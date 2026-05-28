@@ -1,0 +1,50 @@
+- !<AssetImportMetadata/504a9547-d8be-4119-ba9f-05ee1a955390>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> 86a62b80-93bc-4278-a3be-47f5c44dceb6
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> 86a62b80-93bc-4278-a3be-47f5c44dceb6
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 49bf9b7e-3a87-4137-9bda-0fe3bd9cd726
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/49bf9b7e-3a87-4137-9bda-0fe3bd9cd726>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: 74ec2058-6a0b-403f-99e7-b91883ef4129
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    dimosManager: false
+    mainUIFrame: false
+    setupWizard: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - mainUIFrame: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      dimosManager: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
+      setupWizard: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - // @input SceneObject mainUIFrame
+    - // @input AssignableType dimosManager
+    - // @input AssignableType_1 setupWizard

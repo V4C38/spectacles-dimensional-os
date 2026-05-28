@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  dimos-ar:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dimos-ar
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dev tools and package (no DimOS)
+        run: |
+          python -m pip install --upgrade pip
+          pip install websockets questionary qrcode pytest pytest-asyncio ruff mypy
+          pip install -e . --no-deps
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Mypy
+        run: mypy dimos_ar
+
+      - name: Pytest (unit tests without DimOS)
+        run: |
+          pytest tests/ \
+            --ignore=tests/test_robot_bootstrap.py \
+            --ignore=tests/test_robot_select.py \
+            --ignore=tests/test_go2_connection.py \
+            -m "not integration"
+
+      - name: Pytest (DimOS-dependent unit tests)
+        continue-on-error: true
+        run: |
+          pip install "dimos" 2>/dev/null || pip install "git+https://github.com/dimensionalOS/dimos.git"
+          pytest tests/test_robot_bootstrap.py tests/test_robot_select.py tests/test_go2_connection.py -m "not integration"

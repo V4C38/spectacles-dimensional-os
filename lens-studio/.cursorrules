@@ -1,0 +1,56 @@
+# Cursor rules — lens-studio (Spectacles client)
+
+You are working on the **Spectacles Lens Studio** client for dimos-ar. Python lives in
+`../dimos-ar/`. The cross-repo contract is `../dimos-ar/docs/PROTOCOL.md`.
+
+Before Lens work, read:
+
+- `../dimos-ar/docs/PROTOCOL.md` — WebSocket message schema (implement in `Protocol.ts`)
+- `../dimos-ar/docs/LENS_DEVELOPMENT.md` — UI patterns, Reachy + Agent Center references, MCP
+- `../dimos-ar/clients/web/src/protocol.ts` — reference TypeScript types for the protocol
+
+## Non-negotiable facts
+
+- This Lens speaks JSON WebSocket to `ARBridge` on the Mac — it does NOT embed DimOS or Python.
+- **Architecture** follows [spectacles-reachy-mini](https://github.com/V4C38/spectacles-reachy-mini):
+  `DimosManager` (facade) → `SetupWizard` / `UIManager` / `BridgeClient` /
+  `AlignmentController`. Setup wizard **auto-starts on lens launch** (Reachy UX).
+- **UI**: outer panel frames are scene-placed (`@input wizardFrame`, `@input mainUIFrame`);
+  inner content (text, buttons, inputs) is **runtime-instantiated** via
+  `UI/Shared/UIBuilders.ts` (Agent Center pattern). See `LENS_DEVELOPMENT.md`.
+- **Marker detection** runs only during wizard Step 1 (Calibrate). `AlignmentController`
+  `start()` / `stop()` gates MarkerTracking; bridge gates AprilTag detection on `align_start` /
+  `align_stop`.
+- Use generic protocol names on the wire — not Spectacles-only naming.
+- When the protocol changes, update `Protocol.ts` here AND `../dimos-ar/dimos_ar/protocol.py`
+  + `../dimos-ar/docs/PROTOCOL.md` + `../dimos-ar/clients/web/src/protocol.ts`.
+
+## Script layout
+
+```text
+Assets/Scripts/
+├── DimosManager.ts
+├── SetupWizard.ts
+├── UIManager.ts
+├── Network/BridgeClient.ts, Protocol.ts
+├── Alignment/AlignmentController.ts
+├── Rendering/LidarPointCloud.ts, RobotMarker.ts
+└── UI/Shared/UIBuilders.ts, UIConstants.ts, UIAnimations.ts, DirtyComponent.ts
+```
+
+## Lens Studio MCP
+
+Global MCP config only: `~/.cursor/mcp.json` (see `../dimos-ar/docs/LENS_DEVELOPMENT.md`).
+Do not add a project-level `.cursor/mcp.json` here.
+Lens Studio must be open with MCP server running.
+
+## Build discipline
+
+- M1: WebSocket, setup wizard, AprilTag alignment, lidar/pose render.
+- Verify bridge with `../dimos-ar` replay + `clients/web/` before device deploy.
+- Keep `Cache/` out of git.
+
+## Packages
+
+Expect SpectaclesInteractionKit (SIK) and SpectaclesUIKit as `.lspkg` under
+`Packages/`. Pin versions; document upgrades.

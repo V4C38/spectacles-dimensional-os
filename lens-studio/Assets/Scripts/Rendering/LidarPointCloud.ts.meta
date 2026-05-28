@@ -1,0 +1,47 @@
+- !<AssetImportMetadata/cf1d662e-dc80-4a5e-ba6d-52001bec9200>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> 4f5211ef-979a-4bf4-b977-94297f06ab4c
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> 4f5211ef-979a-4bf4-b977-94297f06ab4c
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 6605b6ca-3b49-4b3b-ae46-be10140ec480
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/6605b6ca-3b49-4b3b-ae46-be10140ec480>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: 4822e3e7-1eb1-401a-813e-e002cbe1d645
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    pointParent: false
+    pointTemplate: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - pointParent: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      pointTemplate: !<reference.RenderMeshVisual> 00000000-0000-0000-0000-000000000000
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - // @input SceneObject pointParent
+    - // @input Component.RenderMeshVisual pointTemplate

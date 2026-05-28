@@ -1,0 +1,45 @@
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# README / demo media at repo root (not Lens Studio Assets/)
+# Add GIFs/PNGs here when ready; optional LFS via .gitattributes
+
+# Accidental Lens Studio open at repo root (always use lens-studio/spectacles-unitree.esproj)
+/*.esproj
+/*.esproj.*.lock
+/Cache/
+/Packages/
+/PluginsUserPreferences/
+/Workspaces/
+/assets/*.scene
+/assets/*.scene.meta
+/assets/*.mat
+/assets/*.mat.meta
+/assets/*.deviceCameraTexture
+/assets/*.deviceCameraTexture.meta
+/assets/*.internetModule
+/assets/*.internetModule.meta
+/assets/*.renderTarget
+/assets/*.renderTarget.meta
+/assets/*.imgmarker
+/assets/*.imgmarker.meta
+/assets/Scripts/
+
+# Python (dimos-ar)
+dimos-ar/__pycache__/
+dimos-ar/**/*.py[cod]
+dimos-ar/.venv/
+dimos-ar/venv/
+dimos-ar/.pytest_cache/
+dimos-ar/.mypy_cache/
+dimos-ar/.ruff_cache/
+dimos-ar/dist/
+dimos-ar/build/
+dimos-ar/*.egg-info/
+dimos-ar/.eggs/
+dimos-ar/clients/web/node_modules/
+dimos-ar/clients/web/dist/
+
+# Lens Studio — see lens-studio/.gitignore for Cache/, Workspaces/, etc.

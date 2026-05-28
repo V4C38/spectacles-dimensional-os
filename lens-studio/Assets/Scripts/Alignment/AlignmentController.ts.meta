@@ -1,0 +1,50 @@
+- !<AssetImportMetadata/6e16fb20-9080-4f6c-b1eb-0180ce464c56>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> 392925b8-1f69-4dd7-a240-a07d7ac13400
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> 392925b8-1f69-4dd7-a240-a07d7ac13400
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 45a86a79-e96d-43f5-8657-c522d29bc23f
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/45a86a79-e96d-43f5-8657-c522d29bc23f>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: 8eda754e-5f32-41c6-ad71-254dec6ec7d9
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    bridgeClient: false
+    debugGizmo: false
+    markerTracking: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - bridgeClient: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
+      markerTracking: !<reference.MarkerTrackingComponent> 00000000-0000-0000-0000-000000000000
+      debugGizmo: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - // @input AssignableType bridgeClient
+    - // @input Component.MarkerTrackingComponent markerTracking
+    - // @input SceneObject debugGizmo

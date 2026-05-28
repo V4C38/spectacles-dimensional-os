@@ -1,0 +1,53 @@
+- !<AssetImportMetadata/a49995f9-3eeb-40cc-a483-d4b069c716ad>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> e7e43436-94a6-41bb-9fbf-20dfa652daeb
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> e7e43436-94a6-41bb-9fbf-20dfa652daeb
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 620109b4-39e1-4fed-b18d-44324491f813
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/620109b4-39e1-4fed-b18d-44324491f813>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: fcf7b967-7742-4239-b8e6-623e05e894f3
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    alignmentController: false
+    bridgeClient: false
+    lidarPointCloud: false
+    robotMarker: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - bridgeClient: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
+      alignmentController: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
+      lidarPointCloud: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
+      robotMarker: !<MappingBased.AssignableType_3> 00000000-0000-0000-0000-000000000000
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - // @input AssignableType bridgeClient
+    - // @input AssignableType_1 alignmentController
+    - // @input AssignableType_2 lidarPointCloud
+    - // @input AssignableType_3 robotMarker

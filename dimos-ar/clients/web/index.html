@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>dimos-ar debug viewer</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <div id="panel">
+      <h1>dimos-ar</h1>
+      <p class="hint">Start <code>go2_ar_basic</code> first, then connect.</p>
+      <label>
+        WebSocket URL
+        <input id="ws-url" type="text" value="ws://127.0.0.1:8765" />
+      </label>
+      <div class="row">
+        <button id="btn-connect" type="button">Connect</button>
+        <button id="btn-disconnect" type="button" disabled>Disconnect</button>
+      </div>
+      <button id="btn-register" type="button" disabled>Dev Register</button>
+      <dl id="status">
+        <dt>Connection</dt>
+        <dd id="stat-connection">disconnected</dd>
+        <dt>Capabilities</dt>
+        <dd id="stat-capabilities">—</dd>
+        <dt>Bridge</dt>
+        <dd id="stat-bridge">—</dd>
+        <dt>Registered</dt>
+        <dd id="stat-registered">—</dd>
+        <dt>Lidar points</dt>
+        <dd id="stat-lidar-points">—</dd>
+        <dt>Lidar rate</dt>
+        <dd id="stat-lidar-hz">—</dd>
+        <dt>Pose rate</dt>
+        <dd id="stat-pose-hz">—</dd>
+      </dl>
+      <p id="error" class="error" hidden></p>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

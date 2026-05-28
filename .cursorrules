@@ -1,0 +1,86 @@
+# Cursor rules — spectacles-unitree (monorepo)
+
+This repository combines the DimOS AR bridge (`dimos-ar/`) and the Spectacles
+Lens client (`lens-studio/`). It is **not a fork of DimOS** — a separate package
+that depends on DimOS and composes into blueprints via `autoconnect`.
+
+## Layout
+
+```text
+spectacles-unitree/
+├── README.md                    # whole-project overview, setup, doc map
+├── assets/                      # README gifs, demo media (NOT Lens Studio Assets/)
+├── dimos-ar/                    # Python DimOS extension (platform-agnostic core)
+│   ├── dimos_ar/                # ARBridge module, protocol, transforms, filters
+│   ├── blueprints/              # go2_ar_basic.py (M1), go2_ar_nav.py (M2+, planned)
+│   ├── clients/
+│   │   ├── web/                 # Vite + Three.js debug / phone client
+│   │   └── marker/              # QR marker page served by start.sh
+│   ├── scripts/                 # generate_marker.py (--sync-lens)
+│   ├── docs/                    # PROJECT_BRIEF, ARCHITECTURE, PROTOCOL, LENS_DEVELOPMENT, MARKER_ASSETS
+│   ├── tests/                   # pytest unit + optional WS integration
+│   ├── start.sh                 # discover Go2 or replay; WebSocket on :8765
+│   └── .cursorrules             # Python / bridge rules
+└── lens-studio/                 # Spectacles Lens Studio project
+    ├── spectacles-unitree.esproj   # open THIS file (never from repo root)
+    ├── Assets/Scripts/          # Lens TypeScript (DimosManager, BridgeClient, …)
+    ├── docs/SCENE_SETUP.md      # scene wiring checklist
+    ├── tools/                   # dev helpers (e.g. create_debug_gizmo.py)
+    └── .cursorrules             # Lens Studio rules
+```
+
+| Component | Location | Notes |
+|-----------|----------|-------|
+| `ARBridge`, protocol, transforms | `dimos-ar/dimos_ar/` | Platform-agnostic — no Spectacles logic |
+| Blueprint scripts | `dimos-ar/blueprints/` | Run on Mac with DimOS |
+| Web debug / phone client | `dimos-ar/clients/web/` | Reference protocol implementation |
+| Spectacles Lens | `lens-studio/` | All Lens Studio code; see `LENS_DEVELOPMENT.md` |
+| Cross-platform contract | `dimos-ar/docs/PROTOCOL.md` | JSON WebSocket API |
+
+## Where to read first
+
+| Area | Read |
+|------|------|
+| Whole project | `README.md` |
+| Goals & milestones | `dimos-ar/docs/PROJECT_BRIEF.md` |
+| Package design & threading | `dimos-ar/docs/ARCHITECTURE.md` |
+| WebSocket message schema | `dimos-ar/docs/PROTOCOL.md` |
+| Spectacles / Lens Studio | `dimos-ar/docs/LENS_DEVELOPMENT.md`, `dimos-ar/docs/MARKER_ASSETS.md`, `lens-studio/docs/SCENE_SETUP.md` |
+| Contributing | `CONTRIBUTING.md` |
+| Python / bridge work | `dimos-ar/.cursorrules` |
+| Lens Studio work | `lens-studio/.cursorrules` |
+
+## Non-negotiable facts
+
+- **Never edit DimOS source.** Import from the installed `dimos` package.
+- `dimos-ar/dimos_ar/` stays platform-agnostic. Spectacles-specific code lives
+  only under `lens-studio/`.
+- **Open Lens Studio from `lens-studio/spectacles-unitree.esproj`**, not the repo
+  root — opening at root creates stray `Cache/`, `Packages/`, etc.
+- The cross-repo contract is `dimos-ar/docs/PROTOCOL.md`. When the protocol
+  changes, update all four in the same change:
+  - `dimos-ar/dimos_ar/protocol.py`
+  - `dimos-ar/docs/PROTOCOL.md`
+  - `dimos-ar/clients/web/src/protocol.ts`
+  - `lens-studio/Assets/Scripts/Network/Protocol.ts`
+- The bridge module worker must never block; WebSocket runs on a daemon thread
+  (see `dimos-ar/docs/ARCHITECTURE.md`).
+- AR development uses `dimos-ar/blueprints/go2_ar_basic.py` (via `./start.sh`),
+  not the stock `dimos --replay run unitree-go2` CLI alone.
+- Port **8765** is ARBridge WebSocket. Do not run DimOS Foxglove on the same port.
+
+## Dev quick reference
+
+```bash
+# Install + start bridge (from dimos-ar/)
+./start.sh              # LAN discovery or replay; ws://0.0.0.0:8765
+./start.sh --replay       # replay only
+./start.sh --local        # localhost-only WebSocket
+
+# Web debug client
+cd dimos-ar/clients/web && npm install && npm run dev
+
+# Tests (with blueprint running for integration)
+cd dimos-ar && pytest
+cd dimos-ar && pytest tests/test_ws_integration.py -m integration
+```

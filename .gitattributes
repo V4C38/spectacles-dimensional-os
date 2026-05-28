@@ -1,0 +1,17 @@
+# Git LFS — large binaries (install: git lfs install)
+
+# README / demo media (add files under assets/ when ready)
+assets/** filter=lfs diff=lfs merge=lfs -text
+
+# Lens Studio packages and heavy assets
+lens-studio/Packages/** filter=lfs diff=lfs merge=lfs -text
+lens-studio/Assets/**/*.hdr filter=lfs diff=lfs merge=lfs -text
+lens-studio/Assets/**/*.pdf filter=lfs diff=lfs merge=lfs -text
+lens-studio/icon.png filter=lfs diff=lfs merge=lfs -text
+
+# Lens project file is small YAML
+lens-studio/*.esproj text linguist-language=yaml
+
+# Lens scripts and meta stay as text in git (not LFS)
+lens-studio/Assets/**/*.ts !filter !diff !merge text
+lens-studio/Assets/**/*.meta !filter !diff !merge text linguist-language=yaml
