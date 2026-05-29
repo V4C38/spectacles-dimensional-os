@@ -15,10 +15,12 @@ from websockets.asyncio.server import Server, ServerConnection, serve
 
 from dimos_ar.protocol import (
     AlignCommitMessage,
+    AlignManualPoseMessage,
     AlignMarkerMessage,
     AlignStartMessage,
     AlignStopMessage,
     CancelGoalMessage,
+    EmergencyStopMessage,
     GetStatusMessage,
     InboundMessage,
     NavGoalMessage,
@@ -37,8 +39,10 @@ AlignStartHandler = Callable[[AlignStartMessage, ServerConnection], None]
 AlignStopHandler = Callable[[AlignStopMessage, ServerConnection], None]
 AlignCommitHandler = Callable[[AlignCommitMessage, ServerConnection], None]
 AlignMarkerHandler = Callable[[AlignMarkerMessage, ServerConnection], None]
+AlignManualPoseHandler = Callable[[AlignManualPoseMessage, ServerConnection], None]
 NavGoalHandler = Callable[[NavGoalMessage], None]
 CancelGoalHandler = Callable[[CancelGoalMessage], None]
+EmergencyStopHandler = Callable[[EmergencyStopMessage], None]
 GetStatusHandler = Callable[[GetStatusMessage, ServerConnection], None]
 UnsupportedHandler = Callable[[InboundMessage], None]
 StatusOnConnectHandler = Callable[[ServerConnection], None]
@@ -59,8 +63,10 @@ class ARWebSocketServer:
         on_align_stop: AlignStopHandler | None = None,
         on_align_commit: AlignCommitHandler | None = None,
         on_align_marker: AlignMarkerHandler | None = None,
+        on_align_manual_pose: AlignManualPoseHandler | None = None,
         on_nav_goal: NavGoalHandler | None = None,
         on_cancel_goal: CancelGoalHandler | None = None,
+        on_emergency_stop: EmergencyStopHandler | None = None,
         on_get_status: GetStatusHandler | None = None,
         on_unsupported: UnsupportedHandler | None = None,
         on_status_connect: StatusOnConnectHandler | None = None,
@@ -74,8 +80,10 @@ class ARWebSocketServer:
         self._on_align_stop = on_align_stop
         self._on_align_commit = on_align_commit
         self._on_align_marker = on_align_marker
+        self._on_align_manual_pose = on_align_manual_pose
         self._on_nav_goal = on_nav_goal
         self._on_cancel_goal = on_cancel_goal
+        self._on_emergency_stop = on_emergency_stop
         self._on_get_status = on_get_status
         self._on_unsupported = on_unsupported
         self._on_status_connect = on_status_connect
@@ -177,6 +185,9 @@ class ARWebSocketServer:
                 elif isinstance(inbound, AlignMarkerMessage):
                     if self._on_align_marker is not None:
                         self._on_align_marker(inbound, websocket)
+                elif isinstance(inbound, AlignManualPoseMessage):
+                    if self._on_align_manual_pose is not None:
+                        self._on_align_manual_pose(inbound, websocket)
                 elif isinstance(inbound, NavGoalMessage):
                     if self._on_nav_goal is not None:
                         self._on_nav_goal(inbound)
@@ -191,6 +202,15 @@ class ARWebSocketServer:
                         self._on_unsupported(inbound)
                     else:
                         logger.warning("cancel_goal received but not supported in this blueprint")
+                elif isinstance(inbound, EmergencyStopMessage):
+                    if self._on_emergency_stop is not None:
+                        self._on_emergency_stop(inbound)
+                    elif self._on_unsupported is not None:
+                        self._on_unsupported(inbound)
+                    else:
+                        logger.warning(
+                            "emergency_stop received but not supported in this blueprint"
+                        )
                 elif isinstance(inbound, GetStatusMessage):
                     if self._on_get_status is not None:
                         self._on_get_status(inbound, websocket)

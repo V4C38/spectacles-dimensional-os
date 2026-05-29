@@ -8,6 +8,7 @@ from typing import Literal
 from dimos_ar.robot_bootstrap import LiveRobot, ReplayMode
 
 BridgeMode = Literal["live", "replay"]
+RegistrationMethod = Literal["marker", "manual"] | None
 
 StatusChangeCallback = Callable[[], None]
 
@@ -22,6 +23,8 @@ class BridgeStatusSnapshot:
     streams_active: bool
     registered: bool
     reconnecting: bool
+    registration_method: RegistrationMethod
+    registration_approximate: bool
 
 
 class BridgeStatusTracker:
@@ -45,6 +48,8 @@ class BridgeStatusTracker:
         self._streams_active = False
         self._registered = False
         self._reconnecting = False
+        self._registration_method: RegistrationMethod = None
+        self._registration_approximate = False
         self._on_change: StatusChangeCallback | None = None
 
     def set_on_change(self, callback: StatusChangeCallback | None) -> None:
@@ -63,11 +68,29 @@ class BridgeStatusTracker:
             self._streams_active = active
         self._notify()
 
-    def set_registered(self, registered: bool) -> None:
+    def set_registered(
+        self,
+        registered: bool,
+        *,
+        method: RegistrationMethod | None = None,
+        approximate: bool | None = None,
+    ) -> None:
         with self._lock:
-            if self._registered == registered:
+            next_method = self._registration_method if method is None else method
+            next_approximate = (
+                self._registration_approximate
+                if approximate is None
+                else approximate
+            )
+            if (
+                self._registered == registered
+                and self._registration_method == next_method
+                and self._registration_approximate == next_approximate
+            ):
                 return
             self._registered = registered
+            self._registration_method = next_method if registered else None
+            self._registration_approximate = next_approximate if registered else False
         self._notify()
 
     def set_reconnecting(self, reconnecting: bool) -> None:
@@ -88,6 +111,8 @@ class BridgeStatusTracker:
                 streams_active=self._streams_active,
                 registered=self._registered,
                 reconnecting=self._reconnecting,
+                registration_method=self._registration_method,
+                registration_approximate=self._registration_approximate,
             )
 
 

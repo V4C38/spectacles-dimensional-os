@@ -78,7 +78,11 @@ DimosManager (@component on DimOS scene object)
 
 **UIManager** ([Agent Center `UIManager.ts`](https://github.com/specs-devs/samples/blob/main/Agent%20Center/Assets/Scripts/UI/UIManager.ts)):
 
-- Runtime-instantiated inner UI via `UI/Shared/UIBuilders.ts`.
+- Hybrid model:
+  - `SetupWizard` inner content stays runtime-instantiated via `UI/Shared/UIBuilders.ts`
+  - `MainUI` title/status/top-row buttons are authored scene objects under the `MainUI` frame
+  - navigation controls content stays runtime-instantiated
+  - robot-local menu + 3D toggle sphere are authored under `RobotMarkerRoot`
 - Outer frames (`SetupWizard`, `MainUI`) are scene-placed UIKit Frame objects.
 
 Scene object **RobotManager** is the hierarchy root in `Scene.scene`; the
@@ -110,8 +114,10 @@ this.handDockedMenu.onMenuButtonTapped.add(() => {
 ```
 
 For dimos-ar, mirror this: connection status / calibration UI in `UIManager`;
-WebSocket parse logic in a service; frame alignment math stays on the Mac (the
-Lens sends `register` with marker pose only).
+WebSocket parse logic in a service; frame alignment math stays on the Mac.
+The current alignment flow is session-based: the Lens opens `align_start`,
+streams either `align_marker` or `align_manual_pose`, and finalizes with
+`align_commit`.
 
 ## Runtime UI fundamentals
 
@@ -200,7 +206,8 @@ Implement the same message types as [`clients/web/src/protocol.ts`](../clients/w
 | Phase | Inbound (Lens → Mac) | Outbound (Mac → Lens) |
 |-------|----------------------|------------------------|
 | M1 | `register`, `get_status` | `hello`, `bridge_status`, `lidar`, `pose`, `registered` |
-| M2+ | `nav_goal`, `cancel_goal` | `path`, `nav_status` |
+| M1.5 | `align_start`, `align_marker`, `align_manual_pose`, `align_commit`, `align_stop` | `align_status` |
+| M2+ | `nav_goal`, `cancel_goal`, `emergency_stop` | `path`, `nav_status` |
 
 Rules:
 
@@ -210,8 +217,9 @@ Rules:
   stream health; call `get_status` via `BridgeClient.requestStatus()` to refresh.
 - Ignore unknown message types and fields (forward-compatible).
 - Send `robot_id: "go2"` unless configured otherwise.
-- Registration: send marker pose in **AR world frame** when ArUco is visible;
-  wait for `registered: true` before trusting world-frame lidar.
+- Alignment: use the shared `align_*` session flow. Manual alignment is no
+  longer Lens-local only; it submits `align_manual_pose` and still commits via
+  `align_commit`.
 
 WebSocket has **no authentication** today — use only on trusted LANs (see
 `ARCHITECTURE.md`).
@@ -283,20 +291,29 @@ constructor and build their subtree. Factory functions (`createText`,
 
 ### What to use in lens-studio
 
-**Use runtime instantiation (Pattern B) for all 2D panel UI:**
-- SetupWizard steps (text, buttons, status indicators, text input)
-- UIManager panels (connection status, mode toggle, debug info)
-- Any future nav/settings UI
+Use a **hybrid** of Pattern A and Pattern B:
 
-This means `SetupWizard.ts` builds its own UI tree in `onAwake()` using factory
-functions, rather than declaring 10+ `@input` references to pre-wired scene
-objects. Each wizard step manipulates its own programmatically created elements.
+**Keep runtime instantiation (Pattern B) for:**
+- `SetupWizard` steps and their inner content
+- navigation controls content under `NavigationControls`
+- temporary / future workflow UI that is easier to iterate in code
 
-**Use `@input` scene references only for things that must exist in the scene:**
+**Use scene-authored objects (Pattern A) for:**
+- `MainUI` title/status/restart/debug/lidar objects
+- robot-local menu text/buttons under `RobotMarkerRoot`
+- the Reachy-style 3D sphere toggle under `RobotMarkerRoot`
+
+This means `SetupWizard.ts` still builds its own UI tree in `onAwake()`, but
+`UIManager.ts` now binds the authored HUD objects by scene name instead of
+creating them at runtime. Likewise, `RobotMenuView.ts` binds the authored robot
+menu subtree instead of creating it with `global.scene.createSceneObject()`.
+
+**Use `@input` scene references only for top-level anchors and things that must exist in the scene:**
 - `MarkerTrackingComponent` (Image Tracking object — requires scene-level setup)
 - `InternetModule` (platform service)
 - `Camera` references
-- 3D assets (robot mesh prefab, particle effects)
+- frame roots like `MainUI`
+- 3D assets such as the robot marker root / Reachy toggle sphere
 - Audio assets that cannot use `requireAsset`
 
 **Use `requireAsset()` at module scope for static assets:**
@@ -304,6 +321,14 @@ objects. Each wizard step manipulates its own programmatically created elements.
 - Materials
 - Audio tracks
 - Prefabs
+
+**Use `require("LensStudio:...")` for native Spectacles modules:**
+- `WorldQueryModule`
+- `GestureModule`
+- other built-in `*Module` APIs
+
+Do not expose those as Inspector asset inputs. The navigation implementation
+resolves them directly in code.
 
 Example — wizard text creation with factory vs `@input`:
 
@@ -523,6 +548,30 @@ open** with the MCP server running while you use Agent in Cursor.
 
 Target **M1** (lidar + registration) before M2 navigation UI. Do not port Agent
 Center's Supabase/bridge/agent features — they are unrelated to dimos-ar.
+
+## M2 validation order
+
+When validating the waypoint-navigation foundation, keep the order strict:
+
+1. **Replay + web first**
+   - run `blueprints/go2_ar_nav.py`
+   - confirm `hello` capabilities, `bridge_status`, `path`, and `nav_status`
+2. **Lens compile + scene wiring**
+   - Lens compiles without TypeScript errors
+   - `placementRayOrigin` is wired in the scene
+   - native modules resolve through `require("LensStudio:...")`
+3. **Setup + alignment**
+   - auto alignment still completes through `align_start` -> `align_commit`
+   - manual alignment submits `align_manual_pose` and commits through the same session
+4. **Placement + rendering**
+   - pin-drop mode shows a live preview
+   - pinch confirms one goal
+   - `execute=false` stays Lens-local
+   - `execute=true` sends `nav_goal`
+5. **Robot-local controls**
+   - robot menu follows the moving marker
+   - approximate/manual status is visible there
+   - both HUD and robot-local emergency-stop paths are exercised
 
 ## Framerate and performance
 

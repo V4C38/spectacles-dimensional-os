@@ -41,7 +41,7 @@ blueprint supports.
   "type": "hello",
   "protocol_version": 1,
   "robots": ["go2"],
-  "capabilities": ["lidar", "odom", "align"]
+  "capabilities": ["lidar", "odom", "align", "align_manual"]
 }
 ```
 
@@ -52,7 +52,7 @@ blueprint supports.
   "type": "hello",
   "protocol_version": 1,
   "robots": ["go2"],
-  "capabilities": ["lidar", "odom", "nav", "path"]
+  "capabilities": ["lidar", "odom", "align", "align_manual", "nav", "path", "emergency_stop"]
 }
 ```
 
@@ -80,7 +80,9 @@ sensor streams are flowing.
   "robot_serial": "B42D1234567890ABCD",
   "streams_active": true,
   "registered": false,
-  "reconnecting": false
+  "reconnecting": false,
+  "registration_method": "manual",
+  "registration_approximate": true
 }
 ```
 
@@ -93,6 +95,8 @@ sensor streams are flowing.
 | `streams_active` | bool | Recent lidar and odom on the bridge |
 | `registered` | bool | World-frame calibration applied |
 | `reconnecting` | bool | Live reconnect in progress |
+| `registration_method` | `"marker"` \| `"manual"`, optional | How the active calibration was produced |
+| `registration_approximate` | bool, optional | Whether the active calibration is approximate / manual |
 
 No robot IP is included.
 
@@ -111,6 +115,8 @@ Alignment progress during the setup wizard **Calibrate Coordinates** step.
   "best_quality": 0.95,
   "has_candidate": true,
   "candidate_count": 4,
+  "method": "manual",
+  "approximate": true,
   "message": "Spectacles sees marker — waiting for robot camera"
 }
 ```
@@ -128,6 +134,8 @@ Alignment progress during the setup wizard **Calibrate Coordinates** step.
   candidate that could be committed.
 - `candidate_count`: optional integer count of successful candidate updates seen so far
   in the current calibration session.
+- `method`: optional `marker` or `manual` calibration path for the active/best candidate.
+- `approximate`: optional bool flag marking manual lower-confidence registration.
 - `message`: human-readable status for the wizard UI.
 
 ### lidar
@@ -267,7 +275,13 @@ clients and for future aerial use.
 ```json
 { "type": "cancel_goal", "ts": 1730000000.123, "robot_id": "go2" }
 ```
-The bridge calls the planner's `cancel_goal()`.
+The bridge requests navigation cancellation and clears the active AR path state.
+
+### emergency_stop  (Milestone 2+)
+```json
+{ "type": "emergency_stop", "ts": 1730000000.123, "robot_id": "go2" }
+```
+The bridge publishes the stronger movement-stop path and clears active AR navigation state.
 
 ### align_start
 Sent when the Spectacles wizard enters **Calibrate Coordinates**. Activates robot-side
@@ -312,6 +326,26 @@ Successful samples update `align_status` with live `quality` / `best_quality`. T
 bridge only commits calibration after `align_commit`, at which point it replies with
 `align_status` where `state` is `aligned`. The legacy `register` / `registered` flow
 remains for the web debug client and replay.
+
+### align_manual_pose
+Sent during an active `align_start` session when the user manually places the robot pose.
+This is a clean extension of the same alignment lifecycle rather than a separate
+registration path: the client opens a session with `align_start`, submits either
+`align_marker` or `align_manual_pose` candidate updates, and finalizes with `align_commit`.
+
+```json
+{
+  "type": "align_manual_pose",
+  "ts": 1730000000.123,
+  "robot_id": "go2",
+  "position": [x, y, z],
+  "orientation": [qx, qy, qz, qw]
+}
+```
+
+The bridge auto-levels the manual pose for a ground robot, combines it with the latest
+odom sample to compute `T_world_odom`, and marks the resulting candidate as
+`method=manual` plus `approximate=true`.
 
 ### get_status
 Request a fresh `bridge_status` snapshot from the server (replied on the same

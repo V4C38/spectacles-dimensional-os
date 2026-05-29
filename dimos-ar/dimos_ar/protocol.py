@@ -16,7 +16,8 @@ PROTOCOL_VERSION = 1
 ROBOT_ID = "go2"
 FRAME_WORLD = "world"
 
-DEFAULT_CAPABILITIES = ["lidar", "odom", "align"]
+DEFAULT_CAPABILITIES = ["lidar", "odom", "align", "align_manual"]
+NAV_CAPABILITIES = ["nav", "path", "emergency_stop"]
 
 
 def _dumps(payload: dict[str, Any]) -> str:
@@ -41,6 +42,12 @@ class NavGoalMessage:
 
 @dataclass(frozen=True)
 class CancelGoalMessage:
+    ts: float
+    robot_id: str
+
+
+@dataclass(frozen=True)
+class EmergencyStopMessage:
     ts: float
     robot_id: str
 
@@ -72,6 +79,14 @@ class AlignMarkerMessage:
 
 
 @dataclass(frozen=True)
+class AlignManualPoseMessage:
+    ts: float
+    robot_id: str
+    position: tuple[float, float, float]
+    orientation: tuple[float, float, float, float]
+
+
+@dataclass(frozen=True)
 class GetStatusMessage:
     ts: float
     robot_id: str
@@ -81,10 +96,12 @@ InboundMessage = (
     RegisterMessage
     | NavGoalMessage
     | CancelGoalMessage
+    | EmergencyStopMessage
     | AlignStartMessage
     | AlignStopMessage
     | AlignCommitMessage
     | AlignMarkerMessage
+    | AlignManualPoseMessage
     | GetStatusMessage
 )
 
@@ -156,6 +173,8 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         return NavGoalMessage(ts=ts, robot_id=robot_id, position=_vec3(data, "position"))
     if msg_type == "cancel_goal":
         return CancelGoalMessage(ts=ts, robot_id=robot_id)
+    if msg_type == "emergency_stop":
+        return EmergencyStopMessage(ts=ts, robot_id=robot_id)
     if msg_type == "align_start":
         return AlignStartMessage(ts=ts, robot_id=robot_id)
     if msg_type == "align_stop":
@@ -168,6 +187,13 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
             robot_id=robot_id,
             marker_position=_vec3(data, "marker_position"),
             marker_orientation=_quat(data, "marker_orientation"),
+        )
+    if msg_type == "align_manual_pose":
+        return AlignManualPoseMessage(
+            ts=ts,
+            robot_id=robot_id,
+            position=_vec3(data, "position"),
+            orientation=_quat(data, "orientation"),
         )
     if msg_type == "get_status":
         return GetStatusMessage(ts=ts, robot_id=robot_id)
@@ -192,6 +218,9 @@ def encode_bridge_status(
     }
     if snapshot.robot_serial is not None:
         payload["robot_serial"] = snapshot.robot_serial
+    if snapshot.registration_method is not None:
+        payload["registration_method"] = snapshot.registration_method
+        payload["registration_approximate"] = snapshot.registration_approximate
     return _dumps(payload)
 
 
@@ -265,6 +294,8 @@ def encode_align_status(
     best_quality: float | None = None,
     has_candidate: bool | None = None,
     candidate_count: int | None = None,
+    method: str | None = None,
+    approximate: bool | None = None,
     message: str = "",
 ) -> str:
     payload: dict[str, Any] = {
@@ -284,6 +315,10 @@ def encode_align_status(
         payload["has_candidate"] = has_candidate
     if candidate_count is not None:
         payload["candidate_count"] = candidate_count
+    if method is not None:
+        payload["method"] = method
+    if approximate is not None:
+        payload["approximate"] = approximate
     return _dumps(payload)
 
 
@@ -302,5 +337,40 @@ def encode_pose(
             "frame": FRAME_WORLD,
             "position": list(position),
             "orientation": list(orientation),
+        }
+    )
+
+
+def encode_path(
+    *,
+    ts: float,
+    waypoints: list[tuple[float, float, float]],
+    robot_id: str = ROBOT_ID,
+) -> str:
+    return _dumps(
+        {
+            "type": "path",
+            "ts": ts,
+            "robot_id": robot_id,
+            "frame": FRAME_WORLD,
+            "waypoints": [list(point) for point in waypoints],
+        }
+    )
+
+
+def encode_nav_status(
+    *,
+    ts: float | None = None,
+    state: str,
+    goal_reached: bool,
+    robot_id: str = ROBOT_ID,
+) -> str:
+    return _dumps(
+        {
+            "type": "nav_status",
+            "ts": ts if ts is not None else time.time(),
+            "robot_id": robot_id,
+            "state": state,
+            "goal_reached": goal_reached,
         }
     )

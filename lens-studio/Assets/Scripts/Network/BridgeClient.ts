@@ -3,12 +3,18 @@ import {
   BridgeStatusMessage,
   HelloMessage,
   LidarMessage,
+  NavStatusMessage,
+  PathMessage,
   PoseMessage,
   buildAlignMarker,
   buildAlignCommit,
+  buildAlignManualPose,
   buildAlignStart,
   buildAlignStop,
+  buildCancelGoal,
+  buildEmergencyStop,
   buildGetStatus,
+  buildNavGoal,
   clearActiveRobotId,
   getActiveRobotId,
   parseInboundMessage,
@@ -31,6 +37,8 @@ export class BridgeClient extends BaseScriptComponent {
   public onPose: ((msg: PoseMessage) => void)[] = [];
   public onAlignStatus: ((msg: AlignStatusMessage) => void)[] = [];
   public onBridgeStatus: ((msg: BridgeStatusMessage) => void)[] = [];
+  public onPath: ((msg: PathMessage) => void)[] = [];
+  public onNavStatus: ((msg: NavStatusMessage) => void)[] = [];
   public onConnectionChanged: ((connected: boolean) => void)[] = [];
 
   private ws: WebSocket | null = null;
@@ -58,6 +66,12 @@ export class BridgeClient extends BaseScriptComponent {
     }
     if (!this.onBridgeStatus) {
       this.onBridgeStatus = [];
+    }
+    if (!this.onPath) {
+      this.onPath = [];
+    }
+    if (!this.onNavStatus) {
+      this.onNavStatus = [];
     }
   }
 
@@ -229,6 +243,42 @@ export class BridgeClient extends BaseScriptComponent {
     return true;
   }
 
+  public sendAlignManualPose(position: vec3, rotation: quat): boolean {
+    const robotId = this._requireRobotId("align_manual_pose");
+    if (!robotId) {
+      return false;
+    }
+    this.send(buildAlignManualPose(position, rotation, robotId));
+    return true;
+  }
+
+  public sendNavGoal(position: vec3): boolean {
+    const robotId = this._requireRobotId("nav_goal");
+    if (!robotId) {
+      return false;
+    }
+    this.send(buildNavGoal(position, robotId));
+    return true;
+  }
+
+  public sendCancelGoal(): boolean {
+    const robotId = this._requireRobotId("cancel_goal");
+    if (!robotId) {
+      return false;
+    }
+    this.send(buildCancelGoal(robotId));
+    return true;
+  }
+
+  public sendEmergencyStop(): boolean {
+    const robotId = this._requireRobotId("emergency_stop");
+    if (!robotId) {
+      return false;
+    }
+    this.send(buildEmergencyStop(robotId));
+    return true;
+  }
+
   /** Wait for server `hello` after the socket is open (bridge sends it on connect). */
   public waitForHello(timeoutSeconds: number = 3.0): Promise<boolean> {
     if (this.helloReceived) {
@@ -300,6 +350,14 @@ export class BridgeClient extends BaseScriptComponent {
           this._adoptRobotId(msg.robot_id);
           this.lastBridgeStatus = msg;
           this.onBridgeStatus.forEach((cb) => cb(msg));
+          break;
+        case "path":
+          this._adoptRobotId(msg.robot_id);
+          this.onPath.forEach((cb) => cb(msg));
+          break;
+        case "nav_status":
+          this._adoptRobotId(msg.robot_id);
+          this.onNavStatus.forEach((cb) => cb(msg));
           break;
       }
     } catch (error) {

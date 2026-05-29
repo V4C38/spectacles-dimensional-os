@@ -27,6 +27,14 @@ export function protocolMetersToLensCentimeters(position: [number, number, numbe
   );
 }
 
+export function lensCentimetersToProtocolMeters(position: vec3): [number, number, number] {
+  return [
+    position.x * LENS_CM_TO_PROTOCOL_M,
+    position.y * LENS_CM_TO_PROTOCOL_M,
+    position.z * LENS_CM_TO_PROTOCOL_M,
+  ];
+}
+
 export interface HelloMessage {
   type: "hello";
   protocol_version: number;
@@ -78,6 +86,8 @@ export interface AlignStatusMessage {
   best_quality?: number;
   has_candidate?: boolean;
   candidate_count?: number;
+  method?: "marker" | "manual";
+  approximate?: boolean;
   message: string;
 }
 
@@ -92,6 +102,24 @@ export interface BridgeStatusMessage {
   streams_active: boolean;
   registered: boolean;
   reconnecting: boolean;
+  registration_method?: "marker" | "manual";
+  registration_approximate?: boolean;
+}
+
+export interface PathMessage {
+  type: "path";
+  ts: number;
+  robot_id: string;
+  frame: string;
+  waypoints: [number, number, number][];
+}
+
+export interface NavStatusMessage {
+  type: "nav_status";
+  ts: number;
+  robot_id: string;
+  state: "idle" | "following_path" | "recovery";
+  goal_reached: boolean;
 }
 
 export type InboundMessage =
@@ -100,7 +128,9 @@ export type InboundMessage =
   | PoseMessage
   | RegisteredMessage
   | AlignStatusMessage
-  | BridgeStatusMessage;
+  | BridgeStatusMessage
+  | PathMessage
+  | NavStatusMessage;
 
 export function buildGetStatus(robotId: string): string {
   return JSON.stringify({
@@ -151,6 +181,20 @@ export function buildAlignCommit(robotId: string): string {
   });
 }
 
+export function buildAlignManualPose(
+  position: vec3,
+  rotation: quat,
+  robotId: string,
+): string {
+  return JSON.stringify({
+    type: "align_manual_pose",
+    ts: getTime(),
+    robot_id: robotId,
+    position: lensCentimetersToProtocolMeters(position),
+    orientation: [rotation.x, rotation.y, rotation.z, rotation.w],
+  });
+}
+
 export function buildAlignMarker(
   position: vec3,
   rotation: quat,
@@ -168,6 +212,32 @@ export function buildAlignMarker(
     robot_id: robotId,
     marker_position: markerPositionM,
     marker_orientation: [rotation.x, rotation.y, rotation.z, rotation.w],
+  });
+}
+
+export function buildNavGoal(position: vec3, robotId: string): string {
+  return JSON.stringify({
+    type: "nav_goal",
+    ts: getTime(),
+    robot_id: robotId,
+    frame: "world",
+    position: lensCentimetersToProtocolMeters(position),
+  });
+}
+
+export function buildCancelGoal(robotId: string): string {
+  return JSON.stringify({
+    type: "cancel_goal",
+    ts: getTime(),
+    robot_id: robotId,
+  });
+}
+
+export function buildEmergencyStop(robotId: string): string {
+  return JSON.stringify({
+    type: "emergency_stop",
+    ts: getTime(),
+    robot_id: robotId,
   });
 }
 
@@ -307,6 +377,12 @@ export function parseInboundMessage(text: string): InboundMessage | null {
       if (typeof data.candidate_count === "number") {
         msg.candidate_count = data.candidate_count;
       }
+      if (data.method === "marker" || data.method === "manual") {
+        msg.method = data.method;
+      }
+      if (typeof data.approximate === "boolean") {
+        msg.approximate = data.approximate;
+      }
       setActiveRobotId(msg.robot_id);
       return msg;
     }
@@ -329,8 +405,40 @@ export function parseInboundMessage(text: string): InboundMessage | null {
       if (typeof data.robot_serial === "string") {
         status.robot_serial = data.robot_serial;
       }
+      if (data.registration_method === "marker" || data.registration_method === "manual") {
+        status.registration_method = data.registration_method;
+      }
+      if (typeof data.registration_approximate === "boolean") {
+        status.registration_approximate = data.registration_approximate;
+      }
       setActiveRobotId(status.robot_id);
       return status;
+    }
+    case "path": {
+      const msg: PathMessage = {
+        type: "path",
+        ts: requireNumber(data, "ts"),
+        robot_id: requireString(data, "robot_id"),
+        frame: requireString(data, "frame"),
+        waypoints: parsePoints(data.waypoints),
+      };
+      setActiveRobotId(msg.robot_id);
+      return msg;
+    }
+    case "nav_status": {
+      const state = requireString(data, "state");
+      if (state !== "idle" && state !== "following_path" && state !== "recovery") {
+        throw new Error("invalid nav_status.state");
+      }
+      const msg: NavStatusMessage = {
+        type: "nav_status",
+        ts: requireNumber(data, "ts"),
+        robot_id: requireString(data, "robot_id"),
+        state,
+        goal_reached: Boolean(data.goal_reached),
+      };
+      setActiveRobotId(msg.robot_id);
+      return msg;
     }
     default:
       return null;

@@ -48,6 +48,24 @@ def pose_to_matrix(
     return T
 
 
+def normalize_ground_pose(
+    position: tuple[float, float, float],
+    orientation: tuple[float, float, float, float],
+) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+    """Keep position but flatten rotation to yaw around the world-up Y axis."""
+    rotation = _quat_to_matrix(*orientation)
+    forward = rotation[:, 0]
+    planar = np.array([forward[0], 0.0, forward[2]], dtype=np.float64)
+    norm = float(np.linalg.norm(planar))
+    if norm < 1e-6:
+        return position, (0.0, 0.0, 0.0, 1.0)
+
+    planar /= norm
+    yaw = math.atan2(float(planar[2]), float(planar[0]))
+    half_yaw = yaw * 0.5
+    return position, (0.0, math.sin(half_yaw), 0.0, math.cos(half_yaw))
+
+
 def matrix_to_pose(
     T: NDArray[np.float64],
 ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:

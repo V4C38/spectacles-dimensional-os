@@ -4,7 +4,7 @@ import numpy as np
 
 from dimos_ar.alignment import AprilTagAligner, RobotMarkerDetection
 from dimos_ar.protocol import RegisterMessage
-from dimos_ar.transforms import Calibration, OdomSample
+from dimos_ar.transforms import Calibration, OdomSample, normalize_ground_pose
 
 
 def test_unregistered_is_identity() -> None:
@@ -90,3 +90,13 @@ def test_apriltag_alignment_rejects_stale_marker_pair() -> None:
     )
 
     assert result is None
+
+
+def test_normalize_ground_pose_removes_pitch_and_roll() -> None:
+    position, quat = normalize_ground_pose(
+        (1.0, 0.0, 2.0),
+        (0.2, 0.5, 0.1, 0.8),
+    )
+    assert np.allclose(position, (1.0, 0.0, 2.0))
+    assert np.allclose(quat[0], 0.0, atol=1e-6)
+    assert np.allclose(quat[2], 0.0, atol=1e-6)

@@ -456,6 +456,8 @@ export class SetupWizard extends BaseScriptComponent {
       this.alignmentController.stop();
     }
     if (this._currentStep !== STEP_CALIBRATE) {
+      this.dimosManager?.cancelManualAlignmentPlacement();
+      this.dimosManager?.stopManualAlignmentSession();
       this.dimosManager?.hideRobotMarkerPreview();
     }
 
@@ -550,15 +552,45 @@ export class SetupWizard extends BaseScriptComponent {
     }
 
     if (this._currentStep === STEP_CALIBRATE) {
-      if (this._calibrationState.mode === "manual" && this._aligned) {
-        this._finishSetup();
-        return;
-      }
       if (this._aligned) {
         this._finishSetup();
         return;
       }
       if (this._calibrationState.pendingCommit) {
+        return;
+      }
+      if (this._calibrationState.mode === "manual" && this._calibrationState.hasCandidate) {
+        const captured = this.dimosManager?.captureManualAlignmentCandidate() ?? false;
+        if (!captured) {
+          this._calibrationState.statusMessage = "Could not read manual marker pose - try again";
+          this._calibrationState.statusColor = COLOR_ERROR;
+          this._renderCalibrationState();
+          this._refreshFooterButtons();
+          return;
+        }
+        if (!this.dimosManager?.hasBridgeConnection()) {
+          this._aligned = true;
+          this._calibrationCompleted = true;
+          this._calibrationState.statusMessage = "Manual alignment ready";
+          this._calibrationState.statusColor = COLOR_SUCCESS;
+          this._renderCalibrationState();
+          this._refreshFooterButtons();
+          this._logSetup("manual local-only calibration accepted");
+          return;
+        }
+        if (this.dimosManager?.bridgeClient?.sendAlignCommit()) {
+          this._calibrationState.pendingCommit = true;
+          this._calibrationState.statusMessage = "Applying manual alignment…";
+          this._calibrationState.statusColor = COLOR_WHITE;
+          this._renderCalibrationState();
+          this._refreshFooterButtons();
+          this._logSetup("manual calibration commit requested");
+        } else {
+          this._calibrationState.statusMessage = "Manual alignment commit failed - try again";
+          this._calibrationState.statusColor = COLOR_ERROR;
+          this._renderCalibrationState();
+          this._refreshFooterButtons();
+        }
         return;
       }
       if (this._calibrationState.hasCandidate && this.alignmentController?.commitBestAlignment()) {
@@ -615,6 +647,8 @@ export class SetupWizard extends BaseScriptComponent {
       this.alignmentController.stop();
     }
     if (this.dimosManager) {
+      this.dimosManager.stopManualAlignmentSession();
+      this.dimosManager.cancelManualAlignmentPlacement();
       this.dimosManager.setIsActive(true);
     }
   }
@@ -761,10 +795,17 @@ export class SetupWizard extends BaseScriptComponent {
       return;
     }
     if (this._calibrationState.mode === "manual") {
-      this._setAccuracyText("Manual alignment", COLOR_WARN);
+      this._setAccuracyText(
+        this._calibrationState.hasCandidate ? "Manual alignment ready" : "Manual alignment",
+        COLOR_WARN,
+      );
       this._setStatus(this._calibrationState.statusMessage, this._calibrationState.statusColor);
       this._setDetailStatus(
-        "Robot marker placed in front of you.\nContinue, or switch back to marker align.",
+        this._calibrationState.hasCandidate
+          ? this.dimosManager?.hasBridgeConnection()
+            ? "Grab and move the robot marker.\nComplete to commit the assumed pose."
+            : "Grab and move the robot marker.\nComplete to continue with the local pose."
+          : "Grab the robot marker below the panel to position it.",
       );
       return;
     }
@@ -823,6 +864,8 @@ export class SetupWizard extends BaseScriptComponent {
       this._aligned = false;
       this._calibrationCompleted = false;
       this._calibrationState = this._createCalibrationViewState();
+      this.dimosManager?.cancelManualAlignmentPlacement();
+      this.dimosManager?.stopManualAlignmentSession();
       this.dimosManager?.hideRobotMarkerPreview();
       this.alignmentController?.setCalibrationGizmoEnabled(true);
       this.alignmentController?.start();
@@ -833,28 +876,38 @@ export class SetupWizard extends BaseScriptComponent {
     this._logSetup("manual alignment enabled");
     this.alignmentController?.setCalibrationGizmoEnabled(false);
     this.alignmentController?.stop();
-    this._aligned = true;
-    this._calibrationCompleted = true;
+    this._aligned = false;
+    this._calibrationCompleted = false;
     this._calibrationState = {
       ...this._createCalibrationViewState(),
       mode: "manual",
-      hasCandidate: true,
-      statusMessage: "Robot marker placed in front of you",
-      statusColor: COLOR_SUCCESS,
+        hasCandidate: true,
+        statusMessage: "Move the robot marker into place, then complete",
+      statusColor: COLOR_WHITE,
     };
-    this.dimosManager?.placeRobotMarkerInFrontOf(this._panelRoot());
+    if (!this.dimosManager?.startManualAlignmentSession()) {
+      this._calibrationState = this._createCalibrationViewState();
+      this._setStatus("Connect to bridge before manual alignment", COLOR_ERROR);
+      this.alignmentController?.setCalibrationGizmoEnabled(true);
+      this.alignmentController?.start();
+      this._refreshFooterButtons();
+      return;
+    }
+    this.dimosManager?.beginManualAlignmentPlacement(this._panelRoot());
     this._renderCalibrationState();
     this._refreshFooterButtons();
   }
 
   private _onAlignStatus(msg: AlignStatusMessage): void {
-    if (this._currentStep !== STEP_CALIBRATE || this._calibrationState.mode !== "auto") {
+    if (this._currentStep !== STEP_CALIBRATE) {
       return;
     }
-    this._calibrationState.robotTracking = msg.robot_marker_detected;
-    this._calibrationState.spectaclesTracking = this.alignmentController
-      ? this.alignmentController.isMarkerTracked()
-      : msg.spectacles_marker_detected;
+    if (this._calibrationState.mode === "auto") {
+      this._calibrationState.robotTracking = msg.robot_marker_detected;
+      this._calibrationState.spectaclesTracking = this.alignmentController
+        ? this.alignmentController.isMarkerTracked()
+        : msg.spectacles_marker_detected;
+    }
     this._calibrationState.currentQuality =
       msg.quality !== undefined ? msg.quality : this._calibrationState.currentQuality;
     this._calibrationState.bestQuality =
@@ -898,14 +951,16 @@ export class SetupWizard extends BaseScriptComponent {
       return;
     }
     this._aligned = false;
-    this._calibrationState.statusMessage = this._compactAlignMessage(
-      msg.message || "Searching for calibration marker",
-    );
-    this._calibrationState.statusColor = this._calibrationState.hasCandidate
-      ? COLOR_SUCCESS
-      : (this._calibrationState.spectaclesTracking || this._calibrationState.robotTracking)
-        ? COLOR_WARN
-        : COLOR_WHITE;
+    this._calibrationState.statusMessage = this._calibrationState.mode === "manual"
+      ? (msg.message || "Manual robot pose ready")
+      : this._compactAlignMessage(msg.message || "Searching for calibration marker");
+    this._calibrationState.statusColor = this._calibrationState.mode === "manual"
+      ? (this._calibrationState.hasCandidate ? COLOR_SUCCESS : COLOR_WHITE)
+      : this._calibrationState.hasCandidate
+        ? COLOR_SUCCESS
+        : (this._calibrationState.spectaclesTracking || this._calibrationState.robotTracking)
+          ? COLOR_WARN
+          : COLOR_WHITE;
     this._renderCalibrationState();
     this._refreshFooterButtons();
   }

@@ -47,8 +47,8 @@ dimos-ar/
 │   ├── transforms.py          # frame alignment / calibration math
 │   └── filters.py             # lidar filtering + subsampling
 ├── blueprints/
-│   └── go2_ar_basic.py        # unitree_go2_basic + ARBridge   (M1)
-│   # go2_ar_nav.py            # unitree_go2 + ARBridge           (M2+, planned)
+│   ├── go2_ar_basic.py        # unitree_go2_basic + ARBridge   (M1)
+│   └── go2_ar_nav.py          # unitree_go2 + ARBridge         (M2+)
 ├── clients/
 │   └── web/                   # Vite + Three.js debug + phone client
 ├── docs/
@@ -77,7 +77,7 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.nav_msgs.Path import Path
-from dimos_lcm.std_msgs import Bool
+from dimos_lcm.std_msgs import Bool, String
 
 class ARBridge(Module):
     # --- inputs: filled automatically by autoconnect ---
@@ -85,9 +85,11 @@ class ARBridge(Module):
     odom:         In[PoseStamped]    # matches GO2Connection.odom
     path:         In[Path]           # matches ReplanningAStarPlanner.path  (M2+)
     goal_reached: In[Bool]           # matches ReplanningAStarPlanner.goal_reached (M2+)
+    navigation_state: In[String]     # matches ReplanningAStarPlanner.navigation_state (M2+)
 
     # --- output: autoconnects to ReplanningAStarPlanner.clicked_point (M2+) ---
     clicked_point: Out[PointStamped]
+    stop_movement: Out[Bool]
 
     @rpc
     def start(self) -> None:
@@ -176,20 +178,19 @@ go2_ar_basic = autoconnect(
 ```
 
 ```python
-# blueprints/go2_ar_nav.py     (Milestone 2+, not yet in repo)
+# blueprints/go2_ar_nav.py     (Milestone 2+)
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
 from dimos_ar.bridge_module import ARBridge
 
 go2_ar_nav = autoconnect(
     unitree_go2,            # includes CostMapper + ReplanningAStarPlanner
-    ARBridge.blueprint(),
+    ARBridge.blueprint(enable_navigation=True),
 )
 ```
 
-For M1, `ARBridge` only declares `lidar` and `odom`. The `path`/`goal_reached`
-inputs and `clicked_point` output are added at M2, when the nav blueprint
-provides a planner for them to connect to.
+`ARBridge` keeps the navigation streams optional and capability-gated. The M1 blueprint
+does not enable navigation support; the M2 blueprint does.
 
 Run M1 development with the blueprint script (not stock `dimos --replay run`
 alone — that omits `ARBridge`):
@@ -217,7 +218,7 @@ Clients: `clients/web/` (this folder) and `lens-studio/` Lens (monorepo sibling)
 
 ### Inbound (AR -> robot), Milestone 2
 ```
-AR client taps floor -> JSON nav_goal message {x, y} in AR world frame
+AR client taps floor -> JSON nav_goal message {x, y, z} in AR world frame
    -> websocket_server receives on ws thread
    -> transforms.py: AR world frame -> robot odom frame (inverse calibration)
    -> build PointStamped
@@ -234,6 +235,11 @@ robot's `odom` frame to the AR `world` frame.
 - It is captured once at registration: the AR client detects the ArUco marker
   on the robot and reports the marker pose in AR world space; simultaneously the
   bridge samples the current `odom` pose. The two together yield `T_world_odom`.
+- Manual debug alignment extends the same contract. During an active `align_start`
+  session, the AR client may send `align_manual_pose` instead of `align_marker`;
+  the bridge auto-levels that ground-robot pose, combines it with the latest odom
+  sample, and stores it as an approximate candidate that still commits through
+  `align_commit`.
 - **Assumption:** the marker is rigidly attached at the robot base, co-located
   with the odom pose frame. If the marker is offset from the base, calibration
   will be wrong until marker-to-base offsets are applied. The `marker_id` field

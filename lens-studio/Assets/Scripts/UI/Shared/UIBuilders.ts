@@ -33,6 +33,33 @@ export function setButtonStyle(btn: RectangleButton, style: string): void {
   btn.initialize();
 }
 
+export function configureButtonToggle(
+  btn: RectangleButton,
+  defaultOn: boolean = false,
+): void {
+  const toggleBtn = btn as any;
+  toggleBtn._toggleable = true;
+  toggleBtn._defaultToOn = defaultOn;
+}
+
+export function setButtonToggleState(
+  btn: RectangleButton | null,
+  enabled: boolean,
+): void {
+  if (!btn) {
+    return;
+  }
+  const toggleBtn = btn as any;
+  toggleBtn._defaultToOn = enabled;
+  if (typeof toggleBtn.toggle === "function") {
+    toggleBtn.toggle(enabled);
+    return;
+  }
+  if ("isOn" in toggleBtn) {
+    toggleBtn.isOn = enabled;
+  }
+}
+
 /** Stable world-space text rendering inside UIKit frames. */
 export function configureWorldText(text: Text): void {
   text.depthTest = false;
@@ -94,6 +121,8 @@ export function createIconButton(
   height: number,
   position: vec3,
   style: string = SnapOS2Styles.PrimaryNeutral,
+  toggleable: boolean = false,
+  defaultOn: boolean = false,
 ): IconButtonResult {
   const btnObj = global.scene.createSceneObject(name);
   btnObj.setParent(parent);
@@ -102,6 +131,9 @@ export function createIconButton(
   const btn = btnObj.createComponent(RectangleButton.getTypeName()) as RectangleButton;
   btn.size = new vec3(width, height, 0.5);
   assignButtonStyle(btn, style);
+  if (toggleable) {
+    configureButtonToggle(btn, defaultOn);
+  }
   btn.initialize();
 
   const labelText = createText({

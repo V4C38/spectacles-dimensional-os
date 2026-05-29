@@ -68,6 +68,8 @@ export interface AlignStatusMessage {
   best_quality?: number;
   has_candidate?: boolean;
   candidate_count?: number;
+  method?: "marker" | "manual";
+  approximate?: boolean;
   message: string;
 }
 
@@ -82,6 +84,24 @@ export interface BridgeStatusMessage {
   streams_active: boolean;
   registered: boolean;
   reconnecting: boolean;
+  registration_method?: "marker" | "manual";
+  registration_approximate?: boolean;
+}
+
+export interface PathMessage {
+  type: "path";
+  ts: number;
+  robot_id: string;
+  frame: string;
+  waypoints: [number, number, number][];
+}
+
+export interface NavStatusMessage {
+  type: "nav_status";
+  ts: number;
+  robot_id: string;
+  state: "idle" | "following_path" | "recovery";
+  goal_reached: boolean;
 }
 
 export type OutboundMessage =
@@ -90,7 +110,9 @@ export type OutboundMessage =
   | PoseMessage
   | RegisteredMessage
   | AlignStatusMessage
-  | BridgeStatusMessage;
+  | BridgeStatusMessage
+  | PathMessage
+  | NavStatusMessage;
 
 export function buildGetStatus(): string {
   return JSON.stringify({
@@ -116,6 +138,45 @@ export function buildAlignCommit(): string {
     type: "align_commit",
     ts: Date.now() / 1000,
     robot_id: requireActiveRobotId("align_commit"),
+  });
+}
+
+export function buildAlignManualPose(
+  position: [number, number, number],
+  orientation: [number, number, number, number],
+): string {
+  return JSON.stringify({
+    type: "align_manual_pose",
+    ts: Date.now() / 1000,
+    robot_id: requireActiveRobotId("align_manual_pose"),
+    position,
+    orientation,
+  });
+}
+
+export function buildNavGoal(position: [number, number, number]): string {
+  return JSON.stringify({
+    type: "nav_goal",
+    ts: Date.now() / 1000,
+    robot_id: requireActiveRobotId("nav_goal"),
+    frame: "world",
+    position,
+  });
+}
+
+export function buildCancelGoal(): string {
+  return JSON.stringify({
+    type: "cancel_goal",
+    ts: Date.now() / 1000,
+    robot_id: requireActiveRobotId("cancel_goal"),
+  });
+}
+
+export function buildEmergencyStop(): string {
+  return JSON.stringify({
+    type: "emergency_stop",
+    ts: Date.now() / 1000,
+    robot_id: requireActiveRobotId("emergency_stop"),
   });
 }
 
@@ -285,6 +346,12 @@ export function parseOutboundMessage(text: string): OutboundMessage | null {
       if (typeof data.candidate_count === "number") {
         msg.candidate_count = data.candidate_count;
       }
+      if (data.method === "marker" || data.method === "manual") {
+        msg.method = data.method;
+      }
+      if (typeof data.approximate === "boolean") {
+        msg.approximate = data.approximate;
+      }
       setActiveRobotId(msg.robot_id);
       return msg;
     }
@@ -307,6 +374,38 @@ export function parseOutboundMessage(text: string): OutboundMessage | null {
       if (typeof data.robot_serial === "string") {
         msg.robot_serial = data.robot_serial;
       }
+      if (data.registration_method === "marker" || data.registration_method === "manual") {
+        msg.registration_method = data.registration_method;
+      }
+      if (typeof data.registration_approximate === "boolean") {
+        msg.registration_approximate = data.registration_approximate;
+      }
+      setActiveRobotId(msg.robot_id);
+      return msg;
+    }
+    case "path": {
+      const msg: PathMessage = {
+        type: "path",
+        ts: requireNumber(data, "ts"),
+        robot_id: requireString(data, "robot_id"),
+        frame: requireString(data, "frame"),
+        waypoints: parsePoints(data.waypoints),
+      };
+      setActiveRobotId(msg.robot_id);
+      return msg;
+    }
+    case "nav_status": {
+      const state = requireString(data, "state");
+      if (state !== "idle" && state !== "following_path" && state !== "recovery") {
+        throw new Error("nav_status.state must be idle, following_path, or recovery");
+      }
+      const msg: NavStatusMessage = {
+        type: "nav_status",
+        ts: requireNumber(data, "ts"),
+        robot_id: requireString(data, "robot_id"),
+        state,
+        goal_reached: Boolean(data.goal_reached),
+      };
       setActiveRobotId(msg.robot_id);
       return msg;
     }
@@ -325,6 +424,10 @@ export function formatBridgeStatus(msg: BridgeStatusMessage): string {
   }
   const serial = msg.robot_serial ?? msg.robot_id;
   const streams = msg.streams_active ? "streams OK" : "waiting for streams";
-  const reg = msg.registered ? "registered" : "not registered";
+  const reg = msg.registered
+    ? msg.registration_approximate
+      ? "manual registration"
+      : "registered"
+    : "not registered";
   return `${model} ${serial.slice(0, 8)}… · ${streams} · ${reg}`;
 }

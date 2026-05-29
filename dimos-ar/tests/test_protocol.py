@@ -9,9 +9,11 @@ from dimos_ar.bridge_status import BridgeStatusSnapshot
 from dimos_ar.protocol import (
     DEFAULT_CAPABILITIES,
     AlignMarkerMessage,
+    AlignManualPoseMessage,
     AlignStartMessage,
     AlignStopMessage,
     CancelGoalMessage,
+    EmergencyStopMessage,
     GetStatusMessage,
     NavGoalMessage,
     RegisterMessage,
@@ -20,6 +22,8 @@ from dimos_ar.protocol import (
     encode_bridge_status,
     encode_hello,
     encode_lidar,
+    encode_nav_status,
+    encode_path,
     encode_pose,
     encode_registered,
 )
@@ -118,6 +122,12 @@ def test_cancel_goal_decode() -> None:
     assert isinstance(msg, CancelGoalMessage)
 
 
+def test_emergency_stop_decode() -> None:
+    raw = json.dumps({"type": "emergency_stop", "ts": 3.0, "robot_id": "go2"})
+    msg = decode_inbound(raw)
+    assert isinstance(msg, EmergencyStopMessage)
+
+
 def test_unknown_type_rejected() -> None:
     with pytest.raises(ValueError, match="Unknown inbound"):
         decode_inbound(json.dumps({"type": "nope", "ts": 1.0, "robot_id": "go2"}))
@@ -159,6 +169,19 @@ def test_align_messages_decode() -> None:
     )
     assert isinstance(marker, AlignMarkerMessage)
     assert marker.marker_position == (0.0, 1.0, 0.0)
+    manual_pose = decode_inbound(
+        json.dumps(
+            {
+                "type": "align_manual_pose",
+                "ts": 4.0,
+                "robot_id": "go2",
+                "position": [1.0, 0.0, 2.0],
+                "orientation": [0.0, 0.0, 0.0, 1.0],
+            }
+        )
+    )
+    assert isinstance(manual_pose, AlignManualPoseMessage)
+    assert manual_pose.position == (1.0, 0.0, 2.0)
 
 
 def test_encode_align_status() -> None:
@@ -167,12 +190,16 @@ def test_encode_align_status() -> None:
             state="aligned",
             robot_marker_detected=True,
             quality=0.9,
+            method="manual",
+            approximate=True,
             message="ok",
         )
     )
     assert raw["type"] == "align_status"
     assert raw["state"] == "aligned"
     assert raw["quality"] == 0.9
+    assert raw["method"] == "manual"
+    assert raw["approximate"] is True
 
 
 def test_encode_bridge_status_live() -> None:
@@ -185,6 +212,8 @@ def test_encode_bridge_status_live() -> None:
         streams_active=True,
         registered=False,
         reconnecting=False,
+        registration_method=None,
+        registration_approximate=False,
     )
     raw = json.loads(encode_bridge_status(snap, ts=1.0))
     assert raw["type"] == "bridge_status"
@@ -197,6 +226,21 @@ def test_get_status_decode() -> None:
     raw = json.dumps({"type": "get_status", "ts": 2.0, "robot_id": "go2"})
     msg = decode_inbound(raw, expected_robot_id="go2")
     assert isinstance(msg, GetStatusMessage)
+
+
+def test_encode_path_and_nav_status() -> None:
+    path = json.loads(
+        encode_path(ts=2.0, waypoints=[(1.0, 2.0, 3.0)], robot_id="go2")
+    )
+    assert path["type"] == "path"
+    assert path["waypoints"] == [[1.0, 2.0, 3.0]]
+
+    status = json.loads(
+        encode_nav_status(ts=3.0, state="following_path", goal_reached=False)
+    )
+    assert status["type"] == "nav_status"
+    assert status["state"] == "following_path"
+    assert status["goal_reached"] is False
 
 
 def test_encode_registered_and_pose() -> None:

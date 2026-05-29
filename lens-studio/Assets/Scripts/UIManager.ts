@@ -3,7 +3,12 @@ import { DimosManager } from "./DimosManager";
 import { BridgeStatusMessage } from "./Network/Protocol";
 import { SetupWizard } from "./SetupWizard";
 import { scaleIn, scaleOut } from "./UI/Shared/UIAnimations";
-import { createIconButton, createText, setButtonStyle, SnapOS2Styles } from "./UI/Shared/UIBuilders";
+import {
+  createIconButton,
+  setButtonStyle,
+  setButtonToggleState,
+  SnapOS2Styles,
+} from "./UI/Shared/UIBuilders";
 import {
   BUTTON_HEIGHT,
   BUTTON_WIDTH,
@@ -11,12 +16,17 @@ import {
   COLOR_SUCCESS,
   COLOR_WARN,
   COLOR_WHITE,
+  FONT_BUTTON,
   FONT_CAPTION,
   FONT_HUD_TITLE,
   Z_BUTTONS,
-  Z_CONTENT,
 } from "./UI/Shared/UIConstants";
 import { bindFrameLayout, UIFrameMetrics } from "./UI/Shared/UIFrameMetrics";
+
+const HUD_FRAME_PAD_X = 1.2;
+const HUD_FRAME_PAD_Y = 0.9;
+const HUD_BUTTON_GAP = 0.8;
+const HUD_BUTTON_HEIGHT = BUTTON_HEIGHT * 0.72;
 
 /** 0=hidden, 1=active */
 @component
@@ -24,6 +34,9 @@ export class UIManager extends BaseScriptComponent {
   /** HUD panel only (MainUI). Must not be the parent of SetupWizard. */
   @input
   mainUIFrame: SceneObject;
+
+  @input
+  navigationControlsFrame: SceneObject;
 
   @input
   dimosManager: DimosManager;
@@ -41,14 +54,26 @@ export class UIManager extends BaseScriptComponent {
   private _lidarBtn: RectangleButton | null = null;
   private _lidarObj: SceneObject | null = null;
   private _lidarLabel: Text | null = null;
+  private _placementBtn: RectangleButton | null = null;
+  private _placementObj: SceneObject | null = null;
+  private _placementLabel: Text | null = null;
+  private _executeBtn: RectangleButton | null = null;
+  private _executeObj: SceneObject | null = null;
+  private _executeLabel: Text | null = null;
+  private _stopBtn: RectangleButton | null = null;
+  private _stopObj: SceneObject | null = null;
+  private _stopLabel: Text | null = null;
   private _titleText: Text | null = null;
   private _statusText: Text | null = null;
   private _debugMode = false;
   private _showLidar = true;
+  private _placementMode = false;
+  private _executeMovement = true;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
-      this._buildMainUI();
+      this._bindMainUI();
+      this._buildNavigationUI();
       this.setUIState(0);
     });
   }
@@ -67,76 +92,105 @@ export class UIManager extends BaseScriptComponent {
     return null;
   }
 
-  private _buildMainUI(): void {
+  private _navigationPanelRoot(): SceneObject | null {
+    if (this.navigationControlsFrame) {
+      return this.navigationControlsFrame;
+    }
+    const panel = this._panelRoot();
+    if (!panel) {
+      return null;
+    }
+    for (let i = 0; i < panel.getChildrenCount(); i++) {
+      const child = panel.getChild(i);
+      if (child.name === "NavigationControls") {
+        return child;
+      }
+    }
+    return null;
+  }
+
+  private _bindMainUI(): void {
     const panel = this._panelRoot();
     if (!panel) {
       print("UIManager: mainUIFrame not set — assign MainUI in Lens Studio");
       return;
     }
 
-    this._titleText = createText({
-      parent: panel,
-      name: "MainTitle",
-      text: "DimOS AR",
-      fontSize: FONT_HUD_TITLE,
-      color: COLOR_WHITE,
-      horizontalAlignment: HorizontalAlignment.Center,
-    });
-    this._statusText = createText({
-      parent: panel,
-      name: "MainStatus",
-      text: "Bridge disconnected",
-      fontSize: FONT_CAPTION,
-      color: COLOR_ERROR,
-      horizontalAlignment: HorizontalAlignment.Center,
-    });
-
-    const restart = createIconButton(
-      panel,
-      "RestartSetup",
-      "Restart Setup",
-      BUTTON_WIDTH + 1.5,
-      BUTTON_HEIGHT * 0.72,
-      vec3.zero(),
-      SnapOS2Styles.Ghost,
-    );
-    this._restartBtn = restart.button;
-    this._restartObj = restart.sceneObject;
-    this._restartLabel = restart.labelText;
-    this._restartBtn.onTriggerUp.add(() => {
+    this._titleText = this._findText(panel, "MainTitle");
+    this._statusText = this._findText(panel, "MainStatus");
+    const restart = this._findButtonBinding(panel, "RestartSetup", "RestartSetupLabel");
+    this._restartBtn = restart?.button ?? null;
+    this._restartObj = restart?.sceneObject ?? null;
+    this._restartLabel = restart?.labelText ?? null;
+    this._restartBtn?.onTriggerUp.add(() => {
       this.setUIState(0);
       if (this.setupWizard) {
         this.setupWizard.startSetupWizard();
       }
     });
 
-    const debug = createIconButton(
-      panel,
-      "DebugMode",
-      "Debug Mode: Off",
-      BUTTON_WIDTH + 1.5,
-      BUTTON_HEIGHT * 0.72,
-      vec3.zero(),
-      SnapOS2Styles.Ghost,
+    const debug = this._findButtonBinding(panel, "DebugMode", "DebugModeLabel");
+    this._debugBtn = debug?.button ?? null;
+    this._debugObj = debug?.sceneObject ?? null;
+    this._debugLabel = debug?.labelText ?? null;
+    this._bindToggleButton(
+      this._debugBtn,
+      (enabled) => this.dimosManager?.setDebugMode(enabled),
+      () => this._debugMode,
     );
-    this._debugBtn = debug.button;
-    this._debugObj = debug.sceneObject;
-    this._debugLabel = debug.labelText;
-    this._debugBtn.onTriggerUp.add(() => this._toggleDebugMode());
 
-    const lidar = createIconButton(
-      panel,
-      "ShowLidar",
-      "Show LiDAR: On",
-      BUTTON_WIDTH + 1.5,
-      BUTTON_HEIGHT * 0.72,
-      vec3.zero(),
-      SnapOS2Styles.Ghost,
+    const lidar = this._findButtonBinding(panel, "ShowLidar", "ShowLidarLabel");
+    this._lidarBtn = lidar?.button ?? null;
+    this._lidarObj = lidar?.sceneObject ?? null;
+    this._lidarLabel = lidar?.labelText ?? null;
+    this._bindToggleButton(
+      this._lidarBtn,
+      (enabled) => this.dimosManager?.setShowLidar(enabled),
+      () => this._showLidar,
     );
-    this._lidarBtn = lidar.button;
-    this._lidarObj = lidar.sceneObject;
-    this._lidarLabel = lidar.labelText;
-    this._lidarBtn.onTriggerUp.add(() => this._toggleLidar());
+
+    this._restartLabel && (this._restartLabel.size = FONT_BUTTON);
+    this._debugLabel && (this._debugLabel.size = FONT_BUTTON);
+    this._lidarLabel && (this._lidarLabel.size = FONT_BUTTON);
+    if (this._titleText) {
+      this._titleText.size = FONT_HUD_TITLE;
+      this._titleText.text = "DimOS AR";
+      this._titleText.textFill.color = COLOR_WHITE;
+    }
+    if (this._statusText) {
+      this._statusText.size = FONT_CAPTION;
+      this._statusText.text = "Bridge disconnected";
+      this._statusText.textFill.color = COLOR_ERROR;
+    }
+    if (this._restartBtn) {
+      setButtonStyle(this._restartBtn, SnapOS2Styles.Ghost);
+    }
+    if (this._restartLabel) {
+      this._restartLabel.text = "Restart Setup";
+    }
+    if (this._debugLabel) {
+      this._debugLabel.text = "Debug Mode";
+    }
+    if (this._lidarLabel) {
+      this._lidarLabel.text = "Show LiDAR";
+    }
+
+    if (
+      !this._titleText ||
+      !this._statusText ||
+      !this._restartBtn ||
+      !this._restartObj ||
+      !this._restartLabel ||
+      !this._debugBtn ||
+      !this._debugObj ||
+      !this._debugLabel ||
+      !this._lidarBtn ||
+      !this._lidarObj ||
+      !this._lidarLabel
+    ) {
+      print("UIManager: MainUI scene hierarchy incomplete");
+      return;
+    }
 
     if (this.dimosManager?.bridgeClient) {
       this.dimosManager.bridgeClient.ensureEventHandlers();
@@ -150,75 +204,203 @@ export class UIManager extends BaseScriptComponent {
         this._applyBridgeStatus(this.dimosManager.bridgeClient.lastBridgeStatus);
       }
     }
+    if (this.dimosManager) {
+      this.dimosManager.onDebugModeChanged.push((enabled) => {
+        this._debugMode = enabled;
+        this._syncToggleState(this._debugBtn, enabled);
+      });
+      this.dimosManager.onShowLidarChanged.push((enabled) => {
+        this._showLidar = enabled;
+        this._syncToggleState(this._lidarBtn, enabled);
+      });
+      this._debugMode = this.dimosManager.debugMode;
+      this._showLidar = this.dimosManager.showLidar;
+    }
+    this._syncToggleState(this._debugBtn, this._debugMode);
+    this._syncToggleState(this._lidarBtn, this._showLidar);
 
-    bindFrameLayout(panel, () => this._applyLayout());
-    this._applyLayout();
   }
 
-  private _applyLayout(): void {
+  private _buildNavigationUI(): void {
     const panel = this._panelRoot();
+    const navPanel = this._navigationPanelRoot() ?? panel;
+    if (!panel || !navPanel) {
+      return;
+    }
+
+    const placement = createIconButton(
+      navPanel,
+      "PlacementMode",
+      "Pin Drop",
+      BUTTON_WIDTH + 1.5,
+      BUTTON_HEIGHT * 0.72,
+      vec3.zero(),
+      SnapOS2Styles.PrimaryNeutral,
+      true,
+      this._placementMode,
+    );
+    this._placementBtn = placement.button;
+    this._placementObj = placement.sceneObject;
+    this._placementLabel = placement.labelText;
+    this._placementLabel.size = FONT_BUTTON;
+    this._bindToggleButton(
+      this._placementBtn,
+      (enabled) => this.dimosManager?.setPlacementMode(enabled),
+      () => this._placementMode,
+    );
+
+    const execute = createIconButton(
+      navPanel,
+      "ExecuteMovement",
+      "Execute",
+      BUTTON_WIDTH + 1.5,
+      BUTTON_HEIGHT * 0.72,
+      vec3.zero(),
+      SnapOS2Styles.PrimaryNeutral,
+      true,
+      this._executeMovement,
+    );
+    this._executeBtn = execute.button;
+    this._executeObj = execute.sceneObject;
+    this._executeLabel = execute.labelText;
+    this._executeLabel.size = FONT_BUTTON;
+    this._bindToggleButton(
+      this._executeBtn,
+      (enabled) => this.dimosManager?.setExecuteMovement(enabled),
+      () => this._executeMovement,
+    );
+
+    const stop = createIconButton(
+      navPanel,
+      "EmergencyStop",
+      "E-Stop",
+      BUTTON_WIDTH + 1.5,
+      BUTTON_HEIGHT * 0.72,
+      vec3.zero(),
+      SnapOS2Styles.Primary,
+    );
+    this._stopBtn = stop.button;
+    this._stopObj = stop.sceneObject;
+    this._stopLabel = stop.labelText;
+    this._stopLabel.size = FONT_BUTTON;
+    this._stopLabel.textFill.color = COLOR_ERROR;
+    this._stopBtn.onTriggerUp.add(() => this.dimosManager?.requestEmergencyStop());
+
+    if (this.dimosManager) {
+      this.dimosManager.onPlacementModeChanged.push((enabled) => {
+        this._placementMode = enabled;
+        this._syncToggleState(this._placementBtn, enabled);
+      });
+      this.dimosManager.onExecuteMovementChanged.push((enabled) => {
+        this._executeMovement = enabled;
+        this._syncToggleState(this._executeBtn, enabled);
+      });
+      this._placementMode = this.dimosManager.placementMode;
+      this._executeMovement = this.dimosManager.executeMovement;
+    }
+    this._syncToggleState(this._placementBtn, this._placementMode);
+    this._syncToggleState(this._executeBtn, this._executeMovement);
+
+    if (navPanel !== panel) {
+      bindFrameLayout(navPanel, () => this._applyNavigationLayout());
+    }
+    this._applyNavigationLayout();
+  }
+
+  private _findChildRecursive(root: SceneObject, name: string): SceneObject | null {
+    for (let i = 0; i < root.getChildrenCount(); i++) {
+      const child = root.getChild(i);
+      if (child.name === name) {
+        return child;
+      }
+      const nested = this._findChildRecursive(child, name);
+      if (nested) {
+        return nested;
+      }
+    }
+    return null;
+  }
+
+  private _findText(root: SceneObject, name: string): Text | null {
+    const obj = this._findChildRecursive(root, name);
+    if (!obj) {
+      return null;
+    }
+    return obj.getComponent("Component.Text") as Text;
+  }
+
+  private _findButtonBinding(
+    root: SceneObject,
+    objectName: string,
+    labelName: string,
+  ): { sceneObject: SceneObject; button: RectangleButton; labelText: Text | null } | null {
+    const obj = this._findChildRecursive(root, objectName);
+    if (!obj) {
+      return null;
+    }
+    const button = obj.getComponent(RectangleButton.getTypeName()) as RectangleButton;
+    if (!button) {
+      return null;
+    }
+    return {
+      sceneObject: obj,
+      button,
+      labelText: this._findText(obj, labelName) ?? this._findText(root, labelName),
+    };
+  }
+
+  private _applyNavigationLayout(): void {
+    const navPanel = this._navigationPanelRoot();
     if (
-      !panel ||
-      !this._titleText ||
-      !this._statusText ||
-      !this._restartObj ||
-      !this._restartBtn ||
-      !this._debugObj ||
-      !this._debugBtn ||
-      !this._lidarObj ||
-      !this._lidarBtn
+      !navPanel ||
+      !this._placementObj ||
+      !this._placementBtn ||
+      !this._executeObj ||
+      !this._executeBtn ||
+      !this._stopObj ||
+      !this._stopBtn
     ) {
       return;
     }
-    const metrics = UIFrameMetrics.fromSceneObject(panel);
-    const sidePad = 1.2;
-    const gap = 0.8;
-    const availableButtonWidth = metrics.contentWidth - sidePad * 2 - gap * 2;
-    const buttonWidth = Math.min(BUTTON_WIDTH + 1.0, availableButtonWidth / 3);
-    const buttonHeight = BUTTON_HEIGHT * 0.72;
-    const titleY = metrics.contentTopY - 0.8;
-    const statusY = titleY - 1.8;
-    const buttonY = statusY - 2.5;
-
-    this._titleText.getSceneObject().getTransform().setLocalPosition(
-      new vec3(0, titleY, Z_CONTENT),
+    const rawNavMetrics = UIFrameMetrics.fromSceneObject(navPanel);
+    const navMetrics = new UIFrameMetrics(
+      rawNavMetrics.innerWidth,
+      rawNavMetrics.innerHeight,
+      HUD_FRAME_PAD_X,
+      HUD_FRAME_PAD_Y,
     );
-    this._titleText.worldSpaceRect = Rect.create(
-      -metrics.contentWidth / 2,
-      metrics.contentWidth / 2,
-      -1.4,
-      1.4,
+    const navButtonWidth = Math.min(
+      7.4,
+      (navMetrics.contentWidth - HUD_BUTTON_GAP * 2) / 3,
     );
-    this._statusText.getSceneObject().getTransform().setLocalPosition(
-      new vec3(0, statusY, Z_CONTENT),
-    );
-    this._statusText.worldSpaceRect = Rect.create(
-      -metrics.contentWidth / 2,
-      metrics.contentWidth / 2,
-      -1.0,
-      1.0,
-    );
-
-    const leftX = -metrics.contentWidth / 2 + sidePad + buttonWidth / 2;
+    const navRowY = 0;
+    const leftX = -navButtonWidth - HUD_BUTTON_GAP;
     const centerX = 0;
-    const rightX = metrics.contentWidth / 2 - sidePad - buttonWidth / 2;
-    this._restartObj.getTransform().setLocalPosition(new vec3(leftX, buttonY, Z_BUTTONS));
-    this._debugObj.getTransform().setLocalPosition(new vec3(centerX, buttonY, Z_BUTTONS));
-    this._lidarObj.getTransform().setLocalPosition(new vec3(rightX, buttonY, Z_BUTTONS));
-    this._restartBtn.size = new vec3(buttonWidth, buttonHeight, 0.5);
-    this._debugBtn.size = new vec3(buttonWidth, buttonHeight, 0.5);
-    this._lidarBtn.size = new vec3(buttonWidth, buttonHeight, 0.5);
-    this._setButtonLabelRect(this._restartLabel, buttonWidth, buttonHeight);
-    this._setButtonLabelRect(this._debugLabel, buttonWidth, buttonHeight);
-    this._setButtonLabelRect(this._lidarLabel, buttonWidth, buttonHeight);
+    const rightX = navButtonWidth + HUD_BUTTON_GAP;
+    this._stopObj.getTransform().setLocalPosition(new vec3(leftX, navRowY, Z_BUTTONS));
+    this._placementObj.getTransform().setLocalPosition(new vec3(centerX, navRowY, Z_BUTTONS));
+    this._executeObj.getTransform().setLocalPosition(new vec3(rightX, navRowY, Z_BUTTONS));
+    this._stopBtn.size = new vec3(navButtonWidth, HUD_BUTTON_HEIGHT, 0.5);
+    this._placementBtn.size = new vec3(navButtonWidth, HUD_BUTTON_HEIGHT, 0.5);
+    this._executeBtn.size = new vec3(navButtonWidth, HUD_BUTTON_HEIGHT, 0.5);
+    this._setButtonLabelRect(this._stopLabel, navButtonWidth, HUD_BUTTON_HEIGHT);
+    this._setButtonLabelRect(this._placementLabel, navButtonWidth, HUD_BUTTON_HEIGHT);
+    this._setButtonLabelRect(this._executeLabel, navButtonWidth, HUD_BUTTON_HEIGHT);
+    this._stopLabel && (this._stopLabel.size = FONT_BUTTON);
+    this._placementLabel && (this._placementLabel.size = FONT_BUTTON);
+    this._executeLabel && (this._executeLabel.size = FONT_BUTTON);
   }
 
   public setUIState(state: number): void {
     this._uiState = state;
     if (state === 0) {
       const panel = this._panelRoot();
+      const navPanel = this._navigationPanelRoot();
       if (panel) {
         scaleOut(panel, 0.35);
+      }
+      if (navPanel && navPanel !== panel) {
+        scaleOut(navPanel, 0.35);
       }
       if (this.dimosManager) {
         this.dimosManager.setIsActive(false);
@@ -226,8 +408,12 @@ export class UIManager extends BaseScriptComponent {
       }
     } else if (state === 1) {
       const panel = this._panelRoot();
+      const navPanel = this._navigationPanelRoot();
       if (panel) {
         scaleIn(panel, 0.35);
+      }
+      if (navPanel && navPanel !== panel) {
+        scaleIn(navPanel, 0.35);
       }
       if (this.dimosManager) {
         this.dimosManager.setIsActive(true);
@@ -243,8 +429,7 @@ export class UIManager extends BaseScriptComponent {
   private _applyBridgeStatus(msg: BridgeStatusMessage): void {
     if (this._titleText) {
       const model = this._formatRobotModel(msg.robot_model);
-      const serial = msg.robot_serial ?? msg.robot_id;
-      this._titleText.text = `${model} (${serial})`;
+      this._titleText.text = model;
     }
     if (this._statusText) {
       if (msg.reconnecting) {
@@ -309,30 +494,26 @@ export class UIManager extends BaseScriptComponent {
     );
   }
 
-  private _toggleDebugMode(): void {
-    this._debugMode = !this._debugMode;
-    if (this._debugLabel) {
-      this._debugLabel.text = this._debugMode ? "Debug Mode: On" : "Debug Mode: Off";
+  private _bindToggleButton(
+    button: RectangleButton | null,
+    onChanged: (enabled: boolean) => void,
+    currentValue: () => boolean,
+  ): void {
+    if (!button) {
+      return;
     }
-    if (this.dimosManager) {
-      this.dimosManager.setDebugMode(this._debugMode);
+    const toggleButton = button as RectangleButton & {
+      onValueChange?: { add: (cb: (value: number) => void) => void };
+    };
+    if (toggleButton.onValueChange && typeof toggleButton.onValueChange.add === "function") {
+      toggleButton.onValueChange.add((value: number) => onChanged(value === 1));
+      return;
     }
-    if (this._debugBtn) {
-      setButtonStyle(this._debugBtn, SnapOS2Styles.Ghost);
-    }
+    button.onTriggerUp.add(() => onChanged(!currentValue()));
   }
 
-  private _toggleLidar(): void {
-    this._showLidar = !this._showLidar;
-    if (this._lidarLabel) {
-      this._lidarLabel.text = this._showLidar ? "Show LiDAR: On" : "Show LiDAR: Off";
-    }
-    if (this.dimosManager) {
-      this.dimosManager.setShowLidar(this._showLidar);
-    }
-    if (this._lidarBtn) {
-      setButtonStyle(this._lidarBtn, SnapOS2Styles.Ghost);
-    }
+  private _syncToggleState(button: RectangleButton | null, enabled: boolean): void {
+    setButtonToggleState(button, enabled);
   }
 
   private _formatRobotModel(raw: string): string {

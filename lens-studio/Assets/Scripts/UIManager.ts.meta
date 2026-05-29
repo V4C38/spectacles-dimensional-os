@@ -28,6 +28,7 @@
   ScriptInputsHidden:
     dimosManager: false
     mainUIFrame: false
+    navigationControlsFrame: false
     setupWizard: false
   ScriptTypesHidden:
     {}
@@ -39,6 +40,7 @@
     []
   DefaultScriptInputs:
     - mainUIFrame: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      navigationControlsFrame: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
       dimosManager: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
       setupWizard: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
@@ -46,5 +48,6 @@
       {}
   InputLines:
     - // @input SceneObject mainUIFrame
+    - // @input SceneObject navigationControlsFrame
     - // @input AssignableType dimosManager
     - // @input AssignableType_1 setupWizard
