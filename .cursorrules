@@ -68,6 +68,9 @@ spectacles-unitree/
 - AR development uses `dimos-ar/blueprints/go2_ar_basic.py` (via `./start.sh`),
   not the stock `dimos --replay run unitree-go2` CLI alone.
 - Port **8765** is ARBridge WebSocket. Do not run DimOS Foxglove on the same port.
+- For Lens Studio verification, do **not** run `CompileWithLogs` by default.
+  Use normal compile checks first, and only run compile-with-logs when there is
+  an actual compile/runtime error that needs investigation.
 
 ## Dev quick reference
 

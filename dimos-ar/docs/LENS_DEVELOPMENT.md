@@ -1,8 +1,8 @@
 # Lens development — Spectacles client
 
-Read `PROJECT_BRIEF.md`, `ARCHITECTURE.md`, and `PROTOCOL.md` first. This
-document covers **Spectacles-specific** Lens Studio work. It does not belong in
-`dimos_ar/` Python code.
+Read the repository root `README.md`, `ARCHITECTURE.md`, and `PROTOCOL.md`
+first. This document covers **Spectacles-specific** Lens Studio work. It does
+not belong in `dimos_ar/` Python code.
 
 ## Where the Lens lives
 
@@ -80,10 +80,11 @@ DimosManager (@component on DimOS scene object)
 
 - Hybrid model:
   - `SetupWizard` inner content stays runtime-instantiated via `UI/Shared/UIBuilders.ts`
-  - `MainUI` title/status/top-row buttons are authored scene objects under the `MainUI` frame
-  - navigation controls content stays runtime-instantiated
-  - robot-local menu + 3D toggle sphere are authored under `RobotMarkerRoot`
+  - `MainUI` title/status/top-row controls plus the mode-based submenu are authored scene objects under the `MainUI` frame
+  - the Manual / Agent selector is part of the runtime app state boundary, not just local HUD presentation
+  - robot-local menu `Frame`, 3D toggle, and dedicated manual-placement handle are authored under `RobotMarkerRoot`
 - Outer frames (`SetupWizard`, `MainUI`) are scene-placed UIKit Frame objects.
+  - the live scene currently binds its wizard logic to `Assets/Scripts/Setup/SetupWizard.ts`
 
 Scene object **RobotManager** is the hierarchy root in `Scene.scene`; the
 **DimosManager** script lives on the **DimOS** child object — see
@@ -217,9 +218,14 @@ Rules:
   stream health; call `get_status` via `BridgeClient.requestStatus()` to refresh.
 - Ignore unknown message types and fields (forward-compatible).
 - Send `robot_id: "go2"` unless configured otherwise.
-- Alignment: use the shared `align_*` session flow. Manual alignment is no
-  longer Lens-local only; it submits `align_manual_pose` and still commits via
-  `align_commit`.
+- Alignment: use the shared `align_*` session flow whenever the bridge is
+  connected. Auto alignment streams `align_marker`; connected manual alignment
+  submits `align_manual_pose` and finalizes with `align_commit`.
+- Offline/manual fallback: if the bridge is not connected, the Lens still
+  supports Reachy-style mock placement. Spawn the robot-local marker once below
+  the setup wizard panel, let the user grab the dedicated
+  `RobotPlacementHandle` to place `RobotMarkerRoot` on the robot, and preserve
+  that local pose until live bridge pose data arrives.
 
 WebSocket has **no authentication** today — use only on trusted LANs (see
 `ARCHITECTURE.md`).
@@ -263,6 +269,11 @@ Two patterns exist in production Spectacles Lenses:
 Every UI element is a pre-built SceneObject in Lens Studio's scene hierarchy.
 Scripts reference them via `@input` decorators; the Inspector wires them.
 
+For this project, the outer `SetupWizard` / `MainUI` containers are UIKit
+`Frame` scene objects, but world-space placement should still be derived from a
+one-shot sampled transform. Do not keep robot placement tethered to a
+follow-enabled Frame after the initial spawn under the wizard.
+
 **Pattern B — Runtime instantiation (Agent Center style)**
 UI is built in code: `global.scene.createSceneObject()` + `createComponent()`.
 Plain TypeScript classes (not `@component`) take a `parent: SceneObject` in their
@@ -295,12 +306,12 @@ Use a **hybrid** of Pattern A and Pattern B:
 
 **Keep runtime instantiation (Pattern B) for:**
 - `SetupWizard` steps and their inner content
-- navigation controls content under `NavigationControls`
 - temporary / future workflow UI that is easier to iterate in code
 
 **Use scene-authored objects (Pattern A) for:**
-- `MainUI` title/status/restart/debug/lidar objects
-- robot-local menu text/buttons under `RobotMarkerRoot`
+- `MainUI` title/status/restart/debug/emergency-stop objects
+- the mode-based submenu frame, Manual/Agent toggles, and Manual-mode execute toggle
+- the robot-local `Frame`, text/buttons, and dedicated placement handle under `RobotMarkerRoot`
 - the Reachy-style 3D sphere toggle under `RobotMarkerRoot`
 
 This means `SetupWizard.ts` still builds its own UI tree in `onAwake()`, but

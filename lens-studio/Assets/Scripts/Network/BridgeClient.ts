@@ -6,6 +6,11 @@ import {
   NavStatusMessage,
   PathMessage,
   PoseMessage,
+  clearActiveRobotId,
+  getActiveRobotId,
+  setActiveRobotId,
+} from "./ProtocolTypes";
+import {
   buildAlignMarker,
   buildAlignCommit,
   buildAlignManualPose,
@@ -15,12 +20,10 @@ import {
   buildEmergencyStop,
   buildGetStatus,
   buildNavGoal,
-  clearActiveRobotId,
-  getActiveRobotId,
   parseInboundMessage,
-  setActiveRobotId,
 } from "./Protocol";
 import { IP_STORAGE_KEY, WS_PORT } from "../UI/Shared/UIConstants";
+import { emit } from "./Signals";
 
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
@@ -45,6 +48,7 @@ export class BridgeClient extends BaseScriptComponent {
   private isConnecting = false;
   private helloReceived = false;
   private _activeRobotId: string | null = null;
+  private _helloCapabilities: string[] = [];
   public lastBridgeStatus: BridgeStatusMessage | null = null;
 
   /** Lens Studio may not run field initializers before other scripts read these arrays. */
@@ -142,7 +146,7 @@ export class BridgeClient extends BaseScriptComponent {
 
       this.ws.onopen = () => {
         this.isConnecting = false;
-        print(`BridgeClient: connected`);
+        print("BridgeClient: connected");
         resolve();
       };
 
@@ -160,6 +164,7 @@ export class BridgeClient extends BaseScriptComponent {
         this.ws = null;
         this.helloReceived = false;
         this._activeRobotId = null;
+        this._helloCapabilities = [];
         clearActiveRobotId();
         this.lastBridgeStatus = null;
         this._notifyConnection(false);
@@ -182,13 +187,15 @@ export class BridgeClient extends BaseScriptComponent {
 
   public disconnect(): void {
     if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.close();
+      const socket = this.ws;
+      this._detachSocketHandlers(socket);
+      socket.close();
       this.ws = null;
     }
     this.isConnecting = false;
     this.helloReceived = false;
     this._activeRobotId = null;
+    this._helloCapabilities = [];
     clearActiveRobotId();
     this.lastBridgeStatus = null;
     this._notifyConnection(false);
@@ -198,85 +205,54 @@ export class BridgeClient extends BaseScriptComponent {
     return this._activeRobotId;
   }
 
+  public get negotiatedCapabilities(): string[] {
+    return this._helloCapabilities.slice();
+  }
+
+  public hasCapability(capability: string): boolean {
+    return this._helloCapabilities.indexOf(capability) >= 0;
+  }
+
   public requestStatus(): boolean {
-    const robotId = this._requireRobotId("get_status");
-    if (!robotId) {
-      return false;
-    }
-    this.send(buildGetStatus(robotId));
-    return true;
+    return this._sendForActiveRobot("get_status", buildGetStatus);
   }
 
   public sendAlignStart(): boolean {
-    const robotId = this._requireRobotId("align_start");
-    if (!robotId) {
-      return false;
-    }
-    this.send(buildAlignStart(robotId));
-    return true;
+    return this._sendForActiveRobot("align_start", buildAlignStart);
   }
 
   public sendAlignStop(): boolean {
-    const robotId = this._requireRobotId("align_stop");
-    if (!robotId) {
-      return false;
-    }
-    this.send(buildAlignStop(robotId));
-    return true;
+    return this._sendForActiveRobot("align_stop", buildAlignStop);
   }
 
   public sendAlignCommit(): boolean {
-    const robotId = this._requireRobotId("align_commit");
-    if (!robotId) {
-      return false;
-    }
-    this.send(buildAlignCommit(robotId));
-    return true;
+    return this._sendForActiveRobot("align_commit", buildAlignCommit);
   }
 
   public sendAlignMarker(position: vec3, rotation: quat): boolean {
-    const robotId = this._requireRobotId("align_marker");
-    if (!robotId) {
-      return false;
-    }
-    this.send(buildAlignMarker(position, rotation, robotId));
-    return true;
+    return this._sendForActiveRobot("align_marker", (robotId) =>
+      buildAlignMarker(position, rotation, robotId),
+    );
   }
 
   public sendAlignManualPose(position: vec3, rotation: quat): boolean {
-    const robotId = this._requireRobotId("align_manual_pose");
-    if (!robotId) {
-      return false;
-    }
-    this.send(buildAlignManualPose(position, rotation, robotId));
-    return true;
+    return this._sendForActiveRobot("align_manual_pose", (robotId) =>
+      buildAlignManualPose(position, rotation, robotId),
+    );
   }
 
-  public sendNavGoal(position: vec3): boolean {
-    const robotId = this._requireRobotId("nav_goal");
-    if (!robotId) {
-      return false;
-    }
-    this.send(buildNavGoal(position, robotId));
-    return true;
+  public sendNavGoal(position: vec3, rotation: quat): boolean {
+    return this._sendForActiveRobot("nav_goal", (robotId) =>
+      buildNavGoal(position, rotation, robotId),
+    );
   }
 
   public sendCancelGoal(): boolean {
-    const robotId = this._requireRobotId("cancel_goal");
-    if (!robotId) {
-      return false;
-    }
-    this.send(buildCancelGoal(robotId));
-    return true;
+    return this._sendForActiveRobot("cancel_goal", buildCancelGoal);
   }
 
   public sendEmergencyStop(): boolean {
-    const robotId = this._requireRobotId("emergency_stop");
-    if (!robotId) {
-      return false;
-    }
-    this.send(buildEmergencyStop(robotId));
-    return true;
+    return this._sendForActiveRobot("emergency_stop", buildEmergencyStop);
   }
 
   /** Wait for server `hello` after the socket is open (bridge sends it on connect). */
@@ -330,34 +306,35 @@ export class BridgeClient extends BaseScriptComponent {
       switch (msg.type) {
         case "hello":
           this.helloReceived = true;
+          this._helloCapabilities = msg.capabilities.slice();
           this._adoptRobotId(msg.robots.length > 0 ? msg.robots[0] : null);
           this._notifyConnection(true);
-          this.onHello.forEach((cb) => cb(msg));
+          emit(this.onHello, msg);
           break;
         case "lidar":
           this._adoptRobotId(msg.robot_id);
-          this.onLidar.forEach((cb) => cb(msg));
+          emit(this.onLidar, msg);
           break;
         case "pose":
           this._adoptRobotId(msg.robot_id);
-          this.onPose.forEach((cb) => cb(msg));
+          emit(this.onPose, msg);
           break;
         case "align_status":
           this._adoptRobotId(msg.robot_id);
-          this.onAlignStatus.forEach((cb) => cb(msg));
+          emit(this.onAlignStatus, msg);
           break;
         case "bridge_status":
           this._adoptRobotId(msg.robot_id);
           this.lastBridgeStatus = msg;
-          this.onBridgeStatus.forEach((cb) => cb(msg));
+          emit(this.onBridgeStatus, msg);
           break;
         case "path":
           this._adoptRobotId(msg.robot_id);
-          this.onPath.forEach((cb) => cb(msg));
+          emit(this.onPath, msg);
           break;
         case "nav_status":
           this._adoptRobotId(msg.robot_id);
-          this.onNavStatus.forEach((cb) => cb(msg));
+          emit(this.onNavStatus, msg);
           break;
       }
     } catch (error) {
@@ -372,7 +349,18 @@ export class BridgeClient extends BaseScriptComponent {
   }
 
   private _notifyConnection(connected: boolean): void {
-    this.onConnectionChanged.forEach((cb) => cb(connected));
+    emit(this.onConnectionChanged, connected);
+  }
+
+  /**
+   * Lens Studio expects WebSocket callbacks to stay function-typed.
+   * Use no-op handlers when cancelling a pending connection.
+   */
+  private _detachSocketHandlers(socket: WebSocket): void {
+    socket.onopen = () => {};
+    socket.onmessage = () => {};
+    socket.onerror = () => {};
+    socket.onclose = () => {};
   }
 
   private _adoptRobotId(robotId: string | null): void {
@@ -393,6 +381,18 @@ export class BridgeClient extends BaseScriptComponent {
     }
     this._activeRobotId = robotId;
     return robotId;
+  }
+
+  private _sendForActiveRobot(
+    action: string,
+    build: (robotId: string) => string,
+  ): boolean {
+    const robotId = this._requireRobotId(action);
+    if (!robotId) {
+      return false;
+    }
+    this.send(build(robotId));
+    return true;
   }
 
   private _snippet(text: string, start: number): string {

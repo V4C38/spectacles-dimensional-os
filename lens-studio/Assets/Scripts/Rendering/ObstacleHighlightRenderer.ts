@@ -1,19 +1,11 @@
 import { LidarMessage, protocolMetersToLensCentimeters } from "../Network/Protocol";
+import { cloneMaterialWithColor } from "./Shared/MaterialUtils";
 
 const MAX_HIGHLIGHTS = 120;
 const CORRIDOR_RADIUS_CM = 28.0;
 const HIGHLIGHT_LIFT_CM = 1.0;
 const HIGHLIGHT_SCALE_MIN = 1.2;
 const HIGHLIGHT_SCALE_MAX = 2.2;
-
-function cloneHighlightMaterial(source: Material): Material {
-  const material = source.clone();
-  const pass = material.mainPass as any;
-  const color = new vec4(1.0, 0.2, 0.2, 0.95);
-  pass.baseColor = color;
-  pass.Port_Emissive_N006 = new vec3(color.x, color.y, color.z);
-  return material;
-}
 
 export class ObstacleHighlightRenderer {
   private readonly root: SceneObject;
@@ -27,7 +19,12 @@ export class ObstacleHighlightRenderer {
     this.root = global.scene.createSceneObject("ObstacleHighlights");
     this.root.setParent(parent);
     this.template = template;
-    this.material = template?.mainMaterial ? cloneHighlightMaterial(template.mainMaterial) : null;
+    this.material = template?.mainMaterial
+      ? cloneMaterialWithColor(
+          template.mainMaterial,
+          new vec4(1.0, 0.2, 0.2, 0.95),
+        )
+      : null;
   }
 
   public updateLidar(msg: LidarMessage): void {

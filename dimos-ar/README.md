@@ -21,7 +21,6 @@ Spectacles Lens: [`../lens-studio/`](../lens-studio/) — see [docs/LENS_DEVELOP
 
 | Doc | Contents |
 |-----|----------|
-| [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) | Goals, milestones, constraints |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Package layout, threading, data flow |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | WebSocket message schema |
 | [docs/LENS_DEVELOPMENT.md](docs/LENS_DEVELOPMENT.md) | Spectacles Lens Studio guide |

@@ -1,27 +1,27 @@
 import { RectangleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RectangleButton";
+import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
 import { SnapOS2Styles } from "SpectaclesUIKit.lspkg/Scripts/Themes/SnapOS-2.0/SnapOS2";
 import { FONT_BUTTON, Z_BUTTONS, Z_CONTENT } from "./UIConstants";
 
 export { SnapOS2Styles };
 
-type StyleableButton = RectangleButton & {
-  _style?: string;
-  _visual?: { destroy: () => void } | null;
-  _initialized?: boolean;
-};
+type StyleableButton = any;
 
-function assignButtonStyle(btn: RectangleButton, style: string): void {
+function assignButtonStyle(btn: any, style: string): void {
   (btn as StyleableButton)._style = style;
 }
 
 /** Apply a SnapOS2 style before or after button initialization. */
-export function setButtonStyle(btn: RectangleButton, style: string): void {
+export function setButtonStyle(
+  btn: RectangleButton | RoundButton | null,
+  style: string,
+): void {
   if (!btn || btn.style === style) {
     return;
   }
-  assignButtonStyle(btn, style);
-  const internal = btn as StyleableButton;
+  assignButtonStyle(btn as unknown as StyleableButton, style);
+  const internal = btn as unknown as StyleableButton;
   if (!internal._initialized) {
     return;
   }
@@ -58,6 +58,27 @@ export function setButtonToggleState(
   if ("isOn" in toggleBtn) {
     toggleBtn.isOn = enabled;
   }
+}
+
+export function bindToggleButton(
+  button: RectangleButton | null,
+  onChanged: (enabled: boolean) => void,
+  currentValue: () => boolean,
+): void {
+  if (!button) {
+    return;
+  }
+  const toggleButton = button as RectangleButton & {
+    onValueChange?: { add: (cb: (value: number) => void) => void };
+  };
+  if (
+    toggleButton.onValueChange &&
+    typeof toggleButton.onValueChange.add === "function"
+  ) {
+    toggleButton.onValueChange.add((value: number) => onChanged(value === 1));
+    return;
+  }
+  button.onTriggerUp.add(() => onChanged(!currentValue()));
 }
 
 /** Stable world-space text rendering inside UIKit frames. */
@@ -168,4 +189,21 @@ export function createTextInput(
   const field = obj.createComponent(TextInputField.getTypeName()) as TextInputField;
   field.size = new vec3(width, height, 0.5);
   return field;
+}
+
+export function setButtonLabelRect(
+  label: Text | null,
+  width: number,
+  height: number,
+  inset: number = 0.3,
+): void {
+  if (!label) {
+    return;
+  }
+  label.worldSpaceRect = Rect.create(
+    -width / 2 + inset,
+    width / 2 - inset,
+    -height / 2,
+    height / 2,
+  );
 }

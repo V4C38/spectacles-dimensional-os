@@ -1,6 +1,60 @@
 import { PoseMessage, protocolMetersToLensCentimeters } from "../Network/Protocol";
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 import { InteractableManipulation } from "SpectaclesInteractionKit.lspkg/Components/Interaction/InteractableManipulation/InteractableManipulation";
+import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
+import { requireChild } from "../UI/Shared/SceneLookup";
+
+const ROBOT_UI_WORLD_UP_OFFSET_CM = 15.0;
+const POSITION_SMOOTHING_RATE = 12.0;
+const ROTATION_SMOOTHING_RATE = 14.0;
+const DIRECTION_ARROW_YAW_CORRECTION = new quat(
+  0,
+  -Math.sin(Math.PI / 4),
+  0,
+  Math.cos(Math.PI / 4),
+);
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function lerpVec3(a: vec3, b: vec3, t: number): vec3 {
+  return new vec3(lerp(a.x, b.x, t), lerp(a.y, b.y, t), lerp(a.z, b.z, t));
+}
+
+function normalizeQuat(value: quat): quat {
+  const length = Math.sqrt(
+    value.x * value.x +
+      value.y * value.y +
+      value.z * value.z +
+      value.w * value.w,
+  );
+  if (length <= 0.000001) {
+    return new quat(0, 0, 0, 1);
+  }
+  const invLength = 1.0 / length;
+  return new quat(
+    value.x * invLength,
+    value.y * invLength,
+    value.z * invLength,
+    value.w * invLength,
+  );
+}
+
+function nlerpQuat(from: quat, to: quat, t: number): quat {
+  const dot =
+    from.x * to.x + from.y * to.y + from.z * to.z + from.w * to.w;
+  const target =
+    dot < 0.0 ? new quat(-to.x, -to.y, -to.z, -to.w) : to;
+  return normalizeQuat(
+    new quat(
+      lerp(from.x, target.x, t),
+      lerp(from.y, target.y, t),
+      lerp(from.z, target.z, t),
+      lerp(from.w, target.w, t),
+    ),
+  );
+}
 
 @component
 export class RobotMarker extends BaseScriptComponent {
@@ -8,15 +62,28 @@ export class RobotMarker extends BaseScriptComponent {
   markerRoot: SceneObject;
 
   private _configured = false;
-  private _manualHandle: SceneObject | null = null;
+  private _placementHandle: SceneObject | null = null;
   private _manualCollider: ColliderComponent | null = null;
   private _manualInteractable: Interactable | null = null;
   private _manualManipulation: InteractableManipulation | null = null;
+  private _toggleRoot: SceneObject | null = null;
+  private _directionArrow: SceneObject | null = null;
+  private _toggleCollider: ColliderComponent | null = null;
+  private _toggleButton: RoundButton | null = null;
+  private _menuRoot: SceneObject | null = null;
+  private _runtimePoseTargetPosition: vec3 | null = null;
+  private _runtimePoseTargetRotation: quat | null = null;
+  private _hasLiveRuntimePose = false;
+  private _lastUpdateTime = -1.0;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
       this._configureVisuals();
       this.setVisible(false);
+    });
+    this.createEvent("UpdateEvent").bind(() => {
+      this._updateRuntimePoseSmoothing();
+      this._syncMenuWorldAnchor();
     });
   }
 
@@ -25,31 +92,71 @@ export class RobotMarker extends BaseScriptComponent {
       return;
     }
     this.markerRoot.enabled = true;
-    const t = this.markerRoot.getTransform();
-    t.setWorldPosition(protocolMetersToLensCentimeters(msg.position));
     const q = msg.orientation;
-    t.setWorldRotation(new quat(q[0], q[1], q[2], q[3]));
+    const position = protocolMetersToLensCentimeters(msg.position);
+    const rotation = new quat(q[0], q[1], q[2], q[3]);
+    this._runtimePoseTargetPosition = position;
+    this._runtimePoseTargetRotation = rotation;
+    if (!this._hasLiveRuntimePose) {
+      this._hasLiveRuntimePose = true;
+      this._applyTransformImmediate(position, rotation);
+    }
   }
 
   public applyManualPose(position: vec3, rotation: quat): void {
     if (!this.markerRoot) {
       return;
     }
+    this.resetRuntimePoseSmoothing();
     this.markerRoot.enabled = true;
-    const t = this.markerRoot.getTransform();
-    t.setWorldPosition(position);
-    t.setWorldRotation(rotation);
+    this._applyTransformImmediate(position, rotation);
   }
 
   public setVisible(visible: boolean): void {
     if (this.markerRoot) {
       this.markerRoot.enabled = visible;
     }
+    if (!visible) {
+      this.resetRuntimePoseSmoothing();
+    }
+    if (this._menuRoot && visible) {
+      this._menuRoot.enabled = visible;
+    }
+  }
+
+  public resetRuntimePoseSmoothing(): void {
+    this._runtimePoseTargetPosition = null;
+    this._runtimePoseTargetRotation = null;
+    this._hasLiveRuntimePose = false;
+  }
+
+  public setMenuEnabled(enabled: boolean): void {
+    if (!this._configured) {
+      this._configureVisuals();
+    }
+    if (this._menuRoot && !enabled) {
+      this._menuRoot.enabled = enabled;
+    }
+  }
+
+  public setToggleEnabled(enabled: boolean): void {
+    if (!this._configured) {
+      this._configureVisuals();
+    }
+    if (this._toggleCollider) {
+      this._toggleCollider.enabled = enabled;
+    }
+    if (this._toggleButton) {
+      this._toggleButton.enabled = enabled;
+    }
   }
 
   public setManualPlacementEnabled(enabled: boolean): void {
     if (!this._configured) {
       this._configureVisuals();
+    }
+    if (this._placementHandle) {
+      this._placementHandle.enabled = enabled;
     }
     if (this._manualCollider) {
       this._manualCollider.enabled = enabled;
@@ -78,108 +185,143 @@ export class RobotMarker extends BaseScriptComponent {
     return this.markerRoot.getTransform().getWorldRotation();
   }
 
+  public getMenuRoot(): SceneObject | null {
+    if (this._menuRoot) {
+      return this._menuRoot;
+    }
+    if (!this.markerRoot) {
+      return null;
+    }
+    const searchRoot = this.markerRoot.getParent() ?? this.markerRoot;
+    try {
+      this._menuRoot = requireChild(searchRoot, "RobotUIRoot", "RobotMarker");
+    } catch (_error) {
+      return null;
+    }
+    return this._menuRoot;
+  }
+
   private _configureVisuals(): void {
     if (!this.markerRoot || this._configured) {
       return;
     }
     this._configured = true;
-    this._manualHandle = this._requireChild(this.markerRoot, "RobotPlacementHandle");
-    this._ensureManualInteraction();
+    this._menuRoot = this.getMenuRoot();
+    if (!this._menuRoot) {
+      throw new Error("RobotMarker: Missing scene object RobotUIRoot");
+    }
+    const placementHandle = requireChild(
+      this.markerRoot,
+      "RobotPlacementHandle",
+      "RobotMarker",
+    );
+    const toggleRoot = requireChild(
+      this.markerRoot,
+      "RobotToggleButton",
+      "RobotMarker",
+    );
+    const directionArrow = requireChild(
+      this.markerRoot,
+      "RobotDirectionArrow",
+      "RobotMarker",
+    );
+    this._toggleRoot = toggleRoot;
+    this._directionArrow = directionArrow;
+    this._placementHandle = placementHandle;
+    this._manualCollider = placementHandle.getComponent(
+      "Component.ColliderComponent",
+    ) as ColliderComponent;
+    this._manualInteractable = placementHandle.getComponent(
+      Interactable.getTypeName(),
+    ) as Interactable;
+    this._manualManipulation = placementHandle.getComponent(
+      InteractableManipulation.getTypeName(),
+    ) as InteractableManipulation;
+    this._toggleCollider = toggleRoot.getComponent(
+      "Component.ColliderComponent",
+    ) as ColliderComponent;
+    this._toggleButton = toggleRoot.getComponent(
+      RoundButton.getTypeName(),
+    ) as RoundButton;
+    if (
+      !this._manualCollider ||
+      !this._manualInteractable ||
+      !this._manualManipulation ||
+      !this._toggleButton
+    ) {
+      throw new Error(
+        "RobotMarker: Robot marker is missing authored interaction components",
+      );
+    }
+    this._directionArrow
+      ?.getTransform()
+      .setLocalRotation(DIRECTION_ARROW_YAW_CORRECTION);
+    this.setToggleEnabled(false);
+    this.setMenuEnabled(false);
     this.setManualPlacementEnabled(false);
+    this._syncMenuWorldAnchor();
   }
 
-  private _findChild(name: string, root: SceneObject | null = this.markerRoot): SceneObject | null {
-    if (!root) {
-      return null;
-    }
-    for (let i = 0; i < root.getChildrenCount(); i++) {
-      const child = root.getChild(i);
-      if (child.name === name) {
-        return child;
-      }
-      const nested = this._findChild(name, child);
-      if (nested) {
-        return nested;
-      }
-    }
-    return null;
-  }
-
-  private _ensureManualInteraction(): void {
-    if (!this._manualHandle || !this.markerRoot) {
+  private _applyTransformImmediate(position: vec3, rotation: quat): void {
+    if (!this.markerRoot) {
       return;
     }
-    if (!this._manualCollider) {
-      this._manualCollider = this._manualHandle.getComponent(
-        "Component.ColliderComponent",
-      ) as ColliderComponent;
-      if (!this._manualCollider) {
-        this._manualCollider = this._manualHandle.createComponent(
-          "Component.ColliderComponent",
-        ) as ColliderComponent;
-      }
-      if (this._manualCollider) {
-        const hasVisual = Boolean(
-          this._manualHandle.getComponent("Component.RenderMeshVisual") as RenderMeshVisual,
-        );
-        this._manualCollider.fitVisual = hasVisual;
-        this._manualCollider.intangible = false;
-        this._manualCollider.debugDrawEnabled = false;
-        if (!hasVisual) {
-          const shape = (this._manualCollider as any).shape ?? null;
-          if (shape && "radius" in shape) {
-            shape.radius = 10;
-          }
-        }
-      }
-    }
-
-    if (!this._manualInteractable) {
-      this._manualInteractable = this._manualHandle.getComponent(
-        Interactable.getTypeName(),
-      ) as Interactable;
-      if (!this._manualInteractable) {
-        this._manualInteractable = this._manualHandle.createComponent(
-          Interactable.getTypeName(),
-        ) as Interactable;
-      }
-      if (this._manualInteractable && this._manualCollider) {
-        this._manualInteractable.colliders = [this._manualCollider];
-        (this._manualInteractable as any).enableInstantDrag = false;
-        (this._manualInteractable as any).useFilteredPinch = false;
-      }
-    }
-
-    if (!this._manualManipulation) {
-      this._manualManipulation = this._manualHandle.getComponent(
-        InteractableManipulation.getTypeName(),
-      ) as InteractableManipulation;
-      if (!this._manualManipulation) {
-        this._manualManipulation = this._manualHandle.createComponent(
-          InteractableManipulation.getTypeName(),
-        ) as InteractableManipulation;
-      }
-      if (this._manualManipulation) {
-        this._manualManipulation.setManipulateRoot(this.markerRoot.getTransform());
-        (this._manualManipulation as any).enableStretchZ = false;
-        if (typeof (this._manualManipulation as any).setCanTranslate === "function") {
-          (this._manualManipulation as any).setCanTranslate(true);
-        }
-        if (typeof (this._manualManipulation as any).setCanRotate === "function") {
-          (this._manualManipulation as any).setCanRotate(false);
-        }
-        if (typeof (this._manualManipulation as any).setCanScale === "function") {
-          (this._manualManipulation as any).setCanScale(false);
-        }
-      }
-    }
+    const t = this.markerRoot.getTransform();
+    t.setWorldPosition(position);
+    t.setWorldRotation(rotation);
+    this._syncMenuWorldAnchor();
   }
 
-  private _requireChild(root: SceneObject, name: string): SceneObject {
-    const child = this._findChild(name, root);
-    if (!child) {
-      throw new Error(`RobotMarker: Missing scene object ${name}`);
+  private _updateRuntimePoseSmoothing(): void {
+    const now = getTime();
+    const deltaTime =
+      this._lastUpdateTime >= 0.0 ? Math.max(0.0, now - this._lastUpdateTime) : 0.0;
+    this._lastUpdateTime = now;
+    if (
+      !this.markerRoot ||
+      !this.markerRoot.enabled ||
+      !this._hasLiveRuntimePose ||
+      !this._runtimePoseTargetPosition ||
+      !this._runtimePoseTargetRotation ||
+      deltaTime <= 0.0
+    ) {
+      return;
     }
-    return child;
+
+    const transform = this.markerRoot.getTransform();
+    const positionAlpha = 1.0 - Math.exp(-POSITION_SMOOTHING_RATE * deltaTime);
+    const rotationAlpha = 1.0 - Math.exp(-ROTATION_SMOOTHING_RATE * deltaTime);
+
+    transform.setWorldPosition(
+      lerpVec3(
+        transform.getWorldPosition(),
+        this._runtimePoseTargetPosition,
+        positionAlpha,
+      ),
+    );
+    transform.setWorldRotation(
+      nlerpQuat(
+        transform.getWorldRotation(),
+        this._runtimePoseTargetRotation,
+        rotationAlpha,
+      ),
+    );
+  }
+
+  private _syncMenuWorldAnchor(): void {
+    if (!this.markerRoot || !this._menuRoot) {
+      return;
+    }
+
+    const rootPosition = this.markerRoot.getTransform().getWorldPosition();
+    this._menuRoot
+      .getTransform()
+      .setWorldPosition(
+        new vec3(
+          rootPosition.x,
+          rootPosition.y + ROBOT_UI_WORLD_UP_OFFSET_CM,
+          rootPosition.z,
+        ),
+      );
   }
 }

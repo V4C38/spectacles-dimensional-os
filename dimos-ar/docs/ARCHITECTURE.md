@@ -1,7 +1,7 @@
 # Architecture — dimos-ar
 
-Read `PROJECT_BRIEF.md` first. This document specifies *how* the package is
-built. Decisions here are fixed unless the brief says otherwise.
+This document specifies *how* the package is built. Product scope, milestones,
+and contributor-facing setup live in the repository root `README.md`.
 
 ## Monorepo layout
 
@@ -52,9 +52,7 @@ dimos-ar/
 ├── clients/
 │   └── web/                   # Vite + Three.js debug + phone client
 ├── docs/
-│   ├── PROJECT_BRIEF.md
 │   ├── ARCHITECTURE.md        # this file
-│   ├── PROTOCOL.md
 │   ├── PROTOCOL.md
 │   ├── LENS_DEVELOPMENT.md    # Spectacles / Lens Studio guide
 │   └── MARKER_ASSETS.md       # AprilTag generate + Lens sync
@@ -87,8 +85,9 @@ class ARBridge(Module):
     goal_reached: In[Bool]           # matches ReplanningAStarPlanner.goal_reached (M2+)
     navigation_state: In[String]     # matches ReplanningAStarPlanner.navigation_state (M2+)
 
-    # --- output: autoconnects to ReplanningAStarPlanner.clicked_point (M2+) ---
+    # --- outputs: autoconnect to planner inputs (M2+) ---
     clicked_point: Out[PointStamped]
+    goal_request:  Out[PoseStamped]
     stop_movement: Out[Bool]
 
     @rpc
@@ -108,9 +107,10 @@ class ARBridge(Module):
 ```
 
 Stream names above are verified against DimOS source. `GO2Connection` outputs
-`lidar`/`odom` exactly; `ReplanningAStarPlanner` has input `clicked_point:
-In[PointStamped]` and outputs `path: Out[Path]` and `goal_reached: Out[Bool]`.
-Do not rename these — name match is what makes autoconnect work.
+`lidar`/`odom` exactly; `ReplanningAStarPlanner` accepts both `clicked_point:
+In[PointStamped]` and `goal_request: In[PoseStamped]`, and outputs `path:
+Out[Path]` and `goal_reached: Out[Bool]`. Do not rename these — name match is
+what makes autoconnect work.
 
 ## Threading model — CRITICAL
 
@@ -130,8 +130,10 @@ template; stream handling follows DimOS `_auto_bind_handlers`):
    must NOT touch the WebSocket loop directly. Outbound data crosses threads via
    `asyncio.run_coroutine_threadsafe(...)` on the WS loop.
 4. Inbound messages from the AR client are received on the ws thread. To send a
-   navigation goal into DimOS (M2+), the ws thread calls
-   `self.clicked_point.publish(point)` (publishing is thread-safe).
+   navigation goal into DimOS (M2+), the ws thread publishes either
+   `self.goal_request.publish(pose)` for pose goals or
+   `self.clicked_point.publish(point)` for legacy point-only goals (publishing is
+   thread-safe).
 5. In `stop()`, shut down the WebSocket server first, then call `super().stop()`.
 
 Never `await` or run the server inline in `start()` — it would block the worker.
@@ -218,12 +220,12 @@ Clients: `clients/web/` (this folder) and `lens-studio/` Lens (monorepo sibling)
 
 ### Inbound (AR -> robot), Milestone 2
 ```
-AR client taps floor -> JSON nav_goal message {x, y, z} in AR world frame
+AR client confirms floor goal -> JSON nav_goal message {x, y, z, qx, qy, qz, qw} in AR world frame
    -> websocket_server receives on ws thread
    -> transforms.py: AR world frame -> robot odom frame (inverse calibration)
-   -> build PointStamped
-   -> ARBridge.clicked_point.publish(point)
-   --(autoconnect)--> ReplanningAStarPlanner.clicked_point
+   -> build PoseStamped (or PointStamped for legacy messages)
+   -> ARBridge.goal_request.publish(pose)
+   --(autoconnect)--> ReplanningAStarPlanner.goal_request
    -> planner emits path -> flows back out via ARBridge.path
 ```
 
@@ -234,12 +236,35 @@ robot's `odom` frame to the AR `world` frame.
 
 - It is captured once at registration: the AR client detects the ArUco marker
   on the robot and reports the marker pose in AR world space; simultaneously the
-  bridge samples the current `odom` pose. The two together yield `T_world_odom`.
+  bridge samples the current `odom` pose. During calibration the bridge assumes
+  the robot is on level ground, so it auto-levels the sampled world pose and
+  preserves heading only when solving `T_world_odom`.
+- Frame ownership is explicit:
+  - Lens inbound alignment messages are always raw AR-world poses.
+  - Calibration leveling is bridge-owned and uses world `+Y` as up plus the
+    tracked object's local `+X` axis as semantic robot-forward.
+  - That yaw-only rule applies only while solving a calibration candidate; the
+    final `T_world_odom` may still encode the fixed basis change between DimOS
+    robot frames and Lens world coordinates.
 - Manual debug alignment extends the same contract. During an active `align_start`
   session, the AR client may send `align_manual_pose` instead of `align_marker`;
   the bridge auto-levels that ground-robot pose, combines it with the latest odom
   sample, and stores it as an approximate candidate that still commits through
   `align_commit`.
+- AprilTag camera calibration is treated as part of the alignment contract.
+  The bridge validates `CameraInfo.width` / `height` against the actual image
+  frames, logs the active camera model, and for the Go2 front camera can fall
+  back to the calibrated `front_camera_720.yaml` intrinsics/distortion profile
+  instead of trusting placeholder zero-distortion values.
+- Automatic alignment candidates are no longer "best reprojection wins". The
+  bridge keeps a short rolling window of `T_world_odom` samples, scores each one
+  by reprojection plus translation/yaw cluster stability, and only exposes a
+  committable candidate after a stable cluster forms. A committed best candidate
+  is stored as an immutable snapshot so later phone movement does not replace it
+  unless a clearly better stable cluster appears.
+- That calibration-only leveling does **not** change normal runtime transforms
+  after registration. Once `T_world_odom` is fixed, outbound lidar/pose and
+  inbound navigation goals continue to use the full transform pipeline.
 - **Assumption:** the marker is rigidly attached at the robot base, co-located
   with the odom pose frame. If the marker is offset from the base, calibration
   will be wrong until marker-to-base offsets are applied. The `marker_id` field
@@ -279,7 +304,7 @@ hardware or the Lens (`lens-studio/`).
 
 | Doc | Contents |
 |-----|----------|
-| `PROJECT_BRIEF.md` | Goals, milestones, constraints |
+| `../../README.md` | Project overview, setup, milestones, contributor map |
 | `ARCHITECTURE.md` | This file — layout, threading, data flow |
 | `PROTOCOL.md` | WebSocket message schema (cross-repo contract) |
 | `LENS_DEVELOPMENT.md` | Spectacles Lens Studio practices, Agent Center patterns, MCP |

@@ -1,20 +1,20 @@
-- !<AssetImportMetadata/504a9547-d8be-4119-ba9f-05ee1a955390>
+- !<AssetImportMetadata/66e0cc30-e12c-40e3-9335-d9f101b57b22>
   ImportedAssetIds:
-    TypeScriptAsset: !<reference> 86a62b80-93bc-4278-a3be-47f5c44dceb6
+    TypeScriptAsset: !<reference> 3ef7e409-cd5f-4e0e-af0f-cefea164f44f
   ImporterName: TypeScriptAssetImporter
-  PrimaryAsset: !<reference> 86a62b80-93bc-4278-a3be-47f5c44dceb6
+  PrimaryAsset: !<reference> 3ef7e409-cd5f-4e0e-af0f-cefea164f44f
   PackageType: NotAPackage
   LegacyPackagePolicy: ~
   ExtraData:
     {}
   AssetDataMap:
-    TypeScriptAsset: !<own> 49bf9b7e-3a87-4137-9bda-0fe3bd9cd726
+    TypeScriptAsset: !<own> a23fb171-93fc-4f58-b475-3606c1d1a172
   DependentFiles:
     []
   ImporterSettings: !<AssetImporterSettings>
     {}
   CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
-- !<TypeScriptAssetData/49bf9b7e-3a87-4137-9bda-0fe3bd9cd726>
+- !<TypeScriptAssetData/a23fb171-93fc-4f58-b475-3606c1d1a172>
   SvgIcon: ""
   SetupScript:
     code: ""
@@ -22,14 +22,14 @@
   VersionMajor: 0
   VersionMinor: 0
   VersionPatch: 0
-  ComponentUid: 74ec2058-6a0b-403f-99e7-b91883ef4129
+  ComponentUid: 9c2573cc-5fbe-4a3b-b1e6-8a066ff814e1
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
+    alignmentController: false
+    defaultBridgeIp: false
     dimosManager: false
-    mainUIFrame: false
-    navigationControlsFrame: false
-    setupWizard: false
+    uiManager: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -39,15 +39,15 @@
   Attachments:
     []
   DefaultScriptInputs:
-    - mainUIFrame: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
-      navigationControlsFrame: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+    - defaultBridgeIp: 192.168.1.166
       dimosManager: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
-      setupWizard: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
+      uiManager: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
+      alignmentController: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
   InputLines:
-    - // @input SceneObject mainUIFrame
-    - // @input SceneObject navigationControlsFrame
+    - '// @input string defaultBridgeIp = "192.168.1.166"'
     - // @input AssignableType dimosManager
-    - // @input AssignableType_1 setupWizard
+    - // @input AssignableType_1 uiManager
+    - // @input AssignableType_2 alignmentController

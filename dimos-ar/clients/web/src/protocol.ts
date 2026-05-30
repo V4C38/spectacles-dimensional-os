@@ -154,13 +154,17 @@ export function buildAlignManualPose(
   });
 }
 
-export function buildNavGoal(position: [number, number, number]): string {
+export function buildNavGoal(
+  position: [number, number, number],
+  orientation?: [number, number, number, number],
+): string {
   return JSON.stringify({
     type: "nav_goal",
     ts: Date.now() / 1000,
     robot_id: requireActiveRobotId("nav_goal"),
     frame: "world",
     position,
+    ...(orientation ? { orientation } : {}),
   });
 }
 

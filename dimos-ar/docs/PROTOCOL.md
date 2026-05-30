@@ -126,10 +126,12 @@ Alignment progress during the setup wizard **Calibrate Coordinates** step.
 - `spectacles_marker_detected`: whether the AR device is currently tracking the
   calibration marker (i.e. the bridge has received `align_marker` messages).
 - `quality`: optional, 0–1 confidence for the current alignment sample. During
-  `detecting`, this is the most recent successful match. On `aligned`, it is the
-  committed sample quality.
-- `best_quality`: optional, 0–1 confidence for the best alignment candidate seen so far
-  during the current calibration session.
+  `detecting`, this is the bridge's current confidence after combining reprojection
+  error with short-window stability checks (translation/yaw agreement and cluster
+  size). It is not a literal physical-accuracy estimate. On `aligned`, it is the
+  committed candidate confidence.
+- `best_quality`: optional, 0–1 confidence for the best stable alignment candidate
+  seen so far during the current calibration session.
 - `has_candidate`: optional bool indicating whether the bridge currently has a valid
   candidate that could be committed.
 - `candidate_count`: optional integer count of successful candidate updates seen so far
@@ -264,12 +266,15 @@ A waypoint the user placed on the floor in AR.
   "ts": 1730000000.123,
   "robot_id": "go2",
   "frame": "world",
-  "position": [x, y, z]
+  "position": [x, y, z],
+  "orientation": [qx, qy, qz, qw]
 }
 ```
-The bridge transforms this into the robot frame and publishes a `PointStamped`
-to the planner. `z` may be ignored by a ground robot but is included for
-clients and for future aerial use.
+`orientation` is optional for backward compatibility. When present, the bridge
+transforms the full pose into the robot frame and publishes a `PoseStamped`
+goal to the planner so the robot can honor final heading. When omitted, the
+bridge falls back to publishing the legacy `PointStamped` goal. `z` may be
+ignored by a ground robot but is included for clients and for future aerial use.
 
 ### cancel_goal  (Milestone 2+)
 ```json
@@ -311,7 +316,9 @@ gathered during the current `align_start` session, if one exists.
 Sent while the Spectacles Image Marker is tracked during the calibrate step. Carries
 the marker pose in the **AR world frame**. The bridge matches this with a recent robot
 camera detection (same bridge monotonic clock, default 300 ms window) and computes
-`T_world_odom`.
+`T_world_odom`. Calibration assumes the robot is standing on level ground, so the
+bridge auto-levels the sampled marker pose and keeps only heading when solving the
+registration rotation.
 
 ```json
 {
@@ -326,6 +333,11 @@ Successful samples update `align_status` with live `quality` / `best_quality`. T
 bridge only commits calibration after `align_commit`, at which point it replies with
 `align_status` where `state` is `aligned`. The legacy `register` / `registered` flow
 remains for the web debug client and replay.
+
+The bridge validates camera calibration before accepting robot-camera detections:
+it rejects `camera_info` resolution mismatches, logs the active camera model, and
+for the Go2 1280x720 front camera prefers the calibrated `front_camera_720.yaml`
+intrinsics/distortion profile over placeholder zero-distortion values.
 
 ### align_manual_pose
 Sent during an active `align_start` session when the user manually places the robot pose.
@@ -343,9 +355,12 @@ registration path: the client opens a session with `align_start`, submits either
 }
 ```
 
-The bridge auto-levels the manual pose for a ground robot, combines it with the latest
-odom sample to compute `T_world_odom`, and marks the resulting candidate as
-`method=manual` plus `approximate=true`.
+The client should send the raw world-space pose of the manually placed robot marker.
+The bridge owns the semantic ground-robot leveling: it auto-levels the manual pose,
+combines it with the latest odom sample to compute `T_world_odom`, and marks the
+resulting candidate as `method=manual` plus `approximate=true`. As with
+`align_marker`, this leveling is only applied during calibration; once registered,
+normal pose and lidar updates continue to use the full world transform.
 
 ### get_status
 Request a fresh `bridge_status` snapshot from the server (replied on the same

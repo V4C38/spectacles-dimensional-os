@@ -21,24 +21,54 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BLUEPRINT="${ROOT}/blueprints/go2_ar_basic.py"
+BLUEPRINT="${ROOT}/blueprints/go2_ar_nav.py"
+
+python_has_dimos() {
+  local py="$1"
+  "${py}" -c "import dimos" >/dev/null 2>&1
+}
 
 find_python() {
   if [[ -n "${DIMOS_PYTHON:-}" && -x "${DIMOS_PYTHON}" ]]; then
+    if python_has_dimos "${DIMOS_PYTHON}"; then
     echo "${DIMOS_PYTHON}"
     return
+    fi
+    echo "DIMOS_PYTHON does not have the 'dimos' package installed: ${DIMOS_PYTHON}" >&2
+    exit 1
   fi
   local candidates=(
+    "${ROOT}/../../dimos/.venv/bin/python3"
     "${ROOT}/../dimos/.venv/bin/python3"
     "${ROOT}/.venv/bin/python3"
   )
   for py in "${candidates[@]}"; do
-    if [[ -x "${py}" ]]; then
+    if [[ -x "${py}" ]] && python_has_dimos "${py}"; then
       echo "${py}"
       return
     fi
   done
-  command -v python3
+  local system_python
+  system_python="$(command -v python3)"
+  if python_has_dimos "${system_python}"; then
+    echo "${system_python}"
+    return
+  fi
+  cat >&2 <<EOF
+Could not find a Python interpreter with the 'dimos' package installed.
+
+Tried:
+  - ${ROOT}/../../dimos/.venv/bin/python3
+  - ${ROOT}/../dimos/.venv/bin/python3
+  - ${ROOT}/.venv/bin/python3
+  - ${system_python}
+
+Fix one of these, then retry:
+  - Set DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3
+  - Install dimos-ar into your DimOS venv:
+      /path/to/dimos/.venv/bin/python3 -m pip install -e "${ROOT}"
+EOF
+  exit 1
 }
 
 REPLAY=0
@@ -76,6 +106,9 @@ if [[ "${LOCAL}" -eq 1 ]]; then
 else
   export LISTEN_HOST="${LISTEN_HOST:-0.0.0.0}"
 fi
+
+# Ensure venv bin is on PATH so tools like `rerun` are discoverable by child processes.
+export PATH="$(dirname "${PYTHON}"):${PATH}"
 
 # Suppress harmless macOS dylib duplicate-class warnings from cv2/av fork clash.
 export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES

@@ -14,13 +14,20 @@ Open **`spectacles-unitree.esproj`** in this folder (not the repo root).
 
 ```text
 Assets/Scripts/
-├── DimosManager.ts          # orchestrator (on DimOS scene object)
-├── SetupWizard.ts
-├── UIManager.ts
+├── AppState.ts              # minimal app/runtime state model
+├── DimosManager.ts          # public facade/orchestrator (on DimOS scene object)
+├── Setup/
+│   ├── SetupWizard.ts
+│   ├── WizardConnectionController.ts
+│   └── CalibrationPresenter.ts
+├── UI/
+│   ├── UIManager.ts
+│   ├── HUD/
+│   └── Shared/
 ├── Network/                 # BridgeClient, Protocol
-├── Alignment/               # AlignmentController
+├── Alignment/               # AlignmentController, ManualAlignmentController
+├── Navigation/              # NavigationController, PlacementController
 ├── Rendering/               # LidarPointCloud, RobotMarker
-└── UI/Shared/               # UIBuilders, UIConstants, …
 ```
 
 Scene root object **RobotManager** hosts bridge/render children; **DimosManager** is the script component on the **DimOS** child object.
@@ -32,3 +39,6 @@ Pinned under `Packages/` (SIK, SpectaclesUIKit, Utilities). `icon.png` for Lens 
 ## Dev tools
 
 - `tools/create_debug_gizmo.py` — optional scene debug helper
+- For Lens Studio verification, prefer the normal compile path first. Do not
+  run compile-with-logs unless a compile/runtime error has already occurred and
+  you need detailed diagnostics.

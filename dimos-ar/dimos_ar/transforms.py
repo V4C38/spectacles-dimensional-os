@@ -11,6 +11,9 @@ from numpy.typing import NDArray
 
 from dimos_ar.protocol import RegisterMessage
 
+WORLD_UP_AXIS_INDEX = 1
+SEMANTIC_FORWARD_AXIS_INDEX = 0
+
 
 def _normalize_quaternion(
     qx: float,
@@ -52,16 +55,26 @@ def normalize_ground_pose(
     position: tuple[float, float, float],
     orientation: tuple[float, float, float, float],
 ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
-    """Keep position but flatten rotation to yaw around the world-up Y axis."""
+    """Keep position but flatten rotation to yaw around the world-up Y axis.
+
+    Calibration intentionally treats the tracked marker object's local ``+X`` axis as the
+    semantic "forward" direction in AR world space. This matches the Lens-side yaw helpers
+    and the navigation placement math, even though Lens Studio's camera-facing convention is
+    often discussed in terms of ``-Z`` being visually forward.
+
+    This function is only for the ground-robot calibration step. It does *not* mean the full
+    world<-odom transform should be yaw-only after calibration; the solved transform may still
+    encode the fixed basis change between DimOS robot frames and Lens world coordinates.
+    """
     rotation = _quat_to_matrix(*orientation)
-    forward = rotation[:, 0]
+    forward = rotation[:, SEMANTIC_FORWARD_AXIS_INDEX]
     planar = np.array([forward[0], 0.0, forward[2]], dtype=np.float64)
     norm = float(np.linalg.norm(planar))
     if norm < 1e-6:
         return position, (0.0, 0.0, 0.0, 1.0)
 
     planar /= norm
-    yaw = math.atan2(float(planar[2]), float(planar[0]))
+    yaw = math.atan2(float(-planar[2]), float(planar[0]))
     half_yaw = yaw * 0.5
     return position, (0.0, math.sin(half_yaw), 0.0, math.cos(half_yaw))
 

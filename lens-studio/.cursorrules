@@ -13,8 +13,11 @@ Before Lens work, read:
 
 - This Lens speaks JSON WebSocket to `ARBridge` on the Mac — it does NOT embed DimOS or Python.
 - **Architecture** follows [spectacles-reachy-mini](https://github.com/V4C38/spectacles-reachy-mini):
-  `DimosManager` (facade) → `SetupWizard` / `UIManager` / `BridgeClient` /
-  `AlignmentController`. Setup wizard **auto-starts on lens launch** (Reachy UX).
+  `DimosManager` is the public facade/orchestrator, with setup/runtime/UI state kept
+  explicit through a minimal app-state boundary. `SetupWizard` owns setup UI flow,
+  `UIManager` owns runtime HUD presentation, `BridgeClient` owns transport truth,
+  and `AlignmentController` owns marker-session behavior. Setup wizard
+  **auto-starts on lens launch** (Reachy UX).
 - **UI**: outer panel frames are scene-placed (`@input wizardFrame`, `@input mainUIFrame`);
   inner content (text, buttons, inputs) is **runtime-instantiated** via
   `UI/Shared/UIBuilders.ts` (Agent Center pattern). See `LENS_DEVELOPMENT.md`.
@@ -29,13 +32,20 @@ Before Lens work, read:
 
 ```text
 Assets/Scripts/
+├── AppState.ts
 ├── DimosManager.ts
-├── SetupWizard.ts
-├── UIManager.ts
+├── Setup/
+│   ├── SetupWizard.ts
+│   ├── WizardConnectionController.ts
+│   └── CalibrationPresenter.ts
+├── UI/
+│   ├── UIManager.ts
+│   ├── HUD/
+│   └── Shared/
 ├── Network/BridgeClient.ts, Protocol.ts
-├── Alignment/AlignmentController.ts
-├── Rendering/LidarPointCloud.ts, RobotMarker.ts
-└── UI/Shared/UIBuilders.ts, UIConstants.ts, UIAnimations.ts, DirtyComponent.ts
+├── Alignment/AlignmentController.ts, ManualAlignmentController.ts
+├── Navigation/NavigationController.ts, PlacementController.ts
+└── Rendering/LidarPointCloud.ts, RobotMarker.ts
 ```
 
 ## Lens Studio MCP
@@ -49,6 +59,9 @@ Lens Studio must be open with MCP server running.
 - M1: WebSocket, setup wizard, AprilTag alignment, lidar/pose render.
 - Verify bridge with `../dimos-ar` replay + `clients/web/` before device deploy.
 - Keep `Cache/` out of git.
+- Do **not** run `CompileWithLogs` as the default compile check. First use a
+  normal Lens Studio compile; only use compile-with-logs after an actual error
+  occurs and you need detailed diagnostics.
 
 ## Packages
 

@@ -1,3 +1,4 @@
+# OS / IDE
 .DS_Store
 Thumbs.db
 .idea/
@@ -27,19 +28,42 @@ Thumbs.db
 /assets/*.imgmarker.meta
 /assets/Scripts/
 
-# Python (dimos-ar)
-dimos-ar/__pycache__/
-dimos-ar/**/*.py[cod]
-dimos-ar/.venv/
-dimos-ar/venv/
-dimos-ar/.pytest_cache/
-dimos-ar/.mypy_cache/
-dimos-ar/.ruff_cache/
-dimos-ar/dist/
-dimos-ar/build/
-dimos-ar/*.egg-info/
-dimos-ar/.eggs/
+# Python — repo-wide (see github/gitignore Python template)
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
+*.so
+.Python
+.env
+.envrc
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# dimos-ar web client
 dimos-ar/clients/web/node_modules/
 dimos-ar/clients/web/dist/
 
-# Lens Studio — see lens-studio/.gitignore for Cache/, Workspaces/, etc.
+# Lens Studio generated / local — primary rules in lens-studio/.gitignore
+# (Snap docs: Cache/, BackUp/, Support/, PluginsUserPreferences/, Workspaces/)
+lens-studio/Cache/
+lens-studio/PluginsUserPreferences/
+lens-studio/Support/
+lens-studio/BackUp/
+lens-studio/Workspaces/
+lens-studio/*.lock
+lens-studio/.vscode/
+lens-studio/jsconfig.json
+lens-studio/tsconfig.json

@@ -5,6 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
+from dimos.core.global_config import global_config
+
 from dimos_ar.robot_bootstrap import LiveRobot, ReplayMode
 
 BridgeMode = Literal["live", "replay"]
@@ -100,6 +102,13 @@ class BridgeStatusTracker:
             self._reconnecting = reconnecting
         self._notify()
 
+    def set_robot_model(self, robot_model: str) -> None:
+        with self._lock:
+            if self._robot_model == robot_model:
+                return
+            self._robot_model = robot_model
+        self._notify()
+
     def snapshot(self) -> BridgeStatusSnapshot:
         with self._lock:
             return BridgeStatusSnapshot(
@@ -136,6 +145,19 @@ def tracker_from_bootstrap(
         robot_serial=None,
         robot_connected=True,
     )
+
+
+def sync_tracker_robot_model(
+    tracker: BridgeStatusTracker | None,
+    *,
+    default: str | None = None,
+) -> None:
+    if tracker is None:
+        return
+    configured = global_config.robot_model
+    model = configured if configured else default
+    if model:
+        tracker.set_robot_model(model)
 
 
 bridge_status_tracker: BridgeStatusTracker | None = None

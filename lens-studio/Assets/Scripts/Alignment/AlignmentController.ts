@@ -27,6 +27,7 @@ export class AlignmentController extends BaseScriptComponent {
   private _debugMode = false;
   private _calibrationGizmoEnabled = false;
   private _awaitingCommit = false;
+  private _bridgeSessionActive = false;
 
   onAwake() {
     this.onAlignStatus = [];
@@ -65,12 +66,9 @@ export class AlignmentController extends BaseScriptComponent {
     if (this._active) {
       return;
     }
-    if (!this.bridgeClient || !this.bridgeClient.sendAlignStart()) {
-      print("AlignmentController: cannot start alignment before robot_id is negotiated");
-      return;
-    }
     this._active = true;
     this._awaitingCommit = false;
+    this._bridgeSessionActive = this._startBridgeSession();
     if (this.markerTracking) {
       this._savedOnMarkerFound = this.markerTracking.onMarkerFound;
       this._savedOnMarkerLost = this.markerTracking.onMarkerLost;
@@ -86,9 +84,10 @@ export class AlignmentController extends BaseScriptComponent {
     if (!this._active && !this._awaitingCommit) {
       return;
     }
-    const shouldSendStop = this._active;
+    const shouldSendStop = this._bridgeSessionActive;
     this._active = false;
     this._awaitingCommit = false;
+    this._bridgeSessionActive = false;
     this._stopSending();
     if (shouldSendStop && this.bridgeClient) {
       this.bridgeClient.sendAlignStop();
@@ -99,7 +98,7 @@ export class AlignmentController extends BaseScriptComponent {
   }
 
   public commitBestAlignment(): boolean {
-    if (!this._active || !this.bridgeClient) {
+    if (!this._active || !this.bridgeClient || !this._bridgeSessionActive) {
       return false;
     }
     if (!this.bridgeClient.sendAlignCommit()) {
@@ -107,6 +106,7 @@ export class AlignmentController extends BaseScriptComponent {
     }
     this._active = false;
     this._awaitingCommit = true;
+    this._bridgeSessionActive = true;
     this._stopSending();
     this._restoreMarkerCallbacks();
     this._updateDebugGizmo();
@@ -127,8 +127,10 @@ export class AlignmentController extends BaseScriptComponent {
       return;
     }
     this._setTracking(true);
-    this._ensureSendLoop();
-    this._sendMarkerPose();
+    if (this._bridgeSessionActive) {
+      this._ensureSendLoop();
+      this._sendMarkerPose();
+    }
     this._updateDebugGizmo();
   };
 
@@ -171,7 +173,7 @@ export class AlignmentController extends BaseScriptComponent {
   }
 
   private _sendMarkerPose(): void {
-    if (!this.bridgeClient || !this._active) {
+    if (!this.bridgeClient || !this._active || !this._bridgeSessionActive) {
       return;
     }
     const t = this.getSceneObject().getTransform();
@@ -197,5 +199,23 @@ export class AlignmentController extends BaseScriptComponent {
         this._active &&
         this._tracking;
     }
+  }
+
+  private _startBridgeSession(): boolean {
+    if (
+      !this.bridgeClient ||
+      !this.bridgeClient.isConnected() ||
+      !this.bridgeClient.activeRobotId
+    ) {
+      print(
+        "AlignmentController: starting local-only alignment tracking until bridge session is ready",
+      );
+      return false;
+    }
+    if (!this.bridgeClient.sendAlignStart()) {
+      print("AlignmentController: failed to start bridge alignment session");
+      return false;
+    }
+    return true;
   }
 }

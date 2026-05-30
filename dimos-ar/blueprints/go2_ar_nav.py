@@ -27,7 +27,7 @@ go2_ar_nav = (
         unitree_go2,
         ARBridge.blueprint(robot_id=_robot_id, enable_navigation=True),
     )
-    .global_config(n_workers=9, robot_model="unitree_go2")
+    .global_config(n_workers=9, robot_model="unitree_go2", viewer="none")
     .configurators(ClockSyncConfigurator())
 )
 

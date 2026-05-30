@@ -114,6 +114,23 @@ def test_nav_goal_decode() -> None:
     msg = decode_inbound(raw)
     assert isinstance(msg, NavGoalMessage)
     assert msg.position == (1.0, 0.0, 0.0)
+    assert msg.orientation is None
+
+
+def test_nav_goal_decode_with_orientation() -> None:
+    raw = json.dumps(
+        {
+            "type": "nav_goal",
+            "ts": 2.0,
+            "robot_id": "go2",
+            "position": [1.0, 0.0, 0.0],
+            "orientation": [0.0, 0.0, 0.70710678, 0.70710678],
+        }
+    )
+    msg = decode_inbound(raw)
+    assert isinstance(msg, NavGoalMessage)
+    assert msg.position == (1.0, 0.0, 0.0)
+    assert msg.orientation == (0.0, 0.0, 0.70710678, 0.70710678)
 
 
 def test_cancel_goal_decode() -> None:

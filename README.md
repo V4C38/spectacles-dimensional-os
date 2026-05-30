@@ -61,7 +61,7 @@ This repo is a starting point for developers who want to work at the intersectio
    ./start.sh --local      # WebSocket localhost-only (same-machine web client)
    ```
 
-   The script auto-picks `../dimos/.venv/bin/python3` when present, or set `DIMOS_PYTHON` explicitly.
+   The script auto-picks a nearby DimOS venv when present, including the common sibling-repo layout at `../../dimos/.venv/bin/python3`; otherwise set `DIMOS_PYTHON` explicitly.
 
    **Equivalent manual command:**
 
@@ -146,9 +146,9 @@ The robot lives in an **odom** frame; AR devices live in a **world** frame.
 
 1. Run `./start.sh` and **scan the QR code** on your phone (opens the composite marker page at **60 mm × 120 mm**, with the inner AprilTag still **60 mm × 60 mm**). Max brightness, disable auto-lock.
 2. Run the Spectacles setup wizard (**Connect → Calibrate → Complete**).
-3. During **Calibrate**, hold the phone so both the Go2 camera and your Spectacles can see the marker simultaneously.
+3. During **Calibrate**, hold the phone so both the Go2 camera and your Spectacles can see the marker simultaneously. Calibration assumes the robot is standing on level ground at this moment, so the bridge preserves heading only and ignores calibration-time pitch/roll when solving the floor orientation.
 
-The Lens sends `align_start` / `align_marker` while Image Tracking sees the marker; the bridge runs OpenCV AprilTag detection on the Go2 camera and computes `T_world_odom` when both sides detect the marker within **500 ms**. After that, lidar and pose stream in **world** coordinates.
+The Lens sends `align_start` / `align_marker` while Image Tracking sees the marker; the bridge runs OpenCV AprilTag detection on the Go2 camera and computes `T_world_odom` when both sides detect the marker within **500 ms**. During calibration the registration is auto-leveled to the ground plane and keeps only the robot's facing direction. After that, lidar and pose still stream in full **world** coordinates, so the robot may continue onto uneven terrain normally.
 
 **Marker size configuration.** Default: AprilTag 36h11 with a **60 mm** square inner tag inside a **60 mm × 120 mm** composite tracked image. The shared contract lives in `dimos-ar/dimos_ar/marker_contract.py`. The marker web page is rendered from that contract, and `python scripts/generate_marker.py --sync-lens` updates the Lens marker asset height to match automatically (see [`dimos-ar/docs/MARKER_ASSETS.md`](dimos-ar/docs/MARKER_ASSETS.md)).
 
@@ -170,17 +170,30 @@ They are complementary. Do **not** enable `viewer=foxglove` on the same machine 
 ```mermaid
 flowchart TB
     subgraph specLens [Spectacles Lens]
-        SW[SetupWizard]
-        AC[AlignmentController]
-        BC[BridgeClient]
         DM[DimosManager]
-        LPC[LidarPointCloud]
-        RM[RobotMarker]
-        SW --> AC
-        SW --> BC
-        DM --> LPC
-        DM --> RM
-        BC --> DM
+        SW[SetupWizard]
+        UI[UIManager]
+        BC[BridgeClient]
+        AC[AlignmentController]
+        NAV[NavigationController]
+        MA[ManualAlignmentController]
+        MENU[RobotMenuController]
+        RND[RenderingHelpers]
+
+        DM --> SW
+        DM --> UI
+        DM --> BC
+        DM --> AC
+        DM --> NAV
+        DM --> MA
+        DM --> MENU
+        DM --> RND
+
+        SW --> WV[WizardView]
+        SW --> WC[WizardConnectionController]
+        SW --> CP[CalibrationPresenter]
+        UI --> MHV[MainHudView]
+        MHV --> SUB[ModeBasedSubMenu]
     end
 
     subgraph bridge [ARBridge on Mac]
@@ -206,6 +219,8 @@ flowchart TB
     BC -->|"ws JSON"| WSS
     WSS -->|lidar pose align_status| BC
 ```
+
+The Lens architecture follows the same overall idea as `spectacles-reachy-mini`: keep the scene-entry `@component` scripts small, then push setup, HUD, navigation, robot menu, and protocol details into narrower helper modules underneath them.
 
 ```text
 Unitree Go2 Air
@@ -246,6 +261,26 @@ flowchart TB
 ```
 
 Detailed information about the individual components is provided in the next sections.
+
+### Lens architecture (scene entry points vs helpers)
+
+| Lens script | Role |
+|-------------|------|
+| [`lens-studio/Assets/Scripts/DimosManager.ts`](lens-studio/Assets/Scripts/DimosManager.ts) | Top-level Lens facade that wires transport, rendering, placement, robot menu, and manual alignment helpers |
+| [`lens-studio/Assets/Scripts/Setup/SetupWizard.ts`](lens-studio/Assets/Scripts/Setup/SetupWizard.ts) | Auto-start setup flow that coordinates connect + calibrate and hands off to the main HUD |
+| [`lens-studio/Assets/Scripts/UI/UIManager.ts`](lens-studio/Assets/Scripts/UI/UIManager.ts) | Scene-entry HUD facade that owns overall HUD visibility and delegates to HUD subviews |
+| [`lens-studio/Assets/Scripts/Network/BridgeClient.ts`](lens-studio/Assets/Scripts/Network/BridgeClient.ts) | WebSocket client and typed event fanout for the Lens |
+| [`lens-studio/Assets/Scripts/Alignment/AlignmentController.ts`](lens-studio/Assets/Scripts/Alignment/AlignmentController.ts) | AprilTag alignment session against the bridge |
+| [`lens-studio/Assets/Scripts/Setup/`](lens-studio/Assets/Scripts/Setup/) | Helper classes for wizard UI, connection retry, and calibration presentation |
+| [`lens-studio/Assets/Scripts/UI/HUD/`](lens-studio/Assets/Scripts/UI/HUD/) | Plain HUD view classes for the authored main HUD and runtime nav controls |
+| [`lens-studio/Assets/Scripts/Navigation/`](lens-studio/Assets/Scripts/Navigation/) | Placement and navigation workflow helpers |
+| [`lens-studio/Assets/Scripts/Rendering/`](lens-studio/Assets/Scripts/Rendering/) | Rendering helpers for lidar, robot marker, goals, paths, and obstacles |
+
+The important boundary is:
+
+- `dimos-ar/` owns protocol definition, calibration math, and robot/world transforms on the Mac.
+- `lens-studio/` owns Spectacles-only UX, marker tracking, world-anchored rendering, and navigation interaction.
+- The contract between them is still [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md), implemented on the Lens through [`lens-studio/Assets/Scripts/Network/`](lens-studio/Assets/Scripts/Network/).
 
 ### ARBridge (Python)
 
@@ -289,6 +324,21 @@ See [`dimos-ar/clients/web/README.md`](dimos-ar/clients/web/README.md) for two-t
 ### Spectacles client (`lens-studio/`)
 
 The Lens Studio project lives in [`lens-studio/`](lens-studio/) (`lens-studio/spectacles-unitree.esproj`), not under `dimos-ar/clients/`. It implements world-anchored lidar rendering, ArUco registration in-scene, and (M2+) floor-pin navigation using the same WebSocket protocol as the web client.
+
+The Lens-side code is now organized around a few scene-entry scripts plus feature folders:
+
+```text
+lens-studio/Assets/Scripts/
+├── DimosManager.ts                  # top-level Lens facade / scene entry
+├── SetupWizard.ts                   # setup flow scene entry
+├── UIManager.ts                     # HUD scene entry
+├── Setup/                           # wizard view + connect/calibration helpers
+├── Alignment/                       # marker alignment + manual placement session
+├── Navigation/                      # placement + navigation workflow
+├── Network/                         # WebSocket client + protocol modules
+├── Rendering/                       # lidar, robot marker, goal, path, obstacles
+└── UI/                              # HUD views, robot menu, shared UI helpers
+```
 
 See [`dimos-ar/docs/LENS_DEVELOPMENT.md`](dimos-ar/docs/LENS_DEVELOPMENT.md) for Lens architecture (Agent Center patterns), dev workflow, and Lens Studio MCP setup for Cursor.
 
@@ -362,7 +412,7 @@ Here are things you can change without leaving the supported architecture:
 | **M4** | Voice commands via DimOS agent | Planned |
 | **M5+** | Semantic queries, spatial map in AR, multi-robot | Planned |
 
-Build strictly in order. See [`dimos-ar/docs/PROJECT_BRIEF.md`](dimos-ar/docs/PROJECT_BRIEF.md).
+Build strictly in order. The milestones above are the current project scope.
 
 ## Ports
 
@@ -409,12 +459,12 @@ If the live connection goes stale, `ARGO2Connection` re-discovers by **serial** 
 - Port **8765** conflicts with DimOS **Foxglove** viewer — do not run both on the same machine
 - WebSocket has no auth (intended for local dev; see `listen_host` warning above)
 - Spectacles Lens (`lens-studio/`) is early stage — see `dimos-ar/docs/LENS_DEVELOPMENT.md`
+- **Navigation cancel/emergency stop limitation**: With the currently installed DimOS `ReplanningAStarPlanner`, the `stop_movement` stream is not wired. This means that while the ARBridge correctly handles `cancel_goal` and `emergency_stop` messages from the Lens (clearing bridge-side navigation state and path visualization), the underlying planner will continue driving the robot to the previously set goal. The robot can still be stopped via the physical emergency button or by sending a new navigation goal. Upgrading to a newer DimOS version that includes `stop_movement` input on the planner will resolve this. See `dimos-ar/dimos_ar/bridge_module.py` lines 856, 864 for implementation details.
 
 ### Documentation map
 
 | Doc | Contents |
 |-----|----------|
-| [`dimos-ar/docs/PROJECT_BRIEF.md`](dimos-ar/docs/PROJECT_BRIEF.md) | Goals, milestones, constraints |
 | [`dimos-ar/docs/ARCHITECTURE.md`](dimos-ar/docs/ARCHITECTURE.md) | Package layout, threading, data flow |
 | [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md) | WebSocket message schema |
 | [`dimos-ar/docs/LENS_DEVELOPMENT.md`](dimos-ar/docs/LENS_DEVELOPMENT.md) | Spectacles Lens Studio guide, MCP, UI patterns |

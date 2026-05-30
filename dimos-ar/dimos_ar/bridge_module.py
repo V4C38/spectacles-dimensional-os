@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -27,7 +28,7 @@ from dimos_ar.alignment import (
     DEFAULT_MARKER_LENGTH_M,
     DEFAULT_TIMESTAMP_TOLERANCE_S,
 )
-from dimos_ar.bridge_status import get_bridge_status_tracker
+from dimos_ar.bridge_status import get_bridge_status_tracker, sync_tracker_robot_model
 from dimos_ar.filters import LidarFilter, LidarFilterConfig, RateLimiter
 from dimos_ar.protocol import (
     DEFAULT_CAPABILITIES,
@@ -61,6 +62,75 @@ SPECTACLES_MARKER_TIMEOUT_S = 0.5
 ALIGN_STATUS_BROADCAST_INTERVAL_S = 0.3
 LIDAR_PAYLOAD_LOG_INTERVAL_S = 5.0
 STREAM_STATUS_POLL_INTERVAL_S = 0.5
+ALIGNMENT_CLUSTER_WINDOW = 12
+ALIGNMENT_CLUSTER_MIN_SAMPLES = 4
+ALIGNMENT_CLUSTER_TARGET_SAMPLES = 6
+ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M = 0.08
+ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD = math.radians(12.0)
+
+
+def _wrap_angle_rad(angle: float) -> float:
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def _candidate_yaw_rad(T_world_odom: np.ndarray) -> float:
+    forward = T_world_odom[:3, 0]
+    return math.atan2(float(forward[2]), float(forward[0]))
+
+
+def _candidate_translation_distance_m(lhs: np.ndarray, rhs: np.ndarray) -> float:
+    return float(np.linalg.norm(lhs[:3, 3] - rhs[:3, 3]))
+
+
+def _candidate_yaw_distance_rad(lhs: np.ndarray, rhs: np.ndarray) -> float:
+    return abs(_wrap_angle_rad(_candidate_yaw_rad(lhs) - _candidate_yaw_rad(rhs)))
+
+
+def score_alignment_cluster(
+    candidate: "AlignmentCandidate",
+    recent_candidates: list["AlignmentCandidate"],
+) -> tuple[float, int, float, float]:
+    cluster = [
+        sample
+        for sample in recent_candidates
+        if _candidate_translation_distance_m(sample.T_world_odom, candidate.T_world_odom)
+        <= ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M
+        and _candidate_yaw_distance_rad(sample.T_world_odom, candidate.T_world_odom)
+        <= ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD
+    ]
+    cluster_size = len(cluster)
+    if cluster_size == 0:
+        return (
+            0.0,
+            0,
+            ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M,
+            ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD,
+        )
+
+    mean_translation_error = sum(
+        _candidate_translation_distance_m(sample.T_world_odom, candidate.T_world_odom)
+        for sample in cluster
+    ) / cluster_size
+    mean_yaw_error = sum(
+        _candidate_yaw_distance_rad(sample.T_world_odom, candidate.T_world_odom)
+        for sample in cluster
+    ) / cluster_size
+    translation_score = max(
+        0.0,
+        1.0 - mean_translation_error / ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M,
+    )
+    yaw_score = max(0.0, 1.0 - mean_yaw_error / ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD)
+    stability_score = min(1.0, cluster_size / ALIGNMENT_CLUSTER_MIN_SAMPLES)
+    cluster_bonus = min(1.0, cluster_size / ALIGNMENT_CLUSTER_TARGET_SAMPLES)
+    sample_quality = (
+        candidate.sample_quality if candidate.sample_quality is not None else candidate.quality
+    )
+    confidence = (
+        sample_quality
+        * stability_score
+        * (0.45 + 0.25 * translation_score + 0.15 * yaw_score + 0.15 * cluster_bonus)
+    )
+    return confidence, cluster_size, mean_translation_error, mean_yaw_error
 
 
 @dataclass(frozen=True)
@@ -70,6 +140,8 @@ class AlignmentCandidate:
     method: str
     approximate: bool
     reprojection_error_px: float | None = None
+    sample_quality: float | None = None
+    cluster_size: int = 1
 
 
 class ARBridgeConfig(ModuleConfig):
@@ -102,6 +174,7 @@ class ARBridge(Module):
     navigation_state: In[String]
 
     clicked_point: Out[PointStamped]
+    goal_request: Out[PoseStamped]
     stop_movement: Out[Bool]
 
     config: ARBridgeConfig
@@ -137,6 +210,7 @@ class ARBridge(Module):
         self._latest_alignment_quality: float | None = None
         self._candidate_count = 0
         self._alignment_mode = "marker"
+        self._recent_marker_candidates: list[AlignmentCandidate] = []
         self._align_broadcast_stop = threading.Event()
         self._align_broadcast_thread: threading.Thread | None = None
         self._logged_align_video = False
@@ -148,6 +222,7 @@ class ARBridge(Module):
         self._stream_status_stop = threading.Event()
         self._stream_status_thread: threading.Thread | None = None
         tracker = get_bridge_status_tracker()
+        sync_tracker_robot_model(tracker)
         if tracker is not None:
             tracker.set_on_change(self._broadcast_status)
         self._status_tracker = tracker
@@ -178,6 +253,7 @@ class ARBridge(Module):
     @rpc
     def start(self) -> None:
         super().start()
+        sync_tracker_robot_model(self._status_tracker)
         self._ws_server.start()
         self._start_stream_status_monitor()
         host = global_config.listen_host
@@ -349,6 +425,12 @@ class ARBridge(Module):
         self._latest_alignment_quality = None
         self._candidate_count = 0
         self._alignment_mode = "marker"
+        self._recent_marker_candidates = []
+
+    def _score_alignment_candidate(
+        self, candidate: AlignmentCandidate
+    ) -> tuple[float, int, float, float]:
+        return score_alignment_cluster(candidate, self._recent_marker_candidates)
 
     def _process_alignment_candidate(
         self,
@@ -366,23 +448,51 @@ class ARBridge(Module):
         if result is None:
             return None
         candidate = AlignmentCandidate(
-            T_world_odom=result.T_world_odom,
+            T_world_odom=np.array(result.T_world_odom, dtype=np.float64, copy=True),
             quality=result.quality,
             method="marker",
             approximate=False,
             reprojection_error_px=result.reprojection_error_px,
+            sample_quality=result.quality,
+        )
+        self._recent_marker_candidates.append(candidate)
+        if len(self._recent_marker_candidates) > ALIGNMENT_CLUSTER_WINDOW:
+            self._recent_marker_candidates = self._recent_marker_candidates[
+                -ALIGNMENT_CLUSTER_WINDOW:
+            ]
+        (
+            stable_quality,
+            cluster_size,
+            mean_translation_error,
+            mean_yaw_error,
+        ) = self._score_alignment_candidate(candidate)
+        candidate = AlignmentCandidate(
+            T_world_odom=candidate.T_world_odom,
+            quality=stable_quality,
+            method=candidate.method,
+            approximate=candidate.approximate,
+            reprojection_error_px=candidate.reprojection_error_px,
+            sample_quality=candidate.sample_quality,
+            cluster_size=cluster_size,
         )
         self._latest_alignment_quality = candidate.quality
         self._candidate_count += 1
         improved = False
-        if self._best_alignment is None or candidate.quality > self._best_alignment.quality:
+        is_stable_candidate = cluster_size >= ALIGNMENT_CLUSTER_MIN_SAMPLES
+        if is_stable_candidate and (
+            self._best_alignment is None or candidate.quality > self._best_alignment.quality
+        ):
             self._best_alignment = candidate
             self._best_alignment_ts = msg.ts
             improved = True
             logger.info(
                 "AprilTag alignment improved",
                 quality=round(candidate.quality, 3),
+                sample_quality=round(candidate.sample_quality or 0.0, 3),
                 reproj_px=round(result.reprojection_error_px, 2),
+                cluster_size=cluster_size,
+                mean_translation_error_m=round(mean_translation_error, 4),
+                mean_yaw_error_deg=round(math.degrees(mean_yaw_error), 2),
                 samples=self._candidate_count,
             )
         self._broadcast_align_status(
@@ -398,7 +508,11 @@ class ARBridge(Module):
             message=(
                 "Alignment improved — hold steady for best result"
                 if improved
-                else "Tracking marker — refining best alignment"
+                else (
+                    f"Tracking marker — hold steady ({cluster_size}/{ALIGNMENT_CLUSTER_MIN_SAMPLES})"
+                    if not is_stable_candidate
+                    else "Tracking marker — refining best alignment"
+                )
             ),
             ts=msg.ts,
         )
@@ -413,11 +527,16 @@ class ARBridge(Module):
         T_world_base = pose_to_matrix(norm_position, norm_orientation)
         T_odom_base = pose_to_matrix(odom.position, odom.orientation)
         candidate = AlignmentCandidate(
-            T_world_odom=T_world_base @ np.linalg.inv(T_odom_base),
+            T_world_odom=np.array(
+                T_world_base @ np.linalg.inv(T_odom_base),
+                dtype=np.float64,
+                copy=True,
+            ),
             quality=self.config.manual_alignment_quality,
             method="manual",
             approximate=True,
             reprojection_error_px=None,
+            sample_quality=self.config.manual_alignment_quality,
         )
         self._alignment_mode = "manual"
         self._latest_alignment_quality = candidate.quality
@@ -693,24 +812,43 @@ class ARBridge(Module):
             logger.warning("nav_goal ignored before calibration")
             return
 
-        goal = self._calibration.inverse_transform_point(msg.position)
-        self.clicked_point.publish(
-            PointStamped(
-                x=goal[0],
-                y=goal[1],
-                z=goal[2],
-                ts=msg.ts,
-                frame_id="odom",
+        if msg.orientation is not None:
+            odom_position, odom_orientation = self._calibration.inverse_transform_pose(
+                msg.position,
+                msg.orientation,
             )
-        )
+            self.goal_request.publish(
+                PoseStamped(
+                    position=list(odom_position),
+                    orientation=list(odom_orientation),
+                    ts=msg.ts,
+                    frame_id="odom",
+                )
+            )
+            logger.info(
+                "Navigation pose goal published",
+                world_goal=[round(v, 3) for v in msg.position],
+                world_orientation=[round(v, 4) for v in msg.orientation],
+                odom_goal=[round(v, 3) for v in odom_position],
+                odom_orientation=[round(v, 4) for v in odom_orientation],
+            )
+        else:
+            goal = self._calibration.inverse_transform_point(msg.position)
+            self.clicked_point.publish(
+                PointStamped(
+                    x=goal[0],
+                    y=goal[1],
+                    z=goal[2],
+                    ts=msg.ts,
+                    frame_id="odom",
+                )
+            )
+            logger.info(
+                "Navigation point goal published",
+                world_goal=[round(v, 3) for v in msg.position],
+                odom_goal=[round(v, 3) for v in goal],
+            )
         self._goal_reached = False
-        self._nav_state = "following_path"
-        logger.info(
-            "Navigation goal published",
-            world_goal=[round(v, 3) for v in msg.position],
-            odom_goal=[round(v, 3) for v in goal],
-        )
-        self._broadcast_nav_status(ts=msg.ts)
 
     def _on_cancel_goal(self, msg: CancelGoalMessage) -> None:
         self.stop_movement.publish(Bool(data=True))

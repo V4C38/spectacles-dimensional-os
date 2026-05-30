@@ -4,15 +4,14 @@ import { LidarMessage, protocolMetersToLensCentimeters } from "../Network/Protoc
 const MAX_POINTS = 2200;
 const POINT_SIZE_CM = 2.4;
 const APPLY_INTERVAL_S = 1.0;
+const DISTANCE_COLOR_STEPS = 12;
+const DISTANCE_NEAR_COLOR: [number, number, number] = [1.0, 0.0, 0.0];
+const DISTANCE_FAR_COLOR: [number, number, number] = [1.0, 1.0, 1.0];
+const DEFAULT_LIDAR_MATERIAL = requireAsset(
+  "../../Materials/LidarVoxel.mat",
+) as Material | null;
 
-const VOXEL_PALETTE: [number, number, number][] = [
-  [0.10, 0.92, 0.95],
-  [0.28, 0.95, 0.58],
-  [0.96, 0.95, 0.12],
-  [1.00, 0.68, 0.12],
-  [1.00, 0.18, 0.72],
-  [0.70, 0.16, 1.00],
-];
+const DISTANCE_PALETTE: [number, number, number][] = createDistancePalette();
 
 @component
 export class LidarPointCloud extends DirtyComponent {
@@ -29,6 +28,7 @@ export class LidarPointCloud extends DirtyComponent {
   private _paletteMaterials: Material[] = [];
   private _lastApplyTime = -APPLY_INTERVAL_S;
   private _warnedMissingTemplate = false;
+  private _robotWorldPosition: vec3 | null = null;
 
   onAwake(): void {
     super.onAwake();
@@ -37,6 +37,10 @@ export class LidarPointCloud extends DirtyComponent {
 
   public queueLidar(msg: LidarMessage): void {
     this._pending = msg;
+  }
+
+  public setRobotWorldPosition(position: vec3): void {
+    this._robotWorldPosition = position;
   }
 
   protected onFlush(_flags: number): void {
@@ -50,7 +54,6 @@ export class LidarPointCloud extends DirtyComponent {
     const msg = this._pending;
     this._pending = null;
     const points = msg.points;
-    const colors = msg.colors;
     const step = Math.max(1, Math.ceil(points.length / MAX_POINTS));
     const count = Math.min(MAX_POINTS, Math.ceil(points.length / step));
     this._ensurePool(count);
@@ -58,22 +61,30 @@ export class LidarPointCloud extends DirtyComponent {
       return;
     }
 
-    let minZ = Number.POSITIVE_INFINITY;
-    let maxZ = Number.NEGATIVE_INFINITY;
+    let minDistance = Number.POSITIVE_INFINITY;
+    let maxDistance = Number.NEGATIVE_INFINITY;
+    const robotWorldPosition = this._robotWorldPosition;
     for (let i = 0, sourceIndex = 0; i < count; i++, sourceIndex += step) {
       const p = points[sourceIndex];
-      minZ = Math.min(minZ, p[2]);
-      maxZ = Math.max(maxZ, p[2]);
+      const distance = this._distanceFromRobotCm(p, robotWorldPosition);
+      minDistance = Math.min(minDistance, distance);
+      maxDistance = Math.max(maxDistance, distance);
     }
 
-    const rangeZ = Math.max(maxZ - minZ, 0.001);
+    const rangeDistance = Math.max(maxDistance - minDistance, 0.001);
     for (let i = 0; i < count; i++) {
       const sourceIndex = Math.min(i * step, points.length - 1);
       const p = points[sourceIndex];
       const obj = this._pointObjects[i];
       obj.enabled = true;
       obj.getTransform().setWorldPosition(protocolMetersToLensCentimeters(p));
-      this._applyPointColor(i, p, colors !== undefined ? colors[sourceIndex] : undefined, minZ, rangeZ);
+      this._applyPointColor(
+        i,
+        p,
+        minDistance,
+        rangeDistance,
+        robotWorldPosition,
+      );
     }
     for (let i = count; i < this._pointObjects.length; i++) {
       this._pointObjects[i].enabled = false;
@@ -83,14 +94,18 @@ export class LidarPointCloud extends DirtyComponent {
 
   private _ensurePool(count: number): void {
     const template = this.pointTemplate as RenderMeshVisual | null;
-    if (!template) {
+    const materialTemplate =
+      DEFAULT_LIDAR_MATERIAL ?? template?.mainMaterial ?? null;
+    if (!template || !materialTemplate) {
       if (!this._warnedMissingTemplate) {
-        print("LidarPointCloud: pointTemplate is not assigned");
+        print(
+          "LidarPointCloud: pointTemplate mesh or LiDAR material is not assigned",
+        );
         this._warnedMissingTemplate = true;
       }
       return;
     }
-    this._ensurePaletteMaterials(template);
+    this._ensurePaletteMaterials(materialTemplate);
 
     while (this._pointObjects.length < count) {
       const obj = global.scene.createSceneObject(`LidarPt${this._pointObjects.length}`);
@@ -116,14 +131,14 @@ export class LidarPointCloud extends DirtyComponent {
     }
   }
 
-  private _ensurePaletteMaterials(template: RenderMeshVisual): void {
-    if (this._paletteMaterials.length > 0 || !template.mainMaterial) {
+  private _ensurePaletteMaterials(materialTemplate: Material): void {
+    if (this._paletteMaterials.length > 0) {
       return;
     }
 
-    for (let i = 0; i < VOXEL_PALETTE.length; i++) {
-      const material = template.mainMaterial.clone();
-      this._setMaterialColor(material, VOXEL_PALETTE[i]);
+    for (let i = 0; i < DISTANCE_PALETTE.length; i++) {
+      const material = materialTemplate.clone();
+      this._setMaterialColor(material, DISTANCE_PALETTE[i]);
       this._paletteMaterials.push(material);
     }
   }
@@ -137,16 +152,21 @@ export class LidarPointCloud extends DirtyComponent {
   private _applyPointColor(
     index: number,
     point: [number, number, number],
-    color: [number, number, number] | undefined,
-    minZ: number,
-    rangeZ: number,
+    minDistance: number,
+    rangeDistance: number,
+    robotWorldPosition: vec3 | null,
   ): void {
     const visual = this._pointVisuals[index];
     if (!visual || this._paletteMaterials.length === 0) {
       return;
     }
 
-    const paletteIndex = this._paletteIndexForPoint(point, color, minZ, rangeZ);
+    const paletteIndex = this._paletteIndexForPoint(
+      point,
+      minDistance,
+      rangeDistance,
+      robotWorldPosition,
+    );
     if (this._pointPaletteIndices[index] !== paletteIndex) {
       visual.mainMaterial = this._paletteMaterials[paletteIndex];
       this._pointPaletteIndices[index] = paletteIndex;
@@ -155,34 +175,50 @@ export class LidarPointCloud extends DirtyComponent {
 
   private _paletteIndexForPoint(
     point: [number, number, number],
-    color: [number, number, number] | undefined,
-    minZ: number,
-    rangeZ: number,
+    minDistance: number,
+    rangeDistance: number,
+    robotWorldPosition: vec3 | null,
   ): number {
-    const heightT = Math.max(0, Math.min(1, (point[2] - minZ) / rangeZ));
-    if (color && color[1] > color[0]) {
-      return heightT < 0.5 ? 0 : 1;
-    }
-    if (heightT < 0.18) {
-      return 0;
-    }
-    if (heightT < 0.35) {
-      return 1;
-    }
-    if (heightT < 0.52) {
-      return 2;
-    }
-    if (heightT < 0.70) {
-      return 3;
-    }
-    if (heightT < 0.86) {
-      return 4;
-    }
-    return 5;
+    const distance = this._distanceFromRobotCm(point, robotWorldPosition);
+    const t = Math.max(0, Math.min(1, (distance - minDistance) / rangeDistance));
+    return Math.min(
+      DISTANCE_PALETTE.length - 1,
+      Math.floor(t * (DISTANCE_PALETTE.length - 1)),
+    );
+  }
+
+  private _distanceFromRobotCm(
+    point: [number, number, number],
+    robotWorldPosition: vec3 | null,
+  ): number {
+    const worldPoint = protocolMetersToLensCentimeters(point);
+    const origin = robotWorldPosition ?? vec3.zero();
+    const dx = worldPoint.x - origin.x;
+    const dy = worldPoint.y - origin.y;
+    const dz = worldPoint.z - origin.z;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
   }
 
   public clear(): void {
     this._pending = null;
     this._pointObjects.forEach((o) => (o.enabled = false));
   }
+}
+
+function createDistancePalette(): [number, number, number][] {
+  const palette: [number, number, number][] = [];
+  for (let i = 0; i < DISTANCE_COLOR_STEPS; i++) {
+    const t =
+      DISTANCE_COLOR_STEPS <= 1 ? 1.0 : i / (DISTANCE_COLOR_STEPS - 1);
+    palette.push([
+      lerp(DISTANCE_NEAR_COLOR[0], DISTANCE_FAR_COLOR[0], t),
+      lerp(DISTANCE_NEAR_COLOR[1], DISTANCE_FAR_COLOR[1], t),
+      lerp(DISTANCE_NEAR_COLOR[2], DISTANCE_FAR_COLOR[2], t),
+    ]);
+  }
+  return palette;
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
 }

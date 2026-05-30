@@ -1,18 +1,10 @@
 import { protocolMetersToLensCentimeters } from "../Network/Protocol";
+import { cloneMaterialWithColor } from "./Shared/MaterialUtils";
 
 const PATH_SAMPLE_CM = 12.0;
 const PATH_POINT_SCALE = 1.6;
 const PATH_POINT_LIFT_CM = 0.8;
 const MAX_PATH_POINTS = 160;
-
-function clonePathMaterial(source: Material): Material {
-  const material = source.clone();
-  const pass = material.mainPass as any;
-  const color = new vec4(0.15, 1.0, 0.45, 1.0);
-  pass.baseColor = color;
-  pass.Port_Emissive_N006 = new vec3(color.x, color.y, color.z);
-  return material;
-}
 
 export class PathRenderer {
   private readonly root: SceneObject;
@@ -24,7 +16,12 @@ export class PathRenderer {
     this.root = global.scene.createSceneObject("PathRenderer");
     this.root.setParent(parent);
     this.template = template;
-    this.material = template?.mainMaterial ? clonePathMaterial(template.mainMaterial) : null;
+    this.material = template?.mainMaterial
+      ? cloneMaterialWithColor(
+          template.mainMaterial,
+          new vec4(0.15, 1.0, 0.45, 1.0),
+        )
+      : null;
   }
 
   public setProtocolPath(waypoints: [number, number, number][]): void {

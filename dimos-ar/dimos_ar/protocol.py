@@ -38,6 +38,7 @@ class NavGoalMessage:
     ts: float
     robot_id: str
     position: tuple[float, float, float]
+    orientation: tuple[float, float, float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -170,7 +171,13 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
             marker_orientation=_quat(data, "marker_orientation"),
         )
     if msg_type == "nav_goal":
-        return NavGoalMessage(ts=ts, robot_id=robot_id, position=_vec3(data, "position"))
+        orientation = _quat(data, "orientation") if "orientation" in data else None
+        return NavGoalMessage(
+            ts=ts,
+            robot_id=robot_id,
+            position=_vec3(data, "position"),
+            orientation=orientation,
+        )
     if msg_type == "cancel_goal":
         return CancelGoalMessage(ts=ts, robot_id=robot_id)
     if msg_type == "emergency_stop":

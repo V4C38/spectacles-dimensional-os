@@ -17,18 +17,66 @@ from dimos_ar.marker_contract import (
     DEFAULT_MARKER_ID,
     DEFAULT_MARKER_LENGTH_M,
 )
-from dimos_ar.transforms import OdomSample, pose_to_matrix
+from dimos_ar.transforms import OdomSample, normalize_ground_pose, pose_to_matrix
 
 logger = setup_logger()
 
 _DEBUG_LOG_INTERVAL_S = 3.0
 
-# Go2 front camera extrinsics (base_link <- camera), from Unitree Go2 sim defaults.
-DEFAULT_CAMERA_POSITION = (0.325, -0.001, 0.054)
+# Go2 front camera extrinsics (base_link <- camera), aligned to the public Unitree Go2
+# front_camera_joint mount. This is intentionally separate from the optical-frame rotation
+# below, which already matches the standard ROS/OpenCV camera_optical convention.
+DEFAULT_CAMERA_POSITION = (0.32715, -0.00003, 0.04297)
 DEFAULT_CAMERA_ORIENTATION = (0.5, -0.5, 0.5, -0.5)
 
 DEFAULT_TIMESTAMP_TOLERANCE_S = 0.5
 DEFAULT_MAX_REPROJECTION_ERROR_PX = 8.0
+
+DEFAULT_GO2_FRONT_CAMERA_INFO_SOURCE = "go2_front_720_calibrated"
+DEFAULT_GO2_FRONT_CAMERA_WIDTH = 1280
+DEFAULT_GO2_FRONT_CAMERA_HEIGHT = 720
+DEFAULT_GO2_FRONT_CAMERA_K = (
+    864.39938,
+    0.0,
+    639.19798,
+    0.0,
+    863.73849,
+    373.28118,
+    0.0,
+    0.0,
+    1.0,
+)
+DEFAULT_GO2_FRONT_CAMERA_D = (-0.35463, 0.102054, -0.001614, -0.001249, 0.0)
+
+
+def build_camera_info(
+    *,
+    width: int,
+    height: int,
+    k: tuple[float, ...],
+    d: tuple[float, ...],
+    frame_id: str = "camera_optical",
+) -> CameraInfo:
+    return CameraInfo(
+        frame_id=frame_id,
+        width=width,
+        height=height,
+        distortion_model="plumb_bob",
+        D=list(d),
+        K=list(k),
+        R=[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        P=[k[0], 0.0, k[2], 0.0, 0.0, k[4], k[5], 0.0, 0.0, 0.0, 1.0, 0.0],
+        binning_x=0,
+        binning_y=0,
+    )
+
+
+DEFAULT_GO2_FRONT_CAMERA_INFO = build_camera_info(
+    width=DEFAULT_GO2_FRONT_CAMERA_WIDTH,
+    height=DEFAULT_GO2_FRONT_CAMERA_HEIGHT,
+    k=DEFAULT_GO2_FRONT_CAMERA_K,
+    d=DEFAULT_GO2_FRONT_CAMERA_D,
+)
 
 
 def camera_info_to_cv_matrices(camera_info: CameraInfo) -> tuple[np.ndarray, np.ndarray]:
@@ -36,6 +84,37 @@ def camera_info_to_cv_matrices(camera_info: CameraInfo) -> tuple[np.ndarray, np.
     k = np.array(camera_info.K, dtype=np.float64).reshape(3, 3)
     d = np.array(camera_info.D if camera_info.D else [], dtype=np.float64).reshape(-1, 1)
     return k, d
+
+
+def _camera_info_matches_resolution(camera_info: CameraInfo, width: int, height: int) -> bool:
+    return int(camera_info.width) == int(width) and int(camera_info.height) == int(height)
+
+
+def _camera_info_has_distortion(camera_info: CameraInfo) -> bool:
+    return any(abs(float(value)) > 1e-6 for value in (camera_info.D if camera_info.D else []))
+
+
+def _camera_info_intrinsics_differ(
+    camera_info: CameraInfo,
+    reference: CameraInfo,
+    *,
+    pixel_tolerance: float = 5.0,
+) -> bool:
+    return any(
+        abs(float(lhs) - float(rhs)) > pixel_tolerance
+        for lhs, rhs in zip(camera_info.K, reference.K)
+    )
+
+
+def _camera_info_summary(camera_info: CameraInfo) -> str:
+    d = camera_info.D if camera_info.D else []
+    return (
+        f"{int(camera_info.width)}x{int(camera_info.height)} "
+        f"fx={float(camera_info.K[0]):.2f} fy={float(camera_info.K[4]):.2f} "
+        f"cx={float(camera_info.K[2]):.2f} cy={float(camera_info.K[5]):.2f} "
+        f"distortion={'nonzero' if _camera_info_has_distortion(camera_info) else 'zero'} "
+        f"D={[round(float(value), 6) for value in d[:5]]}"
+    )
 
 
 @dataclass(frozen=True)
@@ -131,6 +210,7 @@ class AlignDebugStats:
     wrong_id: int = 0
     pose_fail: int = 0
     high_reproj: int = 0
+    camera_resolution_mismatch: int = 0
     detected: int = 0
     last_reproj_px: float | None = None
 
@@ -148,12 +228,16 @@ class AprilTagAligner:
         max_reprojection_error_px: float = DEFAULT_MAX_REPROJECTION_ERROR_PX,
         camera_position: tuple[float, float, float] = DEFAULT_CAMERA_POSITION,
         camera_orientation: tuple[float, float, float, float] = DEFAULT_CAMERA_ORIENTATION,
+        fallback_camera_info: CameraInfo | None = DEFAULT_GO2_FRONT_CAMERA_INFO,
+        prefer_calibrated_camera_info: bool = True,
     ) -> None:
         self._marker_length_m = marker_length_m
         self._marker_id = marker_id
         self._timestamp_tolerance_s = timestamp_tolerance_s
         self._max_reprojection_error_px = max_reprojection_error_px
         self._T_base_camera = pose_to_matrix(camera_position, camera_orientation)
+        self._fallback_camera_info = fallback_camera_info
+        self._prefer_calibrated_camera_info = prefer_calibrated_camera_info
         self._detector = create_apriltag_detector(apriltag_dictionary)
         self._lock = threading.Lock()
         self._active = False
@@ -162,6 +246,8 @@ class AprilTagAligner:
         self._debug = AlignDebugStats()
         self._debug_log_mono: float = 0.0
         self._logged_waiting_camera_info = False
+        self._logged_camera_resolution_mismatch: tuple[int, int, int, int] | None = None
+        self._last_camera_info_signature: tuple[str, str] | None = None
 
     @property
     def active(self) -> bool:
@@ -176,10 +262,14 @@ class AprilTagAligner:
                 self._latest_detection = None
                 self._debug = AlignDebugStats()
                 self._logged_waiting_camera_info = False
+                self._logged_camera_resolution_mismatch = None
+                self._last_camera_info_signature = None
             elif value:
                 self._debug = AlignDebugStats()
                 self._debug_log_mono = 0.0
                 self._logged_waiting_camera_info = False
+                self._logged_camera_resolution_mismatch = None
+                self._last_camera_info_signature = None
                 logger.info(
                     "AprilTag robot detection started: id=%d %s edge=%.0fmm "
                     "(same marker as legacy aruco_marker.png / phone PDF, Lens physical height %.1fcm)",
@@ -194,7 +284,10 @@ class AprilTagAligner:
             had = self._camera_info is not None
             self._camera_info = info
         if not had and self._active:
-            logger.info("AprilTag: robot camera intrinsics received")
+            logger.info(
+                "AprilTag: robot camera intrinsics received (%s)",
+                _camera_info_summary(info),
+            )
 
     def debug_stats(self) -> AlignDebugStats:
         with self._lock:
@@ -205,6 +298,7 @@ class AprilTagAligner:
                 wrong_id=self._debug.wrong_id,
                 pose_fail=self._debug.pose_fail,
                 high_reproj=self._debug.high_reproj,
+                camera_resolution_mismatch=self._debug.camera_resolution_mismatch,
                 detected=self._debug.detected,
                 last_reproj_px=self._debug.last_reproj_px,
             )
@@ -237,6 +331,7 @@ class AprilTagAligner:
         logger.info(
             "AprilTag robot camera: no marker yet — frames=%d "
             "no_intrinsics=%d no_marker=%d wrong_id=%d pose_fail=%d high_reproj=%d "
+            "resolution_mismatch=%d "
             "(show phone marker page to Go2 front camera; avoid glare)",
             stats.frames,
             stats.no_camera_info,
@@ -244,26 +339,136 @@ class AprilTagAligner:
             stats.wrong_id,
             stats.pose_fail,
             stats.high_reproj,
+            stats.camera_resolution_mismatch,
         )
+
+    def _maybe_log_camera_resolution_mismatch(
+        self,
+        camera_info: CameraInfo,
+        frame_width: int,
+        frame_height: int,
+    ) -> None:
+        mismatch = (
+            int(camera_info.width),
+            int(camera_info.height),
+            int(frame_width),
+            int(frame_height),
+        )
+        if mismatch == self._logged_camera_resolution_mismatch:
+            return
+        self._logged_camera_resolution_mismatch = mismatch
+        logger.warning(
+            "AprilTag: camera_info/image resolution mismatch (camera_info=%dx%d frame=%dx%d) "
+            "— rejecting calibration until a matching profile is available",
+            mismatch[0],
+            mismatch[1],
+            mismatch[2],
+            mismatch[3],
+        )
+
+    def _maybe_log_camera_info_source(
+        self,
+        source: str,
+        camera_info: CameraInfo,
+        *,
+        live_camera_info: CameraInfo | None = None,
+    ) -> None:
+        summary = _camera_info_summary(camera_info)
+        signature = (source, summary)
+        if signature == self._last_camera_info_signature:
+            return
+        self._last_camera_info_signature = signature
+        if live_camera_info is None:
+            logger.info("AprilTag: using %s camera model (%s)", source, summary)
+            return
+        logger.warning(
+            "AprilTag: overriding live camera_info with %s (%s); live camera_info was (%s)",
+            source,
+            summary,
+            _camera_info_summary(live_camera_info),
+        )
+
+    def resolve_camera_info(
+        self,
+        frame_width: int,
+        frame_height: int,
+    ) -> tuple[CameraInfo, str] | None:
+        with self._lock:
+            live_camera_info = self._camera_info
+
+        fallback_camera_info = self._fallback_camera_info
+        fallback_matches = (
+            fallback_camera_info is not None
+            and _camera_info_matches_resolution(
+                fallback_camera_info, frame_width, frame_height
+            )
+        )
+
+        if live_camera_info is not None and _camera_info_matches_resolution(
+            live_camera_info, frame_width, frame_height
+        ):
+            if (
+                self._prefer_calibrated_camera_info
+                and fallback_matches
+                and (
+                    not _camera_info_has_distortion(live_camera_info)
+                    or _camera_info_intrinsics_differ(
+                        live_camera_info,
+                        fallback_camera_info,
+                    )
+                )
+            ):
+                assert fallback_camera_info is not None
+                self._maybe_log_camera_info_source(
+                    DEFAULT_GO2_FRONT_CAMERA_INFO_SOURCE,
+                    fallback_camera_info,
+                    live_camera_info=live_camera_info,
+                )
+                return fallback_camera_info, DEFAULT_GO2_FRONT_CAMERA_INFO_SOURCE
+
+            self._maybe_log_camera_info_source("live", live_camera_info)
+            return live_camera_info, "live"
+
+        if live_camera_info is not None:
+            with self._lock:
+                self._debug.camera_resolution_mismatch += 1
+            self._maybe_log_camera_resolution_mismatch(
+                live_camera_info,
+                frame_width,
+                frame_height,
+            )
+
+        if fallback_matches:
+            assert fallback_camera_info is not None
+            self._maybe_log_camera_info_source(
+                DEFAULT_GO2_FRONT_CAMERA_INFO_SOURCE,
+                fallback_camera_info,
+            )
+            return fallback_camera_info, DEFAULT_GO2_FRONT_CAMERA_INFO_SOURCE
+
+        return None
 
     def process_frame(self, image: Image) -> None:
         with self._lock:
             if not self._active:
                 return
-            info = self._camera_info
             self._debug.frames += 1
-        if info is None:
+        frame_bgr = image.to_opencv()
+        frame_height, frame_width = frame_bgr.shape[:2]
+        resolved = self.resolve_camera_info(frame_width, frame_height)
+        if resolved is None:
             with self._lock:
                 self._debug.no_camera_info += 1
                 if not self._logged_waiting_camera_info:
                     self._logged_waiting_camera_info = True
                     logger.warning(
-                        "AprilTag: waiting for robot camera_info before detection can run",
+                        "AprilTag: waiting for matching robot camera_info before detection can run",
                     )
             self._maybe_log_debug()
             return
 
-        gray = cv2.cvtColor(image.to_opencv(), cv2.COLOR_BGR2GRAY)
+        info, _source = resolved
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         corners, ids, _rejected = self._detector.detectMarkers(gray)
         if ids is None or len(ids) == 0:
             with self._lock:
@@ -337,7 +542,10 @@ class AprilTagAligner:
         if abs(recv_ts - detection.detect_ts) > self._timestamp_tolerance_s:
             return None
 
-        T_world_marker = pose_to_matrix(marker_position, marker_orientation)
+        norm_position, norm_orientation = normalize_ground_pose(
+            marker_position, marker_orientation
+        )
+        T_world_marker = pose_to_matrix(norm_position, norm_orientation)
         T_odom_base = pose_to_matrix(odom.position, odom.orientation)
         T_odom_camera = T_odom_base @ self._T_base_camera
         T_odom_marker = T_odom_camera @ detection.T_camera_marker
