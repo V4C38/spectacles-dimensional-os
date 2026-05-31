@@ -7,11 +7,10 @@ Quest) that speaks this protocol works without touching the Python side.
 Keep this document and `dimos_ar/protocol.py` in sync. Version the protocol;
 bump `protocol_version` on any breaking change.
 
-**Reference implementations:**
+**Current in-repo client:**
 
 | Client | Location |
 |--------|----------|
-| Web debug / phone | `clients/web/src/protocol.ts` (this repo) |
 | Spectacles Lens | `lens-studio/` (see `docs/LENS_DEVELOPMENT.md`) |
 
 ## Transport
@@ -31,21 +30,7 @@ bump `protocol_version` on any breaking change.
 
 ## Handshake
 
-On connect, the server sends one `hello`. Capabilities reflect what the running
-blueprint supports.
-
-**Milestone 1 (go2_ar_basic):**
-
-```json
-{
-  "type": "hello",
-  "protocol_version": 1,
-  "robots": ["go2"],
-  "capabilities": ["lidar", "odom", "align", "align_manual"]
-}
-```
-
-**Milestone 2+ (go2_ar_nav, when navigation is wired):**
+On connect, the server sends one `hello` with all capabilities:
 
 ```json
 {
@@ -95,7 +80,6 @@ sensor streams are flowing.
 | `streams_active` | bool | Recent lidar and odom on the bridge |
 | `registered` | bool | World-frame calibration applied |
 | `reconnecting` | bool | Live reconnect in progress |
-| `registration_method` | `"marker"` \| `"manual"`, optional | How the active calibration was produced |
 | `registration_approximate` | bool, optional | Whether the active calibration is approximate / manual |
 
 No robot IP is included.
@@ -114,9 +98,7 @@ Alignment progress during the setup wizard **Calibrate Coordinates** step.
   "quality": 0.81,
   "best_quality": 0.95,
   "has_candidate": true,
-  "candidate_count": 4,
   "method": "manual",
-  "approximate": true,
   "message": "Spectacles sees marker — waiting for robot camera"
 }
 ```
@@ -134,10 +116,7 @@ Alignment progress during the setup wizard **Calibrate Coordinates** step.
   seen so far during the current calibration session.
 - `has_candidate`: optional bool indicating whether the bridge currently has a valid
   candidate that could be committed.
-- `candidate_count`: optional integer count of successful candidate updates seen so far
-  in the current calibration session.
 - `method`: optional `marker` or `manual` calibration path for the active/best candidate.
-- `approximate`: optional bool flag marking manual lower-confidence registration.
 - `message`: human-readable status for the wizard UI.
 
 ### lidar
@@ -176,7 +155,7 @@ The robot's current pose in the AR world frame.
 ```
 
 ### path
-The planner's current planned path (Milestone 2+).
+The planner's current planned path.
 
 ```json
 {
@@ -191,7 +170,7 @@ Sent whenever the planner emits a new path. An empty `waypoints` array means
 no active path.
 
 ### nav_status
-Navigation state updates (Milestone 2+).
+Navigation state updates.
 
 ```json
 {
@@ -205,7 +184,7 @@ Navigation state updates (Milestone 2+).
 `state` is one of `idle`, `following_path`, `recovery` (mirrors DimOS
 `NavigationState`).
 
-### object  (Milestone 3+)
+### object  (future)
 A detected object placed in the AR world frame.
 
 ```json
@@ -257,7 +236,7 @@ Acknowledgement that frame alignment succeeded (or failed).
 - `registered`: `true` if calibration was applied; `false` if registration
   failed (e.g. no odom sample available yet). Clients may retry `register`.
 
-### nav_goal  (Milestone 2+)
+### nav_goal
 A waypoint the user placed on the floor in AR.
 
 ```json
@@ -265,7 +244,6 @@ A waypoint the user placed on the floor in AR.
   "type": "nav_goal",
   "ts": 1730000000.123,
   "robot_id": "go2",
-  "frame": "world",
   "position": [x, y, z],
   "orientation": [qx, qy, qz, qw]
 }
@@ -276,13 +254,13 @@ goal to the planner so the robot can honor final heading. When omitted, the
 bridge falls back to publishing the legacy `PointStamped` goal. `z` may be
 ignored by a ground robot but is included for clients and for future aerial use.
 
-### cancel_goal  (Milestone 2+)
+### cancel_goal
 ```json
 { "type": "cancel_goal", "ts": 1730000000.123, "robot_id": "go2" }
 ```
 The bridge requests navigation cancellation and clears the active AR path state.
 
-### emergency_stop  (Milestone 2+)
+### emergency_stop
 ```json
 { "type": "emergency_stop", "ts": 1730000000.123, "robot_id": "go2" }
 ```
@@ -316,9 +294,8 @@ gathered during the current `align_start` session, if one exists.
 Sent while the Spectacles Image Marker is tracked during the calibrate step. Carries
 the marker pose in the **AR world frame**. The bridge matches this with a recent robot
 camera detection (same bridge monotonic clock, default 300 ms window) and computes
-`T_world_odom`. Calibration assumes the robot is standing on level ground, so the
-bridge auto-levels the sampled marker pose and keeps only heading when solving the
-registration rotation.
+`T_world_odom` from the raw tracked pose. Floor-planarity is enforced only when the
+alignment is committed, by gravity-leveling the final `world<-odom` transform once.
 
 ```json
 {
@@ -332,7 +309,7 @@ registration rotation.
 Successful samples update `align_status` with live `quality` / `best_quality`. The
 bridge only commits calibration after `align_commit`, at which point it replies with
 `align_status` where `state` is `aligned`. The legacy `register` / `registered` flow
-remains for the web debug client and replay.
+remains available for replay workflows and future lightweight clients.
 
 The bridge validates camera calibration before accepting robot-camera detections:
 it rejects `camera_info` resolution mismatches, logs the active camera model, and

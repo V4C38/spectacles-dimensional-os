@@ -172,6 +172,7 @@ export class NavigationMarkerView {
     if (this.arrow) {
       this.arrow.enabled = false;
     }
+    this._setPortalSaturation(0);  // Desaturate during placing
     this._animateVisibility(true);
   }
 
@@ -194,6 +195,7 @@ export class NavigationMarkerView {
     if (this.arrow) {
       this.arrow.enabled = true;
     }
+    this._setPortalSaturation(1);  // Full saturation during execution
     this._animateVisibility(true);
   }
 
@@ -278,6 +280,18 @@ export class NavigationMarkerView {
       }
     }
     return null;
+  }
+
+  private _setPortalSaturation(value: number): void {
+    const visual = this.portalCircle.getComponent("Component.RenderMeshVisual") as RenderMeshVisual | null;
+    if (!visual || !visual.mainMaterial) {
+      return;
+    }
+    const material = visual.mainMaterial;
+    const pass = material.mainPass;
+    if (pass && "Saturation" in pass) {
+      (pass as any).Saturation = value;
+    }
   }
 
   private _setConfirmVfxState(

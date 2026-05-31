@@ -94,6 +94,16 @@ export class NavigationController {
     }
   }
 
+  public requestCancelGoal(): void {
+    this._options.bridgeClient?.sendCancelGoal();
+    if (this._placementEnabled) {
+      this._options.placementController?.showPlacing();
+      this._options.onNavigationModeChanged("placingGoal");
+    } else {
+      this._options.onNavigationModeChanged("idle");
+    }
+  }
+
   public applyPath(msg: PathMessage): void {
     this._options.pathRenderer?.setProtocolPath(msg.waypoints);
     this._options.obstacleRenderer?.setPath(
@@ -133,21 +143,25 @@ export class NavigationController {
     print(
       `NavigationController: goal confirmed at (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`,
     );
-    this._options.placementController?.showExecuting();
     this._options.pathRenderer?.clear();
     this._options.obstacleRenderer?.clear();
+    this._options.placementController?.showExecuting();
     this._options.onNavigationModeChanged("executingGoal");
 
-    if (
-      this._options.isExecuteMovementEnabled() &&
-      this._options.canSendNavGoal()
-    ) {
+    const shouldSendNavGoal =
+      this._options.isExecuteMovementEnabled() && this._options.canSendNavGoal();
+    if (shouldSendNavGoal) {
       this._options.bridgeClient?.sendNavGoal(position, rotation);
+      return;
     }
+
+    print(
+      "NavigationController: executing locally without sending nav_goal",
+    );
   }
 
   private _handleGoalCancelled(): void {
     print("NavigationController: goal cancelled");
-    this.requestEmergencyStop();
+    this.requestCancelGoal();
   }
 }

@@ -1,27 +1,38 @@
 import { protocolMetersToLensCentimeters } from "../Network/Protocol";
-import { cloneMaterialWithColor } from "./Shared/MaterialUtils";
+import LineRenderer from "SpectaclesInteractionKit.lspkg/Utils/views/LineRenderer/LineRenderer";
 
-const PATH_SAMPLE_CM = 12.0;
-const PATH_POINT_SCALE = 1.6;
-const PATH_POINT_LIFT_CM = 0.8;
-const MAX_PATH_POINTS = 160;
+const PATH_POINT_LIFT_CM = 15.8;
+const LINE_WIDTH_CM = 1.5;
+
 
 export class PathRenderer {
-  private readonly root: SceneObject;
-  private readonly template: RenderMeshVisual | null;
-  private readonly material: Material | null;
-  private readonly points: SceneObject[] = [];
+  private readonly container: SceneObject;
+  private readonly lineRenderer: LineRenderer | null = null;
 
-  constructor(parent: SceneObject, template: RenderMeshVisual | null) {
-    this.root = global.scene.createSceneObject("PathRenderer");
-    this.root.setParent(parent);
-    this.template = template;
-    this.material = template?.mainMaterial
-      ? cloneMaterialWithColor(
-          template.mainMaterial,
-          new vec4(0.15, 1.0, 0.45, 1.0),
-        )
-      : null;
+  constructor(parent: SceneObject, lineMaterial: Material | null) {
+    // Create container with identity world transform so world-cm waypoints map 1:1 to mesh-local points
+    this.container = global.scene.createSceneObject("PathRenderer");
+    this.container.setParent(parent);
+    const transform = this.container.getTransform();
+    transform.setWorldPosition(vec3.zero());
+    transform.setWorldRotation(quat.quatIdentity());
+    transform.setWorldScale(vec3.one());
+
+    if (lineMaterial) {
+      try {
+        this.lineRenderer = new LineRenderer({
+          material: lineMaterial,
+          startWidth: LINE_WIDTH_CM,
+          endWidth: LINE_WIDTH_CM,
+          points: [],
+        });
+        this.lineRenderer.getSceneObject().setParent(this.container);
+      } catch (e) {
+        print(`PathRenderer: Failed to create LineRenderer: ${e}`);
+      }
+    } else {
+      print("PathRenderer: No line material provided, path rendering disabled");
+    }
   }
 
   public setProtocolPath(waypoints: [number, number, number][]): void {
@@ -30,66 +41,28 @@ export class PathRenderer {
   }
 
   public setLensPath(points: vec3[]): void {
-    const sampled = this._samplePath(points);
-    this._ensurePool(sampled.length);
-    for (let i = 0; i < sampled.length; i++) {
-      const obj = this.points[i];
-      obj.enabled = true;
-      obj.getTransform().setWorldPosition(
-        new vec3(sampled[i].x, sampled[i].y + PATH_POINT_LIFT_CM, sampled[i].z),
-      );
+    if (!this.lineRenderer) {
+      return;
     }
-    for (let i = sampled.length; i < this.points.length; i++) {
-      this.points[i].enabled = false;
+
+    if (points.length < 2) {
+      this.clear();
+      return;
     }
+
+    // Lift path slightly above ground
+    const liftedPoints = points.map(
+      (p) => new vec3(p.x, p.y + PATH_POINT_LIFT_CM, p.z)
+    );
+
+    this.lineRenderer.points = liftedPoints;
+    this.container.enabled = true;
   }
 
   public clear(): void {
-    this.points.forEach((point) => {
-      point.enabled = false;
-    });
-  }
-
-  private _samplePath(points: vec3[]): vec3[] {
-    if (points.length <= 1) {
-      return points;
+    if (this.lineRenderer) {
+      this.lineRenderer.points = [];
     }
-    const sampled: vec3[] = [points[0]];
-    for (let i = 1; i < points.length && sampled.length < MAX_PATH_POINTS; i++) {
-      const start = points[i - 1];
-      const end = points[i];
-      const dx = end.x - start.x;
-      const dy = end.y - start.y;
-      const dz = end.z - start.z;
-      const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      const steps = Math.max(1, Math.ceil(distance / PATH_SAMPLE_CM));
-      for (let step = 1; step <= steps && sampled.length < MAX_PATH_POINTS; step++) {
-        const t = step / steps;
-        sampled.push(
-          new vec3(
-            start.x + dx * t,
-            start.y + dy * t,
-            start.z + dz * t,
-          ),
-        );
-      }
-    }
-    return sampled;
-  }
-
-  private _ensurePool(count: number): void {
-    while (this.points.length < count) {
-      const obj = global.scene.createSceneObject(`PathPoint${this.points.length}`);
-      obj.setParent(this.root);
-      obj.getTransform().setLocalScale(new vec3(PATH_POINT_SCALE, PATH_POINT_SCALE, PATH_POINT_SCALE));
-      const visual = obj.createComponent("Component.RenderMeshVisual") as RenderMeshVisual;
-      if (visual && this.template) {
-        visual.mesh = this.template.mesh;
-        visual.mainMaterial = this.material ?? this.template.mainMaterial;
-        visual.meshShadowMode = MeshShadowMode.None;
-      }
-      obj.enabled = false;
-      this.points.push(obj);
-    }
+    this.container.enabled = false;
   }
 }

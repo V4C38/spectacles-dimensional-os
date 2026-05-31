@@ -29,7 +29,6 @@ export function createCalibrationViewState(): CalibrationViewState {
     currentQuality: null,
     bestQuality: null,
     hasCandidate: false,
-    candidateCount: 0,
     pendingCommit: false,
     statusMessage: "Searching for calibration marker",
     statusColor: COLOR_WHITE,
@@ -189,10 +188,6 @@ export function applyAlignStatusToCalibrationState(
       shouldApplyDetectingBridgeCandidate && msg.has_candidate !== undefined
         ? msg.has_candidate
         : state.hasCandidate,
-    candidateCount:
-      shouldApplyDetectingBridgeCandidate && msg.candidate_count !== undefined
-        ? msg.candidate_count
-        : state.candidateCount,
   };
 
   if (state.mode === "auto") {

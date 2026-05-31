@@ -76,4 +76,5 @@ def test_inverse_transform_pose() -> None:
     cal.register(reg, odom)
     pos, quat = cal.inverse_transform_pose((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert np.allclose(pos, (1.0, 0.0, 0.0), atol=1e-5)
-    assert np.allclose(quat, (0.0, 0.0, 0.0, 1.0), atol=1e-5)
+    _, expected_quat = matrix_to_pose(cal._get_T_inv())
+    assert np.allclose(quat, expected_quat, atol=1e-5)

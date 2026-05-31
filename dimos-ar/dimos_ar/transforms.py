@@ -79,6 +79,95 @@ def normalize_ground_pose(
     return position, (0.0, math.sin(half_yaw), 0.0, math.cos(half_yaw))
 
 
+def gravity_level_transform(T: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Gravity-level a 4x4 transform so its local +Z axis maps exactly to world +Y.
+    
+    Forces the AR floor to be perfectly planar by aligning the odom frame's up-axis
+    with the world up-axis, while preserving yaw (heading) and translation.
+    
+    Args:
+        T: 4x4 homogeneous transform (e.g. T_world_odom)
+    
+    Returns:
+        Flattened 4x4 transform with the same translation and yaw, but pitch/roll removed.
+    """
+    R = T[:3, :3]
+    translation = T[:3, 3]
+    
+    # Current world-space image of odom +Z axis
+    up_world = R[:, 2]
+    up_world_norm = float(np.linalg.norm(up_world))
+    if up_world_norm < 1e-9:
+        # Degenerate rotation, return identity rotation
+        T_flat = np.eye(4, dtype=np.float64)
+        T_flat[:3, 3] = translation
+        return T_flat
+    
+    up_world = up_world / up_world_norm
+    target_up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    
+    # Compute minimal rotation axis and angle from up_world to target_up
+    cross = np.cross(up_world, target_up)
+    dot = float(np.dot(up_world, target_up))
+    
+    # If already aligned, no correction needed
+    if dot > 0.9999:
+        T_flat = T.copy()
+        return T_flat
+    
+    # If perfectly opposed (dot ~ -1), pick an arbitrary perpendicular axis
+    if dot < -0.9999:
+        # Find a perpendicular axis to up_world
+        if abs(up_world[0]) < 0.9:
+            perp = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        else:
+            perp = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        axis = np.cross(up_world, perp)
+        axis /= np.linalg.norm(axis)
+        angle = math.pi
+    else:
+        axis = cross / np.linalg.norm(cross)
+        angle = math.acos(np.clip(dot, -1.0, 1.0))
+    
+    # Rodrigues rotation formula for axis-angle to matrix
+    K = np.array([
+        [0, -axis[2], axis[1]],
+        [axis[2], 0, -axis[0]],
+        [-axis[1], axis[0], 0]
+    ], dtype=np.float64)
+    R_align = np.eye(3, dtype=np.float64) + math.sin(angle) * K + (1 - math.cos(angle)) * (K @ K)
+    
+    # Apply alignment rotation and re-orthonormalize
+    R_flat = R_align @ R
+    
+    # Gram-Schmidt orthonormalization to clean up numerical errors
+    x_axis = R_flat[:, 0]
+    y_axis = R_flat[:, 1]
+    z_axis = R_flat[:, 2]
+    
+    # Force z to be exactly (0, 1, 0)
+    z_axis = target_up
+    
+    # Make x perpendicular to z (project out z component)
+    x_axis = x_axis - np.dot(x_axis, z_axis) * z_axis
+    x_norm = np.linalg.norm(x_axis)
+    if x_norm < 1e-9:
+        # Degenerate, pick arbitrary x in XZ plane
+        x_axis = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    else:
+        x_axis = x_axis / x_norm
+    
+    # y = z cross x (right-handed)
+    y_axis = np.cross(z_axis, x_axis)
+    
+    R_flat = np.column_stack([x_axis, y_axis, z_axis])
+    
+    T_flat = np.eye(4, dtype=np.float64)
+    T_flat[:3, :3] = R_flat
+    T_flat[:3, 3] = translation
+    return T_flat
+
+
 def matrix_to_pose(
     T: NDArray[np.float64],
 ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
@@ -153,9 +242,14 @@ class Calibration:
         self.register_from_alignment(T_world_odom)
 
     def register_from_alignment(self, T_world_odom: NDArray[np.float64]) -> None:
-        """Apply a precomputed world<-odom transform from AprilTag dual detection."""
+        """Apply a precomputed world<-odom transform from AprilTag dual detection.
+        
+        Gravity-levels the transform to ensure the AR floor is perfectly planar by forcing
+        the odom +Z axis to map exactly to world +Y axis, while preserving yaw and translation.
+        """
+        T_flat = gravity_level_transform(T_world_odom)
         with self._lock:
-            self._T_world_odom = T_world_odom.astype(np.float64)
+            self._T_world_odom = T_flat.astype(np.float64)
             self._registered = True
 
     def _get_T(self) -> NDArray[np.float64]:

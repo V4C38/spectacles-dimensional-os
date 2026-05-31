@@ -14,6 +14,7 @@ export class ObstacleHighlightRenderer {
   private readonly points: SceneObject[] = [];
   private latestLidar: LidarMessage | null = null;
   private activePath: vec3[] = [];
+  private warnedMissingMaterial = false;
 
   constructor(parent: SceneObject, template: RenderMeshVisual | null) {
     this.root = global.scene.createSceneObject("ObstacleHighlights");
@@ -111,9 +112,19 @@ export class ObstacleHighlightRenderer {
       const obj = global.scene.createSceneObject(`ObstaclePoint${this.points.length}`);
       obj.setParent(this.root);
       const visual = obj.createComponent("Component.RenderMeshVisual") as RenderMeshVisual;
+      const material = this.material ?? this.template?.mainMaterial ?? null;
+      if (!material) {
+        if (!this.warnedMissingMaterial) {
+          this.warnedMissingMaterial = true;
+          print("ObstacleHighlightRenderer: No valid material, skipping pool creation");
+        }
+        obj.enabled = false;
+        this.points.push(obj);
+        continue;
+      }
       if (visual && this.template) {
         visual.mesh = this.template.mesh;
-        visual.mainMaterial = this.material ?? this.template.mainMaterial;
+        visual.mainMaterial = material;
         visual.meshShadowMode = MeshShadowMode.None;
       }
       obj.enabled = false;

@@ -8,12 +8,10 @@ This folder is the **DimOS extension** inside the [`spectacles-unitree`](../) mo
 
 ```bash
 cd dimos-ar
-/path/to/dimos/.venv/bin/python3 -m pip install -e .
+./setup.sh
 ./start.sh              # Go2 discovery or replay; WebSocket :8765
 ./start.sh --replay     # replay only
 ```
-
-Web debug client: `clients/web/` — see [clients/web/README.md](clients/web/README.md).
 
 Spectacles Lens: [`../lens-studio/`](../lens-studio/) — see [docs/LENS_DEVELOPMENT.md](docs/LENS_DEVELOPMENT.md).
 

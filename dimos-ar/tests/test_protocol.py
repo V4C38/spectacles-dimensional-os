@@ -208,7 +208,6 @@ def test_encode_align_status() -> None:
             robot_marker_detected=True,
             quality=0.9,
             method="manual",
-            approximate=True,
             message="ok",
         )
     )
@@ -216,7 +215,7 @@ def test_encode_align_status() -> None:
     assert raw["state"] == "aligned"
     assert raw["quality"] == 0.9
     assert raw["method"] == "manual"
-    assert raw["approximate"] is True
+    assert "approximate" not in raw
 
 
 def test_encode_bridge_status_live() -> None:
@@ -237,6 +236,7 @@ def test_encode_bridge_status_live() -> None:
     assert raw["mode"] == "live"
     assert raw["robot_serial"] == "SERIAL_X"
     assert raw["robot_model"] == "unitree_go2"
+    assert "registration_method" not in raw
 
 
 def test_get_status_decode() -> None:

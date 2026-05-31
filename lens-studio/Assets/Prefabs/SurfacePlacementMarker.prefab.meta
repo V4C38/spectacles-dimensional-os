@@ -19,9 +19,10 @@
     []
   Name: Physics Collider
   Enabled: true
-  Shape: !<Box>
-    FitVisual: false
-    Size: {x: 75.000000, y: 1.000000, z: 75.000000}
+  Shape: !<Cylinder>
+    Axis: Y
+    Length: 15.000000
+    Radius: 45.000000
   Matter: !<reference> 00000000-0000-0000-0000-000000000000
   Filter: !<reference> 00000000-0000-0000-0000-000000000000
   OverlapFilter: !<reference> 00000000-0000-0000-0000-000000000000
@@ -136,7 +137,7 @@
   LocalTransform: !<TransformEntity>
     Position: {x: 0.000000, y: 0.000000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 2.000000, y: 2.000000, z: 2.000000}
+    Scale: {x: 1.500000, y: 1.607143, z: 1.607143}
     HasSegmentScaleCompensation: false
   Children:
     - !<own> 67e78a49-8c4d-47e2-bbbd-122b0a7b2d79
@@ -220,6 +221,7 @@
   ScriptInputsDefault:
     _renderOrder: true
     _inactive: true
+    _playAudio: true
     _hasShadow: true
     _shadowPositionOffset: true
     _toggleable: true
@@ -235,7 +237,7 @@
     "":
       _renderOrder: 0
       _inactive: false
-      _playAudio: true
+      _playAudio: false
       _style: Primary
       _hasShadow: false
       _shadowPositionOffset: !<Vec3> {x: 0.050000, y: -0.050000, z: -0.010000}
@@ -263,7 +265,7 @@
   LocalTransform: !<TransformEntity>
     Position: {x: 0.000000, y: 0.000000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.500000, y: 1.500000, z: 1.500000}
+    Scale: {x: 1.250000, y: 1.250000, z: 1.250000}
     HasSegmentScaleCompensation: false
   Children:
     - !<own> 17347689-fa64-41b1-9bba-49568d68e6db
@@ -276,7 +278,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000011, y: 53.500000, z: 0.500000}
+    Position: {x: 0.000011, y: 40.000000, z: 0.000000}
     Rotation: {x: -0.000010, y: -0.000010, z: 0.000000}
     Scale: {x: 2.000000, y: 2.000000, z: 2.000000}
     HasSegmentScaleCompensation: false
@@ -338,7 +340,7 @@
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
   Materials:
-    - !<reference> aefc5196-4a0d-4cc2-90d8-da697b320cc8
+    - !<reference> 634460c1-d837-4144-86e3-ba22c3de1371
   Mesh: !<reference> 1a9172a3-5301-44af-b311-6dd12dee99b5
   Skin: !<reference> 00000000-0000-0000-0000-000000000000
   BlendShapesEnabled: true
@@ -659,9 +661,9 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 47.000000, z: 0.000000}
-    Rotation: {x: 90.000000, y: -0.000012, z: -180.000000}
-    Scale: {x: 0.025000, y: 0.025000, z: 0.025000}
+    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Rotation: {x: 90.000000, y: -0.000012, z: 0.000000}
+    Scale: {x: 0.020000, y: 0.020000, z: 0.008000}
     HasSegmentScaleCompensation: false
   Children:
     []

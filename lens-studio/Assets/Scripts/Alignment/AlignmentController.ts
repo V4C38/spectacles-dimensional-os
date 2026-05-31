@@ -2,6 +2,7 @@ import { BridgeClient } from "../Network/BridgeClient";
 import { AlignStatusMessage } from "../Network/Protocol";
 
 const ALIGN_SEND_INTERVAL_S = 0.2;
+const TRACKING_QUALITY_LOG_INTERVAL_S = 1.0;
 
 @component
 export class AlignmentController extends BaseScriptComponent {
@@ -28,6 +29,10 @@ export class AlignmentController extends BaseScriptComponent {
   private _calibrationGizmoEnabled = false;
   private _awaitingCommit = false;
   private _bridgeSessionActive = false;
+  private _lastTrackingLogTime = 0;
+  private _lastMarkerPosition: vec3 | null = null;
+  private _lastMarkerRotation: quat | null = null;
+  private _markerFoundTime = 0;
 
   onAwake() {
     this.onAlignStatus = [];
@@ -132,12 +137,26 @@ export class AlignmentController extends BaseScriptComponent {
       this._sendMarkerPose();
     }
     this._updateDebugGizmo();
+    
+    // Log marker found transition
+    this._markerFoundTime = getTime();
+    print(`[AlignmentController] Marker FOUND at t=${this._markerFoundTime.toFixed(2)}s`);
+    this._lastMarkerPosition = null;
+    this._lastMarkerRotation = null;
+    this._lastTrackingLogTime = this._markerFoundTime;
   };
 
   private _onMarkerLost = (): void => {
     this._setTracking(false);
     this._stopSending();
     this._updateDebugGizmo();
+    
+    // Log marker lost transition
+    const lostTime = getTime();
+    const trackingDuration = lostTime - this._markerFoundTime;
+    print(`[AlignmentController] Marker LOST at t=${lostTime.toFixed(2)}s (tracked for ${trackingDuration.toFixed(2)}s)`);
+    this._lastMarkerPosition = null;
+    this._lastMarkerRotation = null;
   };
 
   private _setTracking(tracking: boolean): void {
@@ -180,6 +199,24 @@ export class AlignmentController extends BaseScriptComponent {
     const pos = t.getWorldPosition();
     const rot = t.getWorldRotation();
     this.bridgeClient.sendAlignMarker(pos, rot);
+    
+    // Log tracking quality metrics periodically
+    const now = getTime();
+    if (now - this._lastTrackingLogTime >= TRACKING_QUALITY_LOG_INTERVAL_S) {
+      if (this._lastMarkerPosition && this._lastMarkerRotation) {
+        // Compute position delta in cm
+        const posDelta = pos.distance(this._lastMarkerPosition);
+        
+        // Compute rotation delta in degrees using static angleBetween
+        const rotDelta = quat.angleBetween(this._lastMarkerRotation, rot);
+        const rotDeltaDeg = (rotDelta * 180.0) / Math.PI;
+        
+        print(`[AlignmentController] Tracking quality: pos_delta=${posDelta.toFixed(2)}cm, rot_delta=${rotDeltaDeg.toFixed(2)}deg (over ${(now - this._lastTrackingLogTime).toFixed(2)}s)`);
+      }
+      this._lastMarkerPosition = pos;
+      this._lastMarkerRotation = rot;
+      this._lastTrackingLogTime = now;
+    }
   }
 
   public setDebugMode(enabled: boolean): void {

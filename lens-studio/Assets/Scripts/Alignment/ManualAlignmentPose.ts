@@ -1,5 +1,3 @@
-import { flattenCalibrationRotation } from "./CalibrationRotation";
-
 export const MANUAL_MARKER_DOWN_CM = 35.0;
 
 export interface ManualAlignmentPose {
@@ -13,9 +11,9 @@ export function manualMarkerPoseFromReference(
 ): ManualAlignmentPose {
   return {
     position: new vec3(position.x, position.y - MANUAL_MARKER_DOWN_CM, position.z),
-    // Keep the preview visually level in Lens, but let the bridge own the
-    // semantic calibration flattening when the pose is actually submitted.
-    rotation: flattenCalibrationRotation(rotation),
+    // Pass the raw rotation; the bridge owns flattening when the pose is submitted.
+    // quat constructor is (w, x, y, z)
+    rotation: new quat(rotation.w, rotation.x, rotation.y, rotation.z),
   };
 }
 
@@ -25,6 +23,7 @@ export function manualMarkerPoseFromMarkerWorldPose(
 ): ManualAlignmentPose {
   return {
     position: new vec3(position.x, position.y, position.z),
-    rotation: new quat(rotation.x, rotation.y, rotation.z, rotation.w),
+    // quat constructor is (w, x, y, z)
+    rotation: new quat(rotation.w, rotation.x, rotation.y, rotation.z),
   };
 }

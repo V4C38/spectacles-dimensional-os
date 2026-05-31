@@ -46,6 +46,7 @@ EmergencyStopHandler = Callable[[EmergencyStopMessage], None]
 GetStatusHandler = Callable[[GetStatusMessage, ServerConnection], None]
 UnsupportedHandler = Callable[[InboundMessage], None]
 StatusOnConnectHandler = Callable[[ServerConnection], None]
+DisconnectHandler = Callable[[ServerConnection], None]
 
 STARTUP_TIMEOUT_S = 10.0
 
@@ -70,6 +71,7 @@ class ARWebSocketServer:
         on_get_status: GetStatusHandler | None = None,
         on_unsupported: UnsupportedHandler | None = None,
         on_status_connect: StatusOnConnectHandler | None = None,
+        on_disconnect: DisconnectHandler | None = None,
     ) -> None:
         self._port = port
         self._capabilities = capabilities
@@ -87,6 +89,7 @@ class ARWebSocketServer:
         self._on_get_status = on_get_status
         self._on_unsupported = on_unsupported
         self._on_status_connect = on_status_connect
+        self._on_disconnect = on_disconnect
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -220,6 +223,8 @@ class ARWebSocketServer:
             logger.warning("Invalid inbound WebSocket message", error=str(exc))
         finally:
             self._connections.discard(websocket)
+            if self._on_disconnect is not None:
+                self._on_disconnect(websocket)
 
     def schedule_send(self, text: str) -> None:
         """Schedule a send on the WS event loop from any thread."""

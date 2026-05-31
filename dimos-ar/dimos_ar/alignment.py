@@ -17,7 +17,7 @@ from dimos_ar.marker_contract import (
     DEFAULT_MARKER_ID,
     DEFAULT_MARKER_LENGTH_M,
 )
-from dimos_ar.transforms import OdomSample, normalize_ground_pose, pose_to_matrix
+from dimos_ar.transforms import OdomSample, pose_to_matrix
 
 logger = setup_logger()
 
@@ -245,6 +245,7 @@ class AprilTagAligner:
         self._latest_detection: RobotMarkerDetection | None = None
         self._debug = AlignDebugStats()
         self._debug_log_mono: float = 0.0
+        self._axes_log_mono: float = 0.0
         self._logged_waiting_camera_info = False
         self._logged_camera_resolution_mismatch: tuple[int, int, int, int] | None = None
         self._last_camera_info_signature: tuple[str, str] | None = None
@@ -542,14 +543,35 @@ class AprilTagAligner:
         if abs(recv_ts - detection.detect_ts) > self._timestamp_tolerance_s:
             return None
 
-        norm_position, norm_orientation = normalize_ground_pose(
-            marker_position, marker_orientation
-        )
-        T_world_marker = pose_to_matrix(norm_position, norm_orientation)
+        T_world_marker = pose_to_matrix(marker_position, marker_orientation)
         T_odom_base = pose_to_matrix(odom.position, odom.orientation)
         T_odom_camera = T_odom_base @ self._T_base_camera
         T_odom_marker = T_odom_camera @ detection.T_camera_marker
         T_world_odom = T_world_marker @ np.linalg.inv(T_odom_marker)
+        now = time.monotonic()
+        if now - self._axes_log_mono >= 1.0:
+            self._axes_log_mono = now
+            logger.info(
+                "AprilTag alignment axes",
+                spectacles_marker_x_axis=[
+                    round(float(value), 4) for value in T_world_marker[:3, 0]
+                ],
+                spectacles_marker_y_axis=[
+                    round(float(value), 4) for value in T_world_marker[:3, 1]
+                ],
+                spectacles_marker_z_axis=[
+                    round(float(value), 4) for value in T_world_marker[:3, 2]
+                ],
+                robot_marker_x_axis=[
+                    round(float(value), 4) for value in T_odom_marker[:3, 0]
+                ],
+                robot_marker_y_axis=[
+                    round(float(value), 4) for value in T_odom_marker[:3, 1]
+                ],
+                robot_marker_z_axis=[
+                    round(float(value), 4) for value in T_odom_marker[:3, 2]
+                ],
+            )
 
         quality = max(
             0.0,

@@ -5,7 +5,7 @@ and contributor-facing setup live in the repository root `README.md`.
 
 ## Monorepo layout
 
-The `spectacles-unitree` repository contains the Python extension, web client,
+The `spectacles-unitree` repository contains the Python extension, marker page,
 and Spectacles Lens. Only `dimos_ar/` stays platform-agnostic.
 
 ```text
@@ -13,7 +13,7 @@ spectacles-unitree/
 ├── dimos-ar/                    # this folder
 │   ├── dimos_ar/                # Python ARBridge
 │   ├── blueprints/
-│   ├── clients/web/             # Vite + Three.js
+│   ├── clients/marker/          # QR-linked marker page
 │   └── docs/PROTOCOL.md
 └── lens-studio/
     ├── spectacles-unitree.esproj
@@ -27,7 +27,6 @@ spectacles-unitree/
 |-----------|----------|-------|
 | `ARBridge`, protocol, transforms | `dimos-ar/` | Platform-agnostic |
 | Blueprint scripts | `dimos-ar/blueprints/` | Run on Mac with DimOS |
-| Web debug / phone client | `dimos-ar/clients/web/` | Vite + Three.js |
 | Spectacles Lens | `lens-studio/` | Lens Studio; see `LENS_DEVELOPMENT.md` |
 
 The contract between components is always `docs/PROTOCOL.md`.
@@ -47,10 +46,9 @@ dimos-ar/
 │   ├── transforms.py          # frame alignment / calibration math
 │   └── filters.py             # lidar filtering + subsampling
 ├── blueprints/
-│   ├── go2_ar_basic.py        # unitree_go2_basic + ARBridge   (M1)
-│   └── go2_ar_nav.py          # unitree_go2 + ARBridge         (M2+)
+│   └── go2_ar.py              # unitree_go2 + ARBridge (full stack)
 ├── clients/
-│   └── web/                   # Vite + Three.js debug + phone client
+│   └── marker/                # phone marker page served by Python
 ├── docs/
 │   ├── ARCHITECTURE.md        # this file
 │   ├── PROTOCOL.md
@@ -81,11 +79,11 @@ class ARBridge(Module):
     # --- inputs: filled automatically by autoconnect ---
     lidar:        In[PointCloud2]    # matches GO2Connection.lidar
     odom:         In[PoseStamped]    # matches GO2Connection.odom
-    path:         In[Path]           # matches ReplanningAStarPlanner.path  (M2+)
-    goal_reached: In[Bool]           # matches ReplanningAStarPlanner.goal_reached (M2+)
-    navigation_state: In[String]     # matches ReplanningAStarPlanner.navigation_state (M2+)
+    path:         In[Path]           # matches ReplanningAStarPlanner.path
+    goal_reached: In[Bool]           # matches ReplanningAStarPlanner.goal_reached
+    navigation_state: In[String]     # matches ReplanningAStarPlanner.navigation_state
 
-    # --- outputs: autoconnect to planner inputs (M2+) ---
+    # --- outputs: autoconnect to planner inputs ---
     clicked_point: Out[PointStamped]
     goal_request:  Out[PoseStamped]
     stop_movement: Out[Bool]
@@ -130,7 +128,7 @@ template; stream handling follows DimOS `_auto_bind_handlers`):
    must NOT touch the WebSocket loop directly. Outbound data crosses threads via
    `asyncio.run_coroutine_threadsafe(...)` on the WS loop.
 4. Inbound messages from the AR client are received on the ws thread. To send a
-   navigation goal into DimOS (M2+), the ws thread publishes either
+   navigation goal into DimOS, the ws thread publishes either
    `self.goal_request.publish(pose)` for pose goals or
    `self.clicked_point.publish(point)` for legacy point-only goals (publishing is
    thread-safe).
@@ -140,7 +138,7 @@ Never `await` or run the server inline in `start()` — it would block the worke
 
 ## Robot discovery
 
-Before any DimOS robot modules load, [`blueprints/go2_ar_basic.py`](../blueprints/go2_ar_basic.py)
+Before any DimOS robot modules load, [`blueprints/go2_ar.py`](../blueprints/go2_ar.py)
 calls [`dimos_ar/robot_bootstrap.py`](../dimos_ar/robot_bootstrap.py):
 
 1. Probe the LAN via DimOS [`landiscovery.discover()`](../dimos_ar/robot_bootstrap.py) (~2 s).
@@ -158,67 +156,51 @@ after discovery, never from `.env`.
 lidar/odom go stale, it re-runs discovery for the same serial and reconnects WebRTC
 to the robot’s current IP.
 
-## Blueprints
+## Blueprint
 
-A blueprint composes modules. M1 uses a custom stack (not stock `unitree_go2_basic`,
-which pulls in WebsocketVis on port 7779):
-
-```python
-# blueprints/go2_ar_basic.py   (Milestone 1)
-from dimos_ar.robot_bootstrap import apply_robot_bootstrap
-apply_robot_bootstrap()  # before DimOS imports
-
-from dimos.core.coordination.blueprints import autoconnect
-from dimos_ar.go2_connection import ARGO2Connection
-from dimos_ar.bridge_module import ARBridge
-
-go2_ar_basic = autoconnect(
-    _transports,
-    ARGO2Connection.blueprint(target_serial=...),
-    ARBridge.blueprint(robot_id=...),
-)
-```
+The single blueprint composes the full Unitree Go2 stack with the AR bridge:
 
 ```python
-# blueprints/go2_ar_nav.py     (Milestone 2+)
+# blueprints/go2_ar.py
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
 from dimos_ar.bridge_module import ARBridge
 
-go2_ar_nav = autoconnect(
+go2_ar = autoconnect(
     unitree_go2,            # includes CostMapper + ReplanningAStarPlanner
-    ARBridge.blueprint(enable_navigation=True),
+    ARBridge.blueprint(robot_id=...),
 )
 ```
 
-`ARBridge` keeps the navigation streams optional and capability-gated. The M1 blueprint
-does not enable navigation support; the M2 blueprint does.
-
-Run M1 development with the blueprint script (not stock `dimos --replay run`
+Run development with the blueprint script (not stock `dimos --replay run`
 alone — that omits `ARBridge`):
 
 ```bash
-python blueprints/go2_ar_basic.py          # discover → live or replay
-FORCE_REPLAY=1 CI=1 python blueprints/go2_ar_basic.py   # offline / CI
+python blueprints/go2_ar.py          # discover → live or replay
+FORCE_REPLAY=1 CI=1 python blueprints/go2_ar.py   # offline / CI
 ```
 
 ## Data flow
 
-### Outbound (robot -> AR), Milestone 1
+### Outbound (robot -> AR)
 ```
-ARGO2Connection.lidar  --(autoconnect)-->  ARBridge.lidar
+GO2Connection.lidar  --(autoconnect)-->  ARBridge.lidar
    -> filters.py: optional range/height filter, voxel/stride subsample
    -> protocol.py: encode as JSON lidar message
    -> websocket_server: broadcast to all connected clients
 
-ARGO2Connection.odom   --(autoconnect)-->  ARBridge.odom
+GO2Connection.odom   --(autoconnect)-->  ARBridge.odom
    -> protocol.py: encode as JSON pose message
+   -> websocket_server: broadcast
+   
+ReplanningAStarPlanner.path  --(autoconnect)-->  ARBridge.path
+   -> protocol.py: encode as JSON path message
    -> websocket_server: broadcast
 ```
 
-Clients: `clients/web/` (this folder) and `lens-studio/` Lens (monorepo sibling).
+Client: `lens-studio/` Lens (monorepo sibling).
 
-### Inbound (AR -> robot), Milestone 2
+### Inbound (AR -> robot)
 ```
 AR client confirms floor goal -> JSON nav_goal message {x, y, z, qx, qy, qz, qw} in AR world frame
    -> websocket_server receives on ws thread
@@ -234,11 +216,13 @@ AR client confirms floor goal -> JSON nav_goal message {x, y, z, qx, qy, qz, qw}
 `transforms.py` holds one calibration: a 4x4 matrix `T_world_odom` mapping the
 robot's `odom` frame to the AR `world` frame.
 
-- It is captured once at registration: the AR client detects the ArUco marker
-  on the robot and reports the marker pose in AR world space; simultaneously the
-  bridge samples the current `odom` pose. During calibration the bridge assumes
-  the robot is on level ground, so it auto-levels the sampled world pose and
-  preserves heading only when solving `T_world_odom`.
+- It is captured once at registration: the AR client reports the pose of the
+  shared phone-held calibration marker in AR world space while the bridge
+  simultaneously detects that same marker in the Go2 camera and samples the
+  current `odom` pose. The solve uses the observed marker pose directly. When
+  the calibration is committed, the bridge assumes the robot is on level ground
+  and gravity-levels the final `T_world_odom` so the AR floor remains planar and
+  lidar is not rendered with phone tilt baked in.
 - Frame ownership is explicit:
   - Lens inbound alignment messages are always raw AR-world poses.
   - Calibration leveling is bridge-owned and uses world `+Y` as up plus the
@@ -265,10 +249,10 @@ robot's `odom` frame to the AR `world` frame.
 - That calibration-only leveling does **not** change normal runtime transforms
   after registration. Once `T_world_odom` is fixed, outbound lidar/pose and
   inbound navigation goals continue to use the full transform pipeline.
-- **Assumption:** the marker is rigidly attached at the robot base, co-located
-  with the odom pose frame. If the marker is offset from the base, calibration
-  will be wrong until marker-to-base offsets are applied. The `marker_id` field
-  is reserved for future per-marker offset lookup (see DimOS `MarkerTfModule`).
+- **Important:** the calibration marker is not attached to the robot base. It is
+  held in view of both the robot camera and the AR device during calibration, so
+  marker-to-base offsets are not part of the solve. The floor-leveling step is
+  what removes phone tilt from the committed world frame.
 - Outbound: every lidar point and the robot pose are multiplied by
   `T_world_odom` before broadcast, so the AR client renders in world space.
 - Inbound: nav goals use `inverse_transform_point` / `inverse_transform_pose`.
@@ -294,11 +278,10 @@ protecting both the WebSocket and AR-client framerate.
 ## Testing without hardware
 
 `dimos --replay run unitree-go2` plays recorded robot data inside DimOS, but AR
-development should use `blueprints/go2_ar_basic.py` so `ARBridge` is in the
-graph. The web client under `clients/web/` renders the broadcast. Together these
-let the entire bridge be developed and verified with no robot and no Spectacles
-present. Always get a feature working on replay + web client before testing on
-hardware or the Lens (`lens-studio/`).
+development should use `blueprints/go2_ar.py` so `ARBridge` is in the
+graph. The replay blueprint plus `pytest tests/test_ws_integration.py -m integration`
+let the bridge be verified with no robot present before moving on to Lens testing
+in `lens-studio/`.
 
 ## Documentation map
 

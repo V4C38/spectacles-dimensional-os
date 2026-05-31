@@ -18,7 +18,10 @@ from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.navigation.navigation_spec import NavigationInterfaceSpec
+from dimos.robot.unitree.go2.connection_spec import GO2ConnectionSpec
 from dimos.utils.logging_config import setup_logger
+from unitree_webrtc_connect.constants import RTC_TOPIC, SPORT_CMD
 from websockets.asyncio.server import ServerConnection
 
 from dimos_ar.alignment import (
@@ -32,7 +35,6 @@ from dimos_ar.bridge_status import get_bridge_status_tracker, sync_tracker_robot
 from dimos_ar.filters import LidarFilter, LidarFilterConfig, RateLimiter
 from dimos_ar.protocol import (
     DEFAULT_CAPABILITIES,
-    NAV_CAPABILITIES,
     AlignCommitMessage,
     AlignManualPoseMessage,
     AlignMarkerMessage,
@@ -63,10 +65,10 @@ ALIGN_STATUS_BROADCAST_INTERVAL_S = 0.3
 LIDAR_PAYLOAD_LOG_INTERVAL_S = 5.0
 STREAM_STATUS_POLL_INTERVAL_S = 0.5
 ALIGNMENT_CLUSTER_WINDOW = 12
-ALIGNMENT_CLUSTER_MIN_SAMPLES = 4
-ALIGNMENT_CLUSTER_TARGET_SAMPLES = 6
+ALIGNMENT_CLUSTER_MIN_SAMPLES = 6
+ALIGNMENT_CLUSTER_TARGET_SAMPLES = 8
 ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M = 0.08
-ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD = math.radians(12.0)
+ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD = math.radians(8.0)
 
 
 def _wrap_angle_rad(angle: float) -> float:
@@ -154,13 +156,12 @@ class ARBridgeConfig(ModuleConfig):
     obstacle_height_threshold_m: float = 0.08
     target_points: int = 1600
     lidar_max_hz: float = 1.0
-    pose_max_hz: float = 20.0
+    pose_max_hz: float = 30.0
     stream_stale_timeout_s: float = 10.0
     align_timestamp_tolerance_s: float = DEFAULT_TIMESTAMP_TOLERANCE_S
     marker_length_m: float = DEFAULT_MARKER_LENGTH_M
     camera_position: tuple[float, float, float] = DEFAULT_CAMERA_POSITION
     camera_orientation: tuple[float, float, float, float] = DEFAULT_CAMERA_ORIENTATION
-    enable_navigation: bool = False
     manual_alignment_quality: float = 0.35
 
 
@@ -178,6 +179,8 @@ class ARBridge(Module):
     stop_movement: Out[Bool]
 
     config: ARBridgeConfig
+    _navigation: NavigationInterfaceSpec
+    _connection: GO2ConnectionSpec
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -226,9 +229,7 @@ class ARBridge(Module):
         if tracker is not None:
             tracker.set_on_change(self._broadcast_status)
         self._status_tracker = tracker
-        capabilities = list(DEFAULT_CAPABILITIES)
-        if self.config.enable_navigation:
-            capabilities.extend(NAV_CAPABILITIES)
+        capabilities = list(dict.fromkeys(DEFAULT_CAPABILITIES))
 
         self._ws_server = ARWebSocketServer(
             port=self.config.port,
@@ -241,13 +242,12 @@ class ARBridge(Module):
             on_align_commit=self._on_align_commit,
             on_align_marker=self._on_align_marker,
             on_align_manual_pose=self._on_align_manual_pose,
-            on_nav_goal=self._on_nav_goal if self.config.enable_navigation else None,
-            on_cancel_goal=self._on_cancel_goal if self.config.enable_navigation else None,
-            on_emergency_stop=(
-                self._on_emergency_stop if self.config.enable_navigation else None
-            ),
+            on_nav_goal=self._on_nav_goal,
+            on_cancel_goal=self._on_cancel_goal,
+            on_emergency_stop=self._on_emergency_stop,
             on_get_status=self._on_get_status,
             on_status_connect=self._send_status_to,
+            on_disconnect=self._on_client_disconnect,
         )
 
     @rpc
@@ -427,6 +427,19 @@ class ARBridge(Module):
         self._alignment_mode = "marker"
         self._recent_marker_candidates = []
 
+    def _on_client_disconnect(self, _websocket: ServerConnection) -> None:
+        if (
+            not self._aligner.active
+            and self._last_align_marker is None
+            and self._best_alignment is None
+            and self._candidate_count == 0
+        ):
+            return
+        self._aligner.active = False
+        self._stop_align_status_broadcast()
+        self._clear_align_session()
+        logger.info("Alignment session cleared on AR client disconnect")
+
     def _score_alignment_candidate(
         self, candidate: AlignmentCandidate
     ) -> tuple[float, int, float, float]:
@@ -493,6 +506,9 @@ class ARBridge(Module):
                 cluster_size=cluster_size,
                 mean_translation_error_m=round(mean_translation_error, 4),
                 mean_yaw_error_deg=round(math.degrees(mean_yaw_error), 2),
+                candidate_yaw_deg=round(
+                    math.degrees(_candidate_yaw_rad(candidate.T_world_odom)), 2
+                ),
                 samples=self._candidate_count,
             )
         self._broadcast_align_status(
@@ -502,9 +518,7 @@ class ARBridge(Module):
             quality=candidate.quality,
             best_quality=self._best_alignment.quality if self._best_alignment is not None else None,
             has_candidate=self._best_alignment is not None,
-            candidate_count=self._candidate_count,
             method="marker",
-            approximate=False,
             message=(
                 "Alignment improved — hold steady for best result"
                 if improved
@@ -550,9 +564,7 @@ class ARBridge(Module):
             quality=candidate.quality,
             best_quality=candidate.quality,
             has_candidate=True,
-            candidate_count=self._candidate_count,
             method="manual",
-            approximate=True,
             message="Manual robot pose ready — review and commit",
             ts=msg.ts,
         )
@@ -579,6 +591,7 @@ class ARBridge(Module):
             log_payload["reproj_px"] = round(result.reprojection_error_px, 2)
         logger.info("Alignment succeeded", **log_payload)
         self._clear_align_session()
+        self._broadcast_status()
         self._broadcast_align_status(
             state="aligned",
             robot_marker_detected=result.method == "marker",
@@ -586,9 +599,7 @@ class ARBridge(Module):
             quality=result.quality,
             best_quality=result.quality,
             has_candidate=True,
-            candidate_count=candidate_count,
             method=result.method,
-            approximate=result.approximate,
             message=(
                 "Manual alignment committed"
                 if result.method == "manual"
@@ -606,9 +617,7 @@ class ARBridge(Module):
         quality: float | None = None,
         best_quality: float | None = None,
         has_candidate: bool | None = None,
-        candidate_count: int | None = None,
         method: str | None = None,
-        approximate: bool | None = None,
         message: str = "",
         ts: float | None = None,
     ) -> None:
@@ -620,16 +629,10 @@ class ARBridge(Module):
             best_quality = self._best_alignment.quality
         if has_candidate is None:
             has_candidate = self._best_alignment is not None
-        if candidate_count is None and self._candidate_count > 0:
-            candidate_count = self._candidate_count
         if method is None and self._best_alignment is not None:
             method = self._best_alignment.method
         if method is None and self._alignment_mode == "manual":
             method = "manual"
-        if approximate is None and self._best_alignment is not None:
-            approximate = self._best_alignment.approximate
-        if approximate is None and method == "manual":
-            approximate = True
         if not message and state == "detecting":
             message = self._align_status_message()
         payload = encode_align_status(
@@ -641,9 +644,7 @@ class ARBridge(Module):
             quality=quality,
             best_quality=best_quality,
             has_candidate=has_candidate,
-            candidate_count=candidate_count,
             method=method,
-            approximate=approximate,
             message=message,
         )
         self._ws_server.schedule_send(payload)
@@ -684,7 +685,6 @@ class ARBridge(Module):
             spectacles_marker_detected=False,
             has_candidate=False,
             method=alignment_mode,
-            approximate=alignment_mode == "manual",
             message="Alignment cancelled",
             ts=msg.ts,
         )
@@ -699,9 +699,7 @@ class ARBridge(Module):
                 quality=self._latest_alignment_quality,
                 best_quality=None,
                 has_candidate=False,
-                candidate_count=self._candidate_count,
                 method=self._alignment_mode,
-                approximate=self._alignment_mode == "manual",
                 message="No valid alignment candidate yet",
                 ts=msg.ts,
             )
@@ -725,7 +723,6 @@ class ARBridge(Module):
                 quality=self._latest_alignment_quality,
                 has_candidate=self._best_alignment is not None,
                 method="marker",
-                approximate=False,
                 message="Waiting for robot odometry",
                 ts=msg.ts,
             )
@@ -850,21 +847,76 @@ class ARBridge(Module):
             )
         self._goal_reached = False
 
+    def _emergency_stop_robot(self, source: str) -> None:
+        """Emergency stop: send StopMove immediately, then cancel the planner goal.
+
+        StopMove is the fastest reliable robot-side halt available here. We send it first
+        so the robot stops immediately, then cancel the planner to prevent replanning and
+        future cmd_vel output from resuming movement.
+        """
+        logger.warning(
+            "Emergency stop sequence started",
+            source=source,
+            stop_topic_connected=self.stop_movement.transport is not None,
+        )
+        for i in range(3):
+            try:
+                self._connection.publish_request(
+                    RTC_TOPIC["SPORT_MOD"],
+                    {"api_id": SPORT_CMD["StopMove"]},
+                )
+                logger.info("StopMove published", source=source, attempt=i + 1)
+            except Exception as e:
+                logger.error(
+                    "StopMove failed",
+                    source=source,
+                    attempt=i + 1,
+                    error=str(e),
+                )
+            if i < 2:
+                time.sleep(0.1)
+
+        try:
+            self._navigation.cancel_goal()
+            logger.info("Planner cancel_goal RPC completed", source=source)
+        except Exception as e:
+            logger.error("cancel_goal RPC failed", source=source, error=str(e))
+
     def _on_cancel_goal(self, msg: CancelGoalMessage) -> None:
         self.stop_movement.publish(Bool(data=True))
         self._goal_reached = False
         self._nav_state = "idle"
-        logger.info("Navigation cancel requested")
+        logger.info(
+            "Navigation cancel requested",
+            stop_topic_connected=self.stop_movement.transport is not None,
+        )
         self._broadcast_empty_path(ts=msg.ts)
         self._broadcast_nav_status(ts=msg.ts)
+        
+        # Emergency stop the robot on a daemon thread
+        threading.Thread(
+            target=self._emergency_stop_robot,
+            args=("cancel_goal",),
+            daemon=True,
+        ).start()
 
     def _on_emergency_stop(self, msg: EmergencyStopMessage) -> None:
         self.stop_movement.publish(Bool(data=True))
         self._goal_reached = False
         self._nav_state = "idle"
-        logger.warning("Emergency stop requested from AR client")
+        logger.warning(
+            "Emergency stop requested from AR client",
+            stop_topic_connected=self.stop_movement.transport is not None,
+        )
         self._broadcast_empty_path(ts=msg.ts)
         self._broadcast_nav_status(ts=msg.ts)
+        
+        # Emergency stop the robot on a daemon thread
+        threading.Thread(
+            target=self._emergency_stop_robot,
+            args=("emergency_stop",),
+            daemon=True,
+        ).start()
 
     async def handle_camera_info(self, msg: CameraInfo) -> None:
         self._aligner.set_camera_info(msg)

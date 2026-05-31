@@ -55,15 +55,20 @@ export class DimosManager extends BaseScriptComponent {
   @input
   placementRayOrigin: SceneObject;
 
+  @input
+  lineMaterial: Material;
+
   public onBridgeReady: (() => void)[] = [];
   public onBridgeStatusChanged: ((msg: BridgeStatusMessage) => void)[] = [];
   public onBridgeConnectionChanged: ((connected: boolean) => void)[] = [];
 
   private _isActive = false;
-  private _registrationApproximate = false;
   private _lastPose: PoseMessage | null = null;
   private _manualAlignmentPose: ManualAlignmentPose | null = null;
   private _preferManualPoseUntilNextRuntimePose = false;
+  private _useManualPoseCorrection = false;
+  private _manualPoseCorrectionRotation: quat | null = null;
+  private _manualPoseCorrectionTranslation: vec3 | null = null;
   private readonly _appState = new AppState({
     phase: "setup",
     debugMode: false,
@@ -113,7 +118,7 @@ export class DimosManager extends BaseScriptComponent {
     );
 
     this._goalRenderer = new NavigationMarkerView(navigationMarkerRoot);
-    this._pathRenderer = new PathRenderer(parent, template);
+    this._pathRenderer = new PathRenderer(parent, this.lineMaterial ?? null);
     this._obstacleRenderer = new ObstacleHighlightRenderer(parent, template);
     this._placementController = new PlacementController(
       this,
@@ -203,9 +208,32 @@ export class DimosManager extends BaseScriptComponent {
         protocolMetersToLensCentimeters(msg.position),
       );
       if (this._isActive && this.robotMarker) {
-        this._preferManualPoseUntilNextRuntimePose = false;
-        this._manualAlignmentPose = null;
-        this.robotMarker.applyPose(msg);
+        const shouldApplyManualCorrection =
+          this._manualAlignmentPose !== null && this._useManualPoseCorrection;
+        if (shouldApplyManualCorrection) {
+          // Apply manual pose anchor correction: display corrected pose
+          const q = msg.orientation;
+          const bridgePosition = protocolMetersToLensCentimeters(msg.position);
+          const bridgeRotation = new quat(q[0], q[1], q[2], q[3]);
+
+          // Compute correction on first pose
+          if (this._manualPoseCorrectionRotation === null || this._manualPoseCorrectionTranslation === null) {
+            const anchorPosition = this._manualAlignmentPose.position;
+            const anchorRotation = this._manualAlignmentPose.rotation;
+            this._manualPoseCorrectionRotation = anchorRotation.multiply(bridgeRotation.invert());
+            const rotatedBridgePos = this._manualPoseCorrectionRotation.multiplyVec3(bridgePosition);
+            this._manualPoseCorrectionTranslation = anchorPosition.sub(rotatedBridgePos);
+          }
+
+          // Apply correction: corrected = Rc * bridge + Tc
+          const correctedRotation = this._manualPoseCorrectionRotation.multiply(bridgeRotation);
+          const correctedPosition = this._manualPoseCorrectionRotation.multiplyVec3(bridgePosition).add(this._manualPoseCorrectionTranslation);
+          this.robotMarker.applyRuntimeLensPose(correctedPosition, correctedRotation);
+        } else {
+          // No manual pose, use bridge pose directly
+          this._preferManualPoseUntilNextRuntimePose = false;
+          this.robotMarker.applyPose(msg);
+        }
       }
     });
     this.bridgeClient.onPath.push((msg) => this._applyPath(msg));
@@ -246,6 +274,7 @@ export class DimosManager extends BaseScriptComponent {
     this.stopManualAlignmentSession();
     this.clearManualAlignmentPose();
     this._preferManualPoseUntilNextRuntimePose = false;
+    this._useManualPoseCorrection = false;
     this.disconnect();
     this.setIsActive(false);
     this._setAppState({ navigationPlacementEnabled: true });
@@ -260,6 +289,11 @@ export class DimosManager extends BaseScriptComponent {
     this.cancelManualAlignmentPlacement();
     this.stopManualAlignmentSession();
     this._preferManualPoseUntilNextRuntimePose = this._manualAlignmentPose !== null;
+    this._useManualPoseCorrection =
+      this._manualAlignmentPose !== null &&
+      Boolean(this.bridgeClient?.lastBridgeStatus?.registration_approximate);
+    this._manualPoseCorrectionRotation = null;
+    this._manualPoseCorrectionTranslation = null;
     this.setIsActive(true);
     this._setAppState({ phase: "runtime" });
     this._setRobotInteractionMode("runtimeRobot");
@@ -351,6 +385,13 @@ export class DimosManager extends BaseScriptComponent {
       this._navigationController.setPlacementEnabled(false);
     }
     this._manualAlignmentPose = manualMarkerPoseFromReference(position, rotation);
+    this._manualPoseCorrectionRotation = null;
+    this._manualPoseCorrectionTranslation = null;
+    const p = this._manualAlignmentPose.position;
+    const r = this._manualAlignmentPose.rotation;
+    this._log(
+      `beginManualAlignmentPlacementAt: initial pos=(${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}) rot=(${r.x.toFixed(3)}, ${r.y.toFixed(3)}, ${r.z.toFixed(3)}, ${r.w.toFixed(3)})`,
+    );
     this._manualAlignmentController?.beginPlacementPose(this._manualAlignmentPose);
     this._setRobotInteractionMode("manualPlacement");
   }
@@ -358,6 +399,9 @@ export class DimosManager extends BaseScriptComponent {
   public clearManualAlignmentPose(): void {
     this._manualAlignmentPose = null;
     this._preferManualPoseUntilNextRuntimePose = false;
+    this._useManualPoseCorrection = false;
+    this._manualPoseCorrectionRotation = null;
+    this._manualPoseCorrectionTranslation = null;
   }
 
   public cancelManualAlignmentPlacement(): void {
@@ -489,14 +533,19 @@ export class DimosManager extends BaseScriptComponent {
 
   public finalizeOfflineManualAlignment(): boolean {
     const candidate = this._manualAlignmentController?.captureCandidate();
-    if (candidate) {
-      this._manualAlignmentPose = manualMarkerPoseFromMarkerWorldPose(
-        candidate.position,
-        candidate.rotation,
-      );
-      return true;
+    if (!candidate) {
+      this._log("finalizeOfflineManualAlignment: no candidate captured");
+      return false;
     }
-    return this._manualAlignmentPose !== null;
+    this._manualAlignmentPose = manualMarkerPoseFromMarkerWorldPose(
+      candidate.position,
+      candidate.rotation,
+    );
+    const r = candidate.rotation;
+    this._log(
+      `finalizeOfflineManualAlignment: captured pos=(${candidate.position.x.toFixed(1)}, ${candidate.position.y.toFixed(1)}, ${candidate.position.z.toFixed(1)}) rot=(${r.x.toFixed(3)}, ${r.y.toFixed(3)}, ${r.z.toFixed(3)}, ${r.w.toFixed(3)})`,
+    );
+    return true;
   }
 
   public get placementMode(): boolean {
@@ -517,7 +566,17 @@ export class DimosManager extends BaseScriptComponent {
   }
 
   private _applyBridgeStatus(msg: BridgeStatusMessage): void {
-    this._registrationApproximate = Boolean(msg.registration_approximate);
+    if (msg.registered && msg.registration_approximate && this._manualAlignmentPose) {
+      this._useManualPoseCorrection = true;
+    }
+    if (
+      msg.registered &&
+      !msg.registration_approximate &&
+      this.appState.robotInteractionMode !== "manualPlacement"
+    ) {
+      this._useManualPoseCorrection = false;
+      this.clearManualAlignmentPose();
+    }
     this._robotMenuController?.applyBridgeStatus(msg);
     this.onBridgeStatusChanged.forEach((cb) => cb(msg));
   }
@@ -528,6 +587,8 @@ export class DimosManager extends BaseScriptComponent {
     this.onBridgeConnectionChanged.forEach((cb) => cb(connected));
     if (!connected) {
       this._preferManualPoseUntilNextRuntimePose = this._manualAlignmentPose !== null;
+      this._manualPoseCorrectionRotation = null;
+      this._manualPoseCorrectionTranslation = null;
       this.robotMarker?.resetRuntimePoseSmoothing();
     }
   }
@@ -618,7 +679,7 @@ export class DimosManager extends BaseScriptComponent {
       (this.appState.robotInteractionMode === "manualPlacement" ||
         this._preferManualPoseUntilNextRuntimePose)
     ) {
-      this.robotMarker.applyManualPose(
+    this.robotMarker.applyManualPose(
         this._manualAlignmentPose.position,
         this._manualAlignmentPose.rotation,
       );

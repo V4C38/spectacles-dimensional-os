@@ -4,8 +4,7 @@
     - !<own> 00000000-0000-0065-0000-000000000064
     - !<own> 0005641c-028d-459a-0000-000000014b4d
     - !<own> 5aa0f98b-e799-448c-a2dc-cae5d04fa2a4
-    - !<own> 7686270e-6751-42b3-99f4-436fb1dc6862
-    - !<own> a30db649-5675-46c5-a50b-92b2fbd052a7
+    - !<own> 9d5912d5-686e-4878-a8ba-331574261592
   layers: !<Layers/267ee9a7-aff2-4f9d-9a49-f71214747d03>
     userLayers:
       - |
@@ -184,7 +183,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 14.000000, z: 0.000000}
+    Position: {x: 0.000000, y: 16.000000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -271,6 +270,22 @@
     - !<own> b509b27f-5aa6-47c9-9f7b-1f83a1eda97c
   Components:
     []
+- !<SceneObject/02b4e96e-3fd3-487e-ae91-31828aea1503>
+  PrefabRemaps:
+    []
+  Name: RobotMarker
+  Enabled: true
+  Layers: 1
+  LocalTransform: !<TransformEntity>
+    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
+    HasSegmentScaleCompensation: false
+  Children:
+    - !<own> 5d452f16-b5e4-4fe1-b630-d1e608c2c0c7
+    - !<own> 0007656a-2aa8-442b-bef7-1a2c3c0c9bde
+  Components:
+    - !<own> b749cbc7-9706-4499-8d79-19f5a03dd792
 - !<SceneObject/02baa3fd-e1a1-4075-b723-ac8d49b7fd62>
   PrefabRemaps:
     []
@@ -323,7 +338,7 @@
   Enabled: true
   Shape: !<Sphere>
     FitVisual: false
-    Radius: 4.000000
+    Radius: 1.250000
   Matter: !<reference> 00000000-0000-0000-0000-000000000000
   Filter: !<reference> 00000000-0000-0000-0000-000000000000
   OverlapFilter: !<reference> 00000000-0000-0000-0000-000000000000
@@ -1799,9 +1814,9 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 1.500000, z: 0.000000}
+    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.330000, y: 0.850000, z: 1.330000}
+    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
   Children:
     []
@@ -2145,8 +2160,8 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.500000, z: 3.500000}
-    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Position: {x: 0.000000, y: -0.562778, z: 0.000000}
+    Rotation: {x: 180.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 0.350000, y: 1.000000, z: 0.350000}
     HasSegmentScaleCompensation: false
   Children:
@@ -2733,7 +2748,7 @@
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
   Materials:
-    - !<reference> 4afcc257-852d-4f43-856b-afdcda0fd86c
+    - !<reference> 9ce46964-68d4-4ad4-bd7e-7c1aa459272a
   Mesh: !<reference> e542623c-1432-4bfa-881d-a28905bd9e57
   Skin: !<reference> 00000000-0000-0000-0000-000000000000
   BlendShapesEnabled: true
@@ -2762,8 +2777,8 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Position: {x: 0.000000, y: -3.000000, z: 0.000000}
+    Rotation: {x: 10.304847, y: -89.980217, z: 33.690067}
     Scale: {x: 2.250000, y: 2.250000, z: 2.250000}
     HasSegmentScaleCompensation: false
   Children:
@@ -2847,7 +2862,7 @@
   LocalTransform: !<TransformEntity>
     Position: {x: 0.000000, y: 0.000000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.500000, y: 1.500000, z: 1.500000}
+    Scale: {x: 1.250000, y: 1.250000, z: 1.250000}
     HasSegmentScaleCompensation: false
   Children:
     - !<own> 7f524fef-25f9-4782-b18a-3c591d34d05e
@@ -3258,23 +3273,6 @@
     Fingers_length: 0.000000
     Thumb_inflate: 0.000000
     Thumb_length: 0.000000
-- !<SceneObject/7686270e-6751-42b3-99f4-436fb1dc6862>
-  PrefabRemaps:
-    []
-  Name: RobotManager
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
-    HasSegmentScaleCompensation: false
-  Children:
-    - !<own> 20937b64-ad12-476c-a010-dbda8811f91f
-    - !<own> 9d5912d5-686e-4878-a8ba-331574261592
-    - !<own> 987602b0-ef22-4a53-85a8-ca0d7eaaa7b4
-  Components:
-    []
 - !<SceneObject/7747c579-b049-4c0d-bd9b-db409ed1a845>
   PrefabRemaps:
     []
@@ -3441,7 +3439,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000011, y: 53.500000, z: 0.500000}
+    Position: {x: 0.000011, y: 40.000000, z: 0.000000}
     Rotation: {x: -0.000010, y: -0.000010, z: 0.000000}
     Scale: {x: 2.000000, y: 2.000000, z: 2.000000}
     HasSegmentScaleCompensation: false
@@ -4191,7 +4189,7 @@
 - !<SceneObject/987602b0-ef22-4a53-85a8-ca0d7eaaa7b4>
   PrefabRemaps:
     []
-  Name: Rendering
+  Name: LiDARPointCloud
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -4201,11 +4199,8 @@
     HasSegmentScaleCompensation: false
   Children:
     - !<own> 2ec96410-2815-4f3f-b3af-5f1799c074f4
-    - !<own> 5d452f16-b5e4-4fe1-b630-d1e608c2c0c7
-    - !<own> 0007656a-2aa8-442b-bef7-1a2c3c0c9bde
   Components:
     - !<own> 03a2975f-a602-46fd-8680-df1a4bee1014
-    - !<own> f5530c80-9154-4df6-aa86-2e2d45661a2a
 - !<RenderMeshVisual/994a37e7-029e-431a-9842-2fadd648813d>
   PrefabRemaps:
     []
@@ -4219,7 +4214,7 @@
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
   Materials:
-    - !<reference> aefc5196-4a0d-4cc2-90d8-da697b320cc8
+    - !<reference> 634460c1-d837-4144-86e3-ba22c3de1371
   Mesh: !<reference> 1a9172a3-5301-44af-b311-6dd12dee99b5
   Skin: !<reference> 00000000-0000-0000-0000-000000000000
   BlendShapesEnabled: true
@@ -4289,7 +4284,7 @@
 - !<SceneObject/9d5912d5-686e-4878-a8ba-331574261592>
   PrefabRemaps:
     []
-  Name: DimOS
+  Name: DimOSManager
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -4298,7 +4293,10 @@
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
   Children:
-    []
+    - !<own> 20937b64-ad12-476c-a010-dbda8811f91f
+    - !<own> 02b4e96e-3fd3-487e-ae91-31828aea1503
+    - !<own> a30db649-5675-46c5-a50b-92b2fbd052a7
+    - !<own> 987602b0-ef22-4a53-85a8-ca0d7eaaa7b4
   Components:
     - !<own> d44336ee-e3d0-430c-8b0d-ae6a4a6af963
     - !<own> ef9bba3c-1138-44cc-b761-7ef88bf3856d
@@ -4334,34 +4332,7 @@
     - !<own> 155df322-f290-40ed-804f-bd4b26b46d6f
 - !<SceneObject/a30db649-5675-46c5-a50b-92b2fbd052a7>
   PrefabRemaps:
-    - 1ab66e81-878d-4cc6-8c27-4e8b6e2dae36: ce2beaa1-1439-4e3f-6d29-7c0fd9d71857
-    - 2320548e-7315-4548-9c8b-101e186d30ac: b2412a3e-f973-4392-8d5a-2b48330312cd
-    - 2cf1b107-98ea-41df-826c-c890a5cc1474: 1630c38e-8f32-42b5-a66d-a743724e5ef9
-    - 2d0089d6-c4b0-45c0-9e98-bf815002607e: 47eeff86-0ae0-44c2-9a00-b4a4745e3017
-    - 32387e22-04a9-4480-bd73-972bd4478920: 67e78a49-8c4d-47e2-bbbd-122b0a7b2d79
-    - 5152d005-37e3-4baa-a41f-dcbc3499743b: 242898e4-a4eb-410c-85d2-5b8228e1baec
-    - 5163eca7-57b1-472e-b93a-7123758640a9: 21945cfc-a6d3-4e3f-9d36-11c5c4c4431c
-    - 5d177eed-cb08-428b-8cfe-3543726130a6: 8c9a4137-edd3-4bae-abba-f0961cfbe141
-    - 5de6b9a6-4810-494c-98b0-1d66ec019054: ac04cb28-9bf0-47f2-7fe8-234c4823f378
-    - 61c58507-706d-44d4-8e01-26f68164da8f: 93a5b8bb-2954-448a-8153-f73f02319395
-    - 6311dcfb-031b-4d74-b05a-848e8459b9db: b78a7219-0746-447e-b172-87242070615f
-    - 672bd3b9-8656-49bf-8561-31660732d39c: ce8d49e4-6646-461e-b512-e41430bd5a5e
-    - 68a8291d-61c8-48a0-9145-30e70547bc15: 06223384-bd7a-45e9-7501-21243de5e359
-    - 7d6fbfaf-43ad-467b-9418-3b431033d4cc: 9edbad16-71dc-4324-894c-69a65bf3020d
-    - 7f524fef-25f9-4782-b18a-3c591d34d05e: 17347689-fa64-41b1-9bba-49568d68e6db
-    - 87ea4e61-590a-4bfa-ae5a-a81cc616b86f: db17bb12-b42c-4cda-a388-ebb39254406a
-    - 8cfc81e2-d2f7-4d52-912f-96244ab5dac1: 4ec60dd4-d9ab-4e62-a907-1f76ead455ad
-    - 994a37e7-029e-431a-9842-2fadd648813d: a814a897-e9e8-43d9-b367-04c0a283f4ab
-    - a30db649-5675-46c5-a50b-92b2fbd052a7: 2f5aa319-7c6a-4293-40e4-f9d3c7a380cd
-    - a7d5fdf7-45db-4882-bb10-d6e0bccf49d7: f1b1ca56-4468-4753-a8a2-672370f86726
-    - ac2c39d2-53b9-4049-9896-c59b9df2cf97: b1fdc852-d5fd-42f0-a0b3-52b5e27d1804
-    - bea40f99-2d91-497b-832a-8ca74295ed37: a284db9e-120a-4dcf-9485-ed7762a7c5bc
-    - c41c89ff-1faf-4e95-9ced-deb8722a982b: a07b0650-623b-4366-9710-74af19bbbc57
-    - d7a0a646-dfdc-482f-b928-78ac04ece710: e7b55b7a-61a1-47ce-834f-54bb0bc98fbc
-    - d99b8eb5-4fd1-4883-a19a-c5c841387f5e: 00531911-e23d-4890-aaf2-61d91a353fc3
-    - dd450cf1-810b-45e0-8cc7-a2d8abbb3c5b: c40c891b-545f-4e52-994c-9053f61477d9
-    - e8aa205c-3cd7-47ac-bfd9-97da8c2a23a9: 8f66dc29-3046-419a-b496-c9749f210566
-    - fdd22645-9b22-4132-b493-5d9ca607c580: 3cc44acb-8ec1-4f39-b35b-63c69caa87be
+    []
   Name: SurfacePlacementMarker
   Enabled: true
   Layers: 1
@@ -4426,9 +4397,9 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 47.000000, z: 0.000000}
-    Rotation: {x: 90.000000, y: -0.000012, z: -180.000000}
-    Scale: {x: 0.025000, y: 0.025000, z: 0.025000}
+    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Rotation: {x: 90.000000, y: -0.000012, z: 0.000000}
+    Scale: {x: 0.020000, y: 0.020000, z: 0.008000}
     HasSegmentScaleCompensation: false
   Children:
     []
@@ -4900,7 +4871,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 5.000000}
+    Position: {x: 0.000000, y: 0.000000, z: 1.482094}
     Rotation: {x: 90.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 0.350000, y: 3.000000, z: 0.350000}
     HasSegmentScaleCompensation: false
@@ -4929,6 +4900,22 @@
   Name: Marker Tracking
   Enabled: true
   Marker: !<reference> a16dc724-407b-4b1f-a427-0441189871c3
+- !<ScriptComponent/b749cbc7-9706-4499-8d79-19f5a03dd792>
+  PrefabRemaps:
+    []
+  Name: RobotMarker
+  Enabled: true
+  ScriptAsset: !<reference> b376bd82-6b1f-4f69-84b3-cdaf143e452a
+  ScriptInputsDefault:
+    {}
+  ScriptTypesDefault:
+    {}
+  ScriptInputs:
+    "":
+      markerRoot: !<reference.SceneObject> 5d452f16-b5e4-4fe1-b630-d1e608c2c0c7
+  ScriptTypes:
+    "":
+      {}
 - !<SceneObject/b74ff32e-5135-4266-b883-71d0f54a6200>
   PrefabRemaps:
     []
@@ -5850,9 +5837,10 @@
     []
   Name: Physics Collider
   Enabled: true
-  Shape: !<Box>
-    FitVisual: false
-    Size: {x: 75.000000, y: 1.000000, z: 75.000000}
+  Shape: !<Cylinder>
+    Axis: Y
+    Length: 15.000000
+    Radius: 45.000000
   Matter: !<reference> 00000000-0000-0000-0000-000000000000
   Filter: !<reference> 00000000-0000-0000-0000-000000000000
   OverlapFilter: !<reference> 00000000-0000-0000-0000-000000000000
@@ -6226,6 +6214,7 @@
   ScriptInputsDefault:
     _renderOrder: true
     _inactive: true
+    _playAudio: true
     _hasShadow: true
     _shadowPositionOffset: true
     _toggleable: true
@@ -6241,7 +6230,7 @@
     "":
       _renderOrder: 0
       _inactive: false
-      _playAudio: true
+      _playAudio: false
       _style: Primary
       _hasShadow: false
       _shadowPositionOffset: !<Vec3> {x: 0.050000, y: -0.050000, z: -0.010000}
@@ -6380,8 +6369,9 @@
       bridgeClient: !<MappingBased.AssignableType> d44336ee-e3d0-430c-8b0d-ae6a4a6af963
       alignmentController: !<MappingBased.AssignableType_1> f7144df4-6cb9-41b7-90ed-629872a8120d
       lidarPointCloud: !<MappingBased.AssignableType_2> 03a2975f-a602-46fd-8680-df1a4bee1014
-      robotMarker: !<MappingBased.AssignableType_3> f5530c80-9154-4df6-aa86-2e2d45661a2a
+      robotMarker: !<MappingBased.AssignableType_3> b749cbc7-9706-4499-8d79-19f5a03dd792
       placementRayOrigin: !<reference.SceneObject> 00000000-0000-0065-0000-000000000064
+      lineMaterial: !<reference.Material> f1fce27e-8307-4e9a-8584-85a92c6b13be
   ScriptTypes:
     "":
       {}
@@ -6605,22 +6595,6 @@
     - !<own> f2f51db7-cc95-4855-bcd4-cc04a38c98c1
   Components:
     - !<own> 006cbfee-6476-4fa7-a1ec-7a5a102dbbf4
-- !<ScriptComponent/f5530c80-9154-4df6-aa86-2e2d45661a2a>
-  PrefabRemaps:
-    []
-  Name: RobotMarker
-  Enabled: true
-  ScriptAsset: !<reference> b376bd82-6b1f-4f69-84b3-cdaf143e452a
-  ScriptInputsDefault:
-    {}
-  ScriptTypesDefault:
-    {}
-  ScriptInputs:
-    "":
-      markerRoot: !<reference.SceneObject> 5d452f16-b5e4-4fe1-b630-d1e608c2c0c7
-  ScriptTypes:
-    "":
-      {}
 - !<SceneObject/f5b6585a-c64e-42d9-a80a-e465a21c6e12>
   PrefabRemaps:
     []
@@ -6870,7 +6844,7 @@
   LocalTransform: !<TransformEntity>
     Position: {x: 0.000000, y: 0.000000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 2.000000, y: 2.000000, z: 2.000000}
+    Scale: {x: 1.500000, y: 1.607143, z: 1.607143}
     HasSegmentScaleCompensation: false
   Children:
     - !<own> 32387e22-04a9-4480-bd73-972bd4478920

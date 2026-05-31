@@ -15,7 +15,6 @@ export interface CalibrationViewState {
   currentQuality: number | null;
   bestQuality: number | null;
   hasCandidate: boolean;
-  candidateCount: number;
   pendingCommit: boolean;
   statusMessage: string;
   statusColor: vec4;

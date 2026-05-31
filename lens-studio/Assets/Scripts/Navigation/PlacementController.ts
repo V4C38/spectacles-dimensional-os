@@ -28,6 +28,7 @@ export class PlacementController {
   private isDragging = false;
   private lastGroundHeight = 0;
   private _smoothedGroundHeight = 0;
+  private _processingButtonPress = false;
 
   constructor(
     owner: BaseScriptComponent,
@@ -64,6 +65,7 @@ export class PlacementController {
   public stop(): void {
     print("PlacementController: stop");
     this.active = false;
+    this._processingButtonPress = false;
     this.activeInteractor = null;
     this._setDragEnabled(false);
     this.renderer.hide();
@@ -136,15 +138,25 @@ export class PlacementController {
       });
     }
     this.renderer.confirmActionButton.onTriggerUp.add(() => {
-      if (!this.active) {
+      if (!this.active || this._processingButtonPress) {
         return;
       }
+      this._processingButtonPress = true;
       this._syncDesiredPoseToRenderedPose();
-      if (this.visualState === "executing") {
-        this.onCancelled?.(this.desiredPosition, this.desiredRotation);
-        return;
-      }
-      this.onConfirmed?.(this.desiredPosition, this.desiredRotation);
+      const wasExecuting = this.visualState === "executing";
+      const position = this.desiredPosition;
+      const rotation = this.desiredRotation;
+      
+      const delayedEvent = this.owner.createEvent("DelayedCallbackEvent");
+      delayedEvent.bind(() => {
+        this._processingButtonPress = false;
+        if (wasExecuting) {
+          this.onCancelled?.(position, rotation);
+        } else {
+          this.onConfirmed?.(position, rotation);
+        }
+      });
+      delayedEvent.reset(0.0);
     });
   }
 

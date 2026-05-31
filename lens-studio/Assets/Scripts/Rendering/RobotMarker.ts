@@ -5,8 +5,8 @@ import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/Rou
 import { requireChild } from "../UI/Shared/SceneLookup";
 
 const ROBOT_UI_WORLD_UP_OFFSET_CM = 15.0;
-const POSITION_SMOOTHING_RATE = 12.0;
-const ROTATION_SMOOTHING_RATE = 14.0;
+const POSITION_SMOOTHING_RATE = 20.0;
+const ROTATION_SMOOTHING_RATE = 22.0;
 const DIRECTION_ARROW_YAW_CORRECTION = new quat(
   0,
   -Math.sin(Math.PI / 4),
@@ -110,6 +110,19 @@ export class RobotMarker extends BaseScriptComponent {
     this.resetRuntimePoseSmoothing();
     this.markerRoot.enabled = true;
     this._applyTransformImmediate(position, rotation);
+  }
+
+  public applyRuntimeLensPose(position: vec3, rotation: quat): void {
+    if (!this.markerRoot) {
+      return;
+    }
+    this.markerRoot.enabled = true;
+    this._runtimePoseTargetPosition = position;
+    this._runtimePoseTargetRotation = rotation;
+    if (!this._hasLiveRuntimePose) {
+      this._hasLiveRuntimePose = true;
+      this._applyTransformImmediate(position, rotation);
+    }
   }
 
   public setVisible(visible: boolean): void {

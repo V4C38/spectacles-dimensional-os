@@ -90,7 +90,6 @@ export function buildNavGoal(
     type: "nav_goal",
     ts: getTime(),
     robot_id: robotId,
-    frame: "world",
     position: lensCentimetersToProtocolMeters(position),
     orientation: [rotation.x, rotation.y, rotation.z, rotation.w],
   });

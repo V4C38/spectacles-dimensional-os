@@ -24,15 +24,6 @@ export interface HelloMessage {
   capabilities: string[];
 }
 
-export interface NavGoalMessage {
-  type: "nav_goal";
-  ts: number;
-  robot_id: string;
-  frame: string;
-  position: [number, number, number];
-  orientation?: [number, number, number, number];
-}
-
 export interface LidarMessage {
   type: "lidar";
   ts: number;
@@ -68,9 +59,7 @@ export interface AlignStatusMessage {
   quality?: number;
   best_quality?: number;
   has_candidate?: boolean;
-  candidate_count?: number;
   method?: "marker" | "manual";
-  approximate?: boolean;
   message: string;
 }
 
@@ -85,7 +74,6 @@ export interface BridgeStatusMessage {
   streams_active: boolean;
   registered: boolean;
   reconnecting: boolean;
-  registration_method?: "marker" | "manual";
   registration_approximate?: boolean;
 }
 

@@ -21,55 +21,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BLUEPRINT="${ROOT}/blueprints/go2_ar_nav.py"
-
-python_has_dimos() {
-  local py="$1"
-  "${py}" -c "import dimos" >/dev/null 2>&1
-}
-
-find_python() {
-  if [[ -n "${DIMOS_PYTHON:-}" && -x "${DIMOS_PYTHON}" ]]; then
-    if python_has_dimos "${DIMOS_PYTHON}"; then
-    echo "${DIMOS_PYTHON}"
-    return
-    fi
-    echo "DIMOS_PYTHON does not have the 'dimos' package installed: ${DIMOS_PYTHON}" >&2
-    exit 1
-  fi
-  local candidates=(
-    "${ROOT}/../../dimos/.venv/bin/python3"
-    "${ROOT}/../dimos/.venv/bin/python3"
-    "${ROOT}/.venv/bin/python3"
-  )
-  for py in "${candidates[@]}"; do
-    if [[ -x "${py}" ]] && python_has_dimos "${py}"; then
-      echo "${py}"
-      return
-    fi
-  done
-  local system_python
-  system_python="$(command -v python3)"
-  if python_has_dimos "${system_python}"; then
-    echo "${system_python}"
-    return
-  fi
-  cat >&2 <<EOF
-Could not find a Python interpreter with the 'dimos' package installed.
-
-Tried:
-  - ${ROOT}/../../dimos/.venv/bin/python3
-  - ${ROOT}/../dimos/.venv/bin/python3
-  - ${ROOT}/.venv/bin/python3
-  - ${system_python}
-
-Fix one of these, then retry:
-  - Set DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3
-  - Install dimos-ar into your DimOS venv:
-      /path/to/dimos/.venv/bin/python3 -m pip install -e "${ROOT}"
-EOF
-  exit 1
-}
+BLUEPRINT="${ROOT}/blueprints/go2_ar.py"
+source "${ROOT}/scripts/_dimos_env.sh"
 
 REPLAY=0
 LOCAL=0
@@ -79,7 +32,7 @@ for arg in "$@"; do
     --local) LOCAL=1 ;;
     --lan) ;; # no-op; all interfaces is the default
     -h|--help)
-      sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -90,7 +43,10 @@ for arg in "$@"; do
   esac
 done
 
-PYTHON="$(find_python)"
+if ! PYTHON="$(find_dimos_python "${ROOT}")"; then
+  print_dimos_python_help "${ROOT}"
+  exit 1
+fi
 if [[ ! -f "${BLUEPRINT}" ]]; then
   echo "Blueprint not found: ${BLUEPRINT}" >&2
   exit 1
@@ -114,7 +70,7 @@ export PATH="$(dirname "${PYTHON}"):${PATH}"
 export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
 
 # Detect LAN IP for the user.
-LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || echo "unknown")"
+LAN_IP="$(detect_lan_ip)"
 
 echo "Using Python: ${PYTHON}"
 echo "Blueprint:    ${BLUEPRINT}"

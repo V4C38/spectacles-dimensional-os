@@ -1,4 +1,4 @@
-# Lens Studio scene setup (M1)
+# Lens Studio scene setup
 
 Scripts live under `Assets/Scripts/`. After pulling, wire the scene in Lens Studio
 (MCP can attach scripts; these steps are manual when asset references are needed).
@@ -239,7 +239,7 @@ calibration status from `bridge_status`.
 
 For the navigation foundation pass, validate in this order:
 
-1. Replay/web first: run `dimos-ar/blueprints/go2_ar_nav.py` and verify `hello`, `bridge_status`,
+1. Replay/web first: run `dimos-ar/blueprints/go2_ar.py` and verify `hello`, `bridge_status`,
    `path`, and `nav_status` from the web client.
 2. Lens compile and scene wiring: confirm `DimosManager` has `placementRayOrigin` wired and the
    Lens compiles without TypeScript errors.

@@ -16,12 +16,12 @@
 pytest tests/ -m "not integration"
 ```
 
-## Run integration test (headless M1 protocol check)
+## Run integration test (headless protocol check)
 
 Terminal 1 — start the blueprint:
 
 ```bash
-CI=1 python3 blueprints/go2_ar_basic.py
+CI=1 python3 blueprints/go2_ar.py
 ```
 
 Wait for `AR WebSocket server listening` and allow 15–40s for replay lidar.

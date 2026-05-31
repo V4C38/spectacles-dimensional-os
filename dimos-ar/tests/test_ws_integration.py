@@ -30,7 +30,7 @@ async def _connect_with_retry() -> websockets.ClientConnection:
     ) from last_error
 
 
-async def _collect_m1_protocol_messages() -> dict[str, int]:
+async def _collect_protocol_messages() -> dict[str, int]:
     seen: dict[str, int] = {"hello": 0, "lidar": 0, "pose": 0, "registered": 0}
     async with await _connect_with_retry() as ws:
         deadline = time.monotonic() + TIMEOUT_S
@@ -40,9 +40,13 @@ async def _collect_m1_protocol_messages() -> dict[str, int]:
             msg_type = msg.get("type")
             if msg_type == "hello" and seen["hello"] == 0:
                 assert msg.get("protocol_version") == 1
-                assert "lidar" in msg.get("capabilities", [])
-                assert "odom" in msg.get("capabilities", [])
-                assert "align" in msg.get("capabilities", [])
+                caps = msg.get("capabilities", [])
+                assert "lidar" in caps
+                assert "odom" in caps
+                assert "align" in caps
+                assert "nav" in caps
+                assert "path" in caps
+                assert "emergency_stop" in caps
                 register = {
                     "type": "register",
                     "ts": time.time(),
@@ -61,9 +65,9 @@ async def _collect_m1_protocol_messages() -> dict[str, int]:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_arbridge_m1_protocol_live() -> None:
-    """Requires ARBridge running (e.g. blueprints/go2_ar_basic.py in replay mode)."""
-    seen = await _collect_m1_protocol_messages()
+async def test_arbridge_protocol_live() -> None:
+    """Requires ARBridge running (e.g. blueprints/go2_ar.py in replay mode)."""
+    seen = await _collect_protocol_messages()
     assert seen["hello"] >= 1
     assert seen["lidar"] >= 2
     assert seen["pose"] >= 2

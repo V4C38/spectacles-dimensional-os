@@ -56,9 +56,10 @@
     []
   Name: Physics Collider
   Enabled: true
-  Shape: !<Box>
-    FitVisual: false
-    Size: {x: 75.000000, y: 1.000000, z: 75.000000}
+  Shape: !<Cylinder>
+    Axis: Y
+    Length: 15.000000
+    Radius: 45.000000
   Matter: !<reference> 00000000-0000-0000-0000-000000000000
   Filter: !<reference> 00000000-0000-0000-0000-000000000000
   OverlapFilter: !<reference> 00000000-0000-0000-0000-000000000000
@@ -159,7 +160,7 @@
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
   Materials:
-    - !<reference> aefc5196-4a0d-4cc2-90d8-da697b320cc8
+    - !<reference> 634460c1-d837-4144-86e3-ba22c3de1371
   Mesh: !<reference> 1a9172a3-5301-44af-b311-6dd12dee99b5
   Skin: !<reference> 00000000-0000-0000-0000-000000000000
   BlendShapesEnabled: true
@@ -403,7 +404,7 @@
   LocalTransform: !<TransformEntity>
     Position: {x: 0.000000, y: 0.000000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 2.000000, y: 2.000000, z: 2.000000}
+    Scale: {x: 1.500000, y: 1.607143, z: 1.607143}
     HasSegmentScaleCompensation: false
   Children:
     - !<own> 0ea4ef1d-6609-4797-b9a0-cf82c02126c9
@@ -432,7 +433,7 @@
   Layers: 1
   LocalTransform: !<TransformEntity>
     Position: {x: -0.000150, y: -24.043209, z: 1.486229}
-    Rotation: {x: 90.000000, y: -0.000012, z: -180.000000}
+    Rotation: {x: 90.000000, y: -0.000012, z: 0.000000}
     Scale: {x: 0.010000, y: 0.010000, z: 0.010000}
     HasSegmentScaleCompensation: false
   Children:
@@ -671,7 +672,7 @@
   LocalTransform: !<TransformEntity>
     Position: {x: 0.000000, y: 0.000000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.500000, y: 1.500000, z: 1.500000}
+    Scale: {x: 1.250000, y: 1.250000, z: 1.250000}
     HasSegmentScaleCompensation: false
   Children:
     - !<own> dbb253ea-5ef9-428e-aba1-4923e069f975

@@ -1,23 +1,19 @@
-# spectacles-unitree — AR for DimOS + Unitree Go2
+# Spectacles AR + Unitree Go2
 
-> **Lens Studio:** open [`lens-studio/spectacles-unitree.esproj`](lens-studio/spectacles-unitree.esproj) — not the repo root. See [CONTRIBUTING.md](CONTRIBUTING.md).
+> **Lens Studio:** open [`lens-studio/spectacles-unitree.esproj`](lens-studio/spectacles-unitree.esproj) — not the repo root.
 
-Visualize your **Unitree Go2** in **augmented reality**: live lidar and robot pose in the AR world frame, with floor-pin navigation on the roadmap. The Mac runs [DimOS](https://github.com/dimensionalOS/dimos); the Python side is a **DimOS extension** ([`dimos-ar/`](dimos-ar/)) that exposes a documented WebSocket API any AR client can speak.
+Visualize and control a **Unitree Go2** via **Spectacles AR**. The Mac runs [DimOS](https://github.com/dimensionalOS/dimos), while [`dimos-ar/`](dimos-ar/) provides the AR bridge that streams world-anchored robot data to the Lens over WebSocket.
 
-First targets: **Snap Spectacles** (Lens Studio) and a **phone/web** debug viewer. Neither is hardcoded in the Python side — platform-specific clients live outside `dimos_ar/` (`dimos-ar/clients/web/`; Spectacles in [`lens-studio/`](lens-studio/)).
+The first client is **Snap Spectacles** (Lens Studio), but the Python side stays platform-agnostic: it exposes a documented protocol that future AR clients can implement without changing `dimos_ar/`.
 
-## Repository layout
+At a glance:
+- A **Lens Studio project** for Spectacles (`lens-studio/`) with the setup wizard, UI, rendering, and navigation interaction
+- A **Python DimOS extension** (`dimos-ar/`) that serves lidar, pose, paths, and calibration over WebSocket
+- Shared protocol and architecture docs for extending or porting the system
 
-```text
-spectacles-unitree/          # this repo (README, git, shared assets)
-├── assets/                  # README gifs, demo media
-├── dimos-ar/                # Python AR bridge, blueprints, web client, protocol docs
-└── lens-studio/             # Spectacles Lens Studio project (spectacles-unitree.esproj)
-```
+This is **not a fork of DimOS**. It is a separate package that depends on DimOS and composes into DimOS blueprints via `autoconnect`.
 
-> This is **not a fork of DimOS**. It is a separate package that depends on DimOS and composes into DimOS blueprints via `autoconnect`.
-
-This repo is a starting point for developers who want to work at the intersection of **spatial computing**, **mobile robotics**, and **DimOS**. The layout and documentation style are inspired by [spectacles-reachy-mini](https://github.com/V4C38/spectacles-reachy-mini) (Spectacles Lens + robot-side WebSocket), adapted here for quadruped navigation.
+This project is an easy starting point for developers who want to work at the intersection of **spatial computing**, **mobile robotics**, and **DimOS**. The overall structure and documentation style are inspired by [spectacles-reachy-mini](https://github.com/V4C38/spectacles-reachy-mini), adapted here for quadruped navigation and AR registration.
 
 *Demo video and GIFs: add under [`assets/`](assets/) when ready — see [`assets/README.md`](assets/README.md).*
 
@@ -26,7 +22,6 @@ This repo is a starting point for developers who want to work at the intersectio
 - **AR bridge (Python)** — [`dimos-ar/dimos_ar/`](dimos-ar/dimos_ar/) `ARBridge` DimOS module: filter lidar, transform frames, serve WebSocket
 - **Blueprints** — [`dimos-ar/blueprints/`](dimos-ar/blueprints/) compose DimOS robot stacks with `ARBridge`
 - **Protocol spec** — [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md) JSON WebSocket contract (the real cross-platform API)
-- **Web debug client** — [`dimos-ar/clients/web/`](dimos-ar/clients/web/) Vite + Three.js viewer for replay testing (no glasses required)
 - **Tests** — [`dimos-ar/tests/`](dimos-ar/tests/) unit tests + optional live WebSocket integration check
 - **Spectacles client** — [`lens-studio/`](lens-studio/) Lens Studio project (early stage)
 - **Design docs** — [`dimos-ar/docs/`](dimos-ar/docs/) architecture, project brief, protocol, Lens development guide
@@ -37,20 +32,35 @@ This repo is a starting point for developers who want to work at the intersectio
 
 - macOS dev machine (8GB-class MacBook Air is the reference target; CPU only, no CUDA)
 - Python 3.12+
-- [DimOS](https://github.com/dimensionalOS/dimos) installed in a venv (`pip install "dimos[base,unitree]"` or `pip install -e ".[unitree]"` from this repo after DimOS is available)
-- Node.js 18+ (for the web debug client only)
+- [DimOS](https://github.com/dimensionalOS/dimos) available somewhere on the machine, or installable via `./setup.sh`
 
-*Note: With no Go2 on the LAN, the blueprint starts in **replay mode** automatically (WebSocket still works for testing).*
+*Note: You can also use **replay mode** if you do not have a Go2 on the LAN. The AR bridge and Lens flow still work for development.*
 
-1. **Install dimos-ar into your DimOS venv**
+1. **Run first-time setup**
 
    ```bash
-   /path/to/dimos/.venv/bin/python3 -m pip install -e /path/to/spectacles-unitree/dimos-ar
+   cd /path/to/spectacles-unitree/dimos-ar
+   ./setup.sh
    ```
+
+   `./setup.sh` asks whether DimOS is already installed. If it is, the script tries
+   to auto-detect a suitable Python environment and otherwise prompts you for the
+   path. If DimOS is not installed yet, the script can clone it, create a venv,
+   install `dimos[base,unitree]`, install `dimos-ar`, and run the unit tests for you.
+
+   <details>
+   <summary>Manual setup instead</summary>
+
+   ```bash
+   cd /path/to/spectacles-unitree/dimos-ar
+   /path/to/dimos/.venv/bin/python3 -m pip install -e ".[dev]"
+   pytest
+   ```
+   </details>
 
 2. **Start the AR blueprint**
 
-   AR development uses the blueprint script — **not** the stock `dimos --replay run unitree-go2` CLI alone (that runs DimOS without `ARBridge`).
+   AR development uses the blueprint script — **not** the stock `dimos --replay run unitree-go2` CLI alone, because that runs DimOS without `ARBridge`.
 
    **Quick start (from this repo):**
 
@@ -58,15 +68,20 @@ This repo is a starting point for developers who want to work at the intersectio
    cd /path/to/spectacles-unitree/dimos-ar
    ./start.sh              # discover Go2, or replay; WebSocket on 0.0.0.0:8765 (Spectacles-ready)
    ./start.sh --replay     # replay only (no robot)
-   ./start.sh --local      # WebSocket localhost-only (same-machine web client)
+   ./start.sh --local      # WebSocket localhost-only for local testing
    ```
 
-   The script auto-picks a nearby DimOS venv when present, including the common sibling-repo layout at `../../dimos/.venv/bin/python3`; otherwise set `DIMOS_PYTHON` explicitly.
+   The script auto-picks a nearby DimOS venv when present. If DimOS lives somewhere
+   unusual, set `DIMOS_PYTHON` explicitly:
+
+   ```bash
+   DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3 ./start.sh --replay
+   ```
 
    **Equivalent manual command:**
 
    ```bash
-   /path/to/dimos/.venv/bin/python3 /path/to/spectacles-unitree/dimos-ar/blueprints/go2_ar_basic.py
+   /path/to/dimos/.venv/bin/python3 /path/to/spectacles-unitree/dimos-ar/blueprints/go2_ar.py
    ```
 
    On startup the blueprint **searches the LAN for Go2 robots** (DimOS UDP discovery). There is **no robot IP configuration** — only an optional serial:
@@ -76,13 +91,13 @@ This repo is a starting point for developers who want to work at the intersectio
    Found 1 robot (B42D...) — connecting.
    ```
 
-   If several robots are on the network, an interactive picker runs in the terminal (arrow keys). Pin a robot with `ROBOT_SERIAL` in the environment or `.env` to skip the menu.
+   If several robots are on the network, an interactive picker runs in the terminal (arrow keys). Pin a robot with `ROBOT_SERIAL` in the environment to skip the menu.
 
    **Offline / CI (no discovery, replay only):**
 
    ```bash
    FORCE_REPLAY=1 CI=1 /path/to/dimos/.venv/bin/python3 \
-     /path/to/spectacles-unitree/dimos-ar/blueprints/go2_ar_basic.py
+     /path/to/spectacles-unitree/dimos-ar/blueprints/go2_ar.py
    ```
 
    Wait for:
@@ -93,17 +108,7 @@ This repo is a starting point for developers who want to work at the intersectio
 
    Replay lidar often starts **15–40 seconds** after the process boots — that delay is normal.
 
-3. **Open the web debug viewer**
-
-   ```bash
-   cd dimos-ar/clients/web
-   npm install
-   npm run dev
-   ```
-
-   Open the URL Vite prints (typically `http://localhost:5173`). Click **Connect**, then **Dev Register** to apply identity calibration for replay (no physical ArUco marker required).
-
-   For headless protocol checks (with the blueprint still running in another terminal):
+   **Optional headless protocol check** (with the blueprint still running in another terminal):
 
    ```bash
    cd /path/to/spectacles-unitree/dimos-ar
@@ -112,7 +117,7 @@ This repo is a starting point for developers who want to work at the intersectio
 
    See [`dimos-ar/tests/README.md`](dimos-ar/tests/README.md) for unit vs integration test details.
 
-4. **Spectacles Lens (hardware)**
+3. **Spectacles Lens (hardware)**
 
    - On the phone, scan the **QR code** from `./start.sh` (marker page at true size) — see [Frame alignment](#frame-alignment-apriltag-marker).
    - Open [`lens-studio/spectacles-unitree.esproj`](lens-studio/spectacles-unitree.esproj) in Lens Studio; follow [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md).
@@ -126,13 +131,13 @@ This repo is a starting point for developers who want to work at the intersectio
 
 DimOS connects to the Go2 over **WebRTC** (no ROS2 on this path). This package subscribes to DimOS streams and re-broadcasts them to AR clients over WebSocket.
 
-- **Inputs (M1):** `lidar`, `odom`, `color_image`, `camera_info` from `ARGO2Connection` — wired automatically via `handle_*` when `super().start()` runs
-- **Outputs (M2+):** `clicked_point` to `ReplanningAStarPlanner`
+- **Inputs:** `lidar`, `odom`, `color_image`, `camera_info`, `path`, `goal_reached`, `navigation_state` — wired automatically via `handle_*` when `super().start()` runs
+- **Outputs:** `clicked_point`, `goal_request`, `stop_movement` to `ReplanningAStarPlanner`
 - **Side channel:** a WebSocket server on a daemon thread (the RPC worker never blocks)
 
 ### Platform-agnostic protocol
 
-All DimOS-side code speaks a single JSON WebSocket protocol ([`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md)). Any client that implements it works: Spectacles, a phone browser, a future Quest app.
+All DimOS-side code speaks a single JSON WebSocket protocol ([`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md)). Spectacles is just one client of that protocol.
 
 - Name things generically: `ARBridge`, not `SpectaclesBridge`
 - Treat the protocol schema as a versioned API (`protocol_version` in `hello`)
@@ -142,30 +147,27 @@ All DimOS-side code speaks a single JSON WebSocket protocol ([`dimos-ar/docs/PRO
 
 The robot lives in an **odom** frame; AR devices live in a **world** frame.
 
-**M1 hardware flow (phone-first — no printing required):**
+**Hardware calibration flow (phone-first — no printing required):**
 
 1. Run `./start.sh` and **scan the QR code** on your phone (opens the composite marker page at **60 mm × 120 mm**, with the inner AprilTag still **60 mm × 60 mm**). Max brightness, disable auto-lock.
 2. Run the Spectacles setup wizard (**Connect → Calibrate → Complete**).
-3. During **Calibrate**, hold the phone so both the Go2 camera and your Spectacles can see the marker simultaneously. Calibration assumes the robot is standing on level ground at this moment, so the bridge preserves heading only and ignores calibration-time pitch/roll when solving the floor orientation.
+3. During **Calibrate**, hold the phone so both the Go2 camera and your Spectacles can see the marker simultaneously. The bridge uses the full observed marker pose to solve the shared world/odom alignment, then assumes the robot is standing on a flat plane when the calibration is committed so the final AR floor stays level and lidar is not tilted with the phone.
 
-The Lens sends `align_start` / `align_marker` while Image Tracking sees the marker; the bridge runs OpenCV AprilTag detection on the Go2 camera and computes `T_world_odom` when both sides detect the marker within **500 ms**. During calibration the registration is auto-leveled to the ground plane and keeps only the robot's facing direction. After that, lidar and pose still stream in full **world** coordinates, so the robot may continue onto uneven terrain normally.
+The Lens sends `align_start` / `align_marker` while Image Tracking sees the marker; the bridge runs OpenCV AprilTag detection on the Go2 camera and computes `T_world_odom` when both sides detect the same phone-held marker within **500 ms**. At commit time the resulting transform is gravity-leveled so the AR floor remains flat even if the phone was held with some tilt. After that, lidar and pose still stream in full **world** coordinates, so the robot may continue onto uneven terrain normally.
 
 **Marker size configuration.** Default: AprilTag 36h11 with a **60 mm** square inner tag inside a **60 mm × 120 mm** composite tracked image. The shared contract lives in `dimos-ar/dimos_ar/marker_contract.py`. The marker web page is rendered from that contract, and `python scripts/generate_marker.py --sync-lens` updates the Lens marker asset height to match automatically (see [`dimos-ar/docs/MARKER_ASSETS.md`](dimos-ar/docs/MARKER_ASSETS.md)).
 
-The web client’s **Dev Register** button still uses the legacy `register` message (identity at origin) for replay without a physical marker.
+The legacy `register` message still exists for replay workflows and future lightweight clients that do not use the full `align_*` session.
 
 ### DimOS visualization vs this repo
 
 DimOS ships its own Mac-side tools (Rerun native/web on port **7779**, optional Foxglove on **8765**). Those are for **debugging DimOS blueprints** in robot/odom frame.
 
-| Tool | Use for |
-|------|---------|
-| DimOS Rerun / WebsocketVis | Nav, costmaps, teleop, odom-frame lidar |
-| **`dimos-ar/clients/web`** | AR protocol, world-frame lidar, `register` flow |
-
-They are complementary. Do **not** enable `viewer=foxglove` on the same machine as ARBridge — both bind port **8765**.
+This repo adds `ARBridge` on port **8765** plus the QR-linked marker page used by the Spectacles setup flow. Do **not** enable `viewer=foxglove` on the same machine as ARBridge — both bind port **8765**.
 
 ## Architecture overview
+
+Detailed information about the individual components is provided in the sections below and in the focused docs under [`dimos-ar/docs/`](dimos-ar/docs/).
 
 ```mermaid
 flowchart TB
@@ -227,7 +229,7 @@ Unitree Go2 Air
     |  WebRTC (DimOS GO2Connection — no jailbreak)
 MacBook (DimOS + dimos-ar)
     |  WebSocket JSON  ws://host:8765
-AR client (Spectacles Lens / phone web app)
+AR client (Spectacles Lens)
 ```
 
 ```mermaid
@@ -249,18 +251,10 @@ flowchart TB
         Bridge --> Filter --> Xform --> Proto --> WS
     end
 
-    subgraph Clients [AR clients]
-        Web[clients/web]
-        Spec[lens-studio]
-    end
-
     Robot --> GO2
-    WS --> Web
     WS --> Spec
-    Web -->|register nav_goal| WS
+    Spec -->|register nav_goal| WS
 ```
-
-Detailed information about the individual components is provided in the next sections.
 
 ### Lens architecture (scene entry points vs helpers)
 
@@ -306,24 +300,13 @@ Central module: [`dimos-ar/dimos_ar/bridge_module.py`](dimos-ar/dimos_ar/bridge_
 | `max_range_m` | 3.0 | Lidar horizontal range filter |
 | `min_height_m` / `max_height_m` | 0.1 / 1.5 | Height band filter |
 | `target_points` | 2500 | Lidar subsample target |
-| `lidar_max_hz` / `pose_max_hz` | 10 / 20 | Outbound rate limits |
+| `lidar_max_hz` / `pose_max_hz` | 10 / 30 | Outbound rate limits |
 | `marker_length_m` | 0.060 | AprilTag square edge (60 mm) |
 | `align_timestamp_tolerance_s` | 0.5 | Max time gap between dual detections |
 
-### Web debug client
-
-[`dimos-ar/clients/web/`](dimos-ar/clients/web/) — Vite + Three.js reference implementation of the AR protocol.
-
-1. Connect to `ws://127.0.0.1:8765` (or your Mac’s LAN IP when testing from a phone)
-2. Server sends `hello` with capabilities; stats panel shows connection state
-3. Click **Dev Register** to send identity calibration (replay without a printed marker)
-4. Live point cloud and robot pose render in world frame; Hz counters update in the HUD
-
-See [`dimos-ar/clients/web/README.md`](dimos-ar/clients/web/README.md) for two-terminal setup details.
-
 ### Spectacles client (`lens-studio/`)
 
-The Lens Studio project lives in [`lens-studio/`](lens-studio/) (`lens-studio/spectacles-unitree.esproj`), not under `dimos-ar/clients/`. It implements world-anchored lidar rendering, ArUco registration in-scene, and (M2+) floor-pin navigation using the same WebSocket protocol as the web client.
+The Lens Studio project lives in [`lens-studio/`](lens-studio/) (`lens-studio/spectacles-unitree.esproj`), not under `dimos-ar/clients/`. It implements world-anchored lidar rendering, AprilTag registration in-scene, and floor-pin navigation using the same documented WebSocket protocol as the bridge.
 
 The Lens-side code is now organized around a few scene-entry scripts plus feature folders:
 
@@ -346,10 +329,10 @@ See [`dimos-ar/docs/LENS_DEVELOPMENT.md`](dimos-ar/docs/LENS_DEVELOPMENT.md) for
 
 The Mac is the **server**; AR devices are **clients**. All messages are JSON text frames.
 
-**Handshake (server → client on connect, M1)**
+**Handshake (server → client on connect)**
 
 ```json
-{"type":"hello","protocol_version":1,"robots":["go2"],"capabilities":["lidar","odom","align"]}
+{"type":"hello","protocol_version":1,"robots":["go2"],"capabilities":["lidar","odom","align","align_manual","nav","path","emergency_stop"]}
 {"type":"bridge_status","mode":"replay","robot_model":"unitree_go2","robot_connected":true,...}
 ```
 
@@ -357,35 +340,33 @@ The Mac is the **server**; AR devices are **clients**. All messages are JSON tex
 which `robot_model` is active (`unitree_go2` today; `unitree_g1` when that blueprint
 exists), and whether streams are flowing. Clients can send `get_status` to refresh.
 
-**Outbound (server → client, M1)**
+**Outbound (server → client)**
 
 | Message | Purpose |
 |---------|---------|
 | `lidar` | Filtered point cloud in **world** frame (~1–3k points) |
 | `pose` | Robot pose in **world** frame |
+| `path` | Planned path waypoints in **world** frame |
+| `nav_status` | Navigation state (idle, following_path, recovery) |
 | `registered` | Ack after `register` |
+| `align_status` | Alignment progress and quality |
 
-**Inbound (client → server, M1)**
+**Inbound (client → server)**
 
 | Message | Purpose |
 |---------|---------|
 | `register` | ArUco marker pose in world frame → compute calibration |
-
-**Inbound (M2+, not yet wired in `go2_ar_basic`)**
-
-| Message | Purpose |
-|---------|---------|
+| `align_start`, `align_stop`, `align_commit` | Alignment session control |
+| `align_marker`, `align_manual_pose` | Marker or manual pose for alignment |
 | `nav_goal` | Floor waypoint in world frame → planner |
 | `cancel_goal` | Cancel active navigation |
+| `emergency_stop` | Emergency stop and clear navigation |
 
 Full schema: [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md).
 
-## Blueprints
+## Blueprint
 
-| Blueprint | Composition | Milestone |
-|-----------|-------------|-----------|
-| [`go2_ar_basic.py`](dimos-ar/blueprints/go2_ar_basic.py) | LAN discovery + `ARGO2Connection` + `ARBridge` | M1 — lidar + odom |
-| `go2_ar_nav.py` (planned) | `unitree_go2` + `ARBridge` | M2 — navigation + path |
+The single blueprint [`go2_ar.py`](dimos-ar/blueprints/go2_ar.py) composes the full Unitree Go2 stack (`unitree_go2` with navigation planner) with the `ARBridge` module for AR communication.
 
 ## Customization
 
@@ -393,26 +374,8 @@ Here are things you can change without leaving the supported architecture:
 
 - **Tune lidar for your network:** edit `ARBridgeConfig` in [`bridge_module.py`](dimos-ar/dimos_ar/bridge_module.py) — `max_range_m`, `target_points`, `lidar_max_hz`
 - **Pin a specific Go2 on a busy LAN:** set `ROBOT_SERIAL` before starting the blueprint (must match the hardware serial from discovery)
-- **Add a protocol message:** update [`dimos_ar/protocol.py`](dimos-ar/dimos_ar/protocol.py) and [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md) together, then mirror types in [`dimos-ar/clients/web/src/protocol.ts`](dimos-ar/clients/web/src/protocol.ts) and `lens-studio/Assets/Scripts/Network/Protocol.ts`
-- **Add a new AR platform:** implement [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md) in your client; keep platform code out of `dimos_ar/` (web in `dimos-ar/clients/web/`; Spectacles in `lens-studio/`; other platforms in their own folder or repo)
-
-**Extend the bridge (M2+)**
-
-1. Add stream declarations on `ARBridge` (`path`, `goal_reached`, `clicked_point`)
-2. Switch blueprint to `go2_ar_nav` composing `unitree_go2` (includes planner)
-3. Wire `on_nav_goal` / `on_cancel_goal` on `ARWebSocketServer`; use `inverse_transform_point` from [`transforms.py`](dimos-ar/dimos_ar/transforms.py)
-
-## Milestones
-
-| # | Goal | Status |
-|---|------|--------|
-| **M1** | Lidar visualization in AR with ArUco registration | In progress — bridge + web client |
-| **M2** | Waypoint navigation: pin on floor, path in AR, robot follows | Planned |
-| **M3** | Open-vocabulary object detection pins | Planned |
-| **M4** | Voice commands via DimOS agent | Planned |
-| **M5+** | Semantic queries, spatial map in AR, multi-robot | Planned |
-
-Build strictly in order. The milestones above are the current project scope.
+- **Add a protocol message:** update [`dimos_ar/protocol.py`](dimos-ar/dimos_ar/protocol.py), [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md), and `lens-studio/Assets/Scripts/Network/Protocol.ts` together
+- **Add a new AR platform:** implement [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md) in your client; keep platform code out of `dimos_ar/` (Spectacles in `lens-studio/`; other platforms in their own folder or repo)
 
 ## Ports
 
@@ -420,7 +383,6 @@ Build strictly in order. The milestones above are the current project scope.
 |---------|------|
 | **ARBridge WebSocket** | **8765** |
 | DimOS WebsocketVis (nav dashboard) | 7779 |
-| Vite dev server (`dimos-ar/clients/web`) | 5173 |
 
 ## Robot discovery
 
@@ -459,7 +421,7 @@ If the live connection goes stale, `ARGO2Connection` re-discovers by **serial** 
 - Port **8765** conflicts with DimOS **Foxglove** viewer — do not run both on the same machine
 - WebSocket has no auth (intended for local dev; see `listen_host` warning above)
 - Spectacles Lens (`lens-studio/`) is early stage — see `dimos-ar/docs/LENS_DEVELOPMENT.md`
-- **Navigation cancel/emergency stop limitation**: With the currently installed DimOS `ReplanningAStarPlanner`, the `stop_movement` stream is not wired. This means that while the ARBridge correctly handles `cancel_goal` and `emergency_stop` messages from the Lens (clearing bridge-side navigation state and path visualization), the underlying planner will continue driving the robot to the previously set goal. The robot can still be stopped via the physical emergency button or by sending a new navigation goal. Upgrading to a newer DimOS version that includes `stop_movement` input on the planner will resolve this. See `dimos-ar/dimos_ar/bridge_module.py` lines 856, 864 for implementation details.
+- In offline Lens debugging with no bridge connected, confirming a floor goal still transitions the placement marker into its local **executing / cancel** state for UI testing, but no `nav_goal` is sent until a bridge connection is available.
 
 ### Documentation map
 
@@ -470,7 +432,6 @@ If the live connection goes stale, `ARGO2Connection` re-discovers by **serial** 
 | [`dimos-ar/docs/LENS_DEVELOPMENT.md`](dimos-ar/docs/LENS_DEVELOPMENT.md) | Spectacles Lens Studio guide, MCP, UI patterns |
 | [`dimos-ar/docs/MARKER_ASSETS.md`](dimos-ar/docs/MARKER_ASSETS.md) | AprilTag generation and Lens sync |
 | [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md) | Lens scene wiring checklist |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Monorepo layout, protocol sync, dev workflow |
 
 Contributions, ideas, and bug reports are welcome. Feel free to open an issue or pull request.
 

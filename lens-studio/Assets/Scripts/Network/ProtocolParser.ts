@@ -162,14 +162,8 @@ export function parseInboundMessage(text: string): InboundMessage | null {
       if (typeof data.has_candidate === "boolean") {
         msg.has_candidate = data.has_candidate;
       }
-      if (typeof data.candidate_count === "number") {
-        msg.candidate_count = data.candidate_count;
-      }
       if (data.method === "marker" || data.method === "manual") {
         msg.method = data.method;
-      }
-      if (typeof data.approximate === "boolean") {
-        msg.approximate = data.approximate;
       }
       setActiveRobotId(msg.robot_id);
       return msg;
@@ -193,12 +187,6 @@ export function parseInboundMessage(text: string): InboundMessage | null {
       };
       if (typeof data.robot_serial === "string") {
         status.robot_serial = data.robot_serial;
-      }
-      if (
-        data.registration_method === "marker" ||
-        data.registration_method === "manual"
-      ) {
-        status.registration_method = data.registration_method;
       }
       if (typeof data.registration_approximate === "boolean") {
         status.registration_approximate = data.registration_approximate;

@@ -96,7 +96,8 @@ export class ManualAlignmentController {
     }
     return {
       position: new vec3(position.x, position.y, position.z),
-      rotation: new quat(rotation.x, rotation.y, rotation.z, rotation.w),
+      // quat constructor is (w, x, y, z)
+      rotation: new quat(rotation.w, rotation.x, rotation.y, rotation.z),
     };
   }
 }

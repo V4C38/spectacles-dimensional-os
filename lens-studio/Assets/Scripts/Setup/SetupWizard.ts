@@ -148,9 +148,42 @@ export class SetupWizard extends BaseScriptComponent {
         this._refreshFooterButtons();
       }
     });
+    this.dimosManager.onBridgeConnectionChanged.push((connected) => {
+      this._connected = connected;
+      if (this._currentStep === WizardStep.Connect) {
+        this._showBridgeConnectionStatus();
+        this._refreshFooterButtons();
+      }
+      if (this._currentStep === WizardStep.Calibrate && !connected) {
+        if (this._calibrationState.pendingCommit) {
+          this._calibrationState.pendingCommit = false;
+          this._calibrationState.statusMessage =
+            "Bridge disconnected during alignment - try again or use local manual placement";
+          this._calibrationState.statusColor = COLOR_ERROR;
+          this._renderCalibrationState();
+          this._refreshFooterButtons();
+        }
+      }
+    });
     this.dimosManager.onBridgeStatusChanged.push((msg) => {
       if (this._currentStep === WizardStep.Connect) {
         this._view?.setStatus(formatBridgeStatus(msg), COLOR_WHITE);
+      }
+      if (
+        this._currentStep === WizardStep.Calibrate &&
+        this._calibrationState.pendingCommit &&
+        msg.registered
+      ) {
+        this._calibrationState.pendingCommit = false;
+        this.dimosManager?.cancelManualAlignmentPlacement();
+        this._aligned = true;
+        this._calibrationCompleted = true;
+        this._calibrationState.statusMessage = "Alignment confirmed via bridge status";
+        this._calibrationState.statusColor = COLOR_SUCCESS;
+        this._renderCalibrationState();
+        this._logSetup("alignment confirmed via bridge_status fallback");
+        this._refreshFooterButtons();
+        this._finishSetup();
       }
     });
   }

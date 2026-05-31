@@ -11,7 +11,7 @@ root (sibling of this `dimos-ar/` folder):
 
 | Path | Role |
 |------|------|
-| [`dimos-ar/`](.) | DimOS extension: `ARBridge`, WebSocket protocol, web debug client |
+| [`dimos-ar/`](.) | DimOS extension: `ARBridge`, WebSocket protocol, setup + marker tooling |
 | [`lens-studio/`](../lens-studio/) | Lens Studio project (`spectacles-unitree.esproj`) |
 
 The Python side stays platform-agnostic; Spectacles code stays under
@@ -22,13 +22,13 @@ that on the Lens; do not add Spectacles logic to `dimos_ar/`.
 Mac (dimos-ar blueprint)
     |  ws://host:8765  JSON protocol
 lens-studio/ Lens
-    |  world-anchored rendering, ArUco registration, nav UI (M2+)
+    |  world-anchored rendering, ArUco registration, navigation UI
 User wearing Spectacles
 ```
 
-For day-to-day bridge work, use `clients/web/` in `dimos-ar` (replay + no
-hardware). Use the Lens when testing world anchoring, device performance, or
-Spectacles-only APIs (SIK, UIKit, ASR, etc.).
+For day-to-day bridge work, use `./start.sh --replay` plus the integration test
+suite in `dimos-ar` before moving to device validation. Use the Lens when testing
+world anchoring, device performance, or Spectacles-only APIs (SIK, UIKit, ASR, etc.).
 
 ## Reference sample: Agent Center
 
@@ -73,8 +73,8 @@ DimosManager (@component on DimOS scene object)
 
 - Holds connection state, parses inbound JSON, exposes typed event arrays
   (`onHello`, `onLidar`, `onPose`, `onBridgeStatus`, …).
-- UI and rendering subscribe here instead of a separate `DimosStore` class (M1
-  implementation). A dedicated store module is optional if state grows (M2+).
+- UI and rendering subscribe here instead of a separate `DimosStore` class.
+  A dedicated store module is optional if state complexity grows.
 
 **UIManager** ([Agent Center `UIManager.ts`](https://github.com/specs-devs/samples/blob/main/Agent%20Center/Assets/Scripts/UI/UIManager.ts)):
 
@@ -202,13 +202,12 @@ Pin package versions in the Lens project; document upgrades in
 
 ## Protocol implementation on the Lens
 
-Implement the same message types as [`clients/web/src/protocol.ts`](../clients/web/src/protocol.ts):
+Implement the same message types documented in [`PROTOCOL.md`](PROTOCOL.md):
 
-| Phase | Inbound (Lens → Mac) | Outbound (Mac → Lens) |
-|-------|----------------------|------------------------|
-| M1 | `register`, `get_status` | `hello`, `bridge_status`, `lidar`, `pose`, `registered` |
-| M1.5 | `align_start`, `align_marker`, `align_manual_pose`, `align_commit`, `align_stop` | `align_status` |
-| M2+ | `nav_goal`, `cancel_goal`, `emergency_stop` | `path`, `nav_status` |
+| Direction | Messages |
+|-----------|----------|
+| Inbound (Lens → Mac) | `register`, `get_status`, `align_start`, `align_marker`, `align_manual_pose`, `align_commit`, `align_stop`, `nav_goal`, `cancel_goal`, `emergency_stop` |
+| Outbound (Mac → Lens) | `hello`, `bridge_status`, `lidar`, `pose`, `registered`, `align_status`, `path`, `nav_status` |
 
 Rules:
 
@@ -245,7 +244,7 @@ lens-studio/
 │       ├── UIManager.ts         # runtime UI (@component)
 │       ├── Network/
 │       │   ├── BridgeClient.ts  # WebSocket + event arrays (@component)
-│       │   └── Protocol.ts      # mirror docs/PROTOCOL.md + clients/web
+│       │   └── Protocol.ts      # mirror docs/PROTOCOL.md
 │       ├── Alignment/
 │       │   └── AlignmentController.ts  # MarkerTracking + WS alignment
 │       ├── Rendering/
@@ -547,8 +546,8 @@ open** with the MCP server running while you use Agent in Cursor.
 
 ## Development workflow
 
-1. **Bridge + protocol:** run `blueprints/go2_ar_basic.py` with replay; verify
-   with `clients/web/` and `pytest tests/test_ws_integration.py -m integration`.
+1. **Bridge + protocol:** run `blueprints/go2_ar.py` with replay; verify
+   with `pytest tests/test_ws_integration.py -m integration`.
 2. **Lens networking:** implement `WebSocketClient` + `Protocol.ts`; log
    `hello` / `lidar` / `pose` before any rendering.
 3. **World rendering:** point cloud + robot marker using world-frame coordinates
@@ -557,16 +556,15 @@ open** with the MCP server running while you use Agent in Cursor.
 5. **Device test:** deploy to Spectacles; Mac and glasses on same Wi‑Fi; use Mac
    LAN IP in the Lens (not `127.0.0.1`).
 
-Target **M1** (lidar + registration) before M2 navigation UI. Do not port Agent
-Center's Supabase/bridge/agent features — they are unrelated to dimos-ar.
+Do not port Agent Center's Supabase/bridge/agent features — they are unrelated to dimos-ar.
 
-## M2 validation order
+## Validation order
 
-When validating the waypoint-navigation foundation, keep the order strict:
+When validating features, keep the order strict:
 
-1. **Replay + web first**
-   - run `blueprints/go2_ar_nav.py`
-   - confirm `hello` capabilities, `bridge_status`, `path`, and `nav_status`
+1. **Replay + integration test first**
+   - run `blueprints/go2_ar.py`
+   - confirm `hello` capabilities, `bridge_status`, `lidar`, `pose`, `path`, and `nav_status`
 2. **Lens compile + scene wiring**
    - Lens compiles without TypeScript errors
    - `placementRayOrigin` is wired in the scene
@@ -577,8 +575,8 @@ When validating the waypoint-navigation foundation, keep the order strict:
 4. **Placement + rendering**
    - pin-drop mode shows a live preview
    - pinch confirms one goal
-   - `execute=false` stays Lens-local
-   - `execute=true` sends `nav_goal`
+   - `execute=false` or no bridge connection still switches the marker into the local executing/cancel state for UI debugging, but does not send `nav_goal`
+   - `execute=true` with bridge + calibration available sends `nav_goal`
 5. **Robot-local controls**
    - robot menu follows the moving marker
    - approximate/manual status is visible there
@@ -597,7 +595,7 @@ lidar:
 ## Checklist before opening a PR (Lens side)
 
 - [ ] No robot/DimOS imports in `dimos-ar` — protocol-only coupling
-- [ ] `Protocol.ts` matches `docs/PROTOCOL.md` and `clients/web/src/protocol.ts`
+- [ ] `Protocol.ts` matches `docs/PROTOCOL.md`
 - [ ] UI built via `UIManager` + shared builders (Agent Center pattern)
 - [ ] WebSocket + registration tested against replay blueprint
 - [ ] Tested on Spectacles hardware for world lock and performance

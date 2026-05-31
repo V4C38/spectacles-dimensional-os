@@ -16,8 +16,7 @@ PROTOCOL_VERSION = 1
 ROBOT_ID = "go2"
 FRAME_WORLD = "world"
 
-DEFAULT_CAPABILITIES = ["lidar", "odom", "align", "align_manual"]
-NAV_CAPABILITIES = ["nav", "path", "emergency_stop"]
+DEFAULT_CAPABILITIES = ["lidar", "odom", "align", "align_manual", "nav", "path", "emergency_stop"]
 
 
 def _dumps(payload: dict[str, Any]) -> str:
@@ -226,7 +225,6 @@ def encode_bridge_status(
     if snapshot.robot_serial is not None:
         payload["robot_serial"] = snapshot.robot_serial
     if snapshot.registration_method is not None:
-        payload["registration_method"] = snapshot.registration_method
         payload["registration_approximate"] = snapshot.registration_approximate
     return _dumps(payload)
 
@@ -300,9 +298,7 @@ def encode_align_status(
     quality: float | None = None,
     best_quality: float | None = None,
     has_candidate: bool | None = None,
-    candidate_count: int | None = None,
     method: str | None = None,
-    approximate: bool | None = None,
     message: str = "",
 ) -> str:
     payload: dict[str, Any] = {
@@ -320,12 +316,8 @@ def encode_align_status(
         payload["best_quality"] = best_quality
     if has_candidate is not None:
         payload["has_candidate"] = has_candidate
-    if candidate_count is not None:
-        payload["candidate_count"] = candidate_count
     if method is not None:
         payload["method"] = method
-    if approximate is not None:
-        payload["approximate"] = approximate
     return _dumps(payload)
 
 
