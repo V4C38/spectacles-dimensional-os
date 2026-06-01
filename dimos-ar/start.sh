@@ -88,4 +88,4 @@ echo "First replay run may download ~80 MB of recorded data."
 echo "Ctrl+C to stop."
 echo ""
 
-exec "${PYTHON}" "${BLUEPRINT}" 2> >(grep -v '^objc\[' >&2)
+exec "${PYTHON}" "${BLUEPRINT}" < /dev/null 2> >(grep -v '^objc\[' >&2)

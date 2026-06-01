@@ -10,6 +10,7 @@ export type NavigationMarkerVisualState = "disabled" | "placing" | "executing";
 
 const MARKER_VISIBILITY_DURATION_SECONDS = 0.18;
 const VISIBILITY_ANIMATION_VERSION_KEY = "__navMarkerVisibilityVersion";
+const CIRCLE_SCALE_ANIMATION_VERSION_KEY = "__navMarkerCircleScaleVersion";
 
 export class NavigationMarkerView {
   private readonly root: SceneObject;
@@ -158,8 +159,6 @@ export class NavigationMarkerView {
     if (this.calibrationLookAt) {
       this.calibrationLookAt.enabled = false;
     }
-    this.portalCircle.enabled = true;
-    this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
     this.dots.enabled = true;
     this.confirmButtonObject.enabled = true;
     this.setConfirmActionEnabled(true);
@@ -174,6 +173,7 @@ export class NavigationMarkerView {
     }
     this._setPortalSaturation(0);  // Desaturate during placing
     this._animateVisibility(true);
+    this._animateCircleScale(true);
   }
 
   public showExecuting(): void {
@@ -182,8 +182,6 @@ export class NavigationMarkerView {
     if (this.calibrationLookAt) {
       this.calibrationLookAt.enabled = false;
     }
-    this.portalCircle.enabled = true;
-    this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
     this.dots.enabled = true;
     this.confirmButtonObject.enabled = true;
     this.setConfirmActionEnabled(true);
@@ -197,6 +195,7 @@ export class NavigationMarkerView {
     }
     this._setPortalSaturation(1);  // Full saturation during execution
     this._animateVisibility(true);
+    this._animateCircleScale(false);
   }
 
   public hide(): void {
@@ -207,6 +206,12 @@ export class NavigationMarkerView {
     if (this.arrow) {
       this.arrow.enabled = false;
     }
+    // Cancel any in-progress circle animation and restore the circle to full
+    // scale so it is ready for the next showPlacing(). The root is about to
+    // scale to zero so this is invisible.
+    this._nextCircleAnimationVersion();
+    this.portalCircle.enabled = true;
+    this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
     this._animateVisibility(false);
   }
 
@@ -316,6 +321,51 @@ export class NavigationMarkerView {
     if (this.arrow) {
       this.arrow.enabled = false;
     }
+  }
+
+  private _animateCircleScale(visible: boolean): void {
+    const transform = this.portalCircle.getTransform();
+    const start = transform.getLocalScale();
+    const target = visible ? this.portalBaseScale : vec3.zero();
+    const version = this._nextCircleAnimationVersion();
+    this.portalCircle.enabled = true;
+    animate({
+      duration: MARKER_VISIBILITY_DURATION_SECONDS,
+      easing: "ease-in-out-quad",
+      update: (t: number) => {
+        if (!this._isLatestCircleAnimationVersion(version)) {
+          return;
+        }
+        transform.setLocalScale(
+          new vec3(
+            start.x + (target.x - start.x) * t,
+            start.y + (target.y - start.y) * t,
+            start.z + (target.z - start.z) * t,
+          ),
+        );
+      },
+      ended: () => {
+        if (!this._isLatestCircleAnimationVersion(version)) {
+          return;
+        }
+        transform.setLocalScale(target);
+        if (!visible) {
+          this.portalCircle.enabled = false;
+        }
+      },
+    });
+  }
+
+  private _nextCircleAnimationVersion(): number {
+    const circleAny = this.portalCircle as unknown as { [key: string]: number };
+    const nextVersion = (circleAny[CIRCLE_SCALE_ANIMATION_VERSION_KEY] ?? 0) + 1;
+    circleAny[CIRCLE_SCALE_ANIMATION_VERSION_KEY] = nextVersion;
+    return nextVersion;
+  }
+
+  private _isLatestCircleAnimationVersion(version: number): boolean {
+    const circleAny = this.portalCircle as unknown as { [key: string]: number };
+    return circleAny[CIRCLE_SCALE_ANIMATION_VERSION_KEY] === version;
   }
 
   private _animateVisibility(visible: boolean): void {

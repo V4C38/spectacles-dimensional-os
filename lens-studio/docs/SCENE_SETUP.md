@@ -172,6 +172,8 @@ The exact Reachy sphere assets live in:
 | DimosManager | lidarPointCloud | LidarPointCloud (on **Rendering**) |
 | DimosManager | placementRayOrigin | **Camera Object** (tracked camera root used for placement ray fallback) |
 | DimosManager | robotMarker | RobotMarker (on **Rendering**) |
+
+> **Note:** `DimosManager` no longer has a `lineMaterial` input. The path line material (`InteractorLineMaterial`) is loaded automatically from the SpectaclesInteractionKit package at runtime. If a `lineMaterial` field was previously wired in the Inspector, it can be safely removed.
 | AlignmentController | bridgeClient | BridgeClient |
 | AlignmentController | markerTracking | Marker Tracking on **Image Tracking** |
 | AlignmentController | debugGizmo | (Optional) SceneObject with 3D gizmo for tracking debug |

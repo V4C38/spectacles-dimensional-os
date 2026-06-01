@@ -1,4 +1,4 @@
-# Spectacles AR + Unitree Go2
+# Spectacles AR + Dimensional OS
 
 > **Lens Studio:** open [`lens-studio/spectacles-unitree.esproj`](lens-studio/spectacles-unitree.esproj) — not the repo root.
 

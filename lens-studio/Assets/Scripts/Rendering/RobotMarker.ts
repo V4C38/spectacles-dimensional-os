@@ -8,10 +8,10 @@ const ROBOT_UI_WORLD_UP_OFFSET_CM = 15.0;
 const POSITION_SMOOTHING_RATE = 20.0;
 const ROTATION_SMOOTHING_RATE = 22.0;
 const DIRECTION_ARROW_YAW_CORRECTION = new quat(
+  Math.cos(Math.PI / 4),
   0,
   -Math.sin(Math.PI / 4),
   0,
-  Math.cos(Math.PI / 4),
 );
 
 function lerp(a: number, b: number, t: number): number {
@@ -20,40 +20,6 @@ function lerp(a: number, b: number, t: number): number {
 
 function lerpVec3(a: vec3, b: vec3, t: number): vec3 {
   return new vec3(lerp(a.x, b.x, t), lerp(a.y, b.y, t), lerp(a.z, b.z, t));
-}
-
-function normalizeQuat(value: quat): quat {
-  const length = Math.sqrt(
-    value.x * value.x +
-      value.y * value.y +
-      value.z * value.z +
-      value.w * value.w,
-  );
-  if (length <= 0.000001) {
-    return new quat(0, 0, 0, 1);
-  }
-  const invLength = 1.0 / length;
-  return new quat(
-    value.x * invLength,
-    value.y * invLength,
-    value.z * invLength,
-    value.w * invLength,
-  );
-}
-
-function nlerpQuat(from: quat, to: quat, t: number): quat {
-  const dot =
-    from.x * to.x + from.y * to.y + from.z * to.z + from.w * to.w;
-  const target =
-    dot < 0.0 ? new quat(-to.x, -to.y, -to.z, -to.w) : to;
-  return normalizeQuat(
-    new quat(
-      lerp(from.x, target.x, t),
-      lerp(from.y, target.y, t),
-      lerp(from.z, target.z, t),
-      lerp(from.w, target.w, t),
-    ),
-  );
 }
 
 @component
@@ -94,7 +60,7 @@ export class RobotMarker extends BaseScriptComponent {
     this.markerRoot.enabled = true;
     const q = msg.orientation;
     const position = protocolMetersToLensCentimeters(msg.position);
-    const rotation = new quat(q[0], q[1], q[2], q[3]);
+    const rotation = new quat(q[3], q[0], q[1], q[2]);
     this._runtimePoseTargetPosition = position;
     this._runtimePoseTargetRotation = rotation;
     if (!this._hasLiveRuntimePose) {
@@ -313,7 +279,7 @@ export class RobotMarker extends BaseScriptComponent {
       ),
     );
     transform.setWorldRotation(
-      nlerpQuat(
+      quat.slerp(
         transform.getWorldRotation(),
         this._runtimePoseTargetRotation,
         rotationAlpha,

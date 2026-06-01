@@ -29,7 +29,6 @@
     alignmentController: false
     bridgeClient: false
     lidarPointCloud: false
-    lineMaterial: false
     placementRayOrigin: false
     robotMarker: false
   ScriptTypesHidden:
@@ -46,7 +45,6 @@
       lidarPointCloud: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
       robotMarker: !<MappingBased.AssignableType_3> 00000000-0000-0000-0000-000000000000
       placementRayOrigin: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
-      lineMaterial: !<reference.Material> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
@@ -56,4 +54,3 @@
     - // @input AssignableType_2 lidarPointCloud
     - // @input AssignableType_3 robotMarker
     - // @input SceneObject placementRayOrigin
-    - // @input Asset.Material lineMaterial

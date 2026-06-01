@@ -3439,7 +3439,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000011, y: 40.000000, z: 0.000000}
+    Position: {x: 0.000011, y: 50.000000, z: 0.000000}
     Rotation: {x: -0.000010, y: -0.000010, z: 0.000000}
     Scale: {x: 2.000000, y: 2.000000, z: 2.000000}
     HasSegmentScaleCompensation: false
@@ -4397,7 +4397,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Position: {x: 0.000000, y: 11.551888, z: -1.839851}
     Rotation: {x: 90.000000, y: -0.000012, z: 0.000000}
     Scale: {x: 0.020000, y: 0.020000, z: 0.008000}
     HasSegmentScaleCompensation: false
@@ -6371,7 +6371,6 @@
       lidarPointCloud: !<MappingBased.AssignableType_2> 03a2975f-a602-46fd-8680-df1a4bee1014
       robotMarker: !<MappingBased.AssignableType_3> b749cbc7-9706-4499-8d79-19f5a03dd792
       placementRayOrigin: !<reference.SceneObject> 00000000-0000-0065-0000-000000000064
-      lineMaterial: !<reference.Material> f1fce27e-8307-4e9a-8584-85a92c6b13be
   ScriptTypes:
     "":
       {}

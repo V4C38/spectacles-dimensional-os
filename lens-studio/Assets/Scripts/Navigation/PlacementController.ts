@@ -5,7 +5,9 @@ const INTERPOLATION_SPEED = 8;
 const GROUND_NORMAL_MIN_Y = 0.95;
 const SURFACE_RAY_START_Y_OFFSET_CM = 120;
 const SURFACE_RAY_END_Y_OFFSET_CM = 220;
-const GROUND_HEIGHT_SMOOTHING = 0.25;
+const DRAG_HIT_TEST_INTERVAL = 6;
+const Y_UPDATE_THRESHOLD_CM = 5;
+const GROUND_Y_OFFSET_CM = 5;
 
 type PlacementVisualState = "placing" | "executing";
 
@@ -27,7 +29,7 @@ export class PlacementController {
   private touchStartPosition = vec3.zero();
   private isDragging = false;
   private lastGroundHeight = 0;
-  private _smoothedGroundHeight = 0;
+  private _dragHitTestFrameCount = 0;
   private _processingButtonPress = false;
 
   constructor(
@@ -51,7 +53,7 @@ export class PlacementController {
     this.activeInteractor = null;
     this.isDragging = false;
     this.lastGroundHeight = position.y;
-    this._smoothedGroundHeight = position.y;
+    this._dragHitTestFrameCount = 0;
     this.desiredPosition = new vec3(position.x, position.y, position.z);
     this.desiredRotation = this._levelRotation(rotation);
     this.touchStartPosition = this.desiredPosition;
@@ -257,7 +259,17 @@ export class PlacementController {
       this.isDragging = true;
     }
     if (this.isDragging) {
-      this._snapPointToSurface(pointPosition);
+      this._dragHitTestFrameCount++;
+      if (this._dragHitTestFrameCount >= DRAG_HIT_TEST_INTERVAL) {
+        this._dragHitTestFrameCount = 0;
+        this._snapPointToSurface(pointPosition);
+      } else {
+        this.desiredPosition = new vec3(
+          pointPosition.x,
+          this.lastGroundHeight,
+          pointPosition.z,
+        );
+      }
     }
   }
 
@@ -273,13 +285,20 @@ export class PlacementController {
       );
       return;
     }
-    this._smoothedGroundHeight =
-      this._smoothedGroundHeight * (1 - GROUND_HEIGHT_SMOOTHING) +
-      foundPosition.y * GROUND_HEIGHT_SMOOTHING;
-    this.lastGroundHeight = this._smoothedGroundHeight;
+    const candidateY = foundPosition.y + GROUND_Y_OFFSET_CM;
+    const yDelta = Math.abs(candidateY - this.lastGroundHeight);
+    if (this.lastGroundHeight !== 0 && yDelta < Y_UPDATE_THRESHOLD_CM) {
+      this.desiredPosition = new vec3(
+        foundPosition.x,
+        this.lastGroundHeight,
+        foundPosition.z,
+      );
+      return;
+    }
+    this.lastGroundHeight = candidateY;
     this.desiredPosition = new vec3(
       foundPosition.x,
-      this._smoothedGroundHeight,
+      this.lastGroundHeight,
       foundPosition.z,
     );
   }

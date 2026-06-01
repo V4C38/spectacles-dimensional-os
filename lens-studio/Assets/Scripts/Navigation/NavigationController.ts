@@ -1,7 +1,6 @@
 import { BridgeClient } from "../Network/BridgeClient";
 import { NavigationMode } from "../AppState";
-import { NavStatusMessage, PathMessage, protocolMetersToLensCentimeters } from "../Network/Protocol";
-import { ObstacleHighlightRenderer } from "../Rendering/ObstacleHighlightRenderer";
+import { NavStatusMessage, PathMessage } from "../Network/Protocol";
 import { PathRenderer } from "../Rendering/PathRenderer";
 import { NavigationMarkerView } from "./NavigationMarkerView";
 import { PlacementController } from "./PlacementController";
@@ -10,7 +9,6 @@ export interface NavigationControllerOptions {
   bridgeClient: BridgeClient | null;
   goalRenderer: NavigationMarkerView | null;
   pathRenderer: PathRenderer | null;
-  obstacleRenderer: ObstacleHighlightRenderer | null;
   placementController: PlacementController | null;
   onNavigationModeChanged: (mode: NavigationMode) => void;
   isExecuteMovementEnabled: () => boolean;
@@ -52,7 +50,6 @@ export class NavigationController {
       print("NavigationController: placement enabled");
       this._placementEnabled = true;
       this._options.pathRenderer?.clear();
-      this._options.obstacleRenderer?.clear();
       this._options.placementController?.start(
         initialPose.position,
         initialPose.rotation,
@@ -67,7 +64,6 @@ export class NavigationController {
     print("NavigationController: placement disabled");
     this._options.placementController?.stop();
     this._options.pathRenderer?.clear();
-    this._options.obstacleRenderer?.clear();
     this._placementEnabled = false;
     this._options.onNavigationModeChanged("idle");
   }
@@ -80,7 +76,6 @@ export class NavigationController {
     this._placementEnabled = false;
     this._options.placementController?.stop();
     this._options.pathRenderer?.clear();
-    this._options.obstacleRenderer?.clear();
     this._options.onNavigationModeChanged("idle");
   }
 
@@ -106,15 +101,11 @@ export class NavigationController {
 
   public applyPath(msg: PathMessage): void {
     this._options.pathRenderer?.setProtocolPath(msg.waypoints);
-    this._options.obstacleRenderer?.setPath(
-      msg.waypoints.map((point) => protocolMetersToLensCentimeters(point)),
-    );
   }
 
   public applyNavStatus(msg: NavStatusMessage): string {
     if (msg.goal_reached) {
       this._options.pathRenderer?.clear();
-      this._options.obstacleRenderer?.clear();
       if (this._placementEnabled) {
         this._options.placementController?.showPlacing();
         this._options.onNavigationModeChanged("placingGoal");
@@ -144,7 +135,6 @@ export class NavigationController {
       `NavigationController: goal confirmed at (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`,
     );
     this._options.pathRenderer?.clear();
-    this._options.obstacleRenderer?.clear();
     this._options.placementController?.showExecuting();
     this._options.onNavigationModeChanged("executingGoal");
 

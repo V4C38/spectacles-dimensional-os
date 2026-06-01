@@ -55,9 +55,6 @@ export class DimosManager extends BaseScriptComponent {
   @input
   placementRayOrigin: SceneObject;
 
-  @input
-  lineMaterial: Material;
-
   public onBridgeReady: (() => void)[] = [];
   public onBridgeStatusChanged: ((msg: BridgeStatusMessage) => void)[] = [];
   public onBridgeConnectionChanged: ((connected: boolean) => void)[] = [];
@@ -118,7 +115,7 @@ export class DimosManager extends BaseScriptComponent {
     );
 
     this._goalRenderer = new NavigationMarkerView(navigationMarkerRoot);
-    this._pathRenderer = new PathRenderer(parent, this.lineMaterial ?? null);
+    this._pathRenderer = new PathRenderer(parent);
     this._obstacleRenderer = new ObstacleHighlightRenderer(parent, template);
     this._placementController = new PlacementController(
       this,
@@ -152,7 +149,6 @@ export class DimosManager extends BaseScriptComponent {
       bridgeClient: this.bridgeClient ?? null,
       goalRenderer: this._goalRenderer,
       pathRenderer: this._pathRenderer,
-      obstacleRenderer: this._obstacleRenderer,
       placementController: this._placementController,
       onNavigationModeChanged: (mode) => this._setNavigationMode(mode),
       isExecuteMovementEnabled: () => this.executeMovement,
@@ -204,9 +200,9 @@ export class DimosManager extends BaseScriptComponent {
     });
     this.bridgeClient.onPose.push((msg) => {
       this._lastPose = msg;
-      (this.lidarPointCloud as any)?.setRobotWorldPosition?.(
-        protocolMetersToLensCentimeters(msg.position),
-      );
+      const robotLensPos = protocolMetersToLensCentimeters(msg.position);
+      (this.lidarPointCloud as any)?.setRobotWorldPosition?.(robotLensPos);
+      this._obstacleRenderer?.setRobotPosition(robotLensPos);
       if (this._isActive && this.robotMarker) {
         const shouldApplyManualCorrection =
           this._manualAlignmentPose !== null && this._useManualPoseCorrection;
@@ -250,6 +246,7 @@ export class DimosManager extends BaseScriptComponent {
       this.lidarPointCloud.clear();
     }
     if (!active) {
+      this._obstacleRenderer?.clear();
       this._navigationController?.clearInactiveState();
       this._robotMenuController?.hide();
     }
