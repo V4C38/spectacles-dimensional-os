@@ -8,9 +8,8 @@ from dimos_ar.filters import LidarFilter, LidarFilterConfig, RateLimiter
 
 def test_empty_points() -> None:
     filt = LidarFilter()
-    pts, colors = filt.filter(np.zeros((0, 3), dtype=np.float32))
+    pts = filt.filter(np.zeros((0, 3), dtype=np.float32))
     assert len(pts) == 0
-    assert colors is None
 
 
 def test_range_and_height_filter() -> None:
@@ -19,7 +18,6 @@ def test_range_and_height_filter() -> None:
         min_height_m=0.1,
         max_height_m=1.0,
         target_points=100,
-        color_by_distance=False,
     )
     filt = LidarFilter(config)
     points = np.array(
@@ -31,10 +29,9 @@ def test_range_and_height_filter() -> None:
         ],
         dtype=np.float32,
     )
-    filtered, colors = filt.filter(points)
+    filtered = filt.filter(points)
     assert len(filtered) == 1
     assert np.allclose(filtered[0], [0.5, 0.0, 0.5])
-    assert colors is None
 
 
 def test_optional_filters_allow_full_pointcloud() -> None:
@@ -43,7 +40,6 @@ def test_optional_filters_allow_full_pointcloud() -> None:
         min_height_m=None,
         max_height_m=None,
         target_points=100,
-        color_by_distance=False,
     )
     filt = LidarFilter(config)
     points = np.array(
@@ -55,37 +51,8 @@ def test_optional_filters_allow_full_pointcloud() -> None:
         ],
         dtype=np.float32,
     )
-    filtered, colors = filt.filter(points)
+    filtered = filt.filter(points)
     assert len(filtered) == len(points)
-    assert colors is None
-
-
-def test_height_class_colors_mark_ground_and_obstacles() -> None:
-    config = LidarFilterConfig(
-        max_range_m=None,
-        min_height_m=None,
-        max_height_m=None,
-        target_points=100,
-        color_by_distance=False,
-        color_by_height_class=True,
-        obstacle_height_threshold_m=0.08,
-    )
-    filt = LidarFilter(config)
-    points = np.array(
-        [
-            [0.5, 0.0, -0.1],
-            [0.5, 0.0, 0.08],
-            [0.5, 0.0, 0.3],
-        ],
-        dtype=np.float32,
-    )
-
-    _, colors = filt.filter(points)
-
-    assert colors is not None
-    assert np.allclose(colors[0], [0.22, 0.78, 0.34])
-    assert np.allclose(colors[1], [0.22, 0.78, 0.34])
-    assert np.allclose(colors[2], [1.0, 0.45, 0.12])
 
 
 def test_subsample_stride_when_over_target(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -97,11 +64,10 @@ def test_subsample_stride_when_over_target(monkeypatch: pytest.MonkeyPatch) -> N
         min_height_m=-1.0,
         max_height_m=10.0,
         target_points=10,
-        color_by_distance=False,
     )
     filt = LidarFilter(config)
     points = np.array([[float(i), 0.0, 0.5] for i in range(100)], dtype=np.float32)
-    filtered, _ = filt.filter(points)
+    filtered = filt.filter(points)
     assert len(filtered) <= config.target_points
 
 

@@ -27,7 +27,6 @@
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
     alignmentController: false
-    defaultBridgeIp: false
     dimosManager: false
     uiManager: false
   ScriptTypesHidden:
@@ -39,15 +38,13 @@
   Attachments:
     []
   DefaultScriptInputs:
-    - defaultBridgeIp: 192.168.1.166
-      dimosManager: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
+    - dimosManager: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
       uiManager: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
       alignmentController: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
   InputLines:
-    - '// @input string defaultBridgeIp = "192.168.1.166"'
     - // @input AssignableType dimosManager
     - // @input AssignableType_1 uiManager
     - // @input AssignableType_2 alignmentController

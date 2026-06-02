@@ -47,6 +47,7 @@
   Children:
     - !<own> 21945cfc-a6d3-4e3f-9d36-11c5c4c4431c
     - !<own> a07b0650-623b-4366-9710-74af19bbbc57
+    - !<own> 60af3132-f77a-4195-bc86-3e8c8a50f759
   Components:
     []
 - !<ScriptComponent/1630c38e-8f32-42b5-a66d-a743724e5ef9>
@@ -89,7 +90,7 @@
   LocalTransform: !<TransformEntity>
     Position: {x: 0.000000, y: 0.000000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 0.350000, y: 0.350000, z: 0.350000}
+    Scale: {x: 0.240000, y: 0.240000, z: 0.240000}
     HasSegmentScaleCompensation: false
   Children:
     - !<own> b2412a3e-f973-4392-8d5a-2b48330312cd
@@ -117,7 +118,7 @@
   PrefabRemaps:
     []
   Name: SurfacePlacementMarker
-  Enabled: true
+  Enabled: false
   Layers: 1
   LocalTransform: !<TransformEntity>
     Position: {x: -24.316116, y: 0.000000, z: 0.000000}
@@ -150,7 +151,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.500000}
+    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -178,6 +179,21 @@
   BlendNormals: false
   BlendShapes:
     {}
+- !<SceneObject/60af3132-f77a-4195-bc86-3e8c8a50f759>
+  PrefabRemaps:
+    []
+  Name: ScreenTextParent
+  Enabled: true
+  Layers: 1
+  LocalTransform: !<TransformEntity>
+    Position: {x: 0.000000, y: 95.000000, z: 0.000000}
+    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Scale: {x: 2.000000, y: 2.000000, z: 2.000000}
+    HasSegmentScaleCompensation: false
+  Children:
+    []
+  Components:
+    []
 - !<SceneObject/67e78a49-8c4d-47e2-bbbd-122b0a7b2d79>
   PrefabRemaps:
     []
@@ -252,7 +268,7 @@
         []
       onFinishedCallbacks:
         []
-      _width: !<float> 6.000000
+      _width: !<float> 12.000000
   ScriptTypes:
     "":
       {}
@@ -278,9 +294,9 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000011, y: 40.000000, z: 0.000000}
+    Position: {x: 0.000023, y: 170.038513, z: -0.000096}
     Rotation: {x: -0.000010, y: -0.000010, z: 0.000000}
-    Scale: {x: 2.000000, y: 2.000000, z: 2.000000}
+    Scale: {x: 5.000000, y: 5.000000, z: 5.000000}
     HasSegmentScaleCompensation: false
   Children:
     - !<own> 3cc44acb-8ec1-4f39-b35b-63c69caa87be
@@ -367,7 +383,7 @@
     []
   Name: Text
   Enabled: true
-  RenderOrder: 0
+  RenderOrder: 150
   StretchMode: Stretch
   VerticalAlignment: Center
   HorizontalAlignment: Center
@@ -590,9 +606,9 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 5.000000, z: 0.500000}
+    Position: {x: 0.000000, y: -21.893215, z: 1.486229}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 12.000000, y: 12.000000, z: 12.000000}
+    Scale: {x: 5.000000, y: 5.000000, z: 5.000000}
     HasSegmentScaleCompensation: false
   Children:
     []
@@ -661,9 +677,9 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Position: {x: -0.000150, y: -24.043209, z: 1.486229}
     Rotation: {x: 90.000000, y: -0.000012, z: 0.000000}
-    Scale: {x: 0.020000, y: 0.020000, z: 0.008000}
+    Scale: {x: 0.010000, y: 0.010000, z: 0.010000}
     HasSegmentScaleCompensation: false
   Children:
     []

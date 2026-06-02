@@ -36,9 +36,6 @@ const NAV_DEBOUNCE_S = 0.35;
 @component
 export class SetupWizard extends BaseScriptComponent {
   @input
-  defaultBridgeIp: string = "192.168.1.166";
-
-  @input
   dimosManager: DimosManager;
 
   @input
@@ -238,7 +235,7 @@ export class SetupWizard extends BaseScriptComponent {
         this._view?.setInputEnabled(true);
         const saved = this.dimosManager ? this.dimosManager.loadIp() : null;
         const rawFallback =
-          this.defaultBridgeIp ||
+          (this.dimosManager ? this.dimosManager.getDefaultBridgeIp() : "") ||
           (this.dimosManager ? this.dimosManager.getBaseUrl() : "");
         const fallback = BridgeClient.normalizeIp(rawFallback);
         const ip = saved || fallback;

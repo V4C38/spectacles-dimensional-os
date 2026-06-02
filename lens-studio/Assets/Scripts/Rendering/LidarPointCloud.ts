@@ -8,7 +8,7 @@ const DISTANCE_COLOR_STEPS = 12;
 const DISTANCE_NEAR_COLOR: [number, number, number] = [1.0, 0.0, 0.0];
 const DISTANCE_FAR_COLOR: [number, number, number] = [1.0, 1.0, 1.0];
 const DEFAULT_LIDAR_MATERIAL = requireAsset(
-  "../../Materials/LidarVoxel.mat",
+  "../../Materials/LidarUnlit.mat",
 ) as Material | null;
 
 const DISTANCE_PALETTE: [number, number, number][] = createDistancePalette();
@@ -144,9 +144,7 @@ export class LidarPointCloud extends DirtyComponent {
   }
 
   private _setMaterialColor(material: Material, color: [number, number, number]): void {
-    const pass = material.mainPass as any;
-    pass.baseColor = new vec4(color[0], color[1], color[2], 1.0);
-    pass.Port_Emissive_N006 = new vec3(color[0], color[1], color[2]);
+    material.mainPass.baseColor = new vec4(color[0], color[1], color[2], 1.0);
   }
 
   private _applyPointColor(

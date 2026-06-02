@@ -23,8 +23,6 @@ class LidarFilterConfig:
     max_height_m: float | None = 1.5
     target_points: int = 2500
     max_hz: float = 10.0
-    color_by_distance: bool = True
-    color_by_height_class: bool = False
     obstacle_height_threshold_m: float = 0.08
 
 
@@ -50,12 +48,10 @@ class LidarFilter:
         self.config = config or LidarFilterConfig()
         self.rate_limiter = RateLimiter(self.config.max_hz)
 
-    def filter(
-        self, points: NDArray[np.floating]
-    ) -> tuple[NDArray[np.float32], NDArray[np.float32] | None]:
-        """Filter and subsample points. Returns (points, optional colors)."""
+    def filter(self, points: NDArray[np.floating]) -> NDArray[np.float32]:
+        """Filter and subsample points."""
         if points.size == 0:
-            return np.zeros((0, 3), dtype=np.float32), None
+            return np.zeros((0, 3), dtype=np.float32)
 
         pts = np.asarray(points, dtype=np.float32)
         if pts.ndim != 2 or pts.shape[1] != 3:
@@ -71,15 +67,9 @@ class LidarFilter:
             mask &= pts[:, 2] <= self.config.max_height_m
         pts = pts[mask]
         if len(pts) == 0:
-            return np.zeros((0, 3), dtype=np.float32), None
+            return np.zeros((0, 3), dtype=np.float32)
 
-        pts = self._subsample(pts)
-        colors = None
-        if self.config.color_by_height_class:
-            colors = self._obstacle_ground_colors(pts)
-        elif self.config.color_by_distance:
-            colors = self._distance_colors(pts)
-        return pts, colors
+        return self._subsample(pts)
 
     def _subsample(self, pts: NDArray[np.float32]) -> NDArray[np.float32]:
         target = self.config.target_points
@@ -100,22 +90,39 @@ class LidarFilter:
         stride = max(1, len(pts) // target)
         return pts[::stride]
 
-    def _distance_colors(self, pts: NDArray[np.float32]) -> NDArray[np.float32]:
-        dist = np.linalg.norm(pts[:, :2], axis=1)
-        max_range = (
-            self.config.max_range_m if self.config.max_range_m is not None else float(np.max(dist))
-        )
-        max_d = max(max_range, 1e-6)
-        t = np.clip(dist / max_d, 0.0, 1.0)
-        # near = cyan, far = blue
-        r = t * 0.2
-        g = 1.0 - 0.5 * t
-        b = np.ones_like(t)
-        return np.stack([r, g, b], axis=1).astype(np.float32)
 
-    def _obstacle_ground_colors(self, pts: NDArray[np.float32]) -> NDArray[np.float32]:
-        colors = np.zeros((len(pts), 3), dtype=np.float32)
-        ground_mask = pts[:, 2] <= self.config.obstacle_height_threshold_m
-        colors[ground_mask] = np.array([0.22, 0.78, 0.34], dtype=np.float32)
-        colors[~ground_mask] = np.array([1.0, 0.45, 0.12], dtype=np.float32)
-        return colors
+def filter_runtime_obstacles_world(
+    points_world: NDArray[np.floating],
+    robot_world_position: tuple[float, float, float] | None,
+    *,
+    min_height_m: float = 0.10,
+    min_distance_m: float = 0.20,
+    max_distance_m: float = 1.50,
+    max_points: int = 200,
+) -> NDArray[np.float32]:
+    """Filter world-space LiDAR points down to nearby obstacle highlights."""
+    if points_world.size == 0 or robot_world_position is None:
+        return np.zeros((0, 3), dtype=np.float32)
+
+    pts = np.asarray(points_world, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise ValueError(f"Expected Nx3 points, got shape {pts.shape}")
+
+    robot = np.asarray(robot_world_position, dtype=np.float32)
+    dx = pts[:, 0] - robot[0]
+    dz = pts[:, 2] - robot[2]
+    horiz_dist = np.sqrt(dx * dx + dz * dz)
+
+    mask = pts[:, 1] >= min_height_m
+    mask &= horiz_dist >= min_distance_m
+    mask &= horiz_dist <= max_distance_m
+    filtered = pts[mask]
+    if len(filtered) == 0:
+        return np.zeros((0, 3), dtype=np.float32)
+
+    if len(filtered) <= max_points:
+        return filtered
+
+    stride = max(1, len(filtered) // max_points)
+    return filtered[::stride][:max_points]
+

@@ -16,7 +16,17 @@ PROTOCOL_VERSION = 1
 ROBOT_ID = "go2"
 FRAME_WORLD = "world"
 
-DEFAULT_CAPABILITIES = ["lidar", "odom", "align", "align_manual", "nav", "path", "emergency_stop"]
+DEFAULT_CAPABILITIES = [
+    "lidar",
+    "obstacles",
+    "odom",
+    "align",
+    "align_manual",
+    "nav",
+    "path",
+    "emergency_stop",
+    "stream_preferences",
+]
 
 
 def _dumps(payload: dict[str, Any]) -> str:
@@ -92,6 +102,13 @@ class GetStatusMessage:
     robot_id: str
 
 
+@dataclass(frozen=True)
+class SetStreamPreferencesMessage:
+    ts: float
+    robot_id: str
+    debug_lidar: bool
+
+
 InboundMessage = (
     RegisterMessage
     | NavGoalMessage
@@ -103,6 +120,7 @@ InboundMessage = (
     | AlignMarkerMessage
     | AlignManualPoseMessage
     | GetStatusMessage
+    | SetStreamPreferencesMessage
 )
 
 
@@ -203,6 +221,12 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         )
     if msg_type == "get_status":
         return GetStatusMessage(ts=ts, robot_id=robot_id)
+    if msg_type == "set_stream_preferences":
+        return SetStreamPreferencesMessage(
+            ts=ts,
+            robot_id=robot_id,
+            debug_lidar=bool(_require_type(data, "debug_lidar", bool)),
+        )
     raise ValueError(f"Unknown inbound message type: {msg_type!r}")
 
 
@@ -273,7 +297,6 @@ def encode_lidar(
     *,
     ts: float,
     points: NDArray[np.floating],
-    colors: NDArray[np.floating] | None = None,
     robot_id: str = ROBOT_ID,
 ) -> str:
     payload: dict[str, Any] = {
@@ -283,8 +306,22 @@ def encode_lidar(
         "frame": FRAME_WORLD,
         "points_flat": _round_flat(points),
     }
-    if colors is not None and len(colors) > 0:
-        payload["colors_flat"] = _round_flat(colors)
+    return _dumps(payload)
+
+
+def encode_obstacles(
+    *,
+    ts: float,
+    points: NDArray[np.floating],
+    robot_id: str = ROBOT_ID,
+) -> str:
+    payload: dict[str, Any] = {
+        "type": "obstacles",
+        "ts": round(ts, 3),
+        "robot_id": robot_id,
+        "frame": FRAME_WORLD,
+        "points_flat": _round_flat(points),
+    }
     return _dumps(payload)
 
 
@@ -362,14 +399,16 @@ def encode_nav_status(
     ts: float | None = None,
     state: str,
     goal_reached: bool,
+    goal_failed: bool = False,
     robot_id: str = ROBOT_ID,
 ) -> str:
-    return _dumps(
-        {
-            "type": "nav_status",
-            "ts": ts if ts is not None else time.time(),
-            "robot_id": robot_id,
-            "state": state,
-            "goal_reached": goal_reached,
-        }
-    )
+    payload: dict[str, Any] = {
+        "type": "nav_status",
+        "ts": ts if ts is not None else time.time(),
+        "robot_id": robot_id,
+        "state": state,
+        "goal_reached": goal_reached,
+    }
+    if goal_failed:
+        payload["goal_failed"] = True
+    return _dumps(payload)

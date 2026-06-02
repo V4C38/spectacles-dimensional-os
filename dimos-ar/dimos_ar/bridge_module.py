@@ -32,7 +32,12 @@ from dimos_ar.alignment import (
     DEFAULT_TIMESTAMP_TOLERANCE_S,
 )
 from dimos_ar.bridge_status import get_bridge_status_tracker, sync_tracker_robot_model
-from dimos_ar.filters import LidarFilter, LidarFilterConfig, RateLimiter
+from dimos_ar.filters import (
+    LidarFilter,
+    LidarFilterConfig,
+    RateLimiter,
+    filter_runtime_obstacles_world,
+)
 from dimos_ar.protocol import (
     DEFAULT_CAPABILITIES,
     AlignCommitMessage,
@@ -45,10 +50,12 @@ from dimos_ar.protocol import (
     GetStatusMessage,
     NavGoalMessage,
     RegisterMessage,
+    SetStreamPreferencesMessage,
     encode_align_status,
     encode_bridge_status,
     encode_lidar,
     encode_nav_status,
+    encode_obstacles,
     encode_path,
     encode_pose,
     encode_registered,
@@ -69,6 +76,10 @@ ALIGNMENT_CLUSTER_MIN_SAMPLES = 6
 ALIGNMENT_CLUSTER_TARGET_SAMPLES = 8
 ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M = 0.08
 ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD = math.radians(8.0)
+RUNTIME_OBSTACLE_MIN_HEIGHT_M = 0.10
+RUNTIME_OBSTACLE_MIN_DISTANCE_M = 0.20
+RUNTIME_OBSTACLE_MAX_DISTANCE_M = 1.50
+RUNTIME_OBSTACLE_MAX_POINTS = 200
 
 
 def _wrap_angle_rad(angle: float) -> float:
@@ -191,8 +202,6 @@ class ARBridge(Module):
             obstacle_height_threshold_m=self.config.obstacle_height_threshold_m,
             target_points=self.config.target_points,
             max_hz=self.config.lidar_max_hz,
-            color_by_distance=False,
-            color_by_height_class=True,
         )
         self._lidar_filter = LidarFilter(filter_config)
         self._pose_limiter = RateLimiter(self.config.pose_max_hz)
@@ -222,8 +231,11 @@ class ARBridge(Module):
         self._last_odom_mono: float | None = None
         self._nav_state = "idle"
         self._goal_reached = False
+        self._goal_failed = False
+        self._nav_goal_pending = False
         self._stream_status_stop = threading.Event()
         self._stream_status_thread: threading.Thread | None = None
+        self._debug_lidar_clients: set[ServerConnection] = set()
         tracker = get_bridge_status_tracker()
         sync_tracker_robot_model(tracker)
         if tracker is not None:
@@ -246,6 +258,7 @@ class ARBridge(Module):
             on_cancel_goal=self._on_cancel_goal,
             on_emergency_stop=self._on_emergency_stop,
             on_get_status=self._on_get_status,
+            on_set_stream_preferences=self._on_set_stream_preferences,
             on_status_connect=self._send_status_to,
             on_disconnect=self._on_client_disconnect,
         )
@@ -300,6 +313,16 @@ class ARBridge(Module):
         payload = self._status_payload()
         if payload is not None:
             self._ws_server.schedule_send_to(websocket, payload)
+
+    def _latest_robot_world_position(self) -> tuple[float, float, float] | None:
+        odom = self._get_latest_odom()
+        if odom is None:
+            return None
+        position, _orientation = self._calibration.transform_pose(
+            odom.position,
+            odom.orientation,
+        )
+        return position
 
     def _broadcast_status(self) -> None:
         payload = self._status_payload()
@@ -428,6 +451,7 @@ class ARBridge(Module):
         self._recent_marker_candidates = []
 
     def _on_client_disconnect(self, _websocket: ServerConnection) -> None:
+        self._debug_lidar_clients.discard(_websocket)
         if (
             not self._aligner.active
             and self._last_align_marker is None
@@ -439,6 +463,16 @@ class ARBridge(Module):
         self._stop_align_status_broadcast()
         self._clear_align_session()
         logger.info("Alignment session cleared on AR client disconnect")
+
+    def _on_set_stream_preferences(
+        self,
+        msg: SetStreamPreferencesMessage,
+        websocket: ServerConnection,
+    ) -> None:
+        if msg.debug_lidar:
+            self._debug_lidar_clients.add(websocket)
+        else:
+            self._debug_lidar_clients.discard(websocket)
 
     def _score_alignment_candidate(
         self, candidate: AlignmentCandidate
@@ -792,6 +826,7 @@ class ARBridge(Module):
             ts=ts,
             state=self._nav_state,
             goal_reached=self._goal_reached,
+            goal_failed=self._goal_failed,
             robot_id=self.config.robot_id,
         )
         self._ws_server.schedule_send(payload)
@@ -809,43 +844,54 @@ class ARBridge(Module):
             logger.warning("nav_goal ignored before calibration")
             return
 
-        if msg.orientation is not None:
-            odom_position, odom_orientation = self._calibration.inverse_transform_pose(
-                msg.position,
-                msg.orientation,
-            )
-            self.goal_request.publish(
-                PoseStamped(
-                    position=list(odom_position),
-                    orientation=list(odom_orientation),
-                    ts=msg.ts,
-                    frame_id="odom",
-                )
-            )
-            logger.info(
-                "Navigation pose goal published",
-                world_goal=[round(v, 3) for v in msg.position],
-                world_orientation=[round(v, 4) for v in msg.orientation],
-                odom_goal=[round(v, 3) for v in odom_position],
-                odom_orientation=[round(v, 4) for v in odom_orientation],
-            )
-        else:
-            goal = self._calibration.inverse_transform_point(msg.position)
-            self.clicked_point.publish(
-                PointStamped(
-                    x=goal[0],
-                    y=goal[1],
-                    z=goal[2],
-                    ts=msg.ts,
-                    frame_id="odom",
-                )
-            )
-            logger.info(
-                "Navigation point goal published",
-                world_goal=[round(v, 3) for v in msg.position],
-                odom_goal=[round(v, 3) for v in goal],
-            )
         self._goal_reached = False
+        self._goal_failed = False
+        self._nav_goal_pending = True
+
+        try:
+            if msg.orientation is not None:
+                odom_position, odom_orientation = self._calibration.inverse_transform_pose(
+                    msg.position,
+                    msg.orientation,
+                )
+                self.goal_request.publish(
+                    PoseStamped(
+                        position=list(odom_position),
+                        orientation=list(odom_orientation),
+                        ts=msg.ts,
+                        frame_id="odom",
+                    )
+                )
+                logger.info(
+                    "Navigation pose goal published",
+                    world_goal=[round(v, 3) for v in msg.position],
+                    world_orientation=[round(v, 4) for v in msg.orientation],
+                    odom_goal=[round(v, 3) for v in odom_position],
+                    odom_orientation=[round(v, 4) for v in odom_orientation],
+                )
+            else:
+                goal = self._calibration.inverse_transform_point(msg.position)
+                self.clicked_point.publish(
+                    PointStamped(
+                        x=goal[0],
+                        y=goal[1],
+                        z=goal[2],
+                        ts=msg.ts,
+                        frame_id="odom",
+                    )
+                )
+                logger.info(
+                    "Navigation point goal published",
+                    world_goal=[round(v, 3) for v in msg.position],
+                    odom_goal=[round(v, 3) for v in goal],
+                )
+        except Exception as exc:
+            self._goal_failed = True
+            self._nav_goal_pending = False
+            self._nav_state = "idle"
+            logger.error("Navigation goal publish failed", error=str(exc))
+            self._broadcast_empty_path(ts=msg.ts)
+            self._broadcast_nav_status(ts=msg.ts)
 
     def _emergency_stop_robot(self, source: str) -> None:
         """Emergency stop: send StopMove immediately, then cancel the planner goal.
@@ -883,9 +929,14 @@ class ARBridge(Module):
             logger.error("cancel_goal RPC failed", source=source, error=str(e))
 
     def _on_cancel_goal(self, msg: CancelGoalMessage) -> None:
-        self.stop_movement.publish(Bool(data=True))
         self._goal_reached = False
+        self._goal_failed = False
+        self._nav_goal_pending = False
         self._nav_state = "idle"
+        try:
+            self.stop_movement.publish(Bool(data=True))
+        except Exception as exc:
+            logger.error("stop_movement publish failed", source="cancel_goal", error=str(exc))
         logger.info(
             "Navigation cancel requested",
             stop_topic_connected=self.stop_movement.transport is not None,
@@ -901,9 +952,18 @@ class ARBridge(Module):
         ).start()
 
     def _on_emergency_stop(self, msg: EmergencyStopMessage) -> None:
-        self.stop_movement.publish(Bool(data=True))
         self._goal_reached = False
+        self._goal_failed = False
+        self._nav_goal_pending = False
         self._nav_state = "idle"
+        try:
+            self.stop_movement.publish(Bool(data=True))
+        except Exception as exc:
+            logger.error(
+                "stop_movement publish failed",
+                source="emergency_stop",
+                error=str(exc),
+            )
         logger.warning(
             "Emergency stop requested from AR client",
             stop_topic_connected=self.stop_movement.transport is not None,
@@ -935,20 +995,37 @@ class ARBridge(Module):
         if not self._lidar_filter.rate_limiter.allow():
             return
         points = msg.points_f32()
-        if points.size == 0:
-            return
-        filtered, colors = self._lidar_filter.filter(points)
-        if len(filtered) == 0:
-            return
-        world_pts = self._calibration.transform_points(filtered)
-        payload = encode_lidar(
-            ts=msg.ts,
-            points=world_pts,
-            colors=colors,
-            robot_id=self.config.robot_id,
+        world_pts = np.zeros((0, 3), dtype=np.float32)
+        if points.size != 0:
+            filtered = self._lidar_filter.filter(points)
+            if len(filtered) != 0:
+                world_pts = self._calibration.transform_points(filtered)
+
+        obstacle_pts = filter_runtime_obstacles_world(
+            world_pts,
+            self._latest_robot_world_position(),
+            min_height_m=RUNTIME_OBSTACLE_MIN_HEIGHT_M,
+            min_distance_m=RUNTIME_OBSTACLE_MIN_DISTANCE_M,
+            max_distance_m=RUNTIME_OBSTACLE_MAX_DISTANCE_M,
+            max_points=RUNTIME_OBSTACLE_MAX_POINTS,
         )
-        self._maybe_log_lidar_payload(len(filtered), len(payload))
-        self._ws_server.schedule_send(payload)
+        self._ws_server.schedule_send(
+            encode_obstacles(
+                ts=msg.ts,
+                points=obstacle_pts,
+                robot_id=self.config.robot_id,
+            )
+        )
+
+        if self._debug_lidar_clients:
+            payload = encode_lidar(
+                ts=msg.ts,
+                points=world_pts,
+                robot_id=self.config.robot_id,
+            )
+            self._maybe_log_lidar_payload(len(world_pts), len(payload))
+            for websocket in list(self._debug_lidar_clients):
+                self._ws_server.schedule_send_to(websocket, payload)
 
     def _maybe_log_lidar_payload(self, point_count: int, payload_bytes: int) -> None:
         now = time.monotonic()
@@ -1001,8 +1078,10 @@ class ARBridge(Module):
 
         if waypoints:
             self._goal_reached = False
+            self._goal_failed = False
+            self._nav_goal_pending = True
             self._nav_state = "following_path"
-        elif not self._goal_reached:
+        elif self._goal_failed or not self._nav_goal_pending:
             self._nav_state = "idle"
 
         self._ws_server.schedule_send(
@@ -1012,7 +1091,9 @@ class ARBridge(Module):
 
     async def handle_goal_reached(self, msg: Bool) -> None:
         self._goal_reached = bool(msg.data)
-        if self._goal_reached:
+        self._goal_failed = self._nav_goal_pending and not self._goal_reached
+        self._nav_goal_pending = False
+        if self._goal_reached or self._goal_failed:
             self._nav_state = "idle"
             self._broadcast_empty_path()
         self._broadcast_nav_status()
@@ -1021,4 +1102,6 @@ class ARBridge(Module):
         self._nav_state = self._normalize_nav_state(msg.data)
         if self._nav_state == "following_path":
             self._goal_reached = False
+            self._goal_failed = False
+            self._nav_goal_pending = True
         self._broadcast_nav_status()

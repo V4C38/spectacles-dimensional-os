@@ -25,6 +25,8 @@ export class NavigationMarkerView {
   private readonly confirmLabel: Text;
   private readonly placeText: Text;
   private readonly arrow: SceneObject | null;
+  private readonly moveDirectionArrow: SceneObject | null;
+  private readonly moveDirectionArrowBaseRotation: quat;
   private readonly portalBaseScale: vec3;
   private readonly rootBaseScale: vec3;
   private readonly calibrationLookAt: Component | null;
@@ -32,6 +34,8 @@ export class NavigationMarkerView {
 
   private _state: NavigationMarkerVisualState = "disabled";
   private _confirmEnabled = false;
+  private _placementAnchor: SceneObject | null = null;
+  private _preAnchorParent: SceneObject | null = null;
 
   constructor(root: SceneObject) {
     this.root = root;
@@ -51,6 +55,10 @@ export class NavigationMarkerView {
     this.confirmLabel = this._requireFirstText(this.confirmButtonObject);
     this.placeText = this._requireText(this.root, "PlaceText");
     this.arrow = this._findChild(this.root, "Arrow");
+    this.moveDirectionArrow = this._findChild(this.portalCircle, "MoveDirectionArrow");
+    this.moveDirectionArrowBaseRotation = this.moveDirectionArrow
+      ? this.moveDirectionArrow.getTransform().getLocalRotation()
+      : quat.quatIdentity();
     this.portalBaseScale = this.portalCircle.getTransform().getLocalScale();
     this.rootBaseScale = this.root.getTransform().getLocalScale();
     this.calibrationLookAt = this.calibrationSceneVisual.getComponent(
@@ -98,12 +106,101 @@ export class NavigationMarkerView {
     return this.root.getTransform().getWorldPosition();
   }
 
+  public get localPosition(): vec3 {
+    return this.root.getTransform().getLocalPosition();
+  }
+
   public get worldRotation(): quat {
     return this.root.getTransform().getWorldRotation();
   }
 
+  public setMoveDirectionFromRotation(rotation: quat): void {
+    const forward = rotation.multiplyVec3(vec3.right().uniformScale(-1));
+    const distance = Math.sqrt(forward.x * forward.x + forward.z * forward.z);
+    if (distance < 0.001) {
+      if (this.moveDirectionArrow) {
+        this.moveDirectionArrow.enabled = false;
+      }
+      return;
+    }
+    const fx = forward.x / distance;
+    const fz = forward.z / distance;
+    // The authored arrow faces -Z when yaw=0, so convert the robot forward
+    // direction into a yaw whose zero heading points along -Z.
+    this.setMoveDirectionYaw(Math.atan2(-fx, -fz));
+  }
+
+  public setMoveDirectionYaw(yawRadians: number): void {
+    if (!this.moveDirectionArrow) {
+      return;
+    }
+    // Compose q_yaw (Y-axis, world space) with the scene base rotation so the
+    // arrow stays flat on the ground while rotating to point in the drag direction.
+    // Lens Studio quat constructor is (w, x, y, z).
+    // q_yaw = (cos(h), 0, sin(h), 0) for a Y-axis rotation by yawRadians.
+    // q_result = q_yaw * q_base  (apply base tilt first, then yaw in world space)
+    // The authored flat plane turns with the opposite yaw sign from the
+    // drag-space heading we compute, so invert the final applied yaw here.
+    const h = -yawRadians * 0.5;
+    const cw = Math.cos(h);
+    const sy = Math.sin(h);
+    const b = this.moveDirectionArrowBaseRotation;
+    this.moveDirectionArrow.getTransform().setLocalRotation(
+      new quat(
+        cw * b.w - sy * b.y,
+        cw * b.x + sy * b.z,
+        cw * b.y + sy * b.w,
+        cw * b.z - sy * b.x,
+      ),
+    );
+    this.moveDirectionArrow.enabled = true;
+  }
+
+  public bindPlacementAnchor(
+    anchor: SceneObject,
+    initialWorldPosition: vec3,
+  ): void {
+    if (this._placementAnchor !== anchor) {
+      this._preAnchorParent = this.root.getParent();
+      this.root.setParent(anchor);
+      this._placementAnchor = anchor;
+    }
+    anchor.getTransform().setWorldPosition(initialWorldPosition);
+    anchor.getTransform().setWorldRotation(quat.quatIdentity());
+    this.root.getTransform().setLocalPosition(vec3.zero());
+  }
+
+  public releasePlacementAnchor(): void {
+    if (!this._placementAnchor) {
+      return;
+    }
+    const worldPosition = this.root.getTransform().getWorldPosition();
+    const worldRotation = this.root.getTransform().getWorldRotation();
+    const parent = this._preAnchorParent ?? this._placementAnchor.getParent();
+    if (parent) {
+      this.root.setParent(parent);
+    }
+    this.root.getTransform().setWorldPosition(worldPosition);
+    this.root.getTransform().setWorldRotation(worldRotation);
+    this._placementAnchor = null;
+    this._preAnchorParent = null;
+  }
+
+  public rebasePlacementAnchor(): void {
+    if (!this._placementAnchor) {
+      return;
+    }
+    const worldPosition = this.root.getTransform().getWorldPosition();
+    this._placementAnchor.getTransform().setWorldPosition(worldPosition);
+    this.root.getTransform().setLocalPosition(vec3.zero());
+  }
+
   public setPose(position: vec3, rotation: quat): void {
     const transform = this.root.getTransform();
+    if (this._placementAnchor) {
+      transform.setLocalPosition(this._worldToAnchorLocal(position));
+      return;
+    }
     transform.setWorldPosition(position);
   }
 
@@ -113,12 +210,16 @@ export class NavigationMarkerView {
     lerpSpeed: number,
   ): void {
     const transform = this.root.getTransform();
+    const alpha = getDeltaTime() * lerpSpeed;
+    if (this._placementAnchor) {
+      const desiredLocal = this._worldToAnchorLocal(desiredPosition);
+      transform.setLocalPosition(
+        vec3.lerp(transform.getLocalPosition(), desiredLocal, alpha),
+      );
+      return;
+    }
     transform.setWorldPosition(
-      vec3.lerp(
-        transform.getWorldPosition(),
-        desiredPosition,
-        getDeltaTime() * lerpSpeed,
-      ),
+      vec3.lerp(transform.getWorldPosition(), desiredPosition, alpha),
     );
   }
 
@@ -193,6 +294,9 @@ export class NavigationMarkerView {
     if (this.arrow) {
       this.arrow.enabled = true;
     }
+    if (this.moveDirectionArrow) {
+      this.moveDirectionArrow.enabled = false;
+    }
     this._setPortalSaturation(1);  // Full saturation during execution
     this._animateVisibility(true);
     this._animateCircleScale(false);
@@ -206,6 +310,9 @@ export class NavigationMarkerView {
     if (this.arrow) {
       this.arrow.enabled = false;
     }
+    if (this.moveDirectionArrow) {
+      this.moveDirectionArrow.enabled = false;
+    }
     // Cancel any in-progress circle animation and restore the circle to full
     // scale so it is ready for the next showPlacing(). The root is about to
     // scale to zero so this is invisible.
@@ -213,6 +320,62 @@ export class NavigationMarkerView {
     this.portalCircle.enabled = true;
     this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
     this._animateVisibility(false);
+  }
+
+  public hideAndThen(callback: () => void): void {
+    this._state = "disabled";
+    this.placeText.getSceneObject().enabled = false;
+    this.setScanAnimationEnabled(false);
+    this._setConfirmVfxState(true, true);
+    if (this.arrow) {
+      this.arrow.enabled = false;
+    }
+    if (this.moveDirectionArrow) {
+      this.moveDirectionArrow.enabled = false;
+    }
+    this._nextCircleAnimationVersion();
+    this.portalCircle.enabled = true;
+    this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
+    const transform = this.root.getTransform();
+    const start = transform.getLocalScale();
+    const target = vec3.zero();
+    const version = this._nextVisibilityAnimationVersion();
+    animate({
+      duration: MARKER_VISIBILITY_DURATION_SECONDS,
+      easing: "ease-in-out-quad",
+      update: (t: number) => {
+        if (!this._isLatestVisibilityAnimationVersion(version)) {
+          return;
+        }
+        transform.setLocalScale(
+          new vec3(
+            start.x + (target.x - start.x) * t,
+            start.y + (target.y - start.y) * t,
+            start.z + (target.z - start.z) * t,
+          ),
+        );
+      },
+      ended: () => {
+        if (!this._isLatestVisibilityAnimationVersion(version)) {
+          return;
+        }
+        transform.setLocalScale(target);
+        this.root.enabled = false;
+        callback();
+      },
+    });
+  }
+
+  private _worldToAnchorLocal(worldPosition: vec3): vec3 {
+    if (!this._placementAnchor) {
+      return worldPosition;
+    }
+    const anchorPosition = this._placementAnchor.getTransform().getWorldPosition();
+    return new vec3(
+      worldPosition.x - anchorPosition.x,
+      worldPosition.y - anchorPosition.y,
+      worldPosition.z - anchorPosition.z,
+    );
   }
 
   private _requireChild(root: SceneObject, name: string): SceneObject {
@@ -320,6 +483,9 @@ export class NavigationMarkerView {
     this._confirmEnabled = false;
     if (this.arrow) {
       this.arrow.enabled = false;
+    }
+    if (this.moveDirectionArrow) {
+      this.moveDirectionArrow.enabled = false;
     }
   }
 

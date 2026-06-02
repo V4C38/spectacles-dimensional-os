@@ -8,8 +8,18 @@ const SURFACE_RAY_END_Y_OFFSET_CM = 220;
 const DRAG_HIT_TEST_INTERVAL = 6;
 const Y_UPDATE_THRESHOLD_CM = 5;
 const GROUND_Y_OFFSET_CM = 5;
+const DIRECTION_SMOOTHING_RATE = 4.0;
+const MIN_DRAG_DELTA_CM = 0.5;
+const MAX_ROTATION_SPEED_RAD_PER_SEC = 15.0;
+const PLACEMENT_ANCHOR_REBASE_DISTANCE_CM = 300;
+const ROBOT_GROUND_DEADZONE_RADIUS_CM = 75;
 
 type PlacementVisualState = "placing" | "executing";
+
+export type RobotGroundDeadzone = {
+  radiusCm: number;
+  getRobotWorldPosition: () => vec3 | null;
+};
 
 export class PlacementController {
   public onConfirmed: ((position: vec3, rotation: quat) => void) | null = null;
@@ -31,6 +41,10 @@ export class PlacementController {
   private lastGroundHeight = 0;
   private _dragHitTestFrameCount = 0;
   private _processingButtonPress = false;
+  private _previousDragPosition: vec3 | null = null;
+  private _smoothedDragDirection = vec3.zero();
+  private _placementAnchor: SceneObject | null = null;
+  private _robotGroundDeadzone: RobotGroundDeadzone | null = null;
 
   constructor(
     owner: BaseScriptComponent,
@@ -54,11 +68,15 @@ export class PlacementController {
     this.isDragging = false;
     this.lastGroundHeight = position.y;
     this._dragHitTestFrameCount = 0;
+    this._previousDragPosition = null;
+    this._smoothedDragDirection = vec3.zero();
     this.desiredPosition = new vec3(position.x, position.y, position.z);
     this.desiredRotation = this._levelRotation(rotation);
     this.touchStartPosition = this.desiredPosition;
+    this._bindPlacementAnchor(position);
     this.renderer.setPose(this.desiredPosition, this.desiredRotation);
     this.renderer.showPlacing();
+    this._syncMoveDirectionPreview();
     this._setDragEnabled(true);
     this._ensureHitTestSession();
     this._ensureUpdateLoop();
@@ -79,6 +97,8 @@ export class PlacementController {
       this.hitTestSession.stop();
     }
     this.hitTestSession = null;
+    this.renderer.releasePlacementAnchor();
+    this._placementAnchor = null;
   }
 
   public isActive(): boolean {
@@ -113,7 +133,49 @@ export class PlacementController {
     this.visualState = "placing";
     this._syncDesiredPoseToRenderedPose();
     this.renderer.showPlacing();
+    this._syncMoveDirectionPreview();
     this._setDragEnabled(true);
+  }
+
+  public showPlacingAtNewPose(position: vec3, rotation: quat): void {
+    if (!this.active) {
+      return;
+    }
+    this.visualState = "placing";
+    this._setDragEnabled(false);
+    this.isDragging = false;
+    this.activeInteractor = null;
+    this.renderer.hideAndThen(() => {
+      if (!this.active) {
+        return;
+      }
+      this.desiredPosition = new vec3(position.x, position.y, position.z);
+      this.desiredRotation = this._levelRotation(rotation);
+      this.lastGroundHeight = position.y;
+      this.touchStartPosition = this.desiredPosition;
+      this._previousDragPosition = null;
+      this._smoothedDragDirection = vec3.zero();
+      this._bindPlacementAnchor(position);
+      this.renderer.setPose(this.desiredPosition, this.desiredRotation);
+      this.renderer.showPlacing();
+      this._syncMoveDirectionPreview();
+      this._setDragEnabled(true);
+    });
+  }
+
+  public setRobotGroundDeadzone(
+    deadzone: RobotGroundDeadzone | null,
+  ): void {
+    if (!deadzone) {
+      this._robotGroundDeadzone = null;
+      return;
+    }
+    this._robotGroundDeadzone = {
+      radiusCm: deadzone.radiusCm > 0
+        ? deadzone.radiusCm
+        : ROBOT_GROUND_DEADZONE_RADIUS_CM,
+      getRobotWorldPosition: deadzone.getRobotWorldPosition,
+    };
   }
 
   private _bindMarkerInteractions(): void {
@@ -126,17 +188,21 @@ export class PlacementController {
         this.activeInteractor = args?.interactor ?? null;
         this.touchStartPosition = this.desiredPosition;
         this.isDragging = false;
+        this._previousDragPosition = null;
+        this._smoothedDragDirection = vec3.zero();
       });
     }
     if (dragInteractable?.onTriggerEnd?.add) {
       dragInteractable.onTriggerEnd.add(() => {
         this.activeInteractor = null;
+        this._previousDragPosition = null;
       });
     }
     if (dragInteractable?.onTriggerCanceled?.add) {
       dragInteractable.onTriggerCanceled.add((args: any) => {
         args?.interactor?.clearCurrentInteractable?.();
         this.activeInteractor = null;
+        this._previousDragPosition = null;
       });
     }
     this.renderer.confirmActionButton.onTriggerUp.add(() => {
@@ -204,12 +270,35 @@ export class PlacementController {
       } else {
         this._snapCurrentPoseToSurface();
       }
+      this._maybeRebasePlacementAnchor();
       this.renderer.interpolatePose(
         this.desiredPosition,
         this.desiredRotation,
         INTERPOLATION_SPEED,
       );
     }
+  }
+
+  private _bindPlacementAnchor(worldPosition: vec3): void {
+    if (!this._placementAnchor) {
+      this._placementAnchor = global.scene.createSceneObject(
+        "NavigationPlacementAnchor",
+      );
+    }
+    this.renderer.bindPlacementAnchor(this._placementAnchor, worldPosition);
+  }
+
+  private _maybeRebasePlacementAnchor(): void {
+    const local = this.renderer.localPosition;
+    const horizontalDistance = Math.sqrt(local.x * local.x + local.z * local.z);
+    if (horizontalDistance < PLACEMENT_ANCHOR_REBASE_DISTANCE_CM) {
+      return;
+    }
+    this.renderer.rebasePlacementAnchor();
+  }
+
+  private _offsetPointY(point: vec3, yOffsetCm: number): vec3 {
+    return new vec3(point.x, point.y + yOffsetCm, point.z);
   }
 
   private _snapCurrentPoseToSurface(): void {
@@ -220,12 +309,8 @@ export class PlacementController {
     if (!this.hitTestSession) {
       return;
     }
-    const rayStart = point.add(
-      vec3.up().uniformScale(SURFACE_RAY_START_Y_OFFSET_CM),
-    );
-    const rayEnd = point.add(
-      vec3.up().uniformScale(-SURFACE_RAY_END_Y_OFFSET_CM),
-    );
+    const rayStart = this._offsetPointY(point, SURFACE_RAY_START_Y_OFFSET_CM);
+    const rayEnd = this._offsetPointY(point, -SURFACE_RAY_END_Y_OFFSET_CM);
     const maybeResults = this.hitTestSession.hitTest(
       rayStart,
       rayEnd,
@@ -248,9 +333,12 @@ export class PlacementController {
     if (Math.abs(denominator) <= 0.0001) {
       return;
     }
-    const distanceToPlane =
-      planeNormal.dot(this.desiredPosition.sub(this.activeInteractor.startPoint)) /
-      denominator;
+    const planeOffset = new vec3(
+      this.desiredPosition.x - this.activeInteractor.startPoint.x,
+      this.desiredPosition.y - this.activeInteractor.startPoint.y,
+      this.desiredPosition.z - this.activeInteractor.startPoint.z,
+    );
+    const distanceToPlane = planeNormal.dot(planeOffset) / denominator;
     const pointPosition = this.activeInteractor.startPoint.add(
       interactorDirection.uniformScale(distanceToPlane),
     );
@@ -270,6 +358,7 @@ export class PlacementController {
           pointPosition.z,
         );
       }
+      this._updateDragDirection(pointPosition);
     }
   }
 
@@ -286,7 +375,14 @@ export class PlacementController {
       return;
     }
     const candidateY = foundPosition.y + GROUND_Y_OFFSET_CM;
-    const yDelta = Math.abs(candidateY - this.lastGroundHeight);
+    let effectiveY = candidateY;
+    if (
+      this._isInsideRobotGroundDeadzone(foundPosition) &&
+      effectiveY > this.lastGroundHeight
+    ) {
+      effectiveY = this.lastGroundHeight;
+    }
+    const yDelta = Math.abs(effectiveY - this.lastGroundHeight);
     if (this.lastGroundHeight !== 0 && yDelta < Y_UPDATE_THRESHOLD_CM) {
       this.desiredPosition = new vec3(
         foundPosition.x,
@@ -295,12 +391,26 @@ export class PlacementController {
       );
       return;
     }
-    this.lastGroundHeight = candidateY;
+    this.lastGroundHeight = effectiveY;
     this.desiredPosition = new vec3(
       foundPosition.x,
       this.lastGroundHeight,
       foundPosition.z,
     );
+  }
+
+  private _isInsideRobotGroundDeadzone(point: vec3): boolean {
+    if (!this._robotGroundDeadzone) {
+      return false;
+    }
+    const robotPosition = this._robotGroundDeadzone.getRobotWorldPosition();
+    if (!robotPosition) {
+      return false;
+    }
+    const dx = point.x - robotPosition.x;
+    const dz = point.z - robotPosition.z;
+    const horizontalDistance = Math.sqrt(dx * dx + dz * dz);
+    return horizontalDistance < this._robotGroundDeadzone.radiusCm;
   }
 
   private _isGroundLikeHit(normal: vec3): boolean {
@@ -314,8 +424,52 @@ export class PlacementController {
     return normalizedY > GROUND_NORMAL_MIN_Y;
   }
 
+  private _updateDragDirection(pointPosition: vec3): void {
+    if (this._previousDragPosition) {
+      const dx = pointPosition.x - this._previousDragPosition.x;
+      const dz = pointPosition.z - this._previousDragPosition.z;
+      const deltaMag = Math.sqrt(dx * dx + dz * dz);
+      if (deltaMag > MIN_DRAG_DELTA_CM) {
+        const nx = dx / deltaMag;
+        const nz = dz / deltaMag;
+        const alpha = 1.0 - Math.exp(-DIRECTION_SMOOTHING_RATE * getDeltaTime());
+        this._smoothedDragDirection = new vec3(
+          this._smoothedDragDirection.x + (nx - this._smoothedDragDirection.x) * alpha,
+          0,
+          this._smoothedDragDirection.z + (nz - this._smoothedDragDirection.z) * alpha,
+        );
+        const smoothedMag = Math.sqrt(
+          this._smoothedDragDirection.x * this._smoothedDragDirection.x +
+          this._smoothedDragDirection.z * this._smoothedDragDirection.z,
+        );
+        if (smoothedMag > 0.001) {
+          const fx = this._smoothedDragDirection.x / smoothedMag;
+          const fz = this._smoothedDragDirection.z / smoothedMag;
+          const targetRotation = this._yawRotation(fx, fz);
+          const maxRotationStep =
+            MAX_ROTATION_SPEED_RAD_PER_SEC * getDeltaTime();
+          const angleToTarget = quat.angleBetween(
+            this.desiredRotation,
+            targetRotation,
+          );
+          const rotationAlpha =
+            angleToTarget <= 0.0001
+              ? 1
+              : Math.min(1, maxRotationStep / angleToTarget);
+          this.desiredRotation = quat.slerp(
+            this.desiredRotation,
+            targetRotation,
+            rotationAlpha,
+          );
+          this._syncMoveDirectionPreview();
+        }
+      }
+    }
+    this._previousDragPosition = pointPosition;
+  }
+
   private _levelRotation(rotation: quat): quat {
-    const forward = rotation.multiplyVec3(vec3.right()); // +X semantic forward
+    const forward = rotation.multiplyVec3(vec3.right().uniformScale(-1)); // -X is actual forward
     const distance = Math.sqrt(forward.x * forward.x + forward.z * forward.z);
     if (distance < 0.001) {
       return quat.quatIdentity();
@@ -326,12 +480,17 @@ export class PlacementController {
   private _yawRotation(x: number, z: number): quat {
     const yaw = Math.atan2(z, x);
     const halfYaw = yaw * 0.5;
-    return new quat(0, Math.sin(halfYaw), 0, Math.cos(halfYaw));
+    // Lens Studio quat constructor is (w, x, y, z); Y-axis yaw = (cos, 0, sin, 0)
+    return new quat(Math.cos(halfYaw), 0, Math.sin(halfYaw), 0);
   }
 
   private _syncDesiredPoseToRenderedPose(): void {
     this.desiredPosition = this.renderer.worldPosition;
     this.lastGroundHeight = this.desiredPosition.y;
+  }
+
+  private _syncMoveDirectionPreview(): void {
+    this.renderer.setMoveDirectionFromRotation(this.desiredRotation);
   }
 
   private _setDragEnabled(enabled: boolean): void {

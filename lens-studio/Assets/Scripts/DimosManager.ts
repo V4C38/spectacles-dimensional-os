@@ -5,7 +5,10 @@ import { RobotMarker } from "./Rendering/RobotMarker";
 import { ObstacleHighlightRenderer } from "./Rendering/ObstacleHighlightRenderer";
 import { PathRenderer } from "./Rendering/PathRenderer";
 import { NavigationMarkerView } from "./Navigation/NavigationMarkerView";
-import { PlacementController } from "./Navigation/PlacementController";
+import {
+  PlacementController,
+  RobotGroundDeadzone,
+} from "./Navigation/PlacementController";
 import { RobotMenuView } from "./UI/RobotMenuView";
 import { RobotMenuController } from "./UI/RobotMenuController";
 import { NavigationController } from "./Navigation/NavigationController";
@@ -54,6 +57,9 @@ export class DimosManager extends BaseScriptComponent {
 
   @input
   placementRayOrigin: SceneObject;
+
+  @input
+  robotGroundDeadzoneRadiusCm = 75;
 
   public onBridgeReady: (() => void)[] = [];
   public onBridgeStatusChanged: ((msg: BridgeStatusMessage) => void)[] = [];
@@ -123,6 +129,10 @@ export class DimosManager extends BaseScriptComponent {
       this.placementRayOrigin ?? null,
       this._goalRenderer,
     );
+    this._placementController.setRobotGroundDeadzone({
+      radiusCm: this.robotGroundDeadzoneRadiusCm,
+      getRobotWorldPosition: () => this.robotMarker?.getWorldPosition() ?? null,
+    } as RobotGroundDeadzone);
 
     const markerRoot = this.robotMarker?.markerRoot ?? null;
     const menuRoot = this.robotMarker?.getMenuRoot() ?? null;
@@ -154,6 +164,7 @@ export class DimosManager extends BaseScriptComponent {
       isExecuteMovementEnabled: () => this.executeMovement,
       canStartPlacement: () => this._canStartNavigationPlacement(),
       canSendNavGoal: () => this._canSendNavigationGoal(),
+      getGoalResetPose: () => this._getNavigationPlacementStartPose(),
     });
   }
 
@@ -190,46 +201,23 @@ export class DimosManager extends BaseScriptComponent {
     }
     this.bridgeClient.ensureEventHandlers();
     this.bridgeClient.onHello.push(() => {
+      this.bridgeClient.sendStreamPreferences(this.debugMode);
       this.onBridgeReady.forEach((cb) => cb());
     });
     this.bridgeClient.onLidar.push((msg) => {
       if (this._isActive && this.debugMode && this.lidarPointCloud) {
         this.lidarPointCloud.queueLidar(msg);
       }
-      this._obstacleRenderer?.updateLidar(msg);
+    });
+    this.bridgeClient.onObstacles.push((msg) => {
+      this._obstacleRenderer?.updateObstacles(msg);
     });
     this.bridgeClient.onPose.push((msg) => {
       this._lastPose = msg;
       const robotLensPos = protocolMetersToLensCentimeters(msg.position);
       (this.lidarPointCloud as any)?.setRobotWorldPosition?.(robotLensPos);
-      this._obstacleRenderer?.setRobotPosition(robotLensPos);
       if (this._isActive && this.robotMarker) {
-        const shouldApplyManualCorrection =
-          this._manualAlignmentPose !== null && this._useManualPoseCorrection;
-        if (shouldApplyManualCorrection) {
-          // Apply manual pose anchor correction: display corrected pose
-          const q = msg.orientation;
-          const bridgePosition = protocolMetersToLensCentimeters(msg.position);
-          const bridgeRotation = new quat(q[0], q[1], q[2], q[3]);
-
-          // Compute correction on first pose
-          if (this._manualPoseCorrectionRotation === null || this._manualPoseCorrectionTranslation === null) {
-            const anchorPosition = this._manualAlignmentPose.position;
-            const anchorRotation = this._manualAlignmentPose.rotation;
-            this._manualPoseCorrectionRotation = anchorRotation.multiply(bridgeRotation.invert());
-            const rotatedBridgePos = this._manualPoseCorrectionRotation.multiplyVec3(bridgePosition);
-            this._manualPoseCorrectionTranslation = anchorPosition.sub(rotatedBridgePos);
-          }
-
-          // Apply correction: corrected = Rc * bridge + Tc
-          const correctedRotation = this._manualPoseCorrectionRotation.multiply(bridgeRotation);
-          const correctedPosition = this._manualPoseCorrectionRotation.multiplyVec3(bridgePosition).add(this._manualPoseCorrectionTranslation);
-          this.robotMarker.applyRuntimeLensPose(correctedPosition, correctedRotation);
-        } else {
-          // No manual pose, use bridge pose directly
-          this._preferManualPoseUntilNextRuntimePose = false;
-          this.robotMarker.applyPose(msg);
-        }
+        this._applyRobotDisplayPose(msg);
       }
     });
     this.bridgeClient.onPath.push((msg) => this._applyPath(msg));
@@ -307,6 +295,12 @@ export class DimosManager extends BaseScriptComponent {
 
   public getBaseUrl(): string {
     return this.bridgeClient ? this.bridgeClient.baseUrl : "";
+  }
+
+  public getDefaultBridgeIp(): string {
+    return this.bridgeClient
+      ? BridgeClient.normalizeIp(this.bridgeClient.defaultBridgeIp)
+      : "";
   }
 
   public saveIp(ip: string): void {
@@ -450,6 +444,7 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     this._setAppState({ debugMode: enabled });
+    this.bridgeClient?.sendStreamPreferences(enabled);
     if (this.alignmentController) {
       this.alignmentController.setDebugMode(enabled);
     }
@@ -555,6 +550,11 @@ export class DimosManager extends BaseScriptComponent {
   }
 
   private _applyPath(msg: PathMessage): void {
+    const robotY = this.robotMarker?.getWorldPosition()?.y ?? null;
+    const goalY  = this._goalRenderer?.worldPosition.y ?? null;
+    if (robotY !== null && goalY !== null) {
+      this._pathRenderer?.setHeightRange(robotY, goalY);
+    }
     this._navigationController?.applyPath(msg);
   }
 
@@ -683,7 +683,7 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     if (this._lastPose && this.appState.robotInteractionMode !== "manualPlacement") {
-      this.robotMarker.applyPose(this._lastPose);
+      this._applyRobotDisplayPose(this._lastPose);
       return;
     }
     if (this._manualAlignmentPose) {
@@ -692,6 +692,47 @@ export class DimosManager extends BaseScriptComponent {
         this._manualAlignmentPose.rotation,
       );
     }
+  }
+
+  private _applyRobotDisplayPose(msg: PoseMessage): void {
+    if (!this.robotMarker) {
+      return;
+    }
+
+    const shouldApplyManualCorrection =
+      this._manualAlignmentPose !== null && this._useManualPoseCorrection;
+    if (!shouldApplyManualCorrection) {
+      this._preferManualPoseUntilNextRuntimePose = false;
+      this.robotMarker.applyPose(msg);
+      return;
+    }
+
+    const q = msg.orientation;
+    const bridgePosition = protocolMetersToLensCentimeters(msg.position);
+    const bridgeRotation = new quat(q[3], q[0], q[1], q[2]);
+
+    if (
+      this._manualPoseCorrectionRotation === null ||
+      this._manualPoseCorrectionTranslation === null
+    ) {
+      const anchorPosition = this._manualAlignmentPose.position;
+      const anchorRotation = this._manualAlignmentPose.rotation;
+      this._manualPoseCorrectionRotation = anchorRotation.multiply(
+        bridgeRotation.invert(),
+      );
+      const rotatedBridgePos =
+        this._manualPoseCorrectionRotation.multiplyVec3(bridgePosition);
+      this._manualPoseCorrectionTranslation =
+        anchorPosition.sub(rotatedBridgePos);
+    }
+
+    const correctedRotation =
+      this._manualPoseCorrectionRotation.multiply(bridgeRotation);
+    const correctedPosition = this._manualPoseCorrectionRotation
+      .multiplyVec3(bridgePosition)
+      .add(this._manualPoseCorrectionTranslation);
+    this._preferManualPoseUntilNextRuntimePose = false;
+    this.robotMarker.applyRuntimeLensPose(correctedPosition, correctedRotation);
   }
 
   private _syncNavigationPlacementState(): void {
@@ -728,7 +769,7 @@ export class DimosManager extends BaseScriptComponent {
       return null;
     }
     const q = this._lastPose.orientation;
-    const rotation = new quat(q[0], q[1], q[2], q[3]);
+    const rotation = new quat(q[3], q[0], q[1], q[2]);
     const position = protocolMetersToLensCentimeters(this._lastPose.position);
     return {
       position: this._offsetNavigationStartPosition(position, rotation),
@@ -740,7 +781,7 @@ export class DimosManager extends BaseScriptComponent {
     position: vec3,
     rotation: quat,
   ): vec3 {
-    const robotForward = rotation.multiplyVec3(vec3.right());
+    const robotForward = rotation.multiplyVec3(vec3.right().uniformScale(-1));
     const planarLength = Math.sqrt(
       robotForward.x * robotForward.x + robotForward.z * robotForward.z,
     );

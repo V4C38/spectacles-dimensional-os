@@ -4,6 +4,7 @@ import {
   HelloMessage,
   LidarMessage,
   NavStatusMessage,
+  ObstaclesMessage,
   PathMessage,
   PoseMessage,
   clearActiveRobotId,
@@ -20,6 +21,7 @@ import {
   buildEmergencyStop,
   buildGetStatus,
   buildNavGoal,
+  buildSetStreamPreferences,
   parseInboundMessage,
 } from "./Protocol";
 import { IP_STORAGE_KEY, WS_PORT } from "../UI/Shared/UIConstants";
@@ -30,6 +32,10 @@ const WS_OPEN = 1;
 
 @component
 export class BridgeClient extends BaseScriptComponent {
+  /** Default Mac LAN IP when no IP is saved on device. */
+  @input
+  defaultBridgeIp: string = "192.168.1.166";
+
   @input
   internetModule: InternetModule;
 
@@ -37,6 +43,7 @@ export class BridgeClient extends BaseScriptComponent {
 
   public onHello: ((msg: HelloMessage) => void)[] = [];
   public onLidar: ((msg: LidarMessage) => void)[] = [];
+  public onObstacles: ((msg: ObstaclesMessage) => void)[] = [];
   public onPose: ((msg: PoseMessage) => void)[] = [];
   public onAlignStatus: ((msg: AlignStatusMessage) => void)[] = [];
   public onBridgeStatus: ((msg: BridgeStatusMessage) => void)[] = [];
@@ -58,6 +65,9 @@ export class BridgeClient extends BaseScriptComponent {
     }
     if (!this.onLidar) {
       this.onLidar = [];
+    }
+    if (!this.onObstacles) {
+      this.onObstacles = [];
     }
     if (!this.onPose) {
       this.onPose = [];
@@ -84,6 +94,8 @@ export class BridgeClient extends BaseScriptComponent {
     const saved = this.loadIp();
     if (saved) {
       this.baseUrl = saved;
+    } else if (this.defaultBridgeIp) {
+      this.baseUrl = BridgeClient.normalizeIp(this.defaultBridgeIp);
     }
   }
 
@@ -255,6 +267,12 @@ export class BridgeClient extends BaseScriptComponent {
     return this._sendForActiveRobot("emergency_stop", buildEmergencyStop);
   }
 
+  public sendStreamPreferences(debugLidar: boolean): boolean {
+    return this._sendForActiveRobot("set_stream_preferences", (robotId) =>
+      buildSetStreamPreferences(robotId, debugLidar),
+    );
+  }
+
   /** Wait for server `hello` after the socket is open (bridge sends it on connect). */
   public waitForHello(timeoutSeconds: number = 3.0): Promise<boolean> {
     if (this.helloReceived) {
@@ -314,6 +332,10 @@ export class BridgeClient extends BaseScriptComponent {
         case "lidar":
           this._adoptRobotId(msg.robot_id);
           emit(this.onLidar, msg);
+          break;
+        case "obstacles":
+          this._adoptRobotId(msg.robot_id);
+          emit(this.onObstacles, msg);
           break;
         case "pose":
           this._adoptRobotId(msg.robot_id);

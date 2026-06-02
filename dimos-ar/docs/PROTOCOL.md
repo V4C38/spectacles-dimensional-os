@@ -37,7 +37,7 @@ On connect, the server sends one `hello` with all capabilities:
   "type": "hello",
   "protocol_version": 1,
   "robots": ["go2"],
-  "capabilities": ["lidar", "odom", "align", "align_manual", "nav", "path", "emergency_stop"]
+  "capabilities": ["lidar", "obstacles", "odom", "align", "align_manual", "nav", "path", "emergency_stop", "stream_preferences"]
 }
 ```
 
@@ -120,9 +120,9 @@ Alignment progress during the setup wizard **Calibrate Coordinates** step.
 - `message`: human-readable status for the wizard UI.
 
 ### lidar
-A subsampled point cloud in the AR world frame. The bridge may optionally apply
-360-degree range/height filtering to keep nearby traversable space plus obstacles
-while trimming very high clutter above the robot.
+A subsampled debug point cloud in the AR world frame. The bridge may optionally
+apply 360-degree range/height filtering to keep nearby traversable space plus
+obstacles while trimming very high clutter above the robot.
 
 ```json
 {
@@ -130,15 +130,31 @@ while trimming very high clutter above the robot.
   "ts": 1730000000.123,
   "robot_id": "go2",
   "frame": "world",
-  "points_flat": [x1, y1, z1, x2, y2, z2, ...],
-  "colors_flat": [r1, g1, b1, r2, g2, b2, ...]
+  "points_flat": [x1, y1, z1, x2, y2, z2, ...]
 }
 ```
 - `points_flat`: flat array of floats (x,y,z triples), metres, rounded to 3 decimals.
   Expect ~1-3k points (3-9k floats). Clients unflatten to `[[x,y,z], ...]`.
-- `colors_flat`: optional, parallel flat array of [r,g,b] 0-1 floats. The bridge
-  may send semantic colours such as ground-vs-obstacle classification; otherwise
-  clients can fall back to their own colouring.
+  Point colouring is handled entirely client-side.
+- Full `lidar` is intended for debug visualization and may be gated by client
+  stream preferences so it is only sent when explicitly requested.
+
+### obstacles
+A compact runtime obstacle stream in the AR world frame, pre-filtered on the
+bridge so clients do not need to receive and re-filter the full debug point cloud.
+
+```json
+{
+  "type": "obstacles",
+  "ts": 1730000000.123,
+  "robot_id": "go2",
+  "frame": "world",
+  "points_flat": [x1, y1, z1, x2, y2, z2, ...]
+}
+```
+- `points_flat`: flat array of floats (x,y,z triples), metres, rounded to 3 decimals.
+- Intended for lightweight runtime obstacle highlighting near the robot.
+- The bridge may cap this stream to a small point count (for example ~200 points).
 
 ### pose
 The robot's current pose in the AR world frame.
@@ -178,11 +194,14 @@ Navigation state updates.
   "ts": 1730000000.123,
   "robot_id": "go2",
   "state": "following_path",
-  "goal_reached": false
+  "goal_reached": false,
+  "goal_failed": false
 }
 ```
 `state` is one of `idle`, `following_path`, `recovery` (mirrors DimOS
-`NavigationState`).
+`NavigationState`). `goal_reached` marks successful completion; `goal_failed`
+is sent when the planner gives up on an active goal. If `goal_failed` is absent,
+clients should treat it as `false`.
 
 ### object  (future)
 A detected object placed in the AR world frame.
@@ -349,6 +368,22 @@ connection).
 
 Use `hello.robots[0]` as `robot_id` after connect when the bridge reports a hardware
 serial.
+
+### set_stream_preferences
+Allow the client to request optional high-bandwidth debug streams.
+
+```json
+{
+  "type": "set_stream_preferences",
+  "ts": 1730000000.123,
+  "robot_id": "go2",
+  "debug_lidar": true
+}
+```
+
+- `debug_lidar`: when `true`, request full outbound `lidar` messages for debug
+  point-cloud rendering. When `false`, the client still receives compact
+  `obstacles` messages but should no longer receive full debug `lidar`.
 
 ## Versioning rules
 

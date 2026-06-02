@@ -14,6 +14,7 @@ export interface NavigationControllerOptions {
   isExecuteMovementEnabled: () => boolean;
   canStartPlacement: () => boolean;
   canSendNavGoal: () => boolean;
+  getGoalResetPose?: () => { position: vec3; rotation: quat } | null;
 }
 
 export class NavigationController {
@@ -107,7 +108,15 @@ export class NavigationController {
     if (msg.goal_reached) {
       this._options.pathRenderer?.clear();
       if (this._placementEnabled) {
-        this._options.placementController?.showPlacing();
+        const newPose = this._options.getGoalResetPose?.() ?? null;
+        if (newPose) {
+          this._options.placementController?.showPlacingAtNewPose(
+            newPose.position,
+            newPose.rotation,
+          );
+        } else {
+          this._options.placementController?.showPlacing();
+        }
         this._options.onNavigationModeChanged("placingGoal");
       } else {
         this._options.onNavigationModeChanged("idle");

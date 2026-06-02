@@ -582,6 +582,26 @@ When validating features, keep the order strict:
    - approximate/manual status is visible there
    - both HUD and robot-local emergency-stop paths are exercised
 
+## Lens Studio TypeScript gotchas
+
+### `quat` constructor order — `(w, x, y, z)`
+
+The Lens Studio `quat` constructor takes **(w, x, y, z)**, not `(x, y, z, w)`.
+Source: [Lens Scripting API — quat](https://developers.snap.com/lens-studio/api/lens-scripting/classes/Built-In.quat)
+
+```typescript
+// Y-axis rotation (yaw) by angle θ:
+//   w = cos(θ/2),  x = 0,  y = sin(θ/2),  z = 0
+new quat(Math.cos(halfYaw), 0, Math.sin(halfYaw), 0)  // ✓ correct
+
+new quat(0, Math.sin(halfYaw), 0, Math.cos(halfYaw))  // ✗ wrong — sets w=0 → 180° rotation
+```
+
+When converting a protocol quaternion from DimOS/ROS (`[x, y, z, w]` array), reorder explicitly:
+```typescript
+const rotation = new quat(q[3], q[0], q[1], q[2]);  // w=q[3], x=q[0], y=q[1], z=q[2]
+```
+
 ## Framerate and performance
 
 Agent Center uses `FramerateManager` (30 fps idle, 60 fps when animating). For

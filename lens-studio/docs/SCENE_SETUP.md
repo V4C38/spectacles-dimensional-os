@@ -160,20 +160,20 @@ The exact Reachy sphere assets live in:
 
 | Component | Field | Target |
 |-----------|-------|--------|
-| SetupWizard | defaultBridgeIp | Your Mac's LAN IP, bare IP only (e.g. `192.168.1.166`) |
 | SetupWizard | dimosManager | DimosManager (on **DimOS**) |
 | SetupWizard | uiManager | UIManager (on **MainUI**) |
 | SetupWizard | alignmentController | AlignmentController (on **MarkerAnchor**) |
 | UIManager | mainUIFrame | **MainUI** scene object (sibling of SetupWizard, not the parent) |
 | UIManager | dimosManager | DimosManager |
 | UIManager | setupWizard | SetupWizard (script on **SetupWizard** object) |
+| BridgeClient | defaultBridgeIp | Your Mac's LAN IP, bare IP only (e.g. `192.168.1.166`) |
 | DimosManager | bridgeClient | BridgeClient (on **DimOS**) |
 | DimosManager | alignmentController | AlignmentController |
 | DimosManager | lidarPointCloud | LidarPointCloud (on **Rendering**) |
 | DimosManager | placementRayOrigin | **Camera Object** (tracked camera root used for placement ray fallback) |
 | DimosManager | robotMarker | RobotMarker (on **Rendering**) |
 
-> **Note:** `DimosManager` no longer has a `lineMaterial` input. The path line material (`InteractorLineMaterial`) is loaded automatically from the SpectaclesInteractionKit package at runtime. If a `lineMaterial` field was previously wired in the Inspector, it can be safely removed.
+> **Note:** `DimosManager` no longer has a `lineMaterial` input. The path line uses `Assets/Materials/InteractorLineMaterial.mat` (cloned at runtime by `PathRenderer`). If a `lineMaterial` field was previously wired in the Inspector, it can be safely removed.
 | AlignmentController | bridgeClient | BridgeClient |
 | AlignmentController | markerTracking | Marker Tracking on **Image Tracking** |
 | AlignmentController | debugGizmo | (Optional) SceneObject with 3D gizmo for tracking debug |

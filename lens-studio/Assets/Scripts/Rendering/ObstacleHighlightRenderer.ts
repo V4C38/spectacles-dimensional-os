@@ -1,18 +1,12 @@
-import { LidarMessage, protocolMetersToLensCentimeters } from "../Network/Protocol";
+import { ObstaclesMessage, protocolMetersToLensCentimeters } from "../Network/Protocol";
 
 const MAX_HIGHLIGHTS = 200;
-const MIN_DISTANCE_CM = 30.0;
-const MAX_DISTANCE_CM = 50.0;
-const FLOOR_HEIGHT_THRESHOLD_CM = 10.0;
 const HIGHLIGHT_SCALE_CM = 2.4;
 
 const OBSTACLE_COLOR_RGB: [number, number, number] = [1.0, 0.55, 0.0];
-const OBSTACLE_ALPHA = 0.5;
 
-// ObstacleHighlight.mat has BlendMode: Normal pre-baked so alpha blending
-// works without any runtime blend-mode mutation.
 const DEFAULT_OBSTACLE_MATERIAL = requireAsset(
-  "../../Materials/ObstacleHighlight.mat"
+  "../../Materials/LidarUnlit.mat"
 ) as Material | null;
 
 export class ObstacleHighlightRenderer {
@@ -20,8 +14,6 @@ export class ObstacleHighlightRenderer {
   private readonly template: RenderMeshVisual | null;
   private readonly material: Material | null;
   private readonly pointObjects: SceneObject[] = [];
-  private latestLidar: LidarMessage | null = null;
-  private robotPosition: vec3 | null = null;
   private warnedMissingMaterial = false;
 
   constructor(parent: SceneObject, template: RenderMeshVisual | null) {
@@ -31,17 +23,11 @@ export class ObstacleHighlightRenderer {
 
     if (DEFAULT_OBSTACLE_MATERIAL) {
       const mat = DEFAULT_OBSTACLE_MATERIAL.clone();
-      const pass = mat.mainPass as any;
-      pass.baseColor = new vec4(
+      mat.mainPass.baseColor = new vec4(
         OBSTACLE_COLOR_RGB[0],
         OBSTACLE_COLOR_RGB[1],
         OBSTACLE_COLOR_RGB[2],
-        OBSTACLE_ALPHA,
-      );
-      pass.Port_Emissive_N006 = new vec3(
-        OBSTACLE_COLOR_RGB[0],
-        OBSTACLE_COLOR_RGB[1],
-        OBSTACLE_COLOR_RGB[2],
+        1.0,
       );
       this.material = mat;
     } else {
@@ -49,14 +35,8 @@ export class ObstacleHighlightRenderer {
     }
   }
 
-  public updateLidar(msg: LidarMessage): void {
-    this.latestLidar = msg;
-    this._refresh();
-  }
-
-  public setRobotPosition(pos: vec3): void {
-    this.robotPosition = pos;
-    this._refresh();
+  public updateObstacles(msg: ObstaclesMessage): void {
+    this._refresh(msg.points);
   }
 
   public clear(): void {
@@ -65,39 +45,16 @@ export class ObstacleHighlightRenderer {
     });
   }
 
-  private _refresh(): void {
-    if (!this.latestLidar || !this.robotPosition) {
-      this.clear();
-      return;
-    }
-
-    const robot = this.robotPosition;
-    const rawPoints = this.latestLidar.points;
-    const highlights: vec3[] = [];
-
-    for (let i = 0; i < rawPoints.length && highlights.length < MAX_HIGHLIGHTS; i++) {
+  private _refresh(rawPoints: [number, number, number][]): void {
+    const count = Math.min(rawPoints.length, MAX_HIGHLIGHTS);
+    this._ensurePool(count);
+    for (let i = 0; i < count; i++) {
       const lensPoint = protocolMetersToLensCentimeters(rawPoints[i]);
-
-      if (lensPoint.y < FLOOR_HEIGHT_THRESHOLD_CM) {
-        continue;
-      }
-
-      const dx = lensPoint.x - robot.x;
-      const dz = lensPoint.z - robot.z;
-      const horizDist = Math.sqrt(dx * dx + dz * dz);
-
-      if (horizDist >= MIN_DISTANCE_CM && horizDist <= MAX_DISTANCE_CM) {
-        highlights.push(lensPoint);
-      }
-    }
-
-    this._ensurePool(highlights.length);
-    for (let i = 0; i < highlights.length; i++) {
       const obj = this.pointObjects[i];
       obj.enabled = true;
-      obj.getTransform().setWorldPosition(highlights[i]);
+      obj.getTransform().setWorldPosition(lensPoint);
     }
-    for (let i = highlights.length; i < this.pointObjects.length; i++) {
+    for (let i = count; i < this.pointObjects.length; i++) {
       this.pointObjects[i].enabled = false;
     }
   }

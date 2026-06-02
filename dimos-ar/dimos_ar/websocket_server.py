@@ -25,6 +25,7 @@ from dimos_ar.protocol import (
     InboundMessage,
     NavGoalMessage,
     RegisterMessage,
+    SetStreamPreferencesMessage,
     decode_inbound,
     encode_hello,
 )
@@ -44,6 +45,7 @@ NavGoalHandler = Callable[[NavGoalMessage], None]
 CancelGoalHandler = Callable[[CancelGoalMessage], None]
 EmergencyStopHandler = Callable[[EmergencyStopMessage], None]
 GetStatusHandler = Callable[[GetStatusMessage, ServerConnection], None]
+SetStreamPreferencesHandler = Callable[[SetStreamPreferencesMessage, ServerConnection], None]
 UnsupportedHandler = Callable[[InboundMessage], None]
 StatusOnConnectHandler = Callable[[ServerConnection], None]
 DisconnectHandler = Callable[[ServerConnection], None]
@@ -69,6 +71,7 @@ class ARWebSocketServer:
         on_cancel_goal: CancelGoalHandler | None = None,
         on_emergency_stop: EmergencyStopHandler | None = None,
         on_get_status: GetStatusHandler | None = None,
+        on_set_stream_preferences: SetStreamPreferencesHandler | None = None,
         on_unsupported: UnsupportedHandler | None = None,
         on_status_connect: StatusOnConnectHandler | None = None,
         on_disconnect: DisconnectHandler | None = None,
@@ -87,6 +90,7 @@ class ARWebSocketServer:
         self._on_cancel_goal = on_cancel_goal
         self._on_emergency_stop = on_emergency_stop
         self._on_get_status = on_get_status
+        self._on_set_stream_preferences = on_set_stream_preferences
         self._on_unsupported = on_unsupported
         self._on_status_connect = on_status_connect
         self._on_disconnect = on_disconnect
@@ -171,60 +175,72 @@ class ARWebSocketServer:
             if self._on_status_connect is not None:
                 self._on_status_connect(websocket)
             async for message in websocket:
-                if not isinstance(message, str):
-                    raise ValueError("Only JSON text frames are supported")
-                inbound = decode_inbound(message, expected_robot_id=self._robot_id)
-                if isinstance(inbound, RegisterMessage):
-                    self._on_register(inbound, websocket)
-                elif isinstance(inbound, AlignStartMessage):
-                    if self._on_align_start is not None:
-                        self._on_align_start(inbound, websocket)
-                elif isinstance(inbound, AlignStopMessage):
-                    if self._on_align_stop is not None:
-                        self._on_align_stop(inbound, websocket)
-                elif isinstance(inbound, AlignCommitMessage):
-                    if self._on_align_commit is not None:
-                        self._on_align_commit(inbound, websocket)
-                elif isinstance(inbound, AlignMarkerMessage):
-                    if self._on_align_marker is not None:
-                        self._on_align_marker(inbound, websocket)
-                elif isinstance(inbound, AlignManualPoseMessage):
-                    if self._on_align_manual_pose is not None:
-                        self._on_align_manual_pose(inbound, websocket)
-                elif isinstance(inbound, NavGoalMessage):
-                    if self._on_nav_goal is not None:
-                        self._on_nav_goal(inbound)
-                    elif self._on_unsupported is not None:
-                        self._on_unsupported(inbound)
-                    else:
-                        logger.warning("nav_goal received but not supported in this blueprint")
-                elif isinstance(inbound, CancelGoalMessage):
-                    if self._on_cancel_goal is not None:
-                        self._on_cancel_goal(inbound)
-                    elif self._on_unsupported is not None:
-                        self._on_unsupported(inbound)
-                    else:
-                        logger.warning("cancel_goal received but not supported in this blueprint")
-                elif isinstance(inbound, EmergencyStopMessage):
-                    if self._on_emergency_stop is not None:
-                        self._on_emergency_stop(inbound)
-                    elif self._on_unsupported is not None:
-                        self._on_unsupported(inbound)
-                    else:
-                        logger.warning(
-                            "emergency_stop received but not supported in this blueprint"
-                        )
-                elif isinstance(inbound, GetStatusMessage):
-                    if self._on_get_status is not None:
-                        self._on_get_status(inbound, websocket)
+                try:
+                    if not isinstance(message, str):
+                        raise ValueError("Only JSON text frames are supported")
+                    inbound = decode_inbound(message, expected_robot_id=self._robot_id)
+                    self._dispatch_inbound(inbound, websocket)
+                except ValueError as exc:
+                    logger.warning("Invalid inbound WebSocket message", error=str(exc))
+                except Exception as exc:
+                    logger.error(
+                        "Unhandled inbound WebSocket handler error",
+                        error=str(exc),
+                    )
         except websockets.ConnectionClosed:
             pass
-        except ValueError as exc:
-            logger.warning("Invalid inbound WebSocket message", error=str(exc))
         finally:
             self._connections.discard(websocket)
             if self._on_disconnect is not None:
                 self._on_disconnect(websocket)
+
+    def _dispatch_inbound(self, inbound: InboundMessage, websocket: ServerConnection) -> None:
+        if isinstance(inbound, RegisterMessage):
+            self._on_register(inbound, websocket)
+        elif isinstance(inbound, AlignStartMessage):
+            if self._on_align_start is not None:
+                self._on_align_start(inbound, websocket)
+        elif isinstance(inbound, AlignStopMessage):
+            if self._on_align_stop is not None:
+                self._on_align_stop(inbound, websocket)
+        elif isinstance(inbound, AlignCommitMessage):
+            if self._on_align_commit is not None:
+                self._on_align_commit(inbound, websocket)
+        elif isinstance(inbound, AlignMarkerMessage):
+            if self._on_align_marker is not None:
+                self._on_align_marker(inbound, websocket)
+        elif isinstance(inbound, AlignManualPoseMessage):
+            if self._on_align_manual_pose is not None:
+                self._on_align_manual_pose(inbound, websocket)
+        elif isinstance(inbound, NavGoalMessage):
+            if self._on_nav_goal is not None:
+                self._on_nav_goal(inbound)
+            elif self._on_unsupported is not None:
+                self._on_unsupported(inbound)
+            else:
+                logger.warning("nav_goal received but not supported in this blueprint")
+        elif isinstance(inbound, CancelGoalMessage):
+            if self._on_cancel_goal is not None:
+                self._on_cancel_goal(inbound)
+            elif self._on_unsupported is not None:
+                self._on_unsupported(inbound)
+            else:
+                logger.warning("cancel_goal received but not supported in this blueprint")
+        elif isinstance(inbound, EmergencyStopMessage):
+            if self._on_emergency_stop is not None:
+                self._on_emergency_stop(inbound)
+            elif self._on_unsupported is not None:
+                self._on_unsupported(inbound)
+            else:
+                logger.warning(
+                    "emergency_stop received but not supported in this blueprint"
+                )
+        elif isinstance(inbound, GetStatusMessage):
+            if self._on_get_status is not None:
+                self._on_get_status(inbound, websocket)
+        elif isinstance(inbound, SetStreamPreferencesMessage):
+            if self._on_set_stream_preferences is not None:
+                self._on_set_stream_preferences(inbound, websocket)
 
     def schedule_send(self, text: str) -> None:
         """Schedule a send on the WS event loop from any thread."""

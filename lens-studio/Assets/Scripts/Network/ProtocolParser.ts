@@ -4,6 +4,7 @@ import {
   HelloMessage,
   InboundMessage,
   LidarMessage,
+  ObstaclesMessage,
   NavStatusMessage,
   PathMessage,
   PoseMessage,
@@ -65,6 +66,26 @@ function parseVec3(raw: unknown): [number, number, number] {
   return [Number(raw[0]), Number(raw[1]), Number(raw[2])];
 }
 
+function parseFlatPointMessage(
+  data: Record<string, unknown>,
+  type: "lidar" | "obstacles",
+): LidarMessage | ObstaclesMessage {
+  let pts: [number, number, number][];
+  if (Array.isArray(data.points_flat)) {
+    pts = unflattenVec3(data.points_flat as number[]);
+  } else {
+    pts = parsePoints(data.points);
+  }
+
+  return {
+    type,
+    ts: requireNumber(data, "ts"),
+    robot_id: requireString(data, "robot_id"),
+    frame: requireString(data, "frame"),
+    points: pts,
+  };
+}
+
 export function parseInboundMessage(text: string): InboundMessage | null {
   const data = requireObject(JSON.parse(text));
   const type = requireString(data, "type");
@@ -84,30 +105,14 @@ export function parseInboundMessage(text: string): InboundMessage | null {
     }
 
     case "lidar": {
-      let pts: [number, number, number][];
-      if (Array.isArray(data.points_flat)) {
-        pts = unflattenVec3(data.points_flat as number[]);
-      } else {
-        pts = parsePoints(data.points);
-      }
-
-      const msg: LidarMessage = {
-        type: "lidar",
-        ts: requireNumber(data, "ts"),
-        robot_id: requireString(data, "robot_id"),
-        frame: requireString(data, "frame"),
-        points: pts,
-      };
+      const msg = parseFlatPointMessage(data, "lidar");
       setActiveRobotId(msg.robot_id);
+      return msg;
+    }
 
-      if (Array.isArray(data.colors_flat)) {
-        msg.colors = unflattenVec3(data.colors_flat as number[]);
-      } else if (Array.isArray(data.colors)) {
-        msg.colors = (data.colors as unknown[]).map((c) => {
-          const row = c as number[];
-          return [row[0], row[1], row[2]] as [number, number, number];
-        });
-      }
+    case "obstacles": {
+      const msg = parseFlatPointMessage(data, "obstacles");
+      setActiveRobotId(msg.robot_id);
       return msg;
     }
 
@@ -222,6 +227,7 @@ export function parseInboundMessage(text: string): InboundMessage | null {
         robot_id: requireString(data, "robot_id"),
         state,
         goal_reached: Boolean(data.goal_reached),
+        goal_failed: Boolean(data.goal_failed),
       };
       setActiveRobotId(msg.robot_id);
       return msg;

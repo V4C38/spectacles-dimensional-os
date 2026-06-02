@@ -30,7 +30,14 @@ export interface LidarMessage {
   robot_id: string;
   frame: string;
   points: [number, number, number][];
-  colors?: [number, number, number][];
+}
+
+export interface ObstaclesMessage {
+  type: "obstacles";
+  ts: number;
+  robot_id: string;
+  frame: string;
+  points: [number, number, number][];
 }
 
 export interface PoseMessage {
@@ -91,11 +98,13 @@ export interface NavStatusMessage {
   robot_id: string;
   state: "idle" | "following_path" | "recovery";
   goal_reached: boolean;
+  goal_failed: boolean;
 }
 
 export type InboundMessage =
   | HelloMessage
   | LidarMessage
+  | ObstaclesMessage
   | PoseMessage
   | RegisteredMessage
   | AlignStatusMessage

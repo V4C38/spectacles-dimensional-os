@@ -110,3 +110,15 @@ export function buildEmergencyStop(robotId: string): string {
     robot_id: robotId,
   });
 }
+
+export function buildSetStreamPreferences(
+  robotId: string,
+  debugLidar: boolean,
+): string {
+  return JSON.stringify({
+    type: "set_stream_preferences",
+    ts: getTime(),
+    robot_id: robotId,
+    debug_lidar: debugLidar,
+  });
+}

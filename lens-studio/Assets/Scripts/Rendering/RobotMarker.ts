@@ -5,8 +5,8 @@ import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/Rou
 import { requireChild } from "../UI/Shared/SceneLookup";
 
 const ROBOT_UI_WORLD_UP_OFFSET_CM = 15.0;
-const POSITION_SMOOTHING_RATE = 20.0;
-const ROTATION_SMOOTHING_RATE = 22.0;
+const POSITION_DEADBAND_CM = 0.75;
+const ROTATION_DEADBAND_RAD = (1.0 * Math.PI) / 180.0;
 const DIRECTION_ARROW_YAW_CORRECTION = new quat(
   Math.cos(Math.PI / 4),
   0,
@@ -14,12 +14,16 @@ const DIRECTION_ARROW_YAW_CORRECTION = new quat(
   0,
 );
 
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
+function vec3Distance(a: vec3, b: vec3): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const dz = a.z - b.z;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-function lerpVec3(a: vec3, b: vec3, t: number): vec3 {
-  return new vec3(lerp(a.x, b.x, t), lerp(a.y, b.y, t), lerp(a.z, b.z, t));
+function quatAngularDistanceRad(a: quat, b: quat): number {
+  const dot = Math.abs(a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z);
+  return 2.0 * Math.acos(Math.min(1.0, Math.max(-1.0, dot)));
 }
 
 @component
@@ -37,10 +41,7 @@ export class RobotMarker extends BaseScriptComponent {
   private _toggleCollider: ColliderComponent | null = null;
   private _toggleButton: RoundButton | null = null;
   private _menuRoot: SceneObject | null = null;
-  private _runtimePoseTargetPosition: vec3 | null = null;
-  private _runtimePoseTargetRotation: quat | null = null;
   private _hasLiveRuntimePose = false;
-  private _lastUpdateTime = -1.0;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
@@ -48,7 +49,6 @@ export class RobotMarker extends BaseScriptComponent {
       this.setVisible(false);
     });
     this.createEvent("UpdateEvent").bind(() => {
-      this._updateRuntimePoseSmoothing();
       this._syncMenuWorldAnchor();
     });
   }
@@ -61,12 +61,7 @@ export class RobotMarker extends BaseScriptComponent {
     const q = msg.orientation;
     const position = protocolMetersToLensCentimeters(msg.position);
     const rotation = new quat(q[3], q[0], q[1], q[2]);
-    this._runtimePoseTargetPosition = position;
-    this._runtimePoseTargetRotation = rotation;
-    if (!this._hasLiveRuntimePose) {
-      this._hasLiveRuntimePose = true;
-      this._applyTransformImmediate(position, rotation);
-    }
+    this._applyRuntimePose(position, rotation);
   }
 
   public applyManualPose(position: vec3, rotation: quat): void {
@@ -83,12 +78,7 @@ export class RobotMarker extends BaseScriptComponent {
       return;
     }
     this.markerRoot.enabled = true;
-    this._runtimePoseTargetPosition = position;
-    this._runtimePoseTargetRotation = rotation;
-    if (!this._hasLiveRuntimePose) {
-      this._hasLiveRuntimePose = true;
-      this._applyTransformImmediate(position, rotation);
-    }
+    this._applyRuntimePose(position, rotation);
   }
 
   public setVisible(visible: boolean): void {
@@ -104,8 +94,6 @@ export class RobotMarker extends BaseScriptComponent {
   }
 
   public resetRuntimePoseSmoothing(): void {
-    this._runtimePoseTargetPosition = null;
-    this._runtimePoseTargetRotation = null;
     this._hasLiveRuntimePose = false;
   }
 
@@ -251,40 +239,30 @@ export class RobotMarker extends BaseScriptComponent {
     this._syncMenuWorldAnchor();
   }
 
-  private _updateRuntimePoseSmoothing(): void {
-    const now = getTime();
-    const deltaTime =
-      this._lastUpdateTime >= 0.0 ? Math.max(0.0, now - this._lastUpdateTime) : 0.0;
-    this._lastUpdateTime = now;
-    if (
-      !this.markerRoot ||
-      !this.markerRoot.enabled ||
-      !this._hasLiveRuntimePose ||
-      !this._runtimePoseTargetPosition ||
-      !this._runtimePoseTargetRotation ||
-      deltaTime <= 0.0
-    ) {
+  private _applyRuntimePose(position: vec3, rotation: quat): void {
+    if (!this.markerRoot) {
+      return;
+    }
+
+    if (!this._hasLiveRuntimePose) {
+      this._hasLiveRuntimePose = true;
+      this._applyTransformImmediate(position, rotation);
       return;
     }
 
     const transform = this.markerRoot.getTransform();
-    const positionAlpha = 1.0 - Math.exp(-POSITION_SMOOTHING_RATE * deltaTime);
-    const rotationAlpha = 1.0 - Math.exp(-ROTATION_SMOOTHING_RATE * deltaTime);
+    const currentPosition = transform.getWorldPosition();
+    const currentRotation = transform.getWorldRotation();
+    const positionDelta = vec3Distance(currentPosition, position);
+    const rotationDelta = quatAngularDistanceRad(currentRotation, rotation);
+    if (
+      positionDelta < POSITION_DEADBAND_CM &&
+      rotationDelta < ROTATION_DEADBAND_RAD
+    ) {
+      return;
+    }
 
-    transform.setWorldPosition(
-      lerpVec3(
-        transform.getWorldPosition(),
-        this._runtimePoseTargetPosition,
-        positionAlpha,
-      ),
-    );
-    transform.setWorldRotation(
-      quat.slerp(
-        transform.getWorldRotation(),
-        this._runtimePoseTargetRotation,
-        rotationAlpha,
-      ),
-    );
+    this._applyTransformImmediate(position, rotation);
   }
 
   private _syncMenuWorldAnchor(): void {
