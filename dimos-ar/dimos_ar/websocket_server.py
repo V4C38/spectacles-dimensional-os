@@ -25,7 +25,6 @@ from dimos_ar.protocol import (
     InboundMessage,
     NavGoalMessage,
     RegisterMessage,
-    SetStreamPreferencesMessage,
     decode_inbound,
     encode_hello,
 )
@@ -45,7 +44,6 @@ NavGoalHandler = Callable[[NavGoalMessage], None]
 CancelGoalHandler = Callable[[CancelGoalMessage], None]
 EmergencyStopHandler = Callable[[EmergencyStopMessage], None]
 GetStatusHandler = Callable[[GetStatusMessage, ServerConnection], None]
-SetStreamPreferencesHandler = Callable[[SetStreamPreferencesMessage, ServerConnection], None]
 UnsupportedHandler = Callable[[InboundMessage], None]
 StatusOnConnectHandler = Callable[[ServerConnection], None]
 DisconnectHandler = Callable[[ServerConnection], None]
@@ -71,7 +69,6 @@ class ARWebSocketServer:
         on_cancel_goal: CancelGoalHandler | None = None,
         on_emergency_stop: EmergencyStopHandler | None = None,
         on_get_status: GetStatusHandler | None = None,
-        on_set_stream_preferences: SetStreamPreferencesHandler | None = None,
         on_unsupported: UnsupportedHandler | None = None,
         on_status_connect: StatusOnConnectHandler | None = None,
         on_disconnect: DisconnectHandler | None = None,
@@ -90,7 +87,6 @@ class ARWebSocketServer:
         self._on_cancel_goal = on_cancel_goal
         self._on_emergency_stop = on_emergency_stop
         self._on_get_status = on_get_status
-        self._on_set_stream_preferences = on_set_stream_preferences
         self._on_unsupported = on_unsupported
         self._on_status_connect = on_status_connect
         self._on_disconnect = on_disconnect
@@ -238,9 +234,6 @@ class ARWebSocketServer:
         elif isinstance(inbound, GetStatusMessage):
             if self._on_get_status is not None:
                 self._on_get_status(inbound, websocket)
-        elif isinstance(inbound, SetStreamPreferencesMessage):
-            if self._on_set_stream_preferences is not None:
-                self._on_set_stream_preferences(inbound, websocket)
 
     def schedule_send(self, text: str) -> None:
         """Schedule a send on the WS event loop from any thread."""

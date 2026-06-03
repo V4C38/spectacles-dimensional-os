@@ -36,7 +36,7 @@ from dimos_ar.filters import (
     LidarFilter,
     LidarFilterConfig,
     RateLimiter,
-    filter_runtime_obstacles_world,
+    subsample_points_near_robot,
 )
 from dimos_ar.protocol import (
     DEFAULT_CAPABILITIES,
@@ -50,12 +50,10 @@ from dimos_ar.protocol import (
     GetStatusMessage,
     NavGoalMessage,
     RegisterMessage,
-    SetStreamPreferencesMessage,
     encode_align_status,
     encode_bridge_status,
     encode_lidar,
     encode_nav_status,
-    encode_obstacles,
     encode_path,
     encode_pose,
     encode_registered,
@@ -76,10 +74,6 @@ ALIGNMENT_CLUSTER_MIN_SAMPLES = 6
 ALIGNMENT_CLUSTER_TARGET_SAMPLES = 8
 ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M = 0.08
 ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD = math.radians(8.0)
-RUNTIME_OBSTACLE_MIN_HEIGHT_M = 0.10
-RUNTIME_OBSTACLE_MIN_DISTANCE_M = 0.20
-RUNTIME_OBSTACLE_MAX_DISTANCE_M = 1.50
-RUNTIME_OBSTACLE_MAX_POINTS = 200
 
 
 def _wrap_angle_rad(angle: float) -> float:
@@ -161,11 +155,11 @@ class ARBridgeConfig(ModuleConfig):
     port: int = 8765
     robot_id: str = "go2"
     max_message_bytes: int = 1_048_576
-    max_range_m: float | None = 4.0
+    max_range_m: float | None = None
     min_height_m: float | None = -0.35
     max_height_m: float | None = 1.2
     obstacle_height_threshold_m: float = 0.08
-    target_points: int = 1600
+    target_points: int = 1000
     lidar_max_hz: float = 1.0
     pose_max_hz: float = 30.0
     stream_stale_timeout_s: float = 10.0
@@ -235,7 +229,6 @@ class ARBridge(Module):
         self._nav_goal_pending = False
         self._stream_status_stop = threading.Event()
         self._stream_status_thread: threading.Thread | None = None
-        self._debug_lidar_clients: set[ServerConnection] = set()
         tracker = get_bridge_status_tracker()
         sync_tracker_robot_model(tracker)
         if tracker is not None:
@@ -258,7 +251,6 @@ class ARBridge(Module):
             on_cancel_goal=self._on_cancel_goal,
             on_emergency_stop=self._on_emergency_stop,
             on_get_status=self._on_get_status,
-            on_set_stream_preferences=self._on_set_stream_preferences,
             on_status_connect=self._send_status_to,
             on_disconnect=self._on_client_disconnect,
         )
@@ -451,7 +443,6 @@ class ARBridge(Module):
         self._recent_marker_candidates = []
 
     def _on_client_disconnect(self, _websocket: ServerConnection) -> None:
-        self._debug_lidar_clients.discard(_websocket)
         if (
             not self._aligner.active
             and self._last_align_marker is None
@@ -463,16 +454,6 @@ class ARBridge(Module):
         self._stop_align_status_broadcast()
         self._clear_align_session()
         logger.info("Alignment session cleared on AR client disconnect")
-
-    def _on_set_stream_preferences(
-        self,
-        msg: SetStreamPreferencesMessage,
-        websocket: ServerConnection,
-    ) -> None:
-        if msg.debug_lidar:
-            self._debug_lidar_clients.add(websocket)
-        else:
-            self._debug_lidar_clients.discard(websocket)
 
     def _score_alignment_candidate(
         self, candidate: AlignmentCandidate
@@ -1000,32 +981,19 @@ class ARBridge(Module):
             filtered = self._lidar_filter.filter(points)
             if len(filtered) != 0:
                 world_pts = self._calibration.transform_points(filtered)
+                world_pts = subsample_points_near_robot(
+                    world_pts,
+                    self._latest_robot_world_position(),
+                    target_points=self.config.target_points,
+                )
 
-        obstacle_pts = filter_runtime_obstacles_world(
-            world_pts,
-            self._latest_robot_world_position(),
-            min_height_m=RUNTIME_OBSTACLE_MIN_HEIGHT_M,
-            min_distance_m=RUNTIME_OBSTACLE_MIN_DISTANCE_M,
-            max_distance_m=RUNTIME_OBSTACLE_MAX_DISTANCE_M,
-            max_points=RUNTIME_OBSTACLE_MAX_POINTS,
+        payload = encode_lidar(
+            ts=msg.ts,
+            points=world_pts,
+            robot_id=self.config.robot_id,
         )
-        self._ws_server.schedule_send(
-            encode_obstacles(
-                ts=msg.ts,
-                points=obstacle_pts,
-                robot_id=self.config.robot_id,
-            )
-        )
-
-        if self._debug_lidar_clients:
-            payload = encode_lidar(
-                ts=msg.ts,
-                points=world_pts,
-                robot_id=self.config.robot_id,
-            )
-            self._maybe_log_lidar_payload(len(world_pts), len(payload))
-            for websocket in list(self._debug_lidar_clients):
-                self._ws_server.schedule_send_to(websocket, payload)
+        self._maybe_log_lidar_payload(len(world_pts), len(payload))
+        self._ws_server.schedule_send(payload)
 
     def _maybe_log_lidar_payload(self, point_count: int, payload_bytes: int) -> None:
         now = time.monotonic()

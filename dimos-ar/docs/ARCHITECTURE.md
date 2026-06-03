@@ -263,17 +263,17 @@ robot's `odom` frame to the AR `world` frame.
 ## Filtering (filters.py)
 
 Lidar arrives as an (N,3) numpy array. Before broadcast:
-- Optional 360-degree range filter: can drop points beyond a configurable
-  horizontal distance around the robot.
-- Optional height-band filter: trims floor noise and clutter high above the
-  robot while still allowing the bridge to keep a nearby world-space cloud.
-- Optional bridge-side colour classification can label ground and obstacles
-  before sending the cloud to clients.
-- Subsample: voxel downsample (Open3D, already a DimOS dep) preferred over a
-  plain stride; target ~1-3k points.
-- Rate-limit the broadcast (RxPY `sample`) to ~10Hz.
+- Optional height-band filter: trims floor noise and clutter high above the robot.
+- Transform to world frame via `T_world_odom`.
+- Annulus subsample (`subsample_points_near_robot`): ~1000 points with quotas
+  500 / 350 / 150 in 0–1 m / 1–2.5 m / 2.5–4 m rings (backfills if a ring is
+  sparse). No separate horizontal `max_range_m` filter — the annulus owns the
+  spatial budget.
+- Rate-limit the broadcast to ~1 Hz for lidar.
 All filtering happens on the Mac, before JSON encoding — it is the main lever
-protecting both the WebSocket and AR-client framerate.
+protecting both the WebSocket and AR-client framerate. The Lens client renders
+height (debug) and obstacle layers from this single stream via CPU vertex colours
+in `PointCloudRenderer`.
 
 ## Testing without hardware
 

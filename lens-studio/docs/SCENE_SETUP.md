@@ -72,8 +72,8 @@ toggle reflect the same shared app-state boolean.
 ```
 RobotManager          ← scene object (hierarchy root)
 ├── DimOS              ← BridgeClient + DimosManager scripts
-├── Rendering          ← LidarPointCloud, RobotMarker
-│   ├── LidarPoints    (empty — point cloud parent)
+├── Rendering          ← PointCloudRenderer, RobotMarker
+│   ├── LidarPoints    ← LidarHeightVisual + LidarObstacleVisual children
 │   ├── RobotMarkerRoot
 │   │   ├── RobotToggleButton
 │   │   ├── RobotDirectionArrow
@@ -169,7 +169,7 @@ The exact Reachy sphere assets live in:
 | BridgeClient | defaultBridgeIp | Your Mac's LAN IP, bare IP only (e.g. `192.168.1.166`) |
 | DimosManager | bridgeClient | BridgeClient (on **DimOS**) |
 | DimosManager | alignmentController | AlignmentController |
-| DimosManager | lidarPointCloud | LidarPointCloud (on **Rendering**) |
+| DimosManager | pointCloudRenderer | PointCloudRenderer (on **PointCloudRenderer** under **Rendering**) |
 | DimosManager | placementRayOrigin | **Camera Object** (tracked camera root used for placement ray fallback) |
 | DimosManager | robotMarker | RobotMarker (on **Rendering**) |
 
@@ -178,8 +178,35 @@ The exact Reachy sphere assets live in:
 | AlignmentController | markerTracking | Marker Tracking on **Image Tracking** |
 | AlignmentController | debugGizmo | (Optional) SceneObject with 3D gizmo for tracking debug |
 | BridgeClient | internetModule | **Internet Module** asset (see below) |
-| LidarPointCloud | pointParent | **LidarPoints** (child of **Rendering**) |
+| PointCloudRenderer | pointParent | **LidarPoints** |
+| PointCloudRenderer | heightVisual | **LidarHeightVisual** (`RenderMeshVisual` → `LidarHeight.mat`) |
+| PointCloudRenderer | obstacleVisual | **LidarObstacleVisual** (`RenderMeshVisual` → `LidarObstacle.mat`) |
 | RobotMarker | markerRoot | **RobotMarkerRoot** (child of **Rendering**) |
+
+### LiDAR materials
+
+Both lidar layers use the vertex-color unlit shader:
+
+| Asset | Role |
+|-------|------|
+| `Assets/Materials/unlit.ss_graph` | Vertex-color unlit pass (`7bf996fa-…`) — **do not duplicate** |
+| `Assets/Materials/LidarHeight.mat` | Height/debug cubes (opaque, vertex color) |
+| `Assets/Materials/LidarObstacle.mat` | Proximity obstacle cubes (alpha blend, red) |
+
+If preview logs `missing a material pass` or `!passList.empty()`, confirm
+`LidarHeight.mat` / `LidarObstacle.mat` still reference `unlit.ss_graph` and
+that duplicate `unlit 2` / `uber_unlit` shader copies are not present.
+
+### Lens Studio MCP (assets + scene)
+
+Prefer **Lens Studio MCP** for Inspector-equivalent work when the project is open
+(MCP server started). Use it to list/create/move/delete assets, read or patch
+scripts under `Assets/`, inspect the scene graph, and set component properties —
+instead of hand-editing YAML scene/material files.
+
+Details and tool list: [`dimos-ar/docs/LENS_DEVELOPMENT.md` — MCP asset operations](../dimos-ar/docs/LENS_DEVELOPMENT.md#lens-studio-mcp-asset-and-scene-operations).
+
+**Manual-only exception:** Internet Module (see below).
 
 `SetupWizard` still has a `uiManager` script input for scene compatibility, but
 runtime HUD visibility is now derived from app phase instead of `UIManager`
@@ -187,7 +214,7 @@ owning lifecycle side effects.
 
 ### Internet Module (manual)
 
-MCP cannot add this asset automatically:
+MCP cannot add this asset automatically (use MCP for almost all other assets):
 
 1. **+ Add Asset → Internet Module**
 2. On **BridgeClient** (under **DimOS**), assign it to **Internet Module**

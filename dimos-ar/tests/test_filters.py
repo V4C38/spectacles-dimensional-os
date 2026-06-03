@@ -3,7 +3,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dimos_ar.filters import LidarFilter, LidarFilterConfig, RateLimiter
+from dimos_ar.filters import (
+    LidarFilter,
+    LidarFilterConfig,
+    RateLimiter,
+    subsample_points_near_robot,
+)
 
 
 def test_empty_points() -> None:
@@ -55,10 +60,7 @@ def test_optional_filters_allow_full_pointcloud() -> None:
     assert len(filtered) == len(points)
 
 
-def test_subsample_stride_when_over_target(monkeypatch: pytest.MonkeyPatch) -> None:
-    import dimos_ar.filters as filters_mod
-
-    monkeypatch.setattr(filters_mod, "_HAS_OPEN3D", False)
+def test_filter_does_not_subsample() -> None:
     config = LidarFilterConfig(
         max_range_m=100.0,
         min_height_m=-1.0,
@@ -68,7 +70,55 @@ def test_subsample_stride_when_over_target(monkeypatch: pytest.MonkeyPatch) -> N
     filt = LidarFilter(config)
     points = np.array([[float(i), 0.0, 0.5] for i in range(100)], dtype=np.float32)
     filtered = filt.filter(points)
-    assert len(filtered) <= config.target_points
+    assert len(filtered) == 100
+
+
+def test_subsample_without_robot_stride() -> None:
+    points = np.array([[float(i), 0.0, 0.5] for i in range(5000)], dtype=np.float32)
+    result = subsample_points_near_robot(points, None, target_points=1000)
+    assert len(result) == 1000
+
+
+def test_subsample_annulus_prefers_near_robot() -> None:
+    rng = np.random.default_rng(42)
+    near_theta = rng.uniform(0.0, 2.0 * np.pi, size=2000)
+    near_r = rng.uniform(0.1, 0.9, size=2000)
+    near = np.column_stack(
+        [
+            near_r * np.cos(near_theta),
+            np.full(2000, 0.5, dtype=np.float32),
+            near_r * np.sin(near_theta),
+        ]
+    ).astype(np.float32)
+    far_theta = rng.uniform(0.0, 2.0 * np.pi, size=2000)
+    far_r = rng.uniform(2.6, 3.8, size=2000)
+    far = np.column_stack(
+        [
+            far_r * np.cos(far_theta),
+            np.full(2000, 0.5, dtype=np.float32),
+            far_r * np.sin(far_theta),
+        ]
+    ).astype(np.float32)
+    points = np.vstack([near, far])
+    robot = (0.0, 0.0, 0.0)
+    result = subsample_points_near_robot(points, robot, target_points=1000)
+
+    assert len(result) == 1000
+    robot_arr = np.asarray(robot, dtype=np.float32)
+    horiz = np.sqrt(
+        (result[:, 0] - robot_arr[0]) ** 2 + (result[:, 2] - robot_arr[2]) ** 2
+    )
+    near_count = int(np.sum(horiz < 1.0))
+    assert near_count >= 400
+
+
+def test_subsample_empty() -> None:
+    result = subsample_points_near_robot(
+        np.zeros((0, 3), dtype=np.float32),
+        (0.0, 0.0, 0.0),
+        target_points=1000,
+    )
+    assert len(result) == 0
 
 
 def test_invalid_shape_raises() -> None:

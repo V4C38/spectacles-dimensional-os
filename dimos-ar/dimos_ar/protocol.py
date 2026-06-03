@@ -18,14 +18,12 @@ FRAME_WORLD = "world"
 
 DEFAULT_CAPABILITIES = [
     "lidar",
-    "obstacles",
     "odom",
     "align",
     "align_manual",
     "nav",
     "path",
     "emergency_stop",
-    "stream_preferences",
 ]
 
 
@@ -102,13 +100,6 @@ class GetStatusMessage:
     robot_id: str
 
 
-@dataclass(frozen=True)
-class SetStreamPreferencesMessage:
-    ts: float
-    robot_id: str
-    debug_lidar: bool
-
-
 InboundMessage = (
     RegisterMessage
     | NavGoalMessage
@@ -120,7 +111,6 @@ InboundMessage = (
     | AlignMarkerMessage
     | AlignManualPoseMessage
     | GetStatusMessage
-    | SetStreamPreferencesMessage
 )
 
 
@@ -221,12 +211,6 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         )
     if msg_type == "get_status":
         return GetStatusMessage(ts=ts, robot_id=robot_id)
-    if msg_type == "set_stream_preferences":
-        return SetStreamPreferencesMessage(
-            ts=ts,
-            robot_id=robot_id,
-            debug_lidar=bool(_require_type(data, "debug_lidar", bool)),
-        )
     raise ValueError(f"Unknown inbound message type: {msg_type!r}")
 
 
@@ -285,7 +269,7 @@ def encode_registered(
     )
 
 
-def _round_flat(arr: NDArray[np.floating], decimals: int = 3) -> list[float]:
+def _round_flat(arr: NDArray[np.floating], decimals: int = 2) -> list[float]:
     """Flatten Nx3 array to a 1-D list of rounded floats for compact JSON."""
     arr_f64 = arr.astype(np.float64)
     # Replace NaN/Inf with 0 to ensure valid JSON
@@ -301,22 +285,6 @@ def encode_lidar(
 ) -> str:
     payload: dict[str, Any] = {
         "type": "lidar",
-        "ts": round(ts, 3),
-        "robot_id": robot_id,
-        "frame": FRAME_WORLD,
-        "points_flat": _round_flat(points),
-    }
-    return _dumps(payload)
-
-
-def encode_obstacles(
-    *,
-    ts: float,
-    points: NDArray[np.floating],
-    robot_id: str = ROBOT_ID,
-) -> str:
-    payload: dict[str, Any] = {
-        "type": "obstacles",
         "ts": round(ts, 3),
         "robot_id": robot_id,
         "frame": FRAME_WORLD,

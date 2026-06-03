@@ -118,9 +118,6 @@ export class NavigationMarkerView {
     const forward = rotation.multiplyVec3(vec3.right().uniformScale(-1));
     const distance = Math.sqrt(forward.x * forward.x + forward.z * forward.z);
     if (distance < 0.001) {
-      if (this.moveDirectionArrow) {
-        this.moveDirectionArrow.enabled = false;
-      }
       return;
     }
     const fx = forward.x / distance;
@@ -153,7 +150,7 @@ export class NavigationMarkerView {
         cw * b.z - sy * b.x,
       ),
     );
-    this.moveDirectionArrow.enabled = true;
+    this._syncMoveDirectionArrowVisibility();
   }
 
   public bindPlacementAnchor(
@@ -272,6 +269,8 @@ export class NavigationMarkerView {
     if (this.arrow) {
       this.arrow.enabled = false;
     }
+    this._setMoveDirectionArrowSpeed(0);
+    this._syncMoveDirectionArrowVisibility();
     this._setPortalSaturation(0);  // Desaturate during placing
     this._animateVisibility(true);
     this._animateCircleScale(true);
@@ -294,9 +293,8 @@ export class NavigationMarkerView {
     if (this.arrow) {
       this.arrow.enabled = true;
     }
-    if (this.moveDirectionArrow) {
-      this.moveDirectionArrow.enabled = false;
-    }
+    this._setMoveDirectionArrowSpeed(1);
+    this._syncMoveDirectionArrowVisibility();
     this._setPortalSaturation(1);  // Full saturation during execution
     this._animateVisibility(true);
     this._animateCircleScale(false);
@@ -310,9 +308,8 @@ export class NavigationMarkerView {
     if (this.arrow) {
       this.arrow.enabled = false;
     }
-    if (this.moveDirectionArrow) {
-      this.moveDirectionArrow.enabled = false;
-    }
+    this._setMoveDirectionArrowSpeed(0);
+    this._syncMoveDirectionArrowVisibility();
     // Cancel any in-progress circle animation and restore the circle to full
     // scale so it is ready for the next showPlacing(). The root is about to
     // scale to zero so this is invisible.
@@ -330,9 +327,8 @@ export class NavigationMarkerView {
     if (this.arrow) {
       this.arrow.enabled = false;
     }
-    if (this.moveDirectionArrow) {
-      this.moveDirectionArrow.enabled = false;
-    }
+    this._setMoveDirectionArrowSpeed(0);
+    this._syncMoveDirectionArrowVisibility();
     this._nextCircleAnimationVersion();
     this.portalCircle.enabled = true;
     this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
@@ -484,9 +480,31 @@ export class NavigationMarkerView {
     if (this.arrow) {
       this.arrow.enabled = false;
     }
-    if (this.moveDirectionArrow) {
-      this.moveDirectionArrow.enabled = false;
+    this._setMoveDirectionArrowSpeed(0);
+    this._syncMoveDirectionArrowVisibility();
+  }
+
+  private _setMoveDirectionArrowSpeed(speed: number): void {
+    if (!this.moveDirectionArrow) {
+      return;
     }
+    const visual = this.moveDirectionArrow.getComponent(
+      "Component.RenderMeshVisual",
+    ) as RenderMeshVisual | null;
+    if (!visual?.mainMaterial) {
+      return;
+    }
+    const pass = visual.mainMaterial.mainPass;
+    if (pass && "ArrowSpeed" in pass) {
+      (pass as any).ArrowSpeed = speed;
+    }
+  }
+
+  private _syncMoveDirectionArrowVisibility(): void {
+    if (!this.moveDirectionArrow) {
+      return;
+    }
+    this.moveDirectionArrow.enabled = true;
   }
 
   private _animateCircleScale(visible: boolean): void {

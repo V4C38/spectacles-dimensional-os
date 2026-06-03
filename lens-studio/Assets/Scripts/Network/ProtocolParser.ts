@@ -4,7 +4,6 @@ import {
   HelloMessage,
   InboundMessage,
   LidarMessage,
-  ObstaclesMessage,
   NavStatusMessage,
   PathMessage,
   PoseMessage,
@@ -68,8 +67,7 @@ function parseVec3(raw: unknown): [number, number, number] {
 
 function parseFlatPointMessage(
   data: Record<string, unknown>,
-  type: "lidar" | "obstacles",
-): LidarMessage | ObstaclesMessage {
+): LidarMessage {
   let pts: [number, number, number][];
   if (Array.isArray(data.points_flat)) {
     pts = unflattenVec3(data.points_flat as number[]);
@@ -78,7 +76,7 @@ function parseFlatPointMessage(
   }
 
   return {
-    type,
+    type: "lidar",
     ts: requireNumber(data, "ts"),
     robot_id: requireString(data, "robot_id"),
     frame: requireString(data, "frame"),
@@ -105,13 +103,7 @@ export function parseInboundMessage(text: string): InboundMessage | null {
     }
 
     case "lidar": {
-      const msg = parseFlatPointMessage(data, "lidar");
-      setActiveRobotId(msg.robot_id);
-      return msg;
-    }
-
-    case "obstacles": {
-      const msg = parseFlatPointMessage(data, "obstacles");
+      const msg = parseFlatPointMessage(data);
       setActiveRobotId(msg.robot_id);
       return msg;
     }

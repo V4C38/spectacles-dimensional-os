@@ -32,14 +32,6 @@ export interface LidarMessage {
   points: [number, number, number][];
 }
 
-export interface ObstaclesMessage {
-  type: "obstacles";
-  ts: number;
-  robot_id: string;
-  frame: string;
-  points: [number, number, number][];
-}
-
 export interface PoseMessage {
   type: "pose";
   ts: number;
@@ -104,7 +96,6 @@ export interface NavStatusMessage {
 export type InboundMessage =
   | HelloMessage
   | LidarMessage
-  | ObstaclesMessage
   | PoseMessage
   | RegisteredMessage
   | AlignStatusMessage

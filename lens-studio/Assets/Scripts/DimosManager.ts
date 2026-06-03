@@ -1,8 +1,7 @@
 import { BridgeClient } from "./Network/BridgeClient";
 import { AlignmentController } from "./Alignment/AlignmentController";
-import { LidarPointCloud } from "./Rendering/LidarPointCloud";
+import { PointCloudRenderer } from "./Rendering/PointCloudRenderer";
 import { RobotMarker } from "./Rendering/RobotMarker";
-import { ObstacleHighlightRenderer } from "./Rendering/ObstacleHighlightRenderer";
 import { PathRenderer } from "./Rendering/PathRenderer";
 import { NavigationMarkerView } from "./Navigation/NavigationMarkerView";
 import {
@@ -50,7 +49,7 @@ export class DimosManager extends BaseScriptComponent {
   alignmentController: AlignmentController;
 
   @input
-  lidarPointCloud: LidarPointCloud;
+  pointCloudRenderer: PointCloudRenderer;
 
   @input
   robotMarker: RobotMarker;
@@ -84,7 +83,6 @@ export class DimosManager extends BaseScriptComponent {
 
   private _goalRenderer: NavigationMarkerView | null = null;
   private _pathRenderer: PathRenderer | null = null;
-  private _obstacleRenderer: ObstacleHighlightRenderer | null = null;
   private _placementController: PlacementController | null = null;
   private _robotMenuController: RobotMenuController | null = null;
   private _navigationController: NavigationController | null = null;
@@ -113,16 +111,14 @@ export class DimosManager extends BaseScriptComponent {
   private _createHelpers(): void {
     const parent =
       this.robotMarker?.markerRoot?.getParent() ??
-      this.lidarPointCloud?.pointParent?.getParent() ??
+      this.pointCloudRenderer?.pointParent?.getParent() ??
       this.getSceneObject();
-    const template = this.lidarPointCloud?.pointTemplate ?? null;
     const navigationMarkerRoot = this._requireSceneObject(
       "SurfacePlacementMarker",
     );
 
     this._goalRenderer = new NavigationMarkerView(navigationMarkerRoot);
     this._pathRenderer = new PathRenderer(parent);
-    this._obstacleRenderer = new ObstacleHighlightRenderer(parent, template);
     this._placementController = new PlacementController(
       this,
       WorldQueryModule,
@@ -201,21 +197,17 @@ export class DimosManager extends BaseScriptComponent {
     }
     this.bridgeClient.ensureEventHandlers();
     this.bridgeClient.onHello.push(() => {
-      this.bridgeClient.sendStreamPreferences(this.debugMode);
       this.onBridgeReady.forEach((cb) => cb());
     });
     this.bridgeClient.onLidar.push((msg) => {
-      if (this._isActive && this.debugMode && this.lidarPointCloud) {
-        this.lidarPointCloud.queueLidar(msg);
+      if (this._isActive && this.pointCloudRenderer) {
+        this.pointCloudRenderer.updateLidar(msg);
       }
-    });
-    this.bridgeClient.onObstacles.push((msg) => {
-      this._obstacleRenderer?.updateObstacles(msg);
     });
     this.bridgeClient.onPose.push((msg) => {
       this._lastPose = msg;
       const robotLensPos = protocolMetersToLensCentimeters(msg.position);
-      (this.lidarPointCloud as any)?.setRobotWorldPosition?.(robotLensPos);
+      this.pointCloudRenderer?.setRobotWorldPosition(robotLensPos);
       if (this._isActive && this.robotMarker) {
         this._applyRobotDisplayPose(msg);
       }
@@ -226,20 +218,43 @@ export class DimosManager extends BaseScriptComponent {
     this.bridgeClient.onConnectionChanged.push((connected) =>
       this._applyConnectionState(connected),
     );
+    this._syncDebugLidarPreview();
+  }
+
+  private _syncDebugLidarPreview(): void {
+    const renderer = this.pointCloudRenderer;
+    if (!renderer) {
+      return;
+    }
+
+    const showMock =
+      this._isActive && this.debugMode && !this.hasBridgeConnection();
+    if (showMock) {
+      const anchor = this.robotMarker?.getWorldPosition() ?? vec3.zero();
+      renderer.setRobotWorldPosition(anchor);
+      renderer.setHeightLayerVisible(true);
+      renderer.showMockDebugCloud(anchor);
+      return;
+    }
+
+    renderer.setHeightLayerVisible(this.debugMode);
+    if (!this.hasBridgeConnection()) {
+      renderer.clear();
+    }
   }
 
   public setIsActive(active: boolean): void {
     this._isActive = active;
-    if (!active && this.lidarPointCloud) {
-      this.lidarPointCloud.clear();
+    if (!active && this.pointCloudRenderer) {
+      this.pointCloudRenderer.clear();
     }
     if (!active) {
-      this._obstacleRenderer?.clear();
       this._navigationController?.clearInactiveState();
       this._robotMenuController?.hide();
     }
     this._applyRobotInteractionMode(this.appState.robotInteractionMode);
     if (active) {
+      this._syncDebugLidarPreview();
       if (this.bridgeClient?.lastBridgeStatus) {
         this._applyBridgeStatus(this.bridgeClient.lastBridgeStatus);
       } else {
@@ -444,12 +459,9 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     this._setAppState({ debugMode: enabled });
-    this.bridgeClient?.sendStreamPreferences(enabled);
+    this._syncDebugLidarPreview();
     if (this.alignmentController) {
       this.alignmentController.setDebugMode(enabled);
-    }
-    if (!enabled && this.lidarPointCloud) {
-      this.lidarPointCloud.clear();
     }
     if (!enabled && !this._canStartNavigationPlacement()) {
       this._navigationController?.setPlacementEnabled(false);
@@ -588,6 +600,7 @@ export class DimosManager extends BaseScriptComponent {
       this._manualPoseCorrectionTranslation = null;
       this.robotMarker?.resetRuntimePoseSmoothing();
     }
+    this._syncDebugLidarPreview();
   }
 
   private _canStartNavigationPlacement(): boolean {

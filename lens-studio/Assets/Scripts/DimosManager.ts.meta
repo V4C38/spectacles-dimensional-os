@@ -28,8 +28,8 @@
   ScriptInputsHidden:
     alignmentController: false
     bridgeClient: false
-    lidarPointCloud: false
     placementRayOrigin: false
+    pointCloudRenderer: false
     robotGroundDeadzoneRadiusCm: false
     robotMarker: false
   ScriptTypesHidden:
@@ -43,7 +43,7 @@
   DefaultScriptInputs:
     - bridgeClient: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
       alignmentController: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
-      lidarPointCloud: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
+      pointCloudRenderer: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
       robotMarker: !<MappingBased.AssignableType_3> 00000000-0000-0000-0000-000000000000
       placementRayOrigin: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
       robotGroundDeadzoneRadiusCm: !<float> 75.000000
@@ -53,7 +53,7 @@
   InputLines:
     - // @input AssignableType bridgeClient
     - // @input AssignableType_1 alignmentController
-    - // @input AssignableType_2 lidarPointCloud
+    - // @input AssignableType_2 pointCloudRenderer
     - // @input AssignableType_3 robotMarker
     - // @input SceneObject placementRayOrigin
     - // @input float robotGroundDeadzoneRadiusCm = 75

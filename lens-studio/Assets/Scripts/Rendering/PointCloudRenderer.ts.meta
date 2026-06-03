@@ -1,20 +1,20 @@
-- !<AssetImportMetadata/cf1d662e-dc80-4a5e-ba6d-52001bec9200>
+- !<AssetImportMetadata/46c809b4-d4fb-4cae-abcd-a53ec12d2bcf>
   ImportedAssetIds:
-    TypeScriptAsset: !<reference> 4f5211ef-979a-4bf4-b977-94297f06ab4c
+    TypeScriptAsset: !<reference> 827e4123-6a34-4227-916c-d9e54ea1e595
   ImporterName: TypeScriptAssetImporter
-  PrimaryAsset: !<reference> 4f5211ef-979a-4bf4-b977-94297f06ab4c
+  PrimaryAsset: !<reference> 827e4123-6a34-4227-916c-d9e54ea1e595
   PackageType: NotAPackage
   LegacyPackagePolicy: ~
   ExtraData:
     {}
   AssetDataMap:
-    TypeScriptAsset: !<own> 6605b6ca-3b49-4b3b-ae46-be10140ec480
+    TypeScriptAsset: !<own> cd67cf87-fde0-4e7b-8c49-90c406665701
   DependentFiles:
     []
   ImporterSettings: !<AssetImporterSettings>
     {}
   CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
-- !<TypeScriptAssetData/6605b6ca-3b49-4b3b-ae46-be10140ec480>
+- !<TypeScriptAssetData/cd67cf87-fde0-4e7b-8c49-90c406665701>
   SvgIcon: ""
   SetupScript:
     code: ""
@@ -22,12 +22,13 @@
   VersionMajor: 0
   VersionMinor: 0
   VersionPatch: 0
-  ComponentUid: 4822e3e7-1eb1-401a-813e-e002cbe1d645
+  ComponentUid: 45cf2afc-dc21-4d80-a315-91f3b13a5633
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
+    heightVisual: false
+    obstacleVisual: false
     pointParent: false
-    pointTemplate: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -38,10 +39,12 @@
     []
   DefaultScriptInputs:
     - pointParent: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
-      pointTemplate: !<reference.RenderMeshVisual> 00000000-0000-0000-0000-000000000000
+      heightVisual: !<reference.RenderMeshVisual> 00000000-0000-0000-0000-000000000000
+      obstacleVisual: !<reference.RenderMeshVisual> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
   InputLines:
     - // @input SceneObject pointParent
-    - // @input Component.RenderMeshVisual pointTemplate
+    - // @input Component.RenderMeshVisual heightVisual
+    - // @input Component.RenderMeshVisual obstacleVisual

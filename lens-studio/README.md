@@ -8,7 +8,7 @@ Open **`spectacles-unitree.esproj`** in this folder (not the repo root).
 |-----|----------|
 | [docs/SCENE_SETUP.md](docs/SCENE_SETUP.md) | Scene hierarchy and `@input` wiring |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common marker / tracking issues |
-| [../dimos-ar/docs/LENS_DEVELOPMENT.md](../dimos-ar/docs/LENS_DEVELOPMENT.md) | Architecture, UI patterns, MCP |
+| [../dimos-ar/docs/LENS_DEVELOPMENT.md](../dimos-ar/docs/LENS_DEVELOPMENT.md) | Architecture, UI patterns, **MCP asset/scene operations** |
 
 ## Scripts
 
@@ -27,7 +27,7 @@ Assets/Scripts/
 ├── Network/                 # BridgeClient, Protocol
 ├── Alignment/               # AlignmentController, ManualAlignmentController
 ├── Navigation/              # NavigationController, PlacementController
-├── Rendering/               # LidarPointCloud, RobotMarker
+├── Rendering/               # PointCloudRenderer, RobotMarker
 ```
 
 Scene root object **RobotManager** hosts bridge/render children; **DimosManager** is the script component on the **DimOS** child object.
@@ -38,6 +38,10 @@ Pinned under `Packages/` (SIK, SpectaclesUIKit, Utilities). `icon.png` for Lens 
 
 ## Dev tools
 
+- **Lens Studio MCP (asset + scene ops):** with Lens Studio open and MCP started,
+  use Cursor Agent tools instead of editing `.scene` / `.mat` by hand. See
+  [MCP asset operations](../dimos-ar/docs/LENS_DEVELOPMENT.md#lens-studio-mcp-asset-and-scene-operations)
+  in `LENS_DEVELOPMENT.md`.
 - `tools/create_debug_gizmo.py` — optional scene debug helper
 - For Lens Studio verification, prefer the normal compile path first. Do not
   run compile-with-logs unless a compile/runtime error has already occurred and

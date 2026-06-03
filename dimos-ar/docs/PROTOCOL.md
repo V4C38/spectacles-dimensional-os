@@ -37,7 +37,7 @@ On connect, the server sends one `hello` with all capabilities:
   "type": "hello",
   "protocol_version": 1,
   "robots": ["go2"],
-  "capabilities": ["lidar", "obstacles", "odom", "align", "align_manual", "nav", "path", "emergency_stop", "stream_preferences"]
+  "capabilities": ["lidar", "odom", "align", "align_manual", "nav", "path", "emergency_stop"]
 }
 ```
 
@@ -120,9 +120,10 @@ Alignment progress during the setup wizard **Calibrate Coordinates** step.
 - `message`: human-readable status for the wizard UI.
 
 ### lidar
-A subsampled debug point cloud in the AR world frame. The bridge may optionally
-apply 360-degree range/height filtering to keep nearby traversable space plus
-obstacles while trimming very high clutter above the robot.
+A subsampled point cloud in the AR world frame, broadcast to all connected
+clients at ~1 Hz. The bridge applies a height-band filter, transforms points to
+world coordinates, then annulus subsampling (~1000 points, denser near the
+robot).
 
 ```json
 {
@@ -133,28 +134,11 @@ obstacles while trimming very high clutter above the robot.
   "points_flat": [x1, y1, z1, x2, y2, z2, ...]
 }
 ```
-- `points_flat`: flat array of floats (x,y,z triples), metres, rounded to 3 decimals.
-  Expect ~1-3k points (3-9k floats). Clients unflatten to `[[x,y,z], ...]`.
-  Point colouring is handled entirely client-side.
-- Full `lidar` is intended for debug visualization and may be gated by client
-  stream preferences so it is only sent when explicitly requested.
-
-### obstacles
-A compact runtime obstacle stream in the AR world frame, pre-filtered on the
-bridge so clients do not need to receive and re-filter the full debug point cloud.
-
-```json
-{
-  "type": "obstacles",
-  "ts": 1730000000.123,
-  "robot_id": "go2",
-  "frame": "world",
-  "points_flat": [x1, y1, z1, x2, y2, z2, ...]
-}
-```
-- `points_flat`: flat array of floats (x,y,z triples), metres, rounded to 3 decimals.
-- Intended for lightweight runtime obstacle highlighting near the robot.
-- The bridge may cap this stream to a small point count (for example ~200 points).
+- `points_flat`: flat array of floats (x,y,z triples), metres, rounded to 2 decimals.
+  Expect ~1000 points (~3000 floats). Clients unflatten to `[[x,y,z], ...]`.
+  The Lens client renders two CPU-coloured layers from this single stream:
+  a debug height cloud (blue→white by world Y) and a runtime obstacle layer
+  (red with distance-based fade).
 
 ### pose
 The robot's current pose in the AR world frame.
@@ -368,22 +352,6 @@ connection).
 
 Use `hello.robots[0]` as `robot_id` after connect when the bridge reports a hardware
 serial.
-
-### set_stream_preferences
-Allow the client to request optional high-bandwidth debug streams.
-
-```json
-{
-  "type": "set_stream_preferences",
-  "ts": 1730000000.123,
-  "robot_id": "go2",
-  "debug_lidar": true
-}
-```
-
-- `debug_lidar`: when `true`, request full outbound `lidar` messages for debug
-  point-cloud rendering. When `false`, the client still receives compact
-  `obstacles` messages but should no longer receive full debug `lidar`.
 
 ## Versioning rules
 

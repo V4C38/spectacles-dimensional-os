@@ -60,7 +60,7 @@ DimosManager (@component on DimOS scene object)
     ├── SetupWizard / UIManager   (wizard + HUD; runtime UI via UIBuilders)
     ├── BridgeClient              (WebSocket; onHello/onLidar/onPose event arrays)
     ├── AlignmentController       (marker tracking during Calibrate step)
-    └── LidarPointCloud / RobotMarker
+    └── PointCloudRenderer / RobotMarker
 ```
 
 **DimosManager** (`ReachyMiniManager` analogue):
@@ -248,7 +248,7 @@ lens-studio/
 │       ├── Alignment/
 │       │   └── AlignmentController.ts  # MarkerTracking + WS alignment
 │       ├── Rendering/
-│       │   ├── LidarPointCloud.ts
+│       │   ├── PointCloudRenderer.ts
 │       │   └── RobotMarker.ts
 │       └── UI/
 │           └── Shared/
@@ -543,6 +543,46 @@ open** with the MCP server running while you use Agent in Cursor.
   Library, generate TypeScript scripts.
 - MCP complements but does not replace reading Agent Center patterns for UI
   architecture.
+
+## Lens Studio MCP — asset and scene operations
+
+When Lens Studio is open and **AI Assistant → MCP → Start Server** is active,
+use the built-in MCP server for **asset and scene work** in Cursor Agent mode.
+Do **not** hand-edit `.scene`, `.mat`, or `.meta` YAML when MCP can do the job —
+especially for wiring `@input` references and creating materials.
+
+**Prerequisites:** global `~/.cursor/mcp.json` only (see **Using MCP in Cursor**
+above). Lens Studio must stay open with the same project loaded.
+
+### Prefer MCP for
+
+| Task | MCP tools (read schema before calling) |
+|------|----------------------------------------|
+| List / find assets | `ListLensStudioAssets`, `GetLensStudioAssetsByName`, `GetLensStudioAssetByPath` |
+| Create / duplicate assets | `CreateLensStudioAsset`, `DuplicateLensStudioAsset`, `CreateAssetFromPresetTool` |
+| Move / rename / delete | `MoveLensStudioAsset`, `RenameAsset`, `DeleteLensStudioAsset` |
+| Edit TypeScript under `Assets/` | `ReadWriteTextFile` (`action: read/write`, path relative to `Assets/`) |
+| Scene graph inspection | `GetLensStudioSceneGraph`, `GetLensStudioSceneObjectByName` |
+| Add / wire components | `CreateLensStudioComponent`, `SetLensStudioProperty`, `SetLensStudioParent` |
+| Packages | `InstallLensStudioPackage`, `ListInstalledPackagesTool` |
+| Compile / logs (when debugging) | `GetLensStudioLogsTool`; use `CompileWithLogsTool` only after a real compile failure |
+
+### Still manual in Lens Studio UI
+
+- **Internet Module** asset (assign on `BridgeClient`) — MCP cannot create it.
+- First-time **open project** from `lens-studio/spectacles-dimensional-os.esproj`.
+- Device push / Spectacles preview on hardware.
+
+### Agent prompt examples
+
+- “Use Lens Studio MCP to list assets under `Materials/` and confirm `LidarHeight.mat` references `unlit.ss_graph`.”
+- “Use MCP to read `Assets/Scripts/DimosManager.ts` and verify `pointCloudRenderer` wiring in the scene graph.”
+- “Create a new material asset via MCP; do not edit `.mat` YAML by hand.”
+
+### Cache / preview hygiene
+
+- Do not browse `lens-studio/Cache/` in Finder (macOS `.DS_Store` can break TypeScript cache wipes).
+- If preview shows `!passList.empty()` on `PointCloudRenderer`, check lidar materials still point at `Assets/Materials/unlit.ss_graph` (pass `7bf996fa-…`).
 
 ## Development workflow
 

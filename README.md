@@ -268,7 +268,7 @@ flowchart TB
 | [`lens-studio/Assets/Scripts/Setup/`](lens-studio/Assets/Scripts/Setup/) | Helper classes for wizard UI, connection retry, and calibration presentation |
 | [`lens-studio/Assets/Scripts/UI/HUD/`](lens-studio/Assets/Scripts/UI/HUD/) | Plain HUD view classes for the authored main HUD and runtime nav controls |
 | [`lens-studio/Assets/Scripts/Navigation/`](lens-studio/Assets/Scripts/Navigation/) | Placement and navigation workflow helpers |
-| [`lens-studio/Assets/Scripts/Rendering/`](lens-studio/Assets/Scripts/Rendering/) | Rendering helpers for lidar, robot marker, goals, paths, and obstacles |
+| [`lens-studio/Assets/Scripts/Rendering/`](lens-studio/Assets/Scripts/Rendering/) | Rendering helpers for lidar (PointCloudRenderer), robot marker, goals, and paths |
 
 The important boundary is:
 
@@ -285,7 +285,7 @@ Central module: [`dimos-ar/dimos_ar/bridge_module.py`](dimos-ar/dimos_ar/bridge_
 | [`bridge_module.py`](dimos-ar/dimos_ar/bridge_module.py) | DimOS module lifecycle, stream handlers |
 | [`websocket_server.py`](dimos-ar/dimos_ar/websocket_server.py) | Daemon-thread `websockets` server |
 | [`protocol.py`](dimos-ar/dimos_ar/protocol.py) | JSON encode/decode (keep in sync with PROTOCOL.md) |
-| [`filters.py`](dimos-ar/dimos_ar/filters.py) | Range/height filter, subsample, rate limit (~1–3k points) |
+| [`filters.py`](dimos-ar/dimos_ar/filters.py) | Height filter, annulus subsample (~1000 pts), rate limit |
 | [`transforms.py`](dimos-ar/dimos_ar/transforms.py) | `T_world_odom` calibration and inverse transforms |
 
 **Threading (critical):** `super().start()` auto-binds `handle_lidar` / `handle_odom` on the module asyncio loop. Handlers schedule WebSocket sends via `asyncio.run_coroutine_threadsafe`. The WebSocket server runs on its own daemon thread; `start()` waits until the socket is listening.
@@ -297,10 +297,10 @@ Central module: [`dimos-ar/dimos_ar/bridge_module.py`](dimos-ar/dimos_ar/bridge_
 | `port` | 8765 | WebSocket listen port |
 | `robot_id` | `"go2"` | Protocol robot identifier |
 | `max_message_bytes` | 1048576 | Max inbound WebSocket frame size |
-| `max_range_m` | 3.0 | Lidar horizontal range filter |
-| `min_height_m` / `max_height_m` | 0.1 / 1.5 | Height band filter |
-| `target_points` | 2500 | Lidar subsample target |
-| `lidar_max_hz` / `pose_max_hz` | 10 / 30 | Outbound rate limits |
+| `max_range_m` | `None` | Optional horizontal range filter (default: disabled; annulus subsampling owns spatial budget) |
+| `min_height_m` / `max_height_m` | -0.35 / 1.2 | Height band filter |
+| `target_points` | 1000 | Lidar annulus subsample target |
+| `lidar_max_hz` / `pose_max_hz` | 1 / 30 | Outbound rate limits |
 | `marker_length_m` | 0.060 | AprilTag square edge (60 mm) |
 | `align_timestamp_tolerance_s` | 0.5 | Max time gap between dual detections |
 
@@ -319,11 +319,11 @@ lens-studio/Assets/Scripts/
 ├── Alignment/                       # marker alignment + manual placement session
 ├── Navigation/                      # placement + navigation workflow
 ├── Network/                         # WebSocket client + protocol modules
-├── Rendering/                       # lidar, robot marker, goal, path, obstacles
+├── Rendering/                       # PointCloudRenderer, robot marker, goal, path
 └── UI/                              # HUD views, robot menu, shared UI helpers
 ```
 
-See [`dimos-ar/docs/LENS_DEVELOPMENT.md`](dimos-ar/docs/LENS_DEVELOPMENT.md) for Lens architecture (Agent Center patterns), dev workflow, and Lens Studio MCP setup for Cursor.
+See [`dimos-ar/docs/LENS_DEVELOPMENT.md`](dimos-ar/docs/LENS_DEVELOPMENT.md) for Lens architecture (Agent Center patterns), dev workflow, and **Lens Studio MCP** setup plus asset/scene operation tools for Cursor.
 
 ## WebSocket on port 8765
 
@@ -344,7 +344,7 @@ exists), and whether streams are flowing. Clients can send `get_status` to refre
 
 | Message | Purpose |
 |---------|---------|
-| `lidar` | Filtered point cloud in **world** frame (~1–3k points) |
+| `lidar` | Filtered point cloud in **world** frame (~1000 points @ 1 Hz) |
 | `pose` | Robot pose in **world** frame |
 | `path` | Planned path waypoints in **world** frame |
 | `nav_status` | Navigation state (idle, following_path, recovery) |
@@ -372,7 +372,7 @@ The single blueprint [`go2_ar.py`](dimos-ar/blueprints/go2_ar.py) composes the f
 
 Here are things you can change without leaving the supported architecture:
 
-- **Tune lidar for your network:** edit `ARBridgeConfig` in [`bridge_module.py`](dimos-ar/dimos_ar/bridge_module.py) — `max_range_m`, `target_points`, `lidar_max_hz`
+- **Tune lidar for your network:** edit `ARBridgeConfig` in [`bridge_module.py`](dimos-ar/dimos_ar/bridge_module.py) — `target_points`, `lidar_max_hz`, height band (`min_height_m` / `max_height_m`)
 - **Pin a specific Go2 on a busy LAN:** set `ROBOT_SERIAL` before starting the blueprint (must match the hardware serial from discovery)
 - **Add a protocol message:** update [`dimos_ar/protocol.py`](dimos-ar/dimos_ar/protocol.py), [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md), and `lens-studio/Assets/Scripts/Network/Protocol.ts` together
 - **Add a new AR platform:** implement [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md) in your client; keep platform code out of `dimos_ar/` (Spectacles in `lens-studio/`; other platforms in their own folder or repo)
@@ -429,7 +429,7 @@ If the live connection goes stale, `ARGO2Connection` re-discovers by **serial** 
 |-----|----------|
 | [`dimos-ar/docs/ARCHITECTURE.md`](dimos-ar/docs/ARCHITECTURE.md) | Package layout, threading, data flow |
 | [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md) | WebSocket message schema |
-| [`dimos-ar/docs/LENS_DEVELOPMENT.md`](dimos-ar/docs/LENS_DEVELOPMENT.md) | Spectacles Lens Studio guide, MCP, UI patterns |
+| [`dimos-ar/docs/LENS_DEVELOPMENT.md`](dimos-ar/docs/LENS_DEVELOPMENT.md) | Spectacles Lens Studio guide, MCP asset/scene ops, UI patterns |
 | [`dimos-ar/docs/MARKER_ASSETS.md`](dimos-ar/docs/MARKER_ASSETS.md) | AprilTag generation and Lens sync |
 | [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md) | Lens scene wiring checklist |
 
