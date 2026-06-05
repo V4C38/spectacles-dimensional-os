@@ -23,7 +23,6 @@ import numpy as np
 from dimos_ar.marker_contract import (
     COMPOSITE_MARKER_HEIGHT_CM,
     COMPOSITE_MARKER_HEIGHT_M,
-    COMPOSITE_MARKER_HEIGHT_MM,
     COMPOSITE_MARKER_WIDTH_M,
     DEFAULT_APRILTAG_DICT,
     DEFAULT_MARKER_ID,

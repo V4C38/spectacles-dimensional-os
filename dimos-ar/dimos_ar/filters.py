@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
+
 @dataclass
 class LidarFilterConfig:
     max_range_m: float | None = 3.0

@@ -8,8 +8,8 @@ import pytest
 from dimos_ar.bridge_status import BridgeStatusSnapshot
 from dimos_ar.protocol import (
     DEFAULT_CAPABILITIES,
-    AlignMarkerMessage,
     AlignManualPoseMessage,
+    AlignMarkerMessage,
     AlignStartMessage,
     AlignStopMessage,
     CancelGoalMessage,
