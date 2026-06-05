@@ -56,7 +56,7 @@ export const COLOR_SUCCESS = new vec4(0, 1, 0, 1);
 export const COLOR_ERROR = new vec4(1, 0, 0, 1);
 export const COLOR_WARN = new vec4(1, 0.85, 0, 1);
 
-export const WS_PORT = 8765;
+export const WS_PORT = 8787;
 export const IP_STORAGE_KEY = "dimos_bridge_ip";
 
 /** Content-area measurements derived from a UIKit Frame inner size. */

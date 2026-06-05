@@ -7,6 +7,26 @@ export type OperatingMode = "manual" | "agent";
 export type RobotInteractionMode = "hidden" | "manualPlacement" | "runtimeRobot";
 export type NavigationMode = "idle" | "placingGoal" | "executingGoal";
 
+export interface RuntimeCapabilityState {
+  available: boolean;
+  reason: string | null;
+}
+
+export interface RobotRuntimeState {
+  negotiated: boolean;
+  bridgeConnected: boolean;
+  robotId: string | null;
+  robotModel: string | null;
+  displayName: string;
+  visualOriginFrame: string;
+  bodyBoundsM: [number, number, number] | null;
+  footprintM: [number, number] | null;
+  baseHeightM: number | null;
+  defaultRenderOffsetM: [number, number, number] | null;
+  alignmentProfile: Record<string, unknown> | null;
+  capabilities: Record<string, RuntimeCapabilityState>;
+}
+
 export interface DimosAppState {
   phase: AppPhase;
   debugMode: boolean;
@@ -15,12 +35,78 @@ export interface DimosAppState {
   navigationPlacementEnabled: boolean;
   robotInteractionMode: RobotInteractionMode;
   navigationMode: NavigationMode;
+  robotRuntime: RobotRuntimeState;
 }
 
 export type AppStateListener = (state: DimosAppState) => void;
 
+const DEFAULT_CAPABILITY_NAMES = [
+  "lidar",
+  "odom",
+  "align",
+  "align_manual",
+  "nav",
+  "path",
+  "cancel_goal",
+  "emergency_stop",
+];
+
+function cloneCapabilities(
+  capabilities: Record<string, RuntimeCapabilityState>,
+): Record<string, RuntimeCapabilityState> {
+  const next: Record<string, RuntimeCapabilityState> = {};
+  Object.keys(capabilities).forEach((key) => {
+    const capability = capabilities[key];
+    next[key] = {
+      available: capability.available,
+      reason: capability.reason,
+    };
+  });
+  return next;
+}
+
+function cloneRobotRuntime(state: RobotRuntimeState): RobotRuntimeState {
+  return {
+    ...state,
+    bodyBoundsM: state.bodyBoundsM ? [...state.bodyBoundsM] as [number, number, number] : null,
+    footprintM: state.footprintM ? [...state.footprintM] as [number, number] : null,
+    defaultRenderOffsetM: state.defaultRenderOffsetM
+      ? [...state.defaultRenderOffsetM] as [number, number, number]
+      : null,
+    alignmentProfile: state.alignmentProfile ? { ...state.alignmentProfile } : null,
+    capabilities: cloneCapabilities(state.capabilities),
+  };
+}
+
 function cloneState(state: DimosAppState): DimosAppState {
-  return { ...state };
+  return {
+    ...state,
+    robotRuntime: cloneRobotRuntime(state.robotRuntime),
+  };
+}
+
+export function createDefaultRobotRuntimeState(): RobotRuntimeState {
+  const capabilities: Record<string, RuntimeCapabilityState> = {};
+  DEFAULT_CAPABILITY_NAMES.forEach((capability) => {
+    capabilities[capability] = {
+      available: true,
+      reason: null,
+    };
+  });
+  return {
+    negotiated: false,
+    bridgeConnected: false,
+    robotId: null,
+    robotModel: null,
+    displayName: "Development Robot",
+    visualOriginFrame: "base_link",
+    bodyBoundsM: null,
+    footprintM: null,
+    baseHeightM: null,
+    defaultRenderOffsetM: null,
+    alignmentProfile: null,
+    capabilities,
+  };
 }
 
 export class AppState {

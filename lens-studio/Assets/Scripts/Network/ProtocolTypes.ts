@@ -1,12 +1,11 @@
 // ================================================================
 /**
  * Canonical TypeScript message schemas and active-robot ID state synced with Python protocol.py.
- * Keep in sync with dimos_ar/protocol.py and dimos-ar/PROTOCOL.md.
+ * Keep in sync with dimos_xr/protocol.py and dimos-xr/PROTOCOL.md.
  */
 // ================================================================
 
-export const PROTOCOL_VERSION = 1;
-export const ROBOT_ID = "go2";
+export const PROTOCOL_VERSION = 2;
 
 let activeRobotId: string | null = null;
 
@@ -22,11 +21,30 @@ export function getActiveRobotId(): string | null {
   return activeRobotId;
 }
 
+export interface CapabilityState {
+  available: boolean;
+  reason?: string;
+}
+
+export interface RobotHelloInfo {
+  robot_id: string;
+  robot_model: string;
+  display_name: string;
+  body_bounds_m?: [number, number, number];
+  footprint_m?: [number, number];
+  visual_origin_frame: string;
+  base_height_m?: number;
+  default_render_offset_m?: [number, number, number];
+  alignment_profile?: Record<string, unknown>;
+}
+
 export interface HelloMessage {
   type: "hello";
   protocol_version: number;
-  robots: string[];
+  robot: RobotHelloInfo;
   capabilities: string[];
+  disabled_capabilities: string[];
+  capability_states: Record<string, CapabilityState>;
 }
 
 export interface LidarMessage {
@@ -44,13 +62,6 @@ export interface PoseMessage {
   frame: string;
   position: [number, number, number];
   orientation: [number, number, number, number];
-}
-
-export interface RegisteredMessage {
-  type: "registered";
-  ts: number;
-  robot_id: string;
-  registered: boolean;
 }
 
 export interface AlignStatusMessage {
@@ -71,13 +82,11 @@ export interface BridgeStatusMessage {
   type: "bridge_status";
   ts: number;
   robot_id: string;
-  mode: "live" | "replay";
   robot_connected: boolean;
-  robot_model: string;
-  robot_serial?: string;
   streams_active: boolean;
   registered: boolean;
   reconnecting: boolean;
+  registration_method?: "marker" | "manual";
   registration_approximate?: boolean;
 }
 
@@ -102,7 +111,6 @@ export type InboundMessage =
   | HelloMessage
   | LidarMessage
   | PoseMessage
-  | RegisteredMessage
   | AlignStatusMessage
   | BridgeStatusMessage
   | PathMessage

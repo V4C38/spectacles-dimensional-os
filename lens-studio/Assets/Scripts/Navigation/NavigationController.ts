@@ -22,6 +22,7 @@ export interface NavigationControllerOptions {
 
 export class NavigationController {
   private _placementEnabled = false;
+  private _cancelGoalAvailable = true;
 
   constructor(private readonly _options: NavigationControllerOptions) {
     if (this._options.placementController) {
@@ -94,6 +95,9 @@ export class NavigationController {
   }
 
   public requestCancelGoal(): void {
+    if (!this._cancelGoalAvailable) {
+      return;
+    }
     this._options.bridgeClient?.sendCancelGoal();
     if (this._placementEnabled) {
       this._options.placementController?.showPlacing();
@@ -105,6 +109,14 @@ export class NavigationController {
 
   public applyPath(msg: PathMessage): void {
     this._options.pathRenderer?.setProtocolPath(msg.waypoints);
+  }
+
+  public setCancelGoalAvailability(
+    available: boolean,
+    _reason: string | null = null,
+  ): void {
+    this._cancelGoalAvailable = available;
+    this._options.goalRenderer?.setCancelActionAvailability(available);
   }
 
   public applyNavStatus(msg: NavStatusMessage): string {

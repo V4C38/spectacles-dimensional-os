@@ -6,9 +6,9 @@ Thanks for helping improve spectacles-dimensional-os. This repo is a **monorepo*
 
 | Change | Location |
 |--------|----------|
-| DimOS bridge, protocol, blueprints | [`dimos-ar/`](dimos-ar/) |
+| DimOS bridge, protocol, blueprints | [`dimos-xr/`](dimos-xr/) |
 | Spectacles Lens | [`lens-studio/`](lens-studio/) — open **`lens-studio/spectacles-dimensional-os.esproj`** in Lens Studio |
-| Cross-platform WebSocket API | [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) + the Python and Lens implementations (see below) |
+| Cross-platform WebSocket API | [`dimos-xr/PROTOCOL.md`](dimos-xr/PROTOCOL.md) + the Python and Lens implementations (see below) |
 | README demo GIFs / images | [`assets/`](assets/) at repo root |
 
 Do **not** open Lens Studio from the repo root — that creates stray `Cache/`, `Packages/`, etc.
@@ -17,23 +17,21 @@ Do **not** open Lens Studio from the repo root — that creates stray `Cache/`, 
 
 Update together in one change:
 
-1. `dimos-ar/dimos_ar/protocol.py`
-2. `dimos-ar/PROTOCOL.md`
+1. `dimos-xr/dimos_xr/protocol.py`
+2. `dimos-xr/PROTOCOL.md`
 3. `lens-studio/Assets/Scripts/Network/ProtocolTypes.ts`
-4. `lens-studio/Assets/Scripts/Network/ProtocolBuilders.ts`
-5. `lens-studio/Assets/Scripts/Network/ProtocolParser.ts`
-6. `lens-studio/Assets/Scripts/Network/ProtocolFormatters.ts`
-7. `lens-studio/Assets/Scripts/Network/Protocol.ts`
+4. `lens-studio/Assets/Scripts/Network/ProtocolParser.ts`
+5. `lens-studio/Assets/Scripts/Network/Protocol.ts`
 
 ## Python
 
 ```bash
-cd dimos-ar
+cd dimos-xr
 /path/to/dimos/.venv/bin/python3 -m pip install -e ".[dev]"
-./start.sh --replay    # WebSocket :8765
-pytest                 # unit tests (no integration)
-ruff check .
-mypy dimos_ar
+./start.sh            # WebSocket :8787, interactive robot selection
+/path/to/dimos/.venv/bin/python3 -m pytest
+/path/to/dimos/.venv/bin/python3 -m ruff check .
+/path/to/dimos/.venv/bin/python3 -m mypy dimos_xr
 ```
 
 DimOS is an external dependency — install from [dimensionalOS/dimos](https://github.com/dimensionalOS/dimos), not from this repo.
@@ -44,12 +42,12 @@ See [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md).
 
 ## Marker assets
 
-After changing the AprilTag, regenerate and sync to the Lens: `python scripts/generate_marker.py --sync-lens` (from `dimos-ar/`).
+After changing the AprilTag, regenerate and sync to the Lens: `python scripts/generate_marker.py --sync-lens` (from `dimos-xr/`).
 
 ## Tests
 
 - Default CI runs unit tests that do not require DimOS installed.
-- Integration: `pytest tests/test_ws_integration.py -m integration` with `./start.sh --replay` running.
+- Integration: `pytest tests/test_ws_integration.py -m integration` with the bridge already running from the DimOS `.venv`.
 
 ## License
 

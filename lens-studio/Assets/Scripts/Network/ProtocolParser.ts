@@ -7,7 +7,6 @@ import {
   NavStatusMessage,
   PathMessage,
   PoseMessage,
-  RegisteredMessage,
   setActiveRobotId,
 } from "./ProtocolTypes";
 
@@ -94,50 +93,63 @@ export function parseInboundMessage(text: string): InboundMessage | null {
 
   switch (type) {
     case "hello": {
+      const robot = requireObject(data.robot);
       const hello: HelloMessage = {
         type: "hello",
         protocol_version: requireNumber(data, "protocol_version"),
-        robots: (data.robots as unknown[]).map(String),
+        robot: {
+          robot_id: requireString(robot, "robot_id"),
+          robot_model: requireString(robot, "robot_model"),
+          display_name: requireString(robot, "display_name"),
+          visual_origin_frame: requireString(robot, "visual_origin_frame"),
+        },
         capabilities: (data.capabilities as unknown[]).map(String),
+        disabled_capabilities: Array.isArray(data.disabled_capabilities)
+          ? (data.disabled_capabilities as unknown[]).map(String)
+          : [],
+        capability_states: {},
       };
-      if (hello.robots.length > 0) {
-        setActiveRobotId(hello.robots[0]);
+      if (Array.isArray(robot.body_bounds_m) && robot.body_bounds_m.length === 3) {
+        hello.robot.body_bounds_m = parseVec3(robot.body_bounds_m);
       }
+      if (Array.isArray(robot.footprint_m) && robot.footprint_m.length === 2) {
+        hello.robot.footprint_m = [
+          Number(robot.footprint_m[0]),
+          Number(robot.footprint_m[1]),
+        ];
+      }
+      if (typeof robot.base_height_m === "number") {
+        hello.robot.base_height_m = robot.base_height_m;
+      }
+      if (
+        Array.isArray(robot.default_render_offset_m) &&
+        robot.default_render_offset_m.length === 3
+      ) {
+        hello.robot.default_render_offset_m = parseVec3(
+          robot.default_render_offset_m,
+        );
+      }
+      if (
+        typeof robot.alignment_profile === "object" &&
+        robot.alignment_profile !== null &&
+        !Array.isArray(robot.alignment_profile)
+      ) {
+        hello.robot.alignment_profile = robot.alignment_profile as Record<
+          string,
+          unknown
+        >;
+      }
+      const rawStates = requireObject(data.capability_states ?? {});
+      Object.keys(rawStates).forEach((key) => {
+        const value = requireObject(rawStates[key]);
+        hello.capability_states[key] = {
+          available: Boolean(value.available),
+          reason:
+            typeof value.reason === "string" ? value.reason : undefined,
+        };
+      });
+      setActiveRobotId(hello.robot.robot_id);
       return hello;
-    }
-
-    case "lidar": {
-      const msg = parseFlatPointMessage(data);
-      setActiveRobotId(msg.robot_id);
-      return msg;
-    }
-
-    case "pose": {
-      const q = data.orientation;
-      if (!Array.isArray(q) || q.length !== 4) {
-        throw new Error("orientation must be [qx, qy, qz, qw]");
-      }
-      const msg: PoseMessage = {
-        type: "pose",
-        ts: requireNumber(data, "ts"),
-        robot_id: requireString(data, "robot_id"),
-        frame: requireString(data, "frame"),
-        position: parseVec3(data.position),
-        orientation: [Number(q[0]), Number(q[1]), Number(q[2]), Number(q[3])],
-      };
-      setActiveRobotId(msg.robot_id);
-      return msg;
-    }
-
-    case "registered": {
-      const msg: RegisteredMessage = {
-        type: "registered",
-        ts: requireNumber(data, "ts"),
-        robot_id: requireString(data, "robot_id"),
-        registered: Boolean(data.registered),
-      };
-      setActiveRobotId(msg.robot_id);
-      return msg;
     }
 
     case "align_status": {
@@ -171,29 +183,49 @@ export function parseInboundMessage(text: string): InboundMessage | null {
     }
 
     case "bridge_status": {
-      const mode = requireString(data, "mode");
-      if (mode !== "live" && mode !== "replay") {
-        throw new Error("invalid bridge_status.mode");
-      }
       const status: BridgeStatusMessage = {
         type: "bridge_status",
         ts: requireNumber(data, "ts"),
         robot_id: requireString(data, "robot_id"),
-        mode,
         robot_connected: Boolean(data.robot_connected),
-        robot_model: requireString(data, "robot_model"),
         streams_active: Boolean(data.streams_active),
         registered: Boolean(data.registered),
         reconnecting: Boolean(data.reconnecting),
       };
-      if (typeof data.robot_serial === "string") {
-        status.robot_serial = data.robot_serial;
+      if (
+        data.registration_method === "marker" ||
+        data.registration_method === "manual"
+      ) {
+        status.registration_method = data.registration_method;
       }
       if (typeof data.registration_approximate === "boolean") {
         status.registration_approximate = data.registration_approximate;
       }
       setActiveRobotId(status.robot_id);
       return status;
+    }
+
+    case "lidar": {
+      const msg = parseFlatPointMessage(data);
+      setActiveRobotId(msg.robot_id);
+      return msg;
+    }
+
+    case "pose": {
+      const q = data.orientation;
+      if (!Array.isArray(q) || q.length !== 4) {
+        throw new Error("orientation must be [qx, qy, qz, qw]");
+      }
+      const msg: PoseMessage = {
+        type: "pose",
+        ts: requireNumber(data, "ts"),
+        robot_id: requireString(data, "robot_id"),
+        frame: requireString(data, "frame"),
+        position: parseVec3(data.position),
+        orientation: [Number(q[0]), Number(q[1]), Number(q[2]), Number(q[3])],
+      };
+      setActiveRobotId(msg.robot_id);
+      return msg;
     }
 
     case "path": {

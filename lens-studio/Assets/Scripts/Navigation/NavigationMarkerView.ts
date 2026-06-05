@@ -2,6 +2,7 @@ import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interact
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import animate from "SpectaclesInteractionKit.lspkg/Utils/animate";
 import {
+  applyCapabilityButtonPresentation,
   setButtonStyle,
   SnapOS2Styles,
 } from "../UI/Shared/UIBuilders";
@@ -42,6 +43,7 @@ export class NavigationMarkerView {
   private _confirmEnabled = false;
   private _placementAnchor: SceneObject | null = null;
   private _preAnchorParent: SceneObject | null = null;
+  private _cancelActionAvailable = true;
 
   constructor(root: SceneObject) {
     this.root = root;
@@ -256,6 +258,13 @@ export class NavigationMarkerView {
     (this.confirmButton as any).enabled = enabled;
   }
 
+  public setCancelActionAvailability(available: boolean): void {
+    this._cancelActionAvailable = available;
+    if (this._state === "executing") {
+      this._applyExecutingButtonPresentation();
+    }
+  }
+
   public showPlacing(): void {
     this._state = "placing";
     if (this.circleExecuting) {
@@ -291,9 +300,7 @@ export class NavigationMarkerView {
       this.rotationLookAt.enabled = false;
     }
     this.confirmButtonObject.enabled = true;
-    this.setConfirmActionEnabled(true);
-    this.confirmLabel.text = "Cancel";
-    setButtonStyle(this.confirmButton, SnapOS2Styles.Special);
+    this._applyExecutingButtonPresentation();
     this.setScanAnimationEnabled(true);
     this._setConfirmVfxState(false);
     if (this.arrow) {
@@ -542,6 +549,16 @@ export class NavigationMarkerView {
     }
     this._setMoveDirectionArrowSpeed(0);
     this._syncMoveDirectionArrowVisibility();
+  }
+
+  private _applyExecutingButtonPresentation(): void {
+    applyCapabilityButtonPresentation(this.confirmButton, this.confirmLabel, {
+      available: this._cancelActionAvailable,
+      availableLabel: "Cancel",
+      unavailableLabel: "Cancel\nUnavailable",
+      availableStyle: SnapOS2Styles.Special,
+      unavailableStyle: SnapOS2Styles.Special,
+    });
   }
 
   private _setMoveDirectionArrowSpeed(speed: number): void {

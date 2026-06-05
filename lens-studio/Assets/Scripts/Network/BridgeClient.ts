@@ -57,6 +57,9 @@ export class BridgeClient extends BaseScriptComponent {
   private helloReceived = false;
   private _activeRobotId: string | null = null;
   private _helloCapabilities: string[] = [];
+  private _capabilityStates: Record<string, { available: boolean; reason?: string }> =
+    {};
+  public lastHello: HelloMessage | null = null;
   public lastBridgeStatus: BridgeStatusMessage | null = null;
 
   /** Lens Studio may not run field initializers before other scripts read these arrays. */
@@ -175,6 +178,8 @@ export class BridgeClient extends BaseScriptComponent {
         this.helloReceived = false;
         this._activeRobotId = null;
         this._helloCapabilities = [];
+        this._capabilityStates = {};
+        this.lastHello = null;
         clearActiveRobotId();
         this.lastBridgeStatus = null;
         this._notifyConnection(false);
@@ -206,6 +211,8 @@ export class BridgeClient extends BaseScriptComponent {
     this.helloReceived = false;
     this._activeRobotId = null;
     this._helloCapabilities = [];
+    this._capabilityStates = {};
+    this.lastHello = null;
     clearActiveRobotId();
     this.lastBridgeStatus = null;
     this._notifyConnection(false);
@@ -221,6 +228,22 @@ export class BridgeClient extends BaseScriptComponent {
 
   public hasCapability(capability: string): boolean {
     return this._helloCapabilities.indexOf(capability) >= 0;
+  }
+
+  public isCapabilityAvailable(capability: string): boolean {
+    if (!this.hasCapability(capability)) {
+      return false;
+    }
+    const state = this._capabilityStates[capability];
+    return state ? state.available : true;
+  }
+
+  public capabilityUnavailableReason(capability: string): string | null {
+    const state = this._capabilityStates[capability];
+    if (!state || state.available) {
+      return null;
+    }
+    return state.reason ?? null;
   }
 
   public requestStatus(): boolean {
@@ -316,8 +339,10 @@ export class BridgeClient extends BaseScriptComponent {
       switch (msg.type) {
         case "hello":
           this.helloReceived = true;
+          this.lastHello = msg;
           this._helloCapabilities = msg.capabilities.slice();
-          this._adoptRobotId(msg.robots.length > 0 ? msg.robots[0] : null);
+          this._capabilityStates = msg.capability_states;
+          this._adoptRobotId(msg.robot.robot_id);
           this._notifyConnection(true);
           emit(this.onHello, msg);
           break;

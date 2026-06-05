@@ -3,6 +3,7 @@ import { BridgeClient } from "../Network/BridgeClient";
 import { DimosManager } from "../DimosManager";
 import {
   createCalibrationViewState,
+  createManualCalibrationState,
 } from "./CalibrationPresenter";
 import {
   CALIBRATE_DESCRIPTION_AUTO,
@@ -42,6 +43,7 @@ export interface WizardStepControllerHost {
   refreshFooterButtons: () => void;
   renderCalibrationState: () => void;
   refreshCalibrationDescription: () => void;
+  beginManualAlignmentPlacementFromWizard: () => boolean;
   finishSetup: () => void;
   startAutoconnect: () => void;
 }
@@ -134,12 +136,34 @@ export class WizardStepController {
       case WizardStep.Calibrate:
         this._host.setAligned(false);
         this._host.setCalibrationCompleted(false);
-        this._host.setCalibrationState(createCalibrationViewState());
+        const markerAlignmentAvailable =
+          dimosManager?.canUseMarkerAlignment() ?? true;
+        const manualAlignmentAvailable =
+          dimosManager?.canUseManualAlignment() ?? true;
+        const useManualOnly =
+          dimosManager?.hasBridgeConnection() &&
+          !markerAlignmentAvailable &&
+          manualAlignmentAvailable;
+        this._host.setCalibrationState(
+          useManualOnly ? createManualCalibrationState() : createCalibrationViewState(),
+        );
         view?.setInputEnabled(false);
         this._host.refreshFooterButtons();
         this._host.refreshCalibrationDescription();
         this._host.renderCalibrationState();
-        if (alignmentController) {
+        if (useManualOnly) {
+          alignmentController?.setCalibrationGizmoEnabled(false);
+          alignmentController?.stop();
+          if (!this._host.beginManualAlignmentPlacementFromWizard()) {
+            const calibrationState = this._host.getCalibrationState();
+            calibrationState.hasCandidate = false;
+            calibrationState.statusMessage =
+              "Could not determine a stable marker spawn pose";
+            calibrationState.statusColor = COLOR_ERROR;
+            this._host.renderCalibrationState();
+            this._host.refreshFooterButtons();
+          }
+        } else if (alignmentController) {
           alignmentController.setCalibrationGizmoEnabled(true);
           alignmentController.start();
         }

@@ -4,8 +4,10 @@ import { OperatingMode } from "../AppState";
 import { scaleIn, scaleOut } from "./Shared/UIAnimations";
 import { COLOR_ERROR, COLOR_WHITE } from "./Shared/UICore";
 import {
+  applyCapabilityButtonPresentation,
   bindToggleButton,
   configureButtonToggle,
+  SnapOS2Styles,
   setButtonToggleState,
 } from "./Shared/UIBuilders";
 import {
@@ -135,9 +137,35 @@ export class RobotMenuView {
     setButtonToggleState(this.navigationPlacementBtn, enabled);
   }
 
+  public setNavigationPlacementAvailability(available: boolean): void {
+    applyCapabilityButtonPresentation(
+      this.navigationPlacementBtn,
+      this.navigationPlacementLabel,
+      {
+        available,
+        availableLabel: "Enable Navigation",
+        unavailableLabel: "Enable Navigation\nUnavailable",
+      },
+    );
+  }
+
   public setStopEmphasis(emergency: boolean): void {
     this.stopLabel.text = emergency ? "Emergency stop" : "Stop";
     this.stopLabel.textFill.color = emergency ? COLOR_ERROR : COLOR_WHITE;
+  }
+
+  public setEmergencyStopAvailability(
+    available: boolean,
+    _reason: string | null = null,
+  ): void {
+    applyCapabilityButtonPresentation(this.stopBtn, this.stopLabel, {
+      available,
+      availableLabel: "Emergency Stop",
+      unavailableLabel: "Emergency Stop\nUnavailable",
+      availableStyle: SnapOS2Styles.Special,
+      unavailableStyle: SnapOS2Styles.Special,
+    });
+    this.stopLabel.textFill.color = COLOR_WHITE;
   }
 
   public setOperatingMode(mode: OperatingMode): void {

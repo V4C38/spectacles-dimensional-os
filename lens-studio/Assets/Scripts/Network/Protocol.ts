@@ -124,22 +124,18 @@ export function buildEmergencyStop(robotId: string): string {
 }
 
 export function formatBridgeStatus(msg: BridgeStatusMessage): string {
-  const model = msg.robot_model.replace("unitree_", "").toUpperCase();
-  const mode = msg.mode === "replay" ? "Replay" : "Live";
-
   if (msg.reconnecting) {
-    return `${mode} · ${model} — reconnecting…`;
+    return `XR bridge — reconnecting…`;
   }
   if (!msg.robot_connected) {
-    return `${mode} · ${model} — robot not connected`;
+    return `XR bridge — robot not connected`;
   }
 
-  const label = msg.robot_serial ?? msg.robot_id;
   const streams = msg.streams_active
     ? "data streaming"
     : "waiting for lidar/odom";
   const calibrated = msg.registered ? "calibrated" : "needs calibration";
-  return `${mode} · ${model} (${label}) — ${streams}, ${calibrated}`;
+  return `XR bridge (${msg.robot_id}) — ${streams}, ${calibrated}`;
 }
 
 export function emit<T>(callbacks: ((value: T) => void)[], value: T): void {

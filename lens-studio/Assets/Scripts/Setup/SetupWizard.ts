@@ -91,6 +91,8 @@ export class SetupWizard extends BaseScriptComponent {
         renderCalibrationState: () => this._renderCalibrationState(),
         refreshCalibrationDescription: () =>
           this._refreshCalibrationDescription(),
+        beginManualAlignmentPlacementFromWizard: () =>
+          this._beginManualAlignmentPlacementFromWizard(),
         finishSetup: () => this._finishSetup(),
         startAutoconnect: () => this._startAutoconnect(),
       });
@@ -237,6 +239,14 @@ export class SetupWizard extends BaseScriptComponent {
       this._aligned,
       this._calibrationState,
     );
+    if (
+      this._currentStep === WizardStep.Calibrate &&
+      this.dimosManager?.hasBridgeConnection() &&
+      !this.dimosManager.canUseMarkerAlignment() &&
+      this.dimosManager.canUseManualAlignment()
+    ) {
+      footerState.showManual = false;
+    }
     this._view?.applyFooterState(this._currentStep, footerState);
   }
 
@@ -266,6 +276,14 @@ export class SetupWizard extends BaseScriptComponent {
 
   private _toggleManualAlignment(): void {
     if (this._currentStep !== WizardStep.Calibrate) {
+      return;
+    }
+    if (
+      this._calibrationState.mode === "manual" &&
+      this.dimosManager?.hasBridgeConnection() &&
+      !this.dimosManager.canUseMarkerAlignment() &&
+      this.dimosManager.canUseManualAlignment()
+    ) {
       return;
     }
     if (this._calibrationState.mode === "manual") {

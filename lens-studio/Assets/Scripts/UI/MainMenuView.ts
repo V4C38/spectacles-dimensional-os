@@ -1,5 +1,6 @@
 import { OperatingMode } from "../AppState";
 import {
+  applyCapabilityButtonPresentation,
   bindToggleButton,
   configureButtonToggle,
   setButtonStyle,
@@ -168,8 +169,45 @@ export class MainMenuView {
     setButtonToggleState(this._showLiDAR.button, enabled);
   }
 
+  public setShowLiDARAvailability(available: boolean): void {
+    applyCapabilityButtonPresentation(this._showLiDAR.button, this._showLiDAR.labelText, {
+      available,
+      availableLabel: "Show LiDAR",
+      unavailableLabel: "Show LiDAR\nUnavailable",
+    });
+  }
+
   public setNavigationPlacementToggle(enabled: boolean): void {
     setButtonToggleState(this._navigationPlacement.button, enabled);
+  }
+
+  public setNavigationPlacementAvailability(available: boolean): void {
+    applyCapabilityButtonPresentation(
+      this._navigationPlacement.button,
+      this._navigationPlacement.labelText,
+      {
+        available,
+        availableLabel: "Enable Navigation",
+        unavailableLabel: "Enable Navigation\nUnavailable",
+      },
+    );
+  }
+
+  public setEmergencyStopAvailability(
+    available: boolean,
+    _reason: string | null = null,
+  ): void {
+    applyCapabilityButtonPresentation(
+      this._emergencyStop.button,
+      this._emergencyStop.labelText,
+      {
+        available,
+        availableLabel: "Emergency Stop",
+        unavailableLabel: "Emergency Stop\nUnavailable",
+        availableStyle: SnapOS2Styles.Special,
+        unavailableStyle: SnapOS2Styles.Special,
+      },
+    );
   }
 
   public setSubMenuExpanded(expanded: boolean): void {

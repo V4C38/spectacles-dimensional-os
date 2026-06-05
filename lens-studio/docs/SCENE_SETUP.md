@@ -7,11 +7,11 @@ The live `SetupWizard` scene object is bound to
 
 ## 1. AprilTag marker asset
 
-**Lens Studio** uses `Assets/TrackingMarkers/apriltag_marker.png` (tracking image). **On the phone** during calibration, scan the **QR code** printed in the terminal when you run `dimos-ar` `./start.sh` — it opens the composite marker page at true size (**60 mm × 120 mm** overall, with a **60 mm × 60 mm** AprilTag centered inside).
+**Lens Studio** uses `Assets/TrackingMarkers/apriltag_marker.png` (tracking image). **On the phone** during calibration, scan the **QR code** printed in the terminal when you run `dimos-xr` `./start.sh` — it opens the composite marker page at true size (**60 mm × 120 mm** overall, with a **60 mm × 60 mm** AprilTag centered inside).
 
 The scene should already have **Image Tracking** with `apriltag_marker` (physical height **12.0 cm** for the full tracked image). If you re-import:
 
-1. Ensure `Assets/TrackingMarkers/apriltag_marker.png` is in the project (sync from `dimos-ar`: `python scripts/generate_marker.py --sync-lens`).
+1. Ensure `Assets/TrackingMarkers/apriltag_marker.png` is in the project (sync from `dimos-xr`: `python scripts/generate_marker.py --sync-lens`).
 2. On the marker asset, set texture to `apriltag_marker` and **Physical Height** to `12.0` cm.
 
 ## 2. UI frames (scene-placed, UIKit Frame)
@@ -262,12 +262,14 @@ The runtime architecture is intentionally split this way:
 
 Push to Spectacles. On launch, the setup wizard should appear immediately at the
 Start step, then proceed through Connect and Calibrate. After a successful
-connection, the status line shows bridge mode, robot model, stream state, and
-calibration status from `bridge_status`.
+connection, the status line shows bridge connectivity, robot identity, stream
+state, and calibration status from `hello` plus `bridge_status`.
 
 For the navigation foundation pass, validate in this order:
 
-1. Replay bridge first: run `dimos-ar/blueprints/go2_ar.py` and verify the bridge starts, the QR marker page is served, and the `bridge_status` stream is healthy.
+1. Bridge first: run `dimos-xr/blueprints/dimos_xr.py` from the DimOS `.venv`
+   with the desired `DIMOS_XR_STACK`, then verify the bridge starts, the QR
+   marker page is served, and the `bridge_status` stream is healthy.
 2. Lens compile and scene wiring: confirm `DimosManager` has `placementRayOrigin` wired and the
    Lens compiles without TypeScript errors.
    Do not run compile-with-logs as the default verification step; only use it
@@ -300,4 +302,4 @@ For the navigation foundation pass, validate in this order:
    the robot-local **Enable Navigation** button mirrors the HUD state, and the
    emergency stop path works from both the HUD and robot-local menu.
 
-See [`dimos-ar/PROTOCOL.md`](../../dimos-ar/PROTOCOL.md) for the WebSocket protocol schema.
+See [`dimos-xr/PROTOCOL.md`](../../dimos-xr/PROTOCOL.md) for the WebSocket protocol schema.

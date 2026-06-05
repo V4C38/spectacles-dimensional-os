@@ -21,9 +21,11 @@ import { findChildRecursive } from "./UI/Shared/UICore";
 import {
   AppState,
   AppStateListener,
+  createDefaultRobotRuntimeState,
   DimosAppState,
   NavigationMode,
   OperatingMode,
+  RobotRuntimeState,
   RobotInteractionMode,
 } from "./AppState";
 import {
@@ -33,6 +35,7 @@ import {
   PoseMessage,
   protocolMetersToLensCentimeters,
 } from "./Network/Protocol";
+import { HelloMessage } from "./Network/ProtocolTypes";
 
 const WorldQueryModule = require("LensStudio:WorldQueryModule");
 const NAVIGATION_MARKER_FORWARD_OFFSET_CM = 50.0;
@@ -79,6 +82,7 @@ export class DimosManager extends BaseScriptComponent {
     navigationPlacementEnabled: true,
     robotInteractionMode: "hidden",
     navigationMode: "idle",
+    robotRuntime: createDefaultRobotRuntimeState(),
   });
 
   private _goalRenderer: NavigationMarkerView | null = null;
@@ -102,6 +106,24 @@ export class DimosManager extends BaseScriptComponent {
 
   public get appState(): DimosAppState {
     return this._appState.snapshot;
+  }
+
+  public isRuntimeCapabilityAvailable(capability: string): boolean {
+    const state = this.appState.robotRuntime.capabilities[capability];
+    return state ? state.available : true;
+  }
+
+  public runtimeCapabilityUnavailableReason(capability: string): string | null {
+    const state = this.appState.robotRuntime.capabilities[capability];
+    return state ? state.reason : null;
+  }
+
+  public canUseMarkerAlignment(): boolean {
+    return this.isRuntimeCapabilityAvailable("align");
+  }
+
+  public canUseManualAlignment(): boolean {
+    return this.isRuntimeCapabilityAvailable("align_manual");
   }
 
   public get lastBridgeStatus(): BridgeStatusMessage | null {
@@ -161,6 +183,7 @@ export class DimosManager extends BaseScriptComponent {
       canSendNavGoal: () => this._canSendNavigationGoal(),
       getGoalResetPose: () => this._getNavigationPlacementStartPose(),
     });
+    this._applyRuntimeState(this.appState.robotRuntime);
   }
 
   private _requireSceneObject(name: string): SceneObject {
@@ -195,7 +218,8 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     this.bridgeClient.ensureEventHandlers();
-    this.bridgeClient.onHello.push(() => {
+    this.bridgeClient.onHello.push((msg) => {
+      this._applyHello(msg);
       this.onBridgeReady.forEach((cb) => cb());
     });
     this.bridgeClient.onLidar.push((msg) => {
@@ -218,6 +242,96 @@ export class DimosManager extends BaseScriptComponent {
       this._applyConnectionState(connected),
     );
     this._syncLiDARPreview();
+  }
+
+  private _applyHello(msg: HelloMessage): void {
+    const runtimeState = this._projectRuntimeStateFromHello(msg);
+    this._setAppState({ robotRuntime: runtimeState });
+    this._applyRuntimeState(runtimeState);
+  }
+
+  private _projectRuntimeStateFromHello(msg: HelloMessage): RobotRuntimeState {
+    const capabilities = createDefaultRobotRuntimeState().capabilities;
+    Object.keys(msg.capability_states).forEach((capability) => {
+      const state = msg.capability_states[capability];
+      capabilities[capability] = {
+        available: state.available,
+        reason: state.reason ?? null,
+      };
+    });
+    return {
+      negotiated: true,
+      bridgeConnected: true,
+      robotId: msg.robot.robot_id,
+      robotModel: msg.robot.robot_model,
+      displayName: msg.robot.display_name,
+      visualOriginFrame: msg.robot.visual_origin_frame,
+      bodyBoundsM: msg.robot.body_bounds_m ?? null,
+      footprintM: msg.robot.footprint_m ?? null,
+      baseHeightM: msg.robot.base_height_m ?? null,
+      defaultRenderOffsetM: msg.robot.default_render_offset_m ?? null,
+      alignmentProfile: msg.robot.alignment_profile ?? null,
+      capabilities,
+    };
+  }
+
+  private _applyRuntimeState(state: RobotRuntimeState): void {
+    if (!state.capabilities.lidar?.available && this.showLiDAR) {
+      this._setAppState({ showLiDAR: false });
+    }
+    if (!state.capabilities.nav?.available && this.navigationPlacementEnabled) {
+      this._setAppState({ navigationPlacementEnabled: false });
+    }
+    this.robotMarker?.setMenuHeightOffsetCm(this._runtimeMenuHeightOffsetCm(state));
+    this.robotMarker?.setRenderOffsetCm(this._runtimeRenderOffsetCm(state));
+    this._placementController?.setRobotGroundDeadzone({
+      radiusCm: this._runtimeDeadzoneRadiusCm(state),
+      getRobotWorldPosition: () => this.robotMarker?.getWorldPosition() ?? null,
+    } as RobotGroundDeadzone);
+    this._robotMenuController?.setRobotLabel(state.displayName);
+    this._robotMenuController?.setNavigationPlacementAvailability(
+      this.isRuntimeCapabilityAvailable("nav"),
+    );
+    this._robotMenuController?.setEmergencyStopAvailability(
+      this.isRuntimeCapabilityAvailable("emergency_stop"),
+      this.runtimeCapabilityUnavailableReason("emergency_stop"),
+    );
+    this._navigationController?.setCancelGoalAvailability(
+      this.isRuntimeCapabilityAvailable("cancel_goal"),
+      this.runtimeCapabilityUnavailableReason("cancel_goal"),
+    );
+    if (state.capabilities.nav?.available) {
+      this._robotMenuController?.setNavigationPlacementToggle(this.navigationPlacementEnabled);
+    }
+    this._syncNavigationPlacementState();
+    this._syncLiDARPreview();
+  }
+
+  private _runtimeDeadzoneRadiusCm(state: RobotRuntimeState): number {
+    const footprint = state.footprintM;
+    if (!state.negotiated || !footprint) {
+      return this.robotGroundDeadzoneRadiusCm;
+    }
+    const maxDimensionCm = Math.max(footprint[0], footprint[1]) * 100.0;
+    return Math.max(20.0, maxDimensionCm * 0.5 + 20.0);
+  }
+
+  private _runtimeMenuHeightOffsetCm(state: RobotRuntimeState): number {
+    const heightM =
+      state.baseHeightM ??
+      (state.bodyBoundsM ? state.bodyBoundsM[2] : null);
+    if (heightM === null) {
+      return 15.0;
+    }
+    return Math.max(15.0, heightM * 100.0 + 10.0);
+  }
+
+  private _runtimeRenderOffsetCm(state: RobotRuntimeState): vec3 {
+    const offset = state.defaultRenderOffsetM;
+    if (!offset) {
+      return new vec3(0, 0, 0);
+    }
+    return protocolMetersToLensCentimeters(offset);
   }
 
   private _syncLiDARPreview(): void {
@@ -558,6 +672,9 @@ export class DimosManager extends BaseScriptComponent {
   }
 
   public requestEmergencyStop(): void {
+    if (!this.isRuntimeCapabilityAvailable("emergency_stop")) {
+      return;
+    }
     this._log("requestEmergencyStop");
     this._navigationController?.requestEmergencyStop();
   }
@@ -596,6 +713,9 @@ export class DimosManager extends BaseScriptComponent {
     this._robotMenuController?.applyConnectionState(connected);
     this.onBridgeConnectionChanged.forEach((cb) => cb(connected));
     if (!connected) {
+      const defaultRuntime = createDefaultRobotRuntimeState();
+      this._setAppState({ robotRuntime: defaultRuntime });
+      this._applyRuntimeState(defaultRuntime);
       this._preferManualPoseUntilNextRuntimePose = this._manualAlignmentPose !== null;
       this._manualPoseCorrectionRotation = null;
       this._manualPoseCorrectionTranslation = null;
@@ -611,13 +731,16 @@ export class DimosManager extends BaseScriptComponent {
     if (!this._isActive) {
       return false;
     }
+    if (!this.isRuntimeCapabilityAvailable("nav")) {
+      return false;
+    }
     return this.appState.robotInteractionMode === "runtimeRobot";
   }
 
   private _canSendNavigationGoal(): boolean {
     return (
       this.hasBridgeConnection() &&
-      (this.bridgeClient?.hasCapability("nav") ?? false) &&
+      this.isRuntimeCapabilityAvailable("nav") &&
       (this.bridgeClient?.lastBridgeStatus?.registered ?? false)
     );
   }
@@ -795,21 +918,33 @@ export class DimosManager extends BaseScriptComponent {
     position: vec3,
     rotation: quat,
   ): vec3 {
+    const forwardOffsetCm = this._navigationForwardOffsetCm();
     const robotForward = rotation.multiplyVec3(vec3.right().uniformScale(-1));
     const planarLength = Math.sqrt(
       robotForward.x * robotForward.x + robotForward.z * robotForward.z,
     );
     if (planarLength <= 0.0001) {
       return new vec3(
-        position.x + NAVIGATION_MARKER_FORWARD_OFFSET_CM,
+        position.x + forwardOffsetCm,
         position.y,
         position.z,
       );
     }
     return new vec3(
-      position.x + (robotForward.x / planarLength) * NAVIGATION_MARKER_FORWARD_OFFSET_CM,
+      position.x + (robotForward.x / planarLength) * forwardOffsetCm,
       position.y,
-      position.z + (robotForward.z / planarLength) * NAVIGATION_MARKER_FORWARD_OFFSET_CM,
+      position.z + (robotForward.z / planarLength) * forwardOffsetCm,
+    );
+  }
+
+  private _navigationForwardOffsetCm(): number {
+    const footprint = this.appState.robotRuntime.footprintM;
+    if (!this.appState.robotRuntime.negotiated || !footprint) {
+      return NAVIGATION_MARKER_FORWARD_OFFSET_CM;
+    }
+    return Math.max(
+      NAVIGATION_MARKER_FORWARD_OFFSET_CM,
+      Math.max(footprint[0], footprint[1]) * 50.0 + 10.0,
     );
   }
 

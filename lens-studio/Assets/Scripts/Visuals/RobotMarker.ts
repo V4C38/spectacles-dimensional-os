@@ -46,6 +46,11 @@ export class RobotMarker extends BaseScriptComponent {
   private _toggleButton: RoundButton | null = null;
   private _menuRoot: SceneObject | null = null;
   private _hasLiveRuntimePose = false;
+  private _menuHeightOffsetCm = ROBOT_UI_WORLD_UP_OFFSET_CM;
+  private _renderOffsetCm = vec3.zero();
+  private _toggleBaseLocalPosition: vec3 | null = null;
+  private _directionArrowBaseLocalPosition: vec3 | null = null;
+  private _placementHandleBaseLocalPosition: vec3 | null = null;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
@@ -172,6 +177,17 @@ export class RobotMarker extends BaseScriptComponent {
     return this._menuRoot;
   }
 
+  public setMenuHeightOffsetCm(offsetCm: number): void {
+    this._menuHeightOffsetCm = offsetCm;
+    this._syncMenuWorldAnchor();
+  }
+
+  public setRenderOffsetCm(offsetCm: vec3): void {
+    this._renderOffsetCm = offsetCm;
+    this._syncVisualOffsets();
+    this._syncMenuWorldAnchor();
+  }
+
   private _configureVisuals(): void {
     if (!this.markerRoot || this._configured) {
       return;
@@ -199,6 +215,9 @@ export class RobotMarker extends BaseScriptComponent {
     this._toggleRoot = toggleRoot;
     this._directionArrow = directionArrow;
     this._placementHandle = placementHandle;
+    this._toggleBaseLocalPosition = toggleRoot.getTransform().getLocalPosition();
+    this._directionArrowBaseLocalPosition = directionArrow.getTransform().getLocalPosition();
+    this._placementHandleBaseLocalPosition = placementHandle.getTransform().getLocalPosition();
     this._manualCollider = placementHandle.getComponent(
       "Component.ColliderComponent",
     ) as ColliderComponent;
@@ -230,6 +249,7 @@ export class RobotMarker extends BaseScriptComponent {
     this.setToggleEnabled(false);
     this.setMenuEnabled(false);
     this.setManualPlacementEnabled(false);
+    this._syncVisualOffsets();
     this._syncMenuWorldAnchor();
   }
 
@@ -280,9 +300,27 @@ export class RobotMarker extends BaseScriptComponent {
       .setWorldPosition(
         new vec3(
           rootPosition.x,
-          rootPosition.y + ROBOT_UI_WORLD_UP_OFFSET_CM,
+          rootPosition.y + this._menuHeightOffsetCm,
           rootPosition.z,
         ),
       );
+  }
+
+  private _syncVisualOffsets(): void {
+    if (this._toggleRoot && this._toggleBaseLocalPosition) {
+      this._toggleRoot.getTransform().setLocalPosition(
+        this._toggleBaseLocalPosition.add(this._renderOffsetCm),
+      );
+    }
+    if (this._directionArrow && this._directionArrowBaseLocalPosition) {
+      this._directionArrow.getTransform().setLocalPosition(
+        this._directionArrowBaseLocalPosition.add(this._renderOffsetCm),
+      );
+    }
+    if (this._placementHandle && this._placementHandleBaseLocalPosition) {
+      this._placementHandle.getTransform().setLocalPosition(
+        this._placementHandleBaseLocalPosition.add(this._renderOffsetCm),
+      );
+    }
   }
 }

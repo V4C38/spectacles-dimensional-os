@@ -182,9 +182,20 @@ export class UIManager extends BaseScriptComponent {
     this._showLiDAR = state.showLiDAR;
     this._operatingMode = state.operatingMode;
     this._navigationPlacementEnabled = state.navigationPlacementEnabled;
+    this._mainMenuView?.setTitle(state.robotRuntime.displayName);
     this._mainMenuView?.setShowLiDARToggle(this._showLiDAR);
+    this._mainMenuView?.setShowLiDARAvailability(
+      state.robotRuntime.capabilities.lidar?.available ?? true,
+    );
     this._mainMenuView?.setOperatingMode(this._operatingMode);
     this._mainMenuView?.setNavigationPlacementToggle(this._navigationPlacementEnabled);
+    this._mainMenuView?.setNavigationPlacementAvailability(
+      state.robotRuntime.capabilities.nav?.available ?? true,
+    );
+    this._mainMenuView?.setEmergencyStopAvailability(
+      state.robotRuntime.capabilities.emergency_stop?.available ?? true,
+      state.robotRuntime.capabilities.emergency_stop?.reason ?? null,
+    );
     this._mainMenuView?.setSubMenuExpanded(this._subMenuExpanded);
     this.setUIState(nextUiState);
     if ((uiStateChanged || operatingModeChanged) && nextUiState === 1) {

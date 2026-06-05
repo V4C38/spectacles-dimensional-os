@@ -1,9 +1,6 @@
 import { BridgeStatusMessage } from "../Network/Protocol";
 import { OperatingMode } from "../AppState";
-import {
-  getBridgeStatusPresentation,
-  getRobotModelLabel,
-} from "./Shared/BridgeStatusPresentation";
+import { getBridgeStatusPresentation } from "./Shared/BridgeStatusPresentation";
 import { COLOR_ERROR, COLOR_WARN } from "./Shared/UICore";
 import { RobotMenuView } from "./RobotMenuView";
 
@@ -45,6 +42,21 @@ export class RobotMenuController {
     this._view.setNavigationPlacementToggle(enabled);
   }
 
+  public setNavigationPlacementAvailability(available: boolean): void {
+    this._view.setNavigationPlacementAvailability(available);
+  }
+
+  public setEmergencyStopAvailability(
+    available: boolean,
+    reason: string | null,
+  ): void {
+    this._view.setEmergencyStopAvailability(available, reason);
+  }
+
+  public setRobotLabel(label: string): void {
+    this._view.setRobotLabel(label);
+  }
+
   public setOperatingMode(mode: OperatingMode): void {
     this._view.setOperatingMode(mode);
   }
@@ -53,7 +65,6 @@ export class RobotMenuController {
     msg: BridgeStatusMessage,
   ): void {
     const presentation = getBridgeStatusPresentation(msg);
-    this._view.setRobotLabel(getRobotModelLabel(msg));
     this._view.setStatus(presentation.text, presentation.color);
   }
 

@@ -50,7 +50,7 @@ export function getBridgeStatusPresentation(
 export function getRobotModelLabel(
   msg: BridgeStatusMessage | null | undefined,
 ): string {
-  const raw = msg?.robot_model?.trim();
+  const raw = msg?.robot_id?.trim();
   if (!raw) {
     return "Unknown Hardware";
   }
@@ -66,10 +66,6 @@ export function getRobotModelLabel(
 }
 
 export function getRobotHardwareLabel(msg: BridgeStatusMessage): string {
-  const serial = msg.robot_serial?.trim();
-  if (serial) {
-    return serial;
-  }
   const id = msg.robot_id?.trim();
   return `HARDWARE [${id || "UNKNOWN"}]`;
 }

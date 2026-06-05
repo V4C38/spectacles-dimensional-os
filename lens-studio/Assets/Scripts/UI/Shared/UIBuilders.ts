@@ -64,6 +64,47 @@ export function setButtonToggleState(
   }
 }
 
+export function setButtonEnabled(
+  btn: RectangleButton | RoundButton | null,
+  enabled: boolean,
+): void {
+  if (!btn) {
+    return;
+  }
+  (btn as any).enabled = enabled;
+  if ("inactive" in (btn as any)) {
+    (btn as any).inactive = !enabled;
+  }
+}
+
+export interface CapabilityButtonPresentation {
+  available: boolean;
+  availableLabel: string;
+  unavailableLabel?: string;
+  availableStyle?: string;
+  unavailableStyle?: string;
+}
+
+export function applyCapabilityButtonPresentation(
+  button: RectangleButton | RoundButton | null,
+  label: Text | null,
+  presentation: CapabilityButtonPresentation,
+): void {
+  if (!button || !label) {
+    return;
+  }
+  label.text = presentation.available
+    ? presentation.availableLabel
+    : presentation.unavailableLabel ?? `${presentation.availableLabel}\nUnavailable`;
+  setButtonStyle(
+    button,
+    presentation.available
+      ? presentation.availableStyle ?? SnapOS2Styles.PrimaryNeutral
+      : presentation.unavailableStyle ?? SnapOS2Styles.Special,
+  );
+  setButtonEnabled(button, presentation.available);
+}
+
 export function bindToggleButton(
   button: RectangleButton | null,
   onChanged: (enabled: boolean) => void,
