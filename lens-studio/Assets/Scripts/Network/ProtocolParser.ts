@@ -11,6 +11,10 @@ import {
   setActiveRobotId,
 } from "./ProtocolTypes";
 
+// ================================================================
+/** Validates and parses inbound WebSocket JSON into typed InboundMessage objects. */
+// ================================================================
+
 function unflattenVec3(flat: number[]): [number, number, number][] {
   const out: [number, number, number][] = [];
   for (let i = 0; i + 2 < flat.length; i += 3) {

@@ -102,7 +102,7 @@ def _camera_info_intrinsics_differ(
 ) -> bool:
     return any(
         abs(float(lhs) - float(rhs)) > pixel_tolerance
-        for lhs, rhs in zip(camera_info.K, reference.K)
+        for lhs, rhs in zip(camera_info.K, reference.K, strict=False)
     )
 
 
@@ -273,7 +273,8 @@ class AprilTagAligner:
                 self._last_camera_info_signature = None
                 logger.info(
                     "AprilTag robot detection started: id=%d %s edge=%.0fmm "
-                    "(same marker as legacy aruco_marker.png / phone PDF, Lens physical height %.1fcm)",
+                    "(same marker as legacy aruco_marker.png / phone PDF, "
+                    "Lens physical height %.1fcm)",
                     self._marker_id,
                     DEFAULT_APRILTAG_DICT,
                     self._marker_length_m * 1000,

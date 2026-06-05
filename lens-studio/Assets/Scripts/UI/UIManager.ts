@@ -4,10 +4,13 @@ import { BridgeStatusMessage } from "../Network/Protocol";
 import { SetupWizard } from "../Setup/SetupWizard";
 import { getBridgeStatusPresentation } from "./Shared/BridgeStatusPresentation";
 import { scaleIn, scaleOut } from "./Shared/UIAnimations";
-import { COLOR_ERROR, COLOR_WARN } from "./Shared/UIConstants";
-import { MainHudView } from "./HUD/MainHudView";
+import { COLOR_ERROR, COLOR_WARN } from "./Shared/UICore";
+import { MainMenuView } from "./MainMenuView";
 
-/** 0=hidden, 1=active */
+// ================================================================
+// Runtime HUD controller toggling main menu visibility and syncing with DimosManager app state.
+// ================================================================
+/** Runtime HUD controller toggling main menu visibility and syncing with DimosManager app state. */
 @component
 export class UIManager extends BaseScriptComponent {
   /** HUD panel only (MainUI). Must not be the parent of SetupWizard. */
@@ -21,11 +24,10 @@ export class UIManager extends BaseScriptComponent {
   setupWizard: SetupWizard;
 
   private _uiState = -1;
-  private _mainHudView: MainHudView | null = null;
-  private _debugMode = false;
+  private _mainMenuView: MainMenuView | null = null;
+  private _showLiDAR = false;
   private _operatingMode: OperatingMode = "manual";
   private _navigationPlacementEnabled = false;
-  private _executeMovement = true;
   private _subMenuExpanded = false;
   private _unsubscribeAppState: (() => void) | null = null;
 
@@ -65,7 +67,7 @@ export class UIManager extends BaseScriptComponent {
       return;
     }
     this._subMenuExpanded = expanded;
-    this._mainHudView?.setSubMenuExpanded(expanded);
+    this._mainMenuView?.setSubMenuExpanded(expanded);
   }
 
   private _bindMainUI(): void {
@@ -76,21 +78,19 @@ export class UIManager extends BaseScriptComponent {
     }
 
     try {
-      this._mainHudView = new MainHudView(panel, {
+      this._mainMenuView = new MainMenuView(panel, {
         onRestart: () => {
           this.setupWizard?.startSetupWizard();
         },
-        onDebugChanged: (enabled) => this.dimosManager?.setDebugMode(enabled),
+        onShowLiDARChanged: (enabled) => this.dimosManager?.setShowLiDAR(enabled),
         onOperatingModeSelected: (mode) => this.dimosManager?.setOperatingMode(mode),
         onNavigationPlacementChanged: (enabled) =>
           this.dimosManager?.setNavigationPlacementEnabled(enabled),
-        onExecuteChanged: (enabled) => this.dimosManager?.setExecuteMovement(enabled),
         onEmergencyStop: () => this.dimosManager?.requestEmergencyStop(),
         onToggleSubMenu: () => this._setSubMenuExpanded(!this._subMenuExpanded),
-        getDebugValue: () => this._debugMode,
+        getShowLiDARValue: () => this._showLiDAR,
         getNavigationPlacementValue: () => this._navigationPlacementEnabled,
         getOperatingMode: () => this._operatingMode,
-        getExecuteValue: () => this._executeMovement,
         getSubMenuExpanded: () => this._subMenuExpanded,
       });
     } catch (error) {
@@ -109,11 +109,10 @@ export class UIManager extends BaseScriptComponent {
         this._applyBridgeStatus(this.dimosManager.lastBridgeStatus);
       }
     }
-    this._mainHudView?.setDebugToggle(this._debugMode);
-    this._mainHudView?.setOperatingMode(this._operatingMode);
-    this._mainHudView?.setNavigationPlacementToggle(this._navigationPlacementEnabled);
-    this._mainHudView?.setExecuteToggle(this._executeMovement);
-    this._mainHudView?.setSubMenuExpanded(this._subMenuExpanded);
+    this._mainMenuView?.setShowLiDARToggle(this._showLiDAR);
+    this._mainMenuView?.setOperatingMode(this._operatingMode);
+    this._mainMenuView?.setNavigationPlacementToggle(this._navigationPlacementEnabled);
+    this._mainMenuView?.setSubMenuExpanded(this._subMenuExpanded);
   }
 
   public setUIState(state: number): void {
@@ -173,22 +172,20 @@ export class UIManager extends BaseScriptComponent {
   }
 
   private _setStatus(text: string, color: vec4): void {
-    this._mainHudView?.setStatus(text, color);
+    this._mainMenuView?.setStatus(text, color);
   }
 
   private _applyAppState(state: DimosAppState): void {
     const nextUiState = state.phase === "runtime" ? 1 : 0;
     const uiStateChanged = this._uiState !== nextUiState;
     const operatingModeChanged = this._operatingMode !== state.operatingMode;
-    this._debugMode = state.debugMode;
+    this._showLiDAR = state.showLiDAR;
     this._operatingMode = state.operatingMode;
     this._navigationPlacementEnabled = state.navigationPlacementEnabled;
-    this._executeMovement = state.executeMovement;
-    this._mainHudView?.setDebugToggle(this._debugMode);
-    this._mainHudView?.setOperatingMode(this._operatingMode);
-    this._mainHudView?.setNavigationPlacementToggle(this._navigationPlacementEnabled);
-    this._mainHudView?.setExecuteToggle(this._executeMovement);
-    this._mainHudView?.setSubMenuExpanded(this._subMenuExpanded);
+    this._mainMenuView?.setShowLiDARToggle(this._showLiDAR);
+    this._mainMenuView?.setOperatingMode(this._operatingMode);
+    this._mainMenuView?.setNavigationPlacementToggle(this._navigationPlacementEnabled);
+    this._mainMenuView?.setSubMenuExpanded(this._subMenuExpanded);
     this.setUIState(nextUiState);
     if ((uiStateChanged || operatingModeChanged) && nextUiState === 1) {
       this._refreshBridgeStatus();

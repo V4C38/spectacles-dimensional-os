@@ -20,14 +20,18 @@ import {
   buildEmergencyStop,
   buildGetStatus,
   buildNavGoal,
+  emit,
   parseInboundMessage,
 } from "./Protocol";
-import { IP_STORAGE_KEY, WS_PORT } from "../UI/Shared/UIConstants";
-import { emit } from "./Signals";
+import { IP_STORAGE_KEY, WS_PORT } from "../UI/Shared/UICore";
 
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
 
+// ================================================================
+// WebSocket client to the DimOS AR bridge; parses inbound messages and sends alignment/navigation commands.
+// ================================================================
+/** WebSocket client to the DimOS AR bridge; parses inbound messages and sends alignment/navigation commands. */
 @component
 export class BridgeClient extends BaseScriptComponent {
   /** Default Mac LAN IP when no IP is saved on device. */

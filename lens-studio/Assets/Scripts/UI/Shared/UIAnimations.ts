@@ -1,5 +1,9 @@
 import animate from "SpectaclesInteractionKit.lspkg/Utils/animate";
 
+// ================================================================
+/** Scale-in/out animations with cancellation via version tokens. */
+// ================================================================
+
 const SCALE_ANIMATION_VERSION_KEY = "__cursorScaleAnimationVersion";
 
 function nextAnimationVersion(sceneObject: SceneObject): number {

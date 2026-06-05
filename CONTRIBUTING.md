@@ -1,26 +1,29 @@
 # Contributing
 
-Thanks for helping improve spectacles-unitree. This repo is a **monorepo** (formerly two repos merged together).
+Thanks for helping improve spectacles-dimensional-os. This repo is a **monorepo**.
 
 ## Where to work
 
 | Change | Location |
 |--------|----------|
 | DimOS bridge, protocol, blueprints | [`dimos-ar/`](dimos-ar/) |
-| Spectacles Lens | [`lens-studio/`](lens-studio/) — open **`lens-studio/spectacles-unitree.esproj`** in Lens Studio |
-| Cross-platform WebSocket API | [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md) + all four implementations (see below) |
+| Spectacles Lens | [`lens-studio/`](lens-studio/) — open **`lens-studio/spectacles-dimensional-os.esproj`** in Lens Studio |
+| Cross-platform WebSocket API | [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) + the Python and Lens implementations (see below) |
 | README demo GIFs / images | [`assets/`](assets/) at repo root |
 
 Do **not** open Lens Studio from the repo root — that creates stray `Cache/`, `Packages/`, etc.
 
 ## Protocol changes
 
-Update together in one PR:
+Update together in one change:
 
 1. `dimos-ar/dimos_ar/protocol.py`
-2. `dimos-ar/docs/PROTOCOL.md`
-3. `dimos-ar/clients/web/src/protocol.ts`
-4. `lens-studio/Assets/Scripts/Network/Protocol.ts`
+2. `dimos-ar/PROTOCOL.md`
+3. `lens-studio/Assets/Scripts/Network/ProtocolTypes.ts`
+4. `lens-studio/Assets/Scripts/Network/ProtocolBuilders.ts`
+5. `lens-studio/Assets/Scripts/Network/ProtocolParser.ts`
+6. `lens-studio/Assets/Scripts/Network/ProtocolFormatters.ts`
+7. `lens-studio/Assets/Scripts/Network/Protocol.ts`
 
 ## Python
 
@@ -37,11 +40,11 @@ DimOS is an external dependency — install from [dimensionalOS/dimos](https://g
 
 ## Lens Studio
 
-See [`dimos-ar/docs/LENS_DEVELOPMENT.md`](dimos-ar/docs/LENS_DEVELOPMENT.md) and [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md).
+See [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md).
 
 ## Marker assets
 
-After changing the AprilTag, regenerate and sync to the Lens — see [`dimos-ar/docs/MARKER_ASSETS.md`](dimos-ar/docs/MARKER_ASSETS.md).
+After changing the AprilTag, regenerate and sync to the Lens: `python scripts/generate_marker.py --sync-lens` (from `dimos-ar/`).
 
 ## Tests
 

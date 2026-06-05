@@ -1,5 +1,9 @@
 import { NavigationMarkerView } from "./NavigationMarkerView";
 
+// ================================================================
+/** Ground-ray drag placement for navigation goals with robot deadzone and marker anchoring. */
+// ================================================================
+
 const DRAG_THRESHOLD_CM = 11;
 const INTERPOLATION_SPEED = 8;
 const GROUND_NORMAL_MIN_Y = 0.95;

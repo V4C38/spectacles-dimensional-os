@@ -1,9 +1,13 @@
 import { BridgeClient } from "../Network/BridgeClient";
 import { NavigationMode } from "../AppState";
 import { NavStatusMessage, PathMessage } from "../Network/Protocol";
-import { PathRenderer } from "../Rendering/PathRenderer";
+import { PathRenderer } from "../Visuals/PathRenderer";
 import { NavigationMarkerView } from "./NavigationMarkerView";
 import { PlacementController } from "./PlacementController";
+
+// ================================================================
+/** State machine for goal placement, nav-goal submission, path display, and nav-status handling. */
+// ================================================================
 
 export interface NavigationControllerOptions {
   bridgeClient: BridgeClient | null;
@@ -11,7 +15,6 @@ export interface NavigationControllerOptions {
   pathRenderer: PathRenderer | null;
   placementController: PlacementController | null;
   onNavigationModeChanged: (mode: NavigationMode) => void;
-  isExecuteMovementEnabled: () => boolean;
   canStartPlacement: () => boolean;
   canSendNavGoal: () => boolean;
   getGoalResetPose?: () => { position: vec3; rotation: quat } | null;
@@ -147,9 +150,7 @@ export class NavigationController {
     this._options.placementController?.showExecuting();
     this._options.onNavigationModeChanged("executingGoal");
 
-    const shouldSendNavGoal =
-      this._options.isExecuteMovementEnabled() && this._options.canSendNavGoal();
-    if (shouldSendNavGoal) {
+    if (this._options.canSendNavGoal()) {
       this._options.bridgeClient?.sendNavGoal(position, rotation);
       return;
     }

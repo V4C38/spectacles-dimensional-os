@@ -38,7 +38,7 @@ def test_lens_marker_height_matches_composite_tracking_size() -> None:
         Path(__file__).resolve().parents[2]
         / "lens-studio"
         / "Assets"
-        / "Markers"
+        / "TrackingMarkers"
         / "apriltag_marker.imgmarker"
     )
     assert f"MarkerHeight: {COMPOSITE_MARKER_HEIGHT_CM:.6f}" in imgmarker.read_text(

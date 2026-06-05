@@ -2,6 +2,10 @@ import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInp
 import { BridgeClient } from "../Network/BridgeClient";
 import { DimosManager } from "../DimosManager";
 
+// ================================================================
+/** Autoconnect and retry logic for bridge IP entry during the connect step. */
+// ================================================================
+
 export interface WizardConnectionCallbacks {
   onConnecting: (ip: string) => void;
   onConnected: (ip: string) => void;

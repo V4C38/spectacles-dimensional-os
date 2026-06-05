@@ -1,6 +1,6 @@
 # Spectacles AR + Dimensional OS
 
-> **Lens Studio:** open [`lens-studio/spectacles-unitree.esproj`](lens-studio/spectacles-unitree.esproj) — not the repo root.
+> **Lens Studio:** open [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj) — not the repo root.
 
 Visualize and control a **Unitree Go2** via **Spectacles AR**. The Mac runs [DimOS](https://github.com/dimensionalOS/dimos), while [`dimos-ar/`](dimos-ar/) provides the AR bridge that streams world-anchored robot data to the Lens over WebSocket.
 
@@ -15,16 +15,72 @@ This is **not a fork of DimOS**. It is a separate package that depends on DimOS 
 
 This project is an easy starting point for developers who want to work at the intersection of **spatial computing**, **mobile robotics**, and **DimOS**. The overall structure and documentation style are inspired by [spectacles-reachy-mini](https://github.com/V4C38/spectacles-reachy-mini), adapted here for quadruped navigation and AR registration.
 
-*Demo video and GIFs: add under [`assets/`](assets/) when ready — see [`assets/README.md`](assets/README.md).*
-
 ## This repo contains
 
 - **AR bridge (Python)** — [`dimos-ar/dimos_ar/`](dimos-ar/dimos_ar/) `ARBridge` DimOS module: filter lidar, transform frames, serve WebSocket
 - **Blueprints** — [`dimos-ar/blueprints/`](dimos-ar/blueprints/) compose DimOS robot stacks with `ARBridge`
-- **Protocol spec** — [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md) JSON WebSocket contract (the real cross-platform API)
+- **Protocol spec** — [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) JSON WebSocket contract (the real cross-platform API)
 - **Tests** — [`dimos-ar/tests/`](dimos-ar/tests/) unit tests + optional live WebSocket integration check
-- **Spectacles client** — [`lens-studio/`](lens-studio/) Lens Studio project (early stage)
-- **Design docs** — [`dimos-ar/docs/`](dimos-ar/docs/) architecture, project brief, protocol, Lens development guide
+- **Spectacles client** — [`lens-studio/`](lens-studio/) Lens Studio project
+
+## Lens Scripts Architecture
+
+Setup is handled by `SetupWizard` (connect and calibrate via `BridgeClient` and `AlignmentController`). After setup, `DimosManager` runs the runtime stack: bridge I/O, alignment, LiDAR/pose rendering, navigation, and the robot menu. `UIManager` drives the HUD from `AppState`.
+
+```mermaid
+flowchart TB
+  subgraph setupPhase [SetupPhase]
+    SW[SetupWizard]
+    WCC[WizardConnectionController]
+    AC_align[AlignmentController]
+  end
+
+  subgraph runtime [Runtime]
+    DM[DimosManager]
+    BC[BridgeClient]
+    UM[UIManager]
+  end
+
+  subgraph protocolLayer [ProtocolLayer]
+    P[Protocol barrel]
+    PT[ProtocolTypes]
+    PB[ProtocolBuilders]
+    PP[ProtocolParser]
+    PF[ProtocolFormatters]
+  end
+
+  subgraph features [Features]
+    NC[NavigationController]
+    MAC[ManualAlignmentController]
+    PCR[PointCloudRenderer]
+    RM[RobotMarker]
+  end
+
+  subgraph uiShared [UIShared]
+    UC[UIConstants]
+    UB[UIBuilders]
+    AS[AppState]
+  end
+
+  SW --> BC
+  SW --> DM
+  SW --> UM
+  DM --> BC
+  DM --> NC
+  DM --> MAC
+  DM --> PCR
+  DM --> RM
+  BC --> P
+  P --> PT & PB & PP & PF
+  NC --> BC
+  NC --> AS
+  UM --> DM
+  UM --> AS
+  UM --> UC
+  BC --> UC
+```
+
+The highest fan-in Lens modules are [`Protocol.ts`](lens-studio/Assets/Scripts/Network/Protocol.ts) (protocol barrel) and [`UIConstants.ts`](lens-studio/Assets/Scripts/UI/Shared/UIConstants.ts). `DimosManager` is the runtime orchestrator. See [`lens-studio/Assets/Scripts/`](lens-studio/Assets/Scripts/) for per-file headers.
 
 ## Setup
 
@@ -39,7 +95,7 @@ This project is an easy starting point for developers who want to work at the in
 1. **Run first-time setup**
 
    ```bash
-   cd /path/to/spectacles-unitree/dimos-ar
+   cd /path/to/spectacles-dimensional-os/dimos-ar
    ./setup.sh
    ```
 
@@ -52,7 +108,7 @@ This project is an easy starting point for developers who want to work at the in
    <summary>Manual setup instead</summary>
 
    ```bash
-   cd /path/to/spectacles-unitree/dimos-ar
+   cd /path/to/spectacles-dimensional-os/dimos-ar
    /path/to/dimos/.venv/bin/python3 -m pip install -e ".[dev]"
    pytest
    ```
@@ -65,7 +121,7 @@ This project is an easy starting point for developers who want to work at the in
    **Quick start (from this repo):**
 
    ```bash
-   cd /path/to/spectacles-unitree/dimos-ar
+   cd /path/to/spectacles-dimensional-os/dimos-ar
    ./start.sh              # discover Go2, or replay; WebSocket on 0.0.0.0:8765 (Spectacles-ready)
    ./start.sh --replay     # replay only (no robot)
    ./start.sh --local      # WebSocket localhost-only for local testing
@@ -81,7 +137,7 @@ This project is an easy starting point for developers who want to work at the in
    **Equivalent manual command:**
 
    ```bash
-   /path/to/dimos/.venv/bin/python3 /path/to/spectacles-unitree/dimos-ar/blueprints/go2_ar.py
+   /path/to/dimos/.venv/bin/python3 /path/to/spectacles-dimensional-os/dimos-ar/blueprints/go2_ar.py
    ```
 
    On startup the blueprint **searches the LAN for Go2 robots** (DimOS UDP discovery). There is **no robot IP configuration** — only an optional serial:
@@ -97,7 +153,7 @@ This project is an easy starting point for developers who want to work at the in
 
    ```bash
    FORCE_REPLAY=1 CI=1 /path/to/dimos/.venv/bin/python3 \
-     /path/to/spectacles-unitree/dimos-ar/blueprints/go2_ar.py
+     /path/to/spectacles-dimensional-os/dimos-ar/blueprints/go2_ar.py
    ```
 
    Wait for:
@@ -111,7 +167,7 @@ This project is an easy starting point for developers who want to work at the in
    **Optional headless protocol check** (with the blueprint still running in another terminal):
 
    ```bash
-   cd /path/to/spectacles-unitree/dimos-ar
+   cd /path/to/spectacles-dimensional-os/dimos-ar
    pytest tests/test_ws_integration.py -m integration
    ```
 
@@ -120,7 +176,7 @@ This project is an easy starting point for developers who want to work at the in
 3. **Spectacles Lens (hardware)**
 
    - On the phone, scan the **QR code** from `./start.sh` (marker page at true size) — see [Frame alignment](#frame-alignment-apriltag-marker).
-   - Open [`lens-studio/spectacles-unitree.esproj`](lens-studio/spectacles-unitree.esproj) in Lens Studio; follow [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md).
+   - Open [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj) in Lens Studio; follow [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md).
    - Push to device — the setup wizard opens automatically: **Connect → Calibrate → Complete**.
 
 ## Core concepts
@@ -135,9 +191,11 @@ DimOS connects to the Go2 over **WebRTC** (no ROS2 on this path). This package s
 - **Outputs:** `clicked_point`, `goal_request`, `stop_movement` to `ReplanningAStarPlanner`
 - **Side channel:** a WebSocket server on a daemon thread (the RPC worker never blocks)
 
+**Threading (critical):** `super().start()` auto-binds stream handlers on the module asyncio loop. The WebSocket server runs on a daemon thread. Handlers must never block — outbound data crosses threads via `asyncio.run_coroutine_threadsafe()`. See [`bridge_module.py`](dimos-ar/dimos_ar/bridge_module.py) for the pattern.
+
 ### Platform-agnostic protocol
 
-All DimOS-side code speaks a single JSON WebSocket protocol ([`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md)). Spectacles is just one client of that protocol.
+All DimOS-side code speaks a single JSON WebSocket protocol ([`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md)). Spectacles is just one client of that protocol.
 
 - Name things generically: `ARBridge`, not `SpectaclesBridge`
 - Treat the protocol schema as a versioned API (`protocol_version` in `hello`)
@@ -155,7 +213,7 @@ The robot lives in an **odom** frame; AR devices live in a **world** frame.
 
 The Lens sends `align_start` / `align_marker` while Image Tracking sees the marker; the bridge runs OpenCV AprilTag detection on the Go2 camera and computes `T_world_odom` when both sides detect the same phone-held marker within **500 ms**. At commit time the resulting transform is gravity-leveled so the AR floor remains flat even if the phone was held with some tilt. After that, lidar and pose still stream in full **world** coordinates, so the robot may continue onto uneven terrain normally.
 
-**Marker size configuration.** Default: AprilTag 36h11 with a **60 mm** square inner tag inside a **60 mm × 120 mm** composite tracked image. The shared contract lives in `dimos-ar/dimos_ar/marker_contract.py`. The marker web page is rendered from that contract, and `python scripts/generate_marker.py --sync-lens` updates the Lens marker asset height to match automatically (see [`dimos-ar/docs/MARKER_ASSETS.md`](dimos-ar/docs/MARKER_ASSETS.md)).
+**Marker size configuration.** Default: AprilTag 36h11 with a **60 mm** square inner tag inside a **60 mm × 120 mm** composite tracked image. The shared contract lives in `dimos-ar/dimos_ar/marker_contract.py`. The marker web page is rendered from that contract. **Regenerate marker assets:** `python scripts/generate_marker.py --sync-lens` (updates PNG/PDF and syncs Lens marker asset height to match).
 
 The legacy `register` message still exists for replay workflows and future lightweight clients that do not use the full `align_*` session.
 
@@ -167,7 +225,7 @@ This repo adds `ARBridge` on port **8765** plus the QR-linked marker page used b
 
 ## Architecture overview
 
-Detailed information about the individual components is provided in the sections below and in the focused docs under [`dimos-ar/docs/`](dimos-ar/docs/).
+Detailed information about the individual components is provided in the sections below.
 
 ```mermaid
 flowchart TB
@@ -194,8 +252,8 @@ flowchart TB
         SW --> WV[WizardView]
         SW --> WC[WizardConnectionController]
         SW --> CP[CalibrationPresenter]
-        UI --> MHV[MainHudView]
-        MHV --> SUB[ModeBasedSubMenu]
+        UI --> MMV[MainMenuView]
+        MMV --> SUB[ModeBasedSubMenu]
     end
 
     subgraph bridge [ARBridge on Mac]
@@ -252,8 +310,8 @@ flowchart TB
     end
 
     Robot --> GO2
-    WS --> Spec
-    Spec -->|register nav_goal| WS
+    WS --> Lens[SpectaclesLens]
+    Lens -->|register nav_goal| WS
 ```
 
 ### Lens architecture (scene entry points vs helpers)
@@ -274,7 +332,7 @@ The important boundary is:
 
 - `dimos-ar/` owns protocol definition, calibration math, and robot/world transforms on the Mac.
 - `lens-studio/` owns Spectacles-only UX, marker tracking, world-anchored rendering, and navigation interaction.
-- The contract between them is still [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md), implemented on the Lens through [`lens-studio/Assets/Scripts/Network/`](lens-studio/Assets/Scripts/Network/).
+- The contract between them is still [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md), implemented on the Lens through [`lens-studio/Assets/Scripts/Network/`](lens-studio/Assets/Scripts/Network/).
 
 ### ARBridge (Python)
 
@@ -306,15 +364,15 @@ Central module: [`dimos-ar/dimos_ar/bridge_module.py`](dimos-ar/dimos_ar/bridge_
 
 ### Spectacles client (`lens-studio/`)
 
-The Lens Studio project lives in [`lens-studio/`](lens-studio/) (`lens-studio/spectacles-unitree.esproj`), not under `dimos-ar/clients/`. It implements world-anchored lidar rendering, AprilTag registration in-scene, and floor-pin navigation using the same documented WebSocket protocol as the bridge.
+The Lens Studio project lives in [`lens-studio/`](lens-studio/) (`lens-studio/spectacles-dimensional-os.esproj`), not under `dimos-ar/clients/`. It implements world-anchored lidar rendering, AprilTag registration in-scene, and floor-pin navigation using the same documented WebSocket protocol as the bridge.
 
 The Lens-side code is now organized around a few scene-entry scripts plus feature folders:
 
 ```text
 lens-studio/Assets/Scripts/
 ├── DimosManager.ts                  # top-level Lens facade / scene entry
-├── SetupWizard.ts                   # setup flow scene entry
-├── UIManager.ts                     # HUD scene entry
+├── Setup/SetupWizard.ts             # setup flow scene entry
+├── UI/UIManager.ts                  # HUD scene entry
 ├── Setup/                           # wizard view + connect/calibration helpers
 ├── Alignment/                       # marker alignment + manual placement session
 ├── Navigation/                      # placement + navigation workflow
@@ -323,7 +381,7 @@ lens-studio/Assets/Scripts/
 └── UI/                              # HUD views, robot menu, shared UI helpers
 ```
 
-See [`dimos-ar/docs/LENS_DEVELOPMENT.md`](dimos-ar/docs/LENS_DEVELOPMENT.md) for Lens architecture (Agent Center patterns), dev workflow, and **Lens Studio MCP** setup plus asset/scene operation tools for Cursor.
+See [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md) for scene wiring details.
 
 ## WebSocket on port 8765
 
@@ -362,7 +420,7 @@ exists), and whether streams are flowing. Clients can send `get_status` to refre
 | `cancel_goal` | Cancel active navigation |
 | `emergency_stop` | Emergency stop and clear navigation |
 
-Full schema: [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md).
+Full schema: [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md).
 
 ## Blueprint
 
@@ -374,8 +432,8 @@ Here are things you can change without leaving the supported architecture:
 
 - **Tune lidar for your network:** edit `ARBridgeConfig` in [`bridge_module.py`](dimos-ar/dimos_ar/bridge_module.py) — `target_points`, `lidar_max_hz`, height band (`min_height_m` / `max_height_m`)
 - **Pin a specific Go2 on a busy LAN:** set `ROBOT_SERIAL` before starting the blueprint (must match the hardware serial from discovery)
-- **Add a protocol message:** update [`dimos_ar/protocol.py`](dimos-ar/dimos_ar/protocol.py), [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md), and `lens-studio/Assets/Scripts/Network/Protocol.ts` together
-- **Add a new AR platform:** implement [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md) in your client; keep platform code out of `dimos_ar/` (Spectacles in `lens-studio/`; other platforms in their own folder or repo)
+- **Add a protocol message:** update [`dimos_ar/protocol.py`](dimos-ar/dimos_ar/protocol.py), [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md), and the Lens protocol files in [`lens-studio/Assets/Scripts/Network/`](lens-studio/Assets/Scripts/Network/) together
+- **Add a new AR platform:** implement [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) in your client; keep platform code out of `dimos_ar/` (Spectacles in `lens-studio/`; other platforms in their own folder or repo)
 
 ## Ports
 
@@ -420,17 +478,14 @@ If the live connection goes stale, `ARGO2Connection` re-discovers by **serial** 
 - Replay lidar may take **15–40 seconds** after blueprint boot before the first points arrive
 - Port **8765** conflicts with DimOS **Foxglove** viewer — do not run both on the same machine
 - WebSocket has no auth (intended for local dev; see `listen_host` warning above)
-- Spectacles Lens (`lens-studio/`) is early stage — see `dimos-ar/docs/LENS_DEVELOPMENT.md`
 - In offline Lens debugging with no bridge connected, confirming a floor goal still transitions the placement marker into its local **executing / cancel** state for UI testing, but no `nav_goal` is sent until a bridge connection is available.
 
 ### Documentation map
 
 | Doc | Contents |
 |-----|----------|
-| [`dimos-ar/docs/ARCHITECTURE.md`](dimos-ar/docs/ARCHITECTURE.md) | Package layout, threading, data flow |
-| [`dimos-ar/docs/PROTOCOL.md`](dimos-ar/docs/PROTOCOL.md) | WebSocket message schema |
-| [`dimos-ar/docs/LENS_DEVELOPMENT.md`](dimos-ar/docs/LENS_DEVELOPMENT.md) | Spectacles Lens Studio guide, MCP asset/scene ops, UI patterns |
-| [`dimos-ar/docs/MARKER_ASSETS.md`](dimos-ar/docs/MARKER_ASSETS.md) | AprilTag generation and Lens sync |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Contributor workflow and protocol sync checklist |
+| [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) | WebSocket message schema (cross-repo contract) |
 | [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md) | Lens scene wiring checklist |
 
 Contributions, ideas, and bug reports are welcome. Feel free to open an issue or pull request.

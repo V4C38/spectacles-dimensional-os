@@ -7,11 +7,11 @@ The live `SetupWizard` scene object is bound to
 
 ## 1. AprilTag marker asset
 
-**Lens Studio** uses `Assets/Markers/apriltag_marker.png` (tracking image). **On the phone** during calibration, scan the **QR code** printed in the terminal when you run `dimos-ar` `./start.sh` — it opens the composite marker page at true size (**60 mm × 120 mm** overall, with a **60 mm × 60 mm** AprilTag centered inside).
+**Lens Studio** uses `Assets/TrackingMarkers/apriltag_marker.png` (tracking image). **On the phone** during calibration, scan the **QR code** printed in the terminal when you run `dimos-ar` `./start.sh` — it opens the composite marker page at true size (**60 mm × 120 mm** overall, with a **60 mm × 60 mm** AprilTag centered inside).
 
-The scene should already have **Image Tracking** with `aruco_marker` (physical height **12.0 cm** for the full tracked image). If you re-import:
+The scene should already have **Image Tracking** with `apriltag_marker` (physical height **12.0 cm** for the full tracked image). If you re-import:
 
-1. Ensure `Assets/Markers/apriltag_marker.png` is in the project (sync from `dimos-ar`: `python scripts/generate_marker.py --sync-lens` — see [`dimos-ar/docs/MARKER_ASSETS.md`](../../dimos-ar/docs/MARKER_ASSETS.md)).
+1. Ensure `Assets/TrackingMarkers/apriltag_marker.png` is in the project (sync from `dimos-ar`: `python scripts/generate_marker.py --sync-lens`).
 2. On the marker asset, set texture to `apriltag_marker` and **Physical Height** to `12.0` cm.
 
 ## 2. UI frames (scene-placed, UIKit Frame)
@@ -51,19 +51,21 @@ scene so the HUD can be edited visually in Lens Studio:
 | **TextManualMode** | authored descriptive text under **ModeManualMenu** |
 | **EnableNavigation** | authored toggle button under **ModeManualMenu** |
 | **EnableNavigationLabel** | text child under **EnableNavigation** |
-| **ExecuteMovement** | authored toggle button under **ModeManualMenu** |
-| **ExecuteMovementLabel** | text child under **ExecuteMovement** |
+| **ShowLiDAR** | authored toggle under **ModeManualMenu** — height/debug LiDAR layer only |
+| **ShowLiDARLabel** | text child under **ShowLiDAR** |
 | **ModeAgentMenu** | agent-mode content container under **SubMenu** |
 | **TextAgentMode** | authored descriptive text under **ModeAgentMenu** |
 
 `UIManager` binds those authored children by name and remains presentation-only.
 Setup/runtime lifecycle transitions are owned through `DimosManager` + app state.
-`DebugMode` now drives LiDAR point-cloud visibility directly, `EmergencyStop`
-lives on the main HUD, and the expand/collapse button shows or hides the
-mode-based submenu. Selecting **Manual** no longer auto-starts navigation
-placement; the manual submenu exposes **Enable Navigation** plus the
-**Execute movement** toggle, and both the main HUD toggle and robot-local
-toggle reflect the same shared app-state boolean.
+**ShowLiDAR** toggles the height/debug LiDAR layer (`showLiDAR` app state). The red
+obstacle layer always renders from live bridge `lidar` messages when connected,
+independent of Show LiDAR. **DebugMode** on the main bar is reserved for future
+debug features (unwired in code). `EmergencyStop` lives on the main HUD. The
+expand/collapse button shows or hides the mode-based submenu. Selecting **Manual**
+no longer auto-starts navigation placement; the manual submenu exposes **Enable
+Navigation**, and both the main HUD toggle and robot-local toggle reflect the same
+shared app-state boolean.
 
 ## 3. RobotManager hierarchy
 
@@ -138,7 +140,9 @@ authoritative nodes are:
 | Prefab node | Purpose |
 |-------------|---------|
 | **CalibrationSceneVisual** | root subtree for the floor marker; should not add a conflicting root `LookAt` behavior over placement rotation |
-| **PortalCircle** | drag surface / placement ring |
+| **Circle_Seeking** | drag surface / placement ring (legacy name: **PortalCircle**) |
+| **Circle_Executing** | saturated ring shown while navigating |
+| **MoveDirectionArrow** | direction hint; child of **RotationRoot** (not under the circle) |
 | **ConfirmButton** | explicit confirm or cancel action |
 | **PlaceText** | helper text visible while placing |
 | **Dots** | retained in both placing and executing states |
@@ -148,13 +152,13 @@ Gameplay code now binds the `SurfacePlacementMarker` already present in
 `Scene.scene`, so scene edits to that marker should be reflected directly at
 runtime.
 
-### Reachy assets
+### Robot marker assets
 
-The exact Reachy sphere assets live in:
+The authored robot marker assets now live under the project-level mesh and material folders:
 
-- `Assets/Reachy/Main_sphere_default_normals.mesh`
-- `Assets/Reachy/ActivityIndicator.ss_graph`
-- `Assets/Reachy/ActivityIndicator_LookAtInteraction.mat`
+- `Assets/Meshes/Main_sphere_default_normals.mesh`
+- `Assets/Materials/Shaders/AnimatedNoiseWaves.ss_graph`
+- `Assets/Materials/ActivityIndicator_*.mat`
 
 ## 4. Wire `@input` references
 
@@ -173,7 +177,7 @@ The exact Reachy sphere assets live in:
 | DimosManager | placementRayOrigin | **Camera Object** (tracked camera root used for placement ray fallback) |
 | DimosManager | robotMarker | RobotMarker (on **Rendering**) |
 
-> **Note:** `DimosManager` no longer has a `lineMaterial` input. The path line uses `Assets/Materials/InteractorLineMaterial.mat` (cloned at runtime by `PathRenderer`). If a `lineMaterial` field was previously wired in the Inspector, it can be safely removed.
+> **Note:** `DimosManager` no longer has a `lineMaterial` input. `PathRenderer` clones `InteractorLineMaterial.mat` from **Spectacles Interaction Kit** at runtime (`requireAsset` on the SIK package path). If a `lineMaterial` field was previously wired in the Inspector, it can be safely removed.
 | AlignmentController | bridgeClient | BridgeClient |
 | AlignmentController | markerTracking | Marker Tracking on **Image Tracking** |
 | AlignmentController | debugGizmo | (Optional) SceneObject with 3D gizmo for tracking debug |
@@ -189,22 +193,17 @@ Both lidar layers use the vertex-color unlit shader:
 
 | Asset | Role |
 |-------|------|
-| `Assets/Materials/unlit.ss_graph` | Vertex-color unlit pass (`7bf996fa-…`) — **do not duplicate** |
-| `Assets/Materials/LidarHeight.mat` | Height/debug cubes (opaque, vertex color) |
+| `Assets/Materials/Shaders/unlit_LiDAR.ss_graph` | Vertex-color unlit pass used by the LiDAR materials |
+| `Assets/Materials/LidarHeight.mat` | Height/debug cubes (alpha blend, vertex-colored height gradient) |
 | `Assets/Materials/LidarObstacle.mat` | Proximity obstacle cubes (alpha blend, red) |
 
 If preview logs `missing a material pass` or `!passList.empty()`, confirm
-`LidarHeight.mat` / `LidarObstacle.mat` still reference `unlit.ss_graph` and
+`LidarHeight.mat` / `LidarObstacle.mat` still reference `Assets/Materials/Shaders/unlit_LiDAR.ss_graph` and
 that duplicate `unlit 2` / `uber_unlit` shader copies are not present.
 
 ### Lens Studio MCP (assets + scene)
 
-Prefer **Lens Studio MCP** for Inspector-equivalent work when the project is open
-(MCP server started). Use it to list/create/move/delete assets, read or patch
-scripts under `Assets/`, inspect the scene graph, and set component properties —
-instead of hand-editing YAML scene/material files.
-
-Details and tool list: [`dimos-ar/docs/LENS_DEVELOPMENT.md` — MCP asset operations](../dimos-ar/docs/LENS_DEVELOPMENT.md#lens-studio-mcp-asset-and-scene-operations).
+Prefer MCP for: listing/creating/moving/deleting assets, reading or patching scripts under `Assets/`, inspecting the scene graph, and setting component properties — instead of hand-editing YAML scene/material files.
 
 **Manual-only exception:** Internet Module (see below).
 
@@ -268,8 +267,7 @@ calibration status from `bridge_status`.
 
 For the navigation foundation pass, validate in this order:
 
-1. Replay/web first: run `dimos-ar/blueprints/go2_ar.py` and verify `hello`, `bridge_status`,
-   `path`, and `nav_status` from the web client.
+1. Replay bridge first: run `dimos-ar/blueprints/go2_ar.py` and verify the bridge starts, the QR marker page is served, and the `bridge_status` stream is healthy.
 2. Lens compile and scene wiring: confirm `DimosManager` has `placementRayOrigin` wired and the
    Lens compiles without TypeScript errors.
    Do not run compile-with-logs as the default verification step; only use it
@@ -286,18 +284,20 @@ For the navigation foundation pass, validate in this order:
    either HUD, confirm the other toggle updates immediately, and verify the
    scene-authored `SurfacePlacementMarker` resets near the robot pose and then
    stays snapped to the detected floor while placing.
-6. Drag flow: grab `PortalCircle`, verify drag moves on a stable horizontal
+6. Drag flow: grab `Circle_Seeking`, verify drag moves on a stable horizontal
    plane, remains surface-aligned while visible, release, drag again without
    accepting on release, and confirm `ConfirmButton` is the only acceptance
-   path. In `executeMovement=false`, the marker should still enter its executing
-   state locally without sending `nav_goal`.
-7. Execute/cancel flow: after tapping **Confirm**, verify the marker keeps
-   `Dots`, does not shrink `PortalCircle`, hides `PlaceText`, and changes the
+   path.
+7. Show LiDAR: with bridge connected, toggle **Show LiDAR** off and confirm red
+   obstacle cubes remain visible; toggle on to show the height layer. Offline
+   (no bridge), Show LiDAR on shows height-only mock preview (no mock obstacles).
+8. Execute/cancel flow: after tapping **Confirm**, verify the marker keeps
+   `Dots`, does not shrink `Circle_Seeking`, hides `PlaceText`, and changes the
    button to **Cancel** with `Special` styling. Tapping **Cancel** should fire
    once, follow the same stop path as emergency stop, and return the marker to
    placing at the same pose.
-8. Robot-local controls: confirm the robot marker menu toggle follows odometry,
+9. Robot-local controls: confirm the robot marker menu toggle follows odometry,
    the robot-local **Enable Navigation** button mirrors the HUD state, and the
    emergency stop path works from both the HUD and robot-local menu.
 
-See [`dimos-ar/docs/LENS_DEVELOPMENT.md`](../../dimos-ar/docs/LENS_DEVELOPMENT.md) for protocol and MCP setup.
+See [`dimos-ar/PROTOCOL.md`](../../dimos-ar/PROTOCOL.md) for the WebSocket protocol schema.

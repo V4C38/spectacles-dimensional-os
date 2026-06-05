@@ -6,30 +6,36 @@ import {
   SnapOS2Styles,
 } from "../UI/Shared/UIBuilders";
 
+// ================================================================
+/** Scene-graph view for the navigation target marker with confirm/cancel and visibility animations. */
+// ================================================================
+
 export type NavigationMarkerVisualState = "disabled" | "placing" | "executing";
 
 const MARKER_VISIBILITY_DURATION_SECONDS = 0.18;
 const VISIBILITY_ANIMATION_VERSION_KEY = "__navMarkerVisibilityVersion";
 const CIRCLE_SCALE_ANIMATION_VERSION_KEY = "__navMarkerCircleScaleVersion";
+const DOTS_WHITE = new vec4(1, 1, 1, 0.457359);
+const DOTS_YELLOW = new vec4(0.976471, 0.929412, 0.423529, 0.500008);
 
 export class NavigationMarkerView {
   private readonly root: SceneObject;
-  private readonly calibrationSceneVisual: SceneObject;
   private readonly screenTextParent: SceneObject | null;
+  private readonly rotationRoot: SceneObject | null;
   private readonly portalCircle: SceneObject;
-  private readonly dots: SceneObject;
+  private readonly circleExecuting: SceneObject | null;
   private readonly confirmButtonObject: SceneObject;
   private readonly confirmButton: RoundButton;
   private readonly confirmVfx: SceneObject | null;
   private readonly cancelVfx: SceneObject | null;
   private readonly confirmLabel: Text;
-  private readonly placeText: Text;
   private readonly arrow: SceneObject | null;
   private readonly moveDirectionArrow: SceneObject | null;
+  private readonly dots: SceneObject | null;
   private readonly moveDirectionArrowBaseRotation: quat;
   private readonly portalBaseScale: vec3;
   private readonly rootBaseScale: vec3;
-  private readonly calibrationLookAt: Component | null;
+  private readonly rotationLookAt: Component | null;
   private readonly circleAnimation: any;
 
   private _state: NavigationMarkerVisualState = "disabled";
@@ -39,13 +45,12 @@ export class NavigationMarkerView {
 
   constructor(root: SceneObject) {
     this.root = root;
-    this.calibrationSceneVisual = this._requireChild(
-      this.root,
-      "CalibrationSceneVisual",
-    );
     this.screenTextParent = this._findChild(this.root, "ScreenTextParent");
-    this.portalCircle = this._requireChild(this.root, "PortalCircle");
-    this.dots = this._requireChild(this.root, "Dots");
+    this.rotationRoot = this._findChild(this.root, "RotationRoot");
+    this.portalCircle =
+      this._findChild(this.root, "Circle_Seeking") ??
+      this._requireChild(this.root, "PortalCircle");
+    this.circleExecuting = this._findChild(this.root, "Circle_Executing");
     this.confirmButtonObject = this._requireChild(this.root, "ConfirmButton");
     this.confirmButton = this.confirmButtonObject.getComponent(
       RoundButton.getTypeName(),
@@ -53,15 +58,15 @@ export class NavigationMarkerView {
     this.confirmVfx = this._findChild(this.confirmButtonObject, "ButtonVFX_Confirm");
     this.cancelVfx = this._findChild(this.confirmButtonObject, "ButtonVFX_Cancel");
     this.confirmLabel = this._requireFirstText(this.confirmButtonObject);
-    this.placeText = this._requireText(this.root, "PlaceText");
     this.arrow = this._findChild(this.root, "Arrow");
-    this.moveDirectionArrow = this._findChild(this.portalCircle, "MoveDirectionArrow");
+    this.moveDirectionArrow = this._findChild(this.root, "MoveDirectionArrow");
+    this.dots = this._findChild(this.root, "Dots");
     this.moveDirectionArrowBaseRotation = this.moveDirectionArrow
       ? this.moveDirectionArrow.getTransform().getLocalRotation()
       : quat.quatIdentity();
     this.portalBaseScale = this.portalCircle.getTransform().getLocalScale();
     this.rootBaseScale = this.root.getTransform().getLocalScale();
-    this.calibrationLookAt = this.calibrationSceneVisual.getComponent(
+    this.rotationLookAt = (this.rotationRoot ?? this.root).getComponent(
       "Component.LookAtComponent",
     ) as Component | null;
     this.circleAnimation = this._findScriptComponent(
@@ -71,11 +76,11 @@ export class NavigationMarkerView {
     );
     if (!this.confirmButton) {
       throw new Error(
-        "NavigationMarkerView: SurfacePlacementMarker is missing ConfirmButton RoundButton",
+        "NavigationMarkerView: NavigationTargetMarker is missing ConfirmButton RoundButton",
       );
     }
-    if (this.calibrationLookAt) {
-      this.calibrationLookAt.enabled = false;
+    if (this.rotationLookAt) {
+      this.rotationLookAt.enabled = false;
     }
     this._initializeHidden();
   }
@@ -95,7 +100,7 @@ export class NavigationMarkerView {
   }
 
   public get floatingUiParent(): SceneObject {
-    return this.screenTextParent ?? this.calibrationSceneVisual;
+    return this.screenTextParent ?? this.rotationRoot ?? this.root;
   }
 
   public get rootSceneObject(): SceneObject {
@@ -253,14 +258,14 @@ export class NavigationMarkerView {
 
   public showPlacing(): void {
     this._state = "placing";
-    this.calibrationSceneVisual.enabled = true;
-    if (this.calibrationLookAt) {
-      this.calibrationLookAt.enabled = false;
+    if (this.circleExecuting) {
+      this.circleExecuting.enabled = false;
     }
-    this.dots.enabled = true;
+    if (this.rotationLookAt) {
+      this.rotationLookAt.enabled = false;
+    }
     this.confirmButtonObject.enabled = true;
     this.setConfirmActionEnabled(true);
-    this.placeText.getSceneObject().enabled = true;
     this.confirmLabel.text = "Confirm";
     setButtonStyle(this.confirmButton, SnapOS2Styles.Primary);
     this.resetCircleAnimation();
@@ -271,21 +276,22 @@ export class NavigationMarkerView {
     }
     this._setMoveDirectionArrowSpeed(0);
     this._syncMoveDirectionArrowVisibility();
-    this._setPortalSaturation(0);  // Desaturate during placing
+    this._setCircleSaturation(this.portalCircle, 0);
+    this._applyDotsVisual(true);
     this._animateVisibility(true);
     this._animateCircleScale(true);
   }
 
   public showExecuting(): void {
     this._state = "executing";
-    this.calibrationSceneVisual.enabled = true;
-    if (this.calibrationLookAt) {
-      this.calibrationLookAt.enabled = false;
+    if (this.circleExecuting) {
+      this.circleExecuting.enabled = true;
     }
-    this.dots.enabled = true;
+    if (this.rotationLookAt) {
+      this.rotationLookAt.enabled = false;
+    }
     this.confirmButtonObject.enabled = true;
     this.setConfirmActionEnabled(true);
-    this.placeText.getSceneObject().enabled = false;
     this.confirmLabel.text = "Cancel";
     setButtonStyle(this.confirmButton, SnapOS2Styles.Special);
     this.setScanAnimationEnabled(true);
@@ -295,14 +301,14 @@ export class NavigationMarkerView {
     }
     this._setMoveDirectionArrowSpeed(1);
     this._syncMoveDirectionArrowVisibility();
-    this._setPortalSaturation(1);  // Full saturation during execution
+    this._setCircleSaturation(this.circleExecuting, 1);
+    this._applyDotsVisual(false);
     this._animateVisibility(true);
     this._animateCircleScale(false);
   }
 
   public hide(): void {
     this._state = "disabled";
-    this.placeText.getSceneObject().enabled = false;
     this.setScanAnimationEnabled(false);
     this._setConfirmVfxState(true, true);
     if (this.arrow) {
@@ -316,12 +322,15 @@ export class NavigationMarkerView {
     this._nextCircleAnimationVersion();
     this.portalCircle.enabled = true;
     this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
+    if (this.circleExecuting) {
+      this.circleExecuting.enabled = false;
+    }
+    this._applyDotsVisual(true);
     this._animateVisibility(false);
   }
 
   public hideAndThen(callback: () => void): void {
     this._state = "disabled";
-    this.placeText.getSceneObject().enabled = false;
     this.setScanAnimationEnabled(false);
     this._setConfirmVfxState(true, true);
     if (this.arrow) {
@@ -332,6 +341,10 @@ export class NavigationMarkerView {
     this._nextCircleAnimationVersion();
     this.portalCircle.enabled = true;
     this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
+    if (this.circleExecuting) {
+      this.circleExecuting.enabled = false;
+    }
+    this._applyDotsVisual(true);
     const transform = this.root.getTransform();
     const start = transform.getLocalScale();
     const target = vec3.zero();
@@ -446,13 +459,61 @@ export class NavigationMarkerView {
     return null;
   }
 
-  private _setPortalSaturation(value: number): void {
-    const visual = this.portalCircle.getComponent("Component.RenderMeshVisual") as RenderMeshVisual | null;
+  private _applyDotsVisual(seeking: boolean): void {
+    if (!this.dots) {
+      return;
+    }
+    const visual = this.dots.getComponent(
+      "Component.RenderMeshVisual",
+    ) as RenderMeshVisual | null;
+    if (!visual?.mainMaterial) {
+      return;
+    }
+    const pass = visual.mainMaterial.mainPass as any;
+    if (!pass) {
+      return;
+    }
+    if (seeking) {
+      if ("WhiteColor" in pass) {
+        pass.WhiteColor = DOTS_WHITE;
+      }
+      if ("YellowColor" in pass) {
+        pass.YellowColor = DOTS_WHITE;
+      }
+      if ("AnimationSwitch" in pass) {
+        pass.AnimationSwitch = false;
+      } else if ("animationSwitch" in pass) {
+        pass.animationSwitch = false;
+      }
+      return;
+    }
+    if ("WhiteColor" in pass) {
+      pass.WhiteColor = DOTS_WHITE;
+    }
+    if ("YellowColor" in pass) {
+      pass.YellowColor = DOTS_YELLOW;
+    }
+    if ("AnimationSwitch" in pass) {
+      pass.AnimationSwitch = true;
+    } else if ("animationSwitch" in pass) {
+      pass.animationSwitch = true;
+    }
+  }
+
+  private _setCircleSaturation(
+    circle: SceneObject | null,
+    value: number,
+  ): void {
+    if (!circle) {
+      return;
+    }
+    const visual = circle.getComponent(
+      "Component.RenderMeshVisual",
+    ) as RenderMeshVisual | null;
     if (!visual || !visual.mainMaterial) {
       return;
     }
-    const material = visual.mainMaterial;
-    const pass = material.mainPass;
+    const pass = visual.mainMaterial.mainPass;
     if (pass && "Saturation" in pass) {
       (pass as any).Saturation = value;
     }
@@ -473,7 +534,6 @@ export class NavigationMarkerView {
   private _initializeHidden(): void {
     this.root.enabled = false;
     this.root.getTransform().setLocalScale(vec3.zero());
-    this.placeText.getSceneObject().enabled = false;
     this.setScanAnimationEnabled(false);
     this._setConfirmVfxState(true, true);
     this._confirmEnabled = false;

@@ -1,4 +1,4 @@
-"""WebSocket JSON protocol — keep in sync with docs/PROTOCOL.md."""
+"""WebSocket JSON protocol — keep in sync with PROTOCOL.md."""
 
 from __future__ import annotations
 

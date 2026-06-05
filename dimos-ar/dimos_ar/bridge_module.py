@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from dimos_lcm.std_msgs import Bool, String
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
@@ -21,15 +20,16 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
 from dimos.robot.unitree.go2.connection_spec import GO2ConnectionSpec
 from dimos.utils.logging_config import setup_logger
+from dimos_lcm.std_msgs import Bool, String
 from unitree_webrtc_connect.constants import RTC_TOPIC, SPORT_CMD
 from websockets.asyncio.server import ServerConnection
 
 from dimos_ar.alignment import (
-    AprilTagAligner,
     DEFAULT_CAMERA_ORIENTATION,
     DEFAULT_CAMERA_POSITION,
     DEFAULT_MARKER_LENGTH_M,
     DEFAULT_TIMESTAMP_TOLERANCE_S,
+    AprilTagAligner,
 )
 from dimos_ar.bridge_status import get_bridge_status_tracker, sync_tracker_robot_model
 from dimos_ar.filters import (
@@ -94,8 +94,8 @@ def _candidate_yaw_distance_rad(lhs: np.ndarray, rhs: np.ndarray) -> float:
 
 
 def score_alignment_cluster(
-    candidate: "AlignmentCandidate",
-    recent_candidates: list["AlignmentCandidate"],
+    candidate: AlignmentCandidate,
+    recent_candidates: list[AlignmentCandidate],
 ) -> tuple[float, int, float, float]:
     cluster = [
         sample
@@ -538,7 +538,8 @@ class ARBridge(Module):
                 "Alignment improved — hold steady for best result"
                 if improved
                 else (
-                    f"Tracking marker — hold steady ({cluster_size}/{ALIGNMENT_CLUSTER_MIN_SAMPLES})"
+                    "Tracking marker — hold steady "
+                    f"({cluster_size}/{ALIGNMENT_CLUSTER_MIN_SAMPLES})"
                     if not is_stable_candidate
                     else "Tracking marker — refining best alignment"
                 )
@@ -719,7 +720,12 @@ class ARBridge(Module):
                 ts=msg.ts,
             )
             return
-        self._finish_alignment(best, self._best_alignment_ts if self._best_alignment_ts is not None else msg.ts)
+        finish_ts = (
+            self._best_alignment_ts
+            if self._best_alignment_ts is not None
+            else msg.ts
+        )
+        self._finish_alignment(best, finish_ts)
 
     def _on_align_marker(self, msg: AlignMarkerMessage, websocket: ServerConnection) -> None:
         if not self._aligner.active:

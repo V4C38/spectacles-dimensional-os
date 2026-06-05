@@ -2,7 +2,11 @@ import { RectangleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
 import { SnapOS2Styles } from "SpectaclesUIKit.lspkg/Scripts/Themes/SnapOS-2.0/SnapOS2";
-import { FONT_BUTTON, Z_BUTTONS, Z_CONTENT } from "./UIConstants";
+import { FONT_BUTTON, Z_BUTTONS, Z_CONTENT } from "./UICore";
+
+// ================================================================
+/** SnapOS2 button/text factory helpers and toggle binding utilities. */
+// ================================================================
 
 export { SnapOS2Styles };
 

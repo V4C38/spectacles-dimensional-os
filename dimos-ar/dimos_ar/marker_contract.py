@@ -36,5 +36,5 @@ LEGACY_MARKER_BASENAME = "aruco_marker"
 LEGACY_MARKER_PNG = f"{LEGACY_MARKER_BASENAME}.png"
 LEGACY_PHONE_PDF = f"{LEGACY_MARKER_BASENAME}_phone.pdf"
 
-LENS_MARKER_ASSET_RELATIVE_PATH = "Markers/apriltag_marker.imgmarker"
-LENS_MARKER_TEXTURE_RELATIVE_PATH = "Markers/apriltag_marker.png"
+LENS_MARKER_ASSET_RELATIVE_PATH = "TrackingMarkers/apriltag_marker.imgmarker"
+LENS_MARKER_TEXTURE_RELATIVE_PATH = "TrackingMarkers/apriltag_marker.png"

@@ -1,4 +1,9 @@
-/** Keep in sync with dimos_ar/protocol.py and docs/PROTOCOL.md */
+// ================================================================
+/**
+ * Canonical TypeScript message schemas and active-robot ID state synced with Python protocol.py.
+ * Keep in sync with dimos_ar/protocol.py and dimos-ar/PROTOCOL.md.
+ */
+// ================================================================
 
 export const PROTOCOL_VERSION = 1;
 export const ROBOT_ID = "go2";

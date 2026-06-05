@@ -4,11 +4,15 @@ import {
   SPACE_LG,
   SPACE_SM,
   SPACE_XS,
+  UIFrameMetrics,
   Z_BUTTONS,
   Z_CONTENT,
-} from "./UIConstants";
-import { UIFrameMetrics } from "./UIFrameMetrics";
+} from "./UICore";
 import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
+
+// ================================================================
+/** Frame-aware layout helpers for wizard and HUD panels. */
+// ================================================================
 
 export function setSceneObjectY(obj: SceneObject, centerY: number): void {
   obj.getTransform().setLocalPosition(new vec3(0, centerY, Z_CONTENT));

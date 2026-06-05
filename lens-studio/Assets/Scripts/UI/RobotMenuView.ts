@@ -2,7 +2,7 @@ import { RectangleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import { OperatingMode } from "../AppState";
 import { scaleIn, scaleOut } from "./Shared/UIAnimations";
-import { COLOR_ERROR, COLOR_WHITE } from "./Shared/UIConstants";
+import { COLOR_ERROR, COLOR_WHITE } from "./Shared/UICore";
 import {
   bindToggleButton,
   configureButtonToggle,
@@ -15,7 +15,11 @@ import {
   requireRoundButton,
   requireText,
   findChildRecursive,
-} from "./Shared/SceneLookup";
+} from "./Shared/UICore";
+
+// ================================================================
+/** Scene-bound robot menu UI for toggle, stop, navigation placement, and mode panels. */
+// ================================================================
 
 export class RobotMenuView {
   public onToggleRequested: (() => void) | null = null;

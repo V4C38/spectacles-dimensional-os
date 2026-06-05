@@ -1,8 +1,8 @@
 import { BridgeClient } from "./Network/BridgeClient";
 import { AlignmentController } from "./Alignment/AlignmentController";
-import { PointCloudRenderer } from "./Rendering/PointCloudRenderer";
-import { RobotMarker } from "./Rendering/RobotMarker";
-import { PathRenderer } from "./Rendering/PathRenderer";
+import { PointCloudRenderer } from "./Visuals/PointCloudRenderer";
+import { RobotMarker } from "./Visuals/RobotMarker";
+import { PathRenderer } from "./Visuals/PathRenderer";
 import { NavigationMarkerView } from "./Navigation/NavigationMarkerView";
 import {
   PlacementController,
@@ -11,13 +11,13 @@ import {
 import { RobotMenuView } from "./UI/RobotMenuView";
 import { RobotMenuController } from "./UI/RobotMenuController";
 import { NavigationController } from "./Navigation/NavigationController";
-import { ManualAlignmentController } from "./Alignment/ManualAlignmentController";
 import {
+  ManualAlignmentController,
   manualMarkerPoseFromMarkerWorldPose,
   manualMarkerPoseFromReference,
   ManualAlignmentPose,
-} from "./Alignment/ManualAlignmentPose";
-import { findChildRecursive } from "./UI/Shared/SceneLookup";
+} from "./Alignment/ManualAlignmentController";
+import { findChildRecursive } from "./UI/Shared/UICore";
 import {
   AppState,
   AppStateListener,
@@ -37,9 +37,9 @@ import {
 const WorldQueryModule = require("LensStudio:WorldQueryModule");
 const NAVIGATION_MARKER_FORWARD_OFFSET_CM = 50.0;
 
-/**
- * Top-level orchestrator. SetupWizard completes first, then hands control here.
- */
+// ================================================================
+// ================================================================
+/** Scene-root orchestrator wiring bridge I/O, alignment, rendering, navigation, and robot menu after setup completes. */
 @component
 export class DimosManager extends BaseScriptComponent {
   @input
@@ -74,8 +74,8 @@ export class DimosManager extends BaseScriptComponent {
   private readonly _appState = new AppState({
     phase: "setup",
     debugMode: false,
+    showLiDAR: false,
     operatingMode: "manual",
-    executeMovement: true,
     navigationPlacementEnabled: true,
     robotInteractionMode: "hidden",
     navigationMode: "idle",
@@ -114,7 +114,7 @@ export class DimosManager extends BaseScriptComponent {
       this.pointCloudRenderer?.pointParent?.getParent() ??
       this.getSceneObject();
     const navigationMarkerRoot = this._requireSceneObject(
-      "SurfacePlacementMarker",
+      "NavigationTargetMarker",
     );
 
     this._goalRenderer = new NavigationMarkerView(navigationMarkerRoot);
@@ -157,7 +157,6 @@ export class DimosManager extends BaseScriptComponent {
       pathRenderer: this._pathRenderer,
       placementController: this._placementController,
       onNavigationModeChanged: (mode) => this._setNavigationMode(mode),
-      isExecuteMovementEnabled: () => this.executeMovement,
       canStartPlacement: () => this._canStartNavigationPlacement(),
       canSendNavGoal: () => this._canSendNavigationGoal(),
       getGoalResetPose: () => this._getNavigationPlacementStartPose(),
@@ -218,35 +217,37 @@ export class DimosManager extends BaseScriptComponent {
     this.bridgeClient.onConnectionChanged.push((connected) =>
       this._applyConnectionState(connected),
     );
-    this._syncDebugLidarPreview();
+    this._syncLiDARPreview();
   }
 
-  private _syncDebugLidarPreview(): void {
+  private _syncLiDARPreview(): void {
     const renderer = this.pointCloudRenderer;
     if (!renderer) {
       return;
     }
 
     const showMock =
-      this._isActive && this.debugMode && !this.hasBridgeConnection();
+      this._isActive && this.showLiDAR && !this.hasBridgeConnection();
     if (showMock) {
       const anchor = this.robotMarker?.getWorldPosition() ?? vec3.zero();
       renderer.setRobotWorldPosition(anchor);
       renderer.setHeightLayerVisible(true);
-      renderer.showMockDebugCloud(anchor);
+      renderer.showMockHeightCloud(anchor);
       return;
     }
 
-    renderer.setHeightLayerVisible(this.debugMode);
+    renderer.setHeightLayerVisible(this.showLiDAR);
     if (!this.hasBridgeConnection()) {
-      renderer.clear();
+      renderer.clearAll();
+    } else if (!this.showLiDAR) {
+      renderer.clearHeightLayer();
     }
   }
 
   public setIsActive(active: boolean): void {
     this._isActive = active;
     if (!active && this.pointCloudRenderer) {
-      this.pointCloudRenderer.clear();
+      this.pointCloudRenderer.clearAll();
     }
     if (!active) {
       this._navigationController?.clearInactiveState();
@@ -254,7 +255,7 @@ export class DimosManager extends BaseScriptComponent {
     }
     this._applyRobotInteractionMode(this.appState.robotInteractionMode);
     if (active) {
-      this._syncDebugLidarPreview();
+      this._syncLiDARPreview();
       if (this.bridgeClient?.lastBridgeStatus) {
         this._applyBridgeStatus(this.bridgeClient.lastBridgeStatus);
       } else {
@@ -454,17 +455,28 @@ export class DimosManager extends BaseScriptComponent {
     this._applyRobotInteractionMode(this.appState.robotInteractionMode);
   }
 
+  public setShowLiDAR(enabled: boolean): void {
+    if (this.showLiDAR === enabled) {
+      return;
+    }
+    this._setAppState({ showLiDAR: enabled });
+    this._syncLiDARPreview();
+    if (!enabled && !this._canStartNavigationPlacement()) {
+      this._navigationController?.setPlacementEnabled(false);
+    }
+  }
+
+  public get showLiDAR(): boolean {
+    return this.appState.showLiDAR;
+  }
+
   public setDebugMode(enabled: boolean): void {
     if (this.debugMode === enabled) {
       return;
     }
     this._setAppState({ debugMode: enabled });
-    this._syncDebugLidarPreview();
     if (this.alignmentController) {
       this.alignmentController.setDebugMode(enabled);
-    }
-    if (!enabled && !this._canStartNavigationPlacement()) {
-      this._navigationController?.setPlacementEnabled(false);
     }
   }
 
@@ -488,17 +500,6 @@ export class DimosManager extends BaseScriptComponent {
 
   public get operatingMode(): OperatingMode {
     return this.appState.operatingMode;
-  }
-
-  public setExecuteMovement(enabled: boolean): void {
-    if (this.executeMovement === enabled) {
-      return;
-    }
-    this._setAppState({ executeMovement: enabled });
-  }
-
-  public get executeMovement(): boolean {
-    return this.appState.executeMovement;
   }
 
   public setNavigationPlacementEnabled(enabled: boolean): void {
@@ -600,7 +601,7 @@ export class DimosManager extends BaseScriptComponent {
       this._manualPoseCorrectionTranslation = null;
       this.robotMarker?.resetRuntimePoseSmoothing();
     }
-    this._syncDebugLidarPreview();
+    this._syncLiDARPreview();
   }
 
   private _canStartNavigationPlacement(): boolean {

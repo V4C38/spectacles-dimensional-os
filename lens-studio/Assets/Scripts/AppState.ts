@@ -1,3 +1,7 @@
+// ================================================================
+/** Observable store for setup/runtime phase, debug toggles, operating mode, and navigation/robot interaction state. */
+// ================================================================
+
 export type AppPhase = "setup" | "runtime";
 export type OperatingMode = "manual" | "agent";
 export type RobotInteractionMode = "hidden" | "manualPlacement" | "runtimeRobot";
@@ -6,8 +10,8 @@ export type NavigationMode = "idle" | "placingGoal" | "executingGoal";
 export interface DimosAppState {
   phase: AppPhase;
   debugMode: boolean;
+  showLiDAR: boolean;
   operatingMode: OperatingMode;
-  executeMovement: boolean;
   navigationPlacementEnabled: boolean;
   robotInteractionMode: RobotInteractionMode;
   navigationMode: NavigationMode;

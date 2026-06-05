@@ -3,7 +3,11 @@ import {
   COLOR_ERROR,
   COLOR_SUCCESS,
   COLOR_WARN,
-} from "./UIConstants";
+} from "./UICore";
+
+// ================================================================
+/** Maps BridgeStatusMessage to status text, color, and robot model labels. */
+// ================================================================
 
 export interface BridgeStatusPresentation {
   text: string;

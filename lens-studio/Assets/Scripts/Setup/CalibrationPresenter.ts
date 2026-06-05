@@ -4,14 +4,18 @@ import {
   COLOR_SUCCESS,
   COLOR_WARN,
   COLOR_WHITE,
-} from "../UI/Shared/UIConstants";
+} from "../UI/Shared/UICore";
 import {
   AlignmentMode,
   CalibrationViewState,
   WizardFooterState,
   WizardStep,
-} from "./WizardTypes";
+} from "./WizardStepData";
 import { AlignStatusMessage } from "../Network/Protocol";
+
+// ================================================================
+/** Pure functions mapping AlignStatusMessage into wizard display and footer state. */
+// ================================================================
 
 export interface CalibrationDisplayModel {
   accuracyText: string;

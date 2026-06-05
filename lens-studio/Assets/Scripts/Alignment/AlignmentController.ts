@@ -4,6 +4,9 @@ import { AlignStatusMessage } from "../Network/Protocol";
 const ALIGN_SEND_INTERVAL_S = 0.2;
 const TRACKING_QUALITY_LOG_INTERVAL_S = 1.0;
 
+// ================================================================
+// ================================================================
+/** Streams Spectacles marker poses to the bridge during QR-based auto calibration. */
 @component
 export class AlignmentController extends BaseScriptComponent {
   @input

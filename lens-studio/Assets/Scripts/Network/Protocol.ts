@@ -1,4 +1,147 @@
+import { BridgeStatusMessage } from "./ProtocolTypes";
+
+// ================================================================
+/**
+ * Public protocol surface re-exporting types/parser plus outbound builders,
+ * unit conversion helpers, status formatting, and simple callback fan-out.
+ */
+// ================================================================
+
+const LENS_CM_TO_PROTOCOL_M = 0.01;
+const PROTOCOL_M_TO_LENS_CM = 100.0;
+
 export * from "./ProtocolTypes";
-export * from "./ProtocolBuilders";
 export * from "./ProtocolParser";
-export * from "./ProtocolFormatters";
+
+export function protocolMetersToLensCentimeters(
+  position: [number, number, number],
+): vec3 {
+  return new vec3(
+    position[0] * PROTOCOL_M_TO_LENS_CM,
+    position[1] * PROTOCOL_M_TO_LENS_CM,
+    position[2] * PROTOCOL_M_TO_LENS_CM,
+  );
+}
+
+export function lensCentimetersToProtocolMeters(
+  position: vec3,
+): [number, number, number] {
+  return [
+    position.x * LENS_CM_TO_PROTOCOL_M,
+    position.y * LENS_CM_TO_PROTOCOL_M,
+    position.z * LENS_CM_TO_PROTOCOL_M,
+  ];
+}
+
+export function buildGetStatus(robotId: string): string {
+  return JSON.stringify({
+    type: "get_status",
+    ts: getTime(),
+    robot_id: robotId,
+  });
+}
+
+export function buildAlignStart(robotId: string): string {
+  return JSON.stringify({
+    type: "align_start",
+    ts: getTime(),
+    robot_id: robotId,
+  });
+}
+
+export function buildAlignStop(robotId: string): string {
+  return JSON.stringify({
+    type: "align_stop",
+    ts: getTime(),
+    robot_id: robotId,
+  });
+}
+
+export function buildAlignCommit(robotId: string): string {
+  return JSON.stringify({
+    type: "align_commit",
+    ts: getTime(),
+    robot_id: robotId,
+  });
+}
+
+export function buildAlignManualPose(
+  position: vec3,
+  rotation: quat,
+  robotId: string,
+): string {
+  return JSON.stringify({
+    type: "align_manual_pose",
+    ts: getTime(),
+    robot_id: robotId,
+    position: lensCentimetersToProtocolMeters(position),
+    orientation: [rotation.x, rotation.y, rotation.z, rotation.w],
+  });
+}
+
+export function buildAlignMarker(
+  position: vec3,
+  rotation: quat,
+  robotId: string,
+): string {
+  return JSON.stringify({
+    type: "align_marker",
+    ts: getTime(),
+    robot_id: robotId,
+    marker_position: lensCentimetersToProtocolMeters(position),
+    marker_orientation: [rotation.x, rotation.y, rotation.z, rotation.w],
+  });
+}
+
+export function buildNavGoal(
+  position: vec3,
+  rotation: quat,
+  robotId: string,
+): string {
+  return JSON.stringify({
+    type: "nav_goal",
+    ts: getTime(),
+    robot_id: robotId,
+    position: lensCentimetersToProtocolMeters(position),
+    orientation: [rotation.x, rotation.y, rotation.z, rotation.w],
+  });
+}
+
+export function buildCancelGoal(robotId: string): string {
+  return JSON.stringify({
+    type: "cancel_goal",
+    ts: getTime(),
+    robot_id: robotId,
+  });
+}
+
+export function buildEmergencyStop(robotId: string): string {
+  return JSON.stringify({
+    type: "emergency_stop",
+    ts: getTime(),
+    robot_id: robotId,
+  });
+}
+
+export function formatBridgeStatus(msg: BridgeStatusMessage): string {
+  const model = msg.robot_model.replace("unitree_", "").toUpperCase();
+  const mode = msg.mode === "replay" ? "Replay" : "Live";
+
+  if (msg.reconnecting) {
+    return `${mode} · ${model} — reconnecting…`;
+  }
+  if (!msg.robot_connected) {
+    return `${mode} · ${model} — robot not connected`;
+  }
+
+  const label = msg.robot_serial ?? msg.robot_id;
+  const streams = msg.streams_active
+    ? "data streaming"
+    : "waiting for lidar/odom";
+  const calibrated = msg.registered ? "calibrated" : "needs calibration";
+  return `${mode} · ${model} (${label}) — ${streams}, ${calibrated}`;
+}
+
+export function emit<T>(callbacks: ((value: T) => void)[], value: T): void {
+  callbacks.forEach((cb) => cb(value));
+}

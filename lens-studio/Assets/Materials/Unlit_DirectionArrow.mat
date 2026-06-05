@@ -1,14 +1,14 @@
-- !<Material/468d0377-075a-4dff-9858-57c01dff1aba>
+- !<Material/70cf774c-3b79-45e4-b3fd-5a1b045b5742>
   PackagePath: ""
   PassesInfo:
-    - !<own> 2558be30-1198-4a2f-9e3c-d12ec420b7ed
-- !<PassInfo/2558be30-1198-4a2f-9e3c-d12ec420b7ed>
+    - !<own> f5b5289a-4b78-4dab-9507-9ddf62bcf330
+- !<PassInfo/f5b5289a-4b78-4dab-9507-9ddf62bcf330>
   CachedProperties:
     []
-  DepthWrite: false
+  DepthWrite: true
   DepthTest: true
   DepthFunction: LessEqual
-  TwoSided: true
+  TwoSided: false
   ColorMask: {x: true, y: true, z: true, w: true}
   CullMode: Back
   PolygonOffset: {x: 0.000000, y: 0.000000}
@@ -20,15 +20,18 @@
     - NODE_27_DROPLIST_ITEM 0
     - NODE_49_DROPLIST_ITEM 0
     - NODE_69_DROPLIST_ITEM 0
-  BlendMode: Normal
+  BlendMode: Disabled
   Properties:
     Port_Default_N204:
       typeIdx: 1
-      value: 1.000000
+      value: 0.000000
     Port_Default_N369:
       typeIdx: 5
       value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
     PreviewEnabled:
       typeIdx: 0
       value: 0
-  Pass: !<reference> 67f1acf9-8548-4ed2-a16b-7972bd034234
+    baseColor:
+      typeIdx: 5
+      value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+  Pass: !<reference> 37153c5a-0d43-47c2-97b1-931b10270075

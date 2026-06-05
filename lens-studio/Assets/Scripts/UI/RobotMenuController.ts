@@ -4,8 +4,12 @@ import {
   getBridgeStatusPresentation,
   getRobotModelLabel,
 } from "./Shared/BridgeStatusPresentation";
-import { COLOR_ERROR, COLOR_WARN } from "./Shared/UIConstants";
+import { COLOR_ERROR, COLOR_WARN } from "./Shared/UICore";
 import { RobotMenuView } from "./RobotMenuView";
+
+// ================================================================
+/** Binds bridge status and operating mode to the world-anchored robot menu. */
+// ================================================================
 
 export class RobotMenuController {
   constructor(private readonly _view: RobotMenuView) {
