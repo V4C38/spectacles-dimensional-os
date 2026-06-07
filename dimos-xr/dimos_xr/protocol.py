@@ -23,6 +23,7 @@ DEFAULT_CAPABILITIES = [
     "align_manual",
     "nav",
     "path",
+    "plan_preview",
     "cancel_goal",
     "emergency_stop",
 ]
@@ -34,6 +35,14 @@ def _dumps(payload: dict[str, Any]) -> str:
 
 @dataclass(frozen=True)
 class NavGoalMessage:
+    ts: float
+    robot_id: str
+    position: tuple[float, float, float]
+    orientation: tuple[float, float, float, float] | None = None
+
+
+@dataclass(frozen=True)
+class PlanPathMessage:
     ts: float
     robot_id: str
     position: tuple[float, float, float]
@@ -94,6 +103,7 @@ class GetStatusMessage:
 
 InboundMessage = (
     NavGoalMessage
+    | PlanPathMessage
     | CancelGoalMessage
     | EmergencyStopMessage
     | AlignStartMessage
@@ -146,6 +156,14 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
     if msg_type == "nav_goal":
         orientation = _quat(data, "orientation") if "orientation" in data else None
         return NavGoalMessage(
+            ts=ts,
+            robot_id=robot_id,
+            position=_vec3(data, "position"),
+            orientation=orientation,
+        )
+    if msg_type == "plan_path":
+        orientation = _quat(data, "orientation") if "orientation" in data else None
+        return PlanPathMessage(
             ts=ts,
             robot_id=robot_id,
             position=_vec3(data, "position"),
@@ -329,15 +347,35 @@ def encode_path(
     waypoints: list[tuple[float, float, float]],
     robot_id: str,
 ) -> str:
-    return _dumps(
-        {
-            "type": "path",
-            "ts": ts,
-            "robot_id": robot_id,
-            "frame": FRAME_WORLD,
-            "waypoints": [list(point) for point in waypoints],
-        }
-    )
+    return _dumps(_path_payload("path", ts=ts, waypoints=waypoints, robot_id=robot_id))
+
+
+def encode_path_preview(
+    *,
+    ts: float,
+    waypoints: list[tuple[float, float, float]],
+    robot_id: str,
+    target: tuple[float, float, float],
+) -> str:
+    payload = _path_payload("path_preview", ts=ts, waypoints=waypoints, robot_id=robot_id)
+    payload["target"] = list(target)
+    return _dumps(payload)
+
+
+def _path_payload(
+    msg_type: str,
+    *,
+    ts: float,
+    waypoints: list[tuple[float, float, float]],
+    robot_id: str,
+) -> dict[str, Any]:
+    return {
+        "type": msg_type,
+        "ts": ts,
+        "robot_id": robot_id,
+        "frame": FRAME_WORLD,
+        "waypoints": [list(point) for point in waypoints],
+    }
 
 
 def encode_nav_status(
@@ -348,13 +386,32 @@ def encode_nav_status(
     goal_failed: bool = False,
     robot_id: str,
 ) -> str:
+    return _dumps(
+        _nav_status_payload(
+            ts=ts if ts is not None else time.time(),
+            state=state,
+            goal_reached=goal_reached,
+            goal_failed=goal_failed,
+            robot_id=robot_id,
+        )
+    )
+
+
+def _nav_status_payload(
+    *,
+    ts: float,
+    state: str,
+    goal_reached: bool,
+    goal_failed: bool,
+    robot_id: str,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "type": "nav_status",
-        "ts": ts if ts is not None else time.time(),
+        "ts": ts,
         "robot_id": robot_id,
         "state": state,
         "goal_reached": goal_reached,
     }
     if goal_failed:
         payload["goal_failed"] = True
-    return _dumps(payload)
+    return payload

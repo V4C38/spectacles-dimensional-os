@@ -48,7 +48,7 @@ export const CALIBRATE_DESCRIPTION_MANUAL =
   "Move the robot marker to approximately where the robot stands. No QR code or phone needed.";
 
 export const WIZARD_STEP_DESCRIPTIONS: string[] = [
-  "Power up your robot (Go2 / G1) and wait for it to stand up.\nOn your Mac, open the dimos-xr folder and run ./start.sh to choose the robot stack and launch the bridge.",
+  "Power up your robot (Go2 / G1) and wait for it to stand up. \nOn your Mac, open the dimos-xr folder and run ./start.sh to choose the robot stack and launch the bridge.",
   "Enter your PC's local IP to connect.\nKeep the robot, your PC, and Spectacles on the same local network.",
   CALIBRATE_DESCRIPTION_AUTO,
 ];

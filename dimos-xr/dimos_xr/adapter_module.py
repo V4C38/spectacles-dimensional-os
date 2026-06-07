@@ -8,6 +8,7 @@ from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
@@ -46,6 +47,7 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
     odometry: In[Odometry]
     color_image: In[Image]
     camera_info: In[CameraInfo]
+    global_costmap: In[OccupancyGrid]
     path: In[Path]
     path_active: In[Path]
     goal_reached: In[Bool]
@@ -55,6 +57,7 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
     xr_odom: Out[PoseStamped]
     xr_color_image: Out[Image]
     xr_camera_info: Out[CameraInfo]
+    xr_global_costmap: Out[OccupancyGrid]
     xr_path: Out[Path]
     xr_goal_reached: Out[Bool]
     xr_navigation_state: Out[String]
@@ -104,6 +107,9 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
     async def handle_camera_info(self, msg: CameraInfo) -> None:
         self.xr_camera_info.publish(msg)
 
+    async def handle_global_costmap(self, msg: OccupancyGrid) -> None:
+        self.xr_global_costmap.publish(msg)
+
     async def handle_path(self, msg: Path) -> None:
         self.xr_path.publish(msg)
 
@@ -140,6 +146,9 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
     def _path_available(self) -> bool:
         return self.path.transport is not None or self.path_active.transport is not None
 
+    def _plan_preview_available(self) -> bool:
+        return self.global_costmap.transport is not None
+
     def _cancel_goal_available(self) -> bool:
         return (
             self._navigation is not None
@@ -175,6 +184,7 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
                 self.robot_id(),
                 nav_available=self._nav_available(),
                 path_available=self._path_available(),
+                plan_preview_available=self._plan_preview_available(),
                 cancel_goal_available=self._cancel_goal_available(),
                 emergency_stop_available=self._emergency_stop_available(),
                 marker_align_available=self._marker_alignment_available(),
@@ -187,6 +197,10 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
         if not self._path_available():
             handshake.capability_states["path"] = CapabilityState(
                 False, "Path output is not present for this runtime."
+            )
+        if not self._plan_preview_available():
+            handshake.capability_states["plan_preview"] = CapabilityState(
+                False, "Global costmap is not present for preview planning in this runtime."
             )
         if not self._cancel_goal_available():
             handshake.capability_states["cancel_goal"] = CapabilityState(
@@ -205,6 +219,7 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
                 self.robot_id(),
                 nav_available=self._nav_available(),
                 path_available=self._path_available(),
+                plan_preview_available=self._plan_preview_available(),
                 cancel_goal_available=self._cancel_goal_available(),
                 emergency_stop_available=self._emergency_stop_available(),
                 marker_align_available=self._marker_alignment_available(),
@@ -217,6 +232,10 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
         if not self._path_available():
             capability_states["path"] = CapabilityState(
                 False, "Path output is not present for this runtime."
+            )
+        if not self._plan_preview_available():
+            capability_states["plan_preview"] = CapabilityState(
+                False, "Global costmap is not present for preview planning in this runtime."
             )
         if not self._cancel_goal_available():
             capability_states["cancel_goal"] = CapabilityState(

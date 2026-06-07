@@ -47,6 +47,7 @@ const DEFAULT_CAPABILITY_NAMES = [
   "align_manual",
   "nav",
   "path",
+  "plan_preview",
   "cancel_goal",
   "emergency_stop",
 ];
@@ -102,7 +103,7 @@ export function createDefaultRobotRuntimeState(): RobotRuntimeState {
     visualOriginFrame: "base_link",
     bodyBoundsM: null,
     footprintM: null,
-    baseHeightM: null,
+    baseHeightM: 0.33,
     defaultRenderOffsetM: null,
     alignmentProfile: null,
     capabilities,

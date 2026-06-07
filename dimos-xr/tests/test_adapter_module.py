@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos_lcm.std_msgs import Bool
 
@@ -41,6 +42,8 @@ def _make_adapter() -> XRRobotAdapterModule:
     adapter.odometry = _FakeStream(connected=False)
     adapter.color_image = _FakeStream(connected=False)
     adapter.camera_info = _FakeStream(connected=False)
+    adapter.global_costmap = _FakeStream(connected=False)
+    adapter.xr_global_costmap = _FakeStream(connected=True)
     return adapter
 
 
@@ -94,3 +97,20 @@ def test_handle_odometry_converts_to_pose_stamped() -> None:
         pose.orientation.w,
     ) == (0.0, 0.0, 0.2, 0.98)
     assert pose.frame_id == "odom"
+
+
+def test_handle_global_costmap_relays_to_xr_stream() -> None:
+    adapter = _make_adapter()
+    grid = OccupancyGrid(width=4, height=4, resolution=0.1)
+
+    asyncio.run(XRRobotAdapterModule.handle_global_costmap(adapter, grid))
+
+    assert adapter.xr_global_costmap.published == [grid]
+
+
+def test_capabilities_disable_preview_without_costmap() -> None:
+    adapter = _make_adapter()
+
+    capabilities = XRRobotAdapterModule.capabilities(adapter)
+
+    assert capabilities["plan_preview"].available is False

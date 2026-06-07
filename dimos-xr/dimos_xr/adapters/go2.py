@@ -16,6 +16,7 @@ GO2_CAPABILITIES = {
     "align_manual": CapabilityState(True),
     "nav": CapabilityState(True),
     "path": CapabilityState(True),
+    "plan_preview": CapabilityState(True),
     "cancel_goal": CapabilityState(True),
     "emergency_stop": CapabilityState(True),
 }

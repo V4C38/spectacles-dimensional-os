@@ -44,6 +44,7 @@ export class NavigationMarkerView {
   private _placementAnchor: SceneObject | null = null;
   private _preAnchorParent: SceneObject | null = null;
   private _cancelActionAvailable = true;
+  private _confirmUnlocked = false;
 
   constructor(root: SceneObject) {
     this.root = root;
@@ -258,6 +259,17 @@ export class NavigationMarkerView {
     (this.confirmButton as any).enabled = enabled;
   }
 
+  public unlockConfirmAction(): void {
+    if (this._confirmUnlocked) {
+      return;
+    }
+    this._confirmUnlocked = true;
+    if (this._state === "placing") {
+      this.confirmButtonObject.enabled = true;
+      this.setConfirmActionEnabled(true);
+    }
+  }
+
   public setCancelActionAvailability(available: boolean): void {
     this._cancelActionAvailable = available;
     if (this._state === "executing") {
@@ -273,8 +285,8 @@ export class NavigationMarkerView {
     if (this.rotationLookAt) {
       this.rotationLookAt.enabled = false;
     }
-    this.confirmButtonObject.enabled = true;
-    this.setConfirmActionEnabled(true);
+    this.confirmButtonObject.enabled = this._confirmUnlocked;
+    this.setConfirmActionEnabled(this._confirmUnlocked);
     this.confirmLabel.text = "Confirm";
     setButtonStyle(this.confirmButton, SnapOS2Styles.Primary);
     this.resetCircleAnimation();
@@ -300,6 +312,7 @@ export class NavigationMarkerView {
       this.rotationLookAt.enabled = false;
     }
     this.confirmButtonObject.enabled = true;
+    this.setConfirmActionEnabled(true);
     this._applyExecutingButtonPresentation();
     this.setScanAnimationEnabled(true);
     this._setConfirmVfxState(false);
@@ -316,6 +329,9 @@ export class NavigationMarkerView {
 
   public hide(): void {
     this._state = "disabled";
+    this._confirmUnlocked = false;
+    this.confirmButtonObject.enabled = false;
+    this.setConfirmActionEnabled(false);
     this.setScanAnimationEnabled(false);
     this._setConfirmVfxState(true, true);
     if (this.arrow) {
@@ -338,6 +354,9 @@ export class NavigationMarkerView {
 
   public hideAndThen(callback: () => void): void {
     this._state = "disabled";
+    this._confirmUnlocked = false;
+    this.confirmButtonObject.enabled = false;
+    this.setConfirmActionEnabled(false);
     this.setScanAnimationEnabled(false);
     this._setConfirmVfxState(true, true);
     if (this.arrow) {
@@ -543,6 +562,8 @@ export class NavigationMarkerView {
     this.root.getTransform().setLocalScale(vec3.zero());
     this.setScanAnimationEnabled(false);
     this._setConfirmVfxState(true, true);
+    this.confirmButtonObject.enabled = false;
+    this._confirmUnlocked = false;
     this._confirmEnabled = false;
     if (this.arrow) {
       this.arrow.enabled = false;

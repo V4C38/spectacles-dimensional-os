@@ -1000,7 +1000,6 @@
     HasSegmentScaleCompensation: false
   Children:
     - !<own> 52bc606c-3d23-4e49-88f2-dc66bd154524
-    - !<own> 02b4e96e-3fd3-487e-ae91-31828aea1503
     - !<own> de62f332-a278-4f7a-a64e-b953e348cf95
   Components:
     - !<own> 4e5ef885-944c-4898-b6ae-cae879e72a87
@@ -3337,7 +3336,7 @@
   LocalTransform: !<TransformEntity>
     Position: {x: 0.000011, y: 43.000000, z: 0.000000}
     Rotation: {x: -0.000010, y: -0.000010, z: 0.000000}
-    Scale: {x: 2.500000, y: 2.500000, z: 2.500000}
+    Scale: {x: 2.490000, y: 2.490000, z: 2.490000}
     HasSegmentScaleCompensation: false
   Children:
     - !<own> fdd22645-9b22-4132-b493-5d9ca607c580
@@ -4212,6 +4211,7 @@
   Children:
     - !<own> 20937b64-ad12-476c-a010-dbda8811f91f
     - !<own> 987602b0-ef22-4a53-85a8-ca0d7eaaa7b4
+    - !<own> 02b4e96e-3fd3-487e-ae91-31828aea1503
     - !<own> a30db649-5675-46c5-a50b-92b2fbd052a7
   Components:
     - !<own> d44336ee-e3d0-430c-8b0d-ae6a4a6af963

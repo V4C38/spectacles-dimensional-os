@@ -32,13 +32,13 @@ import {
   BridgeStatusMessage,
   NavStatusMessage,
   PathMessage,
+  PathPreviewMessage,
   PoseMessage,
   protocolMetersToLensCentimeters,
 } from "./Network/Protocol";
 import { HelloMessage } from "./Network/ProtocolTypes";
 
 const WorldQueryModule = require("LensStudio:WorldQueryModule");
-const NAVIGATION_MARKER_FORWARD_OFFSET_CM = 50.0;
 
 // ================================================================
 // ================================================================
@@ -181,6 +181,7 @@ export class DimosManager extends BaseScriptComponent {
       onNavigationModeChanged: (mode) => this._setNavigationMode(mode),
       canStartPlacement: () => this._canStartNavigationPlacement(),
       canSendNavGoal: () => this._canSendNavigationGoal(),
+      getRobotFloorPosition: () => this._robotFloorPosition(),
       getGoalResetPose: () => this._getNavigationPlacementStartPose(),
     });
     this._applyRuntimeState(this.appState.robotRuntime);
@@ -236,6 +237,7 @@ export class DimosManager extends BaseScriptComponent {
       }
     });
     this.bridgeClient.onPath.push((msg) => this._applyPath(msg));
+    this.bridgeClient.onPathPreview.push((msg) => this._applyPathPreview(msg));
     this.bridgeClient.onNavStatus.push((msg) => this._applyNavStatus(msg));
     this.bridgeClient.onBridgeStatus.push((msg) => this._applyBridgeStatus(msg));
     this.bridgeClient.onConnectionChanged.push((connected) =>
@@ -317,9 +319,9 @@ export class DimosManager extends BaseScriptComponent {
   }
 
   private _runtimeMenuHeightOffsetCm(state: RobotRuntimeState): number {
-    const heightM =
-      state.baseHeightM ??
-      (state.bodyBoundsM ? state.bodyBoundsM[2] : null);
+    const heightM = state.negotiated
+      ? state.baseHeightM ?? (state.bodyBoundsM ? state.bodyBoundsM[2] : null)
+      : null;
     if (heightM === null) {
       return 15.0;
     }
@@ -332,6 +334,32 @@ export class DimosManager extends BaseScriptComponent {
       return new vec3(0, 0, 0);
     }
     return protocolMetersToLensCentimeters(offset);
+  }
+
+  private _robotFloorY(
+    sourceY: number | null = this.robotMarker?.getWorldPosition()?.y ?? null,
+  ): number | null {
+    if (sourceY === null) {
+      return null;
+    }
+    const baseHeightM = this.appState.robotRuntime.baseHeightM;
+    if (baseHeightM === null) {
+      return sourceY;
+    }
+    return sourceY - baseHeightM * 100.0;
+  }
+
+  private _robotFloorPosition(
+    position: vec3 | null = this.robotMarker?.getWorldPosition() ?? null,
+  ): vec3 | null {
+    if (!position) {
+      return null;
+    }
+    const floorY = this._robotFloorY(position.y);
+    if (floorY === null) {
+      return null;
+    }
+    return new vec3(position.x, floorY, position.z);
   }
 
   private _syncLiDARPreview(): void {
@@ -680,12 +708,16 @@ export class DimosManager extends BaseScriptComponent {
   }
 
   private _applyPath(msg: PathMessage): void {
-    const robotY = this.robotMarker?.getWorldPosition()?.y ?? null;
-    const goalY  = this._goalRenderer?.worldPosition.y ?? null;
+    const robotY = this._robotFloorY();
+    const goalY = this._goalRenderer?.worldPosition.y ?? null;
     if (robotY !== null && goalY !== null) {
       this._pathRenderer?.setHeightRange(robotY, goalY);
     }
     this._navigationController?.applyPath(msg);
+  }
+
+  private _applyPathPreview(msg: PathPreviewMessage): void {
+    this._navigationController?.applyPathPreview(msg);
   }
 
   private _applyNavStatus(msg: NavStatusMessage): void {
@@ -897,8 +929,12 @@ export class DimosManager extends BaseScriptComponent {
     const markerPosition = this.robotMarker?.getWorldPosition() ?? null;
     const markerRotation = this.robotMarker?.getWorldRotation() ?? null;
     if (markerPosition && markerRotation) {
+      const floorPosition = this._robotFloorPosition(markerPosition);
+      if (!floorPosition) {
+        return null;
+      }
       return {
-        position: this._offsetNavigationStartPosition(markerPosition, markerRotation),
+        position: floorPosition,
         rotation: markerRotation,
       };
     }
@@ -908,44 +944,14 @@ export class DimosManager extends BaseScriptComponent {
     const q = this._lastPose.orientation;
     const rotation = new quat(q[3], q[0], q[1], q[2]);
     const position = protocolMetersToLensCentimeters(this._lastPose.position);
+    const floorPosition = this._robotFloorPosition(position);
+    if (!floorPosition) {
+      return null;
+    }
     return {
-      position: this._offsetNavigationStartPosition(position, rotation),
+      position: floorPosition,
       rotation,
     };
-  }
-
-  private _offsetNavigationStartPosition(
-    position: vec3,
-    rotation: quat,
-  ): vec3 {
-    const forwardOffsetCm = this._navigationForwardOffsetCm();
-    const robotForward = rotation.multiplyVec3(vec3.right().uniformScale(-1));
-    const planarLength = Math.sqrt(
-      robotForward.x * robotForward.x + robotForward.z * robotForward.z,
-    );
-    if (planarLength <= 0.0001) {
-      return new vec3(
-        position.x + forwardOffsetCm,
-        position.y,
-        position.z,
-      );
-    }
-    return new vec3(
-      position.x + (robotForward.x / planarLength) * forwardOffsetCm,
-      position.y,
-      position.z + (robotForward.z / planarLength) * forwardOffsetCm,
-    );
-  }
-
-  private _navigationForwardOffsetCm(): number {
-    const footprint = this.appState.robotRuntime.footprintM;
-    if (!this.appState.robotRuntime.negotiated || !footprint) {
-      return NAVIGATION_MARKER_FORWARD_OFFSET_CM;
-    }
-    return Math.max(
-      NAVIGATION_MARKER_FORWARD_OFFSET_CM,
-      Math.max(footprint[0], footprint[1]) * 50.0 + 10.0,
-    );
   }
 
   private _log(message: string): void {

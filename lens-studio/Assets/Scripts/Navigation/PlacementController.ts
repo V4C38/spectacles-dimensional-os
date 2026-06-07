@@ -28,6 +28,12 @@ export type RobotGroundDeadzone = {
 export class PlacementController {
   public onConfirmed: ((position: vec3, rotation: quat) => void) | null = null;
   public onCancelled: ((position: vec3, rotation: quat) => void) | null = null;
+  public onPreviewTargetChanged: ((
+    position: vec3,
+    rotation: quat,
+    isDragging: boolean,
+    force: boolean,
+  ) => void) | null = null;
 
   private readonly owner: BaseScriptComponent;
   private readonly worldQueryModule: any;
@@ -81,6 +87,7 @@ export class PlacementController {
     this.renderer.setPose(this.desiredPosition, this.desiredRotation);
     this.renderer.showPlacing();
     this._syncMoveDirectionPreview();
+    this._emitPreviewTargetChanged(true);
     this._setDragEnabled(true);
     this._ensureHitTestSession();
     this._ensureUpdateLoop();
@@ -120,6 +127,10 @@ export class PlacementController {
     };
   }
 
+  public getRenderedPosition(): vec3 {
+    return this.renderer.worldPosition;
+  }
+
   public showExecuting(): void {
     if (!this.active) {
       return;
@@ -138,6 +149,7 @@ export class PlacementController {
     this._syncDesiredPoseToRenderedPose();
     this.renderer.showPlacing();
     this._syncMoveDirectionPreview();
+    this._emitPreviewTargetChanged(true);
     this._setDragEnabled(true);
   }
 
@@ -163,6 +175,7 @@ export class PlacementController {
       this.renderer.setPose(this.desiredPosition, this.desiredRotation);
       this.renderer.showPlacing();
       this._syncMoveDirectionPreview();
+      this._emitPreviewTargetChanged(true);
       this._setDragEnabled(true);
     });
   }
@@ -200,6 +213,7 @@ export class PlacementController {
       dragInteractable.onTriggerEnd.add(() => {
         this.activeInteractor = null;
         this._previousDragPosition = null;
+        this._emitPreviewTargetChanged(true);
       });
     }
     if (dragInteractable?.onTriggerCanceled?.add) {
@@ -207,6 +221,7 @@ export class PlacementController {
         args?.interactor?.clearCurrentInteractable?.();
         this.activeInteractor = null;
         this._previousDragPosition = null;
+        this._emitPreviewTargetChanged(true);
       });
     }
     this.renderer.confirmActionButton.onTriggerUp.add(() => {
@@ -280,6 +295,7 @@ export class PlacementController {
         this.desiredRotation,
         INTERPOLATION_SPEED,
       );
+      this._emitPreviewTargetChanged(false);
     }
   }
 
@@ -349,6 +365,7 @@ export class PlacementController {
     const dragDistance = pointPosition.distance(this.touchStartPosition);
     if (dragDistance > DRAG_THRESHOLD_CM && !this.isDragging) {
       this.isDragging = true;
+      this.renderer.unlockConfirmAction();
     }
     if (this.isDragging) {
       this._dragHitTestFrameCount++;
@@ -495,6 +512,15 @@ export class PlacementController {
 
   private _syncMoveDirectionPreview(): void {
     this.renderer.setMoveDirectionFromRotation(this.desiredRotation);
+  }
+
+  private _emitPreviewTargetChanged(force: boolean): void {
+    this.onPreviewTargetChanged?.(
+      this.desiredPosition,
+      this.desiredRotation,
+      this.isDragging,
+      force,
+    );
   }
 
   private _setDragEnabled(enabled: boolean): void {

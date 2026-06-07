@@ -18,6 +18,7 @@ from dimos_xr.protocol import (
     EmergencyStopMessage,
     GetStatusMessage,
     NavGoalMessage,
+    PlanPathMessage,
     decode_inbound,
     encode_align_status,
     encode_bridge_status,
@@ -25,6 +26,7 @@ from dimos_xr.protocol import (
     encode_lidar,
     encode_nav_status,
     encode_path,
+    encode_path_preview,
     encode_pose,
 )
 
@@ -65,6 +67,7 @@ def test_encode_hello_g1_manual_alignment_only() -> None:
         "unitree_g1",
         nav_available=True,
         path_available=True,
+        plan_preview_available=True,
         cancel_goal_available=False,
         emergency_stop_available=True,
         marker_align_available=False,
@@ -113,6 +116,22 @@ def test_nav_goal_decode_with_orientation() -> None:
     assert isinstance(msg, NavGoalMessage)
     assert msg.position == (1.0, 0.0, 0.0)
     assert msg.orientation == (0.0, 0.0, 0.70710678, 0.70710678)
+
+
+def test_plan_path_decode() -> None:
+    raw = json.dumps(
+        {
+            "type": "plan_path",
+            "ts": 2.5,
+            "robot_id": "unitree_go2",
+            "position": [2.0, 0.0, 1.0],
+            "orientation": [0.0, 0.0, 0.0, 1.0],
+        }
+    )
+    msg = decode_inbound(raw)
+    assert isinstance(msg, PlanPathMessage)
+    assert msg.position == (2.0, 0.0, 1.0)
+    assert msg.orientation == (0.0, 0.0, 0.0, 1.0)
 
 
 def test_cancel_goal_decode() -> None:
@@ -229,6 +248,18 @@ def test_encode_path_and_nav_status() -> None:
     )
     assert path["type"] == "path"
     assert path["waypoints"] == [[1.0, 2.0, 3.0]]
+
+    preview = json.loads(
+        encode_path_preview(
+            ts=2.5,
+            waypoints=[(4.0, 5.0, 6.0)],
+            robot_id="unitree_go2",
+            target=(7.0, 8.0, 9.0),
+        )
+    )
+    assert preview["type"] == "path_preview"
+    assert preview["waypoints"] == [[4.0, 5.0, 6.0]]
+    assert preview["target"] == [7.0, 8.0, 9.0]
 
     status = json.loads(
         encode_nav_status(

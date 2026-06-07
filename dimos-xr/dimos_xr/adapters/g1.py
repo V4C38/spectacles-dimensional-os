@@ -8,6 +8,7 @@ def g1_capabilities(
     *,
     nav_available: bool,
     path_available: bool,
+    plan_preview_available: bool,
     cancel_goal_available: bool,
     emergency_stop_available: bool,
     marker_align_available: bool,
@@ -29,6 +30,12 @@ def g1_capabilities(
         "path": CapabilityState(
             path_available,
             None if path_available else "Active path output is not present for this G1 runtime.",
+        ),
+        "plan_preview": CapabilityState(
+            plan_preview_available,
+            None
+            if plan_preview_available
+            else "Global costmap is not present for preview planning in this G1 runtime.",
         ),
         "cancel_goal": CapabilityState(
             cancel_goal_available,
@@ -60,6 +67,7 @@ def g1_handshake(
     *,
     nav_available: bool,
     path_available: bool,
+    plan_preview_available: bool,
     cancel_goal_available: bool,
     emergency_stop_available: bool,
     marker_align_available: bool,
@@ -67,6 +75,7 @@ def g1_handshake(
     capability_states = g1_capabilities(
         nav_available=nav_available,
         path_available=path_available,
+        plan_preview_available=plan_preview_available,
         cancel_goal_available=cancel_goal_available,
         emergency_stop_available=emergency_stop_available,
         marker_align_available=marker_align_available,

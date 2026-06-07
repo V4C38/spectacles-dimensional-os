@@ -5,6 +5,7 @@ import {
   LidarMessage,
   NavStatusMessage,
   PathMessage,
+  PathPreviewMessage,
   PoseMessage,
   clearActiveRobotId,
   getActiveRobotId,
@@ -20,6 +21,7 @@ import {
   buildEmergencyStop,
   buildGetStatus,
   buildNavGoal,
+  buildPlanPath,
   emit,
   parseInboundMessage,
 } from "./Protocol";
@@ -49,6 +51,7 @@ export class BridgeClient extends BaseScriptComponent {
   public onAlignStatus: ((msg: AlignStatusMessage) => void)[] = [];
   public onBridgeStatus: ((msg: BridgeStatusMessage) => void)[] = [];
   public onPath: ((msg: PathMessage) => void)[] = [];
+  public onPathPreview: ((msg: PathPreviewMessage) => void)[] = [];
   public onNavStatus: ((msg: NavStatusMessage) => void)[] = [];
   public onConnectionChanged: ((connected: boolean) => void)[] = [];
 
@@ -84,6 +87,9 @@ export class BridgeClient extends BaseScriptComponent {
     }
     if (!this.onPath) {
       this.onPath = [];
+    }
+    if (!this.onPathPreview) {
+      this.onPathPreview = [];
     }
     if (!this.onNavStatus) {
       this.onNavStatus = [];
@@ -280,6 +286,12 @@ export class BridgeClient extends BaseScriptComponent {
     );
   }
 
+  public sendPlanPath(position: vec3, rotation?: quat | null): boolean {
+    return this._sendForActiveRobot("plan_path", (robotId) =>
+      buildPlanPath(position, robotId, rotation),
+    );
+  }
+
   public sendCancelGoal(): boolean {
     return this._sendForActiveRobot("cancel_goal", buildCancelGoal);
   }
@@ -366,6 +378,10 @@ export class BridgeClient extends BaseScriptComponent {
         case "path":
           this._adoptRobotId(msg.robot_id);
           emit(this.onPath, msg);
+          break;
+        case "path_preview":
+          this._adoptRobotId(msg.robot_id);
+          emit(this.onPathPreview, msg);
           break;
         case "nav_status":
           this._adoptRobotId(msg.robot_id);

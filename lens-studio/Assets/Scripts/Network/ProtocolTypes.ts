@@ -98,6 +98,15 @@ export interface PathMessage {
   waypoints: [number, number, number][];
 }
 
+export interface PathPreviewMessage {
+  type: "path_preview";
+  ts: number;
+  robot_id: string;
+  frame: string;
+  waypoints: [number, number, number][];
+  target: [number, number, number];
+}
+
 export interface NavStatusMessage {
   type: "nav_status";
   ts: number;
@@ -114,4 +123,5 @@ export type InboundMessage =
   | AlignStatusMessage
   | BridgeStatusMessage
   | PathMessage
+  | PathPreviewMessage
   | NavStatusMessage;

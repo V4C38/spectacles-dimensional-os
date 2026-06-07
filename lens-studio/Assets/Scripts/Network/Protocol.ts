@@ -107,6 +107,23 @@ export function buildNavGoal(
   });
 }
 
+export function buildPlanPath(
+  position: vec3,
+  robotId: string,
+  rotation?: quat | null,
+): string {
+  const payload: Record<string, unknown> = {
+    type: "plan_path",
+    ts: getTime(),
+    robot_id: robotId,
+    position: lensCentimetersToProtocolMeters(position),
+  };
+  if (rotation) {
+    payload.orientation = [rotation.x, rotation.y, rotation.z, rotation.w];
+  }
+  return JSON.stringify(payload);
+}
+
 export function buildCancelGoal(robotId: string): string {
   return JSON.stringify({
     type: "cancel_goal",

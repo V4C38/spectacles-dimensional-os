@@ -6,6 +6,7 @@ import {
   LidarMessage,
   NavStatusMessage,
   PathMessage,
+  PathPreviewMessage,
   PoseMessage,
   setActiveRobotId,
 } from "./ProtocolTypes";
@@ -235,6 +236,19 @@ export function parseInboundMessage(text: string): InboundMessage | null {
         robot_id: requireString(data, "robot_id"),
         frame: requireString(data, "frame"),
         waypoints: parsePoints(data.waypoints),
+      };
+      setActiveRobotId(msg.robot_id);
+      return msg;
+    }
+
+    case "path_preview": {
+      const msg: PathPreviewMessage = {
+        type: "path_preview",
+        ts: requireNumber(data, "ts"),
+        robot_id: requireString(data, "robot_id"),
+        frame: requireString(data, "frame"),
+        waypoints: parsePoints(data.waypoints),
+        target: parseVec3(data.target),
       };
       setActiveRobotId(msg.robot_id);
       return msg;

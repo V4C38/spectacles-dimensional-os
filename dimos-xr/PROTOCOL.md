@@ -41,6 +41,7 @@ capability surface:
     "align_manual",
     "nav",
     "path",
+  "plan_preview",
     "cancel_goal",
     "emergency_stop"
   ],
@@ -156,6 +157,28 @@ Planner path in XR world frame:
 }
 ```
 
+### `path_preview`
+
+Preview planner path in XR world frame for an unconfirmed target:
+
+```json
+{
+  "type": "path_preview",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "frame": "world",
+  "waypoints": [[x, y, z]],
+  "target": [x, y, z]
+}
+```
+
+Fields:
+
+- `waypoints`: preview route in XR world frame; may be empty when no preview path
+  is available
+- `target`: echoed world-frame target used for this preview request so the client
+  can ignore stale responses
+
 ### `nav_status`
 
 Navigation state updates:
@@ -239,6 +262,23 @@ World-frame navigation goal:
 
 `orientation` is optional. If omitted, the bridge may route the goal through a
 point-based navigation path.
+
+### `plan_path`
+
+Request a preview path to a world-frame target without moving the robot:
+
+```json
+{
+  "type": "plan_path",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "position": [x, y, z],
+  "orientation": [qx, qy, qz, qw]
+}
+```
+
+`orientation` is optional. Preview planning is side-effect free: it must never
+start navigation or change the robot state.
 
 ### `cancel_goal`
 

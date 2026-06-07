@@ -11,6 +11,7 @@ from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
+from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
@@ -39,13 +40,16 @@ from dimos_xr.protocol import (
     EmergencyStopMessage,
     GetStatusMessage,
     NavGoalMessage,
+    PlanPathMessage,
     encode_align_status,
     encode_bridge_status,
     encode_lidar,
     encode_nav_status,
     encode_path,
+    encode_path_preview,
     encode_pose,
 )
+from dimos_xr.preview_planner import PreviewPlanner
 from dimos_xr.transforms import Calibration, OdomSample, normalize_ground_pose, pose_to_matrix
 from dimos_xr.websocket_server import XRWebSocketServer
 
@@ -88,6 +92,12 @@ class AlignmentCandidate:
     reprojection_error_px: float | None = None
     sample_quality: float | None = None
     cluster_size: int = 1
+
+
+@dataclass(frozen=True)
+class PreviewPathRequest:
+    ts: float
+    target_world: tuple[float, float, float]
 
 
 def score_alignment_cluster(
@@ -155,6 +165,7 @@ class XRBridge(Module):
     xr_odom: In[PoseStamped]
     xr_color_image: In[Image]
     xr_camera_info: In[CameraInfo]
+    xr_global_costmap: In[OccupancyGrid]
     xr_path: In[Path]
     xr_goal_reached: In[Bool]
     xr_navigation_state: In[String]
@@ -175,6 +186,7 @@ class XRBridge(Module):
         self._lidar_filter = LidarFilter(filter_config)
         self._pose_limiter = RateLimiter(self.config.pose_max_hz)
         self._calibration = Calibration()
+        self._preview_planner = PreviewPlanner(global_config)
         camera_alignment = self._adapter.camera_alignment_config()
         self._aligner = AprilTagAligner(
             marker_length_m=camera_alignment.marker_length_m,
@@ -213,6 +225,10 @@ class XRBridge(Module):
         self._nav_goal_pending = False
         self._stream_status_stop = threading.Event()
         self._stream_status_thread: threading.Thread | None = None
+        self._preview_worker_stop = threading.Event()
+        self._preview_request_condition = threading.Condition()
+        self._preview_request: PreviewPathRequest | None = None
+        self._preview_worker_thread: threading.Thread | None = None
         self._ws_server = XRWebSocketServer(
             port=self.config.port,
             hello_supplier=self._adapter.handshake_payload,
@@ -223,6 +239,7 @@ class XRBridge(Module):
             on_align_marker=self._on_align_marker,
             on_align_manual_pose=self._on_align_manual_pose,
             on_nav_goal=self._on_nav_goal,
+            on_plan_path=self._on_plan_path,
             on_cancel_goal=self._on_cancel_goal,
             on_emergency_stop=self._on_emergency_stop,
             on_get_status=self._on_get_status,
@@ -233,6 +250,7 @@ class XRBridge(Module):
     @rpc
     def start(self) -> None:
         super().start()
+        self._start_preview_worker()
         self._ws_server.start()
         self._start_stream_status_monitor()
         host = global_config.listen_host
@@ -244,6 +262,7 @@ class XRBridge(Module):
         self._aligner.active = False
         self._stop_align_status_broadcast()
         self._stop_stream_status_monitor()
+        self._stop_preview_worker()
         self._ws_server.stop()
         logger.info("XRBridge stopping")
         super().stop()
@@ -322,6 +341,42 @@ class XRBridge(Module):
         if self._stream_status_thread is not None and self._stream_status_thread.is_alive():
             self._stream_status_thread.join(timeout=1.0)
         self._stream_status_thread = None
+
+    def _start_preview_worker(self) -> None:
+        self._stop_preview_worker()
+        self._preview_worker_stop.clear()
+
+        def loop() -> None:
+            while not self._preview_worker_stop.is_set():
+                with self._preview_request_condition:
+                    while (
+                        self._preview_request is None
+                        and not self._preview_worker_stop.is_set()
+                    ):
+                        self._preview_request_condition.wait()
+                    if self._preview_worker_stop.is_set():
+                        return
+                    request = self._preview_request
+                    self._preview_request = None
+                if request is not None:
+                    self._process_preview_request(request)
+
+        self._preview_worker_thread = threading.Thread(
+            target=loop,
+            name="xr-preview-planner",
+            daemon=True,
+        )
+        self._preview_worker_thread.start()
+
+    def _stop_preview_worker(self) -> None:
+        self._preview_worker_stop.set()
+        with self._preview_request_condition:
+            self._preview_request = None
+            self._preview_request_condition.notify_all()
+        thread = self._preview_worker_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
+        self._preview_worker_thread = None
 
     def _spectacles_marker_detected(self) -> bool:
         if self._last_spectacles_marker_mono is None:
@@ -651,6 +706,22 @@ class XRBridge(Module):
             )
         )
 
+    def _send_preview_path(
+        self,
+        *,
+        ts: float,
+        target_world: tuple[float, float, float],
+        waypoints: list[tuple[float, float, float]],
+    ) -> None:
+        self._ws_server.schedule_send(
+            encode_path_preview(
+                ts=ts,
+                waypoints=waypoints,
+                robot_id=self._robot_id,
+                target=target_world,
+            )
+        )
+
     def _on_get_status(self, _msg: GetStatusMessage, websocket: ServerConnection) -> None:
         self._send_status_to(websocket)
 
@@ -792,6 +863,66 @@ class XRBridge(Module):
             self._broadcast_empty_path(ts=msg.ts)
             self._broadcast_nav_status(ts=msg.ts)
 
+    def _on_plan_path(self, msg: PlanPathMessage) -> None:
+        if not self._calibration.is_registered or not self._preview_planner.has_costmap():
+            self._send_preview_path(ts=msg.ts, target_world=msg.position, waypoints=[])
+            return
+        if self._get_latest_odom() is None:
+            self._send_preview_path(ts=msg.ts, target_world=msg.position, waypoints=[])
+            return
+        with self._preview_request_condition:
+            self._preview_request = PreviewPathRequest(ts=msg.ts, target_world=msg.position)
+            self._preview_request_condition.notify()
+
+    def _process_preview_request(self, request: PreviewPathRequest) -> None:
+        try:
+            if not self._calibration.is_registered:
+                self._send_preview_path(
+                    ts=request.ts,
+                    target_world=request.target_world,
+                    waypoints=[],
+                )
+                return
+            odom = self._get_latest_odom()
+            if odom is None or not self._preview_planner.has_costmap():
+                self._send_preview_path(
+                    ts=request.ts,
+                    target_world=request.target_world,
+                    waypoints=[],
+                )
+                return
+            target_odom = self._calibration.inverse_transform_point(request.target_world)
+            preview_path = self._preview_planner.plan(
+                (odom.position[0], odom.position[1]),
+                (target_odom[0], target_odom[1]),
+            )
+            if not preview_path:
+                self._send_preview_path(
+                    ts=request.ts,
+                    target_world=request.target_world,
+                    waypoints=[],
+                )
+                return
+            world_waypoints = []
+            for waypoint in preview_path:
+                world_position, _ = self._calibration.transform_pose(
+                    waypoint,
+                    (0.0, 0.0, 0.0, 1.0),
+                )
+                world_waypoints.append(world_position)
+            self._send_preview_path(
+                ts=request.ts,
+                target_world=request.target_world,
+                waypoints=world_waypoints,
+            )
+        except Exception as exc:
+            logger.error("XR preview planning failed", error=str(exc))
+            self._send_preview_path(
+                ts=request.ts,
+                target_world=request.target_world,
+                waypoints=[],
+            )
+
     def _cancel_or_stop(self, *, emergency: bool) -> None:
         try:
             if emergency:
@@ -913,6 +1044,9 @@ class XRBridge(Module):
             encode_path(ts=msg.ts, waypoints=waypoints, robot_id=self._robot_id)
         )
         self._broadcast_nav_status(ts=msg.ts)
+
+    async def handle_xr_global_costmap(self, msg: OccupancyGrid) -> None:
+        self._preview_planner.update_costmap(msg)
 
     async def handle_xr_goal_reached(self, msg: Bool) -> None:
         self._goal_reached = bool(msg.data)

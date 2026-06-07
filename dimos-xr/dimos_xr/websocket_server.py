@@ -25,6 +25,7 @@ from dimos_xr.protocol import (
     GetStatusMessage,
     InboundMessage,
     NavGoalMessage,
+    PlanPathMessage,
     decode_inbound,
     encode_hello,
 )
@@ -40,6 +41,7 @@ AlignCommitHandler = Callable[[AlignCommitMessage, ServerConnection], None]
 AlignMarkerHandler = Callable[[AlignMarkerMessage, ServerConnection], None]
 AlignManualPoseHandler = Callable[[AlignManualPoseMessage, ServerConnection], None]
 NavGoalHandler = Callable[[NavGoalMessage], None]
+PlanPathHandler = Callable[[PlanPathMessage], None]
 CancelGoalHandler = Callable[[CancelGoalMessage], None]
 EmergencyStopHandler = Callable[[EmergencyStopMessage], None]
 GetStatusHandler = Callable[[GetStatusMessage, ServerConnection], None]
@@ -64,6 +66,7 @@ class XRWebSocketServer:
         on_align_marker: AlignMarkerHandler | None = None,
         on_align_manual_pose: AlignManualPoseHandler | None = None,
         on_nav_goal: NavGoalHandler | None = None,
+        on_plan_path: PlanPathHandler | None = None,
         on_cancel_goal: CancelGoalHandler | None = None,
         on_emergency_stop: EmergencyStopHandler | None = None,
         on_get_status: GetStatusHandler | None = None,
@@ -80,6 +83,7 @@ class XRWebSocketServer:
         self._on_align_marker = on_align_marker
         self._on_align_manual_pose = on_align_manual_pose
         self._on_nav_goal = on_nav_goal
+        self._on_plan_path = on_plan_path
         self._on_cancel_goal = on_cancel_goal
         self._on_emergency_stop = on_emergency_stop
         self._on_get_status = on_get_status
@@ -210,6 +214,13 @@ class XRWebSocketServer:
                 self._on_unsupported(inbound)
             else:
                 logger.warning("nav_goal received but not supported in this blueprint")
+        elif isinstance(inbound, PlanPathMessage):
+            if self._on_plan_path is not None:
+                self._on_plan_path(inbound)
+            elif self._on_unsupported is not None:
+                self._on_unsupported(inbound)
+            else:
+                logger.warning("plan_path received but not supported in this blueprint")
         elif isinstance(inbound, CancelGoalMessage):
             if self._on_cancel_goal is not None:
                 self._on_cancel_goal(inbound)
