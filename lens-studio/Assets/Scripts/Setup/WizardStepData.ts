@@ -11,17 +11,19 @@ export enum WizardStep {
 export const LAST_WIZARD_STEP = WizardStep.Calibrate;
 
 export type AlignmentMode = "auto" | "manual";
+export type CalibrationPhase = "editing" | "ready" | "pendingCommit" | "complete";
 
 export interface CalibrationViewState {
   mode: AlignmentMode;
+  phase: CalibrationPhase;
   spectaclesTracking: boolean;
   robotTracking: boolean;
   currentQuality: number | null;
   bestQuality: number | null;
-  hasCandidate: boolean;
-  pendingCommit: boolean;
   statusMessage: string;
   statusColor: vec4;
+  bridgeWaitStartedAt: number | null;
+  bridgeErrorCode: number | null;
 }
 
 export interface WizardFooterState {
@@ -36,20 +38,20 @@ export interface WizardFooterState {
 }
 
 export const WIZARD_STEP_TITLES: string[] = [
-  "Start Robot & DimOS",
-  "Connect DimOS WebSocket",
-  "Calibrate coordinates",
+  "Start Robot & Bridge",
+  "Connect",
+  "Calibrate",
 ];
 
 export const CALIBRATE_DESCRIPTION_AUTO =
-  "Open the DimOS QR code on your phone.\nHold the marker where the robot camera and Spectacles can both see it.";
+  "Show DimOS April Tag (printed or on your phone).\nBoth cameras must see the marker.";
 
 export const CALIBRATE_DESCRIPTION_MANUAL =
-  "Move the robot marker to approximately where the robot stands. No QR code or phone needed.";
+  "Place the marker at the robot location & rotation.\nNo April Tag needed.";
 
 export const WIZARD_STEP_DESCRIPTIONS: string[] = [
-  "Power up your robot (Go2 / G1) and wait for it to stand up. \nOn your Mac, open the dimos-xr folder and run ./start.sh to choose the robot stack and launch the bridge.",
-  "Enter your PC's local IP to connect.\nKeep the robot, your PC, and Spectacles on the same local network.",
+  "Power on your robot.\nRun ./start.sh in dimos-xr on your Mac.",
+  "Enter your Mac's IP.\nSame Wi‑Fi for robot, Mac, and Spectacles.",
   CALIBRATE_DESCRIPTION_AUTO,
 ];
 

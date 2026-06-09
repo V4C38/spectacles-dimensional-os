@@ -2,10 +2,73 @@
 /** Observable store for setup/runtime phase, debug toggles, operating mode, and navigation/robot interaction state. */
 // ================================================================
 
+import {
+  formatBridgeError,
+} from "./Setup/BridgeErrorCodes";
+import {
+  COLOR_ERROR,
+  COLOR_SUCCESS,
+  COLOR_WHITE,
+} from "./UI/Shared/UICore";
+
 export type AppPhase = "setup" | "runtime";
 export type OperatingMode = "manual" | "agent";
 export type RobotInteractionMode = "hidden" | "manualPlacement" | "runtimeRobot";
 export type NavigationMode = "idle" | "placingGoal" | "executingGoal";
+export type NavigationOutcome = "none" | "success" | "failed";
+export type BridgeLinkState = "disconnected" | "connectedNoRobot" | "connected";
+export type LidarDisplayMode = "off" | "obstacles" | "full";
+
+export const LIDAR_MODE_LABELS: Record<LidarDisplayMode, string> = {
+  off: "LiDAR: Off",
+  obstacles: "LiDAR: Obstacles",
+  full: "LiDAR: Full",
+};
+
+export interface StatusTextPresentation {
+  text: string;
+  color: vec4;
+}
+
+export function navigationOutcomePresentation(
+  outcome: NavigationOutcome,
+): StatusTextPresentation | null {
+  if (outcome === "success") {
+    return { text: "Navigation success", color: COLOR_SUCCESS };
+  }
+  if (outcome === "failed") {
+    return { text: "Navigation failed", color: COLOR_ERROR };
+  }
+  return null;
+}
+
+export function robotMarkerSteadyStatePresentation(
+  state: DimosAppState,
+): StatusTextPresentation {
+  if (state.operatingMode === "agent") {
+    return { text: "", color: COLOR_WHITE };
+  }
+  if (state.navRuntimeErrorCode !== null) {
+    return {
+      text: formatBridgeError(state.navRuntimeErrorCode),
+      color: COLOR_ERROR,
+    };
+  }
+  return {
+    text: state.navigationMode === "executingGoal" ? "Navigating" : "Idle",
+    color: COLOR_WHITE,
+  };
+}
+
+export function nextLidarMode(mode: LidarDisplayMode): LidarDisplayMode {
+  if (mode === "off") {
+    return "obstacles";
+  }
+  if (mode === "obstacles") {
+    return "full";
+  }
+  return "off";
+}
 
 export interface RuntimeCapabilityState {
   available: boolean;
@@ -14,7 +77,6 @@ export interface RuntimeCapabilityState {
 
 export interface RobotRuntimeState {
   negotiated: boolean;
-  bridgeConnected: boolean;
   robotId: string | null;
   robotModel: string | null;
   displayName: string;
@@ -30,15 +92,22 @@ export interface RobotRuntimeState {
 export interface DimosAppState {
   phase: AppPhase;
   debugMode: boolean;
-  showLiDAR: boolean;
+  lidarMode: LidarDisplayMode;
   operatingMode: OperatingMode;
+  /** UI-only: which mode's settings submenu is open, or null when collapsed. */
+  mainMenuExpandedSettingsMode: OperatingMode | null;
   navigationPlacementEnabled: boolean;
   robotInteractionMode: RobotInteractionMode;
   navigationMode: NavigationMode;
+  navigationOutcome: NavigationOutcome;
+  navRuntimeErrorCode: number | null;
+  bridgeLinkState: BridgeLinkState;
   robotRuntime: RobotRuntimeState;
 }
 
 export type AppStateListener = (state: DimosAppState) => void;
+
+export const NO_ROBOT_CONNECTED_LABEL = "No Robot connected";
 
 const DEFAULT_CAPABILITY_NAMES = [
   "lidar",
@@ -86,6 +155,49 @@ function cloneState(state: DimosAppState): DimosAppState {
   };
 }
 
+const DEFAULT_ROBOT_BODY_HEIGHT_M = 0.55;
+const LIDAR_FLOOR_CLEARANCE_CM = 0.5;
+const LIDAR_MAX_HEIGHT_ABOVE_BODY_M = 1.0;
+
+export interface LidarVerticalBandCm {
+  minAboveFloorCm: number;
+  maxAboveFloorCm: number;
+}
+
+/** Robot body height (m) from negotiated runtime metadata. */
+export function robotBodyHeightM(runtime: RobotRuntimeState): number {
+  if (runtime.bodyBoundsM) {
+    return runtime.bodyBoundsM[2];
+  }
+  if (runtime.baseHeightM !== null) {
+    return runtime.baseHeightM;
+  }
+  return DEFAULT_ROBOT_BODY_HEIGHT_M;
+}
+
+/** LiDAR vertical band above the robot floor plane (world cm). */
+export function lidarVerticalBandCm(runtime: RobotRuntimeState): LidarVerticalBandCm {
+  const bodyHeightCm = robotBodyHeightM(runtime) * 100.0;
+  return {
+    minAboveFloorCm: LIDAR_FLOOR_CLEARANCE_CM,
+    maxAboveFloorCm: bodyHeightCm + LIDAR_MAX_HEIGHT_ABOVE_BODY_M * 100.0,
+  };
+}
+
+/** World-space floor Y (cm) from marker origin Y and negotiated robot base height. */
+export function robotFloorWorldYCm(
+  markerWorldYCm: number,
+  runtime: RobotRuntimeState,
+): number {
+  const baseHeightM =
+    runtime.baseHeightM ??
+    (runtime.bodyBoundsM ? runtime.bodyBoundsM[2] : null);
+  if (baseHeightM === null) {
+    return markerWorldYCm;
+  }
+  return markerWorldYCm - baseHeightM * 100.0;
+}
+
 export function createDefaultRobotRuntimeState(): RobotRuntimeState {
   const capabilities: Record<string, RuntimeCapabilityState> = {};
   DEFAULT_CAPABILITY_NAMES.forEach((capability) => {
@@ -96,10 +208,9 @@ export function createDefaultRobotRuntimeState(): RobotRuntimeState {
   });
   return {
     negotiated: false,
-    bridgeConnected: false,
     robotId: null,
     robotModel: null,
-    displayName: "Development Robot",
+    displayName: NO_ROBOT_CONNECTED_LABEL,
     visualOriginFrame: "base_link",
     bodyBoundsM: null,
     footprintM: null,

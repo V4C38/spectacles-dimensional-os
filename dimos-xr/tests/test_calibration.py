@@ -14,6 +14,7 @@ from dimos_xr.alignment import (
 from dimos_xr.bridge_module import (
     ALIGNMENT_CLUSTER_MIN_SAMPLES,
     AlignmentCandidate,
+    XRBridge,
     score_alignment_cluster,
 )
 from dimos_xr.transforms import (
@@ -132,6 +133,35 @@ def test_apriltag_alignment_preserves_raw_marker_orientation_until_commit() -> N
     assert result is not None
     expected = pose_to_matrix(marker_position, marker_orientation)
     assert np.allclose(result.T_world_odom, expected, atol=1e-5)
+
+
+def test_bridge_retries_alignment_with_current_time(monkeypatch) -> None:
+    bridge = object.__new__(XRBridge)
+    bridge._alignment_mode = "marker"
+    bridge._last_align_marker = object()
+    bridge._last_align_marker_mono = 10.0
+    bridge._aligner = type("AlignerStub", (), {"robot_marker_detected": True})()
+    bridge._spectacles_marker_detected = lambda: True
+    bridge._get_latest_odom = lambda: OdomSample(
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+
+    captured: dict[str, float | object] = {}
+
+    def capture_candidate(msg, odom, *, received_ts=None):
+        captured["msg"] = msg
+        captured["received_ts"] = received_ts
+        captured["odom"] = odom
+        return None
+
+    bridge._process_alignment_candidate = capture_candidate
+    monkeypatch.setattr("dimos_xr.bridge_module.time.monotonic", lambda: 10.35)
+
+    bridge._try_align_from_last_marker()
+
+    assert captured["msg"] is bridge._last_align_marker
+    assert captured["received_ts"] == 10.35
 
 
 def test_normalize_ground_pose_removes_pitch_and_roll() -> None:

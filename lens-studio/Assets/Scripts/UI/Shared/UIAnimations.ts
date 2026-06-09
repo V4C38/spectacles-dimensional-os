@@ -54,6 +54,35 @@ export function scaleIn(
   });
 }
 
+export function animateScaleTo(
+  sceneObject: SceneObject,
+  target: vec3,
+  duration: number = 0.12,
+): void {
+  const transform = sceneObject.getTransform();
+  const start = transform.getLocalScale();
+  const version = nextAnimationVersion(sceneObject);
+  animate({
+    duration,
+    easing: "ease-in-out-quad",
+    update: (t: number) => {
+      if (!isLatestAnimationVersion(sceneObject, version)) {
+        return;
+      }
+      const x = start.x + (target.x - start.x) * t;
+      const y = start.y + (target.y - start.y) * t;
+      const z = start.z + (target.z - start.z) * t;
+      transform.setLocalScale(new vec3(x, y, z));
+    },
+    ended: () => {
+      if (!isLatestAnimationVersion(sceneObject, version)) {
+        return;
+      }
+      transform.setLocalScale(target);
+    },
+  });
+}
+
 export function scaleOut(
   sceneObject: SceneObject,
   duration: number = 0.5,

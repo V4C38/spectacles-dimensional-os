@@ -194,6 +194,11 @@ Navigation state updates:
 }
 ```
 
+Optional fields:
+
+- `recovering`: when `true`, the bridge cleared a stuck goal and the client should return to a retryable placing state without treating it as a terminal failure
+- `error_code`: numeric XR bridge client error code when navigation is unavailable for the session (see [`ERROR_CODES.md`](ERROR_CODES.md))
+
 ## Inbound Messages
 
 ### `get_status`
@@ -205,6 +210,16 @@ Navigation state updates:
   "robot_id": "unitree_go2"
 }
 ```
+
+The bridge responds with a runtime sync burst for the requesting client:
+
+1. `bridge_status` — current bridge/registration snapshot
+2. `nav_status` — current navigation lifecycle state (including optional
+   `recovering` / `error_code`)
+3. `path` — last executing path when navigation is active; omitted when no
+   executing path is cached
+
+The same sync burst is sent automatically after the initial `hello` on connect.
 
 ### `align_start`
 

@@ -1,26 +1,9 @@
 import { AlignmentController } from "../Alignment/AlignmentController";
 import { BridgeClient } from "../Network/BridgeClient";
 import { DimosManager } from "../DimosManager";
-import {
-  createCalibrationViewState,
-  createManualCalibrationState,
-} from "./CalibrationPresenter";
-import {
-  CALIBRATE_DESCRIPTION_AUTO,
-  CALIBRATE_DESCRIPTION_MANUAL,
-  CalibrationViewState,
-  LAST_WIZARD_STEP,
-  WIZARD_STEP_DESCRIPTIONS,
-  WIZARD_STEP_TITLES,
-  WizardStep,
-  wizardStepName,
-} from "./WizardStepData";
+import { CalibrationViewState, LAST_WIZARD_STEP, WIZARD_STEP_DESCRIPTIONS, WIZARD_STEP_TITLES, WizardStep, wizardStepName } from "./WizardStepData";
 import { WizardConnectionController } from "./WizardConnectionController";
-import {
-  COLOR_ERROR,
-  COLOR_SUCCESS,
-  COLOR_WHITE,
-} from "../UI/Shared/UICore";
+import { COLOR_ERROR, COLOR_WHITE } from "../UI/Shared/UICore";
 import { WizardView } from "../UI/WizardView";
 
 const NAV_DEBOUNCE_S = 0.35;
@@ -29,11 +12,7 @@ export interface WizardStepControllerHost {
   getCurrentStep: () => WizardStep;
   setCurrentStep: (step: WizardStep) => void;
   getConnected: () => boolean;
-  getAligned: () => boolean;
-  setAligned: (aligned: boolean) => void;
-  setCalibrationCompleted: (completed: boolean) => void;
   getCalibrationState: () => CalibrationViewState;
-  setCalibrationState: (state: CalibrationViewState) => void;
   getView: () => WizardView | null;
   getDimosManager: () => DimosManager | null;
   getAlignmentController: () => AlignmentController | null;
@@ -41,9 +20,9 @@ export interface WizardStepControllerHost {
   log: (message: string) => void;
   showBridgeConnectionStatus: () => void;
   refreshFooterButtons: () => void;
-  renderCalibrationState: () => void;
-  refreshCalibrationDescription: () => void;
-  beginManualAlignmentPlacementFromWizard: () => boolean;
+  enterCalibration: () => void;
+  leaveCalibration: () => void;
+  completeCalibrationStep: () => boolean;
   finishSetup: () => void;
   startAutoconnect: () => void;
 }
@@ -85,12 +64,8 @@ export class WizardStepController {
       alignmentController.stop();
     }
 
-    const dimosManager = this._host.getDimosManager();
     if (clampedStep !== WizardStep.Calibrate) {
-      dimosManager?.cancelManualAlignmentPlacement();
-      dimosManager?.stopManualAlignmentSession();
-      dimosManager?.clearManualAlignmentPose();
-      dimosManager?.hideRobotMarkerPreview();
+      this._host.leaveCalibration();
     }
 
     switch (clampedStep) {
@@ -103,8 +78,7 @@ export class WizardStepController {
         break;
 
       case WizardStep.Connect: {
-        this._host.setAligned(false);
-        this._host.setCalibrationCompleted(false);
+        const dimosManager = this._host.getDimosManager();
         view?.clearDetailStatus();
         view?.setAccuracy("");
         view?.setInputEnabled(true);
@@ -127,46 +101,17 @@ export class WizardStepController {
         if (this._host.getConnected()) {
           this._host.showBridgeConnectionStatus();
         } else {
-          view?.setStatus("Enter IP and connect", COLOR_WHITE);
+          view?.setStatus("Bridge disconnected", COLOR_ERROR);
           this._host.startAutoconnect();
         }
         break;
       }
 
       case WizardStep.Calibrate:
-        this._host.setAligned(false);
-        this._host.setCalibrationCompleted(false);
-        const markerAlignmentAvailable =
-          dimosManager?.canUseMarkerAlignment() ?? true;
-        const manualAlignmentAvailable =
-          dimosManager?.canUseManualAlignment() ?? true;
-        const useManualOnly =
-          dimosManager?.hasBridgeConnection() &&
-          !markerAlignmentAvailable &&
-          manualAlignmentAvailable;
-        this._host.setCalibrationState(
-          useManualOnly ? createManualCalibrationState() : createCalibrationViewState(),
-        );
         view?.setInputEnabled(false);
-        this._host.refreshFooterButtons();
-        this._host.refreshCalibrationDescription();
-        this._host.renderCalibrationState();
-        if (useManualOnly) {
-          alignmentController?.setCalibrationGizmoEnabled(false);
-          alignmentController?.stop();
-          if (!this._host.beginManualAlignmentPlacementFromWizard()) {
-            const calibrationState = this._host.getCalibrationState();
-            calibrationState.hasCandidate = false;
-            calibrationState.statusMessage =
-              "Could not determine a stable marker spawn pose";
-            calibrationState.statusColor = COLOR_ERROR;
-            this._host.renderCalibrationState();
-            this._host.refreshFooterButtons();
-          }
-        } else if (alignmentController) {
-          alignmentController.setCalibrationGizmoEnabled(true);
-          alignmentController.start();
-        }
+        view?.setAccuracy("");
+        view?.clearDetailStatus();
+        this._host.enterCalibration();
         break;
     }
   }
@@ -204,81 +149,17 @@ export class WizardStepController {
     }
 
     const calibrationState = this._host.getCalibrationState();
-    const dimosManager = this._host.getDimosManager();
-    const alignmentController = this._host.getAlignmentController();
-
-    if (this._host.getAligned()) {
+    if (calibrationState.phase === "complete") {
       this._host.finishSetup();
       return;
     }
-    if (calibrationState.pendingCommit) {
-      return;
-    }
-    if (calibrationState.mode === "manual" && calibrationState.hasCandidate) {
-      if (!dimosManager?.hasBridgeConnection()) {
-        const finalized = dimosManager?.finalizeOfflineManualAlignment() ?? false;
-        if (!finalized) {
-          calibrationState.statusMessage =
-            "Could not read manual marker pose - try again";
-          calibrationState.statusColor = COLOR_ERROR;
-          this._host.renderCalibrationState();
-          this._host.refreshFooterButtons();
-          return;
-        }
-        dimosManager?.cancelManualAlignmentPlacement();
-        this._host.setAligned(true);
-        this._host.setCalibrationCompleted(true);
-        calibrationState.statusMessage = "Manual alignment ready";
-        calibrationState.statusColor = COLOR_SUCCESS;
-        this._host.renderCalibrationState();
-        this._host.refreshFooterButtons();
-        this._host.log("manual local-only calibration accepted");
-        this._host.finishSetup();
-        return;
-      }
-
-      const captured = dimosManager?.captureManualAlignmentCandidate() ?? false;
-      if (!captured) {
-        calibrationState.statusMessage =
-          "Could not read manual marker pose - try again";
-        calibrationState.statusColor = COLOR_ERROR;
-        this._host.renderCalibrationState();
-        this._host.refreshFooterButtons();
-        return;
-      }
-
-      if (dimosManager?.bridgeClient?.sendAlignCommit()) {
-        dimosManager?.freezeManualAlignmentPlacement();
-        calibrationState.pendingCommit = true;
-        calibrationState.statusMessage = "Applying manual alignment…";
-        calibrationState.statusColor = COLOR_WHITE;
-        this._host.renderCalibrationState();
-        this._host.refreshFooterButtons();
-        this._host.log("manual calibration commit requested");
-      } else {
-        calibrationState.statusMessage =
-          "Manual alignment commit failed - try again";
-        calibrationState.statusColor = COLOR_ERROR;
-        this._host.renderCalibrationState();
-        this._host.refreshFooterButtons();
-      }
+    if (calibrationState.phase === "pendingCommit") {
       return;
     }
 
-    if (calibrationState.hasCandidate && alignmentController?.commitBestAlignment()) {
-      calibrationState.pendingCommit = true;
-      calibrationState.statusMessage = "Applying best alignment…";
-      calibrationState.statusColor = COLOR_WHITE;
-      this._host.renderCalibrationState();
-      this._host.refreshFooterButtons();
-      this._host.log("calibration commit requested");
-      return;
+    if (this._host.completeCalibrationStep()) {
+      this._host.finishSetup();
     }
-
-    alignmentController?.setCalibrationGizmoEnabled(false);
-    alignmentController?.stop();
-    this._host.log("calibration step skipped");
-    this._host.finishSetup();
   }
 
   public onPrevious(): void {

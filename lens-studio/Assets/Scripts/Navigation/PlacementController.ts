@@ -1,4 +1,5 @@
 import { NavigationMarkerView } from "./NavigationMarkerView";
+import { yawRotationFromPlanarDirection } from "./HeadingRotation";
 
 // ================================================================
 /** Ground-ray drag placement for navigation goals with robot deadzone and marker anchoring. */
@@ -31,7 +32,7 @@ export class PlacementController {
   public onPreviewTargetChanged: ((
     position: vec3,
     rotation: quat,
-    isDragging: boolean,
+    placementActive: boolean,
     force: boolean,
   ) => void) | null = null;
 
@@ -45,7 +46,6 @@ export class PlacementController {
   private updateEvent: SceneEvent | null = null;
   private activeInteractor: any = null;
   private desiredPosition = vec3.zero();
-  private desiredRotation = quat.quatIdentity();
   private touchStartPosition = vec3.zero();
   private isDragging = false;
   private lastGroundHeight = 0;
@@ -55,6 +55,7 @@ export class PlacementController {
   private _smoothedDragDirection = vec3.zero();
   private _placementAnchor: SceneObject | null = null;
   private _robotGroundDeadzone: RobotGroundDeadzone | null = null;
+  private _placementActive = false;
 
   constructor(
     owner: BaseScriptComponent,
@@ -74,21 +75,7 @@ export class PlacementController {
     );
     this.active = true;
     this.visualState = "placing";
-    this.activeInteractor = null;
-    this.isDragging = false;
-    this.lastGroundHeight = position.y;
-    this._dragHitTestFrameCount = 0;
-    this._previousDragPosition = null;
-    this._smoothedDragDirection = vec3.zero();
-    this.desiredPosition = new vec3(position.x, position.y, position.z);
-    this.desiredRotation = this._levelRotation(rotation);
-    this.touchStartPosition = this.desiredPosition;
-    this._bindPlacementAnchor(position);
-    this.renderer.setPose(this.desiredPosition, this.desiredRotation);
-    this.renderer.showPlacing();
-    this._syncMoveDirectionPreview();
-    this._emitPreviewTargetChanged(true);
-    this._setDragEnabled(true);
+    this._beginPlacingAtPose(position, rotation, true);
     this._ensureHitTestSession();
     this._ensureUpdateLoop();
   }
@@ -96,6 +83,7 @@ export class PlacementController {
   public stop(): void {
     print("PlacementController: stop");
     this.active = false;
+    this._placementActive = false;
     this._processingButtonPress = false;
     this.activeInteractor = null;
     this._setDragEnabled(false);
@@ -116,6 +104,10 @@ export class PlacementController {
     return this.active;
   }
 
+  public isPlacementActive(): boolean {
+    return this._placementActive;
+  }
+
   public getCurrentPose(): { position: vec3; rotation: quat } | null {
     return {
       position: new vec3(
@@ -123,7 +115,7 @@ export class PlacementController {
         this.desiredPosition.y,
         this.desiredPosition.z,
       ),
-      rotation: this.desiredRotation,
+      rotation: this.renderer.getRotation(),
     };
   }
 
@@ -141,42 +133,36 @@ export class PlacementController {
     this._setDragEnabled(false);
   }
 
-  public showPlacing(): void {
+  public resumePlacing(): void {
     if (!this.active) {
       return;
     }
     this.visualState = "placing";
     this._syncDesiredPoseToRenderedPose();
-    this.renderer.showPlacing();
-    this._syncMoveDirectionPreview();
+    this.renderer.showPlacing(this._placementActive);
     this._emitPreviewTargetChanged(true);
     this._setDragEnabled(true);
   }
 
-  public showPlacingAtNewPose(position: vec3, rotation: quat): void {
+  public respawnPlacingAt(
+    getPose: () => { position: vec3; rotation: quat } | null,
+  ): void {
     if (!this.active) {
       return;
     }
     this.visualState = "placing";
     this._setDragEnabled(false);
-    this.isDragging = false;
-    this.activeInteractor = null;
+    this._resetGestureState();
     this.renderer.hideAndThen(() => {
       if (!this.active) {
         return;
       }
-      this.desiredPosition = new vec3(position.x, position.y, position.z);
-      this.desiredRotation = this._levelRotation(rotation);
-      this.lastGroundHeight = position.y;
-      this.touchStartPosition = this.desiredPosition;
-      this._previousDragPosition = null;
-      this._smoothedDragDirection = vec3.zero();
-      this._bindPlacementAnchor(position);
-      this.renderer.setPose(this.desiredPosition, this.desiredRotation);
-      this.renderer.showPlacing();
-      this._syncMoveDirectionPreview();
-      this._emitPreviewTargetChanged(true);
-      this._setDragEnabled(true);
+      const pose = getPose();
+      if (!pose) {
+        this.resumePlacing();
+        return;
+      }
+      this._beginPlacingAtPose(pose.position, pose.rotation, true);
     });
   }
 
@@ -212,7 +198,11 @@ export class PlacementController {
     if (dragInteractable?.onTriggerEnd?.add) {
       dragInteractable.onTriggerEnd.add(() => {
         this.activeInteractor = null;
+        this.isDragging = false;
         this._previousDragPosition = null;
+        this._syncDesiredPoseToRenderedPose();
+        this._snapCurrentPoseToSurface();
+        this.renderer.setPose(this.desiredPosition, this.renderer.getRotation());
         this._emitPreviewTargetChanged(true);
       });
     }
@@ -224,27 +214,30 @@ export class PlacementController {
         this._emitPreviewTargetChanged(true);
       });
     }
-    this.renderer.confirmActionButton.onTriggerUp.add(() => {
-      if (!this.active || this._processingButtonPress) {
-        return;
-      }
-      this._processingButtonPress = true;
-      this._syncDesiredPoseToRenderedPose();
-      const wasExecuting = this.visualState === "executing";
-      const position = this.desiredPosition;
-      const rotation = this.desiredRotation;
-      
-      const delayedEvent = this.owner.createEvent("DelayedCallbackEvent");
-      delayedEvent.bind(() => {
-        this._processingButtonPress = false;
-        if (wasExecuting) {
-          this.onCancelled?.(position, rotation);
-        } else {
-          this.onConfirmed?.(position, rotation);
+    const confirmButton = this.renderer.confirmActionButton as any;
+    if (confirmButton?.onTriggerUp?.add) {
+      confirmButton.onTriggerUp.add(() => {
+        if (!this.active || this._processingButtonPress) {
+          return;
         }
+        this._processingButtonPress = true;
+        this._syncDesiredPoseToRenderedPose();
+        const wasExecuting = this.visualState === "executing";
+        const position = this.desiredPosition;
+        const rotation = this.renderer.getRotation();
+
+        const delayedEvent = this.owner.createEvent("DelayedCallbackEvent");
+        delayedEvent.bind(() => {
+          this._processingButtonPress = false;
+          if (wasExecuting) {
+            this.onCancelled?.(position, rotation);
+          } else {
+            this.onConfirmed?.(position, rotation);
+          }
+        });
+        delayedEvent.reset(0.0);
       });
-      delayedEvent.reset(0.0);
-    });
+    }
   }
 
   private _ensureHitTestSession(): void {
@@ -292,7 +285,7 @@ export class PlacementController {
       this._maybeRebasePlacementAnchor();
       this.renderer.interpolatePose(
         this.desiredPosition,
-        this.desiredRotation,
+        this.renderer.getRotation(),
         INTERPOLATION_SPEED,
       );
       this._emitPreviewTargetChanged(false);
@@ -365,7 +358,7 @@ export class PlacementController {
     const dragDistance = pointPosition.distance(this.touchStartPosition);
     if (dragDistance > DRAG_THRESHOLD_CM && !this.isDragging) {
       this.isDragging = true;
-      this.renderer.unlockConfirmAction();
+      this._activatePlacement();
     }
     if (this.isDragging) {
       this._dragHitTestFrameCount++;
@@ -383,7 +376,7 @@ export class PlacementController {
     }
   }
 
-  private _consumeSurfaceSnap(rawResults: any, _fallbackPoint: vec3): void {
+  private _consumeSurfaceSnap(rawResults: any, fallbackPoint: vec3): void {
     const first = Array.isArray(rawResults) ? rawResults[0] : rawResults;
     const foundPosition = first?.position ?? first?.hit?.position ?? null;
     const foundNormal = first?.normal ?? first?.hit?.normal ?? null;
@@ -406,17 +399,17 @@ export class PlacementController {
     const yDelta = Math.abs(effectiveY - this.lastGroundHeight);
     if (this.lastGroundHeight !== 0 && yDelta < Y_UPDATE_THRESHOLD_CM) {
       this.desiredPosition = new vec3(
-        foundPosition.x,
+        fallbackPoint.x,
         this.lastGroundHeight,
-        foundPosition.z,
+        fallbackPoint.z,
       );
       return;
     }
     this.lastGroundHeight = effectiveY;
     this.desiredPosition = new vec3(
-      foundPosition.x,
+      fallbackPoint.x,
       this.lastGroundHeight,
-      foundPosition.z,
+      fallbackPoint.z,
     );
   }
 
@@ -467,42 +460,32 @@ export class PlacementController {
           const fx = this._smoothedDragDirection.x / smoothedMag;
           const fz = this._smoothedDragDirection.z / smoothedMag;
           const targetRotation = this._yawRotation(fx, fz);
+          const currentRotation = this.renderer.getRotation();
           const maxRotationStep =
             MAX_ROTATION_SPEED_RAD_PER_SEC * getDeltaTime();
           const angleToTarget = quat.angleBetween(
-            this.desiredRotation,
+            currentRotation,
             targetRotation,
           );
           const rotationAlpha =
             angleToTarget <= 0.0001
               ? 1
               : Math.min(1, maxRotationStep / angleToTarget);
-          this.desiredRotation = quat.slerp(
-            this.desiredRotation,
-            targetRotation,
-            rotationAlpha,
+          this.renderer.setRotation(
+            quat.slerp(
+              currentRotation,
+              targetRotation,
+              rotationAlpha,
+            ),
           );
-          this._syncMoveDirectionPreview();
         }
       }
     }
     this._previousDragPosition = pointPosition;
   }
 
-  private _levelRotation(rotation: quat): quat {
-    const forward = rotation.multiplyVec3(vec3.right().uniformScale(-1)); // -X is actual forward
-    const distance = Math.sqrt(forward.x * forward.x + forward.z * forward.z);
-    if (distance < 0.001) {
-      return quat.quatIdentity();
-    }
-    return this._yawRotation(forward.x / distance, forward.z / distance);
-  }
-
   private _yawRotation(x: number, z: number): quat {
-    const yaw = Math.atan2(z, x);
-    const halfYaw = yaw * 0.5;
-    // Lens Studio quat constructor is (w, x, y, z); Y-axis yaw = (cos, 0, sin, 0)
-    return new quat(Math.cos(halfYaw), 0, Math.sin(halfYaw), 0);
+    return yawRotationFromPlanarDirection(x, z);
   }
 
   private _syncDesiredPoseToRenderedPose(): void {
@@ -510,15 +493,48 @@ export class PlacementController {
     this.lastGroundHeight = this.desiredPosition.y;
   }
 
-  private _syncMoveDirectionPreview(): void {
-    this.renderer.setMoveDirectionFromRotation(this.desiredRotation);
+  private _beginPlacingAtPose(
+    position: vec3,
+    rotation: quat,
+    resetPlacementActive: boolean,
+  ): void {
+    this._resetGestureState();
+    if (resetPlacementActive) {
+      this._placementActive = false;
+    }
+    this.desiredPosition = new vec3(position.x, position.y, position.z);
+    this.lastGroundHeight = position.y;
+    this.touchStartPosition = this.desiredPosition;
+    this._bindPlacementAnchor(position);
+    this.renderer.setPose(this.desiredPosition, rotation);
+    this.renderer.showPlacing(this._placementActive);
+    this._emitPreviewTargetChanged(true);
+    this._setDragEnabled(true);
+  }
+
+  private _resetGestureState(): void {
+    this.activeInteractor = null;
+    this.isDragging = false;
+    this._dragHitTestFrameCount = 0;
+    this._previousDragPosition = null;
+    this._smoothedDragDirection = vec3.zero();
+  }
+
+  private _activatePlacement(): void {
+    if (this._placementActive) {
+      return;
+    }
+    this._placementActive = true;
+    if (this.visualState === "placing") {
+      this.renderer.setConfirmVisible(true);
+    }
   }
 
   private _emitPreviewTargetChanged(force: boolean): void {
     this.onPreviewTargetChanged?.(
       this.desiredPosition,
-      this.desiredRotation,
-      this.isDragging,
+      this.renderer.getRotation(),
+      this._placementActive,
       force,
     );
   }
@@ -529,12 +545,6 @@ export class PlacementController {
       return;
     }
     dragInteractable.enabled = enabled;
-    if ("enableInstantDrag" in dragInteractable) {
-      dragInteractable.enableInstantDrag = enabled;
-    }
-    if ("useFilteredPinch" in dragInteractable) {
-      dragInteractable.useFilteredPinch = enabled;
-    }
     if (!enabled) {
       this.activeInteractor = null;
     }

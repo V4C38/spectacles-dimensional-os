@@ -140,21 +140,6 @@ export function buildEmergencyStop(robotId: string): string {
   });
 }
 
-export function formatBridgeStatus(msg: BridgeStatusMessage): string {
-  if (msg.reconnecting) {
-    return `XR bridge — reconnecting…`;
-  }
-  if (!msg.robot_connected) {
-    return `XR bridge — robot not connected`;
-  }
-
-  const streams = msg.streams_active
-    ? "data streaming"
-    : "waiting for lidar/odom";
-  const calibrated = msg.registered ? "calibrated" : "needs calibration";
-  return `XR bridge (${msg.robot_id}) — ${streams}, ${calibrated}`;
-}
-
 export function emit<T>(callbacks: ((value: T) => void)[], value: T): void {
   callbacks.forEach((cb) => cb(value));
 }

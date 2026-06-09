@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+from dimos.core.global_config import global_config
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Odometry import Odometry
@@ -40,7 +41,6 @@ def _make_adapter() -> XRRobotAdapterModule:
     adapter.registered_scan = _FakeStream(connected=False)
     adapter.odom = _FakeStream(connected=False)
     adapter.odometry = _FakeStream(connected=False)
-    adapter.color_image = _FakeStream(connected=False)
     adapter.camera_info = _FakeStream(connected=False)
     adapter.global_costmap = _FakeStream(connected=False)
     adapter.xr_global_costmap = _FakeStream(connected=True)
@@ -114,3 +114,28 @@ def test_capabilities_disable_preview_without_costmap() -> None:
     capabilities = XRRobotAdapterModule.capabilities(adapter)
 
     assert capabilities["plan_preview"].available is False
+
+
+def test_capabilities_prefer_live_go2_connection_over_stale_global_model(
+    monkeypatch,
+) -> None:
+    adapter = _make_adapter()
+    adapter._go2_connection = object()
+    monkeypatch.setattr(global_config, "robot_model", "unitree_g1", raising=False)
+
+    capabilities = XRRobotAdapterModule.capabilities(adapter)
+
+    assert capabilities["align"].available is True
+    assert XRRobotAdapterModule.robot_model(adapter) == "unitree_go2"
+
+
+def test_capabilities_report_manual_only_for_g1_runtime(monkeypatch) -> None:
+    adapter = _make_adapter()
+    adapter._g1_connection = object()
+    monkeypatch.setattr(global_config, "robot_model", "unitree_go2", raising=False)
+
+    capabilities = XRRobotAdapterModule.capabilities(adapter)
+
+    assert capabilities["align"].available is False
+    assert capabilities["align_manual"].available is True
+    assert XRRobotAdapterModule.robot_model(adapter) == "unitree_g1"

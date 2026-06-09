@@ -24,6 +24,14 @@ def test_pose_matrix_roundtrip() -> None:
     _assert_pose_matrix_roundtrip((1.0, 2.0, 0.5), (0.0, 0.0, 0.70710678, 0.70710678))
 
 
+def test_pose_to_matrix_normalizes_non_unit_quaternion() -> None:
+    T = pose_to_matrix((0.0, 0.0, 0.0), (0.2, 0.4, 0.6, 0.8))
+    rotation = T[:3, :3]
+    assert np.allclose(rotation @ rotation.T, np.eye(3), atol=1e-5)
+    _, quat = matrix_to_pose(T)
+    assert all(np.isfinite(value) for value in quat)
+
+
 def test_calibration_identity_before_register() -> None:
     cal = Calibration()
     pts = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)

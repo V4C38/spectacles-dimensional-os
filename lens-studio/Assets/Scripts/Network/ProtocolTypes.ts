@@ -114,6 +114,8 @@ export interface NavStatusMessage {
   state: "idle" | "following_path" | "recovery";
   goal_reached: boolean;
   goal_failed: boolean;
+  recovering?: boolean;
+  error_code?: number;
 }
 
 export type InboundMessage =

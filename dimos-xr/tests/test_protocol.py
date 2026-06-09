@@ -273,6 +273,30 @@ def test_encode_path_and_nav_status() -> None:
     assert status["state"] == "following_path"
     assert status["goal_reached"] is False
 
+    recovering = json.loads(
+        encode_nav_status(
+            ts=3.5,
+            state="idle",
+            goal_reached=False,
+            recovering=True,
+            robot_id="unitree_go2",
+        )
+    )
+    assert recovering["recovering"] is True
+
+    failed = json.loads(
+        encode_nav_status(
+            ts=4.0,
+            state="idle",
+            goal_reached=False,
+            goal_failed=True,
+            error_code=505,
+            robot_id="unitree_go2",
+        )
+    )
+    assert failed["goal_failed"] is True
+    assert failed["error_code"] == 505
+
 
 def test_encode_pose() -> None:
     pose = json.loads(

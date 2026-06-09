@@ -10,6 +10,28 @@ import numpy as np
 from numpy.typing import NDArray
 
 
+DEFAULT_ROBOT_BODY_HEIGHT_M = 0.55
+LIDAR_FLOOR_CLEARANCE_M = 0.005
+LIDAR_MAX_HEIGHT_ABOVE_BODY_M = 1.0
+
+
+def lidar_height_band_m(
+    *,
+    body_bounds_m: tuple[float, float, float] | None,
+    base_height_m: float | None,
+) -> tuple[float, float]:
+    """Robot odom Z band equivalent to floor clearance through body height + 1 m."""
+    body_h = (
+        body_bounds_m[2]
+        if body_bounds_m is not None
+        else (base_height_m if base_height_m is not None else DEFAULT_ROBOT_BODY_HEIGHT_M)
+    )
+    base_h = base_height_m if base_height_m is not None else body_h
+    min_height_m = -base_h + LIDAR_FLOOR_CLEARANCE_M
+    max_height_m = (body_h + LIDAR_MAX_HEIGHT_ABOVE_BODY_M) - base_h
+    return min_height_m, max_height_m
+
+
 @dataclass
 class LidarFilterConfig:
     max_range_m: float | None = 3.0

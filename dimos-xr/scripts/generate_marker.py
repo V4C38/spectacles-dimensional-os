@@ -2,8 +2,8 @@
 """Generate AprilTag 36h11 calibration assets.
 
 Outputs:
-  - ``aruco_marker.png`` — legacy filename containing the AprilTag image
-  - ``aruco_marker_phone.pdf`` — legacy filename for the padded phone-display PDF
+  - ``apriltag_marker.png`` — composite AprilTag tracking image
+  - ``apriltag_marker_phone.pdf`` — padded phone-display PDF
 
 Pose code uses ``marker_length_m`` from ``dimos_xr.marker_contract``.
 Phone display: scan QR from ./start.sh marker URL.
@@ -27,8 +27,10 @@ from dimos_xr.marker_contract import (
     DEFAULT_APRILTAG_DICT,
     DEFAULT_MARKER_ID,
     DEFAULT_MARKER_LENGTH_M,
-    LEGACY_MARKER_PNG,
-    LEGACY_PHONE_PDF,
+    MARKER_PHONE_PDF,
+    MARKER_PNG,
+    MARKER_PRINT_PDF,
+    MARKER_PRINT_PNG,
     LENS_MARKER_ASSET_RELATIVE_PATH,
     LENS_MARKER_TEXTURE_RELATIVE_PATH,
 )
@@ -70,23 +72,13 @@ def sync_lens_marker_height(lens_assets_dir: Path, marker_height_cm: float) -> N
 
 
 def sync_lens_texture(lens_assets_dir: Path, source_png: Path) -> list[Path]:
-    """Copy the generated marker texture to the active Lens asset location.
-
-    If an older root-level texture still exists, keep it in sync too.
-    """
-    targets = [lens_assets_dir / LENS_MARKER_TEXTURE_RELATIVE_PATH]
-    legacy_root_texture = lens_assets_dir / LEGACY_MARKER_PNG
-    if legacy_root_texture.is_file():
-        targets.append(legacy_root_texture)
-
+    """Copy the generated marker texture to the active Lens asset location."""
     import shutil
 
-    copied: list[Path] = []
-    for target in targets:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_png, target)
-        copied.append(target)
-    return copied
+    target = lens_assets_dir / LENS_MARKER_TEXTURE_RELATIVE_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_png, target)
+    return [target]
 
 
 def generate_marker_raster(
@@ -285,7 +277,7 @@ def main() -> None:
     parser.add_argument(
         "--sync-lens",
         action="store_true",
-        help="Copy legacy aruco_marker.png AprilTag asset to lens-studio/Assets/",
+        help="Copy apriltag_marker.png to lens-studio/Assets/TrackingMarkers/",
     )
     parser.add_argument(
         "--lens-assets-dir",
@@ -320,9 +312,8 @@ def main() -> None:
         marker = cv2.resize(marker, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
 
     assets_dir = args.assets_dir
-    png_path = assets_dir / ("aruco_marker_print.png" if args.print_mode else "aruco_marker.png")
-    pdf_name = "aruco_marker_print.pdf" if args.print_mode else LEGACY_PHONE_PDF
-    pdf_path = assets_dir / pdf_name
+    png_path = assets_dir / (MARKER_PRINT_PNG if args.print_mode else MARKER_PNG)
+    pdf_path = assets_dir / (MARKER_PRINT_PDF if args.print_mode else MARKER_PHONE_PDF)
 
     if not cv2.imwrite(str(png_path), marker):
         raise SystemExit(f"Failed to write {png_path}")

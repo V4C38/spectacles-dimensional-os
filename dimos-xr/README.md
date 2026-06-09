@@ -12,6 +12,7 @@ At a glance:
 - `dimos_xr/protocol.py`: the XR WebSocket contract implementation
 - `blueprints/dimos_xr.py`: monorepo entrypoint used by `start.sh`
 - `PROTOCOL.md`: cross-client protocol documentation
+- `ERROR_CODES.md`: bridge client error codes shown in Lens setup (`Bridge Error (CODE)`)
 - `tests/`: focused bridge unit and integration tests
 
 <details>

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import math
 import threading
 import time
@@ -11,8 +13,8 @@ from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
-from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
@@ -22,14 +24,17 @@ from dimos_lcm.std_msgs import Bool, String
 from websockets.asyncio.server import ServerConnection
 
 from dimos_xr.adapters.base import XRRobotAdapterSpec
+from dimos_xr.error_codes import NAV_GOAL_STALLED
 from dimos_xr.alignment import AprilTagAligner
 from dimos_xr.bridge_status import BridgeStatusTracker
 from dimos_xr.filters import (
     LidarFilter,
     LidarFilterConfig,
     RateLimiter,
+    lidar_height_band_m,
     subsample_points_near_robot,
 )
+from dimos_xr.preview_planner import PreviewPlanner
 from dimos_xr.protocol import (
     AlignCommitMessage,
     AlignManualPoseMessage,
@@ -49,16 +54,57 @@ from dimos_xr.protocol import (
     encode_path_preview,
     encode_pose,
 )
-from dimos_xr.preview_planner import PreviewPlanner
-from dimos_xr.transforms import Calibration, OdomSample, normalize_ground_pose, pose_to_matrix
+from dimos_xr.transforms import (
+    Calibration,
+    OdomSample,
+    _normalize_quaternion,
+    matrix_to_pose,
+    normalize_ground_pose,
+    pose_to_matrix,
+)
 from dimos_xr.websocket_server import XRWebSocketServer
 
 logger = setup_logger()
 
+_DEBUG_LOG_PATH = (
+    "/Users/johannestscharn/Repositories/spectacles-dimensional-os/.cursor/debug-541187.log"
+)
+
+
+def _agent_debug_log(
+    *,
+    location: str,
+    message: str,
+    data: dict[str, object],
+    hypothesis_id: str,
+    run_id: str = "pre-fix",
+) -> None:
+    # region agent log
+    try:
+        payload = {
+            "sessionId": "541187",
+            "runId": run_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+            "hypothesisId": hypothesis_id,
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload) + "\n")
+    except OSError:
+        pass
+    # endregion
+
+
 SPECTACLES_MARKER_TIMEOUT_S = 0.5
 ALIGN_STATUS_BROADCAST_INTERVAL_S = 0.3
 LIDAR_PAYLOAD_LOG_INTERVAL_S = 5.0
+DROPPED_POSE_LOG_INTERVAL_S = 5.0
 STREAM_STATUS_POLL_INTERVAL_S = 0.5
+NAV_GOAL_PATH_TIMEOUT_S = 8.0
+NAV_RECOVERY_MAX_ATTEMPTS = 2
+NAV_WATCHDOG_POLL_INTERVAL_S = 0.5
 ALIGNMENT_CLUSTER_WINDOW = 12
 ALIGNMENT_CLUSTER_MIN_SAMPLES = 6
 ALIGNMENT_CLUSTER_TARGET_SAMPLES = 8
@@ -81,6 +127,13 @@ def _candidate_translation_distance_m(lhs: np.ndarray, rhs: np.ndarray) -> float
 
 def _candidate_yaw_distance_rad(lhs: np.ndarray, rhs: np.ndarray) -> float:
     return abs(_wrap_angle_rad(_candidate_yaw_rad(lhs) - _candidate_yaw_rad(rhs)))
+
+
+def _orientation_yaw_deg(
+    orientation: tuple[float, float, float, float],
+) -> float:
+    yaw_rad = _candidate_yaw_rad(pose_to_matrix((0.0, 0.0, 0.0), orientation))
+    return round(math.degrees(yaw_rad), 2)
 
 
 @dataclass(frozen=True)
@@ -172,6 +225,12 @@ class XRBridge(Module):
 
     config: XRBridgeConfig
     _adapter: XRRobotAdapterSpec
+    # Adapter-dependent objects are constructed in build(), after the coordinator
+    # injects self._adapter via set_module_ref (not available during __init__).
+    _aligner: AprilTagAligner
+    _robot_id: str
+    _status_tracker: BridgeStatusTracker
+    _ws_server: XRWebSocketServer
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -187,21 +246,6 @@ class XRBridge(Module):
         self._pose_limiter = RateLimiter(self.config.pose_max_hz)
         self._calibration = Calibration()
         self._preview_planner = PreviewPlanner(global_config)
-        camera_alignment = self._adapter.camera_alignment_config()
-        self._aligner = AprilTagAligner(
-            marker_length_m=camera_alignment.marker_length_m,
-            timestamp_tolerance_s=camera_alignment.timestamp_tolerance_s,
-            camera_position=camera_alignment.position,
-            camera_orientation=camera_alignment.orientation,
-        )
-        if camera_alignment.camera_info is not None:
-            self._aligner.set_camera_info(camera_alignment.camera_info)
-        self._robot_id = self._adapter.robot_id()
-        self._status_tracker = BridgeStatusTracker(
-            robot_id=self._robot_id,
-            robot_connected=False,
-        )
-        self._status_tracker.set_on_change(self._broadcast_status)
         self._odom_lock = threading.Lock()
         self._latest_odom: OdomSample | None = None
         self._last_spectacles_marker_mono: float | None = None
@@ -216,19 +260,65 @@ class XRBridge(Module):
         self._align_broadcast_stop = threading.Event()
         self._align_broadcast_thread: threading.Thread | None = None
         self._logged_align_video = False
+        self._color_frame_count = 0
+        self._last_color_frame_mono: float | None = None
+        self._last_debug_robot_detected: bool | None = None
+        self._align_start_mono: float | None = None
         self._last_lidar_payload_log_mono = 0.0
+        self._logged_lidar_stream_active = False
         self._last_lidar_mono: float | None = None
         self._last_odom_mono: float | None = None
         self._nav_state = "idle"
         self._goal_reached = False
         self._goal_failed = False
         self._nav_goal_pending = False
+        self._nav_path_received = False
+        self._nav_goal_dispatch_mono: float | None = None
+        self._nav_recovery_attempts = 0
+        self._nav_degraded = False
+        self._nav_recovering = False
+        self._nav_error_code: int | None = None
+        self._nav_watchdog_stop = threading.Event()
+        self._nav_watchdog_thread: threading.Thread | None = None
+        self._nav_watchdog_lock = threading.Lock()
+        self._last_executing_path_payload: str | None = None
         self._stream_status_stop = threading.Event()
         self._stream_status_thread: threading.Thread | None = None
         self._preview_worker_stop = threading.Event()
         self._preview_request_condition = threading.Condition()
         self._preview_request: PreviewPathRequest | None = None
         self._preview_worker_thread: threading.Thread | None = None
+        self._dropped_pose_count = 0
+        self._last_dropped_pose_log_mono = 0.0
+
+    @rpc
+    def build(self) -> None:
+        # Runs after the coordinator wires self._adapter (set_module_ref) and
+        # before start(), so this is the earliest point adapter-dependent objects
+        # can be constructed.
+        super().build()
+        camera_alignment = self._adapter.camera_alignment_config()
+        self._aligner = AprilTagAligner(
+            marker_length_m=camera_alignment.marker_length_m,
+            timestamp_tolerance_s=camera_alignment.timestamp_tolerance_s,
+            camera_position=camera_alignment.position,
+            camera_orientation=camera_alignment.orientation,
+        )
+        if camera_alignment.camera_info is not None:
+            self._aligner.set_camera_info(camera_alignment.camera_info)
+        self._robot_id = self._adapter.robot_id()
+        handshake = self._adapter.handshake_payload()
+        min_height_m, max_height_m = lidar_height_band_m(
+            body_bounds_m=handshake.body_bounds_m,
+            base_height_m=handshake.base_height_m,
+        )
+        self._lidar_filter.config.min_height_m = min_height_m
+        self._lidar_filter.config.max_height_m = max_height_m
+        self._status_tracker = BridgeStatusTracker(
+            robot_id=self._robot_id,
+            robot_connected=False,
+        )
+        self._status_tracker.set_on_change(self._broadcast_status)
         self._ws_server = XRWebSocketServer(
             port=self.config.port,
             hello_supplier=self._adapter.handshake_payload,
@@ -251,6 +341,7 @@ class XRBridge(Module):
     def start(self) -> None:
         super().start()
         self._start_preview_worker()
+        self._start_nav_watchdog()
         self._ws_server.start()
         self._start_stream_status_monitor()
         host = global_config.listen_host
@@ -259,24 +350,39 @@ class XRBridge(Module):
 
     @rpc
     def stop(self) -> None:
-        self._aligner.active = False
+        # build() may not have run if another module aborted deployment, so the
+        # adapter-dependent objects can be absent during teardown.
+        self._stop_nav_watchdog()
+        aligner = getattr(self, "_aligner", None)
+        if aligner is not None:
+            aligner.active = False
         self._stop_align_status_broadcast()
         self._stop_stream_status_monitor()
         self._stop_preview_worker()
-        self._ws_server.stop()
+        ws_server = getattr(self, "_ws_server", None)
+        if ws_server is not None:
+            ws_server.stop()
         logger.info("XRBridge stopping")
         super().stop()
 
     def _sample_odom(self, msg: PoseStamped) -> OdomSample:
+        orientation = _normalize_quaternion(
+            msg.orientation.x,
+            msg.orientation.y,
+            msg.orientation.z,
+            msg.orientation.w,
+        )
         return OdomSample(
             position=(msg.x, msg.y, msg.z),
-            orientation=(
-                msg.orientation.x,
-                msg.orientation.y,
-                msg.orientation.z,
-                msg.orientation.w,
-            ),
+            orientation=orientation,
         )
+
+    @staticmethod
+    def _pose_components_finite(
+        position: tuple[float, float, float],
+        orientation: tuple[float, float, float, float],
+    ) -> bool:
+        return all(math.isfinite(value) for value in (*position, *orientation))
 
     def _update_latest_odom(self, msg: PoseStamped) -> None:
         with self._odom_lock:
@@ -289,8 +395,25 @@ class XRBridge(Module):
     def _status_payload(self) -> str:
         return encode_bridge_status(self._status_tracker.snapshot())
 
-    def _send_status_to(self, websocket: ServerConnection) -> None:
+    def _nav_status_payload(self) -> str:
+        return encode_nav_status(
+            state=self._nav_state,
+            goal_reached=self._goal_reached,
+            goal_failed=self._goal_failed,
+            recovering=self._nav_recovering,
+            error_code=self._nav_error_code,
+            robot_id=self._robot_id,
+        )
+
+    def _send_runtime_sync_to(self, websocket: ServerConnection) -> None:
+        """Resend authoritative bridge + nav lifecycle state after connect or get_status."""
         self._ws_server.schedule_send_to(websocket, self._status_payload())
+        self._ws_server.schedule_send_to(websocket, self._nav_status_payload())
+        if self._last_executing_path_payload is not None:
+            self._ws_server.schedule_send_to(websocket, self._last_executing_path_payload)
+
+    def _send_status_to(self, websocket: ServerConnection) -> None:
+        self._send_runtime_sync_to(websocket)
 
     def _broadcast_status(self) -> None:
         self._ws_server.schedule_send(self._status_payload())
@@ -443,6 +566,13 @@ class XRBridge(Module):
         self._recent_marker_candidates = []
 
     def _on_client_disconnect(self, _websocket: ServerConnection) -> None:
+        self._nav_degraded = False
+        self._nav_error_code = None
+        self._nav_recovering = False
+        self._goal_failed = False
+        self._goal_reached = False
+        self._nav_state = "idle"
+        self._reset_nav_goal_tracking(reset_recovery=True)
         if (
             not self._aligner.active
             and self._last_align_marker is None
@@ -466,13 +596,12 @@ class XRBridge(Module):
         if not self._spectacles_marker_detected() or not self._aligner.robot_marker_detected:
             return
         msg = self._last_align_marker
-        marker_mono = self._last_align_marker_mono
-        if msg is None or marker_mono is None:
+        if msg is None or self._last_align_marker_mono is None:
             return
         odom = self._get_latest_odom()
         if odom is None:
             return
-        self._process_alignment_candidate(msg, odom, received_ts=marker_mono)
+        self._process_alignment_candidate(msg, odom, received_ts=time.monotonic())
 
     def _process_alignment_candidate(
         self,
@@ -568,6 +697,21 @@ class XRBridge(Module):
         norm_position, norm_orientation = normalize_ground_pose(msg.position, msg.orientation)
         T_world_base = pose_to_matrix(norm_position, norm_orientation)
         T_odom_base = pose_to_matrix(odom.position, odom.orientation)
+        # #region agent log
+        _agent_debug_log(
+            location="bridge_module.py:_process_manual_alignment_candidate",
+            message="manual alignment candidate",
+            data={
+                "manual_pos_m": [round(v, 4) for v in msg.position],
+                "norm_pos_m": [round(v, 4) for v in norm_position],
+                "odom_pos_m": [round(v, 4) for v in odom.position],
+                "manual_y_m": round(msg.position[1], 4),
+                "norm_y_m": round(norm_position[1], 4),
+                "odom_z_m": round(odom.position[2], 4),
+            },
+            hypothesis_id="C",
+        )
+        # #endregion
         candidate = AlignmentCandidate(
             T_world_odom=np.array(
                 T_world_base @ np.linalg.inv(T_odom_base),
@@ -601,6 +745,20 @@ class XRBridge(Module):
         self._aligner.active = False
         self._stop_align_status_broadcast()
         self._calibration.register_from_alignment(result.T_world_odom)
+        # #region agent log
+        committed_pos, _committed_quat = matrix_to_pose(result.T_world_odom)
+        _agent_debug_log(
+            location="bridge_module.py:_finish_alignment",
+            message="alignment committed transform",
+            data={
+                "method": result.method,
+                "approximate": result.approximate,
+                "T_translation_m": [round(v, 4) for v in committed_pos],
+                "T_world_y_m": round(committed_pos[1], 4),
+            },
+            hypothesis_id="B",
+        )
+        # #endregion
         method: Literal["manual", "marker"] = (
             "manual" if result.method == "manual" else "marker"
         )
@@ -661,6 +819,33 @@ class XRBridge(Module):
             method = "manual"
         if not message and state == "detecting":
             message = self._align_status_message()
+        if state == "detecting" and robot_marker_detected != self._last_debug_robot_detected:
+            self._last_debug_robot_detected = robot_marker_detected
+            stats = self._aligner.debug_stats()
+            now = time.monotonic()
+            frame_gap_s = (
+                None
+                if self._last_color_frame_mono is None
+                else round(now - self._last_color_frame_mono, 3)
+            )
+            # region agent log
+            _agent_debug_log(
+                location="bridge_module.py:_broadcast_align_status",
+                message="robot_marker_detected changed",
+                data={
+                    "robot_marker_detected": robot_marker_detected,
+                    "spectacles_marker_detected": spectacles_marker_detected,
+                    "status_message": message,
+                    "aligner_frames": stats.frames,
+                    "aligner_detected": stats.detected,
+                    "aligner_no_marker": stats.no_marker,
+                    "color_frame_count": self._color_frame_count,
+                    "seconds_since_last_color_frame": frame_gap_s,
+                    "aligner_active": self._aligner.active,
+                },
+                hypothesis_id="H2",
+            )
+            # endregion
         self._ws_server.schedule_send(
             encode_align_status(
                 ts=ts,
@@ -693,11 +878,124 @@ class XRBridge(Module):
                 state=self._nav_state,
                 goal_reached=self._goal_reached,
                 goal_failed=self._goal_failed,
+                recovering=self._nav_recovering,
+                error_code=self._nav_error_code,
                 robot_id=self._robot_id,
             )
         )
 
+    def _start_nav_watchdog(self) -> None:
+        if self._nav_watchdog_thread is not None:
+            return
+        self._nav_watchdog_stop.clear()
+        self._nav_watchdog_thread = threading.Thread(
+            target=self._nav_watchdog_loop,
+            name="XRBridgeNavWatchdog",
+            daemon=True,
+        )
+        self._nav_watchdog_thread.start()
+
+    def _stop_nav_watchdog(self) -> None:
+        self._nav_watchdog_stop.set()
+        thread = self._nav_watchdog_thread
+        if thread is not None:
+            thread.join(timeout=1.0)
+        self._nav_watchdog_thread = None
+
+    def _nav_watchdog_loop(self) -> None:
+        while not self._nav_watchdog_stop.wait(timeout=NAV_WATCHDOG_POLL_INTERVAL_S):
+            with self._nav_watchdog_lock:
+                if (
+                    self._nav_degraded
+                    or not self._nav_goal_pending
+                    or self._nav_path_received
+                    or self._nav_goal_dispatch_mono is None
+                ):
+                    continue
+                elapsed = time.monotonic() - self._nav_goal_dispatch_mono
+                if elapsed < NAV_GOAL_PATH_TIMEOUT_S:
+                    continue
+            self._handle_nav_goal_stall()
+
+    def _reset_nav_goal_tracking(self, *, reset_recovery: bool = False) -> None:
+        with self._nav_watchdog_lock:
+            self._nav_goal_pending = False
+            self._nav_path_received = False
+            self._nav_goal_dispatch_mono = None
+            self._nav_recovering = False
+            if reset_recovery:
+                self._nav_recovery_attempts = 0
+
+    def _cancel_nav_goal_async(self) -> None:
+        threading.Thread(
+            target=self._cancel_or_stop,
+            kwargs={"emergency": False},
+            daemon=True,
+        ).start()
+
+    def _handle_nav_goal_stall(self) -> None:
+        with self._nav_watchdog_lock:
+            if (
+                self._nav_degraded
+                or not self._nav_goal_pending
+                or self._nav_path_received
+            ):
+                return
+            self._nav_recovery_attempts += 1
+            attempts = self._nav_recovery_attempts
+
+        if attempts <= NAV_RECOVERY_MAX_ATTEMPTS:
+            logger.warning(
+                "XR navigation goal stalled; attempting recovery",
+                attempt=attempts,
+                max_attempts=NAV_RECOVERY_MAX_ATTEMPTS,
+            )
+            self._recover_stuck_nav_goal()
+            return
+
+        logger.error(
+            "XR navigation goal stalled; recovery exhausted",
+            attempts=attempts,
+        )
+        self._terminal_nav_failure()
+
+    def _recover_stuck_nav_goal(self) -> None:
+        self._goal_reached = False
+        self._goal_failed = False
+        self._nav_error_code = None
+        self._nav_state = "idle"
+        self._reset_nav_goal_tracking(reset_recovery=False)
+        self._nav_recovering = True
+        self._broadcast_empty_path()
+        self._broadcast_nav_status()
+        self._cancel_nav_goal_async()
+
+    def _terminal_nav_failure(self) -> None:
+        self._nav_degraded = True
+        self._goal_reached = False
+        self._goal_failed = True
+        self._nav_error_code = NAV_GOAL_STALLED.code
+        self._nav_state = "idle"
+        self._nav_recovering = False
+        self._reset_nav_goal_tracking(reset_recovery=False)
+        self._broadcast_empty_path()
+        self._broadcast_nav_status()
+        self._cancel_nav_goal_async()
+
+    def _promote_nav_to_following_path(self, *, ts: float | None = None) -> None:
+        with self._nav_watchdog_lock:
+            if not self._nav_goal_pending:
+                return
+            self._nav_path_received = True
+            self._nav_goal_dispatch_mono = None
+            self._nav_recovering = False
+        self._nav_state = "following_path"
+        self._goal_failed = False
+        self._nav_error_code = None
+        self._broadcast_nav_status(ts=ts)
+
     def _broadcast_empty_path(self, *, ts: float | None = None) -> None:
+        self._last_executing_path_payload = None
         self._ws_server.schedule_send(
             encode_path(
                 ts=ts if ts is not None else time.time(),
@@ -729,8 +1027,20 @@ class XRBridge(Module):
         self._aligner.active = True
         self._clear_align_session()
         self._logged_align_video = False
+        self._color_frame_count = 0
+        self._last_color_frame_mono = None
+        self._last_debug_robot_detected = None
+        self._align_start_mono = time.monotonic()
         self._alignment_mode = "marker"
         logger.info("XR alignment started")
+        # region agent log
+        _agent_debug_log(
+            location="bridge_module.py:_on_align_start",
+            message="XR alignment session started",
+            data={"aligner_active": True},
+            hypothesis_id="H4",
+        )
+        # endregion
         self._broadcast_align_status(
             state="detecting",
             robot_marker_detected=False,
@@ -830,9 +1140,25 @@ class XRBridge(Module):
         if not self._calibration.is_registered:
             logger.warning("nav_goal ignored before calibration")
             return
+        if self._nav_degraded:
+            logger.warning("nav_goal rejected: navigation is unavailable for this session")
+            self._goal_failed = True
+            self._goal_reached = False
+            self._nav_error_code = NAV_GOAL_STALLED.code
+            self._nav_state = "idle"
+            self._nav_recovering = False
+            self._broadcast_empty_path(ts=msg.ts)
+            self._broadcast_nav_status(ts=msg.ts)
+            return
         self._goal_reached = False
         self._goal_failed = False
-        self._nav_goal_pending = True
+        self._nav_error_code = None
+        self._nav_recovering = False
+        self._nav_path_received = False
+        self._nav_state = "idle"
+        with self._nav_watchdog_lock:
+            self._nav_goal_pending = True
+            self._nav_goal_dispatch_mono = time.monotonic()
         if msg.orientation is not None:
             odom_position, odom_orientation = self._calibration.inverse_transform_pose(
                 msg.position,
@@ -854,10 +1180,17 @@ class XRBridge(Module):
                 "XR navigation goal published",
                 world_goal=[round(v, 3) for v in msg.position],
                 odom_goal=[round(v, 3) for v in odom_position],
+                world_goal_yaw_deg=(
+                    _orientation_yaw_deg(msg.orientation)
+                    if msg.orientation is not None
+                    else None
+                ),
+                odom_goal_yaw_deg=_orientation_yaw_deg(odom_orientation),
             )
+            self._broadcast_nav_status(ts=msg.ts)
         except Exception as exc:
             self._goal_failed = True
-            self._nav_goal_pending = False
+            self._reset_nav_goal_tracking(reset_recovery=False)
             self._nav_state = "idle"
             logger.error("XR navigation goal publish failed", error=str(exc))
             self._broadcast_empty_path(ts=msg.ts)
@@ -935,21 +1268,21 @@ class XRBridge(Module):
     def _on_cancel_goal(self, msg: CancelGoalMessage) -> None:
         self._goal_reached = False
         self._goal_failed = False
-        self._nav_goal_pending = False
+        self._nav_error_code = None
+        self._nav_recovering = False
         self._nav_state = "idle"
+        self._reset_nav_goal_tracking(reset_recovery=True)
         self._broadcast_empty_path(ts=msg.ts)
         self._broadcast_nav_status(ts=msg.ts)
-        threading.Thread(
-            target=self._cancel_or_stop,
-            kwargs={"emergency": False},
-            daemon=True,
-        ).start()
+        self._cancel_nav_goal_async()
 
     def _on_emergency_stop(self, msg: EmergencyStopMessage) -> None:
         self._goal_reached = False
         self._goal_failed = False
-        self._nav_goal_pending = False
+        self._nav_error_code = None
+        self._nav_recovering = False
         self._nav_state = "idle"
+        self._reset_nav_goal_tracking(reset_recovery=True)
         self._broadcast_empty_path(ts=msg.ts)
         self._broadcast_nav_status(ts=msg.ts)
         threading.Thread(
@@ -963,7 +1296,7 @@ class XRBridge(Module):
         if now - self._last_lidar_payload_log_mono < LIDAR_PAYLOAD_LOG_INTERVAL_S:
             return
         self._last_lidar_payload_log_mono = now
-        logger.info(
+        logger.debug(
             "LiDAR payload",
             points=point_count,
             bytes=payload_bytes,
@@ -976,10 +1309,48 @@ class XRBridge(Module):
     async def handle_xr_color_image(self, msg: Image) -> None:
         if not self._aligner.active:
             return
+        now = time.monotonic()
+        frame_gap_s = (
+            None if self._last_color_frame_mono is None else now - self._last_color_frame_mono
+        )
+        self._last_color_frame_mono = now
+        self._color_frame_count += 1
         if not self._logged_align_video:
             self._logged_align_video = True
             logger.info("AprilTag: robot video frames reaching XR bridge")
-        self._aligner.process_frame(msg)
+            # region agent log
+            _agent_debug_log(
+                location="bridge_module.py:handle_xr_color_image",
+                message="first color frame during alignment",
+                data={
+                    "seconds_since_align_start": (
+                        None
+                        if self._align_start_mono is None
+                        else round(now - self._align_start_mono, 3)
+                    ),
+                    "width": int(getattr(msg, "width", 0) or 0),
+                    "height": int(getattr(msg, "height", 0) or 0),
+                },
+                hypothesis_id="H1",
+            )
+            # endregion
+        elif frame_gap_s is not None and (
+            frame_gap_s > 1.0 or self._color_frame_count % 20 == 0
+        ):
+            # region agent log
+            _agent_debug_log(
+                location="bridge_module.py:handle_xr_color_image",
+                message="color frame cadence sample",
+                data={
+                    "frame_count": self._color_frame_count,
+                    "inter_arrival_s": round(frame_gap_s, 3),
+                    "width": int(getattr(msg, "width", 0) or 0),
+                    "height": int(getattr(msg, "height", 0) or 0),
+                },
+                hypothesis_id="H1",
+            )
+            # endregion
+        await asyncio.to_thread(self._aligner.process_frame, msg)
 
     async def handle_xr_lidar(self, msg: PointCloud2) -> None:
         self._last_lidar_mono = time.monotonic()
@@ -997,7 +1368,30 @@ class XRBridge(Module):
                     self._latest_robot_world_position(),
                     target_points=self.config.target_points,
                 )
+                # #region agent log
+                if len(world_pts) > 0 and not getattr(self, "_logged_lidar_y_debug", False):
+                    robot_world = self._latest_robot_world_position()
+                    self._logged_lidar_y_debug = True
+                    _agent_debug_log(
+                        location="bridge_module.py:handle_xr_lidar",
+                        message="world lidar vertical stats",
+                        data={
+                            "registered": self._calibration.is_registered,
+                            "world_min_y_m": round(float(np.min(world_pts[:, 1])), 4),
+                            "world_max_y_m": round(float(np.max(world_pts[:, 1])), 4),
+                            "robot_world_y_m": round(robot_world[1], 4)
+                            if robot_world is not None
+                            else None,
+                            "odom_min_z_m": round(float(np.min(filtered[:, 2])), 4),
+                            "odom_max_z_m": round(float(np.max(filtered[:, 2])), 4),
+                        },
+                        hypothesis_id="B",
+                    )
+                # #endregion
         payload = encode_lidar(ts=msg.ts, points=world_pts, robot_id=self._robot_id)
+        if not self._logged_lidar_stream_active:
+            self._logged_lidar_stream_active = True
+            logger.info("LiDAR stream active", hz=self.config.lidar_max_hz)
         self._maybe_log_lidar_payload(len(world_pts), len(payload))
         self._ws_server.schedule_send(payload)
 
@@ -1007,15 +1401,18 @@ class XRBridge(Module):
         self._refresh_streams_active()
         if not self._pose_limiter.allow():
             return
-        pos, quat = self._calibration.transform_pose(
-            (msg.x, msg.y, msg.z),
-            (
-                msg.orientation.x,
-                msg.orientation.y,
-                msg.orientation.z,
-                msg.orientation.w,
-            ),
-        )
+        sample = self._sample_odom(msg)
+        pos, quat = self._calibration.transform_pose(sample.position, sample.orientation)
+        if not self._pose_components_finite(pos, quat):
+            self._dropped_pose_count += 1
+            now = time.monotonic()
+            if now - self._last_dropped_pose_log_mono >= DROPPED_POSE_LOG_INTERVAL_S:
+                self._last_dropped_pose_log_mono = now
+                logger.warning(
+                    "XR pose dropped (non-finite after transform)",
+                    drops=self._dropped_pose_count,
+                )
+            return
         self._ws_server.schedule_send(
             encode_pose(ts=msg.ts, position=pos, orientation=quat, robot_id=self._robot_id)
         )
@@ -1033,34 +1430,47 @@ class XRBridge(Module):
                 ),
             )
             waypoints.append(world_pos)
+        if waypoints and self._nav_goal_pending and not self._nav_path_received:
+            self._promote_nav_to_following_path(ts=msg.ts)
+        path_payload = encode_path(ts=msg.ts, waypoints=waypoints, robot_id=self._robot_id)
         if waypoints:
-            self._goal_reached = False
-            self._goal_failed = False
-            self._nav_goal_pending = True
-            self._nav_state = "following_path"
-        elif self._goal_failed or not self._nav_goal_pending:
-            self._nav_state = "idle"
-        self._ws_server.schedule_send(
-            encode_path(ts=msg.ts, waypoints=waypoints, robot_id=self._robot_id)
-        )
-        self._broadcast_nav_status(ts=msg.ts)
+            self._last_executing_path_payload = path_payload
+        elif self._nav_state == "idle":
+            self._last_executing_path_payload = None
+        self._ws_server.schedule_send(path_payload)
 
     async def handle_xr_global_costmap(self, msg: OccupancyGrid) -> None:
         self._preview_planner.update_costmap(msg)
 
     async def handle_xr_goal_reached(self, msg: Bool) -> None:
         self._goal_reached = bool(msg.data)
-        self._goal_failed = self._nav_goal_pending and not self._goal_reached
-        self._nav_goal_pending = False
+        was_pending = self._nav_goal_pending
+        self._goal_failed = was_pending and not self._goal_reached
+        self._nav_recovering = False
+        self._nav_error_code = None
+        self._reset_nav_goal_tracking(reset_recovery=self._goal_reached)
         if self._goal_reached or self._goal_failed:
             self._nav_state = "idle"
             self._broadcast_empty_path()
         self._broadcast_nav_status()
 
     async def handle_xr_navigation_state(self, msg: String) -> None:
-        self._nav_state = self._normalize_nav_state(msg.data)
+        normalized = self._normalize_nav_state(msg.data)
+        if (
+            normalized == "idle"
+            and self._nav_goal_pending
+            and not self._nav_path_received
+            and not self._nav_degraded
+        ):
+            self._handle_nav_goal_stall()
+            return
+        self._nav_state = normalized
         if self._nav_state == "following_path":
             self._goal_reached = False
             self._goal_failed = False
-            self._nav_goal_pending = True
+            with self._nav_watchdog_lock:
+                self._nav_goal_pending = True
+                if not self._nav_path_received:
+                    self._nav_path_received = True
+                    self._nav_goal_dispatch_mono = None
         self._broadcast_nav_status()

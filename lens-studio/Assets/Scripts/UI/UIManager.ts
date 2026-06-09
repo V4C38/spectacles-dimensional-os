@@ -1,10 +1,8 @@
 import { DimosManager } from "../DimosManager";
-import { DimosAppState, OperatingMode } from "../AppState";
-import { BridgeStatusMessage } from "../Network/Protocol";
+import { DimosAppState, LidarDisplayMode, OperatingMode } from "../AppState";
 import { SetupWizard } from "../Setup/SetupWizard";
 import { getBridgeStatusPresentation } from "./Shared/BridgeStatusPresentation";
 import { scaleIn, scaleOut } from "./Shared/UIAnimations";
-import { COLOR_ERROR, COLOR_WARN } from "./Shared/UICore";
 import { MainMenuView } from "./MainMenuView";
 
 // ================================================================
@@ -25,10 +23,11 @@ export class UIManager extends BaseScriptComponent {
 
   private _uiState = -1;
   private _mainMenuView: MainMenuView | null = null;
-  private _showLiDAR = false;
+  private _lidarMode: LidarDisplayMode = "obstacles";
   private _operatingMode: OperatingMode = "manual";
   private _navigationPlacementEnabled = false;
-  private _subMenuExpanded = false;
+  private _expandedSettingsMode: OperatingMode | null = null;
+  private _debugModeEnabled = false;
   private _unsubscribeAppState: (() => void) | null = null;
 
   onAwake() {
@@ -62,14 +61,6 @@ export class UIManager extends BaseScriptComponent {
     return null;
   }
 
-  private _setSubMenuExpanded(expanded: boolean): void {
-    if (this._subMenuExpanded === expanded) {
-      return;
-    }
-    this._subMenuExpanded = expanded;
-    this._mainMenuView?.setSubMenuExpanded(expanded);
-  }
-
   private _bindMainUI(): void {
     const panel = this._panelRoot();
     if (!panel) {
@@ -77,42 +68,50 @@ export class UIManager extends BaseScriptComponent {
       return;
     }
 
+    const appState = this.dimosManager?.appState;
+
     try {
       this._mainMenuView = new MainMenuView(panel, {
         onRestart: () => {
           this.setupWizard?.startSetupWizard();
         },
-        onShowLiDARChanged: (enabled) => this.dimosManager?.setShowLiDAR(enabled),
-        onOperatingModeSelected: (mode) => this.dimosManager?.setOperatingMode(mode),
+        onLidarModeCycle: () => this.dimosManager?.cycleLidarMode(),
+        onModeButtonPressed: (mode) =>
+          this.dimosManager?.onMainMenuModeButtonPressed(mode),
         onNavigationPlacementChanged: (enabled) =>
           this.dimosManager?.setNavigationPlacementEnabled(enabled),
         onEmergencyStop: () => this.dimosManager?.requestEmergencyStop(),
-        onToggleSubMenu: () => this._setSubMenuExpanded(!this._subMenuExpanded),
-        getShowLiDARValue: () => this._showLiDAR,
+        onDebugModeChanged: (enabled) => this.dimosManager?.setDebugMode(enabled),
+        getLidarMode: () => this._lidarMode,
         getNavigationPlacementValue: () => this._navigationPlacementEnabled,
         getOperatingMode: () => this._operatingMode,
-        getSubMenuExpanded: () => this._subMenuExpanded,
+        getExpandedSettingsMode: () => this._expandedSettingsMode,
+        getDebugModeValue: () => this._debugModeEnabled,
       });
     } catch (error) {
       print(`UIManager: ${error}`);
       return;
     }
 
-    if (this.dimosManager) {
-      this.dimosManager.onBridgeStatusChanged.push((msg) =>
-        this._applyBridgeStatus(msg),
-      );
-      this.dimosManager.onBridgeConnectionChanged.push((connected) =>
-        this._applyConnectionState(connected),
-      );
-      if (this.dimosManager.lastBridgeStatus) {
-        this._applyBridgeStatus(this.dimosManager.lastBridgeStatus);
-      }
+    if (appState) {
+      this._expandedSettingsMode = appState.mainMenuExpandedSettingsMode;
+      this._operatingMode = appState.operatingMode;
+      this._lidarMode = appState.lidarMode;
+      this._navigationPlacementEnabled = appState.navigationPlacementEnabled;
+      this._debugModeEnabled = appState.debugMode;
     }
-    this._mainMenuView?.setShowLiDARToggle(this._showLiDAR);
+
+    if (this.dimosManager) {
+      this._setStatus(
+        getBridgeStatusPresentation(this.dimosManager.bridgeLinkState).text,
+        getBridgeStatusPresentation(this.dimosManager.bridgeLinkState).color,
+      );
+    }
+    this._mainMenuView?.setLidarModeDisplay(this._lidarMode);
+    this._mainMenuView?.setExpandedSettingsMode(this._expandedSettingsMode);
     this._mainMenuView?.setOperatingMode(this._operatingMode);
     this._mainMenuView?.setNavigationPlacementToggle(this._navigationPlacementEnabled);
-    this._mainMenuView?.setSubMenuExpanded(this._subMenuExpanded);
+    this._mainMenuView?.setDebugModeToggle(this._debugModeEnabled);
   }
 
   public setUIState(state: number): void {
@@ -138,37 +137,17 @@ export class UIManager extends BaseScriptComponent {
     return this._uiState;
   }
 
-  private _applyBridgeStatus(msg: BridgeStatusMessage): void {
-    const presentation = getBridgeStatusPresentation(msg);
-    this._setStatus(presentation.text, presentation.color);
-  }
-
   private _refreshBridgeStatus(): void {
     if (!this.dimosManager) {
-      this._setStatus("Bridge unavailable", COLOR_ERROR);
+      const presentation = getBridgeStatusPresentation("disconnected");
+      this._setStatus(presentation.text, presentation.color);
       return;
     }
-    if (this.dimosManager.lastBridgeStatus) {
-      this._applyBridgeStatus(this.dimosManager.lastBridgeStatus);
-    } else if (this.dimosManager.hasBridgeConnection()) {
-      this._setStatus("Waiting for robot status", COLOR_WARN);
-    } else if (this._operatingMode === "manual") {
-      this._setStatus("Bridge disconnected - local placement only", COLOR_WARN);
-    } else {
-      this._setStatus("Bridge disconnected", COLOR_ERROR);
-    }
+    const presentation = getBridgeStatusPresentation(this.dimosManager.bridgeLinkState);
+    this._setStatus(presentation.text, presentation.color);
     if (this.dimosManager.hasBridgeConnection()) {
       this.dimosManager.requestBridgeStatus();
     }
-  }
-
-  private _applyConnectionState(connected: boolean): void {
-    if (!connected) {
-      this._refreshBridgeStatus();
-      return;
-    }
-    this._setStatus("Waiting for robot status", COLOR_WARN);
-    this.dimosManager?.requestBridgeStatus();
   }
 
   private _setStatus(text: string, color: vec4): void {
@@ -179,16 +158,22 @@ export class UIManager extends BaseScriptComponent {
     const nextUiState = state.phase === "runtime" ? 1 : 0;
     const uiStateChanged = this._uiState !== nextUiState;
     const operatingModeChanged = this._operatingMode !== state.operatingMode;
-    this._showLiDAR = state.showLiDAR;
+
+    this._lidarMode = state.lidarMode;
     this._operatingMode = state.operatingMode;
     this._navigationPlacementEnabled = state.navigationPlacementEnabled;
-    this._mainMenuView?.setTitle(state.robotRuntime.displayName);
-    this._mainMenuView?.setShowLiDARToggle(this._showLiDAR);
-    this._mainMenuView?.setShowLiDARAvailability(
+    this._expandedSettingsMode = state.mainMenuExpandedSettingsMode;
+    this._debugModeEnabled = state.debugMode;
+
+    this._mainMenuView?.setLidarModeDisplay(this._lidarMode);
+    this._mainMenuView?.setLidarModeAvailability(
       state.robotRuntime.capabilities.lidar?.available ?? true,
+      this._lidarMode,
     );
+    this._mainMenuView?.setExpandedSettingsMode(this._expandedSettingsMode);
     this._mainMenuView?.setOperatingMode(this._operatingMode);
     this._mainMenuView?.setNavigationPlacementToggle(this._navigationPlacementEnabled);
+    this._mainMenuView?.setDebugModeToggle(this._debugModeEnabled);
     this._mainMenuView?.setNavigationPlacementAvailability(
       state.robotRuntime.capabilities.nav?.available ?? true,
     );
@@ -196,7 +181,8 @@ export class UIManager extends BaseScriptComponent {
       state.robotRuntime.capabilities.emergency_stop?.available ?? true,
       state.robotRuntime.capabilities.emergency_stop?.reason ?? null,
     );
-    this._mainMenuView?.setSubMenuExpanded(this._subMenuExpanded);
+    const bridgePresentation = getBridgeStatusPresentation(state.bridgeLinkState);
+    this._setStatus(bridgePresentation.text, bridgePresentation.color);
     this.setUIState(nextUiState);
     if ((uiStateChanged || operatingModeChanged) && nextUiState === 1) {
       this._refreshBridgeStatus();

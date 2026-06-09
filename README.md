@@ -16,6 +16,7 @@ At a glance:
 - [`lens-studio/`](lens-studio/) contains the Spectacles Lens Studio project, setup flow, HUD, navigation interaction, and world-anchored visuals.
 - [`dimos-xr/`](dimos-xr/) contains the DimOS XR bridge package, `XRBridge`, the adapter module, the marker page, and tests.
 - [`dimos-xr/PROTOCOL.md`](dimos-xr/PROTOCOL.md) is the cross-platform contract between the bridge and every XR client.
+- [`dimos-xr/ERROR_CODES.md`](dimos-xr/ERROR_CODES.md) documents setup `Bridge Error (CODE)` messages from the Lens wizard.
 
 ```mermaid
 flowchart LR
@@ -90,22 +91,27 @@ If the protocol changes, update these together in the same change:
 The Lens side is organized around three scene-entry scripts:
 
 - [`SetupWizard.ts`](lens-studio/Assets/Scripts/Setup/SetupWizard.ts) owns the connect-and-calibrate flow and hands off to runtime.
-- [`DimosManager.ts`](lens-studio/Assets/Scripts/DimosManager.ts) is the orchestration hub for bridge I/O, app state, robot marker state, LiDAR/path rendering, navigation placement, and manual-alignment fallback.
+- If calibrate shows **`Bridge Error (CODE)`**, see [`dimos-xr/ERROR_CODES.md`](dimos-xr/ERROR_CODES.md) for meaning and fixes.
+- [`DimosManager.ts`](lens-studio/Assets/Scripts/DimosManager.ts) is the orchestration hub for bridge I/O, shared app state, robot marker state, LiDAR/path rendering, navigation placement, and manual-alignment fallback.
 - [`UIManager.ts`](lens-studio/Assets/Scripts/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
 
-`BridgeClient` is the transport layer, `AlignmentController` handles marker alignment, `ManualAlignmentController` handles local placement fallback, `NavigationController` manages goal placement and navigation state, and the visuals live under [`Assets/Scripts/Visuals/`](lens-studio/Assets/Scripts/Visuals/).
+`BridgeClient` is the transport layer, `CalibrationSession` owns wizard-local calibration orchestration, `AlignmentController` handles marker alignment, `ManualAlignmentController` handles local placement fallback, `NavigationController` manages goal placement and navigation state, and the visuals live under [`Assets/Scripts/Visuals/`](lens-studio/Assets/Scripts/Visuals/).
 
 ```mermaid
 flowchart TB
   SetupWizard[SetupWizard] --> DimosManager[DimosManager]
+  SetupWizard --> CalibrationSession[CalibrationSession]
   SetupWizard --> AlignmentController[AlignmentController]
   UIManager[UIManager] --> DimosManager
   UIManager -->|"Restart setup"| SetupWizard
   DimosManager --> BridgeClient[BridgeClient]
+  DimosManager --> AppState[AppState]
   DimosManager --> ManualAlignment[ManualAlignmentController]
   DimosManager --> Navigation[NavigationController]
   DimosManager --> RobotMarker[RobotMarker]
   DimosManager --> PointCloud[PointCloudRenderer]
+  AppState --> UIManager
+  AppState --> SetupWizard
   AlignmentController --> BridgeClient
   Navigation --> BridgeClient
 ```
@@ -113,15 +119,15 @@ flowchart TB
 <details>
 <summary>Lens setup and runtime responsibilities</summary>
 
-`SetupWizard` creates the wizard view and its helper controllers, starts autoconnect, watches bridge status, and finishes by calling `DimosManager.enterRuntime()`. It does not talk to `BridgeClient` directly; connection checks flow through `WizardConnectionController` and `DimosManager`.
+`SetupWizard` creates the wizard view and its helper controllers, starts autoconnect, owns the high-level step flow, and finishes by calling `DimosManager.enterRuntime()`. It does not talk to `BridgeClient` directly; connection checks flow through `WizardConnectionController` and `DimosManager`, while calibrate-step orchestration is delegated to `CalibrationSession`.
 
-`DimosManager` starts in setup mode, disconnects the bridge when re-entering setup, and switches to runtime by enabling visuals, preserving manual alignment state when needed, and syncing navigation and robot interaction state. During runtime it fans bridge events into:
+`DimosManager` starts in setup mode, disconnects the bridge when re-entering setup, and switches to runtime by enabling visuals, preserving manual alignment state when needed, and syncing navigation and robot interaction state. It also owns the shared `AppState`, including bridge-link status used by setup and runtime UI. During runtime it fans bridge events into:
 - `PointCloudRenderer` for lidar visualization
 - `RobotMarker` for robot pose and local controls
 - `NavigationController` and `PathRenderer` for goal placement and path display
 - `UIManager` and `RobotMenuController` for status presentation
 
-`UIManager` subscribes to app state and updates the authored HUD. Restarting setup goes back through `SetupWizard`, while bridge status and operating mode changes still come from `DimosManager`.
+`UIManager` subscribes to app state and updates the authored HUD. Restarting setup goes back through `SetupWizard`, while bridge status, operating mode changes, and the coarse `disconnected` / `connectedNoRobot` / `connected` link state still come from `DimosManager`.
 
 </details>
 
@@ -175,7 +181,7 @@ Supported runtimes:
 - `unitree-g1` is a reduced-capability runtime under the same G1 family presentation.
 
 On the Lens side, runtime behavior is negotiated from the bridge handshake:
-- `AppState` projects robot/runtime metadata from the bridge.
+- `AppState` projects robot/runtime metadata from the bridge and carries the coarse bridge-link state used by the setup and runtime UI.
 - offline development stays permissive until a bridge connects and completes the handshake.
 - unavailable controls stay visible and switch into disabled explanatory UI states with labels explaining why.
 

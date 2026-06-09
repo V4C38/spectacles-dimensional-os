@@ -1,7 +1,5 @@
-import { BridgeStatusMessage } from "../Network/Protocol";
-import { OperatingMode } from "../AppState";
+import { BridgeLinkState, OperatingMode } from "../AppState";
 import { getBridgeStatusPresentation } from "./Shared/BridgeStatusPresentation";
-import { COLOR_ERROR, COLOR_WARN } from "./Shared/UICore";
 import { RobotMenuView } from "./RobotMenuView";
 
 // ================================================================
@@ -59,21 +57,13 @@ export class RobotMenuController {
 
   public setOperatingMode(mode: OperatingMode): void {
     this._view.setOperatingMode(mode);
-  }
-
-  public applyBridgeStatus(
-    msg: BridgeStatusMessage,
-  ): void {
-    const presentation = getBridgeStatusPresentation(msg);
-    this._view.setStatus(presentation.text, presentation.color);
-  }
-
-  public applyConnectionState(connected: boolean): void {
-    this._view.setRobotLabel("Unknown Hardware");
-    if (!connected) {
-      this._view.setStatus("Bridge disconnected", COLOR_ERROR);
-      return;
+    if (mode === "manual") {
+      this.hide();
     }
-    this._view.setStatus("Waiting for robot status", COLOR_WARN);
+  }
+
+  public applyBridgeLinkState(state: BridgeLinkState): void {
+    const presentation = getBridgeStatusPresentation(state);
+    this._view.setStatus(presentation.text, presentation.color);
   }
 }

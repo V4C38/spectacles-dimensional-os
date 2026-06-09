@@ -17,6 +17,7 @@ from dimos_xr.marker_contract import (
     COMPOSITE_MARKER_WIDTH_MM,
     DEFAULT_APRILTAG_DICT,
     DEFAULT_MARKER_ID,
+    MARKER_PNG,
     PHONE_WEB_MARKER_DISPLAY_HEIGHT_MM,
     PHONE_WEB_MARKER_DISPLAY_WIDTH_MM,
 )
@@ -29,7 +30,7 @@ DEFAULT_MARKER_PORT = 8766
 _PKG_ROOT = Path(__file__).resolve().parent.parent
 _MARKER_PAGE_DIR = _PKG_ROOT / "clients" / "marker"
 _MARKER_PAGE_TEMPLATE = _MARKER_PAGE_DIR / "index.html"
-_MARKER_PNG = _PKG_ROOT / "assets" / "aruco_marker.png"
+_MARKER_PNG = _PKG_ROOT / "assets" / MARKER_PNG
 
 
 def _lan_ip() -> str:
@@ -49,7 +50,7 @@ class _MarkerHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(_MARKER_PAGE_DIR), **kwargs)
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path in ("/aruco_marker.png", "/aruco_marker.png/"):
+        if self.path in (f"/{MARKER_PNG}", f"/{MARKER_PNG}/"):
             if not self._board_png.is_file():
                 self.send_error(404, "Marker image not found")
                 return

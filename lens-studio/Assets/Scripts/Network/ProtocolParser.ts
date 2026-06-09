@@ -15,6 +15,33 @@ import {
 /** Validates and parses inbound WebSocket JSON into typed InboundMessage objects. */
 // ================================================================
 
+export type ProtocolParseFailureKind = "json" | "schema";
+
+export class ProtocolParseError extends Error {
+  readonly kind: ProtocolParseFailureKind;
+  readonly messageType: string | null;
+
+  constructor(
+    kind: ProtocolParseFailureKind,
+    messageType: string | null,
+    detail: string,
+  ) {
+    super(detail);
+    this.name = "ProtocolParseError";
+    this.kind = kind;
+    this.messageType = messageType;
+  }
+}
+
+export function sniffInboundMessageType(text: string): string | null {
+  const match = text.match(/"type"\s*:\s*"([^"]+)"/);
+  return match ? match[1] : null;
+}
+
+export function isNonCriticalInboundMessageType(messageType: string | null): boolean {
+  return messageType === "lidar" || messageType === "pose";
+}
+
 function unflattenVec3(flat: number[]): [number, number, number][] {
   const out: [number, number, number][] = [];
   for (let i = 0; i + 2 < flat.length; i += 3) {
@@ -88,8 +115,36 @@ function parseFlatPointMessage(
   };
 }
 
+export function parseInboundJson(text: string): Record<string, unknown> {
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch (error) {
+    throw new ProtocolParseError(
+      "json",
+      sniffInboundMessageType(text),
+      `JSON parse failed: ${error}`,
+    );
+  }
+  return requireObject(data);
+}
+
 export function parseInboundMessage(text: string): InboundMessage | null {
-  const data = requireObject(JSON.parse(text));
+  const data = parseInboundJson(text);
+  const messageType =
+    typeof data.type === "string" ? (data.type as string) : null;
+  try {
+    return parseInboundObject(data);
+  } catch (error) {
+    throw new ProtocolParseError(
+      "schema",
+      messageType,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+function parseInboundObject(data: Record<string, unknown>): InboundMessage | null {
   const type = requireString(data, "type");
 
   switch (type) {
@@ -271,6 +326,12 @@ export function parseInboundMessage(text: string): InboundMessage | null {
         goal_reached: Boolean(data.goal_reached),
         goal_failed: Boolean(data.goal_failed),
       };
+      if (typeof data.recovering === "boolean") {
+        msg.recovering = data.recovering;
+      }
+      if (typeof data.error_code === "number") {
+        msg.error_code = data.error_code;
+      }
       setActiveRobotId(msg.robot_id);
       return msg;
     }

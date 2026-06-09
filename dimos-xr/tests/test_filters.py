@@ -3,10 +3,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from dimos_xr.adapters.go2 import go2_handshake
 from dimos_xr.filters import (
     LidarFilter,
     LidarFilterConfig,
     RateLimiter,
+    lidar_height_band_m,
     subsample_points_near_robot,
 )
 
@@ -137,3 +139,51 @@ def test_rate_limiter_zero_hz_always_allows() -> None:
     limiter = RateLimiter(max_hz=0.0)
     assert limiter.allow() is True
     assert limiter.allow() is True
+
+
+def test_lidar_height_band_go2() -> None:
+    handshake = go2_handshake("unitree_go2")
+    min_h, max_h = lidar_height_band_m(
+        body_bounds_m=handshake.body_bounds_m,
+        base_height_m=handshake.base_height_m,
+    )
+    assert min_h == pytest.approx(-0.325)
+    assert max_h == pytest.approx(1.22)
+
+
+def test_lidar_height_band_g1() -> None:
+    min_h, max_h = lidar_height_band_m(
+        body_bounds_m=(0.65, 0.45, 1.35),
+        base_height_m=0.95,
+    )
+    assert min_h == pytest.approx(-0.945)
+    assert max_h == pytest.approx(1.4)
+
+
+def test_robot_aware_height_filter_go2() -> None:
+    handshake = go2_handshake("unitree_go2")
+    min_h, max_h = lidar_height_band_m(
+        body_bounds_m=handshake.body_bounds_m,
+        base_height_m=handshake.base_height_m,
+    )
+    filt = LidarFilter(
+        LidarFilterConfig(
+            max_range_m=None,
+            min_height_m=min_h,
+            max_height_m=max_h,
+            target_points=100,
+        )
+    )
+    points = np.array(
+        [
+            [0.5, 0.0, -0.32],  # just above floor clearance
+            [0.5, 0.0, -0.34],  # below floor clearance
+            [0.5, 0.0, 0.5],    # mid band
+            [0.5, 0.0, 1.3],    # above max
+        ],
+        dtype=np.float32,
+    )
+    filtered = filt.filter(points)
+    assert len(filtered) == 2
+    assert np.allclose(filtered[0], [0.5, 0.0, -0.32])
+    assert np.allclose(filtered[1], [0.5, 0.0, 0.5])

@@ -12,7 +12,6 @@ from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
-from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
 from dimos.robot.unitree.g1.connection_spec import G1ConnectionSpec
@@ -45,7 +44,6 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
     registered_scan: In[PointCloud2]
     odom: In[PoseStamped]
     odometry: In[Odometry]
-    color_image: In[Image]
     camera_info: In[CameraInfo]
     global_costmap: In[OccupancyGrid]
     path: In[Path]
@@ -55,7 +53,6 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
 
     xr_lidar: Out[PointCloud2]
     xr_odom: Out[PoseStamped]
-    xr_color_image: Out[Image]
     xr_camera_info: Out[CameraInfo]
     xr_global_costmap: Out[OccupancyGrid]
     xr_path: Out[Path]
@@ -69,10 +66,14 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
     cancel_goal_signal: Out[Bool]
 
     config: XRRobotAdapterConfig
-    _navigation: NavigationInterfaceSpec
-    _go2_connection: GO2ConnectionSpec
-    _g1_connection: G1ConnectionSpec
-    _g1_high_level: HighLevelG1Spec
+    # Optional module references: which providers exist depends on the selected
+    # robot stack (go2 vs g1, nav vs basic). Declaring them as "Spec | None = None"
+    # makes the coordinator treat the refs as optional and leaves them as None when
+    # no provider is present, which every use below already guards for.
+    _navigation: NavigationInterfaceSpec | None = None
+    _go2_connection: GO2ConnectionSpec | None = None
+    _g1_connection: G1ConnectionSpec | None = None
+    _g1_high_level: HighLevelG1Spec | None = None
 
     async def handle_lidar(self, msg: PointCloud2) -> None:
         self.xr_lidar.publish(msg)
@@ -101,9 +102,6 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
             )
         )
 
-    async def handle_color_image(self, msg: Image) -> None:
-        self.xr_color_image.publish(msg)
-
     async def handle_camera_info(self, msg: CameraInfo) -> None:
         self.xr_camera_info.publish(msg)
 
@@ -122,18 +120,22 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
     async def handle_navigation_state(self, msg: String) -> None:
         self.xr_navigation_state.publish(msg)
 
-    def _configured_model(self) -> str:
+    def _resolved_robot_model(self) -> str:
         if self.config.robot_model_override:
-            return self.config.robot_model_override
+            return str(self.config.robot_model_override)
+        if self._go2_connection is not None:
+            return "unitree_go2"
+        if self._g1_connection is not None or self._g1_high_level is not None:
+            return "unitree_g1"
         if global_config.robot_model:
             return str(global_config.robot_model)
-        if self._is_g1_runtime():
-            return "unitree_g1"
         return "unitree_go2"
 
+    def _configured_model(self) -> str:
+        return self._resolved_robot_model()
+
     def _is_g1_runtime(self) -> bool:
-        model = str(global_config.robot_model or self.config.robot_model_override or "").lower()
-        return "g1" in model or self._g1_connection is not None or self._g1_high_level is not None
+        return "g1" in self._resolved_robot_model().lower()
 
     def _nav_available(self) -> bool:
         return (

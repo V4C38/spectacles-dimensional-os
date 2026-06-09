@@ -44,6 +44,17 @@ See [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md).
 
 After changing the AprilTag, regenerate and sync to the Lens: `python scripts/generate_marker.py --sync-lens` (from `dimos-xr/`).
 
+## Bridge error codes
+
+When introducing a new `Bridge Error (CODE)` surfaced in Lens setup, update **together in one change**:
+
+1. `dimos-xr/dimos_xr/error_codes.py` — add `BridgeError` + register in `BRIDGE_ERRORS`
+2. `dimos-xr/ERROR_CODES.md` — add table row and detailed section
+3. `lens-studio/Assets/Scripts/Setup/BridgeErrorCodes.ts` — mirror numeric code
+4. Wire the code in `CalibrationSession.ts` / `CalibrationPresenter.ts`
+
+See [`dimos-xr/ERROR_CODES.md`](dimos-xr/ERROR_CODES.md) for the full catalog.
+
 ## Tests
 
 - Default CI runs unit tests that do not require DimOS installed.

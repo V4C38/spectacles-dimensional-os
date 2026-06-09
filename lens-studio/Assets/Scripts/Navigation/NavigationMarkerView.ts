@@ -6,6 +6,7 @@ import {
   setButtonStyle,
   SnapOS2Styles,
 } from "../UI/Shared/UIBuilders";
+import { yawRotationFromWorldRotation } from "./HeadingRotation";
 
 // ================================================================
 /** Scene-graph view for the navigation target marker with confirm/cancel and visibility animations. */
@@ -22,6 +23,7 @@ const DOTS_YELLOW = new vec4(0.976471, 0.929412, 0.423529, 0.500008);
 export class NavigationMarkerView {
   private readonly root: SceneObject;
   private readonly screenTextParent: SceneObject | null;
+  private readonly headingRoot: SceneObject | null;
   private readonly rotationRoot: SceneObject | null;
   private readonly portalCircle: SceneObject;
   private readonly circleExecuting: SceneObject | null;
@@ -33,7 +35,6 @@ export class NavigationMarkerView {
   private readonly arrow: SceneObject | null;
   private readonly moveDirectionArrow: SceneObject | null;
   private readonly dots: SceneObject | null;
-  private readonly moveDirectionArrowBaseRotation: quat;
   private readonly portalBaseScale: vec3;
   private readonly rootBaseScale: vec3;
   private readonly rotationLookAt: Component | null;
@@ -44,11 +45,12 @@ export class NavigationMarkerView {
   private _placementAnchor: SceneObject | null = null;
   private _preAnchorParent: SceneObject | null = null;
   private _cancelActionAvailable = true;
-  private _confirmUnlocked = false;
+  private _rotation = quat.quatIdentity();
 
   constructor(root: SceneObject) {
     this.root = root;
     this.screenTextParent = this._findChild(this.root, "ScreenTextParent");
+    this.headingRoot = this._findChild(this.root, "NavigationHeadingRoot");
     this.rotationRoot = this._findChild(this.root, "RotationRoot");
     this.portalCircle =
       this._findChild(this.root, "Circle_Seeking") ??
@@ -64,9 +66,11 @@ export class NavigationMarkerView {
     this.arrow = this._findChild(this.root, "Arrow");
     this.moveDirectionArrow = this._findChild(this.root, "MoveDirectionArrow");
     this.dots = this._findChild(this.root, "Dots");
-    this.moveDirectionArrowBaseRotation = this.moveDirectionArrow
-      ? this.moveDirectionArrow.getTransform().getLocalRotation()
-      : quat.quatIdentity();
+    if (this.moveDirectionArrow && !this.headingRoot) {
+      throw new Error(
+        "NavigationMarkerView: MoveDirectionArrow requires NavigationHeadingRoot",
+      );
+    }
     this.portalBaseScale = this.portalCircle.getTransform().getLocalScale();
     this.rootBaseScale = this.root.getTransform().getLocalScale();
     this.rotationLookAt = (this.rotationRoot ?? this.root).getComponent(
@@ -86,6 +90,7 @@ export class NavigationMarkerView {
       this.rotationLookAt.enabled = false;
     }
     this._initializeHidden();
+    this.setRotation(this._rotation);
   }
 
   public get visualState(): NavigationMarkerVisualState {
@@ -118,47 +123,14 @@ export class NavigationMarkerView {
     return this.root.getTransform().getLocalPosition();
   }
 
-  public get worldRotation(): quat {
-    return this.root.getTransform().getWorldRotation();
+  public getRotation(): quat {
+    return this._rotation;
   }
 
-  public setMoveDirectionFromRotation(rotation: quat): void {
-    const forward = rotation.multiplyVec3(vec3.right().uniformScale(-1));
-    const distance = Math.sqrt(forward.x * forward.x + forward.z * forward.z);
-    if (distance < 0.001) {
-      return;
-    }
-    const fx = forward.x / distance;
-    const fz = forward.z / distance;
-    // The authored arrow faces -Z when yaw=0, so convert the robot forward
-    // direction into a yaw whose zero heading points along -Z.
-    this.setMoveDirectionYaw(Math.atan2(-fx, -fz));
-  }
-
-  public setMoveDirectionYaw(yawRadians: number): void {
-    if (!this.moveDirectionArrow) {
-      return;
-    }
-    // Compose q_yaw (Y-axis, world space) with the scene base rotation so the
-    // arrow stays flat on the ground while rotating to point in the drag direction.
-    // Lens Studio quat constructor is (w, x, y, z).
-    // q_yaw = (cos(h), 0, sin(h), 0) for a Y-axis rotation by yawRadians.
-    // q_result = q_yaw * q_base  (apply base tilt first, then yaw in world space)
-    // The authored flat plane turns with the opposite yaw sign from the
-    // drag-space heading we compute, so invert the final applied yaw here.
-    const h = -yawRadians * 0.5;
-    const cw = Math.cos(h);
-    const sy = Math.sin(h);
-    const b = this.moveDirectionArrowBaseRotation;
-    this.moveDirectionArrow.getTransform().setLocalRotation(
-      new quat(
-        cw * b.w - sy * b.y,
-        cw * b.x + sy * b.z,
-        cw * b.y + sy * b.w,
-        cw * b.z - sy * b.x,
-      ),
-    );
-    this._syncMoveDirectionArrowVisibility();
+  public setRotation(rotation: quat): void {
+    // Heading pivot is yaw-only so the flat arrow stays ground-parallel.
+    this._rotation = yawRotationFromWorldRotation(rotation);
+    this._applyHeadingRootRotation();
   }
 
   public bindPlacementAnchor(
@@ -204,9 +176,10 @@ export class NavigationMarkerView {
     const transform = this.root.getTransform();
     if (this._placementAnchor) {
       transform.setLocalPosition(this._worldToAnchorLocal(position));
-      return;
+    } else {
+      transform.setWorldPosition(position);
     }
-    transform.setWorldPosition(position);
+    this.setRotation(rotation);
   }
 
   public interpolatePose(
@@ -221,11 +194,12 @@ export class NavigationMarkerView {
       transform.setLocalPosition(
         vec3.lerp(transform.getLocalPosition(), desiredLocal, alpha),
       );
-      return;
+    } else {
+      transform.setWorldPosition(
+        vec3.lerp(transform.getWorldPosition(), desiredPosition, alpha),
+      );
     }
-    transform.setWorldPosition(
-      vec3.lerp(transform.getWorldPosition(), desiredPosition, alpha),
-    );
+    this.setRotation(desiredRotation);
   }
 
   public setFloatingUiWorldPosition(position: vec3): void {
@@ -251,23 +225,17 @@ export class NavigationMarkerView {
     this.circleAnimation?.animateCircleIn?.(null);
   }
 
-  public setConfirmActionEnabled(enabled: boolean): void {
+  public setConfirmVisible(visible: boolean): void {
+    this.confirmButtonObject.enabled = visible;
+    this._setConfirmInteractable(visible);
+  }
+
+  private _setConfirmInteractable(enabled: boolean): void {
     if (this._confirmEnabled === enabled) {
       return;
     }
     this._confirmEnabled = enabled;
     (this.confirmButton as any).enabled = enabled;
-  }
-
-  public unlockConfirmAction(): void {
-    if (this._confirmUnlocked) {
-      return;
-    }
-    this._confirmUnlocked = true;
-    if (this._state === "placing") {
-      this.confirmButtonObject.enabled = true;
-      this.setConfirmActionEnabled(true);
-    }
   }
 
   public setCancelActionAvailability(available: boolean): void {
@@ -277,7 +245,17 @@ export class NavigationMarkerView {
     }
   }
 
-  public showPlacing(): void {
+  public setConfirmAvailability(available: boolean): void {
+    if (this._state !== "placing") {
+      return;
+    }
+    this._setConfirmInteractable(available);
+    if (this.confirmButtonObject.enabled) {
+      this.confirmLabel.text = available ? "Confirm" : "Confirm\nUnavailable";
+    }
+  }
+
+  public showPlacing(showConfirm: boolean = false): void {
     this._state = "placing";
     if (this.circleExecuting) {
       this.circleExecuting.enabled = false;
@@ -285,8 +263,7 @@ export class NavigationMarkerView {
     if (this.rotationLookAt) {
       this.rotationLookAt.enabled = false;
     }
-    this.confirmButtonObject.enabled = this._confirmUnlocked;
-    this.setConfirmActionEnabled(this._confirmUnlocked);
+    this.setConfirmVisible(showConfirm);
     this.confirmLabel.text = "Confirm";
     setButtonStyle(this.confirmButton, SnapOS2Styles.Primary);
     this.resetCircleAnimation();
@@ -311,8 +288,7 @@ export class NavigationMarkerView {
     if (this.rotationLookAt) {
       this.rotationLookAt.enabled = false;
     }
-    this.confirmButtonObject.enabled = true;
-    this.setConfirmActionEnabled(true);
+    this.setConfirmVisible(true);
     this._applyExecutingButtonPresentation();
     this.setScanAnimationEnabled(true);
     this._setConfirmVfxState(false);
@@ -328,49 +304,12 @@ export class NavigationMarkerView {
   }
 
   public hide(): void {
-    this._state = "disabled";
-    this._confirmUnlocked = false;
-    this.confirmButtonObject.enabled = false;
-    this.setConfirmActionEnabled(false);
-    this.setScanAnimationEnabled(false);
-    this._setConfirmVfxState(true, true);
-    if (this.arrow) {
-      this.arrow.enabled = false;
-    }
-    this._setMoveDirectionArrowSpeed(0);
-    this._syncMoveDirectionArrowVisibility();
-    // Cancel any in-progress circle animation and restore the circle to full
-    // scale so it is ready for the next showPlacing(). The root is about to
-    // scale to zero so this is invisible.
-    this._nextCircleAnimationVersion();
-    this.portalCircle.enabled = true;
-    this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
-    if (this.circleExecuting) {
-      this.circleExecuting.enabled = false;
-    }
-    this._applyDotsVisual(true);
+    this._beginHide();
     this._animateVisibility(false);
   }
 
   public hideAndThen(callback: () => void): void {
-    this._state = "disabled";
-    this._confirmUnlocked = false;
-    this.confirmButtonObject.enabled = false;
-    this.setConfirmActionEnabled(false);
-    this.setScanAnimationEnabled(false);
-    this._setConfirmVfxState(true, true);
-    if (this.arrow) {
-      this.arrow.enabled = false;
-    }
-    this._setMoveDirectionArrowSpeed(0);
-    this._syncMoveDirectionArrowVisibility();
-    this._nextCircleAnimationVersion();
-    this.portalCircle.enabled = true;
-    this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
-    if (this.circleExecuting) {
-      this.circleExecuting.enabled = false;
-    }
-    this._applyDotsVisual(true);
+    this._beginHide();
     const transform = this.root.getTransform();
     const start = transform.getLocalScale();
     const target = vec3.zero();
@@ -433,15 +372,6 @@ export class NavigationMarkerView {
       }
     }
     return null;
-  }
-
-  private _requireText(root: SceneObject, objectName: string): Text {
-    const sceneObject = this._requireChild(root, objectName);
-    const text = sceneObject.getComponent("Component.Text") as Text;
-    if (!text) {
-      throw new Error(`NavigationMarkerView: Missing Text on ${objectName}`);
-    }
-    return text;
   }
 
   private _requireFirstText(root: SceneObject): Text {
@@ -557,13 +487,34 @@ export class NavigationMarkerView {
     }
   }
 
+  private _beginHide(): void {
+    this._state = "disabled";
+    this.setConfirmVisible(false);
+    this.setScanAnimationEnabled(false);
+    this._setConfirmVfxState(true, true);
+    if (this.arrow) {
+      this.arrow.enabled = false;
+    }
+    this._setMoveDirectionArrowSpeed(0);
+    this._syncMoveDirectionArrowVisibility();
+    // Cancel any in-progress circle animation and restore the circle to full
+    // scale so it is ready for the next showPlacing(). The root is about to
+    // scale to zero so this is invisible.
+    this._nextCircleAnimationVersion();
+    this.portalCircle.enabled = true;
+    this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
+    if (this.circleExecuting) {
+      this.circleExecuting.enabled = false;
+    }
+    this._applyDotsVisual(true);
+  }
+
   private _initializeHidden(): void {
     this.root.enabled = false;
     this.root.getTransform().setLocalScale(vec3.zero());
     this.setScanAnimationEnabled(false);
     this._setConfirmVfxState(true, true);
     this.confirmButtonObject.enabled = false;
-    this._confirmUnlocked = false;
     this._confirmEnabled = false;
     if (this.arrow) {
       this.arrow.enabled = false;
@@ -603,6 +554,16 @@ export class NavigationMarkerView {
       return;
     }
     this.moveDirectionArrow.enabled = true;
+  }
+
+  private _applyHeadingRootRotation(): void {
+    if (!this.headingRoot) {
+      return;
+    }
+    // The root stays unrotated so circles and billboarded UI remain stable.
+    // Semantic heading is applied only to the dedicated nav heading pivot.
+    this.headingRoot.getTransform().setLocalRotation(this._rotation);
+    this._syncMoveDirectionArrowVisibility();
   }
 
   private _animateCircleScale(visible: boolean): void {

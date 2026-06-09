@@ -272,6 +272,18 @@ def _round_flat(arr: NDArray[np.floating], decimals: int = 2) -> list[float]:
     return np.round(arr_f64, decimals).ravel().tolist()
 
 
+def _sanitize_pose_values(
+    position: tuple[float, float, float],
+    orientation: tuple[float, float, float, float],
+) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+    pos = np.nan_to_num(np.asarray(position, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    quat = np.nan_to_num(np.asarray(orientation, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    return (
+        (float(pos[0]), float(pos[1]), float(pos[2])),
+        (float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])),
+    )
+
+
 def encode_lidar(
     *,
     ts: float,
@@ -329,14 +341,15 @@ def encode_pose(
     orientation: tuple[float, float, float, float],
     robot_id: str,
 ) -> str:
+    safe_position, safe_orientation = _sanitize_pose_values(position, orientation)
     return _dumps(
         {
             "type": "pose",
             "ts": ts,
             "robot_id": robot_id,
             "frame": FRAME_WORLD,
-            "position": list(position),
-            "orientation": list(orientation),
+            "position": list(safe_position),
+            "orientation": list(safe_orientation),
         }
     )
 
@@ -384,6 +397,8 @@ def encode_nav_status(
     state: str,
     goal_reached: bool,
     goal_failed: bool = False,
+    recovering: bool = False,
+    error_code: int | None = None,
     robot_id: str,
 ) -> str:
     return _dumps(
@@ -392,6 +407,8 @@ def encode_nav_status(
             state=state,
             goal_reached=goal_reached,
             goal_failed=goal_failed,
+            recovering=recovering,
+            error_code=error_code,
             robot_id=robot_id,
         )
     )
@@ -403,6 +420,8 @@ def _nav_status_payload(
     state: str,
     goal_reached: bool,
     goal_failed: bool,
+    recovering: bool,
+    error_code: int | None,
     robot_id: str,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -414,4 +433,8 @@ def _nav_status_payload(
     }
     if goal_failed:
         payload["goal_failed"] = True
+    if recovering:
+        payload["recovering"] = True
+    if error_code is not None:
+        payload["error_code"] = error_code
     return payload

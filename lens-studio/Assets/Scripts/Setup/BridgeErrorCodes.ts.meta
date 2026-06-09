@@ -1,20 +1,20 @@
-- !<AssetImportMetadata/46c809b4-d4fb-4cae-abcd-a53ec12d2bcf>
+- !<AssetImportMetadata/67f94a0a-f166-4b49-8a84-895525e108e2>
   ImportedAssetIds:
-    TypeScriptAsset: !<reference> 827e4123-6a34-4227-916c-d9e54ea1e595
+    TypeScriptAsset: !<reference> 5b78dfb7-89f8-4c9c-a4fb-0148c797f766
   ImporterName: TypeScriptAssetImporter
-  PrimaryAsset: !<reference> 827e4123-6a34-4227-916c-d9e54ea1e595
+  PrimaryAsset: !<reference> 5b78dfb7-89f8-4c9c-a4fb-0148c797f766
   PackageType: NotAPackage
   LegacyPackagePolicy: ~
   ExtraData:
     {}
   AssetDataMap:
-    TypeScriptAsset: !<own> cd67cf87-fde0-4e7b-8c49-90c406665701
+    TypeScriptAsset: !<own> 457e152e-a01c-46bc-a3dc-888c26e83c84
   DependentFiles:
     []
   ImporterSettings: !<AssetImporterSettings>
     {}
   CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
-- !<TypeScriptAssetData/cd67cf87-fde0-4e7b-8c49-90c406665701>
+- !<TypeScriptAssetData/457e152e-a01c-46bc-a3dc-888c26e83c84>
   SvgIcon: ""
   SetupScript:
     code: ""
@@ -22,12 +22,11 @@
   VersionMajor: 0
   VersionMinor: 0
   VersionPatch: 0
-  ComponentUid: 45cf2afc-dc21-4d80-a315-91f3b13a5633
+  ComponentUid: a0cc60c4-b617-4443-a593-3a73f9f6b9c0
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
-    obstacleVisual: false
-    pointParent: false
+    {}
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -37,11 +36,10 @@
   Attachments:
     []
   DefaultScriptInputs:
-    - pointParent: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
-      obstacleVisual: !<reference.RenderMeshVisual> 00000000-0000-0000-0000-000000000000
+    -
+      {}
   ScriptTypes:
     -
       {}
   InputLines:
-    - // @input SceneObject pointParent
-    - // @input Component.RenderMeshVisual obstacleVisual
+    []

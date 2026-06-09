@@ -1,8 +1,8 @@
 import { RectangleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RectangleButton";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import { OperatingMode } from "../AppState";
-import { scaleIn, scaleOut } from "./Shared/UIAnimations";
-import { COLOR_ERROR, COLOR_WHITE } from "./Shared/UICore";
+import { animateScaleTo, scaleIn, scaleOut } from "./Shared/UIAnimations";
+import { FONT_BUTTON } from "./Shared/UICore";
 import {
   applyCapabilityButtonPresentation,
   bindToggleButton,
@@ -43,6 +43,8 @@ export class RobotMenuView {
   private readonly navigationPlacementBtn: RectangleButton;
   private readonly manualModeMenu: SceneObject | null;
   private readonly agentModeMenu: SceneObject | null;
+  private readonly _emergencyStopBaseScale: vec3;
+  private readonly _emergencyStopHoverScale: vec3;
   private _navigationPlacementEnabled = false;
   private _operatingMode: OperatingMode = "manual";
 
@@ -78,8 +80,15 @@ export class RobotMenuView {
     this.toggleVisual = toggleObj.getComponent(
       "Component.RenderMeshVisual",
     ) as RenderMeshVisual;
+    this._emergencyStopBaseScale = this.stopObj.getTransform().getLocalScale();
+    this._emergencyStopHoverScale =
+      this._emergencyStopBaseScale.uniformScale(1.05);
     this.toggleBtn.onTriggerUp.add(() => this.onToggleRequested?.());
-    this.stopBtn.onTriggerUp.add(() => this.onStopRequested?.());
+    this.stopBtn.onTriggerUp.add(() => {
+      this.onStopRequested?.();
+      setButtonToggleState(this.stopBtn, true);
+    });
+    this._bindEmergencyStopHoverScale();
     bindToggleButton(
       this.navigationPlacementBtn,
       (enabled) => this.onNavigationPlacementRequested?.(enabled),
@@ -89,6 +98,10 @@ export class RobotMenuView {
 
     this.manualModeMenu = findChildRecursive(this.menuObj, "ManualModeMenu");
     this.agentModeMenu = findChildRecursive(this.menuObj, "AgentModeMenu");
+
+    this.stopLabel.size = FONT_BUTTON;
+    configureButtonToggle(this.stopBtn, true);
+    setButtonToggleState(this.stopBtn, true);
 
     this.setMenuVisible(false);
     this.setNavigationPlacementVisible(true);
@@ -150,8 +163,7 @@ export class RobotMenuView {
   }
 
   public setStopEmphasis(emergency: boolean): void {
-    this.stopLabel.text = emergency ? "Emergency stop" : "Stop";
-    this.stopLabel.textFill.color = emergency ? COLOR_ERROR : COLOR_WHITE;
+    this.stopLabel.text = emergency ? "Emergency Stop" : "Stop";
   }
 
   public setEmergencyStopAvailability(
@@ -165,7 +177,9 @@ export class RobotMenuView {
       availableStyle: SnapOS2Styles.Special,
       unavailableStyle: SnapOS2Styles.Special,
     });
-    this.stopLabel.textFill.color = COLOR_WHITE;
+    if (available) {
+      setButtonToggleState(this.stopBtn, true);
+    }
   }
 
   public setOperatingMode(mode: OperatingMode): void {
@@ -176,6 +190,15 @@ export class RobotMenuView {
     if (this.agentModeMenu) {
       this.agentModeMenu.enabled = mode === "agent";
     }
+  }
+
+  private _bindEmergencyStopHoverScale(): void {
+    this.stopBtn.onHoverEnter.add(() => {
+      animateScaleTo(this.stopObj, this._emergencyStopHoverScale);
+    });
+    this.stopBtn.onHoverExit.add(() => {
+      animateScaleTo(this.stopObj, this._emergencyStopBaseScale);
+    });
   }
 
   private _setToggleVisualSaturation(value: number): void {

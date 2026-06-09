@@ -43,8 +43,9 @@ def pose_to_matrix(
     orientation: tuple[float, float, float, float],
 ) -> NDArray[np.float64]:
     """Build 4x4 homogeneous transform from position and quaternion [qx,qy,qz,qw]."""
+    qx, qy, qz, qw = _normalize_quaternion(*orientation)
     T = np.eye(4, dtype=np.float64)
-    T[:3, :3] = _quat_to_matrix(*orientation)
+    T[:3, :3] = _quat_to_matrix(qx, qy, qz, qw)
     T[:3, 3] = position
     return T
 
@@ -64,7 +65,7 @@ def normalize_ground_pose(
     world<-odom transform should be yaw-only after calibration; the solved transform may still
     encode the fixed basis change between DimOS robot frames and Lens world coordinates.
     """
-    rotation = _quat_to_matrix(*orientation)
+    rotation = _quat_to_matrix(*_normalize_quaternion(*orientation))
     forward = rotation[:, SEMANTIC_FORWARD_AXIS_INDEX]
     planar = np.array([forward[0], 0.0, forward[2]], dtype=np.float64)
     norm = float(np.linalg.norm(planar))
@@ -213,7 +214,7 @@ class Calibration:
     Before calibration: identity (odom coordinates pass through as world).
     After calibration: T_world_odom maps robot odom into XR world coordinates.
 
-    Assumption: the ArUco marker is rigidly attached at the robot base, co-located
+    Assumption: the AprilTag marker is rigidly attached at the robot base, co-located
     with the odom pose frame. If the marker is offset from the base, calibration
     will be wrong until marker-to-base offsets are applied (see DimOS MarkerTfModule).
     This remains marker-agnostic at the transform layer; marker identity lives in the

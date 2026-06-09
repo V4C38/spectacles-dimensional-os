@@ -1,4 +1,4 @@
-import { BridgeStatusMessage } from "../../Network/Protocol";
+import { BridgeLinkState } from "../../AppState";
 import {
   COLOR_ERROR,
   COLOR_SUCCESS,
@@ -15,57 +15,36 @@ export interface BridgeStatusPresentation {
 }
 
 export function getBridgeStatusPresentation(
-  msg: BridgeStatusMessage,
+  state: BridgeLinkState,
 ): BridgeStatusPresentation {
-  if (msg.reconnecting) {
-    return {
-      text: "Bridge reconnecting",
-      color: COLOR_WARN,
-    };
+  switch (state) {
+    case "disconnected":
+      return {
+        text: "Bridge disconnected",
+        color: COLOR_ERROR,
+      };
+    case "connectedNoRobot":
+      return {
+        text: "Bridge connected - waiting for robot",
+        color: COLOR_WARN,
+      };
+    case "connected":
+      return {
+        text: "Bridge connected",
+        color: COLOR_SUCCESS,
+      };
   }
-  if (!msg.robot_connected) {
+}
+
+export function getBridgeStatusPresentationForConnect(
+  state: BridgeLinkState,
+  isConnecting: boolean,
+): BridgeStatusPresentation {
+  if (isConnecting && state === "disconnected") {
     return {
-      text: "Robot disconnected",
+      text: "Connecting...",
       color: COLOR_ERROR,
     };
   }
-  if (!msg.streams_active) {
-    return {
-      text: "Robot connected - waiting for data",
-      color: COLOR_WARN,
-    };
-  }
-  if (!msg.registered) {
-    return {
-      text: "Robot data active - calibration needed",
-      color: COLOR_WARN,
-    };
-  }
-  return {
-    text: "Robot data active",
-    color: COLOR_SUCCESS,
-  };
-}
-
-export function getRobotModelLabel(
-  msg: BridgeStatusMessage | null | undefined,
-): string {
-  const raw = msg?.robot_id?.trim();
-  if (!raw) {
-    return "Unknown Hardware";
-  }
-
-  const normalized = raw.replace(/[-\s]+/g, "_").toLowerCase();
-  if (normalized === "unitree_go2") {
-    return "Unitree Go2";
-  }
-  if (normalized === "unitree_g1") {
-    return "Unitree G1";
-  }
-  return "Unknown Hardware";
-}
-
-export function getRobotHardwareLabel(msg: BridgeStatusMessage): string {
-  const id = msg.robot_id?.trim();
-  return `HARDWARE [${id || "UNKNOWN"}]`;
+  return getBridgeStatusPresentation(state);
 }

@@ -23,12 +23,17 @@ import {
   buildNavGoal,
   buildPlanPath,
   emit,
+  isNonCriticalInboundMessageType,
   parseInboundMessage,
+  ProtocolParseError,
+  sniffInboundMessageType,
 } from "./Protocol";
 import { IP_STORAGE_KEY, WS_PORT } from "../UI/Shared/UICore";
 
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
+const PARSE_RECOVERY_COOLDOWN_S = 2.0;
+const PARSE_RECONNECT_THRESHOLD = 5;
 
 // ================================================================
 // WebSocket client to the DimOS AR bridge; parses inbound messages and sends alignment/navigation commands.
@@ -54,10 +59,14 @@ export class BridgeClient extends BaseScriptComponent {
   public onPathPreview: ((msg: PathPreviewMessage) => void)[] = [];
   public onNavStatus: ((msg: NavStatusMessage) => void)[] = [];
   public onConnectionChanged: ((connected: boolean) => void)[] = [];
+  public onProtocolError: ((error: ProtocolParseError) => void)[] = [];
 
   private ws: WebSocket | null = null;
   private isConnecting = false;
   private helloReceived = false;
+  private _consecutiveParseFailures = 0;
+  private _lastParseRecoveryRequestTime = -PARSE_RECOVERY_COOLDOWN_S;
+  private _reconnectScheduled = false;
   private _activeRobotId: string | null = null;
   private _helloCapabilities: string[] = [];
   private _capabilityStates: Record<string, { available: boolean; reason?: string }> =
@@ -93,6 +102,9 @@ export class BridgeClient extends BaseScriptComponent {
     }
     if (!this.onNavStatus) {
       this.onNavStatus = [];
+    }
+    if (!this.onProtocolError) {
+      this.onProtocolError = [];
     }
   }
 
@@ -342,9 +354,10 @@ export class BridgeClient extends BaseScriptComponent {
 
   private _onMessage(event: WebSocketMessageEvent): void {
     this.ensureEventHandlers();
+    const raw = event.data as string;
     try {
-      const raw = event.data as string;
       const msg = parseInboundMessage(raw);
+      this._consecutiveParseFailures = 0;
       if (!msg) {
         return;
       }
@@ -389,14 +402,69 @@ export class BridgeClient extends BaseScriptComponent {
           break;
       }
     } catch (error) {
-      const raw = event.data as string;
-      print(
-        `BridgeClient: parse error ${error}; len=${raw.length}; first="${this._snippet(
-          raw,
-          0,
-        )}" last="${this._snippet(raw, Math.max(0, raw.length - 80))}"`,
-      );
+      this._handleParseFailure(raw, error);
     }
+  }
+
+  private _handleParseFailure(raw: string, error: unknown): void {
+    const sniffed = sniffInboundMessageType(raw);
+    const parseError =
+      error instanceof ProtocolParseError
+        ? error
+        : new ProtocolParseError(
+            "json",
+            sniffed,
+            error instanceof Error ? error.message : String(error),
+          );
+    this._consecutiveParseFailures += 1;
+    emit(this.onProtocolError, parseError);
+
+    const nonCritical =
+      isNonCriticalInboundMessageType(parseError.messageType) ||
+      (parseError.kind === "json" &&
+        isNonCriticalInboundMessageType(sniffed));
+
+    print(
+      `BridgeClient: protocol ${parseError.kind} error on ${parseError.messageType ?? sniffed ?? "unknown"} (${this._consecutiveParseFailures}); len=${raw.length}; first="${this._snippet(raw, 0)}" last="${this._snippet(raw, Math.max(0, raw.length - 80))}"`,
+    );
+
+    if (this._consecutiveParseFailures >= PARSE_RECONNECT_THRESHOLD) {
+      print(
+        `BridgeClient: ${this._consecutiveParseFailures} consecutive parse failures; reconnecting`,
+      );
+      this._scheduleReconnectAfterParseFailures();
+      return;
+    }
+
+    if (nonCritical && this._consecutiveParseFailures === 1) {
+      return;
+    }
+
+    const now = getTime();
+    if (now - this._lastParseRecoveryRequestTime >= PARSE_RECOVERY_COOLDOWN_S) {
+      this._lastParseRecoveryRequestTime = now;
+      this.requestStatus();
+    }
+  }
+
+  private _scheduleReconnectAfterParseFailures(): void {
+    if (this._reconnectScheduled) {
+      return;
+    }
+    this._reconnectScheduled = true;
+    this._consecutiveParseFailures = 0;
+    const timeout = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
+    timeout.bind(() => {
+      this._reconnectScheduled = false;
+      if (!this.baseUrl) {
+        return;
+      }
+      this.disconnect();
+      this.connect().catch((error) => {
+        print(`BridgeClient: parse-recovery reconnect failed: ${error}`);
+      });
+    });
+    timeout.reset(0.5);
   }
 
   private _notifyConnection(connected: boolean): void {

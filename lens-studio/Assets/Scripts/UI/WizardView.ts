@@ -36,6 +36,7 @@ import { WizardFooterState, WizardStep } from "../Setup/WizardStepData";
 
 const ACCURACY_SLOT = 1.8;
 const TITLE_BOTTOM_GAP = 1.45;
+const Z_WIZARD_BUTTONS = Z_BUTTONS + 0.5;
 const STATUS_FONT = 38;
 const CALIBRATE_STATUS_SHIFT_Y = SLOT_INPUT * 0.72;
 const FOOTER_BUTTON_WIDTH = 9.6;
@@ -62,6 +63,8 @@ export class WizardView {
   private readonly _manualObj: SceneObject;
   private readonly _statusBaseY: number;
   private readonly _detailStatusBaseY: number;
+  private readonly _innerWidth: number;
+  private readonly _statusSlotHeight: number;
 
   constructor(private readonly _panel: SceneObject) {
     const innerWidth = UIFrameMetrics.fromSceneObject(_panel).contentWidth;
@@ -183,6 +186,8 @@ export class WizardView {
       ),
     });
     this._detailStatusBaseY = cursorY - SLOT_STATUS / 2;
+    this._innerWidth = innerWidth;
+    this._statusSlotHeight = statusSlotHeight;
 
     cursorY -= statusSlotHeight / 2 + FOOTER_TOP_GAP;
     const btnY = cursorY - BUTTON_HEIGHT / 2;
@@ -193,7 +198,7 @@ export class WizardView {
       "Align manually",
       MANUAL_BUTTON_WIDTH,
       MANUAL_BUTTON_HEIGHT,
-      new vec3(0, 0, Z_BUTTONS),
+      new vec3(0, 0, Z_WIZARD_BUTTONS),
       SnapOS2Styles.Ghost,
     );
     this._manualBtn = manual.button;
@@ -213,7 +218,7 @@ export class WizardView {
       "Back",
       FOOTER_BUTTON_WIDTH,
       BUTTON_HEIGHT,
-      new vec3(-BUTTON_WIDTH / 2 - FOOTER_BUTTON_GAP, btnY, Z_BUTTONS),
+      new vec3(-BUTTON_WIDTH / 2 - FOOTER_BUTTON_GAP, btnY, Z_WIZARD_BUTTONS),
       SnapOS2Styles.Ghost,
     );
     this._prevBtn = prev.button;
@@ -226,7 +231,7 @@ export class WizardView {
       "Skip",
       FOOTER_BUTTON_WIDTH,
       BUTTON_HEIGHT,
-      new vec3(BUTTON_WIDTH / 2 + FOOTER_BUTTON_GAP, btnY, Z_BUTTONS),
+      new vec3(BUTTON_WIDTH / 2 + FOOTER_BUTTON_GAP, btnY, Z_WIZARD_BUTTONS),
       SnapOS2Styles.PrimaryNeutral,
     );
     this._nextBtn = next.button;
@@ -304,18 +309,50 @@ export class WizardView {
   }
 
   public applyStepLayout(step: WizardStep): void {
-    const shiftY =
-      step === WizardStep.Calibrate ? CALIBRATE_STATUS_SHIFT_Y : 0;
+    const halfWidth = this._innerWidth / 2;
+    const halfStatusLine = SLOT_STATUS / 2;
+
+    if (step === WizardStep.Calibrate) {
+      const centerY =
+        (this._statusBaseY + this._detailStatusBaseY) / 2 +
+        CALIBRATE_STATUS_SHIFT_Y;
+      this._statusText.worldSpaceRect = Rect.create(
+        -halfWidth,
+        halfWidth,
+        -this._statusSlotHeight / 2,
+        this._statusSlotHeight / 2,
+      );
+      this._statusText
+        .getSceneObject()
+        .getTransform()
+        .setLocalPosition(new vec3(0, centerY, Z_CONTENT));
+      this._detailStatusText.getSceneObject().enabled = false;
+      this._accuracyText.getSceneObject().enabled = false;
+      return;
+    }
+
+    this._detailStatusText.getSceneObject().enabled = true;
+    this._accuracyText.getSceneObject().enabled = true;
+    this._statusText.worldSpaceRect = Rect.create(
+      -halfWidth,
+      halfWidth,
+      -halfStatusLine,
+      halfStatusLine,
+    );
+    this._detailStatusText.worldSpaceRect = Rect.create(
+      -halfWidth,
+      halfWidth,
+      -halfStatusLine,
+      halfStatusLine,
+    );
     this._statusText
       .getSceneObject()
       .getTransform()
-      .setLocalPosition(new vec3(0, this._statusBaseY + shiftY, Z_CONTENT));
+      .setLocalPosition(new vec3(0, this._statusBaseY, Z_CONTENT));
     this._detailStatusText
       .getSceneObject()
       .getTransform()
-      .setLocalPosition(
-        new vec3(0, this._detailStatusBaseY + shiftY, Z_CONTENT),
-      );
+      .setLocalPosition(new vec3(0, this._detailStatusBaseY, Z_CONTENT));
   }
 
   public applyFooterState(
@@ -333,7 +370,7 @@ export class WizardView {
       new vec3(
         nextX,
         this._nextObj.getTransform().getLocalPosition().y,
-        Z_BUTTONS,
+        Z_WIZARD_BUTTONS,
       ),
     );
     this._nextBtn.size = new vec3(FOOTER_BUTTON_WIDTH, BUTTON_HEIGHT, 0.5);
@@ -346,7 +383,7 @@ export class WizardView {
       new vec3(
         prevX,
         this._prevObj.getTransform().getLocalPosition().y,
-        Z_BUTTONS,
+        Z_WIZARD_BUTTONS,
       ),
     );
     this._prevBtn.size = new vec3(FOOTER_BUTTON_WIDTH, BUTTON_HEIGHT, 0.5);
@@ -358,7 +395,7 @@ export class WizardView {
         new vec3(
           FOOTER_BUTTON_WIDTH + FOOTER_THREE_BUTTON_GAP,
           this._nextObj.getTransform().getLocalPosition().y,
-          Z_BUTTONS,
+          Z_WIZARD_BUTTONS,
         ),
       );
     }

@@ -121,6 +121,19 @@ export class AlignmentController extends BaseScriptComponent {
     return true;
   }
 
+  /** Retry align_start when the bridge was not ready at session start. */
+  public ensureBridgeSession(): boolean {
+    if (!this._active || this._awaitingCommit || this._bridgeSessionActive) {
+      return this._bridgeSessionActive;
+    }
+    this._bridgeSessionActive = this._startBridgeSession();
+    if (this._bridgeSessionActive && this._tracking) {
+      this._ensureSendLoop();
+      this._sendMarkerPose();
+    }
+    return this._bridgeSessionActive;
+  }
+
   private _restoreMarkerCallbacks(): void {
     if (this.markerTracking) {
       this.markerTracking.onMarkerFound = this._savedOnMarkerFound ?? (() => {});
@@ -135,6 +148,7 @@ export class AlignmentController extends BaseScriptComponent {
       return;
     }
     this._setTracking(true);
+    this.ensureBridgeSession();
     if (this._bridgeSessionActive) {
       this._ensureSendLoop();
       this._sendMarkerPose();
@@ -242,11 +256,9 @@ export class AlignmentController extends BaseScriptComponent {
   }
 
   private _startBridgeSession(): boolean {
-    if (
-      !this.bridgeClient ||
-      !this.bridgeClient.isConnected() ||
-      !this.bridgeClient.activeRobotId
-    ) {
+    const connected = Boolean(this.bridgeClient?.isConnected());
+    const hasRobotId = Boolean(this.bridgeClient?.activeRobotId);
+    if (!this.bridgeClient || !connected || !hasRobotId) {
       print(
         "AlignmentController: starting local-only alignment tracking until bridge session is ready",
       );

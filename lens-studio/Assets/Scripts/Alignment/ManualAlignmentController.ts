@@ -120,7 +120,7 @@ export class ManualAlignmentController {
 
   public captureCandidate(): { position: vec3; rotation: quat } | null {
     const position = this._robotMarker?.getWorldPosition() ?? null;
-    const rotation = this._robotMarker?.getWorldRotation() ?? null;
+    const rotation = this._robotMarker?.getRotation() ?? null;
     if (!position || !rotation) {
       return null;
     }

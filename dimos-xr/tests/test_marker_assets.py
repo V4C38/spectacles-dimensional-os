@@ -47,7 +47,7 @@ def test_lens_marker_height_matches_composite_tracking_size() -> None:
 
 
 def test_generated_marker_texture_matches_composite_aspect_ratio() -> None:
-    marker_png = Path(__file__).resolve().parent.parent / "assets" / "aruco_marker.png"
+    marker_png = Path(__file__).resolve().parent.parent / "assets" / "apriltag_marker.png"
     marker = cv2.imread(str(marker_png), cv2.IMREAD_COLOR)
     assert marker is not None
 

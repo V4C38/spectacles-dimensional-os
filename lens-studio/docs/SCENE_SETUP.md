@@ -32,7 +32,7 @@ scene so the HUD can be edited visually in Lens Studio:
 
 | Child object | Purpose |
 |--------------|---------|
-| **MainTitle** | top title text |
+| **MainTitle** | top title text — editor-authored only; runtime code never changes this |
 | **MainStatus** | bridge / robot status text |
 | **RestartSetup** | authored `RectangleButton` scene object |
 | **RestartSetupLabel** | text child under **RestartSetup** |
@@ -40,32 +40,32 @@ scene so the HUD can be edited visually in Lens Studio:
 | **DebugModeLabel** | text child under **DebugMode** |
 | **EmergencyStop** | authored `RectangleButton` scene object replacing the old LiDAR button |
 | **EmergencyStopLabel** | text child under **EmergencyStop** |
-| **SubMenuToggle** | authored `RectangleButton` scene object used to expand/collapse the mode submenu |
-| **SubMenuToggleLabel** | text child under **SubMenuToggle** |
-| **SubMenu** | authored UIKit `Frame` containing the mode selector and mode-specific content |
-| **ModeManual** | authored toggle button for Manual mode |
-| **TextModeManual** | text child under **ModeManual** |
-| **ModeAgent** | authored toggle button for Agent mode |
-| **TextModeAgent** | text child under **ModeAgent** |
+| **SubMenu** | authored UIKit `Frame` containing mode-specific settings content; collapsed by default |
+| **ModeManual** | Manual mode button (3-state: off / active / active + settings) |
+| **TextModeManual** | text child under **ModeManual** — label source for Manual button |
+| **ModeAgent** | Agent mode button (3-state: off / active / active + settings) |
+| **TextModeAgent** | text child under **ModeAgent** — label source for Agent button |
 | **ModeManualMenu** | manual-mode content container under **SubMenu** |
 | **TextManualMode** | authored descriptive text under **ModeManualMenu** |
 | **EnableNavigation** | authored toggle button under **ModeManualMenu** |
-| **EnableNavigationLabel** | text child under **EnableNavigation** |
-| **ShowLiDAR** | authored toggle under **ModeManualMenu** — height/debug LiDAR layer only |
+| **EnableNavigationLabel** | text child under **EnableNavigation** — runtime label is `Navigation Marker: on/off` |
+| **ShowLiDAR** | authored cycle button under **ModeManualMenu** — cycles LiDAR display mode |
 | **ShowLiDARLabel** | text child under **ShowLiDAR** |
 | **ModeAgentMenu** | agent-mode content container under **SubMenu** |
 | **TextAgentMode** | authored descriptive text under **ModeAgentMenu** |
 
 `UIManager` binds those authored children by name and remains presentation-only.
 Setup/runtime lifecycle transitions are owned through `DimosManager` + app state.
-**ShowLiDAR** toggles the height/debug LiDAR layer (`showLiDAR` app state). The red
-obstacle layer always renders from live bridge `lidar` messages when connected,
-independent of Show LiDAR. **DebugMode** on the main bar is reserved for future
-debug features (unwired in code). `EmergencyStop` lives on the main HUD. The
-expand/collapse button shows or hides the mode-based submenu. Selecting **Manual**
+**ShowLiDAR** cycles LiDAR display mode (`lidarMode` app state: off / obstacles / full).
+The red obstacle layer always renders from live bridge `lidar` messages when connected,
+independent of LiDAR mode. **DebugMode** on the main bar is reserved for future
+debug features (unwired in code). `EmergencyStop` lives on the main HUD.
+**ModeManual** and **ModeAgent** are mutually exclusive mode selectors. Tapping the
+inactive mode activates it and closes settings. Tapping the active mode toggles its
+settings submenu (`Manual (Settings)` / `Agent (Settings)`). Selecting **Manual**
 no longer auto-starts navigation placement; the manual submenu exposes **Enable
-Navigation**, and both the main HUD toggle and robot-local toggle reflect the same
-shared app-state boolean.
+Navigation** (`Navigation Marker: on/off`), and both the main HUD toggle and
+robot-local toggle reflect the same shared app-state boolean.
 
 ## 3. RobotManager hierarchy
 
@@ -93,7 +93,7 @@ frame:
 | Child object | Purpose |
 |--------------|---------|
 | **RobotToggleButton** | Reachy-style authored toggle root with sphere mesh/material, `Look At`, `RoundButton`, and VFX/title children under **RobotMarkerRoot** |
-| **RobotDirectionArrow** | heading indicator under **RobotMarkerRoot**; authored mesh points along local `+Z`, but runtime applies a `+90deg` local yaw correction so it visually matches the app's semantic forward axis (`RobotMarkerRoot` local `+X`) |
+| **RobotDirectionArrow** | 3D Cylinder/Cone heading gizmo under **RobotMarkerRoot**; **RobotDirectionShaft** is scene-authored along local `+X` (`{x:90,y:90,z:0}` on the shaft). No runtime yaw compensation — semantic heading lives on **RobotMarkerRoot** via `RobotMarker.getRotation()` / `setRotation()` |
 | **RobotPlacementHandle** | dedicated manual-placement handle under **RobotMarkerRoot** with authored `Physics Collider`, `Interactable`, and `InteractableManipulation` targeting **RobotMarkerRoot** |
 | **RobotUIRoot** | separate UIKit `Frame` under **Rendering** that is world-positioned above **RobotMarkerRoot** and billboarded for readability |
 | **RobotMenuTitle** | robot label text under **RobotUIRoot** |
@@ -142,15 +142,18 @@ authoritative nodes are:
 | **CalibrationSceneVisual** | root subtree for the floor marker; should not add a conflicting root `LookAt` behavior over placement rotation |
 | **Circle_Seeking** | drag surface / placement ring (legacy name: **PortalCircle**) |
 | **Circle_Executing** | saturated ring shown while navigating |
-| **MoveDirectionArrow** | direction hint; child of **RotationRoot** (not under the circle) |
+| **NavigationHeadingRoot** | dedicated heading pivot for semantic nav yaw; keep non-arrow visuals out of this subtree |
+| **MoveDirectionArrow** | flat textured plane under **NavigationHeadingRoot**; keep it parallel to the ground with one stable authored correction rather than layered runtime compensation |
 | **ConfirmButton** | explicit confirm or cancel action |
-| **PlaceText** | helper text visible while placing |
 | **Dots** | retained in both placing and executing states |
 | **Arrow** | present in the prefab but ignored by the current implementation |
 
 Gameplay code now binds the `SurfacePlacementMarker` already present in
 `Scene.scene`, so scene edits to that marker should be reflected directly at
 runtime.
+
+`RotationRoot` is reserved for billboard/UI content such as `ConfirmButton`
+and `Dots`. Do not use it as the semantic heading pivot.
 
 ### Robot marker assets
 
@@ -182,8 +185,7 @@ The authored robot marker assets now live under the project-level mesh and mater
 | AlignmentController | markerTracking | Marker Tracking on **Image Tracking** |
 | AlignmentController | debugGizmo | (Optional) SceneObject with 3D gizmo for tracking debug |
 | BridgeClient | internetModule | **Internet Module** asset (see below) |
-| PointCloudRenderer | pointParent | **LidarPoints** |
-| PointCloudRenderer | heightVisual | **LidarHeightVisual** (`RenderMeshVisual` → `LidarHeight.mat`) |
+| PointCloudRenderer | pointParent | **LidarPoints** (must contain **LidarHeightVisual** child for full LiDAR) |
 | PointCloudRenderer | obstacleVisual | **LidarObstacleVisual** (`RenderMeshVisual` → `LidarObstacle.mat`) |
 | RobotMarker | markerRoot | **RobotMarkerRoot** (child of **Rendering**) |
 
@@ -204,6 +206,10 @@ that duplicate `unlit 2` / `uber_unlit` shader copies are not present.
 ### Lens Studio MCP (assets + scene)
 
 Prefer MCP for: listing/creating/moving/deleting assets, reading or patching scripts under `Assets/`, inspecting the scene graph, and setting component properties — instead of hand-editing YAML scene/material files.
+
+For Lens scene objects specifically, prefer MCP scene operations over direct
+`Scene.scene` editing. Treat raw `Scene.scene` edits as a fallback for cases the
+Lens Studio MCP cannot express.
 
 **Manual-only exception:** Internet Module (see below).
 
@@ -264,6 +270,9 @@ Push to Spectacles. On launch, the setup wizard should appear immediately at the
 Start step, then proceed through Connect and Calibrate. After a successful
 connection, the status line shows bridge connectivity, robot identity, stream
 state, and calibration status from `hello` plus `bridge_status`.
+
+If calibrate shows **`Bridge Error (CODE)`**, look up the code in
+[`dimos-xr/ERROR_CODES.md`](../../dimos-xr/ERROR_CODES.md).
 
 For the navigation foundation pass, validate in this order:
 
