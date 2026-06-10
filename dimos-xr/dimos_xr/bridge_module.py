@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import math
 import threading
 import time
@@ -24,9 +23,9 @@ from dimos_lcm.std_msgs import Bool, String
 from websockets.asyncio.server import ServerConnection
 
 from dimos_xr.adapters.base import XRRobotAdapterSpec
-from dimos_xr.error_codes import NAV_GOAL_STALLED
 from dimos_xr.alignment import AprilTagAligner
 from dimos_xr.bridge_status import BridgeStatusTracker
+from dimos_xr.error_codes import NAV_GOAL_STALLED
 from dimos_xr.filters import (
     LidarFilter,
     LidarFilterConfig,
@@ -58,44 +57,13 @@ from dimos_xr.transforms import (
     Calibration,
     OdomSample,
     _normalize_quaternion,
-    matrix_to_pose,
+    gravity_level_transform,
     normalize_ground_pose,
     pose_to_matrix,
 )
 from dimos_xr.websocket_server import XRWebSocketServer
 
 logger = setup_logger()
-
-_DEBUG_LOG_PATH = (
-    "/Users/johannestscharn/Repositories/spectacles-dimensional-os/.cursor/debug-541187.log"
-)
-
-
-def _agent_debug_log(
-    *,
-    location: str,
-    message: str,
-    data: dict[str, object],
-    hypothesis_id: str,
-    run_id: str = "pre-fix",
-) -> None:
-    # region agent log
-    try:
-        payload = {
-            "sessionId": "541187",
-            "runId": run_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-            "hypothesisId": hypothesis_id,
-        }
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload) + "\n")
-    except OSError:
-        pass
-    # endregion
-
 
 SPECTACLES_MARKER_TIMEOUT_S = 0.5
 ALIGN_STATUS_BROADCAST_INTERVAL_S = 0.3
@@ -106,10 +74,10 @@ NAV_GOAL_PATH_TIMEOUT_S = 8.0
 NAV_RECOVERY_MAX_ATTEMPTS = 2
 NAV_WATCHDOG_POLL_INTERVAL_S = 0.5
 ALIGNMENT_CLUSTER_WINDOW = 12
-ALIGNMENT_CLUSTER_MIN_SAMPLES = 6
+ALIGNMENT_CLUSTER_MIN_SAMPLES = 8
 ALIGNMENT_CLUSTER_TARGET_SAMPLES = 8
-ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M = 0.08
-ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD = math.radians(8.0)
+ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M = 0.05
+ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD = math.radians(3.0)
 
 
 def _wrap_angle_rad(angle: float) -> float:
@@ -197,6 +165,72 @@ def score_alignment_cluster(
         * (0.45 + 0.25 * translation_score + 0.15 * yaw_score + 0.15 * cluster_bonus)
     )
     return confidence, cluster_size, mean_translation_error, mean_yaw_error
+
+
+def collect_alignment_cluster(
+    candidate: AlignmentCandidate,
+    recent_candidates: list[AlignmentCandidate],
+) -> list[AlignmentCandidate]:
+    return [
+        sample
+        for sample in recent_candidates
+        if _candidate_translation_distance_m(sample.T_world_odom, candidate.T_world_odom)
+        <= ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M
+        and _candidate_yaw_distance_rad(sample.T_world_odom, candidate.T_world_odom)
+        <= ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD
+    ]
+
+
+def _circular_mean_rad(angles: list[float]) -> float:
+    if not angles:
+        return 0.0
+    sin_sum = sum(math.sin(angle) for angle in angles)
+    cos_sum = sum(math.cos(angle) for angle in angles)
+    return math.atan2(sin_sum, cos_sum)
+
+
+def _matrix_from_yaw_and_translation(
+    yaw_rad: float,
+    translation: np.ndarray,
+) -> np.ndarray:
+    x_axis = np.array(
+        [math.cos(yaw_rad), 0.0, math.sin(yaw_rad)],
+        dtype=np.float64,
+    )
+    z_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    y_axis = np.cross(z_axis, x_axis)
+    T = np.eye(4, dtype=np.float64)
+    T[:3, 0] = x_axis
+    T[:3, 1] = y_axis
+    T[:3, 2] = z_axis
+    T[:3, 3] = translation
+    return T
+
+
+def average_cluster_transform(
+    cluster: list[AlignmentCandidate],
+) -> tuple[np.ndarray, float, float]:
+    """Average gravity-leveled cluster members; return (T, yaw_spread_rad, trans_spread_m)."""
+    if not cluster:
+        raise ValueError("cluster must not be empty")
+    leveled = [
+        gravity_level_transform(np.array(sample.T_world_odom, dtype=np.float64, copy=True))
+        for sample in cluster
+    ]
+    yaws = [_candidate_yaw_rad(T) for T in leveled]
+    translations = np.array([T[:3, 3] for T in leveled], dtype=np.float64)
+    mean_yaw = _circular_mean_rad(yaws)
+    mean_translation = np.mean(translations, axis=0)
+    T_avg = _matrix_from_yaw_and_translation(mean_yaw, mean_translation)
+    yaw_spread = (
+        max(abs(_wrap_angle_rad(yaw - mean_yaw)) for yaw in yaws) if len(yaws) > 1 else 0.0
+    )
+    trans_spread = (
+        float(np.max(np.linalg.norm(translations - mean_translation, axis=1)))
+        if len(translations) > 1
+        else 0.0
+    )
+    return T_avg, yaw_spread, trans_spread
 
 
 class XRBridgeConfig(ModuleConfig):
@@ -519,7 +553,7 @@ class XRBridge(Module):
         if spec and robot:
             return "Both see marker — aligning..."
         if spec:
-            return "Spectacles sees marker — point phone at the robot camera"
+            return "Spectacles sees marker — hold printed board toward robot camera"
         if robot:
             return "Robot sees marker — show marker to Spectacles"
         stats = self._aligner.debug_stats()
@@ -697,21 +731,6 @@ class XRBridge(Module):
         norm_position, norm_orientation = normalize_ground_pose(msg.position, msg.orientation)
         T_world_base = pose_to_matrix(norm_position, norm_orientation)
         T_odom_base = pose_to_matrix(odom.position, odom.orientation)
-        # #region agent log
-        _agent_debug_log(
-            location="bridge_module.py:_process_manual_alignment_candidate",
-            message="manual alignment candidate",
-            data={
-                "manual_pos_m": [round(v, 4) for v in msg.position],
-                "norm_pos_m": [round(v, 4) for v in norm_position],
-                "odom_pos_m": [round(v, 4) for v in odom.position],
-                "manual_y_m": round(msg.position[1], 4),
-                "norm_y_m": round(norm_position[1], 4),
-                "odom_z_m": round(odom.position[2], 4),
-            },
-            hypothesis_id="C",
-        )
-        # #endregion
         candidate = AlignmentCandidate(
             T_world_odom=np.array(
                 T_world_base @ np.linalg.inv(T_odom_base),
@@ -745,20 +764,6 @@ class XRBridge(Module):
         self._aligner.active = False
         self._stop_align_status_broadcast()
         self._calibration.register_from_alignment(result.T_world_odom)
-        # #region agent log
-        committed_pos, _committed_quat = matrix_to_pose(result.T_world_odom)
-        _agent_debug_log(
-            location="bridge_module.py:_finish_alignment",
-            message="alignment committed transform",
-            data={
-                "method": result.method,
-                "approximate": result.approximate,
-                "T_translation_m": [round(v, 4) for v in committed_pos],
-                "T_world_y_m": round(committed_pos[1], 4),
-            },
-            hypothesis_id="B",
-        )
-        # #endregion
         method: Literal["manual", "marker"] = (
             "manual" if result.method == "manual" else "marker"
         )
@@ -821,31 +826,6 @@ class XRBridge(Module):
             message = self._align_status_message()
         if state == "detecting" and robot_marker_detected != self._last_debug_robot_detected:
             self._last_debug_robot_detected = robot_marker_detected
-            stats = self._aligner.debug_stats()
-            now = time.monotonic()
-            frame_gap_s = (
-                None
-                if self._last_color_frame_mono is None
-                else round(now - self._last_color_frame_mono, 3)
-            )
-            # region agent log
-            _agent_debug_log(
-                location="bridge_module.py:_broadcast_align_status",
-                message="robot_marker_detected changed",
-                data={
-                    "robot_marker_detected": robot_marker_detected,
-                    "spectacles_marker_detected": spectacles_marker_detected,
-                    "status_message": message,
-                    "aligner_frames": stats.frames,
-                    "aligner_detected": stats.detected,
-                    "aligner_no_marker": stats.no_marker,
-                    "color_frame_count": self._color_frame_count,
-                    "seconds_since_last_color_frame": frame_gap_s,
-                    "aligner_active": self._aligner.active,
-                },
-                hypothesis_id="H2",
-            )
-            # endregion
         self._ws_server.schedule_send(
             encode_align_status(
                 ts=ts,
@@ -1033,14 +1013,6 @@ class XRBridge(Module):
         self._align_start_mono = time.monotonic()
         self._alignment_mode = "marker"
         logger.info("XR alignment started")
-        # region agent log
-        _agent_debug_log(
-            location="bridge_module.py:_on_align_start",
-            message="XR alignment session started",
-            data={"aligner_active": True},
-            hypothesis_id="H4",
-        )
-        # endregion
         self._broadcast_align_status(
             state="detecting",
             robot_marker_detected=False,
@@ -1091,7 +1063,31 @@ class XRBridge(Module):
             )
             return
         finish_ts = self._best_alignment_ts if self._best_alignment_ts is not None else msg.ts
-        self._finish_alignment(best, finish_ts)
+        commit_candidate = best
+        if best.method == "marker":
+            cluster = collect_alignment_cluster(best, self._recent_marker_candidates)
+            if len(cluster) >= ALIGNMENT_CLUSTER_MIN_SAMPLES:
+                T_avg, yaw_spread, trans_spread = average_cluster_transform(cluster)
+                commit_candidate = AlignmentCandidate(
+                    T_world_odom=T_avg,
+                    quality=best.quality,
+                    method=best.method,
+                    approximate=best.approximate,
+                    reprojection_error_px=best.reprojection_error_px,
+                    sample_quality=best.sample_quality,
+                    cluster_size=len(cluster),
+                )
+                logger.info(
+                    "AprilTag alignment commit averaged cluster",
+                    cluster_size=len(cluster),
+                    yaw_spread_deg=round(math.degrees(yaw_spread), 2),
+                    trans_spread_m=round(trans_spread, 4),
+                    committed_yaw_deg=round(
+                        math.degrees(_candidate_yaw_rad(T_avg)),
+                        2,
+                    ),
+                )
+        self._finish_alignment(commit_candidate, finish_ts)
 
     def _on_align_marker(self, msg: AlignMarkerMessage, _websocket: ServerConnection) -> None:
         if not self._aligner.active:
@@ -1309,47 +1305,11 @@ class XRBridge(Module):
     async def handle_xr_color_image(self, msg: Image) -> None:
         if not self._aligner.active:
             return
-        now = time.monotonic()
-        frame_gap_s = (
-            None if self._last_color_frame_mono is None else now - self._last_color_frame_mono
-        )
-        self._last_color_frame_mono = now
+        self._last_color_frame_mono = time.monotonic()
         self._color_frame_count += 1
         if not self._logged_align_video:
             self._logged_align_video = True
             logger.info("AprilTag: robot video frames reaching XR bridge")
-            # region agent log
-            _agent_debug_log(
-                location="bridge_module.py:handle_xr_color_image",
-                message="first color frame during alignment",
-                data={
-                    "seconds_since_align_start": (
-                        None
-                        if self._align_start_mono is None
-                        else round(now - self._align_start_mono, 3)
-                    ),
-                    "width": int(getattr(msg, "width", 0) or 0),
-                    "height": int(getattr(msg, "height", 0) or 0),
-                },
-                hypothesis_id="H1",
-            )
-            # endregion
-        elif frame_gap_s is not None and (
-            frame_gap_s > 1.0 or self._color_frame_count % 20 == 0
-        ):
-            # region agent log
-            _agent_debug_log(
-                location="bridge_module.py:handle_xr_color_image",
-                message="color frame cadence sample",
-                data={
-                    "frame_count": self._color_frame_count,
-                    "inter_arrival_s": round(frame_gap_s, 3),
-                    "width": int(getattr(msg, "width", 0) or 0),
-                    "height": int(getattr(msg, "height", 0) or 0),
-                },
-                hypothesis_id="H1",
-            )
-            # endregion
         await asyncio.to_thread(self._aligner.process_frame, msg)
 
     async def handle_xr_lidar(self, msg: PointCloud2) -> None:
@@ -1368,26 +1328,6 @@ class XRBridge(Module):
                     self._latest_robot_world_position(),
                     target_points=self.config.target_points,
                 )
-                # #region agent log
-                if len(world_pts) > 0 and not getattr(self, "_logged_lidar_y_debug", False):
-                    robot_world = self._latest_robot_world_position()
-                    self._logged_lidar_y_debug = True
-                    _agent_debug_log(
-                        location="bridge_module.py:handle_xr_lidar",
-                        message="world lidar vertical stats",
-                        data={
-                            "registered": self._calibration.is_registered,
-                            "world_min_y_m": round(float(np.min(world_pts[:, 1])), 4),
-                            "world_max_y_m": round(float(np.max(world_pts[:, 1])), 4),
-                            "robot_world_y_m": round(robot_world[1], 4)
-                            if robot_world is not None
-                            else None,
-                            "odom_min_z_m": round(float(np.min(filtered[:, 2])), 4),
-                            "odom_max_z_m": round(float(np.max(filtered[:, 2])), 4),
-                        },
-                        hypothesis_id="B",
-                    )
-                # #endregion
         payload = encode_lidar(ts=msg.ts, points=world_pts, robot_id=self._robot_id)
         if not self._logged_lidar_stream_active:
             self._logged_lidar_stream_active = True

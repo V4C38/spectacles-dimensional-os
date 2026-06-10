@@ -114,6 +114,18 @@ Alignment progress during calibration:
 }
 ```
 
+### Numeric precision (outbound)
+
+Bridge encoders round world-frame floats before JSON serialization to reduce
+payload size on Wi-Fi:
+
+| Field | Decimal places |
+|-------|----------------|
+| `lidar.points_flat` | 2 |
+| `pose.position`, `pose.orientation` | 4 |
+| `path` / `path_preview` waypoints and `target` | 3 |
+| `ts` on high-rate streams (`lidar`, `pose`, `path`, `path_preview`) | 3 |
+
 ### `lidar`
 
 Subsampled point cloud in XR world frame:

@@ -15,12 +15,15 @@ from dimos_xr.bridge_module import (
     ALIGNMENT_CLUSTER_MIN_SAMPLES,
     AlignmentCandidate,
     XRBridge,
+    average_cluster_transform,
+    collect_alignment_cluster,
     score_alignment_cluster,
 )
 from dimos_xr.transforms import (
     Calibration,
     OdomSample,
     gravity_level_transform,
+    matrix_to_pose,
     normalize_ground_pose,
     pose_to_matrix,
 )
@@ -266,6 +269,10 @@ def test_alignment_cluster_score_promotes_stable_candidate_groups() -> None:
         _alignment_candidate(1.02, 2.01, 11.0),
         _alignment_candidate(0.99, 1.98, 9.5),
         _alignment_candidate(1.01, 2.00, 10.5),
+        _alignment_candidate(1.00, 2.00, 10.2),
+        _alignment_candidate(1.01, 1.99, 9.8),
+        _alignment_candidate(0.98, 2.01, 10.1),
+        _alignment_candidate(1.02, 2.00, 10.3),
         _alignment_candidate(1.50, 2.60, 40.0),
     ]
 
@@ -273,8 +280,8 @@ def test_alignment_cluster_score_promotes_stable_candidate_groups() -> None:
         recent[0], recent
     )
 
-    assert cluster_size == 4
-    assert cluster_size < ALIGNMENT_CLUSTER_MIN_SAMPLES
+    assert cluster_size == 8
+    assert cluster_size >= ALIGNMENT_CLUSTER_MIN_SAMPLES
     assert confidence > 0.5
     assert mean_translation_error < 0.03
     assert mean_yaw_error < math.radians(2.0)
@@ -295,6 +302,35 @@ def test_alignment_cluster_score_penalizes_drifted_outlier_candidates() -> None:
 
     assert cluster_size == 1
     assert confidence < 0.3
+
+
+def test_average_cluster_transform_uses_circular_yaw_mean() -> None:
+    cluster = [
+        _alignment_candidate(1.00, 2.00, 10.0),
+        _alignment_candidate(1.01, 2.00, 12.0),
+        _alignment_candidate(0.99, 1.99, 8.0),
+        _alignment_candidate(1.00, 2.01, 11.0),
+        _alignment_candidate(1.02, 2.00, 9.0),
+        _alignment_candidate(1.01, 2.00, 10.5),
+        _alignment_candidate(0.98, 1.98, 10.2),
+        _alignment_candidate(1.00, 2.00, 9.8),
+    ]
+    T_avg, yaw_spread, trans_spread = average_cluster_transform(cluster)
+    committed_pos, _ = matrix_to_pose(T_avg)
+    assert abs(committed_pos[0] - 1.0) < 0.02
+    assert abs(committed_pos[2] - 2.0) < 0.02
+    assert yaw_spread < math.radians(3.0)
+    assert trans_spread < 0.03
+
+
+def test_collect_alignment_cluster_excludes_yaw_outliers() -> None:
+    recent = [
+        _alignment_candidate(1.00, 2.00, 10.0),
+        _alignment_candidate(1.01, 2.00, 11.0),
+        _alignment_candidate(1.50, 2.60, 40.0),
+    ]
+    cluster = collect_alignment_cluster(recent[0], recent)
+    assert len(cluster) == 2
 
 
 def test_gravity_level_transform_flattens_floor() -> None:

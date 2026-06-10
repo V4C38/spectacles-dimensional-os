@@ -1,17 +1,17 @@
 import { NavigationMarkerView } from "./NavigationMarkerView";
 import { yawRotationFromPlanarDirection } from "./HeadingRotation";
+import { SurfacePlacementStabilizer } from "./SurfacePlacementStabilizer";
 
 // ================================================================
 /** Ground-ray drag placement for navigation goals with robot deadzone and marker anchoring. */
 // ================================================================
 
 const DRAG_THRESHOLD_CM = 11;
-const INTERPOLATION_SPEED = 8;
+const INTERPOLATION_SPEED = 10;
 const GROUND_NORMAL_MIN_Y = 0.95;
 const SURFACE_RAY_START_Y_OFFSET_CM = 120;
 const SURFACE_RAY_END_Y_OFFSET_CM = 220;
-const DRAG_HIT_TEST_INTERVAL = 6;
-const Y_UPDATE_THRESHOLD_CM = 5;
+const DRAG_HIT_TEST_INTERVAL = 2;
 const GROUND_Y_OFFSET_CM = 5;
 const DIRECTION_SMOOTHING_RATE = 4.0;
 const MIN_DRAG_DELTA_CM = 0.5;
@@ -39,6 +39,7 @@ export class PlacementController {
   private readonly owner: BaseScriptComponent;
   private readonly worldQueryModule: any;
   private readonly renderer: NavigationMarkerView;
+  private readonly _surfaceStabilizer = new SurfacePlacementStabilizer();
 
   private active = false;
   private visualState: PlacementVisualState = "placing";
@@ -49,6 +50,7 @@ export class PlacementController {
   private touchStartPosition = vec3.zero();
   private isDragging = false;
   private lastGroundHeight = 0;
+  private _floorBaselineY = 0;
   private _dragHitTestFrameCount = 0;
   private _processingButtonPress = false;
   private _previousDragPosition: vec3 | null = null;
@@ -56,6 +58,9 @@ export class PlacementController {
   private _placementAnchor: SceneObject | null = null;
   private _robotGroundDeadzone: RobotGroundDeadzone | null = null;
   private _placementActive = false;
+  /** False at spawn on robot; true once user drags or marker leaves deadzone. */
+  private _enforceRobotDeadzone = false;
+  private _lastValidOutsideDeadzone: vec3 | null = null;
 
   constructor(
     owner: BaseScriptComponent,
@@ -320,17 +325,26 @@ export class PlacementController {
 
   private _snapPointToSurface(point: vec3): void {
     if (!this.hitTestSession) {
+      this._applyDragFallback(point);
       return;
     }
     const rayStart = this._offsetPointY(point, SURFACE_RAY_START_Y_OFFSET_CM);
     const rayEnd = this._offsetPointY(point, -SURFACE_RAY_END_Y_OFFSET_CM);
+    let consumed = false;
+    const consumeOnce = (rawResults: any) => {
+      if (consumed) {
+        return;
+      }
+      consumed = true;
+      this._consumeSurfaceSnap(rawResults, point);
+    };
     const maybeResults = this.hitTestSession.hitTest(
       rayStart,
       rayEnd,
-      (result: any) => this._consumeSurfaceSnap(result, point),
+      (result: any) => consumeOnce(result),
     );
     if (maybeResults !== undefined) {
-      this._consumeSurfaceSnap(maybeResults, point);
+      consumeOnce(maybeResults);
     }
   }
 
@@ -359,6 +373,7 @@ export class PlacementController {
     if (dragDistance > DRAG_THRESHOLD_CM && !this.isDragging) {
       this.isDragging = true;
       this._activatePlacement();
+      this._enforceRobotDeadzone = true;
     }
     if (this.isDragging) {
       this._dragHitTestFrameCount++;
@@ -366,14 +381,19 @@ export class PlacementController {
         this._dragHitTestFrameCount = 0;
         this._snapPointToSurface(pointPosition);
       } else {
-        this.desiredPosition = new vec3(
-          pointPosition.x,
-          this.lastGroundHeight,
-          pointPosition.z,
-        );
+        this._applyDragFallback(pointPosition);
       }
       this._updateDragDirection(pointPosition);
     }
+  }
+
+  private _applyDragFallback(fallbackPoint: vec3): void {
+    const rawTarget = new vec3(
+      fallbackPoint.x,
+      this.lastGroundHeight,
+      fallbackPoint.z,
+    );
+    this._commitResolvedPlacement(rawTarget, fallbackPoint, false);
   }
 
   private _consumeSurfaceSnap(rawResults: any, fallbackPoint: vec3): void {
@@ -381,14 +401,14 @@ export class PlacementController {
     const foundPosition = first?.position ?? first?.hit?.position ?? null;
     const foundNormal = first?.normal ?? first?.hit?.normal ?? null;
     if (!foundPosition || !foundNormal || !this._isGroundLikeHit(foundNormal)) {
-      this.desiredPosition = new vec3(
-        this.desiredPosition.x,
-        this.lastGroundHeight,
-        this.desiredPosition.z,
-      );
+      this._applyDragFallback(fallbackPoint);
       return;
     }
-    const candidateY = foundPosition.y + GROUND_Y_OFFSET_CM;
+
+    const candidateY = Math.max(
+      foundPosition.y + GROUND_Y_OFFSET_CM,
+      this._floorBaselineY,
+    );
     let effectiveY = candidateY;
     if (
       this._isInsideRobotGroundDeadzone(foundPosition) &&
@@ -396,21 +416,118 @@ export class PlacementController {
     ) {
       effectiveY = this.lastGroundHeight;
     }
-    const yDelta = Math.abs(effectiveY - this.lastGroundHeight);
-    if (this.lastGroundHeight !== 0 && yDelta < Y_UPDATE_THRESHOLD_CM) {
-      this.desiredPosition = new vec3(
-        fallbackPoint.x,
-        this.lastGroundHeight,
-        fallbackPoint.z,
-      );
-      return;
+
+    const sampleInsideDeadzone = this._isInsideRobotGroundDeadzone(foundPosition);
+    if (!sampleInsideDeadzone || !this._enforceRobotDeadzone) {
+      this._surfaceStabilizer.pushSample(foundPosition, effectiveY);
     }
-    this.lastGroundHeight = effectiveY;
-    this.desiredPosition = new vec3(
+
+    const bufferEstimate = this._surfaceStabilizer.estimateFromBuffer();
+    const resolvedY = bufferEstimate?.y ?? effectiveY;
+    const rawTarget = new vec3(
       fallbackPoint.x,
-      this.lastGroundHeight,
+      Math.max(resolvedY, this._floorBaselineY),
       fallbackPoint.z,
     );
+    const snapImmediate = this._surfaceStabilizer.shouldSnapImmediate();
+    this._commitResolvedPlacement(rawTarget, fallbackPoint, snapImmediate);
+  }
+
+  private _commitResolvedPlacement(
+    rawTarget: vec3,
+    fallbackPoint: vec3,
+    snapImmediate: boolean,
+  ): void {
+    if (!this._enforceRobotDeadzone && this._isInsideRobotGroundDeadzone(rawTarget)) {
+      // Initial spawn at robot anchor is allowed.
+    } else if (this._isInsideRobotGroundDeadzone(rawTarget)) {
+      this._enforceRobotDeadzone = true;
+    } else {
+      this._enforceRobotDeadzone = true;
+      this._lastValidOutsideDeadzone = new vec3(
+        rawTarget.x,
+        rawTarget.y,
+        rawTarget.z,
+      );
+    }
+
+    let target = this._enforceRobotDeadzone
+      ? this._clampOutsideRobotDeadzone(rawTarget, fallbackPoint)
+      : rawTarget;
+
+    const dt = getDeltaTime();
+    if (dt <= 0) {
+      this.desiredPosition = target;
+      this.lastGroundHeight = target.y;
+      return;
+    }
+
+    const snapNow = snapImmediate || (this.isDragging && this.activeInteractor !== null);
+    target = this._surfaceStabilizer.advanceTowardTarget(target, dt, snapNow);
+
+    if (this.isDragging && this.activeInteractor) {
+      // Drag XZ follows the hand immediately; only height is temporally smoothed.
+      target = new vec3(fallbackPoint.x, target.y, fallbackPoint.z);
+      target = this._enforceRobotDeadzone
+        ? this._clampOutsideRobotDeadzone(target, fallbackPoint)
+        : target;
+    }
+
+    this.desiredPosition = target;
+    this.lastGroundHeight = target.y;
+  }
+
+  private _clampOutsideRobotDeadzone(point: vec3, fallbackPoint: vec3): vec3 {
+    if (!this._robotGroundDeadzone || !this._enforceRobotDeadzone) {
+      return point;
+    }
+    if (!this._isInsideRobotGroundDeadzone(point)) {
+      return point;
+    }
+
+    const robotPosition = this._robotGroundDeadzone.getRobotWorldPosition();
+    if (!robotPosition) {
+      return point;
+    }
+
+    const radius = this._robotGroundDeadzone.radiusCm;
+    const dx = point.x - robotPosition.x;
+    const dz = point.z - robotPosition.z;
+    const horizontalDistance = Math.sqrt(dx * dx + dz * dz);
+
+    if (horizontalDistance >= radius) {
+      return point;
+    }
+
+    if (horizontalDistance > 0.001) {
+      const scale = radius / horizontalDistance;
+      return new vec3(
+        robotPosition.x + dx * scale,
+        point.y,
+        robotPosition.z + dz * scale,
+      );
+    }
+
+    if (this._lastValidOutsideDeadzone) {
+      return new vec3(
+        this._lastValidOutsideDeadzone.x,
+        point.y,
+        this._lastValidOutsideDeadzone.z,
+      );
+    }
+
+    const refDx = fallbackPoint.x - robotPosition.x;
+    const refDz = fallbackPoint.z - robotPosition.z;
+    const refDistance = Math.sqrt(refDx * refDx + refDz * refDz);
+    if (refDistance > 0.001) {
+      return new vec3(
+        robotPosition.x + (refDx / refDistance) * radius,
+        point.y,
+        robotPosition.z + (refDz / refDistance) * radius,
+      );
+    }
+
+    return new vec3(robotPosition.x + radius, point.y, robotPosition.z);
   }
 
   private _isInsideRobotGroundDeadzone(point: vec3): boolean {
@@ -491,6 +608,12 @@ export class PlacementController {
   private _syncDesiredPoseToRenderedPose(): void {
     this.desiredPosition = this.renderer.worldPosition;
     this.lastGroundHeight = this.desiredPosition.y;
+    this._surfaceStabilizer.setFloorBaselineY(this._floorBaselineY);
+    this._surfaceStabilizer.advanceTowardTarget(
+      this.desiredPosition,
+      getDeltaTime(),
+      true,
+    );
   }
 
   private _beginPlacingAtPose(
@@ -502,9 +625,13 @@ export class PlacementController {
     if (resetPlacementActive) {
       this._placementActive = false;
     }
+    this._floorBaselineY = position.y;
+    this._enforceRobotDeadzone = false;
+    this._lastValidOutsideDeadzone = null;
     this.desiredPosition = new vec3(position.x, position.y, position.z);
     this.lastGroundHeight = position.y;
     this.touchStartPosition = this.desiredPosition;
+    this._surfaceStabilizer.reset(this._floorBaselineY, this.desiredPosition);
     this._bindPlacementAnchor(position);
     this.renderer.setPose(this.desiredPosition, rotation);
     this.renderer.showPlacing(this._placementActive);

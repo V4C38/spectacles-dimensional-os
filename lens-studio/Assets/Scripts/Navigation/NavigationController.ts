@@ -205,6 +205,9 @@ export class NavigationController {
     }
 
     if (msg.goal_reached || msg.goal_failed) {
+      if (!this._navGoalActive) {
+        return "Idle";
+      }
       this._finishActiveNavigationGoal();
       return msg.goal_reached ? "Goal reached" : "Goal failed";
     }

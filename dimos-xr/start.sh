@@ -11,7 +11,6 @@
 #   DIMOS_PYTHON   Path to Python in your DimOS .venv (overrides auto-detect)
 #   ROBOT_IP       Pin a specific robot IP and skip discovery (or "fake" replay)
 #   LISTEN_HOST    WebSocket bind address (default 0.0.0.0)
-#   MARKER_PORT    Calibration board HTTP port (default 8766)
 #   DIMOS_CONFIGURE_SYSTEM=1  Enable interactive sysctl/ulimit prompts (off by default)
 
 set -euo pipefail
@@ -211,8 +210,6 @@ echo "Equivalent:   ${EQUIVALENT}"
 echo "Robot IP:     ${ROBOT_IP}"
 echo "WebSocket:    ws://${LISTEN_HOST}:8787"
 print_blue_stdout "Spectacles:   enter ${LAN_IP} in the lens"
-MARKER_PORT="${MARKER_PORT:-8766}"
-echo "Marker page:  http://${LAN_IP}:${MARKER_PORT}/  (QR code printed when server starts)"
 echo ""
 echo "Ctrl+C to stop."
 echo ""

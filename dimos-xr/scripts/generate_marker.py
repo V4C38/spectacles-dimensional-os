@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Generate AprilTag 36h11 calibration assets.
+"""Generate AprilTag 36h11 calibration assets for print and Lens tracking.
 
 Outputs:
-  - ``apriltag_marker.png`` — composite AprilTag tracking image
-  - ``apriltag_marker_phone.pdf`` — padded phone-display PDF
+  - ``apriltag_marker.png`` — composite tracking image (<= 2048 px, Lens texture)
+  - ``apriltag_marker_a4.pdf`` — A4 page (210 x 297 mm), print at 100% scale
+  - ``apriltag_marker_letter.pdf`` — US Letter page (8.5 x 11 in), print at 100% scale
 
-Pose code uses ``marker_length_m`` from ``dimos_xr.marker_contract``.
-Phone display: scan QR from ./start.sh marker URL.
-
-Print: ``--print`` for a larger print PDF and PNG (150 mm).
+Pose code uses ``DEFAULT_MARKER_LENGTH_M`` from ``dimos_xr.marker_contract``.
+Print either PDF at actual size (no "fit to page") and verify the black tag
+edge with a ruler before calibrating.
 """
 
 from __future__ import annotations
@@ -27,12 +27,11 @@ from dimos_xr.marker_contract import (
     DEFAULT_APRILTAG_DICT,
     DEFAULT_MARKER_ID,
     DEFAULT_MARKER_LENGTH_M,
-    MARKER_PHONE_PDF,
-    MARKER_PNG,
-    MARKER_PRINT_PDF,
-    MARKER_PRINT_PNG,
     LENS_MARKER_ASSET_RELATIVE_PATH,
     LENS_MARKER_TEXTURE_RELATIVE_PATH,
+    MARKER_PDF_A4,
+    MARKER_PDF_LETTER,
+    MARKER_PNG,
 )
 
 try:
@@ -40,20 +39,21 @@ try:
 except ImportError as e:  # pragma: no cover
     raise SystemExit("Pillow is required for PDF export: pip install Pillow") from e
 
-PHONE_MARKER_WIDTH_M = COMPOSITE_MARKER_WIDTH_M
-PHONE_MARKER_HEIGHT_M = COMPOSITE_MARKER_HEIGHT_M
-PRINT_MARKER_TAG_EDGE_M = 0.150
-
-PHONE_PAGE_PADDING = 0.125
-PRINT_PAGE_PADDING = 0.08
+A4_PAGE_MM = (210.0, 297.0)
+LETTER_PAGE_MM = (215.9, 279.4)
 
 PDF_DPI = 300
-MARKER_SIDE_PX = 600
-QUIET_ZONE_PX = 72
+# Snap recommends marker textures of 2048 x 2048 px or less.
+LENS_TEXTURE_MAX_PX = 2048
 
-
-def _composite_marker_height_px(side_pixels: int) -> int:
-    return int(round(side_pixels * (COMPOSITE_MARKER_HEIGHT_M / COMPOSITE_MARKER_WIDTH_M)))
+# Reference layout rendered at 12.8 px/mm. The tag is 1920 px
+# (240 px per 36h11 module), the composite 2432 x 3328 px,
+# and the quiet zone 256 px (20 mm) — all integer module multiples.
+MARKER_SIDE_PX = 1920
+_REF_TAG_PX = 1920
+_REF_WIDTH_PX = 2432
+_REF_HEIGHT_PX = 3328
+_REF_QUIET_PX = 256
 
 
 def sync_lens_marker_height(lens_assets_dir: Path, marker_height_cm: float) -> None:
@@ -95,130 +95,89 @@ def generate_marker_raster(
     return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
 
-def generate_composite_marker_raster(
-    marker_bgr: np.ndarray,
-    *,
-    total_height_px: int | None = None,
-    quiet_zone_px: int = QUIET_ZONE_PX,
-) -> np.ndarray:
-    """Return a portrait marker with a central AprilTag and extra tracking features."""
+def generate_composite_marker_raster(marker_bgr: np.ndarray) -> np.ndarray:
+    """Return the portrait composite: centered AprilTag plus macro feature bands.
+
+    The tag keeps a full quiet zone on all sides. The bands above and below
+    are filled with large, high-contrast, non-repeating shapes (different per
+    band, so the target has no rotational symmetry) sized for Spectacles
+    image tracking at distance.
+    """
     marker_h, marker_w = marker_bgr.shape[:2]
     if marker_h != marker_w:
         raise ValueError("Core AprilTag raster must be square")
 
-    height_px = total_height_px or _composite_marker_height_px(marker_w)
-    feature_band_px = (height_px - marker_h - (2 * quiet_zone_px)) // 2
-    if feature_band_px <= 0:
-        raise ValueError("Composite marker height leaves no room for feature bands")
+    s = marker_w / _REF_TAG_PX
 
-    composite = np.full((height_px, marker_w, 3), 255, dtype=np.uint8)
-    marker_top = (height_px - marker_h) // 2
-    composite[marker_top : marker_top + marker_h, :, :] = marker_bgr
+    def px(value: float) -> int:
+        return int(round(value * s))
 
-    def fill_triangle(points: list[tuple[int, int]]) -> None:
-        pts = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
-        cv2.fillPoly(composite, [pts], (0, 0, 0), lineType=cv2.LINE_AA)
+    width_px = px(_REF_WIDTH_PX)
+    height_px = px(_REF_HEIGHT_PX)
+    quiet_px = px(_REF_QUIET_PX)
+    band_px = (height_px - marker_h) // 2 - quiet_px
+    if band_px <= 0:
+        raise ValueError("Composite layout leaves no room for feature bands")
 
-    def fill_diamond(center: tuple[int, int], half_w: int, half_h: int) -> None:
-        cx, cy = center
+    composite = np.full((height_px, width_px, 3), 255, dtype=np.uint8)
+    top = (height_px - marker_h) // 2
+    left = (width_px - marker_w) // 2
+    composite[top : top + marker_h, left : left + marker_w, :] = marker_bgr
+
+    black = (0, 0, 0)
+
+    def fill_triangle(points: list[tuple[float, float]]) -> None:
+        pts = np.array([(px(x), px(y)) for x, y in points], dtype=np.int32)
+        cv2.fillPoly(composite, [pts.reshape((-1, 1, 2))], black, lineType=cv2.LINE_AA)
+
+    def fill_diamond(cx: float, cy: float, half_w: float, half_h: float) -> None:
         fill_triangle([(cx, cy - half_h), (cx + half_w, cy), (cx, cy + half_h)])
         fill_triangle([(cx, cy - half_h), (cx - half_w, cy), (cx, cy + half_h)])
 
-    top_band_y1 = feature_band_px
-    bottom_band_y0 = height_px - feature_band_px
-    bottom_center_y = bottom_band_y0 + (feature_band_px // 2)
+    def fill_rect(x0: float, y0: float, x1: float, y1: float) -> None:
+        cv2.rectangle(composite, (px(x0), px(y0)), (px(x1), px(y1)), black, thickness=-1)
 
-    # Top band: use a few large, unmistakable silhouettes so Spectacles can
-    # distinguish the target from farther away on a phone screen.
-    cv2.circle(
-        composite,
-        center=(96, 64),
-        radius=48,
-        color=(0, 0, 0),
-        thickness=-1,
-        lineType=cv2.LINE_AA,
-    )
-    cv2.circle(
-        composite,
-        center=(190, 120),
-        radius=18,
-        color=(0, 0, 0),
-        thickness=10,
-        lineType=cv2.LINE_AA,
-    )
-    fill_triangle([(246, top_band_y1 - 18), (318, 22), (382, top_band_y1 - 34)])
-    fill_diamond((432, 74), half_w=30, half_h=24)
-    cv2.rectangle(
-        composite,
-        pt1=(392, 110),
-        pt2=(434, 152),
-        color=(0, 0, 0),
-        thickness=-1,
-        lineType=cv2.LINE_AA,
-    )
-    cv2.line(
-        composite,
-        pt1=(500, 18),
-        pt2=(582, top_band_y1 - 24),
-        color=(0, 0, 0),
-        thickness=26,
-        lineType=cv2.LINE_AA,
-    )
-    cv2.rectangle(
-        composite,
-        pt1=(520, 70),
-        pt2=(574, 98),
-        color=(0, 0, 0),
-        thickness=-1,
-        lineType=cv2.LINE_AA,
-    )
+    def circle(cx: float, cy: float, radius: float, thickness: float = -1.0) -> None:
+        cv2.circle(
+            composite,
+            (px(cx), px(cy)),
+            px(radius),
+            black,
+            thickness=-1 if thickness < 0 else max(1, px(thickness)),
+            lineType=cv2.LINE_AA,
+        )
 
-    # Bottom band: different macro shapes and spacing so orientation stays clear.
-    ring_center = (110, bottom_center_y - 18)
-    cv2.circle(
-        composite,
-        center=ring_center,
-        radius=46,
-        color=(0, 0, 0),
-        thickness=18,
-        lineType=cv2.LINE_AA,
-    )
-    cv2.circle(
-        composite,
-        center=(206, bottom_band_y0 + 116),
-        radius=16,
-        color=(0, 0, 0),
-        thickness=-1,
-        lineType=cv2.LINE_AA,
-    )
-    cv2.rectangle(
-        composite,
-        pt1=(272, bottom_band_y0 + 18),
-        pt2=(350, bottom_band_y0 + 112),
-        color=(0, 0, 0),
-        thickness=-1,
-        lineType=cv2.LINE_AA,
-    )
-    fill_diamond((420, bottom_band_y0 + 50), half_w=28, half_h=22)
-    fill_triangle(
-        [(462, bottom_band_y0 + 132), (520, bottom_band_y0 + 56), (578, bottom_band_y0 + 132)]
-    )
-    cv2.line(
-        composite,
-        pt1=(470, height_px - 18),
-        pt2=(586, bottom_band_y0 + 14),
-        color=(0, 0, 0),
-        thickness=34,
-        lineType=cv2.LINE_AA,
-    )
-    cv2.rectangle(
-        composite,
-        pt1=(26, bottom_band_y0 + 120),
-        pt2=(76, bottom_band_y0 + 144),
-        color=(0, 0, 0),
-        thickness=-1,
-        lineType=cv2.LINE_AA,
-    )
+    def line(x0: float, y0: float, x1: float, y1: float, thickness: float) -> None:
+        cv2.line(
+            composite,
+            (px(x0), px(y0)),
+            (px(x1), px(y1)),
+            black,
+            thickness=max(1, px(thickness)),
+            lineType=cv2.LINE_AA,
+        )
+
+    # Top band (reference y in [0, 448]): bracket, disc, ring, triangle,
+    # diamond, square, diagonal.
+    fill_rect(32, 32, 384, 128)
+    fill_rect(32, 32, 128, 384)
+    circle(640, 256, 152)
+    circle(968, 144, 88, thickness=48)
+    fill_triangle([(1120, 416), (1296, 48), (1472, 400)])
+    fill_diamond(1696, 224, 128, 176)
+    fill_rect(1856, 48, 1984, 176)
+    line(2080, 400, 2384, 64, 72)
+
+    # Bottom band (reference y in [2880, 3328]): mirrored-but-different set
+    # so orientation stays unambiguous.
+    line(48, 2928, 368, 3280, 80)
+    circle(608, 3112, 136, thickness=56)
+    circle(856, 3264, 56)
+    fill_rect(1000, 2928, 1216, 3280)
+    fill_triangle([(1344, 3280), (1504, 2928), (1664, 3280)])
+    fill_diamond(1856, 3104, 112, 160)
+    fill_rect(2048, 3232, 2400, 3296)
+    fill_rect(2336, 2944, 2400, 3296)
 
     return composite
 
@@ -227,19 +186,22 @@ def _mm_to_px(mm: float, dpi: int = PDF_DPI) -> int:
     return max(1, int(round(mm / 25.4 * dpi)))
 
 
-def write_padded_pdf(
+def write_page_pdf(
     marker_bgr: np.ndarray,
     out_path: Path,
     *,
+    page_width_mm: float,
+    page_height_mm: float,
     marker_width_mm: float,
     marker_height_mm: float,
-    padding_fraction: float = PHONE_PAGE_PADDING,
     dpi: int = PDF_DPI,
 ) -> None:
-    """PDF: marker centered on white page with known physical size."""
-    pad = padding_fraction
-    page_width_mm = marker_width_mm / (1.0 - 2.0 * pad)
-    page_height_mm = marker_height_mm / (1.0 - 2.0 * pad)
+    """PDF: marker centered on a fixed-size page so 100%-scale printing is exact."""
+    if marker_width_mm > page_width_mm or marker_height_mm > page_height_mm:
+        raise ValueError(
+            f"Marker {marker_width_mm}x{marker_height_mm} mm does not fit "
+            f"page {page_width_mm}x{page_height_mm} mm"
+        )
 
     page_width_px = _mm_to_px(page_width_mm, dpi)
     page_height_px = _mm_to_px(page_height_mm, dpi)
@@ -285,56 +247,52 @@ def main() -> None:
         default=lens_assets,
         help="Lens Studio Assets directory (default: ../lens-studio/Assets)",
     )
-    parser.add_argument(
-        "--print",
-        dest="print_mode",
-        action="store_true",
-        help="Print-sized marker instead of phone defaults",
-    )
-    parser.add_argument(
-        "--padding",
-        type=float,
-        default=PHONE_PAGE_PADDING,
-        help="Padding fraction per side on phone PDF (default: 0.125)",
-    )
     args = parser.parse_args()
 
-    tag_edge_m = PRINT_MARKER_TAG_EDGE_M if args.print_mode else DEFAULT_MARKER_LENGTH_M
-    width_scale = tag_edge_m / DEFAULT_MARKER_LENGTH_M
-    marker_width_mm = PHONE_MARKER_WIDTH_M * width_scale * 1000.0
-    marker_height_mm = PHONE_MARKER_HEIGHT_M * width_scale * 1000.0
+    marker_width_mm = COMPOSITE_MARKER_WIDTH_M * 1000.0
+    marker_height_mm = COMPOSITE_MARKER_HEIGHT_M * 1000.0
 
-    core_marker = generate_marker_raster()
-    marker = generate_composite_marker_raster(core_marker)
-    if args.print_mode and width_scale != 1.0:
-        resized_width = _mm_to_px(marker_width_mm, dpi=PDF_DPI)
-        resized_height = _mm_to_px(marker_height_mm, dpi=PDF_DPI)
-        marker = cv2.resize(marker, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
+    marker = generate_composite_marker_raster(generate_marker_raster())
+
+    # Lens texture / repo PNG, capped at Snap's recommended texture size.
+    texture_scale = LENS_TEXTURE_MAX_PX / max(marker.shape[:2])
+    texture = cv2.resize(
+        marker,
+        (
+            int(round(marker.shape[1] * texture_scale)),
+            int(round(marker.shape[0] * texture_scale)),
+        ),
+        interpolation=cv2.INTER_AREA,
+    )
 
     assets_dir = args.assets_dir
-    png_path = assets_dir / (MARKER_PRINT_PNG if args.print_mode else MARKER_PNG)
-    pdf_path = assets_dir / (MARKER_PRINT_PDF if args.print_mode else MARKER_PHONE_PDF)
-
-    if not cv2.imwrite(str(png_path), marker):
+    png_path = assets_dir / MARKER_PNG
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(png_path), texture):
         raise SystemExit(f"Failed to write {png_path}")
 
-    write_padded_pdf(
-        marker,
-        pdf_path,
-        marker_width_mm=marker_width_mm,
-        marker_height_mm=marker_height_mm,
-        padding_fraction=args.padding if not args.print_mode else PRINT_PAGE_PADDING,
-    )
+    for pdf_name, (page_w, page_h) in (
+        (MARKER_PDF_A4, A4_PAGE_MM),
+        (MARKER_PDF_LETTER, LETTER_PAGE_MM),
+    ):
+        pdf_path = assets_dir / pdf_name
+        write_page_pdf(
+            marker,
+            pdf_path,
+            page_width_mm=page_w,
+            page_height_mm=page_h,
+            marker_width_mm=marker_width_mm,
+            marker_height_mm=marker_height_mm,
+        )
+        print(
+            f"Wrote {pdf_path} (page {page_w:.0f}x{page_h:.0f} mm; "
+            f"tracked image {marker_width_mm:.0f}x{marker_height_mm:.0f} mm; "
+            f"inner tag edge {DEFAULT_MARKER_LENGTH_M * 1000.0:.0f} mm)"
+        )
 
-    mode = "PRINT" if args.print_mode else "PHONE"
-    print(f"[{mode}] Wrote {png_path} ({marker.shape[1]}x{marker.shape[0]} px)")
-    print(
-        f"[{mode}] Wrote {pdf_path} "
-        f"(tracked image {marker_width_mm:.0f}x{marker_height_mm:.0f} mm; "
-        f"inner tag edge {tag_edge_m * 1000.0:.0f} mm)"
-    )
+    print(f"Wrote {png_path} ({texture.shape[1]}x{texture.shape[0]} px)")
 
-    if args.sync_lens and not args.print_mode:
+    if args.sync_lens:
         lens_dir = args.lens_assets_dir
         lens_dir.mkdir(parents=True, exist_ok=True)
         copied_targets = sync_lens_texture(lens_dir, png_path)

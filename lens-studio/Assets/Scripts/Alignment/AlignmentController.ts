@@ -6,7 +6,7 @@ const TRACKING_QUALITY_LOG_INTERVAL_S = 1.0;
 
 // ================================================================
 // ================================================================
-/** Streams Spectacles marker poses to the bridge during QR-based auto calibration. */
+/** Streams Spectacles marker poses to the bridge during marker-based auto calibration. */
 @component
 export class AlignmentController extends BaseScriptComponent {
   @input

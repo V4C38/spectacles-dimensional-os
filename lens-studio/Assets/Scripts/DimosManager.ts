@@ -112,6 +112,7 @@ export class DimosManager extends BaseScriptComponent {
   private _navWatchdogEvent: SceneEvent | null = null;
   private _navigationOutcomeClearEvent: DelayedCallbackEvent | null = null;
   private _navigationOutcomeClearSeq = 0;
+  private _navigationOutcomeClearDueSeq = 0;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
@@ -501,13 +502,6 @@ export class DimosManager extends BaseScriptComponent {
     return new vec3(position.x, floorY, position.z);
   }
 
-  private _hasLiveLidarStreams(): boolean {
-    return (
-      this.hasBridgeConnection() &&
-      (this.bridgeClient?.lastBridgeStatus?.streams_active ?? false)
-    );
-  }
-
   private _renderCachedLidarIfAvailable(): void {
     const renderer = this.pointCloudRenderer;
     if (!renderer || this.lidarMode === "off" || !this._lastLidarPoints) {
@@ -540,11 +534,16 @@ export class DimosManager extends BaseScriptComponent {
 
     renderer.setFullLidarVisible(mode === "full");
 
-    if (this._hasLiveLidarStreams()) {
+    if (this.hasBridgeConnection()) {
       if (mode !== "full") {
         renderer.clearFullLidar();
       }
-      this._renderCachedLidarIfAvailable();
+      if (this._lastLidarPoints) {
+        this._renderCachedLidarIfAvailable();
+      } else {
+        renderer.clearAll();
+        renderer.setFullLidarVisible(mode === "full");
+      }
       return;
     }
 
@@ -964,19 +963,19 @@ export class DimosManager extends BaseScriptComponent {
 
   private _applyNavStatus(msg: NavStatusMessage): void {
     this._protocolParseFailureCount = 0;
-    this._navigationController?.applyNavStatus(msg);
+    const navLabel = this._navigationController?.applyNavStatus(msg) ?? "Idle";
 
     if (msg.recovering) {
       this._clearNavigationOutcome();
       return;
     }
 
-    if (msg.goal_reached) {
+    if (navLabel === "Goal reached") {
       this._setNavigationOutcome("success");
       return;
     }
 
-    if (msg.goal_failed) {
+    if (navLabel === "Goal failed") {
       if (msg.error_code !== undefined) {
         this._disableNavRuntime(msg.error_code);
         return;
@@ -1133,11 +1132,13 @@ export class DimosManager extends BaseScriptComponent {
 
   private _scheduleNavigationOutcomeClear(): void {
     this._navigationOutcomeClearSeq += 1;
-    const seq = this._navigationOutcomeClearSeq;
+    this._navigationOutcomeClearDueSeq = this._navigationOutcomeClearSeq;
     if (!this._navigationOutcomeClearEvent) {
       const event = this.createEvent("DelayedCallbackEvent");
       event.bind(() => {
-        if (this._navigationOutcomeClearSeq !== seq) {
+        if (
+          this._navigationOutcomeClearSeq !== this._navigationOutcomeClearDueSeq
+        ) {
           return;
         }
         this._clearNavigationOutcome();

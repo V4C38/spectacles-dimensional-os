@@ -44,7 +44,7 @@ export const WIZARD_STEP_TITLES: string[] = [
 ];
 
 export const CALIBRATE_DESCRIPTION_AUTO =
-  "Show DimOS April Tag (printed or on your phone).\nBoth cameras must see the marker.";
+  "Show the printed DimOS AprilTag board.\nBoth cameras must see the marker.";
 
 export const CALIBRATE_DESCRIPTION_MANUAL =
   "Place the marker at the robot location & rotation.\nNo April Tag needed.";

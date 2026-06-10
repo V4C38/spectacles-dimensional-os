@@ -14,7 +14,7 @@ This is **not a fork of DimOS**. It is a separate package that depends on DimOS 
 
 At a glance:
 - [`lens-studio/`](lens-studio/) contains the Spectacles Lens Studio project, setup flow, HUD, navigation interaction, and world-anchored visuals.
-- [`dimos-xr/`](dimos-xr/) contains the DimOS XR bridge package, `XRBridge`, the adapter module, the marker page, and tests.
+- [`dimos-xr/`](dimos-xr/) contains the DimOS XR bridge package, `XRBridge`, the adapter module, and tests.
 - [`dimos-xr/PROTOCOL.md`](dimos-xr/PROTOCOL.md) is the cross-platform contract between the bridge and every XR client.
 - [`dimos-xr/ERROR_CODES.md`](dimos-xr/ERROR_CODES.md) documents setup `Bridge Error (CODE)` messages from the Lens wizard.
 
@@ -24,8 +24,6 @@ flowchart LR
   DimOS -->|"lidar / odom / path"| XRBridge[XRBridge in dimos-xr]
   Spectacles[Spectacles Lens] -->|"ws JSON :8787"| XRBridge
   XRBridge -->|"bridge_status / pose / lidar / path"| Spectacles
-  XRBridge --> MarkerPage[Marker page :8766]
-  Spectacles -->|"phone-assisted calibration"| MarkerPage
 ```
 
 ## Core concepts / Overview
@@ -61,14 +59,16 @@ flowchart LR
 <details>
 <summary>Frame alignment</summary>
 
-The bridge solves `T_world_odom` so AR content stays registered to the robot. During calibration, the Lens sends `align_start` and `align_marker` while the headset tracks the marker, and the bridge combines that with AprilTag detection from the robot camera. When both sides see the same marker within the configured time tolerance, the bridge produces an alignment candidate and commits a gravity-leveled transform so the AR floor stays flat.
+The bridge solves `T_world_odom` so AR content stays registered to the robot. During calibration, the Lens sends `align_start` and `align_marker` while the headset tracks the marker, and the bridge combines that with AprilTag detection from the robot camera. When both sides see the same marker within the configured time tolerance, the bridge averages a stable cluster of candidates and commits a gravity-leveled transform so the AR floor stays flat.
 
-The default marker contract is a **60 mm x 120 mm** tracked image with a **60 mm x 60 mm** AprilTag centered inside. The shared marker definition lives in `dimos-xr/dimos_xr/marker_contract.py`, and marker assets can be regenerated with:
+Calibration requires a **printed** marker: a **190 mm × 260 mm** tracked image with a **150 mm × 150 mm** AprilTag centered inside. It prints at 100% scale on both A4 (`apriltag_marker_a4.pdf`) and US Letter (`apriltag_marker_letter.pdf`). Generate and sync assets with:
 
 ```bash
 cd /path/to/spectacles-dimensional-os/dimos-xr
 python scripts/generate_marker.py --sync-lens
 ```
+
+Print the matching PDF from `dimos-xr/assets/` at **actual size** (no "fit to page") and verify the black tag edge measures 150 mm with a ruler before calibrating.
 
 </details>
 
@@ -155,7 +155,7 @@ flowchart TB
 
 ## Dimensional OS Blueprint (`dimos-xr`)
 
-[`dimos-xr/`](dimos-xr/) contains the Python side: `XRBridge`, `XRRobotAdapterModule`, the marker page server, the protocol definition, and the tests. The monorepo entrypoint is [`dimos-xr/blueprints/dimos_xr.py`](dimos-xr/blueprints/dimos_xr.py), which wraps native DimOS stack composition for the currently selected robot runtime.
+[`dimos-xr/`](dimos-xr/) contains the Python side: `XRBridge`, `XRRobotAdapterModule`, the protocol definition, and the tests. The monorepo entrypoint is [`dimos-xr/blueprints/dimos_xr.py`](dimos-xr/blueprints/dimos_xr.py), which wraps native DimOS stack composition for the currently selected robot runtime.
 
 `XRBridge` subclasses `dimos.core.module.Module`, handles WebSocket sessions, calibration, transforms, LiDAR/pose/path streaming, and dispatches outbound control through `XRRobotAdapterModule`. The adapter module absorbs robot-specific streams and control surfaces for Go2 and G1 while keeping the bridge core platform-agnostic.
 
@@ -249,7 +249,6 @@ See [`dimos-xr/tests/README.md`](dimos-xr/tests/README.md) for the unit vs integ
 <summary>Transport, ports, and discovery</summary>
 
 - XR bridge WebSocket listens on **8787**; avoid binding port **8765** on the same machine while Foxglove is running.
-- The marker page is served separately on **8766** by default and its QR code is printed when the blueprint starts.
 - `start.sh` chooses the stack interactively at launch.
 - `unitree-g1-nav-onboard` is the recommended G1 XR path.
 - `unitree-g1` is a reduced-capability runtime; nav/control may be disabled there.

@@ -308,3 +308,39 @@ def test_encode_pose() -> None:
         )
     )
     assert pose["orientation"] == [0.0, 0.0, 0.0, 1.0]
+
+
+def test_encode_pose_rounds_high_precision_values() -> None:
+    pose = json.loads(
+        encode_pose(
+            ts=1.23456789,
+            position=(1.23456789, 2.34567891, 3.45678912),
+            orientation=(0.111111115, 0.222222225, 0.333333335, 0.999999995),
+            robot_id="unitree_go2",
+        )
+    )
+    assert pose["ts"] == 1.235
+    assert pose["position"] == [1.2346, 2.3457, 3.4568]
+    assert pose["orientation"] == [0.1111, 0.2222, 0.3333, 1.0]
+
+
+def test_encode_path_rounds_waypoints() -> None:
+    path = json.loads(
+        encode_path(
+            ts=2.123456,
+            waypoints=[(1.23456, 2.34567, 3.45678)],
+            robot_id="unitree_go2",
+        )
+    )
+    assert path["ts"] == 2.123
+    assert path["waypoints"] == [[1.235, 2.346, 3.457]]
+
+    preview = json.loads(
+        encode_path_preview(
+            ts=2.5,
+            waypoints=[(4.0, 5.0, 6.0)],
+            robot_id="unitree_go2",
+            target=(7.123456, 8.234567, 9.345678),
+        )
+    )
+    assert preview["target"] == [7.123, 8.235, 9.346]

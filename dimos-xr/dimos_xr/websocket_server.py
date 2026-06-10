@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -52,7 +53,19 @@ DisconnectHandler = Callable[[ServerConnection], None]
 HelloSupplier = Callable[[], Any]
 
 STARTUP_TIMEOUT_S = 10.0
-COALESCE_MESSAGE_TYPES = frozenset({"lidar", "pose"})
+OUTBOUND_FIFO_MAXSIZE = 64
+OUTBOUND_BACKLOG_LOG_INTERVAL_S = 5.0
+COALESCE_MESSAGE_TYPES = frozenset(
+    {
+        "lidar",
+        "pose",
+        "path",
+        "path_preview",
+        "nav_status",
+        "bridge_status",
+        "align_status",
+    }
+)
 _MESSAGE_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
 
 
@@ -62,14 +75,18 @@ def _peek_message_type(text: str) -> str | None:
 
 
 class _ConnectionOutbound:
-    """Per-connection ordered sender with latest-wins coalescing for high-rate streams."""
+    """Per-connection sender with latest-wins coalescing and bounded FIFO."""
 
     def __init__(self, websocket: ServerConnection) -> None:
         self._websocket = websocket
-        self._queue: asyncio.Queue[tuple[int, str]] = asyncio.Queue()
+        self._queue: asyncio.Queue[tuple[int, str]] = asyncio.Queue(
+            maxsize=OUTBOUND_FIFO_MAXSIZE,
+        )
         self._coalesce_latest: dict[str, str] = {}
         self._sequence = 0
         self._sent_count = 0
+        self._dropped_fifo_count = 0
+        self._last_backlog_log_mono = 0.0
         self._work_available = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._closed = False
@@ -97,7 +114,19 @@ class _ConnectionOutbound:
             self._coalesce_latest[msg_type] = text
         else:
             self._sequence += 1
-            self._queue.put_nowait((self._sequence, text))
+            item = (self._sequence, text)
+            try:
+                self._queue.put_nowait(item)
+            except asyncio.QueueFull:
+                try:
+                    self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                self._dropped_fifo_count += 1
+                try:
+                    self._queue.put_nowait(item)
+                except asyncio.QueueFull:
+                    pass
         self._work_available.set()
 
     async def _sender_loop(self) -> None:
@@ -109,18 +138,14 @@ class _ConnectionOutbound:
                     if self._closed:
                         break
 
-                while True:
-                    try:
-                        _seq, text = self._queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-                    await self._send(text)
+                try:
+                    _seq, text = self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    await self._flush_coalesced_batch()
+                    continue
 
-                if self._coalesce_latest:
-                    pending = self._coalesce_latest
-                    self._coalesce_latest = {}
-                    for text in pending.values():
-                        await self._send(text)
+                await self._send(text)
+                await self._flush_one_coalesced()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -129,10 +154,39 @@ class _ConnectionOutbound:
                 error=str(exc),
             )
 
+    async def _flush_one_coalesced(self) -> None:
+        if not self._coalesce_latest:
+            return
+        msg_type = next(iter(self._coalesce_latest))
+        text = self._coalesce_latest.pop(msg_type)
+        await self._send(text)
+
+    async def _flush_coalesced_batch(self) -> None:
+        while self._coalesce_latest and not self._closed:
+            await self._flush_one_coalesced()
+
+    def _maybe_log_backlog(self) -> None:
+        now = time.monotonic()
+        if now - self._last_backlog_log_mono < OUTBOUND_BACKLOG_LOG_INTERVAL_S:
+            return
+        fifo_depth = self._queue.qsize()
+        coalesce_depth = len(self._coalesce_latest)
+        if fifo_depth == 0 and coalesce_depth == 0 and self._dropped_fifo_count == 0:
+            return
+        self._last_backlog_log_mono = now
+        logger.debug(
+            "XR WebSocket outbound backlog",
+            fifo_depth=fifo_depth,
+            coalesce_pending=coalesce_depth,
+            dropped_fifo=self._dropped_fifo_count,
+            sent_count=self._sent_count,
+        )
+
     async def _send(self, text: str) -> None:
         try:
             await self._websocket.send(text)
             self._sent_count += 1
+            self._maybe_log_backlog()
         except websockets.ConnectionClosed:
             self._closed = True
         except Exception as exc:
@@ -205,16 +259,18 @@ class XRWebSocketServer:
         self._startup_error = None
 
         def run_loop() -> None:
-            self._loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._loop)
+            loop = asyncio.new_event_loop()
+            self._loop = loop
+            asyncio.set_event_loop(loop)
             try:
-                self._loop.run_until_complete(self._run_server())
+                loop.run_until_complete(self._run_server())
             except BaseException as exc:
                 self._startup_error = exc
                 self._ready.set()
                 raise
             finally:
-                self._loop.close()
+                loop.close()
+                self._loop = None
 
         self._thread = threading.Thread(target=run_loop, daemon=True, name="ar-ws")
         self._thread.start()

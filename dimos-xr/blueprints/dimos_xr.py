@@ -91,7 +91,4 @@ def _runtime_blueprint(stack_name: str | None = None) -> Any:
 if __name__ == "__main__":
     from dimos.core.coordination.module_coordinator import ModuleCoordinator
 
-    from dimos_xr.marker_server import start_marker_server
-
-    start_marker_server()
     ModuleCoordinator.build(_runtime_blueprint()).loop()

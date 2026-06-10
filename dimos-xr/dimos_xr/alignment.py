@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 from dataclasses import dataclass
@@ -14,6 +13,7 @@ from dimos.msgs.sensor_msgs.Image import Image
 from dimos.utils.logging_config import setup_logger
 
 from dimos_xr.marker_contract import (
+    COMPOSITE_MARKER_HEIGHT_CM,
     DEFAULT_APRILTAG_DICT,
     DEFAULT_MARKER_ID,
     DEFAULT_MARKER_LENGTH_M,
@@ -23,39 +23,6 @@ from dimos_xr.transforms import OdomSample, pose_to_matrix
 logger = setup_logger()
 
 _DEBUG_LOG_INTERVAL_S = 3.0
-_AGENT_DEBUG_LOG_PATH = (
-    "/Users/johannestscharn/Repositories/spectacles-dimensional-os/.cursor/debug-541187.log"
-)
-
-
-def _agent_debug_log(
-    *,
-    location: str,
-    message: str,
-    data: dict[str, object],
-    hypothesis_id: str,
-    run_id: str = "pre-fix",
-) -> None:
-    # region agent log
-    try:
-        with open(_AGENT_DEBUG_LOG_PATH, "a", encoding="utf-8") as handle:
-            handle.write(
-                json.dumps(
-                    {
-                        "sessionId": "541187",
-                        "runId": run_id,
-                        "hypothesisId": hypothesis_id,
-                        "location": location,
-                        "message": message,
-                        "data": data,
-                        "timestamp": int(time.time() * 1000),
-                    }
-                )
-                + "\n"
-            )
-    except OSError:
-        pass
-    # endregion
 
 # Go2 front camera extrinsics (base_link <- camera), aligned to the public Unitree Go2
 # front_camera_joint mount. This is intentionally separate from the optical-frame rotation
@@ -307,12 +274,11 @@ class AprilTagAligner:
                 self._last_camera_info_signature = None
                 logger.info(
                     "AprilTag robot detection started: id=%d %s edge=%.0fmm "
-                    "(same marker as apriltag_marker.png / phone PDF, "
-                    "Lens physical height %.1fcm)",
+                    "(printed apriltag_marker_a4/letter.pdf, Lens physical height %.1fcm)",
                     self._marker_id,
                     DEFAULT_APRILTAG_DICT,
                     self._marker_length_m * 1000,
-                    self._marker_length_m * 100,
+                    COMPOSITE_MARKER_HEIGHT_CM,
                 )
 
     def set_camera_info(self, info: CameraInfo) -> None:
@@ -363,27 +329,12 @@ class AprilTagAligner:
                 stats.frames,
                 stats.detected,
             )
-            # region agent log
-            _agent_debug_log(
-                location="alignment.py:_maybe_log_debug",
-                message="robot april tag detection stats",
-                data={
-                    "marker_visible": True,
-                    "frames": stats.frames,
-                    "detected": stats.detected,
-                    "no_marker": stats.no_marker,
-                    "robot_marker_detected_now": self.robot_marker_detected,
-                    "last_reproj_px": stats.last_reproj_px,
-                },
-                hypothesis_id="H3",
-            )
-            # endregion
             return
         logger.info(
             "AprilTag robot camera: no marker yet — frames=%d "
             "no_intrinsics=%d no_marker=%d wrong_id=%d pose_fail=%d high_reproj=%d "
             "resolution_mismatch=%d "
-            "(show phone marker page to Go2 front camera; avoid glare)",
+            "(hold printed marker toward Go2 front camera; avoid glare)",
             stats.frames,
             stats.no_camera_info,
             stats.no_marker,
@@ -392,25 +343,6 @@ class AprilTagAligner:
             stats.high_reproj,
             stats.camera_resolution_mismatch,
         )
-        # region agent log
-        _agent_debug_log(
-            location="alignment.py:_maybe_log_debug",
-            message="robot april tag detection stats",
-            data={
-                "marker_visible": False,
-                "frames": stats.frames,
-                "detected": stats.detected,
-                "no_marker": stats.no_marker,
-                "no_camera_info": stats.no_camera_info,
-                "wrong_id": stats.wrong_id,
-                "pose_fail": stats.pose_fail,
-                "high_reproj": stats.high_reproj,
-                "resolution_mismatch": stats.camera_resolution_mismatch,
-                "robot_marker_detected_now": self.robot_marker_detected,
-            },
-            hypothesis_id="H3",
-        )
-        # endregion
 
     def _maybe_log_camera_resolution_mismatch(
         self,

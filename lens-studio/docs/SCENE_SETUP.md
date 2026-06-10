@@ -7,12 +7,12 @@ The live `SetupWizard` scene object is bound to
 
 ## 1. AprilTag marker asset
 
-**Lens Studio** uses `Assets/TrackingMarkers/apriltag_marker.png` (tracking image). **On the phone** during calibration, scan the **QR code** printed in the terminal when you run `dimos-xr` `./start.sh` — it opens the composite marker page at true size (**60 mm × 120 mm** overall, with a **60 mm × 60 mm** AprilTag centered inside).
+**Lens Studio** uses `Assets/TrackingMarkers/apriltag_marker.png` (tracking image). **Print** the calibration board from `dimos-xr/assets/apriltag_marker_a4.pdf` (A4) or `apriltag_marker_letter.pdf` (US Letter) at **100% scale** (**190 mm × 260 mm** overall, with a **150 mm × 150 mm** AprilTag centered inside). Regenerate assets with `python scripts/generate_marker.py --sync-lens` from `dimos-xr/`.
 
-The scene should already have **Image Tracking** with `apriltag_marker` (physical height **12.0 cm** for the full tracked image). If you re-import:
+The scene should already have **Image Tracking** with `apriltag_marker` (physical height **26.0 cm** for the full tracked image). If you re-import:
 
 1. Ensure `Assets/TrackingMarkers/apriltag_marker.png` is in the project (sync from `dimos-xr`: `python scripts/generate_marker.py --sync-lens`).
-2. On the marker asset, set texture to `apriltag_marker` and **Physical Height** to `12.0` cm.
+2. On the marker asset, set texture to `apriltag_marker` and **Physical Height** to `26.0` cm.
 
 ## 2. UI frames (scene-placed, UIKit Frame)
 
@@ -277,8 +277,8 @@ If calibrate shows **`Bridge Error (CODE)`**, look up the code in
 For the navigation foundation pass, validate in this order:
 
 1. Bridge first: run `dimos-xr/blueprints/dimos_xr.py` from the DimOS `.venv`
-   with the desired `DIMOS_XR_STACK`, then verify the bridge starts, the QR
-   marker page is served, and the `bridge_status` stream is healthy.
+   with the desired `DIMOS_XR_STACK`, then verify the bridge starts and the
+   `bridge_status` stream is healthy.
 2. Lens compile and scene wiring: confirm `DimosManager` has `placementRayOrigin` wired and the
    Lens compiles without TypeScript errors.
    Do not run compile-with-logs as the default verification step; only use it

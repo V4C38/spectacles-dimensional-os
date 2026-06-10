@@ -34,6 +34,7 @@ const WS_CONNECTING = 0;
 const WS_OPEN = 1;
 const PARSE_RECOVERY_COOLDOWN_S = 2.0;
 const PARSE_RECONNECT_THRESHOLD = 5;
+const FRAGMENT_REASSEMBLY_MAX_BYTES = 1_048_576;
 
 // ================================================================
 // WebSocket client to the DimOS AR bridge; parses inbound messages and sends alignment/navigation commands.
@@ -67,6 +68,7 @@ export class BridgeClient extends BaseScriptComponent {
   private _consecutiveParseFailures = 0;
   private _lastParseRecoveryRequestTime = -PARSE_RECOVERY_COOLDOWN_S;
   private _reconnectScheduled = false;
+  private _fragmentBuffer: string | null = null;
   private _activeRobotId: string | null = null;
   private _helloCapabilities: string[] = [];
   private _capabilityStates: Record<string, { available: boolean; reason?: string }> =
@@ -193,6 +195,7 @@ export class BridgeClient extends BaseScriptComponent {
 
       this.ws.onclose = () => {
         this.ws = null;
+        this._fragmentBuffer = null;
         this.helloReceived = false;
         this._activeRobotId = null;
         this._helloCapabilities = [];
@@ -225,6 +228,7 @@ export class BridgeClient extends BaseScriptComponent {
       socket.close();
       this.ws = null;
     }
+    this._fragmentBuffer = null;
     this.isConnecting = false;
     this.helloReceived = false;
     this._activeRobotId = null;
@@ -355,8 +359,13 @@ export class BridgeClient extends BaseScriptComponent {
   private _onMessage(event: WebSocketMessageEvent): void {
     this.ensureEventHandlers();
     const raw = event.data as string;
+    const payload = this._reassembleFragment(raw);
+    if (payload === null) {
+      return;
+    }
     try {
-      const msg = parseInboundMessage(raw);
+      const msg = parseInboundMessage(payload);
+      this._fragmentBuffer = null;
       this._consecutiveParseFailures = 0;
       if (!msg) {
         return;
@@ -402,7 +411,45 @@ export class BridgeClient extends BaseScriptComponent {
           break;
       }
     } catch (error) {
-      this._handleParseFailure(raw, error);
+      this._handleParseFailure(payload, error);
+    }
+  }
+
+  /**
+   * Spectacles may deliver a single JSON WebSocket frame across multiple onmessage
+   * callbacks. Continuation chunks do not start with `{`.
+   */
+  private _reassembleFragment(raw: string): string | null {
+    const trimmed = raw.trimStart();
+    if (trimmed.startsWith("{")) {
+      this._fragmentBuffer = raw;
+    } else if (this._fragmentBuffer !== null) {
+      const combined = this._fragmentBuffer + raw;
+      if (combined.length > FRAGMENT_REASSEMBLY_MAX_BYTES) {
+        print(
+          `BridgeClient: discarding oversized fragment buffer (${combined.length} bytes)`,
+        );
+        this._fragmentBuffer = null;
+        return null;
+      }
+      this._fragmentBuffer = combined;
+    } else {
+      return raw;
+    }
+
+    const candidate = this._fragmentBuffer;
+    if (candidate === null || !this._isCompleteJsonObject(candidate)) {
+      return null;
+    }
+    return candidate;
+  }
+
+  private _isCompleteJsonObject(text: string): boolean {
+    try {
+      const parsed = JSON.parse(text);
+      return typeof parsed === "object" && parsed !== null;
+    } catch (_error) {
+      return false;
     }
   }
 
@@ -416,13 +463,19 @@ export class BridgeClient extends BaseScriptComponent {
             sniffed,
             error instanceof Error ? error.message : String(error),
           );
-    this._consecutiveParseFailures += 1;
-    emit(this.onProtocolError, parseError);
 
     const nonCritical =
       isNonCriticalInboundMessageType(parseError.messageType) ||
       (parseError.kind === "json" &&
         isNonCriticalInboundMessageType(sniffed));
+
+    if (nonCritical) {
+      this._fragmentBuffer = null;
+      return;
+    }
+
+    this._consecutiveParseFailures += 1;
+    emit(this.onProtocolError, parseError);
 
     print(
       `BridgeClient: protocol ${parseError.kind} error on ${parseError.messageType ?? sniffed ?? "unknown"} (${this._consecutiveParseFailures}); len=${raw.length}; first="${this._snippet(raw, 0)}" last="${this._snippet(raw, Math.max(0, raw.length - 80))}"`,
@@ -433,10 +486,6 @@ export class BridgeClient extends BaseScriptComponent {
         `BridgeClient: ${this._consecutiveParseFailures} consecutive parse failures; reconnecting`,
       );
       this._scheduleReconnectAfterParseFailures();
-      return;
-    }
-
-    if (nonCritical && this._consecutiveParseFailures === 1) {
       return;
     }
 

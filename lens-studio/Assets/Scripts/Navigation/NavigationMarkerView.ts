@@ -188,7 +188,8 @@ export class NavigationMarkerView {
     lerpSpeed: number,
   ): void {
     const transform = this.root.getTransform();
-    const alpha = getDeltaTime() * lerpSpeed;
+    const dt = getDeltaTime();
+    const alpha = dt > 0 ? 1.0 - Math.exp(-lerpSpeed * dt) : 1.0;
     if (this._placementAnchor) {
       const desiredLocal = this._worldToAnchorLocal(desiredPosition);
       transform.setLocalPosition(

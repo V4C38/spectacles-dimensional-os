@@ -272,6 +272,22 @@ def _round_flat(arr: NDArray[np.floating], decimals: int = 2) -> list[float]:
     return np.round(arr_f64, decimals).ravel().tolist()
 
 
+def _round_vec3(
+    position: tuple[float, float, float],
+    decimals: int = 3,
+) -> list[float]:
+    arr = np.nan_to_num(np.asarray(position, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    return np.round(arr, decimals).tolist()
+
+
+def _round_quat(
+    orientation: tuple[float, float, float, float],
+    decimals: int = 4,
+) -> list[float]:
+    arr = np.nan_to_num(np.asarray(orientation, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+    return np.round(arr, decimals).tolist()
+
+
 def _sanitize_pose_values(
     position: tuple[float, float, float],
     orientation: tuple[float, float, float, float],
@@ -345,11 +361,11 @@ def encode_pose(
     return _dumps(
         {
             "type": "pose",
-            "ts": ts,
+            "ts": round(ts, 3),
             "robot_id": robot_id,
             "frame": FRAME_WORLD,
-            "position": list(safe_position),
-            "orientation": list(safe_orientation),
+            "position": _round_vec3(safe_position, decimals=4),
+            "orientation": _round_quat(safe_orientation, decimals=4),
         }
     )
 
@@ -371,7 +387,7 @@ def encode_path_preview(
     target: tuple[float, float, float],
 ) -> str:
     payload = _path_payload("path_preview", ts=ts, waypoints=waypoints, robot_id=robot_id)
-    payload["target"] = list(target)
+    payload["target"] = _round_vec3(target, decimals=3)
     return _dumps(payload)
 
 
@@ -384,10 +400,10 @@ def _path_payload(
 ) -> dict[str, Any]:
     return {
         "type": msg_type,
-        "ts": ts,
+        "ts": round(ts, 3),
         "robot_id": robot_id,
         "frame": FRAME_WORLD,
-        "waypoints": [list(point) for point in waypoints],
+        "waypoints": [_round_vec3(point, decimals=3) for point in waypoints],
     }
 
 
