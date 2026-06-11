@@ -42,7 +42,7 @@ See [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md).
 
 ## Marker assets
 
-After changing the AprilTag, regenerate and sync to the Lens: `python scripts/generate_marker.py --sync-lens` (from `dimos-xr/`).
+After changing the AprilTag contract, regenerate robot-mounted assets: `python scripts/generate_marker.py` (from `dimos-xr/`).
 
 ## Bridge error codes
 

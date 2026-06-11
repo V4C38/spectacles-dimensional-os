@@ -7,7 +7,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import websockets
@@ -19,9 +19,9 @@ from websockets.asyncio.server import Server, ServerConnection, serve
 from dimos_xr.protocol import (
     AlignCommitMessage,
     AlignManualPoseMessage,
-    AlignMarkerMessage,
     AlignStartMessage,
     AlignStopMessage,
+    CameraInfoMessage,
     CancelGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
@@ -31,6 +31,7 @@ from dimos_xr.protocol import (
     decode_inbound,
     encode_hello,
 )
+from dimos_xr.tag_tracker import parse_camera_frame
 
 logger = setup_logger()
 
@@ -40,7 +41,8 @@ logging.getLogger("websockets").setLevel(logging.WARNING)
 AlignStartHandler = Callable[[AlignStartMessage, ServerConnection], None]
 AlignStopHandler = Callable[[AlignStopMessage, ServerConnection], None]
 AlignCommitHandler = Callable[[AlignCommitMessage, ServerConnection], None]
-AlignMarkerHandler = Callable[[AlignMarkerMessage, ServerConnection], None]
+CameraInfoHandler = Callable[[CameraInfoMessage, ServerConnection], None]
+CameraFrameHandler = Callable[[dict[str, Any], bytes, ServerConnection], Awaitable[None]]
 AlignManualPoseHandler = Callable[[AlignManualPoseMessage, ServerConnection], None]
 NavGoalHandler = Callable[[NavGoalMessage], None]
 PlanPathHandler = Callable[[PlanPathMessage], None]
@@ -64,6 +66,7 @@ COALESCE_MESSAGE_TYPES = frozenset(
         "nav_status",
         "bridge_status",
         "align_status",
+        "camera_frame_ack",
     }
 )
 _MESSAGE_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
@@ -210,7 +213,8 @@ class XRWebSocketServer:
         on_align_start: AlignStartHandler | None = None,
         on_align_stop: AlignStopHandler | None = None,
         on_align_commit: AlignCommitHandler | None = None,
-        on_align_marker: AlignMarkerHandler | None = None,
+        on_camera_info: CameraInfoHandler | None = None,
+        on_camera_frame: CameraFrameHandler | None = None,
         on_align_manual_pose: AlignManualPoseHandler | None = None,
         on_nav_goal: NavGoalHandler | None = None,
         on_plan_path: PlanPathHandler | None = None,
@@ -227,7 +231,8 @@ class XRWebSocketServer:
         self._on_align_start = on_align_start
         self._on_align_stop = on_align_stop
         self._on_align_commit = on_align_commit
-        self._on_align_marker = on_align_marker
+        self._on_camera_info = on_camera_info
+        self._on_camera_frame = on_camera_frame
         self._on_align_manual_pose = on_align_manual_pose
         self._on_nav_goal = on_nav_goal
         self._on_plan_path = on_plan_path
@@ -326,8 +331,19 @@ class XRWebSocketServer:
                 self._on_status_connect(websocket)
             async for message in websocket:
                 try:
+                    if isinstance(message, bytes):
+                        if self._on_camera_frame is None:
+                            logger.warning("Binary camera_frame received but no handler")
+                            continue
+                        header, jpeg = parse_camera_frame(message)
+                        if header.get("robot_id") != hello.robot_id:
+                            raise ValueError(
+                                f"camera_frame robot_id mismatch: {header.get('robot_id')}"
+                            )
+                        await self._on_camera_frame(header, jpeg, websocket)
+                        continue
                     if not isinstance(message, str):
-                        raise ValueError("Only JSON text frames are supported")
+                        raise ValueError("Unsupported WebSocket frame type")
                     inbound = decode_inbound(message, expected_robot_id=hello.robot_id)
                     self._dispatch_inbound(inbound, websocket)
                 except ValueError as exc:
@@ -356,9 +372,9 @@ class XRWebSocketServer:
         elif isinstance(inbound, AlignCommitMessage):
             if self._on_align_commit is not None:
                 self._on_align_commit(inbound, websocket)
-        elif isinstance(inbound, AlignMarkerMessage):
-            if self._on_align_marker is not None:
-                self._on_align_marker(inbound, websocket)
+        elif isinstance(inbound, CameraInfoMessage):
+            if self._on_camera_info is not None:
+                self._on_camera_info(inbound, websocket)
         elif isinstance(inbound, AlignManualPoseMessage):
             if self._on_align_manual_pose is not None:
                 self._on_align_manual_pose(inbound, websocket)

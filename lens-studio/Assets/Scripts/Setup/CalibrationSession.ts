@@ -1,4 +1,4 @@
-import { AlignmentController } from "../Alignment/AlignmentController";
+import { TagAlignmentSession } from "../Alignment/TagAlignmentSession";
 import { DimosManager } from "../DimosManager";
 import { AlignStatusMessage, BridgeStatusMessage } from "../Network/Protocol";
 import { BridgeErrorCode } from "./BridgeErrorCodes";
@@ -33,7 +33,7 @@ export class CalibrationSession {
 
   constructor(
     private readonly _dimosManager: DimosManager,
-    private readonly _alignmentController: AlignmentController | null,
+    private readonly _tagAlignmentSession: TagAlignmentSession | null,
     private readonly _host: CalibrationSessionHost,
   ) {}
 
@@ -61,8 +61,8 @@ export class CalibrationSession {
   public leave(): void {
     this._commitInFlight = false;
     this._resetManualCandidateSync();
-    this._alignmentController?.setCalibrationGizmoEnabled(false);
-    this._alignmentController?.stop();
+    this._tagAlignmentSession?.setCalibrationGizmoEnabled(false);
+    this._tagAlignmentSession?.stop();
     this._dimosManager.cancelManualAlignmentPlacement();
     this._dimosManager.stopManualAlignmentSession();
     this._dimosManager.clearManualAlignmentPose();
@@ -99,7 +99,7 @@ export class CalibrationSession {
     }
 
     if (hasCalibrationCandidate(this._state)) {
-      if (this._alignmentController?.commitBestAlignment()) {
+      if (this._tagAlignmentSession?.commitBestAlignment()) {
         this._commitInFlight = true;
         this._state = {
           ...this._state,
@@ -122,8 +122,8 @@ export class CalibrationSession {
       return false;
     }
 
-    this._alignmentController?.setCalibrationGizmoEnabled(false);
-    this._alignmentController?.stop();
+    this._tagAlignmentSession?.setCalibrationGizmoEnabled(false);
+    this._tagAlignmentSession?.stop();
     this._host.log("calibration step skipped");
     return true;
   }
@@ -337,16 +337,26 @@ export class CalibrationSession {
     this._dimosManager.stopManualAlignmentSession();
     this._dimosManager.clearManualAlignmentPose();
     this._dimosManager.hideRobotMarkerPreview();
-    this._alignmentController?.setCalibrationGizmoEnabled(true);
-    this._alignmentController?.start();
+    this._dimosManager.frameCaptureController?.setCaptureErrorHandler(() => {
+      this._state = {
+        ...this._state,
+        bridgeErrorCode: BridgeErrorCode.CameraCaptureFailed,
+        bridgeWaitStartedAt: null,
+        statusMessage: "",
+        statusColor: COLOR_WHITE,
+      };
+      this._notify();
+    });
+    this._tagAlignmentSession?.setCalibrationGizmoEnabled(true);
+    this._tagAlignmentSession?.start();
     this._notify(true);
   }
 
   private _beginManualMode(offlineReady: boolean): void {
     this._commitInFlight = false;
     this._resetManualCandidateSync();
-    this._alignmentController?.setCalibrationGizmoEnabled(false);
-    this._alignmentController?.stop();
+    this._tagAlignmentSession?.setCalibrationGizmoEnabled(false);
+    this._tagAlignmentSession?.stop();
     this._state = createManualCalibrationState(offlineReady ? "ready" : "editing");
     this._host.refreshDescription();
 

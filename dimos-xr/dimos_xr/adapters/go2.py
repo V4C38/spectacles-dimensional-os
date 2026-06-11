@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-from dimos_xr.adapters.base import CameraAlignmentConfig, CapabilityState, RobotHandshake
-from dimos_xr.alignment import (
-    DEFAULT_CAMERA_ORIENTATION,
-    DEFAULT_CAMERA_POSITION,
-    DEFAULT_GO2_FRONT_CAMERA_INFO,
-    DEFAULT_MARKER_LENGTH_M,
-    DEFAULT_TIMESTAMP_TOLERANCE_S,
-)
+from dimos_xr.adapters.base import CapabilityState, RobotHandshake
+from dimos_xr.marker_contract import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M
+from dimos_xr.tag_tracker import TagMount
 
 GO2_CAPABILITIES = {
     "lidar": CapabilityState(True),
@@ -21,18 +16,23 @@ GO2_CAPABILITIES = {
     "emergency_stop": CapabilityState(True),
 }
 
+# Shoulder plate above/between front legs (approximate; verify with ruler on robot).
+GO2_DEFAULT_TAG_MOUNTS = [
+    TagMount(
+        tag_id=DEFAULT_MARKER_ID,
+        size_m=0.056,
+        position=(0.19, 0.0, 0.07),
+        orientation=(0.0, 0.0, -0.70710678, 0.70710678),
+    ),
+]
 
-def go2_camera_alignment_config() -> CameraAlignmentConfig:
-    return CameraAlignmentConfig(
-        position=DEFAULT_CAMERA_POSITION,
-        orientation=DEFAULT_CAMERA_ORIENTATION,
-        marker_length_m=DEFAULT_MARKER_LENGTH_M,
-        timestamp_tolerance_s=DEFAULT_TIMESTAMP_TOLERANCE_S,
-        camera_info=DEFAULT_GO2_FRONT_CAMERA_INFO,
-    )
+
+def go2_tag_mounts() -> list[TagMount]:
+    return list(GO2_DEFAULT_TAG_MOUNTS)
 
 
 def go2_handshake(robot_id: str) -> RobotHandshake:
+    tag_ids = [m.tag_id for m in GO2_DEFAULT_TAG_MOUNTS]
     return RobotHandshake(
         robot_id=robot_id,
         robot_model="unitree_go2",
@@ -44,5 +44,9 @@ def go2_handshake(robot_id: str) -> RobotHandshake:
         visual_origin_frame="base_link",
         base_height_m=0.33,
         default_render_offset_m=(0.0, 0.0, 0.0),
-        alignment_profile={"camera": "front_rgb"},
+        alignment_profile={
+            "method": "tag",
+            "tag_ids": tag_ids,
+            "tag_total_size_m": TAG_TOTAL_SIZE_M,
+        },
     )

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import struct
 
 import pytest
 
+from dimos_xr.tag_tracker import CAMERA_FRAME_MAGIC, parse_camera_frame
 from dimos_xr.websocket_server import (
     COALESCE_MESSAGE_TYPES,
     OUTBOUND_FIFO_MAXSIZE,
@@ -121,6 +123,24 @@ async def test_outbound_drops_oldest_fifo_when_full() -> None:
     assert first_seq >= 5
 
 
+def test_binary_camera_frame_parses_for_handler_dispatch() -> None:
+    header = {
+        "type": "camera_frame",
+        "robot_id": "unitree_go2",
+        "seq": 3,
+        "ts": 1.0,
+        "send_ts": 1.1,
+        "cam_pos": [0.0, 0.0, 0.0],
+        "cam_rot": [0.0, 0.0, 0.0, 1.0],
+    }
+    jpeg = b"\xff\xd8\xff\xd9"
+    header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    payload = CAMERA_FRAME_MAGIC + struct.pack("<I", len(header_bytes)) + header_bytes + jpeg
+    parsed_header, parsed_jpeg = parse_camera_frame(payload)
+    assert parsed_header["seq"] == 3
+    assert parsed_jpeg == jpeg
+
+
 def test_coalesce_message_types_cover_streams() -> None:
     assert COALESCE_MESSAGE_TYPES == frozenset(
         {
@@ -131,5 +151,6 @@ def test_coalesce_message_types_cover_streams() -> None:
             "nav_status",
             "bridge_status",
             "align_status",
+            "camera_frame_ack",
         }
     )

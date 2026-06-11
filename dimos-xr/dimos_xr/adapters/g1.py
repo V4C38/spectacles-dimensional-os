@@ -1,7 +1,21 @@
 from __future__ import annotations
 
-from dimos_xr.adapters.base import CameraAlignmentConfig, CapabilityState, RobotHandshake
-from dimos_xr.alignment import DEFAULT_MARKER_LENGTH_M, DEFAULT_TIMESTAMP_TOLERANCE_S
+from dimos_xr.adapters.base import CapabilityState, RobotHandshake
+from dimos_xr.marker_contract import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M
+from dimos_xr.tag_tracker import TagMount
+
+G1_DEFAULT_TAG_MOUNTS = [
+    TagMount(
+        tag_id=DEFAULT_MARKER_ID,
+        size_m=0.056,
+        position=(0.10, 0.0, 0.35),
+        orientation=(0.0, -0.70710678, 0.0, 0.70710678),
+    ),
+]
+
+
+def g1_tag_mounts() -> list[TagMount]:
+    return list(G1_DEFAULT_TAG_MOUNTS)
 
 
 def g1_capabilities(
@@ -52,16 +66,6 @@ def g1_capabilities(
     }
 
 
-def g1_camera_alignment_config() -> CameraAlignmentConfig:
-    return CameraAlignmentConfig(
-        position=(0.0, 0.0, 0.0),
-        orientation=(0.0, 0.0, 0.0, 1.0),
-        marker_length_m=DEFAULT_MARKER_LENGTH_M,
-        timestamp_tolerance_s=DEFAULT_TIMESTAMP_TOLERANCE_S,
-        camera_info=None,
-    )
-
-
 def g1_handshake(
     robot_id: str,
     *,
@@ -80,6 +84,7 @@ def g1_handshake(
         emergency_stop_available=emergency_stop_available,
         marker_align_available=marker_align_available,
     )
+    tag_ids = [m.tag_id for m in G1_DEFAULT_TAG_MOUNTS]
     return RobotHandshake(
         robot_id=robot_id,
         robot_model="unitree_g1",
@@ -92,7 +97,8 @@ def g1_handshake(
         base_height_m=0.95,
         default_render_offset_m=(0.0, 0.0, 0.0),
         alignment_profile={
-            "camera": "head_rgb",
-            "marker_alignment": "enabled" if marker_align_available else "manual_only",
+            "method": "tag",
+            "tag_ids": tag_ids,
+            "tag_total_size_m": TAG_TOTAL_SIZE_M,
         },
     )

@@ -4,17 +4,9 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.spec.utils import Spec
 
-
-@dataclass(frozen=True)
-class CameraAlignmentConfig:
-    position: tuple[float, float, float]
-    orientation: tuple[float, float, float, float]
-    marker_length_m: float
-    timestamp_tolerance_s: float
-    camera_info: CameraInfo | None = None
+from dimos_xr.tag_tracker import TagMount
 
 
 @dataclass(frozen=True)
@@ -56,4 +48,4 @@ class XRRobotAdapterSpec(Spec, Protocol):
 
     def supports_goal_orientation(self) -> bool: ...
 
-    def camera_alignment_config(self) -> CameraAlignmentConfig: ...
+    def tag_mounts(self) -> list[TagMount]: ...

@@ -4,6 +4,7 @@ import asyncio
 import math
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -15,15 +16,12 @@ from dimos.core.stream import In
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
-from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
-from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.utils.logging_config import setup_logger
 from dimos_lcm.std_msgs import Bool, String
 from websockets.asyncio.server import ServerConnection
 
 from dimos_xr.adapters.base import XRRobotAdapterSpec
-from dimos_xr.alignment import AprilTagAligner
 from dimos_xr.bridge_status import BridgeStatusTracker
 from dimos_xr.error_codes import NAV_GOAL_STALLED
 from dimos_xr.filters import (
@@ -37,9 +35,9 @@ from dimos_xr.preview_planner import PreviewPlanner
 from dimos_xr.protocol import (
     AlignCommitMessage,
     AlignManualPoseMessage,
-    AlignMarkerMessage,
     AlignStartMessage,
     AlignStopMessage,
+    CameraInfoMessage,
     CancelGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
@@ -47,11 +45,18 @@ from dimos_xr.protocol import (
     PlanPathMessage,
     encode_align_status,
     encode_bridge_status,
+    encode_camera_frame_ack,
     encode_lidar,
     encode_nav_status,
     encode_path,
     encode_path_preview,
     encode_pose,
+)
+from dimos_xr.tag_tracker import (
+    TagTracker,
+    TagTrackerConfig,
+    build_camera_info,
+    build_T_world_odom,
 )
 from dimos_xr.transforms import (
     Calibration,
@@ -65,8 +70,9 @@ from dimos_xr.websocket_server import XRWebSocketServer
 
 logger = setup_logger()
 
-SPECTACLES_MARKER_TIMEOUT_S = 0.5
 ALIGN_STATUS_BROADCAST_INTERVAL_S = 0.3
+ODOM_BUFFER_MAXLEN = 600
+ODOM_LOOKUP_MAX_GAP_S = 0.25
 LIDAR_PAYLOAD_LOG_INTERVAL_S = 5.0
 DROPPED_POSE_LOG_INTERVAL_S = 5.0
 STREAM_STATUS_POLL_INTERVAL_S = 0.5
@@ -235,7 +241,7 @@ def average_cluster_transform(
 
 class XRBridgeConfig(ModuleConfig):
     port: int = 8787
-    max_message_bytes: int = 1_048_576
+    max_message_bytes: int = 4_194_304
     max_range_m: float | None = None
     min_height_m: float | None = -0.35
     max_height_m: float | None = 1.2
@@ -245,13 +251,19 @@ class XRBridgeConfig(ModuleConfig):
     pose_max_hz: float = 30.0
     stream_stale_timeout_s: float = 10.0
     manual_alignment_quality: float = 0.35
+    frame_max_age_s: float = 2.0
+    tag_max_distance_m: float = 6.0
+    tag_min_baseline_m: float = 0.30
+    tag_window_max_obs: int = 40
+    tag_window_max_age_s: float = 120.0
+    tag_smoothing_tau_s: float = 3.0
+    tag_max_reprojection_error_px: float = 3.0
+    runtime_correction_enabled: bool = True
 
 
 class XRBridge(Module):
     xr_lidar: In[PointCloud2]
     xr_odom: In[PoseStamped]
-    xr_color_image: In[Image]
-    xr_camera_info: In[CameraInfo]
     xr_global_costmap: In[OccupancyGrid]
     xr_path: In[Path]
     xr_goal_reached: In[Bool]
@@ -261,7 +273,7 @@ class XRBridge(Module):
     _adapter: XRRobotAdapterSpec
     # Adapter-dependent objects are constructed in build(), after the coordinator
     # injects self._adapter via set_module_ref (not available during __init__).
-    _aligner: AprilTagAligner
+    _tag_tracker: TagTracker
     _robot_id: str
     _status_tracker: BridgeStatusTracker
     _ws_server: XRWebSocketServer
@@ -282,9 +294,11 @@ class XRBridge(Module):
         self._preview_planner = PreviewPlanner(global_config)
         self._odom_lock = threading.Lock()
         self._latest_odom: OdomSample | None = None
-        self._last_spectacles_marker_mono: float | None = None
-        self._last_align_marker: AlignMarkerMessage | None = None
-        self._last_align_marker_mono: float | None = None
+        self._odom_buffer: deque[tuple[float, OdomSample]] = deque(maxlen=ODOM_BUFFER_MAXLEN)
+        self._frame_in_flight = False
+        self._last_smooth_mono: float | None = None
+        self._T_committed: np.ndarray | None = None
+        self._pending_large_solves: list[np.ndarray] = []
         self._best_alignment: AlignmentCandidate | None = None
         self._best_alignment_ts: float | None = None
         self._latest_alignment_quality: float | None = None
@@ -293,10 +307,7 @@ class XRBridge(Module):
         self._recent_marker_candidates: list[AlignmentCandidate] = []
         self._align_broadcast_stop = threading.Event()
         self._align_broadcast_thread: threading.Thread | None = None
-        self._logged_align_video = False
-        self._color_frame_count = 0
-        self._last_color_frame_mono: float | None = None
-        self._last_debug_robot_detected: bool | None = None
+        self._last_debug_tag_detected: bool | None = None
         self._align_start_mono: float | None = None
         self._last_lidar_payload_log_mono = 0.0
         self._logged_lidar_stream_active = False
@@ -331,15 +342,17 @@ class XRBridge(Module):
         # before start(), so this is the earliest point adapter-dependent objects
         # can be constructed.
         super().build()
-        camera_alignment = self._adapter.camera_alignment_config()
-        self._aligner = AprilTagAligner(
-            marker_length_m=camera_alignment.marker_length_m,
-            timestamp_tolerance_s=camera_alignment.timestamp_tolerance_s,
-            camera_position=camera_alignment.position,
-            camera_orientation=camera_alignment.orientation,
+        tracker_config = TagTrackerConfig(
+            max_reprojection_error_px=self.config.tag_max_reprojection_error_px,
+            max_distance_m=self.config.tag_max_distance_m,
+            min_baseline_m=self.config.tag_min_baseline_m,
+            window_max_obs=self.config.tag_window_max_obs,
+            window_max_age_s=self.config.tag_window_max_age_s,
         )
-        if camera_alignment.camera_info is not None:
-            self._aligner.set_camera_info(camera_alignment.camera_info)
+        self._tag_tracker = TagTracker(
+            self._adapter.tag_mounts(),
+            config=tracker_config,
+        )
         self._robot_id = self._adapter.robot_id()
         handshake = self._adapter.handshake_payload()
         min_height_m, max_height_m = lidar_height_band_m(
@@ -360,7 +373,8 @@ class XRBridge(Module):
             on_align_start=self._on_align_start,
             on_align_stop=self._on_align_stop,
             on_align_commit=self._on_align_commit,
-            on_align_marker=self._on_align_marker,
+            on_camera_info=self._on_camera_info,
+            on_camera_frame=self._on_camera_frame,
             on_align_manual_pose=self._on_align_manual_pose,
             on_nav_goal=self._on_nav_goal,
             on_plan_path=self._on_plan_path,
@@ -387,9 +401,9 @@ class XRBridge(Module):
         # build() may not have run if another module aborted deployment, so the
         # adapter-dependent objects can be absent during teardown.
         self._stop_nav_watchdog()
-        aligner = getattr(self, "_aligner", None)
-        if aligner is not None:
-            aligner.active = False
+        tracker = getattr(self, "_tag_tracker", None)
+        if tracker is not None:
+            tracker.active = False
         self._stop_align_status_broadcast()
         self._stop_stream_status_monitor()
         self._stop_preview_worker()
@@ -419,12 +433,30 @@ class XRBridge(Module):
         return all(math.isfinite(value) for value in (*position, *orientation))
 
     def _update_latest_odom(self, msg: PoseStamped) -> None:
+        sample = self._sample_odom(msg)
+        mono = time.monotonic()
         with self._odom_lock:
-            self._latest_odom = self._sample_odom(msg)
+            self._latest_odom = sample
+            self._odom_buffer.append((mono, sample))
 
     def _get_latest_odom(self) -> OdomSample | None:
         with self._odom_lock:
             return self._latest_odom
+
+    def _odom_at(self, mono_ts: float) -> OdomSample | None:
+        with self._odom_lock:
+            if not self._odom_buffer:
+                return self._latest_odom
+            best: tuple[float, OdomSample] | None = None
+            best_gap = float("inf")
+            for ts, sample in self._odom_buffer:
+                gap = abs(ts - mono_ts)
+                if gap < best_gap:
+                    best_gap = gap
+                    best = (ts, sample)
+            if best is None or best_gap > ODOM_LOOKUP_MAX_GAP_S:
+                return None
+            return best[1]
 
     def _status_payload(self) -> str:
         return encode_bridge_status(self._status_tracker.snapshot())
@@ -535,33 +567,23 @@ class XRBridge(Module):
             thread.join(timeout=1.0)
         self._preview_worker_thread = None
 
-    def _spectacles_marker_detected(self) -> bool:
-        if self._last_spectacles_marker_mono is None:
-            return False
-        return time.monotonic() - self._last_spectacles_marker_mono <= SPECTACLES_MARKER_TIMEOUT_S
+    def _tag_detected(self) -> bool:
+        return self._tag_tracker.last_tag_detected
 
     def _align_status_message(self) -> str:
         if self._alignment_mode == "manual":
             if self._best_alignment is not None:
                 return "Manual robot pose ready — review and commit"
             return "Place the robot pose manually, then commit"
-        spec = self._spectacles_marker_detected()
-        robot = self._aligner.robot_marker_detected
+        if not self._tag_tracker.has_camera_info():
+            return "Waiting for camera intrinsics..."
         if self._best_alignment is not None:
             best = round(self._best_alignment.quality * 100)
-            return f"Tracking marker — best alignment {best}% ready"
-        if spec and robot:
-            return "Both see marker — aligning..."
-        if spec:
-            return "Spectacles sees marker — hold printed board toward robot camera"
-        if robot:
-            return "Robot sees marker — show marker to Spectacles"
-        stats = self._aligner.debug_stats()
-        if stats.frames == 0:
-            return "Waiting for robot video frames..."
-        if stats.no_camera_info > 0 and stats.detected == 0:
-            return "Waiting for robot camera calibration..."
-        return "Searching for marker on both devices..."
+            return f"Tag tracked — best alignment {best}% ready"
+        if self._tag_detected():
+            count = self._tag_tracker.observation_count()
+            return f"Tag detected — collecting samples ({count})"
+        return "Look at the AprilTag on your robot"
 
     def _start_align_status_broadcast(self) -> None:
         self._stop_align_status_broadcast()
@@ -569,10 +591,9 @@ class XRBridge(Module):
 
         def loop() -> None:
             while not self._align_broadcast_stop.wait(ALIGN_STATUS_BROADCAST_INTERVAL_S):
-                if not self._aligner.active:
+                if not self._tag_tracker.active:
                     break
                 self._broadcast_align_status()
-                self._try_align_from_last_marker()
 
         self._align_broadcast_thread = threading.Thread(
             target=loop,
@@ -589,15 +610,14 @@ class XRBridge(Module):
         self._align_broadcast_thread = None
 
     def _clear_align_session(self) -> None:
-        self._last_spectacles_marker_mono = None
-        self._last_align_marker = None
-        self._last_align_marker_mono = None
+        self._tag_tracker.reset_window()
         self._best_alignment = None
         self._best_alignment_ts = None
         self._latest_alignment_quality = None
         self._candidate_count = 0
         self._alignment_mode = "marker"
         self._recent_marker_candidates = []
+        self._pending_large_solves = []
 
     def _on_client_disconnect(self, _websocket: ServerConnection) -> None:
         self._nav_degraded = False
@@ -608,13 +628,12 @@ class XRBridge(Module):
         self._nav_state = "idle"
         self._reset_nav_goal_tracking(reset_recovery=True)
         if (
-            not self._aligner.active
-            and self._last_align_marker is None
+            not self._tag_tracker.active
             and self._best_alignment is None
             and self._candidate_count == 0
         ):
             return
-        self._aligner.active = False
+        self._tag_tracker.active = False
         self._stop_align_status_broadcast()
         self._clear_align_session()
         logger.info("Alignment session cleared on XR client disconnect")
@@ -624,41 +643,18 @@ class XRBridge(Module):
     ) -> tuple[float, int, float, float]:
         return score_alignment_cluster(candidate, self._recent_marker_candidates)
 
-    def _try_align_from_last_marker(self) -> None:
-        if self._alignment_mode != "marker":
-            return
-        if not self._spectacles_marker_detected() or not self._aligner.robot_marker_detected:
-            return
-        msg = self._last_align_marker
-        if msg is None or self._last_align_marker_mono is None:
-            return
-        odom = self._get_latest_odom()
-        if odom is None:
-            return
-        self._process_alignment_candidate(msg, odom, received_ts=time.monotonic())
-
-    def _process_alignment_candidate(
-        self,
-        msg: AlignMarkerMessage,
-        odom: OdomSample,
-        *,
-        received_ts: float | None = None,
-    ) -> AlignmentCandidate | None:
-        result = self._aligner.try_align(
-            msg.marker_position,
-            msg.marker_orientation,
-            odom,
-            received_ts=received_ts,
-        )
-        if result is None:
+    def _process_tag_solve(self, *, ts: float | None = None) -> AlignmentCandidate | None:
+        solve = self._tag_tracker.current_solve()
+        if solve is None:
             return None
+        method = "marker" if solve.method == "tag" else solve.method
         candidate = AlignmentCandidate(
-            T_world_odom=np.array(result.T_world_odom, dtype=np.float64, copy=True),
-            quality=result.quality,
-            method="marker",
+            T_world_odom=np.array(solve.T_world_odom, dtype=np.float64, copy=True),
+            quality=solve.quality,
+            method=method,
             approximate=False,
-            reprojection_error_px=result.reprojection_error_px,
-            sample_quality=result.quality,
+            sample_quality=solve.quality,
+            cluster_size=solve.observation_count,
         )
         self._recent_marker_candidates.append(candidate)
         if len(self._recent_marker_candidates) > ALIGNMENT_CLUSTER_WINDOW:
@@ -673,7 +669,6 @@ class XRBridge(Module):
             quality=stable_quality,
             method=candidate.method,
             approximate=candidate.approximate,
-            reprojection_error_px=candidate.reprojection_error_px,
             sample_quality=candidate.sample_quality,
             cluster_size=cluster_size,
         )
@@ -685,41 +680,38 @@ class XRBridge(Module):
             self._best_alignment is None or candidate.quality > self._best_alignment.quality
         ):
             self._best_alignment = candidate
-            self._best_alignment_ts = msg.ts
+            self._best_alignment_ts = ts if ts is not None else time.time()
             improved = True
             logger.info(
-                "AprilTag alignment improved",
+                "Tag alignment improved",
                 quality=round(candidate.quality, 3),
-                sample_quality=round(candidate.sample_quality or 0.0, 3),
-                reproj_px=round(result.reprojection_error_px, 2),
+                method=solve.method,
+                baseline_m=round(solve.baseline_m, 3),
                 cluster_size=cluster_size,
                 mean_translation_error_m=round(mean_translation_error, 4),
                 mean_yaw_error_deg=round(math.degrees(mean_yaw_error), 2),
-                candidate_yaw_deg=round(
-                    math.degrees(_candidate_yaw_rad(candidate.T_world_odom)),
-                    2,
-                ),
                 samples=self._candidate_count,
             )
         self._broadcast_align_status(
             state="detecting",
-            robot_marker_detected=True,
-            spectacles_marker_detected=True,
+            tag_detected=self._tag_detected(),
+            observation_count=solve.observation_count,
+            baseline_m=solve.baseline_m,
             quality=candidate.quality,
             best_quality=self._best_alignment.quality if self._best_alignment is not None else None,
             has_candidate=self._best_alignment is not None,
-            method="marker",
+            method=method,
             message=(
                 "Alignment improved — hold steady for best result"
                 if improved
                 else (
-                    "Tracking marker — hold steady "
+                    "Tracking tag — hold steady "
                     f"({cluster_size}/{ALIGNMENT_CLUSTER_MIN_SAMPLES})"
                     if not is_stable_candidate
-                    else "Tracking marker — refining best alignment"
+                    else "Tracking tag — refining best alignment"
                 )
             ),
-            ts=msg.ts,
+            ts=ts,
         )
         return candidate
 
@@ -749,8 +741,7 @@ class XRBridge(Module):
         self._best_alignment_ts = msg.ts
         self._broadcast_align_status(
             state="detecting",
-            robot_marker_detected=False,
-            spectacles_marker_detected=True,
+            tag_detected=True,
             quality=candidate.quality,
             best_quality=candidate.quality,
             has_candidate=True,
@@ -761,7 +752,7 @@ class XRBridge(Module):
         return candidate
 
     def _finish_alignment(self, result: AlignmentCandidate, ts: float | None) -> None:
-        self._aligner.active = False
+        self._tag_tracker.active = False
         self._stop_align_status_broadcast()
         self._calibration.register_from_alignment(result.T_world_odom)
         method: Literal["manual", "marker"] = (
@@ -783,8 +774,7 @@ class XRBridge(Module):
         self._broadcast_status()
         self._broadcast_align_status(
             state="aligned",
-            robot_marker_detected=method == "marker",
-            spectacles_marker_detected=True,
+            tag_detected=True,
             quality=result.quality,
             best_quality=result.quality,
             has_candidate=True,
@@ -796,13 +786,15 @@ class XRBridge(Module):
             ),
             ts=ts,
         )
+        self._T_committed = np.array(result.T_world_odom, dtype=np.float64, copy=True)
 
     def _broadcast_align_status(
         self,
         *,
         state: str = "detecting",
-        robot_marker_detected: bool | None = None,
-        spectacles_marker_detected: bool | None = None,
+        tag_detected: bool | None = None,
+        observation_count: int | None = None,
+        baseline_m: float | None = None,
         quality: float | None = None,
         best_quality: float | None = None,
         has_candidate: bool | None = None,
@@ -810,10 +802,10 @@ class XRBridge(Module):
         message: str = "",
         ts: float | None = None,
     ) -> None:
-        if robot_marker_detected is None:
-            robot_marker_detected = self._aligner.robot_marker_detected
-        if spectacles_marker_detected is None:
-            spectacles_marker_detected = self._spectacles_marker_detected()
+        if tag_detected is None:
+            tag_detected = self._tag_detected()
+        if observation_count is None:
+            observation_count = self._tag_tracker.observation_count()
         if best_quality is None and self._best_alignment is not None:
             best_quality = self._best_alignment.quality
         if has_candidate is None:
@@ -824,15 +816,16 @@ class XRBridge(Module):
             method = "manual"
         if not message and state == "detecting":
             message = self._align_status_message()
-        if state == "detecting" and robot_marker_detected != self._last_debug_robot_detected:
-            self._last_debug_robot_detected = robot_marker_detected
+        if state == "detecting" and tag_detected != self._last_debug_tag_detected:
+            self._last_debug_tag_detected = tag_detected
         self._ws_server.schedule_send(
             encode_align_status(
                 ts=ts,
                 robot_id=self._robot_id,
                 state=state,
-                robot_marker_detected=robot_marker_detected,
-                spectacles_marker_detected=spectacles_marker_detected,
+                tag_detected=tag_detected,
+                observation_count=observation_count,
+                baseline_m=baseline_m,
                 quality=quality,
                 best_quality=best_quality,
                 has_candidate=has_candidate,
@@ -1004,21 +997,17 @@ class XRBridge(Module):
         self._send_status_to(websocket)
 
     def _on_align_start(self, msg: AlignStartMessage, _websocket: ServerConnection) -> None:
-        self._aligner.active = True
+        self._tag_tracker.active = True
         self._clear_align_session()
-        self._logged_align_video = False
-        self._color_frame_count = 0
-        self._last_color_frame_mono = None
-        self._last_debug_robot_detected = None
+        self._last_debug_tag_detected = None
         self._align_start_mono = time.monotonic()
         self._alignment_mode = "marker"
         logger.info("XR alignment started")
         self._broadcast_align_status(
             state="detecting",
-            robot_marker_detected=False,
-            spectacles_marker_detected=False,
+            tag_detected=False,
             has_candidate=False,
-            message="Searching for calibration marker",
+            message="Look at the AprilTag on your robot",
             ts=msg.ts,
         )
         self._start_align_status_broadcast()
@@ -1026,12 +1015,11 @@ class XRBridge(Module):
     def _on_align_stop(self, msg: AlignStopMessage, _websocket: ServerConnection) -> None:
         alignment_mode = self._alignment_mode
         was_active = (
-            self._aligner.active
-            or self._last_align_marker is not None
+            self._tag_tracker.active
             or self._best_alignment is not None
             or self._candidate_count > 0
         )
-        self._aligner.active = False
+        self._tag_tracker.active = False
         self._stop_align_status_broadcast()
         self._clear_align_session()
         if not was_active:
@@ -1039,8 +1027,7 @@ class XRBridge(Module):
         logger.info("XR alignment stopped")
         self._broadcast_align_status(
             state="detecting",
-            robot_marker_detected=False,
-            spectacles_marker_detected=False,
+            tag_detected=False,
             has_candidate=False,
             method=alignment_mode,
             message="Alignment cancelled",
@@ -1052,8 +1039,7 @@ class XRBridge(Module):
         if best is None:
             self._broadcast_align_status(
                 state="failed",
-                robot_marker_detected=self._aligner.robot_marker_detected,
-                spectacles_marker_detected=self._spectacles_marker_detected(),
+                tag_detected=self._tag_detected(),
                 quality=self._latest_alignment_quality,
                 best_quality=None,
                 has_candidate=False,
@@ -1089,40 +1075,148 @@ class XRBridge(Module):
                 )
         self._finish_alignment(commit_candidate, finish_ts)
 
-    def _on_align_marker(self, msg: AlignMarkerMessage, _websocket: ServerConnection) -> None:
-        if not self._aligner.active:
+    def _on_camera_info(self, msg: CameraInfoMessage, _websocket: ServerConnection) -> None:
+        k = (
+            msg.fx,
+            0.0,
+            msg.cx,
+            0.0,
+            msg.fy,
+            msg.cy,
+            0.0,
+            0.0,
+            1.0,
+        )
+        info = build_camera_info(
+            width=msg.width,
+            height=msg.height,
+            k=k,
+            d=msg.distortion,
+            frame_id="xr_camera",
+        )
+        self._tag_tracker.set_camera_info(info)
+        logger.info(
+            "XR camera intrinsics received",
+            resolution=f"{msg.width}x{msg.height}",
+            device=msg.device_model,
+        )
+
+    async def _on_camera_frame(
+        self,
+        header: dict,
+        jpeg: bytes,
+        _websocket: ServerConnection,
+    ) -> None:
+        if self._frame_in_flight:
             return
-        self._alignment_mode = "marker"
-        marker_mono = time.monotonic()
-        self._last_spectacles_marker_mono = marker_mono
-        self._last_align_marker = msg
-        self._last_align_marker_mono = marker_mono
-        odom = self._get_latest_odom()
-        if odom is None:
-            self._broadcast_align_status(
-                state="detecting",
-                spectacles_marker_detected=True,
-                quality=self._latest_alignment_quality,
-                has_candidate=self._best_alignment is not None,
-                method="marker",
-                message="Waiting for robot odometry",
-                ts=msg.ts,
+        frame_age = float(header["send_ts"]) - float(header["ts"])
+        if frame_age > self.config.frame_max_age_s:
+            return
+        if not self._tag_tracker.has_camera_info():
+            self._ws_server.schedule_send(
+                encode_camera_frame_ack(
+                    robot_id=self._robot_id,
+                    seq=int(header["seq"]),
+                    tag_detected=False,
+                )
             )
+            if self._tag_tracker.active:
+                self._broadcast_align_status(
+                    state="failed",
+                    tag_detected=False,
+                    message="No camera intrinsics received",
+                )
             return
-        self._process_alignment_candidate(msg, odom, received_ts=marker_mono)
+        self._frame_in_flight = True
+        try:
+            receive_mono = time.monotonic()
+            registered = self._calibration.is_registered
+            T_committed = self._T_committed
+            if registered and T_committed is None:
+                T_committed = self._calibration.current_transform()
+            result = await asyncio.to_thread(
+                self._tag_tracker.process_frame,
+                header,
+                jpeg,
+                self._odom_at,
+                receive_mono=receive_mono,
+                T_committed=T_committed,
+                registered=registered,
+            )
+            self._ws_server.schedule_send(
+                encode_camera_frame_ack(
+                    robot_id=self._robot_id,
+                    seq=int(header["seq"]),
+                    tag_detected=result.tag_detected,
+                    tag_ids=result.tag_ids if result.tag_ids else None,
+                    quality=result.quality,
+                )
+            )
+            self._apply_tracker_update(ts=float(header.get("ts", time.time())))
+        finally:
+            self._frame_in_flight = False
+
+    def _apply_tracker_update(self, *, ts: float | None = None) -> None:
+        if self._tag_tracker.active:
+            self._process_tag_solve(ts=ts)
+            return
+        if not self._calibration.is_registered or not self.config.runtime_correction_enabled:
+            return
+        solve = self._tag_tracker.current_solve()
+        if solve is None:
+            return
+        T_new = np.array(solve.T_world_odom, dtype=np.float64, copy=True)
+        now = time.monotonic()
+        if self._T_committed is None:
+            self._T_committed = T_new
+            self._calibration.register_from_alignment(T_new)
+            self._last_smooth_mono = now
+            return
+        trans_delta = float(np.linalg.norm(T_new[:3, 3] - self._T_committed[:3, 3]))
+        yaw_delta = abs(
+            _wrap_angle_rad(_candidate_yaw_rad(T_new) - _candidate_yaw_rad(self._T_committed))
+        )
+        if trans_delta > 0.5 or yaw_delta > math.radians(10.0):
+            self._pending_large_solves.append(T_new)
+            if len(self._pending_large_solves) > 3:
+                self._pending_large_solves = self._pending_large_solves[-3:]
+            if len(self._pending_large_solves) < 3:
+                return
+            spreads = [
+                float(np.linalg.norm(self._pending_large_solves[i][:3, 3] - self._pending_large_solves[j][:3, 3]))
+                for i in range(len(self._pending_large_solves))
+                for j in range(i + 1, len(self._pending_large_solves))
+            ]
+            if max(spreads) > 0.2:
+                return
+            T_new = self._pending_large_solves[-1]
+            self._pending_large_solves = []
+        else:
+            dt = now - (self._last_smooth_mono or now)
+            alpha = 1.0 - math.exp(-dt / self.config.tag_smoothing_tau_s)
+            yaw_new = _candidate_yaw_rad(T_new)
+            yaw_old = _candidate_yaw_rad(self._T_committed)
+            yaw_blend = _wrap_angle_rad(yaw_old + alpha * _wrap_angle_rad(yaw_new - yaw_old))
+            t_old = self._T_committed[:3, 3]
+            t_new = T_new[:3, 3]
+            t_blend = t_old + alpha * (t_new - t_old)
+            T_new = build_T_world_odom(yaw_blend, (float(t_blend[0]), float(t_blend[1]), float(t_blend[2])))
+            T_new = gravity_level_transform(T_new)
+        self._T_committed = T_new
+        self._last_smooth_mono = now
+        self._calibration.register_from_alignment(T_new)
 
     def _on_align_manual_pose(
         self, msg: AlignManualPoseMessage, _websocket: ServerConnection
     ) -> None:
-        if not self._aligner.active:
+        if not self._tag_tracker.active:
             return
         odom = self._get_latest_odom()
         if odom is None:
             self._alignment_mode = "manual"
             self._broadcast_align_status(
                 state="detecting",
-                robot_marker_detected=False,
-                spectacles_marker_detected=True,
+                tag_detected=False,
                 quality=self._latest_alignment_quality,
                 has_candidate=False,
                 method="manual",
@@ -1298,19 +1392,6 @@ class XRBridge(Module):
             bytes=payload_bytes,
             hz=self.config.lidar_max_hz,
         )
-
-    async def handle_xr_camera_info(self, msg: CameraInfo) -> None:
-        self._aligner.set_camera_info(msg)
-
-    async def handle_xr_color_image(self, msg: Image) -> None:
-        if not self._aligner.active:
-            return
-        self._last_color_frame_mono = time.monotonic()
-        self._color_frame_count += 1
-        if not self._logged_align_video:
-            self._logged_align_video = True
-            logger.info("AprilTag: robot video frames reaching XR bridge")
-        await asyncio.to_thread(self._aligner.process_frame, msg)
 
     async def handle_xr_lidar(self, msg: PointCloud2) -> None:
         self._last_lidar_mono = time.monotonic()

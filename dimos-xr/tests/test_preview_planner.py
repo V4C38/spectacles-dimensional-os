@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import numpy as np
-
 from dimos.core.global_config import GlobalConfig
 from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 

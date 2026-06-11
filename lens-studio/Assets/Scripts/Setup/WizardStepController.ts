@@ -1,4 +1,4 @@
-import { AlignmentController } from "../Alignment/AlignmentController";
+import { TagAlignmentSession } from "../Alignment/TagAlignmentSession";
 import { BridgeClient } from "../Network/BridgeClient";
 import { DimosManager } from "../DimosManager";
 import { CalibrationViewState, LAST_WIZARD_STEP, WIZARD_STEP_DESCRIPTIONS, WIZARD_STEP_TITLES, WizardStep, wizardStepName } from "./WizardStepData";
@@ -15,7 +15,7 @@ export interface WizardStepControllerHost {
   getCalibrationState: () => CalibrationViewState;
   getView: () => WizardView | null;
   getDimosManager: () => DimosManager | null;
-  getAlignmentController: () => AlignmentController | null;
+  getAlignmentController: () => TagAlignmentSession | null;
   getConnectionController: () => WizardConnectionController | null;
   log: (message: string) => void;
   showBridgeConnectionStatus: () => void;

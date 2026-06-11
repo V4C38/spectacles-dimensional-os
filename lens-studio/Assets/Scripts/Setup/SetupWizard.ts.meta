@@ -26,8 +26,8 @@
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
-    alignmentController: false
     dimosManager: false
+    tagAlignmentSession: false
     uiManager: false
   ScriptTypesHidden:
     {}
@@ -40,11 +40,11 @@
   DefaultScriptInputs:
     - dimosManager: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
       uiManager: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
-      alignmentController: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
+      tagAlignmentSession: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
   InputLines:
     - // @input AssignableType dimosManager
     - // @input AssignableType_1 uiManager
-    - // @input AssignableType_2 alignmentController
+    - // @input AssignableType_2 tagAlignmentSession

@@ -1,5 +1,6 @@
 import {
   AlignStatusMessage,
+  CameraFrameAckMessage,
   BridgeStatusMessage,
   HelloMessage,
   LidarMessage,
@@ -12,7 +13,6 @@ import {
   setActiveRobotId,
 } from "./ProtocolTypes";
 import {
-  buildAlignMarker,
   buildAlignCommit,
   buildAlignManualPose,
   buildAlignStart,
@@ -55,6 +55,7 @@ export class BridgeClient extends BaseScriptComponent {
   public onLidar: ((msg: LidarMessage) => void)[] = [];
   public onPose: ((msg: PoseMessage) => void)[] = [];
   public onAlignStatus: ((msg: AlignStatusMessage) => void)[] = [];
+  public onCameraFrameAck: ((msg: CameraFrameAckMessage) => void)[] = [];
   public onBridgeStatus: ((msg: BridgeStatusMessage) => void)[] = [];
   public onPath: ((msg: PathMessage) => void)[] = [];
   public onPathPreview: ((msg: PathPreviewMessage) => void)[] = [];
@@ -89,6 +90,9 @@ export class BridgeClient extends BaseScriptComponent {
     }
     if (!this.onAlignStatus) {
       this.onAlignStatus = [];
+    }
+    if (!this.onCameraFrameAck) {
+      this.onCameraFrameAck = [];
     }
     if (!this.onConnectionChanged) {
       this.onConnectionChanged = [];
@@ -284,12 +288,6 @@ export class BridgeClient extends BaseScriptComponent {
     return this._sendForActiveRobot("align_commit", buildAlignCommit);
   }
 
-  public sendAlignMarker(position: vec3, rotation: quat): boolean {
-    return this._sendForActiveRobot("align_marker", (robotId) =>
-      buildAlignMarker(position, rotation, robotId),
-    );
-  }
-
   public sendAlignManualPose(position: vec3, rotation: quat): boolean {
     return this._sendForActiveRobot("align_manual_pose", (robotId) =>
       buildAlignManualPose(position, rotation, robotId),
@@ -356,6 +354,12 @@ export class BridgeClient extends BaseScriptComponent {
     }
   }
 
+  public sendBinary(bytes: Uint8Array): void {
+    if (this.ws && this.ws.readyState === WS_OPEN) {
+      this.ws.send(bytes);
+    }
+  }
+
   private _onMessage(event: WebSocketMessageEvent): void {
     this.ensureEventHandlers();
     const raw = event.data as string;
@@ -391,6 +395,10 @@ export class BridgeClient extends BaseScriptComponent {
         case "align_status":
           this._adoptRobotId(msg.robot_id);
           emit(this.onAlignStatus, msg);
+          break;
+        case "camera_frame_ack":
+          this._adoptRobotId(msg.robot_id);
+          emit(this.onCameraFrameAck, msg);
           break;
         case "bridge_status":
           this._adoptRobotId(msg.robot_id);

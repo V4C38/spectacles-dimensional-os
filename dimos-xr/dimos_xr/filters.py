@@ -9,7 +9,6 @@ from typing import cast
 import numpy as np
 from numpy.typing import NDArray
 
-
 DEFAULT_ROBOT_BODY_HEIGHT_M = 0.55
 LIDAR_FLOOR_CLEARANCE_M = 0.005
 LIDAR_MAX_HEIGHT_ABOVE_BODY_M = 1.0

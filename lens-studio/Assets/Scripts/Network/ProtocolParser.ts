@@ -1,5 +1,6 @@
 import {
   AlignStatusMessage,
+  CameraFrameAckMessage,
   BridgeStatusMessage,
   HelloMessage,
   InboundMessage,
@@ -218,10 +219,15 @@ function parseInboundObject(data: Record<string, unknown>): InboundMessage | nul
         ts: requireNumber(data, "ts"),
         robot_id: requireString(data, "robot_id"),
         state,
-        robot_marker_detected: Boolean(data.robot_marker_detected),
-        spectacles_marker_detected: Boolean(data.spectacles_marker_detected),
+        tag_detected: Boolean(data.tag_detected),
         message: typeof data.message === "string" ? data.message : "",
       };
+      if (typeof data.observation_count === "number") {
+        msg.observation_count = data.observation_count;
+      }
+      if (typeof data.baseline_m === "number") {
+        msg.baseline_m = data.baseline_m;
+      }
       if (typeof data.quality === "number") {
         msg.quality = data.quality;
       }
@@ -231,11 +237,34 @@ function parseInboundObject(data: Record<string, unknown>): InboundMessage | nul
       if (typeof data.has_candidate === "boolean") {
         msg.has_candidate = data.has_candidate;
       }
-      if (data.method === "marker" || data.method === "manual") {
+      if (
+        data.method === "marker" ||
+        data.method === "manual" ||
+        data.method === "tag" ||
+        data.method === "tag_orientation"
+      ) {
         msg.method = data.method;
       }
       setActiveRobotId(msg.robot_id);
       return msg;
+    }
+
+    case "camera_frame_ack": {
+      const ack: CameraFrameAckMessage = {
+        type: "camera_frame_ack",
+        ts: requireNumber(data, "ts"),
+        robot_id: requireString(data, "robot_id"),
+        seq: requireNumber(data, "seq"),
+        tag_detected: Boolean(data.tag_detected),
+      };
+      if (Array.isArray(data.tag_ids)) {
+        ack.tag_ids = data.tag_ids.map((id) => Number(id));
+      }
+      if (typeof data.quality === "number") {
+        ack.quality = data.quality;
+      }
+      setActiveRobotId(ack.robot_id);
+      return ack;
     }
 
     case "bridge_status": {

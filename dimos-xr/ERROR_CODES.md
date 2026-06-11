@@ -25,13 +25,15 @@ codes** — they are not HTTP response codes from a web server.
 | 503 | Align session unavailable | Calibrate status + detail | Restart robot & bridge |
 | 504 | Manual pose confirm timeout | Calibrate status + detail | Restart robot & bridge |
 | 505 | Nav goal stalled | Runtime robot marker (red) | Reconnect or restart robot & bridge |
+| 506 | Camera capture failed | Calibrate status + detail | Retry; keep robot-mounted tag in view |
+| 507 | Camera info missing | Calibrate status + detail | Reconnect and retry calibration |
 
 ---
 
 ## 400 — Manual pose invalid
 
-**When:** Manual calibrate; Spectacles could not read the marker pose, finalize
-offline placement, start manual placement, or failed to send `align_commit`.
+**When:** Tag or manual calibrate; Spectacles could not finalize placement, start
+manual placement, or send `align_commit` to the bridge.
 
 **Description:** Spectacles could not read the manual robot marker pose, finalize
 offline placement, start manual placement, or send the alignment commit to the
@@ -76,7 +78,7 @@ alignment (other than the no-candidate case).
 
 ## 503 — Align session unavailable
 
-**When:** Manual calibrate starts with bridge connected but `align_start` could not
+**When:** Calibrate step starts with bridge connected but `align_start` could not
 be sent or accepted.
 
 **Description:** The bridge could not start an alignment session after `align_start`.
@@ -105,3 +107,23 @@ confirmed a calibration candidate within 5 seconds.
 **Description:** Navigation stopped responding after automatic recovery attempts. The robot did not start moving or publish a path for the goal.
 
 **Fix:** Reconnect Spectacles to the bridge or restart the robot and bridge (`./start.sh`).
+
+---
+
+## 506 — Camera capture failed
+
+**When:** Calibrate step; `FrameCaptureController` fails to capture or send a still frame.
+
+**Description:** Spectacles failed to capture or send a camera still for tag alignment.
+
+**Fix:** Retry calibration and keep the robot-mounted tag in view.
+
+---
+
+## 507 — Camera info missing
+
+**When:** Calibrate step; binary `camera_frame` arrives before `camera_info` intrinsics.
+
+**Description:** Spectacles did not send camera intrinsics before camera frames.
+
+**Fix:** Reconnect Spectacles to the bridge and retry calibration.

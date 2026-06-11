@@ -11,9 +11,9 @@ from dimos_xr.bridge_status import BridgeStatusSnapshot
 from dimos_xr.protocol import (
     DEFAULT_CAPABILITIES,
     AlignManualPoseMessage,
-    AlignMarkerMessage,
     AlignStartMessage,
     AlignStopMessage,
+    CameraInfoMessage,
     CancelGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
@@ -22,6 +22,7 @@ from dimos_xr.protocol import (
     decode_inbound,
     encode_align_status,
     encode_bridge_status,
+    encode_camera_frame_ack,
     encode_hello,
     encode_lidar,
     encode_nav_status,
@@ -55,14 +56,32 @@ def _sample_handshake() -> RobotHandshake:
 def test_encode_hello() -> None:
     msg = json.loads(encode_hello(_sample_handshake()))
     assert msg["type"] == "hello"
-    assert msg["protocol_version"] == 2
+    assert msg["protocol_version"] == 3
     assert msg["robot"]["robot_id"] == "unitree_go2"
     assert msg["capabilities"] == DEFAULT_CAPABILITIES
     assert msg["disabled_capabilities"] == ["emergency_stop"]
     assert msg["capability_states"]["emergency_stop"]["available"] is False
 
 
-def test_encode_hello_g1_manual_alignment_only() -> None:
+def test_encode_hello_g1_tag_alignment_profile() -> None:
+    handshake = g1_handshake(
+        "unitree_g1",
+        nav_available=True,
+        path_available=True,
+        plan_preview_available=True,
+        cancel_goal_available=False,
+        emergency_stop_available=True,
+        marker_align_available=True,
+    )
+    msg = json.loads(encode_hello(handshake))
+    assert msg["robot"]["robot_model"] == "unitree_g1"
+    assert msg["capability_states"]["align"]["available"] is True
+    assert msg["capability_states"]["align_manual"]["available"] is True
+    assert msg["robot"]["alignment_profile"]["method"] == "tag"
+    assert msg["robot"]["alignment_profile"]["tag_total_size_m"] == 0.07
+
+
+def test_encode_hello_g1_tag_alignment_disabled() -> None:
     handshake = g1_handshake(
         "unitree_g1",
         nav_available=True,
@@ -73,12 +92,8 @@ def test_encode_hello_g1_manual_alignment_only() -> None:
         marker_align_available=False,
     )
     msg = json.loads(encode_hello(handshake))
-    assert msg["robot"]["robot_model"] == "unitree_g1"
     assert msg["capability_states"]["align"]["available"] is False
-    assert msg["capability_states"]["align_manual"]["available"] is True
-    assert msg["capability_states"]["cancel_goal"]["available"] is False
     assert "align" in msg["disabled_capabilities"]
-    assert msg["robot"]["alignment_profile"]["marker_alignment"] == "manual_only"
 
 
 def test_robot_id_mismatch_rejected() -> None:
@@ -156,6 +171,38 @@ def test_malformed_json_rejected() -> None:
         decode_inbound("not json")
 
 
+def test_align_marker_message_rejected() -> None:
+    with pytest.raises(ValueError, match="Unknown inbound message type"):
+        decode_inbound(
+            json.dumps(
+                {
+                    "type": "align_marker",
+                    "ts": 1.0,
+                    "robot_id": "unitree_go2",
+                    "marker_position": [0.0, 1.0, 0.0],
+                    "marker_orientation": [0.0, 0.0, 0.0, 1.0],
+                }
+            )
+        )
+
+
+def test_camera_info_rejects_missing_intrinsics() -> None:
+    with pytest.raises(ValueError, match="Missing or invalid field"):
+        decode_inbound(
+            json.dumps(
+                {
+                    "type": "camera_info",
+                    "ts": 1.0,
+                    "robot_id": "unitree_go2",
+                    "width": 3200,
+                    "height": 2400,
+                    "camera_model": "pinhole",
+                    "device_model": "spectacles",
+                }
+            )
+        )
+
+
 def test_encode_lidar_compact_json() -> None:
     points = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
     raw = encode_lidar(ts=1.0, points=points, robot_id="unitree_go2")
@@ -174,19 +221,26 @@ def test_align_messages_decode() -> None:
         json.dumps({"type": "align_stop", "ts": 2.0, "robot_id": "unitree_go2"})
     )
     assert isinstance(stop, AlignStopMessage)
-    marker = decode_inbound(
+    camera_info = decode_inbound(
         json.dumps(
             {
-                "type": "align_marker",
+                "type": "camera_info",
                 "ts": 3.0,
                 "robot_id": "unitree_go2",
-                "marker_position": [0.0, 1.0, 0.0],
-                "marker_orientation": [0.0, 0.0, 0.0, 1.0],
+                "width": 3200,
+                "height": 2400,
+                "fx": 1800.0,
+                "fy": 1800.0,
+                "cx": 1600.0,
+                "cy": 1200.0,
+                "distortion": [],
+                "camera_model": "perspective",
+                "device_model": "spectacles",
             }
         )
     )
-    assert isinstance(marker, AlignMarkerMessage)
-    assert marker.marker_position == (0.0, 1.0, 0.0)
+    assert isinstance(camera_info, CameraInfoMessage)
+    assert camera_info.width == 3200
     manual_pose = decode_inbound(
         json.dumps(
             {
@@ -207,16 +261,35 @@ def test_encode_align_status() -> None:
         encode_align_status(
             robot_id="unitree_go2",
             state="aligned",
-            robot_marker_detected=True,
+            tag_detected=True,
+            observation_count=8,
+            baseline_m=0.45,
             quality=0.9,
-            method="manual",
+            method="tag",
             message="ok",
         )
     )
     assert raw["type"] == "align_status"
     assert raw["state"] == "aligned"
     assert raw["quality"] == 0.9
-    assert raw["method"] == "manual"
+    assert raw["method"] == "tag"
+    assert raw["tag_detected"] is True
+    assert raw["observation_count"] == 8
+
+
+def test_encode_camera_frame_ack() -> None:
+    raw = json.loads(
+        encode_camera_frame_ack(
+            robot_id="unitree_go2",
+            seq=9,
+            tag_detected=True,
+            tag_ids=[0],
+            quality=0.75,
+        )
+    )
+    assert raw["type"] == "camera_frame_ack"
+    assert raw["seq"] == 9
+    assert raw["tag_ids"] == [0]
 
 
 def test_encode_bridge_status() -> None:

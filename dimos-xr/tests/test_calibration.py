@@ -4,20 +4,18 @@ import math
 
 import numpy as np
 
-from dimos_xr.alignment import (
-    DEFAULT_GO2_FRONT_CAMERA_INFO,
-    DEFAULT_GO2_FRONT_CAMERA_INFO_SOURCE,
-    AprilTagAligner,
-    RobotMarkerDetection,
-    build_camera_info,
-)
 from dimos_xr.bridge_module import (
     ALIGNMENT_CLUSTER_MIN_SAMPLES,
     AlignmentCandidate,
-    XRBridge,
     average_cluster_transform,
     collect_alignment_cluster,
     score_alignment_cluster,
+)
+from dimos_xr.tag_tracker import (
+    TagMount,
+    TagTracker,
+    build_T_world_odom,
+    solve_yaw_translation_2d,
 )
 from dimos_xr.transforms import (
     Calibration,
@@ -59,112 +57,20 @@ def test_register_from_alignment() -> None:
     assert np.allclose(pos[0], 5.0, atol=1e-5)
 
 
-def test_apriltag_alignment_recovers_world_from_odom() -> None:
-    aligner = AprilTagAligner(
-        camera_position=(0.0, 0.0, 0.0),
-        camera_orientation=(0.0, 0.0, 0.0, 1.0),
-    )
-    T_camera_marker = np.eye(4, dtype=np.float64)
-    T_camera_marker[0, 3] = 1.0
-    with aligner._lock:
-        aligner._latest_detection = RobotMarkerDetection(
-            detect_ts=10.0,
-            T_camera_marker=T_camera_marker,
-            reprojection_error_px=1.0,
-        )
-
-    result = aligner.try_align(
-        marker_position=(3.0, 0.0, 0.0),
-        marker_orientation=(0.0, 0.0, 0.0, 1.0),
-        odom=OdomSample(
-            position=(0.0, 0.0, 0.0),
-            orientation=(0.0, 0.0, 0.0, 1.0),
-        ),
-        received_ts=10.0,
-    )
-
-    assert result is not None
-    assert np.allclose(result.T_world_odom[:3, 3], (2.0, 0.0, 0.0), atol=1e-5)
+def test_solve_yaw_translation_2d_recovers_planar_shift() -> None:
+    u = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float64)
+    v = np.array([[2.0, 3.0], [3.0, 3.0]], dtype=np.float64)
+    yaw, t2 = solve_yaw_translation_2d(u, v)
+    T = build_T_world_odom(yaw, (float(t2[0]), 0.0, -float(t2[1])))
+    world = (T @ np.array([0.0, 0.0, 0.0, 1.0]))[:3]
+    assert np.allclose(world[0], 2.0, atol=1e-5)
+    assert np.allclose(world[2], -3.0, atol=1e-5)
 
 
-def test_apriltag_alignment_rejects_stale_marker_pair() -> None:
-    aligner = AprilTagAligner(timestamp_tolerance_s=0.5)
-    with aligner._lock:
-        aligner._latest_detection = RobotMarkerDetection(
-            detect_ts=10.0,
-            T_camera_marker=np.eye(4, dtype=np.float64),
-            reprojection_error_px=1.0,
-        )
-
-    result = aligner.try_align(
-        marker_position=(0.0, 0.0, 0.0),
-        marker_orientation=(0.0, 0.0, 0.0, 1.0),
-        odom=OdomSample(
-            position=(0.0, 0.0, 0.0),
-            orientation=(0.0, 0.0, 0.0, 1.0),
-        ),
-        received_ts=11.0,
-    )
-
-    assert result is None
-
-
-def test_apriltag_alignment_preserves_raw_marker_orientation_until_commit() -> None:
-    aligner = AprilTagAligner(
-        camera_position=(0.0, 0.0, 0.0),
-        camera_orientation=(0.0, 0.0, 0.0, 1.0),
-    )
-    with aligner._lock:
-        aligner._latest_detection = RobotMarkerDetection(
-            detect_ts=10.0,
-            T_camera_marker=np.eye(4, dtype=np.float64),
-            reprojection_error_px=1.0,
-        )
-
-    marker_position = (3.0, 0.0, 0.0)
-    marker_orientation = (0.2, 0.5, 0.1, 0.8)
-    result = aligner.try_align(
-        marker_position=marker_position,
-        marker_orientation=marker_orientation,
-        odom=OdomSample(
-            position=(0.0, 0.0, 0.0),
-            orientation=(0.0, 0.0, 0.0, 1.0),
-        ),
-        received_ts=10.0,
-    )
-
-    assert result is not None
-    expected = pose_to_matrix(marker_position, marker_orientation)
-    assert np.allclose(result.T_world_odom, expected, atol=1e-5)
-
-
-def test_bridge_retries_alignment_with_current_time(monkeypatch) -> None:
-    bridge = object.__new__(XRBridge)
-    bridge._alignment_mode = "marker"
-    bridge._last_align_marker = object()
-    bridge._last_align_marker_mono = 10.0
-    bridge._aligner = type("AlignerStub", (), {"robot_marker_detected": True})()
-    bridge._spectacles_marker_detected = lambda: True
-    bridge._get_latest_odom = lambda: OdomSample(
-        position=(0.0, 0.0, 0.0),
-        orientation=(0.0, 0.0, 0.0, 1.0),
-    )
-
-    captured: dict[str, float | object] = {}
-
-    def capture_candidate(msg, odom, *, received_ts=None):
-        captured["msg"] = msg
-        captured["received_ts"] = received_ts
-        captured["odom"] = odom
-        return None
-
-    bridge._process_alignment_candidate = capture_candidate
-    monkeypatch.setattr("dimos_xr.bridge_module.time.monotonic", lambda: 10.35)
-
-    bridge._try_align_from_last_marker()
-
-    assert captured["msg"] is bridge._last_align_marker
-    assert captured["received_ts"] == 10.35
+def test_tag_tracker_starts_inactive_without_camera_info() -> None:
+    tracker = TagTracker([TagMount(tag_id=0)])
+    assert tracker.active is False
+    assert tracker.has_camera_info() is False
 
 
 def test_normalize_ground_pose_removes_pitch_and_roll() -> None:
@@ -189,58 +95,6 @@ def test_normalize_ground_pose_removes_pitch_and_roll() -> None:
     )
 
 
-def test_apriltag_prefers_calibrated_go2_profile_over_placeholder_live_camera_info() -> None:
-    aligner = AprilTagAligner()
-    aligner.set_camera_info(
-        build_camera_info(
-            width=1280,
-            height=720,
-            k=(
-                819.553492,
-                0.0,
-                625.284099,
-                0.0,
-                820.646595,
-                336.808987,
-                0.0,
-                0.0,
-                1.0,
-            ),
-            d=(),
-        )
-    )
-
-    resolved = aligner.resolve_camera_info(1280, 720)
-
-    assert resolved is not None
-    info, source = resolved
-    assert source == DEFAULT_GO2_FRONT_CAMERA_INFO_SOURCE
-    assert np.allclose(info.K, DEFAULT_GO2_FRONT_CAMERA_INFO.K)
-    assert np.allclose(info.D, DEFAULT_GO2_FRONT_CAMERA_INFO.D)
-
-
-def test_apriltag_keeps_matching_live_camera_info_when_it_is_already_calibrated() -> None:
-    aligner = AprilTagAligner()
-    aligner.set_camera_info(DEFAULT_GO2_FRONT_CAMERA_INFO)
-
-    resolved = aligner.resolve_camera_info(1280, 720)
-
-    assert resolved is not None
-    info, source = resolved
-    assert source == "live"
-    assert np.allclose(info.K, DEFAULT_GO2_FRONT_CAMERA_INFO.K)
-    assert np.allclose(info.D, DEFAULT_GO2_FRONT_CAMERA_INFO.D)
-
-
-def test_apriltag_rejects_camera_info_resolution_mismatch_without_matching_fallback() -> None:
-    aligner = AprilTagAligner(fallback_camera_info=None)
-    aligner.set_camera_info(DEFAULT_GO2_FRONT_CAMERA_INFO)
-
-    resolved = aligner.resolve_camera_info(640, 480)
-
-    assert resolved is None
-
-
 def _yaw_quaternion(yaw_rad: float) -> tuple[float, float, float, float]:
     half_yaw = yaw_rad * 0.5
     return (0.0, math.sin(half_yaw), 0.0, math.cos(half_yaw))
@@ -258,7 +112,7 @@ def _alignment_candidate(
         T_world_odom=T_world_odom,
         quality=sample_quality,
         sample_quality=sample_quality,
-        method="marker",
+        method="tag",
         approximate=False,
     )
 

@@ -39,7 +39,7 @@ async def _collect_protocol_messages() -> dict[str, int]:
             msg = json.loads(raw)
             msg_type = msg.get("type")
             if msg_type == "hello" and seen["hello"] == 0:
-                assert msg.get("protocol_version") == 2
+                assert msg.get("protocol_version") == 3
                 assert isinstance(msg.get("robot"), dict)
                 caps = msg.get("capabilities", [])
                 assert "lidar" in caps
@@ -69,3 +69,36 @@ async def test_arbridge_protocol_live() -> None:
     assert seen["bridge_status"] >= 1
     assert seen["lidar"] >= 2
     assert seen["pose"] >= 2
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_arbridge_accepts_camera_info() -> None:
+    """Requires XR bridge running (e.g. blueprints/dimos_xr.py)."""
+    async with await _connect_with_retry() as ws:
+        await ws.recv()
+        await ws.recv()
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "camera_info",
+                    "ts": time.time(),
+                    "robot_id": "unitree_go2",
+                    "width": 3200,
+                    "height": 2400,
+                    "fx": 1800.0,
+                    "fy": 1800.0,
+                    "cx": 1600.0,
+                    "cy": 1200.0,
+                    "distortion": [],
+                    "camera_model": "pinhole",
+                    "device_model": "spectacles",
+                }
+            )
+        )
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+            msg = json.loads(raw)
+            if msg.get("type") in {"pose", "lidar", "bridge_status"}:
+                break

@@ -18,6 +18,7 @@ export interface CalibrationViewState {
   phase: CalibrationPhase;
   spectaclesTracking: boolean;
   robotTracking: boolean;
+  observationCount: number;
   currentQuality: number | null;
   bestQuality: number | null;
   statusMessage: string;
@@ -44,7 +45,7 @@ export const WIZARD_STEP_TITLES: string[] = [
 ];
 
 export const CALIBRATE_DESCRIPTION_AUTO =
-  "Show the printed DimOS AprilTag board.\nBoth cameras must see the marker.";
+  "Look at the AprilTag on your robot.\nStand 1-3 m away and hold steady.";
 
 export const CALIBRATE_DESCRIPTION_MANUAL =
   "Place the marker at the robot location & rotation.\nNo April Tag needed.";

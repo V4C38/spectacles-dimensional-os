@@ -4,10 +4,7 @@ import importlib
 import os
 from typing import Any
 
-from dimos.constants import DEFAULT_CAPACITY_COLOR_IMAGE
 from dimos.core.coordination.blueprints import autoconnect
-from dimos.core.transport import pSHMTransport
-from dimos.msgs.sensor_msgs.Image import Image
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 
 from dimos_xr.adapter_module import XRRobotAdapterModule
@@ -62,19 +59,6 @@ def _runtime_blueprint(stack_name: str | None = None) -> Any:
         autoconnect(
             selected_stack,
             dimos_xr,
-        )
-        .transports(
-            {
-                ("color_image", Image): pSHMTransport(
-                    "color_image",
-                    default_capacity=DEFAULT_CAPACITY_COLOR_IMAGE,
-                ),
-            }
-        )
-        .remappings(
-            [
-                (XRBridge, "xr_color_image", "color_image"),
-            ]
         )
         .global_config(viewer="none")
         .configurators(ClockSyncConfigurator())

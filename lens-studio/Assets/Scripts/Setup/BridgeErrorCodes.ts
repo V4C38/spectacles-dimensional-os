@@ -10,6 +10,8 @@ export enum BridgeErrorCode {
   AlignSessionUnavailable = 503,
   ManualPoseConfirmTimeout = 504,
   NavGoalStalled = 505,
+  CameraCaptureFailed = 506,
+  CameraInfoMissing = 507,
 }
 
 export interface BridgeErrorInfo {
@@ -49,6 +51,14 @@ export const BRIDGE_ERROR_CATALOG: Record<number, BridgeErrorInfo> = {
     description:
       "Navigation stopped responding after automatic recovery attempts. The robot did not start moving or publish a path for the goal.",
     fix: "Reconnect Spectacles to the bridge or restart the robot and bridge (./start.sh).",
+  },
+  [BridgeErrorCode.CameraCaptureFailed]: {
+    description: "Spectacles failed to capture a still image from the camera.",
+    fix: "Re-launch the Lens, confirm camera permission, and ensure Experimental APIs are enabled.",
+  },
+  [BridgeErrorCode.CameraInfoMissing]: {
+    description: "The bridge did not receive camera intrinsics before processing frames.",
+    fix: "Reconnect to the bridge and retry calibration.",
   },
 };
 

@@ -21,14 +21,10 @@ from dimos.utils.logging_config import setup_logger
 from dimos_lcm.std_msgs import Bool, String
 from unitree_webrtc_connect.constants import RTC_TOPIC, SPORT_CMD
 
-from dimos_xr.adapters.base import (
-    CameraAlignmentConfig,
-    CapabilityState,
-    RobotHandshake,
-    XRRobotAdapterSpec,
-)
-from dimos_xr.adapters.g1 import g1_camera_alignment_config, g1_handshake
-from dimos_xr.adapters.go2 import GO2_CAPABILITIES, go2_camera_alignment_config, go2_handshake
+from dimos_xr.adapters.base import CapabilityState, RobotHandshake, XRRobotAdapterSpec
+from dimos_xr.adapters.g1 import g1_handshake, g1_tag_mounts
+from dimos_xr.adapters.go2 import GO2_CAPABILITIES, go2_handshake, go2_tag_mounts
+from dimos_xr.tag_tracker import TagMount
 
 logger = setup_logger()
 
@@ -159,9 +155,7 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
         )
 
     def _marker_alignment_available(self) -> bool:
-        if not self._is_g1_runtime():
-            return True
-        return False
+        return len(self.tag_mounts()) > 0
 
     def _emergency_stop_available(self) -> bool:
         if self._is_g1_runtime():
@@ -332,7 +326,7 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
         return self._nav_available()
 
     @rpc
-    def camera_alignment_config(self) -> CameraAlignmentConfig:
+    def tag_mounts(self) -> list[TagMount]:
         if self._is_g1_runtime():
-            return g1_camera_alignment_config()
-        return go2_camera_alignment_config()
+            return g1_tag_mounts()
+        return go2_tag_mounts()

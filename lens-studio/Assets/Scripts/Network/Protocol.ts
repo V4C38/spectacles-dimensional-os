@@ -79,18 +79,67 @@ export function buildAlignManualPose(
   });
 }
 
-export function buildAlignMarker(
-  position: vec3,
-  rotation: quat,
-  robotId: string,
-): string {
+export function buildCameraInfo(args: {
+  robotId: string;
+  width: number;
+  height: number;
+  fx: number;
+  fy: number;
+  cx: number;
+  cy: number;
+  deviceModel?: string;
+}): string {
   return JSON.stringify({
-    type: "align_marker",
+    type: "camera_info",
     ts: getTime(),
-    robot_id: robotId,
-    marker_position: lensCentimetersToProtocolMeters(position),
-    marker_orientation: [rotation.x, rotation.y, rotation.z, rotation.w],
+    robot_id: args.robotId,
+    width: args.width,
+    height: args.height,
+    fx: args.fx,
+    fy: args.fy,
+    cx: args.cx,
+    cy: args.cy,
+    distortion: [],
+    camera_model: "pinhole",
+    device_model: args.deviceModel ?? "spectacles",
   });
+}
+
+const CAMERA_FRAME_MAGIC = [0x58, 0x52, 0x46, 0x31];
+
+export function buildCameraFrameBytes(args: {
+  robotId: string;
+  seq: number;
+  ts: number;
+  sendTs: number;
+  camPos: vec3;
+  camRot: quat;
+  jpegBytes: Uint8Array;
+}): Uint8Array {
+  const header = JSON.stringify({
+    type: "camera_frame",
+    robot_id: args.robotId,
+    seq: args.seq,
+    ts: args.ts,
+    send_ts: args.sendTs,
+    cam_pos: lensCentimetersToProtocolMeters(args.camPos),
+    cam_rot: [args.camRot.x, args.camRot.y, args.camRot.z, args.camRot.w],
+  });
+  const headerBytes = [];
+  for (let i = 0; i < header.length; i++) {
+    headerBytes.push(header.charCodeAt(i));
+  }
+  const headerLen = headerBytes.length;
+  const totalLen = 8 + headerLen + args.jpegBytes.length;
+  const out = new Uint8Array(totalLen);
+  out.set(CAMERA_FRAME_MAGIC, 0);
+  out[4] = headerLen & 0xff;
+  out[5] = (headerLen >> 8) & 0xff;
+  out[6] = (headerLen >> 16) & 0xff;
+  out[7] = (headerLen >> 24) & 0xff;
+  out.set(headerBytes, 8);
+  out.set(args.jpegBytes, 8 + headerLen);
+  return out;
 }
 
 export function buildNavGoal(

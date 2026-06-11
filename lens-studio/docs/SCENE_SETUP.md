@@ -5,14 +5,11 @@ Scripts live under `Assets/Scripts/`. After pulling, wire the scene in Lens Stud
 The live `SetupWizard` scene object is bound to
 `Assets/Scripts/Setup/SetupWizard.ts`.
 
-## 1. AprilTag marker asset
+## 1. Robot-mounted AprilTag
 
-**Lens Studio** uses `Assets/TrackingMarkers/apriltag_marker.png` (tracking image). **Print** the calibration board from `dimos-xr/assets/apriltag_marker_a4.pdf` (A4) or `apriltag_marker_letter.pdf` (US Letter) at **100% scale** (**190 mm × 260 mm** overall, with a **150 mm × 150 mm** AprilTag centered inside). Regenerate assets with `python scripts/generate_marker.py --sync-lens` from `dimos-xr/`.
+**Print** a plain **70 mm × 70 mm** AprilTag 36h11 sticker from `dimos-xr/assets/apriltag_robot_a4.pdf` (A4) or `apriltag_robot_letter.pdf` (US Letter) at **100% scale**. Regenerate with `python scripts/generate_marker.py` from `dimos-xr/`. Mount the tag flat on the robot (default Go2 mount: shoulder plate, tag facing up). Verify the printed outer edge measures 70 mm before calibrating.
 
-The scene should already have **Image Tracking** with `apriltag_marker` (physical height **26.0 cm** for the full tracked image). If you re-import:
-
-1. Ensure `Assets/TrackingMarkers/apriltag_marker.png` is in the project (sync from `dimos-xr`: `python scripts/generate_marker.py --sync-lens`).
-2. On the marker asset, set texture to `apriltag_marker` and **Physical Height** to `26.0` cm.
+Image Tracking / MarkerAnchor are removed. Tag alignment uses **FrameCaptureController** on **Camera Object** and **TagAlignmentSession** on **DimOSManager**.
 
 ## 2. UI frames (scene-placed, UIKit Frame)
 
@@ -83,7 +80,7 @@ RobotManager          ← scene object (hierarchy root)
 │   └── RobotUIRoot
 ```
 
-**Image Tracking → MarkerAnchor** holds `AlignmentController` (marker detection).
+**Camera Object** holds `FrameCaptureController` (still capture + pose streaming). **DimOSManager** holds `TagAlignmentSession`, wired to `BridgeClient` and `FrameCaptureController`. Camera capture requires Experimental APIs (enabled in the `.esproj`) and runs on device only.
 
 ### `RobotMarkerRoot` authored robot UI
 
@@ -169,21 +166,22 @@ The authored robot marker assets now live under the project-level mesh and mater
 |-----------|-------|--------|
 | SetupWizard | dimosManager | DimosManager (on **DimOS**) |
 | SetupWizard | uiManager | UIManager (on **MainUI**) |
-| SetupWizard | alignmentController | AlignmentController (on **MarkerAnchor**) |
+| SetupWizard | tagAlignmentSession | TagAlignmentSession |
 | UIManager | mainUIFrame | **MainUI** scene object (sibling of SetupWizard, not the parent) |
 | UIManager | dimosManager | DimosManager |
 | UIManager | setupWizard | SetupWizard (script on **SetupWizard** object) |
 | BridgeClient | defaultBridgeIp | Your Mac's LAN IP, bare IP only (e.g. `192.168.1.166`) |
 | DimosManager | bridgeClient | BridgeClient (on **DimOS**) |
-| DimosManager | alignmentController | AlignmentController |
+| DimosManager | frameCaptureController | FrameCaptureController (on **Camera Object**) |
 | DimosManager | pointCloudRenderer | PointCloudRenderer (on **PointCloudRenderer** under **Rendering**) |
 | DimosManager | placementRayOrigin | **Camera Object** (tracked camera root used for placement ray fallback) |
 | DimosManager | robotMarker | RobotMarker (on **Rendering**) |
 
 > **Note:** `DimosManager` no longer has a `lineMaterial` input. `PathRenderer` clones `InteractorLineMaterial.mat` from **Spectacles Interaction Kit** at runtime (`requireAsset` on the SIK package path). If a `lineMaterial` field was previously wired in the Inspector, it can be safely removed.
-| AlignmentController | bridgeClient | BridgeClient |
-| AlignmentController | markerTracking | Marker Tracking on **Image Tracking** |
-| AlignmentController | debugGizmo | (Optional) SceneObject with 3D gizmo for tracking debug |
+| FrameCaptureController | bridgeClient | BridgeClient |
+| FrameCaptureController | cameraObject | **Camera Object** |
+| TagAlignmentSession | bridgeClient | BridgeClient |
+| TagAlignmentSession | frameCapture | FrameCaptureController |
 | BridgeClient | internetModule | **Internet Module** asset (see below) |
 | PointCloudRenderer | pointParent | **LidarPoints** (must contain **LidarHeightVisual** child for full LiDAR) |
 | PointCloudRenderer | obstacleVisual | **LidarObstacleVisual** (`RenderMeshVisual` → `LidarObstacle.mat`) |

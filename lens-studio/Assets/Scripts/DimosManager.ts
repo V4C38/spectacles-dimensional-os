@@ -1,5 +1,5 @@
 import { BridgeClient } from "./Network/BridgeClient";
-import { AlignmentController } from "./Alignment/AlignmentController";
+import { FrameCaptureController } from "./Camera/FrameCaptureController";
 import { PointCloudRenderer } from "./Visuals/PointCloudRenderer";
 import { RobotMarker } from "./Visuals/RobotMarker";
 import { PathRenderer } from "./Visuals/PathRenderer";
@@ -56,7 +56,7 @@ export class DimosManager extends BaseScriptComponent {
   bridgeClient: BridgeClient;
 
   @input
-  alignmentController: AlignmentController;
+  frameCaptureController: FrameCaptureController;
 
   @input
   pointCloudRenderer: PointCloudRenderer;
@@ -585,6 +585,7 @@ export class DimosManager extends BaseScriptComponent {
     this._preferManualPoseUntilNextRuntimePose = false;
     this._useManualPoseCorrection = false;
     this.disconnect();
+    this.frameCaptureController?.setMode("off");
     this.setIsActive(false);
     this._setAppState({ navigationPlacementEnabled: true });
     this._robotMenuController?.setNavigationPlacementToggle(true);
@@ -604,6 +605,10 @@ export class DimosManager extends BaseScriptComponent {
     this._manualPoseCorrectionRotation = null;
     this._manualPoseCorrectionTranslation = null;
     this.setIsActive(true);
+    if (this.frameCaptureController) {
+      const registered = Boolean(this.bridgeClient?.lastBridgeStatus?.registered);
+      this.frameCaptureController.setMode(registered ? "runtime" : "off");
+    }
     this._setAppState({ phase: "runtime" });
     this._setRobotInteractionMode("runtimeRobot");
     this.setOperatingMode(this.operatingMode);
@@ -788,9 +793,6 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     this._setAppState({ debugMode: enabled });
-    if (this.alignmentController) {
-      this.alignmentController.setDebugMode(enabled);
-    }
   }
 
   public get debugMode(): boolean {
@@ -1256,6 +1258,8 @@ export class DimosManager extends BaseScriptComponent {
     if (!shouldApplyManualCorrection) {
       this._preferManualPoseUntilNextRuntimePose = false;
       this.robotMarker.applyPose(msg);
+      const worldPos = protocolMetersToLensCentimeters(msg.position);
+      this.frameCaptureController?.setRobotWorldPosition(worldPos);
       return;
     }
 

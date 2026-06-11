@@ -67,6 +67,18 @@ NAV_GOAL_STALLED = BridgeError(
     fix="Reconnect Spectacles to the bridge or restart the robot and bridge (./start.sh).",
 )
 
+CAMERA_CAPTURE_FAILED = BridgeError(
+    code=506,
+    description="Spectacles failed to capture or send a camera still for tag alignment.",
+    fix="Retry calibration and keep the robot-mounted tag in view.",
+)
+
+CAMERA_INFO_MISSING = BridgeError(
+    code=507,
+    description="Spectacles did not send camera intrinsics before camera frames.",
+    fix="Reconnect Spectacles to the bridge and retry calibration.",
+)
+
 BRIDGE_ERRORS: dict[int, BridgeError] = {
     error.code: error
     for error in (
@@ -77,5 +89,7 @@ BRIDGE_ERRORS: dict[int, BridgeError] = {
         ALIGN_SESSION_UNAVAILABLE,
         MANUAL_POSE_CONFIRM_TIMEOUT,
         NAV_GOAL_STALLED,
+        CAMERA_CAPTURE_FAILED,
+        CAMERA_INFO_MISSING,
     )
 }

@@ -5,7 +5,7 @@
  */
 // ================================================================
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 let activeRobotId: string | null = null;
 
@@ -69,13 +69,24 @@ export interface AlignStatusMessage {
   ts: number;
   robot_id: string;
   state: "detecting" | "aligned" | "failed";
-  robot_marker_detected: boolean;
-  spectacles_marker_detected: boolean;
+  tag_detected: boolean;
+  observation_count?: number;
+  baseline_m?: number;
   quality?: number;
   best_quality?: number;
   has_candidate?: boolean;
-  method?: "marker" | "manual";
+  method?: "marker" | "manual" | "tag" | "tag_orientation";
   message: string;
+}
+
+export interface CameraFrameAckMessage {
+  type: "camera_frame_ack";
+  ts: number;
+  robot_id: string;
+  seq: number;
+  tag_detected: boolean;
+  tag_ids?: number[];
+  quality?: number;
 }
 
 export interface BridgeStatusMessage {
@@ -123,6 +134,7 @@ export type InboundMessage =
   | LidarMessage
   | PoseMessage
   | AlignStatusMessage
+  | CameraFrameAckMessage
   | BridgeStatusMessage
   | PathMessage
   | PathPreviewMessage

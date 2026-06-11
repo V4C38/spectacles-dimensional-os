@@ -1,20 +1,20 @@
-- !<AssetImportMetadata/6e16fb20-9080-4f6c-b1eb-0180ce464c56>
+- !<AssetImportMetadata/de7202b6-4b4f-4d21-95e1-7eb3c406330b>
   ImportedAssetIds:
-    TypeScriptAsset: !<reference> 392925b8-1f69-4dd7-a240-a07d7ac13400
+    TypeScriptAsset: !<reference> 195d211d-fbcd-4ed9-97c6-33f95380edc2
   ImporterName: TypeScriptAssetImporter
-  PrimaryAsset: !<reference> 392925b8-1f69-4dd7-a240-a07d7ac13400
+  PrimaryAsset: !<reference> 195d211d-fbcd-4ed9-97c6-33f95380edc2
   PackageType: NotAPackage
   LegacyPackagePolicy: ~
   ExtraData:
     {}
   AssetDataMap:
-    TypeScriptAsset: !<own> 45a86a79-e96d-43f5-8657-c522d29bc23f
+    TypeScriptAsset: !<own> e8ca089e-8a59-4e9e-a184-bbea6cc6acff
   DependentFiles:
     []
   ImporterSettings: !<AssetImporterSettings>
     {}
   CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
-- !<TypeScriptAssetData/45a86a79-e96d-43f5-8657-c522d29bc23f>
+- !<TypeScriptAssetData/e8ca089e-8a59-4e9e-a184-bbea6cc6acff>
   SvgIcon: ""
   SetupScript:
     code: ""
@@ -22,13 +22,12 @@
   VersionMajor: 0
   VersionMinor: 0
   VersionPatch: 0
-  ComponentUid: 8eda754e-5f32-41c6-ad71-254dec6ec7d9
+  ComponentUid: c2513639-dad2-47fb-8001-19fc3c64555e
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
     bridgeClient: false
-    debugGizmo: false
-    markerTracking: false
+    frameCapture: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -39,12 +38,10 @@
     []
   DefaultScriptInputs:
     - bridgeClient: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
-      markerTracking: !<reference.MarkerTrackingComponent> 00000000-0000-0000-0000-000000000000
-      debugGizmo: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      frameCapture: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
   InputLines:
     - // @input AssignableType bridgeClient
-    - // @input Component.MarkerTrackingComponent markerTracking
-    - // @input SceneObject debugGizmo
+    - // @input AssignableType_1 frameCapture

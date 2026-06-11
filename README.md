@@ -22,7 +22,7 @@ At a glance:
 flowchart LR
   RobotStack[DimOS robot stack] --> DimOS[DimOS]
   DimOS -->|"lidar / odom / path"| XRBridge[XRBridge in dimos-xr]
-  Spectacles[Spectacles Lens] -->|"ws JSON :8787"| XRBridge
+  Spectacles[Spectacles Lens] -->|"ws JSON + binary frames :8787"| XRBridge
   XRBridge -->|"bridge_status / pose / lidar / path"| Spectacles
 ```
 
@@ -59,16 +59,16 @@ flowchart LR
 <details>
 <summary>Frame alignment</summary>
 
-The bridge solves `T_world_odom` so AR content stays registered to the robot. During calibration, the Lens sends `align_start` and `align_marker` while the headset tracks the marker, and the bridge combines that with AprilTag detection from the robot camera. When both sides see the same marker within the configured time tolerance, the bridge averages a stable cluster of candidates and commits a gravity-leveled transform so the AR floor stays flat.
+The bridge solves `T_world_odom` so AR content stays registered to the robot. During calibration, Spectacles streams high-resolution stills plus camera pose over the WebSocket; the bridge runs AprilTag detection and PnP on those frames against **robot-mounted** tags. When enough stable observations accumulate, the bridge averages a cluster of candidates and commits a gravity-leveled transform so the AR floor stays flat. After commit, the same tag stream provides continuous runtime correction when the tag is in view.
 
-Calibration requires a **printed** marker: a **190 mm × 260 mm** tracked image with a **150 mm × 150 mm** AprilTag centered inside. It prints at 100% scale on both A4 (`apriltag_marker_a4.pdf`) and US Letter (`apriltag_marker_letter.pdf`). Generate and sync assets with:
+Calibration requires a **printed robot-mounted tag**: a plain **70 mm × 70 mm** AprilTag 36h11 sticker (56 mm black square). Generate assets with:
 
 ```bash
 cd /path/to/spectacles-dimensional-os/dimos-xr
-python scripts/generate_marker.py --sync-lens
+python scripts/generate_marker.py
 ```
 
-Print the matching PDF from `dimos-xr/assets/` at **actual size** (no "fit to page") and verify the black tag edge measures 150 mm with a ruler before calibrating.
+Print `apriltag_robot_a4.pdf` or `apriltag_robot_letter.pdf` from `dimos-xr/assets/` at **actual size** (no "fit to page") and verify the outer edge measures 70 mm with a ruler before mounting on the robot.
 
 </details>
 
@@ -95,13 +95,14 @@ The Lens side is organized around three scene-entry scripts:
 - [`DimosManager.ts`](lens-studio/Assets/Scripts/DimosManager.ts) is the orchestration hub for bridge I/O, shared app state, robot marker state, LiDAR/path rendering, navigation placement, and manual-alignment fallback.
 - [`UIManager.ts`](lens-studio/Assets/Scripts/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
 
-`BridgeClient` is the transport layer, `CalibrationSession` owns wizard-local calibration orchestration, `AlignmentController` handles marker alignment, `ManualAlignmentController` handles local placement fallback, `NavigationController` manages goal placement and navigation state, and the visuals live under [`Assets/Scripts/Visuals/`](lens-studio/Assets/Scripts/Visuals/).
+`BridgeClient` is the transport layer, `CalibrationSession` owns wizard-local calibration orchestration, `TagAlignmentSession` and `FrameCaptureController` handle tag-based alignment capture, `ManualAlignmentController` handles local placement fallback, `NavigationController` manages goal placement and navigation state, and the visuals live under [`Assets/Scripts/Visuals/`](lens-studio/Assets/Scripts/Visuals/).
 
 ```mermaid
 flowchart TB
   SetupWizard[SetupWizard] --> DimosManager[DimosManager]
   SetupWizard --> CalibrationSession[CalibrationSession]
-  SetupWizard --> AlignmentController[AlignmentController]
+  SetupWizard --> TagAlignment[TagAlignmentSession]
+  SetupWizard --> FrameCapture[FrameCaptureController]
   UIManager[UIManager] --> DimosManager
   UIManager -->|"Restart setup"| SetupWizard
   DimosManager --> BridgeClient[BridgeClient]
@@ -112,7 +113,8 @@ flowchart TB
   DimosManager --> PointCloud[PointCloudRenderer]
   AppState --> UIManager
   AppState --> SetupWizard
-  AlignmentController --> BridgeClient
+  TagAlignment --> BridgeClient
+  FrameCapture --> BridgeClient
   Navigation --> BridgeClient
 ```
 

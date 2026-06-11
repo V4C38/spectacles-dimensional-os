@@ -13,7 +13,7 @@ from numpy.typing import NDArray
 from dimos_xr.adapters.base import CapabilityState, RobotHandshake
 from dimos_xr.bridge_status import BridgeStatusSnapshot
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 FRAME_WORLD = "world"
 
 DEFAULT_CAPABILITIES = [
@@ -80,11 +80,18 @@ class AlignCommitMessage:
 
 
 @dataclass(frozen=True)
-class AlignMarkerMessage:
+class CameraInfoMessage:
     ts: float
     robot_id: str
-    marker_position: tuple[float, float, float]
-    marker_orientation: tuple[float, float, float, float]
+    width: int
+    height: int
+    fx: float
+    fy: float
+    cx: float
+    cy: float
+    distortion: tuple[float, ...]
+    camera_model: str
+    device_model: str
 
 
 @dataclass(frozen=True)
@@ -109,7 +116,7 @@ InboundMessage = (
     | AlignStartMessage
     | AlignStopMessage
     | AlignCommitMessage
-    | AlignMarkerMessage
+    | CameraInfoMessage
     | AlignManualPoseMessage
     | GetStatusMessage
 )
@@ -179,12 +186,26 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         return AlignStopMessage(ts=ts, robot_id=robot_id)
     if msg_type == "align_commit":
         return AlignCommitMessage(ts=ts, robot_id=robot_id)
-    if msg_type == "align_marker":
-        return AlignMarkerMessage(
+    if msg_type == "camera_info":
+        distortion_raw = data.get("distortion", [])
+        if not isinstance(distortion_raw, list):
+            raise ValueError("Field 'distortion' must be a list")
+        distortion = tuple(float(v) for v in distortion_raw)
+        for key in ("width", "height", "fx", "fy", "cx", "cy"):
+            if key not in data or not isinstance(data[key], (int, float)):
+                raise ValueError(f"Missing or invalid field: {key}")
+        return CameraInfoMessage(
             ts=ts,
             robot_id=robot_id,
-            marker_position=_vec3(data, "marker_position"),
-            marker_orientation=_quat(data, "marker_orientation"),
+            width=int(data["width"]),
+            height=int(data["height"]),
+            fx=float(data["fx"]),
+            fy=float(data["fy"]),
+            cx=float(data["cx"]),
+            cy=float(data["cy"]),
+            distortion=distortion,
+            camera_model=str(_require_type(data, "camera_model", str)),
+            device_model=str(_require_type(data, "device_model", str)),
         )
     if msg_type == "align_manual_pose":
         return AlignManualPoseMessage(
@@ -277,7 +298,8 @@ def _round_vec3(
     decimals: int = 3,
 ) -> list[float]:
     arr = np.nan_to_num(np.asarray(position, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
-    return np.round(arr, decimals).tolist()
+    rounded: list[float] = np.round(arr, decimals).tolist()
+    return rounded
 
 
 def _round_quat(
@@ -285,7 +307,8 @@ def _round_quat(
     decimals: int = 4,
 ) -> list[float]:
     arr = np.nan_to_num(np.asarray(orientation, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
-    return np.round(arr, decimals).tolist()
+    rounded: list[float] = np.round(arr, decimals).tolist()
+    return rounded
 
 
 def _sanitize_pose_values(
@@ -322,8 +345,9 @@ def encode_align_status(
     ts: float | None = None,
     robot_id: str,
     state: str = "detecting",
-    robot_marker_detected: bool = False,
-    spectacles_marker_detected: bool = False,
+    tag_detected: bool = False,
+    observation_count: int | None = None,
+    baseline_m: float | None = None,
     quality: float | None = None,
     best_quality: float | None = None,
     has_candidate: bool | None = None,
@@ -335,10 +359,13 @@ def encode_align_status(
         "ts": ts if ts is not None else time.time(),
         "robot_id": robot_id,
         "state": state,
-        "robot_marker_detected": robot_marker_detected,
-        "spectacles_marker_detected": spectacles_marker_detected,
+        "tag_detected": tag_detected,
         "message": message,
     }
+    if observation_count is not None:
+        payload["observation_count"] = observation_count
+    if baseline_m is not None:
+        payload["baseline_m"] = baseline_m
     if quality is not None:
         payload["quality"] = quality
     if best_quality is not None:
@@ -347,6 +374,29 @@ def encode_align_status(
         payload["has_candidate"] = has_candidate
     if method is not None:
         payload["method"] = method
+    return _dumps(payload)
+
+
+def encode_camera_frame_ack(
+    *,
+    ts: float | None = None,
+    robot_id: str,
+    seq: int,
+    tag_detected: bool,
+    tag_ids: list[int] | None = None,
+    quality: float | None = None,
+) -> str:
+    payload: dict[str, Any] = {
+        "type": "camera_frame_ack",
+        "ts": ts if ts is not None else time.time(),
+        "robot_id": robot_id,
+        "seq": seq,
+        "tag_detected": tag_detected,
+    }
+    if tag_ids is not None:
+        payload["tag_ids"] = tag_ids
+    if quality is not None:
+        payload["quality"] = quality
     return _dumps(payload)
 
 

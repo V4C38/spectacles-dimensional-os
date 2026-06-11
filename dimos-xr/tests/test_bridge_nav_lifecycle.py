@@ -3,18 +3,19 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections import deque
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.nav_msgs.Path import Path
+from dimos_lcm.std_msgs import Bool
 
 from dimos_xr.bridge_module import NAV_GOAL_PATH_TIMEOUT_S, XRBridge
 from dimos_xr.error_codes import NAV_GOAL_STALLED
 from dimos_xr.protocol import NavGoalMessage, encode_pose
 from dimos_xr.transforms import Calibration, OdomSample, pose_to_matrix
-from dimos_lcm.std_msgs import Bool
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.nav_msgs.Path import Path
 
 
 def _make_bridge_stub(*, registered: bool = True) -> XRBridge:
@@ -42,6 +43,7 @@ def _make_bridge_stub(*, registered: bool = True) -> XRBridge:
     bridge._last_dropped_pose_log_mono = 0.0
     bridge._odom_lock = threading.Lock()
     bridge._latest_odom: OdomSample | None = None
+    bridge._odom_buffer: deque[tuple[float, OdomSample]] = deque(maxlen=120)
     bridge._last_odom_mono = None
     bridge._last_lidar_mono = None
     bridge._refresh_streams_active = lambda: None

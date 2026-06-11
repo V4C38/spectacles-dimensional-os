@@ -1,13 +1,13 @@
 from dimos_xr.adapters.base import (
-    CameraAlignmentConfig,
     CapabilityState,
     RobotHandshake,
     XRRobotAdapterSpec,
 )
+from dimos_xr.tag_tracker import TagMount
 
 __all__ = [
-    "CameraAlignmentConfig",
     "CapabilityState",
     "RobotHandshake",
+    "TagMount",
     "XRRobotAdapterSpec",
 ]

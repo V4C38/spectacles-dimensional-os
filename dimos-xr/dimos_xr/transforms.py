@@ -231,6 +231,12 @@ class Calibration:
         with self._lock:
             return self._registered
 
+    def current_transform(self) -> NDArray[np.float64] | None:
+        with self._lock:
+            if not self._registered:
+                return None
+            return np.array(self._T_world_odom, dtype=np.float64, copy=True)
+
     def register_marker_pose(
         self,
         marker_position: tuple[float, float, float],

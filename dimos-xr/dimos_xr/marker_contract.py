@@ -1,13 +1,7 @@
-"""Shared AprilTag calibration marker contract.
+"""Shared AprilTag robot-mount marker contract.
 
-Keep robot-side AprilTag detection, generated composite assets, and Lens
-physical marker height aligned through these constants.
-
-The composite is sized to print at 100% scale on both A4 and US Letter:
-190 x 260 mm fits inside the shared printable area of both paper sizes
-with >= 9.7 mm margins. The central AprilTag is the largest 36h11 square
-that keeps a full one-module (>= 18.75 mm) white quiet zone inside the
-190 mm composite width.
+Robot-mounted tags are plain 36h11 AprilTags printed at 7 x 7 cm total
+(including white quiet zone). PnP uses the black detection square edge length.
 """
 
 from __future__ import annotations
@@ -15,32 +9,19 @@ from __future__ import annotations
 DEFAULT_MARKER_ID = 0
 DEFAULT_APRILTAG_DICT = "DICT_APRILTAG_36h11"
 
-# Robot pose math uses the exact edge length of the central AprilTag
-# (outer edge of the black border, as detected by OpenCV).
-DEFAULT_MARKER_LENGTH_M = 0.150
-DEFAULT_MARKER_LENGTH_MM = int(round(DEFAULT_MARKER_LENGTH_M * 1000.0))
-DEFAULT_MARKER_LENGTH_CM = DEFAULT_MARKER_LENGTH_M * 100.0
+# Printed sticker edge including quiet zone (10 x 10 modules at 7 mm/module).
+TAG_TOTAL_SIZE_M = 0.070
+TAG_MODULES_TOTAL = 10
+# Black detection square (8 modules) — used for solvePnP marker_length_m.
+TAG_BLACK_SIZE_M = TAG_TOTAL_SIZE_M * 8 / TAG_MODULES_TOTAL  # 0.056 m
 
-# White quiet zone around the tag. Must stay >= one tag module
-# (DEFAULT_MARKER_LENGTH_M / 8 for 36h11 with a one-module border).
-MARKER_QUIET_ZONE_M = 0.020
+TAG_TOTAL_SIZE_MM = int(round(TAG_TOTAL_SIZE_M * 1000.0))
+TAG_BLACK_SIZE_MM = int(round(TAG_BLACK_SIZE_M * 1000.0))
 
-# The full tracked image carries non-repetitive macro features above and
-# below the tag so Spectacles image tracking stays robust at distance.
-# The AprilTag is centered so the Lens marker origin and the robot PnP
-# tag center are the same physical point.
-COMPOSITE_MARKER_WIDTH_M = 0.190
-COMPOSITE_MARKER_WIDTH_MM = int(round(COMPOSITE_MARKER_WIDTH_M * 1000.0))
-COMPOSITE_MARKER_WIDTH_CM = COMPOSITE_MARKER_WIDTH_M * 100.0
-
-COMPOSITE_MARKER_HEIGHT_M = 0.260
-COMPOSITE_MARKER_HEIGHT_MM = int(round(COMPOSITE_MARKER_HEIGHT_M * 1000.0))
-COMPOSITE_MARKER_HEIGHT_CM = COMPOSITE_MARKER_HEIGHT_M * 100.0
-
-MARKER_BASENAME = "apriltag_marker"
-MARKER_PNG = f"{MARKER_BASENAME}.png"
+MARKER_BASENAME = "apriltag_robot"
 MARKER_PDF_A4 = f"{MARKER_BASENAME}_a4.pdf"
 MARKER_PDF_LETTER = f"{MARKER_BASENAME}_letter.pdf"
 
-LENS_MARKER_ASSET_RELATIVE_PATH = "TrackingMarkers/apriltag_marker.imgmarker"
-LENS_MARKER_TEXTURE_RELATIVE_PATH = "TrackingMarkers/apriltag_marker.png"
+
+def marker_png_name(tag_id: int) -> str:
+    return f"{MARKER_BASENAME}_{tag_id}.png"

@@ -48,6 +48,7 @@ export function createCalibrationViewState(): CalibrationViewState {
     phase: "editing",
     spectaclesTracking: false,
     robotTracking: false,
+    observationCount: 0,
     currentQuality: null,
     bestQuality: null,
     statusMessage: "",
@@ -103,8 +104,8 @@ function buildAutoProgressDetail(state: CalibrationViewState): string {
       ? `${Math.round(state.bestQuality * 100)}%`
       : "none yet";
   return (
-    `Spectacles: ${markerVisibilityLabel(state.spectaclesTracking)}\n` +
-    `Robot: ${markerVisibilityLabel(state.robotTracking)}\n` +
+    `Tag: ${markerVisibilityLabel(state.spectaclesTracking)}\n` +
+    `Samples: ${state.observationCount}\n` +
     `Best: ${bestLabel}`
   );
 }
@@ -192,6 +193,9 @@ function alignFailureErrorCode(message: string | undefined): BridgeErrorCode {
   if (message && message.includes("No valid alignment")) {
     return BridgeErrorCode.AlignCommitNoCandidate;
   }
+  if (message && message.includes("No camera intrinsics")) {
+    return BridgeErrorCode.CameraInfoMissing;
+  }
   return BridgeErrorCode.AlignFailed;
 }
 
@@ -226,8 +230,9 @@ export function applyAlignStatusToCalibrationState(
   }
 
   if (state.mode === "auto") {
-    nextState.robotTracking = msg.robot_marker_detected;
-    nextState.spectaclesTracking = spectaclesTracking;
+    nextState.spectaclesTracking = msg.tag_detected;
+    nextState.observationCount = msg.observation_count ?? 0;
+    nextState.robotTracking = nextState.observationCount > 0;
   }
 
   if (msg.state === "aligned") {

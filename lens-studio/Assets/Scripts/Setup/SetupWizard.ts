@@ -1,6 +1,6 @@
 require("LensStudio:TextInputModule");
 
-import { AlignmentController } from "../Alignment/AlignmentController";
+import { TagAlignmentSession } from "../Alignment/TagAlignmentSession";
 import { DimosManager } from "../DimosManager";
 import { UIManager } from "../UI/UIManager";
 import { AlignStatusMessage } from "../Network/Protocol";
@@ -37,7 +37,7 @@ export class SetupWizard extends BaseScriptComponent {
   uiManager: UIManager;
 
   @input
-  alignmentController: AlignmentController;
+  tagAlignmentSession: TagAlignmentSession;
 
   private _currentStep = WizardStep.Start;
   private _connectCompleted = false;
@@ -60,7 +60,7 @@ export class SetupWizard extends BaseScriptComponent {
       );
       this._calibrationSession = new CalibrationSession(
         this.dimosManager,
-        this.alignmentController,
+        this.tagAlignmentSession,
         {
           beginManualAlignmentPlacementFromWizard: () =>
             this._beginManualAlignmentPlacementFromWizard(),
@@ -82,7 +82,7 @@ export class SetupWizard extends BaseScriptComponent {
           this._calibrationSession?.state ?? createCalibrationViewState(),
         getView: () => this._view,
         getDimosManager: () => this.dimosManager,
-        getAlignmentController: () => this.alignmentController,
+        getAlignmentController: () => this.tagAlignmentSession,
         getConnectionController: () => this._connectionController,
         log: (message) => this._logSetup(message),
         showBridgeConnectionStatus: () => this._showBridgeConnectionStatus(),
@@ -115,9 +115,9 @@ export class SetupWizard extends BaseScriptComponent {
     this._calibrationSession?.leave();
     this._calibrationSession?.setState(createCalibrationViewState());
     this._connectionController?.invalidatePending();
-    if (this.alignmentController) {
-      this.alignmentController.setCalibrationGizmoEnabled(false);
-      this.alignmentController.stop();
+    if (this.tagAlignmentSession) {
+      this.tagAlignmentSession.setCalibrationGizmoEnabled(false);
+      this.tagAlignmentSession.stop();
     }
     this.dimosManager?.enterSetup();
     const panel = this.getSceneObject();
@@ -140,21 +140,12 @@ export class SetupWizard extends BaseScriptComponent {
   }
 
   private _bindAlignmentHandlers(): void {
-    if (this._alignmentHandlersBound || !this.alignmentController) {
+    if (this._alignmentHandlersBound || !this.tagAlignmentSession) {
       return;
     }
     this._alignmentHandlersBound = true;
-    this.alignmentController.ensureEventHandlers?.();
-    this.alignmentController.onAlignStatus.push((msg) => this._onAlignStatus(msg));
-    this.alignmentController.onMarkerTrackingChanged.push((tracking) => {
-      if (
-        this._currentStep !== WizardStep.Calibrate ||
-        this._calibrationSession?.state.mode !== "auto"
-      ) {
-        return;
-      }
-      this._calibrationSession?.updateSpectaclesTracking(tracking);
-    });
+    this.tagAlignmentSession.ensureEventHandlers?.();
+    this.tagAlignmentSession.onAlignStatus.push((msg) => this._onAlignStatus(msg));
   }
 
   private _bindBridgeHandlers(): void {
@@ -172,9 +163,9 @@ export class SetupWizard extends BaseScriptComponent {
       if (
         this._currentStep === WizardStep.Calibrate &&
         this._calibrationSession?.state.mode === "auto" &&
-        this.alignmentController
+        this.tagAlignmentSession
       ) {
-        if (this.alignmentController.ensureBridgeSession()) {
+        if (this.tagAlignmentSession.ensureBridgeSession()) {
           this._renderCalibrationState();
         }
       }
@@ -211,9 +202,9 @@ export class SetupWizard extends BaseScriptComponent {
     if (panel) {
       panel.enabled = false;
     }
-    if (this.alignmentController) {
-      this.alignmentController.setCalibrationGizmoEnabled(false);
-      this.alignmentController.stop();
+    if (this.tagAlignmentSession) {
+      this.tagAlignmentSession.setCalibrationGizmoEnabled(false);
+      this.tagAlignmentSession.stop();
     }
     this.dimosManager?.enterRuntime();
   }
@@ -287,9 +278,7 @@ export class SetupWizard extends BaseScriptComponent {
     if (this._currentStep !== WizardStep.Calibrate) {
       return;
     }
-    const spectaclesTracking = this.alignmentController
-      ? this.alignmentController.isMarkerTracked()
-      : msg.spectacles_marker_detected;
+    const spectaclesTracking = msg.tag_detected;
     this._calibrationSession?.handleAlignStatus(msg, spectaclesTracking);
     if (msg.state === "aligned") {
       this._logSetup(

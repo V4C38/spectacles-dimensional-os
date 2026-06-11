@@ -45,7 +45,7 @@ def main():
     print("2. Find MarkerAnchor UUID")
     print("3. Create DebugGizmo parent")
     print("4. Create 3 axis meshes (RGB)")
-    print("5. Wire to AlignmentController.debugGizmo")
+    print("5. (Optional) wire to a debug SceneObject if needed")
     print()
     print("Run this from Cursor Agent with Lens Studio open:")
     print(f"  'Create debug gizmo using {Path(__file__).resolve()}'")

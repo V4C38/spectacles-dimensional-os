@@ -129,13 +129,13 @@ def test_capabilities_prefer_live_go2_connection_over_stale_global_model(
     assert XRRobotAdapterModule.robot_model(adapter) == "unitree_go2"
 
 
-def test_capabilities_report_manual_only_for_g1_runtime(monkeypatch) -> None:
+def test_capabilities_report_tag_align_for_g1_runtime(monkeypatch) -> None:
     adapter = _make_adapter()
     adapter._g1_connection = object()
     monkeypatch.setattr(global_config, "robot_model", "unitree_go2", raising=False)
 
     capabilities = XRRobotAdapterModule.capabilities(adapter)
 
-    assert capabilities["align"].available is False
+    assert capabilities["align"].available is True
     assert capabilities["align_manual"].available is True
     assert XRRobotAdapterModule.robot_model(adapter) == "unitree_g1"

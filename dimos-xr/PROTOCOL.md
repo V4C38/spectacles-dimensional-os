@@ -9,8 +9,9 @@ Keep this document and `dimos_xr/protocol.py` in sync. Bump
 ## Transport
 
 - Plain WebSocket. The Mac runs the server; XR devices connect as clients.
-- All messages are JSON text frames.
-- Every message is a JSON object with a `type` field.
+- Most messages are JSON text frames. High-resolution camera stills use a binary
+  `camera_frame` envelope (see below).
+- Every JSON message is a JSON object with a `type` field.
 - Inbound and outbound coordinates use the XR world frame. The bridge converts
   world-frame goals and calibration poses into robot odom coordinates.
 - Every runtime message carries a single active `robot_id`.
@@ -23,7 +24,7 @@ capability surface:
 ```json
 {
   "type": "hello",
-  "protocol_version": 2,
+  "protocol_version": 3,
   "robot": {
     "robot_id": "unitree_go2",
     "robot_model": "unitree_go2",
@@ -104,13 +105,36 @@ Alignment progress during calibration:
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
   "state": "detecting",
-  "robot_marker_detected": false,
-  "spectacles_marker_detected": true,
+  "tag_detected": true,
+  "observation_count": 12,
+  "baseline_m": 0.42,
   "quality": 0.81,
   "best_quality": 0.95,
   "has_candidate": true,
-  "method": "manual",
-  "message": "Waiting for robot odometry"
+  "method": "tag",
+  "message": "Look at the robot-mounted tag"
+}
+```
+
+Fields:
+
+- `tag_detected`: bridge detected a configured robot-mounted tag in a recent frame
+- `observation_count`: observations in the sliding alignment window
+- `baseline_m`: max ground-plane separation between tag observations (meters)
+
+### `camera_frame_ack`
+
+Per-frame acknowledgement after the bridge processes a binary `camera_frame`:
+
+```json
+{
+  "type": "camera_frame_ack",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "seq": 42,
+  "tag_detected": true,
+  "tag_ids": [0],
+  "quality": 0.88
 }
 ```
 
@@ -245,19 +269,55 @@ Stop/cancel the current calibration session.
 
 Commit the current best alignment candidate.
 
-### `align_marker`
+### `camera_info`
 
-Tracked marker pose from the XR client:
+Spectacles camera intrinsics for the still-capture resolution (sent once per
+resolution change before binary frames):
 
 ```json
 {
-  "type": "align_marker",
+  "type": "camera_info",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
-  "marker_position": [x, y, z],
-  "marker_orientation": [qx, qy, qz, qw]
+  "width": 3200,
+  "height": 2400,
+  "fx": 1800.0,
+  "fy": 1800.0,
+  "cx": 1600.0,
+  "cy": 1200.0,
+  "distortion": [],
+  "camera_model": "perspective",
+  "device_model": "spectacles"
 }
 ```
+
+### `camera_frame` (binary)
+
+JPEG still plus pose metadata. Wire format:
+
+1. Magic `XRF1` (4 bytes)
+2. `header_len` uint32 little-endian
+3. UTF-8 JSON header
+4. Raw JPEG bytes
+
+Header fields:
+
+```json
+{
+  "type": "camera_frame",
+  "robot_id": "unitree_go2",
+  "seq": 42,
+  "ts": 1730000000.123,
+  "send_ts": 1730000000.456,
+  "cam_pos": [x, y, z],
+  "cam_rot": [qx, qy, qz, qw]
+}
+```
+
+- `ts`: capture time in scene seconds (`getTime()` after image await)
+- `send_ts`: scene time when the frame was enqueued for send
+- The bridge detects robot-mounted AprilTags in the JPEG and estimates
+  `T_world_odom` continuously while an align session is active.
 
 ### `align_manual_pose`
 
