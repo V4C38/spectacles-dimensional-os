@@ -4,20 +4,18 @@ from pathlib import Path
 
 import cv2
 
-from dimos_xr.marker_contract import (
+from scripts.generate_marker import (
+    A4_PAGE_MM,
     DEFAULT_APRILTAG_DICT,
     DEFAULT_MARKER_ID,
+    LETTER_PAGE_MM,
     MARKER_PDF_A4,
     MARKER_PDF_LETTER,
     TAG_BLACK_SIZE_M,
     TAG_MODULES_TOTAL,
     TAG_TOTAL_SIZE_M,
-    marker_png_name,
-)
-from scripts.generate_marker import (
-    A4_PAGE_MM,
-    LETTER_PAGE_MM,
     generate_tag_raster,
+    marker_png_name,
 )
 
 _MIN_PRINT_MARGIN_MM = 9.0

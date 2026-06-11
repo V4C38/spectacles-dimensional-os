@@ -108,13 +108,3 @@ class BridgeStatusTracker:
             )
 
 
-bridge_status_tracker: BridgeStatusTracker | None = None
-
-
-def get_bridge_status_tracker() -> BridgeStatusTracker | None:
-    return bridge_status_tracker
-
-
-def set_bridge_status_tracker(tracker: BridgeStatusTracker) -> None:
-    global bridge_status_tracker
-    bridge_status_tracker = tracker

@@ -31,7 +31,7 @@ class RobotHandshake:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-class XRRobotAdapterSpec(Spec, Protocol):
+class XRRobotAdapterSpec(Spec, Protocol):  # type: ignore[misc]
     def robot_id(self) -> str: ...
 
     def robot_model(self) -> str: ...

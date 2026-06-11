@@ -33,12 +33,35 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011"]
-"blueprints/*" = ["E402", "I001"]
 
 [tool.mypy]
 python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
-ignore_missing_imports = true
+strict = true
 packages = ["dimos_xr"]
+
+# DimOS, cv2, dimos_lcm, unitree_webrtc_connect, websockets ship without
+# py.typed markers or stubs; they are genuinely untyped dependencies.
+[[tool.mypy.overrides]]
+module = [
+    "dimos.*",
+    "dimos_lcm.*",
+    "cv2.*",
+    "unitree_webrtc_connect.*",
+    "websockets.*",
+]
+ignore_missing_imports = true
+
+# @rpc from DimOS is untyped, causing [untyped-decorator] on every @rpc method.
+# This is a DimOS upstream issue; suppress it in all files that use @rpc.
+[[tool.mypy.overrides]]
+module = [
+    "dimos_xr.adapters.go2",
+    "dimos_xr.adapters.g1",
+    "dimos_xr.adapter_module",
+    "dimos_xr.xr_bridge_module",
+    "dimos_xr.preview_planner",
+]
+disallow_untyped_decorators = false

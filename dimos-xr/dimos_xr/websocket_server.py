@@ -1,4 +1,10 @@
-"""Daemon-thread WebSocket server for XR clients."""
+"""XR WebSocket server — mirrors RerunWebSocketServer lifecycle.
+
+Lifecycle runs on the Module's own asyncio loop (self._loop) via
+asyncio.run_coroutine_threadsafe. Stop is signalled via loop.call_soon_threadsafe.
+Liveness relies solely on WebSocket protocol-level ping/pong — there is no
+application-level heartbeat in the XR bridge protocol.
+"""
 
 from __future__ import annotations
 
@@ -6,15 +12,13 @@ import asyncio
 import logging
 import re
 import threading
-import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import websockets
-from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
+import websockets.asyncio.server as ws_server
 from dimos.core.global_config import global_config
 from dimos.utils.logging_config import setup_logger
-from websockets.asyncio.server import Server, ServerConnection, serve
 
 from dimos_xr.protocol import (
     AlignCommitMessage,
@@ -35,26 +39,24 @@ from dimos_xr.tag_tracker import parse_camera_frame
 
 logger = setup_logger()
 
-# Port probes / non-WebSocket clients (e.g. nc, browser) close immediately; avoid stack traces.
-logging.getLogger("websockets").setLevel(logging.WARNING)
-
-AlignStartHandler = Callable[[AlignStartMessage, ServerConnection], None]
-AlignStopHandler = Callable[[AlignStopMessage, ServerConnection], None]
-AlignCommitHandler = Callable[[AlignCommitMessage, ServerConnection], None]
-CameraInfoHandler = Callable[[CameraInfoMessage, ServerConnection], None]
-CameraFrameHandler = Callable[[dict[str, Any], bytes, ServerConnection], Awaitable[None]]
-AlignManualPoseHandler = Callable[[AlignManualPoseMessage, ServerConnection], None]
+AlignStartHandler = Callable[[AlignStartMessage, "ws_server.ServerConnection"], None]
+AlignStopHandler = Callable[[AlignStopMessage, "ws_server.ServerConnection"], None]
+AlignCommitHandler = Callable[[AlignCommitMessage, "ws_server.ServerConnection"], None]
+CameraInfoHandler = Callable[[CameraInfoMessage, "ws_server.ServerConnection"], None]
+CameraFrameHandler = Callable[
+    [dict[str, Any], bytes, "ws_server.ServerConnection"], Awaitable[None]
+]
+AlignManualPoseHandler = Callable[[AlignManualPoseMessage, "ws_server.ServerConnection"], None]
 NavGoalHandler = Callable[[NavGoalMessage], None]
 PlanPathHandler = Callable[[PlanPathMessage], None]
 CancelGoalHandler = Callable[[CancelGoalMessage], None]
 EmergencyStopHandler = Callable[[EmergencyStopMessage], None]
-GetStatusHandler = Callable[[GetStatusMessage, ServerConnection], None]
+GetStatusHandler = Callable[[GetStatusMessage, "ws_server.ServerConnection"], None]
 UnsupportedHandler = Callable[[InboundMessage], None]
-StatusOnConnectHandler = Callable[[ServerConnection], None]
-DisconnectHandler = Callable[[ServerConnection], None]
+StatusOnConnectHandler = Callable[["ws_server.ServerConnection"], None]
+DisconnectHandler = Callable[["ws_server.ServerConnection"], None]
 HelloSupplier = Callable[[], Any]
 
-STARTUP_TIMEOUT_S = 10.0
 OUTBOUND_FIFO_MAXSIZE = 64
 OUTBOUND_BACKLOG_LOG_INTERVAL_S = 5.0
 COALESCE_MESSAGE_TYPES = frozenset(
@@ -70,6 +72,16 @@ COALESCE_MESSAGE_TYPES = frozenset(
     }
 )
 _MESSAGE_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
+PING_INTERVAL_S = 30
+PING_TIMEOUT_S = 30
+
+
+def _handshake_noise_filter(record: logging.LogRecord) -> bool:
+    """Drop noisy handshake-failed records from port scanners and non-WS clients."""
+    msg = record.getMessage()
+    return not (
+        "opening handshake failed" in msg or "did not receive a valid HTTP request" in msg
+    )
 
 
 def _peek_message_type(text: str) -> str | None:
@@ -80,7 +92,7 @@ def _peek_message_type(text: str) -> str | None:
 class _ConnectionOutbound:
     """Per-connection sender with latest-wins coalescing and bounded FIFO."""
 
-    def __init__(self, websocket: ServerConnection) -> None:
+    def __init__(self, websocket: ws_server.ServerConnection) -> None:
         self._websocket = websocket
         self._queue: asyncio.Queue[tuple[int, str]] = asyncio.Queue(
             maxsize=OUTBOUND_FIFO_MAXSIZE,
@@ -140,22 +152,17 @@ class _ConnectionOutbound:
                     await self._work_available.wait()
                     if self._closed:
                         break
-
                 try:
                     _seq, text = self._queue.get_nowait()
                 except asyncio.QueueEmpty:
                     await self._flush_coalesced_batch()
                     continue
-
                 await self._send(text)
                 await self._flush_one_coalesced()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error(
-                "XR WebSocket outbound sender crashed",
-                error=str(exc),
-            )
+            logger.error("XR WebSocket outbound sender crashed", error=str(exc))
 
     async def _flush_one_coalesced(self) -> None:
         if not self._coalesce_latest:
@@ -168,28 +175,24 @@ class _ConnectionOutbound:
         while self._coalesce_latest and not self._closed:
             await self._flush_one_coalesced()
 
-    def _maybe_log_backlog(self) -> None:
-        now = time.monotonic()
-        if now - self._last_backlog_log_mono < OUTBOUND_BACKLOG_LOG_INTERVAL_S:
-            return
-        fifo_depth = self._queue.qsize()
-        coalesce_depth = len(self._coalesce_latest)
-        if fifo_depth == 0 and coalesce_depth == 0 and self._dropped_fifo_count == 0:
-            return
-        self._last_backlog_log_mono = now
-        logger.debug(
-            "XR WebSocket outbound backlog",
-            fifo_depth=fifo_depth,
-            coalesce_pending=coalesce_depth,
-            dropped_fifo=self._dropped_fifo_count,
-            sent_count=self._sent_count,
-        )
-
     async def _send(self, text: str) -> None:
+        import time
+
         try:
             await self._websocket.send(text)
             self._sent_count += 1
-            self._maybe_log_backlog()
+            now = time.monotonic()
+            if now - self._last_backlog_log_mono >= OUTBOUND_BACKLOG_LOG_INTERVAL_S:
+                fifo_depth = self._queue.qsize()
+                coalesce_depth = len(self._coalesce_latest)
+                if fifo_depth > 0 or coalesce_depth > 0 or self._dropped_fifo_count > 0:
+                    self._last_backlog_log_mono = now
+                    logger.debug(
+                        "XR WebSocket outbound backlog",
+                        fifo_depth=fifo_depth,
+                        coalesce_pending=coalesce_depth,
+                        dropped_fifo=self._dropped_fifo_count,
+                    )
         except websockets.ConnectionClosed:
             self._closed = True
         except Exception as exc:
@@ -198,18 +201,25 @@ class _ConnectionOutbound:
                 "XR WebSocket outbound send failed",
                 error=str(exc),
                 message_type=msg_type,
-                payload_bytes=len(text.encode("utf-8")),
-                sent_count=self._sent_count,
             )
 
 
 class XRWebSocketServer:
+    """WebSocket server running on the Module's asyncio loop.
+
+    Lifecycle adopts the RerunWebSocketServer pattern: start() schedules
+    _serve() on self._loop via asyncio.run_coroutine_threadsafe; stop() signals
+    via loop.call_soon_threadsafe. The module must call start() after assigning
+    loop and stop() before its loop closes.
+    """
+
     def __init__(
         self,
         *,
         port: int,
         hello_supplier: HelloSupplier,
         max_message_bytes: int,
+        loop: asyncio.AbstractEventLoop,
         on_align_start: AlignStartHandler | None = None,
         on_align_stop: AlignStopHandler | None = None,
         on_align_commit: AlignCommitHandler | None = None,
@@ -228,6 +238,7 @@ class XRWebSocketServer:
         self._port = port
         self._hello_supplier = hello_supplier
         self._max_message_bytes = max_message_bytes
+        self._loop = loop
         self._on_align_start = on_align_start
         self._on_align_stop = on_align_stop
         self._on_align_commit = on_align_commit
@@ -243,92 +254,75 @@ class XRWebSocketServer:
         self._on_status_connect = on_status_connect
         self._on_disconnect = on_disconnect
 
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._thread: threading.Thread | None = None
-        self._server: Server | None = None
-        self._connections: set[ServerConnection] = set()
-        self._outbound: dict[ServerConnection, _ConnectionOutbound] = {}
-        self._stop_future: asyncio.Future[None] | None = None
-        self._ready = threading.Event()
-        self._startup_error: BaseException | None = None
+        self._stop_event: asyncio.Event | None = None
+        self._server_ready = threading.Event()
+        self.client_connected = threading.Event()
+        self._connections: set[ws_server.ServerConnection] = set()
+        self._outbound: dict[ws_server.ServerConnection, _ConnectionOutbound] = {}
 
     @property
     def port(self) -> int:
         return self._port
 
     def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
+        """Schedule _serve() on the Module loop; block until server is accepting."""
+        asyncio.run_coroutine_threadsafe(self._serve(), self._loop)
+        self._server_ready.wait()
+
+    def stop(self) -> None:
+        """Signal _serve() to exit from any thread."""
+        if not self._server_ready.is_set():
             return
+        if self._stop_event is not None:
+            self._loop.call_soon_threadsafe(self._stop_event.set)
+        self._server_ready.clear()
+        self.client_connected.clear()
 
-        self._ready.clear()
-        self._startup_error = None
+    async def _serve(self) -> None:
+        self._stop_event = asyncio.Event()
 
-        def run_loop() -> None:
-            loop = asyncio.new_event_loop()
-            self._loop = loop
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(self._run_server())
-            except BaseException as exc:
-                self._startup_error = exc
-                self._ready.set()
-                raise
-            finally:
-                loop.close()
-                self._loop = None
+        ws_logger = logging.getLogger("websockets.server")
+        ws_logger.addFilter(_handshake_noise_filter)
 
-        self._thread = threading.Thread(target=run_loop, daemon=True, name="ar-ws")
-        self._thread.start()
-
-        host = global_config.listen_host
-        logger.info("XR WebSocket server starting", host=host, port=self._port)
-
-        if not self._ready.wait(timeout=STARTUP_TIMEOUT_S):
-            raise TimeoutError(
-                f"XR WebSocket server did not start within {STARTUP_TIMEOUT_S}s",
-            )
-        if self._startup_error is not None:
-            raise RuntimeError("XR WebSocket server failed to start") from self._startup_error
-
-    async def _run_server(self) -> None:
-        loop = asyncio.get_running_loop()
-        self._stop_future = loop.create_future()
         host = global_config.listen_host
         try:
-            async with serve(
+            async with ws_server.serve(
                 self._handler,
                 host,
                 self._port,
-                ping_interval=20,
-                ping_timeout=20,
+                ping_interval=PING_INTERVAL_S,
+                ping_timeout=PING_TIMEOUT_S,
                 max_size=self._max_message_bytes,
-            ) as server:
-                self._server = server
+                logger=ws_logger,
+            ):
                 logger.info("XR WebSocket server listening", host=host, port=self._port)
                 if host in ("127.0.0.1", "localhost"):
                     logger.warning(
-                        "WebSocket is localhost-only; Spectacles/phone cannot connect. "
+                        "WebSocket is localhost-only; Spectacles cannot connect. "
                         "Restart without --local (default binds 0.0.0.0).",
                     )
-                self._ready.set()
-                await self._stop_future
-        except BaseException:
-            if not self._ready.is_set():
-                self._ready.set()
+                self._server_ready.set()
+                await self._stop_event.wait()
+        except Exception:
+            if not self._server_ready.is_set():
+                self._server_ready.set()
             raise
 
-    async def _handler(self, websocket: ServerConnection) -> None:
+    async def _handler(self, websocket: ws_server.ServerConnection) -> None:
+        req = getattr(websocket, "request", None)
+        if req is not None and req.path not in ("/", "/ws"):
+            await websocket.close(1008, "Not Found")
+            return
         self._connections.add(websocket)
         outbound = _ConnectionOutbound(websocket)
         self._outbound[websocket] = outbound
         outbound.start()
         try:
             hello = self._hello_supplier()
-            await websocket.send(
-                encode_hello(hello),
-            )
+            await websocket.send(encode_hello(hello))
             if self._on_status_connect is not None:
                 self._on_status_connect(websocket)
+            self.client_connected.set()
             async for message in websocket:
                 try:
                     if isinstance(message, bytes):
@@ -362,7 +356,9 @@ class XRWebSocketServer:
             if self._on_disconnect is not None:
                 self._on_disconnect(websocket)
 
-    def _dispatch_inbound(self, inbound: InboundMessage, websocket: ServerConnection) -> None:
+    def _dispatch_inbound(
+        self, inbound: InboundMessage, websocket: ws_server.ServerConnection
+    ) -> None:
         if isinstance(inbound, AlignStartMessage):
             if self._on_align_start is not None:
                 self._on_align_start(inbound, websocket)
@@ -405,51 +401,27 @@ class XRWebSocketServer:
             elif self._on_unsupported is not None:
                 self._on_unsupported(inbound)
             else:
-                logger.warning(
-                    "emergency_stop received but not supported in this blueprint"
-                )
+                logger.warning("emergency_stop received but not supported in this blueprint")
         elif isinstance(inbound, GetStatusMessage):
             if self._on_get_status is not None:
                 self._on_get_status(inbound, websocket)
 
     def schedule_send(self, text: str) -> None:
-        """Schedule a send on the WS event loop from any thread."""
-        if self._loop is None or self._loop.is_closed():
-            return
+        """Enqueue a broadcast from any thread onto the server loop."""
         asyncio.run_coroutine_threadsafe(self._enqueue_all(text), self._loop)
 
-    def schedule_send_to(self, websocket: ServerConnection, text: str) -> None:
-        if self._loop is None or self._loop.is_closed():
-            return
+    def schedule_send_to(
+        self, websocket: ws_server.ServerConnection, text: str
+    ) -> None:
         asyncio.run_coroutine_threadsafe(self._enqueue_one(websocket, text), self._loop)
 
     async def _enqueue_all(self, text: str) -> None:
-        if not self._outbound:
-            return
         for outbound in list(self._outbound.values()):
             outbound.enqueue(text)
 
-    async def _enqueue_one(self, websocket: ServerConnection, text: str) -> None:
+    async def _enqueue_one(
+        self, websocket: ws_server.ServerConnection, text: str
+    ) -> None:
         outbound = self._outbound.get(websocket)
         if outbound is not None:
             outbound.enqueue(text)
-
-    def stop(self) -> None:
-        if self._loop is not None and not self._loop.is_closed():
-            if self._stop_future is not None and not self._stop_future.done():
-
-                def _set_stop() -> None:
-                    if self._stop_future is not None and not self._stop_future.done():
-                        self._stop_future.set_result(None)
-
-                self._loop.call_soon_threadsafe(_set_stop)
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
-        self._thread = None
-        self._loop = None
-        self._server = None
-        self._stop_future = None
-        self._connections.clear()
-        self._outbound.clear()
-        self._ready.clear()
-        logger.info("XR WebSocket server stopped")

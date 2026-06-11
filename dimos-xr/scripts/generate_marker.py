@@ -17,16 +17,17 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from dimos_xr.marker_contract import (
-    DEFAULT_APRILTAG_DICT,
-    DEFAULT_MARKER_ID,
-    MARKER_PDF_A4,
-    MARKER_PDF_LETTER,
-    TAG_BLACK_SIZE_M,
-    TAG_MODULES_TOTAL,
-    TAG_TOTAL_SIZE_M,
-    marker_png_name,
-)
+DEFAULT_MARKER_ID: int = 0
+DEFAULT_APRILTAG_DICT: str = "DICT_APRILTAG_36h11"
+TAG_TOTAL_SIZE_M: float = 0.070
+TAG_MODULES_TOTAL: int = 10
+TAG_BLACK_SIZE_M: float = TAG_TOTAL_SIZE_M * 8 / TAG_MODULES_TOTAL
+MARKER_PDF_A4: str = "apriltag_robot_a4.pdf"
+MARKER_PDF_LETTER: str = "apriltag_robot_letter.pdf"
+
+
+def marker_png_name(tag_id: int) -> str:
+    return f"apriltag_robot_{tag_id}.png"
 
 try:
     from PIL import Image, ImageDraw, ImageFont

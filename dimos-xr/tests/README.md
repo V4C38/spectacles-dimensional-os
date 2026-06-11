@@ -20,49 +20,38 @@ Run tests from the DimOS `.venv`, not an arbitrary Python environment.
 
 ## Run integration test (headless protocol check)
 
-Terminal 1 — start the blueprint:
+Terminal 1 — start the bridge (from repo root):
 
 ```bash
-DIMOS_XR_STACK=unitree-go2 /path/to/dimos/.venv/bin/python3 blueprints/dimos_xr.py
+./start.sh        # interactive robot chooser (Go2 or G1)
+```
+
+Or directly with `dimos run` once blueprints are registered upstream:
+
+```bash
+/path/to/dimos/.venv/bin/python3 -c "from dimos_xr.blueprints import xr_go2; ..."
 ```
 
 Wait for `XR WebSocket server listening`.
 
-For a best-effort non-navigation Go2 check, you can also start:
+### Go2
 
-```bash
-DIMOS_XR_STACK=unitree-go2-basic /path/to/dimos/.venv/bin/python3 blueprints/dimos_xr.py
-```
+Start the bridge with the Go2 stack (`./start.sh` → choose "Unitree Go2").
 
-In that mode, the bridge negotiates a valid handshake and streams pose/lidar,
-while navigation-related capabilities may be disabled.
+Expected XR behavior:
+
+- pose/lidar/path negotiate from the Go2 smart stack
+- all capabilities enabled when the robot is live
 
 ### G1 nav-onboard
 
-```bash
-DIMOS_XR_STACK=unitree-g1-nav-onboard /path/to/dimos/.venv/bin/python3 blueprints/dimos_xr.py
-```
+Start the bridge with the G1 stack (`./start.sh` → choose "Unitree G1").
 
 Expected XR behavior:
 
-- pose/lidar/path should negotiate from the onboard nav stack when present
-- navigation-related capabilities should reflect the actual runtime contract
-- alignment may negotiate as manual-only if the runtime does not expose the
-  camera path and calibrated robot-camera geometry required for marker alignment
-
-### G1 reduced / non-nav
-
-```bash
-DIMOS_XR_STACK=unitree-g1 /path/to/dimos/.venv/bin/python3 blueprints/dimos_xr.py
-```
-
-Expected XR behavior:
-
-- passive visualization and pose negotiate when the underlying LCM topics are
-  present
-- navigation/cancel/path capabilities are negotiated from the actual runtime
-  transports
-- manual alignment is available even when marker alignment is disabled
+- pose/lidar/path negotiate from the onboard nav stack
+- navigation capabilities enabled when the nav stack is present
+- marker alignment available
 
 Terminal 2 — run the integration test:
 

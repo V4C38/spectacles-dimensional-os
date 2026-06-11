@@ -16,7 +16,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BLUEPRINT="${ROOT}/blueprints/dimos_xr.py"
+DIMOS_XR_ROOT="${ROOT}/dimos-xr"
 source "${ROOT}/scripts/_dimos_env.sh"
 
 print_blue_stdout() {
@@ -45,10 +45,6 @@ if ! PYTHON="$(find_dimos_python "${ROOT}")"; then
   print_dimos_python_help "${ROOT}"
   exit 1
 fi
-if [[ ! -f "${BLUEPRINT}" ]]; then
-  echo "Blueprint not found: ${BLUEPRINT}" >&2
-  exit 1
-fi
 
 if [[ -z "${DIMOS_CONFIGURE_SYSTEM:-}" && -z "${CI:-}" ]]; then
   export CI=1
@@ -61,33 +57,20 @@ export PATH="$(dirname "${PYTHON}"):${PATH}"
 # Suppress harmless macOS dylib duplicate-class warnings from cv2/av fork clash.
 export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
 
-# The blueprint file is named dimos_xr.py, identical to the installed dimos_xr
-# package. Running it as a script would prepend blueprints/ to sys.path and let
-# the script shadow the package ("'dimos_xr' is not a package"). PYTHONSAFEPATH
-# stops Python from prepending the script directory so imports resolve to the
-# installed package. Requires Python 3.11+ (DimOS venv is 3.12+).
-export PYTHONSAFEPATH=1
-
 # Detect LAN IP for the user.
 LAN_IP="$(detect_lan_ip)"
 
 STACK_IDS=(
-  "unitree-go2"
-  "unitree-go2-basic"
-  "unitree-g1-nav-onboard"
-  "unitree-g1"
+  "xr_go2"
+  "xr_g1"
 )
 MENU_LABELS=(
   "Unitree Go2"
-  "Unitree Go2 (no navigation)"
   "Unitree G1"
-  "Unitree G1 (no navigation)"
 )
 SUMMARY_LABELS=(
   "Unitree Go2"
-  "Unitree Go2 (no navigation)"
   "Unitree G1"
-  "Unitree G1 (no navigation)"
 )
 
 # Interactive arrow-key menu: up/down to move, Enter to select.
@@ -191,9 +174,9 @@ resolve_robot_ip() {
 
 arrow_menu "Choose the robot stack to run (↑/↓ then Enter):" "${MENU_LABELS[@]}"
 
-export DIMOS_XR_STACK="${STACK_IDS[$SELECTED_INDEX]}"
+SELECTED_BLUEPRINT="${STACK_IDS[$SELECTED_INDEX]}"
 STACK_LABEL="${SUMMARY_LABELS[$SELECTED_INDEX]}"
-EQUIVALENT="dimos run ${STACK_IDS[$SELECTED_INDEX]} dimos-xr"
+EQUIVALENT="dimos run ${SELECTED_BLUEPRINT}"
 
 # DimOS GlobalConfig reads ROBOT_IP (or a .env file) to open the robot
 # connection; without it the connection module aborts with "IP address must be
@@ -218,4 +201,10 @@ echo ""
 # A one-off Go2 :8081 /offer refusal usually means the robot-side runtime was
 # still coming up, not that the Lens-side ws://<host>:8787 bridge is misconfigured.
 
-exec "${PYTHON}" "${BLUEPRINT}" < /dev/null 2> >(grep -v '^objc\[' >&2)
+exec "${PYTHON}" -c "
+import sys
+sys.path.insert(0, '${DIMOS_XR_ROOT}')
+from dimos.core.coordination.module_coordinator import ModuleCoordinator
+from dimos_xr.blueprints import ${SELECTED_BLUEPRINT}
+ModuleCoordinator.build(${SELECTED_BLUEPRINT}).loop()
+" < /dev/null 2> >(grep -v '^objc\[' >&2)

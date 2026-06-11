@@ -1,10 +1,23 @@
-# Phase 0 validation notes (device testing via scripts/frame_probe.py):
-# - Timestamp: use imageFrame.timestampMillis/1000 as capture ts (scene seconds).
-# - Intrinsics: scale DeviceCamera focal/principal by still/camera resolution ratio.
-# - Reprojection gate: 3.0 px default; fallback 6.0 px if stills prove non-rectified.
-# - JPEG size: expect 0.3-1.5 MB at IntermediateQuality over binary WS.
+"""Robot-mounted AprilTag tracking from XR client camera frames.
 
-"""Robot-mounted AprilTag tracking from XR client camera frames."""
+Phase 0 validation notes (device testing via scripts/frame_probe.py):
+- Timestamp: use imageFrame.timestampMillis/1000 as capture ts (scene seconds).
+- Intrinsics: scale DeviceCamera focal/principal by still/camera resolution ratio.
+- Reprojection gate: 3.0 px default; fallback 6.0 px if stills prove non-rectified.
+- JPEG size: expect 0.3-1.5 MB at IntermediateQuality over binary WS.
+
+DimOS fiducial delegation note:
+Detection and PnP pose estimation here deliberately does NOT delegate to
+``dimos.perception.fiducial.marker_tf_module.MarkerTfModule`` because:
+1. Input is XR headset camera JPEG frames over WebSocket, not a robot camera stream.
+2. ``T_world_glcam`` (headset AR world pose) arrives in the ``camera_frame`` header —
+   it is not in the DimOS TF graph and cannot be looked up via ``TFSpec``.
+3. The bridge computes ``T_world_odom`` directly from paired (world-space tag,
+   odom-space robot) observations — a fundamentally different fusion path.
+The individual helper functions ``camera_info_to_cv_matrices`` and
+``estimate_marker_pose`` are re-exported from the DimOS fiducial module (same
+implementation) to keep the two in sync.
+"""
 
 from __future__ import annotations
 
@@ -16,14 +29,24 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import cv2
 import numpy as np
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
+from dimos.perception.fiducial.marker_tf_module import (
+    camera_info_to_cv_matrices,
+    create_aruco_detector,
+    estimate_marker_pose,
+)
 from numpy.typing import NDArray
 
-from dimos_xr.marker_contract import DEFAULT_APRILTAG_DICT, TAG_BLACK_SIZE_M
 from dimos_xr.transforms import OdomSample, gravity_level_transform, pose_to_matrix
+
+DEFAULT_MARKER_ID: int = 0
+DEFAULT_APRILTAG_DICT: str = "DICT_APRILTAG_36h11"
+TAG_TOTAL_SIZE_M: float = 0.070
+TAG_BLACK_SIZE_M: float = TAG_TOTAL_SIZE_M * 8 / 10  # 0.056 m — black detection square
 
 CAMERA_FRAME_MAGIC = b"XRF1"
 MAX_HEADER_BYTES = 4096
@@ -62,25 +85,6 @@ def build_camera_info(
     )
 
 
-def camera_info_to_cv_matrices(camera_info: CameraInfo) -> tuple[np.ndarray, np.ndarray]:
-    k = np.array(camera_info.K, dtype=np.float64).reshape(3, 3)
-    d = np.array(camera_info.D if camera_info.D else [], dtype=np.float64).reshape(-1, 1)
-    return k, d
-
-
-def _square_marker_object_points(marker_length_m: float) -> np.ndarray:
-    h = marker_length_m / 2.0
-    return np.array(
-        [
-            [-h, h, 0.0],
-            [h, h, 0.0],
-            [h, -h, 0.0],
-            [-h, -h, 0.0],
-        ],
-        dtype=np.float32,
-    )
-
-
 def _rvec_tvec_to_matrix(rvec: np.ndarray, tvec: np.ndarray) -> np.ndarray:
     rot_mat, _ = cv2.Rodrigues(rvec)
     T = np.eye(4, dtype=np.float64)
@@ -89,34 +93,12 @@ def _rvec_tvec_to_matrix(rvec: np.ndarray, tvec: np.ndarray) -> np.ndarray:
     return T
 
 
-def create_apriltag_detector(
-    dictionary_name: str = DEFAULT_APRILTAG_DICT,
-) -> cv2.aruco.ArucoDetector:
-    if not hasattr(cv2.aruco, dictionary_name):
-        raise ValueError(f"Unknown AprilTag dictionary {dictionary_name!r}")
-    dictionary = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, dictionary_name))
-    parameters = cv2.aruco.DetectorParameters()
-    return cv2.aruco.ArucoDetector(dictionary, parameters)
-
-
-def estimate_marker_pose(
-    corners_px: np.ndarray,
-    marker_length_m: float,
-    camera_matrix: np.ndarray,
-    dist_coeffs: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray] | None:
-    obj = _square_marker_object_points(marker_length_m)
-    img: np.ndarray = corners_px.reshape(4, 1, 2).astype(np.float32)
-    ok, rvec, tvec = cv2.solvePnP(
-        obj,
-        img,
-        camera_matrix,
-        dist_coeffs,
-        flags=cv2.SOLVEPNP_IPPE_SQUARE,
+def _square_marker_object_points(marker_length_m: float) -> np.ndarray:
+    h = marker_length_m / 2.0
+    return np.array(
+        [[-h, h, 0.0], [h, h, 0.0], [h, -h, 0.0], [-h, -h, 0.0]],
+        dtype=np.float32,
     )
-    if not ok:
-        return None
-    return rvec, tvec
 
 
 def reprojection_error_px(
@@ -133,7 +115,7 @@ def reprojection_error_px(
     return float(np.sqrt(np.mean(np.sum(diff * diff, axis=1))))
 
 
-def parse_camera_frame(data: bytes) -> tuple[dict, bytes]:
+def parse_camera_frame(data: bytes) -> tuple[dict[str, Any], bytes]:
     if len(data) < 8:
         raise ValueError("camera_frame too short")
     if data[:4] != CAMERA_FRAME_MAGIC:
@@ -266,7 +248,7 @@ class TagTracker:
         self._mounts = {m.tag_id: m for m in mounts}
         self._config = config or TagTrackerConfig()
         self._camera_info = camera_info
-        self._detector = create_apriltag_detector()
+        self._detector = create_aruco_detector(DEFAULT_APRILTAG_DICT)
         self._lock = threading.Lock()
         self._observations: deque[TagObservation] = deque(maxlen=self._config.window_max_obs)
         self._active = False
@@ -331,7 +313,7 @@ class TagTracker:
 
     def process_frame(
         self,
-        header: dict,
+        header: dict[str, Any],
         jpeg: bytes,
         odom_lookup: Callable[[float], OdomSample | None],
         *,
@@ -432,7 +414,12 @@ class TagTracker:
                     if len(recent) < self._config.relocalize_consecutive:
                         continue
                     spread = max(
-                        float(np.linalg.norm(np.array(recent[i].p_world_tag) - np.array(recent[j].p_world_tag)))
+                        float(
+                            np.linalg.norm(
+                                np.array(recent[i].p_world_tag)
+                                - np.array(recent[j].p_world_tag)
+                            )
+                        )
                         for i in range(len(recent))
                         for j in range(i + 1, len(recent))
                     )
@@ -486,8 +473,14 @@ class TagTracker:
 
         baseline = _ground_baseline_m(observations)
         if baseline >= self._config.min_baseline_m and len(observations) >= 2:
-            u = np.array([(o.p_odom_tag[0], o.p_odom_tag[1]) for o in observations], dtype=np.float64)
-            v = np.array([(o.p_world_tag[0], -o.p_world_tag[2]) for o in observations], dtype=np.float64)
+            u = np.array(
+                [(o.p_odom_tag[0], o.p_odom_tag[1]) for o in observations],
+                dtype=np.float64,
+            )
+            v = np.array(
+                [(o.p_world_tag[0], -o.p_world_tag[2]) for o in observations],
+                dtype=np.float64,
+            )
             yaw, t2 = solve_yaw_translation_2d(u, v)
             mean_world_y = float(np.mean([o.p_world_tag[1] for o in observations]))
             mean_odom_z = float(np.mean([o.p_odom_tag[2] for o in observations]))
@@ -527,7 +520,9 @@ def collect_alignment_cluster_from_matrices(
     if not candidates:
         return []
     ref = candidates[-1]
-    cluster = [c for c in candidates if _matrix_close(c, ref, translation_threshold_m, yaw_threshold_rad)]
+    cluster = [
+        c for c in candidates if _matrix_close(c, ref, translation_threshold_m, yaw_threshold_rad)
+    ]
     return cluster
 
 
@@ -556,7 +551,15 @@ def average_cluster_transform_from_matrices(
     mean_yaw = math.atan2(sin_sum, cos_sum)
     translations = np.array([T[:3, 3] for T in cluster])
     mean_t = translations.mean(axis=0)
-    T_avg = build_T_world_odom(mean_yaw, (float(mean_t[0]), float(mean_t[1]), float(mean_t[2])))
-    yaw_spread = max(abs(math.atan2(math.sin(y - mean_yaw), math.cos(y - mean_yaw))) for y in yaws)
-    trans_spread = float(np.max(np.linalg.norm(translations - mean_t, axis=1))) if len(translations) > 1 else 0.0
+    T_avg = build_T_world_odom(
+        mean_yaw, (float(mean_t[0]), float(mean_t[1]), float(mean_t[2]))
+    )
+    yaw_spread = max(
+        abs(math.atan2(math.sin(y - mean_yaw), math.cos(y - mean_yaw))) for y in yaws
+    )
+    trans_spread = (
+        float(np.max(np.linalg.norm(translations - mean_t, axis=1)))
+        if len(translations) > 1
+        else 0.0
+    )
     return T_avg, yaw_spread, trans_spread

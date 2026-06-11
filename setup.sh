@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set up DimOS + dimos-ar for local development.
+# Set up DimOS + dimos-xr for local development.
 #
 # Usage:
 #   ./setup.sh         # interactive first-run setup
@@ -12,6 +12,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIMOS_XR_ROOT="${ROOT}/dimos-xr"
 source "${ROOT}/scripts/_dimos_env.sh"
 
 NON_INTERACTIVE=0
@@ -34,7 +35,7 @@ for arg in "$@"; do
   esac
 done
 
-DEFAULT_DIMOS_DIR="$(cd "${ROOT}/../.." && pwd)/dimos"
+  DEFAULT_DIMOS_DIR="$(cd "${ROOT}/.." && pwd)/dimos"
 
 ask_yes_no() {
   local prompt="$1"
@@ -169,15 +170,15 @@ echo "Resolving DimOS environment..."
 DIMOS_ENV_PYTHON="$(resolve_dimos_python)"
 
 echo "Using DimOS Python: ${DIMOS_ENV_PYTHON}"
-echo "Installing dimos-ar into that environment..."
+echo "Installing dimos-xr into that environment..."
 (
-  cd "${ROOT}"
+  cd "${DIMOS_XR_ROOT}"
   "${DIMOS_ENV_PYTHON}" -m pip install -e ".[dev]"
 )
 
 echo "Running unit tests..."
 (
-  cd "${ROOT}"
+  cd "${DIMOS_XR_ROOT}"
   "${DIMOS_ENV_PYTHON}" -m pytest
 )
 
@@ -186,9 +187,8 @@ cat <<EOF
 Setup complete.
 
 Next steps:
-  cd "${ROOT}"
-  ./start.sh --replay
+  ./start.sh
 
 If DimOS lives somewhere unusual, you can always override auto-detection with:
-  DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3 ./start.sh --replay
+  DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3 ./start.sh
 EOF

@@ -26,9 +26,9 @@ find_dimos_python() {
   fi
 
   candidates=(
-    "${root}/../../dimos/.venv/bin/python3"
     "${root}/../dimos/.venv/bin/python3"
-    "${root}/.venv/bin/python3"
+    "${root}/../../dimos/.venv/bin/python3"
+    "${root}/dimos-xr/.venv/bin/python3"
   )
 
   for py in "${candidates[@]}"; do
@@ -56,15 +56,15 @@ print_dimos_python_help() {
 Could not find a Python interpreter with the 'dimos' package installed.
 
 Tried:
-  - ${root}/../../dimos/.venv/bin/python3
   - ${root}/../dimos/.venv/bin/python3
-  - ${root}/.venv/bin/python3
+  - ${root}/../../dimos/.venv/bin/python3
+  - ${root}/dimos-xr/.venv/bin/python3
   - ${system_python}
 
 Fix one of these, then retry:
   - Set DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3
   - Run ./setup.sh and point it at your DimOS install
-  - Install dimos-ar into your DimOS venv manually:
+  - Install dimos-xr into your DimOS venv manually:
       cd "${root}" && /path/to/dimos/.venv/bin/python3 -m pip install -e ".[dev]"
 EOF
 }

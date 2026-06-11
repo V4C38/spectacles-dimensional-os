@@ -10,9 +10,9 @@ import numpy as np
 import pytest
 
 from dimos_xr.adapters.go2 import GO2_DEFAULT_TAG_MOUNTS
-from dimos_xr.marker_contract import DEFAULT_MARKER_ID
 from dimos_xr.tag_tracker import (
     CAMERA_FRAME_MAGIC,
+    DEFAULT_MARKER_ID,
     TagMount,
     TagTracker,
     TagTrackerConfig,

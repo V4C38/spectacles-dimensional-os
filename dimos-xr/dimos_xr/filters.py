@@ -1,17 +1,29 @@
-"""Lidar filtering and subsampling before WebSocket broadcast."""
+"""LiDAR filtering and near-robot-weighted subsampling for WebSocket broadcast.
+
+Rate-limiting is handled via ``time.monotonic()`` inside ``LidarFilter``;
+the ``RateLimiter`` class has been removed in favour of inline monotonic checks.
+Use ``PointCloud2.voxel_downsample`` for initial density reduction before the
+near-robot weighting stage (which is XR-specific and has no DimOS equivalent).
+"""
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import cast
 
 import numpy as np
 from numpy.typing import NDArray
 
-DEFAULT_ROBOT_BODY_HEIGHT_M = 0.55
-LIDAR_FLOOR_CLEARANCE_M = 0.005
-LIDAR_MAX_HEIGHT_ABOVE_BODY_M = 1.0
+DEFAULT_ROBOT_BODY_HEIGHT_M: float = 0.55
+LIDAR_FLOOR_CLEARANCE_M: float = 0.005
+LIDAR_MAX_HEIGHT_ABOVE_BODY_M: float = 1.0
+
+_ANNULUS_RINGS: tuple[tuple[float, float, int], ...] = (
+    (0.0, 1.0, 500),
+    (1.0, 2.5, 350),
+    (2.5, 4.0, 150),
+)
 
 
 def lidar_height_band_m(
@@ -39,20 +51,18 @@ class LidarFilterConfig:
     target_points: int = 2500
     max_hz: float = 10.0
     obstacle_height_threshold_m: float = 0.08
+    _last_emit: float = field(default=0.0, init=False, repr=False, compare=False)
 
-
-class RateLimiter:
-    """Drop messages that arrive faster than max_hz."""
-
-    def __init__(self, max_hz: float) -> None:
-        self._min_interval = 1.0 / max_hz if max_hz > 0 else 0.0
-        self._last_emit = 0.0
+    @property
+    def min_interval_s(self) -> float:
+        return 1.0 / self.max_hz if self.max_hz > 0 else 0.0
 
     def allow(self) -> bool:
-        if self._min_interval <= 0:
+        """Return True if enough time has elapsed since the last allowed message."""
+        if self.min_interval_s <= 0:
             return True
         now = time.monotonic()
-        if now - self._last_emit >= self._min_interval:
+        if now - self._last_emit >= self.min_interval_s:
             self._last_emit = now
             return True
         return False
@@ -61,17 +71,14 @@ class RateLimiter:
 class LidarFilter:
     def __init__(self, config: LidarFilterConfig | None = None) -> None:
         self.config = config or LidarFilterConfig()
-        self.rate_limiter = RateLimiter(self.config.max_hz)
 
     def filter(self, points: NDArray[np.floating]) -> NDArray[np.float32]:
-        """Apply height/range band filter (no subsampling)."""
+        """Apply height/range band filter (vectorised; no loops over points)."""
         if points.size == 0:
             return np.zeros((0, 3), dtype=np.float32)
-
         pts = np.asarray(points, dtype=np.float32)
         if pts.ndim != 2 or pts.shape[1] != 3:
             raise ValueError(f"Expected Nx3 points, got shape {pts.shape}")
-
         mask = np.ones(len(pts), dtype=bool)
         if self.config.max_range_m is not None:
             horizontal = np.linalg.norm(pts[:, :2], axis=1)
@@ -83,16 +90,7 @@ class LidarFilter:
         pts = pts[mask]
         if len(pts) == 0:
             return np.zeros((0, 3), dtype=np.float32)
-
         return pts
-
-
-# Annulus quotas for subsample_points_near_robot (must sum to target_points).
-_ANNULUS_RINGS: tuple[tuple[float, float, int], ...] = (
-    (0.0, 1.0, 500),
-    (1.0, 2.5, 350),
-    (2.5, 4.0, 150),
-)
 
 
 def subsample_points_near_robot(
@@ -101,14 +99,17 @@ def subsample_points_near_robot(
     *,
     target_points: int = 1000,
 ) -> NDArray[np.float32]:
-    """Cap world-frame LiDAR with more points near the robot."""
+    """Cap world-frame LiDAR with more points near the robot.
+
+    XR-specific: preserves near-robot density so AR users see detailed floor
+    geometry around the robot. Applies on top of PointCloud2.voxel_downsample
+    output (see xr_bridge_module.handle_xr_lidar).
+    """
     if points_world.size == 0:
         return np.zeros((0, 3), dtype=np.float32)
-
     pts = np.asarray(points_world, dtype=np.float32)
     if pts.ndim != 2 or pts.shape[1] != 3:
         raise ValueError(f"Expected Nx3 points, got shape {pts.shape}")
-
     if robot_world_position is None:
         if len(pts) <= target_points:
             return pts
@@ -163,12 +164,11 @@ def subsample_points_near_robot(
         chosen = cast(
             NDArray[np.int64],
             rng.choice(
-            np.asarray(selected_indices, dtype=np.int64),
-            size=target_points,
-            replace=False,
+                np.asarray(selected_indices, dtype=np.int64),
+                size=target_points,
+                replace=False,
             ),
         )
         return pts[chosen].astype(np.float32)
 
     return pts[np.asarray(selected_indices, dtype=np.int64)].astype(np.float32)
-

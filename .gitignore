@@ -3,11 +3,13 @@
 Thumbs.db
 .idea/
 .vscode/
+# Cursor IDE local config (MCP tokens, rules cache) — use ~/.cursor/mcp.json
+**/.cursor/
 
 # README / demo media at repo root (not Lens Studio Assets/)
 # Add GIFs/PNGs here when ready; optional LFS via .gitattributes
 
-# Accidental Lens Studio open at repo root (always use lens-studio/spectacles-unitree.esproj)
+# Accidental Lens Studio open at repo root (always use lens-studio/spectacles-dimensional-os.esproj)
 /*.esproj
 /*.esproj.*.lock
 /Cache/
@@ -51,10 +53,6 @@ dist/
 build/
 *.egg-info/
 .eggs/
-
-# dimos-ar web client
-dimos-ar/clients/web/node_modules/
-dimos-ar/clients/web/dist/
 
 # Lens Studio generated / local — primary rules in lens-studio/.gitignore
 # (Snap docs: Cache/, BackUp/, Support/, PluginsUserPreferences/, Workspaces/)

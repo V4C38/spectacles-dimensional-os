@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dimos.core.core import rpc
-from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
@@ -13,7 +12,6 @@ from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.navigation.navigation_spec import NavigationInterfaceSpec
 from dimos.robot.unitree.g1.connection_spec import G1ConnectionSpec
 from dimos.robot.unitree.g1.effectors.high_level.high_level_spec import HighLevelG1Spec
 from dimos.robot.unitree.go2.connection_spec import GO2ConnectionSpec
@@ -29,12 +27,22 @@ from dimos_xr.tag_tracker import TagMount
 logger = setup_logger()
 
 
-class XRRobotAdapterConfig(ModuleConfig):
+class XRRobotAdapterConfig(ModuleConfig):  # type: ignore[misc]
     robot_id: str = "robot"
     robot_model_override: str | None = None
 
 
-class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
+class XRRobotAdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
+    """Fan-in adapter: normalises stream names across robot stacks and routes commands.
+
+    All stream-name reconciliation (lidar/pointcloud/registered_scan, odom/odometry,
+    path/path_active) happens here. The XRBridge sees only the ``xr_*`` streams.
+    Navigation commands are published onto the existing DimOS control seam via
+    ``goal_request``/``clicked_point``/``stop_movement``/``cancel_goal_signal``;
+    direct NavigationInterfaceSpec is not used because the supported nav-capable
+    stacks (unitree_go2 smart, unitree_g1_nav_onboard) wire nav through streams.
+    """
+
     lidar: In[PointCloud2]
     pointcloud: In[PointCloud2]
     registered_scan: In[PointCloud2]
@@ -55,18 +63,13 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
     xr_goal_reached: Out[Bool]
     xr_navigation_state: Out[String]
 
-    clicked_point: Out[PointStamped]
     goal_request: Out[PoseStamped]
     goal_req: Out[PoseStamped]
+    clicked_point: Out[PointStamped]
     stop_movement: Out[Bool]
     cancel_goal_signal: Out[Bool]
 
     config: XRRobotAdapterConfig
-    # Optional module references: which providers exist depends on the selected
-    # robot stack (go2 vs g1, nav vs basic). Declaring them as "Spec | None = None"
-    # makes the coordinator treat the refs as optional and leaves them as None when
-    # no provider is present, which every use below already guards for.
-    _navigation: NavigationInterfaceSpec | None = None
     _go2_connection: GO2ConnectionSpec | None = None
     _g1_connection: G1ConnectionSpec | None = None
     _g1_high_level: HighLevelG1Spec | None = None
@@ -123,20 +126,14 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
             return "unitree_go2"
         if self._g1_connection is not None or self._g1_high_level is not None:
             return "unitree_g1"
-        if global_config.robot_model:
-            return str(global_config.robot_model)
         return "unitree_go2"
-
-    def _configured_model(self) -> str:
-        return self._resolved_robot_model()
 
     def _is_g1_runtime(self) -> bool:
         return "g1" in self._resolved_robot_model().lower()
 
     def _nav_available(self) -> bool:
         return (
-            self._navigation is not None
-            or self.goal_request.transport is not None
+            self.goal_request.transport is not None
             or self.goal_req.transport is not None
             or self.clicked_point.transport is not None
         )
@@ -149,8 +146,7 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
 
     def _cancel_goal_available(self) -> bool:
         return (
-            self._navigation is not None
-            or self.stop_movement.transport is not None
+            self.stop_movement.transport is not None
             or self.cancel_goal_signal.transport is not None
         )
 
@@ -167,11 +163,11 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
         configured = self.config.robot_id.strip()
         if configured and configured != "robot":
             return configured
-        return self._configured_model()
+        return self._resolved_robot_model()
 
     @rpc
     def robot_model(self) -> str:
-        return self._configured_model()
+        return self._resolved_robot_model()
 
     @rpc
     def capabilities(self) -> dict[str, CapabilityState]:
@@ -185,28 +181,28 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
                 emergency_stop_available=self._emergency_stop_available(),
                 marker_align_available=self._marker_alignment_available(),
             ).capability_states
-        handshake = go2_handshake(self.robot_id())
+        capability_states = dict(GO2_CAPABILITIES)
         if not self._nav_available():
-            handshake.capability_states["nav"] = CapabilityState(
+            capability_states["nav"] = CapabilityState(
                 False, "Navigation stack is not present for this runtime."
             )
         if not self._path_available():
-            handshake.capability_states["path"] = CapabilityState(
+            capability_states["path"] = CapabilityState(
                 False, "Path output is not present for this runtime."
             )
         if not self._plan_preview_available():
-            handshake.capability_states["plan_preview"] = CapabilityState(
+            capability_states["plan_preview"] = CapabilityState(
                 False, "Global costmap is not present for preview planning in this runtime."
             )
         if not self._cancel_goal_available():
-            handshake.capability_states["cancel_goal"] = CapabilityState(
+            capability_states["cancel_goal"] = CapabilityState(
                 False, "Goal cancellation is not available for this runtime."
             )
         if not self._emergency_stop_available():
-            handshake.capability_states["emergency_stop"] = CapabilityState(
+            capability_states["emergency_stop"] = CapabilityState(
                 False, "No safe stop transport is present for this runtime."
             )
-        return handshake.capability_states
+        return capability_states
 
     @rpc
     def handshake_payload(self) -> RobotHandshake:
@@ -258,8 +254,6 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
 
     @rpc
     def send_nav_goal(self, goal: PoseStamped) -> bool:
-        if self._navigation is not None:
-            return bool(self._navigation.set_goal(goal))
         if self.goal_request.transport is not None:
             self.goal_request.publish(goal)
             return True
@@ -283,8 +277,6 @@ class XRRobotAdapterModule(Module, XRRobotAdapterSpec):
     @rpc
     def cancel_goal(self) -> bool:
         cancelled = False
-        if self._navigation is not None:
-            cancelled = bool(self._navigation.cancel_goal())
         if self.stop_movement.transport is not None:
             self.stop_movement.publish(Bool(data=True))
             cancelled = True

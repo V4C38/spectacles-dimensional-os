@@ -4,13 +4,6 @@ import math
 
 import numpy as np
 
-from dimos_xr.bridge_module import (
-    ALIGNMENT_CLUSTER_MIN_SAMPLES,
-    AlignmentCandidate,
-    average_cluster_transform,
-    collect_alignment_cluster,
-    score_alignment_cluster,
-)
 from dimos_xr.tag_tracker import (
     TagMount,
     TagTracker,
@@ -24,6 +17,13 @@ from dimos_xr.transforms import (
     matrix_to_pose,
     normalize_ground_pose,
     pose_to_matrix,
+)
+from dimos_xr.xr_bridge_module import (
+    ALIGNMENT_CLUSTER_MIN_SAMPLES,
+    AlignmentCandidate,
+    average_cluster_transform,
+    collect_alignment_cluster,
+    score_alignment_cluster,
 )
 
 

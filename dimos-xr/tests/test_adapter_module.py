@@ -1,15 +1,14 @@
+"""Tests for Go2AdapterModule and G1AdapterModule per-robot adapters."""
+
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
 
-from dimos.core.global_config import global_config
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
-from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos_lcm.std_msgs import Bool
 
-from dimos_xr.adapter_module import XRRobotAdapterModule
+from dimos_xr.adapters.g1 import G1AdapterModule
+from dimos_xr.adapters.go2 import Go2AdapterModule
 
 
 class _FakeStream:
@@ -21,121 +20,118 @@ class _FakeStream:
         self.published.append(msg)
 
 
-def _make_adapter() -> XRRobotAdapterModule:
-    adapter = object.__new__(XRRobotAdapterModule)
-    adapter._navigation = None
+def _make_go2_adapter() -> Go2AdapterModule:
+    adapter = object.__new__(Go2AdapterModule)
     adapter._go2_connection = None
-    adapter._g1_connection = None
-    adapter._g1_high_level = None
-    adapter.config = SimpleNamespace(robot_id="robot", robot_model_override=None)
+    adapter.config = SimpleNamespace(robot_id="unitree_go2")
     adapter.goal_request = _FakeStream(connected=False)
     adapter.goal_req = _FakeStream(connected=False)
     adapter.clicked_point = _FakeStream(connected=False)
     adapter.stop_movement = _FakeStream(connected=False)
     adapter.cancel_goal_signal = _FakeStream(connected=False)
+    adapter.xr_lidar = _FakeStream(connected=True)
     adapter.xr_odom = _FakeStream(connected=True)
-    adapter.path = _FakeStream(connected=False)
-    adapter.path_active = _FakeStream(connected=False)
-    adapter.lidar = _FakeStream(connected=False)
-    adapter.pointcloud = _FakeStream(connected=False)
-    adapter.registered_scan = _FakeStream(connected=False)
-    adapter.odom = _FakeStream(connected=False)
-    adapter.odometry = _FakeStream(connected=False)
-    adapter.camera_info = _FakeStream(connected=False)
-    adapter.global_costmap = _FakeStream(connected=False)
     adapter.xr_global_costmap = _FakeStream(connected=True)
+    adapter.xr_path = _FakeStream(connected=True)
+    adapter.xr_goal_reached = _FakeStream(connected=True)
+    adapter.xr_navigation_state = _FakeStream(connected=True)
+    adapter.xr_lidar_in = _FakeStream(connected=False)
+    adapter.xr_odom_in = _FakeStream(connected=False)
+    adapter.xr_global_costmap_in = _FakeStream(connected=False)
+    adapter.xr_path_in = _FakeStream(connected=False)
+    adapter.xr_goal_reached_in = _FakeStream(connected=False)
+    adapter.xr_navigation_state_in = _FakeStream(connected=False)
     return adapter
 
 
-def test_send_nav_goal_uses_goal_req_when_present() -> None:
-    adapter = _make_adapter()
+def _make_g1_adapter() -> G1AdapterModule:
+    adapter = object.__new__(G1AdapterModule)
+    adapter._g1_connection = None
+    adapter._g1_high_level = None
+    adapter.config = SimpleNamespace(robot_id="unitree_g1")
+    adapter.goal_request = _FakeStream(connected=False)
+    adapter.goal_req = _FakeStream(connected=False)
+    adapter.clicked_point = _FakeStream(connected=False)
+    adapter.stop_movement = _FakeStream(connected=False)
+    adapter.cancel_goal_signal = _FakeStream(connected=False)
+    adapter.xr_lidar = _FakeStream(connected=True)
+    adapter.xr_odom = _FakeStream(connected=True)
+    adapter.xr_global_costmap = _FakeStream(connected=True)
+    adapter.xr_path = _FakeStream(connected=True)
+    adapter.xr_goal_reached = _FakeStream(connected=True)
+    adapter.xr_navigation_state = _FakeStream(connected=True)
+    adapter.xr_lidar_in = _FakeStream(connected=False)
+    adapter.xr_odom_in = _FakeStream(connected=False)
+    adapter.xr_global_costmap_in = _FakeStream(connected=False)
+    adapter.xr_path_in = _FakeStream(connected=False)
+    adapter.xr_goal_reached_in = _FakeStream(connected=False)
+    adapter.xr_navigation_state_in = _FakeStream(connected=False)
+    return adapter
+
+
+def test_go2_send_nav_goal_uses_goal_req_when_present() -> None:
+    adapter = _make_go2_adapter()
     adapter.goal_req = _FakeStream(connected=True)
+    goal = PoseStamped(position=[1.0, 2.0, 0.0], orientation=[0.0, 0.0, 0.0, 1.0], ts=1.0)
 
-    goal = PoseStamped(
-        position=[1.0, 2.0, 0.0],
-        orientation=[0.0, 0.0, 0.0, 1.0],
-        ts=1.0,
-        frame_id="odom",
-    )
-
-    assert XRRobotAdapterModule.send_nav_goal(adapter, goal) is True
+    assert Go2AdapterModule.send_nav_goal(adapter, goal) is True
     assert adapter.goal_req.published == [goal]
 
 
-def test_cancel_goal_uses_legacy_cancel_signal_when_present() -> None:
-    adapter = _make_adapter()
+def test_go2_cancel_goal_uses_cancel_signal_when_present() -> None:
+    adapter = _make_go2_adapter()
     adapter.cancel_goal_signal = _FakeStream(connected=True)
 
-    assert XRRobotAdapterModule.cancel_goal(adapter) is True
-    assert len(adapter.cancel_goal_signal.published) == 1
+    assert Go2AdapterModule.cancel_goal(adapter) is True
     cancel = adapter.cancel_goal_signal.published[0]
     assert isinstance(cancel, Bool)
     assert cancel.data is True
 
 
-def test_handle_odometry_converts_to_pose_stamped() -> None:
-    adapter = _make_adapter()
-    odom = Odometry(ts=2.0, frame_id="odom")
-    odom.pose.position.x = 1.25
-    odom.pose.position.y = -0.5
-    odom.pose.position.z = 0.75
-    odom.pose.orientation.x = 0.0
-    odom.pose.orientation.y = 0.0
-    odom.pose.orientation.z = 0.2
-    odom.pose.orientation.w = 0.98
+def test_go2_capabilities_disable_preview_without_costmap() -> None:
+    adapter = _make_go2_adapter()
 
-    asyncio.run(XRRobotAdapterModule.handle_odometry(adapter, odom))
-
-    assert len(adapter.xr_odom.published) == 1
-    pose = adapter.xr_odom.published[0]
-    assert isinstance(pose, PoseStamped)
-    assert (pose.x, pose.y, pose.z) == (1.25, -0.5, 0.75)
-    assert (
-        pose.orientation.x,
-        pose.orientation.y,
-        pose.orientation.z,
-        pose.orientation.w,
-    ) == (0.0, 0.0, 0.2, 0.98)
-    assert pose.frame_id == "odom"
-
-
-def test_handle_global_costmap_relays_to_xr_stream() -> None:
-    adapter = _make_adapter()
-    grid = OccupancyGrid(width=4, height=4, resolution=0.1)
-
-    asyncio.run(XRRobotAdapterModule.handle_global_costmap(adapter, grid))
-
-    assert adapter.xr_global_costmap.published == [grid]
-
-
-def test_capabilities_disable_preview_without_costmap() -> None:
-    adapter = _make_adapter()
-
-    capabilities = XRRobotAdapterModule.capabilities(adapter)
+    capabilities = Go2AdapterModule.capabilities(adapter)
 
     assert capabilities["plan_preview"].available is False
 
 
-def test_capabilities_prefer_live_go2_connection_over_stale_global_model(
-    monkeypatch,
-) -> None:
-    adapter = _make_adapter()
-    adapter._go2_connection = object()
-    monkeypatch.setattr(global_config, "robot_model", "unitree_g1", raising=False)
+def test_go2_robot_id_and_model() -> None:
+    adapter = _make_go2_adapter()
 
-    capabilities = XRRobotAdapterModule.capabilities(adapter)
-
-    assert capabilities["align"].available is True
-    assert XRRobotAdapterModule.robot_model(adapter) == "unitree_go2"
+    assert Go2AdapterModule.robot_id(adapter) == "unitree_go2"
+    assert Go2AdapterModule.robot_model(adapter) == "unitree_go2"
 
 
-def test_capabilities_report_tag_align_for_g1_runtime(monkeypatch) -> None:
-    adapter = _make_adapter()
-    adapter._g1_connection = object()
-    monkeypatch.setattr(global_config, "robot_model", "unitree_go2", raising=False)
+def test_g1_send_nav_goal_uses_goal_request_when_present() -> None:
+    adapter = _make_g1_adapter()
+    adapter.goal_request = _FakeStream(connected=True)
+    goal = PoseStamped(position=[1.0, 2.0, 0.0], orientation=[0.0, 0.0, 0.0, 1.0], ts=1.0)
 
-    capabilities = XRRobotAdapterModule.capabilities(adapter)
+    assert G1AdapterModule.send_nav_goal(adapter, goal) is True
+    assert adapter.goal_request.published == [goal]
 
-    assert capabilities["align"].available is True
-    assert capabilities["align_manual"].available is True
-    assert XRRobotAdapterModule.robot_model(adapter) == "unitree_g1"
+
+def test_g1_cancel_goal_uses_stop_movement() -> None:
+    adapter = _make_g1_adapter()
+    adapter.stop_movement = _FakeStream(connected=True)
+
+    assert G1AdapterModule.cancel_goal(adapter) is True
+    stop = adapter.stop_movement.published[0]
+    assert isinstance(stop, Bool)
+    assert stop.data is True
+
+
+def test_g1_capabilities_report_emergency_stop_unavailable_without_hw() -> None:
+    adapter = _make_g1_adapter()
+
+    capabilities = G1AdapterModule.capabilities(adapter)
+
+    assert capabilities["emergency_stop"].available is False
+
+
+def test_g1_robot_id_and_model() -> None:
+    adapter = _make_g1_adapter()
+
+    assert G1AdapterModule.robot_id(adapter) == "unitree_g1"
+    assert G1AdapterModule.robot_model(adapter) == "unitree_g1"

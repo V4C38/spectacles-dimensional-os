@@ -14,6 +14,9 @@ from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Transform import Transform
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -27,7 +30,6 @@ from dimos_xr.error_codes import NAV_GOAL_STALLED
 from dimos_xr.filters import (
     LidarFilter,
     LidarFilterConfig,
-    RateLimiter,
     lidar_height_band_m,
     subsample_points_near_robot,
 )
@@ -61,7 +63,6 @@ from dimos_xr.tag_tracker import (
 from dimos_xr.transforms import (
     Calibration,
     OdomSample,
-    _normalize_quaternion,
     gravity_level_transform,
     normalize_ground_pose,
     pose_to_matrix,
@@ -239,8 +240,10 @@ def average_cluster_transform(
     return T_avg, yaw_spread, trans_spread
 
 
-class XRBridgeConfig(ModuleConfig):
+class XRBridgeConfig(ModuleConfig):  # type: ignore[misc]
     port: int = 8787
+    # max_message_bytes: Spectacles IntermediateQuality stills are 0.3-1.5 MB (see
+    # scripts/frame_probe.py). 4 MB is a comfortable upper bound.
     max_message_bytes: int = 4_194_304
     max_range_m: float | None = None
     min_height_m: float | None = -0.35
@@ -252,6 +255,11 @@ class XRBridgeConfig(ModuleConfig):
     stream_stale_timeout_s: float = 10.0
     manual_alignment_quality: float = 0.35
     frame_max_age_s: float = 2.0
+    # Tag geometry — defaults match scripts/generate_marker.py output (70 mm total,
+    # 56 mm black detection square, AprilTag 36h11, tag ID 0 on top of robot body).
+    tag_aruco_dictionary: str = "DICT_APRILTAG_36h11"
+    tag_total_size_m: float = 0.070
+    tag_black_size_m: float = 0.056
     tag_max_distance_m: float = 6.0
     tag_min_baseline_m: float = 0.30
     tag_window_max_obs: int = 40
@@ -261,7 +269,7 @@ class XRBridgeConfig(ModuleConfig):
     runtime_correction_enabled: bool = True
 
 
-class XRBridge(Module):
+class XRBridge(Module):  # type: ignore[misc]
     xr_lidar: In[PointCloud2]
     xr_odom: In[PoseStamped]
     xr_global_costmap: In[OccupancyGrid]
@@ -289,7 +297,7 @@ class XRBridge(Module):
             max_hz=self.config.lidar_max_hz,
         )
         self._lidar_filter = LidarFilter(filter_config)
-        self._pose_limiter = RateLimiter(self.config.pose_max_hz)
+        self._pose_last_emit: float = 0.0
         self._calibration = Calibration()
         self._preview_planner = PreviewPlanner(global_config)
         self._odom_lock = threading.Lock()
@@ -366,10 +374,12 @@ class XRBridge(Module):
             robot_connected=False,
         )
         self._status_tracker.set_on_change(self._broadcast_status)
+        assert self._loop is not None, "build() called before Module loop is assigned"
         self._ws_server = XRWebSocketServer(
             port=self.config.port,
             hello_supplier=self._adapter.handshake_payload,
             max_message_bytes=self.config.max_message_bytes,
+            loop=self._loop,
             on_align_start=self._on_align_start,
             on_align_stop=self._on_align_stop,
             on_align_commit=self._on_align_commit,
@@ -414,12 +424,12 @@ class XRBridge(Module):
         super().stop()
 
     def _sample_odom(self, msg: PoseStamped) -> OdomSample:
-        orientation = _normalize_quaternion(
-            msg.orientation.x,
-            msg.orientation.y,
-            msg.orientation.z,
-            msg.orientation.w,
-        )
+        q = msg.orientation
+        norm = math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w)
+        if norm < 1e-12:
+            orientation: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
+        else:
+            orientation = (q.x / norm, q.y / norm, q.z / norm, q.w / norm)
         return OdomSample(
             position=(msg.x, msg.y, msg.z),
             orientation=orientation,
@@ -751,10 +761,28 @@ class XRBridge(Module):
         )
         return candidate
 
+    def _publish_world_odom_tf(self, T_world_odom: np.ndarray) -> None:
+        """Publish world → odom static transform to the DimOS TF system."""
+        rot_mat = T_world_odom[:3, :3]
+        tx, ty, tz = float(T_world_odom[0, 3]), float(T_world_odom[1, 3]), float(T_world_odom[2, 3])
+        quat = Quaternion.from_rotation_matrix(rot_mat)
+        tf = Transform(
+            translation=Vector3(tx, ty, tz),
+            rotation=quat,
+            frame_id="world",
+            child_frame_id="odom",
+            ts=time.time(),
+        )
+        try:
+            self.tf.publish_static(tf)
+        except Exception as exc:
+            logger.warning("TF publish_static failed", error=str(exc))
+
     def _finish_alignment(self, result: AlignmentCandidate, ts: float | None) -> None:
         self._tag_tracker.active = False
         self._stop_align_status_broadcast()
         self._calibration.register_from_alignment(result.T_world_odom)
+        self._publish_world_odom_tf(result.T_world_odom)
         method: Literal["manual", "marker"] = (
             "manual" if result.method == "manual" else "marker"
         )
@@ -1103,7 +1131,7 @@ class XRBridge(Module):
 
     async def _on_camera_frame(
         self,
-        header: dict,
+        header: dict[str, Any],
         jpeg: bytes,
         _websocket: ServerConnection,
     ) -> None:
@@ -1182,10 +1210,11 @@ class XRBridge(Module):
                 self._pending_large_solves = self._pending_large_solves[-3:]
             if len(self._pending_large_solves) < 3:
                 return
+            solves = self._pending_large_solves
             spreads = [
-                float(np.linalg.norm(self._pending_large_solves[i][:3, 3] - self._pending_large_solves[j][:3, 3]))
-                for i in range(len(self._pending_large_solves))
-                for j in range(i + 1, len(self._pending_large_solves))
+                float(np.linalg.norm(solves[i][:3, 3] - solves[j][:3, 3]))
+                for i in range(len(solves))
+                for j in range(i + 1, len(solves))
             ]
             if max(spreads) > 0.2:
                 return
@@ -1200,7 +1229,9 @@ class XRBridge(Module):
             t_old = self._T_committed[:3, 3]
             t_new = T_new[:3, 3]
             t_blend = t_old + alpha * (t_new - t_old)
-            T_new = build_T_world_odom(yaw_blend, (float(t_blend[0]), float(t_blend[1]), float(t_blend[2])))
+            T_new = build_T_world_odom(
+                yaw_blend, (float(t_blend[0]), float(t_blend[1]), float(t_blend[2]))
+            )
             T_new = gravity_level_transform(T_new)
         self._T_committed = T_new
         self._last_smooth_mono = now
@@ -1396,9 +1427,11 @@ class XRBridge(Module):
     async def handle_xr_lidar(self, msg: PointCloud2) -> None:
         self._last_lidar_mono = time.monotonic()
         self._refresh_streams_active()
-        if not self._lidar_filter.rate_limiter.allow():
+        if not self._lidar_filter.config.allow():
             return
-        points = msg.points_f32()
+        # Coarse voxel reduction via DimOS PointCloud2 API before height-band filter.
+        downsampled = msg.voxel_downsample(voxel_size=0.05)
+        points = downsampled.points_f32()
         world_pts = np.zeros((0, 3), dtype=np.float32)
         if points.size != 0:
             filtered = self._lidar_filter.filter(points)
@@ -1418,10 +1451,13 @@ class XRBridge(Module):
 
     async def handle_xr_odom(self, msg: PoseStamped) -> None:
         self._update_latest_odom(msg)
-        self._last_odom_mono = time.monotonic()
+        now = time.monotonic()
+        self._last_odom_mono = now
         self._refresh_streams_active()
-        if not self._pose_limiter.allow():
+        pose_interval = 1.0 / self.config.pose_max_hz if self.config.pose_max_hz > 0 else 0.0
+        if pose_interval > 0 and now - self._pose_last_emit < pose_interval:
             return
+        self._pose_last_emit = now
         sample = self._sample_odom(msg)
         pos, quat = self._calibration.transform_pose(sample.position, sample.orientation)
         if not self._pose_components_finite(pos, quat):

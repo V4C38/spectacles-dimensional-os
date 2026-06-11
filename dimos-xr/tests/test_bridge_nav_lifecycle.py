@@ -12,10 +12,10 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
 from dimos_lcm.std_msgs import Bool
 
-from dimos_xr.bridge_module import NAV_GOAL_PATH_TIMEOUT_S, XRBridge
 from dimos_xr.error_codes import NAV_GOAL_STALLED
 from dimos_xr.protocol import NavGoalMessage, encode_pose
 from dimos_xr.transforms import Calibration, OdomSample, pose_to_matrix
+from dimos_xr.xr_bridge_module import NAV_GOAL_PATH_TIMEOUT_S, XRBridge
 
 
 def _make_bridge_stub(*, registered: bool = True) -> XRBridge:
