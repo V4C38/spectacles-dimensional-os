@@ -7,7 +7,6 @@ from dimos_xr.adapters.go2 import go2_handshake
 from dimos_xr.filters import (
     LidarFilter,
     LidarFilterConfig,
-    RateLimiter,
     lidar_height_band_m,
     subsample_points_near_robot,
 )
@@ -129,16 +128,16 @@ def test_invalid_shape_raises() -> None:
         filt.filter(np.array([1.0, 2.0, 3.0], dtype=np.float32))
 
 
-def test_rate_limiter() -> None:
-    limiter = RateLimiter(max_hz=10.0)
-    assert limiter.allow() is True
-    assert limiter.allow() is False
+def test_lidar_filter_rate_limits() -> None:
+    config = LidarFilterConfig(max_hz=10.0)
+    assert config.allow() is True
+    assert config.allow() is False
 
 
-def test_rate_limiter_zero_hz_always_allows() -> None:
-    limiter = RateLimiter(max_hz=0.0)
-    assert limiter.allow() is True
-    assert limiter.allow() is True
+def test_lidar_filter_zero_hz_always_allows() -> None:
+    config = LidarFilterConfig(max_hz=0.0)
+    assert config.allow() is True
+    assert config.allow() is True
 
 
 def test_lidar_height_band_go2() -> None:

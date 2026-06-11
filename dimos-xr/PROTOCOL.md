@@ -381,3 +381,23 @@ provides. If the capability is disabled in `hello`, clients should not send it.
 The legacy `register` / `registered` message flow is removed from `dimos-xr`.
 Calibration is driven entirely by the `align_*` messages plus `align_status` and
 `bridge_status.registered`.
+
+## Changelog
+
+### v3 (current) — XR Bridge PR refactor (no wire changes)
+
+The PR that introduced per-robot adapters (`go2` / `g1`), DimOS TF publication,
+`PointCloud2` delegation, `mypy strict`, and launcher restructuring made **no
+changes to the wire format**. All message types, field names, and semantics are
+identical to the protocol as it was before the refactor. Clients built against
+protocol version 3 continue to work without modification.
+
+Internal changes that are invisible on the wire:
+
+- `XRBridgeConfig` tag geometry fields (`tag_aruco_dictionary`, `tag_total_size_m`,
+  `tag_black_size_m`) are server-side configuration only.
+- `hello.robot.alignment_profile` is an optional field emitted when the adapter
+  provides a profile string; clients that ignore unknown fields are unaffected.
+- The `bridge_status.registration_approximate` field is now always present
+  (previously emitted conditionally). Clients must tolerate both its presence and
+  absence as specified.

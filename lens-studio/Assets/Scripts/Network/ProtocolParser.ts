@@ -212,7 +212,8 @@ function parseInboundObject(data: Record<string, unknown>): InboundMessage | nul
     case "align_status": {
       const state = requireString(data, "state");
       if (state !== "detecting" && state !== "aligned" && state !== "failed") {
-        throw new Error("invalid align_status.state");
+        print(`ProtocolParser: unknown align_status.state "${state}"; skipping`);
+        return null;
       }
       const msg: AlignStatusMessage = {
         type: "align_status",
@@ -345,7 +346,8 @@ function parseInboundObject(data: Record<string, unknown>): InboundMessage | nul
         state !== "following_path" &&
         state !== "recovery"
       ) {
-        throw new Error("invalid nav_status.state");
+        print(`ProtocolParser: unknown nav_status.state "${state}"; skipping`);
+        return null;
       }
       const msg: NavStatusMessage = {
         type: "nav_status",

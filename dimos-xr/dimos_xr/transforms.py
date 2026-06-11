@@ -255,6 +255,15 @@ class Calibration:
     ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
         T_odom = pose_to_matrix(position, orientation)
         T_world = self._get_T() @ T_odom
+        # Guard: R.from_matrix() (used inside matrix_to_pose) calls SVD and
+        # raises LinAlgError on non-finite input.  Return NaN sentinels so the
+        # caller's _pose_components_finite() check handles the drop cleanly.
+        if not np.all(np.isfinite(T_world)):
+            _nan3: tuple[float, float, float] = (float("nan"), float("nan"), float("nan"))
+            _nan4: tuple[float, float, float, float] = (
+                float("nan"), float("nan"), float("nan"), float("nan"),
+            )
+            return _nan3, _nan4
         return matrix_to_pose(T_world)
 
     def inverse_transform_point(

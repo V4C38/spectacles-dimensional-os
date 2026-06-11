@@ -19,6 +19,8 @@ export interface CalibrationViewState {
   spectaclesTracking: boolean;
   robotTracking: boolean;
   observationCount: number;
+  baselineM: number | null;
+  bridgeMessage: string;
   currentQuality: number | null;
   bestQuality: number | null;
   statusMessage: string;

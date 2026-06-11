@@ -44,16 +44,19 @@ export class TagAlignmentSession extends BaseScriptComponent {
     if (msg.tag_detected) {
       this._lastTagDetectedTime = getTime();
     }
+    if (msg.state === "failed" && (this._active || this._awaitingCommit)) {
+      this._active = false;
+      this._awaitingCommit = false;
+      this._bridgeSessionActive = false;
+      if (this.frameCapture) {
+        this.frameCapture.setMode("off");
+      }
+    }
     this.onAlignStatus.forEach((cb) => cb(msg));
   };
 
   public hasRecentDetection(): boolean {
     return getTime() - this._lastTagDetectedTime <= RECENT_DETECTION_WINDOW_S;
-  }
-
-  /** Alias for wizard code that still calls isMarkerTracked(). */
-  public isMarkerTracked(): boolean {
-    return this.hasRecentDetection();
   }
 
   public start(): void {

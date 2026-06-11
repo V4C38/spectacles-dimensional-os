@@ -72,6 +72,7 @@ export class FrameCaptureController extends BaseScriptComponent {
     this._mode = mode;
     if (mode === "off") {
       this._inFlight = false;
+      this._inFlightSeq = -1;
       this._lastRuntimeTagAckTime = 0;
     }
   }
@@ -87,6 +88,8 @@ export class FrameCaptureController extends BaseScriptComponent {
   }
 
   private _onHello = (): void => {
+    this._inFlight = false;
+    this._inFlightSeq = -1;
     this._sentCameraInfo = false;
     this._sendCameraInfo(DEFAULT_STILL_WIDTH, DEFAULT_STILL_HEIGHT);
   };

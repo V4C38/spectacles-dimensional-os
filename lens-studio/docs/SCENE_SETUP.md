@@ -11,6 +11,17 @@ The live `SetupWizard` scene object is bound to
 
 Image Tracking / MarkerAnchor are removed. Tag alignment uses **FrameCaptureController** on **Camera Object** and **TagAlignmentSession** on **DimOSManager**.
 
+During auto calibration the wizard progress panel shows:
+
+```
+Tag: ✅/❌
+Samples: N  Baseline: X cm
+Best: Y%
+<bridge guidance message>
+```
+
+`Baseline` is the max ground-plane separation between tag observations (from `align_status.baseline_m`). Walk around the robot during calibration to grow baseline and improve accuracy. The guidance message (`align_status.message`) provides per-frame cues from the bridge (e.g. "Look at the robot-mounted tag").
+
 ## 2. UI frames (scene-placed, UIKit Frame)
 
 These scene objects use the Spectacles UIKit **Frame** script component. The wizard and HUD scripts live on the **same** objects as their frames:
@@ -310,3 +321,5 @@ For the navigation foundation pass, validate in this order:
    emergency stop path works from both the HUD and robot-local menu.
 
 See [`dimos-xr/PROTOCOL.md`](../../dimos-xr/PROTOCOL.md) for the WebSocket protocol schema.
+See [`lens-studio/docs/PROTOCOL_DIFF.md`](PROTOCOL_DIFF.md) for the bridge–client diff table and accepted deviations.
+See [`lens-studio/docs/SCENE_CHANGES.md`](SCENE_CHANGES.md) for a log of MCP-applied scene/project changes.

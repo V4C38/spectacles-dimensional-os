@@ -53,12 +53,12 @@ export const BRIDGE_ERROR_CATALOG: Record<number, BridgeErrorInfo> = {
     fix: "Reconnect Spectacles to the bridge or restart the robot and bridge (./start.sh).",
   },
   [BridgeErrorCode.CameraCaptureFailed]: {
-    description: "Spectacles failed to capture a still image from the camera.",
-    fix: "Re-launch the Lens, confirm camera permission, and ensure Experimental APIs are enabled.",
+    description: "Spectacles failed to capture or send a camera still for tag alignment.",
+    fix: "Retry calibration and keep the robot-mounted tag in view.",
   },
   [BridgeErrorCode.CameraInfoMissing]: {
-    description: "The bridge did not receive camera intrinsics before processing frames.",
-    fix: "Reconnect to the bridge and retry calibration.",
+    description: "Spectacles did not send camera intrinsics before camera frames.",
+    fix: "Reconnect Spectacles to the bridge and retry calibration.",
   },
 };
 

@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from collections import deque
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -46,9 +47,9 @@ def _make_bridge_stub(*, registered: bool = True) -> XRBridge:
     bridge._odom_buffer: deque[tuple[float, OdomSample]] = deque(maxlen=120)
     bridge._last_odom_mono = None
     bridge._last_lidar_mono = None
+    bridge._pose_last_emit = 0.0
     bridge._refresh_streams_active = lambda: None
-    bridge._pose_limiter = MagicMock()
-    bridge._pose_limiter.allow.return_value = True
+    bridge.config = SimpleNamespace(pose_max_hz=0.0, stream_stale_timeout_s=10.0)
     return bridge
 
 

@@ -49,6 +49,8 @@ export function createCalibrationViewState(): CalibrationViewState {
     spectaclesTracking: false,
     robotTracking: false,
     observationCount: 0,
+    baselineM: null,
+    bridgeMessage: "",
     currentQuality: null,
     bestQuality: null,
     statusMessage: "",
@@ -103,10 +105,16 @@ function buildAutoProgressDetail(state: CalibrationViewState): string {
     state.bestQuality !== null
       ? `${Math.round(state.bestQuality * 100)}%`
       : "none yet";
+  const baselineLabel =
+    state.baselineM !== null
+      ? `${Math.round(state.baselineM * 100)} cm`
+      : "—";
+  const msgLine = state.bridgeMessage ? `\n${state.bridgeMessage}` : "";
   return (
     `Tag: ${markerVisibilityLabel(state.spectaclesTracking)}\n` +
-    `Samples: ${state.observationCount}\n` +
-    `Best: ${bestLabel}`
+    `Samples: ${state.observationCount}  Baseline: ${baselineLabel}\n` +
+    `Best: ${bestLabel}` +
+    msgLine
   );
 }
 
@@ -222,6 +230,9 @@ export function applyAlignStatusToCalibrationState(
           ? "ready"
           : "editing"
         : state.phase,
+    baselineM:
+      msg.baseline_m !== undefined ? msg.baseline_m : state.baselineM,
+    bridgeMessage: msg.message !== "" ? msg.message : state.bridgeMessage,
   };
 
   if (shouldApplyDetectingBridgeCandidate && msg.has_candidate) {
