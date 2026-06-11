@@ -3,7 +3,7 @@ from dimos_xr.adapters.base import (
     RobotHandshake,
     XRRobotAdapterSpec,
 )
-from dimos_xr.tag_tracker import TagMount
+from dimos_xr.tracking.tag_tracker import TagMount
 
 __all__ = [
     "CapabilityState",

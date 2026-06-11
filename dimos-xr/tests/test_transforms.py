@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from dimos_xr.transforms import (
+from dimos_xr.tracking.transforms import (
     Calibration,
-    OdomSample,
     matrix_to_pose,
     pose_to_matrix,
 )
@@ -41,8 +40,8 @@ def test_calibration_identity_before_register() -> None:
 
 def test_calibration_register_and_transform() -> None:
     cal = Calibration()
-    odom = OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
-    cal.register_marker_pose((2.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), odom)
+    # marker at (2,0,0), robot at origin → T_world_odom = T((2,0,0))
+    cal.register_from_alignment(pose_to_matrix((2.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)))
     assert cal.is_registered
     pos, _ = cal.transform_pose((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert np.allclose(pos, (2.0, 0.0, 0.0), atol=1e-5)
@@ -50,16 +49,18 @@ def test_calibration_register_and_transform() -> None:
 
 def test_inverse_transform_point() -> None:
     cal = Calibration()
-    odom = OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
-    cal.register_marker_pose((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), odom)
+    # marker at (1,0,0), robot at origin → T_world_odom = T((1,0,0))
+    cal.register_from_alignment(pose_to_matrix((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)))
     odom_pt = cal.inverse_transform_point((1.0, 0.0, 0.0))
     assert np.allclose(odom_pt, (0.0, 0.0, 0.0), atol=1e-5)
 
 
 def test_inverse_transform_pose() -> None:
     cal = Calibration()
-    odom = OdomSample(position=(1.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
-    cal.register_marker_pose((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), odom)
+    # marker at origin, robot at (1,0,0) → T_world_odom = T(-1,0,0)
+    T_world_marker = pose_to_matrix((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    T_odom_robot = pose_to_matrix((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    cal.register_from_alignment(T_world_marker @ np.linalg.inv(T_odom_robot))
     pos, quat = cal.inverse_transform_pose((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert np.allclose(pos, (1.0, 0.0, 0.0), atol=1e-5)
     _, expected_quat = matrix_to_pose(cal._get_T_inv())

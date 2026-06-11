@@ -21,20 +21,30 @@ from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.utils.logging_config import setup_logger
+from dimos.utils.transform_utils import normalize_angle
 from dimos_lcm.std_msgs import Bool, String
 from websockets.asyncio.server import ServerConnection
 
 from dimos_xr.adapters.base import XRRobotAdapterSpec
-from dimos_xr.bridge_status import BridgeStatusTracker
-from dimos_xr.error_codes import NAV_GOAL_STALLED
-from dimos_xr.filters import (
+from dimos_xr.network.bridge_status import BridgeStatusTracker
+from dimos_xr.network.data_plane import (
+    DROPPED_POSE_LOG_INTERVAL_S,
+    LIDAR_PAYLOAD_LOG_INTERVAL_S,
+    build_empty_path_payload,
+    build_lidar_payload,
+    build_path_payload,
+    build_pose_payload,
+    build_preview_path_payload,
+    normalize_nav_state,
+)
+from dimos_xr.network.error_codes import NAV_GOAL_STALLED
+from dimos_xr.tracking.filters import (
     LidarFilter,
     LidarFilterConfig,
     lidar_height_band_m,
-    subsample_points_near_robot,
 )
 from dimos_xr.preview_planner import PreviewPlanner
-from dimos_xr.protocol import (
+from dimos_xr.network.protocol import (
     AlignCommitMessage,
     AlignManualPoseMessage,
     AlignStartMessage,
@@ -48,196 +58,44 @@ from dimos_xr.protocol import (
     encode_align_status,
     encode_bridge_status,
     encode_camera_frame_ack,
-    encode_lidar,
     encode_nav_status,
-    encode_path,
-    encode_path_preview,
-    encode_pose,
 )
-from dimos_xr.tag_tracker import (
+from dimos_xr.tracking.tag_tracker import (
+    ALIGNMENT_CLUSTER_MIN_SAMPLES,
+    ALIGNMENT_CLUSTER_WINDOW,
+    AlignmentCandidate,
     TagTracker,
     TagTrackerConfig,
+    _orientation_yaw_deg,
+    _yaw_from_T,
+    average_cluster_transform,
     build_camera_info,
     build_T_world_odom,
+    collect_alignment_cluster,
+    score_alignment_cluster,
 )
-from dimos_xr.transforms import (
+from dimos_xr.tracking.transforms import (
     Calibration,
     OdomSample,
     gravity_level_transform,
     normalize_ground_pose,
     pose_to_matrix,
 )
-from dimos_xr.websocket_server import XRWebSocketServer
+from dimos_xr.network.websocket_server import XRWebSocketServer
 
 logger = setup_logger()
 
 ALIGN_STATUS_BROADCAST_INTERVAL_S = 0.3
 ODOM_BUFFER_MAXLEN = 600
 ODOM_LOOKUP_MAX_GAP_S = 0.25
-LIDAR_PAYLOAD_LOG_INTERVAL_S = 5.0
-DROPPED_POSE_LOG_INTERVAL_S = 5.0
 STREAM_STATUS_POLL_INTERVAL_S = 0.5
 NAV_GOAL_PATH_TIMEOUT_S = 8.0
 NAV_RECOVERY_MAX_ATTEMPTS = 2
 NAV_WATCHDOG_POLL_INTERVAL_S = 0.5
-ALIGNMENT_CLUSTER_WINDOW = 12
-ALIGNMENT_CLUSTER_MIN_SAMPLES = 8
-ALIGNMENT_CLUSTER_TARGET_SAMPLES = 8
-ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M = 0.05
-ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD = math.radians(3.0)
-
-
-def _wrap_angle_rad(angle: float) -> float:
-    return math.atan2(math.sin(angle), math.cos(angle))
-
-
-def _candidate_yaw_rad(T_world_odom: np.ndarray) -> float:
-    forward = T_world_odom[:3, 0]
-    return math.atan2(float(forward[2]), float(forward[0]))
-
-
-def _candidate_translation_distance_m(lhs: np.ndarray, rhs: np.ndarray) -> float:
-    return float(np.linalg.norm(lhs[:3, 3] - rhs[:3, 3]))
-
-
-def _candidate_yaw_distance_rad(lhs: np.ndarray, rhs: np.ndarray) -> float:
-    return abs(_wrap_angle_rad(_candidate_yaw_rad(lhs) - _candidate_yaw_rad(rhs)))
-
-
-def _orientation_yaw_deg(
-    orientation: tuple[float, float, float, float],
-) -> float:
-    yaw_rad = _candidate_yaw_rad(pose_to_matrix((0.0, 0.0, 0.0), orientation))
-    return round(math.degrees(yaw_rad), 2)
-
-
-@dataclass(frozen=True)
-class AlignmentCandidate:
-    T_world_odom: Any
-    quality: float
-    method: str
-    approximate: bool
-    reprojection_error_px: float | None = None
-    sample_quality: float | None = None
-    cluster_size: int = 1
-
-
 @dataclass(frozen=True)
 class PreviewPathRequest:
     ts: float
     target_world: tuple[float, float, float]
-
-
-def score_alignment_cluster(
-    candidate: AlignmentCandidate,
-    recent_candidates: list[AlignmentCandidate],
-) -> tuple[float, int, float, float]:
-    cluster = [
-        sample
-        for sample in recent_candidates
-        if _candidate_translation_distance_m(sample.T_world_odom, candidate.T_world_odom)
-        <= ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M
-        and _candidate_yaw_distance_rad(sample.T_world_odom, candidate.T_world_odom)
-        <= ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD
-    ]
-    cluster_size = len(cluster)
-    if cluster_size == 0:
-        return (
-            0.0,
-            0,
-            ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M,
-            ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD,
-        )
-    mean_translation_error = sum(
-        _candidate_translation_distance_m(sample.T_world_odom, candidate.T_world_odom)
-        for sample in cluster
-    ) / cluster_size
-    mean_yaw_error = sum(
-        _candidate_yaw_distance_rad(sample.T_world_odom, candidate.T_world_odom)
-        for sample in cluster
-    ) / cluster_size
-    translation_score = max(
-        0.0,
-        1.0 - mean_translation_error / ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M,
-    )
-    yaw_score = max(0.0, 1.0 - mean_yaw_error / ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD)
-    stability_score = min(1.0, cluster_size / ALIGNMENT_CLUSTER_MIN_SAMPLES)
-    cluster_bonus = min(1.0, cluster_size / ALIGNMENT_CLUSTER_TARGET_SAMPLES)
-    sample_quality = (
-        candidate.sample_quality if candidate.sample_quality is not None else candidate.quality
-    )
-    confidence = (
-        sample_quality
-        * stability_score
-        * (0.45 + 0.25 * translation_score + 0.15 * yaw_score + 0.15 * cluster_bonus)
-    )
-    return confidence, cluster_size, mean_translation_error, mean_yaw_error
-
-
-def collect_alignment_cluster(
-    candidate: AlignmentCandidate,
-    recent_candidates: list[AlignmentCandidate],
-) -> list[AlignmentCandidate]:
-    return [
-        sample
-        for sample in recent_candidates
-        if _candidate_translation_distance_m(sample.T_world_odom, candidate.T_world_odom)
-        <= ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M
-        and _candidate_yaw_distance_rad(sample.T_world_odom, candidate.T_world_odom)
-        <= ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD
-    ]
-
-
-def _circular_mean_rad(angles: list[float]) -> float:
-    if not angles:
-        return 0.0
-    sin_sum = sum(math.sin(angle) for angle in angles)
-    cos_sum = sum(math.cos(angle) for angle in angles)
-    return math.atan2(sin_sum, cos_sum)
-
-
-def _matrix_from_yaw_and_translation(
-    yaw_rad: float,
-    translation: np.ndarray,
-) -> np.ndarray:
-    x_axis = np.array(
-        [math.cos(yaw_rad), 0.0, math.sin(yaw_rad)],
-        dtype=np.float64,
-    )
-    z_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-    y_axis = np.cross(z_axis, x_axis)
-    T = np.eye(4, dtype=np.float64)
-    T[:3, 0] = x_axis
-    T[:3, 1] = y_axis
-    T[:3, 2] = z_axis
-    T[:3, 3] = translation
-    return T
-
-
-def average_cluster_transform(
-    cluster: list[AlignmentCandidate],
-) -> tuple[np.ndarray, float, float]:
-    """Average gravity-leveled cluster members; return (T, yaw_spread_rad, trans_spread_m)."""
-    if not cluster:
-        raise ValueError("cluster must not be empty")
-    leveled = [
-        gravity_level_transform(np.array(sample.T_world_odom, dtype=np.float64, copy=True))
-        for sample in cluster
-    ]
-    yaws = [_candidate_yaw_rad(T) for T in leveled]
-    translations = np.array([T[:3, 3] for T in leveled], dtype=np.float64)
-    mean_yaw = _circular_mean_rad(yaws)
-    mean_translation = np.mean(translations, axis=0)
-    T_avg = _matrix_from_yaw_and_translation(mean_yaw, mean_translation)
-    yaw_spread = (
-        max(abs(_wrap_angle_rad(yaw - mean_yaw)) for yaw in yaws) if len(yaws) > 1 else 0.0
-    )
-    trans_spread = (
-        float(np.max(np.linalg.norm(translations - mean_translation, axis=1)))
-        if len(translations) > 1
-        else 0.0
-    )
-    return T_avg, yaw_spread, trans_spread
 
 
 class XRBridgeConfig(ModuleConfig):  # type: ignore[misc]
@@ -251,6 +109,9 @@ class XRBridgeConfig(ModuleConfig):  # type: ignore[misc]
     obstacle_height_threshold_m: float = 0.08
     target_points: int = 1000
     lidar_max_hz: float = 1.0
+    # Voxel grid size for coarse LiDAR downsampling before the height-band filter.
+    # The DimOS default is 0.025 m; 0.05 m is chosen deliberately for XR payload budget.
+    lidar_voxel_size_m: float = 0.05
     pose_max_hz: float = 30.0
     stream_stale_timeout_s: float = 10.0
     manual_alignment_quality: float = 0.35
@@ -776,7 +637,7 @@ class XRBridge(Module):  # type: ignore[misc]
         try:
             self.tf.publish_static(tf)
         except Exception as exc:
-            logger.warning("TF publish_static failed", error=str(exc))
+            logger.exception("TF publish_static failed", error=str(exc))
 
     def _finish_alignment(self, result: AlignmentCandidate, ts: float | None) -> None:
         self._tag_tracker.active = False
@@ -863,14 +724,7 @@ class XRBridge(Module):  # type: ignore[misc]
         )
 
     def _normalize_nav_state(self, raw: str) -> str:
-        state = raw.strip().lower()
-        if state in {"idle", "following_path", "recovery"}:
-            return state
-        if "recover" in state:
-            return "recovery"
-        if any(token in state for token in ("follow", "path", "navig")):
-            return "following_path"
-        return "idle"
+        return normalize_nav_state(raw)
 
     def _broadcast_nav_status(self, *, ts: float | None = None) -> None:
         self._ws_server.schedule_send(
@@ -997,13 +851,7 @@ class XRBridge(Module):  # type: ignore[misc]
 
     def _broadcast_empty_path(self, *, ts: float | None = None) -> None:
         self._last_executing_path_payload = None
-        self._ws_server.schedule_send(
-            encode_path(
-                ts=ts if ts is not None else time.time(),
-                waypoints=[],
-                robot_id=self._robot_id,
-            )
-        )
+        self._ws_server.schedule_send(build_empty_path_payload(robot_id=self._robot_id, ts=ts))
 
     def _send_preview_path(
         self,
@@ -1013,11 +861,11 @@ class XRBridge(Module):  # type: ignore[misc]
         waypoints: list[tuple[float, float, float]],
     ) -> None:
         self._ws_server.schedule_send(
-            encode_path_preview(
+            build_preview_path_payload(
                 ts=ts,
+                target_world=target_world,
                 waypoints=waypoints,
                 robot_id=self._robot_id,
-                target=target_world,
             )
         )
 
@@ -1097,7 +945,7 @@ class XRBridge(Module):  # type: ignore[misc]
                     yaw_spread_deg=round(math.degrees(yaw_spread), 2),
                     trans_spread_m=round(trans_spread, 4),
                     committed_yaw_deg=round(
-                        math.degrees(_candidate_yaw_rad(T_avg)),
+                        math.degrees(_yaw_from_T(T_avg)),
                         2,
                     ),
                 )
@@ -1202,7 +1050,7 @@ class XRBridge(Module):  # type: ignore[misc]
             return
         trans_delta = float(np.linalg.norm(T_new[:3, 3] - self._T_committed[:3, 3]))
         yaw_delta = abs(
-            _wrap_angle_rad(_candidate_yaw_rad(T_new) - _candidate_yaw_rad(self._T_committed))
+            normalize_angle(_yaw_from_T(T_new) - _yaw_from_T(self._T_committed))
         )
         if trans_delta > 0.5 or yaw_delta > math.radians(10.0):
             self._pending_large_solves.append(T_new)
@@ -1223,9 +1071,9 @@ class XRBridge(Module):  # type: ignore[misc]
         else:
             dt = now - (self._last_smooth_mono or now)
             alpha = 1.0 - math.exp(-dt / self.config.tag_smoothing_tau_s)
-            yaw_new = _candidate_yaw_rad(T_new)
-            yaw_old = _candidate_yaw_rad(self._T_committed)
-            yaw_blend = _wrap_angle_rad(yaw_old + alpha * _wrap_angle_rad(yaw_new - yaw_old))
+            yaw_new = _yaw_from_T(T_new)
+            yaw_old = _yaw_from_T(self._T_committed)
+            yaw_blend = normalize_angle(yaw_old + alpha * normalize_angle(yaw_new - yaw_old))
             t_old = self._T_committed[:3, 3]
             t_new = T_new[:3, 3]
             t_blend = t_old + alpha * (t_new - t_old)
@@ -1313,7 +1161,7 @@ class XRBridge(Module):  # type: ignore[misc]
             self._goal_failed = True
             self._reset_nav_goal_tracking(reset_recovery=False)
             self._nav_state = "idle"
-            logger.error("XR navigation goal publish failed", error=str(exc))
+            logger.exception("XR navigation goal publish failed", error=str(exc))
             self._broadcast_empty_path(ts=msg.ts)
             self._broadcast_nav_status(ts=msg.ts)
 
@@ -1370,7 +1218,7 @@ class XRBridge(Module):  # type: ignore[misc]
                 waypoints=world_waypoints,
             )
         except Exception as exc:
-            logger.error("XR preview planning failed", error=str(exc))
+            logger.exception("XR preview planning failed", error=str(exc))
             self._send_preview_path(
                 ts=request.ts,
                 target_world=request.target_world,
@@ -1384,7 +1232,7 @@ class XRBridge(Module):  # type: ignore[misc]
             else:
                 self._adapter.cancel_goal()
         except Exception as exc:
-            logger.error("XR control command failed", emergency=emergency, error=str(exc))
+            logger.exception("XR control command failed", emergency=emergency, error=str(exc))
 
     def _on_cancel_goal(self, msg: CancelGoalMessage) -> None:
         self._goal_reached = False
@@ -1427,26 +1275,22 @@ class XRBridge(Module):  # type: ignore[misc]
     async def handle_xr_lidar(self, msg: PointCloud2) -> None:
         self._last_lidar_mono = time.monotonic()
         self._refresh_streams_active()
-        if not self._lidar_filter.config.allow():
+        lidar_result = build_lidar_payload(
+            msg,
+            calibration=self._calibration,
+            lidar_filter=self._lidar_filter,
+            robot_world_pos=self._latest_robot_world_position(),
+            target_points=self.config.target_points,
+            voxel_size=self.config.lidar_voxel_size_m,
+            robot_id=self._robot_id,
+        )
+        if lidar_result is None:
             return
-        # Coarse voxel reduction via DimOS PointCloud2 API before height-band filter.
-        downsampled = msg.voxel_downsample(voxel_size=0.05)
-        points = downsampled.points_f32()
-        world_pts = np.zeros((0, 3), dtype=np.float32)
-        if points.size != 0:
-            filtered = self._lidar_filter.filter(points)
-            if len(filtered) != 0:
-                world_pts = self._calibration.transform_points(filtered)
-                world_pts = subsample_points_near_robot(
-                    world_pts,
-                    self._latest_robot_world_position(),
-                    target_points=self.config.target_points,
-                )
-        payload = encode_lidar(ts=msg.ts, points=world_pts, robot_id=self._robot_id)
+        payload, point_count = lidar_result
         if not self._logged_lidar_stream_active:
             self._logged_lidar_stream_active = True
             logger.info("LiDAR stream active", hz=self.config.lidar_max_hz)
-        self._maybe_log_lidar_payload(len(world_pts), len(payload))
+        self._maybe_log_lidar_payload(point_count, len(payload))
         self._ws_server.schedule_send(payload)
 
     async def handle_xr_odom(self, msg: PoseStamped) -> None:
@@ -1458,9 +1302,13 @@ class XRBridge(Module):  # type: ignore[misc]
         if pose_interval > 0 and now - self._pose_last_emit < pose_interval:
             return
         self._pose_last_emit = now
-        sample = self._sample_odom(msg)
-        pos, quat = self._calibration.transform_pose(sample.position, sample.orientation)
-        if not self._pose_components_finite(pos, quat):
+        result = build_pose_payload(
+            msg,
+            calibration=self._calibration,
+            sample_odom=self._sample_odom,
+            robot_id=self._robot_id,
+        )
+        if result is None:
             self._dropped_pose_count += 1
             now = time.monotonic()
             if now - self._last_dropped_pose_log_mono >= DROPPED_POSE_LOG_INTERVAL_S:
@@ -1470,26 +1318,17 @@ class XRBridge(Module):  # type: ignore[misc]
                     drops=self._dropped_pose_count,
                 )
             return
-        self._ws_server.schedule_send(
-            encode_pose(ts=msg.ts, position=pos, orientation=quat, robot_id=self._robot_id)
-        )
+        pose_payload, _pos, _quat = result
+        self._ws_server.schedule_send(pose_payload)
 
     async def handle_xr_path(self, msg: Path) -> None:
-        waypoints: list[tuple[float, float, float]] = []
-        for pose in msg.poses:
-            world_pos, _world_quat = self._calibration.transform_pose(
-                (pose.x, pose.y, pose.z),
-                (
-                    pose.orientation.x,
-                    pose.orientation.y,
-                    pose.orientation.z,
-                    pose.orientation.w,
-                ),
-            )
-            waypoints.append(world_pos)
+        path_payload, waypoints = build_path_payload(
+            msg,
+            calibration=self._calibration,
+            robot_id=self._robot_id,
+        )
         if waypoints and self._nav_goal_pending and not self._nav_path_received:
             self._promote_nav_to_following_path(ts=msg.ts)
-        path_payload = encode_path(ts=msg.ts, waypoints=waypoints, robot_id=self._robot_id)
         if waypoints:
             self._last_executing_path_payload = path_payload
         elif self._nav_state == "idle":

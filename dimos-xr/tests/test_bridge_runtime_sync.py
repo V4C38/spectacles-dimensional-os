@@ -4,8 +4,8 @@ import json
 import threading
 from unittest.mock import MagicMock
 
-from dimos_xr.bridge_status import BridgeStatusSnapshot
-from dimos_xr.protocol import GetStatusMessage, encode_path
+from dimos_xr.network.bridge_status import BridgeStatusSnapshot
+from dimos_xr.network.protocol import GetStatusMessage, encode_path
 from dimos_xr.xr_bridge_module import XRBridge
 
 

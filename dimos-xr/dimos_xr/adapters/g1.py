@@ -22,7 +22,7 @@ from dimos.utils.logging_config import setup_logger
 from dimos_lcm.std_msgs import Bool, String
 
 from dimos_xr.adapters.base import CapabilityState, RobotHandshake, XRRobotAdapterSpec
-from dimos_xr.tag_tracker import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
+from dimos_xr.tracking.tag_tracker import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
 
 logger = setup_logger()
 

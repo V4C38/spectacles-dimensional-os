@@ -7,8 +7,8 @@ import pytest
 
 from dimos_xr.adapters.base import CapabilityState, RobotHandshake
 from dimos_xr.adapters.g1 import g1_handshake
-from dimos_xr.bridge_status import BridgeStatusSnapshot
-from dimos_xr.protocol import (
+from dimos_xr.network.bridge_status import BridgeStatusSnapshot
+from dimos_xr.network.protocol import (
     DEFAULT_CAPABILITIES,
     AlignManualPoseMessage,
     AlignStartMessage,

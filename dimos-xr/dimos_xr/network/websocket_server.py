@@ -20,7 +20,7 @@ import websockets.asyncio.server as ws_server
 from dimos.core.global_config import global_config
 from dimos.utils.logging_config import setup_logger
 
-from dimos_xr.protocol import (
+from dimos_xr.network.protocol import (
     AlignCommitMessage,
     AlignManualPoseMessage,
     AlignStartMessage,
@@ -35,7 +35,7 @@ from dimos_xr.protocol import (
     decode_inbound,
     encode_hello,
 )
-from dimos_xr.tag_tracker import parse_camera_frame
+from dimos_xr.tracking.tag_tracker import parse_camera_frame
 
 logger = setup_logger()
 
@@ -162,7 +162,7 @@ class _ConnectionOutbound:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.error("XR WebSocket outbound sender crashed", error=str(exc))
+            logger.exception("XR WebSocket outbound sender crashed", error=str(exc))
 
     async def _flush_one_coalesced(self) -> None:
         if not self._coalesce_latest:
@@ -195,7 +195,7 @@ class _ConnectionOutbound:
                     )
         except websockets.ConnectionClosed:
             self._closed = True
-        except Exception as exc:
+        except (OSError, websockets.WebSocketException) as exc:
             msg_type = _peek_message_type(text)
             logger.warning(
                 "XR WebSocket outbound send failed",
@@ -303,7 +303,8 @@ class XRWebSocketServer:
                     )
                 self._server_ready.set()
                 await self._stop_event.wait()
-        except Exception:
+        except Exception as exc:
+            logger.exception("XR WebSocket server crashed", error=str(exc))
             if not self._server_ready.is_set():
                 self._server_ready.set()
             raise
@@ -343,7 +344,7 @@ class XRWebSocketServer:
                 except ValueError as exc:
                     logger.warning("Invalid inbound WebSocket message", error=str(exc))
                 except Exception as exc:
-                    logger.error(
+                    logger.exception(
                         "Unhandled inbound WebSocket handler error",
                         error=str(exc),
                     )

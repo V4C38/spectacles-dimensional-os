@@ -4,26 +4,23 @@ import math
 
 import numpy as np
 
-from dimos_xr.tag_tracker import (
+from dimos_xr.tracking.tag_tracker import (
+    ALIGNMENT_CLUSTER_MIN_SAMPLES,
+    AlignmentCandidate,
     TagMount,
     TagTracker,
+    average_cluster_transform,
     build_T_world_odom,
+    collect_alignment_cluster,
+    score_alignment_cluster,
     solve_yaw_translation_2d,
 )
-from dimos_xr.transforms import (
+from dimos_xr.tracking.transforms import (
     Calibration,
-    OdomSample,
     gravity_level_transform,
     matrix_to_pose,
     normalize_ground_pose,
     pose_to_matrix,
-)
-from dimos_xr.xr_bridge_module import (
-    ALIGNMENT_CLUSTER_MIN_SAMPLES,
-    AlignmentCandidate,
-    average_cluster_transform,
-    collect_alignment_cluster,
-    score_alignment_cluster,
 )
 
 
@@ -37,11 +34,10 @@ def test_unregistered_is_identity() -> None:
 
 def test_registered_transforms_lidar_points() -> None:
     cal = Calibration()
-    cal.register_marker_pose(
-        (0.0, 0.0, 0.0),
-        (0.0, 0.0, 0.0, 1.0),
-        OdomSample(position=(1.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
-    )
+    # marker at origin, robot odom at (1,0,0) → T_world_odom = T(-1,0,0)
+    T_world_marker = pose_to_matrix((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    T_odom_robot = pose_to_matrix((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    cal.register_from_alignment(T_world_marker @ np.linalg.inv(T_odom_robot))
     pts = np.array([[0.0, 0.0, 0.0]], dtype=np.float32)
     world = cal.transform_points(pts)
     assert np.allclose(world[0], (-1.0, 0.0, 0.0), atol=1e-5)

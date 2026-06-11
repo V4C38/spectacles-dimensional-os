@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from dimos_xr.adapters.go2 import go2_handshake
-from dimos_xr.filters import (
+from dimos_xr.tracking.filters import (
     LidarFilter,
     LidarFilterConfig,
     lidar_height_band_m,

@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from dimos_xr.adapters.go2 import GO2_DEFAULT_TAG_MOUNTS
-from dimos_xr.tag_tracker import (
+from dimos_xr.tracking.tag_tracker import (
     CAMERA_FRAME_MAGIC,
     DEFAULT_MARKER_ID,
     TagMount,
@@ -21,7 +21,7 @@ from dimos_xr.tag_tracker import (
     parse_camera_frame,
     solve_yaw_translation_2d,
 )
-from dimos_xr.transforms import OdomSample
+from dimos_xr.tracking.transforms import OdomSample
 from scripts.generate_marker import generate_tag_raster
 
 

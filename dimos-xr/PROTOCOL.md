@@ -64,6 +64,26 @@ Rules:
   that exist conceptually but are currently unavailable.
 - Clients should render unavailable actions as disabled, not hide them silently.
 
+### `hello.robot.alignment_profile`
+
+Optional field emitted when the robot adapter provides alignment configuration.
+Absent or `null` when the adapter does not supply one.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `method` | `string` | Recommended alignment method (e.g. `"tag"`) |
+| `tag_ids` | `number[]` | AprilTag IDs physically mounted on this robot |
+| `tag_total_size_m` | `number` | Outer edge size of each printed tag in metres |
+
+Example (Unitree G1):
+```json
+{
+  "method": "tag",
+  "tag_ids": [0],
+  "tag_total_size_m": 0.070
+}
+```
+
 Immediately after `hello`, the server sends `bridge_status`.
 
 ## Outbound Messages
@@ -384,20 +404,24 @@ Calibration is driven entirely by the `align_*` messages plus `align_status` and
 
 ## Changelog
 
-### v3 (current) — XR Bridge PR refactor (no wire changes)
+### v3 (current) — XR Bridge PR refactor (additive, backward-compatible changes only)
 
 The PR that introduced per-robot adapters (`go2` / `g1`), DimOS TF publication,
-`PointCloud2` delegation, `mypy strict`, and launcher restructuring made **no
-changes to the wire format**. All message types, field names, and semantics are
-identical to the protocol as it was before the refactor. Clients built against
-protocol version 3 continue to work without modification.
+`PointCloud2` delegation, `mypy strict`, and launcher restructuring is
+**backward-compatible**: all existing message types, field names, and semantics
+are preserved. Clients built against any prior version of protocol v3 continue
+to work without modification.
 
-Internal changes that are invisible on the wire:
+Additive wire changes (new optional fields; existing fields unchanged):
+
+- `hello.robot.alignment_profile` is a new optional field emitted when the
+  adapter provides alignment configuration (see the `hello` section above for
+  the full field definition). Clients that ignore unknown fields are unaffected.
+- The `bridge_status.registration_approximate` field is now **always present**
+  (`true` or `false`), previously only emitted when `true`. Clients must
+  tolerate both its presence and absence as specified.
+
+Server-side only (invisible on the wire):
 
 - `XRBridgeConfig` tag geometry fields (`tag_aruco_dictionary`, `tag_total_size_m`,
   `tag_black_size_m`) are server-side configuration only.
-- `hello.robot.alignment_profile` is an optional field emitted when the adapter
-  provides a profile string; clients that ignore unknown fields are unaffected.
-- The `bridge_status.registration_approximate` field is now always present
-  (previously emitted conditionally). Clients must tolerate both its presence and
-  absence as specified.

@@ -6,8 +6,8 @@ import struct
 
 import pytest
 
-from dimos_xr.tag_tracker import CAMERA_FRAME_MAGIC, parse_camera_frame
-from dimos_xr.websocket_server import (
+from dimos_xr.tracking.tag_tracker import CAMERA_FRAME_MAGIC, parse_camera_frame
+from dimos_xr.network.websocket_server import (
     COALESCE_MESSAGE_TYPES,
     OUTBOUND_FIFO_MAXSIZE,
     _ConnectionOutbound,

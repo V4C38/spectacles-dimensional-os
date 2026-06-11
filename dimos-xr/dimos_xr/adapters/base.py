@@ -6,7 +6,7 @@ from typing import Any, Protocol
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.spec.utils import Spec
 
-from dimos_xr.tag_tracker import TagMount
+from dimos_xr.tracking.tag_tracker import TagMount
 
 
 @dataclass(frozen=True)

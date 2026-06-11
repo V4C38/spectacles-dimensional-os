@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from dimos_xr.bridge_status import BridgeStatusTracker
-from dimos_xr.protocol import encode_bridge_status
+from dimos_xr.network.bridge_status import BridgeStatusTracker
+from dimos_xr.network.protocol import encode_bridge_status
 
 
 def test_tracker_snapshot() -> None:

@@ -183,14 +183,17 @@ class OdomSample:
 
 
 class Calibration:
-    """Holds T_world_odom mapping from robot odom frame to AR world frame.
+    """Per-message cache for world-frame coordinate conversion.
 
-    Before calibration: identity (odom coordinates pass through as world).
-    After calibration: T_world_odom maps robot odom into XR world coordinates.
+    Holds the ``T_world_odom`` transform that maps robot odom-frame coordinates
+    into the XR AR world frame established by AprilTag alignment.  Every
+    outbound LiDAR point, pose, and path is transformed through this object
+    before being sent to the Lens client.  The DimOS-facing mirror is
+    ``publish_static`` (TF publication) wired in
+    ``xr_bridge_module._finish_alignment``.
 
-    On commit, ``register_from_alignment`` also publishes the transform to the
-    DimOS TF system via the Module's ``self.tf`` (see Phase 3.1 — TF publication
-    is wired in xr_bridge_module._finish_alignment).
+    Before registration: identity (odom coordinates pass through unchanged).
+    After registration: ``T_world_odom`` is gravity-levelled and published.
     """
 
     def __init__(self) -> None:
@@ -208,17 +211,6 @@ class Calibration:
             if not self._registered:
                 return None
             return np.array(self._T_world_odom, dtype=np.float64, copy=True)
-
-    def register_marker_pose(
-        self,
-        marker_position: tuple[float, float, float],
-        marker_orientation: tuple[float, float, float, float],
-        odom: OdomSample,
-    ) -> None:
-        T_world_marker = pose_to_matrix(marker_position, marker_orientation)
-        T_odom_robot = pose_to_matrix(odom.position, odom.orientation)
-        T_world_odom = T_world_marker @ np.linalg.inv(T_odom_robot)
-        self.register_from_alignment(T_world_odom)
 
     def register_from_alignment(self, T_world_odom: NDArray[np.float64]) -> None:
         """Apply a precomputed world←odom transform from AprilTag dual detection.

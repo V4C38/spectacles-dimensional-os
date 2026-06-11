@@ -60,7 +60,6 @@ ignore_missing_imports = true
 module = [
     "dimos_xr.adapters.go2",
     "dimos_xr.adapters.g1",
-    "dimos_xr.adapter_module",
     "dimos_xr.xr_bridge_module",
     "dimos_xr.preview_planner",
 ]

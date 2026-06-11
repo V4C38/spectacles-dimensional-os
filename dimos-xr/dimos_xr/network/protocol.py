@@ -11,7 +11,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from dimos_xr.adapters.base import CapabilityState, RobotHandshake
-from dimos_xr.bridge_status import BridgeStatusSnapshot
+from dimos_xr.network.bridge_status import BridgeStatusSnapshot
 
 PROTOCOL_VERSION = 3
 FRAME_WORLD = "world"

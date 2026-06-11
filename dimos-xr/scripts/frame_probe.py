@@ -21,7 +21,7 @@ import numpy as np
 import websockets
 from websockets.asyncio.server import serve
 
-from dimos_xr.tag_tracker import create_apriltag_detector, parse_camera_frame
+from dimos_xr.tracking.tag_tracker import create_apriltag_detector, parse_camera_frame
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger("frame_probe")
