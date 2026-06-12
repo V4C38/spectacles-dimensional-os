@@ -1,4 +1,4 @@
-import { LidarMessage, protocolMetersToLensCentimeters } from "../Network/Protocol";
+import { protocolMetersToLensCentimeters } from "../Network/Protocol";
 import { findChildRecursive } from "../UI/Shared/UICore";
 import { buildMockLidarPoints } from "./MockLidarPoints";
 
@@ -87,11 +87,6 @@ export class PointCloudRenderer extends BaseScriptComponent {
         ) as RenderMeshVisual;
       }
     }
-  }
-
-  /** Live bridge point cloud — obstacle always rebuilds; full only when visible. */
-  public updateLidar(msg: LidarMessage): void {
-    this.renderPointCloud(msg.points);
   }
 
   /** Offline mock point cloud anchored at the robot marker (or origin). */

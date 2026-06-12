@@ -61,6 +61,11 @@ export class PlacementController {
   /** False at spawn on robot; true once user drags or marker leaves deadzone. */
   private _enforceRobotDeadzone = false;
   private _lastValidOutsideDeadzone: vec3 | null = null;
+  // BUG-2: cached confirm deferral event (created once, re-armed per press).
+  private _confirmDeferralEvent: DelayedCallbackEvent | null = null;
+  private _pendingWasExecuting = false;
+  private _pendingConfirmPosition = vec3.zero();
+  private _pendingConfirmRotation = new quat(1, 0, 0, 0);
 
   constructor(
     owner: BaseScriptComponent,
@@ -219,6 +224,20 @@ export class PlacementController {
         this._emitPreviewTargetChanged(true);
       });
     }
+    // BUG-2: create the confirm deferral event once; re-arm per press.
+    const confirmDeferral = this.owner.createEvent(
+      "DelayedCallbackEvent",
+    ) as DelayedCallbackEvent;
+    confirmDeferral.bind(() => {
+      this._processingButtonPress = false;
+      if (this._pendingWasExecuting) {
+        this.onCancelled?.(this._pendingConfirmPosition, this._pendingConfirmRotation);
+      } else {
+        this.onConfirmed?.(this._pendingConfirmPosition, this._pendingConfirmRotation);
+      }
+    });
+    this._confirmDeferralEvent = confirmDeferral;
+
     const confirmButton = this.renderer.confirmActionButton as any;
     if (confirmButton?.onTriggerUp?.add) {
       confirmButton.onTriggerUp.add(() => {
@@ -227,20 +246,10 @@ export class PlacementController {
         }
         this._processingButtonPress = true;
         this._syncDesiredPoseToRenderedPose();
-        const wasExecuting = this.visualState === "executing";
-        const position = this.desiredPosition;
-        const rotation = this.renderer.getRotation();
-
-        const delayedEvent = this.owner.createEvent("DelayedCallbackEvent");
-        delayedEvent.bind(() => {
-          this._processingButtonPress = false;
-          if (wasExecuting) {
-            this.onCancelled?.(position, rotation);
-          } else {
-            this.onConfirmed?.(position, rotation);
-          }
-        });
-        delayedEvent.reset(0.0);
+        this._pendingWasExecuting = this.visualState === "executing";
+        this._pendingConfirmPosition = this.desiredPosition;
+        this._pendingConfirmRotation = this.renderer.getRotation();
+        this._confirmDeferralEvent!.reset(0.0);
       });
     }
   }

@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import time
-from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from numpy.typing import NDArray
 
-from dimos_xr.adapters.base import CapabilityState, RobotHandshake
-from dimos_xr.network.bridge_status import BridgeStatusSnapshot
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
+    from dimos_xr.adapters.base import CapabilityState, RobotHandshake
+    from dimos_xr.network.bridge_status import BridgeStatusSnapshot
 
 PROTOCOL_VERSION = 3
 FRAME_WORLD = "world"
@@ -353,6 +355,8 @@ def encode_align_status(
     has_candidate: bool | None = None,
     method: str | None = None,
     message: str = "",
+    cluster_size: int | None = None,
+    required_samples: int | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "type": "align_status",
@@ -374,6 +378,10 @@ def encode_align_status(
         payload["has_candidate"] = has_candidate
     if method is not None:
         payload["method"] = method
+    if cluster_size is not None:
+        payload["cluster_size"] = cluster_size
+    if required_samples is not None:
+        payload["required_samples"] = required_samples
     return _dumps(payload)
 
 

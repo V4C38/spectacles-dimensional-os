@@ -45,7 +45,16 @@ export const FOOTER_BUTTON_GAP = SPACE_MD;
 
 /** Spectacles UIKit typography - Far distance / Large frame. */
 export const FONT_HEADLINE = 72;
+/** Setup wizard step titles (larger than generic headlines). */
+export const FONT_WIZARD_TITLE = 105;
 export const FONT_BODY = 54;
+/** Wizard status / connection readouts (below step body, not description copy). */
+export const FONT_WIZARD_STATUS = 64;
+/** Setup wizard IP / text input field. */
+export const FONT_WIZARD_INPUT = 58;
+/** Alignment step tag visibility and progress readout. */
+export const FONT_CALIBRATE_TAG = FONT_WIZARD_STATUS;
+export const FONT_CALIBRATE_PROGRESS = 58;
 export const FONT_CAPTION = 42;
 export const FONT_BUTTON = 44;
 export const FONT_HUD_TITLE = 64;
@@ -179,6 +188,39 @@ export function findText(root: SceneObject, name: string): Text | null {
   return obj.getComponent("Component.Text") as Text;
 }
 
+/** Depth-first search for the first SceneObject in the subtree that has a Text component. */
+function findFirstTextObject(root: SceneObject): SceneObject | null {
+  const text = root.getComponent("Component.Text") as Text | null;
+  if (text) {
+    return root;
+  }
+  for (let i = 0; i < root.getChildrenCount(); i++) {
+    const nested = findFirstTextObject(root.getChild(i));
+    if (nested) {
+      return nested;
+    }
+  }
+  return null;
+}
+
+/** Returns the first Text component found in the subtree, or null if none. */
+export function findFirstText(root: SceneObject): Text | null {
+  const obj = findFirstTextObject(root);
+  return obj ? (obj.getComponent("Component.Text") as Text) : null;
+}
+
+/** Returns the first Text component found in the subtree; throws if none. */
+export function requireFirstText(
+  root: SceneObject,
+  ownerName: string = "SceneLookup",
+): Text {
+  const text = findFirstText(root);
+  if (!text) {
+    throw new Error(`${ownerName}: subtree of ${root.name} is missing a Text component`);
+  }
+  return text;
+}
+
 export function requireText(
   root: SceneObject,
   name: string,
@@ -220,6 +262,44 @@ export function requireRoundButton(
     );
   }
   return button;
+}
+
+/**
+ * Search all scene roots (and their descendants) for a SceneObject with
+ * the given name, falling back to a subtree search under `sceneObject`'s
+ * parent (or `sceneObject` itself when it has no parent). Throws if not
+ * found. Suitable for looking up top-level scene objects by name from
+ * inside a script component (pass `this.getSceneObject()` as `sceneObject`).
+ */
+export function requireSceneObjectByName(
+  name: string,
+  sceneObject: SceneObject,
+  ownerName: string = "SceneLookup",
+): SceneObject {
+  const sceneApi = global.scene as any;
+  const rootCount =
+    typeof sceneApi?.getRootObjectsCount === "function"
+      ? sceneApi.getRootObjectsCount()
+      : 0;
+  for (let index = 0; index < rootCount; index++) {
+    const root = sceneApi.getRootObject(index) as SceneObject;
+    if (!root) {
+      continue;
+    }
+    if (root.name === name) {
+      return root;
+    }
+    const nested = findChildRecursive(root, name);
+    if (nested) {
+      return nested;
+    }
+  }
+  const fallbackRoot = sceneObject.getParent() ?? sceneObject;
+  const nested = findChildRecursive(fallbackRoot, name);
+  if (nested) {
+    return nested;
+  }
+  throw new Error(`${ownerName}: Missing scene object ${name}`);
 }
 
 export function findButtonBinding(

@@ -21,12 +21,10 @@ import {
 } from "./WizardStepData";
 import { WizardConnectionController } from "./WizardConnectionController";
 import { WizardStepController } from "./WizardStepController";
-import { WizardView } from "../UI/WizardView";
+import { WizardView } from "./WizardView";
 import { getBridgeStatusPresentationForConnect } from "../UI/Shared/BridgeStatusPresentation";
 import { CalibrationSession } from "./CalibrationSession";
 
-// ================================================================
-// ================================================================
 /** Three-step setup component (start, connect, calibrate) that gates entry into runtime. */
 @component
 export class SetupWizard extends BaseScriptComponent {
@@ -144,8 +142,7 @@ export class SetupWizard extends BaseScriptComponent {
       return;
     }
     this._alignmentHandlersBound = true;
-    this.tagAlignmentSession.ensureEventHandlers?.();
-    this.tagAlignmentSession.onAlignStatus.push((msg) => this._onAlignStatus(msg));
+    this.tagAlignmentSession.onAlignStatus.add((msg) => this._onAlignStatus(msg));
   }
 
   private _bindBridgeHandlers(): void {
@@ -153,7 +150,7 @@ export class SetupWizard extends BaseScriptComponent {
       return;
     }
     this._bridgeHandlersBound = true;
-    this.dimosManager.onBridgeReady.push(() => {
+    this.dimosManager.onBridgeReady.add(() => {
       if (this._currentStep === WizardStep.Connect) {
         this._connectCompleted = true;
         this._isConnecting = false;
@@ -170,7 +167,7 @@ export class SetupWizard extends BaseScriptComponent {
         }
       }
     });
-    this.dimosManager.onBridgeConnectionChanged.push((connected) => {
+    this.dimosManager.onBridgeConnectionChanged.add((connected) => {
       if (!connected) {
         this._isConnecting = false;
       }
@@ -182,7 +179,7 @@ export class SetupWizard extends BaseScriptComponent {
         this._calibrationSession?.handleBridgeConnectionChanged(connected);
       }
     });
-    this.dimosManager.onBridgeStatusChanged.push((msg) => {
+    this.dimosManager.onBridgeStatusChanged.add((msg) => {
       if (this._currentStep === WizardStep.Connect) {
         this._showBridgeConnectionStatus();
       }
@@ -238,7 +235,11 @@ export class SetupWizard extends BaseScriptComponent {
     } else {
       this._view?.setStatus("", COLOR_WHITE);
     }
-    this._view?.clearDetailStatus();
+    if (display.detailText) {
+      this._view?.setDetailStatus(display.detailText, display.detailColor);
+    } else {
+      this._view?.clearDetailStatus();
+    }
   }
 
   private _refreshCalibrationDescription(): void {
@@ -280,12 +281,17 @@ export class SetupWizard extends BaseScriptComponent {
     }
     const spectaclesTracking = msg.tag_detected;
     this._calibrationSession?.handleAlignStatus(msg, spectaclesTracking);
+    const method = msg.method ?? "-";
     if (msg.state === "aligned") {
       this._logSetup(
         `alignment succeeded (${Math.round((msg.quality ?? 0) * 100)}%)`,
       );
     } else if (msg.state === "failed") {
       this._logSetup(`alignment failed: ${msg.message || "unknown"}`);
+    } else {
+      this._logSetup(
+        `align_status state=${msg.state} candidate=${msg.has_candidate} method=${method} "${msg.message}"`,
+      );
     }
   }
 

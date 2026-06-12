@@ -22,23 +22,22 @@ import {
   buildGetStatus,
   buildNavGoal,
   buildPlanPath,
-  emit,
   isNonCriticalInboundMessageType,
   parseInboundMessage,
   ProtocolParseError,
   sniffInboundMessageType,
 } from "./Protocol";
 import { IP_STORAGE_KEY, WS_PORT } from "../UI/Shared/UICore";
+import { Signal } from "../Shared/SignalEmitter";
 
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
 const PARSE_RECOVERY_COOLDOWN_S = 2.0;
 const PARSE_RECONNECT_THRESHOLD = 5;
 const FRAGMENT_REASSEMBLY_MAX_BYTES = 1_048_576;
+const SEND_DROP_LOG_INTERVAL_S = 1.0;
+const ALIGN_POSE_TX_LOG_INTERVAL_S = 1.0;
 
-// ================================================================
-// WebSocket client to the DimOS AR bridge; parses inbound messages and sends alignment/navigation commands.
-// ================================================================
 /** WebSocket client to the DimOS AR bridge; parses inbound messages and sends alignment/navigation commands. */
 @component
 export class BridgeClient extends BaseScriptComponent {
@@ -51,17 +50,17 @@ export class BridgeClient extends BaseScriptComponent {
 
   public baseUrl: string = "";
 
-  public onHello: ((msg: HelloMessage) => void)[] = [];
-  public onLidar: ((msg: LidarMessage) => void)[] = [];
-  public onPose: ((msg: PoseMessage) => void)[] = [];
-  public onAlignStatus: ((msg: AlignStatusMessage) => void)[] = [];
-  public onCameraFrameAck: ((msg: CameraFrameAckMessage) => void)[] = [];
-  public onBridgeStatus: ((msg: BridgeStatusMessage) => void)[] = [];
-  public onPath: ((msg: PathMessage) => void)[] = [];
-  public onPathPreview: ((msg: PathPreviewMessage) => void)[] = [];
-  public onNavStatus: ((msg: NavStatusMessage) => void)[] = [];
-  public onConnectionChanged: ((connected: boolean) => void)[] = [];
-  public onProtocolError: ((error: ProtocolParseError) => void)[] = [];
+  public readonly onHello = new Signal<HelloMessage>();
+  public readonly onLidar = new Signal<LidarMessage>();
+  public readonly onPose = new Signal<PoseMessage>();
+  public readonly onAlignStatus = new Signal<AlignStatusMessage>();
+  public readonly onCameraFrameAck = new Signal<CameraFrameAckMessage>();
+  public readonly onBridgeStatus = new Signal<BridgeStatusMessage>();
+  public readonly onPath = new Signal<PathMessage>();
+  public readonly onPathPreview = new Signal<PathPreviewMessage>();
+  public readonly onNavStatus = new Signal<NavStatusMessage>();
+  public readonly onConnectionChanged = new Signal<boolean>();
+  public readonly onProtocolError = new Signal<ProtocolParseError>();
 
   private ws: WebSocket | null = null;
   private isConnecting = false;
@@ -71,57 +70,76 @@ export class BridgeClient extends BaseScriptComponent {
   private _reconnectScheduled = false;
   private _fragmentBuffer: string | null = null;
   private _activeRobotId: string | null = null;
+  private _lastSendDropLogTime = -1;
+  private _lastAlignPoseTxLogTime = -1;
   private _helloCapabilities: string[] = [];
   private _capabilityStates: Record<string, { available: boolean; reason?: string }> =
     {};
-  public lastHello: HelloMessage | null = null;
   public lastBridgeStatus: BridgeStatusMessage | null = null;
 
-  /** Lens Studio may not run field initializers before other scripts read these arrays. */
-  public ensureEventHandlers(): void {
-    if (!this.onHello) {
-      this.onHello = [];
-    }
-    if (!this.onLidar) {
-      this.onLidar = [];
-    }
-    if (!this.onPose) {
-      this.onPose = [];
-    }
-    if (!this.onAlignStatus) {
-      this.onAlignStatus = [];
-    }
-    if (!this.onCameraFrameAck) {
-      this.onCameraFrameAck = [];
-    }
-    if (!this.onConnectionChanged) {
-      this.onConnectionChanged = [];
-    }
-    if (!this.onBridgeStatus) {
-      this.onBridgeStatus = [];
-    }
-    if (!this.onPath) {
-      this.onPath = [];
-    }
-    if (!this.onPathPreview) {
-      this.onPathPreview = [];
-    }
-    if (!this.onNavStatus) {
-      this.onNavStatus = [];
-    }
-    if (!this.onProtocolError) {
-      this.onProtocolError = [];
-    }
-  }
+  // BUG-2: cached timer events (created once in onAwake, re-armed per use).
+  private _connectTimeoutEvent: DelayedCallbackEvent | null = null;
+  private _helloTimeoutEvent: DelayedCallbackEvent | null = null;
+  private _parseRecoveryEvent: DelayedCallbackEvent | null = null;
+  private _pendingConnectReject: ((error: Error) => void) | null = null;
+  private _pendingHelloFinish: ((ok: boolean) => void) | null = null;
+  private _connectingSocket: WebSocket | null = null;
 
   onAwake() {
-    this.ensureEventHandlers();
     const saved = this.loadIp();
     if (saved) {
       this.baseUrl = saved;
     } else if (this.defaultBridgeIp) {
       this.baseUrl = BridgeClient.normalizeIp(this.defaultBridgeIp);
     }
+
+    // BUG-2: create all timer events once here and re-arm with reset() per use.
+    const connectTimeout = this.createEvent(
+      "DelayedCallbackEvent",
+    ) as DelayedCallbackEvent;
+    connectTimeout.bind(() => {
+      const socket = this._connectingSocket;
+      if (!this.isConnecting || this.ws !== socket || socket === null) {
+        return;
+      }
+      this.isConnecting = false;
+      this._connectingSocket = null;
+      this._detachSocketHandlers(socket);
+      socket.close();
+      this.ws = null;
+      const rejectFn = this._pendingConnectReject;
+      this._pendingConnectReject = null;
+      rejectFn?.(new Error("WebSocket connection timeout"));
+    });
+    this._connectTimeoutEvent = connectTimeout;
+
+    const helloTimeout = this.createEvent(
+      "DelayedCallbackEvent",
+    ) as DelayedCallbackEvent;
+    helloTimeout.bind(() => {
+      const finish = this._pendingHelloFinish;
+      if (finish === null) {
+        return;
+      }
+      this._pendingHelloFinish = null;
+      finish(false);
+    });
+    this._helloTimeoutEvent = helloTimeout;
+
+    const parseRecovery = this.createEvent(
+      "DelayedCallbackEvent",
+    ) as DelayedCallbackEvent;
+    parseRecovery.bind(() => {
+      this._reconnectScheduled = false;
+      if (!this.baseUrl) {
+        return;
+      }
+      this.disconnect();
+      this.connect().catch((error) => {
+        print(`BridgeClient: parse-recovery reconnect failed: ${error}`);
+      });
+    });
+    this._parseRecoveryEvent = parseRecovery;
   }
 
   private get store(): GeneralDataStore {
@@ -181,51 +199,65 @@ export class BridgeClient extends BaseScriptComponent {
         return;
       }
 
-      this.ws.onopen = () => {
+      // BUG-1: capture socket identity so stale handlers from a timed-out
+      // attempt cannot corrupt a subsequently opened socket's state.
+      const socket = this.ws;
+      // BUG-2: store socket so the cached timeout handler can identify it.
+      this._connectingSocket = socket;
+      this._pendingConnectReject = reject;
+
+      socket.onopen = () => {
+        if (this.ws !== socket) {
+          return;
+        }
         this.isConnecting = false;
+        this._connectingSocket = null;
         print("BridgeClient: connected");
         resolve();
       };
 
-      this.ws.onmessage = (event: WebSocketMessageEvent) => {
+      socket.onmessage = (event: WebSocketMessageEvent) => {
+        if (this.ws !== socket) {
+          return;
+        }
         this._onMessage(event);
       };
 
-      this.ws.onerror = () => {
+      socket.onerror = () => {
+        if (this.ws !== socket) {
+          return;
+        }
         this.isConnecting = false;
         this._notifyConnection(false);
         reject(new Error("WebSocket connection error"));
       };
 
-      this.ws.onclose = () => {
+      socket.onclose = (event: WebSocketCloseEvent) => {
+        if (this.ws !== socket) {
+          return;
+        }
+        print(`BridgeClient: socket closed code=${(event as unknown as { code?: number }).code ?? "?"} reason="${(event as unknown as { reason?: string }).reason ?? ""}"`);
         this.ws = null;
         this._fragmentBuffer = null;
         this.helloReceived = false;
         this._activeRobotId = null;
         this._helloCapabilities = [];
         this._capabilityStates = {};
-        this.lastHello = null;
         clearActiveRobotId();
         this.lastBridgeStatus = null;
         this._notifyConnection(false);
       };
 
-      const timeout = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
-      timeout.bind(() => {
-        if (this.isConnecting) {
-          this.isConnecting = false;
-          if (this.ws) {
-            this.ws.close();
-            this.ws = null;
-          }
-          reject(new Error("WebSocket connection timeout"));
-        }
-      });
-      timeout.reset(5.0);
+      // BUG-2: rearm the single cached timeout event (no new event object).
+      this._connectTimeoutEvent!.reset(5.0);
     });
   }
 
   public disconnect(): void {
+    // BUG-5: only emit disconnected if there was something to tear down.
+    // Idle retry attempts call disconnect() before every connect() even while
+    // already disconnected — notifying listeners every 2 s is churn.
+    const hadSocket = this.ws !== null || this.helloReceived;
     if (this.ws) {
       const socket = this.ws;
       this._detachSocketHandlers(socket);
@@ -238,18 +270,15 @@ export class BridgeClient extends BaseScriptComponent {
     this._activeRobotId = null;
     this._helloCapabilities = [];
     this._capabilityStates = {};
-    this.lastHello = null;
     clearActiveRobotId();
     this.lastBridgeStatus = null;
-    this._notifyConnection(false);
+    if (hadSocket) {
+      this._notifyConnection(false);
+    }
   }
 
   public get activeRobotId(): string | null {
     return this._activeRobotId;
-  }
-
-  public get negotiatedCapabilities(): string[] {
-    return this._helloCapabilities.slice();
   }
 
   public hasCapability(capability: string): boolean {
@@ -262,14 +291,6 @@ export class BridgeClient extends BaseScriptComponent {
     }
     const state = this._capabilityStates[capability];
     return state ? state.available : true;
-  }
-
-  public capabilityUnavailableReason(capability: string): string | null {
-    const state = this._capabilityStates[capability];
-    if (!state || state.available) {
-      return null;
-    }
-    return state.reason ?? null;
   }
 
   public requestStatus(): boolean {
@@ -324,23 +345,20 @@ export class BridgeClient extends BaseScriptComponent {
     }
     return new Promise((resolve) => {
       let settled = false;
+      let unsub: (() => void) | null = null;
       const finish = (ok: boolean) => {
         if (settled) {
           return;
         }
         settled = true;
-        const idx = this.onHello.indexOf(onHello);
-        if (idx >= 0) {
-          this.onHello.splice(idx, 1);
-        }
+        this._pendingHelloFinish = null;
+        unsub?.();
         resolve(ok);
       };
-      const onHello = () => finish(true);
-      this.ensureEventHandlers();
-      this.onHello.push(onHello);
-      const timeout = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
-      timeout.bind(() => finish(false));
-      timeout.reset(timeoutSeconds);
+      unsub = this.onHello.add(() => finish(true));
+      // BUG-2: rearm the single cached hello timeout (no new event object per call).
+      this._pendingHelloFinish = (ok: boolean) => finish(ok);
+      this._helloTimeoutEvent!.reset(timeoutSeconds);
     });
   }
 
@@ -348,20 +366,31 @@ export class BridgeClient extends BaseScriptComponent {
     return this.ws !== null && this.ws.readyState === WS_OPEN && this.helloReceived;
   }
 
-  public send(text: string): void {
+  public send(text: string): boolean {
     if (this.ws && this.ws.readyState === WS_OPEN) {
       this.ws.send(text);
+      return true;
     }
+    const now = getTime();
+    if (now - this._lastSendDropLogTime >= SEND_DROP_LOG_INTERVAL_S) {
+      this._lastSendDropLogTime = now;
+      print(
+        `BridgeClient: send dropped — socket not open (readyState=${this.ws ? this.ws.readyState : "null"})`,
+      );
+    }
+    return false;
   }
 
   public sendBinary(bytes: Uint8Array): void {
     if (this.ws && this.ws.readyState === WS_OPEN) {
+      print(`BridgeClient: sendBinary bytes=${bytes.byteLength} readyState=${this.ws.readyState}`);
       this.ws.send(bytes);
+    } else {
+      print(`BridgeClient: sendBinary skipped — not open (readyState=${this.ws ? this.ws.readyState : "null"})`);
     }
   }
 
   private _onMessage(event: WebSocketMessageEvent): void {
-    this.ensureEventHandlers();
     const raw = event.data as string;
     const payload = this._reassembleFragment(raw);
     if (payload === null) {
@@ -369,7 +398,6 @@ export class BridgeClient extends BaseScriptComponent {
     }
     try {
       const msg = parseInboundMessage(payload);
-      this._fragmentBuffer = null;
       this._consecutiveParseFailures = 0;
       if (!msg) {
         return;
@@ -377,45 +405,48 @@ export class BridgeClient extends BaseScriptComponent {
       switch (msg.type) {
         case "hello":
           this.helloReceived = true;
-          this.lastHello = msg;
           this._helloCapabilities = msg.capabilities.slice();
           this._capabilityStates = msg.capability_states;
           this._adoptRobotId(msg.robot.robot_id);
           this._notifyConnection(true);
-          emit(this.onHello, msg);
+          this.onHello.emit(msg);
           break;
         case "lidar":
           this._adoptRobotId(msg.robot_id);
-          emit(this.onLidar, msg);
+          this.onLidar.emit(msg);
           break;
         case "pose":
           this._adoptRobotId(msg.robot_id);
-          emit(this.onPose, msg);
+          this.onPose.emit(msg);
           break;
         case "align_status":
           this._adoptRobotId(msg.robot_id);
-          emit(this.onAlignStatus, msg);
+          this._logDiagnosticRx(msg);
+          this.onAlignStatus.emit(msg);
           break;
         case "camera_frame_ack":
           this._adoptRobotId(msg.robot_id);
-          emit(this.onCameraFrameAck, msg);
+          this._logDiagnosticRx(msg);
+          this.onCameraFrameAck.emit(msg);
           break;
         case "bridge_status":
           this._adoptRobotId(msg.robot_id);
           this.lastBridgeStatus = msg;
-          emit(this.onBridgeStatus, msg);
+          this._logDiagnosticRx(msg);
+          this.onBridgeStatus.emit(msg);
           break;
         case "path":
           this._adoptRobotId(msg.robot_id);
-          emit(this.onPath, msg);
+          this.onPath.emit(msg);
           break;
         case "path_preview":
           this._adoptRobotId(msg.robot_id);
-          emit(this.onPathPreview, msg);
+          this.onPathPreview.emit(msg);
           break;
         case "nav_status":
           this._adoptRobotId(msg.robot_id);
-          emit(this.onNavStatus, msg);
+          this._logDiagnosticRx(msg);
+          this.onNavStatus.emit(msg);
           break;
       }
     } catch (error) {
@@ -449,6 +480,9 @@ export class BridgeClient extends BaseScriptComponent {
     if (candidate === null || !this._isCompleteJsonObject(candidate)) {
       return null;
     }
+    // BUG-4: clear the buffer as soon as we have a complete payload so that a
+    // subsequent schema-invalid parse error cannot poison the next fragment.
+    this._fragmentBuffer = null;
     return candidate;
   }
 
@@ -478,12 +512,11 @@ export class BridgeClient extends BaseScriptComponent {
         isNonCriticalInboundMessageType(sniffed));
 
     if (nonCritical) {
-      this._fragmentBuffer = null;
       return;
     }
 
     this._consecutiveParseFailures += 1;
-    emit(this.onProtocolError, parseError);
+    this.onProtocolError.emit(parseError);
 
     print(
       `BridgeClient: protocol ${parseError.kind} error on ${parseError.messageType ?? sniffed ?? "unknown"} (${this._consecutiveParseFailures}); len=${raw.length}; first="${this._snippet(raw, 0)}" last="${this._snippet(raw, Math.max(0, raw.length - 80))}"`,
@@ -510,22 +543,12 @@ export class BridgeClient extends BaseScriptComponent {
     }
     this._reconnectScheduled = true;
     this._consecutiveParseFailures = 0;
-    const timeout = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
-    timeout.bind(() => {
-      this._reconnectScheduled = false;
-      if (!this.baseUrl) {
-        return;
-      }
-      this.disconnect();
-      this.connect().catch((error) => {
-        print(`BridgeClient: parse-recovery reconnect failed: ${error}`);
-      });
-    });
-    timeout.reset(0.5);
+    // BUG-2: rearm the single cached parse-recovery event (no new event object).
+    this._parseRecoveryEvent!.reset(0.5);
   }
 
   private _notifyConnection(connected: boolean): void {
-    emit(this.onConnectionChanged, connected);
+    this.onConnectionChanged.emit(connected);
   }
 
   /**
@@ -567,8 +590,24 @@ export class BridgeClient extends BaseScriptComponent {
     if (!robotId) {
       return false;
     }
-    this.send(build(robotId));
-    return true;
+    const payload = build(robotId);
+    const sent = this.send(payload);
+    if (action.startsWith("align")) {
+      if (action === "align_manual_pose") {
+        const now = getTime();
+        if (now - this._lastAlignPoseTxLogTime >= ALIGN_POSE_TX_LOG_INTERVAL_S) {
+          this._lastAlignPoseTxLogTime = now;
+          print(
+            `BridgeClient: ${action} TX robot=${robotId} bytes=${payload.length} sent=${sent}`,
+          );
+        }
+      } else {
+        print(
+          `BridgeClient: ${action} TX robot=${robotId} bytes=${payload.length} sent=${sent}`,
+        );
+      }
+    }
+    return sent;
   }
 
   private _snippet(text: string, start: number): string {
@@ -576,5 +615,32 @@ export class BridgeClient extends BaseScriptComponent {
       .substring(start, Math.min(text.length, start + 80))
       .replace("\n", "\\n")
       .replace("\r", "\\r");
+  }
+
+  private _logDiagnosticRx(
+    msg: AlignStatusMessage | CameraFrameAckMessage | BridgeStatusMessage | NavStatusMessage,
+  ): void {
+    switch (msg.type) {
+      case "align_status":
+        print(
+          `BridgeClient: RX align_status state=${msg.state} has_candidate=${msg.has_candidate} method=${msg.method ?? "-"} msg="${msg.message}"`,
+        );
+        break;
+      case "camera_frame_ack":
+        print(
+          `BridgeClient: RX camera_frame_ack seq=${msg.seq} tag_detected=${msg.tag_detected}`,
+        );
+        break;
+      case "bridge_status":
+        print(
+          `BridgeClient: RX bridge_status registered=${msg.registered} robot_connected=${msg.robot_connected}`,
+        );
+        break;
+      case "nav_status":
+        print(
+          `BridgeClient: RX nav_status state=${msg.state} goal_reached=${msg.goal_reached} goal_failed=${msg.goal_failed} error_code=${msg.error_code ?? "-"}`,
+        );
+        break;
+    }
   }
 }

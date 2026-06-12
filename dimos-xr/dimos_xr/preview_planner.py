@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import threading
+from typing import TYPE_CHECKING
 
-from dimos.core.global_config import GlobalConfig
 from dimos.mapping.occupancy.path_resampling import smooth_resample_path
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -10,6 +10,9 @@ from dimos.msgs.nav_msgs.OccupancyGrid import CostValues, OccupancyGrid
 from dimos.navigation.replanning_a_star.goal_validator import find_safe_goal
 from dimos.navigation.replanning_a_star.min_cost_astar import min_cost_astar
 from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
+
+if TYPE_CHECKING:
+    from dimos.core.global_config import GlobalConfig
 
 
 class PreviewPlanner:
@@ -66,10 +69,7 @@ class PreviewPlanner:
             orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
         )
         resampled = smooth_resample_path(path, goal_pose, 0.1)
-        return [
-            (pose.position.x, pose.position.y, 0.0)
-            for pose in resampled.poses
-        ]
+        return [(pose.position.x, pose.position.y, 0.0) for pose in resampled.poses]
 
     def _gradient_costmap_for_locked(self, binary_costmap: OccupancyGrid) -> OccupancyGrid:
         if (

@@ -29,8 +29,9 @@ MARKER_PDF_LETTER: str = "apriltag_robot_letter.pdf"
 def marker_png_name(tag_id: int) -> str:
     return f"apriltag_robot_{tag_id}.png"
 
+
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw
 except ImportError as e:  # pragma: no cover
     raise SystemExit("Pillow is required for PDF export: pip install Pillow") from e
 
@@ -43,7 +44,7 @@ PX_PER_MODULE = 80
 
 
 def _mm_to_px(mm: float, dpi: int = PDF_DPI) -> int:
-    return max(1, int(round(mm / 25.4 * dpi)))
+    return max(1, round(mm / 25.4 * dpi))
 
 
 def generate_tag_raster(
@@ -98,7 +99,7 @@ def write_page_pdf(
     label_y = y + marker_height_px + int(0.01 * dpi)
     lines = [
         f"AprilTag 36h11 ID {tag_id}",
-        f"70 mm total / 56 mm black square — print at 100% scale",
+        "70 mm total / 56 mm black square — print at 100% scale",
         "Mount FLAT (rigid backing). Do not bend or wrap.",
     ]
     for i, line in enumerate(lines):

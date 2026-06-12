@@ -237,15 +237,6 @@ export class PathRenderer {
     this.container.enabled = true;
   }
 
-  public setStraightPath(
-    start: vec3,
-    end: vec3,
-    style: PathRenderStyle = "preview",
-  ): void {
-    this.setHeightRange(start.y, end.y);
-    this.setLensPath([start, end], style);
-  }
-
   public restyle(style: PathRenderStyle): void {
     this._applyStyle(style);
   }

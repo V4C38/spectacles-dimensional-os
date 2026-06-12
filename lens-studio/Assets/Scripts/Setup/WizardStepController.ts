@@ -4,7 +4,7 @@ import { DimosManager } from "../DimosManager";
 import { CalibrationViewState, LAST_WIZARD_STEP, WIZARD_STEP_DESCRIPTIONS, WIZARD_STEP_TITLES, WizardStep, wizardStepName } from "./WizardStepData";
 import { WizardConnectionController } from "./WizardConnectionController";
 import { COLOR_ERROR, COLOR_WHITE } from "../UI/Shared/UICore";
-import { WizardView } from "../UI/WizardView";
+import { WizardView } from "./WizardView";
 
 const NAV_DEBOUNCE_S = 0.35;
 

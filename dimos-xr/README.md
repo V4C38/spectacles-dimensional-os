@@ -7,12 +7,11 @@ It lives in this monorepo as a standalone bridge package, with all
 platform-agnostic code under `dimos_xr/`.
 
 At a glance:
-- `dimos_xr/bridge_module.py`: `XRBridge`, the WebSocket/protocol/calibration core
-- `dimos_xr/adapter_module.py`: `XRRobotAdapterModule`, the robot/runtime adapter layer
-- `dimos_xr/protocol.py`: the XR WebSocket contract implementation
+- `dimos_xr/bridge/`: `XRBridge` and collaborator classes (alignment, navigation, preview, telemetry, odom buffer, status service)
+- `dimos_xr/adapters/`: `XRRobotAdapterModule`, the robot/runtime adapter layer
+- `dimos_xr/network/protocol.py`: the XR WebSocket contract implementation
 - `blueprints/dimos_xr.py`: monorepo entrypoint used by `start.sh`
 - `PROTOCOL.md`: cross-client protocol documentation
-- `ERROR_CODES.md`: bridge client error codes shown in Lens setup (`Bridge Error (CODE)`)
 - `tests/`: focused bridge unit and integration tests
 
 <details>

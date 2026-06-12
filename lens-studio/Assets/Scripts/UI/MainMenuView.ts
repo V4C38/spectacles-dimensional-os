@@ -1,14 +1,17 @@
 import { LidarDisplayMode, LIDAR_MODE_LABELS, OperatingMode } from "../AppState";
+import { RectangleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RectangleButton";
 import {
   applyCapabilityButtonPresentation,
+  bindHoverScale,
   bindToggleButton,
+  bindToggleOnValueChange,
   configureButtonToggle,
   setButtonEnabled,
   setButtonStyle,
   setButtonToggleState,
   SnapOS2Styles,
 } from "./Shared/UIBuilders";
-import { animateScaleTo, scaleIn, scaleOut } from "./Shared/UIAnimations";
+import { scaleIn, scaleOut } from "./Shared/UIAnimations";
 import {
   FONT_BUTTON,
   FONT_CAPTION,
@@ -17,7 +20,9 @@ import {
   ButtonBinding,
   findButtonBinding,
   findChildRecursive,
+  findFirstText,
   findText,
+  requireRectangleButton,
 } from "./Shared/UICore";
 
 // ================================================================
@@ -28,13 +33,13 @@ interface ModePanelConfig {
   mode: OperatingMode;
   button: ButtonBinding;
   menu: SceneObject;
-  baseLabel: string;
 }
 
 interface MainMenuCallbacks {
   onRestart: () => void;
   onLidarModeCycle: () => void;
   onModeButtonPressed: (mode: OperatingMode) => void;
+  onModeSettingsChanged: (enabled: boolean) => void;
   onNavigationPlacementChanged: (enabled: boolean) => void;
   onEmergencyStop: () => void;
   onDebugModeChanged: (enabled: boolean) => void;
@@ -42,6 +47,7 @@ interface MainMenuCallbacks {
   getNavigationPlacementValue: () => boolean;
   getOperatingMode: () => OperatingMode;
   getExpandedSettingsMode: () => OperatingMode | null;
+  getModeSettingsExpanded: () => boolean;
   getDebugModeValue: () => boolean;
 }
 
@@ -53,13 +59,13 @@ export class MainMenuView {
   private readonly _showLiDAR: ButtonBinding;
   private readonly _debugMode: ButtonBinding;
   private readonly _subMenu: SceneObject;
+  private readonly _modeSettings: RectangleButton;
   private readonly _modePanels: ModePanelConfig[];
   private _operatingMode: OperatingMode;
   private _expandedSettingsMode: OperatingMode | null;
   private _navigationPlacementEnabled = false;
   private _debugModeEnabled = false;
-  private readonly _emergencyStopBaseScale: vec3;
-  private readonly _emergencyStopHoverScale: vec3;
+  private _suppressModeSettingsChange = false;
 
   constructor(
     panel: SceneObject,
@@ -84,6 +90,7 @@ export class MainMenuView {
     const subMenu = findChildRecursive(panel, "SubMenu");
     const manualMenu = findChildRecursive(panel, "ModeManualMenu");
     const agentMenu = findChildRecursive(panel, "ModeAgentMenu");
+    const modeSettingsObj = findChildRecursive(panel, "ModeSettings");
 
     if (
       !statusText ||
@@ -96,34 +103,32 @@ export class MainMenuView {
       !debugMode ||
       !subMenu ||
       !manualMenu ||
-      !agentMenu
+      !agentMenu ||
+      !modeSettingsObj
     ) {
       throw new Error("MainMenuView: MainUI scene hierarchy incomplete");
     }
 
+    const modeSettings = requireRectangleButton(modeSettingsObj, "MainMenuView");
+
     this._statusText = statusText;
     this._restart = restart;
     this._emergencyStop = emergencyStop;
-    this._emergencyStopBaseScale =
-      emergencyStop.sceneObject.getTransform().getLocalScale();
-    this._emergencyStopHoverScale =
-      this._emergencyStopBaseScale.uniformScale(1.05);
     this._navigationPlacement = navigationPlacement;
     this._showLiDAR = showLiDAR;
     this._debugMode = debugMode;
     this._subMenu = subMenu;
+    this._modeSettings = modeSettings;
     this._modePanels = [
       {
         mode: "manual",
         button: manualMode,
         menu: manualMenu,
-        baseLabel: manualMode.labelText?.text ?? "Manual",
       },
       {
         mode: "agent",
         button: agentMode,
         menu: agentMenu,
-        baseLabel: agentMode.labelText?.text ?? "Agent",
       },
     ];
     this._operatingMode = callbacks.getOperatingMode();
@@ -132,11 +137,16 @@ export class MainMenuView {
 
     this._restart.button.onTriggerUp.add(callbacks.onRestart);
     for (const panel of this._modePanels) {
-      // Use triggerDown so submenu scale-in on release cannot re-hit the button.
-      panel.button.button.onTriggerDown.add(() =>
+      panel.button.button.onTriggerUp.add(() =>
         callbacks.onModeButtonPressed(panel.mode),
       );
     }
+    bindToggleOnValueChange(this._modeSettings, (enabled) => {
+      if (this._suppressModeSettingsChange) {
+        return;
+      }
+      callbacks.onModeSettingsChanged(enabled);
+    });
     bindToggleButton(
       this._navigationPlacement.button,
       callbacks.onNavigationPlacementChanged,
@@ -152,7 +162,7 @@ export class MainMenuView {
       callbacks.onEmergencyStop();
       setButtonToggleState(this._emergencyStop.button, true);
     });
-    this._bindEmergencyStopHoverScale();
+    bindHoverScale(this._emergencyStop.button, this._emergencyStop.sceneObject);
 
     this._initializeStyles();
     this.setOperatingMode(this._operatingMode);
@@ -196,6 +206,7 @@ export class MainMenuView {
     if (this._navigationPlacement.labelText) {
       this._navigationPlacement.labelText.text = this._navigationPlacementLabel(enabled);
     }
+    setButtonToggleState(this._navigationPlacement.button, enabled);
   }
 
   public setDebugModeToggle(enabled: boolean): void {
@@ -265,6 +276,7 @@ export class MainMenuView {
       this._applyModeButtonPresentation(panel);
       this._syncModeMenuVisibility(panel);
     }
+    this._syncModeSettingsPresentation();
   }
 
   private _syncModeMenuVisibility(panel: ModePanelConfig): void {
@@ -273,28 +285,17 @@ export class MainMenuView {
 
   private _applyModeButtonPresentation(panel: ModePanelConfig): void {
     const active = this._operatingMode === panel.mode;
-    const settingsOpen = this._expandedSettingsMode === panel.mode;
     setButtonStyle(
       panel.button.button,
       active ? SnapOS2Styles.Primary : SnapOS2Styles.Secondary,
     );
-    if (!panel.button.labelText) {
-      return;
-    }
-    panel.button.labelText.text =
-      active && settingsOpen
-        ? `${panel.baseLabel} (Settings)`
-        : panel.baseLabel;
   }
 
-  private _bindEmergencyStopHoverScale(): void {
-    const sceneObject = this._emergencyStop.sceneObject;
-    this._emergencyStop.button.onHoverEnter.add(() => {
-      animateScaleTo(sceneObject, this._emergencyStopHoverScale);
-    });
-    this._emergencyStop.button.onHoverExit.add(() => {
-      animateScaleTo(sceneObject, this._emergencyStopBaseScale);
-    });
+  private _syncModeSettingsPresentation(): void {
+    const expanded = this._expandedSettingsMode !== null;
+    this._suppressModeSettingsChange = true;
+    setButtonToggleState(this._modeSettings, expanded);
+    this._suppressModeSettingsChange = false;
   }
 
   private _initializeStyles(): void {
@@ -306,8 +307,12 @@ export class MainMenuView {
       panel.button.labelText && (panel.button.labelText.size = FONT_BUTTON);
       (panel.button.button as any)._toggleable = false;
     }
+    const modeSettingsLabel = findFirstText(this._modeSettings.getSceneObject());
+    modeSettingsLabel && (modeSettingsLabel.size = FONT_BUTTON);
+    configureButtonToggle(this._modeSettings, false);
     this._navigationPlacement.labelText &&
       (this._navigationPlacement.labelText.size = FONT_BUTTON);
+    configureButtonToggle(this._navigationPlacement.button, false);
     this._showLiDAR.labelText && (this._showLiDAR.labelText.size = FONT_BUTTON);
     this._debugMode.labelText && (this._debugMode.labelText.size = FONT_BUTTON);
     configureButtonToggle(this._debugMode.button, this._debugModeEnabled);

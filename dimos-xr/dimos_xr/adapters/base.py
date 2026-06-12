@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.spec.utils import Spec
 
-from dimos_xr.tracking.tag_tracker import TagMount
+if TYPE_CHECKING:
+    from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+
+    from dimos_xr.tracking.tag_tracker import TagMount
 
 
 @dataclass(frozen=True)

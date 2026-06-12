@@ -9,16 +9,18 @@ application-level heartbeat in the XR bridge protocol.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import logging
+import os
 import re
 import threading
-from collections.abc import Awaitable, Callable
+import time
 from typing import Any
 
-import websockets
-import websockets.asyncio.server as ws_server
 from dimos.core.global_config import global_config
 from dimos.utils.logging_config import setup_logger
+import websockets
+import websockets.asyncio.server as ws_server
 
 from dimos_xr.network.protocol import (
     AlignCommitMessage,
@@ -59,6 +61,9 @@ HelloSupplier = Callable[[], Any]
 
 OUTBOUND_FIFO_MAXSIZE = 64
 OUTBOUND_BACKLOG_LOG_INTERVAL_S = 5.0
+# High-frequency inbound message types that need throttled RX logging (~3 Hz).
+INBOUND_TEXT_LOG_INTERVAL_S = 1.0
+_THROTTLED_INBOUND_TYPES = frozenset({"align_manual_pose", "get_status"})
 COALESCE_MESSAGE_TYPES = frozenset(
     {
         "lidar",
@@ -79,9 +84,7 @@ PING_TIMEOUT_S = 30
 def _handshake_noise_filter(record: logging.LogRecord) -> bool:
     """Drop noisy handshake-failed records from port scanners and non-WS clients."""
     msg = record.getMessage()
-    return not (
-        "opening handshake failed" in msg or "did not receive a valid HTTP request" in msg
-    )
+    return not ("opening handshake failed" in msg or "did not receive a valid HTTP request" in msg)
 
 
 def _peek_message_type(text: str) -> str | None:
@@ -181,13 +184,16 @@ class _ConnectionOutbound:
         try:
             await self._websocket.send(text)
             self._sent_count += 1
+            msg_type = _peek_message_type(text)
+            if msg_type == "align_status" and os.getenv("DIMOS_LOG_LEVEL", "INFO") == "DEBUG":
+                logger.debug("XR WebSocket outbound align_status sent", bytes=len(text))
             now = time.monotonic()
             if now - self._last_backlog_log_mono >= OUTBOUND_BACKLOG_LOG_INTERVAL_S:
                 fifo_depth = self._queue.qsize()
                 coalesce_depth = len(self._coalesce_latest)
                 if fifo_depth > 0 or coalesce_depth > 0 or self._dropped_fifo_count > 0:
                     self._last_backlog_log_mono = now
-                    logger.debug(
+                    logger.info(
                         "XR WebSocket outbound backlog",
                         fifo_depth=fifo_depth,
                         coalesce_pending=coalesce_depth,
@@ -318,15 +324,22 @@ class XRWebSocketServer:
         outbound = _ConnectionOutbound(websocket)
         self._outbound[websocket] = outbound
         outbound.start()
+        remote = getattr(websocket, "remote_address", None)
+        logger.info("XR client connected", remote=str(remote))
         try:
             hello = self._hello_supplier()
             await websocket.send(encode_hello(hello))
             if self._on_status_connect is not None:
                 self._on_status_connect(websocket)
             self.client_connected.set()
+            _last_inbound_text_log: dict[str, float] = {}
             async for message in websocket:
                 try:
                     if isinstance(message, bytes):
+                        logger.info(
+                            "XR inbound binary frame",
+                            bytes=len(message),
+                        )
                         if self._on_camera_frame is None:
                             logger.warning("Binary camera_frame received but no handler")
                             continue
@@ -339,6 +352,15 @@ class XRWebSocketServer:
                         continue
                     if not isinstance(message, str):
                         raise ValueError("Unsupported WebSocket frame type")
+                    msg_type = _peek_message_type(message)
+                    now_mono = time.monotonic()
+                    if msg_type not in _THROTTLED_INBOUND_TYPES or (
+                        now_mono - _last_inbound_text_log.get(msg_type, 0.0)
+                        >= INBOUND_TEXT_LOG_INTERVAL_S
+                    ):
+                        if msg_type is not None:
+                            _last_inbound_text_log[msg_type] = now_mono
+                        logger.info("XR inbound text message", type=msg_type)
                     inbound = decode_inbound(message, expected_robot_id=hello.robot_id)
                     self._dispatch_inbound(inbound, websocket)
                 except ValueError as exc:
@@ -348,8 +370,13 @@ class XRWebSocketServer:
                         "Unhandled inbound WebSocket handler error",
                         error=str(exc),
                     )
-        except websockets.ConnectionClosed:
-            pass
+        except websockets.ConnectionClosed as exc:
+            logger.info(
+                "XR client disconnected",
+                remote=str(remote),
+                code=exc.rcvd.code if exc.rcvd is not None else None,
+                reason=exc.rcvd.reason if exc.rcvd is not None else None,
+            )
         finally:
             await outbound.stop()
             self._outbound.pop(websocket, None)
@@ -411,18 +438,14 @@ class XRWebSocketServer:
         """Enqueue a broadcast from any thread onto the server loop."""
         asyncio.run_coroutine_threadsafe(self._enqueue_all(text), self._loop)
 
-    def schedule_send_to(
-        self, websocket: ws_server.ServerConnection, text: str
-    ) -> None:
+    def schedule_send_to(self, websocket: ws_server.ServerConnection, text: str) -> None:
         asyncio.run_coroutine_threadsafe(self._enqueue_one(websocket, text), self._loop)
 
     async def _enqueue_all(self, text: str) -> None:
         for outbound in list(self._outbound.values()):
             outbound.enqueue(text)
 
-    async def _enqueue_one(
-        self, websocket: ws_server.ServerConnection, text: str
-    ) -> None:
+    async def _enqueue_one(self, websocket: ws_server.ServerConnection, text: str) -> None:
         outbound = self._outbound.get(websocket)
         if outbound is not None:
             outbound.enqueue(text)

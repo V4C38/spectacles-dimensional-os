@@ -60,10 +60,6 @@ export class SurfacePlacementStabilizer {
     this._floorBaselineY = floorBaselineY;
   }
 
-  public get smoothedPosition(): vec3 | null {
-    return this._smoothedPosition;
-  }
-
   public pushSample(position: vec3, groundedY: number, now: number = getTime()): void {
     this._pruneSamples(now);
     this._samples.push({
@@ -150,10 +146,6 @@ export class SurfacePlacementStabilizer {
     }
     const latest = this._samples[this._samples.length - 1];
     return now - latest.time >= STALE_GAP_S;
-  }
-
-  public clearSamples(): void {
-    this._samples = [];
   }
 
   private _pruneSamples(now: number): void {

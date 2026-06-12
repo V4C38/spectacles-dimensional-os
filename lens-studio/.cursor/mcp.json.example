@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "lens-studio": {
+      "type": "http",
+      "url": "http://localhost:8732/mcp",
+      "headers": {
+        "Authorization": "Bearer PASTE_TOKEN_FROM_LENS_STUDIO_COPY_MCP_CONFIG"
+      }
+    }
+  }
+}

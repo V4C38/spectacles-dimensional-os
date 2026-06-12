@@ -1,7 +1,6 @@
 import { TagAlignmentSession } from "../Alignment/TagAlignmentSession";
 import { DimosManager } from "../DimosManager";
 import { AlignStatusMessage, BridgeStatusMessage } from "../Network/Protocol";
-import { BridgeErrorCode } from "./BridgeErrorCodes";
 import {
   applyAlignStatusToCalibrationState,
   createCalibrationViewState,
@@ -16,6 +15,8 @@ import { CalibrationViewState } from "./WizardStepData";
 import { COLOR_SUCCESS, COLOR_WHITE } from "../UI/Shared/UICore";
 
 const MANUAL_CANDIDATE_SYNC_INTERVAL_S = 0.35;
+const MANUAL_CAPTURE_FAILURE_THRESHOLD = 3;
+const ALIGN_STATUS_LOG_INTERVAL_S = 1.0;
 
 export interface CalibrationSessionHost {
   beginManualAlignmentPlacementFromWizard: () => boolean;
@@ -29,7 +30,10 @@ export interface CalibrationSessionHost {
 export class CalibrationSession {
   private _state: CalibrationViewState = createCalibrationViewState();
   private _lastManualCandidateSyncTime = -1;
+  private _lastAlignStatusLogTime = -1;
+  private _lastLoggedAlignStatusKey = "";
   private _commitInFlight = false;
+  private _consecutiveManualCaptureFailures = 0;
 
   constructor(
     private readonly _dimosManager: DimosManager,
@@ -111,10 +115,13 @@ export class CalibrationSession {
         this._host.log("calibration commit requested");
         return false;
       }
+      this._host.log(
+        "auto alignment: commit failed — alignment session unavailable",
+      );
       this._state = {
         ...this._state,
-        bridgeErrorCode: BridgeErrorCode.AlignSessionUnavailable,
         bridgeWaitStartedAt: null,
+        manualBridgeWaitFailed: false,
         statusMessage: "",
         statusColor: COLOR_WHITE,
       };
@@ -132,6 +139,8 @@ export class CalibrationSession {
     msg: AlignStatusMessage,
     spectaclesTracking: boolean,
   ): void {
+    this._logAlignStatusIfChanged(msg);
+
     this._state = applyAlignStatusToCalibrationState(
       this._state,
       msg,
@@ -140,24 +149,23 @@ export class CalibrationSession {
 
     if (msg.state === "failed") {
       this._commitInFlight = false;
+      this._host.log(
+        `alignment failed on bridge: ${msg.message || "unknown reason"}`,
+      );
       if (this._state.mode === "manual") {
         this._dimosManager.hideRobotMarkerPreview();
       }
     } else if (msg.state === "aligned") {
       this._tryAutoFinishSetup();
+    } else if (
+      this._state.mode === "manual" &&
+      msg.has_candidate &&
+      msg.method === "manual"
+    ) {
+      this._consecutiveManualCaptureFailures = 0;
+      this._host.log("manual alignment candidate confirmed by bridge");
     }
     this._notify();
-  }
-
-  public updateSpectaclesTracking(tracking: boolean): void {
-    if (this._state.mode !== "auto" || this._state.spectaclesTracking === tracking) {
-      return;
-    }
-    this._state = {
-      ...this._state,
-      spectaclesTracking: tracking,
-    };
-    this._host.render();
   }
 
   public handleBridgeConnectionChanged(connected: boolean): void {
@@ -168,12 +176,15 @@ export class CalibrationSession {
       };
       if (isCalibrationPendingCommit(this._state)) {
         this._commitInFlight = false;
+        this._host.log(
+          "manual alignment: bridge disconnected during commit",
+        );
         this._state = {
           ...this._state,
           phase: "editing",
           statusMessage: "",
           statusColor: COLOR_WHITE,
-          bridgeErrorCode: BridgeErrorCode.BridgeDisconnectedDuringCommit,
+          manualBridgeWaitFailed: false,
         };
         this._notify();
       }
@@ -190,7 +201,7 @@ export class CalibrationSession {
         statusMessage: "",
         statusColor: COLOR_SUCCESS,
         bridgeWaitStartedAt: null,
-        bridgeErrorCode: null,
+        manualBridgeWaitFailed: false,
       };
       this._notify();
       this._host.log("alignment confirmed via bridge_status fallback");
@@ -208,9 +219,12 @@ export class CalibrationSession {
       if (elapsed >= MANUAL_BRIDGE_WAIT_TIMEOUT_S) {
         this._state = {
           ...this._state,
-          bridgeErrorCode: BridgeErrorCode.ManualPoseConfirmTimeout,
+          manualBridgeWaitFailed: true,
           bridgeWaitStartedAt: null,
         };
+        this._host.log(
+          "manual alignment bridge wait timed out — no has_candidate from bridge (check bridge logs for odom / align_manual_pose)",
+        );
         this._host.refreshFooter();
       }
       needsRender = true;
@@ -241,7 +255,30 @@ export class CalibrationSession {
     }
 
     this._lastManualCandidateSyncTime = now;
-    this._dimosManager.captureManualAlignmentCandidate();
+    const captured = this._dimosManager.captureManualAlignmentCandidate();
+    if (captured) {
+      this._consecutiveManualCaptureFailures = 0;
+    } else if (
+      isManualBridgeWait(this._state, this._dimosManager.hasBridgeConnection())
+    ) {
+      this._consecutiveManualCaptureFailures += 1;
+      if (
+        this._consecutiveManualCaptureFailures >=
+          MANUAL_CAPTURE_FAILURE_THRESHOLD &&
+        !this._state.manualBridgeWaitFailed
+      ) {
+        this._state = {
+          ...this._state,
+          manualBridgeWaitFailed: true,
+          bridgeWaitStartedAt: null,
+        };
+        this._host.log(
+          "manual alignment: capture failed repeatedly — marker position unavailable",
+        );
+        this._host.refreshFooter();
+        needsRender = true;
+      }
+    }
     if (needsRender) {
       this._host.render();
     }
@@ -252,13 +289,17 @@ export class CalibrationSession {
       this._dimosManager.hasBridgeConnection() &&
       !hasCalibrationCandidate(this._state)
     ) {
+      const waitJustStarted = this._state.bridgeWaitStartedAt === null;
       this._state = {
         ...this._state,
         bridgeWaitStartedAt: this._state.bridgeWaitStartedAt ?? getTime(),
-        bridgeErrorCode: null,
+        manualBridgeWaitFailed: false,
         statusMessage: "",
         statusColor: COLOR_WHITE,
       };
+      if (waitJustStarted) {
+        this._host.log("manual alignment bridge wait started");
+      }
       this._notify();
       return false;
     }
@@ -266,10 +307,13 @@ export class CalibrationSession {
     if (!this._dimosManager.hasBridgeConnection()) {
       const finalized = this._dimosManager.finalizeOfflineManualAlignment();
       if (!finalized) {
+        this._host.log(
+          "manual alignment: offline finalize failed — marker pose unavailable",
+        );
         this._state = {
           ...this._state,
-          bridgeErrorCode: BridgeErrorCode.ManualPoseInvalid,
           bridgeWaitStartedAt: null,
+          manualBridgeWaitFailed: false,
           statusMessage: "",
           statusColor: COLOR_WHITE,
         };
@@ -283,7 +327,7 @@ export class CalibrationSession {
         statusMessage: "",
         statusColor: COLOR_SUCCESS,
         bridgeWaitStartedAt: null,
-        bridgeErrorCode: null,
+        manualBridgeWaitFailed: false,
       };
       this._notify();
       this._host.log("manual local-only calibration accepted");
@@ -292,10 +336,13 @@ export class CalibrationSession {
 
     const captured = this._dimosManager.captureManualAlignmentCandidate();
     if (!captured) {
+      this._host.log(
+        "manual alignment: capture failed on Complete — marker pose unavailable",
+      );
       this._state = {
         ...this._state,
-        bridgeErrorCode: BridgeErrorCode.ManualPoseInvalid,
         bridgeWaitStartedAt: null,
+        manualBridgeWaitFailed: false,
         statusMessage: "",
         statusColor: COLOR_WHITE,
       };
@@ -318,10 +365,11 @@ export class CalibrationSession {
       return false;
     }
 
+    this._host.log("manual alignment: align_commit send failed");
     this._state = {
       ...this._state,
-      bridgeErrorCode: BridgeErrorCode.ManualPoseInvalid,
       bridgeWaitStartedAt: null,
+      manualBridgeWaitFailed: false,
       statusMessage: "",
       statusColor: COLOR_WHITE,
     };
@@ -338,10 +386,11 @@ export class CalibrationSession {
     this._dimosManager.clearManualAlignmentPose();
     this._dimosManager.hideRobotMarkerPreview();
     this._dimosManager.frameCaptureController?.setCaptureErrorHandler(() => {
+      this._host.log("auto alignment: camera capture error");
       this._state = {
         ...this._state,
-        bridgeErrorCode: BridgeErrorCode.CameraCaptureFailed,
         bridgeWaitStartedAt: null,
+        manualBridgeWaitFailed: false,
         statusMessage: "",
         statusColor: COLOR_WHITE,
       };
@@ -361,11 +410,14 @@ export class CalibrationSession {
     this._host.refreshDescription();
 
     if (!this._host.beginManualAlignmentPlacementFromWizard()) {
+      this._host.log(
+        "manual alignment: could not begin placement from wizard panel",
+      );
       this._state = {
         ...this._state,
         phase: "editing",
-        bridgeErrorCode: BridgeErrorCode.ManualPoseInvalid,
         bridgeWaitStartedAt: null,
+        manualBridgeWaitFailed: false,
         statusMessage: "",
         statusColor: COLOR_WHITE,
       };
@@ -378,10 +430,11 @@ export class CalibrationSession {
 
     if (this._dimosManager.hasBridgeConnection()) {
       if (!this._dimosManager.startManualAlignmentSession()) {
+        this._host.log("manual alignment: align_start send failed");
         this._state = {
           ...this._state,
-          bridgeErrorCode: BridgeErrorCode.AlignSessionUnavailable,
           bridgeWaitStartedAt: null,
+          manualBridgeWaitFailed: false,
           statusMessage: "",
           statusColor: COLOR_WHITE,
         };
@@ -389,13 +442,40 @@ export class CalibrationSession {
         this._state = {
           ...this._state,
           bridgeWaitStartedAt: getTime(),
-          bridgeErrorCode: null,
+          manualBridgeWaitFailed: false,
           statusMessage: "",
           statusColor: COLOR_WHITE,
         };
+        this._host.log("manual alignment bridge wait started");
       }
     }
+    this._host.log("manual alignment placement started");
     this._notify();
+  }
+
+  private _logAlignStatusIfChanged(msg: AlignStatusMessage): void {
+    const method = msg.method ?? "-";
+    const key = `${msg.state}|${msg.has_candidate}|${method}|${msg.message}`;
+    const now = getTime();
+    if (
+      key === this._lastLoggedAlignStatusKey &&
+      now - this._lastAlignStatusLogTime < ALIGN_STATUS_LOG_INTERVAL_S
+    ) {
+      return;
+    }
+    if (
+      msg.state === "aligned" ||
+      msg.state === "failed" ||
+      msg.has_candidate ||
+      msg.method === "manual" ||
+      key !== this._lastLoggedAlignStatusKey
+    ) {
+      this._lastLoggedAlignStatusKey = key;
+      this._lastAlignStatusLogTime = now;
+      this._host.log(
+        `align_status state=${msg.state} candidate=${msg.has_candidate} method=${method} "${msg.message}"`,
+      );
+    }
   }
 
   private _notify(refreshDescription: boolean = false): void {
@@ -408,6 +488,7 @@ export class CalibrationSession {
 
   private _resetManualCandidateSync(): void {
     this._lastManualCandidateSyncTime = -1;
+    this._consecutiveManualCaptureFailures = 0;
   }
 
   private _tryAutoFinishSetup(): void {

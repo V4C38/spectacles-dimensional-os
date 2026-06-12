@@ -23,7 +23,7 @@ from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
 
 from dimos_xr.adapters.g1 import G1AdapterModule
 from dimos_xr.adapters.go2 import Go2AdapterModule
-from dimos_xr.xr_bridge_module import XRBridge
+from dimos_xr.bridge.module import XRBridge
 
 xr_go2 = (
     autoconnect(

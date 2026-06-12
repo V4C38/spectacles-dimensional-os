@@ -65,9 +65,7 @@ def g1_capabilities(
         ),
         "path": CapabilityState(
             path_available,
-            None
-            if path_available
-            else "Active path output is not present for this G1 runtime.",
+            None if path_available else "Active path output is not present for this G1 runtime.",
         ),
         "plan_preview": CapabilityState(
             plan_preview_available,

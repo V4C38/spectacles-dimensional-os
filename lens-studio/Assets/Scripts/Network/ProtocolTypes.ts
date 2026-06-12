@@ -77,6 +77,8 @@ export interface AlignStatusMessage {
   has_candidate?: boolean;
   method?: "marker" | "manual" | "tag" | "tag_orientation";
   message: string;
+  cluster_size?: number;
+  required_samples?: number;
 }
 
 export interface CameraFrameAckMessage {

@@ -5,9 +5,6 @@ import { getBridgeStatusPresentation } from "./Shared/BridgeStatusPresentation";
 import { scaleIn, scaleOut } from "./Shared/UIAnimations";
 import { MainMenuView } from "./MainMenuView";
 
-// ================================================================
-// Runtime HUD controller toggling main menu visibility and syncing with DimosManager app state.
-// ================================================================
 /** Runtime HUD controller toggling main menu visibility and syncing with DimosManager app state. */
 @component
 export class UIManager extends BaseScriptComponent {
@@ -78,6 +75,8 @@ export class UIManager extends BaseScriptComponent {
         onLidarModeCycle: () => this.dimosManager?.cycleLidarMode(),
         onModeButtonPressed: (mode) =>
           this.dimosManager?.onMainMenuModeButtonPressed(mode),
+        onModeSettingsChanged: (enabled) =>
+          this.dimosManager?.setMainMenuSettingsExpanded(enabled),
         onNavigationPlacementChanged: (enabled) =>
           this.dimosManager?.setNavigationPlacementEnabled(enabled),
         onEmergencyStop: () => this.dimosManager?.requestEmergencyStop(),
@@ -86,6 +85,7 @@ export class UIManager extends BaseScriptComponent {
         getNavigationPlacementValue: () => this._navigationPlacementEnabled,
         getOperatingMode: () => this._operatingMode,
         getExpandedSettingsMode: () => this._expandedSettingsMode,
+        getModeSettingsExpanded: () => this._expandedSettingsMode !== null,
         getDebugModeValue: () => this._debugModeEnabled,
       });
     } catch (error) {

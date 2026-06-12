@@ -6,16 +6,14 @@ import {
 } from "../Network/ProtocolTypes";
 
 const POSE_BUFFER_CAPACITY = 180;
-const SETUP_CAPTURE_INTERVAL_S = 0.7;
-const RUNTIME_CAPTURE_INTERVAL_S = 1.0;
-const RUNTIME_TRACKING_INTERVAL_S = 4.0;
-const RUNTIME_TRACKING_WINDOW_S = 3.0;
-const IN_FLIGHT_TIMEOUT_S = 2.0;
+// Interval measured from pipeline END (ack or finally), guaranteeing idle GC time.
+const SETUP_CAPTURE_INTERVAL_S = 1.0;
+const RUNTIME_CAPTURE_INTERVAL_S = 3.0;
+// Safety net only: ack clears _inFlight in the normal case.
+const IN_FLIGHT_TIMEOUT_S = 12.0;
 const MAX_HEAD_ANGULAR_VEL_DEG_S = 40.0;
 const RUNTIME_MAX_DISTANCE_CM = 450.0;
 const RUNTIME_MAX_ANGLE_DEG = 35.0;
-const DEFAULT_STILL_WIDTH = 3200;
-const DEFAULT_STILL_HEIGHT = 2400;
 
 type CaptureMode = "off" | "setup" | "runtime";
 
@@ -40,15 +38,25 @@ export class FrameCaptureController extends BaseScriptComponent {
   private _inFlight = false;
   private _inFlightSeq = -1;
   private _inFlightStart = 0;
-  private _lastCaptureTime = 0;
+  // Hard lock: prevents overlapping encode pipelines regardless of ack-timeout state.
+  private _pipelineBusy = false;
+  // Idle-gap pacing: timestamp of the last pipeline END (ack or finally).
+  // The interval timer starts here, not at capture start, so idle GC time
+  // is guaranteed regardless of how long the pipeline takes.
+  private _lastPipelineEndTime = 0;
   private _poseBuffer: PoseSample[] = [];
   private _updateEvent: SceneEvent | null = null;
   private _helloBound = false;
   private _robotWorldPos: vec3 | null = null;
   private _sentCameraInfo = false;
-  private _sentResolution: { w: number; h: number } | null = null;
   private _onCaptureError: ((message: string) => void) | null = null;
-  private _lastRuntimeTagAckTime = 0;
+
+  // Camera-stream state
+  private _cameraTexture: Texture | null = null;
+  private _cameraTextureProvider: CameraTextureProvider | null = null;
+  private _frameRegistration: EventRegistration | null = null;
+  private _captureRequested = false;
+  private _latestFrameTs = 0;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
@@ -69,38 +77,44 @@ export class FrameCaptureController extends BaseScriptComponent {
   }
 
   public setMode(mode: CaptureMode): void {
+    print(`FrameCaptureController: mode ${this._mode} -> ${mode}`);
     this._mode = mode;
     if (mode === "off") {
       this._inFlight = false;
       this._inFlightSeq = -1;
-      this._lastRuntimeTagAckTime = 0;
+      this._captureRequested = false;
+      this._stopCameraStream();
+    } else {
+      this._ensureCameraStream();
     }
+    // Reset pacing so the first capture in the new mode fires promptly
+    // (within one interval), not after a potentially stale gap from the old mode.
+    this._lastPipelineEndTime = 0;
   }
 
   private _bindBridge(): void {
     if (this._helloBound || !this.bridgeClient) {
       return;
     }
-    this.bridgeClient.ensureEventHandlers();
-    this.bridgeClient.onHello.push(this._onHello);
-    this.bridgeClient.onCameraFrameAck.push(this._onCameraFrameAck);
+    this.bridgeClient.onHello.add(this._onHello);
+    this.bridgeClient.onCameraFrameAck.add(this._onCameraFrameAck);
     this._helloBound = true;
   }
 
   private _onHello = (): void => {
     this._inFlight = false;
     this._inFlightSeq = -1;
+    // Reset so camera_info is re-sent on the next capture with the live texture dimensions.
     this._sentCameraInfo = false;
-    this._sendCameraInfo(DEFAULT_STILL_WIDTH, DEFAULT_STILL_HEIGHT);
   };
 
   private _onCameraFrameAck = (msg: CameraFrameAckMessage): void => {
+    print(`FrameCaptureController: ack seq=${msg.seq} tag_detected=${msg.tag_detected} expected=${this._inFlightSeq}`);
     if (msg.seq === this._inFlightSeq) {
       this._inFlight = false;
       this._inFlightSeq = -1;
-    }
-    if (this._mode === "runtime" && msg.tag_detected) {
-      this._lastRuntimeTagAckTime = getTime();
+      // Idle-gap pacing: start the interval clock from ack receipt.
+      this._lastPipelineEndTime = getTime();
     }
   };
 
@@ -135,26 +149,24 @@ export class FrameCaptureController extends BaseScriptComponent {
     if (this._mode === "off" || !this.bridgeClient?.isConnected()) {
       return;
     }
+    // Hard guard: never start a new encode pipeline while one is still running.
+    if (this._pipelineBusy) {
+      return;
+    }
     const now = getTime();
     if (this._inFlight) {
       if (now - this._inFlightStart > IN_FLIGHT_TIMEOUT_S) {
         this._inFlight = false;
         this._inFlightSeq = -1;
+        this._lastPipelineEndTime = now;
       } else {
         return;
       }
     }
-    let interval: number;
-    if (this._mode === "setup") {
-      interval = SETUP_CAPTURE_INTERVAL_S;
-    } else if (
-      now - this._lastRuntimeTagAckTime <= RUNTIME_TRACKING_WINDOW_S
-    ) {
-      interval = RUNTIME_TRACKING_INTERVAL_S;
-    } else {
-      interval = RUNTIME_CAPTURE_INTERVAL_S;
-    }
-    if (now - this._lastCaptureTime < interval) {
+    const interval =
+      this._mode === "setup" ? SETUP_CAPTURE_INTERVAL_S : RUNTIME_CAPTURE_INTERVAL_S;
+    // Idle-gap pacing: measure from the end of the last pipeline, not its start.
+    if (now - this._lastPipelineEndTime < interval) {
       return;
     }
     if (this._mode === "runtime" && !this._isRobotPlausiblyInView()) {
@@ -163,8 +175,8 @@ export class FrameCaptureController extends BaseScriptComponent {
     if (this._headAngularVelocityDegS() > MAX_HEAD_ANGULAR_VEL_DEG_S) {
       return;
     }
-    this._lastCaptureTime = now;
-    this._captureStill();
+    // Signal the onNewFrame handler to grab the next available stream frame.
+    this._captureRequested = true;
   }
 
   private _isRobotPlausiblyInView(): boolean {
@@ -202,40 +214,77 @@ export class FrameCaptureController extends BaseScriptComponent {
     return (angleRad * 180) / Math.PI / dt;
   }
 
-  private async _captureStill(): Promise<void> {
+  private _ensureCameraStream(): void {
+    if (this._cameraTexture !== null) {
+      return;
+    }
+    const cameraRequest = CameraModule.createCameraRequest();
+    cameraRequest.cameraId = CameraModule.CameraId.Default_Color;
+    this._cameraTexture = this._cameraModule.requestCamera(cameraRequest);
+    this._cameraTextureProvider = this._cameraTexture.control as CameraTextureProvider;
+    this._frameRegistration = this._cameraTextureProvider.onNewFrame.add(
+      (frame: CameraFrame) => this._onNewFrame(frame),
+    );
+    print("FrameCaptureController: camera stream started");
+  }
+
+  private _stopCameraStream(): void {
+    // Spectacles has no explicit stopCamera; unsubscribe the handler and null refs.
+    // The underlying stream will be GC'd when no references remain.
+    if (this._frameRegistration !== null && this._cameraTextureProvider !== null) {
+      this._cameraTextureProvider.onNewFrame.remove(this._frameRegistration);
+      this._frameRegistration = null;
+    }
+    this._cameraTextureProvider = null;
+    this._cameraTexture = null;
+    print("FrameCaptureController: camera stream stopped");
+  }
+
+  private _onNewFrame(frame: CameraFrame): void {
+    // Always update the latest timestamp from the live stream.
+    // CameraFrame.timestampSeconds is the frame capture time in scene seconds.
+    const frameTs = frame.timestampSeconds;
+    this._latestFrameTs = typeof frameTs === "number" && frameTs > 0
+      ? frameTs
+      : getTime();
+
+    if (!this._captureRequested || this._pipelineBusy || this._mode === "off") {
+      return;
+    }
+    if (!this._cameraTexture || !this.bridgeClient?.isConnected()) {
+      return;
+    }
+
+    this._captureRequested = false;
+    this._captureFromStream(this._cameraTexture, this._latestFrameTs).catch((err) => {
+      print("FrameCaptureController: capture error: " + String(err));
+    });
+  }
+
+  private async _captureFromStream(texture: Texture, captureTs: number): Promise<void> {
     const robotId = getActiveRobotId();
     if (!robotId || !this._deviceCamera) {
       return;
     }
+    this._pipelineBusy = true;
     this._inFlight = true;
     this._inFlightStart = getTime();
     const seq = ++this._seq;
     this._inFlightSeq = seq;
+    const pipelineStart = getTime();
+    print(`FrameCaptureController: seq=${seq} capture start`);
     try {
-      const imageRequest = CameraModule.createImageRequest();
-      (imageRequest as { cameraId?: number }).cameraId =
-        CameraModule.CameraId.Default_Color;
-      const imageFrame = await this._cameraModule.requestImage(imageRequest);
-      const texture = imageFrame.texture;
-      if (!texture) {
-        throw new Error("No texture from still capture");
-      }
-      const captureTs = getTime();
       const pose = this._lookupPose(captureTs);
       if (!pose) {
         this._inFlight = false;
+        this._inFlightSeq = -1;
         return;
       }
-      const width = texture.getWidth();
-      const height = texture.getHeight();
-      if (
-        !this._sentCameraInfo ||
-        (this._sentResolution &&
-          (this._sentResolution.w !== width || this._sentResolution.h !== height))
-      ) {
-        this._sendCameraInfo(width, height);
-      }
       const camPose = this._cameraWorldPose(pose);
+      if (!this._sentCameraInfo) {
+        this._sendCameraInfo(texture);
+      }
+      print(`FrameCaptureController: seq=${seq} encode start`);
       const jpegBytes = await this._encodeJpeg(texture);
       const bytes = buildCameraFrameBytes({
         robotId,
@@ -247,18 +296,25 @@ export class FrameCaptureController extends BaseScriptComponent {
         jpegBytes,
       });
       this.bridgeClient.sendBinary(bytes);
+      const pipelineMs = Math.round((getTime() - pipelineStart) * 1000);
+      print(
+        `FrameCaptureController: seq=${seq} pipeline=${pipelineMs}ms jpeg=${jpegBytes.byteLength}B`,
+      );
     } catch (error) {
       this._inFlight = false;
       this._inFlightSeq = -1;
+      this._lastPipelineEndTime = getTime();
       const message = String(error);
       if (this._onCaptureError) {
         this._onCaptureError(message);
       }
       print("FrameCaptureController: capture failed: " + message);
+    } finally {
+      this._pipelineBusy = false;
     }
   }
 
-  private _sendCameraInfo(width: number, height: number): void {
+  private _sendCameraInfo(frameTexture: Texture): void {
     if (!this._deviceCamera || !this.bridgeClient) {
       return;
     }
@@ -266,18 +322,22 @@ export class FrameCaptureController extends BaseScriptComponent {
     if (!robotId) {
       return;
     }
-    const res = this._deviceCamera.resolution;
-    const sx = width / res.x;
-    const sy = height / res.y;
-    const fx = this._deviceCamera.focalLength.x * sx;
-    const fy = this._deviceCamera.focalLength.y * sy;
-    const cx = this._deviceCamera.principalPoint.x * sx;
-    const cy = this._deviceCamera.principalPoint.y * sy;
+    // Use the actual encoded frame dimensions so the camera matrix matches.
+    // For the stream, these equal DeviceCamera.resolution (scale factor = 1).
+    const frameWidth = frameTexture.getWidth();
+    const frameHeight = frameTexture.getHeight();
+    const nativeRes = this._deviceCamera.resolution;
+    const scaleX = nativeRes.x > 0 ? frameWidth / nativeRes.x : 1.0;
+    const scaleY = nativeRes.y > 0 ? frameHeight / nativeRes.y : 1.0;
+    const fx = this._deviceCamera.focalLength.x * scaleX;
+    const fy = this._deviceCamera.focalLength.y * scaleY;
+    const cx = this._deviceCamera.principalPoint.x * scaleX;
+    const cy = this._deviceCamera.principalPoint.y * scaleY;
     this.bridgeClient.send(
       buildCameraInfo({
         robotId,
-        width,
-        height,
+        width: frameWidth,
+        height: frameHeight,
         fx,
         fy,
         cx,
@@ -286,7 +346,7 @@ export class FrameCaptureController extends BaseScriptComponent {
       }),
     );
     this._sentCameraInfo = true;
-    this._sentResolution = { w: width, h: height };
+    print(`FrameCaptureController: camera_info sent ${frameWidth}x${frameHeight} scale=${scaleX.toFixed(3)}x${scaleY.toFixed(3)}`);
   }
 
   private _lookupPose(ts: number): PoseSample | null {

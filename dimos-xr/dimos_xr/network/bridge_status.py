@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+import threading
 from typing import Literal
 
 RegistrationMethod = Literal["marker", "manual"] | None
@@ -66,9 +66,7 @@ class BridgeStatusTracker:
         with self._lock:
             next_method = self._registration_method if method is None else method
             next_approximate = (
-                self._registration_approximate
-                if approximate is None
-                else approximate
+                self._registration_approximate if approximate is None else approximate
             )
             if (
                 self._registered == registered
@@ -106,5 +104,3 @@ class BridgeStatusTracker:
                 registration_method=self._registration_method,
                 registration_approximate=self._registration_approximate,
             )
-
-

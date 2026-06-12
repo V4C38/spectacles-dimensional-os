@@ -44,16 +44,12 @@ See [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md).
 
 After changing the AprilTag contract, regenerate robot-mounted assets: `python scripts/generate_marker.py` (from `dimos-xr/`).
 
-## Bridge error codes
+## Diagnostics and logging
 
-When introducing a new `Bridge Error (CODE)` surfaced in Lens setup, update **together in one change**:
-
-1. `dimos-xr/dimos_xr/error_codes.py` — add `BridgeError` + register in `BRIDGE_ERRORS`
-2. `dimos-xr/ERROR_CODES.md` — add table row and detailed section
-3. `lens-studio/Assets/Scripts/Setup/BridgeErrorCodes.ts` — mirror numeric code
-4. Wire the code in `CalibrationSession.ts` / `CalibrationPresenter.ts`
-
-See [`dimos-xr/ERROR_CODES.md`](dimos-xr/ERROR_CODES.md) for the full catalog.
+Alignment and bridge failures are logged to the Lens Studio Logger (`print`) and
+the bridge terminal / `dimos log -f`. `./start.sh` defaults to `DIMOS_LOG_LEVEL=DEBUG`.
+When changing protocol or alignment behavior, add or extend log lines at failure
+points rather than introducing UI error catalogs.
 
 ## Tests
 

@@ -14,14 +14,16 @@ import argparse
 import asyncio
 import json
 import logging
-import time
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
-import websockets
 from websockets.asyncio.server import serve
 
 from dimos_xr.tracking.tag_tracker import create_apriltag_detector, parse_camera_frame
+
+if TYPE_CHECKING:
+    import websockets
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger("frame_probe")
@@ -62,7 +64,7 @@ async def handler(websocket: websockets.ServerConnection) -> None:
             frame_age,
         )
         detector = create_apriltag_detector()
-        corners, ids, _ = detector.detectMarkers(gray)
+        _corners, ids, _ = detector.detectMarkers(gray)
         if ids is not None and len(ids) > 0:
             tag_id = int(ids[0][0])
             logger.info("  Detected tag id=%d", tag_id)

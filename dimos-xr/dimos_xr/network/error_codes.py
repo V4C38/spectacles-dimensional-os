@@ -25,8 +25,7 @@ MANUAL_POSE_INVALID = BridgeError(
 ALIGN_COMMIT_NO_CANDIDATE = BridgeError(
     code=409,
     description=(
-        "The bridge rejected align_commit because no valid calibration candidate "
-        "was available yet."
+        "The bridge rejected align_commit because no valid calibration candidate was available yet."
     ),
     fix="Wait for bridge confirmation or restart the robot and bridge (./start.sh).",
 )

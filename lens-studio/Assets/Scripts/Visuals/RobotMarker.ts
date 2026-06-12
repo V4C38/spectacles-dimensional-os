@@ -10,26 +10,13 @@ import { InteractableManipulation } from "SpectaclesInteractionKit.lspkg/Compone
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import { yawRotationFromWorldRotation } from "../Navigation/HeadingRotation";
 import { findText, findChildRecursive, requireChild } from "../UI/Shared/UICore";
+import { vec3Distance, quatAngularDistanceRad } from "../Shared/MathUtils";
 
 const ROBOT_UI_WORLD_UP_OFFSET_CM = 15.0;
 const POSITION_DEADBAND_CM = 0.75;
 const ROTATION_DEADBAND_RAD = (1.0 * Math.PI) / 180.0;
 const RUNTIME_POSE_SMOOTHING_RATE = 14.0;
-function vec3Distance(a: vec3, b: vec3): number {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  const dz = a.z - b.z;
-  return Math.sqrt(dx * dx + dy * dy + dz * dz);
-}
 
-function quatAngularDistanceRad(a: quat, b: quat): number {
-  const dot = Math.abs(a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z);
-  return 2.0 * Math.acos(Math.min(1.0, Math.max(-1.0, dot)));
-}
-
-// ================================================================
-// World-space robot marker with live pose, manual placement, and floating robot menu anchor.
-// ================================================================
 /** World-space robot marker with live pose, manual placement, and floating robot menu anchor. */
 @component
 export class RobotMarker extends BaseScriptComponent {
@@ -191,10 +178,6 @@ export class RobotMarker extends BaseScriptComponent {
       return null;
     }
     return this._rotation;
-  }
-
-  public getWorldRotation(): quat | null {
-    return this.getRotation();
   }
 
   public setRotation(rotation: quat): void {

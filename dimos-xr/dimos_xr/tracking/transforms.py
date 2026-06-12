@@ -10,33 +10,32 @@ therefore not a drop-in replacement here; OdomSample bookkeeping is retained.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
 import threading
-from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-import numpy as np
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.utils.transform_utils import (
     matrix_to_pose as _dimos_matrix_to_pose,
-)
-from dimos.utils.transform_utils import (
     normalize_angle,
-)
-from dimos.utils.transform_utils import (
     pose_to_matrix as _dimos_pose_to_matrix,
 )
-from numpy.typing import NDArray
+import numpy as np
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
 __all__ = [
-    "OdomSample",
     "Calibration",
+    "OdomSample",
     "gravity_level_transform",
-    "normalize_ground_pose",
-    "pose_to_matrix",
     "matrix_to_pose",
     "normalize_angle",
+    "normalize_ground_pose",
+    "pose_to_matrix",
 ]
 
 WORLD_UP_AXIS_INDEX = 1
@@ -188,9 +187,9 @@ class Calibration:
     Holds the ``T_world_odom`` transform that maps robot odom-frame coordinates
     into the XR AR world frame established by AprilTag alignment.  Every
     outbound LiDAR point, pose, and path is transformed through this object
-    before being sent to the Lens client.  The DimOS-facing mirror is
+    before being sent to the Lens client.      The DimOS-facing mirror is
     ``publish_static`` (TF publication) wired in
-    ``xr_bridge_module._finish_alignment``.
+    ``bridge.alignment.AlignmentController._finish_alignment``.
 
     Before registration: identity (odom coordinates pass through unchanged).
     After registration: ``T_world_odom`` is gravity-levelled and published.
@@ -253,7 +252,10 @@ class Calibration:
         if not np.all(np.isfinite(T_world)):
             _nan3: tuple[float, float, float] = (float("nan"), float("nan"), float("nan"))
             _nan4: tuple[float, float, float, float] = (
-                float("nan"), float("nan"), float("nan"), float("nan"),
+                float("nan"),
+                float("nan"),
+                float("nan"),
+                float("nan"),
             )
             return _nan3, _nan4
         return matrix_to_pose(T_world)

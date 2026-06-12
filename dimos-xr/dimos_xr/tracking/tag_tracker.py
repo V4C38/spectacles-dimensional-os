@@ -5,6 +5,9 @@ Phase 0 validation notes (device testing via scripts/frame_probe.py):
 - Intrinsics: scale DeviceCamera focal/principal by still/camera resolution ratio.
 - Reprojection gate: 3.0 px default; fallback 6.0 px if stills prove non-rectified.
 - JPEG size: expect 0.3-1.5 MB at IntermediateQuality over binary WS.
+- Serialization: the Lens must keep at most one requestImage + encode pipeline
+  in flight at a time (_pipelineBusy guard in FrameCaptureController). Overlapping
+  stills at 3200x2400 exhaust Lens memory.
 
 DimOS fiducial delegation note:
 Detection and PnP pose estimation here deliberately does NOT delegate to
@@ -21,28 +24,34 @@ implementation) to keep the two in sync.
 
 from __future__ import annotations
 
+from collections import deque
+from dataclasses import dataclass
 import json
 import math
 import struct
 import threading
 import time
-from collections import deque
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cv2
-import numpy as np
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.perception.fiducial.marker_tf_module import (
     camera_info_to_cv_matrices,
     create_aruco_detector,
     estimate_marker_pose,
 )
+from dimos.utils.logging_config import setup_logger
 from dimos.utils.transform_utils import normalize_angle
-from numpy.typing import NDArray
+import numpy as np
 
 from dimos_xr.tracking.transforms import OdomSample, gravity_level_transform, pose_to_matrix
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from numpy.typing import NDArray
+
+logger = setup_logger()
 
 DEFAULT_MARKER_ID: int = 0
 DEFAULT_APRILTAG_DICT: str = "DICT_APRILTAG_36h11"
@@ -186,12 +195,12 @@ def _yaw_from_T(T: NDArray[np.float64]) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Alignment-candidate cluster helpers (moved from xr_bridge_module)
+# Alignment-candidate cluster helpers (used by bridge.alignment.AlignmentController)
 # ---------------------------------------------------------------------------
 
 ALIGNMENT_CLUSTER_WINDOW: int = 12
-ALIGNMENT_CLUSTER_MIN_SAMPLES: int = 8
-ALIGNMENT_CLUSTER_TARGET_SAMPLES: int = 8
+ALIGNMENT_CLUSTER_MIN_SAMPLES: int = 5
+ALIGNMENT_CLUSTER_TARGET_SAMPLES: int = 5
 ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M: float = 0.05
 ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD: float = math.radians(3.0)
 
@@ -242,14 +251,20 @@ def score_alignment_cluster(
             ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M,
             ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD,
         )
-    mean_translation_error = sum(
-        _candidate_translation_distance_m(sample.T_world_odom, candidate.T_world_odom)
-        for sample in cluster
-    ) / cluster_size
-    mean_yaw_error = sum(
-        _candidate_yaw_distance_rad(sample.T_world_odom, candidate.T_world_odom)
-        for sample in cluster
-    ) / cluster_size
+    mean_translation_error = (
+        sum(
+            _candidate_translation_distance_m(sample.T_world_odom, candidate.T_world_odom)
+            for sample in cluster
+        )
+        / cluster_size
+    )
+    mean_yaw_error = (
+        sum(
+            _candidate_yaw_distance_rad(sample.T_world_odom, candidate.T_world_odom)
+            for sample in cluster
+        )
+        / cluster_size
+    )
     translation_score = max(
         0.0,
         1.0 - mean_translation_error / ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M,
@@ -323,9 +338,7 @@ def average_cluster_transform(
     mean_yaw = _circular_mean_rad(yaws)
     mean_translation = np.mean(translations, axis=0)
     T_avg = _matrix_from_yaw_and_translation(mean_yaw, mean_translation)
-    yaw_spread = (
-        max(abs(normalize_angle(yaw - mean_yaw)) for yaw in yaws) if len(yaws) > 1 else 0.0
-    )
+    yaw_spread = max(abs(normalize_angle(yaw - mean_yaw)) for yaw in yaws) if len(yaws) > 1 else 0.0
     trans_spread = (
         float(np.max(np.linalg.norm(translations - mean_translation, axis=1)))
         if len(translations) > 1
@@ -481,12 +494,22 @@ class TagTracker:
             mounts = dict(self._mounts)
 
         if camera_info is None:
+            logger.warning("Tag frame skipped: no camera intrinsics yet", seq=header.get("seq"))
             return FrameResult(False, [], None, 0)
         if odom is None:
+            logger.info(
+                "Tag frame skipped: no odom at capture time",
+                seq=header.get("seq"),
+            )
             return FrameResult(False, [], None, 0)
 
         gray = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_GRAYSCALE)
         if gray is None:
+            logger.warning(
+                "Tag frame JPEG decode failed",
+                seq=header.get("seq"),
+                jpeg_bytes=len(jpeg),
+            )
             return FrameResult(False, [], None, 0)
 
         camera_matrix, dist_coeffs = camera_info_to_cv_matrices(camera_info)
@@ -495,7 +518,15 @@ class TagTracker:
             with self._lock:
                 self._last_tag_detected = False
                 self._last_tag_ids = []
+            logger.info("Tag frame: no markers detected", seq=header.get("seq"))
             return FrameResult(False, [], None, 0)
+
+        detected_tag_ids = [int(tag_id_arr[0]) for tag_id_arr in ids]
+        logger.info(
+            "Tag frame: markers detected",
+            seq=header.get("seq"),
+            tag_ids=detected_tag_ids,
+        )
 
         T_world_glcam = pose_to_matrix(
             tuple(header["cam_pos"]),
@@ -555,9 +586,7 @@ class TagTracker:
                 T_candidate = gravity_level_transform(T_candidate)
                 implied_base = T_candidate @ T_odom_base
                 committed_base = T_committed @ T_odom_base
-                innov = float(
-                    np.linalg.norm(implied_base[:3, 3] - committed_base[:3, 3])
-                )
+                innov = float(np.linalg.norm(implied_base[:3, 3] - committed_base[:3, 3]))
                 if innov > self._config.innovation_gate_m:
                     with self._lock:
                         recent = list(self._observations)[-self._config.relocalize_consecutive :]
@@ -566,8 +595,7 @@ class TagTracker:
                     spread = max(
                         float(
                             np.linalg.norm(
-                                np.array(recent[i].p_world_tag)
-                                - np.array(recent[j].p_world_tag)
+                                np.array(recent[i].p_world_tag) - np.array(recent[j].p_world_tag)
                             )
                         )
                         for i in range(len(recent))
@@ -589,9 +617,7 @@ class TagTracker:
             with self._lock:
                 self._prune_old(recv_mono)
                 self._observations.append(obs)
-                orient_candidate = gravity_level_transform(
-                    T_world_tag @ np.linalg.inv(T_odom_tag)
-                )
+                orient_candidate = gravity_level_transform(T_world_tag @ np.linalg.inv(T_odom_tag))
                 self._orientation_candidates.append(orient_candidate)
                 if len(self._orientation_candidates) > self._config.window_max_obs:
                     self._orientation_candidates = self._orientation_candidates[
@@ -701,12 +727,8 @@ def average_cluster_transform_from_matrices(
     mean_yaw = math.atan2(sin_sum, cos_sum)
     translations = np.array([T[:3, 3] for T in cluster])
     mean_t = translations.mean(axis=0)
-    T_avg = build_T_world_odom(
-        mean_yaw, (float(mean_t[0]), float(mean_t[1]), float(mean_t[2]))
-    )
-    yaw_spread = max(
-        abs(math.atan2(math.sin(y - mean_yaw), math.cos(y - mean_yaw))) for y in yaws
-    )
+    T_avg = build_T_world_odom(mean_yaw, (float(mean_t[0]), float(mean_t[1]), float(mean_t[2])))
+    yaw_spread = max(abs(math.atan2(math.sin(y - mean_yaw), math.cos(y - mean_yaw))) for y in yaws)
     trans_spread = (
         float(np.max(np.linalg.norm(translations - mean_t, axis=1)))
         if len(translations) > 1

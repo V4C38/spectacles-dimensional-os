@@ -8,16 +8,21 @@ delegates to these helpers from its ``handle_xr_*`` stream methods.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import numpy as np
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.nav_msgs.Path import Path
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 
-from dimos_xr.tracking.filters import LidarFilter, subsample_points_near_robot
 from dimos_xr.network.protocol import encode_lidar, encode_path, encode_path_preview, encode_pose
-from dimos_xr.tracking.transforms import Calibration, OdomSample
+from dimos_xr.tracking.filters import LidarFilter, subsample_points_near_robot
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+    from dimos.msgs.nav_msgs.Path import Path
+    from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+
+    from dimos_xr.tracking.transforms import Calibration, OdomSample
 
 LIDAR_PAYLOAD_LOG_INTERVAL_S: float = 5.0
 DROPPED_POSE_LOG_INTERVAL_S: float = 5.0

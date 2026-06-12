@@ -15,12 +15,40 @@ export interface WizardConnectionCallbacks {
 export class WizardConnectionController {
   private _operationId = 0;
 
+  // BUG-2: cached retry event (created once in constructor, re-armed per retry).
+  private readonly _retryEvent: DelayedCallbackEvent;
+  private _pendingRetryOpId = 0;
+  private _pendingRetryIp = "";
+  private _pendingRetryCallbacks: WizardConnectionCallbacks | null = null;
+
   constructor(
     private readonly _owner: BaseScriptComponent,
     private readonly _dimosManager: DimosManager,
     private readonly _isConnectStepActive: () => boolean,
     private readonly _log: (message: string) => void,
-  ) {}
+  ) {
+    const retryEv = this._owner.createEvent(
+      "DelayedCallbackEvent",
+    ) as DelayedCallbackEvent;
+    retryEv.bind(() => {
+      if (
+        this._pendingRetryOpId !== this._operationId ||
+        !this._isConnectStepActive()
+      ) {
+        return;
+      }
+      this._dimosManager.setBaseUrl(this._pendingRetryIp);
+      this._dimosManager.checkConnection().then((ok) => {
+        this._handleConnectionResult(
+          this._pendingRetryOpId,
+          this._pendingRetryIp,
+          ok,
+          this._pendingRetryCallbacks!,
+        );
+      });
+    });
+    this._retryEvent = retryEv;
+  }
 
   public invalidatePending(): void {
     this._operationId++;
@@ -90,21 +118,10 @@ export class WizardConnectionController {
     ip: string,
     callbacks: WizardConnectionCallbacks,
   ): void {
-    const retry = this._owner.createEvent(
-      "DelayedCallbackEvent",
-    ) as DelayedCallbackEvent;
-
-    retry.bind(() => {
-      if (opId !== this._operationId || !this._isConnectStepActive()) {
-        return;
-      }
-
-      this._dimosManager.setBaseUrl(ip);
-      this._dimosManager.checkConnection().then((ok) => {
-        this._handleConnectionResult(opId, ip, ok, callbacks);
-      });
-    });
-
-    retry.reset(2.0);
+    // BUG-2: rearm the single cached retry event (no new event object per retry).
+    this._pendingRetryOpId = opId;
+    this._pendingRetryIp = ip;
+    this._pendingRetryCallbacks = callbacks;
+    this._retryEvent.reset(2.0);
   }
 }

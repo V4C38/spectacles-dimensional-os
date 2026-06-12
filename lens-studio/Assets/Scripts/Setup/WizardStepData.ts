@@ -26,7 +26,12 @@ export interface CalibrationViewState {
   statusMessage: string;
   statusColor: vec4;
   bridgeWaitStartedAt: number | null;
-  bridgeErrorCode: number | null;
+  /** Set when manual bridge wait times out; cleared on retry or candidate. */
+  manualBridgeWaitFailed: boolean;
+  /** Current stable-cluster size reported by the bridge (marker align only). */
+  clusterSize: number | null;
+  /** Minimum cluster size required to produce a candidate (bridge constant). */
+  requiredSamples: number | null;
 }
 
 export interface WizardFooterState {
@@ -36,6 +41,7 @@ export interface WizardFooterState {
   showPrev: boolean;
   showManual: boolean;
   manualLabel: string;
+  manualStyle: string;
   centerNext: boolean;
   widePrevOffset: boolean;
 }

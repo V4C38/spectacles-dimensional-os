@@ -6,6 +6,11 @@ import {
   setButtonStyle,
   SnapOS2Styles,
 } from "../UI/Shared/UIBuilders";
+import {
+  findChildRecursive,
+  requireChild,
+  requireFirstText,
+} from "../UI/Shared/UICore";
 import { yawRotationFromWorldRotation } from "./HeadingRotation";
 
 // ================================================================
@@ -22,7 +27,6 @@ const DOTS_YELLOW = new vec4(0.976471, 0.929412, 0.423529, 0.500008);
 
 export class NavigationMarkerView {
   private readonly root: SceneObject;
-  private readonly screenTextParent: SceneObject | null;
   private readonly headingRoot: SceneObject | null;
   private readonly rotationRoot: SceneObject | null;
   private readonly portalCircle: SceneObject;
@@ -49,23 +53,22 @@ export class NavigationMarkerView {
 
   constructor(root: SceneObject) {
     this.root = root;
-    this.screenTextParent = this._findChild(this.root, "ScreenTextParent");
-    this.headingRoot = this._findChild(this.root, "NavigationHeadingRoot");
-    this.rotationRoot = this._findChild(this.root, "RotationRoot");
+    this.headingRoot = findChildRecursive(this.root, "NavigationHeadingRoot");
+    this.rotationRoot = findChildRecursive(this.root, "RotationRoot");
     this.portalCircle =
-      this._findChild(this.root, "Circle_Seeking") ??
-      this._requireChild(this.root, "PortalCircle");
-    this.circleExecuting = this._findChild(this.root, "Circle_Executing");
-    this.confirmButtonObject = this._requireChild(this.root, "ConfirmButton");
+      findChildRecursive(this.root, "Circle_Seeking") ??
+      requireChild(this.root, "PortalCircle", "NavigationMarkerView");
+    this.circleExecuting = findChildRecursive(this.root, "Circle_Executing");
+    this.confirmButtonObject = requireChild(this.root, "ConfirmButton", "NavigationMarkerView");
     this.confirmButton = this.confirmButtonObject.getComponent(
       RoundButton.getTypeName(),
     ) as RoundButton;
-    this.confirmVfx = this._findChild(this.confirmButtonObject, "ButtonVFX_Confirm");
-    this.cancelVfx = this._findChild(this.confirmButtonObject, "ButtonVFX_Cancel");
-    this.confirmLabel = this._requireFirstText(this.confirmButtonObject);
-    this.arrow = this._findChild(this.root, "Arrow");
-    this.moveDirectionArrow = this._findChild(this.root, "MoveDirectionArrow");
-    this.dots = this._findChild(this.root, "Dots");
+    this.confirmVfx = findChildRecursive(this.confirmButtonObject, "ButtonVFX_Confirm");
+    this.cancelVfx = findChildRecursive(this.confirmButtonObject, "ButtonVFX_Cancel");
+    this.confirmLabel = requireFirstText(this.confirmButtonObject, "NavigationMarkerView");
+    this.arrow = findChildRecursive(this.root, "Arrow");
+    this.moveDirectionArrow = findChildRecursive(this.root, "MoveDirectionArrow");
+    this.dots = findChildRecursive(this.root, "Dots");
     if (this.moveDirectionArrow && !this.headingRoot) {
       throw new Error(
         "NavigationMarkerView: MoveDirectionArrow requires NavigationHeadingRoot",
@@ -93,10 +96,6 @@ export class NavigationMarkerView {
     this.setRotation(this._rotation);
   }
 
-  public get visualState(): NavigationMarkerVisualState {
-    return this._state;
-  }
-
   public get confirmActionButton(): RoundButton {
     return this.confirmButton;
   }
@@ -105,10 +104,6 @@ export class NavigationMarkerView {
     return this.portalCircle.getComponent(
       Interactable.getTypeName(),
     ) as Interactable | null;
-  }
-
-  public get floatingUiParent(): SceneObject {
-    return this.screenTextParent ?? this.rotationRoot ?? this.root;
   }
 
   public get rootSceneObject(): SceneObject {
@@ -203,27 +198,12 @@ export class NavigationMarkerView {
     this.setRotation(desiredRotation);
   }
 
-  public setFloatingUiWorldPosition(position: vec3): void {
-    if (!this.screenTextParent) {
-      return;
-    }
-    this.screenTextParent.getTransform().setWorldPosition(position);
-  }
-
   public resetCircleAnimation(): void {
     this.circleAnimation?.reset?.();
   }
 
   public setScanAnimationEnabled(enabled: boolean): void {
     this.circleAnimation?.enableScanAnimation?.(enabled);
-  }
-
-  public animateCircleOut(): void {
-    this.circleAnimation?.animateCircleOut?.(null);
-  }
-
-  public animateCircleIn(): void {
-    this.circleAnimation?.animateCircleIn?.(null);
   }
 
   public setConfirmVisible(visible: boolean): void {
@@ -351,52 +331,6 @@ export class NavigationMarkerView {
       worldPosition.y - anchorPosition.y,
       worldPosition.z - anchorPosition.z,
     );
-  }
-
-  private _requireChild(root: SceneObject, name: string): SceneObject {
-    const child = this._findChild(root, name);
-    if (!child) {
-      throw new Error(`NavigationMarkerView: Missing scene object ${name}`);
-    }
-    return child;
-  }
-
-  private _findChild(root: SceneObject, name: string): SceneObject | null {
-    for (let index = 0; index < root.getChildrenCount(); index++) {
-      const child = root.getChild(index);
-      if (child.name === name) {
-        return child;
-      }
-      const nested = this._findChild(child, name);
-      if (nested) {
-        return nested;
-      }
-    }
-    return null;
-  }
-
-  private _requireFirstText(root: SceneObject): Text {
-    const sceneObject = this._findFirstTextObject(root);
-    if (!sceneObject) {
-      throw new Error(
-        "NavigationMarkerView: ConfirmButton subtree is missing a text label",
-      );
-    }
-    return sceneObject.getComponent("Component.Text") as Text;
-  }
-
-  private _findFirstTextObject(root: SceneObject): SceneObject | null {
-    const text = root.getComponent("Component.Text") as Text | null;
-    if (text) {
-      return root;
-    }
-    for (let index = 0; index < root.getChildrenCount(); index++) {
-      const nested = this._findFirstTextObject(root.getChild(index));
-      if (nested) {
-        return nested;
-      }
-    }
-    return null;
   }
 
   private _findScriptComponent(

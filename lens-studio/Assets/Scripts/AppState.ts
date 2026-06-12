@@ -3,9 +3,6 @@
 // ================================================================
 
 import {
-  formatBridgeError,
-} from "./Setup/BridgeErrorCodes";
-import {
   COLOR_ERROR,
   COLOR_SUCCESS,
   COLOR_WHITE,
@@ -48,11 +45,11 @@ export function robotMarkerSteadyStatePresentation(
   if (state.operatingMode === "agent") {
     return { text: "", color: COLOR_WHITE };
   }
-  if (state.navRuntimeErrorCode !== null) {
-    return {
-      text: formatBridgeError(state.navRuntimeErrorCode),
-      color: COLOR_ERROR,
-    };
+  if (!state.robotRuntime.capabilities.nav.available) {
+    const reason = state.robotRuntime.capabilities.nav.reason;
+    if (reason) {
+      return { text: reason, color: COLOR_WHITE };
+    }
   }
   return {
     text: state.navigationMode === "executingGoal" ? "Navigating" : "Idle",
@@ -100,7 +97,6 @@ export interface DimosAppState {
   robotInteractionMode: RobotInteractionMode;
   navigationMode: NavigationMode;
   navigationOutcome: NavigationOutcome;
-  navRuntimeErrorCode: number | null;
   bridgeLinkState: BridgeLinkState;
   robotRuntime: RobotRuntimeState;
 }
@@ -223,6 +219,8 @@ export function createDefaultRobotRuntimeState(): RobotRuntimeState {
 
 export class AppState {
   private readonly _listeners: AppStateListener[] = [];
+  private _dispatching = false;
+  private _pendingPatches: Partial<DimosAppState>[] = [];
 
   constructor(private _state: DimosAppState) {}
 
@@ -231,14 +229,32 @@ export class AppState {
   }
 
   public update(patch: Partial<DimosAppState>): DimosAppState {
-    const nextState: DimosAppState = {
-      ...this._state,
-      ...patch,
-    };
-    this._state = nextState;
-    const snapshot = cloneState(nextState);
-    this._listeners.forEach((listener) => listener(snapshot));
-    return snapshot;
+    if (this._dispatching) {
+      // Re-entrant call from inside a listener — queue for after current dispatch.
+      this._pendingPatches.push(patch);
+      return cloneState(this._state);
+    }
+    this._state = { ...this._state, ...patch };
+    this._dispatching = true;
+    try {
+      const snapshot = cloneState(this._state);
+      for (const listener of this._listeners.slice()) {
+        try {
+          listener(snapshot);
+        } catch (e) {
+          print(`AppState listener error: ${e}`);
+        }
+      }
+    } finally {
+      this._dispatching = false;
+    }
+    while (this._pendingPatches.length > 0) {
+      const queued = this._pendingPatches.splice(0);
+      for (const pending of queued) {
+        this.update(pending);
+      }
+    }
+    return cloneState(this._state);
   }
 
   public subscribe(listener: AppStateListener): () => void {

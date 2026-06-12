@@ -8,12 +8,14 @@ near-robot weighting stage (which is XR-specific and has no DimOS equivalent).
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
-from typing import cast
+import time
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
-from numpy.typing import NDArray
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
 DEFAULT_ROBOT_BODY_HEIGHT_M: float = 0.55
 LIDAR_FLOOR_CLEARANCE_M: float = 0.005
@@ -103,7 +105,7 @@ def subsample_points_near_robot(
 
     XR-specific: preserves near-robot density so AR users see detailed floor
     geometry around the robot. Applies on top of PointCloud2.voxel_downsample
-    output (see xr_bridge_module.handle_xr_lidar).
+    output (see bridge.telemetry.TelemetryPublisher.publish_lidar).
     """
     if points_world.size == 0:
         return np.zeros((0, 3), dtype=np.float32)
@@ -122,9 +124,7 @@ def subsample_points_near_robot(
     horiz_dist = np.sqrt(dx * dx + dz * dz)
 
     scale = target_points / sum(budget for _, _, budget in _ANNULUS_RINGS)
-    ring_budgets = [
-        max(0, int(round(budget * scale))) for _, _, budget in _ANNULUS_RINGS
-    ]
+    ring_budgets = [max(0, round(budget * scale)) for _, _, budget in _ANNULUS_RINGS]
     remainder = target_points - sum(ring_budgets)
     ring_budgets[0] += remainder
 
@@ -162,7 +162,7 @@ def subsample_points_near_robot(
 
     if len(selected_indices) > target_points:
         chosen = cast(
-            NDArray[np.int64],
+            "NDArray[np.int64]",
             rng.choice(
                 np.asarray(selected_indices, dtype=np.int64),
                 size=target_points,

@@ -14,33 +14,55 @@ unitree = ["dimos[base,unitree]"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.8", "mypy>=1.13"]
 
 [tool.setuptools.packages.find]
+where = ["."]
 include = ["dimos_xr*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["dimos_xr", "scripts"]
 asyncio_mode = "auto"
 markers = [
     "integration: live WebSocket check against a running XR bridge",
 ]
-addopts = "-m 'not integration'"
+addopts = "--import-mode=importlib -m 'not integration'"
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+extend-select = ["E", "W", "F", "B", "UP", "N", "I", "C90", "A", "RUF", "TCH"]
+ignore = [
+    # Matching DimOS upstream ignore list (TC* break runtime type introspection; C901/N*/A*/RUF* are
+    # TODO fixes deferred until upstream alignment)
+    "A001", "A002", "A003", "B008", "B017", "B019", "B024", "B026", "B904", "C901",
+    "E402", "E501", "E721", "E722", "E741", "F811", "F821",
+    "N801", "N802", "N803", "N806", "N817", "N999",
+    "RUF003", "RUF009", "RUF012", "RUF034", "RUF043", "RUF059",
+    # TC* breaks runtime type checking (DimOS metaclass introspects annotations at class creation)
+    "TC001", "TC002", "TC003",
+]
 
-[tool.ruff.lint.per-file-ignores]
-"tests/*" = ["B011"]
+[tool.ruff.format]
+line-ending = "lf"
+
+[tool.ruff.lint.isort]
+known-first-party = ["dimos_xr"]
+combine-as-imports = true
+force-sort-within-sections = true
+
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = ["dimos.core.module.Module"]
 
 [tool.mypy]
 python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
+warn_unused_ignores = false
 disallow_untyped_defs = true
 strict = true
-packages = ["dimos_xr"]
+files = ["dimos_xr"]
+explicit_package_bases = true
+exclude = ".*/test_."
 
 # DimOS, cv2, dimos_lcm, unitree_webrtc_connect, websockets ship without
 # py.typed markers or stubs; they are genuinely untyped dependencies.
@@ -60,7 +82,7 @@ ignore_missing_imports = true
 module = [
     "dimos_xr.adapters.go2",
     "dimos_xr.adapters.g1",
-    "dimos_xr.xr_bridge_module",
+    "dimos_xr.bridge.module",
     "dimos_xr.preview_planner",
 ]
 disallow_untyped_decorators = false

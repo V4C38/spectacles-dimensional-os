@@ -1,24 +1,16 @@
 import { SnapOS2Styles } from "../UI/Shared/UIBuilders";
 import {
   COLOR_ERROR,
-  COLOR_MUTED,
   COLOR_SUCCESS,
-  COLOR_WARN,
   COLOR_WHITE,
 } from "../UI/Shared/UICore";
 import {
-  AlignmentMode,
   CalibrationPhase,
   CalibrationViewState,
   WizardFooterState,
   WizardStep,
 } from "./WizardStepData";
 import { AlignStatusMessage } from "../Network/Protocol";
-import {
-  BridgeErrorCode,
-  formatBridgeError,
-  formatBridgeErrorFix,
-} from "./BridgeErrorCodes";
 
 // ================================================================
 /** Pure functions mapping AlignStatusMessage into wizard display and footer state. */
@@ -32,6 +24,7 @@ export interface CalibrationDisplayModel {
   statusText: string;
   statusColor: vec4;
   detailText: string;
+  detailColor: vec4;
 }
 
 const EMPTY_DISPLAY: CalibrationDisplayModel = {
@@ -40,7 +33,52 @@ const EMPTY_DISPLAY: CalibrationDisplayModel = {
   statusText: "",
   statusColor: COLOR_WHITE,
   detailText: "",
+  detailColor: COLOR_WHITE,
 };
+
+const PROGRESS_BAR_WIDTH = 18;
+
+export function buildAsciiProgressBar(pct: number, width: number = PROGRESS_BAR_WIDTH): string {
+  const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+  const filled = Math.round((clamped / 100) * width);
+  const empty = Math.max(0, width - filled);
+  return `[${"█".repeat(filled)}${"░".repeat(empty)}] ${clamped}%`;
+}
+
+export function computeAlignmentProgressPct(state: CalibrationViewState): number {
+  if (hasCalibrationCandidate(state) || state.phase === "complete") {
+    return 100;
+  }
+  if (
+    state.clusterSize !== null &&
+    state.requiredSamples !== null &&
+    state.requiredSamples > 0
+  ) {
+    return Math.min(
+      100,
+      Math.round((100 * state.clusterSize) / state.requiredSamples),
+    );
+  }
+  return 0;
+}
+
+function buildTagVisibilityStatus(tracking: boolean): { text: string; color: vec4 } {
+  return tracking
+    ? { text: "✅  Tag visible", color: COLOR_SUCCESS }
+    : { text: "❌  Tag not visible", color: COLOR_ERROR };
+}
+
+function buildAutoAlignmentDisplay(state: CalibrationViewState): CalibrationDisplayModel {
+  const tag = buildTagVisibilityStatus(state.spectaclesTracking);
+  const pct = computeAlignmentProgressPct(state);
+  return {
+    ...EMPTY_DISPLAY,
+    statusText: tag.text,
+    statusColor: tag.color,
+    detailText: buildAsciiProgressBar(pct),
+    detailColor: COLOR_WHITE,
+  };
+}
 
 export function createCalibrationViewState(): CalibrationViewState {
   return {
@@ -56,7 +94,9 @@ export function createCalibrationViewState(): CalibrationViewState {
     statusMessage: "",
     statusColor: COLOR_WHITE,
     bridgeWaitStartedAt: null,
-    bridgeErrorCode: null,
+    manualBridgeWaitFailed: false,
+    clusterSize: null,
+    requiredSamples: null,
   };
 }
 
@@ -67,6 +107,8 @@ export function createManualCalibrationState(
     ...createCalibrationViewState(),
     mode: "manual",
     phase,
+    clusterSize: null,
+    requiredSamples: null,
   };
 }
 
@@ -92,62 +134,16 @@ export function isManualBridgeWait(
     state.phase === "editing" &&
     !hasCalibrationCandidate(state) &&
     state.bridgeWaitStartedAt !== null &&
-    state.bridgeErrorCode === null
-  );
-}
-
-function markerVisibilityLabel(tracking: boolean): string {
-  return tracking ? "✅" : "❌";
-}
-
-function buildAutoProgressDetail(state: CalibrationViewState): string {
-  const bestLabel =
-    state.bestQuality !== null
-      ? `${Math.round(state.bestQuality * 100)}%`
-      : "none yet";
-  const baselineLabel =
-    state.baselineM !== null
-      ? `${Math.round(state.baselineM * 100)} cm`
-      : "—";
-  const msgLine = state.bridgeMessage ? `\n${state.bridgeMessage}` : "";
-  return (
-    `Tag: ${markerVisibilityLabel(state.spectaclesTracking)}\n` +
-    `Samples: ${state.observationCount}  Baseline: ${baselineLabel}\n` +
-    `Best: ${bestLabel}` +
-    msgLine
+    !state.manualBridgeWaitFailed
   );
 }
 
 export function buildCalibrationDisplay(
   state: CalibrationViewState,
-  hasBridgeConnection: boolean,
+  _hasBridgeConnection: boolean,
 ): CalibrationDisplayModel {
-  if (state.bridgeErrorCode !== null) {
-    const fix = formatBridgeErrorFix(state.bridgeErrorCode);
-    const errorLine = formatBridgeError(state.bridgeErrorCode);
-    return {
-      ...EMPTY_DISPLAY,
-      statusText: fix ? `${errorLine}\n${fix}` : errorLine,
-      statusColor: COLOR_ERROR,
-    };
-  }
-
-  if (isManualBridgeWait(state, hasBridgeConnection)) {
-    const elapsed = getTime() - (state.bridgeWaitStartedAt ?? getTime());
-    const secs = Math.max(1, Math.floor(elapsed));
-    return {
-      ...EMPTY_DISPLAY,
-      statusText: `Waiting for bridge… ${secs} s`,
-      statusColor: COLOR_WARN,
-    };
-  }
-
   if (state.mode === "auto") {
-    return {
-      ...EMPTY_DISPLAY,
-      statusText: buildAutoProgressDetail(state),
-      statusColor: COLOR_MUTED,
-    };
+    return buildAutoAlignmentDisplay(state);
   }
 
   return EMPTY_DISPLAY;
@@ -192,19 +188,10 @@ export function getWizardFooterState(
       calibrationState.mode === "manual"
         ? "Use marker align"
         : "Align manually",
+    manualStyle: SnapOS2Styles.PrimaryNeutral,
     centerNext: step === WizardStep.Start || step === WizardStep.Calibrate,
     widePrevOffset: step === WizardStep.Calibrate,
   };
-}
-
-function alignFailureErrorCode(message: string | undefined): BridgeErrorCode {
-  if (message && message.includes("No valid alignment")) {
-    return BridgeErrorCode.AlignCommitNoCandidate;
-  }
-  if (message && message.includes("No camera intrinsics")) {
-    return BridgeErrorCode.CameraInfoMissing;
-  }
-  return BridgeErrorCode.AlignFailed;
 }
 
 export function applyAlignStatusToCalibrationState(
@@ -224,20 +211,30 @@ export function applyAlignStatusToCalibrationState(
       shouldApplyDetectingBridgeCandidate && msg.best_quality !== undefined
         ? msg.best_quality
         : state.bestQuality,
+    // Guard: pendingCommit/complete phases must not be downgraded by a concurrent
+    // align_status. Only msg.state === "aligned" (→ complete) or "failed" (→ editing)
+    // may transition out of these terminal phases; those are handled below.
     phase:
-      shouldApplyDetectingBridgeCandidate && msg.has_candidate !== undefined
-        ? msg.has_candidate
-          ? "ready"
-          : "editing"
-        : state.phase,
+      state.phase === "pendingCommit" || state.phase === "complete"
+        ? state.phase
+        : shouldApplyDetectingBridgeCandidate && msg.has_candidate !== undefined
+          ? msg.has_candidate
+            ? "ready"
+            : "editing"
+          : state.phase,
     baselineM:
       msg.baseline_m !== undefined ? msg.baseline_m : state.baselineM,
     bridgeMessage: msg.message !== "" ? msg.message : state.bridgeMessage,
+    // Retain last-known cluster progress when the broadcast omits these fields
+    // (e.g. periodic heartbeats) to prevent flickering in the UI.
+    clusterSize: msg.cluster_size !== undefined ? msg.cluster_size : state.clusterSize,
+    requiredSamples:
+      msg.required_samples !== undefined ? msg.required_samples : state.requiredSamples,
   };
 
   if (shouldApplyDetectingBridgeCandidate && msg.has_candidate) {
     nextState.bridgeWaitStartedAt = null;
-    nextState.bridgeErrorCode = null;
+    nextState.manualBridgeWaitFailed = false;
   }
 
   if (state.mode === "auto") {
@@ -255,7 +252,7 @@ export function applyAlignStatusToCalibrationState(
       statusMessage: "",
       statusColor: COLOR_SUCCESS,
       bridgeWaitStartedAt: null,
-      bridgeErrorCode: null,
+      manualBridgeWaitFailed: false,
     };
   }
 
@@ -264,9 +261,9 @@ export function applyAlignStatusToCalibrationState(
       ...nextState,
       phase: "editing",
       statusMessage: "",
-      statusColor: COLOR_ERROR,
+      statusColor: COLOR_WHITE,
       bridgeWaitStartedAt: null,
-      bridgeErrorCode: alignFailureErrorCode(msg.message),
+      manualBridgeWaitFailed: false,
     };
   }
 
@@ -279,8 +276,4 @@ export function applyAlignStatusToCalibrationState(
     statusMessage: "",
     statusColor: hasCalibrationCandidate(nextState) ? COLOR_SUCCESS : COLOR_WHITE,
   };
-}
-
-export function calibrationModeLabel(mode: AlignmentMode): string {
-  return mode === "manual" ? "manual" : "auto";
 }

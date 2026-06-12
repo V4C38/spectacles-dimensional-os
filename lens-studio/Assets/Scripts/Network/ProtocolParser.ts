@@ -9,7 +9,6 @@ import {
   PathMessage,
   PathPreviewMessage,
   PoseMessage,
-  setActiveRobotId,
 } from "./ProtocolTypes";
 
 // ================================================================
@@ -205,7 +204,6 @@ function parseInboundObject(data: Record<string, unknown>): InboundMessage | nul
             typeof value.reason === "string" ? value.reason : undefined,
         };
       });
-      setActiveRobotId(hello.robot.robot_id);
       return hello;
     }
 
@@ -246,7 +244,12 @@ function parseInboundObject(data: Record<string, unknown>): InboundMessage | nul
       ) {
         msg.method = data.method;
       }
-      setActiveRobotId(msg.robot_id);
+      if (typeof data.cluster_size === "number") {
+        msg.cluster_size = data.cluster_size;
+      }
+      if (typeof data.required_samples === "number") {
+        msg.required_samples = data.required_samples;
+      }
       return msg;
     }
 
@@ -264,7 +267,6 @@ function parseInboundObject(data: Record<string, unknown>): InboundMessage | nul
       if (typeof data.quality === "number") {
         ack.quality = data.quality;
       }
-      setActiveRobotId(ack.robot_id);
       return ack;
     }
 
@@ -287,14 +289,11 @@ function parseInboundObject(data: Record<string, unknown>): InboundMessage | nul
       if (typeof data.registration_approximate === "boolean") {
         status.registration_approximate = data.registration_approximate;
       }
-      setActiveRobotId(status.robot_id);
       return status;
     }
 
     case "lidar": {
-      const msg = parseFlatPointMessage(data);
-      setActiveRobotId(msg.robot_id);
-      return msg;
+      return parseFlatPointMessage(data);
     }
 
     case "pose": {
@@ -310,7 +309,6 @@ function parseInboundObject(data: Record<string, unknown>): InboundMessage | nul
         position: parseVec3(data.position),
         orientation: [Number(q[0]), Number(q[1]), Number(q[2]), Number(q[3])],
       };
-      setActiveRobotId(msg.robot_id);
       return msg;
     }
 
@@ -322,7 +320,6 @@ function parseInboundObject(data: Record<string, unknown>): InboundMessage | nul
         frame: requireString(data, "frame"),
         waypoints: parsePoints(data.waypoints),
       };
-      setActiveRobotId(msg.robot_id);
       return msg;
     }
 
@@ -335,7 +332,6 @@ function parseInboundObject(data: Record<string, unknown>): InboundMessage | nul
         waypoints: parsePoints(data.waypoints),
         target: parseVec3(data.target),
       };
-      setActiveRobotId(msg.robot_id);
       return msg;
     }
 
@@ -363,7 +359,6 @@ function parseInboundObject(data: Record<string, unknown>): InboundMessage | nul
       if (typeof data.error_code === "number") {
         msg.error_code = data.error_code;
       }
-      setActiveRobotId(msg.robot_id);
       return msg;
     }
 

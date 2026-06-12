@@ -1,10 +1,11 @@
 import { RectangleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RectangleButton";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import { OperatingMode } from "../AppState";
-import { animateScaleTo, scaleIn, scaleOut } from "./Shared/UIAnimations";
+import { scaleIn, scaleOut } from "./Shared/UIAnimations";
 import { FONT_BUTTON } from "./Shared/UICore";
 import {
   applyCapabilityButtonPresentation,
+  bindHoverScale,
   bindToggleButton,
   configureButtonToggle,
   SnapOS2Styles,
@@ -43,8 +44,6 @@ export class RobotMenuView {
   private readonly navigationPlacementBtn: RectangleButton;
   private readonly manualModeMenu: SceneObject | null;
   private readonly agentModeMenu: SceneObject | null;
-  private readonly _emergencyStopBaseScale: vec3;
-  private readonly _emergencyStopHoverScale: vec3;
   private _navigationPlacementEnabled = false;
   private _operatingMode: OperatingMode = "manual";
 
@@ -80,15 +79,12 @@ export class RobotMenuView {
     this.toggleVisual = toggleObj.getComponent(
       "Component.RenderMeshVisual",
     ) as RenderMeshVisual;
-    this._emergencyStopBaseScale = this.stopObj.getTransform().getLocalScale();
-    this._emergencyStopHoverScale =
-      this._emergencyStopBaseScale.uniformScale(1.05);
     this.toggleBtn.onTriggerUp.add(() => this.onToggleRequested?.());
     this.stopBtn.onTriggerUp.add(() => {
       this.onStopRequested?.();
       setButtonToggleState(this.stopBtn, true);
     });
-    this._bindEmergencyStopHoverScale();
+    bindHoverScale(this.stopBtn, this.stopObj);
     bindToggleButton(
       this.navigationPlacementBtn,
       (enabled) => this.onNavigationPlacementRequested?.(enabled),
@@ -190,15 +186,6 @@ export class RobotMenuView {
     if (this.agentModeMenu) {
       this.agentModeMenu.enabled = mode === "agent";
     }
-  }
-
-  private _bindEmergencyStopHoverScale(): void {
-    this.stopBtn.onHoverEnter.add(() => {
-      animateScaleTo(this.stopObj, this._emergencyStopHoverScale);
-    });
-    this.stopBtn.onHoverExit.add(() => {
-      animateScaleTo(this.stopObj, this._emergencyStopBaseScale);
-    });
   }
 
   private _setToggleVisualSaturation(value: number): void {

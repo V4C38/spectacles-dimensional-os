@@ -3,6 +3,7 @@ import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/Rou
 import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
 import { SnapOS2Styles } from "SpectaclesUIKit.lspkg/Scripts/Themes/SnapOS-2.0/SnapOS2";
 import { FONT_BUTTON, Z_BUTTONS, Z_CONTENT } from "./UICore";
+import { animateScaleTo } from "./UIAnimations";
 
 // ================================================================
 /** SnapOS2 button/text factory helpers and toggle binding utilities. */
@@ -46,6 +47,16 @@ export function configureButtonToggle(
   toggleBtn._defaultToOn = defaultOn;
 }
 
+function buttonToggleState(btn: any): boolean | null {
+  if ("isOn" in btn && typeof btn.isOn === "boolean") {
+    return btn.isOn;
+  }
+  if ("_isOn" in btn && typeof btn._isOn === "boolean") {
+    return btn._isOn;
+  }
+  return null;
+}
+
 export function setButtonToggleState(
   btn: RectangleButton | null,
   enabled: boolean,
@@ -54,14 +65,41 @@ export function setButtonToggleState(
     return;
   }
   const toggleBtn = btn as any;
+  const current = buttonToggleState(toggleBtn);
   toggleBtn._defaultToOn = enabled;
-  if (typeof toggleBtn.toggle === "function") {
-    toggleBtn.toggle(enabled);
+  if (current === enabled) {
     return;
   }
   if ("isOn" in toggleBtn) {
     toggleBtn.isOn = enabled;
+    return;
   }
+  if ("_isOn" in toggleBtn) {
+    toggleBtn._isOn = enabled;
+    return;
+  }
+  if (typeof toggleBtn.toggle === "function") {
+    toggleBtn.toggle(enabled);
+  }
+}
+
+type ToggleButtonWithValueChange = RectangleButton & {
+  onValueChange?: { add: (cb: (value: number) => void) => void };
+};
+
+/** Bind a toggleable RectangleButton via onValueChange only (no onTriggerUp fallback). */
+export function bindToggleOnValueChange(
+  button: RectangleButton,
+  onChanged: (enabled: boolean) => void,
+): void {
+  const toggleButton = button as ToggleButtonWithValueChange;
+  if (
+    !toggleButton.onValueChange ||
+    typeof toggleButton.onValueChange.add !== "function"
+  ) {
+    throw new Error("bindToggleOnValueChange: button missing onValueChange");
+  }
+  toggleButton.onValueChange.add((value: number) => onChanged(value === 1));
 }
 
 export function setButtonEnabled(
@@ -227,12 +265,16 @@ export function createTextInput(
   width: number,
   height: number,
   position: vec3,
+  fontSize?: number,
 ): TextInputField {
   const obj = global.scene.createSceneObject(name);
   obj.setParent(parent);
   obj.getTransform().setLocalPosition(position);
   const field = obj.createComponent(TextInputField.getTypeName()) as TextInputField;
   field.size = new vec3(width, height, 0.5);
+  if (fontSize !== undefined) {
+    field.fontSize = fontSize;
+  }
   return field;
 }
 
@@ -251,4 +293,19 @@ export function setButtonLabelRect(
     -height / 2,
     height / 2,
   );
+}
+
+/**
+ * Bind a subtle hover scale animation to a button/sceneObject pair.
+ * Base scale is read once at bind time; the hover scale is `base * scale`.
+ */
+export function bindHoverScale(
+  button: RectangleButton | RoundButton,
+  sceneObject: SceneObject,
+  scale: number = 1.05,
+): void {
+  const baseScale = sceneObject.getTransform().getLocalScale();
+  const hoverScale = baseScale.uniformScale(scale);
+  button.onHoverEnter.add(() => animateScaleTo(sceneObject, hoverScale));
+  button.onHoverExit.add(() => animateScaleTo(sceneObject, baseScale));
 }

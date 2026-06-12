@@ -16,7 +16,6 @@ At a glance:
 - [`lens-studio/`](lens-studio/) contains the Spectacles Lens Studio project, setup flow, HUD, navigation interaction, and world-anchored visuals.
 - [`dimos-xr/`](dimos-xr/) contains the DimOS XR bridge package, `XRBridge`, the adapter module, and tests.
 - [`dimos-xr/PROTOCOL.md`](dimos-xr/PROTOCOL.md) is the cross-platform contract between the bridge and every XR client.
-- [`dimos-xr/ERROR_CODES.md`](dimos-xr/ERROR_CODES.md) documents setup `Bridge Error (CODE)` messages from the Lens wizard.
 
 ```mermaid
 flowchart LR
@@ -50,7 +49,7 @@ flowchart LR
    ./start.sh
    ```
 
-3. Open [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj) in Lens Studio, follow [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md), and push to device.
+3. Open [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj) in Lens Studio and push to device.
 
 4. In the Lens, go through **Connect -> Calibrate -> Complete**.
 
@@ -90,8 +89,7 @@ If the protocol changes, update these together in the same change:
 
 The Lens side is organized around three scene-entry scripts:
 
-- [`SetupWizard.ts`](lens-studio/Assets/Scripts/Setup/SetupWizard.ts) owns the connect-and-calibrate flow and hands off to runtime.
-- If calibrate shows **`Bridge Error (CODE)`**, see [`dimos-xr/ERROR_CODES.md`](dimos-xr/ERROR_CODES.md) for meaning and fixes.
+- [`SetupWizard.ts`](lens-studio/Assets/Scripts/Setup/SetupWizard.ts) owns the connect-and-calibrate flow and hands off to runtime. Check Lens Studio Logger output and `./start.sh` bridge logs when calibrate fails.
 - [`DimosManager.ts`](lens-studio/Assets/Scripts/DimosManager.ts) is the orchestration hub for bridge I/O, shared app state, robot marker state, LiDAR/path rendering, navigation placement, and manual-alignment fallback.
 - [`UIManager.ts`](lens-studio/Assets/Scripts/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
 
@@ -137,7 +135,7 @@ flowchart TB
 <summary>Scene setup pointers</summary>
 
 - Open the project from [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj).
-- Follow [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md) for scene wiring, authored object names, and `@input` references.
+- Scene wiring, authored object names, and `@input` references are documented inline in the script files via comments at lookup sites.
 - The main feature folders are:
 
   ```text
@@ -260,7 +258,7 @@ See [`dimos-xr/tests/README.md`](dimos-xr/tests/README.md) for the unit vs integ
 <details>
 <summary>Extension points</summary>
 
-- Tune lidar and rate limits in [`dimos-xr/dimos_xr/bridge_module.py`](dimos-xr/dimos_xr/bridge_module.py) via `XRBridgeConfig`.
+- Tune lidar and rate limits in [`dimos-xr/dimos_xr/bridge/config.py`](dimos-xr/dimos_xr/bridge/config.py) via `XRBridgeConfig`.
 - Add or change messages by updating the Python protocol, the protocol spec, and the Lens protocol modules together.
 - Keep `dimos-xr/dimos_xr/` platform-agnostic. Spectacles-specific code stays in [`lens-studio/`](lens-studio/); other XR clients should live in their own client folder or repo.
 

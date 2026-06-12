@@ -1,8 +1,7 @@
 import { FrameCaptureController } from "../Camera/FrameCaptureController";
 import { BridgeClient } from "../Network/BridgeClient";
 import { AlignStatusMessage } from "../Network/Protocol";
-
-const RECENT_DETECTION_WINDOW_S = 1.5;
+import { Signal } from "../Shared/SignalEmitter";
 
 @component
 export class TagAlignmentSession extends BaseScriptComponent {
@@ -12,39 +11,30 @@ export class TagAlignmentSession extends BaseScriptComponent {
   @input
   frameCapture: FrameCaptureController;
 
-  public onAlignStatus: ((msg: AlignStatusMessage) => void)[] = [];
+  public readonly onAlignStatus = new Signal<AlignStatusMessage>();
 
   private _active = false;
   private _awaitingCommit = false;
   private _bridgeSessionActive = false;
   private _bridgeAlignBound = false;
-  private _lastTagDetectedTime = 0;
 
   onAwake() {
-    this.onAlignStatus = [];
     this.createEvent("OnStartEvent").bind(() => this._bindBridgeAlignStatus());
-  }
-
-  public ensureEventHandlers(): void {
-    if (!this.onAlignStatus) {
-      this.onAlignStatus = [];
-    }
   }
 
   private _bindBridgeAlignStatus(): void {
     if (this._bridgeAlignBound || !this.bridgeClient) {
       return;
     }
-    this.bridgeClient.ensureEventHandlers();
-    this.bridgeClient.onAlignStatus.push(this._relayAlignStatus);
+    this.bridgeClient.onAlignStatus.add(this._relayAlignStatus);
     this._bridgeAlignBound = true;
   }
 
   private _relayAlignStatus = (msg: AlignStatusMessage): void => {
-    if (msg.tag_detected) {
-      this._lastTagDetectedTime = getTime();
-    }
     if (msg.state === "failed" && (this._active || this._awaitingCommit)) {
+      print(
+        `TagAlignmentSession: align_status failed "${msg.message || "unknown"}"`,
+      );
       this._active = false;
       this._awaitingCommit = false;
       this._bridgeSessionActive = false;
@@ -52,12 +42,8 @@ export class TagAlignmentSession extends BaseScriptComponent {
         this.frameCapture.setMode("off");
       }
     }
-    this.onAlignStatus.forEach((cb) => cb(msg));
+    this.onAlignStatus.emit(msg);
   };
-
-  public hasRecentDetection(): boolean {
-    return getTime() - this._lastTagDetectedTime <= RECENT_DETECTION_WINDOW_S;
-  }
 
   public start(): void {
     if (this._active) {
@@ -121,7 +107,6 @@ export class TagAlignmentSession extends BaseScriptComponent {
     return true;
   }
 
-  public setDebugMode(_enabled: boolean): void {}
-
   public setCalibrationGizmoEnabled(_enabled: boolean): void {}
+  // Intentional no-op: debug gizmo removed; kept to preserve caller wiring.
 }

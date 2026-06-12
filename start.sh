@@ -11,6 +11,7 @@
 #   DIMOS_PYTHON   Path to Python in your DimOS .venv (overrides auto-detect)
 #   ROBOT_IP       Pin a specific robot IP and skip discovery (or "fake" replay)
 #   LISTEN_HOST    WebSocket bind address (default 0.0.0.0)
+#   DIMOS_LOG_LEVEL  Log verbosity (default DEBUG; set INFO for quieter runs)
 #   DIMOS_CONFIGURE_SYSTEM=1  Enable interactive sysctl/ulimit prompts (off by default)
 
 set -euo pipefail
@@ -50,6 +51,7 @@ if [[ -z "${DIMOS_CONFIGURE_SYSTEM:-}" && -z "${CI:-}" ]]; then
   export CI=1
 fi
 export LISTEN_HOST="${LISTEN_HOST:-0.0.0.0}"
+export DIMOS_LOG_LEVEL="${DIMOS_LOG_LEVEL:-DEBUG}"
 
 # Ensure venv bin is on PATH so tools like `rerun` are discoverable by child processes.
 export PATH="$(dirname "${PYTHON}"):${PATH}"
@@ -187,11 +189,13 @@ fi
 export ROBOT_IP
 
 echo "Using Python: ${PYTHON}"
-echo "Blueprint:    ${BLUEPRINT}"
+echo "Blueprint:    ${SELECTED_BLUEPRINT}"
 echo "Stack:        ${STACK_LABEL}"
 echo "Equivalent:   ${EQUIVALENT}"
 echo "Robot IP:     ${ROBOT_IP}"
 echo "WebSocket:    ws://${LISTEN_HOST}:8787"
+echo "Log level:    ${DIMOS_LOG_LEVEL} (quieter: DIMOS_LOG_LEVEL=INFO ./start.sh)"
+echo "Logs:         stdout + ~/.local/state/dimos/logs/.../main.jsonl (dimos log -f)"
 print_blue_stdout "Spectacles:   enter ${LAN_IP} in the lens"
 echo ""
 echo "Ctrl+C to stop."

@@ -132,7 +132,9 @@ Alignment progress during calibration:
   "best_quality": 0.95,
   "has_candidate": true,
   "method": "tag",
-  "message": "Look at the robot-mounted tag"
+  "message": "Look at the robot-mounted tag",
+  "cluster_size": 3,
+  "required_samples": 5
 }
 ```
 
@@ -141,10 +143,16 @@ Fields:
 - `tag_detected`: bridge detected a configured robot-mounted tag in a recent frame
 - `observation_count`: observations in the sliding alignment window
 - `baseline_m`: max ground-plane separation between tag observations (meters)
+- `cluster_size` (optional): number of candidates in the current stable cluster; sent only during marker detection
+- `required_samples` (optional): minimum cluster size required before `has_candidate` becomes true
 
 ### `camera_frame_ack`
 
-Per-frame acknowledgement after the bridge processes a binary `camera_frame`:
+Per-frame acknowledgement after the bridge receives a binary `camera_frame`.
+The bridge acks **every** received frame, including frames it drops (busy
+processing a previous frame, stale `send_ts - ts`, or missing intrinsics) —
+dropped frames are acked with `tag_detected: false`. Clients rely on this to
+clear their single-flight capture state:
 
 ```json
 {
@@ -253,7 +261,7 @@ Navigation state updates:
 Optional fields:
 
 - `recovering`: when `true`, the bridge cleared a stuck goal and the client should return to a retryable placing state without treating it as a terminal failure
-- `error_code`: numeric XR bridge client error code when navigation is unavailable for the session (see [`ERROR_CODES.md`](ERROR_CODES.md))
+- `error_code`: optional numeric code when navigation is unavailable for the session (logged on the Lens; `505` = goal stalled)
 
 ## Inbound Messages
 
@@ -313,7 +321,7 @@ resolution change before binary frames):
 
 ### `camera_frame` (binary)
 
-JPEG still plus pose metadata. Wire format:
+JPEG camera frame plus pose metadata. Wire format:
 
 1. Magic `XRF1` (4 bytes)
 2. `header_len` uint32 little-endian
@@ -334,7 +342,7 @@ Header fields:
 }
 ```
 
-- `ts`: capture time in scene seconds (`getTime()` after image await)
+- `ts`: capture time in scene seconds (`imageFrame.timestampMillis / 1000`)
 - `send_ts`: scene time when the frame was enqueued for send
 - The bridge detects robot-mounted AprilTags in the JPEG and estimates
   `T_world_odom` continuously while an align session is active.

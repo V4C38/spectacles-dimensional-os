@@ -1,11 +1,13 @@
 import { BridgeClient } from "../Network/BridgeClient";
 import { RobotMarker } from "../Visuals/RobotMarker";
+import { cloneQuat, cloneVec3 } from "../Shared/MathUtils";
 
 // ================================================================
 /** Drives manual robot-marker placement and sends manual alignment poses over the bridge. */
 // ================================================================
 
 const MANUAL_MARKER_DOWN_CM = 35.0;
+const MANUAL_ALIGN_LOG_INTERVAL_S = 2.0;
 
 export interface ManualAlignmentPose {
   position: vec3;
@@ -19,8 +21,7 @@ export function manualMarkerPoseFromReference(
   return {
     position: new vec3(position.x, position.y - MANUAL_MARKER_DOWN_CM, position.z),
     // Pass the raw rotation; the bridge owns flattening when the pose is submitted.
-    // quat constructor is (w, x, y, z)
-    rotation: new quat(rotation.w, rotation.x, rotation.y, rotation.z),
+    rotation: cloneQuat(rotation),
   };
 }
 
@@ -29,49 +30,19 @@ export function manualMarkerPoseFromMarkerWorldPose(
   rotation: quat,
 ): ManualAlignmentPose {
   return {
-    position: new vec3(position.x, position.y, position.z),
-    // quat constructor is (w, x, y, z)
-    rotation: new quat(rotation.w, rotation.x, rotation.y, rotation.z),
+    position: cloneVec3(position),
+    rotation: cloneQuat(rotation),
   };
 }
 
 export class ManualAlignmentController {
-  private _manualPlacementMode = false;
+  private _lastCaptureLogTime = -1;
+  private _lastSubmitLogTime = -1;
 
   constructor(
     private readonly _bridgeClient: BridgeClient | null,
     private readonly _robotMarker: RobotMarker | null,
   ) {}
-
-  public get isManualPlacementMode(): boolean {
-    return this._manualPlacementMode;
-  }
-
-  public placeRobotMarkerInFrontOf(reference: SceneObject): void {
-    if (!reference) {
-      return;
-    }
-    const transform = reference.getTransform();
-    this.placeRobotMarkerPose(
-      manualMarkerPoseFromReference(
-        transform.getWorldPosition(),
-        transform.getWorldRotation(),
-      ),
-    );
-  }
-
-  public beginPlacement(reference: SceneObject): void {
-    if (!reference) {
-      return;
-    }
-    const transform = reference.getTransform();
-    this.beginPlacementPose(
-      manualMarkerPoseFromReference(
-        transform.getWorldPosition(),
-        transform.getWorldRotation(),
-      ),
-    );
-  }
 
   public placeRobotMarkerPose(pose: ManualAlignmentPose): void {
     if (!this._robotMarker) {
@@ -81,13 +52,10 @@ export class ManualAlignmentController {
   }
 
   public beginPlacementPose(pose: ManualAlignmentPose): void {
-    this._manualPlacementMode = true;
     this.placeRobotMarkerPose(pose);
   }
 
-  public cancelPlacement(): void {
-    this._manualPlacementMode = false;
-  }
+  public cancelPlacement(): void {}
 
   public startSession(hasBridgeConnection: boolean): boolean {
     if (!hasBridgeConnection) {
@@ -104,12 +72,18 @@ export class ManualAlignmentController {
     if (!hasBridgeConnection) {
       return true;
     }
-    return (
+    const sent =
       this._bridgeClient?.sendAlignManualPose(
         position,
         rotation,
-      ) ?? false
-    );
+      ) ?? false;
+    if (!sent) {
+      this._logThrottled(
+        "submit",
+        "ManualAlignmentController: align_manual_pose send failed (no robot id or socket closed)",
+      );
+    }
+    return sent;
   }
 
   public stopSession(hasBridgeConnection: boolean): void {
@@ -122,12 +96,31 @@ export class ManualAlignmentController {
     const position = this._robotMarker?.getWorldPosition() ?? null;
     const rotation = this._robotMarker?.getRotation() ?? null;
     if (!position || !rotation) {
+      const missing = !position ? "position" : "rotation";
+      this._logThrottled(
+        "capture",
+        `ManualAlignmentController: marker ${missing} unavailable`,
+      );
       return null;
     }
     return {
-      position: new vec3(position.x, position.y, position.z),
-      // quat constructor is (w, x, y, z)
-      rotation: new quat(rotation.w, rotation.x, rotation.y, rotation.z),
+      position: cloneVec3(position),
+      rotation: cloneQuat(rotation),
     };
+  }
+
+  private _logThrottled(kind: "capture" | "submit", message: string): void {
+    const now = getTime();
+    const lastTime =
+      kind === "capture" ? this._lastCaptureLogTime : this._lastSubmitLogTime;
+    if (lastTime >= 0 && now - lastTime < MANUAL_ALIGN_LOG_INTERVAL_S) {
+      return;
+    }
+    if (kind === "capture") {
+      this._lastCaptureLogTime = now;
+    } else {
+      this._lastSubmitLogTime = now;
+    }
+    print(message);
   }
 }
