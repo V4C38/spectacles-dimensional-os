@@ -56,11 +56,13 @@ def _sample_handshake() -> RobotHandshake:
 def test_encode_hello() -> None:
     msg = json.loads(encode_hello(_sample_handshake()))
     assert msg["type"] == "hello"
-    assert msg["protocol_version"] == 3
+    assert msg["protocol_version"] == 4
     assert msg["robot"]["robot_id"] == "unitree_go2"
-    assert msg["capabilities"] == DEFAULT_CAPABILITIES
-    assert msg["disabled_capabilities"] == ["emergency_stop"]
-    assert msg["capability_states"]["emergency_stop"]["available"] is False
+    assert isinstance(msg["capabilities"], dict)
+    assert msg["capabilities"]["lidar"]["available"] is True
+    assert msg["capabilities"]["emergency_stop"]["available"] is False
+    assert "disabled_capabilities" not in msg
+    assert "capability_states" not in msg
 
 
 def test_encode_hello_g1_tag_alignment_profile() -> None:
@@ -75,8 +77,8 @@ def test_encode_hello_g1_tag_alignment_profile() -> None:
     )
     msg = json.loads(encode_hello(handshake))
     assert msg["robot"]["robot_model"] == "unitree_g1"
-    assert msg["capability_states"]["align"]["available"] is True
-    assert msg["capability_states"]["align_manual"]["available"] is True
+    assert msg["capabilities"]["align"]["available"] is True
+    assert msg["capabilities"]["align_manual"]["available"] is True
     assert msg["robot"]["alignment_profile"]["method"] == "tag"
     assert msg["robot"]["alignment_profile"]["tag_total_size_m"] == 0.07
 
@@ -92,8 +94,7 @@ def test_encode_hello_g1_tag_alignment_disabled() -> None:
         marker_align_available=False,
     )
     msg = json.loads(encode_hello(handshake))
-    assert msg["capability_states"]["align"]["available"] is False
-    assert "align" in msg["disabled_capabilities"]
+    assert msg["capabilities"]["align"]["available"] is False
 
 
 def test_robot_id_mismatch_rejected() -> None:
@@ -214,9 +215,19 @@ def test_encode_lidar_compact_json() -> None:
 
 def test_align_messages_decode() -> None:
     start = decode_inbound(
-        json.dumps({"type": "align_start", "ts": 1.0, "robot_id": "unitree_go2"})
+        json.dumps(
+            {"type": "align_start", "ts": 1.0, "robot_id": "unitree_go2", "method": "tag"}
+        )
     )
     assert isinstance(start, AlignStartMessage)
+    assert start.method == "tag"
+    start_manual = decode_inbound(
+        json.dumps(
+            {"type": "align_start", "ts": 1.0, "robot_id": "unitree_go2", "method": "manual"}
+        )
+    )
+    assert isinstance(start_manual, AlignStartMessage)
+    assert start_manual.method == "manual"
     stop = decode_inbound(json.dumps({"type": "align_stop", "ts": 2.0, "robot_id": "unitree_go2"}))
     assert isinstance(stop, AlignStopMessage)
     camera_info = decode_inbound(
@@ -254,25 +265,57 @@ def test_align_messages_decode() -> None:
     assert manual_pose.position == (1.0, 0.0, 2.0)
 
 
+def test_align_start_missing_method_rejected() -> None:
+    with pytest.raises(ValueError, match="Missing required field"):
+        decode_inbound(
+            json.dumps({"type": "align_start", "ts": 1.0, "robot_id": "unitree_go2"})
+        )
+
+
+def test_align_start_invalid_method_rejected() -> None:
+    with pytest.raises(ValueError, match="must be 'tag' or 'manual'"):
+        decode_inbound(
+            json.dumps(
+                {"type": "align_start", "ts": 1.0, "robot_id": "unitree_go2", "method": "bad"}
+            )
+        )
+
+
 def test_encode_align_status() -> None:
     raw = json.loads(
         encode_align_status(
             robot_id="unitree_go2",
-            state="aligned",
-            tag_detected=True,
-            observation_count=8,
-            baseline_m=0.45,
-            quality=0.9,
             method="tag",
-            message="ok",
+            state="detecting",
+            progress=60,
+            message="Tracking tag — hold steady (3/5)",
+            tag_visible=True,
         )
     )
     assert raw["type"] == "align_status"
-    assert raw["state"] == "aligned"
-    assert raw["quality"] == 0.9
     assert raw["method"] == "tag"
-    assert raw["tag_detected"] is True
-    assert raw["observation_count"] == 8
+    assert raw["state"] == "detecting"
+    assert raw["progress"] == 60
+    assert raw["tag_visible"] is True
+    assert "tag_detected" not in raw
+    assert "observation_count" not in raw
+    assert "quality" not in raw
+
+
+def test_encode_align_status_manual() -> None:
+    raw = json.loads(
+        encode_align_status(
+            robot_id="unitree_go2",
+            method="manual",
+            state="ready",
+            progress=100,
+            message="Candidate ready",
+        )
+    )
+    assert raw["method"] == "manual"
+    assert raw["state"] == "ready"
+    assert raw["progress"] == 100
+    assert "tag_visible" not in raw
 
 
 def test_encode_camera_frame_ack() -> None:
@@ -280,14 +323,13 @@ def test_encode_camera_frame_ack() -> None:
         encode_camera_frame_ack(
             robot_id="unitree_go2",
             seq=9,
-            tag_detected=True,
-            tag_ids=[0],
-            quality=0.75,
         )
     )
     assert raw["type"] == "camera_frame_ack"
     assert raw["seq"] == 9
-    assert raw["tag_ids"] == [0]
+    assert "tag_detected" not in raw
+    assert "tag_ids" not in raw
+    assert "quality" not in raw
 
 
 def test_encode_bridge_status() -> None:
@@ -304,7 +346,24 @@ def test_encode_bridge_status() -> None:
     assert raw["type"] == "bridge_status"
     assert raw["robot_id"] == "unitree_go2"
     assert raw["robot_connected"] is True
-    assert "registration_method" not in raw
+    assert "registration_method" in raw
+    assert raw["registration_method"] is None
+    assert raw["registration_approximate"] is False
+
+
+def test_encode_bridge_status_with_method() -> None:
+    snap = BridgeStatusSnapshot(
+        robot_id="unitree_go2",
+        robot_connected=True,
+        streams_active=True,
+        registered=True,
+        reconnecting=False,
+        registration_method="tag",
+        registration_approximate=False,
+    )
+    raw = json.loads(encode_bridge_status(snap, ts=1.0))
+    assert raw["registration_method"] == "tag"
+    assert raw["registration_approximate"] is False
 
 
 def test_get_status_decode() -> None:

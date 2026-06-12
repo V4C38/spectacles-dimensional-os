@@ -10,9 +10,8 @@ At a glance:
 - `dimos_xr/bridge/`: `XRBridge` and collaborator classes (alignment, navigation, preview, telemetry, odom buffer, status service)
 - `dimos_xr/adapters/`: `XRRobotAdapterModule`, the robot/runtime adapter layer
 - `dimos_xr/network/protocol.py`: the XR WebSocket contract implementation
-- `blueprints/dimos_xr.py`: monorepo entrypoint used by `start.sh`
+- `dimos_xr/blueprints.py`: monorepo entrypoint used by `start.sh`
 - `PROTOCOL.md`: cross-client protocol documentation
-- `tests/`: focused bridge unit and integration tests
 
 <details>
 <summary>Start</summary>
@@ -20,7 +19,7 @@ At a glance:
 Use the DimOS `.venv`, then run:
 
 ```bash
-cd /path/to/spectacles-dimensional-os/dimos-xr
+cd /path/to/spectacles-dimensional-os
 ./start.sh
 ```
 
@@ -101,14 +100,13 @@ dependency set first:
 /path/to/dimos/.venv/bin/pip3 install "unitree-sdk2py-dimos>=1.0.2"
 ```
 
-For the integration test:
+For the integration test, start the blueprint first, then run:
 
 ```bash
-DIMOS_XR_STACK=unitree-go2 /path/to/dimos/.venv/bin/python3 blueprints/dimos_xr.py
-/path/to/dimos/.venv/bin/python3 -m pytest tests/test_ws_integration.py -m integration
+/path/to/dimos/.venv/bin/python3 -m pytest dimos_xr/network/test_ws_integration.py -m integration
 ```
 
-See [`tests/README.md`](tests/README.md) for the unit vs integration test split.
+Tests are colocated with their modules under `dimos_xr/` rather than in a top-level `tests/` directory. Unit tests run without any external services; the integration test requires a live bridge WebSocket on port 8787.
 
 </details>
 
@@ -117,8 +115,8 @@ See [`tests/README.md`](tests/README.md) for the unit vs integration test split.
 
 If the XR protocol changes, update these together:
 
-- `dimos-xr/dimos_xr/protocol.py`
-- `dimos-xr/PROTOCOL.md`
+- `dimos_xr/network/protocol.py`
+- `PROTOCOL.md`
 - `lens-studio/Assets/Scripts/Network/ProtocolTypes.ts`
 - `lens-studio/Assets/Scripts/Network/Protocol.ts`
 - `lens-studio/Assets/Scripts/Network/ProtocolParser.ts`

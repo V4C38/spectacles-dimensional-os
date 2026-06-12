@@ -38,14 +38,14 @@ flowchart LR
 1. Install and test the Python side:
 
    ```bash
-   cd /path/to/spectacles-dimensional-os/dimos-xr
+   cd /path/to/spectacles-dimensional-os
    ./setup.sh
    ```
 
 2. Start the XR bridge:
 
    ```bash
-   cd /path/to/spectacles-dimensional-os/dimos-xr
+   cd /path/to/spectacles-dimensional-os
    ./start.sh
    ```
 
@@ -77,11 +77,9 @@ Print `apriltag_robot_a4.pdf` or `apriltag_robot_letter.pdf` from `dimos-xr/asse
 The Mac is always the WebSocket **server** and AR devices are **clients**. The bridge sends `hello` and `bridge_status` on connect, then streams messages such as `pose`, `lidar`, `path`, `nav_status`, and `align_status`. Clients send messages such as `align_*`, `nav_goal`, `cancel_goal`, and `emergency_stop`.
 
 If the protocol changes, update these together in the same change:
-- [`dimos-xr/dimos_xr/protocol.py`](dimos-xr/dimos_xr/protocol.py)
+- [`dimos-xr/dimos_xr/network/protocol.py`](dimos-xr/dimos_xr/network/protocol.py)
 - [`dimos-xr/PROTOCOL.md`](dimos-xr/PROTOCOL.md)
-- [`lens-studio/Assets/Scripts/Network/ProtocolTypes.ts`](lens-studio/Assets/Scripts/Network/ProtocolTypes.ts)
-- [`lens-studio/Assets/Scripts/Network/Protocol.ts`](lens-studio/Assets/Scripts/Network/Protocol.ts)
-- [`lens-studio/Assets/Scripts/Network/ProtocolParser.ts`](lens-studio/Assets/Scripts/Network/ProtocolParser.ts)
+- [`lens-studio/Assets/Scripts/bridge/Protocol.ts`](lens-studio/Assets/Scripts/bridge/Protocol.ts)
 
 </details>
 
@@ -93,39 +91,36 @@ The Lens side is organized around three scene-entry scripts:
 - [`DimosManager.ts`](lens-studio/Assets/Scripts/DimosManager.ts) is the orchestration hub for bridge I/O, shared app state, robot marker state, LiDAR/path rendering, navigation placement, and manual-alignment fallback.
 - [`UIManager.ts`](lens-studio/Assets/Scripts/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
 
-`BridgeClient` is the transport layer, `CalibrationSession` owns wizard-local calibration orchestration, `TagAlignmentSession` and `FrameCaptureController` handle tag-based alignment capture, `ManualAlignmentController` handles local placement fallback, `NavigationController` manages goal placement and navigation state, and the visuals live under [`Assets/Scripts/Visuals/`](lens-studio/Assets/Scripts/Visuals/).
+`BridgeClient` is the transport layer, `CalibrationFlow` owns calibrate-step state for both tag and manual modes, `AlignmentSession` is the single owner of the bridge alignment session (tag + manual), `NavigationController` manages goal placement and navigation state, and the visuals live under `robot/`, `lidar/`, and `navigation/`.
 
 ```mermaid
 flowchart TB
   SetupWizard[SetupWizard] --> DimosManager[DimosManager]
-  SetupWizard --> CalibrationSession[CalibrationSession]
-  SetupWizard --> TagAlignment[TagAlignmentSession]
-  SetupWizard --> FrameCapture[FrameCaptureController]
+  SetupWizard --> CalibrationFlow[CalibrationFlow]
+  SetupWizard --> AlignmentSession[AlignmentSession]
   UIManager[UIManager] --> DimosManager
   UIManager -->|"Restart setup"| SetupWizard
   DimosManager --> BridgeClient[BridgeClient]
   DimosManager --> AppState[AppState]
-  DimosManager --> ManualAlignment[ManualAlignmentController]
+  DimosManager --> AlignmentSession
   DimosManager --> Navigation[NavigationController]
   DimosManager --> RobotMarker[RobotMarker]
-  DimosManager --> PointCloud[PointCloudRenderer]
   AppState --> UIManager
   AppState --> SetupWizard
-  TagAlignment --> BridgeClient
-  FrameCapture --> BridgeClient
+  AlignmentSession --> BridgeClient
   Navigation --> BridgeClient
 ```
 
 <details>
 <summary>Lens setup and runtime responsibilities</summary>
 
-`SetupWizard` creates the wizard view and its helper controllers, starts autoconnect, owns the high-level step flow, and finishes by calling `DimosManager.enterRuntime()`. It does not talk to `BridgeClient` directly; connection checks flow through `WizardConnectionController` and `DimosManager`, while calibrate-step orchestration is delegated to `CalibrationSession`.
+`SetupWizard` builds the wizard view, starts autoconnect, owns the 3-step state machine inline, and finishes by calling `DimosManager.enterRuntime()`. Calibrate-step state (both tag and manual modes) is delegated to `CalibrationFlow`; the bridge alignment session is owned exclusively by `AlignmentSession`, which re-arms on every `hello` so reconnects cannot leave the session stranded.
 
 `DimosManager` starts in setup mode, disconnects the bridge when re-entering setup, and switches to runtime by enabling visuals, preserving manual alignment state when needed, and syncing navigation and robot interaction state. It also owns the shared `AppState`, including bridge-link status used by setup and runtime UI. During runtime it fans bridge events into:
 - `PointCloudRenderer` for lidar visualization
 - `RobotMarker` for robot pose and local controls
-- `NavigationController` and `PathRenderer` for goal placement and path display
-- `UIManager` and `RobotMenuController` for status presentation
+- `NavigationController` for goal placement and path display
+- `UIManager` for status presentation
 
 `UIManager` subscribes to app state and updates the authored HUD. Restarting setup goes back through `SetupWizard`, while bridge status, operating mode changes, and the coarse `disconnected` / `connectedNoRobot` / `connected` link state still come from `DimosManager`.
 
@@ -141,12 +136,16 @@ flowchart TB
   ```text
   lens-studio/Assets/Scripts/
   ├── DimosManager.ts
-  ├── Setup/
-  ├── UI/
-  ├── Alignment/
-  ├── Navigation/
-  ├── Network/
-  └── Visuals/
+  ├── AppState.ts
+  ├── Setup/          (SetupWizard, WizardView, CalibrationFlow)
+  ├── UI/             (UIManager, MainMenuView, RobotMenuView, Shared/UIKit)
+  ├── Alignment/      (AlignmentSession, ManualPoseCorrection)
+  ├── Navigation/     (NavigationController, PlacementController, …)
+  ├── Network/        (BridgeClient)
+  ├── bridge/         (Protocol.ts — types + parser + builders)
+  ├── Robot/          (RobotRuntime)
+  ├── Camera/         (FrameCaptureController)
+  └── Visuals/        (RobotMarker, PointCloudRenderer, PathRenderer, …)
   ```
 
 - `ShowLiDAR` controls the height/debug layer, while the red obstacle layer still comes from live bridge lidar when connected.
@@ -155,7 +154,7 @@ flowchart TB
 
 ## Dimensional OS Blueprint (`dimos-xr`)
 
-[`dimos-xr/`](dimos-xr/) contains the Python side: `XRBridge`, `XRRobotAdapterModule`, the protocol definition, and the tests. The monorepo entrypoint is [`dimos-xr/blueprints/dimos_xr.py`](dimos-xr/blueprints/dimos_xr.py), which wraps native DimOS stack composition for the currently selected robot runtime.
+[`dimos-xr/`](dimos-xr/) contains the Python side: `XRBridge`, `XRRobotAdapterModule`, the protocol definition, and the tests. The monorepo entrypoint is [`dimos-xr/dimos_xr/blueprints.py`](dimos-xr/dimos_xr/blueprints.py), which wraps native DimOS stack composition for the currently selected robot runtime.
 
 `XRBridge` subclasses `dimos.core.module.Module`, handles WebSocket sessions, calibration, transforms, LiDAR/pose/path streaming, and dispatches outbound control through `XRRobotAdapterModule`. The adapter module absorbs robot-specific streams and control surfaces for Go2 and G1 while keeping the bridge core platform-agnostic.
 
@@ -193,7 +192,7 @@ On the Lens side, runtime behavior is negotiated from the bridge handshake:
 The monorepo provides `start.sh` as a convenience wrapper around native DimOS composition:
 
 ```bash
-cd /path/to/spectacles-dimensional-os/dimos-xr
+cd /path/to/spectacles-dimensional-os
 ./start.sh
 ```
 
@@ -238,10 +237,10 @@ Optional live protocol check while the blueprint is already running:
 
 ```bash
 cd /path/to/spectacles-dimensional-os/dimos-xr
-/path/to/dimos/.venv/bin/python3 -m pytest tests/test_ws_integration.py -m integration
+/path/to/dimos/.venv/bin/python3 -m pytest dimos_xr/network/test_ws_integration.py -m integration
 ```
 
-See [`dimos-xr/tests/README.md`](dimos-xr/tests/README.md) for the unit vs integration test split.
+Tests are colocated with their modules under `dimos-xr/dimos_xr/`. See [`dimos-xr/README.md`](dimos-xr/README.md) for the unit vs integration test split.
 
 </details>
 
@@ -258,7 +257,7 @@ See [`dimos-xr/tests/README.md`](dimos-xr/tests/README.md) for the unit vs integ
 <details>
 <summary>Extension points</summary>
 
-- Tune lidar and rate limits in [`dimos-xr/dimos_xr/bridge/config.py`](dimos-xr/dimos_xr/bridge/config.py) via `XRBridgeConfig`.
+- Tune lidar and rate limits via `XRBridgeConfig` in [`dimos-xr/dimos_xr/bridge/module.py`](dimos-xr/dimos_xr/bridge/module.py).
 - Add or change messages by updating the Python protocol, the protocol spec, and the Lens protocol modules together.
 - Keep `dimos-xr/dimos_xr/` platform-agnostic. Spectacles-specific code stays in [`lens-studio/`](lens-studio/); other XR clients should live in their own client folder or repo.
 

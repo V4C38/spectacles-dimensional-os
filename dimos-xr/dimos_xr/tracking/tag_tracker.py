@@ -412,7 +412,7 @@ class TagTracker:
         self._config = config or TagTrackerConfig()
         self._camera_info = camera_info
         self._detector = create_aruco_detector(DEFAULT_APRILTAG_DICT)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._observations: deque[TagObservation] = deque(maxlen=self._config.window_max_obs)
         self._active = False
         self._last_tag_detected = False

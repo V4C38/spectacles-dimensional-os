@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from dimos_xr.adapters.base import CapabilityState, RobotHandshake
     from dimos_xr.network.bridge_status import BridgeStatusSnapshot
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 FRAME_WORLD = "world"
 
 DEFAULT_CAPABILITIES = [
@@ -67,6 +67,7 @@ class EmergencyStopMessage:
 class AlignStartMessage:
     ts: float
     robot_id: str
+    method: str
 
 
 @dataclass(frozen=True)
@@ -183,7 +184,10 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
     if msg_type == "emergency_stop":
         return EmergencyStopMessage(ts=ts, robot_id=robot_id)
     if msg_type == "align_start":
-        return AlignStartMessage(ts=ts, robot_id=robot_id)
+        method = _require_type(data, "method", str)
+        if method not in ("tag", "manual"):
+            raise ValueError(f"align_start.method must be 'tag' or 'manual', got {method!r}")
+        return AlignStartMessage(ts=ts, robot_id=robot_id, method=method)
     if msg_type == "align_stop":
         return AlignStopMessage(ts=ts, robot_id=robot_id)
     if msg_type == "align_commit":
@@ -237,9 +241,7 @@ def _serialize_capability_states(
 
 
 def encode_hello(handshake: RobotHandshake) -> str:
-    capability_states, disabled_capabilities = _serialize_capability_states(
-        handshake.capability_states
-    )
+    capabilities, _ = _serialize_capability_states(handshake.capability_states)
     robot: dict[str, Any] = {
         "robot_id": handshake.robot_id,
         "robot_model": handshake.robot_model,
@@ -262,9 +264,7 @@ def encode_hello(handshake: RobotHandshake) -> str:
             "type": "hello",
             "protocol_version": PROTOCOL_VERSION,
             "robot": robot,
-            "capabilities": handshake.capabilities,
-            "disabled_capabilities": disabled_capabilities,
-            "capability_states": capability_states,
+            "capabilities": capabilities,
         }
     )
 
@@ -282,10 +282,9 @@ def encode_bridge_status(
         "streams_active": snapshot.streams_active,
         "registered": snapshot.registered,
         "reconnecting": snapshot.reconnecting,
+        "registration_method": snapshot.registration_method,
         "registration_approximate": snapshot.registration_approximate,
     }
-    if snapshot.registration_method is not None:
-        payload["registration_method"] = snapshot.registration_method
     return _dumps(payload)
 
 
@@ -346,42 +345,23 @@ def encode_align_status(
     *,
     ts: float | None = None,
     robot_id: str,
-    state: str = "detecting",
-    tag_detected: bool = False,
-    observation_count: int | None = None,
-    baseline_m: float | None = None,
-    quality: float | None = None,
-    best_quality: float | None = None,
-    has_candidate: bool | None = None,
-    method: str | None = None,
+    method: str,
+    state: str,
+    progress: int,
     message: str = "",
-    cluster_size: int | None = None,
-    required_samples: int | None = None,
+    tag_visible: bool | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "type": "align_status",
         "ts": ts if ts is not None else time.time(),
         "robot_id": robot_id,
+        "method": method,
         "state": state,
-        "tag_detected": tag_detected,
+        "progress": progress,
         "message": message,
     }
-    if observation_count is not None:
-        payload["observation_count"] = observation_count
-    if baseline_m is not None:
-        payload["baseline_m"] = baseline_m
-    if quality is not None:
-        payload["quality"] = quality
-    if best_quality is not None:
-        payload["best_quality"] = best_quality
-    if has_candidate is not None:
-        payload["has_candidate"] = has_candidate
-    if method is not None:
-        payload["method"] = method
-    if cluster_size is not None:
-        payload["cluster_size"] = cluster_size
-    if required_samples is not None:
-        payload["required_samples"] = required_samples
+    if tag_visible is not None:
+        payload["tag_visible"] = tag_visible
     return _dumps(payload)
 
 
@@ -390,22 +370,15 @@ def encode_camera_frame_ack(
     ts: float | None = None,
     robot_id: str,
     seq: int,
-    tag_detected: bool,
-    tag_ids: list[int] | None = None,
-    quality: float | None = None,
 ) -> str:
-    payload: dict[str, Any] = {
-        "type": "camera_frame_ack",
-        "ts": ts if ts is not None else time.time(),
-        "robot_id": robot_id,
-        "seq": seq,
-        "tag_detected": tag_detected,
-    }
-    if tag_ids is not None:
-        payload["tag_ids"] = tag_ids
-    if quality is not None:
-        payload["quality"] = quality
-    return _dumps(payload)
+    return _dumps(
+        {
+            "type": "camera_frame_ack",
+            "ts": ts if ts is not None else time.time(),
+            "robot_id": robot_id,
+            "seq": seq,
+        }
+    )
 
 
 def encode_pose(

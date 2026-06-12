@@ -19,9 +19,7 @@ Update together in one change:
 
 1. `dimos-xr/dimos_xr/protocol.py`
 2. `dimos-xr/PROTOCOL.md`
-3. `lens-studio/Assets/Scripts/Network/ProtocolTypes.ts`
-4. `lens-studio/Assets/Scripts/Network/ProtocolParser.ts`
-5. `lens-studio/Assets/Scripts/Network/Protocol.ts`
+3. `lens-studio/Assets/Scripts/bridge/Protocol.ts`
 
 ## Python
 
@@ -39,6 +37,16 @@ DimOS is an external dependency — install from [dimensionalOS/dimos](https://g
 ## Lens Studio
 
 See [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md).
+
+### Architecture rules — one owner per concern
+
+Each subsystem (navigation, alignment, robot, lidar, setup) has **one owner class** that holds all state, logic, and lifecycle for that concern. Do not split a concern across coordinator + controller + presenter layers or introduce lambda-bundle dependency interfaces. If a subsystem needs a sibling's API, pass a concrete reference (or the shared `AppState`) in the constructor.
+
+### Scene-reference policy
+
+1. **Cross-tree references are `@input`s** on the owning component. No global scene scans (`requireSceneObjectByName` is deleted — do not re-introduce it).
+2. **A View class may resolve children by name only under a root it was handed**, only in its constructor, via `requireChild` (throwing) for required nodes and `findChildRecursive` for optional ones. Fail fast at startup, never lazily at runtime.
+3. **No new code-built UI.** The wizard panel is grandfathered; anything new is scene-authored with a View class wired to it via `@input`.
 
 ## Marker assets
 

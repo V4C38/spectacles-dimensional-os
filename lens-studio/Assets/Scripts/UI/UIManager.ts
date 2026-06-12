@@ -1,8 +1,8 @@
-import { DimosManager } from "../DimosManager";
-import { DimosAppState, LidarDisplayMode, OperatingMode } from "../AppState";
+import { DimosManager } from "../Core/DimosManager";
+import { DimosAppState, LidarDisplayMode, OperatingMode } from "../Core/AppState";
 import { SetupWizard } from "../Setup/SetupWizard";
-import { getBridgeStatusPresentation } from "./Shared/BridgeStatusPresentation";
-import { scaleIn, scaleOut } from "./Shared/UIAnimations";
+import { getBridgeStatusPresentation } from "./BridgeStatusPresentation";
+import { scaleIn, scaleOut } from "./kit/UIAnimations";
 import { MainMenuView } from "./MainMenuView";
 
 /** Runtime HUD controller toggling main menu visibility and syncing with DimosManager app state. */

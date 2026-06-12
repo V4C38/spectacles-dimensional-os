@@ -3,8 +3,9 @@
 This is the cross-platform contract between the DimOS-side XR bridge and any XR
 client. It is the real API of this project.
 
-Keep this document and `dimos_xr/protocol.py` in sync. Bump
-`protocol_version` on breaking changes.
+Keep this document, `dimos_xr/network/protocol.py`, and
+`lens-studio/Assets/Scripts/bridge/Protocol.ts` in sync. Bump
+`PROTOCOL_VERSION` on breaking changes.
 
 ## Transport
 
@@ -18,13 +19,13 @@ Keep this document and `dimos_xr/protocol.py` in sync. Bump
 
 ## Handshake
 
-On connect, the server sends `hello` with the active robot metadata and
-capability surface:
+On connect, the server sends `hello` with the active robot metadata and a flat
+capability map:
 
 ```json
 {
   "type": "hello",
-  "protocol_version": 3,
+  "protocol_version": 4,
   "robot": {
     "robot_id": "unitree_go2",
     "robot_model": "unitree_go2",
@@ -35,23 +36,16 @@ capability surface:
     "base_height_m": 0.33,
     "default_render_offset_m": [0.0, 0.0, 0.0]
   },
-  "capabilities": [
-    "lidar",
-    "odom",
-    "align",
-    "align_manual",
-    "nav",
-    "path",
-  "plan_preview",
-    "cancel_goal",
-    "emergency_stop"
-  ],
-  "disabled_capabilities": ["emergency_stop"],
-  "capability_states": {
-    "emergency_stop": {
-      "available": false,
-      "reason": "No safe stop interface is available in this runtime."
-    }
+  "capabilities": {
+    "lidar":           { "available": true,  "reason": null },
+    "odom":            { "available": true,  "reason": null },
+    "align":           { "available": true,  "reason": null },
+    "align_manual":    { "available": true,  "reason": null },
+    "nav":             { "available": true,  "reason": null },
+    "path":            { "available": true,  "reason": null },
+    "plan_preview":    { "available": true,  "reason": null },
+    "cancel_goal":     { "available": true,  "reason": null },
+    "emergency_stop":  { "available": false, "reason": "No safe stop interface is available in this runtime." }
   }
 }
 ```
@@ -59,10 +53,12 @@ capability surface:
 Rules:
 
 - `robot` is the only static robot descriptor in the protocol.
-- `capabilities` lists the full intended surface for the active runtime.
-- `disabled_capabilities` and `capability_states` let the bridge expose actions
-  that exist conceptually but are currently unavailable.
-- Clients should render unavailable actions as disabled, not hide them silently.
+- `capabilities` is a flat map from capability name → `{ available, reason }`.
+  Every capability the runtime knows about is present in the map.
+- `available: false` with a non-null `reason` means the feature exists but is
+  currently disabled. Clients should render these as disabled, not hidden.
+- The separate `disabled_capabilities` / `capability_states` arrays from v3 are
+  removed; `capabilities` is the single source of truth.
 
 ### `hello.robot.alignment_profile`
 
@@ -112,59 +108,60 @@ Fields:
 - `streams_active`: recent lidar and odom are flowing
 - `registered`: world-frame calibration has been committed
 - `reconnecting`: reconnect/recovery is in progress
-- `registration_method`: optional `marker` or `manual`
-- `registration_approximate`: optional bool for approximate/manual calibration
+- `registration_method`: **always present** — `"tag"`, `"manual"`, or `null` when unregistered
+- `registration_approximate`: **always present** — `true` when the active calibration is approximate (e.g. manual pose)
 
 ### `align_status`
 
-Alignment progress during calibration:
+Alignment progress during a calibration session:
 
 ```json
 {
   "type": "align_status",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
-  "state": "detecting",
-  "tag_detected": true,
-  "observation_count": 12,
-  "baseline_m": 0.42,
-  "quality": 0.81,
-  "best_quality": 0.95,
-  "has_candidate": true,
   "method": "tag",
+  "state": "detecting",
+  "progress": 60,
   "message": "Look at the robot-mounted tag",
-  "cluster_size": 3,
-  "required_samples": 5
+  "tag_visible": true
 }
 ```
 
 Fields:
 
-- `tag_detected`: bridge detected a configured robot-mounted tag in a recent frame
-- `observation_count`: observations in the sliding alignment window
-- `baseline_m`: max ground-plane separation between tag observations (meters)
-- `cluster_size` (optional): number of candidates in the current stable cluster; sent only during marker detection
-- `required_samples` (optional): minimum cluster size required before `has_candidate` becomes true
+- `method`: `"tag"` or `"manual"` — matches the `method` sent in `align_start`
+- `state`: one of `"idle"`, `"detecting"`, `"converging"`, `"ready"`, `"committed"`,
+  `"cancelled"`, `"failed"`
+- `progress`: integer 0–100 representing overall alignment completion for the
+  current session
+- `message`: human-readable status string for display in the client HUD
+- `tag_visible` (optional): present only for tag-method sessions; `true` when a
+  configured robot-mounted tag was detected in the most recent processed frame
+
+> **v3 → v4 breaking change**: `tag_detected`, `observation_count`,
+> `baseline_m`, `quality`, `best_quality`, `has_candidate`, `cluster_size`, and
+> `required_samples` are removed. Use `progress` and `state` instead.
 
 ### `camera_frame_ack`
 
 Per-frame acknowledgement after the bridge receives a binary `camera_frame`.
 The bridge acks **every** received frame, including frames it drops (busy
-processing a previous frame, stale `send_ts - ts`, or missing intrinsics) —
-dropped frames are acked with `tag_detected: false`. Clients rely on this to
-clear their single-flight capture state:
+processing a previous frame, stale `send_ts - ts`, missing intrinsics, or manual
+session fast-path) — dropped frames are still acked so the client can clear its
+single-flight capture state:
 
 ```json
 {
   "type": "camera_frame_ack",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
-  "seq": 42,
-  "tag_detected": true,
-  "tag_ids": [0],
-  "quality": 0.88
+  "seq": 42
 }
 ```
+
+> **v3 → v4 breaking change**: `tag_detected`, `tag_ids`, and `quality` are
+> removed. Use `align_status.tag_visible` for detection feedback.
 
 ### Numeric precision (outbound)
 
@@ -289,6 +286,21 @@ The same sync burst is sent automatically after the initial `hello` on connect.
 
 Begin a calibration session.
 
+```json
+{
+  "type": "align_start",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "method": "tag"
+}
+```
+
+Fields:
+
+- `method` (**required**): `"tag"` for AprilTag-based alignment or `"manual"` for
+  manual pose placement. The value is echoed back in every `align_status` for
+  this session.
+
 ### `align_stop`
 
 Stop/cancel the current calibration session.
@@ -412,7 +424,32 @@ Calibration is driven entirely by the `align_*` messages plus `align_status` and
 
 ## Changelog
 
-### v3 (current) — XR Bridge PR refactor (additive, backward-compatible changes only)
+### v4 (current) — Protocol shrink + alignment session semantics
+
+**Breaking changes** — clients built against v3 must be updated:
+
+- **`hello.capabilities`** is now a flat map `{ name → { available, reason } }`.
+  The parallel `disabled_capabilities` array and `capability_states` object are
+  removed.
+- **`align_start`** now requires a `method` field (`"tag"` or `"manual"`). A
+  message without `method` is rejected by the bridge.
+- **`align_status`** is stripped to `ts`, `robot_id`, `method`, `state`,
+  `progress`, `message`, and optional `tag_visible`. The removed fields are:
+  `tag_detected`, `observation_count`, `baseline_m`, `quality`, `best_quality`,
+  `has_candidate`, `cluster_size`, `required_samples`.
+- **`camera_frame_ack`** is stripped to `ts`, `robot_id`, `seq`. The removed
+  fields are: `tag_detected`, `tag_ids`, `quality`.
+- **`bridge_status.registration_method`** and
+  **`bridge_status.registration_approximate`** are now **always present** (they
+  were previously optional / omitted before first registration).
+
+**Alignment session semantics fix**:
+A bug in v3 caused `on_align_manual_pose` to accept poses even when no manual
+session was open (or when a tag session was open). In v4 the bridge tracks an
+explicit `_session_method` and silently drops manual pose messages unless a
+`method="manual"` session is active.
+
+### v3 — XR Bridge PR refactor (additive, backward-compatible)
 
 The PR that introduced per-robot adapters (`go2` / `g1`), DimOS TF publication,
 `PointCloud2` delegation, `mypy strict`, and launcher restructuring is

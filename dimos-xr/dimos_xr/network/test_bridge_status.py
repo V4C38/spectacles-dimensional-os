@@ -19,13 +19,17 @@ def test_tracker_snapshot() -> None:
     assert snap.registration_approximate is True
 
 
-def test_encode_bridge_status_omits_registration_method_when_unset() -> None:
+def test_encode_bridge_status_always_includes_registration_method() -> None:
     tracker = BridgeStatusTracker(robot_id="unitree_go2", robot_connected=True)
     snap = tracker.snapshot()
     raw = json.loads(encode_bridge_status(snap))
     assert raw["type"] == "bridge_status"
     assert raw["robot_id"] == "unitree_go2"
-    assert "registration_method" not in raw
+    # v4 guarantee: registration_method is always present (None when unregistered)
+    assert "registration_method" in raw
+    assert raw["registration_method"] is None
+    assert "registration_approximate" in raw
+    assert raw["registration_approximate"] is False
 
 
 def test_tracker_notify_on_change() -> None:

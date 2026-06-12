@@ -31,6 +31,8 @@ def _make_runtime_sync_stub() -> tuple[MagicMock, BridgeSender, MagicMock, Magic
             "streams_active": True,
             "registered": True,
             "reconnecting": False,
+            "registration_method": None,
+            "registration_approximate": False,
         }
     )
     bridge._status = mock_status  # type: ignore[attr-defined]

@@ -1,10 +1,14 @@
-import { ManualAlignmentPose } from "./ManualAlignmentController";
 import {
   BridgeStatusMessage,
   PoseMessage,
   protocolMetersToLensCentimeters,
-} from "../Network/Protocol";
-import { RobotInteractionMode } from "../AppState";
+} from "../Bridge/Protocol";
+import { RobotInteractionMode } from "../Core/AppState";
+
+export interface ManualAlignmentPose {
+  position: vec3;
+  rotation: quat;
+}
 
 // ================================================================
 /**

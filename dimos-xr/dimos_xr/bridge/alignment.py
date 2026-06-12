@@ -104,9 +104,9 @@ class AlignmentController:
         self._best_alignment_ts: float | None = None
         self._latest_alignment_quality: float | None = None
         self._candidate_count: int = 0
-        self._alignment_mode: str = "marker"
+        self._session_method: Literal["tag", "manual"] | None = None  # None = no session
+        self._latest_cluster_size: int = 0
         self._recent_marker_candidates: list[AlignmentCandidate] = []
-        self._last_debug_tag_detected: bool | None = None
         self._align_start_mono: float | None = None
 
         self._manual_pose_first_logged: bool = False
@@ -130,29 +130,28 @@ class AlignmentController:
     # ------------------------------------------------------------------
 
     def on_align_start(self, msg: AlignStartMessage, _websocket: ServerConnection) -> None:
-        self._tag_tracker.active = True
+        self._session_method = msg.method  # type: ignore[assignment]
+        self._tag_tracker.active = msg.method == "tag"
         self._clear_session()
-        self._last_debug_tag_detected = None
+        self._session_method = msg.method  # type: ignore[assignment]  # re-set after clear
         self._align_start_mono = time.monotonic()
-        self._alignment_mode = "marker"
         self._manual_pose_first_logged = False
         self._last_manual_inactive_log_mono = 0.0
         self._last_manual_odom_missing_log_mono = 0.0
         self._last_manual_candidate_log_mono = 0.0
-        logger.info("XR alignment started", mode=self._alignment_mode)
-        self._broadcast_align_status(
-            state="detecting",
-            tag_detected=False,
-            has_candidate=False,
-            message="Look at the AprilTag on your robot",
-            ts=msg.ts,
+        logger.info("XR alignment started", method=self._session_method)
+        initial_message = (
+            "Look at the AprilTag on your robot"
+            if msg.method == "tag"
+            else "Place the robot marker, then commit"
         )
+        self._broadcast_align_status(state="detecting", message=initial_message, ts=msg.ts)
         self._start_broadcast()
 
     def on_align_stop(self, msg: AlignStopMessage, _websocket: ServerConnection) -> None:
-        alignment_mode = self._alignment_mode
+        session_method = self._session_method
         was_active = (
-            self._tag_tracker.active
+            self._session_method is not None
             or self._best_alignment is not None
             or self._candidate_count > 0
         )
@@ -164,9 +163,7 @@ class AlignmentController:
         logger.info("XR alignment stopped")
         self._broadcast_align_status(
             state="detecting",
-            tag_detected=False,
-            has_candidate=False,
-            method=alignment_mode,
+            method=session_method or "tag",
             message="Alignment cancelled",
             ts=msg.ts,
         )
@@ -176,11 +173,7 @@ class AlignmentController:
         if best is None:
             self._broadcast_align_status(
                 state="failed",
-                tag_detected=self._tag_detected(),
-                quality=self._latest_alignment_quality,
-                best_quality=None,
-                has_candidate=False,
-                method=self._alignment_mode,
+                method=self._session_method or "tag",
                 message="No valid alignment candidate yet",
                 ts=msg.ts,
             )
@@ -269,19 +262,20 @@ class AlignmentController:
             )
             self._send_frame_drop_ack(header)
             return
+        # Manual sessions must never produce marker candidates — ack and skip.
+        if self._session_method == "manual":
+            self._sender.send(
+                encode_camera_frame_ack(robot_id=self._robot_id, seq=seq)
+            )
+            return
         if not self._tag_tracker.has_camera_info():
             logger.warning("XR camera frame dropped: no camera intrinsics yet", seq=seq)
             self._sender.send(
-                encode_camera_frame_ack(
-                    robot_id=self._robot_id,
-                    seq=seq,
-                    tag_detected=False,
-                )
+                encode_camera_frame_ack(robot_id=self._robot_id, seq=seq)
             )
             if self._tag_tracker.active:
                 self._broadcast_align_status(
                     state="failed",
-                    tag_detected=False,
                     message="No camera intrinsics received",
                 )
             return
@@ -309,13 +303,7 @@ class AlignmentController:
                 quality=round(result.quality, 3) if result.quality else None,
             )
             self._sender.send(
-                encode_camera_frame_ack(
-                    robot_id=self._robot_id,
-                    seq=seq,
-                    tag_detected=result.tag_detected,
-                    tag_ids=result.tag_ids if result.tag_ids else None,
-                    quality=result.quality,
-                )
+                encode_camera_frame_ack(robot_id=self._robot_id, seq=seq)
             )
             self._apply_tracker_update(ts=float(header.get("ts", time.time())))
         finally:
@@ -324,12 +312,13 @@ class AlignmentController:
     def on_align_manual_pose(
         self, msg: AlignManualPoseMessage, _websocket: ServerConnection
     ) -> None:
-        if not self._tag_tracker.active:
+        if self._session_method != "manual":
             now = time.monotonic()
             if now - self._last_manual_inactive_log_mono >= DROPPED_POSE_LOG_INTERVAL_S:
                 self._last_manual_inactive_log_mono = now
                 logger.warning(
-                    "align_manual_pose dropped: alignment session inactive (send align_start first)"
+                    "align_manual_pose dropped: no manual session open"
+                    " (send align_start{method:'manual'} first)"
                 )
             return
         if not self._manual_pose_first_logged:
@@ -340,17 +329,12 @@ class AlignmentController:
             )
         odom = self._odom.latest()
         if odom is None:
-            self._alignment_mode = "manual"
             now = time.monotonic()
             if now - self._last_manual_odom_missing_log_mono >= DROPPED_POSE_LOG_INTERVAL_S:
                 self._last_manual_odom_missing_log_mono = now
                 logger.warning("Manual alignment waiting on robot odometry")
             self._broadcast_align_status(
                 state="detecting",
-                tag_detected=False,
-                quality=self._latest_alignment_quality,
-                has_candidate=False,
-                method="manual",
                 message="Waiting for robot odometry",
                 ts=msg.ts,
             )
@@ -363,7 +347,7 @@ class AlignmentController:
 
     def clear_on_disconnect(self) -> None:
         if (
-            not self._tag_tracker.active
+            self._session_method is None
             and self._best_alignment is None
             and self._candidate_count == 0
         ):
@@ -381,7 +365,7 @@ class AlignmentController:
         return self._tag_tracker.last_tag_detected
 
     def _align_status_message(self) -> str:
-        if self._alignment_mode == "manual":
+        if self._session_method == "manual":
             if self._best_alignment is not None:
                 return "Manual robot pose ready — review and commit"
             return "Place the robot pose manually, then commit"
@@ -401,7 +385,7 @@ class AlignmentController:
 
         def loop() -> None:
             while not self._broadcast_stop.wait(ALIGN_STATUS_BROADCAST_INTERVAL_S):
-                if not self._tag_tracker.active:
+                if self._session_method is None:
                     break
                 self._broadcast_align_status()
 
@@ -425,7 +409,8 @@ class AlignmentController:
         self._best_alignment_ts = None
         self._latest_alignment_quality = None
         self._candidate_count = 0
-        self._alignment_mode = "marker"
+        self._session_method = None
+        self._latest_cluster_size = 0
         self._recent_marker_candidates = []
         self._pending_large_solves = []
         self._manual_pose_first_logged = False
@@ -463,6 +448,7 @@ class AlignmentController:
             cluster_size=cluster_size,
         )
         self._latest_alignment_quality = candidate.quality
+        self._latest_cluster_size = cluster_size
         self._candidate_count += 1
         improved = False
         is_stable_candidate = cluster_size >= ALIGNMENT_CLUSTER_MIN_SAMPLES
@@ -484,12 +470,7 @@ class AlignmentController:
             )
         self._broadcast_align_status(
             state="detecting",
-            tag_detected=self._tag_detected(),
-            observation_count=solve.observation_count,
-            baseline_m=solve.baseline_m,
-            quality=candidate.quality,
-            best_quality=self._best_alignment.quality if self._best_alignment is not None else None,
-            has_candidate=self._best_alignment is not None,
+            tag_visible=self._tag_detected(),
             method=method,
             message=(
                 "Alignment improved — hold steady for best result"
@@ -501,8 +482,6 @@ class AlignmentController:
                 )
             ),
             ts=ts,
-            cluster_size=cluster_size,
-            required_samples=ALIGNMENT_CLUSTER_MIN_SAMPLES,
         )
         return candidate
 
@@ -525,7 +504,6 @@ class AlignmentController:
             approximate=True,
             sample_quality=self._manual_alignment_quality,
         )
-        self._alignment_mode = "manual"
         self._latest_alignment_quality = candidate.quality
         self._candidate_count += 1
         self._best_alignment = candidate
@@ -541,10 +519,7 @@ class AlignmentController:
             )
         self._broadcast_align_status(
             state="detecting",
-            tag_detected=True,
-            quality=candidate.quality,
-            best_quality=candidate.quality,
-            has_candidate=True,
+            tag_visible=True,
             method="manual",
             message="Manual robot pose ready — review and commit",
             ts=msg.ts,
@@ -591,10 +566,6 @@ class AlignmentController:
         self._status.broadcast()
         self._broadcast_align_status(
             state="aligned",
-            tag_detected=True,
-            quality=result.quality,
-            best_quality=result.quality,
-            has_candidate=True,
             method=method,
             message=(
                 "Manual alignment committed"
@@ -656,53 +627,48 @@ class AlignmentController:
         self._last_smooth_mono = now
         self._calibration.register_from_alignment(T_new)
 
+    def _compute_progress(self, state: str) -> int:
+        """Return a 0-100 progress integer for the current session state."""
+        if state == "aligned":
+            return 100
+        if state == "failed":
+            return 0
+        if self._session_method == "manual":
+            return 100 if self._best_alignment is not None else 0
+        # tag session: scale cluster_size up to ALIGNMENT_CLUSTER_MIN_SAMPLES
+        if self._latest_cluster_size >= ALIGNMENT_CLUSTER_MIN_SAMPLES:
+            return min(100, int(self._best_alignment.quality * 100)) if self._best_alignment else 90
+        return min(
+            90,
+            int(self._latest_cluster_size / ALIGNMENT_CLUSTER_MIN_SAMPLES * 90),
+        )
+
     def _broadcast_align_status(
         self,
         *,
         state: str = "detecting",
-        tag_detected: bool | None = None,
-        observation_count: int | None = None,
-        baseline_m: float | None = None,
-        quality: float | None = None,
-        best_quality: float | None = None,
-        has_candidate: bool | None = None,
         method: str | None = None,
         message: str = "",
+        tag_visible: bool | None = None,
+        progress: int | None = None,
         ts: float | None = None,
-        cluster_size: int | None = None,
-        required_samples: int | None = None,
     ) -> None:
-        if tag_detected is None:
-            tag_detected = self._tag_detected()
-        if observation_count is None:
-            observation_count = self._tag_tracker.observation_count()
-        if best_quality is None and self._best_alignment is not None:
-            best_quality = self._best_alignment.quality
-        if has_candidate is None:
-            has_candidate = self._best_alignment is not None
-        if method is None and self._best_alignment is not None:
-            method = self._best_alignment.method
-        if method is None and self._alignment_mode == "manual":
-            method = "manual"
+        effective_method = method or self._session_method or "tag"
         if not message and state == "detecting":
             message = self._align_status_message()
-        if state == "detecting" and tag_detected != self._last_debug_tag_detected:
-            self._last_debug_tag_detected = tag_detected
+        if progress is None:
+            progress = self._compute_progress(state)
+        if tag_visible is None and effective_method == "tag":
+            tag_visible = self._tag_detected()
         self._sender.send(
             encode_align_status(
                 ts=ts,
                 robot_id=self._robot_id,
                 state=state,
-                tag_detected=tag_detected,
-                observation_count=observation_count,
-                baseline_m=baseline_m,
-                quality=quality,
-                best_quality=best_quality,
-                has_candidate=has_candidate,
-                method=method,
+                method=effective_method,
+                progress=progress,
                 message=message,
-                cluster_size=cluster_size,
-                required_samples=required_samples,
+                tag_visible=tag_visible,
             )
         )
 
@@ -711,6 +677,5 @@ class AlignmentController:
             encode_camera_frame_ack(
                 robot_id=self._robot_id,
                 seq=int(header["seq"]),
-                tag_detected=False,
             )
         )

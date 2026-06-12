@@ -1,31 +1,32 @@
 require("LensStudio:TextInputModule");
 
-import { TagAlignmentSession } from "../Alignment/TagAlignmentSession";
-import { DimosManager } from "../DimosManager";
+import { AlignmentSession } from "../Alignment/AlignmentSession";
+import { DimosManager } from "../Core/DimosManager";
 import { UIManager } from "../UI/UIManager";
-import { AlignStatusMessage } from "../Network/Protocol";
-import { scaleIn } from "../UI/Shared/UIAnimations";
-import {
-  COLOR_WHITE,
-} from "../UI/Shared/UICore";
+import { AlignStatusMessage } from "../Bridge/Protocol";
+import { scaleIn } from "../UI/kit/UIAnimations";
+import { COLOR_ERROR, COLOR_WHITE } from "../UI/kit/UIKit";
+import { WizardView } from "./WizardView";
+import { getBridgeStatusPresentationForConnect } from "../UI/BridgeStatusPresentation";
+import { BridgeClient } from "../Bridge/BridgeClient";
 import {
   buildCalibrationDisplay,
-  createCalibrationViewState,
-  getWizardFooterState,
-} from "./CalibrationPresenter";
-import {
-  WizardStep,
-  WIZARD_STEP_TITLES,
+  CalibrationFlow,
   CALIBRATE_DESCRIPTION_AUTO,
   CALIBRATE_DESCRIPTION_MANUAL,
-} from "./WizardStepData";
-import { WizardConnectionController } from "./WizardConnectionController";
-import { WizardStepController } from "./WizardStepController";
-import { WizardView } from "./WizardView";
-import { getBridgeStatusPresentationForConnect } from "../UI/Shared/BridgeStatusPresentation";
-import { CalibrationSession } from "./CalibrationSession";
+  createCalibrationViewState,
+  getWizardFooterState,
+  LAST_WIZARD_STEP,
+  WIZARD_STEP_DESCRIPTIONS,
+  WIZARD_STEP_TITLES,
+  WizardStep,
+  wizardStepName,
+} from "./CalibrationFlow";
 
-/** Three-step setup component (start, connect, calibrate) that gates entry into runtime. */
+const NAV_DEBOUNCE_S = 0.35;
+const AUTOCONNECT_RETRY_S = 2.0;
+
+/** Three-step setup component (start → connect → calibrate) that gates entry into runtime. */
 @component
 export class SetupWizard extends BaseScriptComponent {
   @input
@@ -35,70 +36,51 @@ export class SetupWizard extends BaseScriptComponent {
   uiManager: UIManager;
 
   @input
-  tagAlignmentSession: TagAlignmentSession;
+  alignmentSession: AlignmentSession;
 
   private _currentStep = WizardStep.Start;
   private _connectCompleted = false;
+  private _isConnecting = false;
   private _alignmentHandlersBound = false;
   private _bridgeHandlersBound = false;
+  private _lastNavigationTime = -1;
+  private _autoconnectOpId = 0;
+  private _retryEvent: DelayedCallbackEvent | null = null;
+  private _retryOpId = 0;
+  private _retryIp = "";
   private _view: WizardView | null = null;
-  private _connectionController: WizardConnectionController | null = null;
-  private _stepController: WizardStepController | null = null;
-  private _calibrationSession: CalibrationSession | null = null;
-  private _isConnecting = false;
+  private _calibrationFlow: CalibrationFlow | null = null;
 
   onAwake() {
     this._view = new WizardView(this.getSceneObject());
     this.createEvent("OnStartEvent").bind(() => {
-      this._connectionController = new WizardConnectionController(
-        this,
+      // Cache retry event (re-armed per retry; never recreated).
+      const retryEv = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
+      retryEv.bind(() => this._onRetryFired());
+      this._retryEvent = retryEv;
+
+      this._calibrationFlow = new CalibrationFlow(
         this.dimosManager,
-        () => this._currentStep === WizardStep.Connect,
-        (message: string) => this._logSetup(message),
-      );
-      this._calibrationSession = new CalibrationSession(
-        this.dimosManager,
-        this.tagAlignmentSession,
+        this.alignmentSession,
         {
           beginManualAlignmentPlacementFromWizard: () =>
             this._beginManualAlignmentPlacementFromWizard(),
           render: () => this._renderCalibrationState(),
           refreshFooter: () => this._refreshFooterButtons(),
           refreshDescription: () => this._refreshCalibrationDescription(),
-          log: (message) => this._logSetup(message),
+          log: (message) => this._log(message),
           finishSetup: () => this._finishSetup(),
         },
       );
-      this._stepController = new WizardStepController({
-        getCurrentStep: () => this._currentStep,
-        setCurrentStep: (step) => {
-          this._currentStep = step;
-        },
-        getConnected: () =>
-          (this.dimosManager?.bridgeLinkState ?? "disconnected") !== "disconnected",
-        getCalibrationState: () =>
-          this._calibrationSession?.state ?? createCalibrationViewState(),
-        getView: () => this._view,
-        getDimosManager: () => this.dimosManager,
-        getAlignmentController: () => this.tagAlignmentSession,
-        getConnectionController: () => this._connectionController,
-        log: (message) => this._logSetup(message),
-        showBridgeConnectionStatus: () => this._showBridgeConnectionStatus(),
-        refreshFooterButtons: () => this._refreshFooterButtons(),
-        enterCalibration: () => this._calibrationSession?.enter(),
-        leaveCalibration: () => this._calibrationSession?.leave(),
-        completeCalibrationStep: () =>
-          this._calibrationSession?.completeStep() ?? false,
-        finishSetup: () => this._finishSetup(),
-        startAutoconnect: () => this._startAutoconnect(),
-      });
+
       this._view?.bindHandlers(
-        () => this._stepController?.onNext(),
-        () => this._stepController?.onPrevious(),
+        () => this._onNext(),
+        () => this._onPrevious(),
         () => this._toggleManualAlignment(),
         () => this._startAutoconnect(),
       );
-      this.createEvent("UpdateEvent").bind(() => this._calibrationSession?.tick());
+
+      this.createEvent("UpdateEvent").bind(() => this._calibrationFlow?.tick());
       this._bindAlignmentHandlers();
       this._bindBridgeHandlers();
       this.startSetupWizard();
@@ -106,16 +88,15 @@ export class SetupWizard extends BaseScriptComponent {
   }
 
   public startSetupWizard(): void {
-    this._logSetup("start");
+    this._log("start");
     this._connectCompleted = false;
     this._isConnecting = false;
-    this._stepController?.resetNavigationDebounce();
-    this._calibrationSession?.leave();
-    this._calibrationSession?.setState(createCalibrationViewState());
-    this._connectionController?.invalidatePending();
-    if (this.tagAlignmentSession) {
-      this.tagAlignmentSession.setCalibrationGizmoEnabled(false);
-      this.tagAlignmentSession.stop();
+    this._lastNavigationTime = -1;
+    this._calibrationFlow?.leave();
+    this._calibrationFlow?.setState(createCalibrationViewState());
+    this._invalidatePending();
+    if (this.alignmentSession) {
+      this.alignmentSession.stop();
     }
     this.dimosManager?.enterSetup();
     const panel = this.getSceneObject();
@@ -123,26 +104,217 @@ export class SetupWizard extends BaseScriptComponent {
       panel.enabled = true;
       scaleIn(panel, 0.5);
     }
-    this._stepController?.setStep(WizardStep.Start);
+    this._setStep(WizardStep.Start);
   }
 
-  private _showBridgeConnectionStatus(): void {
-    const presentation = getBridgeStatusPresentationForConnect(
-      this.dimosManager?.bridgeLinkState ?? "disconnected",
-      this._isConnecting,
-    );
-    this._view?.setStatus(presentation.text, presentation.color);
-    if (this.dimosManager?.hasBridgeConnection()) {
-      this.dimosManager.requestBridgeStatus();
+  // ── Step machine (inlined from WizardStepController) ──────────
+
+  private _setStep(step: WizardStep): void {
+    const previousStep = this._currentStep;
+    const clamped = Math.max(WizardStep.Start, Math.min(step, LAST_WIZARD_STEP)) as WizardStep;
+    this._invalidatePending();
+    this._currentStep = clamped;
+
+    if (previousStep !== clamped) {
+      this._log(`step ${wizardStepName(previousStep)} -> ${wizardStepName(clamped)}`);
+    }
+
+    this._view?.setStepContent(WIZARD_STEP_TITLES[clamped], WIZARD_STEP_DESCRIPTIONS[clamped]);
+    this._view?.applyStepLayout(clamped);
+
+    if (clamped !== WizardStep.Calibrate) {
+      this.alignmentSession?.stop();
+      this._calibrationFlow?.leave();
+    }
+
+    switch (clamped) {
+      case WizardStep.Start:
+        this._view?.setInputEnabled(false);
+        this._view?.setStatus("", COLOR_WHITE);
+        this._view?.clearDetailStatus();
+        this._refreshFooterButtons();
+        break;
+
+      case WizardStep.Connect: {
+        this._view?.clearDetailStatus();
+        this._view?.setInputEnabled(true);
+
+        const saved = this.dimosManager?.loadIp() ?? null;
+        const rawFallback =
+          this.dimosManager?.getDefaultBridgeIp() || this.dimosManager?.getBaseUrl() || "";
+        const fallback = BridgeClient.normalizeIp(rawFallback);
+        const ip = saved || fallback;
+
+        if (this._view) {
+          this._view.initializeInput(ip);
+        }
+        if (!saved && this.dimosManager && ip) {
+          this.dimosManager.setBaseUrl(ip);
+        }
+
+        this._refreshFooterButtons();
+        if (this._isConnected()) {
+          this._showBridgeConnectionStatus();
+        } else {
+          this._view?.setStatus("Bridge disconnected", COLOR_ERROR);
+          this._startAutoconnect();
+        }
+        break;
+      }
+
+      case WizardStep.Calibrate:
+        this._view?.setInputEnabled(false);
+        this._view?.clearDetailStatus();
+        this._calibrationFlow?.enter();
+        break;
     }
   }
 
+  private _onNext(): void {
+    if (!this._canNavigate()) {
+      return;
+    }
+
+    if (this._currentStep === WizardStep.Start) {
+      this._log("startup step completed");
+      this._setStep(WizardStep.Connect);
+      return;
+    }
+
+    if (this._currentStep === WizardStep.Connect) {
+      const raw = this._view?.getInputText() ?? "";
+      if (!this._isConnected() && raw && this.dimosManager) {
+        this.dimosManager.setBaseUrl(BridgeClient.normalizeIp(raw));
+      }
+      if (!this._isConnected()) {
+        this._cancelAutoconnect("connect step skipped", true);
+      } else {
+        this._log("connect step completed");
+      }
+      this._setStep(WizardStep.Calibrate);
+      return;
+    }
+
+    if (this._currentStep !== WizardStep.Calibrate) {
+      return;
+    }
+
+    const calState = this._calibrationFlow?.state ?? createCalibrationViewState();
+    if (calState.phase === "complete") {
+      this._finishSetup();
+      return;
+    }
+    if (calState.phase === "pendingCommit") {
+      return;
+    }
+    if (this._calibrationFlow?.completeStep()) {
+      this._finishSetup();
+    }
+  }
+
+  private _onPrevious(): void {
+    if (!this._canNavigate()) {
+      return;
+    }
+    if (this._currentStep <= WizardStep.Start) {
+      return;
+    }
+    this._setStep((this._currentStep - 1) as WizardStep);
+  }
+
+  private _canNavigate(): boolean {
+    const now = getTime();
+    if (this._lastNavigationTime >= 0 && now - this._lastNavigationTime < NAV_DEBOUNCE_S) {
+      return false;
+    }
+    this._lastNavigationTime = now;
+    return true;
+  }
+
+  // ── Autoconnect (inlined from WizardConnectionController) ─────
+
+  private _startAutoconnect(): void {
+    if (this._currentStep !== WizardStep.Connect || !this._view?.inputField) {
+      return;
+    }
+    const raw = this._view.inputField.text.trim();
+    if (!raw) {
+      return;
+    }
+    const ip = BridgeClient.normalizeIp(raw);
+    if (ip !== raw) {
+      this._view.inputField.text = ip;
+    }
+    this._invalidatePending();
+    const opId = this._autoconnectOpId;
+    this.dimosManager?.setBaseUrl(ip);
+    this._isConnecting = true;
+    this._view?.setInputText(ip);
+    this._showBridgeConnectionStatus();
+    this._log(`connect attempt ${ip}`);
+    this.dimosManager?.checkConnection().then((ok) => {
+      this._handleConnectionResult(opId, ip, ok);
+    });
+  }
+
+  private _onRetryFired(): void {
+    if (
+      this._retryOpId !== this._autoconnectOpId ||
+      this._currentStep !== WizardStep.Connect
+    ) {
+      return;
+    }
+    this.dimosManager?.setBaseUrl(this._retryIp);
+    this.dimosManager?.checkConnection().then((ok) => {
+      this._handleConnectionResult(this._retryOpId, this._retryIp, ok);
+    });
+  }
+
+  private _handleConnectionResult(opId: number, ip: string, ok: boolean): void {
+    if (opId !== this._autoconnectOpId || this._currentStep !== WizardStep.Connect) {
+      return;
+    }
+    if (ok) {
+      this.dimosManager?.saveIp(ip);
+      this._connectCompleted = true;
+      this._isConnecting = false;
+      this._showBridgeConnectionStatus();
+      this._refreshFooterButtons();
+      this._log("connect succeeded");
+      return;
+    }
+    this._isConnecting = false;
+    this._showBridgeConnectionStatus();
+    this._log("connect failed, retrying");
+    this._retryOpId = opId;
+    this._retryIp = ip;
+    this._retryEvent?.reset(AUTOCONNECT_RETRY_S);
+  }
+
+  private _invalidatePending(): void {
+    this._autoconnectOpId += 1;
+  }
+
+  private _cancelAutoconnect(reason: string, disconnect: boolean = false): void {
+    this._invalidatePending();
+    if (disconnect) {
+      this.dimosManager?.disconnect();
+    }
+    this._log(reason);
+  }
+
+  private _isConnected(): boolean {
+    return (this.dimosManager?.bridgeLinkState ?? "disconnected") !== "disconnected";
+  }
+
+  // ── Bridge handlers ────────────────────────────────────────────
+
   private _bindAlignmentHandlers(): void {
-    if (this._alignmentHandlersBound || !this.tagAlignmentSession) {
+    if (this._alignmentHandlersBound || !this.alignmentSession) {
       return;
     }
     this._alignmentHandlersBound = true;
-    this.tagAlignmentSession.onAlignStatus.add((msg) => this._onAlignStatus(msg));
+    this.alignmentSession.onAlignStatus.add((msg) => this._onAlignStatus(msg));
   }
 
   private _bindBridgeHandlers(): void {
@@ -157,12 +329,9 @@ export class SetupWizard extends BaseScriptComponent {
         this._showBridgeConnectionStatus();
         this._refreshFooterButtons();
       }
-      if (
-        this._currentStep === WizardStep.Calibrate &&
-        this._calibrationSession?.state.mode === "auto" &&
-        this.tagAlignmentSession
-      ) {
-        if (this.tagAlignmentSession.ensureBridgeSession()) {
+      // B1 fix: unconditionally call ensureSession when on Calibrate step.
+      if (this._currentStep === WizardStep.Calibrate && this.alignmentSession) {
+        if (this.alignmentSession.ensureSession()) {
           this._renderCalibrationState();
         }
       }
@@ -176,7 +345,7 @@ export class SetupWizard extends BaseScriptComponent {
         this._refreshFooterButtons();
       }
       if (this._currentStep === WizardStep.Calibrate) {
-        this._calibrationSession?.handleBridgeConnectionChanged(connected);
+        this._calibrationFlow?.handleBridgeConnectionChanged(connected);
       }
     });
     this.dimosManager.onBridgeStatusChanged.add((msg) => {
@@ -184,41 +353,22 @@ export class SetupWizard extends BaseScriptComponent {
         this._showBridgeConnectionStatus();
       }
       if (this._currentStep === WizardStep.Calibrate) {
-        this._calibrationSession?.handleBridgeStatus(msg);
+        this._calibrationFlow?.handleBridgeStatus(msg);
       }
     });
   }
 
-  private _finishSetup(): void {
-    this._logSetup(
-      `finish connect=${this._connectCompleted ? "done" : "skipped"} calibration=${
-        this._calibrationSession?.isComplete() ? "done" : "skipped"
-      }`,
-    );
-    const panel = this.getSceneObject();
-    if (panel) {
-      panel.enabled = false;
-    }
-    if (this.tagAlignmentSession) {
-      this.tagAlignmentSession.setCalibrationGizmoEnabled(false);
-      this.tagAlignmentSession.stop();
-    }
-    this.dimosManager?.enterRuntime();
-  }
+  // ── Rendering helpers ──────────────────────────────────────────
 
-  private _refreshFooterButtons(): void {
-    const footerState = getWizardFooterState(
-      this._currentStep,
-      (this.dimosManager?.bridgeLinkState ?? "disconnected") !== "disconnected",
-      this._calibrationSession?.state ?? createCalibrationViewState(),
+  private _showBridgeConnectionStatus(): void {
+    const presentation = getBridgeStatusPresentationForConnect(
+      this.dimosManager?.bridgeLinkState ?? "disconnected",
+      this._isConnecting,
     );
-    if (
-      this._currentStep === WizardStep.Calibrate &&
-      this._calibrationSession?.isManualOnly()
-    ) {
-      footerState.showManual = false;
+    this._view?.setStatus(presentation.text, presentation.color);
+    if (this.dimosManager?.hasBridgeConnection()) {
+      this.dimosManager.requestBridgeStatus();
     }
-    this._view?.applyFooterState(this._currentStep, footerState);
   }
 
   private _renderCalibrationState(): void {
@@ -226,10 +376,9 @@ export class SetupWizard extends BaseScriptComponent {
       return;
     }
     const display = buildCalibrationDisplay(
-      this._calibrationSession?.state ?? createCalibrationViewState(),
+      this._calibrationFlow?.state ?? createCalibrationViewState(),
       this.dimosManager?.hasBridgeConnection() ?? false,
     );
-    this._view?.setAccuracy("");
     if (display.statusText) {
       this._view?.setStatus(display.statusText, display.statusColor);
     } else {
@@ -242,22 +391,31 @@ export class SetupWizard extends BaseScriptComponent {
     }
   }
 
+  private _refreshFooterButtons(): void {
+    const footerState = getWizardFooterState(
+      this._currentStep,
+      this._isConnected(),
+      this._calibrationFlow?.state ?? createCalibrationViewState(),
+    );
+    if (this._currentStep === WizardStep.Calibrate && this._calibrationFlow?.isManualOnly()) {
+      footerState.showManual = false;
+    }
+    this._view?.applyFooterState(this._currentStep, footerState);
+  }
+
   private _refreshCalibrationDescription(): void {
     const description =
-      this._calibrationSession?.state.mode === "manual"
+      this._calibrationFlow?.state.mode === "manual"
         ? CALIBRATE_DESCRIPTION_MANUAL
         : CALIBRATE_DESCRIPTION_AUTO;
-    this._view?.setStepContent(
-      WIZARD_STEP_TITLES[WizardStep.Calibrate],
-      description,
-    );
+    this._view?.setStepContent(WIZARD_STEP_TITLES[WizardStep.Calibrate], description);
   }
 
   private _toggleManualAlignment(): void {
     if (this._currentStep !== WizardStep.Calibrate) {
       return;
     }
-    this._calibrationSession?.toggleMode();
+    this._calibrationFlow?.toggleMode();
   }
 
   private _beginManualAlignmentPlacementFromWizard(): boolean {
@@ -279,46 +437,35 @@ export class SetupWizard extends BaseScriptComponent {
     if (this._currentStep !== WizardStep.Calibrate) {
       return;
     }
-    const spectaclesTracking = msg.tag_detected;
-    this._calibrationSession?.handleAlignStatus(msg, spectaclesTracking);
-    const method = msg.method ?? "-";
+    this._calibrationFlow?.handleAlignStatus(msg);
     if (msg.state === "aligned") {
-      this._logSetup(
-        `alignment succeeded (${Math.round((msg.quality ?? 0) * 100)}%)`,
-      );
+      this._log(`alignment succeeded (progress=${msg.progress}%)`);
     } else if (msg.state === "failed") {
-      this._logSetup(`alignment failed: ${msg.message || "unknown"}`);
+      this._log(`alignment failed: ${msg.message || "unknown"}`);
     } else {
-      this._logSetup(
-        `align_status state=${msg.state} candidate=${msg.has_candidate} method=${method} "${msg.message}"`,
+      this._log(
+        `align_status state=${msg.state} method=${msg.method} progress=${msg.progress} "${msg.message}"`,
       );
     }
   }
 
-  private _startAutoconnect(): void {
-    if (!this._connectionController || !this._view) {
-      return;
+  private _finishSetup(): void {
+    this._log(
+      `finish connect=${this._connectCompleted ? "done" : "skipped"} calibration=${
+        this._calibrationFlow?.isComplete() ? "done" : "skipped"
+      }`,
+    );
+    const panel = this.getSceneObject();
+    if (panel) {
+      panel.enabled = false;
     }
-    this._connectionController.startAutoconnect(this._view.inputField, {
-      onConnecting: (ip: string) => {
-        this._isConnecting = true;
-        this._view?.setInputText(ip);
-        this._showBridgeConnectionStatus();
-      },
-      onConnected: () => {
-        this._connectCompleted = true;
-        this._isConnecting = false;
-        this._showBridgeConnectionStatus();
-        this._refreshFooterButtons();
-      },
-      onRetrying: () => {
-        this._isConnecting = false;
-        this._showBridgeConnectionStatus();
-      },
-    });
+    if (this.alignmentSession) {
+      this.alignmentSession.stop();
+    }
+    this.dimosManager?.enterRuntime();
   }
 
-  private _logSetup(message: string): void {
+  private _log(message: string): void {
     print(`SetupWizard: ${message}`);
   }
 }

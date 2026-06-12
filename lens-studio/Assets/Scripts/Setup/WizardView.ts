@@ -1,18 +1,13 @@
 import { RectangleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RectangleButton";
 import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
 import {
-  createIconButton,
-  createText,
-  createTextInput,
-  setButtonLabelRect,
-  setButtonStyle,
-  SnapOS2Styles,
-} from "../UI/Shared/UIBuilders";
-import {
   BUTTON_HEIGHT,
   BUTTON_WIDTH,
   COLOR_MUTED,
   COLOR_WHITE,
+  createIconButton,
+  createText,
+  createTextInput,
   FONT_BODY,
   FONT_BUTTON,
   FONT_CALIBRATE_PROGRESS,
@@ -22,17 +17,20 @@ import {
   FONT_WIZARD_TITLE,
   FOOTER_BUTTON_GAP,
   FOOTER_TOP_GAP,
+  setButtonLabelRect,
+  setButtonStyle,
   SLOT_BODY,
   SLOT_FOOTER,
   SLOT_HEADLINE,
   SLOT_INPUT,
   SLOT_STATUS,
+  SnapOS2Styles,
   SPACE_SM,
+  UIFrameMetrics,
   Z_BUTTONS,
   Z_CONTENT,
-  UIFrameMetrics,
-} from "../UI/Shared/UICore";
-import { WizardFooterState, WizardStep } from "./WizardStepData";
+} from "../UI/kit/UIKit";
+import { WizardFooterState, WizardStep } from "./CalibrationFlow";
 
 // ================================================================
 /** Builds and updates the setup wizard panel UI (title, IP input, calibration status, footer). */
@@ -52,7 +50,6 @@ const MANUAL_BUTTON_HEIGHT = BUTTON_HEIGHT;
 export class WizardView {
   private readonly _titleText: Text;
   private readonly _descriptionText: Text;
-  private readonly _accuracyText: Text;
   private readonly _statusText: Text;
   private readonly _detailStatusText: Text;
   private readonly _nextBtn: RectangleButton;
@@ -127,22 +124,7 @@ export class WizardView {
     cursorY -= SLOT_BODY / 2 + SPACE_SM;
 
     cursorY -= ACCURACY_SLOT / 2;
-    this._accuracyText = createText({
-      parent: this._panel,
-      name: "StepAccuracy",
-      text: "",
-      fontSize: FONT_BODY,
-      color: COLOR_MUTED,
-      position: new vec3(0, cursorY, Z_CONTENT),
-      horizontalAlignment: HorizontalAlignment.Center,
-      worldSpaceRect: Rect.create(
-        -innerWidth / 2,
-        innerWidth / 2,
-        -ACCURACY_SLOT / 2,
-        ACCURACY_SLOT / 2,
-      ),
-    });
-
+    // ACCURACY_SLOT spacer: layout-math placeholder only; no text element created.
     cursorY -= ACCURACY_SLOT / 2 + SPACE_SM;
 
     cursorY -= SLOT_INPUT / 2;
@@ -309,11 +291,6 @@ export class WizardView {
     this.setDetailStatus("");
   }
 
-  public setAccuracy(text: string, color: vec4 = COLOR_MUTED): void {
-    this._accuracyText.text = text;
-    this._accuracyText.textFill.color = color;
-  }
-
   public applyStepLayout(step: WizardStep): void {
     const halfWidth = this._innerWidth / 2;
     const halfStatusLine = SLOT_STATUS / 2;
@@ -350,14 +327,12 @@ export class WizardView {
             Z_CONTENT,
           ),
         );
-      this._accuracyText.getSceneObject().enabled = false;
       return;
     }
 
     this._statusText.size = FONT_WIZARD_STATUS;
     this._detailStatusText.size = FONT_WIZARD_STATUS;
     this._detailStatusText.getSceneObject().enabled = true;
-    this._accuracyText.getSceneObject().enabled = true;
     this._statusText.worldSpaceRect = Rect.create(
       -halfWidth,
       halfWidth,

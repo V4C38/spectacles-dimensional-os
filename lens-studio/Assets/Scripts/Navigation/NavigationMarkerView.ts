@@ -3,14 +3,12 @@ import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/Rou
 import animate from "SpectaclesInteractionKit.lspkg/Utils/animate";
 import {
   applyCapabilityButtonPresentation,
-  setButtonStyle,
-  SnapOS2Styles,
-} from "../UI/Shared/UIBuilders";
-import {
   findChildRecursive,
   requireChild,
   requireFirstText,
-} from "../UI/Shared/UICore";
+  setButtonStyle,
+  SnapOS2Styles,
+} from "../UI/kit/UIKit";
 import { yawRotationFromWorldRotation } from "./HeadingRotation";
 
 // ================================================================

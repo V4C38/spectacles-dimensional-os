@@ -1,29 +1,25 @@
-import { LidarDisplayMode, LIDAR_MODE_LABELS, OperatingMode } from "../AppState";
+import { LidarDisplayMode, LIDAR_MODE_LABELS, OperatingMode } from "../Core/AppState";
 import { RectangleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RectangleButton";
+import { scaleIn, scaleOut } from "./kit/UIAnimations";
 import {
   applyCapabilityButtonPresentation,
   bindHoverScale,
   bindToggleButton,
   bindToggleOnValueChange,
-  configureButtonToggle,
-  setButtonEnabled,
-  setButtonStyle,
-  setButtonToggleState,
-  SnapOS2Styles,
-} from "./Shared/UIBuilders";
-import { scaleIn, scaleOut } from "./Shared/UIAnimations";
-import {
-  FONT_BUTTON,
-  FONT_CAPTION,
-} from "./Shared/UICore";
-import {
   ButtonBinding,
+  configureButtonToggle,
   findButtonBinding,
   findChildRecursive,
   findFirstText,
   findText,
+  FONT_BUTTON,
+  FONT_CAPTION,
   requireRectangleButton,
-} from "./Shared/UICore";
+  setButtonEnabled,
+  setButtonStyle,
+  setButtonToggleState,
+  SnapOS2Styles,
+} from "./kit/UIKit";
 
 // ================================================================
 /** Main HUD panel for restart, emergency stop, LiDAR toggle, and mode controls. */
