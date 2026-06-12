@@ -63,6 +63,7 @@ export class PlacementController {
   private _lastValidOutsideDeadzone: vec3 | null = null;
   // BUG-2: cached confirm deferral event (created once, re-armed per press).
   private _confirmDeferralEvent: DelayedCallbackEvent | null = null;
+  private _hitTestDeferralEvent: DelayedCallbackEvent | null = null;
   private _pendingWasExecuting = false;
   private _pendingConfirmPosition = vec3.zero();
   private _pendingConfirmRotation = new quat(1, 0, 0, 0);
@@ -86,7 +87,9 @@ export class PlacementController {
     this.active = true;
     this.visualState = "placing";
     this._beginPlacingAtPose(position, rotation, true);
-    this._ensureHitTestSession();
+    // Defer WorldQuery hit-test session creation to the next frame so it does
+    // not contend with LiDAR mesh and camera stream activating in the same frame.
+    this._hitTestDeferralEvent?.reset(0.0);
     this._ensureUpdateLoop();
   }
 
@@ -224,6 +227,18 @@ export class PlacementController {
         this._emitPreviewTargetChanged(true);
       });
     }
+    // Deferred hit-test session init: created once, re-armed on each start().
+    const hitTestDeferral = this.owner.createEvent(
+      "DelayedCallbackEvent",
+    ) as DelayedCallbackEvent;
+    hitTestDeferral.bind(() => {
+      if (!this.active) {
+        return;
+      }
+      this._ensureHitTestSession();
+    });
+    this._hitTestDeferralEvent = hitTestDeferral;
+
     // BUG-2: create the confirm deferral event once; re-arm per press.
     const confirmDeferral = this.owner.createEvent(
       "DelayedCallbackEvent",

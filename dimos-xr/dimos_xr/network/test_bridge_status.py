@@ -42,6 +42,16 @@ def test_tracker_notify_on_change() -> None:
     assert len(calls) == 2
 
 
+def test_tag_registration_method_uses_wire_value() -> None:
+    """Committed tag alignment must produce registration_method='tag', not 'marker'."""
+    tracker = BridgeStatusTracker(robot_id="unitree_go2", robot_connected=True)
+    tracker.set_registered(True, method="tag", approximate=False)
+    snap = tracker.snapshot()
+    assert snap.registration_method == "tag"
+    raw = json.loads(encode_bridge_status(snap))
+    assert raw["registration_method"] == "tag"
+
+
 def test_tracker_connection_and_recovery_flags() -> None:
     tracker = BridgeStatusTracker(robot_id="unitree_go2", robot_connected=False)
     tracker.set_robot_connected(True)

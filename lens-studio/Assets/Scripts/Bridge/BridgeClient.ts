@@ -20,6 +20,7 @@ import {
   buildPlanPath,
   isNonCriticalInboundMessageType,
   parseInboundMessage,
+  parseLidarBinary,
   ProtocolParseError,
   sniffInboundMessageType,
 } from "./Protocol";
@@ -33,6 +34,12 @@ const PARSE_RECONNECT_THRESHOLD = 5;
 const FRAGMENT_REASSEMBLY_MAX_BYTES = 1_048_576;
 const SEND_DROP_LOG_INTERVAL_S = 1.0;
 const ALIGN_POSE_TX_LOG_INTERVAL_S = 1.0;
+// Diagnostic RX/TX prints fire per-frame/per-status; collapse the repetitive
+// ones so the logs aren't flooded with thousands of identical lines.
+const ALIGN_STATUS_RX_LOG_INTERVAL_S = 2.0;
+const SEND_BINARY_LOG_INTERVAL_S = 2.0;
+// Set to true to re-enable steady-state binary + RX noise for deep debugging.
+const DEBUG_VERBOSE = false;
 
 /** WebSocket client to the DimOS AR bridge; parses inbound messages and sends alignment/navigation commands. */
 @component
@@ -68,6 +75,11 @@ export class BridgeClient extends BaseScriptComponent {
   private _activeRobotId: string | null = null;
   private _lastSendDropLogTime = -1;
   private _lastAlignPoseTxLogTime = -1;
+  private _lastAlignStatusRxLogTime = -1;
+  private _lastAlignStatusRxKey = "";
+  private _lastSendBinaryLogTime = -1;
+  private _lastBridgeStatusKey = "";
+  private _lastNavStatusKey = "";
   private _capabilities: Record<string, CapabilityState> = {};
   public lastBridgeStatus: BridgeStatusMessage | null = null;
 
@@ -187,6 +199,8 @@ export class BridgeClient extends BaseScriptComponent {
     return new Promise((resolve, reject) => {
       try {
         this.ws = this.internetModule.createWebSocket(wsUrl);
+        // Spectacles only supports binaryType "blob"; arraybuffer is not available.
+        this.ws.binaryType = "blob";
       } catch (error) {
         this.isConnecting = false;
         reject(new Error(`Failed to create WebSocket: ${error}`));
@@ -284,7 +298,7 @@ export class BridgeClient extends BaseScriptComponent {
     return this._sendForActiveRobot("get_status", buildGetStatus);
   }
 
-  public sendAlignStart(method: "marker" | "manual"): boolean {
+  public sendAlignStart(method: "tag" | "manual"): boolean {
     return this._sendForActiveRobot("align_start", (robotId) =>
       buildAlignStart(robotId, method),
     );
@@ -372,7 +386,13 @@ export class BridgeClient extends BaseScriptComponent {
 
   public sendBinary(bytes: Uint8Array): void {
     if (this.ws && this.ws.readyState === WS_OPEN) {
-      print(`BridgeClient: sendBinary bytes=${bytes.byteLength} readyState=${this.ws.readyState}`);
+      if (DEBUG_VERBOSE) {
+        const now = getTime();
+        if (now - this._lastSendBinaryLogTime >= SEND_BINARY_LOG_INTERVAL_S) {
+          this._lastSendBinaryLogTime = now;
+          print(`BridgeClient: sendBinary bytes=${bytes.byteLength} readyState=${this.ws.readyState}`);
+        }
+      }
       this.ws.send(bytes);
     } else {
       print(`BridgeClient: sendBinary skipped — not open (readyState=${this.ws ? this.ws.readyState : "null"})`);
@@ -380,7 +400,29 @@ export class BridgeClient extends BaseScriptComponent {
   }
 
   private _onMessage(event: WebSocketMessageEvent): void {
-    const raw = event.data as string;
+    // Spectacles delivers binary WebSocket frames as Blob (arraybuffer unsupported).
+    if (event.data instanceof Blob) {
+      const socket = this.ws;
+      event.data
+        .bytes()
+        .then((bytes: Uint8Array) => {
+          if (this.ws !== socket) {
+            return;
+          }
+          const msg = parseLidarBinary(bytes, this._activeRobotId ?? "");
+          if (msg) {
+            this.onLidar.emit(msg);
+          }
+        })
+        .catch((e: unknown) => {
+          print(`BridgeClient: binary frame decode failed: ${e}`);
+        });
+      return;
+    }
+    if (typeof event.data !== "string") {
+      return;
+    }
+    const raw = event.data;
     const payload = this._reassembleFragment(raw);
     if (payload === null) {
       return;
@@ -606,25 +648,33 @@ export class BridgeClient extends BaseScriptComponent {
   ): void {
     switch (msg.type) {
       case "align_status":
-        print(
-          `BridgeClient: RX align_status state=${msg.state} method=${msg.method ?? "-"} msg="${msg.message}"`,
-        );
+        // SetupWizard / CalibrationFlow already log every align_status change;
+        // skip the duplicate print here.
         break;
       case "camera_frame_ack":
-        print(
-          `BridgeClient: RX camera_frame_ack seq=${msg.seq}`,
-        );
+        // Per-frame ack — silent in the normal path; FrameCaptureController
+        // logs mismatches.
         break;
-      case "bridge_status":
-        print(
-          `BridgeClient: RX bridge_status registered=${msg.registered} robot_connected=${msg.robot_connected}`,
-        );
+      case "bridge_status": {
+        const key = `${msg.registered}|${msg.robot_connected}|${msg.registration_method ?? "-"}`;
+        if (key !== this._lastBridgeStatusKey) {
+          this._lastBridgeStatusKey = key;
+          print(
+            `BridgeClient: RX bridge_status registered=${msg.registered} robot_connected=${msg.robot_connected}`,
+          );
+        }
         break;
-      case "nav_status":
-        print(
-          `BridgeClient: RX nav_status state=${msg.state} goal_reached=${msg.goal_reached} goal_failed=${msg.goal_failed} error_code=${msg.error_code ?? "-"}`,
-        );
+      }
+      case "nav_status": {
+        const key = `${msg.state}|${msg.goal_reached}|${msg.goal_failed}|${msg.error_code ?? "-"}`;
+        if (key !== this._lastNavStatusKey) {
+          this._lastNavStatusKey = key;
+          print(
+            `BridgeClient: RX nav_status state=${msg.state} goal_reached=${msg.goal_reached} goal_failed=${msg.goal_failed} error_code=${msg.error_code ?? "-"}`,
+          );
+        }
         break;
+      }
     }
   }
 }

@@ -8,6 +8,10 @@ const RUNTIME_CAPTURE_INTERVAL_S = 3.0;
 // Safety net only: ack clears _inFlight in the normal case.
 const IN_FLIGHT_TIMEOUT_S = 12.0;
 const MAX_HEAD_ANGULAR_VEL_DEG_S = 40.0;
+// Capture runs ~1/s; collapse the per-frame pipeline trace into a periodic summary.
+const PIPELINE_LOG_INTERVAL_S = 2.0;
+// Set to true to re-enable steady-state pipeline summary logs for deep debugging.
+const DEBUG_VERBOSE = false;
 const RUNTIME_MAX_DISTANCE_CM = 450.0;
 const RUNTIME_MAX_ANGLE_DEG = 35.0;
 
@@ -46,6 +50,7 @@ export class FrameCaptureController extends BaseScriptComponent {
   private _robotWorldPos: vec3 | null = null;
   private _sentCameraInfo = false;
   private _onCaptureError: ((message: string) => void) | null = null;
+  private _lastPipelineLogTime = 0;
 
   // Camera-stream state
   private _cameraTexture: Texture | null = null;
@@ -105,12 +110,14 @@ export class FrameCaptureController extends BaseScriptComponent {
   };
 
   private _onCameraFrameAck = (msg: CameraFrameAckMessage): void => {
-    print(`FrameCaptureController: ack seq=${msg.seq} expected=${this._inFlightSeq}`);
     if (msg.seq === this._inFlightSeq) {
       this._inFlight = false;
       this._inFlightSeq = -1;
       // Idle-gap pacing: start the interval clock from ack receipt.
       this._lastPipelineEndTime = getTime();
+    } else {
+      // Only interesting when it doesn't match the frame we're waiting on.
+      print(`FrameCaptureController: ack seq=${msg.seq} expected=${this._inFlightSeq} (mismatch)`);
     }
   };
 
@@ -268,7 +275,6 @@ export class FrameCaptureController extends BaseScriptComponent {
     const seq = ++this._seq;
     this._inFlightSeq = seq;
     const pipelineStart = getTime();
-    print(`FrameCaptureController: seq=${seq} capture start`);
     try {
       const pose = this._lookupPose(captureTs);
       if (!pose) {
@@ -280,7 +286,6 @@ export class FrameCaptureController extends BaseScriptComponent {
       if (!this._sentCameraInfo) {
         this._sendCameraInfo(texture);
       }
-      print(`FrameCaptureController: seq=${seq} encode start`);
       const jpegBytes = await this._encodeJpeg(texture);
       const bytes = buildCameraFrameBytes({
         robotId,
@@ -292,10 +297,16 @@ export class FrameCaptureController extends BaseScriptComponent {
         jpegBytes,
       });
       this.bridgeClient.sendBinary(bytes);
-      const pipelineMs = Math.round((getTime() - pipelineStart) * 1000);
-      print(
-        `FrameCaptureController: seq=${seq} pipeline=${pipelineMs}ms jpeg=${jpegBytes.byteLength}B`,
-      );
+      if (DEBUG_VERBOSE) {
+        const now = getTime();
+        if (now - this._lastPipelineLogTime >= PIPELINE_LOG_INTERVAL_S) {
+          this._lastPipelineLogTime = now;
+          const pipelineMs = Math.round((now - pipelineStart) * 1000);
+          print(
+            `FrameCaptureController: seq=${seq} pipeline=${pipelineMs}ms jpeg=${jpegBytes.byteLength}B`,
+          );
+        }
+      }
     } catch (error) {
       this._inFlight = false;
       this._inFlightSeq = -1;

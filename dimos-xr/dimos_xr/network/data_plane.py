@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from dimos_xr.network.protocol import encode_lidar, encode_path, encode_path_preview, encode_pose
+from dimos_xr.network.protocol import encode_lidar, encode_lidar_binary, encode_path, encode_path_preview, encode_pose
 from dimos_xr.tracking.filters import LidarFilter, subsample_points_near_robot
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     from dimos_xr.tracking.transforms import Calibration, OdomSample
 
-LIDAR_PAYLOAD_LOG_INTERVAL_S: float = 5.0
+LIDAR_PAYLOAD_LOG_INTERVAL_S: float = 60.0
 DROPPED_POSE_LOG_INTERVAL_S: float = 5.0
 
 
@@ -37,11 +37,14 @@ def build_lidar_payload(
     target_points: int,
     voxel_size: float,
     robot_id: str,
-) -> tuple[str, int] | None:
+    lidar_binary: bool = True,
+) -> tuple[str | bytes, int] | None:
     """Filter, transform, and encode a PointCloud2 into an XR LiDAR payload.
 
-    Returns ``(payload_str, point_count)`` on success, or ``None`` if the
-    lidar rate-limiter drops this frame.
+    Returns ``(payload, point_count)`` on success, or ``None`` if the lidar
+    rate-limiter drops this frame. When ``lidar_binary=True`` (default), the
+    payload is a compact binary frame (Float16, ~6 bytes/point); otherwise a
+    JSON text string is returned.
     """
     if not lidar_filter.config.allow():
         return None
@@ -55,7 +58,10 @@ def build_lidar_payload(
             world_pts = subsample_points_near_robot(
                 world_pts, robot_world_pos, target_points=target_points
             )
-    payload = encode_lidar(ts=msg.ts, points=world_pts, robot_id=robot_id)
+    if lidar_binary:
+        payload: str | bytes = encode_lidar_binary(ts=msg.ts, points=world_pts)
+    else:
+        payload = encode_lidar(ts=msg.ts, points=world_pts, robot_id=robot_id)
     return payload, len(world_pts)
 
 

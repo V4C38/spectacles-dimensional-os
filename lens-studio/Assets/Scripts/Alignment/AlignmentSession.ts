@@ -50,7 +50,7 @@ export class AlignmentSession extends BaseScriptComponent {
   public readonly onAlignStatus = new Signal<AlignStatusMessage>();
 
   /** Intent: the method we want to run. Null = no session desired. */
-  private _intent: "marker" | "manual" | null = null;
+  private _intent: "tag" | "manual" | null = null;
   /** Bridge confirmation: cleared on every disconnect/hello so ensureSession re-arms. */
   private _bridgeSessionConfirmed = false;
   private _awaitingCommit = false;
@@ -98,13 +98,13 @@ export class AlignmentSession extends BaseScriptComponent {
    * Sets intent, attempts to send align_start to the bridge (non-blocking —
    * ensureSession() will retry on the next hello if the bridge isn't ready).
    */
-  public start(method: "marker" | "manual"): void {
+  public start(method: "tag" | "manual"): void {
     this._intent = method;
     this._awaitingCommit = false;
     this._bridgeSessionConfirmed = false;
     this._lastAlignStatusTime = -1;
     this._tryStartBridgeSession(method);
-    if (method === "marker" && this.frameCapture) {
+    if (method === "tag" && this.frameCapture) {
       this.frameCapture.setMode("setup");
     }
     print(`AlignmentSession: start method=${method}`);
@@ -115,7 +115,7 @@ export class AlignmentSession extends BaseScriptComponent {
       return;
     }
     const shouldSendStop = this._bridgeSessionConfirmed;
-    const wasMarker = this._intent === "marker";
+    const wasMarker = this._intent === "tag";
     this._intent = null;
     this._awaitingCommit = false;
     this._bridgeSessionConfirmed = false;
@@ -295,7 +295,7 @@ export class AlignmentSession extends BaseScriptComponent {
 
   // ── Internals ──────────────────────────────────────────────────
 
-  private _tryStartBridgeSession(method: "marker" | "manual"): boolean {
+  private _tryStartBridgeSession(method: "tag" | "manual"): boolean {
     const connected = Boolean(this.bridgeClient?.isConnected());
     const hasRobotId = Boolean(this.bridgeClient?.activeRobotId);
     if (!this.bridgeClient || !connected || !hasRobotId) {

@@ -28,10 +28,13 @@ from collections import deque
 from dataclasses import dataclass
 import json
 import math
+import os
 import struct
 import threading
 import time
 from typing import TYPE_CHECKING, Any
+
+_TRACE = os.getenv("DIMOS_XR_TRACE", "") not in ("", "0", "false")
 
 import cv2
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
@@ -518,15 +521,17 @@ class TagTracker:
             with self._lock:
                 self._last_tag_detected = False
                 self._last_tag_ids = []
-            logger.info("Tag frame: no markers detected", seq=header.get("seq"))
+            if _TRACE:
+                logger.debug("Tag frame: no markers detected", seq=header.get("seq"))
             return FrameResult(False, [], None, 0)
 
         detected_tag_ids = [int(tag_id_arr[0]) for tag_id_arr in ids]
-        logger.info(
-            "Tag frame: markers detected",
-            seq=header.get("seq"),
-            tag_ids=detected_tag_ids,
-        )
+        if _TRACE:
+            logger.debug(
+                "Tag frame: markers detected",
+                seq=header.get("seq"),
+                tag_ids=detected_tag_ids,
+            )
 
         T_world_glcam = pose_to_matrix(
             tuple(header["cam_pos"]),

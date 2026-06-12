@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import threading
 from typing import Literal
 
-RegistrationMethod = Literal["marker", "manual"] | None
+RegistrationMethod = Literal["tag", "manual"] | None
 
 StatusChangeCallback = Callable[[], None]
 

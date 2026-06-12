@@ -157,7 +157,7 @@ export function applyAlignStatusToCalibrationState(
   state: CalibrationViewState,
   msg: AlignStatusMessage,
 ): CalibrationViewState {
-  if (state.mode === "auto" && msg.method !== "marker") return state;
+  if (state.mode === "auto" && msg.method !== "tag") return state;
   if (state.mode === "manual" && msg.method !== "manual") return state;
 
   let phase: CalibrationPhase = state.phase;
@@ -205,6 +205,10 @@ export function getWizardFooterState(
       nextLabel = "Complete";
       nextStyle = SnapOS2Styles.Primary;
     } else if (hasCalibrationCandidate(calibrationState)) {
+      nextLabel = "Complete";
+      nextStyle = SnapOS2Styles.Primary;
+    } else if (calibrationState.mode === "manual") {
+      // Manual placement commits via Complete even while still editing.
       nextLabel = "Complete";
       nextStyle = SnapOS2Styles.Primary;
     }
@@ -450,7 +454,7 @@ export class CalibrationFlow {
       this._state = { ...this._state, message: "" };
       this._notify();
     });
-    this._alignmentSession?.start("marker");
+    this._alignmentSession?.start("tag");
     this._notify(true);
   }
 

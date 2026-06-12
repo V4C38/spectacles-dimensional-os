@@ -175,9 +175,26 @@ payload size on Wi-Fi:
 | `path` / `path_preview` waypoints and `target` | 3 |
 | `ts` on high-rate streams (`lidar`, `pose`, `path`, `path_preview`) | 3 |
 
-### `lidar`
+### `lidar` (binary — default)
 
-Subsampled point cloud in XR world frame:
+Subsampled point cloud in XR world frame, sent as a **binary WebSocket frame**
+(message type `0x01 lidar_f16`). Each point is encoded as three IEEE 754
+half-precision (float16) values, little-endian. Up to 2500 points per frame.
+
+Wire layout:
+
+| Offset | Size | Type | Field |
+|--------|------|------|-------|
+| 0 | 1 B | uint8 | message_type = `0x01` |
+| 1 | 4 B | float32 LE | timestamp (seconds) |
+| 5 | N×6 B | float16[] LE | x, y, z per point in world metres |
+
+Point count: `N = (total_bytes − 5) / 6`.
+
+### `lidar` (JSON — legacy fallback)
+
+The JSON format is preserved for debugging and backwards compatibility. It is
+only emitted when `XRBridgeConfig.lidar_binary = False`.
 
 ```json
 {

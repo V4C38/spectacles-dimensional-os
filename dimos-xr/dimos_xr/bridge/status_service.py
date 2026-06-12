@@ -87,7 +87,7 @@ class StatusService:
         self,
         registered: bool,
         *,
-        method: Literal["manual", "marker"] | None = None,
+        method: Literal["manual", "tag"] | None = None,
         approximate: bool | None = None,
     ) -> None:
         self._tracker.set_registered(registered, method=method, approximate=approximate)

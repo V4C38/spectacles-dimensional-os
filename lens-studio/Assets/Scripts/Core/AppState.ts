@@ -185,6 +185,11 @@ export function robotFloorWorldYCm(
   markerWorldYCm: number,
   runtime: RobotRuntimeState,
 ): number {
+  // Offline/manual marker Y is already ground contact; base_height only applies
+  // to bridge poses at base_link after hello negotiation.
+  if (!runtime.negotiated) {
+    return markerWorldYCm;
+  }
   const baseHeightM =
     runtime.baseHeightM ??
     (runtime.bodyBoundsM ? runtime.bodyBoundsM[2] : null);
@@ -210,7 +215,7 @@ export function createDefaultRobotRuntimeState(): RobotRuntimeState {
     visualOriginFrame: "base_link",
     bodyBoundsM: null,
     footprintM: null,
-    baseHeightM: 0.33,
+    baseHeightM: null,
     defaultRenderOffsetM: null,
     alignmentProfile: null,
     capabilities,

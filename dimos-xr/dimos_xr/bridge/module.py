@@ -56,7 +56,8 @@ class XRBridgeConfig(ModuleConfig):  # type: ignore[misc]
     min_height_m: float | None = -0.35
     max_height_m: float | None = 1.2
     obstacle_height_threshold_m: float = 0.08
-    target_points: int = 1000
+    target_points: int = 1500
+    lidar_binary: bool = True
     lidar_max_hz: float = 1.0
     # Voxel grid size for coarse LiDAR downsampling before the height-band filter.
     # The DimOS default is 0.025 m; 0.05 m is chosen deliberately for XR payload budget.
@@ -190,6 +191,7 @@ class XRBridge(Module):  # type: ignore[misc]
             target_points=self.config.target_points,
             lidar_voxel_size_m=self.config.lidar_voxel_size_m,
             pose_max_hz=self.config.pose_max_hz,
+            lidar_binary=self.config.lidar_binary,
         )
 
         assert self._loop is not None, "build() called before Module loop is assigned"

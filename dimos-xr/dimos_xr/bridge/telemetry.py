@@ -45,6 +45,7 @@ class TelemetryPublisher:
         target_points: int,
         lidar_voxel_size_m: float,
         pose_max_hz: float,
+        lidar_binary: bool = True,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
@@ -54,6 +55,7 @@ class TelemetryPublisher:
         self._target_points = target_points
         self._lidar_voxel_size_m = lidar_voxel_size_m
         self._pose_max_hz = pose_max_hz
+        self._lidar_binary = lidar_binary
         self._pose_last_emit: float = 0.0
         self._dropped_pose_count: int = 0
         self._last_dropped_pose_log_mono: float = 0.0
@@ -71,15 +73,23 @@ class TelemetryPublisher:
             target_points=self._target_points,
             voxel_size=self._lidar_voxel_size_m,
             robot_id=self._robot_id,
+            lidar_binary=self._lidar_binary,
         )
         if result is None:
             return
         payload, point_count = result
         if not self._logged_lidar_stream_active:
             self._logged_lidar_stream_active = True
-            logger.info("LiDAR stream active", hz=self._lidar_filter.config.max_hz)
+            logger.info(
+                "LiDAR stream active",
+                hz=self._lidar_filter.config.max_hz,
+                binary=self._lidar_binary,
+            )
         self._maybe_log_lidar_payload(point_count, len(payload))
-        self._sender.send(payload)
+        if isinstance(payload, bytes):
+            self._sender.send_binary(payload)
+        else:
+            self._sender.send(payload)
 
     def publish_pose(self, msg: PoseStamped) -> None:
         if not self._calibration.is_registered:

@@ -87,7 +87,7 @@ export interface AlignStatusMessage {
   type: "align_status";
   ts: number;
   robot_id: string;
-  method: "marker" | "manual";
+  method: "tag" | "manual";
   state: "detecting" | "ready" | "aligned" | "failed";
   progress: number;
   message: string;
@@ -110,7 +110,7 @@ export interface BridgeStatusMessage {
   streams_active: boolean;
   registered: boolean;
   reconnecting: boolean;
-  registration_method?: "marker" | "manual";
+  registration_method?: "tag" | "manual";
   registration_approximate?: boolean;
 }
 
@@ -368,7 +368,7 @@ function parseInboundObject(
         return null;
       }
       const method = data.method;
-      if (method !== "marker" && method !== "manual") {
+      if (method !== "tag" && method !== "manual") {
         print(`Protocol: unknown align_status.method "${method}"; skipping`);
         return null;
       }
@@ -407,7 +407,7 @@ function parseInboundObject(
         reconnecting: Boolean(data.reconnecting),
       };
       if (
-        data.registration_method === "marker" ||
+        data.registration_method === "tag" ||
         data.registration_method === "manual"
       ) {
         status.registration_method = data.registration_method;
@@ -503,7 +503,7 @@ export function buildGetStatus(robotId: string): string {
 /** v4: align_start includes the session method. */
 export function buildAlignStart(
   robotId: string,
-  method: "marker" | "manual",
+  method: "tag" | "manual",
 ): string {
   return JSON.stringify({
     type: "align_start",
@@ -651,6 +651,56 @@ export function buildEmergencyStop(robotId: string): string {
     ts: getTime(),
     robot_id: robotId,
   });
+}
+
+// Binary lidar frame (message_type 0x01 = lidar_f16).
+// Layout: [1B type][4B float32 ts LE][N*6B float16 xyz world-metres LE]
+const LIDAR_F16_TYPE = 0x01;
+
+function _getFloat16LE(view: DataView, byteOffset: number): number {
+  const h = view.getUint16(byteOffset, true);
+  const exp = (h >> 10) & 0x1f;
+  const mant = h & 0x3ff;
+  if (exp === 0) {
+    return (h >> 15 ? -1 : 1) * Math.pow(2, -14) * (mant / 1024);
+  }
+  if (exp === 31) {
+    return mant ? NaN : h >> 15 ? -Infinity : Infinity;
+  }
+  return (h >> 15 ? -1 : 1) * Math.pow(2, exp - 15) * (1 + mant / 1024);
+}
+
+/**
+ * Parse a binary lidar_f16 WebSocket frame into a LidarMessage.
+ * Accepts a Uint8Array (from Blob.bytes()) — Spectacles only delivers binary
+ * WebSocket frames as Blob, not ArrayBuffer.
+ * The robot_id is not present in the binary frame; pass the currently
+ * active robot id from the session context.
+ */
+export function parseLidarBinary(
+  data: Uint8Array,
+  robotId: string,
+): LidarMessage | null {
+  if (data.byteLength < 5) {
+    return null;
+  }
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const msgType = view.getUint8(0);
+  if (msgType !== LIDAR_F16_TYPE) {
+    return null;
+  }
+  const ts = view.getFloat32(1, true);
+  const pointBytes = data.byteLength - 5;
+  const n = Math.floor(pointBytes / 6);
+  const points: [number, number, number][] = [];
+  for (let i = 0; i < n; i++) {
+    const base = 5 + i * 6;
+    const x = _getFloat16LE(view, base);
+    const y = _getFloat16LE(view, base + 2);
+    const z = _getFloat16LE(view, base + 4);
+    points.push([x, y, z]);
+  }
+  return { type: "lidar", ts, robot_id: robotId, frame: "world", points };
 }
 
 /** Derive BridgeLinkState from connection + bridge_status flags. */

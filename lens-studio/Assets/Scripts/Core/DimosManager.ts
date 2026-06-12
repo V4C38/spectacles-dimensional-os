@@ -95,6 +95,7 @@ export class DimosManager extends BaseScriptComponent {
 
   private _robotMenuView: RobotMenuView | null = null;
   private _nav: NavigationController | null = null;
+  private _placementDeferralEvent: DelayedCallbackEvent | null = null;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
@@ -102,6 +103,14 @@ export class DimosManager extends BaseScriptComponent {
       this._bindBridgeHandlers();
       this.enterSetup();
     });
+
+    // Defer placement activation one frame after enterRuntime to avoid
+    // initializing WorldQuery in the same frame as LiDAR mesh + camera stream.
+    const placementDeferral = this.createEvent(
+      "DelayedCallbackEvent",
+    ) as DelayedCallbackEvent;
+    placementDeferral.bind(() => this._nav?.syncPlacementState());
+    this._placementDeferralEvent = placementDeferral;
   }
 
   public subscribeAppState(listener: AppStateListener): () => void {
@@ -373,7 +382,9 @@ export class DimosManager extends BaseScriptComponent {
     this._setAppState({ phase: "runtime" });
     this._setRobotInteractionMode("runtimeRobot");
     this.robotMarker?.syncPose();
-    this._nav?.syncPlacementState();
+    // Defer placement (WorldQuery hit-test init) to the next frame so LiDAR
+    // mesh and runtime camera stream have one frame to settle after commit.
+    this._placementDeferralEvent?.reset(0.0);
   }
 
   // ── Connection (inlined from ConnectionCoordinator) ────────────

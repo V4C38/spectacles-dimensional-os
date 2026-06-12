@@ -26,7 +26,14 @@
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
-    {}
+    alignmentSession: false
+    bridgeClient: false
+    frameCaptureController: false
+    navigationMarkerRoot: false
+    placementRayOrigin: false
+    pointCloudRenderer: false
+    robotGroundDeadzoneRadiusCm: false
+    robotMarker: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -36,10 +43,23 @@
   Attachments:
     []
   DefaultScriptInputs:
-    -
-      {}
+    - bridgeClient: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
+      frameCaptureController: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
+      pointCloudRenderer: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
+      robotMarker: !<MappingBased.AssignableType_3> 00000000-0000-0000-0000-000000000000
+      placementRayOrigin: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      navigationMarkerRoot: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      robotGroundDeadzoneRadiusCm: !<float> 75.000000
+      alignmentSession: !<MappingBased.AssignableType_4> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
   InputLines:
-    []
+    - // @input AssignableType bridgeClient
+    - // @input AssignableType_1 frameCaptureController
+    - // @input AssignableType_2 pointCloudRenderer
+    - // @input AssignableType_3 robotMarker
+    - // @input SceneObject placementRayOrigin
+    - // @input SceneObject navigationMarkerRoot
+    - // @input float robotGroundDeadzoneRadiusCm = 75
+    - // @input AssignableType_4 alignmentSession

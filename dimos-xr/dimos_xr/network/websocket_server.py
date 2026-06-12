@@ -80,6 +80,11 @@ _MESSAGE_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
 PING_INTERVAL_S = 30
 PING_TIMEOUT_S = 30
 
+# Gate per-frame / per-message firehose logs. Set DIMOS_XR_TRACE=1 to enable.
+_TRACE = os.getenv("DIMOS_XR_TRACE", "") not in ("", "0", "false")
+# Inbound message types logged only under trace (too frequent for normal DEBUG).
+_TRACE_ONLY_INBOUND_TYPES = frozenset({"get_status"})
+
 
 def _handshake_noise_filter(record: logging.LogRecord) -> bool:
     """Drop noisy handshake-failed records from port scanners and non-WS clients."""
@@ -185,7 +190,7 @@ class _ConnectionOutbound:
             await self._websocket.send(text)
             self._sent_count += 1
             msg_type = _peek_message_type(text)
-            if msg_type == "align_status" and os.getenv("DIMOS_LOG_LEVEL", "INFO") == "DEBUG":
+            if _TRACE and msg_type == "align_status":
                 logger.debug("XR WebSocket outbound align_status sent", bytes=len(text))
             now = time.monotonic()
             if now - self._last_backlog_log_mono >= OUTBOUND_BACKLOG_LOG_INTERVAL_S:
@@ -336,10 +341,11 @@ class XRWebSocketServer:
             async for message in websocket:
                 try:
                     if isinstance(message, bytes):
-                        logger.info(
-                            "XR inbound binary frame",
-                            bytes=len(message),
-                        )
+                        if _TRACE:
+                            logger.debug(
+                                "XR inbound binary frame",
+                                bytes=len(message),
+                            )
                         if self._on_camera_frame is None:
                             logger.warning("Binary camera_frame received but no handler")
                             continue
@@ -354,10 +360,16 @@ class XRWebSocketServer:
                         raise ValueError("Unsupported WebSocket frame type")
                     msg_type = _peek_message_type(message)
                     now_mono = time.monotonic()
-                    if msg_type not in _THROTTLED_INBOUND_TYPES or (
-                        now_mono - _last_inbound_text_log.get(msg_type, 0.0)
-                        >= INBOUND_TEXT_LOG_INTERVAL_S
-                    ):
+                    _should_log = (
+                        msg_type not in _THROTTLED_INBOUND_TYPES
+                        and (not _TRACE_ONLY_INBOUND_TYPES or msg_type not in _TRACE_ONLY_INBOUND_TYPES)
+                    ) or (
+                        msg_type in _THROTTLED_INBOUND_TYPES
+                        and now_mono - _last_inbound_text_log.get(msg_type, 0.0) >= INBOUND_TEXT_LOG_INTERVAL_S
+                    ) or (
+                        msg_type in _TRACE_ONLY_INBOUND_TYPES and _TRACE
+                    )
+                    if _should_log:
                         if msg_type is not None:
                             _last_inbound_text_log[msg_type] = now_mono
                         logger.info("XR inbound text message", type=msg_type)
@@ -438,12 +450,23 @@ class XRWebSocketServer:
         """Enqueue a broadcast from any thread onto the server loop."""
         asyncio.run_coroutine_threadsafe(self._enqueue_all(text), self._loop)
 
+    def schedule_send_binary(self, data: bytes) -> None:
+        """Broadcast a raw binary WebSocket frame to all connected clients."""
+        asyncio.run_coroutine_threadsafe(self._broadcast_binary(data), self._loop)
+
     def schedule_send_to(self, websocket: ws_server.ServerConnection, text: str) -> None:
         asyncio.run_coroutine_threadsafe(self._enqueue_one(websocket, text), self._loop)
 
     async def _enqueue_all(self, text: str) -> None:
         for outbound in list(self._outbound.values()):
             outbound.enqueue(text)
+
+    async def _broadcast_binary(self, data: bytes) -> None:
+        for websocket in list(self._outbound.keys()):
+            try:
+                await websocket.send(data)
+            except Exception:
+                pass
 
     async def _enqueue_one(self, websocket: ws_server.ServerConnection, text: str) -> None:
         outbound = self._outbound.get(websocket)

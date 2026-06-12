@@ -19,8 +19,11 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.transform_utils import normalize_angle
 import numpy as np
+import os
 
 from dimos_xr.network.data_plane import DROPPED_POSE_LOG_INTERVAL_S
+
+_TRACE = os.getenv("DIMOS_XR_TRACE", "") not in ("", "0", "false")
 from dimos_xr.network.protocol import (
     AlignCommitMessage,
     AlignManualPoseMessage,
@@ -240,12 +243,13 @@ class AlignmentController:
         seq = int(header.get("seq", -1))
         frame_age = float(header["send_ts"]) - float(header["ts"])
         jpeg_bytes = len(jpeg)
-        logger.info(
-            "XR camera frame received",
-            seq=seq,
-            jpeg_bytes=jpeg_bytes,
-            frame_age_s=round(frame_age, 3),
-        )
+        if _TRACE:
+            logger.debug(
+                "XR camera frame received",
+                seq=seq,
+                jpeg_bytes=jpeg_bytes,
+                frame_age_s=round(frame_age, 3),
+            )
         # Always ack, even for dropped frames — the Lens uses the ack to clear
         # its single-flight state; a silent drop forces it into the in-flight
         # timeout path and can pile up capture pipelines (memory pressure).
@@ -295,13 +299,14 @@ class AlignmentController:
                 T_committed=T_committed,
                 registered=registered,
             )
-            logger.info(
-                "XR camera frame processed",
-                seq=seq,
-                tag_detected=result.tag_detected,
-                tag_ids=result.tag_ids if result.tag_ids else None,
-                quality=round(result.quality, 3) if result.quality else None,
-            )
+            if _TRACE:
+                logger.debug(
+                    "XR camera frame processed",
+                    seq=seq,
+                    tag_detected=result.tag_detected,
+                    tag_ids=result.tag_ids if result.tag_ids else None,
+                    quality=round(result.quality, 3) if result.quality else None,
+                )
             self._sender.send(
                 encode_camera_frame_ack(robot_id=self._robot_id, seq=seq)
             )
@@ -468,10 +473,12 @@ class AlignmentController:
                 mean_yaw_error_deg=round(math.degrees(mean_yaw_error), 2),
                 samples=self._candidate_count,
             )
+        # NOTE: do not pass ``method`` here — ``method`` is the *internal* solver
+        # name ("marker"/"tag_orientation"), not a wire value. The wire method must
+        # stay "tag" (the session method) or the Lens rejects the whole message.
         self._broadcast_align_status(
             state="detecting",
             tag_visible=self._tag_detected(),
-            method=method,
             message=(
                 "Alignment improved — hold steady for best result"
                 if improved
@@ -549,24 +556,24 @@ class AlignmentController:
         self._stop_broadcast()
         self._calibration.register_from_alignment(result.T_world_odom)
         self._publish_world_odom_tf(result.T_world_odom)
-        method: Literal["manual", "marker"] = "manual" if result.method == "manual" else "marker"
+        wire_method: Literal["tag", "manual"] = "manual" if result.method == "manual" else "tag"
         self._status.set_registered(
             True,
-            method=method,
+            method=wire_method,
             approximate=result.approximate,
         )
         logger.info(
             "Alignment succeeded",
             quality=round(result.quality, 3),
             samples=self._candidate_count,
-            method=method,
+            method=wire_method,
             approximate=result.approximate,
         )
         self._clear_session()
         self._status.broadcast()
         self._broadcast_align_status(
             state="aligned",
-            method=method,
+            method=wire_method,
             message=(
                 "Manual alignment committed"
                 if result.method == "manual"
@@ -629,7 +636,7 @@ class AlignmentController:
 
     def _compute_progress(self, state: str) -> int:
         """Return a 0-100 progress integer for the current session state."""
-        if state == "aligned":
+        if state in ("aligned", "ready"):
             return 100
         if state == "failed":
             return 0
@@ -654,17 +661,27 @@ class AlignmentController:
         ts: float | None = None,
     ) -> None:
         effective_method = method or self._session_method or "tag"
+        # A committable tag candidate exists → advance the wire state to "ready"
+        # so the Lens can offer the Complete action. Without this the tag session
+        # stays in "detecting" forever and the user can never commit.
+        effective_state = state
+        if (
+            state == "detecting"
+            and self._session_method == "tag"
+            and self._best_alignment is not None
+        ):
+            effective_state = "ready"
         if not message and state == "detecting":
             message = self._align_status_message()
         if progress is None:
-            progress = self._compute_progress(state)
+            progress = self._compute_progress(effective_state)
         if tag_visible is None and effective_method == "tag":
             tag_visible = self._tag_detected()
         self._sender.send(
             encode_align_status(
                 ts=ts,
                 robot_id=self._robot_id,
-                state=state,
+                state=effective_state,
                 method=effective_method,
                 progress=progress,
                 message=message,

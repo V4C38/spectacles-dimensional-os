@@ -438,14 +438,12 @@ export class SetupWizard extends BaseScriptComponent {
       return;
     }
     this._calibrationFlow?.handleAlignStatus(msg);
+    // Detecting/ready updates arrive ~3-4/s; CalibrationFlow already logs those
+    // (throttled + deduped). Only surface the terminal transitions here.
     if (msg.state === "aligned") {
       this._log(`alignment succeeded (progress=${msg.progress}%)`);
     } else if (msg.state === "failed") {
       this._log(`alignment failed: ${msg.message || "unknown"}`);
-    } else {
-      this._log(
-        `align_status state=${msg.state} method=${msg.method} progress=${msg.progress} "${msg.message}"`,
-      );
     }
   }
 

@@ -1745,7 +1745,7 @@
     "":
       dimosManager: !<MappingBased.AssignableType> ef9bba3c-1138-44cc-b761-7ef88bf3856d
       uiManager: !<MappingBased.AssignableType_1> 4e5ef885-944c-4898-b6ae-cae879e72a87
-      tagAlignmentSession: !<MappingBased.AssignableType_2> f7144df4-6cb9-41b7-90ed-629872a8120d
+      alignmentSession: !<MappingBased.AssignableType_2> f7144df4-6cb9-41b7-90ed-629872a8120d
   ScriptTypes:
     "":
       {}
@@ -4837,6 +4837,7 @@
   ScriptInputs:
     "":
       markerRoot: !<reference.SceneObject> 5d452f16-b5e4-4fe1-b630-d1e608c2c0c7
+      frameCapture: !<MappingBased.AssignableType> a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b
   ScriptTypes:
     "":
       {}
@@ -5584,7 +5585,7 @@
     []
   Name: BridgeClient
   Enabled: true
-  ScriptAsset: !<reference> d84cf546-250c-42b1-9fd1-f964bbf5fa4d
+  ScriptAsset: !<reference> caff008b-c706-414a-be2e-efaad98f9535
   ScriptInputsDefault:
     {}
   ScriptTypesDefault:
@@ -6143,7 +6144,7 @@
     []
   Name: PointCloudRenderer
   Enabled: true
-  ScriptAsset: !<reference> 827e4123-6a34-4227-916c-d9e54ea1e595
+  ScriptAsset: !<reference> e3dd8fb0-5293-4da1-af29-b1bdd911e349
   ScriptInputsDefault:
     {}
   ScriptTypesDefault:
@@ -6205,7 +6206,7 @@
     []
   Name: DimosManager
   Enabled: true
-  ScriptAsset: !<reference> e7e43436-94a6-41bb-9fbf-20dfa652daeb
+  ScriptAsset: !<reference> c1e64b90-558d-45bf-b045-9d35cc7c0793
   ScriptInputsDefault:
     robotGroundDeadzoneRadiusCm: true
   ScriptTypesDefault:
@@ -6217,7 +6218,9 @@
       pointCloudRenderer: !<MappingBased.AssignableType_2> edc2d9a2-52ca-414f-acba-c9661ee12fea
       robotMarker: !<MappingBased.AssignableType_3> b749cbc7-9706-4499-8d79-19f5a03dd792
       placementRayOrigin: !<reference.SceneObject> 00000000-0000-0065-0000-000000000064
+      navigationMarkerRoot: !<reference.SceneObject> a30db649-5675-46c5-a50b-92b2fbd052a7
       robotGroundDeadzoneRadiusCm: !<float> 75.000000
+      alignmentSession: !<MappingBased.AssignableType_4> f7144df4-6cb9-41b7-90ed-629872a8120d
   ScriptTypes:
     "":
       {}
@@ -6443,9 +6446,9 @@
 - !<ScriptComponent/f7144df4-6cb9-41b7-90ed-629872a8120d>
   PrefabRemaps:
     []
-  Name: TagAlignmentSession
+  Name: AlignmentSession
   Enabled: true
-  ScriptAsset: !<reference> 195d211d-fbcd-4ed9-97c6-33f95380edc2
+  ScriptAsset: !<reference> ca650874-25a1-41a8-8e8b-b789474edd31
   ScriptInputsDefault:
     {}
   ScriptTypesDefault:
@@ -6454,6 +6457,7 @@
     "":
       bridgeClient: !<MappingBased.AssignableType> d44336ee-e3d0-430c-8b0d-ae6a4a6af963
       frameCapture: !<MappingBased.AssignableType_1> a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b
+      robotMarker: !<MappingBased.AssignableType_2> b749cbc7-9706-4499-8d79-19f5a03dd792
   ScriptTypes:
     "":
       {}

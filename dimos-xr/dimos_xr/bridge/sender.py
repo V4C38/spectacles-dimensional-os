@@ -33,6 +33,10 @@ class BridgeSender:
         if self._server is not None:
             self._server.schedule_send(payload)
 
+    def send_binary(self, payload: bytes) -> None:
+        if self._server is not None:
+            self._server.schedule_send_binary(payload)
+
     def send_to(self, websocket: ServerConnection, payload: str) -> None:
         if self._server is not None:
             self._server.schedule_send_to(websocket, payload)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import struct
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -339,6 +340,29 @@ def encode_lidar(
             "points_flat": _round_flat(points),
         }
     )
+
+
+# Binary lidar frame (message_type 0x01 = lidar_f16).
+# Format: [1B type=0x01][4B float32 ts little-endian][N*6B float16 xyz world-metres]
+_LIDAR_F16_TYPE: int = 0x01
+
+
+def encode_lidar_binary(
+    *,
+    ts: float,
+    points: NDArray[np.floating],
+) -> bytes:
+    """Encode a LiDAR point cloud as a compact binary WebSocket frame.
+
+    The binary format is 6 bytes per point (3 × IEEE754 float16, little-endian)
+    plus a 5-byte header, vs ~18 bytes/point in JSON text. At 2500 points the
+    frame is ~15 KB compared to ~18–20 KB for JSON.
+    """
+    header = struct.pack("<Bf", _LIDAR_F16_TYPE, float(ts))
+    if points.size == 0:
+        return header
+    f16 = np.asarray(points, dtype=np.float16)
+    return header + f16.tobytes()
 
 
 def encode_align_status(
