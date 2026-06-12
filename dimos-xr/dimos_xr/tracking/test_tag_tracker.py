@@ -13,9 +13,13 @@ from dimos_xr.adapters.go2 import GO2_DEFAULT_TAG_MOUNTS
 from dimos_xr.tracking.tag_tracker import (
     CAMERA_FRAME_MAGIC,
     DEFAULT_MARKER_ID,
+    AlignmentCandidate,
     TagMount,
     TagTracker,
     TagTrackerConfig,
+    _matrix_from_yaw_and_translation,
+    _yaw_from_T,
+    average_cluster_transform,
     build_camera_info,
     build_T_world_odom,
     parse_camera_frame,
@@ -253,3 +257,31 @@ def test_tag_tracker_without_camera_info_returns_empty() -> None:
     )
     assert result.tag_detected is False
     assert result.observations_added == 0
+
+
+# ---------------------------------------------------------------------------
+# Yaw convention round-trip tests (regression guard for Bug A)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("theta_deg", [-150, -90, -30, 30, 45, 90, 137])
+def test_yaw_roundtrip_build_T(theta_deg: float) -> None:
+    theta = math.radians(theta_deg)
+    assert math.isclose(_yaw_from_T(build_T_world_odom(theta, (0.0, 0.0, 0.0))), theta, abs_tol=1e-9)
+
+
+@pytest.mark.parametrize("theta_deg", [-150, -30, 30, 137])
+def test_yaw_roundtrip_matrix_from_yaw(theta_deg: float) -> None:
+    theta = math.radians(theta_deg)
+    T = _matrix_from_yaw_and_translation(theta, np.zeros(3))
+    assert math.isclose(_yaw_from_T(T), theta, abs_tol=1e-9)
+    np.testing.assert_allclose(T[:3, 0], build_T_world_odom(theta, (0.0, 0.0, 0.0))[:3, 0], atol=1e-9)
+
+
+def test_single_candidate_cluster_average_is_identity_op() -> None:
+    theta = math.radians(40.0)
+    T = build_T_world_odom(theta, (1.2, 0.0, -2.0))
+    candidate = AlignmentCandidate(T_world_odom=T, quality=1.0, method="marker", approximate=False)
+    T_avg, yaw_spread, trans_spread = average_cluster_transform([candidate])
+    np.testing.assert_allclose(T_avg, T, atol=1e-9)
+    assert yaw_spread == 0.0 and trans_spread == 0.0

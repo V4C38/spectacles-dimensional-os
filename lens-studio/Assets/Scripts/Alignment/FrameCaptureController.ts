@@ -1,5 +1,6 @@
 import { BridgeClient } from "../Bridge/BridgeClient";
 import { buildCameraFrameBytes, buildCameraInfo, CameraFrameAckMessage } from "../Bridge/Protocol";
+import { quatFromMat4Rotation } from "../Core/MathUtils";
 
 const POSE_BUFFER_CAPACITY = 180;
 // Interval measured from pipeline END (ack or finally), guaranteeing idle GC time.
@@ -392,15 +393,14 @@ export class FrameCaptureController extends BaseScriptComponent {
     if (!this._deviceCamera) {
       return { position: devicePose.position, rotation: devicePose.rotation };
     }
-    const offset = new vec3(
-      this._deviceCamera.pose.column3.x,
-      this._deviceCamera.pose.column3.y,
-      this._deviceCamera.pose.column3.z,
-    );
-    const worldOffset = devicePose.rotation.multiplyVec3(offset);
+    // DeviceCamera.pose is T_device_camera on Spectacles: converts camera-space
+    // points to device-center space. Composing with devicePose gives T_world_camera.
+    const extrinsic = this._deviceCamera.pose;
+    const extrinsicPos = new vec3(extrinsic.column3.x, extrinsic.column3.y, extrinsic.column3.z);
+    const extrinsicRot = quatFromMat4Rotation(extrinsic);
     return {
-      position: devicePose.position.add(worldOffset),
-      rotation: devicePose.rotation,
+      position: devicePose.position.add(devicePose.rotation.multiplyVec3(extrinsicPos)),
+      rotation: devicePose.rotation.multiply(extrinsicRot),
     };
   }
 

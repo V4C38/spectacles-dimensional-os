@@ -59,8 +59,6 @@ export class PlacementController {
   private _robotGroundDeadzone: RobotGroundDeadzone | null = null;
   private _placementActive = false;
   /** False at spawn on robot; true once user drags or marker leaves deadzone. */
-  private _enforceRobotDeadzone = false;
-  private _lastValidOutsideDeadzone: vec3 | null = null;
   // BUG-2: cached confirm deferral event (created once, re-armed per press).
   private _confirmDeferralEvent: DelayedCallbackEvent | null = null;
   private _hitTestDeferralEvent: DelayedCallbackEvent | null = null;
@@ -441,8 +439,7 @@ export class PlacementController {
       effectiveY = this.lastGroundHeight;
     }
 
-    const sampleInsideDeadzone = this._isInsideRobotGroundDeadzone(foundPosition);
-    if (!sampleInsideDeadzone || !this._enforceRobotDeadzone) {
+    if (!this._isInsideRobotGroundDeadzone(foundPosition)) {
       this._surfaceStabilizer.pushSample(foundPosition, effectiveY);
     }
 
@@ -462,22 +459,7 @@ export class PlacementController {
     fallbackPoint: vec3,
     snapImmediate: boolean,
   ): void {
-    if (!this._enforceRobotDeadzone && this._isInsideRobotGroundDeadzone(rawTarget)) {
-      // Initial spawn at robot anchor is allowed.
-    } else if (this._isInsideRobotGroundDeadzone(rawTarget)) {
-      this._enforceRobotDeadzone = true;
-    } else {
-      this._enforceRobotDeadzone = true;
-      this._lastValidOutsideDeadzone = new vec3(
-        rawTarget.x,
-        rawTarget.y,
-        rawTarget.z,
-      );
-    }
-
-    let target = this._enforceRobotDeadzone
-      ? this._clampOutsideRobotDeadzone(rawTarget, fallbackPoint)
-      : rawTarget;
+    let target = rawTarget;
 
     const dt = getDeltaTime();
     if (dt <= 0) {
@@ -492,66 +474,10 @@ export class PlacementController {
     if (this.isDragging && this.activeInteractor) {
       // Drag XZ follows the hand immediately; only height is temporally smoothed.
       target = new vec3(fallbackPoint.x, target.y, fallbackPoint.z);
-      target = this._enforceRobotDeadzone
-        ? this._clampOutsideRobotDeadzone(target, fallbackPoint)
-        : target;
     }
 
     this.desiredPosition = target;
     this.lastGroundHeight = target.y;
-  }
-
-  private _clampOutsideRobotDeadzone(point: vec3, fallbackPoint: vec3): vec3 {
-    if (!this._robotGroundDeadzone || !this._enforceRobotDeadzone) {
-      return point;
-    }
-    if (!this._isInsideRobotGroundDeadzone(point)) {
-      return point;
-    }
-
-    const robotPosition = this._robotGroundDeadzone.getRobotWorldPosition();
-    if (!robotPosition) {
-      return point;
-    }
-
-    const radius = this._robotGroundDeadzone.radiusCm;
-    const dx = point.x - robotPosition.x;
-    const dz = point.z - robotPosition.z;
-    const horizontalDistance = Math.sqrt(dx * dx + dz * dz);
-
-    if (horizontalDistance >= radius) {
-      return point;
-    }
-
-    if (horizontalDistance > 0.001) {
-      const scale = radius / horizontalDistance;
-      return new vec3(
-        robotPosition.x + dx * scale,
-        point.y,
-        robotPosition.z + dz * scale,
-      );
-    }
-
-    if (this._lastValidOutsideDeadzone) {
-      return new vec3(
-        this._lastValidOutsideDeadzone.x,
-        point.y,
-        this._lastValidOutsideDeadzone.z,
-      );
-    }
-
-    const refDx = fallbackPoint.x - robotPosition.x;
-    const refDz = fallbackPoint.z - robotPosition.z;
-    const refDistance = Math.sqrt(refDx * refDx + refDz * refDz);
-    if (refDistance > 0.001) {
-      return new vec3(
-        robotPosition.x + (refDx / refDistance) * radius,
-        point.y,
-        robotPosition.z + (refDz / refDistance) * radius,
-      );
-    }
-
-    return new vec3(robotPosition.x + radius, point.y, robotPosition.z);
   }
 
   private _isInsideRobotGroundDeadzone(point: vec3): boolean {
@@ -650,8 +576,6 @@ export class PlacementController {
       this._placementActive = false;
     }
     this._floorBaselineY = position.y;
-    this._enforceRobotDeadzone = false;
-    this._lastValidOutsideDeadzone = null;
     this.desiredPosition = new vec3(position.x, position.y, position.z);
     this.lastGroundHeight = position.y;
     this.touchStartPosition = this.desiredPosition;

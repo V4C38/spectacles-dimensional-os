@@ -193,8 +193,13 @@ def _ground_baseline_m(observations: list[TagObservation]) -> float:
 
 
 def _yaw_from_T(T: NDArray[np.float64]) -> float:
+    """Heading of T's forward (x) axis. Convention: forward = (cos th, 0, -sin th).
+
+    Sign-consistent with build_T_world_odom, normalize_ground_pose, and the
+    Lens-side HeadingRotation.yawToQuat.
+    """
     forward = T[:3, 0]
-    return math.atan2(float(forward[2]), float(forward[0]))
+    return math.atan2(-float(forward[2]), float(forward[0]))
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +318,7 @@ def _matrix_from_yaw_and_translation(
     translation: NDArray[np.float64],
 ) -> NDArray[np.float64]:
     x_axis = np.array(
-        [math.cos(yaw_rad), 0.0, math.sin(yaw_rad)],
+        [math.cos(yaw_rad), 0.0, -math.sin(yaw_rad)],
         dtype=np.float64,
     )
     z_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)

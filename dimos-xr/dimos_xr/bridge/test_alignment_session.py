@@ -12,8 +12,10 @@ Covers:
 from __future__ import annotations
 
 import json
+import math
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 from dimos_xr.bridge.alignment import AlignmentController
@@ -24,7 +26,12 @@ from dimos_xr.network.protocol import (
     AlignStartMessage,
     AlignStopMessage,
 )
-from dimos_xr.tracking.tag_tracker import TagTrackerConfig
+from dimos_xr.tracking.tag_tracker import (
+    TagSolve,
+    TagTrackerConfig,
+    _yaw_from_T,
+    build_T_world_odom,
+)
 from dimos_xr.tracking.transforms import Calibration
 
 
@@ -200,3 +207,73 @@ def test_clear_session_resets_session_method() -> None:
     assert ctrl._candidate_count == 0
     assert ctrl._latest_cluster_size == 0
     assert ctrl._best_alignment is None
+
+
+# ---------------------------------------------------------------------------
+# Runtime smoothing regression test (Bug A2 — yaw sign convention)
+# ---------------------------------------------------------------------------
+
+
+def _make_controller_with_correction() -> tuple[AlignmentController, list[str]]:
+    """Like _make_controller but with runtime_correction_enabled=True."""
+    sent: list[str] = []
+    mock_server = MagicMock()
+    mock_server.schedule_send.side_effect = lambda msg: sent.append(msg)
+
+    sender = BridgeSender()
+    sender.bind(mock_server)
+
+    calibration = Calibration()
+    odom = OdomBuffer()
+    mock_status = MagicMock()
+    mock_status.broadcast.return_value = None
+
+    ctrl = AlignmentController(
+        robot_id="test_robot",
+        sender=sender,
+        calibration=calibration,
+        odom=odom,
+        status=mock_status,
+        tag_mounts=[],
+        tracker_config=TagTrackerConfig(),
+        frame_max_age_s=1.0,
+        manual_alignment_quality=0.7,
+        runtime_correction_enabled=True,
+        tag_smoothing_tau_s=1.0,
+        tf_publish_static=MagicMock(),
+    )
+    return ctrl, sent
+
+
+def test_runtime_smoothing_preserves_heading() -> None:
+    """Regression guard: one smoothing step on an identical solve must not flip the yaw.
+
+    Pre-fix: _yaw_from_T used the inverted convention, causing the blend to
+    produce -theta when the committed heading was +theta.
+    """
+    ctrl, _ = _make_controller_with_correction()
+
+    theta = math.radians(30.0)
+    T_committed = build_T_world_odom(theta, (1.0, 0.0, -2.0))
+
+    # Seed the committed transform directly and register it so is_registered=True.
+    ctrl._T_committed = T_committed
+    ctrl._calibration.register_from_alignment(T_committed)
+
+    # Stub the tag tracker to return an identical solve.
+    solve = TagSolve(
+        T_world_odom=np.array(T_committed, dtype=np.float64, copy=True),
+        method="marker",
+        quality=1.0,
+        observation_count=8,
+        baseline_m=0.40,
+    )
+    ctrl._tag_tracker.current_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
+
+    ctrl._apply_tracker_update()
+
+    committed_yaw = _yaw_from_T(ctrl._T_committed)
+    assert committed_yaw == pytest.approx(theta, abs=1e-6), (
+        f"Heading flipped: expected {math.degrees(theta):.1f}°, "
+        f"got {math.degrees(committed_yaw):.1f}°"
+    )

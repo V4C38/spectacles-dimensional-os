@@ -4,7 +4,9 @@ Thumbs.db
 .idea/
 .vscode/
 # Cursor IDE local config (MCP tokens, rules cache) — use ~/.cursor/mcp.json
-**/.cursor/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 
 # README / demo media at repo root (not Lens Studio Assets/)
 # Add GIFs/PNGs here when ready; optional LFS via .gitattributes
@@ -29,6 +31,7 @@ Thumbs.db
 /assets/*.imgmarker
 /assets/*.imgmarker.meta
 /assets/Scripts/
+lens-studio/Assets/Assets/
 
 # Python — repo-wide (see github/gitignore Python template)
 **/__pycache__/
