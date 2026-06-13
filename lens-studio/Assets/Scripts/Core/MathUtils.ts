@@ -57,5 +57,7 @@ export function quatFromMat4Rotation(m: mat4): quat {
     const s = Math.sqrt(1.0 + r22 - r00 - r11) * 2;
     w = (r10 - r01) / s; x = (r02 + r20) / s; y = (r12 + r21) / s; z = 0.25 * s;
   }
-  return new quat(w, x, y, z).normalize();
+  const result = new quat(w, x, y, z);
+  result.normalize();
+  return result;
 }

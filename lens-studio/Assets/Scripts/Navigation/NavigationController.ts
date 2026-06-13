@@ -91,6 +91,7 @@ export class NavigationController {
     this._placement.setRobotGroundDeadzone({
       radiusCm: _robotGroundDeadzoneRadiusCm,
       getRobotWorldPosition: () => this._robotMarker?.getWorldPosition() ?? null,
+      getRobotFloorWorldY: () => this._robotFloorY(),
     } as RobotGroundDeadzone);
   }
 
@@ -232,6 +233,7 @@ export class NavigationController {
     this._placement?.setRobotGroundDeadzone({
       radiusCm: runtimeDeadzoneRadiusCm(state, this._robotGroundDeadzoneRadiusCm),
       getRobotWorldPosition: () => this._robotMarker?.getWorldPosition() ?? null,
+      getRobotFloorWorldY: () => this._robotFloorY(),
     } as RobotGroundDeadzone);
     this.setCancelGoalAvailability(
       isCapabilityAvailable(state, "cancel_goal"),

@@ -19,8 +19,8 @@ export { SnapOS2Styles };
 
 // ── Constants ──────────────────────────────────────────────────
 
-export const FALLBACK_FRAME_INNER_WIDTH = 33;
-export const FALLBACK_FRAME_INNER_HEIGHT = 18;
+export const FALLBACK_FRAME_INNER_WIDTH = 25;
+export const FALLBACK_FRAME_INNER_HEIGHT = 14;
 
 export const CONTENT_PAD_X = 2.0;
 export const CONTENT_PAD_Y = 1.5;

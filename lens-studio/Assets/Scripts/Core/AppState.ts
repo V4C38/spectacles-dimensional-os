@@ -185,16 +185,16 @@ export function robotFloorWorldYCm(
   markerWorldYCm: number,
   runtime: RobotRuntimeState,
 ): number {
-  // Offline/manual marker Y is already ground contact; base_height only applies
-  // to bridge poses at base_link after hello negotiation.
   if (!runtime.negotiated) {
-    return markerWorldYCm;
+    // AprilTag / offline marker origin is elevated on the robot body; subtract
+    // the default body height so the floor lands at ground contact.
+    return markerWorldYCm - robotBodyHeightM(runtime) * 100.0;
   }
   const baseHeightM =
     runtime.baseHeightM ??
     (runtime.bodyBoundsM ? runtime.bodyBoundsM[2] : null);
   if (baseHeightM === null) {
-    return markerWorldYCm;
+    return markerWorldYCm - robotBodyHeightM(runtime) * 100.0;
   }
   return markerWorldYCm - baseHeightM * 100.0;
 }

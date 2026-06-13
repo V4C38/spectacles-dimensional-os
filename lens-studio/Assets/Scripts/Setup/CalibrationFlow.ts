@@ -106,7 +106,7 @@ export function isCalibrationComplete(state: CalibrationViewState): boolean {
 
 // ── Display builders ───────────────────────────────────────────
 
-const PROGRESS_BAR_WIDTH = 18;
+const PROGRESS_BAR_WIDTH = 12;
 
 export function buildAsciiProgressBar(pct: number, width: number = PROGRESS_BAR_WIDTH): string {
   const clamped = Math.max(0, Math.min(100, Math.round(pct)));

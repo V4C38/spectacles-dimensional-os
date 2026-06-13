@@ -42,12 +42,10 @@ function average(values: number[]): number {
 export class SurfacePlacementStabilizer {
   private _samples: SurfaceHitSample[] = [];
   private _smoothedPosition: vec3 | null = null;
-  private _floorBaselineY = 0;
   private _hasResolvedEstimate = false;
 
   public reset(floorBaselineY: number, initialPosition: vec3): void {
     this._samples = [];
-    this._floorBaselineY = floorBaselineY;
     this._hasResolvedEstimate = false;
     this._smoothedPosition = new vec3(
       initialPosition.x,
@@ -56,8 +54,8 @@ export class SurfacePlacementStabilizer {
     );
   }
 
-  public setFloorBaselineY(floorBaselineY: number): void {
-    this._floorBaselineY = floorBaselineY;
+  public clearSamples(): void {
+    this._samples = [];
   }
 
   public pushSample(position: vec3, groundedY: number, now: number = getTime()): void {
@@ -82,11 +80,10 @@ export class SurfacePlacementStabilizer {
     const ys = this._samples.map((sample) => sample.y);
     const estimatedY =
       ys.length >= MIN_SAMPLES_FOR_MEDIAN ? median(ys) : average(ys);
-    const clampedY = Math.max(estimatedY, this._floorBaselineY);
 
     return new vec3(
       average(this._samples.map((sample) => sample.x)),
-      clampedY,
+      estimatedY,
       average(this._samples.map((sample) => sample.z)),
     );
   }

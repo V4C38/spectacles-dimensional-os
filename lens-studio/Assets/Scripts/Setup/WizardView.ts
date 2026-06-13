@@ -1,232 +1,76 @@
-import { RectangleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RectangleButton";
 import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
 import {
-  BUTTON_HEIGHT,
-  BUTTON_WIDTH,
+  ButtonBinding,
   COLOR_MUTED,
-  COLOR_WHITE,
-  createIconButton,
-  createText,
+  CONTENT_PAD_X,
   createTextInput,
-  FONT_BODY,
-  FONT_BUTTON,
-  FONT_CALIBRATE_PROGRESS,
-  FONT_CALIBRATE_TAG,
+  FALLBACK_FRAME_INNER_WIDTH,
+  findButtonBinding,
+  findChildRecursive,
+  findText,
   FONT_WIZARD_INPUT,
-  FONT_WIZARD_STATUS,
-  FONT_WIZARD_TITLE,
-  FOOTER_BUTTON_GAP,
-  FOOTER_TOP_GAP,
-  setButtonLabelRect,
   setButtonStyle,
-  SLOT_BODY,
-  SLOT_FOOTER,
-  SLOT_HEADLINE,
   SLOT_INPUT,
-  SLOT_STATUS,
   SnapOS2Styles,
-  SPACE_SM,
-  UIFrameMetrics,
-  Z_BUTTONS,
   Z_CONTENT,
 } from "../UI/kit/UIKit";
 import { WizardFooterState, WizardStep } from "./CalibrationFlow";
 
 // ================================================================
-/** Builds and updates the setup wizard panel UI (title, IP input, calibration status, footer). */
+/** Binds and updates the setup wizard panel UI (title, IP input, calibration status, footer). */
 // ================================================================
-
-const ACCURACY_SLOT = 1.8;
-const TITLE_BOTTOM_GAP = 1.45;
-const Z_WIZARD_BUTTONS = Z_BUTTONS + 0.5;
-/** Extra vertical offset between tag visibility and progress bar on calibrate step (cm). */
-const CALIBRATE_TAG_OFFSET_UP = 1.0;
-const CALIBRATE_PROGRESS_OFFSET_DOWN = 0.45;
-const FOOTER_BUTTON_WIDTH = 9.6;
-const FOOTER_THREE_BUTTON_GAP = 0.8;
-const MANUAL_BUTTON_WIDTH = FOOTER_BUTTON_WIDTH;
-const MANUAL_BUTTON_HEIGHT = BUTTON_HEIGHT;
 
 export class WizardView {
   private readonly _titleText: Text;
   private readonly _descriptionText: Text;
   private readonly _statusText: Text;
   private readonly _detailStatusText: Text;
-  private readonly _nextBtn: RectangleButton;
-  private readonly _prevBtn: RectangleButton;
-  private readonly _nextLabel: Text;
-  private readonly _prevLabel: Text;
-  private readonly _nextObj: SceneObject;
-  private readonly _prevObj: SceneObject;
+  private readonly _next: ButtonBinding;
+  private readonly _prev: ButtonBinding;
+  private readonly _manual: ButtonBinding;
   private readonly _inputField: TextInputField;
   private readonly _inputObj: SceneObject;
-  private readonly _manualBtn: RectangleButton;
-  private readonly _manualLabel: Text;
-  private readonly _manualObj: SceneObject;
-  private readonly _statusBaseY: number;
-  private readonly _detailStatusBaseY: number;
-  private readonly _innerWidth: number;
-  private readonly _statusSlotHeight: number;
 
   constructor(private readonly _panel: SceneObject) {
-    const innerWidth = UIFrameMetrics.fromSceneObject(_panel).contentWidth;
-    const statusSlotHeight = SLOT_STATUS * 2.2;
-    const totalContent =
-      SLOT_HEADLINE +
-      TITLE_BOTTOM_GAP +
-      SLOT_BODY +
-      SPACE_SM +
-      ACCURACY_SLOT +
-      SPACE_SM +
-      SLOT_INPUT +
-      SPACE_SM +
-      statusSlotHeight +
-      FOOTER_TOP_GAP +
-      SLOT_FOOTER;
-    let cursorY = totalContent / 2;
+    const titleText = findText(_panel, "StepTitle");
+    const descriptionText = findText(_panel, "StepDescription");
+    const statusText = findText(_panel, "StepStatus");
+    const detailStatusText = findText(_panel, "StepDetailStatus");
+    const next = findButtonBinding(_panel, "NextBtn", "NextBtnLabel");
+    const prev = findButtonBinding(_panel, "PrevBtn", "PrevBtnLabel");
+    const manual = findButtonBinding(_panel, "ManualAlignBtn", "ManualAlignBtnLabel");
 
-    cursorY -= SLOT_HEADLINE / 2;
-    this._titleText = createText({
-      parent: this._panel,
-      name: "StepTitle",
-      text: "",
-      fontSize: FONT_WIZARD_TITLE,
-      color: COLOR_WHITE,
-      position: new vec3(0, cursorY, Z_CONTENT),
-      horizontalAlignment: HorizontalAlignment.Center,
-      worldSpaceRect: Rect.create(
-        -innerWidth / 2,
-        innerWidth / 2,
-        -SLOT_HEADLINE / 2,
-        SLOT_HEADLINE / 2,
-      ),
-    });
+    if (
+      !titleText ||
+      !descriptionText ||
+      !statusText ||
+      !detailStatusText ||
+      !next ||
+      !prev ||
+      !manual
+    ) {
+      throw new Error("WizardView: scene hierarchy incomplete");
+    }
 
-    cursorY -= SLOT_HEADLINE / 2 + TITLE_BOTTOM_GAP;
+    this._titleText = titleText;
+    this._descriptionText = descriptionText;
+    this._statusText = statusText;
+    this._detailStatusText = detailStatusText;
+    this._next = next;
+    this._prev = prev;
+    this._manual = manual;
 
-    cursorY -= SLOT_BODY / 2;
-    this._descriptionText = createText({
-      parent: this._panel,
-      name: "StepDescription",
-      text: "",
-      fontSize: FONT_BODY,
-      color: COLOR_MUTED,
-      position: new vec3(0, cursorY, Z_CONTENT),
-      horizontalAlignment: HorizontalAlignment.Center,
-      worldSpaceRect: Rect.create(
-        -innerWidth / 2,
-        innerWidth / 2,
-        -SLOT_BODY / 2,
-        SLOT_BODY / 2,
-      ),
-    });
-
-    cursorY -= SLOT_BODY / 2 + SPACE_SM;
-
-    cursorY -= ACCURACY_SLOT / 2;
-    // ACCURACY_SLOT spacer: layout-math placeholder only; no text element created.
-    cursorY -= ACCURACY_SLOT / 2 + SPACE_SM;
-
-    cursorY -= SLOT_INPUT / 2;
+    const inputParent = findChildRecursive(_panel, "IpInputFieldAnchor") ?? _panel;
+    const inputWidth = FALLBACK_FRAME_INNER_WIDTH - CONTENT_PAD_X * 2 - 2;
     this._inputField = createTextInput(
-      this._panel,
+      inputParent,
       "IpInputField",
-      innerWidth - 2,
+      inputWidth,
       SLOT_INPUT,
-      new vec3(0, cursorY, Z_CONTENT),
+      new vec3(0, 0, Z_CONTENT),
       FONT_WIZARD_INPUT,
     );
     this._inputObj = this._inputField.getSceneObject();
-
-    cursorY -= SLOT_INPUT / 2 + SPACE_SM;
-
-    cursorY -= statusSlotHeight / 2;
-    this._statusText = createText({
-      parent: this._panel,
-      name: "StepStatus",
-      text: "",
-      fontSize: FONT_WIZARD_STATUS,
-      color: COLOR_MUTED,
-      position: new vec3(0, cursorY + SLOT_STATUS / 2, Z_CONTENT),
-      horizontalAlignment: HorizontalAlignment.Center,
-      worldSpaceRect: Rect.create(
-        -innerWidth / 2,
-        innerWidth / 2,
-        -SLOT_STATUS / 2,
-        SLOT_STATUS / 2,
-      ),
-    });
-    this._statusBaseY = cursorY + SLOT_STATUS / 2;
-
-    this._detailStatusText = createText({
-      parent: this._panel,
-      name: "StepDetailStatus",
-      text: "",
-      fontSize: FONT_WIZARD_STATUS,
-      color: COLOR_MUTED,
-      position: new vec3(0, cursorY - SLOT_STATUS / 2, Z_CONTENT),
-      horizontalAlignment: HorizontalAlignment.Center,
-      worldSpaceRect: Rect.create(
-        -innerWidth / 2,
-        innerWidth / 2,
-        -SLOT_STATUS / 2,
-        SLOT_STATUS / 2,
-      ),
-    });
-    this._detailStatusBaseY = cursorY - SLOT_STATUS / 2;
-    this._innerWidth = innerWidth;
-    this._statusSlotHeight = statusSlotHeight;
-
-    cursorY -= statusSlotHeight / 2 + FOOTER_TOP_GAP;
-    const btnY = cursorY - BUTTON_HEIGHT / 2;
-
-    const manual = createIconButton(
-      this._panel,
-      "ManualAlignBtn",
-      "Align manually",
-      MANUAL_BUTTON_WIDTH,
-      MANUAL_BUTTON_HEIGHT,
-      new vec3(0, 0, Z_WIZARD_BUTTONS),
-      SnapOS2Styles.PrimaryNeutral,
-    );
-    this._manualBtn = manual.button;
-    this._manualLabel = manual.labelText;
-    this._manualObj = manual.sceneObject;
-    this._manualLabel.size = FONT_BUTTON;
-    setButtonLabelRect(
-      this._manualLabel,
-      MANUAL_BUTTON_WIDTH,
-      MANUAL_BUTTON_HEIGHT,
-      0.25,
-    );
-
-    const prev = createIconButton(
-      this._panel,
-      "PrevBtn",
-      "Back",
-      FOOTER_BUTTON_WIDTH,
-      BUTTON_HEIGHT,
-      new vec3(-BUTTON_WIDTH / 2 - FOOTER_BUTTON_GAP, btnY, Z_WIZARD_BUTTONS),
-      SnapOS2Styles.Ghost,
-    );
-    this._prevBtn = prev.button;
-    this._prevLabel = prev.labelText;
-    this._prevObj = prev.sceneObject;
-
-    const next = createIconButton(
-      this._panel,
-      "NextBtn",
-      "Skip",
-      FOOTER_BUTTON_WIDTH,
-      BUTTON_HEIGHT,
-      new vec3(BUTTON_WIDTH / 2 + FOOTER_BUTTON_GAP, btnY, Z_WIZARD_BUTTONS),
-      SnapOS2Styles.PrimaryNeutral,
-    );
-    this._nextBtn = next.button;
-    this._nextLabel = next.labelText;
-    this._nextObj = next.sceneObject;
-    setButtonLabelRect(this._prevLabel, FOOTER_BUTTON_WIDTH, BUTTON_HEIGHT, 0.25);
-    setButtonLabelRect(this._nextLabel, FOOTER_BUTTON_WIDTH, BUTTON_HEIGHT, 0.25);
   }
 
   public bindHandlers(
@@ -235,9 +79,9 @@ export class WizardView {
     onToggleManual: () => void,
     onInputSubmit: () => void,
   ): void {
-    this._nextBtn.onTriggerUp.add(onNext);
-    this._prevBtn.onTriggerUp.add(onPrevious);
-    this._manualBtn.onTriggerUp.add(onToggleManual);
+    this._next.button.onTriggerUp.add(onNext);
+    this._prev.button.onTriggerUp.add(onPrevious);
+    this._manual.button.onTriggerUp.add(onToggleManual);
     this._inputField.onReturnKeyPressed.add(onInputSubmit);
     this._inputField.onKeyboardStateChanged.add((open: boolean) => {
       if (!open) {
@@ -291,121 +135,24 @@ export class WizardView {
     this.setDetailStatus("");
   }
 
-  public applyStepLayout(step: WizardStep): void {
-    const halfWidth = this._innerWidth / 2;
-    const halfStatusLine = SLOT_STATUS / 2;
-
-    if (step === WizardStep.Calibrate) {
-      this._statusText.size = FONT_CALIBRATE_TAG;
-      this._detailStatusText.size = FONT_CALIBRATE_PROGRESS;
-      this._statusText.worldSpaceRect = Rect.create(
-        -halfWidth,
-        halfWidth,
-        -halfStatusLine,
-        halfStatusLine,
-      );
-      this._detailStatusText.worldSpaceRect = Rect.create(
-        -halfWidth,
-        halfWidth,
-        -halfStatusLine,
-        halfStatusLine,
-      );
-      this._statusText
-        .getSceneObject()
-        .getTransform()
-        .setLocalPosition(
-          new vec3(0, this._statusBaseY + CALIBRATE_TAG_OFFSET_UP, Z_CONTENT),
-        );
-      this._detailStatusText.getSceneObject().enabled = true;
-      this._detailStatusText
-        .getSceneObject()
-        .getTransform()
-        .setLocalPosition(
-          new vec3(
-            0,
-            this._detailStatusBaseY - CALIBRATE_PROGRESS_OFFSET_DOWN,
-            Z_CONTENT,
-          ),
-        );
-      return;
-    }
-
-    this._statusText.size = FONT_WIZARD_STATUS;
-    this._detailStatusText.size = FONT_WIZARD_STATUS;
-    this._detailStatusText.getSceneObject().enabled = true;
-    this._statusText.worldSpaceRect = Rect.create(
-      -halfWidth,
-      halfWidth,
-      -halfStatusLine,
-      halfStatusLine,
-    );
-    this._detailStatusText.worldSpaceRect = Rect.create(
-      -halfWidth,
-      halfWidth,
-      -halfStatusLine,
-      halfStatusLine,
-    );
-    this._statusText
-      .getSceneObject()
-      .getTransform()
-      .setLocalPosition(new vec3(0, this._statusBaseY, Z_CONTENT));
-    this._detailStatusText
-      .getSceneObject()
-      .getTransform()
-      .setLocalPosition(new vec3(0, this._detailStatusBaseY, Z_CONTENT));
+  public applyStepLayout(_step: WizardStep): void {
+    // Layout is authored in the scene; no runtime repositioning.
   }
 
-  public applyFooterState(
-    step: WizardStep,
-    state: WizardFooterState,
-  ): void {
-    setButtonStyle(this._nextBtn, state.nextStyle);
-    this._nextBtn.inactive = state.nextInactive;
-    this._nextLabel.text = state.nextLabel;
-
-    const nextX = state.centerNext
-      ? 0
-      : FOOTER_BUTTON_WIDTH / 2 + FOOTER_BUTTON_GAP;
-    this._nextObj.getTransform().setLocalPosition(
-      new vec3(
-        nextX,
-        this._nextObj.getTransform().getLocalPosition().y,
-        Z_WIZARD_BUTTONS,
-      ),
-    );
-    this._nextBtn.size = new vec3(FOOTER_BUTTON_WIDTH, BUTTON_HEIGHT, 0.5);
-
-    this._prevObj.enabled = state.showPrev;
-    const prevX = state.widePrevOffset
-      ? -(FOOTER_BUTTON_WIDTH + FOOTER_THREE_BUTTON_GAP)
-      : -(FOOTER_BUTTON_WIDTH / 2 + FOOTER_BUTTON_GAP);
-    this._prevObj.getTransform().setLocalPosition(
-      new vec3(
-        prevX,
-        this._prevObj.getTransform().getLocalPosition().y,
-        Z_WIZARD_BUTTONS,
-      ),
-    );
-    this._prevBtn.size = new vec3(FOOTER_BUTTON_WIDTH, BUTTON_HEIGHT, 0.5);
-    setButtonStyle(this._prevBtn, SnapOS2Styles.Ghost);
-
-    this._manualObj.enabled = state.showManual;
-    if (step === WizardStep.Calibrate) {
-      this._manualObj.getTransform().setLocalPosition(
-        new vec3(
-          FOOTER_BUTTON_WIDTH + FOOTER_THREE_BUTTON_GAP,
-          this._nextObj.getTransform().getLocalPosition().y,
-          Z_WIZARD_BUTTONS,
-        ),
-      );
+  public applyFooterState(_step: WizardStep, state: WizardFooterState): void {
+    setButtonStyle(this._next.button, state.nextStyle);
+    this._next.button.inactive = state.nextInactive;
+    if (this._next.labelText) {
+      this._next.labelText.text = state.nextLabel;
     }
-    this._manualLabel.text = state.manualLabel;
-    setButtonStyle(this._manualBtn, state.manualStyle);
-    setButtonLabelRect(
-      this._manualLabel,
-      MANUAL_BUTTON_WIDTH,
-      MANUAL_BUTTON_HEIGHT,
-      0.25,
-    );
+
+    this._prev.sceneObject.enabled = state.showPrev;
+    setButtonStyle(this._prev.button, SnapOS2Styles.Ghost);
+
+    this._manual.sceneObject.enabled = state.showManual;
+    if (this._manual.labelText) {
+      this._manual.labelText.text = state.manualLabel;
+    }
+    setButtonStyle(this._manual.button, state.manualStyle);
   }
 }
