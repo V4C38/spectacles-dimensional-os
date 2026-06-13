@@ -123,8 +123,15 @@ Alignment progress during a calibration session:
   "method": "tag",
   "state": "detecting",
   "progress": 60,
-  "message": "Look at the robot-mounted tag",
-  "tag_visible": true
+  "message": "Tag locked — move the robot sideways (12/30 cm)",
+  "tag_visible": true,
+  "baseline_m": 0.123,
+  "baseline_target_m": 0.30,
+  "assist_stage": "collect",
+  "robot_world_pose": {
+    "position": [1.2, 0.0, -2.0],
+    "orientation": [0.0, 0.0, 0.383, 0.924]
+  }
 }
 ```
 
@@ -138,6 +145,16 @@ Fields:
 - `message`: human-readable status string for display in the client HUD
 - `tag_visible` (optional): present only for tag-method sessions; `true` when a
   configured robot-mounted tag was detected in the most recent processed frame
+- `baseline_m` (optional): current robot translation baseline in metres; omitted
+  until at least one observation exists
+- `baseline_target_m` (optional): minimum baseline required for a valid solve
+  (configuration-dependent; typically 0.30)
+- `assist_stage` (optional): current stage of the robot-assisted calibration flow
+  (`"estimating"`, `"awaiting_confirm"`, `"countdown"`, `"collect"`, `"move"`,
+  `"settle"`, `"done"`); omitted when assist is not active
+- `robot_world_pose` (optional): estimated robot pose in world frame
+  (`position` xyz metres, `orientation` quaternion xyzw); omitted until a
+  solve is available
 
 > **v3 → v4 breaking change**: `tag_detected`, `observation_count`,
 > `baseline_m`, `quality`, `best_quality`, `has_candidate`, `cluster_size`, and
@@ -308,7 +325,8 @@ Begin a calibration session.
   "type": "align_start",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
-  "method": "tag"
+  "method": "tag",
+  "assist": true
 }
 ```
 
@@ -317,6 +335,24 @@ Fields:
 - `method` (**required**): `"tag"` for AprilTag-based alignment or `"manual"` for
   manual pose placement. The value is echoed back in every `align_status` for
   this session.
+- `assist` (optional, default `false`): request robot-assisted baseline collection.
+  The bridge honours this only when the `align_assist` capability is available for
+  the active robot. When `true`, the bridge will send `assist_stage` in
+  `align_status` updates and wait for an `assist_confirm` before moving the robot.
+
+### `assist_confirm`
+
+Confirm that the operator has reviewed the clearance area and the robot may
+begin the assisted baseline-collection move sequence. The bridge **MUST NOT**
+issue assist motion before receiving `assist_confirm` for the current session.
+
+```json
+{
+  "type": "assist_confirm",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2"
+}
+```
 
 ### `align_stop`
 

@@ -24,11 +24,13 @@ import os
 from dimos_xr.network.data_plane import DROPPED_POSE_LOG_INTERVAL_S
 
 _TRACE = os.getenv("DIMOS_XR_TRACE", "") not in ("", "0", "false")
+from dimos_xr.bridge.assist import AssistDriver
 from dimos_xr.network.protocol import (
     AlignCommitMessage,
     AlignManualPoseMessage,
     AlignStartMessage,
     AlignStopMessage,
+    AssistConfirmMessage,
     CameraInfoMessage,
     encode_align_status,
     encode_camera_frame_ack,
@@ -59,6 +61,7 @@ if TYPE_CHECKING:
 
     from websockets.asyncio.server import ServerConnection
 
+    from dimos_xr.adapters.base import XRRobotAdapterSpec
     from dimos_xr.bridge.odom_buffer import OdomBuffer
     from dimos_xr.bridge.sender import BridgeSender
     from dimos_xr.bridge.status_service import StatusService
@@ -86,6 +89,7 @@ class AlignmentController:
         runtime_correction_enabled: bool,
         tag_smoothing_tau_s: float,
         tf_publish_static: Callable[[Transform], None],
+        adapter: XRRobotAdapterSpec | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
@@ -120,6 +124,10 @@ class AlignmentController:
         self._broadcast_stop = threading.Event()
         self._broadcast_thread: threading.Thread | None = None
 
+        self._assist_driver: AssistDriver | None = (
+            AssistDriver(adapter=adapter, odom=odom) if adapter is not None else None
+        )
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -133,6 +141,8 @@ class AlignmentController:
     # ------------------------------------------------------------------
 
     def on_align_start(self, msg: AlignStartMessage, _websocket: ServerConnection) -> None:
+        if self._assist_driver is not None:
+            self._assist_driver.on_new_session()
         self._session_method = msg.method  # type: ignore[assignment]
         self._tag_tracker.active = msg.method == "tag"
         self._clear_session()
@@ -148,10 +158,18 @@ class AlignmentController:
             if msg.method == "tag"
             else "Place the robot marker, then commit"
         )
+        if msg.method == "tag" and msg.assist and self._assist_driver is not None:
+            self._assist_driver.start()
         self._broadcast_align_status(state="detecting", message=initial_message, ts=msg.ts)
         self._start_broadcast()
 
+    def on_assist_confirm(self, msg: AssistConfirmMessage, _websocket: ServerConnection) -> None:
+        if self._assist_driver is not None:
+            self._assist_driver.on_assist_confirm()
+
     def on_align_stop(self, msg: AlignStopMessage, _websocket: ServerConnection) -> None:
+        if self._assist_driver is not None:
+            self._assist_driver.on_align_stop()
         session_method = self._session_method
         was_active = (
             self._session_method is not None
@@ -170,6 +188,10 @@ class AlignmentController:
             message="Alignment cancelled",
             ts=msg.ts,
         )
+
+    def on_emergency_stop(self) -> None:
+        if self._assist_driver is not None:
+            self._assist_driver.on_emergency_stop()
 
     def on_align_commit(self, msg: AlignCommitMessage, _websocket: ServerConnection) -> None:
         best = self._best_alignment
@@ -392,6 +414,13 @@ class AlignmentController:
             while not self._broadcast_stop.wait(ALIGN_STATUS_BROADCAST_INTERVAL_S):
                 if self._session_method is None:
                     break
+                if self._assist_driver is not None:
+                    odom = self._odom.latest()
+                    self._assist_driver.tick(
+                        obs_count=self._tag_tracker.observation_count(),
+                        latest_obs_pos_world=None,
+                        odom=odom,
+                    )
                 self._broadcast_align_status()
 
         self._broadcast_thread = threading.Thread(
@@ -422,6 +451,8 @@ class AlignmentController:
         self._last_manual_inactive_log_mono = 0.0
         self._last_manual_odom_missing_log_mono = 0.0
         self._last_manual_candidate_log_mono = 0.0
+        if self._assist_driver is not None:
+            self._assist_driver.on_new_session()
 
     def _process_tag_solve(self, *, ts: float | None = None) -> AlignmentCandidate | None:
         solve = self._tag_tracker.current_solve()
@@ -474,7 +505,7 @@ class AlignmentController:
                 samples=self._candidate_count,
             )
         # NOTE: do not pass ``method`` here — ``method`` is the *internal* solver
-        # name ("marker"/"tag_orientation"), not a wire value. The wire method must
+        # name ("marker"/"tag"), not a wire value. The wire method must
         # stay "tag" (the session method) or the Lens rejects the whole message.
         self._broadcast_align_status(
             state="detecting",
@@ -586,6 +617,19 @@ class AlignmentController:
     def _apply_tracker_update(self, *, ts: float | None = None) -> None:
         if self._tag_tracker.active:
             self._process_tag_solve(ts=ts)
+            if self._assist_driver is not None:
+                frame_result_pos: tuple[float, float, float] | None = None
+                obs = self._tag_tracker.last_tag_detected
+                if obs:
+                    frame_result_pos = self._tag_tracker.robot_world_pose_estimate()
+                    if frame_result_pos is not None:
+                        frame_result_pos = frame_result_pos[0]  # extract position
+                odom = self._odom.latest()
+                self._assist_driver.tick(
+                    obs_count=self._tag_tracker.observation_count(),
+                    latest_obs_pos_world=frame_result_pos,
+                    odom=odom,
+                )
             return
         if not self._calibration.is_registered or not self._runtime_correction_enabled:
             return
@@ -677,6 +721,27 @@ class AlignmentController:
             progress = self._compute_progress(effective_state)
         if tag_visible is None and effective_method == "tag":
             tag_visible = self._tag_detected()
+
+        # Assist / baseline fields
+        assist_stage: str | None = None
+        robot_world_pose: dict | None = None
+        baseline_m: float | None = None
+        baseline_target_m: float | None = None
+        if self._session_method == "tag":
+            raw_baseline = self._tag_tracker.baseline_m()
+            if raw_baseline > 0:
+                baseline_m = raw_baseline
+            baseline_target_m = self._tag_tracker._config.min_baseline_m
+            if self._assist_driver is not None:
+                assist_stage = self._assist_driver.stage_label
+            pose_result = self._tag_tracker.robot_world_pose_estimate()
+            if pose_result is not None:
+                pos, ori, _conf = pose_result
+                robot_world_pose = {
+                    "position": list(pos),
+                    "orientation": list(ori),
+                }
+
         self._sender.send(
             encode_align_status(
                 ts=ts,
@@ -686,6 +751,10 @@ class AlignmentController:
                 progress=progress,
                 message=message,
                 tag_visible=tag_visible,
+                baseline_m=baseline_m,
+                baseline_target_m=baseline_target_m,
+                assist_stage=assist_stage,
+                robot_world_pose=robot_world_pose,
             )
         )
 

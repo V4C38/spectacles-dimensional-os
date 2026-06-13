@@ -145,7 +145,8 @@ def test_tag_tracker_detects_generated_marker() -> None:
     assert tracker.observation_count() >= 1
 
 
-def test_tag_tracker_orientation_fallback_when_stationary() -> None:
+def test_tag_tracker_no_solve_when_stationary() -> None:
+    """With stationary robot (zero baseline), current_solve() must return None."""
     mount = GO2_DEFAULT_TAG_MOUNTS[0]
     tracker = TagTracker(
         [mount],
@@ -171,10 +172,8 @@ def test_tag_tracker_orientation_fallback_when_stationary() -> None:
             receive_mono=10.1 + seq * 0.1,
         )
 
-    solve = tracker.current_solve()
-    assert solve is not None
-    assert solve.method == "tag_orientation"
-    assert solve.observation_count >= 1
+    assert tracker.current_solve() is None
+    assert tracker.baseline_m() == pytest.approx(0.0, abs=1e-6)
 
 
 def test_tag_tracker_rejects_unknown_tag_id() -> None:

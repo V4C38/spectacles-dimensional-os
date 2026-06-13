@@ -85,6 +85,10 @@ def g1_capabilities(
             if emergency_stop_available
             else "No safe G1 high-level stop interface is available in this runtime.",
         ),
+        "align_assist": CapabilityState(
+            False,
+            "Assisted calibration motion is not available for this runtime.",
+        ),
     }
 
 
@@ -281,3 +285,11 @@ class G1AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
     @rpc
     def tag_mounts(self) -> list[TagMount]:
         return g1_tag_mounts()
+
+    @rpc
+    def assist_motion_available(self) -> bool:
+        return False
+
+    @rpc
+    def assist_set_lateral_velocity(self, vy_m_s: float) -> bool:
+        return False

@@ -426,8 +426,6 @@ class TagTracker:
         self._last_tag_detected = False
         self._last_tag_ids: list[int] = []
         self._last_quality: float | None = None
-        self._pending_relocalize: list[TagSolve] = []
-        self._orientation_candidates: list[NDArray[np.float64]] = []
 
     @property
     def active(self) -> bool:
@@ -444,8 +442,6 @@ class TagTracker:
     def reset_window(self) -> None:
         with self._lock:
             self._observations.clear()
-            self._orientation_candidates.clear()
-            self._pending_relocalize.clear()
             self._last_tag_detected = False
             self._last_tag_ids = []
             self._last_quality = None
@@ -627,12 +623,6 @@ class TagTracker:
             with self._lock:
                 self._prune_old(recv_mono)
                 self._observations.append(obs)
-                orient_candidate = gravity_level_transform(T_world_tag @ np.linalg.inv(T_odom_tag))
-                self._orientation_candidates.append(orient_candidate)
-                if len(self._orientation_candidates) > self._config.window_max_obs:
-                    self._orientation_candidates = self._orientation_candidates[
-                        -self._config.window_max_obs :
-                    ]
             detected_ids.append(tag_id)
             best_quality = max(best_quality, quality)
             added += 1
@@ -652,7 +642,6 @@ class TagTracker:
     def current_solve(self) -> TagSolve | None:
         with self._lock:
             observations = list(self._observations)
-            orient_candidates = list(self._orientation_candidates)
 
         if not observations:
             return None
@@ -681,67 +670,50 @@ class TagTracker:
                 observation_count=len(observations),
                 baseline_m=baseline,
             )
-
-        if orient_candidates:
-            cluster = collect_alignment_cluster_from_matrices(orient_candidates)
-            if cluster:
-                T_avg, _, _ = average_cluster_transform_from_matrices(cluster)
-                quality = float(np.mean([o.quality for o in observations]))
-                return TagSolve(
-                    T_world_odom=gravity_level_transform(T_avg),
-                    method="tag_orientation",
-                    quality=quality,
-                    observation_count=len(observations),
-                    baseline_m=baseline,
-                )
         return None
 
+    def baseline_m(self) -> float:
+        with self._lock:
+            return _ground_baseline_m(list(self._observations))
 
-def collect_alignment_cluster_from_matrices(
-    candidates: list[NDArray[np.float64]],
-    *,
-    translation_threshold_m: float = 0.05,
-    yaw_threshold_rad: float = math.radians(3.0),
-) -> list[NDArray[np.float64]]:
-    if not candidates:
-        return []
-    ref = candidates[-1]
-    cluster = [
-        c for c in candidates if _matrix_close(c, ref, translation_threshold_m, yaw_threshold_rad)
-    ]
-    return cluster
+    def robot_world_pose_estimate(
+        self,
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float, float], float] | None:
+        """Estimate robot base pose in world frame from recent tag observations.
 
-
-def _matrix_close(
-    lhs: NDArray[np.float64],
-    rhs: NDArray[np.float64],
-    trans_m: float,
-    yaw_rad: float,
-) -> bool:
-    if float(np.linalg.norm(lhs[:3, 3] - rhs[:3, 3])) > trans_m:
-        return False
-    yaw_l = _yaw_from_T(lhs)
-    yaw_r = _yaw_from_T(rhs)
-    dy = abs(math.atan2(math.sin(yaw_l - yaw_r), math.cos(yaw_l - yaw_r)))
-    return dy <= yaw_rad
-
-
-def average_cluster_transform_from_matrices(
-    cluster: list[NDArray[np.float64]],
-) -> tuple[NDArray[np.float64], float, float]:
-    if not cluster:
-        raise ValueError("empty cluster")
-    yaws = [_yaw_from_T(T) for T in cluster]
-    sin_sum = sum(math.sin(y) for y in yaws)
-    cos_sum = sum(math.cos(y) for y in yaws)
-    mean_yaw = math.atan2(sin_sum, cos_sum)
-    translations = np.array([T[:3, 3] for T in cluster])
-    mean_t = translations.mean(axis=0)
-    T_avg = build_T_world_odom(mean_yaw, (float(mean_t[0]), float(mean_t[1]), float(mean_t[2])))
-    yaw_spread = max(abs(math.atan2(math.sin(y - mean_yaw), math.cos(y - mean_yaw))) for y in yaws)
-    trans_spread = (
-        float(np.max(np.linalg.norm(translations - mean_t, axis=1)))
-        if len(translations) > 1
-        else 0.0
-    )
-    return T_avg, yaw_spread, trans_spread
+        Returns:
+            (position_xyz, orientation_xyzw, confidence) or None if no
+            observations are available.  Heading is gravity-leveled and averaged
+            using circular mean.  Confidence is mean observation quality (0–1).
+        """
+        with self._lock:
+            observations = list(self._observations)
+            mounts = dict(self._mounts)
+        if not observations:
+            return None
+        positions = []
+        yaws = []
+        qualities = []
+        for obs in observations:
+            mount = mounts.get(obs.tag_id)
+            if mount is None:
+                continue
+            T_world_tag = obs.T_world_tag
+            T_world_base = gravity_level_transform(T_world_tag @ np.linalg.inv(mount.T_base_tag))
+            positions.append(T_world_base[:3, 3])
+            yaws.append(_yaw_from_T(T_world_base))
+            qualities.append(obs.quality)
+        if not positions:
+            return None
+        mean_pos = np.mean(positions, axis=0)
+        sin_sum = sum(math.sin(y) for y in yaws)
+        cos_sum = sum(math.cos(y) for y in yaws)
+        mean_yaw = math.atan2(sin_sum, cos_sum)
+        cy, sy = math.cos(mean_yaw / 2), math.sin(mean_yaw / 2)
+        orientation = (0.0, float(sy), 0.0, float(cy))
+        confidence = float(np.mean(qualities))
+        return (
+            (float(mean_pos[0]), float(mean_pos[1]), float(mean_pos[2])),
+            orientation,
+            confidence,
+        )

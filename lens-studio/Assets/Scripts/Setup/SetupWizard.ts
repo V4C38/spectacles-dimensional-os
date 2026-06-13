@@ -5,7 +5,7 @@ import { DimosManager } from "../Core/DimosManager";
 import { UIManager } from "../UI/UIManager";
 import { AlignStatusMessage } from "../Bridge/Protocol";
 import { scaleIn } from "../UI/kit/UIAnimations";
-import { COLOR_ERROR, COLOR_WHITE } from "../UI/kit/UIKit";
+import { COLOR_ERROR, COLOR_WHITE, getFrameComponent } from "../UI/kit/UIKit";
 import { WizardView } from "./WizardView";
 import { getBridgeStatusPresentationForConnect } from "../UI/BridgeStatusPresentation";
 import { BridgeClient } from "../Bridge/BridgeClient";
@@ -38,7 +38,17 @@ export class SetupWizard extends BaseScriptComponent {
   @input
   alignmentSession: AlignmentSession;
 
+  @input
+  assistClearanceDisc: SceneObject;
+
+  @input
+  camera: SceneObject;
+
   private _currentStep = WizardStep.Start;
+  /** World position where the panel was last anchored (for re-snap threshold). */
+  private _lastAnchorPos: vec3 | null = null;
+  /** Whether the Frame follow was enabled before we disabled it for anchoring. */
+  private _savedFollowing: boolean | null = null;
   private _connectCompleted = false;
   private _isConnecting = false;
   private _alignmentHandlersBound = false;
@@ -125,6 +135,7 @@ export class SetupWizard extends BaseScriptComponent {
     if (clamped !== WizardStep.Calibrate) {
       this.alignmentSession?.stop();
       this._calibrationFlow?.leave();
+      this._resetWizardAnchor();
     }
 
     switch (clamped) {
@@ -200,6 +211,10 @@ export class SetupWizard extends BaseScriptComponent {
     }
 
     const calState = this._calibrationFlow?.state ?? createCalibrationViewState();
+    if (calState.assistStage === "awaiting_confirm") {
+      this.alignmentSession?.confirmAssist();
+      return;
+    }
     if (calState.phase === "complete") {
       this._finishSetup();
       return;
@@ -415,6 +430,7 @@ export class SetupWizard extends BaseScriptComponent {
     if (this._currentStep !== WizardStep.Calibrate) {
       return;
     }
+    this._resetWizardAnchor();
     this._calibrationFlow?.toggleMode();
   }
 
@@ -442,9 +458,98 @@ export class SetupWizard extends BaseScriptComponent {
     // (throttled + deduped). Only surface the terminal transitions here.
     if (msg.state === "aligned") {
       this._log(`alignment succeeded (progress=${msg.progress}%)`);
+      this._resetWizardAnchor();
     } else if (msg.state === "failed") {
       this._log(`alignment failed: ${msg.message || "unknown"}`);
     }
+
+    // Panel anchoring: snap to robot when assist_stage is active and robot pose is known.
+    if (msg.assist_stage && msg.assist_stage !== "done" && msg.robot_world_pose) {
+      const rp = msg.robot_world_pose;
+      const robotPos = new vec3(rp.position[0], rp.position[1], rp.position[2]);
+      const prev = this._lastAnchorPos;
+      const RESNAP_THRESHOLD_CM = 8.0;
+      const needsSnap =
+        prev === null ||
+        Math.sqrt(
+          Math.pow(robotPos.x - prev.x, 2) +
+          Math.pow(robotPos.y - prev.y, 2) +
+          Math.pow(robotPos.z - prev.z, 2),
+        ) > RESNAP_THRESHOLD_CM;
+      if (needsSnap) {
+        this._anchorWizardAtRobot(robotPos);
+      }
+    } else if (!msg.assist_stage || msg.assist_stage === "done") {
+      if (this._lastAnchorPos !== null) {
+        this._resetWizardAnchor();
+      }
+    }
+  }
+
+  /**
+   * Relocate the wizard panel to hover above the robot world position.
+   * Disables Frame follow so the panel stays fixed in world space.
+   * Call only while on the Calibrate step with a valid robot pose.
+   */
+  private _anchorWizardAtRobot(robotWorldPos: vec3): void {
+    const panel = this.getSceneObject();
+    if (!panel) {
+      return;
+    }
+    const frame = getFrameComponent(panel);
+    if (frame && this._savedFollowing === null) {
+      this._savedFollowing = frame.following;
+      if (frame.following) {
+        frame.setFollowing(false);
+      }
+    }
+    // Position the panel ~35 cm above robot, ~25 cm toward the camera.
+    const cam = this.camera ?? null;
+    const PANEL_HEIGHT_ABOVE_CM = 35.0;
+    const PANEL_TOWARD_CAM_CM = 25.0;
+    let towardCam = new vec3(0, 0, -1);
+    if (cam) {
+      const camPos = cam.getTransform().getWorldPosition();
+      const diff = new vec3(camPos.x - robotWorldPos.x, 0, camPos.z - robotWorldPos.z);
+      const len = Math.sqrt(diff.x * diff.x + diff.z * diff.z);
+      if (len > 0.01) {
+        towardCam = new vec3(diff.x / len, 0, diff.z / len);
+      }
+    }
+    const panelPos = new vec3(
+      robotWorldPos.x + towardCam.x * PANEL_TOWARD_CAM_CM,
+      robotWorldPos.y + PANEL_HEIGHT_ABOVE_CM,
+      robotWorldPos.z + towardCam.z * PANEL_TOWARD_CAM_CM,
+    );
+    panel.getTransform().setWorldPosition(panelPos);
+    this._lastAnchorPos = new vec3(robotWorldPos.x, robotWorldPos.y, robotWorldPos.z);
+
+    if (this.assistClearanceDisc) {
+      this.assistClearanceDisc.enabled = true;
+      const discTransform = this.assistClearanceDisc.getTransform();
+      discTransform.setWorldPosition(new vec3(robotWorldPos.x, robotWorldPos.y, robotWorldPos.z));
+    }
+  }
+
+  /** Restore follow behaviour and hide the clearance disc. Idempotent. */
+  private _resetWizardAnchor(): void {
+    this._lastAnchorPos = null;
+    if (this.assistClearanceDisc) {
+      this.assistClearanceDisc.enabled = false;
+    }
+    if (this._savedFollowing === null) {
+      return;
+    }
+    const panel = this.getSceneObject();
+    if (!panel) {
+      this._savedFollowing = null;
+      return;
+    }
+    const frame = getFrameComponent(panel);
+    if (frame && this._savedFollowing) {
+      frame.setFollowing(true);
+    }
+    this._savedFollowing = null;
   }
 
   private _finishSetup(): void {

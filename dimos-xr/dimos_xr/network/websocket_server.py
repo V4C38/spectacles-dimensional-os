@@ -27,6 +27,7 @@ from dimos_xr.network.protocol import (
     AlignManualPoseMessage,
     AlignStartMessage,
     AlignStopMessage,
+    AssistConfirmMessage,
     CameraInfoMessage,
     CancelGoalMessage,
     EmergencyStopMessage,
@@ -44,6 +45,7 @@ logger = setup_logger()
 AlignStartHandler = Callable[[AlignStartMessage, "ws_server.ServerConnection"], None]
 AlignStopHandler = Callable[[AlignStopMessage, "ws_server.ServerConnection"], None]
 AlignCommitHandler = Callable[[AlignCommitMessage, "ws_server.ServerConnection"], None]
+AssistConfirmHandler = Callable[[AssistConfirmMessage, "ws_server.ServerConnection"], None]
 CameraInfoHandler = Callable[[CameraInfoMessage, "ws_server.ServerConnection"], None]
 CameraFrameHandler = Callable[
     [dict[str, Any], bytes, "ws_server.ServerConnection"], Awaitable[None]
@@ -234,6 +236,7 @@ class XRWebSocketServer:
         on_align_start: AlignStartHandler | None = None,
         on_align_stop: AlignStopHandler | None = None,
         on_align_commit: AlignCommitHandler | None = None,
+        on_assist_confirm: AssistConfirmHandler | None = None,
         on_camera_info: CameraInfoHandler | None = None,
         on_camera_frame: CameraFrameHandler | None = None,
         on_align_manual_pose: AlignManualPoseHandler | None = None,
@@ -253,6 +256,7 @@ class XRWebSocketServer:
         self._on_align_start = on_align_start
         self._on_align_stop = on_align_stop
         self._on_align_commit = on_align_commit
+        self._on_assist_confirm = on_assist_confirm
         self._on_camera_info = on_camera_info
         self._on_camera_frame = on_camera_frame
         self._on_align_manual_pose = on_align_manual_pose
@@ -408,6 +412,9 @@ class XRWebSocketServer:
         elif isinstance(inbound, AlignCommitMessage):
             if self._on_align_commit is not None:
                 self._on_align_commit(inbound, websocket)
+        elif isinstance(inbound, AssistConfirmMessage):
+            if self._on_assist_confirm is not None:
+                self._on_assist_confirm(inbound, websocket)
         elif isinstance(inbound, CameraInfoMessage):
             if self._on_camera_info is not None:
                 self._on_camera_info(inbound, websocket)

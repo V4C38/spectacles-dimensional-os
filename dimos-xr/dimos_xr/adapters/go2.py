@@ -29,6 +29,7 @@ GO2_CAPABILITIES: dict[str, CapabilityState] = {
     "odom": CapabilityState(True),
     "align": CapabilityState(True),
     "align_manual": CapabilityState(True),
+    "align_assist": CapabilityState(True),
     "nav": CapabilityState(True),
     "path": CapabilityState(True),
     "plan_preview": CapabilityState(True),
@@ -176,6 +177,10 @@ class Go2AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
             capability_states["emergency_stop"] = CapabilityState(
                 False, "No safe stop transport is present for this runtime."
             )
+        if self._go2_connection is None:
+            capability_states["align_assist"] = CapabilityState(
+                False, "WebRTC connection is not present for this runtime."
+            )
         return capability_states
 
     @rpc
@@ -247,3 +252,24 @@ class Go2AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
     @rpc
     def tag_mounts(self) -> list[TagMount]:
         return go2_tag_mounts()
+
+    @rpc
+    def assist_motion_available(self) -> bool:
+        return self._go2_connection is not None
+
+    @rpc
+    def assist_set_lateral_velocity(self, vy_m_s: float) -> bool:
+        if self._go2_connection is None:
+            return False
+        if vy_m_s == 0.0:
+            self._go2_connection.publish_request(
+                RTC_TOPIC["SPORT_MOD"],
+                {"api_id": SPORT_CMD["StopMove"]},
+            )
+            return True
+        vy = max(-0.20, min(0.20, float(vy_m_s)))
+        self._go2_connection.publish_request(
+            RTC_TOPIC["SPORT_MOD"],
+            {"api_id": SPORT_CMD["Move"], "parameter": {"x": 0.0, "y": vy, "z": 0.0}},
+        )
+        return True

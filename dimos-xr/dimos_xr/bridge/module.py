@@ -165,6 +165,7 @@ class XRBridge(Module):  # type: ignore[misc]
             runtime_correction_enabled=self.config.runtime_correction_enabled,
             tag_smoothing_tau_s=self.config.tag_smoothing_tau_s,
             tf_publish_static=self.tf.publish_static,
+            adapter=self._adapter,
         )
 
         nav = NavController(
@@ -203,13 +204,14 @@ class XRBridge(Module):  # type: ignore[misc]
             on_align_start=alignment.on_align_start,
             on_align_stop=alignment.on_align_stop,
             on_align_commit=alignment.on_align_commit,
+            on_assist_confirm=alignment.on_assist_confirm,
             on_camera_info=alignment.on_camera_info,
             on_camera_frame=alignment.on_camera_frame,
             on_align_manual_pose=alignment.on_align_manual_pose,
             on_nav_goal=nav.on_nav_goal,
             on_plan_path=preview.on_plan_path,
             on_cancel_goal=lambda msg: nav.on_cancel_goal(msg.ts),
-            on_emergency_stop=lambda msg: nav.on_emergency_stop(msg.ts),
+            on_emergency_stop=lambda msg: (nav.on_emergency_stop(msg.ts), alignment.on_emergency_stop()),
             on_get_status=self._on_get_status,
             on_status_connect=self._send_status_to,
             on_disconnect=self._on_client_disconnect,

@@ -92,6 +92,10 @@ export interface AlignStatusMessage {
   progress: number;
   message: string;
   tag_visible?: boolean;
+  baseline_m?: number;
+  baseline_target_m?: number;
+  assist_stage?: string;
+  robot_world_pose?: { position: [number, number, number]; orientation: [number, number, number, number] };
 }
 
 /** v4: camera_frame_ack contains only seq. */
@@ -500,16 +504,29 @@ export function buildGetStatus(robotId: string): string {
   });
 }
 
-/** v4: align_start includes the session method. */
+/** v4: align_start includes the session method. Pass assist=true for robot-assisted calibration. */
 export function buildAlignStart(
   robotId: string,
   method: "tag" | "manual",
+  assist: boolean = false,
 ): string {
-  return JSON.stringify({
+  const payload: Record<string, unknown> = {
     type: "align_start",
     ts: getTime(),
     robot_id: robotId,
     method,
+  };
+  if (assist) {
+    payload["assist"] = true;
+  }
+  return JSON.stringify(payload);
+}
+
+export function buildAssistConfirm(robotId: string): string {
+  return JSON.stringify({
+    type: "assist_confirm",
+    ts: getTime(),
+    robot_id: robotId,
   });
 }
 

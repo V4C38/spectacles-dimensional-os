@@ -32,6 +32,9 @@ export interface CalibrationViewState {
   progress: number;
   message: string;
   tagVisible: boolean;
+  assistStage?: string;
+  robotWorldPose?: { position: [number, number, number]; orientation: [number, number, number, number] };
+  baselineM?: number;
 }
 
 export interface WizardFooterState {
@@ -179,6 +182,9 @@ export function applyAlignStatusToCalibrationState(
     progress: msg.progress,
     message: msg.message || state.message,
     tagVisible: msg.tag_visible ?? state.tagVisible,
+    assistStage: msg.assist_stage ?? state.assistStage,
+    robotWorldPose: msg.robot_world_pose ?? state.robotWorldPose,
+    baselineM: msg.baseline_m ?? state.baselineM,
   };
 }
 
@@ -204,6 +210,14 @@ export function getWizardFooterState(
     } else if (isCalibrationComplete(calibrationState)) {
       nextLabel = "Complete";
       nextStyle = SnapOS2Styles.Primary;
+    } else if (calibrationState.assistStage === "awaiting_confirm") {
+      // Robot-assisted flow: offer Continue to confirm the robot move
+      nextLabel = "Continue";
+      nextStyle = SnapOS2Styles.Primary;
+    } else if (calibrationState.assistStage && calibrationState.assistStage !== "done") {
+      // Assist flow in progress (estimating/countdown/collect/move/settle) — inactive Continue
+      nextLabel = "Continue";
+      nextInactive = true;
     } else if (hasCalibrationCandidate(calibrationState)) {
       nextLabel = "Complete";
       nextStyle = SnapOS2Styles.Primary;
@@ -262,6 +276,10 @@ export class CalibrationFlow {
 
   public setState(state: CalibrationViewState): void {
     this._state = state;
+  }
+
+  public get alignmentSession(): AlignmentSession | null {
+    return this._alignmentSession;
   }
 
   public isComplete(): boolean {
@@ -454,7 +472,7 @@ export class CalibrationFlow {
       this._state = { ...this._state, message: "" };
       this._notify();
     });
-    this._alignmentSession?.start("tag");
+    this._alignmentSession?.start("tag", true);
     this._notify(true);
   }
 

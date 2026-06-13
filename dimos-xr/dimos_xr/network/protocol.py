@@ -24,6 +24,7 @@ DEFAULT_CAPABILITIES = [
     "odom",
     "align",
     "align_manual",
+    "align_assist",
     "nav",
     "path",
     "plan_preview",
@@ -69,6 +70,13 @@ class AlignStartMessage:
     ts: float
     robot_id: str
     method: str
+    assist: bool = False
+
+
+@dataclass(frozen=True)
+class AssistConfirmMessage:
+    ts: float
+    robot_id: str
 
 
 @dataclass(frozen=True)
@@ -118,6 +126,7 @@ InboundMessage = (
     | CancelGoalMessage
     | EmergencyStopMessage
     | AlignStartMessage
+    | AssistConfirmMessage
     | AlignStopMessage
     | AlignCommitMessage
     | CameraInfoMessage
@@ -188,7 +197,9 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         method = _require_type(data, "method", str)
         if method not in ("tag", "manual"):
             raise ValueError(f"align_start.method must be 'tag' or 'manual', got {method!r}")
-        return AlignStartMessage(ts=ts, robot_id=robot_id, method=method)
+        return AlignStartMessage(ts=ts, robot_id=robot_id, method=method, assist=bool(data.get("assist", False)))
+    if msg_type == "assist_confirm":
+        return AssistConfirmMessage(ts=ts, robot_id=robot_id)
     if msg_type == "align_stop":
         return AlignStopMessage(ts=ts, robot_id=robot_id)
     if msg_type == "align_commit":
@@ -374,6 +385,10 @@ def encode_align_status(
     progress: int,
     message: str = "",
     tag_visible: bool | None = None,
+    baseline_m: float | None = None,
+    baseline_target_m: float | None = None,
+    assist_stage: str | None = None,
+    robot_world_pose: dict | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "type": "align_status",
@@ -386,6 +401,14 @@ def encode_align_status(
     }
     if tag_visible is not None:
         payload["tag_visible"] = tag_visible
+    if baseline_m is not None:
+        payload["baseline_m"] = round(baseline_m, 3)
+    if baseline_target_m is not None:
+        payload["baseline_target_m"] = round(baseline_target_m, 3)
+    if assist_stage is not None:
+        payload["assist_stage"] = assist_stage
+    if robot_world_pose is not None:
+        payload["robot_world_pose"] = robot_world_pose
     return _dumps(payload)
 
 

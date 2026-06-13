@@ -56,6 +56,13 @@ class OdomBuffer:
         with self._lock:
             return self._latest
 
+    def latest_mono(self) -> float | None:
+        """Return the monotonic timestamp of the most recent odom sample, or None."""
+        with self._lock:
+            if self._buffer:
+                return self._buffer[-1][0]
+            return None
+
     def at(self, mono_ts: float) -> OdomSample | None:
         """Return the sample closest to ``mono_ts`` within ``ODOM_LOOKUP_MAX_GAP_S``."""
         with self._lock:

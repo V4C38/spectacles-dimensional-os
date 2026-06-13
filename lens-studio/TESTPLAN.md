@@ -115,3 +115,49 @@ Record in `TESTPLAN_BASELINE.md` (git-ignored):
 - Bridge-side log snippet for cases 2, 3 (align_start / align_stop).
 
 This baseline is the regression reference for every subsequent phase.
+
+---
+
+## Robot-Assisted Baseline Collection (wizard align flow)
+
+### TC-A1. Happy path — assisted calibration
+
+**Setup:** Go2 connected with WebRTC, `align_assist` capability available.
+
+1. Enter Calibrate step. Verify footer shows "Skip" (no candidate yet).
+2. Look at robot tag. Verify `assistStage` in Logger progresses: `estimating` → `awaiting_confirm`.
+3. Footer must show **Continue** (active, Primary style) when `assistStage === "awaiting_confirm"`.
+4. Press **Continue**. Verify countdown messages `3…2…1` appear in status text.
+5. Robot strafes +35 cm, pauses, strafes −35 cm back. Verify no tag-visibility abort fires.
+6. Footer remains showing **Continue** (inactive) during collect/move/settle phases.
+7. After two moves, `assistStage` becomes `done`. `baseline_m` ≥ 0.30 m.
+8. Alignment candidate appears; footer transitions to **Complete** (active).
+9. Press **Complete**. Verify `align_commit` sent and setup finishes.
+
+**Expected:** Full assisted calibration completes without manual intervention.
+
+---
+
+### TC-A2. Back button while robot is strafing
+
+**Setup:** Same as TC-A1, reach MOVE state during strafe.
+
+1. Press **Back** while `assistStage === "move"`.
+2. Verify bridge sends `align_stop`.
+3. Verify robot stops (e-stop or velocity=0 sent within 0.5 s).
+4. Verify UI resets to Calibrate step start; no clearance disc visible.
+
+**Expected:** Back always stops the robot and resets the wizard cleanly.
+
+---
+
+### TC-A3. Manual toggle while assist is active
+
+**Setup:** Same as TC-A1, enter COLLECT(0) state.
+
+1. Press **Align manually** toggle.
+2. Verify: tag session stops (`align_stop` sent), robot velocity zeroed.
+3. Manual robot marker appears; user can place it.
+4. Toggling back to auto re-starts a fresh tag session (with `assist=true`).
+
+**Expected:** Manual toggle mid-assist is graceful; no motion continues after toggle.

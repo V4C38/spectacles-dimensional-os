@@ -51,6 +51,7 @@ export class AlignmentSession extends BaseScriptComponent {
 
   /** Intent: the method we want to run. Null = no session desired. */
   private _intent: "tag" | "manual" | null = null;
+  private _assist: boolean = false;
   /** Bridge confirmation: cleared on every disconnect/hello so ensureSession re-arms. */
   private _bridgeSessionConfirmed = false;
   private _awaitingCommit = false;
@@ -98,8 +99,9 @@ export class AlignmentSession extends BaseScriptComponent {
    * Sets intent, attempts to send align_start to the bridge (non-blocking —
    * ensureSession() will retry on the next hello if the bridge isn't ready).
    */
-  public start(method: "tag" | "manual"): void {
+  public start(method: "tag" | "manual", assist: boolean = false): void {
     this._intent = method;
+    this._assist = method === "tag" && assist;
     this._awaitingCommit = false;
     this._bridgeSessionConfirmed = false;
     this._lastAlignStatusTime = -1;
@@ -107,7 +109,13 @@ export class AlignmentSession extends BaseScriptComponent {
     if (method === "tag" && this.frameCapture) {
       this.frameCapture.setMode("setup");
     }
-    print(`AlignmentSession: start method=${method}`);
+    print(`AlignmentSession: start method=${method} assist=${this._assist}`);
+  }
+
+  public confirmAssist(): void {
+    if (this.bridgeClient) {
+      this.bridgeClient.sendAssistConfirm();
+    }
   }
 
   public stop(): void {
@@ -301,11 +309,15 @@ export class AlignmentSession extends BaseScriptComponent {
     if (!this.bridgeClient || !connected || !hasRobotId) {
       return false;
     }
-    const sent = this.bridgeClient.sendAlignStart(method);
+    const assist =
+      method === "tag" &&
+      this._assist &&
+      Boolean(this._deps?.isCapabilityAvailable("align_assist"));
+    const sent = this.bridgeClient.sendAlignStart(method, assist);
     if (sent) {
       this._bridgeSessionConfirmed = true;
       this._lastAlignStatusTime = getTime();
-      print(`AlignmentSession: align_start{method:${method}} sent`);
+      print(`AlignmentSession: align_start{method:${method},assist:${assist}} sent`);
     }
     return sent;
   }

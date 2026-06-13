@@ -13,6 +13,7 @@ import {
   buildAlignManualPose,
   buildAlignStart,
   buildAlignStop,
+  buildAssistConfirm,
   buildCancelGoal,
   buildEmergencyStop,
   buildGetStatus,
@@ -298,10 +299,14 @@ export class BridgeClient extends BaseScriptComponent {
     return this._sendForActiveRobot("get_status", buildGetStatus);
   }
 
-  public sendAlignStart(method: "tag" | "manual"): boolean {
+  public sendAlignStart(method: "tag" | "manual", assist: boolean = false): boolean {
     return this._sendForActiveRobot("align_start", (robotId) =>
-      buildAlignStart(robotId, method),
+      buildAlignStart(robotId, method, assist),
     );
+  }
+
+  public sendAssistConfirm(): boolean {
+    return this._sendForActiveRobot("assist_confirm", buildAssistConfirm);
   }
 
   public sendAlignStop(): boolean {
