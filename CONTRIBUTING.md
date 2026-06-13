@@ -17,9 +17,9 @@ Do **not** open Lens Studio from the repo root — that creates stray `Cache/`, 
 
 Update together in one change:
 
-1. `dimos-xr/dimos_xr/protocol.py`
+1. `dimos-xr/dimos_xr/network/protocol.py`
 2. `dimos-xr/PROTOCOL.md`
-3. `lens-studio/Assets/Scripts/bridge/Protocol.ts`
+3. `lens-studio/Assets/Scripts/Bridge/Protocol.ts`
 
 ## Python
 
@@ -36,7 +36,7 @@ DimOS is an external dependency — install from [dimensionalOS/dimos](https://g
 
 ## Lens Studio
 
-See [`lens-studio/docs/SCENE_SETUP.md`](lens-studio/docs/SCENE_SETUP.md).
+Scene wiring, authored object names, and `@input` references are documented inline in the script files via comments at lookup sites (see [`SetupWizard.ts`](lens-studio/Assets/Scripts/Setup/SetupWizard.ts) and [`DimosManager.ts`](lens-studio/Assets/Scripts/Core/DimosManager.ts)).
 
 ### Architecture rules — one owner per concern
 
@@ -62,7 +62,7 @@ points rather than introducing UI error catalogs.
 ## Tests
 
 - Default CI runs unit tests that do not require DimOS installed.
-- Integration: `pytest tests/test_ws_integration.py -m integration` with the bridge already running from the DimOS `.venv`.
+- Integration: `pytest dimos_xr/network/test_ws_integration.py -m integration` with the bridge already running from the DimOS `.venv`.
 
 ## License
 

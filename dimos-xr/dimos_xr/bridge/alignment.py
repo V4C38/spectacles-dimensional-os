@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import threading
 import time
 from typing import TYPE_CHECKING, Any, Literal
@@ -19,12 +20,9 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.transform_utils import normalize_angle
 import numpy as np
-import os
 
-from dimos_xr.network.data_plane import DROPPED_POSE_LOG_INTERVAL_S
-
-_TRACE = os.getenv("DIMOS_XR_TRACE", "") not in ("", "0", "false")
 from dimos_xr.bridge.assist import AssistDriver
+from dimos_xr.network.data_plane import DROPPED_POSE_LOG_INTERVAL_S
 from dimos_xr.network.protocol import (
     AlignCommitMessage,
     AlignManualPoseMessage,
@@ -65,6 +63,8 @@ if TYPE_CHECKING:
     from dimos_xr.bridge.odom_buffer import OdomBuffer
     from dimos_xr.bridge.sender import BridgeSender
     from dimos_xr.bridge.status_service import StatusService
+
+_TRACE = os.getenv("DIMOS_XR_TRACE", "") not in ("", "0", "false")
 
 logger = setup_logger()
 
@@ -673,9 +673,9 @@ class AlignmentController:
                 frame_result_pos: tuple[float, float, float] | None = None
                 obs = self._tag_tracker.last_tag_detected
                 if obs:
-                    frame_result_pos = self._tag_tracker.robot_world_pose_estimate()
-                    if frame_result_pos is not None:
-                        frame_result_pos = frame_result_pos[0]  # extract position
+                    pose_estimate = self._tag_tracker.robot_world_pose_estimate()
+                    if pose_estimate is not None:
+                        frame_result_pos = pose_estimate[0]
                 self._assist_driver.tick(
                     obs_count=self._tag_tracker.observation_count(),
                     latest_obs_pos_world=frame_result_pos,
@@ -781,7 +781,7 @@ class AlignmentController:
 
         # Assist / step fields
         assist_stage: str | None = None
-        robot_world_pose: dict | None = None
+        robot_world_pose: dict[str, Any] | None = None
         step_index: int | None = None
         step_count: int | None = None
         if self._session_method == "tag" and self._assist_driver is not None:

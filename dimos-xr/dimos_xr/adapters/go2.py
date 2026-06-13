@@ -9,8 +9,6 @@ from __future__ import annotations
 import threading
 import time
 
-from scipy.spatial.transform import Rotation as _Rotation
-
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
@@ -24,6 +22,7 @@ from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.robot.unitree.go2.connection_spec import GO2ConnectionSpec
 from dimos.utils.logging_config import setup_logger
 from dimos_lcm.std_msgs import Bool, String
+from scipy.spatial.transform import Rotation as _Rotation
 from unitree_webrtc_connect.constants import RTC_TOPIC, SPORT_CMD
 
 from dimos_xr.adapters.base import CapabilityState, RobotHandshake, XRRobotAdapterSpec

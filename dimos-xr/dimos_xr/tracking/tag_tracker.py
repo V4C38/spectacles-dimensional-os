@@ -684,7 +684,7 @@ class TagTracker:
         Returns:
             (position_xyz, orientation_xyzw, confidence) or None if no
             observations are available.  Heading is gravity-leveled and averaged
-            using circular mean.  Confidence is mean observation quality (0–1).
+            using circular mean.  Confidence is mean observation quality (0-1).
         """
         with self._lock:
             observations = list(self._observations)

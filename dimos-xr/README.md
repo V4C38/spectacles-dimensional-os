@@ -27,26 +27,20 @@ cd /path/to/spectacles-dimensional-os
 monorepo bridge entrypoint. The equivalent native DimOS compositions are:
 
 ```bash
-dimos run unitree-go2 dimos-xr
-dimos run unitree-go2-basic dimos-xr
-dimos run unitree-g1-nav-onboard dimos-xr
-dimos run unitree-g1 dimos-xr
+dimos run xr-go2
+dimos run xr-g1
 ```
 
-`unitree-go2` is the primary, fully navigation-capable Go2 target.
-`unitree-go2-basic` is a best-effort capability-driven runtime that works cleanly
-when navigation-capable modules are absent.
+Use `./start.sh` if these blueprints are not yet registered in your DimOS install.
 
-For G1:
+Capability expectations by stack (negotiated at runtime via `hello` / `capability_states`):
 
-- `unitree-g1-nav-onboard` is the primary navigation-capable G1 target
-- `unitree-g1` is supported through the same capability-driven contract
-- G1 runtimes negotiate manual alignment support explicitly; marker
-  alignment is only advertised when the active runtime has the required camera
-  path and calibrated robot-camera geometry
-- `unitree-g1-nav-onboard` requires the Unitree DDS dependency set in the DimOS
-  `.venv`; if that runtime is missing `unitree_sdk2py`, install
-  `unitree-sdk2py-dimos` into the same `.venv`
+- `xr-go2`: Go2 family — full navigation and marker alignment when the selected
+  onboard stack exposes those modules; lighter stacks may negotiate unavailable
+  navigation/path/cancel while keeping the same XR contract
+- `xr-g1`: G1 nav-onboard — navigation-capable when the Unitree DDS dependency
+  set is present in the DimOS `.venv`; manual alignment is always supported,
+  marker alignment only when the runtime exposes the required camera path
 
 The default XR WebSocket port is `8787`.
 
@@ -70,14 +64,11 @@ robot family:
 
 Capability expectations by stack:
 
-- `unitree-go2`: full intended experience, including navigation-capable runtime
-  behavior and marker alignment support
-- `unitree-go2-basic`: same Go2 family presentation, but navigation/path/cancel
-  may negotiate unavailable
-- `unitree-g1-nav-onboard`: navigation-capable G1 runtime, with capabilities
-  negotiated from the actual onboard stack
-- `unitree-g1`: reduced-capability G1 runtime; visualization and manual
-  alignment are supported, while navigation/path/cancel may negotiate unavailable
+- `xr-go2`: full intended Go2 experience when navigation-capable modules are
+  present; marker alignment support depends on the active onboard stack
+- `xr-g1`: navigation-capable G1 runtime when DDS dependencies are installed;
+  manual alignment always supported, marker alignment negotiated from the
+  active camera path and calibrated robot-camera geometry
 
 </details>
 
@@ -117,8 +108,6 @@ If the XR protocol changes, update these together:
 
 - `dimos_xr/network/protocol.py`
 - `PROTOCOL.md`
-- `lens-studio/Assets/Scripts/Network/ProtocolTypes.ts`
-- `lens-studio/Assets/Scripts/Network/Protocol.ts`
-- `lens-studio/Assets/Scripts/Network/ProtocolParser.ts`
+- `lens-studio/Assets/Scripts/Bridge/Protocol.ts`
 
 </details>

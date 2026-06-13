@@ -33,6 +33,7 @@ from dimos_xr.bridge.preview import PreviewService
 from dimos_xr.bridge.sender import BridgeSender
 from dimos_xr.bridge.status_service import StatusService
 from dimos_xr.bridge.telemetry import TelemetryPublisher
+from dimos_xr.network.protocol import EmergencyStopMessage
 from dimos_xr.network.websocket_server import XRWebSocketServer
 from dimos_xr.preview_planner import PreviewPlanner
 from dimos_xr.tracking.filters import LidarFilter, LidarFilterConfig, lidar_height_band_m
@@ -196,6 +197,11 @@ class XRBridge(Module):  # type: ignore[misc]
         )
 
         assert self._loop is not None, "build() called before Module loop is assigned"
+
+        def _on_emergency_stop(msg: EmergencyStopMessage) -> None:
+            nav.on_emergency_stop(msg.ts)
+            alignment.on_emergency_stop()
+
         ws_server = XRWebSocketServer(
             port=self.config.port,
             hello_supplier=self._adapter.handshake_payload,
@@ -211,7 +217,7 @@ class XRBridge(Module):  # type: ignore[misc]
             on_nav_goal=nav.on_nav_goal,
             on_plan_path=preview.on_plan_path,
             on_cancel_goal=lambda msg: nav.on_cancel_goal(msg.ts),
-            on_emergency_stop=lambda msg: (nav.on_emergency_stop(msg.ts), alignment.on_emergency_stop()),
+            on_emergency_stop=_on_emergency_stop,
             on_get_status=self._on_get_status,
             on_status_connect=self._send_status_to,
             on_disconnect=self._on_client_disconnect,

@@ -12,7 +12,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from dimos_xr.network.protocol import encode_lidar, encode_lidar_binary, encode_path, encode_path_preview, encode_pose
+from dimos_xr.network.protocol import (
+    encode_lidar,
+    encode_lidar_binary,
+    encode_path,
+    encode_path_preview,
+    encode_pose,
+)
 from dimos_xr.tracking.filters import LidarFilter, subsample_points_near_robot
 
 if TYPE_CHECKING:

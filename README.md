@@ -79,7 +79,7 @@ The Mac is always the WebSocket **server** and AR devices are **clients**. The b
 If the protocol changes, update these together in the same change:
 - [`dimos-xr/dimos_xr/network/protocol.py`](dimos-xr/dimos_xr/network/protocol.py)
 - [`dimos-xr/PROTOCOL.md`](dimos-xr/PROTOCOL.md)
-- [`lens-studio/Assets/Scripts/bridge/Protocol.ts`](lens-studio/Assets/Scripts/bridge/Protocol.ts)
+- [`lens-studio/Assets/Scripts/Bridge/Protocol.ts`](lens-studio/Assets/Scripts/Bridge/Protocol.ts)
 
 </details>
 
@@ -88,7 +88,7 @@ If the protocol changes, update these together in the same change:
 The Lens side is organized around three scene-entry scripts:
 
 - [`SetupWizard.ts`](lens-studio/Assets/Scripts/Setup/SetupWizard.ts) owns the connect-and-calibrate flow and hands off to runtime. Check Lens Studio Logger output and `./start.sh` bridge logs when calibrate fails.
-- [`DimosManager.ts`](lens-studio/Assets/Scripts/DimosManager.ts) is the orchestration hub for bridge I/O, shared app state, robot marker state, LiDAR/path rendering, navigation placement, and manual-alignment fallback.
+- [`DimosManager.ts`](lens-studio/Assets/Scripts/Core/DimosManager.ts) is the orchestration hub for bridge I/O, shared app state, robot marker state, LiDAR/path rendering, navigation placement, and manual-alignment fallback.
 - [`UIManager.ts`](lens-studio/Assets/Scripts/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
 
 `BridgeClient` is the transport layer, `CalibrationFlow` owns calibrate-step state for both tag and manual modes, `AlignmentSession` is the single owner of the bridge alignment session (tag + manual), `NavigationController` manages goal placement and navigation state, and the visuals live under `robot/`, `lidar/`, and `navigation/`.
@@ -135,17 +135,14 @@ flowchart TB
 
   ```text
   lens-studio/Assets/Scripts/
-  ├── DimosManager.ts
-  ├── AppState.ts
-  ├── Setup/          (SetupWizard, WizardView, CalibrationFlow)
-  ├── UI/             (UIManager, MainMenuView, RobotMenuView, Shared/UIKit)
-  ├── Alignment/      (AlignmentSession, ManualPoseCorrection)
-  ├── Navigation/     (NavigationController, PlacementController, …)
-  ├── Network/        (BridgeClient)
-  ├── bridge/         (Protocol.ts — types + parser + builders)
-  ├── Robot/          (RobotRuntime)
-  ├── Camera/         (FrameCaptureController)
-  └── Visuals/        (RobotMarker, PointCloudRenderer, PathRenderer, …)
+  ├── Core/        (DimosManager, AppState, RobotRuntime, SignalEmitter, MathUtils)
+  ├── Bridge/      (BridgeClient, Protocol — types + parser + builders)
+  ├── Setup/       (SetupWizard, WizardView, CalibrationFlow)
+  ├── UI/          (UIManager, MainMenuView, RobotMenuView, BridgeStatusPresentation, kit/UIKit, kit/UIAnimations)
+  ├── Alignment/   (AlignmentSession, ManualPoseCorrection, FrameCaptureController)
+  ├── Navigation/  (NavigationController, PlacementController, PathRenderer, NavigationMarkerView, SurfacePlacementStabilizer, HeadingRotation)
+  ├── Robot/       (RobotMarker, RobotMenuView)
+  └── Lidar/       (PointCloudRenderer, MockLidarPoints)
   ```
 
 - `ShowLiDAR` controls the height/debug layer, while the red obstacle layer still comes from live bridge lidar when connected.
@@ -167,17 +164,18 @@ flowchart TB
   XRBridge --> Alignment[Alignment and calibration]
   XRBridge --> Filtering[Lidar filtering and world transforms]
   XRBridge --> XRAdapter
-  Blueprint[dimos_xr.py] -->|"autoconnect"| XRBridge
+  Blueprint[blueprints.py] -->|"autoconnect"| XRBridge
 ```
 
 <details>
 <summary>Runtime support and capabilities</summary>
 
-Supported runtimes:
-- `unitree-go2` is the primary fully-supported navigation runtime.
-- `unitree-go2-basic` is best-effort and stays in the same capability-driven contract.
-- `unitree-g1-nav-onboard` is the primary navigation-capable G1 runtime, but it requires the Unitree DDS Python package set in the DimOS `.venv`.
-- `unitree-g1` is a reduced-capability runtime under the same G1 family presentation.
+Supported runtimes (selected interactively by `./start.sh`):
+
+- `xr-go2` — Unitree Go2 stack (full navigation and marker alignment when the onboard modules are available; capability states may negotiate reduced features on lighter stacks).
+- `xr-g1` — Unitree G1 nav-onboard stack (requires the Unitree DDS Python package set in the DimOS `.venv` for onboard navigation).
+
+Direct `dimos run xr-go2` / `dimos run xr-g1` work once these blueprints are registered upstream in DimOS; until then, use `./start.sh`.
 
 On the Lens side, runtime behavior is negotiated from the bridge handshake:
 - `AppState` projects robot/runtime metadata from the bridge and carries the coarse bridge-link state used by the setup and runtime UI.
@@ -199,11 +197,11 @@ cd /path/to/spectacles-dimensional-os
 `./start.sh` always prompts for the target robot stack, then runs the bridge against the selected composition. The equivalent native commands are:
 
 ```bash
-dimos run unitree-go2 dimos-xr
-dimos run unitree-go2-basic dimos-xr
-dimos run unitree-g1-nav-onboard dimos-xr
-dimos run unitree-g1 dimos-xr
+dimos run xr-go2
+dimos run xr-g1
 ```
+
+Use `./start.sh` if the blueprints are not yet registered in your DimOS install.
 
 If DimOS lives somewhere unusual, set `DIMOS_PYTHON` explicitly:
 

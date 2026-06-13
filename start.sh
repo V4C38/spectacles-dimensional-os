@@ -178,7 +178,7 @@ arrow_menu "Choose the robot stack to run (↑/↓ then Enter):" "${MENU_LABELS[
 
 SELECTED_BLUEPRINT="${STACK_IDS[$SELECTED_INDEX]}"
 STACK_LABEL="${SUMMARY_LABELS[$SELECTED_INDEX]}"
-EQUIVALENT="dimos run ${SELECTED_BLUEPRINT}"
+EQUIVALENT="dimos run ${SELECTED_BLUEPRINT//_/-}"
 
 # DimOS GlobalConfig reads ROBOT_IP (or a .env file) to open the robot
 # connection; without it the connection module aborts with "IP address must be

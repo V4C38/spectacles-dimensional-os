@@ -6,8 +6,6 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from dimos_xr.bridge.assist import (
     COUNTDOWN_DURATION_S,
     MOVE_LEG_S,
@@ -15,7 +13,6 @@ from dimos_xr.bridge.assist import (
     AssistDriver,
     AssistState,
 )
-
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -114,7 +111,7 @@ def test_happy_path_full_move_sequence() -> None:
 
 
 def test_right_switch_happens_only_once() -> None:
-    """Repeated ticks between LEG_S and 3×LEG_S must not re-issue the right command."""
+    """Repeated ticks between LEG_S and 3xLEG_S must not re-issue the right command."""
     driver, adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)

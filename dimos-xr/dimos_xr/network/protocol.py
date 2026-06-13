@@ -365,9 +365,9 @@ def encode_lidar_binary(
 ) -> bytes:
     """Encode a LiDAR point cloud as a compact binary WebSocket frame.
 
-    The binary format is 6 bytes per point (3 × IEEE754 float16, little-endian)
+    The binary format is 6 bytes per point (3 x IEEE754 float16, little-endian)
     plus a 5-byte header, vs ~18 bytes/point in JSON text. At 2500 points the
-    frame is ~15 KB compared to ~18–20 KB for JSON.
+    frame is ~15 KB compared to ~18-20 KB for JSON.
     """
     header = struct.pack("<Bf", _LIDAR_F16_TYPE, float(ts))
     if points.size == 0:
@@ -386,7 +386,7 @@ def encode_align_status(
     message: str = "",
     tag_visible: bool | None = None,
     assist_stage: str | None = None,
-    robot_world_pose: dict | None = None,
+    robot_world_pose: dict[str, Any] | None = None,
     step_index: int | None = None,
     step_count: int | None = None,
 ) -> str:

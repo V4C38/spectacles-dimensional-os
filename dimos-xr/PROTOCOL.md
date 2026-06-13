@@ -4,7 +4,7 @@ This is the cross-platform contract between the DimOS-side XR bridge and any XR
 client. It is the real API of this project.
 
 Keep this document, `dimos_xr/network/protocol.py`, and
-`lens-studio/Assets/Scripts/bridge/Protocol.ts` in sync. Bump
+`lens-studio/Assets/Scripts/Bridge/Protocol.ts` in sync. Bump
 `PROTOCOL_VERSION` on breaking changes.
 
 ## Transport

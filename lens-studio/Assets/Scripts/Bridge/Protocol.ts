@@ -4,7 +4,7 @@
  * conversion helpers. Single source of truth replacing the v3 trio
  * (ProtocolTypes / ProtocolParser / Protocol).
  *
- * Keep in sync with dimos_xr/protocol.py and dimos-xr/PROTOCOL.md.
+ * Keep in sync with dimos_xr/network/protocol.py and dimos-xr/PROTOCOL.md.
  */
 // ================================================================
 

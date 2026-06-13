@@ -16,11 +16,12 @@ Design constraints:
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from enum import StrEnum
 import math
 import threading
 import time
-from enum import Enum
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from dimos.utils.logging_config import setup_logger
 
@@ -37,7 +38,7 @@ ESTIMATING_SPREAD_M: float = 0.10 # max allowed XY tag-position spread
 COUNTDOWN_DURATION_S: float = 3.0
 
 
-class AssistState(str, Enum):
+class AssistState(StrEnum):
     IDLE = "idle"
     ESTIMATING = "estimating"
     AWAITING_CONFIRM = "awaiting_confirm"

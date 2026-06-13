@@ -2,9 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
   pull_request:
-    branches: [main, master]
 
 jobs:
   dimos-xr:
@@ -23,7 +21,7 @@ jobs:
       - name: Install dev tools and package (no DimOS)
         run: |
           python -m pip install --upgrade pip
-          pip install websockets qrcode pytest pytest-asyncio ruff mypy
+          pip install websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless
           pip install -e . --no-deps
 
       - name: Ruff
@@ -33,4 +31,4 @@ jobs:
         run: mypy dimos_xr
 
       - name: Pytest (unit tests without DimOS)
-        run: pytest tests/ -m "not integration"
+        run: pytest -m "not integration"
