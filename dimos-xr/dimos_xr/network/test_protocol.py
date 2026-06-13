@@ -300,6 +300,47 @@ def test_encode_align_status() -> None:
     assert "tag_detected" not in raw
     assert "observation_count" not in raw
     assert "quality" not in raw
+    assert "baseline_m" not in raw
+    assert "baseline_target_m" not in raw
+
+
+def test_encode_align_status_step_fields() -> None:
+    """Step index/count appear only when passed; assist_stage and robot_world_pose included."""
+    raw = json.loads(
+        encode_align_status(
+            robot_id="unitree_go2",
+            method="tag",
+            state="detecting",
+            progress=40,
+            message="Collecting",
+            assist_stage="collect",
+            robot_world_pose={"position": [1.0, 0.0, -2.0], "orientation": [0.0, 0.0, 0.0, 1.0]},
+            step_index=2,
+            step_count=2,
+        )
+    )
+    assert raw["assist_stage"] == "collect"
+    assert raw["step_index"] == 2
+    assert raw["step_count"] == 2
+    assert raw["robot_world_pose"]["position"] == [1.0, 0.0, -2.0]
+    assert "baseline_m" not in raw
+    assert "baseline_target_m" not in raw
+
+
+def test_encode_align_status_no_step_fields_when_not_assist() -> None:
+    """Without step_index/step_count, fields must be absent."""
+    raw = json.loads(
+        encode_align_status(
+            robot_id="unitree_go2",
+            method="tag",
+            state="detecting",
+            progress=0,
+        )
+    )
+    assert "step_index" not in raw
+    assert "step_count" not in raw
+    assert "assist_stage" not in raw
+    assert "robot_world_pose" not in raw
 
 
 def test_encode_align_status_manual() -> None:

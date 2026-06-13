@@ -11,7 +11,6 @@ import {
   FONT_WIZARD_INPUT,
   setButtonStyle,
   SLOT_INPUT,
-  SnapOS2Styles,
   Z_CONTENT,
 } from "../UI/kit/UIKit";
 import { WizardFooterState, WizardStep } from "./CalibrationFlow";
@@ -69,6 +68,7 @@ export class WizardView {
       SLOT_INPUT,
       new vec3(0, 0, Z_CONTENT),
       FONT_WIZARD_INPUT,
+      HorizontalAlignment.Center,
     );
     this._inputObj = this._inputField.getSceneObject();
   }
@@ -147,7 +147,6 @@ export class WizardView {
     }
 
     this._prev.sceneObject.enabled = state.showPrev;
-    setButtonStyle(this._prev.button, SnapOS2Styles.Ghost);
 
     this._manual.sceneObject.enabled = state.showManual;
     if (this._manual.labelText) {

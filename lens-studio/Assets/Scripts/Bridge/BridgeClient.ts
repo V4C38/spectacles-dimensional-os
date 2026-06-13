@@ -77,6 +77,8 @@ export class BridgeClient extends BaseScriptComponent {
   private _lastSendDropLogTime = -1;
   private _lastAlignPoseTxLogTime = -1;
   private _lastAlignStatusRxLogTime = -1;
+  private _poseRxCount = 0;
+  private _lastPoseRxLogTime = -1;
   private _lastAlignStatusRxKey = "";
   private _lastSendBinaryLogTime = -1;
   private _lastBridgeStatusKey = "";
@@ -452,6 +454,7 @@ export class BridgeClient extends BaseScriptComponent {
           break;
         case "pose":
           this._adoptRobotId(msg.robot_id);
+          this._logPoseRx(msg);
           this.onPose.emit(msg);
           break;
         case "align_status":
@@ -646,6 +649,20 @@ export class BridgeClient extends BaseScriptComponent {
       .substring(start, Math.min(text.length, start + 80))
       .replace("\n", "\\n")
       .replace("\r", "\\r");
+  }
+
+  private _logPoseRx(msg: PoseMessage): void {
+    const POSE_LOG_INTERVAL_S = 30;
+    this._poseRxCount++;
+    const now = getTime();
+    if (this._poseRxCount === 1 || now - this._lastPoseRxLogTime >= POSE_LOG_INTERVAL_S) {
+      this._lastPoseRxLogTime = now;
+      const pos = msg.position;
+      print(
+        `BridgeClient: RX pose #${this._poseRxCount}` +
+          ` pos=(${pos[0].toFixed(2)},${pos[1].toFixed(2)},${pos[2].toFixed(2)})`,
+      );
+    }
   }
 
   private _logDiagnosticRx(

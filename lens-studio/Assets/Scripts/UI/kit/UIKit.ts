@@ -396,6 +396,14 @@ export function createIconButton(
   return { sceneObject: btnObj, button: btn, labelText };
 }
 
+function bindTextInputAlignment(field: TextInputField, alignment: HorizontalAlignment): void {
+  const apply = (): void => {
+    field.textComponent.horizontalAlignment = alignment;
+  };
+  field.onTextChanged.add(apply);
+  apply();
+}
+
 export function createTextInput(
   parent: SceneObject,
   name: string,
@@ -403,6 +411,7 @@ export function createTextInput(
   height: number,
   position: vec3,
   fontSize?: number,
+  horizontalAlignment?: HorizontalAlignment,
 ): TextInputField {
   const obj = global.scene.createSceneObject(name);
   obj.setParent(parent);
@@ -410,6 +419,7 @@ export function createTextInput(
   const field = obj.createComponent(TextInputField.getTypeName()) as TextInputField;
   field.size = new vec3(width, height, 0.5);
   if (fontSize !== undefined) field.fontSize = fontSize;
+  if (horizontalAlignment !== undefined) bindTextInputAlignment(field, horizontalAlignment);
   return field;
 }
 

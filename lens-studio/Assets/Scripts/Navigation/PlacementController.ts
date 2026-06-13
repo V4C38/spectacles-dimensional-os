@@ -92,6 +92,9 @@ export class PlacementController {
   }
 
   public stop(): void {
+    if (!this.active) {
+      return;
+    }
     print("PlacementController: stop");
     this.active = false;
     this._placementActive = false;

@@ -82,6 +82,8 @@ export interface PoseMessage {
 /**
  * v4: simplified align_status — method, state, progress, message, tag_visible.
  * "ready" = has candidate; "aligned" = committed successfully.
+ * progress = percent of the current step (bridge-computed).
+ * step_index / step_count present only for assisted sessions.
  */
 export interface AlignStatusMessage {
   type: "align_status";
@@ -92,10 +94,10 @@ export interface AlignStatusMessage {
   progress: number;
   message: string;
   tag_visible?: boolean;
-  baseline_m?: number;
-  baseline_target_m?: number;
   assist_stage?: string;
   robot_world_pose?: { position: [number, number, number]; orientation: [number, number, number, number] };
+  step_index?: number;
+  step_count?: number;
 }
 
 /** v4: camera_frame_ack contains only seq. */
@@ -376,7 +378,7 @@ function parseInboundObject(
         print(`Protocol: unknown align_status.method "${method}"; skipping`);
         return null;
       }
-      return {
+      const msg: AlignStatusMessage = {
         type: "align_status",
         ts: requireNumber(data, "ts"),
         robot_id: requireString(data, "robot_id"),
@@ -389,6 +391,34 @@ function parseInboundObject(
             ? data.tag_visible
             : undefined,
       };
+      if (typeof data.assist_stage === "string") {
+        msg.assist_stage = data.assist_stage;
+      }
+      if (
+        typeof data.robot_world_pose === "object" &&
+        data.robot_world_pose !== null &&
+        !Array.isArray(data.robot_world_pose)
+      ) {
+        const rwp = data.robot_world_pose as Record<string, unknown>;
+        if (Array.isArray(rwp.position) && Array.isArray(rwp.orientation)) {
+          msg.robot_world_pose = {
+            position: parseVec3(rwp.position),
+            orientation: [
+              Number((rwp.orientation as number[])[0]),
+              Number((rwp.orientation as number[])[1]),
+              Number((rwp.orientation as number[])[2]),
+              Number((rwp.orientation as number[])[3]),
+            ],
+          };
+        }
+      }
+      if (typeof data.step_index === "number") {
+        msg.step_index = data.step_index;
+      }
+      if (typeof data.step_count === "number") {
+        msg.step_count = data.step_count;
+      }
+      return msg;
     }
 
     case "camera_frame_ack": {

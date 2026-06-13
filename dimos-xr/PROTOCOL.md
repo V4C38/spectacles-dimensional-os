@@ -122,39 +122,38 @@ Alignment progress during a calibration session:
   "robot_id": "unitree_go2",
   "method": "tag",
   "state": "detecting",
-  "progress": 60,
-  "message": "Tag locked — move the robot sideways (12/30 cm)",
+  "progress": 40,
+  "message": "Look at the robot tag — collecting baseline observations",
   "tag_visible": true,
-  "baseline_m": 0.123,
-  "baseline_target_m": 0.30,
   "assist_stage": "collect",
   "robot_world_pose": {
     "position": [1.2, 0.0, -2.0],
     "orientation": [0.0, 0.0, 0.383, 0.924]
-  }
+  },
+  "step_index": 2,
+  "step_count": 2
 }
 ```
 
 Fields:
 
 - `method`: `"tag"` or `"manual"` — matches the `method` sent in `align_start`
-- `state`: one of `"idle"`, `"detecting"`, `"converging"`, `"ready"`, `"committed"`,
-  `"cancelled"`, `"failed"`
-- `progress`: integer 0–100 representing overall alignment completion for the
-  current session
+- `state`: one of `"detecting"`, `"ready"`, `"aligned"`, `"failed"`
+- `progress`: integer 0–100 representing completion of the **current step**
+  (bridge-computed; step-2 progress depends on bridge-internal tunables)
 - `message`: human-readable status string for display in the client HUD
 - `tag_visible` (optional): present only for tag-method sessions; `true` when a
   configured robot-mounted tag was detected in the most recent processed frame
-- `baseline_m` (optional): current robot translation baseline in metres; omitted
-  until at least one observation exists
-- `baseline_target_m` (optional): minimum baseline required for a valid solve
-  (configuration-dependent; typically 0.30)
 - `assist_stage` (optional): current stage of the robot-assisted calibration flow
   (`"estimating"`, `"awaiting_confirm"`, `"countdown"`, `"collect"`, `"move"`,
-  `"settle"`, `"done"`); omitted when assist is not active
+  `"settle"`); omitted when assist is not active or when the flow has completed
 - `robot_world_pose` (optional): estimated robot pose in world frame
   (`position` xyz metres, `orientation` quaternion xyzw); omitted until a
   solve is available
+- `step_index` (optional): 1-based index of the current step in the assisted
+  flow (present only when `assist_stage` is active and the driver is not idle)
+- `step_count` (optional): total number of steps in this assist routine
+  (currently always 2 — "Pre-alignment" then "Calibration")
 
 > **v3 → v4 breaking change**: `tag_detected`, `observation_count`,
 > `baseline_m`, `quality`, `best_quality`, `has_candidate`, `cluster_size`, and
@@ -490,6 +489,9 @@ Calibration is driven entirely by the `align_*` messages plus `align_status` and
   `progress`, `message`, and optional `tag_visible`. The removed fields are:
   `tag_detected`, `observation_count`, `baseline_m`, `quality`, `best_quality`,
   `has_candidate`, `cluster_size`, `required_samples`.
+  Optional assist fields added: `assist_stage`, `robot_world_pose`, `step_index`,
+  `step_count`. `state` values are `detecting`, `ready`, `aligned`, `failed`
+  (stale values `idle`, `converging`, `committed`, `cancelled` removed).
 - **`camera_frame_ack`** is stripped to `ts`, `robot_id`, `seq`. The removed
   fields are: `tag_detected`, `tag_ids`, `quality`.
 - **`bridge_status.registration_method`** and

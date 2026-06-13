@@ -325,7 +325,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: -8.000000, z: 0.500000}
+    Position: {x: 0.000000, y: -8.000000, z: 0.250000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -581,8 +581,8 @@
     LetterSpacing: 0.000000
     LineSpacing: 1.000000
     CapitalizationOverride: None
-  DepthTest: false
-  TwoSided: false
+  DepthTest: true
+  TwoSided: true
 - !<Text/0b25d129-a1fa-4f51-a4f3-89b4c903b744>
   PrefabRemaps:
     []
@@ -972,7 +972,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 5.000000, y: -3.000000, z: 0.000000}
+    Position: {x: 0.000000, y: -3.500000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -1002,7 +1002,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 3.500000, z: 0.250000}
+    Position: {x: 0.000000, y: 3.500000, z: 0.750000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -1032,7 +1032,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 10.000000, y: -8.000000, z: 0.500000}
+    Position: {x: 10.000000, y: -8.000000, z: 0.250000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -1179,8 +1179,8 @@
     LetterSpacing: 0.000000
     LineSpacing: 1.000000
     CapitalizationOverride: None
-  DepthTest: false
-  TwoSided: false
+  DepthTest: true
+  TwoSided: true
 - !<SceneObject/1f742f7f-cbee-478c-b821-6b396d6608c7>
   PrefabRemaps:
     []
@@ -1425,8 +1425,8 @@
     LetterSpacing: 0.000000
     LineSpacing: 1.000000
     CapitalizationOverride: None
-  DepthTest: false
-  TwoSided: false
+  DepthTest: true
+  TwoSided: true
 - !<ScriptComponent/2732d388-98da-4ba1-85c9-359ecb72d9e7>
   PrefabRemaps:
     []
@@ -2432,7 +2432,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: -4.500000, z: 0.250000}
+    Position: {x: 0.000000, y: -4.000000, z: 0.750000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -2763,8 +2763,8 @@
     LetterSpacing: 0.000000
     LineSpacing: 1.000000
     CapitalizationOverride: None
-  DepthTest: false
-  TwoSided: false
+  DepthTest: true
+  TwoSided: true
 - !<SceneObject/530ca55d-4c3e-43b5-a836-e7191b9e1571>
   PrefabRemaps:
     []
@@ -3411,7 +3411,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 7.500000, z: 0.500000}
+    Position: {x: 0.000000, y: 7.500000, z: 0.750000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -3426,7 +3426,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: -10.000000, y: -8.000000, z: 0.500000}
+    Position: {x: -10.000000, y: -8.000000, z: 0.250000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -4315,6 +4315,7 @@
     _renderOrder: true
     _inactive: true
     _playAudio: true
+    _style: true
     _hasShadow: true
     _shadowPositionOffset: true
     _toggleable: true
@@ -4332,7 +4333,7 @@
       _size: !<Vec3> {x: 8.000000, y: 3.000000, z: 3.000000}
       _inactive: false
       _playAudio: false
-      _style: Ghost
+      _style: PrimaryNeutral
       _hasShadow: false
       _shadowPositionOffset: !<Vec3> {x: 0.050000, y: -0.050000, z: -0.010000}
       _toggleable: false
@@ -4921,7 +4922,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: -1.000000, z: 0.250000}
+    Position: {x: 0.000000, y: -0.500000, z: 0.750000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -5452,7 +5453,7 @@
   ScriptInputs:
     "":
       _renderOrder: 0
-      _size: !<Vec3> {x: 8.000000, y: 3.000000, z: 3.000000}
+      _size: !<Vec3> {x: 10.000000, y: 3.000000, z: 3.000000}
       _inactive: false
       _playAudio: false
       _style: PrimaryNeutral
@@ -5932,7 +5933,7 @@
     "":
       autoShowHide: false
       _appearance: Large
-      _innerSize: !<Vec2> {x: 25.000000, y: 14.000000}
+      _innerSize: !<Vec2> {x: 26.000000, y: 14.000000}
       _padding: !<Vec2> {x: 0.000000, y: 0.000000}
       _allowScaling: false
       allowNonUniformScaling: false
@@ -6813,7 +6814,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Position: {x: 0.000000, y: -25.000000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false

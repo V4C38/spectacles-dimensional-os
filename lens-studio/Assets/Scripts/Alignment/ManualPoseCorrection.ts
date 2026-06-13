@@ -113,12 +113,14 @@ export class ManualPoseCorrection {
     bridgePose: PoseMessage | null,
     interactionMode: RobotInteractionMode,
   ): ResolvedDisplayPose {
-    // Manual anchor takes precedence during placement or while awaiting first
-    // runtime bridge pose.
+    // Manual anchor takes precedence during placement or while awaiting the
+    // first runtime bridge pose. Once a live pose arrives (_preferManual stays
+    // true but bridgePose is now non-null), fall through to the corrected
+    // branch so the correction transform is computed and the flag is cleared.
     if (
       this._manualAlignmentPose &&
       (interactionMode === "manualPlacement" ||
-        this._preferManualPoseUntilNextRuntimePose)
+        (this._preferManualPoseUntilNextRuntimePose && !bridgePose))
     ) {
       return {
         kind: "manual",

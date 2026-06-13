@@ -385,10 +385,10 @@ def encode_align_status(
     progress: int,
     message: str = "",
     tag_visible: bool | None = None,
-    baseline_m: float | None = None,
-    baseline_target_m: float | None = None,
     assist_stage: str | None = None,
     robot_world_pose: dict | None = None,
+    step_index: int | None = None,
+    step_count: int | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "type": "align_status",
@@ -401,14 +401,14 @@ def encode_align_status(
     }
     if tag_visible is not None:
         payload["tag_visible"] = tag_visible
-    if baseline_m is not None:
-        payload["baseline_m"] = round(baseline_m, 3)
-    if baseline_target_m is not None:
-        payload["baseline_target_m"] = round(baseline_target_m, 3)
     if assist_stage is not None:
         payload["assist_stage"] = assist_stage
     if robot_world_pose is not None:
         payload["robot_world_pose"] = robot_world_pose
+    if step_index is not None:
+        payload["step_index"] = step_index
+    if step_count is not None:
+        payload["step_count"] = step_count
     return _dumps(payload)
 
 

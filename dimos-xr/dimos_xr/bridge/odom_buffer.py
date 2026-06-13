@@ -79,6 +79,20 @@ class OdomBuffer:
                 return None
             return best[1]
 
+    def at_or_latest(self, mono_ts: float) -> OdomSample | None:
+        """Like ``at`` but falls back to the most-recent sample when no buffered
+        sample is within ``ODOM_LOOKUP_MAX_GAP_S``.
+
+        Use this for stationary operations (e.g. tag-based alignment before
+        registration) where a slightly stale pose is still geometrically valid.
+        Returns ``None`` only if no odom has ever arrived.
+        """
+        result = self.at(mono_ts)
+        if result is not None:
+            return result
+        with self._lock:
+            return self._latest
+
     def latest_world_position(self, calibration: Calibration) -> tuple[float, float, float] | None:
         """Transform the latest odom position into the AR world frame."""
         odom = self.latest()

@@ -79,6 +79,9 @@ export class FrameCaptureController extends BaseScriptComponent {
   }
 
   public setMode(mode: CaptureMode): void {
+    if (this._mode === mode) {
+      return;
+    }
     print(`FrameCaptureController: mode ${this._mode} -> ${mode}`);
     this._mode = mode;
     if (mode === "off") {
@@ -238,10 +241,13 @@ export class FrameCaptureController extends BaseScriptComponent {
     if (this._frameRegistration !== null && this._cameraTextureProvider !== null) {
       this._cameraTextureProvider.onNewFrame.remove(this._frameRegistration);
       this._frameRegistration = null;
+      this._cameraTextureProvider = null;
+      this._cameraTexture = null;
+      print("FrameCaptureController: camera stream stopped");
+    } else {
+      this._cameraTextureProvider = null;
+      this._cameraTexture = null;
     }
-    this._cameraTextureProvider = null;
-    this._cameraTexture = null;
-    print("FrameCaptureController: camera stream stopped");
   }
 
   private _onNewFrame(frame: CameraFrame): void {

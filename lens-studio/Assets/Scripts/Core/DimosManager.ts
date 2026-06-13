@@ -325,6 +325,7 @@ export class DimosManager extends BaseScriptComponent {
         robotRuntime: defaultRuntime,
       } as any);
       this._applyRuntimeState(defaultRuntime);
+      this._lastPose = null;
       this._poseCorrection.onDisconnected();
       this.robotMarker?.resetRuntimePoseSmoothing();
     }
