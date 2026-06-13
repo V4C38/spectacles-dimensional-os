@@ -11,7 +11,7 @@
 import { AlignmentSession } from "../Alignment/AlignmentSession";
 import { DimosManager } from "../Core/DimosManager";
 import { AlignStatusMessage, BridgeStatusMessage } from "../Bridge/Protocol";
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE, SnapOS2Styles } from "../UI/kit/UIKit";
+import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE,COLOR_WARN, SnapOS2Styles } from "../UI/kit/UIKit";
 
 // ── Step / calibration types ───────────────────────────────────
 
@@ -24,7 +24,7 @@ export enum WizardStep {
 export const LAST_WIZARD_STEP = WizardStep.Calibrate;
 
 export type AlignmentMode = "auto" | "manual";
-export type CalibrationPhase = "editing" | "ready" | "pendingCommit" | "complete";
+export type CalibrationPhase = "editing" | "ready" | "pendingCommit" | "complete" | "failed";
 
 export interface CalibrationViewState {
   mode: AlignmentMode;
@@ -34,7 +34,8 @@ export interface CalibrationViewState {
   tagVisible: boolean;
   assistStage?: string;
   robotWorldPose?: { position: [number, number, number]; orientation: [number, number, number, number] };
-  baselineM?: number;
+  stepIndex?: number;
+  stepCount?: number;
 }
 
 export interface WizardFooterState {
@@ -63,14 +64,14 @@ export const WIZARD_STEP_TITLES: string[] = [
 ];
 
 export const CALIBRATE_DESCRIPTION_AUTO =
-  "Look at the AprilTag on your robot.\nStand 1-3 m away and hold steady.";
+  "Look at the AprilTag on your robot to start calibration.";
 
 export const CALIBRATE_DESCRIPTION_MANUAL =
-  "Place the marker at the robot location & rotation.\nNo April Tag needed.";
+  "Place the marker at the robot position.";
 
 export const WIZARD_STEP_DESCRIPTIONS: string[] = [
   "Power on your robot.\nRun ./start.sh in dimos-xr on your Mac.",
-  "Enter your Mac's IP.\nSame Wi‑Fi for robot, Mac, and Spectacles.",
+  "Enter your Mac's IP.\nUse same Wi‑Fi for robot, Mac, and Spectacles.",
   CALIBRATE_DESCRIPTION_AUTO,
 ];
 
@@ -107,6 +108,10 @@ export function isCalibrationComplete(state: CalibrationViewState): boolean {
   return state.phase === "complete";
 }
 
+export function isCalibrationFailed(state: CalibrationViewState): boolean {
+  return state.phase === "failed";
+}
+
 // ── Display builders ───────────────────────────────────────────
 
 const PROGRESS_BAR_WIDTH = 12;
@@ -123,13 +128,37 @@ export function buildCalibrationDisplay(
   _hasBridgeConnection: boolean,
 ): CalibrationDisplayModel {
   if (state.mode === "auto") {
+    if (state.phase === "complete") {
+      return {
+        statusText: "Calibration completed",
+        statusColor: COLOR_SUCCESS,
+        detailText: "",
+        detailColor: COLOR_WHITE,
+      };
+    }
+    if (state.phase === "failed") {
+      return {
+        statusText: state.message || "Calibration failed",
+        statusColor: COLOR_ERROR,
+        detailText: "Tap Redo to retry",
+        detailColor: COLOR_WHITE,
+      };
+    }
     const tagStatus = state.tagVisible
       ? { text: "✅  Tag visible", color: COLOR_SUCCESS }
       : { text: "❌  Tag not visible", color: COLOR_ERROR };
+
+    let detailText: string;
+    if (state.stepIndex !== undefined && state.stepCount !== undefined) {
+      const label = state.stepIndex === 1 ? "Pre-alignment" : "Calibration";
+      detailText = `Step ${state.stepIndex}/${state.stepCount}: ${label}  ${buildAsciiProgressBar(state.progress)}`;
+    } else {
+      detailText = buildAsciiProgressBar(state.progress);
+    }
     return {
       statusText: tagStatus.text,
       statusColor: tagStatus.color,
-      detailText: buildAsciiProgressBar(state.progress),
+      detailText,
       detailColor: COLOR_WHITE,
     };
   }
@@ -138,7 +167,8 @@ export function buildCalibrationDisplay(
   let detailText = "";
   switch (state.phase) {
     case "editing":
-      statusText = state.message || "Place the marker at the robot position.";
+      statusText = state.message || "Low accuracy \n  Introduces drift over long distances";
+      statusColor = COLOR_WARN;
       break;
     case "ready":
       statusText = "Ready — tap Complete to commit.";
@@ -151,6 +181,10 @@ export function buildCalibrationDisplay(
     case "complete":
       statusText = "Aligned.";
       statusColor = COLOR_SUCCESS;
+      break;
+    case "failed":
+      statusText = state.message || "Calibration failed";
+      statusColor = COLOR_ERROR;
       break;
   }
   return { statusText, statusColor, detailText, detailColor: COLOR_WHITE };
@@ -169,12 +203,12 @@ export function applyAlignStatusToCalibrationState(
       case "detecting": phase = "editing"; break;
       case "ready": phase = "ready"; break;
       case "aligned": phase = "complete"; break;
-      case "failed": phase = "editing"; break;
+      case "failed": phase = "failed"; break;
     }
   } else if (msg.state === "aligned") {
     phase = "complete";
   } else if (msg.state === "failed") {
-    phase = "editing";
+    phase = "failed";
   }
   return {
     ...state,
@@ -182,9 +216,10 @@ export function applyAlignStatusToCalibrationState(
     progress: msg.progress,
     message: msg.message || state.message,
     tagVisible: msg.tag_visible ?? state.tagVisible,
-    assistStage: msg.assist_stage ?? state.assistStage,
+    assistStage: msg.state === "aligned" || msg.state === "failed" ? undefined : (msg.assist_stage ?? state.assistStage),
     robotWorldPose: msg.robot_world_pose ?? state.robotWorldPose,
-    baselineM: msg.baseline_m ?? state.baselineM,
+    stepIndex: msg.state === "aligned" || msg.state === "failed" ? undefined : (msg.step_index ?? state.stepIndex),
+    stepCount: msg.step_count ?? state.stepCount,
   };
 }
 
@@ -194,7 +229,7 @@ export function getWizardFooterState(
   calibrationState: CalibrationViewState,
 ): WizardFooterState {
   let nextLabel = "Skip";
-  let nextStyle = SnapOS2Styles.Ghost;
+  let nextStyle = SnapOS2Styles.PrimaryNeutral;
   let nextInactive = false;
 
   if (step === WizardStep.Start) {
@@ -204,7 +239,11 @@ export function getWizardFooterState(
     nextLabel = "Complete";
     nextStyle = SnapOS2Styles.Primary;
   } else if (step === WizardStep.Calibrate) {
-    if (isCalibrationPendingCommit(calibrationState)) {
+    if (isCalibrationFailed(calibrationState)) {
+      // Align failed — offer a Redo button which restarts the auto session
+      nextLabel = "Redo";
+      nextStyle = SnapOS2Styles.PrimaryNeutral;
+    } else if (isCalibrationPendingCommit(calibrationState)) {
       nextLabel = "Completing...";
       nextInactive = true;
     } else if (isCalibrationComplete(calibrationState)) {
@@ -213,11 +252,7 @@ export function getWizardFooterState(
     } else if (calibrationState.assistStage === "awaiting_confirm") {
       // Robot-assisted flow: offer Continue to confirm the robot move
       nextLabel = "Continue";
-      nextStyle = SnapOS2Styles.Primary;
-    } else if (calibrationState.assistStage && calibrationState.assistStage !== "done") {
-      // Assist flow in progress (estimating/countdown/collect/move/settle) — inactive Continue
-      nextLabel = "Continue";
-      nextInactive = true;
+      nextStyle = SnapOS2Styles.PrimaryNeutral;
     } else if (hasCalibrationCandidate(calibrationState)) {
       nextLabel = "Complete";
       nextStyle = SnapOS2Styles.Primary;
@@ -235,7 +270,7 @@ export function getWizardFooterState(
     showPrev: step !== WizardStep.Start,
     showManual:
       step === WizardStep.Calibrate && !isCalibrationPendingCommit(calibrationState),
-    manualLabel: calibrationState.mode === "manual" ? "Use marker align" : "Align manually",
+    manualLabel: calibrationState.mode === "manual" ? "Marker align" : "Manual align",
     manualStyle: SnapOS2Styles.PrimaryNeutral,
     centerNext: step === WizardStep.Start || step === WizardStep.Calibrate,
     widePrevOffset: step === WizardStep.Calibrate,
@@ -255,6 +290,7 @@ export interface CalibrationFlowCallbacks {
   refreshDescription: () => void;
   log: (message: string) => void;
   finishSetup: () => void;
+  scheduleFinishSetup: (delaySecs: number) => void;
 }
 
 export class CalibrationFlow {
@@ -292,7 +328,7 @@ export class CalibrationFlow {
 
   public enter(): void {
     const preferredMode = this._dimosManager.preferredCalibrationMode();
-    if (preferredMode === "manualOnly") {
+    if (preferredMode === "manualOnly" || !this._dimosManager.hasBridgeConnection()) {
       this._beginManualMode();
       return;
     }
@@ -363,6 +399,18 @@ export class CalibrationFlow {
       this._tryAutoFinishSetup();
     }
     this._notify();
+  }
+
+  /**
+   * Redo: restart the auto alignment session after a failure.
+   * Called by SetupWizard when the user taps the "Redo" button.
+   */
+  public redo(): void {
+    if (!isCalibrationFailed(this._state)) {
+      return;
+    }
+    this._callbacks.log("redo requested — restarting auto alignment");
+    this._beginAutoMode();
   }
 
   public handleBridgeConnectionChanged(connected: boolean): void {
@@ -499,7 +547,9 @@ export class CalibrationFlow {
   }
 
   private _logAlignStatusIfChanged(msg: AlignStatusMessage): void {
-    const key = `${msg.state}|${msg.method}|${msg.progress}|${msg.message}`;
+    // Exclude message from the dedupe key so incremental counter changes
+    // (e.g. "collecting samples (1)", "collecting samples (2)") don't spam.
+    const key = `${msg.state}|${msg.method}|${msg.progress}`;
     const now = getTime();
     if (
       key === this._lastLoggedAlignStatusKey &&
@@ -532,7 +582,8 @@ export class CalibrationFlow {
   private _tryAutoFinishSetup(): void {
     if (this._commitInFlight && isCalibrationComplete(this._state)) {
       this._commitInFlight = false;
-      this._callbacks.finishSetup();
+      // Show "Calibration completed" briefly before dismissing the wizard.
+      this._callbacks.scheduleFinishSetup(1.5);
     }
   }
 }

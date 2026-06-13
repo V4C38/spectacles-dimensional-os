@@ -23,12 +23,16 @@ class _FakeStream:
 def _make_go2_adapter() -> Go2AdapterModule:
     adapter = object.__new__(Go2AdapterModule)
     adapter._go2_connection = None
+    adapter._assist_vel_lock = __import__("threading").Lock()
+    adapter._assist_vel_thread = None
+    adapter._assist_vel_target = 0.0
     adapter.config = SimpleNamespace(robot_id="unitree_go2")
     adapter.goal_request = _FakeStream(connected=False)
     adapter.goal_req = _FakeStream(connected=False)
     adapter.clicked_point = _FakeStream(connected=False)
     adapter.stop_movement = _FakeStream(connected=False)
     adapter.cancel_goal_signal = _FakeStream(connected=False)
+    adapter.cmd_vel = _FakeStream(connected=False)
     adapter.xr_lidar = _FakeStream(connected=True)
     adapter.xr_odom = _FakeStream(connected=True)
     adapter.xr_global_costmap = _FakeStream(connected=True)

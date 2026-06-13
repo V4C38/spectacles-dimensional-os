@@ -125,8 +125,28 @@ class AlignmentController:
         self._broadcast_thread: threading.Thread | None = None
 
         self._assist_driver: AssistDriver | None = (
-            AssistDriver(adapter=adapter, odom=odom) if adapter is not None else None
+            AssistDriver(
+                adapter=adapter,
+                on_stage_change=self._on_assist_stage_change,
+            )
+            if adapter is not None
+            else None
         )
+
+    # ------------------------------------------------------------------
+    # Assist stage change callback (called from AssistDriver under its lock)
+    # ------------------------------------------------------------------
+
+    def _on_assist_stage_change(self, stage: str, message: str) -> None:
+        """Broadcast an immediate align_status when the assist stage transitions."""
+        # Called from within AssistDriver._lock — must not re-enter the driver.
+        # Use a daemon thread to avoid blocking the driver's lock.
+        import threading as _threading
+        _threading.Thread(
+            target=self._broadcast_align_status,
+            kwargs={"message": message},
+            daemon=True,
+        ).start()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -312,11 +332,22 @@ class AlignmentController:
             T_committed = self._T_committed
             if registered and T_committed is None:
                 T_committed = self._calibration.current_transform()
+            # Use strict odom lookup (within 250 ms window) when registered, because
+            # the robot may be moving and the odom timestamp must be accurate.
+            # Use the relaxed at_or_latest lookup when not yet registered (alignment),
+            # because the robot is stationary and a slightly stale pose is fine.
+            odom_lookup = self._odom.at if registered else self._odom.at_or_latest
+            # Surface a visible stall to the Lens if no odom has ever arrived.
+            if self._odom.latest() is None:
+                self._broadcast_align_status(
+                    state="detecting",
+                    message="Waiting for robot odometry",
+                )
             result = await asyncio.to_thread(
                 self._tag_tracker.process_frame,
                 header,
                 jpeg,
-                self._odom.at,
+                odom_lookup,
                 receive_mono=receive_mono,
                 T_committed=T_committed,
                 registered=registered,
@@ -415,12 +446,11 @@ class AlignmentController:
                 if self._session_method is None:
                     break
                 if self._assist_driver is not None:
-                    odom = self._odom.latest()
                     self._assist_driver.tick(
                         obs_count=self._tag_tracker.observation_count(),
                         latest_obs_pos_world=None,
-                        odom=odom,
                     )
+                    self._maybe_finish_assist()
                 self._broadcast_align_status()
 
         self._broadcast_thread = threading.Thread(
@@ -429,6 +459,28 @@ class AlignmentController:
             daemon=True,
         )
         self._broadcast_thread.start()
+
+    def _maybe_finish_assist(self) -> None:
+        """Auto-commit when the assist driver reaches DONE.
+
+        Called from the broadcast loop after every tick(). DONE means the driver
+        completed both timed movement legs — we have enough baseline data to commit.
+        """
+        if self._assist_driver is None:
+            return
+        from dimos_xr.bridge.assist import AssistState
+        state = self._assist_driver.state
+        if state == AssistState.DONE:
+            if self._best_alignment is not None:
+                logger.info("AssistDriver DONE — auto-committing alignment")
+                finish_ts = self._best_alignment_ts if self._best_alignment_ts is not None else time.time()
+                self._finish_alignment(self._best_alignment, finish_ts)
+            else:
+                logger.warning("AssistDriver DONE but no alignment candidate — marking failed")
+                self._broadcast_align_status(
+                    state="failed",
+                    message="Assisted calibration complete but no tag data — retry",
+                )
 
     def _stop_broadcast(self) -> None:
         self._broadcast_stop.set()
@@ -624,11 +676,9 @@ class AlignmentController:
                     frame_result_pos = self._tag_tracker.robot_world_pose_estimate()
                     if frame_result_pos is not None:
                         frame_result_pos = frame_result_pos[0]  # extract position
-                odom = self._odom.latest()
                 self._assist_driver.tick(
                     obs_count=self._tag_tracker.observation_count(),
                     latest_obs_pos_world=frame_result_pos,
-                    odom=odom,
                 )
             return
         if not self._calibration.is_registered or not self._runtime_correction_enabled:
@@ -679,14 +729,20 @@ class AlignmentController:
         self._calibration.register_from_alignment(T_new)
 
     def _compute_progress(self, state: str) -> int:
-        """Return a 0-100 progress integer for the current session state."""
+        """Return a 0-100 progress integer for the current step."""
         if state in ("aligned", "ready"):
             return 100
         if state == "failed":
             return 0
         if self._session_method == "manual":
             return 100 if self._best_alignment is not None else 0
-        # tag session: scale cluster_size up to ALIGNMENT_CLUSTER_MIN_SAMPLES
+        # Assist flow: progress belongs to the current step
+        if self._assist_driver is not None:
+            from dimos_xr.bridge.assist import AssistState
+            assist_state = self._assist_driver.state
+            if assist_state != AssistState.IDLE:
+                return self._assist_driver.progress_percent()
+        # Non-assist tag session: scale cluster_size up to ALIGNMENT_CLUSTER_MIN_SAMPLES
         if self._latest_cluster_size >= ALIGNMENT_CLUSTER_MIN_SAMPLES:
             return min(100, int(self._best_alignment.quality * 100)) if self._best_alignment else 90
         return min(
@@ -705,16 +761,17 @@ class AlignmentController:
         ts: float | None = None,
     ) -> None:
         effective_method = method or self._session_method or "tag"
-        # A committable tag candidate exists → advance the wire state to "ready"
-        # so the Lens can offer the Complete action. Without this the tag session
-        # stays in "detecting" forever and the user can never commit.
         effective_state = state
+        # A committable tag candidate exists → advance to "ready" so the Lens can
+        # offer the Complete action — UNLESS assist is still actively running, in
+        # which case the commit will be triggered automatically when DONE.
         if (
             state == "detecting"
             and self._session_method == "tag"
             and self._best_alignment is not None
         ):
-            effective_state = "ready"
+            if self._assist_driver is None or self._assist_driver.state.value in ("idle", "done"):
+                effective_state = "ready"
         if not message and state == "detecting":
             message = self._align_status_message()
         if progress is None:
@@ -722,18 +779,17 @@ class AlignmentController:
         if tag_visible is None and effective_method == "tag":
             tag_visible = self._tag_detected()
 
-        # Assist / baseline fields
+        # Assist / step fields
         assist_stage: str | None = None
         robot_world_pose: dict | None = None
-        baseline_m: float | None = None
-        baseline_target_m: float | None = None
-        if self._session_method == "tag":
-            raw_baseline = self._tag_tracker.baseline_m()
-            if raw_baseline > 0:
-                baseline_m = raw_baseline
-            baseline_target_m = self._tag_tracker._config.min_baseline_m
-            if self._assist_driver is not None:
+        step_index: int | None = None
+        step_count: int | None = None
+        if self._session_method == "tag" and self._assist_driver is not None:
+            from dimos_xr.bridge.assist import AssistState
+            if self._assist_driver.state not in (AssistState.IDLE, AssistState.DONE):
                 assist_stage = self._assist_driver.stage_label
+                step_index = self._assist_driver.step_index
+                step_count = self._assist_driver.step_count
             pose_result = self._tag_tracker.robot_world_pose_estimate()
             if pose_result is not None:
                 pos, ori, _conf = pose_result
@@ -751,10 +807,10 @@ class AlignmentController:
                 progress=progress,
                 message=message,
                 tag_visible=tag_visible,
-                baseline_m=baseline_m,
-                baseline_target_m=baseline_target_m,
                 assist_stage=assist_stage,
                 robot_world_pose=robot_world_pose,
+                step_index=step_index,
+                step_count=step_count,
             )
         )
 

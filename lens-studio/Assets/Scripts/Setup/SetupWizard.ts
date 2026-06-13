@@ -3,8 +3,8 @@ require("LensStudio:TextInputModule");
 import { AlignmentSession } from "../Alignment/AlignmentSession";
 import { DimosManager } from "../Core/DimosManager";
 import { UIManager } from "../UI/UIManager";
-import { AlignStatusMessage } from "../Bridge/Protocol";
-import { scaleIn } from "../UI/kit/UIAnimations";
+import { AlignStatusMessage, protocolMetersToLensCentimeters } from "../Bridge/Protocol";
+import { scaleIn, animateScaleTo, scaleOut } from "../UI/kit/UIAnimations";
 import { COLOR_ERROR, COLOR_WHITE, getFrameComponent } from "../UI/kit/UIKit";
 import { WizardView } from "./WizardView";
 import { getBridgeStatusPresentationForConnect } from "../UI/BridgeStatusPresentation";
@@ -16,6 +16,7 @@ import {
   CALIBRATE_DESCRIPTION_MANUAL,
   createCalibrationViewState,
   getWizardFooterState,
+  isCalibrationFailed,
   LAST_WIZARD_STEP,
   WIZARD_STEP_DESCRIPTIONS,
   WIZARD_STEP_TITLES,
@@ -58,16 +59,38 @@ export class SetupWizard extends BaseScriptComponent {
   private _retryEvent: DelayedCallbackEvent | null = null;
   private _retryOpId = 0;
   private _retryIp = "";
+  private _finishEvent: DelayedCallbackEvent | null = null;
+  private _finishPending = false;
   private _view: WizardView | null = null;
   private _calibrationFlow: CalibrationFlow | null = null;
+  private _discBaseScale: vec3 | null = null;
+  private _discShown = false;
+  private _discPulsing = false;
+  private _discPulseT = 0.0;
 
   onAwake() {
     this._view = new WizardView(this.getSceneObject());
+    // Capture the disc's authored scale so animations can restore it correctly.
+    if (this.assistClearanceDisc) {
+      this._discBaseScale = this.assistClearanceDisc.getTransform().getLocalScale();
+      this.assistClearanceDisc.enabled = false;
+    }
     this.createEvent("OnStartEvent").bind(() => {
       // Cache retry event (re-armed per retry; never recreated).
       const retryEv = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
       retryEv.bind(() => this._onRetryFired());
       this._retryEvent = retryEv;
+
+      // Cache finish-delay event for deferred wizard dismissal after calibration.
+      const finishEv = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
+      finishEv.bind(() => {
+        if (!this._finishPending) {
+          return;
+        }
+        this._finishPending = false;
+        this._finishSetup();
+      });
+      this._finishEvent = finishEv;
 
       this._calibrationFlow = new CalibrationFlow(
         this.dimosManager,
@@ -80,6 +103,7 @@ export class SetupWizard extends BaseScriptComponent {
           refreshDescription: () => this._refreshCalibrationDescription(),
           log: (message) => this._log(message),
           finishSetup: () => this._finishSetup(),
+          scheduleFinishSetup: (delaySecs) => this._scheduleFinishSetup(delaySecs),
         },
       );
 
@@ -91,6 +115,7 @@ export class SetupWizard extends BaseScriptComponent {
       );
 
       this.createEvent("UpdateEvent").bind(() => this._calibrationFlow?.tick());
+      this.createEvent("UpdateEvent").bind(() => this._tickDiscPulse());
       this._bindAlignmentHandlers();
       this._bindBridgeHandlers();
       this.startSetupWizard();
@@ -99,6 +124,7 @@ export class SetupWizard extends BaseScriptComponent {
 
   public startSetupWizard(): void {
     this._log("start");
+    this._finishPending = false;
     this._connectCompleted = false;
     this._isConnecting = false;
     this._lastNavigationTime = -1;
@@ -215,6 +241,10 @@ export class SetupWizard extends BaseScriptComponent {
       this.alignmentSession?.confirmAssist();
       return;
     }
+    if (calState.phase === "failed") {
+      this._calibrationFlow?.redo();
+      return;
+    }
     if (calState.phase === "complete") {
       this._finishSetup();
       return;
@@ -223,6 +253,7 @@ export class SetupWizard extends BaseScriptComponent {
       return;
     }
     if (this._calibrationFlow?.completeStep()) {
+      this._resetWizardAnchor();
       this._finishSetup();
     }
   }
@@ -233,6 +264,12 @@ export class SetupWizard extends BaseScriptComponent {
     }
     if (this._currentStep <= WizardStep.Start) {
       return;
+    }
+    // Leaving calibrate: stop the alignment session (cancels any in-progress assist)
+    // and restore follow-camera by resetting the anchor.
+    if (this._currentStep === WizardStep.Calibrate) {
+      this.alignmentSession?.stop();
+      this._resetWizardAnchor();
     }
     this._setStep((this._currentStep - 1) as WizardStep);
   }
@@ -463,10 +500,13 @@ export class SetupWizard extends BaseScriptComponent {
       this._log(`alignment failed: ${msg.message || "unknown"}`);
     }
 
-    // Panel anchoring: snap to robot when assist_stage is active and robot pose is known.
-    if (msg.assist_stage && msg.assist_stage !== "done" && msg.robot_world_pose) {
+    // Panel anchoring: snap to robot when assist is active past the initial
+    // estimating phase and robot pose is known.
+    // During "estimating" the pose is still approximate so we don't snap yet.
+    const snapStages = new Set(["awaiting_confirm", "countdown", "move"]);
+    if (msg.assist_stage && snapStages.has(msg.assist_stage) && msg.robot_world_pose) {
       const rp = msg.robot_world_pose;
-      const robotPos = new vec3(rp.position[0], rp.position[1], rp.position[2]);
+      const robotPos = protocolMetersToLensCentimeters(rp.position);
       const prev = this._lastAnchorPos;
       const RESNAP_THRESHOLD_CM = 8.0;
       const needsSnap =
@@ -479,9 +519,23 @@ export class SetupWizard extends BaseScriptComponent {
       if (needsSnap) {
         this._anchorWizardAtRobot(robotPos);
       }
-    } else if (!msg.assist_stage || msg.assist_stage === "done") {
-      if (this._lastAnchorPos !== null) {
+    } else if (!msg.assist_stage || msg.assist_stage === "done" || msg.assist_stage === "estimating") {
+      // No active assist or still just estimating (pre-snap) — unanchor if currently anchored.
+      if (this._lastAnchorPos !== null && (!msg.assist_stage || msg.assist_stage === "done")) {
         this._resetWizardAnchor();
+      }
+    }
+
+    // Drive disc pulse: on during "move", off otherwise.
+    const isMoveStage = msg.assist_stage === "move";
+    if (isMoveStage && !this._discPulsing) {
+      this._discPulsing = true;
+      this._discPulseT = 0.0;
+    } else if (!isMoveStage && this._discPulsing) {
+      this._discPulsing = false;
+      // Restore base scale when leaving move stage.
+      if (this.assistClearanceDisc && this._discBaseScale) {
+        this.assistClearanceDisc.getTransform().setLocalScale(this._discBaseScale);
       }
     }
   }
@@ -525,17 +579,29 @@ export class SetupWizard extends BaseScriptComponent {
     this._lastAnchorPos = new vec3(robotWorldPos.x, robotWorldPos.y, robotWorldPos.z);
 
     if (this.assistClearanceDisc) {
-      this.assistClearanceDisc.enabled = true;
       const discTransform = this.assistClearanceDisc.getTransform();
       discTransform.setWorldPosition(new vec3(robotWorldPos.x, robotWorldPos.y, robotWorldPos.z));
+      discTransform.setWorldRotation(quat.quatIdentity());
+      if (!this._discShown) {
+        // First appearance: grow from 0 to base scale.
+        this._discShown = true;
+        this.assistClearanceDisc.enabled = true;
+        if (this._discBaseScale) {
+          discTransform.setLocalScale(new vec3(0, 0, 0));
+          animateScaleTo(this.assistClearanceDisc, this._discBaseScale);
+        }
+      }
+      // Re-snaps during MOVE just reposition; the pulse keeps running.
     }
   }
 
   /** Restore follow behaviour and hide the clearance disc. Idempotent. */
   private _resetWizardAnchor(): void {
     this._lastAnchorPos = null;
-    if (this.assistClearanceDisc) {
-      this.assistClearanceDisc.enabled = false;
+    this._discPulsing = false;
+    if (this._discShown && this.assistClearanceDisc) {
+      this._discShown = false;
+      scaleOut(this.assistClearanceDisc, 0.25);
     }
     if (this._savedFollowing === null) {
       return;
@@ -552,7 +618,27 @@ export class SetupWizard extends BaseScriptComponent {
     this._savedFollowing = null;
   }
 
+  private _tickDiscPulse(): void {
+    if (!this._discPulsing || !this.assistClearanceDisc || !this._discBaseScale) {
+      return;
+    }
+    this._discPulseT += getDeltaTime();
+    const scale = 1.0 + 0.1 * Math.sin(this._discPulseT * 2.5);
+    const s = new vec3(
+      this._discBaseScale.x * scale,
+      this._discBaseScale.y * scale,
+      this._discBaseScale.z * scale,
+    );
+    this.assistClearanceDisc.getTransform().setLocalScale(s);
+  }
+
+  private _scheduleFinishSetup(delaySecs: number): void {
+    this._finishPending = true;
+    this._finishEvent?.reset(delaySecs);
+  }
+
   private _finishSetup(): void {
+    this._finishPending = false;
     this._log(
       `finish connect=${this._connectCompleted ? "done" : "skipped"} calibration=${
         this._calibrationFlow?.isComplete() ? "done" : "skipped"

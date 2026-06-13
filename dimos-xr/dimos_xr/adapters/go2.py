@@ -6,11 +6,18 @@ is handled in the blueprint via .remappings([...]) — not here.
 
 from __future__ import annotations
 
+import threading
+import time
+
+from scipy.spatial.transform import Rotation as _Rotation
+
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Twist import Twist
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -37,13 +44,26 @@ GO2_CAPABILITIES: dict[str, CapabilityState] = {
     "emergency_stop": CapabilityState(True),
 }
 
-# Shoulder plate above/between front legs (approximate; verify with ruler on robot).
+# Front shoulder plate, centered (y=0), ~19 cm forward and 7 cm above base_link.
+# Orientation: tag face normally points straight up (+Z), top edge forward (+X).
+# That base pose is a -90 deg yaw about base +Z.  The physical marker is also
+# mounted at ~5 deg so its upward normal leans toward the robot rear; modelled
+# as an additional -5 deg pitch about base +Y applied after the yaw.
+_GO2_TAG_YAW_DEG: float = -90.0
+_GO2_TAG_PITCH_DEG: float = -5.0
+_GO2_TAG_QUAT: tuple[float, float, float, float] = tuple(  # type: ignore[assignment]
+    (
+        _Rotation.from_euler("y", _GO2_TAG_PITCH_DEG, degrees=True)
+        * _Rotation.from_euler("z", _GO2_TAG_YAW_DEG, degrees=True)
+    ).as_quat()
+)
+
 GO2_DEFAULT_TAG_MOUNTS: list[TagMount] = [
     TagMount(
         tag_id=DEFAULT_MARKER_ID,
         size_m=0.056,
         position=(0.19, 0.0, 0.07),
-        orientation=(0.0, 0.0, -0.70710678, 0.70710678),
+        orientation=_GO2_TAG_QUAT,
     ),
 ]
 
@@ -102,9 +122,19 @@ class Go2AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
     clicked_point: Out[PointStamped]
     stop_movement: Out[Bool]
     cancel_goal_signal: Out[Bool]
+    cmd_vel: Out[Twist]
 
     config: Go2AdapterConfig
     _go2_connection: GO2ConnectionSpec | None = None
+    _assist_vel_lock: threading.Lock
+    _assist_vel_thread: threading.Thread | None
+    _assist_vel_target: float
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self._assist_vel_lock = threading.Lock()
+        self._assist_vel_thread = None
+        self._assist_vel_target = 0.0
 
     async def handle_xr_lidar_in(self, msg: PointCloud2) -> None:
         self.xr_lidar.publish(msg)
@@ -177,9 +207,9 @@ class Go2AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
             capability_states["emergency_stop"] = CapabilityState(
                 False, "No safe stop transport is present for this runtime."
             )
-        if self._go2_connection is None:
+        if self.cmd_vel.transport is None:
             capability_states["align_assist"] = CapabilityState(
-                False, "WebRTC connection is not present for this runtime."
+                False, "cmd_vel transport is not present for assist motion in this runtime."
             )
         return capability_states
 
@@ -255,21 +285,58 @@ class Go2AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
 
     @rpc
     def assist_motion_available(self) -> bool:
-        return self._go2_connection is not None
+        return self.cmd_vel.transport is not None
 
     @rpc
     def assist_set_lateral_velocity(self, vy_m_s: float) -> bool:
-        if self._go2_connection is None:
-            return False
+        """Drive a lateral strafe via the proven joystick/cmd_vel path.
+
+        The value is interpreted as **raw joystick deflection in [-1, 1]**, not
+        meters per second. UnitreeWebRTCConnection.move() maps Twist.linear.y
+        directly to the `lx` stick field with no m/s→stick scaling.
+
+        A ~12 Hz daemon thread continuously republishes the requested Twist so
+        the robot keeps moving (Go2 WebRTC has no deadman — if the stream goes
+        silent the robot does NOT auto-stop; the republisher bridges ticks).
+        Calling with 0.0 publishes a zero Twist immediately, which stops the
+        robot, and lets the republisher thread exit.
+        """
+        with self._assist_vel_lock:
+            self._assist_vel_target = float(vy_m_s)
+
         if vy_m_s == 0.0:
-            self._go2_connection.publish_request(
-                RTC_TOPIC["SPORT_MOD"],
-                {"api_id": SPORT_CMD["StopMove"]},
-            )
+            # Stop: publish a zero Twist immediately, then let the thread exit.
+            self._publish_assist_twist(0.0)
             return True
-        vy = max(-0.20, min(0.20, float(vy_m_s)))
-        self._go2_connection.publish_request(
-            RTC_TOPIC["SPORT_MOD"],
-            {"api_id": SPORT_CMD["Move"], "parameter": {"x": 0.0, "y": vy, "z": 0.0}},
-        )
+
+        # Start the republisher thread if not already running.
+        with self._assist_vel_lock:
+            if self._assist_vel_thread is None or not self._assist_vel_thread.is_alive():
+                t = threading.Thread(
+                    target=self._assist_vel_loop,
+                    daemon=True,
+                    name="xr-assist-vel",
+                )
+                self._assist_vel_thread = t
+                t.start()
         return True
+
+    def _assist_vel_loop(self) -> None:
+        """Republish the current assist velocity at ~12 Hz until it is zeroed."""
+        while True:
+            with self._assist_vel_lock:
+                vy = self._assist_vel_target
+            if vy == 0.0:
+                break
+            self._publish_assist_twist(vy)
+            time.sleep(1.0 / 12.0)
+
+    def _publish_assist_twist(self, vy_m_s: float) -> None:
+        if self.cmd_vel.transport is None:
+            logger.warning("Go2 assist_set_lateral_velocity: cmd_vel transport not available")
+            return
+        twist = Twist(
+            linear=Vector3(0.0, vy_m_s, 0.0),
+            angular=Vector3(0.0, 0.0, 0.0),
+        )
+        self.cmd_vel.publish(twist)
