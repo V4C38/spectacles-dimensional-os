@@ -29,6 +29,7 @@
     alignmentSession: false
     bridgeClient: false
     frameCaptureController: false
+    groundDisc: false
     navigationMarkerRoot: false
     placementRayOrigin: false
     pointCloudRenderer: false
@@ -51,6 +52,7 @@
       navigationMarkerRoot: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
       robotGroundDeadzoneRadiusCm: !<float> 75.000000
       alignmentSession: !<MappingBased.AssignableType_4> 00000000-0000-0000-0000-000000000000
+      groundDisc: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
@@ -63,3 +65,4 @@
     - // @input SceneObject navigationMarkerRoot
     - // @input float robotGroundDeadzoneRadiusCm = 75
     - // @input AssignableType_4 alignmentSession
+    - // @input SceneObject groundDisc

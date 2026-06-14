@@ -27,6 +27,7 @@ export class RobotMenuView {
   public onToggleRequested: (() => void) | null = null;
   public onStopRequested: (() => void) | null = null;
   public onNavigationPlacementRequested: ((enabled: boolean) => void) | null = null;
+  public onContinueRequested: (() => void) | null = null;
 
   private readonly markerRoot: SceneObject;
   private readonly toggleBtn: RoundButton;
@@ -43,8 +44,12 @@ export class RobotMenuView {
   private readonly navigationPlacementBtn: RectangleButton;
   private readonly manualModeMenu: SceneObject | null;
   private readonly agentModeMenu: SceneObject | null;
+  private readonly setupWizardMenuObj: SceneObject | null;
+  private readonly continueSetupObj: SceneObject | null;
+  private readonly continueSetupBtn: RectangleButton | null;
   private _navigationPlacementEnabled = false;
   private _operatingMode: OperatingMode = "manual";
+  private _inSetupMode = false;
 
   constructor(markerRoot: SceneObject, menuRoot: SceneObject) {
     this.markerRoot = markerRoot;
@@ -94,6 +99,18 @@ export class RobotMenuView {
     this.manualModeMenu = findChildRecursive(this.menuObj, "ManualModeMenu");
     this.agentModeMenu = findChildRecursive(this.menuObj, "AgentModeMenu");
 
+    // Setup wizard menu (disabled by default in the scene)
+    this.setupWizardMenuObj = findChildRecursive(this.menuObj, "SetupWizardMenu");
+    this.continueSetupObj = this.setupWizardMenuObj
+      ? findChildRecursive(this.setupWizardMenuObj, "ContinueSetupButton")
+      : null;
+    this.continueSetupBtn = this.continueSetupObj
+      ? (this.continueSetupObj.getComponent("ScriptComponent") as any as RectangleButton | null)
+      : null;
+    if (this.continueSetupBtn) {
+      this.continueSetupBtn.onTriggerUp.add(() => this.onContinueRequested?.());
+    }
+
     this.stopLabel.size = FONT_BUTTON;
     configureButtonToggle(this.stopBtn, true);
     setButtonToggleState(this.stopBtn, true);
@@ -113,6 +130,10 @@ export class RobotMenuView {
   }
 
   public applyBridgeLinkState(state: BridgeLinkState): void {
+    // Do not overwrite setup-mode status text with bridge link state.
+    if (this._inSetupMode) {
+      return;
+    }
     const presentation = getBridgeStatusPresentation(state);
     this.setStatus(presentation.text, presentation.color);
   }
@@ -193,15 +214,44 @@ export class RobotMenuView {
 
   public setOperatingMode(mode: OperatingMode): void {
     this._operatingMode = mode;
+    this._inSetupMode = mode === "setup";
     if (this.manualModeMenu) {
       this.manualModeMenu.enabled = mode === "manual";
     }
     if (this.agentModeMenu) {
       this.agentModeMenu.enabled = mode === "agent";
     }
+    if (this.setupWizardMenuObj) {
+      this.setupWizardMenuObj.enabled = mode === "setup";
+    }
     if (mode === "manual") {
       this.hide();
     }
+  }
+
+  public setSetupWizardMenuVisible(visible: boolean): void {
+    if (this.setupWizardMenuObj) {
+      this.setupWizardMenuObj.enabled = visible;
+    }
+  }
+
+  public setSetupTitle(text: string): void {
+    this.titleText.text = text;
+  }
+
+  public setSetupStatus(text: string, color: vec4): void {
+    this.statusText.text = text;
+    this.statusText.textFill.color = color;
+  }
+
+  public setContinueVisible(visible: boolean): void {
+    if (this.continueSetupObj) {
+      this.continueSetupObj.enabled = visible;
+    }
+  }
+
+  public setSetupStopVisible(visible: boolean): void {
+    this.stopObj.enabled = visible;
   }
 
   private _setToggleVisualSaturation(value: number): void {

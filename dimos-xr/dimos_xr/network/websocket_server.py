@@ -79,6 +79,11 @@ COALESCE_MESSAGE_TYPES = frozenset(
     }
 )
 _MESSAGE_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
+_ALIGN_STATUS_STATE_RE = re.compile(r'"state"\s*:\s*"([^"]+)"')
+# Terminal align_status states that must never be silently overwritten by a
+# later coalesced message.  If one of these is already pending in the coalesce
+# slot, only another terminal state is allowed to replace it.
+_ALIGN_STATUS_TERMINAL_STATES = frozenset({"aligned", "failed"})
 PING_INTERVAL_S = 30
 PING_TIMEOUT_S = 30
 
@@ -97,6 +102,7 @@ def _handshake_noise_filter(record: logging.LogRecord) -> bool:
 def _peek_message_type(text: str) -> str | None:
     match = _MESSAGE_TYPE_RE.search(text)
     return match.group(1) if match else None
+
 
 
 class _ConnectionOutbound:
@@ -136,6 +142,19 @@ class _ConnectionOutbound:
             return
         msg_type = _peek_message_type(text)
         if msg_type in COALESCE_MESSAGE_TYPES:
+            # Terminal align_status (aligned/failed) must not be overwritten by a
+            # non-terminal one.  Check the pending slot before clobbering it.
+            if msg_type == "align_status":
+                pending = self._coalesce_latest.get("align_status")
+                if pending is not None:
+                    pending_state_match = _ALIGN_STATUS_STATE_RE.search(pending)
+                    if pending_state_match and pending_state_match.group(1) in _ALIGN_STATUS_TERMINAL_STATES:
+                        new_state_match = _ALIGN_STATUS_STATE_RE.search(text)
+                        new_state = new_state_match.group(1) if new_state_match else ""
+                        if new_state not in _ALIGN_STATUS_TERMINAL_STATES:
+                            # Incoming non-terminal must not overwrite a pending terminal.
+                            self._work_available.set()
+                            return
             self._coalesce_latest[msg_type] = text
         else:
             self._sequence += 1

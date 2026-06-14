@@ -3,9 +3,9 @@ require("LensStudio:TextInputModule");
 import { AlignmentSession } from "../Alignment/AlignmentSession";
 import { DimosManager } from "../Core/DimosManager";
 import { UIManager } from "../UI/UIManager";
-import { AlignStatusMessage, protocolMetersToLensCentimeters } from "../Bridge/Protocol";
-import { scaleIn, animateScaleTo, scaleOut } from "../UI/kit/UIAnimations";
-import { COLOR_ERROR, COLOR_WHITE, getFrameComponent } from "../UI/kit/UIKit";
+import { AlignStatusMessage } from "../Bridge/Protocol";
+import { scaleIn } from "../UI/kit/UIAnimations";
+import { COLOR_ERROR, COLOR_WHITE } from "../UI/kit/UIKit";
 import { WizardView } from "./WizardView";
 import { getBridgeStatusPresentationForConnect } from "../UI/BridgeStatusPresentation";
 import { BridgeClient } from "../Bridge/BridgeClient";
@@ -39,17 +39,7 @@ export class SetupWizard extends BaseScriptComponent {
   @input
   alignmentSession: AlignmentSession;
 
-  @input
-  assistClearanceDisc: SceneObject;
-
-  @input
-  camera: SceneObject;
-
   private _currentStep = WizardStep.Start;
-  /** World position where the panel was last anchored (for re-snap threshold). */
-  private _lastAnchorPos: vec3 | null = null;
-  /** Whether the Frame follow was enabled before we disabled it for anchoring. */
-  private _savedFollowing: boolean | null = null;
   private _connectCompleted = false;
   private _isConnecting = false;
   private _alignmentHandlersBound = false;
@@ -63,18 +53,9 @@ export class SetupWizard extends BaseScriptComponent {
   private _finishPending = false;
   private _view: WizardView | null = null;
   private _calibrationFlow: CalibrationFlow | null = null;
-  private _discBaseScale: vec3 | null = null;
-  private _discShown = false;
-  private _discPulsing = false;
-  private _discPulseT = 0.0;
 
   onAwake() {
     this._view = new WizardView(this.getSceneObject());
-    // Capture the disc's authored scale so animations can restore it correctly.
-    if (this.assistClearanceDisc) {
-      this._discBaseScale = this.assistClearanceDisc.getTransform().getLocalScale();
-      this.assistClearanceDisc.enabled = false;
-    }
     this.createEvent("OnStartEvent").bind(() => {
       // Cache retry event (re-armed per retry; never recreated).
       const retryEv = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
@@ -115,7 +96,6 @@ export class SetupWizard extends BaseScriptComponent {
       );
 
       this.createEvent("UpdateEvent").bind(() => this._calibrationFlow?.tick());
-      this.createEvent("UpdateEvent").bind(() => this._tickDiscPulse());
       this._bindAlignmentHandlers();
       this._bindBridgeHandlers();
       this.startSetupWizard();
@@ -161,7 +141,7 @@ export class SetupWizard extends BaseScriptComponent {
     if (clamped !== WizardStep.Calibrate) {
       this.alignmentSession?.stop();
       this._calibrationFlow?.leave();
-      this._resetWizardAnchor();
+      this.dimosManager?.endSetupAlignmentPreview();
     }
 
     switch (clamped) {
@@ -253,7 +233,7 @@ export class SetupWizard extends BaseScriptComponent {
       return;
     }
     if (this._calibrationFlow?.completeStep()) {
-      this._resetWizardAnchor();
+      this.dimosManager?.endSetupAlignmentPreview();
       this._finishSetup();
     }
   }
@@ -269,7 +249,7 @@ export class SetupWizard extends BaseScriptComponent {
     // and restore follow-camera by resetting the anchor.
     if (this._currentStep === WizardStep.Calibrate) {
       this.alignmentSession?.stop();
-      this._resetWizardAnchor();
+      this.dimosManager?.endSetupAlignmentPreview();
     }
     this._setStep((this._currentStep - 1) as WizardStep);
   }
@@ -467,7 +447,7 @@ export class SetupWizard extends BaseScriptComponent {
     if (this._currentStep !== WizardStep.Calibrate) {
       return;
     }
-    this._resetWizardAnchor();
+    this.dimosManager?.endSetupAlignmentPreview();
     this._calibrationFlow?.toggleMode();
   }
 
@@ -491,145 +471,11 @@ export class SetupWizard extends BaseScriptComponent {
       return;
     }
     this._calibrationFlow?.handleAlignStatus(msg);
-    // Detecting/ready updates arrive ~3-4/s; CalibrationFlow already logs those
-    // (throttled + deduped). Only surface the terminal transitions here.
     if (msg.state === "aligned") {
       this._log(`alignment succeeded (progress=${msg.progress}%)`);
-      this._resetWizardAnchor();
     } else if (msg.state === "failed") {
       this._log(`alignment failed: ${msg.message || "unknown"}`);
     }
-
-    // Panel anchoring: snap to robot when assist is active past the initial
-    // estimating phase and robot pose is known.
-    // During "estimating" the pose is still approximate so we don't snap yet.
-    const snapStages = new Set(["awaiting_confirm", "countdown", "move"]);
-    if (msg.assist_stage && snapStages.has(msg.assist_stage) && msg.robot_world_pose) {
-      const rp = msg.robot_world_pose;
-      const robotPos = protocolMetersToLensCentimeters(rp.position);
-      const prev = this._lastAnchorPos;
-      const RESNAP_THRESHOLD_CM = 8.0;
-      const needsSnap =
-        prev === null ||
-        Math.sqrt(
-          Math.pow(robotPos.x - prev.x, 2) +
-          Math.pow(robotPos.y - prev.y, 2) +
-          Math.pow(robotPos.z - prev.z, 2),
-        ) > RESNAP_THRESHOLD_CM;
-      if (needsSnap) {
-        this._anchorWizardAtRobot(robotPos);
-      }
-    } else if (!msg.assist_stage || msg.assist_stage === "done" || msg.assist_stage === "estimating") {
-      // No active assist or still just estimating (pre-snap) — unanchor if currently anchored.
-      if (this._lastAnchorPos !== null && (!msg.assist_stage || msg.assist_stage === "done")) {
-        this._resetWizardAnchor();
-      }
-    }
-
-    // Drive disc pulse: on during "move", off otherwise.
-    const isMoveStage = msg.assist_stage === "move";
-    if (isMoveStage && !this._discPulsing) {
-      this._discPulsing = true;
-      this._discPulseT = 0.0;
-    } else if (!isMoveStage && this._discPulsing) {
-      this._discPulsing = false;
-      // Restore base scale when leaving move stage.
-      if (this.assistClearanceDisc && this._discBaseScale) {
-        this.assistClearanceDisc.getTransform().setLocalScale(this._discBaseScale);
-      }
-    }
-  }
-
-  /**
-   * Relocate the wizard panel to hover above the robot world position.
-   * Disables Frame follow so the panel stays fixed in world space.
-   * Call only while on the Calibrate step with a valid robot pose.
-   */
-  private _anchorWizardAtRobot(robotWorldPos: vec3): void {
-    const panel = this.getSceneObject();
-    if (!panel) {
-      return;
-    }
-    const frame = getFrameComponent(panel);
-    if (frame && this._savedFollowing === null) {
-      this._savedFollowing = frame.following;
-      if (frame.following) {
-        frame.setFollowing(false);
-      }
-    }
-    // Position the panel ~35 cm above robot, ~25 cm toward the camera.
-    const cam = this.camera ?? null;
-    const PANEL_HEIGHT_ABOVE_CM = 35.0;
-    const PANEL_TOWARD_CAM_CM = 25.0;
-    let towardCam = new vec3(0, 0, -1);
-    if (cam) {
-      const camPos = cam.getTransform().getWorldPosition();
-      const diff = new vec3(camPos.x - robotWorldPos.x, 0, camPos.z - robotWorldPos.z);
-      const len = Math.sqrt(diff.x * diff.x + diff.z * diff.z);
-      if (len > 0.01) {
-        towardCam = new vec3(diff.x / len, 0, diff.z / len);
-      }
-    }
-    const panelPos = new vec3(
-      robotWorldPos.x + towardCam.x * PANEL_TOWARD_CAM_CM,
-      robotWorldPos.y + PANEL_HEIGHT_ABOVE_CM,
-      robotWorldPos.z + towardCam.z * PANEL_TOWARD_CAM_CM,
-    );
-    panel.getTransform().setWorldPosition(panelPos);
-    this._lastAnchorPos = new vec3(robotWorldPos.x, robotWorldPos.y, robotWorldPos.z);
-
-    if (this.assistClearanceDisc) {
-      const discTransform = this.assistClearanceDisc.getTransform();
-      discTransform.setWorldPosition(new vec3(robotWorldPos.x, robotWorldPos.y, robotWorldPos.z));
-      discTransform.setWorldRotation(quat.quatIdentity());
-      if (!this._discShown) {
-        // First appearance: grow from 0 to base scale.
-        this._discShown = true;
-        this.assistClearanceDisc.enabled = true;
-        if (this._discBaseScale) {
-          discTransform.setLocalScale(new vec3(0, 0, 0));
-          animateScaleTo(this.assistClearanceDisc, this._discBaseScale);
-        }
-      }
-      // Re-snaps during MOVE just reposition; the pulse keeps running.
-    }
-  }
-
-  /** Restore follow behaviour and hide the clearance disc. Idempotent. */
-  private _resetWizardAnchor(): void {
-    this._lastAnchorPos = null;
-    this._discPulsing = false;
-    if (this._discShown && this.assistClearanceDisc) {
-      this._discShown = false;
-      scaleOut(this.assistClearanceDisc, 0.25);
-    }
-    if (this._savedFollowing === null) {
-      return;
-    }
-    const panel = this.getSceneObject();
-    if (!panel) {
-      this._savedFollowing = null;
-      return;
-    }
-    const frame = getFrameComponent(panel);
-    if (frame && this._savedFollowing) {
-      frame.setFollowing(true);
-    }
-    this._savedFollowing = null;
-  }
-
-  private _tickDiscPulse(): void {
-    if (!this._discPulsing || !this.assistClearanceDisc || !this._discBaseScale) {
-      return;
-    }
-    this._discPulseT += getDeltaTime();
-    const scale = 1.0 + 0.1 * Math.sin(this._discPulseT * 2.5);
-    const s = new vec3(
-      this._discBaseScale.x * scale,
-      this._discBaseScale.y * scale,
-      this._discBaseScale.z * scale,
-    );
-    this.assistClearanceDisc.getTransform().setLocalScale(s);
   }
 
   private _scheduleFinishSetup(delaySecs: number): void {

@@ -202,15 +202,11 @@ def _yaw_from_T(T: NDArray[np.float64]) -> float:
     return math.atan2(-float(forward[2]), float(forward[0]))
 
 
-# ---------------------------------------------------------------------------
-# Alignment-candidate cluster helpers (used by bridge.alignment.AlignmentController)
-# ---------------------------------------------------------------------------
-
-ALIGNMENT_CLUSTER_WINDOW: int = 12
-ALIGNMENT_CLUSTER_MIN_SAMPLES: int = 5
-ALIGNMENT_CLUSTER_TARGET_SAMPLES: int = 5
-ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M: float = 0.05
-ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD: float = math.radians(3.0)
+def _orientation_yaw_deg(
+    orientation: tuple[float, float, float, float],
+) -> float:
+    yaw_rad = _yaw_from_T(pose_to_matrix((0.0, 0.0, 0.0), orientation))
+    return round(math.degrees(yaw_rad), 2)
 
 
 @dataclass(frozen=True)
@@ -219,140 +215,6 @@ class AlignmentCandidate:
     quality: float
     method: str
     approximate: bool
-    reprojection_error_px: float | None = None
-    sample_quality: float | None = None
-    cluster_size: int = 1
-
-
-def _candidate_translation_distance_m(lhs: NDArray[np.float64], rhs: NDArray[np.float64]) -> float:
-    return float(np.linalg.norm(lhs[:3, 3] - rhs[:3, 3]))
-
-
-def _candidate_yaw_distance_rad(lhs: NDArray[np.float64], rhs: NDArray[np.float64]) -> float:
-    return float(abs(normalize_angle(_yaw_from_T(lhs) - _yaw_from_T(rhs))))
-
-
-def _orientation_yaw_deg(
-    orientation: tuple[float, float, float, float],
-) -> float:
-    yaw_rad = _yaw_from_T(pose_to_matrix((0.0, 0.0, 0.0), orientation))
-    return round(math.degrees(yaw_rad), 2)
-
-
-def score_alignment_cluster(
-    candidate: AlignmentCandidate,
-    recent_candidates: list[AlignmentCandidate],
-) -> tuple[float, int, float, float]:
-    cluster = [
-        sample
-        for sample in recent_candidates
-        if _candidate_translation_distance_m(sample.T_world_odom, candidate.T_world_odom)
-        <= ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M
-        and _candidate_yaw_distance_rad(sample.T_world_odom, candidate.T_world_odom)
-        <= ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD
-    ]
-    cluster_size = len(cluster)
-    if cluster_size == 0:
-        return (
-            0.0,
-            0,
-            ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M,
-            ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD,
-        )
-    mean_translation_error = (
-        sum(
-            _candidate_translation_distance_m(sample.T_world_odom, candidate.T_world_odom)
-            for sample in cluster
-        )
-        / cluster_size
-    )
-    mean_yaw_error = (
-        sum(
-            _candidate_yaw_distance_rad(sample.T_world_odom, candidate.T_world_odom)
-            for sample in cluster
-        )
-        / cluster_size
-    )
-    translation_score = max(
-        0.0,
-        1.0 - mean_translation_error / ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M,
-    )
-    yaw_score = max(0.0, 1.0 - mean_yaw_error / ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD)
-    stability_score = min(1.0, cluster_size / ALIGNMENT_CLUSTER_MIN_SAMPLES)
-    cluster_bonus = min(1.0, cluster_size / ALIGNMENT_CLUSTER_TARGET_SAMPLES)
-    sample_quality = (
-        candidate.sample_quality if candidate.sample_quality is not None else candidate.quality
-    )
-    confidence = (
-        sample_quality
-        * stability_score
-        * (0.45 + 0.25 * translation_score + 0.15 * yaw_score + 0.15 * cluster_bonus)
-    )
-    return confidence, cluster_size, mean_translation_error, mean_yaw_error
-
-
-def collect_alignment_cluster(
-    candidate: AlignmentCandidate,
-    recent_candidates: list[AlignmentCandidate],
-) -> list[AlignmentCandidate]:
-    return [
-        sample
-        for sample in recent_candidates
-        if _candidate_translation_distance_m(sample.T_world_odom, candidate.T_world_odom)
-        <= ALIGNMENT_CLUSTER_TRANSLATION_THRESHOLD_M
-        and _candidate_yaw_distance_rad(sample.T_world_odom, candidate.T_world_odom)
-        <= ALIGNMENT_CLUSTER_YAW_THRESHOLD_RAD
-    ]
-
-
-def _circular_mean_rad(angles: list[float]) -> float:
-    if not angles:
-        return 0.0
-    sin_sum = sum(math.sin(angle) for angle in angles)
-    cos_sum = sum(math.cos(angle) for angle in angles)
-    return math.atan2(sin_sum, cos_sum)
-
-
-def _matrix_from_yaw_and_translation(
-    yaw_rad: float,
-    translation: NDArray[np.float64],
-) -> NDArray[np.float64]:
-    x_axis = np.array(
-        [math.cos(yaw_rad), 0.0, -math.sin(yaw_rad)],
-        dtype=np.float64,
-    )
-    z_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-    y_axis = np.cross(z_axis, x_axis)
-    T: NDArray[np.float64] = np.eye(4, dtype=np.float64)
-    T[:3, 0] = x_axis
-    T[:3, 1] = y_axis
-    T[:3, 2] = z_axis
-    T[:3, 3] = translation
-    return T
-
-
-def average_cluster_transform(
-    cluster: list[AlignmentCandidate],
-) -> tuple[NDArray[np.float64], float, float]:
-    """Average gravity-leveled cluster members; return (T, yaw_spread_rad, trans_spread_m)."""
-    if not cluster:
-        raise ValueError("cluster must not be empty")
-    leveled = [
-        gravity_level_transform(np.array(sample.T_world_odom, dtype=np.float64, copy=True))
-        for sample in cluster
-    ]
-    yaws = [_yaw_from_T(T) for T in leveled]
-    translations = np.array([T[:3, 3] for T in leveled], dtype=np.float64)
-    mean_yaw = _circular_mean_rad(yaws)
-    mean_translation = np.mean(translations, axis=0)
-    T_avg = _matrix_from_yaw_and_translation(mean_yaw, mean_translation)
-    yaw_spread = max(abs(normalize_angle(yaw - mean_yaw)) for yaw in yaws) if len(yaws) > 1 else 0.0
-    trans_spread = (
-        float(np.max(np.linalg.norm(translations - mean_translation, axis=1)))
-        if len(translations) > 1
-        else 0.0
-    )
-    return T_avg, yaw_spread, trans_spread
 
 
 @dataclass(frozen=True)
@@ -400,7 +262,7 @@ class FrameResult:
 class TagTrackerConfig:
     max_reprojection_error_px: float = 3.0
     max_distance_m: float = 6.0
-    min_baseline_m: float = 0.30
+    min_baseline_m: float = 0.15
     window_max_obs: int = 40
     window_max_age_s: float = 120.0
     innovation_gate_m: float = 1.5
@@ -639,15 +501,16 @@ class TagTracker:
             observations_added=added,
         )
 
-    def current_solve(self) -> TagSolve | None:
+    def current_solve(self, *, min_baseline_m: float | None = None) -> TagSolve | None:
         with self._lock:
             observations = list(self._observations)
 
         if not observations:
             return None
 
+        effective_min_baseline = min_baseline_m if min_baseline_m is not None else self._config.min_baseline_m
         baseline = _ground_baseline_m(observations)
-        if baseline >= self._config.min_baseline_m and len(observations) >= 2:
+        if len(observations) >= 2 and baseline >= effective_min_baseline:
             u = np.array(
                 [(o.p_odom_tag[0], o.p_odom_tag[1]) for o in observations],
                 dtype=np.float64,

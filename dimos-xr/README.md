@@ -102,6 +102,37 @@ Tests are colocated with their modules under `dimos_xr/` rather than in a top-le
 </details>
 
 <details>
+<summary>Calibration flows</summary>
+
+Two flows are supported:
+
+**Assisted tag** (`align_start{method:"tag", assist:true}`)  
+The bridge drives the robot through a 3-leg baseline-collection move (out ⟶ back ⟶ return)
+while the Spectacles user looks at the robot-mounted AprilTag.  After each leg the robot
+stops and waits (SAMPLE phase) until the tag is detected to collect at least 4 stable
+observations before advancing.  At `DONE`, the bridge calls `current_solve(min_baseline_m=0.0)`
+and auto-commits.  If no solve is produced the session is marked `failed` and the user can
+retry.
+
+Requires the robot to advertise `align_assist` (i.e., the `cmd_vel` transport must be
+available).  On robots without `align_assist` the `tag` path returns an immediate `failed`
+message and the user must switch to the manual pose flow.
+
+**Manual pose** (`align_start{method:"manual"}`)  
+The user drags the robot marker to its real-world position in the Lens, then presses Commit.
+No camera frames are consumed.  Always available regardless of hardware capabilities.
+
+Notes:
+- Runtime drift correction uses the same `TagTracker.current_solve()` mechanism with a
+  `min_baseline_m=0.15` floor to avoid corrupting the committed calibration when the robot
+  is stationary.
+- The handheld-tag-scan flow (static robot, user collects many samples, cluster-averaged on
+  commit) has been removed.  It was only reachable on robots without `cmd_vel` transport,
+  for which manual pose is the correct alternative.
+
+</details>
+
+<details>
 <summary>Protocol coupling</summary>
 
 If the XR protocol changes, update these together:

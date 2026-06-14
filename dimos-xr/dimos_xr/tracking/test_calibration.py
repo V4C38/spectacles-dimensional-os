@@ -5,20 +5,15 @@ import math
 import numpy as np
 
 from dimos_xr.tracking.tag_tracker import (
-    ALIGNMENT_CLUSTER_MIN_SAMPLES,
-    AlignmentCandidate,
+    R_ALIGN,
     TagMount,
     TagTracker,
-    average_cluster_transform,
     build_T_world_odom,
-    collect_alignment_cluster,
-    score_alignment_cluster,
     solve_yaw_translation_2d,
 )
 from dimos_xr.tracking.transforms import (
     Calibration,
     gravity_level_transform,
-    matrix_to_pose,
     normalize_ground_pose,
     pose_to_matrix,
 )
@@ -89,96 +84,6 @@ def test_normalize_ground_pose_removes_pitch_and_roll() -> None:
         expected_planar,
         atol=1e-6,
     )
-
-
-def _yaw_quaternion(yaw_rad: float) -> tuple[float, float, float, float]:
-    half_yaw = yaw_rad * 0.5
-    return (0.0, math.sin(half_yaw), 0.0, math.cos(half_yaw))
-
-
-def _alignment_candidate(
-    x: float,
-    z: float,
-    yaw_deg: float,
-    *,
-    sample_quality: float = 0.9,
-) -> AlignmentCandidate:
-    T_world_odom = pose_to_matrix((x, 0.0, z), _yaw_quaternion(math.radians(yaw_deg)))
-    return AlignmentCandidate(
-        T_world_odom=T_world_odom,
-        quality=sample_quality,
-        sample_quality=sample_quality,
-        method="tag",
-        approximate=False,
-    )
-
-
-def test_alignment_cluster_score_promotes_stable_candidate_groups() -> None:
-    recent = [
-        _alignment_candidate(1.00, 2.00, 10.0),
-        _alignment_candidate(1.02, 2.01, 11.0),
-        _alignment_candidate(0.99, 1.98, 9.5),
-        _alignment_candidate(1.01, 2.00, 10.5),
-        _alignment_candidate(1.00, 2.00, 10.2),
-        _alignment_candidate(1.01, 1.99, 9.8),
-        _alignment_candidate(0.98, 2.01, 10.1),
-        _alignment_candidate(1.02, 2.00, 10.3),
-        _alignment_candidate(1.50, 2.60, 40.0),
-    ]
-
-    confidence, cluster_size, mean_translation_error, mean_yaw_error = score_alignment_cluster(
-        recent[0], recent
-    )
-
-    assert cluster_size == 8
-    assert cluster_size >= ALIGNMENT_CLUSTER_MIN_SAMPLES
-    assert confidence > 0.5
-    assert mean_translation_error < 0.03
-    assert mean_yaw_error < math.radians(2.0)
-
-
-def test_alignment_cluster_score_penalizes_drifted_outlier_candidates() -> None:
-    stable_recent = [
-        _alignment_candidate(1.00, 2.00, 10.0),
-        _alignment_candidate(1.02, 2.01, 11.0),
-        _alignment_candidate(0.99, 1.98, 9.5),
-        _alignment_candidate(1.01, 2.00, 10.5),
-    ]
-    drifted = _alignment_candidate(1.45, 2.55, 42.0)
-
-    confidence, cluster_size, _, _ = score_alignment_cluster(drifted, [*stable_recent, drifted])
-
-    assert cluster_size == 1
-    assert confidence < 0.3
-
-
-def test_average_cluster_transform_uses_circular_yaw_mean() -> None:
-    cluster = [
-        _alignment_candidate(1.00, 2.00, 10.0),
-        _alignment_candidate(1.01, 2.00, 12.0),
-        _alignment_candidate(0.99, 1.99, 8.0),
-        _alignment_candidate(1.00, 2.01, 11.0),
-        _alignment_candidate(1.02, 2.00, 9.0),
-        _alignment_candidate(1.01, 2.00, 10.5),
-        _alignment_candidate(0.98, 1.98, 10.2),
-        _alignment_candidate(1.00, 2.00, 9.8),
-    ]
-    T_avg, yaw_spread, trans_spread = average_cluster_transform(cluster)
-    committed_pos, _ = matrix_to_pose(T_avg)
-    assert abs(committed_pos[0] - 1.0) < 0.02
-    assert abs(committed_pos[2] - 2.0) < 0.02
-    assert yaw_spread < math.radians(3.0)
-    assert trans_spread < 0.03
-
-
-def test_collect_alignment_cluster_excludes_yaw_outliers() -> None:
-    recent = [
-        _alignment_candidate(1.00, 2.00, 10.0),
-        _alignment_candidate(1.01, 2.00, 11.0),
-        _alignment_candidate(1.50, 2.60, 40.0),
-    ]
-    cluster = collect_alignment_cluster(recent[0], recent)
-    assert len(cluster) == 2
 
 
 def test_gravity_level_transform_flattens_floor() -> None:
@@ -261,4 +166,46 @@ def test_calibration_commit_creates_planar_floor() -> None:
 
     assert np.allclose(world_z_axis, expected_world_up, atol=1e-5), (
         f"Level odom pose should produce world +Z = world +Y, got {world_z_axis}"
+    )
+
+
+def test_manual_alignment_world_pose_matches_placement() -> None:
+    """Regression test for the manual-alignment frame-inconsistency bug.
+
+    Before the fix, _process_manual_candidate built T_world_base using only
+    R_y(yaw) (from normalize_ground_pose) without the odom(Z-up)->world(Y-up)
+    basis change R_ALIGN.  gravity_level_transform then re-leveled the rotation
+    while preserving the (wrong) translation, producing an offset of ~|t_ob|.
+
+    This test simulates the same arithmetic with |t_ob| ~ 1.5 m and asserts that
+    the committed world position matches the marker placement to within 1 mm.
+    """
+    marker_position = (3.0, 0.0, -2.0)   # world-frame placement (Y-up)
+    marker_yaw_rad = math.radians(45.0)
+
+    # Replicate normalize_ground_pose output: pure yaw about world +Y
+    half_yaw = marker_yaw_rad * 0.5
+    norm_orientation = (0.0, math.sin(half_yaw), 0.0, math.cos(half_yaw))
+
+    # Build T_world_base WITH the fix (R_ALIGN applied)
+    T_world_base = pose_to_matrix(marker_position, norm_orientation)
+    T_world_base[:3, :3] = T_world_base[:3, :3] @ R_ALIGN
+
+    # Robot odom pose with non-trivial translation (~1.5 m from odom origin)
+    odom_position = (1.0, 0.0, 1.1)
+    odom_orientation = (0.0, 0.0, 0.0, 1.0)
+    T_odom_base = pose_to_matrix(odom_position, odom_orientation)
+
+    T_world_odom = T_world_base @ np.linalg.inv(T_odom_base)
+
+    cal = Calibration()
+    cal.register_from_alignment(T_world_odom)
+
+    # Transform the commit-time odom pose back through the calibration.
+    # The returned world position must equal the marker placement.
+    world_pos, _ = cal.transform_pose(odom_position, odom_orientation)
+
+    assert np.allclose(world_pos, marker_position, atol=1e-3), (
+        f"Manual calibration world position {world_pos} does not match "
+        f"marker placement {marker_position} — R_ALIGN basis change missing?"
     )

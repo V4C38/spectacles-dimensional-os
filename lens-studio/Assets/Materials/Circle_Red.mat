@@ -1,8 +1,8 @@
-- !<Material/292c5410-f592-4e05-9e04-1abe6083dfcf>
+- !<Material/0357bc25-0c02-47d5-b17d-66d392fc7cab>
   PackagePath: ""
   PassesInfo:
-    - !<own> af02dbee-cd40-4932-a5f4-67249a336c38
-- !<PassInfo/af02dbee-cd40-4932-a5f4-67249a336c38>
+    - !<own> ede14006-09e0-43a7-8322-f17adfa03655
+- !<PassInfo/ede14006-09e0-43a7-8322-f17adfa03655>
   CachedProperties:
     - AnimatedArrow:
         typeIdx: 2
@@ -173,7 +173,7 @@
   Properties:
     Color:
       typeIdx: 5
-      value: {x: 0.999420, y: 0.985550, z: 0.000000, w: 1.000000}
+      value: {x: 1.000000, y: 0.149126, z: 0.000000, w: 1.000000}
     Port_Input0_N015:
       typeIdx: 1
       value: 0.499000

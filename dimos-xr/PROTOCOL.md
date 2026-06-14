@@ -145,8 +145,8 @@ Fields:
 - `tag_visible` (optional): present only for tag-method sessions; `true` when a
   configured robot-mounted tag was detected in the most recent processed frame
 - `assist_stage` (optional): current stage of the robot-assisted calibration flow
-  (`"estimating"`, `"awaiting_confirm"`, `"countdown"`, `"collect"`, `"move"`,
-  `"settle"`); omitted when assist is not active or when the flow has completed
+  (`"estimating"`, `"awaiting_confirm"`, `"move"`); omitted when assist is not
+  active or when the flow has completed
 - `robot_world_pose` (optional): estimated robot pose in world frame
   (`position` xyz metres, `orientation` quaternion xyzw); omitted until a
   solve is available

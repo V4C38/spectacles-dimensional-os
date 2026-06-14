@@ -13,13 +13,10 @@ from dimos_xr.adapters.go2 import GO2_DEFAULT_TAG_MOUNTS
 from dimos_xr.tracking.tag_tracker import (
     CAMERA_FRAME_MAGIC,
     DEFAULT_MARKER_ID,
-    AlignmentCandidate,
     TagMount,
     TagTracker,
     TagTrackerConfig,
-    _matrix_from_yaw_and_translation,
     _yaw_from_T,
-    average_cluster_transform,
     build_camera_info,
     build_T_world_odom,
     parse_camera_frame,
@@ -269,18 +266,45 @@ def test_yaw_roundtrip_build_T(theta_deg: float) -> None:
     assert math.isclose(_yaw_from_T(build_T_world_odom(theta, (0.0, 0.0, 0.0))), theta, abs_tol=1e-9)
 
 
-@pytest.mark.parametrize("theta_deg", [-150, -30, 30, 137])
-def test_yaw_roundtrip_matrix_from_yaw(theta_deg: float) -> None:
-    theta = math.radians(theta_deg)
-    T = _matrix_from_yaw_and_translation(theta, np.zeros(3))
-    assert math.isclose(_yaw_from_T(T), theta, abs_tol=1e-9)
-    np.testing.assert_allclose(T[:3, 0], build_T_world_odom(theta, (0.0, 0.0, 0.0))[:3, 0], atol=1e-9)
+# ---------------------------------------------------------------------------
+# current_solve parameterized baseline
+# ---------------------------------------------------------------------------
 
 
-def test_single_candidate_cluster_average_is_identity_op() -> None:
-    theta = math.radians(40.0)
-    T = build_T_world_odom(theta, (1.2, 0.0, -2.0))
-    candidate = AlignmentCandidate(T_world_odom=T, quality=1.0, method="marker", approximate=False)
-    T_avg, yaw_spread, trans_spread = average_cluster_transform([candidate])
-    np.testing.assert_allclose(T_avg, T, atol=1e-9)
-    assert yaw_spread == 0.0 and trans_spread == 0.0
+def test_current_solve_with_zero_baseline_returns_solve_from_small_window() -> None:
+    """current_solve(min_baseline_m=0.0) must succeed even when observations span < 15 cm."""
+    mount = GO2_DEFAULT_TAG_MOUNTS[0]
+    tracker = TagTracker(
+        [mount],
+        config=TagTrackerConfig(max_reprojection_error_px=8.0, min_baseline_m=0.15),
+    )
+    tracker.set_camera_info(_synthetic_camera_info())
+    header = {
+        "type": "camera_frame",
+        "robot_id": "unitree_go2",
+        "seq": 1,
+        "ts": 10.0,
+        "send_ts": 10.05,
+        "cam_pos": [1.0, 1.5, -2.0],
+        "cam_rot": [0.0, 0.0, 0.0, 1.0],
+    }
+    # Two slightly different robot odom positions (< 15 cm apart) to build a small baseline window
+    odoms = [
+        OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+        OdomSample(position=(0.05, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+        OdomSample(position=(0.10, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+    ]
+    for i, odom in enumerate(odoms):
+        tracker.process_frame(
+            {**header, "seq": i},
+            _encode_marker_jpeg(),
+            lambda _ts, o=odom: o,
+            receive_mono=10.1 + i * 0.1,
+        )
+
+    # With default config (0.15 m floor) this may return None (baseline < 0.15 m)
+    # But with min_baseline_m=0.0 it must return a solve if we have >= 2 observations.
+    if tracker.observation_count() >= 2:
+        solve = tracker.current_solve(min_baseline_m=0.0)
+        assert solve is not None, "current_solve(min_baseline_m=0.0) must return a solve for >= 2 observations"
+

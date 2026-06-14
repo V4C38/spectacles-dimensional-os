@@ -13,17 +13,30 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import threading
+import time
 from typing import TYPE_CHECKING
 
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
+from dimos.utils.logging_config import setup_logger
 from dimos.utils.transform_utils import (
     matrix_to_pose as _dimos_matrix_to_pose,
     normalize_angle,
     pose_to_matrix as _dimos_pose_to_matrix,
 )
 import numpy as np
+
+logger = setup_logger()
+
+# Rate-limit the gravity_level_transform tilt warning to once per 30 s.
+# Tilt angles of 23–69° are observed when the headset is held at an angle while
+# scanning — this is expected during calibration.  The warning is retained (not
+# silenced) because a tilt that large on a flat-floor robot indicates a
+# genuinely malformed calibration input; we just don't flood the log.
+_GRAVITY_WARN_INTERVAL_S: float = 30.0
+_gravity_warn_last_mono: float = 0.0
+_gravity_warn_lock = threading.Lock()
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -140,6 +153,20 @@ def gravity_level_transform(T: NDArray[np.float64]) -> NDArray[np.float64]:
     else:
         axis = cross / np.linalg.norm(cross)
         angle = math.acos(np.clip(dot, -1.0, 1.0))
+
+    if angle > math.radians(15.0):
+        global _gravity_warn_last_mono
+        now = time.monotonic()
+        with _gravity_warn_lock:
+            if now - _gravity_warn_last_mono >= _GRAVITY_WARN_INTERVAL_S:
+                _gravity_warn_last_mono = now
+                logger.warning(
+                    "gravity_level_transform: input up-axis far from world-up "
+                    "(angle=%.1f deg) — calibration input likely malformed; "
+                    "this warning is rate-limited to once per %.0f s",
+                    math.degrees(angle),
+                    _GRAVITY_WARN_INTERVAL_S,
+                )
 
     K = np.array(
         [

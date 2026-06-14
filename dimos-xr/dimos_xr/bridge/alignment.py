@@ -1,6 +1,13 @@
 """AlignmentController — AprilTag and manual alignment, camera-frame processing,
 runtime drift correction, and align_status broadcasting.
 
+Two calibration flows are supported:
+- **assisted tag**: align_start{method:"tag", assist:true} — the robot drives itself
+  through a 3-leg move while the user looks at the robot-mounted AprilTag (glasses
+  camera only).  The bridge auto-commits at DONE via a fresh current_solve().
+- **manual pose**: align_start{method:"manual"} + align_manual_pose — the user
+  hand-places a pose, then align_commit commits it.
+
 Owns the TagTracker, all alignment session state, the align-status broadcast
 thread, and the async camera-frame pipeline.
 """
@@ -34,17 +41,13 @@ from dimos_xr.network.protocol import (
     encode_camera_frame_ack,
 )
 from dimos_xr.tracking.tag_tracker import (
-    ALIGNMENT_CLUSTER_MIN_SAMPLES,
-    ALIGNMENT_CLUSTER_WINDOW,
     AlignmentCandidate,
+    R_ALIGN,
     TagTracker,
     TagTrackerConfig,
     _yaw_from_T,
-    average_cluster_transform,
     build_camera_info,
     build_T_world_odom,
-    collect_alignment_cluster,
-    score_alignment_cluster,
 )
 from dimos_xr.tracking.transforms import (
     Calibration,
@@ -102,19 +105,16 @@ class AlignmentController:
         self._runtime_correction_enabled = runtime_correction_enabled
         self._tag_smoothing_tau_s = tag_smoothing_tau_s
         self._tf_publish_static = tf_publish_static
+        self._tf_publish_static_unsupported: bool = False  # set once on first NotImplementedError
 
         self._frame_in_flight: bool = False
         self._last_smooth_mono: float | None = None
         self._T_committed: np.ndarray | None = None
         self._pending_large_solves: list[np.ndarray] = []
-        self._best_alignment: AlignmentCandidate | None = None
-        self._best_alignment_ts: float | None = None
-        self._latest_alignment_quality: float | None = None
-        self._candidate_count: int = 0
+        # _pending_candidate: manual pose awaiting commit (tag flow auto-commits at DONE)
+        self._pending_candidate: AlignmentCandidate | None = None
+        self._pending_candidate_ts: float | None = None
         self._session_method: Literal["tag", "manual"] | None = None  # None = no session
-        self._latest_cluster_size: int = 0
-        self._recent_marker_candidates: list[AlignmentCandidate] = []
-        self._align_start_mono: float | None = None
 
         self._manual_pose_first_logged: bool = False
         self._last_manual_inactive_log_mono: float = 0.0
@@ -140,7 +140,6 @@ class AlignmentController:
     def _on_assist_stage_change(self, stage: str, message: str) -> None:
         """Broadcast an immediate align_status when the assist stage transitions."""
         # Called from within AssistDriver._lock — must not re-enter the driver.
-        # Use a daemon thread to avoid blocking the driver's lock.
         import threading as _threading
         _threading.Thread(
             target=self._broadcast_align_status,
@@ -163,11 +162,30 @@ class AlignmentController:
     def on_align_start(self, msg: AlignStartMessage, _websocket: ServerConnection) -> None:
         if self._assist_driver is not None:
             self._assist_driver.on_new_session()
-        self._session_method = msg.method  # type: ignore[assignment]
-        self._tag_tracker.active = msg.method == "tag"
         self._clear_session()
-        self._session_method = msg.method  # type: ignore[assignment]  # re-set after clear
-        self._align_start_mono = time.monotonic()
+        self._session_method = msg.method  # type: ignore[assignment]
+
+        if msg.method == "tag":
+            if self._assist_driver is None or not msg.assist:
+                # Assisted calibration not available on this robot — use manual pose instead.
+                logger.warning(
+                    "align_start tag without assist driver — failing immediately",
+                    assist=msg.assist,
+                    has_driver=self._assist_driver is not None,
+                )
+                self._session_method = None
+                self._broadcast_align_status(
+                    state="failed",
+                    method="tag",
+                    message="Assisted calibration unavailable on this robot — place the robot pose manually",
+                    ts=msg.ts,
+                )
+                return
+            self._tag_tracker.active = True
+            self._assist_driver.start()
+        else:
+            self._tag_tracker.active = False
+
         self._manual_pose_first_logged = False
         self._last_manual_inactive_log_mono = 0.0
         self._last_manual_odom_missing_log_mono = 0.0
@@ -178,8 +196,6 @@ class AlignmentController:
             if msg.method == "tag"
             else "Place the robot marker, then commit"
         )
-        if msg.method == "tag" and msg.assist and self._assist_driver is not None:
-            self._assist_driver.start()
         self._broadcast_align_status(state="detecting", message=initial_message, ts=msg.ts)
         self._start_broadcast()
 
@@ -191,11 +207,7 @@ class AlignmentController:
         if self._assist_driver is not None:
             self._assist_driver.on_align_stop()
         session_method = self._session_method
-        was_active = (
-            self._session_method is not None
-            or self._best_alignment is not None
-            or self._candidate_count > 0
-        )
+        was_active = self._session_method is not None or self._pending_candidate is not None
         self._tag_tracker.active = False
         self._stop_broadcast()
         self._clear_session()
@@ -214,41 +226,17 @@ class AlignmentController:
             self._assist_driver.on_emergency_stop()
 
     def on_align_commit(self, msg: AlignCommitMessage, _websocket: ServerConnection) -> None:
-        best = self._best_alignment
-        if best is None:
+        cand = self._pending_candidate
+        if cand is None:
             self._broadcast_align_status(
                 state="failed",
-                method=self._session_method or "tag",
+                method=self._session_method or "manual",
                 message="No valid alignment candidate yet",
                 ts=msg.ts,
             )
             return
-        finish_ts = self._best_alignment_ts if self._best_alignment_ts is not None else msg.ts
-        commit_candidate = best
-        if best.method == "marker":
-            cluster = collect_alignment_cluster(best, self._recent_marker_candidates)
-            if len(cluster) >= ALIGNMENT_CLUSTER_MIN_SAMPLES:
-                T_avg, yaw_spread, trans_spread = average_cluster_transform(cluster)
-                commit_candidate = AlignmentCandidate(
-                    T_world_odom=T_avg,
-                    quality=best.quality,
-                    method=best.method,
-                    approximate=best.approximate,
-                    reprojection_error_px=best.reprojection_error_px,
-                    sample_quality=best.sample_quality,
-                    cluster_size=len(cluster),
-                )
-                logger.info(
-                    "AprilTag alignment commit averaged cluster",
-                    cluster_size=len(cluster),
-                    yaw_spread_deg=round(math.degrees(yaw_spread), 2),
-                    trans_spread_m=round(trans_spread, 4),
-                    committed_yaw_deg=round(
-                        math.degrees(_yaw_from_T(T_avg)),
-                        2,
-                    ),
-                )
-        self._finish_alignment(commit_candidate, finish_ts)
+        finish_ts = self._pending_candidate_ts if self._pending_candidate_ts is not None else msg.ts
+        self._finish_alignment(cand, finish_ts)
 
     def on_camera_info(self, msg: CameraInfoMessage, _websocket: ServerConnection) -> None:
         k = (
@@ -308,7 +296,7 @@ class AlignmentController:
             )
             self._send_frame_drop_ack(header)
             return
-        # Manual sessions must never produce marker candidates — ack and skip.
+        # Manual sessions never produce tag candidates — ack and skip.
         if self._session_method == "manual":
             self._sender.send(
                 encode_camera_frame_ack(robot_id=self._robot_id, seq=seq)
@@ -404,11 +392,7 @@ class AlignmentController:
     # ------------------------------------------------------------------
 
     def clear_on_disconnect(self) -> None:
-        if (
-            self._session_method is None
-            and self._best_alignment is None
-            and self._candidate_count == 0
-        ):
+        if self._session_method is None and self._pending_candidate is None:
             return
         self._tag_tracker.active = False
         self._stop_broadcast()
@@ -424,14 +408,11 @@ class AlignmentController:
 
     def _align_status_message(self) -> str:
         if self._session_method == "manual":
-            if self._best_alignment is not None:
+            if self._pending_candidate is not None:
                 return "Manual robot pose ready — review and commit"
             return "Place the robot pose manually, then commit"
         if not self._tag_tracker.has_camera_info():
             return "Waiting for camera intrinsics..."
-        if self._best_alignment is not None:
-            best = round(self._best_alignment.quality * 100)
-            return f"Tag tracked — best alignment {best}% ready"
         if self._tag_detected():
             count = self._tag_tracker.observation_count()
             return f"Tag detected — collecting samples ({count})"
@@ -451,6 +432,15 @@ class AlignmentController:
                         latest_obs_pos_world=None,
                     )
                     self._maybe_finish_assist()
+                    # _maybe_finish_assist() may have auto-committed and cleared the
+                    # session (nulling _session_method) and set the broadcast stop
+                    # event. Do NOT fall through to the trailing
+                    # _broadcast_align_status() below: it would enqueue a default
+                    # state="detecting" AFTER the terminal "aligned" just emitted,
+                    # which can coalesce-overwrite "aligned" before it is sent and
+                    # reverts the client wizard out of "ready".
+                    if self._session_method is None or self._broadcast_stop.is_set():
+                        break
                 self._broadcast_align_status()
 
         self._broadcast_thread = threading.Thread(
@@ -463,24 +453,34 @@ class AlignmentController:
     def _maybe_finish_assist(self) -> None:
         """Auto-commit when the assist driver reaches DONE.
 
-        Called from the broadcast loop after every tick(). DONE means the driver
-        completed both timed movement legs — we have enough baseline data to commit.
+        Computes a fresh current_solve(min_baseline_m=0.0) at DONE.
+        If the solve is None (no observations), logs a warning and marks failed.
+        No fallback — the SAMPLE phases ensure at least a few observations exist.
         """
         if self._assist_driver is None:
             return
         from dimos_xr.bridge.assist import AssistState
-        state = self._assist_driver.state
-        if state == AssistState.DONE:
-            if self._best_alignment is not None:
-                logger.info("AssistDriver DONE — auto-committing alignment")
-                finish_ts = self._best_alignment_ts if self._best_alignment_ts is not None else time.time()
-                self._finish_alignment(self._best_alignment, finish_ts)
-            else:
-                logger.warning("AssistDriver DONE but no alignment candidate — marking failed")
-                self._broadcast_align_status(
-                    state="failed",
-                    message="Assisted calibration complete but no tag data — retry",
-                )
+        if self._assist_driver.state != AssistState.DONE:
+            return
+        solve = self._tag_tracker.current_solve(min_baseline_m=0.0)
+        if solve is not None:
+            logger.info("AssistDriver DONE — auto-committing alignment")
+            candidate = AlignmentCandidate(
+                T_world_odom=np.array(solve.T_world_odom, dtype=np.float64, copy=True),
+                quality=solve.quality,
+                method="tag",
+                approximate=False,
+            )
+            self._finish_alignment(candidate, time.time())
+        else:
+            logger.warning("AssistDriver DONE but no solve produced — marking failed")
+            self._tag_tracker.active = False
+            self._stop_broadcast()
+            self._clear_session()
+            self._broadcast_align_status(
+                state="failed",
+                message="Assisted calibration produced no solve — retry",
+            )
 
     def _stop_broadcast(self) -> None:
         self._broadcast_stop.set()
@@ -491,89 +491,19 @@ class AlignmentController:
 
     def _clear_session(self) -> None:
         self._tag_tracker.reset_window()
-        self._best_alignment = None
-        self._best_alignment_ts = None
-        self._latest_alignment_quality = None
-        self._candidate_count = 0
+        self._pending_candidate = None
+        self._pending_candidate_ts = None
         self._session_method = None
-        self._latest_cluster_size = 0
-        self._recent_marker_candidates = []
         self._pending_large_solves = []
         self._manual_pose_first_logged = False
         self._last_manual_inactive_log_mono = 0.0
         self._last_manual_odom_missing_log_mono = 0.0
         self._last_manual_candidate_log_mono = 0.0
         if self._assist_driver is not None:
-            self._assist_driver.on_new_session()
-
-    def _process_tag_solve(self, *, ts: float | None = None) -> AlignmentCandidate | None:
-        solve = self._tag_tracker.current_solve()
-        if solve is None:
-            return None
-        method = "marker" if solve.method == "tag" else solve.method
-        candidate = AlignmentCandidate(
-            T_world_odom=np.array(solve.T_world_odom, dtype=np.float64, copy=True),
-            quality=solve.quality,
-            method=method,
-            approximate=False,
-            sample_quality=solve.quality,
-            cluster_size=solve.observation_count,
-        )
-        self._recent_marker_candidates.append(candidate)
-        if len(self._recent_marker_candidates) > ALIGNMENT_CLUSTER_WINDOW:
-            self._recent_marker_candidates = self._recent_marker_candidates[
-                -ALIGNMENT_CLUSTER_WINDOW:
-            ]
-        stable_quality, cluster_size, mean_translation_error, mean_yaw_error = (
-            score_alignment_cluster(candidate, self._recent_marker_candidates)
-        )
-        candidate = AlignmentCandidate(
-            T_world_odom=candidate.T_world_odom,
-            quality=stable_quality,
-            method=candidate.method,
-            approximate=candidate.approximate,
-            sample_quality=candidate.sample_quality,
-            cluster_size=cluster_size,
-        )
-        self._latest_alignment_quality = candidate.quality
-        self._latest_cluster_size = cluster_size
-        self._candidate_count += 1
-        improved = False
-        is_stable_candidate = cluster_size >= ALIGNMENT_CLUSTER_MIN_SAMPLES
-        if is_stable_candidate and (
-            self._best_alignment is None or candidate.quality > self._best_alignment.quality
-        ):
-            self._best_alignment = candidate
-            self._best_alignment_ts = ts if ts is not None else time.time()
-            improved = True
-            logger.info(
-                "Tag alignment improved",
-                quality=round(candidate.quality, 3),
-                method=solve.method,
-                baseline_m=round(solve.baseline_m, 3),
-                cluster_size=cluster_size,
-                mean_translation_error_m=round(mean_translation_error, 4),
-                mean_yaw_error_deg=round(math.degrees(mean_yaw_error), 2),
-                samples=self._candidate_count,
-            )
-        # NOTE: do not pass ``method`` here — ``method`` is the *internal* solver
-        # name ("marker"/"tag"), not a wire value. The wire method must
-        # stay "tag" (the session method) or the Lens rejects the whole message.
-        self._broadcast_align_status(
-            state="detecting",
-            tag_visible=self._tag_detected(),
-            message=(
-                "Alignment improved — hold steady for best result"
-                if improved
-                else (
-                    f"Tracking tag — hold steady ({cluster_size}/{ALIGNMENT_CLUSTER_MIN_SAMPLES})"
-                    if not is_stable_candidate
-                    else "Tracking tag — refining best alignment"
-                )
-            ),
-            ts=ts,
-        )
-        return candidate
+            # Use silent reset so teardown emits no stage-change broadcast that
+            # could race with and overwrite a terminal align_status already enqueued.
+            # Re-arming via start() happens in on_align_start -> assist_driver.start().
+            self._assist_driver.reset_to_idle()
 
     def _process_manual_candidate(
         self,
@@ -582,6 +512,10 @@ class AlignmentController:
     ) -> AlignmentCandidate:
         norm_position, norm_orientation = normalize_ground_pose(msg.position, msg.orientation)
         T_world_base = pose_to_matrix(norm_position, norm_orientation)
+        # normalize_ground_pose yields a yaw-only-about-world-Y rotation that omits the
+        # odom(Z-up) -> world(Y-up) basis change. Apply R_ALIGN so the robot body +Z maps
+        # to world +Y, matching the AprilTag path (build_T_world_odom = R_yaw @ R_ALIGN).
+        T_world_base[:3, :3] = T_world_base[:3, :3] @ R_ALIGN
         T_odom_base = pose_to_matrix(odom.position, odom.orientation)
         candidate = AlignmentCandidate(
             T_world_odom=np.array(
@@ -592,12 +526,9 @@ class AlignmentController:
             quality=self._manual_alignment_quality,
             method="manual",
             approximate=True,
-            sample_quality=self._manual_alignment_quality,
         )
-        self._latest_alignment_quality = candidate.quality
-        self._candidate_count += 1
-        self._best_alignment = candidate
-        self._best_alignment_ts = msg.ts
+        self._pending_candidate = candidate
+        self._pending_candidate_ts = msg.ts
         now = time.monotonic()
         if now - self._last_manual_candidate_log_mono >= DROPPED_POSE_LOG_INTERVAL_S:
             self._last_manual_candidate_log_mono = now
@@ -605,7 +536,6 @@ class AlignmentController:
                 "Manual alignment candidate confirmed",
                 quality=round(candidate.quality, 3),
                 position=[round(v, 3) for v in norm_position],
-                samples=self._candidate_count,
             )
         self._broadcast_align_status(
             state="detecting",
@@ -617,6 +547,8 @@ class AlignmentController:
         return candidate
 
     def _publish_world_odom_tf(self, T_world_odom: np.ndarray) -> None:
+        if self._tf_publish_static_unsupported:
+            return
         rot_mat = T_world_odom[:3, :3]
         tx = float(T_world_odom[0, 3])
         ty = float(T_world_odom[1, 3])
@@ -631,6 +563,12 @@ class AlignmentController:
         )
         try:
             self._tf_publish_static(tf)
+        except NotImplementedError:
+            self._tf_publish_static_unsupported = True
+            logger.debug(
+                "TF publish_static not supported by current backend (PubSubTF) — "
+                "skipping world→odom static TF broadcast"
+            )
         except Exception as exc:
             logger.exception("TF publish_static failed", error=str(exc))
 
@@ -648,7 +586,6 @@ class AlignmentController:
         logger.info(
             "Alignment succeeded",
             quality=round(result.quality, 3),
-            samples=self._candidate_count,
             method=wire_method,
             approximate=result.approximate,
         )
@@ -668,11 +605,11 @@ class AlignmentController:
 
     def _apply_tracker_update(self, *, ts: float | None = None) -> None:
         if self._tag_tracker.active:
-            self._process_tag_solve(ts=ts)
+            # Assisted tag flow: tick the driver and broadcast tag-visible feedback.
+            # No candidate production here — the commit happens in _maybe_finish_assist at DONE.
             if self._assist_driver is not None:
                 frame_result_pos: tuple[float, float, float] | None = None
-                obs = self._tag_tracker.last_tag_detected
-                if obs:
+                if self._tag_tracker.last_tag_detected:
                     pose_estimate = self._tag_tracker.robot_world_pose_estimate()
                     if pose_estimate is not None:
                         frame_result_pos = pose_estimate[0]
@@ -680,6 +617,7 @@ class AlignmentController:
                     obs_count=self._tag_tracker.observation_count(),
                     latest_obs_pos_world=frame_result_pos,
                 )
+            self._broadcast_align_status()
             return
         if not self._calibration.is_registered or not self._runtime_correction_enabled:
             return
@@ -735,20 +673,13 @@ class AlignmentController:
         if state == "failed":
             return 0
         if self._session_method == "manual":
-            return 100 if self._best_alignment is not None else 0
-        # Assist flow: progress belongs to the current step
+            return 100 if self._pending_candidate is not None else 0
         if self._assist_driver is not None:
             from dimos_xr.bridge.assist import AssistState
             assist_state = self._assist_driver.state
             if assist_state != AssistState.IDLE:
                 return self._assist_driver.progress_percent()
-        # Non-assist tag session: scale cluster_size up to ALIGNMENT_CLUSTER_MIN_SAMPLES
-        if self._latest_cluster_size >= ALIGNMENT_CLUSTER_MIN_SAMPLES:
-            return min(100, int(self._best_alignment.quality * 100)) if self._best_alignment else 90
-        return min(
-            90,
-            int(self._latest_cluster_size / ALIGNMENT_CLUSTER_MIN_SAMPLES * 90),
-        )
+        return 0
 
     def _broadcast_align_status(
         self,
@@ -762,16 +693,9 @@ class AlignmentController:
     ) -> None:
         effective_method = method or self._session_method or "tag"
         effective_state = state
-        # A committable tag candidate exists → advance to "ready" so the Lens can
-        # offer the Complete action — UNLESS assist is still actively running, in
-        # which case the commit will be triggered automatically when DONE.
-        if (
-            state == "detecting"
-            and self._session_method == "tag"
-            and self._best_alignment is not None
-        ):
-            if self._assist_driver is None or self._assist_driver.state.value in ("idle", "done"):
-                effective_state = "ready"
+        # Manual: a pending candidate → ready so Lens can offer Commit action.
+        if state == "detecting" and self._session_method == "manual" and self._pending_candidate is not None:
+            effective_state = "ready"
         if not message and state == "detecting":
             message = self._align_status_message()
         if progress is None:
@@ -779,7 +703,6 @@ class AlignmentController:
         if tag_visible is None and effective_method == "tag":
             tag_visible = self._tag_detected()
 
-        # Assist / step fields
         assist_stage: str | None = None
         robot_world_pose: dict[str, Any] | None = None
         step_index: int | None = None

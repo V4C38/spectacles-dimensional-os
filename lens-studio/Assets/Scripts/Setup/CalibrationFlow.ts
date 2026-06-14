@@ -395,8 +395,21 @@ export class CalibrationFlow {
       if (this._state.mode === "manual") {
         this._dimosManager.hideRobotMarkerPreview();
       }
+      this._dimosManager.endSetupAlignmentPreview();
     } else if (msg.state === "aligned") {
+      this._dimosManager.setSetupAlignmentComplete();
       this._tryAutoFinishSetup();
+    } else if (this._state.mode === "auto") {
+      // Forward to the robot-anchored preview while calibrating
+      const assist = (msg as any);
+      this._dimosManager.updateSetupAlignmentPreview({
+        worldPose: assist.robot_world_pose ?? null,
+        assistStage: assist.assist_stage,
+        stepIndex: assist.step_index,
+        stepCount: assist.step_count,
+        progress: assist.progress ?? 0,
+        tagVisible: this._state.tagVisible,
+      });
     }
     this._notify();
   }
@@ -520,6 +533,9 @@ export class CalibrationFlow {
       this._state = { ...this._state, message: "" };
       this._notify();
     });
+    this._dimosManager.beginSetupAlignmentPreview(() => {
+      this._callbacks.log("auto alignment: aborted via preview");
+    });
     this._alignmentSession?.start("tag", true);
     this._notify(true);
   }
@@ -580,7 +596,11 @@ export class CalibrationFlow {
   }
 
   private _tryAutoFinishSetup(): void {
-    if (this._commitInFlight && isCalibrationComplete(this._state)) {
+    // In the assisted/auto-commit path the BRIDGE commits and emits "aligned";
+    // the user never taps Complete, so do not gate hands-free completion on the
+    // local _commitInFlight flag. isCalibrationComplete() (phase === "complete")
+    // already scopes this to a genuinely committed calibration.
+    if (isCalibrationComplete(this._state)) {
       this._commitInFlight = false;
       // Show "Calibration completed" briefly before dismissing the wizard.
       this._callbacks.scheduleFinishSetup(1.5);

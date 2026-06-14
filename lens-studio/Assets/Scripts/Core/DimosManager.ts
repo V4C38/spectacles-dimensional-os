@@ -67,6 +67,9 @@ export class DimosManager extends BaseScriptComponent {
   @input
   alignmentSession: AlignmentSession;
 
+  @input
+  groundDisc: SceneObject;
+
   public readonly onBridgeReady = new Signal<void>();
   public readonly onBridgeStatusChanged = new Signal<BridgeStatusMessage>();
   public readonly onBridgeConnectionChanged = new Signal<boolean>();
@@ -96,6 +99,12 @@ export class DimosManager extends BaseScriptComponent {
   private _robotMenuView: RobotMenuView | null = null;
   private _nav: NavigationController | null = null;
   private _placementDeferralEvent: DelayedCallbackEvent | null = null;
+
+  // ── Setup preview state ───────────────────────────────────
+  private _priorRuntimeMode: OperatingMode = "manual";
+  private _setupPreviewActive = false;
+  private _setupPreviewOnAbort: (() => void) | null = null;
+  private _setupDiscPulse = false;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
@@ -370,6 +379,10 @@ export class DimosManager extends BaseScriptComponent {
 
   public enterRuntime(): void {
     this._log("enterRuntime");
+    // Clean up setup preview if still active (e.g. auto-finish after alignment)
+    if (this._setupPreviewActive) {
+      this.endSetupAlignmentPreview();
+    }
     this.cancelManualAlignmentPlacement();
     this.stopManualAlignmentSession();
     this._poseCorrection.prepareForRuntime(
@@ -495,6 +508,118 @@ export class DimosManager extends BaseScriptComponent {
 
   // ── Operating mode / display ──────────────────────────────────
 
+  // ── Setup alignment preview API (B1-B3, B7) ──────────────────
+
+  public beginSetupAlignmentPreview(onAbort: () => void): void {
+    this._priorRuntimeMode = this.appState.operatingMode !== "setup"
+      ? this.appState.operatingMode
+      : "manual";
+    this._setupPreviewOnAbort = onAbort;
+    this._setupPreviewActive = true;
+    this.setOperatingMode("setup");
+    // Wire robot-menu Continue → CalibrationFlow abort handler is managed by caller
+    if (this._robotMenuView) {
+      this._robotMenuView.onContinueRequested = () =>
+        this.alignmentSession?.confirmAssist();
+    }
+    // Hide marker, disc, and menu until we have a pose (shown in updateSetupAlignmentPreview)
+    this.robotMarker?.setVisible(false);
+    if (this.groundDisc) {
+      this.groundDisc.enabled = false;
+    }
+    this._robotMenuView?.setMenuVisible(false);
+  }
+
+  public updateSetupAlignmentPreview(data: {
+    worldPose?: { position: [number, number, number]; orientation: [number, number, number, number] } | null;
+    assistStage?: string;
+    stepIndex?: number;
+    stepCount?: number;
+    progress: number;
+    tagVisible: boolean;
+  }): void {
+    if (!this._setupPreviewActive) {
+      return;
+    }
+    const { worldPose, assistStage, progress, tagVisible } = data;
+    const showPreview = (assistStage === "awaiting_confirm" || assistStage === "move") && !!worldPose;
+    const wasMenuVisible = this._robotMenuView?.isMenuVisible() ?? false;
+
+    if (showPreview && worldPose) {
+      const pos = new vec3(worldPose.position[0] * 100, worldPose.position[1] * 100, worldPose.position[2] * 100);
+      const rot = new quat(worldPose.orientation[3], worldPose.orientation[0], worldPose.orientation[1], worldPose.orientation[2]);
+      this.robotMarker?.setVisible(true);
+      this.robotMarker?.setPose(pos, rot);
+
+      if (this.groundDisc) {
+        const floorY = robotFloorWorldYCm(pos.y, this.appState.robotRuntime);
+        this.groundDisc.enabled = true;
+        const discTransform = this.groundDisc.getTransform();
+        discTransform.setWorldPosition(new vec3(pos.x, floorY, pos.z));
+        // Pulse disc during motion legs, static during holds/confirm
+        const pulsing = assistStage === "move";
+        if (pulsing !== this._setupDiscPulse) {
+          this._setupDiscPulse = pulsing;
+        }
+      }
+
+      // Show menu on first transition into preview-visible state (P1 → P2)
+      if (!wasMenuVisible) {
+        this._robotMenuView?.setMenuVisible(true);
+      }
+    } else {
+      this.robotMarker?.setVisible(false);
+      if (this.groundDisc) {
+        this.groundDisc.enabled = false;
+      }
+    }
+
+    // Update menu: action swap by stage
+    const inMove = assistStage === "move";
+    this._robotMenuView?.setSetupWizardMenuVisible(assistStage === "awaiting_confirm");
+    this._robotMenuView?.setContinueVisible(assistStage === "awaiting_confirm");
+    this._robotMenuView?.setSetupStopVisible(inMove);
+
+    this._robotMenuView?.setSetupTitle(`Calibrating: ${progress}%`);
+
+    const GREEN = new vec4(0.2, 0.8, 0.2, 1);
+    const RED = new vec4(0.9, 0.2, 0.2, 1);
+    this._robotMenuView?.setSetupStatus(
+      tagVisible ? "✅ Tag visible" : "❌ Tag not visible - Look at the tag",
+      tagVisible ? GREEN : RED,
+    );
+  }
+
+  public setSetupAlignmentComplete(): void {
+    if (!this._setupPreviewActive) {
+      return;
+    }
+    const GREEN = new vec4(0.2, 0.8, 0.2, 1);
+    this._robotMenuView?.setSetupTitle("Alignment complete");
+    this._robotMenuView?.setSetupStatus("Alignment complete", GREEN);
+    this._robotMenuView?.setContinueVisible(false);
+    this._robotMenuView?.setSetupStopVisible(false);
+  }
+
+  public endSetupAlignmentPreview(): void {
+    if (!this._setupPreviewActive) {
+      return;
+    }
+    this._setupPreviewActive = false;
+    this._setupPreviewOnAbort = null;
+    this._setupDiscPulse = false;
+    this.robotMarker?.setVisible(false);
+    if (this.groundDisc) {
+      this.groundDisc.enabled = false;
+    }
+    if (this._robotMenuView) {
+      this._robotMenuView.onContinueRequested = null;
+    }
+    this._robotMenuView?.setMenuVisible(false);
+    // Restore runtime operating mode
+    this.setOperatingMode(this._priorRuntimeMode);
+  }
+
   public hideRobotMarkerPreview(): void {
     this.robotMarker?.applyInteractionMode(this.appState.robotInteractionMode);
   }
@@ -530,6 +655,10 @@ export class DimosManager extends BaseScriptComponent {
   }
 
   public onMainMenuModeButtonPressed(mode: OperatingMode): void {
+    // "setup" is wizard-only and never user-selectable via main menu
+    if (mode === "setup") {
+      return;
+    }
     if (this.appState.operatingMode === mode) {
       return;
     }
@@ -544,12 +673,21 @@ export class DimosManager extends BaseScriptComponent {
     this._setAppState({ mainMenuExpandedSettingsMode: nextExpanded });
   }
 
-  private setOperatingMode(mode: OperatingMode): void {
+  public setOperatingMode(mode: OperatingMode): void {
     const modeChanged = this.appState.operatingMode !== mode;
     if (!modeChanged) {
       return;
     }
     this._log(`setOperatingMode: ${mode}`);
+    if (mode === "setup") {
+      // Setup mode: LiDAR off, nav placement off; wizard-only, not user-selectable
+      this._setAppState({ operatingMode: mode, lidarMode: "off" });
+      this._lidarSync();
+      this._nav?.setPlacementEnabled(false);
+      this._nav?.syncPlacementState();
+      this._robotMenuView?.setOperatingMode(mode);
+      return;
+    }
     const lidarMode: LidarDisplayMode = mode === "manual" ? "obstacles" : "off";
     const settingsSubmenuOpen = this.appState.mainMenuExpandedSettingsMode !== null;
     this._setAppState({

@@ -1,4 +1,4 @@
-"""Tests for AssistDriver state machine (dimos_xr.bridge.assist) — simplified open-loop flow."""
+"""Tests for AssistDriver state machine (dimos_xr.bridge.assist) — 3-leg stop-and-sample flow."""
 
 from __future__ import annotations
 
@@ -7,11 +7,13 @@ import time
 from unittest.mock import MagicMock, patch
 
 from dimos_xr.bridge.assist import (
-    COUNTDOWN_DURATION_S,
     MOVE_LEG_S,
     MOVE_SPEED,
+    SAMPLE_MIN_OBS,
+    SAMPLE_SPREAD_M,
     AssistDriver,
     AssistState,
+    _MovePhase,
 )
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -52,115 +54,152 @@ def _advance_to_awaiting_confirm(driver: AssistDriver) -> None:
     assert driver.state == AssistState.AWAITING_CONFIRM
 
 
-# ── countdown ─────────────────────────────────────────────────────────────────
+# ── confirm goes directly to MOVE (no countdown) ─────────────────────────────
 
 
-def test_confirm_enters_countdown() -> None:
-    driver, _ = _make_driver()
-    driver.start()
-    _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
-    assert driver.state == AssistState.COUNTDOWN
-
-
-def test_countdown_transitions_to_move() -> None:
+def test_confirm_enters_move_directly() -> None:
+    """A1: on_assist_confirm must go AWAITING_CONFIRM→MOVE with no intermediate state."""
     driver, adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.on_assist_confirm()
-    with patch("dimos_xr.bridge.assist.time") as mock_time:
-        mock_time.monotonic.return_value = time.monotonic() + COUNTDOWN_DURATION_S + 0.1
-        driver.tick(obs_count=3, latest_obs_pos_world=None)
     assert driver.state == AssistState.MOVE
-    adapter.assist_set_lateral_velocity.assert_called_with(MOVE_SPEED)
+    adapter.assist_set_lateral_velocity.assert_called_with(MOVE_SPEED * 1.0)
 
 
-# ── happy path: full timed move sequence ──────────────────────────────────────
+# ── happy path: full 3-leg stop-and-sample sequence ──────────────────────────
 
 
-def test_happy_path_full_move_sequence() -> None:
+def _stable_pos(base: float = 1.0) -> list[tuple[float, float, float]]:
+    """Return SAMPLE_MIN_OBS observations tight enough to pass spread check."""
+    return [(base + i * 0.001, 0.0, -2.0) for i in range(SAMPLE_MIN_OBS)]
+
+
+def _drive_through_sample(
+    driver: AssistDriver,
+    expected_leg_after: int | None,
+) -> None:
+    """Deliver stable tag observations until the driver leaves the SAMPLE phase."""
+    for pos in _stable_pos():
+        driver.tick(obs_count=SAMPLE_MIN_OBS, latest_obs_pos_world=pos)
+    if expected_leg_after is None:
+        assert driver.state == AssistState.DONE
+    else:
+        assert driver._move_leg_index == expected_leg_after
+        assert driver._move_phase == _MovePhase.LEG
+
+
+def test_happy_path_full_3_leg_sequence() -> None:
     driver, adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.on_assist_confirm()
-
-    base_time = time.monotonic()
-
-    # Fast-forward past countdown → enters MOVE with left leg
-    with patch("dimos_xr.bridge.assist.time") as mock_time:
-        mock_time.monotonic.return_value = base_time + COUNTDOWN_DURATION_S + 0.1
-        driver.tick(obs_count=3, latest_obs_pos_world=None)
     assert driver.state == AssistState.MOVE
-    adapter.assist_set_lateral_velocity.assert_called_with(MOVE_SPEED)
+    assert driver._move_leg_index == 0
 
-    # At MOVE_LEG_S → switches to right leg (once)
+    # --- Leg 0 completes (time-based) ---
     t0 = driver._move_start_mono
     assert t0 is not None
-    with patch("dimos_xr.bridge.assist.time") as mock_time:
-        mock_time.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
-        driver.tick(obs_count=3, latest_obs_pos_world=None)
-    assert driver.state == AssistState.MOVE
-    adapter.assist_set_lateral_velocity.assert_called_with(-MOVE_SPEED)
+    with patch("dimos_xr.bridge.assist.time") as mt:
+        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        driver.tick(obs_count=0, latest_obs_pos_world=None)
+    assert driver._move_phase == _MovePhase.SAMPLE, "leg 0 must enter sample phase"
 
-    # At 3 × MOVE_LEG_S → stops and transitions to DONE
-    with patch("dimos_xr.bridge.assist.time") as mock_time:
-        mock_time.monotonic.return_value = t0 + 3.0 * MOVE_LEG_S + 0.1
-        driver.tick(obs_count=3, latest_obs_pos_world=None)
+    # --- Sample 0: deliver stable observations ---
+    _drive_through_sample(driver, expected_leg_after=1)
+    assert driver.state == AssistState.MOVE
+    adapter.assist_set_lateral_velocity.assert_called_with(MOVE_SPEED * -1.0)
+
+    # --- Leg 1 completes (2× duration) ---
+    t1 = driver._move_start_mono
+    assert t1 is not None
+    with patch("dimos_xr.bridge.assist.time") as mt:
+        mt.monotonic.return_value = t1 + 2 * MOVE_LEG_S + 0.1
+        driver.tick(obs_count=0, latest_obs_pos_world=None)
+    assert driver._move_phase == _MovePhase.SAMPLE, "leg 1 must enter sample phase"
+
+    # --- Sample 1 ---
+    _drive_through_sample(driver, expected_leg_after=2)
+    assert driver.state == AssistState.MOVE
+    adapter.assist_set_lateral_velocity.assert_called_with(MOVE_SPEED * 1.0)
+
+    # --- Leg 2 completes (1× duration) ---
+    t2 = driver._move_start_mono
+    assert t2 is not None
+    with patch("dimos_xr.bridge.assist.time") as mt:
+        mt.monotonic.return_value = t2 + MOVE_LEG_S + 0.1
+        driver.tick(obs_count=0, latest_obs_pos_world=None)
+    assert driver._move_phase == _MovePhase.SAMPLE, "leg 2 must enter sample phase"
+
+    # --- Sample 2 → DONE ---
+    _drive_through_sample(driver, expected_leg_after=None)
     assert driver.state == AssistState.DONE
     adapter.assist_set_lateral_velocity.assert_called_with(0.0)
 
 
-def test_right_switch_happens_only_once() -> None:
-    """Repeated ticks between LEG_S and 3xLEG_S must not re-issue the right command."""
+# ── tag loss during motion leg: robot keeps moving ───────────────────────────
+
+
+def test_tag_loss_during_leg_does_not_abort() -> None:
+    driver, _ = _make_driver()
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    driver.on_assist_confirm()
+    assert driver.state == AssistState.MOVE
+    t0 = driver._move_start_mono
+    assert t0 is not None
+    for i in range(10):
+        with patch("dimos_xr.bridge.assist.time") as mt:
+            mt.monotonic.return_value = t0 + 0.1 * i
+            driver.tick(obs_count=0, latest_obs_pos_world=None)
+        assert driver.state == AssistState.MOVE, "Tag loss must not abort MOVE"
+
+
+# ── sample: tag loss makes the robot hold (no timeout) ───────────────────────
+
+
+def test_sample_holds_on_tag_loss() -> None:
+    """During a SAMPLE pause with no tag, the robot holds indefinitely."""
     driver, adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.on_assist_confirm()
 
-    base_time = time.monotonic()
-    with patch("dimos_xr.bridge.assist.time") as mock_time:
-        mock_time.monotonic.return_value = base_time + COUNTDOWN_DURATION_S + 0.1
-        driver.tick(obs_count=0, latest_obs_pos_world=None)
-
+    # Fast-forward leg 0 to settle
     t0 = driver._move_start_mono
     assert t0 is not None
-    right_calls_before = sum(
-        1 for c in adapter.assist_set_lateral_velocity.call_args_list if c.args[0] == -MOVE_SPEED
-    )
+    with patch("dimos_xr.bridge.assist.time") as mt:
+        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        driver.tick(obs_count=0, latest_obs_pos_world=None)
+    assert driver._move_phase == _MovePhase.SAMPLE
 
-    for _ in range(5):
-        with patch("dimos_xr.bridge.assist.time") as mock_time:
-            mock_time.monotonic.return_value = t0 + MOVE_LEG_S + 0.5
-            driver.tick(obs_count=0, latest_obs_pos_world=None)
-
-    right_calls_after = sum(
-        1 for c in adapter.assist_set_lateral_velocity.call_args_list if c.args[0] == -MOVE_SPEED
-    )
-    assert right_calls_after - right_calls_before == 1
+    # No tag — tick many times; must remain in SAMPLE
+    for _ in range(20):
+        driver.tick(obs_count=0, latest_obs_pos_world=None)
+    assert driver._move_phase == _MovePhase.SAMPLE
+    assert driver._move_leg_index == 0
 
 
-# ── tag loss does NOT abort ────────────────────────────────────────────────────
+# ── sample: unstable observations do not advance ─────────────────────────────
 
 
-def test_tag_loss_during_move_does_not_abort() -> None:
+def test_sample_unstable_obs_do_not_advance() -> None:
     driver, _ = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.on_assist_confirm()
 
-    base_time = time.monotonic()
-    with patch("dimos_xr.bridge.assist.time") as mock_time:
-        mock_time.monotonic.return_value = base_time + COUNTDOWN_DURATION_S + 0.1
-        driver.tick(obs_count=0, latest_obs_pos_world=None)
-    assert driver.state == AssistState.MOVE
-
     t0 = driver._move_start_mono
     assert t0 is not None
-    for i in range(10):
-        with patch("dimos_xr.bridge.assist.time") as mock_time:
-            mock_time.monotonic.return_value = t0 + 0.1 * i
-            driver.tick(obs_count=0, latest_obs_pos_world=None)
-        assert driver.state == AssistState.MOVE, "Tag loss must not abort MOVE"
+    with patch("dimos_xr.bridge.assist.time") as mt:
+        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        driver.tick(obs_count=0, latest_obs_pos_world=None)
+    assert driver._move_phase == _MovePhase.SAMPLE
+
+    # Deliver spread-out (unstable) positions
+    for i in range(SAMPLE_MIN_OBS + 2):
+        driver.tick(obs_count=i, latest_obs_pos_world=(float(i) * 0.1, 0.0, -2.0))
+    assert driver._move_phase == _MovePhase.SAMPLE, "Unstable obs must not advance the driver"
 
 
 # ── external abort events ─────────────────────────────────────────────────────
@@ -197,11 +236,6 @@ def test_abort_during_move_publishes_zero_velocity() -> None:
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.on_assist_confirm()
-
-    base_time = time.monotonic()
-    with patch("dimos_xr.bridge.assist.time") as mock_time:
-        mock_time.monotonic.return_value = base_time + COUNTDOWN_DURATION_S + 0.1
-        driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver.state == AssistState.MOVE
 
     driver.on_align_stop()
@@ -209,14 +243,49 @@ def test_abort_during_move_publishes_zero_velocity() -> None:
     adapter.assist_set_lateral_velocity.assert_called_with(0.0)
 
 
-def test_retry_after_abort_runs_countdown() -> None:
+def test_retry_after_abort_restarts_from_move() -> None:
+    """After an abort from AWAITING_CONFIRM, a new confirm must re-enter MOVE."""
     driver, _ = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.on_align_stop()
     assert driver.state == AssistState.AWAITING_CONFIRM
     driver.on_assist_confirm()
-    assert driver.state == AssistState.COUNTDOWN
+    assert driver.state == AssistState.MOVE
+
+
+# ── reset_to_idle: silent teardown ────────────────────────────────────────────
+
+
+def test_reset_to_idle_goes_to_idle_silently() -> None:
+    """reset_to_idle must transition to IDLE without firing on_stage_change."""
+    stage_changes: list[tuple[str, str]] = []
+    adapter = _make_adapter()
+    driver = AssistDriver(
+        adapter=adapter,
+        on_stage_change=lambda s, m: stage_changes.append((s, m)),
+    )
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    stage_changes.clear()
+
+    driver.reset_to_idle()
+
+    assert driver.state == AssistState.IDLE
+    assert stage_changes == [], "reset_to_idle must not fire on_stage_change"
+
+
+def test_reset_to_idle_stops_motion() -> None:
+    """reset_to_idle must zero the robot velocity when motion was active."""
+    driver, adapter = _make_driver()
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    driver.on_assist_confirm()
+    assert driver.state == AssistState.MOVE
+
+    driver.reset_to_idle()
+    assert driver.state == AssistState.IDLE
+    adapter.assist_set_lateral_velocity.assert_called_with(0.0)
 
 
 # ── concurrency ───────────────────────────────────────────────────────────────
@@ -286,12 +355,12 @@ def test_step_index_1_during_awaiting_confirm() -> None:
     assert driver.step_index == 1
 
 
-def test_step_index_2_during_countdown() -> None:
+def test_step_index_2_during_move() -> None:
     driver, _ = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.on_assist_confirm()
-    assert driver.state == AssistState.COUNTDOWN
+    assert driver.state == AssistState.MOVE
     assert driver.step_index == 2
 
 
@@ -310,12 +379,12 @@ def test_progress_percent_100_at_awaiting_confirm() -> None:
     assert driver.progress_percent() == 100
 
 
-def test_progress_percent_0_at_countdown() -> None:
+def test_progress_percent_0_at_move_start() -> None:
     driver, _ = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.on_assist_confirm()
-    assert driver.state == AssistState.COUNTDOWN
+    assert driver.state == AssistState.MOVE
     assert driver.progress_percent() == 0
 
 
@@ -325,25 +394,3 @@ def test_progress_percent_100_at_done() -> None:
     with driver._lock:
         driver._state = AssistState.DONE
     assert driver.progress_percent() == 100
-
-
-def test_progress_percent_ramps_during_move() -> None:
-    driver, _ = _make_driver()
-    driver.start()
-    _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
-
-    base_time = time.monotonic()
-    with patch("dimos_xr.bridge.assist.time") as mock_time:
-        mock_time.monotonic.return_value = base_time + COUNTDOWN_DURATION_S + 0.1
-        driver.tick(obs_count=0, latest_obs_pos_world=None)
-    assert driver.state == AssistState.MOVE
-
-    t0 = driver._move_start_mono
-    assert t0 is not None
-    # Halfway through total move duration → progress should be around 50
-    mid = t0 + 1.5 * MOVE_LEG_S
-    with patch("dimos_xr.bridge.assist.time") as mock_time:
-        mock_time.monotonic.return_value = mid
-        pct = driver.progress_percent()
-    assert 30 < pct < 70

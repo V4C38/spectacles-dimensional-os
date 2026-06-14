@@ -27,8 +27,6 @@
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
     alignmentSession: false
-    assistClearanceDisc: false
-    camera: false
     dimosManager: false
     uiManager: false
   ScriptTypesHidden:
@@ -43,8 +41,6 @@
     - dimosManager: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
       uiManager: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
       alignmentSession: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
-      assistClearanceDisc: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
-      camera: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
@@ -52,5 +48,3 @@
     - // @input AssignableType dimosManager
     - // @input AssignableType_1 uiManager
     - // @input AssignableType_2 alignmentSession
-    - // @input SceneObject assistClearanceDisc
-    - // @input SceneObject camera

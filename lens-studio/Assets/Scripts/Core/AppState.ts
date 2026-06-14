@@ -9,7 +9,7 @@ import {
 } from "../UI/kit/UIKit";
 
 export type AppPhase = "setup" | "runtime";
-export type OperatingMode = "manual" | "agent";
+export type OperatingMode = "setup" | "manual" | "agent";
 export type RobotInteractionMode = "hidden" | "manualPlacement" | "runtimeRobot";
 export type NavigationMode = "idle" | "placingGoal" | "executingGoal";
 export type NavigationOutcome = "none" | "success" | "failed";
@@ -42,6 +42,9 @@ export function navigationOutcomePresentation(
 export function robotMarkerSteadyStatePresentation(
   state: DimosAppState,
 ): StatusTextPresentation {
+  if (state.operatingMode === "setup") {
+    return { text: "", color: COLOR_WHITE };
+  }
   if (state.operatingMode === "agent") {
     return { text: "", color: COLOR_WHITE };
   }

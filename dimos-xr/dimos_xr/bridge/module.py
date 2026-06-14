@@ -77,7 +77,7 @@ class XRBridgeConfig(ModuleConfig):  # type: ignore[misc]
     tag_total_size_m: float = 0.070
     tag_black_size_m: float = 0.056
     tag_max_distance_m: float = 6.0
-    tag_min_baseline_m: float = 0.30
+    tag_min_baseline_m: float = 0.15
     tag_window_max_obs: int = 40
     tag_window_max_age_s: float = 120.0
     tag_smoothing_tau_s: float = 3.0
