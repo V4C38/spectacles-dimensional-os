@@ -154,26 +154,12 @@ class NavController:
             ts=msg.ts,
             frame_id="odom",
         )
-        try:
-            if not self._adapter.send_nav_goal(goal):
-                raise RuntimeError("adapter rejected goal")
-            logger.info(
-                "XR navigation goal published",
-                world_goal=[round(v, 3) for v in msg.position],
-                odom_goal=[round(v, 3) for v in odom_position],
-                world_goal_yaw_deg=(
-                    _orientation_yaw_deg(msg.orientation) if msg.orientation is not None else None
-                ),
-                odom_goal_yaw_deg=_orientation_yaw_deg(odom_orientation),
-            )
-            self.broadcast_nav_status(ts=msg.ts)
-        except Exception as exc:
-            self._goal_failed = True
-            self._reset_goal_tracking(reset_recovery=False)
-            self._nav_state = "idle"
-            logger.exception("XR navigation goal publish failed", error=str(exc))
-            self._broadcast_empty_path(ts=msg.ts)
-            self.broadcast_nav_status(ts=msg.ts)
+        self.broadcast_nav_status(ts=msg.ts)
+        threading.Thread(
+            target=self._publish_nav_goal,
+            args=(goal, msg, odom_position, odom_orientation),
+            daemon=True,
+        ).start()
 
     def on_cancel_goal(self, ts: float | None = None) -> None:
         self._goal_reached = False
@@ -240,6 +226,18 @@ class NavController:
             and not self._nav_degraded
         ):
             self.handle_goal_stall()
+            return
+        if (
+            normalized == "idle"
+            and self._nav_goal_pending
+            and self._nav_path_received
+            and not self._goal_reached
+            and not self._goal_failed
+            and not self._nav_degraded
+        ):
+            self._nav_state = "recovery"
+            self._nav_recovering = True
+            self.broadcast_nav_status()
             return
         self._nav_state = normalized
         if self._nav_state == "following_path":
@@ -334,6 +332,34 @@ class NavController:
                 self._adapter.cancel_goal()
         except Exception as exc:
             logger.exception("XR control command failed", emergency=emergency, error=str(exc))
+
+    def _publish_nav_goal(
+        self,
+        goal: PoseStamped,
+        msg: NavGoalMessage,
+        odom_position: tuple[float, float, float],
+        odom_orientation: tuple[float, float, float, float],
+    ) -> None:
+        """Publish goal to the adapter off the WebSocket event loop."""
+        try:
+            if not self._adapter.send_nav_goal(goal):
+                raise RuntimeError("adapter rejected goal")
+            logger.info(
+                "XR navigation goal published",
+                world_goal=[round(v, 3) for v in msg.position],
+                odom_goal=[round(v, 3) for v in odom_position],
+                world_goal_yaw_deg=(
+                    _orientation_yaw_deg(msg.orientation) if msg.orientation is not None else None
+                ),
+                odom_goal_yaw_deg=_orientation_yaw_deg(odom_orientation),
+            )
+        except Exception as exc:
+            self._goal_failed = True
+            self._reset_goal_tracking(reset_recovery=False)
+            self._nav_state = "idle"
+            logger.exception("XR navigation goal publish failed", error=str(exc))
+            self._broadcast_empty_path(ts=msg.ts)
+            self.broadcast_nav_status(ts=msg.ts)
 
     def _recover_stuck_goal(self) -> None:
         self._goal_reached = False

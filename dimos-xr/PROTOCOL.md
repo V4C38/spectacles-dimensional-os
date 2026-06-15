@@ -16,6 +16,11 @@ Keep this document, `dimos_xr/network/protocol.py`, and
 - Inbound and outbound coordinates use the XR world frame. The bridge converts
   world-frame goals and calibration poses into robot odom coordinates.
 - Every runtime message carries a single active `robot_id`.
+- **Text framing:** every outbound JSON text frame from the bridge ends with a
+  single newline (`\n`). The client accumulates incoming text and splits on
+  `\n` to recover complete messages when the platform delivers one JSON object
+  across multiple WebSocket callbacks. Binary frames (LiDAR, `camera_frame`) are
+  not newline-delimited.
 
 ## Handshake
 
@@ -378,7 +383,7 @@ resolution change before binary frames):
   "cx": 1600.0,
   "cy": 1200.0,
   "distortion": [],
-  "camera_model": "perspective",
+  "camera_model": "pinhole",
   "device_model": "spectacles"
 }
 ```
@@ -409,7 +414,10 @@ Header fields:
 - `ts`: capture time in scene seconds (`imageFrame.timestampMillis / 1000`)
 - `send_ts`: scene time when the frame was enqueued for send
 - The bridge detects robot-mounted AprilTags in the JPEG and estimates
-  `T_world_odom` continuously while an align session is active.
+  `T_world_odom` while an align session is active, then continues to consume
+  post-registration runtime frames for drift correction from the same
+  robot-mounted tag. Runtime correction does not require robot-camera
+  visibility of the tag; Spectacles frames are the only camera input.
 
 ### `align_manual_pose`
 

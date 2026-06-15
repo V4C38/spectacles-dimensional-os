@@ -11,16 +11,19 @@ import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interact
 import { InteractableManipulation } from "SpectaclesInteractionKit.lspkg/Components/Interaction/InteractableManipulation/InteractableManipulation";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import { yawRotationFromWorldRotation } from "../Navigation/HeadingRotation";
-import { findText, findChildRecursive, requireChild } from "../UI/kit/UIKit";
+import { COLOR_WHITE, findText, findChildRecursive, requireChild } from "../UI/kit/UIKit";
 import { vec3Distance, quatAngularDistanceRad } from "../Core/MathUtils";
 import { FrameCaptureController } from "../Alignment/FrameCaptureController";
 import { ManualPoseCorrection, ResolvedDisplayPose } from "../Alignment/ManualPoseCorrection";
 import { RobotMenuView } from "./RobotMenuView";
+import { UILogEntry, UILogger } from "../Core/UILogger";
 
 const ROBOT_UI_WORLD_UP_OFFSET_CM = 15.0;
 const POSITION_DEADBAND_CM = 0.75;
 const ROTATION_DEADBAND_RAD = (1.0 * Math.PI) / 180.0;
 const RUNTIME_POSE_SMOOTHING_RATE = 14.0;
+const REFINED_TRACKING_LOG_TEXT = "- Refined Tracking -";
+const REFINED_TRACKING_LOG_DURATION_S = 0.5;
 
 /** World-space robot marker with live pose, manual placement, floating robot menu anchor, and interaction-mode switching. */
 @component
@@ -49,9 +52,13 @@ export class RobotMarker extends BaseScriptComponent {
   private _toggleBaseLocalPosition: vec3 | null = null;
   private _directionArrowBaseLocalPosition: vec3 | null = null;
   private _placementHandleBaseLocalPosition: vec3 | null = null;
+  private _stateInfoText: Text | null = null;
   private _debugInfoText: Text | null = null;
   private _unsubscribeAppState: (() => void) | null = null;
+  private _unsubscribeUILog: (() => void) | null = null;
   private _debugMode = false;
+  private _uiLogger: UILogger | null = null;
+  private _uiLogEntry: UILogEntry | null = null;
   private _rotation = quat.quatIdentity();
 
   // ── Presenter deps (injected via initialize) ───────────────────
@@ -78,6 +85,8 @@ export class RobotMarker extends BaseScriptComponent {
     this.createEvent("OnDestroyEvent").bind(() => {
       this._unsubscribeAppState?.();
       this._unsubscribeAppState = null;
+      this._unsubscribeUILog?.();
+      this._unsubscribeUILog = null;
     });
   }
 
@@ -85,12 +94,13 @@ export class RobotMarker extends BaseScriptComponent {
     subscribe: (listener: AppStateListener) => () => void,
   ): void {
     this._unsubscribeAppState?.();
-    this._unsubscribeAppState = subscribe((state) => this._applyDebugInfo(state));
+    this._unsubscribeAppState = subscribe((state) => this._applyStateInfo(state));
   }
 
   /** Inject presenter dependencies that cannot be @inputs. */
   public initialize(deps: {
     poseCorrection: ManualPoseCorrection;
+    uiLogger: UILogger;
     getLastPose: () => PoseMessage | null;
     robotMenuView: RobotMenuView | null;
     getIsActive: () => boolean;
@@ -99,12 +109,17 @@ export class RobotMarker extends BaseScriptComponent {
     syncNavigationPlacementState: () => void;
   }): void {
     this._poseCorrection = deps.poseCorrection;
+    this._uiLogger = deps.uiLogger;
     this._getLastPose = deps.getLastPose;
     this._robotMenuView = deps.robotMenuView;
     this._getIsActive = deps.getIsActive;
     this._getOperatingMode = deps.getOperatingMode;
     this._getInteractionMode = deps.getInteractionMode;
     this._syncNavPlacement = deps.syncNavigationPlacementState;
+    this._unsubscribeUILog?.();
+    this._unsubscribeUILog = this._uiLogger.subscribe((entry) =>
+      this._applyUILogEntry(entry),
+    );
   }
 
   /**
@@ -180,8 +195,6 @@ export class RobotMarker extends BaseScriptComponent {
       case "bridge":
         if (bridgePose) {
           this.applyPose(bridgePose);
-          const worldPos = protocolMetersToLensCentimeters(bridgePose.position);
-          this.frameCapture?.setRobotWorldPosition(worldPos);
         }
         break;
       case "corrected":
@@ -200,6 +213,7 @@ export class RobotMarker extends BaseScriptComponent {
     const q = msg.orientation;
     const position = protocolMetersToLensCentimeters(msg.position);
     const rotation = new quat(q[3], q[0], q[1], q[2]);
+    this.frameCapture?.setRobotWorldPosition(position);
     this._applyRuntimePose(position, rotation);
   }
 
@@ -209,6 +223,7 @@ export class RobotMarker extends BaseScriptComponent {
     }
     this.resetRuntimePoseSmoothing();
     this.markerRoot.enabled = true;
+    this.frameCapture?.setRobotWorldPosition(position);
     this.setPose(position, rotation);
   }
 
@@ -217,6 +232,7 @@ export class RobotMarker extends BaseScriptComponent {
       return;
     }
     this.markerRoot.enabled = true;
+    this.frameCapture?.setRobotWorldPosition(position);
     this._applyRuntimePose(position, rotation);
   }
 
@@ -394,6 +410,7 @@ export class RobotMarker extends BaseScriptComponent {
     this._toggleButton = toggleRoot.getComponent(
       RoundButton.getTypeName(),
     ) as RoundButton;
+    this._stateInfoText = findText(this.markerRoot, "StateInfoText");
     this._debugInfoText = findText(this.markerRoot, "DebugInfoText");
     if (
       !this._manualCollider ||
@@ -417,6 +434,7 @@ export class RobotMarker extends BaseScriptComponent {
     this.syncRotationFromScene();
     this._syncVisualOffsets();
     this._syncMenuWorldAnchor();
+    this._refreshDebugInfoText();
   }
 
   private _applyRuntimePose(position: vec3, rotation: quat): void {
@@ -449,6 +467,13 @@ export class RobotMarker extends BaseScriptComponent {
       desiredRotation.z,
     );
     this._runtimeTrackingActive = true;
+    if (this._debugMode) {
+      this._uiLogger?.show(
+        REFINED_TRACKING_LOG_TEXT,
+        COLOR_WHITE,
+        REFINED_TRACKING_LOG_DURATION_S,
+      );
+    }
 
     if (snapImmediate) {
       this.setPose(position, desiredRotation);
@@ -500,25 +525,29 @@ export class RobotMarker extends BaseScriptComponent {
     );
   }
 
-  private _applyDebugInfo(state: DimosAppState): void {
+  private _applyStateInfo(state: DimosAppState): void {
+    if (!this._stateInfoText && this.markerRoot) {
+      this._stateInfoText = findText(this.markerRoot, "StateInfoText");
+    }
     if (!this._debugInfoText && this.markerRoot) {
       this._debugInfoText = findText(this.markerRoot, "DebugInfoText");
     }
     this._debugMode = state.debugMode;
     this._syncDirectionArrowVisibility();
-    this._refreshDebugInfoText(state);
+    this._refreshStateInfoText(state);
+    this._refreshDebugInfoText();
   }
 
-  private _refreshDebugInfoText(state: DimosAppState): void {
-    if (!this._debugInfoText) {
+  private _refreshStateInfoText(state: DimosAppState): void {
+    if (!this._stateInfoText) {
       return;
     }
-    const presentation = this._resolveDebugInfoPresentation(state);
-    this._debugInfoText.text = presentation.text;
-    this._debugInfoText.textFill.color = presentation.color;
+    const presentation = this._resolveStateInfoPresentation(state);
+    this._stateInfoText.text = presentation.text;
+    this._stateInfoText.textFill.color = presentation.color;
   }
 
-  private _resolveDebugInfoPresentation(state: DimosAppState): {
+  private _resolveStateInfoPresentation(state: DimosAppState): {
     text: string;
     color: vec4;
   } {
@@ -529,6 +558,22 @@ export class RobotMarker extends BaseScriptComponent {
       return outcomePresentation;
     }
     return robotMarkerSteadyStatePresentation(state);
+  }
+
+  private _applyUILogEntry(entry: UILogEntry | null): void {
+    this._uiLogEntry = entry;
+    this._refreshDebugInfoText();
+  }
+
+  private _refreshDebugInfoText(): void {
+    if (!this._debugInfoText) {
+      return;
+    }
+    const presentation = this._debugMode ? this._uiLogEntry : null;
+    const shouldShow = !!presentation && presentation.text.length > 0;
+    this._debugInfoText.text = presentation?.text ?? "";
+    this._debugInfoText.textFill.color = presentation?.color ?? COLOR_WHITE;
+    this._debugInfoText.getSceneObject().enabled = shouldShow;
   }
 
   private _syncDirectionArrowVisibility(): void {

@@ -62,6 +62,7 @@ def _make_controller(*, with_adapter: bool = False) -> tuple[AlignmentController
     if with_adapter:
         adapter = MagicMock()
         adapter.assist_motion_available.return_value = True
+        adapter.assist_strafe_speed.return_value = 0.5
         adapter.assist_set_lateral_velocity.return_value = True
 
     ctrl = AlignmentController(
@@ -425,6 +426,34 @@ def test_runtime_smoothing_preserves_heading() -> None:
     )
 
 
+def test_runtime_translation_solve_corrects_stationary_robot() -> None:
+    """When baseline solve is unavailable, runtime translation solve must still update."""
+    ctrl, _ = _make_controller_with_correction()
+
+    theta = math.radians(20.0)
+    T_committed = build_T_world_odom(theta, (0.0, 0.0, 0.0))
+    ctrl._T_committed = np.array(T_committed, dtype=np.float64, copy=True)
+    ctrl._calibration.register_from_alignment(T_committed)
+
+    T_target = build_T_world_odom(theta, (1.0, 0.0, -1.0))
+    solve = TagSolve(
+        T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
+        method="tag_translation",
+        quality=0.95,
+        observation_count=1,
+        baseline_m=0.0,
+    )
+    ctrl._tag_tracker.current_solve = MagicMock(return_value=None)  # type: ignore[method-assign]
+    ctrl._tag_tracker.current_translation_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
+
+    ctrl._apply_tracker_update()
+
+    committed_yaw = _yaw_from_T(ctrl._T_committed)
+    assert committed_yaw == pytest.approx(theta, abs=1e-6)
+    assert ctrl._T_committed[0, 3] == pytest.approx(0.65, abs=1e-6)
+    assert ctrl._T_committed[2, 3] == pytest.approx(-0.65, abs=1e-6)
+
+
 # ---------------------------------------------------------------------------
 # C1 regression: _clear_session must NOT emit a trailing stage-change broadcast
 # ---------------------------------------------------------------------------
@@ -444,6 +473,7 @@ def test_clear_session_does_not_emit_stage_change() -> None:
 
     adapter = MagicMock()
     adapter.assist_motion_available.return_value = True
+    adapter.assist_strafe_speed.return_value = 0.5
     adapter.assist_set_lateral_velocity.return_value = True
 
     ctrl = AlignmentController(
@@ -503,6 +533,7 @@ def test_finish_alignment_terminal_status_is_last(
 
     adapter = MagicMock()
     adapter.assist_motion_available.return_value = True
+    adapter.assist_strafe_speed.return_value = 0.5
     adapter.assist_set_lateral_velocity.return_value = True
 
     ctrl = AlignmentController(
@@ -571,6 +602,7 @@ def test_failed_path_terminal_status_is_last(
 
     adapter = MagicMock()
     adapter.assist_motion_available.return_value = True
+    adapter.assist_strafe_speed.return_value = 0.5
     adapter.assist_set_lateral_velocity.return_value = True
 
     ctrl = AlignmentController(

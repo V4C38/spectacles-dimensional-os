@@ -513,3 +513,14 @@ def test_encode_path_rounds_waypoints() -> None:
         )
     )
     assert preview["target"] == [7.123, 8.235, 9.346]
+
+
+def test_normalize_nav_state_active_planner_substates() -> None:
+    from dimos_xr.network.data_plane import normalize_nav_state
+
+    assert normalize_nav_state("initial_rotation") == "following_path"
+    assert normalize_nav_state("final_rotation") == "following_path"
+    assert normalize_nav_state("path_following") == "following_path"
+    assert normalize_nav_state("arrived") == "idle"
+    assert normalize_nav_state("stopped") == "idle"
+    assert normalize_nav_state("recovery_mode") == "recovery"

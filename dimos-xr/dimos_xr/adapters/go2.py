@@ -43,7 +43,12 @@ GO2_CAPABILITIES: dict[str, CapabilityState] = {
     "emergency_stop": CapabilityState(True),
 }
 
-# Front shoulder plate, centered (y=0), ~19 cm forward and 7 cm above base_link.
+# Front shoulder plate, centered (y=0), ~7 cm above base_link.
+# The tag sits on the shoulder with its face upward; the lever arm from
+# base_link to tag center in the odom/base frame is validated on hardware via
+# the ``tag_mount_offset diagnostic`` log emitted by TagTracker (see README).
+# A prior model used 0.19 m forward here, which over-subtracted in
+# current_translation_solve and placed the marker ~20 cm rear of robot center.
 # Orientation: tag face normally points straight up (+Z), top edge forward (+X).
 # That base pose is a -90 deg yaw about base +Z.  The physical marker is also
 # mounted at ~5 deg so its upward normal leans toward the robot rear; modelled
@@ -61,7 +66,7 @@ GO2_DEFAULT_TAG_MOUNTS: list[TagMount] = [
     TagMount(
         tag_id=DEFAULT_MARKER_ID,
         size_m=0.056,
-        position=(0.19, 0.0, 0.07),
+        position=(0.0, 0.0, 0.07),
         orientation=_GO2_TAG_QUAT,
     ),
 ]
@@ -287,6 +292,10 @@ class Go2AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
         return self.cmd_vel.transport is not None
 
     @rpc
+    def assist_strafe_speed(self) -> float:
+        return 0.5
+
+    @rpc
     def assist_set_lateral_velocity(self, vy_m_s: float) -> bool:
         """Drive a lateral strafe via the proven joystick/cmd_vel path.
 
@@ -294,7 +303,7 @@ class Go2AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
         meters per second. UnitreeWebRTCConnection.move() maps Twist.linear.y
         directly to the `lx` stick field with no m/s→stick scaling.
 
-        A ~12 Hz daemon thread continuously republishes the requested Twist so
+        A ~50 Hz daemon thread continuously republishes the requested Twist so
         the robot keeps moving (Go2 WebRTC has no deadman — if the stream goes
         silent the robot does NOT auto-stop; the republisher bridges ticks).
         Calling with 0.0 publishes a zero Twist immediately, which stops the
@@ -321,14 +330,14 @@ class Go2AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
         return True
 
     def _assist_vel_loop(self) -> None:
-        """Republish the current assist velocity at ~12 Hz until it is zeroed."""
+        """Republish the current assist velocity at ~50 Hz until it is zeroed."""
         while True:
             with self._assist_vel_lock:
                 vy = self._assist_vel_target
             if vy == 0.0:
                 break
             self._publish_assist_twist(vy)
-            time.sleep(1.0 / 12.0)
+            time.sleep(1.0 / 50.0)
 
     def _publish_assist_twist(self, vy_m_s: float) -> None:
         if self.cmd_vel.transport is None:

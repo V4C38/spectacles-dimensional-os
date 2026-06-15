@@ -5,6 +5,8 @@ is handled in the blueprint via .remappings([...]) — not here.
 """
 
 from __future__ import annotations
+import threading
+import time
 
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -48,6 +50,7 @@ def g1_capabilities(
     cancel_goal_available: bool,
     emergency_stop_available: bool,
     marker_align_available: bool,
+    assist_motion_available: bool = False,
 ) -> dict[str, CapabilityState]:
     return {
         "lidar": CapabilityState(True),
@@ -86,8 +89,10 @@ def g1_capabilities(
             else "No safe G1 high-level stop interface is available in this runtime.",
         ),
         "align_assist": CapabilityState(
-            False,
-            "Assisted calibration motion is not available for this runtime.",
+            assist_motion_available,
+            None
+            if assist_motion_available
+            else "Assisted calibration motion is not available for this runtime.",
         ),
     }
 
@@ -101,6 +106,7 @@ def g1_handshake(
     cancel_goal_available: bool,
     emergency_stop_available: bool,
     marker_align_available: bool,
+    assist_motion_available: bool = False,
 ) -> RobotHandshake:
     capability_states = g1_capabilities(
         nav_available=nav_available,
@@ -109,6 +115,7 @@ def g1_handshake(
         cancel_goal_available=cancel_goal_available,
         emergency_stop_available=emergency_stop_available,
         marker_align_available=marker_align_available,
+        assist_motion_available=assist_motion_available,
     )
     tag_ids = [m.tag_id for m in G1_DEFAULT_TAG_MOUNTS]
     return RobotHandshake(
@@ -159,10 +166,20 @@ class G1AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
     clicked_point: Out[PointStamped]
     stop_movement: Out[Bool]
     cancel_goal_signal: Out[Bool]
+    cmd_vel: Out[Twist]
 
     config: G1AdapterConfig
     _g1_connection: G1ConnectionSpec | None = None
     _g1_high_level: HighLevelG1Spec | None = None
+    _assist_vel_lock: threading.Lock
+    _assist_vel_thread: threading.Thread | None
+    _assist_vel_target: float
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self._assist_vel_lock = threading.Lock()
+        self._assist_vel_thread = None
+        self._assist_vel_target = 0.0
 
     async def handle_xr_lidar_in(self, msg: PointCloud2) -> None:
         self.xr_lidar.publish(msg)
@@ -221,6 +238,7 @@ class G1AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
             cancel_goal_available=self._cancel_goal_available(),
             emergency_stop_available=self._emergency_stop_available(),
             marker_align_available=len(self.tag_mounts()) > 0,
+            assist_motion_available=self.assist_motion_available(),
         )
 
     @rpc
@@ -233,6 +251,7 @@ class G1AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
             cancel_goal_available=self._cancel_goal_available(),
             emergency_stop_available=self._emergency_stop_available(),
             marker_align_available=len(self.tag_mounts()) > 0,
+            assist_motion_available=self.assist_motion_available(),
         )
 
     @rpc
@@ -288,8 +307,48 @@ class G1AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
 
     @rpc
     def assist_motion_available(self) -> bool:
-        return False
+        return self.cmd_vel.transport is not None
+
+    @rpc
+    def assist_strafe_speed(self) -> float:
+        return 0.3
 
     @rpc
     def assist_set_lateral_velocity(self, vy_m_s: float) -> bool:
-        return False
+        with self._assist_vel_lock:
+            self._assist_vel_target = float(vy_m_s)
+
+        if vy_m_s == 0.0:
+            self._publish_assist_twist(0.0)
+            return True
+
+        with self._assist_vel_lock:
+            if self._assist_vel_thread is None or not self._assist_vel_thread.is_alive():
+                t = threading.Thread(
+                    target=self._assist_vel_loop,
+                    daemon=True,
+                    name="xr-g1-assist-vel",
+                )
+                self._assist_vel_thread = t
+                t.start()
+        return True
+
+    def _assist_vel_loop(self) -> None:
+        while True:
+            with self._assist_vel_lock:
+                vy = self._assist_vel_target
+            if vy == 0.0:
+                break
+            self._publish_assist_twist(vy)
+            time.sleep(1.0 / 50.0)
+
+    def _publish_assist_twist(self, vy_m_s: float) -> None:
+        if self.cmd_vel.transport is None:
+            logger.warning("G1 assist_set_lateral_velocity: cmd_vel transport not available")
+            return
+        self.cmd_vel.publish(
+            Twist(
+                linear=Vector3(0.0, vy_m_s, 0.0),
+                angular=Vector3(0.0, 0.0, 0.0),
+            )
+        )

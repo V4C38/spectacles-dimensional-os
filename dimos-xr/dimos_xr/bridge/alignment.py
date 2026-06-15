@@ -430,6 +430,7 @@ class AlignmentController:
                     self._assist_driver.tick(
                         obs_count=self._tag_tracker.observation_count(),
                         latest_obs_pos_world=None,
+                    latest_odom=self._odom.latest(),
                     )
                     self._maybe_finish_assist()
                     # _maybe_finish_assist() may have auto-committed and cleared the
@@ -616,12 +617,19 @@ class AlignmentController:
                 self._assist_driver.tick(
                     obs_count=self._tag_tracker.observation_count(),
                     latest_obs_pos_world=frame_result_pos,
+                    latest_odom=self._odom.latest(),
                 )
             self._broadcast_align_status()
             return
         if not self._calibration.is_registered or not self._runtime_correction_enabled:
             return
         solve = self._tag_tracker.current_solve()
+        if solve is None:
+            T_reference = self._T_committed
+            if T_reference is None:
+                T_reference = self._calibration.current_transform()
+            if T_reference is not None:
+                solve = self._tag_tracker.current_translation_solve(T_reference)
         if solve is None:
             return
         T_new = np.array(solve.T_world_odom, dtype=np.float64, copy=True)
@@ -634,21 +642,36 @@ class AlignmentController:
         trans_delta = float(np.linalg.norm(T_new[:3, 3] - self._T_committed[:3, 3]))
         yaw_delta = abs(normalize_angle(_yaw_from_T(T_new) - _yaw_from_T(self._T_committed)))
         if trans_delta > 0.5 or yaw_delta > math.radians(10.0):
-            self._pending_large_solves.append(T_new)
-            if len(self._pending_large_solves) > 3:
-                self._pending_large_solves = self._pending_large_solves[-3:]
-            if len(self._pending_large_solves) < 3:
-                return
-            solves = self._pending_large_solves
-            spreads = [
-                float(np.linalg.norm(solves[i][:3, 3] - solves[j][:3, 3]))
-                for i in range(len(solves))
-                for j in range(i + 1, len(solves))
-            ]
-            if max(spreads) > 0.2:
-                return
-            T_new = self._pending_large_solves[-1]
-            self._pending_large_solves = []
+            if solve.method == "tag_translation" and solve.quality >= 0.85:
+                # For a visible stationary robot, apply a fast first-step shrink in
+                # translation while preserving the committed yaw. This avoids
+                # forcing large, high-confidence tag sightings through the
+                # baseline-based multi-solve gate used by the assisted path.
+                t_old = self._T_committed[:3, 3]
+                t_new = T_new[:3, 3]
+                t_blend = t_old + 0.65 * (t_new - t_old)
+                T_new = build_T_world_odom(
+                    _yaw_from_T(self._T_committed),
+                    (float(t_blend[0]), float(t_blend[1]), float(t_blend[2])),
+                )
+                T_new = gravity_level_transform(T_new)
+                self._pending_large_solves = []
+            else:
+                self._pending_large_solves.append(T_new)
+                if len(self._pending_large_solves) > 3:
+                    self._pending_large_solves = self._pending_large_solves[-3:]
+                if len(self._pending_large_solves) < 3:
+                    return
+                solves = self._pending_large_solves
+                spreads = [
+                    float(np.linalg.norm(solves[i][:3, 3] - solves[j][:3, 3]))
+                    for i in range(len(solves))
+                    for j in range(i + 1, len(solves))
+                ]
+                if max(spreads) > 0.2:
+                    return
+                T_new = self._pending_large_solves[-1]
+                self._pending_large_solves = []
         else:
             dt = now - (self._last_smooth_mono or now)
             alpha = 1.0 - math.exp(-dt / self._tag_smoothing_tau_s)
@@ -713,7 +736,7 @@ class AlignmentController:
                 assist_stage = self._assist_driver.stage_label
                 step_index = self._assist_driver.step_index
                 step_count = self._assist_driver.step_count
-            pose_result = self._tag_tracker.robot_world_pose_estimate()
+            pose_result = self._tag_tracker.robot_world_pose_estimate(max_observations=2)
             if pose_result is not None:
                 pos, ori, _conf = pose_result
                 robot_world_pose = {

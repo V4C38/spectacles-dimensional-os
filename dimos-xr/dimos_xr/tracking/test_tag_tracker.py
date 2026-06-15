@@ -13,6 +13,7 @@ from dimos_xr.adapters.go2 import GO2_DEFAULT_TAG_MOUNTS
 from dimos_xr.tracking.tag_tracker import (
     CAMERA_FRAME_MAGIC,
     DEFAULT_MARKER_ID,
+    TagObservation,
     TagMount,
     TagTracker,
     TagTrackerConfig,
@@ -143,7 +144,7 @@ def test_tag_tracker_detects_generated_marker() -> None:
 
 
 def test_tag_tracker_no_solve_when_stationary() -> None:
-    """With stationary robot (zero baseline), current_solve() must return None."""
+    """With stationary robot (zero baseline), the baseline yaw solve must return None."""
     mount = GO2_DEFAULT_TAG_MOUNTS[0]
     tracker = TagTracker(
         [mount],
@@ -171,6 +172,165 @@ def test_tag_tracker_no_solve_when_stationary() -> None:
 
     assert tracker.current_solve() is None
     assert tracker.baseline_m() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_current_translation_solve_recovers_base_from_lever_arm() -> None:
+    """Lever-arm sign/magnitude: base = tag_world - R_world_base @ mount.position."""
+    mount = TagMount(tag_id=3, position=(0.12, -0.03, 0.05))
+    tracker = TagTracker([mount])
+
+    yaw_world_odom = math.radians(20.0)
+    T_reference = build_T_world_odom(yaw_world_odom, (1.0, 0.5, -0.2))
+    R_world_odom = T_reference[:3, :3]
+
+    yaw_base = math.radians(-15.0)
+    cy, sy = math.cos(yaw_base), math.sin(yaw_base)
+    R_odom_base = np.array(
+        [[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    p_odom_base = np.array([2.0, -1.0, 0.1], dtype=np.float64)
+    T_odom_base = np.eye(4, dtype=np.float64)
+    T_odom_base[:3, :3] = R_odom_base
+    T_odom_base[:3, 3] = p_odom_base
+
+    p_base_tag = np.array(mount.position, dtype=np.float64)
+    R_world_base = R_world_odom @ R_odom_base
+    p_world_base_expected = np.array([0.4, 0.0, -0.3], dtype=np.float64)
+    p_world_tag = p_world_base_expected + R_world_base @ p_base_tag
+
+    T_world_tag = np.eye(4, dtype=np.float64)
+    T_world_tag[:3, 3] = p_world_tag
+
+    tracker._observations.append(
+        TagObservation(
+            mono_ts=1.0,
+            tag_id=3,
+            p_world_tag=tuple(p_world_tag),
+            p_odom_tag=(0.0, 0.0, 0.0),
+            T_world_tag=T_world_tag,
+            T_odom_tag=np.eye(4, dtype=np.float64),
+            T_odom_base=T_odom_base,
+            quality=0.95,
+            reprojection_error_px=0.5,
+        )
+    )
+
+    solve = tracker.current_translation_solve(T_reference, max_observations=1)
+    assert solve is not None
+
+    p_world_base_solved = solve.T_world_odom[:3, 3] + R_world_odom @ p_odom_base
+    assert np.allclose(p_world_base_solved, p_world_base_expected, atol=1e-9)
+
+
+def test_mount_offset_diagnostic_emitted_when_translation_solve_runs() -> None:
+    import dimos_xr.tracking.tag_tracker as tag_tracker_module
+
+    tag_tracker_module._MOUNT_OFFSET_DIAG_EMITTED = False
+    tag_tracker_module._MOUNT_OFFSET_DIAG_LAST_MONO = 0.0
+
+    mount = TagMount(tag_id=4, position=(0.12, 0.0, 0.07))
+    tracker = TagTracker([mount])
+    T_reference = build_T_world_odom(0.0, (0.0, 0.0, 0.0))
+
+    p_world_tag = np.array(mount.position, dtype=np.float64)
+    T_world_tag = np.eye(4, dtype=np.float64)
+    T_world_tag[:3, 3] = p_world_tag
+
+    tracker._observations.append(
+        TagObservation(
+            mono_ts=1.0,
+            tag_id=4,
+            p_world_tag=tuple(p_world_tag),
+            p_odom_tag=tuple(p_world_tag),
+            T_world_tag=T_world_tag,
+            T_odom_tag=T_world_tag,
+            T_odom_base=np.eye(4, dtype=np.float64),
+            quality=0.9,
+            reprojection_error_px=0.5,
+        )
+    )
+
+    solve = tracker.current_translation_solve(T_reference, max_observations=1)
+    assert solve is not None
+    assert tag_tracker_module._MOUNT_OFFSET_DIAG_EMITTED is True
+
+
+def test_tag_tracker_translation_solve_when_stationary() -> None:
+    """A stationary robot can still produce a translation-only runtime correction."""
+    mount = GO2_DEFAULT_TAG_MOUNTS[0]
+    tracker = TagTracker(
+        [mount],
+        config=TagTrackerConfig(max_reprojection_error_px=8.0, min_baseline_m=0.30),
+    )
+    tracker.set_camera_info(_synthetic_camera_info())
+    header = {
+        "type": "camera_frame",
+        "robot_id": "unitree_go2",
+        "seq": 1,
+        "ts": 10.0,
+        "send_ts": 10.05,
+        "cam_pos": [1.0, 1.5, -2.0],
+        "cam_rot": [0.0, 0.0, 0.0, 1.0],
+    }
+    odom = OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
+
+    for seq in range(4):
+        tracker.process_frame(
+            {**header, "seq": seq},
+            _encode_marker_jpeg(),
+            lambda _ts: odom,
+            receive_mono=10.1 + seq * 0.1,
+        )
+
+    reference = build_T_world_odom(math.radians(15.0), (0.0, 0.0, 0.0))
+    solve = tracker.current_translation_solve(reference)
+    assert solve is not None
+    assert solve.method == "tag_translation"
+    assert solve.baseline_m == pytest.approx(0.0, abs=1e-6)
+    assert _yaw_from_T(solve.T_world_odom) == pytest.approx(_yaw_from_T(reference), abs=1e-9)
+    assert np.all(np.isfinite(solve.T_world_odom[:3, 3]))
+    assert np.linalg.norm(solve.T_world_odom[:3, 3]) > 0.0
+
+
+def test_robot_world_pose_estimate_can_use_only_recent_observations() -> None:
+    mount = TagMount(tag_id=7)
+    tracker = TagTracker([mount])
+    tracker._observations.extend(
+        [
+            TagObservation(
+                mono_ts=1.0,
+                tag_id=7,
+                p_world_tag=(0.0, 0.0, 0.0),
+                p_odom_tag=(0.0, 0.0, 0.0),
+                T_world_tag=build_T_world_odom(0.0, (0.0, 0.0, 0.0)),
+                T_odom_tag=np.eye(4, dtype=np.float64),
+                T_odom_base=np.eye(4, dtype=np.float64),
+                quality=0.5,
+                reprojection_error_px=0.5,
+            ),
+            TagObservation(
+                mono_ts=2.0,
+                tag_id=7,
+                p_world_tag=(2.0, 0.0, 0.0),
+                p_odom_tag=(0.0, 0.0, 0.0),
+                T_world_tag=build_T_world_odom(0.0, (2.0, 0.0, 0.0)),
+                T_odom_tag=np.eye(4, dtype=np.float64),
+                T_odom_base=np.eye(4, dtype=np.float64),
+                quality=0.9,
+                reprojection_error_px=0.5,
+            ),
+        ]
+    )
+
+    pose_all = tracker.robot_world_pose_estimate()
+    pose_recent = tracker.robot_world_pose_estimate(max_observations=1)
+
+    assert pose_all is not None
+    assert pose_recent is not None
+    assert pose_all[0][0] == pytest.approx(1.0)
+    assert pose_recent[0][0] == pytest.approx(2.0)
+    assert pose_recent[2] == pytest.approx(0.9)
 
 
 def test_tag_tracker_rejects_unknown_tag_id() -> None:

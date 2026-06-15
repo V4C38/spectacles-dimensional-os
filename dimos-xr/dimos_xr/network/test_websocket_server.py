@@ -222,3 +222,43 @@ async def test_non_terminal_align_status_can_be_overwritten() -> None:
     align_statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "align_status"]
     assert len(align_statuses) == 1, "non-terminal messages must still coalesce to one"
     assert align_statuses[0]["state"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_outbound_text_frames_are_newline_delimited() -> None:
+    ws = _FakeWebSocket()
+    outbound = _ConnectionOutbound(ws)  # type: ignore[arg-type]
+    outbound.start()
+
+    outbound.enqueue('{"type":"nav_status","state":"idle"}')
+
+    await asyncio.sleep(0.05)
+    await outbound.stop()
+
+    assert len(ws.sent) == 1
+    assert ws.sent[0].endswith("\n")
+    msg = json.loads(ws.sent[0].strip())
+    assert msg["type"] == "nav_status"
+    assert msg["state"] == "idle"
+
+
+def test_newline_framing_client_round_trip() -> None:
+    """Simulate Lens line-split reassembly across fragmented callbacks."""
+    buffer = ""
+    messages: list[dict] = []
+    for frame in (
+        '{"type":"path","waypoints":[[1,2',
+        ',3]]}\n{"type":"nav_status","state":"idle"}\n',
+    ):
+        buffer += frame
+        parts = buffer.split("\n")
+        tail = parts.pop() if parts else ""
+        for line in parts:
+            if line:
+                messages.append(json.loads(line))
+        buffer = tail
+
+    assert len(messages) == 2
+    assert messages[0]["type"] == "path"
+    assert messages[0]["waypoints"] == [[1, 2, 3]]
+    assert messages[1]["state"] == "idle"

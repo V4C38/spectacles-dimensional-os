@@ -136,4 +136,8 @@ def normalize_nav_state(raw: str) -> str:
         return "recovery"
     if any(token in state for token in ("follow", "path", "navig")):
         return "following_path"
+    if state in {"arrived", "stopped"}:
+        return "idle"
+    if any(token in state for token in ("rotat", "initial", "final", "align", "execut", "move")):
+        return "following_path"
     return "idle"

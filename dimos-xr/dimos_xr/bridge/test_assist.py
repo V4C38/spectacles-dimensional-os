@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from unittest.mock import MagicMock, patch
 
 from dimos_xr.bridge.assist import (
+    MOVE_LEG_MAX_S,
     MOVE_LEG_S,
-    MOVE_SPEED,
+    MOVE_LEG_TARGET_M,
     SAMPLE_MIN_OBS,
     SAMPLE_SPREAD_M,
     AssistDriver,
     AssistState,
     _MovePhase,
 )
+from dimos_xr.tracking.transforms import OdomSample
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -22,6 +25,7 @@ from dimos_xr.bridge.assist import (
 def _make_adapter(*, available: bool = True) -> MagicMock:
     adapter = MagicMock()
     adapter.assist_motion_available.return_value = available
+    adapter.assist_strafe_speed.return_value = 0.5
     adapter.assist_set_lateral_velocity.return_value = True
     return adapter
 
@@ -64,7 +68,7 @@ def test_confirm_enters_move_directly() -> None:
     _advance_to_awaiting_confirm(driver)
     driver.on_assist_confirm()
     assert driver.state == AssistState.MOVE
-    adapter.assist_set_lateral_velocity.assert_called_with(MOVE_SPEED * 1.0)
+    adapter.assist_set_lateral_velocity.assert_called_with(0.5)
 
 
 # ── happy path: full 3-leg stop-and-sample sequence ──────────────────────────
@@ -73,6 +77,14 @@ def test_confirm_enters_move_directly() -> None:
 def _stable_pos(base: float = 1.0) -> list[tuple[float, float, float]]:
     """Return SAMPLE_MIN_OBS observations tight enough to pass spread check."""
     return [(base + i * 0.001, 0.0, -2.0) for i in range(SAMPLE_MIN_OBS)]
+
+
+def _odom(x: float, y: float, yaw_rad: float = 0.0) -> OdomSample:
+    half_yaw = yaw_rad * 0.5
+    return OdomSample(
+        position=(x, y, 0.0),
+        orientation=(0.0, 0.0, math.sin(half_yaw), math.cos(half_yaw)),
+    )
 
 
 def _drive_through_sample(
@@ -108,7 +120,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     # --- Sample 0: deliver stable observations ---
     _drive_through_sample(driver, expected_leg_after=1)
     assert driver.state == AssistState.MOVE
-    adapter.assist_set_lateral_velocity.assert_called_with(MOVE_SPEED * -1.0)
+    adapter.assist_set_lateral_velocity.assert_called_with(-0.5)
 
     # --- Leg 1 completes (2× duration) ---
     t1 = driver._move_start_mono
@@ -121,7 +133,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     # --- Sample 1 ---
     _drive_through_sample(driver, expected_leg_after=2)
     assert driver.state == AssistState.MOVE
-    adapter.assist_set_lateral_velocity.assert_called_with(MOVE_SPEED * 1.0)
+    adapter.assist_set_lateral_velocity.assert_called_with(0.5)
 
     # --- Leg 2 completes (1× duration) ---
     t2 = driver._move_start_mono
@@ -135,6 +147,88 @@ def test_happy_path_full_3_leg_sequence() -> None:
     _drive_through_sample(driver, expected_leg_after=None)
     assert driver.state == AssistState.DONE
     adapter.assist_set_lateral_velocity.assert_called_with(0.0)
+
+
+def test_leg_completion_uses_odom_lateral_displacement_when_available() -> None:
+    driver, _adapter = _make_driver()
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    driver.on_assist_confirm()
+    assert driver.state == AssistState.MOVE
+
+    # First odom sample establishes the start pose; second reaches the lateral target.
+    driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0))
+    driver.tick(
+        obs_count=0,
+        latest_obs_pos_world=None,
+        latest_odom=_odom(0.0, MOVE_LEG_TARGET_M + 0.01),
+    )
+    assert driver._move_phase == _MovePhase.SAMPLE
+
+
+def test_leg_completion_uses_ground_displacement_with_large_yaw_change() -> None:
+    driver, _adapter = _make_driver()
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    driver.on_assist_confirm()
+
+    driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0, 0.0))
+    driver.tick(
+        obs_count=0,
+        latest_obs_pos_world=None,
+        latest_odom=_odom(0.05, MOVE_LEG_TARGET_M + 0.02, math.radians(35.0)),
+    )
+
+    assert driver.state == AssistState.MOVE
+    assert driver._move_phase == _MovePhase.SAMPLE
+
+
+def test_leg_watchdog_advances_without_abort_when_odom_target_not_reached() -> None:
+    driver, _adapter = _make_driver()
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    driver.on_assist_confirm()
+
+    driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0))
+    t0 = driver._move_start_mono
+    assert t0 is not None
+    with patch("dimos_xr.bridge.assist.time") as mt:
+        mt.monotonic.return_value = t0 + MOVE_LEG_MAX_S + 0.1
+        driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0))
+
+    assert driver.state == AssistState.MOVE
+    assert driver._move_phase == _MovePhase.SAMPLE
+
+
+def test_long_middle_leg_uses_doubled_ground_displacement_target() -> None:
+    driver, _adapter = _make_driver()
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    driver.on_assist_confirm()
+
+    # Finish leg 1 and sample so leg 2 starts.
+    t0 = driver._move_start_mono
+    assert t0 is not None
+    with patch("dimos_xr.bridge.assist.time") as mt:
+        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        driver.tick(obs_count=0, latest_obs_pos_world=None)
+    _drive_through_sample(driver, expected_leg_after=1)
+    assert driver._move_leg_index == 1
+
+    driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0))
+    driver.tick(
+        obs_count=0,
+        latest_obs_pos_world=None,
+        latest_odom=_odom(0.0, MOVE_LEG_TARGET_M * 1.8),
+    )
+    assert driver._move_phase == _MovePhase.LEG
+
+    driver.tick(
+        obs_count=0,
+        latest_obs_pos_world=None,
+        latest_odom=_odom(0.0, MOVE_LEG_TARGET_M * 2.0 + 0.02),
+    )
+    assert driver._move_phase == _MovePhase.SAMPLE
 
 
 # ── tag loss during motion leg: robot keeps moving ───────────────────────────

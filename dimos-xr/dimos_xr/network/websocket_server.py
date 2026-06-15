@@ -63,9 +63,9 @@ HelloSupplier = Callable[[], Any]
 
 OUTBOUND_FIFO_MAXSIZE = 64
 OUTBOUND_BACKLOG_LOG_INTERVAL_S = 5.0
-# High-frequency inbound message types that need throttled RX logging (~3 Hz).
+# High-frequency inbound message types that need throttled RX logging (~1 Hz).
 INBOUND_TEXT_LOG_INTERVAL_S = 1.0
-_THROTTLED_INBOUND_TYPES = frozenset({"align_manual_pose", "get_status"})
+_THROTTLED_INBOUND_TYPES = frozenset({"align_manual_pose", "get_status", "plan_path"})
 COALESCE_MESSAGE_TYPES = frozenset(
     {
         "lidar",
@@ -208,7 +208,7 @@ class _ConnectionOutbound:
         import time
 
         try:
-            await self._websocket.send(text)
+            await self._websocket.send(text + "\n")
             self._sent_count += 1
             msg_type = _peek_message_type(text)
             if _TRACE and msg_type == "align_status":
@@ -356,7 +356,7 @@ class XRWebSocketServer:
         logger.info("XR client connected", remote=str(remote))
         try:
             hello = self._hello_supplier()
-            await websocket.send(encode_hello(hello))
+            await websocket.send(encode_hello(hello) + "\n")
             if self._on_status_connect is not None:
                 self._on_status_connect(websocket)
             self.client_connected.set()

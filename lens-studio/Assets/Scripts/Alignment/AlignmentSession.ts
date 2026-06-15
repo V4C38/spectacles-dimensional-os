@@ -106,8 +106,8 @@ export class AlignmentSession extends BaseScriptComponent {
     this._bridgeSessionConfirmed = false;
     this._lastAlignStatusTime = -1;
     this._tryStartBridgeSession(method);
-    if (method === "tag" && this.frameCapture) {
-      this.frameCapture.setMode("setup");
+    if (this.frameCapture) {
+      this.frameCapture.setMode(method === "tag" ? "setup" : "off");
     }
     print(`AlignmentSession: start method=${method} assist=${this._assist}`);
   }

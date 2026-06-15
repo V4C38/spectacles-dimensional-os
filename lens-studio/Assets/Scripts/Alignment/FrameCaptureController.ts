@@ -5,7 +5,7 @@ import { quatFromMat4Rotation } from "../Core/MathUtils";
 const POSE_BUFFER_CAPACITY = 180;
 // Interval measured from pipeline END (ack or finally), guaranteeing idle GC time.
 const SETUP_CAPTURE_INTERVAL_S = 1.0;
-const RUNTIME_CAPTURE_INTERVAL_S = 3.0;
+const RUNTIME_CAPTURE_INTERVAL_S = 1.0;
 // Safety net only: ack clears _inFlight in the normal case.
 const IN_FLIGHT_TIMEOUT_S = 12.0;
 const MAX_HEAD_ANGULAR_VEL_DEG_S = 40.0;
@@ -13,8 +13,6 @@ const MAX_HEAD_ANGULAR_VEL_DEG_S = 40.0;
 const PIPELINE_LOG_INTERVAL_S = 2.0;
 // Set to true to re-enable steady-state pipeline summary logs for deep debugging.
 const DEBUG_VERBOSE = false;
-const RUNTIME_MAX_DISTANCE_CM = 450.0;
-const RUNTIME_MAX_ANGLE_DEG = 35.0;
 
 type CaptureMode = "off" | "setup" | "runtime";
 
@@ -176,34 +174,11 @@ export class FrameCaptureController extends BaseScriptComponent {
     if (now - this._lastPipelineEndTime < interval) {
       return;
     }
-    if (this._mode === "runtime" && !this._isRobotPlausiblyInView()) {
-      return;
-    }
     if (this._headAngularVelocityDegS() > MAX_HEAD_ANGULAR_VEL_DEG_S) {
       return;
     }
     // Signal the onNewFrame handler to grab the next available stream frame.
     this._captureRequested = true;
-  }
-
-  private _isRobotPlausiblyInView(): boolean {
-    if (!this._robotWorldPos || !this.cameraObject) {
-      return false;
-    }
-    const camPos = this.cameraObject.getTransform().getWorldPosition();
-    const toRobot = this._robotWorldPos.sub(camPos);
-    const dist = toRobot.length;
-    if (dist > RUNTIME_MAX_DISTANCE_CM) {
-      return false;
-    }
-    const forward = this.cameraObject
-      .getTransform()
-      .getWorldRotation()
-      .multiplyVec3(new vec3(0, 0, -1));
-    const angleRad = Math.acos(
-      Math.max(-1, Math.min(1, forward.dot(toRobot.normalize()))),
-    );
-    return (angleRad * 180) / Math.PI <= RUNTIME_MAX_ANGLE_DEG;
   }
 
   private _headAngularVelocityDegS(): number {

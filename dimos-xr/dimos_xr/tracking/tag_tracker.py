@@ -56,6 +56,12 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
+# One-shot mount-offset diagnostic (see _maybe_log_mount_offset_diagnostic).
+_MOUNT_OFFSET_DIAG_EMITTED: bool = False
+_MOUNT_OFFSET_DIAG_LOCK = threading.Lock()
+_MOUNT_OFFSET_DIAG_INTERVAL_S: float = 30.0
+_MOUNT_OFFSET_DIAG_LAST_MONO: float = 0.0
+
 DEFAULT_MARKER_ID: int = 0
 DEFAULT_APRILTAG_DICT: str = "DICT_APRILTAG_36h11"
 TAG_TOTAL_SIZE_M: float = 0.070
@@ -237,6 +243,7 @@ class TagObservation:
     p_odom_tag: tuple[float, float, float]
     T_world_tag: NDArray[np.float64]
     T_odom_tag: NDArray[np.float64]
+    T_odom_base: NDArray[np.float64]
     quality: float
     reprojection_error_px: float
 
@@ -479,6 +486,7 @@ class TagTracker:
                 p_odom_tag=p_odom,
                 T_world_tag=T_world_tag,
                 T_odom_tag=T_odom_tag,
+                T_odom_base=np.array(T_odom_base, dtype=np.float64, copy=True),
                 quality=quality,
                 reprojection_error_px=reproj,
             )
@@ -539,8 +547,137 @@ class TagTracker:
         with self._lock:
             return _ground_baseline_m(list(self._observations))
 
+    def _maybe_log_mount_offset_diagnostic(
+        self,
+        obs: TagObservation,
+        mount: TagMount,
+        T_world_odom: NDArray[np.float64],
+    ) -> None:
+        """Log measured base->tag offset vs configured mount.position (rate-limited).
+
+        Uses the committed world<-odom transform and a vision-derived tag pose so
+        the residual reflects true lever-arm error rather than the mount model.
+        """
+        global _MOUNT_OFFSET_DIAG_EMITTED, _MOUNT_OFFSET_DIAG_LAST_MONO
+
+        T_world_odom = np.asarray(T_world_odom, dtype=np.float64)
+        if not np.all(np.isfinite(T_world_odom)):
+            return
+
+        T_odom_world = np.linalg.inv(T_world_odom)
+        T_odom_tag_meas = T_odom_world @ obs.T_world_tag
+        p_odom_tag_meas = T_odom_tag_meas[:3, 3]
+
+        R_odom_base = obs.T_odom_base[:3, :3]
+        p_odom_base = obs.T_odom_base[:3, 3]
+        measured_p_base_tag = R_odom_base.T @ (p_odom_tag_meas - p_odom_base)
+
+        configured = np.asarray(mount.position, dtype=np.float64)
+        residual = measured_p_base_tag - configured
+
+        R_world_odom = T_world_odom[:3, :3]
+        p_world_tag = obs.T_world_tag[:3, 3]
+        p_base_tag = configured
+        p_world_base_from_mount = p_world_tag - (R_world_odom @ R_odom_base) @ p_base_tag
+
+        now = time.monotonic()
+        with _MOUNT_OFFSET_DIAG_LOCK:
+            emit_one_shot = not _MOUNT_OFFSET_DIAG_EMITTED
+            emit_periodic = now - _MOUNT_OFFSET_DIAG_LAST_MONO >= _MOUNT_OFFSET_DIAG_INTERVAL_S
+            if not emit_one_shot and not emit_periodic:
+                return
+            if emit_one_shot:
+                _MOUNT_OFFSET_DIAG_EMITTED = True
+            _MOUNT_OFFSET_DIAG_LAST_MONO = now
+
+        logger.info(
+            "tag_mount_offset diagnostic tag_id=%s "
+            "measured_base_to_tag=%s configured_mount.position=%s residual=%s "
+            "p_world_tag=%s p_world_base_from_mount=%s",
+            mount.tag_id,
+            np.array2string(measured_p_base_tag, precision=4),
+            np.array2string(configured, precision=4),
+            np.array2string(residual, precision=4),
+            np.array2string(p_world_tag, precision=4),
+            np.array2string(p_world_base_from_mount, precision=4),
+        )
+
+    def current_translation_solve(
+        self,
+        T_reference: NDArray[np.float64],
+        *,
+        max_observations: int = 5,
+    ) -> TagSolve | None:
+        """Estimate a translation-only world<-odom update from recent tag sightings.
+
+        This runtime path is intentionally separate from ``current_solve()``.
+        ``current_solve()`` uses baseline across multiple odom-tag samples to
+        recover yaw and translation; that geometry breaks down when the robot is
+        stationary.  Here we preserve the committed gravity-levelled rotation
+        from ``T_reference`` and solve only for translation from one or more
+        robot-mounted tag observations.
+        """
+        with self._lock:
+            observations = list(self._observations)[-max_observations:]
+            mounts = dict(self._mounts)
+
+        if not observations:
+            return None
+
+        T_keep = gravity_level_transform(np.array(T_reference, dtype=np.float64, copy=True))
+        R_world_odom_keep = T_keep[:3, :3]
+
+        translations: list[np.ndarray] = []
+        qualities: list[float] = []
+        for obs in observations:
+            mount = mounts.get(obs.tag_id)
+            if mount is None:
+                continue
+            self._maybe_log_mount_offset_diagnostic(obs, mount, T_keep)
+            R_odom_base = obs.T_odom_base[:3, :3]
+            p_odom_base = obs.T_odom_base[:3, 3]
+            p_world_tag = obs.T_world_tag[:3, 3]
+            p_base_tag = np.array(mount.position, dtype=np.float64)
+            p_world_base = p_world_tag - (R_world_odom_keep @ R_odom_base) @ p_base_tag
+            t_world_odom = p_world_base - R_world_odom_keep @ p_odom_base
+            if not np.all(np.isfinite(t_world_odom)):
+                continue
+            translations.append(t_world_odom)
+            qualities.append(max(obs.quality, 1e-3))
+
+        if not translations:
+            return None
+
+        if len(translations) >= 3:
+            arr = np.stack(translations, axis=0)
+            center = np.median(arr, axis=0)
+            dists = np.linalg.norm(arr - center, axis=1)
+            keep_mask = dists <= self._config.relocalize_cluster_m
+            if np.any(keep_mask):
+                translations = [translations[i] for i, keep in enumerate(keep_mask) if keep]
+                qualities = [qualities[i] for i, keep in enumerate(keep_mask) if keep]
+
+        weights = np.asarray(qualities, dtype=np.float64)
+        weights /= np.sum(weights)
+        mean_translation = np.sum(
+            np.stack(translations, axis=0) * weights[:, np.newaxis],
+            axis=0,
+        )
+        T_new = np.array(T_keep, dtype=np.float64, copy=True)
+        T_new[:3, 3] = mean_translation
+        T_new = gravity_level_transform(T_new)
+        return TagSolve(
+            T_world_odom=T_new,
+            method="tag_translation",
+            quality=float(np.mean(qualities)),
+            observation_count=len(translations),
+            baseline_m=self.baseline_m(),
+        )
+
     def robot_world_pose_estimate(
         self,
+        *,
+        max_observations: int | None = None,
     ) -> tuple[tuple[float, float, float], tuple[float, float, float, float], float] | None:
         """Estimate robot base pose in world frame from recent tag observations.
 
@@ -552,6 +689,8 @@ class TagTracker:
         with self._lock:
             observations = list(self._observations)
             mounts = dict(self._mounts)
+        if max_observations is not None:
+            observations = observations[-max_observations:]
         if not observations:
             return None
         positions = []

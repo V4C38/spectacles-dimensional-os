@@ -6,9 +6,12 @@ State flow::
     (any state) --abort--> AWAITING_CONFIRM  [stop motion first]
 
 Design constraints:
-- No timeouts anywhere. Tag loss never aborts any step.
+- Tag loss never aborts any step.
 - MOVE is a 3-leg 1:2:1 out-and-back routine implemented as sub-states.
-  The robot returns to approximately its starting position. No odom required.
+  The robot returns to approximately its starting position. When odom is
+  available, leg completion is closed-loop on lateral displacement; the legacy
+  time-based completion is kept only as a no-odom fallback, with a non-fatal
+  odom watchdog to keep the session moving if the target is not reached.
 - The robot is stopped only by an explicit zero Twist (Go2 WebRTC has no
   deadman). The abort path always calls assist_set_lateral_velocity(0.0).
 - tick() is called from two threads concurrently; a single RLock guards all state.
@@ -27,12 +30,14 @@ from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
     from dimos_xr.adapters.base import XRRobotAdapterSpec
+    from dimos_xr.tracking.transforms import OdomSample
 
 logger = setup_logger()
 
 # ── tunables ─────────────────────────────────────────────────────────────────
-MOVE_SPEED: float = 0.3           # raw joystick deflection in [-1, 1] (not m/s)
-MOVE_LEG_S: float = 2.0           # duration of each short leg; long leg = 2×
+MOVE_LEG_S: float = 2.0           # no-odom time fallback for each short leg; long leg = 2×
+MOVE_LEG_MAX_S: float = 8.0       # odom watchdog cap for each short leg; long leg = 2×
+MOVE_LEG_TARGET_M: float = 0.20   # short-leg ground-displacement target in odom
 MIN_ESTIMATING_OBS: int = 2       # observations needed to enter AWAITING_CONFIRM
 ESTIMATING_SPREAD_M: float = 0.10 # max allowed XY tag-position spread
 
@@ -51,7 +56,7 @@ class AssistState(StrEnum):
 
 # Sub-states within MOVE (not exposed on the wire — assist_stage stays "move")
 class _MovePhase(StrEnum):
-    LEG = "leg"      # robot is moving
+    LEG = "leg"       # robot is moving
     SAMPLE = "sample" # robot stopped, waiting for user to look at tag and collect samples
 
 
@@ -83,6 +88,7 @@ class AssistDriver:
         self._move_leg_index: int = 0   # 0=leg1, 1=leg2, 2=leg3
         self._move_phase: _MovePhase = _MovePhase.LEG
         self._move_sample_positions: list[tuple[float, float, float]] = []  # for current sample phase
+        self._move_leg_start_xy: tuple[float, float] | None = None
 
         # ESTIMATING: world tag positions seen
         self._estimating_positions: list[tuple[float, float, float]] = []
@@ -195,6 +201,7 @@ class AssistDriver:
         *,
         obs_count: int,
         latest_obs_pos_world: tuple[float, float, float] | None,
+        latest_odom: OdomSample | None = None,
     ) -> None:
         """Drive the state machine.
 
@@ -204,7 +211,7 @@ class AssistDriver:
                 added observation tag, or None if no tag was detected.
         """
         with self._lock:
-            self._tick_locked(obs_count, latest_obs_pos_world)
+            self._tick_locked(obs_count, latest_obs_pos_world, latest_odom)
 
     # ── internal helpers ─────────────────────────────────────────────────────
 
@@ -214,6 +221,7 @@ class AssistDriver:
         self._move_leg_index = 0
         self._move_phase = _MovePhase.LEG
         self._move_sample_positions = []
+        self._move_leg_start_xy = None
         self._estimating_positions = []
         self._abort_message = ""
 
@@ -262,9 +270,10 @@ class AssistDriver:
         self._move_phase = _MovePhase.LEG
         self._move_sample_positions = []
         self._move_start_mono = time.monotonic()
+        self._move_leg_start_xy = None
         self._move_velocity_active = True
         self._adapter.assist_set_lateral_velocity(
-            MOVE_SPEED * self._LEG_DIRECTIONS[0]
+            self._adapter.assist_strafe_speed() * self._LEG_DIRECTIONS[0]
         )
         self._transition(AssistState.MOVE, self._LEG_LABELS[0])
 
@@ -274,6 +283,7 @@ class AssistDriver:
         self._move_phase = _MovePhase.SAMPLE
         self._move_sample_positions = []
         self._move_start_mono = None  # unused during sample phase
+        self._move_leg_start_xy = None
         leg = self._move_leg_index
         if self._on_stage_change is not None:
             try:
@@ -295,9 +305,10 @@ class AssistDriver:
         self._move_phase = _MovePhase.LEG
         self._move_sample_positions = []
         self._move_start_mono = time.monotonic()
+        self._move_leg_start_xy = None
         self._move_velocity_active = True
         self._adapter.assist_set_lateral_velocity(
-            MOVE_SPEED * self._LEG_DIRECTIONS[leg]
+            self._adapter.assist_strafe_speed() * self._LEG_DIRECTIONS[leg]
         )
         if self._on_stage_change is not None:
             try:
@@ -309,6 +320,7 @@ class AssistDriver:
         self,
         obs_count: int,
         latest_obs_pos_world: tuple[float, float, float] | None,
+        latest_odom: OdomSample | None,
     ) -> None:
         state = self._state
 
@@ -338,13 +350,34 @@ class AssistDriver:
             leg = self._move_leg_index
 
             if self._move_phase == _MovePhase.LEG:
-                # Time-based leg completion
+                if latest_odom is not None:
+                    if self._move_leg_start_xy is None:
+                        self._move_leg_start_xy = (
+                            float(latest_odom.position[0]),
+                            float(latest_odom.position[1]),
+                        )
+                        self._move_start_mono = time.monotonic()
+                        return
+
+                    start_x, start_y = self._move_leg_start_xy
+                    dx = float(latest_odom.position[0]) - start_x
+                    dy = float(latest_odom.position[1]) - start_y
+                    target = MOVE_LEG_TARGET_M * self._LEG_MULTIPLIERS[leg]
+                    if math.hypot(dx, dy) >= target:
+                        self._start_sample()
+                        return
+
+                # Non-fatal watchdog when odom is present but the displacement target
+                # is not reached, plus the existing no-odom time-based fallback.
                 if self._move_start_mono is None:
                     return
                 elapsed = time.monotonic() - self._move_start_mono
-                leg_duration = MOVE_LEG_S * self._LEG_MULTIPLIERS[leg]
+                leg_duration = (
+                    MOVE_LEG_MAX_S if latest_odom is not None else MOVE_LEG_S
+                ) * self._LEG_MULTIPLIERS[leg]
                 if elapsed >= leg_duration:
                     self._start_sample()
+                    return
                 return
 
             if self._move_phase == _MovePhase.SAMPLE:

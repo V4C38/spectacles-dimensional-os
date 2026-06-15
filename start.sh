@@ -20,17 +20,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIMOS_XR_ROOT="${ROOT}/dimos-xr"
 source "${ROOT}/scripts/_dimos_env.sh"
 
-print_blue_stdout() {
+print_green_stdout() {
   if [[ -t 1 ]]; then
-    printf '\033[34m%s\033[0m\n' "$1"
+    printf '\033[32m%s\033[0m\n' "$1"
   else
     printf '%s\n' "$1"
   fi
 }
 
-print_blue_stderr() {
+print_green_stderr() {
   if [[ -t 2 ]]; then
-    printf '\033[34m%s\033[0m\n' "$1" >&2
+    printf '\033[32m%s\033[0m\n' "$1" >&2
   else
     printf '%s\n' "$1" >&2
   fi
@@ -154,7 +154,7 @@ resolve_robot_ip() {
     sn="${discovered[0]%%$'\t'*}"
     ip="${discovered[0]#*$'\t'}"
     ROBOT_IP="${ip}"
-    print_blue_stderr "Found robot ${sn} at ${ip}"
+    print_green_stderr "Found robot ${sn} at ${ip}"
     return 0
   fi
 
@@ -196,7 +196,7 @@ echo "Robot IP:     ${ROBOT_IP}"
 echo "WebSocket:    ws://${LISTEN_HOST}:8787"
 echo "Log level:    ${DIMOS_LOG_LEVEL} (quieter: DIMOS_LOG_LEVEL=INFO ./start.sh)"
 echo "Logs:         stdout + ~/.local/state/dimos/logs/.../main.jsonl (dimos log -f)"
-print_blue_stdout "Spectacles:   enter ${LAN_IP} in the lens"
+print_green_stdout "Spectacles:   enter ${LAN_IP} in the lens"
 echo ""
 echo "Ctrl+C to stop."
 echo ""

@@ -382,30 +382,11 @@ export class NavigationController {
     return "Idle";
   }
 
-  private _reconcileResyncedNavStatus(msg: NavStatusMessage): boolean {
-    if (!this._navGoalActive) {
-      return false;
-    }
-    if (
-      msg.recovering ||
-      msg.goal_reached ||
-      msg.goal_failed ||
-      msg.state === "following_path" ||
-      msg.state === "recovery"
-    ) {
-      return false;
-    }
-    if (msg.state !== "idle") {
-      return false;
-    }
-    if (this._awaitingPathHandoff) {
-      return false;
-    }
-    print(
-      "NavigationController: resynced nav_status is idle while executing; recovering locally",
-    );
-    this._recoverFromStaleExecution();
-    return true;
+  private _reconcileResyncedNavStatus(_msg: NavStatusMessage): boolean {
+    // Transient idle during replanning is normal; the lifecycle watchdog escalates
+    // on sustained staleness (resync at 8s, local recovery at 16s) instead of
+    // aborting immediately when get_status returns idle mid-execution.
+    return false;
   }
 
   private _recoverFromStaleExecution(): void {

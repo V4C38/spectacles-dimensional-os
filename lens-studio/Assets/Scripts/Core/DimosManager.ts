@@ -37,6 +37,7 @@ import {
   isCapabilityAvailable,
   capabilityUnavailableReason,
 } from "./RobotRuntime";
+import { UILogListener, UILogger } from "./UILogger";
 
 const WorldQueryModule = require("LensStudio:WorldQueryModule");
 
@@ -77,6 +78,7 @@ export class DimosManager extends BaseScriptComponent {
   private _isActive = false;
   private _lastPose: PoseMessage | null = null;
   private readonly _poseCorrection = new ManualPoseCorrection();
+  private readonly _uiLogger = new UILogger();
   private readonly _appState = new AppState({
     phase: "setup",
     debugMode: false,
@@ -128,6 +130,14 @@ export class DimosManager extends BaseScriptComponent {
 
   public get appState(): DimosAppState {
     return this._appState.snapshot;
+  }
+
+  public get uiLogger(): UILogger {
+    return this._uiLogger;
+  }
+
+  public subscribeUILog(listener: UILogListener): () => void {
+    return this._uiLogger.subscribe(listener);
   }
 
   public get bridgeLinkState(): BridgeLinkState {
@@ -211,6 +221,7 @@ export class DimosManager extends BaseScriptComponent {
     if (this.robotMarker) {
       this.robotMarker.initialize({
         poseCorrection: this._poseCorrection,
+        uiLogger: this._uiLogger,
         getLastPose: () => this._lastPose,
         robotMenuView: this._robotMenuView,
         getIsActive: () => this._isActive,
@@ -264,7 +275,10 @@ export class DimosManager extends BaseScriptComponent {
 
     // Deferred lidar mesh pump — tick every frame, render only when dirty.
     const lidarTickEvent = this.createEvent("UpdateEvent");
-    lidarTickEvent.bind(() => this._lidarTick());
+    lidarTickEvent.bind(() => {
+      this._uiLogger.tick();
+      this._lidarTick();
+    });
     this._lidarSync();
   }
 
@@ -309,6 +323,9 @@ export class DimosManager extends BaseScriptComponent {
       this._poseCorrection.reset();
     }
     this._syncLinkState(true, msg);
+    if (this.appState.phase === "runtime" && this.frameCaptureController) {
+      this.frameCaptureController.setMode(msg.registered ? "runtime" : "off");
+    }
     this._robotMenuView?.applyBridgeLinkState(this.bridgeLinkState);
     this.onBridgeStatusChanged.emit(msg);
     this._lidarSync();

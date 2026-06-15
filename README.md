@@ -58,7 +58,7 @@ flowchart LR
 <details>
 <summary>Frame alignment</summary>
 
-The bridge solves `T_world_odom` so AR content stays registered to the robot. During calibration, Spectacles streams high-resolution stills plus camera pose over the WebSocket; the bridge runs AprilTag detection and PnP on those frames against **robot-mounted** tags. When enough stable observations accumulate, the bridge averages a cluster of candidates and commits a gravity-leveled transform so the AR floor stays flat. After commit, the same tag stream provides continuous runtime correction when the tag is in view.
+The bridge solves `T_world_odom` so AR content stays registered to the robot. During calibration, Spectacles streams high-resolution stills plus camera pose over the WebSocket; the bridge runs AprilTag detection and PnP on those frames against the **robot-mounted** tag while the robot performs an assisted left/right baseline move. When enough stable observations accumulate, the bridge commits a gravity-leveled transform so the AR floor stays flat. After commit, the same robot-mounted tag continues to drive runtime correction from Spectacles frames, including translation updates when the robot is stationary and the tag is visible.
 
 Calibration requires a **printed robot-mounted tag**: a plain **70 mm × 70 mm** AprilTag 36h11 sticker (56 mm black square). Generate assets with:
 

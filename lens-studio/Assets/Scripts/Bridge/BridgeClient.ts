@@ -30,7 +30,6 @@ import { Signal } from "../Core/SignalEmitter";
 
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
-const PARSE_RECOVERY_COOLDOWN_S = 2.0;
 const PARSE_RECONNECT_THRESHOLD = 5;
 const FRAGMENT_REASSEMBLY_MAX_BYTES = 1_048_576;
 const SEND_DROP_LOG_INTERVAL_S = 1.0;
@@ -70,7 +69,6 @@ export class BridgeClient extends BaseScriptComponent {
   private isConnecting = false;
   private helloReceived = false;
   private _consecutiveParseFailures = 0;
-  private _lastParseRecoveryRequestTime = -PARSE_RECOVERY_COOLDOWN_S;
   private _reconnectScheduled = false;
   private _fragmentBuffer: string | null = null;
   private _activeRobotId: string | null = null;
@@ -429,11 +427,13 @@ export class BridgeClient extends BaseScriptComponent {
     if (typeof event.data !== "string") {
       return;
     }
-    const raw = event.data;
-    const payload = this._reassembleFragment(raw);
-    if (payload === null) {
-      return;
+    const lines = this._accumulateTextFrames(event.data);
+    for (const line of lines) {
+      this._dispatchTextMessage(line);
     }
+  }
+
+  private _dispatchTextMessage(payload: string): void {
     try {
       const msg = parseInboundMessage(payload);
       this._consecutiveParseFailures = 0;
@@ -493,44 +493,22 @@ export class BridgeClient extends BaseScriptComponent {
   }
 
   /**
-   * Spectacles may deliver a single JSON WebSocket frame across multiple onmessage
-   * callbacks. Continuation chunks do not start with `{`.
+   * Bridge text frames are newline-delimited (see PROTOCOL.md). Accumulate
+   * partial callbacks and return every complete line for dispatch.
    */
-  private _reassembleFragment(raw: string): string | null {
-    const trimmed = raw.trimStart();
-    if (trimmed.startsWith("{")) {
-      this._fragmentBuffer = raw;
-    } else if (this._fragmentBuffer !== null) {
-      const combined = this._fragmentBuffer + raw;
-      if (combined.length > FRAGMENT_REASSEMBLY_MAX_BYTES) {
-        print(
-          `BridgeClient: discarding oversized fragment buffer (${combined.length} bytes)`,
-        );
-        this._fragmentBuffer = null;
-        return null;
-      }
-      this._fragmentBuffer = combined;
-    } else {
-      return raw;
+  private _accumulateTextFrames(raw: string): string[] {
+    const combined = (this._fragmentBuffer ?? "") + raw;
+    if (combined.length > FRAGMENT_REASSEMBLY_MAX_BYTES) {
+      print(
+        `BridgeClient: discarding oversized text buffer (${combined.length} bytes)`,
+      );
+      this._fragmentBuffer = null;
+      return [];
     }
-
-    const candidate = this._fragmentBuffer;
-    if (candidate === null || !this._isCompleteJsonObject(candidate)) {
-      return null;
-    }
-    // BUG-4: clear the buffer as soon as we have a complete payload so that a
-    // subsequent schema-invalid parse error cannot poison the next fragment.
-    this._fragmentBuffer = null;
-    return candidate;
-  }
-
-  private _isCompleteJsonObject(text: string): boolean {
-    try {
-      const parsed = JSON.parse(text);
-      return typeof parsed === "object" && parsed !== null;
-    } catch (_error) {
-      return false;
-    }
+    const parts = combined.split("\n");
+    const tail = parts.pop() ?? "";
+    this._fragmentBuffer = tail.length > 0 ? tail : null;
+    return parts.filter((line) => line.length > 0);
   }
 
   private _handleParseFailure(raw: string, error: unknown): void {
@@ -549,6 +527,11 @@ export class BridgeClient extends BaseScriptComponent {
       (parseError.kind === "json" &&
         isNonCriticalInboundMessageType(sniffed));
 
+    if (parseError.kind === "json") {
+      // Newline framing recovers complete messages; resync would resend large paths.
+      return;
+    }
+
     if (nonCritical) {
       return;
     }
@@ -566,12 +549,6 @@ export class BridgeClient extends BaseScriptComponent {
       );
       this._scheduleReconnectAfterParseFailures();
       return;
-    }
-
-    const now = getTime();
-    if (now - this._lastParseRecoveryRequestTime >= PARSE_RECOVERY_COOLDOWN_S) {
-      this._lastParseRecoveryRequestTime = now;
-      this.requestStatus();
     }
   }
 

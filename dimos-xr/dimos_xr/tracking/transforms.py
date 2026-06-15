@@ -37,6 +37,7 @@ logger = setup_logger()
 _GRAVITY_WARN_INTERVAL_S: float = 30.0
 _gravity_warn_last_mono: float = 0.0
 _gravity_warn_lock = threading.Lock()
+_gravity_warn_diagnostic_emitted: bool = False
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -155,9 +156,17 @@ def gravity_level_transform(T: NDArray[np.float64]) -> NDArray[np.float64]:
         angle = math.acos(np.clip(dot, -1.0, 1.0))
 
     if angle > math.radians(15.0):
-        global _gravity_warn_last_mono
+        global _gravity_warn_diagnostic_emitted, _gravity_warn_last_mono
         now = time.monotonic()
         with _gravity_warn_lock:
+            if not _gravity_warn_diagnostic_emitted:
+                _gravity_warn_diagnostic_emitted = True
+                logger.warning(
+                    "gravity_level_transform diagnostic: translation=%s up_world=%s input_rotation=%s",
+                    np.array2string(translation, precision=3),
+                    np.array2string(up_world, precision=3),
+                    np.array2string(R, precision=3),
+                )
             if now - _gravity_warn_last_mono >= _GRAVITY_WARN_INTERVAL_S:
                 _gravity_warn_last_mono = now
                 logger.warning(
@@ -239,7 +248,7 @@ class Calibration:
             return np.array(self._T_world_odom, dtype=np.float64, copy=True)
 
     def register_from_alignment(self, T_world_odom: NDArray[np.float64]) -> None:
-        """Apply a precomputed world←odom transform from AprilTag dual detection.
+        """Apply a precomputed world<-odom transform from the alignment pipeline.
 
         Gravity-levels the transform to ensure the AR floor is perfectly planar.
         """
