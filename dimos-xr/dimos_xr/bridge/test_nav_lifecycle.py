@@ -13,7 +13,7 @@ import pytest
 from dimos_xr.bridge.navigation import NAV_GOAL_PATH_TIMEOUT_S, NavController
 from dimos_xr.bridge.odom_buffer import OdomBuffer
 from dimos_xr.bridge.sender import BridgeSender
-from dimos_xr.network.error_codes import NAV_GOAL_STALLED
+from dimos_xr.network.error_codes import CONTROL_RPC_TIMEOUT, NAV_GOAL_STALLED
 from dimos_xr.network.protocol import NavGoalMessage, encode_pose
 from dimos_xr.tracking.transforms import Calibration, pose_to_matrix
 
@@ -268,6 +268,25 @@ def test_emergency_stop_then_nav_goal_succeeds() -> None:
     nav._adapter.send_nav_goal.assert_called_once()
     assert nav._nav_goal_pending is True
     assert nav._nav_path_received is False
+
+
+def test_cancel_goal_timeout_marks_navigation_degraded() -> None:
+    nav, mock_server = _make_nav()
+
+    def slow_cancel() -> bool:
+        time.sleep(1.2)
+        return True
+
+    nav._adapter.cancel_goal.side_effect = slow_cancel
+    nav.on_cancel_goal(ts=3.0)
+    time.sleep(1.05)
+
+    assert nav._nav_degraded is True
+    assert nav._goal_failed is True
+    assert nav._nav_error_code == CONTROL_RPC_TIMEOUT.code
+    nav_status = _last_nav_status(mock_server)
+    assert nav_status["goal_failed"] is True
+    assert nav_status["error_code"] == CONTROL_RPC_TIMEOUT.code
 
 
 def test_on_navigation_state_idle_while_live_emits_recovery() -> None:

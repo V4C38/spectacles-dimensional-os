@@ -12,6 +12,7 @@ const LINE_WIDTH_CM = 1.5;
 const CORNER_FILLET_MAX_CM = 10.0;
 const CORNER_FILLET_ANGLE_DEG = 40.0;
 const CORNER_FILLET_SEGMENTS = 2;
+const PATH_REBUILD_POSITION_EPSILON_CM = 0.5;
 
 // InteractorLineMat shader mode 4: fade in at the start and fade out at the goal end.
 // (VisualStyle.FadedStart = start only, FadedEnd = end only; 4 is both — not in the TS enum.)
@@ -155,6 +156,8 @@ export class PathRenderer {
   private _startY: number | null = null;
   private _endY: number | null = null;
   private _style: PathRenderStyle = "executing";
+  private _lastRenderedPoints: vec3[] = [];
+  private _lastRenderedStyle: PathRenderStyle = "executing";
 
   constructor(parent: SceneObject) {
     // Create container with identity world transform so world-cm waypoints map 1:1 to mesh-local points
@@ -233,7 +236,14 @@ export class PathRenderer {
       return new vec3(p.x, y, p.z);
     });
 
+    if (this._matchesLastRendered(liftedPoints, style)) {
+      this.container.enabled = true;
+      return;
+    }
+
     this.lineRenderer.points = liftedPoints;
+    this._lastRenderedPoints = liftedPoints.map((p) => new vec3(p.x, p.y, p.z));
+    this._lastRenderedStyle = style;
     this.container.enabled = true;
   }
 
@@ -245,8 +255,21 @@ export class PathRenderer {
     if (this.lineRenderer) {
       this.lineRenderer.points = [];
     }
+    this._lastRenderedPoints = [];
     this.clearHeightRange();
     this.container.enabled = false;
+  }
+
+  private _matchesLastRendered(points: vec3[], style: PathRenderStyle): boolean {
+    if (this._lastRenderedStyle !== style || this._lastRenderedPoints.length !== points.length) {
+      return false;
+    }
+    for (let i = 0; i < points.length; i++) {
+      if (this._lastRenderedPoints[i].distance(points[i]) > PATH_REBUILD_POSITION_EPSILON_CM) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private _applyStyle(style: PathRenderStyle): void {

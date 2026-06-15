@@ -47,7 +47,12 @@ from dimos.utils.logging_config import setup_logger
 from dimos.utils.transform_utils import normalize_angle
 import numpy as np
 
-from dimos_xr.tracking.transforms import OdomSample, gravity_level_transform, pose_to_matrix
+from dimos_xr.tracking.transforms import (
+    OdomSample,
+    gravity_level_transform,
+    pose_to_matrix,
+    up_axis_angle_deg,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -266,6 +271,14 @@ class FrameResult:
 
 
 @dataclass
+class WorldAnchorObservation:
+    mono_ts: float
+    tag_id: int
+    T_world_tag: NDArray[np.float64]
+    quality: float
+
+
+@dataclass
 class TagTrackerConfig:
     max_reprojection_error_px: float = 3.0
     max_distance_m: float = 6.0
@@ -275,6 +288,8 @@ class TagTrackerConfig:
     innovation_gate_m: float = 1.5
     relocalize_cluster_m: float = 0.2
     relocalize_consecutive: int = 3
+    max_mount_residual_m: float = 0.5
+    max_up_axis_tilt_deg: float = 85.0
 
 
 class TagTracker:
@@ -284,13 +299,18 @@ class TagTracker:
         *,
         config: TagTrackerConfig | None = None,
         camera_info: CameraInfo | None = None,
+        world_anchor_tag_ids: list[int] | None = None,
+        world_anchor_size_m: float = TAG_BLACK_SIZE_M,
     ) -> None:
         self._mounts = {m.tag_id: m for m in mounts}
+        self._world_anchor_tag_ids = set(world_anchor_tag_ids or [])
+        self._world_anchor_size_m = world_anchor_size_m
         self._config = config or TagTrackerConfig()
         self._camera_info = camera_info
         self._detector = create_aruco_detector(DEFAULT_APRILTAG_DICT)
         self._lock = threading.RLock()
         self._observations: deque[TagObservation] = deque(maxlen=self._config.window_max_obs)
+        self._world_anchor_observations: deque[WorldAnchorObservation] = deque(maxlen=8)
         self._active = False
         self._last_tag_detected = False
         self._last_tag_ids: list[int] = []
@@ -311,6 +331,7 @@ class TagTracker:
     def reset_window(self) -> None:
         with self._lock:
             self._observations.clear()
+            self._world_anchor_observations.clear()
             self._last_tag_detected = False
             self._last_tag_ids = []
             self._last_quality = None
@@ -341,6 +362,12 @@ class TagTracker:
     def observation_count(self) -> int:
         with self._lock:
             return len(self._observations)
+
+    def consume_world_anchor_observations(self) -> list[WorldAnchorObservation]:
+        with self._lock:
+            observations = list(self._world_anchor_observations)
+            self._world_anchor_observations.clear()
+            return observations
 
     def _prune_old(self, now_mono: float) -> None:
         cutoff = now_mono - self._config.window_max_age_s
@@ -416,11 +443,12 @@ class TagTracker:
         for corners, tag_id_arr in zip(corners_list, ids, strict=False):
             tag_id = int(tag_id_arr[0])
             mount = mounts.get(tag_id)
-            if mount is None:
+            is_world_anchor = tag_id in self._world_anchor_tag_ids
+            if mount is None and not is_world_anchor:
                 continue
             pose = estimate_marker_pose(
                 corners,
-                mount.size_m,
+                mount.size_m if mount is not None else self._world_anchor_size_m,
                 camera_matrix,
                 dist_coeffs,
             )
@@ -429,7 +457,7 @@ class TagTracker:
             rvec, tvec = pose
             reproj = reprojection_error_px(
                 corners,
-                mount.size_m,
+                mount.size_m if mount is not None else self._world_anchor_size_m,
                 rvec,
                 tvec,
                 camera_matrix,
@@ -443,7 +471,22 @@ class TagTracker:
 
             T_camera_tag = _rvec_tvec_to_matrix(rvec, tvec)
             T_world_tag = T_world_glcam @ FLIP_YZ @ T_camera_tag
+            if is_world_anchor:
+                quality = max(0.0, min(1.0, 1.0 - reproj / self._config.max_reprojection_error_px))
+                with self._lock:
+                    self._world_anchor_observations.append(
+                        WorldAnchorObservation(
+                            mono_ts=recv_mono,
+                            tag_id=tag_id,
+                            T_world_tag=np.array(T_world_tag, dtype=np.float64, copy=True),
+                            quality=quality,
+                        )
+                    )
+                detected_ids.append(tag_id)
+                best_quality = max(best_quality, quality)
+                continue
             T_odom_tag = T_odom_base @ mount.T_base_tag
+            T_candidate_raw = T_world_tag @ np.linalg.inv(T_odom_tag)
             p_world = (
                 float(T_world_tag[0, 3]),
                 float(T_world_tag[1, 3]),
@@ -457,7 +500,20 @@ class TagTracker:
             quality = max(0.0, min(1.0, 1.0 - reproj / self._config.max_reprojection_error_px))
 
             if registered and T_committed is not None:
-                T_candidate = T_world_tag @ np.linalg.inv(T_odom_tag)
+                up_tilt_deg = up_axis_angle_deg(T_candidate_raw)
+                if up_tilt_deg > self._config.max_up_axis_tilt_deg:
+                    continue
+                measured_mount = self._measured_mount_position(
+                    T_world_tag=T_world_tag,
+                    T_odom_base=T_odom_base,
+                    T_world_odom=T_candidate_raw,
+                )
+                mount_residual = float(
+                    np.linalg.norm(measured_mount - np.asarray(mount.position, dtype=np.float64))
+                )
+                if mount_residual > self._config.max_mount_residual_m:
+                    continue
+                T_candidate = T_candidate_raw
                 T_candidate = gravity_level_transform(T_candidate)
                 implied_base = T_candidate @ T_odom_base
                 committed_base = T_committed @ T_odom_base
@@ -508,6 +564,20 @@ class TagTracker:
             quality=best_quality if detected_ids else None,
             observations_added=added,
         )
+
+    def _measured_mount_position(
+        self,
+        *,
+        T_world_tag: NDArray[np.float64],
+        T_odom_base: NDArray[np.float64],
+        T_world_odom: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        T_odom_world = np.linalg.inv(np.asarray(T_world_odom, dtype=np.float64))
+        T_odom_tag_meas = T_odom_world @ T_world_tag
+        p_odom_tag_meas = T_odom_tag_meas[:3, 3]
+        R_odom_base = T_odom_base[:3, :3]
+        p_odom_base = T_odom_base[:3, 3]
+        return R_odom_base.T @ (p_odom_tag_meas - p_odom_base)
 
     def current_solve(self, *, min_baseline_m: float | None = None) -> TagSolve | None:
         with self._lock:

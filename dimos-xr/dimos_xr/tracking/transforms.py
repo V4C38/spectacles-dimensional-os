@@ -50,6 +50,7 @@ __all__ = [
     "normalize_angle",
     "normalize_ground_pose",
     "pose_to_matrix",
+    "up_axis_angle_deg",
 ]
 
 WORLD_UP_AXIS_INDEX = 1
@@ -115,6 +116,19 @@ def normalize_ground_pose(
     yaw = math.atan2(float(-planar[2]), float(planar[0]))
     half_yaw = yaw * 0.5
     return position, (0.0, math.sin(half_yaw), 0.0, math.cos(half_yaw))
+
+
+def up_axis_angle_deg(T: NDArray[np.float64]) -> float:
+    """Return the angle between the transform's local +Z axis and world +Y."""
+    R = T[:3, :3]
+    up_world = R[:, 2]
+    up_norm = float(np.linalg.norm(up_world))
+    if up_norm < 1e-9:
+        return 90.0
+    up_world = up_world / up_norm
+    target_up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    dot = float(np.clip(np.dot(up_world, target_up), -1.0, 1.0))
+    return math.degrees(math.acos(dot))
 
 
 def gravity_level_transform(T: NDArray[np.float64]) -> NDArray[np.float64]:

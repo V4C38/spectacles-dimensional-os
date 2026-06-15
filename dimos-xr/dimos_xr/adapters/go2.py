@@ -66,7 +66,7 @@ GO2_DEFAULT_TAG_MOUNTS: list[TagMount] = [
     TagMount(
         tag_id=DEFAULT_MARKER_ID,
         size_m=0.056,
-        position=(0.0, 0.0, 0.07),
+        position=(0.18, 0.0, 0.06),
         orientation=_GO2_TAG_QUAT,
     ),
 ]

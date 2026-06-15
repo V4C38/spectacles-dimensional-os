@@ -5,10 +5,12 @@ import { quatFromMat4Rotation } from "../Core/MathUtils";
 const POSE_BUFFER_CAPACITY = 180;
 // Interval measured from pipeline END (ack or finally), guaranteeing idle GC time.
 const SETUP_CAPTURE_INTERVAL_S = 1.0;
-const RUNTIME_CAPTURE_INTERVAL_S = 1.0;
+const RUNTIME_CAPTURE_INTERVAL_S = 3.0;
 // Safety net only: ack clears _inFlight in the normal case.
 const IN_FLIGHT_TIMEOUT_S = 12.0;
 const MAX_HEAD_ANGULAR_VEL_DEG_S = 40.0;
+const RUNTIME_CAMERA_WINDOW_S = 1.25;
+const RUNTIME_CAMERA_MAX_DISTANCE_CM = 700.0;
 // Capture runs ~1/s; collapse the per-frame pipeline trace into a periodic summary.
 const PIPELINE_LOG_INTERVAL_S = 2.0;
 // Set to true to re-enable steady-state pipeline summary logs for deep debugging.
@@ -57,6 +59,7 @@ export class FrameCaptureController extends BaseScriptComponent {
   private _frameRegistration: EventRegistration | null = null;
   private _captureRequested = false;
   private _latestFrameTs = 0;
+  private _runtimeCameraWindowDeadline = 0;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
@@ -88,7 +91,12 @@ export class FrameCaptureController extends BaseScriptComponent {
       this._captureRequested = false;
       this._stopCameraStream();
     } else {
-      this._ensureCameraStream();
+      if (mode === "setup") {
+        this._ensureCameraStream();
+      } else {
+        this._runtimeCameraWindowDeadline = 0;
+        this._stopCameraStream();
+      }
     }
     // Reset pacing so the first capture in the new mode fires promptly
     // (within one interval), not after a potentially stale gap from the old mode.
@@ -154,11 +162,33 @@ export class FrameCaptureController extends BaseScriptComponent {
     if (this._mode === "off" || !this.bridgeClient?.isConnected()) {
       return;
     }
+    const now = getTime();
+    if (this._mode === "runtime") {
+      if (!this._shouldRunRuntimeCaptureWindow()) {
+        this._captureRequested = false;
+        if (!this._pipelineBusy && !this._inFlight) {
+          this._stopCameraStream();
+        }
+        return;
+      }
+      if (this._cameraTexture === null) {
+        this._runtimeCameraWindowDeadline = now + RUNTIME_CAMERA_WINDOW_S;
+        this._ensureCameraStream();
+      } else if (
+        this._runtimeCameraWindowDeadline > 0 &&
+        now >= this._runtimeCameraWindowDeadline &&
+        !this._captureRequested &&
+        !this._pipelineBusy &&
+        !this._inFlight
+      ) {
+        this._stopCameraStream();
+        return;
+      }
+    }
     // Hard guard: never start a new encode pipeline while one is still running.
     if (this._pipelineBusy) {
       return;
     }
-    const now = getTime();
     if (this._inFlight) {
       if (now - this._inFlightStart > IN_FLIGHT_TIMEOUT_S) {
         this._inFlight = false;
@@ -179,6 +209,21 @@ export class FrameCaptureController extends BaseScriptComponent {
     }
     // Signal the onNewFrame handler to grab the next available stream frame.
     this._captureRequested = true;
+    if (this._mode === "runtime") {
+      this._runtimeCameraWindowDeadline = now + RUNTIME_CAMERA_WINDOW_S;
+    }
+  }
+
+  private _shouldRunRuntimeCaptureWindow(): boolean {
+    if (this._mode !== "runtime") {
+      return true;
+    }
+    const robot = this._robotWorldPos;
+    if (!robot || !this.cameraObject) {
+      return true;
+    }
+    const cameraPos = this.cameraObject.getTransform().getWorldPosition();
+    return cameraPos.distance(robot) <= RUNTIME_CAMERA_MAX_DISTANCE_CM;
   }
 
   private _headAngularVelocityDegS(): number {

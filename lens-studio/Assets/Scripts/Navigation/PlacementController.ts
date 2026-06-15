@@ -310,16 +310,16 @@ export class PlacementController {
     if (this.visualState === "placing") {
       if (this.activeInteractor) {
         this._adjustPositionOnSurface();
-      } else {
-        this._snapCurrentPoseToSurface();
       }
-      this._maybeRebasePlacementAnchor();
-      this.renderer.interpolatePose(
-        this.desiredPosition,
-        this.renderer.getRotation(),
-        INTERPOLATION_SPEED,
-      );
-      this._emitPreviewTargetChanged(false);
+      if (this.isDragging && this.activeInteractor) {
+        this._maybeRebasePlacementAnchor();
+        this.renderer.interpolatePose(
+          this.desiredPosition,
+          this.renderer.getRotation(),
+          INTERPOLATION_SPEED,
+        );
+        this._emitPreviewTargetChanged(false);
+      }
     }
   }
 

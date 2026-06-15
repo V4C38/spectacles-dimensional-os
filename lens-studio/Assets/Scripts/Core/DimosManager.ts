@@ -77,6 +77,7 @@ export class DimosManager extends BaseScriptComponent {
 
   private _isActive = false;
   private _lastPose: PoseMessage | null = null;
+  private _pendingPose: PoseMessage | null = null;
   private readonly _poseCorrection = new ManualPoseCorrection();
   private readonly _uiLogger = new UILogger();
   private readonly _appState = new AppState({
@@ -101,6 +102,13 @@ export class DimosManager extends BaseScriptComponent {
   private _robotMenuView: RobotMenuView | null = null;
   private _nav: NavigationController | null = null;
   private _placementDeferralEvent: DelayedCallbackEvent | null = null;
+  private _lastPerfLogTime = 0;
+  private _frameSampleCount = 0;
+  private _frameSampleTotalDt = 0;
+  private _lastPerfMessageRxCount = 0;
+  private _lastPerfPoseRxCount = 0;
+  private _lastPerfPoseAppliedCount = 0;
+  private _poseAppliedCount = 0;
 
   // ── Setup preview state ───────────────────────────────────
   private _priorRuntimeMode: OperatingMode = "manual";
@@ -228,6 +236,7 @@ export class DimosManager extends BaseScriptComponent {
         getOperatingMode: () => this.operatingMode,
         getInteractionMode: () => this.appState.robotInteractionMode,
         syncNavigationPlacementState: () => this._nav?.syncPlacementState(),
+        onWorldPositionChanged: () => this._refreshRobotLidarAnchor(),
       });
       this.robotMarker.bindAppState((listener) => this.subscribeAppState(listener));
     }
@@ -252,14 +261,7 @@ export class DimosManager extends BaseScriptComponent {
     });
     this.bridgeClient.onPose.add((msg) => {
       this._lastPose = msg;
-      if (this._isActive && this.robotMarker) {
-        const resolved = this._poseCorrection.resolveDisplayPose(
-          msg,
-          this.appState.robotInteractionMode,
-        );
-        this.robotMarker.applyResolvedPose(resolved, msg);
-      }
-      this._refreshRobotLidarAnchor();
+      this._pendingPose = msg;
     });
     this.bridgeClient.onPath.add((msg) => this._nav?.applyPath(msg));
     this.bridgeClient.onPathPreview.add((msg) => this._nav?.applyPathPreview(msg));
@@ -277,7 +279,9 @@ export class DimosManager extends BaseScriptComponent {
     const lidarTickEvent = this.createEvent("UpdateEvent");
     lidarTickEvent.bind(() => {
       this._uiLogger.tick();
+      this._applyPendingPose();
       this._lidarTick();
+      this._tickPerformanceStats();
     });
     this._lidarSync();
   }
@@ -352,6 +356,7 @@ export class DimosManager extends BaseScriptComponent {
       } as any);
       this._applyRuntimeState(defaultRuntime);
       this._lastPose = null;
+      this._pendingPose = null;
       this._poseCorrection.onDisconnected();
       this.robotMarker?.resetRuntimePoseSmoothing();
     }
@@ -756,6 +761,63 @@ export class DimosManager extends BaseScriptComponent {
     }
     this._lidarMeshDirty = false;
     this.pointCloudRenderer?.renderPointCloud(this._lastLidarPoints);
+  }
+
+  private _applyPendingPose(): void {
+    const msg = this._pendingPose;
+    if (!msg) {
+      return;
+    }
+    this._pendingPose = null;
+    if (this._isActive && this.robotMarker) {
+      const resolved = this._poseCorrection.resolveDisplayPose(
+        msg,
+        this.appState.robotInteractionMode,
+      );
+      this.robotMarker.applyResolvedPose(resolved, msg);
+    }
+    this._poseAppliedCount++;
+  }
+
+  private _tickPerformanceStats(): void {
+    if (!this.debugMode) {
+      this._lastPerfLogTime = 0;
+      this._frameSampleCount = 0;
+      this._frameSampleTotalDt = 0;
+      this._lastPerfMessageRxCount = this.bridgeClient?.messageRxCount ?? 0;
+      this._lastPerfPoseRxCount = this.bridgeClient?.poseRxCount ?? 0;
+      this._lastPerfPoseAppliedCount = this._poseAppliedCount;
+      return;
+    }
+    const now = getTime();
+    this._frameSampleCount++;
+    this._frameSampleTotalDt += getDeltaTime();
+    if (this._lastPerfLogTime !== 0 && now - this._lastPerfLogTime < 30.0) {
+      return;
+    }
+    const elapsed = this._lastPerfLogTime === 0
+      ? Math.max(1 / 60, this._frameSampleTotalDt)
+      : Math.max(1 / 60, now - this._lastPerfLogTime);
+    const fps = this._frameSampleTotalDt > 0
+      ? this._frameSampleCount / this._frameSampleTotalDt
+      : 0;
+    const frameMs = this._frameSampleCount > 0
+      ? (this._frameSampleTotalDt / this._frameSampleCount) * 1000.0
+      : 0;
+    const messageRxCount = this.bridgeClient?.messageRxCount ?? 0;
+    const messageRxRate = (messageRxCount - this._lastPerfMessageRxCount) / elapsed;
+    const poseRxCount = this.bridgeClient?.poseRxCount ?? 0;
+    const poseRxRate = (poseRxCount - this._lastPerfPoseRxCount) / elapsed;
+    const poseApplyRate = (this._poseAppliedCount - this._lastPerfPoseAppliedCount) / elapsed;
+    print(
+      `DimosManager: perf fps=${fps.toFixed(1)} frameMs=${frameMs.toFixed(1)} msgRxHz=${messageRxRate.toFixed(1)} poseRxHz=${poseRxRate.toFixed(1)} poseApplyHz=${poseApplyRate.toFixed(1)}`,
+    );
+    this._lastPerfLogTime = now;
+    this._frameSampleCount = 0;
+    this._frameSampleTotalDt = 0;
+    this._lastPerfMessageRxCount = messageRxCount;
+    this._lastPerfPoseRxCount = poseRxCount;
+    this._lastPerfPoseAppliedCount = this._poseAppliedCount;
   }
 
   private _refreshRobotLidarAnchor(): void {

@@ -2,7 +2,7 @@ import { protocolMetersToLensCentimeters } from "../Bridge/Protocol";
 import { findChildRecursive } from "../UI/kit/UIKit";
 import { buildMockLidarPoints } from "./MockLidarPoints";
 
-const MAX_POINTS = 1500;
+const MAX_POINTS = 500;
 const POINT_SIZE_CM = 2.4;
 const DEFAULT_MIN_ABOVE_FLOOR_CM = 0.5;
 const DEFAULT_MAX_ABOVE_FLOOR_CM = 155;

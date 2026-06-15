@@ -82,7 +82,11 @@ class XRBridgeConfig(ModuleConfig):  # type: ignore[misc]
     tag_window_max_age_s: float = 120.0
     tag_smoothing_tau_s: float = 3.0
     tag_max_reprojection_error_px: float = 3.0
+    tag_max_mount_residual_m: float = 0.15
+    tag_max_up_axis_tilt_deg: float = 20.0
     runtime_correction_enabled: bool = True
+    world_anchor_tag_ids: list[int] = []
+    world_anchor_size_m: float = 0.056
 
 
 class XRBridge(Module):  # type: ignore[misc]
@@ -152,6 +156,8 @@ class XRBridge(Module):  # type: ignore[misc]
             min_baseline_m=self.config.tag_min_baseline_m,
             window_max_obs=self.config.tag_window_max_obs,
             window_max_age_s=self.config.tag_window_max_age_s,
+            max_mount_residual_m=self.config.tag_max_mount_residual_m,
+            max_up_axis_tilt_deg=self.config.tag_max_up_axis_tilt_deg,
         )
         alignment = AlignmentController(
             robot_id=robot_id,
@@ -167,6 +173,8 @@ class XRBridge(Module):  # type: ignore[misc]
             tag_smoothing_tau_s=self.config.tag_smoothing_tau_s,
             tf_publish_static=self.tf.publish_static,
             adapter=self._adapter,
+            world_anchor_tag_ids=self.config.world_anchor_tag_ids,
+            world_anchor_size_m=self.config.world_anchor_size_m,
         )
 
         nav = NavController(

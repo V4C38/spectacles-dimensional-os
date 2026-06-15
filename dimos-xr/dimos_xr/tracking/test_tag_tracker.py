@@ -389,6 +389,48 @@ def test_tag_tracker_window_ages_out_old_observations() -> None:
     assert tracker.observation_count() == 1
 
 
+def test_tag_tracker_rejects_large_mount_residual() -> None:
+    tracker = TagTracker(
+        [TagMount(tag_id=1, position=(0.18, 0.0, 0.06))],
+        config=TagTrackerConfig(max_mount_residual_m=0.15),
+    )
+    obs = tracker._measured_mount_position(
+        T_world_tag=np.eye(4, dtype=np.float64),
+        T_odom_base=np.eye(4, dtype=np.float64),
+        T_world_odom=build_T_world_odom(0.0, (0.0, 0.0, 0.0)),
+    )
+    assert np.allclose(obs, [0.0, 0.0, 0.0], atol=1e-9)
+    assert np.linalg.norm(obs - np.array([0.18, 0.0, 0.06])) > 0.15
+
+
+def test_tag_tracker_collects_world_anchor_observations() -> None:
+    tracker = TagTracker(
+        [TagMount(tag_id=99)],
+        config=TagTrackerConfig(max_reprojection_error_px=8.0),
+        world_anchor_tag_ids=[DEFAULT_MARKER_ID],
+    )
+    tracker.set_camera_info(_synthetic_camera_info())
+    header = {
+        "type": "camera_frame",
+        "robot_id": "unitree_go2",
+        "seq": 1,
+        "ts": 10.0,
+        "send_ts": 10.1,
+        "cam_pos": [0.0, 1.5, 0.0],
+        "cam_rot": [0.0, 0.0, 0.0, 1.0],
+    }
+    result = tracker.process_frame(
+        header,
+        _encode_marker_jpeg(),
+        lambda _ts: OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+        receive_mono=10.2,
+    )
+    assert result.tag_detected is True
+    anchors = tracker.consume_world_anchor_observations()
+    assert len(anchors) >= 1
+    assert anchors[0].tag_id == DEFAULT_MARKER_ID
+
+
 def test_build_T_world_odom_maps_odom_origin() -> None:
     T = build_T_world_odom(math.radians(90.0), (1.0, 2.0, 3.0))
     origin = T @ np.array([0.0, 0.0, 0.0, 1.0])

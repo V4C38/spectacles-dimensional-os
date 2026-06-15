@@ -41,6 +41,11 @@ const SEND_BINARY_LOG_INTERVAL_S = 2.0;
 // Set to true to re-enable steady-state binary + RX noise for deep debugging.
 const DEBUG_VERBOSE = false;
 
+interface PendingBinaryFrame {
+  blob: Blob;
+  socket: WebSocket | null;
+}
+
 /** WebSocket client to the DimOS AR bridge; parses inbound messages and sends alignment/navigation commands. */
 @component
 export class BridgeClient extends BaseScriptComponent {
@@ -82,7 +87,18 @@ export class BridgeClient extends BaseScriptComponent {
   private _lastBridgeStatusKey = "";
   private _lastNavStatusKey = "";
   private _capabilities: Record<string, CapabilityState> = {};
+  private _messageRxCount = 0;
   public lastBridgeStatus: BridgeStatusMessage | null = null;
+  private _pendingBinaryFrames: PendingBinaryFrame[] = [];
+  private _binaryDecodeRunning = false;
+
+  public get poseRxCount(): number {
+    return this._poseRxCount;
+  }
+
+  public get messageRxCount(): number {
+    return this._messageRxCount;
+  }
 
   // BUG-2: cached timer events (created once in onAwake, re-armed per use).
   private _connectTimeoutEvent: DelayedCallbackEvent | null = null;
@@ -248,6 +264,8 @@ export class BridgeClient extends BaseScriptComponent {
         print(`BridgeClient: socket closed code=${(event as unknown as { code?: number }).code ?? "?"} reason="${(event as unknown as { reason?: string }).reason ?? ""}"`);
         this.ws = null;
         this._fragmentBuffer = null;
+        this._pendingBinaryFrames = [];
+        this._binaryDecodeRunning = false;
         this.helloReceived = false;
         this._activeRobotId = null;
         this._capabilities = {};
@@ -272,6 +290,8 @@ export class BridgeClient extends BaseScriptComponent {
       this.ws = null;
     }
     this._fragmentBuffer = null;
+    this._pendingBinaryFrames = [];
+    this._binaryDecodeRunning = false;
     this.isConnecting = false;
     this.helloReceived = false;
     this._activeRobotId = null;
@@ -405,23 +425,14 @@ export class BridgeClient extends BaseScriptComponent {
   }
 
   private _onMessage(event: WebSocketMessageEvent): void {
+    this._messageRxCount++;
     // Spectacles delivers binary WebSocket frames as Blob (arraybuffer unsupported).
     if (event.data instanceof Blob) {
-      const socket = this.ws;
-      event.data
-        .bytes()
-        .then((bytes: Uint8Array) => {
-          if (this.ws !== socket) {
-            return;
-          }
-          const msg = parseLidarBinary(bytes, this._activeRobotId ?? "");
-          if (msg) {
-            this.onLidar.emit(msg);
-          }
-        })
-        .catch((e: unknown) => {
-          print(`BridgeClient: binary frame decode failed: ${e}`);
-        });
+      this._pendingBinaryFrames.push({
+        blob: event.data,
+        socket: this.ws,
+      });
+      this._pumpBinaryFrames();
       return;
     }
     if (typeof event.data !== "string") {
@@ -430,6 +441,38 @@ export class BridgeClient extends BaseScriptComponent {
     const lines = this._accumulateTextFrames(event.data);
     for (const line of lines) {
       this._dispatchTextMessage(line);
+    }
+  }
+
+  private async _pumpBinaryFrames(): Promise<void> {
+    if (this._binaryDecodeRunning) {
+      return;
+    }
+    this._binaryDecodeRunning = true;
+    try {
+      while (this._pendingBinaryFrames.length > 0) {
+        const frame = this._pendingBinaryFrames.shift();
+        if (!frame) {
+          continue;
+        }
+        try {
+          const bytes = await frame.blob.bytes();
+          if (this.ws !== frame.socket) {
+            continue;
+          }
+          const msg = parseLidarBinary(bytes, this._activeRobotId ?? "");
+          if (msg) {
+            this.onLidar.emit(msg);
+          }
+        } catch (e: unknown) {
+          print(`BridgeClient: binary frame decode failed: ${e}`);
+        }
+      }
+    } finally {
+      this._binaryDecodeRunning = false;
+      if (this._pendingBinaryFrames.length > 0) {
+        this._pumpBinaryFrames();
+      }
     }
   }
 

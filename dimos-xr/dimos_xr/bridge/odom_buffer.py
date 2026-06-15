@@ -13,6 +13,8 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from dimos_xr.tracking.transforms import Calibration, OdomSample
 
 if TYPE_CHECKING:
@@ -92,6 +94,64 @@ class OdomBuffer:
             return result
         with self._lock:
             return self._latest
+
+    def at_interpolated(self, mono_ts: float) -> OdomSample | None:
+        """Return an interpolated sample near ``mono_ts`` when the gap is acceptable."""
+        with self._lock:
+            if not self._buffer:
+                return self._latest
+            if len(self._buffer) == 1:
+                ts, sample = self._buffer[0]
+                return sample if abs(ts - mono_ts) <= ODOM_LOOKUP_MAX_GAP_S else None
+
+            before: tuple[float, OdomSample] | None = None
+            after: tuple[float, OdomSample] | None = None
+            for ts, sample in self._buffer:
+                if ts <= mono_ts:
+                    before = (ts, sample)
+                    continue
+                after = (ts, sample)
+                break
+
+            if before is None:
+                first_ts, first_sample = self._buffer[0]
+                return first_sample if abs(first_ts - mono_ts) <= ODOM_LOOKUP_MAX_GAP_S else None
+            if after is None:
+                last_ts, last_sample = self._buffer[-1]
+                return last_sample if abs(last_ts - mono_ts) <= ODOM_LOOKUP_MAX_GAP_S else None
+
+            before_ts, before_sample = before
+            after_ts, after_sample = after
+            if (
+                abs(mono_ts - before_ts) > ODOM_LOOKUP_MAX_GAP_S
+                and abs(after_ts - mono_ts) > ODOM_LOOKUP_MAX_GAP_S
+            ):
+                return None
+            span = after_ts - before_ts
+            if span <= 1e-6:
+                return before_sample
+            alpha = max(0.0, min(1.0, (mono_ts - before_ts) / span))
+
+            before_pos = np.asarray(before_sample.position, dtype=np.float64)
+            after_pos = np.asarray(after_sample.position, dtype=np.float64)
+            pos = before_pos + alpha * (after_pos - before_pos)
+
+            before_quat = np.asarray(before_sample.orientation, dtype=np.float64)
+            after_quat = np.asarray(after_sample.orientation, dtype=np.float64)
+            if float(np.dot(before_quat, after_quat)) < 0.0:
+                after_quat = -after_quat
+            quat = before_quat + alpha * (after_quat - before_quat)
+            quat_norm = float(np.linalg.norm(quat))
+            if quat_norm < 1e-12:
+                quat_out = before_sample.orientation
+            else:
+                quat /= quat_norm
+                quat_out = (float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3]))
+
+            return OdomSample(
+                position=(float(pos[0]), float(pos[1]), float(pos[2])),
+                orientation=quat_out,
+            )
 
     def latest_world_position(self, calibration: Calibration) -> tuple[float, float, float] | None:
         """Transform the latest odom position into the AR world frame."""

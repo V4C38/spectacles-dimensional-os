@@ -93,13 +93,20 @@ class AlignmentController:
         tag_smoothing_tau_s: float,
         tf_publish_static: Callable[[Transform], None],
         adapter: XRRobotAdapterSpec | None = None,
+        world_anchor_tag_ids: list[int] | None = None,
+        world_anchor_size_m: float = 0.056,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
         self._calibration = calibration
         self._odom = odom
         self._status = status
-        self._tag_tracker = TagTracker(tag_mounts, config=tracker_config)
+        self._tag_tracker = TagTracker(
+            tag_mounts,
+            config=tracker_config,
+            world_anchor_tag_ids=world_anchor_tag_ids,
+            world_anchor_size_m=world_anchor_size_m,
+        )
         self._frame_max_age_s = frame_max_age_s
         self._manual_alignment_quality = manual_alignment_quality
         self._runtime_correction_enabled = runtime_correction_enabled
@@ -115,6 +122,7 @@ class AlignmentController:
         self._pending_candidate: AlignmentCandidate | None = None
         self._pending_candidate_ts: float | None = None
         self._session_method: Literal["tag", "manual"] | None = None  # None = no session
+        self._world_anchor_refs: dict[int, np.ndarray] = {}
 
         self._manual_pose_first_logged: bool = False
         self._last_manual_inactive_log_mono: float = 0.0
@@ -320,11 +328,12 @@ class AlignmentController:
             T_committed = self._T_committed
             if registered and T_committed is None:
                 T_committed = self._calibration.current_transform()
-            # Use strict odom lookup (within 250 ms window) when registered, because
-            # the robot may be moving and the odom timestamp must be accurate.
+            # Use interpolated odom lookup when registered so runtime tag corrections
+            # are aligned to the actual capture timestamp instead of dropping frames
+            # that land between buffered odom samples.
             # Use the relaxed at_or_latest lookup when not yet registered (alignment),
             # because the robot is stationary and a slightly stale pose is fine.
-            odom_lookup = self._odom.at if registered else self._odom.at_or_latest
+            odom_lookup = self._odom.at_interpolated if registered else self._odom.at_or_latest
             # Surface a visible stall to the Lens if no odom has ever arrived.
             if self._odom.latest() is None:
                 self._broadcast_align_status(
@@ -623,6 +632,10 @@ class AlignmentController:
             return
         if not self._calibration.is_registered or not self._runtime_correction_enabled:
             return
+        anchor_solve = self._apply_world_anchor_correction()
+        if anchor_solve is not None:
+            self._commit_runtime_correction(anchor_solve)
+            return
         solve = self._tag_tracker.current_solve()
         if solve is None:
             T_reference = self._T_committed
@@ -685,9 +698,50 @@ class AlignmentController:
                 yaw_blend, (float(t_blend[0]), float(t_blend[1]), float(t_blend[2]))
             )
             T_new = gravity_level_transform(T_new)
-        self._T_committed = T_new
-        self._last_smooth_mono = now
-        self._calibration.register_from_alignment(T_new)
+        self._commit_runtime_correction(T_new, now=now)
+
+    def _apply_world_anchor_correction(self) -> np.ndarray | None:
+        observations = self._tag_tracker.consume_world_anchor_observations()
+        if not observations:
+            return None
+        T_current = self._T_committed
+        if T_current is None:
+            T_current = self._calibration.current_transform()
+        if T_current is None:
+            return None
+        candidates: list[np.ndarray] = []
+        weights: list[float] = []
+        for observation in observations:
+            ref = self._world_anchor_refs.get(observation.tag_id)
+            if ref is None:
+                self._world_anchor_refs[observation.tag_id] = np.array(
+                    observation.T_world_tag,
+                    dtype=np.float64,
+                    copy=True,
+                )
+                continue
+            delta = ref @ np.linalg.inv(observation.T_world_tag)
+            candidate = gravity_level_transform(delta @ T_current)
+            if not np.all(np.isfinite(candidate)):
+                continue
+            candidates.append(candidate)
+            weights.append(max(observation.quality, 1e-3))
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        weight_arr = np.asarray(weights, dtype=np.float64)
+        weight_arr /= np.sum(weight_arr)
+        translations = np.stack([candidate[:3, 3] for candidate in candidates], axis=0)
+        mean_translation = np.sum(translations * weight_arr[:, np.newaxis], axis=0)
+        reference = np.array(candidates[-1], dtype=np.float64, copy=True)
+        reference[:3, 3] = mean_translation
+        return gravity_level_transform(reference)
+
+    def _commit_runtime_correction(self, T_world_odom: np.ndarray, *, now: float | None = None) -> None:
+        self._T_committed = np.array(T_world_odom, dtype=np.float64, copy=True)
+        self._last_smooth_mono = time.monotonic() if now is None else now
+        self._calibration.register_from_alignment(self._T_committed)
 
     def _compute_progress(self, state: str) -> int:
         """Return a 0-100 progress integer for the current step."""

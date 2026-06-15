@@ -41,7 +41,8 @@ const PREVIEW_TAIL_BLEND_POINTS = 3;
 const PREVIEW_DIRTY_DISTANCE_CM = 5.0;
 const PREVIEW_STALE_TARGET_DISTANCE_CM = 12.0;
 const NAV_STATUS_STALE_TIMEOUT_S = 8.0;
-const NAV_STATUS_RESYNC_COOLDOWN_S = 2.0;
+const NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S = 2.0;
+const NAV_STATUS_RESYNC_MAX_COOLDOWN_S = 8.0;
 const NAV_STATUS_LOCAL_RECOVERY_S = 16.0;
 const NAVIGATION_OUTCOME_FLASH_S = 1.5;
 
@@ -56,7 +57,8 @@ export class NavigationController {
   private _previewDirty = false;
   private _lastPreviewRequestTime = -PREVIEW_INTERVAL_S;
   private _lastNavStatusTime = -NAV_STATUS_STALE_TIMEOUT_S;
-  private _lastNavStatusResyncTime = -NAV_STATUS_RESYNC_COOLDOWN_S;
+  private _lastNavStatusResyncTime = -NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S;
+  private _navStatusResyncCooldownS = NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S;
   private _navExecutingSince = -NAV_STATUS_STALE_TIMEOUT_S;
   /** Bridge broadcasts idle until the first executing path; ignore idle reconcile meanwhile. */
   private _awaitingPathHandoff = false;
@@ -309,6 +311,7 @@ export class NavigationController {
     this._placementEnabled = false;
     this._clearPathHandoff();
     this._navGoalActive = false;
+    this._navStatusResyncCooldownS = NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S;
     this._placement?.stop();
     this._resetPreviewState();
     this._pathRenderer?.clear();
@@ -341,6 +344,7 @@ export class NavigationController {
 
   private _applyNavStatusInner(msg: NavStatusMessage): string {
     this._lastNavStatusTime = getTime();
+    this._navStatusResyncCooldownS = NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S;
 
     if (this._reconcileResyncedNavStatus(msg)) {
       return "Recovered";
@@ -429,8 +433,12 @@ export class NavigationController {
     if (elapsed < NAV_STATUS_STALE_TIMEOUT_S) {
       return "ok";
     }
-    if (now - this._lastNavStatusResyncTime >= NAV_STATUS_RESYNC_COOLDOWN_S) {
+    if (now - this._lastNavStatusResyncTime >= this._navStatusResyncCooldownS) {
       this._lastNavStatusResyncTime = now;
+      this._navStatusResyncCooldownS = Math.min(
+        this._navStatusResyncCooldownS * 2.0,
+        NAV_STATUS_RESYNC_MAX_COOLDOWN_S,
+      );
       return "request_resync";
     }
     if (now - this._navExecutingSince >= NAV_STATUS_LOCAL_RECOVERY_S) {

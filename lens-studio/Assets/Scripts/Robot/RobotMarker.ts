@@ -60,6 +60,7 @@ export class RobotMarker extends BaseScriptComponent {
   private _uiLogger: UILogger | null = null;
   private _uiLogEntry: UILogEntry | null = null;
   private _rotation = quat.quatIdentity();
+  private _lastNotifiedWorldPosition: vec3 | null = null;
 
   // ── Presenter deps (injected via initialize) ───────────────────
   private _poseCorrection: ManualPoseCorrection | null = null;
@@ -69,6 +70,7 @@ export class RobotMarker extends BaseScriptComponent {
   private _getOperatingMode: (() => OperatingMode) | null = null;
   private _getInteractionMode: (() => RobotInteractionMode) | null = null;
   private _syncNavPlacement: (() => void) | null = null;
+  private _onWorldPositionChanged: ((position: vec3) => void) | null = null;
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
       this._configureVisuals();
@@ -80,6 +82,7 @@ export class RobotMarker extends BaseScriptComponent {
       } else if (this._runtimeTrackingActive) {
         this._tickRuntimePoseSmoothing();
       }
+      this._notifyWorldPositionIfMoved();
       this._syncMenuWorldAnchor();
     });
     this.createEvent("OnDestroyEvent").bind(() => {
@@ -107,6 +110,7 @@ export class RobotMarker extends BaseScriptComponent {
     getOperatingMode: () => OperatingMode;
     getInteractionMode: () => RobotInteractionMode;
     syncNavigationPlacementState: () => void;
+    onWorldPositionChanged?: (position: vec3) => void;
   }): void {
     this._poseCorrection = deps.poseCorrection;
     this._uiLogger = deps.uiLogger;
@@ -116,6 +120,7 @@ export class RobotMarker extends BaseScriptComponent {
     this._getOperatingMode = deps.getOperatingMode;
     this._getInteractionMode = deps.getInteractionMode;
     this._syncNavPlacement = deps.syncNavigationPlacementState;
+    this._onWorldPositionChanged = deps.onWorldPositionChanged ?? null;
     this._unsubscribeUILog?.();
     this._unsubscribeUILog = this._uiLogger.subscribe((entry) =>
       this._applyUILogEntry(entry),
@@ -242,6 +247,7 @@ export class RobotMarker extends BaseScriptComponent {
     }
     if (!visible) {
       this.resetRuntimePoseSmoothing();
+      this._lastNotifiedWorldPosition = null;
     }
     if (this._menuRoot && visible) {
       this._menuRoot.enabled = visible;
@@ -332,6 +338,7 @@ export class RobotMarker extends BaseScriptComponent {
     this.markerRoot.getTransform().setWorldPosition(position);
     this.setRotation(rotation);
     this._syncMenuWorldAnchor();
+    this._notifyWorldPositionChanged(position);
   }
 
   public syncRotationFromScene(): void {
@@ -508,6 +515,29 @@ export class RobotMarker extends BaseScriptComponent {
       alpha,
     );
     this.setRotation(nextRotation);
+  }
+
+  private _notifyWorldPositionIfMoved(): void {
+    if (!this.markerRoot) {
+      return;
+    }
+    this._notifyWorldPositionChanged(
+      this.markerRoot.getTransform().getWorldPosition(),
+    );
+  }
+
+  private _notifyWorldPositionChanged(position: vec3): void {
+    if (!this._onWorldPositionChanged) {
+      return;
+    }
+    if (
+      this._lastNotifiedWorldPosition &&
+      this._lastNotifiedWorldPosition.distance(position) < 0.01
+    ) {
+      return;
+    }
+    this._lastNotifiedWorldPosition = new vec3(position.x, position.y, position.z);
+    this._onWorldPositionChanged(this._lastNotifiedWorldPosition);
   }
 
   private _syncMenuWorldAnchor(): void {

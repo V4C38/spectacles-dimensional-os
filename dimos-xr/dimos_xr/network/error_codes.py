@@ -78,6 +78,15 @@ CAMERA_INFO_MISSING = BridgeError(
     fix="Reconnect Spectacles to the bridge and retry calibration.",
 )
 
+CONTROL_RPC_TIMEOUT = BridgeError(
+    code=508,
+    description=(
+        "A robot control RPC stopped responding, so the bridge could not confirm "
+        "cancel-goal or emergency-stop control health."
+    ),
+    fix="Use the robot's hardware/controller stop path, then restart the robot and bridge (./start.sh).",
+)
+
 BRIDGE_ERRORS: dict[int, BridgeError] = {
     error.code: error
     for error in (
@@ -90,5 +99,6 @@ BRIDGE_ERRORS: dict[int, BridgeError] = {
         NAV_GOAL_STALLED,
         CAMERA_CAPTURE_FAILED,
         CAMERA_INFO_MISSING,
+        CONTROL_RPC_TIMEOUT,
     )
 }
