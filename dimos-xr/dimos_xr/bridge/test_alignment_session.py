@@ -40,7 +40,7 @@ from dimos_xr.tracking.tag_tracker import (
     _yaw_from_T,
     build_T_world_odom,
 )
-from dimos_xr.tracking.transforms import Calibration
+from dimos_xr.tracking.transforms import Calibration, OdomSample
 
 
 def _make_controller(*, with_adapter: bool = False) -> tuple[AlignmentController, list[str]]:
@@ -76,7 +76,6 @@ def _make_controller(*, with_adapter: bool = False) -> tuple[AlignmentController
         frame_max_age_s=1.0,
         manual_alignment_quality=0.7,
         runtime_correction_enabled=False,
-        tag_smoothing_tau_s=1.0,
         tf_publish_static=MagicMock(),
         adapter=adapter,
     )
@@ -392,7 +391,6 @@ def _make_controller_with_correction() -> tuple[AlignmentController, list[str]]:
         frame_max_age_s=1.0,
         manual_alignment_quality=0.7,
         runtime_correction_enabled=True,
-        tag_smoothing_tau_s=1.0,
         tf_publish_static=MagicMock(),
     )
     return ctrl, sent
@@ -428,7 +426,7 @@ def test_runtime_smoothing_preserves_heading() -> None:
 
 def test_runtime_translation_solve_corrects_stationary_robot() -> None:
     """When baseline solve is unavailable, runtime translation solve must still update."""
-    ctrl, _ = _make_controller_with_correction()
+    ctrl, sent = _make_controller_with_correction()
 
     theta = math.radians(20.0)
     T_committed = build_T_world_odom(theta, (0.0, 0.0, 0.0))
@@ -450,8 +448,49 @@ def test_runtime_translation_solve_corrects_stationary_robot() -> None:
 
     committed_yaw = _yaw_from_T(ctrl._T_committed)
     assert committed_yaw == pytest.approx(theta, abs=1e-6)
-    assert ctrl._T_committed[0, 3] == pytest.approx(0.65, abs=1e-6)
-    assert ctrl._T_committed[2, 3] == pytest.approx(-0.65, abs=1e-6)
+    assert ctrl._T_committed[0, 3] == pytest.approx(1.0, abs=1e-6)
+    assert ctrl._T_committed[2, 3] == pytest.approx(-1.0, abs=1e-6)
+    pose_corrections = [
+        json.loads(payload)
+        for payload in sent
+        if json.loads(payload).get("type") == "pose_correction"
+    ]
+    assert len(pose_corrections) == 1
+    assert pose_corrections[0]["solve_method"] == "tag_translation"
+
+
+def test_runtime_correction_emits_fresh_pose_for_stationary_robot() -> None:
+    """A runtime correction must push an updated pose even without new odom traffic."""
+    ctrl, sent = _make_controller_with_correction()
+
+    theta = math.radians(20.0)
+    T_committed = build_T_world_odom(theta, (0.0, 0.0, 0.0))
+    ctrl._T_committed = np.array(T_committed, dtype=np.float64, copy=True)
+    ctrl._calibration.register_from_alignment(T_committed)
+    ctrl._odom._latest = OdomSample(  # type: ignore[attr-defined]
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+
+    T_target = build_T_world_odom(theta, (1.0, 0.0, -1.0))
+    solve = TagSolve(
+        T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
+        method="tag_translation",
+        quality=0.95,
+        observation_count=1,
+        baseline_m=0.0,
+    )
+    ctrl._tag_tracker.current_solve = MagicMock(return_value=None)  # type: ignore[method-assign]
+    ctrl._tag_tracker.current_translation_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
+
+    ctrl._apply_tracker_update(ts=123.456)
+
+    payloads = [json.loads(m) for m in sent]
+    pose_payloads = [m for m in payloads if m["type"] == "pose"]
+    assert pose_payloads, "runtime correction should emit an immediate pose snapshot"
+    latest_pose = pose_payloads[-1]
+    assert latest_pose["ts"] == pytest.approx(123.456, abs=1e-3)
+    assert latest_pose["position"] == pytest.approx([1.0, 0.0, -1.0], abs=1e-4)
 
 
 # ---------------------------------------------------------------------------
@@ -487,7 +526,6 @@ def test_clear_session_does_not_emit_stage_change() -> None:
         frame_max_age_s=1.0,
         manual_alignment_quality=0.7,
         runtime_correction_enabled=False,
-        tag_smoothing_tau_s=1.0,
         tf_publish_static=MagicMock(),
         adapter=adapter,
     )
@@ -547,7 +585,6 @@ def test_finish_alignment_terminal_status_is_last(
         frame_max_age_s=1.0,
         manual_alignment_quality=0.7,
         runtime_correction_enabled=False,
-        tag_smoothing_tau_s=1.0,
         tf_publish_static=MagicMock(),
         adapter=adapter,
     )
@@ -616,7 +653,6 @@ def test_failed_path_terminal_status_is_last(
         frame_max_age_s=1.0,
         manual_alignment_quality=0.7,
         runtime_correction_enabled=False,
-        tag_smoothing_tau_s=1.0,
         tf_publish_static=MagicMock(),
         adapter=adapter,
     )

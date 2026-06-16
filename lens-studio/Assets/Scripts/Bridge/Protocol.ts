@@ -79,6 +79,17 @@ export interface PoseMessage {
   orientation: [number, number, number, number];
 }
 
+export interface PoseCorrectionMessage {
+  type: "pose_correction";
+  ts: number;
+  robot_id: string;
+  trans_delta_m: number;
+  yaw_delta_deg?: number;
+  yaw_corrected: boolean;
+  solve_quality: number;
+  solve_method: "tag" | "tag_translation";
+}
+
 /**
  * v4: simplified align_status — method, state, progress, message, tag_visible.
  * "ready" = has candidate; "aligned" = committed successfully.
@@ -152,6 +163,7 @@ export type InboundMessage =
   | HelloMessage
   | LidarMessage
   | PoseMessage
+  | PoseCorrectionMessage
   | AlignStatusMessage
   | CameraFrameAckMessage
   | BridgeStatusMessage
@@ -189,7 +201,11 @@ export function sniffInboundMessageType(text: string): string | null {
 export function isNonCriticalInboundMessageType(
   messageType: string | null,
 ): boolean {
-  return messageType === "lidar" || messageType === "pose";
+  return (
+    messageType === "lidar" ||
+    messageType === "pose" ||
+    messageType === "pose_correction"
+  );
 }
 
 function unflattenVec3(flat: number[]): [number, number, number][] {
@@ -469,6 +485,29 @@ function parseInboundObject(
         position: parseVec3(data.position),
         orientation: [Number(q[0]), Number(q[1]), Number(q[2]), Number(q[3])],
       };
+    }
+
+    case "pose_correction": {
+      const solveMethod = data.solve_method;
+      if (solveMethod !== "tag" && solveMethod !== "tag_translation") {
+        print(
+          `Protocol: unknown pose_correction.solve_method "${solveMethod}"; skipping`,
+        );
+        return null;
+      }
+      const msg: PoseCorrectionMessage = {
+        type: "pose_correction",
+        ts: requireNumber(data, "ts"),
+        robot_id: requireString(data, "robot_id"),
+        trans_delta_m: requireNumber(data, "trans_delta_m"),
+        yaw_corrected: Boolean(data.yaw_corrected),
+        solve_quality: requireNumber(data, "solve_quality"),
+        solve_method: solveMethod,
+      };
+      if (typeof data.yaw_delta_deg === "number") {
+        msg.yaw_delta_deg = data.yaw_delta_deg;
+      }
+      return msg;
     }
 
     case "path": {

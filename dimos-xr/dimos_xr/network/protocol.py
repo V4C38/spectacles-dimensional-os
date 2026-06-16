@@ -448,6 +448,30 @@ def encode_pose(
     )
 
 
+def encode_pose_correction(
+    *,
+    ts: float | None,
+    robot_id: str,
+    trans_delta_m: float,
+    yaw_delta_deg: float | None,
+    yaw_corrected: bool,
+    solve_quality: float,
+    solve_method: str,
+) -> str:
+    payload: dict[str, Any] = {
+        "type": "pose_correction",
+        "ts": round(ts, 3) if ts is not None else time.time(),
+        "robot_id": robot_id,
+        "trans_delta_m": round(float(trans_delta_m), 4),
+        "yaw_corrected": yaw_corrected,
+        "solve_quality": round(float(solve_quality), 4),
+        "solve_method": solve_method,
+    }
+    if yaw_delta_deg is not None:
+        payload["yaw_delta_deg"] = round(float(yaw_delta_deg), 3)
+    return _dumps(payload)
+
+
 def encode_path(
     *,
     ts: float,

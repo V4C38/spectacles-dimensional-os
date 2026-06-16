@@ -8,6 +8,7 @@ import {
   NavStatusMessage,
   PathMessage,
   PathPreviewMessage,
+  PoseCorrectionMessage,
   PoseMessage,
   buildAlignCommit,
   buildAlignManualPose,
@@ -61,6 +62,7 @@ export class BridgeClient extends BaseScriptComponent {
   public readonly onHello = new Signal<HelloMessage>();
   public readonly onLidar = new Signal<LidarMessage>();
   public readonly onPose = new Signal<PoseMessage>();
+  public readonly onPoseCorrection = new Signal<PoseCorrectionMessage>();
   public readonly onAlignStatus = new Signal<AlignStatusMessage>();
   public readonly onCameraFrameAck = new Signal<CameraFrameAckMessage>();
   public readonly onBridgeStatus = new Signal<BridgeStatusMessage>();
@@ -499,6 +501,10 @@ export class BridgeClient extends BaseScriptComponent {
           this._adoptRobotId(msg.robot_id);
           this._logPoseRx(msg);
           this.onPose.emit(msg);
+          break;
+        case "pose_correction":
+          this._adoptRobotId(msg.robot_id);
+          this.onPoseCorrection.emit(msg);
           break;
         case "align_status":
           this._adoptRobotId(msg.robot_id);

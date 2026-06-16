@@ -12,6 +12,10 @@ import { AlignmentSession } from "../Alignment/AlignmentSession";
 import { DimosManager } from "../Core/DimosManager";
 import { AlignStatusMessage, BridgeStatusMessage } from "../Bridge/Protocol";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE,COLOR_WARN, SnapOS2Styles } from "../UI/kit/UIKit";
+import {
+  buildAssistPreviewPresentation,
+  isAssistPreviewStage,
+} from "./AssistPreviewPresentation";
 
 // ── Step / calibration types ───────────────────────────────────
 
@@ -60,7 +64,7 @@ export interface CalibrationDisplayModel {
 export const WIZARD_STEP_TITLES: string[] = [
   "Start Robot & Bridge",
   "Connect",
-  "Calibrate",
+  "Calibration",
 ];
 
 export const CALIBRATE_DESCRIPTION_AUTO =
@@ -114,15 +118,6 @@ export function isCalibrationFailed(state: CalibrationViewState): boolean {
 
 // ── Display builders ───────────────────────────────────────────
 
-const PROGRESS_BAR_WIDTH = 12;
-
-export function buildAsciiProgressBar(pct: number, width: number = PROGRESS_BAR_WIDTH): string {
-  const clamped = Math.max(0, Math.min(100, Math.round(pct)));
-  const filled = Math.round((clamped / 100) * width);
-  const empty = Math.max(0, width - filled);
-  return `[${"█".repeat(filled)}${"░".repeat(empty)}] ${clamped}%`;
-}
-
 export function buildCalibrationDisplay(
   state: CalibrationViewState,
   _hasBridgeConnection: boolean,
@@ -148,12 +143,29 @@ export function buildCalibrationDisplay(
       ? { text: "✅  Tag visible", color: COLOR_SUCCESS }
       : { text: "❌  Tag not visible", color: COLOR_ERROR };
 
+    if (isAssistPreviewStage(state.assistStage)) {
+      const presentation = buildAssistPreviewPresentation({
+        assistStage: state.assistStage,
+        progress: state.progress,
+        tagVisible: state.tagVisible,
+      });
+      return {
+        statusText: presentation.titleText,
+        statusColor: COLOR_WHITE,
+        detailText: presentation.statusText,
+        detailColor: presentation.statusColor,
+      };
+    }
+
     let detailText: string;
     if (state.stepIndex !== undefined && state.stepCount !== undefined) {
       const label = state.stepIndex === 1 ? "Pre-alignment" : "Calibration";
-      detailText = `Step ${state.stepIndex}/${state.stepCount}: ${label}  ${buildAsciiProgressBar(state.progress)}`;
+      detailText = `Step ${state.stepIndex}/${state.stepCount}: ${label} (${Math.max(
+        0,
+        Math.min(100, Math.round(state.progress)),
+      )}%)`;
     } else {
-      detailText = buildAsciiProgressBar(state.progress);
+      detailText = `Calibrating: ${Math.max(0, Math.min(100, Math.round(state.progress)))}%`;
     }
     return {
       statusText: tagStatus.text,

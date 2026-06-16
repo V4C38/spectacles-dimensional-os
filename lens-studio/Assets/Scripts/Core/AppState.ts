@@ -89,6 +89,16 @@ export interface RobotRuntimeState {
   capabilities: Record<string, RuntimeCapabilityState>;
 }
 
+export interface DriftState {
+  isDrifting: boolean;
+  transDeltaM: number;
+  yawDeltaDeg: number | null;
+  yawCorrected: boolean;
+  solveQuality: number;
+  solveMethod: "tag" | "tag_translation" | null;
+  lastUpdateTs: number | null;
+}
+
 export interface DimosAppState {
   phase: AppPhase;
   debugMode: boolean;
@@ -102,6 +112,7 @@ export interface DimosAppState {
   navigationOutcome: NavigationOutcome;
   bridgeLinkState: BridgeLinkState;
   robotRuntime: RobotRuntimeState;
+  driftState: DriftState;
 }
 
 export type AppStateListener = (state: DimosAppState) => void;
@@ -147,10 +158,15 @@ function cloneRobotRuntime(state: RobotRuntimeState): RobotRuntimeState {
   };
 }
 
+function cloneDriftState(state: DriftState): DriftState {
+  return { ...state };
+}
+
 function cloneState(state: DimosAppState): DimosAppState {
   return {
     ...state,
     robotRuntime: cloneRobotRuntime(state.robotRuntime),
+    driftState: cloneDriftState(state.driftState),
   };
 }
 
@@ -222,6 +238,18 @@ export function createDefaultRobotRuntimeState(): RobotRuntimeState {
     defaultRenderOffsetM: null,
     alignmentProfile: null,
     capabilities,
+  };
+}
+
+export function createDefaultDriftState(): DriftState {
+  return {
+    isDrifting: false,
+    transDeltaM: 0.0,
+    yawDeltaDeg: null,
+    yawCorrected: false,
+    solveQuality: 0.0,
+    solveMethod: null,
+    lastUpdateTs: null,
   };
 }
 

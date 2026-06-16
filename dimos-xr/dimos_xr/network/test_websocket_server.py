@@ -141,6 +141,23 @@ def test_binary_camera_frame_parses_for_handler_dispatch() -> None:
     assert parsed_jpeg == jpeg
 
 
+def test_binary_camera_frame_rejects_null_timestamp() -> None:
+    header = {
+        "type": "camera_frame",
+        "robot_id": "unitree_go2",
+        "seq": 3,
+        "ts": None,
+        "send_ts": 1.1,
+        "cam_pos": [0.0, 0.0, 0.0],
+        "cam_rot": [0.0, 0.0, 0.0, 1.0],
+    }
+    jpeg = b"\xff\xd8\xff\xd9"
+    header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    payload = CAMERA_FRAME_MAGIC + struct.pack("<I", len(header_bytes)) + header_bytes + jpeg
+    with pytest.raises(ValueError, match="camera_frame invalid ts"):
+        parse_camera_frame(payload)
+
+
 def test_coalesce_message_types_cover_streams() -> None:
     assert COALESCE_MESSAGE_TYPES == frozenset(
         {

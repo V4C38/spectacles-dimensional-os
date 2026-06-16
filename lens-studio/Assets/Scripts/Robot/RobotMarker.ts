@@ -21,6 +21,8 @@ import { UILogEntry, UILogger } from "../Core/UILogger";
 const ROBOT_UI_WORLD_UP_OFFSET_CM = 15.0;
 const POSITION_DEADBAND_CM = 0.75;
 const ROTATION_DEADBAND_RAD = (1.0 * Math.PI) / 180.0;
+const POSITION_SNAP_CM = 0.2;
+const ROTATION_SNAP_RAD = (0.25 * Math.PI) / 180.0;
 const RUNTIME_POSE_SMOOTHING_RATE = 14.0;
 const REFINED_TRACKING_LOG_TEXT = "- Refined Tracking -";
 const REFINED_TRACKING_LOG_DURATION_S = 0.5;
@@ -239,6 +241,14 @@ export class RobotMarker extends BaseScriptComponent {
     this.markerRoot.enabled = true;
     this.frameCapture?.setRobotWorldPosition(position);
     this._applyRuntimePose(position, rotation);
+  }
+
+  public notifyAlignmentUpdated(): void {
+    this._uiLogger?.show(
+      REFINED_TRACKING_LOG_TEXT,
+      COLOR_WHITE,
+      REFINED_TRACKING_LOG_DURATION_S,
+    );
   }
 
   public setVisible(visible: boolean): void {
@@ -474,13 +484,6 @@ export class RobotMarker extends BaseScriptComponent {
       desiredRotation.z,
     );
     this._runtimeTrackingActive = true;
-    if (this._debugMode) {
-      this._uiLogger?.show(
-        REFINED_TRACKING_LOG_TEXT,
-        COLOR_WHITE,
-        REFINED_TRACKING_LOG_DURATION_S,
-      );
-    }
 
     if (snapImmediate) {
       this.setPose(position, desiredRotation);
@@ -501,14 +504,27 @@ export class RobotMarker extends BaseScriptComponent {
       return;
     }
 
-    const alpha = 1.0 - Math.exp(-RUNTIME_POSE_SMOOTHING_RATE * dt);
     const transform = this.markerRoot.getTransform();
     const currentPosition = transform.getWorldPosition();
+    const currentRotation = this.getRotation() ?? quat.quatIdentity();
+    const positionDelta = vec3Distance(currentPosition, this._runtimeTargetPosition);
+    const rotationDelta = quatAngularDistanceRad(
+      currentRotation,
+      this._runtimeTargetRotation,
+    );
+    if (
+      positionDelta <= POSITION_SNAP_CM &&
+      rotationDelta <= ROTATION_SNAP_RAD
+    ) {
+      this.setPose(this._runtimeTargetPosition, this._runtimeTargetRotation);
+      return;
+    }
+
+    const alpha = 1.0 - Math.exp(-RUNTIME_POSE_SMOOTHING_RATE * dt);
     const targetPosition = this._runtimeTargetPosition;
     const nextPosition = vec3.lerp(currentPosition, targetPosition, alpha);
     transform.setWorldPosition(nextPosition);
 
-    const currentRotation = this.getRotation() ?? quat.quatIdentity();
     const nextRotation = quat.slerp(
       currentRotation,
       this._runtimeTargetRotation,

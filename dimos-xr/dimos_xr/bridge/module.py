@@ -80,7 +80,6 @@ class XRBridgeConfig(ModuleConfig):  # type: ignore[misc]
     tag_min_baseline_m: float = 0.15
     tag_window_max_obs: int = 40
     tag_window_max_age_s: float = 120.0
-    tag_smoothing_tau_s: float = 3.0
     tag_max_reprojection_error_px: float = 3.0
     tag_max_mount_residual_m: float = 0.15
     tag_max_up_axis_tilt_deg: float = 20.0
@@ -170,7 +169,6 @@ class XRBridge(Module):  # type: ignore[misc]
             frame_max_age_s=self.config.frame_max_age_s,
             manual_alignment_quality=self.config.manual_alignment_quality,
             runtime_correction_enabled=self.config.runtime_correction_enabled,
-            tag_smoothing_tau_s=self.config.tag_smoothing_tau_s,
             tf_publish_static=self.tf.publish_static,
             adapter=self._adapter,
             world_anchor_tag_ids=self.config.world_anchor_tag_ids,

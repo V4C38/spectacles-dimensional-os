@@ -2,17 +2,21 @@ import { BridgeClient } from "../Bridge/BridgeClient";
 import { buildCameraFrameBytes, buildCameraInfo, CameraFrameAckMessage } from "../Bridge/Protocol";
 import { quatFromMat4Rotation } from "../Core/MathUtils";
 
-const POSE_BUFFER_CAPACITY = 180;
+const POSE_BUFFER_CAPACITY = 360;
 // Interval measured from pipeline END (ack or finally), guaranteeing idle GC time.
 const SETUP_CAPTURE_INTERVAL_S = 1.0;
 const RUNTIME_CAPTURE_INTERVAL_S = 3.0;
 // Safety net only: ack clears _inFlight in the normal case.
 const IN_FLIGHT_TIMEOUT_S = 12.0;
 const MAX_HEAD_ANGULAR_VEL_DEG_S = 40.0;
-const RUNTIME_CAMERA_WINDOW_S = 1.25;
 const RUNTIME_CAMERA_MAX_DISTANCE_CM = 700.0;
+const RUNTIME_STILL_WIDTH = 3200;
+const RUNTIME_STILL_HEIGHT = 2400;
 // Capture runs ~1/s; collapse the per-frame pipeline trace into a periodic summary.
 const PIPELINE_LOG_INTERVAL_S = 2.0;
+const STILL_TIMING_LOG_INTERVAL_S = 1.0;
+const MAX_STILL_WINDOW_ANGULAR_DELTA_DEG = 3.0;
+const MAX_STILL_WINDOW_LINEAR_DELTA_CM = 5.0;
 // Set to true to re-enable steady-state pipeline summary logs for deep debugging.
 const DEBUG_VERBOSE = false;
 
@@ -22,6 +26,16 @@ interface PoseSample {
   t: number;
   position: vec3;
   rotation: quat;
+}
+
+interface StillCaptureTimestampResolution {
+  captureTs: number;
+  source: "frame_timestamp_seconds" | "frame_timestamp_millis" | "midpoint_fallback";
+}
+
+interface HeadMotionWindow {
+  angularDeg: number;
+  linearCm: number;
 }
 
 @component
@@ -52,6 +66,9 @@ export class FrameCaptureController extends BaseScriptComponent {
   private _sentCameraInfo = false;
   private _onCaptureError: ((message: string) => void) | null = null;
   private _lastPipelineLogTime = 0;
+  private _lastStillTimingLogTime = 0;
+  private _runtimeStillErrorLogged = false;
+  private _runtimeStillTimestampFallbackLogged = false;
 
   // Camera-stream state
   private _cameraTexture: Texture | null = null;
@@ -59,7 +76,6 @@ export class FrameCaptureController extends BaseScriptComponent {
   private _frameRegistration: EventRegistration | null = null;
   private _captureRequested = false;
   private _latestFrameTs = 0;
-  private _runtimeCameraWindowDeadline = 0;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
@@ -85,16 +101,19 @@ export class FrameCaptureController extends BaseScriptComponent {
     }
     print(`FrameCaptureController: mode ${this._mode} -> ${mode}`);
     this._mode = mode;
+    this._captureRequested = false;
+    this._sentCameraInfo = false;
+    this._lastStillTimingLogTime = 0;
+    this._runtimeStillErrorLogged = false;
+    this._runtimeStillTimestampFallbackLogged = false;
     if (mode === "off") {
       this._inFlight = false;
       this._inFlightSeq = -1;
-      this._captureRequested = false;
       this._stopCameraStream();
     } else {
       if (mode === "setup") {
         this._ensureCameraStream();
       } else {
-        this._runtimeCameraWindowDeadline = 0;
         this._stopCameraStream();
       }
     }
@@ -163,27 +182,8 @@ export class FrameCaptureController extends BaseScriptComponent {
       return;
     }
     const now = getTime();
-    if (this._mode === "runtime") {
-      if (!this._shouldRunRuntimeCaptureWindow()) {
-        this._captureRequested = false;
-        if (!this._pipelineBusy && !this._inFlight) {
-          this._stopCameraStream();
-        }
-        return;
-      }
-      if (this._cameraTexture === null) {
-        this._runtimeCameraWindowDeadline = now + RUNTIME_CAMERA_WINDOW_S;
-        this._ensureCameraStream();
-      } else if (
-        this._runtimeCameraWindowDeadline > 0 &&
-        now >= this._runtimeCameraWindowDeadline &&
-        !this._captureRequested &&
-        !this._pipelineBusy &&
-        !this._inFlight
-      ) {
-        this._stopCameraStream();
-        return;
-      }
+    if (this._mode === "runtime" && !this._shouldRunRuntimeCaptureWindow()) {
+      return;
     }
     // Hard guard: never start a new encode pipeline while one is still running.
     if (this._pipelineBusy) {
@@ -207,11 +207,14 @@ export class FrameCaptureController extends BaseScriptComponent {
     if (this._headAngularVelocityDegS() > MAX_HEAD_ANGULAR_VEL_DEG_S) {
       return;
     }
-    // Signal the onNewFrame handler to grab the next available stream frame.
-    this._captureRequested = true;
-    if (this._mode === "runtime") {
-      this._runtimeCameraWindowDeadline = now + RUNTIME_CAMERA_WINDOW_S;
+    if (this._mode === "setup") {
+      // Signal the onNewFrame handler to grab the next available stream frame.
+      this._captureRequested = true;
+      return;
     }
+    this._captureStill().catch((err) => {
+      print("FrameCaptureController: still capture error: " + String(err));
+    });
   }
 
   private _shouldRunRuntimeCaptureWindow(): boolean {
@@ -296,48 +299,18 @@ export class FrameCaptureController extends BaseScriptComponent {
     if (!robotId || !this._deviceCamera) {
       return;
     }
-    this._pipelineBusy = true;
-    this._inFlight = true;
-    this._inFlightStart = getTime();
-    const seq = ++this._seq;
-    this._inFlightSeq = seq;
+    const seq = this._beginPipeline();
     const pipelineStart = getTime();
     try {
-      const pose = this._lookupPose(captureTs);
-      if (!pose) {
-        this._inFlight = false;
-        this._inFlightSeq = -1;
-        return;
-      }
-      const camPose = this._cameraWorldPose(pose);
-      if (!this._sentCameraInfo) {
-        this._sendCameraInfo(texture);
-      }
-      const jpegBytes = await this._encodeJpeg(texture);
-      const bytes = buildCameraFrameBytes({
+      await this._sendCapturedFrame({
+        texture,
+        captureTs,
         robotId,
         seq,
-        ts: captureTs,
-        sendTs: getTime(),
-        camPos: camPose.position,
-        camRot: camPose.rotation,
-        jpegBytes,
+        pipelineStart,
       });
-      this.bridgeClient.sendBinary(bytes);
-      if (DEBUG_VERBOSE) {
-        const now = getTime();
-        if (now - this._lastPipelineLogTime >= PIPELINE_LOG_INTERVAL_S) {
-          this._lastPipelineLogTime = now;
-          const pipelineMs = Math.round((now - pipelineStart) * 1000);
-          print(
-            `FrameCaptureController: seq=${seq} pipeline=${pipelineMs}ms jpeg=${jpegBytes.byteLength}B`,
-          );
-        }
-      }
     } catch (error) {
-      this._inFlight = false;
-      this._inFlightSeq = -1;
-      this._lastPipelineEndTime = getTime();
+      this._finishPipelineWithoutAck(seq);
       const message = String(error);
       if (this._onCaptureError) {
         this._onCaptureError(message);
@@ -346,6 +319,221 @@ export class FrameCaptureController extends BaseScriptComponent {
     } finally {
       this._pipelineBusy = false;
     }
+  }
+
+  private async _captureStill(): Promise<void> {
+    const robotId = this.bridgeClient?.activeRobotId;
+    if (!robotId || !this._deviceCamera) {
+      return;
+    }
+    const seq = this._beginPipeline();
+    const pipelineStart = getTime();
+    try {
+      const request = CameraModule.createImageRequest();
+      request.resolution = new vec2(RUNTIME_STILL_WIDTH, RUNTIME_STILL_HEIGHT);
+      const requestStartTs = getTime();
+      const imageFrame = await this._cameraModule.requestImage(request);
+      const resolveTs = getTime();
+      const timestampResolution = this._resolveStillCaptureTimestamp(
+        imageFrame,
+        requestStartTs,
+        resolveTs,
+      );
+      const headMotionWindow = this._measureHeadMotionWindow(
+        requestStartTs,
+        resolveTs,
+      );
+      const droppedForMotion = this._shouldDropStillForHeadMotion(
+        headMotionWindow,
+      );
+      this._maybeLogStillTiming({
+        latencyMs: Math.round((resolveTs - requestStartTs) * 1000.0),
+        headMotionWindow,
+        captureTsSource: timestampResolution.source,
+        droppedForMotion,
+      });
+      if (droppedForMotion) {
+        this._finishPipelineWithoutAck(seq);
+        return;
+      }
+      await this._sendCapturedFrame({
+        texture: imageFrame.texture,
+        captureTs: timestampResolution.captureTs,
+        robotId,
+        seq,
+        pipelineStart,
+      });
+    } catch (error) {
+      this._finishPipelineWithoutAck(seq);
+      const message = String(error);
+      if (!this._runtimeStillErrorLogged) {
+        this._runtimeStillErrorLogged = true;
+        print("FrameCaptureController: runtime still capture unavailable: " + message);
+        if (this._onCaptureError) {
+          this._onCaptureError(message);
+        }
+      }
+    } finally {
+      this._pipelineBusy = false;
+    }
+  }
+
+  private _beginPipeline(): number {
+    this._pipelineBusy = true;
+    this._inFlight = true;
+    this._inFlightStart = getTime();
+    const seq = ++this._seq;
+    this._inFlightSeq = seq;
+    return seq;
+  }
+
+  private _finishPipelineWithoutAck(seq: number): void {
+    if (this._inFlightSeq === seq) {
+      this._inFlight = false;
+      this._inFlightSeq = -1;
+    }
+    this._lastPipelineEndTime = getTime();
+  }
+
+  private async _sendCapturedFrame(args: {
+    texture: Texture;
+    captureTs: number;
+    robotId: string;
+    seq: number;
+    pipelineStart: number;
+  }): Promise<void> {
+    if (!Number.isFinite(args.captureTs)) {
+      throw new Error("non-finite capture timestamp");
+    }
+    const pose = this._lookupPose(args.captureTs);
+    if (!pose) {
+      this._finishPipelineWithoutAck(args.seq);
+      return;
+    }
+    const camPose = this._cameraWorldPose(pose);
+    if (!this._sentCameraInfo) {
+      this._sendCameraInfo(args.texture);
+    }
+    const jpegBytes = await this._encodeJpeg(args.texture);
+    const bytes = buildCameraFrameBytes({
+      robotId: args.robotId,
+      seq: args.seq,
+      ts: args.captureTs,
+      sendTs: getTime(),
+      camPos: camPose.position,
+      camRot: camPose.rotation,
+      jpegBytes,
+    });
+    this.bridgeClient.sendBinary(bytes);
+    if (DEBUG_VERBOSE) {
+      const now = getTime();
+      if (now - this._lastPipelineLogTime >= PIPELINE_LOG_INTERVAL_S) {
+        this._lastPipelineLogTime = now;
+        const pipelineMs = Math.round((now - args.pipelineStart) * 1000);
+        print(
+          `FrameCaptureController: seq=${args.seq} pipeline=${pipelineMs}ms jpeg=${jpegBytes.byteLength}B`,
+        );
+      }
+    }
+  }
+
+  private _resolveStillCaptureTimestamp(
+    imageFrame: ImageFrame,
+    requestStartTs: number,
+    resolveTs: number,
+  ): StillCaptureTimestampResolution {
+    const frameWithTimestamp = imageFrame as ImageFrame & {
+      timestampMillis?: unknown;
+      timestampSeconds?: unknown;
+    };
+    const rawTimestampSeconds = frameWithTimestamp.timestampSeconds;
+    if (
+      typeof rawTimestampSeconds === "number" &&
+      Number.isFinite(rawTimestampSeconds) &&
+      rawTimestampSeconds > 0
+    ) {
+      return {
+        captureTs: rawTimestampSeconds,
+        source: "frame_timestamp_seconds",
+      };
+    }
+    const rawTimestampMillis = frameWithTimestamp.timestampMillis;
+    if (
+      typeof rawTimestampMillis === "number" &&
+      Number.isFinite(rawTimestampMillis) &&
+      rawTimestampMillis > 0
+    ) {
+      return {
+        captureTs: rawTimestampMillis / 1000,
+        source: "frame_timestamp_millis",
+      };
+    }
+    // Some Spectacles builds expose ImageFrame.texture but not a usable
+    // timestamp field. In that case the midpoint of the still-request window is
+    // the best available capture-time estimate to keep pose lookup and bridge
+    // headers closer to the actual photo time.
+    if (!this._runtimeStillTimestampFallbackLogged) {
+      this._runtimeStillTimestampFallbackLogged = true;
+      print(
+        "FrameCaptureController: ImageFrame timestamp unavailable; using still request midpoint fallback",
+      );
+    }
+    return {
+      captureTs: (requestStartTs + resolveTs) * 0.5,
+      source: "midpoint_fallback",
+    };
+  }
+
+  private _measureHeadMotionWindow(
+    startTs: number,
+    endTs: number,
+  ): HeadMotionWindow | null {
+    const startPose = this._lookupPose(startTs);
+    const endPose = this._lookupPose(endTs);
+    if (!startPose || !endPose) {
+      return null;
+    }
+    const dot = Math.abs(startPose.rotation.dot(endPose.rotation));
+    const clampedDot = Math.min(1, Math.max(0, dot));
+    const angleRad = 2 * Math.acos(clampedDot);
+    return {
+      angularDeg: (angleRad * 180.0) / Math.PI,
+      linearCm: startPose.position.distance(endPose.position),
+    };
+  }
+
+  private _shouldDropStillForHeadMotion(
+    headMotionWindow: HeadMotionWindow | null,
+  ): boolean {
+    return headMotionWindow !== null && (
+      headMotionWindow.angularDeg > MAX_STILL_WINDOW_ANGULAR_DELTA_DEG ||
+      headMotionWindow.linearCm > MAX_STILL_WINDOW_LINEAR_DELTA_CM
+    );
+  }
+
+  private _maybeLogStillTiming(args: {
+    latencyMs: number;
+    headMotionWindow: HeadMotionWindow | null;
+    captureTsSource: StillCaptureTimestampResolution["source"];
+    droppedForMotion: boolean;
+  }): void {
+    const now = getTime();
+    if (
+      this._lastStillTimingLogTime !== 0 &&
+      now - this._lastStillTimingLogTime < STILL_TIMING_LOG_INTERVAL_S
+    ) {
+      return;
+    }
+    this._lastStillTimingLogTime = now;
+    const headAngularText = args.headMotionWindow
+      ? args.headMotionWindow.angularDeg.toFixed(2)
+      : "n/a";
+    const headLinearText = args.headMotionWindow
+      ? args.headMotionWindow.linearCm.toFixed(2)
+      : "n/a";
+    print(
+      `FrameCaptureController: stillWindow latencyMs=${args.latencyMs} headAngularDeg=${headAngularText} headLinearCm=${headLinearText} captureTsSource=${args.captureTsSource} dropped=${args.droppedForMotion}`,
+    );
   }
 
   private _sendCameraInfo(frameTexture: Texture): void {

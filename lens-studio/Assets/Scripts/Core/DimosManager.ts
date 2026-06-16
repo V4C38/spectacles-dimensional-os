@@ -14,6 +14,7 @@ import {
   AppState,
   AppStateListener,
   BridgeLinkState,
+  createDefaultDriftState,
   createDefaultRobotRuntimeState,
   DimosAppState,
   LidarDisplayMode,
@@ -27,6 +28,7 @@ import {
 import {
   BridgeStatusMessage,
   deriveLinkState,
+  PoseCorrectionMessage,
   PoseMessage,
   protocolMetersToLensCentimeters,
 } from "../Bridge/Protocol";
@@ -38,8 +40,16 @@ import {
   capabilityUnavailableReason,
 } from "./RobotRuntime";
 import { UILogListener, UILogger } from "./UILogger";
+import { findChildRecursive } from "../UI/kit/UIKit";
+import {
+  buildAssistPreviewPresentation,
+  isAssistMoveStage,
+  isAssistPreviewStage,
+} from "../Setup/AssistPreviewPresentation";
 
 const WorldQueryModule = require("LensStudio:WorldQueryModule");
+const DRIFTING_TRANSLATION_THRESHOLD_M = 0.05;
+const POSE_CORRECTION_LOG_INTERVAL_S = 1.0;
 
 /** Scene-root orchestrator wiring bridge I/O, alignment, rendering, navigation, and robot menu after setup completes. */
 @component
@@ -93,6 +103,7 @@ export class DimosManager extends BaseScriptComponent {
     navRuntimeErrorCode: null,
     bridgeLinkState: "disconnected",
     robotRuntime: createDefaultRobotRuntimeState(),
+    driftState: createDefaultDriftState(),
   } as any);
 
   // ── Inlined LidarFeed state ────────────────────────────────────
@@ -109,12 +120,16 @@ export class DimosManager extends BaseScriptComponent {
   private _lastPerfPoseRxCount = 0;
   private _lastPerfPoseAppliedCount = 0;
   private _poseAppliedCount = 0;
+  private _lastPoseCorrectionLogTime = 0;
 
   // ── Setup preview state ───────────────────────────────────
   private _priorRuntimeMode: OperatingMode = "manual";
   private _setupPreviewActive = false;
   private _setupPreviewOnAbort: (() => void) | null = null;
-  private _setupDiscPulse = false;
+  private _setupDiscAnchorInitialized = false;
+  private _setupDiscLeftArrow: SceneObject | null = null;
+  private _setupDiscRightArrow: SceneObject | null = null;
+  private _setupPreviewMoveLeg = -1;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
@@ -263,6 +278,9 @@ export class DimosManager extends BaseScriptComponent {
       this._lastPose = msg;
       this._pendingPose = msg;
     });
+    this.bridgeClient.onPoseCorrection.add((msg) =>
+      this._applyPoseCorrection(msg)
+    );
     this.bridgeClient.onPath.add((msg) => this._nav?.applyPath(msg));
     this.bridgeClient.onPathPreview.add((msg) => this._nav?.applyPathPreview(msg));
     this.bridgeClient.onNavStatus.add((msg) => this._nav?.applyNavStatus(msg));
@@ -291,10 +309,40 @@ export class DimosManager extends BaseScriptComponent {
     this._nav?.cancelOutcome();
     this._setAppState({
       robotRuntime: runtimeState,
+      driftState: createDefaultDriftState(),
       navRuntimeErrorCode: null,
       navigationOutcome: "none",
     } as any);
     this._applyRuntimeState(runtimeState);
+  }
+
+  private _applyPoseCorrection(msg: PoseCorrectionMessage): void {
+    this._setAppState({
+      driftState: {
+        isDrifting: msg.trans_delta_m > DRIFTING_TRANSLATION_THRESHOLD_M,
+        transDeltaM: msg.trans_delta_m,
+        yawDeltaDeg:
+          typeof msg.yaw_delta_deg === "number" ? msg.yaw_delta_deg : null,
+        yawCorrected: msg.yaw_corrected,
+        solveQuality: msg.solve_quality,
+        solveMethod: msg.solve_method,
+        lastUpdateTs: msg.ts,
+      },
+    });
+    const now = getTime();
+    if (
+      this._lastPoseCorrectionLogTime === 0 ||
+      now - this._lastPoseCorrectionLogTime >= POSE_CORRECTION_LOG_INTERVAL_S
+    ) {
+      this._lastPoseCorrectionLogTime = now;
+      const yawDeltaText = typeof msg.yaw_delta_deg === "number"
+        ? msg.yaw_delta_deg.toFixed(2)
+        : "n/a";
+      print(
+        `DimosManager: pose_correction transDeltaM=${msg.trans_delta_m.toFixed(3)} yawDeltaDeg=${yawDeltaText} yawCorrected=${msg.yaw_corrected} solveQuality=${msg.solve_quality.toFixed(3)} solveMethod=${msg.solve_method}`,
+      );
+    }
+    this.robotMarker?.notifyAlignmentUpdated();
   }
 
   private _applyRuntimeState(state: RobotRuntimeState): void {
@@ -544,11 +592,9 @@ export class DimosManager extends BaseScriptComponent {
       this._robotMenuView.onContinueRequested = () =>
         this.alignmentSession?.confirmAssist();
     }
+    this._resetSetupPreviewVisualState();
     // Hide marker, disc, and menu until we have a pose (shown in updateSetupAlignmentPreview)
     this.robotMarker?.setVisible(false);
-    if (this.groundDisc) {
-      this.groundDisc.enabled = false;
-    }
     this._robotMenuView?.setMenuVisible(false);
   }
 
@@ -564,26 +610,16 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     const { worldPose, assistStage, progress, tagVisible } = data;
-    const showPreview = (assistStage === "awaiting_confirm" || assistStage === "move") && !!worldPose;
+    const previewStageActive = isAssistPreviewStage(assistStage);
+    const showMarker = previewStageActive && !!worldPose;
     const wasMenuVisible = this._robotMenuView?.isMenuVisible() ?? false;
 
-    if (showPreview && worldPose) {
+    if (showMarker && worldPose) {
       const pos = new vec3(worldPose.position[0] * 100, worldPose.position[1] * 100, worldPose.position[2] * 100);
       const rot = new quat(worldPose.orientation[3], worldPose.orientation[0], worldPose.orientation[1], worldPose.orientation[2]);
       this.robotMarker?.setVisible(true);
-      this.robotMarker?.setPose(pos, rot);
-
-      if (this.groundDisc) {
-        const floorY = robotFloorWorldYCm(pos.y, this.appState.robotRuntime);
-        this.groundDisc.enabled = true;
-        const discTransform = this.groundDisc.getTransform();
-        discTransform.setWorldPosition(new vec3(pos.x, floorY, pos.z));
-        // Pulse disc during motion legs, static during holds/confirm
-        const pulsing = assistStage === "move";
-        if (pulsing !== this._setupDiscPulse) {
-          this._setupDiscPulse = pulsing;
-        }
-      }
+      this.robotMarker?.applyRuntimeLensPose(pos, rot);
+      this._updateSetupDiscPreview(pos, assistStage, progress);
 
       // Show menu on first transition into preview-visible state (P1 → P2)
       if (!wasMenuVisible) {
@@ -591,25 +627,26 @@ export class DimosManager extends BaseScriptComponent {
       }
     } else {
       this.robotMarker?.setVisible(false);
-      if (this.groundDisc) {
-        this.groundDisc.enabled = false;
-      }
+      this._updateSetupDiscPreview(null, assistStage, progress);
     }
 
     // Update menu: action swap by stage
-    const inMove = assistStage === "move";
+    const inMove = isAssistMoveStage(assistStage);
     this._robotMenuView?.setSetupWizardMenuVisible(assistStage === "awaiting_confirm");
     this._robotMenuView?.setContinueVisible(assistStage === "awaiting_confirm");
     this._robotMenuView?.setSetupStopVisible(inMove);
-
-    this._robotMenuView?.setSetupTitle(`Calibrating: ${progress}%`);
-
-    const GREEN = new vec4(0.2, 0.8, 0.2, 1);
-    const RED = new vec4(0.9, 0.2, 0.2, 1);
-    this._robotMenuView?.setSetupStatus(
-      tagVisible ? "✅ Tag visible" : "❌ Tag not visible - Look at the tag",
-      tagVisible ? GREEN : RED,
-    );
+    if (previewStageActive) {
+      const presentation = buildAssistPreviewPresentation({
+        assistStage,
+        progress,
+        tagVisible,
+      });
+      this._robotMenuView?.setSetupTitle(presentation.titleText);
+      this._robotMenuView?.setSetupStatus(
+        presentation.statusText,
+        presentation.statusColor,
+      );
+    }
   }
 
   public setSetupAlignmentComplete(): void {
@@ -617,6 +654,7 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     const GREEN = new vec4(0.2, 0.8, 0.2, 1);
+    this._setSetupDiscArrowVisibility(null);
     this._robotMenuView?.setSetupTitle("Alignment complete");
     this._robotMenuView?.setSetupStatus("Alignment complete", GREEN);
     this._robotMenuView?.setContinueVisible(false);
@@ -629,11 +667,8 @@ export class DimosManager extends BaseScriptComponent {
     }
     this._setupPreviewActive = false;
     this._setupPreviewOnAbort = null;
-    this._setupDiscPulse = false;
+    this._resetSetupPreviewVisualState();
     this.robotMarker?.setVisible(false);
-    if (this.groundDisc) {
-      this.groundDisc.enabled = false;
-    }
     if (this._robotMenuView) {
       this._robotMenuView.onContinueRequested = null;
     }
@@ -644,6 +679,85 @@ export class DimosManager extends BaseScriptComponent {
 
   public hideRobotMarkerPreview(): void {
     this.robotMarker?.applyInteractionMode(this.appState.robotInteractionMode);
+  }
+
+  private _updateSetupDiscPreview(
+    worldPosition: vec3 | null,
+    assistStage: string | undefined,
+    progress: number,
+  ): void {
+    if (!this.groundDisc) {
+      return;
+    }
+    this._ensureSetupDiscChildren();
+
+    if (!isAssistPreviewStage(assistStage)) {
+      this._resetSetupPreviewVisualState();
+      return;
+    }
+
+    if (!this._setupDiscAnchorInitialized && worldPosition) {
+      const floorY = robotFloorWorldYCm(worldPosition.y, this.appState.robotRuntime);
+      this.groundDisc.getTransform().setWorldPosition(
+        new vec3(worldPosition.x, floorY, worldPosition.z),
+      );
+      this._setupDiscAnchorInitialized = true;
+    }
+
+    this.groundDisc.enabled = this._setupDiscAnchorInitialized;
+    if (!this._setupDiscAnchorInitialized) {
+      this._setSetupDiscArrowVisibility(null);
+      return;
+    }
+
+    if (!isAssistMoveStage(assistStage)) {
+      this._setupPreviewMoveLeg = -1;
+      this._setSetupDiscArrowVisibility(null);
+      return;
+    }
+
+    const moveLeg = progress >= 66 ? 2 : progress >= 33 ? 1 : 0;
+    if (moveLeg !== this._setupPreviewMoveLeg) {
+      this._setupPreviewMoveLeg = moveLeg;
+    }
+    this._setSetupDiscArrowVisibility(moveLeg);
+  }
+
+  private _ensureSetupDiscChildren(): void {
+    if (!this.groundDisc) {
+      return;
+    }
+    if (!this._setupDiscLeftArrow) {
+      this._setupDiscLeftArrow = findChildRecursive(
+        this.groundDisc,
+        "MoveDirectionArrow_Left",
+      );
+    }
+    if (!this._setupDiscRightArrow) {
+      this._setupDiscRightArrow = findChildRecursive(
+        this.groundDisc,
+        "MoveDirectionArrow_Right",
+      );
+    }
+    this._setSetupDiscArrowVisibility(null);
+  }
+
+  private _setSetupDiscArrowVisibility(moveLeg: number | null): void {
+    if (this._setupDiscLeftArrow) {
+      this._setupDiscLeftArrow.enabled = moveLeg === 0 || moveLeg === 2;
+    }
+    if (this._setupDiscRightArrow) {
+      this._setupDiscRightArrow.enabled = moveLeg === 1;
+    }
+  }
+
+  private _resetSetupPreviewVisualState(): void {
+    this._setupDiscAnchorInitialized = false;
+    this._setupPreviewMoveLeg = -1;
+    if (this.groundDisc) {
+      this.groundDisc.enabled = false;
+    }
+    this._setSetupDiscArrowVisibility(null);
   }
 
   private setLidarMode(mode: LidarDisplayMode): void {

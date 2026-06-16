@@ -39,10 +39,13 @@ from dimos_xr.network.protocol import (
     CameraInfoMessage,
     encode_align_status,
     encode_camera_frame_ack,
+    encode_pose,
+    encode_pose_correction,
 )
 from dimos_xr.tracking.tag_tracker import (
     AlignmentCandidate,
     R_ALIGN,
+    TagSolve,
     TagTracker,
     TagTrackerConfig,
     _yaw_from_T,
@@ -72,6 +75,7 @@ _TRACE = os.getenv("DIMOS_XR_TRACE", "") not in ("", "0", "false")
 logger = setup_logger()
 
 ALIGN_STATUS_BROADCAST_INTERVAL_S: float = 0.3
+RUNTIME_CORRECTION_LOG_INTERVAL_S: float = 1.0
 
 
 class AlignmentController:
@@ -90,7 +94,6 @@ class AlignmentController:
         frame_max_age_s: float,
         manual_alignment_quality: float,
         runtime_correction_enabled: bool,
-        tag_smoothing_tau_s: float,
         tf_publish_static: Callable[[Transform], None],
         adapter: XRRobotAdapterSpec | None = None,
         world_anchor_tag_ids: list[int] | None = None,
@@ -110,12 +113,10 @@ class AlignmentController:
         self._frame_max_age_s = frame_max_age_s
         self._manual_alignment_quality = manual_alignment_quality
         self._runtime_correction_enabled = runtime_correction_enabled
-        self._tag_smoothing_tau_s = tag_smoothing_tau_s
         self._tf_publish_static = tf_publish_static
         self._tf_publish_static_unsupported: bool = False  # set once on first NotImplementedError
 
         self._frame_in_flight: bool = False
-        self._last_smooth_mono: float | None = None
         self._T_committed: np.ndarray | None = None
         self._pending_large_solves: list[np.ndarray] = []
         # _pending_candidate: manual pose awaiting commit (tag flow auto-commits at DONE)
@@ -128,6 +129,7 @@ class AlignmentController:
         self._last_manual_inactive_log_mono: float = 0.0
         self._last_manual_odom_missing_log_mono: float = 0.0
         self._last_manual_candidate_log_mono: float = 0.0
+        self._last_correction_log_mono: float = 0.0
 
         self._broadcast_stop = threading.Event()
         self._broadcast_thread: threading.Thread | None = None
@@ -613,6 +615,56 @@ class AlignmentController:
         )
         self._T_committed = np.array(result.T_world_odom, dtype=np.float64, copy=True)
 
+    def _robot_base_world_position(self, odom: OdomSample | None) -> np.ndarray | None:
+        if odom is None:
+            return None
+        position, _orientation = self._calibration.transform_pose(
+            odom.position,
+            odom.orientation,
+        )
+        base_world = np.asarray(position, dtype=np.float64)
+        if base_world.shape != (3,) or not np.all(np.isfinite(base_world)):
+            return None
+        return base_world
+
+    def _maybe_log_runtime_correction(
+        self,
+        *,
+        solve: TagSolve,
+        odom: OdomSample | None,
+        base_before: np.ndarray | None,
+        trans_delta_m: float,
+        yaw_delta_deg: float,
+    ) -> None:
+        now = time.monotonic()
+        if now - self._last_correction_log_mono < RUNTIME_CORRECTION_LOG_INTERVAL_S:
+            return
+        self._last_correction_log_mono = now
+        base_after = self._robot_base_world_position(odom)
+        marker_jump_m: float | None = None
+        if base_before is not None and base_after is not None:
+            marker_jump_m = float(np.linalg.norm(base_after - base_before))
+        logger.info(
+            "Runtime correction applied",
+            solve_method=solve.method,
+            solve_quality=round(solve.quality, 3),
+            observation_count=solve.observation_count,
+            baseline_m=round(solve.baseline_m, 3),
+            trans_delta_m=round(trans_delta_m, 3),
+            yaw_delta_deg=round(yaw_delta_deg, 2),
+            marker_jump_m=round(marker_jump_m, 3) if marker_jump_m is not None else None,
+            base_before=(
+                [round(float(v), 3) for v in base_before]
+                if base_before is not None
+                else None
+            ),
+            base_after=(
+                [round(float(v), 3) for v in base_after]
+                if base_after is not None
+                else None
+            ),
+        )
+
     def _apply_tracker_update(self, *, ts: float | None = None) -> None:
         if self._tag_tracker.active:
             # Assisted tag flow: tick the driver and broadcast tag-visible feedback.
@@ -634,7 +686,7 @@ class AlignmentController:
             return
         anchor_solve = self._apply_world_anchor_correction()
         if anchor_solve is not None:
-            self._commit_runtime_correction(anchor_solve)
+            self._commit_runtime_correction(anchor_solve, ts=ts)
             return
         solve = self._tag_tracker.current_solve()
         if solve is None:
@@ -646,23 +698,20 @@ class AlignmentController:
         if solve is None:
             return
         T_new = np.array(solve.T_world_odom, dtype=np.float64, copy=True)
-        now = time.monotonic()
         if self._T_committed is None:
             self._T_committed = T_new
             self._calibration.register_from_alignment(T_new)
-            self._last_smooth_mono = now
             return
         trans_delta = float(np.linalg.norm(T_new[:3, 3] - self._T_committed[:3, 3]))
         yaw_delta = abs(normalize_angle(_yaw_from_T(T_new) - _yaw_from_T(self._T_committed)))
+        yaw_delta_deg = math.degrees(yaw_delta)
         if trans_delta > 0.5 or yaw_delta > math.radians(10.0):
             if solve.method == "tag_translation" and solve.quality >= 0.85:
                 # For a visible stationary robot, apply a fast first-step shrink in
                 # translation while preserving the committed yaw. This avoids
                 # forcing large, high-confidence tag sightings through the
                 # baseline-based multi-solve gate used by the assisted path.
-                t_old = self._T_committed[:3, 3]
-                t_new = T_new[:3, 3]
-                t_blend = t_old + 0.65 * (t_new - t_old)
+                t_blend = T_new[:3, 3]
                 T_new = build_T_world_odom(
                     _yaw_from_T(self._T_committed),
                     (float(t_blend[0]), float(t_blend[1]), float(t_blend[2])),
@@ -686,19 +735,34 @@ class AlignmentController:
                 T_new = self._pending_large_solves[-1]
                 self._pending_large_solves = []
         else:
-            dt = now - (self._last_smooth_mono or now)
-            alpha = 1.0 - math.exp(-dt / self._tag_smoothing_tau_s)
             yaw_new = _yaw_from_T(T_new)
-            yaw_old = _yaw_from_T(self._T_committed)
-            yaw_blend = normalize_angle(yaw_old + alpha * normalize_angle(yaw_new - yaw_old))
-            t_old = self._T_committed[:3, 3]
-            t_new = T_new[:3, 3]
-            t_blend = t_old + alpha * (t_new - t_old)
+            yaw_blend = yaw_new
+            t_blend = T_new[:3, 3]
             T_new = build_T_world_odom(
                 yaw_blend, (float(t_blend[0]), float(t_blend[1]), float(t_blend[2]))
             )
             T_new = gravity_level_transform(T_new)
-        self._commit_runtime_correction(T_new, now=now)
+        self._sender.send(
+            encode_pose_correction(
+                ts=ts,
+                robot_id=self._robot_id,
+                trans_delta_m=trans_delta,
+                yaw_delta_deg=yaw_delta_deg,
+                yaw_corrected=solve.method == "tag",
+                solve_quality=solve.quality,
+                solve_method=solve.method,
+            )
+        )
+        odom = self._odom.latest()
+        base_before = self._robot_base_world_position(odom)
+        self._commit_runtime_correction(T_new, ts=ts)
+        self._maybe_log_runtime_correction(
+            solve=solve,
+            odom=odom,
+            base_before=base_before,
+            trans_delta_m=trans_delta,
+            yaw_delta_deg=yaw_delta_deg,
+        )
 
     def _apply_world_anchor_correction(self) -> np.ndarray | None:
         observations = self._tag_tracker.consume_world_anchor_observations()
@@ -738,10 +802,39 @@ class AlignmentController:
         reference[:3, 3] = mean_translation
         return gravity_level_transform(reference)
 
-    def _commit_runtime_correction(self, T_world_odom: np.ndarray, *, now: float | None = None) -> None:
+    def _commit_runtime_correction(
+        self, T_world_odom: np.ndarray, *, ts: float | None = None
+    ) -> None:
         self._T_committed = np.array(T_world_odom, dtype=np.float64, copy=True)
-        self._last_smooth_mono = time.monotonic() if now is None else now
         self._calibration.register_from_alignment(self._T_committed)
+        odom = self._odom.latest()
+        if odom is None:
+            return
+        position, orientation = self._calibration.transform_pose(
+            odom.position,
+            odom.orientation,
+        )
+        if not all(
+            np.isfinite(v)
+            for v in (
+                position[0],
+                position[1],
+                position[2],
+                orientation[0],
+                orientation[1],
+                orientation[2],
+                orientation[3],
+            )
+        ):
+            return
+        self._sender.send(
+            encode_pose(
+                ts=ts if ts is not None else time.time(),
+                position=position,
+                orientation=orientation,
+                robot_id=self._robot_id,
+            )
+        )
 
     def _compute_progress(self, state: str) -> int:
         """Return a 0-100 progress integer for the current step."""

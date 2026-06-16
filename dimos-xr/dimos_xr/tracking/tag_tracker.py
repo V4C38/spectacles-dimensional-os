@@ -140,6 +140,25 @@ def reprojection_error_px(
 
 
 def parse_camera_frame(data: bytes) -> tuple[dict[str, Any], bytes]:
+    def _require_finite_number(header: dict[str, Any], key: str) -> float:
+        value = header.get(key)
+        if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            raise ValueError(f"camera_frame invalid {key}")
+        return float(value)
+
+    def _require_finite_vector(
+        header: dict[str, Any], key: str, *, length: int
+    ) -> tuple[float, ...]:
+        value = header.get(key)
+        if not isinstance(value, list) or len(value) != length:
+            raise ValueError(f"camera_frame invalid {key}")
+        parsed: list[float] = []
+        for item in value:
+            if not isinstance(item, (int, float)) or not math.isfinite(float(item)):
+                raise ValueError(f"camera_frame invalid {key}")
+            parsed.append(float(item))
+        return tuple(parsed)
+
     if len(data) < 8:
         raise ValueError("camera_frame too short")
     if data[:4] != CAMERA_FRAME_MAGIC:
@@ -156,6 +175,13 @@ def parse_camera_frame(data: bytes) -> tuple[dict[str, Any], bytes]:
     for key in ("robot_id", "seq", "ts", "send_ts", "cam_pos", "cam_rot"):
         if key not in header:
             raise ValueError(f"camera_frame missing {key}")
+    if not isinstance(header["robot_id"], str) or len(header["robot_id"]) == 0:
+        raise ValueError("camera_frame invalid robot_id")
+    header["seq"] = int(_require_finite_number(header, "seq"))
+    header["ts"] = _require_finite_number(header, "ts")
+    header["send_ts"] = _require_finite_number(header, "send_ts")
+    header["cam_pos"] = _require_finite_vector(header, "cam_pos", length=3)
+    header["cam_rot"] = _require_finite_vector(header, "cam_rot", length=4)
     return header, data[header_end:]
 
 

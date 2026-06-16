@@ -193,6 +193,8 @@ payload size on Wi-Fi:
 |-------|----------------|
 | `lidar.points_flat` | 2 |
 | `pose.position`, `pose.orientation` | 4 |
+| `pose_correction.trans_delta_m`, `pose_correction.solve_quality` | 4 |
+| `pose_correction.yaw_delta_deg` | 3 |
 | `path` / `path_preview` waypoints and `target` | 3 |
 | `ts` on high-rate streams (`lidar`, `pose`, `path`, `path_preview`) | 3 |
 
@@ -241,6 +243,33 @@ Robot pose in XR world frame:
   "orientation": [qx, qy, qz, qw]
 }
 ```
+
+### `pose_correction`
+
+Runtime pose-correction telemetry emitted when the bridge commits a tag-driven
+world-to-odom correction:
+
+```json
+{
+  "type": "pose_correction",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "trans_delta_m": 0.1824,
+  "yaw_delta_deg": 6.137,
+  "yaw_corrected": false,
+  "solve_quality": 0.9521,
+  "solve_method": "tag_translation"
+}
+```
+
+Fields:
+
+- `trans_delta_m`: translation magnitude before the correction commit, in metres
+- `yaw_delta_deg` (optional): yaw magnitude before the correction commit, in degrees
+- `yaw_corrected`: `true` when the correction came from a full `tag` solve that
+  can update yaw; `false` for `tag_translation` fallback solves
+- `solve_quality`: quality score reported by the tracker for the committed solve
+- `solve_method`: `"tag"` or `"tag_translation"`
 
 ### `path`
 
@@ -368,8 +397,9 @@ Commit the current best alignment candidate.
 
 ### `camera_info`
 
-Spectacles camera intrinsics for the still-capture resolution (sent once per
-resolution change before binary frames):
+Spectacles camera intrinsics for the active capture resolution (sent once per
+resolution change before binary frames, including setup-stream `1008x756` and
+runtime-still `3200x2400` stage switches):
 
 ```json
 {
@@ -413,6 +443,9 @@ Header fields:
 
 - `ts`: capture time in scene seconds (`imageFrame.timestampMillis / 1000`)
 - `send_ts`: scene time when the frame was enqueued for send
+- The XR client must re-send `camera_info` before the first `camera_frame` whose
+  JPEG dimensions differ from the previous stage/mode so the bridge can replace
+  the active intrinsics before decoding the new stream or still resolution.
 - The bridge detects robot-mounted AprilTags in the JPEG and estimates
   `T_world_odom` while an align session is active, then continues to consume
   post-registration runtime frames for drift correction from the same
@@ -511,6 +544,11 @@ A bug in v3 caused `on_align_manual_pose` to accept poses even when no manual
 session was open (or when a tag session was open). In v4 the bridge tracks an
 explicit `_session_method` and silently drops manual pose messages unless a
 `method="manual"` session is active.
+
+**Additive runtime telemetry**:
+- `pose_correction` is emitted whenever the bridge commits a runtime tag-based
+  world-to-odom correction, so Lens clients can observe drift magnitude and
+  whether yaw was corrected by a full solve.
 
 ### v3 — XR Bridge PR refactor (additive, backward-compatible)
 
