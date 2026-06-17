@@ -26,6 +26,8 @@ const ROTATION_SNAP_RAD = (0.25 * Math.PI) / 180.0;
 const RUNTIME_POSE_SMOOTHING_RATE = 14.0;
 const REFINED_TRACKING_LOG_TEXT = "- Refined Tracking -";
 const REFINED_TRACKING_LOG_DURATION_S = 0.5;
+// Duration of the fixed-time realignment snap triggered by a meaningful pose_correction.
+const REALIGN_SNAP_DURATION_S = 0.2;
 
 /** World-space robot marker with live pose, manual placement, floating robot menu anchor, and interaction-mode switching. */
 @component
@@ -49,6 +51,15 @@ export class RobotMarker extends BaseScriptComponent {
   private _runtimeTrackingActive = false;
   private _runtimeTargetPosition: vec3 | null = null;
   private _runtimeTargetRotation: quat | null = null;
+  // Realignment snap state — triggered by beginRealignmentSnap().
+  private _snapRequested = false;
+  private _snapActive = false;
+  private _snapStartTime = 0;
+  private _snapStartPosition: vec3 | null = null;
+  private _snapStartRotation: quat | null = null;
+  // Button VFX objects resolved in _configureVisuals.
+  private _buttonVfxActive: SceneObject | null = null;
+  private _buttonVfxInactive: SceneObject | null = null;
   private _manualPlacementActive = false;
   private _renderOffsetCm = vec3.zero();
   private _toggleBaseLocalPosition: vec3 | null = null;
@@ -251,6 +262,16 @@ export class RobotMarker extends BaseScriptComponent {
     );
   }
 
+  /**
+   * Request a fixed-duration 0.2 s snap on the next incoming runtime pose.
+   * Call this whenever a meaningful pose_correction is received so the marker
+   * jumps to its new position in a crisp, timed animation rather than the
+   * normal rate-based exponential blend.
+   */
+  public beginRealignmentSnap(): void {
+    this._snapRequested = true;
+  }
+
   public setVisible(visible: boolean): void {
     if (this.markerRoot) {
       this.markerRoot.enabled = visible;
@@ -268,6 +289,13 @@ export class RobotMarker extends BaseScriptComponent {
     this._runtimeTrackingActive = false;
     this._runtimeTargetPosition = null;
     this._runtimeTargetRotation = null;
+    this._snapRequested = false;
+    if (this._snapActive) {
+      this._snapActive = false;
+      this._snapStartPosition = null;
+      this._snapStartRotation = null;
+      this._setRealignmentVfx(false);
+    }
   }
 
   public setMenuEnabled(enabled: boolean): void {
@@ -429,6 +457,8 @@ export class RobotMarker extends BaseScriptComponent {
     ) as RoundButton;
     this._stateInfoText = findText(this.markerRoot, "StateInfoText");
     this._debugInfoText = findText(this.markerRoot, "DebugInfoText");
+    this._buttonVfxActive = findChildRecursive(toggleRoot, "ButtonVFX_Active");
+    this._buttonVfxInactive = findChildRecursive(toggleRoot, "ButtonVFX_Inactive");
     if (
       !this._manualCollider ||
       !this._manualInteractable ||
@@ -462,7 +492,9 @@ export class RobotMarker extends BaseScriptComponent {
     const desiredRotation = yawRotationFromWorldRotation(rotation);
     const snapImmediate = !this._runtimeTrackingActive;
 
-    if (this._runtimeTrackingActive && this._runtimeTargetPosition && this._runtimeTargetRotation) {
+    // Skip the deadband check when a realignment snap has been requested, so the
+    // new target is always accepted and the snap starts from the current pose.
+    if (!this._snapRequested && this._runtimeTrackingActive && this._runtimeTargetPosition && this._runtimeTargetRotation) {
       const positionDelta = vec3Distance(this._runtimeTargetPosition, position);
       const rotationDelta = quatAngularDistanceRad(
         this._runtimeTargetRotation,
@@ -487,6 +519,19 @@ export class RobotMarker extends BaseScriptComponent {
 
     if (snapImmediate) {
       this.setPose(position, desiredRotation);
+      this._snapRequested = false;
+      return;
+    }
+
+    if (this._snapRequested) {
+      this._snapRequested = false;
+      // Capture the current rendered pose as the snap start.
+      const transform = this.markerRoot.getTransform();
+      this._snapStartPosition = transform.getWorldPosition();
+      this._snapStartRotation = this.getRotation() ?? quat.quatIdentity();
+      this._snapStartTime = getTime();
+      this._snapActive = true;
+      this._setRealignmentVfx(true);
     }
   }
 
@@ -504,6 +549,29 @@ export class RobotMarker extends BaseScriptComponent {
       return;
     }
 
+    // Fixed-duration realignment snap: ease-out from the captured start pose to
+    // the target over REALIGN_SNAP_DURATION_S, then switch back to normal smoothing.
+    if (this._snapActive && this._snapStartPosition && this._snapStartRotation) {
+      const elapsed = getTime() - this._snapStartTime;
+      const rawT = elapsed / REALIGN_SNAP_DURATION_S;
+      if (rawT >= 1.0) {
+        // Snap complete — land exactly on target and restore VFX.
+        this.setPose(this._runtimeTargetPosition, this._runtimeTargetRotation);
+        this._snapActive = false;
+        this._snapStartPosition = null;
+        this._snapStartRotation = null;
+        this._setRealignmentVfx(false);
+        return;
+      }
+      // Ease-out cubic: t = 1 - (1-rawT)^3
+      const t = 1.0 - Math.pow(1.0 - rawT, 3);
+      const snapPos = vec3.lerp(this._snapStartPosition, this._runtimeTargetPosition, t);
+      this.markerRoot.getTransform().setWorldPosition(snapPos);
+      this.setRotation(quat.slerp(this._snapStartRotation, this._runtimeTargetRotation, t));
+      return;
+    }
+
+    // Normal rate-based exponential smoothing.
     const transform = this.markerRoot.getTransform();
     const currentPosition = transform.getWorldPosition();
     const currentRotation = this.getRotation() ?? quat.quatIdentity();
@@ -630,6 +698,20 @@ export class RobotMarker extends BaseScriptComponent {
       return;
     }
     this._directionArrow.enabled = this._debugMode || this._manualPlacementActive;
+  }
+
+  /**
+   * Swap the toggle button VFX during a realignment snap.
+   * snapping=true  → disable Active, enable Inactive (button appears "off"/loading)
+   * snapping=false → restore Active, disable Inactive (button returns to normal)
+   */
+  private _setRealignmentVfx(snapping: boolean): void {
+    if (this._buttonVfxActive) {
+      this._buttonVfxActive.enabled = !snapping;
+    }
+    if (this._buttonVfxInactive) {
+      this._buttonVfxInactive.enabled = snapping;
+    }
   }
 
   private _syncVisualOffsets(): void {

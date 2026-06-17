@@ -43,8 +43,9 @@ from dimos_xr.network.protocol import (
     encode_pose_correction,
 )
 from dimos_xr.tracking.tag_tracker import (
-    AlignmentCandidate,
     R_ALIGN,
+    AlignmentCandidate,
+    FrameResult,
     TagSolve,
     TagTracker,
     TagTrackerConfig,
@@ -76,6 +77,14 @@ logger = setup_logger()
 
 ALIGN_STATUS_BROADCAST_INTERVAL_S: float = 0.3
 RUNTIME_CORRECTION_LOG_INTERVAL_S: float = 1.0
+# Rate limit for the moving-robot capture-timing diagnostic log (issue-4 investigation).
+MOVING_ROBOT_DIAG_LOG_INTERVAL_S: float = 2.0
+# Minimum correction magnitude for a pose_correction event to be sent to the Lens.
+# Continuous micro-refinements below these thresholds still update T_world_odom but
+# are silent — the Lens treats pose_correction as a user-visible "Refined Tracking"
+# notification that should only fire when the robot position actually jumped.
+MIN_REPORTED_CORRECTION_TRANS_M: float = 0.05
+MIN_REPORTED_CORRECTION_YAW_DEG: float = 1.0
 
 
 class AlignmentController:
@@ -130,6 +139,7 @@ class AlignmentController:
         self._last_manual_odom_missing_log_mono: float = 0.0
         self._last_manual_candidate_log_mono: float = 0.0
         self._last_correction_log_mono: float = 0.0
+        self._last_moving_diag_log_mono: float = 0.0
 
         self._broadcast_stop = threading.Event()
         self._broadcast_thread: threading.Thread | None = None
@@ -323,6 +333,17 @@ class AlignmentController:
                     message="No camera intrinsics received",
                 )
             return
+        if self._assist_driver is not None:
+            from dimos_xr.bridge.assist import AssistState
+
+            if (
+                self._assist_driver.state == AssistState.MOVE
+                and not self._assist_driver.is_sampling
+            ):
+                self._sender.send(
+                    encode_camera_frame_ack(robot_id=self._robot_id, seq=seq)
+                )
+                return
         self._frame_in_flight = True
         try:
             receive_mono = time.monotonic()
@@ -363,6 +384,13 @@ class AlignmentController:
                 encode_camera_frame_ack(robot_id=self._robot_id, seq=seq)
             )
             self._apply_tracker_update(ts=float(header.get("ts", time.time())))
+            if registered:
+                self._maybe_log_moving_robot_diag(
+                    header=header,
+                    receive_mono=receive_mono,
+                    frame_age=frame_age,
+                    result=result,
+                )
         finally:
             self._frame_in_flight = False
 
@@ -441,7 +469,7 @@ class AlignmentController:
                     self._assist_driver.tick(
                         obs_count=self._tag_tracker.observation_count(),
                         latest_obs_pos_world=None,
-                    latest_odom=self._odom.latest(),
+                        latest_odom=self._odom.latest(),
                     )
                     self._maybe_finish_assist()
                     # _maybe_finish_assist() may have auto-committed and cleared the
@@ -742,17 +770,24 @@ class AlignmentController:
                 yaw_blend, (float(t_blend[0]), float(t_blend[1]), float(t_blend[2]))
             )
             T_new = gravity_level_transform(T_new)
-        self._sender.send(
-            encode_pose_correction(
-                ts=ts,
-                robot_id=self._robot_id,
-                trans_delta_m=trans_delta,
-                yaw_delta_deg=yaw_delta_deg,
-                yaw_corrected=solve.method == "tag",
-                solve_quality=solve.quality,
-                solve_method=solve.method,
+        # Only notify the Lens when the correction is large enough to be meaningful.
+        # Continuous sub-threshold micro-refinements still update T_world_odom (below)
+        # but do not fire the user-visible "Refined Tracking" event.
+        if (
+            trans_delta >= MIN_REPORTED_CORRECTION_TRANS_M
+            or yaw_delta_deg >= MIN_REPORTED_CORRECTION_YAW_DEG
+        ):
+            self._sender.send(
+                encode_pose_correction(
+                    ts=ts,
+                    robot_id=self._robot_id,
+                    trans_delta_m=trans_delta,
+                    yaw_delta_deg=yaw_delta_deg,
+                    yaw_corrected=solve.method == "tag",
+                    solve_quality=solve.quality,
+                    solve_method=solve.method,
+                )
             )
-        )
         odom = self._odom.latest()
         base_before = self._robot_base_world_position(odom)
         self._commit_runtime_correction(T_new, ts=ts)
@@ -875,12 +910,14 @@ class AlignmentController:
 
         assist_stage: str | None = None
         robot_world_pose: dict[str, Any] | None = None
+        sampling: bool | None = None
         step_index: int | None = None
         step_count: int | None = None
         if self._session_method == "tag" and self._assist_driver is not None:
             from dimos_xr.bridge.assist import AssistState
             if self._assist_driver.state not in (AssistState.IDLE, AssistState.DONE):
                 assist_stage = self._assist_driver.stage_label
+                sampling = self._assist_driver.is_sampling
                 step_index = self._assist_driver.step_index
                 step_count = self._assist_driver.step_count
             pose_result = self._tag_tracker.robot_world_pose_estimate(max_observations=2)
@@ -901,10 +938,68 @@ class AlignmentController:
                 message=message,
                 tag_visible=tag_visible,
                 assist_stage=assist_stage,
+                sampling=sampling,
                 robot_world_pose=robot_world_pose,
                 step_index=step_index,
                 step_count=step_count,
             )
+        )
+
+    def _maybe_log_moving_robot_diag(
+        self,
+        *,
+        header: dict[str, Any],
+        receive_mono: float,
+        frame_age: float,
+        result: FrameResult,
+    ) -> None:
+        """Rate-limited diagnostic log for the issue-4 moving-robot investigation.
+
+        Logs capture timing, estimated robot speed, predicted timestamp bias
+        (speed × frame_age), and per-reason observation rejection counts so we can
+        quantify how much odom-timestamp error hurts runtime corrections while the
+        robot is moving.
+        """
+        now = time.monotonic()
+        if now - self._last_moving_diag_log_mono < MOVING_ROBOT_DIAG_LOG_INTERVAL_S:
+            return
+        self._last_moving_diag_log_mono = now
+
+        odom_ts = receive_mono - max(0.0, frame_age)
+        speed = self._odom.speed_at(odom_ts)
+
+        # Odom interpolation bracket gap: how far off is the odom_ts from the
+        # nearest buffered sample?  A large gap means the odom lookup may have
+        # used a stale sample.
+        latest_mono = self._odom.latest_mono()
+        bracket_gap_s = abs(latest_mono - odom_ts) if latest_mono is not None else None
+
+        estimated_bias_m: float | None = (
+            speed * frame_age if speed is not None else None
+        )
+
+        total_rej = (
+            result.rejections_reprojection
+            + result.rejections_distance
+            + result.rejections_up_tilt
+            + result.rejections_mount_residual
+            + result.rejections_innovation
+        )
+
+        logger.info(
+            "moving_robot_diag",
+            seq=int(header.get("seq", -1)),
+            frame_age_s=round(frame_age, 4),
+            robot_speed_ms=round(speed, 3) if speed is not None else None,
+            estimated_bias_m=round(estimated_bias_m, 4) if estimated_bias_m is not None else None,
+            odom_bracket_gap_s=round(bracket_gap_s, 4) if bracket_gap_s is not None else None,
+            obs_added=result.observations_added,
+            total_rejections=total_rej,
+            rej_reprojection=result.rejections_reprojection,
+            rej_distance=result.rejections_distance,
+            rej_up_tilt=result.rejections_up_tilt,
+            rej_mount_residual=result.rejections_mount_residual,
+            rej_innovation=result.rejections_innovation,
         )
 
     def _send_frame_drop_ack(self, header: dict[str, Any]) -> None:

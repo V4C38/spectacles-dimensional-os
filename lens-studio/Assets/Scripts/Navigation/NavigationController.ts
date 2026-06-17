@@ -252,8 +252,10 @@ export class NavigationController {
     this._log("requestEmergencyStop");
     this._clearPathHandoff();
     this._navGoalActive = false;
+    this._resetPreviewState();
+    this._pathRenderer?.clear();
     this._bridgeClient?.sendEmergencyStop();
-    this._returnToPlacingFromExecuting();
+    this._startPlacementOutcomeReset("Cancelled");
   }
 
   public setNavigationMode(mode: NavigationMode): void {
@@ -324,8 +326,10 @@ export class NavigationController {
     }
     this._clearPathHandoff();
     this._navGoalActive = false;
+    this._resetPreviewState();
+    this._pathRenderer?.clear();
     this._bridgeClient?.sendCancelGoal();
-    this._returnToPlacingFromExecuting();
+    this._startPlacementOutcomeReset("Cancelled");
   }
 
   public setCancelGoalAvailability(
@@ -353,13 +357,9 @@ export class NavigationController {
     if (msg.recovering) {
       this._clearPathHandoff();
       this._navGoalActive = false;
+      this._resetPreviewState();
       this._pathRenderer?.clear();
-      if (this._placementEnabled) {
-        this._respawnGoalMarkerAtRobot();
-        this._setNavigationMode("placingGoal");
-      } else {
-        this._setNavigationMode("idle");
-      }
+      this._startPlacementOutcomeReset("Failed");
       return "Recovering";
     }
 
@@ -367,7 +367,7 @@ export class NavigationController {
       if (!this._navGoalActive) {
         return "Idle";
       }
-      this._finishActiveNavigationGoal();
+      this._finishActiveNavigationGoal(msg.goal_reached);
       return msg.goal_reached ? "Goal reached" : "Goal failed";
     }
 
@@ -400,13 +400,15 @@ export class NavigationController {
     print("NavigationController: recovering from stale navigation lifecycle");
     this._clearPathHandoff();
     this._navGoalActive = false;
+    this._resetPreviewState();
     this._pathRenderer?.clear();
-    this._returnToPlacingFromExecuting();
+    this._startPlacementOutcomeReset("Failed");
   }
 
   // ── Private: watchdog ──────────────────────────────────────────
 
   private _tickNavLifecycleWatchdog(): void {
+    this._syncIdlePlacementPose();
     if (!this._bridgeClient?.isConnected()) {
       return;
     }
@@ -575,6 +577,7 @@ export class NavigationController {
       return;
     }
     if (this._placementEnabled) {
+      this._syncIdlePlacementPose();
       return;
     }
     const initialPose = this._getNavigationPlacementStartPose();
@@ -690,16 +693,6 @@ export class NavigationController {
     );
   }
 
-  private _refreshPreviewNow(): void {
-    const pose = this._placement?.getCurrentPose() ?? null;
-    const placementActive = this._placement?.isPlacementActive() ?? false;
-    if (!pose) {
-      this._renderPreviewPath(placementActive);
-      return;
-    }
-    this._handlePreviewTargetChanged(pose.position, pose.rotation, placementActive, true);
-  }
-
   private _canRequestPreviewPath(placementActive: boolean): boolean {
     return (
       placementActive &&
@@ -757,13 +750,17 @@ export class NavigationController {
     this._lastPreviewRequestTime = -PREVIEW_INTERVAL_S;
   }
 
-  private _finishActiveNavigationGoal(): void {
+  private _finishActiveNavigationGoal(succeeded: boolean): void {
     this._clearPathHandoff();
     this._navGoalActive = false;
     this._resetPreviewState();
     this._pathRenderer?.clear();
     if (this._placementEnabled) {
-      this._respawnGoalMarkerAtRobot();
+      if (succeeded) {
+        this._respawnGoalMarkerAtRobot();
+      } else {
+        this._startPlacementOutcomeReset("Failed");
+      }
       this._setNavigationMode("placingGoal");
       return;
     }
@@ -771,12 +768,7 @@ export class NavigationController {
   }
 
   private _respawnGoalMarkerAtRobot(): void {
-    const getPose = () => this._getNavigationPlacementStartPose();
-    if (getPose) {
-      this._placement?.respawnPlacingAt(getPose);
-      return;
-    }
-    this._placement?.resumePlacing();
+    this._placement?.respawnPlacingAt(() => this._getNavigationPlacementStartPose());
   }
 
   private _markNavExecuting(): void {
@@ -801,14 +793,27 @@ export class NavigationController {
     this._setNavigationMode("executingGoal");
   }
 
-  private _returnToPlacingFromExecuting(): void {
+  private _startPlacementOutcomeReset(label: "Cancelled" | "Failed"): void {
     if (this._placementEnabled) {
-      this._placement?.resumePlacing();
-      this._refreshPreviewNow();
+      this._placement?.beginOutcomeReset(
+        label,
+        () => this._getNavigationPlacementStartPose(),
+      );
       this._setNavigationMode("placingGoal");
       return;
     }
     this._setNavigationMode("idle");
+  }
+
+  private _syncIdlePlacementPose(): void {
+    if (!this._placementEnabled || !this._placement?.isIdleFollowingRobot()) {
+      return;
+    }
+    const pose = this._getNavigationPlacementStartPose();
+    if (!pose) {
+      return;
+    }
+    this._placement.syncIdlePose(pose.position, pose.rotation);
   }
 
   // ── Private: pose helpers ──────────────────────────────────────

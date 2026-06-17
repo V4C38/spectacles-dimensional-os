@@ -8,18 +8,28 @@ import { SurfacePlacementStabilizer } from "./SurfacePlacementStabilizer";
 
 const DRAG_THRESHOLD_CM = 11;
 const INTERPOLATION_SPEED = 10;
+const IDLE_FOLLOW_INTERPOLATION_SPEED = 8;
+const IDLE_FOLLOW_POSITION_EPSILON_CM = 0.25;
+const IDLE_FOLLOW_ROTATION_EPSILON_RAD = 0.01;
 const GROUND_NORMAL_MIN_Y = 0.95;
 const SURFACE_RAY_START_Y_OFFSET_CM = 120;
 const SURFACE_RAY_END_Y_OFFSET_CM = 220;
 const DRAG_HIT_TEST_INTERVAL = 2;
 const GROUND_Y_OFFSET_CM = 5;
-const DIRECTION_SMOOTHING_RATE = 4.0;
-const MIN_DRAG_DELTA_CM = 0.5;
-const MAX_ROTATION_SPEED_RAD_PER_SEC = 15.0;
+const DIRECTION_SMOOTHING_RATE = 7.0;
+const MIN_DRAG_DELTA_CM = 1.25;
+const MAX_ROTATION_SPEED_RAD_PER_SEC = 24.0;
+const ROTATION_INTERPOLATION_SPEED = 22;
 const PLACEMENT_ANCHOR_REBASE_DISTANCE_CM = 300;
 const ROBOT_GROUND_DEADZONE_RADIUS_CM = 75;
+const ROBOT_GROUND_DEADZONE_EXIT_MARGIN_CM = 12;
+const OUTCOME_RESET_DURATION_S = 2.0;
 
-type PlacementVisualState = "placing" | "executing";
+type PlacementMarkerState =
+  | "idleFollowingRobot"
+  | "dragged"
+  | "executing"
+  | "resettingOutcome";
 
 export type RobotGroundDeadzone = {
   radiusCm: number;
@@ -43,14 +53,16 @@ export class PlacementController {
   private readonly _surfaceStabilizer = new SurfacePlacementStabilizer();
 
   private active = false;
-  private visualState: PlacementVisualState = "placing";
+  private _state: PlacementMarkerState = "idleFollowingRobot";
   private hitTestSession: any = null;
   private updateEvent: SceneEvent | null = null;
   private activeInteractor: any = null;
   private desiredPosition = vec3.zero();
+  private desiredRotation = quat.quatIdentity();
   private touchStartPosition = vec3.zero();
   private isDragging = false;
   private lastGroundHeight = 0;
+  private _cachedResolvedGroundY: number | null = null;
   private _wasDragInsideDeadzone = false;
   private _dragHitTestFrameCount = 0;
   private _processingButtonPress = false;
@@ -62,6 +74,9 @@ export class PlacementController {
   // BUG-2: cached confirm deferral event (created once, re-armed per press).
   private _confirmDeferralEvent: DelayedCallbackEvent | null = null;
   private _hitTestDeferralEvent: DelayedCallbackEvent | null = null;
+  private _outcomeResetEvent: DelayedCallbackEvent | null = null;
+  private _pendingResetPoseProvider: (() => { position: vec3; rotation: quat } | null) | null =
+    null;
   private _pendingWasExecuting = false;
   private _pendingConfirmPosition = vec3.zero();
   private _pendingConfirmRotation = new quat(1, 0, 0, 0);
@@ -83,7 +98,7 @@ export class PlacementController {
       `PlacementController: start at (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`,
     );
     this.active = true;
-    this.visualState = "placing";
+    this._state = "idleFollowingRobot";
     this._beginPlacingAtPose(position, rotation, true);
     // Defer WorldQuery hit-test session creation to the next frame so it does
     // not contend with LiDAR mesh and camera stream activating in the same frame.
@@ -97,6 +112,7 @@ export class PlacementController {
     }
     print("PlacementController: stop");
     this.active = false;
+    this._state = "idleFollowingRobot";
     this._placementActive = false;
     this._processingButtonPress = false;
     this.activeInteractor = null;
@@ -129,7 +145,7 @@ export class PlacementController {
         this.desiredPosition.y,
         this.desiredPosition.z,
       ),
-      rotation: this.renderer.getRotation(),
+      rotation: this.desiredRotation,
     };
   }
 
@@ -141,7 +157,7 @@ export class PlacementController {
     if (!this.active) {
       return;
     }
-    this.visualState = "executing";
+    this._state = "executing";
     this._syncDesiredPoseToRenderedPose();
     this.renderer.showExecuting();
     this._setDragEnabled(false);
@@ -151,7 +167,7 @@ export class PlacementController {
     if (!this.active) {
       return;
     }
-    this.visualState = "placing";
+    this._state = this._placementActive ? "dragged" : "idleFollowingRobot";
     this._syncDesiredPoseToRenderedPose();
     this.renderer.showPlacing(this._placementActive);
     this._emitPreviewTargetChanged(true);
@@ -164,7 +180,7 @@ export class PlacementController {
     if (!this.active) {
       return;
     }
-    this.visualState = "placing";
+    this._state = "idleFollowingRobot";
     this._setDragEnabled(false);
     this._resetGestureState();
     this.renderer.hideAndThen(() => {
@@ -178,6 +194,56 @@ export class PlacementController {
       }
       this._beginPlacingAtPose(pose.position, pose.rotation, true);
     });
+  }
+
+  public beginOutcomeReset(
+    label: "Cancelled" | "Failed",
+    getPose: () => { position: vec3; rotation: quat } | null,
+  ): void {
+    if (!this.active) {
+      return;
+    }
+    this._state = "resettingOutcome";
+    this._placementActive = false;
+    this._processingButtonPress = false;
+    this._pendingResetPoseProvider = getPose;
+    this._setDragEnabled(false);
+    this._resetGestureState();
+    this.renderer.showOutcomeReset(label);
+    this._outcomeResetEvent?.reset(OUTCOME_RESET_DURATION_S);
+  }
+
+  public isIdleFollowingRobot(): boolean {
+    return (
+      this.active &&
+      this._state === "idleFollowingRobot" &&
+      this.activeInteractor === null &&
+      !this._placementActive
+    );
+  }
+
+  public syncIdlePose(position: vec3, rotation: quat): void {
+    if (!this.isIdleFollowingRobot()) {
+      return;
+    }
+    const positionChanged =
+      this.desiredPosition.distance(position) > IDLE_FOLLOW_POSITION_EPSILON_CM;
+    const rotationChanged =
+      quat.angleBetween(this.desiredRotation, rotation) > IDLE_FOLLOW_ROTATION_EPSILON_RAD;
+    if (!positionChanged && !rotationChanged) {
+      return;
+    }
+    this.desiredPosition = new vec3(position.x, position.y, position.z);
+    this.desiredRotation = rotation;
+    this.lastGroundHeight = position.y;
+    this._cachedResolvedGroundY = position.y;
+    this.touchStartPosition = this.desiredPosition;
+    this._surfaceStabilizer.reset(position.y, this.desiredPosition);
+    this.renderer.interpolatePose(
+      this.desiredPosition,
+      this.desiredRotation,
+      IDLE_FOLLOW_INTERPOLATION_SPEED,
+    );
   }
 
   public setRobotGroundDeadzone(
@@ -200,14 +266,19 @@ export class PlacementController {
     const dragInteractable = this.renderer.dragInteractable as any;
     if (dragInteractable?.onTriggerStart?.add) {
       dragInteractable.onTriggerStart.add((args: any) => {
-        if (!this.active || this.visualState !== "placing") {
+        if (
+          !this.active ||
+          this._state === "executing" ||
+          this._state === "resettingOutcome"
+        ) {
           return;
         }
         this.activeInteractor = args?.interactor ?? null;
         this.touchStartPosition = this.desiredPosition;
         this.isDragging = false;
         this._previousDragPosition = null;
-        this._smoothedDragDirection = vec3.zero();
+        const headingForward = this.desiredRotation.multiplyVec3(new vec3(1, 0, 0));
+        this._smoothedDragDirection = new vec3(headingForward.x, 0, headingForward.z);
       });
     }
     if (dragInteractable?.onTriggerEnd?.add) {
@@ -217,7 +288,7 @@ export class PlacementController {
         this._previousDragPosition = null;
         this._syncDesiredPoseToRenderedPose();
         this._snapCurrentPoseToSurface();
-        this.renderer.setPose(this.desiredPosition, this.renderer.getRotation());
+        this.renderer.setPose(this.desiredPosition, this.desiredRotation);
         this._emitPreviewTargetChanged(true);
       });
     }
@@ -255,6 +326,23 @@ export class PlacementController {
     });
     this._confirmDeferralEvent = confirmDeferral;
 
+    const outcomeReset = this.owner.createEvent(
+      "DelayedCallbackEvent",
+    ) as DelayedCallbackEvent;
+    outcomeReset.bind(() => {
+      const pose = this._pendingResetPoseProvider?.() ?? null;
+      this._pendingResetPoseProvider = null;
+      if (!this.active) {
+        return;
+      }
+      if (!pose) {
+        this.resumePlacing();
+        return;
+      }
+      this._beginPlacingAtPose(pose.position, pose.rotation, true);
+    });
+    this._outcomeResetEvent = outcomeReset;
+
     const confirmButton = this.renderer.confirmActionButton as any;
     if (confirmButton?.onTriggerUp?.add) {
       confirmButton.onTriggerUp.add(() => {
@@ -263,9 +351,9 @@ export class PlacementController {
         }
         this._processingButtonPress = true;
         this._syncDesiredPoseToRenderedPose();
-        this._pendingWasExecuting = this.visualState === "executing";
+        this._pendingWasExecuting = this._state === "executing";
         this._pendingConfirmPosition = this.desiredPosition;
-        this._pendingConfirmRotation = this.renderer.getRotation();
+        this._pendingConfirmRotation = this.desiredRotation;
         this._confirmDeferralEvent!.reset(0.0);
       });
     }
@@ -307,7 +395,7 @@ export class PlacementController {
     if (!this.active) {
       return;
     }
-    if (this.visualState === "placing") {
+    if (this._state === "idleFollowingRobot" || this._state === "dragged") {
       if (this.activeInteractor) {
         this._adjustPositionOnSurface();
       }
@@ -315,8 +403,9 @@ export class PlacementController {
         this._maybeRebasePlacementAnchor();
         this.renderer.interpolatePose(
           this.desiredPosition,
-          this.renderer.getRotation(),
+          this.desiredRotation,
           INTERPOLATION_SPEED,
+          ROTATION_INTERPOLATION_SPEED,
         );
         this._emitPreviewTargetChanged(false);
       }
@@ -399,6 +488,7 @@ export class PlacementController {
     if (dragDistance > DRAG_THRESHOLD_CM && !this.isDragging) {
       this.isDragging = true;
       this._activatePlacement();
+      this._syncDesiredPoseToRenderedPose();
     }
     if (this.isDragging) {
       this._dragHitTestFrameCount++;
@@ -414,11 +504,10 @@ export class PlacementController {
 
   private _applyDragFallback(fallbackPoint: vec3): void {
     const insideDeadzone = this._isDragInsideDeadzone(fallbackPoint);
-    const floorY = insideDeadzone
-      ? (this._robotGroundDeadzone?.getRobotFloorWorldY() ?? this.lastGroundHeight)
-      : this.lastGroundHeight;
+    const floorY = this._resolveFallbackGroundY(insideDeadzone);
     const rawTarget = new vec3(fallbackPoint.x, floorY, fallbackPoint.z);
     this._commitResolvedPlacement(rawTarget, fallbackPoint, false);
+    this._wasDragInsideDeadzone = insideDeadzone;
   }
 
   private _consumeSurfaceSnap(rawResults: any, fallbackPoint: vec3): void {
@@ -440,18 +529,10 @@ export class PlacementController {
     this._wasDragInsideDeadzone = insideDeadzone;
 
     if (insideDeadzone) {
-      // Inside deadzone: pin to live robot floor; ignore ray hit Y to avoid
-      // jumping onto robot geometry.
-      const robotFloorY = this._robotGroundDeadzone?.getRobotFloorWorldY() ?? null;
-      let effectiveY = robotFloorY !== null
-        ? robotFloorY + GROUND_Y_OFFSET_CM
-        : this.lastGroundHeight;
-      // Still suppress upward spikes (e.g. stale lastGroundHeight is already low).
-      if (effectiveY > this.lastGroundHeight + GROUND_Y_OFFSET_CM * 2) {
-        effectiveY = this.lastGroundHeight;
-      }
+      const effectiveY = this._resolveFallbackGroundY(true);
       const rawTarget = new vec3(fallbackPoint.x, effectiveY, fallbackPoint.z);
-      this._commitResolvedPlacement(rawTarget, fallbackPoint, true);
+      this._commitResolvedPlacement(rawTarget, fallbackPoint, false);
+      this._wasDragInsideDeadzone = true;
       return;
     }
 
@@ -464,6 +545,7 @@ export class PlacementController {
     const rawTarget = new vec3(fallbackPoint.x, resolvedY, fallbackPoint.z);
     const snapImmediate = this._surfaceStabilizer.shouldSnapImmediate();
     this._commitResolvedPlacement(rawTarget, fallbackPoint, snapImmediate);
+    this._wasDragInsideDeadzone = false;
   }
 
   private _commitResolvedPlacement(
@@ -476,11 +558,12 @@ export class PlacementController {
     const dt = getDeltaTime();
     if (dt <= 0) {
       this.desiredPosition = target;
+      this._cachedResolvedGroundY = target.y;
       this.lastGroundHeight = target.y;
       return;
     }
 
-    const snapNow = snapImmediate || (this.isDragging && this.activeInteractor !== null);
+    const snapNow = snapImmediate;
     target = this._surfaceStabilizer.advanceTowardTarget(target, dt, snapNow);
 
     if (this.isDragging && this.activeInteractor) {
@@ -489,6 +572,7 @@ export class PlacementController {
     }
 
     this.desiredPosition = target;
+    this._cachedResolvedGroundY = target.y;
     this.lastGroundHeight = target.y;
   }
 
@@ -502,21 +586,21 @@ export class PlacementController {
     }
     const dx = point.x - robotPosition.x;
     const dz = point.z - robotPosition.z;
-    return Math.sqrt(dx * dx + dz * dz) < this._robotGroundDeadzone.radiusCm;
+    const horizontalDistance = Math.sqrt(dx * dx + dz * dz);
+    const threshold = this._wasDragInsideDeadzone
+      ? this._robotGroundDeadzone.radiusCm + ROBOT_GROUND_DEADZONE_EXIT_MARGIN_CM
+      : this._robotGroundDeadzone.radiusCm;
+    return horizontalDistance < threshold;
   }
 
-  private _isInsideRobotGroundDeadzone(point: vec3): boolean {
-    if (!this._robotGroundDeadzone) {
-      return false;
+  private _resolveFallbackGroundY(insideDeadzone: boolean): number {
+    if (insideDeadzone) {
+      const robotFloorY = this._robotGroundDeadzone?.getRobotFloorWorldY() ?? null;
+      if (robotFloorY !== null) {
+        return robotFloorY + GROUND_Y_OFFSET_CM;
+      }
     }
-    const robotPosition = this._robotGroundDeadzone.getRobotWorldPosition();
-    if (!robotPosition) {
-      return false;
-    }
-    const dx = point.x - robotPosition.x;
-    const dz = point.z - robotPosition.z;
-    const horizontalDistance = Math.sqrt(dx * dx + dz * dz);
-    return horizontalDistance < this._robotGroundDeadzone.radiusCm;
+    return this._cachedResolvedGroundY ?? this.lastGroundHeight;
   }
 
   private _isGroundLikeHit(normal: vec3): boolean {
@@ -552,7 +636,7 @@ export class PlacementController {
           const fx = this._smoothedDragDirection.x / smoothedMag;
           const fz = this._smoothedDragDirection.z / smoothedMag;
           const targetRotation = this._yawRotation(fx, fz);
-          const currentRotation = this.renderer.getRotation();
+          const currentRotation = this.desiredRotation;
           const maxRotationStep =
             MAX_ROTATION_SPEED_RAD_PER_SEC * getDeltaTime();
           const angleToTarget = quat.angleBetween(
@@ -563,12 +647,10 @@ export class PlacementController {
             angleToTarget <= 0.0001
               ? 1
               : Math.min(1, maxRotationStep / angleToTarget);
-          this.renderer.setRotation(
-            quat.slerp(
-              currentRotation,
-              targetRotation,
-              rotationAlpha,
-            ),
+          this.desiredRotation = quat.slerp(
+            currentRotation,
+            targetRotation,
+            rotationAlpha,
           );
         }
       }
@@ -582,7 +664,9 @@ export class PlacementController {
 
   private _syncDesiredPoseToRenderedPose(): void {
     this.desiredPosition = this.renderer.worldPosition;
+    this.desiredRotation = this.renderer.getRotation();
     this.lastGroundHeight = this.desiredPosition.y;
+    this._cachedResolvedGroundY = this.desiredPosition.y;
     this._surfaceStabilizer.advanceTowardTarget(
       this.desiredPosition,
       getDeltaTime(),
@@ -599,8 +683,11 @@ export class PlacementController {
     if (resetPlacementActive) {
       this._placementActive = false;
     }
+    this._state = this._placementActive ? "dragged" : "idleFollowingRobot";
     this.desiredPosition = new vec3(position.x, position.y, position.z);
+    this.desiredRotation = rotation;
     this.lastGroundHeight = position.y;
+    this._cachedResolvedGroundY = position.y;
     this._wasDragInsideDeadzone = false;
     this.touchStartPosition = this.desiredPosition;
     this._surfaceStabilizer.reset(position.y, this.desiredPosition);
@@ -623,16 +710,15 @@ export class PlacementController {
     if (this._placementActive) {
       return;
     }
+    this._state = "dragged";
     this._placementActive = true;
-    if (this.visualState === "placing") {
-      this.renderer.setConfirmVisible(true);
-    }
+    this.renderer.setConfirmVisible(true);
   }
 
   private _emitPreviewTargetChanged(force: boolean): void {
     this.onPreviewTargetChanged?.(
       this.desiredPosition,
-      this.renderer.getRotation(),
+      this.desiredRotation,
       this._placementActive,
       force,
     );

@@ -4,6 +4,7 @@ import animate from "SpectaclesInteractionKit.lspkg/Utils/animate";
 import {
   applyCapabilityButtonPresentation,
   findChildRecursive,
+  findText,
   requireChild,
   requireFirstText,
   setButtonStyle,
@@ -15,11 +16,19 @@ import { yawRotationFromWorldRotation } from "./HeadingRotation";
 /** Scene-graph view for the navigation target marker with confirm/cancel and visibility animations. */
 // ================================================================
 
-export type NavigationMarkerVisualState = "disabled" | "placing" | "executing";
+export type NavigationMarkerVisualState =
+  | "disabled"
+  | "placing"
+  | "executing"
+  | "resettingOutcome";
 
 const MARKER_VISIBILITY_DURATION_SECONDS = 0.18;
+const OUTCOME_CIRCLE_COLLAPSE_DURATION_SECONDS =
+  MARKER_VISIBILITY_DURATION_SECONDS / 0.5;
+const OUTCOME_DOTS_TEXT_COLLAPSE_DELAY_SECONDS = 1.5;
 const VISIBILITY_ANIMATION_VERSION_KEY = "__navMarkerVisibilityVersion";
 const CIRCLE_SCALE_ANIMATION_VERSION_KEY = "__navMarkerCircleScaleVersion";
+const OUTCOME_RESET_ANIMATION_VERSION_KEY = "__navMarkerOutcomeResetVersion";
 const DOTS_WHITE = new vec4(1, 1, 1, 0.457359);
 const DOTS_YELLOW = new vec4(0.976471, 0.929412, 0.423529, 0.500008);
 
@@ -34,11 +43,15 @@ export class NavigationMarkerView {
   private readonly confirmVfx: SceneObject | null;
   private readonly cancelVfx: SceneObject | null;
   private readonly confirmLabel: Text;
+  private readonly stateText: Text | null;
   private readonly arrow: SceneObject | null;
   private readonly moveDirectionArrow: SceneObject | null;
   private readonly dots: SceneObject | null;
   private readonly portalBaseScale: vec3;
   private readonly rootBaseScale: vec3;
+  private readonly headingBaseScale: vec3 | null;
+  private readonly dotsBaseScale: vec3 | null;
+  private readonly stateTextBaseScale: vec3 | null;
   private readonly rotationLookAt: Component | null;
   private readonly circleAnimation: any;
 
@@ -64,6 +77,7 @@ export class NavigationMarkerView {
     this.confirmVfx = findChildRecursive(this.confirmButtonObject, "ButtonVFX_Confirm");
     this.cancelVfx = findChildRecursive(this.confirmButtonObject, "ButtonVFX_Cancel");
     this.confirmLabel = requireFirstText(this.confirmButtonObject, "NavigationMarkerView");
+    this.stateText = findText(this.root, "State_Text");
     this.arrow = findChildRecursive(this.root, "Arrow");
     this.moveDirectionArrow = findChildRecursive(this.root, "MoveDirectionArrow");
     this.dots = findChildRecursive(this.root, "Dots");
@@ -74,6 +88,10 @@ export class NavigationMarkerView {
     }
     this.portalBaseScale = this.portalCircle.getTransform().getLocalScale();
     this.rootBaseScale = this.root.getTransform().getLocalScale();
+    this.headingBaseScale = this.headingRoot?.getTransform().getLocalScale() ?? null;
+    this.dotsBaseScale = this.dots?.getTransform().getLocalScale() ?? null;
+    this.stateTextBaseScale =
+      this.stateText?.getSceneObject().getTransform().getLocalScale() ?? null;
     this.rotationLookAt = (this.rotationRoot ?? this.root).getComponent(
       "Component.LookAtComponent",
     ) as Component | null;
@@ -179,10 +197,13 @@ export class NavigationMarkerView {
     desiredPosition: vec3,
     desiredRotation: quat,
     lerpSpeed: number,
+    rotationLerpSpeed: number = lerpSpeed,
   ): void {
     const transform = this.root.getTransform();
     const dt = getDeltaTime();
     const alpha = dt > 0 ? 1.0 - Math.exp(-lerpSpeed * dt) : 1.0;
+    const rotationAlpha =
+      dt > 0 ? 1.0 - Math.exp(-rotationLerpSpeed * dt) : 1.0;
     if (this._placementAnchor) {
       const desiredLocal = this._worldToAnchorLocal(desiredPosition);
       transform.setLocalPosition(
@@ -193,7 +214,7 @@ export class NavigationMarkerView {
         vec3.lerp(transform.getWorldPosition(), desiredPosition, alpha),
       );
     }
-    this.setRotation(desiredRotation);
+    this.setRotation(quat.slerp(this._rotation, desiredRotation, rotationAlpha));
   }
 
   public resetCircleAnimation(): void {
@@ -236,6 +257,7 @@ export class NavigationMarkerView {
 
   public showPlacing(showConfirm: boolean = false): void {
     this._state = "placing";
+    this._restoreOutcomeVisualState();
     if (this.circleExecuting) {
       this.circleExecuting.enabled = false;
     }
@@ -261,6 +283,7 @@ export class NavigationMarkerView {
 
   public showExecuting(): void {
     this._state = "executing";
+    this._restoreOutcomeVisualState();
     if (this.circleExecuting) {
       this.circleExecuting.enabled = true;
     }
@@ -280,6 +303,33 @@ export class NavigationMarkerView {
     this._applyDotsVisual(false);
     this._animateVisibility(true);
     this._animateCircleScale(false);
+  }
+
+  public showOutcomeReset(label: "Cancelled" | "Failed"): void {
+    this._state = "resettingOutcome";
+    this._restoreOutcomeVisualState();
+    if (this.rotationLookAt) {
+      this.rotationLookAt.enabled = false;
+    }
+    if (this.circleExecuting) {
+      this.circleExecuting.enabled = false;
+    }
+    this.root.enabled = true;
+    this.root.getTransform().setLocalScale(this.rootBaseScale);
+    this.setConfirmVisible(false);
+    this.setScanAnimationEnabled(false);
+    this._setConfirmVfxState(true, true);
+    if (this.arrow) {
+      this.arrow.enabled = false;
+    }
+    this._setDotsVisible(true);
+    this._applyDotsVisual(true);
+    this._setStateText(label, true);
+    this._setMoveDirectionArrowSpeed(0);
+    this._syncMoveDirectionArrowVisibility();
+    const animationVersion = this._nextOutcomeResetAnimationVersion();
+    this._animateOutcomeResetCollapse(animationVersion);
+    this._animateOutcomeResetDelayedContentCollapse(animationVersion);
   }
 
   public hide(): void {
@@ -389,6 +439,38 @@ export class NavigationMarkerView {
     }
   }
 
+  private _setDotsVisible(visible: boolean): void {
+    if (!this.dots) {
+      return;
+    }
+    this.dots.enabled = visible;
+  }
+
+  private _setStateText(text: string, visible: boolean): void {
+    if (!this.stateText) {
+      return;
+    }
+    this.stateText.text = text;
+    this.stateText.getSceneObject().enabled = visible;
+  }
+
+  private _restoreOutcomeVisualState(): void {
+    this._nextOutcomeResetAnimationVersion();
+    this.portalCircle.enabled = true;
+    this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
+    if (this.headingRoot && this.headingBaseScale) {
+      this.headingRoot.getTransform().setLocalScale(this.headingBaseScale);
+    }
+    if (this.dots && this.dotsBaseScale) {
+      this.dots.getTransform().setLocalScale(this.dotsBaseScale);
+    }
+    if (this.stateText && this.stateTextBaseScale) {
+      this.stateText.getSceneObject().getTransform().setLocalScale(this.stateTextBaseScale);
+    }
+    this._setDotsVisible(true);
+    this._setStateText("", false);
+  }
+
   private _setCircleSaturation(
     circle: SceneObject | null,
     value: number,
@@ -422,6 +504,7 @@ export class NavigationMarkerView {
 
   private _beginHide(): void {
     this._state = "disabled";
+    this._restoreOutcomeVisualState();
     this.setConfirmVisible(false);
     this.setScanAnimationEnabled(false);
     this._setConfirmVfxState(true, true);
@@ -445,6 +528,7 @@ export class NavigationMarkerView {
   private _initializeHidden(): void {
     this.root.enabled = false;
     this.root.getTransform().setLocalScale(vec3.zero());
+    this._restoreOutcomeVisualState();
     this.setScanAnimationEnabled(false);
     this._setConfirmVfxState(true, true);
     this.confirmButtonObject.enabled = false;
@@ -486,7 +570,7 @@ export class NavigationMarkerView {
     if (!this.moveDirectionArrow) {
       return;
     }
-    this.moveDirectionArrow.enabled = true;
+    this.moveDirectionArrow.enabled = this._state !== "resettingOutcome";
   }
 
   private _applyHeadingRootRotation(): void {
@@ -532,6 +616,116 @@ export class NavigationMarkerView {
     });
   }
 
+  private _animateOutcomeResetCollapse(version: number): void {
+    const portalTransform = this.portalCircle.getTransform();
+    const portalStart = portalTransform.getLocalScale();
+    const target = vec3.zero();
+    animate({
+      duration: OUTCOME_CIRCLE_COLLAPSE_DURATION_SECONDS,
+      easing: "ease-in-out-quad",
+      update: (t: number) => {
+        if (!this._isLatestOutcomeResetAnimationVersion(version)) {
+          return;
+        }
+        portalTransform.setLocalScale(
+          new vec3(
+            portalStart.x + (target.x - portalStart.x) * t,
+            portalStart.y + (target.y - portalStart.y) * t,
+            portalStart.z + (target.z - portalStart.z) * t,
+          ),
+        );
+      },
+      ended: () => {
+        if (!this._isLatestOutcomeResetAnimationVersion(version)) {
+          return;
+        }
+        portalTransform.setLocalScale(target);
+      },
+    });
+  }
+
+  private _animateOutcomeResetDelayedContentCollapse(version: number): void {
+    if (!this.dots && !this.stateText && !this.headingRoot) {
+      return;
+    }
+    const dotsTransform = this.dots?.getTransform() ?? null;
+    const dotsStart = dotsTransform?.getLocalScale() ?? null;
+    const stateTextTransform = this.stateText?.getSceneObject().getTransform() ?? null;
+    const stateTextStart = stateTextTransform?.getLocalScale() ?? null;
+    const headingTransform = this.headingRoot?.getTransform() ?? null;
+    const headingStart = headingTransform?.getLocalScale() ?? null;
+    const target = vec3.zero();
+    const totalDuration =
+      OUTCOME_DOTS_TEXT_COLLAPSE_DELAY_SECONDS + MARKER_VISIBILITY_DURATION_SECONDS;
+    animate({
+      duration: totalDuration,
+      easing: "linear",
+      update: (t: number) => {
+        if (!this._isLatestOutcomeResetAnimationVersion(version)) {
+          return;
+        }
+        const elapsed = t * totalDuration;
+        if (elapsed < OUTCOME_DOTS_TEXT_COLLAPSE_DELAY_SECONDS) {
+          if (dotsTransform && dotsStart) {
+            dotsTransform.setLocalScale(dotsStart);
+          }
+          if (stateTextTransform && stateTextStart) {
+            stateTextTransform.setLocalScale(stateTextStart);
+          }
+          if (headingTransform && headingStart) {
+            headingTransform.setLocalScale(headingStart);
+          }
+          return;
+        }
+        const collapseT =
+          (elapsed - OUTCOME_DOTS_TEXT_COLLAPSE_DELAY_SECONDS) /
+          MARKER_VISIBILITY_DURATION_SECONDS;
+        const easedT = Math.min(1, collapseT);
+        if (dotsTransform && dotsStart) {
+          dotsTransform.setLocalScale(
+            new vec3(
+              dotsStart.x + (target.x - dotsStart.x) * easedT,
+              dotsStart.y + (target.y - dotsStart.y) * easedT,
+              dotsStart.z + (target.z - dotsStart.z) * easedT,
+            ),
+          );
+        }
+        if (stateTextTransform && stateTextStart) {
+          stateTextTransform.setLocalScale(
+            new vec3(
+              stateTextStart.x + (target.x - stateTextStart.x) * easedT,
+              stateTextStart.y + (target.y - stateTextStart.y) * easedT,
+              stateTextStart.z + (target.z - stateTextStart.z) * easedT,
+            ),
+          );
+        }
+        if (headingTransform && headingStart) {
+          headingTransform.setLocalScale(
+            new vec3(
+              headingStart.x + (target.x - headingStart.x) * easedT,
+              headingStart.y + (target.y - headingStart.y) * easedT,
+              headingStart.z + (target.z - headingStart.z) * easedT,
+            ),
+          );
+        }
+      },
+      ended: () => {
+        if (!this._isLatestOutcomeResetAnimationVersion(version)) {
+          return;
+        }
+        if (dotsTransform) {
+          dotsTransform.setLocalScale(target);
+        }
+        if (stateTextTransform) {
+          stateTextTransform.setLocalScale(target);
+        }
+        if (headingTransform) {
+          headingTransform.setLocalScale(target);
+        }
+      },
+    });
+  }
+
   private _nextCircleAnimationVersion(): number {
     const circleAny = this.portalCircle as unknown as { [key: string]: number };
     const nextVersion = (circleAny[CIRCLE_SCALE_ANIMATION_VERSION_KEY] ?? 0) + 1;
@@ -542,6 +736,18 @@ export class NavigationMarkerView {
   private _isLatestCircleAnimationVersion(version: number): boolean {
     const circleAny = this.portalCircle as unknown as { [key: string]: number };
     return circleAny[CIRCLE_SCALE_ANIMATION_VERSION_KEY] === version;
+  }
+
+  private _nextOutcomeResetAnimationVersion(): number {
+    const rootAny = this.root as unknown as { [key: string]: number };
+    const nextVersion = (rootAny[OUTCOME_RESET_ANIMATION_VERSION_KEY] ?? 0) + 1;
+    rootAny[OUTCOME_RESET_ANIMATION_VERSION_KEY] = nextVersion;
+    return nextVersion;
+  }
+
+  private _isLatestOutcomeResetAnimationVersion(version: number): boolean {
+    const rootAny = this.root as unknown as { [key: string]: number };
+    return rootAny[OUTCOME_RESET_ANIMATION_VERSION_KEY] === version;
   }
 
   private _animateVisibility(visible: boolean): void {

@@ -21,3 +21,9 @@ Future work items that are known, researched, and worth doing — but not yet sc
 3. Design a small-angle yaw guard (e.g. reject if `yaw_delta > 45°` on a full solve) as defense-in-depth beyond the existing innovation/reprojection gates.
 
 **Files that would change.** `dimos-xr/dimos_xr/bridge/alignment.py` (one guard block in `_apply_tracker_update`), `dimos-xr/dimos_xr/bridge/test_alignment_session.py`.
+
+
+
+E-STOP hanging
+
+go2.py:255–280: cancel_goal and emergency_stop are both @rpc and both publish to the same stop_movement transport with no timeout. emergency_stop has an additional direct _go2_connection.publish_request(SPORT_MOD, StopMove) path, but if RPC dispatch is serialized and a prior call hangs, e-stop cannot be dispatched. Recommend a dedicated, timeout-bounded, non-@rpc e-stop path. Flagging only; out of scope for issues 1–2.

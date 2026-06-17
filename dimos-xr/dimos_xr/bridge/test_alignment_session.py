@@ -25,7 +25,7 @@ import numpy as np
 import pytest
 
 from dimos_xr.bridge.alignment import AlignmentController
-from dimos_xr.bridge.assist import AssistDriver, AssistState
+from dimos_xr.bridge.assist import AssistDriver, AssistState, _MovePhase
 from dimos_xr.bridge.odom_buffer import OdomBuffer
 from dimos_xr.bridge.sender import BridgeSender
 from dimos_xr.network.protocol import (
@@ -208,6 +208,58 @@ async def test_camera_frame_acked_not_processed_in_manual_session() -> None:
     assert ctrl._tag_tracker.active is False
 
 
+@pytest.mark.asyncio
+async def test_camera_frame_acked_not_processed_during_assist_leg() -> None:
+    ctrl, sent = _make_controller(with_adapter=True)
+    ctrl.on_align_start(_align_start("tag", assist=True), MagicMock())
+    ctrl._stop_broadcast()
+    sent.clear()
+
+    assert ctrl._assist_driver is not None
+    ctrl._assist_driver._state = AssistState.MOVE
+    ctrl._assist_driver._move_phase = _MovePhase.LEG
+    ctrl._tag_tracker.has_camera_info = MagicMock(return_value=True)  # type: ignore[method-assign]
+    ctrl._tag_tracker.process_frame = MagicMock()  # type: ignore[method-assign]
+
+    header = {"seq": 43, "ts": 1.0, "send_ts": 1.01}
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+
+    await ctrl.on_camera_frame(header, jpeg, MagicMock())
+
+    acks = [m for m in sent if json.loads(m)["type"] == "camera_frame_ack"]
+    assert len(acks) == 1
+    assert json.loads(acks[0])["seq"] == 43
+    ctrl._tag_tracker.process_frame.assert_not_called()  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_camera_frame_processed_during_assist_sample() -> None:
+    ctrl, sent = _make_controller(with_adapter=True)
+    ctrl.on_align_start(_align_start("tag", assist=True), MagicMock())
+    ctrl._stop_broadcast()
+    sent.clear()
+
+    assert ctrl._assist_driver is not None
+    ctrl._assist_driver._state = AssistState.MOVE
+    ctrl._assist_driver._move_phase = _MovePhase.SAMPLE
+    ctrl._tag_tracker.has_camera_info = MagicMock(return_value=True)  # type: ignore[method-assign]
+    ctrl._tag_tracker.process_frame = MagicMock(
+        return_value=MagicMock(tag_detected=True, tag_ids=[0], quality=0.9)
+    )  # type: ignore[method-assign]
+    ctrl._apply_tracker_update = MagicMock()  # type: ignore[method-assign]
+
+    header = {"seq": 44, "ts": 1.0, "send_ts": 1.01}
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+
+    await ctrl.on_camera_frame(header, jpeg, MagicMock())
+
+    acks = [m for m in sent if json.loads(m)["type"] == "camera_frame_ack"]
+    assert len(acks) == 1
+    assert json.loads(acks[0])["seq"] == 44
+    ctrl._tag_tracker.process_frame.assert_called_once()  # type: ignore[union-attr]
+    ctrl._apply_tracker_update.assert_called_once_with(ts=1.0)  # type: ignore[union-attr]
+
+
 # ------------------------------------------------------------------
 # 6. align_stop clears session and broadcasts cancellation
 # ------------------------------------------------------------------
@@ -286,6 +338,24 @@ def test_assist_auto_commit_emits_no_trailing_detecting(
     assert all(s["state"] != "detecting" for s in statuses), (
         "no trailing 'detecting' should be emitted after auto-commit"
     )
+
+
+def test_broadcast_align_status_includes_sampling_when_assist_active() -> None:
+    ctrl, sent = _make_controller(with_adapter=True)
+    ctrl._stop_broadcast()
+    sent.clear()
+
+    assert ctrl._assist_driver is not None
+    ctrl._session_method = "tag"  # type: ignore[assignment]
+    ctrl._assist_driver._state = AssistState.MOVE
+    ctrl._assist_driver._move_phase = _MovePhase.SAMPLE
+
+    ctrl._broadcast_align_status()
+
+    statuses = [json.loads(m) for m in sent if json.loads(m)["type"] == "align_status"]
+    assert statuses
+    assert statuses[-1]["assist_stage"] == "move"
+    assert statuses[-1]["sampling"] is True
 
 
 # ------------------------------------------------------------------
@@ -491,6 +561,78 @@ def test_runtime_correction_emits_fresh_pose_for_stationary_robot() -> None:
     latest_pose = pose_payloads[-1]
     assert latest_pose["ts"] == pytest.approx(123.456, abs=1e-3)
     assert latest_pose["position"] == pytest.approx([1.0, 0.0, -1.0], abs=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# pose_correction deadband: sub-threshold corrections must be silent
+# ---------------------------------------------------------------------------
+
+
+def test_runtime_correction_below_deadband_emits_no_pose_correction() -> None:
+    """A correction below the notification deadband must update T_world_odom
+    without emitting a pose_correction message."""
+    ctrl, sent = _make_controller_with_correction()
+
+    theta = math.radians(20.0)
+    T_committed = build_T_world_odom(theta, (0.0, 0.0, 0.0))
+    ctrl._T_committed = np.array(T_committed, dtype=np.float64, copy=True)
+    ctrl._calibration.register_from_alignment(T_committed)
+
+    # 2 cm translation, 0.5° yaw — both below the MIN_REPORTED thresholds.
+    T_target = build_T_world_odom(theta + math.radians(0.5), (0.02, 0.0, 0.0))
+    solve = TagSolve(
+        T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
+        method="tag",
+        quality=0.95,
+        observation_count=4,
+        baseline_m=0.30,
+    )
+    ctrl._tag_tracker.current_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
+
+    ctrl._apply_tracker_update()
+
+    pose_corrections = [
+        json.loads(payload)
+        for payload in sent
+        if json.loads(payload).get("type") == "pose_correction"
+    ]
+    assert len(pose_corrections) == 0, (
+        "pose_correction should not fire for sub-threshold corrections"
+    )
+    # But T_world_odom should still have been updated.
+    assert ctrl._T_committed is not None
+
+
+def test_runtime_correction_above_deadband_emits_pose_correction() -> None:
+    """A correction that exceeds the notification deadband must emit pose_correction."""
+    ctrl, sent = _make_controller_with_correction()
+
+    theta = math.radians(20.0)
+    T_committed = build_T_world_odom(theta, (0.0, 0.0, 0.0))
+    ctrl._T_committed = np.array(T_committed, dtype=np.float64, copy=True)
+    ctrl._calibration.register_from_alignment(T_committed)
+
+    # 10 cm translation — above the 5 cm threshold.
+    T_target = build_T_world_odom(theta, (0.10, 0.0, 0.0))
+    solve = TagSolve(
+        T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
+        method="tag_translation",
+        quality=0.95,
+        observation_count=1,
+        baseline_m=0.0,
+    )
+    ctrl._tag_tracker.current_solve = MagicMock(return_value=None)  # type: ignore[method-assign]
+    ctrl._tag_tracker.current_translation_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
+
+    ctrl._apply_tracker_update()
+
+    pose_corrections = [
+        json.loads(payload)
+        for payload in sent
+        if json.loads(payload).get("type") == "pose_correction"
+    ]
+    assert len(pose_corrections) == 1
+    assert pose_corrections[0]["solve_method"] == "tag_translation"
 
 
 # ---------------------------------------------------------------------------

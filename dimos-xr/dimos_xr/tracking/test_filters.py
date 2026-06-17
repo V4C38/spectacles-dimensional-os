@@ -7,6 +7,8 @@ from dimos_xr.adapters.go2 import go2_handshake
 from dimos_xr.tracking.filters import (
     LidarFilter,
     LidarFilterConfig,
+    LidarObstacleDistanceConfig,
+    filter_obstacle_points,
     lidar_height_band_m,
     subsample_points_near_robot,
 )
@@ -72,6 +74,75 @@ def test_filter_does_not_subsample() -> None:
     points = np.array([[float(i), 0.0, 0.5] for i in range(100)], dtype=np.float32)
     filtered = filt.filter(points)
     assert len(filtered) == 100
+
+
+def test_filter_obstacle_points_keeps_annulus_only() -> None:
+    config = LidarObstacleDistanceConfig(
+        min_distance_m=0.1,
+        opaque_distance_m=0.4,
+        max_distance_m=0.6,
+    )
+    points = np.array(
+        [
+            [0.05, 0.0, 0.5],  # too close
+            [0.10, 0.0, 0.5],  # min boundary
+            [0.40, 0.0, 0.5],  # opaque boundary
+            [0.60, 0.0, 0.5],  # max boundary
+            [0.61, 0.0, 0.5],  # too far
+        ],
+        dtype=np.float32,
+    )
+    filtered = filter_obstacle_points(points, config)
+    assert len(filtered) == 3
+    assert np.allclose(
+        filtered,
+        np.array(
+            [
+                [0.10, 0.0, 0.5],
+                [0.40, 0.0, 0.5],
+                [0.60, 0.0, 0.5],
+            ],
+            dtype=np.float32,
+        ),
+    )
+
+
+def test_filter_obstacle_points_can_use_robot_center_and_world_up() -> None:
+    config = LidarObstacleDistanceConfig(
+        min_distance_m=0.1,
+        opaque_distance_m=0.4,
+        max_distance_m=0.6,
+    )
+    points = np.array(
+        [
+            [2.05, 0.70, -1.00],  # too close to robot center
+            [2.20, 0.70, -1.00],  # keep
+            [2.55, 0.70, -1.00],  # keep
+            [2.61, 0.70, -1.00],  # too far
+            [2.20, 0.55, -1.00],  # below height band
+            [2.20, 1.25, -1.00],  # above height band
+        ],
+        dtype=np.float32,
+    )
+    filtered = filter_obstacle_points(
+        points,
+        config,
+        robot_position=(2.0, 0.7, -1.0),
+        vertical_axis=1,
+        min_height_m=-0.1,
+        max_height_m=0.5,
+    )
+    assert len(filtered) == 2
+    assert np.allclose(
+        filtered,
+        np.array(
+            [
+                [2.20, 0.70, -1.00],
+                [2.55, 0.70, -1.00],
+            ],
+            dtype=np.float32,
+        ),
+    )
 
 
 def test_subsample_without_robot_stride() -> None:

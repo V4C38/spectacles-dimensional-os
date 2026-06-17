@@ -120,6 +120,16 @@ class GetStatusMessage:
     robot_id: str
 
 
+@dataclass(frozen=True)
+class SetLidarModeMessage:
+    ts: float
+    robot_id: str
+    mode: str
+    obstacle_min_distance_m: float
+    obstacle_opaque_distance_m: float
+    obstacle_max_distance_m: float
+
+
 InboundMessage = (
     NavGoalMessage
     | PlanPathMessage
@@ -132,6 +142,7 @@ InboundMessage = (
     | CameraInfoMessage
     | AlignManualPoseMessage
     | GetStatusMessage
+    | SetLidarModeMessage
 )
 
 
@@ -234,6 +245,40 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         )
     if msg_type == "get_status":
         return GetStatusMessage(ts=ts, robot_id=robot_id)
+    if msg_type == "set_lidar_mode":
+        mode = _require_type(data, "mode", str)
+        if mode not in ("off", "obstacles", "full"):
+            raise ValueError(
+                "set_lidar_mode.mode must be 'off', 'obstacles', or 'full'"
+            )
+        for key in (
+            "obstacle_min_distance_m",
+            "obstacle_opaque_distance_m",
+            "obstacle_max_distance_m",
+        ):
+            if key not in data or not isinstance(data[key], (int, float)):
+                raise ValueError(f"Missing or invalid field: {key}")
+        min_distance_m = float(data["obstacle_min_distance_m"])
+        opaque_distance_m = float(data["obstacle_opaque_distance_m"])
+        max_distance_m = float(data["obstacle_max_distance_m"])
+        if min_distance_m < 0.0:
+            raise ValueError("obstacle_min_distance_m must be >= 0")
+        if opaque_distance_m < min_distance_m:
+            raise ValueError(
+                "obstacle_opaque_distance_m must be >= obstacle_min_distance_m"
+            )
+        if max_distance_m < opaque_distance_m:
+            raise ValueError(
+                "obstacle_max_distance_m must be >= obstacle_opaque_distance_m"
+            )
+        return SetLidarModeMessage(
+            ts=ts,
+            robot_id=robot_id,
+            mode=mode,
+            obstacle_min_distance_m=min_distance_m,
+            obstacle_opaque_distance_m=opaque_distance_m,
+            obstacle_max_distance_m=max_distance_m,
+        )
     raise ValueError(f"Unknown inbound message type: {msg_type!r}")
 
 
@@ -386,6 +431,7 @@ def encode_align_status(
     message: str = "",
     tag_visible: bool | None = None,
     assist_stage: str | None = None,
+    sampling: bool | None = None,
     robot_world_pose: dict[str, Any] | None = None,
     step_index: int | None = None,
     step_count: int | None = None,
@@ -403,6 +449,8 @@ def encode_align_status(
         payload["tag_visible"] = tag_visible
     if assist_stage is not None:
         payload["assist_stage"] = assist_stage
+    if sampling is not None:
+        payload["sampling"] = sampling
     if robot_world_pose is not None:
         payload["robot_world_pose"] = robot_world_pose
     if step_index is not None:
@@ -458,6 +506,14 @@ def encode_pose_correction(
     solve_quality: float,
     solve_method: str,
 ) -> str:
+    """Encode a pose_correction message.
+
+    Emitted only when a runtime tag correction exceeds the deadband defined by
+    MIN_REPORTED_CORRECTION_TRANS_M / MIN_REPORTED_CORRECTION_YAW_DEG in
+    alignment.py.  Sub-threshold micro-refinements still update T_world_odom on
+    the bridge but are silent — the Lens uses this message to trigger the
+    user-visible "Refined Tracking" notification and the realignment snap animation.
+    """
     payload: dict[str, Any] = {
         "type": "pose_correction",
         "ts": round(ts, 3) if ts is not None else time.time(),

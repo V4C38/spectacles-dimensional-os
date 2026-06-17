@@ -19,6 +19,7 @@ from dimos_xr.network.protocol import (
     GetStatusMessage,
     NavGoalMessage,
     PlanPathMessage,
+    SetLidarModeMessage,
     decode_inbound,
     encode_align_status,
     encode_bridge_status,
@@ -340,7 +341,23 @@ def test_encode_align_status_no_step_fields_when_not_assist() -> None:
     assert "step_index" not in raw
     assert "step_count" not in raw
     assert "assist_stage" not in raw
+    assert "sampling" not in raw
     assert "robot_world_pose" not in raw
+
+
+def test_encode_align_status_sampling_field() -> None:
+    raw = json.loads(
+        encode_align_status(
+            robot_id="unitree_go2",
+            method="tag",
+            state="detecting",
+            progress=33,
+            assist_stage="move",
+            sampling=True,
+        )
+    )
+    assert raw["assist_stage"] == "move"
+    assert raw["sampling"] is True
 
 
 def test_encode_align_status_manual() -> None:
@@ -411,6 +428,47 @@ def test_get_status_decode() -> None:
     raw = json.dumps({"type": "get_status", "ts": 2.0, "robot_id": "unitree_go2"})
     msg = decode_inbound(raw, expected_robot_id="unitree_go2")
     assert isinstance(msg, GetStatusMessage)
+
+
+def test_set_lidar_mode_decode() -> None:
+    raw = json.dumps(
+        {
+            "type": "set_lidar_mode",
+            "ts": 2.0,
+            "robot_id": "unitree_go2",
+            "mode": "obstacles",
+            "obstacle_min_distance_m": 0.1,
+            "obstacle_opaque_distance_m": 0.4,
+            "obstacle_max_distance_m": 0.6,
+        }
+    )
+    msg = decode_inbound(raw, expected_robot_id="unitree_go2")
+    assert isinstance(msg, SetLidarModeMessage)
+    assert msg.mode == "obstacles"
+    assert msg.obstacle_min_distance_m == pytest.approx(0.1)
+    assert msg.obstacle_opaque_distance_m == pytest.approx(0.4)
+    assert msg.obstacle_max_distance_m == pytest.approx(0.6)
+
+
+def test_set_lidar_mode_rejects_invalid_threshold_order() -> None:
+    with pytest.raises(
+        ValueError,
+        match="obstacle_opaque_distance_m must be >= obstacle_min_distance_m",
+    ):
+        decode_inbound(
+            json.dumps(
+                {
+                    "type": "set_lidar_mode",
+                    "ts": 2.0,
+                    "robot_id": "unitree_go2",
+                    "mode": "obstacles",
+                    "obstacle_min_distance_m": 0.4,
+                    "obstacle_opaque_distance_m": 0.2,
+                    "obstacle_max_distance_m": 0.6,
+                }
+            ),
+            expected_robot_id="unitree_go2",
+        )
 
 
 def test_encode_path_and_nav_status() -> None:

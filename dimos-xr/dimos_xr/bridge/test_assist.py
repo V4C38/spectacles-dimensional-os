@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 import threading
-import time
 from unittest.mock import MagicMock, patch
 
 from dimos_xr.bridge.assist import (
@@ -12,7 +11,6 @@ from dimos_xr.bridge.assist import (
     MOVE_LEG_S,
     MOVE_LEG_TARGET_M,
     SAMPLE_MIN_OBS,
-    SAMPLE_SPREAD_M,
     AssistDriver,
     AssistState,
     _MovePhase,
@@ -433,6 +431,29 @@ def test_stage_label_none_when_done() -> None:
     with driver._lock:
         driver._state = AssistState.DONE
     assert driver.stage_label is None
+
+
+def test_is_sampling_false_during_leg() -> None:
+    driver, _ = _make_driver()
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    driver.on_assist_confirm()
+    assert driver.state == AssistState.MOVE
+    assert driver.is_sampling is False
+
+
+def test_is_sampling_true_during_sample() -> None:
+    driver, _ = _make_driver()
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    driver.on_assist_confirm()
+    t0 = driver._move_start_mono
+    assert t0 is not None
+    with patch("dimos_xr.bridge.assist.time") as mt:
+        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        driver.tick(obs_count=0, latest_obs_pos_world=None)
+    assert driver._move_phase == _MovePhase.SAMPLE
+    assert driver.is_sampling is True
 
 
 def test_step_index_1_during_estimating() -> None:

@@ -19,7 +19,12 @@ from dimos_xr.network.protocol import (
     encode_path_preview,
     encode_pose,
 )
-from dimos_xr.tracking.filters import LidarFilter, subsample_points_near_robot
+from dimos_xr.tracking.filters import (
+    LidarFilter,
+    LidarObstacleDistanceConfig,
+    filter_obstacle_points,
+    subsample_points_near_robot,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -39,6 +44,8 @@ def build_lidar_payload(
     *,
     calibration: Calibration,
     lidar_filter: LidarFilter,
+    mode: str,
+    obstacle_distance_config: LidarObstacleDistanceConfig | None,
     robot_world_pos: tuple[float, float, float] | None,
     target_points: int,
     voxel_size: float,
@@ -61,6 +68,15 @@ def build_lidar_payload(
         filtered = lidar_filter.filter(points)
         if len(filtered) != 0:
             world_pts = calibration.transform_points(filtered)
+            if mode == "obstacles" and obstacle_distance_config is not None:
+                world_pts = filter_obstacle_points(
+                    world_pts,
+                    obstacle_distance_config,
+                    robot_position=robot_world_pos,
+                    vertical_axis=1,
+                    min_height_m=lidar_filter.config.min_height_m,
+                    max_height_m=lidar_filter.config.max_height_m,
+                )
             world_pts = subsample_points_near_robot(
                 world_pts, robot_world_pos, target_points=target_points
             )

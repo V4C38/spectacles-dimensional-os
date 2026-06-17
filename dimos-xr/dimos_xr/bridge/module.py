@@ -33,7 +33,7 @@ from dimos_xr.bridge.preview import PreviewService
 from dimos_xr.bridge.sender import BridgeSender
 from dimos_xr.bridge.status_service import StatusService
 from dimos_xr.bridge.telemetry import TelemetryPublisher
-from dimos_xr.network.protocol import EmergencyStopMessage
+from dimos_xr.network.protocol import EmergencyStopMessage, SetLidarModeMessage
 from dimos_xr.network.websocket_server import XRWebSocketServer
 from dimos_xr.preview_planner import PreviewPlanner
 from dimos_xr.tracking.filters import LidarFilter, LidarFilterConfig, lidar_height_band_m
@@ -57,7 +57,8 @@ class XRBridgeConfig(ModuleConfig):  # type: ignore[misc]
     min_height_m: float | None = -0.35
     max_height_m: float | None = 1.2
     obstacle_height_threshold_m: float = 0.08
-    target_points: int = 1500
+    target_points: int = 600
+    obstacle_target_points: int = 300
     lidar_binary: bool = True
     lidar_max_hz: float = 1.0
     # Voxel grid size for coarse LiDAR downsampling before the height-band filter.
@@ -197,6 +198,7 @@ class XRBridge(Module):  # type: ignore[misc]
             odom=odom,
             lidar_filter=lidar_filter,
             target_points=self.config.target_points,
+            obstacle_target_points=self.config.obstacle_target_points,
             lidar_voxel_size_m=self.config.lidar_voxel_size_m,
             pose_max_hz=self.config.pose_max_hz,
             lidar_binary=self.config.lidar_binary,
@@ -225,6 +227,7 @@ class XRBridge(Module):  # type: ignore[misc]
             on_cancel_goal=lambda msg: nav.on_cancel_goal(msg.ts),
             on_emergency_stop=_on_emergency_stop,
             on_get_status=self._on_get_status,
+            on_set_lidar_mode=self._on_set_lidar_mode,
             on_status_connect=self._send_status_to,
             on_disconnect=self._on_client_disconnect,
         )
@@ -315,6 +318,18 @@ class XRBridge(Module):  # type: ignore[misc]
     def _on_get_status(self, _msg: GetStatusMessage, websocket: ServerConnection) -> None:
         self._send_status_to(websocket)
 
+    def _on_set_lidar_mode(
+        self,
+        msg: SetLidarModeMessage,
+        _websocket: ServerConnection,
+    ) -> None:
+        self._telemetry.set_lidar_mode(
+            mode=msg.mode,
+            obstacle_min_distance_m=msg.obstacle_min_distance_m,
+            obstacle_opaque_distance_m=msg.obstacle_opaque_distance_m,
+            obstacle_max_distance_m=msg.obstacle_max_distance_m,
+        )
+
     # ------------------------------------------------------------------
     # Disconnect handler
     # ------------------------------------------------------------------
@@ -322,3 +337,5 @@ class XRBridge(Module):  # type: ignore[misc]
     def _on_client_disconnect(self, _websocket: ServerConnection) -> None:
         self._nav.reset_on_disconnect()
         self._alignment.clear_on_disconnect()
+        if self._ws_server.connection_count == 0:
+            self._telemetry.reset_lidar_mode()

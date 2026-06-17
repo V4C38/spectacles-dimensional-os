@@ -400,8 +400,11 @@ export class CalibrationFlow {
   public handleAlignStatus(msg: AlignStatusMessage): void {
     this._logAlignStatusIfChanged(msg);
     this._state = applyAlignStatusToCalibrationState(this._state, msg);
+    const frameCapture = this._dimosManager.frameCaptureController;
 
     if (msg.state === "failed") {
+      frameCapture?.setSamplingBurst(false);
+      frameCapture?.setCapturePaused(false);
       this._commitInFlight = false;
       this._callbacks.log(`alignment failed on bridge: ${msg.message || "unknown reason"}`);
       if (this._state.mode === "manual") {
@@ -409,19 +412,27 @@ export class CalibrationFlow {
       }
       this._dimosManager.endSetupAlignmentPreview();
     } else if (msg.state === "aligned") {
+      frameCapture?.setSamplingBurst(false);
+      frameCapture?.setCapturePaused(false);
       this._dimosManager.setSetupAlignmentComplete();
       this._tryAutoFinishSetup();
     } else if (this._state.mode === "auto") {
+      frameCapture?.setSamplingBurst(msg.sampling === true);
+      frameCapture?.setCapturePaused(
+        msg.assist_stage === "move" && msg.sampling === false,
+      );
       // Forward to the robot-anchored preview while calibrating
-      const assist = (msg as any);
       this._dimosManager.updateSetupAlignmentPreview({
-        worldPose: assist.robot_world_pose ?? null,
-        assistStage: assist.assist_stage,
-        stepIndex: assist.step_index,
-        stepCount: assist.step_count,
-        progress: assist.progress ?? 0,
+        worldPose: msg.robot_world_pose ?? null,
+        assistStage: msg.assist_stage,
+        stepIndex: msg.step_index,
+        stepCount: msg.step_count,
+        progress: msg.progress ?? 0,
         tagVisible: this._state.tagVisible,
       });
+    } else {
+      frameCapture?.setSamplingBurst(false);
+      frameCapture?.setCapturePaused(false);
     }
     this._notify();
   }

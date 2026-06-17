@@ -130,7 +130,8 @@ Alignment progress during a calibration session:
   "progress": 40,
   "message": "Look at the robot tag — collecting baseline observations",
   "tag_visible": true,
-  "assist_stage": "collect",
+  "assist_stage": "move",
+  "sampling": true,
   "robot_world_pose": {
     "position": [1.2, 0.0, -2.0],
     "orientation": [0.0, 0.0, 0.383, 0.924]
@@ -152,6 +153,9 @@ Fields:
 - `assist_stage` (optional): current stage of the robot-assisted calibration flow
   (`"estimating"`, `"awaiting_confirm"`, `"move"`); omitted when assist is not
   active or when the flow has completed
+- `sampling` (optional): present only while `assist_stage` is active; `true`
+  during the stopped SAMPLE sub-phase inside assisted MOVE, `false` during the
+  moving LEG sub-phase
 - `robot_world_pose` (optional): estimated robot pose in world frame
   (`position` xyz metres, `orientation` quaternion xyzw); omitted until a
   solve is available
@@ -203,6 +207,13 @@ payload size on Wi-Fi:
 Subsampled point cloud in XR world frame, sent as a **binary WebSocket frame**
 (message type `0x01 lidar_f16`). Each point is encoded as three IEEE 754
 half-precision (float16) values, little-endian. Up to 2500 points per frame.
+The emitted point set depends on the active bridge-side LiDAR mode selected by
+the client:
+
+- `full`: current world-frame stream after the bridge's standard voxel/range/height
+  filtering
+- `obstacles`: bridge-filtered obstacle subset only
+- `off`: no `lidar` frames are sent
 
 Wire layout:
 
@@ -247,7 +258,11 @@ Robot pose in XR world frame:
 ### `pose_correction`
 
 Runtime pose-correction telemetry emitted when the bridge commits a tag-driven
-world-to-odom correction:
+world-to-odom correction **that exceeds the notification deadband**
+(≥ 5 cm translation or ≥ 1° yaw).  Sub-threshold micro-refinements still update
+`T_world_odom` on the bridge but do not emit this message, so Lens-side
+user-visible events (e.g. "Refined Tracking" toast, realignment snap animation)
+fire only when the robot position has meaningfully changed:
 
 ```json
 {
@@ -348,6 +363,42 @@ The bridge responds with a runtime sync burst for the requesting client:
    executing path is cached
 
 The same sync burst is sent automatically after the initial `hello` on connect.
+
+### `set_lidar_mode`
+
+Update the bridge-global LiDAR transmit mode. The latest message from any
+connected client becomes the active bridge policy for all clients until another
+`set_lidar_mode` arrives or all clients disconnect.
+
+```json
+{
+  "type": "set_lidar_mode",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "mode": "obstacles",
+  "obstacle_min_distance_m": 0.10,
+  "obstacle_opaque_distance_m": 0.40,
+  "obstacle_max_distance_m": 0.60
+}
+```
+
+Fields:
+
+- `mode`: `"off"`, `"obstacles"`, or `"full"`
+- `obstacle_min_distance_m`: robot-relative horizontal distance where obstacle
+  rendering/filtering begins
+- `obstacle_opaque_distance_m`: distance where the client starts fading obstacle
+  points; must be greater than or equal to `obstacle_min_distance_m`
+- `obstacle_max_distance_m`: farthest robot-relative horizontal distance that
+  obstacle mode keeps; must be greater than or equal to
+  `obstacle_opaque_distance_m`
+
+Semantics:
+
+- `off`: the bridge suppresses LiDAR transmission entirely
+- `obstacles`: the bridge sends only points inside the configured obstacle
+  distance annulus after its normal height/range filtering
+- `full`: the bridge sends the standard full XR payload path
 
 ### `align_start`
 
@@ -546,9 +597,11 @@ explicit `_session_method` and silently drops manual pose messages unless a
 `method="manual"` session is active.
 
 **Additive runtime telemetry**:
-- `pose_correction` is emitted whenever the bridge commits a runtime tag-based
-  world-to-odom correction, so Lens clients can observe drift magnitude and
-  whether yaw was corrected by a full solve.
+- `pose_correction` is emitted when the bridge commits a runtime tag-based
+  world-to-odom correction that exceeds the notification deadband (≥ 5 cm
+  translation or ≥ 1° yaw), so Lens clients can observe meaningful drift
+  magnitude and whether yaw was corrected by a full solve.  Sub-threshold
+  micro-refinements remain silent.
 
 ### v3 — XR Bridge PR refactor (additive, backward-compatible)
 

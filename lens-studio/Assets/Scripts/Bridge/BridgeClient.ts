@@ -18,9 +18,11 @@ import {
   buildCancelGoal,
   buildEmergencyStop,
   buildGetStatus,
+  buildSetLidarMode,
   buildNavGoal,
   buildPlanPath,
   isNonCriticalInboundMessageType,
+  LidarObstacleSettings,
   parseInboundMessage,
   parseLidarBinary,
   ProtocolParseError,
@@ -319,6 +321,15 @@ export class BridgeClient extends BaseScriptComponent {
 
   public requestStatus(): boolean {
     return this._sendForActiveRobot("get_status", buildGetStatus);
+  }
+
+  public sendLidarMode(
+    mode: "off" | "obstacles" | "full",
+    settings: LidarObstacleSettings,
+  ): boolean {
+    return this._sendForActiveRobot("set_lidar_mode", (robotId) =>
+      buildSetLidarMode(robotId, mode, settings),
+    );
   }
 
   public sendAlignStart(method: "tag" | "manual", assist: boolean = false): boolean {

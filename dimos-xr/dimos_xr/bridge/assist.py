@@ -42,7 +42,7 @@ MIN_ESTIMATING_OBS: int = 2       # observations needed to enter AWAITING_CONFIR
 ESTIMATING_SPREAD_M: float = 0.10 # max allowed XY tag-position spread
 
 # Stop-and-sample tuning: how many stable observations are required per waypoint.
-SAMPLE_MIN_OBS: int = 4
+SAMPLE_MIN_OBS: int = 3
 SAMPLE_SPREAD_M: float = 0.05     # max XY spread to consider observations stable
 
 
@@ -126,6 +126,15 @@ class AssistDriver:
     def step_count(self) -> int:
         """Total number of steps in this assist routine."""
         return 2
+
+    @property
+    def is_sampling(self) -> bool:
+        """True only during the stopped sampling sub-phase of MOVE."""
+        with self._lock:
+            return (
+                self._state == AssistState.MOVE
+                and self._move_phase == _MovePhase.SAMPLE
+            )
 
     def progress_percent(self) -> int:
         """Return 0-100 progress for the *current* step.

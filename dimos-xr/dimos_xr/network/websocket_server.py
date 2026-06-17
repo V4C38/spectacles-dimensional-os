@@ -35,6 +35,7 @@ from dimos_xr.network.protocol import (
     InboundMessage,
     NavGoalMessage,
     PlanPathMessage,
+    SetLidarModeMessage,
     decode_inbound,
     encode_hello,
 )
@@ -56,6 +57,7 @@ PlanPathHandler = Callable[[PlanPathMessage], None]
 CancelGoalHandler = Callable[[CancelGoalMessage], None]
 EmergencyStopHandler = Callable[[EmergencyStopMessage], None]
 GetStatusHandler = Callable[[GetStatusMessage, "ws_server.ServerConnection"], None]
+SetLidarModeHandler = Callable[[SetLidarModeMessage, "ws_server.ServerConnection"], None]
 UnsupportedHandler = Callable[[InboundMessage], None]
 StatusOnConnectHandler = Callable[["ws_server.ServerConnection"], None]
 DisconnectHandler = Callable[["ws_server.ServerConnection"], None]
@@ -264,6 +266,7 @@ class XRWebSocketServer:
         on_cancel_goal: CancelGoalHandler | None = None,
         on_emergency_stop: EmergencyStopHandler | None = None,
         on_get_status: GetStatusHandler | None = None,
+        on_set_lidar_mode: SetLidarModeHandler | None = None,
         on_unsupported: UnsupportedHandler | None = None,
         on_status_connect: StatusOnConnectHandler | None = None,
         on_disconnect: DisconnectHandler | None = None,
@@ -284,6 +287,7 @@ class XRWebSocketServer:
         self._on_cancel_goal = on_cancel_goal
         self._on_emergency_stop = on_emergency_stop
         self._on_get_status = on_get_status
+        self._on_set_lidar_mode = on_set_lidar_mode
         self._on_unsupported = on_unsupported
         self._on_status_connect = on_status_connect
         self._on_disconnect = on_disconnect
@@ -471,6 +475,9 @@ class XRWebSocketServer:
         elif isinstance(inbound, GetStatusMessage):
             if self._on_get_status is not None:
                 self._on_get_status(inbound, websocket)
+        elif isinstance(inbound, SetLidarModeMessage):
+            if self._on_set_lidar_mode is not None:
+                self._on_set_lidar_mode(inbound, websocket)
 
     def schedule_send(self, text: str) -> None:
         """Enqueue a broadcast from any thread onto the server loop."""
@@ -498,3 +505,7 @@ class XRWebSocketServer:
         outbound = self._outbound.get(websocket)
         if outbound is not None:
             outbound.enqueue(text)
+
+    @property
+    def connection_count(self) -> int:
+        return len(self._connections)

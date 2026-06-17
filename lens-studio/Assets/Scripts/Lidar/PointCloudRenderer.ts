@@ -7,9 +7,9 @@ const POINT_SIZE_CM = 2.4;
 const DEFAULT_MIN_ABOVE_FLOOR_CM = 0.5;
 const DEFAULT_MAX_ABOVE_FLOOR_CM = 155;
 const LIDAR_FILTER_DEBUG_INTERVAL_S = 5.0;
-const OBSTACLE_MIN_DIST_CM = 10;
-const OBSTACLE_OPAQUE_CM = 40;
-const OBSTACLE_FADE_END_CM = 60;
+const DEFAULT_OBSTACLE_MIN_DIST_CM = 10;
+const DEFAULT_OBSTACLE_OPAQUE_CM = 40;
+const DEFAULT_OBSTACLE_FADE_END_CM = 60;
 const FULL_LIDAR_POINT_ALPHA = 0.4;
 const FLOATS_PER_VERTEX = 7;
 const VERTS_PER_POINT = 8;
@@ -49,6 +49,9 @@ export class PointCloudRenderer extends BaseScriptComponent {
   private _robotFloorWorldY: number | null = null;
   private _minAboveFloorCm = DEFAULT_MIN_ABOVE_FLOOR_CM;
   private _maxAboveFloorCm = DEFAULT_MAX_ABOVE_FLOOR_CM;
+  private _obstacleMinDistCm = DEFAULT_OBSTACLE_MIN_DIST_CM;
+  private _obstacleOpaqueCm = DEFAULT_OBSTACLE_OPAQUE_CM;
+  private _obstacleFadeEndCm = DEFAULT_OBSTACLE_FADE_END_CM;
   private _fullLidarVisible = false;
   private _lastFilterDebugLogTime = 0;
 
@@ -125,6 +128,16 @@ export class PointCloudRenderer extends BaseScriptComponent {
   ): void {
     this._minAboveFloorCm = minAboveFloorCm;
     this._maxAboveFloorCm = Math.max(maxAboveFloorCm, minAboveFloorCm + 1);
+  }
+
+  public setObstacleDistanceBand(
+    minDistanceCm: number,
+    opaqueDistanceCm: number,
+    maxDistanceCm: number,
+  ): void {
+    this._obstacleMinDistCm = Math.max(0, minDistanceCm);
+    this._obstacleOpaqueCm = Math.max(this._obstacleMinDistCm, opaqueDistanceCm);
+    this._obstacleFadeEndCm = Math.max(this._obstacleOpaqueCm, maxDistanceCm);
   }
 
   public setFullLidarVisible(enabled: boolean): void {
@@ -323,18 +336,18 @@ export class PointCloudRenderer extends BaseScriptComponent {
       const world = this._protocolPointToVisualLocalCm(points[i], invertMat);
       const dist = horizontalDistanceCm(world, robot);
       if (
-        dist < OBSTACLE_MIN_DIST_CM ||
-        dist > OBSTACLE_FADE_END_CM
+        dist < this._obstacleMinDistCm ||
+        dist > this._obstacleFadeEndCm
       ) {
         continue;
       }
 
       let alpha = 1.0;
-      if (dist > OBSTACLE_OPAQUE_CM) {
+      if (dist > this._obstacleOpaqueCm) {
         alpha =
           1.0 -
-          (dist - OBSTACLE_OPAQUE_CM) /
-            (OBSTACLE_FADE_END_CM - OBSTACLE_OPAQUE_CM);
+          (dist - this._obstacleOpaqueCm) /
+            (this._obstacleFadeEndCm - this._obstacleOpaqueCm);
       }
       if (alpha <= 0.001) {
         continue;

@@ -70,6 +70,13 @@ class LidarFilterConfig:
         return False
 
 
+@dataclass(frozen=True)
+class LidarObstacleDistanceConfig:
+    min_distance_m: float = 0.10
+    opaque_distance_m: float = 0.40
+    max_distance_m: float = 0.60
+
+
 class LidarFilter:
     def __init__(self, config: LidarFilterConfig | None = None) -> None:
         self.config = config or LidarFilterConfig()
@@ -93,6 +100,49 @@ class LidarFilter:
         if len(pts) == 0:
             return np.zeros((0, 3), dtype=np.float32)
         return pts
+
+
+def filter_obstacle_points(
+    points: NDArray[np.floating],
+    config: LidarObstacleDistanceConfig,
+    *,
+    robot_position: tuple[float, float, float] | None = None,
+    vertical_axis: int = 2,
+    min_height_m: float | None = None,
+    max_height_m: float | None = None,
+) -> NDArray[np.float32]:
+    """Keep only obstacle points inside a robot-centred horizontal annulus.
+
+    ``vertical_axis`` selects the up-axis for the supplied point frame:
+    - ``2`` for odom-space clouds where +Z is up.
+    - ``1`` for world-space clouds where +Y is up.
+    """
+    if points.size == 0:
+        return np.zeros((0, 3), dtype=np.float32)
+    pts = np.asarray(points, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise ValueError(f"Expected Nx3 points, got shape {pts.shape}")
+    if vertical_axis not in (0, 1, 2):
+        raise ValueError(f"Expected vertical_axis in (0, 1, 2), got {vertical_axis}")
+    origin = np.zeros(3, dtype=np.float32)
+    if robot_position is not None:
+        origin = np.asarray(robot_position, dtype=np.float32)
+        if origin.shape != (3,):
+            raise ValueError(f"Expected robot_position shape (3,), got {origin.shape}")
+    horizontal_axes = [axis for axis in range(3) if axis != vertical_axis]
+    horizontal = np.linalg.norm(pts[:, horizontal_axes] - origin[horizontal_axes], axis=1)
+    mask = (
+        (horizontal >= config.min_distance_m)
+        & (horizontal <= config.max_distance_m)
+    )
+    if min_height_m is not None:
+        mask &= pts[:, vertical_axis] >= origin[vertical_axis] + min_height_m
+    if max_height_m is not None:
+        mask &= pts[:, vertical_axis] <= origin[vertical_axis] + max_height_m
+    pts = pts[mask]
+    if len(pts) == 0:
+        return np.zeros((0, 3), dtype=np.float32)
+    return pts
 
 
 def subsample_points_near_robot(

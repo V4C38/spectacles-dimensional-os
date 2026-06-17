@@ -153,6 +153,40 @@ class OdomBuffer:
                 orientation=quat_out,
             )
 
+    def speed_at(self, mono_ts: float) -> float | None:
+        """Estimate robot linear speed (m/s) from the two odom samples that bracket
+        ``mono_ts``.  Returns ``None`` when fewer than two samples are available or
+        the bracket gap exceeds ``ODOM_LOOKUP_MAX_GAP_S``."""
+        with self._lock:
+            if len(self._buffer) < 2:
+                return None
+            before: tuple[float, OdomSample] | None = None
+            after: tuple[float, OdomSample] | None = None
+            for ts, sample in self._buffer:
+                if ts <= mono_ts:
+                    before = (ts, sample)
+                else:
+                    after = (ts, sample)
+                    break
+            if before is None or after is None:
+                return None
+            before_ts, before_sample = before
+            after_ts, after_sample = after
+            dt = after_ts - before_ts
+            if dt <= 1e-6:
+                return None
+            if (
+                abs(mono_ts - before_ts) > ODOM_LOOKUP_MAX_GAP_S
+                and abs(after_ts - mono_ts) > ODOM_LOOKUP_MAX_GAP_S
+            ):
+                return None
+            dp = math.sqrt(
+                (after_sample.position[0] - before_sample.position[0]) ** 2
+                + (after_sample.position[1] - before_sample.position[1]) ** 2
+                + (after_sample.position[2] - before_sample.position[2]) ** 2
+            )
+            return dp / dt
+
     def latest_world_position(self, calibration: Calibration) -> tuple[float, float, float] | None:
         """Transform the latest odom position into the AR world frame."""
         odom = self.latest()

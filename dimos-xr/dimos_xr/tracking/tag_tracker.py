@@ -294,6 +294,13 @@ class FrameResult:
     tag_ids: list[int]
     quality: float | None
     observations_added: int
+    # Counts of per-observation rejections in the registered runtime path,
+    # populated only when process_frame is called with registered=True.
+    rejections_reprojection: int = 0
+    rejections_distance: int = 0
+    rejections_up_tilt: int = 0
+    rejections_mount_residual: int = 0
+    rejections_innovation: int = 0
 
 
 @dataclass
@@ -465,6 +472,7 @@ class TagTracker:
         detected_ids: list[int] = []
         best_quality = 0.0
         added = 0
+        rej_reproj = rej_dist = rej_tilt = rej_mount = rej_innov = 0
 
         for corners, tag_id_arr in zip(corners_list, ids, strict=False):
             tag_id = int(tag_id_arr[0])
@@ -490,9 +498,11 @@ class TagTracker:
                 dist_coeffs,
             )
             if reproj > self._config.max_reprojection_error_px:
+                rej_reproj += 1
                 continue
             dist_cam = float(np.linalg.norm(tvec.reshape(3)))
             if dist_cam > self._config.max_distance_m:
+                rej_dist += 1
                 continue
 
             T_camera_tag = _rvec_tvec_to_matrix(rvec, tvec)
@@ -528,6 +538,7 @@ class TagTracker:
             if registered and T_committed is not None:
                 up_tilt_deg = up_axis_angle_deg(T_candidate_raw)
                 if up_tilt_deg > self._config.max_up_axis_tilt_deg:
+                    rej_tilt += 1
                     continue
                 measured_mount = self._measured_mount_position(
                     T_world_tag=T_world_tag,
@@ -538,6 +549,7 @@ class TagTracker:
                     np.linalg.norm(measured_mount - np.asarray(mount.position, dtype=np.float64))
                 )
                 if mount_residual > self._config.max_mount_residual_m:
+                    rej_mount += 1
                     continue
                 T_candidate = T_candidate_raw
                 T_candidate = gravity_level_transform(T_candidate)
@@ -548,6 +560,7 @@ class TagTracker:
                     with self._lock:
                         recent = list(self._observations)[-self._config.relocalize_consecutive :]
                     if len(recent) < self._config.relocalize_consecutive:
+                        rej_innov += 1
                         continue
                     spread = max(
                         float(
@@ -559,6 +572,7 @@ class TagTracker:
                         for j in range(i + 1, len(recent))
                     )
                     if spread > self._config.relocalize_cluster_m:
+                        rej_innov += 1
                         continue
 
             obs = TagObservation(
@@ -589,6 +603,11 @@ class TagTracker:
             tag_ids=detected_ids,
             quality=best_quality if detected_ids else None,
             observations_added=added,
+            rejections_reprojection=rej_reproj,
+            rejections_distance=rej_dist,
+            rejections_up_tilt=rej_tilt,
+            rejections_mount_residual=rej_mount,
+            rejections_innovation=rej_innov,
         )
 
     def _measured_mount_position(

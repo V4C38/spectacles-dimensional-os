@@ -70,6 +70,18 @@ export interface LidarMessage {
   points: [number, number, number][];
 }
 
+export interface LidarObstacleSettings {
+  minDistanceM: number;
+  opaqueDistanceM: number;
+  maxDistanceM: number;
+}
+
+export const DEFAULT_LIDAR_OBSTACLE_SETTINGS: LidarObstacleSettings = {
+  minDistanceM: 0.10,
+  opaqueDistanceM: 0.40,
+  maxDistanceM: 0.60,
+};
+
 export interface PoseMessage {
   type: "pose";
   ts: number;
@@ -106,6 +118,7 @@ export interface AlignStatusMessage {
   message: string;
   tag_visible?: boolean;
   assist_stage?: string;
+  sampling?: boolean;
   robot_world_pose?: { position: [number, number, number]; orientation: [number, number, number, number] };
   step_index?: number;
   step_count?: number;
@@ -410,6 +423,9 @@ function parseInboundObject(
       if (typeof data.assist_stage === "string") {
         msg.assist_stage = data.assist_stage;
       }
+      if (typeof data.sampling === "boolean") {
+        msg.sampling = data.sampling;
+      }
       if (
         typeof data.robot_world_pose === "object" &&
         data.robot_world_pose !== null &&
@@ -570,6 +586,22 @@ export function buildGetStatus(robotId: string): string {
     type: "get_status",
     ts: getTime(),
     robot_id: robotId,
+  });
+}
+
+export function buildSetLidarMode(
+  robotId: string,
+  mode: "off" | "obstacles" | "full",
+  settings: LidarObstacleSettings = DEFAULT_LIDAR_OBSTACLE_SETTINGS,
+): string {
+  return JSON.stringify({
+    type: "set_lidar_mode",
+    ts: getTime(),
+    robot_id: robotId,
+    mode,
+    obstacle_min_distance_m: settings.minDistanceM,
+    obstacle_opaque_distance_m: settings.opaqueDistanceM,
+    obstacle_max_distance_m: settings.maxDistanceM,
   });
 }
 

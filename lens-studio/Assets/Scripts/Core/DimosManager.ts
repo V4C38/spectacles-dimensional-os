@@ -27,6 +27,7 @@ import {
 } from "./AppState";
 import {
   BridgeStatusMessage,
+  DEFAULT_LIDAR_OBSTACLE_SETTINGS,
   deriveLinkState,
   PoseCorrectionMessage,
   PoseMessage,
@@ -50,6 +51,7 @@ import {
 const WorldQueryModule = require("LensStudio:WorldQueryModule");
 const DRIFTING_TRANSLATION_THRESHOLD_M = 0.05;
 const POSE_CORRECTION_LOG_INTERVAL_S = 1.0;
+const LIDAR_STALE_CLEAR_S = 0.5;
 
 /** Scene-root orchestrator wiring bridge I/O, alignment, rendering, navigation, and robot menu after setup completes. */
 @component
@@ -108,6 +110,7 @@ export class DimosManager extends BaseScriptComponent {
 
   // ── Inlined LidarFeed state ────────────────────────────────────
   private _lastLidarPoints: [number, number, number][] | null = null;
+  private _lastLidarRxTime = 0;
   private _lidarMeshDirty = false;
 
   private _robotMenuView: RobotMenuView | null = null;
@@ -265,11 +268,13 @@ export class DimosManager extends BaseScriptComponent {
     }
     this.bridgeClient.onHello.add((msg) => {
       this._applyHello(msg);
+      this._syncBridgeLidarMode();
       this.onBridgeReady.emit();
     });
     this.bridgeClient.onLidar.add((msg) => {
       if (this._isActive && this.lidarMode !== "off") {
         this._lastLidarPoints = msg.points;
+        this._lastLidarRxTime = getTime();
         this._lidarMeshDirty = true;
         this._refreshRobotLidarAnchor();
       }
@@ -343,11 +348,12 @@ export class DimosManager extends BaseScriptComponent {
       );
     }
     this.robotMarker?.notifyAlignmentUpdated();
+    this.robotMarker?.beginRealignmentSnap();
   }
 
   private _applyRuntimeState(state: RobotRuntimeState): void {
     if (!state.capabilities.lidar?.available && this.lidarMode !== "off") {
-      this._setAppState({ lidarMode: "off" });
+      this.setLidarMode("off");
     }
     this.robotMarker?.setRenderOffsetCm(runtimeRenderOffsetCm(state));
     this._robotMenuView?.setRobotLabel(state.displayName);
@@ -393,6 +399,7 @@ export class DimosManager extends BaseScriptComponent {
     this.onBridgeConnectionChanged.emit(connected);
     if (!connected) {
       this._lastLidarPoints = null;
+      this._lastLidarRxTime = 0;
       this._lidarMeshDirty = false;
       this._nav?.clearForDisconnect();
       const defaultRuntime = createDefaultRobotRuntimeState();
@@ -766,6 +773,7 @@ export class DimosManager extends BaseScriptComponent {
     }
     this._setAppState({ lidarMode: mode });
     this._lidarSync();
+    this._syncBridgeLidarMode();
     if (mode === "off" && !this._nav?.canStartPlacement()) {
       this._nav?.setPlacementEnabled(false);
     }
@@ -819,6 +827,7 @@ export class DimosManager extends BaseScriptComponent {
       // Setup mode: LiDAR off, nav placement off; wizard-only, not user-selectable
       this._setAppState({ operatingMode: mode, lidarMode: "off" });
       this._lidarSync();
+      this._syncBridgeLidarMode();
       this._nav?.setPlacementEnabled(false);
       this._nav?.syncPlacementState();
       this._robotMenuView?.setOperatingMode(mode);
@@ -832,6 +841,7 @@ export class DimosManager extends BaseScriptComponent {
       mainMenuExpandedSettingsMode: settingsSubmenuOpen ? mode : null,
     });
     this._lidarSync();
+    this._syncBridgeLidarMode();
     if (lidarMode === "off" && !this._nav?.canStartPlacement()) {
       this._nav?.setPlacementEnabled(false);
     }
@@ -865,6 +875,20 @@ export class DimosManager extends BaseScriptComponent {
   // ── Inlined LidarFeed ─────────────────────────────────────────
 
   private _lidarTick(): void {
+    if (
+      !this._lidarMeshDirty &&
+      this._isActive &&
+      this.lidarMode !== "off" &&
+      this.hasBridgeConnection() &&
+      this._lastLidarPoints !== null &&
+      this._lastLidarRxTime > 0 &&
+      getTime() - this._lastLidarRxTime >= LIDAR_STALE_CLEAR_S
+    ) {
+      this._lastLidarPoints = null;
+      this._lastLidarRxTime = 0;
+      this.pointCloudRenderer?.clearAll();
+      return;
+    }
     if (
       !this._lidarMeshDirty ||
       !this._isActive ||
@@ -951,11 +975,27 @@ export class DimosManager extends BaseScriptComponent {
     this.pointCloudRenderer?.setRobotFloorWorldY(robotFloorWorldYCm(position.y, runtime));
     const band = lidarVerticalBandCm(runtime);
     this.pointCloudRenderer?.setLidarVerticalBand(band.minAboveFloorCm, band.maxAboveFloorCm);
+    this.pointCloudRenderer?.setObstacleDistanceBand(
+      DEFAULT_LIDAR_OBSTACLE_SETTINGS.minDistanceM * 100.0,
+      DEFAULT_LIDAR_OBSTACLE_SETTINGS.opaqueDistanceM * 100.0,
+      DEFAULT_LIDAR_OBSTACLE_SETTINGS.maxDistanceM * 100.0,
+    );
+  }
+
+  private _syncBridgeLidarMode(): void {
+    if (!this.bridgeClient || !this.hasBridgeConnection() || !this.bridgeClient.activeRobotId) {
+      return;
+    }
+    this.bridgeClient?.sendLidarMode(
+      this.lidarMode,
+      DEFAULT_LIDAR_OBSTACLE_SETTINGS,
+    );
   }
 
   private _lidarSync(): void {
     if (!this._isActive || this.lidarMode === "off") {
       this._lastLidarPoints = null;
+      this._lastLidarRxTime = 0;
       this._lidarMeshDirty = false;
       this.pointCloudRenderer?.clearAll();
       return;
