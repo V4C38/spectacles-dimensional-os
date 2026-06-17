@@ -19,10 +19,8 @@ At a glance:
 
 ```mermaid
 flowchart LR
-  RobotStack[DimOS robot stack] --> DimOS[DimOS]
-  DimOS -->|"lidar / odom / path"| XRBridge[XRBridge in dimos-xr]
-  Spectacles[Spectacles Lens] -->|"ws JSON + binary frames :8787"| XRBridge
-  XRBridge -->|"bridge_status / pose / lidar / path"| Spectacles
+  DimOS[DimOS robot stack] --> Bridge[XRBridge]
+  Lens[Spectacles Lens] <-->|"WebSocket :8787"| Bridge
 ```
 
 ## Core concepts / Overview
@@ -58,7 +56,12 @@ flowchart LR
 <details>
 <summary>Frame alignment</summary>
 
-The bridge solves `T_world_odom` so AR content stays registered to the robot. During calibration, Spectacles streams high-resolution stills plus camera pose over the WebSocket; the bridge runs AprilTag detection and PnP on those frames against the **robot-mounted** tag while the robot performs an assisted left/right baseline move. When enough stable observations accumulate, the bridge commits a gravity-leveled transform so the AR floor stays flat. After commit, the same robot-mounted tag continues to drive runtime correction from Spectacles frames, including translation updates when the robot is stationary and the tag is visible.
+The bridge solves `T_world_odom` so AR content stays registered to the robot. Two calibration flows are supported:
+
+- **Assisted tag** (`align_start{method:"tag", assist:true}`) — the robot drives itself through a 3-leg baseline move (out → back → return) while the Spectacles user looks at the **robot-mounted** AprilTag; the bridge stops the robot between legs to collect stable observations, then runs PnP and auto-commits a gravity-leveled transform once enough baseline has accumulated. Requires the active robot to advertise `align_assist`.
+- **Manual pose** — the user drags the robot marker to its real-world position in the Lens and commits directly. No camera frames are consumed, and it's always available regardless of hardware capabilities.
+
+After commit, the same robot-mounted tag continues to drive runtime drift correction from Spectacles frames: a full solve updates yaw and translation once enough baseline exists, falling back to a translation-only correction when the robot is stationary. Runtime corrections only surface to the Lens as a "Refined Tracking" notification once they cross a small deadband (≥ 5 cm translation or ≥ 1° yaw); smaller continuous refinements stay silent.
 
 Calibration requires a **printed robot-mounted tag**: a plain **70 mm × 70 mm** AprilTag 36h11 sticker (56 mm black square). Generate assets with:
 
@@ -91,24 +94,13 @@ The Lens side is organized around three scene-entry scripts:
 - [`DimosManager.ts`](lens-studio/Assets/Scripts/Core/DimosManager.ts) is the orchestration hub for bridge I/O, shared app state, robot marker state, LiDAR/path rendering, navigation placement, and manual-alignment fallback.
 - [`UIManager.ts`](lens-studio/Assets/Scripts/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
 
-`BridgeClient` is the transport layer, `CalibrationFlow` owns calibrate-step state for both tag and manual modes, `AlignmentSession` is the single owner of the bridge alignment session (tag + manual), `NavigationController` manages goal placement and navigation state, and the visuals live under `robot/`, `lidar/`, and `navigation/`.
+`BridgeClient` is the transport layer, `CalibrationFlow` owns calibrate-step state for both tag and manual modes, `AlignmentSession` is the single owner of the bridge alignment session (tag + manual), `CameraStream` is a singleton wrapper around the Spectacles colour camera shared by setup and runtime capture, `NavigationController` manages goal placement and navigation state, and the visuals live under `robot/`, `lidar/`, and `navigation/`.
 
 ```mermaid
 flowchart TB
-  SetupWizard[SetupWizard] --> DimosManager[DimosManager]
-  SetupWizard --> CalibrationFlow[CalibrationFlow]
-  SetupWizard --> AlignmentSession[AlignmentSession]
-  UIManager[UIManager] --> DimosManager
-  UIManager -->|"Restart setup"| SetupWizard
-  DimosManager --> BridgeClient[BridgeClient]
-  DimosManager --> AppState[AppState]
-  DimosManager --> AlignmentSession
-  DimosManager --> Navigation[NavigationController]
-  DimosManager --> RobotMarker[RobotMarker]
-  AppState --> UIManager
-  AppState --> SetupWizard
-  AlignmentSession --> BridgeClient
-  Navigation --> BridgeClient
+  Setup[SetupWizard] --> Manager[DimosManager]
+  UI[UIManager] --> Manager
+  Manager --> Bridge[BridgeClient]
 ```
 
 <details>
@@ -135,9 +127,10 @@ flowchart TB
 
   ```text
   lens-studio/Assets/Scripts/
-  ├── Core/        (DimosManager, AppState, RobotRuntime, SignalEmitter, MathUtils)
+  ├── Core/        (DimosManager, AppState, RobotRuntime, SignalEmitter, MathUtils, UILogger)
   ├── Bridge/      (BridgeClient, Protocol — types + parser + builders)
-  ├── Setup/       (SetupWizard, WizardView, CalibrationFlow)
+  ├── Camera/      (CameraStream — shared colour camera singleton)
+  ├── Setup/       (SetupWizard, WizardView, CalibrationFlow, AssistPreviewPresentation)
   ├── UI/          (UIManager, MainMenuView, RobotMenuView, BridgeStatusPresentation, kit/UIKit, kit/UIAnimations)
   ├── Alignment/   (AlignmentSession, ManualPoseCorrection, FrameCaptureController)
   ├── Navigation/  (NavigationController, PlacementController, PathRenderer, NavigationMarkerView, SurfacePlacementStabilizer, HeadingRotation)
@@ -145,7 +138,7 @@ flowchart TB
   └── Lidar/       (PointCloudRenderer, MockLidarPoints)
   ```
 
-- `ShowLiDAR` controls the height/debug layer, while the red obstacle layer still comes from live bridge lidar when connected.
+- `ShowLiDAR` controls the height/debug layer, while the red obstacle layer still comes from live bridge lidar when connected. The Lens can also request a bridge-side LiDAR transmit mode (`off` / `obstacles` / `full`) via `set_lidar_mode` to cut payload when only obstacle proximity matters.
 
 </details>
 
@@ -153,18 +146,13 @@ flowchart TB
 
 [`dimos-xr/`](dimos-xr/) contains the Python side: `XRBridge`, `XRRobotAdapterModule`, the protocol definition, and the tests. The monorepo entrypoint is [`dimos-xr/dimos_xr/blueprints.py`](dimos-xr/dimos_xr/blueprints.py), which wraps native DimOS stack composition for the currently selected robot runtime.
 
-`XRBridge` subclasses `dimos.core.module.Module`, handles WebSocket sessions, calibration, transforms, LiDAR/pose/path streaming, and dispatches outbound control through `XRRobotAdapterModule`. The adapter module absorbs robot-specific streams and control surfaces for Go2 and G1 while keeping the bridge core platform-agnostic.
+`XRBridge` itself ([`dimos-xr/dimos_xr/bridge/module.py`](dimos-xr/dimos_xr/bridge/module.py)) subclasses `dimos.core.module.Module` and stays thin: it declares the DimOS `In[...]` streams, builds its collaborators, and fans handler calls out to them. The actual logic lives in single-owner collaborators under `dimos-xr/dimos_xr/bridge/`: `AlignmentController` (calibration sessions, camera-frame processing, runtime drift correction), `NavController` (goal placement, path execution, e-stop), `TelemetryPublisher` (pose/lidar streaming and the bridge-side LiDAR transmit mode), `OdomBuffer` (latest-odom cache), `StatusService` (`bridge_status` broadcasting), `PreviewService` (side-effect-free path preview), and `BridgeSender` (the shared outbound-message sink). The adapter module absorbs robot-specific streams and control surfaces for Go2 and G1 while keeping the bridge core platform-agnostic.
 
 ```mermaid
 flowchart TB
-  DimOSStreams[DimOS streams] --> XRAdapter[XRRobotAdapterModule]
-  XRAdapter --> XRBridge[XRBridge]
-  Clients[XR clients] -->|"align / nav_goal / stop"| XRBridge
-  XRBridge -->|"pose / lidar / path / status"| Clients
-  XRBridge --> Alignment[Alignment and calibration]
-  XRBridge --> Filtering[Lidar filtering and world transforms]
-  XRBridge --> XRAdapter
-  Blueprint[blueprints.py] -->|"autoconnect"| XRBridge
+  DimOS[DimOS] --> Bridge[XRBridge]
+  Clients[XR clients] <-->|protocol| Bridge
+  Blueprint[blueprints.py] --> Bridge
 ```
 
 <details>
@@ -224,7 +212,7 @@ cd /path/to/spectacles-dimensional-os/dimos-xr
 /path/to/dimos/.venv/bin/python3 -m mypy dimos_xr
 ```
 
-If you want to run `unitree-g1-nav-onboard`, make sure the same DimOS `.venv`
+If you want to run `xr-g1`, make sure the same DimOS `.venv`
 also has the DDS SDK package installed:
 
 ```bash
@@ -246,9 +234,8 @@ Tests are colocated with their modules under `dimos-xr/dimos_xr/`. See [`dimos-x
 <summary>Transport, ports, and discovery</summary>
 
 - XR bridge WebSocket listens on **8787**; avoid binding port **8765** on the same machine while Foxglove is running.
-- `start.sh` chooses the stack interactively at launch.
-- `unitree-g1-nav-onboard` is the recommended G1 XR path.
-- `unitree-g1` is a reduced-capability runtime; nav/control may be disabled there.
+- `start.sh` chooses the stack interactively at launch, between `xr-go2` and `xr-g1`.
+- `xr-g1` always composes on top of the Unitree G1 nav-onboard blueprint; navigation requires the Unitree DDS Python package set in the DimOS `.venv`, while manual alignment stays available regardless.
 
 </details>
 
@@ -257,6 +244,7 @@ Tests are colocated with their modules under `dimos-xr/dimos_xr/`. See [`dimos-x
 
 - Tune lidar and rate limits via `XRBridgeConfig` in [`dimos-xr/dimos_xr/bridge/module.py`](dimos-xr/dimos_xr/bridge/module.py).
 - Add or change messages by updating the Python protocol, the protocol spec, and the Lens protocol modules together.
+- The protocol now also carries `set_lidar_mode` (client-selected `off` / `obstacles` / `full` LiDAR transmission) and `pose_correction` (runtime drift-correction telemetry, deadbanded so only meaningful jumps reach the client); see [`dimos-xr/PROTOCOL.md`](dimos-xr/PROTOCOL.md) for the full schema.
 - Keep `dimos-xr/dimos_xr/` platform-agnostic. Spectacles-specific code stays in [`lens-studio/`](lens-studio/); other XR clients should live in their own client folder or repo.
 
 </details>
