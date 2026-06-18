@@ -1,12 +1,21 @@
 import { RectangleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RectangleButton";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
-import { BridgeLinkState, OperatingMode } from "../Core/AppState";
+import {
+  AppStateListener,
+  BridgeLinkState,
+  DimosAppState,
+  navigationOutcomePresentation,
+  OperatingMode,
+  robotMarkerSteadyStatePresentation,
+} from "../Core/AppState";
+import { UILogEntry, UILogger } from "../UI/UILogger";
 import { getBridgeStatusPresentation } from "../UI/BridgeStatusPresentation";
 import { scaleIn, scaleOut } from "../UI/kit/UIAnimations";
 import {
   applyCapabilityButtonPresentation,
   bindHoverScale,
   bindToggleButton,
+  COLOR_WHITE,
   configureButtonToggle,
   findChildRecursive,
   findText,
@@ -20,10 +29,10 @@ import {
 } from "../UI/kit/UIKit";
 
 // ================================================================
-/** Scene-bound robot menu UI for toggle, stop, navigation placement, and mode panels. */
+/** Scene-bound robot marker UI: floating menu, toggle, and marker HUD texts. */
 // ================================================================
 
-export class RobotMenuView {
+export class RobotMarkerView {
   public onToggleRequested: (() => void) | null = null;
   public onStopRequested: (() => void) | null = null;
   public onNavigationPlacementRequested: ((enabled: boolean) => void) | null = null;
@@ -47,42 +56,50 @@ export class RobotMenuView {
   private readonly setupWizardMenuObj: SceneObject | null;
   private readonly continueSetupObj: SceneObject | null;
   private readonly continueSetupBtn: RectangleButton | null;
+  private readonly _stateInfoText: Text | null;
+  private readonly _debugInfoText: Text | null;
   private _navigationPlacementEnabled = false;
   private _operatingMode: OperatingMode = "manual";
   private _inSetupMode = false;
+  private _debugMode = false;
+  private _uiLogEntry: UILogEntry | null = null;
+  private _unsubscribeAppState: (() => void) | null = null;
+  private _unsubscribeUILog: (() => void) | null = null;
 
   constructor(markerRoot: SceneObject, menuRoot: SceneObject) {
     this.markerRoot = markerRoot;
     const toggleObj = requireChild(
       this.markerRoot,
       "RobotToggleButton",
-      "RobotMenuView",
+      "RobotMarkerView",
     );
     this.menuObj = menuRoot;
-    this.titleText = requireText(this.menuObj, "RobotMenuTitle", "RobotMenuView");
+    this.titleText = requireText(this.menuObj, "RobotMenuTitle", "RobotMarkerView");
     this.markerTitleText = findText(this.markerRoot, "Text_Title");
-    this.statusText = requireText(this.menuObj, "RobotMenuStatus", "RobotMenuView");
-    this.stopObj = requireChild(this.menuObj, "RobotMenuStop", "RobotMenuView");
+    this.statusText = requireText(this.menuObj, "RobotMenuStatus", "RobotMarkerView");
+    this.stopObj = requireChild(this.menuObj, "RobotMenuStop", "RobotMarkerView");
     this.navigationPlacementObj = requireChild(
       this.menuObj,
       "RobotMenuEnableNavigation",
-      "RobotMenuView",
+      "RobotMarkerView",
     );
-    this.stopBtn = requireRectangleButton(this.stopObj, "RobotMenuView");
+    this.stopBtn = requireRectangleButton(this.stopObj, "RobotMarkerView");
     this.navigationPlacementBtn = requireRectangleButton(
       this.navigationPlacementObj,
-      "RobotMenuView",
+      "RobotMarkerView",
     );
-    this.stopLabel = requireText(this.stopObj, "RobotMenuStopLabel", "RobotMenuView");
+    this.stopLabel = requireText(this.stopObj, "RobotMenuStopLabel", "RobotMarkerView");
     this.navigationPlacementLabel = requireText(
       this.navigationPlacementObj,
       "RobotMenuEnableNavigationLabel",
-      "RobotMenuView",
+      "RobotMarkerView",
     );
-    this.toggleBtn = requireRoundButton(toggleObj, "RobotMenuView");
+    this.toggleBtn = requireRoundButton(toggleObj, "RobotMarkerView");
     this.toggleVisual = toggleObj.getComponent(
       "Component.RenderMeshVisual",
     ) as RenderMeshVisual;
+    this._stateInfoText = findText(this.markerRoot, "StateInfoText");
+    this._debugInfoText = findText(this.markerRoot, "DebugInfoText");
     this.toggleBtn.onTriggerUp.add(() => this.onToggleRequested?.());
     this.stopBtn.onTriggerUp.add(() => {
       this.onStopRequested?.();
@@ -99,7 +116,6 @@ export class RobotMenuView {
     this.manualModeMenu = findChildRecursive(this.menuObj, "ManualModeMenu");
     this.agentModeMenu = findChildRecursive(this.menuObj, "AgentModeMenu");
 
-    // Setup wizard menu (disabled by default in the scene)
     this.setupWizardMenuObj = findChildRecursive(this.menuObj, "SetupWizardMenu");
     this.continueSetupObj = this.setupWizardMenuObj
       ? findChildRecursive(this.setupWizardMenuObj, "ContinueSetupButton")
@@ -119,6 +135,28 @@ export class RobotMenuView {
     this.setMenuVisible(false);
     this.setNavigationPlacementVisible(true);
     this.setOperatingMode(this._operatingMode);
+    this._refreshDebugInfoText();
+  }
+
+  public initialize(deps: {
+    subscribeAppState: (listener: AppStateListener) => () => void;
+    uiLogger: UILogger;
+  }): void {
+    this._unsubscribeAppState?.();
+    this._unsubscribeAppState = deps.subscribeAppState((state) =>
+      this._applyStateInfo(state),
+    );
+    this._unsubscribeUILog?.();
+    this._unsubscribeUILog = deps.uiLogger.subscribe((entry) =>
+      this._applyUILogEntry(entry),
+    );
+  }
+
+  public dispose(): void {
+    this._unsubscribeAppState?.();
+    this._unsubscribeAppState = null;
+    this._unsubscribeUILog?.();
+    this._unsubscribeUILog = null;
   }
 
   public hide(): void {
@@ -130,7 +168,6 @@ export class RobotMenuView {
   }
 
   public applyBridgeLinkState(state: BridgeLinkState): void {
-    // Do not overwrite setup-mode status text with bridge link state.
     if (this._inSetupMode) {
       return;
     }
@@ -252,6 +289,38 @@ export class RobotMenuView {
 
   public setSetupStopVisible(visible: boolean): void {
     this.stopObj.enabled = visible;
+  }
+
+  private _applyStateInfo(state: DimosAppState): void {
+    this._debugMode = state.debugMode;
+    this._refreshStateInfoText(state);
+    this._refreshDebugInfoText();
+  }
+
+  private _refreshStateInfoText(state: DimosAppState): void {
+    if (!this._stateInfoText) {
+      return;
+    }
+    const outcomePresentation = navigationOutcomePresentation(state.navigationOutcome);
+    const presentation = outcomePresentation ?? robotMarkerSteadyStatePresentation(state);
+    this._stateInfoText.text = presentation.text;
+    this._stateInfoText.textFill.color = presentation.color;
+  }
+
+  private _applyUILogEntry(entry: UILogEntry | null): void {
+    this._uiLogEntry = entry;
+    this._refreshDebugInfoText();
+  }
+
+  private _refreshDebugInfoText(): void {
+    if (!this._debugInfoText) {
+      return;
+    }
+    const presentation = this._debugMode ? this._uiLogEntry : null;
+    const shouldShow = !!presentation && presentation.text.length > 0;
+    this._debugInfoText.text = presentation?.text ?? "";
+    this._debugInfoText.textFill.color = presentation?.color ?? COLOR_WHITE;
+    this._debugInfoText.getSceneObject().enabled = shouldShow;
   }
 
   private _setToggleVisualSaturation(value: number): void {

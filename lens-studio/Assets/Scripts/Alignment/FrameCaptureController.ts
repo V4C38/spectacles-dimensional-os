@@ -1,6 +1,6 @@
 import { BridgeClient } from "../Bridge/BridgeClient";
 import { buildCameraFrameBytes, buildCameraInfo, CameraFrameAckMessage } from "../Bridge/Protocol";
-import { CameraStream } from "../Camera/CameraStream";
+import { CameraStream } from "../Core/CameraStream";
 import { quatFromMat4Rotation } from "../Core/MathUtils";
 
 const POSE_BUFFER_CAPACITY = 360;

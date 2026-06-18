@@ -15,7 +15,6 @@ import {
   NavigationMode,
   NavigationOutcome,
   RobotRuntimeState,
-  robotFloorWorldYCm,
 } from "../Core/AppState";
 import { BridgeClient } from "../Bridge/BridgeClient";
 import { RobotMarker } from "../Robot/RobotMarker";
@@ -30,8 +29,9 @@ import {
 import {
   isCapabilityAvailable,
   capabilityUnavailableReason,
+  robotFloorWorldYCm,
   runtimeDeadzoneRadiusCm,
-} from "../Core/RobotRuntime";
+} from "../Robot/RobotRuntimeModel";
 import { NavigationMarkerView } from "./NavigationMarkerView";
 import { NavigationPathRenderer } from "./NavigationPathRenderer";
 import { SurfacePlacementController, RobotGroundDeadzone } from "./SurfacePlacementController";

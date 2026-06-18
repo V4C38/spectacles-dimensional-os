@@ -3,7 +3,7 @@ import { FrameCaptureController } from "../Alignment/FrameCaptureController";
 import { PointCloudRenderer } from "../Lidar/PointCloudRenderer";
 import { LidarPresentationController } from "../Lidar/LidarPresentationController";
 import { RobotMarker } from "../Robot/RobotMarker";
-import { RobotMenuView } from "../Robot/RobotMenuView";
+import { RobotMarkerView } from "../Robot/RobotMarkerView";
 import { ManualPoseCorrection } from "../Alignment/ManualPoseCorrection";
 import { AlignmentSession } from "../Alignment/AlignmentSession";
 import { NavigationController } from "../Navigation/NavigationController";
@@ -39,14 +39,17 @@ import {
   runtimeRenderOffsetCm,
   isCapabilityAvailable,
   capabilityUnavailableReason,
-} from "./RobotRuntime";
-import { UILogListener, UILogger } from "./UILogger";
+} from "../Robot/RobotRuntimeModel";
+import { UILogListener, UILogger } from "../UI/UILogger";
 import { SetupAlignmentPreview } from "../Setup/SetupAlignmentPreview";
+import { COLOR_WHITE } from "../UI/kit/UIKit";
 
 const WorldQueryModule = require("LensStudio:WorldQueryModule");
 const DRIFTING_TRANSLATION_THRESHOLD_M = 0.05;
 const POSE_CORRECTION_LOG_INTERVAL_S = 1.0;
 const LIDAR_STALE_CLEAR_S = 0.5;
+const REFINED_TRACKING_LOG_TEXT = "- Refined Tracking -";
+const REFINED_TRACKING_LOG_DURATION_S = 0.5;
 
 /** Scene-root orchestrator wiring bridge I/O, alignment, rendering, navigation, and robot menu after setup completes. */
 @component
@@ -107,7 +110,7 @@ export class DimosManager extends BaseScriptComponent {
   } as any);
 
   private _lidar: LidarPresentationController | null = null;
-  private _robotMenuView: RobotMenuView | null = null;
+  private _robotMarkerView: RobotMarkerView | null = null;
   private _nav: NavigationController | null = null;
   private _placementDeferralEvent: DelayedCallbackEvent | null = null;
   private _lastPoseCorrectionLogTime = 0;
@@ -206,42 +209,44 @@ export class DimosManager extends BaseScriptComponent {
     const markerRoot = this.robotMarker?.markerRoot ?? null;
     const menuRoot = this.robotMarker?.getMenuRoot() ?? null;
     if (markerRoot && menuRoot) {
-      const robotMenuView = new RobotMenuView(markerRoot, menuRoot);
-      this._robotMenuView = robotMenuView;
-      robotMenuView.onToggleRequested = () => {
+      const robotMarkerView = new RobotMarkerView(markerRoot, menuRoot);
+      robotMarkerView.initialize({
+        subscribeAppState: (listener) => this.subscribeAppState(listener),
+        uiLogger: this._uiLogger,
+      });
+      this._robotMarkerView = robotMarkerView;
+      robotMarkerView.onToggleRequested = () => {
         if (this.operatingMode === "manual") {
-          robotMenuView.hide();
+          robotMarkerView.hide();
           this.setNavigationPlacementEnabled(!this.navigationPlacementEnabled);
           return;
         }
-        robotMenuView.toggleVisible();
+        robotMarkerView.toggleVisible();
       };
-      robotMenuView.onStopRequested = () => this.requestEmergencyStop();
-      robotMenuView.onNavigationPlacementRequested = (enabled) =>
+      robotMarkerView.onStopRequested = () => this.requestEmergencyStop();
+      robotMarkerView.onNavigationPlacementRequested = (enabled) =>
         this.setNavigationPlacementEnabled(enabled);
-      robotMenuView.setNavigationPlacementToggle(this.navigationPlacementEnabled);
+      robotMarkerView.setNavigationPlacementToggle(this.navigationPlacementEnabled);
     }
 
     if (this.robotMarker) {
       this.robotMarker.initialize({
         poseCorrection: this._poseCorrection,
-        uiLogger: this._uiLogger,
         getLastPose: () => this._lastPose,
-        robotMenuView: this._robotMenuView,
+        robotMarkerView: this._robotMarkerView,
         getIsActive: () => this._isActive,
         getOperatingMode: () => this.operatingMode,
         getInteractionMode: () => this.appState.robotInteractionMode,
         syncNavigationPlacementState: () => this._nav?.syncPlacementState(),
         onWorldPositionChanged: () => this._refreshLidarPresentation(),
       });
-      this.robotMarker.bindAppState((listener) => this.subscribeAppState(listener));
     }
 
     this._setupPreview = new SetupAlignmentPreview();
     this._setupPreview.initialize({
       groundDisc: this.groundDisc ?? null,
       robotMarker: this.robotMarker ?? null,
-      robotMenuView: this._robotMenuView,
+      robotMarkerView: this._robotMarkerView,
       getRobotRuntime: () => this.appState.robotRuntime,
       onConfirmAssist: () => this.alignmentSession?.confirmAssist(),
     });
@@ -334,7 +339,11 @@ export class DimosManager extends BaseScriptComponent {
         `DimosManager: pose_correction transDeltaM=${msg.trans_delta_m.toFixed(3)} yawDeltaDeg=${yawDeltaText} yawCorrected=${msg.yaw_corrected} solveQuality=${msg.solve_quality.toFixed(3)} solveMethod=${msg.solve_method}`,
       );
     }
-    this.robotMarker?.notifyAlignmentUpdated();
+    this._uiLogger.show(
+      REFINED_TRACKING_LOG_TEXT,
+      COLOR_WHITE,
+      REFINED_TRACKING_LOG_DURATION_S,
+    );
     this.robotMarker?.beginRealignmentSnap();
   }
 
@@ -346,16 +355,17 @@ export class DimosManager extends BaseScriptComponent {
 
     const runtime = state.robotRuntime;
     this.robotMarker?.setRenderOffsetCm(runtimeRenderOffsetCm(runtime));
-    this._robotMenuView?.setRobotLabel(runtime.displayName);
-    this._robotMenuView?.setNavigationPlacementAvailability(
+    this.robotMarker?.setDebugMode(state.debugMode);
+    this._robotMarkerView?.setRobotLabel(runtime.displayName);
+    this._robotMarkerView?.setNavigationPlacementAvailability(
       isCapabilityAvailable(runtime, "nav"),
     );
-    this._robotMenuView?.setEmergencyStopAvailability(
+    this._robotMarkerView?.setEmergencyStopAvailability(
       isCapabilityAvailable(runtime, "emergency_stop"),
       capabilityUnavailableReason(runtime, "emergency_stop"),
     );
     if (runtime.capabilities.nav?.available) {
-      this._robotMenuView?.setNavigationPlacementToggle(state.navigationPlacementEnabled);
+      this._robotMarkerView?.setNavigationPlacementToggle(state.navigationPlacementEnabled);
     }
 
     this._nav?.applyRuntimeState(runtime);
@@ -373,7 +383,7 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     this._lastSyncedOperatingMode = mode;
-    this._robotMenuView?.setOperatingMode(mode);
+    this._robotMarkerView?.setOperatingMode(mode);
 
     if (mode === "setup") {
       this._nav?.setPlacementEnabled(false);
@@ -385,7 +395,7 @@ export class DimosManager extends BaseScriptComponent {
       if (!state.navigationPlacementEnabled) {
         this._setAppState({ navigationPlacementEnabled: true });
       } else {
-        this._robotMenuView?.setNavigationPlacementToggle(true);
+        this._robotMarkerView?.setNavigationPlacementToggle(true);
         this._nav?.onPlacementEnabledChanged(true);
       }
     } else {
@@ -406,7 +416,7 @@ export class DimosManager extends BaseScriptComponent {
     if (this.appState.phase === "runtime" && this.frameCaptureController) {
       this.frameCaptureController.setMode(msg.registered ? "runtime" : "off");
     }
-    this._robotMenuView?.applyBridgeLinkState(this.bridgeLinkState);
+    this._robotMarkerView?.applyBridgeLinkState(this.bridgeLinkState);
     this.onBridgeStatusChanged.emit(msg);
   }
 
@@ -416,7 +426,7 @@ export class DimosManager extends BaseScriptComponent {
       connected,
       connected ? this.bridgeClient?.lastBridgeStatus ?? null : null,
     );
-    this._robotMenuView?.applyBridgeLinkState(this.bridgeLinkState);
+    this._robotMarkerView?.applyBridgeLinkState(this.bridgeLinkState);
     this.onBridgeConnectionChanged.emit(connected);
     if (!connected) {
       this._lastSentBridgeLidarMode = null;
@@ -441,7 +451,7 @@ export class DimosManager extends BaseScriptComponent {
       this.pointCloudRenderer?.clearAll();
       this._lidar?.clearBuffer();
       this._nav?.clearInactiveState();
-      this._robotMenuView?.hide();
+      this._robotMarkerView?.hide();
     }
     this.robotMarker?.applyInteractionMode(this.appState.robotInteractionMode);
     if (active) {
@@ -466,7 +476,7 @@ export class DimosManager extends BaseScriptComponent {
     this.frameCaptureController?.setMode("off");
     this.setIsActive(false);
     this._setAppState({ navigationPlacementEnabled: true });
-    this._robotMenuView?.setNavigationPlacementToggle(true);
+    this._robotMarkerView?.setNavigationPlacementToggle(true);
     this._nav?.setNavigationMode("idle");
     this._setRobotInteractionMode("hidden");
     this._setAppState({ phase: "setup" });
@@ -702,7 +712,7 @@ export class DimosManager extends BaseScriptComponent {
     }
     this._log(`setNavigationPlacementEnabled: ${enabled}`);
     this._setAppState({ navigationPlacementEnabled: enabled });
-    this._robotMenuView?.setNavigationPlacementToggle(enabled);
+    this._robotMarkerView?.setNavigationPlacementToggle(enabled);
     this._nav?.onPlacementEnabledChanged(enabled);
   }
 

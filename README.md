@@ -127,14 +127,14 @@ flowchart TB
 
   ```text
   lens-studio/Assets/Scripts/
-  ├── Core/        (DimosManager, AppState, RobotRuntime, SignalEmitter, MathUtils, UILogger)
+  ├── Core/        (DimosManager, AppState, SignalEmitter, MathUtils, UILogger)
   ├── Bridge/      (BridgeClient, Protocol — types + parser + builders)
   ├── Camera/      (CameraStream — shared colour camera singleton)
   ├── Setup/       (SetupWizard, SetupWizardView, SetupCalibrationFlow, SetupAlignmentPreview)
-  ├── UI/          (UIManager, MainMenuView, RobotMenuView, BridgeStatusPresentation, kit/UIKit, kit/UIAnimations)
+  ├── UI/          (UIManager, MainMenuView, BridgeStatusPresentation, kit/UIKit, kit/UIAnimations)
   ├── Alignment/   (AlignmentSession, ManualPoseCorrection, FrameCaptureController)
   ├── Navigation/  (NavigationController, PlacementController, PathRenderer, NavigationMarkerView, SurfacePlacementStabilizer, HeadingRotation)
-  ├── Robot/       (RobotMarker, RobotMenuView)
+  ├── Robot/       (RobotMarker, RobotMarkerView, RobotRuntimeModel)
   └── Lidar/       (PointCloudRenderer, MockLidarPoints)
   ```
 

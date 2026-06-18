@@ -1,4 +1,4 @@
-import { Signal } from "../Core/SignalEmitter";
+import { Signal } from "./SignalEmitter";
 
 // Smaller dimension for the camera stream in pixels (Spectacles max supported).
 const CAMERA_STREAM_SMALLER_DIM = 756;

@@ -1,10 +1,9 @@
 import { PointCloudRenderer } from "./PointCloudRenderer";
+import { LidarDisplayMode, RobotRuntimeState } from "../Core/AppState";
 import {
-  LidarDisplayMode,
   lidarVerticalBandCm,
   robotFloorWorldYCm,
-  RobotRuntimeState,
-} from "../Core/AppState";
+} from "../Robot/RobotRuntimeModel";
 import { DEFAULT_LIDAR_OBSTACLE_SETTINGS } from "../Bridge/Protocol";
 
 export interface LidarPresentationInput {

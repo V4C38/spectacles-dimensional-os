@@ -1,7 +1,8 @@
 import { AlignStatusMessage } from "../Bridge/Protocol";
 import { RobotMarker } from "../Robot/RobotMarker";
-import { RobotMenuView } from "../Robot/RobotMenuView";
-import { robotFloorWorldYCm, RobotRuntimeState } from "../Core/AppState";
+import { RobotMarkerView } from "../Robot/RobotMarkerView";
+import { RobotRuntimeState } from "../Core/AppState";
+import { robotFloorWorldYCm } from "../Robot/RobotRuntimeModel";
 import { COLOR_ERROR, COLOR_SUCCESS, findChildRecursive } from "../UI/kit/UIKit";
 
 // ── Assist preview presentation ────────────────────────────────
@@ -69,7 +70,7 @@ export function computeAssistPreviewProgress(input: AssistPreviewInput): number 
 export interface SetupAlignmentPreviewDeps {
   groundDisc: SceneObject | null;
   robotMarker: RobotMarker | null;
-  robotMenuView: RobotMenuView | null;
+  robotMarkerView: RobotMarkerView | null;
   getRobotRuntime: () => RobotRuntimeState;
   onConfirmAssist: () => void;
 }
@@ -91,7 +92,7 @@ export class SetupAlignmentPreview {
   public begin(): void {
     this._active = true;
     this._tagVisible = false;
-    const menu = this._deps?.robotMenuView;
+    const menu = this._deps?.robotMarkerView;
     if (menu) {
       menu.onContinueRequested = () => this._deps?.onConfirmAssist();
     }
@@ -110,7 +111,7 @@ export class SetupAlignmentPreview {
     const worldPose = msg.robot_world_pose ?? null;
     const previewStageActive = isAssistPreviewStage(assistStage);
     const showMarker = previewStageActive && !!worldPose;
-    const menu = this._deps?.robotMenuView;
+    const menu = this._deps?.robotMarkerView;
     const wasMenuVisible = menu?.isMenuVisible() ?? false;
     const marker = this._deps?.robotMarker;
 
@@ -158,7 +159,7 @@ export class SetupAlignmentPreview {
     }
     const GREEN = new vec4(0.2, 0.8, 0.2, 1);
     this._setDiscArrowVisibility(null);
-    const menu = this._deps?.robotMenuView;
+    const menu = this._deps?.robotMarkerView;
     menu?.setSetupTitle("Alignment complete");
     menu?.setSetupStatus("Alignment complete", GREEN);
     menu?.setContinueVisible(false);
@@ -172,7 +173,7 @@ export class SetupAlignmentPreview {
     this._active = false;
     this._resetVisualState();
     this._deps?.robotMarker?.setVisible(false);
-    const menu = this._deps?.robotMenuView;
+    const menu = this._deps?.robotMarkerView;
     if (menu) {
       menu.onContinueRequested = null;
     }
