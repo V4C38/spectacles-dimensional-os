@@ -59,6 +59,7 @@ export class RobotMarkerView {
   private readonly _stateInfoText: Text | null;
   private readonly _debugInfoText: Text | null;
   private _navigationPlacementEnabled = false;
+  private _suppressNavigationPlacementCallback = false;
   private _operatingMode: OperatingMode = "manual";
   private _inSetupMode = false;
   private _debugMode = false;
@@ -108,7 +109,12 @@ export class RobotMarkerView {
     bindHoverScale(this.stopBtn, this.stopObj);
     bindToggleButton(
       this.navigationPlacementBtn,
-      (enabled) => this.onNavigationPlacementRequested?.(enabled),
+      (enabled) => {
+        if (this._suppressNavigationPlacementCallback) {
+          return;
+        }
+        this.onNavigationPlacementRequested?.(enabled);
+      },
       () => this._navigationPlacementEnabled,
     );
     configureButtonToggle(this.navigationPlacementBtn, false);
@@ -213,8 +219,13 @@ export class RobotMarkerView {
   }
 
   public setNavigationPlacementToggle(enabled: boolean): void {
+    if (this._navigationPlacementEnabled === enabled) {
+      return;
+    }
     this._navigationPlacementEnabled = enabled;
+    this._suppressNavigationPlacementCallback = true;
     setButtonToggleState(this.navigationPlacementBtn, enabled);
+    this._suppressNavigationPlacementCallback = false;
   }
 
   public setNavigationPlacementAvailability(available: boolean): void {

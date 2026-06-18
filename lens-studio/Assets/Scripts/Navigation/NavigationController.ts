@@ -3,18 +3,18 @@
  * Single owner of the navigation subsystem: goal placement, path
  * display, nav-status state machine, lifecycle watchdog, outcome
  * flash, and placement gating.
- *
- * Merged from NavigationCoordinator + NavigationController +
- * NavigationOutcomeTracker (P2). Constructor takes concrete refs —
- * no deps-lambda bundle; capability reads go through AppState.
  */
 // ================================================================
 
 import {
   AppState,
-  NavigationMode,
+  defaultNavigationOutcome,
   NavigationOutcome,
+  NavigationState,
+  navigationOutcomeHasNavRuntimeError,
+  navigationOutcomeIsNone,
   RobotRuntimeState,
+  toSessionState,
 } from "../Core/AppState";
 import { BridgeClient } from "../Bridge/BridgeClient";
 import { RobotMarker } from "../Robot/RobotMarker";
@@ -85,7 +85,7 @@ export class NavigationController {
   private _outcomeFlashSeq = 0;
   private _outcomeFlashDueSeq = 0;
   private _outcomeFlashEvent: DelayedCallbackEvent | null = null;
-  private _watchedNavigationOutcome: NavigationOutcome = "none";
+  private _watchedNavigationOutcome: NavigationOutcome = defaultNavigationOutcome();
 
   constructor(
     private readonly _script: BaseScriptComponent,
@@ -172,7 +172,7 @@ export class NavigationController {
       return;
     }
     if (navLabel === "Goal reached") {
-      this._setOutcome("success");
+      this._setOutcome({ kind: "success" });
       return;
     }
     if (navLabel === "Goal failed") {
@@ -180,7 +180,7 @@ export class NavigationController {
         this._disableNavRuntime(msg.error_code);
         return;
       }
-      this._setOutcome("failed");
+      this._setOutcome({ kind: "failed", errorCode: null });
     }
   }
 
@@ -189,7 +189,7 @@ export class NavigationController {
     if (this._protocolParseFailureCount < 3) {
       return;
     }
-    if (this._appState.snapshot.navigationMode !== "executingGoal") {
+    if (this._appState.snapshot.navigationState !== "executingGoal") {
       return;
     }
     this._log(
@@ -211,7 +211,7 @@ export class NavigationController {
 
   public resetForUserDisconnect(): void {
     this._clearOutcome();
-    this._setNavigationMode("idle");
+    this._setNavigationState("off");
     this.clearInactiveState();
   }
 
@@ -224,7 +224,7 @@ export class NavigationController {
       const appState = this._appState.snapshot;
       const stopActiveNavigation =
         appState.operatingMode === "manual" &&
-        appState.navigationMode === "executingGoal";
+        appState.navigationState === "executingGoal";
       if (stopActiveNavigation) {
         if (isCapabilityAvailable(appState.robotRuntime, "emergency_stop")) {
           this._log(
@@ -239,18 +239,21 @@ export class NavigationController {
         }
       }
       this.setPlacementEnabled(false);
-      this._setNavigationMode("idle");
+      this._setNavigationState("off");
       return;
     }
+    this._setNavigationState("armed");
     this._syncNavigationPlacementState();
   }
 
   public applyRuntimeState(state: RobotRuntimeState): void {
+    const appState = this._appState.snapshot;
     if (
       !state.capabilities.nav?.available &&
-      this._appState.snapshot.navigationPlacementEnabled
+      (appState.navigationState === "armed" ||
+        appState.navigationState === "placingGoal")
     ) {
-      this._appState.update({ navigationPlacementEnabled: false });
+      this._appState.update({ navigationState: "off" });
     }
     this._placement?.setRobotGroundDeadzone({
       radiusCm: runtimeDeadzoneRadiusCm(state, this._robotGroundDeadzoneRadiusCm),
@@ -274,12 +277,42 @@ export class NavigationController {
     this._bridgeClient?.sendEmergencyStop();
   }
 
-  public setNavigationMode(mode: NavigationMode): void {
-    this._setNavigationMode(mode);
+  public setNavigationState(state: NavigationState): void {
+    this._setNavigationState(state);
+  }
+
+  /** Agent-driven goal flow: mark goal placement without manual surface UI. */
+  public beginAgentGoal(): boolean {
+    if (!this._canStartAgentNavigation()) {
+      return false;
+    }
+    this._setNavigationState("placingGoal");
+    return true;
+  }
+
+  /** Agent-driven goal submission: send nav goal and enter execution. */
+  public submitAgentGoal(position: vec3, rotation: quat): boolean {
+    if (!this._canStartAgentNavigation()) {
+      return false;
+    }
+    this._lifecycle.goalActive = true;
+    this._markNavExecuting();
+    this._resetPreviewState();
+    this._pathRenderer?.clear();
+    this._setNavigationState("executingGoal");
+    if (this._canSendNavigationGoal()) {
+      this._lifecycle.phase = "awaitingPath";
+      this._bridgeClient?.sendNavGoal(position, rotation);
+      return true;
+    }
+    this._lifecycle.phase = "executing";
+    this._assertExecutingVisuals();
+    print("NavigationController: agent goal executing locally without sending nav_goal");
+    return true;
   }
 
   public canStartPlacement(): boolean {
-    return this._canStartNavigationPlacement();
+    return this._canStartManualNavigationPlacement();
   }
 
   public setPlacementEnabled(
@@ -291,7 +324,7 @@ export class NavigationController {
         print("NavigationController: placement already enabled");
         return;
       }
-      if (!this._canStartNavigationPlacement()) {
+      if (!this._canStartManualNavigationPlacement()) {
         print("NavigationController: cannot start placement (precondition failed)");
         return;
       }
@@ -305,7 +338,7 @@ export class NavigationController {
       this._resetPreviewState();
       this._pathRenderer?.clear();
       this._placement?.start(initialPose.position, initialPose.rotation);
-      this._setNavigationMode("placingGoal");
+      this._setNavigationState("placingGoal");
       return;
     }
 
@@ -314,7 +347,7 @@ export class NavigationController {
     }
     print("NavigationController: placement disabled");
     this._resetNavigationVisuals("placement_off", { stopPlacement: true });
-    this._setNavigationMode("idle");
+    this._setNavigationState(this._idleNavigationState());
   }
 
   public get placementEnabled(): boolean {
@@ -326,7 +359,7 @@ export class NavigationController {
       stopPlacement: true,
       resetResyncCooldown: true,
     });
-    this._setNavigationMode("idle");
+    this._setNavigationState("off");
   }
 
   public requestCancelGoal(): void {
@@ -373,13 +406,13 @@ export class NavigationController {
     }
 
     if (msg.state === "following_path") {
-      if (this._placementEnabled && this._lifecycle.goalActive) {
+      if (this._lifecycle.goalActive) {
         this._enterExecutingFromBridge();
       }
       return "Navigating";
     }
     if (msg.state === "recovery") {
-      if (this._placementEnabled && this._lifecycle.goalActive) {
+      if (this._lifecycle.goalActive) {
         this._enterExecutingFromBridge();
       }
       return "Recovery";
@@ -388,9 +421,6 @@ export class NavigationController {
   }
 
   private _reconcileResyncedNavStatus(_msg: NavStatusMessage): boolean {
-    // Transient idle during replanning is normal; the lifecycle watchdog escalates
-    // on sustained staleness (resync at 8s, local recovery at 16s) instead of
-    // aborting immediately when get_status returns idle mid-execution.
     return false;
   }
 
@@ -418,7 +448,7 @@ export class NavigationController {
     if (action === "recover_local") {
       this._log("nav lifecycle stale after resync; recovering locally");
       this._recoverFromStaleExecution();
-      this._setOutcome("failed");
+      this._setOutcome({ kind: "failed", errorCode: null });
     }
   }
 
@@ -451,13 +481,23 @@ export class NavigationController {
 
   // ── Private: outcome flash ─────────────────────────────────────
 
+  private _outcomesEqual(a: NavigationOutcome, b: NavigationOutcome): boolean {
+    if (a.kind !== b.kind) {
+      return false;
+    }
+    if (a.kind === "failed" && b.kind === "failed") {
+      return a.errorCode === b.errorCode;
+    }
+    return true;
+  }
+
   private _handleNavigationOutcomeChanged(outcome: NavigationOutcome): void {
-    if (outcome === this._watchedNavigationOutcome) {
+    if (this._outcomesEqual(outcome, this._watchedNavigationOutcome)) {
       return;
     }
     this._watchedNavigationOutcome = outcome;
     this._cancelOutcomeFlashTimer();
-    if (outcome === "success" || outcome === "failed") {
+    if (outcome.kind === "success" || outcome.kind === "failed") {
       this._armOutcomeFlashTimer();
     }
   }
@@ -473,10 +513,10 @@ export class NavigationController {
         if (this._outcomeFlashSeq !== this._outcomeFlashDueSeq) {
           return;
         }
-        if (this._appState.snapshot.navigationOutcome === "none") {
+        if (navigationOutcomeIsNone(this._appState.snapshot.navigationOutcome)) {
           return;
         }
-        this._appState.update({ navigationOutcome: "none" });
+        this._appState.update({ navigationOutcome: defaultNavigationOutcome() });
       });
     }
     (this._outcomeFlashEvent as DelayedCallbackEvent).reset(NAVIGATION_OUTCOME_FLASH_S);
@@ -486,16 +526,16 @@ export class NavigationController {
     this._outcomeFlashSeq += 1;
   }
 
-  private _setOutcome(outcome: "success" | "failed"): void {
+  private _setOutcome(outcome: NavigationOutcome): void {
     this._appState.update({ navigationOutcome: outcome });
   }
 
   private _clearOutcome(): void {
     this._cancelOutcomeFlashTimer();
-    if (this._appState.snapshot.navigationOutcome === "none") {
+    if (navigationOutcomeIsNone(this._appState.snapshot.navigationOutcome)) {
       return;
     }
-    this._appState.update({ navigationOutcome: "none" });
+    this._appState.update({ navigationOutcome: defaultNavigationOutcome() });
   }
 
   // ── Private: gating ────────────────────────────────────────────
@@ -514,25 +554,50 @@ export class NavigationController {
       capabilities,
     };
     this._appState.update({
-      navRuntimeErrorCode: errorCode,
-      navigationOutcome: "failed",
+      navigationOutcome: { kind: "failed", errorCode },
       robotRuntime: runtimeState,
-    } as any);
+    });
     this._onRuntimeStateChanged(runtimeState);
   }
 
-  private _canStartNavigationPlacement(): boolean {
+  private _sharedNavigationPreconditions(): boolean {
+    const session = toSessionState(this._appState.snapshot);
+    if (session.phase !== "runtime") {
+      return false;
+    }
+    if (!isCapabilityAvailable(this._appState.snapshot.robotRuntime, "nav")) {
+      return false;
+    }
+    return true;
+  }
+
+  private _canStartManualNavigationPlacement(): boolean {
     const state = this._appState.snapshot;
-    if (state.operatingMode !== "manual") {
+    const session = toSessionState(state);
+    if (session.phase !== "runtime") {
       return false;
     }
-    if (state.phase !== "runtime") {
+    if (session.operating !== "manual") {
       return false;
     }
-    if (!isCapabilityAvailable(state.robotRuntime, "nav")) {
+    if (session.navigation !== "armed") {
+      return false;
+    }
+    if (!this._sharedNavigationPreconditions()) {
       return false;
     }
     return state.robotInteractionMode === "runtimeRobot";
+  }
+
+  private _canStartAgentNavigation(): boolean {
+    const session = toSessionState(this._appState.snapshot);
+    if (session.phase !== "runtime") {
+      return false;
+    }
+    if (session.operating !== "agent") {
+      return false;
+    }
+    return this._sharedNavigationPreconditions();
   }
 
   private _canSendNavigationGoal(): boolean {
@@ -546,50 +611,77 @@ export class NavigationController {
   private _canConfirmNavigationGoal(): boolean {
     return (
       isCapabilityAvailable(this._appState.snapshot.robotRuntime, "nav") &&
-      (this._appState.snapshot as any).navRuntimeErrorCode === null
+      !navigationOutcomeHasNavRuntimeError(this._appState.snapshot.navigationOutcome)
     );
   }
 
-  private _setNavigationMode(mode: NavigationMode): void {
+  private _manualPlacementIntent(): boolean {
     const state = this._appState.snapshot;
-    if (mode === "executingGoal") {
+    return (
+      state.operatingMode === "manual" &&
+      (state.navigationState === "armed" ||
+        state.navigationState === "placingGoal" ||
+        state.navigationState === "executingGoal")
+    );
+  }
+
+  private _idleNavigationState(): NavigationState {
+    return this._manualPlacementIntent() ? "armed" : "off";
+  }
+
+  private _setNavigationState(state: NavigationState): void {
+    const current = this._appState.snapshot;
+    if (state === "executingGoal") {
       if (
-        state.navigationMode === mode &&
-        (state as any).navigationOutcome === "none"
+        current.navigationState === state &&
+        navigationOutcomeIsNone(current.navigationOutcome)
       ) {
         return;
       }
       this._cancelOutcomeFlashTimer();
       this._appState.update({
-        navigationOutcome: "none",
-        navigationMode: mode,
-      } as any);
+        navigationOutcome: defaultNavigationOutcome(),
+        navigationState: state,
+      });
       return;
     }
-    if (state.navigationMode === mode) {
+    if (current.navigationState === state) {
       return;
     }
-    this._appState.update({ navigationMode: mode });
+    this._appState.update({ navigationState: state });
   }
 
   private _syncNavigationPlacementState(): void {
     const state = this._appState.snapshot;
-    if (!state.navigationPlacementEnabled || !this._canStartNavigationPlacement()) {
-      this.setPlacementEnabled(false);
-      if (state.navigationMode !== "idle") {
-        this._setNavigationMode("idle");
+    if (state.navigationState === "executingGoal") {
+      return;
+    }
+
+    const wantsManualPlacement =
+      state.navigationState === "armed" || state.navigationState === "placingGoal";
+    const canMaintainManualPlacement =
+      state.operatingMode === "manual" &&
+      state.phase === "runtime" &&
+      state.robotInteractionMode === "runtimeRobot" &&
+      isCapabilityAvailable(state.robotRuntime, "nav");
+
+    if (wantsManualPlacement && canMaintainManualPlacement) {
+      if (this._placementEnabled) {
+        this._syncIdlePlacementPose();
+        return;
       }
+      const initialPose = this._getNavigationPlacementStartPose();
+      if (!initialPose) {
+        return;
+      }
+      this.setPlacementEnabled(true, initialPose);
       return;
     }
-    if (this._placementEnabled) {
-      this._syncIdlePlacementPose();
-      return;
+
+    this.setPlacementEnabled(false);
+    if (state.navigationState !== "off") {
+      this._setNavigationState(this._idleNavigationState());
     }
-    const initialPose = this._getNavigationPlacementStartPose();
-    if (!initialPose) {
-      return;
-    }
-    this.setPlacementEnabled(true, initialPose);
   }
 
   // ── Private: lifecycle reset ───────────────────────────────────
@@ -643,7 +735,7 @@ export class NavigationController {
     this._markNavExecuting();
     this._resetPreviewState();
     this._assertExecutingVisuals();
-    this._setNavigationMode("executingGoal");
+    this._setNavigationState("executingGoal");
 
     if (this._canSendNavigationGoal()) {
       this._lifecycle.phase = "awaitingPath";
@@ -758,10 +850,10 @@ export class NavigationController {
       } else {
         this._startPlacementOutcomeReset("Failed");
       }
-      this._setNavigationMode("placingGoal");
+      this._setNavigationState("placingGoal");
       return;
     }
-    this._setNavigationMode("idle");
+    this._setNavigationState(this._idleNavigationState());
   }
 
   private _respawnGoalMarkerAtRobot(): void {
@@ -783,7 +875,7 @@ export class NavigationController {
     this._lifecycle.phase = "executing";
     this._markNavExecuting();
     this._assertExecutingVisuals();
-    this._setNavigationMode("executingGoal");
+    this._setNavigationState("executingGoal");
   }
 
   private _startPlacementOutcomeReset(label: "Cancelled" | "Failed"): void {
@@ -792,10 +884,10 @@ export class NavigationController {
         label,
         () => this._getNavigationPlacementStartPose(),
       );
-      this._setNavigationMode("placingGoal");
+      this._setNavigationState("placingGoal");
       return;
     }
-    this._setNavigationMode("idle");
+    this._setNavigationState(this._idleNavigationState());
   }
 
   private _syncIdlePlacementPose(): void {

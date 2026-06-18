@@ -14,15 +14,21 @@ import { Signal } from "./SignalEmitter";
 import {
   AppState,
   AppStateListener,
+  AppPhase,
   BridgeLinkState,
+  createDefaultDimosAppState,
   createDefaultDriftState,
   createDefaultRobotRuntimeState,
+  defaultNavigationOutcome,
   DimosAppState,
+  isRuntimePhase as isAppRuntimePhase,
   LidarDisplayMode,
+  navigationPlacementToggleEnabled,
   nextLidarMode,
   OperatingMode,
   RobotRuntimeState,
   RobotInteractionMode,
+  transitionSessionPatch,
 } from "./AppState";
 import {
   AlignStatusMessage,
@@ -88,26 +94,11 @@ export class DimosManager extends BaseScriptComponent {
   public readonly onBridgeStatusChanged = new Signal<BridgeStatusMessage>();
   public readonly onBridgeConnectionChanged = new Signal<boolean>();
 
-  private _isActive = false;
   private _lastPose: PoseMessage | null = null;
   private _pendingPose: PoseMessage | null = null;
   private readonly _poseCorrection = new ManualPoseCorrection();
   private readonly _uiLogger = new UILogger();
-  private readonly _appState = new AppState({
-    phase: "setup",
-    debugMode: false,
-    lidarMode: "obstacles",
-    operatingMode: "manual",
-    mainMenuExpandedSettingsMode: null,
-    navigationPlacementEnabled: true,
-    robotInteractionMode: "hidden",
-    navigationMode: "idle",
-    navigationOutcome: "none",
-    navRuntimeErrorCode: null,
-    bridgeLinkState: "disconnected",
-    robotRuntime: createDefaultRobotRuntimeState(),
-    driftState: createDefaultDriftState(),
-  } as any);
+  private readonly _appState = new AppState(createDefaultDimosAppState());
 
   private _lidar: LidarPresentationController | null = null;
   private _robotMarkerView: RobotMarkerView | null = null;
@@ -160,6 +151,10 @@ export class DimosManager extends BaseScriptComponent {
     return capabilityUnavailableReason(this.appState.robotRuntime, capability);
   }
 
+  private isRuntimePhase(): boolean {
+    return isAppRuntimePhase(this.appState);
+  }
+
   private _createHelpers(): void {
     this._lidar = new LidarPresentationController(this.pointCloudRenderer ?? null);
 
@@ -197,7 +192,7 @@ export class DimosManager extends BaseScriptComponent {
         isCapabilityAvailable: (cap) => this.isRuntimeCapabilityAvailable(cap),
         getInteractionMode: () => this.appState.robotInteractionMode,
         setInteractionMode: (mode) => this._setRobotInteractionMode(mode),
-        getIsActive: () => this._isActive,
+        getIsRuntimePhase: () => this.isRuntimePhase(),
         disableNavigationPlacementForAlignment: () => {
           if (this._nav?.placementEnabled) {
             this._nav.setPlacementEnabled(false);
@@ -234,7 +229,7 @@ export class DimosManager extends BaseScriptComponent {
         poseCorrection: this._poseCorrection,
         getLastPose: () => this._lastPose,
         robotMarkerView: this._robotMarkerView,
-        getIsActive: () => this._isActive,
+        getIsRuntimePhase: () => this.isRuntimePhase(),
         getOperatingMode: () => this.operatingMode,
         getInteractionMode: () => this.appState.robotInteractionMode,
         syncNavigationPlacementState: () => this._nav?.syncPlacementState(),
@@ -263,7 +258,7 @@ export class DimosManager extends BaseScriptComponent {
       this.onBridgeReady.emit();
     });
     this.bridgeClient.onLidar.add((msg) => {
-      if (this._isActive && this.lidarMode !== "off") {
+      if (this.isRuntimePhase() && this.lidarMode !== "off") {
         this._lidar?.onLidarReceived(msg.points);
         this._refreshLidarPresentation();
       }
@@ -292,7 +287,7 @@ export class DimosManager extends BaseScriptComponent {
       this._uiLogger.tick();
       this._applyPendingPose();
       this._lidar?.tickFrame(
-        this._isActive,
+        this.isRuntimePhase(),
         this.lidarMode,
         this.hasBridgeConnection(),
         LIDAR_STALE_CLEAR_S,
@@ -308,9 +303,8 @@ export class DimosManager extends BaseScriptComponent {
     this._setAppState({
       robotRuntime: runtimeState,
       driftState: createDefaultDriftState(),
-      navRuntimeErrorCode: null,
-      navigationOutcome: "none",
-    } as any);
+      navigationOutcome: defaultNavigationOutcome(),
+    });
   }
 
   private _applyPoseCorrection(msg: PoseCorrectionMessage): void {
@@ -365,7 +359,9 @@ export class DimosManager extends BaseScriptComponent {
       capabilityUnavailableReason(runtime, "emergency_stop"),
     );
     if (runtime.capabilities.nav?.available) {
-      this._robotMarkerView?.setNavigationPlacementToggle(state.navigationPlacementEnabled);
+      this._robotMarkerView?.setNavigationPlacementToggle(
+        navigationPlacementToggleEnabled(state),
+      );
     }
 
     this._nav?.applyRuntimeState(runtime);
@@ -392,14 +388,22 @@ export class DimosManager extends BaseScriptComponent {
     }
 
     if (mode === "manual") {
-      if (!state.navigationPlacementEnabled) {
-        this._setAppState({ navigationPlacementEnabled: true });
+      if (state.navigationState === "off") {
+        this._setAppState({ navigationState: "armed" });
       } else {
-        this._robotMarkerView?.setNavigationPlacementToggle(true);
+        this._robotMarkerView?.setNavigationPlacementToggle(
+          navigationPlacementToggleEnabled(state),
+        );
         this._nav?.onPlacementEnabledChanged(true);
       }
-    } else {
+    } else if (mode === "agent") {
       this._nav?.setPlacementEnabled(false);
+      if (
+        state.navigationState === "armed" ||
+        state.navigationState === "placingGoal"
+      ) {
+        this._setAppState({ navigationState: "off" });
+      }
     }
     this._nav?.syncPlacementState();
   }
@@ -433,11 +437,10 @@ export class DimosManager extends BaseScriptComponent {
       this._lidar?.clearBuffer();
       this._nav?.clearForDisconnect();
       this._setAppState({
-        navigationMode: "idle",
-        navigationOutcome: "none",
-        navRuntimeErrorCode: null,
+        navigationState: "off",
+        navigationOutcome: defaultNavigationOutcome(),
         robotRuntime: createDefaultRobotRuntimeState(),
-      } as any);
+      });
       this._lastPose = null;
       this._pendingPose = null;
       this._poseCorrection.onDisconnected();
@@ -445,16 +448,15 @@ export class DimosManager extends BaseScriptComponent {
     }
   }
 
-  private setIsActive(active: boolean): void {
-    this._isActive = active;
-    if (!active) {
+  private _applyPhaseSideEffects(phase: AppPhase): void {
+    if (phase !== "runtime") {
       this.pointCloudRenderer?.clearAll();
       this._lidar?.clearBuffer();
       this._nav?.clearInactiveState();
       this._robotMarkerView?.hide();
     }
     this.robotMarker?.applyInteractionMode(this.appState.robotInteractionMode);
-    if (active) {
+    if (phase === "runtime") {
       if (this.bridgeClient?.lastBridgeStatus) {
         this._applyBridgeStatus(this.bridgeClient.lastBridgeStatus);
       } else {
@@ -474,12 +476,13 @@ export class DimosManager extends BaseScriptComponent {
     this.clearManualAlignmentPose();
     this.disconnect();
     this.frameCaptureController?.setMode("off");
-    this.setIsActive(false);
-    this._setAppState({ navigationPlacementEnabled: true });
-    this._robotMarkerView?.setNavigationPlacementToggle(true);
-    this._nav?.setNavigationMode("idle");
+    this._setAppState({
+      phase: "setup",
+      navigationState: "off",
+      navigationOutcome: defaultNavigationOutcome(),
+    });
+    this._applyPhaseSideEffects("setup");
     this._setRobotInteractionMode("hidden");
-    this._setAppState({ phase: "setup" });
   }
 
   public enterRuntime(): void {
@@ -492,12 +495,12 @@ export class DimosManager extends BaseScriptComponent {
     this._poseCorrection.prepareForRuntime(
       Boolean(this.bridgeClient?.lastBridgeStatus?.registration_approximate),
     );
-    this.setIsActive(true);
+    this._setAppState({ phase: "runtime", navigationState: "armed" });
+    this._applyPhaseSideEffects("runtime");
     if (this.frameCaptureController) {
       const registered = Boolean(this.bridgeClient?.lastBridgeStatus?.registered);
       this.frameCaptureController.setMode(registered ? "runtime" : "off");
     }
-    this._setAppState({ phase: "runtime" });
     this._setRobotInteractionMode("runtimeRobot");
     this.robotMarker?.syncPose();
     this._placementDeferralEvent?.reset(0.0);
@@ -608,6 +611,16 @@ export class DimosManager extends BaseScriptComponent {
     this._nav?.requestEmergencyStop();
   }
 
+  /** Agent-driven navigation: begin goal placement without manual surface UI. */
+  public beginAgentNavigationGoal(): boolean {
+    return this._nav?.beginAgentGoal() ?? false;
+  }
+
+  /** Agent-driven navigation: submit goal and start execution. */
+  public submitAgentNavigationGoal(position: vec3, rotation: quat): boolean {
+    return this._nav?.submitAgentGoal(position, rotation) ?? false;
+  }
+
   // ── Setup alignment preview API ───────────────────────────────
 
   public beginSetupAlignmentPreview(_onAbort: () => void): void {
@@ -707,17 +720,20 @@ export class DimosManager extends BaseScriptComponent {
   }
 
   public setNavigationPlacementEnabled(enabled: boolean): void {
-    if (this.navigationPlacementEnabled === enabled) {
+    const currentEnabled = navigationPlacementToggleEnabled(this.appState);
+    if (currentEnabled === enabled) {
       return;
     }
     this._log(`setNavigationPlacementEnabled: ${enabled}`);
-    this._setAppState({ navigationPlacementEnabled: enabled });
-    this._robotMarkerView?.setNavigationPlacementToggle(enabled);
+    this._setAppState({ navigationState: enabled ? "armed" : "off" });
     this._nav?.onPlacementEnabledChanged(enabled);
+    this._robotMarkerView?.setNavigationPlacementToggle(
+      navigationPlacementToggleEnabled(this.appState),
+    );
   }
 
   public get navigationPlacementEnabled(): boolean {
-    return this.appState.navigationPlacementEnabled;
+    return navigationPlacementToggleEnabled(this.appState);
   }
 
   // ── LiDAR presentation ──────────────────────────────────────
@@ -737,7 +753,7 @@ export class DimosManager extends BaseScriptComponent {
     const snapshot = state ?? this.appState;
     this._lidar?.apply({
       mode: snapshot.lidarMode,
-      active: this._isActive,
+      active: this.isRuntimePhase(),
       connected: this.hasBridgeConnection(),
       points: this._lidar?.lastPoints ?? null,
       anchor: this._resolveLidarAnchor(),
@@ -762,7 +778,7 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     this._pendingPose = null;
-    if (this._isActive && this.robotMarker) {
+    if (this.isRuntimePhase() && this.robotMarker) {
       const resolved = this._poseCorrection.resolveDisplayPose(
         msg,
         this.appState.robotInteractionMode,
@@ -785,7 +801,7 @@ export class DimosManager extends BaseScriptComponent {
   }
 
   private _setAppState(patch: Partial<DimosAppState>): void {
-    this._appState.update(patch);
+    this._appState.update(transitionSessionPatch(this.appState, patch));
   }
 
   private _setRobotInteractionMode(mode: RobotInteractionMode): void {

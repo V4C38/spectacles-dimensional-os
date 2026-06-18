@@ -1,5 +1,5 @@
 import { DimosManager } from "../Core/DimosManager";
-import { DimosAppState, LidarDisplayMode, OperatingMode } from "../Core/AppState";
+import { DimosAppState, LidarDisplayMode, navigationPlacementToggleEnabled, OperatingMode } from "../Core/AppState";
 import { SetupWizard } from "../Setup/SetupWizard";
 import { getBridgeStatusPresentation } from "./BridgeStatusPresentation";
 import { scaleIn, scaleOut } from "./kit/UIAnimations";
@@ -97,7 +97,7 @@ export class UIManager extends BaseScriptComponent {
       this._expandedSettingsMode = appState.mainMenuExpandedSettingsMode;
       this._operatingMode = appState.operatingMode;
       this._lidarMode = appState.lidarMode;
-      this._navigationPlacementEnabled = appState.navigationPlacementEnabled;
+      this._navigationPlacementEnabled = navigationPlacementToggleEnabled(appState);
       this._debugModeEnabled = appState.debugMode;
     }
 
@@ -161,7 +161,7 @@ export class UIManager extends BaseScriptComponent {
 
     this._lidarMode = state.lidarMode;
     this._operatingMode = state.operatingMode;
-    this._navigationPlacementEnabled = state.navigationPlacementEnabled;
+    this._navigationPlacementEnabled = navigationPlacementToggleEnabled(state);
     this._expandedSettingsMode = state.mainMenuExpandedSettingsMode;
     this._debugModeEnabled = state.debugMode;
 

@@ -8,13 +8,37 @@ import {
   COLOR_WHITE,
 } from "../UI/kit/UIKit";
 
+/** Whole-app lifecycle: setup wizard vs live XR session. */
 export type AppPhase = "setup" | "runtime";
+/** Runtime UX mode; `"setup"` is calibration preview overlay — not the same as `AppPhase.setup`. */
 export type OperatingMode = "setup" | "manual" | "agent";
 export type RobotInteractionMode = "hidden" | "manualPlacement" | "runtimeRobot";
-export type NavigationMode = "idle" | "placingGoal" | "executingGoal";
-export type NavigationOutcome = "none" | "success" | "failed";
+export type NavigationState =
+  | "off"
+  | "armed"
+  | "placingGoal"
+  | "executingGoal";
+export type NavigationOutcome =
+  | { kind: "none" }
+  | { kind: "success" }
+  | { kind: "failed"; errorCode: number | null };
 export type BridgeLinkState = "disconnected" | "connectedNoRobot" | "connected";
 export type LidarDisplayMode = "off" | "obstacles" | "full";
+
+export type SetupSessionState = {
+  phase: "setup";
+  interaction: "hidden" | "manualPlacement";
+};
+
+export type RuntimeSessionState = {
+  phase: "runtime";
+  operating: OperatingMode;
+  interaction: RobotInteractionMode;
+  navigation: NavigationState;
+  outcome: NavigationOutcome;
+};
+
+export type SessionState = SetupSessionState | RuntimeSessionState;
 
 export const LIDAR_MODE_LABELS: Record<LidarDisplayMode, string> = {
   off: "LiDAR: Off",
@@ -27,13 +51,37 @@ export interface StatusTextPresentation {
   color: vec4;
 }
 
+export function defaultNavigationOutcome(): NavigationOutcome {
+  return { kind: "none" };
+}
+
+export function isRuntimePhase(state: DimosAppState): boolean {
+  return state.phase === "runtime";
+}
+
+export function navigationOutcomeIsNone(outcome: NavigationOutcome): boolean {
+  return outcome.kind === "none";
+}
+
+export function navigationOutcomeIsFailed(outcome: NavigationOutcome): boolean {
+  return outcome.kind === "failed";
+}
+
+export function navigationOutcomeHasNavRuntimeError(outcome: NavigationOutcome): boolean {
+  return outcome.kind === "failed" && outcome.errorCode !== null;
+}
+
+export function navigationPlacementToggleEnabled(state: DimosAppState): boolean {
+  return state.navigationState !== "off";
+}
+
 export function navigationOutcomePresentation(
   outcome: NavigationOutcome,
 ): StatusTextPresentation | null {
-  if (outcome === "success") {
+  if (outcome.kind === "success") {
     return { text: "Navigation success", color: COLOR_SUCCESS };
   }
-  if (outcome === "failed") {
+  if (outcome.kind === "failed") {
     return { text: "Navigation failed", color: COLOR_ERROR };
   }
   return null;
@@ -55,9 +103,59 @@ export function robotMarkerSteadyStatePresentation(
     }
   }
   return {
-    text: state.navigationMode === "executingGoal" ? "Navigating" : "Idle",
+    text: state.navigationState === "executingGoal" ? "Navigating" : "Idle",
     color: COLOR_WHITE,
   };
+}
+
+export function toSessionState(state: DimosAppState): SessionState {
+  if (state.phase === "setup") {
+    const interaction =
+      state.robotInteractionMode === "manualPlacement"
+        ? "manualPlacement"
+        : "hidden";
+    return { phase: "setup", interaction };
+  }
+  return {
+    phase: "runtime",
+    operating: state.operatingMode,
+    interaction: state.robotInteractionMode,
+    navigation: state.navigationState,
+    outcome: state.navigationOutcome,
+  };
+}
+
+export function validateSessionFields(state: DimosAppState): DimosAppState {
+  const next: DimosAppState = { ...state };
+
+  if (next.phase === "setup") {
+    next.navigationState = "off";
+    next.navigationOutcome = defaultNavigationOutcome();
+    if (next.robotInteractionMode === "runtimeRobot") {
+      next.robotInteractionMode = "hidden";
+    }
+  }
+
+  if (next.phase === "runtime") {
+    if (next.navigationState === "armed" && next.operatingMode !== "manual") {
+      next.navigationState = "off";
+    }
+    if (
+      next.operatingMode === "setup" &&
+      (next.navigationState === "armed" || next.navigationState === "placingGoal")
+    ) {
+      next.navigationState = "off";
+    }
+  }
+
+  return next;
+}
+
+export function transitionSessionPatch(
+  current: DimosAppState,
+  patch: Partial<DimosAppState>,
+): Partial<DimosAppState> {
+  return validateSessionFields({ ...current, ...patch });
 }
 
 export function nextLidarMode(mode: LidarDisplayMode): LidarDisplayMode {
@@ -106,9 +204,8 @@ export interface DimosAppState {
   operatingMode: OperatingMode;
   /** UI-only: which mode's settings submenu is open, or null when collapsed. */
   mainMenuExpandedSettingsMode: OperatingMode | null;
-  navigationPlacementEnabled: boolean;
+  navigationState: NavigationState;
   robotInteractionMode: RobotInteractionMode;
-  navigationMode: NavigationMode;
   navigationOutcome: NavigationOutcome;
   bridgeLinkState: BridgeLinkState;
   robotRuntime: RobotRuntimeState;
@@ -162,9 +259,17 @@ function cloneDriftState(state: DriftState): DriftState {
   return { ...state };
 }
 
+function cloneNavigationOutcome(outcome: NavigationOutcome): NavigationOutcome {
+  if (outcome.kind === "failed") {
+    return { kind: "failed", errorCode: outcome.errorCode };
+  }
+  return { ...outcome };
+}
+
 function cloneState(state: DimosAppState): DimosAppState {
   return {
     ...state,
+    navigationOutcome: cloneNavigationOutcome(state.navigationOutcome),
     robotRuntime: cloneRobotRuntime(state.robotRuntime),
     driftState: cloneDriftState(state.driftState),
   };
@@ -205,6 +310,22 @@ export function createDefaultDriftState(): DriftState {
   };
 }
 
+export function createDefaultDimosAppState(): DimosAppState {
+  return validateSessionFields({
+    phase: "setup",
+    debugMode: false,
+    lidarMode: "obstacles",
+    operatingMode: "manual",
+    mainMenuExpandedSettingsMode: null,
+    navigationState: "off",
+    robotInteractionMode: "hidden",
+    navigationOutcome: defaultNavigationOutcome(),
+    bridgeLinkState: "disconnected",
+    robotRuntime: createDefaultRobotRuntimeState(),
+    driftState: createDefaultDriftState(),
+  });
+}
+
 export class AppState {
   private readonly _listeners: AppStateListener[] = [];
   private _dispatching = false;
@@ -218,11 +339,10 @@ export class AppState {
 
   public update(patch: Partial<DimosAppState>): DimosAppState {
     if (this._dispatching) {
-      // Re-entrant call from inside a listener — queue for after current dispatch.
       this._pendingPatches.push(patch);
       return cloneState(this._state);
     }
-    this._state = { ...this._state, ...patch };
+    this._state = validateSessionFields({ ...this._state, ...patch });
     this._dispatching = true;
     try {
       const snapshot = cloneState(this._state);

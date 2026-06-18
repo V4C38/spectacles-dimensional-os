@@ -262,7 +262,7 @@ export class RobotMarker extends BaseScriptComponent {
   private _poseCorrection: ManualPoseCorrection | null = null;
   private _robotMarkerView: RobotMarkerView | null = null;
   private _getLastPose: (() => PoseMessage | null) | null = null;
-  private _getIsActive: (() => boolean) | null = null;
+  private _getIsRuntimePhase: (() => boolean) | null = null;
   private _getOperatingMode: (() => OperatingMode) | null = null;
   private _getInteractionMode: (() => RobotInteractionMode) | null = null;
   private _syncNavPlacement: (() => void) | null = null;
@@ -288,7 +288,7 @@ export class RobotMarker extends BaseScriptComponent {
     poseCorrection: ManualPoseCorrection;
     getLastPose: () => PoseMessage | null;
     robotMarkerView: RobotMarkerView | null;
-    getIsActive: () => boolean;
+    getIsRuntimePhase: () => boolean;
     getOperatingMode: () => OperatingMode;
     getInteractionMode: () => RobotInteractionMode;
     syncNavigationPlacementState: () => void;
@@ -297,7 +297,7 @@ export class RobotMarker extends BaseScriptComponent {
     this._poseCorrection = deps.poseCorrection;
     this._getLastPose = deps.getLastPose;
     this._robotMarkerView = deps.robotMarkerView;
-    this._getIsActive = deps.getIsActive;
+    this._getIsRuntimePhase = deps.getIsRuntimePhase;
     this._getOperatingMode = deps.getOperatingMode;
     this._getInteractionMode = deps.getInteractionMode;
     this._syncNavPlacement = deps.syncNavigationPlacementState;
@@ -306,9 +306,9 @@ export class RobotMarker extends BaseScriptComponent {
 
   public applyInteractionMode(mode: RobotInteractionMode): void {
     const config = INTERACTION_MODE_CONFIG[mode];
-    const isActive = this._getIsActive?.() ?? false;
+    const isRuntimePhase = this._getIsRuntimePhase?.() ?? false;
     const resolve = (value: BoolOrActive): boolean =>
-      value === "whenActive" ? isActive : value;
+      value === "whenActive" ? isRuntimePhase : value;
 
     this.setManualPlacementEnabled(config.manualPlacement);
     this.setToggleEnabled(resolve(config.toggle));

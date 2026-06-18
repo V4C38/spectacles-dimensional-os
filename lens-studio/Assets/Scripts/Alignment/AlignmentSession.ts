@@ -32,7 +32,7 @@ export interface AlignmentSessionDeps {
   isCapabilityAvailable: (cap: string) => boolean;
   getInteractionMode: () => RobotInteractionMode;
   setInteractionMode: (mode: RobotInteractionMode) => void;
-  getIsActive: () => boolean;
+  getIsRuntimePhase: () => boolean;
   disableNavigationPlacementForAlignment: () => void;
 }
 
@@ -200,7 +200,7 @@ export class AlignmentSession extends BaseScriptComponent {
     }
     if (this._deps.getInteractionMode() === "manualPlacement") {
       this._deps.setInteractionMode(
-        this._deps.getIsActive() ? "runtimeRobot" : "hidden",
+        this._deps.getIsRuntimePhase() ? "runtimeRobot" : "hidden",
       );
     }
   }
