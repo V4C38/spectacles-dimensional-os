@@ -94,7 +94,7 @@ The Lens side is organized around three scene-entry scripts:
 - [`DimosManager.ts`](lens-studio/Assets/Scripts/Core/DimosManager.ts) is the orchestration hub for bridge I/O, shared app state, robot marker state, LiDAR/path rendering, navigation placement, and manual-alignment fallback.
 - [`UIManager.ts`](lens-studio/Assets/Scripts/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
 
-`BridgeClient` is the transport layer, `CalibrationFlow` owns calibrate-step state for both tag and manual modes, `AlignmentSession` is the single owner of the bridge alignment session (tag + manual), `CameraStream` is a singleton wrapper around the Spectacles colour camera shared by setup and runtime capture, `NavigationController` manages goal placement and navigation state, and the visuals live under `robot/`, `lidar/`, and `navigation/`.
+`BridgeClient` is the transport layer, `SetupCalibrationFlow` owns calibrate-step state for both tag and manual modes, `AlignmentSession` is the single owner of the bridge alignment session (tag + manual), `CameraStream` is a singleton wrapper around the Spectacles colour camera shared by setup and runtime capture, `NavigationController` manages goal placement and navigation state, and the visuals live under `robot/`, `lidar/`, and `navigation/`.
 
 ```mermaid
 flowchart TB
@@ -106,7 +106,7 @@ flowchart TB
 <details>
 <summary>Lens setup and runtime responsibilities</summary>
 
-`SetupWizard` builds the wizard view, starts autoconnect, owns the 3-step state machine inline, and finishes by calling `DimosManager.enterRuntime()`. Calibrate-step state (both tag and manual modes) is delegated to `CalibrationFlow`; the bridge alignment session is owned exclusively by `AlignmentSession`, which re-arms on every `hello` so reconnects cannot leave the session stranded.
+`SetupWizard` builds the wizard view, starts autoconnect, owns the 3-step state machine inline, and finishes by calling `DimosManager.enterRuntime()`. Calibrate-step state (both tag and manual modes) is delegated to `SetupCalibrationFlow`; the bridge alignment session is owned exclusively by `AlignmentSession`, which re-arms on every `hello` so reconnects cannot leave the session stranded.
 
 `DimosManager` starts in setup mode, disconnects the bridge when re-entering setup, and switches to runtime by enabling visuals, preserving manual alignment state when needed, and syncing navigation and robot interaction state. It also owns the shared `AppState`, including bridge-link status used by setup and runtime UI. During runtime it fans bridge events into:
 - `PointCloudRenderer` for lidar visualization
@@ -130,7 +130,7 @@ flowchart TB
   ├── Core/        (DimosManager, AppState, RobotRuntime, SignalEmitter, MathUtils, UILogger)
   ├── Bridge/      (BridgeClient, Protocol — types + parser + builders)
   ├── Camera/      (CameraStream — shared colour camera singleton)
-  ├── Setup/       (SetupWizard, WizardView, CalibrationFlow, AssistPreviewPresentation)
+  ├── Setup/       (SetupWizard, SetupWizardView, SetupCalibrationFlow, SetupAlignmentPreview)
   ├── UI/          (UIManager, MainMenuView, RobotMenuView, BridgeStatusPresentation, kit/UIKit, kit/UIAnimations)
   ├── Alignment/   (AlignmentSession, ManualPoseCorrection, FrameCaptureController)
   ├── Navigation/  (NavigationController, PlacementController, PathRenderer, NavigationMarkerView, SurfacePlacementStabilizer, HeadingRotation)

@@ -13,13 +13,13 @@ import {
   SLOT_INPUT,
   Z_CONTENT,
 } from "../UI/kit/UIKit";
-import { WizardFooterState, WizardStep } from "./CalibrationFlow";
+import { WizardFooterState, WizardStep } from "./SetupCalibrationFlow";
 
 // ================================================================
 /** Binds and updates the setup wizard panel UI (title, IP input, calibration status, footer). */
 // ================================================================
 
-export class WizardView {
+export class SetupWizardView {
   private readonly _titleText: Text;
   private readonly _descriptionText: Text;
   private readonly _statusText: Text;
@@ -48,7 +48,7 @@ export class WizardView {
       !prev ||
       !manual
     ) {
-      throw new Error("WizardView: scene hierarchy incomplete");
+      throw new Error("SetupWizardView: scene hierarchy incomplete");
     }
 
     this._titleText = titleText;
@@ -147,7 +147,6 @@ export class WizardView {
     }
 
     this._prev.sceneObject.enabled = state.showPrev;
-
     this._manual.sceneObject.enabled = state.showManual;
     if (this._manual.labelText) {
       this._manual.labelText.text = state.manualLabel;

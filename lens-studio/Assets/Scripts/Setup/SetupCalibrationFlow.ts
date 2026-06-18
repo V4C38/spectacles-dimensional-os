@@ -15,7 +15,7 @@ import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE,COLOR_WARN, SnapOS2Styles } fro
 import {
   buildAssistPreviewPresentation,
   isAssistPreviewStage,
-} from "./AssistPreviewPresentation";
+} from "./SetupAlignmentPreview";
 
 // ── Step / calibration types ───────────────────────────────────
 
@@ -289,13 +289,13 @@ export function getWizardFooterState(
   };
 }
 
-// ── CalibrationFlow class ──────────────────────────────────────
+// ── SetupCalibrationFlow class ─────────────────────────────────
 
 const MANUAL_CANDIDATE_SYNC_INTERVAL_S = 0.35;
 const ALIGN_STATUS_LOG_INTERVAL_S = 1.0;
 const NO_RESPONSE_STATUS_MSG = "No response from bridge";
 
-export interface CalibrationFlowCallbacks {
+export interface SetupCalibrationFlowCallbacks {
   beginManualAlignmentPlacementFromWizard: () => boolean;
   render: () => void;
   refreshFooter: () => void;
@@ -305,7 +305,7 @@ export interface CalibrationFlowCallbacks {
   scheduleFinishSetup: (delaySecs: number) => void;
 }
 
-export class CalibrationFlow {
+export class SetupCalibrationFlow {
   private _state: CalibrationViewState = createCalibrationViewState();
   private _lastManualCandidateSyncTime = -1;
   private _lastAlignStatusLogTime = -1;
@@ -315,7 +315,7 @@ export class CalibrationFlow {
   constructor(
     private readonly _dimosManager: DimosManager,
     private readonly _alignmentSession: AlignmentSession | null,
-    private readonly _callbacks: CalibrationFlowCallbacks,
+    private readonly _callbacks: SetupCalibrationFlowCallbacks,
   ) {}
 
   public get state(): CalibrationViewState {
@@ -421,15 +421,7 @@ export class CalibrationFlow {
       frameCapture?.setCapturePaused(
         msg.assist_stage === "move" && msg.sampling === false,
       );
-      // Forward to the robot-anchored preview while calibrating
-      this._dimosManager.updateSetupAlignmentPreview({
-        worldPose: msg.robot_world_pose ?? null,
-        assistStage: msg.assist_stage,
-        stepIndex: msg.step_index,
-        stepCount: msg.step_count,
-        progress: msg.progress ?? 0,
-        tagVisible: this._state.tagVisible,
-      });
+      this._dimosManager.updateSetupAlignmentFromAlignStatus(msg);
     } else {
       frameCapture?.setSamplingBurst(false);
       frameCapture?.setCapturePaused(false);

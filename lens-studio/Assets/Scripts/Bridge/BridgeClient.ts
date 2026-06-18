@@ -707,7 +707,7 @@ export class BridgeClient extends BaseScriptComponent {
   ): void {
     switch (msg.type) {
       case "align_status":
-        // SetupWizard / CalibrationFlow already log every align_status change;
+        // SetupWizard / SetupCalibrationFlow already log every align_status change;
         // skip the duplicate print here.
         break;
       case "camera_frame_ack":

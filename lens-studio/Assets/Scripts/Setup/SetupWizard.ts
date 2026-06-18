@@ -6,12 +6,12 @@ import { UIManager } from "../UI/UIManager";
 import { AlignStatusMessage } from "../Bridge/Protocol";
 import { scaleIn } from "../UI/kit/UIAnimations";
 import { COLOR_ERROR, COLOR_WHITE } from "../UI/kit/UIKit";
-import { WizardView } from "./WizardView";
+import { SetupWizardView } from "./SetupWizardView";
 import { getBridgeStatusPresentationForConnect } from "../UI/BridgeStatusPresentation";
 import { BridgeClient } from "../Bridge/BridgeClient";
 import {
   buildCalibrationDisplay,
-  CalibrationFlow,
+  SetupCalibrationFlow,
   CALIBRATE_DESCRIPTION_AUTO,
   CALIBRATE_DESCRIPTION_MANUAL,
   createCalibrationViewState,
@@ -22,7 +22,7 @@ import {
   WIZARD_STEP_TITLES,
   WizardStep,
   wizardStepName,
-} from "./CalibrationFlow";
+} from "./SetupCalibrationFlow";
 
 const NAV_DEBOUNCE_S = 0.35;
 const AUTOCONNECT_RETRY_S = 2.0;
@@ -51,11 +51,11 @@ export class SetupWizard extends BaseScriptComponent {
   private _retryIp = "";
   private _finishEvent: DelayedCallbackEvent | null = null;
   private _finishPending = false;
-  private _view: WizardView | null = null;
-  private _calibrationFlow: CalibrationFlow | null = null;
+  private _view: SetupWizardView | null = null;
+  private _calibrationFlow: SetupCalibrationFlow | null = null;
 
   onAwake() {
-    this._view = new WizardView(this.getSceneObject());
+    this._view = new SetupWizardView(this.getSceneObject());
     this.createEvent("OnStartEvent").bind(() => {
       // Cache retry event (re-armed per retry; never recreated).
       const retryEv = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
@@ -73,7 +73,7 @@ export class SetupWizard extends BaseScriptComponent {
       });
       this._finishEvent = finishEv;
 
-      this._calibrationFlow = new CalibrationFlow(
+      this._calibrationFlow = new SetupCalibrationFlow(
         this.dimosManager,
         this.alignmentSession,
         {
