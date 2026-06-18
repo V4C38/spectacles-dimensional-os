@@ -8,8 +8,8 @@ import { ManualPoseCorrection } from "../Alignment/ManualPoseCorrection";
 import { AlignmentSession } from "../Alignment/AlignmentSession";
 import { NavigationController } from "../Navigation/NavigationController";
 import { NavigationMarkerView } from "../Navigation/NavigationMarkerView";
-import { PathRenderer } from "../Navigation/PathRenderer";
-import { PlacementController } from "../Navigation/PlacementController";
+import { NavigationPathRenderer } from "../Navigation/NavigationPathRenderer";
+import { SurfacePlacementController } from "../Navigation/SurfacePlacementController";
 import { Signal } from "./SignalEmitter";
 import {
   AppState,
@@ -166,8 +166,8 @@ export class DimosManager extends BaseScriptComponent {
       this.getSceneObject();
 
     const goalRenderer = new NavigationMarkerView(this.navigationMarkerRoot);
-    const pathRenderer = new PathRenderer(parent);
-    const placement = new PlacementController(
+    const pathRenderer = new NavigationPathRenderer(parent);
+    const placement = new SurfacePlacementController(
       this,
       WorldQueryModule,
       this.placementRayOrigin ?? null,

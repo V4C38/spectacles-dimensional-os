@@ -10,7 +10,7 @@ import {
   setButtonStyle,
   SnapOS2Styles,
 } from "../UI/kit/UIKit";
-import { yawRotationFromWorldRotation } from "./HeadingRotation";
+import { yawRotationFromWorldRotation } from "../Core/MathUtils";
 
 // ================================================================
 /** Scene-graph view for the navigation target marker with confirm/cancel and visibility animations. */
@@ -31,6 +31,215 @@ const CIRCLE_SCALE_ANIMATION_VERSION_KEY = "__navMarkerCircleScaleVersion";
 const OUTCOME_RESET_ANIMATION_VERSION_KEY = "__navMarkerOutcomeResetVersion";
 const DOTS_WHITE = new vec4(1, 1, 1, 0.457359);
 const DOTS_YELLOW = new vec4(0.976471, 0.929412, 0.423529, 0.500008);
+
+type MarkerPreset = {
+  circleExecuting: boolean;
+  lookAtEnabled: boolean;
+  confirmVisible: boolean;
+  useExecutingButtonPresentation: boolean;
+  resetCircleBeforeShow: boolean;
+  scanAnimation: boolean;
+  confirmVfx: "confirm" | "cancel" | "hidden";
+  arrowEnabled: boolean;
+  arrowSpeed: number;
+  circleSaturation: { circle: "portal" | "executing"; value: number } | null;
+  dotsMode: "seeking" | "executing";
+  restoreOutcomeFirst: boolean;
+  animateRootVisible: boolean | null;
+  animateCircleExpanded: boolean | null;
+};
+
+type MarkerPresetOverrides = Partial<
+  Pick<MarkerPreset, "confirmVisible" | "animateRootVisible" | "animateCircleExpanded">
+>;
+
+const MARKER_PRESETS: Record<NavigationMarkerVisualState, MarkerPreset> = {
+  disabled: {
+    circleExecuting: false,
+    lookAtEnabled: false,
+    confirmVisible: false,
+    useExecutingButtonPresentation: false,
+    resetCircleBeforeShow: false,
+    scanAnimation: false,
+    confirmVfx: "hidden",
+    arrowEnabled: false,
+    arrowSpeed: 0,
+    circleSaturation: null,
+    dotsMode: "seeking",
+    restoreOutcomeFirst: true,
+    animateRootVisible: null,
+    animateCircleExpanded: null,
+  },
+  placing: {
+    circleExecuting: false,
+    lookAtEnabled: false,
+    confirmVisible: false,
+    useExecutingButtonPresentation: false,
+    resetCircleBeforeShow: true,
+    scanAnimation: false,
+    confirmVfx: "confirm",
+    arrowEnabled: false,
+    arrowSpeed: 0,
+    circleSaturation: { circle: "portal", value: 0 },
+    dotsMode: "seeking",
+    restoreOutcomeFirst: true,
+    animateRootVisible: true,
+    animateCircleExpanded: true,
+  },
+  executing: {
+    circleExecuting: true,
+    lookAtEnabled: false,
+    confirmVisible: true,
+    useExecutingButtonPresentation: true,
+    resetCircleBeforeShow: false,
+    scanAnimation: true,
+    confirmVfx: "cancel",
+    arrowEnabled: true,
+    arrowSpeed: 1,
+    circleSaturation: { circle: "executing", value: 1 },
+    dotsMode: "executing",
+    restoreOutcomeFirst: true,
+    animateRootVisible: true,
+    animateCircleExpanded: false,
+  },
+  resettingOutcome: {
+    circleExecuting: false,
+    lookAtEnabled: false,
+    confirmVisible: false,
+    useExecutingButtonPresentation: false,
+    resetCircleBeforeShow: false,
+    scanAnimation: false,
+    confirmVfx: "hidden",
+    arrowEnabled: false,
+    arrowSpeed: 0,
+    circleSaturation: null,
+    dotsMode: "seeking",
+    restoreOutcomeFirst: true,
+    animateRootVisible: null,
+    animateCircleExpanded: null,
+  },
+};
+
+function nextAnimationVersion(store: object, key: string): number {
+  const storeAny = store as { [key: string]: number };
+  const nextVersion = (storeAny[key] ?? 0) + 1;
+  storeAny[key] = nextVersion;
+  return nextVersion;
+}
+
+function isLatestAnimationVersion(
+  store: object,
+  key: string,
+  version: number,
+): boolean {
+  const storeAny = store as { [key: string]: number };
+  return storeAny[key] === version;
+}
+
+type AnimateEasing = NonNullable<Parameters<typeof animate>[0]["easing"]>;
+
+function animateLocalScale(
+  object: SceneObject,
+  targetScale: vec3,
+  duration: number,
+  versionStore: object,
+  versionKey: string,
+  options?: {
+    easing?: AnimateEasing;
+    onEnded?: () => void;
+    enableOnStart?: boolean;
+    disableOnEnd?: boolean;
+    fixedVersion?: number;
+  },
+): void {
+  const transform = object.getTransform();
+  const start = transform.getLocalScale();
+  const version =
+    options?.fixedVersion ?? nextAnimationVersion(versionStore, versionKey);
+  if (options?.enableOnStart) {
+    object.enabled = true;
+  }
+  animate({
+    duration,
+    easing: options?.easing ?? "ease-in-out-quad",
+    update: (t: number) => {
+      if (!isLatestAnimationVersion(versionStore, versionKey, version)) {
+        return;
+      }
+      transform.setLocalScale(
+        new vec3(
+          start.x + (targetScale.x - start.x) * t,
+          start.y + (targetScale.y - start.y) * t,
+          start.z + (targetScale.z - start.z) * t,
+        ),
+      );
+    },
+    ended: () => {
+      if (!isLatestAnimationVersion(versionStore, versionKey, version)) {
+        return;
+      }
+      transform.setLocalScale(targetScale);
+      if (options?.disableOnEnd) {
+        object.enabled = false;
+      }
+      options?.onEnded?.();
+    },
+  });
+}
+
+function setMaterialPassProp(
+  object: SceneObject | null,
+  prop: string,
+  value: unknown,
+  altProp?: string,
+): boolean {
+  if (!object) {
+    return false;
+  }
+  const visual = object.getComponent(
+    "Component.RenderMeshVisual",
+  ) as RenderMeshVisual | null;
+  if (!visual?.mainMaterial?.mainPass) {
+    return false;
+  }
+  const pass = visual.mainMaterial.mainPass as any;
+  if (prop in pass) {
+    pass[prop] = value;
+    return true;
+  }
+  if (altProp && altProp in pass) {
+    pass[altProp] = value;
+    return true;
+  }
+  return false;
+}
+
+function applyDotsMaterialMode(
+  dots: SceneObject | null,
+  seeking: boolean,
+): void {
+  if (!dots) {
+    return;
+  }
+  const visual = dots.getComponent(
+    "Component.RenderMeshVisual",
+  ) as RenderMeshVisual | null;
+  if (!visual?.mainMaterial?.mainPass) {
+    return;
+  }
+  const pass = visual.mainMaterial.mainPass as any;
+  if ("WhiteColor" in pass) {
+    pass.WhiteColor = DOTS_WHITE;
+  }
+  if ("YellowColor" in pass) {
+    pass.YellowColor = seeking ? DOTS_WHITE : DOTS_YELLOW;
+  }
+  if ("AnimationSwitch" in pass) {
+    pass.AnimationSwitch = !seeking;
+  } else if ("animationSwitch" in pass) {
+    pass.animationSwitch = !seeking;
+  }
+}
 
 export class NavigationMarkerView {
   private readonly root: SceneObject;
@@ -256,117 +465,98 @@ export class NavigationMarkerView {
   }
 
   public showPlacing(showConfirm: boolean = false): void {
-    this._state = "placing";
-    this._restoreOutcomeVisualState();
-    if (this.circleExecuting) {
-      this.circleExecuting.enabled = false;
-    }
-    if (this.rotationLookAt) {
-      this.rotationLookAt.enabled = false;
-    }
-    this.setConfirmVisible(showConfirm);
+    this._applyPreset("placing", { confirmVisible: showConfirm });
     this.confirmLabel.text = "Confirm";
     setButtonStyle(this.confirmButton, SnapOS2Styles.Primary);
-    this.resetCircleAnimation();
-    this.setScanAnimationEnabled(false);
-    this._setConfirmVfxState(true);
-    if (this.arrow) {
-      this.arrow.enabled = false;
-    }
-    this._setMoveDirectionArrowSpeed(0);
-    this._syncMoveDirectionArrowVisibility();
-    this._setCircleSaturation(this.portalCircle, 0);
-    this._applyDotsVisual(true);
-    this._animateVisibility(true);
-    this._animateCircleScale(true);
   }
 
   public showExecuting(): void {
-    this._state = "executing";
-    this._restoreOutcomeVisualState();
-    if (this.circleExecuting) {
-      this.circleExecuting.enabled = true;
-    }
-    if (this.rotationLookAt) {
-      this.rotationLookAt.enabled = false;
-    }
-    this.setConfirmVisible(true);
-    this._applyExecutingButtonPresentation();
-    this.setScanAnimationEnabled(true);
-    this._setConfirmVfxState(false);
-    if (this.arrow) {
-      this.arrow.enabled = true;
-    }
-    this._setMoveDirectionArrowSpeed(1);
-    this._syncMoveDirectionArrowVisibility();
-    this._setCircleSaturation(this.circleExecuting, 1);
-    this._applyDotsVisual(false);
-    this._animateVisibility(true);
-    this._animateCircleScale(false);
+    this._applyPreset("executing");
   }
 
   public showOutcomeReset(label: "Cancelled" | "Failed"): void {
     this._state = "resettingOutcome";
-    this._restoreOutcomeVisualState();
-    if (this.rotationLookAt) {
-      this.rotationLookAt.enabled = false;
-    }
-    if (this.circleExecuting) {
-      this.circleExecuting.enabled = false;
-    }
+    this._applyPreset("resettingOutcome");
     this.root.enabled = true;
     this.root.getTransform().setLocalScale(this.rootBaseScale);
-    this.setConfirmVisible(false);
-    this.setScanAnimationEnabled(false);
-    this._setConfirmVfxState(true, true);
-    if (this.arrow) {
-      this.arrow.enabled = false;
-    }
     this._setDotsVisible(true);
-    this._applyDotsVisual(true);
     this._setStateText(label, true);
-    this._setMoveDirectionArrowSpeed(0);
-    this._syncMoveDirectionArrowVisibility();
-    const animationVersion = this._nextOutcomeResetAnimationVersion();
+    const animationVersion = nextAnimationVersion(
+      this.root,
+      OUTCOME_RESET_ANIMATION_VERSION_KEY,
+    );
     this._animateOutcomeResetCollapse(animationVersion);
     this._animateOutcomeResetDelayedContentCollapse(animationVersion);
   }
 
   public hide(): void {
     this._beginHide();
-    this._animateVisibility(false);
+    this._animateRootVisibility(false);
   }
 
   public hideAndThen(callback: () => void): void {
     this._beginHide();
-    const transform = this.root.getTransform();
-    const start = transform.getLocalScale();
-    const target = vec3.zero();
-    const version = this._nextVisibilityAnimationVersion();
-    animate({
-      duration: MARKER_VISIBILITY_DURATION_SECONDS,
-      easing: "ease-in-out-quad",
-      update: (t: number) => {
-        if (!this._isLatestVisibilityAnimationVersion(version)) {
-          return;
-        }
-        transform.setLocalScale(
-          new vec3(
-            start.x + (target.x - start.x) * t,
-            start.y + (target.y - start.y) * t,
-            start.z + (target.z - start.z) * t,
-          ),
-        );
+    animateLocalScale(
+      this.root,
+      vec3.zero(),
+      MARKER_VISIBILITY_DURATION_SECONDS,
+      this.root,
+      VISIBILITY_ANIMATION_VERSION_KEY,
+      {
+        onEnded: () => {
+          this.root.enabled = false;
+          callback();
+        },
       },
-      ended: () => {
-        if (!this._isLatestVisibilityAnimationVersion(version)) {
-          return;
-        }
-        transform.setLocalScale(target);
-        this.root.enabled = false;
-        callback();
-      },
-    });
+    );
+  }
+
+  private _applyPreset(
+    state: NavigationMarkerVisualState,
+    overrides: MarkerPresetOverrides = {},
+  ): void {
+    this._state = state;
+    const preset = { ...MARKER_PRESETS[state], ...overrides };
+    if (preset.restoreOutcomeFirst) {
+      this._restoreOutcomeVisualState();
+    }
+    if (this.circleExecuting) {
+      this.circleExecuting.enabled = preset.circleExecuting;
+    }
+    if (this.rotationLookAt) {
+      this.rotationLookAt.enabled = preset.lookAtEnabled;
+    }
+    this.setConfirmVisible(preset.confirmVisible);
+    if (preset.useExecutingButtonPresentation) {
+      this._applyExecutingButtonPresentation();
+    }
+    if (preset.resetCircleBeforeShow) {
+      this.resetCircleAnimation();
+    }
+    this.setScanAnimationEnabled(preset.scanAnimation);
+    this._setConfirmVfxState(
+      preset.confirmVfx === "confirm",
+      preset.confirmVfx === "hidden",
+    );
+    if (this.arrow) {
+      this.arrow.enabled = preset.arrowEnabled;
+    }
+    this._setMoveDirectionArrowSpeed(preset.arrowSpeed);
+    this._syncMoveDirectionArrowVisibility();
+    if (preset.circleSaturation) {
+      const circle =
+        preset.circleSaturation.circle === "portal"
+          ? this.portalCircle
+          : this.circleExecuting;
+      setMaterialPassProp(circle, "Saturation", preset.circleSaturation.value);
+    }
+    applyDotsMaterialMode(this.dots, preset.dotsMode === "seeking");
+    if (preset.animateRootVisible !== null) {
+      this._animateRootVisibility(preset.animateRootVisible);
+    }
+    if (preset.animateCircleExpanded !== null) {
+      this._animateCircleScale(preset.animateCircleExpanded);
+    }
   }
 
   private _worldToAnchorLocal(worldPosition: vec3): vec3 {
@@ -398,47 +588,6 @@ export class NavigationMarkerView {
     return null;
   }
 
-  private _applyDotsVisual(seeking: boolean): void {
-    if (!this.dots) {
-      return;
-    }
-    const visual = this.dots.getComponent(
-      "Component.RenderMeshVisual",
-    ) as RenderMeshVisual | null;
-    if (!visual?.mainMaterial) {
-      return;
-    }
-    const pass = visual.mainMaterial.mainPass as any;
-    if (!pass) {
-      return;
-    }
-    if (seeking) {
-      if ("WhiteColor" in pass) {
-        pass.WhiteColor = DOTS_WHITE;
-      }
-      if ("YellowColor" in pass) {
-        pass.YellowColor = DOTS_WHITE;
-      }
-      if ("AnimationSwitch" in pass) {
-        pass.AnimationSwitch = false;
-      } else if ("animationSwitch" in pass) {
-        pass.animationSwitch = false;
-      }
-      return;
-    }
-    if ("WhiteColor" in pass) {
-      pass.WhiteColor = DOTS_WHITE;
-    }
-    if ("YellowColor" in pass) {
-      pass.YellowColor = DOTS_YELLOW;
-    }
-    if ("AnimationSwitch" in pass) {
-      pass.AnimationSwitch = true;
-    } else if ("animationSwitch" in pass) {
-      pass.animationSwitch = true;
-    }
-  }
-
   private _setDotsVisible(visible: boolean): void {
     if (!this.dots) {
       return;
@@ -455,7 +604,7 @@ export class NavigationMarkerView {
   }
 
   private _restoreOutcomeVisualState(): void {
-    this._nextOutcomeResetAnimationVersion();
+    nextAnimationVersion(this.root, OUTCOME_RESET_ANIMATION_VERSION_KEY);
     this.portalCircle.enabled = true;
     this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
     if (this.headingRoot && this.headingBaseScale) {
@@ -471,25 +620,6 @@ export class NavigationMarkerView {
     this._setStateText("", false);
   }
 
-  private _setCircleSaturation(
-    circle: SceneObject | null,
-    value: number,
-  ): void {
-    if (!circle) {
-      return;
-    }
-    const visual = circle.getComponent(
-      "Component.RenderMeshVisual",
-    ) as RenderMeshVisual | null;
-    if (!visual || !visual.mainMaterial) {
-      return;
-    }
-    const pass = visual.mainMaterial.mainPass;
-    if (pass && "Saturation" in pass) {
-      (pass as any).Saturation = value;
-    }
-  }
-
   private _setConfirmVfxState(
     confirmVisible: boolean,
     hideBoth: boolean = false,
@@ -503,26 +633,13 @@ export class NavigationMarkerView {
   }
 
   private _beginHide(): void {
-    this._state = "disabled";
-    this._restoreOutcomeVisualState();
-    this.setConfirmVisible(false);
-    this.setScanAnimationEnabled(false);
-    this._setConfirmVfxState(true, true);
-    if (this.arrow) {
-      this.arrow.enabled = false;
-    }
-    this._setMoveDirectionArrowSpeed(0);
-    this._syncMoveDirectionArrowVisibility();
+    this._applyPreset("disabled");
     // Cancel any in-progress circle animation and restore the circle to full
     // scale so it is ready for the next showPlacing(). The root is about to
     // scale to zero so this is invisible.
-    this._nextCircleAnimationVersion();
+    nextAnimationVersion(this.portalCircle, CIRCLE_SCALE_ANIMATION_VERSION_KEY);
     this.portalCircle.enabled = true;
     this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
-    if (this.circleExecuting) {
-      this.circleExecuting.enabled = false;
-    }
-    this._applyDotsVisual(true);
   }
 
   private _initializeHidden(): void {
@@ -551,19 +668,7 @@ export class NavigationMarkerView {
   }
 
   private _setMoveDirectionArrowSpeed(speed: number): void {
-    if (!this.moveDirectionArrow) {
-      return;
-    }
-    const visual = this.moveDirectionArrow.getComponent(
-      "Component.RenderMeshVisual",
-    ) as RenderMeshVisual | null;
-    if (!visual?.mainMaterial) {
-      return;
-    }
-    const pass = visual.mainMaterial.mainPass;
-    if (pass && "ArrowSpeed" in pass) {
-      (pass as any).ArrowSpeed = speed;
-    }
+    setMaterialPassProp(this.moveDirectionArrow, "ArrowSpeed", speed);
   }
 
   private _syncMoveDirectionArrowVisibility(): void {
@@ -584,64 +689,28 @@ export class NavigationMarkerView {
   }
 
   private _animateCircleScale(visible: boolean): void {
-    const transform = this.portalCircle.getTransform();
-    const start = transform.getLocalScale();
-    const target = visible ? this.portalBaseScale : vec3.zero();
-    const version = this._nextCircleAnimationVersion();
-    this.portalCircle.enabled = true;
-    animate({
-      duration: MARKER_VISIBILITY_DURATION_SECONDS,
-      easing: "ease-in-out-quad",
-      update: (t: number) => {
-        if (!this._isLatestCircleAnimationVersion(version)) {
-          return;
-        }
-        transform.setLocalScale(
-          new vec3(
-            start.x + (target.x - start.x) * t,
-            start.y + (target.y - start.y) * t,
-            start.z + (target.z - start.z) * t,
-          ),
-        );
+    animateLocalScale(
+      this.portalCircle,
+      visible ? this.portalBaseScale : vec3.zero(),
+      MARKER_VISIBILITY_DURATION_SECONDS,
+      this.portalCircle,
+      CIRCLE_SCALE_ANIMATION_VERSION_KEY,
+      {
+        enableOnStart: true,
+        disableOnEnd: !visible,
       },
-      ended: () => {
-        if (!this._isLatestCircleAnimationVersion(version)) {
-          return;
-        }
-        transform.setLocalScale(target);
-        if (!visible) {
-          this.portalCircle.enabled = false;
-        }
-      },
-    });
+    );
   }
 
   private _animateOutcomeResetCollapse(version: number): void {
-    const portalTransform = this.portalCircle.getTransform();
-    const portalStart = portalTransform.getLocalScale();
-    const target = vec3.zero();
-    animate({
-      duration: OUTCOME_CIRCLE_COLLAPSE_DURATION_SECONDS,
-      easing: "ease-in-out-quad",
-      update: (t: number) => {
-        if (!this._isLatestOutcomeResetAnimationVersion(version)) {
-          return;
-        }
-        portalTransform.setLocalScale(
-          new vec3(
-            portalStart.x + (target.x - portalStart.x) * t,
-            portalStart.y + (target.y - portalStart.y) * t,
-            portalStart.z + (target.z - portalStart.z) * t,
-          ),
-        );
-      },
-      ended: () => {
-        if (!this._isLatestOutcomeResetAnimationVersion(version)) {
-          return;
-        }
-        portalTransform.setLocalScale(target);
-      },
-    });
+    animateLocalScale(
+      this.portalCircle,
+      vec3.zero(),
+      OUTCOME_CIRCLE_COLLAPSE_DURATION_SECONDS,
+      this.root,
+      OUTCOME_RESET_ANIMATION_VERSION_KEY,
+      { fixedVersion: version },
+    );
   }
 
   private _animateOutcomeResetDelayedContentCollapse(version: number): void {
@@ -661,7 +730,13 @@ export class NavigationMarkerView {
       duration: totalDuration,
       easing: "linear",
       update: (t: number) => {
-        if (!this._isLatestOutcomeResetAnimationVersion(version)) {
+        if (
+          !isLatestAnimationVersion(
+            this.root,
+            OUTCOME_RESET_ANIMATION_VERSION_KEY,
+            version,
+          )
+        ) {
           return;
         }
         const elapsed = t * totalDuration;
@@ -710,7 +785,13 @@ export class NavigationMarkerView {
         }
       },
       ended: () => {
-        if (!this._isLatestOutcomeResetAnimationVersion(version)) {
+        if (
+          !isLatestAnimationVersion(
+            this.root,
+            OUTCOME_RESET_ANIMATION_VERSION_KEY,
+            version,
+          )
+        ) {
           return;
         }
         if (dotsTransform) {
@@ -726,69 +807,21 @@ export class NavigationMarkerView {
     });
   }
 
-  private _nextCircleAnimationVersion(): number {
-    const circleAny = this.portalCircle as unknown as { [key: string]: number };
-    const nextVersion = (circleAny[CIRCLE_SCALE_ANIMATION_VERSION_KEY] ?? 0) + 1;
-    circleAny[CIRCLE_SCALE_ANIMATION_VERSION_KEY] = nextVersion;
-    return nextVersion;
-  }
-
-  private _isLatestCircleAnimationVersion(version: number): boolean {
-    const circleAny = this.portalCircle as unknown as { [key: string]: number };
-    return circleAny[CIRCLE_SCALE_ANIMATION_VERSION_KEY] === version;
-  }
-
-  private _nextOutcomeResetAnimationVersion(): number {
-    const rootAny = this.root as unknown as { [key: string]: number };
-    const nextVersion = (rootAny[OUTCOME_RESET_ANIMATION_VERSION_KEY] ?? 0) + 1;
-    rootAny[OUTCOME_RESET_ANIMATION_VERSION_KEY] = nextVersion;
-    return nextVersion;
-  }
-
-  private _isLatestOutcomeResetAnimationVersion(version: number): boolean {
-    const rootAny = this.root as unknown as { [key: string]: number };
-    return rootAny[OUTCOME_RESET_ANIMATION_VERSION_KEY] === version;
-  }
-
-  private _animateVisibility(visible: boolean): void {
-    const transform = this.root.getTransform();
-    const start = transform.getLocalScale();
-    const target = visible ? this.rootBaseScale : vec3.zero();
-    const version = this._nextVisibilityAnimationVersion();
+  private _animateRootVisibility(visible: boolean): void {
     if (visible) {
       this.root.enabled = true;
     }
-    animate({
-      duration: MARKER_VISIBILITY_DURATION_SECONDS,
-      easing: "ease-in-out-quad",
-      update: (t: number) => {
-        transform.setLocalScale(
-          new vec3(
-            start.x + (target.x - start.x) * t,
-            start.y + (target.y - start.y) * t,
-            start.z + (target.z - start.z) * t,
-          ),
-        );
+    animateLocalScale(
+      this.root,
+      visible ? this.rootBaseScale : vec3.zero(),
+      MARKER_VISIBILITY_DURATION_SECONDS,
+      this.root,
+      VISIBILITY_ANIMATION_VERSION_KEY,
+      {
+        onEnded: () => {
+          this.root.enabled = visible;
+        },
       },
-      ended: () => {
-        if (!this._isLatestVisibilityAnimationVersion(version)) {
-          return;
-        }
-        transform.setLocalScale(target);
-        this.root.enabled = visible;
-      },
-    });
-  }
-
-  private _nextVisibilityAnimationVersion(): number {
-    const rootAny = this.root as unknown as { [key: string]: number };
-    const nextVersion = (rootAny[VISIBILITY_ANIMATION_VERSION_KEY] ?? 0) + 1;
-    rootAny[VISIBILITY_ANIMATION_VERSION_KEY] = nextVersion;
-    return nextVersion;
-  }
-
-  private _isLatestVisibilityAnimationVersion(version: number): boolean {
-    const rootAny = this.root as unknown as { [key: string]: number };
-    return rootAny[VISIBILITY_ANIMATION_VERSION_KEY] === version;
+    );
   }
 }

@@ -233,7 +233,7 @@ def _yaw_from_T(T: NDArray[np.float64]) -> float:
     """Heading of T's forward (x) axis. Convention: forward = (cos th, 0, -sin th).
 
     Sign-consistent with build_T_world_odom, normalize_ground_pose, and the
-    Lens-side HeadingRotation.yawToQuat.
+    Lens-side MathUtils.yawRotationFromPlanarDirection.
     """
     forward = T[:3, 0]
     return math.atan2(-float(forward[2]), float(forward[0]))

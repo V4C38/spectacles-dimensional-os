@@ -10,9 +10,12 @@ import { PoseMessage, protocolMetersToLensCentimeters } from "../Bridge/Protocol
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 import { InteractableManipulation } from "SpectaclesInteractionKit.lspkg/Components/Interaction/InteractableManipulation/InteractableManipulation";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
-import { yawRotationFromWorldRotation } from "../Navigation/HeadingRotation";
 import { COLOR_WHITE, findText, findChildRecursive, requireChild } from "../UI/kit/UIKit";
-import { vec3Distance, quatAngularDistanceRad } from "../Core/MathUtils";
+import {
+  quatAngularDistanceRad,
+  vec3Distance,
+  yawRotationFromWorldRotation,
+} from "../Core/MathUtils";
 import { FrameCaptureController } from "../Alignment/FrameCaptureController";
 import { ManualPoseCorrection, ResolvedDisplayPose } from "../Alignment/ManualPoseCorrection";
 import { RobotMenuView } from "./RobotMenuView";

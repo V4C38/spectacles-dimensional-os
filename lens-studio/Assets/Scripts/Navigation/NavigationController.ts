@@ -33,12 +33,10 @@ import {
   runtimeDeadzoneRadiusCm,
 } from "../Core/RobotRuntime";
 import { NavigationMarkerView } from "./NavigationMarkerView";
-import { PathRenderer } from "./PathRenderer";
-import { PlacementController, RobotGroundDeadzone } from "./PlacementController";
+import { NavigationPathRenderer } from "./NavigationPathRenderer";
+import { SurfacePlacementController, RobotGroundDeadzone } from "./SurfacePlacementController";
 
 const PREVIEW_INTERVAL_S = 0.25;
-const PREVIEW_TAIL_BLEND_POINTS = 3;
-const PREVIEW_DIRTY_DISTANCE_CM = 5.0;
 const PREVIEW_STALE_TARGET_DISTANCE_CM = 12.0;
 const NAV_STATUS_STALE_TIMEOUT_S = 8.0;
 const NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S = 2.0;
@@ -46,31 +44,48 @@ const NAV_STATUS_RESYNC_MAX_COOLDOWN_S = 8.0;
 const NAV_STATUS_LOCAL_RECOVERY_S = 16.0;
 const NAVIGATION_OUTCOME_FLASH_S = 1.5;
 
+type NavigationPhase = "idle" | "placing" | "awaitingPath" | "executing";
+
+interface NavigationLifecycle {
+  phase: NavigationPhase;
+  goalActive: boolean;
+  lastNavStatusTime: number;
+  lastNavStatusResyncTime: number;
+  navStatusResyncCooldownS: number;
+  navExecutingSince: number;
+}
+
+type NavVisualResetReason =
+  | "disconnect"
+  | "cancel"
+  | "estop"
+  | "stale"
+  | "placement_off"
+  | "goal_done"
+  | "recovering";
+
 export class NavigationController {
-  // ── Placement / goal state ─────────────────────────────────────
   private _placementEnabled = false;
-  private _navGoalActive = false;
   private _cancelGoalAvailable = true;
   private _previewTarget: { position: vec3; rotation: quat } | null = null;
   private _previewBasePath: vec3[] | null = null;
-  private _lastPreviewSamplePosition: vec3 | null = null;
-  private _previewDirty = false;
   private _lastPreviewRequestTime = -PREVIEW_INTERVAL_S;
-  private _lastNavStatusTime = -NAV_STATUS_STALE_TIMEOUT_S;
-  private _lastNavStatusResyncTime = -NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S;
-  private _navStatusResyncCooldownS = NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S;
-  private _navExecutingSince = -NAV_STATUS_STALE_TIMEOUT_S;
-  /** Bridge broadcasts idle until the first executing path; ignore idle reconcile meanwhile. */
-  private _awaitingPathHandoff = false;
+  private _lifecycle: NavigationLifecycle = {
+    phase: "idle",
+    goalActive: false,
+    lastNavStatusTime: -NAV_STATUS_STALE_TIMEOUT_S,
+    lastNavStatusResyncTime: -NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S,
+    navStatusResyncCooldownS: NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S,
+    navExecutingSince: -NAV_STATUS_STALE_TIMEOUT_S,
+  };
 
-  // ── Watchdog / gating state ────────────────────────────────────
   private _navWatchdogEvent: SceneEvent | null = null;
   private _protocolParseFailureCount = 0;
 
-  // ── Outcome-flash state (was NavigationOutcomeTracker) ─────────
-  private _outcomeSeq = 0;
-  private _outcomeDueSeq = 0;
-  private _outcomeEvent: DelayedCallbackEvent | null = null;
+  private _outcomeFlashSeq = 0;
+  private _outcomeFlashDueSeq = 0;
+  private _outcomeFlashEvent: DelayedCallbackEvent | null = null;
+  private _watchedNavigationOutcome: NavigationOutcome = "none";
 
   constructor(
     private readonly _script: BaseScriptComponent,
@@ -78,8 +93,8 @@ export class NavigationController {
     private readonly _appState: AppState,
     private readonly _robotMarker: RobotMarker | null,
     private readonly _goalRenderer: NavigationMarkerView,
-    private readonly _pathRenderer: PathRenderer,
-    private readonly _placement: PlacementController,
+    private readonly _pathRenderer: NavigationPathRenderer,
+    private readonly _placement: SurfacePlacementController,
     private readonly _robotGroundDeadzoneRadiusCm: number,
     private readonly _getLastPose: () => PoseMessage | null,
     private readonly _onRuntimeStateChanged: (state: RobotRuntimeState) => void,
@@ -95,6 +110,11 @@ export class NavigationController {
       getRobotWorldPosition: () => this._robotMarker?.getWorldPosition() ?? null,
       getRobotFloorWorldY: () => this._robotFloorY(),
     } as RobotGroundDeadzone);
+
+    this._watchedNavigationOutcome = this._appState.snapshot.navigationOutcome;
+    this._appState.subscribe((state) => {
+      this._handleNavigationOutcomeChanged(state.navigationOutcome);
+    });
   }
 
   // ── Bridge event handlers ──────────────────────────────────────
@@ -114,8 +134,8 @@ export class NavigationController {
     if (robotY !== null && goalY !== null) {
       this._pathRenderer?.setHeightRange(robotY, goalY);
     }
-    if (this._navGoalActive && msg.waypoints.length >= 2) {
-      this._clearPathHandoff();
+    if (this._lifecycle.goalActive && msg.waypoints.length >= 2) {
+      this._lifecycle.phase = "executing";
       this._assertExecutingVisuals();
     }
     this._pathRenderer?.setProtocolPath(msg.waypoints, "executing");
@@ -148,7 +168,7 @@ export class NavigationController {
     const navLabel = this._applyNavStatusInner(msg);
 
     if (msg.recovering) {
-      this._cancelOutcome();
+      this._cancelOutcomeFlashTimer();
       return;
     }
     if (navLabel === "Goal reached") {
@@ -180,13 +200,13 @@ export class NavigationController {
   // ── Lifecycle / state coordination ────────────────────────────
 
   public cancelOutcome(): void {
-    this._cancelOutcome();
+    this._cancelOutcomeFlashTimer();
   }
 
   public clearForDisconnect(): void {
     this.clearInactiveState();
     this._protocolParseFailureCount = 0;
-    this._cancelOutcome();
+    this._cancelOutcomeFlashTimer();
   }
 
   public resetForUserDisconnect(): void {
@@ -250,12 +270,8 @@ export class NavigationController {
       return;
     }
     this._log("requestEmergencyStop");
-    this._clearPathHandoff();
-    this._navGoalActive = false;
-    this._resetPreviewState();
-    this._pathRenderer?.clear();
+    this._resetNavigationVisuals("estop", { outcomeLabel: "Cancelled" });
     this._bridgeClient?.sendEmergencyStop();
-    this._startPlacementOutcomeReset("Cancelled");
   }
 
   public setNavigationMode(mode: NavigationMode): void {
@@ -285,6 +301,7 @@ export class NavigationController {
       }
       print("NavigationController: placement enabled");
       this._placementEnabled = true;
+      this._lifecycle.phase = "placing";
       this._resetPreviewState();
       this._pathRenderer?.clear();
       this._placement?.start(initialPose.position, initialPose.rotation);
@@ -296,12 +313,7 @@ export class NavigationController {
       return;
     }
     print("NavigationController: placement disabled");
-    this._clearPathHandoff();
-    this._navGoalActive = false;
-    this._placement?.stop();
-    this._resetPreviewState();
-    this._pathRenderer?.clear();
-    this._placementEnabled = false;
+    this._resetNavigationVisuals("placement_off", { stopPlacement: true });
     this._setNavigationMode("idle");
   }
 
@@ -310,13 +322,10 @@ export class NavigationController {
   }
 
   public clearInactiveState(): void {
-    this._placementEnabled = false;
-    this._clearPathHandoff();
-    this._navGoalActive = false;
-    this._navStatusResyncCooldownS = NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S;
-    this._placement?.stop();
-    this._resetPreviewState();
-    this._pathRenderer?.clear();
+    this._resetNavigationVisuals("disconnect", {
+      stopPlacement: true,
+      resetResyncCooldown: true,
+    });
     this._setNavigationMode("idle");
   }
 
@@ -324,12 +333,8 @@ export class NavigationController {
     if (!this._cancelGoalAvailable) {
       return;
     }
-    this._clearPathHandoff();
-    this._navGoalActive = false;
-    this._resetPreviewState();
-    this._pathRenderer?.clear();
+    this._resetNavigationVisuals("cancel", { outcomeLabel: "Cancelled" });
     this._bridgeClient?.sendCancelGoal();
-    this._startPlacementOutcomeReset("Cancelled");
   }
 
   public setCancelGoalAvailability(
@@ -347,24 +352,20 @@ export class NavigationController {
   // ── Private: nav-status state machine ─────────────────────────
 
   private _applyNavStatusInner(msg: NavStatusMessage): string {
-    this._lastNavStatusTime = getTime();
-    this._navStatusResyncCooldownS = NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S;
+    this._lifecycle.lastNavStatusTime = getTime();
+    this._lifecycle.navStatusResyncCooldownS = NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S;
 
     if (this._reconcileResyncedNavStatus(msg)) {
       return "Recovered";
     }
 
     if (msg.recovering) {
-      this._clearPathHandoff();
-      this._navGoalActive = false;
-      this._resetPreviewState();
-      this._pathRenderer?.clear();
-      this._startPlacementOutcomeReset("Failed");
+      this._resetNavigationVisuals("recovering", { outcomeLabel: "Failed" });
       return "Recovering";
     }
 
     if (msg.goal_reached || msg.goal_failed) {
-      if (!this._navGoalActive) {
+      if (!this._lifecycle.goalActive) {
         return "Idle";
       }
       this._finishActiveNavigationGoal(msg.goal_reached);
@@ -372,13 +373,13 @@ export class NavigationController {
     }
 
     if (msg.state === "following_path") {
-      if (this._placementEnabled && this._navGoalActive) {
+      if (this._placementEnabled && this._lifecycle.goalActive) {
         this._enterExecutingFromBridge();
       }
       return "Navigating";
     }
     if (msg.state === "recovery") {
-      if (this._placementEnabled && this._navGoalActive) {
+      if (this._placementEnabled && this._lifecycle.goalActive) {
         this._enterExecutingFromBridge();
       }
       return "Recovery";
@@ -394,15 +395,11 @@ export class NavigationController {
   }
 
   private _recoverFromStaleExecution(): void {
-    if (!this._navGoalActive) {
+    if (!this._lifecycle.goalActive) {
       return;
     }
     print("NavigationController: recovering from stale navigation lifecycle");
-    this._clearPathHandoff();
-    this._navGoalActive = false;
-    this._resetPreviewState();
-    this._pathRenderer?.clear();
-    this._startPlacementOutcomeReset("Failed");
+    this._resetNavigationVisuals("stale", { outcomeLabel: "Failed" });
   }
 
   // ── Private: watchdog ──────────────────────────────────────────
@@ -428,67 +425,77 @@ export class NavigationController {
   private _checkNavLifecycleStaleness(
     now: number = getTime(),
   ): "ok" | "request_resync" | "recover_local" {
-    if (!this._navGoalActive) {
+    if (!this._lifecycle.goalActive) {
       return "ok";
     }
-    const elapsed = now - this._lastNavStatusTime;
+    const elapsed = now - this._lifecycle.lastNavStatusTime;
     if (elapsed < NAV_STATUS_STALE_TIMEOUT_S) {
       return "ok";
     }
-    if (now - this._lastNavStatusResyncTime >= this._navStatusResyncCooldownS) {
-      this._lastNavStatusResyncTime = now;
-      this._navStatusResyncCooldownS = Math.min(
-        this._navStatusResyncCooldownS * 2.0,
+    if (
+      now - this._lifecycle.lastNavStatusResyncTime >=
+      this._lifecycle.navStatusResyncCooldownS
+    ) {
+      this._lifecycle.lastNavStatusResyncTime = now;
+      this._lifecycle.navStatusResyncCooldownS = Math.min(
+        this._lifecycle.navStatusResyncCooldownS * 2.0,
         NAV_STATUS_RESYNC_MAX_COOLDOWN_S,
       );
       return "request_resync";
     }
-    if (now - this._navExecutingSince >= NAV_STATUS_LOCAL_RECOVERY_S) {
+    if (now - this._lifecycle.navExecutingSince >= NAV_STATUS_LOCAL_RECOVERY_S) {
       return "recover_local";
     }
     return "ok";
   }
 
-  // ── Private: outcome flash (was NavigationOutcomeTracker) ──────
+  // ── Private: outcome flash ─────────────────────────────────────
 
-  private _setOutcome(outcome: "success" | "failed"): void {
-    this._cancelOutcome();
-    this._appState.update({ navigationOutcome: outcome });
-    this._scheduleOutcomeFlash();
+  private _handleNavigationOutcomeChanged(outcome: NavigationOutcome): void {
+    if (outcome === this._watchedNavigationOutcome) {
+      return;
+    }
+    this._watchedNavigationOutcome = outcome;
+    this._cancelOutcomeFlashTimer();
+    if (outcome === "success" || outcome === "failed") {
+      this._armOutcomeFlashTimer();
+    }
   }
 
-  private _scheduleOutcomeFlash(): void {
-    this._outcomeSeq += 1;
-    this._outcomeDueSeq = this._outcomeSeq;
-    if (!this._outcomeEvent) {
-      this._outcomeEvent = this._script.createEvent(
+  private _armOutcomeFlashTimer(): void {
+    this._outcomeFlashSeq += 1;
+    this._outcomeFlashDueSeq = this._outcomeFlashSeq;
+    if (!this._outcomeFlashEvent) {
+      this._outcomeFlashEvent = this._script.createEvent(
         "DelayedCallbackEvent",
       ) as DelayedCallbackEvent;
-      this._outcomeEvent.bind(() => {
-        if (this._outcomeSeq !== this._outcomeDueSeq) {
+      this._outcomeFlashEvent.bind(() => {
+        if (this._outcomeFlashSeq !== this._outcomeFlashDueSeq) {
           return;
         }
-        this._clearOutcome();
+        if (this._appState.snapshot.navigationOutcome === "none") {
+          return;
+        }
+        this._appState.update({ navigationOutcome: "none" });
       });
     }
-    (this._outcomeEvent as DelayedCallbackEvent).reset(NAVIGATION_OUTCOME_FLASH_S);
+    (this._outcomeFlashEvent as DelayedCallbackEvent).reset(NAVIGATION_OUTCOME_FLASH_S);
   }
 
-  private _cancelOutcome(): void {
-    this._outcomeSeq += 1;
+  private _cancelOutcomeFlashTimer(): void {
+    this._outcomeFlashSeq += 1;
+  }
+
+  private _setOutcome(outcome: "success" | "failed"): void {
+    this._appState.update({ navigationOutcome: outcome });
   }
 
   private _clearOutcome(): void {
-    this._cancelOutcome();
+    this._cancelOutcomeFlashTimer();
     if (this._appState.snapshot.navigationOutcome === "none") {
       return;
     }
     this._appState.update({ navigationOutcome: "none" });
-  }
-
-  private _scheduleOutcomeFlashAfterUpdate(): void {
-    this._cancelOutcome();
-    this._scheduleOutcomeFlash();
   }
 
   // ── Private: gating ────────────────────────────────────────────
@@ -506,13 +513,11 @@ export class NavigationController {
       ...appState.robotRuntime,
       capabilities,
     };
-    this._cancelOutcome();
     this._appState.update({
       navRuntimeErrorCode: errorCode,
       navigationOutcome: "failed",
       robotRuntime: runtimeState,
     } as any);
-    this._scheduleOutcomeFlashAfterUpdate();
     this._onRuntimeStateChanged(runtimeState);
   }
 
@@ -554,7 +559,7 @@ export class NavigationController {
       ) {
         return;
       }
-      this._cancelOutcome();
+      this._cancelOutcomeFlashTimer();
       this._appState.update({
         navigationOutcome: "none",
         navigationMode: mode,
@@ -587,6 +592,44 @@ export class NavigationController {
     this.setPlacementEnabled(true, initialPose);
   }
 
+  // ── Private: lifecycle reset ───────────────────────────────────
+
+  private _resetNavigationVisuals(
+    reason: NavVisualResetReason,
+    opts?: {
+      outcomeLabel?: "Cancelled" | "Failed";
+      respawnAtRobot?: boolean;
+      stopPlacement?: boolean;
+      resetResyncCooldown?: boolean;
+    },
+  ): void {
+    this._lifecycle.goalActive = false;
+    if (
+      this._lifecycle.phase === "awaitingPath" ||
+      this._lifecycle.phase === "executing"
+    ) {
+      this._lifecycle.phase =
+        this._placementEnabled && !opts?.stopPlacement ? "placing" : "idle";
+    }
+
+    this._resetPreviewState();
+    this._pathRenderer?.clear();
+
+    if (opts?.resetResyncCooldown) {
+      this._lifecycle.navStatusResyncCooldownS = NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S;
+    }
+    if (opts?.stopPlacement) {
+      this._placementEnabled = false;
+      this._lifecycle.phase = "idle";
+      this._placement?.stop();
+    }
+    if (opts?.outcomeLabel) {
+      this._startPlacementOutcomeReset(opts.outcomeLabel);
+    } else if (opts?.respawnAtRobot) {
+      this._respawnGoalMarkerAtRobot();
+    }
+  }
+
   // ── Private: preview & path ────────────────────────────────────
 
   private _handleGoalConfirmed(position: vec3, rotation: quat): void {
@@ -596,17 +639,18 @@ export class NavigationController {
     print(
       `NavigationController: goal confirmed at (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`,
     );
-    this._navGoalActive = true;
+    this._lifecycle.goalActive = true;
     this._markNavExecuting();
     this._resetPreviewState();
     this._assertExecutingVisuals();
     this._setNavigationMode("executingGoal");
 
     if (this._canSendNavigationGoal()) {
-      this._awaitingPathHandoff = true;
+      this._lifecycle.phase = "awaitingPath";
       this._bridgeClient?.sendNavGoal(position, rotation);
       return;
     }
+    this._lifecycle.phase = "executing";
     print("NavigationController: executing locally without sending nav_goal");
   }
 
@@ -628,14 +672,6 @@ export class NavigationController {
       position: new vec3(position.x, position.y, position.z),
       rotation,
     };
-    if (
-      force ||
-      !this._lastPreviewSamplePosition ||
-      this._lastPreviewSamplePosition.distance(position) >= PREVIEW_DIRTY_DISTANCE_CM
-    ) {
-      this._previewDirty = true;
-      this._lastPreviewSamplePosition = new vec3(position.x, position.y, position.z);
-    }
     this._maybeRequestPreview(force, placementActive);
     this._renderPreviewPath(placementActive);
   }
@@ -645,13 +681,9 @@ export class NavigationController {
       return;
     }
     const now = getTime();
-    if (!force && !this._previewDirty) {
-      return;
-    }
     if (!force && now - this._lastPreviewRequestTime < PREVIEW_INTERVAL_S) {
       return;
     }
-    this._previewDirty = false;
     this._lastPreviewRequestTime = now;
     if (this._canRequestPreviewPath(placementActive)) {
       const sent =
@@ -687,10 +719,7 @@ export class NavigationController {
       this._pathRenderer?.setLensPath([robotPosition, goalPosition], "preview");
       return;
     }
-    this._pathRenderer?.setLensPath(
-      this._tailAdjustedPreviewPath(this._previewBasePath, goalPosition),
-      "preview",
-    );
+    this._pathRenderer?.setLensPath(this._previewBasePath, "preview");
   }
 
   private _canRequestPreviewPath(placementActive: boolean): boolean {
@@ -712,47 +741,15 @@ export class NavigationController {
     );
   }
 
-  private _tailAdjustedPreviewPath(points: vec3[], goalPosition: vec3): vec3[] {
-    const adjusted = points.map((point) => new vec3(point.x, point.y, point.z));
-    if (adjusted.length < 2) {
-      return adjusted;
-    }
-    const tailSpan = Math.min(PREVIEW_TAIL_BLEND_POINTS, adjusted.length - 1);
-    const anchorIndex = adjusted.length - tailSpan - 1;
-    const anchor = adjusted[anchorIndex];
-    const bridgeGoal = adjusted[adjusted.length - 1];
-    for (let index = 0; index < tailSpan; index++) {
-      const t = (index + 1) / tailSpan;
-      adjusted[anchorIndex + 1 + index] = this._quadraticBezierPoint(
-        anchor,
-        bridgeGoal,
-        goalPosition,
-        t,
-      );
-    }
-    return adjusted;
-  }
-
-  private _quadraticBezierPoint(p0: vec3, p1: vec3, p2: vec3, t: number): vec3 {
-    const u = 1.0 - t;
-    return new vec3(
-      u * u * p0.x + 2.0 * u * t * p1.x + t * t * p2.x,
-      u * u * p0.y + 2.0 * u * t * p1.y + t * t * p2.y,
-      u * u * p0.z + 2.0 * u * t * p1.z + t * t * p2.z,
-    );
-  }
-
   private _resetPreviewState(): void {
     this._previewTarget = null;
     this._previewBasePath = null;
-    this._lastPreviewSamplePosition = null;
-    this._previewDirty = false;
     this._lastPreviewRequestTime = -PREVIEW_INTERVAL_S;
   }
 
   private _finishActiveNavigationGoal(succeeded: boolean): void {
-    this._clearPathHandoff();
-    this._navGoalActive = false;
+    this._lifecycle.goalActive = false;
+    this._lifecycle.phase = this._placementEnabled ? "placing" : "idle";
     this._resetPreviewState();
     this._pathRenderer?.clear();
     if (this._placementEnabled) {
@@ -773,12 +770,8 @@ export class NavigationController {
 
   private _markNavExecuting(): void {
     const now = getTime();
-    this._navExecutingSince = now;
-    this._lastNavStatusTime = now;
-  }
-
-  private _clearPathHandoff(): void {
-    this._awaitingPathHandoff = false;
+    this._lifecycle.navExecutingSince = now;
+    this._lifecycle.lastNavStatusTime = now;
   }
 
   private _assertExecutingVisuals(): void {
@@ -787,7 +780,7 @@ export class NavigationController {
   }
 
   private _enterExecutingFromBridge(): void {
-    this._clearPathHandoff();
+    this._lifecycle.phase = "executing";
     this._markNavExecuting();
     this._assertExecutingVisuals();
     this._setNavigationMode("executingGoal");

@@ -149,7 +149,7 @@ function createPathLineMaterial(style: PathRenderStyle): Material | null {
   return material;
 }
 
-export class PathRenderer {
+export class NavigationPathRenderer {
   private readonly container: SceneObject;
   private readonly pathMaterial: Material | null;
   private readonly lineRenderer: InteractorLineRenderer | null = null;
@@ -161,7 +161,7 @@ export class PathRenderer {
 
   constructor(parent: SceneObject) {
     // Create container with identity world transform so world-cm waypoints map 1:1 to mesh-local points
-    this.container = global.scene.createSceneObject("PathRenderer");
+    this.container = global.scene.createSceneObject("NavigationPathRenderer");
     this.container.setParent(parent);
     const transform = this.container.getTransform();
     transform.setWorldPosition(vec3.zero());
@@ -183,10 +183,10 @@ export class PathRenderer {
         this.lineRenderer.setSolidColor(styleColor(this._style));
         this.lineRenderer.getSceneObject().setParent(this.container);
       } catch (e) {
-        print(`PathRenderer: Failed to create LineRenderer: ${e}`);
+        print(`NavigationPathRenderer: Failed to create LineRenderer: ${e}`);
       }
     } else {
-      print("PathRenderer: SIK InteractorLineMaterial not found, path rendering disabled");
+      print("NavigationPathRenderer: SIK InteractorLineMaterial not found, path rendering disabled");
     }
   }
 
