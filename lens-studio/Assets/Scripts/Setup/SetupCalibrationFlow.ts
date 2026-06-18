@@ -9,7 +9,10 @@
 // ================================================================
 
 import { AlignmentSession } from "../Alignment/AlignmentSession";
-import { DimosManager } from "../Core/DimosManager";
+import { BridgeRuntime } from "../Bridge/BridgeRuntime";
+import { FrameCaptureController } from "../Alignment/FrameCaptureController";
+import { RobotRuntime } from "../Robot/RobotRuntime";
+import { SetupAlignmentPreview } from "./SetupAlignmentPreview";
 import { AlignStatusMessage, BridgeStatusMessage } from "../Bridge/Protocol";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE,COLOR_WARN, SnapOS2Styles } from "../UI/kit/UIKit";
 import {
@@ -313,8 +316,11 @@ export class SetupCalibrationFlow {
   private _commitInFlight = false;
 
   constructor(
-    private readonly _dimosManager: DimosManager,
+    private readonly _setupAlignmentPreview: SetupAlignmentPreview | null,
     private readonly _alignmentSession: AlignmentSession | null,
+    private readonly _bridgeRuntime: BridgeRuntime | null,
+    private readonly _robotRuntime: RobotRuntime | null,
+    private readonly _frameCapture: FrameCaptureController | null,
     private readonly _callbacks: SetupCalibrationFlowCallbacks,
   ) {}
 
@@ -335,12 +341,12 @@ export class SetupCalibrationFlow {
   }
 
   public isManualOnly(): boolean {
-    return this._dimosManager.preferredCalibrationMode() === "manualOnly";
+    return this._alignmentSession?.preferredMode() === "manualOnly";
   }
 
   public enter(): void {
-    const preferredMode = this._dimosManager.preferredCalibrationMode();
-    if (preferredMode === "manualOnly" || !this._dimosManager.hasBridgeConnection()) {
+    const preferredMode = this._alignmentSession?.preferredMode() ?? "auto";
+    if (preferredMode === "manualOnly" || !this._bridgeRuntime?.hasConnection()) {
       this._beginManualMode();
       return;
     }
@@ -351,9 +357,9 @@ export class SetupCalibrationFlow {
     this._commitInFlight = false;
     this._lastManualCandidateSyncTime = -1;
     this._alignmentSession?.stop();
-    this._dimosManager.cancelManualAlignmentPlacement();
-    this._dimosManager.clearManualAlignmentPose();
-    this._dimosManager.hideRobotMarkerPreview();
+    this._alignmentSession?.cancelPlacement();
+    this._alignmentSession?.clearPose();
+    this._robotRuntime?.applyInteractionFromState();
   }
 
   public toggleMode(): void {
@@ -400,7 +406,7 @@ export class SetupCalibrationFlow {
   public handleAlignStatus(msg: AlignStatusMessage): void {
     this._logAlignStatusIfChanged(msg);
     this._state = applyAlignStatusToCalibrationState(this._state, msg);
-    const frameCapture = this._dimosManager.frameCaptureController;
+    const frameCapture = this._frameCapture;
 
     if (msg.state === "failed") {
       frameCapture?.setSamplingBurst(false);
@@ -408,20 +414,20 @@ export class SetupCalibrationFlow {
       this._commitInFlight = false;
       this._callbacks.log(`alignment failed on bridge: ${msg.message || "unknown reason"}`);
       if (this._state.mode === "manual") {
-        this._dimosManager.hideRobotMarkerPreview();
+        this._robotRuntime?.applyInteractionFromState();
       }
-      this._dimosManager.endSetupAlignmentPreview();
+      this._setupAlignmentPreview?.end();
     } else if (msg.state === "aligned") {
       frameCapture?.setSamplingBurst(false);
       frameCapture?.setCapturePaused(false);
-      this._dimosManager.setSetupAlignmentComplete();
+      this._setupAlignmentPreview?.setComplete();
       this._tryAutoFinishSetup();
     } else if (this._state.mode === "auto") {
       frameCapture?.setSamplingBurst(msg.sampling === true);
       frameCapture?.setCapturePaused(
         msg.assist_stage === "move" && msg.sampling === false,
       );
-      this._dimosManager.updateSetupAlignmentFromAlignStatus(msg);
+      this._setupAlignmentPreview?.updateFromAlignStatus(msg);
     } else {
       frameCapture?.setSamplingBurst(false);
       frameCapture?.setCapturePaused(false);
@@ -452,7 +458,7 @@ export class SetupCalibrationFlow {
 
   public handleBridgeStatus(msg: BridgeStatusMessage): void {
     if (isCalibrationPendingCommit(this._state) && msg.registered) {
-      this._dimosManager.cancelManualAlignmentPlacement();
+      this._alignmentSession?.cancelPlacement();
       this._state = { ...this._state, phase: "complete", message: "" };
       this._notify();
       this._callbacks.log("alignment confirmed via bridge_status fallback");
@@ -464,7 +470,7 @@ export class SetupCalibrationFlow {
     if (
       this._alignmentSession?.hasActiveIntent() &&
       this._alignmentSession.isNoResponseTimeout() &&
-      this._dimosManager.hasBridgeConnection()
+      this._bridgeRuntime?.hasConnection()
     ) {
       if (this._state.message !== NO_RESPONSE_STATUS_MSG) {
         this._state = { ...this._state, message: NO_RESPONSE_STATUS_MSG };
@@ -477,7 +483,7 @@ export class SetupCalibrationFlow {
       this._state.mode !== "manual" ||
       isCalibrationPendingCommit(this._state) ||
       isCalibrationComplete(this._state) ||
-      !this._dimosManager.hasBridgeConnection()
+      !this._bridgeRuntime?.hasConnection()
     ) {
       this._lastManualCandidateSyncTime = -1;
       return;
@@ -491,28 +497,28 @@ export class SetupCalibrationFlow {
       return;
     }
     this._lastManualCandidateSyncTime = now;
-    this._dimosManager.captureManualAlignmentCandidate();
+    this._alignmentSession?.captureAndSubmitManualPose();
   }
 
   // ── Private ────────────────────────────────────────────────────
 
   private _completeManualStep(): boolean {
-    if (!this._dimosManager.hasBridgeConnection()) {
-      const finalized = this._dimosManager.finalizeOfflineManualAlignment();
+    if (!this._bridgeRuntime?.hasConnection()) {
+      const finalized = this._alignmentSession?.finalizeOffline() ?? false;
       if (!finalized) {
         this._callbacks.log("manual alignment: offline finalize failed — marker pose unavailable");
         this._state = { ...this._state, message: "" };
         this._notify();
         return false;
       }
-      this._dimosManager.cancelManualAlignmentPlacement();
+      this._alignmentSession?.cancelPlacement();
       this._state = { ...this._state, phase: "complete", message: "" };
       this._notify();
       this._callbacks.log("manual local-only calibration accepted");
       return true;
     }
 
-    const captured = this._dimosManager.captureManualAlignmentCandidate();
+    const captured = this._alignmentSession?.captureAndSubmitManualPose() ?? false;
     if (!captured) {
       this._callbacks.log("manual alignment: capture failed on Complete — marker pose unavailable");
       this._state = { ...this._state, message: "" };
@@ -522,7 +528,7 @@ export class SetupCalibrationFlow {
 
     if (this._alignmentSession?.commit()) {
       this._commitInFlight = true;
-      this._dimosManager.freezeManualAlignmentPlacement();
+      this._alignmentSession?.freezePlacement();
       this._state = { ...this._state, phase: "pendingCommit", message: "" };
       this._notify();
       this._callbacks.log("manual calibration commit requested");
@@ -539,18 +545,16 @@ export class SetupCalibrationFlow {
     this._commitInFlight = false;
     this._lastManualCandidateSyncTime = -1;
     this._state = createCalibrationViewState();
-    this._dimosManager.cancelManualAlignmentPlacement();
-    this._dimosManager.stopManualAlignmentSession();
-    this._dimosManager.clearManualAlignmentPose();
-    this._dimosManager.hideRobotMarkerPreview();
-    this._dimosManager.frameCaptureController?.setCaptureErrorHandler(() => {
+    this._alignmentSession?.cancelPlacement();
+    this._alignmentSession?.stop();
+    this._alignmentSession?.clearPose();
+    this._robotRuntime?.applyInteractionFromState();
+    this._frameCapture?.setCaptureErrorHandler(() => {
       this._callbacks.log("auto alignment: camera capture error");
       this._state = { ...this._state, message: "" };
       this._notify();
     });
-    this._dimosManager.beginSetupAlignmentPreview(() => {
-      this._callbacks.log("auto alignment: aborted via preview");
-    });
+    this._setupAlignmentPreview?.begin();
     this._alignmentSession?.start("tag", true);
     this._notify(true);
   }
@@ -565,14 +569,14 @@ export class SetupCalibrationFlow {
     if (!this._callbacks.beginManualAlignmentPlacementFromWizard()) {
       this._callbacks.log("manual alignment: could not begin placement from wizard panel");
       this._state = { ...this._state, phase: "editing", message: "" };
-      this._dimosManager.cancelManualAlignmentPlacement();
-      this._dimosManager.stopManualAlignmentSession();
-      this._dimosManager.clearManualAlignmentPose();
+      this._alignmentSession?.cancelPlacement();
+      this._alignmentSession?.stop();
+      this._alignmentSession?.clearPose();
       this._notify();
       return;
     }
 
-    this._dimosManager.startManualAlignmentSession();
+    this._alignmentSession?.start("manual");
     this._callbacks.log("manual alignment placement started");
     this._notify();
   }

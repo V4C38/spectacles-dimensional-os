@@ -1,7 +1,11 @@
 require("LensStudio:TextInputModule");
 
 import { AlignmentSession } from "../Alignment/AlignmentSession";
+import { BridgeRuntime } from "../Bridge/BridgeRuntime";
 import { DimosManager } from "../Core/DimosManager";
+import { FrameCaptureController } from "../Alignment/FrameCaptureController";
+import { RobotRuntime } from "../Robot/RobotRuntime";
+import { SetupAlignmentPreview } from "./SetupAlignmentPreview";
 import { UIManager } from "../UI/UIManager";
 import { AlignStatusMessage } from "../Bridge/Protocol";
 import { scaleIn } from "../UI/kit/UIAnimations";
@@ -32,6 +36,18 @@ const AUTOCONNECT_RETRY_S = 2.0;
 export class SetupWizard extends BaseScriptComponent {
   @input
   dimosManager: DimosManager;
+
+  @input
+  bridgeRuntime: BridgeRuntime;
+
+  @input
+  setupAlignmentPreview: SetupAlignmentPreview;
+
+  @input
+  robotRuntime: RobotRuntime;
+
+  @input
+  frameCaptureController: FrameCaptureController;
 
   @input
   uiManager: UIManager;
@@ -74,8 +90,11 @@ export class SetupWizard extends BaseScriptComponent {
       this._finishEvent = finishEv;
 
       this._calibrationFlow = new SetupCalibrationFlow(
-        this.dimosManager,
+        this.setupAlignmentPreview,
         this.alignmentSession,
+        this.bridgeRuntime,
+        this.robotRuntime,
+        this.frameCaptureController,
         {
           beginManualAlignmentPlacementFromWizard: () =>
             this._beginManualAlignmentPlacementFromWizard(),
@@ -141,7 +160,7 @@ export class SetupWizard extends BaseScriptComponent {
     if (clamped !== WizardStep.Calibrate) {
       this.alignmentSession?.stop();
       this._calibrationFlow?.leave();
-      this.dimosManager?.endSetupAlignmentPreview();
+      this.setupAlignmentPreview?.end();
     }
 
     switch (clamped) {
@@ -233,7 +252,7 @@ export class SetupWizard extends BaseScriptComponent {
       return;
     }
     if (this._calibrationFlow?.completeStep()) {
-      this.dimosManager?.endSetupAlignmentPreview();
+      this.setupAlignmentPreview?.end();
       this._finishSetup();
     }
   }
@@ -249,7 +268,7 @@ export class SetupWizard extends BaseScriptComponent {
     // and restore follow-camera by resetting the anchor.
     if (this._currentStep === WizardStep.Calibrate) {
       this.alignmentSession?.stop();
-      this.dimosManager?.endSetupAlignmentPreview();
+      this.setupAlignmentPreview?.end();
     }
     this._setStep((this._currentStep - 1) as WizardStep);
   }
@@ -336,7 +355,7 @@ export class SetupWizard extends BaseScriptComponent {
   }
 
   private _isConnected(): boolean {
-    return (this.dimosManager?.bridgeLinkState ?? "disconnected") !== "disconnected";
+    return (this.bridgeRuntime?.bridgeLinkState ?? "disconnected") !== "disconnected";
   }
 
   // ── Bridge handlers ────────────────────────────────────────────
@@ -350,11 +369,11 @@ export class SetupWizard extends BaseScriptComponent {
   }
 
   private _bindBridgeHandlers(): void {
-    if (this._bridgeHandlersBound || !this.dimosManager) {
+    if (this._bridgeHandlersBound || !this.bridgeRuntime) {
       return;
     }
     this._bridgeHandlersBound = true;
-    this.dimosManager.onBridgeReady.add(() => {
+    this.bridgeRuntime.onBridgeReady.add(() => {
       if (this._currentStep === WizardStep.Connect) {
         this._connectCompleted = true;
         this._isConnecting = false;
@@ -368,7 +387,7 @@ export class SetupWizard extends BaseScriptComponent {
         }
       }
     });
-    this.dimosManager.onBridgeConnectionChanged.add((connected) => {
+    this.bridgeRuntime.onBridgeConnectionChanged.add((connected) => {
       if (!connected) {
         this._isConnecting = false;
       }
@@ -380,7 +399,7 @@ export class SetupWizard extends BaseScriptComponent {
         this._calibrationFlow?.handleBridgeConnectionChanged(connected);
       }
     });
-    this.dimosManager.onBridgeStatusChanged.add((msg) => {
+    this.bridgeRuntime.onBridgeStatusChanged.add((msg) => {
       if (this._currentStep === WizardStep.Connect) {
         this._showBridgeConnectionStatus();
       }
@@ -394,12 +413,12 @@ export class SetupWizard extends BaseScriptComponent {
 
   private _showBridgeConnectionStatus(): void {
     const presentation = getBridgeStatusPresentationForConnect(
-      this.dimosManager?.bridgeLinkState ?? "disconnected",
+      this.bridgeRuntime?.bridgeLinkState ?? "disconnected",
       this._isConnecting,
     );
     this._view?.setStatus(presentation.text, presentation.color);
-    if (this.dimosManager?.hasBridgeConnection()) {
-      this.dimosManager.requestBridgeStatus();
+    if (this.bridgeRuntime?.hasConnection()) {
+      this.bridgeRuntime.requestBridgeStatus();
     }
   }
 
@@ -409,7 +428,7 @@ export class SetupWizard extends BaseScriptComponent {
     }
     const display = buildCalibrationDisplay(
       this._calibrationFlow?.state ?? createCalibrationViewState(),
-      this.dimosManager?.hasBridgeConnection() ?? false,
+      this.bridgeRuntime?.hasConnection() ?? false,
     );
     if (display.statusText) {
       this._view?.setStatus(display.statusText, display.statusColor);
@@ -447,7 +466,7 @@ export class SetupWizard extends BaseScriptComponent {
     if (this._currentStep !== WizardStep.Calibrate) {
       return;
     }
-    this.dimosManager?.endSetupAlignmentPreview();
+    this.setupAlignmentPreview?.end();
     this._calibrationFlow?.toggleMode();
   }
 

@@ -1,20 +1,20 @@
-- !<AssetImportMetadata/101dbee6-1c49-4bb7-b03a-8954dd374155>
+- !<AssetImportMetadata/afeb96fc-8962-4a56-9c47-310b6e1e767f>
   ImportedAssetIds:
-    TypeScriptAsset: !<reference> 65cc0480-0a43-423d-ad15-b89c55c3a604
+    TypeScriptAsset: !<reference> baf0198e-db4b-49ae-8ebb-e22f22102536
   ImporterName: TypeScriptAssetImporter
-  PrimaryAsset: !<reference> 65cc0480-0a43-423d-ad15-b89c55c3a604
+  PrimaryAsset: !<reference> baf0198e-db4b-49ae-8ebb-e22f22102536
   PackageType: NotAPackage
   LegacyPackagePolicy: ~
   ExtraData:
     {}
   AssetDataMap:
-    TypeScriptAsset: !<own> a4252188-8dbe-47c3-831e-367dbdd67a48
+    TypeScriptAsset: !<own> 8645005e-0934-4d7e-a6e8-d1b1a0808d46
   DependentFiles:
     []
   ImporterSettings: !<AssetImporterSettings>
     {}
   CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
-- !<TypeScriptAssetData/a4252188-8dbe-47c3-831e-367dbdd67a48>
+- !<TypeScriptAssetData/8645005e-0934-4d7e-a6e8-d1b1a0808d46>
   SvgIcon: ""
   SetupScript:
     code: ""
@@ -22,14 +22,14 @@
   VersionMajor: 0
   VersionMinor: 0
   VersionPatch: 0
-  ComponentUid: b8369b0b-960a-4336-91b3-11477aa36374
+  ComponentUid: 86d57fb1-e92f-4108-9abe-bb9bb9e675b6
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
-    alignmentSession: false
+    bridgeClient: false
     dimosState: false
-    groundDisc: false
-    robotRuntime: false
+    pointCloudRenderer: false
+    robotMarker: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -40,14 +40,14 @@
     []
   DefaultScriptInputs:
     - dimosState: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
-      groundDisc: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
-      robotRuntime: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
-      alignmentSession: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
+      robotMarker: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
+      pointCloudRenderer: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
+      bridgeClient: !<MappingBased.AssignableType_3> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
   InputLines:
     - // @input AssignableType dimosState
-    - // @input SceneObject groundDisc
-    - // @input AssignableType_1 robotRuntime
-    - // @input AssignableType_2 alignmentSession
+    - // @input AssignableType_1 robotMarker
+    - // @input AssignableType_2 pointCloudRenderer
+    - // @input AssignableType_3 bridgeClient

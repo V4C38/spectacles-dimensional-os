@@ -127,15 +127,14 @@ flowchart TB
 
   ```text
   lens-studio/Assets/Scripts/
-  ├── Core/        (DimosManager, AppState, SignalEmitter, MathUtils, UILogger)
+  ├── Core/        (DimosManager, AppState, CameraStream, SignalEmitter, MathUtils)
   ├── Bridge/      (BridgeClient, Protocol — types + parser + builders)
-  ├── Camera/      (CameraStream — shared colour camera singleton)
   ├── Setup/       (SetupWizard, SetupWizardView, SetupCalibrationFlow, SetupAlignmentPreview)
-  ├── UI/          (UIManager, MainMenuView, BridgeStatusPresentation, kit/UIKit, kit/UIAnimations)
+  ├── UI/          (UIManager, MainMenuView, UILogger, BridgeStatusPresentation, kit/UIKit, kit/UIAnimations)
   ├── Alignment/   (AlignmentSession, ManualPoseCorrection, FrameCaptureController)
-  ├── Navigation/  (NavigationController, PlacementController, PathRenderer, NavigationMarkerView, SurfacePlacementStabilizer, HeadingRotation)
+  ├── Navigation/  (NavigationController, SurfacePlacementController, NavigationPathRenderer, NavigationMarkerView)
   ├── Robot/       (RobotMarker, RobotMarkerView, RobotRuntimeModel)
-  └── Lidar/       (PointCloudRenderer, MockLidarPoints)
+  └── Lidar/       (PointCloudRenderer, LidarPresentationController, MockLidarPoints)
   ```
 
 - `ShowLiDAR` controls the height/debug layer, while the red obstacle layer still comes from live bridge lidar when connected. The Lens can also request a bridge-side LiDAR transmit mode (`off` / `obstacles` / `full`) via `set_lidar_mode` to cut payload when only obstacle proximity matters.

@@ -28,13 +28,12 @@
   ScriptInputsHidden:
     alignmentSession: false
     bridgeClient: false
+    bridgeRuntime: false
+    dimosState: false
     frameCaptureController: false
-    groundDisc: false
-    navigationMarkerRoot: false
-    placementRayOrigin: false
-    pointCloudRenderer: false
-    robotGroundDeadzoneRadiusCm: false
-    robotMarker: false
+    navigationHost: false
+    robotRuntime: false
+    setupAlignmentPreview: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -44,25 +43,23 @@
   Attachments:
     []
   DefaultScriptInputs:
-    - bridgeClient: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
-      frameCaptureController: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
-      pointCloudRenderer: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
-      robotMarker: !<MappingBased.AssignableType_3> 00000000-0000-0000-0000-000000000000
-      placementRayOrigin: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
-      navigationMarkerRoot: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
-      robotGroundDeadzoneRadiusCm: !<float> 75.000000
-      alignmentSession: !<MappingBased.AssignableType_4> 00000000-0000-0000-0000-000000000000
-      groundDisc: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+    - dimosState: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
+      bridgeRuntime: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
+      robotRuntime: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
+      navigationHost: !<MappingBased.AssignableType_3> 00000000-0000-0000-0000-000000000000
+      setupAlignmentPreview: !<MappingBased.AssignableType_4> 00000000-0000-0000-0000-000000000000
+      bridgeClient: !<MappingBased.AssignableType_5> 00000000-0000-0000-0000-000000000000
+      frameCaptureController: !<MappingBased.AssignableType_6> 00000000-0000-0000-0000-000000000000
+      alignmentSession: !<MappingBased.AssignableType_7> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
   InputLines:
-    - // @input AssignableType bridgeClient
-    - // @input AssignableType_1 frameCaptureController
-    - // @input AssignableType_2 pointCloudRenderer
-    - // @input AssignableType_3 robotMarker
-    - // @input SceneObject placementRayOrigin
-    - // @input SceneObject navigationMarkerRoot
-    - // @input float robotGroundDeadzoneRadiusCm = 75
-    - // @input AssignableType_4 alignmentSession
-    - // @input SceneObject groundDisc
+    - // @input AssignableType dimosState
+    - // @input AssignableType_1 bridgeRuntime
+    - // @input AssignableType_2 robotRuntime
+    - // @input AssignableType_3 navigationHost
+    - // @input AssignableType_4 setupAlignmentPreview
+    - // @input AssignableType_5 bridgeClient
+    - // @input AssignableType_6 frameCaptureController
+    - // @input AssignableType_7 alignmentSession

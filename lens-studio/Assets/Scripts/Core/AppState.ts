@@ -148,14 +148,11 @@ export function validateSessionFields(state: DimosAppState): DimosAppState {
     }
   }
 
-  return next;
-}
+  if (!next.robotRuntime.capabilities.lidar?.available && next.lidarMode !== "off") {
+    next.lidarMode = "off";
+  }
 
-export function transitionSessionPatch(
-  current: DimosAppState,
-  patch: Partial<DimosAppState>,
-): Partial<DimosAppState> {
-  return validateSessionFields({ ...current, ...patch });
+  return next;
 }
 
 export function nextLidarMode(mode: LidarDisplayMode): LidarDisplayMode {

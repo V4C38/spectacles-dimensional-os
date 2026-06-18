@@ -1,7 +1,8 @@
 import { AlignStatusMessage } from "../Bridge/Protocol";
-import { RobotMarker } from "../Robot/RobotMarker";
-import { RobotMarkerView } from "../Robot/RobotMarkerView";
-import { RobotRuntimeState } from "../Core/AppState";
+import { AlignmentSession } from "../Alignment/AlignmentSession";
+import { DimosState } from "../Core/DimosState";
+import { OperatingMode } from "../Core/AppState";
+import { RobotRuntime } from "../Robot/RobotRuntime";
 import { robotFloorWorldYCm } from "../Robot/RobotRuntimeModel";
 import { COLOR_ERROR, COLOR_SUCCESS, findChildRecursive } from "../UI/kit/UIKit";
 
@@ -65,39 +66,43 @@ export function computeAssistPreviewProgress(input: AssistPreviewInput): number 
   return clamped;
 }
 
-// ── Setup alignment preview ────────────────────────────────────
+/** Setup calibration assist preview (marker, ground disc, robot menu). */
+@component
+export class SetupAlignmentPreview extends BaseScriptComponent {
+  @input
+  dimosState: DimosState;
 
-export interface SetupAlignmentPreviewDeps {
-  groundDisc: SceneObject | null;
-  robotMarker: RobotMarker | null;
-  robotMarkerView: RobotMarkerView | null;
-  getRobotRuntime: () => RobotRuntimeState;
-  onConfirmAssist: () => void;
-}
+  @input
+  groundDisc: SceneObject;
 
-/** Setup calibration preview (marker, ground disc, robot menu). */
-export class SetupAlignmentPreview {
-  private _deps: SetupAlignmentPreviewDeps | null = null;
+  @input
+  robotRuntime: RobotRuntime;
+
+  @input
+  alignmentSession: AlignmentSession;
+
   private _active = false;
   private _tagVisible = false;
   private _discAnchorInitialized = false;
   private _discLeftArrow: SceneObject | null = null;
   private _discRightArrow: SceneObject | null = null;
   private _moveLeg = -1;
-
-  public initialize(deps: SetupAlignmentPreviewDeps): void {
-    this._deps = deps;
-  }
+  private _priorRuntimeMode: OperatingMode = "manual";
 
   public begin(): void {
+    this._priorRuntimeMode = this.dimosState.snapshot.operatingMode !== "setup"
+      ? this.dimosState.snapshot.operatingMode
+      : "manual";
+    this.dimosState.update({ operatingMode: "setup", lidarMode: "off" });
+
     this._active = true;
     this._tagVisible = false;
-    const menu = this._deps?.robotMarkerView;
+    const menu = this.robotRuntime?.robotMarkerView;
     if (menu) {
-      menu.onContinueRequested = () => this._deps?.onConfirmAssist();
+      menu.onContinueRequested = () => this.alignmentSession?.confirmAssist();
     }
     this._resetVisualState();
-    this._deps?.robotMarker?.setVisible(false);
+    this.robotRuntime?.robotMarker?.setVisible(false);
     menu?.setMenuVisible(false);
   }
 
@@ -111,9 +116,9 @@ export class SetupAlignmentPreview {
     const worldPose = msg.robot_world_pose ?? null;
     const previewStageActive = isAssistPreviewStage(assistStage);
     const showMarker = previewStageActive && !!worldPose;
-    const menu = this._deps?.robotMarkerView;
+    const menu = this.robotRuntime?.robotMarkerView;
     const wasMenuVisible = menu?.isMenuVisible() ?? false;
-    const marker = this._deps?.robotMarker;
+    const marker = this.robotRuntime?.robotMarker;
 
     if (showMarker && worldPose) {
       const pos = new vec3(
@@ -159,7 +164,7 @@ export class SetupAlignmentPreview {
     }
     const GREEN = new vec4(0.2, 0.8, 0.2, 1);
     this._setDiscArrowVisibility(null);
-    const menu = this._deps?.robotMarkerView;
+    const menu = this.robotRuntime?.robotMarkerView;
     menu?.setSetupTitle("Alignment complete");
     menu?.setSetupStatus("Alignment complete", GREEN);
     menu?.setContinueVisible(false);
@@ -172,12 +177,22 @@ export class SetupAlignmentPreview {
     }
     this._active = false;
     this._resetVisualState();
-    this._deps?.robotMarker?.setVisible(false);
-    const menu = this._deps?.robotMarkerView;
+    this.robotRuntime?.robotMarker?.setVisible(false);
+    const menu = this.robotRuntime?.robotMarkerView;
     if (menu) {
       menu.onContinueRequested = null;
     }
     menu?.setMenuVisible(false);
+
+    const prior = this._priorRuntimeMode;
+    const lidarMode = prior === "manual" ? "obstacles" : "off";
+    this.dimosState.update({ operatingMode: prior, lidarMode });
+  }
+
+  public endIfActive(): void {
+    if (this._active) {
+      this.end();
+    }
   }
 
   public get isActive(): boolean {
@@ -189,7 +204,7 @@ export class SetupAlignmentPreview {
     assistStage: string | undefined,
     progress: number,
   ): void {
-    const disc = this._deps?.groundDisc ?? null;
+    const disc = this.groundDisc ?? null;
     if (!disc) {
       return;
     }
@@ -200,9 +215,11 @@ export class SetupAlignmentPreview {
       return;
     }
 
-    const runtime = this._deps?.getRobotRuntime() ?? ({} as RobotRuntimeState);
     if (!this._discAnchorInitialized && worldPosition) {
-      const floorY = robotFloorWorldYCm(worldPosition.y, runtime);
+      const floorY = robotFloorWorldYCm(
+        worldPosition.y,
+        this.dimosState.snapshot.robotRuntime,
+      );
       disc.getTransform().setWorldPosition(
         new vec3(worldPosition.x, floorY, worldPosition.z),
       );
@@ -250,7 +267,7 @@ export class SetupAlignmentPreview {
   private _resetVisualState(): void {
     this._discAnchorInitialized = false;
     this._moveLeg = -1;
-    const disc = this._deps?.groundDisc ?? null;
+    const disc = this.groundDisc ?? null;
     if (disc) {
       disc.enabled = false;
     }
