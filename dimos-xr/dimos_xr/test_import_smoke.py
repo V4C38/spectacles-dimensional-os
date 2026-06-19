@@ -15,8 +15,8 @@ def test_blueprints_importable() -> None:
 
 
 def test_tag_tracker_importable() -> None:
-    """dimos_xr.tracking.tag_tracker must be importable (exercises fiducial helper imports)."""
-    importlib.import_module("dimos_xr.tracking.tag_tracker")
+    """dimos_xr.tracking.robot_tag_tracker must be importable (exercises fiducial helper imports)."""
+    importlib.import_module("dimos_xr.tracking.robot_tag_tracker")
 
 
 def test_xr_bridge_module_importable() -> None:

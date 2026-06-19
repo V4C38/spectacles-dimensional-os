@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 from websockets.asyncio.server import serve
 
-from dimos_xr.tracking.tag_tracker import create_apriltag_detector, parse_camera_frame
+from dimos_xr.tracking.robot_tag_tracker import create_apriltag_detector, parse_camera_frame
 
 if TYPE_CHECKING:
     import websockets

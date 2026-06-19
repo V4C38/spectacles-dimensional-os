@@ -19,13 +19,14 @@ from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.std_msgs.Bool import Bool as NavBool
 from dimos.robot.unitree.g1.connection_spec import G1ConnectionSpec
 from dimos.robot.unitree.g1.effectors.high_level.high_level_spec import HighLevelG1Spec
 from dimos.utils.logging_config import setup_logger
 from dimos_lcm.std_msgs import Bool, String
 
 from dimos_xr.adapters.base import CapabilityState, RobotHandshake, RuntimeAlignmentProfile, XRRobotAdapterSpec
-from dimos_xr.tracking.tag_tracker import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
+from dimos_xr.tracking.robot_tag_tracker import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
 
 logger = setup_logger()
 
@@ -161,7 +162,7 @@ class G1AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
     xr_odom_in: In[Odometry]
     xr_global_costmap_in: In[OccupancyGrid]
     xr_path_in: In[Path]
-    xr_goal_reached_in: In[Bool]
+    xr_goal_reached_in: In[NavBool]
     xr_navigation_state_in: In[String]
 
     xr_lidar: Out[PointCloud2]
@@ -175,7 +176,7 @@ class G1AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
     goal_req: Out[PoseStamped]
     clicked_point: Out[PointStamped]
     stop_movement: Out[Bool]
-    cancel_goal_signal: Out[Bool]
+    cancel_goal_signal: Out[NavBool]
     cmd_vel: Out[Twist]
 
     config: G1AdapterConfig
@@ -203,8 +204,8 @@ class G1AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
     async def handle_xr_path_in(self, msg: Path) -> None:
         self.xr_path.publish(msg)
 
-    async def handle_xr_goal_reached_in(self, msg: Bool) -> None:
-        self.xr_goal_reached.publish(msg)
+    async def handle_xr_goal_reached_in(self, msg: NavBool) -> None:
+        self.xr_goal_reached.publish(Bool(data=msg.data))
 
     async def handle_xr_navigation_state_in(self, msg: String) -> None:
         self.xr_navigation_state.publish(msg)
@@ -287,7 +288,7 @@ class G1AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
             self.stop_movement.publish(Bool(data=True))
             cancelled = True
         if self.cancel_goal_signal.transport is not None:
-            self.cancel_goal_signal.publish(Bool(data=True))
+            self.cancel_goal_signal.publish(NavBool(data=True))
             cancelled = True
         if not cancelled:
             logger.warning("G1 cancel_goal rejected: no navigation cancel path is available")

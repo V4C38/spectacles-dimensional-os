@@ -26,7 +26,7 @@ from scipy.spatial.transform import Rotation as _Rotation
 from unitree_webrtc_connect.constants import RTC_TOPIC, SPORT_CMD
 
 from dimos_xr.adapters.base import CapabilityState, RobotHandshake, RuntimeAlignmentProfile, XRRobotAdapterSpec
-from dimos_xr.tracking.tag_tracker import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
+from dimos_xr.tracking.robot_tag_tracker import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
 
 logger = setup_logger()
 
@@ -46,7 +46,7 @@ GO2_CAPABILITIES: dict[str, CapabilityState] = {
 # Front shoulder plate, centered (y=0), ~7 cm above base_link.
 # The tag sits on the shoulder with its face upward; the lever arm from
 # base_link to tag center in the odom/base frame is validated on hardware via
-# the ``tag_mount_offset diagnostic`` log emitted by TagTracker (see README).
+# the ``tag_mount_offset diagnostic`` log emitted by RobotAprilTagTracker (see README).
 # A prior model used 0.19 m forward here, which over-subtracted in
 # current_translation_solve and placed the marker ~20 cm rear of robot center.
 # Orientation: tag face normally points straight up (+Z), top edge forward (+X).

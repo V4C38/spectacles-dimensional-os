@@ -211,7 +211,7 @@ export interface DimosAppState {
 
 export type AppStateListener = (state: DimosAppState) => void;
 
-export const NO_ROBOT_CONNECTED_LABEL = "No Robot connected - marker alignment not possible";
+export const NO_ROBOT_CONNECTED_LABEL = "No Robot connected";
 
 const DEFAULT_CAPABILITY_NAMES = [
   "lidar",

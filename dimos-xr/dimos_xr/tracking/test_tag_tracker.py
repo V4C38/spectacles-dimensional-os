@@ -10,13 +10,13 @@ import numpy as np
 import pytest
 
 from dimos_xr.adapters.go2 import GO2_DEFAULT_TAG_MOUNTS
-from dimos_xr.tracking.tag_tracker import (
+from dimos_xr.tracking.robot_tag_tracker import (
     CAMERA_FRAME_MAGIC,
     DEFAULT_MARKER_ID,
     TagObservation,
     TagMount,
-    TagTracker,
-    TagTrackerConfig,
+    RobotAprilTagTracker,
+    RobotAprilTagTrackerConfig,
     _yaw_from_T,
     build_camera_info,
     build_T_world_odom,
@@ -112,15 +112,15 @@ def test_solve_yaw_translation_2d_noisy_recovery() -> None:
 
 
 def test_tag_tracker_accepts_camera_info() -> None:
-    tracker = TagTracker([TagMount(tag_id=0)])
+    tracker = RobotAprilTagTracker([TagMount(tag_id=0)])
     tracker.set_camera_info(_synthetic_camera_info())
     assert tracker.has_camera_info() is True
 
 
 def test_tag_tracker_detects_generated_marker() -> None:
-    tracker = TagTracker(
+    tracker = RobotAprilTagTracker(
         [TagMount(tag_id=DEFAULT_MARKER_ID)],
-        config=TagTrackerConfig(max_reprojection_error_px=8.0),
+        config=RobotAprilTagTrackerConfig(max_reprojection_error_px=8.0),
     )
     tracker.set_camera_info(_synthetic_camera_info())
     header = {
@@ -143,9 +143,9 @@ def test_tag_tracker_detects_generated_marker() -> None:
 def test_tag_tracker_no_solve_when_stationary() -> None:
     """With stationary robot (zero baseline), the baseline yaw solve must return None."""
     mount = GO2_DEFAULT_TAG_MOUNTS[0]
-    tracker = TagTracker(
+    tracker = RobotAprilTagTracker(
         [mount],
-        config=TagTrackerConfig(max_reprojection_error_px=8.0, min_baseline_m=0.30),
+        config=RobotAprilTagTrackerConfig(max_reprojection_error_px=8.0, min_baseline_m=0.30),
     )
     tracker.set_camera_info(_synthetic_camera_info())
     header = {
@@ -174,7 +174,7 @@ def test_tag_tracker_no_solve_when_stationary() -> None:
 def test_current_translation_solve_recovers_base_from_lever_arm() -> None:
     """Lever-arm sign/magnitude: base = tag_world - R_world_base @ mount.position."""
     mount = TagMount(tag_id=3, position=(0.12, -0.03, 0.05))
-    tracker = TagTracker([mount])
+    tracker = RobotAprilTagTracker([mount])
 
     yaw_world_odom = math.radians(20.0)
     T_reference = build_T_world_odom(yaw_world_odom, (1.0, 0.5, -0.2))
@@ -221,13 +221,13 @@ def test_current_translation_solve_recovers_base_from_lever_arm() -> None:
 
 
 def test_mount_offset_diagnostic_emitted_when_translation_solve_runs() -> None:
-    import dimos_xr.tracking.tag_tracker as tag_tracker_module
+    import dimos_xr.tracking.robot_tag_tracker as tag_tracker_module
 
     tag_tracker_module._MOUNT_OFFSET_DIAG_EMITTED = False
     tag_tracker_module._MOUNT_OFFSET_DIAG_LAST_MONO = 0.0
 
     mount = TagMount(tag_id=4, position=(0.12, 0.0, 0.07))
-    tracker = TagTracker([mount])
+    tracker = RobotAprilTagTracker([mount])
     T_reference = build_T_world_odom(0.0, (0.0, 0.0, 0.0))
 
     p_world_tag = np.array(mount.position, dtype=np.float64)
@@ -256,9 +256,9 @@ def test_mount_offset_diagnostic_emitted_when_translation_solve_runs() -> None:
 def test_tag_tracker_translation_solve_when_stationary() -> None:
     """A stationary robot can still produce a translation-only runtime correction."""
     mount = GO2_DEFAULT_TAG_MOUNTS[0]
-    tracker = TagTracker(
+    tracker = RobotAprilTagTracker(
         [mount],
-        config=TagTrackerConfig(max_reprojection_error_px=8.0, min_baseline_m=0.30),
+        config=RobotAprilTagTrackerConfig(max_reprojection_error_px=8.0, min_baseline_m=0.30),
     )
     tracker.set_camera_info(_synthetic_camera_info())
     header = {
@@ -292,7 +292,7 @@ def test_tag_tracker_translation_solve_when_stationary() -> None:
 
 def test_robot_world_pose_estimate_can_use_only_recent_observations() -> None:
     mount = TagMount(tag_id=7)
-    tracker = TagTracker([mount])
+    tracker = RobotAprilTagTracker([mount])
     tracker._observations.extend(
         [
             TagObservation(
@@ -331,7 +331,7 @@ def test_robot_world_pose_estimate_can_use_only_recent_observations() -> None:
 
 
 def test_tag_tracker_rejects_unknown_tag_id() -> None:
-    tracker = TagTracker([TagMount(tag_id=99)])
+    tracker = RobotAprilTagTracker([TagMount(tag_id=99)])
     tracker.set_camera_info(_synthetic_camera_info())
     header = {
         "type": "camera_frame",
@@ -353,9 +353,9 @@ def test_tag_tracker_rejects_unknown_tag_id() -> None:
 
 
 def test_tag_tracker_window_ages_out_old_observations() -> None:
-    tracker = TagTracker(
+    tracker = RobotAprilTagTracker(
         [TagMount(tag_id=DEFAULT_MARKER_ID)],
-        config=TagTrackerConfig(
+        config=RobotAprilTagTrackerConfig(
             max_reprojection_error_px=8.0,
             window_max_age_s=0.05,
             window_max_obs=10,
@@ -389,9 +389,9 @@ def test_tag_tracker_window_ages_out_old_observations() -> None:
 
 
 def test_tag_tracker_rejects_large_mount_residual() -> None:
-    tracker = TagTracker(
+    tracker = RobotAprilTagTracker(
         [TagMount(tag_id=1, position=(0.18, 0.0, 0.06))],
-        config=TagTrackerConfig(max_mount_residual_m=0.15),
+        config=RobotAprilTagTrackerConfig(max_mount_residual_m=0.15),
     )
     obs = tracker._measured_mount_position(
         T_world_tag=np.eye(4, dtype=np.float64),
@@ -402,35 +402,6 @@ def test_tag_tracker_rejects_large_mount_residual() -> None:
     assert np.linalg.norm(obs - np.array([0.18, 0.0, 0.06])) > 0.15
 
 
-def test_tag_tracker_collects_world_anchor_observations() -> None:
-    tracker = TagTracker(
-        [TagMount(tag_id=99)],
-        config=TagTrackerConfig(max_reprojection_error_px=8.0),
-        world_anchor_tag_ids=[DEFAULT_MARKER_ID],
-    )
-    tracker.set_camera_info(_synthetic_camera_info())
-    header = {
-        "type": "camera_frame",
-        "robot_id": "unitree_go2",
-        "seq": 1,
-        "ts": 10.0,
-        "send_ts": 10.1,
-        "cam_pos": [0.0, 1.5, 0.0],
-        "cam_rot": [0.0, 0.0, 0.0, 1.0],
-    }
-    odom = OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
-    result = tracker.process_frame(
-        header,
-        _encode_marker_jpeg(),
-        odom=odom,
-        receive_mono=10.2,
-    )
-    assert result.tag_detected is True
-    anchors = tracker.consume_world_anchor_observations()
-    assert len(anchors) >= 1
-    assert anchors[0].tag_id == DEFAULT_MARKER_ID
-
-
 def test_build_T_world_odom_maps_odom_origin() -> None:
     T = build_T_world_odom(math.radians(90.0), (1.0, 2.0, 3.0))
     origin = T @ np.array([0.0, 0.0, 0.0, 1.0])
@@ -438,7 +409,7 @@ def test_build_T_world_odom_maps_odom_origin() -> None:
 
 
 def test_tag_tracker_without_camera_info_returns_empty() -> None:
-    tracker = TagTracker([TagMount(tag_id=0)])
+    tracker = RobotAprilTagTracker([TagMount(tag_id=0)])
     header = {
         "type": "camera_frame",
         "robot_id": "unitree_go2",
@@ -477,9 +448,9 @@ def test_yaw_roundtrip_build_T(theta_deg: float) -> None:
 def test_current_solve_with_zero_baseline_returns_solve_from_small_window() -> None:
     """current_solve(min_baseline_m=0.0) must succeed even when observations span < 15 cm."""
     mount = GO2_DEFAULT_TAG_MOUNTS[0]
-    tracker = TagTracker(
+    tracker = RobotAprilTagTracker(
         [mount],
-        config=TagTrackerConfig(max_reprojection_error_px=8.0, min_baseline_m=0.15),
+        config=RobotAprilTagTrackerConfig(max_reprojection_error_px=8.0, min_baseline_m=0.15),
     )
     tracker.set_camera_info(_synthetic_camera_info())
     header = {
@@ -513,7 +484,7 @@ def test_current_solve_with_zero_baseline_returns_solve_from_small_window() -> N
 
 
 def test_odom_tag_straightness_straight_vs_curved() -> None:
-    from dimos_xr.tracking.tag_tracker import TagObservation, _odom_tag_straightness
+    from dimos_xr.tracking.robot_tag_tracker import TagObservation, _odom_tag_straightness
 
     straight = [
         TagObservation(
@@ -595,9 +566,9 @@ def test_process_frame_uses_provided_odom() -> None:
         source_ts=10.0,
     )
 
-    tracker = TagTracker(
+    tracker = RobotAprilTagTracker(
         GO2_DEFAULT_TAG_MOUNTS,
-        config=TagTrackerConfig(max_reprojection_error_px=8.0),
+        config=RobotAprilTagTrackerConfig(max_reprojection_error_px=8.0),
     )
     tracker.set_camera_info(_synthetic_camera_info())
     header = {

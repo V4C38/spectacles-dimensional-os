@@ -6,13 +6,14 @@ import struct
 
 import pytest
 
-from dimos_xr.network.websocket_server import (
+from dimos_xr.network.ws_send_queue import (
     COALESCE_MESSAGE_TYPES,
     OUTBOUND_FIFO_MAXSIZE,
-    _ConnectionOutbound,
-    _peek_message_type,
+    _ALIGN_STATUS_TERMINAL_STATES,
+    ClientSendQueue,
+    peek_message_type,
 )
-from dimos_xr.tracking.tag_tracker import CAMERA_FRAME_MAGIC, parse_camera_frame
+from dimos_xr.tracking.robot_tag_tracker import CAMERA_FRAME_MAGIC, parse_camera_frame
 
 
 class _FakeWebSocket:
@@ -35,13 +36,13 @@ class _FakeWebSocket:
     ],
 )
 def test_peek_message_type(payload: str, expected: str | None) -> None:
-    assert _peek_message_type(payload) == expected
+    assert peek_message_type(payload) == expected
 
 
 @pytest.mark.asyncio
 async def test_outbound_coalesces_broadcast_snapshots() -> None:
     ws = _FakeWebSocket()
-    outbound = _ConnectionOutbound(ws)  # type: ignore[arg-type]
+    outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
     outbound.enqueue('{"type":"nav_status","state":"idle"}')
@@ -52,7 +53,7 @@ async def test_outbound_coalesces_broadcast_snapshots() -> None:
     await asyncio.sleep(0.05)
     await outbound.stop()
 
-    by_type = {(_peek_message_type(text) or ""): json.loads(text) for text in ws.sent}
+    by_type = {(peek_message_type(text) or ""): json.loads(text) for text in ws.sent}
     assert by_type["nav_status"]["state"] == "following_path"
     assert by_type["path"]["waypoints"] == [[1, 2, 3]]
     assert by_type["bridge_status"]["registered"] is True
@@ -62,7 +63,7 @@ async def test_outbound_coalesces_broadcast_snapshots() -> None:
 @pytest.mark.asyncio
 async def test_outbound_coalesces_pose_and_lidar() -> None:
     ws = _FakeWebSocket()
-    outbound = _ConnectionOutbound(ws)  # type: ignore[arg-type]
+    outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
     outbound.enqueue('{"type":"nav_status","state":"following_path"}')
@@ -76,7 +77,7 @@ async def test_outbound_coalesces_pose_and_lidar() -> None:
     await outbound.stop()
 
     assert len(ws.sent) == 4
-    by_type = {(_peek_message_type(text) or ""): json.loads(text) for text in ws.sent}
+    by_type = {(peek_message_type(text) or ""): json.loads(text) for text in ws.sent}
     assert by_type["nav_status"]["state"] == "following_path"
     assert by_type["pose"]["position"] == [4, 5, 6]
     assert by_type["lidar"]["points_flat"] == [7, 8, 9]
@@ -86,7 +87,7 @@ async def test_outbound_coalesces_pose_and_lidar() -> None:
 @pytest.mark.asyncio
 async def test_outbound_interleaves_coalesced_after_fifo() -> None:
     ws = _FakeWebSocket()
-    outbound = _ConnectionOutbound(ws)  # type: ignore[arg-type]
+    outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
     outbound.enqueue('{"type":"hello","protocol_version":2}')
@@ -97,7 +98,7 @@ async def test_outbound_interleaves_coalesced_after_fifo() -> None:
     await asyncio.sleep(0.05)
     await outbound.stop()
 
-    types = [_peek_message_type(text) for text in ws.sent]
+    types = [peek_message_type(text) for text in ws.sent]
     assert types[0] == "hello"
     assert types[1] in {"pose", "lidar"}
     assert "hello" in types
@@ -108,7 +109,7 @@ async def test_outbound_interleaves_coalesced_after_fifo() -> None:
 @pytest.mark.asyncio
 async def test_outbound_drops_oldest_fifo_when_full() -> None:
     ws = _FakeWebSocket()
-    outbound = _ConnectionOutbound(ws)  # type: ignore[arg-type]
+    outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
     for index in range(OUTBOUND_FIFO_MAXSIZE + 5):
@@ -201,10 +202,10 @@ async def test_terminal_align_status_not_overwritten_by_non_terminal() -> None:
     This is the backstop for the C1 race: even if a stale daemon thread enqueues
     a trailing 'detecting' after the terminal 'aligned', the terminal wins.
     """
-    from dimos_xr.network.websocket_server import _ALIGN_STATUS_TERMINAL_STATES
+    from dimos_xr.network.ws_send_queue import _ALIGN_STATUS_TERMINAL_STATES
 
     ws = _FakeWebSocket()
-    outbound = _ConnectionOutbound(ws)  # type: ignore[arg-type]
+    outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
     # 1. Enqueue terminal 'aligned' first
@@ -227,7 +228,7 @@ async def test_terminal_align_status_not_overwritten_by_non_terminal() -> None:
 async def test_terminal_failed_not_overwritten_by_non_terminal() -> None:
     """Same backstop test for the 'failed' terminal state."""
     ws = _FakeWebSocket()
-    outbound = _ConnectionOutbound(ws)  # type: ignore[arg-type]
+    outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
     outbound.enqueue('{"type":"align_status","state":"failed","robot_id":"r"}')
@@ -247,7 +248,7 @@ async def test_terminal_failed_not_overwritten_by_non_terminal() -> None:
 async def test_non_terminal_align_status_can_be_overwritten() -> None:
     """Non-terminal align_status messages (detecting/ready) must still coalesce normally."""
     ws = _FakeWebSocket()
-    outbound = _ConnectionOutbound(ws)  # type: ignore[arg-type]
+    outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
     outbound.enqueue('{"type":"align_status","state":"detecting","robot_id":"r","v":1}')
@@ -264,7 +265,7 @@ async def test_non_terminal_align_status_can_be_overwritten() -> None:
 @pytest.mark.asyncio
 async def test_outbound_text_frames_are_newline_delimited() -> None:
     ws = _FakeWebSocket()
-    outbound = _ConnectionOutbound(ws)  # type: ignore[arg-type]
+    outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
     outbound.enqueue('{"type":"nav_status","state":"idle"}')

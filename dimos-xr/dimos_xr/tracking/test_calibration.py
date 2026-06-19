@@ -4,10 +4,10 @@ import math
 
 import numpy as np
 
-from dimos_xr.tracking.tag_tracker import (
+from dimos_xr.tracking.robot_tag_tracker import (
     R_ALIGN,
     TagMount,
-    TagTracker,
+    RobotAprilTagTracker,
     build_T_world_odom,
     solve_yaw_translation_2d,
 )
@@ -59,7 +59,7 @@ def test_solve_yaw_translation_2d_recovers_planar_shift() -> None:
 
 
 def test_tag_tracker_starts_inactive_without_camera_info() -> None:
-    tracker = TagTracker([TagMount(tag_id=0)])
+    tracker = RobotAprilTagTracker([TagMount(tag_id=0)])
     assert tracker.active is False
     assert tracker.has_camera_info() is False
 

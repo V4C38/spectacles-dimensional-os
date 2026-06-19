@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
+from dimos.msgs.std_msgs.Bool import Bool as NavBool
 from dimos_lcm.std_msgs import Bool
 
 from dimos_xr.adapters.g1 import G1AdapterModule
@@ -130,6 +131,16 @@ def test_g1_cancel_goal_uses_stop_movement() -> None:
     stop = adapter.stop_movement.published[0]
     assert isinstance(stop, Bool)
     assert stop.data is True
+
+
+def test_g1_cancel_goal_uses_cancel_goal_signal_when_present() -> None:
+    adapter = _make_g1_adapter()
+    adapter.cancel_goal_signal = _FakeStream(connected=True)
+
+    assert G1AdapterModule.cancel_goal(adapter) is True
+    cancel = adapter.cancel_goal_signal.published[0]
+    assert isinstance(cancel, NavBool)
+    assert cancel.data is True
 
 
 def test_g1_capabilities_report_emergency_stop_unavailable_without_hw() -> None:

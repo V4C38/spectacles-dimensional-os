@@ -27,7 +27,8 @@ from dimos.utils.logging_config import setup_logger
 from dimos_lcm.std_msgs import Bool, String
 
 from dimos_xr.adapters.base import XRRobotAdapterSpec
-from dimos_xr.bridge.alignment import AlignmentController
+from dimos_xr.bridge.calibration_session import CalibrationSessionController
+from dimos_xr.bridge.pose_refinement import RegisteredPoseRefiner
 from dimos_xr.bridge.navigation import NavController
 from dimos_xr.bridge.odom_buffer import OdomBuffer
 from dimos_xr.bridge.preview import PreviewService
@@ -38,7 +39,7 @@ from dimos_xr.network.protocol import EmergencyStopMessage, SetLidarModeMessage
 from dimos_xr.network.websocket_server import XRWebSocketServer
 from dimos_xr.preview_planner import PreviewPlanner
 from dimos_xr.tracking.filters import LidarFilter, LidarFilterConfig, lidar_height_band_m
-from dimos_xr.tracking.tag_tracker import TagTrackerConfig
+from dimos_xr.tracking.robot_tag_tracker import RobotAprilTagTracker, RobotAprilTagTrackerConfig
 from dimos_xr.tracking.transforms import Calibration
 
 if TYPE_CHECKING:
@@ -86,8 +87,6 @@ class XRBridgeConfig(ModuleConfig):  # type: ignore[misc]
     tag_max_mount_residual_m: float = 0.15
     tag_max_up_axis_tilt_deg: float = 20.0
     runtime_correction_enabled: bool = True
-    world_anchor_tag_ids: list[int] = []
-    world_anchor_size_m: float = 0.056
 
 
 class XRBridge(Module):  # type: ignore[misc]
@@ -106,7 +105,7 @@ class XRBridge(Module):  # type: ignore[misc]
     _sender: BridgeSender
     _odom: OdomBuffer
     _status: StatusService
-    _alignment: AlignmentController
+    _alignment: CalibrationSessionController
     _nav: NavController
     _preview: PreviewService
     _telemetry: TelemetryPublisher
@@ -153,7 +152,7 @@ class XRBridge(Module):  # type: ignore[misc]
             stream_stale_timeout_s=self.config.stream_stale_timeout_s,
         )
 
-        tracker_config = TagTrackerConfig(
+        tracker_config = RobotAprilTagTrackerConfig(
             max_reprojection_error_px=self.config.tag_max_reprojection_error_px,
             max_distance_m=self.config.tag_max_distance_m,
             min_baseline_m=self.config.tag_min_baseline_m,
@@ -162,21 +161,31 @@ class XRBridge(Module):  # type: ignore[misc]
             max_mount_residual_m=self.config.tag_max_mount_residual_m,
             max_up_axis_tilt_deg=self.config.tag_max_up_axis_tilt_deg,
         )
-        alignment = AlignmentController(
+        tag_tracker = RobotAprilTagTracker(
+            self._adapter.tag_mounts(),
+            config=tracker_config,
+        )
+        pose_refiner = RegisteredPoseRefiner(
+            robot_id=robot_id,
+            sender=sender,
+            calibration=self._calibration,
+            odom=odom,
+            tag_tracker=tag_tracker,
+            runtime_profile=runtime_profile,
+            runtime_correction_enabled=self.config.runtime_correction_enabled,
+        )
+        alignment = CalibrationSessionController(
             robot_id=robot_id,
             sender=sender,
             calibration=self._calibration,
             odom=odom,
             status=status,
-            tag_mounts=self._adapter.tag_mounts(),
-            tracker_config=tracker_config,
+            tag_tracker=tag_tracker,
             frame_max_age_s=self.config.frame_max_age_s,
             manual_alignment_quality=self.config.manual_alignment_quality,
-            runtime_correction_enabled=self.config.runtime_correction_enabled,
             tf_publish_static=self.tf.publish_static,
+            pose_refiner=pose_refiner,
             adapter=self._adapter,
-            world_anchor_tag_ids=self.config.world_anchor_tag_ids,
-            world_anchor_size_m=self.config.world_anchor_size_m,
             runtime_profile=runtime_profile,
         )
 

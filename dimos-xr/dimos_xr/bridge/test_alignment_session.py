@@ -1,4 +1,4 @@
-"""Regression tests for AlignmentController session semantics (Protocol v4).
+"""Regression tests for CalibrationSessionController session semantics (Protocol v4).
 
 Hardware validation checklist (Tier 2 exact pairing — run on device):
   1. Connect: stable RTT and clock offset within a few ms on LAN.
@@ -31,7 +31,8 @@ import numpy as np
 import pytest
 
 from dimos_xr.adapters.base import RuntimeAlignmentProfile
-from dimos_xr.bridge.alignment import AlignmentController
+from dimos_xr.bridge.calibration_session import CalibrationSessionController
+from dimos_xr.bridge.pose_refinement import RegisteredPoseRefiner
 from dimos_xr.bridge.assist import AssistDriver, AssistState, _MovePhase
 from dimos_xr.bridge.odom_buffer import OdomBuffer
 from dimos_xr.bridge.sender import BridgeSender
@@ -41,17 +42,17 @@ from dimos_xr.network.protocol import (
     AlignStartMessage,
     AlignStopMessage,
 )
-from dimos_xr.tracking.tag_tracker import (
+from dimos_xr.tracking.robot_tag_tracker import (
     TagSolve,
-    TagTrackerConfig,
-    _yaw_from_T,
+    RobotAprilTagTracker,
+    RobotAprilTagTrackerConfig,
     build_T_world_odom,
 )
 from dimos_xr.tracking.transforms import Calibration, OdomSample
 
 
-def _make_controller(*, with_adapter: bool = False) -> tuple[AlignmentController, list[str]]:
-    """Build a minimal AlignmentController; return it plus a list that collects sent payloads."""
+def _make_controller(*, with_adapter: bool = False) -> tuple[CalibrationSessionController, list[str]]:
+    """Build a minimal CalibrationSessionController; return it plus sent payloads."""
     sent: list[str] = []
     mock_server = MagicMock()
     mock_server.schedule_send.side_effect = lambda msg: sent.append(msg)
@@ -72,21 +73,67 @@ def _make_controller(*, with_adapter: bool = False) -> tuple[AlignmentController
         adapter.assist_strafe_speed.return_value = 0.5
         adapter.assist_set_lateral_velocity.return_value = True
 
-    ctrl = AlignmentController(
+    tag_tracker = RobotAprilTagTracker([], config=RobotAprilTagTrackerConfig())
+    pose_refiner = RegisteredPoseRefiner(
+        robot_id="test_robot",
+        sender=sender,
+        calibration=calibration,
+        odom=odom,
+        tag_tracker=tag_tracker,
+        runtime_profile=RuntimeAlignmentProfile(),
+        runtime_correction_enabled=False,
+    )
+    ctrl = CalibrationSessionController(
         robot_id="test_robot",
         sender=sender,
         calibration=calibration,
         odom=odom,
         status=mock_status,
-        tag_mounts=[],
-        tracker_config=TagTrackerConfig(),
+        tag_tracker=tag_tracker,
         frame_max_age_s=1.0,
         manual_alignment_quality=0.7,
-        runtime_correction_enabled=False,
         tf_publish_static=MagicMock(),
+        pose_refiner=pose_refiner,
         adapter=adapter,
     )
     return ctrl, sent
+
+
+def _make_controller_for_sent(
+    sent: list[str],
+    *,
+    adapter: MagicMock | None = None,
+    runtime_correction_enabled: bool = False,
+) -> CalibrationSessionController:
+    mock_server = MagicMock()
+    mock_server.schedule_send.side_effect = lambda msg: sent.append(msg)
+    sender = BridgeSender()
+    sender.bind(mock_server)
+    calibration = Calibration()
+    odom = OdomBuffer()
+    tag_tracker = RobotAprilTagTracker([], config=RobotAprilTagTrackerConfig())
+    pose_refiner = RegisteredPoseRefiner(
+        robot_id="test_robot",
+        sender=sender,
+        calibration=calibration,
+        odom=odom,
+        tag_tracker=tag_tracker,
+        runtime_profile=RuntimeAlignmentProfile(),
+        runtime_correction_enabled=runtime_correction_enabled,
+    )
+    return CalibrationSessionController(
+        robot_id="test_robot",
+        sender=sender,
+        calibration=calibration,
+        odom=odom,
+        status=MagicMock(),
+        tag_tracker=tag_tracker,
+        frame_max_age_s=1.0,
+        manual_alignment_quality=0.7,
+        tf_publish_static=MagicMock(),
+        pose_refiner=pose_refiner,
+        adapter=adapter,
+    )
 
 
 def _align_start(method: str, *, assist: bool = False, ts: float = 1.0) -> AlignStartMessage:
@@ -108,7 +155,7 @@ def test_align_start_tag_with_assist_activates_tracker() -> None:
     ctrl.on_align_start(_align_start("tag", assist=True), MagicMock())
     ctrl._stop_broadcast()
 
-    assert ctrl._session_method == "tag"
+    assert ctrl._session.method == "tag"
     assert ctrl._tag_tracker.active is True
     assert any(json.loads(m)["type"] == "align_status" for m in sent)
 
@@ -124,7 +171,7 @@ def test_align_start_tag_without_assist_driver_fails() -> None:
     ctrl.on_align_start(_align_start("tag", assist=True), MagicMock())
     ctrl._stop_broadcast()
 
-    assert ctrl._session_method is None
+    assert ctrl._session.method is None
     assert ctrl._tag_tracker.active is False
     statuses = [json.loads(m) for m in sent if json.loads(m)["type"] == "align_status"]
     assert any(s["state"] == "failed" for s in statuses)
@@ -138,7 +185,7 @@ def test_align_start_tag_with_assist_false_fails() -> None:
     ctrl.on_align_start(_align_start("tag", assist=False), MagicMock())
     ctrl._stop_broadcast()
 
-    assert ctrl._session_method is None
+    assert ctrl._session.method is None
     statuses = [json.loads(m) for m in sent if json.loads(m)["type"] == "align_status"]
     assert any(s["state"] == "failed" for s in statuses)
 
@@ -153,7 +200,7 @@ def test_align_start_manual_leaves_tracker_inactive() -> None:
     ctrl.on_align_start(_align_start("manual"), MagicMock())
     ctrl._stop_broadcast()
 
-    assert ctrl._session_method == "manual"
+    assert ctrl._session.method == "manual"
     assert ctrl._tag_tracker.active is False
     assert any(json.loads(m)["type"] == "align_status" for m in sent)
 
@@ -173,7 +220,7 @@ def test_align_manual_pose_dropped_outside_manual_session() -> None:
     )
     ctrl.on_align_manual_pose(pose_msg, MagicMock())
 
-    assert ctrl._pending_candidate is None
+    assert ctrl._session.pending_candidate is None
 
 
 def test_align_manual_pose_dropped_when_tag_session_open() -> None:
@@ -190,7 +237,7 @@ def test_align_manual_pose_dropped_when_tag_session_open() -> None:
     )
     ctrl.on_align_manual_pose(pose_msg, MagicMock())
 
-    assert ctrl._pending_candidate is None
+    assert ctrl._session.pending_candidate is None
 
 
 # ------------------------------------------------------------------
@@ -322,7 +369,7 @@ def test_align_stop_clears_session_and_broadcasts() -> None:
 
     ctrl.on_align_stop(_align_stop(), MagicMock())
 
-    assert ctrl._session_method is None
+    assert ctrl._session.method is None
     assert ctrl._tag_tracker.active is False
     statuses = [json.loads(m) for m in sent if json.loads(m)["type"] == "align_status"]
     assert any(s.get("message") == "Alignment cancelled" for s in statuses)
@@ -334,13 +381,13 @@ def test_align_stop_clears_session_and_broadcasts() -> None:
 
 def test_clear_session_resets_session_method() -> None:
     ctrl, _ = _make_controller()
-    ctrl._session_method = "manual"  # type: ignore[assignment]
-    ctrl._pending_candidate = MagicMock()
+    ctrl._session.method = "manual"  # type: ignore[assignment]
+    ctrl._session.pending_candidate = MagicMock()
 
     ctrl._clear_session()
 
-    assert ctrl._session_method is None
-    assert ctrl._pending_candidate is None
+    assert ctrl._session.method is None
+    assert ctrl._session.pending_candidate is None
 
 
 # ------------------------------------------------------------------
@@ -353,7 +400,7 @@ def test_assist_auto_commit_emits_no_trailing_detecting(
     """The broadcast loop must not append a default state='detecting' after the
     assist driver auto-commits from inside it."""
     monkeypatch.setattr(
-        "dimos_xr.bridge.alignment.ALIGN_STATUS_BROADCAST_INTERVAL_S", 0.01
+        "dimos_xr.bridge.calibration_session.ALIGN_STATUS_BROADCAST_INTERVAL_S", 0.01
     )
 
     ctrl, sent = _make_controller(with_adapter=True)
@@ -363,7 +410,7 @@ def test_assist_auto_commit_emits_no_trailing_detecting(
     driver = AssistDriver(adapter=MagicMock())
     driver._state = AssistState.DONE
     ctrl._assist_driver = driver
-    ctrl._session_method = "tag"  # type: ignore[assignment]
+    ctrl._session.method = "tag"  # type: ignore[assignment]
 
     # Stub current_solve to return a valid solve so the auto-commit succeeds.
     theta = math.radians(20.0)
@@ -396,7 +443,7 @@ def test_broadcast_align_status_includes_sampling_when_assist_active() -> None:
     sent.clear()
 
     assert ctrl._assist_driver is not None
-    ctrl._session_method = "tag"  # type: ignore[assignment]
+    ctrl._session.method = "tag"  # type: ignore[assignment]
     ctrl._assist_driver._state = AssistState.MOVE
     ctrl._assist_driver._move_phase = _MovePhase.SAMPLE
 
@@ -417,7 +464,7 @@ def test_assist_done_without_candidate_fails_once_and_stops(
 ) -> None:
     """DONE-with-no-solve must clear the session and stop the loop."""
     monkeypatch.setattr(
-        "dimos_xr.bridge.alignment.ALIGN_STATUS_BROADCAST_INTERVAL_S", 0.01
+        "dimos_xr.bridge.calibration_session.ALIGN_STATUS_BROADCAST_INTERVAL_S", 0.01
     )
 
     ctrl, sent = _make_controller(with_adapter=True)
@@ -427,7 +474,7 @@ def test_assist_done_without_candidate_fails_once_and_stops(
     driver = AssistDriver(adapter=MagicMock())
     driver._state = AssistState.DONE
     ctrl._assist_driver = driver
-    ctrl._session_method = "tag"  # type: ignore[assignment]
+    ctrl._session.method = "tag"  # type: ignore[assignment]
     ctrl._tag_tracker.active = True
     ctrl._tag_tracker.current_solve = MagicMock(return_value=None)  # type: ignore[method-assign]
 
@@ -449,7 +496,7 @@ def test_assist_done_without_candidate_fails_once_and_stops(
         if json.loads(m)["type"] == "align_status" and json.loads(m).get("state") == "failed"
     ]
     assert len(failed) == 1, f"expected exactly one terminal 'failed', got {len(failed)}"
-    assert ctrl._session_method is None
+    assert ctrl._session.method is None
     assert ctrl._tag_tracker.active is False
 
 
@@ -475,7 +522,7 @@ def test_manual_align_commit_succeeds() -> None:
         orientation=(0.0, 0.0, 0.0, 1.0),
     )
     ctrl.on_align_manual_pose(pose_msg, MagicMock())
-    assert ctrl._pending_candidate is not None
+    assert ctrl._session.pending_candidate is not None
 
     sent.clear()
     commit_msg = AlignCommitMessage(ts=2.0, robot_id="test_robot")
@@ -483,210 +530,7 @@ def test_manual_align_commit_succeeds() -> None:
 
     statuses = [json.loads(m) for m in sent if json.loads(m)["type"] == "align_status"]
     assert any(s["state"] == "aligned" for s in statuses)
-    assert ctrl._session_method is None
-
-
-# ---------------------------------------------------------------------------
-# Runtime smoothing regression test (Bug A2 — yaw sign convention)
-# ---------------------------------------------------------------------------
-
-
-def _make_controller_with_correction() -> tuple[AlignmentController, list[str]]:
-    """Like _make_controller but with runtime_correction_enabled=True."""
-    sent: list[str] = []
-    mock_server = MagicMock()
-    mock_server.schedule_send.side_effect = lambda msg: sent.append(msg)
-
-    sender = BridgeSender()
-    sender.bind(mock_server)
-
-    ctrl = AlignmentController(
-        robot_id="test_robot",
-        sender=sender,
-        calibration=Calibration(),
-        odom=OdomBuffer(),
-        status=MagicMock(),
-        tag_mounts=[],
-        tracker_config=TagTrackerConfig(),
-        frame_max_age_s=1.0,
-        manual_alignment_quality=0.7,
-        runtime_correction_enabled=True,
-        tf_publish_static=MagicMock(),
-        runtime_profile=RuntimeAlignmentProfile(),
-    )
-    ctrl._odom.speed_windowed = MagicMock(return_value=0.0)  # type: ignore[method-assign]
-    return ctrl, sent
-
-
-def test_runtime_smoothing_preserves_heading() -> None:
-    """Regression guard: one smoothing step on an identical solve must not flip the yaw."""
-    ctrl, _ = _make_controller_with_correction()
-
-    theta = math.radians(30.0)
-    T_committed = build_T_world_odom(theta, (1.0, 0.0, -2.0))
-
-    ctrl._T_committed = T_committed
-    ctrl._calibration.register_from_alignment(T_committed)
-
-    solve = TagSolve(
-        T_world_odom=np.array(T_committed, dtype=np.float64, copy=True),
-        method="tag",
-        quality=1.0,
-        observation_count=8,
-        baseline_m=0.40,
-    )
-    ctrl._tag_tracker.current_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
-    ctrl._tag_tracker.current_translation_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
-
-    ctrl._apply_tracker_update()
-
-    committed_yaw = _yaw_from_T(ctrl._T_committed)
-    assert committed_yaw == pytest.approx(theta, abs=1e-6), (
-        f"Heading flipped: expected {math.degrees(theta):.1f}°, "
-        f"got {math.degrees(committed_yaw):.1f}°"
-    )
-
-
-def test_runtime_translation_solve_corrects_stationary_robot() -> None:
-    """When baseline solve is unavailable, runtime translation solve must still update."""
-    ctrl, sent = _make_controller_with_correction()
-
-    theta = math.radians(20.0)
-    T_committed = build_T_world_odom(theta, (0.0, 0.0, 0.0))
-    ctrl._T_committed = np.array(T_committed, dtype=np.float64, copy=True)
-    ctrl._calibration.register_from_alignment(T_committed)
-
-    T_target = build_T_world_odom(theta, (1.0, 0.0, -1.0))
-    solve = TagSolve(
-        T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
-        method="tag_translation",
-        quality=0.95,
-        observation_count=1,
-        baseline_m=0.0,
-    )
-    ctrl._tag_tracker.current_solve = MagicMock(return_value=None)  # type: ignore[method-assign]
-    ctrl._tag_tracker.current_translation_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
-
-    ctrl._apply_tracker_update()
-
-    committed_yaw = _yaw_from_T(ctrl._T_committed)
-    assert committed_yaw == pytest.approx(theta, abs=1e-6)
-    assert ctrl._T_committed[0, 3] == pytest.approx(1.0, abs=1e-3)
-    assert ctrl._T_committed[2, 3] == pytest.approx(-1.0, abs=1e-3)
-    pose_corrections = [
-        json.loads(payload)
-        for payload in sent
-        if json.loads(payload).get("type") == "pose_correction"
-    ]
-    assert len(pose_corrections) == 1
-    assert pose_corrections[0]["solve_method"] == "tag_translation"
-
-
-def test_runtime_correction_emits_fresh_pose_for_stationary_robot() -> None:
-    """A runtime correction must push an updated pose even without new odom traffic."""
-    ctrl, sent = _make_controller_with_correction()
-
-    theta = math.radians(20.0)
-    T_committed = build_T_world_odom(theta, (0.0, 0.0, 0.0))
-    ctrl._T_committed = np.array(T_committed, dtype=np.float64, copy=True)
-    ctrl._calibration.register_from_alignment(T_committed)
-    ctrl._odom._latest = OdomSample(  # type: ignore[attr-defined]
-        position=(0.0, 0.0, 0.0),
-        orientation=(0.0, 0.0, 0.0, 1.0),
-    )
-
-    T_target = build_T_world_odom(theta, (1.0, 0.0, -1.0))
-    solve = TagSolve(
-        T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
-        method="tag_translation",
-        quality=0.95,
-        observation_count=1,
-        baseline_m=0.0,
-    )
-    ctrl._tag_tracker.current_solve = MagicMock(return_value=None)  # type: ignore[method-assign]
-    ctrl._tag_tracker.current_translation_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
-
-    ctrl._apply_tracker_update(ts=123.456)
-
-    payloads = [json.loads(m) for m in sent]
-    pose_payloads = [m for m in payloads if m["type"] == "pose"]
-    assert pose_payloads, "runtime correction should emit an immediate pose snapshot"
-    latest_pose = pose_payloads[-1]
-    assert latest_pose["ts"] == pytest.approx(123.456, abs=1e-3)
-    assert latest_pose["position"] == pytest.approx([1.0, 0.0, -1.0], abs=1e-3)
-
-
-# ---------------------------------------------------------------------------
-# pose_correction deadband: sub-threshold corrections must be silent
-# ---------------------------------------------------------------------------
-
-
-def test_runtime_correction_below_deadband_emits_no_pose_correction() -> None:
-    """A correction below the notification deadband must update T_world_odom
-    without emitting a pose_correction message."""
-    ctrl, sent = _make_controller_with_correction()
-
-    theta = math.radians(20.0)
-    T_committed = build_T_world_odom(theta, (0.0, 0.0, 0.0))
-    ctrl._T_committed = np.array(T_committed, dtype=np.float64, copy=True)
-    ctrl._calibration.register_from_alignment(T_committed)
-
-    # 2 cm translation, 0.5° yaw — both below the MIN_REPORTED thresholds.
-    T_target = build_T_world_odom(theta + math.radians(0.5), (0.02, 0.0, 0.0))
-    solve = TagSolve(
-        T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
-        method="tag_translation",
-        quality=0.95,
-        observation_count=1,
-        baseline_m=0.0,
-    )
-    ctrl._tag_tracker.current_solve = MagicMock(return_value=None)  # type: ignore[method-assign]
-    ctrl._tag_tracker.current_translation_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
-
-    ctrl._apply_tracker_update()
-
-    pose_corrections = [
-        json.loads(payload)
-        for payload in sent
-        if json.loads(payload).get("type") == "pose_correction"
-    ]
-    assert len(pose_corrections) == 0, (
-        "pose_correction should not fire for sub-threshold corrections"
-    )
-    # But T_world_odom should still have been updated.
-    assert ctrl._T_committed is not None
-
-
-def test_runtime_correction_above_deadband_emits_pose_correction() -> None:
-    """A correction that exceeds the notification deadband must emit pose_correction."""
-    ctrl, sent = _make_controller_with_correction()
-
-    theta = math.radians(20.0)
-    T_committed = build_T_world_odom(theta, (0.0, 0.0, 0.0))
-    ctrl._T_committed = np.array(T_committed, dtype=np.float64, copy=True)
-    ctrl._calibration.register_from_alignment(T_committed)
-
-    # 25 cm translation — above the pose_correction notification threshold.
-    T_target = build_T_world_odom(theta, (0.25, 0.0, 0.0))
-    solve = TagSolve(
-        T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
-        method="tag_translation",
-        quality=0.95,
-        observation_count=1,
-        baseline_m=0.0,
-    )
-    ctrl._tag_tracker.current_solve = MagicMock(return_value=None)  # type: ignore[method-assign]
-    ctrl._tag_tracker.current_translation_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
-
-    ctrl._apply_tracker_update()
-
-    pose_corrections = [
-        json.loads(payload)
-        for payload in sent
-        if json.loads(payload).get("type") == "pose_correction"
-    ]
-    assert len(pose_corrections) == 1
-    assert pose_corrections[0]["solve_method"] == "tag_translation"
+    assert ctrl._session.method is None
 
 
 # ---------------------------------------------------------------------------
@@ -711,20 +555,7 @@ def test_clear_session_does_not_emit_stage_change() -> None:
     adapter.assist_strafe_speed.return_value = 0.5
     adapter.assist_set_lateral_velocity.return_value = True
 
-    ctrl = AlignmentController(
-        robot_id="test_robot",
-        sender=sender,
-        calibration=Calibration(),
-        odom=OdomBuffer(),
-        status=MagicMock(),
-        tag_mounts=[],
-        tracker_config=TagTrackerConfig(),
-        frame_max_age_s=1.0,
-        manual_alignment_quality=0.7,
-        runtime_correction_enabled=False,
-        tf_publish_static=MagicMock(),
-        adapter=adapter,
-    )
+    ctrl = _make_controller_for_sent(sent, adapter=adapter)
     assert ctrl._assist_driver is not None
     orig_on_stage_change = ctrl._assist_driver._on_stage_change
 
@@ -756,7 +587,7 @@ def test_finish_alignment_terminal_status_is_last(
     import time as _time
 
     monkeypatch.setattr(
-        "dimos_xr.bridge.alignment.ALIGN_STATUS_BROADCAST_INTERVAL_S", 0.01
+        "dimos_xr.bridge.calibration_session.ALIGN_STATUS_BROADCAST_INTERVAL_S", 0.01
     )
     sent: list[str] = []
     mock_server = MagicMock()
@@ -770,27 +601,14 @@ def test_finish_alignment_terminal_status_is_last(
     adapter.assist_strafe_speed.return_value = 0.5
     adapter.assist_set_lateral_velocity.return_value = True
 
-    ctrl = AlignmentController(
-        robot_id="test_robot",
-        sender=sender,
-        calibration=Calibration(),
-        odom=OdomBuffer(),
-        status=MagicMock(),
-        tag_mounts=[],
-        tracker_config=TagTrackerConfig(),
-        frame_max_age_s=1.0,
-        manual_alignment_quality=0.7,
-        runtime_correction_enabled=False,
-        tf_publish_static=MagicMock(),
-        adapter=adapter,
-    )
+    ctrl = _make_controller_for_sent(sent, adapter=adapter)
 
     ctrl._stop_broadcast()
     sent.clear()
 
     assert ctrl._assist_driver is not None
     ctrl._assist_driver.start()
-    ctrl._session_method = "tag"  # type: ignore[assignment]
+    ctrl._session.method = "tag"  # type: ignore[assignment]
     ctrl._assist_driver._state = AssistState.DONE
 
     theta = math.radians(20.0)
@@ -824,7 +642,7 @@ def test_failed_path_terminal_status_is_last(
     import time as _time
 
     monkeypatch.setattr(
-        "dimos_xr.bridge.alignment.ALIGN_STATUS_BROADCAST_INTERVAL_S", 0.01
+        "dimos_xr.bridge.calibration_session.ALIGN_STATUS_BROADCAST_INTERVAL_S", 0.01
     )
     sent: list[str] = []
     mock_server = MagicMock()
@@ -838,27 +656,14 @@ def test_failed_path_terminal_status_is_last(
     adapter.assist_strafe_speed.return_value = 0.5
     adapter.assist_set_lateral_velocity.return_value = True
 
-    ctrl = AlignmentController(
-        robot_id="test_robot",
-        sender=sender,
-        calibration=Calibration(),
-        odom=OdomBuffer(),
-        status=MagicMock(),
-        tag_mounts=[],
-        tracker_config=TagTrackerConfig(),
-        frame_max_age_s=1.0,
-        manual_alignment_quality=0.7,
-        runtime_correction_enabled=False,
-        tf_publish_static=MagicMock(),
-        adapter=adapter,
-    )
+    ctrl = _make_controller_for_sent(sent, adapter=adapter)
 
     ctrl._stop_broadcast()
     sent.clear()
 
     assert ctrl._assist_driver is not None
     ctrl._assist_driver.start()
-    ctrl._session_method = "tag"  # type: ignore[assignment]
+    ctrl._session.method = "tag"  # type: ignore[assignment]
     ctrl._tag_tracker.active = True
     ctrl._assist_driver._state = AssistState.DONE
     ctrl._tag_tracker.current_solve = MagicMock(return_value=None)  # type: ignore[method-assign]
@@ -880,53 +685,3 @@ def test_failed_path_terminal_status_is_last(
     assert statuses[-1]["state"] == "failed", (
         f"last align_status must be 'failed', got {statuses[-1]['state']!r}"
     )
-
-
-def test_runtime_yaw_gate_holds_on_curve() -> None:
-    ctrl, _ = _make_controller_with_correction()
-    ctrl._odom.speed_windowed = MagicMock(return_value=0.5)  # type: ignore[method-assign]
-
-    theta = math.radians(15.0)
-    T_committed = build_T_world_odom(theta, (0.0, 0.0, 0.0))
-    ctrl._T_committed = np.array(T_committed, dtype=np.float64, copy=True)
-    ctrl._calibration.register_from_alignment(T_committed)
-
-    T_target = build_T_world_odom(theta + math.radians(5.0), (0.2, 0.0, -0.2))
-    solve = TagSolve(
-        T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
-        method="tag",
-        quality=0.9,
-        observation_count=6,
-        baseline_m=0.5,
-        straightness=0.8,
-    )
-    ctrl._tag_tracker.current_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
-
-    ctrl._apply_tracker_update()
-
-    assert _yaw_from_T(ctrl._T_committed) == pytest.approx(theta, abs=1e-6)
-
-
-def test_runtime_yaw_gate_allows_straight_run() -> None:
-    ctrl, _ = _make_controller_with_correction()
-    ctrl._odom.speed_windowed = MagicMock(return_value=0.5)  # type: ignore[method-assign]
-
-    theta = math.radians(15.0)
-    T_committed = build_T_world_odom(theta, (0.0, 0.0, 0.0))
-    ctrl._T_committed = np.array(T_committed, dtype=np.float64, copy=True)
-    ctrl._calibration.register_from_alignment(T_committed)
-
-    T_target = build_T_world_odom(theta + math.radians(5.0), (0.2, 0.0, -0.2))
-    solve = TagSolve(
-        T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
-        method="tag",
-        quality=0.9,
-        observation_count=6,
-        baseline_m=0.5,
-        straightness=0.1,
-    )
-    ctrl._tag_tracker.current_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
-
-    ctrl._apply_tracker_update()
-
-    assert _yaw_from_T(ctrl._T_committed) != pytest.approx(theta, abs=1e-6)

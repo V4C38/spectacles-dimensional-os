@@ -244,8 +244,13 @@ export function getWizardFooterState(
       nextLabel = "Completing...";
       nextInactive = true;
     } else if (isCalibrationComplete(calibrationState)) {
-      nextLabel = "Complete";
-      nextStyle = SnapOS2Styles.Primary;
+      if (calibrationState.mode === "manual") {
+        nextLabel = "Finishing...";
+        nextInactive = true;
+      } else {
+        nextLabel = "Complete";
+        nextStyle = SnapOS2Styles.Primary;
+      }
     } else if (calibrationState.assistStage === "awaiting_confirm") {
       // Robot-assisted flow: offer Continue to confirm the robot move
       nextLabel = "Continue";
@@ -611,10 +616,16 @@ export class SetupCalibrationFlow {
     // the user never taps Complete, so do not gate hands-free completion on the
     // local _commitInFlight flag. isCalibrationComplete() (phase === "complete")
     // already scopes this to a genuinely committed calibration.
-    if (isCalibrationComplete(this._state)) {
-      this._commitInFlight = false;
-      // Show "Calibration completed" briefly before dismissing the wizard.
-      this._callbacks.scheduleFinishSetup(1.5);
+    if (!isCalibrationComplete(this._state)) {
+      return;
     }
+    this._commitInFlight = false;
+    if (this._state.mode === "manual") {
+      // Manual mode: Complete already captured the user's intent to finish.
+      this._callbacks.finishSetup();
+      return;
+    }
+    // Show "Calibration completed" briefly before dismissing the wizard.
+    this._callbacks.scheduleFinishSetup(1.5);
   }
 }

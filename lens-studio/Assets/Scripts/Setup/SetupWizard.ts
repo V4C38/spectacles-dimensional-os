@@ -216,7 +216,6 @@ export class SetupWizard extends BaseScriptComponent {
       return;
     }
     if (this._calibrationFlow?.completeStep()) {
-      this.dimosManager?.setupAlignmentPreview.end();
       this._finishSetup();
     }
   }
@@ -493,6 +492,7 @@ export class SetupWizard extends BaseScriptComponent {
     if (panel) {
       panel.enabled = false;
     }
+    this.dimosManager?.setupAlignmentPreview.end();
     this.dimosManager?.alignmentSession.stop();
     this.dimosManager?.enterRuntime();
   }

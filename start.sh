@@ -36,6 +36,14 @@ print_green_stderr() {
   fi
 }
 
+print_red_stderr() {
+  if [[ -t 2 ]]; then
+    printf '\033[31m%s\033[0m\n' "$1" >&2
+  else
+    printf '%s\n' "$1" >&2
+  fi
+}
+
 if [[ "$#" -ne 0 ]]; then
   echo "start.sh does not take command-line arguments." >&2
   echo "Run it without arguments and choose the robot from the menu." >&2
@@ -169,7 +177,7 @@ resolve_robot_ip() {
     return 0
   fi
 
-  echo "No robots found on the network — using offline replay (ROBOT_IP=fake)." >&2
+  print_red_stderr "No robots found on the network — using offline replay (ROBOT_IP=fake)."
   echo "Set ROBOT_IP=<ip> and re-run to target a specific robot." >&2
   ROBOT_IP="fake"
 }

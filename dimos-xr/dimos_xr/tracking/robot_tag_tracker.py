@@ -32,7 +32,7 @@ import os
 import struct
 import threading
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 _TRACE = os.getenv("DIMOS_XR_TRACE", "") not in ("", "0", "false")
 
@@ -58,6 +58,8 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 logger = setup_logger()
+
+create_apriltag_detector = create_aruco_detector
 
 # One-shot mount-offset diagnostic (see _maybe_log_mount_offset_diagnostic).
 _MOUNT_OFFSET_DIAG_EMITTED: bool = False
@@ -261,14 +263,6 @@ def _orientation_yaw_deg(
 
 
 @dataclass(frozen=True)
-class AlignmentCandidate:
-    T_world_odom: Any
-    quality: float
-    method: str
-    approximate: bool
-
-
-@dataclass(frozen=True)
 class TagMount:
     tag_id: int
     size_m: float = TAG_BLACK_SIZE_M
@@ -318,16 +312,32 @@ class FrameResult:
     rejections_innovation: int = 0
 
 
-@dataclass
-class WorldAnchorObservation:
-    mono_ts: float
-    tag_id: int
-    T_world_tag: NDArray[np.float64]
-    quality: float
+_RejectionKey = Literal["reproj", "dist", "tilt", "mount", "innov"]
 
 
 @dataclass
-class TagTrackerConfig:
+class RejectionSummary:
+    reprojection: int = 0
+    distance: int = 0
+    up_tilt: int = 0
+    mount_residual: int = 0
+    innovation: int = 0
+
+    def record(self, key: _RejectionKey) -> None:
+        if key == "reproj":
+            self.reprojection += 1
+        elif key == "dist":
+            self.distance += 1
+        elif key == "tilt":
+            self.up_tilt += 1
+        elif key == "mount":
+            self.mount_residual += 1
+        elif key == "innov":
+            self.innovation += 1
+
+
+@dataclass
+class RobotAprilTagTrackerConfig:
     max_reprojection_error_px: float = 3.0
     max_distance_m: float = 6.0
     min_baseline_m: float = 0.15
@@ -340,25 +350,20 @@ class TagTrackerConfig:
     max_up_axis_tilt_deg: float = 85.0
 
 
-class TagTracker:
+class RobotAprilTagTracker:
     def __init__(
         self,
         mounts: list[TagMount],
         *,
-        config: TagTrackerConfig | None = None,
+        config: RobotAprilTagTrackerConfig | None = None,
         camera_info: CameraInfo | None = None,
-        world_anchor_tag_ids: list[int] | None = None,
-        world_anchor_size_m: float = TAG_BLACK_SIZE_M,
     ) -> None:
         self._mounts = {m.tag_id: m for m in mounts}
-        self._world_anchor_tag_ids = set(world_anchor_tag_ids or [])
-        self._world_anchor_size_m = world_anchor_size_m
-        self._config = config or TagTrackerConfig()
+        self._config = config or RobotAprilTagTrackerConfig()
         self._camera_info = camera_info
         self._detector = create_aruco_detector(DEFAULT_APRILTAG_DICT)
         self._lock = threading.RLock()
         self._observations: deque[TagObservation] = deque(maxlen=self._config.window_max_obs)
-        self._world_anchor_observations: deque[WorldAnchorObservation] = deque(maxlen=8)
         self._active = False
         self._last_tag_detected = False
         self._last_tag_ids: list[int] = []
@@ -379,7 +384,6 @@ class TagTracker:
     def reset_window(self) -> None:
         with self._lock:
             self._observations.clear()
-            self._world_anchor_observations.clear()
             self._last_tag_detected = False
             self._last_tag_ids = []
             self._last_quality = None
@@ -411,16 +415,110 @@ class TagTracker:
         with self._lock:
             return len(self._observations)
 
-    def consume_world_anchor_observations(self) -> list[WorldAnchorObservation]:
-        with self._lock:
-            observations = list(self._world_anchor_observations)
-            self._world_anchor_observations.clear()
-            return observations
-
     def _prune_old(self, now_mono: float) -> None:
         cutoff = now_mono - self._config.window_max_age_s
         while self._observations and self._observations[0].mono_ts < cutoff:
             self._observations.popleft()
+
+    def _try_accept_robot_tag(
+        self,
+        *,
+        corners: Any,
+        tag_id: int,
+        mount: TagMount,
+        camera_matrix: NDArray[np.float64],
+        dist_coeffs: NDArray[np.float64],
+        T_world_glcam: NDArray[np.float64],
+        T_odom_base: NDArray[np.float64],
+        recv_mono: float,
+        registered: bool,
+        T_committed: NDArray[np.float64] | None,
+    ) -> tuple[TagObservation | None, _RejectionKey | None]:
+        pose = estimate_marker_pose(
+            corners,
+            mount.size_m,
+            camera_matrix,
+            dist_coeffs,
+        )
+        if pose is None:
+            return None, None
+        rvec, tvec = pose
+        reproj = reprojection_error_px(
+            corners,
+            mount.size_m,
+            rvec,
+            tvec,
+            camera_matrix,
+            dist_coeffs,
+        )
+        if reproj > self._config.max_reprojection_error_px:
+            return None, "reproj"
+        dist_cam = float(np.linalg.norm(tvec.reshape(3)))
+        if dist_cam > self._config.max_distance_m:
+            return None, "dist"
+
+        T_camera_tag = _rvec_tvec_to_matrix(rvec, tvec)
+        T_world_tag = T_world_glcam @ FLIP_YZ @ T_camera_tag
+        T_odom_tag = T_odom_base @ mount.T_base_tag
+        T_candidate_raw = T_world_tag @ np.linalg.inv(T_odom_tag)
+        p_world = (
+            float(T_world_tag[0, 3]),
+            float(T_world_tag[1, 3]),
+            float(T_world_tag[2, 3]),
+        )
+        p_odom = (
+            float(T_odom_tag[0, 3]),
+            float(T_odom_tag[1, 3]),
+            float(T_odom_tag[2, 3]),
+        )
+        quality = max(0.0, min(1.0, 1.0 - reproj / self._config.max_reprojection_error_px))
+
+        if registered and T_committed is not None:
+            up_tilt_deg = up_axis_angle_deg(T_candidate_raw)
+            if up_tilt_deg > self._config.max_up_axis_tilt_deg:
+                return None, "tilt"
+            measured_mount = self._measured_mount_position(
+                T_world_tag=T_world_tag,
+                T_odom_base=T_odom_base,
+                T_world_odom=T_candidate_raw,
+            )
+            mount_residual = float(
+                np.linalg.norm(measured_mount - np.asarray(mount.position, dtype=np.float64))
+            )
+            if mount_residual > self._config.max_mount_residual_m:
+                return None, "mount"
+            T_candidate = gravity_level_transform(T_candidate_raw)
+            implied_base = T_candidate @ T_odom_base
+            committed_base = T_committed @ T_odom_base
+            innov = float(np.linalg.norm(implied_base[:3, 3] - committed_base[:3, 3]))
+            if innov > self._config.innovation_gate_m:
+                with self._lock:
+                    recent = list(self._observations)[-self._config.relocalize_consecutive :]
+                if len(recent) < self._config.relocalize_consecutive:
+                    return None, "innov"
+                spread = max(
+                    float(
+                        np.linalg.norm(
+                            np.array(recent[i].p_world_tag) - np.array(recent[j].p_world_tag)
+                        )
+                    )
+                    for i in range(len(recent))
+                    for j in range(i + 1, len(recent))
+                )
+                if spread > self._config.relocalize_cluster_m:
+                    return None, "innov"
+
+        return TagObservation(
+            mono_ts=recv_mono,
+            tag_id=tag_id,
+            p_world_tag=p_world,
+            p_odom_tag=p_odom,
+            T_world_tag=T_world_tag,
+            T_odom_tag=T_odom_tag,
+            T_odom_base=np.array(T_odom_base, dtype=np.float64, copy=True),
+            quality=quality,
+            reprojection_error_px=reproj,
+        ), None
 
     def process_frame(
         self,
@@ -484,125 +582,35 @@ class TagTracker:
         detected_ids: list[int] = []
         best_quality = 0.0
         added = 0
-        rej_reproj = rej_dist = rej_tilt = rej_mount = rej_innov = 0
+        rejections = RejectionSummary()
 
         for corners, tag_id_arr in zip(corners_list, ids, strict=False):
             tag_id = int(tag_id_arr[0])
             mount = mounts.get(tag_id)
-            is_world_anchor = tag_id in self._world_anchor_tag_ids
-            if mount is None and not is_world_anchor:
+            if mount is None:
                 continue
-            pose = estimate_marker_pose(
-                corners,
-                mount.size_m if mount is not None else self._world_anchor_size_m,
-                camera_matrix,
-                dist_coeffs,
-            )
-            if pose is None:
-                continue
-            rvec, tvec = pose
-            reproj = reprojection_error_px(
-                corners,
-                mount.size_m if mount is not None else self._world_anchor_size_m,
-                rvec,
-                tvec,
-                camera_matrix,
-                dist_coeffs,
-            )
-            if reproj > self._config.max_reprojection_error_px:
-                rej_reproj += 1
-                continue
-            dist_cam = float(np.linalg.norm(tvec.reshape(3)))
-            if dist_cam > self._config.max_distance_m:
-                rej_dist += 1
-                continue
-
-            T_camera_tag = _rvec_tvec_to_matrix(rvec, tvec)
-            T_world_tag = T_world_glcam @ FLIP_YZ @ T_camera_tag
-            if is_world_anchor:
-                quality = max(0.0, min(1.0, 1.0 - reproj / self._config.max_reprojection_error_px))
-                with self._lock:
-                    self._world_anchor_observations.append(
-                        WorldAnchorObservation(
-                            mono_ts=recv_mono,
-                            tag_id=tag_id,
-                            T_world_tag=np.array(T_world_tag, dtype=np.float64, copy=True),
-                            quality=quality,
-                        )
-                    )
-                detected_ids.append(tag_id)
-                best_quality = max(best_quality, quality)
-                continue
-            T_odom_tag = T_odom_base @ mount.T_base_tag
-            T_candidate_raw = T_world_tag @ np.linalg.inv(T_odom_tag)
-            p_world = (
-                float(T_world_tag[0, 3]),
-                float(T_world_tag[1, 3]),
-                float(T_world_tag[2, 3]),
-            )
-            p_odom = (
-                float(T_odom_tag[0, 3]),
-                float(T_odom_tag[1, 3]),
-                float(T_odom_tag[2, 3]),
-            )
-            quality = max(0.0, min(1.0, 1.0 - reproj / self._config.max_reprojection_error_px))
-
-            if registered and T_committed is not None:
-                up_tilt_deg = up_axis_angle_deg(T_candidate_raw)
-                if up_tilt_deg > self._config.max_up_axis_tilt_deg:
-                    rej_tilt += 1
-                    continue
-                measured_mount = self._measured_mount_position(
-                    T_world_tag=T_world_tag,
-                    T_odom_base=T_odom_base,
-                    T_world_odom=T_candidate_raw,
-                )
-                mount_residual = float(
-                    np.linalg.norm(measured_mount - np.asarray(mount.position, dtype=np.float64))
-                )
-                if mount_residual > self._config.max_mount_residual_m:
-                    rej_mount += 1
-                    continue
-                T_candidate = T_candidate_raw
-                T_candidate = gravity_level_transform(T_candidate)
-                implied_base = T_candidate @ T_odom_base
-                committed_base = T_committed @ T_odom_base
-                innov = float(np.linalg.norm(implied_base[:3, 3] - committed_base[:3, 3]))
-                if innov > self._config.innovation_gate_m:
-                    with self._lock:
-                        recent = list(self._observations)[-self._config.relocalize_consecutive :]
-                    if len(recent) < self._config.relocalize_consecutive:
-                        rej_innov += 1
-                        continue
-                    spread = max(
-                        float(
-                            np.linalg.norm(
-                                np.array(recent[i].p_world_tag) - np.array(recent[j].p_world_tag)
-                            )
-                        )
-                        for i in range(len(recent))
-                        for j in range(i + 1, len(recent))
-                    )
-                    if spread > self._config.relocalize_cluster_m:
-                        rej_innov += 1
-                        continue
-
-            obs = TagObservation(
-                mono_ts=recv_mono,
+            obs, rejection = self._try_accept_robot_tag(
+                corners=corners,
                 tag_id=tag_id,
-                p_world_tag=p_world,
-                p_odom_tag=p_odom,
-                T_world_tag=T_world_tag,
-                T_odom_tag=T_odom_tag,
-                T_odom_base=np.array(T_odom_base, dtype=np.float64, copy=True),
-                quality=quality,
-                reprojection_error_px=reproj,
+                mount=mount,
+                camera_matrix=camera_matrix,
+                dist_coeffs=dist_coeffs,
+                T_world_glcam=T_world_glcam,
+                T_odom_base=T_odom_base,
+                recv_mono=recv_mono,
+                registered=registered,
+                T_committed=T_committed,
             )
+            if rejection is not None:
+                rejections.record(rejection)
+                continue
+            if obs is None:
+                continue
             with self._lock:
                 self._prune_old(recv_mono)
                 self._observations.append(obs)
             detected_ids.append(tag_id)
-            best_quality = max(best_quality, quality)
+            best_quality = max(best_quality, obs.quality)
             added += 1
 
         with self._lock:
@@ -615,11 +623,11 @@ class TagTracker:
             tag_ids=detected_ids,
             quality=best_quality if detected_ids else None,
             observations_added=added,
-            rejections_reprojection=rej_reproj,
-            rejections_distance=rej_dist,
-            rejections_up_tilt=rej_tilt,
-            rejections_mount_residual=rej_mount,
-            rejections_innovation=rej_innov,
+            rejections_reprojection=rejections.reprojection,
+            rejections_distance=rejections.distance,
+            rejections_up_tilt=rejections.up_tilt,
+            rejections_mount_residual=rejections.mount_residual,
+            rejections_innovation=rejections.innovation,
         )
 
     def _measured_mount_position(

@@ -12,7 +12,6 @@ import asyncio
 from collections.abc import Awaitable, Callable
 import logging
 import os
-import re
 import threading
 import time
 from typing import Any
@@ -41,7 +40,8 @@ from dimos_xr.network.protocol import (
     encode_hello,
     encode_pong,
 )
-from dimos_xr.tracking.tag_tracker import parse_camera_frame
+from dimos_xr.network.ws_send_queue import ClientSendQueue, peek_message_type
+from dimos_xr.tracking.robot_tag_tracker import parse_camera_frame
 
 logger = setup_logger()
 
@@ -65,35 +65,14 @@ StatusOnConnectHandler = Callable[["ws_server.ServerConnection"], None]
 DisconnectHandler = Callable[["ws_server.ServerConnection"], None]
 HelloSupplier = Callable[[], Any]
 
-OUTBOUND_FIFO_MAXSIZE = 64
-OUTBOUND_BACKLOG_LOG_INTERVAL_S = 5.0
-# High-frequency inbound message types that need throttled RX logging (~1 Hz).
+InboundHandler = Callable[[InboundMessage, "ws_server.ServerConnection"], None]
+
 INBOUND_TEXT_LOG_INTERVAL_S = 1.0
 _THROTTLED_INBOUND_TYPES = frozenset({"align_manual_pose", "get_status", "plan_path"})
-COALESCE_MESSAGE_TYPES = frozenset(
-    {
-        "lidar",
-        "pose",
-        "path",
-        "path_preview",
-        "nav_status",
-        "bridge_status",
-        "align_status",
-        "camera_frame_ack",
-    }
-)
-_MESSAGE_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
-_ALIGN_STATUS_STATE_RE = re.compile(r'"state"\s*:\s*"([^"]+)"')
-# Terminal align_status states that must never be silently overwritten by a
-# later coalesced message.  If one of these is already pending in the coalesce
-# slot, only another terminal state is allowed to replace it.
-_ALIGN_STATUS_TERMINAL_STATES = frozenset({"aligned", "failed"})
 PING_INTERVAL_S = 30
 PING_TIMEOUT_S = 30
 
-# Gate per-frame / per-message firehose logs. Set DIMOS_XR_TRACE=1 to enable.
 _TRACE = os.getenv("DIMOS_XR_TRACE", "") not in ("", "0", "false")
-# Inbound message types logged only under trace (too frequent for normal DEBUG).
 _TRACE_ONLY_INBOUND_TYPES = frozenset({"get_status"})
 
 
@@ -103,151 +82,8 @@ def _handshake_noise_filter(record: logging.LogRecord) -> bool:
     return not ("opening handshake failed" in msg or "did not receive a valid HTTP request" in msg)
 
 
-def _peek_message_type(text: str) -> str | None:
-    match = _MESSAGE_TYPE_RE.search(text)
-    return match.group(1) if match else None
-
-
-
-class _ConnectionOutbound:
-    """Per-connection sender with latest-wins coalescing and bounded FIFO."""
-
-    def __init__(self, websocket: ws_server.ServerConnection) -> None:
-        self._websocket = websocket
-        self._queue: asyncio.Queue[tuple[int, str]] = asyncio.Queue(
-            maxsize=OUTBOUND_FIFO_MAXSIZE,
-        )
-        self._coalesce_latest: dict[str, str] = {}
-        self._sequence = 0
-        self._sent_count = 0
-        self._dropped_fifo_count = 0
-        self._last_backlog_log_mono = 0.0
-        self._work_available = asyncio.Event()
-        self._task: asyncio.Task[None] | None = None
-        self._closed = False
-
-    def start(self) -> None:
-        if self._task is None:
-            self._task = asyncio.create_task(self._sender_loop())
-
-    async def stop(self) -> None:
-        self._closed = True
-        self._work_available.set()
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
-
-    def enqueue(self, text: str) -> None:
-        if self._closed:
-            return
-        msg_type = _peek_message_type(text)
-        if msg_type in COALESCE_MESSAGE_TYPES:
-            # Terminal align_status (aligned/failed) must not be overwritten by a
-            # non-terminal one.  Check the pending slot before clobbering it.
-            if msg_type == "align_status":
-                pending = self._coalesce_latest.get("align_status")
-                if pending is not None:
-                    pending_state_match = _ALIGN_STATUS_STATE_RE.search(pending)
-                    if pending_state_match and pending_state_match.group(1) in _ALIGN_STATUS_TERMINAL_STATES:
-                        new_state_match = _ALIGN_STATUS_STATE_RE.search(text)
-                        new_state = new_state_match.group(1) if new_state_match else ""
-                        if new_state not in _ALIGN_STATUS_TERMINAL_STATES:
-                            # Incoming non-terminal must not overwrite a pending terminal.
-                            self._work_available.set()
-                            return
-            self._coalesce_latest[msg_type] = text
-        else:
-            self._sequence += 1
-            item = (self._sequence, text)
-            try:
-                self._queue.put_nowait(item)
-            except asyncio.QueueFull:
-                try:
-                    self._queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                self._dropped_fifo_count += 1
-                try:
-                    self._queue.put_nowait(item)
-                except asyncio.QueueFull:
-                    pass
-        self._work_available.set()
-
-    async def _sender_loop(self) -> None:
-        try:
-            while not self._closed:
-                if self._queue.empty() and not self._coalesce_latest:
-                    self._work_available.clear()
-                    await self._work_available.wait()
-                    if self._closed:
-                        break
-                try:
-                    _seq, text = self._queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    await self._flush_coalesced_batch()
-                    continue
-                await self._send(text)
-                await self._flush_one_coalesced()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception("XR WebSocket outbound sender crashed", error=str(exc))
-
-    async def _flush_one_coalesced(self) -> None:
-        if not self._coalesce_latest:
-            return
-        msg_type = next(iter(self._coalesce_latest))
-        text = self._coalesce_latest.pop(msg_type)
-        await self._send(text)
-
-    async def _flush_coalesced_batch(self) -> None:
-        while self._coalesce_latest and not self._closed:
-            await self._flush_one_coalesced()
-
-    async def _send(self, text: str) -> None:
-        import time
-
-        try:
-            await self._websocket.send(text + "\n")
-            self._sent_count += 1
-            msg_type = _peek_message_type(text)
-            if _TRACE and msg_type == "align_status":
-                logger.debug("XR WebSocket outbound align_status sent", bytes=len(text))
-            now = time.monotonic()
-            if now - self._last_backlog_log_mono >= OUTBOUND_BACKLOG_LOG_INTERVAL_S:
-                fifo_depth = self._queue.qsize()
-                coalesce_depth = len(self._coalesce_latest)
-                if fifo_depth > 0 or coalesce_depth > 0 or self._dropped_fifo_count > 0:
-                    self._last_backlog_log_mono = now
-                    logger.info(
-                        "XR WebSocket outbound backlog",
-                        fifo_depth=fifo_depth,
-                        coalesce_pending=coalesce_depth,
-                        dropped_fifo=self._dropped_fifo_count,
-                    )
-        except websockets.ConnectionClosed:
-            self._closed = True
-        except (OSError, websockets.WebSocketException) as exc:
-            msg_type = _peek_message_type(text)
-            logger.warning(
-                "XR WebSocket outbound send failed",
-                error=str(exc),
-                message_type=msg_type,
-            )
-
-
 class XRWebSocketServer:
-    """WebSocket server running on the Module's asyncio loop.
-
-    Lifecycle adopts the RerunWebSocketServer pattern: start() schedules
-    _serve() on self._loop via asyncio.run_coroutine_threadsafe; stop() signals
-    via loop.call_soon_threadsafe. The module must call start() after assigning
-    loop and stop() before its loop closes.
-    """
+    """WebSocket server running on the Module's asyncio loop."""
 
     def __init__(
         self,
@@ -277,40 +113,96 @@ class XRWebSocketServer:
         self._hello_supplier = hello_supplier
         self._max_message_bytes = max_message_bytes
         self._loop = loop
-        self._on_align_start = on_align_start
-        self._on_align_stop = on_align_stop
-        self._on_align_commit = on_align_commit
-        self._on_assist_confirm = on_assist_confirm
-        self._on_camera_info = on_camera_info
         self._on_camera_frame = on_camera_frame
-        self._on_align_manual_pose = on_align_manual_pose
-        self._on_nav_goal = on_nav_goal
-        self._on_plan_path = on_plan_path
-        self._on_cancel_goal = on_cancel_goal
-        self._on_emergency_stop = on_emergency_stop
-        self._on_get_status = on_get_status
-        self._on_set_lidar_mode = on_set_lidar_mode
         self._on_unsupported = on_unsupported
         self._on_status_connect = on_status_connect
         self._on_disconnect = on_disconnect
+        self._inbound_handlers = self._build_inbound_handlers(
+            on_align_start=on_align_start,
+            on_align_stop=on_align_stop,
+            on_align_commit=on_align_commit,
+            on_assist_confirm=on_assist_confirm,
+            on_camera_info=on_camera_info,
+            on_align_manual_pose=on_align_manual_pose,
+            on_nav_goal=on_nav_goal,
+            on_plan_path=on_plan_path,
+            on_cancel_goal=on_cancel_goal,
+            on_emergency_stop=on_emergency_stop,
+            on_get_status=on_get_status,
+            on_set_lidar_mode=on_set_lidar_mode,
+            on_unsupported=on_unsupported,
+        )
 
         self._stop_event: asyncio.Event | None = None
         self._server_ready = threading.Event()
         self.client_connected = threading.Event()
         self._connections: set[ws_server.ServerConnection] = set()
-        self._outbound: dict[ws_server.ServerConnection, _ConnectionOutbound] = {}
+        self._outbound: dict[ws_server.ServerConnection, ClientSendQueue] = {}
+
+    def _build_inbound_handlers(
+        self,
+        *,
+        on_align_start: AlignStartHandler | None,
+        on_align_stop: AlignStopHandler | None,
+        on_align_commit: AlignCommitHandler | None,
+        on_assist_confirm: AssistConfirmHandler | None,
+        on_camera_info: CameraInfoHandler | None,
+        on_align_manual_pose: AlignManualPoseHandler | None,
+        on_nav_goal: NavGoalHandler | None,
+        on_plan_path: PlanPathHandler | None,
+        on_cancel_goal: CancelGoalHandler | None,
+        on_emergency_stop: EmergencyStopHandler | None,
+        on_get_status: GetStatusHandler | None,
+        on_set_lidar_mode: SetLidarModeHandler | None,
+        on_unsupported: UnsupportedHandler | None,
+    ) -> dict[type[InboundMessage], InboundHandler]:
+        handlers: dict[type[InboundMessage], InboundHandler] = {}
+
+        if on_align_start is not None:
+            handlers[AlignStartMessage] = on_align_start
+        if on_align_stop is not None:
+            handlers[AlignStopMessage] = on_align_stop
+        if on_align_commit is not None:
+            handlers[AlignCommitMessage] = on_align_commit
+        if on_assist_confirm is not None:
+            handlers[AssistConfirmMessage] = on_assist_confirm
+        if on_camera_info is not None:
+            handlers[CameraInfoMessage] = on_camera_info
+        if on_align_manual_pose is not None:
+            handlers[AlignManualPoseMessage] = on_align_manual_pose
+        if on_get_status is not None:
+            handlers[GetStatusMessage] = lambda msg, ws: on_get_status(msg, ws)
+        if on_set_lidar_mode is not None:
+            handlers[SetLidarModeMessage] = lambda msg, ws: on_set_lidar_mode(msg, ws)
+
+        def _nav_handler(
+            handler: Callable[[Any], None] | None,
+            label: str,
+        ) -> InboundHandler:
+            if handler is not None:
+                return lambda inbound, _ws: handler(inbound)
+            if on_unsupported is not None:
+                return lambda inbound, _ws: on_unsupported(inbound)
+            return lambda _inbound, _ws: logger.warning(
+                f"{label} received but not supported in this blueprint"
+            )
+
+        handlers[NavGoalMessage] = _nav_handler(on_nav_goal, "nav_goal")
+        handlers[PlanPathMessage] = _nav_handler(on_plan_path, "plan_path")
+        handlers[CancelGoalMessage] = _nav_handler(on_cancel_goal, "cancel_goal")
+        handlers[EmergencyStopMessage] = _nav_handler(on_emergency_stop, "emergency_stop")
+
+        return handlers
 
     @property
     def port(self) -> int:
         return self._port
 
     def start(self) -> None:
-        """Schedule _serve() on the Module loop; block until server is accepting."""
         asyncio.run_coroutine_threadsafe(self._serve(), self._loop)
         self._server_ready.wait()
 
     def stop(self) -> None:
-        """Signal _serve() to exit from any thread."""
         if not self._server_ready.is_set():
             return
         if self._stop_event is not None:
@@ -355,7 +247,7 @@ class XRWebSocketServer:
             await websocket.close(1008, "Not Found")
             return
         self._connections.add(websocket)
-        outbound = _ConnectionOutbound(websocket)
+        outbound = ClientSendQueue(websocket)
         self._outbound[websocket] = outbound
         outbound.start()
         remote = getattr(websocket, "remote_address", None)
@@ -387,17 +279,19 @@ class XRWebSocketServer:
                         continue
                     if not isinstance(message, str):
                         raise ValueError("Unsupported WebSocket frame type")
-                    msg_type = _peek_message_type(message)
+                    msg_type = peek_message_type(message)
                     now_mono = time.monotonic()
                     _should_log = (
                         msg_type not in _THROTTLED_INBOUND_TYPES
-                        and (not _TRACE_ONLY_INBOUND_TYPES or msg_type not in _TRACE_ONLY_INBOUND_TYPES)
+                        and (
+                            not _TRACE_ONLY_INBOUND_TYPES
+                            or msg_type not in _TRACE_ONLY_INBOUND_TYPES
+                        )
                     ) or (
                         msg_type in _THROTTLED_INBOUND_TYPES
-                        and now_mono - _last_inbound_text_log.get(msg_type, 0.0) >= INBOUND_TEXT_LOG_INTERVAL_S
-                    ) or (
-                        msg_type in _TRACE_ONLY_INBOUND_TYPES and _TRACE
-                    )
+                        and now_mono - _last_inbound_text_log.get(msg_type, 0.0)
+                        >= INBOUND_TEXT_LOG_INTERVAL_S
+                    ) or (msg_type in _TRACE_ONLY_INBOUND_TYPES and _TRACE)
                     if _should_log:
                         if msg_type is not None:
                             _last_inbound_text_log[msg_type] = now_mono
@@ -428,59 +322,7 @@ class XRWebSocketServer:
     def _dispatch_inbound(
         self, inbound: InboundMessage, websocket: ws_server.ServerConnection
     ) -> None:
-        if isinstance(inbound, AlignStartMessage):
-            if self._on_align_start is not None:
-                self._on_align_start(inbound, websocket)
-        elif isinstance(inbound, AlignStopMessage):
-            if self._on_align_stop is not None:
-                self._on_align_stop(inbound, websocket)
-        elif isinstance(inbound, AlignCommitMessage):
-            if self._on_align_commit is not None:
-                self._on_align_commit(inbound, websocket)
-        elif isinstance(inbound, AssistConfirmMessage):
-            if self._on_assist_confirm is not None:
-                self._on_assist_confirm(inbound, websocket)
-        elif isinstance(inbound, CameraInfoMessage):
-            if self._on_camera_info is not None:
-                self._on_camera_info(inbound, websocket)
-        elif isinstance(inbound, AlignManualPoseMessage):
-            if self._on_align_manual_pose is not None:
-                self._on_align_manual_pose(inbound, websocket)
-        elif isinstance(inbound, NavGoalMessage):
-            if self._on_nav_goal is not None:
-                self._on_nav_goal(inbound)
-            elif self._on_unsupported is not None:
-                self._on_unsupported(inbound)
-            else:
-                logger.warning("nav_goal received but not supported in this blueprint")
-        elif isinstance(inbound, PlanPathMessage):
-            if self._on_plan_path is not None:
-                self._on_plan_path(inbound)
-            elif self._on_unsupported is not None:
-                self._on_unsupported(inbound)
-            else:
-                logger.warning("plan_path received but not supported in this blueprint")
-        elif isinstance(inbound, CancelGoalMessage):
-            if self._on_cancel_goal is not None:
-                self._on_cancel_goal(inbound)
-            elif self._on_unsupported is not None:
-                self._on_unsupported(inbound)
-            else:
-                logger.warning("cancel_goal received but not supported in this blueprint")
-        elif isinstance(inbound, EmergencyStopMessage):
-            if self._on_emergency_stop is not None:
-                self._on_emergency_stop(inbound)
-            elif self._on_unsupported is not None:
-                self._on_unsupported(inbound)
-            else:
-                logger.warning("emergency_stop received but not supported in this blueprint")
-        elif isinstance(inbound, GetStatusMessage):
-            if self._on_get_status is not None:
-                self._on_get_status(inbound, websocket)
-        elif isinstance(inbound, SetLidarModeMessage):
-            if self._on_set_lidar_mode is not None:
-                self._on_set_lidar_mode(inbound, websocket)
-        elif isinstance(inbound, PingMessage):
+        if isinstance(inbound, PingMessage):
             asyncio.create_task(
                 websocket.send(
                     encode_pong(
@@ -491,13 +333,15 @@ class XRWebSocketServer:
                     + "\n"
                 )
             )
+            return
+        handler = self._inbound_handlers.get(type(inbound))
+        if handler is not None:
+            handler(inbound, websocket)
 
     def schedule_send(self, text: str) -> None:
-        """Enqueue a broadcast from any thread onto the server loop."""
         asyncio.run_coroutine_threadsafe(self._enqueue_all(text), self._loop)
 
     def schedule_send_binary(self, data: bytes) -> None:
-        """Broadcast a raw binary WebSocket frame to all connected clients."""
         asyncio.run_coroutine_threadsafe(self._broadcast_binary(data), self._loop)
 
     def schedule_send_to(self, websocket: ws_server.ServerConnection, text: str) -> None:

@@ -244,7 +244,7 @@ class Calibration:
     outbound LiDAR point, pose, and path is transformed through this object
     before being sent to the Lens client.      The DimOS-facing mirror is
     ``publish_static`` (TF publication) wired in
-    ``bridge.alignment.AlignmentController._finish_alignment``.
+    ``bridge.calibration_session.CalibrationSessionController._finish_alignment``.
 
     Before registration: identity (odom coordinates pass through unchanged).
     After registration: ``T_world_odom`` is gravity-levelled and published.

@@ -21,7 +21,7 @@ from dimos_xr.network.data_plane import (
 )
 from dimos_xr.network.error_codes import CONTROL_RPC_TIMEOUT, NAV_GOAL_STALLED
 from dimos_xr.network.protocol import NavGoalMessage, encode_nav_status
-from dimos_xr.tracking.tag_tracker import _orientation_yaw_deg
+from dimos_xr.tracking.robot_tag_tracker import _orientation_yaw_deg
 
 if TYPE_CHECKING:
     from dimos.msgs.nav_msgs.Path import Path
