@@ -13,33 +13,23 @@ import {
 
 const WorldQueryModule = require("LensStudio:WorldQueryModule");
 
-/** Scene component owning the navigation subsystem. */
-@component
-export class NavigationHost extends BaseScriptComponent {
-  @input
-  dimosState: DimosState;
-
-  @input
-  bridgeClient: BridgeClient;
-
-  @input
-  robotRuntime: RobotRuntime;
-
-  @input
-  robotMarker: RobotMarker;
-
-  @input
-  placementRayOrigin: SceneObject;
-
-  @input
-  navigationMarkerRoot: SceneObject;
-
-  @input
-  robotGroundDeadzoneRadiusCm = 75;
-
+/** Navigation subsystem: goal placement, paths, and emergency stop. */
+export class NavigationHost {
   private _nav: NavigationController | null = null;
   private _placementDeferralEvent: DelayedCallbackEvent | null = null;
   private _bound = false;
+
+  constructor(
+    private readonly _eventHost: BaseScriptComponent,
+    private readonly _pathParentFallback: SceneObject,
+    private readonly dimosState: DimosState,
+    private readonly bridgeClient: BridgeClient | null,
+    private readonly robotRuntime: RobotRuntime,
+    private readonly robotMarker: RobotMarker | null,
+    private readonly placementRayOrigin: SceneObject | null,
+    private readonly navigationMarkerRoot: SceneObject | null,
+    private readonly robotGroundDeadzoneRadiusCm: number,
+  ) {}
 
   public get controller(): NavigationController | null {
     return this._nav;
@@ -53,19 +43,19 @@ export class NavigationHost extends BaseScriptComponent {
 
     const parent =
       this.robotMarker?.markerRoot?.getParent() ??
-      this.getSceneObject();
+      this._pathParentFallback;
 
     const goalRenderer = new NavigationMarkerView(this.navigationMarkerRoot);
     const pathRenderer = new NavigationPathRenderer(parent);
     const placement = new SurfacePlacementController(
-      this,
+      this._eventHost,
       WorldQueryModule,
       this.placementRayOrigin ?? null,
       goalRenderer,
     );
 
     this._nav = new NavigationController(
-      this,
+      this._eventHost,
       this.bridgeClient ?? null,
       this.dimosState.store,
       this.robotMarker ?? null,
@@ -81,7 +71,7 @@ export class NavigationHost extends BaseScriptComponent {
 
     this.dimosState.subscribe((state) => this._syncFromState(state));
 
-    const placementDeferral = this.createEvent(
+    const placementDeferral = this._eventHost.createEvent(
       "DelayedCallbackEvent",
     ) as DelayedCallbackEvent;
     placementDeferral.bind(() => this._nav?.syncPlacementState());

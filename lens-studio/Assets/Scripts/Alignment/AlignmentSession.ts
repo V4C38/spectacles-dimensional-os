@@ -36,18 +36,14 @@ export interface AlignmentSessionDeps {
   disableNavigationPlacementForAlignment: () => void;
 }
 
-@component
-export class AlignmentSession extends BaseScriptComponent {
-  @input
-  bridgeClient: BridgeClient;
-
-  @input
-  frameCapture: FrameCaptureController;
-
-  @input
-  robotMarker: RobotMarker;
-
+export class AlignmentSession {
   public readonly onAlignStatus = new Signal<AlignStatusMessage>();
+
+  constructor(
+    private readonly bridgeClient: BridgeClient | null,
+    private readonly frameCapture: FrameCaptureController | null,
+    private readonly robotMarker: RobotMarker | null,
+  ) {}
 
   /** Intent: the method we want to run. Null = no session desired. */
   private _intent: "tag" | "manual" | null = null;
@@ -62,16 +58,12 @@ export class AlignmentSession extends BaseScriptComponent {
   private _deps: AlignmentSessionDeps | null = null;
   private _bound = false;
 
-  onAwake(): void {
-    this.createEvent("OnStartEvent").bind(() => this._bind());
-  }
-
-  /** Called by DimosManager after scene construction to inject non-component deps. */
+  /** Called after construction to inject non-component deps. */
   public initialize(deps: AlignmentSessionDeps): void {
     this._deps = deps;
   }
 
-  private _bind(): void {
+  public bind(): void {
     if (this._bound || !this.bridgeClient) {
       return;
     }

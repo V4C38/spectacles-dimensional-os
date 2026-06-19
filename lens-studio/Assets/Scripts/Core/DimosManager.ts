@@ -1,9 +1,7 @@
-import { BridgeClient } from "../Bridge/BridgeClient";
 import { FrameCaptureController } from "../Alignment/FrameCaptureController";
 import { AlignmentSession } from "../Alignment/AlignmentSession";
 import { BridgeRuntime } from "../Bridge/BridgeRuntime";
-import { DimosState } from "./DimosState";
-import { NavigationHost } from "../Navigation/NavigationHost";
+import { DimosServices } from "./DimosServices";
 import { RobotRuntime } from "../Robot/RobotRuntime";
 import { SetupAlignmentPreview } from "../Setup/SetupAlignmentPreview";
 import {
@@ -19,53 +17,29 @@ import {
   OperatingMode,
   RobotInteractionMode,
 } from "./AppState";
-import {
-  isCapabilityAvailable,
-} from "../Robot/RobotRuntimeModel";
+import { isCapabilityAvailable } from "../Robot/RobotRuntimeModel";
 
 /** Phase lifecycle, operating mode, and subsystem orchestration for DimOS runtime. */
 @component
 export class DimosManager extends BaseScriptComponent {
   @input
-  dimosState: DimosState;
-
-  @input
-  bridgeRuntime: BridgeRuntime;
-
-  @input
-  robotRuntime: RobotRuntime;
-
-  @input
-  navigationHost: NavigationHost;
-
-  @input
-  setupAlignmentPreview: SetupAlignmentPreview;
-
-  @input
-  bridgeClient: BridgeClient;
-
-  @input
-  frameCaptureController: FrameCaptureController;
-
-  @input
-  alignmentSession: AlignmentSession;
+  dimosServices: DimosServices;
 
   private _lastSyncedOperatingMode: OperatingMode | null = null;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
       this._bindSubsystems();
-      this.bridgeRuntime?.bind();
       this.enterSetup();
     });
   }
 
   public subscribeAppState(listener: AppStateListener): () => void {
-    return this.dimosState.subscribe(listener);
+    return this.dimosServices.state.subscribe(listener);
   }
 
   public get appState(): DimosAppState {
-    return this.dimosState.snapshot;
+    return this.dimosServices.state.snapshot;
   }
 
   public get bridgeLinkState(): BridgeLinkState {
@@ -73,40 +47,63 @@ export class DimosManager extends BaseScriptComponent {
   }
 
   public get onBridgeReady() {
-    return this.bridgeRuntime.onBridgeReady;
+    return this.dimosServices.bridge.onBridgeReady;
   }
 
   public get onBridgeStatusChanged() {
-    return this.bridgeRuntime.onBridgeStatusChanged;
+    return this.dimosServices.bridge.onBridgeStatusChanged;
   }
 
   public get onBridgeConnectionChanged() {
-    return this.bridgeRuntime.onBridgeConnectionChanged;
+    return this.dimosServices.bridge.onBridgeConnectionChanged;
+  }
+
+  public get alignmentSession(): AlignmentSession {
+    return this.dimosServices.alignment;
+  }
+
+  public get setupAlignmentPreview(): SetupAlignmentPreview {
+    return this.dimosServices.setupPreview;
+  }
+
+  public get bridgeRuntime(): BridgeRuntime {
+    return this.dimosServices.bridge;
+  }
+
+  public get robotRuntime(): RobotRuntime {
+    return this.dimosServices.robot;
+  }
+
+  public get frameCaptureController(): FrameCaptureController | null {
+    return this.dimosServices.frameCaptureController ?? null;
   }
 
   private _bindSubsystems(): void {
-    this.robotRuntime.bind({
-      onToggleRequested: () => {
-        const view = this.robotRuntime.robotMarkerView;
-        if (this.operatingMode === "manual") {
-          view?.hide();
-          this.setNavigationPlacementEnabled(!this.navigationPlacementEnabled);
-          return;
-        }
-        view?.toggleVisible();
+    if (!this.dimosServices) {
+      return;
+    }
+    const robot = this.dimosServices.robot;
+    const navigation = this.dimosServices.navigation;
+
+    this.dimosServices.bind(
+      {
+        onToggleRequested: () => {
+          const view = robot.robotMarkerView;
+          if (this.operatingMode === "manual") {
+            view?.hide();
+            this.setNavigationPlacementEnabled(!this.navigationPlacementEnabled);
+            return;
+          }
+          view?.toggleVisible();
+        },
+        onStopRequested: () => navigation.requestEmergencyStop(),
+        onNavigationPlacementRequested: (enabled) =>
+          this.setNavigationPlacementEnabled(enabled),
+        getOperatingMode: () => this.operatingMode,
+        getNavigationPlacementEnabled: () => this.navigationPlacementEnabled,
       },
-      onStopRequested: () => this.navigationHost.requestEmergencyStop(),
-      onNavigationPlacementRequested: (enabled) =>
-        this.setNavigationPlacementEnabled(enabled),
-      getOperatingMode: () => this.operatingMode,
-      getNavigationPlacementEnabled: () => this.navigationPlacementEnabled,
-    });
-
-    this.navigationHost.bind();
-
-    if (this.alignmentSession) {
-      this.alignmentSession.initialize({
-        poseCorrection: this.robotRuntime.poseCorrection,
+      {
+        poseCorrection: robot.poseCorrection,
         hasBridgeConnection: () => this.hasBridgeConnection(),
         isCapabilityAvailable: (cap) =>
           isCapabilityAvailable(this.appState.robotRuntime, cap),
@@ -114,14 +111,16 @@ export class DimosManager extends BaseScriptComponent {
         setInteractionMode: (mode) => this._setRobotInteractionMode(mode),
         getIsRuntimePhase: () => this.isRuntimePhase(),
         disableNavigationPlacementForAlignment: () => {
-          if (this.navigationHost.placementEnabled) {
-            this.navigationHost.setPlacementEnabled(false);
+          if (navigation.placementEnabled) {
+            navigation.setPlacementEnabled(false);
           }
         },
-      });
-    }
+      },
+    );
 
-    this.dimosState.subscribe((state) => this._syncOperatingModeSideEffects(state));
+    this.dimosServices.state.subscribe((state) =>
+      this._syncOperatingModeSideEffects(state),
+    );
   }
 
   private _syncOperatingModeSideEffects(state: DimosAppState): void {
@@ -130,44 +129,47 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     this._lastSyncedOperatingMode = mode;
-    this.robotRuntime.robotMarkerView?.setOperatingMode(mode);
+    this.dimosServices.robot.robotMarkerView?.setOperatingMode(mode);
 
+    const navigation = this.dimosServices.navigation;
     if (mode === "setup") {
-      this.navigationHost.setPlacementEnabledForOperatingMode(mode, state);
+      navigation.setPlacementEnabledForOperatingMode(mode, state);
       return;
     }
 
     if (mode === "manual") {
       if (state.navigationState === "off") {
-        this.dimosState.update({ navigationState: "armed" });
+        this.dimosServices.state.update({ navigationState: "armed" });
       } else {
-        this.navigationHost.syncPlacementToggleOnMarkerView();
-        this.navigationHost.onPlacementEnabledChanged(true);
+        navigation.syncPlacementToggleOnMarkerView();
+        navigation.onPlacementEnabledChanged(true);
       }
     } else if (mode === "agent") {
-      this.navigationHost.setPlacementEnabled(false);
+      navigation.setPlacementEnabled(false);
       if (
         state.navigationState === "armed" ||
         state.navigationState === "placingGoal"
       ) {
-        this.dimosState.update({ navigationState: "off" });
+        this.dimosServices.state.update({ navigationState: "off" });
       }
     }
-    this.navigationHost.setPlacementEnabledForOperatingMode(mode, state);
+    navigation.setPlacementEnabledForOperatingMode(mode, state);
   }
 
   private _applyPhaseSideEffects(phase: AppPhase): void {
+    const robot = this.dimosServices.robot;
+    const navigation = this.dimosServices.navigation;
     if (phase !== "runtime") {
-      this.robotRuntime.clearInactiveState();
-      this.navigationHost.clearInactiveState();
+      robot.clearInactiveState();
+      navigation.clearInactiveState();
     }
-    this.robotRuntime.applyInteractionFromState();
+    robot.applyInteractionFromState();
     if (phase === "runtime") {
-      this.bridgeRuntime.reapplyBridgeStatusIfConnected();
-      this.robotRuntime.robotMarker?.syncPose();
+      this.dimosServices.bridge.reapplyBridgeStatusIfConnected();
+      robot.robotMarker?.syncPose();
     }
-    this.navigationHost.applyRuntimeStateFromSnapshot();
-    this.robotRuntime.refreshLidarPresentation();
+    navigation.applyRuntimeStateFromSnapshot();
+    robot.refreshLidarPresentation();
   }
 
   public enterSetup(): void {
@@ -175,9 +177,9 @@ export class DimosManager extends BaseScriptComponent {
     this.alignmentSession?.cancelPlacement();
     this.alignmentSession?.stop();
     this.alignmentSession?.clearPose();
-    this.bridgeRuntime.disconnect();
+    this.dimosServices.bridge.disconnect();
     this.frameCaptureController?.setMode("off");
-    this.dimosState.update({
+    this.dimosServices.state.update({
       phase: "setup",
       navigationState: "off",
       navigationOutcome: defaultNavigationOutcome(),
@@ -191,54 +193,58 @@ export class DimosManager extends BaseScriptComponent {
     this.setupAlignmentPreview?.endIfActive();
     this.alignmentSession?.cancelPlacement();
     this.alignmentSession?.stop();
-    this.robotRuntime.prepareForRuntime(
-      Boolean(this.bridgeClient?.lastBridgeStatus?.registration_approximate),
+    this.dimosServices.robot.prepareForRuntime(
+      Boolean(
+        this.dimosServices.bridgeClient?.lastBridgeStatus?.registration_approximate,
+      ),
     );
-    this.dimosState.update({ phase: "runtime", navigationState: "armed" });
+    this.dimosServices.state.update({ phase: "runtime", navigationState: "armed" });
     this._applyPhaseSideEffects("runtime");
     if (this.frameCaptureController) {
-      const registered = Boolean(this.bridgeClient?.lastBridgeStatus?.registered);
+      const registered = Boolean(
+        this.dimosServices.bridgeClient?.lastBridgeStatus?.registered,
+      );
       this.frameCaptureController.setMode(registered ? "runtime" : "off");
     }
     this._setRobotInteractionMode("runtimeRobot");
-    this.robotRuntime.robotMarker?.syncPose();
-    this.navigationHost.deferPlacementSync();
+    this.dimosServices.robot.robotMarker?.syncPose();
+    this.dimosServices.navigation.deferPlacementSync();
   }
 
   public setBaseUrl(url: string): void {
-    this.bridgeRuntime.setBaseUrl(url);
+    this.dimosServices.bridge.setBaseUrl(url);
   }
 
   public getBaseUrl(): string {
-    return this.bridgeRuntime.getBaseUrl();
+    return this.dimosServices.bridge.getBaseUrl();
   }
 
   public getDefaultBridgeIp(): string {
-    return this.bridgeRuntime.getDefaultBridgeIp();
+    return this.dimosServices.bridge.getDefaultBridgeIp();
   }
 
   public saveIp(ip: string): void {
-    this.bridgeRuntime.saveIp(ip);
+    this.dimosServices.bridge.saveIp(ip);
   }
 
   public loadIp(): string | null {
-    return this.bridgeRuntime.loadIp();
+    return this.dimosServices.bridge.loadIp();
   }
 
   public checkConnection(): Promise<boolean> {
-    return this.bridgeRuntime.checkConnection();
+    return this.dimosServices.bridge.checkConnection();
   }
 
   public disconnect(): void {
-    this.bridgeRuntime.disconnect();
+    this.dimosServices.bridge.disconnect();
   }
 
   public hasBridgeConnection(): boolean {
-    return this.bridgeRuntime.hasConnection();
+    return this.dimosServices.bridge.hasConnection();
   }
 
   public requestBridgeStatus(): boolean {
-    return this.bridgeRuntime.requestBridgeStatus();
+    return this.dimosServices.bridge.requestBridgeStatus();
   }
 
   public beginManualAlignmentPlacementAt(position: vec3, rotation: quat): void {
@@ -246,15 +252,15 @@ export class DimosManager extends BaseScriptComponent {
   }
 
   public requestEmergencyStop(): void {
-    this.navigationHost.requestEmergencyStop();
+    this.dimosServices.navigation.requestEmergencyStop();
   }
 
   public beginAgentNavigationGoal(): boolean {
-    return this.navigationHost.beginAgentNavigationGoal();
+    return this.dimosServices.navigation.beginAgentNavigationGoal();
   }
 
   public submitAgentNavigationGoal(position: vec3, rotation: quat): boolean {
-    return this.navigationHost.submitAgentNavigationGoal(position, rotation);
+    return this.dimosServices.navigation.submitAgentNavigationGoal(position, rotation);
   }
 
   public cycleLidarMode(): void {
@@ -269,14 +275,14 @@ export class DimosManager extends BaseScriptComponent {
     if (this.lidarMode === mode) {
       return;
     }
-    this.dimosState.update({ lidarMode: mode });
+    this.dimosServices.state.update({ lidarMode: mode });
   }
 
   public setDebugMode(enabled: boolean): void {
     if (this.debugMode === enabled) {
       return;
     }
-    this.dimosState.update({ debugMode: enabled });
+    this.dimosServices.state.update({ debugMode: enabled });
   }
 
   public get debugMode(): boolean {
@@ -298,7 +304,7 @@ export class DimosManager extends BaseScriptComponent {
     if (this.appState.mainMenuExpandedSettingsMode === nextExpanded) {
       return;
     }
-    this.dimosState.update({ mainMenuExpandedSettingsMode: nextExpanded });
+    this.dimosServices.state.update({ mainMenuExpandedSettingsMode: nextExpanded });
   }
 
   public setOperatingMode(mode: OperatingMode): void {
@@ -307,12 +313,12 @@ export class DimosManager extends BaseScriptComponent {
     }
     this._log(`setOperatingMode: ${mode}`);
     if (mode === "setup") {
-      this.dimosState.update({ operatingMode: mode, lidarMode: "off" });
+      this.dimosServices.state.update({ operatingMode: mode, lidarMode: "off" });
       return;
     }
     const lidarMode: LidarDisplayMode = mode === "manual" ? "obstacles" : "off";
     const settingsSubmenuOpen = this.appState.mainMenuExpandedSettingsMode !== null;
-    this.dimosState.update({
+    this.dimosServices.state.update({
       operatingMode: mode,
       lidarMode,
       mainMenuExpandedSettingsMode: settingsSubmenuOpen ? mode : null,
@@ -329,9 +335,10 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     this._log(`setNavigationPlacementEnabled: ${enabled}`);
-    this.dimosState.update({ navigationState: enabled ? "armed" : "off" });
-    this.navigationHost.onPlacementEnabledChanged(enabled);
-    this.navigationHost.syncPlacementToggleOnMarkerView();
+    this.dimosServices.state.update({ navigationState: enabled ? "armed" : "off" });
+    const navigation = this.dimosServices.navigation;
+    navigation.onPlacementEnabledChanged(enabled);
+    navigation.syncPlacementToggleOnMarkerView();
   }
 
   public get navigationPlacementEnabled(): boolean {
@@ -344,12 +351,12 @@ export class DimosManager extends BaseScriptComponent {
 
   private _setRobotInteractionMode(mode: RobotInteractionMode): void {
     if (this.appState.robotInteractionMode === mode) {
-      this.robotRuntime.applyInteractionFromState();
+      this.dimosServices.robot.applyInteractionFromState();
       return;
     }
     this._log(`robotInteractionMode: ${mode}`);
-    this.dimosState.update({ robotInteractionMode: mode });
-    this.robotRuntime.applyInteractionFromState();
+    this.dimosServices.state.update({ robotInteractionMode: mode });
+    this.dimosServices.robot.applyInteractionFromState();
   }
 
   private _log(message: string): void {

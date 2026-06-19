@@ -26,14 +26,7 @@
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
-    alignmentSession: false
-    bridgeClient: false
-    bridgeRuntime: false
-    dimosState: false
-    frameCaptureController: false
-    navigationHost: false
-    robotRuntime: false
-    setupAlignmentPreview: false
+    dimosServices: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -43,23 +36,9 @@
   Attachments:
     []
   DefaultScriptInputs:
-    - dimosState: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
-      bridgeRuntime: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
-      robotRuntime: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
-      navigationHost: !<MappingBased.AssignableType_3> 00000000-0000-0000-0000-000000000000
-      setupAlignmentPreview: !<MappingBased.AssignableType_4> 00000000-0000-0000-0000-000000000000
-      bridgeClient: !<MappingBased.AssignableType_5> 00000000-0000-0000-0000-000000000000
-      frameCaptureController: !<MappingBased.AssignableType_6> 00000000-0000-0000-0000-000000000000
-      alignmentSession: !<MappingBased.AssignableType_7> 00000000-0000-0000-0000-000000000000
+    - dimosServices: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
   InputLines:
-    - // @input AssignableType dimosState
-    - // @input AssignableType_1 bridgeRuntime
-    - // @input AssignableType_2 robotRuntime
-    - // @input AssignableType_3 navigationHost
-    - // @input AssignableType_4 setupAlignmentPreview
-    - // @input AssignableType_5 bridgeClient
-    - // @input AssignableType_6 frameCaptureController
-    - // @input AssignableType_7 alignmentSession
+    - // @input AssignableType dimosServices

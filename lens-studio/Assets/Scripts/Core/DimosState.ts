@@ -7,8 +7,7 @@ import {
 import { UILogListener, UILogger } from "../UI/UILogger";
 
 /** Shared observable app state and UI log for DimOS runtime subsystems. */
-@component
-export class DimosState extends BaseScriptComponent {
+export class DimosState {
   private readonly _appState = new AppState(createDefaultDimosAppState());
   private readonly _uiLogger = new UILogger();
 

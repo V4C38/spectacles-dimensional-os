@@ -67,21 +67,15 @@ export function computeAssistPreviewProgress(input: AssistPreviewInput): number 
 }
 
 /** Setup calibration assist preview (marker, ground disc, robot menu). */
-@component
-export class SetupAlignmentPreview extends BaseScriptComponent {
-  @input
-  dimosState: DimosState;
-
-  @input
-  groundDisc: SceneObject;
-
-  @input
-  robotRuntime: RobotRuntime;
-
-  @input
-  alignmentSession: AlignmentSession;
-
+export class SetupAlignmentPreview {
   private _active = false;
+
+  constructor(
+    private readonly dimosState: DimosState,
+    private readonly groundDisc: SceneObject | null,
+    private readonly robotRuntime: RobotRuntime,
+    private readonly alignmentSession: AlignmentSession,
+  ) {}
   private _tagVisible = false;
   private _discAnchorInitialized = false;
   private _discLeftArrow: SceneObject | null = null;

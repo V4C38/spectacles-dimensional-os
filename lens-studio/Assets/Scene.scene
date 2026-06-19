@@ -272,25 +272,6 @@
     - !<own> 8b1597e7-0f83-4295-a17b-d12cd299f954
   Components:
     []
-- !<ScriptComponent/012a4dd1-5233-4a01-8e62-257212731759>
-  PrefabRemaps:
-    []
-  Name: RobotRuntime
-  Enabled: true
-  ScriptAsset: !<reference> baf0198e-db4b-49ae-8ebb-e22f22102536
-  ScriptInputsDefault:
-    {}
-  ScriptTypesDefault:
-    {}
-  ScriptInputs:
-    "":
-      dimosState: !<MappingBased.AssignableType> f7b53647-0bf2-4b80-92fb-b313bdc0191f
-      robotMarker: !<MappingBased.AssignableType_1> b749cbc7-9706-4499-8d79-19f5a03dd792
-      pointCloudRenderer: !<MappingBased.AssignableType_2> edc2d9a2-52ca-414f-acba-c9661ee12fea
-      bridgeClient: !<MappingBased.AssignableType_3> d44336ee-e3d0-430c-8b0d-ae6a4a6af963
-  ScriptTypes:
-    "":
-      {}
 - !<SceneObject/0291f3e1-baca-481b-91ac-8cb9fffd3bcd>
   PrefabRemaps:
     []
@@ -958,21 +939,6 @@
   BlendNormals: false
   BlendShapes:
     {}
-- !<SceneObject/130612c8-7ace-4fed-8ca1-0ba6984557fd>
-  PrefabRemaps:
-    []
-  Name: NavigationHost
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
-    HasSegmentScaleCompensation: false
-  Children:
-    []
-  Components:
-    - !<own> bdb0bc25-dfbd-4a4b-b40e-827dc4b13f5f
 - !<RenderMeshVisual/13babcea-912e-4e89-b60a-1b003f0c6dd8>
   PrefabRemaps:
     []
@@ -2451,12 +2417,6 @@
   ScriptInputs:
     "":
       dimosManager: !<MappingBased.AssignableType> ef9bba3c-1138-44cc-b761-7ef88bf3856d
-      bridgeRuntime: !<MappingBased.AssignableType_1> ce957665-8a99-4dbe-89c2-6f234ac017df
-      setupAlignmentPreview: !<MappingBased.AssignableType_2> c8b9ad07-e783-4618-adb0-0908dadb06d2
-      robotRuntime: !<MappingBased.AssignableType_3> 012a4dd1-5233-4a01-8e62-257212731759
-      frameCaptureController: !<MappingBased.AssignableType_4> a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b
-      uiManager: !<MappingBased.AssignableType_5> 4e5ef885-944c-4898-b6ae-cae879e72a87
-      alignmentSession: !<MappingBased.AssignableType_6> f7144df4-6cb9-41b7-90ed-629872a8120d
   ScriptTypes:
     "":
       {}
@@ -2871,7 +2831,6 @@
     "":
       mainUIFrame: !<reference.SceneObject> 52bc606c-3d23-4e49-88f2-dc66bd154524
       dimosManager: !<MappingBased.AssignableType> ef9bba3c-1138-44cc-b761-7ef88bf3856d
-      setupWizard: !<MappingBased.AssignableType_1> 3f25b0bd-8d4d-4305-8d53-c0955727b8a1
   ScriptTypes:
     "":
       {}
@@ -3094,21 +3053,6 @@
     CapitalizationOverride: None
   DepthTest: true
   TwoSided: true
-- !<SceneObject/52e6ca96-0e0e-450e-a58d-6435ed89a2c5>
-  PrefabRemaps:
-    []
-  Name: SetupAlignmentPreview
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
-    HasSegmentScaleCompensation: false
-  Children:
-    []
-  Components:
-    - !<own> c8b9ad07-e783-4618-adb0-0908dadb06d2
 - !<SceneObject/530ca55d-4c3e-43b5-a836-e7191b9e1571>
   PrefabRemaps:
     []
@@ -4691,21 +4635,6 @@
   BlendNormals: false
   BlendShapes:
     {}
-- !<SceneObject/897dfe8f-35b8-4fac-89b3-0e36da994e28>
-  PrefabRemaps:
-    []
-  Name: BridgeRuntime
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
-    HasSegmentScaleCompensation: false
-  Children:
-    []
-  Components:
-    - !<own> ce957665-8a99-4dbe-89c2-6f234ac017df
 - !<SceneObject/8b1597e7-0f83-4295-a17b-d12cd299f954>
   PrefabRemaps:
     []
@@ -4836,6 +4765,29 @@
     []
   Components:
     - !<own> 403632c1-bd94-4e54-9777-1b641403a532
+- !<ScriptComponent/91557cd7-47f1-4bd1-a2ef-580e94599eb4>
+  PrefabRemaps:
+    []
+  Name: DimosServices
+  Enabled: true
+  ScriptAsset: !<reference> 6c42d423-1330-4de1-b30c-6cdfa3d360ef
+  ScriptInputsDefault:
+    robotGroundDeadzoneRadiusCm: true
+  ScriptTypesDefault:
+    {}
+  ScriptInputs:
+    "":
+      bridgeClient: !<MappingBased.AssignableType> d44336ee-e3d0-430c-8b0d-ae6a4a6af963
+      frameCaptureController: !<MappingBased.AssignableType_1> a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b
+      robotMarker: !<MappingBased.AssignableType_2> b749cbc7-9706-4499-8d79-19f5a03dd792
+      pointCloudRenderer: !<MappingBased.AssignableType_3> edc2d9a2-52ca-414f-acba-c9661ee12fea
+      navigationMarkerRoot: !<reference.SceneObject> a30db649-5675-46c5-a50b-92b2fbd052a7
+      placementRayOrigin: !<reference.SceneObject> 00000000-0000-0065-0000-000000000064
+      groundDisc: !<reference.SceneObject> 1713f1b3-d3c3-4b1f-8515-4729f53ef13c
+      robotGroundDeadzoneRadiusCm: !<float> 75.000000
+  ScriptTypes:
+    "":
+      {}
 - !<SceneObject/929164ef-2d41-474a-a457-1bf03d6cd9f1>
   PrefabRemaps:
     []
@@ -5368,15 +5320,10 @@
     - !<own> 02b4e96e-3fd3-487e-ae91-31828aea1503
     - !<own> a30db649-5675-46c5-a50b-92b2fbd052a7
     - !<own> 1713f1b3-d3c3-4b1f-8515-4729f53ef13c
-    - !<own> ad01165e-9ba9-43bb-9b17-5c6a3402bfc0
-    - !<own> 897dfe8f-35b8-4fac-89b3-0e36da994e28
-    - !<own> a8ca2b7b-ea2c-4cf4-9462-451e29f35001
-    - !<own> 130612c8-7ace-4fed-8ca1-0ba6984557fd
-    - !<own> 52e6ca96-0e0e-450e-a58d-6435ed89a2c5
   Components:
     - !<own> d44336ee-e3d0-430c-8b0d-ae6a4a6af963
     - !<own> ef9bba3c-1138-44cc-b761-7ef88bf3856d
-    - !<own> f7144df4-6cb9-41b7-90ed-629872a8120d
+    - !<own> 91557cd7-47f1-4bd1-a2ef-580e94599eb4
 - !<SceneObject/9e02f8cb-befe-42fb-88f1-eb7f4ed5be31>
   PrefabRemaps:
     []
@@ -5545,21 +5492,6 @@
     []
   Components:
     - !<own> 8cfc81e2-d2f7-4d52-912f-96244ab5dac1
-- !<SceneObject/a8ca2b7b-ea2c-4cf4-9462-451e29f35001>
-  PrefabRemaps:
-    []
-  Name: RobotRuntime
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
-    HasSegmentScaleCompensation: false
-  Children:
-    []
-  Components:
-    - !<own> 012a4dd1-5233-4a01-8e62-257212731759
 - !<ScriptComponent/a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b>
   PrefabRemaps:
     []
@@ -5805,21 +5737,6 @@
     CapitalizationOverride: None
   DepthTest: false
   TwoSided: false
-- !<SceneObject/ad01165e-9ba9-43bb-9b17-5c6a3402bfc0>
-  PrefabRemaps:
-    []
-  Name: DimosState
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
-    HasSegmentScaleCompensation: false
-  Children:
-    []
-  Components:
-    - !<own> f7b53647-0bf2-4b80-92fb-b313bdc0191f
 - !<ScriptComponent/ad41cba7-c50c-4133-b23d-156eeb49bd6b>
   PrefabRemaps:
     []
@@ -6272,28 +6189,6 @@
     []
   Components:
     - !<own> 37b5ac08-80d7-45bd-8dd5-ec3d931e6b0e
-- !<ScriptComponent/bdb0bc25-dfbd-4a4b-b40e-827dc4b13f5f>
-  PrefabRemaps:
-    []
-  Name: NavigationHost
-  Enabled: true
-  ScriptAsset: !<reference> 5c959d5e-30f5-4a32-83de-e52f644fc48a
-  ScriptInputsDefault:
-    robotGroundDeadzoneRadiusCm: true
-  ScriptTypesDefault:
-    {}
-  ScriptInputs:
-    "":
-      dimosState: !<MappingBased.AssignableType> f7b53647-0bf2-4b80-92fb-b313bdc0191f
-      bridgeClient: !<MappingBased.AssignableType_1> d44336ee-e3d0-430c-8b0d-ae6a4a6af963
-      robotRuntime: !<MappingBased.AssignableType_2> 012a4dd1-5233-4a01-8e62-257212731759
-      robotMarker: !<MappingBased.AssignableType_3> b749cbc7-9706-4499-8d79-19f5a03dd792
-      placementRayOrigin: !<reference.SceneObject> 00000000-0000-0065-0000-000000000064
-      navigationMarkerRoot: !<reference.SceneObject> a30db649-5675-46c5-a50b-92b2fbd052a7
-      robotGroundDeadzoneRadiusCm: !<float> 75.000000
-  ScriptTypes:
-    "":
-      {}
 - !<RenderMeshVisual/bea40f99-2d91-497b-832a-8ca74295ed37>
   PrefabRemaps:
     []
@@ -6672,25 +6567,6 @@
     - !<own> d3340ef4-90e8-49c1-aeb6-4194ed9937f9
   Components:
     []
-- !<ScriptComponent/c8b9ad07-e783-4618-adb0-0908dadb06d2>
-  PrefabRemaps:
-    []
-  Name: SetupAlignmentPreview
-  Enabled: true
-  ScriptAsset: !<reference> 65cc0480-0a43-423d-ad15-b89c55c3a604
-  ScriptInputsDefault:
-    {}
-  ScriptTypesDefault:
-    {}
-  ScriptInputs:
-    "":
-      dimosState: !<MappingBased.AssignableType> f7b53647-0bf2-4b80-92fb-b313bdc0191f
-      groundDisc: !<reference.SceneObject> 1713f1b3-d3c3-4b1f-8515-4729f53ef13c
-      robotRuntime: !<MappingBased.AssignableType_1> 012a4dd1-5233-4a01-8e62-257212731759
-      alignmentSession: !<MappingBased.AssignableType_2> f7144df4-6cb9-41b7-90ed-629872a8120d
-  ScriptTypes:
-    "":
-      {}
 - !<SceneObject/c8d496eb-0808-4c60-b12e-2578b5238aa9>
   PrefabRemaps:
     []
@@ -6870,26 +6746,6 @@
     - !<own> 124ebfc0-9240-4eaf-af6e-ce6ef49c1d7d
   Components:
     []
-- !<ScriptComponent/ce957665-8a99-4dbe-89c2-6f234ac017df>
-  PrefabRemaps:
-    []
-  Name: BridgeRuntime
-  Enabled: true
-  ScriptAsset: !<reference> a86ca677-d17d-4a1a-b94b-18fe22c10a8f
-  ScriptInputsDefault:
-    {}
-  ScriptTypesDefault:
-    {}
-  ScriptInputs:
-    "":
-      bridgeClient: !<MappingBased.AssignableType> d44336ee-e3d0-430c-8b0d-ae6a4a6af963
-      dimosState: !<MappingBased.AssignableType_1> f7b53647-0bf2-4b80-92fb-b313bdc0191f
-      robotRuntime: !<MappingBased.AssignableType_2> 012a4dd1-5233-4a01-8e62-257212731759
-      navigationHost: !<MappingBased.AssignableType_3> bdb0bc25-dfbd-4a4b-b40e-827dc4b13f5f
-      frameCaptureController: !<MappingBased.AssignableType_4> a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b
-  ScriptTypes:
-    "":
-      {}
 - !<SceneObject/d068eba3-1e0b-4b40-aa4c-7096a22b2748>
   PrefabRemaps:
     []
@@ -7868,14 +7724,7 @@
     {}
   ScriptInputs:
     "":
-      dimosState: !<MappingBased.AssignableType> f7b53647-0bf2-4b80-92fb-b313bdc0191f
-      bridgeRuntime: !<MappingBased.AssignableType_1> ce957665-8a99-4dbe-89c2-6f234ac017df
-      robotRuntime: !<MappingBased.AssignableType_2> 012a4dd1-5233-4a01-8e62-257212731759
-      navigationHost: !<MappingBased.AssignableType_3> bdb0bc25-dfbd-4a4b-b40e-827dc4b13f5f
-      setupAlignmentPreview: !<MappingBased.AssignableType_4> c8b9ad07-e783-4618-adb0-0908dadb06d2
-      bridgeClient: !<MappingBased.AssignableType_5> d44336ee-e3d0-430c-8b0d-ae6a4a6af963
-      frameCaptureController: !<MappingBased.AssignableType_6> a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b
-      alignmentSession: !<MappingBased.AssignableType_7> f7144df4-6cb9-41b7-90ed-629872a8120d
+      dimosServices: !<MappingBased.AssignableType> 91557cd7-47f1-4bd1-a2ef-580e94599eb4
   ScriptTypes:
     "":
       {}
@@ -8118,24 +7967,6 @@
     - !<own> f2f51db7-cc95-4855-bcd4-cc04a38c98c1
   Components:
     - !<own> 006cbfee-6476-4fa7-a1ec-7a5a102dbbf4
-- !<ScriptComponent/f7144df4-6cb9-41b7-90ed-629872a8120d>
-  PrefabRemaps:
-    []
-  Name: AlignmentSession
-  Enabled: true
-  ScriptAsset: !<reference> ca650874-25a1-41a8-8e8b-b789474edd31
-  ScriptInputsDefault:
-    {}
-  ScriptTypesDefault:
-    {}
-  ScriptInputs:
-    "":
-      bridgeClient: !<MappingBased.AssignableType> d44336ee-e3d0-430c-8b0d-ae6a4a6af963
-      frameCapture: !<MappingBased.AssignableType_1> a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b
-      robotMarker: !<MappingBased.AssignableType_2> b749cbc7-9706-4499-8d79-19f5a03dd792
-  ScriptTypes:
-    "":
-      {}
 - !<Text/f74140ad-f0fb-4219-bb90-10ec3b387741>
   PrefabRemaps:
     []
@@ -8232,22 +8063,6 @@
     []
   Components:
     - !<own> 6f958547-abe3-441c-aade-b4b2726c08c3
-- !<ScriptComponent/f7b53647-0bf2-4b80-92fb-b313bdc0191f>
-  PrefabRemaps:
-    []
-  Name: DimosState
-  Enabled: true
-  ScriptAsset: !<reference> 5f6ecc07-007e-439d-9eb2-8b52b94c650a
-  ScriptInputsDefault:
-    {}
-  ScriptTypesDefault:
-    {}
-  ScriptInputs:
-    "":
-      {}
-  ScriptTypes:
-    "":
-      {}
 - !<SceneObject/f7f95fff-c512-4bf3-b03e-47c3440bf5df>
   PrefabRemaps:
     []

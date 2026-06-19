@@ -18,28 +18,20 @@ import {
 import { projectRuntimeStateFromHello } from "../Robot/RobotRuntimeModel";
 
 /** Bridge connection lifecycle, signals, and inbound message routing. */
-@component
-export class BridgeRuntime extends BaseScriptComponent {
-  @input
-  bridgeClient: BridgeClient;
-
-  @input
-  dimosState: DimosState;
-
-  @input
-  robotRuntime: RobotRuntime;
-
-  @input
-  navigationHost: NavigationHost;
-
-  @input
-  frameCaptureController: FrameCaptureController;
-
+export class BridgeRuntime {
   public readonly onBridgeReady = new Signal<void>();
   public readonly onBridgeStatusChanged = new Signal<BridgeStatusMessage>();
   public readonly onBridgeConnectionChanged = new Signal<boolean>();
 
   private _bound = false;
+
+  constructor(
+    private readonly bridgeClient: BridgeClient | null,
+    private readonly dimosState: DimosState,
+    private readonly robotRuntime: RobotRuntime,
+    private readonly navigationHost: NavigationHost,
+    private readonly frameCaptureController: FrameCaptureController | null,
+  ) {}
 
   public bind(): void {
     if (this._bound || !this.bridgeClient) {
@@ -74,13 +66,12 @@ export class BridgeRuntime extends BaseScriptComponent {
     this.bridgeClient.onProtocolError.add((error) =>
       this.navigationHost?.controller?.handleProtocolError(error),
     );
+  }
 
-    const tickEvent = this.createEvent("UpdateEvent");
-    tickEvent.bind(() => {
-      this.dimosState.uiLogger.tick();
-      this.robotRuntime?.applyPendingPose();
-      this.robotRuntime?.tickFrame();
-    });
+  public tick(): void {
+    this.dimosState.uiLogger.tick();
+    this.robotRuntime?.applyPendingPose();
+    this.robotRuntime?.tickFrame();
   }
 
   public setBaseUrl(url: string): void {

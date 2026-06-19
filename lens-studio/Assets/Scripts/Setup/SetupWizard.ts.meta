@@ -26,13 +26,7 @@
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
-    alignmentSession: false
-    bridgeRuntime: false
     dimosManager: false
-    frameCaptureController: false
-    robotRuntime: false
-    setupAlignmentPreview: false
-    uiManager: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -43,20 +37,8 @@
     []
   DefaultScriptInputs:
     - dimosManager: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
-      bridgeRuntime: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
-      setupAlignmentPreview: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
-      robotRuntime: !<MappingBased.AssignableType_3> 00000000-0000-0000-0000-000000000000
-      frameCaptureController: !<MappingBased.AssignableType_4> 00000000-0000-0000-0000-000000000000
-      uiManager: !<MappingBased.AssignableType_5> 00000000-0000-0000-0000-000000000000
-      alignmentSession: !<MappingBased.AssignableType_6> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
   InputLines:
     - // @input AssignableType dimosManager
-    - // @input AssignableType_1 bridgeRuntime
-    - // @input AssignableType_2 setupAlignmentPreview
-    - // @input AssignableType_3 robotRuntime
-    - // @input AssignableType_4 frameCaptureController
-    - // @input AssignableType_5 uiManager
-    - // @input AssignableType_6 alignmentSession

@@ -9,10 +9,7 @@
 // ================================================================
 
 import { AlignmentSession } from "../Alignment/AlignmentSession";
-import { BridgeRuntime } from "../Bridge/BridgeRuntime";
-import { FrameCaptureController } from "../Alignment/FrameCaptureController";
-import { RobotRuntime } from "../Robot/RobotRuntime";
-import { SetupAlignmentPreview } from "./SetupAlignmentPreview";
+import { DimosManager } from "../Core/DimosManager";
 import { AlignStatusMessage, BridgeStatusMessage } from "../Bridge/Protocol";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE,COLOR_WARN, SnapOS2Styles } from "../UI/kit/UIKit";
 import {
@@ -316,13 +313,29 @@ export class SetupCalibrationFlow {
   private _commitInFlight = false;
 
   constructor(
-    private readonly _setupAlignmentPreview: SetupAlignmentPreview | null,
-    private readonly _alignmentSession: AlignmentSession | null,
-    private readonly _bridgeRuntime: BridgeRuntime | null,
-    private readonly _robotRuntime: RobotRuntime | null,
-    private readonly _frameCapture: FrameCaptureController | null,
+    private readonly _dimosManager: DimosManager | null,
     private readonly _callbacks: SetupCalibrationFlowCallbacks,
   ) {}
+
+  private get _setupAlignmentPreview() {
+    return this._dimosManager?.setupAlignmentPreview ?? null;
+  }
+
+  private get _alignmentSession() {
+    return this._dimosManager?.alignmentSession ?? null;
+  }
+
+  private get _bridgeRuntime() {
+    return this._dimosManager?.bridgeRuntime ?? null;
+  }
+
+  private get _robotRuntime() {
+    return this._dimosManager?.robotRuntime ?? null;
+  }
+
+  private get _frameCapture() {
+    return this._dimosManager?.frameCaptureController ?? null;
+  }
 
   public get state(): CalibrationViewState {
     return this._state;

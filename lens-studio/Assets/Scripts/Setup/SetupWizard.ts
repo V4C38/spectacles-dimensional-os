@@ -1,12 +1,6 @@
 require("LensStudio:TextInputModule");
 
-import { AlignmentSession } from "../Alignment/AlignmentSession";
-import { BridgeRuntime } from "../Bridge/BridgeRuntime";
 import { DimosManager } from "../Core/DimosManager";
-import { FrameCaptureController } from "../Alignment/FrameCaptureController";
-import { RobotRuntime } from "../Robot/RobotRuntime";
-import { SetupAlignmentPreview } from "./SetupAlignmentPreview";
-import { UIManager } from "../UI/UIManager";
 import { AlignStatusMessage } from "../Bridge/Protocol";
 import { scaleIn } from "../UI/kit/UIAnimations";
 import { COLOR_ERROR, COLOR_WHITE } from "../UI/kit/UIKit";
@@ -37,24 +31,6 @@ export class SetupWizard extends BaseScriptComponent {
   @input
   dimosManager: DimosManager;
 
-  @input
-  bridgeRuntime: BridgeRuntime;
-
-  @input
-  setupAlignmentPreview: SetupAlignmentPreview;
-
-  @input
-  robotRuntime: RobotRuntime;
-
-  @input
-  frameCaptureController: FrameCaptureController;
-
-  @input
-  uiManager: UIManager;
-
-  @input
-  alignmentSession: AlignmentSession;
-
   private _currentStep = WizardStep.Start;
   private _connectCompleted = false;
   private _isConnecting = false;
@@ -73,12 +49,10 @@ export class SetupWizard extends BaseScriptComponent {
   onAwake() {
     this._view = new SetupWizardView(this.getSceneObject());
     this.createEvent("OnStartEvent").bind(() => {
-      // Cache retry event (re-armed per retry; never recreated).
       const retryEv = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
       retryEv.bind(() => this._onRetryFired());
       this._retryEvent = retryEv;
 
-      // Cache finish-delay event for deferred wizard dismissal after calibration.
       const finishEv = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
       finishEv.bind(() => {
         if (!this._finishPending) {
@@ -89,23 +63,16 @@ export class SetupWizard extends BaseScriptComponent {
       });
       this._finishEvent = finishEv;
 
-      this._calibrationFlow = new SetupCalibrationFlow(
-        this.setupAlignmentPreview,
-        this.alignmentSession,
-        this.bridgeRuntime,
-        this.robotRuntime,
-        this.frameCaptureController,
-        {
-          beginManualAlignmentPlacementFromWizard: () =>
-            this._beginManualAlignmentPlacementFromWizard(),
-          render: () => this._renderCalibrationState(),
-          refreshFooter: () => this._refreshFooterButtons(),
-          refreshDescription: () => this._refreshCalibrationDescription(),
-          log: (message) => this._log(message),
-          finishSetup: () => this._finishSetup(),
-          scheduleFinishSetup: (delaySecs) => this._scheduleFinishSetup(delaySecs),
-        },
-      );
+      this._calibrationFlow = new SetupCalibrationFlow(this.dimosManager, {
+        beginManualAlignmentPlacementFromWizard: () =>
+          this._beginManualAlignmentPlacementFromWizard(),
+        render: () => this._renderCalibrationState(),
+        refreshFooter: () => this._refreshFooterButtons(),
+        refreshDescription: () => this._refreshCalibrationDescription(),
+        log: (message) => this._log(message),
+        finishSetup: () => this._finishSetup(),
+        scheduleFinishSetup: (delaySecs) => this._scheduleFinishSetup(delaySecs),
+      });
 
       this._view?.bindHandlers(
         () => this._onNext(),
@@ -130,9 +97,7 @@ export class SetupWizard extends BaseScriptComponent {
     this._calibrationFlow?.leave();
     this._calibrationFlow?.setState(createCalibrationViewState());
     this._invalidatePending();
-    if (this.alignmentSession) {
-      this.alignmentSession.stop();
-    }
+    this.dimosManager?.alignmentSession.stop();
     this.dimosManager?.enterSetup();
     const panel = this.getSceneObject();
     if (panel) {
@@ -141,8 +106,6 @@ export class SetupWizard extends BaseScriptComponent {
     }
     this._setStep(WizardStep.Start);
   }
-
-  // ── Step machine (inlined from WizardStepController) ──────────
 
   private _setStep(step: WizardStep): void {
     const previousStep = this._currentStep;
@@ -158,9 +121,9 @@ export class SetupWizard extends BaseScriptComponent {
     this._view?.applyStepLayout(clamped);
 
     if (clamped !== WizardStep.Calibrate) {
-      this.alignmentSession?.stop();
+      this.dimosManager?.alignmentSession.stop();
       this._calibrationFlow?.leave();
-      this.setupAlignmentPreview?.end();
+      this.dimosManager?.setupAlignmentPreview.end();
     }
 
     switch (clamped) {
@@ -237,7 +200,7 @@ export class SetupWizard extends BaseScriptComponent {
 
     const calState = this._calibrationFlow?.state ?? createCalibrationViewState();
     if (calState.assistStage === "awaiting_confirm") {
-      this.alignmentSession?.confirmAssist();
+      this.dimosManager?.alignmentSession.confirmAssist();
       return;
     }
     if (calState.phase === "failed") {
@@ -252,7 +215,7 @@ export class SetupWizard extends BaseScriptComponent {
       return;
     }
     if (this._calibrationFlow?.completeStep()) {
-      this.setupAlignmentPreview?.end();
+      this.dimosManager?.setupAlignmentPreview.end();
       this._finishSetup();
     }
   }
@@ -264,11 +227,9 @@ export class SetupWizard extends BaseScriptComponent {
     if (this._currentStep <= WizardStep.Start) {
       return;
     }
-    // Leaving calibrate: stop the alignment session (cancels any in-progress assist)
-    // and restore follow-camera by resetting the anchor.
     if (this._currentStep === WizardStep.Calibrate) {
-      this.alignmentSession?.stop();
-      this.setupAlignmentPreview?.end();
+      this.dimosManager?.alignmentSession.stop();
+      this.dimosManager?.setupAlignmentPreview.end();
     }
     this._setStep((this._currentStep - 1) as WizardStep);
   }
@@ -281,8 +242,6 @@ export class SetupWizard extends BaseScriptComponent {
     this._lastNavigationTime = now;
     return true;
   }
-
-  // ── Autoconnect (inlined from WizardConnectionController) ─────
 
   private _startAutoconnect(): void {
     if (this._currentStep !== WizardStep.Connect || !this._view?.inputField) {
@@ -355,39 +314,38 @@ export class SetupWizard extends BaseScriptComponent {
   }
 
   private _isConnected(): boolean {
-    return (this.bridgeRuntime?.bridgeLinkState ?? "disconnected") !== "disconnected";
+    return (this.dimosManager?.bridgeLinkState ?? "disconnected") !== "disconnected";
   }
 
-  // ── Bridge handlers ────────────────────────────────────────────
-
   private _bindAlignmentHandlers(): void {
-    if (this._alignmentHandlersBound || !this.alignmentSession) {
+    if (this._alignmentHandlersBound || !this.dimosManager) {
       return;
     }
     this._alignmentHandlersBound = true;
-    this.alignmentSession.onAlignStatus.add((msg) => this._onAlignStatus(msg));
+    this.dimosManager.alignmentSession.onAlignStatus.add((msg) =>
+      this._onAlignStatus(msg),
+    );
   }
 
   private _bindBridgeHandlers(): void {
-    if (this._bridgeHandlersBound || !this.bridgeRuntime) {
+    if (this._bridgeHandlersBound || !this.dimosManager) {
       return;
     }
     this._bridgeHandlersBound = true;
-    this.bridgeRuntime.onBridgeReady.add(() => {
+    this.dimosManager.onBridgeReady.add(() => {
       if (this._currentStep === WizardStep.Connect) {
         this._connectCompleted = true;
         this._isConnecting = false;
         this._showBridgeConnectionStatus();
         this._refreshFooterButtons();
       }
-      // B1 fix: unconditionally call ensureSession when on Calibrate step.
-      if (this._currentStep === WizardStep.Calibrate && this.alignmentSession) {
-        if (this.alignmentSession.ensureSession()) {
+      if (this._currentStep === WizardStep.Calibrate) {
+        if (this.dimosManager!.alignmentSession.ensureSession()) {
           this._renderCalibrationState();
         }
       }
     });
-    this.bridgeRuntime.onBridgeConnectionChanged.add((connected) => {
+    this.dimosManager.onBridgeConnectionChanged.add((connected) => {
       if (!connected) {
         this._isConnecting = false;
       }
@@ -399,7 +357,7 @@ export class SetupWizard extends BaseScriptComponent {
         this._calibrationFlow?.handleBridgeConnectionChanged(connected);
       }
     });
-    this.bridgeRuntime.onBridgeStatusChanged.add((msg) => {
+    this.dimosManager.onBridgeStatusChanged.add((msg) => {
       if (this._currentStep === WizardStep.Connect) {
         this._showBridgeConnectionStatus();
       }
@@ -409,16 +367,14 @@ export class SetupWizard extends BaseScriptComponent {
     });
   }
 
-  // ── Rendering helpers ──────────────────────────────────────────
-
   private _showBridgeConnectionStatus(): void {
     const presentation = getBridgeStatusPresentationForConnect(
-      this.bridgeRuntime?.bridgeLinkState ?? "disconnected",
+      this.dimosManager?.bridgeLinkState ?? "disconnected",
       this._isConnecting,
     );
     this._view?.setStatus(presentation.text, presentation.color);
-    if (this.bridgeRuntime?.hasConnection()) {
-      this.bridgeRuntime.requestBridgeStatus();
+    if (this.dimosManager?.hasBridgeConnection()) {
+      this.dimosManager.requestBridgeStatus();
     }
   }
 
@@ -428,7 +384,7 @@ export class SetupWizard extends BaseScriptComponent {
     }
     const display = buildCalibrationDisplay(
       this._calibrationFlow?.state ?? createCalibrationViewState(),
-      this.bridgeRuntime?.hasConnection() ?? false,
+      this.dimosManager?.hasBridgeConnection() ?? false,
     );
     if (display.statusText) {
       this._view?.setStatus(display.statusText, display.statusColor);
@@ -466,7 +422,7 @@ export class SetupWizard extends BaseScriptComponent {
     if (this._currentStep !== WizardStep.Calibrate) {
       return;
     }
-    this.setupAlignmentPreview?.end();
+    this.dimosManager?.setupAlignmentPreview.end();
     this._calibrationFlow?.toggleMode();
   }
 
@@ -513,9 +469,7 @@ export class SetupWizard extends BaseScriptComponent {
     if (panel) {
       panel.enabled = false;
     }
-    if (this.alignmentSession) {
-      this.alignmentSession.stop();
-    }
+    this.dimosManager?.alignmentSession.stop();
     this.dimosManager?.enterRuntime();
   }
 

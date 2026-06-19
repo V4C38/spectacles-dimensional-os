@@ -41,20 +41,7 @@ export interface RobotRuntimeMenuCallbacks {
 }
 
 /** Robot pose, marker UI, and LiDAR spatial presentation in the AR scene. */
-@component
-export class RobotRuntime extends BaseScriptComponent {
-  @input
-  dimosState: DimosState;
-
-  @input
-  robotMarker: RobotMarker;
-
-  @input
-  pointCloudRenderer: PointCloudRenderer;
-
-  @input
-  bridgeClient: BridgeClient;
-
+export class RobotRuntime {
   private _lastPose: PoseMessage | null = null;
   private _pendingPose: PoseMessage | null = null;
   private readonly _poseCorrection = new ManualPoseCorrection();
@@ -64,6 +51,13 @@ export class RobotRuntime extends BaseScriptComponent {
   private _lastSentBridgeLidarMode: LidarDisplayMode | null = null;
   private _menuCallbacks: RobotRuntimeMenuCallbacks | null = null;
   private _bound = false;
+
+  constructor(
+    private readonly dimosState: DimosState,
+    public readonly robotMarker: RobotMarker | null,
+    private readonly pointCloudRenderer: PointCloudRenderer | null,
+    private readonly bridgeClient: BridgeClient | null,
+  ) {}
 
   public get poseCorrection(): ManualPoseCorrection {
     return this._poseCorrection;

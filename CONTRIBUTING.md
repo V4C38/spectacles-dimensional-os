@@ -36,7 +36,7 @@ DimOS is an external dependency — install from [dimensionalOS/dimos](https://g
 
 ## Lens Studio
 
-Scene wiring, authored object names, and `@input` references are documented inline in the script files via comments at lookup sites (see [`SetupWizard.ts`](lens-studio/Assets/Scripts/Setup/SetupWizard.ts) and [`DimosManager.ts`](lens-studio/Assets/Scripts/Core/DimosManager.ts)).
+Scene wiring is centralized on [`DimosServices.ts`](lens-studio/Assets/Scripts/Core/DimosServices.ts): assign cross-tree `@input`s there once. Entry scripts need [`DimosManager`](lens-studio/Assets/Scripts/Core/DimosManager.ts) (plus `mainUIFrame` and `setupWizard` on [`UIManager`](lens-studio/Assets/Scripts/UI/UIManager.ts)). Runtime services (`DimosState`, `BridgeRuntime`, `RobotRuntime`, `NavigationHost`, `AlignmentSession`, `SetupAlignmentPreview`) are plain TypeScript classes owned by `DimosServices`, not separate scene objects.
 
 ### Architecture rules — one owner per concern
 
@@ -44,9 +44,10 @@ Each subsystem (navigation, alignment, robot, lidar, setup) has **one owner clas
 
 ### Scene-reference policy
 
-1. **Cross-tree references are `@input`s** on the owning component. No global scene scans (`requireSceneObjectByName` is deleted — do not re-introduce it).
-2. **A View class may resolve children by name only under a root it was handed**, only in its constructor, via `requireChild` (throwing) for required nodes and `findChildRecursive` for optional ones. Fail fast at startup, never lazily at runtime.
-3. **No new code-built UI.** The wizard panel is grandfathered; anything new is scene-authored with a View class wired to it via `@input`.
+1. **Cross-tree references are `@input`s on [`DimosServices`](lens-studio/Assets/Scripts/Core/DimosServices.ts)** (or on leaf components that legitimately need a spatial/camera ref, e.g. `RobotMarker`, `FrameCaptureController`). No global scene scans (`requireSceneObjectByName` is deleted — do not re-introduce it).
+2. **Entry scripts (`SetupWizard`, `UIManager`) take `DimosManager` only** (plus `mainUIFrame` and `setupWizard` on `UIManager`).
+3. **A View class may resolve children by name only under a root it was handed**, only in its constructor, via `requireChild` (throwing) for required nodes and `findChildRecursive` for optional ones. Fail fast at startup, never lazily at runtime.
+4. **No new code-built UI.** The wizard panel is grandfathered; anything new is scene-authored with a View class wired to it via `@input`.
 
 ## Marker assets
 

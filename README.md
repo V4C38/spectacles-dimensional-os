@@ -88,10 +88,11 @@ If the protocol changes, update these together in the same change:
 
 ## Lens Studio Project
 
-The Lens side is organized around three scene-entry scripts:
+The Lens side is organized around three scene-entry scripts plus one wiring hub:
 
+- [`DimosServices.ts`](lens-studio/Assets/Scripts/Core/DimosServices.ts) owns all cross-tree scene `@input`s and plain runtime service instances (`DimosState`, `BridgeRuntime`, `RobotRuntime`, `NavigationHost`, `AlignmentSession`, `SetupAlignmentPreview`).
 - [`SetupWizard.ts`](lens-studio/Assets/Scripts/Setup/SetupWizard.ts) owns the connect-and-calibrate flow and hands off to runtime. Check Lens Studio Logger output and `./start.sh` bridge logs when calibrate fails.
-- [`DimosManager.ts`](lens-studio/Assets/Scripts/Core/DimosManager.ts) is the orchestration hub for bridge I/O, shared app state, robot marker state, LiDAR/path rendering, navigation placement, and manual-alignment fallback.
+- [`DimosManager.ts`](lens-studio/Assets/Scripts/Core/DimosManager.ts) is the orchestration hub for phase/mode lifecycle; it delegates to `DimosServices`.
 - [`UIManager.ts`](lens-studio/Assets/Scripts/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
 
 `BridgeClient` is the transport layer, `SetupCalibrationFlow` owns calibrate-step state for both tag and manual modes, `AlignmentSession` is the single owner of the bridge alignment session (tag + manual), `CameraStream` is a singleton wrapper around the Spectacles colour camera shared by setup and runtime capture, `NavigationController` manages goal placement and navigation state, and the visuals live under `robot/`, `lidar/`, and `navigation/`.
@@ -100,7 +101,8 @@ The Lens side is organized around three scene-entry scripts:
 flowchart TB
   Setup[SetupWizard] --> Manager[DimosManager]
   UI[UIManager] --> Manager
-  Manager --> Bridge[BridgeClient]
+  Manager --> Services[DimosServices]
+  Services --> Bridge[BridgeClient]
 ```
 
 <details>
@@ -122,12 +124,12 @@ flowchart TB
 <summary>Scene setup pointers</summary>
 
 - Open the project from [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj).
-- Scene wiring, authored object names, and `@input` references are documented inline in the script files via comments at lookup sites.
+- Wire cross-tree references on [`DimosServices`](lens-studio/Assets/Scripts/Core/DimosServices.ts) (`bridgeClient`, `frameCaptureController`, `robotMarker`, `pointCloudRenderer`, `navigationMarkerRoot`, `placementRayOrigin`, `groundDisc`). Point `DimosManager` at `DimosServices`; point `SetupWizard` and `UIManager` at `DimosManager`. On `UIManager`, also wire `mainUIFrame` and `setupWizard`.
 - The main feature folders are:
 
   ```text
   lens-studio/Assets/Scripts/
-  ├── Core/        (DimosManager, AppState, CameraStream, SignalEmitter, MathUtils)
+  ├── Core/        (DimosServices, DimosManager, DimosState, AppState, CameraStream, SignalEmitter, MathUtils)
   ├── Bridge/      (BridgeClient, Protocol — types + parser + builders)
   ├── Setup/       (SetupWizard, SetupWizardView, SetupCalibrationFlow, SetupAlignmentPreview)
   ├── UI/          (UIManager, MainMenuView, UILogger, BridgeStatusPresentation, kit/UIKit, kit/UIAnimations)
