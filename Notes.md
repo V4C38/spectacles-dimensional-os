@@ -57,7 +57,7 @@ For automatic, accurate latency measurement replace the static config with a pro
 Bridge sends {"type": "ping", "bridge_mono": time.monotonic()} on connection established
 Lens responds immediately with {"type": "pong", "bridge_mono": <echoed>} (no Lens-side computation)
 Bridge: one_way_latency = (recv_mono - echoed_bridge_mono) / 2, stored and used in Fix 1
-This requires adding ping/pong to ProtocolTypes.ts, ProtocolParser.ts, and Protocol.ts on the Lens side, and protocol.py + XRBridge handler on the bridge side.
+This requires adding ping/pong to ProtocolTypes.ts, ProtocolParser.ts, and Protocol.ts on the Lens side, and protocol.py + ARBridge handler on the bridge side.
 
 Fix 3 — Moving-robot observation strategy (current_solve preferred over current_translation_solve)
 For moving robots, current_solve() (Kabsch over the full observation window) is more robust than current_translation_solve() because the biases are distributed across many robot-heading directions and partially cancel. The current code already tries current_solve() first:

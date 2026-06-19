@@ -5,11 +5,11 @@ on:
   pull_request:
 
 jobs:
-  dimos-xr:
+  dimos-ar:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: dimos-xr
+        working-directory: dimos-ar
 
     steps:
       - uses: actions/checkout@v6
@@ -28,7 +28,7 @@ jobs:
         run: ruff check .
 
       - name: Mypy
-        run: mypy dimos_xr
+        run: mypy dimos.ar
 
       - name: Pytest (unit tests without DimOS)
         run: pytest -m "not integration"

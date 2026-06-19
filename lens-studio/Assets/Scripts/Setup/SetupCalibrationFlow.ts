@@ -78,7 +78,7 @@ export const CALIBRATE_STATUS_MANUAL = "Complete to confirm manual alignment";
 
 
 export const WIZARD_STEP_DESCRIPTIONS: string[] = [
-  "Power on your robot.\nRun ./start.sh in dimos-xr on your Mac.",
+  "Power on your robot.\nRun ./start.sh in dimos-ar on your Mac.",
   "Enter your Mac's IP.\nUse same Wi‑Fi for robot, Mac, and Spectacles.",
   buildCalibrateDescriptionAuto(NO_ROBOT_CONNECTED_LABEL),
 ];

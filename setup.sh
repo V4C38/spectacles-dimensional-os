@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set up DimOS + dimos-xr for local development.
+# Set up DimOS + dimos-ar for local development.
 #
 # Usage:
 #   ./setup.sh         # interactive first-run setup
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DIMOS_XR_ROOT="${ROOT}/dimos-xr"
+DIMOS_AR_ROOT="${ROOT}/dimos-ar"
 source "${ROOT}/scripts/_dimos_env.sh"
 
 NON_INTERACTIVE=0
@@ -170,15 +170,15 @@ echo "Resolving DimOS environment..."
 DIMOS_ENV_PYTHON="$(resolve_dimos_python)"
 
 echo "Using DimOS Python: ${DIMOS_ENV_PYTHON}"
-echo "Installing dimos-xr into that environment..."
+echo "Installing dimos-ar into that environment..."
 (
-  cd "${DIMOS_XR_ROOT}"
+  cd "${DIMOS_AR_ROOT}"
   "${DIMOS_ENV_PYTHON}" -m pip install -e ".[dev]"
 )
 
 echo "Running unit tests..."
 (
-  cd "${DIMOS_XR_ROOT}"
+  cd "${DIMOS_AR_ROOT}"
   "${DIMOS_ENV_PYTHON}" -m pytest
 )
 

@@ -6,9 +6,9 @@ Thanks for helping improve spectacles-dimensional-os. This repo is a **monorepo*
 
 | Change | Location |
 |--------|----------|
-| DimOS bridge, protocol, blueprints | [`dimos-xr/`](dimos-xr/) |
+| DimOS bridge, protocol, blueprints | [`dimos-ar/`](dimos-ar/) |
 | Spectacles Lens | [`lens-studio/`](lens-studio/) — open **`lens-studio/spectacles-dimensional-os.esproj`** in Lens Studio |
-| Cross-platform WebSocket API | [`dimos-xr/PROTOCOL.md`](dimos-xr/PROTOCOL.md) + the Python and Lens implementations (see below) |
+| Cross-platform WebSocket API | [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) + the Python and Lens implementations (see below) |
 | README demo GIFs / images | [`assets/`](assets/) at repo root |
 
 Do **not** open Lens Studio from the repo root — that creates stray `Cache/`, `Packages/`, etc.
@@ -17,19 +17,19 @@ Do **not** open Lens Studio from the repo root — that creates stray `Cache/`, 
 
 Update together in one change:
 
-1. `dimos-xr/dimos_xr/network/protocol.py`
-2. `dimos-xr/PROTOCOL.md`
+1. `dimos-ar/dimos/ar/network/protocol.py`
+2. `dimos-ar/PROTOCOL.md`
 3. `lens-studio/Assets/Scripts/Bridge/Protocol.ts`
 
 ## Python
 
 ```bash
-cd dimos-xr
+cd dimos-ar
 /path/to/dimos/.venv/bin/python3 -m pip install -e ".[dev]"
 ./start.sh            # WebSocket :8787, interactive robot selection
 /path/to/dimos/.venv/bin/python3 -m pytest
 /path/to/dimos/.venv/bin/python3 -m ruff check .
-/path/to/dimos/.venv/bin/python3 -m mypy dimos_xr
+/path/to/dimos/.venv/bin/python3 -m mypy dimos/ar
 ```
 
 DimOS is an external dependency — install from [dimensionalOS/dimos](https://github.com/dimensionalOS/dimos), not from this repo.
@@ -51,7 +51,7 @@ Each subsystem (navigation, alignment, robot, lidar, setup) has **one owner clas
 
 ## Marker assets
 
-After changing the AprilTag contract, regenerate robot-mounted assets: `python scripts/generate_marker.py` (from `dimos-xr/`).
+After changing the AprilTag contract, regenerate robot-mounted assets: `python scripts/generate_marker.py` (from `dimos-ar/`).
 
 ## Diagnostics and logging
 
@@ -63,7 +63,7 @@ points rather than introducing UI error catalogs.
 ## Tests
 
 - Default CI runs unit tests that do not require DimOS installed.
-- Integration: `pytest dimos_xr/network/test_ws_integration.py -m integration` with the bridge already running from the DimOS `.venv`.
+- Integration: `pytest dimos/ar/network/test_ws_integration.py -m integration` with the bridge already running from the DimOS `.venv`.
 
 ## License
 

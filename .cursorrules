@@ -3,7 +3,7 @@
 Persistent agent rules live in `.cursor/rules/` (version-controlled). This file
 is a project overview; prefer those rules for non-negotiable constraints.
 
-This repository combines the DimOS XR bridge (`dimos-xr/`) and the Spectacles
+This repository combines the DimOS AR bridge (`dimos-ar/`) and the Spectacles
 Lens client (`lens-studio/`). It is **not a fork of DimOS** — a separate package
 that depends on DimOS and composes into blueprints via `autoconnect`.
 
@@ -13,14 +13,15 @@ that depends on DimOS and composes into blueprints via `autoconnect`.
 spectacles-dimensional-os/
 ├── README.md                    # whole-project overview, setup, doc map
 ├── assets/                      # README gifs, demo media (NOT Lens Studio Assets/)
-├── dimos-xr/                    # Python DimOS extension (platform-agnostic core)
-│   ├── dimos_xr/                # XRBridge module, adapter, protocol, transforms, filters
+├── dimos-ar/                    # Python DimOS extension (platform-agnostic core)
+│   ├── dimos/ar/                # ARBridge module, adapter, protocol, transforms, filters
 │   ├── assets/                  # Generated apriltag_robot_* PNG/PDF for robot-mounted tags
-│   ├── blueprints/              # dimos_xr.py entrypoint used by start.sh
+│   ├── dimos/ar/blueprints.py   # monorepo entrypoint used by start.sh
 │   ├── scripts/                 # generate_marker.py (--sync-lens)
 │   ├── PROTOCOL.md              # JSON WebSocket contract (cross-repo)
-│   ├── tests/                   # pytest unit + optional WS integration
-│   ├── start.sh                 # interactive robot chooser; WebSocket on :8787
+│   └── tests colocated under dimos/ar/
+├── start.sh                     # interactive robot chooser; WebSocket on :8787
+├── setup.sh
 └── lens-studio/                 # Spectacles Lens Studio project
     ├── spectacles-dimensional-os.esproj   # open THIS file (never from repo root)
     ├── Assets/Scripts/          # Lens TypeScript (DimosManager, BridgeClient, …)
@@ -30,18 +31,18 @@ spectacles-dimensional-os/
 
 | Component | Location | Notes |
 |-----------|----------|-------|
-| `XRBridge`, adapter, protocol, transforms | `dimos-xr/dimos_xr/` | Platform-agnostic — no Spectacles logic |
-| Blueprint scripts | `dimos-xr/blueprints/` | Run on Mac with DimOS |
-| Robot-mounted AprilTag PDF | `dimos-xr/assets/apriltag_robot_{a4,letter}.pdf` | Print at 100% scale (70 mm); `python scripts/generate_marker.py` |
+| `ARBridge`, adapter, protocol, transforms | `dimos-ar/dimos/ar/` | Platform-agnostic — no Spectacles logic |
+| Blueprint entry | `dimos-ar/dimos/ar/blueprints.py` | Run on Mac with DimOS via `./start.sh` |
+| Robot-mounted AprilTag PDF | `dimos-ar/assets/apriltag_robot_{a4,letter}.pdf` | Print at 100% scale (70 mm); `python scripts/generate_marker.py` |
 | Spectacles Lens | `lens-studio/` | All Lens Studio code; see `lens-studio/docs/SCENE_SETUP.md` |
-| Cross-platform contract | `dimos-xr/PROTOCOL.md` | JSON WebSocket API |
+| Cross-platform contract | `dimos-ar/PROTOCOL.md` | JSON WebSocket API |
 
 ## Where to read first
 
 | Area | Read |
 |------|------|
 | Whole project | `README.md` |
-| WebSocket message schema | `dimos-xr/PROTOCOL.md` |
+| WebSocket message schema | `dimos-ar/PROTOCOL.md` |
 | Spectacles / Lens Studio | `lens-studio/docs/SCENE_SETUP.md` |
 | Contributing | `CONTRIBUTING.md` |
 
@@ -54,22 +55,20 @@ implementation steps only. Do not create "investigation plans."
 ## Non-negotiable facts
 
 - **Never edit DimOS source.** Import from the installed `dimos` package.
-- `dimos-xr/dimos_xr/` stays platform-agnostic. Spectacles-specific code lives
+- `dimos-ar/dimos/ar/` stays platform-agnostic. Spectacles-specific code lives
   only under `lens-studio/`.
 - **Open Lens Studio from `lens-studio/spectacles-dimensional-os.esproj`**, not the repo
   root — opening at root creates stray `Cache/`, `Packages/`, etc.
-- The cross-repo contract is `dimos-xr/PROTOCOL.md`. When the protocol
+- The cross-repo contract is `dimos-ar/PROTOCOL.md`. When the protocol
   changes, update the Python protocol and the Lens protocol modules in the same change:
-  - `dimos-xr/dimos_xr/protocol.py`
-  - `dimos-xr/PROTOCOL.md`
-  - `lens-studio/Assets/Scripts/Network/ProtocolTypes.ts`
-  - `lens-studio/Assets/Scripts/Network/ProtocolParser.ts`
-  - `lens-studio/Assets/Scripts/Network/Protocol.ts`
+  - `dimos-ar/dimos/ar/network/protocol.py`
+  - `dimos-ar/PROTOCOL.md`
+  - `lens-studio/Assets/Scripts/Bridge/Protocol.ts`
 - The bridge module worker must never block; WebSocket runs on a daemon thread
  (see `bridge/module.py`).
-- AR development in this monorepo uses `dimos-xr/blueprints/dimos_xr.py` (via `./start.sh`),
+- AR development in this monorepo uses `dimos-ar/dimos/ar/blueprints.py` (via `./start.sh`),
   which wraps native DimOS composition for the selected robot stack.
-- Port **8787** is the XR bridge WebSocket. Do not reuse the old Foxglove `8765` port.
+- Port **8787** is the AR bridge WebSocket. Do not reuse the old Foxglove `8765` port.
 - Tests for the bridge package must run from the DimOS `.venv`.
 - For Lens Studio verification, do **not** run `CompileWithLogs` by default.
   Use normal compile checks first, and only run compile-with-logs when there is
@@ -82,10 +81,10 @@ implementation steps only. Do not create "investigation plans."
 ## Dev quick reference
 
 ```bash
-# Install + start bridge (from dimos-xr/)
+# Install + start bridge (from dimos-ar/)
 ./start.sh              # choose robot stack interactively; ws://0.0.0.0:8787
 
 # Tests (with blueprint running for integration)
-cd dimos-xr && /path/to/dimos/.venv/bin/python3 -m pytest
-cd dimos-xr && /path/to/dimos/.venv/bin/python3 -m pytest tests/test_ws_integration.py -m integration
+cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest
+cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/network/test_ws_integration.py -m integration
 ```

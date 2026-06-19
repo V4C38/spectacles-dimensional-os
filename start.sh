@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the dimos-xr bridge from this monorepo package.
+# Start the dimos-ar bridge from this monorepo package.
 #
 # Usage:
 #   ./start.sh              # choose the target robot stack interactively
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DIMOS_XR_ROOT="${ROOT}/dimos-xr"
+DIMOS_AR_ROOT="${ROOT}/dimos-ar"
 source "${ROOT}/scripts/_dimos_env.sh"
 
 print_green_stdout() {
@@ -71,8 +71,8 @@ export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
 LAN_IP="$(detect_lan_ip)"
 
 STACK_IDS=(
-  "xr_go2"
-  "xr_g1"
+  "ar_go2"
+  "ar_g1"
 )
 MENU_LABELS=(
   "Unitree Go2"
@@ -215,8 +215,8 @@ echo ""
 
 exec "${PYTHON}" -c "
 import sys
-sys.path.insert(0, '${DIMOS_XR_ROOT}')
+sys.path.insert(0, '${DIMOS_AR_ROOT}')
 from dimos.core.coordination.module_coordinator import ModuleCoordinator
-from dimos_xr.blueprints import ${SELECTED_BLUEPRINT}
+from dimos.ar.blueprints import ${SELECTED_BLUEPRINT}
 ModuleCoordinator.build(${SELECTED_BLUEPRINT}).loop()
 " < /dev/null 2> >(grep -v '^objc\[' >&2)

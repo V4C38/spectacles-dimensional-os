@@ -3,30 +3,30 @@
 > **Lens Studio:** open [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj), not the repo root.
 
 Visualize and control **DimOS robot stacks** from **Snap Spectacles**.
-[`dimos-xr/`](dimos-xr/) is a WebSocket based bridge between [Dimensional OS](https://github.com/dimensionalOS/dimos) for low-level robot control and orchestration and a Spectacles Lens for spatial UI/UX.
+[`dimos-ar/`](dimos-ar/) is a WebSocket based bridge between [Dimensional OS](https://github.com/dimensionalOS/dimos) for low-level robot control and orchestration and a Spectacles Lens for spatial UI/UX.
 
 <p align="center">
   <img src="assets/rm_hero.gif" alt="Spectacles AR controlling a Unitree Go2" width="800" />
 </p>
 
-This is **not a fork of DimOS**. It is a separate package that depends on DimOS and composes into blueprints via `autoconnect`. The Spectacles client lives in [`lens-studio/`](lens-studio/), while the Python side stays platform-agnostic so future XR clients can implement the same protocol without changing `dimos_xr/`.
+This is **not a fork of DimOS**. It is a separate package that depends on DimOS and composes into blueprints via `autoconnect`. The Spectacles client lives in [`lens-studio/`](lens-studio/), while the Python side stays platform-agnostic so future XR clients can implement the same protocol without changing `dimos/ar/`.
 
 
 At a glance:
 - [`lens-studio/`](lens-studio/) contains the Spectacles Lens Studio project, setup flow, HUD, navigation interaction, and world-anchored visuals.
-- [`dimos-xr/`](dimos-xr/) contains the DimOS XR bridge package, `XRBridge`, the adapter module, and tests.
-- [`dimos-xr/PROTOCOL.md`](dimos-xr/PROTOCOL.md) is the cross-platform contract between the bridge and every XR client.
+- [`dimos-ar/`](dimos-ar/) contains the DimOS XR bridge package, `ARBridge`, the adapter module, and tests.
+- [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) is the cross-platform contract between the bridge and every XR client.
 
 ```mermaid
 flowchart LR
-  DimOS[DimOS robot stack] --> Bridge[XRBridge]
+  DimOS[DimOS robot stack] --> Bridge[ARBridge]
   Lens[Spectacles Lens] <-->|"WebSocket :8787"| Bridge
 ```
 
 ## Core concepts / Overview
 
-- `dimos-xr` is a **DimOS extension**, not a platform-specific fork.
-- The shared API is the JSON WebSocket protocol in [`dimos-xr/PROTOCOL.md`](dimos-xr/PROTOCOL.md).
+- `dimos-ar` is a **DimOS extension**, not a platform-specific fork.
+- The shared API is the JSON WebSocket protocol in [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md).
 - The robot lives in an **odom** frame, while AR clients live in a **world** frame, so setup must solve a shared transform before runtime visuals are trustworthy.
 - The bridge is single-active-robot per process and uses adapter-declared capabilities.
 
@@ -66,11 +66,11 @@ After commit, the same robot-mounted tag continues to drive runtime drift correc
 Calibration requires a **printed robot-mounted tag**: a plain **70 mm × 70 mm** AprilTag 36h11 sticker (56 mm black square). Generate assets with:
 
 ```bash
-cd /path/to/spectacles-dimensional-os/dimos-xr
+cd /path/to/spectacles-dimensional-os/dimos-ar
 python scripts/generate_marker.py
 ```
 
-Print `apriltag_robot_a4.pdf` or `apriltag_robot_letter.pdf` from `dimos-xr/assets/` at **actual size** (no "fit to page") and verify the outer edge measures 70 mm with a ruler before mounting on the robot.
+Print `apriltag_robot_a4.pdf` or `apriltag_robot_letter.pdf` from `dimos-ar/assets/` at **actual size** (no "fit to page") and verify the outer edge measures 70 mm with a ruler before mounting on the robot.
 
 </details>
 
@@ -80,8 +80,8 @@ Print `apriltag_robot_a4.pdf` or `apriltag_robot_letter.pdf` from `dimos-xr/asse
 The Mac is always the WebSocket **server** and AR devices are **clients**. The bridge sends `hello` and `bridge_status` on connect, then streams messages such as `pose`, `lidar`, `path`, `nav_status`, and `align_status`. Clients send messages such as `align_*`, `nav_goal`, `cancel_goal`, and `emergency_stop`.
 
 If the protocol changes, update these together in the same change:
-- [`dimos-xr/dimos_xr/network/protocol.py`](dimos-xr/dimos_xr/network/protocol.py)
-- [`dimos-xr/PROTOCOL.md`](dimos-xr/PROTOCOL.md)
+- [`dimos-ar/dimos/ar/network/protocol.py`](dimos-ar/dimos/ar/network/protocol.py)
+- [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md)
 - [`lens-studio/Assets/Scripts/Bridge/Protocol.ts`](lens-studio/Assets/Scripts/Bridge/Protocol.ts)
 
 </details>
@@ -143,15 +143,15 @@ flowchart TB
 
 </details>
 
-## Dimensional OS Blueprint (`dimos-xr`)
+## Dimensional OS Blueprint (`dimos-ar`)
 
-[`dimos-xr/`](dimos-xr/) contains the Python side: `XRBridge`, `XRRobotAdapterModule`, the protocol definition, and the tests. The monorepo entrypoint is [`dimos-xr/dimos_xr/blueprints.py`](dimos-xr/dimos_xr/blueprints.py), which wraps native DimOS stack composition for the currently selected robot runtime.
+[`dimos-ar/`](dimos-ar/) contains the Python side: `ARBridge`, `ARRobotAdapterModule`, the protocol definition, and the tests. The monorepo entrypoint is [`dimos-ar/dimos/ar/blueprints.py`](dimos-ar/dimos/ar/blueprints.py), which wraps native DimOS stack composition for the currently selected robot runtime.
 
-`XRBridge` itself ([`dimos-xr/dimos_xr/bridge/module.py`](dimos-xr/dimos_xr/bridge/module.py)) subclasses `dimos.core.module.Module` and stays thin: it declares the DimOS `In[...]` streams, builds its collaborators, and fans handler calls out to them. The actual logic lives in single-owner collaborators under `dimos-xr/dimos_xr/bridge/`: `AlignmentController` (calibration sessions, camera-frame processing, runtime drift correction), `NavController` (goal placement, path execution, e-stop), `TelemetryPublisher` (pose/lidar streaming and the bridge-side LiDAR transmit mode), `OdomBuffer` (latest-odom cache), `StatusService` (`bridge_status` broadcasting), `PreviewService` (side-effect-free path preview), and `BridgeSender` (the shared outbound-message sink). The adapter module absorbs robot-specific streams and control surfaces for Go2 and G1 while keeping the bridge core platform-agnostic.
+`ARBridge` itself ([`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py)) subclasses `dimos.core.module.Module` and stays thin: it declares the DimOS `In[...]` streams, builds its collaborators, and fans handler calls out to them. The actual logic lives in single-owner collaborators under `dimos-ar/dimos/ar/bridge/`: `AlignmentController` (calibration sessions, camera-frame processing, runtime drift correction), `NavController` (goal placement, path execution, e-stop), `TelemetryPublisher` (pose/lidar streaming and the bridge-side LiDAR transmit mode), `OdomBuffer` (latest-odom cache), `StatusService` (`bridge_status` broadcasting), `PreviewService` (side-effect-free path preview), and `BridgeSender` (the shared outbound-message sink). The adapter module absorbs robot-specific streams and control surfaces for Go2 and G1 while keeping the bridge core platform-agnostic.
 
 ```mermaid
 flowchart TB
-  DimOS[DimOS] --> Bridge[XRBridge]
+  DimOS[DimOS] --> Bridge[ARBridge]
   Clients[XR clients] <-->|protocol| Bridge
   Blueprint[blueprints.py] --> Bridge
 ```
@@ -161,10 +161,10 @@ flowchart TB
 
 Supported runtimes (selected interactively by `./start.sh`):
 
-- `xr-go2` — Unitree Go2 stack (full navigation and marker alignment when the onboard modules are available; capability states may negotiate reduced features on lighter stacks).
-- `xr-g1` — Unitree G1 nav-onboard stack (requires the Unitree DDS Python package set in the DimOS `.venv` for onboard navigation).
+- `ar-go2` — Unitree Go2 stack (full navigation and marker alignment when the onboard modules are available; capability states may negotiate reduced features on lighter stacks).
+- `ar-g1` — Unitree G1 nav-onboard stack (requires the Unitree DDS Python package set in the DimOS `.venv` for onboard navigation).
 
-Direct `dimos run xr-go2` / `dimos run xr-g1` work once these blueprints are registered upstream in DimOS; until then, use `./start.sh`.
+Direct `dimos run ar-go2` / `dimos run ar-g1` work once these blueprints are registered upstream in DimOS; until then, use `./start.sh`.
 
 On the Lens side, runtime behavior is negotiated from the bridge handshake:
 - `AppState` projects robot/runtime metadata from the bridge and carries the coarse bridge-link state used by the setup and runtime UI.
@@ -186,8 +186,8 @@ cd /path/to/spectacles-dimensional-os
 `./start.sh` always prompts for the target robot stack, then runs the bridge against the selected composition. The equivalent native commands are:
 
 ```bash
-dimos run xr-go2
-dimos run xr-g1
+dimos run ar-go2
+dimos run ar-g1
 ```
 
 Use `./start.sh` if the blueprints are not yet registered in your DimOS install.
@@ -206,14 +206,14 @@ DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3 ./start.sh
 Install from the DimOS Python environment:
 
 ```bash
-cd /path/to/spectacles-dimensional-os/dimos-xr
+cd /path/to/spectacles-dimensional-os/dimos-ar
 /path/to/dimos/.venv/bin/python3 -m pip install -e ".[dev]"
 /path/to/dimos/.venv/bin/python3 -m pytest
 /path/to/dimos/.venv/bin/python3 -m ruff check .
-/path/to/dimos/.venv/bin/python3 -m mypy dimos_xr
+/path/to/dimos/.venv/bin/python3 -m mypy dimos/ar
 ```
 
-If you want to run `xr-g1`, make sure the same DimOS `.venv`
+If you want to run `ar-g1`, make sure the same DimOS `.venv`
 also has the DDS SDK package installed:
 
 ```bash
@@ -223,11 +223,11 @@ also has the DDS SDK package installed:
 Optional live protocol check while the blueprint is already running:
 
 ```bash
-cd /path/to/spectacles-dimensional-os/dimos-xr
-/path/to/dimos/.venv/bin/python3 -m pytest dimos_xr/network/test_ws_integration.py -m integration
+cd /path/to/spectacles-dimensional-os/dimos-ar
+/path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/network/test_ws_integration.py -m integration
 ```
 
-Tests are colocated with their modules under `dimos-xr/dimos_xr/`. See [`dimos-xr/README.md`](dimos-xr/README.md) for the unit vs integration test split.
+Tests are colocated with their modules under `dimos-ar/dimos/ar/`. See [`dimos-ar/README.md`](dimos-ar/README.md) for the unit vs integration test split.
 
 </details>
 
@@ -235,18 +235,18 @@ Tests are colocated with their modules under `dimos-xr/dimos_xr/`. See [`dimos-x
 <summary>Transport, ports, and discovery</summary>
 
 - XR bridge WebSocket listens on **8787**; avoid binding port **8765** on the same machine while Foxglove is running.
-- `start.sh` chooses the stack interactively at launch, between `xr-go2` and `xr-g1`.
-- `xr-g1` always composes on top of the Unitree G1 nav-onboard blueprint; navigation requires the Unitree DDS Python package set in the DimOS `.venv`, while manual alignment stays available regardless.
+- `start.sh` chooses the stack interactively at launch, between `ar-go2` and `ar-g1`.
+- `ar-g1` always composes on top of the Unitree G1 nav-onboard blueprint; navigation requires the Unitree DDS Python package set in the DimOS `.venv`, while manual alignment stays available regardless.
 
 </details>
 
 <details>
 <summary>Extension points</summary>
 
-- Tune lidar and rate limits via `XRBridgeConfig` in [`dimos-xr/dimos_xr/bridge/module.py`](dimos-xr/dimos_xr/bridge/module.py).
+- Tune lidar and rate limits via `ARBridgeConfig` in [`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py).
 - Add or change messages by updating the Python protocol, the protocol spec, and the Lens protocol modules together.
-- The protocol now also carries `set_lidar_mode` (client-selected `off` / `obstacles` / `full` LiDAR transmission) and `pose_correction` (runtime drift-correction telemetry, deadbanded so only meaningful jumps reach the client); see [`dimos-xr/PROTOCOL.md`](dimos-xr/PROTOCOL.md) for the full schema.
-- Keep `dimos-xr/dimos_xr/` platform-agnostic. Spectacles-specific code stays in [`lens-studio/`](lens-studio/); other XR clients should live in their own client folder or repo.
+- The protocol now also carries `set_lidar_mode` (client-selected `off` / `obstacles` / `full` LiDAR transmission) and `pose_correction` (runtime drift-correction telemetry, deadbanded so only meaningful jumps reach the client); see [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) for the full schema.
+- Keep `dimos-ar/dimos/ar/` platform-agnostic. Spectacles-specific code stays in [`lens-studio/`](lens-studio/); other XR clients should live in their own client folder or repo.
 
 </details>
 
