@@ -16,6 +16,17 @@ class CapabilityState:
 
 
 @dataclass(frozen=True)
+class RuntimeAlignmentProfile:
+    odom_pairing_offset_s: float = 0.02
+    runtime_static_speed_mps: float = 0.05
+    runtime_max_correct_speed_mps: float = 1.5
+    runtime_cruise_window_s: float = 12.0
+    runtime_speed_horizon_s: float = 0.4
+    runtime_yaw_min_baseline_m: float = 0.40
+    runtime_yaw_straightness_max: float = 0.20
+
+
+@dataclass(frozen=True)
 class RobotHandshake:
     robot_id: str
     robot_model: str
@@ -55,3 +66,5 @@ class XRRobotAdapterSpec(Spec, Protocol):  # type: ignore[misc]
     def assist_set_lateral_velocity(self, vy_m_s: float) -> bool: ...
 
     def assist_strafe_speed(self) -> float: ...
+
+    def runtime_alignment_profile(self) -> RuntimeAlignmentProfile: ...

@@ -89,6 +89,8 @@ export interface PoseMessage {
   frame: string;
   position: [number, number, number];
   orientation: [number, number, number, number];
+  /** Smoothed robot speed from bridge odom (m/s); optional on older bridges. */
+  speed_mps?: number;
 }
 
 export interface PoseCorrectionMessage {
@@ -499,6 +501,7 @@ function parseInboundObject(
         robot_id: requireString(data, "robot_id"),
         frame: requireString(data, "frame"),
         position: parseVec3(data.position),
+        ...(typeof data.speed_mps === "number" ? { speed_mps: Number(data.speed_mps) } : {}),
         orientation: [Number(q[0]), Number(q[1]), Number(q[2]), Number(q[3])],
       };
     }

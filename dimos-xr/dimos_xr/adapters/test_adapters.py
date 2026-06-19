@@ -173,3 +173,17 @@ def test_g1_assist_set_lateral_velocity_zero_publishes_stop_twist() -> None:
     assert isinstance(twist, Twist)
     assert twist.linear.y == 0.0
     assert twist.angular.z == 0.0
+
+
+def test_go2_runtime_alignment_profile_defaults() -> None:
+    adapter = _make_go2_adapter()
+    profile = Go2AdapterModule.runtime_alignment_profile(adapter)
+    assert profile.runtime_static_speed_mps == 0.05
+    assert profile.runtime_speed_horizon_s == 0.4
+
+
+def test_g1_runtime_alignment_profile_overrides() -> None:
+    adapter = _make_g1_adapter()
+    profile = G1AdapterModule.runtime_alignment_profile(adapter)
+    assert profile.runtime_static_speed_mps == 0.08
+    assert profile.runtime_speed_horizon_s == 0.9

@@ -2,7 +2,7 @@ import { protocolMetersToLensCentimeters } from "../Bridge/Protocol";
 import { findChildRecursive } from "../UI/kit/UIKit";
 import { buildMockLidarPoints } from "./MockLidarPoints";
 
-const MAX_POINTS = 500;
+const MAX_POINTS = 1000;
 const POINT_SIZE_CM = 2.4;
 const DEFAULT_MIN_ABOVE_FLOOR_CM = 0.5;
 const DEFAULT_MAX_ABOVE_FLOOR_CM = 155;
@@ -255,7 +255,7 @@ export class PointCloudRenderer extends BaseScriptComponent {
     }
     const pass = material.mainPass as any;
     pass.blendMode = useAlphaBlend ? BlendMode.Normal : BlendMode.Disabled;
-    pass.twoSided = true;
+    pass.twoSided = false;
     pass.depthWrite = false;
     pass.baseColor = new vec4(1, 1, 1, 1);
     pass.Port_Default_N204 = 1;

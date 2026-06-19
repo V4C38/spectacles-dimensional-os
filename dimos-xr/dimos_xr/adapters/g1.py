@@ -23,7 +23,7 @@ from dimos.robot.unitree.g1.effectors.high_level.high_level_spec import HighLeve
 from dimos.utils.logging_config import setup_logger
 from dimos_lcm.std_msgs import Bool, String
 
-from dimos_xr.adapters.base import CapabilityState, RobotHandshake, XRRobotAdapterSpec
+from dimos_xr.adapters.base import CapabilityState, RobotHandshake, RuntimeAlignmentProfile, XRRobotAdapterSpec
 from dimos_xr.tracking.tag_tracker import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
 
 logger = setup_logger()
@@ -95,6 +95,15 @@ def g1_capabilities(
             else "Assisted calibration motion is not available for this runtime.",
         ),
     }
+
+
+def g1_runtime_alignment_profile() -> RuntimeAlignmentProfile:
+    return RuntimeAlignmentProfile(
+        runtime_static_speed_mps=0.08,
+        runtime_max_correct_speed_mps=1.2,
+        runtime_cruise_window_s=14.0,
+        runtime_speed_horizon_s=0.9,
+    )
 
 
 def g1_handshake(
@@ -312,6 +321,10 @@ class G1AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
     @rpc
     def assist_strafe_speed(self) -> float:
         return 0.3
+
+    @rpc
+    def runtime_alignment_profile(self) -> RuntimeAlignmentProfile:
+        return g1_runtime_alignment_profile()
 
     @rpc
     def assist_set_lateral_velocity(self, vy_m_s: float) -> bool:

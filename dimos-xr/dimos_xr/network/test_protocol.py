@@ -537,6 +537,19 @@ def test_encode_pose() -> None:
     assert pose["orientation"] == [0.0, 0.0, 0.0, 1.0]
 
 
+def test_encode_pose_includes_optional_speed_mps() -> None:
+    pose = json.loads(
+        encode_pose(
+            ts=1.0,
+            position=(0.0, 0.0, 0.0),
+            orientation=(0.0, 0.0, 0.0, 1.0),
+            robot_id="unitree_go2",
+            speed_mps=0.42,
+        )
+    )
+    assert pose["speed_mps"] == 0.42
+
+
 def test_encode_pose_rounds_high_precision_values() -> None:
     pose = json.loads(
         encode_pose(

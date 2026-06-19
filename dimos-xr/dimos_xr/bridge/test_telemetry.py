@@ -57,8 +57,8 @@ class _RecordingSender:
 def _publisher(
     *,
     world_position: tuple[float, float, float] | None = None,
-    target_points: int = 600,
-    obstacle_target_points: int = 300,
+    target_points: int = 1000,
+    obstacle_target_points: int = 200,
 ) -> tuple[TelemetryPublisher, _RecordingSender]:
     sender = _RecordingSender()
     publisher = TelemetryPublisher(
@@ -155,14 +155,14 @@ def test_publish_lidar_obstacle_mode_uses_robot_world_position() -> None:
     assert len(sender.binary_payloads[0]) == 11
 
 
-def test_publish_lidar_full_mode_caps_binary_payload_at_600_points() -> None:
-    publisher, sender = _publisher(target_points=600, obstacle_target_points=300)
+def test_publish_lidar_full_mode_caps_binary_payload_at_1000_points() -> None:
+    publisher, sender = _publisher(target_points=1000, obstacle_target_points=200)
     msg = _FakePointCloud2(
         np.column_stack(
             [
-                np.linspace(0.0, 4.0, 900, dtype=np.float32),
-                np.zeros(900, dtype=np.float32),
-                np.full(900, 0.5, dtype=np.float32),
+                np.linspace(0.0, 4.0, 1100, dtype=np.float32),
+                np.zeros(1100, dtype=np.float32),
+                np.full(1100, 0.5, dtype=np.float32),
             ]
         ).astype(np.float32)
     )
@@ -170,17 +170,17 @@ def test_publish_lidar_full_mode_caps_binary_payload_at_600_points() -> None:
     publisher.publish_lidar(msg)
 
     assert len(sender.binary_payloads) == 1
-    assert len(sender.binary_payloads[0]) == 5 + (600 * 6)
+    assert len(sender.binary_payloads[0]) == 5 + (1000 * 6)
 
 
-def test_publish_lidar_obstacle_mode_caps_binary_payload_at_300_points() -> None:
-    publisher, sender = _publisher(target_points=600, obstacle_target_points=300)
+def test_publish_lidar_obstacle_mode_caps_binary_payload_at_200_points() -> None:
+    publisher, sender = _publisher(target_points=1000, obstacle_target_points=200)
     msg = _FakePointCloud2(
         np.column_stack(
             [
-                np.linspace(0.11, 0.59, 700, dtype=np.float32),
-                np.zeros(700, dtype=np.float32),
-                np.full(700, 0.5, dtype=np.float32),
+                np.linspace(0.11, 0.59, 500, dtype=np.float32),
+                np.zeros(500, dtype=np.float32),
+                np.full(500, 0.5, dtype=np.float32),
             ]
         ).astype(np.float32)
     )
@@ -194,4 +194,4 @@ def test_publish_lidar_obstacle_mode_caps_binary_payload_at_300_points() -> None
     publisher.publish_lidar(msg)
 
     assert len(sender.binary_payloads) == 1
-    assert len(sender.binary_payloads[0]) == 5 + (300 * 6)
+    assert len(sender.binary_payloads[0]) == 5 + (200 * 6)

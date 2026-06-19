@@ -1,5 +1,5 @@
 import { BridgeClient } from "../Bridge/BridgeClient";
-import { buildCameraFrameBytes, buildCameraInfo, CameraFrameAckMessage } from "../Bridge/Protocol";
+import { buildCameraFrameBytes, buildCameraInfo, CameraFrameAckMessage, HelloMessage } from "../Bridge/Protocol";
 import { CameraStream } from "../Core/CameraStream";
 import { quatFromMat4Rotation } from "../Core/MathUtils";
 
@@ -117,7 +117,7 @@ export class FrameCaptureController extends BaseScriptComponent {
     this._helloBound = true;
   }
 
-  private _onHello = (): void => {
+  private _onHello = (_msg: HelloMessage): void => {
     this._inFlight = false;
     this._inFlightSeq = -1;
     this._samplingBurst = false;

@@ -94,6 +94,7 @@ export class LidarPresentationController {
       }
       if (this._lastPoints) {
         this._renderer?.renderPointCloud(this._lastPoints);
+        this._meshDirty = false;
       } else {
         this._renderer?.clearAll();
         this._renderer?.setFullLidarVisible(mode === "full");

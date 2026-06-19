@@ -340,6 +340,7 @@ async def test_publish_pose_skips_non_finite_transform() -> None:
         odom=odom,
         lidar_filter=LidarFilter(),
         target_points=1000,
+        obstacle_target_points=200,
         lidar_voxel_size_m=0.05,
         pose_max_hz=0.0,
     )

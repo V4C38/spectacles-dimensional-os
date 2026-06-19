@@ -510,3 +510,107 @@ def test_current_solve_with_zero_baseline_returns_solve_from_small_window() -> N
         solve = tracker.current_solve(min_baseline_m=0.0)
         assert solve is not None, "current_solve(min_baseline_m=0.0) must return a solve for >= 2 observations"
 
+
+def test_odom_tag_straightness_straight_vs_curved() -> None:
+    from dimos_xr.tracking.tag_tracker import TagObservation, _odom_tag_straightness
+
+    straight = [
+        TagObservation(
+            mono_ts=1.0,
+            tag_id=0,
+            p_world_tag=(0.0, 0.0, 0.0),
+            p_odom_tag=(0.0, 0.0, 0.0),
+            T_world_tag=np.eye(4),
+            T_odom_tag=np.eye(4),
+            T_odom_base=np.eye(4),
+            quality=1.0,
+            reprojection_error_px=0.0,
+        ),
+        TagObservation(
+            mono_ts=2.0,
+            tag_id=0,
+            p_world_tag=(1.0, 0.0, 0.0),
+            p_odom_tag=(1.0, 0.0, 0.0),
+            T_world_tag=np.eye(4),
+            T_odom_tag=np.eye(4),
+            T_odom_base=np.eye(4),
+            quality=1.0,
+            reprojection_error_px=0.0,
+        ),
+        TagObservation(
+            mono_ts=3.0,
+            tag_id=0,
+            p_world_tag=(2.0, 0.0, 0.0),
+            p_odom_tag=(2.0, 0.0, 0.0),
+            T_world_tag=np.eye(4),
+            T_odom_tag=np.eye(4),
+            T_odom_base=np.eye(4),
+            quality=1.0,
+            reprojection_error_px=0.0,
+        ),
+    ]
+    curved = [
+        TagObservation(
+            mono_ts=1.0,
+            tag_id=0,
+            p_world_tag=(0.0, 0.0, 0.0),
+            p_odom_tag=(0.0, 0.0, 0.0),
+            T_world_tag=np.eye(4),
+            T_odom_tag=np.eye(4),
+            T_odom_base=np.eye(4),
+            quality=1.0,
+            reprojection_error_px=0.0,
+        ),
+        TagObservation(
+            mono_ts=2.0,
+            tag_id=0,
+            p_world_tag=(1.0, 0.0, 0.0),
+            p_odom_tag=(0.0, 1.0, 0.0),
+            T_world_tag=np.eye(4),
+            T_odom_tag=np.eye(4),
+            T_odom_base=np.eye(4),
+            quality=1.0,
+            reprojection_error_px=0.0,
+        ),
+        TagObservation(
+            mono_ts=3.0,
+            tag_id=0,
+            p_world_tag=(2.0, 0.0, 0.0),
+            p_odom_tag=(-1.0, 0.0, 0.0),
+            T_world_tag=np.eye(4),
+            T_odom_tag=np.eye(4),
+            T_odom_base=np.eye(4),
+            quality=1.0,
+            reprojection_error_px=0.0,
+        ),
+    ]
+    assert _odom_tag_straightness(straight) < _odom_tag_straightness(curved)
+
+
+def test_process_frame_applies_signed_odom_pairing_offset() -> None:
+    captured: list[float] = []
+
+    def lookup(ts: float) -> OdomSample:
+        captured.append(ts)
+        return OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
+
+    tracker = TagTracker(
+        GO2_DEFAULT_TAG_MOUNTS,
+        config=TagTrackerConfig(
+            max_reprojection_error_px=8.0,
+            odom_pairing_offset_s=-0.01,
+        ),
+    )
+    tracker.set_camera_info(_synthetic_camera_info())
+    header = {
+        "type": "camera_frame",
+        "robot_id": "unitree_go2",
+        "seq": 1,
+        "ts": 10.0,
+        "send_ts": 10.05,
+        "cam_pos": [1.0, 1.5, -2.0],
+        "cam_rot": [0.0, 0.0, 0.0, 1.0],
+    }
+    tracker.process_frame(header, _encode_marker_jpeg(), lookup, receive_mono=20.0)
+    assert captured
+    assert captured[0] == pytest.approx(19.96, abs=1e-9)

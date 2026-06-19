@@ -66,7 +66,7 @@ if TYPE_CHECKING:
 
     from websockets.asyncio.server import ServerConnection
 
-    from dimos_xr.adapters.base import XRRobotAdapterSpec
+    from dimos_xr.adapters.base import RuntimeAlignmentProfile, XRRobotAdapterSpec
     from dimos_xr.bridge.odom_buffer import OdomBuffer
     from dimos_xr.bridge.sender import BridgeSender
     from dimos_xr.bridge.status_service import StatusService
@@ -85,6 +85,8 @@ MOVING_ROBOT_DIAG_LOG_INTERVAL_S: float = 2.0
 # notification that should only fire when the robot position actually jumped.
 MIN_REPORTED_CORRECTION_TRANS_M: float = 0.05
 MIN_REPORTED_CORRECTION_YAW_DEG: float = 1.0
+
+RuntimeRegime = Literal["static", "cruise", "fast"]
 
 
 class AlignmentController:
@@ -107,6 +109,7 @@ class AlignmentController:
         adapter: XRRobotAdapterSpec | None = None,
         world_anchor_tag_ids: list[int] | None = None,
         world_anchor_size_m: float = 0.056,
+        runtime_profile: RuntimeAlignmentProfile | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
@@ -127,7 +130,6 @@ class AlignmentController:
 
         self._frame_in_flight: bool = False
         self._T_committed: np.ndarray | None = None
-        self._pending_large_solves: list[np.ndarray] = []
         # _pending_candidate: manual pose awaiting commit (tag flow auto-commits at DONE)
         self._pending_candidate: AlignmentCandidate | None = None
         self._pending_candidate_ts: float | None = None
@@ -140,6 +142,15 @@ class AlignmentController:
         self._last_manual_candidate_log_mono: float = 0.0
         self._last_correction_log_mono: float = 0.0
         self._last_moving_diag_log_mono: float = 0.0
+
+        if runtime_profile is not None:
+            self._runtime_profile = runtime_profile
+        elif adapter is not None:
+            self._runtime_profile = adapter.runtime_alignment_profile()
+        else:
+            from dimos_xr.adapters.base import RuntimeAlignmentProfile
+
+            self._runtime_profile = RuntimeAlignmentProfile()
 
         self._broadcast_stop = threading.Event()
         self._broadcast_thread: threading.Thread | None = None
@@ -383,13 +394,22 @@ class AlignmentController:
             self._sender.send(
                 encode_camera_frame_ack(robot_id=self._robot_id, seq=seq)
             )
-            self._apply_tracker_update(ts=float(header.get("ts", time.time())))
+            odom_ts = (
+                receive_mono
+                - max(0.0, frame_age)
+                - self._runtime_profile.odom_pairing_offset_s
+            )
+            self._apply_tracker_update(
+                ts=float(header.get("ts", time.time())),
+                odom_ts=odom_ts,
+            )
             if registered:
                 self._maybe_log_moving_robot_diag(
                     header=header,
                     receive_mono=receive_mono,
                     frame_age=frame_age,
                     result=result,
+                    odom_ts=odom_ts,
                 )
         finally:
             self._frame_in_flight = False
@@ -534,7 +554,6 @@ class AlignmentController:
         self._pending_candidate = None
         self._pending_candidate_ts = None
         self._session_method = None
-        self._pending_large_solves = []
         self._manual_pose_first_logged = False
         self._last_manual_inactive_log_mono = 0.0
         self._last_manual_odom_missing_log_mono = 0.0
@@ -693,7 +712,47 @@ class AlignmentController:
             ),
         )
 
-    def _apply_tracker_update(self, *, ts: float | None = None) -> None:
+    def _committed_or_current(self) -> np.ndarray | None:
+        if self._T_committed is not None:
+            return np.array(self._T_committed, dtype=np.float64, copy=True)
+        current = self._calibration.current_transform()
+        if current is None:
+            return None
+        return np.array(current, dtype=np.float64, copy=True)
+
+    def _runtime_regime(self, speed_mps: float) -> RuntimeRegime:
+        profile = self._runtime_profile
+        if speed_mps >= profile.runtime_max_correct_speed_mps:
+            return "fast"
+        if speed_mps < profile.runtime_static_speed_mps:
+            return "static"
+        return "cruise"
+
+    def _resolve_runtime_transform(
+        self,
+        T_committed: np.ndarray,
+        T_target: np.ndarray,
+        *,
+        use_yaw: bool,
+    ) -> np.ndarray:
+        """Apply the tag solve directly; yaw gate selects full vs translation-only."""
+        T_target = gravity_level_transform(
+            np.array(T_target, dtype=np.float64, copy=True),
+        )
+        if use_yaw:
+            return T_target
+        yaw = _yaw_from_T(T_committed)
+        t = T_target[:3, 3]
+        return gravity_level_transform(
+            build_T_world_odom(
+                yaw,
+                (float(t[0]), float(t[1]), float(t[2])),
+            ),
+        )
+
+    def _apply_tracker_update(
+        self, *, ts: float | None = None, odom_ts: float | None = None
+    ) -> None:
         if self._tag_tracker.active:
             # Assisted tag flow: tick the driver and broadcast tag-visible feedback.
             # No candidate production here — the commit happens in _maybe_finish_assist at DONE.
@@ -716,60 +775,58 @@ class AlignmentController:
         if anchor_solve is not None:
             self._commit_runtime_correction(anchor_solve, ts=ts)
             return
-        solve = self._tag_tracker.current_solve()
-        if solve is None:
-            T_reference = self._T_committed
-            if T_reference is None:
-                T_reference = self._calibration.current_transform()
-            if T_reference is not None:
-                solve = self._tag_tracker.current_translation_solve(T_reference)
+
+        profile = self._runtime_profile
+        lookup_ts = odom_ts if odom_ts is not None else time.monotonic()
+        speed = self._odom.speed_windowed(lookup_ts, profile.runtime_speed_horizon_s)
+        speed_mps = speed if speed is not None else 0.0
+        regime = self._runtime_regime(speed_mps)
+        if regime == "fast":
+            return
+
+        T_reference = self._committed_or_current()
+        if T_reference is None:
+            return
+
+        if regime == "static":
+            solve = self._tag_tracker.current_translation_solve(
+                T_reference,
+                max_observations=1,
+            )
+        else:
+            solve = self._tag_tracker.current_solve(
+                max_age_s=profile.runtime_cruise_window_s,
+            )
+            if solve is None:
+                solve = self._tag_tracker.current_translation_solve(
+                    T_reference,
+                    max_observations=1,
+                )
+
         if solve is None:
             return
-        T_new = np.array(solve.T_world_odom, dtype=np.float64, copy=True)
+
+        T_target = np.array(solve.T_world_odom, dtype=np.float64, copy=True)
         if self._T_committed is None:
-            self._T_committed = T_new
-            self._calibration.register_from_alignment(T_new)
+            self._T_committed = gravity_level_transform(T_target)
+            self._calibration.register_from_alignment(self._T_committed)
             return
+
+        use_yaw = (
+            regime == "cruise"
+            and solve.method == "tag"
+            and solve.baseline_m >= profile.runtime_yaw_min_baseline_m
+            and solve.straightness <= profile.runtime_yaw_straightness_max
+        )
+        T_new = self._resolve_runtime_transform(
+            self._T_committed,
+            T_target,
+            use_yaw=use_yaw,
+        )
+
         trans_delta = float(np.linalg.norm(T_new[:3, 3] - self._T_committed[:3, 3]))
         yaw_delta = abs(normalize_angle(_yaw_from_T(T_new) - _yaw_from_T(self._T_committed)))
         yaw_delta_deg = math.degrees(yaw_delta)
-        if trans_delta > 0.5 or yaw_delta > math.radians(10.0):
-            if solve.method == "tag_translation" and solve.quality >= 0.85:
-                # For a visible stationary robot, apply a fast first-step shrink in
-                # translation while preserving the committed yaw. This avoids
-                # forcing large, high-confidence tag sightings through the
-                # baseline-based multi-solve gate used by the assisted path.
-                t_blend = T_new[:3, 3]
-                T_new = build_T_world_odom(
-                    _yaw_from_T(self._T_committed),
-                    (float(t_blend[0]), float(t_blend[1]), float(t_blend[2])),
-                )
-                T_new = gravity_level_transform(T_new)
-                self._pending_large_solves = []
-            else:
-                self._pending_large_solves.append(T_new)
-                if len(self._pending_large_solves) > 3:
-                    self._pending_large_solves = self._pending_large_solves[-3:]
-                if len(self._pending_large_solves) < 3:
-                    return
-                solves = self._pending_large_solves
-                spreads = [
-                    float(np.linalg.norm(solves[i][:3, 3] - solves[j][:3, 3]))
-                    for i in range(len(solves))
-                    for j in range(i + 1, len(solves))
-                ]
-                if max(spreads) > 0.2:
-                    return
-                T_new = self._pending_large_solves[-1]
-                self._pending_large_solves = []
-        else:
-            yaw_new = _yaw_from_T(T_new)
-            yaw_blend = yaw_new
-            t_blend = T_new[:3, 3]
-            T_new = build_T_world_odom(
-                yaw_blend, (float(t_blend[0]), float(t_blend[1]), float(t_blend[2]))
-            )
-            T_new = gravity_level_transform(T_new)
         # Only notify the Lens when the correction is large enough to be meaningful.
         # Continuous sub-threshold micro-refinements still update T_world_odom (below)
         # but do not fire the user-visible "Refined Tracking" event.
@@ -783,7 +840,7 @@ class AlignmentController:
                     robot_id=self._robot_id,
                     trans_delta_m=trans_delta,
                     yaw_delta_deg=yaw_delta_deg,
-                    yaw_corrected=solve.method == "tag",
+                    yaw_corrected=use_yaw,
                     solve_quality=solve.quality,
                     solve_method=solve.method,
                 )
@@ -952,31 +1009,35 @@ class AlignmentController:
         receive_mono: float,
         frame_age: float,
         result: FrameResult,
+        odom_ts: float,
     ) -> None:
-        """Rate-limited diagnostic log for the issue-4 moving-robot investigation.
+        """Rate-limited diagnostic log for runtime re-alignment validation.
 
-        Logs capture timing, estimated robot speed, predicted timestamp bias
-        (speed × frame_age), and per-reason observation rejection counts so we can
-        quantify how much odom-timestamp error hurts runtime corrections while the
-        robot is moving.
+        Logs capture timing, smoothed robot speed, world-frame position residual
+        (tag estimate vs odom-projected base), straightness, and regime.
         """
         now = time.monotonic()
         if now - self._last_moving_diag_log_mono < MOVING_ROBOT_DIAG_LOG_INTERVAL_S:
             return
         self._last_moving_diag_log_mono = now
 
-        odom_ts = receive_mono - max(0.0, frame_age)
-        speed = self._odom.speed_at(odom_ts)
+        profile = self._runtime_profile
+        speed = self._odom.speed_windowed(odom_ts, profile.runtime_speed_horizon_s)
+        speed_mps = speed if speed is not None else 0.0
+        regime = self._runtime_regime(speed_mps)
 
-        # Odom interpolation bracket gap: how far off is the odom_ts from the
-        # nearest buffered sample?  A large gap means the odom lookup may have
-        # used a stale sample.
-        latest_mono = self._odom.latest_mono()
-        bracket_gap_s = abs(latest_mono - odom_ts) if latest_mono is not None else None
+        tag_estimate = self._tag_tracker.robot_world_pose_estimate()
+        odom = self._odom.at_interpolated(odom_ts)
+        odom_base = self._robot_base_world_position(odom)
+        residual_m: float | None = None
+        if tag_estimate is not None and odom_base is not None:
+            tag_pos = np.asarray(tag_estimate[0], dtype=np.float64)
+            residual_m = float(np.linalg.norm(tag_pos - odom_base))
 
-        estimated_bias_m: float | None = (
-            speed * frame_age if speed is not None else None
+        solve = self._tag_tracker.current_solve(
+            max_age_s=profile.runtime_cruise_window_s,
         )
+        straightness = solve.straightness if solve is not None else None
 
         total_rej = (
             result.rejections_reprojection
@@ -990,9 +1051,10 @@ class AlignmentController:
             "moving_robot_diag",
             seq=int(header.get("seq", -1)),
             frame_age_s=round(frame_age, 4),
-            robot_speed_ms=round(speed, 3) if speed is not None else None,
-            estimated_bias_m=round(estimated_bias_m, 4) if estimated_bias_m is not None else None,
-            odom_bracket_gap_s=round(bracket_gap_s, 4) if bracket_gap_s is not None else None,
+            robot_speed_ms=round(speed_mps, 3),
+            regime=regime,
+            world_residual_m=round(residual_m, 4) if residual_m is not None else None,
+            straightness=round(straightness, 4) if straightness is not None else None,
             obs_added=result.observations_added,
             total_rejections=total_rej,
             rej_reprojection=result.rejections_reprojection,

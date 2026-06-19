@@ -28,7 +28,9 @@ import { COLOR_WHITE } from "../UI/kit/UIKit";
 
 const DRIFTING_TRANSLATION_THRESHOLD_M = 0.05;
 const POSE_CORRECTION_LOG_INTERVAL_S = 1.0;
-const LIDAR_STALE_CLEAR_S = 0.5;
+// Bridge LiDAR is capped at 1 Hz; must exceed one inter-frame gap so live clouds
+// are not cleared between normal updates (0.5 s caused visible flicker).
+const LIDAR_STALE_CLEAR_S = 3.0;
 const REFINED_TRACKING_LOG_TEXT = "- Refined Tracking -";
 const REFINED_TRACKING_LOG_DURATION_S = 0.5;
 

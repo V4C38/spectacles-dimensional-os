@@ -1,16 +1,19 @@
 require("LensStudio:TextInputModule");
 
 import { DimosManager } from "../Core/DimosManager";
+import { NO_ROBOT_CONNECTED_LABEL } from "../Core/AppState";
+
 import { AlignStatusMessage } from "../Bridge/Protocol";
 import { scaleIn } from "../UI/kit/UIAnimations";
-import { COLOR_ERROR, COLOR_WHITE } from "../UI/kit/UIKit";
+import { COLOR_ERROR, COLOR_WARN, COLOR_WHITE } from "../UI/kit/UIKit";
 import { SetupWizardView } from "./SetupWizardView";
 import { getBridgeStatusPresentationForConnect } from "../UI/BridgeStatusPresentation";
 import { BridgeClient } from "../Bridge/BridgeClient";
 import {
   buildCalibrationDisplay,
+  buildCalibrateDescriptionAuto,
+  buildCalibrateStepTitle,
   SetupCalibrationFlow,
-  CALIBRATE_DESCRIPTION_AUTO,
   CALIBRATE_DESCRIPTION_MANUAL,
   createCalibrationViewState,
   getWizardFooterState,
@@ -340,6 +343,7 @@ export class SetupWizard extends BaseScriptComponent {
         this._refreshFooterButtons();
       }
       if (this._currentStep === WizardStep.Calibrate) {
+        this._refreshCalibrationDescription();
         if (this.dimosManager!.alignmentSession.ensureSession()) {
           this._renderCalibrationState();
         }
@@ -355,6 +359,8 @@ export class SetupWizard extends BaseScriptComponent {
       }
       if (this._currentStep === WizardStep.Calibrate) {
         this._calibrationFlow?.handleBridgeConnectionChanged(connected);
+        this._refreshCalibrationDescription();
+        this._renderCalibrationState();
       }
     });
     this.dimosManager.onBridgeStatusChanged.add((msg) => {
@@ -411,11 +417,19 @@ export class SetupWizard extends BaseScriptComponent {
   }
 
   private _refreshCalibrationDescription(): void {
-    const description =
-      this._calibrationFlow?.state.mode === "manual"
-        ? CALIBRATE_DESCRIPTION_MANUAL
-        : CALIBRATE_DESCRIPTION_AUTO;
-    this._view?.setStepContent(WIZARD_STEP_TITLES[WizardStep.Calibrate], description);
+    const mode = this._calibrationFlow?.state.mode ?? "auto";
+    const title = buildCalibrateStepTitle(mode);
+    if (mode === "manual") {
+      this._view?.setStepContent(title, CALIBRATE_DESCRIPTION_MANUAL);
+      return;
+    }
+    if (!this.dimosManager?.hasBridgeConnection()) {
+      this._view?.setStepContent(title, NO_ROBOT_CONNECTED_LABEL, COLOR_WARN);
+      return;
+    }
+    const displayName =
+      this.dimosManager.appState.robotRuntime.displayName ?? NO_ROBOT_CONNECTED_LABEL;
+    this._view?.setStepContent(title, buildCalibrateDescriptionAuto(displayName));
   }
 
   private _toggleManualAlignment(): void {

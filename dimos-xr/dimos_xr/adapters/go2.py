@@ -25,7 +25,7 @@ from dimos_lcm.std_msgs import Bool, String
 from scipy.spatial.transform import Rotation as _Rotation
 from unitree_webrtc_connect.constants import RTC_TOPIC, SPORT_CMD
 
-from dimos_xr.adapters.base import CapabilityState, RobotHandshake, XRRobotAdapterSpec
+from dimos_xr.adapters.base import CapabilityState, RobotHandshake, RuntimeAlignmentProfile, XRRobotAdapterSpec
 from dimos_xr.tracking.tag_tracker import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
 
 logger = setup_logger()
@@ -74,6 +74,10 @@ GO2_DEFAULT_TAG_MOUNTS: list[TagMount] = [
 
 def go2_tag_mounts() -> list[TagMount]:
     return list(GO2_DEFAULT_TAG_MOUNTS)
+
+
+def go2_runtime_alignment_profile() -> RuntimeAlignmentProfile:
+    return RuntimeAlignmentProfile()
 
 
 def go2_handshake(robot_id: str) -> RobotHandshake:
@@ -294,6 +298,10 @@ class Go2AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
     @rpc
     def assist_strafe_speed(self) -> float:
         return 0.5
+
+    @rpc
+    def runtime_alignment_profile(self) -> RuntimeAlignmentProfile:
+        return go2_runtime_alignment_profile()
 
     @rpc
     def assist_set_lateral_velocity(self, vy_m_s: float) -> bool:

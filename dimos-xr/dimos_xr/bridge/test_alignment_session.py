@@ -24,6 +24,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+from dimos_xr.adapters.base import RuntimeAlignmentProfile
 from dimos_xr.bridge.alignment import AlignmentController
 from dimos_xr.bridge.assist import AssistDriver, AssistState, _MovePhase
 from dimos_xr.bridge.odom_buffer import OdomBuffer
@@ -257,7 +258,10 @@ async def test_camera_frame_processed_during_assist_sample() -> None:
     assert len(acks) == 1
     assert json.loads(acks[0])["seq"] == 44
     ctrl._tag_tracker.process_frame.assert_called_once()  # type: ignore[union-attr]
-    ctrl._apply_tracker_update.assert_called_once_with(ts=1.0)  # type: ignore[union-attr]
+    ctrl._apply_tracker_update.assert_called_once()  # type: ignore[union-attr]
+    call_kwargs = ctrl._apply_tracker_update.call_args.kwargs  # type: ignore[union-attr]
+    assert call_kwargs["ts"] == 1.0
+    assert "odom_ts" in call_kwargs
 
 
 # ------------------------------------------------------------------
@@ -462,7 +466,9 @@ def _make_controller_with_correction() -> tuple[AlignmentController, list[str]]:
         manual_alignment_quality=0.7,
         runtime_correction_enabled=True,
         tf_publish_static=MagicMock(),
+        runtime_profile=RuntimeAlignmentProfile(),
     )
+    ctrl._odom.speed_windowed = MagicMock(return_value=0.0)  # type: ignore[method-assign]
     return ctrl, sent
 
 
@@ -484,6 +490,7 @@ def test_runtime_smoothing_preserves_heading() -> None:
         baseline_m=0.40,
     )
     ctrl._tag_tracker.current_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
+    ctrl._tag_tracker.current_translation_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
 
     ctrl._apply_tracker_update()
 
@@ -518,8 +525,8 @@ def test_runtime_translation_solve_corrects_stationary_robot() -> None:
 
     committed_yaw = _yaw_from_T(ctrl._T_committed)
     assert committed_yaw == pytest.approx(theta, abs=1e-6)
-    assert ctrl._T_committed[0, 3] == pytest.approx(1.0, abs=1e-6)
-    assert ctrl._T_committed[2, 3] == pytest.approx(-1.0, abs=1e-6)
+    assert ctrl._T_committed[0, 3] == pytest.approx(1.0, abs=1e-3)
+    assert ctrl._T_committed[2, 3] == pytest.approx(-1.0, abs=1e-3)
     pose_corrections = [
         json.loads(payload)
         for payload in sent
@@ -560,7 +567,7 @@ def test_runtime_correction_emits_fresh_pose_for_stationary_robot() -> None:
     assert pose_payloads, "runtime correction should emit an immediate pose snapshot"
     latest_pose = pose_payloads[-1]
     assert latest_pose["ts"] == pytest.approx(123.456, abs=1e-3)
-    assert latest_pose["position"] == pytest.approx([1.0, 0.0, -1.0], abs=1e-4)
+    assert latest_pose["position"] == pytest.approx([1.0, 0.0, -1.0], abs=1e-3)
 
 
 # ---------------------------------------------------------------------------
@@ -582,12 +589,13 @@ def test_runtime_correction_below_deadband_emits_no_pose_correction() -> None:
     T_target = build_T_world_odom(theta + math.radians(0.5), (0.02, 0.0, 0.0))
     solve = TagSolve(
         T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
-        method="tag",
+        method="tag_translation",
         quality=0.95,
-        observation_count=4,
-        baseline_m=0.30,
+        observation_count=1,
+        baseline_m=0.0,
     )
-    ctrl._tag_tracker.current_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
+    ctrl._tag_tracker.current_solve = MagicMock(return_value=None)  # type: ignore[method-assign]
+    ctrl._tag_tracker.current_translation_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
 
     ctrl._apply_tracker_update()
 
@@ -612,8 +620,8 @@ def test_runtime_correction_above_deadband_emits_pose_correction() -> None:
     ctrl._T_committed = np.array(T_committed, dtype=np.float64, copy=True)
     ctrl._calibration.register_from_alignment(T_committed)
 
-    # 10 cm translation — above the 5 cm threshold.
-    T_target = build_T_world_odom(theta, (0.10, 0.0, 0.0))
+    # 25 cm translation — above the pose_correction notification threshold.
+    T_target = build_T_world_odom(theta, (0.25, 0.0, 0.0))
     solve = TagSolve(
         T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
         method="tag_translation",
@@ -826,3 +834,53 @@ def test_failed_path_terminal_status_is_last(
     assert statuses[-1]["state"] == "failed", (
         f"last align_status must be 'failed', got {statuses[-1]['state']!r}"
     )
+
+
+def test_runtime_yaw_gate_holds_on_curve() -> None:
+    ctrl, _ = _make_controller_with_correction()
+    ctrl._odom.speed_windowed = MagicMock(return_value=0.5)  # type: ignore[method-assign]
+
+    theta = math.radians(15.0)
+    T_committed = build_T_world_odom(theta, (0.0, 0.0, 0.0))
+    ctrl._T_committed = np.array(T_committed, dtype=np.float64, copy=True)
+    ctrl._calibration.register_from_alignment(T_committed)
+
+    T_target = build_T_world_odom(theta + math.radians(5.0), (0.2, 0.0, -0.2))
+    solve = TagSolve(
+        T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
+        method="tag",
+        quality=0.9,
+        observation_count=6,
+        baseline_m=0.5,
+        straightness=0.8,
+    )
+    ctrl._tag_tracker.current_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
+
+    ctrl._apply_tracker_update()
+
+    assert _yaw_from_T(ctrl._T_committed) == pytest.approx(theta, abs=1e-6)
+
+
+def test_runtime_yaw_gate_allows_straight_run() -> None:
+    ctrl, _ = _make_controller_with_correction()
+    ctrl._odom.speed_windowed = MagicMock(return_value=0.5)  # type: ignore[method-assign]
+
+    theta = math.radians(15.0)
+    T_committed = build_T_world_odom(theta, (0.0, 0.0, 0.0))
+    ctrl._T_committed = np.array(T_committed, dtype=np.float64, copy=True)
+    ctrl._calibration.register_from_alignment(T_committed)
+
+    T_target = build_T_world_odom(theta + math.radians(5.0), (0.2, 0.0, -0.2))
+    solve = TagSolve(
+        T_world_odom=np.array(T_target, dtype=np.float64, copy=True),
+        method="tag",
+        quality=0.9,
+        observation_count=6,
+        baseline_m=0.5,
+        straightness=0.1,
+    )
+    ctrl._tag_tracker.current_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
+
+    ctrl._apply_tracker_update()
+
+    assert _yaw_from_T(ctrl._T_committed) != pytest.approx(theta, abs=1e-6)

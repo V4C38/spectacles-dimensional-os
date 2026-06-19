@@ -187,6 +187,32 @@ class OdomBuffer:
             )
             return dp / dt
 
+    def speed_windowed(self, mono_ts: float, horizon_s: float) -> float | None:
+        """Average linear speed (m/s) over odom samples within ``horizon_s`` of ``mono_ts``."""
+        if horizon_s <= 0.0:
+            return self.speed_at(mono_ts)
+        with self._lock:
+            if len(self._buffer) < 2:
+                return None
+            window = [
+                (ts, sample)
+                for ts, sample in self._buffer
+                if mono_ts - horizon_s <= ts <= mono_ts
+            ]
+            if len(window) < 2:
+                return None
+            first_ts, first_sample = window[0]
+            last_ts, last_sample = window[-1]
+            dt = last_ts - first_ts
+            if dt <= 1e-6:
+                return 0.0
+            dp = math.sqrt(
+                (last_sample.position[0] - first_sample.position[0]) ** 2
+                + (last_sample.position[1] - first_sample.position[1]) ** 2
+                + (last_sample.position[2] - first_sample.position[2]) ** 2
+            )
+            return dp / dt
+
     def latest_world_position(self, calibration: Calibration) -> tuple[float, float, float] | None:
         """Transform the latest odom position into the AR world frame."""
         odom = self.latest()

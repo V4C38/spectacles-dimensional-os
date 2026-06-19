@@ -251,9 +251,13 @@ Robot pose in XR world frame:
   "robot_id": "unitree_go2",
   "frame": "world",
   "position": [x, y, z],
-  "orientation": [qx, qy, qz, qw]
+  "orientation": [qx, qy, qz, qw],
+  "speed_mps": 0.42
 }
 ```
+
+- `speed_mps` (optional): smoothed robot linear speed in m/s from bridge odom,
+  used by the Lens for runtime static capture burst when the robot stops.
 
 ### `pose_correction`
 

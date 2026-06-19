@@ -57,8 +57,8 @@ class XRBridgeConfig(ModuleConfig):  # type: ignore[misc]
     min_height_m: float | None = -0.35
     max_height_m: float | None = 1.2
     obstacle_height_threshold_m: float = 0.08
-    target_points: int = 600
-    obstacle_target_points: int = 300
+    target_points: int = 1000
+    obstacle_target_points: int = 200
     lidar_binary: bool = True
     lidar_max_hz: float = 1.0
     # Voxel grid size for coarse LiDAR downsampling before the height-band filter.
@@ -87,6 +87,7 @@ class XRBridgeConfig(ModuleConfig):  # type: ignore[misc]
     runtime_correction_enabled: bool = True
     world_anchor_tag_ids: list[int] = []
     world_anchor_size_m: float = 0.056
+    odom_pairing_offset_s: float = 0.02
 
 
 class XRBridge(Module):  # type: ignore[misc]
@@ -123,6 +124,7 @@ class XRBridge(Module):  # type: ignore[misc]
 
         robot_id = self._adapter.robot_id()
         handshake = self._adapter.handshake_payload()
+        runtime_profile = self._adapter.runtime_alignment_profile()
 
         # Build LidarFilter with adapter-derived height bounds.
         min_height_m, max_height_m = lidar_height_band_m(
@@ -158,6 +160,7 @@ class XRBridge(Module):  # type: ignore[misc]
             window_max_age_s=self.config.tag_window_max_age_s,
             max_mount_residual_m=self.config.tag_max_mount_residual_m,
             max_up_axis_tilt_deg=self.config.tag_max_up_axis_tilt_deg,
+            odom_pairing_offset_s=runtime_profile.odom_pairing_offset_s,
         )
         alignment = AlignmentController(
             robot_id=robot_id,
@@ -174,6 +177,7 @@ class XRBridge(Module):  # type: ignore[misc]
             adapter=self._adapter,
             world_anchor_tag_ids=self.config.world_anchor_tag_ids,
             world_anchor_size_m=self.config.world_anchor_size_m,
+            runtime_profile=runtime_profile,
         )
 
         nav = NavController(
@@ -202,6 +206,7 @@ class XRBridge(Module):  # type: ignore[misc]
             lidar_voxel_size_m=self.config.lidar_voxel_size_m,
             pose_max_hz=self.config.pose_max_hz,
             lidar_binary=self.config.lidar_binary,
+            speed_horizon_s=runtime_profile.runtime_speed_horizon_s,
         )
 
         assert self._loop is not None, "build() called before Module loop is assigned"

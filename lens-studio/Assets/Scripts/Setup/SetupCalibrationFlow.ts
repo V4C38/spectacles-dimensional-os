@@ -9,15 +9,11 @@
 // ================================================================
 
 import { AlignmentSession } from "../Alignment/AlignmentSession";
+import { NO_ROBOT_CONNECTED_LABEL } from "../Core/AppState";
 import { DimosManager } from "../Core/DimosManager";
 import { AlignStatusMessage, BridgeStatusMessage } from "../Bridge/Protocol";
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE,COLOR_WARN, SnapOS2Styles } from "../UI/kit/UIKit";
-import {
-  buildAssistPreviewPresentation,
-  isAssistPreviewStage,
-} from "./SetupAlignmentPreview";
-
-// ── Step / calibration types ───────────────────────────────────
+import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE, COLOR_WARN, SnapOS2Styles } from "../UI/kit/UIKit";
+import { isAssistPreviewStage } from "./SetupAlignmentPreview";
 
 export enum WizardStep {
   Start = 0,
@@ -67,16 +63,22 @@ export const WIZARD_STEP_TITLES: string[] = [
   "Calibration",
 ];
 
-export const CALIBRATE_DESCRIPTION_AUTO =
-  "Look at the AprilTag on your robot to start calibration.";
+export function buildCalibrateDescriptionAuto(displayName: string): string {
+  return `Look at the tag on the ${displayName}.`;
+}
+
+export function buildCalibrateStepTitle(mode: AlignmentMode): string {
+  return mode === "manual" ? "Calibration - Manual" : "Calibration - April Tag";
+}
 
 export const CALIBRATE_DESCRIPTION_MANUAL =
-  "Place the marker at the robot position.";
+  "Manually place the marker at the robot center.";
+
 
 export const WIZARD_STEP_DESCRIPTIONS: string[] = [
   "Power on your robot.\nRun ./start.sh in dimos-xr on your Mac.",
   "Enter your Mac's IP.\nUse same Wi‑Fi for robot, Mac, and Spectacles.",
-  CALIBRATE_DESCRIPTION_AUTO,
+  buildCalibrateDescriptionAuto(NO_ROBOT_CONNECTED_LABEL),
 ];
 
 export function wizardStepName(step: WizardStep): string {
@@ -144,33 +146,18 @@ export function buildCalibrationDisplay(
       : { text: "❌  Tag not visible", color: COLOR_ERROR };
 
     if (isAssistPreviewStage(state.assistStage)) {
-      const presentation = buildAssistPreviewPresentation({
-        assistStage: state.assistStage,
-        progress: state.progress,
-        tagVisible: state.tagVisible,
-      });
       return {
-        statusText: presentation.titleText,
-        statusColor: COLOR_WHITE,
-        detailText: presentation.statusText,
-        detailColor: presentation.statusColor,
+        statusText: tagStatus.text,
+        statusColor: tagStatus.color,
+        detailText: "",
+        detailColor: COLOR_WHITE,
       };
     }
 
-    let detailText: string;
-    if (state.stepIndex !== undefined && state.stepCount !== undefined) {
-      const label = state.stepIndex === 1 ? "Pre-alignment" : "Calibration";
-      detailText = `Step ${state.stepIndex}/${state.stepCount}: ${label} (${Math.max(
-        0,
-        Math.min(100, Math.round(state.progress)),
-      )}%)`;
-    } else {
-      detailText = `Calibrating: ${Math.max(0, Math.min(100, Math.round(state.progress)))}%`;
-    }
     return {
       statusText: tagStatus.text,
       statusColor: tagStatus.color,
-      detailText,
+      detailText: "",
       detailColor: COLOR_WHITE,
     };
   }

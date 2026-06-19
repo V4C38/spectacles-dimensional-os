@@ -229,6 +229,22 @@ def _ground_baseline_m(observations: list[TagObservation]) -> float:
     return max_dist
 
 
+def _odom_tag_straightness(observations: list[TagObservation]) -> float:
+    """Path straightness from odom-tag XY spread (0 = straight, →1 = curved)."""
+    if len(observations) < 2:
+        return 1.0
+    u = np.array(
+        [(o.p_odom_tag[0], o.p_odom_tag[1]) for o in observations],
+        dtype=np.float64,
+    )
+    u_c = u - u.mean(axis=0)
+    cov = (u_c.T @ u_c) / len(u_c)
+    lam2, lam1 = sorted(np.linalg.eigvalsh(cov))
+    if lam1 <= 1e-9:
+        return 1.0
+    return float(math.sqrt(lam2 / lam1))
+
+
 def _yaw_from_T(T: NDArray[np.float64]) -> float:
     """Heading of T's forward (x) axis. Convention: forward = (cos th, 0, -sin th).
 
@@ -286,6 +302,7 @@ class TagSolve:
     quality: float
     observation_count: int
     baseline_m: float
+    straightness: float = 1.0
 
 
 @dataclass
@@ -323,6 +340,7 @@ class TagTrackerConfig:
     relocalize_consecutive: int = 3
     max_mount_residual_m: float = 0.5
     max_up_axis_tilt_deg: float = 85.0
+    odom_pairing_offset_s: float = 0.02
 
 
 class TagTracker:
@@ -419,7 +437,7 @@ class TagTracker:
     ) -> FrameResult:
         recv_mono = receive_mono if receive_mono is not None else time.monotonic()
         frame_age = float(header["send_ts"]) - float(header["ts"])
-        odom_ts = recv_mono - max(0.0, frame_age)
+        odom_ts = recv_mono - max(0.0, frame_age) - self._config.odom_pairing_offset_s
         odom = odom_lookup(odom_ts)
 
         with self._lock:
@@ -624,15 +642,32 @@ class TagTracker:
         p_odom_base = T_odom_base[:3, 3]
         return R_odom_base.T @ (p_odom_tag_meas - p_odom_base)
 
-    def current_solve(self, *, min_baseline_m: float | None = None) -> TagSolve | None:
+    def current_solve(
+        self,
+        *,
+        min_baseline_m: float | None = None,
+        max_age_s: float | None = None,
+        max_observations: int | None = None,
+    ) -> TagSolve | None:
         with self._lock:
             observations = list(self._observations)
 
         if not observations:
             return None
 
+        if max_age_s is not None:
+            newest = observations[-1].mono_ts
+            cutoff = newest - max_age_s
+            observations = [o for o in observations if o.mono_ts >= cutoff]
+        if max_observations is not None and len(observations) > max_observations:
+            observations = observations[-max_observations:]
+
+        if not observations:
+            return None
+
         effective_min_baseline = min_baseline_m if min_baseline_m is not None else self._config.min_baseline_m
         baseline = _ground_baseline_m(observations)
+        straightness = _odom_tag_straightness(observations)
         if len(observations) >= 2 and baseline >= effective_min_baseline:
             u = np.array(
                 [(o.p_odom_tag[0], o.p_odom_tag[1]) for o in observations],
@@ -655,6 +690,7 @@ class TagTracker:
                 quality=quality,
                 observation_count=len(observations),
                 baseline_m=baseline,
+                straightness=straightness,
             )
         return None
 
@@ -781,12 +817,14 @@ class TagTracker:
         T_new = np.array(T_keep, dtype=np.float64, copy=True)
         T_new[:3, 3] = mean_translation
         T_new = gravity_level_transform(T_new)
+        window_obs = observations[-max_observations:] if max_observations else observations
         return TagSolve(
             T_world_odom=T_new,
             method="tag_translation",
             quality=float(np.mean(qualities)),
             observation_count=len(translations),
-            baseline_m=self.baseline_m(),
+            baseline_m=_ground_baseline_m(window_obs),
+            straightness=_odom_tag_straightness(window_obs),
         )
 
     def robot_world_pose_estimate(

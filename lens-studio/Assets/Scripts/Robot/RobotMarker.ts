@@ -5,8 +5,6 @@ import { InteractableManipulation } from "SpectaclesInteractionKit.lspkg/Compone
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import { findChildRecursive, requireChild } from "../UI/kit/UIKit";
 import {
-  quatAngularDistanceRad,
-  vec3Distance,
   yawRotationFromWorldRotation,
 } from "../Core/MathUtils";
 import { FrameCaptureController } from "../Alignment/FrameCaptureController";
@@ -58,75 +56,44 @@ interface RuntimePoseTickResult {
   position: vec3;
   rotation: quat;
   realignmentVfxActive: boolean;
-  commitPose: boolean;
 }
 
-type RuntimePoseSetTargetResult = "immediate" | "track" | "rejected";
+type RuntimePoseSetTargetResult = "immediate" | "track";
 
 class RuntimePoseAnimator {
-  private static readonly POSITION_DEADBAND_CM = 0.75;
-  private static readonly ROTATION_DEADBAND_RAD = (1.0 * Math.PI) / 180.0;
-  private static readonly POSITION_SNAP_CM = 0.2;
-  private static readonly ROTATION_SNAP_RAD = (0.25 * Math.PI) / 180.0;
-  private static readonly SMOOTHING_RATE = 14.0;
-  private static readonly REALIGN_SNAP_DURATION_S = 0.2;
+  private static readonly SMOOTHING_RATE = 18.0;
+  private static readonly REALIGN_SNAP_BOOST_RATE = 28.0;
+  private static readonly REALIGN_SNAP_DURATION_S = 0.15;
 
   private _tracking = false;
   private _targetPosition: vec3 | null = null;
   private _targetRotation: quat | null = null;
-  private _snapRequested = false;
-  private _snapActive = false;
-  private _snapStartTime = 0;
-  private _snapStartPosition: vec3 | null = null;
-  private _snapStartRotation: quat | null = null;
+  private _boostUntil = 0;
 
   public get isTracking(): boolean {
     return this._tracking;
   }
 
   public get realignmentVfxActive(): boolean {
-    return this._snapActive;
+    return getTime() < this._boostUntil;
   }
 
   public reset(): void {
     this._tracking = false;
     this._targetPosition = null;
     this._targetRotation = null;
-    this._snapRequested = false;
-    this._snapActive = false;
-    this._snapStartPosition = null;
-    this._snapStartRotation = null;
+    this._boostUntil = 0;
   }
 
   public beginRealignmentSnap(): void {
-    this._snapRequested = true;
+    this._boostUntil = getTime() + RuntimePoseAnimator.REALIGN_SNAP_DURATION_S;
   }
 
   public setTarget(
     position: vec3,
     rotation: quat,
     snapImmediate: boolean,
-    currentPose?: { position: vec3; rotation: quat },
   ): RuntimePoseSetTargetResult {
-    if (
-      !this._snapRequested &&
-      this._tracking &&
-      this._targetPosition &&
-      this._targetRotation
-    ) {
-      const positionDelta = vec3Distance(this._targetPosition, position);
-      const rotationDelta = quatAngularDistanceRad(
-        this._targetRotation,
-        rotation,
-      );
-      if (
-        positionDelta < RuntimePoseAnimator.POSITION_DEADBAND_CM &&
-        rotationDelta < RuntimePoseAnimator.ROTATION_DEADBAND_RAD
-      ) {
-        return "rejected";
-      }
-    }
-
     this._targetPosition = new vec3(position.x, position.y, position.z);
     this._targetRotation = new quat(
       rotation.w,
@@ -137,25 +104,7 @@ class RuntimePoseAnimator {
     this._tracking = true;
 
     if (snapImmediate) {
-      this._snapRequested = false;
       return "immediate";
-    }
-
-    if (this._snapRequested && currentPose) {
-      this._snapRequested = false;
-      this._snapStartPosition = new vec3(
-        currentPose.position.x,
-        currentPose.position.y,
-        currentPose.position.z,
-      );
-      this._snapStartRotation = new quat(
-        currentPose.rotation.w,
-        currentPose.rotation.x,
-        currentPose.rotation.y,
-        currentPose.rotation.z,
-      );
-      this._snapStartTime = getTime();
-      this._snapActive = true;
     }
 
     return "track";
@@ -174,56 +123,15 @@ class RuntimePoseAnimator {
       return null;
     }
 
-    if (this._snapActive && this._snapStartPosition && this._snapStartRotation) {
-      const elapsed = now - this._snapStartTime;
-      const rawT = elapsed / RuntimePoseAnimator.REALIGN_SNAP_DURATION_S;
-      if (rawT >= 1.0) {
-        this._snapActive = false;
-        this._snapStartPosition = null;
-        this._snapStartRotation = null;
-        return {
-          position: this._targetPosition,
-          rotation: this._targetRotation,
-          realignmentVfxActive: false,
-          commitPose: true,
-        };
-      }
-      const t = 1.0 - Math.pow(1.0 - rawT, 3);
-      return {
-        position: vec3.lerp(this._snapStartPosition, this._targetPosition, t),
-        rotation: quat.slerp(
-          this._snapStartRotation,
-          this._targetRotation,
-          t,
-        ),
-        realignmentVfxActive: true,
-        commitPose: false,
-      };
-    }
-
-    const positionDelta = vec3Distance(current.position, this._targetPosition);
-    const rotationDelta = quatAngularDistanceRad(
-      current.rotation,
-      this._targetRotation,
-    );
-    if (
-      positionDelta <= RuntimePoseAnimator.POSITION_SNAP_CM &&
-      rotationDelta <= RuntimePoseAnimator.ROTATION_SNAP_RAD
-    ) {
-      return {
-        position: this._targetPosition,
-        rotation: this._targetRotation,
-        realignmentVfxActive: false,
-        commitPose: true,
-      };
-    }
-
-    const alpha = 1.0 - Math.exp(-RuntimePoseAnimator.SMOOTHING_RATE * dt);
+    const rate =
+      now < this._boostUntil
+        ? RuntimePoseAnimator.REALIGN_SNAP_BOOST_RATE
+        : RuntimePoseAnimator.SMOOTHING_RATE;
+    const alpha = 1.0 - Math.exp(-rate * dt);
     return {
       position: vec3.lerp(current.position, this._targetPosition, alpha),
       rotation: quat.slerp(current.rotation, this._targetRotation, alpha),
-      realignmentVfxActive: false,
-      commitPose: false,
+      realignmentVfxActive: now < this._boostUntil,
     };
   }
 }
@@ -529,7 +437,7 @@ export class RobotMarker extends BaseScriptComponent {
     }
     const searchRoot = this.markerRoot.getParent() ?? this.markerRoot;
     try {
-      this._menuRoot = requireChild(searchRoot, "RobotUIRoot", "RobotMarker");
+      this._menuRoot = requireChild(searchRoot, "RobotUI", "RobotMarker");
     } catch (_error) {
       return null;
     }
@@ -548,7 +456,7 @@ export class RobotMarker extends BaseScriptComponent {
     this._configured = true;
     this._menuRoot = this.getMenuRoot();
     if (!this._menuRoot) {
-      throw new Error("RobotMarker: Missing scene object RobotUIRoot");
+      throw new Error("RobotMarker: Missing scene object RobotUI");
     }
 
     const childBindings: Array<{ name: string; assign: (obj: SceneObject) => void }> = [
@@ -638,22 +546,11 @@ export class RobotMarker extends BaseScriptComponent {
 
     const desiredRotation = yawRotationFromWorldRotation(rotation);
     const snapImmediate = !this._poseAnimator.isTracking;
-    const transform = this.markerRoot.getTransform();
     const result = this._poseAnimator.setTarget(
       position,
       desiredRotation,
       snapImmediate,
-      snapImmediate
-        ? undefined
-        : {
-            position: transform.getWorldPosition(),
-            rotation: this.getRotation() ?? quat.quatIdentity(),
-          },
     );
-
-    if (result === "rejected") {
-      return;
-    }
 
     if (result === "immediate") {
       this.setPose(position, desiredRotation);
@@ -681,12 +578,8 @@ export class RobotMarker extends BaseScriptComponent {
       return;
     }
 
-    if (tickResult.commitPose) {
-      this.setPose(tickResult.position, tickResult.rotation);
-    } else {
-      transform.setWorldPosition(tickResult.position);
-      this.setRotation(tickResult.rotation);
-    }
+    transform.setWorldPosition(tickResult.position);
+    this.setRotation(tickResult.rotation);
     this._setRealignmentVfx(tickResult.realignmentVfxActive);
   }
 

@@ -93,6 +93,7 @@ def build_pose_payload(
     calibration: Calibration,
     sample_odom: Callable[[PoseStamped], OdomSample],
     robot_id: str,
+    speed_mps: float | None = None,
 ) -> tuple[str, tuple[float, float, float], tuple[float, float, float, float]] | None:
     """Transform odom pose into world frame and encode as an XR pose payload.
 
@@ -105,7 +106,13 @@ def build_pose_payload(
         np.isfinite(v) for v in (pos[0], pos[1], pos[2], quat[0], quat[1], quat[2], quat[3])
     ):
         return None
-    payload = encode_pose(ts=msg.ts, position=pos, orientation=quat, robot_id=robot_id)
+    payload = encode_pose(
+        ts=msg.ts,
+        position=pos,
+        orientation=quat,
+        robot_id=robot_id,
+        speed_mps=speed_mps,
+    )
     return payload, pos, quat
 
 

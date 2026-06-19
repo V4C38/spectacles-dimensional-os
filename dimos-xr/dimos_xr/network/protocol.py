@@ -482,18 +482,20 @@ def encode_pose(
     position: tuple[float, float, float],
     orientation: tuple[float, float, float, float],
     robot_id: str,
+    speed_mps: float | None = None,
 ) -> str:
     safe_position, safe_orientation = _sanitize_pose_values(position, orientation)
-    return _dumps(
-        {
-            "type": "pose",
-            "ts": round(ts, 3),
-            "robot_id": robot_id,
-            "frame": FRAME_WORLD,
-            "position": _round_vec3(safe_position, decimals=4),
-            "orientation": _round_quat(safe_orientation, decimals=4),
-        }
-    )
+    payload: dict[str, Any] = {
+        "type": "pose",
+        "ts": round(ts, 3),
+        "robot_id": robot_id,
+        "frame": FRAME_WORLD,
+        "position": _round_vec3(safe_position, decimals=4),
+        "orientation": _round_quat(safe_orientation, decimals=4),
+    }
+    if speed_mps is not None:
+        payload["speed_mps"] = round(float(speed_mps), 4)
+    return _dumps(payload)
 
 
 def encode_pose_correction(

@@ -2,6 +2,7 @@ import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInp
 import {
   ButtonBinding,
   COLOR_MUTED,
+  COLOR_WHITE,
   CONTENT_PAD_X,
   createTextInput,
   FALLBACK_FRAME_INNER_WIDTH,
@@ -29,6 +30,17 @@ export class SetupWizardView {
   private readonly _manual: ButtonBinding;
   private readonly _inputField: TextInputField;
   private readonly _inputObj: SceneObject;
+  private readonly _statusObj: SceneObject;
+  private readonly _statusBaseLocalX: number;
+  private readonly _statusBaseLocalZ: number;
+  private readonly _descriptionObj: SceneObject;
+  private readonly _descriptionBaseLocalX: number;
+  private readonly _descriptionBaseLocalZ: number;
+
+  private static readonly STATUS_Y_CALIBRATE = 0;
+  private static readonly STATUS_Y_DEFAULT = -2;
+  private static readonly DESCRIPTION_Y_START = 1;
+  private static readonly DESCRIPTION_Y_DEFAULT = 3;
 
   constructor(private readonly _panel: SceneObject) {
     const titleText = findText(_panel, "StepTitle");
@@ -55,6 +67,14 @@ export class SetupWizardView {
     this._descriptionText = descriptionText;
     this._statusText = statusText;
     this._detailStatusText = detailStatusText;
+    this._descriptionObj = descriptionText.getSceneObject();
+    const descriptionLocal = this._descriptionObj.getTransform().getLocalPosition();
+    this._descriptionBaseLocalX = descriptionLocal.x;
+    this._descriptionBaseLocalZ = descriptionLocal.z;
+    this._statusObj = statusText.getSceneObject();
+    const statusLocal = this._statusObj.getTransform().getLocalPosition();
+    this._statusBaseLocalX = statusLocal.x;
+    this._statusBaseLocalZ = statusLocal.z;
     this._next = next;
     this._prev = prev;
     this._manual = manual;
@@ -98,9 +118,10 @@ export class SetupWizardView {
     return this._inputField;
   }
 
-  public setStepContent(title: string, description: string): void {
+  public setStepContent(title: string, description: string, descriptionColor?: vec4): void {
     this._titleText.text = title;
     this._descriptionText.text = description;
+    this._descriptionText.textFill.color = descriptionColor ?? COLOR_WHITE;
   }
 
   public setInputEnabled(enabled: boolean): void {
@@ -135,8 +156,22 @@ export class SetupWizardView {
     this.setDetailStatus("");
   }
 
-  public applyStepLayout(_step: WizardStep): void {
-    // Layout is authored in the scene; no runtime repositioning.
+  public applyStepLayout(step: WizardStep): void {
+    const statusY =
+      step === WizardStep.Calibrate
+        ? SetupWizardView.STATUS_Y_CALIBRATE
+        : SetupWizardView.STATUS_Y_DEFAULT;
+    this._statusObj.getTransform().setLocalPosition(
+      new vec3(this._statusBaseLocalX, statusY, this._statusBaseLocalZ),
+    );
+
+    const descriptionY =
+      step === WizardStep.Start
+        ? SetupWizardView.DESCRIPTION_Y_START
+        : SetupWizardView.DESCRIPTION_Y_DEFAULT;
+    this._descriptionObj.getTransform().setLocalPosition(
+      new vec3(this._descriptionBaseLocalX, descriptionY, this._descriptionBaseLocalZ),
+    );
   }
 
   public applyFooterState(_step: WizardStep, state: WizardFooterState): void {

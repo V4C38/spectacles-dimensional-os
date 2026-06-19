@@ -20,17 +20,17 @@ export function getBridgeStatusPresentation(
   switch (state) {
     case "disconnected":
       return {
-        text: "Bridge disconnected",
+        text: "\n\n\nBridge disconnected",
         color: COLOR_ERROR,
       };
     case "connectedNoRobot":
       return {
-        text: "Bridge connected - waiting for robot",
+        text: "\n\n\nBridge connected - waiting for robot",
         color: COLOR_WARN,
       };
     case "connected":
       return {
-        text: "Bridge connected",
+        text: "\n\n\nBridge connected",
         color: COLOR_SUCCESS,
       };
   }

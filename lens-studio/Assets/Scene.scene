@@ -180,7 +180,7 @@
 - !<SceneObject/0007656a-2aa8-442b-bef7-1a2c3c0c9bde>
   PrefabRemaps:
     []
-  Name: RobotUIRoot
+  Name: RobotUI
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -254,6 +254,74 @@
         []
       onFinishedCallbacks:
         []
+  ScriptTypes:
+    "":
+      {}
+- !<ScriptComponent/00d95e0b-9c9c-4d06-8bdd-1017943e51c2>
+  PrefabRemaps:
+    []
+  Name: Frame
+  Enabled: true
+  ScriptAsset: !<reference> 3b46d829-f6db-432a-914c-3551904d3994
+  ScriptInputsDefault:
+    _appearance: true
+    _padding: true
+    allowNonUniformScaling: true
+    _onlyInteractOnBorder: true
+    _cutOutCenter: true
+    _minimumSize: true
+    _maximumSize: true
+    xOnTranslate: true
+    xAlways: true
+    xBufferDegrees: true
+    yOnTranslate: true
+    yAlways: true
+    yBufferDegrees: true
+    useSnapping: true
+    itemSnapping: true
+    worldSnapping: true
+    _showFollowButton: true
+    _following: true
+    _showCloseButton: true
+    _enableInteractionPlane: true
+    _interactionPlaneOffset: true
+    _interactionPlanePadding: true
+    _targetingVisual: true
+  ScriptTypesDefault:
+    {}
+  ScriptInputs:
+    "":
+      autoShowHide: false
+      _appearance: Large
+      _innerSize: !<Vec2> {x: 4.000000, y: 14.000000}
+      _padding: !<Vec2> {x: 0.000000, y: 0.000000}
+      _allowScaling: false
+      allowNonUniformScaling: false
+      autoScaleContent: false
+      relativeZ: false
+      _onlyInteractOnBorder: false
+      allowTranslation: false
+      _cutOutCenter: false
+      _minimumSize: !<Vec2> {x: 10.000000, y: 10.000000}
+      _maximumSize: !<Vec2> {x: 150.000000, y: 150.000000}
+      useBillboarding: false
+      xOnTranslate: true
+      xAlways: false
+      xBufferDegrees: !<float> 0.000000
+      yOnTranslate: true
+      yAlways: false
+      yBufferDegrees: !<float> 0.000000
+      useSnapping: false
+      itemSnapping: false
+      worldSnapping: false
+      _showFollowButton: false
+      useFollowBehavior: true
+      _following: false
+      _showCloseButton: false
+      _enableInteractionPlane: true
+      _interactionPlaneOffset: !<Vec3> {x: 0.000000, y: 0.000000, z: 0.000000}
+      _interactionPlanePadding: !<Vec2> {x: 0.000000, y: 0.000000}
+      _targetingVisual: !<float> 1.000000
   ScriptTypes:
     "":
       {}
@@ -341,7 +409,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: -8.000000, z: 0.250000}
+    Position: {x: 0.000000, y: -7.500000, z: 0.250000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -606,7 +674,7 @@
   Enabled: true
   RenderOrder: 0
   StretchMode: Stretch
-  VerticalAlignment: Center
+  VerticalAlignment: Bottom
   HorizontalAlignment: Center
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
@@ -1069,7 +1137,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: -3.500000, z: 0.000000}
+    Position: {x: 0.000000, y: -1.000000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -1100,7 +1168,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 3.500000, z: 0.750000}
+    Position: {x: 0.000000, y: 3.000000, z: 0.750000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -1130,7 +1198,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 10.000000, y: -8.000000, z: 0.250000}
+    Position: {x: 10.000000, y: -7.500000, z: 0.250000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -1205,8 +1273,8 @@
   Enabled: false
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.200000, y: 0.150000, z: 0.001000}
-    Rotation: {x: 0.000000, y: 0.000000, z: 90.000000}
+    Position: {x: -0.200000, y: -0.150000, z: 0.001000}
+    Rotation: {x: 0.000000, y: 0.000000, z: -90.000000}
     Scale: {x: 0.400000, y: 0.400000, z: 0.400000}
     HasSegmentScaleCompensation: false
   Children:
@@ -1220,7 +1288,7 @@
   Enabled: true
   RenderOrder: 0
   StretchMode: Stretch
-  VerticalAlignment: Center
+  VerticalAlignment: Bottom
   HorizontalAlignment: Center
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
@@ -1387,6 +1455,21 @@
     []
   Components:
     - !<own> 10f47d90-3c83-45a0-be42-7c3f6b599fd9
+- !<SceneObject/22c20fb3-5db8-4cc2-b883-93d371440452>
+  PrefabRemaps:
+    []
+  Name: ImageFrame
+  Enabled: false
+  Layers: 1
+  LocalTransform: !<TransformEntity>
+    Position: {x: -23.000000, y: 0.000000, z: 0.000000}
+    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
+    HasSegmentScaleCompensation: false
+  Children:
+    []
+  Components:
+    - !<own> 00d95e0b-9c9c-4d06-8bdd-1017943e51c2
 - !<SceneObject/2320548e-7315-4548-9c8b-101e186d30ac>
   PrefabRemaps:
     []
@@ -2701,7 +2784,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: -4.000000, z: 1.250000}
+    Position: {x: 0.000000, y: 0.000000, z: 1.250000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -2831,6 +2914,7 @@
     "":
       mainUIFrame: !<reference.SceneObject> 52bc606c-3d23-4e49-88f2-dc66bd154524
       dimosManager: !<MappingBased.AssignableType> ef9bba3c-1138-44cc-b761-7ef88bf3856d
+      setupWizard: !<MappingBased.AssignableType_1> 3f25b0bd-8d4d-4305-8d53-c0955727b8a1
   ScriptTypes:
     "":
       {}
@@ -3700,7 +3784,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 7.500000, z: 0.750000}
+    Position: {x: 0.000000, y: 7.000000, z: 1.500000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -3715,7 +3799,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: -10.000000, y: -8.000000, z: 0.250000}
+    Position: {x: -10.000000, y: -7.500000, z: 0.250000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -4179,6 +4263,7 @@
     _playAudio: true
     _hasShadow: true
     _shadowPositionOffset: true
+    _toggleable: true
     _defaultToOn: true
     addCallbacks: true
     triggerUpCallbacks: true
@@ -4196,7 +4281,7 @@
       _style: Secondary
       _hasShadow: false
       _shadowPositionOffset: !<Vec3> {x: 0.050000, y: -0.050000, z: -0.010000}
-      _toggleable: true
+      _toggleable: false
       _defaultToOn: false
       addCallbacks: false
       triggerUpCallbacks:
@@ -4831,6 +4916,7 @@
     _style: true
     _hasShadow: true
     _shadowPositionOffset: true
+    _toggleable: true
     _defaultToOn: true
     addCallbacks: true
     triggerUpCallbacks: true
@@ -4848,7 +4934,7 @@
       _style: PrimaryNeutral
       _hasShadow: false
       _shadowPositionOffset: !<Vec3> {x: 0.050000, y: -0.050000, z: -0.010000}
-      _toggleable: true
+      _toggleable: false
       _defaultToOn: false
       addCallbacks: false
       triggerUpCallbacks:
@@ -5346,7 +5432,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: -0.500000, z: 0.750000}
+    Position: {x: 0.000000, y: -2.000000, z: 0.750000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -6387,7 +6473,7 @@
     "":
       autoShowHide: false
       _appearance: Large
-      _innerSize: !<Vec2> {x: 26.000000, y: 14.000000}
+      _innerSize: !<Vec2> {x: 26.000000, y: 12.500000}
       _padding: !<Vec2> {x: 0.000000, y: 0.000000}
       _allowScaling: false
       allowNonUniformScaling: false
@@ -6544,8 +6630,8 @@
   Enabled: false
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: -0.200000, y: 0.150000, z: 0.001000}
-    Rotation: {x: 0.000000, y: 0.000000, z: -90.000000}
+    Position: {x: 0.200000, y: -0.150000, z: 0.001000}
+    Rotation: {x: 0.000000, y: 0.000000, z: 90.000000}
     Scale: {x: 0.400000, y: 0.400000, z: 0.400000}
     HasSegmentScaleCompensation: false
   Children:
@@ -7289,6 +7375,7 @@
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
   Children:
+    - !<own> 22c20fb3-5db8-4cc2-b883-93d371440452
     - !<own> 6972fe66-f808-483c-97e8-8cd14463634e
     - !<own> 17f9e44d-fd4e-4ed0-aecd-ddae01e422db
     - !<own> 9e547daa-6275-46ea-a49a-38474d66c630

@@ -49,6 +49,7 @@ class TelemetryPublisher:
         lidar_voxel_size_m: float,
         pose_max_hz: float,
         lidar_binary: bool = True,
+        speed_horizon_s: float = 0.4,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
@@ -59,6 +60,7 @@ class TelemetryPublisher:
         self._obstacle_target_points = obstacle_target_points
         self._lidar_voxel_size_m = lidar_voxel_size_m
         self._pose_max_hz = pose_max_hz
+        self._speed_horizon_s = speed_horizon_s
         self._lidar_binary = lidar_binary
         self._pose_last_emit: float = 0.0
         self._dropped_pose_count: int = 0
@@ -143,11 +145,13 @@ class TelemetryPublisher:
         if pose_interval > 0 and now - self._pose_last_emit < pose_interval:
             return
         self._pose_last_emit = now
+        speed_mps = self._odom.speed_windowed(now, self._speed_horizon_s)
         result = build_pose_payload(
             msg,
             calibration=self._calibration,
             sample_odom=self._odom.sample,
             robot_id=self._robot_id,
+            speed_mps=speed_mps,
         )
         if result is None:
             self._dropped_pose_count += 1

@@ -464,6 +464,9 @@ export class BridgeClient extends BaseScriptComponent {
     this._binaryDecodeRunning = true;
     try {
       while (this._pendingBinaryFrames.length > 0) {
+        if (this._pendingBinaryFrames.length > 1) {
+          this._pendingBinaryFrames.splice(0, this._pendingBinaryFrames.length - 1);
+        }
         const frame = this._pendingBinaryFrames.shift();
         if (!frame) {
           continue;
