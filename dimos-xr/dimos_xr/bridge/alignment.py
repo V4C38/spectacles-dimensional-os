@@ -355,6 +355,12 @@ class AlignmentController:
                     encode_camera_frame_ack(robot_id=self._robot_id, seq=seq)
                 )
                 return
+        resolved_odom = self.resolve_frame_odom(header)
+        if resolved_odom is None:
+            self._sender.send(
+                encode_camera_frame_ack(robot_id=self._robot_id, seq=seq)
+            )
+            return
         self._frame_in_flight = True
         try:
             receive_mono = time.monotonic()
@@ -362,12 +368,6 @@ class AlignmentController:
             T_committed = self._T_committed
             if registered and T_committed is None:
                 T_committed = self._calibration.current_transform()
-            # Use interpolated odom lookup when registered so runtime tag corrections
-            # are aligned to the actual capture timestamp instead of dropping frames
-            # that land between buffered odom samples.
-            # Use the relaxed at_or_latest lookup when not yet registered (alignment),
-            # because the robot is stationary and a slightly stale pose is fine.
-            odom_lookup = self._odom.at_interpolated if registered else self._odom.at_or_latest
             # Surface a visible stall to the Lens if no odom has ever arrived.
             if self._odom.latest() is None:
                 self._broadcast_align_status(
@@ -378,7 +378,7 @@ class AlignmentController:
                 self._tag_tracker.process_frame,
                 header,
                 jpeg,
-                odom_lookup,
+                odom=resolved_odom,
                 receive_mono=receive_mono,
                 T_committed=T_committed,
                 registered=registered,
@@ -394,14 +394,10 @@ class AlignmentController:
             self._sender.send(
                 encode_camera_frame_ack(robot_id=self._robot_id, seq=seq)
             )
-            odom_ts = (
-                receive_mono
-                - max(0.0, frame_age)
-                - self._runtime_profile.odom_pairing_offset_s
-            )
             self._apply_tracker_update(
                 ts=float(header.get("ts", time.time())),
-                odom_ts=odom_ts,
+                resolved_odom=resolved_odom,
+                capture_ts_robot=float(header["capture_ts_robot"]),
             )
             if registered:
                 self._maybe_log_moving_robot_diag(
@@ -409,7 +405,8 @@ class AlignmentController:
                     receive_mono=receive_mono,
                     frame_age=frame_age,
                     result=result,
-                    odom_ts=odom_ts,
+                    resolved_odom=resolved_odom,
+                    capture_ts_robot=float(header["capture_ts_robot"]),
                 )
         finally:
             self._frame_in_flight = False
@@ -461,6 +458,37 @@ class AlignmentController:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def resolve_frame_odom(self, header: dict[str, Any]) -> OdomSample | None:
+        """Pair frame capture time to odom via ``capture_ts_robot`` (required)."""
+        raw_capture_ts = header.get("capture_ts_robot")
+        if raw_capture_ts is None:
+            logger.debug(
+                "pairing skip: missing capture_ts_robot",
+                seq=int(header.get("seq", -1)),
+            )
+            return None
+        if not isinstance(raw_capture_ts, (int, float)) or not math.isfinite(float(raw_capture_ts)):
+            logger.debug(
+                "pairing skip: invalid capture_ts_robot",
+                seq=int(header.get("seq", -1)),
+            )
+            return None
+        capture_ts = float(raw_capture_ts)
+        registered = self._calibration.is_registered
+        lookup = (
+            self._odom.at_interpolated_by_source
+            if registered
+            else self._odom.at_or_latest_by_source
+        )
+        odom = lookup(capture_ts)
+        if odom is None:
+            logger.debug(
+                "pairing skip: no odom at capture_ts_robot",
+                seq=int(header.get("seq", -1)),
+                capture_ts_robot=round(capture_ts, 6),
+            )
+        return odom
 
     def _tag_detected(self) -> bool:
         return self._tag_tracker.last_tag_detected
@@ -751,7 +779,11 @@ class AlignmentController:
         )
 
     def _apply_tracker_update(
-        self, *, ts: float | None = None, odom_ts: float | None = None
+        self,
+        *,
+        ts: float | None = None,
+        resolved_odom: OdomSample | None = None,
+        capture_ts_robot: float | None = None,
     ) -> None:
         if self._tag_tracker.active:
             # Assisted tag flow: tick the driver and broadcast tag-visible feedback.
@@ -777,9 +809,12 @@ class AlignmentController:
             return
 
         profile = self._runtime_profile
-        lookup_ts = odom_ts if odom_ts is not None else time.monotonic()
-        speed = self._odom.speed_windowed(lookup_ts, profile.runtime_speed_horizon_s)
-        speed_mps = speed if speed is not None else 0.0
+        if resolved_odom is not None and resolved_odom.measured_speed_mps is not None:
+            speed_mps = resolved_odom.measured_speed_mps
+        else:
+            lookup_ts = self._odom.latest_mono() or time.monotonic()
+            speed = self._odom.speed_windowed(lookup_ts, profile.runtime_speed_horizon_s)
+            speed_mps = speed if speed is not None else 0.0
         regime = self._runtime_regime(speed_mps)
         if regime == "fast":
             return
@@ -1009,7 +1044,8 @@ class AlignmentController:
         receive_mono: float,
         frame_age: float,
         result: FrameResult,
-        odom_ts: float,
+        resolved_odom: OdomSample | None,
+        capture_ts_robot: float,
     ) -> None:
         """Rate-limited diagnostic log for runtime re-alignment validation.
 
@@ -1022,13 +1058,16 @@ class AlignmentController:
         self._last_moving_diag_log_mono = now
 
         profile = self._runtime_profile
-        speed = self._odom.speed_windowed(odom_ts, profile.runtime_speed_horizon_s)
-        speed_mps = speed if speed is not None else 0.0
+        if resolved_odom is not None and resolved_odom.measured_speed_mps is not None:
+            speed_mps = resolved_odom.measured_speed_mps
+        else:
+            lookup_ts = self._odom.latest_mono() or receive_mono
+            speed = self._odom.speed_windowed(lookup_ts, profile.runtime_speed_horizon_s)
+            speed_mps = speed if speed is not None else 0.0
         regime = self._runtime_regime(speed_mps)
 
         tag_estimate = self._tag_tracker.robot_world_pose_estimate()
-        odom = self._odom.at_interpolated(odom_ts)
-        odom_base = self._robot_base_world_position(odom)
+        odom_base = self._robot_base_world_position(resolved_odom)
         residual_m: float | None = None
         if tag_estimate is not None and odom_base is not None:
             tag_pos = np.asarray(tag_estimate[0], dtype=np.float64)
@@ -1047,10 +1086,16 @@ class AlignmentController:
             + result.rejections_innovation
         )
 
+        source_ts_gap: float | None = None
+        if resolved_odom is not None and resolved_odom.source_ts is not None:
+            source_ts_gap = capture_ts_robot - resolved_odom.source_ts
+
         logger.info(
             "moving_robot_diag",
             seq=int(header.get("seq", -1)),
             frame_age_s=round(frame_age, 4),
+            capture_ts_robot=round(capture_ts_robot, 6),
+            source_ts_gap_s=round(source_ts_gap, 6) if source_ts_gap is not None else None,
             robot_speed_ms=round(speed_mps, 3),
             regime=regime,
             world_residual_m=round(residual_m, 4) if residual_m is not None else None,

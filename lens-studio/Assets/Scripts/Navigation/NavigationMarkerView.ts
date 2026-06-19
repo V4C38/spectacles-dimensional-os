@@ -10,7 +10,7 @@ import {
   setButtonStyle,
   SnapOS2Styles,
 } from "../UI/kit/UIKit";
-import { yawRotationFromWorldRotation } from "../Core/MathUtils";
+import { yawRotationFromWorldRotation } from "../Core/Utilities";
 
 // ================================================================
 /** Scene-graph view for the navigation target marker with confirm/cancel and visibility animations. */

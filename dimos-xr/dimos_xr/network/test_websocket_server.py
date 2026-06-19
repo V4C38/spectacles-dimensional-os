@@ -141,6 +141,26 @@ def test_binary_camera_frame_parses_for_handler_dispatch() -> None:
     assert parsed_jpeg == jpeg
 
 
+def test_binary_camera_frame_parses_capture_ts_robot() -> None:
+    header = {
+        "type": "camera_frame",
+        "robot_id": "unitree_go2",
+        "seq": 3,
+        "ts": 1.0,
+        "send_ts": 1.1,
+        "capture_ts_robot": 1.005,
+        "cam_pos": [0.0, 0.0, 0.0],
+        "cam_rot": [0.0, 0.0, 0.0, 1.0],
+    }
+    jpeg = b"\xff\xd8\xff\xd9"
+    header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    payload = CAMERA_FRAME_MAGIC + struct.pack("<I", len(header_bytes)) + header_bytes + jpeg
+    parsed_header, parsed_jpeg = parse_camera_frame(payload)
+    assert parsed_header["capture_ts_robot"] == 1.005
+    assert parsed_header["seq"] == 3
+    assert parsed_jpeg == jpeg
+
+
 def test_binary_camera_frame_rejects_null_timestamp() -> None:
     header = {
         "type": "camera_frame",

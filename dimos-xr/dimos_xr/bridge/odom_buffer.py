@@ -1,8 +1,7 @@
-"""OdomBuffer — thread-safe odometry ring buffer with monotonic-clock lookup.
+"""OdomBuffer — thread-safe odometry ring buffer with monotonic- and source-ts lookup.
 
-Uses ``time.monotonic()`` rather than wall clock so frame-reception latency
-compensation stays accurate across sleep/wake cycles. Cannot be replaced by
-DimOS TBuffer which uses wall-clock ``Transform.ts``.
+Uses ``time.monotonic()`` for receive-time speed estimation. Frame↔odom pairing
+uses robot production timestamps (``source_ts``) after Lens clock sync.
 """
 
 from __future__ import annotations
@@ -11,47 +10,91 @@ from collections import deque
 import math
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 import numpy as np
+
+from dimos.utils.logging_config import setup_logger
 
 from dimos_xr.tracking.transforms import Calibration, OdomSample
 
 if TYPE_CHECKING:
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+    from dimos.msgs.nav_msgs.Odometry import Odometry
+
+logger = setup_logger()
+
+OdomMsg = Union["PoseStamped", "Odometry"]
 
 ODOM_BUFFER_MAXLEN = 600
 ODOM_LOOKUP_MAX_GAP_S = 0.25
 
+_source_ts_provenance_logged = False
+_source_ts_provenance_lock = threading.Lock()
+
 
 class OdomBuffer:
-    """Thread-safe odometry ring buffer with monotonic-clock nearest-neighbour lookup."""
+    """Thread-safe odometry ring buffer with monotonic- and source-ts lookup."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._latest: OdomSample | None = None
         self._buffer: deque[tuple[float, OdomSample]] = deque(maxlen=ODOM_BUFFER_MAXLEN)
+        self._source_buffer: deque[tuple[float, OdomSample]] = deque(maxlen=ODOM_BUFFER_MAXLEN)
+
+    def _normalize_orientation(
+        self, q: object
+    ) -> tuple[float, float, float, float]:
+        x, y, z, w = float(q.x), float(q.y), float(q.z), float(q.w)  # type: ignore[attr-defined]
+        norm = math.sqrt(x * x + y * y + z * z + w * w)
+        if norm < 1e-12:
+            return (0.0, 0.0, 0.0, 1.0)
+        return (x / norm, y / norm, z / norm, w / norm)
+
+    def sample_from_msg(self, msg: OdomMsg) -> OdomSample:
+        """Build an OdomSample from a PoseStamped or Odometry message."""
+        orientation = self._normalize_orientation(msg.orientation)
+        measured_speed_mps: float | None = None
+        if hasattr(msg, "vx") and hasattr(msg, "vy"):
+            measured_speed_mps = math.hypot(float(msg.vx), float(msg.vy))  # type: ignore[attr-defined]
+        return OdomSample(
+            position=(float(msg.x), float(msg.y), float(msg.z)),  # type: ignore[attr-defined]
+            orientation=orientation,
+            source_ts=float(msg.ts),
+            measured_speed_mps=measured_speed_mps,
+        )
 
     def sample(self, msg: PoseStamped) -> OdomSample:
         """Build an OdomSample from a PoseStamped (normalises quaternion)."""
-        q = msg.orientation
-        norm = math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w)
-        if norm < 1e-12:
-            orientation: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
-        else:
-            orientation = (q.x / norm, q.y / norm, q.z / norm, q.w / norm)
-        return OdomSample(
-            position=(msg.x, msg.y, msg.z),
-            orientation=orientation,
+        return self.sample_from_msg(msg)
+
+    def _maybe_log_source_ts_provenance(self, *, source_ts: float, receive_mono: float) -> None:
+        """Once-per-session: first sample source_ts vs receive mono.
+
+        Remove after hardware confirms sensor timestamps; assume good for now.
+        """
+        global _source_ts_provenance_logged
+        with _source_ts_provenance_lock:
+            if _source_ts_provenance_logged:
+                return
+            _source_ts_provenance_logged = True
+        logger.debug(
+            "odom source_ts provenance (assume good; remove log after hardware check)",
+            source_ts=round(source_ts, 6),
+            receive_mono=round(receive_mono, 6),
+            delta_s=round(receive_mono - source_ts, 6),
         )
 
-    def update(self, msg: PoseStamped) -> OdomSample:
-        """Sample from msg, store as latest, and append to the ring buffer."""
-        s = self.sample(msg)
+    def update(self, msg: OdomMsg) -> OdomSample:
+        """Sample from msg, store as latest, and append to both ring buffers."""
+        s = self.sample_from_msg(msg)
         mono = time.monotonic()
+        source_ts = float(msg.ts)
         with self._lock:
             self._latest = s
             self._buffer.append((mono, s))
+            self._source_buffer.append((source_ts, s))
+        self._maybe_log_source_ts_provenance(source_ts=source_ts, receive_mono=mono)
         return s
 
     def latest(self) -> OdomSample | None:
@@ -65,72 +108,90 @@ class OdomBuffer:
                 return self._buffer[-1][0]
             return None
 
-    def at(self, mono_ts: float) -> OdomSample | None:
-        """Return the sample closest to ``mono_ts`` within ``ODOM_LOOKUP_MAX_GAP_S``."""
+    def latest_source_ts(self) -> float | None:
         with self._lock:
-            if not self._buffer:
+            if self._source_buffer:
+                return self._source_buffer[-1][0]
+            return None
+
+    def _lookup_nearest(
+        self,
+        buffer: deque[tuple[float, OdomSample]],
+        ts: float,
+        *,
+        fallback_latest: bool,
+    ) -> OdomSample | None:
+        with self._lock:
+            if not buffer:
                 return self._latest
             best: tuple[float, OdomSample] | None = None
             best_gap = float("inf")
-            for ts, sample in self._buffer:
-                gap = abs(ts - mono_ts)
+            for entry_ts, sample in buffer:
+                gap = abs(entry_ts - ts)
                 if gap < best_gap:
                     best_gap = gap
-                    best = (ts, sample)
+                    best = (entry_ts, sample)
             if best is None or best_gap > ODOM_LOOKUP_MAX_GAP_S:
+                if fallback_latest:
+                    return self._latest
                 return None
             return best[1]
+
+    def at(self, mono_ts: float) -> OdomSample | None:
+        """Return the sample closest to ``mono_ts`` within ``ODOM_LOOKUP_MAX_GAP_S``."""
+        return self._lookup_nearest(self._buffer, mono_ts, fallback_latest=False)
 
     def at_or_latest(self, mono_ts: float) -> OdomSample | None:
         """Like ``at`` but falls back to the most-recent sample when no buffered
         sample is within ``ODOM_LOOKUP_MAX_GAP_S``.
-
-        Use this for stationary operations (e.g. tag-based alignment before
-        registration) where a slightly stale pose is still geometrically valid.
-        Returns ``None`` only if no odom has ever arrived.
         """
-        result = self.at(mono_ts)
-        if result is not None:
-            return result
-        with self._lock:
-            return self._latest
+        return self._lookup_nearest(self._buffer, mono_ts, fallback_latest=True)
 
-    def at_interpolated(self, mono_ts: float) -> OdomSample | None:
-        """Return an interpolated sample near ``mono_ts`` when the gap is acceptable."""
+    def at_by_source(self, source_ts: float) -> OdomSample | None:
+        return self._lookup_nearest(self._source_buffer, source_ts, fallback_latest=False)
+
+    def at_or_latest_by_source(self, source_ts: float) -> OdomSample | None:
+        return self._lookup_nearest(self._source_buffer, source_ts, fallback_latest=True)
+
+    def _interpolate(
+        self,
+        buffer: deque[tuple[float, OdomSample]],
+        ts: float,
+    ) -> OdomSample | None:
         with self._lock:
-            if not self._buffer:
+            if not buffer:
                 return self._latest
-            if len(self._buffer) == 1:
-                ts, sample = self._buffer[0]
-                return sample if abs(ts - mono_ts) <= ODOM_LOOKUP_MAX_GAP_S else None
+            if len(buffer) == 1:
+                entry_ts, sample = buffer[0]
+                return sample if abs(entry_ts - ts) <= ODOM_LOOKUP_MAX_GAP_S else None
 
             before: tuple[float, OdomSample] | None = None
             after: tuple[float, OdomSample] | None = None
-            for ts, sample in self._buffer:
-                if ts <= mono_ts:
-                    before = (ts, sample)
+            for entry_ts, sample in buffer:
+                if entry_ts <= ts:
+                    before = (entry_ts, sample)
                     continue
-                after = (ts, sample)
+                after = (entry_ts, sample)
                 break
 
             if before is None:
-                first_ts, first_sample = self._buffer[0]
-                return first_sample if abs(first_ts - mono_ts) <= ODOM_LOOKUP_MAX_GAP_S else None
+                first_ts, first_sample = buffer[0]
+                return first_sample if abs(first_ts - ts) <= ODOM_LOOKUP_MAX_GAP_S else None
             if after is None:
-                last_ts, last_sample = self._buffer[-1]
-                return last_sample if abs(last_ts - mono_ts) <= ODOM_LOOKUP_MAX_GAP_S else None
+                last_ts, last_sample = buffer[-1]
+                return last_sample if abs(last_ts - ts) <= ODOM_LOOKUP_MAX_GAP_S else None
 
             before_ts, before_sample = before
             after_ts, after_sample = after
             if (
-                abs(mono_ts - before_ts) > ODOM_LOOKUP_MAX_GAP_S
-                and abs(after_ts - mono_ts) > ODOM_LOOKUP_MAX_GAP_S
+                abs(ts - before_ts) > ODOM_LOOKUP_MAX_GAP_S
+                and abs(after_ts - ts) > ODOM_LOOKUP_MAX_GAP_S
             ):
                 return None
             span = after_ts - before_ts
             if span <= 1e-6:
                 return before_sample
-            alpha = max(0.0, min(1.0, (mono_ts - before_ts) / span))
+            alpha = max(0.0, min(1.0, (ts - before_ts) / span))
 
             before_pos = np.asarray(before_sample.position, dtype=np.float64)
             after_pos = np.asarray(after_sample.position, dtype=np.float64)
@@ -148,10 +209,30 @@ class OdomBuffer:
                 quat /= quat_norm
                 quat_out = (float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3]))
 
+            measured_speed_mps = before_sample.measured_speed_mps
+            if (
+                before_sample.measured_speed_mps is not None
+                and after_sample.measured_speed_mps is not None
+            ):
+                measured_speed_mps = (
+                    before_sample.measured_speed_mps
+                    + alpha * (after_sample.measured_speed_mps - before_sample.measured_speed_mps)
+                )
+
             return OdomSample(
                 position=(float(pos[0]), float(pos[1]), float(pos[2])),
                 orientation=quat_out,
+                source_ts=before_sample.source_ts,
+                measured_speed_mps=measured_speed_mps,
             )
+
+    def at_interpolated(self, mono_ts: float) -> OdomSample | None:
+        """Return an interpolated sample near ``mono_ts`` when the gap is acceptable."""
+        return self._interpolate(self._buffer, mono_ts)
+
+    def at_interpolated_by_source(self, source_ts: float) -> OdomSample | None:
+        """Return an interpolated sample near ``source_ts`` when the gap is acceptable."""
+        return self._interpolate(self._source_buffer, source_ts)
 
     def speed_at(self, mono_ts: float) -> float | None:
         """Estimate robot linear speed (m/s) from the two odom samples that bracket

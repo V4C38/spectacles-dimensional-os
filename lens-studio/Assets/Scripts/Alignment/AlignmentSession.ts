@@ -11,20 +11,28 @@
  */
 // ================================================================
 
-import { FrameCaptureController } from "./FrameCaptureController";
+import { FrameCaptureController } from "../Camera/FrameCaptureController";
 import { BridgeClient } from "../Bridge/BridgeClient";
 import {
   AlignStatusMessage,
 } from "../Bridge/Protocol";
-import { Signal } from "../Core/SignalEmitter";
+import { Signal } from "../Core/Utilities";
 import { RobotMarker } from "../Robot/RobotMarker";
 import { ManualPoseCorrection } from "./ManualPoseCorrection";
-import { cloneQuat, cloneVec3 } from "../Core/MathUtils";
+import {
+  cloneQuat,
+  cloneVec3,
+  quatAngularDistanceRad,
+  vec3Distance,
+} from "../Core/Utilities";
 import { RobotInteractionMode } from "../Core/AppState";
 
 const MANUAL_MARKER_DOWN_CM = 35.0;
 const MANUAL_ALIGN_LOG_INTERVAL_S = 2.0;
 const NO_RESPONSE_TIMEOUT_S = 10.0;
+/** Skip bridge resend when marker pose is unchanged within these tolerances. */
+const MANUAL_POSE_POSITION_EPS_CM = 0.5;
+const MANUAL_POSE_ROTATION_EPS_RAD = 0.02;
 
 export interface AlignmentSessionDeps {
   poseCorrection: ManualPoseCorrection;
@@ -55,6 +63,10 @@ export class AlignmentSession {
   private _lastAlignStatusTime = -1;
   private _lastCaptureLogTime = -1;
   private _lastSubmitLogTime = -1;
+  private _lastSubmittedManualPose: {
+    position: vec3;
+    rotation: quat;
+  } | null = null;
   private _deps: AlignmentSessionDeps | null = null;
   private _bound = false;
 
@@ -74,6 +86,7 @@ export class AlignmentSession {
         // Clear confirmation so ensureSession will re-arm on next hello.
         this._bridgeSessionConfirmed = false;
         this._lastAlignStatusTime = -1;
+        this._lastSubmittedManualPose = null;
       }
     });
     this.bridgeClient.onHello.add(() => {
@@ -97,6 +110,7 @@ export class AlignmentSession {
     this._awaitingCommit = false;
     this._bridgeSessionConfirmed = false;
     this._lastAlignStatusTime = -1;
+    this._lastSubmittedManualPose = null;
     this._tryStartBridgeSession(method);
     if (this.frameCapture) {
       this.frameCapture.setMode(method === "tag" ? "setup" : "off");
@@ -120,6 +134,7 @@ export class AlignmentSession {
     this._awaitingCommit = false;
     this._bridgeSessionConfirmed = false;
     this._lastAlignStatusTime = -1;
+    this._lastSubmittedManualPose = null;
     if (shouldSendStop && this.bridgeClient) {
       this.bridgeClient.sendAlignStop();
     }
@@ -219,7 +234,7 @@ export class AlignmentSession {
    * Capture current robot marker pose and send align_manual_pose to bridge.
    * Returns true if submitted successfully.
    */
-  public captureAndSubmitManualPose(): boolean {
+  public captureAndSubmitManualPose(force: boolean = false): boolean {
     const position = this.robotMarker?.getWorldPosition() ?? null;
     const rotation = this.robotMarker?.getRotation() ?? null;
     if (!position || !rotation) {
@@ -236,9 +251,21 @@ export class AlignmentSession {
     if (!this._deps?.hasBridgeConnection()) {
       return true;
     }
+    if (
+      !force &&
+      this._lastSubmittedManualPose !== null &&
+      this._manualPoseMatchesLastSubmitted(position, rotation)
+    ) {
+      return true;
+    }
     const sent =
       this.bridgeClient?.sendAlignManualPose(position, rotation) ?? false;
-    if (!sent) {
+    if (sent) {
+      this._lastSubmittedManualPose = {
+        position: cloneVec3(position),
+        rotation: cloneQuat(rotation),
+      };
+    } else {
       this._logThrottled(
         "submit",
         "AlignmentSession: align_manual_pose send failed",
@@ -309,6 +336,9 @@ export class AlignmentSession {
     if (sent) {
       this._bridgeSessionConfirmed = true;
       this._lastAlignStatusTime = getTime();
+      if (method === "manual") {
+        this._lastSubmittedManualPose = null;
+      }
       print(`AlignmentSession: align_start{method:${method},assist:${assist}} sent`);
     }
     return sent;
@@ -352,6 +382,21 @@ export class AlignmentSession {
       position: cloneVec3(position),
       rotation: cloneQuat(rotation),
     };
+  }
+
+  private _manualPoseMatchesLastSubmitted(
+    position: vec3,
+    rotation: quat,
+  ): boolean {
+    const last = this._lastSubmittedManualPose;
+    if (!last) {
+      return false;
+    }
+    return (
+      vec3Distance(position, last.position) <= MANUAL_POSE_POSITION_EPS_CM &&
+      quatAngularDistanceRad(rotation, last.rotation) <=
+        MANUAL_POSE_ROTATION_EPS_RAD
+    );
   }
 
   private _logThrottled(kind: "capture" | "submit", message: string): void {

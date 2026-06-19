@@ -1,5 +1,11 @@
 """Regression tests for AlignmentController session semantics (Protocol v4).
 
+Hardware validation checklist (Tier 2 exact pairing — run on device):
+  1. Connect: stable RTT and clock offset within a few ms on LAN.
+  2. Residual-vs-speed: moving_robot_diag world_residual_m slope → 0 at cruise.
+  3. G1: regime classifier stable under gait sway (measured twist speed).
+  4. Sync loss: disconnect/reconnect skips frames cleanly; no marker jump.
+
 Covers:
   1. align_start(method="tag", assist=True) activates tag tracker (with assist driver)
   2. align_start(method="tag") without assist driver → immediate failed
@@ -222,7 +228,17 @@ async def test_camera_frame_acked_not_processed_during_assist_leg() -> None:
     ctrl._tag_tracker.has_camera_info = MagicMock(return_value=True)  # type: ignore[method-assign]
     ctrl._tag_tracker.process_frame = MagicMock()  # type: ignore[method-assign]
 
-    header = {"seq": 43, "ts": 1.0, "send_ts": 1.01}
+    header = {"seq": 43, "ts": 1.0, "send_ts": 1.01, "capture_ts_robot": 1.0}
+    ctrl._odom.update = MagicMock(  # type: ignore[method-assign]
+        return_value=OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
+    )
+    ctrl._odom.latest = MagicMock(return_value=OdomSample(  # type: ignore[method-assign]
+        position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)
+    ))
+    ctrl._odom.at_interpolated_by_source = MagicMock(  # type: ignore[method-assign]
+        return_value=OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
+    )
+    ctrl._odom.at_or_latest_by_source = ctrl._odom.at_interpolated_by_source  # type: ignore[method-assign]
     jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100
 
     await ctrl.on_camera_frame(header, jpeg, MagicMock())
@@ -249,8 +265,15 @@ async def test_camera_frame_processed_during_assist_sample() -> None:
     )  # type: ignore[method-assign]
     ctrl._apply_tracker_update = MagicMock()  # type: ignore[method-assign]
 
-    header = {"seq": 44, "ts": 1.0, "send_ts": 1.01}
+    header = {"seq": 44, "ts": 1.0, "send_ts": 1.01, "capture_ts_robot": 1.0}
     jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+    ctrl._odom.latest = MagicMock(return_value=OdomSample(  # type: ignore[method-assign]
+        position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)
+    ))
+    ctrl._odom.at_interpolated_by_source = MagicMock(  # type: ignore[method-assign]
+        return_value=OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
+    )
+    ctrl._odom.at_or_latest_by_source = ctrl._odom.at_interpolated_by_source  # type: ignore[method-assign]
 
     await ctrl.on_camera_frame(header, jpeg, MagicMock())
 
@@ -261,7 +284,30 @@ async def test_camera_frame_processed_during_assist_sample() -> None:
     ctrl._apply_tracker_update.assert_called_once()  # type: ignore[union-attr]
     call_kwargs = ctrl._apply_tracker_update.call_args.kwargs  # type: ignore[union-attr]
     assert call_kwargs["ts"] == 1.0
-    assert "odom_ts" in call_kwargs
+    assert "resolved_odom" in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_camera_frame_skipped_without_capture_ts_robot() -> None:
+    ctrl, sent = _make_controller(with_adapter=True)
+    ctrl.on_align_start(_align_start("tag", assist=True), MagicMock())
+    ctrl._stop_broadcast()
+    sent.clear()
+
+    assert ctrl._assist_driver is not None
+    ctrl._assist_driver._state = AssistState.MOVE
+    ctrl._assist_driver._move_phase = _MovePhase.SAMPLE
+    ctrl._tag_tracker.has_camera_info = MagicMock(return_value=True)  # type: ignore[method-assign]
+    ctrl._tag_tracker.process_frame = MagicMock()  # type: ignore[method-assign]
+
+    header = {"seq": 45, "ts": 1.0, "send_ts": 1.01}
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+
+    await ctrl.on_camera_frame(header, jpeg, MagicMock())
+
+    acks = [m for m in sent if json.loads(m)["type"] == "camera_frame_ack"]
+    assert len(acks) == 1
+    ctrl._tag_tracker.process_frame.assert_not_called()  # type: ignore[union-attr]
 
 
 # ------------------------------------------------------------------

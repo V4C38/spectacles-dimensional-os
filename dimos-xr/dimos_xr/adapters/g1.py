@@ -16,6 +16,7 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
+from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.robot.unitree.g1.connection_spec import G1ConnectionSpec
@@ -157,14 +158,14 @@ class G1AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
     # Additional aliases (pointcloud, registered_scan, odometry, path_active)
     # are wired via .remappings([...]) in the blueprint.
     xr_lidar_in: In[PointCloud2]
-    xr_odom_in: In[PoseStamped]
+    xr_odom_in: In[Odometry]
     xr_global_costmap_in: In[OccupancyGrid]
     xr_path_in: In[Path]
     xr_goal_reached_in: In[Bool]
     xr_navigation_state_in: In[String]
 
     xr_lidar: Out[PointCloud2]
-    xr_odom: Out[PoseStamped]
+    xr_odometry: Out[Odometry]
     xr_global_costmap: Out[OccupancyGrid]
     xr_path: Out[Path]
     xr_goal_reached: Out[Bool]
@@ -193,8 +194,8 @@ class G1AdapterModule(Module, XRRobotAdapterSpec):  # type: ignore[misc]
     async def handle_xr_lidar_in(self, msg: PointCloud2) -> None:
         self.xr_lidar.publish(msg)
 
-    async def handle_xr_odom_in(self, msg: PoseStamped) -> None:
-        self.xr_odom.publish(msg)
+    async def handle_xr_odom_in(self, msg: Odometry) -> None:
+        self.xr_odometry.publish(msg)
 
     async def handle_xr_global_costmap_in(self, msg: OccupancyGrid) -> None:
         self.xr_global_costmap.publish(msg)

@@ -1,7 +1,7 @@
 import { BridgeClient } from "../Bridge/BridgeClient";
 import { buildCameraFrameBytes, buildCameraInfo, CameraFrameAckMessage, HelloMessage } from "../Bridge/Protocol";
-import { CameraStream } from "../Core/CameraStream";
-import { quatFromMat4Rotation } from "../Core/MathUtils";
+import { DeviceCameraStream } from "./DeviceCameraStream";
+import { quatFromMat4Rotation } from "../Core/Utilities";
 
 const POSE_BUFFER_CAPACITY = 360;
 // Interval measured from pipeline END (ack or finally), guaranteeing idle GC time.
@@ -14,8 +14,8 @@ const MAX_HEAD_ANGULAR_VEL_DEG_S = 40.0;
 const RUNTIME_CAMERA_MAX_DISTANCE_CM = 700.0;
 // Capture runs ~1/s; collapse the per-frame pipeline trace into a periodic summary.
 const PIPELINE_LOG_INTERVAL_S = 2.0;
-// Set to true to re-enable steady-state pipeline summary logs for deep debugging.
-const DEBUG_VERBOSE = false;
+const CAPTURE_TS_LOG_INTERVAL_S = 2.0;
+const CLOCK_SYNC_RACE_LOG_INTERVAL_S = 2.0;
 
 type CaptureMode = "off" | "setup" | "runtime";
 
@@ -33,7 +33,7 @@ export class FrameCaptureController extends BaseScriptComponent {
   @input
   cameraObject: SceneObject;
 
-  private _camera: CameraStream = CameraStream.getInstance();
+  private _camera: DeviceCameraStream = DeviceCameraStream.getInstance();
   private _mode: CaptureMode = "off";
   private _seq = 0;
   private _inFlight = false;
@@ -52,12 +52,13 @@ export class FrameCaptureController extends BaseScriptComponent {
   private _sentCameraInfo = false;
   private _onCaptureError: ((message: string) => void) | null = null;
   private _lastPipelineLogTime = 0;
+  private _lastCaptureTsLogTime = 0;
+  private _lastClockSyncRaceLogTime = 0;
   private _samplingBurst = false;
   private _capturePaused = false;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
-      // Start the stream once at launch; it remains on for the session lifetime.
       this._camera.start();
       this._bindBridge();
       this._ensureUpdateLoop();
@@ -167,6 +168,9 @@ export class FrameCaptureController extends BaseScriptComponent {
 
   private _maybeCapture(): void {
     if (this._mode === "off" || !this.bridgeClient?.isConnected()) {
+      return;
+    }
+    if (!this.bridgeClient.isClockSyncReady) {
       return;
     }
     if (this._capturePaused) {
@@ -315,11 +319,23 @@ export class FrameCaptureController extends BaseScriptComponent {
       this._finishPipelineWithoutAck(args.seq);
       return;
     }
+    if (!this.bridgeClient.isClockSyncReady) {
+      this._finishPipelineWithoutAck(args.seq);
+      const now = getTime();
+      if (now - this._lastClockSyncRaceLogTime >= CLOCK_SYNC_RACE_LOG_INTERVAL_S) {
+        this._lastClockSyncRaceLogTime = now;
+        print(
+          "FrameCaptureController: clock sync not ready at send time; skipping frame (no capture_ts_robot)",
+        );
+      }
+      return;
+    }
     const camPose = this._cameraWorldPose(pose);
     if (!this._sentCameraInfo) {
       this._sendCameraInfo(args.texture);
     }
     const jpegBytes = await this._encodeJpeg(args.texture);
+    const captureTsRobot = this.bridgeClient.mapCaptureTime(args.captureTs);
     const bytes = buildCameraFrameBytes({
       robotId: args.robotId,
       seq: args.seq,
@@ -328,17 +344,23 @@ export class FrameCaptureController extends BaseScriptComponent {
       camPos: camPose.position,
       camRot: camPose.rotation,
       jpegBytes,
+      captureTsRobot,
     });
     this.bridgeClient.sendBinary(bytes);
-    if (DEBUG_VERBOSE) {
-      const now = getTime();
-      if (now - this._lastPipelineLogTime >= PIPELINE_LOG_INTERVAL_S) {
-        this._lastPipelineLogTime = now;
-        const pipelineMs = Math.round((now - args.pipelineStart) * 1000);
-        print(
-          `FrameCaptureController: seq=${args.seq} pipeline=${pipelineMs}ms jpeg=${jpegBytes.byteLength}B`,
-        );
-      }
+    const now = getTime();
+    if (now - this._lastCaptureTsLogTime >= CAPTURE_TS_LOG_INTERVAL_S) {
+      this._lastCaptureTsLogTime = now;
+      const offset = captureTsRobot - args.captureTs;
+      print(
+        `FrameCaptureController: seq=${args.seq} capture_ts_robot=${captureTsRobot.toFixed(4)} lens_ts=${args.captureTs.toFixed(4)} offset=${offset.toFixed(4)}`,
+      );
+    }
+    if (now - this._lastPipelineLogTime >= PIPELINE_LOG_INTERVAL_S) {
+      this._lastPipelineLogTime = now;
+      const pipelineMs = Math.round((now - args.pipelineStart) * 1000);
+      print(
+        `FrameCaptureController: seq=${args.seq} pipeline=${pipelineMs}ms jpeg=${jpegBytes.byteLength}B`,
+      );
     }
   }
 

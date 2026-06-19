@@ -20,6 +20,7 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
+from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.utils.logging_config import setup_logger
@@ -87,12 +88,12 @@ class XRBridgeConfig(ModuleConfig):  # type: ignore[misc]
     runtime_correction_enabled: bool = True
     world_anchor_tag_ids: list[int] = []
     world_anchor_size_m: float = 0.056
-    odom_pairing_offset_s: float = 0.02
 
 
 class XRBridge(Module):  # type: ignore[misc]
     xr_lidar: In[PointCloud2]
     xr_odom: In[PoseStamped]
+    xr_odometry: In[Odometry]
     xr_global_costmap: In[OccupancyGrid]
     xr_path: In[Path]
     xr_goal_reached: In[Bool]
@@ -160,7 +161,6 @@ class XRBridge(Module):  # type: ignore[misc]
             window_max_age_s=self.config.tag_window_max_age_s,
             max_mount_residual_m=self.config.tag_max_mount_residual_m,
             max_up_axis_tilt_deg=self.config.tag_max_up_axis_tilt_deg,
-            odom_pairing_offset_s=runtime_profile.odom_pairing_offset_s,
         )
         alignment = AlignmentController(
             robot_id=robot_id,
@@ -292,6 +292,23 @@ class XRBridge(Module):  # type: ignore[misc]
         self._status.mark_odom()
         self._status.refresh()
         self._telemetry.publish_pose(msg)
+
+    async def handle_xr_odometry(self, msg: Odometry) -> None:
+        self._odom.update(msg)
+        self._status.mark_odom()
+        self._status.refresh()
+        pose = PoseStamped(
+            ts=msg.ts,
+            frame_id=msg.child_frame_id or msg.frame_id,
+            position=(msg.x, msg.y, msg.z),
+            orientation=(
+                msg.orientation.x,
+                msg.orientation.y,
+                msg.orientation.z,
+                msg.orientation.w,
+            ),
+        )
+        self._telemetry.publish_pose(pose)
 
     async def handle_xr_path(self, msg: Path) -> None:
         self._nav.on_path(msg)

@@ -130,6 +130,13 @@ class SetLidarModeMessage:
     obstacle_max_distance_m: float
 
 
+@dataclass(frozen=True)
+class PingMessage:
+    ts: float
+    robot_id: str
+    client_ts: float
+
+
 InboundMessage = (
     NavGoalMessage
     | PlanPathMessage
@@ -143,6 +150,7 @@ InboundMessage = (
     | AlignManualPoseMessage
     | GetStatusMessage
     | SetLidarModeMessage
+    | PingMessage
 )
 
 
@@ -279,6 +287,10 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
             obstacle_opaque_distance_m=opaque_distance_m,
             obstacle_max_distance_m=max_distance_m,
         )
+    if msg_type == "ping":
+        if "client_ts" not in data or not isinstance(data["client_ts"], (int, float)):
+            raise ValueError("Missing or invalid field: client_ts")
+        return PingMessage(ts=ts, robot_id=robot_id, client_ts=float(data["client_ts"]))
     raise ValueError(f"Unknown inbound message type: {msg_type!r}")
 
 
@@ -472,6 +484,24 @@ def encode_camera_frame_ack(
             "ts": ts if ts is not None else time.time(),
             "robot_id": robot_id,
             "seq": seq,
+        }
+    )
+
+
+def encode_pong(
+    *,
+    ts: float | None = None,
+    robot_id: str,
+    client_ts: float,
+    bridge_ts: float | None = None,
+) -> str:
+    return _dumps(
+        {
+            "type": "pong",
+            "ts": ts if ts is not None else time.time(),
+            "robot_id": robot_id,
+            "client_ts": client_ts,
+            "bridge_ts": bridge_ts if bridge_ts is not None else time.time(),
         }
     )
 

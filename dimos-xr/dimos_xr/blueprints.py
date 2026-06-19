@@ -61,8 +61,8 @@ xr_g1 = (
         [
             # G1 nav-onboard: registered_scan from FastLio2
             (G1AdapterModule, "xr_lidar_in", "registered_scan"),
-            # G1 odom via Odometry → PoseStamped conversion is done in adapter
-            (G1AdapterModule, "xr_odom_in", "odom"),
+            # G1 odom from FastLio2 Odometry (twist + production timestamp)
+            (G1AdapterModule, "xr_odom_in", "odometry"),
             # Global costmap
             (G1AdapterModule, "xr_global_costmap_in", "global_costmap"),
             # Active navigation path

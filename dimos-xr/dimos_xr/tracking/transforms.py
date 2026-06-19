@@ -220,15 +220,20 @@ def gravity_level_transform(T: NDArray[np.float64]) -> NDArray[np.float64]:
 
 @dataclass
 class OdomSample:
-    """Timestamped odometry snapshot using monotonic clock.
+    """Timestamped odometry snapshot.
 
-    Uses ``time.monotonic()`` rather than wall clock so frame-reception latency
-    compensation stays accurate across sleep/wake cycles and system clock adjustments.
-    Cannot be replaced by ``TBuffer.get()`` which uses wall-clock ``Transform.ts``.
+    ``source_ts`` is the robot production timestamp (``PoseStamped.ts`` /
+    ``Odometry.ts``). Frame pairing uses ``source_ts`` via ``OdomBuffer``
+    source-key lookup after Lens clock sync maps capture time to the bridge clock.
+
+    Monotonic receive time is stored separately on the buffer keys for legacy
+    speed estimation (``speed_windowed``).
     """
 
     position: tuple[float, float, float]
     orientation: tuple[float, float, float, float]
+    source_ts: float | None = None
+    measured_speed_mps: float | None = None
 
 
 class Calibration:

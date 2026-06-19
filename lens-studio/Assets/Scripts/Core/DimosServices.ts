@@ -1,5 +1,5 @@
 import { BridgeClient } from "../Bridge/BridgeClient";
-import { FrameCaptureController } from "../Alignment/FrameCaptureController";
+import { FrameCaptureController } from "../Camera/FrameCaptureController";
 import {
   AlignmentSession,
   AlignmentSessionDeps,

@@ -34,10 +34,12 @@ from dimos_xr.network.protocol import (
     GetStatusMessage,
     InboundMessage,
     NavGoalMessage,
+    PingMessage,
     PlanPathMessage,
     SetLidarModeMessage,
     decode_inbound,
     encode_hello,
+    encode_pong,
 )
 from dimos_xr.tracking.tag_tracker import parse_camera_frame
 
@@ -478,6 +480,17 @@ class XRWebSocketServer:
         elif isinstance(inbound, SetLidarModeMessage):
             if self._on_set_lidar_mode is not None:
                 self._on_set_lidar_mode(inbound, websocket)
+        elif isinstance(inbound, PingMessage):
+            asyncio.create_task(
+                websocket.send(
+                    encode_pong(
+                        robot_id=inbound.robot_id,
+                        client_ts=inbound.client_ts,
+                        bridge_ts=time.time(),
+                    )
+                    + "\n"
+                )
+            )
 
     def schedule_send(self, text: str) -> None:
         """Enqueue a broadcast from any thread onto the server loop."""

@@ -7,7 +7,7 @@ import { AlignStatusMessage } from "../Bridge/Protocol";
 import { scaleIn } from "../UI/kit/UIAnimations";
 import { COLOR_ERROR, COLOR_WARN, COLOR_WHITE } from "../UI/kit/UIKit";
 import { SetupWizardView } from "./SetupWizardView";
-import { getBridgeStatusPresentationForConnect } from "../UI/BridgeStatusPresentation";
+import { getBridgeStatusPresentationForConnect, getBridgeConnectDetailStatus } from "../UI/BridgeStatusPresentation";
 import { BridgeClient } from "../Bridge/BridgeClient";
 import {
   buildCalibrationDisplay,
@@ -39,6 +39,7 @@ export class SetupWizard extends BaseScriptComponent {
   private _isConnecting = false;
   private _alignmentHandlersBound = false;
   private _bridgeHandlersBound = false;
+  private _clockSyncHandlerBound = false;
   private _lastNavigationTime = -1;
   private _autoconnectOpId = 0;
   private _retryEvent: DelayedCallbackEvent | null = null;
@@ -133,12 +134,10 @@ export class SetupWizard extends BaseScriptComponent {
       case WizardStep.Start:
         this._view?.setInputEnabled(false);
         this._view?.setStatus("", COLOR_WHITE);
-        this._view?.clearDetailStatus();
         this._refreshFooterButtons();
         break;
 
       case WizardStep.Connect: {
-        this._view?.clearDetailStatus();
         this._view?.setInputEnabled(true);
 
         const saved = this.dimosManager?.loadIp() ?? null;
@@ -166,7 +165,6 @@ export class SetupWizard extends BaseScriptComponent {
 
       case WizardStep.Calibrate:
         this._view?.setInputEnabled(false);
-        this._view?.clearDetailStatus();
         this._calibrationFlow?.enter();
         break;
     }
@@ -371,6 +369,19 @@ export class SetupWizard extends BaseScriptComponent {
         this._calibrationFlow?.handleBridgeStatus(msg);
       }
     });
+    this._bindClockSyncHandler();
+  }
+
+  private _bindClockSyncHandler(): void {
+    if (this._clockSyncHandlerBound || !this.dimosManager?.bridgeClient) {
+      return;
+    }
+    this._clockSyncHandlerBound = true;
+    this.dimosManager.bridgeClient.onClockSyncStateChanged.add(() => {
+      if (this._currentStep === WizardStep.Connect) {
+        this._showBridgeConnectionStatus();
+      }
+    });
   }
 
   private _showBridgeConnectionStatus(): void {
@@ -379,6 +390,10 @@ export class SetupWizard extends BaseScriptComponent {
       this._isConnecting,
     );
     this._view?.setStatus(presentation.text, presentation.color);
+    const detail = getBridgeConnectDetailStatus(
+      this.dimosManager?.bridgeLinkState ?? "disconnected",
+      this.dimosManager?.bridgeClient?.clockSyncState ?? "idle",
+    );
     if (this.dimosManager?.hasBridgeConnection()) {
       this.dimosManager.requestBridgeStatus();
     }
@@ -396,11 +411,6 @@ export class SetupWizard extends BaseScriptComponent {
       this._view?.setStatus(display.statusText, display.statusColor);
     } else {
       this._view?.setStatus("", COLOR_WHITE);
-    }
-    if (display.detailText) {
-      this._view?.setDetailStatus(display.detailText, display.detailColor);
-    } else {
-      this._view?.clearDetailStatus();
     }
   }
 

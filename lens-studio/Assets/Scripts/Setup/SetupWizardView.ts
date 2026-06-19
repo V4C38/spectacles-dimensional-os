@@ -24,7 +24,6 @@ export class SetupWizardView {
   private readonly _titleText: Text;
   private readonly _descriptionText: Text;
   private readonly _statusText: Text;
-  private readonly _detailStatusText: Text;
   private readonly _next: ButtonBinding;
   private readonly _prev: ButtonBinding;
   private readonly _manual: ButtonBinding;
@@ -46,7 +45,6 @@ export class SetupWizardView {
     const titleText = findText(_panel, "StepTitle");
     const descriptionText = findText(_panel, "StepDescription");
     const statusText = findText(_panel, "StepStatus");
-    const detailStatusText = findText(_panel, "StepDetailStatus");
     const next = findButtonBinding(_panel, "NextBtn", "NextBtnLabel");
     const prev = findButtonBinding(_panel, "PrevBtn", "PrevBtnLabel");
     const manual = findButtonBinding(_panel, "ManualAlignBtn", "ManualAlignBtnLabel");
@@ -55,7 +53,6 @@ export class SetupWizardView {
       !titleText ||
       !descriptionText ||
       !statusText ||
-      !detailStatusText ||
       !next ||
       !prev ||
       !manual
@@ -66,7 +63,6 @@ export class SetupWizardView {
     this._titleText = titleText;
     this._descriptionText = descriptionText;
     this._statusText = statusText;
-    this._detailStatusText = detailStatusText;
     this._descriptionObj = descriptionText.getSceneObject();
     const descriptionLocal = this._descriptionObj.getTransform().getLocalPosition();
     this._descriptionBaseLocalX = descriptionLocal.x;
@@ -145,15 +141,6 @@ export class SetupWizardView {
   public setStatus(text: string, color: vec4): void {
     this._statusText.text = text;
     this._statusText.textFill.color = color;
-  }
-
-  public setDetailStatus(text: string, color: vec4 = COLOR_MUTED): void {
-    this._detailStatusText.text = text;
-    this._detailStatusText.textFill.color = color;
-  }
-
-  public clearDetailStatus(): void {
-    this.setDetailStatus("");
   }
 
   public applyStepLayout(step: WizardStep): void {

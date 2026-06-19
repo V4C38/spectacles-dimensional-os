@@ -129,7 +129,7 @@ flowchart TB
 
   ```text
   lens-studio/Assets/Scripts/
-  ├── Core/        (DimosServices, DimosManager, DimosState, AppState, CameraStream, SignalEmitter, MathUtils)
+  ├── Core/        (DimosServices, DimosManager, DimosState, AppState, CameraStream, Utilities)
   ├── Bridge/      (BridgeClient, Protocol — types + parser + builders)
   ├── Setup/       (SetupWizard, SetupWizardView, SetupCalibrationFlow, SetupAlignmentPreview)
   ├── UI/          (UIManager, MainMenuView, UILogger, BridgeStatusPresentation, kit/UIKit, kit/UIAnimations)

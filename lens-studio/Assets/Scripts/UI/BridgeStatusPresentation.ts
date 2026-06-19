@@ -1,4 +1,5 @@
 import { BridgeLinkState } from "../Core/AppState";
+import { ClockSyncState } from "../Bridge/BridgeConnectionManager";
 import {
   COLOR_ERROR,
   COLOR_SUCCESS,
@@ -47,4 +48,20 @@ export function getBridgeStatusPresentationForConnect(
     };
   }
   return getBridgeStatusPresentation(state);
+}
+
+export function getBridgeConnectDetailStatus(
+  linkState: BridgeLinkState,
+  clockSyncState: ClockSyncState,
+): string | null {
+  if (linkState === "disconnected" || linkState === "connectedNoRobot") {
+    return null;
+  }
+  if (clockSyncState === "pending") {
+    return "Syncing clock…";
+  }
+  if (clockSyncState === "failed") {
+    return "Clock sync failed — reconnect or continue without alignment frames";
+  }
+  return null;
 }

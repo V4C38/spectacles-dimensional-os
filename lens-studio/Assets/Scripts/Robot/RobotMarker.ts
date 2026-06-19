@@ -6,8 +6,8 @@ import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/Rou
 import { findChildRecursive, requireChild } from "../UI/kit/UIKit";
 import {
   yawRotationFromWorldRotation,
-} from "../Core/MathUtils";
-import { FrameCaptureController } from "../Alignment/FrameCaptureController";
+} from "../Core/Utilities";
+import { FrameCaptureController } from "../Camera/FrameCaptureController";
 import { ManualPoseCorrection, ResolvedDisplayPose } from "../Alignment/ManualPoseCorrection";
 import { RobotMarkerView } from "./RobotMarkerView";
 

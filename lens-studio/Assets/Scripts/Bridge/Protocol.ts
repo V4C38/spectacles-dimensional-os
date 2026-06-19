@@ -174,6 +174,14 @@ export interface NavStatusMessage {
   error_code?: number;
 }
 
+export interface PongMessage {
+  type: "pong";
+  ts: number;
+  robot_id: string;
+  client_ts: number;
+  bridge_ts: number;
+}
+
 export type InboundMessage =
   | HelloMessage
   | LidarMessage
@@ -184,7 +192,8 @@ export type InboundMessage =
   | BridgeStatusMessage
   | PathMessage
   | PathPreviewMessage
-  | NavStatusMessage;
+  | NavStatusMessage
+  | PongMessage;
 
 // ── Parse-error taxonomy ───────────────────────────────────────
 
@@ -577,6 +586,16 @@ function parseInboundObject(
       return msg;
     }
 
+    case "pong": {
+      return {
+        type: "pong",
+        ts: requireNumber(data, "ts"),
+        robot_id: requireString(data, "robot_id"),
+        client_ts: requireNumber(data, "client_ts"),
+        bridge_ts: requireNumber(data, "bridge_ts"),
+      };
+    }
+
     default:
       return null;
   }
@@ -664,6 +683,15 @@ export function buildAlignManualPose(
   });
 }
 
+export function buildPing(clientTs: number, robotId: string): string {
+  return JSON.stringify({
+    type: "ping",
+    ts: getTime(),
+    robot_id: robotId,
+    client_ts: clientTs,
+  });
+}
+
 export function buildCameraInfo(args: {
   robotId: string;
   width: number;
@@ -700,8 +728,9 @@ export function buildCameraFrameBytes(args: {
   camPos: vec3;
   camRot: quat;
   jpegBytes: Uint8Array;
+  captureTsRobot?: number;
 }): Uint8Array {
-  const header = JSON.stringify({
+  const headerObj: Record<string, unknown> = {
     type: "camera_frame",
     robot_id: args.robotId,
     seq: args.seq,
@@ -709,7 +738,11 @@ export function buildCameraFrameBytes(args: {
     send_ts: args.sendTs,
     cam_pos: lensCentimetersToProtocolMeters(args.camPos),
     cam_rot: [args.camRot.x, args.camRot.y, args.camRot.z, args.camRot.w],
-  });
+  };
+  if (args.captureTsRobot !== undefined) {
+    headerObj.capture_ts_robot = args.captureTsRobot;
+  }
+  const header = JSON.stringify(headerObj);
   const headerBytes = [];
   for (let i = 0; i < header.length; i++) {
     headerBytes.push(header.charCodeAt(i));

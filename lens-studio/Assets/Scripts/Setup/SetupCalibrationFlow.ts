@@ -12,7 +12,7 @@ import { AlignmentSession } from "../Alignment/AlignmentSession";
 import { NO_ROBOT_CONNECTED_LABEL } from "../Core/AppState";
 import { DimosManager } from "../Core/DimosManager";
 import { AlignStatusMessage, BridgeStatusMessage } from "../Bridge/Protocol";
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE, COLOR_WARN, SnapOS2Styles } from "../UI/kit/UIKit";
+import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE, SnapOS2Styles } from "../UI/kit/UIKit";
 import { isAssistPreviewStage } from "./SetupAlignmentPreview";
 
 export enum WizardStep {
@@ -73,6 +73,8 @@ export function buildCalibrateStepTitle(mode: AlignmentMode): string {
 
 export const CALIBRATE_DESCRIPTION_MANUAL =
   "Manually place the marker at the robot center.";
+
+export const CALIBRATE_STATUS_MANUAL = "Complete to confirm manual alignment";
 
 
 export const WIZARD_STEP_DESCRIPTIONS: string[] = [
@@ -166,13 +168,9 @@ export function buildCalibrationDisplay(
   let detailText = "";
   switch (state.phase) {
     case "editing":
-      statusText = state.message || "Low accuracy \n  Introduces drift over long distances";
-      statusColor = COLOR_WARN;
-      break;
     case "ready":
-      statusText = "Ready — tap Complete to commit.";
+      statusText = CALIBRATE_STATUS_MANUAL;
       statusColor = COLOR_SUCCESS;
-      detailText = state.message;
       break;
     case "pendingCommit":
       statusText = "Committing…";
@@ -518,7 +516,8 @@ export class SetupCalibrationFlow {
       return true;
     }
 
-    const captured = this._alignmentSession?.captureAndSubmitManualPose() ?? false;
+    const captured =
+      this._alignmentSession?.captureAndSubmitManualPose(true) ?? false;
     if (!captured) {
       this._callbacks.log("manual alignment: capture failed on Complete — marker pose unavailable");
       this._state = { ...this._state, message: "" };
@@ -592,18 +591,11 @@ export class SetupCalibrationFlow {
     ) {
       return;
     }
-    if (
-      msg.state === "aligned" ||
-      msg.state === "failed" ||
-      msg.state === "ready" ||
-      key !== this._lastLoggedAlignStatusKey
-    ) {
-      this._lastLoggedAlignStatusKey = key;
-      this._lastAlignStatusLogTime = now;
-      this._callbacks.log(
-        `align_status state=${msg.state} method=${msg.method} progress=${msg.progress} "${msg.message}"`,
-      );
-    }
+    this._lastLoggedAlignStatusKey = key;
+    this._lastAlignStatusLogTime = now;
+    this._callbacks.log(
+      `align_status state=${msg.state} method=${msg.method} progress=${msg.progress} "${msg.message}"`,
+    );
   }
 
   private _notify(refreshDescription: boolean = false): void {

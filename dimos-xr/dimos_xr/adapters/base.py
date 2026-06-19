@@ -17,7 +17,6 @@ class CapabilityState:
 
 @dataclass(frozen=True)
 class RuntimeAlignmentProfile:
-    odom_pairing_offset_s: float = 0.02
     runtime_static_speed_mps: float = 0.05
     runtime_max_correct_speed_mps: float = 1.5
     runtime_cruise_window_s: float = 12.0

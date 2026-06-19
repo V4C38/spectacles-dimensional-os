@@ -1,9 +1,9 @@
 import { BridgeClient } from "./BridgeClient";
-import { FrameCaptureController } from "../Alignment/FrameCaptureController";
+import { FrameCaptureController } from "../Camera/FrameCaptureController";
 import { DimosState } from "../Core/DimosState";
 import { RobotRuntime } from "../Robot/RobotRuntime";
 import { NavigationHost } from "../Navigation/NavigationHost";
-import { Signal } from "../Core/SignalEmitter";
+import { Signal } from "../Core/Utilities";
 import {
   createDefaultDriftState,
   createDefaultRobotRuntimeState,

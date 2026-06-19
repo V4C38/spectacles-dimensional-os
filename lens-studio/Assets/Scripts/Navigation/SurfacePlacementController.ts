@@ -1,5 +1,5 @@
 import { NavigationMarkerView } from "./NavigationMarkerView";
-import { yawRotationFromPlanarDirection } from "../Core/MathUtils";
+import { yawRotationFromPlanarDirection } from "../Core/Utilities";
 
 // ================================================================
 /** Ground-ray drag placement for navigation goals with robot deadzone and marker anchoring. */

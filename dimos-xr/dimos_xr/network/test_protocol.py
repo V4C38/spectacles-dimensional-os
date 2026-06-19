@@ -25,6 +25,7 @@ from dimos_xr.network.protocol import (
     encode_bridge_status,
     encode_camera_frame_ack,
     encode_hello,
+    encode_pong,
     encode_lidar,
     encode_nav_status,
     encode_path,
@@ -584,6 +585,30 @@ def test_encode_path_rounds_waypoints() -> None:
         )
     )
     assert preview["target"] == [7.123, 8.235, 9.346]
+
+
+def test_decode_ping() -> None:
+    msg = decode_inbound(
+        '{"type":"ping","ts":1.0,"robot_id":"unitree_go2","client_ts":99.5}',
+        expected_robot_id="unitree_go2",
+    )
+    from dimos_xr.network.protocol import PingMessage
+
+    assert isinstance(msg, PingMessage)
+    assert msg.client_ts == pytest.approx(99.5)
+
+
+def test_encode_pong() -> None:
+    payload = json.loads(
+        encode_pong(
+            robot_id="unitree_go2",
+            client_ts=99.5,
+            bridge_ts=100.0,
+        )
+    )
+    assert payload["type"] == "pong"
+    assert payload["client_ts"] == pytest.approx(99.5)
+    assert payload["bridge_ts"] == pytest.approx(100.0)
 
 
 def test_normalize_nav_state_active_planner_substates() -> None:

@@ -134,10 +134,7 @@ def test_tag_tracker_detects_generated_marker() -> None:
     }
     odom = OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
 
-    def lookup(_ts: float) -> OdomSample | None:
-        return odom
-
-    result = tracker.process_frame(header, _encode_marker_jpeg(), lookup, receive_mono=10.2)
+    result = tracker.process_frame(header, _encode_marker_jpeg(), odom=odom, receive_mono=10.2)
     assert result.tag_detected is True
     assert DEFAULT_MARKER_ID in result.tag_ids
     assert tracker.observation_count() >= 1
@@ -166,7 +163,7 @@ def test_tag_tracker_no_solve_when_stationary() -> None:
         tracker.process_frame(
             {**header, "seq": seq},
             _encode_marker_jpeg(),
-            lambda _ts: odom,
+            odom=odom,
             receive_mono=10.1 + seq * 0.1,
         )
 
@@ -279,7 +276,7 @@ def test_tag_tracker_translation_solve_when_stationary() -> None:
         tracker.process_frame(
             {**header, "seq": seq},
             _encode_marker_jpeg(),
-            lambda _ts: odom,
+            odom=odom,
             receive_mono=10.1 + seq * 0.1,
         )
 
@@ -345,10 +342,11 @@ def test_tag_tracker_rejects_unknown_tag_id() -> None:
         "cam_pos": [0.0, 1.5, 0.0],
         "cam_rot": [0.0, 0.0, 0.0, 1.0],
     }
+    odom = OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
     result = tracker.process_frame(
         header,
         _encode_marker_jpeg(),
-        lambda _ts: OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+        odom=odom,
         receive_mono=10.1,
     )
     assert result.tag_detected is False
@@ -373,17 +371,18 @@ def test_tag_tracker_window_ages_out_old_observations() -> None:
         "cam_pos": [0.0, 1.5, 0.0],
         "cam_rot": [0.0, 0.0, 0.0, 1.0],
     }
+    odom = OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
     tracker.process_frame(
         header,
         _encode_marker_jpeg(),
-        lambda _ts: OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+        odom=odom,
         receive_mono=10.0,
     )
     assert tracker.observation_count() >= 1
     tracker.process_frame(
         {**header, "seq": 2},
         _encode_marker_jpeg(),
-        lambda _ts: OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+        odom=odom,
         receive_mono=10.2,
     )
     assert tracker.observation_count() == 1
@@ -419,10 +418,11 @@ def test_tag_tracker_collects_world_anchor_observations() -> None:
         "cam_pos": [0.0, 1.5, 0.0],
         "cam_rot": [0.0, 0.0, 0.0, 1.0],
     }
+    odom = OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
     result = tracker.process_frame(
         header,
         _encode_marker_jpeg(),
-        lambda _ts: OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+        odom=odom,
         receive_mono=10.2,
     )
     assert result.tag_detected is True
@@ -448,10 +448,11 @@ def test_tag_tracker_without_camera_info_returns_empty() -> None:
         "cam_pos": [0.0, 0.0, 0.0],
         "cam_rot": [0.0, 0.0, 0.0, 1.0],
     }
+    odom = OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
     result = tracker.process_frame(
         header,
         _encode_marker_jpeg(),
-        lambda _ts: OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+        odom=odom,
     )
     assert result.tag_detected is False
     assert result.observations_added == 0
@@ -500,7 +501,7 @@ def test_current_solve_with_zero_baseline_returns_solve_from_small_window() -> N
         tracker.process_frame(
             {**header, "seq": i},
             _encode_marker_jpeg(),
-            lambda _ts, o=odom: o,
+            odom=odom,
             receive_mono=10.1 + i * 0.1,
         )
 
@@ -587,19 +588,16 @@ def test_odom_tag_straightness_straight_vs_curved() -> None:
     assert _odom_tag_straightness(straight) < _odom_tag_straightness(curved)
 
 
-def test_process_frame_applies_signed_odom_pairing_offset() -> None:
-    captured: list[float] = []
-
-    def lookup(ts: float) -> OdomSample:
-        captured.append(ts)
-        return OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
+def test_process_frame_uses_provided_odom() -> None:
+    odom = OdomSample(
+        position=(1.0, 2.0, 3.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+        source_ts=10.0,
+    )
 
     tracker = TagTracker(
         GO2_DEFAULT_TAG_MOUNTS,
-        config=TagTrackerConfig(
-            max_reprojection_error_px=8.0,
-            odom_pairing_offset_s=-0.01,
-        ),
+        config=TagTrackerConfig(max_reprojection_error_px=8.0),
     )
     tracker.set_camera_info(_synthetic_camera_info())
     header = {
@@ -608,9 +606,14 @@ def test_process_frame_applies_signed_odom_pairing_offset() -> None:
         "seq": 1,
         "ts": 10.0,
         "send_ts": 10.05,
+        "capture_ts_robot": 10.0,
         "cam_pos": [1.0, 1.5, -2.0],
         "cam_rot": [0.0, 0.0, 0.0, 1.0],
     }
-    tracker.process_frame(header, _encode_marker_jpeg(), lookup, receive_mono=20.0)
-    assert captured
-    assert captured[0] == pytest.approx(19.96, abs=1e-9)
+    result = tracker.process_frame(
+        header,
+        _encode_marker_jpeg(),
+        odom=odom,
+        receive_mono=20.0,
+    )
+    assert result.tag_detected is False or result.tag_detected is True

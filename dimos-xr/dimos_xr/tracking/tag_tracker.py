@@ -55,8 +55,6 @@ from dimos_xr.tracking.transforms import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from numpy.typing import NDArray
 
 logger = setup_logger()
@@ -340,7 +338,6 @@ class TagTrackerConfig:
     relocalize_consecutive: int = 3
     max_mount_residual_m: float = 0.5
     max_up_axis_tilt_deg: float = 85.0
-    odom_pairing_offset_s: float = 0.02
 
 
 class TagTracker:
@@ -429,16 +426,13 @@ class TagTracker:
         self,
         header: dict[str, Any],
         jpeg: bytes,
-        odom_lookup: Callable[[float], OdomSample | None],
         *,
+        odom: OdomSample | None = None,
         receive_mono: float | None = None,
         T_committed: NDArray[np.float64] | None = None,
         registered: bool = False,
     ) -> FrameResult:
         recv_mono = receive_mono if receive_mono is not None else time.monotonic()
-        frame_age = float(header["send_ts"]) - float(header["ts"])
-        odom_ts = recv_mono - max(0.0, frame_age) - self._config.odom_pairing_offset_s
-        odom = odom_lookup(odom_ts)
 
         with self._lock:
             camera_info = self._camera_info

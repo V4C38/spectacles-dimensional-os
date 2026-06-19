@@ -498,6 +498,9 @@ Header fields:
 
 - `ts`: capture time in scene seconds (`imageFrame.timestampMillis / 1000`)
 - `send_ts`: scene time when the frame was enqueued for send
+- `capture_ts_robot` (optional): Lens capture time mapped to bridge/robot wall
+  clock via connect-time ping/pong; required for exact frame↔odom pairing on
+  current bridges
 - The XR client must re-send `camera_info` before the first `camera_frame` whose
   JPEG dimensions differ from the previous stage/mode so the bridge can replace
   the active intrinsics before decoding the new stream or still resolution.
@@ -558,6 +561,28 @@ start navigation or change the robot state.
 ### `cancel_goal`
 
 Cancel the active navigation goal.
+
+### `ping` / `pong`
+
+Connect-time clock sync (Lens → bridge). The Lens sends several `ping`
+messages after `hello`; the bridge replies immediately with `pong`:
+
+```json
+{ "type": "ping", "ts": 1730000000.123, "robot_id": "unitree_go2", "client_ts": 1730000000.100 }
+```
+
+```json
+{
+  "type": "pong",
+  "ts": 1730000000.125,
+  "robot_id": "unitree_go2",
+  "client_ts": 1730000000.100,
+  "bridge_ts": 1730000000.124
+}
+```
+
+`bridge_ts` is `time.time()` on the bridge when the ping is received. The Lens
+uses median RTT-adjusted offset to populate `capture_ts_robot` on `camera_frame`.
 
 ### `emergency_stop`
 

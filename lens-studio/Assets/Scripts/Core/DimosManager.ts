@@ -1,5 +1,6 @@
-import { FrameCaptureController } from "../Alignment/FrameCaptureController";
+import { FrameCaptureController } from "../Camera/FrameCaptureController";
 import { AlignmentSession } from "../Alignment/AlignmentSession";
+import { BridgeClient } from "../Bridge/BridgeClient";
 import { BridgeRuntime } from "../Bridge/BridgeRuntime";
 import { DimosServices } from "./DimosServices";
 import { RobotRuntime } from "../Robot/RobotRuntime";
@@ -76,6 +77,10 @@ export class DimosManager extends BaseScriptComponent {
 
   public get frameCaptureController(): FrameCaptureController | null {
     return this.dimosServices.frameCaptureController ?? null;
+  }
+
+  public get bridgeClient(): BridgeClient | null {
+    return this.dimosServices.bridgeClient ?? null;
   }
 
   private _bindSubsystems(): void {
