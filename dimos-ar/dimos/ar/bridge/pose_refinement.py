@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
@@ -177,7 +177,7 @@ class RegisteredPoseRefiner:
     def maybe_log_moving_robot_diag(
         self,
         *,
-        header: dict,
+        header: dict[str, Any],
         receive_mono: float,
         frame_age: float,
         result: object,

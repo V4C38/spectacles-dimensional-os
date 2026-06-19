@@ -28,7 +28,7 @@ jobs:
         run: ruff check .
 
       - name: Mypy
-        run: mypy dimos.ar
+        run: mypy dimos/ar
 
       - name: Pytest (unit tests without DimOS)
         run: pytest -m "not integration"
