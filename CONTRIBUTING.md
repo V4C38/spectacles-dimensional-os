@@ -62,7 +62,31 @@ points rather than introducing UI error catalogs.
 
 ## Tests
 
-- Default CI runs unit tests that do not require DimOS installed.
+**CI** (`.github/workflows/ci.yml`) runs two jobs on every push/PR:
+
+| Job | Command | Scope |
+|-----|---------|--------|
+| `dimos-ar` | `pytest -m "not integration"`, ruff, mypy | Python bridge |
+| `lens-studio-tests` | `npm ci && npm test` in `lens-studio/Tests/` | Lens pure TS modules |
+
+Run both locally before opening a PR that touches protocol, bridge logic, or testable Lens helpers.
+
+**Python** — from the DimOS `.venv`:
+
+```bash
+cd dimos-ar
+/path/to/dimos/.venv/bin/python3 -m pytest
+```
+
+**Lens TypeScript** — Vitest harness outside `Assets/`:
+
+```bash
+cd lens-studio/Tests
+npm install   # first time
+npm test
+```
+
+- Default CI unit tests do not require DimOS installed or Lens Studio open.
 - Integration: `pytest dimos/ar/network/test_ws_integration.py -m integration` with the bridge already running from the DimOS `.venv`.
 
 ## License

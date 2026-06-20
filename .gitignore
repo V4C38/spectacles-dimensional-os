@@ -68,3 +68,8 @@ lens-studio/*.lock
 lens-studio/.vscode/
 lens-studio/jsconfig.json
 lens-studio/tsconfig.json
+
+# JS/TS test toolchain (lens-studio/Tests)
+node_modules/
+lens-studio/Tests/coverage/
+.vitest/

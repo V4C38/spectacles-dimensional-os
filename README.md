@@ -203,7 +203,7 @@ DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3 ./start.sh
 <details>
 <summary>Manual setup and tests</summary>
 
-Install from the DimOS Python environment:
+**Python** (`dimos-ar/`) — install from the DimOS Python environment:
 
 ```bash
 cd /path/to/spectacles-dimensional-os/dimos-ar
@@ -212,6 +212,18 @@ cd /path/to/spectacles-dimensional-os/dimos-ar
 /path/to/dimos/.venv/bin/python3 -m ruff check .
 /path/to/dimos/.venv/bin/python3 -m mypy dimos/ar
 ```
+
+**Lens TypeScript** (`lens-studio/Tests/`) — pure-logic unit tests for `Protocol.ts`, `AppState.ts`, `Utilities.ts`, and `RobotRuntimeModel.ts` (runs in Node/Vitest, not inside Lens Studio):
+
+```bash
+cd /path/to/spectacles-dimensional-os/lens-studio/Tests
+npm install   # first time only
+npm test
+```
+
+Do not put `*.test.ts` under `lens-studio/Assets/` — the Lens compiler globs all `Assets/**/*.ts`.
+
+**CI** — on every push and pull request, GitHub Actions runs both suites in parallel: `dimos-ar` (ruff, mypy, pytest) and `lens-studio-tests` (`npm ci && npm test`). Changes that touch shared protocol or pure Lens logic should pass both before merge.
 
 If you want to run `ar-g1`, make sure the same DimOS `.venv`
 also has the DDS SDK package installed:
@@ -227,7 +239,7 @@ cd /path/to/spectacles-dimensional-os/dimos-ar
 /path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/network/test_ws_integration.py -m integration
 ```
 
-Tests are colocated with their modules under `dimos-ar/dimos/ar/`. See [`dimos-ar/README.md`](dimos-ar/README.md) for the unit vs integration test split.
+Python tests are colocated with their modules under `dimos-ar/dimos/ar/`. See [`dimos-ar/README.md`](dimos-ar/README.md) for the unit vs integration test split.
 
 </details>
 

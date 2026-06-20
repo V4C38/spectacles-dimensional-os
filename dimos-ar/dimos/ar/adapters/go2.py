@@ -11,7 +11,6 @@ import time
 
 from dimos_lcm.std_msgs import Bool, String
 from scipy.spatial.transform import Rotation as _Rotation
-from unitree_webrtc_connect.constants import RTC_TOPIC, SPORT_CMD
 
 from dimos.ar.adapters.base import (
     ARRobotAdapterSpec,
@@ -278,6 +277,8 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         if self.stop_movement.transport is not None:
             self.stop_movement.publish(Bool(data=True))
         if self._go2_connection is not None:
+            from unitree_webrtc_connect.constants import RTC_TOPIC, SPORT_CMD
+
             self._go2_connection.publish_request(
                 RTC_TOPIC["SPORT_MOD"],
                 {"api_id": SPORT_CMD["StopMove"]},

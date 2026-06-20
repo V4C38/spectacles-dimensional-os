@@ -9,12 +9,12 @@ application-level heartbeat in the AR bridge protocol.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 import logging
 import os
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 
 import websockets
 import websockets.asyncio.server as ws_server
@@ -160,21 +160,21 @@ class ARWebSocketServer:
         handlers: dict[type[InboundMessage], InboundHandler] = {}
 
         if on_align_start is not None:
-            handlers[AlignStartMessage] = on_align_start
+            handlers[AlignStartMessage] = cast("InboundHandler", on_align_start)
         if on_align_stop is not None:
-            handlers[AlignStopMessage] = on_align_stop
+            handlers[AlignStopMessage] = cast("InboundHandler", on_align_stop)
         if on_align_commit is not None:
-            handlers[AlignCommitMessage] = on_align_commit
+            handlers[AlignCommitMessage] = cast("InboundHandler", on_align_commit)
         if on_assist_confirm is not None:
-            handlers[AssistConfirmMessage] = on_assist_confirm
+            handlers[AssistConfirmMessage] = cast("InboundHandler", on_assist_confirm)
         if on_camera_info is not None:
-            handlers[CameraInfoMessage] = on_camera_info
+            handlers[CameraInfoMessage] = cast("InboundHandler", on_camera_info)
         if on_align_manual_pose is not None:
-            handlers[AlignManualPoseMessage] = on_align_manual_pose
+            handlers[AlignManualPoseMessage] = cast("InboundHandler", on_align_manual_pose)
         if on_get_status is not None:
-            handlers[GetStatusMessage] = lambda msg, ws: on_get_status(msg, ws)
+            handlers[GetStatusMessage] = cast("InboundHandler", on_get_status)
         if on_set_lidar_mode is not None:
-            handlers[SetLidarModeMessage] = lambda msg, ws: on_set_lidar_mode(msg, ws)
+            handlers[SetLidarModeMessage] = cast("InboundHandler", on_set_lidar_mode)
 
         def _nav_handler(
             handler: Callable[[Any], None] | None,
@@ -320,8 +320,8 @@ class ARWebSocketServer:
             if self._on_disconnect is not None:
                 self._on_disconnect(websocket)
 
-    def _spawn_background(self, coro: Awaitable[None]) -> None:
-        task = asyncio.create_task(coro)
+    def _spawn_background(self, coro: Coroutine[Any, Any, None]) -> None:
+        task: asyncio.Task[None] = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 

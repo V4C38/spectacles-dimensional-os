@@ -142,7 +142,7 @@ def filter_obstacle_points(
     pts = pts[mask]
     if len(pts) == 0:
         return np.zeros((0, 3), dtype=np.float32)
-    return pts
+    return np.asarray(pts, dtype=np.float32)
 
 
 def subsample_points_near_robot(

@@ -87,4 +87,5 @@ implementation steps only. Do not create "investigation plans."
 # Tests (with blueprint running for integration)
 cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest
 cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/network/test_ws_integration.py -m integration
+cd lens-studio/Tests && npm test   # Lens pure TS (Vitest); CI job lens-studio-tests
 ```

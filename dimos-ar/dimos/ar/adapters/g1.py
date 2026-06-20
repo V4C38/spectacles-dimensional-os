@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
+from typing import Any
 
 from dimos_lcm.std_msgs import Bool, String
 
@@ -31,7 +32,6 @@ from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.std_msgs.Bool import Bool as NavBool
 from dimos.robot.unitree.g1.connection_spec import G1ConnectionSpec
-from dimos.robot.unitree.g1.effectors.high_level.high_level_spec import HighLevelG1Spec
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -187,7 +187,7 @@ class G1AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
 
     config: G1AdapterConfig
     _g1_connection: G1ConnectionSpec | None = None
-    _g1_high_level: HighLevelG1Spec | None = None
+    _g1_high_level: Any = None
     _assist_vel_lock: threading.Lock
     _assist_vel_thread: threading.Thread | None
     _assist_vel_target: float
