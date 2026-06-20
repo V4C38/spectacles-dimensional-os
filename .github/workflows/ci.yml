@@ -18,10 +18,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dev tools and package (no DimOS)
+      - name: Install dev tools and package
         run: |
           python -m pip install --upgrade pip
-          pip install websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless
+          pip install websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless Pillow scipy dimos
           pip install -e . --no-deps
 
       - name: Ruff
@@ -30,5 +30,18 @@ jobs:
       - name: Mypy
         run: mypy dimos/ar
 
-      - name: Pytest (unit tests without DimOS)
+      - name: Pytest (unit tests without robot hardware)
         run: pytest -m "not integration"
+
+  lens-studio-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lens-studio/Tests
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - run: npm test

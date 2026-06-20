@@ -17,9 +17,9 @@ Detection and PnP pose estimation here deliberately does NOT delegate to
    it is not in the DimOS TF graph and cannot be looked up via ``TFSpec``.
 3. The bridge computes ``T_world_odom`` directly from paired (world-space tag,
    odom-space robot) observations — a fundamentally different fusion path.
-The individual helper functions ``camera_info_to_cv_matrices`` and
-``estimate_marker_pose`` are re-exported from the DimOS fiducial module (same
-implementation) to keep the two in sync.
+The helper functions ``camera_info_to_cv_matrices``, ``create_aruco_detector``, and
+``estimate_marker_pose`` live in :mod:`dimos.ar.tracking.fiducial_helpers` (vendored
+from DimOS fiducial code to keep CI and PyPI installs self-contained).
 """
 
 from __future__ import annotations
@@ -39,6 +39,11 @@ _TRACE = os.getenv("DIMOS_AR_TRACE", "") not in ("", "0", "false")
 import cv2
 import numpy as np
 
+from dimos.ar.tracking.fiducial_helpers import (
+    camera_info_to_cv_matrices,
+    create_aruco_detector,
+    estimate_marker_pose,
+)
 from dimos.ar.tracking.transforms import (
     OdomSample,
     gravity_level_transform,
@@ -46,11 +51,6 @@ from dimos.ar.tracking.transforms import (
     up_axis_angle_deg,
 )
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
-from dimos.perception.fiducial.marker_tf_module import (
-    camera_info_to_cv_matrices,
-    create_aruco_detector,
-    estimate_marker_pose,
-)
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:

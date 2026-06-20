@@ -30,11 +30,6 @@ def marker_png_name(tag_id: int) -> str:
     return f"apriltag_robot_{tag_id}.png"
 
 
-try:
-    from PIL import Image, ImageDraw
-except ImportError as e:  # pragma: no cover
-    raise SystemExit("Pillow is required for PDF export: pip install Pillow") from e
-
 A4_PAGE_MM = (210.0, 297.0)
 LETTER_PAGE_MM = (215.9, 279.4)
 PDF_DPI = 300
@@ -77,6 +72,11 @@ def write_page_pdf(
     tag_id: int,
     dpi: int = PDF_DPI,
 ) -> None:
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError as e:
+        raise SystemExit("Pillow is required for PDF export: pip install Pillow") from e
+
     if marker_width_mm > page_width_mm or marker_height_mm > page_height_mm:
         raise ValueError(
             f"Marker {marker_width_mm}x{marker_height_mm} mm does not fit "
