@@ -7,6 +7,16 @@ import {
   COLOR_SUCCESS,
   COLOR_WHITE,
 } from "../UI/kit/UIKit";
+import {
+  deriveNavigationProfile,
+  isFollowingProfile,
+  NAV_GOAL_MODE_LABELS,
+  NavigationGoalMode,
+  nextNavigationGoalMode,
+} from "../Navigation/NavigationProfile";
+
+export type { NavigationGoalMode };
+export { NAV_GOAL_MODE_LABELS, nextNavigationGoalMode };
 
 /** Whole-app lifecycle: setup wizard vs live XR session. */
 export type AppPhase = "setup" | "runtime";
@@ -102,10 +112,17 @@ export function robotMarkerSteadyStatePresentation(
       return { text: reason, color: COLOR_WHITE };
     }
   }
-  return {
-    text: state.navigationState === "executingGoal" ? "Navigating" : "Idle",
-    color: COLOR_WHITE,
-  };
+  if (state.navigationState === "executingGoal") {
+    const profile = deriveNavigationProfile(
+      state.operatingMode,
+      state.navigationGoalMode,
+    );
+    return {
+      text: isFollowingProfile(profile) ? "Following" : "Navigating",
+      color: COLOR_WHITE,
+    };
+  }
+  return { text: "Idle", color: COLOR_WHITE };
 }
 
 export function toSessionState(state: DimosAppState): SessionState {
@@ -201,6 +218,7 @@ export interface DimosAppState {
   operatingMode: OperatingMode;
   /** UI-only: which mode's settings submenu is open, or null when collapsed. */
   mainMenuExpandedSettingsMode: OperatingMode | null;
+  navigationGoalMode: NavigationGoalMode;
   navigationState: NavigationState;
   robotInteractionMode: RobotInteractionMode;
   navigationOutcome: NavigationOutcome;
@@ -314,6 +332,7 @@ export function createDefaultDimosAppState(): DimosAppState {
     lidarMode: "obstacles",
     operatingMode: "manual",
     mainMenuExpandedSettingsMode: null,
+    navigationGoalMode: "single",
     navigationState: "off",
     robotInteractionMode: "hidden",
     navigationOutcome: defaultNavigationOutcome(),

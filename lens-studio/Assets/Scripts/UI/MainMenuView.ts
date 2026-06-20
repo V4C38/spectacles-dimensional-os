@@ -1,4 +1,10 @@
-import { LidarDisplayMode, LIDAR_MODE_LABELS, OperatingMode } from "../Core/AppState";
+import {
+  LidarDisplayMode,
+  LIDAR_MODE_LABELS,
+  NAV_GOAL_MODE_LABELS,
+  NavigationGoalMode,
+  OperatingMode,
+} from "../Core/AppState";
 import { RectangleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RectangleButton";
 import { scaleIn, scaleOut } from "./kit/UIAnimations";
 import {
@@ -36,11 +42,11 @@ interface MainMenuCallbacks {
   onLidarModeCycle: () => void;
   onModeButtonPressed: (mode: OperatingMode) => void;
   onModeSettingsChanged: (enabled: boolean) => void;
-  onNavigationPlacementChanged: (enabled: boolean) => void;
+  onNavigationGoalModeCycle: () => void;
   onEmergencyStop: () => void;
   onDebugModeChanged: (enabled: boolean) => void;
   getLidarMode: () => LidarDisplayMode;
-  getNavigationPlacementValue: () => boolean;
+  getNavigationGoalMode: () => NavigationGoalMode;
   getOperatingMode: () => OperatingMode;
   getExpandedSettingsMode: () => OperatingMode | null;
   getModeSettingsExpanded: () => boolean;
@@ -51,7 +57,7 @@ export class MainMenuView {
   private readonly _statusText: Text;
   private readonly _restart: ButtonBinding;
   private readonly _emergencyStop: ButtonBinding;
-  private readonly _navigationPlacement: ButtonBinding;
+  private readonly _modeSwitch: ButtonBinding;
   private readonly _showLiDAR: ButtonBinding;
   private readonly _debugMode: ButtonBinding;
   private readonly _subMenu: SceneObject;
@@ -59,8 +65,8 @@ export class MainMenuView {
   private readonly _modePanels: ModePanelConfig[];
   private _operatingMode: OperatingMode;
   private _expandedSettingsMode: OperatingMode | null;
-  private _navigationPlacementEnabled = false;
   private _debugModeEnabled = false;
+  private _navigationGoalMode: NavigationGoalMode = "single";
   private _suppressModeSettingsChange = false;
 
   constructor(
@@ -78,13 +84,11 @@ export class MainMenuView {
     const agentMode = findButtonBinding(panel, "ModeAgent", "TextModeAgent");
     const showLiDAR = findButtonBinding(panel, "ShowLiDAR", "ShowLiDARLabel");
     const debugMode = findButtonBinding(panel, "DebugMode", "DebugModeLabel");
-    const navigationPlacement = findButtonBinding(
-      panel,
-      "EnableNavigation",
-      "EnableNavigationLabel",
-    );
-    const subMenu = findChildRecursive(panel, "SubMenu");
     const manualMenu = findChildRecursive(panel, "ModeManualMenu");
+    const modeSwitch = manualMenu
+      ? findButtonBinding(manualMenu, "ModeSwitch", "EnableNavigationLabel")
+      : null;
+    const subMenu = findChildRecursive(panel, "SubMenu");
     const agentMenu = findChildRecursive(panel, "ModeAgentMenu");
     const modeSettingsObj = findChildRecursive(panel, "ModeSettings");
 
@@ -94,7 +98,7 @@ export class MainMenuView {
       !emergencyStop ||
       !manualMode ||
       !agentMode ||
-      !navigationPlacement ||
+      !modeSwitch ||
       !showLiDAR ||
       !debugMode ||
       !subMenu ||
@@ -110,7 +114,7 @@ export class MainMenuView {
     this._statusText = statusText;
     this._restart = restart;
     this._emergencyStop = emergencyStop;
-    this._navigationPlacement = navigationPlacement;
+    this._modeSwitch = modeSwitch;
     this._showLiDAR = showLiDAR;
     this._debugMode = debugMode;
     this._subMenu = subMenu;
@@ -130,6 +134,7 @@ export class MainMenuView {
     this._operatingMode = callbacks.getOperatingMode();
     this._expandedSettingsMode = callbacks.getExpandedSettingsMode();
     this._debugModeEnabled = callbacks.getDebugModeValue();
+    this._navigationGoalMode = callbacks.getNavigationGoalMode();
 
     this._restart.button.onTriggerUp.add(callbacks.onRestart);
     for (const panel of this._modePanels) {
@@ -144,16 +149,12 @@ export class MainMenuView {
       callbacks.onModeSettingsChanged(enabled);
     });
     bindToggleButton(
-      this._navigationPlacement.button,
-      callbacks.onNavigationPlacementChanged,
-      callbacks.getNavigationPlacementValue,
-    );
-    bindToggleButton(
       this._debugMode.button,
       callbacks.onDebugModeChanged,
       callbacks.getDebugModeValue,
     );
     this._showLiDAR.button.onTriggerUp.add(callbacks.onLidarModeCycle);
+    this._modeSwitch.button.onTriggerUp.add(callbacks.onNavigationGoalModeCycle);
     this._emergencyStop.button.onTriggerUp.add(() => {
       callbacks.onEmergencyStop();
       setButtonToggleState(this._emergencyStop.button, true);
@@ -162,9 +163,9 @@ export class MainMenuView {
 
     this._initializeStyles();
     this.setOperatingMode(this._operatingMode);
-    this.setNavigationPlacementToggle(callbacks.getNavigationPlacementValue());
     this.setDebugModeToggle(callbacks.getDebugModeValue());
     this.setLidarModeDisplay(callbacks.getLidarMode());
+    this.setNavigationGoalModeDisplay(this._navigationGoalMode);
     this.setExpandedSettingsMode(this._expandedSettingsMode);
   }
 
@@ -176,6 +177,13 @@ export class MainMenuView {
   public setOperatingMode(mode: OperatingMode): void {
     this._operatingMode = mode;
     this._syncModePresentation();
+  }
+
+  public setNavigationGoalModeDisplay(mode: NavigationGoalMode): void {
+    this._navigationGoalMode = mode;
+    if (this._modeSwitch.labelText) {
+      this._modeSwitch.labelText.text = NAV_GOAL_MODE_LABELS[mode];
+    }
   }
 
   public setLidarModeDisplay(mode: LidarDisplayMode): void {
@@ -197,12 +205,14 @@ export class MainMenuView {
     setButtonEnabled(this._showLiDAR.button, available);
   }
 
-  public setNavigationPlacementToggle(enabled: boolean): void {
-    this._navigationPlacementEnabled = enabled;
-    if (this._navigationPlacement.labelText) {
-      this._navigationPlacement.labelText.text = this._navigationPlacementLabel(enabled);
+  public setNavigationGoalModeAvailability(available: boolean): void {
+    if (!this._modeSwitch.button || !this._modeSwitch.labelText) {
+      return;
     }
-    setButtonToggleState(this._navigationPlacement.button, enabled);
+    this._modeSwitch.labelText.text = available
+      ? NAV_GOAL_MODE_LABELS[this._navigationGoalMode]
+      : "Navigation\nUnavailable";
+    setButtonEnabled(this._modeSwitch.button, available);
   }
 
   public setDebugModeToggle(enabled: boolean): void {
@@ -215,20 +225,6 @@ export class MainMenuView {
 
   private _debugModeLabel(enabled: boolean): string {
     return enabled ? "Debug: on" : "Debug: off";
-  }
-
-  public setNavigationPlacementAvailability(available: boolean): void {
-    if (!this._navigationPlacement.button || !this._navigationPlacement.labelText) {
-      return;
-    }
-    this._navigationPlacement.labelText.text = available
-      ? this._navigationPlacementLabel(this._navigationPlacementEnabled)
-      : "Navigation Marker\nUnavailable";
-    setButtonEnabled(this._navigationPlacement.button, available);
-  }
-
-  private _navigationPlacementLabel(enabled: boolean): string {
-    return enabled ? "Navigation Marker: on" : "Navigation Marker: off";
   }
 
   public setEmergencyStopAvailability(
@@ -306,9 +302,7 @@ export class MainMenuView {
     const modeSettingsLabel = findFirstText(this._modeSettings.getSceneObject());
     modeSettingsLabel && (modeSettingsLabel.size = FONT_BUTTON);
     configureButtonToggle(this._modeSettings, false);
-    this._navigationPlacement.labelText &&
-      (this._navigationPlacement.labelText.size = FONT_BUTTON);
-    configureButtonToggle(this._navigationPlacement.button, false);
+    this._modeSwitch.labelText && (this._modeSwitch.labelText.size = FONT_BUTTON);
     this._showLiDAR.labelText && (this._showLiDAR.labelText.size = FONT_BUTTON);
     this._debugMode.labelText && (this._debugMode.labelText.size = FONT_BUTTON);
     configureButtonToggle(this._debugMode.button, this._debugModeEnabled);

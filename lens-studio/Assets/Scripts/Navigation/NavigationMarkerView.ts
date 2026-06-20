@@ -11,16 +11,16 @@ import {
   SnapOS2Styles,
 } from "../UI/kit/UIKit";
 import { yawRotationFromWorldRotation } from "../Core/Utilities";
+import {
+  NavigationMarkerPhase,
+  NavigationMarkerPreset,
+  NavigationMarkerProfile,
+  resolveMarkerPreset,
+} from "./NavigationProfile";
 
 // ================================================================
-/** Scene-graph view for the navigation target marker with confirm/cancel and visibility animations. */
+/** Scene-graph view for the navigation target marker (profile × phase presets). */
 // ================================================================
-
-export type NavigationMarkerVisualState =
-  | "disabled"
-  | "placing"
-  | "executing"
-  | "resettingOutcome";
 
 const MARKER_VISIBILITY_DURATION_SECONDS = 0.18;
 const OUTCOME_CIRCLE_COLLAPSE_DURATION_SECONDS =
@@ -29,95 +29,11 @@ const OUTCOME_DOTS_TEXT_COLLAPSE_DELAY_SECONDS = 1.5;
 const VISIBILITY_ANIMATION_VERSION_KEY = "__navMarkerVisibilityVersion";
 const CIRCLE_SCALE_ANIMATION_VERSION_KEY = "__navMarkerCircleScaleVersion";
 const OUTCOME_RESET_ANIMATION_VERSION_KEY = "__navMarkerOutcomeResetVersion";
-const DOTS_WHITE = new vec4(1, 1, 1, 0.457359);
-const DOTS_YELLOW = new vec4(0.976471, 0.929412, 0.423529, 0.500008);
 
-type MarkerPreset = {
-  circleExecuting: boolean;
-  lookAtEnabled: boolean;
-  confirmVisible: boolean;
-  useExecutingButtonPresentation: boolean;
-  resetCircleBeforeShow: boolean;
-  scanAnimation: boolean;
-  confirmVfx: "confirm" | "cancel" | "hidden";
-  arrowEnabled: boolean;
-  arrowSpeed: number;
-  circleSaturation: { circle: "portal" | "executing"; value: number } | null;
-  dotsMode: "seeking" | "executing";
-  restoreOutcomeFirst: boolean;
-  animateRootVisible: boolean | null;
-  animateCircleExpanded: boolean | null;
-};
-
-type MarkerPresetOverrides = Partial<
-  Pick<MarkerPreset, "confirmVisible" | "animateRootVisible" | "animateCircleExpanded">
->;
-
-const MARKER_PRESETS: Record<NavigationMarkerVisualState, MarkerPreset> = {
-  disabled: {
-    circleExecuting: false,
-    lookAtEnabled: false,
-    confirmVisible: false,
-    useExecutingButtonPresentation: false,
-    resetCircleBeforeShow: false,
-    scanAnimation: false,
-    confirmVfx: "hidden",
-    arrowEnabled: false,
-    arrowSpeed: 0,
-    circleSaturation: null,
-    dotsMode: "seeking",
-    restoreOutcomeFirst: true,
-    animateRootVisible: null,
-    animateCircleExpanded: null,
-  },
-  placing: {
-    circleExecuting: false,
-    lookAtEnabled: false,
-    confirmVisible: false,
-    useExecutingButtonPresentation: false,
-    resetCircleBeforeShow: true,
-    scanAnimation: false,
-    confirmVfx: "confirm",
-    arrowEnabled: false,
-    arrowSpeed: 0,
-    circleSaturation: { circle: "portal", value: 0 },
-    dotsMode: "seeking",
-    restoreOutcomeFirst: true,
-    animateRootVisible: true,
-    animateCircleExpanded: true,
-  },
-  executing: {
-    circleExecuting: true,
-    lookAtEnabled: false,
-    confirmVisible: true,
-    useExecutingButtonPresentation: true,
-    resetCircleBeforeShow: false,
-    scanAnimation: true,
-    confirmVfx: "cancel",
-    arrowEnabled: true,
-    arrowSpeed: 1,
-    circleSaturation: { circle: "executing", value: 1 },
-    dotsMode: "executing",
-    restoreOutcomeFirst: true,
-    animateRootVisible: true,
-    animateCircleExpanded: false,
-  },
-  resettingOutcome: {
-    circleExecuting: false,
-    lookAtEnabled: false,
-    confirmVisible: false,
-    useExecutingButtonPresentation: false,
-    resetCircleBeforeShow: false,
-    scanAnimation: false,
-    confirmVfx: "hidden",
-    arrowEnabled: false,
-    arrowSpeed: 0,
-    circleSaturation: null,
-    dotsMode: "seeking",
-    restoreOutcomeFirst: true,
-    animateRootVisible: null,
-    animateCircleExpanded: null,
-  },
+export type NavigationMarkerApplyOptions = {
+  confirmAvailable?: boolean;
+  cancelAvailable?: boolean;
+  showConfirmInPreview?: boolean;
 };
 
 function nextAnimationVersion(store: object, key: string): number {
@@ -228,6 +144,8 @@ function applyDotsMaterialMode(
     return;
   }
   const pass = visual.mainMaterial.mainPass as any;
+  const DOTS_WHITE = new vec4(1, 1, 1, 0.457359);
+  const DOTS_YELLOW = new vec4(0.976471, 0.929412, 0.423529, 0.500008);
   if ("WhiteColor" in pass) {
     pass.WhiteColor = DOTS_WHITE;
   }
@@ -264,7 +182,8 @@ export class NavigationMarkerView {
   private readonly rotationLookAt: Component | null;
   private readonly circleAnimation: any;
 
-  private _state: NavigationMarkerVisualState = "disabled";
+  private _profile: NavigationMarkerProfile = "manualSingle";
+  private _phase: NavigationMarkerPhase = "hidden";
   private _confirmEnabled = false;
   private _placementAnchor: SceneObject | null = null;
   private _preAnchorParent: SceneObject | null = null;
@@ -321,6 +240,14 @@ export class NavigationMarkerView {
     this.setRotation(this._rotation);
   }
 
+  public get profile(): NavigationMarkerProfile {
+    return this._profile;
+  }
+
+  public get phase(): NavigationMarkerPhase {
+    return this._phase;
+  }
+
   public get confirmActionButton(): RoundButton {
     return this.confirmButton;
   }
@@ -348,9 +275,117 @@ export class NavigationMarkerView {
   }
 
   public setRotation(rotation: quat): void {
-    // Heading pivot is yaw-only so the flat arrow stays ground-parallel.
     this._rotation = yawRotationFromWorldRotation(rotation);
     this._applyHeadingRootRotation();
+  }
+
+  public apply(
+    profile: NavigationMarkerProfile,
+    phase: NavigationMarkerPhase,
+    opts: NavigationMarkerApplyOptions = {},
+  ): void {
+    if (phase === "outcomeReset") {
+      return;
+    }
+
+    const samePresentation =
+      this._profile === profile &&
+      this._phase === phase &&
+      phase !== "hidden";
+
+    this._profile = profile;
+    this._phase = phase;
+    const preset = resolveMarkerPreset(profile, phase);
+    const confirmVisible = this._resolveConfirmVisible(phase, preset.confirmVisible, opts);
+    const resolvedPreset = { ...preset, confirmVisible };
+
+    if (phase === "hidden") {
+      this._beginHide();
+      this._animateRootVisibility(false);
+      return;
+    }
+
+    this._applyPresetVisuals(resolvedPreset, phase, opts, !samePresentation);
+  }
+
+  public showOutcomeReset(
+    profile: NavigationMarkerProfile,
+    label: "Cancelled" | "Failed",
+    opts: NavigationMarkerApplyOptions = {},
+  ): void {
+    this._profile = profile;
+    this._phase = "outcomeReset";
+    const preset = resolveMarkerPreset(profile, "outcomeReset");
+    if (preset.restoreOutcomeFirst) {
+      this._restoreOutcomeVisualState();
+    }
+    this._applyPresetVisuals(preset, "outcomeReset", opts, true);
+    this.root.enabled = true;
+    this.root.getTransform().setLocalScale(this.rootBaseScale);
+    this._setDotsVisible(true);
+    this._setStateText(label, true);
+    const animationVersion = nextAnimationVersion(
+      this.root,
+      OUTCOME_RESET_ANIMATION_VERSION_KEY,
+    );
+    this._animateOutcomeResetCollapse(animationVersion);
+    this._animateOutcomeResetDelayedContentCollapse(animationVersion);
+  }
+
+  private _applyPresetVisuals(
+    preset: NavigationMarkerPreset,
+    phase: NavigationMarkerPhase,
+    opts: NavigationMarkerApplyOptions,
+    animateEntrance: boolean,
+  ): void {
+    if (preset.restoreOutcomeFirst && animateEntrance) {
+      this._restoreOutcomeVisualState();
+    }
+    if (this.circleExecuting) {
+      this.circleExecuting.enabled = preset.circleExecuting;
+    }
+    this.portalCircle.enabled = preset.portalCircleVisible;
+    if (this.rotationLookAt) {
+      this.rotationLookAt.enabled = preset.lookAtEnabled;
+    }
+    this.setConfirmVisible(preset.confirmVisible);
+    if (preset.useExecutingButtonPresentation) {
+      this._cancelActionAvailable = opts.cancelAvailable ?? this._cancelActionAvailable;
+      this._applyExecutingButtonPresentation();
+    } else if (phase === "preview") {
+      this.confirmLabel.text = opts.confirmAvailable === false
+        ? "Confirm\nUnavailable"
+        : "Confirm";
+      setButtonStyle(this.confirmButton, SnapOS2Styles.Primary);
+      this._setConfirmInteractable(opts.confirmAvailable !== false);
+    }
+    if (preset.resetCircleBeforeShow && animateEntrance) {
+      this.resetCircleAnimation();
+    }
+    this.setScanAnimationEnabled(preset.scanAnimation);
+    this._setConfirmVfxState(
+      preset.confirmVfx === "confirm",
+      preset.confirmVfx === "hidden",
+    );
+    if (this.arrow) {
+      this.arrow.enabled = preset.arrowEnabled;
+    }
+    this._setMoveDirectionArrowSpeed(preset.arrowSpeed);
+    this._syncMoveDirectionArrowVisibility();
+    if (preset.circleSaturation) {
+      const circle =
+        preset.circleSaturation.circle === "portal"
+          ? this.portalCircle
+          : this.circleExecuting;
+      setMaterialPassProp(circle, "Saturation", preset.circleSaturation.value);
+    }
+    applyDotsMaterialMode(this.dots, preset.dotsMode === "seeking");
+    if (preset.animateRootVisible !== null && animateEntrance) {
+      this._animateRootVisibility(preset.animateRootVisible);
+    }
+    if (preset.animateCircleExpanded !== null && animateEntrance) {
+      this._animateCircleScale(preset.animateCircleExpanded);
+    }
   }
 
   public bindPlacementAnchor(
@@ -439,59 +474,15 @@ export class NavigationMarkerView {
     this._setConfirmInteractable(visible);
   }
 
-  private _setConfirmInteractable(enabled: boolean): void {
-    if (this._confirmEnabled === enabled) {
-      return;
-    }
-    this._confirmEnabled = enabled;
-    (this.confirmButton as any).enabled = enabled;
-  }
-
   public setCancelActionAvailability(available: boolean): void {
     this._cancelActionAvailable = available;
-    if (this._state === "executing") {
+    if (this._phase === "navigating") {
       this._applyExecutingButtonPresentation();
     }
   }
 
-  public setConfirmAvailability(available: boolean): void {
-    if (this._state !== "placing") {
-      return;
-    }
-    this._setConfirmInteractable(available);
-    if (this.confirmButtonObject.enabled) {
-      this.confirmLabel.text = available ? "Confirm" : "Confirm\nUnavailable";
-    }
-  }
-
-  public showPlacing(showConfirm: boolean = false): void {
-    this._applyPreset("placing", { confirmVisible: showConfirm });
-    this.confirmLabel.text = "Confirm";
-    setButtonStyle(this.confirmButton, SnapOS2Styles.Primary);
-  }
-
-  public showExecuting(): void {
-    this._applyPreset("executing");
-  }
-
-  public showOutcomeReset(label: "Cancelled" | "Failed"): void {
-    this._state = "resettingOutcome";
-    this._applyPreset("resettingOutcome");
-    this.root.enabled = true;
-    this.root.getTransform().setLocalScale(this.rootBaseScale);
-    this._setDotsVisible(true);
-    this._setStateText(label, true);
-    const animationVersion = nextAnimationVersion(
-      this.root,
-      OUTCOME_RESET_ANIMATION_VERSION_KEY,
-    );
-    this._animateOutcomeResetCollapse(animationVersion);
-    this._animateOutcomeResetDelayedContentCollapse(animationVersion);
-  }
-
   public hide(): void {
-    this._beginHide();
-    this._animateRootVisibility(false);
+    this.apply(this._profile, "hidden");
   }
 
   public hideAndThen(callback: () => void): void {
@@ -505,58 +496,33 @@ export class NavigationMarkerView {
       {
         onEnded: () => {
           this.root.enabled = false;
+          this._phase = "hidden";
           callback();
         },
       },
     );
   }
 
-  private _applyPreset(
-    state: NavigationMarkerVisualState,
-    overrides: MarkerPresetOverrides = {},
-  ): void {
-    this._state = state;
-    const preset = { ...MARKER_PRESETS[state], ...overrides };
-    if (preset.restoreOutcomeFirst) {
-      this._restoreOutcomeVisualState();
+  private _resolveConfirmVisible(
+    phase: NavigationMarkerPhase,
+    presetConfirmVisible: boolean,
+    opts: NavigationMarkerApplyOptions,
+  ): boolean {
+    if (phase === "preview") {
+      return (opts.showConfirmInPreview ?? false) && presetConfirmVisible;
     }
-    if (this.circleExecuting) {
-      this.circleExecuting.enabled = preset.circleExecuting;
+    if (phase === "navigating") {
+      return presetConfirmVisible;
     }
-    if (this.rotationLookAt) {
-      this.rotationLookAt.enabled = preset.lookAtEnabled;
+    return presetConfirmVisible;
+  }
+
+  private _setConfirmInteractable(enabled: boolean): void {
+    if (this._confirmEnabled === enabled) {
+      return;
     }
-    this.setConfirmVisible(preset.confirmVisible);
-    if (preset.useExecutingButtonPresentation) {
-      this._applyExecutingButtonPresentation();
-    }
-    if (preset.resetCircleBeforeShow) {
-      this.resetCircleAnimation();
-    }
-    this.setScanAnimationEnabled(preset.scanAnimation);
-    this._setConfirmVfxState(
-      preset.confirmVfx === "confirm",
-      preset.confirmVfx === "hidden",
-    );
-    if (this.arrow) {
-      this.arrow.enabled = preset.arrowEnabled;
-    }
-    this._setMoveDirectionArrowSpeed(preset.arrowSpeed);
-    this._syncMoveDirectionArrowVisibility();
-    if (preset.circleSaturation) {
-      const circle =
-        preset.circleSaturation.circle === "portal"
-          ? this.portalCircle
-          : this.circleExecuting;
-      setMaterialPassProp(circle, "Saturation", preset.circleSaturation.value);
-    }
-    applyDotsMaterialMode(this.dots, preset.dotsMode === "seeking");
-    if (preset.animateRootVisible !== null) {
-      this._animateRootVisibility(preset.animateRootVisible);
-    }
-    if (preset.animateCircleExpanded !== null) {
-      this._animateCircleScale(preset.animateCircleExpanded);
-    }
+    this._confirmEnabled = enabled;
+    (this.confirmButton as any).enabled = enabled;
   }
 
   private _worldToAnchorLocal(worldPosition: vec3): vec3 {
@@ -633,13 +599,17 @@ export class NavigationMarkerView {
   }
 
   private _beginHide(): void {
-    this._applyPreset("disabled");
-    // Cancel any in-progress circle animation and restore the circle to full
-    // scale so it is ready for the next showPlacing(). The root is about to
-    // scale to zero so this is invisible.
+    this._phase = "hidden";
+    const preset = resolveMarkerPreset(this._profile, "hidden");
+    if (preset.restoreOutcomeFirst) {
+      this._restoreOutcomeVisualState();
+    }
     nextAnimationVersion(this.portalCircle, CIRCLE_SCALE_ANIMATION_VERSION_KEY);
     this.portalCircle.enabled = true;
     this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
+    this.setConfirmVisible(false);
+    this.setScanAnimationEnabled(false);
+    this._setConfirmVfxState(true, true);
   }
 
   private _initializeHidden(): void {
@@ -675,15 +645,13 @@ export class NavigationMarkerView {
     if (!this.moveDirectionArrow) {
       return;
     }
-    this.moveDirectionArrow.enabled = this._state !== "resettingOutcome";
+    this.moveDirectionArrow.enabled = this._phase !== "outcomeReset";
   }
 
   private _applyHeadingRootRotation(): void {
     if (!this.headingRoot) {
       return;
     }
-    // The root stays unrotated so circles and billboarded UI remain stable.
-    // Semantic heading is applied only to the dedicated nav heading pivot.
     this.headingRoot.getTransform().setLocalRotation(this._rotation);
     this._syncMoveDirectionArrowVisibility();
   }

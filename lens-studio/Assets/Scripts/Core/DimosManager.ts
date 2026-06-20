@@ -14,7 +14,9 @@ import {
   isRuntimePhase as isAppRuntimePhase,
   LidarDisplayMode,
   navigationPlacementToggleEnabled,
+  NavigationGoalMode,
   nextLidarMode,
+  nextNavigationGoalMode,
   OperatingMode,
   RobotInteractionMode,
 } from "./AppState";
@@ -270,6 +272,22 @@ export class DimosManager extends BaseScriptComponent {
 
   public cycleLidarMode(): void {
     this.setLidarMode(nextLidarMode(this.lidarMode));
+  }
+
+  public cycleNavigationGoalMode(): void {
+    this.setNavigationGoalMode(nextNavigationGoalMode(this.navigationGoalMode));
+  }
+
+  public get navigationGoalMode(): NavigationGoalMode {
+    return this.appState.navigationGoalMode;
+  }
+
+  private setNavigationGoalMode(mode: NavigationGoalMode): void {
+    if (this.navigationGoalMode === mode) {
+      return;
+    }
+    this.dimosServices.state.update({ navigationGoalMode: mode });
+    this.dimosServices.navigation.onNavigationProfileChanged();
   }
 
   public get lidarMode(): LidarDisplayMode {

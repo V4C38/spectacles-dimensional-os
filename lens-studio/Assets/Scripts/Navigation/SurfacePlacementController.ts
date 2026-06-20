@@ -1,4 +1,9 @@
 import { NavigationMarkerView } from "./NavigationMarkerView";
+import {
+  navigationProfileSpec,
+  NavigationMarkerProfile,
+  NavigationSessionEvent,
+} from "./NavigationProfile";
 import { yawRotationFromPlanarDirection } from "../Core/Utilities";
 
 // ================================================================
@@ -45,6 +50,9 @@ export class SurfacePlacementController {
     placementActive: boolean,
     force: boolean,
   ) => void) | null = null;
+  public onSessionEvent: ((event: NavigationSessionEvent) => void) | null = null;
+  public onPresentationSync: (() => void) | null = null;
+  public getProfile: (() => NavigationMarkerProfile) | null = null;
 
   private readonly owner: BaseScriptComponent;
   private readonly worldQueryModule: any;
@@ -152,14 +160,20 @@ export class SurfacePlacementController {
     return this.renderer.worldPosition;
   }
 
-  public showExecuting(): void {
+  public applyNavigatingPolicy(): void {
     if (!this.active) {
       return;
     }
     this._state = "executing";
     this._syncDesiredPoseToRenderedPose();
-    this.renderer.showExecuting();
-    this._setDragEnabled(false);
+    this.syncInteractionPolicy();
+  }
+
+  public syncInteractionPolicy(): void {
+    if (!this.active) {
+      return;
+    }
+    this._syncDragPolicy();
   }
 
   public resumePlacing(): void {
@@ -168,9 +182,9 @@ export class SurfacePlacementController {
     }
     this._state = this._placementActive ? "dragged" : "idleFollowingRobot";
     this._syncDesiredPoseToRenderedPose();
-    this.renderer.showPlacing(this._placementActive);
+    this.syncInteractionPolicy();
+    this.onPresentationSync?.();
     this._emitPreviewTargetChanged(true);
-    this._setDragEnabled(true);
   }
 
   public respawnPlacingAt(
@@ -196,7 +210,7 @@ export class SurfacePlacementController {
   }
 
   public beginOutcomeReset(
-    label: "Cancelled" | "Failed",
+    _label: "Cancelled" | "Failed",
     getPose: () => { position: vec3; rotation: quat } | null,
   ): void {
     if (!this.active) {
@@ -208,7 +222,6 @@ export class SurfacePlacementController {
     this._pendingResetPoseProvider = getPose;
     this._setDragEnabled(false);
     this._resetGestureState();
-    this.renderer.showOutcomeReset(label);
     this._outcomeResetEvent?.reset(OUTCOME_RESET_DURATION_S);
   }
 
@@ -267,8 +280,8 @@ export class SurfacePlacementController {
       dragInteractable.onTriggerStart.add((args: any) => {
         if (
           !this.active ||
-          this._state === "executing" ||
-          this._state === "resettingOutcome"
+          this._state === "resettingOutcome" ||
+          (this._state === "executing" && !this._allowsDragWhileNavigating())
         ) {
           return;
         }
@@ -329,6 +342,7 @@ export class SurfacePlacementController {
       "DelayedCallbackEvent",
     ) as DelayedCallbackEvent;
     outcomeReset.bind(() => {
+      this.onSessionEvent?.({ kind: "outcomeResetComplete" });
       const pose = this._pendingResetPoseProvider?.() ?? null;
       this._pendingResetPoseProvider = null;
       if (!this.active) {
@@ -394,7 +408,11 @@ export class SurfacePlacementController {
     if (!this.active) {
       return;
     }
-    if (this._state === "idleFollowingRobot" || this._state === "dragged") {
+    if (
+      this._state === "idleFollowingRobot" ||
+      this._state === "dragged" ||
+      (this._state === "executing" && this._allowsDragWhileNavigating())
+    ) {
       if (this.activeInteractor) {
         this._adjustPositionOnSurface();
       }
@@ -688,9 +706,21 @@ export class SurfacePlacementController {
     this._surfaceStabilizer.reset(position.y, this.desiredPosition);
     this._bindPlacementAnchor(position);
     this.renderer.setPose(this.desiredPosition, rotation);
-    this.renderer.showPlacing(this._placementActive);
+    this.onPresentationSync?.();
     this._emitPreviewTargetChanged(true);
-    this._setDragEnabled(true);
+    this._syncDragPolicy();
+  }
+
+  private _allowsDragWhileNavigating(): boolean {
+    const profile = this.getProfile?.() ?? "manualSingle";
+    return navigationProfileSpec(profile).dragWhileNavigating;
+  }
+
+  private _syncDragPolicy(): void {
+    const dragEnabled =
+      this._state !== "resettingOutcome" &&
+      (this._state !== "executing" || this._allowsDragWhileNavigating());
+    this._setDragEnabled(dragEnabled);
   }
 
   private _resetGestureState(): void {
@@ -707,7 +737,8 @@ export class SurfacePlacementController {
     }
     this._state = "dragged";
     this._placementActive = true;
-    this.renderer.setConfirmVisible(true);
+    this.onSessionEvent?.({ kind: "dragThresholdCrossed" });
+    this.onPresentationSync?.();
   }
 
   private _emitPreviewTargetChanged(force: boolean): void {

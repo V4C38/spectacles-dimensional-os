@@ -1,5 +1,6 @@
 import { DimosManager } from "../Core/DimosManager";
-import { DimosAppState, LidarDisplayMode, navigationPlacementToggleEnabled, OperatingMode } from "../Core/AppState";
+import { DimosAppState, LidarDisplayMode, OperatingMode } from "../Core/AppState";
+import { NavigationGoalMode } from "../Navigation/NavigationProfile";
 import { SetupWizard } from "../Setup/SetupWizard";
 import { getBridgeStatusPresentation } from "./BridgeStatusPresentation";
 import { scaleIn, scaleOut } from "./kit/UIAnimations";
@@ -22,7 +23,7 @@ export class UIManager extends BaseScriptComponent {
   private _mainMenuView: MainMenuView | null = null;
   private _lidarMode: LidarDisplayMode = "obstacles";
   private _operatingMode: OperatingMode = "manual";
-  private _navigationPlacementEnabled = false;
+  private _navigationGoalMode: NavigationGoalMode = "single";
   private _expandedSettingsMode: OperatingMode | null = null;
   private _debugModeEnabled = false;
   private _unsubscribeAppState: (() => void) | null = null;
@@ -77,12 +78,11 @@ export class UIManager extends BaseScriptComponent {
           this.dimosManager?.onMainMenuModeButtonPressed(mode),
         onModeSettingsChanged: (enabled) =>
           this.dimosManager?.setMainMenuSettingsExpanded(enabled),
-        onNavigationPlacementChanged: (enabled) =>
-          this.dimosManager?.setNavigationPlacementEnabled(enabled),
+        onNavigationGoalModeCycle: () => this.dimosManager?.cycleNavigationGoalMode(),
         onEmergencyStop: () => this.dimosManager?.requestEmergencyStop(),
         onDebugModeChanged: (enabled) => this.dimosManager?.setDebugMode(enabled),
         getLidarMode: () => this._lidarMode,
-        getNavigationPlacementValue: () => this._navigationPlacementEnabled,
+        getNavigationGoalMode: () => this._navigationGoalMode,
         getOperatingMode: () => this._operatingMode,
         getExpandedSettingsMode: () => this._expandedSettingsMode,
         getModeSettingsExpanded: () => this._expandedSettingsMode !== null,
@@ -97,7 +97,7 @@ export class UIManager extends BaseScriptComponent {
       this._expandedSettingsMode = appState.mainMenuExpandedSettingsMode;
       this._operatingMode = appState.operatingMode;
       this._lidarMode = appState.lidarMode;
-      this._navigationPlacementEnabled = navigationPlacementToggleEnabled(appState);
+      this._navigationGoalMode = appState.navigationGoalMode;
       this._debugModeEnabled = appState.debugMode;
     }
 
@@ -110,7 +110,7 @@ export class UIManager extends BaseScriptComponent {
     this._mainMenuView?.setLidarModeDisplay(this._lidarMode);
     this._mainMenuView?.setExpandedSettingsMode(this._expandedSettingsMode);
     this._mainMenuView?.setOperatingMode(this._operatingMode);
-    this._mainMenuView?.setNavigationPlacementToggle(this._navigationPlacementEnabled);
+    this._mainMenuView?.setNavigationGoalModeDisplay(this._navigationGoalMode);
     this._mainMenuView?.setDebugModeToggle(this._debugModeEnabled);
   }
 
@@ -161,7 +161,7 @@ export class UIManager extends BaseScriptComponent {
 
     this._lidarMode = state.lidarMode;
     this._operatingMode = state.operatingMode;
-    this._navigationPlacementEnabled = navigationPlacementToggleEnabled(state);
+    this._navigationGoalMode = state.navigationGoalMode;
     this._expandedSettingsMode = state.mainMenuExpandedSettingsMode;
     this._debugModeEnabled = state.debugMode;
 
@@ -172,11 +172,11 @@ export class UIManager extends BaseScriptComponent {
     );
     this._mainMenuView?.setExpandedSettingsMode(this._expandedSettingsMode);
     this._mainMenuView?.setOperatingMode(this._operatingMode);
-    this._mainMenuView?.setNavigationPlacementToggle(this._navigationPlacementEnabled);
-    this._mainMenuView?.setDebugModeToggle(this._debugModeEnabled);
-    this._mainMenuView?.setNavigationPlacementAvailability(
+    this._mainMenuView?.setNavigationGoalModeDisplay(this._navigationGoalMode);
+    this._mainMenuView?.setNavigationGoalModeAvailability(
       state.robotRuntime.capabilities.nav?.available ?? true,
     );
+    this._mainMenuView?.setDebugModeToggle(this._debugModeEnabled);
     this._mainMenuView?.setEmergencyStopAvailability(
       state.robotRuntime.capabilities.emergency_stop?.available ?? true,
       state.robotRuntime.capabilities.emergency_stop?.reason ?? null,

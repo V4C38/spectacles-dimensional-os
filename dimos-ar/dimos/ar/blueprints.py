@@ -22,7 +22,11 @@ from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfi
 from dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_onboard import (
     unitree_g1_nav_onboard,
 )
-from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
+
+try:
+    from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
+except ModuleNotFoundError:
+    unitree_go2 = None
 
 ar_go2 = (
     autoconnect(
@@ -48,6 +52,8 @@ ar_go2 = (
     )
     .global_config(viewer="none")
     .configurators(ClockSyncConfigurator())
+    if unitree_go2 is not None
+    else None
 )
 
 ar_g1 = (

@@ -88,6 +88,10 @@ export class NavigationHost {
     this._nav?.requestEmergencyStop();
   }
 
+  public onNavigationProfileChanged(): void {
+    this._nav?.onNavigationProfileChanged();
+  }
+
   public beginAgentNavigationGoal(): boolean {
     return this._nav?.beginAgentGoal() ?? false;
   }

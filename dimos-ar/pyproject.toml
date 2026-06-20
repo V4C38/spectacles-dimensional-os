@@ -19,6 +19,7 @@ include = ["dimos.ar*"]
 
 [tool.pytest.ini_options]
 testpaths = ["dimos/ar", "scripts"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 markers = [
     "integration: live WebSocket check against a running AR bridge",
