@@ -6,7 +6,7 @@ import {
 } from "../Alignment/AlignmentSession";
 import { BridgeRuntime } from "../Bridge/BridgeRuntime";
 import { DimosState } from "./DimosState";
-import { NavigationHost } from "../Navigation/NavigationHost";
+import { NavigationController } from "../Navigation/NavigationController";
 import { RobotRuntime, RobotRuntimeMenuCallbacks } from "../Robot/RobotRuntime";
 import { SetupAlignmentPreview } from "../Setup/SetupAlignmentPreview";
 import { PointCloudRenderer } from "../Lidar/PointCloudRenderer";
@@ -28,10 +28,7 @@ export class DimosServices extends BaseScriptComponent {
   pointCloudRenderer: PointCloudRenderer;
 
   @input
-  navigationMarkerRoot: SceneObject;
-
-  @input
-  placementRayOrigin: SceneObject;
+  navigationMarkerPrefab: ObjectPrefab;
 
   @input
   groundDisc: SceneObject;
@@ -41,7 +38,7 @@ export class DimosServices extends BaseScriptComponent {
 
   private _state: DimosState | null = null;
   private _robot: RobotRuntime | null = null;
-  private _navigation: NavigationHost | null = null;
+  private _navigation: NavigationController | null = null;
   private _bridge: BridgeRuntime | null = null;
   private _alignment: AlignmentSession | null = null;
   private _setupPreview: SetupAlignmentPreview | null = null;
@@ -57,7 +54,7 @@ export class DimosServices extends BaseScriptComponent {
     return this._robot!;
   }
 
-  public get navigation(): NavigationHost {
+  public get navigation(): NavigationController {
     this._ensureInstances();
     return this._navigation!;
   }
@@ -88,7 +85,10 @@ export class DimosServices extends BaseScriptComponent {
     this._ensureInstances();
 
     this._robot!.bind(robotMenuCallbacks);
-    this._navigation!.bind();
+    this._navigation!.bindHost({
+      dimosState: this._state!,
+      robotRuntime: this._robot!,
+    });
     this._alignment!.initialize(alignmentDeps);
     this._alignment!.bind();
     this._bridge!.bind();
@@ -120,17 +120,16 @@ export class DimosServices extends BaseScriptComponent {
       this._robot,
       this._alignment,
     );
-    this._navigation = new NavigationHost(
-      this,
-      this.getSceneObject(),
-      this._state,
-      this.bridgeClient ?? null,
-      this._robot,
-      this.robotMarker ?? null,
-      this.placementRayOrigin ?? null,
-      this.navigationMarkerRoot ?? null,
-      this.robotGroundDeadzoneRadiusCm,
-    );
+    this._navigation = NavigationController.create({
+      eventHost: this,
+      pathParentFallback: this.getSceneObject(),
+      dimosState: this._state,
+      bridgeClient: this.bridgeClient ?? null,
+      robotRuntime: this._robot,
+      robotMarker: this.robotMarker ?? null,
+      navigationMarkerPrefab: this.navigationMarkerPrefab,
+      robotGroundDeadzoneRadiusCm: this.robotGroundDeadzoneRadiusCm,
+    });
     this._bridge = new BridgeRuntime(
       this.bridgeClient ?? null,
       this._state,

@@ -2,7 +2,7 @@ import { BridgeClient } from "./BridgeClient";
 import { FrameCaptureController } from "../Camera/FrameCaptureController";
 import { DimosState } from "../Core/DimosState";
 import { RobotRuntime } from "../Robot/RobotRuntime";
-import { NavigationHost } from "../Navigation/NavigationHost";
+import { NavigationController } from "../Navigation/NavigationController";
 import { Signal } from "../Core/Utilities";
 import {
   createDefaultDriftState,
@@ -29,7 +29,7 @@ export class BridgeRuntime {
     private readonly bridgeClient: BridgeClient | null,
     private readonly dimosState: DimosState,
     private readonly robotRuntime: RobotRuntime,
-    private readonly navigationHost: NavigationHost,
+    private readonly navigationController: NavigationController,
     private readonly frameCaptureController: FrameCaptureController | null,
   ) {}
 
@@ -52,19 +52,19 @@ export class BridgeRuntime {
     this.bridgeClient.onPoseCorrection.add((msg) => {
       this.robotRuntime?.onPoseCorrection(msg);
     });
-    this.bridgeClient.onPath.add((msg) => this.navigationHost?.controller?.applyPath(msg));
+    this.bridgeClient.onPath.add((msg) => this.navigationController?.applyPath(msg));
     this.bridgeClient.onPathPreview.add((msg) =>
-      this.navigationHost?.controller?.applyPathPreview(msg),
+      this.navigationController?.applyPathPreview(msg),
     );
     this.bridgeClient.onNavStatus.add((msg) =>
-      this.navigationHost?.controller?.applyNavStatus(msg),
+      this.navigationController?.applyNavStatus(msg),
     );
     this.bridgeClient.onBridgeStatus.add((msg) => this._applyBridgeStatus(msg));
     this.bridgeClient.onConnectionChanged.add((connected) =>
       this._applyConnectionState(connected),
     );
     this.bridgeClient.onProtocolError.add((error) =>
-      this.navigationHost?.controller?.handleProtocolError(error),
+      this.navigationController?.handleProtocolError(error),
     );
   }
 
@@ -118,7 +118,7 @@ export class BridgeRuntime {
 
   public disconnect(): void {
     this.bridgeClient?.disconnect();
-    this.navigationHost?.resetForUserDisconnect();
+    this.navigationController?.resetForUserDisconnect();
   }
 
   public hasConnection(): boolean {
@@ -143,7 +143,7 @@ export class BridgeRuntime {
 
   private _applyHello(msg: HelloMessage): void {
     const runtimeState = projectRuntimeStateFromHello(msg);
-    this.navigationHost?.onHelloReset();
+    this.navigationController?.onHelloReset();
     this.robotRuntime?.resetBridgeLidarModeTracking();
     this.dimosState.update({
       robotRuntime: runtimeState,
@@ -178,9 +178,8 @@ export class BridgeRuntime {
     this.onBridgeConnectionChanged.emit(connected);
     if (!connected) {
       this.robotRuntime.onDisconnect();
-      this.navigationHost?.onDisconnect();
+      this.navigationController?.onDisconnect();
       this.dimosState.update({
-        navigationState: "off",
         navigationOutcome: defaultNavigationOutcome(),
         robotRuntime: createDefaultRobotRuntimeState(),
       });

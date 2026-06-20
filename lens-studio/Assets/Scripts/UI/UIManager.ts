@@ -1,6 +1,6 @@
 import { DimosManager } from "../Core/DimosManager";
 import { DimosAppState, LidarDisplayMode, OperatingMode } from "../Core/AppState";
-import { NavigationGoalMode } from "../Navigation/NavigationProfile";
+import { NavigationGoalMode } from "../Navigation/NavigationModel";
 import { SetupWizard } from "../Setup/SetupWizard";
 import { getBridgeStatusPresentation } from "./BridgeStatusPresentation";
 import { scaleIn, scaleOut } from "./kit/UIAnimations";

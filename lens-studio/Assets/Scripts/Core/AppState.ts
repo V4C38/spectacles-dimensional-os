@@ -8,12 +8,11 @@ import {
   COLOR_WHITE,
 } from "../UI/kit/UIKit";
 import {
-  deriveNavigationProfile,
-  isFollowingProfile,
+  isFollowingMode,
   NAV_GOAL_MODE_LABELS,
   NavigationGoalMode,
   nextNavigationGoalMode,
-} from "../Navigation/NavigationProfile";
+} from "../Navigation/NavigationModel";
 
 export type { NavigationGoalMode };
 export { NAV_GOAL_MODE_LABELS, nextNavigationGoalMode };
@@ -113,12 +112,8 @@ export function robotMarkerSteadyStatePresentation(
     }
   }
   if (state.navigationState === "executingGoal") {
-    const profile = deriveNavigationProfile(
-      state.operatingMode,
-      state.navigationGoalMode,
-    );
     return {
-      text: isFollowingProfile(profile) ? "Following" : "Navigating",
+      text: isFollowingMode(state.navigationGoalMode) ? "Following" : "Navigating",
       color: COLOR_WHITE,
     };
   }

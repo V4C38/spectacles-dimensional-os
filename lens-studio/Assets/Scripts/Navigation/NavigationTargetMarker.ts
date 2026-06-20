@@ -11,12 +11,29 @@ import {
   SnapOS2Styles,
 } from "../UI/kit/UIKit";
 import { yawRotationFromWorldRotation } from "../Core/Utilities";
-import {
-  NavigationMarkerPhase,
+import type {
+  MarkerPresentationKind,
+  NavGoalConfig,
   NavigationMarkerPreset,
-  NavigationMarkerProfile,
-  resolveMarkerPreset,
-} from "./NavigationProfile";
+} from "./NavigationModel";
+import { OUTCOME_RESET_PRESET } from "./NavigationModel";
+
+export type NavigationMarkerEvents = {
+  onConfirmed?: (position: vec3, rotation: quat) => void;
+  onCancelled?: () => void;
+  onDragThresholdCrossed?: () => void;
+  onPreviewPoseChanged?: (
+    position: vec3,
+    rotation: quat,
+    placementActive: boolean,
+    force: boolean,
+  ) => void;
+  onOutcomeResetComplete?: () => void;
+  onDragTriggerStart?: (interactor: any) => void;
+  onDragTriggerEnd?: () => void;
+  onDragTriggerCanceled?: (interactor: any) => void;
+  onConfirmTriggerUp?: () => void;
+};
 
 // ================================================================
 /** Scene-graph view for the navigation target marker (profile × phase presets). */
@@ -159,7 +176,7 @@ function applyDotsMaterialMode(
   }
 }
 
-export class NavigationMarkerView {
+class NavigationMarkerView {
   private readonly root: SceneObject;
   private readonly headingRoot: SceneObject | null;
   private readonly rotationRoot: SceneObject | null;
@@ -182,13 +199,14 @@ export class NavigationMarkerView {
   private readonly rotationLookAt: Component | null;
   private readonly circleAnimation: any;
 
-  private _profile: NavigationMarkerProfile = "manualSingle";
-  private _phase: NavigationMarkerPhase = "hidden";
+  private _config: NavGoalConfig = { mode: "single", allowDrag: true };
+  private _presentationKind: MarkerPresentationKind | "outcomeReset" | "hidden" = "hidden";
   private _confirmEnabled = false;
   private _placementAnchor: SceneObject | null = null;
   private _preAnchorParent: SceneObject | null = null;
   private _cancelActionAvailable = true;
   private _rotation = quat.quatIdentity();
+  private _outcomeResetCompleteCallback: (() => void) | null = null;
 
   constructor(root: SceneObject) {
     this.root = root;
@@ -240,12 +258,12 @@ export class NavigationMarkerView {
     this.setRotation(this._rotation);
   }
 
-  public get profile(): NavigationMarkerProfile {
-    return this._profile;
+  public get config(): NavGoalConfig {
+    return this._config;
   }
 
-  public get phase(): NavigationMarkerPhase {
-    return this._phase;
+  public get presentationKind(): MarkerPresentationKind | "outcomeReset" | "hidden" {
+    return this._presentationKind;
   }
 
   public get confirmActionButton(): RoundButton {
@@ -279,43 +297,42 @@ export class NavigationMarkerView {
     this._applyHeadingRootRotation();
   }
 
-  public apply(
-    profile: NavigationMarkerProfile,
-    phase: NavigationMarkerPhase,
+  public applyPreset(
+    config: NavGoalConfig,
+    kind: MarkerPresentationKind | "hidden",
+    preset: NavigationMarkerPreset,
     opts: NavigationMarkerApplyOptions = {},
   ): void {
-    if (phase === "outcomeReset") {
-      return;
-    }
-
     const samePresentation =
-      this._profile === profile &&
-      this._phase === phase &&
-      phase !== "hidden";
+      this._config.mode === config.mode &&
+      this._config.allowDrag === config.allowDrag &&
+      this._presentationKind === kind &&
+      kind !== "hidden";
 
-    this._profile = profile;
-    this._phase = phase;
-    const preset = resolveMarkerPreset(profile, phase);
-    const confirmVisible = this._resolveConfirmVisible(phase, preset.confirmVisible, opts);
-    const resolvedPreset = { ...preset, confirmVisible };
+    this._config = config;
+    this._presentationKind = kind;
 
-    if (phase === "hidden") {
+    if (kind === "hidden") {
       this._beginHide();
       this._animateRootVisibility(false);
       return;
     }
 
-    this._applyPresetVisuals(resolvedPreset, phase, opts, !samePresentation);
+    const confirmVisible = this._resolveConfirmVisible(kind, preset.confirmVisible, opts);
+    const resolvedPreset = { ...preset, confirmVisible };
+    this._applyPresetVisuals(resolvedPreset, kind, opts, !samePresentation);
   }
 
   public showOutcomeReset(
-    profile: NavigationMarkerProfile,
+    config: NavGoalConfig,
     label: "Cancelled" | "Failed",
     opts: NavigationMarkerApplyOptions = {},
+    onComplete?: () => void,
   ): void {
-    this._profile = profile;
-    this._phase = "outcomeReset";
-    const preset = resolveMarkerPreset(profile, "outcomeReset");
+    this._config = config;
+    this._presentationKind = "outcomeReset";
+    this._outcomeResetCompleteCallback = onComplete ?? null;
+    const preset = OUTCOME_RESET_PRESET;
     if (preset.restoreOutcomeFirst) {
       this._restoreOutcomeVisualState();
     }
@@ -334,7 +351,7 @@ export class NavigationMarkerView {
 
   private _applyPresetVisuals(
     preset: NavigationMarkerPreset,
-    phase: NavigationMarkerPhase,
+    kind: MarkerPresentationKind | "outcomeReset",
     opts: NavigationMarkerApplyOptions,
     animateEntrance: boolean,
   ): void {
@@ -352,7 +369,7 @@ export class NavigationMarkerView {
     if (preset.useExecutingButtonPresentation) {
       this._cancelActionAvailable = opts.cancelAvailable ?? this._cancelActionAvailable;
       this._applyExecutingButtonPresentation();
-    } else if (phase === "preview") {
+    } else if (kind === "preview") {
       this.confirmLabel.text = opts.confirmAvailable === false
         ? "Confirm\nUnavailable"
         : "Confirm";
@@ -476,13 +493,29 @@ export class NavigationMarkerView {
 
   public setCancelActionAvailability(available: boolean): void {
     this._cancelActionAvailable = available;
-    if (this._phase === "navigating") {
+    if (this._presentationKind === "executing") {
       this._applyExecutingButtonPresentation();
     }
   }
 
   public hide(): void {
-    this.apply(this._profile, "hidden");
+    this.applyPreset(this._config, "hidden", {
+      circleExecuting: false,
+      portalCircleVisible: false,
+      lookAtEnabled: false,
+      confirmVisible: false,
+      useExecutingButtonPresentation: false,
+      resetCircleBeforeShow: false,
+      scanAnimation: false,
+      confirmVfx: "hidden",
+      arrowEnabled: false,
+      arrowSpeed: 0,
+      circleSaturation: null,
+      dotsMode: "seeking",
+      restoreOutcomeFirst: true,
+      animateRootVisible: null,
+      animateCircleExpanded: null,
+    });
   }
 
   public hideAndThen(callback: () => void): void {
@@ -496,22 +529,39 @@ export class NavigationMarkerView {
       {
         onEnded: () => {
           this.root.enabled = false;
-          this._phase = "hidden";
+          this._presentationKind = "hidden";
           callback();
         },
       },
     );
   }
 
+  /** Cancel animations and disable interaction before scene-object destroy. */
+  public teardownImmediate(): void {
+    nextAnimationVersion(this.root, VISIBILITY_ANIMATION_VERSION_KEY);
+    nextAnimationVersion(this.portalCircle, CIRCLE_SCALE_ANIMATION_VERSION_KEY);
+    nextAnimationVersion(this.root, OUTCOME_RESET_ANIMATION_VERSION_KEY);
+    const dragInteractable = this.dragInteractable as any;
+    if (dragInteractable) {
+      dragInteractable.enabled = false;
+    }
+    this.setConfirmVisible(false);
+    this.setScanAnimationEnabled(false);
+    this.releasePlacementAnchor();
+    this._presentationKind = "hidden";
+    this.root.enabled = false;
+    this.root.getTransform().setLocalScale(vec3.zero());
+  }
+
   private _resolveConfirmVisible(
-    phase: NavigationMarkerPhase,
+    kind: MarkerPresentationKind | "hidden",
     presetConfirmVisible: boolean,
     opts: NavigationMarkerApplyOptions,
   ): boolean {
-    if (phase === "preview") {
+    if (kind === "preview") {
       return (opts.showConfirmInPreview ?? false) && presetConfirmVisible;
     }
-    if (phase === "navigating") {
+    if (kind === "executing") {
       return presetConfirmVisible;
     }
     return presetConfirmVisible;
@@ -599,8 +649,10 @@ export class NavigationMarkerView {
   }
 
   private _beginHide(): void {
-    this._phase = "hidden";
-    const preset = resolveMarkerPreset(this._profile, "hidden");
+    this._presentationKind = "hidden";
+    const preset = {
+      restoreOutcomeFirst: true,
+    };
     if (preset.restoreOutcomeFirst) {
       this._restoreOutcomeVisualState();
     }
@@ -645,7 +697,7 @@ export class NavigationMarkerView {
     if (!this.moveDirectionArrow) {
       return;
     }
-    this.moveDirectionArrow.enabled = this._phase !== "outcomeReset";
+    this.moveDirectionArrow.enabled = this._presentationKind !== "outcomeReset";
   }
 
   private _applyHeadingRootRotation(): void {
@@ -683,6 +735,8 @@ export class NavigationMarkerView {
 
   private _animateOutcomeResetDelayedContentCollapse(version: number): void {
     if (!this.dots && !this.stateText && !this.headingRoot) {
+      this._outcomeResetCompleteCallback?.();
+      this._outcomeResetCompleteCallback = null;
       return;
     }
     const dotsTransform = this.dots?.getTransform() ?? null;
@@ -771,6 +825,8 @@ export class NavigationMarkerView {
         if (headingTransform) {
           headingTransform.setLocalScale(target);
         }
+        this._outcomeResetCompleteCallback?.();
+        this._outcomeResetCompleteCallback = null;
       },
     });
   }
@@ -791,5 +847,166 @@ export class NavigationMarkerView {
         },
       },
     );
+  }
+}
+
+
+// ================================================================
+/** Prefab-root component: marker visuals, pose, and interaction wiring. */
+// ================================================================
+
+@component
+export class NavigationTargetMarker extends BaseScriptComponent {
+  private _view: NavigationMarkerView | null = null;
+  private _events: NavigationMarkerEvents = {};
+  private _interactionsBound = false;
+
+  public onAwake(): void {
+    this.ensureReady();
+    this._bindInteractions();
+  }
+
+  /** Prefab instantiate may run attach/start before onAwake; init view eagerly. */
+  public ensureReady(): void {
+    if (this._view) {
+      return;
+    }
+    this._view = new NavigationMarkerView(this.getSceneObject());
+    this._interactionsBound = false;
+  }
+
+  public get worldPosition(): vec3 {
+    this.ensureReady();
+    return this._view!.worldPosition;
+  }
+
+  public get localPosition(): vec3 {
+    this.ensureReady();
+    return this._view!.localPosition;
+  }
+
+  public getRotation(): quat {
+    this.ensureReady();
+    return this._view!.getRotation();
+  }
+
+  public applyPreset(
+    config: NavGoalConfig,
+    kind: MarkerPresentationKind | "hidden",
+    preset: NavigationMarkerPreset,
+    opts: NavigationMarkerApplyOptions = {},
+  ): void {
+    this.ensureReady();
+    this._view?.applyPreset(config, kind, preset, opts);
+  }
+
+  public showOutcomeReset(
+    config: NavGoalConfig,
+    label: "Cancelled" | "Failed",
+    opts: NavigationMarkerApplyOptions = {},
+  ): void {
+    this.ensureReady();
+    this._view?.showOutcomeReset(config, label, opts, this._events.onOutcomeResetComplete);
+  }
+
+  public hide(): void {
+    this._view?.hide();
+  }
+
+  public hideAndThen(callback: () => void): void {
+    this._view?.hideAndThen(callback);
+  }
+
+  public setPose(position: vec3, rotation: quat): void {
+    this.ensureReady();
+    this._view?.setPose(position, rotation);
+  }
+
+  public interpolatePose(
+    position: vec3,
+    rotation: quat,
+    lerpSpeed: number,
+    rotationLerpSpeed?: number,
+  ): void {
+    this._view?.interpolatePose(position, rotation, lerpSpeed, rotationLerpSpeed);
+  }
+
+  public setDragEnabled(enabled: boolean): void {
+    this.ensureReady();
+    this._bindInteractions();
+    const dragInteractable = this._view?.dragInteractable as any;
+    if (!dragInteractable) {
+      return;
+    }
+    dragInteractable.enabled = enabled;
+  }
+
+  public setCancelActionAvailability(available: boolean): void {
+    this._view?.setCancelActionAvailability(available);
+  }
+
+  public bindPlacementAnchor(anchor: SceneObject, initialWorldPosition: vec3): void {
+    this.ensureReady();
+    this._view?.bindPlacementAnchor(anchor, initialWorldPosition);
+  }
+
+  public releasePlacementAnchor(): void {
+    this._view?.releasePlacementAnchor();
+  }
+
+  public rebasePlacementAnchor(): void {
+    this._view?.rebasePlacementAnchor();
+  }
+
+  public bindEvents(events: Partial<NavigationMarkerEvents>): void {
+    this.ensureReady();
+    this._events = { ...this._events, ...events };
+    this._bindInteractions();
+  }
+
+  public unbindEvents(): void {
+    this._events = {};
+  }
+
+  public destroy(): void {
+    this._view?.teardownImmediate();
+    this._view = null;
+    this._events = {};
+    this._interactionsBound = false;
+    this.getSceneObject().destroy();
+  }
+
+  private _bindInteractions(): void {
+    if (this._interactionsBound || !this._view) {
+      return;
+    }
+
+    const dragInteractable = this._view.dragInteractable as any;
+    if (!dragInteractable?.onTriggerStart?.add) {
+      return;
+    }
+
+    this._interactionsBound = true;
+    dragInteractable.onTriggerStart.add((args: any) => {
+      this._events.onDragTriggerStart?.(args?.interactor ?? null);
+    });
+    if (dragInteractable.onTriggerEnd?.add) {
+      dragInteractable.onTriggerEnd.add(() => {
+        this._events.onDragTriggerEnd?.();
+      });
+    }
+    if (dragInteractable.onTriggerCanceled?.add) {
+      dragInteractable.onTriggerCanceled.add((args: any) => {
+        args?.interactor?.clearCurrentInteractable?.();
+        this._events.onDragTriggerCanceled?.(args?.interactor ?? null);
+      });
+    }
+
+    const confirmButton = this._view.confirmActionButton as any;
+    if (confirmButton?.onTriggerUp?.add) {
+      confirmButton.onTriggerUp.add(() => {
+        this._events.onConfirmTriggerUp?.();
+      });
+    }
   }
 }

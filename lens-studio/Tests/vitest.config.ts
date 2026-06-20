@@ -39,6 +39,7 @@ export default defineConfig({
         "../Assets/Scripts/Core/AppState.ts",
         "../Assets/Scripts/Core/Utilities.ts",
         "../Assets/Scripts/Robot/RobotRuntimeModel.ts",
+        "../Assets/Scripts/Navigation/NavigationModel.ts",
       ],
     },
   },

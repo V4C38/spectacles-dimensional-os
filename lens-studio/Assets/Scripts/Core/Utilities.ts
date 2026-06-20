@@ -80,6 +80,27 @@ export function yawRotationFromWorldRotation(rotation: quat): quat {
   return yawRotationFromPlanarDirection(forward.x, forward.z);
 }
 
+/** Clamp CameraRequest.imageSmallerDimension to what the device reports as supported. */
+export function clampCameraSmallerDimension(
+  requested: number,
+  supportedResolutions: { x: number; y: number }[],
+): number {
+  if (requested <= 0) {
+    return requested;
+  }
+  let maxSmaller = 0;
+  for (const res of supportedResolutions) {
+    const smaller = Math.min(res.x, res.y);
+    if (smaller > maxSmaller) {
+      maxSmaller = smaller;
+    }
+  }
+  if (maxSmaller <= 0) {
+    return requested;
+  }
+  return Math.min(requested, maxSmaller);
+}
+
 /**
  * Type-safe event emitter that replaces parallel callback arrays + ensureEventHandlers.
  *

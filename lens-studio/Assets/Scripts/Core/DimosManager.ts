@@ -21,6 +21,7 @@ import {
   RobotInteractionMode,
 } from "./AppState";
 import { isCapabilityAvailable } from "../Robot/RobotRuntimeModel";
+import { manualNavGoalConfig } from "../Navigation/NavigationModel";
 
 /** Phase lifecycle, operating mode, and subsystem orchestration for DimOS runtime. */
 @component
@@ -119,7 +120,7 @@ export class DimosManager extends BaseScriptComponent {
         getIsRuntimePhase: () => this.isRuntimePhase(),
         disableNavigationPlacementForAlignment: () => {
           if (navigation.placementEnabled) {
-            navigation.setPlacementEnabled(false);
+            navigation.disarm();
           }
         },
       },
@@ -140,27 +141,17 @@ export class DimosManager extends BaseScriptComponent {
 
     const navigation = this.dimosServices.navigation;
     if (mode === "setup") {
-      navigation.setPlacementEnabledForOperatingMode(mode, state);
+      navigation.syncManualNavigationForOperatingMode(mode, state);
       return;
     }
 
     if (mode === "manual") {
-      if (state.navigationState === "off") {
-        this.dimosServices.state.update({ navigationState: "armed" });
-      } else {
-        navigation.syncPlacementToggleOnMarkerView();
-        navigation.onPlacementEnabledChanged(true);
-      }
+      navigation.syncPlacementToggleOnMarkerView();
+      navigation.syncManualNavigationState({ forceEnable: true });
     } else if (mode === "agent") {
-      navigation.setPlacementEnabled(false);
-      if (
-        state.navigationState === "armed" ||
-        state.navigationState === "placingGoal"
-      ) {
-        this.dimosServices.state.update({ navigationState: "off" });
-      }
+      navigation.onManualNavigationToggleChanged(false);
     }
-    navigation.setPlacementEnabledForOperatingMode(mode, state);
+    navigation.syncManualNavigationForOperatingMode(mode, state);
   }
 
   private _applyPhaseSideEffects(phase: AppPhase): void {
@@ -188,7 +179,6 @@ export class DimosManager extends BaseScriptComponent {
     this.frameCaptureController?.setMode("off");
     this.dimosServices.state.update({
       phase: "setup",
-      navigationState: "off",
       navigationOutcome: defaultNavigationOutcome(),
     });
     this._applyPhaseSideEffects("setup");
@@ -205,7 +195,7 @@ export class DimosManager extends BaseScriptComponent {
         this.dimosServices.bridgeClient?.lastBridgeStatus?.registration_approximate,
       ),
     );
-    this.dimosServices.state.update({ phase: "runtime", navigationState: "armed" });
+    this.dimosServices.state.update({ phase: "runtime" });
     this._applyPhaseSideEffects("runtime");
     if (this.frameCaptureController) {
       const registered = Boolean(
@@ -215,7 +205,11 @@ export class DimosManager extends BaseScriptComponent {
     }
     this._setRobotInteractionMode("runtimeRobot");
     this.dimosServices.robot.robotMarker?.syncPose();
-    this.dimosServices.navigation.deferPlacementSync();
+    if (this.operatingMode === "manual") {
+      this.dimosServices.navigation.syncManualNavigationState({ forceEnable: true });
+    } else {
+      this.dimosServices.navigation.deferPlacementSync();
+    }
   }
 
   public setBaseUrl(url: string): void {
@@ -263,11 +257,15 @@ export class DimosManager extends BaseScriptComponent {
   }
 
   public beginAgentNavigationGoal(): boolean {
-    return this.dimosServices.navigation.beginAgentNavigationGoal();
+    return this.dimosServices.navigation.canSubmitNavigationGoal();
   }
 
   public submitAgentNavigationGoal(position: vec3, rotation: quat): boolean {
-    return this.dimosServices.navigation.submitAgentNavigationGoal(position, rotation);
+    return this.dimosServices.navigation.submitGoal(position, rotation, {
+      mode: "single",
+      allowDrag: false,
+      force: true,
+    });
   }
 
   public cycleLidarMode(): void {
@@ -287,7 +285,7 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     this.dimosServices.state.update({ navigationGoalMode: mode });
-    this.dimosServices.navigation.onNavigationProfileChanged();
+    this.dimosServices.navigation.onNavigationGoalModeChanged();
   }
 
   public get lidarMode(): LidarDisplayMode {
@@ -358,9 +356,12 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     this._log(`setNavigationPlacementEnabled: ${enabled}`);
-    this.dimosServices.state.update({ navigationState: enabled ? "armed" : "off" });
     const navigation = this.dimosServices.navigation;
-    navigation.onPlacementEnabledChanged(enabled);
+    if (enabled) {
+      navigation.arm(manualNavGoalConfig(this.navigationGoalMode));
+    } else {
+      navigation.onManualNavigationToggleChanged(false);
+    }
     navigation.syncPlacementToggleOnMarkerView();
   }
 

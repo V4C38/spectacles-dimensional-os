@@ -1,4 +1,7 @@
-// Smaller dimension for the camera stream in pixels (Spectacles max supported).
+import { clampCameraSmallerDimension } from "../Core/Utilities";
+
+// Target smaller dimension for the camera stream in pixels (Spectacles hardware).
+// PC preview supports a lower max; start() clamps via getSupportedImageResolutions().
 const CAMERA_STREAM_SMALLER_DIM = 756;
 
 export interface DeviceCameraStreamFrame {
@@ -53,7 +56,8 @@ export class DeviceCameraStream {
     }
     const req = CameraModule.createCameraRequest();
     req.cameraId = CameraModule.CameraId.Default_Color;
-    const dim = options?.imageSmallerDimension ?? CAMERA_STREAM_SMALLER_DIM;
+    const requestedDim = options?.imageSmallerDimension ?? CAMERA_STREAM_SMALLER_DIM;
+    const dim = this._resolveImageSmallerDimension(requestedDim);
     if (dim > 0) {
       req.imageSmallerDimension = dim;
     }
@@ -122,6 +126,27 @@ export class DeviceCameraStream {
   }
 
   // ── Internal ────────────────────────────────────────────────────
+
+  private _resolveImageSmallerDimension(requested: number): number {
+    if (requested <= 0) {
+      return requested;
+    }
+    try {
+      const supported = this._cameraModule.getSupportedImageResolutions();
+      const clamped = clampCameraSmallerDimension(requested, supported);
+      if (clamped !== requested) {
+        print(
+          `DeviceCameraStream: clamping imageSmallerDimension ${requested} -> ${clamped}`,
+        );
+      }
+      return clamped;
+    } catch (error) {
+      print(
+        `DeviceCameraStream: getSupportedImageResolutions failed (${String(error)}); using ${requested}`,
+      );
+      return requested;
+    }
+  }
 
   private _onNewFrame(frame: CameraFrame): void {
     const rawTs = frame.timestampSeconds;
