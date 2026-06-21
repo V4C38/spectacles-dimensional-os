@@ -232,6 +232,22 @@ export class SurfacePlacementController {
     return this._marker?.worldPosition ?? this.desiredPosition;
   }
 
+  public respawnPlacingImmediately(
+    getPose: () => { position: vec3; rotation: quat } | null,
+  ): void {
+    if (!this.active || !this._marker) {
+      return;
+    }
+    this._isDragging = false;
+    this._setDragEnabled(false);
+    this._resetGestureState();
+    const pose = getPose();
+    if (!pose) {
+      return;
+    }
+    this._beginPlacingAtPose(pose.position, pose.rotation, true);
+  }
+
   public respawnPlacingAt(
     getPose: () => { position: vec3; rotation: quat } | null,
   ): void {
@@ -316,7 +332,8 @@ export class SurfacePlacementController {
     ) as DelayedCallbackEvent;
     confirmDeferral.bind(() => {
       this._processingButtonPress = false;
-      if (this.isGoalCommitted?.()) {
+      const config = this.getConfig?.() ?? null;
+      if (this.isGoalCommitted?.() || config?.mode === "continuous") {
         this.onCancelled?.(this._pendingConfirmPosition, this._pendingConfirmRotation);
       } else {
         this.onConfirmed?.(this._pendingConfirmPosition, this._pendingConfirmRotation);

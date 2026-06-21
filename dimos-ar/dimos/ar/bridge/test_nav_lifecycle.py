@@ -77,7 +77,7 @@ def test_on_nav_goal_broadcasts_idle_until_path() -> None:
 
 
 @pytest.mark.asyncio
-async def test_handle_ar_path_promotes_following_path() -> None:
+async def test_handle_ar_path_promotes_navigating() -> None:
     nav, _mock_server = _make_nav()
     nav._nav_goal_pending = True
     nav._nav_goal_dispatch_mono = time.monotonic()
@@ -95,7 +95,7 @@ async def test_handle_ar_path_promotes_following_path() -> None:
 
     nav.on_path(path)
 
-    assert nav._nav_state == "following_path"
+    assert nav._nav_state == "navigating"
     assert nav._nav_path_received is True
     assert nav._nav_goal_dispatch_mono is None
 
@@ -128,10 +128,10 @@ async def test_handle_ar_path_does_not_mutate_nav_state_without_pending_goal() -
 
 
 @pytest.mark.asyncio
-async def test_late_path_after_goal_reached_does_not_revive_following_path() -> None:
+async def test_late_path_after_goal_reached_does_not_revive_navigating() -> None:
     nav, _mock_server = _make_nav()
     nav._nav_goal_pending = True
-    nav._nav_state = "following_path"
+    nav._nav_state = "navigating"
 
     nav.on_goal_reached(Bool(data=True))
 
@@ -159,7 +159,7 @@ async def test_late_path_after_goal_reached_does_not_revive_following_path() -> 
 async def test_handle_ar_goal_reached_failure_marks_goal_failed() -> None:
     nav, _mock_server = _make_nav()
     nav._nav_goal_pending = True
-    nav._nav_state = "following_path"
+    nav._nav_state = "navigating"
 
     nav.on_goal_reached(Bool(data=False))
 
@@ -247,7 +247,7 @@ def test_emergency_stop_then_nav_goal_succeeds() -> None:
     """After emergency stop, a new nav_goal is accepted and published."""
     nav, _mock_server = _make_nav()
     nav._nav_goal_pending = True
-    nav._nav_state = "following_path"
+    nav._nav_state = "navigating"
     nav._nav_path_received = True
 
     nav.on_emergency_stop()
@@ -293,7 +293,7 @@ def test_on_navigation_state_idle_while_live_emits_recovery() -> None:
     nav, mock_server = _make_nav()
     nav._nav_goal_pending = True
     nav._nav_path_received = True
-    nav._nav_state = "following_path"
+    nav._nav_state = "navigating"
     nav._goal_reached = False
     nav._goal_failed = False
 
@@ -306,12 +306,12 @@ def test_on_navigation_state_idle_while_live_emits_recovery() -> None:
     assert nav_status["recovering"] is True
 
 
-def test_on_navigation_state_initial_rotation_maps_to_following_path() -> None:
+def test_on_navigation_state_initial_rotation_maps_to_navigating() -> None:
     from dimos.ar.network.data_plane import normalize_nav_state
 
-    assert normalize_nav_state("initial_rotation") == "following_path"
-    assert normalize_nav_state("final_rotation") == "following_path"
-    assert normalize_nav_state("path_following") == "following_path"
+    assert normalize_nav_state("initial_rotation") == "navigating"
+    assert normalize_nav_state("final_rotation") == "navigating"
+    assert normalize_nav_state("path_following") == "navigating"
     assert normalize_nav_state("arrived") == "idle"
 
 

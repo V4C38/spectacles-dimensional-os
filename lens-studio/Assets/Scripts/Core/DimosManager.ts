@@ -96,19 +96,11 @@ export class DimosManager extends BaseScriptComponent {
     this.dimosServices.bind(
       {
         onToggleRequested: () => {
-          const view = robot.robotMarkerView;
-          if (this.operatingMode === "manual") {
-            view?.hide();
-            this.setNavigationPlacementEnabled(!this.navigationPlacementEnabled);
-            return;
-          }
-          view?.toggleVisible();
+          robot.robotMarker?.ui?.toggleVisible();
         },
         onStopRequested: () => navigation.requestEmergencyStop(),
-        onNavigationPlacementRequested: (enabled) =>
-          this.setNavigationPlacementEnabled(enabled),
+        onGoalModeCycleRequested: () => this.cycleNavigationGoalMode(),
         getOperatingMode: () => this.operatingMode,
-        getNavigationPlacementEnabled: () => this.navigationPlacementEnabled,
       },
       {
         poseCorrection: robot.poseCorrection,
@@ -137,7 +129,7 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     this._lastSyncedOperatingMode = mode;
-    this.dimosServices.robot.robotMarkerView?.setOperatingMode(mode);
+    this.dimosServices.robot.robotMarker?.ui?.setOperatingMode(mode);
 
     const navigation = this.dimosServices.navigation;
     if (mode === "setup") {
@@ -146,7 +138,6 @@ export class DimosManager extends BaseScriptComponent {
     }
 
     if (mode === "manual") {
-      navigation.syncPlacementToggleOnMarkerView();
       navigation.syncManualNavigationState({ forceEnable: true });
     } else if (mode === "agent") {
       navigation.onManualNavigationToggleChanged(false);
@@ -362,7 +353,6 @@ export class DimosManager extends BaseScriptComponent {
     } else {
       navigation.onManualNavigationToggleChanged(false);
     }
-    navigation.syncPlacementToggleOnMarkerView();
   }
 
   public get navigationPlacementEnabled(): boolean {

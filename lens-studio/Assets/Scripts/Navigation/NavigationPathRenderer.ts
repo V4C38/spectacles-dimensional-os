@@ -18,9 +18,9 @@ const PATH_REBUILD_POSITION_EPSILON_CM = 0.5;
 // (VisualStyle.FadedStart = start only, FadedEnd = end only; 4 is both — not in the TS enum.)
 const PATH_LINE_VISUAL_STYLE = 4 as VisualStyle;
 
-export type PathRenderStyle = "executing" | "preview";
+export type PathRenderStyle = "navigating" | "preview";
 
-// SIK interactor yellow (#FFFC00); used for the executing path.
+// SIK interactor yellow (#FFFC00); used for the navigating path.
 const PATH_LINE_YELLOW = new vec4(1, 1, 0, 1);
 const PATH_LINE_WHITE = new vec4(1, 1, 1, 1);
 
@@ -155,9 +155,9 @@ export class NavigationPathRenderer {
   private readonly lineRenderer: InteractorLineRenderer | null = null;
   private _startY: number | null = null;
   private _endY: number | null = null;
-  private _style: PathRenderStyle = "executing";
+  private _style: PathRenderStyle = "navigating";
   private _lastRenderedPoints: vec3[] = [];
-  private _lastRenderedStyle: PathRenderStyle = "executing";
+  private _lastRenderedStyle: PathRenderStyle = "navigating";
 
   constructor(parent: SceneObject) {
     // Create container with identity world transform so world-cm waypoints map 1:1 to mesh-local points
@@ -207,7 +207,7 @@ export class NavigationPathRenderer {
 
   public setProtocolPath(
     waypoints: [number, number, number][],
-    style: PathRenderStyle = "executing",
+    style: PathRenderStyle = "navigating",
   ): void {
     const lensPoints = waypoints.map((point) => protocolMetersToLensCentimeters(point));
     this.setLensPath(lensPoints, style);
@@ -215,7 +215,7 @@ export class NavigationPathRenderer {
 
   public setLensPath(
     points: vec3[],
-    style: PathRenderStyle = "executing",
+    style: PathRenderStyle = "navigating",
   ): void {
     if (!this.lineRenderer) {
       return;

@@ -5,6 +5,7 @@
 import {
   COLOR_ERROR,
   COLOR_SUCCESS,
+  COLOR_WARN,
   COLOR_WHITE,
 } from "../UI/kit/UIKit";
 import {
@@ -26,7 +27,7 @@ export type NavigationState =
   | "off"
   | "armed"
   | "placingGoal"
-  | "executingGoal";
+  | "navigating";
 export type NavigationOutcome =
   | { kind: "none" }
   | { kind: "success" }
@@ -96,13 +97,43 @@ export function navigationOutcomePresentation(
   return null;
 }
 
+/** Main HUD bridge connection line. */
+export function bridgeLinkPresentation(
+  linkState: BridgeLinkState,
+): StatusTextPresentation {
+  switch (linkState) {
+    case "disconnected":
+      return {
+        text: "\n\n\nBridge disconnected",
+        color: COLOR_ERROR,
+      };
+    case "connectedNoRobot":
+      return {
+        text: "\n\n\nBridge connected - waiting for robot",
+        color: COLOR_WARN,
+      };
+    case "connected":
+      return {
+        text: "\n\n\nBridge connected",
+        color: COLOR_SUCCESS,
+      };
+  }
+}
+
+/** Robot HUD + menu activity line (Idle, Navigating, outcome, future agent bridge states). */
+export function robotActivityPresentation(
+  state: DimosAppState,
+): StatusTextPresentation {
+  return (
+    navigationOutcomePresentation(state.navigationOutcome)
+    ?? robotMarkerSteadyStatePresentation(state)
+  );
+}
+
 export function robotMarkerSteadyStatePresentation(
   state: DimosAppState,
 ): StatusTextPresentation {
   if (state.operatingMode === "setup") {
-    return { text: "", color: COLOR_WHITE };
-  }
-  if (state.operatingMode === "agent") {
     return { text: "", color: COLOR_WHITE };
   }
   if (!state.robotRuntime.capabilities.nav.available) {
@@ -111,7 +142,7 @@ export function robotMarkerSteadyStatePresentation(
       return { text: reason, color: COLOR_WHITE };
     }
   }
-  if (state.navigationState === "executingGoal") {
+  if (state.navigationState === "navigating") {
     return {
       text: isFollowingMode(state.navigationGoalMode) ? "Following" : "Navigating",
       color: COLOR_WHITE,

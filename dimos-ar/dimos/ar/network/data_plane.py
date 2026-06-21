@@ -150,16 +150,16 @@ def build_preview_path_payload(
 
 
 def normalize_nav_state(raw: str) -> str:
-    """Normalise a raw DimOS navigation state string to one of idle/following_path/recovery."""
+    """Normalise a raw DimOS navigation state string to one of idle/navigating/recovery."""
     state = raw.strip().lower()
-    if state in {"idle", "following_path", "recovery"}:
+    if state in {"idle", "navigating", "recovery"}:
         return state
     if "recover" in state:
         return "recovery"
     if any(token in state for token in ("follow", "path", "navig")):
-        return "following_path"
+        return "navigating"
     if state in {"arrived", "stopped"}:
         return "idle"
     if any(token in state for token in ("rotat", "initial", "final", "align", "execut", "move")):
-        return "following_path"
+        return "navigating"
     return "idle"

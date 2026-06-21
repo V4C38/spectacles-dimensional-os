@@ -492,13 +492,13 @@ def test_encode_path_and_nav_status() -> None:
     status = json.loads(
         encode_nav_status(
             ts=3.0,
-            state="following_path",
+            state="navigating",
             goal_reached=False,
             robot_id="unitree_go2",
         )
     )
     assert status["type"] == "nav_status"
-    assert status["state"] == "following_path"
+    assert status["state"] == "navigating"
     assert status["goal_reached"] is False
 
     recovering = json.loads(
@@ -614,9 +614,9 @@ def test_encode_pong() -> None:
 def test_normalize_nav_state_active_planner_substates() -> None:
     from dimos.ar.network.data_plane import normalize_nav_state
 
-    assert normalize_nav_state("initial_rotation") == "following_path"
-    assert normalize_nav_state("final_rotation") == "following_path"
-    assert normalize_nav_state("path_following") == "following_path"
+    assert normalize_nav_state("initial_rotation") == "navigating"
+    assert normalize_nav_state("final_rotation") == "navigating"
+    assert normalize_nav_state("path_following") == "navigating"
     assert normalize_nav_state("arrived") == "idle"
     assert normalize_nav_state("stopped") == "idle"
     assert normalize_nav_state("recovery_mode") == "recovery"

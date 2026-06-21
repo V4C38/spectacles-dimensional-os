@@ -31,7 +31,7 @@ export class DimosServices extends BaseScriptComponent {
   navigationMarkerPrefab: ObjectPrefab;
 
   @input
-  groundDisc: SceneObject;
+  assistClearanceDiscPrefab: ObjectPrefab;
 
   @input
   robotGroundDeadzoneRadiusCm = 75;
@@ -116,7 +116,8 @@ export class DimosServices extends BaseScriptComponent {
     );
     this._setupPreview = new SetupAlignmentPreview(
       this._state,
-      this.groundDisc ?? null,
+      this.assistClearanceDiscPrefab ?? null,
+      this.getSceneObject(),
       this._robot,
       this._alignment,
     );

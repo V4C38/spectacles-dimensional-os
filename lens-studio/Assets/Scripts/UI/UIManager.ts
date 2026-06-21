@@ -1,8 +1,7 @@
 import { DimosManager } from "../Core/DimosManager";
-import { DimosAppState, LidarDisplayMode, OperatingMode } from "../Core/AppState";
+import { bridgeLinkPresentation, DimosAppState, LidarDisplayMode, OperatingMode } from "../Core/AppState";
 import { NavigationGoalMode } from "../Navigation/NavigationModel";
 import { SetupWizard } from "../Setup/SetupWizard";
-import { getBridgeStatusPresentation } from "./BridgeStatusPresentation";
 import { scaleIn, scaleOut } from "./kit/UIAnimations";
 import { MainMenuView } from "./MainMenuView";
 
@@ -102,10 +101,8 @@ export class UIManager extends BaseScriptComponent {
     }
 
     if (this.dimosManager) {
-      this._setStatus(
-        getBridgeStatusPresentation(this.dimosManager.bridgeLinkState).text,
-        getBridgeStatusPresentation(this.dimosManager.bridgeLinkState).color,
-      );
+      const presentation = bridgeLinkPresentation(this.dimosManager.bridgeLinkState);
+      this._setStatus(presentation.text, presentation.color);
     }
     this._mainMenuView?.setLidarModeDisplay(this._lidarMode);
     this._mainMenuView?.setExpandedSettingsMode(this._expandedSettingsMode);
@@ -139,11 +136,11 @@ export class UIManager extends BaseScriptComponent {
 
   private _refreshBridgeStatus(): void {
     if (!this.dimosManager) {
-      const presentation = getBridgeStatusPresentation("disconnected");
+      const presentation = bridgeLinkPresentation("disconnected");
       this._setStatus(presentation.text, presentation.color);
       return;
     }
-    const presentation = getBridgeStatusPresentation(this.dimosManager.bridgeLinkState);
+    const presentation = bridgeLinkPresentation(this.dimosManager.bridgeLinkState);
     this._setStatus(presentation.text, presentation.color);
     if (this.dimosManager.hasBridgeConnection()) {
       this.dimosManager.requestBridgeStatus();
@@ -181,7 +178,7 @@ export class UIManager extends BaseScriptComponent {
       state.robotRuntime.capabilities.emergency_stop?.available ?? true,
       state.robotRuntime.capabilities.emergency_stop?.reason ?? null,
     );
-    const bridgePresentation = getBridgeStatusPresentation(state.bridgeLinkState);
+    const bridgePresentation = bridgeLinkPresentation(state.bridgeLinkState);
     this._setStatus(bridgePresentation.text, bridgePresentation.color);
     this.setUIState(nextUiState);
     if ((uiStateChanged || operatingModeChanged) && nextUiState === 1) {

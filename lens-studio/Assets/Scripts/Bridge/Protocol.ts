@@ -167,7 +167,7 @@ export interface NavStatusMessage {
   type: "nav_status";
   ts: number;
   robot_id: string;
-  state: "idle" | "following_path" | "recovery";
+  state: "idle" | "navigating" | "recovery";
   goal_reached: boolean;
   goal_failed: boolean;
   recovering?: boolean;
@@ -563,7 +563,7 @@ function parseInboundObject(
       const state = requireString(data, "state");
       if (
         state !== "idle" &&
-        state !== "following_path" &&
+        state !== "navigating" &&
         state !== "recovery"
       ) {
         print(`Protocol: unknown nav_status.state "${state}"; skipping`);

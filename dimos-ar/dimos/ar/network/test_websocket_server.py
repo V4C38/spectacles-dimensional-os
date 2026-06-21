@@ -47,13 +47,13 @@ async def test_outbound_coalesces_broadcast_snapshots() -> None:
     outbound.enqueue('{"type":"nav_status","state":"idle"}')
     outbound.enqueue('{"type":"path","waypoints":[[1,2,3]]}')
     outbound.enqueue('{"type":"bridge_status","registered":true}')
-    outbound.enqueue('{"type":"nav_status","state":"following_path"}')
+    outbound.enqueue('{"type":"nav_status","state":"navigating"}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
 
     by_type = {(peek_message_type(text) or ""): json.loads(text) for text in ws.sent}
-    assert by_type["nav_status"]["state"] == "following_path"
+    assert by_type["nav_status"]["state"] == "navigating"
     assert by_type["path"]["waypoints"] == [[1, 2, 3]]
     assert by_type["bridge_status"]["registered"] is True
     assert len(ws.sent) == 3
@@ -65,7 +65,7 @@ async def test_outbound_coalesces_pose_and_lidar() -> None:
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"nav_status","state":"following_path"}')
+    outbound.enqueue('{"type":"nav_status","state":"navigating"}')
     outbound.enqueue('{"type":"pose","position":[1,2,3]}')
     outbound.enqueue('{"type":"pose","position":[4,5,6]}')
     outbound.enqueue('{"type":"lidar","points_flat":[1,2,3]}')
@@ -77,7 +77,7 @@ async def test_outbound_coalesces_pose_and_lidar() -> None:
 
     assert len(ws.sent) == 4
     by_type = {(peek_message_type(text) or ""): json.loads(text) for text in ws.sent}
-    assert by_type["nav_status"]["state"] == "following_path"
+    assert by_type["nav_status"]["state"] == "navigating"
     assert by_type["pose"]["position"] == [4, 5, 6]
     assert by_type["lidar"]["points_flat"] == [7, 8, 9]
     assert by_type["path"]["waypoints"] == [[0, 0, 0]]

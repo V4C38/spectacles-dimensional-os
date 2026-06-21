@@ -339,7 +339,7 @@ class ARBridge(Module):  # type: ignore[misc]
         """Resend authoritative bridge + nav lifecycle state after connect or get_status."""
         self._sender.send_to(websocket, self._status.status_payload())
         self._sender.send_to(websocket, self._nav.nav_status_payload())
-        last_path = self._nav.last_executing_path_payload
+        last_path = self._nav.last_navigating_path_payload
         if last_path is not None:
             self._sender.send_to(websocket, last_path)
 

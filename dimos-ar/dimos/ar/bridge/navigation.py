@@ -67,7 +67,7 @@ class NavController:
         self._nav_watchdog_lock = threading.Lock()
         self._nav_watchdog_stop = threading.Event()
         self._nav_watchdog_thread: threading.Thread | None = None
-        self._last_executing_path_payload: str | None = None
+        self._last_navigating_path_payload: str | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -96,8 +96,8 @@ class NavController:
     # ------------------------------------------------------------------
 
     @property
-    def last_executing_path_payload(self) -> str | None:
-        return self._last_executing_path_payload
+    def last_navigating_path_payload(self) -> str | None:
+        return self._last_navigating_path_payload
 
     def nav_status_payload(self, *, ts: float | None = None) -> str:
         return encode_nav_status(
@@ -198,11 +198,11 @@ class NavController:
             robot_id=self._robot_id,
         )
         if waypoints and self._nav_goal_pending and not self._nav_path_received:
-            self._promote_to_following_path(ts=msg.ts)
+            self._promote_to_navigating(ts=msg.ts)
         if waypoints:
-            self._last_executing_path_payload = path_payload
+            self._last_navigating_path_payload = path_payload
         elif self._nav_state == "idle":
-            self._last_executing_path_payload = None
+            self._last_navigating_path_payload = None
         self._sender.send(path_payload)
 
     def on_goal_reached(self, msg: Bool) -> None:
@@ -240,7 +240,7 @@ class NavController:
             self.broadcast_nav_status()
             return
         self._nav_state = normalized
-        if self._nav_state == "following_path":
+        if self._nav_state == "navigating":
             self._goal_reached = False
             self._goal_failed = False
             with self._nav_watchdog_lock:
@@ -437,18 +437,18 @@ class NavController:
         self.broadcast_nav_status()
         self._cancel_goal_async()
 
-    def _promote_to_following_path(self, *, ts: float | None = None) -> None:
+    def _promote_to_navigating(self, *, ts: float | None = None) -> None:
         with self._nav_watchdog_lock:
             if not self._nav_goal_pending:
                 return
             self._nav_path_received = True
             self._nav_goal_dispatch_mono = None
             self._nav_recovering = False
-        self._nav_state = "following_path"
+        self._nav_state = "navigating"
         self._goal_failed = False
         self._nav_error_code = None
         self.broadcast_nav_status(ts=ts)
 
     def _broadcast_empty_path(self, *, ts: float | None = None) -> None:
-        self._last_executing_path_payload = None
+        self._last_navigating_path_payload = None
         self._sender.send(build_empty_path_payload(robot_id=self._robot_id, ts=ts))

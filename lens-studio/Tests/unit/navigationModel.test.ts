@@ -6,6 +6,8 @@ import {
   createInitialNavEngineState,
   deriveAppNavigationState,
   deriveMarkerPresentation,
+  deriveNavDisplayPhase,
+  derivePathPresentation,
   goalCommitAllowed,
   manualNavGoalConfig,
   navBehavior,
@@ -44,8 +46,9 @@ describe("NavEngineState", () => {
       commitKind: "direct",
       sendToBridge: true,
     });
-    expect(result.state.goal).toEqual({ since: 0, following: false });
+    expect(result.state.goal).toEqual({ since: 0, navigating: false });
     expect(result.effects.some((effect) => effect.kind === "sendNavGoal")).toBe(true);
+    expect(result.effects.some((effect) => effect.kind === "clearPath")).toBe(false);
   });
 
   it("clears goal on disconnect", () => {
@@ -53,7 +56,7 @@ describe("NavEngineState", () => {
     state = {
       ...state,
       activeConfig: manualNavGoalConfig("single"),
-      goal: { since: 1, following: true },
+      goal: { since: 1, navigating: true },
     };
     const result = applyNavigationEvent(state, { kind: "disconnect" });
     expect(result.state.activeConfig).toBeNull();
@@ -64,7 +67,7 @@ describe("NavEngineState", () => {
   it("detects stale nav lifecycle", () => {
     const state = {
       ...createInitialNavEngineState(0),
-      goal: { since: 0, following: true },
+      goal: { since: 0, navigating: true },
       lastNavStatusTime: 0,
       lastNavStatusResyncTime: 19,
       navStatusResyncCooldownS: 2,
@@ -110,7 +113,7 @@ describe("navigationGoalPolicy", () => {
       {
         ...createInitialNavEngineState(),
         activeConfig: config,
-        goal: { since: 1, following: true },
+        goal: { since: 1, navigating: true },
       },
       { placementActive: true, markerExists: true, outcomeAnimating: false },
     )!;
@@ -125,24 +128,71 @@ describe("applyNavigationEvent goal lifecycle", () => {
     const state = {
       ...createInitialNavEngineState(),
       activeConfig: config,
-      goal: { since: 1, following: true },
+      goal: { since: 1, navigating: true },
     };
     const result = applyNavigationEvent(state, { kind: "navStatusGoalReached" });
     expect(result.effects.some((effect) => effect.kind === "destroyMarker")).toBe(true);
     expect(result.state.activeConfig).toBeNull();
   });
 
-  it("respawns marker on manual continuous goal reached", () => {
+  it("respawns marker instantly on manual continuous goal reached", () => {
     const config = manualNavGoalConfig("continuous");
     const state = {
       ...createInitialNavEngineState(),
       activeConfig: config,
-      goal: { since: 1, following: true },
+      goal: { since: 1, navigating: true },
     };
     const result = applyNavigationEvent(state, { kind: "navStatusGoalReached" });
+    const respawn = result.effects.find((effect) => effect.kind === "respawnMarkerAtRobot");
+    expect(respawn).toEqual({ kind: "respawnMarkerAtRobot", immediate: true });
+  });
+
+  it("recovers without Failed animation", () => {
+    const state = {
+      ...createInitialNavEngineState(),
+      activeConfig: manualNavGoalConfig("single"),
+      goal: { since: 1, navigating: true },
+    };
+    const result = applyNavigationEvent(state, { kind: "navStatusRecovering" });
+    expect(result.state.goal).toBeNull();
+    expect(result.effects.some((effect) => effect.kind === "beginOutcomeAnimation")).toBe(
+      false,
+    );
     expect(result.effects.some((effect) => effect.kind === "respawnMarkerAtRobot")).toBe(
       true,
     );
+  });
+
+  it("respawns marker when switching single and continuous", () => {
+    const state = {
+      ...createInitialNavEngineState(),
+      activeConfig: manualNavGoalConfig("single"),
+      goal: { since: 1, navigating: true },
+    };
+    const result = applyNavigationEvent(state, {
+      kind: "configChanged",
+      config: manualNavGoalConfig("continuous"),
+    });
+    expect(result.state.goal).toBeNull();
+    expect(result.state.activeConfig?.mode).toBe("continuous");
+    expect(result.effects.some((effect) => effect.kind === "sendCancelGoal")).toBe(true);
+    expect(result.effects.some((effect) => effect.kind === "clearPath")).toBe(true);
+    const respawn = result.effects.find((effect) => effect.kind === "respawnMarkerAtRobot");
+    expect(respawn).toEqual({ kind: "respawnMarkerAtRobot", immediate: true });
+  });
+
+  it("marks failure with Failed animation", () => {
+    const state = {
+      ...createInitialNavEngineState(),
+      activeConfig: manualNavGoalConfig("single"),
+      goal: { since: 1, navigating: true },
+    };
+    const result = applyNavigationEvent(state, { kind: "navStatusGoalFailed" });
+    expect(
+      result.effects.some(
+        (effect) => effect.kind === "beginOutcomeAnimation" && effect.label === "Failed",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -159,20 +209,23 @@ describe("derived presentation", () => {
       { placementActive: true, markerExists: true, outcomeAnimating: false },
     )!;
     expect(deriveMarkerPresentation(ctx).kind).toBe("preview");
+    expect(deriveNavDisplayPhase(ctx)).toBe("preview");
     expect(deriveAppNavigationState(ctx, true)).toBe("placingGoal");
   });
 
-  it("shows executing when goal is active", () => {
+  it("shows navigating when single goal is active", () => {
     const ctx = buildNavViewContext(
       {
         ...createInitialNavEngineState(),
         activeConfig: singleDrag,
-        goal: { since: 1, following: true },
+        goal: { since: 1, navigating: false },
       },
       { placementActive: false, markerExists: true, outcomeAnimating: false },
     )!;
-    expect(deriveMarkerPresentation(ctx).kind).toBe("executing");
-    expect(deriveAppNavigationState(ctx, true)).toBe("executingGoal");
+    expect(deriveMarkerPresentation(ctx).kind).toBe("navigating");
+    expect(deriveNavDisplayPhase(ctx)).toBe("navigating");
+    expect(deriveAppNavigationState(ctx, true)).toBe("navigating");
+    expect(derivePathPresentation(ctx).style).toBe("navigating");
   });
 
   it("maps armed manual session to AppState armed", () => {
@@ -185,20 +238,68 @@ describe("derived presentation", () => {
       { placementActive: false, markerExists: true, outcomeAnimating: false },
     )!;
     expect(deriveAppNavigationState(ctx, true)).toBe("armed");
+    expect(deriveNavDisplayPhase(ctx)).toBe("idle");
   });
 
-  it("uses continuous executing preset", () => {
+  it("keeps continuous goal in preview until bridge navigating", () => {
     const ctx = buildNavViewContext(
       {
         ...createInitialNavEngineState(),
         activeConfig: manualNavGoalConfig("continuous"),
-        goal: { since: 0, following: false },
+        goal: { since: 0, navigating: false },
+      },
+      { placementActive: false, markerExists: true, outcomeAnimating: false },
+    )!;
+    const { kind, preset } = deriveMarkerPresentation(ctx);
+    expect(kind).toBe("preview");
+    expect(preset.confirmVisible).toBe(true);
+    expect(preset.useNavigatingButtonPresentation).toBe(true);
+    expect(preset.confirmVfx).toBe("cancel");
+    expect(deriveNavDisplayPhase(ctx)).toBe("preview");
+    expect(deriveAppNavigationState(ctx, true)).toBe("armed");
+    expect(derivePathPresentation(ctx).style).toBe("preview");
+  });
+
+  it("shows confirm only for single preview and cancel for continuous preview", () => {
+    const singleCtx = buildNavViewContext(
+      {
+        ...createInitialNavEngineState(),
+        activeConfig: manualNavGoalConfig("single"),
+        goal: null,
+      },
+      { placementActive: true, markerExists: true, outcomeAnimating: false },
+    )!;
+    const singlePreset = deriveMarkerPresentation(singleCtx).preset;
+    expect(singlePreset.confirmVisible).toBe(true);
+    expect(singlePreset.useNavigatingButtonPresentation).toBe(false);
+
+    const continuousCtx = buildNavViewContext(
+      {
+        ...createInitialNavEngineState(),
+        activeConfig: manualNavGoalConfig("continuous"),
+        goal: null,
+      },
+      { placementActive: true, markerExists: true, outcomeAnimating: false },
+    )!;
+    const continuousPreset = deriveMarkerPresentation(continuousCtx).preset;
+    expect(continuousPreset.confirmVisible).toBe(true);
+    expect(continuousPreset.useNavigatingButtonPresentation).toBe(true);
+    expect(continuousPreset.confirmVfx).toBe("cancel");
+  });
+
+  it("uses continuous navigating preset after bridge ack", () => {
+    const ctx = buildNavViewContext(
+      {
+        ...createInitialNavEngineState(),
+        activeConfig: manualNavGoalConfig("continuous"),
+        goal: { since: 0, navigating: true },
       },
       { placementActive: false, markerExists: true, outcomeAnimating: false },
     )!;
     const { preset } = deriveMarkerPresentation(ctx);
     expect(preset.portalCircleVisible).toBe(true);
-    expect(preset.circleExecuting).toBe(true);
+    expect(preset.circleNavigating).toBe(true);
+    expect(deriveAppNavigationState(ctx, true)).toBe("navigating");
   });
 });
 
@@ -217,12 +318,12 @@ describe("shouldRequestPreviewOnTargetChange", () => {
     expect(shouldRequestPreviewOnTargetChange(ctx)).toBe(true);
   });
 
-  it("returns false while executing a goal", () => {
+  it("returns false while navigating a goal", () => {
     const ctx = buildNavViewContext(
       {
         ...createInitialNavEngineState(),
         activeConfig: singleDrag,
-        goal: { since: 1, following: true },
+        goal: { since: 1, navigating: true },
       },
       { placementActive: false, markerExists: true, outcomeAnimating: false },
     )!;
@@ -246,7 +347,7 @@ describe("shouldRequestPreviewOnTargetChange", () => {
       {
         ...createInitialNavEngineState(),
         activeConfig: manualNavGoalConfig("continuous"),
-        goal: { since: 1, following: true },
+        goal: { since: 1, navigating: true },
       },
       { placementActive: true, markerExists: true, outcomeAnimating: false },
     )!;
@@ -285,19 +386,19 @@ describe("shouldRenderNavigationPath", () => {
     expect(shouldRenderNavigationPath(ctx)).toBe(false);
   });
 
-  it("returns true while executing", () => {
+  it("returns true while navigating", () => {
     const ctx = buildNavViewContext(
       {
         ...createInitialNavEngineState(),
         activeConfig: singleDrag,
-        goal: { since: 1, following: true },
+        goal: { since: 1, navigating: true },
       },
       { placementActive: false, markerExists: true, outcomeAnimating: false },
     )!;
     expect(shouldRenderNavigationPath(ctx)).toBe(true);
   });
 
-  it("returns false for display-only agent without executing goal", () => {
+  it("returns false for display-only agent without navigating goal", () => {
     const ctx = buildNavViewContext(
       {
         ...createInitialNavEngineState(),

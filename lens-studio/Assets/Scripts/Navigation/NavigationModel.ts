@@ -14,7 +14,7 @@ export type NavGoalConfig = {
 
 export type ActiveGoal = {
   since: number;
-  following: boolean;
+  navigating: boolean;
 };
 
 export type GoalTrack = ActiveGoal | null;
@@ -38,21 +38,23 @@ export type NavigationGoalPolicy = "none" | "preview" | "commit" | "stream" | "d
 
 export type GoalCommitKind = "confirm" | "stream" | "direct";
 
-export type MarkerPresentationKind = "hidden" | "seeking" | "preview" | "executing";
+export type NavDisplayPhase = "idle" | "preview" | "navigating";
+
+export type MarkerPresentationKind = "hidden" | "seeking" | "preview" | "navigating";
 
 export type NavigationMarkerPreset = {
-  circleExecuting: boolean;
+  circleNavigating: boolean;
   portalCircleVisible: boolean;
   lookAtEnabled: boolean;
   confirmVisible: boolean;
-  useExecutingButtonPresentation: boolean;
+  useNavigatingButtonPresentation: boolean;
   resetCircleBeforeShow: boolean;
   scanAnimation: boolean;
   confirmVfx: "confirm" | "cancel" | "hidden";
   arrowEnabled: boolean;
   arrowSpeed: number;
-  circleSaturation: { circle: "portal" | "executing"; value: number } | null;
-  dotsMode: "seeking" | "executing";
+  circleSaturation: { circle: "portal" | "navigating"; value: number } | null;
+  dotsMode: "seeking" | "navigating";
   restoreOutcomeFirst: boolean;
   animateRootVisible: boolean | null;
   animateCircleExpanded: boolean | null;
@@ -91,8 +93,7 @@ export type NavigationEvent =
       commitKind: GoalCommitKind;
       sendToBridge: boolean;
     }
-  | { kind: "bridgePathReceived" }
-  | { kind: "bridgeFollowing" }
+  | { kind: "navigating" }
   | { kind: "navStatusGoalReached" }
   | { kind: "navStatusGoalFailed" }
   | { kind: "navStatusRecovering" }
@@ -108,10 +109,9 @@ export type NavigationEffect =
   | { kind: "sendNavGoal" }
   | { kind: "sendCancelGoal" }
   | { kind: "clearPath" }
-  | { kind: "enterExecutingVisuals" }
   | { kind: "resetNavigationOutcome" }
   | { kind: "destroyMarker" }
-  | { kind: "respawnMarkerAtRobot" }
+  | { kind: "respawnMarkerAtRobot"; immediate?: boolean }
   | { kind: "setPlacementInteraction"; policy: PlacementInteractionPolicy }
   | { kind: "beginOutcomeAnimation"; label: "Cancelled" | "Failed" }
   | { kind: "stopPlacement" };
@@ -127,11 +127,11 @@ export const NAV_GOAL_MODE_LABELS: Record<NavigationGoalMode, string> = {
 };
 
 const HIDDEN_PRESET: NavigationMarkerPreset = {
-  circleExecuting: false,
+  circleNavigating: false,
   portalCircleVisible: false,
   lookAtEnabled: false,
   confirmVisible: false,
-  useExecutingButtonPresentation: false,
+  useNavigatingButtonPresentation: false,
   resetCircleBeforeShow: false,
   scanAnimation: false,
   confirmVfx: "hidden",
@@ -145,11 +145,11 @@ const HIDDEN_PRESET: NavigationMarkerPreset = {
 };
 
 const SEEKING_PRESET: NavigationMarkerPreset = {
-  circleExecuting: false,
+  circleNavigating: false,
   portalCircleVisible: true,
   lookAtEnabled: false,
   confirmVisible: false,
-  useExecutingButtonPresentation: false,
+  useNavigatingButtonPresentation: false,
   resetCircleBeforeShow: true,
   scanAnimation: false,
   confirmVfx: "confirm",
@@ -169,35 +169,42 @@ const PREVIEW_PRESET: NavigationMarkerPreset = {
   resetCircleBeforeShow: false,
 };
 
-const EXECUTING_SINGLE_PRESET: NavigationMarkerPreset = {
-  circleExecuting: true,
+const CONTINUOUS_PREVIEW_PRESET: NavigationMarkerPreset = {
+  ...PREVIEW_PRESET,
+  confirmVisible: true,
+  useNavigatingButtonPresentation: true,
+  confirmVfx: "cancel",
+};
+
+const NAVIGATING_SINGLE_PRESET: NavigationMarkerPreset = {
+  circleNavigating: true,
   portalCircleVisible: false,
   lookAtEnabled: false,
   confirmVisible: true,
-  useExecutingButtonPresentation: true,
+  useNavigatingButtonPresentation: true,
   resetCircleBeforeShow: false,
   scanAnimation: true,
   confirmVfx: "cancel",
   arrowEnabled: true,
   arrowSpeed: 1,
-  circleSaturation: { circle: "executing", value: 1 },
-  dotsMode: "executing",
+  circleSaturation: { circle: "navigating", value: 1 },
+  dotsMode: "navigating",
   restoreOutcomeFirst: false,
   animateRootVisible: null,
   animateCircleExpanded: null,
 };
 
-const EXECUTING_CONTINUOUS_PRESET: NavigationMarkerPreset = {
-  ...EXECUTING_SINGLE_PRESET,
+const NAVIGATING_CONTINUOUS_PRESET: NavigationMarkerPreset = {
+  ...NAVIGATING_SINGLE_PRESET,
   portalCircleVisible: true,
 };
 
 export const OUTCOME_RESET_PRESET: NavigationMarkerPreset = {
-  circleExecuting: false,
+  circleNavigating: false,
   portalCircleVisible: true,
   lookAtEnabled: false,
   confirmVisible: false,
-  useExecutingButtonPresentation: false,
+  useNavigatingButtonPresentation: false,
   resetCircleBeforeShow: false,
   scanAnimation: false,
   confirmVfx: "hidden",
@@ -280,6 +287,48 @@ export function isAwaitingConfirm(ctx: NavViewContext): boolean {
   );
 }
 
+export function isNavigatingDisplay(ctx: NavViewContext): boolean {
+  if (!ctx.goal) {
+    return false;
+  }
+  if (ctx.config.mode === "single" || ctx.config.force) {
+    return true;
+  }
+  return ctx.goal.navigating;
+}
+
+export function deriveNavDisplayPhase(ctx: NavViewContext): NavDisplayPhase {
+  if (!ctx.markerExists) {
+    return "idle";
+  }
+  if (isNavigatingDisplay(ctx)) {
+    return "navigating";
+  }
+  if (!ctx.goal && isAwaitingConfirm(ctx)) {
+    return "preview";
+  }
+  if (ctx.goal && ctx.config.mode === "continuous") {
+    return "preview";
+  }
+  if (ctx.placementActive && ctx.goal === null) {
+    return "preview";
+  }
+  return "idle";
+}
+
+export function derivePathPresentation(ctx: NavViewContext): {
+  phase: NavDisplayPhase;
+  renderPath: boolean;
+  style: "preview" | "navigating" | null;
+} {
+  const phase = deriveNavDisplayPhase(ctx);
+  return {
+    phase,
+    renderPath: phase !== "idle" && shouldRenderNavigationPath(ctx),
+    style: phase === "navigating" ? "navigating" : phase === "preview" ? "preview" : null,
+  };
+}
+
 export function deriveMarkerPresentation(ctx: NavViewContext): {
   kind: MarkerPresentationKind;
   preset: NavigationMarkerPreset;
@@ -287,15 +336,18 @@ export function deriveMarkerPresentation(ctx: NavViewContext): {
   if (!ctx.markerExists) {
     return { kind: "hidden", preset: HIDDEN_PRESET };
   }
-  if (ctx.goal !== null) {
+  const phase = deriveNavDisplayPhase(ctx);
+  if (phase === "navigating") {
     const preset =
       ctx.config.mode === "continuous"
-        ? EXECUTING_CONTINUOUS_PRESET
-        : EXECUTING_SINGLE_PRESET;
-    return { kind: "executing", preset };
+        ? NAVIGATING_CONTINUOUS_PRESET
+        : NAVIGATING_SINGLE_PRESET;
+    return { kind: "navigating", preset };
   }
-  if (isAwaitingConfirm(ctx)) {
-    return { kind: "preview", preset: PREVIEW_PRESET };
+  if (phase === "preview") {
+    const preset =
+      ctx.config.mode === "continuous" ? CONTINUOUS_PREVIEW_PRESET : PREVIEW_PRESET;
+    return { kind: "preview", preset };
   }
   return { kind: "seeking", preset: SEEKING_PRESET };
 }
@@ -307,8 +359,8 @@ export function deriveAppNavigationState(
   if (!ctx || !sessionActive) {
     return "off";
   }
-  if (ctx.goal !== null) {
-    return "executingGoal";
+  if (isNavigatingDisplay(ctx)) {
+    return "navigating";
   }
   if (ctx.config.allowDrag && ctx.placementActive) {
     return "placingGoal";
@@ -333,7 +385,7 @@ export function navigationGoalPolicy(ctx: NavViewContext): NavigationGoalPolicy 
     ctx.config.mode === "single" &&
     ctx.placementActive &&
     ctx.goal !== null &&
-    !ctx.goal.following
+    !ctx.goal.navigating
   ) {
     return "commit";
   }
@@ -436,21 +488,21 @@ function clearGoal(state: NavEngineState): NavEngineState {
   return { ...state, goal: null };
 }
 
-function startGoal(state: NavEngineState, now: number, following: boolean): NavEngineState {
+function startGoal(state: NavEngineState, now: number, navigating: boolean): NavEngineState {
   return {
     ...state,
-    goal: { since: now, following },
+    goal: { since: now, navigating },
     lastNavStatusTime: now,
   };
 }
 
-function markFollowing(state: NavEngineState, now: number): NavEngineState {
+function markNavigating(state: NavEngineState, now: number): NavEngineState {
   if (state.goal === null) {
     return state;
   }
   return {
     ...state,
-    goal: { since: state.goal.since, following: true },
+    goal: { since: state.goal.since, navigating: true },
     lastNavStatusTime: now,
   };
 }
@@ -500,6 +552,9 @@ export function applyNavigationEvent(
         next = clearGoal(next);
       }
       next.activeConfig = event.config;
+      if (next.activeConfig?.allowDrag) {
+        push({ kind: "respawnMarkerAtRobot", immediate: true });
+      }
       push(
         { kind: "syncAppNavigationState" },
         { kind: "syncMarkerPresentation" },
@@ -519,32 +574,18 @@ export function applyNavigationEvent(
         next = { ...next, lastNavStatusTime: now };
       }
       if (starting || event.commitKind === "confirm" || event.commitKind === "direct") {
-        push({ kind: "clearPath" }, { kind: "resetNavigationOutcome" });
+        push({ kind: "resetNavigationOutcome" });
       }
       if (event.sendToBridge) {
         push({ kind: "sendNavGoal" });
       }
-      if (starting || event.commitKind !== "stream") {
-        push({ kind: "enterExecutingVisuals" });
-      }
       push({ kind: "syncAppNavigationState" }, { kind: "syncMarkerPresentation" });
       break;
     }
-    case "bridgePathReceived": {
+    case "navigating": {
       if (next.goal !== null) {
-        next = markFollowing(next, now);
-        push({ kind: "enterExecutingVisuals" }, { kind: "syncMarkerPresentation" });
-      }
-      break;
-    }
-    case "bridgeFollowing": {
-      if (next.goal !== null) {
-        next = markFollowing(next, now);
-        push(
-          { kind: "syncAppNavigationState" },
-          { kind: "syncMarkerPresentation" },
-          { kind: "enterExecutingVisuals" },
-        );
+        next = markNavigating(next, now);
+        push({ kind: "syncAppNavigationState" }, { kind: "syncMarkerPresentation" });
       }
       break;
     }
@@ -556,7 +597,7 @@ export function applyNavigationEvent(
       push({ kind: "clearPath" });
       const spec = next.activeConfig ? navBehavior(next.activeConfig) : null;
       if (spec?.respawnAtRobotOnSuccess) {
-        push({ kind: "respawnMarkerAtRobot" });
+        push({ kind: "respawnMarkerAtRobot", immediate: true });
       } else if (spec?.deleteMarkerOnSuccess) {
         push({ kind: "destroyMarker" }, { kind: "stopPlacement" });
         next.activeConfig = null;
@@ -565,7 +606,6 @@ export function applyNavigationEvent(
       break;
     }
     case "navStatusGoalFailed":
-    case "navStatusRecovering":
     case "staleRecovery": {
       if (next.goal === null) {
         break;
@@ -575,6 +615,19 @@ export function applyNavigationEvent(
         { kind: "clearPath" },
         { kind: "beginOutcomeAnimation", label: "Failed" },
         { kind: "syncAppNavigationState" },
+      );
+      break;
+    }
+    case "navStatusRecovering": {
+      if (next.goal === null) {
+        break;
+      }
+      next = clearGoal(next);
+      push(
+        { kind: "clearPath" },
+        { kind: "respawnMarkerAtRobot" },
+        { kind: "syncAppNavigationState" },
+        { kind: "syncMarkerPresentation" },
       );
       break;
     }

@@ -1,4 +1,4 @@
-import { OperatingMode, RobotInteractionMode } from "../Core/AppState";
+import { DimosAppState, OperatingMode, RobotInteractionMode } from "../Core/AppState";
 import { PoseMessage, protocolMetersToLensCentimeters } from "../Bridge/Protocol";
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 import { InteractableManipulation } from "SpectaclesInteractionKit.lspkg/Components/Interaction/InteractableManipulation/InteractableManipulation";
@@ -9,9 +9,10 @@ import {
 } from "../Core/Utilities";
 import { FrameCaptureController } from "../Camera/FrameCaptureController";
 import { ManualPoseCorrection, ResolvedDisplayPose } from "../Alignment/ManualPoseCorrection";
-import { RobotMarkerView } from "./RobotMarkerView";
+import { RobotUiCallbacks, RobotUiView } from "./RobotUiView";
+import { UILogEntry } from "../UI/UILogger";
 
-const ROBOT_UI_WORLD_UP_OFFSET_CM = 15.0;
+const ROBOT_UI_WORLD_UP_OFFSET_CM = 20.0;
 
 type BoolOrActive = boolean | "whenActive";
 
@@ -168,13 +169,16 @@ export class RobotMarker extends BaseScriptComponent {
   private _lastNotifiedWorldPosition: vec3 | null = null;
 
   private _poseCorrection: ManualPoseCorrection | null = null;
-  private _robotMarkerView: RobotMarkerView | null = null;
+  private _ui: RobotUiView | null = null;
   private _getLastPose: (() => PoseMessage | null) | null = null;
   private _getIsRuntimePhase: (() => boolean) | null = null;
   private _getOperatingMode: (() => OperatingMode) | null = null;
   private _getInteractionMode: (() => RobotInteractionMode) | null = null;
-  private _syncNavPlacement: (() => void) | null = null;
   private _onWorldPositionChanged: ((position: vec3) => void) | null = null;
+
+  public get ui(): RobotUiView | null {
+    return this._ui;
+  }
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
@@ -195,21 +199,28 @@ export class RobotMarker extends BaseScriptComponent {
   public initialize(deps: {
     poseCorrection: ManualPoseCorrection;
     getLastPose: () => PoseMessage | null;
-    robotMarkerView: RobotMarkerView | null;
     getIsRuntimePhase: () => boolean;
     getOperatingMode: () => OperatingMode;
     getInteractionMode: () => RobotInteractionMode;
-    syncNavigationPlacementState: () => void;
     onWorldPositionChanged?: (position: vec3) => void;
   }): void {
     this._poseCorrection = deps.poseCorrection;
     this._getLastPose = deps.getLastPose;
-    this._robotMarkerView = deps.robotMarkerView;
     this._getIsRuntimePhase = deps.getIsRuntimePhase;
     this._getOperatingMode = deps.getOperatingMode;
     this._getInteractionMode = deps.getInteractionMode;
-    this._syncNavPlacement = deps.syncNavigationPlacementState;
     this._onWorldPositionChanged = deps.onWorldPositionChanged ?? null;
+    this._ensureUi();
+  }
+
+  public bindUiCallbacks(callbacks: RobotUiCallbacks): void {
+    this._ensureUi();
+    this._ui?.bindCallbacks(callbacks);
+  }
+
+  public applyAppState(state: DimosAppState, uiLogEntry: UILogEntry | null = null): void {
+    this._ensureUi();
+    this._ui?.syncFromState(state, uiLogEntry);
   }
 
   public applyInteractionMode(mode: RobotInteractionMode): void {
@@ -223,7 +234,7 @@ export class RobotMarker extends BaseScriptComponent {
     this.setMenuEnabled(resolve(config.menu));
     this.setVisible(resolve(config.visible));
 
-    const view = this._robotMarkerView;
+    const view = this._ui;
     const markerVisible = resolve(config.visible);
     if (!markerVisible || config.menuWhenVisible === "hide") {
       view?.hide();
@@ -237,8 +248,6 @@ export class RobotMarker extends BaseScriptComponent {
     if (resolve(config.syncPose)) {
       this.syncPose();
     }
-
-    this._syncNavPlacement?.();
   }
 
   public syncPose(): void {
@@ -447,6 +456,20 @@ export class RobotMarker extends BaseScriptComponent {
   public setRenderOffsetCm(offsetCm: vec3): void {
     this._renderOffsetCm = offsetCm;
     this._syncVisualOffsets();
+  }
+
+  private _ensureUi(): void {
+    if (this._ui || !this.markerRoot) {
+      return;
+    }
+    if (!this._configured) {
+      this._configureVisuals();
+    }
+    const menuRoot = this._menuRoot;
+    if (!menuRoot) {
+      return;
+    }
+    this._ui = new RobotUiView(this.markerRoot, menuRoot);
   }
 
   private _configureVisuals(): void {

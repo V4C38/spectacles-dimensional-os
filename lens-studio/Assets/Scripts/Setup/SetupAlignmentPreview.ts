@@ -72,11 +72,13 @@ export class SetupAlignmentPreview {
 
   constructor(
     private readonly dimosState: DimosState,
-    private readonly groundDisc: SceneObject | null,
+    private readonly discPrefab: ObjectPrefab | null,
+    private readonly spawnParent: SceneObject,
     private readonly robotRuntime: RobotRuntime,
     private readonly alignmentSession: AlignmentSession,
   ) {}
   private _tagVisible = false;
+  private _discInstance: SceneObject | null = null;
   private _discAnchorInitialized = false;
   private _discLeftArrow: SceneObject | null = null;
   private _discRightArrow: SceneObject | null = null;
@@ -91,13 +93,11 @@ export class SetupAlignmentPreview {
 
     this._active = true;
     this._tagVisible = false;
-    const menu = this.robotRuntime?.robotMarkerView;
-    if (menu) {
-      menu.onContinueRequested = () => this.alignmentSession?.confirmAssist();
-    }
+    const ui = this.robotRuntime?.robotMarker?.ui;
+    ui?.setOnContinue(() => this.alignmentSession?.confirmAssist());
     this._resetVisualState();
     this.robotRuntime?.robotMarker?.setVisible(false);
-    menu?.setMenuVisible(false);
+    ui?.setMenuVisible(false);
   }
 
   public updateFromAlignStatus(msg: AlignStatusMessage): void {
@@ -110,8 +110,8 @@ export class SetupAlignmentPreview {
     const worldPose = msg.robot_world_pose ?? null;
     const previewStageActive = isAssistPreviewStage(assistStage);
     const showMarker = previewStageActive && !!worldPose;
-    const menu = this.robotRuntime?.robotMarkerView;
-    const wasMenuVisible = menu?.isMenuVisible() ?? false;
+    const ui = this.robotRuntime?.robotMarker?.ui;
+    const wasMenuVisible = ui?.isMenuVisible() ?? false;
     const marker = this.robotRuntime?.robotMarker;
 
     if (showMarker && worldPose) {
@@ -130,7 +130,7 @@ export class SetupAlignmentPreview {
       marker?.applyRuntimeLensPose(pos, rot);
       this._updateDiscPreview(pos, assistStage, progress);
       if (!wasMenuVisible) {
-        menu?.setMenuVisible(true);
+        ui?.setMenuVisible(true);
       }
     } else {
       marker?.setVisible(false);
@@ -138,17 +138,20 @@ export class SetupAlignmentPreview {
     }
 
     const inMove = isAssistMoveStage(assistStage);
-    menu?.setSetupWizardMenuVisible(assistStage === "awaiting_confirm");
-    menu?.setContinueVisible(assistStage === "awaiting_confirm");
-    menu?.setSetupStopVisible(inMove);
     if (previewStageActive) {
       const presentation = buildAssistPreviewPresentation({
         assistStage,
         progress,
         tagVisible: this._tagVisible,
       });
-      menu?.setSetupTitle(presentation.titleText);
-      menu?.setSetupStatus(presentation.statusText, presentation.statusColor);
+      ui?.applyAssistOverlay({
+        titleText: presentation.titleText,
+        statusText: presentation.statusText,
+        statusColor: presentation.statusColor,
+        showWizardMenu: assistStage === "awaiting_confirm",
+        showContinue: assistStage === "awaiting_confirm",
+        showStop: inMove,
+      });
     }
   }
 
@@ -158,11 +161,14 @@ export class SetupAlignmentPreview {
     }
     const GREEN = new vec4(0.2, 0.8, 0.2, 1);
     this._setDiscArrowVisibility(null);
-    const menu = this.robotRuntime?.robotMarkerView;
-    menu?.setSetupTitle("Alignment complete");
-    menu?.setSetupStatus("Alignment complete", GREEN);
-    menu?.setContinueVisible(false);
-    menu?.setSetupStopVisible(false);
+    this.robotRuntime?.robotMarker?.ui?.applyAssistOverlay({
+      titleText: "Alignment complete",
+      statusText: "Alignment complete",
+      statusColor: GREEN,
+      showWizardMenu: false,
+      showContinue: false,
+      showStop: false,
+    });
   }
 
   public end(): void {
@@ -172,11 +178,17 @@ export class SetupAlignmentPreview {
     this._active = false;
     this._resetVisualState();
     this.robotRuntime?.robotMarker?.setVisible(false);
-    const menu = this.robotRuntime?.robotMarkerView;
-    if (menu) {
-      menu.onContinueRequested = null;
-    }
-    menu?.setMenuVisible(false);
+    const ui = this.robotRuntime?.robotMarker?.ui;
+    ui?.setOnContinue(null);
+    ui?.applyAssistOverlay({
+      titleText: "",
+      statusText: "",
+      statusColor: COLOR_SUCCESS,
+      showWizardMenu: false,
+      showContinue: false,
+      showStop: false,
+    });
+    ui?.setMenuVisible(false);
 
     const prior = this._priorRuntimeMode;
     const lidarMode = prior === "manual" ? "obstacles" : "off";
@@ -198,14 +210,13 @@ export class SetupAlignmentPreview {
     assistStage: string | undefined,
     progress: number,
   ): void {
-    const disc = this.groundDisc ?? null;
-    if (!disc) {
-      return;
-    }
-    this._ensureDiscChildren(disc);
-
     if (!isAssistPreviewStage(assistStage)) {
       this._resetVisualState();
+      return;
+    }
+
+    const disc = this._ensureDisc();
+    if (!disc) {
       return;
     }
 
@@ -239,6 +250,28 @@ export class SetupAlignmentPreview {
     this._setDiscArrowVisibility(moveLeg);
   }
 
+  private _ensureDisc(): SceneObject | null {
+    if (!this.discPrefab) {
+      return null;
+    }
+    if (!this._discInstance) {
+      this._discInstance = this.discPrefab.instantiate(this.spawnParent);
+      this._discInstance.enabled = false;
+      this._ensureDiscChildren(this._discInstance);
+    }
+    return this._discInstance;
+  }
+
+  private _destroyDisc(): void {
+    if (!this._discInstance) {
+      return;
+    }
+    this._discInstance.destroy();
+    this._discInstance = null;
+    this._discLeftArrow = null;
+    this._discRightArrow = null;
+  }
+
   private _ensureDiscChildren(disc: SceneObject): void {
     if (!this._discLeftArrow) {
       this._discLeftArrow = findChildRecursive(disc, "MoveDirectionArrow_Left");
@@ -261,10 +294,7 @@ export class SetupAlignmentPreview {
   private _resetVisualState(): void {
     this._discAnchorInitialized = false;
     this._moveLeg = -1;
-    const disc = this.groundDisc ?? null;
-    if (disc) {
-      disc.enabled = false;
-    }
+    this._destroyDisc();
     this._setDiscArrowVisibility(null);
   }
 }

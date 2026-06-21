@@ -1,16 +1,13 @@
 import { PointCloudRenderer } from "../Lidar/PointCloudRenderer";
 import { LidarPresentationController } from "../Lidar/LidarPresentationController";
 import { RobotMarker } from "../Robot/RobotMarker";
-import { RobotMarkerView } from "../Robot/RobotMarkerView";
 import { ManualPoseCorrection } from "../Alignment/ManualPoseCorrection";
 import { DimosState } from "../Core/DimosState";
 import {
   DimosAppState,
   isRuntimePhase as isAppRuntimePhase,
   LidarDisplayMode,
-  navigationPlacementToggleEnabled,
   OperatingMode,
-  RobotInteractionMode,
 } from "../Core/AppState";
 import {
   DEFAULT_LIDAR_OBSTACLE_SETTINGS,
@@ -19,12 +16,9 @@ import {
   protocolMetersToLensCentimeters,
 } from "../Bridge/Protocol";
 import { BridgeClient } from "../Bridge/BridgeClient";
-import {
-  capabilityUnavailableReason,
-  isCapabilityAvailable,
-  runtimeRenderOffsetCm,
-} from "../Robot/RobotRuntimeModel";
+import { runtimeRenderOffsetCm } from "../Robot/RobotRuntimeModel";
 import { COLOR_WHITE } from "../UI/kit/UIKit";
+import { UILogEntry } from "../UI/UILogger";
 
 const DRIFTING_TRANSLATION_THRESHOLD_M = 0.05;
 const POSE_CORRECTION_LOG_INTERVAL_S = 1.0;
@@ -37,9 +31,9 @@ const REFINED_TRACKING_LOG_DURATION_S = 0.5;
 export interface RobotRuntimeMenuCallbacks {
   onToggleRequested: () => void;
   onStopRequested: () => void;
-  onNavigationPlacementRequested: (enabled: boolean) => void;
+  onGoalModeCycleRequested: () => void;
+  onContinueRequested?: () => void;
   getOperatingMode: () => OperatingMode;
-  getNavigationPlacementEnabled: () => boolean;
 }
 
 /** Robot pose, marker UI, and LiDAR spatial presentation in the AR scene. */
@@ -48,11 +42,12 @@ export class RobotRuntime {
   private _pendingPose: PoseMessage | null = null;
   private readonly _poseCorrection = new ManualPoseCorrection();
   private _lidar: LidarPresentationController | null = null;
-  private _robotMarkerView: RobotMarkerView | null = null;
   private _lastPoseCorrectionLogTime = 0;
   private _lastSentBridgeLidarMode: LidarDisplayMode | null = null;
   private _menuCallbacks: RobotRuntimeMenuCallbacks | null = null;
   private _bound = false;
+  private _latestUiLogEntry: UILogEntry | null = null;
+  private _unsubscribeUILog: (() => void) | null = null;
 
   constructor(
     private readonly dimosState: DimosState,
@@ -63,10 +58,6 @@ export class RobotRuntime {
 
   public get poseCorrection(): ManualPoseCorrection {
     return this._poseCorrection;
-  }
-
-  public get robotMarkerView(): RobotMarkerView | null {
-    return this._robotMarkerView;
   }
 
   public get lastPose(): PoseMessage | null {
@@ -82,43 +73,29 @@ export class RobotRuntime {
 
     this._lidar = new LidarPresentationController(this.pointCloudRenderer ?? null);
 
-    const markerRoot = this.robotMarker?.markerRoot ?? null;
-    const menuRoot = this.robotMarker?.getMenuRoot() ?? null;
-    if (markerRoot && menuRoot) {
-      const robotMarkerView = new RobotMarkerView(markerRoot, menuRoot);
-      robotMarkerView.initialize({
-        subscribeAppState: (listener) => this.dimosState.subscribe(listener),
-        uiLogger: this.dimosState.uiLogger,
-      });
-      this._robotMarkerView = robotMarkerView;
-      robotMarkerView.onToggleRequested = () => menuCallbacks.onToggleRequested();
-      robotMarkerView.onStopRequested = () => menuCallbacks.onStopRequested();
-      robotMarkerView.onNavigationPlacementRequested = (enabled) =>
-        menuCallbacks.onNavigationPlacementRequested(enabled);
-      robotMarkerView.setNavigationPlacementToggle(menuCallbacks.getNavigationPlacementEnabled());
-    }
-
     if (this.robotMarker) {
       this.robotMarker.initialize({
         poseCorrection: this._poseCorrection,
         getLastPose: () => this._lastPose,
-        robotMarkerView: this._robotMarkerView,
         getIsRuntimePhase: () => this.isRuntimePhase(),
         getOperatingMode: () => menuCallbacks.getOperatingMode(),
         getInteractionMode: () => this.dimosState.snapshot.robotInteractionMode,
-        syncNavigationPlacementState: () => this._onSyncNavigationPlacement?.(),
         onWorldPositionChanged: () => this.refreshLidarPresentation(),
+      });
+      this.robotMarker.bindUiCallbacks({
+        onToggle: () => menuCallbacks.onToggleRequested(),
+        onStop: () => menuCallbacks.onStopRequested(),
+        onGoalModeCycle: () => menuCallbacks.onGoalModeCycleRequested(),
+        onContinue: menuCallbacks.onContinueRequested,
       });
     }
 
+    this._unsubscribeUILog = this.dimosState.uiLogger.subscribe((entry) => {
+      this._latestUiLogEntry = entry;
+      this._applyAppState(this.dimosState.snapshot);
+    });
     this.dimosState.subscribe((state) => this._syncFromState(state));
     this.refreshLidarPresentation();
-  }
-
-  private _onSyncNavigationPlacement: (() => void) | null = null;
-
-  public setSyncNavigationPlacement(handler: () => void): void {
-    this._onSyncNavigationPlacement = handler;
   }
 
   public onPose(msg: PoseMessage): void {
@@ -207,17 +184,13 @@ export class RobotRuntime {
   public clearInactiveState(): void {
     this.pointCloudRenderer?.clearAll();
     this._lidar?.clearBuffer();
-    this._robotMarkerView?.hide();
+    this.robotMarker?.ui?.hide();
   }
 
   public applyInteractionFromState(): void {
     this.robotMarker?.applyInteractionMode(
       this.dimosState.snapshot.robotInteractionMode,
     );
-  }
-
-  public applyBridgeLinkState(): void {
-    this._robotMarkerView?.applyBridgeLinkState(this.dimosState.snapshot.bridgeLinkState);
   }
 
   public resetBridgeLidarModeTracking(): void {
@@ -236,23 +209,14 @@ export class RobotRuntime {
     });
   }
 
+  private _applyAppState(state: DimosAppState): void {
+    this.robotMarker?.applyAppState(state, this._latestUiLogEntry);
+  }
+
   private _syncFromState(state: DimosAppState): void {
-    const runtime = state.robotRuntime;
-    this.robotMarker?.setRenderOffsetCm(runtimeRenderOffsetCm(runtime));
+    this.robotMarker?.setRenderOffsetCm(runtimeRenderOffsetCm(state.robotRuntime));
     this.robotMarker?.setDebugMode(state.debugMode);
-    this._robotMarkerView?.setRobotLabel(runtime.displayName);
-    this._robotMarkerView?.setNavigationPlacementAvailability(
-      isCapabilityAvailable(runtime, "nav"),
-    );
-    this._robotMarkerView?.setEmergencyStopAvailability(
-      isCapabilityAvailable(runtime, "emergency_stop"),
-      capabilityUnavailableReason(runtime, "emergency_stop"),
-    );
-    if (runtime.capabilities.nav?.available) {
-      this._robotMarkerView?.setNavigationPlacementToggle(
-        navigationPlacementToggleEnabled(state),
-      );
-    }
+    this._applyAppState(state);
     this.refreshLidarPresentation(state);
     this._maybeSyncBridgeLidarMode(state.lidarMode);
   }

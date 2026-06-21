@@ -85,7 +85,7 @@
 - !<SceneObject/17f3728f-ffcc-4add-a5a8-d430f96a64c6>
   PrefabRemaps:
     []
-  Name: Circle_Executing
+  Name: Circle_Navigating
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>

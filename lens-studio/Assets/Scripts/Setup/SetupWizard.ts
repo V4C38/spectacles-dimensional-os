@@ -1,14 +1,14 @@
 require("LensStudio:TextInputModule");
 
 import { DimosManager } from "../Core/DimosManager";
-import { NO_ROBOT_CONNECTED_LABEL } from "../Core/AppState";
+import { BridgeLinkState, bridgeLinkPresentation, NO_ROBOT_CONNECTED_LABEL } from "../Core/AppState";
 
 import { AlignStatusMessage } from "../Bridge/Protocol";
 import { scaleIn } from "../UI/kit/UIAnimations";
 import { COLOR_ERROR, COLOR_WARN, COLOR_WHITE } from "../UI/kit/UIKit";
 import { SetupWizardView } from "./SetupWizardView";
-import { getBridgeStatusPresentationForConnect, getBridgeConnectDetailStatus } from "../UI/BridgeStatusPresentation";
 import { BridgeClient } from "../Bridge/BridgeClient";
+import { ClockSyncState } from "../Bridge/BridgeConnectionManager";
 import {
   buildCalibrationDisplay,
   buildCalibrateDescriptionAuto,
@@ -383,14 +383,38 @@ export class SetupWizard extends BaseScriptComponent {
     });
   }
 
+  private _bridgeStatusForConnect(
+    linkState: BridgeLinkState,
+    isConnecting: boolean,
+  ): { text: string; color: vec4 } {
+    if (isConnecting && linkState === "disconnected") {
+      return { text: "Connecting...", color: COLOR_ERROR };
+    }
+    return bridgeLinkPresentation(linkState);
+  }
+
+  private _bridgeConnectDetailStatus(
+    linkState: BridgeLinkState,
+    clockSyncState: ClockSyncState,
+  ): string | null {
+    if (linkState === "disconnected" || linkState === "connectedNoRobot") {
+      return null;
+    }
+    if (clockSyncState === "pending") {
+      return "Syncing clock…";
+    }
+    if (clockSyncState === "failed") {
+      return "Clock sync failed — reconnect or continue without alignment frames";
+    }
+    return null;
+  }
+
   private _showBridgeConnectionStatus(): void {
-    const presentation = getBridgeStatusPresentationForConnect(
-      this.dimosManager?.bridgeLinkState ?? "disconnected",
-      this._isConnecting,
-    );
+    const linkState = this.dimosManager?.bridgeLinkState ?? "disconnected";
+    const presentation = this._bridgeStatusForConnect(linkState, this._isConnecting);
     this._view?.setStatus(presentation.text, presentation.color);
-    const detail = getBridgeConnectDetailStatus(
-      this.dimosManager?.bridgeLinkState ?? "disconnected",
+    this._bridgeConnectDetailStatus(
+      linkState,
       this.dimosManager?.bridgeClient?.clockSyncState ?? "idle",
     );
     if (this.dimosManager?.hasBridgeConnection()) {

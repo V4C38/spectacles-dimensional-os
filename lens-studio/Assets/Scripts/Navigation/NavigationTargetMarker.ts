@@ -51,6 +51,7 @@ export type NavigationMarkerApplyOptions = {
   confirmAvailable?: boolean;
   cancelAvailable?: boolean;
   showConfirmInPreview?: boolean;
+  showCancelInPreview?: boolean;
 };
 
 function nextAnimationVersion(store: object, key: string): number {
@@ -181,7 +182,7 @@ class NavigationMarkerView {
   private readonly headingRoot: SceneObject | null;
   private readonly rotationRoot: SceneObject | null;
   private readonly portalCircle: SceneObject;
-  private readonly circleExecuting: SceneObject | null;
+  private readonly circleNavigating: SceneObject | null;
   private readonly confirmButtonObject: SceneObject;
   private readonly confirmButton: RoundButton;
   private readonly confirmVfx: SceneObject | null;
@@ -215,7 +216,7 @@ class NavigationMarkerView {
     this.portalCircle =
       findChildRecursive(this.root, "Circle_Seeking") ??
       requireChild(this.root, "PortalCircle", "NavigationMarkerView");
-    this.circleExecuting = findChildRecursive(this.root, "Circle_Executing");
+    this.circleNavigating = findChildRecursive(this.root, "Circle_Navigating");
     this.confirmButtonObject = requireChild(this.root, "ConfirmButton", "NavigationMarkerView");
     this.confirmButton = this.confirmButtonObject.getComponent(
       RoundButton.getTypeName(),
@@ -358,17 +359,17 @@ class NavigationMarkerView {
     if (preset.restoreOutcomeFirst && animateEntrance) {
       this._restoreOutcomeVisualState();
     }
-    if (this.circleExecuting) {
-      this.circleExecuting.enabled = preset.circleExecuting;
+    if (this.circleNavigating) {
+      this.circleNavigating.enabled = preset.circleNavigating;
     }
     this.portalCircle.enabled = preset.portalCircleVisible;
     if (this.rotationLookAt) {
       this.rotationLookAt.enabled = preset.lookAtEnabled;
     }
     this.setConfirmVisible(preset.confirmVisible);
-    if (preset.useExecutingButtonPresentation) {
+    if (preset.useNavigatingButtonPresentation) {
       this._cancelActionAvailable = opts.cancelAvailable ?? this._cancelActionAvailable;
-      this._applyExecutingButtonPresentation();
+      this._applyNavigatingButtonPresentation();
     } else if (kind === "preview") {
       this.confirmLabel.text = opts.confirmAvailable === false
         ? "Confirm\nUnavailable"
@@ -393,7 +394,7 @@ class NavigationMarkerView {
       const circle =
         preset.circleSaturation.circle === "portal"
           ? this.portalCircle
-          : this.circleExecuting;
+          : this.circleNavigating;
       setMaterialPassProp(circle, "Saturation", preset.circleSaturation.value);
     }
     applyDotsMaterialMode(this.dots, preset.dotsMode === "seeking");
@@ -493,18 +494,18 @@ class NavigationMarkerView {
 
   public setCancelActionAvailability(available: boolean): void {
     this._cancelActionAvailable = available;
-    if (this._presentationKind === "executing") {
-      this._applyExecutingButtonPresentation();
+    if (this._presentationKind === "navigating") {
+      this._applyNavigatingButtonPresentation();
     }
   }
 
   public hide(): void {
     this.applyPreset(this._config, "hidden", {
-      circleExecuting: false,
+      circleNavigating: false,
       portalCircleVisible: false,
       lookAtEnabled: false,
       confirmVisible: false,
-      useExecutingButtonPresentation: false,
+      useNavigatingButtonPresentation: false,
       resetCircleBeforeShow: false,
       scanAnimation: false,
       confirmVfx: "hidden",
@@ -559,9 +560,12 @@ class NavigationMarkerView {
     opts: NavigationMarkerApplyOptions,
   ): boolean {
     if (kind === "preview") {
+      if (opts.showCancelInPreview) {
+        return presetConfirmVisible;
+      }
       return (opts.showConfirmInPreview ?? false) && presetConfirmVisible;
     }
-    if (kind === "executing") {
+    if (kind === "navigating") {
       return presetConfirmVisible;
     }
     return presetConfirmVisible;
@@ -679,7 +683,7 @@ class NavigationMarkerView {
     this._syncMoveDirectionArrowVisibility();
   }
 
-  private _applyExecutingButtonPresentation(): void {
+  private _applyNavigatingButtonPresentation(): void {
     applyCapabilityButtonPresentation(this.confirmButton, this.confirmLabel, {
       available: this._cancelActionAvailable,
       availableLabel: "Cancel",

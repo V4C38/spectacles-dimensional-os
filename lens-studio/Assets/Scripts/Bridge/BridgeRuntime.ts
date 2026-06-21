@@ -164,7 +164,6 @@ export class BridgeRuntime {
     if (isAppRuntimePhase(this.dimosState.snapshot) && this.frameCaptureController) {
       this.frameCaptureController.setMode(msg.registered ? "runtime" : "off");
     }
-    this.robotRuntime.applyBridgeLinkState();
     this.onBridgeStatusChanged.emit(msg);
   }
 
@@ -174,7 +173,6 @@ export class BridgeRuntime {
       connected,
       connected ? this.bridgeClient?.lastBridgeStatus ?? null : null,
     );
-    this.robotRuntime.applyBridgeLinkState();
     this.onBridgeConnectionChanged.emit(connected);
     if (!connected) {
       this.robotRuntime.onDisconnect();

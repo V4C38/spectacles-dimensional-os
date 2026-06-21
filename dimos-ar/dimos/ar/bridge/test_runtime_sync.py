@@ -46,7 +46,7 @@ def _make_runtime_sync_stub() -> tuple[MagicMock, BridgeSender, MagicMock, Magic
     mock_nav.nav_status_payload.return_value = json.dumps(
         {
             "type": "nav_status",
-            "state": "following_path",
+            "state": "navigating",
             "goal_reached": False,
             "goal_failed": False,
             "recovering": False,
@@ -54,7 +54,7 @@ def _make_runtime_sync_stub() -> tuple[MagicMock, BridgeSender, MagicMock, Magic
             "robot_id": "unitree_go2",
         }
     )
-    mock_nav.last_executing_path_payload = last_path
+    mock_nav.last_navigating_path_payload = last_path
     bridge._nav = mock_nav  # type: ignore[attr-defined]
 
     return bridge, sender, mock_status, mock_nav
@@ -76,7 +76,7 @@ def test_runtime_sync_includes_bridge_nav_and_path() -> None:
     types = [json.loads(payload)["type"] for payload in payloads]
     assert types == ["bridge_status", "nav_status", "path"]
     nav_status = json.loads(payloads[1])
-    assert nav_status["state"] == "following_path"
+    assert nav_status["state"] == "navigating"
 
 
 def test_get_status_triggers_runtime_sync() -> None:
