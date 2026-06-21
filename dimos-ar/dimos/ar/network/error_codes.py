@@ -16,35 +16,36 @@ MANUAL_POSE_INVALID = BridgeError(
     code=400,
     description=(
         "Spectacles could not read the manual robot marker pose, finalize "
-        "offline placement, start manual placement, or send the alignment "
+        "offline placement, start manual placement, or send the registration "
         "commit to the bridge."
     ),
     fix="Re-grab the marker below the panel and try Complete again.",
 )
 
-ALIGN_COMMIT_NO_CANDIDATE = BridgeError(
+REGISTRATION_COMMIT_NO_CANDIDATE = BridgeError(
     code=409,
     description=(
-        "The bridge rejected align_commit because no valid calibration candidate was available yet."
+        "The bridge rejected registration_commit because no valid registration "
+        "candidate was available yet."
     ),
     fix="Wait for bridge confirmation or restart the robot and bridge (./start.sh).",
 )
 
-ALIGN_FAILED = BridgeError(
+REGISTRATION_FAILED = BridgeError(
     code=500,
-    description="Marker or manual alignment failed on the bridge.",
-    fix="Retry calibration; restart the robot and bridge (./start.sh) if it persists.",
+    description="AprilTag or manual registration failed on the bridge.",
+    fix="Retry registration; restart the robot and bridge (./start.sh) if it persists.",
 )
 
 BRIDGE_DISCONNECTED_DURING_COMMIT = BridgeError(
     code=502,
-    description="The WebSocket disconnected while Spectacles was applying alignment.",
-    fix="Reconnect Spectacles to the bridge and retry calibration.",
+    description="The WebSocket disconnected while Spectacles was applying registration.",
+    fix="Reconnect Spectacles to the bridge and retry registration.",
 )
 
-ALIGN_SESSION_UNAVAILABLE = BridgeError(
+REGISTRATION_SESSION_UNAVAILABLE = BridgeError(
     code=503,
-    description="The bridge could not start an alignment session after align_start.",
+    description="The bridge could not start a registration session after registration_start.",
     fix="Restart the robot and bridge (./start.sh), then reconnect Spectacles.",
 )
 
@@ -52,7 +53,7 @@ MANUAL_POSE_CONFIRM_TIMEOUT = BridgeError(
     code=504,
     description=(
         "Spectacles sent manual placement updates but the bridge never "
-        "confirmed a calibration candidate within 5 seconds."
+        "confirmed a registration candidate within 5 seconds."
     ),
     fix="Restart the robot and bridge (./start.sh), then reconnect Spectacles.",
 )
@@ -68,14 +69,14 @@ NAV_GOAL_STALLED = BridgeError(
 
 CAMERA_CAPTURE_FAILED = BridgeError(
     code=506,
-    description="Spectacles failed to capture or send a camera still for tag alignment.",
-    fix="Retry calibration and keep the robot-mounted tag in view.",
+    description="Spectacles failed to capture or send a camera still for AprilTag registration.",
+    fix="Retry registration and keep the robot-mounted tag in view.",
 )
 
 CAMERA_INFO_MISSING = BridgeError(
     code=507,
     description="Spectacles did not send camera intrinsics before camera frames.",
-    fix="Reconnect Spectacles to the bridge and retry calibration.",
+    fix="Reconnect Spectacles to the bridge and retry registration.",
 )
 
 CONTROL_RPC_TIMEOUT = BridgeError(
@@ -91,10 +92,10 @@ BRIDGE_ERRORS: dict[int, BridgeError] = {
     error.code: error
     for error in (
         MANUAL_POSE_INVALID,
-        ALIGN_COMMIT_NO_CANDIDATE,
-        ALIGN_FAILED,
+        REGISTRATION_COMMIT_NO_CANDIDATE,
+        REGISTRATION_FAILED,
         BRIDGE_DISCONNECTED_DURING_COMMIT,
-        ALIGN_SESSION_UNAVAILABLE,
+        REGISTRATION_SESSION_UNAVAILABLE,
         MANUAL_POSE_CONFIRM_TIMEOUT,
         NAV_GOAL_STALLED,
         CAMERA_CAPTURE_FAILED,

@@ -1,14 +1,14 @@
 import { BridgeClient } from "../Bridge/BridgeClient";
 import { FrameCaptureController } from "../Camera/FrameCaptureController";
 import {
-  AlignmentSession,
-  AlignmentSessionDeps,
-} from "../Alignment/AlignmentSession";
+  RegistrationClient,
+  RegistrationClientDeps,
+} from "../Registration/RegistrationClient";
 import { BridgeRuntime } from "../Bridge/BridgeRuntime";
 import { DimosState } from "./DimosState";
 import { NavigationController } from "../Navigation/NavigationController";
 import { RobotRuntime, RobotRuntimeMenuCallbacks } from "../Robot/RobotRuntime";
-import { SetupAlignmentPreview } from "../Setup/SetupAlignmentPreview";
+import { SetupRegistrationPreview } from "../Setup/SetupRegistrationPreview";
 import { PointCloudRenderer } from "../Lidar/PointCloudRenderer";
 import { RobotMarker } from "../Robot/RobotMarker";
 
@@ -40,8 +40,8 @@ export class DimosServices extends BaseScriptComponent {
   private _robot: RobotRuntime | null = null;
   private _navigation: NavigationController | null = null;
   private _bridge: BridgeRuntime | null = null;
-  private _alignment: AlignmentSession | null = null;
-  private _setupPreview: SetupAlignmentPreview | null = null;
+  private _registration: RegistrationClient | null = null;
+  private _setupPreview: SetupRegistrationPreview | null = null;
   private _bound = false;
 
   public get state(): DimosState {
@@ -64,19 +64,19 @@ export class DimosServices extends BaseScriptComponent {
     return this._bridge!;
   }
 
-  public get alignment(): AlignmentSession {
+  public get registration(): RegistrationClient {
     this._ensureInstances();
-    return this._alignment!;
+    return this._registration!;
   }
 
-  public get setupPreview(): SetupAlignmentPreview {
+  public get setupPreview(): SetupRegistrationPreview {
     this._ensureInstances();
     return this._setupPreview!;
   }
 
   public bind(
     robotMenuCallbacks: RobotRuntimeMenuCallbacks,
-    alignmentDeps: AlignmentSessionDeps,
+    registrationDeps: RegistrationClientDeps,
   ): void {
     if (this._bound) {
       return;
@@ -89,8 +89,8 @@ export class DimosServices extends BaseScriptComponent {
       dimosState: this._state!,
       robotRuntime: this._robot!,
     });
-    this._alignment!.initialize(alignmentDeps);
-    this._alignment!.bind();
+    this._registration!.initialize(registrationDeps);
+    this._registration!.bind();
     this._bridge!.bind();
 
     this.createEvent("UpdateEvent").bind(() => {
@@ -109,17 +109,17 @@ export class DimosServices extends BaseScriptComponent {
       this.pointCloudRenderer ?? null,
       this.bridgeClient ?? null,
     );
-    this._alignment = new AlignmentSession(
+    this._registration = new RegistrationClient(
       this.bridgeClient ?? null,
       this.frameCaptureController ?? null,
       this.robotMarker ?? null,
     );
-    this._setupPreview = new SetupAlignmentPreview(
+    this._setupPreview = new SetupRegistrationPreview(
       this._state,
       this.assistClearanceDiscPrefab ?? null,
       this.getSceneObject(),
       this._robot,
-      this._alignment,
+      this._registration,
     );
     this._navigation = NavigationController.create({
       eventHost: this,

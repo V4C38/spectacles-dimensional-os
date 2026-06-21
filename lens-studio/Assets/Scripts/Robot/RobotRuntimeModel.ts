@@ -39,7 +39,7 @@ export function projectRuntimeStateFromHello(msg: HelloMessage): RobotRuntimeSta
     footprintM: msg.robot.footprint_m ?? null,
     baseHeightM: msg.robot.base_height_m ?? null,
     defaultRenderOffsetM: msg.robot.default_render_offset_m ?? null,
-    alignmentProfile: msg.robot.alignment_profile ?? null,
+    registrationProfile: msg.robot.registration_profile ?? null,
     capabilities,
   };
 }

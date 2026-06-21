@@ -18,7 +18,7 @@ from dimos.ar.network.data_plane import (
 )
 from dimos.ar.network.error_codes import CONTROL_RPC_TIMEOUT, NAV_GOAL_STALLED
 from dimos.ar.network.protocol import NavGoalMessage, encode_nav_status
-from dimos.ar.tracking.robot_tag_tracker import _orientation_yaw_deg
+from dimos.ar.registration.tracker import _orientation_yaw_deg
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.utils.logging_config import setup_logger
 
@@ -325,7 +325,13 @@ class NavController:
         ).start()
 
     def _cancel_or_stop(self, *, emergency: bool) -> None:
-        method_name = "emergency_stop" if emergency else "cancel_goal"
+        if emergency:
+            try:
+                self._adapter.emergency_stop()
+            except Exception:
+                logger.exception("XR emergency_stop failed")
+            return
+        method_name = "cancel_goal"
         result, error = self._call_adapter_with_timeout(method_name, CONTROL_RPC_TIMEOUT_S)
         if error is not None:
             logger.exception("XR control command failed", emergency=emergency, error=str(error))

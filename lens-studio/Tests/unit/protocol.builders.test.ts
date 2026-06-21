@@ -2,11 +2,11 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   buildGetStatus,
   buildSetLidarMode,
-  buildAlignStart,
-  buildAssistConfirm,
-  buildAlignStop,
-  buildAlignCommit,
-  buildAlignManualPose,
+  buildRegistrationStart,
+  buildRegistrationAction,
+  buildRegistrationStop,
+  buildRegistrationCommit,
+  buildRegistrationPose,
   buildPing,
   buildCameraInfo,
   buildNavGoal,
@@ -47,41 +47,41 @@ describe("outbound protocol builders", () => {
     );
   });
 
-  it("buildAlignStart", () => {
-    const msg = JSON.parse(buildAlignStart("go2", "tag", true));
-    expect(msg.type).toBe("align_start");
+  it("buildRegistrationStart", () => {
+    const msg = JSON.parse(buildRegistrationStart("go2", "april_odom_baseline"));
+    expect(msg.type).toBe("registration_start");
     expect(msg.robot_id).toBe("go2");
-    expect(msg.method).toBe("tag");
-    expect(msg.assist).toBe(true);
+    expect(msg.mode).toBe("april_odom_baseline");
     expect(msg.ts).toBe(1000);
   });
 
-  it("buildAssistConfirm", () => {
-    const msg = JSON.parse(buildAssistConfirm("go2"));
-    expect(msg.type).toBe("assist_confirm");
-    expect(msg.robot_id).toBe("go2");
-    expect(msg.ts).toBe(1000);
-  });
-
-  it("buildAlignStop", () => {
-    const msg = JSON.parse(buildAlignStop("go2"));
-    expect(msg.type).toBe("align_stop");
+  it("buildRegistrationAction", () => {
+    const msg = JSON.parse(buildRegistrationAction("go2"));
+    expect(msg.type).toBe("registration_action");
+    expect(msg.action).toBe("authorize_motion");
     expect(msg.robot_id).toBe("go2");
     expect(msg.ts).toBe(1000);
   });
 
-  it("buildAlignCommit", () => {
-    const msg = JSON.parse(buildAlignCommit("go2"));
-    expect(msg.type).toBe("align_commit");
+  it("buildRegistrationStop", () => {
+    const msg = JSON.parse(buildRegistrationStop("go2"));
+    expect(msg.type).toBe("registration_stop");
     expect(msg.robot_id).toBe("go2");
     expect(msg.ts).toBe(1000);
   });
 
-  it("buildAlignManualPose", () => {
+  it("buildRegistrationCommit", () => {
+    const msg = JSON.parse(buildRegistrationCommit("go2"));
+    expect(msg.type).toBe("registration_commit");
+    expect(msg.robot_id).toBe("go2");
+    expect(msg.ts).toBe(1000);
+  });
+
+  it("buildRegistrationPose", () => {
     const msg = JSON.parse(
-      buildAlignManualPose(new vec3(100, 0, 200), new quat(1, 0, 0, 0), "go2"),
+      buildRegistrationPose(new vec3(100, 0, 200), new quat(1, 0, 0, 0), "go2"),
     );
-    expect(msg.type).toBe("align_manual_pose");
+    expect(msg.type).toBe("registration_pose");
     expect(msg.robot_id).toBe("go2");
     expect(msg.position).toEqual([1, 0, 2]);
     expect(msg.orientation).toEqual([0, 0, 0, 1]);

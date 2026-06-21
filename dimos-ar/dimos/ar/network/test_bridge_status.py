@@ -9,13 +9,13 @@ from dimos.ar.network.protocol import encode_bridge_status
 def test_tracker_snapshot() -> None:
     tracker = BridgeStatusTracker(robot_id="unitree_go2", robot_connected=True)
     tracker.set_streams_active(True)
-    tracker.set_registered(True, method="manual", approximate=True)
+    tracker.set_registered(True, method="manual_pose", approximate=True)
     snap = tracker.snapshot()
     assert snap.robot_id == "unitree_go2"
     assert snap.robot_connected is True
     assert snap.streams_active is True
     assert snap.registered is True
-    assert snap.registration_method == "manual"
+    assert snap.registration_method == "manual_pose"
     assert snap.registration_approximate is True
 
 
@@ -42,14 +42,14 @@ def test_tracker_notify_on_change() -> None:
     assert len(calls) == 2
 
 
-def test_tag_registration_method_uses_wire_value() -> None:
-    """Committed tag alignment must produce registration_method='tag', not 'marker'."""
+def test_april_odom_registration_method_uses_wire_value() -> None:
+    """Committed AprilTag baseline must produce registration_method='april_odom_baseline'."""
     tracker = BridgeStatusTracker(robot_id="unitree_go2", robot_connected=True)
-    tracker.set_registered(True, method="tag", approximate=False)
+    tracker.set_registered(True, method="april_odom_baseline", approximate=False)
     snap = tracker.snapshot()
-    assert snap.registration_method == "tag"
+    assert snap.registration_method == "april_odom_baseline"
     raw = json.loads(encode_bridge_status(snap))
-    assert raw["registration_method"] == "tag"
+    assert raw["registration_method"] == "april_odom_baseline"
 
 
 def test_tracker_connection_and_recovery_flags() -> None:

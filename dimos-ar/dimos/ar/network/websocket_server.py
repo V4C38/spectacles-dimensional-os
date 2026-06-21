@@ -20,11 +20,6 @@ import websockets
 import websockets.asyncio.server as ws_server
 
 from dimos.ar.network.protocol import (
-    AlignCommitMessage,
-    AlignManualPoseMessage,
-    AlignStartMessage,
-    AlignStopMessage,
-    AssistConfirmMessage,
     CameraInfoMessage,
     CancelGoalMessage,
     EmergencyStopMessage,
@@ -33,6 +28,11 @@ from dimos.ar.network.protocol import (
     NavGoalMessage,
     PingMessage,
     PlanPathMessage,
+    RegistrationActionMessage,
+    RegistrationCommitMessage,
+    RegistrationPoseMessage,
+    RegistrationStartMessage,
+    RegistrationStopMessage,
     SetLidarModeMessage,
     decode_inbound,
     encode_hello,
@@ -45,15 +45,15 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
-AlignStartHandler = Callable[[AlignStartMessage, "ws_server.ServerConnection"], None]
-AlignStopHandler = Callable[[AlignStopMessage, "ws_server.ServerConnection"], None]
-AlignCommitHandler = Callable[[AlignCommitMessage, "ws_server.ServerConnection"], None]
-AssistConfirmHandler = Callable[[AssistConfirmMessage, "ws_server.ServerConnection"], None]
+RegistrationStartHandler = Callable[[RegistrationStartMessage, "ws_server.ServerConnection"], None]
+RegistrationStopHandler = Callable[[RegistrationStopMessage, "ws_server.ServerConnection"], None]
+RegistrationCommitHandler = Callable[[RegistrationCommitMessage, "ws_server.ServerConnection"], None]
+RegistrationActionHandler = Callable[[RegistrationActionMessage, "ws_server.ServerConnection"], None]
 CameraInfoHandler = Callable[[CameraInfoMessage, "ws_server.ServerConnection"], None]
 CameraFrameHandler = Callable[
     [dict[str, Any], bytes, "ws_server.ServerConnection"], Awaitable[None]
 ]
-AlignManualPoseHandler = Callable[[AlignManualPoseMessage, "ws_server.ServerConnection"], None]
+RegistrationPoseHandler = Callable[[RegistrationPoseMessage, "ws_server.ServerConnection"], None]
 NavGoalHandler = Callable[[NavGoalMessage], None]
 PlanPathHandler = Callable[[PlanPathMessage], None]
 CancelGoalHandler = Callable[[CancelGoalMessage], None]
@@ -68,7 +68,7 @@ HelloSupplier = Callable[[], Any]
 InboundHandler = Callable[[InboundMessage, "ws_server.ServerConnection"], None]
 
 INBOUND_TEXT_LOG_INTERVAL_S = 1.0
-_THROTTLED_INBOUND_TYPES = frozenset({"align_manual_pose", "get_status", "plan_path"})
+_THROTTLED_INBOUND_TYPES = frozenset({"registration_pose", "get_status", "plan_path"})
 PING_INTERVAL_S = 30
 PING_TIMEOUT_S = 30
 
@@ -92,13 +92,13 @@ class ARWebSocketServer:
         hello_supplier: HelloSupplier,
         max_message_bytes: int,
         loop: asyncio.AbstractEventLoop,
-        on_align_start: AlignStartHandler | None = None,
-        on_align_stop: AlignStopHandler | None = None,
-        on_align_commit: AlignCommitHandler | None = None,
-        on_assist_confirm: AssistConfirmHandler | None = None,
+        on_registration_start: RegistrationStartHandler | None = None,
+        on_registration_stop: RegistrationStopHandler | None = None,
+        on_registration_commit: RegistrationCommitHandler | None = None,
+        on_registration_action: RegistrationActionHandler | None = None,
         on_camera_info: CameraInfoHandler | None = None,
         on_camera_frame: CameraFrameHandler | None = None,
-        on_align_manual_pose: AlignManualPoseHandler | None = None,
+        on_registration_pose: RegistrationPoseHandler | None = None,
         on_nav_goal: NavGoalHandler | None = None,
         on_plan_path: PlanPathHandler | None = None,
         on_cancel_goal: CancelGoalHandler | None = None,
@@ -118,12 +118,12 @@ class ARWebSocketServer:
         self._on_status_connect = on_status_connect
         self._on_disconnect = on_disconnect
         self._inbound_handlers = self._build_inbound_handlers(
-            on_align_start=on_align_start,
-            on_align_stop=on_align_stop,
-            on_align_commit=on_align_commit,
-            on_assist_confirm=on_assist_confirm,
+            on_registration_start=on_registration_start,
+            on_registration_stop=on_registration_stop,
+            on_registration_commit=on_registration_commit,
+            on_registration_action=on_registration_action,
             on_camera_info=on_camera_info,
-            on_align_manual_pose=on_align_manual_pose,
+            on_registration_pose=on_registration_pose,
             on_nav_goal=on_nav_goal,
             on_plan_path=on_plan_path,
             on_cancel_goal=on_cancel_goal,
@@ -143,12 +143,12 @@ class ARWebSocketServer:
     def _build_inbound_handlers(
         self,
         *,
-        on_align_start: AlignStartHandler | None,
-        on_align_stop: AlignStopHandler | None,
-        on_align_commit: AlignCommitHandler | None,
-        on_assist_confirm: AssistConfirmHandler | None,
+        on_registration_start: RegistrationStartHandler | None,
+        on_registration_stop: RegistrationStopHandler | None,
+        on_registration_commit: RegistrationCommitHandler | None,
+        on_registration_action: RegistrationActionHandler | None,
         on_camera_info: CameraInfoHandler | None,
-        on_align_manual_pose: AlignManualPoseHandler | None,
+        on_registration_pose: RegistrationPoseHandler | None,
         on_nav_goal: NavGoalHandler | None,
         on_plan_path: PlanPathHandler | None,
         on_cancel_goal: CancelGoalHandler | None,
@@ -159,18 +159,18 @@ class ARWebSocketServer:
     ) -> dict[type[InboundMessage], InboundHandler]:
         handlers: dict[type[InboundMessage], InboundHandler] = {}
 
-        if on_align_start is not None:
-            handlers[AlignStartMessage] = cast("InboundHandler", on_align_start)
-        if on_align_stop is not None:
-            handlers[AlignStopMessage] = cast("InboundHandler", on_align_stop)
-        if on_align_commit is not None:
-            handlers[AlignCommitMessage] = cast("InboundHandler", on_align_commit)
-        if on_assist_confirm is not None:
-            handlers[AssistConfirmMessage] = cast("InboundHandler", on_assist_confirm)
+        if on_registration_start is not None:
+            handlers[RegistrationStartMessage] = cast("InboundHandler", on_registration_start)
+        if on_registration_stop is not None:
+            handlers[RegistrationStopMessage] = cast("InboundHandler", on_registration_stop)
+        if on_registration_commit is not None:
+            handlers[RegistrationCommitMessage] = cast("InboundHandler", on_registration_commit)
+        if on_registration_action is not None:
+            handlers[RegistrationActionMessage] = cast("InboundHandler", on_registration_action)
         if on_camera_info is not None:
             handlers[CameraInfoMessage] = cast("InboundHandler", on_camera_info)
-        if on_align_manual_pose is not None:
-            handlers[AlignManualPoseMessage] = cast("InboundHandler", on_align_manual_pose)
+        if on_registration_pose is not None:
+            handlers[RegistrationPoseMessage] = cast("InboundHandler", on_registration_pose)
         if on_get_status is not None:
             handlers[GetStatusMessage] = cast("InboundHandler", on_get_status)
         if on_set_lidar_mode is not None:

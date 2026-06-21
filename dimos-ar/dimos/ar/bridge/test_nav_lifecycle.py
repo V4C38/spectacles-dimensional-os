@@ -29,7 +29,7 @@ def _make_sender() -> tuple[BridgeSender, MagicMock]:
 def _make_nav(*, registered: bool = True) -> tuple[NavController, MagicMock]:
     calibration = Calibration()
     if registered:
-        calibration.register_from_alignment(np.eye(4, dtype=np.float64))
+        calibration.register_world_odom(np.eye(4, dtype=np.float64))
     adapter = MagicMock()
     adapter.send_nav_goal.return_value = True
     sender, mock_server = _make_sender()
@@ -329,7 +329,7 @@ async def test_publish_pose_skips_non_finite_transform() -> None:
     calibration = Calibration()
     bad_matrix = pose_to_matrix((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     bad_matrix[0, 0] = float("nan")
-    calibration.register_from_alignment(bad_matrix)
+    calibration.register_world_odom(bad_matrix)
 
     odom = OdomBuffer()
     sender, mock_server = _make_sender()

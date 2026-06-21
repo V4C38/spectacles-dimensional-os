@@ -23,13 +23,13 @@ COALESCE_MESSAGE_TYPES = frozenset(
         "path_preview",
         "nav_status",
         "bridge_status",
-        "align_status",
+        "registration_status",
         "camera_frame_ack",
     }
 )
 _MESSAGE_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
-_ALIGN_STATUS_STATE_RE = re.compile(r'"state"\s*:\s*"([^"]+)"')
-_ALIGN_STATUS_TERMINAL_STATES = frozenset({"aligned", "failed"})
+_REGISTRATION_STATUS_PHASE_RE = re.compile(r'"phase"\s*:\s*"([^"]+)"')
+_REGISTRATION_STATUS_TERMINAL_PHASES = frozenset({"succeeded", "failed"})
 
 _TRACE = os.getenv("DIMOS_AR_TRACE", "") not in ("", "0", "false")
 
@@ -76,17 +76,17 @@ class ClientSendQueue:
             return
         msg_type = peek_message_type(text)
         if msg_type in COALESCE_MESSAGE_TYPES:
-            if msg_type == "align_status":
-                pending = self._coalesce_latest.get("align_status")
+            if msg_type == "registration_status":
+                pending = self._coalesce_latest.get("registration_status")
                 if pending is not None:
-                    pending_state_match = _ALIGN_STATUS_STATE_RE.search(pending)
+                    pending_phase_match = _REGISTRATION_STATUS_PHASE_RE.search(pending)
                     if (
-                        pending_state_match
-                        and pending_state_match.group(1) in _ALIGN_STATUS_TERMINAL_STATES
+                        pending_phase_match
+                        and pending_phase_match.group(1) in _REGISTRATION_STATUS_TERMINAL_PHASES
                     ):
-                        new_state_match = _ALIGN_STATUS_STATE_RE.search(text)
-                        new_state = new_state_match.group(1) if new_state_match else ""
-                        if new_state not in _ALIGN_STATUS_TERMINAL_STATES:
+                        new_phase_match = _REGISTRATION_STATUS_PHASE_RE.search(text)
+                        new_phase = new_phase_match.group(1) if new_phase_match else ""
+                        if new_phase not in _REGISTRATION_STATUS_TERMINAL_PHASES:
                             self._work_available.set()
                             return
             self._coalesce_latest[msg_type] = text
@@ -145,8 +145,8 @@ class ClientSendQueue:
             await self._websocket.send(text + "\n")
             self._sent_count += 1
             msg_type = peek_message_type(text)
-            if _TRACE and msg_type == "align_status":
-                logger.debug("XR WebSocket outbound align_status sent", bytes=len(text))
+            if _TRACE and msg_type == "registration_status":
+                logger.debug("XR WebSocket outbound registration_status sent", bytes=len(text))
             now = time.monotonic()
             if now - self._last_backlog_log_mono >= OUTBOUND_BACKLOG_LOG_INTERVAL_S:
                 fifo_depth = self._queue.qsize()

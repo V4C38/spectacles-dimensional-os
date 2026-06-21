@@ -1,73 +1,53 @@
-import { AlignStatusMessage } from "../Bridge/Protocol";
-import { AlignmentSession } from "../Alignment/AlignmentSession";
+import {
+  RegistrationMotion,
+  RegistrationPhase,
+  RegistrationStatusMessage,
+} from "../Bridge/Protocol";
+import { RegistrationClient } from "../Registration/RegistrationClient";
 import { DimosState } from "../Core/DimosState";
 import { OperatingMode } from "../Core/AppState";
 import { RobotRuntime } from "../Robot/RobotRuntime";
 import { robotFloorWorldYCm } from "../Robot/RobotRuntimeModel";
 import { COLOR_ERROR, COLOR_SUCCESS, findChildRecursive } from "../UI/kit/UIKit";
 
-// ── Assist preview presentation ────────────────────────────────
-
-export interface AssistPreviewPresentation {
-  progress: number;
+export interface RegistrationPreviewPresentation {
   titleText: string;
   statusText: string;
   statusColor: vec4;
 }
 
-export interface AssistPreviewInput {
-  assistStage?: string;
-  progress: number;
+export function isRegistrationPreviewPhase(phase: RegistrationPhase): boolean {
+  return (
+    phase === "awaiting_motion" ||
+    phase === "moving" ||
+    phase === "sampling" ||
+    phase === "scanning"
+  );
+}
+
+export function isRegistrationMotionPhase(phase: RegistrationPhase): boolean {
+  return phase === "moving" || phase === "sampling";
+}
+
+export function buildRegistrationPreviewPresentation(args: {
+  phase: RegistrationPhase;
   tagVisible: boolean;
-}
-
-const AWAITING_CONFIRM_PROGRESS = 20;
-const MOVE_LEG_ONE_PROGRESS = 17;
-const MOVE_LEG_TWO_PROGRESS = 50;
-const MOVE_LEG_THREE_PROGRESS = 83;
-
-export function isAssistPreviewStage(assistStage?: string): boolean {
-  return assistStage === "awaiting_confirm" || assistStage === "move";
-}
-
-export function isAssistMoveStage(assistStage?: string): boolean {
-  return assistStage === "move";
-}
-
-export function buildAssistPreviewPresentation(
-  input: AssistPreviewInput,
-): AssistPreviewPresentation {
-  const progress = computeAssistPreviewProgress(input);
+  motion?: RegistrationMotion;
+}): RegistrationPreviewPresentation {
+  const titleText = args.motion
+    ? `Step ${args.motion.waypoint_index}/${args.motion.waypoint_total}`
+    : "Registration";
   return {
-    progress,
-    titleText: `Progress: ${progress}%`,
-    statusText: input.tagVisible ? "✅ Tag visible" : "❌ Tag not visible - Look at the tag",
-    statusColor: input.tagVisible ? COLOR_SUCCESS : COLOR_ERROR,
+    titleText,
+    statusText: args.tagVisible
+      ? "✅ Tag visible"
+      : "❌ Tag not visible - Look at the tag",
+    statusColor: args.tagVisible ? COLOR_SUCCESS : COLOR_ERROR,
   };
 }
 
-export function computeAssistPreviewProgress(input: AssistPreviewInput): number {
-  const clamped = Math.max(0, Math.min(100, Math.round(input.progress)));
-  if (input.assistStage === "awaiting_confirm") {
-    return Math.max(clamped, AWAITING_CONFIRM_PROGRESS);
-  }
-  if (input.assistStage === "move") {
-    if (clamped >= 100) {
-      return 100;
-    }
-    if (clamped >= 66) {
-      return Math.max(clamped, MOVE_LEG_THREE_PROGRESS);
-    }
-    if (clamped >= 33) {
-      return Math.max(clamped, MOVE_LEG_TWO_PROGRESS);
-    }
-    return Math.max(clamped, MOVE_LEG_ONE_PROGRESS);
-  }
-  return clamped;
-}
-
-/** Setup calibration assist preview (marker, ground disc, robot menu). */
-export class SetupAlignmentPreview {
+/** Setup registration assist preview (marker, ground disc, robot menu). */
+export class SetupRegistrationPreview {
   private _active = false;
 
   constructor(
@@ -75,14 +55,13 @@ export class SetupAlignmentPreview {
     private readonly discPrefab: ObjectPrefab | null,
     private readonly spawnParent: SceneObject,
     private readonly robotRuntime: RobotRuntime,
-    private readonly alignmentSession: AlignmentSession,
+    private readonly registrationClient: RegistrationClient,
   ) {}
   private _tagVisible = false;
   private _discInstance: SceneObject | null = null;
   private _discAnchorInitialized = false;
   private _discLeftArrow: SceneObject | null = null;
   private _discRightArrow: SceneObject | null = null;
-  private _moveLeg = -1;
   private _priorRuntimeMode: OperatingMode = "manual";
 
   public begin(): void {
@@ -94,62 +73,61 @@ export class SetupAlignmentPreview {
     this._active = true;
     this._tagVisible = false;
     const ui = this.robotRuntime?.robotMarker?.ui;
-    ui?.setOnContinue(() => this.alignmentSession?.confirmAssist());
+    ui?.setRegistrationPreviewActive(true);
+    ui?.setOnContinue(() => this.registrationClient?.authorizeMotion());
     this._resetVisualState();
     this.robotRuntime?.robotMarker?.setVisible(false);
     ui?.setMenuVisible(false);
   }
 
-  public updateFromAlignStatus(msg: AlignStatusMessage): void {
+  public updateFromRegistrationStatus(msg: RegistrationStatusMessage): void {
     if (!this._active) {
       return;
     }
     this._tagVisible = msg.tag_visible ?? this._tagVisible;
-    const assistStage = msg.assist_stage;
-    const progress = msg.progress ?? 0;
-    const worldPose = msg.robot_world_pose ?? null;
-    const previewStageActive = isAssistPreviewStage(assistStage);
-    const showMarker = previewStageActive && !!worldPose;
+    const previewPose = msg.preview_pose ?? null;
+    const previewStageActive = isRegistrationPreviewPhase(msg.phase);
+    const showMarker = previewStageActive && !!previewPose;
     const ui = this.robotRuntime?.robotMarker?.ui;
     const wasMenuVisible = ui?.isMenuVisible() ?? false;
     const marker = this.robotRuntime?.robotMarker;
 
-    if (showMarker && worldPose) {
+    if (showMarker && previewPose) {
       const pos = new vec3(
-        worldPose.position[0] * 100,
-        worldPose.position[1] * 100,
-        worldPose.position[2] * 100,
+        previewPose.position[0] * 100,
+        previewPose.position[1] * 100,
+        previewPose.position[2] * 100,
       );
       const rot = new quat(
-        worldPose.orientation[3],
-        worldPose.orientation[0],
-        worldPose.orientation[1],
-        worldPose.orientation[2],
+        previewPose.orientation[3],
+        previewPose.orientation[0],
+        previewPose.orientation[1],
+        previewPose.orientation[2],
       );
       marker?.setVisible(true);
       marker?.applyRuntimeLensPose(pos, rot);
-      this._updateDiscPreview(pos, assistStage, progress);
+      this._updateDiscPreview(pos, msg.phase, msg.motion ?? null);
       if (!wasMenuVisible) {
         ui?.setMenuVisible(true);
       }
     } else {
       marker?.setVisible(false);
-      this._updateDiscPreview(null, assistStage, progress);
+      this._updateDiscPreview(null, msg.phase, msg.motion ?? null);
     }
 
-    const inMove = isAssistMoveStage(assistStage);
+    const inMove = isRegistrationMotionPhase(msg.phase);
     if (previewStageActive) {
-      const presentation = buildAssistPreviewPresentation({
-        assistStage,
-        progress,
+      const presentation = buildRegistrationPreviewPresentation({
+        phase: msg.phase,
         tagVisible: this._tagVisible,
+        motion: msg.motion,
       });
       ui?.applyAssistOverlay({
         titleText: presentation.titleText,
         statusText: presentation.statusText,
         statusColor: presentation.statusColor,
-        showWizardMenu: assistStage === "awaiting_confirm",
-        showContinue: assistStage === "awaiting_confirm",
+        showWizardMenu: msg.phase === "awaiting_motion",
+        showContinue: msg.phase === "awaiting_motion",
         showStop: inMove,
       });
     }
@@ -162,8 +140,8 @@ export class SetupAlignmentPreview {
     const GREEN = new vec4(0.2, 0.8, 0.2, 1);
     this._setDiscArrowVisibility(null);
     this.robotRuntime?.robotMarker?.ui?.applyAssistOverlay({
-      titleText: "Alignment complete",
-      statusText: "Alignment complete",
+      titleText: "Registration complete",
+      statusText: "Registration complete",
       statusColor: GREEN,
       showWizardMenu: false,
       showContinue: false,
@@ -179,6 +157,7 @@ export class SetupAlignmentPreview {
     this._resetVisualState();
     this.robotRuntime?.robotMarker?.setVisible(false);
     const ui = this.robotRuntime?.robotMarker?.ui;
+    ui?.setRegistrationPreviewActive(false);
     ui?.setOnContinue(null);
     ui?.applyAssistOverlay({
       titleText: "",
@@ -207,10 +186,10 @@ export class SetupAlignmentPreview {
 
   private _updateDiscPreview(
     worldPosition: vec3 | null,
-    assistStage: string | undefined,
-    progress: number,
+    phase: RegistrationPhase,
+    motion: RegistrationMotion | null,
   ): void {
-    if (!isAssistPreviewStage(assistStage)) {
+    if (!isRegistrationPreviewPhase(phase)) {
       this._resetVisualState();
       return;
     }
@@ -237,17 +216,12 @@ export class SetupAlignmentPreview {
       return;
     }
 
-    if (!isAssistMoveStage(assistStage)) {
-      this._moveLeg = -1;
+    if (!isRegistrationMotionPhase(phase) || !motion) {
       this._setDiscArrowVisibility(null);
       return;
     }
 
-    const moveLeg = progress >= 66 ? 2 : progress >= 33 ? 1 : 0;
-    if (moveLeg !== this._moveLeg) {
-      this._moveLeg = moveLeg;
-    }
-    this._setDiscArrowVisibility(moveLeg);
+    this._setDiscArrowVisibility(motion.direction);
   }
 
   private _ensureDisc(): SceneObject | null {
@@ -282,18 +256,17 @@ export class SetupAlignmentPreview {
     this._setDiscArrowVisibility(null);
   }
 
-  private _setDiscArrowVisibility(moveLeg: number | null): void {
+  private _setDiscArrowVisibility(direction: "left" | "right" | null): void {
     if (this._discLeftArrow) {
-      this._discLeftArrow.enabled = moveLeg === 0 || moveLeg === 2;
+      this._discLeftArrow.enabled = direction === "left";
     }
     if (this._discRightArrow) {
-      this._discRightArrow.enabled = moveLeg === 1;
+      this._discRightArrow.enabled = direction === "right";
     }
   }
 
   private _resetVisualState(): void {
     this._discAnchorInitialized = false;
-    this._moveLeg = -1;
     this._destroyDisc();
     this._setDiscArrowVisibility(null);
   }

@@ -18,6 +18,7 @@ const CAPTURE_TS_LOG_INTERVAL_S = 2.0;
 const CLOCK_SYNC_RACE_LOG_INTERVAL_S = 2.0;
 
 type CaptureMode = "off" | "setup" | "runtime";
+export type CapturePolicy = "off" | "steady" | "burst" | "hold";
 
 interface PoseSample {
   t: number;
@@ -54,8 +55,7 @@ export class FrameCaptureController extends BaseScriptComponent {
   private _lastPipelineLogTime = 0;
   private _lastCaptureTsLogTime = 0;
   private _lastClockSyncRaceLogTime = 0;
-  private _samplingBurst = false;
-  private _capturePaused = false;
+  private _capturePolicy: CapturePolicy = "off";
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
@@ -84,29 +84,18 @@ export class FrameCaptureController extends BaseScriptComponent {
       this._inFlight = false;
       this._inFlightSeq = -1;
     }
-    this._samplingBurst = false;
-    this._capturePaused = false;
+    this._capturePolicy = mode === "setup" ? "steady" : "off";
     // Reset pacing so the first capture in the new mode fires promptly
     // (within one interval), not after a potentially stale gap from the old mode.
     this._lastPipelineEndTime = 0;
   }
 
-  public setSamplingBurst(active: boolean): void {
-    if (this._samplingBurst === active) {
+  public setCapturePolicy(policy: CapturePolicy): void {
+    if (this._capturePolicy === policy) {
       return;
     }
-    this._samplingBurst = active;
+    this._capturePolicy = policy;
     this._lastPipelineEndTime = 0;
-  }
-
-  public setCapturePaused(paused: boolean): void {
-    if (this._capturePaused === paused) {
-      return;
-    }
-    this._capturePaused = paused;
-    if (!paused) {
-      this._lastPipelineEndTime = 0;
-    }
   }
 
   private _bindBridge(): void {
@@ -121,9 +110,7 @@ export class FrameCaptureController extends BaseScriptComponent {
   private _onHello = (_msg: HelloMessage): void => {
     this._inFlight = false;
     this._inFlightSeq = -1;
-    this._samplingBurst = false;
-    this._capturePaused = false;
-    // Reset so camera_info is re-sent on the next capture with the live texture dimensions.
+    this._capturePolicy = this._mode === "setup" ? "steady" : "off";
     this._sentCameraInfo = false;
   };
 
@@ -173,7 +160,7 @@ export class FrameCaptureController extends BaseScriptComponent {
     if (!this.bridgeClient.isClockSyncReady) {
       return;
     }
-    if (this._capturePaused) {
+    if (this._mode === "setup" && (this._capturePolicy === "off" || this._capturePolicy === "hold")) {
       return;
     }
     const now = getTime();
@@ -195,7 +182,7 @@ export class FrameCaptureController extends BaseScriptComponent {
     }
     const interval =
       this._mode === "setup"
-        ? (this._samplingBurst
+        ? (this._capturePolicy === "burst"
           ? SAMPLING_BURST_INTERVAL_S
           : SETUP_CAPTURE_INTERVAL_S)
         : RUNTIME_CAPTURE_INTERVAL_S;

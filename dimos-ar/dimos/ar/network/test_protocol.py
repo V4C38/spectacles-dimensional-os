@@ -10,9 +10,9 @@ from dimos.ar.adapters.g1 import g1_handshake
 from dimos.ar.network.bridge_status import BridgeStatusSnapshot
 from dimos.ar.network.protocol import (
     DEFAULT_CAPABILITIES,
-    AlignManualPoseMessage,
-    AlignStartMessage,
-    AlignStopMessage,
+    RegistrationPoseMessage,
+    RegistrationStartMessage,
+    RegistrationStopMessage,
     CameraInfoMessage,
     CancelGoalMessage,
     EmergencyStopMessage,
@@ -21,7 +21,7 @@ from dimos.ar.network.protocol import (
     PlanPathMessage,
     SetLidarModeMessage,
     decode_inbound,
-    encode_align_status,
+    encode_registration_status,
     encode_bridge_status,
     encode_camera_frame_ack,
     encode_hello,
@@ -31,6 +31,7 @@ from dimos.ar.network.protocol import (
     encode_path_preview,
     encode_pong,
     encode_pose,
+    PROTOCOL_VERSION,
 )
 
 
@@ -58,7 +59,7 @@ def _sample_handshake() -> RobotHandshake:
 def test_encode_hello() -> None:
     msg = json.loads(encode_hello(_sample_handshake()))
     assert msg["type"] == "hello"
-    assert msg["protocol_version"] == 4
+    assert msg["protocol_version"] == PROTOCOL_VERSION
     assert msg["robot"]["robot_id"] == "unitree_go2"
     assert isinstance(msg["capabilities"], dict)
     assert msg["capabilities"]["lidar"]["available"] is True
@@ -67,7 +68,7 @@ def test_encode_hello() -> None:
     assert "capability_states" not in msg
 
 
-def test_encode_hello_g1_tag_alignment_profile() -> None:
+def test_encode_hello_g1_registration_profile() -> None:
     handshake = g1_handshake(
         "unitree_g1",
         nav_available=True,
@@ -75,17 +76,18 @@ def test_encode_hello_g1_tag_alignment_profile() -> None:
         plan_preview_available=True,
         cancel_goal_available=False,
         emergency_stop_available=True,
-        marker_align_available=True,
+        tag_mount_available=True,
+        baseline_motion_available=True,
     )
     msg = json.loads(encode_hello(handshake))
     assert msg["robot"]["robot_model"] == "unitree_g1"
-    assert msg["capabilities"]["align"]["available"] is True
-    assert msg["capabilities"]["align_manual"]["available"] is True
-    assert msg["robot"]["alignment_profile"]["method"] == "tag"
-    assert msg["robot"]["alignment_profile"]["tag_total_size_m"] == 0.07
+    assert msg["capabilities"]["registration_april_odom_baseline"]["available"] is True
+    assert msg["capabilities"]["registration_manual_pose"]["available"] is True
+    assert msg["robot"]["registration_profile"]["method"] == "april_odom_baseline"
+    assert msg["robot"]["registration_profile"]["tag_total_size_m"] == 0.07
 
 
-def test_encode_hello_g1_tag_alignment_disabled() -> None:
+def test_encode_hello_g1_tag_registration_disabled() -> None:
     handshake = g1_handshake(
         "unitree_g1",
         nav_available=True,
@@ -93,10 +95,10 @@ def test_encode_hello_g1_tag_alignment_disabled() -> None:
         plan_preview_available=True,
         cancel_goal_available=False,
         emergency_stop_available=True,
-        marker_align_available=False,
+        tag_mount_available=False,
     )
     msg = json.loads(encode_hello(handshake))
-    assert msg["capabilities"]["align"]["available"] is False
+    assert msg["capabilities"]["registration_manual_pose"]["available"] is False
 
 
 def test_robot_id_mismatch_rejected() -> None:
@@ -215,23 +217,35 @@ def test_encode_lidar_compact_json() -> None:
     assert msg["robot_id"] == "unitree_go2"
 
 
-def test_align_messages_decode() -> None:
+def test_registration_messages_decode() -> None:
     start = decode_inbound(
         json.dumps(
-            {"type": "align_start", "ts": 1.0, "robot_id": "unitree_go2", "method": "tag"}
+            {
+                "type": "registration_start",
+                "ts": 1.0,
+                "robot_id": "unitree_go2",
+                "mode": "april_odom_baseline",
+            }
         )
     )
-    assert isinstance(start, AlignStartMessage)
-    assert start.method == "tag"
+    assert isinstance(start, RegistrationStartMessage)
+    assert start.mode == "april_odom_baseline"
     start_manual = decode_inbound(
         json.dumps(
-            {"type": "align_start", "ts": 1.0, "robot_id": "unitree_go2", "method": "manual"}
+            {
+                "type": "registration_start",
+                "ts": 1.0,
+                "robot_id": "unitree_go2",
+                "mode": "manual_pose",
+            }
         )
     )
-    assert isinstance(start_manual, AlignStartMessage)
-    assert start_manual.method == "manual"
-    stop = decode_inbound(json.dumps({"type": "align_stop", "ts": 2.0, "robot_id": "unitree_go2"}))
-    assert isinstance(stop, AlignStopMessage)
+    assert isinstance(start_manual, RegistrationStartMessage)
+    assert start_manual.mode == "manual_pose"
+    stop = decode_inbound(
+        json.dumps({"type": "registration_stop", "ts": 2.0, "robot_id": "unitree_go2"})
+    )
+    assert isinstance(stop, RegistrationStopMessage)
     camera_info = decode_inbound(
         json.dumps(
             {
@@ -255,7 +269,7 @@ def test_align_messages_decode() -> None:
     manual_pose = decode_inbound(
         json.dumps(
             {
-                "type": "align_manual_pose",
+                "type": "registration_pose",
                 "ts": 4.0,
                 "robot_id": "unitree_go2",
                 "position": [1.0, 0.0, 2.0],
@@ -263,117 +277,84 @@ def test_align_messages_decode() -> None:
             }
         )
     )
-    assert isinstance(manual_pose, AlignManualPoseMessage)
+    assert isinstance(manual_pose, RegistrationPoseMessage)
     assert manual_pose.position == (1.0, 0.0, 2.0)
 
 
-def test_align_start_missing_method_rejected() -> None:
+def test_registration_start_missing_mode_rejected() -> None:
     with pytest.raises(ValueError, match="Missing required field"):
         decode_inbound(
-            json.dumps({"type": "align_start", "ts": 1.0, "robot_id": "unitree_go2"})
+            json.dumps({"type": "registration_start", "ts": 1.0, "robot_id": "unitree_go2"})
         )
 
 
-def test_align_start_invalid_method_rejected() -> None:
-    with pytest.raises(ValueError, match="must be 'tag' or 'manual'"):
+def test_registration_start_invalid_mode_rejected() -> None:
+    with pytest.raises(ValueError, match="april_odom_baseline"):
         decode_inbound(
             json.dumps(
-                {"type": "align_start", "ts": 1.0, "robot_id": "unitree_go2", "method": "bad"}
+                {
+                    "type": "registration_start",
+                    "ts": 1.0,
+                    "robot_id": "unitree_go2",
+                    "mode": "bad",
+                }
             )
         )
 
 
-def test_encode_align_status() -> None:
+def test_encode_registration_status() -> None:
     raw = json.loads(
-        encode_align_status(
+        encode_registration_status(
             robot_id="unitree_go2",
-            method="tag",
-            state="detecting",
-            progress=60,
-            message="Tracking tag — hold steady (3/5)",
+            mode="april_odom_baseline",
+            phase="scanning",
+            capture="steady",
+            message="Look at the AprilTag on your robot",
             tag_visible=True,
         )
     )
-    assert raw["type"] == "align_status"
-    assert raw["method"] == "tag"
-    assert raw["state"] == "detecting"
-    assert raw["progress"] == 60
+    assert raw["type"] == "registration_status"
+    assert raw["mode"] == "april_odom_baseline"
+    assert raw["phase"] == "scanning"
+    assert raw["capture"] == "steady"
     assert raw["tag_visible"] is True
-    assert "tag_detected" not in raw
-    assert "observation_count" not in raw
-    assert "quality" not in raw
-    assert "baseline_m" not in raw
-    assert "baseline_target_m" not in raw
+    assert "progress" not in raw
 
 
-def test_encode_align_status_step_fields() -> None:
-    """Step index/count appear only when passed; assist_stage and robot_world_pose included."""
+def test_encode_registration_status_motion_fields() -> None:
     raw = json.loads(
-        encode_align_status(
+        encode_registration_status(
             robot_id="unitree_go2",
-            method="tag",
-            state="detecting",
-            progress=40,
-            message="Collecting",
-            assist_stage="collect",
-            robot_world_pose={"position": [1.0, 0.0, -2.0], "orientation": [0.0, 0.0, 0.0, 1.0]},
-            step_index=2,
-            step_count=2,
+            mode="april_odom_baseline",
+            phase="moving",
+            capture="hold",
+            message="Robot moving — waypoint 2/3",
+            motion={
+                "frame": "robot",
+                "axis": "lateral",
+                "direction": "left",
+                "distance_m": 0.2,
+                "waypoint_index": 2,
+                "waypoint_total": 3,
+            },
         )
     )
-    assert raw["assist_stage"] == "collect"
-    assert raw["step_index"] == 2
-    assert raw["step_count"] == 2
-    assert raw["robot_world_pose"]["position"] == [1.0, 0.0, -2.0]
-    assert "baseline_m" not in raw
-    assert "baseline_target_m" not in raw
+    assert raw["motion"]["waypoint_index"] == 2
+    assert raw["motion"]["direction"] == "left"
 
 
-def test_encode_align_status_no_step_fields_when_not_assist() -> None:
-    """Without step_index/step_count, fields must be absent."""
+def test_encode_registration_status_manual() -> None:
     raw = json.loads(
-        encode_align_status(
+        encode_registration_status(
             robot_id="unitree_go2",
-            method="tag",
-            state="detecting",
-            progress=0,
+            mode="manual_pose",
+            phase="awaiting_commit",
+            capture="off",
+            message="Manual robot pose ready — review and commit",
         )
     )
-    assert "step_index" not in raw
-    assert "step_count" not in raw
-    assert "assist_stage" not in raw
-    assert "sampling" not in raw
-    assert "robot_world_pose" not in raw
-
-
-def test_encode_align_status_sampling_field() -> None:
-    raw = json.loads(
-        encode_align_status(
-            robot_id="unitree_go2",
-            method="tag",
-            state="detecting",
-            progress=33,
-            assist_stage="move",
-            sampling=True,
-        )
-    )
-    assert raw["assist_stage"] == "move"
-    assert raw["sampling"] is True
-
-
-def test_encode_align_status_manual() -> None:
-    raw = json.loads(
-        encode_align_status(
-            robot_id="unitree_go2",
-            method="manual",
-            state="ready",
-            progress=100,
-            message="Candidate ready",
-        )
-    )
-    assert raw["method"] == "manual"
-    assert raw["state"] == "ready"
-    assert raw["progress"] == 100
+    assert raw["mode"] == "manual_pose"
+    assert raw["phase"] == "awaiting_commit"
     assert "tag_visible" not in raw
 
 
@@ -417,11 +398,11 @@ def test_encode_bridge_status_with_method() -> None:
         streams_active=True,
         registered=True,
         reconnecting=False,
-        registration_method="tag",
+        registration_method="april_odom_baseline",
         registration_approximate=False,
     )
     raw = json.loads(encode_bridge_status(snap, ts=1.0))
-    assert raw["registration_method"] == "tag"
+    assert raw["registration_method"] == "april_odom_baseline"
     assert raw["registration_approximate"] is False
 
 

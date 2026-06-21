@@ -16,15 +16,14 @@ if TYPE_CHECKING:
     from dimos.ar.adapters.base import CapabilityState, RobotHandshake
     from dimos.ar.network.bridge_status import BridgeStatusSnapshot
 
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 FRAME_WORLD = "world"
 
 DEFAULT_CAPABILITIES = [
     "lidar",
     "odom",
-    "align",
-    "align_manual",
-    "align_assist",
+    "registration_april_odom_baseline",
+    "registration_manual_pose",
     "nav",
     "path",
     "plan_preview",
@@ -66,29 +65,37 @@ class EmergencyStopMessage:
 
 
 @dataclass(frozen=True)
-class AlignStartMessage:
+class RegistrationStartMessage:
     ts: float
     robot_id: str
-    method: str
-    assist: bool = False
+    mode: str
 
 
 @dataclass(frozen=True)
-class AssistConfirmMessage:
+class RegistrationActionMessage:
+    ts: float
+    robot_id: str
+    action: str
+
+
+@dataclass(frozen=True)
+class RegistrationStopMessage:
     ts: float
     robot_id: str
 
 
 @dataclass(frozen=True)
-class AlignStopMessage:
+class RegistrationCommitMessage:
     ts: float
     robot_id: str
 
 
 @dataclass(frozen=True)
-class AlignCommitMessage:
+class RegistrationPoseMessage:
     ts: float
     robot_id: str
+    position: tuple[float, float, float]
+    orientation: tuple[float, float, float, float]
 
 
 @dataclass(frozen=True)
@@ -104,14 +111,6 @@ class CameraInfoMessage:
     distortion: tuple[float, ...]
     camera_model: str
     device_model: str
-
-
-@dataclass(frozen=True)
-class AlignManualPoseMessage:
-    ts: float
-    robot_id: str
-    position: tuple[float, float, float]
-    orientation: tuple[float, float, float, float]
 
 
 @dataclass(frozen=True)
@@ -142,12 +141,12 @@ InboundMessage = (
     | PlanPathMessage
     | CancelGoalMessage
     | EmergencyStopMessage
-    | AlignStartMessage
-    | AssistConfirmMessage
-    | AlignStopMessage
-    | AlignCommitMessage
+    | RegistrationStartMessage
+    | RegistrationActionMessage
+    | RegistrationStopMessage
+    | RegistrationCommitMessage
     | CameraInfoMessage
-    | AlignManualPoseMessage
+    | RegistrationPoseMessage
     | GetStatusMessage
     | SetLidarModeMessage
     | PingMessage
@@ -212,17 +211,24 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         return CancelGoalMessage(ts=ts, robot_id=robot_id)
     if msg_type == "emergency_stop":
         return EmergencyStopMessage(ts=ts, robot_id=robot_id)
-    if msg_type == "align_start":
-        method = _require_type(data, "method", str)
-        if method not in ("tag", "manual"):
-            raise ValueError(f"align_start.method must be 'tag' or 'manual', got {method!r}")
-        return AlignStartMessage(ts=ts, robot_id=robot_id, method=method, assist=bool(data.get("assist", False)))
-    if msg_type == "assist_confirm":
-        return AssistConfirmMessage(ts=ts, robot_id=robot_id)
-    if msg_type == "align_stop":
-        return AlignStopMessage(ts=ts, robot_id=robot_id)
-    if msg_type == "align_commit":
-        return AlignCommitMessage(ts=ts, robot_id=robot_id)
+    if msg_type == "registration_start":
+        mode = _require_type(data, "mode", str)
+        if mode not in ("april_odom_baseline", "manual_pose"):
+            raise ValueError(
+                f"registration_start.mode must be 'april_odom_baseline' or 'manual_pose', got {mode!r}"
+            )
+        return RegistrationStartMessage(ts=ts, robot_id=robot_id, mode=mode)
+    if msg_type == "registration_action":
+        action = _require_type(data, "action", str)
+        if action != "authorize_motion":
+            raise ValueError(
+                f"registration_action.action must be 'authorize_motion', got {action!r}"
+            )
+        return RegistrationActionMessage(ts=ts, robot_id=robot_id, action=action)
+    if msg_type == "registration_stop":
+        return RegistrationStopMessage(ts=ts, robot_id=robot_id)
+    if msg_type == "registration_commit":
+        return RegistrationCommitMessage(ts=ts, robot_id=robot_id)
     if msg_type == "camera_info":
         distortion_raw = data.get("distortion", [])
         if not isinstance(distortion_raw, list):
@@ -244,8 +250,8 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
             camera_model=str(_require_type(data, "camera_model", str)),
             device_model=str(_require_type(data, "device_model", str)),
         )
-    if msg_type == "align_manual_pose":
-        return AlignManualPoseMessage(
+    if msg_type == "registration_pose":
+        return RegistrationPoseMessage(
             ts=ts,
             robot_id=robot_id,
             position=_vec3(data, "position"),
@@ -325,8 +331,8 @@ def encode_hello(handshake: RobotHandshake) -> str:
         robot["base_height_m"] = handshake.base_height_m
     if handshake.default_render_offset_m is not None:
         robot["default_render_offset_m"] = list(handshake.default_render_offset_m)
-    if handshake.alignment_profile is not None:
-        robot["alignment_profile"] = handshake.alignment_profile
+    if handshake.registration_profile is not None:
+        robot["registration_profile"] = handshake.registration_profile
     robot.update(handshake.extra)
     return _dumps(
         {
@@ -433,42 +439,34 @@ def encode_lidar_binary(
     return header + f16.tobytes()
 
 
-def encode_align_status(
+def encode_registration_status(
     *,
     ts: float | None = None,
     robot_id: str,
-    method: str,
-    state: str,
-    progress: int,
+    mode: str | None,
+    phase: str,
+    capture: str,
     message: str = "",
     tag_visible: bool | None = None,
-    assist_stage: str | None = None,
-    sampling: bool | None = None,
-    robot_world_pose: dict[str, Any] | None = None,
-    step_index: int | None = None,
-    step_count: int | None = None,
+    motion: dict[str, Any] | None = None,
+    preview_pose: dict[str, Any] | None = None,
 ) -> str:
     payload: dict[str, Any] = {
-        "type": "align_status",
+        "type": "registration_status",
         "ts": ts if ts is not None else time.time(),
         "robot_id": robot_id,
-        "method": method,
-        "state": state,
-        "progress": progress,
+        "phase": phase,
+        "capture": capture,
         "message": message,
     }
+    if mode is not None:
+        payload["mode"] = mode
     if tag_visible is not None:
         payload["tag_visible"] = tag_visible
-    if assist_stage is not None:
-        payload["assist_stage"] = assist_stage
-    if sampling is not None:
-        payload["sampling"] = sampling
-    if robot_world_pose is not None:
-        payload["robot_world_pose"] = robot_world_pose
-    if step_index is not None:
-        payload["step_index"] = step_index
-    if step_count is not None:
-        payload["step_count"] = step_count
+    if motion is not None:
+        payload["motion"] = motion
+    if preview_pose is not None:
+        payload["preview_pose"] = preview_pose
     return _dumps(payload)
 
 

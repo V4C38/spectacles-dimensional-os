@@ -1,6 +1,6 @@
 /** Inbound protocol decode: text dispatch, hello-wait, binary LiDAR pump, parse recovery. */
 import {
-  AlignStatusMessage,
+  RegistrationStatusMessage,
   BridgeStatusMessage,
   CameraFrameAckMessage,
   CapabilityState,
@@ -38,7 +38,7 @@ export class BridgeInboundProcessor {
   public readonly onLidar = new Signal<LidarMessage>();
   public readonly onPose = new Signal<PoseMessage>();
   public readonly onPoseCorrection = new Signal<PoseCorrectionMessage>();
-  public readonly onAlignStatus = new Signal<AlignStatusMessage>();
+  public readonly onRegistrationStatus = new Signal<RegistrationStatusMessage>();
   public readonly onCameraFrameAck = new Signal<CameraFrameAckMessage>();
   public readonly onBridgeStatus = new Signal<BridgeStatusMessage>();
   public readonly onPath = new Signal<PathMessage>();
@@ -190,10 +190,10 @@ export class BridgeInboundProcessor {
           this._adoptRobotId(msg.robot_id);
           this.onPoseCorrection.emit(msg);
           break;
-        case "align_status":
+        case "registration_status":
           this._adoptRobotId(msg.robot_id);
           this._logDiagnosticRx(msg);
-          this.onAlignStatus.emit(msg);
+          this.onRegistrationStatus.emit(msg);
           break;
         case "camera_frame_ack":
           this._adoptRobotId(msg.robot_id);
@@ -340,10 +340,10 @@ export class BridgeInboundProcessor {
   }
 
   private _logDiagnosticRx(
-    msg: AlignStatusMessage | CameraFrameAckMessage | BridgeStatusMessage | NavStatusMessage,
+    msg: RegistrationStatusMessage | CameraFrameAckMessage | BridgeStatusMessage | NavStatusMessage,
   ): void {
     switch (msg.type) {
-      case "align_status":
+      case "registration_status":
         break;
       case "camera_frame_ack":
         break;

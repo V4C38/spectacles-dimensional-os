@@ -14,9 +14,13 @@ def test_blueprints_importable() -> None:
     importlib.import_module("dimos.ar.blueprints")
 
 
+def test_registration_importable() -> None:
+    importlib.import_module("dimos.ar.registration.session")
+
+
 def test_tag_tracker_importable() -> None:
-    """dimos.ar.tracking.robot_tag_tracker must be importable (exercises fiducial helper imports)."""
-    importlib.import_module("dimos.ar.tracking.robot_tag_tracker")
+    """dimos.ar.registration.tracker must be importable."""
+    importlib.import_module("dimos.ar.registration.tracker")
 
 
 def test_ar_bridge_module_importable() -> None:

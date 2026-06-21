@@ -14,7 +14,7 @@ Keep this document, `dimos/ar/network/protocol.py`, and
   `camera_frame` envelope (see below).
 - Every JSON message is a JSON object with a `type` field.
 - Inbound and outbound coordinates use the XR world frame. The bridge converts
-  world-frame goals and calibration poses into robot odom coordinates.
+  world-frame goals and registration poses into robot odom coordinates.
 - Every runtime message carries a single active `robot_id`.
 - **Text framing:** every outbound JSON text frame from the bridge ends with a
   single newline (`\n`). The client accumulates incoming text and splits on
@@ -30,7 +30,7 @@ capability map:
 ```json
 {
   "type": "hello",
-  "protocol_version": 4,
+  "protocol_version": 5,
   "robot": {
     "robot_id": "unitree_go2",
     "robot_model": "unitree_go2",
@@ -39,18 +39,23 @@ capability map:
     "footprint_m": [0.7, 0.5],
     "visual_origin_frame": "base_link",
     "base_height_m": 0.33,
-    "default_render_offset_m": [0.0, 0.0, 0.0]
+    "default_render_offset_m": [0.0, 0.0, 0.0],
+    "registration_profile": {
+      "method": "april_odom_baseline",
+      "tag_ids": [0],
+      "tag_total_size_m": 0.070
+    }
   },
   "capabilities": {
-    "lidar":           { "available": true,  "reason": null },
-    "odom":            { "available": true,  "reason": null },
-    "align":           { "available": true,  "reason": null },
-    "align_manual":    { "available": true,  "reason": null },
-    "nav":             { "available": true,  "reason": null },
-    "path":            { "available": true,  "reason": null },
-    "plan_preview":    { "available": true,  "reason": null },
-    "cancel_goal":     { "available": true,  "reason": null },
-    "emergency_stop":  { "available": false, "reason": "No safe stop interface is available in this runtime." }
+    "lidar":                              { "available": true,  "reason": null },
+    "odom":                               { "available": true,  "reason": null },
+    "registration_april_odom_baseline":   { "available": true,  "reason": null },
+    "registration_manual_pose":           { "available": true,  "reason": null },
+    "nav":                                { "available": true,  "reason": null },
+    "path":                               { "available": true,  "reason": null },
+    "plan_preview":                       { "available": true,  "reason": null },
+    "cancel_goal":                        { "available": true,  "reason": null },
+    "emergency_stop":                     { "available": false, "reason": "No safe stop interface is available in this runtime." }
   }
 }
 ```
@@ -65,21 +70,21 @@ Rules:
 - The separate `disabled_capabilities` / `capability_states` arrays from v3 are
   removed; `capabilities` is the single source of truth.
 
-### `hello.robot.alignment_profile`
+### `hello.robot.registration_profile`
 
-Optional field emitted when the robot adapter provides alignment configuration.
+Optional field emitted when the robot adapter provides registration configuration.
 Absent or `null` when the adapter does not supply one.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `method` | `string` | Recommended alignment method (e.g. `"tag"`) |
+| `method` | `string` | Recommended registration mode (e.g. `"april_odom_baseline"`) |
 | `tag_ids` | `number[]` | AprilTag IDs physically mounted on this robot |
 | `tag_total_size_m` | `number` | Outer edge size of each printed tag in metres |
 
 Example (Unitree G1):
 ```json
 {
-  "method": "tag",
+  "method": "april_odom_baseline",
   "tag_ids": [0],
   "tag_total_size_m": 0.070
 }
@@ -102,7 +107,7 @@ Dynamic bridge/runtime state:
   "streams_active": true,
   "registered": false,
   "reconnecting": false,
-  "registration_method": "manual",
+  "registration_method": "manual_pose",
   "registration_approximate": true
 }
 ```
@@ -111,62 +116,49 @@ Fields:
 
 - `robot_connected`: bridge has an active robot/runtime data path
 - `streams_active`: recent lidar and odom are flowing
-- `registered`: world-frame calibration has been committed
+- `registered`: world-frame registration has been committed
 - `reconnecting`: reconnect/recovery is in progress
-- `registration_method`: **always present** — `"tag"`, `"manual"`, or `null` when unregistered
-- `registration_approximate`: **always present** — `true` when the active calibration is approximate (e.g. manual pose)
+- `registration_method`: **always present** — `"april_odom_baseline"`, `"manual_pose"`, or `null` when unregistered (same strings as `registration_start.mode`)
+- `registration_approximate`: **always present** — `true` when the active registration is approximate (e.g. manual pose)
 
-### `align_status`
+### `registration_status`
 
-Alignment progress during a calibration session:
+Registration progress during a setup session:
 
 ```json
 {
-  "type": "align_status",
+  "type": "registration_status",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
-  "method": "tag",
-  "state": "detecting",
-  "progress": 40,
-  "message": "Look at the robot tag — collecting baseline observations",
+  "mode": "april_odom_baseline",
+  "phase": "awaiting_motion",
+  "capture": "steady",
+  "message": "Authorize robot motion to begin baseline collection",
   "tag_visible": true,
-  "assist_stage": "move",
-  "sampling": true,
-  "robot_world_pose": {
+  "motion": {
+    "frame": "robot",
+    "axis": "lateral",
+    "direction": "left",
+    "distance_m": 0.200,
+    "waypoint_index": 1,
+    "waypoint_total": 3
+  },
+  "preview_pose": {
     "position": [1.2, 0.0, -2.0],
     "orientation": [0.0, 0.0, 0.383, 0.924]
-  },
-  "step_index": 2,
-  "step_count": 2
+  }
 }
 ```
 
 Fields:
 
-- `method`: `"tag"` or `"manual"` — matches the `method` sent in `align_start`
-- `state`: one of `"detecting"`, `"ready"`, `"aligned"`, `"failed"`
-- `progress`: integer 0–100 representing completion of the **current step**
-  (bridge-computed; step-2 progress depends on bridge-internal tunables)
+- `mode` (optional): `"april_odom_baseline"` or `"manual_pose"` — matches `registration_start.mode` when a session is active
+- `phase`: one of `"idle"`, `"scanning"`, `"awaiting_motion"`, `"moving"`, `"sampling"`, `"editing"`, `"awaiting_commit"`, `"succeeded"`, `"failed"`
+- `capture`: camera capture hint for the client — `"off"`, `"steady"`, `"burst"`, or `"hold"`
 - `message`: human-readable status string for display in the client HUD
-- `tag_visible` (optional): present only for tag-method sessions; `true` when a
-  configured robot-mounted tag was detected in the most recent processed frame
-- `assist_stage` (optional): current stage of the robot-assisted calibration flow
-  (`"estimating"`, `"awaiting_confirm"`, `"move"`); omitted when assist is not
-  active or when the flow has completed
-- `sampling` (optional): present only while `assist_stage` is active; `true`
-  during the stopped SAMPLE sub-phase inside assisted MOVE, `false` during the
-  moving LEG sub-phase
-- `robot_world_pose` (optional): estimated robot pose in world frame
-  (`position` xyz metres, `orientation` quaternion xyzw); omitted until a
-  solve is available
-- `step_index` (optional): 1-based index of the current step in the assisted
-  flow (present only when `assist_stage` is active and the driver is not idle)
-- `step_count` (optional): total number of steps in this assist routine
-  (currently always 2 — "Pre-alignment" then "Calibration")
-
-> **v3 → v4 breaking change**: `tag_detected`, `observation_count`,
-> `baseline_m`, `quality`, `best_quality`, `has_candidate`, `cluster_size`, and
-> `required_samples` are removed. Use `progress` and `state` instead.
+- `tag_visible` (optional): present for AprilTag baseline sessions; `true` when a configured robot-mounted tag was detected in the most recent processed frame
+- `motion` (optional): structured safety hint during baseline strafe — `frame` (`"robot"`), `axis` (`"lateral"`), `direction` (`"left"` | `"right"`), `distance_m`, `waypoint_index`, `waypoint_total`
+- `preview_pose` (optional): estimated robot pose in world frame (`position` xyz metres, `orientation` quaternion xyzw); omitted until a solve is available
 
 ### `camera_frame_ack`
 
@@ -186,7 +178,7 @@ single-flight capture state:
 ```
 
 > **v3 → v4 breaking change**: `tag_detected`, `tag_ids`, and `quality` are
-> removed. Use `align_status.tag_visible` for detection feedback.
+> removed. Use `registration_status.tag_visible` for detection feedback.
 
 ### Numeric precision (outbound)
 
@@ -404,51 +396,65 @@ Semantics:
   distance annulus after its normal height/range filtering
 - `full`: the bridge sends the standard full XR payload path
 
-### `align_start`
+### `registration_start`
 
-Begin a calibration session.
+Begin a registration session.
 
 ```json
 {
-  "type": "align_start",
+  "type": "registration_start",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
-  "method": "tag",
-  "assist": true
+  "mode": "april_odom_baseline"
 }
 ```
 
 Fields:
 
-- `method` (**required**): `"tag"` for AprilTag-based alignment or `"manual"` for
-  manual pose placement. The value is echoed back in every `align_status` for
-  this session.
-- `assist` (optional, default `false`): request robot-assisted baseline collection.
-  The bridge honours this only when the `align_assist` capability is available for
-  the active robot. When `true`, the bridge will send `assist_stage` in
-  `align_status` updates and wait for an `assist_confirm` before moving the robot.
+- `mode` (**required**): `"april_odom_baseline"` for AprilTag + odom baseline
+  registration, or `"manual_pose"` for manual marker placement. Requires the
+  matching capability (`registration_april_odom_baseline` or
+  `registration_manual_pose`) to be available in `hello`.
 
-### `assist_confirm`
+### `registration_action`
 
-Confirm that the operator has reviewed the clearance area and the robot may
-begin the assisted baseline-collection move sequence. The bridge **MUST NOT**
-issue assist motion before receiving `assist_confirm` for the current session.
+Authorize the bridge to begin robot motion during an `april_odom_baseline`
+session. The bridge **MUST NOT** issue baseline strafe motion before receiving
+`registration_action` with `action: "authorize_motion"` for the current session.
 
 ```json
 {
-  "type": "assist_confirm",
+  "type": "registration_action",
   "ts": 1730000000.123,
-  "robot_id": "unitree_go2"
+  "robot_id": "unitree_go2",
+  "action": "authorize_motion"
 }
 ```
 
-### `align_stop`
+### `registration_stop`
 
-Stop/cancel the current calibration session.
+Stop/cancel the current registration session.
 
-### `align_commit`
+### `registration_commit`
 
-Commit the current best alignment candidate.
+Commit the current best registration candidate (manual pose flow).
+
+### `registration_pose`
+
+Manual robot pose estimate from the XR client during a `manual_pose` session:
+
+```json
+{
+  "type": "registration_pose",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "position": [x, y, z],
+  "orientation": [qx, qy, qz, qw]
+}
+```
+
+The bridge silently drops `registration_pose` unless a `manual_pose` session is
+active.
 
 ### `camera_info`
 
@@ -505,24 +511,10 @@ Header fields:
   JPEG dimensions differ from the previous stage/mode so the bridge can replace
   the active intrinsics before decoding the new stream or still resolution.
 - The bridge detects robot-mounted AprilTags in the JPEG and estimates
-  `T_world_odom` while an align session is active, then continues to consume
+  `T_world_odom` while a registration session is active, then continues to consume
   post-registration runtime frames for drift correction from the same
   robot-mounted tag. Runtime correction does not require robot-camera
   visibility of the tag; Spectacles frames are the only camera input.
-
-### `align_manual_pose`
-
-Manual robot pose estimate from the XR client:
-
-```json
-{
-  "type": "align_manual_pose",
-  "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
-  "position": [x, y, z],
-  "orientation": [qx, qy, qz, qw]
-}
-```
 
 ### `nav_goal`
 
@@ -592,12 +584,33 @@ provides. If the capability is disabled in `hello`, clients should not send it.
 ## Removed Legacy Flow
 
 The legacy `register` / `registered` message flow is removed from `dimos-ar`.
-Calibration is driven entirely by the `align_*` messages plus `align_status` and
-`bridge_status.registered`.
+Frame registration is driven by `registration_*` messages plus `registration_status`
+and `bridge_status.registered`.
 
 ## Changelog
 
-### v4 (current) — Protocol shrink + alignment session semantics
+### v5 (current) — Registration domain redesign
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **Removed:** all `align_*`, `assist_confirm`, and `align_status` messages.
+- **Added:** `registration_start`, `registration_action`, `registration_stop`,
+  `registration_commit`, `registration_pose`, and `registration_status`.
+- **Capabilities:** `align`, `align_manual`, `align_assist` replaced by
+  `registration_april_odom_baseline` and `registration_manual_pose`.
+- **`registration_start.mode`:** `"april_odom_baseline"` or `"manual_pose"`.
+- **`registration_status`:** `phase`, `capture`, `message`, optional `motion`
+  (safety hints: direction, distance_m, waypoint_index/total), optional
+  `tag_visible` and `preview_pose`. No `progress` field.
+- **Bridge owns baseline recipe:** client sends `registration_action:
+  authorize_motion`; bridge publishes structured `motion` hints during strafe.
+- **`bridge_status.registration_method`** now uses the same strings as
+  `registration_start.mode` (`"april_odom_baseline"` / `"manual_pose"`), replacing
+  the v4 `"tag"` / `"manual"` shorthand.
+- **`hello.robot.registration_profile`** replaces `alignment_profile`; the
+  `method` field uses `"april_odom_baseline"` instead of `"tag"`.
+
+### v4 — Protocol shrink + alignment session semantics (superseded by v5)
 
 **Breaking changes** — clients built against v3 must be updated:
 
@@ -642,9 +655,9 @@ to work without modification.
 
 Additive wire changes (new optional fields; existing fields unchanged):
 
-- `hello.robot.alignment_profile` is a new optional field emitted when the
-  adapter provides alignment configuration (see the `hello` section above for
-  the full field definition). Clients that ignore unknown fields are unaffected.
+- `hello.robot.alignment_profile` (v3–v4) was renamed to
+  `hello.robot.registration_profile` in v5. Clients that ignore unknown fields are
+  unaffected.
 - The `bridge_status.registration_approximate` field is now **always present**
   (`true` or `false`), previously only emitted when `true`. Clients must
   tolerate both its presence and absence as specified.

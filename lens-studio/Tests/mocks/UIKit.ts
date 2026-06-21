@@ -16,3 +16,9 @@ export const COLOR_ERROR = new (globalThis as Record<string, new (...args: numbe
   0,
   1,
 );
+
+export const SnapOS2Styles = {
+  Primary: "primary",
+  PrimaryNeutral: "primary-neutral",
+  Special: "special",
+};

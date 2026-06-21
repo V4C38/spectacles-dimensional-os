@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import threading
 from typing import Literal
 
-RegistrationMethod = Literal["tag", "manual"] | None
+RegistrationMethod = Literal["april_odom_baseline", "manual_pose"] | None
 
 StatusChangeCallback = Callable[[], None]
 

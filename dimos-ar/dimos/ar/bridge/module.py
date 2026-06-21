@@ -17,10 +17,8 @@ from typing import TYPE_CHECKING, Any
 from dimos_lcm.std_msgs import Bool, String
 
 from dimos.ar.adapters.base import ARRobotAdapterSpec
-from dimos.ar.bridge.calibration_session import CalibrationSessionController
 from dimos.ar.bridge.navigation import NavController
 from dimos.ar.bridge.odom_buffer import OdomBuffer
-from dimos.ar.bridge.pose_refinement import RegisteredPoseRefiner
 from dimos.ar.bridge.preview import PreviewService
 from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.bridge.status_service import StatusService
@@ -28,9 +26,12 @@ from dimos.ar.bridge.telemetry import TelemetryPublisher
 from dimos.ar.network.protocol import EmergencyStopMessage, SetLidarModeMessage
 from dimos.ar.network.websocket_server import ARWebSocketServer
 from dimos.ar.preview_planner import PreviewPlanner
+from dimos.ar.registration.refinement import RegisteredPoseRefiner
+from dimos.ar.registration.registry import WorldRegistry
+from dimos.ar.registration.session import RegistrationSession
+from dimos.ar.registration.tracker import RobotAprilTagTracker, RobotAprilTagTrackerConfig
+from dimos.ar.registration.transforms import Calibration
 from dimos.ar.tracking.filters import LidarFilter, LidarFilterConfig, lidar_height_band_m
-from dimos.ar.tracking.robot_tag_tracker import RobotAprilTagTracker, RobotAprilTagTrackerConfig
-from dimos.ar.tracking.transforms import Calibration
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
@@ -68,7 +69,7 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     lidar_voxel_size_m: float = 0.05
     pose_max_hz: float = 30.0
     stream_stale_timeout_s: float = 10.0
-    manual_alignment_quality: float = 0.35
+    manual_registration_quality: float = 0.35
     # still-capture + JPEG-encode on device can take 2-4 s; this gate must be
     # wider than that or frames are discarded before reaching the detector.
     # Geometrically safe: process_frame looks up odom at recv_mono - frame_age
@@ -105,7 +106,7 @@ class ARBridge(Module):  # type: ignore[misc]
     _sender: BridgeSender
     _odom: OdomBuffer
     _status: StatusService
-    _alignment: CalibrationSessionController
+    _registration: RegistrationSession
     _nav: NavController
     _preview: PreviewService
     _telemetry: TelemetryPublisher
@@ -124,7 +125,7 @@ class ARBridge(Module):  # type: ignore[misc]
 
         robot_id = self._adapter.robot_id()
         handshake = self._adapter.handshake_payload()
-        runtime_profile = self._adapter.runtime_alignment_profile()
+        runtime_profile = self._adapter.runtime_registration_profile()
 
         # Build LidarFilter with adapter-derived height bounds.
         min_height_m, max_height_m = lidar_height_band_m(
@@ -174,16 +175,16 @@ class ARBridge(Module):  # type: ignore[misc]
             runtime_profile=runtime_profile,
             runtime_correction_enabled=self.config.runtime_correction_enabled,
         )
-        alignment = CalibrationSessionController(
+        registry = WorldRegistry(self._calibration, self.tf.publish_static)
+        registration = RegistrationSession(
             robot_id=robot_id,
             sender=sender,
-            calibration=self._calibration,
+            registry=registry,
             odom=odom,
             status=status,
             tag_tracker=tag_tracker,
             frame_max_age_s=self.config.frame_max_age_s,
-            manual_alignment_quality=self.config.manual_alignment_quality,
-            tf_publish_static=self.tf.publish_static,
+            manual_registration_quality=self.config.manual_registration_quality,
             pose_refiner=pose_refiner,
             adapter=self._adapter,
             runtime_profile=runtime_profile,
@@ -222,20 +223,20 @@ class ARBridge(Module):  # type: ignore[misc]
 
         def _on_emergency_stop(msg: EmergencyStopMessage) -> None:
             nav.on_emergency_stop(msg.ts)
-            alignment.on_emergency_stop()
+            registration.on_emergency_stop()
 
         ws_server = ARWebSocketServer(
             port=self.config.port,
             hello_supplier=self._adapter.handshake_payload,
             max_message_bytes=self.config.max_message_bytes,
             loop=self._loop,
-            on_align_start=alignment.on_align_start,
-            on_align_stop=alignment.on_align_stop,
-            on_align_commit=alignment.on_align_commit,
-            on_assist_confirm=alignment.on_assist_confirm,
-            on_camera_info=alignment.on_camera_info,
-            on_camera_frame=alignment.on_camera_frame,
-            on_align_manual_pose=alignment.on_align_manual_pose,
+            on_registration_start=registration.on_registration_start,
+            on_registration_stop=registration.on_registration_stop,
+            on_registration_commit=registration.on_registration_commit,
+            on_registration_action=registration.on_registration_action,
+            on_camera_info=registration.on_camera_info,
+            on_camera_frame=registration.on_camera_frame,
+            on_registration_pose=registration.on_registration_pose,
             on_nav_goal=nav.on_nav_goal,
             on_plan_path=preview.on_plan_path,
             on_cancel_goal=lambda msg: nav.on_cancel_goal(msg.ts),
@@ -250,7 +251,7 @@ class ARBridge(Module):  # type: ignore[misc]
         self._sender = sender
         self._odom = odom
         self._status = status
-        self._alignment = alignment
+        self._registration = registration
         self._nav = nav
         self._preview = preview
         self._telemetry = telemetry
@@ -272,9 +273,9 @@ class ARBridge(Module):  # type: ignore[misc]
         nav = getattr(self, "_nav", None)
         if nav is not None:
             nav.stop()
-        alignment = getattr(self, "_alignment", None)
-        if alignment is not None:
-            alignment.stop()
+        registration = getattr(self, "_registration", None)
+        if registration is not None:
+            registration.stop()
         status = getattr(self, "_status", None)
         if status is not None:
             status.stop()
@@ -367,6 +368,6 @@ class ARBridge(Module):  # type: ignore[misc]
 
     def _on_client_disconnect(self, _websocket: ServerConnection) -> None:
         self._nav.reset_on_disconnect()
-        self._alignment.clear_on_disconnect()
+        self._registration.clear_on_disconnect()
         if self._ws_server.connection_count == 0:
             self._telemetry.reset_lidar_mode()

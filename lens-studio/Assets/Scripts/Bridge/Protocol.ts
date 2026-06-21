@@ -1,6 +1,6 @@
 // ================================================================
 /**
- * Protocol v4 — message types, parser, outbound builders, and unit
+ * Protocol v5 — message types, parser, outbound builders, and unit
  * conversion helpers. Single source of truth replacing the v3 trio
  * (ProtocolTypes / ProtocolParser / Protocol).
  *
@@ -8,7 +8,7 @@
  */
 // ================================================================
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -51,7 +51,7 @@ export interface RobotHelloInfo {
   visual_origin_frame: string;
   base_height_m?: number;
   default_render_offset_m?: [number, number, number];
-  alignment_profile?: Record<string, unknown>;
+  registration_profile?: Record<string, unknown>;
 }
 
 /** v4: capabilities is a single unified map; disabled_capabilities removed. */
@@ -104,26 +104,47 @@ export interface PoseCorrectionMessage {
   solve_method: "tag" | "tag_translation";
 }
 
-/**
- * v4: simplified align_status — method, state, progress, message, tag_visible.
- * "ready" = has candidate; "aligned" = committed successfully.
- * progress = percent of the current step (bridge-computed).
- * step_index / step_count present only for assisted sessions.
- */
-export interface AlignStatusMessage {
-  type: "align_status";
+export type RegistrationMode = "april_odom_baseline" | "manual_pose";
+
+export type RegistrationPhase =
+  | "idle"
+  | "scanning"
+  | "awaiting_motion"
+  | "moving"
+  | "sampling"
+  | "editing"
+  | "awaiting_commit"
+  | "succeeded"
+  | "failed";
+
+export type CaptureHint = "off" | "steady" | "burst" | "hold";
+
+export interface RegistrationMotion {
+  frame: "robot";
+  axis: "lateral";
+  direction: "left" | "right";
+  distance_m: number;
+  waypoint_index: number;
+  waypoint_total: number;
+}
+
+export interface RegistrationPreviewPose {
+  position: [number, number, number];
+  orientation: [number, number, number, number];
+}
+
+/** v5: registration progress during a setup registration session. */
+export interface RegistrationStatusMessage {
+  type: "registration_status";
   ts: number;
   robot_id: string;
-  method: "tag" | "manual";
-  state: "detecting" | "ready" | "aligned" | "failed";
-  progress: number;
+  mode?: RegistrationMode;
+  phase: RegistrationPhase;
+  capture: CaptureHint;
   message: string;
   tag_visible?: boolean;
-  assist_stage?: string;
-  sampling?: boolean;
-  robot_world_pose?: { position: [number, number, number]; orientation: [number, number, number, number] };
-  step_index?: number;
-  step_count?: number;
+  motion?: RegistrationMotion;
+  preview_pose?: RegistrationPreviewPose;
 }
 
 /** v4: camera_frame_ack contains only seq. */
@@ -142,7 +163,7 @@ export interface BridgeStatusMessage {
   streams_active: boolean;
   registered: boolean;
   reconnecting: boolean;
-  registration_method?: "tag" | "manual";
+  registration_method?: RegistrationMode;
   registration_approximate?: boolean;
 }
 
@@ -187,7 +208,7 @@ export type InboundMessage =
   | LidarMessage
   | PoseMessage
   | PoseCorrectionMessage
-  | AlignStatusMessage
+  | RegistrationStatusMessage
   | CameraFrameAckMessage
   | BridgeStatusMessage
   | PathMessage
@@ -261,6 +282,54 @@ function requireNumber(obj: Record<string, unknown>, key: string): number {
     throw new Error(`Missing or invalid field: ${key}`);
   }
   return v;
+}
+
+const REGISTRATION_PHASES: RegistrationPhase[] = [
+  "idle",
+  "scanning",
+  "awaiting_motion",
+  "moving",
+  "sampling",
+  "editing",
+  "awaiting_commit",
+  "succeeded",
+  "failed",
+];
+
+const CAPTURE_HINTS: CaptureHint[] = ["off", "steady", "burst", "hold"];
+
+function parseRegistrationMotion(raw: unknown): RegistrationMotion | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const motion = raw as Record<string, unknown>;
+  const direction = motion.direction;
+  if (direction !== "left" && direction !== "right") {
+    return undefined;
+  }
+  return {
+    frame: "robot",
+    axis: "lateral",
+    direction,
+    distance_m: requireNumber(motion, "distance_m"),
+    waypoint_index: requireNumber(motion, "waypoint_index"),
+    waypoint_total: requireNumber(motion, "waypoint_total"),
+  };
+}
+
+function parsePreviewPose(raw: unknown): RegistrationPreviewPose | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const pose = raw as Record<string, unknown>;
+  const q = pose.orientation;
+  if (!Array.isArray(q) || q.length !== 4) {
+    return undefined;
+  }
+  return {
+    position: parseVec3(pose.position),
+    orientation: [Number(q[0]), Number(q[1]), Number(q[2]), Number(q[3])],
+  };
 }
 
 function parsePoints(raw: unknown): [number, number, number][] {
@@ -381,11 +450,11 @@ function parseInboundObject(
         );
       }
       if (
-        typeof robot.alignment_profile === "object" &&
-        robot.alignment_profile !== null &&
-        !Array.isArray(robot.alignment_profile)
+        typeof robot.registration_profile === "object" &&
+        robot.registration_profile !== null &&
+        !Array.isArray(robot.registration_profile)
       ) {
-        hello.robot.alignment_profile = robot.alignment_profile as Record<
+        hello.robot.registration_profile = robot.registration_profile as Record<
           string,
           unknown
         >;
@@ -402,64 +471,47 @@ function parseInboundObject(
       return hello;
     }
 
-    case "align_status": {
-      const state = requireString(data, "state");
+    case "registration_status": {
+      const phase = requireString(data, "phase");
+      if (!REGISTRATION_PHASES.includes(phase as RegistrationPhase)) {
+        print(`Protocol: unknown registration_status.phase "${phase}"; skipping`);
+        return null;
+      }
+      const capture = requireString(data, "capture");
+      if (!CAPTURE_HINTS.includes(capture as CaptureHint)) {
+        print(`Protocol: unknown registration_status.capture "${capture}"; skipping`);
+        return null;
+      }
+      const mode = data.mode;
       if (
-        state !== "detecting" &&
-        state !== "ready" &&
-        state !== "aligned" &&
-        state !== "failed"
+        mode !== undefined &&
+        mode !== "april_odom_baseline" &&
+        mode !== "manual_pose"
       ) {
-        print(`Protocol: unknown align_status.state "${state}"; skipping`);
+        print(`Protocol: unknown registration_status.mode "${mode}"; skipping`);
         return null;
       }
-      const method = data.method;
-      if (method !== "tag" && method !== "manual") {
-        print(`Protocol: unknown align_status.method "${method}"; skipping`);
-        return null;
-      }
-      const msg: AlignStatusMessage = {
-        type: "align_status",
+      const msg: RegistrationStatusMessage = {
+        type: "registration_status",
         ts: requireNumber(data, "ts"),
         robot_id: requireString(data, "robot_id"),
-        method,
-        state: state as AlignStatusMessage["state"],
-        progress: typeof data.progress === "number" ? data.progress : 0,
+        phase: phase as RegistrationPhase,
+        capture: capture as CaptureHint,
         message: typeof data.message === "string" ? data.message : "",
-        tag_visible:
-          typeof data.tag_visible === "boolean"
-            ? data.tag_visible
-            : undefined,
       };
-      if (typeof data.assist_stage === "string") {
-        msg.assist_stage = data.assist_stage;
+      if (mode === "april_odom_baseline" || mode === "manual_pose") {
+        msg.mode = mode;
       }
-      if (typeof data.sampling === "boolean") {
-        msg.sampling = data.sampling;
+      if (typeof data.tag_visible === "boolean") {
+        msg.tag_visible = data.tag_visible;
       }
-      if (
-        typeof data.robot_world_pose === "object" &&
-        data.robot_world_pose !== null &&
-        !Array.isArray(data.robot_world_pose)
-      ) {
-        const rwp = data.robot_world_pose as Record<string, unknown>;
-        if (Array.isArray(rwp.position) && Array.isArray(rwp.orientation)) {
-          msg.robot_world_pose = {
-            position: parseVec3(rwp.position),
-            orientation: [
-              Number((rwp.orientation as number[])[0]),
-              Number((rwp.orientation as number[])[1]),
-              Number((rwp.orientation as number[])[2]),
-              Number((rwp.orientation as number[])[3]),
-            ],
-          };
-        }
+      const motion = parseRegistrationMotion(data.motion);
+      if (motion) {
+        msg.motion = motion;
       }
-      if (typeof data.step_index === "number") {
-        msg.step_index = data.step_index;
-      }
-      if (typeof data.step_count === "number") {
-        msg.step_count = data.step_count;
+      const previewPose = parsePreviewPose(data.preview_pose);
+      if (previewPose) {
+        msg.preview_pose = previewPose;
       }
       return msg;
     }
@@ -484,8 +536,8 @@ function parseInboundObject(
         reconnecting: Boolean(data.reconnecting),
       };
       if (
-        data.registration_method === "tag" ||
-        data.registration_method === "manual"
+        data.registration_method === "april_odom_baseline" ||
+        data.registration_method === "manual_pose"
       ) {
         status.registration_method = data.registration_method;
       }
@@ -627,55 +679,53 @@ export function buildSetLidarMode(
   });
 }
 
-/** v4: align_start includes the session method. Pass assist=true for robot-assisted calibration. */
-export function buildAlignStart(
+export function buildRegistrationStart(
   robotId: string,
-  method: "tag" | "manual",
-  assist: boolean = false,
+  mode: RegistrationMode,
 ): string {
-  const payload: Record<string, unknown> = {
-    type: "align_start",
+  return JSON.stringify({
+    type: "registration_start",
     ts: getTime(),
     robot_id: robotId,
-    method,
-  };
-  if (assist) {
-    payload["assist"] = true;
-  }
-  return JSON.stringify(payload);
+    mode,
+  });
 }
 
-export function buildAssistConfirm(robotId: string): string {
+export function buildRegistrationAction(
+  robotId: string,
+  action: "authorize_motion" = "authorize_motion",
+): string {
   return JSON.stringify({
-    type: "assist_confirm",
+    type: "registration_action",
+    ts: getTime(),
+    robot_id: robotId,
+    action,
+  });
+}
+
+export function buildRegistrationStop(robotId: string): string {
+  return JSON.stringify({
+    type: "registration_stop",
     ts: getTime(),
     robot_id: robotId,
   });
 }
 
-export function buildAlignStop(robotId: string): string {
+export function buildRegistrationCommit(robotId: string): string {
   return JSON.stringify({
-    type: "align_stop",
+    type: "registration_commit",
     ts: getTime(),
     robot_id: robotId,
   });
 }
 
-export function buildAlignCommit(robotId: string): string {
-  return JSON.stringify({
-    type: "align_commit",
-    ts: getTime(),
-    robot_id: robotId,
-  });
-}
-
-export function buildAlignManualPose(
+export function buildRegistrationPose(
   position: vec3,
   rotation: quat,
   robotId: string,
 ): string {
   return JSON.stringify({
-    type: "align_manual_pose",
+    type: "registration_pose",
     ts: getTime(),
     robot_id: robotId,
     position: lensCentimetersToProtocolMeters(position),

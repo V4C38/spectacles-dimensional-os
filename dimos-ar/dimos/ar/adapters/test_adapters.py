@@ -26,9 +26,9 @@ class _FakeStream:
 def _make_go2_adapter() -> Go2AdapterModule:
     adapter = object.__new__(Go2AdapterModule)
     adapter._go2_connection = None
-    adapter._assist_vel_lock = __import__("threading").Lock()
-    adapter._assist_vel_thread = None
-    adapter._assist_vel_target = 0.0
+    adapter._baseline_vel_lock = __import__("threading").Lock()
+    adapter._baseline_vel_thread = None
+    adapter._baseline_vel_target = 0.0
     adapter.config = SimpleNamespace(robot_id="unitree_go2")
     adapter.goal_request = _FakeStream(connected=False)
     adapter.goal_req = _FakeStream(connected=False)
@@ -55,9 +55,9 @@ def _make_g1_adapter() -> G1AdapterModule:
     adapter = object.__new__(G1AdapterModule)
     adapter._g1_connection = None
     adapter._g1_high_level = None
-    adapter._assist_vel_lock = threading.Lock()
-    adapter._assist_vel_thread = None
-    adapter._assist_vel_target = 0.0
+    adapter._baseline_vel_lock = threading.Lock()
+    adapter._baseline_vel_thread = None
+    adapter._baseline_vel_target = 0.0
     adapter.config = SimpleNamespace(robot_id="unitree_g1")
     adapter.goal_request = _FakeStream(connected=False)
     adapter.goal_req = _FakeStream(connected=False)
@@ -149,7 +149,7 @@ def test_g1_capabilities_report_emergency_stop_unavailable_without_hw() -> None:
     capabilities = G1AdapterModule.capabilities(adapter)
 
     assert capabilities["emergency_stop"].available is False
-    assert capabilities["align_assist"].available is False
+    assert capabilities["registration_april_odom_baseline"].available is False
 
 
 def test_g1_robot_id_and_model() -> None:
@@ -159,26 +159,26 @@ def test_g1_robot_id_and_model() -> None:
     assert G1AdapterModule.robot_model(adapter) == "unitree_g1"
 
 
-def test_go2_assist_strafe_speed_matches_teleop() -> None:
+def test_go2_baseline_strafe_speed_matches_teleop() -> None:
     adapter = _make_go2_adapter()
 
-    assert Go2AdapterModule.assist_strafe_speed(adapter) == 0.5
+    assert Go2AdapterModule.baseline_strafe_speed(adapter) == 0.5
 
 
-def test_g1_assist_motion_available_and_capability_follow_cmd_vel_transport() -> None:
+def test_g1_baseline_motion_available_and_capability_follow_cmd_vel_transport() -> None:
     adapter = _make_g1_adapter()
     adapter.cmd_vel = _FakeStream(connected=True)
 
-    assert G1AdapterModule.assist_motion_available(adapter) is True
-    assert G1AdapterModule.assist_strafe_speed(adapter) == 0.3
-    assert G1AdapterModule.capabilities(adapter)["align_assist"].available is True
+    assert G1AdapterModule.baseline_motion_available(adapter) is True
+    assert G1AdapterModule.baseline_strafe_speed(adapter) == 0.3
+    assert G1AdapterModule.capabilities(adapter)["registration_april_odom_baseline"].available is True
 
 
-def test_g1_assist_set_lateral_velocity_zero_publishes_stop_twist() -> None:
+def test_g1_baseline_set_lateral_velocity_zero_publishes_stop_twist() -> None:
     adapter = _make_g1_adapter()
     adapter.cmd_vel = _FakeStream(connected=True)
 
-    assert G1AdapterModule.assist_set_lateral_velocity(adapter, 0.0) is True
+    assert G1AdapterModule.baseline_set_lateral_velocity(adapter, 0.0) is True
     assert len(adapter.cmd_vel.published) == 1
     twist = adapter.cmd_vel.published[0]
     assert isinstance(twist, Twist)
@@ -186,15 +186,15 @@ def test_g1_assist_set_lateral_velocity_zero_publishes_stop_twist() -> None:
     assert twist.angular.z == 0.0
 
 
-def test_go2_runtime_alignment_profile_defaults() -> None:
+def test_go2_runtime_registration_profile_defaults() -> None:
     adapter = _make_go2_adapter()
-    profile = Go2AdapterModule.runtime_alignment_profile(adapter)
+    profile = Go2AdapterModule.runtime_registration_profile(adapter)
     assert profile.runtime_static_speed_mps == 0.05
     assert profile.runtime_speed_horizon_s == 0.4
 
 
-def test_g1_runtime_alignment_profile_overrides() -> None:
+def test_g1_runtime_registration_profile_overrides() -> None:
     adapter = _make_g1_adapter()
-    profile = G1AdapterModule.runtime_alignment_profile(adapter)
+    profile = G1AdapterModule.runtime_registration_profile(adapter)
     assert profile.runtime_static_speed_mps == 0.08
     assert profile.runtime_speed_horizon_s == 0.9

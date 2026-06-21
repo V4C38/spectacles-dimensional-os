@@ -8,7 +8,7 @@ import {
   yawRotationFromWorldRotation,
 } from "../Core/Utilities";
 import { FrameCaptureController } from "../Camera/FrameCaptureController";
-import { ManualPoseCorrection, ResolvedDisplayPose } from "../Alignment/ManualPoseCorrection";
+import { ManualPoseCorrection, ResolvedDisplayPose } from "../Registration/ManualPoseCorrection";
 import { RobotUiCallbacks, RobotUiView } from "./RobotUiView";
 import { UILogEntry } from "../UI/UILogger";
 

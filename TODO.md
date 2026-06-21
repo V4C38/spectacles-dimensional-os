@@ -20,7 +20,7 @@ Issue #1 — Runtime yaw correction (A2)
 2. Check `yaw_corrected = True` frequency in A3 telemetry logs to confirm baseline geometry is met at runtime.
 3. Design a small-angle yaw guard (e.g. reject if `yaw_delta > 45°` on a full solve) as defense-in-depth beyond the existing innovation/reprojection gates.
 
-**Files that would change.** `dimos-ar/dimos/ar/bridge/alignment.py` (one guard block in `_apply_tracker_update`), `dimos-ar/dimos/ar/bridge/test_alignment_session.py`.
+**Files that would change.** `dimos-ar/dimos/ar/registration/refinement.py` (one guard block in runtime correction path), `dimos-ar/dimos/ar/registration/test_refinement.py`.
 
 ------------------------------
 Issue #2 — Nav cancel / e-stop RPC timeouts (508) and session degradation

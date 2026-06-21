@@ -24,18 +24,30 @@ describe("parseInboundMessage", () => {
     expect((msg as { robot: { robot_id: string } }).robot.robot_id).toBe("go2");
   });
 
-  it("parses align_status", () => {
+  it("parses registration_status", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
-        type: "align_status",
+        type: "registration_status",
         ts: 1,
         robot_id: "go2",
-        method: "tag",
-        state: "ready",
+        mode: "april_odom_baseline",
+        phase: "scanning",
+        capture: "steady",
+        message: "Look at tag",
+        tag_visible: true,
+        motion: {
+          frame: "robot",
+          axis: "lateral",
+          direction: "left",
+          distance_m: 0.5,
+          waypoint_index: 1,
+          waypoint_total: 2,
+        },
       }),
     );
-    expect(msg!.type).toBe("align_status");
-    expect((msg as { state: string }).state).toBe("ready");
+    expect(msg!.type).toBe("registration_status");
+    expect((msg as { phase: string }).phase).toBe("scanning");
+    expect((msg as { capture: string }).capture).toBe("steady");
   });
 
   it("parses camera_frame_ack", () => {

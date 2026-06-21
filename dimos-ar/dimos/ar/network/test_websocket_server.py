@@ -187,77 +187,63 @@ def test_coalesce_message_types_cover_streams() -> None:
             "path_preview",
             "nav_status",
             "bridge_status",
-            "align_status",
+            "registration_status",
             "camera_frame_ack",
         }
     )
 
 
 @pytest.mark.asyncio
-async def test_terminal_align_status_not_overwritten_by_non_terminal() -> None:
-    """A pending terminal align_status (aligned/failed) must not be overwritten
-    by a subsequent non-terminal (detecting/ready) message in the coalesce slot.
-
-    This is the backstop for the C1 race: even if a stale daemon thread enqueues
-    a trailing 'detecting' after the terminal 'aligned', the terminal wins.
-    """
+async def test_terminal_registration_status_not_overwritten_by_non_terminal() -> None:
+    """Terminal registration_status (succeeded/failed) must not be overwritten."""
 
     ws = _FakeWebSocket()
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    # 1. Enqueue terminal 'aligned' first
-    outbound.enqueue('{"type":"align_status","state":"aligned","robot_id":"r"}')
-    # 2. Then a stale non-terminal tries to overwrite it
-    outbound.enqueue('{"type":"align_status","state":"detecting","robot_id":"r"}')
+    outbound.enqueue('{"type":"registration_status","phase":"succeeded","robot_id":"r"}')
+    outbound.enqueue('{"type":"registration_status","phase":"scanning","robot_id":"r"}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
 
-    align_statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "align_status"]
-    assert align_statuses, "expected at least one align_status"
-    # The last one delivered must be the terminal 'aligned'
-    assert align_statuses[-1]["state"] == "aligned", (
-        f"terminal 'aligned' was overwritten; got {align_statuses[-1]['state']!r}"
-    )
+    statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "registration_status"]
+    assert statuses
+    assert statuses[-1]["phase"] == "succeeded"
 
 
 @pytest.mark.asyncio
 async def test_terminal_failed_not_overwritten_by_non_terminal() -> None:
-    """Same backstop test for the 'failed' terminal state."""
     ws = _FakeWebSocket()
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"align_status","state":"failed","robot_id":"r"}')
-    outbound.enqueue('{"type":"align_status","state":"detecting","robot_id":"r"}')
+    outbound.enqueue('{"type":"registration_status","phase":"failed","robot_id":"r"}')
+    outbound.enqueue('{"type":"registration_status","phase":"scanning","robot_id":"r"}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
 
-    align_statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "align_status"]
-    assert align_statuses
-    assert align_statuses[-1]["state"] == "failed", (
-        f"terminal 'failed' was overwritten; got {align_statuses[-1]['state']!r}"
-    )
+    statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "registration_status"]
+    assert statuses
+    assert statuses[-1]["phase"] == "failed"
 
 
 @pytest.mark.asyncio
-async def test_non_terminal_align_status_can_be_overwritten() -> None:
-    """Non-terminal align_status messages (detecting/ready) must still coalesce normally."""
+async def test_non_terminal_registration_status_can_be_overwritten() -> None:
     ws = _FakeWebSocket()
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"align_status","state":"detecting","robot_id":"r","v":1}')
-    outbound.enqueue('{"type":"align_status","state":"ready","robot_id":"r","v":2}')
+    outbound.enqueue('{"type":"registration_status","phase":"scanning","robot_id":"r","v":1}')
+    outbound.enqueue('{"type":"registration_status","phase":"awaiting_motion","robot_id":"r","v":2}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
 
-    align_statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "align_status"]
-    assert len(align_statuses) == 1, "non-terminal messages must still coalesce to one"
-    assert align_statuses[0]["state"] == "ready"
+    statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "registration_status"]
+    assert len(statuses) == 1
+    assert statuses[0]["phase"] == "awaiting_motion"
 
 
 @pytest.mark.asyncio

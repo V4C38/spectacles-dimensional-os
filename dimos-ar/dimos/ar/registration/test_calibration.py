@@ -4,14 +4,14 @@ import math
 
 import numpy as np
 
-from dimos.ar.tracking.robot_tag_tracker import (
+from dimos.ar.registration.tracker import (
     R_ALIGN,
     RobotAprilTagTracker,
     TagMount,
     build_T_world_odom,
     solve_yaw_translation_2d,
 )
-from dimos.ar.tracking.transforms import (
+from dimos.ar.registration.transforms import (
     Calibration,
     gravity_level_transform,
     normalize_ground_pose,
@@ -32,17 +32,17 @@ def test_registered_transforms_lidar_points() -> None:
     # marker at origin, robot odom at (1,0,0) → T_world_odom = T(-1,0,0)
     T_world_marker = pose_to_matrix((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     T_odom_robot = pose_to_matrix((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
-    cal.register_from_alignment(T_world_marker @ np.linalg.inv(T_odom_robot))
+    cal.register_world_odom(T_world_marker @ np.linalg.inv(T_odom_robot))
     pts = np.array([[0.0, 0.0, 0.0]], dtype=np.float32)
     world = cal.transform_points(pts)
     assert np.allclose(world[0], (-1.0, 0.0, 0.0), atol=1e-5)
 
 
-def test_register_from_alignment() -> None:
+def test_register_world_odom() -> None:
     cal = Calibration()
     T = np.eye(4, dtype=np.float64)
     T[0, 3] = 5.0
-    cal.register_from_alignment(T)
+    cal.register_world_odom(T)
     assert cal.is_registered is True
     pos, _ = cal.transform_pose((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert np.allclose(pos[0], 5.0, atol=1e-5)
@@ -121,7 +121,7 @@ def test_gravity_level_transform_flattens_floor() -> None:
 
 
 def test_calibration_commit_creates_planar_floor() -> None:
-    """Test that register_from_alignment produces a floor-flat calibration."""
+    """Test that register_world_odom produces a floor-flat calibration."""
     cal = Calibration()
 
     # Create a tilted T_world_odom (simulating PnP + odometry tilt)
@@ -143,7 +143,7 @@ def test_calibration_commit_creates_planar_floor() -> None:
     T_tilted[:3, :3] = R
     T_tilted[:3, 3] = [1.0, 0.5, 2.0]
 
-    cal.register_from_alignment(T_tilted)
+    cal.register_world_odom(T_tilted)
 
     # After commit, odom +Z should map to world +Y
     odom_up = np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float64)  # odom +Z in homogeneous coords
@@ -199,7 +199,7 @@ def test_manual_alignment_world_pose_matches_placement() -> None:
     T_world_odom = T_world_base @ np.linalg.inv(T_odom_base)
 
     cal = Calibration()
-    cal.register_from_alignment(T_world_odom)
+    cal.register_world_odom(T_world_odom)
 
     # Transform the commit-time odom pose back through the calibration.
     # The returned world position must equal the marker placement.

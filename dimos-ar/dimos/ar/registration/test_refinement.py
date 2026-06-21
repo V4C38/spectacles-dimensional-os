@@ -10,16 +10,16 @@ import pytest
 
 from dimos.ar.adapters.base import RuntimeRegistrationProfile
 from dimos.ar.bridge.odom_buffer import OdomBuffer
-from dimos.ar.bridge.pose_refinement import RegisteredPoseRefiner
+from dimos.ar.registration.refinement import RegisteredPoseRefiner
 from dimos.ar.bridge.sender import BridgeSender
-from dimos.ar.tracking.robot_tag_tracker import (
+from dimos.ar.registration.tracker import (
     RobotAprilTagTracker,
     RobotAprilTagTrackerConfig,
     TagSolve,
     _yaw_from_T,
     build_T_world_odom,
 )
-from dimos.ar.tracking.transforms import Calibration, OdomSample
+from dimos.ar.registration.transforms import Calibration, OdomSample
 
 
 def _make_pose_refiner() -> tuple[

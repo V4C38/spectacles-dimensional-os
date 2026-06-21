@@ -1,5 +1,5 @@
 import {
-  AlignStatusMessage,
+  RegistrationStatusMessage,
   CameraFrameAckMessage,
   BridgeStatusMessage,
   HelloMessage,
@@ -10,11 +10,11 @@ import {
   PongMessage,
   PoseCorrectionMessage,
   PoseMessage,
-  buildAlignCommit,
-  buildAlignManualPose,
-  buildAlignStart,
-  buildAlignStop,
-  buildAssistConfirm,
+  buildRegistrationCommit,
+  buildRegistrationPose,
+  buildRegistrationStart,
+  buildRegistrationStop,
+  buildRegistrationAction,
   buildCancelGoal,
   buildEmergencyStop,
   buildGetStatus,
@@ -23,6 +23,7 @@ import {
   buildPlanPath,
   LidarObstacleSettings,
   ProtocolParseError,
+  RegistrationMode,
 } from "./Protocol";
 import {
   BridgeConnectionManager,
@@ -32,7 +33,7 @@ import { BridgeInboundProcessor } from "./BridgeInboundProcessor";
 import { Signal } from "../Core/Utilities";
 
 const SEND_DROP_LOG_INTERVAL_S = 1.0;
-const ALIGN_POSE_TX_LOG_INTERVAL_S = 1.0;
+const REGISTRATION_POSE_TX_LOG_INTERVAL_S = 1.0;
 const SEND_BINARY_LOG_INTERVAL_S = 2.0;
 const DEBUG_VERBOSE = false;
 
@@ -67,8 +68,8 @@ export class BridgeClient extends BaseScriptComponent {
   public get onPoseCorrection(): Signal<PoseCorrectionMessage> {
     return this._inbound!.onPoseCorrection;
   }
-  public get onAlignStatus(): Signal<AlignStatusMessage> {
-    return this._inbound!.onAlignStatus;
+  public get onRegistrationStatus(): Signal<RegistrationStatusMessage> {
+    return this._inbound!.onRegistrationStatus;
   }
   public get onCameraFrameAck(): Signal<CameraFrameAckMessage> {
     return this._inbound!.onCameraFrameAck;
@@ -215,27 +216,29 @@ export class BridgeClient extends BaseScriptComponent {
     );
   }
 
-  public sendAlignStart(method: "tag" | "manual", assist: boolean = false): boolean {
-    return this._sendForActiveRobot("align_start", (robotId) =>
-      buildAlignStart(robotId, method, assist),
+  public sendRegistrationStart(mode: RegistrationMode): boolean {
+    return this._sendForActiveRobot("registration_start", (robotId) =>
+      buildRegistrationStart(robotId, mode),
     );
   }
 
-  public sendAssistConfirm(): boolean {
-    return this._sendForActiveRobot("assist_confirm", buildAssistConfirm);
+  public sendRegistrationAction(): boolean {
+    return this._sendForActiveRobot("registration_action", (robotId) =>
+      buildRegistrationAction(robotId),
+    );
   }
 
-  public sendAlignStop(): boolean {
-    return this._sendForActiveRobot("align_stop", buildAlignStop);
+  public sendRegistrationStop(): boolean {
+    return this._sendForActiveRobot("registration_stop", buildRegistrationStop);
   }
 
-  public sendAlignCommit(): boolean {
-    return this._sendForActiveRobot("align_commit", buildAlignCommit);
+  public sendRegistrationCommit(): boolean {
+    return this._sendForActiveRobot("registration_commit", buildRegistrationCommit);
   }
 
-  public sendAlignManualPose(position: vec3, rotation: quat): boolean {
-    return this._sendForActiveRobot("align_manual_pose", (robotId) =>
-      buildAlignManualPose(position, rotation, robotId),
+  public sendRegistrationPose(position: vec3, rotation: quat): boolean {
+    return this._sendForActiveRobot("registration_pose", (robotId) =>
+      buildRegistrationPose(position, rotation, robotId),
     );
   }
 
@@ -323,10 +326,10 @@ export class BridgeClient extends BaseScriptComponent {
     }
     const payload = build(robotId);
     const sent = this.send(payload);
-    if (action.startsWith("align")) {
-      if (action === "align_manual_pose") {
+    if (action.startsWith("registration")) {
+      if (action === "registration_pose") {
         const now = getTime();
-        if (now - this._lastAlignPoseTxLogTime >= ALIGN_POSE_TX_LOG_INTERVAL_S) {
+        if (now - this._lastAlignPoseTxLogTime >= REGISTRATION_POSE_TX_LOG_INTERVAL_S) {
           this._lastAlignPoseTxLogTime = now;
           print(
             `BridgeClient: ${action} TX robot=${robotId} bytes=${payload.length} sent=${sent}`,

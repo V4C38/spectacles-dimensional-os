@@ -16,7 +16,7 @@ from dimos.ar.adapters.base import (
     ARRobotAdapterSpec,
     CapabilityState,
     RobotHandshake,
-    RuntimeAlignmentProfile,
+    RuntimeRegistrationProfile,
 )
 from dimos.ar.tracking.robot_tag_tracker import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
 from dimos.core.core import rpc
@@ -37,9 +37,8 @@ logger = setup_logger()
 GO2_CAPABILITIES: dict[str, CapabilityState] = {
     "lidar": CapabilityState(True),
     "odom": CapabilityState(True),
-    "align": CapabilityState(True),
-    "align_manual": CapabilityState(True),
-    "align_assist": CapabilityState(True),
+    "registration_april_odom_baseline": CapabilityState(True),
+    "registration_manual_pose": CapabilityState(True),
     "nav": CapabilityState(True),
     "path": CapabilityState(True),
     "plan_preview": CapabilityState(True),
@@ -80,8 +79,8 @@ def go2_tag_mounts() -> list[TagMount]:
     return list(GO2_DEFAULT_TAG_MOUNTS)
 
 
-def go2_runtime_alignment_profile() -> RuntimeAlignmentProfile:
-    return RuntimeAlignmentProfile()
+def go2_runtime_registration_profile() -> RuntimeRegistrationProfile:
+    return RuntimeRegistrationProfile()
 
 
 def go2_handshake(robot_id: str) -> RobotHandshake:
@@ -97,8 +96,8 @@ def go2_handshake(robot_id: str) -> RobotHandshake:
         visual_origin_frame="base_link",
         base_height_m=0.33,
         default_render_offset_m=(0.0, 0.0, 0.0),
-        alignment_profile={
-            "method": "tag",
+        registration_profile={
+            "method": "april_odom_baseline",
             "tag_ids": tag_ids,
             "tag_total_size_m": TAG_TOTAL_SIZE_M,
         },
@@ -138,15 +137,15 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
 
     config: Go2AdapterConfig
     _go2_connection: GO2ConnectionSpec | None = None
-    _assist_vel_lock: threading.Lock
-    _assist_vel_thread: threading.Thread | None
-    _assist_vel_target: float
+    _baseline_vel_lock: threading.Lock
+    _baseline_vel_thread: threading.Thread | None
+    _baseline_vel_target: float
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self._assist_vel_lock = threading.Lock()
-        self._assist_vel_thread = None
-        self._assist_vel_target = 0.0
+        self._baseline_vel_lock = threading.Lock()
+        self._baseline_vel_thread = None
+        self._baseline_vel_target = 0.0
 
     async def handle_ar_lidar_in(self, msg: PointCloud2) -> None:
         self.ar_lidar.publish(msg)
@@ -220,8 +219,9 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
                 False, "No safe stop transport is present for this runtime."
             )
         if self.cmd_vel.transport is None:
-            capability_states["align_assist"] = CapabilityState(
-                False, "cmd_vel transport is not present for assist motion in this runtime."
+            capability_states["registration_april_odom_baseline"] = CapabilityState(
+                False,
+                "cmd_vel transport is not present for baseline registration motion in this runtime.",
             )
         return capability_states
 
@@ -240,7 +240,7 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
             visual_origin_frame=handshake.visual_origin_frame,
             base_height_m=handshake.base_height_m,
             default_render_offset_m=handshake.default_render_offset_m,
-            alignment_profile=handshake.alignment_profile,
+            registration_profile=handshake.registration_profile,
         )
 
     @rpc
@@ -298,19 +298,19 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         return go2_tag_mounts()
 
     @rpc
-    def assist_motion_available(self) -> bool:
+    def baseline_motion_available(self) -> bool:
         return self.cmd_vel.transport is not None
 
     @rpc
-    def assist_strafe_speed(self) -> float:
+    def baseline_strafe_speed(self) -> float:
         return 0.5
 
     @rpc
-    def runtime_alignment_profile(self) -> RuntimeAlignmentProfile:
-        return go2_runtime_alignment_profile()
+    def runtime_registration_profile(self) -> RuntimeRegistrationProfile:
+        return go2_runtime_registration_profile()
 
     @rpc
-    def assist_set_lateral_velocity(self, vy_m_s: float) -> bool:
+    def baseline_set_lateral_velocity(self, vy_m_s: float) -> bool:
         """Drive a lateral strafe via the proven joystick/cmd_vel path.
 
         The value is interpreted as **raw joystick deflection in [-1, 1]**, not
@@ -323,39 +323,39 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         Calling with 0.0 publishes a zero Twist immediately, which stops the
         robot, and lets the republisher thread exit.
         """
-        with self._assist_vel_lock:
-            self._assist_vel_target = float(vy_m_s)
+        with self._baseline_vel_lock:
+            self._baseline_vel_target = float(vy_m_s)
 
         if vy_m_s == 0.0:
             # Stop: publish a zero Twist immediately, then let the thread exit.
-            self._publish_assist_twist(0.0)
+            self._publish_baseline_twist(0.0)
             return True
 
         # Start the republisher thread if not already running.
-        with self._assist_vel_lock:
-            if self._assist_vel_thread is None or not self._assist_vel_thread.is_alive():
+        with self._baseline_vel_lock:
+            if self._baseline_vel_thread is None or not self._baseline_vel_thread.is_alive():
                 t = threading.Thread(
-                    target=self._assist_vel_loop,
+                    target=self._baseline_vel_loop,
                     daemon=True,
                     name="ar-assist-vel",
                 )
-                self._assist_vel_thread = t
+                self._baseline_vel_thread = t
                 t.start()
         return True
 
-    def _assist_vel_loop(self) -> None:
+    def _baseline_vel_loop(self) -> None:
         """Republish the current assist velocity at ~50 Hz until it is zeroed."""
         while True:
-            with self._assist_vel_lock:
-                vy = self._assist_vel_target
+            with self._baseline_vel_lock:
+                vy = self._baseline_vel_target
             if vy == 0.0:
                 break
-            self._publish_assist_twist(vy)
+            self._publish_baseline_twist(vy)
             time.sleep(1.0 / 50.0)
 
-    def _publish_assist_twist(self, vy_m_s: float) -> None:
+    def _publish_baseline_twist(self, vy_m_s: float) -> None:
         if self.cmd_vel.transport is None:
-            logger.warning("Go2 assist_set_lateral_velocity: cmd_vel transport not available")
+            logger.warning("Go2 baseline_set_lateral_velocity: cmd_vel transport not available")
             return
         twist = Twist(
             linear=Vector3(0.0, vy_m_s, 0.0),

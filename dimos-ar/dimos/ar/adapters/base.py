@@ -15,7 +15,7 @@ class CapabilityState:
 
 
 @dataclass(frozen=True)
-class RuntimeAlignmentProfile:
+class RuntimeRegistrationProfile:
     runtime_static_speed_mps: float = 0.05
     runtime_max_correct_speed_mps: float = 1.5
     runtime_cruise_window_s: float = 12.0
@@ -36,7 +36,7 @@ class RobotHandshake:
     visual_origin_frame: str = "base_link"
     base_height_m: float | None = None
     default_render_offset_m: tuple[float, float, float] | None = None
-    alignment_profile: dict[str, Any] | None = None
+    registration_profile: dict[str, Any] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -59,10 +59,10 @@ class ARRobotAdapterSpec(Spec, Protocol):  # type: ignore[misc]
 
     def tag_mounts(self) -> list[TagMount]: ...
 
-    def assist_motion_available(self) -> bool: ...
+    def baseline_motion_available(self) -> bool: ...
 
-    def assist_set_lateral_velocity(self, vy_m_s: float) -> bool: ...
+    def baseline_set_lateral_velocity(self, vy_m_s: float) -> bool: ...
 
-    def assist_strafe_speed(self) -> float: ...
+    def baseline_strafe_speed(self) -> float: ...
 
-    def runtime_alignment_profile(self) -> RuntimeAlignmentProfile: ...
+    def runtime_registration_profile(self) -> RuntimeRegistrationProfile: ...

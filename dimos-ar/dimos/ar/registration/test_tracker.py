@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from dimos.ar.adapters.go2 import GO2_DEFAULT_TAG_MOUNTS
-from dimos.ar.tracking.robot_tag_tracker import (
+from dimos.ar.registration.tracker import (
     CAMERA_FRAME_MAGIC,
     DEFAULT_MARKER_ID,
     RobotAprilTagTracker,
@@ -23,7 +23,7 @@ from dimos.ar.tracking.robot_tag_tracker import (
     parse_camera_frame,
     solve_yaw_translation_2d,
 )
-from dimos.ar.tracking.transforms import OdomSample
+from dimos.ar.registration.transforms import OdomSample
 from scripts.generate_marker import generate_tag_raster
 
 
@@ -221,7 +221,7 @@ def test_current_translation_solve_recovers_base_from_lever_arm() -> None:
 
 
 def test_mount_offset_diagnostic_emitted_when_translation_solve_runs() -> None:
-    import dimos.ar.tracking.robot_tag_tracker as tag_tracker_module
+    import dimos.ar.registration.tracker as tag_tracker_module
 
     tag_tracker_module._MOUNT_OFFSET_DIAG_EMITTED = False
     tag_tracker_module._MOUNT_OFFSET_DIAG_LAST_MONO = 0.0
@@ -484,7 +484,7 @@ def test_current_solve_with_zero_baseline_returns_solve_from_small_window() -> N
 
 
 def test_odom_tag_straightness_straight_vs_curved() -> None:
-    from dimos.ar.tracking.robot_tag_tracker import TagObservation, _odom_tag_straightness
+    from dimos.ar.registration.tracker import TagObservation, _odom_tag_straightness
 
     straight = [
         TagObservation(

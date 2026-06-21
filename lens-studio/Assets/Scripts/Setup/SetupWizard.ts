@@ -3,32 +3,32 @@ require("LensStudio:TextInputModule");
 import { DimosManager } from "../Core/DimosManager";
 import { BridgeLinkState, bridgeLinkPresentation, NO_ROBOT_CONNECTED_LABEL } from "../Core/AppState";
 
-import { AlignStatusMessage } from "../Bridge/Protocol";
+import { RegistrationStatusMessage } from "../Bridge/Protocol";
 import { scaleIn } from "../UI/kit/UIAnimations";
 import { COLOR_ERROR, COLOR_WARN, COLOR_WHITE } from "../UI/kit/UIKit";
 import { SetupWizardView } from "./SetupWizardView";
 import { BridgeClient } from "../Bridge/BridgeClient";
 import { ClockSyncState } from "../Bridge/BridgeConnectionManager";
 import {
-  buildCalibrationDisplay,
-  buildCalibrateDescriptionAuto,
-  buildCalibrateStepTitle,
-  SetupCalibrationFlow,
-  CALIBRATE_DESCRIPTION_MANUAL,
-  createCalibrationViewState,
+  buildRegistrationDisplay,
+  buildRegistrationDescriptionAuto,
+  buildRegistrationStepTitle,
+  SetupRegistrationFlow,
+  REGISTRATION_DESCRIPTION_MANUAL,
+  createRegistrationViewState,
   getWizardFooterState,
-  isCalibrationFailed,
+  isRegistrationFailed,
   LAST_WIZARD_STEP,
   WIZARD_STEP_DESCRIPTIONS,
   WIZARD_STEP_TITLES,
   WizardStep,
   wizardStepName,
-} from "./SetupCalibrationFlow";
+} from "./SetupRegistrationFlow";
 
 const NAV_DEBOUNCE_S = 0.35;
 const AUTOCONNECT_RETRY_S = 2.0;
 
-/** Three-step setup component (start → connect → calibrate) that gates entry into runtime. */
+/** Three-step setup component (start → connect → register) that gates entry into runtime. */
 @component
 export class SetupWizard extends BaseScriptComponent {
   @input
@@ -37,7 +37,7 @@ export class SetupWizard extends BaseScriptComponent {
   private _currentStep = WizardStep.Start;
   private _connectCompleted = false;
   private _isConnecting = false;
-  private _alignmentHandlersBound = false;
+  private _registrationHandlersBound = false;
   private _bridgeHandlersBound = false;
   private _clockSyncHandlerBound = false;
   private _lastNavigationTime = -1;
@@ -48,7 +48,7 @@ export class SetupWizard extends BaseScriptComponent {
   private _finishEvent: DelayedCallbackEvent | null = null;
   private _finishPending = false;
   private _view: SetupWizardView | null = null;
-  private _calibrationFlow: SetupCalibrationFlow | null = null;
+  private _registrationFlow: SetupRegistrationFlow | null = null;
 
   onAwake() {
     this._view = new SetupWizardView(this.getSceneObject());
@@ -67,12 +67,12 @@ export class SetupWizard extends BaseScriptComponent {
       });
       this._finishEvent = finishEv;
 
-      this._calibrationFlow = new SetupCalibrationFlow(this.dimosManager, {
-        beginManualAlignmentPlacementFromWizard: () =>
-          this._beginManualAlignmentPlacementFromWizard(),
-        render: () => this._renderCalibrationState(),
+      this._registrationFlow = new SetupRegistrationFlow(this.dimosManager, {
+        beginManualRegistrationPlacementFromWizard: () =>
+          this._beginManualRegistrationPlacementFromWizard(),
+        render: () => this._renderRegistrationState(),
         refreshFooter: () => this._refreshFooterButtons(),
-        refreshDescription: () => this._refreshCalibrationDescription(),
+        refreshDescription: () => this._refreshRegistrationDescription(),
         log: (message) => this._log(message),
         finishSetup: () => this._finishSetup(),
         scheduleFinishSetup: (delaySecs) => this._scheduleFinishSetup(delaySecs),
@@ -81,12 +81,12 @@ export class SetupWizard extends BaseScriptComponent {
       this._view?.bindHandlers(
         () => this._onNext(),
         () => this._onPrevious(),
-        () => this._toggleManualAlignment(),
+        () => this._toggleManualRegistration(),
         () => this._startAutoconnect(),
       );
 
-      this.createEvent("UpdateEvent").bind(() => this._calibrationFlow?.tick());
-      this._bindAlignmentHandlers();
+      this.createEvent("UpdateEvent").bind(() => this._registrationFlow?.tick());
+      this._bindRegistrationHandlers();
       this._bindBridgeHandlers();
       this.startSetupWizard();
     });
@@ -98,10 +98,10 @@ export class SetupWizard extends BaseScriptComponent {
     this._connectCompleted = false;
     this._isConnecting = false;
     this._lastNavigationTime = -1;
-    this._calibrationFlow?.leave();
-    this._calibrationFlow?.setState(createCalibrationViewState());
+    this._registrationFlow?.leave();
+    this._registrationFlow?.setState(createRegistrationViewState());
     this._invalidatePending();
-    this.dimosManager?.alignmentSession.stop();
+    this.dimosManager?.registrationClient.stop();
     this.dimosManager?.enterSetup();
     const panel = this.getSceneObject();
     if (panel) {
@@ -124,10 +124,10 @@ export class SetupWizard extends BaseScriptComponent {
     this._view?.setStepContent(WIZARD_STEP_TITLES[clamped], WIZARD_STEP_DESCRIPTIONS[clamped]);
     this._view?.applyStepLayout(clamped);
 
-    if (clamped !== WizardStep.Calibrate) {
-      this.dimosManager?.alignmentSession.stop();
-      this._calibrationFlow?.leave();
-      this.dimosManager?.setupAlignmentPreview.end();
+    if (clamped !== WizardStep.Register) {
+      this.dimosManager?.registrationClient.stop();
+      this._registrationFlow?.leave();
+      this.dimosManager?.setupRegistrationPreview.end();
     }
 
     switch (clamped) {
@@ -163,9 +163,9 @@ export class SetupWizard extends BaseScriptComponent {
         break;
       }
 
-      case WizardStep.Calibrate:
+      case WizardStep.Register:
         this._view?.setInputEnabled(false);
-        this._calibrationFlow?.enter();
+        this._registrationFlow?.enter();
         break;
     }
   }
@@ -191,31 +191,31 @@ export class SetupWizard extends BaseScriptComponent {
       } else {
         this._log("connect step completed");
       }
-      this._setStep(WizardStep.Calibrate);
+      this._setStep(WizardStep.Register);
       return;
     }
 
-    if (this._currentStep !== WizardStep.Calibrate) {
+    if (this._currentStep !== WizardStep.Register) {
       return;
     }
 
-    const calState = this._calibrationFlow?.state ?? createCalibrationViewState();
-    if (calState.assistStage === "awaiting_confirm") {
-      this.dimosManager?.alignmentSession.confirmAssist();
+    const regState = this._registrationFlow?.state ?? createRegistrationViewState();
+    if (regState.phase === "awaiting_motion") {
+      this.dimosManager?.registrationClient.authorizeMotion();
       return;
     }
-    if (calState.phase === "failed") {
-      this._calibrationFlow?.redo();
+    if (regState.phase === "failed") {
+      this._registrationFlow?.redo();
       return;
     }
-    if (calState.phase === "complete") {
+    if (regState.phase === "succeeded") {
       this._finishSetup();
       return;
     }
-    if (calState.phase === "pendingCommit") {
+    if (regState.phase === "awaiting_commit") {
       return;
     }
-    if (this._calibrationFlow?.completeStep()) {
+    if (this._registrationFlow?.completeStep()) {
       this._finishSetup();
     }
   }
@@ -227,9 +227,9 @@ export class SetupWizard extends BaseScriptComponent {
     if (this._currentStep <= WizardStep.Start) {
       return;
     }
-    if (this._currentStep === WizardStep.Calibrate) {
-      this.dimosManager?.alignmentSession.stop();
-      this.dimosManager?.setupAlignmentPreview.end();
+    if (this._currentStep === WizardStep.Register) {
+      this.dimosManager?.registrationClient.stop();
+      this.dimosManager?.setupRegistrationPreview.end();
     }
     this._setStep((this._currentStep - 1) as WizardStep);
   }
@@ -317,13 +317,13 @@ export class SetupWizard extends BaseScriptComponent {
     return (this.dimosManager?.bridgeLinkState ?? "disconnected") !== "disconnected";
   }
 
-  private _bindAlignmentHandlers(): void {
-    if (this._alignmentHandlersBound || !this.dimosManager) {
+  private _bindRegistrationHandlers(): void {
+    if (this._registrationHandlersBound || !this.dimosManager) {
       return;
     }
-    this._alignmentHandlersBound = true;
-    this.dimosManager.alignmentSession.onAlignStatus.add((msg) =>
-      this._onAlignStatus(msg),
+    this._registrationHandlersBound = true;
+    this.dimosManager.registrationClient.onRegistrationStatus.add((msg) =>
+      this._onRegistrationStatus(msg),
     );
   }
 
@@ -339,10 +339,10 @@ export class SetupWizard extends BaseScriptComponent {
         this._showBridgeConnectionStatus();
         this._refreshFooterButtons();
       }
-      if (this._currentStep === WizardStep.Calibrate) {
-        this._refreshCalibrationDescription();
-        if (this.dimosManager!.alignmentSession.ensureSession()) {
-          this._renderCalibrationState();
+      if (this._currentStep === WizardStep.Register) {
+        this._refreshRegistrationDescription();
+        if (this.dimosManager!.registrationClient.ensureSession()) {
+          this._renderRegistrationState();
         }
       }
     });
@@ -354,18 +354,18 @@ export class SetupWizard extends BaseScriptComponent {
         this._showBridgeConnectionStatus();
         this._refreshFooterButtons();
       }
-      if (this._currentStep === WizardStep.Calibrate) {
-        this._calibrationFlow?.handleBridgeConnectionChanged(connected);
-        this._refreshCalibrationDescription();
-        this._renderCalibrationState();
+      if (this._currentStep === WizardStep.Register) {
+        this._registrationFlow?.handleBridgeConnectionChanged(connected);
+        this._refreshRegistrationDescription();
+        this._renderRegistrationState();
       }
     });
     this.dimosManager.onBridgeStatusChanged.add((msg) => {
       if (this._currentStep === WizardStep.Connect) {
         this._showBridgeConnectionStatus();
       }
-      if (this._currentStep === WizardStep.Calibrate) {
-        this._calibrationFlow?.handleBridgeStatus(msg);
+      if (this._currentStep === WizardStep.Register) {
+        this._registrationFlow?.handleBridgeStatus(msg);
       }
     });
     this._bindClockSyncHandler();
@@ -404,7 +404,7 @@ export class SetupWizard extends BaseScriptComponent {
       return "Syncing clock…";
     }
     if (clockSyncState === "failed") {
-      return "Clock sync failed — reconnect or continue without alignment frames";
+      return "Clock sync failed — reconnect or continue without registration frames";
     }
     return null;
   }
@@ -422,16 +422,20 @@ export class SetupWizard extends BaseScriptComponent {
     }
   }
 
-  private _renderCalibrationState(): void {
-    if (this._currentStep !== WizardStep.Calibrate) {
+  private _renderRegistrationState(): void {
+    if (this._currentStep !== WizardStep.Register) {
       return;
     }
-    const display = buildCalibrationDisplay(
-      this._calibrationFlow?.state ?? createCalibrationViewState(),
+    const display = buildRegistrationDisplay(
+      this._registrationFlow?.state ?? createRegistrationViewState(),
       this.dimosManager?.hasBridgeConnection() ?? false,
     );
-    if (display.statusText) {
-      this._view?.setStatus(display.statusText, display.statusColor);
+    const detailText = display.detailText;
+    if (display.statusText || detailText) {
+      const statusText = detailText
+        ? `${display.statusText}\n${detailText}`.trim()
+        : display.statusText;
+      this._view?.setStatus(statusText, display.statusColor);
     } else {
       this._view?.setStatus("", COLOR_WHITE);
     }
@@ -441,19 +445,20 @@ export class SetupWizard extends BaseScriptComponent {
     const footerState = getWizardFooterState(
       this._currentStep,
       this._isConnected(),
-      this._calibrationFlow?.state ?? createCalibrationViewState(),
+      this._registrationFlow?.state ?? createRegistrationViewState(),
+      this._registrationFlow?.commitInFlight ?? false,
     );
-    if (this._currentStep === WizardStep.Calibrate && this._calibrationFlow?.isManualOnly()) {
+    if (this._currentStep === WizardStep.Register && this._registrationFlow?.isManualOnly()) {
       footerState.showManual = false;
     }
     this._view?.applyFooterState(this._currentStep, footerState);
   }
 
-  private _refreshCalibrationDescription(): void {
-    const mode = this._calibrationFlow?.state.mode ?? "auto";
-    const title = buildCalibrateStepTitle(mode);
+  private _refreshRegistrationDescription(): void {
+    const mode = this._registrationFlow?.state.mode ?? "auto";
+    const title = buildRegistrationStepTitle(mode);
     if (mode === "manual") {
-      this._view?.setStepContent(title, CALIBRATE_DESCRIPTION_MANUAL);
+      this._view?.setStepContent(title, REGISTRATION_DESCRIPTION_MANUAL);
       return;
     }
     if (!this.dimosManager?.hasBridgeConnection()) {
@@ -462,18 +467,18 @@ export class SetupWizard extends BaseScriptComponent {
     }
     const displayName =
       this.dimosManager.appState.robotRuntime.displayName ?? NO_ROBOT_CONNECTED_LABEL;
-    this._view?.setStepContent(title, buildCalibrateDescriptionAuto(displayName));
+    this._view?.setStepContent(title, buildRegistrationDescriptionAuto(displayName));
   }
 
-  private _toggleManualAlignment(): void {
-    if (this._currentStep !== WizardStep.Calibrate) {
+  private _toggleManualRegistration(): void {
+    if (this._currentStep !== WizardStep.Register) {
       return;
     }
-    this.dimosManager?.setupAlignmentPreview.end();
-    this._calibrationFlow?.toggleMode();
+    this.dimosManager?.setupRegistrationPreview.end();
+    this._registrationFlow?.toggleMode();
   }
 
-  private _beginManualAlignmentPlacementFromWizard(): boolean {
+  private _beginManualRegistrationPlacementFromWizard(): boolean {
     const panel = this.getSceneObject();
     if (!panel) {
       return false;
@@ -481,22 +486,22 @@ export class SetupWizard extends BaseScriptComponent {
     const transform = panel.getTransform();
     const position = transform.getWorldPosition();
     const rotation = transform.getWorldRotation();
-    this.dimosManager?.beginManualAlignmentPlacementAt(
+    this.dimosManager?.beginManualRegistrationPlacementAt(
       new vec3(position.x, position.y, position.z),
       rotation,
     );
     return true;
   }
 
-  private _onAlignStatus(msg: AlignStatusMessage): void {
-    if (this._currentStep !== WizardStep.Calibrate) {
+  private _onRegistrationStatus(msg: RegistrationStatusMessage): void {
+    if (this._currentStep !== WizardStep.Register) {
       return;
     }
-    this._calibrationFlow?.handleAlignStatus(msg);
-    if (msg.state === "aligned") {
-      this._log(`alignment succeeded (progress=${msg.progress}%)`);
-    } else if (msg.state === "failed") {
-      this._log(`alignment failed: ${msg.message || "unknown"}`);
+    this._registrationFlow?.handleRegistrationStatus(msg);
+    if (msg.phase === "succeeded") {
+      this._log("registration succeeded");
+    } else if (msg.phase === "failed") {
+      this._log(`registration failed: ${msg.message || "unknown"}`);
     }
   }
 
@@ -508,16 +513,16 @@ export class SetupWizard extends BaseScriptComponent {
   private _finishSetup(): void {
     this._finishPending = false;
     this._log(
-      `finish connect=${this._connectCompleted ? "done" : "skipped"} calibration=${
-        this._calibrationFlow?.isComplete() ? "done" : "skipped"
+      `finish connect=${this._connectCompleted ? "done" : "skipped"} registration=${
+        this._registrationFlow?.isComplete() ? "done" : "skipped"
       }`,
     );
     const panel = this.getSceneObject();
     if (panel) {
       panel.enabled = false;
     }
-    this.dimosManager?.setupAlignmentPreview.end();
-    this.dimosManager?.alignmentSession.stop();
+    this.dimosManager?.setupRegistrationPreview.end();
+    this.dimosManager?.registrationClient.stop();
     this.dimosManager?.enterRuntime();
   }
 

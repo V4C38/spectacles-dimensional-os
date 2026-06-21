@@ -20,7 +20,7 @@ export { NAV_GOAL_MODE_LABELS, nextNavigationGoalMode };
 
 /** Whole-app lifecycle: setup wizard vs live XR session. */
 export type AppPhase = "setup" | "runtime";
-/** Runtime UX mode; `"setup"` is calibration preview overlay — not the same as `AppPhase.setup`. */
+/** Runtime UX mode; `"setup"` is registration preview overlay — not the same as `AppPhase.setup`. */
 export type OperatingMode = "setup" | "manual" | "agent";
 export type RobotInteractionMode = "hidden" | "manualPlacement" | "runtimeRobot";
 export type NavigationState =
@@ -223,7 +223,7 @@ export interface RobotRuntimeState {
   footprintM: [number, number] | null;
   baseHeightM: number | null;
   defaultRenderOffsetM: [number, number, number] | null;
-  alignmentProfile: Record<string, unknown> | null;
+  registrationProfile: Record<string, unknown> | null;
   capabilities: Record<string, RuntimeCapabilityState>;
 }
 
@@ -260,8 +260,8 @@ export const NO_ROBOT_CONNECTED_LABEL = "No Robot connected";
 const DEFAULT_CAPABILITY_NAMES = [
   "lidar",
   "odom",
-  "align",
-  "align_manual",
+  "registration_april_odom_baseline",
+  "registration_manual_pose",
   "nav",
   "path",
   "plan_preview",
@@ -291,7 +291,7 @@ function cloneRobotRuntime(state: RobotRuntimeState): RobotRuntimeState {
     defaultRenderOffsetM: state.defaultRenderOffsetM
       ? [...state.defaultRenderOffsetM] as [number, number, number]
       : null,
-    alignmentProfile: state.alignmentProfile ? { ...state.alignmentProfile } : null,
+    registrationProfile: state.registrationProfile ? { ...state.registrationProfile } : null,
     capabilities: cloneCapabilities(state.capabilities),
   };
 }
@@ -334,7 +334,7 @@ export function createDefaultRobotRuntimeState(): RobotRuntimeState {
     footprintM: null,
     baseHeightM: null,
     defaultRenderOffsetM: null,
-    alignmentProfile: null,
+    registrationProfile: null,
     capabilities,
   };
 }

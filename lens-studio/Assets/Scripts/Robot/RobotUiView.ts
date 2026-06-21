@@ -72,6 +72,7 @@ export class RobotUiView {
   private _uiLogEntry: UILogEntry | null = null;
   private _callbacks: RobotUiCallbacks | null = null;
   private _continueHandler: (() => void) | null = null;
+  private _registrationPreviewActive = false;
 
   constructor(markerRoot: SceneObject, menuRoot: SceneObject) {
     this.markerRoot = markerRoot;
@@ -139,8 +140,8 @@ export class RobotUiView {
     this._continueHandler = callbacks.onContinue ?? null;
   }
 
-  public setOnContinue(handler: (() => void) | null): void {
-    this._continueHandler = handler;
+  public setRegistrationPreviewActive(active: boolean): void {
+    this._registrationPreviewActive = active;
   }
 
   public hide(): void {
@@ -183,7 +184,14 @@ export class RobotUiView {
     }
   }
 
+  public setOnContinue(handler: (() => void) | null): void {
+    this._continueHandler = handler;
+  }
+
   public syncFromState(state: DimosAppState, uiLogEntry: UILogEntry | null = null): void {
+    if (this._registrationPreviewActive) {
+      return;
+    }
     this._debugMode = state.debugMode;
     this._uiLogEntry = uiLogEntry;
     this.setOperatingMode(state.operatingMode);

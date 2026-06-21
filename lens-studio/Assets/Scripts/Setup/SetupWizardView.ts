@@ -14,10 +14,10 @@ import {
   SLOT_INPUT,
   Z_CONTENT,
 } from "../UI/kit/UIKit";
-import { WizardFooterState, WizardStep } from "./SetupCalibrationFlow";
+import { WizardFooterState, WizardStep } from "./SetupRegistrationFlow";
 
 // ================================================================
-/** Binds and updates the setup wizard panel UI (title, IP input, calibration status, footer). */
+/** Binds and updates the setup wizard panel UI (title, IP input, registration status, footer). */
 // ================================================================
 
 export class SetupWizardView {
@@ -145,7 +145,7 @@ export class SetupWizardView {
 
   public applyStepLayout(step: WizardStep): void {
     const statusY =
-      step === WizardStep.Calibrate
+      step === WizardStep.Register
         ? SetupWizardView.STATUS_Y_CALIBRATE
         : SetupWizardView.STATUS_Y_DEFAULT;
     this._statusObj.getTransform().setLocalPosition(

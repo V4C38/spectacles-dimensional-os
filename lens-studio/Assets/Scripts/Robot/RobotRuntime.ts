@@ -1,7 +1,7 @@
 import { PointCloudRenderer } from "../Lidar/PointCloudRenderer";
 import { LidarPresentationController } from "../Lidar/LidarPresentationController";
 import { RobotMarker } from "../Robot/RobotMarker";
-import { ManualPoseCorrection } from "../Alignment/ManualPoseCorrection";
+import { ManualPoseCorrection } from "../Registration/ManualPoseCorrection";
 import { DimosState } from "../Core/DimosState";
 import {
   DimosAppState,

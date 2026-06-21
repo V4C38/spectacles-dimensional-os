@@ -1,10 +1,10 @@
 import { FrameCaptureController } from "../Camera/FrameCaptureController";
-import { AlignmentSession } from "../Alignment/AlignmentSession";
+import { RegistrationClient } from "../Registration/RegistrationClient";
 import { BridgeClient } from "../Bridge/BridgeClient";
 import { BridgeRuntime } from "../Bridge/BridgeRuntime";
 import { DimosServices } from "./DimosServices";
 import { RobotRuntime } from "../Robot/RobotRuntime";
-import { SetupAlignmentPreview } from "../Setup/SetupAlignmentPreview";
+import { SetupRegistrationPreview } from "../Setup/SetupRegistrationPreview";
 import {
   AppStateListener,
   AppPhase,
@@ -62,11 +62,11 @@ export class DimosManager extends BaseScriptComponent {
     return this.dimosServices.bridge.onBridgeConnectionChanged;
   }
 
-  public get alignmentSession(): AlignmentSession {
-    return this.dimosServices.alignment;
+  public get registrationClient(): RegistrationClient {
+    return this.dimosServices.registration;
   }
 
-  public get setupAlignmentPreview(): SetupAlignmentPreview {
+  public get setupRegistrationPreview(): SetupRegistrationPreview {
     return this.dimosServices.setupPreview;
   }
 
@@ -110,7 +110,7 @@ export class DimosManager extends BaseScriptComponent {
         getInteractionMode: () => this.appState.robotInteractionMode,
         setInteractionMode: (mode) => this._setRobotInteractionMode(mode),
         getIsRuntimePhase: () => this.isRuntimePhase(),
-        disableNavigationPlacementForAlignment: () => {
+        disableNavigationPlacementForRegistration: () => {
           if (navigation.placementEnabled) {
             navigation.disarm();
           }
@@ -163,9 +163,9 @@ export class DimosManager extends BaseScriptComponent {
 
   public enterSetup(): void {
     this._log("enterSetup");
-    this.alignmentSession?.cancelPlacement();
-    this.alignmentSession?.stop();
-    this.alignmentSession?.clearPose();
+    this.registrationClient?.cancelPlacement();
+    this.registrationClient?.stop();
+    this.registrationClient?.clearPose();
     this.dimosServices.bridge.disconnect();
     this.frameCaptureController?.setMode("off");
     this.dimosServices.state.update({
@@ -178,9 +178,9 @@ export class DimosManager extends BaseScriptComponent {
 
   public enterRuntime(): void {
     this._log("enterRuntime");
-    this.setupAlignmentPreview?.endIfActive();
-    this.alignmentSession?.cancelPlacement();
-    this.alignmentSession?.stop();
+    this.setupRegistrationPreview?.endIfActive();
+    this.registrationClient?.cancelPlacement();
+    this.registrationClient?.stop();
     this.dimosServices.robot.prepareForRuntime(
       Boolean(
         this.dimosServices.bridgeClient?.lastBridgeStatus?.registration_approximate,
@@ -239,8 +239,8 @@ export class DimosManager extends BaseScriptComponent {
     return this.dimosServices.bridge.requestBridgeStatus();
   }
 
-  public beginManualAlignmentPlacementAt(position: vec3, rotation: quat): void {
-    this.alignmentSession?.beginManualPlacement(position, rotation);
+  public beginManualRegistrationPlacementAt(position: vec3, rotation: quat): void {
+    this.registrationClient?.beginManualPlacement(position, rotation);
   }
 
   public requestEmergencyStop(): void {

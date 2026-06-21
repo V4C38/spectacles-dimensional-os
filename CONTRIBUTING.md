@@ -36,11 +36,11 @@ DimOS is an external dependency — install from [dimensionalOS/dimos](https://g
 
 ## Lens Studio
 
-Scene wiring is centralized on [`DimosServices.ts`](lens-studio/Assets/Scripts/Core/DimosServices.ts): assign cross-tree `@input`s there once. Entry scripts need [`DimosManager`](lens-studio/Assets/Scripts/Core/DimosManager.ts) (plus `mainUIFrame` and `setupWizard` on [`UIManager`](lens-studio/Assets/Scripts/UI/UIManager.ts)). Runtime services (`DimosState`, `BridgeRuntime`, `RobotRuntime`, `NavigationHost`, `AlignmentSession`, `SetupAlignmentPreview`) are plain TypeScript classes owned by `DimosServices`, not separate scene objects.
+Scene wiring is centralized on [`DimosServices.ts`](lens-studio/Assets/Scripts/Core/DimosServices.ts): assign cross-tree `@input`s there once. Entry scripts need [`DimosManager`](lens-studio/Assets/Scripts/Core/DimosManager.ts) (plus `mainUIFrame` and `setupWizard` on [`UIManager`](lens-studio/Assets/Scripts/UI/UIManager.ts)). Runtime services (`DimosState`, `BridgeRuntime`, `RobotRuntime`, `NavigationHost`, `RegistrationClient`, `SetupRegistrationPreview`) are plain TypeScript classes owned by `DimosServices`, not separate scene objects. The scene prefab input `assistClearanceDiscPrefab` is the baseline-motion clearance disc (legacy prefab name).
 
 ### Architecture rules — one owner per concern
 
-Each subsystem (navigation, alignment, robot, lidar, setup) has **one owner class** that holds all state, logic, and lifecycle for that concern. Do not split a concern across coordinator + controller + presenter layers or introduce lambda-bundle dependency interfaces. If a subsystem needs a sibling's API, pass a concrete reference (or the shared `AppState`) in the constructor.
+Each subsystem (navigation, registration, robot, lidar, setup) has **one owner class** that holds all state, logic, and lifecycle for that concern. Do not split a concern across coordinator + controller + presenter layers or introduce lambda-bundle dependency interfaces. If a subsystem needs a sibling's API, pass a concrete reference (or the shared `AppState`) in the constructor.
 
 ### Scene-reference policy
 
@@ -55,9 +55,9 @@ After changing the AprilTag contract, regenerate robot-mounted assets: `python s
 
 ## Diagnostics and logging
 
-Alignment and bridge failures are logged to the Lens Studio Logger (`print`) and
+Registration and bridge failures are logged to the Lens Studio Logger (`print`) and
 the bridge terminal / `dimos log -f`. `./start.sh` defaults to `DIMOS_LOG_LEVEL=DEBUG`.
-When changing protocol or alignment behavior, add or extend log lines at failure
+When changing protocol or registration behavior, add or extend log lines at failure
 points rather than introducing UI error catalogs.
 
 ## Tests

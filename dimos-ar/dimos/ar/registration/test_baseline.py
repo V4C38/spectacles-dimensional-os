@@ -1,4 +1,4 @@
-"""Tests for AssistDriver state machine (dimos.ar.bridge.assist) — 3-leg stop-and-sample flow."""
+"""Tests for BaselineCollector state machine (dimos.ar.registration.baseline) — 3-leg stop-and-sample flow."""
 
 from __future__ import annotations
 
@@ -6,31 +6,31 @@ import math
 import threading
 from unittest.mock import MagicMock, patch
 
-from dimos.ar.bridge.assist import (
+from dimos.ar.registration.baseline import (
     MOVE_LEG_MAX_S,
     MOVE_LEG_S,
     MOVE_LEG_TARGET_M,
     SAMPLE_MIN_OBS,
-    AssistDriver,
-    AssistState,
+    BaselineCollector,
+    _BaselineState,
     _MovePhase,
 )
-from dimos.ar.tracking.transforms import OdomSample
+from dimos.ar.registration.transforms import OdomSample
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
 
 def _make_adapter(*, available: bool = True) -> MagicMock:
     adapter = MagicMock()
-    adapter.assist_motion_available.return_value = available
-    adapter.assist_strafe_speed.return_value = 0.5
-    adapter.assist_set_lateral_velocity.return_value = True
+    adapter.baseline_motion_available.return_value = available
+    adapter.baseline_strafe_speed.return_value = 0.5
+    adapter.baseline_set_lateral_velocity.return_value = True
     return adapter
 
 
-def _make_driver(*, available: bool = True) -> tuple[AssistDriver, MagicMock]:
+def _make_driver(*, available: bool = True) -> tuple[BaselineCollector, MagicMock]:
     adapter = _make_adapter(available=available)
-    driver = AssistDriver(adapter=adapter)
+    driver = BaselineCollector(adapter=adapter)
     return driver, adapter
 
 
@@ -40,33 +40,33 @@ def _make_driver(*, available: bool = True) -> tuple[AssistDriver, MagicMock]:
 def test_no_velocity_without_confirm() -> None:
     driver, adapter = _make_driver()
     driver.start()
-    assert driver.state == AssistState.ESTIMATING
+    assert driver.state == _BaselineState.ESTIMATING
     for _ in range(10):
         driver.tick(obs_count=0, latest_obs_pos_world=None)
-    adapter.assist_set_lateral_velocity.assert_not_called()
+    adapter.baseline_set_lateral_velocity.assert_not_called()
 
 
 # ── ESTIMATING → AWAITING_CONFIRM ────────────────────────────────────────────
 
 
-def _advance_to_awaiting_confirm(driver: AssistDriver) -> None:
+def _advance_to_awaiting_confirm(driver: BaselineCollector) -> None:
     pos = (1.0, 0.0, -2.0)
     for i in range(3):
         driver.tick(obs_count=i, latest_obs_pos_world=pos)
-    assert driver.state == AssistState.AWAITING_CONFIRM
+    assert driver.state == _BaselineState.AWAITING_CONFIRM
 
 
 # ── confirm goes directly to MOVE (no countdown) ─────────────────────────────
 
 
 def test_confirm_enters_move_directly() -> None:
-    """A1: on_assist_confirm must go AWAITING_CONFIRM→MOVE with no intermediate state."""
+    """A1: authorize_motion must go AWAITING_CONFIRM→MOVE with no intermediate state."""
     driver, adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
-    assert driver.state == AssistState.MOVE
-    adapter.assist_set_lateral_velocity.assert_called_with(0.5)
+    driver.authorize_motion()
+    assert driver.state == _BaselineState.MOVE
+    adapter.baseline_set_lateral_velocity.assert_called_with(0.5)
 
 
 # ── happy path: full 3-leg stop-and-sample sequence ──────────────────────────
@@ -86,14 +86,14 @@ def _odom(x: float, y: float, yaw_rad: float = 0.0) -> OdomSample:
 
 
 def _drive_through_sample(
-    driver: AssistDriver,
+    driver: BaselineCollector,
     expected_leg_after: int | None,
 ) -> None:
     """Deliver stable tag observations until the driver leaves the SAMPLE phase."""
     for pos in _stable_pos():
         driver.tick(obs_count=SAMPLE_MIN_OBS, latest_obs_pos_world=pos)
     if expected_leg_after is None:
-        assert driver.state == AssistState.DONE
+        assert driver.state == _BaselineState.DONE
     else:
         assert driver._move_leg_index == expected_leg_after
         assert driver._move_phase == _MovePhase.LEG
@@ -103,56 +103,56 @@ def test_happy_path_full_3_leg_sequence() -> None:
     driver, adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
-    assert driver.state == AssistState.MOVE
+    driver.authorize_motion()
+    assert driver.state == _BaselineState.MOVE
     assert driver._move_leg_index == 0
 
     # --- Leg 0 completes (time-based) ---
     t0 = driver._move_start_mono
     assert t0 is not None
-    with patch("dimos.ar.bridge.assist.time") as mt:
+    with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE, "leg 0 must enter sample phase"
 
     # --- Sample 0: deliver stable observations ---
     _drive_through_sample(driver, expected_leg_after=1)
-    assert driver.state == AssistState.MOVE
-    adapter.assist_set_lateral_velocity.assert_called_with(-0.5)
+    assert driver.state == _BaselineState.MOVE
+    adapter.baseline_set_lateral_velocity.assert_called_with(-0.5)
 
     # --- Leg 1 completes (2× duration) ---
     t1 = driver._move_start_mono
     assert t1 is not None
-    with patch("dimos.ar.bridge.assist.time") as mt:
+    with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t1 + 2 * MOVE_LEG_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE, "leg 1 must enter sample phase"
 
     # --- Sample 1 ---
     _drive_through_sample(driver, expected_leg_after=2)
-    assert driver.state == AssistState.MOVE
-    adapter.assist_set_lateral_velocity.assert_called_with(0.5)
+    assert driver.state == _BaselineState.MOVE
+    adapter.baseline_set_lateral_velocity.assert_called_with(0.5)
 
     # --- Leg 2 completes (1× duration) ---
     t2 = driver._move_start_mono
     assert t2 is not None
-    with patch("dimos.ar.bridge.assist.time") as mt:
+    with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t2 + MOVE_LEG_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE, "leg 2 must enter sample phase"
 
     # --- Sample 2 → DONE ---
     _drive_through_sample(driver, expected_leg_after=None)
-    assert driver.state == AssistState.DONE
-    adapter.assist_set_lateral_velocity.assert_called_with(0.0)
+    assert driver.state == _BaselineState.DONE
+    adapter.baseline_set_lateral_velocity.assert_called_with(0.0)
 
 
 def test_leg_completion_uses_odom_lateral_displacement_when_available() -> None:
     driver, _adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
-    assert driver.state == AssistState.MOVE
+    driver.authorize_motion()
+    assert driver.state == _BaselineState.MOVE
 
     # First odom sample establishes the start pose; second reaches the lateral target.
     driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0))
@@ -168,7 +168,7 @@ def test_leg_completion_uses_ground_displacement_with_large_yaw_change() -> None
     driver, _adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
+    driver.authorize_motion()
 
     driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0, 0.0))
     driver.tick(
@@ -177,7 +177,7 @@ def test_leg_completion_uses_ground_displacement_with_large_yaw_change() -> None
         latest_odom=_odom(0.05, MOVE_LEG_TARGET_M + 0.02, math.radians(35.0)),
     )
 
-    assert driver.state == AssistState.MOVE
+    assert driver.state == _BaselineState.MOVE
     assert driver._move_phase == _MovePhase.SAMPLE
 
 
@@ -185,16 +185,16 @@ def test_leg_watchdog_advances_without_abort_when_odom_target_not_reached() -> N
     driver, _adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
+    driver.authorize_motion()
 
     driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0))
     t0 = driver._move_start_mono
     assert t0 is not None
-    with patch("dimos.ar.bridge.assist.time") as mt:
+    with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + MOVE_LEG_MAX_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0))
 
-    assert driver.state == AssistState.MOVE
+    assert driver.state == _BaselineState.MOVE
     assert driver._move_phase == _MovePhase.SAMPLE
 
 
@@ -202,12 +202,12 @@ def test_long_middle_leg_uses_doubled_ground_displacement_target() -> None:
     driver, _adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
+    driver.authorize_motion()
 
     # Finish leg 1 and sample so leg 2 starts.
     t0 = driver._move_start_mono
     assert t0 is not None
-    with patch("dimos.ar.bridge.assist.time") as mt:
+    with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     _drive_through_sample(driver, expected_leg_after=1)
@@ -236,15 +236,15 @@ def test_tag_loss_during_leg_does_not_abort() -> None:
     driver, _ = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
-    assert driver.state == AssistState.MOVE
+    driver.authorize_motion()
+    assert driver.state == _BaselineState.MOVE
     t0 = driver._move_start_mono
     assert t0 is not None
     for i in range(10):
-        with patch("dimos.ar.bridge.assist.time") as mt:
+        with patch("dimos.ar.registration.baseline.time") as mt:
             mt.monotonic.return_value = t0 + 0.1 * i
             driver.tick(obs_count=0, latest_obs_pos_world=None)
-        assert driver.state == AssistState.MOVE, "Tag loss must not abort MOVE"
+        assert driver.state == _BaselineState.MOVE, "Tag loss must not abort MOVE"
 
 
 # ── sample: tag loss makes the robot hold (no timeout) ───────────────────────
@@ -255,12 +255,12 @@ def test_sample_holds_on_tag_loss() -> None:
     driver, adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
+    driver.authorize_motion()
 
     # Fast-forward leg 0 to settle
     t0 = driver._move_start_mono
     assert t0 is not None
-    with patch("dimos.ar.bridge.assist.time") as mt:
+    with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE
@@ -279,11 +279,11 @@ def test_sample_unstable_obs_do_not_advance() -> None:
     driver, _ = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
+    driver.authorize_motion()
 
     t0 = driver._move_start_mono
     assert t0 is not None
-    with patch("dimos.ar.bridge.assist.time") as mt:
+    with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE
@@ -297,74 +297,66 @@ def test_sample_unstable_obs_do_not_advance() -> None:
 # ── external abort events ─────────────────────────────────────────────────────
 
 
-def test_align_stop_aborts_and_stops_motion() -> None:
+def test_stop_aborts_and_stops_motion() -> None:
     driver, adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
-    driver.on_align_stop()
-    assert driver.state == AssistState.AWAITING_CONFIRM
+    driver.authorize_motion()
+    driver.stop()
+    assert driver.state == _BaselineState.IDLE
 
 
-def test_emergency_stop_aborts() -> None:
+def test_emergency_stop_fails() -> None:
     driver, _ = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
-    driver.on_emergency_stop()
-    assert driver.state == AssistState.AWAITING_CONFIRM
-
-
-def test_new_session_aborts() -> None:
-    driver, _ = _make_driver()
-    driver.start()
-    _advance_to_awaiting_confirm(driver)
-    driver.on_new_session()
-    assert driver.state == AssistState.AWAITING_CONFIRM
+    driver.authorize_motion()
+    driver.fail("Emergency stop received")
+    assert driver.state == _BaselineState.FAILED
 
 
 def test_abort_during_move_publishes_zero_velocity() -> None:
     driver, adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
-    assert driver.state == AssistState.MOVE
+    driver.authorize_motion()
+    assert driver.state == _BaselineState.MOVE
 
-    driver.on_align_stop()
-    assert driver.state == AssistState.AWAITING_CONFIRM
-    adapter.assist_set_lateral_velocity.assert_called_with(0.0)
+    driver.stop()
+    assert driver.state == _BaselineState.IDLE
+    adapter.baseline_set_lateral_velocity.assert_called_with(0.0)
 
 
-def test_retry_after_abort_restarts_from_move() -> None:
-    """After an abort from AWAITING_CONFIRM, a new confirm must re-enter MOVE."""
+def test_restart_after_stop() -> None:
+    """After stop(), start() must begin a fresh estimating session."""
     driver, _ = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_align_stop()
-    assert driver.state == AssistState.AWAITING_CONFIRM
-    driver.on_assist_confirm()
-    assert driver.state == AssistState.MOVE
+    driver.stop()
+    assert driver.state == _BaselineState.IDLE
+    driver.start()
+    assert driver.state == _BaselineState.ESTIMATING
 
 
 # ── reset_to_idle: silent teardown ────────────────────────────────────────────
 
 
 def test_reset_to_idle_goes_to_idle_silently() -> None:
-    """reset_to_idle must transition to IDLE without firing on_stage_change."""
-    stage_changes: list[tuple[str, str]] = []
+    """reset_to_idle must transition to IDLE without firing on_status."""
+    status_changes: list[str] = []
     adapter = _make_adapter()
-    driver = AssistDriver(
+    driver = BaselineCollector(
         adapter=adapter,
-        on_stage_change=lambda s, m: stage_changes.append((s, m)),
+        on_status=lambda s: status_changes.append(s.phase.value),
     )
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    stage_changes.clear()
+    status_changes.clear()
 
     driver.reset_to_idle()
 
-    assert driver.state == AssistState.IDLE
-    assert stage_changes == [], "reset_to_idle must not fire on_stage_change"
+    assert driver.state == _BaselineState.IDLE
+    assert status_changes == [], "reset_to_idle must not fire on_status"
 
 
 def test_reset_to_idle_stops_motion() -> None:
@@ -372,12 +364,12 @@ def test_reset_to_idle_stops_motion() -> None:
     driver, adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
-    assert driver.state == AssistState.MOVE
+    driver.authorize_motion()
+    assert driver.state == _BaselineState.MOVE
 
     driver.reset_to_idle()
-    assert driver.state == AssistState.IDLE
-    adapter.assist_set_lateral_velocity.assert_called_with(0.0)
+    assert driver.state == _BaselineState.IDLE
+    adapter.baseline_set_lateral_velocity.assert_called_with(0.0)
 
 
 # ── concurrency ───────────────────────────────────────────────────────────────
@@ -411,34 +403,15 @@ def test_concurrent_ticks_do_not_corrupt_state() -> None:
     assert not errors
 
 
-# ── stage_label / step_index / progress_percent ───────────────────────────────
-
-
-def test_stage_label_none_when_idle() -> None:
-    driver, _ = _make_driver()
-    assert driver.stage_label is None
-
-
-def test_stage_label_estimating_when_started() -> None:
-    driver, _ = _make_driver()
-    driver.start()
-    assert driver.stage_label == "estimating"
-
-
-def test_stage_label_none_when_done() -> None:
-    driver, _ = _make_driver()
-    driver.start()
-    with driver._lock:
-        driver._state = AssistState.DONE
-    assert driver.stage_label is None
+# ── sampling phase detection ───────────────────────────────────────────────────
 
 
 def test_is_sampling_false_during_leg() -> None:
     driver, _ = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
-    assert driver.state == AssistState.MOVE
+    driver.authorize_motion()
+    assert driver.state == _BaselineState.MOVE
     assert driver.is_sampling is False
 
 
@@ -446,66 +419,11 @@ def test_is_sampling_true_during_sample() -> None:
     driver, _ = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
+    driver.authorize_motion()
     t0 = driver._move_start_mono
     assert t0 is not None
-    with patch("dimos.ar.bridge.assist.time") as mt:
+    with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE
     assert driver.is_sampling is True
-
-
-def test_step_index_1_during_estimating() -> None:
-    driver, _ = _make_driver()
-    driver.start()
-    assert driver.step_index == 1
-    assert driver.step_count == 2
-
-
-def test_step_index_1_during_awaiting_confirm() -> None:
-    driver, _ = _make_driver()
-    driver.start()
-    _advance_to_awaiting_confirm(driver)
-    assert driver.step_index == 1
-
-
-def test_step_index_2_during_move() -> None:
-    driver, _ = _make_driver()
-    driver.start()
-    _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
-    assert driver.state == AssistState.MOVE
-    assert driver.step_index == 2
-
-
-def test_progress_percent_grows_during_estimating() -> None:
-    driver, _ = _make_driver()
-    driver.start()
-    assert driver.progress_percent() == 0
-    driver.tick(obs_count=0, latest_obs_pos_world=(1.0, 0.0, -2.0))
-    assert 0 < driver.progress_percent() < 100
-
-
-def test_progress_percent_100_at_awaiting_confirm() -> None:
-    driver, _ = _make_driver()
-    driver.start()
-    _advance_to_awaiting_confirm(driver)
-    assert driver.progress_percent() == 100
-
-
-def test_progress_percent_0_at_move_start() -> None:
-    driver, _ = _make_driver()
-    driver.start()
-    _advance_to_awaiting_confirm(driver)
-    driver.on_assist_confirm()
-    assert driver.state == AssistState.MOVE
-    assert driver.progress_percent() == 0
-
-
-def test_progress_percent_100_at_done() -> None:
-    driver, _ = _make_driver()
-    driver.start()
-    with driver._lock:
-        driver._state = AssistState.DONE
-    assert driver.progress_percent() == 100
