@@ -135,7 +135,7 @@ class RegisteredPoseRefiner:
 
         use_yaw = (
             regime == "cruise"
-            and solve.method == "tag"
+            and solve.method == "apriltag_full"
             and solve.baseline_m >= profile.runtime_yaw_min_baseline_m
             and solve.straightness <= profile.runtime_yaw_straightness_max
         )
@@ -155,7 +155,6 @@ class RegisteredPoseRefiner:
             self._sender.send(
                 encode_pose_correction(
                     ts=ts,
-                    robot_id=self._robot_id,
                     trans_delta_m=trans_delta,
                     yaw_delta_deg=yaw_delta_deg,
                     yaw_corrected=use_yaw,
@@ -362,6 +361,5 @@ class RegisteredPoseRefiner:
                 ts=ts if ts is not None else time.time(),
                 position=position,
                 orientation=orientation,
-                robot_id=self._robot_id,
             )
         )

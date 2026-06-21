@@ -15,11 +15,21 @@ Do **not** open Lens Studio from the repo root — that creates stray `Cache/`, 
 
 ## Protocol changes
 
-Update together in one change:
+The cross-repo contract is **protocol v6** (`PROTOCOL_VERSION = 6`). Update
+together in one change:
 
 1. `dimos-ar/dimos/ar/network/protocol.py`
 2. `dimos-ar/PROTOCOL.md`
 3. `lens-studio/Assets/Scripts/Bridge/Protocol.ts`
+
+Key v6 surfaces to keep aligned when extending the contract:
+
+- Session robot from `hello`; most outbound JSON omits `robot_id`
+- `registration_command` (replaces four v5 registration message types)
+- `goal` with `intent: navigate|preview` (replaces `nav_goal` / `plan_path`)
+- `runtime_snapshot` on connect and `get_status` (active path only; preview not cached)
+- `path.kind` active/preview (no separate `path_preview` type)
+- Binary-only LiDAR (`lidar_f16`); no JSON `lidar` fallback
 
 ## Python
 
@@ -36,7 +46,7 @@ DimOS is an external dependency — install from [dimensionalOS/dimos](https://g
 
 ## Lens Studio
 
-Scene wiring is centralized on [`DimosServices.ts`](lens-studio/Assets/Scripts/Core/DimosServices.ts): assign cross-tree `@input`s there once. Entry scripts need [`DimosManager`](lens-studio/Assets/Scripts/Core/DimosManager.ts) (plus `mainUIFrame` and `setupWizard` on [`UIManager`](lens-studio/Assets/Scripts/UI/UIManager.ts)). Runtime services (`DimosState`, `BridgeRuntime`, `RobotRuntime`, `NavigationHost`, `RegistrationClient`, `SetupRegistrationPreview`) are plain TypeScript classes owned by `DimosServices`, not separate scene objects. The scene prefab input `assistClearanceDiscPrefab` is the baseline-motion clearance disc (legacy prefab name).
+Scene wiring is centralized on [`DimosServices.ts`](lens-studio/Assets/Scripts/Core/DimosServices.ts): assign cross-tree `@input`s there once. Entry scripts need [`DimosManager`](lens-studio/Assets/Scripts/Core/DimosManager.ts) (plus `mainUIFrame` and `setupWizard` on [`UIManager`](lens-studio/Assets/Scripts/UI/UIManager.ts)). Runtime services (`DimosState`, `BridgeRuntime`, `RobotRuntime`, `NavigationController`, `RegistrationClient`, `SetupRegistrationPreview`) are plain TypeScript classes owned by `DimosServices`, not separate scene objects. The scene prefab input `assistClearanceDiscPrefab` is the baseline-motion clearance disc (legacy prefab name).
 
 ### Architecture rules — one owner per concern
 

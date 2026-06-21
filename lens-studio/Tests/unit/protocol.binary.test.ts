@@ -38,31 +38,30 @@ describe("parseLidarBinary", () => {
         [1, -2, 0],
         [2, 0.5, 1],
       ]),
-      "go2",
     );
     expect(msg).not.toBeNull();
     expect(msg!.type).toBe("lidar");
-    expect(msg!.robot_id).toBe("go2");
-    expect(msg!.frame).toBe("world");
     expect(msg!.ts).toBeCloseTo(12.5, 5);
     expect(msg!.points[0]).toEqual([1, -2, 0]);
     expect(msg!.points[1][2]).toBeCloseTo(1, 5);
+    expect(msg).not.toHaveProperty("robot_id");
+    expect(msg).not.toHaveProperty("frame");
   });
 
   it("returns null on short buffer and wrong message type", () => {
-    expect(parseLidarBinary(new Uint8Array([0x01, 0, 0]), "x")).toBeNull();
-    expect(parseLidarBinary(new Uint8Array([0x02, 0, 0, 0, 0]), "x")).toBeNull();
+    expect(parseLidarBinary(new Uint8Array([0x01, 0, 0]))).toBeNull();
+    expect(parseLidarBinary(new Uint8Array([0x02, 0, 0, 0, 0]))).toBeNull();
   });
 
   it("floors trailing partial point bytes", () => {
     const f = lidarFrame(0, [[1, 1, 1]]);
     const padded = new Uint8Array(f.length + 3);
     padded.set(f);
-    expect(parseLidarBinary(padded, "x")!.points.length).toBe(1);
+    expect(parseLidarBinary(padded)!.points.length).toBe(1);
   });
 
   it("decodes half-float subnormals and specials", () => {
-    const sub = parseLidarBinary(lidarFrame(0, [[0, 0, 0]]), "x");
+    const sub = parseLidarBinary(lidarFrame(0, [[0, 0, 0]]));
     expect(sub!.points[0]).toEqual([0, 0, 0]);
     const buf = new Uint8Array(5 + 6);
     buf[0] = 0x01;
@@ -74,7 +73,7 @@ describe("parseLidarBinary", () => {
       buf[i] = bits & 0xff;
       buf[i + 1] = bits >> 8;
     }
-    const m = parseLidarBinary(buf, "x")!;
+    const m = parseLidarBinary(buf)!;
     expect(m.points[0][0]).toBe(Infinity);
     expect(m.points[0][1]).toBe(-Infinity);
     expect(Number.isNaN(m.points[0][2])).toBe(true);

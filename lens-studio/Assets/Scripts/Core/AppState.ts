@@ -8,6 +8,7 @@ import {
   COLOR_WARN,
   COLOR_WHITE,
 } from "../UI/kit/UIKit";
+import { RegistrationProfile } from "../Bridge/Protocol";
 import {
   isFollowingMode,
   NAV_GOAL_MODE_LABELS,
@@ -216,14 +217,13 @@ export interface RuntimeCapabilityState {
 export interface RobotRuntimeState {
   negotiated: boolean;
   robotId: string | null;
-  robotModel: string | null;
   displayName: string;
   visualOriginFrame: string;
   bodyBoundsM: [number, number, number] | null;
   footprintM: [number, number] | null;
   baseHeightM: number | null;
   defaultRenderOffsetM: [number, number, number] | null;
-  registrationProfile: Record<string, unknown> | null;
+  registrationProfile: RegistrationProfile | null;
   capabilities: Record<string, RuntimeCapabilityState>;
 }
 
@@ -233,7 +233,7 @@ export interface DriftState {
   yawDeltaDeg: number | null;
   yawCorrected: boolean;
   solveQuality: number;
-  solveMethod: "tag" | "tag_translation" | null;
+  solveMethod: "apriltag_full" | "apriltag_translation" | null;
   lastUpdateTs: number | null;
 }
 
@@ -327,7 +327,6 @@ export function createDefaultRobotRuntimeState(): RobotRuntimeState {
   return {
     negotiated: false,
     robotId: null,
-    robotModel: null,
     displayName: NO_ROBOT_CONNECTED_LABEL,
     visualOriginFrame: "base_link",
     bodyBoundsM: null,

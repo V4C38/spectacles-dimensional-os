@@ -17,8 +17,9 @@ from dimos.ar.network.data_plane import (
     normalize_nav_state,
 )
 from dimos.ar.network.error_codes import CONTROL_RPC_TIMEOUT, NAV_GOAL_STALLED
-from dimos.ar.network.protocol import NavGoalMessage, encode_nav_status
+from dimos.ar.network.protocol import GoalMessage, encode_nav_status, nav_phase_payload
 from dimos.ar.registration.tracker import _orientation_yaw_deg
+from dimos.ar.registration.transforms import Calibration
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.utils.logging_config import setup_logger
 
@@ -27,7 +28,6 @@ if TYPE_CHECKING:
 
     from dimos.ar.adapters.base import ARRobotAdapterSpec
     from dimos.ar.bridge.sender import BridgeSender
-    from dimos.ar.tracking.transforms import Calibration
     from dimos.msgs.nav_msgs.Path import Path
 
 logger = setup_logger()
@@ -67,7 +67,7 @@ class NavController:
         self._nav_watchdog_lock = threading.Lock()
         self._nav_watchdog_stop = threading.Event()
         self._nav_watchdog_thread: threading.Thread | None = None
-        self._last_navigating_path_payload: str | None = None
+        self._last_navigating_path_waypoints: list[tuple[float, float, float]] | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -95,20 +95,31 @@ class NavController:
     # Public accessors
     # ------------------------------------------------------------------
 
-    @property
-    def last_navigating_path_payload(self) -> str | None:
-        return self._last_navigating_path_payload
-
-    def nav_status_payload(self, *, ts: float | None = None) -> str:
-        return encode_nav_status(
-            ts=ts,
-            state=self._nav_state,
+    def nav_phase_dict(self) -> dict[str, object]:
+        return nav_phase_payload(
             goal_reached=self._goal_reached,
             goal_failed=self._goal_failed,
-            recovering=self._nav_recovering,
+            nav_recovering=self._nav_recovering,
+            nav_state=self._nav_state,
+            nav_goal_pending=self._nav_goal_pending,
             error_code=self._nav_error_code,
-            robot_id=self._robot_id,
         )
+
+    def nav_status_payload(self, *, ts: float | None = None) -> str:
+        phase_payload = self.nav_phase_dict()
+        return encode_nav_status(
+            ts=ts,
+            phase=phase_payload["phase"],  # type: ignore[arg-type]
+            error_code=self._nav_error_code,
+        )
+
+    def runtime_snapshot_path(self) -> dict[str, object] | None:
+        if self._last_navigating_path_waypoints is None:
+            return None
+        return {
+            "kind": "active",
+            "waypoints": [list(point) for point in self._last_navigating_path_waypoints],
+        }
 
     def broadcast_nav_status(self, *, ts: float | None = None) -> None:
         self._sender.send(self.nav_status_payload(ts=ts))
@@ -117,12 +128,14 @@ class NavController:
     # WebSocket message handlers
     # ------------------------------------------------------------------
 
-    def on_nav_goal(self, msg: NavGoalMessage) -> None:
+    def on_navigate_goal(self, msg: GoalMessage) -> None:
+        if msg.intent != "navigate":
+            return
         if not self._calibration.is_registered:
-            logger.warning("nav_goal ignored before calibration")
+            logger.warning("goal ignored before registration")
             return
         if self._nav_degraded:
-            logger.warning("nav_goal rejected: navigation is unavailable for this session")
+            logger.warning("goal rejected: navigation is unavailable for this session")
             self._goal_failed = True
             self._goal_reached = False
             self._nav_error_code = NAV_GOAL_STALLED.code
@@ -195,14 +208,13 @@ class NavController:
         path_payload, waypoints = build_path_payload(
             msg,
             calibration=self._calibration,
-            robot_id=self._robot_id,
         )
         if waypoints and self._nav_goal_pending and not self._nav_path_received:
             self._promote_to_navigating(ts=msg.ts)
         if waypoints:
-            self._last_navigating_path_payload = path_payload
+            self._last_navigating_path_waypoints = waypoints
         elif self._nav_state == "idle":
-            self._last_navigating_path_payload = None
+            self._last_navigating_path_waypoints = None
         self._sender.send(path_payload)
 
     def on_goal_reached(self, msg: Bool) -> None:
@@ -395,7 +407,7 @@ class NavController:
     def _publish_nav_goal(
         self,
         goal: PoseStamped,
-        msg: NavGoalMessage,
+        msg: GoalMessage,
         odom_position: tuple[float, float, float],
         odom_orientation: tuple[float, float, float, float],
     ) -> None:
@@ -456,5 +468,5 @@ class NavController:
         self.broadcast_nav_status(ts=ts)
 
     def _broadcast_empty_path(self, *, ts: float | None = None) -> None:
-        self._last_navigating_path_payload = None
-        self._sender.send(build_empty_path_payload(robot_id=self._robot_id, ts=ts))
+        self._last_navigating_path_waypoints = None
+        self._sender.send(build_empty_path_payload(ts=ts))

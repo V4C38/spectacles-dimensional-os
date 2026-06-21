@@ -1,4 +1,4 @@
-"""Registration wire encode/decode — PROTOCOL v5."""
+"""Registration wire encode/decode — PROTOCOL v6."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from dimos.ar.registration.types import CaptureHint, MotionHint, RegistrationMode, RegistrationPhase
 
-RegistrationAction = Literal["authorize_motion"]
+RegistrationCommand = Literal["start", "authorize_motion", "stop", "commit"]
 
 
 def _dumps(payload: dict[str, Any]) -> str:
@@ -17,29 +17,11 @@ def _dumps(payload: dict[str, Any]) -> str:
 
 
 @dataclass(frozen=True)
-class RegistrationStartMessage:
+class RegistrationCommandMessage:
     ts: float
     robot_id: str
-    mode: RegistrationMode
-
-
-@dataclass(frozen=True)
-class RegistrationActionMessage:
-    ts: float
-    robot_id: str
-    action: RegistrationAction
-
-
-@dataclass(frozen=True)
-class RegistrationStopMessage:
-    ts: float
-    robot_id: str
-
-
-@dataclass(frozen=True)
-class RegistrationCommitMessage:
-    ts: float
-    robot_id: str
+    command: RegistrationCommand
+    mode: RegistrationMode | None = None
 
 
 @dataclass(frozen=True)
@@ -64,13 +46,11 @@ class RegistrationStatusPayload:
 def encode_registration_status(
     *,
     ts: float | None,
-    robot_id: str,
     status: RegistrationStatusPayload,
 ) -> str:
     payload: dict[str, Any] = {
         "type": "registration_status",
         "ts": ts if ts is not None else time.time(),
-        "robot_id": robot_id,
         "phase": status.phase.value,
         "capture": status.capture.value,
         "message": status.message,

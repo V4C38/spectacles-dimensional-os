@@ -6,6 +6,8 @@ import struct
 
 import pytest
 
+from dimos.ar.network.protocol import decode_inbound
+from dimos.ar.network.websocket_server import split_inbound_text_lines
 from dimos.ar.network.ws_send_queue import (
     COALESCE_MESSAGE_TYPES,
     OUTBOUND_FIFO_MAXSIZE,
@@ -30,7 +32,7 @@ class _FakeWebSocket:
     ("payload", "expected"),
     [
         ('{"type":"lidar","points_flat":[1]}', "lidar"),
-        ('{"type":"nav_status","state":"idle"}', "nav_status"),
+        ('{"type":"nav_status","phase":"idle"}', "nav_status"),
         ("not json", None),
     ],
 )
@@ -44,16 +46,16 @@ async def test_outbound_coalesces_broadcast_snapshots() -> None:
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"nav_status","state":"idle"}')
+    outbound.enqueue('{"type":"nav_status","phase":"idle"}')
     outbound.enqueue('{"type":"path","waypoints":[[1,2,3]]}')
     outbound.enqueue('{"type":"bridge_status","registered":true}')
-    outbound.enqueue('{"type":"nav_status","state":"navigating"}')
+    outbound.enqueue('{"type":"nav_status","phase":"navigating"}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
 
     by_type = {(peek_message_type(text) or ""): json.loads(text) for text in ws.sent}
-    assert by_type["nav_status"]["state"] == "navigating"
+    assert by_type["nav_status"]["phase"] == "navigating"
     assert by_type["path"]["waypoints"] == [[1, 2, 3]]
     assert by_type["bridge_status"]["registered"] is True
     assert len(ws.sent) == 3
@@ -65,7 +67,7 @@ async def test_outbound_coalesces_pose_and_lidar() -> None:
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"nav_status","state":"navigating"}')
+    outbound.enqueue('{"type":"nav_status","phase":"navigating"}')
     outbound.enqueue('{"type":"pose","position":[1,2,3]}')
     outbound.enqueue('{"type":"pose","position":[4,5,6]}')
     outbound.enqueue('{"type":"lidar","points_flat":[1,2,3]}')
@@ -77,7 +79,7 @@ async def test_outbound_coalesces_pose_and_lidar() -> None:
 
     assert len(ws.sent) == 4
     by_type = {(peek_message_type(text) or ""): json.loads(text) for text in ws.sent}
-    assert by_type["nav_status"]["state"] == "navigating"
+    assert by_type["nav_status"]["phase"] == "navigating"
     assert by_type["pose"]["position"] == [4, 5, 6]
     assert by_type["lidar"]["points_flat"] == [7, 8, 9]
     assert by_type["path"]["waypoints"] == [[0, 0, 0]]
@@ -184,11 +186,11 @@ def test_coalesce_message_types_cover_streams() -> None:
             "lidar",
             "pose",
             "path",
-            "path_preview",
             "nav_status",
             "bridge_status",
             "registration_status",
             "camera_frame_ack",
+            "runtime_snapshot",
         }
     )
 
@@ -252,7 +254,7 @@ async def test_outbound_text_frames_are_newline_delimited() -> None:
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"nav_status","state":"idle"}')
+    outbound.enqueue('{"type":"nav_status","phase":"idle"}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
@@ -261,7 +263,7 @@ async def test_outbound_text_frames_are_newline_delimited() -> None:
     assert ws.sent[0].endswith("\n")
     msg = json.loads(ws.sent[0].strip())
     assert msg["type"] == "nav_status"
-    assert msg["state"] == "idle"
+    assert msg["phase"] == "idle"
 
 
 def test_newline_framing_client_round_trip() -> None:
@@ -270,7 +272,7 @@ def test_newline_framing_client_round_trip() -> None:
     messages: list[dict] = []
     for frame in (
         '{"type":"path","waypoints":[[1,2',
-        ',3]]}\n{"type":"nav_status","state":"idle"}\n',
+        ',3]]}\n{"type":"nav_status","phase":"idle"}\n',
     ):
         buffer += frame
         parts = buffer.split("\n")
@@ -283,4 +285,21 @@ def test_newline_framing_client_round_trip() -> None:
     assert len(messages) == 2
     assert messages[0]["type"] == "path"
     assert messages[0]["waypoints"] == [[1, 2, 3]]
-    assert messages[1]["state"] == "idle"
+    assert messages[1]["phase"] == "idle"
+
+
+def test_split_inbound_text_lines_splits_concatenated_messages() -> None:
+    stop = (
+        '{"type":"registration_command","command":"stop","ts":1.0,"robot_id":"unitree_go2"}'
+    )
+    start = (
+        '{"type":"registration_command","command":"start","mode":"manual_pose",'
+        '"ts":2.0,"robot_id":"unitree_go2"}'
+    )
+    lines = split_inbound_text_lines(f"{stop}\n{start}\n")
+    assert len(lines) == 2
+    stop_msg = decode_inbound(lines[0])
+    start_msg = decode_inbound(lines[1])
+    assert stop_msg.command == "stop"
+    assert start_msg.command == "start"
+    assert start_msg.mode == "manual_pose"

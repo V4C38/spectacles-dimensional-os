@@ -8,10 +8,11 @@ import {
   LidarMessage,
   NavStatusMessage,
   PathMessage,
-  PathPreviewMessage,
   PongMessage,
   PoseCorrectionMessage,
   PoseMessage,
+  RuntimeSnapshotMessage,
+  bridgeStatusFromSnapshot,
   isNonCriticalInboundMessageType,
   parseInboundMessage,
   parseLidarBinary,
@@ -42,8 +43,8 @@ export class BridgeInboundProcessor {
   public readonly onCameraFrameAck = new Signal<CameraFrameAckMessage>();
   public readonly onBridgeStatus = new Signal<BridgeStatusMessage>();
   public readonly onPath = new Signal<PathMessage>();
-  public readonly onPathPreview = new Signal<PathPreviewMessage>();
   public readonly onNavStatus = new Signal<NavStatusMessage>();
+  public readonly onRuntimeSnapshot = new Signal<RuntimeSnapshotMessage>();
   public readonly onPong = new Signal<PongMessage>();
   public readonly onProtocolError = new Signal<ProtocolParseError>();
 
@@ -177,45 +178,37 @@ export class BridgeInboundProcessor {
           this._callbacks.onHelloConnection(true);
           this.onHello.emit(msg);
           break;
-        case "lidar":
+        case "runtime_snapshot":
           this._adoptRobotId(msg.robot_id);
+          this._emitRuntimeSnapshot(msg);
+          break;
+        case "lidar":
           this.onLidar.emit(msg);
           break;
         case "pose":
-          this._adoptRobotId(msg.robot_id);
           this._logPoseRx(msg);
           this.onPose.emit(msg);
           break;
         case "pose_correction":
-          this._adoptRobotId(msg.robot_id);
           this.onPoseCorrection.emit(msg);
           break;
         case "registration_status":
-          this._adoptRobotId(msg.robot_id);
           this._logDiagnosticRx(msg);
           this.onRegistrationStatus.emit(msg);
           break;
         case "camera_frame_ack":
-          this._adoptRobotId(msg.robot_id);
           this._logDiagnosticRx(msg);
           this.onCameraFrameAck.emit(msg);
           break;
         case "bridge_status":
-          this._adoptRobotId(msg.robot_id);
           this.lastBridgeStatus = msg;
           this._logDiagnosticRx(msg);
           this.onBridgeStatus.emit(msg);
           break;
         case "path":
-          this._adoptRobotId(msg.robot_id);
           this.onPath.emit(msg);
           break;
-        case "path_preview":
-          this._adoptRobotId(msg.robot_id);
-          this.onPathPreview.emit(msg);
-          break;
         case "nav_status":
-          this._adoptRobotId(msg.robot_id);
           this._logDiagnosticRx(msg);
           this.onNavStatus.emit(msg);
           break;
@@ -227,6 +220,39 @@ export class BridgeInboundProcessor {
     } catch (error) {
       this._handleParseFailure(payload, error);
     }
+  }
+
+  private _emitRuntimeSnapshot(snapshot: RuntimeSnapshotMessage): void {
+    const bridgeStatus = bridgeStatusFromSnapshot(snapshot);
+    this.lastBridgeStatus = bridgeStatus;
+    this._logDiagnosticRx(bridgeStatus);
+    this.onBridgeStatus.emit(bridgeStatus);
+
+    const navStatus: NavStatusMessage = {
+      type: "nav_status",
+      ts: snapshot.ts,
+      phase: snapshot.nav.phase,
+    };
+    if (typeof snapshot.nav.error_code === "number") {
+      navStatus.error_code = snapshot.nav.error_code;
+    }
+    this._logDiagnosticRx(navStatus);
+    this.onNavStatus.emit(navStatus);
+
+    if (snapshot.path) {
+      const pathMsg: PathMessage = {
+        type: "path",
+        ts: snapshot.ts,
+        kind: snapshot.path.kind,
+        waypoints: snapshot.path.waypoints,
+      };
+      if (snapshot.path.target !== undefined) {
+        pathMsg.target = snapshot.path.target;
+      }
+      this.onPath.emit(pathMsg);
+    }
+
+    this.onRuntimeSnapshot.emit(snapshot);
   }
 
   private async _pumpBinaryFrames(): Promise<void> {
@@ -248,7 +274,7 @@ export class BridgeInboundProcessor {
           if (this._connection.ws !== frame.socket) {
             continue;
           }
-          const msg = parseLidarBinary(bytes, this._activeRobotId ?? "");
+          const msg = parseLidarBinary(bytes);
           if (msg) {
             this.onLidar.emit(msg);
           }
@@ -358,11 +384,11 @@ export class BridgeInboundProcessor {
         break;
       }
       case "nav_status": {
-        const key = `${msg.state}|${msg.goal_reached}|${msg.goal_failed}|${msg.error_code ?? "-"}`;
+        const key = `${msg.phase}|${msg.error_code ?? "-"}`;
         if (key !== this._lastNavStatusKey) {
           this._lastNavStatusKey = key;
           print(
-            `BridgeInboundProcessor: RX nav_status state=${msg.state} goal_reached=${msg.goal_reached} goal_failed=${msg.goal_failed} error_code=${msg.error_code ?? "-"}`,
+            `BridgeInboundProcessor: RX nav_status phase=${msg.phase} error_code=${msg.error_code ?? "-"}`,
           );
         }
         break;

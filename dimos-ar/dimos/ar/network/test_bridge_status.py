@@ -24,7 +24,6 @@ def test_encode_bridge_status_always_includes_registration_method() -> None:
     snap = tracker.snapshot()
     raw = json.loads(encode_bridge_status(snap))
     assert raw["type"] == "bridge_status"
-    assert raw["robot_id"] == "unitree_go2"
     # v4 guarantee: registration_method is always present (None when unregistered)
     assert "registration_method" in raw
     assert raw["registration_method"] is None

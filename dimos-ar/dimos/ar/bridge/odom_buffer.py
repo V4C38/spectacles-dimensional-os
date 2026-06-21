@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Union
 
 import numpy as np
 
-from dimos.ar.tracking.transforms import Calibration, OdomSample
+from dimos.ar.registration.transforms import Calibration, OdomSample
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:

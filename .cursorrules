@@ -25,7 +25,6 @@ spectacles-dimensional-os/
 └── lens-studio/                 # Spectacles Lens Studio project
     ├── spectacles-dimensional-os.esproj   # open THIS file (never from repo root)
     ├── Assets/Scripts/          # Lens TypeScript (DimosManager, BridgeClient, …)
-    ├── docs/SCENE_SETUP.md      # scene wiring checklist
     └── tools/                   # dev helpers (e.g. create_debug_gizmo.py)
 ```
 
@@ -34,7 +33,7 @@ spectacles-dimensional-os/
 | `ARBridge`, adapter, protocol, transforms | `dimos-ar/dimos/ar/` | Platform-agnostic — no Spectacles logic |
 | Blueprint entry | `dimos-ar/dimos/ar/blueprints.py` | Run on Mac with DimOS via `./start.sh` |
 | Robot-mounted AprilTag PDF | `dimos-ar/assets/apriltag_robot_{a4,letter}.pdf` | Print at 100% scale (70 mm); `python scripts/generate_marker.py` |
-| Spectacles Lens | `lens-studio/` | All Lens Studio code; see `lens-studio/docs/SCENE_SETUP.md` |
+| Spectacles Lens | `lens-studio/` | All Lens Studio code; see [`CONTRIBUTING.md`](CONTRIBUTING.md) for scene wiring |
 | Cross-platform contract | `dimos-ar/PROTOCOL.md` | JSON WebSocket API |
 
 ## Where to read first
@@ -43,7 +42,7 @@ spectacles-dimensional-os/
 |------|------|
 | Whole project | `README.md` |
 | WebSocket message schema | `dimos-ar/PROTOCOL.md` |
-| Spectacles / Lens Studio | `lens-studio/docs/SCENE_SETUP.md` |
+| Spectacles / Lens Studio | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Contributing | `CONTRIBUTING.md` |
 
 ## Bugfix planning

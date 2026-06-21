@@ -39,14 +39,13 @@ async def _collect_protocol_messages() -> dict[str, int]:
             msg = json.loads(raw)
             msg_type = msg.get("type")
             if msg_type == "hello" and seen["hello"] == 0:
-                assert msg.get("protocol_version") == 3
+                assert msg.get("protocol_version") == 6
                 assert isinstance(msg.get("robot"), dict)
-                caps = msg.get("capabilities", [])
-                assert "lidar" in caps
-                assert "odom" in caps
-                assert "align" in caps
-                assert "nav" in caps
-                assert "path" in caps
+                caps = msg.get("capabilities", {})
+                assert caps.get("lidar", {}).get("available") is True
+                assert caps.get("odom", {}).get("available") is True
+                assert caps.get("nav", {}).get("available") is True
+                assert caps.get("path", {}).get("available") is True
                 assert "emergency_stop" in caps
             if msg_type in seen:
                 seen[msg_type] += 1

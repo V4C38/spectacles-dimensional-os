@@ -2,8 +2,8 @@
 
 from dimos.ar.registration.tracker import (  # noqa: F401
     CAMERA_FRAME_MAGIC,
-    DEFAULT_MARKER_ID,
     DEFAULT_APRILTAG_DICT,
+    DEFAULT_MARKER_ID,
     MAX_HEADER_BYTES,
     R_ALIGN,
     TAG_BLACK_SIZE_M,
@@ -14,13 +14,13 @@ from dimos.ar.registration.tracker import (  # noqa: F401
     TagMount,
     TagObservation,
     TagSolve,
-    build_T_world_odom,
+    _odom_tag_straightness,
+    _orientation_yaw_deg,
+    _yaw_from_T,
     build_camera_info,
+    build_T_world_odom,
     create_apriltag_detector,
     parse_camera_frame,
     reprojection_error_px,
     solve_yaw_translation_2d,
-    _odom_tag_straightness,
-    _orientation_yaw_deg,
-    _yaw_from_T,
 )

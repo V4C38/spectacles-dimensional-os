@@ -101,7 +101,6 @@ export class SetupWizard extends BaseScriptComponent {
     this._registrationFlow?.leave();
     this._registrationFlow?.setState(createRegistrationViewState());
     this._invalidatePending();
-    this.dimosManager?.registrationClient.stop();
     this.dimosManager?.enterSetup();
     const panel = this.getSceneObject();
     if (panel) {
@@ -210,9 +209,6 @@ export class SetupWizard extends BaseScriptComponent {
     }
     if (regState.phase === "succeeded") {
       this._finishSetup();
-      return;
-    }
-    if (regState.phase === "awaiting_commit") {
       return;
     }
     if (this._registrationFlow?.completeStep()) {
@@ -429,6 +425,7 @@ export class SetupWizard extends BaseScriptComponent {
     const display = buildRegistrationDisplay(
       this._registrationFlow?.state ?? createRegistrationViewState(),
       this.dimosManager?.hasBridgeConnection() ?? false,
+      this._registrationFlow?.commitInFlight ?? false,
     );
     const detailText = display.detailText;
     if (display.statusText || detailText) {

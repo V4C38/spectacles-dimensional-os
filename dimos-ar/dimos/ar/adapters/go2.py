@@ -87,9 +87,7 @@ def go2_handshake(robot_id: str) -> RobotHandshake:
     tag_ids = [m.tag_id for m in GO2_DEFAULT_TAG_MOUNTS]
     return RobotHandshake(
         robot_id=robot_id,
-        robot_model="unitree_go2",
         display_name="Unitree Go2",
-        capabilities=list(GO2_CAPABILITIES.keys()),
         capability_states=dict(GO2_CAPABILITIES),
         body_bounds_m=(0.70, 0.50, 0.55),
         footprint_m=(0.70, 0.50),
@@ -97,7 +95,6 @@ def go2_handshake(robot_id: str) -> RobotHandshake:
         base_height_m=0.33,
         default_render_offset_m=(0.0, 0.0, 0.0),
         registration_profile={
-            "method": "april_odom_baseline",
             "tag_ids": tag_ids,
             "tag_total_size_m": TAG_TOTAL_SIZE_M,
         },
@@ -231,9 +228,7 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         handshake = go2_handshake(self.robot_id())
         return RobotHandshake(
             robot_id=handshake.robot_id,
-            robot_model=handshake.robot_model,
             display_name=handshake.display_name,
-            capabilities=handshake.capabilities,
             capability_states=capability_states,
             body_bounds_m=handshake.body_bounds_m,
             footprint_m=handshake.footprint_m,
@@ -256,7 +251,7 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
                 PointStamped(x=goal.x, y=goal.y, z=goal.z, ts=goal.ts, frame_id=goal.frame_id)
             )
             return True
-        logger.warning("Go2 nav_goal rejected: no navigation transport is available")
+        logger.warning("Go2 goal rejected: no navigation transport is available")
         return False
 
     @rpc

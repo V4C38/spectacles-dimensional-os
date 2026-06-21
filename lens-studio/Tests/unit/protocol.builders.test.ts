@@ -2,15 +2,13 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   buildGetStatus,
   buildSetLidarMode,
-  buildRegistrationStart,
-  buildRegistrationAction,
-  buildRegistrationStop,
-  buildRegistrationCommit,
+  buildRegistrationCommand,
   buildRegistrationPose,
   buildPing,
   buildCameraInfo,
-  buildNavGoal,
-  buildPlanPath,
+  buildNavigateGoal,
+  buildPreviewGoal,
+  buildGoal,
   buildCancelGoal,
   buildEmergencyStop,
   DEFAULT_LIDAR_OBSTACLE_SETTINGS,
@@ -30,12 +28,18 @@ describe("outbound protocol builders", () => {
     expect(msg.ts).toBe(1000);
   });
 
-  it("buildSetLidarMode", () => {
+  it("buildSetLidarMode full omits obstacle distances", () => {
     const msg = JSON.parse(buildSetLidarMode("go2", "full"));
     expect(msg.type).toBe("set_lidar_mode");
     expect(msg.robot_id).toBe("go2");
     expect(msg.mode).toBe("full");
     expect(msg.ts).toBe(1000);
+    expect(msg).not.toHaveProperty("obstacle_min_distance_m");
+  });
+
+  it("buildSetLidarMode obstacles includes distance fields", () => {
+    const msg = JSON.parse(buildSetLidarMode("go2", "obstacles"));
+    expect(msg.mode).toBe("obstacles");
     expect(msg.obstacle_min_distance_m).toBe(
       DEFAULT_LIDAR_OBSTACLE_SETTINGS.minDistanceM,
     );
@@ -47,34 +51,32 @@ describe("outbound protocol builders", () => {
     );
   });
 
-  it("buildRegistrationStart", () => {
-    const msg = JSON.parse(buildRegistrationStart("go2", "april_odom_baseline"));
-    expect(msg.type).toBe("registration_start");
+  it("buildRegistrationCommand start with mode", () => {
+    const msg = JSON.parse(
+      buildRegistrationCommand("go2", "start", "april_odom_baseline"),
+    );
+    expect(msg.type).toBe("registration_command");
     expect(msg.robot_id).toBe("go2");
+    expect(msg.command).toBe("start");
     expect(msg.mode).toBe("april_odom_baseline");
     expect(msg.ts).toBe(1000);
   });
 
-  it("buildRegistrationAction", () => {
-    const msg = JSON.parse(buildRegistrationAction("go2"));
-    expect(msg.type).toBe("registration_action");
-    expect(msg.action).toBe("authorize_motion");
-    expect(msg.robot_id).toBe("go2");
-    expect(msg.ts).toBe(1000);
+  it("buildRegistrationCommand authorize_motion", () => {
+    const msg = JSON.parse(
+      buildRegistrationCommand("go2", "authorize_motion"),
+    );
+    expect(msg.command).toBe("authorize_motion");
+    expect(msg).not.toHaveProperty("mode");
   });
 
-  it("buildRegistrationStop", () => {
-    const msg = JSON.parse(buildRegistrationStop("go2"));
-    expect(msg.type).toBe("registration_stop");
-    expect(msg.robot_id).toBe("go2");
-    expect(msg.ts).toBe(1000);
-  });
-
-  it("buildRegistrationCommit", () => {
-    const msg = JSON.parse(buildRegistrationCommit("go2"));
-    expect(msg.type).toBe("registration_commit");
-    expect(msg.robot_id).toBe("go2");
-    expect(msg.ts).toBe(1000);
+  it("buildRegistrationCommand stop and commit", () => {
+    expect(JSON.parse(buildRegistrationCommand("go2", "stop")).command).toBe(
+      "stop",
+    );
+    expect(JSON.parse(buildRegistrationCommand("go2", "commit")).command).toBe(
+      "commit",
+    );
   });
 
   it("buildRegistrationPose", () => {
@@ -115,30 +117,56 @@ describe("outbound protocol builders", () => {
     expect(msg.ts).toBe(1000);
   });
 
-  it("buildNavGoal", () => {
+  it("buildNavigateGoal", () => {
     const msg = JSON.parse(
-      buildNavGoal(new vec3(100, 0, 200), new quat(1, 0, 0, 0), "go2"),
+      buildNavigateGoal(
+        "go2",
+        new vec3(100, 0, 200),
+        new quat(1, 0, 0, 0),
+      ),
     );
-    expect(msg.type).toBe("nav_goal");
+    expect(msg.type).toBe("goal");
     expect(msg.robot_id).toBe("go2");
+    expect(msg.intent).toBe("navigate");
     expect(msg.position).toEqual([1, 0, 2]);
     expect(msg.ts).toBe(1000);
   });
 
-  it("buildPlanPath without rotation", () => {
-    const msg = JSON.parse(buildPlanPath(new vec3(50, 0, 0), "go2"));
-    expect(msg.type).toBe("plan_path");
-    expect(msg.robot_id).toBe("go2");
+  it("buildPreviewGoal without rotation", () => {
+    const msg = JSON.parse(
+      buildPreviewGoal("go2", new vec3(50, 0, 0)),
+    );
+    expect(msg.intent).toBe("preview");
     expect(msg.position).toEqual([0.5, 0, 0]);
-    expect(msg).not.toHaveProperty("orientation");
-    expect(msg.ts).toBe(1000);
+    expect(msg.orientation).toBeUndefined();
   });
 
-  it("buildPlanPath with rotation", () => {
+  it("buildPreviewGoal with rotation", () => {
     const msg = JSON.parse(
-      buildPlanPath(new vec3(50, 0, 0), "go2", new quat(1, 0, 0, 0)),
+      buildPreviewGoal(
+        "go2",
+        new vec3(50, 0, 0),
+        new quat(1, 0, 0, 0),
+      ),
     );
+    expect(msg.intent).toBe("preview");
     expect(msg.orientation).toEqual([0, 0, 0, 1]);
+  });
+
+  it("buildGoal accepts explicit intent", () => {
+    const msg = JSON.parse(
+      buildGoal("go2", "navigate", new vec3(100, 0, 200), new quat(1, 0, 0, 0)),
+    );
+    expect(msg.intent).toBe("navigate");
+  });
+
+  it("buildGoal preview without rotation", () => {
+    const msg = JSON.parse(
+      buildGoal("go2", "preview", new vec3(50, 0, 0)),
+    );
+    expect(msg.intent).toBe("preview");
+    expect(msg.position).toEqual([0.5, 0, 0]);
+    expect(msg).not.toHaveProperty("orientation");
   });
 
   it("buildCancelGoal", () => {

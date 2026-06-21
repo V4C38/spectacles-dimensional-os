@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import time
-from typing import Any
 
 import numpy as np
 
@@ -37,6 +36,9 @@ class WorldRegistry:
     def commit(self, candidate: RegistrationCandidate) -> None:
         self._calibration.register_world_odom(candidate.T_world_odom)
         self._publish_world_odom_tf(candidate.T_world_odom)
+
+    def clear(self) -> None:
+        self._calibration.clear()
 
     def _publish_world_odom_tf(self, T_world_odom: np.ndarray) -> None:
         if self._tf_publish_static_unsupported:

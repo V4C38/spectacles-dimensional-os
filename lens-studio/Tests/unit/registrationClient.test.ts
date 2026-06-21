@@ -8,11 +8,8 @@ function makeBridgeClient() {
     isConnected: vi.fn(() => true),
     activeRobotId: "go2",
     lastBridgeStatus: { registered: false },
-    sendRegistrationStart: vi.fn(() => true),
-    sendRegistrationStop: vi.fn(() => true),
-    sendRegistrationCommit: vi.fn(() => true),
+    sendRegistrationCommand: vi.fn(() => true),
     sendRegistrationPose: vi.fn(() => true),
-    sendRegistrationAction: vi.fn(() => true),
     onRegistrationStatus: { add: vi.fn() },
     onConnectionChanged: { add: vi.fn() },
     onHello: { add: vi.fn() },
@@ -38,7 +35,10 @@ describe("RegistrationClient", () => {
 
     client.start("april_odom_baseline");
 
-    expect(bridge.sendRegistrationStart).toHaveBeenCalledWith("april_odom_baseline");
+    expect(bridge.sendRegistrationCommand).toHaveBeenCalledWith(
+      "start",
+      "april_odom_baseline",
+    );
     expect(frameCapture.setMode).toHaveBeenCalledWith("setup");
     expect(frameCapture.setCapturePolicy).toHaveBeenCalledWith("steady");
     expect(client.hasActiveIntent()).toBe(true);
@@ -119,5 +119,23 @@ describe("RegistrationClient", () => {
     });
 
     expect(client.preferredMode()).toBe("manualOnly");
+  });
+
+  it("stop with notifyBridge sends stop when no local session", () => {
+    const bridge = makeBridgeClient();
+    const client = new RegistrationClient(bridge as any, null, null);
+
+    client.stop({ notifyBridge: true });
+
+    expect(bridge.sendRegistrationCommand).toHaveBeenCalledWith("stop");
+  });
+
+  it("stop without notifyBridge no-ops when no local session", () => {
+    const bridge = makeBridgeClient();
+    const client = new RegistrationClient(bridge as any, null, null);
+
+    client.stop();
+
+    expect(bridge.sendRegistrationCommand).not.toHaveBeenCalled();
   });
 });

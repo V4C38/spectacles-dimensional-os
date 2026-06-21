@@ -25,7 +25,7 @@ MANUAL_POSE_INVALID = BridgeError(
 REGISTRATION_COMMIT_NO_CANDIDATE = BridgeError(
     code=409,
     description=(
-        "The bridge rejected registration_commit because no valid registration "
+        "The bridge rejected registration_command commit because no valid registration "
         "candidate was available yet."
     ),
     fix="Wait for bridge confirmation or restart the robot and bridge (./start.sh).",
@@ -45,7 +45,7 @@ BRIDGE_DISCONNECTED_DURING_COMMIT = BridgeError(
 
 REGISTRATION_SESSION_UNAVAILABLE = BridgeError(
     code=503,
-    description="The bridge could not start a registration session after registration_start.",
+    description="The bridge could not start a registration session after registration_command start.",
     fix="Restart the robot and bridge (./start.sh), then reconnect Spectacles.",
 )
 

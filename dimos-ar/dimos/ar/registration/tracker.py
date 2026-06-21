@@ -687,7 +687,7 @@ class RobotAprilTagTracker:
             quality = float(np.mean([o.quality for o in observations]))
             return TagSolve(
                 T_world_odom=T,
-                method="tag",
+                method="apriltag_full",
                 quality=quality,
                 observation_count=len(observations),
                 baseline_m=baseline,
@@ -821,7 +821,7 @@ class RobotAprilTagTracker:
         window_obs = observations[-max_observations:] if max_observations else observations
         return TagSolve(
             T_world_odom=T_new,
-            method="tag_translation",
+            method="apriltag_translation",
             quality=float(np.mean(qualities)),
             observation_count=len(translations),
             baseline_m=_ground_baseline_m(window_obs),

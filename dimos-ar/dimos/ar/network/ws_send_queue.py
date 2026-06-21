@@ -20,11 +20,11 @@ COALESCE_MESSAGE_TYPES = frozenset(
         "lidar",
         "pose",
         "path",
-        "path_preview",
         "nav_status",
         "bridge_status",
         "registration_status",
         "camera_frame_ack",
+        "runtime_snapshot",
     }
 )
 _MESSAGE_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')

@@ -27,9 +27,7 @@ class RuntimeRegistrationProfile:
 @dataclass(frozen=True)
 class RobotHandshake:
     robot_id: str
-    robot_model: str
     display_name: str
-    capabilities: list[str]
     capability_states: dict[str, CapabilityState]
     body_bounds_m: tuple[float, float, float] | None = None
     footprint_m: tuple[float, float] | None = None

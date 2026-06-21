@@ -14,7 +14,7 @@ StatusChangeCallback = Callable[[], None]
 class BridgeStatusSnapshot:
     robot_id: str
     robot_connected: bool
-    streams_active: bool
+    streams_active: bool  # internal bridge health; omitted from v6 wire payloads
     registered: bool
     reconnecting: bool
     registration_method: RegistrationMethod
@@ -50,6 +50,7 @@ class BridgeStatusTracker:
             callback()
 
     def set_streams_active(self, active: bool) -> None:
+        """Update internal lidar/odom freshness; not sent on the v6 wire."""
         with self._lock:
             if self._streams_active == active:
                 return

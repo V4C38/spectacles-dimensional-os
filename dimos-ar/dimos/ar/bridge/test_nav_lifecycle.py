@@ -12,8 +12,8 @@ from dimos.ar.bridge.navigation import NAV_GOAL_PATH_TIMEOUT_S, NavController
 from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.network.error_codes import CONTROL_RPC_TIMEOUT, NAV_GOAL_STALLED
-from dimos.ar.network.protocol import NavGoalMessage, encode_pose
-from dimos.ar.tracking.transforms import Calibration, pose_to_matrix
+from dimos.ar.network.protocol import GoalMessage, encode_pose
+from dimos.ar.registration.transforms import Calibration, pose_to_matrix
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
 
@@ -52,16 +52,17 @@ def _last_nav_status(mock_server: MagicMock) -> dict:
 # ------------------------------------------------------------------
 
 
-def test_on_nav_goal_broadcasts_idle_until_path() -> None:
+def test_on_navigate_goal_broadcasts_idle_until_path() -> None:
     nav, mock_server = _make_nav()
-    msg = NavGoalMessage(
+    msg = GoalMessage(
+        intent="navigate",
         ts=1.0,
         robot_id="unitree_go2",
         position=(1.0, 0.0, 2.0),
         orientation=(0.0, 0.0, 0.0, 1.0),
     )
 
-    nav.on_nav_goal(msg)
+    nav.on_navigate_goal(msg)
 
     time.sleep(0.05)
     assert nav._nav_state == "idle"
@@ -72,8 +73,8 @@ def test_on_nav_goal_broadcasts_idle_until_path() -> None:
     nav._adapter.send_nav_goal.assert_called_once()
     nav_status = _last_nav_status(mock_server)
     assert nav_status["type"] == "nav_status"
-    assert nav_status["state"] == "idle"
-    assert nav_status["goal_reached"] is False
+    assert nav_status["phase"] == "idle"
+    assert nav_status["phase"] == "idle"
 
 
 @pytest.mark.asyncio
@@ -169,7 +170,7 @@ async def test_handle_ar_goal_reached_failure_marks_goal_failed() -> None:
     assert nav._nav_goal_pending is False
 
 
-def test_nav_goal_stall_triggers_recovery() -> None:
+def test_goal_stall_triggers_recovery() -> None:
     nav, mock_server = _make_nav()
     nav._nav_goal_pending = True
     nav._nav_path_received = False
@@ -182,12 +183,12 @@ def test_nav_goal_stall_triggers_recovery() -> None:
     assert nav._goal_failed is False
     assert nav._nav_goal_pending is False
     nav_status = _last_nav_status(mock_server)
-    assert nav_status["recovering"] is True
+    assert nav_status["phase"] == "recovering"
     time.sleep(0.05)
     nav._adapter.cancel_goal.assert_called_once()
 
 
-def test_nav_goal_stall_terminal_after_max_attempts() -> None:
+def test_goal_stall_terminal_after_max_attempts() -> None:
     nav, mock_server = _make_nav()
     nav._nav_goal_pending = True
     nav._nav_path_received = False
@@ -199,26 +200,27 @@ def test_nav_goal_stall_terminal_after_max_attempts() -> None:
     assert nav._goal_failed is True
     assert nav._nav_error_code == NAV_GOAL_STALLED.code
     nav_status = _last_nav_status(mock_server)
-    assert nav_status["goal_failed"] is True
+    assert nav_status["phase"] == "failed"
     assert nav_status["error_code"] == NAV_GOAL_STALLED.code
 
 
-def test_nav_goal_rejected_when_degraded() -> None:
+def test_goal_rejected_when_degraded() -> None:
     nav, _mock_server = _make_nav()
     nav._nav_degraded = True
-    msg = NavGoalMessage(
+    msg = GoalMessage(
+        intent="navigate",
         ts=1.0,
         robot_id="unitree_go2",
         position=(1.0, 0.0, 2.0),
         orientation=(0.0, 0.0, 0.0, 1.0),
     )
 
-    nav.on_nav_goal(msg)
+    nav.on_navigate_goal(msg)
 
     nav._adapter.send_nav_goal.assert_not_called()
 
 
-def test_on_nav_goal_returns_before_adapter_publish() -> None:
+def test_on_navigate_goal_returns_before_adapter_publish() -> None:
     """Adapter publish runs off-thread so the WebSocket handler is not blocked."""
     nav, _mock_server = _make_nav()
 
@@ -227,7 +229,8 @@ def test_on_nav_goal_returns_before_adapter_publish() -> None:
         return True
 
     nav._adapter.send_nav_goal.side_effect = slow_goal
-    msg = NavGoalMessage(
+    msg = GoalMessage(
+        intent="navigate",
         ts=1.0,
         robot_id="unitree_go2",
         position=(1.0, 0.0, 2.0),
@@ -235,7 +238,7 @@ def test_on_nav_goal_returns_before_adapter_publish() -> None:
     )
 
     start = time.monotonic()
-    nav.on_nav_goal(msg)
+    nav.on_navigate_goal(msg)
     elapsed = time.monotonic() - start
 
     assert elapsed < 0.1
@@ -243,8 +246,8 @@ def test_on_nav_goal_returns_before_adapter_publish() -> None:
     nav._adapter.send_nav_goal.assert_called_once()
 
 
-def test_emergency_stop_then_nav_goal_succeeds() -> None:
-    """After emergency stop, a new nav_goal is accepted and published."""
+def test_emergency_stop_then_goal_succeeds() -> None:
+    """After emergency stop, a new goal is accepted and published."""
     nav, _mock_server = _make_nav()
     nav._nav_goal_pending = True
     nav._nav_state = "navigating"
@@ -256,13 +259,14 @@ def test_emergency_stop_then_nav_goal_succeeds() -> None:
     assert nav._nav_goal_pending is False
     assert nav._nav_state == "idle"
 
-    msg = NavGoalMessage(
+    msg = GoalMessage(
+        intent="navigate",
         ts=2.0,
         robot_id="unitree_go2",
         position=(2.0, 0.0, 3.0),
         orientation=(0.0, 0.0, 0.0, 1.0),
     )
-    nav.on_nav_goal(msg)
+    nav.on_navigate_goal(msg)
     time.sleep(0.05)
 
     nav._adapter.send_nav_goal.assert_called_once()
@@ -285,7 +289,7 @@ def test_cancel_goal_timeout_marks_navigation_degraded() -> None:
     assert nav._goal_failed is True
     assert nav._nav_error_code == CONTROL_RPC_TIMEOUT.code
     nav_status = _last_nav_status(mock_server)
-    assert nav_status["goal_failed"] is True
+    assert nav_status["phase"] == "failed"
     assert nav_status["error_code"] == CONTROL_RPC_TIMEOUT.code
 
 
@@ -302,8 +306,8 @@ def test_on_navigation_state_idle_while_live_emits_recovery() -> None:
     assert nav._nav_state == "recovery"
     assert nav._nav_recovering is True
     nav_status = _last_nav_status(mock_server)
-    assert nav_status["state"] == "recovery"
-    assert nav_status["recovering"] is True
+    assert nav_status["phase"] == "recovering"
+    assert nav_status["phase"] == "recovering"
 
 
 def test_on_navigation_state_initial_rotation_maps_to_navigating() -> None:
@@ -368,7 +372,6 @@ def test_encode_pose_accepts_non_finite_inputs() -> None:
             ts=1.0,
             position=(float("nan"), 1.0, 2.0),
             orientation=(0.0, float("inf"), 0.0, 1.0),
-            robot_id="unitree_go2",
         )
     )
     assert raw["type"] == "pose"

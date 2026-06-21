@@ -1,6 +1,6 @@
 // ================================================================
 /**
- * Protocol v5 — message types, parser, outbound builders, and unit
+ * Protocol v6 — message types, parser, outbound builders, and unit
  * conversion helpers. Single source of truth replacing the v3 trio
  * (ProtocolTypes / ProtocolParser / Protocol).
  *
@@ -8,7 +8,7 @@
  */
 // ================================================================
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -42,19 +42,23 @@ export interface CapabilityState {
   reason?: string;
 }
 
+export interface RegistrationProfile {
+  tag_ids: number[];
+  tag_total_size_m: number;
+}
+
 export interface RobotHelloInfo {
   robot_id: string;
-  robot_model: string;
   display_name: string;
   body_bounds_m?: [number, number, number];
   footprint_m?: [number, number];
   visual_origin_frame: string;
   base_height_m?: number;
   default_render_offset_m?: [number, number, number];
-  registration_profile?: Record<string, unknown>;
+  registration_profile?: RegistrationProfile;
 }
 
-/** v4: capabilities is a single unified map; disabled_capabilities removed. */
+/** Capabilities is a single unified map; disabled_capabilities removed. */
 export interface HelloMessage {
   type: "hello";
   protocol_version: number;
@@ -65,8 +69,6 @@ export interface HelloMessage {
 export interface LidarMessage {
   type: "lidar";
   ts: number;
-  robot_id: string;
-  frame: string;
   points: [number, number, number][];
 }
 
@@ -85,8 +87,6 @@ export const DEFAULT_LIDAR_OBSTACLE_SETTINGS: LidarObstacleSettings = {
 export interface PoseMessage {
   type: "pose";
   ts: number;
-  robot_id: string;
-  frame: string;
   position: [number, number, number];
   orientation: [number, number, number, number];
   /** Smoothed robot speed from bridge odom (m/s); optional on older bridges. */
@@ -96,12 +96,11 @@ export interface PoseMessage {
 export interface PoseCorrectionMessage {
   type: "pose_correction";
   ts: number;
-  robot_id: string;
   trans_delta_m: number;
   yaw_delta_deg?: number;
   yaw_corrected: boolean;
   solve_quality: number;
-  solve_method: "tag" | "tag_translation";
+  solve_method: "apriltag_full" | "apriltag_translation";
 }
 
 export type RegistrationMode = "april_odom_baseline" | "manual_pose";
@@ -133,11 +132,10 @@ export interface RegistrationPreviewPose {
   orientation: [number, number, number, number];
 }
 
-/** v5: registration progress during a setup registration session. */
+/** Registration progress during a setup registration session. */
 export interface RegistrationStatusMessage {
   type: "registration_status";
   ts: number;
-  robot_id: string;
   mode?: RegistrationMode;
   phase: RegistrationPhase;
   capture: CaptureHint;
@@ -147,52 +145,73 @@ export interface RegistrationStatusMessage {
   preview_pose?: RegistrationPreviewPose;
 }
 
-/** v4: camera_frame_ack contains only seq. */
+/** camera_frame_ack contains only seq. */
 export interface CameraFrameAckMessage {
   type: "camera_frame_ack";
   ts: number;
-  robot_id: string;
   seq: number;
 }
 
 export interface BridgeStatusMessage {
   type: "bridge_status";
   ts: number;
-  robot_id: string;
   robot_connected: boolean;
-  streams_active: boolean;
   registered: boolean;
   reconnecting: boolean;
   registration_method?: RegistrationMode;
   registration_approximate?: boolean;
 }
 
+export type PathKind = "active" | "preview";
+
 export interface PathMessage {
   type: "path";
   ts: number;
-  robot_id: string;
-  frame: string;
+  kind: PathKind;
   waypoints: [number, number, number][];
+  target?: [number, number, number];
 }
 
-export interface PathPreviewMessage {
-  type: "path_preview";
-  ts: number;
-  robot_id: string;
-  frame: string;
-  waypoints: [number, number, number][];
-  target: [number, number, number];
-}
+export type NavPhase =
+  | "idle"
+  | "navigating"
+  | "recovering"
+  | "succeeded"
+  | "failed";
 
 export interface NavStatusMessage {
   type: "nav_status";
   ts: number;
-  robot_id: string;
-  state: "idle" | "navigating" | "recovery";
-  goal_reached: boolean;
-  goal_failed: boolean;
-  recovering?: boolean;
+  phase: NavPhase;
   error_code?: number;
+}
+
+export interface SnapshotBridgeState {
+  robot_connected: boolean;
+  registered: boolean;
+  reconnecting: boolean;
+  registration_method?: RegistrationMode | null;
+  registration_approximate?: boolean;
+}
+
+export interface SnapshotNavState {
+  phase: NavPhase;
+  error_code?: number | null;
+}
+
+export interface SnapshotPathState {
+  kind: PathKind;
+  waypoints: [number, number, number][];
+  target?: [number, number, number];
+}
+
+export interface RuntimeSnapshotMessage {
+  type: "runtime_snapshot";
+  ts: number;
+  robot_id: string;
+  bridge: SnapshotBridgeState;
+  nav: SnapshotNavState;
+  path?: SnapshotPathState;
 }
 
 export interface PongMessage {
@@ -212,9 +231,17 @@ export type InboundMessage =
   | CameraFrameAckMessage
   | BridgeStatusMessage
   | PathMessage
-  | PathPreviewMessage
   | NavStatusMessage
+  | RuntimeSnapshotMessage
   | PongMessage;
+
+export type RegistrationCommandAction =
+  | "start"
+  | "authorize_motion"
+  | "stop"
+  | "commit";
+
+export type GoalIntent = "navigate" | "preview";
 
 // ── Parse-error taxonomy ───────────────────────────────────────
 
@@ -253,14 +280,6 @@ export function isNonCriticalInboundMessageType(
   );
 }
 
-function unflattenVec3(flat: number[]): [number, number, number][] {
-  const out: [number, number, number][] = [];
-  for (let i = 0; i + 2 < flat.length; i += 3) {
-    out.push([flat[i], flat[i + 1], flat[i + 2]]);
-  }
-  return out;
-}
-
 function requireObject(data: unknown): Record<string, unknown> {
   if (typeof data !== "object" || data === null || Array.isArray(data)) {
     throw new Error("Message must be a JSON object");
@@ -297,6 +316,16 @@ const REGISTRATION_PHASES: RegistrationPhase[] = [
 ];
 
 const CAPTURE_HINTS: CaptureHint[] = ["off", "steady", "burst", "hold"];
+
+const NAV_PHASES: NavPhase[] = [
+  "idle",
+  "navigating",
+  "recovering",
+  "succeeded",
+  "failed",
+];
+
+const PATH_KINDS: PathKind[] = ["active", "preview"];
 
 function parseRegistrationMotion(raw: unknown): RegistrationMotion | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -355,22 +384,92 @@ function parseVec3(raw: unknown): [number, number, number] {
   return [Number(raw[0]), Number(raw[1]), Number(raw[2])];
 }
 
-function parseFlatPointMessage(
-  data: Record<string, unknown>,
-): LidarMessage {
-  let pts: [number, number, number][];
-  if (Array.isArray(data.points_flat)) {
-    pts = unflattenVec3(data.points_flat as number[]);
-  } else {
-    pts = parsePoints(data.points);
+function parseRegistrationProfile(raw: unknown): RegistrationProfile | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const profile = raw as Record<string, unknown>;
+  if (!Array.isArray(profile.tag_ids)) {
+    return undefined;
+  }
+  const tagIds = profile.tag_ids.map((id) => Number(id));
+  if (tagIds.some((id) => !Number.isFinite(id))) {
+    return undefined;
+  }
+  if (typeof profile.tag_total_size_m !== "number") {
+    return undefined;
   }
   return {
-    type: "lidar",
-    ts: requireNumber(data, "ts"),
-    robot_id: requireString(data, "robot_id"),
-    frame: requireString(data, "frame"),
-    points: pts,
+    tag_ids: tagIds,
+    tag_total_size_m: profile.tag_total_size_m,
   };
+}
+
+function parseSnapshotBridge(raw: unknown): SnapshotBridgeState {
+  const bridge = requireObject(raw);
+  const status: SnapshotBridgeState = {
+    robot_connected: Boolean(bridge.robot_connected),
+    registered: Boolean(bridge.registered),
+    reconnecting: Boolean(bridge.reconnecting),
+  };
+  const method = bridge.registration_method;
+  if (method === "april_odom_baseline" || method === "manual_pose") {
+    status.registration_method = method;
+  } else if (method === null) {
+    status.registration_method = null;
+  }
+  if (typeof bridge.registration_approximate === "boolean") {
+    status.registration_approximate = bridge.registration_approximate;
+  }
+  return status;
+}
+
+function parseSnapshotNav(raw: unknown): SnapshotNavState {
+  const nav = requireObject(raw);
+  const phase = requireString(nav, "phase");
+  if (!NAV_PHASES.includes(phase as NavPhase)) {
+    throw new Error(`Missing or invalid field: phase`);
+  }
+  const status: SnapshotNavState = { phase: phase as NavPhase };
+  if (typeof nav.error_code === "number") {
+    status.error_code = nav.error_code;
+  } else if (nav.error_code === null) {
+    status.error_code = null;
+  }
+  return status;
+}
+
+function parseSnapshotPath(raw: unknown): SnapshotPathState {
+  const path = requireObject(raw);
+  const kind = requireString(path, "kind");
+  if (!PATH_KINDS.includes(kind as PathKind)) {
+    throw new Error("Missing or invalid field: kind");
+  }
+  const snapshot: SnapshotPathState = {
+    kind: kind as PathKind,
+    waypoints: parsePoints(path.waypoints),
+  };
+  if (path.target !== undefined) {
+    snapshot.target = parseVec3(path.target);
+  }
+  return snapshot;
+}
+
+function parsePathMessage(data: Record<string, unknown>): PathMessage {
+  const kind = requireString(data, "kind");
+  if (!PATH_KINDS.includes(kind as PathKind)) {
+    throw new Error("Missing or invalid field: kind");
+  }
+  const msg: PathMessage = {
+    type: "path",
+    ts: requireNumber(data, "ts"),
+    kind: kind as PathKind,
+    waypoints: parsePoints(data.waypoints),
+  };
+  if (data.target !== undefined) {
+    msg.target = parseVec3(data.target);
+  }
+  return msg;
 }
 
 export function parseInboundJson(text: string): Record<string, unknown> {
@@ -423,7 +522,6 @@ function parseInboundObject(
         protocol_version: version,
         robot: {
           robot_id: requireString(robot, "robot_id"),
-          robot_model: requireString(robot, "robot_model"),
           display_name: requireString(robot, "display_name"),
           visual_origin_frame: requireString(robot, "visual_origin_frame"),
         },
@@ -449,15 +547,11 @@ function parseInboundObject(
           robot.default_render_offset_m,
         );
       }
-      if (
-        typeof robot.registration_profile === "object" &&
-        robot.registration_profile !== null &&
-        !Array.isArray(robot.registration_profile)
-      ) {
-        hello.robot.registration_profile = robot.registration_profile as Record<
-          string,
-          unknown
-        >;
+      const registrationProfile = parseRegistrationProfile(
+        robot.registration_profile,
+      );
+      if (registrationProfile) {
+        hello.robot.registration_profile = registrationProfile;
       }
       const rawCapabilities = requireObject(data.capabilities ?? {});
       Object.keys(rawCapabilities).forEach((key) => {
@@ -469,6 +563,20 @@ function parseInboundObject(
         };
       });
       return hello;
+    }
+
+    case "runtime_snapshot": {
+      const snapshot: RuntimeSnapshotMessage = {
+        type: "runtime_snapshot",
+        ts: requireNumber(data, "ts"),
+        robot_id: requireString(data, "robot_id"),
+        bridge: parseSnapshotBridge(data.bridge),
+        nav: parseSnapshotNav(data.nav),
+      };
+      if (data.path !== undefined) {
+        snapshot.path = parseSnapshotPath(data.path);
+      }
+      return snapshot;
     }
 
     case "registration_status": {
@@ -494,7 +602,6 @@ function parseInboundObject(
       const msg: RegistrationStatusMessage = {
         type: "registration_status",
         ts: requireNumber(data, "ts"),
-        robot_id: requireString(data, "robot_id"),
         phase: phase as RegistrationPhase,
         capture: capture as CaptureHint,
         message: typeof data.message === "string" ? data.message : "",
@@ -520,7 +627,6 @@ function parseInboundObject(
       return {
         type: "camera_frame_ack",
         ts: requireNumber(data, "ts"),
-        robot_id: requireString(data, "robot_id"),
         seq: requireNumber(data, "seq"),
       };
     }
@@ -529,9 +635,7 @@ function parseInboundObject(
       const status: BridgeStatusMessage = {
         type: "bridge_status",
         ts: requireNumber(data, "ts"),
-        robot_id: requireString(data, "robot_id"),
         robot_connected: Boolean(data.robot_connected),
-        streams_active: Boolean(data.streams_active),
         registered: Boolean(data.registered),
         reconnecting: Boolean(data.reconnecting),
       };
@@ -547,10 +651,6 @@ function parseInboundObject(
       return status;
     }
 
-    case "lidar": {
-      return parseFlatPointMessage(data);
-    }
-
     case "pose": {
       const q = data.orientation;
       if (!Array.isArray(q) || q.length !== 4) {
@@ -559,8 +659,6 @@ function parseInboundObject(
       return {
         type: "pose",
         ts: requireNumber(data, "ts"),
-        robot_id: requireString(data, "robot_id"),
-        frame: requireString(data, "frame"),
         position: parseVec3(data.position),
         ...(typeof data.speed_mps === "number" ? { speed_mps: Number(data.speed_mps) } : {}),
         orientation: [Number(q[0]), Number(q[1]), Number(q[2]), Number(q[3])],
@@ -569,7 +667,10 @@ function parseInboundObject(
 
     case "pose_correction": {
       const solveMethod = data.solve_method;
-      if (solveMethod !== "tag" && solveMethod !== "tag_translation") {
+      if (
+        solveMethod !== "apriltag_full" &&
+        solveMethod !== "apriltag_translation"
+      ) {
         print(
           `Protocol: unknown pose_correction.solve_method "${solveMethod}"; skipping`,
         );
@@ -578,7 +679,6 @@ function parseInboundObject(
       const msg: PoseCorrectionMessage = {
         type: "pose_correction",
         ts: requireNumber(data, "ts"),
-        robot_id: requireString(data, "robot_id"),
         trans_delta_m: requireNumber(data, "trans_delta_m"),
         yaw_corrected: Boolean(data.yaw_corrected),
         solve_quality: requireNumber(data, "solve_quality"),
@@ -591,47 +691,20 @@ function parseInboundObject(
     }
 
     case "path": {
-      return {
-        type: "path",
-        ts: requireNumber(data, "ts"),
-        robot_id: requireString(data, "robot_id"),
-        frame: requireString(data, "frame"),
-        waypoints: parsePoints(data.waypoints),
-      };
-    }
-
-    case "path_preview": {
-      return {
-        type: "path_preview",
-        ts: requireNumber(data, "ts"),
-        robot_id: requireString(data, "robot_id"),
-        frame: requireString(data, "frame"),
-        waypoints: parsePoints(data.waypoints),
-        target: parseVec3(data.target),
-      };
+      return parsePathMessage(data);
     }
 
     case "nav_status": {
-      const state = requireString(data, "state");
-      if (
-        state !== "idle" &&
-        state !== "navigating" &&
-        state !== "recovery"
-      ) {
-        print(`Protocol: unknown nav_status.state "${state}"; skipping`);
+      const phase = requireString(data, "phase");
+      if (!NAV_PHASES.includes(phase as NavPhase)) {
+        print(`Protocol: unknown nav_status.phase "${phase}"; skipping`);
         return null;
       }
       const msg: NavStatusMessage = {
         type: "nav_status",
         ts: requireNumber(data, "ts"),
-        robot_id: requireString(data, "robot_id"),
-        state,
-        goal_reached: Boolean(data.goal_reached),
-        goal_failed: Boolean(data.goal_failed),
+        phase: phase as NavPhase,
       };
-      if (typeof data.recovering === "boolean") {
-        msg.recovering = data.recovering;
-      }
       if (typeof data.error_code === "number") {
         msg.error_code = data.error_code;
       }
@@ -653,6 +726,29 @@ function parseInboundObject(
   }
 }
 
+/** Build a live bridge_status view from a runtime_snapshot for shared handlers. */
+export function bridgeStatusFromSnapshot(
+  snapshot: RuntimeSnapshotMessage,
+): BridgeStatusMessage {
+  const status: BridgeStatusMessage = {
+    type: "bridge_status",
+    ts: snapshot.ts,
+    robot_connected: snapshot.bridge.robot_connected,
+    registered: snapshot.bridge.registered,
+    reconnecting: snapshot.bridge.reconnecting,
+  };
+  if (
+    snapshot.bridge.registration_method === "april_odom_baseline" ||
+    snapshot.bridge.registration_method === "manual_pose"
+  ) {
+    status.registration_method = snapshot.bridge.registration_method;
+  }
+  if (typeof snapshot.bridge.registration_approximate === "boolean") {
+    status.registration_approximate = snapshot.bridge.registration_approximate;
+  }
+  return status;
+}
+
 // ── Outbound builders ──────────────────────────────────────────
 
 export function buildGetStatus(robotId: string): string {
@@ -668,55 +764,35 @@ export function buildSetLidarMode(
   mode: "off" | "obstacles" | "full",
   settings: LidarObstacleSettings = DEFAULT_LIDAR_OBSTACLE_SETTINGS,
 ): string {
-  return JSON.stringify({
+  const payload: Record<string, unknown> = {
     type: "set_lidar_mode",
     ts: getTime(),
     robot_id: robotId,
     mode,
-    obstacle_min_distance_m: settings.minDistanceM,
-    obstacle_opaque_distance_m: settings.opaqueDistanceM,
-    obstacle_max_distance_m: settings.maxDistanceM,
-  });
+  };
+  if (mode === "obstacles") {
+    payload.obstacle_min_distance_m = settings.minDistanceM;
+    payload.obstacle_opaque_distance_m = settings.opaqueDistanceM;
+    payload.obstacle_max_distance_m = settings.maxDistanceM;
+  }
+  return JSON.stringify(payload);
 }
 
-export function buildRegistrationStart(
+export function buildRegistrationCommand(
   robotId: string,
-  mode: RegistrationMode,
+  command: RegistrationCommandAction,
+  mode?: RegistrationMode,
 ): string {
-  return JSON.stringify({
-    type: "registration_start",
+  const payload: Record<string, unknown> = {
+    type: "registration_command",
     ts: getTime(),
     robot_id: robotId,
-    mode,
-  });
-}
-
-export function buildRegistrationAction(
-  robotId: string,
-  action: "authorize_motion" = "authorize_motion",
-): string {
-  return JSON.stringify({
-    type: "registration_action",
-    ts: getTime(),
-    robot_id: robotId,
-    action,
-  });
-}
-
-export function buildRegistrationStop(robotId: string): string {
-  return JSON.stringify({
-    type: "registration_stop",
-    ts: getTime(),
-    robot_id: robotId,
-  });
-}
-
-export function buildRegistrationCommit(robotId: string): string {
-  return JSON.stringify({
-    type: "registration_commit",
-    ts: getTime(),
-    robot_id: robotId,
-  });
+    command,
+  };
+  if (mode !== undefined) {
+    payload.mode = mode;
+  }
+  return JSON.stringify(payload);
 }
 
 export function buildRegistrationPose(
@@ -731,6 +807,41 @@ export function buildRegistrationPose(
     position: lensCentimetersToProtocolMeters(position),
     orientation: [rotation.x, rotation.y, rotation.z, rotation.w],
   });
+}
+
+export function buildGoal(
+  robotId: string,
+  intent: GoalIntent,
+  position: vec3,
+  rotation?: quat | null,
+): string {
+  const payload: Record<string, unknown> = {
+    type: "goal",
+    ts: getTime(),
+    robot_id: robotId,
+    intent,
+    position: lensCentimetersToProtocolMeters(position),
+  };
+  if (rotation) {
+    payload.orientation = [rotation.x, rotation.y, rotation.z, rotation.w];
+  }
+  return JSON.stringify(payload);
+}
+
+export function buildNavigateGoal(
+  robotId: string,
+  position: vec3,
+  rotation: quat,
+): string {
+  return buildGoal(robotId, "navigate", position, rotation);
+}
+
+export function buildPreviewGoal(
+  robotId: string,
+  position: vec3,
+  rotation?: quat | null,
+): string {
+  return buildGoal(robotId, "preview", position, rotation);
 }
 
 export function buildPing(clientTs: number, robotId: string): string {
@@ -810,37 +921,6 @@ export function buildCameraFrameBytes(args: {
   return out;
 }
 
-export function buildNavGoal(
-  position: vec3,
-  rotation: quat,
-  robotId: string,
-): string {
-  return JSON.stringify({
-    type: "nav_goal",
-    ts: getTime(),
-    robot_id: robotId,
-    position: lensCentimetersToProtocolMeters(position),
-    orientation: [rotation.x, rotation.y, rotation.z, rotation.w],
-  });
-}
-
-export function buildPlanPath(
-  position: vec3,
-  robotId: string,
-  rotation?: quat | null,
-): string {
-  const payload: Record<string, unknown> = {
-    type: "plan_path",
-    ts: getTime(),
-    robot_id: robotId,
-    position: lensCentimetersToProtocolMeters(position),
-  };
-  if (rotation) {
-    payload.orientation = [rotation.x, rotation.y, rotation.z, rotation.w];
-  }
-  return JSON.stringify(payload);
-}
-
 export function buildCancelGoal(robotId: string): string {
   return JSON.stringify({
     type: "cancel_goal",
@@ -878,13 +958,9 @@ function _getFloat16LE(view: DataView, byteOffset: number): number {
  * Parse a binary lidar_f16 WebSocket frame into a LidarMessage.
  * Accepts a Uint8Array (from Blob.bytes()) — Spectacles only delivers binary
  * WebSocket frames as Blob, not ArrayBuffer.
- * The robot_id is not present in the binary frame; pass the currently
- * active robot id from the session context.
+ * Binary frames carry no robot_id; the session robot comes from hello.
  */
-export function parseLidarBinary(
-  data: Uint8Array,
-  robotId: string,
-): LidarMessage | null {
+export function parseLidarBinary(data: Uint8Array): LidarMessage | null {
   if (data.byteLength < 5) {
     return null;
   }
@@ -904,7 +980,7 @@ export function parseLidarBinary(
     const z = _getFloat16LE(view, base + 4);
     points.push([x, y, z]);
   }
-  return { type: "lidar", ts, robot_id: robotId, frame: "world", points };
+  return { type: "lidar", ts, points };
 }
 
 /** Derive BridgeLinkState from connection + bridge_status flags. */

@@ -10,16 +10,16 @@ import pytest
 
 from dimos.ar.adapters.base import RuntimeRegistrationProfile
 from dimos.ar.bridge.odom_buffer import OdomBuffer
-from dimos.ar.bridge.pose_refinement import RegisteredPoseRefiner
 from dimos.ar.bridge.sender import BridgeSender
-from dimos.ar.tracking.robot_tag_tracker import (
+from dimos.ar.registration.refinement import RegisteredPoseRefiner
+from dimos.ar.registration.tracker import (
     RobotAprilTagTracker,
     RobotAprilTagTrackerConfig,
     TagSolve,
     _yaw_from_T,
     build_T_world_odom,
 )
-from dimos.ar.tracking.transforms import Calibration, OdomSample
+from dimos.ar.registration.transforms import Calibration, OdomSample
 
 
 def _make_pose_refiner() -> tuple[
@@ -65,7 +65,7 @@ def test_runtime_smoothing_preserves_heading() -> None:
 
     solve = TagSolve(
         T_world_odom=T_committed.copy(),
-        method="tag",
+        method="apriltag_full",
         quality=1.0,
         observation_count=8,
         baseline_m=0.40,
@@ -94,7 +94,7 @@ def test_runtime_translation_solve_corrects_stationary_robot() -> None:
     T_target = build_T_world_odom(theta, (1.0, 0.0, -1.0))
     solve = TagSolve(
         T_world_odom=T_target.copy(),
-        method="tag_translation",
+        method="apriltag_translation",
         quality=0.95,
         observation_count=1,
         baseline_m=0.0,
@@ -114,7 +114,7 @@ def test_runtime_translation_solve_corrects_stationary_robot() -> None:
         if json.loads(payload).get("type") == "pose_correction"
     ]
     assert len(pose_corrections) == 1
-    assert pose_corrections[0]["solve_method"] == "tag_translation"
+    assert pose_corrections[0]["solve_method"] == "apriltag_translation"
 
 
 def test_runtime_correction_emits_fresh_pose_for_stationary_robot() -> None:
@@ -133,7 +133,7 @@ def test_runtime_correction_emits_fresh_pose_for_stationary_robot() -> None:
     T_target = build_T_world_odom(theta, (1.0, 0.0, -1.0))
     solve = TagSolve(
         T_world_odom=T_target.copy(),
-        method="tag_translation",
+        method="apriltag_translation",
         quality=0.95,
         observation_count=1,
         baseline_m=0.0,
@@ -165,7 +165,7 @@ def test_runtime_correction_below_deadband_emits_no_pose_correction() -> None:
     T_target = build_T_world_odom(theta + math.radians(0.5), (0.02, 0.0, 0.0))
     solve = TagSolve(
         T_world_odom=T_target.copy(),
-        method="tag_translation",
+        method="apriltag_translation",
         quality=0.95,
         observation_count=1,
         baseline_m=0.0,
@@ -199,7 +199,7 @@ def test_runtime_correction_above_deadband_emits_pose_correction() -> None:
     T_target = build_T_world_odom(theta, (0.25, 0.0, 0.0))
     solve = TagSolve(
         T_world_odom=T_target.copy(),
-        method="tag_translation",
+        method="apriltag_translation",
         quality=0.95,
         observation_count=1,
         baseline_m=0.0,
@@ -215,7 +215,7 @@ def test_runtime_correction_above_deadband_emits_pose_correction() -> None:
         if json.loads(payload).get("type") == "pose_correction"
     ]
     assert len(pose_corrections) == 1
-    assert pose_corrections[0]["solve_method"] == "tag_translation"
+    assert pose_corrections[0]["solve_method"] == "apriltag_translation"
 
 
 def test_runtime_yaw_gate_holds_on_curve() -> None:
@@ -230,7 +230,7 @@ def test_runtime_yaw_gate_holds_on_curve() -> None:
     T_target = build_T_world_odom(theta + math.radians(5.0), (0.2, 0.0, -0.2))
     solve = TagSolve(
         T_world_odom=T_target.copy(),
-        method="tag",
+        method="apriltag_full",
         quality=0.9,
         observation_count=6,
         baseline_m=0.5,
@@ -255,7 +255,7 @@ def test_runtime_yaw_gate_allows_straight_run() -> None:
     T_target = build_T_world_odom(theta + math.radians(5.0), (0.2, 0.0, -0.2))
     solve = TagSolve(
         T_world_odom=T_target.copy(),
-        method="tag",
+        method="apriltag_full",
         quality=0.9,
         observation_count=6,
         baseline_m=0.5,

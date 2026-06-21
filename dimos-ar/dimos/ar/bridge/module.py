@@ -23,7 +23,12 @@ from dimos.ar.bridge.preview import PreviewService
 from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.bridge.status_service import StatusService
 from dimos.ar.bridge.telemetry import TelemetryPublisher
-from dimos.ar.network.protocol import EmergencyStopMessage, SetLidarModeMessage
+from dimos.ar.network.protocol import (
+    EmergencyStopMessage,
+    GoalMessage,
+    SetLidarModeMessage,
+    encode_runtime_snapshot,
+)
 from dimos.ar.network.websocket_server import ARWebSocketServer
 from dimos.ar.preview_planner import PreviewPlanner
 from dimos.ar.registration.refinement import RegisteredPoseRefiner
@@ -62,7 +67,6 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     obstacle_height_threshold_m: float = 0.08
     target_points: int = 1000
     obstacle_target_points: int = 200
-    lidar_binary: bool = True
     lidar_max_hz: float = 1.0
     # Voxel grid size for coarse LiDAR downsampling before the height-band filter.
     # The DimOS default is 0.025 m; 0.05 m is chosen deliberately for XR payload budget.
@@ -215,7 +219,6 @@ class ARBridge(Module):  # type: ignore[misc]
             obstacle_target_points=self.config.obstacle_target_points,
             lidar_voxel_size_m=self.config.lidar_voxel_size_m,
             pose_max_hz=self.config.pose_max_hz,
-            lidar_binary=self.config.lidar_binary,
             speed_horizon_s=runtime_profile.runtime_speed_horizon_s,
         )
 
@@ -225,20 +228,22 @@ class ARBridge(Module):  # type: ignore[misc]
             nav.on_emergency_stop(msg.ts)
             registration.on_emergency_stop()
 
+        def _route_goal_message(msg: GoalMessage) -> None:
+            if msg.intent == "navigate":
+                nav.on_navigate_goal(msg)
+            else:
+                preview.on_preview_goal(msg)
+
         ws_server = ARWebSocketServer(
             port=self.config.port,
             hello_supplier=self._adapter.handshake_payload,
             max_message_bytes=self.config.max_message_bytes,
             loop=self._loop,
-            on_registration_start=registration.on_registration_start,
-            on_registration_stop=registration.on_registration_stop,
-            on_registration_commit=registration.on_registration_commit,
-            on_registration_action=registration.on_registration_action,
+            on_registration_command=registration.on_registration_command,
             on_camera_info=registration.on_camera_info,
             on_camera_frame=registration.on_camera_frame,
             on_registration_pose=registration.on_registration_pose,
-            on_nav_goal=nav.on_nav_goal,
-            on_plan_path=preview.on_plan_path,
+            on_goal=_route_goal_message,
             on_cancel_goal=lambda msg: nav.on_cancel_goal(msg.ts),
             on_emergency_stop=_on_emergency_stop,
             on_get_status=self._on_get_status,
@@ -338,11 +343,16 @@ class ARBridge(Module):  # type: ignore[misc]
 
     def _send_runtime_sync_to(self, websocket: ServerConnection) -> None:
         """Resend authoritative bridge + nav lifecycle state after connect or get_status."""
-        self._sender.send_to(websocket, self._status.status_payload())
-        self._sender.send_to(websocket, self._nav.nav_status_payload())
-        last_path = self._nav.last_navigating_path_payload
-        if last_path is not None:
-            self._sender.send_to(websocket, last_path)
+        path = self._nav.runtime_snapshot_path()
+        self._sender.send_to(
+            websocket,
+            encode_runtime_snapshot(
+                robot_id=self._adapter.robot_id(),
+                bridge=self._status.snapshot(),
+                nav=self._nav.nav_phase_dict(),
+                path=path,
+            ),
+        )
 
     def _send_status_to(self, websocket: ServerConnection) -> None:
         self._send_runtime_sync_to(websocket)
@@ -355,11 +365,26 @@ class ARBridge(Module):  # type: ignore[misc]
         msg: SetLidarModeMessage,
         _websocket: ServerConnection,
     ) -> None:
+        from dimos.ar.tracking.filters import LidarObstacleDistanceConfig
+
+        defaults = LidarObstacleDistanceConfig()
         self._telemetry.set_lidar_mode(
             mode=msg.mode,
-            obstacle_min_distance_m=msg.obstacle_min_distance_m,
-            obstacle_opaque_distance_m=msg.obstacle_opaque_distance_m,
-            obstacle_max_distance_m=msg.obstacle_max_distance_m,
+            obstacle_min_distance_m=(
+                msg.obstacle_min_distance_m
+                if msg.obstacle_min_distance_m is not None
+                else defaults.min_distance_m
+            ),
+            obstacle_opaque_distance_m=(
+                msg.obstacle_opaque_distance_m
+                if msg.obstacle_opaque_distance_m is not None
+                else defaults.opaque_distance_m
+            ),
+            obstacle_max_distance_m=(
+                msg.obstacle_max_distance_m
+                if msg.obstacle_max_distance_m is not None
+                else defaults.max_distance_m
+            ),
         )
 
     # ------------------------------------------------------------------

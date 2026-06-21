@@ -7,15 +7,75 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 `lens-studio/Assets/Scripts/Bridge/Protocol.ts` in sync. Bump
 `PROTOCOL_VERSION` on breaking changes.
 
+## Changelog
+
+### v6 (current) — Session-scoped identity and message consolidation
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 6.**
+- **Session robot from `hello`:** most outbound JSON messages omit `robot_id`.
+  Inbound messages still carry `robot_id` and are validated against the session
+  robot from `hello`. Binary LiDAR frames carry no `robot_id`.
+- **`hello.robot`:** `robot_model` removed. `registration_profile` is
+  `{ tag_ids, tag_total_size_m }` only (no `method` field).
+- **`runtime_snapshot`:** sent on connect and in response to `get_status` —
+  bundles `bridge`, `nav`, and an optional **active** `path`. Preview paths are
+  not cached in snapshots.
+- **`registration_command`:** replaces `registration_start`,
+  `registration_action`, `registration_stop`, and `registration_commit` with a
+  single message and `command` enum (`start`, `authorize_motion`, `stop`,
+  `commit`). `mode` is required only when `command` is `start`.
+- **`goal`:** replaces `nav_goal` and `plan_path` with `intent`:
+  `"navigate"` or `"preview"`.
+- **`path`:** unified message with `kind` `"active"` or `"preview"`. The
+  separate `path_preview` type is removed; preview paths include optional
+  `target`.
+- **`nav_status`:** `phase` enum only (`idle`, `navigating`, `recovering`,
+  `succeeded`, `failed`). Removed: `state`, `goal_reached`, `goal_failed`,
+  `recovering` boolean.
+- **`bridge_status` (live):** omits `robot_id` and `streams_active`.
+- **Lean outbound payloads:** `registration_status`, `pose`, `path`,
+  `pose_correction`, and `camera_frame_ack` omit `robot_id` and `frame`.
+- **LiDAR:** binary-only (`lidar_f16`); JSON `lidar` removed.
+- **`set_lidar_mode`:** obstacle distance fields required only when
+  `mode` is `"obstacles"`.
+- **`pose_correction.solve_method`:** `"apriltag_full"` or
+  `"apriltag_translation"` (replaces `"tag"` / `"tag_translation"`).
+
+### v5 — Registration domain redesign (superseded by v6)
+
+- Removed all `align_*`, `assist_confirm`, and `align_status` messages.
+- Added registration session messages (now consolidated into
+  `registration_command` in v6).
+- Capabilities: `registration_april_odom_baseline` and
+  `registration_manual_pose`.
+- `hello.robot.registration_profile` replaced `alignment_profile`.
+
+### v4 — Protocol shrink + alignment session semantics (superseded)
+
+- Flat `hello.capabilities` map; `align_start` requires `method`.
+- Stripped `camera_frame_ack` to `ts` + `seq`.
+- `bridge_status.registration_method` and `registration_approximate` always
+  present.
+
+### v3 — XR Bridge PR refactor (additive, backward-compatible)
+
+Per-robot adapters, DimOS TF publication, and additive optional fields. Clients
+built against prior v3 wire shapes continue to work without modification.
+
 ## Transport
 
 - Plain WebSocket. The Mac runs the server; XR devices connect as clients.
 - Most messages are JSON text frames. High-resolution camera stills use a binary
-  `camera_frame` envelope (see below).
+  `camera_frame` envelope (see below). LiDAR uses a binary `lidar_f16` frame
+  (see below).
 - Every JSON message is a JSON object with a `type` field.
 - Inbound and outbound coordinates use the XR world frame. The bridge converts
   world-frame goals and registration poses into robot odom coordinates.
-- Every runtime message carries a single active `robot_id`.
+- The active session robot is declared once in `hello.robot.robot_id`. Inbound
+  messages must carry a matching `robot_id`. Most outbound JSON messages omit
+  `robot_id`; exceptions are `hello`, `runtime_snapshot`, and `pong`.
 - **Text framing:** every outbound JSON text frame from the bridge ends with a
   single newline (`\n`). The client accumulates incoming text and splits on
   `\n` to recover complete messages when the platform delivers one JSON object
@@ -25,15 +85,14 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 ## Handshake
 
 On connect, the server sends `hello` with the active robot metadata and a flat
-capability map:
+capability map, then sends a `runtime_snapshot` (see below).
 
 ```json
 {
   "type": "hello",
-  "protocol_version": 5,
+  "protocol_version": 6,
   "robot": {
     "robot_id": "unitree_go2",
-    "robot_model": "unitree_go2",
     "display_name": "Unitree Go2",
     "body_bounds_m": [0.7, 0.5, 0.55],
     "footprint_m": [0.7, 0.5],
@@ -41,7 +100,6 @@ capability map:
     "base_height_m": 0.33,
     "default_render_offset_m": [0.0, 0.0, 0.0],
     "registration_profile": {
-      "method": "april_odom_baseline",
       "tag_ids": [0],
       "tag_total_size_m": 0.070
     }
@@ -72,39 +130,76 @@ Rules:
 
 ### `hello.robot.registration_profile`
 
-Optional field emitted when the robot adapter provides registration configuration.
-Absent or `null` when the adapter does not supply one.
+Optional field emitted when the robot adapter provides tag geometry for
+registration. Absent or `null` when the adapter does not supply one.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `method` | `string` | Recommended registration mode (e.g. `"april_odom_baseline"`) |
 | `tag_ids` | `number[]` | AprilTag IDs physically mounted on this robot |
 | `tag_total_size_m` | `number` | Outer edge size of each printed tag in metres |
 
-Example (Unitree G1):
+Example (Unitree Go2 / G1):
+
 ```json
 {
-  "method": "april_odom_baseline",
   "tag_ids": [0],
   "tag_total_size_m": 0.070
 }
 ```
 
-Immediately after `hello`, the server sends `bridge_status`.
-
 ## Outbound Messages
+
+### `runtime_snapshot`
+
+Authoritative bridge + navigation state sent once after `hello` on connect and
+again when the client sends `get_status`. Bundles the same bridge fields as live
+`bridge_status`, the current navigation phase, and an optional **active** path
+when navigation is in progress. Preview paths are **not** cached — clients
+that reconnect mid-preview must re-issue `goal` with `intent: "preview"`.
+
+```json
+{
+  "type": "runtime_snapshot",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "bridge": {
+    "robot_connected": true,
+    "registered": true,
+    "reconnecting": false,
+    "registration_method": "manual_pose",
+    "registration_approximate": false
+  },
+  "nav": {
+    "phase": "navigating"
+  },
+  "path": {
+    "kind": "active",
+    "waypoints": [[1.0, 2.0, 3.0]]
+  }
+}
+```
+
+Fields:
+
+- `robot_id`: session robot (same as `hello.robot.robot_id`)
+- `bridge`: same shape as live `bridge_status` (without `type` / `ts`)
+- `nav.phase`: one of `"idle"`, `"navigating"`, `"recovering"`, `"succeeded"`,
+  `"failed"`
+- `nav.error_code` (optional): numeric code when navigation is unavailable
+  (e.g. `505` = goal stalled)
+- `path` (optional): present only when an active navigating path is cached;
+  always `kind: "active"`. Omitted when idle or when only a preview exists.
 
 ### `bridge_status`
 
-Dynamic bridge/runtime state:
+Dynamic bridge/runtime state broadcast when registration or connection flags
+change. Does **not** include `robot_id` or `streams_active`.
 
 ```json
 {
   "type": "bridge_status",
   "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
   "robot_connected": true,
-  "streams_active": true,
   "registered": false,
   "reconnecting": false,
   "registration_method": "manual_pose",
@@ -115,11 +210,12 @@ Dynamic bridge/runtime state:
 Fields:
 
 - `robot_connected`: bridge has an active robot/runtime data path
-- `streams_active`: recent lidar and odom are flowing
 - `registered`: world-frame registration has been committed
 - `reconnecting`: reconnect/recovery is in progress
-- `registration_method`: **always present** — `"april_odom_baseline"`, `"manual_pose"`, or `null` when unregistered (same strings as `registration_start.mode`)
-- `registration_approximate`: **always present** — `true` when the active registration is approximate (e.g. manual pose)
+- `registration_method`: **always present** — `"april_odom_baseline"`,
+  `"manual_pose"`, or `null` when unregistered
+- `registration_approximate`: **always present** — `true` when the active
+  registration is approximate (e.g. manual pose)
 
 ### `registration_status`
 
@@ -129,7 +225,6 @@ Registration progress during a setup session:
 {
   "type": "registration_status",
   "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
   "mode": "april_odom_baseline",
   "phase": "awaiting_motion",
   "capture": "steady",
@@ -152,13 +247,20 @@ Registration progress during a setup session:
 
 Fields:
 
-- `mode` (optional): `"april_odom_baseline"` or `"manual_pose"` — matches `registration_start.mode` when a session is active
-- `phase`: one of `"idle"`, `"scanning"`, `"awaiting_motion"`, `"moving"`, `"sampling"`, `"editing"`, `"awaiting_commit"`, `"succeeded"`, `"failed"`
-- `capture`: camera capture hint for the client — `"off"`, `"steady"`, `"burst"`, or `"hold"`
+- `mode` (optional): `"april_odom_baseline"` or `"manual_pose"` — matches
+  `registration_command.mode` when a session is active
+- `phase`: one of `"idle"`, `"scanning"`, `"awaiting_motion"`, `"moving"`,
+  `"sampling"`, `"editing"`, `"awaiting_commit"`, `"succeeded"`, `"failed"`
+- `capture`: camera capture hint for the client — `"off"`, `"steady"`, `"burst"`,
+  or `"hold"`
 - `message`: human-readable status string for display in the client HUD
-- `tag_visible` (optional): present for AprilTag baseline sessions; `true` when a configured robot-mounted tag was detected in the most recent processed frame
-- `motion` (optional): structured safety hint during baseline strafe — `frame` (`"robot"`), `axis` (`"lateral"`), `direction` (`"left"` | `"right"`), `distance_m`, `waypoint_index`, `waypoint_total`
-- `preview_pose` (optional): estimated robot pose in world frame (`position` xyz metres, `orientation` quaternion xyzw); omitted until a solve is available
+- `tag_visible` (optional): present for AprilTag baseline sessions; `true` when
+  a configured robot-mounted tag was detected in the most recent processed frame
+- `motion` (optional): structured safety hint during baseline strafe — `frame`
+  (`"robot"`), `axis` (`"lateral"`), `direction` (`"left"` | `"right"`),
+  `distance_m`, `waypoint_index`, `waypoint_total`
+- `preview_pose` (optional): estimated robot pose in world frame (`position` xyz
+  metres, `orientation` quaternion xyzw); omitted until a solve is available
 
 ### `camera_frame_ack`
 
@@ -172,13 +274,9 @@ single-flight capture state:
 {
   "type": "camera_frame_ack",
   "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
   "seq": 42
 }
 ```
-
-> **v3 → v4 breaking change**: `tag_detected`, `tag_ids`, and `quality` are
-> removed. Use `registration_status.tag_visible` for detection feedback.
 
 ### Numeric precision (outbound)
 
@@ -187,18 +285,19 @@ payload size on Wi-Fi:
 
 | Field | Decimal places |
 |-------|----------------|
-| `lidar.points_flat` | 2 |
 | `pose.position`, `pose.orientation` | 4 |
 | `pose_correction.trans_delta_m`, `pose_correction.solve_quality` | 4 |
 | `pose_correction.yaw_delta_deg` | 3 |
-| `path` / `path_preview` waypoints and `target` | 3 |
-| `ts` on high-rate streams (`lidar`, `pose`, `path`, `path_preview`) | 3 |
+| `path` waypoints and `target` | 3 |
+| `ts` on high-rate streams (`pose`, `path`) | 3 |
 
-### `lidar` (binary — default)
+### `lidar` (binary)
 
 Subsampled point cloud in XR world frame, sent as a **binary WebSocket frame**
 (message type `0x01 lidar_f16`). Each point is encoded as three IEEE 754
 half-precision (float16) values, little-endian. Up to 2500 points per frame.
+Binary frames carry **no** `robot_id`; the session robot comes from `hello`.
+
 The emitted point set depends on the active bridge-side LiDAR mode selected by
 the client:
 
@@ -217,21 +316,6 @@ Wire layout:
 
 Point count: `N = (total_bytes − 5) / 6`.
 
-### `lidar` (JSON — legacy fallback)
-
-The JSON format is preserved for debugging and backwards compatibility. It is
-only emitted when `ARBridgeConfig.lidar_binary = False`.
-
-```json
-{
-  "type": "lidar",
-  "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
-  "frame": "world",
-  "points_flat": [x1, y1, z1, x2, y2, z2]
-}
-```
-
 ### `pose`
 
 Robot pose in XR world frame:
@@ -240,8 +324,6 @@ Robot pose in XR world frame:
 {
   "type": "pose",
   "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
-  "frame": "world",
   "position": [x, y, z],
   "orientation": [qx, qy, qz, qw],
   "speed_mps": 0.42
@@ -255,7 +337,7 @@ Robot pose in XR world frame:
 
 Runtime pose-correction telemetry emitted when the bridge commits a tag-driven
 world-to-odom correction **that exceeds the notification deadband**
-(≥ 5 cm translation or ≥ 1° yaw).  Sub-threshold micro-refinements still update
+(≥ 5 cm translation or ≥ 1° yaw). Sub-threshold micro-refinements still update
 `T_world_odom` on the bridge but do not emit this message, so Lens-side
 user-visible events (e.g. "Refined Tracking" toast, realignment snap animation)
 fire only when the robot position has meaningfully changed:
@@ -264,12 +346,11 @@ fire only when the robot position has meaningfully changed:
 {
   "type": "pose_correction",
   "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
   "trans_delta_m": 0.1824,
   "yaw_delta_deg": 6.137,
   "yaw_corrected": false,
   "solve_quality": 0.9521,
-  "solve_method": "tag_translation"
+  "solve_method": "apriltag_translation"
 }
 ```
 
@@ -277,35 +358,33 @@ Fields:
 
 - `trans_delta_m`: translation magnitude before the correction commit, in metres
 - `yaw_delta_deg` (optional): yaw magnitude before the correction commit, in degrees
-- `yaw_corrected`: `true` when the correction came from a full `tag` solve that
-  can update yaw; `false` for `tag_translation` fallback solves
+- `yaw_corrected`: `true` when the correction came from a full
+  `apriltag_full` solve that can update yaw; `false` for
+  `apriltag_translation` fallback solves
 - `solve_quality`: quality score reported by the tracker for the committed solve
-- `solve_method`: `"tag"` or `"tag_translation"`
+- `solve_method`: `"apriltag_full"` or `"apriltag_translation"`
 
 ### `path`
 
-Planner path in XR world frame:
+Planner path in XR world frame. The `kind` field distinguishes the active
+navigation route from an on-demand preview:
 
 ```json
 {
   "type": "path",
   "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
-  "frame": "world",
+  "kind": "active",
   "waypoints": [[x, y, z]]
 }
 ```
 
-### `path_preview`
-
-Preview planner path in XR world frame for an unconfirmed target:
+Preview path (from `goal` with `intent: "preview"`):
 
 ```json
 {
-  "type": "path_preview",
+  "type": "path",
   "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
-  "frame": "world",
+  "kind": "preview",
   "waypoints": [[x, y, z]],
   "target": [x, y, z]
 }
@@ -313,32 +392,38 @@ Preview planner path in XR world frame for an unconfirmed target:
 
 Fields:
 
-- `waypoints`: preview route in XR world frame; may be empty when no preview path
-  is available
-- `target`: echoed world-frame target used for this preview request so the client
-  can ignore stale responses
+- `kind`: `"active"` for the navigating route, `"preview"` for an unconfirmed
+  target
+- `waypoints`: route in XR world frame; may be empty when no path is available
+- `target` (preview only): echoed world-frame target so the client can ignore
+  stale responses
 
 ### `nav_status`
 
-Navigation state updates:
+Navigation lifecycle updates:
 
 ```json
 {
   "type": "nav_status",
   "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
-  "state": "navigating",
-  "goal_reached": false,
-  "goal_failed": false
+  "phase": "navigating"
 }
 ```
 
+`phase` is one of `"idle"`, `"navigating"`, `"recovering"`, `"succeeded"`,
+`"failed"`.
+
 Optional fields:
 
-- `recovering`: when `true`, the bridge cleared a stuck goal and the client should return to a retryable placing state without treating it as a terminal failure
-- `error_code`: optional numeric code when navigation is unavailable for the session (logged on the Lens; `505` = goal stalled)
+- `error_code`: numeric code when navigation is unavailable for the session
+  (logged on the Lens; `505` = goal stalled). `"recovering"` phase indicates
+  the bridge cleared a stuck goal and the client should return to a retryable
+  placing state without treating it as a terminal failure.
 
 ## Inbound Messages
+
+All inbound JSON messages require `type`, `ts`, and `robot_id` (matching the
+session robot from `hello`).
 
 ### `get_status`
 
@@ -350,15 +435,8 @@ Optional fields:
 }
 ```
 
-The bridge responds with a runtime sync burst for the requesting client:
-
-1. `bridge_status` — current bridge/registration snapshot
-2. `nav_status` — current navigation lifecycle state (including optional
-   `recovering` / `error_code`)
-3. `path` — last navigating path when navigation is active; omitted when no
-   navigating path is cached
-
-The same sync burst is sent automatically after the initial `hello` on connect.
+The bridge responds with a single `runtime_snapshot` for the requesting client
+(same message sent automatically after `hello` on connect).
 
 ### `set_lidar_mode`
 
@@ -381,6 +459,12 @@ connected client becomes the active bridge policy for all clients until another
 Fields:
 
 - `mode`: `"off"`, `"obstacles"`, or `"full"`
+- `obstacle_min_distance_m`, `obstacle_opaque_distance_m`,
+  `obstacle_max_distance_m`: **required only when `mode` is `"obstacles"`**.
+  When `mode` is `"off"` or `"full"`, these fields must be omitted.
+
+Semantics (obstacle distances):
+
 - `obstacle_min_distance_m`: robot-relative horizontal distance where obstacle
   rendering/filtering begins
 - `obstacle_opaque_distance_m`: distance where the client starts fading obstacle
@@ -389,55 +473,92 @@ Fields:
   obstacle mode keeps; must be greater than or equal to
   `obstacle_opaque_distance_m`
 
-Semantics:
+Bridge semantics by mode:
 
 - `off`: the bridge suppresses LiDAR transmission entirely
 - `obstacles`: the bridge sends only points inside the configured obstacle
   distance annulus after its normal height/range filtering
 - `full`: the bridge sends the standard full XR payload path
 
-### `registration_start`
+### `registration_command`
 
-Begin a registration session.
+Unified registration session control. Replaces the v5
+`registration_start` / `registration_action` / `registration_stop` /
+`registration_commit` messages.
+
+Start an AprilTag baseline session:
 
 ```json
 {
-  "type": "registration_start",
+  "type": "registration_command",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
+  "command": "start",
   "mode": "april_odom_baseline"
+}
+```
+
+Start a manual pose session:
+
+```json
+{
+  "type": "registration_command",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "command": "start",
+  "mode": "manual_pose"
+}
+```
+
+Authorize baseline strafe motion (AprilTag flow only):
+
+```json
+{
+  "type": "registration_command",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "command": "authorize_motion"
+}
+```
+
+Stop/cancel the current session. When no registration session is active, `stop`
+also clears any committed registration (`bridge_status.registered` becomes
+`false` and the world→odom transform resets to identity). If the client is
+already disconnected, the bridge cannot be cleared until it reconnects and
+sends `stop` again.
+
+```json
+{
+  "type": "registration_command",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "command": "stop"
+}
+```
+
+Commit manual pose registration:
+
+```json
+{
+  "type": "registration_command",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "command": "commit"
 }
 ```
 
 Fields:
 
-- `mode` (**required**): `"april_odom_baseline"` for AprilTag + odom baseline
-  registration, or `"manual_pose"` for manual marker placement. Requires the
+- `command` (**required**): `"start"`, `"authorize_motion"`, `"stop"`, or
+  `"commit"`
+- `mode` (**required when `command` is `"start"`**): `"april_odom_baseline"` or
+  `"manual_pose"`. Must be omitted for all other commands. Requires the
   matching capability (`registration_april_odom_baseline` or
   `registration_manual_pose`) to be available in `hello`.
 
-### `registration_action`
-
-Authorize the bridge to begin robot motion during an `april_odom_baseline`
-session. The bridge **MUST NOT** issue baseline strafe motion before receiving
-`registration_action` with `action: "authorize_motion"` for the current session.
-
-```json
-{
-  "type": "registration_action",
-  "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
-  "action": "authorize_motion"
-}
-```
-
-### `registration_stop`
-
-Stop/cancel the current registration session.
-
-### `registration_commit`
-
-Commit the current best registration candidate (manual pose flow).
+The bridge **MUST NOT** issue baseline strafe motion before receiving
+`registration_command` with `command: "authorize_motion"` for the current
+session.
 
 ### `registration_pose`
 
@@ -516,43 +637,56 @@ Header fields:
   robot-mounted tag. Runtime correction does not require robot-camera
   visibility of the tag; Spectacles frames are the only camera input.
 
-### `nav_goal`
+### `goal`
 
-World-frame navigation goal:
+World-frame navigation or preview request:
+
+Navigate (replaces v5 `nav_goal`):
 
 ```json
 {
-  "type": "nav_goal",
+  "type": "goal",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
+  "intent": "navigate",
   "position": [x, y, z],
   "orientation": [qx, qy, qz, qw]
 }
 ```
 
-`orientation` is optional. If omitted, the bridge may route the goal through a
-point-based navigation path.
-
-### `plan_path`
-
-Request a preview path to a world-frame target without moving the robot:
+Preview path only (replaces v5 `plan_path`):
 
 ```json
 {
-  "type": "plan_path",
+  "type": "goal",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
+  "intent": "preview",
   "position": [x, y, z],
   "orientation": [qx, qy, qz, qw]
 }
 ```
 
-`orientation` is optional. Preview planning is side-effect free: it must never
-start navigation or change the robot state.
+Fields:
+
+- `intent` (**required**): `"navigate"` to start navigation, or `"preview"` to
+  request a side-effect-free preview path (`path` with `kind: "preview"`)
+- `orientation` (optional): if omitted, the bridge may route through a
+  point-based navigation path
+
+Preview planning must never start navigation or change robot state.
 
 ### `cancel_goal`
 
 Cancel the active navigation goal.
+
+```json
+{
+  "type": "cancel_goal",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2"
+}
+```
 
 ### `ping` / `pong`
 
@@ -581,88 +715,24 @@ uses median RTT-adjusted offset to populate `capture_ts_robot` on `camera_frame`
 Request immediate stop through whatever safe stop path the active adapter
 provides. If the capability is disabled in `hello`, clients should not send it.
 
+```json
+{
+  "type": "emergency_stop",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2"
+}
+```
+
 ## Removed Legacy Flow
 
-The legacy `register` / `registered` message flow is removed from `dimos-ar`.
-Frame registration is driven by `registration_*` messages plus `registration_status`
-and `bridge_status.registered`.
+The following v5 message types are removed in v6:
 
-## Changelog
+- `registration_start`, `registration_action`, `registration_stop`,
+  `registration_commit` → use `registration_command`
+- `nav_goal`, `plan_path` → use `goal` with `intent`
+- `path_preview` → use `path` with `kind: "preview"`
+- JSON `lidar` → binary `lidar_f16` only
 
-### v5 (current) — Registration domain redesign
-
-**Breaking changes** — monorepo clients must be updated in the same release:
-
-- **Removed:** all `align_*`, `assist_confirm`, and `align_status` messages.
-- **Added:** `registration_start`, `registration_action`, `registration_stop`,
-  `registration_commit`, `registration_pose`, and `registration_status`.
-- **Capabilities:** `align`, `align_manual`, `align_assist` replaced by
-  `registration_april_odom_baseline` and `registration_manual_pose`.
-- **`registration_start.mode`:** `"april_odom_baseline"` or `"manual_pose"`.
-- **`registration_status`:** `phase`, `capture`, `message`, optional `motion`
-  (safety hints: direction, distance_m, waypoint_index/total), optional
-  `tag_visible` and `preview_pose`. No `progress` field.
-- **Bridge owns baseline recipe:** client sends `registration_action:
-  authorize_motion`; bridge publishes structured `motion` hints during strafe.
-- **`bridge_status.registration_method`** now uses the same strings as
-  `registration_start.mode` (`"april_odom_baseline"` / `"manual_pose"`), replacing
-  the v4 `"tag"` / `"manual"` shorthand.
-- **`hello.robot.registration_profile`** replaces `alignment_profile`; the
-  `method` field uses `"april_odom_baseline"` instead of `"tag"`.
-
-### v4 — Protocol shrink + alignment session semantics (superseded by v5)
-
-**Breaking changes** — clients built against v3 must be updated:
-
-- **`hello.capabilities`** is now a flat map `{ name → { available, reason } }`.
-  The parallel `disabled_capabilities` array and `capability_states` object are
-  removed.
-- **`align_start`** now requires a `method` field (`"tag"` or `"manual"`). A
-  message without `method` is rejected by the bridge.
-- **`align_status`** is stripped to `ts`, `robot_id`, `method`, `state`,
-  `progress`, `message`, and optional `tag_visible`. The removed fields are:
-  `tag_detected`, `observation_count`, `baseline_m`, `quality`, `best_quality`,
-  `has_candidate`, `cluster_size`, `required_samples`.
-  Optional assist fields added: `assist_stage`, `robot_world_pose`, `step_index`,
-  `step_count`. `state` values are `detecting`, `ready`, `aligned`, `failed`
-  (stale values `idle`, `converging`, `committed`, `cancelled` removed).
-- **`camera_frame_ack`** is stripped to `ts`, `robot_id`, `seq`. The removed
-  fields are: `tag_detected`, `tag_ids`, `quality`.
-- **`bridge_status.registration_method`** and
-  **`bridge_status.registration_approximate`** are now **always present** (they
-  were previously optional / omitted before first registration).
-
-**Alignment session semantics fix**:
-A bug in v3 caused `on_align_manual_pose` to accept poses even when no manual
-session was open (or when a tag session was open). In v4 the bridge tracks an
-explicit `_session_method` and silently drops manual pose messages unless a
-`method="manual"` session is active.
-
-**Additive runtime telemetry**:
-- `pose_correction` is emitted when the bridge commits a runtime tag-based
-  world-to-odom correction that exceeds the notification deadband (≥ 5 cm
-  translation or ≥ 1° yaw), so Lens clients can observe meaningful drift
-  magnitude and whether yaw was corrected by a full solve.  Sub-threshold
-  micro-refinements remain silent.
-
-### v3 — XR Bridge PR refactor (additive, backward-compatible)
-
-The PR that introduced per-robot adapters (`go2` / `g1`), DimOS TF publication,
-`PointCloud2` delegation, `mypy strict`, and launcher restructuring is
-**backward-compatible**: all existing message types, field names, and semantics
-are preserved. Clients built against any prior version of protocol v3 continue
-to work without modification.
-
-Additive wire changes (new optional fields; existing fields unchanged):
-
-- `hello.robot.alignment_profile` (v3–v4) was renamed to
-  `hello.robot.registration_profile` in v5. Clients that ignore unknown fields are
-  unaffected.
-- The `bridge_status.registration_approximate` field is now **always present**
-  (`true` or `false`), previously only emitted when `true`. Clients must
-  tolerate both its presence and absence as specified.
-
-Server-side only (invisible on the wire):
-
-- `ARBridgeConfig` tag geometry fields (`tag_aruco_dictionary`, `tag_total_size_m`,
-  `tag_black_size_m`) are server-side configuration only.
+The legacy `register` / `registered` message flow remains removed from
+`dimos-ar`. Frame registration is driven by `registration_command` /
+`registration_pose` plus `registration_status` and `bridge_status.registered`.

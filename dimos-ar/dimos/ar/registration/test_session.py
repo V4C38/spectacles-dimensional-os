@@ -4,19 +4,24 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from dimos.ar.network.protocol import RegistrationStartMessage
+import numpy as np
+
+from dimos.ar.registration.registry import WorldRegistry
 from dimos.ar.registration.session import RegistrationSession
 from dimos.ar.registration.transforms import Calibration
-from dimos.ar.registration.types import RegistrationMode, RegistrationPhase
+from dimos.ar.registration.wire import RegistrationCommandMessage
 
 
-def _make_session() -> tuple[RegistrationSession, list[str]]:
+def _make_session(
+    *,
+    registry: WorldRegistry | None = None,
+) -> tuple[RegistrationSession, list[str], WorldRegistry]:
     sent: list[str] = []
     sender = MagicMock()
     sender.send.side_effect = sent.append
     calibration = Calibration()
-    registry = MagicMock()
-    registry.calibration = calibration
+    if registry is None:
+        registry = WorldRegistry(calibration, tf_publish_static=lambda _tf: None)
     odom = MagicMock()
     odom.latest.return_value = None
     status = MagicMock()
@@ -40,13 +45,13 @@ def _make_session() -> tuple[RegistrationSession, list[str]]:
         pose_refiner=pose_refiner,
         adapter=adapter,
     )
-    return session, sent
+    return session, sent, registry
 
 
-def test_registration_start_april_odom_broadcasts_scanning() -> None:
-    session, sent = _make_session()
-    session.on_registration_start(
-        RegistrationStartMessage(ts=1.0, robot_id="test_robot", mode="april_odom_baseline"),
+def test_registration_command_start_april_odom_broadcasts_scanning() -> None:
+    session, sent, _registry = _make_session()
+    session.on_registration_command(
+        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="start", mode="april_odom_baseline"),
         MagicMock(),
     )
     assert sent
@@ -54,11 +59,26 @@ def test_registration_start_april_odom_broadcasts_scanning() -> None:
     assert '"phase":"scanning"' in sent[-1] or '"phase":"failed"' in sent[-1]
 
 
-def test_registration_start_manual_enters_editing() -> None:
-    session, sent = _make_session()
-    session.on_registration_start(
-        RegistrationStartMessage(ts=1.0, robot_id="test_robot", mode="manual_pose"),
+def test_registration_command_start_manual_enters_editing() -> None:
+    session, sent, _registry = _make_session()
+    session.on_registration_command(
+        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="start", mode="manual_pose"),
         MagicMock(),
     )
     assert sent
     assert '"phase":"editing"' in sent[-1]
+
+
+def test_registration_command_stop_clears_committed_registration_when_idle() -> None:
+    session, _sent, registry = _make_session()
+    registry.calibration.register_world_odom(np.eye(4, dtype=np.float64))
+    assert registry.calibration.is_registered
+
+    session.on_registration_command(
+        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="stop"),
+        MagicMock(),
+    )
+
+    assert not registry.calibration.is_registered
+    session._status.set_registered.assert_called_with(False)
+    session._status.broadcast.assert_called()

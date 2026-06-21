@@ -79,7 +79,6 @@ def _publisher(
         obstacle_target_points=obstacle_target_points,
         lidar_voxel_size_m=0.05,
         pose_max_hz=30.0,
-        lidar_binary=True,
     )
     return publisher, sender
 

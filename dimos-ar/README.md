@@ -34,7 +34,7 @@ dimos run ar-g1
 
 Use `./start.sh` if these blueprints are not yet registered in your DimOS install.
 
-Capability expectations by stack (negotiated at runtime via `hello` / `capability_states`):
+Capability expectations by stack (negotiated at runtime via `hello` / `capabilities`):
 
 - `ar-go2`: Go2 family — full navigation and AprilTag registration when the selected
   onboard stack exposes those modules; lighter stacks may negotiate unavailable
@@ -55,9 +55,14 @@ robot family:
 
 - `hello.robot` provides display identity plus geometry such as
   `body_bounds_m`, `footprint_m`, `base_height_m`, and
-  `default_render_offset_m`
-- `capability_states` tells the client which features are available for the
+  `default_render_offset_m`; `registration_profile` carries tag geometry only
+  (`tag_ids`, `tag_total_size_m`)
+- `hello.capabilities` tells the client which features are available for the
   active runtime
+- after `hello`, the bridge sends `runtime_snapshot` (bridge + nav phase + optional
+  active path) so reconnecting clients resync without replaying live streams
+- navigation uses `goal` with `intent: "navigate"` or `"preview"`; preview paths
+  are not cached in `runtime_snapshot`
 - the Lens keeps offline development affordances enabled until a bridge connects
   and completes the handshake
 - unavailable controls stay visible and switch into disabled `Special` UI states
@@ -107,7 +112,7 @@ Tests are colocated with their modules under `dimos/ar/` rather than in a top-le
 
 Two flows are supported:
 
-**AprilTag + odom baseline** (`registration_start{mode:"april_odom_baseline"}`)  
+**AprilTag + odom baseline** (`registration_command{command:"start",mode:"april_odom_baseline"}`)  
 The bridge drives the robot through a 3-leg baseline-collection move while the
 Spectacles user looks at the robot-mounted AprilTag. After each leg the robot
 stops and samples until enough stable observations are collected. When baseline
@@ -119,17 +124,17 @@ Requires the robot to advertise `registration_april_odom_baseline` (i.e., the
 without baseline motion the AprilTag path returns `failed` and the user must
 switch to manual pose registration.
 
-**Manual pose** (`registration_start{mode:"manual_pose"}`)  
+**Manual pose** (`registration_command{command:"start",mode:"manual_pose"}`)  
 The user drags the robot marker to its real-world position in the Lens, streams
-`registration_pose`, then sends `registration_commit`. No camera frames are
-consumed. Always available when `registration_manual_pose` is advertised.
+`registration_pose`, then sends `registration_command{command:"commit"}`. No camera
+frames are consumed. Always available when `registration_manual_pose` is advertised.
 
 Notes:
 - Baseline strafe motion uses the same pure lateral `cmd_vel.linear.y` path as
   the proven teleop/app controls. Go2 uses a `0.5` stick deflection streamed at
   50 Hz; G1 uses the same robot-agnostic driver path with adapter-provided speed
   and remains validation-pending on hardware.
-- The client authorizes each baseline move with `registration_action:
+- The client authorizes each baseline move with `registration_command:
   authorize_motion`; the bridge publishes structured `motion` hints in
   `registration_status`.
 - Runtime drift correction reuses the robot-mounted Spectacles tag stream after
@@ -162,7 +167,10 @@ and LiDAR stay co-registered within a few centimetres.
 <details>
 <summary>Protocol coupling</summary>
 
-If the AR protocol changes, update these together:
+Protocol v6 consolidates registration (`registration_command`), navigation
+(`goal` with `intent: navigate|preview`), and reconnect sync
+(`runtime_snapshot` on connect / `get_status`). If the AR protocol changes,
+update these together:
 
 - `dimos/ar/network/protocol.py`
 - `PROTOCOL.md`

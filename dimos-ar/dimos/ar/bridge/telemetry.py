@@ -1,9 +1,4 @@
-"""TelemetryPublisher — LiDAR and robot-pose outbound stream handlers.
-
-Owns the LidarFilter, pose-rate state, and lidar/pose logging throttles.
-Called from ARBridge.handle_ar_lidar / handle_ar_odom after odom and stream
-freshness state have been updated.
-"""
+"""TelemetryPublisher — LiDAR and robot-pose outbound stream handlers."""
 
 from __future__ import annotations
 
@@ -21,8 +16,8 @@ from dimos.utils.logging_config import setup_logger
 if TYPE_CHECKING:
     from dimos.ar.bridge.odom_buffer import OdomBuffer
     from dimos.ar.bridge.sender import BridgeSender
+    from dimos.ar.registration.transforms import Calibration
     from dimos.ar.tracking.filters import LidarFilter
-    from dimos.ar.tracking.transforms import Calibration
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
     from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 
@@ -46,7 +41,6 @@ class TelemetryPublisher:
         obstacle_target_points: int,
         lidar_voxel_size_m: float,
         pose_max_hz: float,
-        lidar_binary: bool = True,
         speed_horizon_s: float = 0.4,
     ) -> None:
         self._robot_id = robot_id
@@ -59,7 +53,6 @@ class TelemetryPublisher:
         self._lidar_voxel_size_m = lidar_voxel_size_m
         self._pose_max_hz = pose_max_hz
         self._speed_horizon_s = speed_horizon_s
-        self._lidar_binary = lidar_binary
         self._pose_last_emit: float = 0.0
         self._dropped_pose_count: int = 0
         self._last_dropped_pose_log_mono: float = 0.0
@@ -86,8 +79,6 @@ class TelemetryPublisher:
             robot_world_pos=self._odom.latest_world_position(self._calibration),
             target_points=self._target_points_for_mode(),
             voxel_size=self._lidar_voxel_size_m,
-            robot_id=self._robot_id,
-            lidar_binary=self._lidar_binary,
         )
         if result is None:
             return
@@ -97,13 +88,9 @@ class TelemetryPublisher:
             logger.info(
                 "LiDAR stream active",
                 hz=self._lidar_filter.config.max_hz,
-                binary=self._lidar_binary,
             )
         self._maybe_log_lidar_payload(point_count, len(payload))
-        if isinstance(payload, bytes):
-            self._sender.send_binary(payload)
-        else:
-            self._sender.send(payload)
+        self._sender.send_binary(payload)
 
     def set_lidar_mode(
         self,
@@ -148,7 +135,6 @@ class TelemetryPublisher:
             msg,
             calibration=self._calibration,
             sample_odom=self._odom.sample,
-            robot_id=self._robot_id,
             speed_mps=speed_mps,
         )
         if result is None:

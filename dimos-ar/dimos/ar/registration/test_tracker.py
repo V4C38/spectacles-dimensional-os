@@ -283,7 +283,7 @@ def test_tag_tracker_translation_solve_when_stationary() -> None:
     reference = build_T_world_odom(math.radians(15.0), (0.0, 0.0, 0.0))
     solve = tracker.current_translation_solve(reference)
     assert solve is not None
-    assert solve.method == "tag_translation"
+    assert solve.method == "apriltag_translation"
     assert solve.baseline_m == pytest.approx(0.0, abs=1e-6)
     assert _yaw_from_T(solve.T_world_odom) == pytest.approx(_yaw_from_T(reference), abs=1e-9)
     assert np.all(np.isfinite(solve.T_world_odom[:3, 3]))

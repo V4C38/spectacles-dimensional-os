@@ -6,9 +6,16 @@ from dataclasses import dataclass
 import json
 import struct
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
+
+from dimos.ar.registration.wire import (
+    RegistrationCommandMessage,
+    RegistrationPoseMessage,
+    RegistrationStatusPayload,
+    encode_registration_status,
+)
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -16,8 +23,11 @@ if TYPE_CHECKING:
     from dimos.ar.adapters.base import CapabilityState, RobotHandshake
     from dimos.ar.network.bridge_status import BridgeStatusSnapshot
 
-PROTOCOL_VERSION = 5
-FRAME_WORLD = "world"
+PROTOCOL_VERSION = 6
+
+NavPhase = Literal["idle", "navigating", "recovering", "succeeded", "failed"]
+PathKind = Literal["active", "preview"]
+GoalIntent = Literal["navigate", "preview"]
 
 DEFAULT_CAPABILITIES = [
     "lidar",
@@ -37,17 +47,10 @@ def _dumps(payload: dict[str, Any]) -> str:
 
 
 @dataclass(frozen=True)
-class NavGoalMessage:
+class GoalMessage:
     ts: float
     robot_id: str
-    position: tuple[float, float, float]
-    orientation: tuple[float, float, float, float] | None = None
-
-
-@dataclass(frozen=True)
-class PlanPathMessage:
-    ts: float
-    robot_id: str
+    intent: GoalIntent
     position: tuple[float, float, float]
     orientation: tuple[float, float, float, float] | None = None
 
@@ -62,40 +65,6 @@ class CancelGoalMessage:
 class EmergencyStopMessage:
     ts: float
     robot_id: str
-
-
-@dataclass(frozen=True)
-class RegistrationStartMessage:
-    ts: float
-    robot_id: str
-    mode: str
-
-
-@dataclass(frozen=True)
-class RegistrationActionMessage:
-    ts: float
-    robot_id: str
-    action: str
-
-
-@dataclass(frozen=True)
-class RegistrationStopMessage:
-    ts: float
-    robot_id: str
-
-
-@dataclass(frozen=True)
-class RegistrationCommitMessage:
-    ts: float
-    robot_id: str
-
-
-@dataclass(frozen=True)
-class RegistrationPoseMessage:
-    ts: float
-    robot_id: str
-    position: tuple[float, float, float]
-    orientation: tuple[float, float, float, float]
 
 
 @dataclass(frozen=True)
@@ -124,9 +93,9 @@ class SetLidarModeMessage:
     ts: float
     robot_id: str
     mode: str
-    obstacle_min_distance_m: float
-    obstacle_opaque_distance_m: float
-    obstacle_max_distance_m: float
+    obstacle_min_distance_m: float | None = None
+    obstacle_opaque_distance_m: float | None = None
+    obstacle_max_distance_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -137,14 +106,10 @@ class PingMessage:
 
 
 InboundMessage = (
-    NavGoalMessage
-    | PlanPathMessage
+    GoalMessage
     | CancelGoalMessage
     | EmergencyStopMessage
-    | RegistrationStartMessage
-    | RegistrationActionMessage
-    | RegistrationStopMessage
-    | RegistrationCommitMessage
+    | RegistrationCommandMessage
     | CameraInfoMessage
     | RegistrationPoseMessage
     | GetStatusMessage
@@ -191,19 +156,15 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
             f"Unknown robot_id {robot_id!r}, expected {expected_robot_id!r}",
         )
 
-    if msg_type == "nav_goal":
+    if msg_type == "goal":
+        intent = _require_type(data, "intent", str)
+        if intent not in ("navigate", "preview"):
+            raise ValueError("goal.intent must be 'navigate' or 'preview'")
         orientation = _quat(data, "orientation") if "orientation" in data else None
-        return NavGoalMessage(
+        return GoalMessage(
             ts=ts,
             robot_id=robot_id,
-            position=_vec3(data, "position"),
-            orientation=orientation,
-        )
-    if msg_type == "plan_path":
-        orientation = _quat(data, "orientation") if "orientation" in data else None
-        return PlanPathMessage(
-            ts=ts,
-            robot_id=robot_id,
+            intent=intent,  # type: ignore[arg-type]
             position=_vec3(data, "position"),
             orientation=orientation,
         )
@@ -211,24 +172,29 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         return CancelGoalMessage(ts=ts, robot_id=robot_id)
     if msg_type == "emergency_stop":
         return EmergencyStopMessage(ts=ts, robot_id=robot_id)
-    if msg_type == "registration_start":
-        mode = _require_type(data, "mode", str)
-        if mode not in ("april_odom_baseline", "manual_pose"):
+    if msg_type == "registration_command":
+        command = _require_type(data, "command", str)
+        if command not in ("start", "authorize_motion", "stop", "commit"):
             raise ValueError(
-                f"registration_start.mode must be 'april_odom_baseline' or 'manual_pose', got {mode!r}"
+                "registration_command.command must be "
+                "'start', 'authorize_motion', 'stop', or 'commit'"
             )
-        return RegistrationStartMessage(ts=ts, robot_id=robot_id, mode=mode)
-    if msg_type == "registration_action":
-        action = _require_type(data, "action", str)
-        if action != "authorize_motion":
-            raise ValueError(
-                f"registration_action.action must be 'authorize_motion', got {action!r}"
-            )
-        return RegistrationActionMessage(ts=ts, robot_id=robot_id, action=action)
-    if msg_type == "registration_stop":
-        return RegistrationStopMessage(ts=ts, robot_id=robot_id)
-    if msg_type == "registration_commit":
-        return RegistrationCommitMessage(ts=ts, robot_id=robot_id)
+        mode: str | None = None
+        if command == "start":
+            mode = _require_type(data, "mode", str)
+            if mode not in ("april_odom_baseline", "manual_pose"):
+                raise ValueError(
+                    "registration_command.mode must be "
+                    "'april_odom_baseline' or 'manual_pose' when command is 'start'"
+                )
+        elif "mode" in data:
+            raise ValueError("registration_command.mode is only valid when command is 'start'")
+        return RegistrationCommandMessage(
+            ts=ts,
+            robot_id=robot_id,
+            command=command,  # type: ignore[arg-type]
+            mode=mode,  # type: ignore[arg-type]
+        )
     if msg_type == "camera_info":
         distortion_raw = data.get("distortion", [])
         if not isinstance(distortion_raw, list):
@@ -265,26 +231,30 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
             raise ValueError(
                 "set_lidar_mode.mode must be 'off', 'obstacles', or 'full'"
             )
-        for key in (
-            "obstacle_min_distance_m",
-            "obstacle_opaque_distance_m",
-            "obstacle_max_distance_m",
-        ):
-            if key not in data or not isinstance(data[key], (int, float)):
-                raise ValueError(f"Missing or invalid field: {key}")
-        min_distance_m = float(data["obstacle_min_distance_m"])
-        opaque_distance_m = float(data["obstacle_opaque_distance_m"])
-        max_distance_m = float(data["obstacle_max_distance_m"])
-        if min_distance_m < 0.0:
-            raise ValueError("obstacle_min_distance_m must be >= 0")
-        if opaque_distance_m < min_distance_m:
-            raise ValueError(
-                "obstacle_opaque_distance_m must be >= obstacle_min_distance_m"
-            )
-        if max_distance_m < opaque_distance_m:
-            raise ValueError(
-                "obstacle_max_distance_m must be >= obstacle_opaque_distance_m"
-            )
+        min_distance_m: float | None = None
+        opaque_distance_m: float | None = None
+        max_distance_m: float | None = None
+        if mode == "obstacles":
+            for key in (
+                "obstacle_min_distance_m",
+                "obstacle_opaque_distance_m",
+                "obstacle_max_distance_m",
+            ):
+                if key not in data or not isinstance(data[key], (int, float)):
+                    raise ValueError(f"Missing or invalid field: {key}")
+            min_distance_m = float(data["obstacle_min_distance_m"])
+            opaque_distance_m = float(data["obstacle_opaque_distance_m"])
+            max_distance_m = float(data["obstacle_max_distance_m"])
+            if min_distance_m < 0.0:
+                raise ValueError("obstacle_min_distance_m must be >= 0")
+            if opaque_distance_m < min_distance_m:
+                raise ValueError(
+                    "obstacle_opaque_distance_m must be >= obstacle_min_distance_m"
+                )
+            if max_distance_m < opaque_distance_m:
+                raise ValueError(
+                    "obstacle_max_distance_m must be >= obstacle_opaque_distance_m"
+                )
         return SetLidarModeMessage(
             ts=ts,
             robot_id=robot_id,
@@ -319,7 +289,6 @@ def encode_hello(handshake: RobotHandshake) -> str:
     capabilities, _ = _serialize_capability_states(handshake.capability_states)
     robot: dict[str, Any] = {
         "robot_id": handshake.robot_id,
-        "robot_model": handshake.robot_model,
         "display_name": handshake.display_name,
         "visual_origin_frame": handshake.visual_origin_frame,
     }
@@ -344,6 +313,18 @@ def encode_hello(handshake: RobotHandshake) -> str:
     )
 
 
+def _bridge_status_wire(snapshot: BridgeStatusSnapshot) -> dict[str, Any]:
+    # v6 wire payloads intentionally omit streams_active (internal-only tracker field).
+    payload: dict[str, Any] = {
+        "robot_connected": snapshot.robot_connected,
+        "registered": snapshot.registered,
+        "reconnecting": snapshot.reconnecting,
+        "registration_method": snapshot.registration_method,
+        "registration_approximate": snapshot.registration_approximate,
+    }
+    return payload
+
+
 def encode_bridge_status(
     snapshot: BridgeStatusSnapshot,
     *,
@@ -352,14 +333,28 @@ def encode_bridge_status(
     payload: dict[str, Any] = {
         "type": "bridge_status",
         "ts": ts if ts is not None else time.time(),
-        "robot_id": snapshot.robot_id,
-        "robot_connected": snapshot.robot_connected,
-        "streams_active": snapshot.streams_active,
-        "registered": snapshot.registered,
-        "reconnecting": snapshot.reconnecting,
-        "registration_method": snapshot.registration_method,
-        "registration_approximate": snapshot.registration_approximate,
+        **_bridge_status_wire(snapshot),
     }
+    return _dumps(payload)
+
+
+def encode_runtime_snapshot(
+    *,
+    robot_id: str,
+    bridge: BridgeStatusSnapshot,
+    nav: dict[str, Any],
+    path: dict[str, Any] | None = None,
+    ts: float | None = None,
+) -> str:
+    payload: dict[str, Any] = {
+        "type": "runtime_snapshot",
+        "ts": ts if ts is not None else time.time(),
+        "robot_id": robot_id,
+        "bridge": _bridge_status_wire(bridge),
+        "nav": nav,
+    }
+    if path is not None:
+        payload["path"] = path
     return _dumps(payload)
 
 
@@ -399,23 +394,6 @@ def _sanitize_pose_values(
     )
 
 
-def encode_lidar(
-    *,
-    ts: float,
-    points: NDArray[np.floating],
-    robot_id: str,
-) -> str:
-    return _dumps(
-        {
-            "type": "lidar",
-            "ts": round(ts, 3),
-            "robot_id": robot_id,
-            "frame": FRAME_WORLD,
-            "points_flat": _round_flat(points),
-        }
-    )
-
-
 # Binary lidar frame (message_type 0x01 = lidar_f16).
 # Format: [1B type=0x01][4B float32 ts little-endian][N*6B float16 xyz world-metres]
 _LIDAR_F16_TYPE: int = 0x01
@@ -426,12 +404,7 @@ def encode_lidar_binary(
     ts: float,
     points: NDArray[np.floating],
 ) -> bytes:
-    """Encode a LiDAR point cloud as a compact binary WebSocket frame.
-
-    The binary format is 6 bytes per point (3 x IEEE754 float16, little-endian)
-    plus a 5-byte header, vs ~18 bytes/point in JSON text. At 2500 points the
-    frame is ~15 KB compared to ~18-20 KB for JSON.
-    """
+    """Encode a LiDAR point cloud as a compact binary WebSocket frame."""
     header = struct.pack("<Bf", _LIDAR_F16_TYPE, float(ts))
     if points.size == 0:
         return header
@@ -439,48 +412,15 @@ def encode_lidar_binary(
     return header + f16.tobytes()
 
 
-def encode_registration_status(
-    *,
-    ts: float | None = None,
-    robot_id: str,
-    mode: str | None,
-    phase: str,
-    capture: str,
-    message: str = "",
-    tag_visible: bool | None = None,
-    motion: dict[str, Any] | None = None,
-    preview_pose: dict[str, Any] | None = None,
-) -> str:
-    payload: dict[str, Any] = {
-        "type": "registration_status",
-        "ts": ts if ts is not None else time.time(),
-        "robot_id": robot_id,
-        "phase": phase,
-        "capture": capture,
-        "message": message,
-    }
-    if mode is not None:
-        payload["mode"] = mode
-    if tag_visible is not None:
-        payload["tag_visible"] = tag_visible
-    if motion is not None:
-        payload["motion"] = motion
-    if preview_pose is not None:
-        payload["preview_pose"] = preview_pose
-    return _dumps(payload)
-
-
 def encode_camera_frame_ack(
     *,
     ts: float | None = None,
-    robot_id: str,
     seq: int,
 ) -> str:
     return _dumps(
         {
             "type": "camera_frame_ack",
             "ts": ts if ts is not None else time.time(),
-            "robot_id": robot_id,
             "seq": seq,
         }
     )
@@ -509,15 +449,12 @@ def encode_pose(
     ts: float,
     position: tuple[float, float, float],
     orientation: tuple[float, float, float, float],
-    robot_id: str,
     speed_mps: float | None = None,
 ) -> str:
     safe_position, safe_orientation = _sanitize_pose_values(position, orientation)
     payload: dict[str, Any] = {
         "type": "pose",
         "ts": round(ts, 3),
-        "robot_id": robot_id,
-        "frame": FRAME_WORLD,
         "position": _round_vec3(safe_position, decimals=4),
         "orientation": _round_quat(safe_orientation, decimals=4),
     }
@@ -529,25 +466,15 @@ def encode_pose(
 def encode_pose_correction(
     *,
     ts: float | None,
-    robot_id: str,
     trans_delta_m: float,
     yaw_delta_deg: float | None,
     yaw_corrected: bool,
     solve_quality: float,
     solve_method: str,
 ) -> str:
-    """Encode a pose_correction message.
-
-    Emitted only when a runtime tag correction exceeds the deadband defined by
-    MIN_REPORTED_CORRECTION_TRANS_M / MIN_REPORTED_CORRECTION_YAW_DEG in
-    alignment.py.  Sub-threshold micro-refinements still update T_world_odom on
-    the bridge but are silent — the Lens uses this message to trigger the
-    user-visible "Refined Tracking" notification and the realignment snap animation.
-    """
     payload: dict[str, Any] = {
         "type": "pose_correction",
         "ts": round(ts, 3) if ts is not None else time.time(),
-        "robot_id": robot_id,
         "trans_delta_m": round(float(trans_delta_m), 4),
         "yaw_corrected": yaw_corrected,
         "solve_quality": round(float(solve_quality), 4),
@@ -562,83 +489,90 @@ def encode_path(
     *,
     ts: float,
     waypoints: list[tuple[float, float, float]],
-    robot_id: str,
+    kind: PathKind = "active",
+    target: tuple[float, float, float] | None = None,
 ) -> str:
-    return _dumps(_path_payload("path", ts=ts, waypoints=waypoints, robot_id=robot_id))
-
-
-def encode_path_preview(
-    *,
-    ts: float,
-    waypoints: list[tuple[float, float, float]],
-    robot_id: str,
-    target: tuple[float, float, float],
-) -> str:
-    payload = _path_payload("path_preview", ts=ts, waypoints=waypoints, robot_id=robot_id)
-    payload["target"] = _round_vec3(target, decimals=3)
+    payload: dict[str, Any] = {
+        "type": "path",
+        "ts": round(ts, 3),
+        "kind": kind,
+        "waypoints": [_round_vec3(point, decimals=3) for point in waypoints],
+    }
+    if kind == "preview" and target is not None:
+        payload["target"] = _round_vec3(target, decimals=3)
     return _dumps(payload)
 
 
-def _path_payload(
-    msg_type: str,
+def nav_phase_payload(
     *,
-    ts: float,
-    waypoints: list[tuple[float, float, float]],
-    robot_id: str,
+    goal_reached: bool,
+    goal_failed: bool,
+    nav_recovering: bool,
+    nav_state: str,
+    nav_goal_pending: bool,
+    error_code: int | None = None,
 ) -> dict[str, Any]:
-    return {
-        "type": msg_type,
-        "ts": round(ts, 3),
-        "robot_id": robot_id,
-        "frame": FRAME_WORLD,
-        "waypoints": [_round_vec3(point, decimals=3) for point in waypoints],
-    }
+    if goal_reached:
+        phase: NavPhase = "succeeded"
+    elif goal_failed:
+        phase = "failed"
+    elif nav_recovering or nav_state == "recovery":
+        phase = "recovering"
+    elif nav_state == "navigating" and nav_goal_pending:
+        phase = "navigating"
+    else:
+        phase = "idle"
+    payload: dict[str, Any] = {"phase": phase}
+    if error_code is not None:
+        payload["error_code"] = error_code
+    return payload
 
 
 def encode_nav_status(
     *,
     ts: float | None = None,
-    state: str,
-    goal_reached: bool,
-    goal_failed: bool = False,
-    recovering: bool = False,
+    phase: NavPhase,
     error_code: int | None = None,
-    robot_id: str,
 ) -> str:
+    nav: dict[str, Any] = {"phase": phase}
+    if error_code is not None:
+        nav["error_code"] = error_code
     return _dumps(
-        _nav_status_payload(
-            ts=ts if ts is not None else time.time(),
-            state=state,
-            goal_reached=goal_reached,
-            goal_failed=goal_failed,
-            recovering=recovering,
-            error_code=error_code,
-            robot_id=robot_id,
-        )
+        {
+            "type": "nav_status",
+            "ts": ts if ts is not None else time.time(),
+            **nav,
+        }
     )
 
 
-def _nav_status_payload(
-    *,
-    ts: float,
-    state: str,
-    goal_reached: bool,
-    goal_failed: bool,
-    recovering: bool,
-    error_code: int | None,
-    robot_id: str,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "type": "nav_status",
-        "ts": ts,
-        "robot_id": robot_id,
-        "state": state,
-        "goal_reached": goal_reached,
-    }
-    if goal_failed:
-        payload["goal_failed"] = True
-    if recovering:
-        payload["recovering"] = True
-    if error_code is not None:
-        payload["error_code"] = error_code
-    return payload
+__all__ = [
+    "PROTOCOL_VERSION",
+    "CameraInfoMessage",
+    "CancelGoalMessage",
+    "EmergencyStopMessage",
+    "GetStatusMessage",
+    "GoalIntent",
+    "GoalMessage",
+    "InboundMessage",
+    "NavPhase",
+    "PathKind",
+    "PingMessage",
+    "RegistrationCommandMessage",
+    "RegistrationPoseMessage",
+    "RegistrationStatusPayload",
+    "SetLidarModeMessage",
+    "decode_inbound",
+    "encode_bridge_status",
+    "encode_camera_frame_ack",
+    "encode_hello",
+    "encode_lidar_binary",
+    "encode_nav_status",
+    "encode_path",
+    "encode_pong",
+    "encode_pose",
+    "encode_pose_correction",
+    "encode_registration_status",
+    "encode_runtime_snapshot",
+    "nav_phase_payload",
+]

@@ -6273,12 +6273,12 @@
   Enabled: true
   ScriptAsset: !<reference> caff008b-c706-414a-be2e-efaad98f9535
   ScriptInputsDefault:
-    {}
+    defaultBridgeIp: true
   ScriptTypesDefault:
     {}
   ScriptInputs:
     "":
-      defaultBridgeIp: 192.168.1.62
+      defaultBridgeIp: 192.168.1.166
       internetModule: !<reference.InternetModule> 79c60deb-0ecf-4df5-9713-7c5bd5dbef32
   ScriptTypes:
     "":

@@ -164,7 +164,7 @@ export class DimosManager extends BaseScriptComponent {
   public enterSetup(): void {
     this._log("enterSetup");
     this.registrationClient?.cancelPlacement();
-    this.registrationClient?.stop();
+    this.registrationClient?.stop({ notifyBridge: this.hasBridgeConnection() });
     this.registrationClient?.clearPose();
     this.dimosServices.bridge.disconnect();
     this.frameCaptureController?.setMode("off");

@@ -3,6 +3,8 @@ import {
   PROTOCOL_VERSION,
   parseInboundMessage,
   ProtocolParseError,
+  bridgeStatusFromSnapshot,
+  RuntimeSnapshotMessage,
 } from "../../Assets/Scripts/Bridge/Protocol";
 
 describe("parseInboundMessage", () => {
@@ -13,15 +15,51 @@ describe("parseInboundMessage", () => {
         protocol_version: PROTOCOL_VERSION,
         robot: {
           robot_id: "go2",
-          robot_model: "unitree_go2",
           display_name: "Go2",
           visual_origin_frame: "base_link",
+          registration_profile: {
+            tag_ids: [0],
+            tag_total_size_m: 0.07,
+          },
         },
         capabilities: { lidar: { available: true } },
       }),
     );
     expect(msg!.type).toBe("hello");
     expect((msg as { robot: { robot_id: string } }).robot.robot_id).toBe("go2");
+    expect(
+      (msg as { robot: { registration_profile: { tag_ids: number[] } } }).robot
+        .registration_profile?.tag_ids,
+    ).toEqual([0]);
+  });
+
+  it("parses runtime_snapshot and bridgeStatusFromSnapshot", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "runtime_snapshot",
+        ts: 1,
+        robot_id: "go2",
+        bridge: {
+          robot_connected: true,
+          registered: false,
+          reconnecting: false,
+          registration_method: null,
+          registration_approximate: false,
+        },
+        nav: { phase: "idle" },
+        path: {
+          kind: "active",
+          waypoints: [[1, 2, 3]],
+        },
+      }),
+    );
+    expect(msg!.type).toBe("runtime_snapshot");
+    const snapshot = msg as RuntimeSnapshotMessage;
+    expect(snapshot.path?.kind).toBe("active");
+    const bridge = bridgeStatusFromSnapshot(snapshot);
+    expect(bridge.type).toBe("bridge_status");
+    expect(bridge.robot_connected).toBe(true);
+    expect(bridge.registered).toBe(false);
   });
 
   it("parses registration_status", () => {
@@ -29,7 +67,6 @@ describe("parseInboundMessage", () => {
       JSON.stringify({
         type: "registration_status",
         ts: 1,
-        robot_id: "go2",
         mode: "april_odom_baseline",
         phase: "scanning",
         capture: "steady",
@@ -55,7 +92,6 @@ describe("parseInboundMessage", () => {
       JSON.stringify({
         type: "camera_frame_ack",
         ts: 1,
-        robot_id: "go2",
         seq: 5,
       }),
     );
@@ -68,9 +104,7 @@ describe("parseInboundMessage", () => {
       JSON.stringify({
         type: "bridge_status",
         ts: 1,
-        robot_id: "go2",
         robot_connected: true,
-        streams_active: true,
         registered: true,
         reconnecting: false,
       }),
@@ -79,18 +113,16 @@ describe("parseInboundMessage", () => {
     expect((msg as { robot_connected: boolean }).robot_connected).toBe(true);
   });
 
-  it("parses lidar text form", () => {
-    const msg = parseInboundMessage(
-      JSON.stringify({
-        type: "lidar",
-        ts: 1,
-        robot_id: "go2",
-        frame: "world",
-        points: [[1, 2, 3]],
-      }),
-    );
-    expect(msg!.type).toBe("lidar");
-    expect((msg as { points: number[][] }).points[0]).toEqual([1, 2, 3]);
+  it("returns null for JSON lidar (binary only in v6)", () => {
+    expect(
+      parseInboundMessage(
+        JSON.stringify({
+          type: "lidar",
+          ts: 1,
+          points: [[1, 2, 3]],
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("parses pose", () => {
@@ -98,8 +130,6 @@ describe("parseInboundMessage", () => {
       JSON.stringify({
         type: "pose",
         ts: 1,
-        robot_id: "go2",
-        frame: "world",
         position: [1, 2, 3],
         orientation: [0, 0, 0, 1],
       }),
@@ -113,59 +143,55 @@ describe("parseInboundMessage", () => {
       JSON.stringify({
         type: "pose_correction",
         ts: 1,
-        robot_id: "go2",
         trans_delta_m: 0.1,
         yaw_corrected: true,
         solve_quality: 0.9,
-        solve_method: "tag",
+        solve_method: "apriltag_full",
       }),
     );
     expect(msg!.type).toBe("pose_correction");
-    expect((msg as { solve_method: string }).solve_method).toBe("tag");
+    expect((msg as { solve_method: string }).solve_method).toBe("apriltag_full");
   });
 
-  it("parses path", () => {
+  it("parses path with kind active", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
         type: "path",
         ts: 1,
-        robot_id: "go2",
-        frame: "world",
+        kind: "active",
         waypoints: [[1, 2, 3]],
       }),
     );
     expect(msg!.type).toBe("path");
+    expect((msg as { kind: string }).kind).toBe("active");
     expect((msg as { waypoints: number[][] }).waypoints).toHaveLength(1);
   });
 
-  it("parses path_preview", () => {
+  it("parses path with kind preview and target", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
-        type: "path_preview",
+        type: "path",
         ts: 1,
-        robot_id: "go2",
-        frame: "world",
+        kind: "preview",
         waypoints: [[1, 2, 3]],
         target: [0, 0, 0],
       }),
     );
-    expect(msg!.type).toBe("path_preview");
+    expect(msg!.type).toBe("path");
+    expect((msg as { kind: string }).kind).toBe("preview");
     expect((msg as { target: number[] }).target).toEqual([0, 0, 0]);
   });
 
-  it("parses nav_status", () => {
+  it("parses nav_status phase", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
         type: "nav_status",
         ts: 1,
-        robot_id: "go2",
-        state: "idle",
-        goal_reached: false,
-        goal_failed: false,
+        phase: "idle",
       }),
     );
     expect(msg!.type).toBe("nav_status");
-    expect((msg as { state: string }).state).toBe("idle");
+    expect((msg as { phase: string }).phase).toBe("idle");
   });
 
   it("parses pong", () => {
@@ -190,7 +216,6 @@ describe("parseInboundMessage", () => {
           protocol_version: 3,
           robot: {
             robot_id: "go2",
-            robot_model: "unitree_go2",
             display_name: "Go2",
             visual_origin_frame: "base_link",
           },
@@ -205,7 +230,6 @@ describe("parseInboundMessage", () => {
           protocol_version: 3,
           robot: {
             robot_id: "go2",
-            robot_model: "unitree_go2",
             display_name: "Go2",
             visual_origin_frame: "base_link",
           },
@@ -223,8 +247,6 @@ describe("parseInboundMessage", () => {
         JSON.stringify({
           type: "pose",
           ts: 1,
-          robot_id: "go2",
-          frame: "world",
           orientation: [0, 0, 0, 1],
         }),
       ),
@@ -234,8 +256,6 @@ describe("parseInboundMessage", () => {
         JSON.stringify({
           type: "pose",
           ts: 1,
-          robot_id: "go2",
-          frame: "world",
           orientation: [0, 0, 0, 1],
         }),
       );

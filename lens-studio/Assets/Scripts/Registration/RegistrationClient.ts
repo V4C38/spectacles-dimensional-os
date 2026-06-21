@@ -101,21 +101,22 @@ export class RegistrationClient {
   }
 
   public authorizeMotion(): void {
-    this.bridgeClient?.sendRegistrationAction();
+    this.bridgeClient?.sendRegistrationCommand("authorize_motion");
   }
 
-  public stop(): void {
-    if (this._intent === null && !this._awaitingCommit) {
+  public stop(options?: { notifyBridge?: boolean }): void {
+    const hasLocalSession = this._intent !== null || this._awaitingCommit;
+    const notifyBridge = options?.notifyBridge ?? hasLocalSession;
+    if (!hasLocalSession && options?.notifyBridge !== true) {
       return;
     }
     const wasBaseline = this._intent === "april_odom_baseline";
-    const shouldSendStop = this._intent !== null || this._awaitingCommit;
     this._intent = null;
     this._awaitingCommit = false;
     this._lastStatusTime = -1;
     this._lastSubmittedManualPose = null;
-    if (shouldSendStop) {
-      this.bridgeClient?.sendRegistrationStop();
+    if (notifyBridge && this.bridgeClient?.isConnected()) {
+      this.bridgeClient.sendRegistrationCommand("stop");
     }
     if (this.frameCapture) {
       const registered = Boolean(
@@ -135,11 +136,11 @@ export class RegistrationClient {
     if (!this.bridgeClient) {
       return false;
     }
-    const sent = this.bridgeClient.sendRegistrationCommit();
+    const sent = this.bridgeClient.sendRegistrationCommand("commit");
     if (sent) {
       this._awaitingCommit = true;
       this._intent = null;
-      print("RegistrationClient: registration_commit sent");
+      print("RegistrationClient: registration_command commit sent");
     }
     return sent;
   }
@@ -292,13 +293,13 @@ export class RegistrationClient {
     if (!this.bridgeClient || !connected || !hasRobotId) {
       return false;
     }
-    const sent = this.bridgeClient.sendRegistrationStart(mode);
+    const sent = this.bridgeClient.sendRegistrationCommand("start", mode);
     if (sent) {
       this._lastStatusTime = getTime();
       if (mode === "manual_pose") {
         this._lastSubmittedManualPose = null;
       }
-      print(`RegistrationClient: registration_start{mode:${mode}} sent`);
+      print(`RegistrationClient: registration_command start mode=${mode} sent`);
     }
     return sent;
   }

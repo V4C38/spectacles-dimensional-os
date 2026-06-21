@@ -12,9 +12,7 @@ describe("deriveLinkState", () => {
       deriveLinkState(false, {
         type: "bridge_status",
         ts: 1,
-        robot_id: "go2",
         robot_connected: true,
-        streams_active: true,
         registered: true,
         reconnecting: false,
       }),
@@ -27,9 +25,7 @@ describe("deriveLinkState", () => {
       deriveLinkState(true, {
         type: "bridge_status",
         ts: 1,
-        robot_id: "go2",
         robot_connected: false,
-        streams_active: false,
         registered: false,
         reconnecting: false,
       }),
@@ -41,9 +37,7 @@ describe("deriveLinkState", () => {
       deriveLinkState(true, {
         type: "bridge_status",
         ts: 1,
-        robot_id: "go2",
         robot_connected: true,
-        streams_active: true,
         registered: true,
         reconnecting: false,
       }),

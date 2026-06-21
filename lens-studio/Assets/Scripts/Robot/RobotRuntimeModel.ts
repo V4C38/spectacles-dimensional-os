@@ -32,7 +32,6 @@ export function projectRuntimeStateFromHello(msg: HelloMessage): RobotRuntimeSta
   return {
     negotiated: true,
     robotId: msg.robot.robot_id,
-    robotModel: msg.robot.robot_model,
     displayName: msg.robot.display_name,
     visualOriginFrame: msg.robot.visual_origin_frame,
     bodyBoundsM: msg.robot.body_bounds_m ?? null,

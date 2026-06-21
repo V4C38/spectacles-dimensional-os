@@ -70,7 +70,7 @@ export function buildRegistrationStepTitle(mode: RegistrationUiMode): string {
 export const REGISTRATION_DESCRIPTION_MANUAL =
   "Manually place the marker at the robot center.";
 
-export const REGISTRATION_STATUS_MANUAL = "Complete to confirm manual registration";
+export const REGISTRATION_STATUS_MANUAL = "Complete to confirm manual Registration";
 
 export const WIZARD_STEP_DESCRIPTIONS: string[] = [
   "Power on your robot.\nRun ./start.sh in dimos-ar on your Mac.",
@@ -157,6 +157,7 @@ export function applyRegistrationStatusToViewState(
 export function buildRegistrationDisplay(
   state: RegistrationViewState,
   _hasBridgeConnection: boolean,
+  commitInFlight = false,
 ): RegistrationDisplayModel {
   if (state.mode === "auto") {
     if (state.phase === "succeeded") {
@@ -195,33 +196,18 @@ export function buildRegistrationDisplay(
     };
   }
 
-  let statusText = "";
-  let statusColor = COLOR_WHITE;
-  switch (state.phase) {
-    case "editing":
-    case "scanning":
-      statusText = REGISTRATION_STATUS_MANUAL;
-      statusColor = COLOR_SUCCESS;
-      break;
-    case "awaiting_commit":
-      statusText = "Committing…";
-      break;
-    case "succeeded":
-      statusText = "Registered.";
-      statusColor = COLOR_SUCCESS;
-      break;
-    case "failed":
-      statusText = state.message || "Registration failed";
-      statusColor = COLOR_ERROR;
-      break;
-    default:
-      statusText = state.message || REGISTRATION_STATUS_MANUAL;
-      break;
+  if (state.phase === "failed") {
+    return {
+      statusText: state.message || "Registration failed",
+      statusColor: COLOR_ERROR,
+      detailText: "",
+      detailColor: COLOR_WHITE,
+    };
   }
   return {
-    statusText,
-    statusColor,
-    detailText: buildRegistrationDetailText(state),
+    statusText: REGISTRATION_STATUS_MANUAL,
+    statusColor: COLOR_SUCCESS,
+    detailText: "",
     detailColor: COLOR_WHITE,
   };
 }
@@ -442,6 +428,14 @@ export class SetupRegistrationFlow {
     if (!isRegistrationFailed(this._state)) {
       return;
     }
+    if (
+      this._registrationClient?.preferredMode() === "manualOnly" ||
+      this._state.mode === "manual"
+    ) {
+      this._callbacks.log("redo requested — restarting manual registration");
+      this._beginManualMode();
+      return;
+    }
     this._callbacks.log("redo requested — restarting auto registration");
     this._beginAutoMode();
   }
@@ -537,7 +531,7 @@ export class SetupRegistrationFlow {
       return false;
     }
 
-    this._callbacks.log("manual registration: registration_commit send failed");
+    this._callbacks.log("manual registration: registration_command commit send failed");
     this._state = { ...this._state, message: "" };
     this._notify();
     return false;

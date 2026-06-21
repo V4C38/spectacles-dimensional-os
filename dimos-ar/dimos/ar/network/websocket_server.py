@@ -1,10 +1,4 @@
-"""AR WebSocket server — mirrors RerunWebSocketServer lifecycle.
-
-Lifecycle runs on the Module's own asyncio loop (self._loop) via
-asyncio.run_coroutine_threadsafe. Stop is signalled via loop.call_soon_threadsafe.
-Liveness relies solely on WebSocket protocol-level ping/pong — there is no
-application-level heartbeat in the AR bridge protocol.
-"""
+"""AR WebSocket server — mirrors RerunWebSocketServer lifecycle."""
 
 from __future__ import annotations
 
@@ -24,15 +18,11 @@ from dimos.ar.network.protocol import (
     CancelGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
+    GoalMessage,
     InboundMessage,
-    NavGoalMessage,
     PingMessage,
-    PlanPathMessage,
-    RegistrationActionMessage,
-    RegistrationCommitMessage,
+    RegistrationCommandMessage,
     RegistrationPoseMessage,
-    RegistrationStartMessage,
-    RegistrationStopMessage,
     SetLidarModeMessage,
     decode_inbound,
     encode_hello,
@@ -45,17 +35,15 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
-RegistrationStartHandler = Callable[[RegistrationStartMessage, "ws_server.ServerConnection"], None]
-RegistrationStopHandler = Callable[[RegistrationStopMessage, "ws_server.ServerConnection"], None]
-RegistrationCommitHandler = Callable[[RegistrationCommitMessage, "ws_server.ServerConnection"], None]
-RegistrationActionHandler = Callable[[RegistrationActionMessage, "ws_server.ServerConnection"], None]
+RegistrationCommandHandler = Callable[
+    [RegistrationCommandMessage, "ws_server.ServerConnection"], None
+]
 CameraInfoHandler = Callable[[CameraInfoMessage, "ws_server.ServerConnection"], None]
 CameraFrameHandler = Callable[
     [dict[str, Any], bytes, "ws_server.ServerConnection"], Awaitable[None]
 ]
 RegistrationPoseHandler = Callable[[RegistrationPoseMessage, "ws_server.ServerConnection"], None]
-NavGoalHandler = Callable[[NavGoalMessage], None]
-PlanPathHandler = Callable[[PlanPathMessage], None]
+GoalHandler = Callable[[GoalMessage], None]
 CancelGoalHandler = Callable[[CancelGoalMessage], None]
 EmergencyStopHandler = Callable[[EmergencyStopMessage], None]
 GetStatusHandler = Callable[[GetStatusMessage, "ws_server.ServerConnection"], None]
@@ -68,7 +56,7 @@ HelloSupplier = Callable[[], Any]
 InboundHandler = Callable[[InboundMessage, "ws_server.ServerConnection"], None]
 
 INBOUND_TEXT_LOG_INTERVAL_S = 1.0
-_THROTTLED_INBOUND_TYPES = frozenset({"registration_pose", "get_status", "plan_path"})
+_THROTTLED_INBOUND_TYPES = frozenset({"registration_pose", "get_status", "goal"})
 PING_INTERVAL_S = 30
 PING_TIMEOUT_S = 30
 
@@ -82,6 +70,11 @@ def _handshake_noise_filter(record: logging.LogRecord) -> bool:
     return not ("opening handshake failed" in msg or "did not receive a valid HTTP request" in msg)
 
 
+def split_inbound_text_lines(message: str) -> list[str]:
+    """Split a WebSocket text frame into non-empty JSON lines."""
+    return [line for line in message.split("\n") if line.strip()]
+
+
 class ARWebSocketServer:
     """WebSocket server running on the Module's asyncio loop."""
 
@@ -92,15 +85,11 @@ class ARWebSocketServer:
         hello_supplier: HelloSupplier,
         max_message_bytes: int,
         loop: asyncio.AbstractEventLoop,
-        on_registration_start: RegistrationStartHandler | None = None,
-        on_registration_stop: RegistrationStopHandler | None = None,
-        on_registration_commit: RegistrationCommitHandler | None = None,
-        on_registration_action: RegistrationActionHandler | None = None,
+        on_registration_command: RegistrationCommandHandler | None = None,
         on_camera_info: CameraInfoHandler | None = None,
         on_camera_frame: CameraFrameHandler | None = None,
         on_registration_pose: RegistrationPoseHandler | None = None,
-        on_nav_goal: NavGoalHandler | None = None,
-        on_plan_path: PlanPathHandler | None = None,
+        on_goal: GoalHandler | None = None,
         on_cancel_goal: CancelGoalHandler | None = None,
         on_emergency_stop: EmergencyStopHandler | None = None,
         on_get_status: GetStatusHandler | None = None,
@@ -118,14 +107,10 @@ class ARWebSocketServer:
         self._on_status_connect = on_status_connect
         self._on_disconnect = on_disconnect
         self._inbound_handlers = self._build_inbound_handlers(
-            on_registration_start=on_registration_start,
-            on_registration_stop=on_registration_stop,
-            on_registration_commit=on_registration_commit,
-            on_registration_action=on_registration_action,
+            on_registration_command=on_registration_command,
             on_camera_info=on_camera_info,
             on_registration_pose=on_registration_pose,
-            on_nav_goal=on_nav_goal,
-            on_plan_path=on_plan_path,
+            on_goal=on_goal,
             on_cancel_goal=on_cancel_goal,
             on_emergency_stop=on_emergency_stop,
             on_get_status=on_get_status,
@@ -143,14 +128,10 @@ class ARWebSocketServer:
     def _build_inbound_handlers(
         self,
         *,
-        on_registration_start: RegistrationStartHandler | None,
-        on_registration_stop: RegistrationStopHandler | None,
-        on_registration_commit: RegistrationCommitHandler | None,
-        on_registration_action: RegistrationActionHandler | None,
+        on_registration_command: RegistrationCommandHandler | None,
         on_camera_info: CameraInfoHandler | None,
         on_registration_pose: RegistrationPoseHandler | None,
-        on_nav_goal: NavGoalHandler | None,
-        on_plan_path: PlanPathHandler | None,
+        on_goal: GoalHandler | None,
         on_cancel_goal: CancelGoalHandler | None,
         on_emergency_stop: EmergencyStopHandler | None,
         on_get_status: GetStatusHandler | None,
@@ -159,14 +140,10 @@ class ARWebSocketServer:
     ) -> dict[type[InboundMessage], InboundHandler]:
         handlers: dict[type[InboundMessage], InboundHandler] = {}
 
-        if on_registration_start is not None:
-            handlers[RegistrationStartMessage] = cast("InboundHandler", on_registration_start)
-        if on_registration_stop is not None:
-            handlers[RegistrationStopMessage] = cast("InboundHandler", on_registration_stop)
-        if on_registration_commit is not None:
-            handlers[RegistrationCommitMessage] = cast("InboundHandler", on_registration_commit)
-        if on_registration_action is not None:
-            handlers[RegistrationActionMessage] = cast("InboundHandler", on_registration_action)
+        if on_registration_command is not None:
+            handlers[RegistrationCommandMessage] = cast(
+                "InboundHandler", on_registration_command
+            )
         if on_camera_info is not None:
             handlers[CameraInfoMessage] = cast("InboundHandler", on_camera_info)
         if on_registration_pose is not None:
@@ -176,7 +153,7 @@ class ARWebSocketServer:
         if on_set_lidar_mode is not None:
             handlers[SetLidarModeMessage] = cast("InboundHandler", on_set_lidar_mode)
 
-        def _nav_handler(
+        def _simple_handler(
             handler: Callable[[Any], None] | None,
             label: str,
         ) -> InboundHandler:
@@ -188,10 +165,9 @@ class ARWebSocketServer:
                 f"{label} received but not supported in this blueprint"
             )
 
-        handlers[NavGoalMessage] = _nav_handler(on_nav_goal, "nav_goal")
-        handlers[PlanPathMessage] = _nav_handler(on_plan_path, "plan_path")
-        handlers[CancelGoalMessage] = _nav_handler(on_cancel_goal, "cancel_goal")
-        handlers[EmergencyStopMessage] = _nav_handler(on_emergency_stop, "emergency_stop")
+        handlers[GoalMessage] = _simple_handler(on_goal, "goal")
+        handlers[CancelGoalMessage] = _simple_handler(on_cancel_goal, "cancel_goal")
+        handlers[EmergencyStopMessage] = _simple_handler(on_emergency_stop, "emergency_stop")
 
         return handlers
 
@@ -280,25 +256,26 @@ class ARWebSocketServer:
                         continue
                     if not isinstance(message, str):
                         raise ValueError("Unsupported WebSocket frame type")
-                    msg_type = peek_message_type(message)
-                    now_mono = time.monotonic()
-                    _should_log = (
-                        msg_type not in _THROTTLED_INBOUND_TYPES
-                        and (
-                            not _TRACE_ONLY_INBOUND_TYPES
-                            or msg_type not in _TRACE_ONLY_INBOUND_TYPES
-                        )
-                    ) or (
-                        msg_type in _THROTTLED_INBOUND_TYPES
-                        and now_mono - _last_inbound_text_log.get(msg_type, 0.0)
-                        >= INBOUND_TEXT_LOG_INTERVAL_S
-                    ) or (msg_type in _TRACE_ONLY_INBOUND_TYPES and _TRACE)
-                    if _should_log:
-                        if msg_type is not None:
-                            _last_inbound_text_log[msg_type] = now_mono
-                        logger.info("XR inbound text message", type=msg_type)
-                    inbound = decode_inbound(message, expected_robot_id=hello.robot_id)
-                    self._dispatch_inbound(inbound, websocket)
+                    for line in split_inbound_text_lines(message):
+                        msg_type = peek_message_type(line)
+                        now_mono = time.monotonic()
+                        _should_log = (
+                            msg_type not in _THROTTLED_INBOUND_TYPES
+                            and (
+                                not _TRACE_ONLY_INBOUND_TYPES
+                                or msg_type not in _TRACE_ONLY_INBOUND_TYPES
+                            )
+                        ) or (
+                            msg_type in _THROTTLED_INBOUND_TYPES
+                            and now_mono - _last_inbound_text_log.get(msg_type, 0.0)
+                            >= INBOUND_TEXT_LOG_INTERVAL_S
+                        ) or (msg_type in _TRACE_ONLY_INBOUND_TYPES and _TRACE)
+                        if _should_log:
+                            if msg_type is not None:
+                                _last_inbound_text_log[msg_type] = now_mono
+                            logger.info("XR inbound text message", type=msg_type)
+                        inbound = decode_inbound(line, expected_robot_id=hello.robot_id)
+                        self._dispatch_inbound(inbound, websocket)
                 except ValueError as exc:
                     logger.warning("Invalid inbound WebSocket message", error=str(exc))
                 except Exception as exc:

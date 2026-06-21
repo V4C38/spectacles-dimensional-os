@@ -136,9 +136,7 @@ def g1_handshake(
     tag_ids = [m.tag_id for m in G1_DEFAULT_TAG_MOUNTS]
     return RobotHandshake(
         robot_id=robot_id,
-        robot_model="unitree_g1",
         display_name="Unitree G1",
-        capabilities=list(capability_states.keys()),
         capability_states=capability_states,
         body_bounds_m=(0.65, 0.45, 1.35),
         footprint_m=(0.32, 0.24),
@@ -146,7 +144,6 @@ def g1_handshake(
         base_height_m=0.95,
         default_render_offset_m=(0.0, 0.0, 0.0),
         registration_profile={
-            "method": "april_odom_baseline",
             "tag_ids": tag_ids,
             "tag_total_size_m": TAG_TOTAL_SIZE_M,
         },
@@ -283,7 +280,7 @@ class G1AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
                 PointStamped(x=goal.x, y=goal.y, z=goal.z, ts=goal.ts, frame_id=goal.frame_id)
             )
             return True
-        logger.warning("G1 nav_goal rejected: no navigation transport is available")
+        logger.warning("G1 goal rejected: no navigation transport is available")
         return False
 
     @rpc

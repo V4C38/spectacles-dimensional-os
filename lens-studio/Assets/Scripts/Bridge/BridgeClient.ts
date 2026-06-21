@@ -6,23 +6,21 @@ import {
   LidarMessage,
   NavStatusMessage,
   PathMessage,
-  PathPreviewMessage,
   PongMessage,
   PoseCorrectionMessage,
   PoseMessage,
-  buildRegistrationCommit,
+  RuntimeSnapshotMessage,
+  buildRegistrationCommand,
   buildRegistrationPose,
-  buildRegistrationStart,
-  buildRegistrationStop,
-  buildRegistrationAction,
   buildCancelGoal,
   buildEmergencyStop,
   buildGetStatus,
   buildSetLidarMode,
-  buildNavGoal,
-  buildPlanPath,
+  buildNavigateGoal,
+  buildPreviewGoal,
   LidarObstacleSettings,
   ProtocolParseError,
+  RegistrationCommandAction,
   RegistrationMode,
 } from "./Protocol";
 import {
@@ -80,11 +78,11 @@ export class BridgeClient extends BaseScriptComponent {
   public get onPath(): Signal<PathMessage> {
     return this._inbound!.onPath;
   }
-  public get onPathPreview(): Signal<PathPreviewMessage> {
-    return this._inbound!.onPathPreview;
-  }
   public get onNavStatus(): Signal<NavStatusMessage> {
     return this._inbound!.onNavStatus;
+  }
+  public get onRuntimeSnapshot(): Signal<RuntimeSnapshotMessage> {
+    return this._inbound!.onRuntimeSnapshot;
   }
   public get onPong(): Signal<PongMessage> {
     return this._inbound!.onPong;
@@ -216,24 +214,14 @@ export class BridgeClient extends BaseScriptComponent {
     );
   }
 
-  public sendRegistrationStart(mode: RegistrationMode): boolean {
-    return this._sendForActiveRobot("registration_start", (robotId) =>
-      buildRegistrationStart(robotId, mode),
+  public sendRegistrationCommand(
+    command: RegistrationCommandAction,
+    mode?: RegistrationMode,
+  ): boolean {
+    const action = mode !== undefined ? `registration_command:${command}:${mode}` : `registration_command:${command}`;
+    return this._sendForActiveRobot(action, (robotId) =>
+      buildRegistrationCommand(robotId, command, mode),
     );
-  }
-
-  public sendRegistrationAction(): boolean {
-    return this._sendForActiveRobot("registration_action", (robotId) =>
-      buildRegistrationAction(robotId),
-    );
-  }
-
-  public sendRegistrationStop(): boolean {
-    return this._sendForActiveRobot("registration_stop", buildRegistrationStop);
-  }
-
-  public sendRegistrationCommit(): boolean {
-    return this._sendForActiveRobot("registration_commit", buildRegistrationCommit);
   }
 
   public sendRegistrationPose(position: vec3, rotation: quat): boolean {
@@ -243,14 +231,14 @@ export class BridgeClient extends BaseScriptComponent {
   }
 
   public sendNavGoal(position: vec3, rotation: quat): boolean {
-    return this._sendForActiveRobot("nav_goal", (robotId) =>
-      buildNavGoal(position, rotation, robotId),
+    return this._sendForActiveRobot("goal:navigate", (robotId) =>
+      buildNavigateGoal(robotId, position, rotation),
     );
   }
 
-  public sendPlanPath(position: vec3, rotation?: quat | null): boolean {
-    return this._sendForActiveRobot("plan_path", (robotId) =>
-      buildPlanPath(position, robotId, rotation),
+  public sendPreviewGoal(position: vec3, rotation?: quat | null): boolean {
+    return this._sendForActiveRobot("goal:preview", (robotId) =>
+      buildPreviewGoal(robotId, position, rotation),
     );
   }
 
@@ -276,7 +264,8 @@ export class BridgeClient extends BaseScriptComponent {
   }
 
   public send(text: string): boolean {
-    const sent = this._connection?.send(text) ?? false;
+    const payload = text.endsWith("\n") ? text : `${text}\n`;
+    const sent = this._connection?.send(payload) ?? false;
     if (!sent) {
       const now = getTime();
       if (now - this._lastSendDropLogTime >= SEND_DROP_LOG_INTERVAL_S) {

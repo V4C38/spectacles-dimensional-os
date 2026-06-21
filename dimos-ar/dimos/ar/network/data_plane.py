@@ -13,23 +13,16 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from dimos.ar.network.protocol import (
-    encode_lidar,
     encode_lidar_binary,
     encode_path,
-    encode_path_preview,
     encode_pose,
-)
-from dimos.ar.tracking.filters import (
-    LidarFilter,
-    LidarObstacleDistanceConfig,
-    filter_obstacle_points,
-    subsample_points_near_robot,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from dimos.ar.tracking.transforms import Calibration, OdomSample
+    from dimos.ar.registration.transforms import Calibration, OdomSample
+    from dimos.ar.tracking.filters import LidarFilter, LidarObstacleDistanceConfig
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
     from dimos.msgs.nav_msgs.Path import Path
     from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -48,16 +41,13 @@ def build_lidar_payload(
     robot_world_pos: tuple[float, float, float] | None,
     target_points: int,
     voxel_size: float,
-    robot_id: str,
-    lidar_binary: bool = True,
-) -> tuple[str | bytes, int] | None:
-    """Filter, transform, and encode a PointCloud2 into an XR LiDAR payload.
+) -> tuple[bytes, int] | None:
+    """Filter, transform, and encode a PointCloud2 into a binary XR LiDAR payload."""
+    from dimos.ar.tracking.filters import (
+        filter_obstacle_points,
+        subsample_points_near_robot,
+    )
 
-    Returns ``(payload, point_count)`` on success, or ``None`` if the lidar
-    rate-limiter drops this frame. When ``lidar_binary=True`` (default), the
-    payload is a compact binary frame (Float16, ~6 bytes/point); otherwise a
-    JSON text string is returned.
-    """
     if not lidar_filter.config.allow():
         return None
     downsampled = msg.voxel_downsample(voxel_size=voxel_size)
@@ -79,10 +69,7 @@ def build_lidar_payload(
             world_pts = subsample_points_near_robot(
                 world_pts, robot_world_pos, target_points=target_points
             )
-    if lidar_binary:
-        payload: str | bytes = encode_lidar_binary(ts=msg.ts, points=world_pts)
-    else:
-        payload = encode_lidar(ts=msg.ts, points=world_pts, robot_id=robot_id)
+    payload = encode_lidar_binary(ts=msg.ts, points=world_pts)
     return payload, len(world_pts)
 
 
@@ -91,14 +78,9 @@ def build_pose_payload(
     *,
     calibration: Calibration,
     sample_odom: Callable[[PoseStamped], OdomSample],
-    robot_id: str,
     speed_mps: float | None = None,
 ) -> tuple[str, tuple[float, float, float], tuple[float, float, float, float]] | None:
-    """Transform odom pose into world frame and encode as an XR pose payload.
-
-    Returns ``(payload_str, world_pos, world_quat)`` on success, or ``None`` if the
-    transformed components are non-finite.
-    """
+    """Transform odom pose into world frame and encode as an XR pose payload."""
     sample = sample_odom(msg)
     pos, quat = calibration.transform_pose(sample.position, sample.orientation)
     if not all(
@@ -109,7 +91,6 @@ def build_pose_payload(
         ts=msg.ts,
         position=pos,
         orientation=quat,
-        robot_id=robot_id,
         speed_mps=speed_mps,
     )
     return payload, pos, quat
@@ -119,7 +100,6 @@ def build_path_payload(
     msg: Path,
     *,
     calibration: Calibration,
-    robot_id: str,
 ) -> tuple[str, list[tuple[float, float, float]]]:
     """Transform path waypoints into world frame and encode as an XR path payload."""
     waypoints: list[tuple[float, float, float]] = []
@@ -129,13 +109,13 @@ def build_path_payload(
             (pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w),
         )
         waypoints.append(world_pos)
-    payload = encode_path(ts=msg.ts, waypoints=waypoints, robot_id=robot_id)
+    payload = encode_path(ts=msg.ts, waypoints=waypoints, kind="active")
     return payload, waypoints
 
 
-def build_empty_path_payload(*, robot_id: str, ts: float | None = None) -> str:
+def build_empty_path_payload(*, ts: float | None = None) -> str:
     """Encode an empty path payload (used to clear the client path display)."""
-    return encode_path(ts=ts if ts is not None else time.time(), waypoints=[], robot_id=robot_id)
+    return encode_path(ts=ts if ts is not None else time.time(), waypoints=[], kind="active")
 
 
 def build_preview_path_payload(
@@ -143,10 +123,14 @@ def build_preview_path_payload(
     ts: float,
     target_world: tuple[float, float, float],
     waypoints: list[tuple[float, float, float]],
-    robot_id: str,
 ) -> str:
     """Encode a preview path payload."""
-    return encode_path_preview(ts=ts, waypoints=waypoints, robot_id=robot_id, target=target_world)
+    return encode_path(
+        ts=ts,
+        waypoints=waypoints,
+        kind="preview",
+        target=target_world,
+    )
 
 
 def normalize_nav_state(raw: str) -> str:

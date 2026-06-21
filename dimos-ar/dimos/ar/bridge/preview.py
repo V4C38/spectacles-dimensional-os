@@ -1,8 +1,4 @@
-"""PreviewService — off-thread preview path planner and broadcaster.
-
-Owns a single-slot request queue (condition variable) and a dedicated worker
-thread so that A* planning doesn't block the asyncio event loop.
-"""
+"""PreviewService — off-thread preview path planner and broadcaster."""
 
 from __future__ import annotations
 
@@ -16,9 +12,9 @@ from dimos.utils.logging_config import setup_logger
 if TYPE_CHECKING:
     from dimos.ar.bridge.odom_buffer import OdomBuffer
     from dimos.ar.bridge.sender import BridgeSender
-    from dimos.ar.network.protocol import PlanPathMessage
+    from dimos.ar.network.protocol import GoalMessage
     from dimos.ar.preview_planner import PreviewPlanner
-    from dimos.ar.tracking.transforms import Calibration
+    from dimos.ar.registration.transforms import Calibration
     from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 
 logger = setup_logger()
@@ -87,7 +83,9 @@ class PreviewService:
     def update_costmap(self, grid: OccupancyGrid) -> None:
         self._planner.update_costmap(grid)
 
-    def on_plan_path(self, msg: PlanPathMessage) -> None:
+    def on_preview_goal(self, msg: GoalMessage) -> None:
+        if msg.intent != "preview":
+            return
         if not self._calibration.is_registered or not self._planner.has_costmap():
             self._send_preview_path(ts=msg.ts, target_world=msg.position, waypoints=[])
             return
@@ -97,10 +95,6 @@ class PreviewService:
         with self._condition:
             self._request = PreviewPathRequest(ts=msg.ts, target_world=msg.position)
             self._condition.notify()
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     def _process_request(self, request: PreviewPathRequest) -> None:
         try:
@@ -163,6 +157,5 @@ class PreviewService:
                 ts=ts,
                 target_world=target_world,
                 waypoints=waypoints,
-                robot_id=self._robot_id,
             )
         )

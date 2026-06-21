@@ -23,7 +23,6 @@ import { RobotRuntime } from "../Robot/RobotRuntime";
 import {
   NavStatusMessage,
   PathMessage,
-  PathPreviewMessage,
   ProtocolParseError,
   PoseMessage,
   protocolMetersToLensCentimeters,
@@ -320,41 +319,43 @@ export class NavigationController {
     if (robotY !== null && goalY !== null) {
       this._pathRenderer?.setHeightRange(robotY, goalY);
     }
-    if (msg.waypoints.length >= 2) {
-      this._bridgePath = msg.waypoints.map((point) =>
-        protocolMetersToLensCentimeters(point),
-      );
-    } else {
-      this._bridgePath = null;
+
+    const waypoints =
+      msg.waypoints.length >= 2
+        ? msg.waypoints.map((point) => protocolMetersToLensCentimeters(point))
+        : null;
+
+    if (msg.kind === "preview") {
+      if (!this._previewTarget) {
+        return;
+      }
+      if (msg.target && !this._previewTargetMatches(msg.target)) {
+        return;
+      }
+      this._previewBasePath = waypoints;
+      this._syncPresentation();
+      return;
     }
+
+    this._bridgePath = waypoints;
     if (this._engine.goal !== null) {
       this._dispatch({ kind: "navigating" });
     }
     this._syncPresentation();
   }
 
-  public applyPathPreview(msg: PathPreviewMessage): void {
-    if (!this._previewTarget) {
+  public resyncPreviewGoal(): void {
+    if (!this._previewTarget || this._engine.goal !== null) {
       return;
     }
-    if (!this._previewTargetMatches(msg.target)) {
-      return;
-    }
-    if (msg.waypoints.length >= 2) {
-      this._previewBasePath = msg.waypoints.map((point) =>
-        protocolMetersToLensCentimeters(point),
-      );
-    } else {
-      this._previewBasePath = null;
-    }
-    this._syncPresentation();
+    this._maybeRequestPreview(true, this._placement.isPlacementActive());
   }
 
   public applyNavStatus(msg: NavStatusMessage): void {
     this._protocolParseFailureCount = 0;
     this._engine = touchNavStatus(this._engine, getTime());
     const navLabel = this._applyNavStatusInner(msg);
-    if (msg.recovering) {
+    if (msg.phase === "recovering") {
       this._cancelOutcomeFlashTimer();
       return;
     }
@@ -679,15 +680,15 @@ export class NavigationController {
   }
 
   private _applyNavStatusInner(msg: NavStatusMessage): string {
-    if (msg.recovering) {
+    if (msg.phase === "recovering") {
       this._dispatch({ kind: "navStatusRecovering" });
       return "Recovering";
     }
-    if (msg.goal_reached || msg.goal_failed) {
+    if (msg.phase === "succeeded" || msg.phase === "failed") {
       if (this._engine.goal === null) {
         return "Idle";
       }
-      if (msg.goal_reached) {
+      if (msg.phase === "succeeded") {
         this._finishContinuousRetargetIfNeeded();
         this._dispatch({ kind: "navStatusGoalReached" });
         return "Goal reached";
@@ -695,14 +696,11 @@ export class NavigationController {
       this._dispatch({ kind: "navStatusGoalFailed" });
       return "Goal failed";
     }
-    if (msg.state === "navigating") {
+    if (msg.phase === "navigating") {
       if (this._engine.goal !== null) {
         this._dispatch({ kind: "navigating" });
       }
       return "Navigating";
-    }
-    if (msg.state === "recovery") {
-      return "Recovery";
     }
     return "Idle";
   }
@@ -731,6 +729,7 @@ export class NavigationController {
     if (action === "request_resync") {
       this._engine = bumpNavResyncCooldown(this._engine, getTime());
       this._bridgeClient?.requestStatus();
+      this.resyncPreviewGoal();
       return;
     }
     if (action === "recover_local") {
@@ -889,7 +888,7 @@ export class NavigationController {
     this._lastPreviewRequestTime = now;
     if (this._canRequestPreviewPath(placementActive)) {
       const sent =
-        this._bridgeClient?.sendPlanPath(
+        this._bridgeClient?.sendPreviewGoal(
           this._previewTarget.position,
           this._previewTarget.rotation,
         ) ?? false;

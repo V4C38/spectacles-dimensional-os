@@ -24,10 +24,9 @@ function sampleHello(
 ): HelloMessage {
   return {
     type: "hello",
-    protocol_version: 4,
+    protocol_version: 6,
     robot: {
       robot_id: "go2",
-      robot_model: "unitree_go2",
       display_name: "Go2",
       visual_origin_frame: "base_link",
       ...patch,
@@ -41,7 +40,6 @@ describe("projectRuntimeStateFromHello", () => {
     const state = projectRuntimeStateFromHello(sampleHello());
     expect(state.negotiated).toBe(true);
     expect(state.robotId).toBe("go2");
-    expect(state.robotModel).toBe("unitree_go2");
     expect(state.displayName).toBe("Go2");
     expect(state.capabilities.lidar.available).toBe(true);
     expect(state.capabilities.nav.available).toBe(false);

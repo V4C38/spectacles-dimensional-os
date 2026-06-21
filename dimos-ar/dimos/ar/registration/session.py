@@ -16,11 +16,8 @@ import numpy as np
 from dimos.ar.network.data_plane import DROPPED_POSE_LOG_INTERVAL_S
 from dimos.ar.network.protocol import (
     CameraInfoMessage,
-    RegistrationActionMessage,
-    RegistrationCommitMessage,
+    RegistrationCommandMessage,
     RegistrationPoseMessage,
-    RegistrationStartMessage,
-    RegistrationStopMessage,
     encode_camera_frame_ack,
 )
 from dimos.ar.registration.baseline import BaselineCollector, BaselineStatus
@@ -46,8 +43,6 @@ from dimos.ar.registration.wire import RegistrationStatusPayload, encode_registr
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from websockets.asyncio.server import ServerConnection
 
     from dimos.ar.adapters.base import ARRobotAdapterSpec, RuntimeRegistrationProfile
@@ -139,9 +134,19 @@ class RegistrationSession:
         self._tag_tracker.active = False
         self._stop_broadcast()
 
-    def on_registration_start(
-        self, msg: RegistrationStartMessage, _websocket: ServerConnection
+    def on_registration_command(
+        self, msg: RegistrationCommandMessage, websocket: ServerConnection
     ) -> None:
+        if msg.command == "start":
+            self._handle_registration_command_start(msg)
+        elif msg.command == "authorize_motion":
+            self._handle_registration_command_authorize_motion(msg)
+        elif msg.command == "stop":
+            self._handle_registration_command_stop(msg)
+        elif msg.command == "commit":
+            self._handle_registration_command_commit(msg)
+
+    def _handle_registration_command_start(self, msg: RegistrationCommandMessage) -> None:
         if self._baseline is not None:
             self._baseline.reset_to_idle()
         self._clear_session()
@@ -149,7 +154,7 @@ class RegistrationSession:
 
         if self._session.mode == RegistrationMode.APRIL_ODOM_BASELINE:
             if self._baseline is None or not self._baseline.motion_available:
-                logger.warning("registration_start april_odom_baseline unavailable")
+                logger.warning("registration_command start april_odom_baseline unavailable")
                 self._session.mode = None
                 self._broadcast_status(
                     phase=RegistrationPhase.FAILED,
@@ -183,15 +188,11 @@ class RegistrationSession:
             )
         self._start_broadcast()
 
-    def on_registration_action(
-        self, msg: RegistrationActionMessage, _websocket: ServerConnection
-    ) -> None:
-        if msg.action == "authorize_motion" and self._baseline is not None:
+    def _handle_registration_command_authorize_motion(self, msg: RegistrationCommandMessage) -> None:
+        if self._baseline is not None:
             self._baseline.authorize_motion()
 
-    def on_registration_stop(
-        self, msg: RegistrationStopMessage, _websocket: ServerConnection
-    ) -> None:
+    def _handle_registration_command_stop(self, msg: RegistrationCommandMessage) -> None:
         if self._baseline is not None:
             self._baseline.stop(message="Registration cancelled")
         session_mode = self._session.mode
@@ -202,6 +203,8 @@ class RegistrationSession:
         self._stop_broadcast()
         self._clear_session()
         if not was_active:
+            if self._registry.calibration.is_registered:
+                self._clear_committed_registration()
             return
         logger.info("XR registration stopped")
         self._broadcast_status(
@@ -211,6 +214,12 @@ class RegistrationSession:
             mode=session_mode,
             ts=msg.ts,
         )
+
+    def _clear_committed_registration(self) -> None:
+        self._registry.clear()
+        self._status.set_registered(False)
+        self._status.broadcast()
+        logger.info("XR committed registration cleared")
 
     def on_emergency_stop(self) -> None:
         if self._baseline is not None:
@@ -225,9 +234,7 @@ class RegistrationSession:
                 capture=CaptureHint.OFF,
             )
 
-    def on_registration_commit(
-        self, msg: RegistrationCommitMessage, _websocket: ServerConnection
-    ) -> None:
+    def _handle_registration_command_commit(self, msg: RegistrationCommandMessage) -> None:
         cand = self._session.pending_candidate
         if cand is None:
             self._broadcast_status(
@@ -337,7 +344,7 @@ class RegistrationSession:
                 self._session.last_manual_inactive_log_mono = now
                 logger.warning(
                     "registration_pose dropped: no manual session open"
-                    " (send registration_start{mode:'manual_pose'} first)"
+                    " (send registration_command{command:'start',mode:'manual_pose'} first)"
                 )
             return
         if not self._session.manual_pose_first_logged:
@@ -417,7 +424,6 @@ class RegistrationSession:
     def _send_frame_ack(self, header: dict[str, Any]) -> None:
         self._sender.send(
             encode_camera_frame_ack(
-                robot_id=self._robot_id,
                 seq=int(header["seq"]),
             )
         )
@@ -642,7 +648,6 @@ class RegistrationSession:
         self._sender.send(
             encode_registration_status(
                 ts=ts,
-                robot_id=self._robot_id,
                 status=payload,
             )
         )

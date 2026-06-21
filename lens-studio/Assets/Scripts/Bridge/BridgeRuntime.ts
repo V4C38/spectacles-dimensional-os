@@ -53,11 +53,11 @@ export class BridgeRuntime {
       this.robotRuntime?.onPoseCorrection(msg);
     });
     this.bridgeClient.onPath.add((msg) => this.navigationController?.applyPath(msg));
-    this.bridgeClient.onPathPreview.add((msg) =>
-      this.navigationController?.applyPathPreview(msg),
-    );
     this.bridgeClient.onNavStatus.add((msg) =>
       this.navigationController?.applyNavStatus(msg),
+    );
+    this.bridgeClient.onRuntimeSnapshot.add(() =>
+      this.navigationController?.resyncPreviewGoal(),
     );
     this.bridgeClient.onBridgeStatus.add((msg) => this._applyBridgeStatus(msg));
     this.bridgeClient.onConnectionChanged.add((connected) =>

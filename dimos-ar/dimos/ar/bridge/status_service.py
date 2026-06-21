@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
-from dimos.ar.network.bridge_status import BridgeStatusSnapshot, BridgeStatusTracker
+from dimos.ar.network.bridge_status import (
+    BridgeStatusSnapshot,
+    BridgeStatusTracker,
+    RegistrationMethod,
+)
 from dimos.ar.network.protocol import encode_bridge_status
 
 if TYPE_CHECKING:
@@ -87,7 +91,7 @@ class StatusService:
         self,
         registered: bool,
         *,
-        method: Literal["manual", "tag"] | None = None,
+        method: RegistrationMethod | None = None,
         approximate: bool | None = None,
     ) -> None:
         self._tracker.set_registered(registered, method=method, approximate=approximate)

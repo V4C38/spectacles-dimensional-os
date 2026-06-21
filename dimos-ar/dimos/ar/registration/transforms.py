@@ -277,6 +277,12 @@ class Calibration:
             self._T_world_odom = T_flat.astype(np.float64)
             self._registered = True
 
+    def clear(self) -> None:
+        """Reset to pre-registration identity transform."""
+        with self._lock:
+            self._T_world_odom = np.eye(4, dtype=np.float64)
+            self._registered = False
+
     def _get_T(self) -> NDArray[np.float64]:
         with self._lock:
             return self._T_world_odom.copy()
