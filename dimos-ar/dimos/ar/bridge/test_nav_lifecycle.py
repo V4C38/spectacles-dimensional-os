@@ -8,10 +8,14 @@ from dimos_lcm.std_msgs import Bool
 import numpy as np
 import pytest
 
-from dimos.ar.bridge.navigation import NAV_GOAL_PATH_TIMEOUT_S, NavController
+from dimos.ar.bridge.navigation import (
+    NAV_GOAL_PATH_TIMEOUT_S,
+    NAV_GOAL_PUBLISH_TIMEOUT_S,
+    NavController,
+)
 from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.bridge.sender import BridgeSender
-from dimos.ar.network.error_codes import CONTROL_RPC_TIMEOUT, NAV_GOAL_STALLED
+from dimos.ar.network.error_codes import NAV_GOAL_STALLED
 from dimos.ar.network.protocol import GoalMessage, encode_pose
 from dimos.ar.registration.transforms import Calibration, pose_to_matrix
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -204,7 +208,8 @@ def test_goal_stall_terminal_after_max_attempts() -> None:
     assert nav_status["error_code"] == NAV_GOAL_STALLED.code
 
 
-def test_goal_rejected_when_degraded() -> None:
+def test_navigate_goal_clears_degraded_session() -> None:
+    """A new navigate goal clears session degradation so the user can retry."""
     nav, _mock_server = _make_nav()
     nav._nav_degraded = True
     msg = GoalMessage(
@@ -216,8 +221,10 @@ def test_goal_rejected_when_degraded() -> None:
     )
 
     nav.on_navigate_goal(msg)
+    time.sleep(0.05)
 
-    nav._adapter.send_nav_goal.assert_not_called()
+    nav._adapter.send_nav_goal.assert_called_once()
+    assert nav._nav_degraded is False
 
 
 def test_on_navigate_goal_returns_before_adapter_publish() -> None:
@@ -274,7 +281,7 @@ def test_emergency_stop_then_goal_succeeds() -> None:
     assert nav._nav_path_received is False
 
 
-def test_cancel_goal_timeout_marks_navigation_degraded() -> None:
+def test_cancel_goal_timeout_does_not_degrade_navigation() -> None:
     nav, mock_server = _make_nav()
 
     def slow_cancel() -> bool:
@@ -285,12 +292,54 @@ def test_cancel_goal_timeout_marks_navigation_degraded() -> None:
     nav.on_cancel_goal(ts=3.0)
     time.sleep(1.05)
 
-    assert nav._nav_degraded is True
-    assert nav._goal_failed is True
-    assert nav._nav_error_code == CONTROL_RPC_TIMEOUT.code
+    assert nav._nav_degraded is False
+    assert nav._goal_failed is False
+    assert nav._nav_error_code is None
     nav_status = _last_nav_status(mock_server)
-    assert nav_status["phase"] == "failed"
-    assert nav_status["error_code"] == CONTROL_RPC_TIMEOUT.code
+    assert nav_status["phase"] == "idle"
+    assert nav_status.get("error_code") is None
+
+
+def test_slow_send_nav_goal_fails_transiently_and_accepts_later_goal() -> None:
+    nav, _mock_server = _make_nav()
+    publish_calls = 0
+
+    def slow_first_goal(_goal: PoseStamped) -> bool:
+        nonlocal publish_calls
+        publish_calls += 1
+        if publish_calls == 1:
+            time.sleep(NAV_GOAL_PUBLISH_TIMEOUT_S + 0.5)
+        return True
+
+    nav._adapter.send_nav_goal.side_effect = slow_first_goal
+    first_goal = GoalMessage(
+        intent="navigate",
+        ts=1.0,
+        robot_id="unitree_go2",
+        position=(1.0, 0.0, 2.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    nav.on_navigate_goal(first_goal)
+    time.sleep(NAV_GOAL_PUBLISH_TIMEOUT_S + 0.7)
+
+    assert nav._goal_failed is True
+    assert nav._nav_degraded is False
+
+    nav._adapter.send_nav_goal.side_effect = None
+    nav._adapter.send_nav_goal.return_value = True
+    second_goal = GoalMessage(
+        intent="navigate",
+        ts=2.0,
+        robot_id="unitree_go2",
+        position=(2.0, 0.0, 3.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    nav.on_navigate_goal(second_goal)
+    time.sleep(0.05)
+
+    assert nav._adapter.send_nav_goal.call_count == 2
+    assert nav._nav_goal_pending is True
+    assert nav._goal_failed is False
 
 
 def test_on_navigation_state_idle_while_live_emits_recovery() -> None:

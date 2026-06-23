@@ -103,7 +103,15 @@ For the integration test, start the blueprint first, then run:
 /path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/network/test_ws_integration.py -m integration
 ```
 
-Tests are colocated with their modules under `dimos/ar/` rather than in a top-level `tests/` directory. Unit tests run without any external services; the integration test requires a live bridge WebSocket on port 8787.
+Tests are colocated with their modules under `dimos/ar/` rather than in a top-level `tests/` directory.
+
+| Tier | Command | Requires |
+|------|---------|----------|
+| Unit | `pytest -m "not integration"` | DimOS `.venv` only |
+| Handshake | included in unit (`test_ws_handshake.py`) | In-process stub server; verifies `hello` + `get_status` wire flow |
+| Integration | `pytest dimos/ar/network/test_ws_integration.py -m integration` | Live bridge on port 8787 (`./start.sh`) |
+
+Lens-side protocol tests run separately: `cd lens-studio/Tests && npm test`.
 
 </details>
 

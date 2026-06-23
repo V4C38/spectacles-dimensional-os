@@ -164,7 +164,7 @@ export class DimosManager extends BaseScriptComponent {
   public enterSetup(): void {
     this._log("enterSetup");
     this.registrationClient?.cancelPlacement();
-    this.registrationClient?.stop({ notifyBridge: this.hasBridgeConnection() });
+    this.registrationClient?.stop();
     this.registrationClient?.clearPose();
     this.dimosServices.bridge.disconnect();
     this.frameCaptureController?.setMode("off");
@@ -203,8 +203,20 @@ export class DimosManager extends BaseScriptComponent {
     }
   }
 
-  public setBaseUrl(url: string): void {
-    this.dimosServices.bridge.setBaseUrl(url);
+  public tryConnectBridge(ip: string): Promise<boolean> {
+    return this.dimosServices.bridge.tryConnect(ip);
+  }
+
+  public normalizeBridgeIp(raw: string): string {
+    return this.dimosServices.bridge.normalizeBridgeIp(raw);
+  }
+
+  public get bridgeClockSyncState(): "idle" | "pending" | "ready" | "failed" {
+    return this.dimosServices.bridgeClient?.clockSyncState ?? "idle";
+  }
+
+  public get onBridgeClockSyncStateChanged() {
+    return this.dimosServices.bridgeClient?.onClockSyncStateChanged;
   }
 
   public getBaseUrl(): string {
@@ -221,10 +233,6 @@ export class DimosManager extends BaseScriptComponent {
 
   public loadIp(): string | null {
     return this.dimosServices.bridge.loadIp();
-  }
-
-  public checkConnection(): Promise<boolean> {
-    return this.dimosServices.bridge.checkConnection();
   }
 
   public disconnect(): void {

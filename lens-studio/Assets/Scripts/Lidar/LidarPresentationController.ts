@@ -4,7 +4,7 @@ import {
   lidarVerticalBandCm,
   robotFloorWorldYCm,
 } from "../Robot/RobotRuntimeModel";
-import { DEFAULT_LIDAR_OBSTACLE_SETTINGS } from "../Bridge/Protocol";
+import { DEFAULT_LIDAR_OBSTACLE_SETTINGS } from "../Bridge/domain";
 
 export interface LidarPresentationInput {
   mode: LidarDisplayMode;

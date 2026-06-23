@@ -6,6 +6,9 @@ export function setMockTime(t: number): void {
 }
 
 const g = globalThis as Record<string, unknown>;
+g.component = (target: unknown) => target;
+g.input = () => () => {};
+g.BaseScriptComponent = class BaseScriptComponent {};
 g.vec3 = vec3;
 g.vec4 = vec4;
 g.quat = quat;

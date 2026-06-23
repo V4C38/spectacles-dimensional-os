@@ -258,9 +258,15 @@ Fields:
   a configured robot-mounted tag was detected in the most recent processed frame
 - `motion` (optional): structured safety hint during baseline strafe — `frame`
   (`"robot"`), `axis` (`"lateral"`), `direction` (`"left"` | `"right"`),
-  `distance_m`, `waypoint_index`, `waypoint_total`
+  `distance_m`, `waypoint_index`, `waypoint_total`. `distance_m` is indicative
+  for UX; Go2 baseline legs are time-controlled at the bridge, not odom-gated.
 - `preview_pose` (optional): estimated robot pose in world frame (`position` xyz
   metres, `orientation` quaternion xyzw); omitted until a solve is available
+
+During baseline **leg motion** (`phase: "moving"`), the bridge emits
+`capture: "steady"` (~1 frame/s) so tag tracking and `preview_pose` updates
+continue. `"hold"` remains in the enum for future use but is not used during
+baseline strafe. **Sampling** at each waypoint uses `capture: "burst"` (~5/s).
 
 ### `camera_frame_ack`
 
@@ -521,11 +527,10 @@ Authorize baseline strafe motion (AprilTag flow only):
 }
 ```
 
-Stop/cancel the current session. When no registration session is active, `stop`
-also clears any committed registration (`bridge_status.registered` becomes
-`false` and the world→odom transform resets to identity). If the client is
-already disconnected, the bridge cannot be cleared until it reconnects and
-sends `stop` again.
+Stop/cancel the current registration session. When no registration session is
+active, `stop` is a no-op for committed registration (`bridge_status.registered`
+and the world→odom transform are unchanged). To replace registration, start a
+new session and commit again.
 
 ```json
 {

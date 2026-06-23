@@ -1,5 +1,5 @@
 import { DimosAppState, OperatingMode, RobotInteractionMode } from "../Core/AppState";
-import { PoseMessage, protocolMetersToLensCentimeters } from "../Bridge/Protocol";
+import { PoseMessage, protocolMetersToLensCentimeters } from "../Bridge/domain";
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 import { InteractableManipulation } from "SpectaclesInteractionKit.lspkg/Components/Interaction/InteractableManipulation/InteractableManipulation";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";

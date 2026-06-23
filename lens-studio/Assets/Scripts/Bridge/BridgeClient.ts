@@ -33,14 +33,18 @@ import { Signal } from "../Core/Utilities";
 const SEND_DROP_LOG_INTERVAL_S = 1.0;
 const REGISTRATION_POSE_TX_LOG_INTERVAL_S = 1.0;
 const SEND_BINARY_LOG_INTERVAL_S = 2.0;
+const HELLO_TIMEOUT_S = 3.0;
 const DEBUG_VERBOSE = false;
 
-/** Scene facade: WebSocket transport, inbound decode, clock sync, and outbound commands. */
+/**
+ * Wire/session owner: WebSocket transport, hello handshake, inbound decode,
+ * clock sync, and outbound commands. App code connects via tryConnect(ip).
+ */
 @component
 export class BridgeClient extends BaseScriptComponent {
   /** Default Mac LAN IP when no IP is saved on device. */
   @input
-  defaultBridgeIp: string = "192.168.1.166";
+  defaultBridgeIp: string = "192.168.1.62";
 
   @input
   internetModule: InternetModule;
@@ -53,6 +57,9 @@ export class BridgeClient extends BaseScriptComponent {
   private _lastAlignPoseTxLogTime = -1;
   private _lastSendBinaryLogTime = -1;
   private _parseRecoveryEvent: DelayedCallbackEvent | null = null;
+  private _connectInFlight: Promise<boolean> | null = null;
+  private _connectInFlightIp: string | null = null;
+  private _connectAttemptId = 0;
 
   public get onHello(): Signal<HelloMessage> {
     return this._inbound!.onHello;
@@ -136,7 +143,7 @@ export class BridgeClient extends BaseScriptComponent {
         return;
       }
       this.disconnect();
-      this.connect().catch((error) => {
+      this.tryConnect(this.baseUrl).catch((error) => {
         print(`BridgeClient: parse-recovery reconnect failed: ${error}`);
       });
     });
@@ -164,19 +171,54 @@ export class BridgeClient extends BaseScriptComponent {
     return this._connection?.loadIp() ?? null;
   }
 
-  public async connect(): Promise<void> {
-    if (!this._connection) {
-      return;
+  /**
+   * Connect to the bridge at `ip` (WS open + v6 hello + requestStatus).
+   * Concurrent calls with the same IP await one in-flight attempt; a different
+   * IP cancels the prior attempt.
+   */
+  public tryConnect(ip: string): Promise<boolean> {
+    const normalized = BridgeClient.normalizeIp(ip);
+    if (!normalized) {
+      print("BridgeClient: tryConnect failed — empty IP");
+      return Promise.resolve(false);
     }
-    if (this._connection.isSocketOpen()) {
-      return;
+
+    if (this._connectInFlight && this._connectInFlightIp === normalized) {
+      return this._connectInFlight;
     }
-    if (this._connection.isConnecting) {
-      return;
+
+    this._connectAttemptId += 1;
+    if (this._connectInFlight) {
+      this.disconnect();
+      this._connectInFlight = null;
+      this._connectInFlightIp = null;
     }
-    this.disconnect();
-    this._connection.baseUrl = this.baseUrl;
-    await this._connection.connect();
+
+    const attemptId = this._connectAttemptId;
+    this.baseUrl = normalized;
+    this._connectInFlightIp = normalized;
+
+    let resolveConnect!: (ok: boolean) => void;
+    const promise = new Promise<boolean>((resolve) => {
+      resolveConnect = resolve;
+    });
+    this._connectInFlight = promise;
+
+    this._runTryConnect(normalized, attemptId)
+      .then((ok) => {
+        resolveConnect(ok);
+      })
+      .catch(() => {
+        resolveConnect(false);
+      })
+      .finally(() => {
+        if (this._connectInFlight === promise) {
+          this._connectInFlight = null;
+          this._connectInFlightIp = null;
+        }
+      });
+
+    return promise;
   }
 
   public disconnect(): void {
@@ -250,11 +292,6 @@ export class BridgeClient extends BaseScriptComponent {
     return this._sendForActiveRobot("emergency_stop", buildEmergencyStop);
   }
 
-  /** Wait for server `hello` after the socket is open (bridge sends it on connect). */
-  public waitForHello(timeoutSeconds: number = 3.0): Promise<boolean> {
-    return this._inbound?.waitForHello(timeoutSeconds) ?? Promise.resolve(false);
-  }
-
   public isConnected(): boolean {
     return (
       this._connection !== null &&
@@ -288,6 +325,62 @@ export class BridgeClient extends BaseScriptComponent {
         this._lastSendBinaryLogTime = now;
         print(`BridgeClient: sendBinary bytes=${bytes.byteLength}`);
       }
+    }
+  }
+
+  private async _runTryConnect(ip: string, attemptId: number): Promise<boolean> {
+    if (!this._connection || !this._inbound) {
+      return false;
+    }
+
+    if (this.isConnected() && BridgeClient.normalizeIp(this.baseUrl) === ip) {
+      this.requestStatus();
+      return true;
+    }
+
+    this.disconnect();
+    if (attemptId !== this._connectAttemptId) {
+      return false;
+    }
+
+    let handshakeError: string | null = null;
+    const offProtocolError = this._inbound.onProtocolError.add((error) => {
+      if (!this._inbound!.helloReceived) {
+        handshakeError = error.message;
+      }
+    });
+
+    try {
+      this._connection.baseUrl = ip;
+      await this._connection.connect();
+      if (attemptId !== this._connectAttemptId) {
+        return false;
+      }
+
+      const ready = await this._inbound.waitForHello(HELLO_TIMEOUT_S);
+      if (attemptId !== this._connectAttemptId) {
+        return false;
+      }
+
+      if (!ready) {
+        const detail = handshakeError
+          ? `hello parse error: ${handshakeError}`
+          : "hello handshake timeout";
+        print(`BridgeClient: tryConnect failed — ${detail}`);
+        this.disconnect();
+        return false;
+      }
+
+      this.requestStatus();
+      return true;
+    } catch (error) {
+      if (attemptId === this._connectAttemptId) {
+        print(`BridgeClient: tryConnect failed — ${error}`);
+        this.disconnect();
+      }
+      return false;
+    } finally {
+      offProtocolError();
     }
   }
 

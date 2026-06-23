@@ -99,11 +99,6 @@ export class SetupWizardView {
     this._prev.button.onTriggerUp.add(onPrevious);
     this._manual.button.onTriggerUp.add(onToggleManual);
     this._inputField.onReturnKeyPressed.add(onInputSubmit);
-    this._inputField.onKeyboardStateChanged.add((open: boolean) => {
-      if (!open) {
-        onInputSubmit();
-      }
-    });
   }
 
   public get panel(): SceneObject {

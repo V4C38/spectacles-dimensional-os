@@ -1683,7 +1683,7 @@
       _size: !<Vec3> {x: 14.000000, y: 3.000000, z: 1.000000}
       _inactive: false
       _playAudio: false
-      _style: Special
+      _style: Primary
       _hasShadow: false
       _shadowPositionOffset: !<Vec3> {x: 0.050000, y: -0.050000, z: -0.010000}
       _toggleable: false
@@ -6273,12 +6273,12 @@
   Enabled: true
   ScriptAsset: !<reference> caff008b-c706-414a-be2e-efaad98f9535
   ScriptInputsDefault:
-    defaultBridgeIp: true
+    {}
   ScriptTypesDefault:
     {}
   ScriptInputs:
     "":
-      defaultBridgeIp: 192.168.1.166
+      defaultBridgeIp: 192.168.1.62
       internetModule: !<reference.InternetModule> 79c60deb-0ecf-4df5-9713-7c5bd5dbef32
   ScriptTypes:
     "":
@@ -6558,7 +6558,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: -15.000000, z: 0.000000}
+    Position: {x: 0.000000, y: -30.000000, z: 0.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false

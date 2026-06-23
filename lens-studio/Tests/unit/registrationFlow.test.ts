@@ -84,6 +84,24 @@ describe("registration flow view state", () => {
       false,
     );
     expect(footer.nextLabel).toBe("Continue");
+    expect(footer.nextInactive).toBe(false);
+  });
+
+  it("footer shows inactive Continuing while motion authorization is pending", () => {
+    const footer = getWizardFooterState(
+      WizardStep.Register,
+      true,
+      {
+        mode: "auto",
+        phase: "awaiting_motion",
+        message: "",
+        tagVisible: true,
+      },
+      false,
+      true,
+    );
+    expect(footer.nextLabel).toBe("Continuing...");
+    expect(footer.nextInactive).toBe(true);
   });
 
   it("footer shows Complete when awaiting commit", () => {

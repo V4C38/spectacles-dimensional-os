@@ -17,7 +17,7 @@ import {
 } from "./Protocol";
 import { projectRuntimeStateFromHello } from "../Robot/RobotRuntimeModel";
 
-/** Bridge connection lifecycle, signals, and inbound message routing. */
+/** Bridge→app integration: inbound fan-out, link-state presentation, lifecycle signals. */
 export class BridgeRuntime {
   public readonly onBridgeReady = new Signal<void>();
   public readonly onBridgeStatusChanged = new Signal<BridgeStatusMessage>();
@@ -74,14 +74,8 @@ export class BridgeRuntime {
     this.robotRuntime?.tickFrame();
   }
 
-  public setBaseUrl(url: string): void {
-    if (this.bridgeClient) {
-      this.bridgeClient.baseUrl = url;
-    }
-  }
-
-  public getBaseUrl(): string {
-    return this.bridgeClient ? this.bridgeClient.baseUrl : "";
+  public tryConnect(ip: string): Promise<boolean> {
+    return this.bridgeClient?.tryConnect(ip) ?? Promise.resolve(false);
   }
 
   public getDefaultBridgeIp(): string {
@@ -98,22 +92,12 @@ export class BridgeRuntime {
     return this.bridgeClient?.loadIp() ?? null;
   }
 
-  public async checkConnection(): Promise<boolean> {
-    const client = this.bridgeClient;
-    if (!client) {
-      return false;
-    }
-    try {
-      await client.connect();
-      const ready = await client.waitForHello(3.0);
-      if (ready) {
-        client.requestStatus();
-      }
-      return ready;
-    } catch (error) {
-      print(`BridgeRuntime: checkConnection failed: ${error}`);
-      return false;
-    }
+  public getBaseUrl(): string {
+    return this.bridgeClient ? this.bridgeClient.baseUrl : "";
+  }
+
+  public normalizeBridgeIp(raw: string): string {
+    return BridgeClient.normalizeIp(raw);
   }
 
   public disconnect(): void {
@@ -188,6 +172,11 @@ export class BridgeRuntime {
     connected: boolean,
     status: BridgeStatusMessage | null,
   ): void {
+    const handshakeReady = this.bridgeClient?.isConnected() ?? false;
+    if (!handshakeReady) {
+      connected = false;
+      status = null;
+    }
     const next = deriveLinkState(connected, status);
     if (this.dimosState.snapshot.bridgeLinkState === next) {
       return;

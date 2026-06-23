@@ -1,4 +1,4 @@
-import { protocolMetersToLensCentimeters } from "../Bridge/Protocol";
+import { protocolMetersToLensCentimeters } from "../Bridge/domain";
 import { findChildRecursive } from "../UI/kit/UIKit";
 import { buildMockLidarPoints } from "./MockLidarPoints";
 

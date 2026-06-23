@@ -7,7 +7,7 @@
 // ================================================================
 
 import { RobotRuntimeState, createDefaultRobotRuntimeState } from "../Core/AppState";
-import { HelloMessage, protocolMetersToLensCentimeters } from "../Bridge/Protocol";
+import { HelloMessage, protocolMetersToLensCentimeters } from "../Bridge/domain";
 
 const DEFAULT_ROBOT_BODY_HEIGHT_M = 0.55;
 const LIDAR_FLOOR_CLEARANCE_CM = 0.5;

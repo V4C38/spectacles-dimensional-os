@@ -26,7 +26,7 @@ import {
   ProtocolParseError,
   PoseMessage,
   protocolMetersToLensCentimeters,
-} from "../Bridge/Protocol";
+} from "../Bridge/domain";
 import {
   isCapabilityAvailable,
   capabilityUnavailableReason,

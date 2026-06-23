@@ -298,7 +298,14 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
 
     @rpc
     def baseline_strafe_speed(self) -> float:
-        return 0.5
+        return 0.3
+
+    @rpc
+    def baseline_leg_duration_s(self, leg_index: int) -> float:
+        multipliers = (1.0, 2.0, 1.0)
+        from dimos.ar.registration.baseline import MOVE_LEG_S
+
+        return MOVE_LEG_S * multipliers[leg_index]
 
     @rpc
     def runtime_registration_profile(self) -> RuntimeRegistrationProfile:

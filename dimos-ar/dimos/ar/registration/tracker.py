@@ -363,6 +363,7 @@ class RobotAprilTagTracker:
         self._detector = create_aruco_detector(DEFAULT_APRILTAG_DICT)
         self._lock = threading.RLock()
         self._observations: deque[TagObservation] = deque(maxlen=self._config.window_max_obs)
+        self._waypoint_sample_positions: list[tuple[float, float, float]] = []
         self._active = False
         self._last_tag_detected = False
         self._last_tag_ids: list[int] = []
@@ -383,9 +384,45 @@ class RobotAprilTagTracker:
     def reset_window(self) -> None:
         with self._lock:
             self._observations.clear()
+            self._waypoint_sample_positions.clear()
             self._last_tag_detected = False
             self._last_tag_ids = []
             self._last_quality = None
+
+    def begin_waypoint_sample(self) -> None:
+        with self._lock:
+            self._waypoint_sample_positions.clear()
+
+    def record_waypoint_observation(self, obs: TagObservation) -> None:
+        mount = self._mounts.get(obs.tag_id)
+        if mount is None:
+            return
+        T_world_base = gravity_level_transform(
+            obs.T_world_tag @ np.linalg.inv(mount.T_base_tag)
+        )
+        pos = (
+            float(T_world_base[0, 3]),
+            float(T_world_base[1, 3]),
+            float(T_world_base[2, 3]),
+        )
+        with self._lock:
+            self._waypoint_sample_positions.append(pos)
+
+    def record_latest_waypoint_observation(self) -> bool:
+        with self._lock:
+            if not self._observations:
+                return False
+            obs = self._observations[-1]
+        self.record_waypoint_observation(obs)
+        return True
+
+    def latest_waypoint_robot_world_position(
+        self,
+    ) -> tuple[float, float, float] | None:
+        with self._lock:
+            if not self._waypoint_sample_positions:
+                return None
+            return self._waypoint_sample_positions[-1]
 
     def set_camera_info(self, info: CameraInfo) -> None:
         with self._lock:

@@ -11,7 +11,8 @@ import {
   BridgeStatusMessage,
   RegistrationPhase,
   RegistrationStatusMessage,
-} from "../Bridge/Protocol";
+} from "../Bridge/domain";
+export type { RegistrationStatusMessage } from "../Bridge/domain";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE, SnapOS2Styles } from "../UI/kit/UIKit";
 import { isRegistrationPreviewPhase } from "./SetupRegistrationPreview";
 
@@ -121,6 +122,10 @@ export function isRegistrationFailed(state: RegistrationViewState): boolean {
   return state.phase === "failed";
 }
 
+const MANUAL_CANDIDATE_SYNC_INTERVAL_S = 0.35;
+const REGISTRATION_STATUS_LOG_INTERVAL_S = 1.0;
+const NO_RESPONSE_STATUS_MSG = "Bridge not responding";
+
 export function buildRegistrationDetailText(state: RegistrationViewState): string {
   const parts: string[] = [];
   if (state.message) {
@@ -176,6 +181,14 @@ export function buildRegistrationDisplay(
         detailColor: COLOR_WHITE,
       };
     }
+    if (state.message === NO_RESPONSE_STATUS_MSG) {
+      return {
+        statusText: NO_RESPONSE_STATUS_MSG,
+        statusColor: COLOR_ERROR,
+        detailText: "Check that ./start.sh is running, then retry or switch to Manual pose",
+        detailColor: COLOR_WHITE,
+      };
+    }
     const tagStatus = state.tagVisible
       ? { text: "✅  Tag visible", color: COLOR_SUCCESS }
       : { text: "❌  Tag not visible", color: COLOR_ERROR };
@@ -217,6 +230,7 @@ export function getWizardFooterState(
   connected: boolean,
   registrationState: RegistrationViewState,
   commitInFlight: boolean,
+  motionAuthorizePending: boolean = false,
 ): WizardFooterState {
   let nextLabel = "Skip";
   let nextStyle = SnapOS2Styles.PrimaryNeutral;
@@ -244,8 +258,13 @@ export function getWizardFooterState(
         nextStyle = SnapOS2Styles.Primary;
       }
     } else if (registrationState.phase === "awaiting_motion") {
-      nextLabel = "Continue";
-      nextStyle = SnapOS2Styles.PrimaryNeutral;
+      if (motionAuthorizePending) {
+        nextLabel = "Continuing...";
+        nextInactive = true;
+      } else {
+        nextLabel = "Continue";
+        nextStyle = SnapOS2Styles.PrimaryNeutral;
+      }
     } else if (hasRegistrationCandidate(registrationState)) {
       nextLabel = "Complete";
       nextStyle = SnapOS2Styles.Primary;
@@ -270,10 +289,6 @@ export function getWizardFooterState(
     widePrevOffset: step === WizardStep.Register,
   };
 }
-
-const MANUAL_CANDIDATE_SYNC_INTERVAL_S = 0.35;
-const REGISTRATION_STATUS_LOG_INTERVAL_S = 1.0;
-const NO_RESPONSE_STATUS_MSG = "No response from bridge";
 
 export interface SetupRegistrationFlowCallbacks {
   beginManualRegistrationPlacementFromWizard: () => boolean;
@@ -353,7 +368,7 @@ export class SetupRegistrationFlow {
   public leave(): void {
     this._commitInFlight = false;
     this._lastManualCandidateSyncTime = -1;
-    this._registrationClient?.stop();
+    this._registrationClient?.stop({ notifyBridge: true });
     this._registrationClient?.cancelPlacement();
     this._registrationClient?.clearPose();
     this._robotRuntime?.applyInteractionFromState();
@@ -397,7 +412,7 @@ export class SetupRegistrationFlow {
       this._notify();
       return false;
     }
-    this._registrationClient?.stop();
+    this._registrationClient?.stop({ notifyBridge: true });
     this._callbacks.log("registration step skipped");
     return true;
   }
@@ -542,7 +557,7 @@ export class SetupRegistrationFlow {
     this._lastManualCandidateSyncTime = -1;
     this._state = createRegistrationViewState();
     this._registrationClient?.cancelPlacement();
-    this._registrationClient?.stop();
+    this._registrationClient?.stop({ notifyBridge: true });
     this._registrationClient?.clearPose();
     this._robotRuntime?.applyInteractionFromState();
     this._frameCapture?.setCaptureErrorHandler(() => {
@@ -558,7 +573,7 @@ export class SetupRegistrationFlow {
   private _beginManualMode(): void {
     this._commitInFlight = false;
     this._lastManualCandidateSyncTime = -1;
-    this._registrationClient?.stop();
+    this._registrationClient?.stop({ notifyBridge: true });
     this._state = createManualRegistrationState("editing");
     this._callbacks.refreshDescription();
 
@@ -568,7 +583,7 @@ export class SetupRegistrationFlow {
       );
       this._state = { ...this._state, phase: "editing", message: "" };
       this._registrationClient?.cancelPlacement();
-      this._registrationClient?.stop();
+      this._registrationClient?.stop({ notifyBridge: true });
       this._registrationClient?.clearPose();
       this._notify();
       return;

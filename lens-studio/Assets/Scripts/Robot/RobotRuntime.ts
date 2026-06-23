@@ -14,7 +14,7 @@ import {
   PoseCorrectionMessage,
   PoseMessage,
   protocolMetersToLensCentimeters,
-} from "../Bridge/Protocol";
+} from "../Bridge/domain";
 import { BridgeClient } from "../Bridge/BridgeClient";
 import { runtimeRenderOffsetCm } from "../Robot/RobotRuntimeModel";
 import { COLOR_WHITE } from "../UI/kit/UIKit";

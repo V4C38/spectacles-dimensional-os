@@ -11,12 +11,13 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
+from dimos.ar.bridge import adapter_rpc
 from dimos.ar.network.data_plane import (
     build_empty_path_payload,
     build_path_payload,
     normalize_nav_state,
 )
-from dimos.ar.network.error_codes import CONTROL_RPC_TIMEOUT, NAV_GOAL_STALLED
+from dimos.ar.network.error_codes import NAV_GOAL_STALLED
 from dimos.ar.network.protocol import GoalMessage, encode_nav_status, nav_phase_payload
 from dimos.ar.registration.tracker import _orientation_yaw_deg
 from dimos.ar.registration.transforms import Calibration
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 NAV_GOAL_PATH_TIMEOUT_S: float = 8.0
+NAV_GOAL_PUBLISH_TIMEOUT_S: float = 8.0
 NAV_RECOVERY_MAX_ATTEMPTS: int = 2
 NAV_WATCHDOG_POLL_INTERVAL_S: float = 0.5
 CONTROL_RPC_TIMEOUT_S: float = 1.0
@@ -134,16 +136,7 @@ class NavController:
         if not self._calibration.is_registered:
             logger.warning("goal ignored before registration")
             return
-        if self._nav_degraded:
-            logger.warning("goal rejected: navigation is unavailable for this session")
-            self._goal_failed = True
-            self._goal_reached = False
-            self._nav_error_code = NAV_GOAL_STALLED.code
-            self._nav_state = "idle"
-            self._nav_recovering = False
-            self._broadcast_empty_path(ts=msg.ts)
-            self.broadcast_nav_status(ts=msg.ts)
-            return
+        self._nav_degraded = False
         self._goal_reached = False
         self._goal_failed = False
         self._nav_error_code = None
@@ -175,6 +168,7 @@ class NavController:
         ).start()
 
     def on_cancel_goal(self, ts: float | None = None) -> None:
+        self._nav_degraded = False
         self._goal_reached = False
         self._goal_failed = False
         self._nav_error_code = None
@@ -194,11 +188,10 @@ class NavController:
         self._reset_goal_tracking(reset_recovery=True)
         self._broadcast_empty_path(ts=ts)
         self.broadcast_nav_status(ts=ts)
-        threading.Thread(
-            target=self._cancel_or_stop,
-            kwargs={"emergency": True},
-            daemon=True,
-        ).start()
+        adapter_rpc.run_in_thread(
+            lambda: self._cancel_or_stop(emergency=True),
+            name="ARBridge-emergency_stop",
+        )
 
     # ------------------------------------------------------------------
     # Stream handlers (called from ARBridge.handle_ar_*)
@@ -330,79 +323,54 @@ class NavController:
                 self._nav_recovery_attempts = 0
 
     def _cancel_goal_async(self) -> None:
-        threading.Thread(
-            target=self._cancel_or_stop,
-            kwargs={"emergency": False},
-            daemon=True,
-        ).start()
+        adapter_rpc.run_in_thread(
+            lambda: self._cancel_or_stop(emergency=False),
+            name="ARBridge-cancel_goal",
+        )
 
     def _cancel_or_stop(self, *, emergency: bool) -> None:
         if emergency:
-            try:
-                self._adapter.emergency_stop()
-            except Exception:
+            result, error = adapter_rpc.call_with_timeout(
+                self._adapter,
+                "emergency_stop",
+                timeout_s=CONTROL_RPC_TIMEOUT_S,
+            )
+            if error is not None:
                 logger.exception("XR emergency_stop failed")
+            elif result is None:
+                logger.warning(
+                    "XR emergency_stop timed out",
+                    timeout_s=CONTROL_RPC_TIMEOUT_S,
+                )
             return
         method_name = "cancel_goal"
-        result, error = self._call_adapter_with_timeout(method_name, CONTROL_RPC_TIMEOUT_S)
+        result, error = adapter_rpc.call_with_timeout(
+            self._adapter,
+            method_name,
+            timeout_s=CONTROL_RPC_TIMEOUT_S,
+        )
         if error is not None:
-            logger.exception("XR control command failed", emergency=emergency, error=str(error))
-            self._mark_control_rpc_failure(method_name, str(error))
+            logger.warning(
+                "XR control command failed",
+                emergency=emergency,
+                rpc=method_name,
+                error=str(error),
+            )
             return
         if result is None:
-            logger.error(
+            logger.warning(
                 "XR control command timed out",
                 emergency=emergency,
                 rpc=method_name,
                 timeout_s=CONTROL_RPC_TIMEOUT_S,
             )
-            self._mark_control_rpc_failure(method_name, "timeout")
-
-    def _call_adapter_with_timeout(
-        self,
-        method_name: str,
-        timeout_s: float,
-    ) -> tuple[bool | None, BaseException | None]:
-        done = threading.Event()
-        result: dict[str, bool | BaseException] = {}
-
-        def invoke() -> None:
-            try:
-                result["value"] = bool(getattr(self._adapter, method_name)())
-            except BaseException as exc:  # pragma: no cover - defensive thread boundary
-                result["error"] = exc
-            finally:
-                done.set()
-
-        threading.Thread(
-            target=invoke,
-            name=f"ARBridge-{method_name}",
-            daemon=True,
-        ).start()
-        if not done.wait(timeout_s):
-            return None, None
-        error = result.get("error")
-        if isinstance(error, BaseException):
-            return None, error
-        value = result.get("value")
-        return bool(value) if isinstance(value, bool) else None, None
-
-    def _mark_control_rpc_failure(self, rpc_name: str, reason: str) -> None:
-        self._nav_degraded = True
-        self._goal_reached = False
-        self._goal_failed = True
-        self._nav_error_code = CONTROL_RPC_TIMEOUT.code
-        self._nav_state = "idle"
-        self._nav_recovering = False
-        self._reset_goal_tracking(reset_recovery=False)
-        self._broadcast_empty_path()
-        self.broadcast_nav_status()
-        logger.error(
-            "XR navigation control degraded after adapter RPC failure",
-            rpc=rpc_name,
-            reason=reason,
-            error_code=CONTROL_RPC_TIMEOUT.code,
-        )
+            return
+        if result is False:
+            logger.warning(
+                "XR control command rejected by adapter",
+                emergency=emergency,
+                rpc=method_name,
+            )
 
     def _publish_nav_goal(
         self,
@@ -413,7 +381,19 @@ class NavController:
     ) -> None:
         """Publish goal to the adapter off the WebSocket event loop."""
         try:
-            if not self._adapter.send_nav_goal(goal):
+            published, error = adapter_rpc.call_with_timeout(
+                self._adapter,
+                "send_nav_goal",
+                goal,
+                timeout_s=NAV_GOAL_PUBLISH_TIMEOUT_S,
+            )
+            if error is not None:
+                raise error
+            if published is None:
+                raise TimeoutError(
+                    f"send_nav_goal timed out after {NAV_GOAL_PUBLISH_TIMEOUT_S}s"
+                )
+            if not published:
                 raise RuntimeError("adapter rejected goal")
             logger.info(
                 "XR navigation goal published",

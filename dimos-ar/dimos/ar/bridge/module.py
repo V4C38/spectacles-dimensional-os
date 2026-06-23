@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from dimos_lcm.std_msgs import Bool, String
 
-from dimos.ar.adapters.base import ARRobotAdapterSpec
+from dimos.ar.adapters.base import ARRobotAdapterSpec, RobotHandshake
 from dimos.ar.bridge.navigation import NavController
 from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.bridge.preview import PreviewService
@@ -31,6 +31,7 @@ from dimos.ar.network.protocol import (
 )
 from dimos.ar.network.websocket_server import ARWebSocketServer
 from dimos.ar.preview_planner import PreviewPlanner
+from dimos.ar.registration.motion_params import resolve_baseline_motion_params
 from dimos.ar.registration.refinement import RegisteredPoseRefiner
 from dimos.ar.registration.registry import WorldRegistry
 from dimos.ar.registration.session import RegistrationSession
@@ -115,6 +116,8 @@ class ARBridge(Module):  # type: ignore[misc]
     _preview: PreviewService
     _telemetry: TelemetryPublisher
     _ws_server: ARWebSocketServer
+    _robot_id: str
+    _connect_handshake: RobotHandshake
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -128,7 +131,9 @@ class ARBridge(Module):  # type: ignore[misc]
         super().build()
 
         robot_id = self._adapter.robot_id()
+        self._robot_id = robot_id
         handshake = self._adapter.handshake_payload()
+        self._connect_handshake = handshake
         runtime_profile = self._adapter.runtime_registration_profile()
 
         # Build LidarFilter with adapter-derived height bounds.
@@ -180,6 +185,12 @@ class ARBridge(Module):  # type: ignore[misc]
             runtime_correction_enabled=self.config.runtime_correction_enabled,
         )
         registry = WorldRegistry(self._calibration, self.tf.publish_static)
+        baseline_cap = handshake.capability_states.get("registration_april_odom_baseline")
+        baseline_motion_available = (
+            baseline_cap.available if baseline_cap is not None else False
+        )
+        assert self._loop is not None, "build() called before Module loop is assigned"
+        baseline_motion_params = resolve_baseline_motion_params(self._adapter)
         registration = RegistrationSession(
             robot_id=robot_id,
             sender=sender,
@@ -187,11 +198,14 @@ class ARBridge(Module):  # type: ignore[misc]
             odom=odom,
             status=status,
             tag_tracker=tag_tracker,
+            loop=self._loop,
             frame_max_age_s=self.config.frame_max_age_s,
             manual_registration_quality=self.config.manual_registration_quality,
             pose_refiner=pose_refiner,
             adapter=self._adapter,
             runtime_profile=runtime_profile,
+            baseline_motion_available=baseline_motion_available,
+            baseline_motion_params=baseline_motion_params,
         )
 
         nav = NavController(
@@ -222,8 +236,6 @@ class ARBridge(Module):  # type: ignore[misc]
             speed_horizon_s=runtime_profile.runtime_speed_horizon_s,
         )
 
-        assert self._loop is not None, "build() called before Module loop is assigned"
-
         def _on_emergency_stop(msg: EmergencyStopMessage) -> None:
             nav.on_emergency_stop(msg.ts)
             registration.on_emergency_stop()
@@ -236,7 +248,7 @@ class ARBridge(Module):  # type: ignore[misc]
 
         ws_server = ARWebSocketServer(
             port=self.config.port,
-            hello_supplier=self._adapter.handshake_payload,
+            hello_supplier=self._connect_hello,
             max_message_bytes=self.config.max_message_bytes,
             loop=self._loop,
             on_registration_command=registration.on_registration_command,
@@ -261,6 +273,10 @@ class ARBridge(Module):  # type: ignore[misc]
         self._preview = preview
         self._telemetry = telemetry
         self._ws_server = ws_server
+
+    def _connect_hello(self) -> RobotHandshake:
+        """Return the handshake cached at build() — must not RPC from the WS loop."""
+        return self._connect_handshake
 
     @rpc
     def start(self) -> None:
@@ -347,7 +363,7 @@ class ARBridge(Module):  # type: ignore[misc]
         self._sender.send_to(
             websocket,
             encode_runtime_snapshot(
-                robot_id=self._adapter.robot_id(),
+                robot_id=self._robot_id,
                 bridge=self._status.snapshot(),
                 nav=self._nav.nav_phase_dict(),
                 path=path,

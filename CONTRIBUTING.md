@@ -97,7 +97,11 @@ npm test
 ```
 
 - Default CI unit tests do not require DimOS installed or Lens Studio open.
-- Integration: `pytest dimos/ar/network/test_ws_integration.py -m integration` with the bridge already running from the DimOS `.venv`.
+- **Unit (Python):** `pytest -m "not integration"` includes protocol encode/decode tests and in-process WebSocket handshake tests (`test_ws_handshake.py`) — no `./start.sh` or robot required.
+- **Unit (Lens):** `npm test` in `lens-studio/Tests/` covers protocol parse/build helpers via Vitest.
+- **Integration:** `pytest dimos/ar/network/test_ws_integration.py -m integration` with the bridge already running from the DimOS `.venv`.
+
+When changing the protocol, update `PROTOCOL.md`, `protocol.py`, `Protocol.ts`, and the relevant inline tests on both sides in the same PR.
 
 ## License
 

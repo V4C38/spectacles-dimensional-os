@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable
+from concurrent.futures import Future
 import logging
 import os
 import threading
@@ -13,6 +14,7 @@ from typing import Any, cast
 import websockets
 import websockets.asyncio.server as ws_server
 
+from dimos.ar.network.inbound_dispatch import InboundDispatcher
 from dimos.ar.network.protocol import (
     CameraInfoMessage,
     CancelGoalMessage,
@@ -56,6 +58,7 @@ HelloSupplier = Callable[[], Any]
 InboundHandler = Callable[[InboundMessage, "ws_server.ServerConnection"], None]
 
 INBOUND_TEXT_LOG_INTERVAL_S = 1.0
+CAMERA_FRAME_LOG_INTERVAL_S = 2.0
 _THROTTLED_INBOUND_TYPES = frozenset({"registration_pose", "get_status", "goal"})
 PING_INTERVAL_S = 30
 PING_TIMEOUT_S = 30
@@ -123,7 +126,8 @@ class ARWebSocketServer:
         self.client_connected = threading.Event()
         self._connections: set[ws_server.ServerConnection] = set()
         self._outbound: dict[ws_server.ServerConnection, ClientSendQueue] = {}
-        self._background_tasks: set[asyncio.Task[None]] = set()
+        self._inbound_dispatcher = InboundDispatcher(loop=loop)
+        self._serve_future: Future[None] | None = None
 
     def _build_inbound_handlers(
         self,
@@ -176,7 +180,7 @@ class ARWebSocketServer:
         return self._port
 
     def start(self) -> None:
-        asyncio.run_coroutine_threadsafe(self._serve(), self._loop)
+        self._serve_future = asyncio.run_coroutine_threadsafe(self._serve(), self._loop)
         self._server_ready.wait()
 
     def stop(self) -> None:
@@ -184,8 +188,22 @@ class ARWebSocketServer:
             return
         if self._stop_event is not None:
             self._loop.call_soon_threadsafe(self._stop_event.set)
+        if not self._is_on_loop():
+            future = self._serve_future
+            if future is not None:
+                try:
+                    future.result(timeout=2.0)
+                except Exception as exc:
+                    logger.warning("XR WebSocket server stop did not finish cleanly", error=str(exc))
         self._server_ready.clear()
         self.client_connected.clear()
+        self._serve_future = None
+
+    def _is_on_loop(self) -> bool:
+        try:
+            return asyncio.get_running_loop() is self._loop
+        except RuntimeError:
+            return False
 
     async def _serve(self) -> None:
         self._stop_event = asyncio.Event()
@@ -194,6 +212,7 @@ class ARWebSocketServer:
         ws_logger.addFilter(_handshake_noise_filter)
 
         host = global_config.listen_host
+        self._inbound_dispatcher.start()
         try:
             async with ws_server.serve(
                 self._handler,
@@ -217,6 +236,8 @@ class ARWebSocketServer:
             if not self._server_ready.is_set():
                 self._server_ready.set()
             raise
+        finally:
+            await self._inbound_dispatcher.stop()
 
     async def _handler(self, websocket: ws_server.ServerConnection) -> None:
         req = getattr(websocket, "request", None)
@@ -230,12 +251,13 @@ class ARWebSocketServer:
         remote = getattr(websocket, "remote_address", None)
         logger.info("XR client connected", remote=str(remote))
         try:
-            hello = self._hello_supplier()
+            hello = await asyncio.to_thread(self._hello_supplier)
             await websocket.send(encode_hello(hello) + "\n")
             if self._on_status_connect is not None:
-                self._on_status_connect(websocket)
+                await asyncio.to_thread(self._on_status_connect, websocket)
             self.client_connected.set()
             _last_inbound_text_log: dict[str, float] = {}
+            _last_camera_frame_log = 0.0
             async for message in websocket:
                 try:
                     if isinstance(message, bytes):
@@ -251,6 +273,14 @@ class ARWebSocketServer:
                         if header.get("robot_id") != hello.robot_id:
                             raise ValueError(
                                 f"camera_frame robot_id mismatch: {header.get('robot_id')}"
+                            )
+                        now_mono = time.monotonic()
+                        if now_mono - _last_camera_frame_log >= CAMERA_FRAME_LOG_INTERVAL_S:
+                            _last_camera_frame_log = now_mono
+                            logger.info(
+                                "XR camera frame received",
+                                seq=int(header.get("seq", -1)),
+                                jpeg_bytes=len(jpeg),
                             )
                         await self._on_camera_frame(header, jpeg, websocket)
                         continue
@@ -275,7 +305,7 @@ class ARWebSocketServer:
                                 _last_inbound_text_log[msg_type] = now_mono
                             logger.info("XR inbound text message", type=msg_type)
                         inbound = decode_inbound(line, expected_robot_id=hello.robot_id)
-                        self._dispatch_inbound(inbound, websocket)
+                        await self._dispatch_inbound(inbound, websocket)
                 except ValueError as exc:
                     logger.warning("Invalid inbound WebSocket message", error=str(exc))
                 except Exception as exc:
@@ -297,29 +327,28 @@ class ARWebSocketServer:
             if self._on_disconnect is not None:
                 self._on_disconnect(websocket)
 
-    def _spawn_background(self, coro: Coroutine[Any, Any, None]) -> None:
-        task: asyncio.Task[None] = asyncio.create_task(coro)
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
-
-    def _dispatch_inbound(
+    async def _dispatch_inbound(
         self, inbound: InboundMessage, websocket: ws_server.ServerConnection
     ) -> None:
         if isinstance(inbound, PingMessage):
-            self._spawn_background(
-                websocket.send(
-                    encode_pong(
-                        robot_id=inbound.robot_id,
-                        client_ts=inbound.client_ts,
-                        bridge_ts=time.time(),
-                    )
-                    + "\n"
-                )
-            )
+            self._inbound_dispatcher.submit(inbound, websocket, self._send_pong)
             return
         handler = self._inbound_handlers.get(type(inbound))
-        if handler is not None:
-            handler(inbound, websocket)
+        self._inbound_dispatcher.submit(inbound, websocket, handler)
+
+    async def _send_pong(
+        self, inbound: InboundMessage, websocket: ws_server.ServerConnection
+    ) -> None:
+        if not isinstance(inbound, PingMessage):
+            return
+        await websocket.send(
+            encode_pong(
+                robot_id=inbound.robot_id,
+                client_ts=inbound.client_ts,
+                bridge_ts=time.time(),
+            )
+            + "\n"
+        )
 
     def schedule_send(self, text: str) -> None:
         asyncio.run_coroutine_threadsafe(self._enqueue_all(text), self._loop)

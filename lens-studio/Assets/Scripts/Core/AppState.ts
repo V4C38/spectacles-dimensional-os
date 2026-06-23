@@ -8,7 +8,7 @@ import {
   COLOR_WARN,
   COLOR_WHITE,
 } from "../UI/kit/UIKit";
-import { RegistrationProfile } from "../Bridge/Protocol";
+import { RegistrationProfile } from "../Bridge/domain";
 import {
   isFollowingMode,
   NAV_GOAL_MODE_LABELS,

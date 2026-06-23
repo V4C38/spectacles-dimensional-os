@@ -2,7 +2,7 @@ import {
   BridgeStatusMessage,
   PoseMessage,
   protocolMetersToLensCentimeters,
-} from "../Bridge/Protocol";
+} from "../Bridge/domain";
 import { RobotInteractionMode } from "../Core/AppState";
 
 export interface ManualAlignmentPose {

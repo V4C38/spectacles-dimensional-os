@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 import math
 import os
-import threading
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -21,10 +20,12 @@ from dimos.ar.network.protocol import (
     encode_camera_frame_ack,
 )
 from dimos.ar.registration.baseline import BaselineCollector, BaselineStatus
+from dimos.ar.registration.motion_params import BaselineMotionParams
 from dimos.ar.registration.refinement import RegisteredPoseRefiner
 from dimos.ar.registration.registry import WorldRegistry
 from dimos.ar.registration.tracker import (
     R_ALIGN,
+    FrameResult,
     RobotAprilTagTracker,
     build_camera_info,
 )
@@ -75,7 +76,12 @@ class FrameAdmission(StrEnum):
 
 
 class RegistrationSession:
-    """Owns registration session state and camera-frame processing during setup."""
+    """Owns registration session state and camera-frame processing during setup.
+
+    Registration commands are invoked from the WebSocket ORDERED dispatch lane.
+    The periodic status tick belongs to the bridge asyncio loop and is started
+    or stopped with ``run_coroutine_threadsafe`` when called off-loop.
+    """
 
     def __init__(
         self,
@@ -86,11 +92,14 @@ class RegistrationSession:
         odom: OdomBuffer,
         status: StatusService,
         tag_tracker: RobotAprilTagTracker,
+        loop: asyncio.AbstractEventLoop,
         frame_max_age_s: float,
         manual_registration_quality: float,
         pose_refiner: RegisteredPoseRefiner,
         adapter: ARRobotAdapterSpec | None = None,
         runtime_profile: RuntimeRegistrationProfile | None = None,
+        baseline_motion_available: bool = False,
+        baseline_motion_params: BaselineMotionParams | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
@@ -99,8 +108,10 @@ class RegistrationSession:
         self._status = status
         self._pose_refiner = pose_refiner
         self._tag_tracker = tag_tracker
+        self._loop = loop
         self._frame_max_age_s = frame_max_age_s
         self._manual_registration_quality = manual_registration_quality
+        self._baseline_motion_available = baseline_motion_available
 
         self._frame_in_flight = False
         self._session = _Session()
@@ -114,25 +125,35 @@ class RegistrationSession:
 
             self._runtime_profile = RuntimeRegistrationProfile()
 
-        self._broadcast_stop = threading.Event()
-        self._broadcast_thread: threading.Thread | None = None
+        self._broadcast_task: asyncio.Task[None] | None = None
+        self._broadcast_stop_requested = False
 
         self._baseline: BaselineCollector | None = (
-            BaselineCollector(adapter=adapter, on_status=self._on_baseline_status)
+            BaselineCollector(
+                adapter=adapter,
+                motion_available=baseline_motion_available,
+                motion_params=baseline_motion_params or BaselineMotionParams(),
+                on_status=self._on_baseline_status,
+            )
             if adapter is not None
             else None
         )
+        self._baseline_was_sampling = False
 
     def _on_baseline_status(self, baseline_status: BaselineStatus) -> None:
-        threading.Thread(
-            target=self._broadcast_status,
-            kwargs={"override": baseline_status},
-            daemon=True,
-        ).start()
+        if (
+            baseline_status.phase == RegistrationPhase.SAMPLING
+            and not self._baseline_was_sampling
+        ):
+            self._tag_tracker.begin_waypoint_sample()
+        self._baseline_was_sampling = baseline_status.phase == RegistrationPhase.SAMPLING
+        self._broadcast_status(override=baseline_status)
 
     def stop(self) -> None:
         self._tag_tracker.active = False
         self._stop_broadcast()
+        if self._baseline is not None:
+            self._baseline.shutdown()
 
     def on_registration_command(
         self, msg: RegistrationCommandMessage, websocket: ServerConnection
@@ -153,7 +174,7 @@ class RegistrationSession:
         self._session.mode = RegistrationMode(msg.mode)
 
         if self._session.mode == RegistrationMode.APRIL_ODOM_BASELINE:
-            if self._baseline is None or not self._baseline.motion_available:
+            if self._baseline is None or not self._baseline_motion_available:
                 logger.warning("registration_command start april_odom_baseline unavailable")
                 self._session.mode = None
                 self._broadcast_status(
@@ -179,18 +200,15 @@ class RegistrationSession:
         self._session.last_manual_odom_missing_log_mono = 0.0
         self._session.last_manual_candidate_log_mono = 0.0
         logger.info("XR registration started", mode=self._session.mode.value)
-        if self._session.mode == RegistrationMode.APRIL_ODOM_BASELINE:
-            self._broadcast_status(
-                phase=RegistrationPhase.SCANNING,
-                message="Look at the AprilTag on your robot",
-                capture=CaptureHint.STEADY,
-                ts=msg.ts,
-            )
         self._start_broadcast()
 
     def _handle_registration_command_authorize_motion(self, msg: RegistrationCommandMessage) -> None:
-        if self._baseline is not None:
-            self._baseline.authorize_motion()
+        if self._baseline is None:
+            logger.warning("authorize_motion ignored: no baseline")
+            return
+        self._baseline.authorize_motion()
+        self._broadcast_status(ts=msg.ts)
+        logger.info("XR registration authorize_motion handled")
 
     def _handle_registration_command_stop(self, msg: RegistrationCommandMessage) -> None:
         if self._baseline is not None:
@@ -203,8 +221,6 @@ class RegistrationSession:
         self._stop_broadcast()
         self._clear_session()
         if not was_active:
-            if self._registry.calibration.is_registered:
-                self._clear_committed_registration()
             return
         logger.info("XR registration stopped")
         self._broadcast_status(
@@ -214,12 +230,6 @@ class RegistrationSession:
             mode=session_mode,
             ts=msg.ts,
         )
-
-    def _clear_committed_registration(self) -> None:
-        self._registry.clear()
-        self._status.set_registered(False)
-        self._status.broadcast()
-        logger.info("XR committed registration cleared")
 
     def on_emergency_stop(self) -> None:
         if self._baseline is not None:
@@ -322,6 +332,7 @@ class RegistrationSession:
             self._apply_tracker_update(
                 ts=float(header.get("ts", time.time())),
                 resolved_odom=resolved_odom,
+                frame_result=result,
             )
             if registered:
                 self._pose_refiner.maybe_log_moving_robot_diag(
@@ -417,8 +428,6 @@ class RegistrationSession:
                     capture=CaptureHint.OFF,
                 )
             return FrameAdmission.ACK_ONLY
-        if self._baseline is not None and self._baseline.is_active and not self._baseline.is_sampling:
-            return FrameAdmission.ACK_ONLY
         return FrameAdmission.PROCESS
 
     def _send_frame_ack(self, header: dict[str, Any]) -> None:
@@ -441,35 +450,63 @@ class RegistrationSession:
         return "Look at the AprilTag on your robot"
 
     def _start_broadcast(self) -> None:
-        self._stop_broadcast()
-        self._broadcast_stop.clear()
-
-        def loop() -> None:
-            while not self._broadcast_stop.wait(STATUS_BROADCAST_INTERVAL_S):
-                if self._session.mode is None:
-                    break
-                if self._baseline is not None and self._baseline.is_active:
-                    self._baseline.tick(
-                        obs_count=self._tag_tracker.observation_count(),
-                        latest_obs_pos_world=None,
-                        latest_odom=self._odom.latest(),
-                    )
-                    self._maybe_finish_baseline()
-                    if self._session.mode is None or self._broadcast_stop.is_set():
-                        break
-                self._broadcast_status()
-
-        self._broadcast_thread = threading.Thread(
-            target=loop,
-            name="ar-registration-status",
-            daemon=True,
+        if not self._loop.is_running():
+            return
+        if self._is_on_loop():
+            asyncio.create_task(self._start_broadcast_on_loop())
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            self._start_broadcast_on_loop(),
+            self._loop,
         )
-        self._broadcast_thread.start()
+        try:
+            future.result(timeout=1.0)
+        except Exception:
+            logger.exception("registration broadcast task start failed")
 
-    def _maybe_finish_baseline(self) -> None:
+    async def _start_broadcast_on_loop(self) -> None:
+        await self._cancel_broadcast_on_loop()
+        self._broadcast_stop_requested = False
+        self._broadcast_task = asyncio.create_task(
+            self._broadcast_loop(),
+            name="ar-registration-status",
+        )
+
+    async def _broadcast_loop(self) -> None:
+        try:
+            while not self._broadcast_stop_requested:
+                await asyncio.sleep(STATUS_BROADCAST_INTERVAL_S)
+                try:
+                    if self._session.mode is None:
+                        break
+                    if (
+                        self._session.mode == RegistrationMode.APRIL_ODOM_BASELINE
+                        and self._baseline is not None
+                    ):
+                        if self._baseline.is_active:
+                            self._baseline.tick(
+                                obs_count=self._tag_tracker.observation_count(),
+                                latest_obs_pos_world=None,
+                            )
+                        await self._maybe_finish_baseline()
+                        if self._session.mode is None or self._broadcast_stop_requested:
+                            break
+                    self._broadcast_status()
+                except Exception:
+                    logger.exception("registration broadcast tick failed")
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if asyncio.current_task() is self._broadcast_task:
+                self._broadcast_task = None
+
+    async def _maybe_finish_baseline(self) -> None:
         if self._baseline is None or not self._baseline.is_done:
             return
-        solve = self._tag_tracker.current_solve(min_baseline_m=0.0)
+        solve = await asyncio.to_thread(
+            self._tag_tracker.current_solve,
+            min_baseline_m=0.0,
+        )
         if solve is not None:
             logger.info("BaselineCollector DONE — auto-committing registration")
             candidate = RegistrationCandidate(
@@ -491,14 +528,43 @@ class RegistrationSession:
             )
 
     def _stop_broadcast(self) -> None:
-        self._broadcast_stop.set()
-        thread = self._broadcast_thread
-        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
-            thread.join(timeout=1.0)
-        self._broadcast_thread = None
+        if not self._loop.is_running():
+            return
+        if self._is_on_loop():
+            asyncio.create_task(self._cancel_broadcast_on_loop())
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            self._cancel_broadcast_on_loop(),
+            self._loop,
+        )
+        try:
+            future.result(timeout=1.0)
+        except Exception:
+            logger.exception("registration broadcast task stop failed")
+
+    async def _cancel_broadcast_on_loop(self) -> None:
+        self._broadcast_stop_requested = True
+        task = self._broadcast_task
+        if task is None:
+            return
+        if task is asyncio.current_task():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        self._broadcast_task = None
+
+    def _is_on_loop(self) -> bool:
+        try:
+            return asyncio.get_running_loop() is self._loop
+        except RuntimeError:
+            return False
 
     def _clear_session(self) -> None:
         self._tag_tracker.reset_window()
+        self._baseline_was_sampling = False
         self._session = _Session()
         if self._baseline is not None:
             self._baseline.reset_to_idle()
@@ -576,23 +642,32 @@ class RegistrationSession:
         *,
         ts: float | None = None,
         resolved_odom: OdomSample | None = None,
+        frame_result: FrameResult | None = None,
     ) -> None:
         if self._tag_tracker.active:
             if self._baseline is not None:
-                frame_result_pos: tuple[float, float, float] | None = None
-                if self._tag_tracker.last_tag_detected:
-                    pose_estimate = self._tag_tracker.robot_world_pose_estimate()
-                    if pose_estimate is not None:
-                        frame_result_pos = pose_estimate[0]
-                self._baseline.tick(
-                    obs_count=self._tag_tracker.observation_count(),
-                    latest_obs_pos_world=frame_result_pos,
-                    latest_odom=self._odom.latest(),
-                )
-            if self._session.last_status is None or self._session.last_status.phase in (
-                RegistrationPhase.SCANNING,
-            ):
+                if frame_result is not None and frame_result.observations_added > 0:
+                    tick_pos: tuple[float, float, float] | None = None
+                    if self._baseline.is_sampling:
+                        self._tag_tracker.record_latest_waypoint_observation()
+                        tick_pos = self._tag_tracker.latest_waypoint_robot_world_position()
+                    elif self._baseline.is_estimating:
+                        pose = self._tag_tracker.robot_world_pose_estimate(
+                            max_observations=1,
+                        )
+                        if pose is not None:
+                            tick_pos = pose[0]
+                    if tick_pos is not None:
+                        self._baseline.tick(
+                            obs_count=self._tag_tracker.observation_count(),
+                            latest_obs_pos_world=tick_pos,
+                        )
                 self._broadcast_status()
+            else:
+                if self._session.last_status is None or self._session.last_status.phase in (
+                    RegistrationPhase.SCANNING,
+                ):
+                    self._broadcast_status()
             return
         self._pose_refiner.apply_tracker_update(
             ts=ts,
@@ -602,7 +677,11 @@ class RegistrationSession:
     def _preview_pose(self) -> dict[str, Any] | None:
         if self._session.mode != RegistrationMode.APRIL_ODOM_BASELINE:
             return None
-        pose_result = self._tag_tracker.robot_world_pose_estimate(max_observations=2)
+        prev = self._session.last_status
+        max_obs = 2
+        if prev is not None and prev.phase == RegistrationPhase.MOVING:
+            max_obs = 1
+        pose_result = self._tag_tracker.robot_world_pose_estimate(max_observations=max_obs)
         if pose_result is None or len(pose_result) < 3:
             return None
         pos, ori, _conf = pose_result
@@ -629,7 +708,12 @@ class RegistrationSession:
             prev = self._session.last_status
             effective_phase = phase or (prev.phase if prev is not None else RegistrationPhase.IDLE)
             effective_capture = capture or (prev.capture if prev is not None else CaptureHint.OFF)
-            effective_message = message or self._default_message()
+            if message:
+                effective_message = message
+            elif prev is not None:
+                effective_message = prev.message
+            else:
+                effective_message = self._default_message()
             motion = prev.motion if prev is not None and phase is None else None
 
         if tag_visible is None and effective_mode == RegistrationMode.APRIL_ODOM_BASELINE:

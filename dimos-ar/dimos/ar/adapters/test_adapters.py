@@ -162,7 +162,7 @@ def test_g1_robot_id_and_model() -> None:
 def test_go2_baseline_strafe_speed_matches_teleop() -> None:
     adapter = _make_go2_adapter()
 
-    assert Go2AdapterModule.baseline_strafe_speed(adapter) == 0.5
+    assert Go2AdapterModule.baseline_strafe_speed(adapter) == 0.3
 
 
 def test_g1_baseline_motion_available_and_capability_follow_cmd_vel_transport() -> None:

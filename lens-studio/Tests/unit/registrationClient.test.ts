@@ -13,6 +13,7 @@ function makeBridgeClient() {
     onRegistrationStatus: { add: vi.fn() },
     onConnectionChanged: { add: vi.fn() },
     onHello: { add: vi.fn() },
+    onBridgeStatus: { add: vi.fn() },
   };
 }
 
@@ -130,12 +131,121 @@ describe("RegistrationClient", () => {
     expect(bridge.sendRegistrationCommand).toHaveBeenCalledWith("stop");
   });
 
-  it("stop without notifyBridge no-ops when no local session", () => {
+  it("stop without notifyBridge does not send bridge command", () => {
     const bridge = makeBridgeClient();
     const client = new RegistrationClient(bridge as any, null, null);
 
     client.stop();
 
     expect(bridge.sendRegistrationCommand).not.toHaveBeenCalled();
+  });
+
+  it("stop after succeeded registration_status does not notify bridge", () => {
+    const bridge = makeBridgeClient();
+    const frameCapture = makeFrameCapture();
+    const client = new RegistrationClient(bridge as any, frameCapture as any, null);
+    client.start("manual_pose");
+    client.commit();
+
+    let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
+    bridge.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
+      statusHandler = handler;
+    });
+    client.bind();
+
+    statusHandler({
+      type: "registration_status",
+      ts: 1,
+      robot_id: "go2",
+      mode: "manual_pose",
+      phase: "succeeded",
+      capture: "off",
+      message: "Manual registration committed",
+    });
+
+    client.stop();
+
+    expect(bridge.sendRegistrationCommand).not.toHaveBeenCalledWith("stop");
+  });
+
+  it("clears awaitingCommit on bridge_status registered", () => {
+    const bridge = makeBridgeClient();
+    const client = new RegistrationClient(bridge as any, null, null);
+    client.start("manual_pose");
+    client.commit();
+
+    let bridgeStatusHandler: (msg: { registered: boolean }) => void = () => {};
+    bridge.onBridgeStatus.add.mockImplementation((handler: typeof bridgeStatusHandler) => {
+      bridgeStatusHandler = handler;
+    });
+    client.bind();
+
+    bridgeStatusHandler({ registered: true });
+    client.stop();
+
+    expect(bridge.sendRegistrationCommand).not.toHaveBeenCalledWith("stop");
+  });
+
+  it("requestMotionAuthorization sets pending and sends authorize_motion", () => {
+    const bridge = makeBridgeClient();
+    const client = new RegistrationClient(bridge as any, null, null);
+
+    expect(client.requestMotionAuthorization()).toBe(true);
+    expect(client.motionAuthorizePending).toBe(true);
+    expect(bridge.sendRegistrationCommand).toHaveBeenCalledWith("authorize_motion");
+  });
+
+  it("requestMotionAuthorization blocks duplicate calls while pending", () => {
+    const bridge = makeBridgeClient();
+    const client = new RegistrationClient(bridge as any, null, null);
+
+    expect(client.requestMotionAuthorization()).toBe(true);
+    expect(client.requestMotionAuthorization()).toBe(false);
+    expect(bridge.sendRegistrationCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears motion authorize pending when phase leaves awaiting_motion", () => {
+    const bridge = makeBridgeClient();
+    const client = new RegistrationClient(bridge as any, null, null);
+    client.start("april_odom_baseline");
+    client.requestMotionAuthorization();
+
+    let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
+    bridge.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
+      statusHandler = handler;
+    });
+    client.bind();
+
+    statusHandler({
+      type: "registration_status",
+      ts: 1,
+      robot_id: "go2",
+      mode: "april_odom_baseline",
+      phase: "moving",
+      capture: "hold",
+      message: "Moving",
+    });
+
+    expect(client.motionAuthorizePending).toBe(false);
+  });
+
+  it("stop clears motion authorize pending", () => {
+    const bridge = makeBridgeClient();
+    const client = new RegistrationClient(bridge as any, null, null);
+    client.requestMotionAuthorization();
+
+    client.stop({ notifyBridge: true });
+
+    expect(client.motionAuthorizePending).toBe(false);
+  });
+
+  it("start clears motion authorize pending", () => {
+    const bridge = makeBridgeClient();
+    const client = new RegistrationClient(bridge as any, null, null);
+    client.requestMotionAuthorization();
+
+    client.start("april_odom_baseline");
+
+    expect(client.motionAuthorizePending).toBe(false);
   });
 });

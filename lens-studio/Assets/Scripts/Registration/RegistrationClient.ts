@@ -10,7 +10,7 @@ import {
   CaptureHint,
   RegistrationMode,
   RegistrationStatusMessage,
-} from "../Bridge/Protocol";
+} from "../Bridge/domain";
 import { Signal } from "../Core/Utilities";
 import { RobotMarker } from "../Robot/RobotMarker";
 import { ManualPoseCorrection } from "./ManualPoseCorrection";
@@ -58,6 +58,7 @@ export class RegistrationClient {
   } | null = null;
   private _deps: RegistrationClientDeps | null = null;
   private _bound = false;
+  private _motionAuthorizePending = false;
 
   public initialize(deps: RegistrationClientDeps): void {
     this._deps = deps;
@@ -81,11 +82,17 @@ export class RegistrationClient {
         this._tryStartBridgeSession(this._intent);
       }
     });
+    this.bridgeClient.onBridgeStatus.add((msg) => {
+      if (this._awaitingCommit && msg.registered) {
+        this._awaitingCommit = false;
+      }
+    });
   }
 
   public start(mode: RegistrationMode): void {
     this._intent = mode;
     this._awaitingCommit = false;
+    this._motionAuthorizePending = false;
     this._lastStatusTime = -1;
     this._lastSubmittedManualPose = null;
     this._tryStartBridgeSession(mode);
@@ -101,18 +108,38 @@ export class RegistrationClient {
   }
 
   public authorizeMotion(): void {
-    this.bridgeClient?.sendRegistrationCommand("authorize_motion");
+    this.requestMotionAuthorization();
+  }
+
+  public requestMotionAuthorization(): boolean {
+    if (this._motionAuthorizePending) {
+      return false;
+    }
+    if (!this.bridgeClient) {
+      print("RegistrationClient: requestMotionAuthorization — bridge unavailable");
+      return false;
+    }
+    this._motionAuthorizePending = true;
+    const sent = this.bridgeClient.sendRegistrationCommand("authorize_motion");
+    if (!sent) {
+      this._motionAuthorizePending = false;
+      print("RegistrationClient: requestMotionAuthorization — send failed");
+      return false;
+    }
+    print("RegistrationClient: requestMotionAuthorization sent");
+    return true;
+  }
+
+  public get motionAuthorizePending(): boolean {
+    return this._motionAuthorizePending;
   }
 
   public stop(options?: { notifyBridge?: boolean }): void {
-    const hasLocalSession = this._intent !== null || this._awaitingCommit;
-    const notifyBridge = options?.notifyBridge ?? hasLocalSession;
-    if (!hasLocalSession && options?.notifyBridge !== true) {
-      return;
-    }
+    const notifyBridge = options?.notifyBridge ?? false;
     const wasBaseline = this._intent === "april_odom_baseline";
     this._intent = null;
     this._awaitingCommit = false;
+    this._motionAuthorizePending = false;
     this._lastStatusTime = -1;
     this._lastSubmittedManualPose = null;
     if (notifyBridge && this.bridgeClient?.isConnected()) {
@@ -306,6 +333,9 @@ export class RegistrationClient {
 
   private _onRegistrationStatus = (msg: RegistrationStatusMessage): void => {
     this._lastStatusTime = getTime();
+    if (msg.phase !== "awaiting_motion") {
+      this._motionAuthorizePending = false;
+    }
     if (msg.phase === "failed" && (this._intent !== null || this._awaitingCommit)) {
       print(
         `RegistrationClient: registration_status failed "${msg.message || "unknown"}"`,

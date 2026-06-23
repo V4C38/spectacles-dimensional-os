@@ -2,36 +2,55 @@
 
 from __future__ import annotations
 
-import math
 import threading
+import time
 from unittest.mock import MagicMock, patch
 
 from dimos.ar.registration.baseline import (
-    MOVE_LEG_MAX_S,
     MOVE_LEG_S,
-    MOVE_LEG_TARGET_M,
     SAMPLE_MIN_OBS,
+    SAMPLE_SETTLE_S,
     BaselineCollector,
+    BaselineStatus,
     _BaselineState,
     _MovePhase,
 )
-from dimos.ar.registration.transforms import OdomSample
+from dimos.ar.registration.motion_params import BaselineMotionParams
+from dimos.ar.registration.types import CaptureHint, RegistrationPhase
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
 
 def _make_adapter(*, available: bool = True) -> MagicMock:
-    adapter = MagicMock()
-    adapter.baseline_motion_available.return_value = available
-    adapter.baseline_strafe_speed.return_value = 0.5
-    adapter.baseline_set_lateral_velocity.return_value = True
+    adapter = MagicMock(
+        baseline_motion_available=MagicMock(return_value=available),
+        baseline_strafe_speed=MagicMock(return_value=0.3),
+        baseline_set_lateral_velocity=MagicMock(return_value=True),
+    )
     return adapter
 
 
-def _make_driver(*, available: bool = True) -> tuple[BaselineCollector, MagicMock]:
+def _make_driver(
+    *,
+    available: bool = True,
+    motion_params: BaselineMotionParams | None = None,
+) -> tuple[BaselineCollector, MagicMock]:
     adapter = _make_adapter(available=available)
-    driver = BaselineCollector(adapter=adapter)
+    driver = BaselineCollector(
+        adapter=adapter,
+        motion_available=available,
+        motion_params=motion_params or BaselineMotionParams(),
+    )
     return driver, adapter
+
+
+def _wait_for_velocity(adapter: MagicMock, expected: float) -> None:
+    for _ in range(100):
+        if adapter.baseline_set_lateral_velocity.call_args is not None:
+            if adapter.baseline_set_lateral_velocity.call_args.args == (expected,):
+                return
+        time.sleep(0.01)
+    adapter.baseline_set_lateral_velocity.assert_called_with(expected)
 
 
 # ── safety: no confirm → no velocity ─────────────────────────────────────────
@@ -66,7 +85,7 @@ def test_confirm_enters_move_directly() -> None:
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
     assert driver.state == _BaselineState.MOVE
-    adapter.baseline_set_lateral_velocity.assert_called_with(0.5)
+    _wait_for_velocity(adapter, 0.3)
 
 
 # ── happy path: full 3-leg stop-and-sample sequence ──────────────────────────
@@ -77,21 +96,17 @@ def _stable_pos(base: float = 1.0) -> list[tuple[float, float, float]]:
     return [(base + i * 0.001, 0.0, -2.0) for i in range(SAMPLE_MIN_OBS)]
 
 
-def _odom(x: float, y: float, yaw_rad: float = 0.0) -> OdomSample:
-    half_yaw = yaw_rad * 0.5
-    return OdomSample(
-        position=(x, y, 0.0),
-        orientation=(0.0, 0.0, math.sin(half_yaw), math.cos(half_yaw)),
-    )
-
-
 def _drive_through_sample(
     driver: BaselineCollector,
     expected_leg_after: int | None,
 ) -> None:
     """Deliver stable tag observations until the driver leaves the SAMPLE phase."""
-    for pos in _stable_pos():
-        driver.tick(obs_count=SAMPLE_MIN_OBS, latest_obs_pos_world=pos)
+    settle_mono = driver._sample_settle_mono
+    assert settle_mono is not None
+    with patch("dimos.ar.registration.baseline.time") as mt:
+        mt.monotonic.return_value = settle_mono + SAMPLE_SETTLE_S + 0.01
+        for pos in _stable_pos():
+            driver.tick(obs_count=SAMPLE_MIN_OBS, latest_obs_pos_world=pos)
     if expected_leg_after is None:
         assert driver.state == _BaselineState.DONE
     else:
@@ -118,7 +133,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     # --- Sample 0: deliver stable observations ---
     _drive_through_sample(driver, expected_leg_after=1)
     assert driver.state == _BaselineState.MOVE
-    adapter.baseline_set_lateral_velocity.assert_called_with(-0.5)
+    _wait_for_velocity(adapter, -0.3)
 
     # --- Leg 1 completes (2× duration) ---
     t1 = driver._move_start_mono
@@ -131,7 +146,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     # --- Sample 1 ---
     _drive_through_sample(driver, expected_leg_after=2)
     assert driver.state == _BaselineState.MOVE
-    adapter.baseline_set_lateral_velocity.assert_called_with(0.5)
+    _wait_for_velocity(adapter, 0.3)
 
     # --- Leg 2 completes (1× duration) ---
     t2 = driver._move_start_mono
@@ -144,88 +159,68 @@ def test_happy_path_full_3_leg_sequence() -> None:
     # --- Sample 2 → DONE ---
     _drive_through_sample(driver, expected_leg_after=None)
     assert driver.state == _BaselineState.DONE
-    adapter.baseline_set_lateral_velocity.assert_called_with(0.0)
+    _wait_for_velocity(adapter, 0.0)
 
 
-def test_leg_completion_uses_odom_lateral_displacement_when_available() -> None:
-    driver, _adapter = _make_driver()
-    driver.start()
-    _advance_to_awaiting_confirm(driver)
-    driver.authorize_motion()
-    assert driver.state == _BaselineState.MOVE
-
-    # First odom sample establishes the start pose; second reaches the lateral target.
-    driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0))
-    driver.tick(
-        obs_count=0,
-        latest_obs_pos_world=None,
-        latest_odom=_odom(0.0, MOVE_LEG_TARGET_M + 0.01),
+def test_leg_phase_emits_steady_capture_not_hold() -> None:
+    """LEG motion must request steady capture so Lens keeps tracking during strafe."""
+    statuses: list[BaselineStatus] = []
+    adapter = _make_adapter()
+    driver = BaselineCollector(
+        adapter=adapter,
+        motion_available=True,
+        motion_params=BaselineMotionParams(),
+        on_status=statuses.append,
     )
-    assert driver._move_phase == _MovePhase.SAMPLE
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    driver.authorize_motion()
+
+    moving_statuses = [s for s in statuses if s.phase == RegistrationPhase.MOVING]
+    assert moving_statuses, "authorize_motion must emit MOVING status"
+    assert moving_statuses[-1].capture == CaptureHint.STEADY
+    assert moving_statuses[-1].capture != CaptureHint.HOLD
 
 
-def test_leg_completion_uses_ground_displacement_with_large_yaw_change() -> None:
+def test_odom_present_does_not_shorten_leg() -> None:
+    """Regression: bad/jumpy odom must not end a leg before the timer fires."""
+    from dimos.ar.registration.transforms import OdomSample
+
     driver, _adapter = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
 
-    driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0, 0.0))
-    driver.tick(
-        obs_count=0,
-        latest_obs_pos_world=None,
-        latest_odom=_odom(0.05, MOVE_LEG_TARGET_M + 0.02, math.radians(35.0)),
-    )
-
-    assert driver.state == _BaselineState.MOVE
-    assert driver._move_phase == _MovePhase.SAMPLE
-
-
-def test_leg_watchdog_advances_without_abort_when_odom_target_not_reached() -> None:
-    driver, _adapter = _make_driver()
-    driver.start()
-    _advance_to_awaiting_confirm(driver)
-    driver.authorize_motion()
-
-    driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0))
     t0 = driver._move_start_mono
     assert t0 is not None
+    odom_jump = OdomSample(position=(10.0, 10.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
     with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t0 + MOVE_LEG_MAX_S + 0.1
-        driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0))
-
-    assert driver.state == _BaselineState.MOVE
-    assert driver._move_phase == _MovePhase.SAMPLE
-
-
-def test_long_middle_leg_uses_doubled_ground_displacement_target() -> None:
-    driver, _adapter = _make_driver()
-    driver.start()
-    _advance_to_awaiting_confirm(driver)
-    driver.authorize_motion()
-
-    # Finish leg 1 and sample so leg 2 starts.
-    t0 = driver._move_start_mono
-    assert t0 is not None
-    with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
-        driver.tick(obs_count=0, latest_obs_pos_world=None)
-    _drive_through_sample(driver, expected_leg_after=1)
-    assert driver._move_leg_index == 1
-
-    driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=_odom(0.0, 0.0))
-    driver.tick(
-        obs_count=0,
-        latest_obs_pos_world=None,
-        latest_odom=_odom(0.0, MOVE_LEG_TARGET_M * 1.8),
-    )
+        mt.monotonic.return_value = t0 + 0.1
+        driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=odom_jump)
     assert driver._move_phase == _MovePhase.LEG
 
-    driver.tick(
-        obs_count=0,
-        latest_obs_pos_world=None,
-        latest_odom=_odom(0.0, MOVE_LEG_TARGET_M * 2.0 + 0.02),
-    )
+    with patch("dimos.ar.registration.baseline.time") as mt:
+        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=odom_jump)
+    assert driver._move_phase == _MovePhase.SAMPLE
+
+
+def test_time_based_leg_completion_when_odom_absent() -> None:
+    driver, _adapter = _make_driver()
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    driver.authorize_motion()
+
+    t0 = driver._move_start_mono
+    assert t0 is not None
+    with patch("dimos.ar.registration.baseline.time") as mt:
+        mt.monotonic.return_value = t0 + MOVE_LEG_S - 0.1
+        driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=None)
+    assert driver._move_phase == _MovePhase.LEG
+
+    with patch("dimos.ar.registration.baseline.time") as mt:
+        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=None)
     assert driver._move_phase == _MovePhase.SAMPLE
 
 
@@ -288,9 +283,13 @@ def test_sample_unstable_obs_do_not_advance() -> None:
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE
 
-    # Deliver spread-out (unstable) positions
-    for i in range(SAMPLE_MIN_OBS + 2):
-        driver.tick(obs_count=i, latest_obs_pos_world=(float(i) * 0.1, 0.0, -2.0))
+    # Deliver spread-out (unstable) positions after settle
+    settle_mono = driver._sample_settle_mono
+    assert settle_mono is not None
+    with patch("dimos.ar.registration.baseline.time") as mt:
+        mt.monotonic.return_value = settle_mono + SAMPLE_SETTLE_S + 0.01
+        for i in range(SAMPLE_MIN_OBS + 2):
+            driver.tick(obs_count=i, latest_obs_pos_world=(float(i) * 0.1, 0.0, -2.0))
     assert driver._move_phase == _MovePhase.SAMPLE, "Unstable obs must not advance the driver"
 
 
@@ -324,7 +323,7 @@ def test_abort_during_move_publishes_zero_velocity() -> None:
 
     driver.stop()
     assert driver.state == _BaselineState.IDLE
-    adapter.baseline_set_lateral_velocity.assert_called_with(0.0)
+    _wait_for_velocity(adapter, 0.0)
 
 
 def test_restart_after_stop() -> None:
@@ -347,6 +346,8 @@ def test_reset_to_idle_goes_to_idle_silently() -> None:
     adapter = _make_adapter()
     driver = BaselineCollector(
         adapter=adapter,
+        motion_available=True,
+        motion_params=BaselineMotionParams(),
         on_status=lambda s: status_changes.append(s.phase.value),
     )
     driver.start()
@@ -369,7 +370,7 @@ def test_reset_to_idle_stops_motion() -> None:
 
     driver.reset_to_idle()
     assert driver.state == _BaselineState.IDLE
-    adapter.baseline_set_lateral_velocity.assert_called_with(0.0)
+    _wait_for_velocity(adapter, 0.0)
 
 
 # ── concurrency ───────────────────────────────────────────────────────────────
@@ -415,6 +416,13 @@ def test_is_sampling_false_during_leg() -> None:
     assert driver.is_sampling is False
 
 
+def test_is_estimating_true_during_estimating() -> None:
+    driver, _ = _make_driver()
+    driver.start()
+    assert driver.is_estimating is True
+    assert driver.is_sampling is False
+
+
 def test_is_sampling_true_during_sample() -> None:
     driver, _ = _make_driver()
     driver.start()
@@ -427,3 +435,69 @@ def test_is_sampling_true_during_sample() -> None:
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE
     assert driver.is_sampling is True
+
+
+def test_motion_params_are_injected_not_fetched_at_runtime() -> None:
+    """Adapter motion-param RPC must not happen during start/tick/authorize."""
+    driver, adapter = _make_driver()
+    driver.start()
+
+    _advance_to_awaiting_confirm(driver)
+    driver.authorize_motion()
+    for _ in range(10):
+        driver.tick(obs_count=0, latest_obs_pos_world=None)
+
+    adapter.baseline_strafe_speed.assert_not_called()
+
+
+def test_injected_motion_params_drive_strafe_speed() -> None:
+    adapter = _make_adapter()
+    params = BaselineMotionParams(strafe_speed=0.2)
+    driver = BaselineCollector(
+        adapter=adapter,
+        motion_available=True,
+        motion_params=params,
+    )
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    driver.authorize_motion()
+    _wait_for_velocity(adapter, 0.2)
+
+
+def test_tick_not_starved_during_authorize_motion() -> None:
+    """Broadcast-style tick must complete while authorize_motion runs."""
+    driver, _ = _make_driver()
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+
+    authorize_done = threading.Event()
+    tick_done = threading.Event()
+    errors: list[Exception] = []
+
+    def authorize() -> None:
+        try:
+            driver.authorize_motion()
+            authorize_done.set()
+        except Exception as exc:
+            errors.append(exc)
+
+    def tick_loop() -> None:
+        try:
+            for _ in range(5):
+                driver.tick(obs_count=0, latest_obs_pos_world=None)
+            tick_done.set()
+        except Exception as exc:
+            errors.append(exc)
+
+    ta = threading.Thread(target=authorize)
+    tt = threading.Thread(target=tick_loop)
+    ta.start()
+    tt.start()
+    ta.join(timeout=2.0)
+    tt.join(timeout=2.0)
+
+    assert not errors
+    assert authorize_done.is_set()
+    assert tick_done.is_set()
+    assert driver.state == _BaselineState.MOVE
+

@@ -1,5 +1,5 @@
 import { BridgeClient } from "../Bridge/BridgeClient";
-import { buildCameraFrameBytes, buildCameraInfo, CameraFrameAckMessage, HelloMessage } from "../Bridge/Protocol";
+import { buildCameraFrameBytes, buildCameraInfo, CameraFrameAckMessage, HelloMessage } from "../Bridge/domain";
 import { DeviceCameraStream } from "./DeviceCameraStream";
 import { quatFromMat4Rotation } from "../Core/Utilities";
 

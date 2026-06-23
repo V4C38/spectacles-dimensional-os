@@ -3,12 +3,6 @@ require("LensStudio:TextInputModule");
 import { DimosManager } from "../Core/DimosManager";
 import { BridgeLinkState, bridgeLinkPresentation, NO_ROBOT_CONNECTED_LABEL } from "../Core/AppState";
 
-import { RegistrationStatusMessage } from "../Bridge/Protocol";
-import { scaleIn } from "../UI/kit/UIAnimations";
-import { COLOR_ERROR, COLOR_WARN, COLOR_WHITE } from "../UI/kit/UIKit";
-import { SetupWizardView } from "./SetupWizardView";
-import { BridgeClient } from "../Bridge/BridgeClient";
-import { ClockSyncState } from "../Bridge/BridgeConnectionManager";
 import {
   buildRegistrationDisplay,
   buildRegistrationDescriptionAuto,
@@ -23,7 +17,11 @@ import {
   WIZARD_STEP_TITLES,
   WizardStep,
   wizardStepName,
+  RegistrationStatusMessage,
 } from "./SetupRegistrationFlow";
+import { scaleIn } from "../UI/kit/UIAnimations";
+import { COLOR_ERROR, COLOR_WARN, COLOR_WHITE } from "../UI/kit/UIKit";
+import { SetupWizardView } from "./SetupWizardView";
 
 const NAV_DEBOUNCE_S = 0.35;
 const AUTOCONNECT_RETRY_S = 2.0;
@@ -124,7 +122,7 @@ export class SetupWizard extends BaseScriptComponent {
     this._view?.applyStepLayout(clamped);
 
     if (clamped !== WizardStep.Register) {
-      this.dimosManager?.registrationClient.stop();
+      this.dimosManager?.registrationClient.stop({ notifyBridge: true });
       this._registrationFlow?.leave();
       this.dimosManager?.setupRegistrationPreview.end();
     }
@@ -142,14 +140,11 @@ export class SetupWizard extends BaseScriptComponent {
         const saved = this.dimosManager?.loadIp() ?? null;
         const rawFallback =
           this.dimosManager?.getDefaultBridgeIp() || this.dimosManager?.getBaseUrl() || "";
-        const fallback = BridgeClient.normalizeIp(rawFallback);
+        const fallback = this.dimosManager?.normalizeBridgeIp(rawFallback) ?? "";
         const ip = saved || fallback;
 
         if (this._view) {
           this._view.initializeInput(ip);
-        }
-        if (!saved && this.dimosManager && ip) {
-          this.dimosManager.setBaseUrl(ip);
         }
 
         this._refreshFooterButtons();
@@ -181,10 +176,6 @@ export class SetupWizard extends BaseScriptComponent {
     }
 
     if (this._currentStep === WizardStep.Connect) {
-      const raw = this._view?.getInputText() ?? "";
-      if (!this._isConnected() && raw && this.dimosManager) {
-        this.dimosManager.setBaseUrl(BridgeClient.normalizeIp(raw));
-      }
       if (!this._isConnected()) {
         this._cancelAutoconnect("connect step skipped", true);
       } else {
@@ -200,7 +191,10 @@ export class SetupWizard extends BaseScriptComponent {
 
     const regState = this._registrationFlow?.state ?? createRegistrationViewState();
     if (regState.phase === "awaiting_motion") {
-      this.dimosManager?.registrationClient.authorizeMotion();
+      if (this.dimosManager?.registrationClient.requestMotionAuthorization()) {
+        this._refreshFooterButtons();
+        this._renderRegistrationState();
+      }
       return;
     }
     if (regState.phase === "failed") {
@@ -224,7 +218,7 @@ export class SetupWizard extends BaseScriptComponent {
       return;
     }
     if (this._currentStep === WizardStep.Register) {
-      this.dimosManager?.registrationClient.stop();
+      this.dimosManager?.registrationClient.stop({ notifyBridge: true });
       this.dimosManager?.setupRegistrationPreview.end();
     }
     this._setStep((this._currentStep - 1) as WizardStep);
@@ -247,18 +241,20 @@ export class SetupWizard extends BaseScriptComponent {
     if (!raw) {
       return;
     }
-    const ip = BridgeClient.normalizeIp(raw);
+    const ip = this.dimosManager?.normalizeBridgeIp(raw) ?? "";
+    if (!ip) {
+      return;
+    }
     if (ip !== raw) {
       this._view.inputField.text = ip;
     }
     this._invalidatePending();
     const opId = this._autoconnectOpId;
-    this.dimosManager?.setBaseUrl(ip);
     this._isConnecting = true;
     this._view?.setInputText(ip);
     this._showBridgeConnectionStatus();
     this._log(`connect attempt ${ip}`);
-    this.dimosManager?.checkConnection().then((ok) => {
+    this.dimosManager?.tryConnectBridge(ip).then((ok) => {
       this._handleConnectionResult(opId, ip, ok);
     });
   }
@@ -270,8 +266,7 @@ export class SetupWizard extends BaseScriptComponent {
     ) {
       return;
     }
-    this.dimosManager?.setBaseUrl(this._retryIp);
-    this.dimosManager?.checkConnection().then((ok) => {
+    this.dimosManager?.tryConnectBridge(this._retryIp).then((ok) => {
       this._handleConnectionResult(this._retryOpId, this._retryIp, ok);
     });
   }
@@ -310,7 +305,7 @@ export class SetupWizard extends BaseScriptComponent {
   }
 
   private _isConnected(): boolean {
-    return (this.dimosManager?.bridgeLinkState ?? "disconnected") !== "disconnected";
+    return this.dimosManager?.hasBridgeConnection() ?? false;
   }
 
   private _bindRegistrationHandlers(): void {
@@ -368,11 +363,11 @@ export class SetupWizard extends BaseScriptComponent {
   }
 
   private _bindClockSyncHandler(): void {
-    if (this._clockSyncHandlerBound || !this.dimosManager?.bridgeClient) {
+    if (this._clockSyncHandlerBound || !this.dimosManager?.onBridgeClockSyncStateChanged) {
       return;
     }
     this._clockSyncHandlerBound = true;
-    this.dimosManager.bridgeClient.onClockSyncStateChanged.add(() => {
+    this.dimosManager.onBridgeClockSyncStateChanged.add(() => {
       if (this._currentStep === WizardStep.Connect) {
         this._showBridgeConnectionStatus();
       }
@@ -391,7 +386,7 @@ export class SetupWizard extends BaseScriptComponent {
 
   private _bridgeConnectDetailStatus(
     linkState: BridgeLinkState,
-    clockSyncState: ClockSyncState,
+    clockSyncState: "idle" | "pending" | "ready" | "failed",
   ): string | null {
     if (linkState === "disconnected" || linkState === "connectedNoRobot") {
       return null;
@@ -411,7 +406,7 @@ export class SetupWizard extends BaseScriptComponent {
     this._view?.setStatus(presentation.text, presentation.color);
     this._bridgeConnectDetailStatus(
       linkState,
-      this.dimosManager?.bridgeClient?.clockSyncState ?? "idle",
+      this.dimosManager?.bridgeClockSyncState ?? "idle",
     );
     if (this.dimosManager?.hasBridgeConnection()) {
       this.dimosManager.requestBridgeStatus();
@@ -444,6 +439,7 @@ export class SetupWizard extends BaseScriptComponent {
       this._isConnected(),
       this._registrationFlow?.state ?? createRegistrationViewState(),
       this._registrationFlow?.commitInFlight ?? false,
+      this.dimosManager?.registrationClient.motionAuthorizePending ?? false,
     );
     if (this._currentStep === WizardStep.Register && this._registrationFlow?.isManualOnly()) {
       footerState.showManual = false;

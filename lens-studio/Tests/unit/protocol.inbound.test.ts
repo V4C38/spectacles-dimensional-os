@@ -33,6 +33,40 @@ describe("parseInboundMessage", () => {
     ).toEqual([0]);
   });
 
+  it("parses hello with full v6 capability map", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "hello",
+        protocol_version: PROTOCOL_VERSION,
+        robot: {
+          robot_id: "unitree_go2",
+          display_name: "Unitree Go2",
+          body_bounds_m: [0.7, 0.5, 0.55],
+          footprint_m: [0.7, 0.5],
+          visual_origin_frame: "base_link",
+          base_height_m: 0.33,
+          default_render_offset_m: [0, 0, 0],
+        },
+        capabilities: {
+          lidar: { available: true },
+          odom: { available: true },
+          registration_april_odom_baseline: { available: true },
+          registration_manual_pose: { available: true },
+          nav: { available: true },
+          path: { available: true },
+          plan_preview: { available: true },
+          cancel_goal: { available: true },
+          emergency_stop: { available: false, reason: "disabled" },
+        },
+      }),
+    );
+    expect(msg!.type).toBe("hello");
+    const caps = (msg as { capabilities: Record<string, { available: boolean }> })
+      .capabilities;
+    expect(caps.lidar.available).toBe(true);
+    expect(caps.emergency_stop.available).toBe(false);
+  });
+
   it("parses runtime_snapshot and bridgeStatusFromSnapshot", () => {
     const msg = parseInboundMessage(
       JSON.stringify({

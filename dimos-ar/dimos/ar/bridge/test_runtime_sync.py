@@ -35,6 +35,7 @@ def _make_runtime_sync_stub() -> tuple[MagicMock, BridgeSender, MagicMock, Magic
     mock_adapter = MagicMock()
     mock_adapter.robot_id.return_value = "unitree_go2"
     bridge._adapter = mock_adapter  # type: ignore[attr-defined]
+    bridge._robot_id = "unitree_go2"  # type: ignore[attr-defined]
 
     mock_nav = MagicMock()
     mock_nav.nav_phase_dict.return_value = {"phase": "navigating"}

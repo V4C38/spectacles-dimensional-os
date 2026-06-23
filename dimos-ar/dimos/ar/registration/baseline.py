@@ -10,6 +10,8 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
+from dimos.ar.bridge.baseline_motion import BaselineMotionExecutor
+from dimos.ar.registration.motion_params import BaselineMotionParams
 from dimos.ar.registration.types import CaptureHint, MotionHint, RegistrationPhase
 from dimos.utils.logging_config import setup_logger
 
@@ -20,8 +22,8 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 MOVE_LEG_S: float = 2.0
-MOVE_LEG_MAX_S: float = 8.0
-MOVE_LEG_TARGET_M: float = 0.20
+MOVE_LEG_TARGET_M: float = 0.20  # UI motion-hint distance only; legs stop on timer
+SAMPLE_SETTLE_S: float = 0.3
 MIN_ESTIMATING_OBS: int = 2
 ESTIMATING_SPREAD_M: float = 0.10
 SAMPLE_MIN_OBS: int = 3
@@ -52,7 +54,11 @@ class BaselineStatus:
 
 
 class BaselineCollector:
-    """Bridge-owned baseline strafe recipe. Publishes phase/capture/motion hints."""
+    """Bridge-owned baseline strafe recipe.
+
+    State transitions are memory-only. Adapter I/O is limited to lateral
+    velocity side effects and must never block while holding ``_lock``.
+    """
 
     _LEG_DIRECTIONS: tuple[float, float, float] = (1.0, -1.0, 1.0)
     _LEG_MULTIPLIERS: tuple[float, float, float] = (1.0, 2.0, 1.0)
@@ -61,9 +67,14 @@ class BaselineCollector:
         self,
         *,
         adapter: ARRobotAdapterSpec,
+        motion_available: bool,
+        motion_params: BaselineMotionParams,
         on_status: Callable[[BaselineStatus], None] | None = None,
     ) -> None:
         self._adapter = adapter
+        self._motion_available = motion_available
+        self._motion_params = motion_params
+        self._motion_executor = BaselineMotionExecutor(adapter)
         self._on_status = on_status
         self._lock = threading.RLock()
         self._state: _BaselineState = _BaselineState.IDLE
@@ -72,7 +83,7 @@ class BaselineCollector:
         self._move_leg_index = 0
         self._move_phase = _MovePhase.LEG
         self._move_sample_positions: list[tuple[float, float, float]] = []
-        self._move_leg_start_xy: tuple[float, float] | None = None
+        self._sample_settle_mono: float | None = None
         self._estimating_positions: list[tuple[float, float, float]] = []
 
     @property
@@ -82,7 +93,7 @@ class BaselineCollector:
 
     @property
     def motion_available(self) -> bool:
-        return self._adapter.baseline_motion_available()
+        return self._motion_available
 
     @property
     def is_active(self) -> bool:
@@ -93,6 +104,11 @@ class BaselineCollector:
     def is_sampling(self) -> bool:
         with self._lock:
             return self._state == _BaselineState.MOVE and self._move_phase == _MovePhase.SAMPLE
+
+    @property
+    def is_estimating(self) -> bool:
+        with self._lock:
+            return self._state == _BaselineState.ESTIMATING
 
     @property
     def is_done(self) -> bool:
@@ -106,7 +122,7 @@ class BaselineCollector:
 
     def start(self) -> None:
         with self._lock:
-            if not self._adapter.baseline_motion_available():
+            if not self._motion_available:
                 self._fail("Baseline motion unavailable on this robot")
                 return
             self._reset_internals()
@@ -143,6 +159,14 @@ class BaselineCollector:
             self._reset_internals()
             self._state = _BaselineState.IDLE
 
+    def shutdown(self) -> None:
+        """Stop the robot and tear down the velocity executor (bridge shutdown)."""
+        with self._lock:
+            self._stop_motion()
+            self._reset_internals()
+            self._state = _BaselineState.IDLE
+        self._motion_executor.shutdown()
+
     def tick(
         self,
         *,
@@ -159,7 +183,7 @@ class BaselineCollector:
         self._move_leg_index = 0
         self._move_phase = _MovePhase.LEG
         self._move_sample_positions = []
-        self._move_leg_start_xy = None
+        self._sample_settle_mono = None
         self._estimating_positions = []
 
     def _fail(self, reason: str) -> None:
@@ -217,42 +241,38 @@ class BaselineCollector:
         )
 
     def _set_lateral_velocity_async(self, velocity: float) -> None:
-        def _publish() -> None:
-            try:
-                self._adapter.baseline_set_lateral_velocity(velocity)
-            except Exception:
-                logger.exception("baseline_set_lateral_velocity failed")
-
-        threading.Thread(target=_publish, name="baseline-velocity", daemon=True).start()
+        self._motion_executor.submit_lateral_velocity(velocity)
 
     def _stop_motion(self) -> None:
         if self._move_velocity_active:
-            self._set_lateral_velocity_async(0.0)
+            self._motion_executor.stop_motion()
             self._move_velocity_active = False
 
     def _start_move(self) -> None:
-        self._move_leg_index = 0
+        leg = 0
+        self._move_leg_index = leg
         self._move_phase = _MovePhase.LEG
         self._move_sample_positions = []
+        self._sample_settle_mono = None
         self._move_start_mono = time.monotonic()
-        self._move_leg_start_xy = None
         self._move_velocity_active = True
         self._state = _BaselineState.MOVE
-        speed = self._adapter.baseline_strafe_speed() * self._LEG_DIRECTIONS[0]
-        self._set_lateral_velocity_async(speed)
+        speed = self._motion_params.strafe_speed * self._LEG_DIRECTIONS[leg]
         self._emit(
             RegistrationPhase.MOVING,
-            CaptureHint.HOLD,
+            CaptureHint.STEADY,
             "Robot moving — waypoint 1/3",
-            leg_index=0,
+            leg_index=leg,
         )
+        logger.info("BaselineCollector MOVE leg=%d", leg)
+        self._set_lateral_velocity_async(speed)
 
     def _start_sample(self) -> None:
         self._stop_motion()
         self._move_phase = _MovePhase.SAMPLE
         self._move_sample_positions = []
         self._move_start_mono = None
-        self._move_leg_start_xy = None
+        self._sample_settle_mono = time.monotonic()
         leg = self._move_leg_index
         self._emit(
             RegistrationPhase.SAMPLING,
@@ -276,23 +296,24 @@ class BaselineCollector:
         leg = self._move_leg_index
         self._move_phase = _MovePhase.LEG
         self._move_sample_positions = []
+        self._sample_settle_mono = None
         self._move_start_mono = time.monotonic()
-        self._move_leg_start_xy = None
         self._move_velocity_active = True
-        speed = self._adapter.baseline_strafe_speed() * self._LEG_DIRECTIONS[leg]
-        self._set_lateral_velocity_async(speed)
+        speed = self._motion_params.strafe_speed * self._LEG_DIRECTIONS[leg]
         self._emit(
             RegistrationPhase.MOVING,
-            CaptureHint.HOLD,
+            CaptureHint.STEADY,
             f"Robot moving — waypoint {leg + 1}/{WAYPOINT_TOTAL}",
             leg_index=leg,
         )
+        logger.info("BaselineCollector MOVE leg=%d", leg)
+        self._set_lateral_velocity_async(speed)
 
     def _tick_locked(
         self,
         obs_count: int,
         latest_obs_pos_world: tuple[float, float, float] | None,
-        latest_odom: OdomSample | None,
+        _latest_odom: OdomSample | None,
     ) -> None:
         state = self._state
         if state in (_BaselineState.IDLE, _BaselineState.DONE, _BaselineState.FAILED):
@@ -307,24 +328,11 @@ class BaselineCollector:
                 spread = math.sqrt((max(xs) - min(xs)) ** 2 + (max(zs) - min(zs)) ** 2)
                 if spread <= ESTIMATING_SPREAD_M:
                     self._state = _BaselineState.AWAITING_CONFIRM
-                    preview = self._motion_hint(1, self._LEG_DIRECTIONS[0])
                     self._emit(
                         RegistrationPhase.AWAITING_MOTION,
                         CaptureHint.STEADY,
                         "Confirm to start baseline collection",
                     )
-                    if self._on_status is not None:
-                        try:
-                            self._on_status(
-                                BaselineStatus(
-                                    phase=RegistrationPhase.AWAITING_MOTION,
-                                    capture=CaptureHint.STEADY,
-                                    message="Confirm to start baseline collection",
-                                    motion=preview,
-                                )
-                            )
-                        except Exception:
-                            pass
             return
 
         if state == _BaselineState.AWAITING_CONFIRM:
@@ -333,32 +341,18 @@ class BaselineCollector:
         if state == _BaselineState.MOVE:
             leg = self._move_leg_index
             if self._move_phase == _MovePhase.LEG:
-                if latest_odom is not None:
-                    if self._move_leg_start_xy is None:
-                        self._move_leg_start_xy = (
-                            float(latest_odom.position[0]),
-                            float(latest_odom.position[1]),
-                        )
-                        self._move_start_mono = time.monotonic()
-                        return
-                    start_x, start_y = self._move_leg_start_xy
-                    dx = float(latest_odom.position[0]) - start_x
-                    dy = float(latest_odom.position[1]) - start_y
-                    target = MOVE_LEG_TARGET_M * self._LEG_MULTIPLIERS[leg]
-                    if math.hypot(dx, dy) >= target:
-                        self._start_sample()
-                        return
                 if self._move_start_mono is None:
                     return
                 elapsed = time.monotonic() - self._move_start_mono
-                leg_duration = (
-                    MOVE_LEG_MAX_S if latest_odom is not None else MOVE_LEG_S
-                ) * self._LEG_MULTIPLIERS[leg]
+                leg_duration = MOVE_LEG_S * self._LEG_MULTIPLIERS[leg]
                 if elapsed >= leg_duration:
                     self._start_sample()
                 return
 
             if self._move_phase == _MovePhase.SAMPLE:
+                if self._sample_settle_mono is not None:
+                    if time.monotonic() - self._sample_settle_mono < SAMPLE_SETTLE_S:
+                        return
                 if latest_obs_pos_world is not None:
                     self._move_sample_positions.append(latest_obs_pos_world)
                 if len(self._move_sample_positions) >= SAMPLE_MIN_OBS:

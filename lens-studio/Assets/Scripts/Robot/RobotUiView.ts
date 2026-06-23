@@ -35,6 +35,7 @@ export interface RobotUiAssistOverlay {
   statusColor: vec4;
   showWizardMenu: boolean;
   showContinue: boolean;
+  continueInactive: boolean;
   showStop: boolean;
 }
 
@@ -71,7 +72,8 @@ export class RobotUiView {
   private _debugMode = false;
   private _uiLogEntry: UILogEntry | null = null;
   private _callbacks: RobotUiCallbacks | null = null;
-  private _continueHandler: (() => void) | null = null;
+  private _menuContinueHandler: (() => void) | null = null;
+  private _registrationContinueHandler: (() => void) | null = null;
   private _registrationPreviewActive = false;
 
   constructor(markerRoot: SceneObject, menuRoot: SceneObject) {
@@ -119,10 +121,10 @@ export class RobotUiView {
       ? findChildRecursive(this.setupWizardMenuObj, "ContinueSetupButton")
       : null;
     this.continueSetupBtn = this.continueSetupObj
-      ? (this.continueSetupObj.getComponent("ScriptComponent") as any as RectangleButton | null)
+      ? requireRectangleButton(this.continueSetupObj, "RobotUiView")
       : null;
     if (this.continueSetupBtn) {
-      this.continueSetupBtn.onTriggerUp.add(() => this._continueHandler?.());
+      this.continueSetupBtn.onTriggerUp.add(() => this._invokeContinueHandler());
     }
 
     this.stopLabel.size = FONT_BUTTON;
@@ -137,7 +139,9 @@ export class RobotUiView {
 
   public bindCallbacks(callbacks: RobotUiCallbacks): void {
     this._callbacks = callbacks;
-    this._continueHandler = callbacks.onContinue ?? null;
+    if (callbacks.onContinue !== undefined) {
+      this._menuContinueHandler = callbacks.onContinue;
+    }
   }
 
   public setRegistrationPreviewActive(active: boolean): void {
@@ -185,7 +189,7 @@ export class RobotUiView {
   }
 
   public setOnContinue(handler: (() => void) | null): void {
-    this._continueHandler = handler;
+    this._registrationContinueHandler = handler;
   }
 
   public syncFromState(state: DimosAppState, uiLogEntry: UILogEntry | null = null): void {
@@ -237,9 +241,14 @@ export class RobotUiView {
     this.menuTitleText.getSceneObject().enabled = !overlay.showWizardMenu;
     this.menuStateInfoText.getSceneObject().enabled = !overlay.showWizardMenu;
     if (this.continueSetupObj) {
-      this.continueSetupObj.enabled = overlay.showContinue;
+      this.continueSetupObj.enabled =
+        overlay.showContinue && !overlay.continueInactive;
     }
     this.stopObj.enabled = overlay.showStop;
+  }
+
+  private _invokeContinueHandler(): void {
+    (this._registrationContinueHandler ?? this._menuContinueHandler)?.();
   }
 
   private _applyTitle(title: string): void {

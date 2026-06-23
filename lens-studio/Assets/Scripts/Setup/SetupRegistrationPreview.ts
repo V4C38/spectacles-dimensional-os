@@ -2,7 +2,7 @@ import {
   RegistrationMotion,
   RegistrationPhase,
   RegistrationStatusMessage,
-} from "../Bridge/Protocol";
+} from "../Bridge/domain";
 import { RegistrationClient } from "../Registration/RegistrationClient";
 import { DimosState } from "../Core/DimosState";
 import { OperatingMode } from "../Core/AppState";
@@ -63,6 +63,7 @@ export class SetupRegistrationPreview {
   private _discLeftArrow: SceneObject | null = null;
   private _discRightArrow: SceneObject | null = null;
   private _priorRuntimeMode: OperatingMode = "manual";
+  private _lastStatusMsg: RegistrationStatusMessage | null = null;
 
   public begin(): void {
     this._priorRuntimeMode = this.dimosState.snapshot.operatingMode !== "setup"
@@ -74,7 +75,7 @@ export class SetupRegistrationPreview {
     this._tagVisible = false;
     const ui = this.robotRuntime?.robotMarker?.ui;
     ui?.setRegistrationPreviewActive(true);
-    ui?.setOnContinue(() => this.registrationClient?.authorizeMotion());
+    ui?.setOnContinue(() => this._onContinueRequested());
     this._resetVisualState();
     this.robotRuntime?.robotMarker?.setVisible(false);
     ui?.setMenuVisible(false);
@@ -84,6 +85,7 @@ export class SetupRegistrationPreview {
     if (!this._active) {
       return;
     }
+    this._lastStatusMsg = msg;
     this._tagVisible = msg.tag_visible ?? this._tagVisible;
     const previewPose = msg.preview_pose ?? null;
     const previewStageActive = isRegistrationPreviewPhase(msg.phase);
@@ -128,6 +130,7 @@ export class SetupRegistrationPreview {
         statusColor: presentation.statusColor,
         showWizardMenu: msg.phase === "awaiting_motion",
         showContinue: msg.phase === "awaiting_motion",
+        continueInactive: this.registrationClient.motionAuthorizePending,
         showStop: inMove,
       });
     }
@@ -145,6 +148,7 @@ export class SetupRegistrationPreview {
       statusColor: GREEN,
       showWizardMenu: false,
       showContinue: false,
+      continueInactive: false,
       showStop: false,
     });
   }
@@ -154,6 +158,7 @@ export class SetupRegistrationPreview {
       return;
     }
     this._active = false;
+    this._lastStatusMsg = null;
     this._resetVisualState();
     this.robotRuntime?.robotMarker?.setVisible(false);
     const ui = this.robotRuntime?.robotMarker?.ui;
@@ -165,6 +170,7 @@ export class SetupRegistrationPreview {
       statusColor: COLOR_SUCCESS,
       showWizardMenu: false,
       showContinue: false,
+      continueInactive: false,
       showStop: false,
     });
     ui?.setMenuVisible(false);
@@ -182,6 +188,15 @@ export class SetupRegistrationPreview {
 
   public get isActive(): boolean {
     return this._active;
+  }
+
+  private _onContinueRequested(): void {
+    if (!this.registrationClient?.requestMotionAuthorization()) {
+      return;
+    }
+    if (this._lastStatusMsg) {
+      this.updateFromRegistrationStatus(this._lastStatusMsg);
+    }
   }
 
   private _updateDiscPreview(

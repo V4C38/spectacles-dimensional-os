@@ -588,3 +588,61 @@ def test_process_frame_uses_provided_odom() -> None:
         receive_mono=20.0,
     )
     assert result.tag_detected is False or result.tag_detected is True
+
+
+def _synthetic_tag_observation(
+    *,
+    mono_ts: float = 1.0,
+    p_world: tuple[float, float, float] = (1.0, 0.0, -2.0),
+) -> TagObservation:
+    T = np.eye(4, dtype=np.float64)
+    T[0, 3], T[1, 3], T[2, 3] = p_world
+    return TagObservation(
+        mono_ts=mono_ts,
+        tag_id=DEFAULT_MARKER_ID,
+        p_world_tag=p_world,
+        p_odom_tag=(0.0, 0.0, 0.0),
+        T_world_tag=T,
+        T_odom_tag=np.eye(4),
+        T_odom_base=np.eye(4),
+        quality=0.9,
+        reprojection_error_px=0.5,
+    )
+
+
+def test_waypoint_sample_buffer_begin_clears_positions() -> None:
+    tracker = RobotAprilTagTracker(GO2_DEFAULT_TAG_MOUNTS)
+    tracker.record_waypoint_observation(_synthetic_tag_observation())
+    assert tracker.latest_waypoint_robot_world_position() is not None
+
+    tracker.begin_waypoint_sample()
+    assert tracker.latest_waypoint_robot_world_position() is None
+
+
+def test_waypoint_sample_buffer_tracks_latest_position() -> None:
+    tracker = RobotAprilTagTracker(GO2_DEFAULT_TAG_MOUNTS)
+    tracker.begin_waypoint_sample()
+    tracker.record_waypoint_observation(
+        _synthetic_tag_observation(p_world=(1.0, 0.0, -2.0))
+    )
+    first = tracker.latest_waypoint_robot_world_position()
+    assert first is not None
+
+    tracker.record_waypoint_observation(
+        _synthetic_tag_observation(p_world=(1.05, 0.0, -2.0))
+    )
+    second = tracker.latest_waypoint_robot_world_position()
+    assert second is not None
+    assert second[0] > first[0]
+
+
+def test_record_latest_waypoint_observation_uses_global_window() -> None:
+    tracker = RobotAprilTagTracker(GO2_DEFAULT_TAG_MOUNTS)
+    tracker.begin_waypoint_sample()
+    with tracker._lock:
+        tracker._observations.append(_synthetic_tag_observation(p_world=(2.0, 0.0, -3.0)))
+
+    assert tracker.record_latest_waypoint_observation() is True
+    pos = tracker.latest_waypoint_robot_world_position()
+    assert pos is not None
+    assert abs(pos[0] - 2.0) < 0.01

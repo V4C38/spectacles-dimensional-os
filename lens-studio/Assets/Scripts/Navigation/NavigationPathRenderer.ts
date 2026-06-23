@@ -1,4 +1,4 @@
-import { protocolMetersToLensCentimeters } from "../Bridge/Protocol";
+import { protocolMetersToLensCentimeters } from "../Bridge/domain";
 import InteractorLineRenderer, {
   VisualStyle,
 } from "SpectaclesInteractionKit.lspkg/Components/Interaction/InteractorLineVisual/InteractorLineRenderer";
