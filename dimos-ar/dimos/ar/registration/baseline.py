@@ -10,6 +10,7 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
+from dimos.ar.adapters.base import BaselineMotionRecipe, DEFAULT_BASELINE_MOTION_RECIPE
 from dimos.ar.registration.types import CaptureHint, MotionHint, RegistrationPhase
 from dimos.utils.logging_config import setup_logger
 
@@ -19,9 +20,6 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
-DEFAULT_BASELINE_STRAFE_SPEED: float = 0.3
-MOVE_LEG_S: float = 2.0
-MOVE_LEG_TARGET_M: float = 0.20  # UI motion-hint distance only; legs stop on timer
 SAMPLE_SETTLE_S: float = 0.3
 MIN_ESTIMATING_OBS: int = 2
 ESTIMATING_SPREAD_M: float = 0.10
@@ -59,20 +57,17 @@ class BaselineCollector:
     velocity side effects and must never block while holding ``_lock``.
     """
 
-    _LEG_DIRECTIONS: tuple[float, float, float] = (1.0, -1.0, 1.0)
-    _LEG_MULTIPLIERS: tuple[float, float, float] = (1.0, 2.0, 1.0)
-
     def __init__(
         self,
         *,
         command_queue: AdapterCommandQueue,
         motion_available: bool,
-        strafe_speed: float = DEFAULT_BASELINE_STRAFE_SPEED,
+        motion_recipe: BaselineMotionRecipe = DEFAULT_BASELINE_MOTION_RECIPE,
         on_status: Callable[[BaselineStatus], None] | None = None,
     ) -> None:
         self._command_queue = command_queue
         self._motion_available = motion_available
-        self._strafe_speed = strafe_speed
+        self._motion_recipe = motion_recipe
         self._on_status = on_status
         self._lock = threading.RLock()
         self._state: _BaselineState = _BaselineState.IDLE
@@ -203,14 +198,19 @@ class BaselineCollector:
         motion: MotionHint | None = None
         if phase in (RegistrationPhase.AWAITING_MOTION, RegistrationPhase.MOVING):
             idx = (leg_index if leg_index is not None else self._move_leg_index) + 1
-            sign = self._LEG_DIRECTIONS[(leg_index if leg_index is not None else self._move_leg_index)]
+            sign = self._motion_recipe.leg_directions[
+                leg_index if leg_index is not None else self._move_leg_index
+            ]
             motion = self._motion_hint(idx, sign)
         elif phase == RegistrationPhase.SAMPLING and leg_index is not None:
             motion = MotionHint(
                 frame="robot",
                 axis="lateral",
-                direction="left" if self._LEG_DIRECTIONS[leg_index] > 0 else "right",
-                distance_m=MOVE_LEG_TARGET_M * self._LEG_MULTIPLIERS[leg_index],
+                direction="left" if self._motion_recipe.leg_directions[leg_index] > 0 else "right",
+                distance_m=(
+                    self._motion_recipe.move_leg_target_m
+                    * self._motion_recipe.leg_distance_multipliers[leg_index]
+                ),
                 waypoint_index=leg_index + 1,
                 waypoint_total=WAYPOINT_TOTAL,
             )
@@ -233,7 +233,10 @@ class BaselineCollector:
             frame="robot",
             axis="lateral",
             direction="left" if sign > 0 else "right",
-            distance_m=MOVE_LEG_TARGET_M * self._LEG_MULTIPLIERS[leg],
+            distance_m=(
+                self._motion_recipe.move_leg_target_m
+                * self._motion_recipe.leg_distance_multipliers[leg]
+            ),
             waypoint_index=waypoint_index,
             waypoint_total=WAYPOINT_TOTAL,
         )
@@ -272,7 +275,7 @@ class BaselineCollector:
         self._move_start_mono = None
         self._move_velocity_active = True
         self._state = _BaselineState.MOVE
-        speed = self._strafe_speed * self._LEG_DIRECTIONS[leg]
+        speed = self._motion_recipe.strafe_speed * self._motion_recipe.leg_directions[leg]
         self._emit(
             RegistrationPhase.MOVING,
             CaptureHint.STEADY,
@@ -314,7 +317,7 @@ class BaselineCollector:
         self._sample_settle_mono = None
         self._move_start_mono = None
         self._move_velocity_active = True
-        speed = self._strafe_speed * self._LEG_DIRECTIONS[leg]
+        speed = self._motion_recipe.strafe_speed * self._motion_recipe.leg_directions[leg]
         self._emit(
             RegistrationPhase.MOVING,
             CaptureHint.STEADY,
@@ -359,7 +362,7 @@ class BaselineCollector:
                 if self._move_start_mono is None:
                     return
                 elapsed = time.monotonic() - self._move_start_mono
-                leg_duration = MOVE_LEG_S * self._LEG_MULTIPLIERS[leg]
+                leg_duration = self._motion_recipe.leg_duration_s[leg]
                 if elapsed >= leg_duration:
                     self._start_sample()
                 return

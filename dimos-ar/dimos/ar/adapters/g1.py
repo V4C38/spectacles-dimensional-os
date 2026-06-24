@@ -14,7 +14,9 @@ from dimos_lcm.std_msgs import Bool, String
 
 from dimos.ar.adapters.base import (
     ARRobotAdapterSpec,
+    BaselineMotionRecipe,
     CapabilityState,
+    DEFAULT_BASELINE_MOTION_RECIPE,
     RobotHandshake,
     RuntimeRegistrationProfile,
 )
@@ -323,8 +325,8 @@ class G1AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         return self.cmd_vel.transport is not None
 
     @rpc
-    def baseline_strafe_speed(self) -> float:
-        return 0.3
+    def baseline_motion_recipe(self) -> BaselineMotionRecipe:
+        return DEFAULT_BASELINE_MOTION_RECIPE
 
     @rpc
     def runtime_registration_profile(self) -> RuntimeRegistrationProfile:

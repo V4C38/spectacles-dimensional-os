@@ -15,6 +15,23 @@ class CapabilityState:
 
 
 @dataclass(frozen=True)
+class BaselineMotionRecipe:
+    strafe_speed: float
+    leg_duration_s: tuple[float, float, float]
+    leg_directions: tuple[float, float, float]
+    leg_distance_multipliers: tuple[float, float, float]
+    move_leg_target_m: float = 0.20
+
+
+DEFAULT_BASELINE_MOTION_RECIPE = BaselineMotionRecipe(
+    strafe_speed=0.3,
+    leg_duration_s=(2.0, 4.0, 2.0),
+    leg_directions=(1.0, -1.0, 1.0),
+    leg_distance_multipliers=(1.0, 2.0, 1.0),
+)
+
+
+@dataclass(frozen=True)
 class RuntimeRegistrationProfile:
     runtime_static_speed_mps: float = 0.05
     runtime_max_correct_speed_mps: float = 1.5
@@ -61,6 +78,6 @@ class ARRobotAdapterSpec(Spec, Protocol):  # type: ignore[misc]
 
     def baseline_set_lateral_velocity(self, vy_m_s: float) -> bool: ...
 
-    def baseline_strafe_speed(self) -> float: ...
+    def baseline_motion_recipe(self) -> BaselineMotionRecipe: ...
 
     def runtime_registration_profile(self) -> RuntimeRegistrationProfile: ...

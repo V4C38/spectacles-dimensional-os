@@ -14,7 +14,9 @@ from scipy.spatial.transform import Rotation as _Rotation
 
 from dimos.ar.adapters.base import (
     ARRobotAdapterSpec,
+    BaselineMotionRecipe,
     CapabilityState,
+    DEFAULT_BASELINE_MOTION_RECIPE,
     RobotHandshake,
     RuntimeRegistrationProfile,
 )
@@ -297,15 +299,8 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         return self.cmd_vel.transport is not None
 
     @rpc
-    def baseline_strafe_speed(self) -> float:
-        return 0.3
-
-    @rpc
-    def baseline_leg_duration_s(self, leg_index: int) -> float:
-        multipliers = (1.0, 2.0, 1.0)
-        from dimos.ar.registration.baseline import MOVE_LEG_S
-
-        return MOVE_LEG_S * multipliers[leg_index]
+    def baseline_motion_recipe(self) -> BaselineMotionRecipe:
+        return DEFAULT_BASELINE_MOTION_RECIPE
 
     @rpc
     def runtime_registration_profile(self) -> RuntimeRegistrationProfile:

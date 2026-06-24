@@ -8,9 +8,9 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
+from dimos.ar.adapters.base import DEFAULT_BASELINE_MOTION_RECIPE
 from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
 from dimos.ar.registration.baseline import (
-    MOVE_LEG_S,
     SAMPLE_MIN_OBS,
     SAMPLE_SETTLE_S,
     _BaselineState,
@@ -22,6 +22,9 @@ from dimos.ar.registration.tracker import FrameResult, TagSolve
 from dimos.ar.registration.transforms import Calibration
 from dimos.ar.registration.types import CaptureHint, RegistrationMode, RegistrationPhase
 from dimos.ar.registration.wire import RegistrationCommandMessage, RegistrationStatusPayload
+
+
+_LEG_DURATIONS = DEFAULT_BASELINE_MOTION_RECIPE.leg_duration_s
 
 
 def _make_session(
@@ -63,7 +66,7 @@ def _make_session(
         adapter=adapter,
         command_queue=queue,
         baseline_motion_available=True,
-        baseline_strafe_speed=0.3,
+        baseline_motion_recipe=DEFAULT_BASELINE_MOTION_RECIPE,
     )
     return session, sent, registry
 
@@ -256,19 +259,19 @@ def _drive_baseline_to_done(baseline) -> None:
 
     t0 = _wait_for_leg_timer(baseline)
     with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        mt.monotonic.return_value = t0 + _LEG_DURATIONS[0] + 0.1
         baseline.tick(obs_count=0, latest_obs_pos_world=None)
     _drive_baseline_through_sample(baseline, expected_leg_after=1)
 
     t1 = _wait_for_leg_timer(baseline)
     with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t1 + 2 * MOVE_LEG_S + 0.1
+        mt.monotonic.return_value = t1 + _LEG_DURATIONS[1] + 0.1
         baseline.tick(obs_count=0, latest_obs_pos_world=None)
     _drive_baseline_through_sample(baseline, expected_leg_after=2)
 
     t2 = _wait_for_leg_timer(baseline)
     with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t2 + MOVE_LEG_S + 0.1
+        mt.monotonic.return_value = t2 + _LEG_DURATIONS[2] + 0.1
         baseline.tick(obs_count=0, latest_obs_pos_world=None)
     _drive_baseline_through_sample(baseline, expected_leg_after=None)
 

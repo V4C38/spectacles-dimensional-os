@@ -20,11 +20,8 @@ from dimos.ar.network.protocol import (
     RegistrationPoseMessage,
     encode_camera_frame_ack,
 )
-from dimos.ar.registration.baseline import (
-    DEFAULT_BASELINE_STRAFE_SPEED,
-    BaselineCollector,
-    BaselineStatus,
-)
+from dimos.ar.adapters.base import BaselineMotionRecipe, DEFAULT_BASELINE_MOTION_RECIPE
+from dimos.ar.registration.baseline import BaselineCollector, BaselineStatus
 from dimos.ar.registration.refinement import RegisteredPoseRefiner
 from dimos.ar.registration.registry import WorldRegistry
 from dimos.ar.registration.tracker import (
@@ -105,7 +102,7 @@ class RegistrationSession:
         command_queue: AdapterCommandQueue | None = None,
         runtime_profile: RuntimeRegistrationProfile | None = None,
         baseline_motion_available: bool = False,
-        baseline_strafe_speed: float = DEFAULT_BASELINE_STRAFE_SPEED,
+        baseline_motion_recipe: BaselineMotionRecipe = DEFAULT_BASELINE_MOTION_RECIPE,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
@@ -139,7 +136,7 @@ class RegistrationSession:
             BaselineCollector(
                 command_queue=command_queue,
                 motion_available=baseline_motion_available,
-                strafe_speed=baseline_strafe_speed,
+                motion_recipe=baseline_motion_recipe,
                 on_status=self._on_baseline_status,
             )
             if command_queue is not None

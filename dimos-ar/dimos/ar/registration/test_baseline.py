@@ -6,9 +6,9 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+from dimos.ar.adapters.base import BaselineMotionRecipe, DEFAULT_BASELINE_MOTION_RECIPE
 from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
 from dimos.ar.registration.baseline import (
-    MOVE_LEG_S,
     SAMPLE_MIN_OBS,
     SAMPLE_SETTLE_S,
     BaselineCollector,
@@ -20,11 +20,12 @@ from dimos.ar.registration.types import CaptureHint, RegistrationPhase
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
+_LEG_DURATIONS = DEFAULT_BASELINE_MOTION_RECIPE.leg_duration_s
+
 
 def _make_adapter(*, available: bool = True) -> MagicMock:
     adapter = MagicMock(
         baseline_motion_available=MagicMock(return_value=available),
-        baseline_strafe_speed=MagicMock(return_value=0.3),
         baseline_set_lateral_velocity=MagicMock(return_value=True),
     )
     return adapter
@@ -33,14 +34,14 @@ def _make_adapter(*, available: bool = True) -> MagicMock:
 def _make_driver(
     *,
     available: bool = True,
-    strafe_speed: float = 0.3,
+    motion_recipe: BaselineMotionRecipe = DEFAULT_BASELINE_MOTION_RECIPE,
 ) -> tuple[BaselineCollector, MagicMock, AdapterCommandQueue]:
     adapter = _make_adapter(available=available)
     queue = AdapterCommandQueue(adapter)
     driver = BaselineCollector(
         command_queue=queue,
         motion_available=available,
-        strafe_speed=strafe_speed,
+        motion_recipe=motion_recipe,
     )
     return driver, adapter, queue
 
@@ -134,7 +135,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     # --- Leg 0 completes (time-based) ---
     t0 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        mt.monotonic.return_value = t0 + _LEG_DURATIONS[0] + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE, "leg 0 must enter sample phase"
 
@@ -146,7 +147,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     # --- Leg 1 completes (2× duration) ---
     t1 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t1 + 2 * MOVE_LEG_S + 0.1
+        mt.monotonic.return_value = t1 + _LEG_DURATIONS[1] + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE, "leg 1 must enter sample phase"
 
@@ -158,7 +159,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     # --- Leg 2 completes (1× duration) ---
     t2 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t2 + MOVE_LEG_S + 0.1
+        mt.monotonic.return_value = t2 + _LEG_DURATIONS[2] + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE, "leg 2 must enter sample phase"
 
@@ -176,7 +177,6 @@ def test_leg_phase_emits_steady_capture_not_hold() -> None:
     driver = BaselineCollector(
         command_queue=gate,
         motion_available=True,
-        strafe_speed=0.3,
         on_status=statuses.append,
     )
     driver.start()
@@ -206,7 +206,7 @@ def test_odom_present_does_not_shorten_leg() -> None:
     assert driver._move_phase == _MovePhase.LEG
 
     with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        mt.monotonic.return_value = t0 + _LEG_DURATIONS[0] + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=odom_jump)
     assert driver._move_phase == _MovePhase.SAMPLE
 
@@ -219,12 +219,12 @@ def test_time_based_leg_completion_when_odom_absent() -> None:
 
     t0 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t0 + MOVE_LEG_S - 0.1
+        mt.monotonic.return_value = t0 + _LEG_DURATIONS[0] - 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=None)
     assert driver._move_phase == _MovePhase.LEG
 
     with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        mt.monotonic.return_value = t0 + _LEG_DURATIONS[0] + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=None)
     assert driver._move_phase == _MovePhase.SAMPLE
 
@@ -259,7 +259,7 @@ def test_sample_holds_on_tag_loss() -> None:
     # Fast-forward leg 0 to settle
     t0 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        mt.monotonic.return_value = t0 + _LEG_DURATIONS[0] + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE
 
@@ -281,7 +281,7 @@ def test_sample_unstable_obs_do_not_advance() -> None:
 
     t0 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        mt.monotonic.return_value = t0 + _LEG_DURATIONS[0] + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE
 
@@ -350,7 +350,6 @@ def test_reset_to_idle_goes_to_idle_silently() -> None:
     driver = BaselineCollector(
         command_queue=gate,
         motion_available=True,
-        strafe_speed=0.3,
         on_status=lambda s: status_changes.append(s.phase.value),
     )
     driver.start()
@@ -433,19 +432,25 @@ def test_is_sampling_true_during_sample() -> None:
     driver.authorize_motion()
     t0 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
+        mt.monotonic.return_value = t0 + _LEG_DURATIONS[0] + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
     assert driver._move_phase == _MovePhase.SAMPLE
     assert driver.is_sampling is True
 
 
-def test_injected_strafe_speed_drives_velocity() -> None:
+def test_injected_motion_recipe_drives_velocity() -> None:
+    recipe = BaselineMotionRecipe(
+        strafe_speed=0.2,
+        leg_duration_s=(2.0, 4.0, 2.0),
+        leg_directions=(1.0, -1.0, 1.0),
+        leg_distance_multipliers=(1.0, 2.0, 1.0),
+    )
     adapter = _make_adapter()
     queue = AdapterCommandQueue(adapter)
     driver = BaselineCollector(
         command_queue=queue,
         motion_available=True,
-        strafe_speed=0.2,
+        motion_recipe=recipe,
     )
     driver.start()
     _advance_to_awaiting_confirm(driver)

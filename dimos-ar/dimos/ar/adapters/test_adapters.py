@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from dimos_lcm.std_msgs import Bool
 
 from dimos.ar.adapters.g1 import G1AdapterModule
+from dimos.ar.adapters.base import DEFAULT_BASELINE_MOTION_RECIPE
 from dimos.ar.adapters.go2 import Go2AdapterModule
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
@@ -159,10 +160,10 @@ def test_g1_robot_id_and_model() -> None:
     assert G1AdapterModule.robot_model(adapter) == "unitree_g1"
 
 
-def test_go2_baseline_strafe_speed_matches_teleop() -> None:
+def test_go2_baseline_motion_recipe_matches_teleop() -> None:
     adapter = _make_go2_adapter()
 
-    assert Go2AdapterModule.baseline_strafe_speed(adapter) == 0.3
+    assert Go2AdapterModule.baseline_motion_recipe(adapter) == DEFAULT_BASELINE_MOTION_RECIPE
 
 
 def test_g1_baseline_motion_available_and_capability_follow_cmd_vel_transport() -> None:
@@ -170,7 +171,7 @@ def test_g1_baseline_motion_available_and_capability_follow_cmd_vel_transport() 
     adapter.cmd_vel = _FakeStream(connected=True)
 
     assert G1AdapterModule.baseline_motion_available(adapter) is True
-    assert G1AdapterModule.baseline_strafe_speed(adapter) == 0.3
+    assert G1AdapterModule.baseline_motion_recipe(adapter) == DEFAULT_BASELINE_MOTION_RECIPE
     assert G1AdapterModule.capabilities(adapter)["registration_april_odom_baseline"].available is True
 
 

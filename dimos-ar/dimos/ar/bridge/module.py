@@ -17,23 +17,27 @@ from typing import TYPE_CHECKING, Any
 
 from dimos_lcm.std_msgs import Bool, String
 
-from dimos.ar.adapters.base import ARRobotAdapterSpec, RobotHandshake
+from dimos.ar.adapters.base import (
+    ARRobotAdapterSpec,
+    BaselineMotionRecipe,
+    DEFAULT_BASELINE_MOTION_RECIPE,
+    RobotHandshake,
+)
 from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
 from dimos.ar.bridge.navigation import NavController
 from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.bridge.preview import PreviewService
+from dimos.ar.bridge.safety import BridgeSafetyCoordinator
 from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.bridge.status_service import StatusService
 from dimos.ar.bridge.telemetry import TelemetryPublisher
 from dimos.ar.network.protocol import (
-    EmergencyStopMessage,
     GoalMessage,
     SetLidarModeMessage,
     encode_runtime_snapshot,
 )
 from dimos.ar.network.websocket_server import ARWebSocketServer
 from dimos.ar.preview_planner import PreviewPlanner
-from dimos.ar.registration.baseline import DEFAULT_BASELINE_STRAFE_SPEED
 from dimos.ar.registration.refinement import RegisteredPoseRefiner
 from dimos.ar.registration.registry import WorldRegistry
 from dimos.ar.registration.session import RegistrationSession
@@ -59,19 +63,26 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 
-def _resolve_baseline_strafe_speed(adapter: ARRobotAdapterSpec) -> float:
+def _resolve_baseline_motion_recipe(adapter: ARRobotAdapterSpec) -> BaselineMotionRecipe:
     try:
-        speed = float(adapter.baseline_strafe_speed())
-        if math.isfinite(speed) and speed > 0:
-            logger.info("Baseline strafe speed resolved", strafe_speed=speed)
-            return speed
+        recipe = adapter.baseline_motion_recipe()
+        if (
+            isinstance(recipe, BaselineMotionRecipe)
+            and math.isfinite(recipe.strafe_speed)
+            and recipe.strafe_speed > 0
+        ):
+            logger.info(
+                "Baseline motion recipe resolved",
+                strafe_speed=recipe.strafe_speed,
+            )
+            return recipe
     except Exception as exc:
         logger.warning(
-            "baseline_strafe_speed failed; using default",
+            "baseline_motion_recipe failed; using default",
             error=str(exc),
-            default=DEFAULT_BASELINE_STRAFE_SPEED,
+            default=DEFAULT_BASELINE_MOTION_RECIPE,
         )
-    return DEFAULT_BASELINE_STRAFE_SPEED
+    return DEFAULT_BASELINE_MOTION_RECIPE
 
 
 class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
@@ -80,8 +91,6 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     # scripts/frame_probe.py). 4 MB is a comfortable upper bound.
     max_message_bytes: int = 4_194_304
     max_range_m: float | None = None
-    min_height_m: float | None = -0.35
-    max_height_m: float | None = 1.2
     obstacle_height_threshold_m: float = 0.08
     target_points: int = 1000
     obstacle_target_points: int = 200
@@ -154,7 +163,7 @@ class ARBridge(Module):  # type: ignore[misc]
         self._connect_handshake = handshake
         runtime_profile = self._adapter.runtime_registration_profile()
 
-        # Build LidarFilter with adapter-derived height bounds.
+        # LiDAR height band comes from the adapter handshake only (not ARBridgeConfig).
         min_height_m, max_height_m = lidar_height_band_m(
             body_bounds_m=handshake.body_bounds_m,
             base_height_m=handshake.base_height_m,
@@ -208,7 +217,7 @@ class ARBridge(Module):  # type: ignore[misc]
             baseline_cap.available if baseline_cap is not None else False
         )
         assert self._loop is not None, "build() called before Module loop is assigned"
-        baseline_strafe_speed = _resolve_baseline_strafe_speed(self._adapter)
+        baseline_motion_recipe = _resolve_baseline_motion_recipe(self._adapter)
         command_queue = AdapterCommandQueue(self._adapter)
         registration = RegistrationSession(
             robot_id=robot_id,
@@ -225,7 +234,7 @@ class ARBridge(Module):  # type: ignore[misc]
             command_queue=command_queue,
             runtime_profile=runtime_profile,
             baseline_motion_available=baseline_motion_available,
-            baseline_strafe_speed=baseline_strafe_speed,
+            baseline_motion_recipe=baseline_motion_recipe,
         )
 
         nav = NavController(
@@ -256,15 +265,11 @@ class ARBridge(Module):  # type: ignore[misc]
             speed_horizon_s=runtime_profile.runtime_speed_horizon_s,
         )
 
-        def _on_emergency_stop(msg: EmergencyStopMessage) -> None:
-            nav.on_emergency_stop(msg.ts)
-            registration.on_emergency_stop()
-
-        def _route_goal_message(msg: GoalMessage) -> None:
-            if msg.intent == "navigate":
-                nav.on_navigate_goal(msg)
-            else:
-                preview.on_preview_goal(msg)
+        safety = BridgeSafetyCoordinator(
+            nav=nav,
+            registration=registration,
+            command_queue=command_queue,
+        )
 
         ws_server = ARWebSocketServer(
             port=self.config.port,
@@ -275,9 +280,9 @@ class ARBridge(Module):  # type: ignore[misc]
             on_camera_info=registration.on_camera_info,
             on_camera_frame=registration.on_camera_frame,
             on_registration_pose=registration.on_registration_pose,
-            on_goal=_route_goal_message,
+            on_goal=self._route_goal_message,
             on_cancel_goal=lambda msg: nav.on_cancel_goal(msg.ts),
-            on_emergency_stop=_on_emergency_stop,
+            on_emergency_stop=safety.on_emergency_stop,
             on_get_status=self._on_get_status,
             on_set_lidar_mode=self._on_set_lidar_mode,
             on_status_connect=self._send_status_to,
@@ -291,6 +296,7 @@ class ARBridge(Module):  # type: ignore[misc]
         self._registration = registration
         self._nav = nav
         self._command_queue = command_queue
+        self._safety = safety
         self._preview = preview
         self._telemetry = telemetry
         self._ws_server = ws_server
@@ -341,6 +347,9 @@ class ARBridge(Module):  # type: ignore[misc]
         self._status.mark_lidar()
         self._status.refresh()
         self._telemetry.publish_lidar(msg)
+
+    # Go2 blueprint connects ar_odom (PoseStamped); G1 connects ar_odometry (Odometry).
+    # Only one stream is wired per deployment — both handlers support both robot stacks.
 
     async def handle_ar_odom(self, msg: PoseStamped) -> None:
         self._odom.update(msg)
@@ -431,8 +440,13 @@ class ARBridge(Module):  # type: ignore[misc]
     # Disconnect handler
     # ------------------------------------------------------------------
 
+    def _route_goal_message(self, msg: GoalMessage) -> None:
+        if msg.intent == "navigate":
+            self._nav.on_navigate_goal(msg)
+        else:
+            self._preview.on_preview_goal(msg)
+
     def _on_client_disconnect(self, _websocket: ServerConnection) -> None:
-        self._nav.reset_on_disconnect()
-        self._registration.clear_on_disconnect()
+        self._safety.on_client_disconnect()
         if self._ws_server.connection_count == 0:
             self._telemetry.reset_lidar_mode()
