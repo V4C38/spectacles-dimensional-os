@@ -9,6 +9,7 @@ import pytest
 from dimos.ar.adapters.base import CapabilityState, RobotHandshake
 from dimos.ar.adapters.g1 import g1_handshake
 from dimos.ar.network.bridge_status import BridgeStatusSnapshot
+from dimos.ar.world_frame.state import WorldFrameState
 from dimos.ar.network.protocol import (
     DEFAULT_CAPABILITIES,
     PROTOCOL_VERSION,
@@ -70,7 +71,7 @@ def test_encode_hello() -> None:
     assert "capability_states" not in msg
 
 
-def test_encode_hello_g1_registration_profile() -> None:
+def test_encode_hello_g1_tag_tracking_profile() -> None:
     handshake = g1_handshake(
         "unitree_g1",
         nav_available=True,
@@ -86,8 +87,8 @@ def test_encode_hello_g1_registration_profile() -> None:
     assert "robot_model" not in msg["robot"]
     assert msg["capabilities"]["registration_april_odom_baseline"]["available"] is True
     assert msg["capabilities"]["registration_manual_pose"]["available"] is True
-    assert msg["robot"]["registration_profile"]["tag_total_size_m"] == 0.07
-    assert isinstance(msg["robot"]["registration_profile"]["tag_ids"], list)
+    assert msg["robot"]["tag_tracking_profile"]["tag_total_size_m"] == 0.07
+    assert isinstance(msg["robot"]["tag_tracking_profile"]["tag_ids"], list)
 
 
 def test_encode_hello_g1_tag_registration_disabled() -> None:
@@ -432,50 +433,48 @@ def test_encode_bridge_status() -> None:
         robot_id="unitree_go2",
         robot_connected=True,
         streams_active=True,
-        registered=False,
         reconnecting=False,
-        registration_method=None,
-        registration_approximate=False,
     )
-    raw = json.loads(encode_bridge_status(snap, ts=1.0))
+    world_frame = WorldFrameState()
+    raw = json.loads(encode_bridge_status(snap, world_frame=world_frame, ts=1.0))
     assert raw["type"] == "bridge_status"
     assert "robot_id" not in raw
     assert "streams_active" not in raw
     assert raw["robot_connected"] is True
-    assert "registration_method" in raw
-    assert raw["registration_method"] is None
-    assert raw["registration_approximate"] is False
+    assert raw["world_frame_method"] is None
+    assert raw["world_frame_approximate"] is False
+    assert raw["world_frame_committed"] is False
 
 
 def test_encode_bridge_status_with_method() -> None:
+    import numpy as np
+
     snap = BridgeStatusSnapshot(
         robot_id="unitree_go2",
         robot_connected=True,
         streams_active=True,
-        registered=True,
         reconnecting=False,
-        registration_method="april_odom_baseline",
-        registration_approximate=False,
     )
-    raw = json.loads(encode_bridge_status(snap, ts=1.0))
-    assert raw["registration_method"] == "april_odom_baseline"
-    assert raw["registration_approximate"] is False
+    world_frame = WorldFrameState()
+    world_frame.commit(np.eye(4), method="april_odom_baseline", approximate=False)
+    raw = json.loads(encode_bridge_status(snap, world_frame=world_frame, ts=1.0))
+    assert raw["world_frame_method"] == "april_odom_baseline"
+    assert raw["world_frame_approximate"] is False
+    assert raw["world_frame_committed"] is True
 
 
 def test_encode_runtime_snapshot() -> None:
-    snap = BridgeStatusSnapshot(
-        robot_id="unitree_go2",
-        robot_connected=True,
-        streams_active=False,
-        registered=True,
-        reconnecting=False,
-        registration_method="manual_pose",
-        registration_approximate=False,
-    )
+    bridge = {
+        "robot_connected": True,
+        "reconnecting": False,
+        "world_frame_committed": True,
+        "world_frame_method": "manual_pose",
+        "world_frame_approximate": False,
+    }
     raw = json.loads(
         encode_runtime_snapshot(
             robot_id="unitree_go2",
-            bridge=snap,
+            bridge=bridge,
             nav={"phase": "navigating"},
             path={"kind": "active", "waypoints": [[1.0, 2.0, 3.0]]},
             ts=5.0,
@@ -572,17 +571,21 @@ def test_nav_phase_payload_mapping() -> None:
     assert nav_phase_payload(
         goal_reached=False,
         goal_failed=False,
-        nav_recovering=False,
         nav_state="navigating",
         nav_goal_pending=True,
     ) == {"phase": "navigating"}
     assert nav_phase_payload(
         goal_reached=True,
         goal_failed=False,
-        nav_recovering=False,
         nav_state="idle",
         nav_goal_pending=False,
     ) == {"phase": "succeeded"}
+    assert nav_phase_payload(
+        goal_reached=False,
+        goal_failed=False,
+        nav_state="recovery",
+        nav_goal_pending=False,
+    ) == {"phase": "recovering"}
 
 
 def test_encode_pose() -> None:
@@ -667,7 +670,7 @@ def test_encode_pong() -> None:
 
 
 def test_normalize_nav_state_active_planner_substates() -> None:
-    from dimos.ar.network.data_plane import normalize_nav_state
+    from dimos.ar.navigation.nav_state import normalize_nav_state
 
     assert normalize_nav_state("initial_rotation") == "navigating"
     assert normalize_nav_state("final_rotation") == "navigating"

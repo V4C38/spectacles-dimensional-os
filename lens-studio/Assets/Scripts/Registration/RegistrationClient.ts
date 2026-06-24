@@ -10,10 +10,10 @@ import {
   CaptureHint,
   RegistrationMode,
   RegistrationStatusMessage,
-} from "../Bridge/domain";
+} from "../Bridge/BridgeDomain";
 import { Signal } from "../Core/Utilities";
 import { RobotMarker } from "../Robot/RobotMarker";
-import { ManualPoseCorrection } from "./ManualPoseCorrection";
+import { ManualRegistrationAlignment } from "./ManualRegistrationAlignment";
 import {
   cloneQuat,
   cloneVec3,
@@ -29,7 +29,7 @@ const MANUAL_POSE_POSITION_EPS_CM = 0.5;
 const MANUAL_POSE_ROTATION_EPS_RAD = 0.02;
 
 export interface RegistrationClientDeps {
-  poseCorrection: ManualPoseCorrection;
+  manualRegistrationAlignment: ManualRegistrationAlignment;
   hasBridgeConnection: () => boolean;
   isCapabilityAvailable: (cap: string) => boolean;
   getInteractionMode: () => RobotInteractionMode;
@@ -40,6 +40,7 @@ export interface RegistrationClientDeps {
 
 export class RegistrationClient {
   public readonly onRegistrationStatus = new Signal<RegistrationStatusMessage>();
+  public readonly onCapturePolicyInputsChanged = new Signal<void>();
 
   constructor(
     private readonly bridgeClient: BridgeClient | null,
@@ -49,6 +50,8 @@ export class RegistrationClient {
 
   private _intent: RegistrationMode | null = null;
   private _awaitingCommit = false;
+  private _baselineCaptureSessionActive = false;
+  private _registrationCaptureHint: CaptureHint = "off";
   private _lastStatusTime = -1;
   private _lastCaptureLogTime = -1;
   private _lastSubmitLogTime = -1;
@@ -59,6 +62,18 @@ export class RegistrationClient {
   private _deps: RegistrationClientDeps | null = null;
   private _bound = false;
   private _motionAuthorizePending = false;
+
+  public get awaitingCommit(): boolean {
+    return this._awaitingCommit;
+  }
+
+  public get baselineCaptureSessionActive(): boolean {
+    return this._baselineCaptureSessionActive;
+  }
+
+  public get registrationCaptureHint(): CaptureHint {
+    return this._registrationCaptureHint;
+  }
 
   public initialize(deps: RegistrationClientDeps): void {
     this._deps = deps;
@@ -82,11 +97,6 @@ export class RegistrationClient {
         this._tryStartBridgeSession(this._intent);
       }
     });
-    this.bridgeClient.onBridgeStatus.add((msg) => {
-      if (this._awaitingCommit && msg.registered) {
-        this._awaitingCommit = false;
-      }
-    });
   }
 
   public start(mode: RegistrationMode): void {
@@ -95,15 +105,11 @@ export class RegistrationClient {
     this._motionAuthorizePending = false;
     this._lastStatusTime = -1;
     this._lastSubmittedManualPose = null;
+    this._baselineCaptureSessionActive = mode === "april_odom_baseline";
+    this._registrationCaptureHint =
+      mode === "april_odom_baseline" ? "steady" : "off";
     this._tryStartBridgeSession(mode);
-    if (this.frameCapture) {
-      this.frameCapture.setMode(
-        mode === "april_odom_baseline" ? "setup" : "off",
-      );
-      this.frameCapture.setCapturePolicy(
-        mode === "april_odom_baseline" ? "steady" : "off",
-      );
-    }
+    this._notifyCapturePolicyInputsChanged();
     print(`RegistrationClient: start mode=${mode}`);
   }
 
@@ -142,16 +148,12 @@ export class RegistrationClient {
     this._motionAuthorizePending = false;
     this._lastStatusTime = -1;
     this._lastSubmittedManualPose = null;
+    this._baselineCaptureSessionActive = false;
+    this._registrationCaptureHint = "off";
     if (notifyBridge && this.bridgeClient?.isConnected()) {
       this.bridgeClient.sendRegistrationCommand("stop");
     }
-    if (this.frameCapture) {
-      const registered = Boolean(
-        this.bridgeClient?.lastBridgeStatus?.registered,
-      );
-      this.frameCapture.setMode(registered ? "runtime" : "off");
-      this.frameCapture.setCapturePolicy("off");
-    }
+    this._notifyCapturePolicyInputsChanged();
     print(
       wasBaseline
         ? "RegistrationClient: stop (april_odom_baseline)"
@@ -189,7 +191,7 @@ export class RegistrationClient {
     }
     this._deps.disableNavigationPlacementForRegistration();
     const pose = this._poseFromReference(position, rotation);
-    this._deps.poseCorrection.setAnchorPose(pose);
+    this._deps.manualRegistrationAlignment.setAnchorPose(pose);
     const p = pose.position;
     const r = pose.rotation;
     print(
@@ -227,7 +229,7 @@ export class RegistrationClient {
   }
 
   public clearPose(): void {
-    this._deps?.poseCorrection.reset();
+    this._deps?.manualRegistrationAlignment.reset();
   }
 
   public captureAndSubmitManualPose(force: boolean = false): boolean {
@@ -242,7 +244,7 @@ export class RegistrationClient {
     }
     const pose = this._poseFromMarkerWorld(position, rotation);
     if (this._deps) {
-      this._deps.poseCorrection.setAnchorPose(pose);
+      this._deps.manualRegistrationAlignment.setAnchorPose(pose);
     }
     if (!this._deps?.hasBridgeConnection()) {
       return true;
@@ -279,7 +281,7 @@ export class RegistrationClient {
     }
     const pose = this._poseFromMarkerWorld(position, rotation);
     if (this._deps) {
-      this._deps.poseCorrection.setAnchorPose(pose);
+      this._deps.manualRegistrationAlignment.setAnchorPose(pose);
     }
     const r = rotation;
     print(
@@ -314,6 +316,10 @@ export class RegistrationClient {
     return getTime() - this._lastStatusTime > NO_RESPONSE_TIMEOUT_S;
   }
 
+  private _notifyCapturePolicyInputsChanged(): void {
+    this.onCapturePolicyInputsChanged.emit();
+  }
+
   private _tryStartBridgeSession(mode: RegistrationMode): boolean {
     const connected = Boolean(this.bridgeClient?.isConnected());
     const hasRobotId = Boolean(this.bridgeClient?.activeRobotId);
@@ -342,26 +348,19 @@ export class RegistrationClient {
       );
       this._intent = null;
       this._awaitingCommit = false;
-      if (this.frameCapture) {
-        this.frameCapture.setMode("off");
-        this.frameCapture.setCapturePolicy("off");
-      }
+      this._baselineCaptureSessionActive = false;
+      this._registrationCaptureHint = "off";
+      this._notifyCapturePolicyInputsChanged();
     } else if (msg.phase === "succeeded") {
       this._awaitingCommit = false;
       this._intent = null;
     }
     if (this._intent === "april_odom_baseline" || this._awaitingCommit) {
-      this._applyCapturePolicy(msg.capture);
+      this._registrationCaptureHint = msg.capture;
+      this._notifyCapturePolicyInputsChanged();
     }
     this.onRegistrationStatus.emit(msg);
   };
-
-  private _applyCapturePolicy(capture: CaptureHint): void {
-    if (!this.frameCapture) {
-      return;
-    }
-    this.frameCapture.setCapturePolicy(capture);
-  }
 
   private _poseFromReference(
     position: vec3,

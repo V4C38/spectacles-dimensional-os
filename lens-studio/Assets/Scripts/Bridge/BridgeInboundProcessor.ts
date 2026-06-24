@@ -9,7 +9,7 @@ import {
   NavStatusMessage,
   PathMessage,
   PongMessage,
-  PoseCorrectionMessage,
+  WorldFrameCorrectionMessage,
   PoseMessage,
   RuntimeSnapshotMessage,
   bridgeStatusFromSnapshot,
@@ -38,7 +38,7 @@ export class BridgeInboundProcessor {
   public readonly onHello = new Signal<HelloMessage>();
   public readonly onLidar = new Signal<LidarMessage>();
   public readonly onPose = new Signal<PoseMessage>();
-  public readonly onPoseCorrection = new Signal<PoseCorrectionMessage>();
+  public readonly onWorldFrameCorrection = new Signal<WorldFrameCorrectionMessage>();
   public readonly onRegistrationStatus = new Signal<RegistrationStatusMessage>();
   public readonly onCameraFrameAck = new Signal<CameraFrameAckMessage>();
   public readonly onBridgeStatus = new Signal<BridgeStatusMessage>();
@@ -189,8 +189,8 @@ export class BridgeInboundProcessor {
           this._logPoseRx(msg);
           this.onPose.emit(msg);
           break;
-        case "pose_correction":
-          this.onPoseCorrection.emit(msg);
+        case "world_frame_correction":
+          this.onWorldFrameCorrection.emit(msg);
           break;
         case "registration_status":
           this._logDiagnosticRx(msg);
@@ -235,6 +235,12 @@ export class BridgeInboundProcessor {
     };
     if (typeof snapshot.nav.error_code === "number") {
       navStatus.error_code = snapshot.nav.error_code;
+    }
+    if (typeof snapshot.nav.retryable === "boolean") {
+      navStatus.retryable = snapshot.nav.retryable;
+    }
+    if (snapshot.nav.stall_reason === "no_path" || snapshot.nav.stall_reason === "planner_idle") {
+      navStatus.stall_reason = snapshot.nav.stall_reason;
     }
     this._logDiagnosticRx(navStatus);
     this.onNavStatus.emit(navStatus);
@@ -374,21 +380,21 @@ export class BridgeInboundProcessor {
       case "camera_frame_ack":
         break;
       case "bridge_status": {
-        const key = `${msg.registered}|${msg.robot_connected}|${msg.registration_method ?? "-"}`;
+        const key = `${msg.world_frame_committed}|${msg.robot_connected}|${msg.world_frame_method ?? "-"}`;
         if (key !== this._lastBridgeStatusKey) {
           this._lastBridgeStatusKey = key;
           print(
-            `BridgeInboundProcessor: RX bridge_status registered=${msg.registered} robot_connected=${msg.robot_connected}`,
+            `BridgeInboundProcessor: RX bridge_status world_frame_committed=${msg.world_frame_committed} robot_connected=${msg.robot_connected}`,
           );
         }
         break;
       }
       case "nav_status": {
-        const key = `${msg.phase}|${msg.error_code ?? "-"}`;
+        const key = `${msg.phase}|${msg.error_code ?? "-"}|${msg.retryable ?? "-"}|${msg.stall_reason ?? "-"}`;
         if (key !== this._lastNavStatusKey) {
           this._lastNavStatusKey = key;
           print(
-            `BridgeInboundProcessor: RX nav_status phase=${msg.phase} error_code=${msg.error_code ?? "-"}`,
+            `BridgeInboundProcessor: RX nav_status phase=${msg.phase} error_code=${msg.error_code ?? "-"} retryable=${msg.retryable ?? "-"} stall_reason=${msg.stall_reason ?? "-"}`,
           );
         }
         break;

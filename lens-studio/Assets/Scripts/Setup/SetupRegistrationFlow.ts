@@ -9,10 +9,11 @@ import { NO_ROBOT_CONNECTED_LABEL } from "../Core/AppState";
 import { DimosManager } from "../Core/DimosManager";
 import {
   BridgeStatusMessage,
+  RegistrationMotion,
   RegistrationPhase,
   RegistrationStatusMessage,
-} from "../Bridge/domain";
-export type { RegistrationStatusMessage } from "../Bridge/domain";
+} from "../Bridge/BridgeDomain";
+export type { RegistrationStatusMessage } from "../Bridge/BridgeDomain";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE, SnapOS2Styles } from "../UI/kit/UIKit";
 import { isRegistrationPreviewPhase } from "./SetupRegistrationPreview";
 
@@ -75,7 +76,7 @@ export const REGISTRATION_STATUS_MANUAL = "Complete to confirm manual Registrati
 
 export const WIZARD_STEP_DESCRIPTIONS: string[] = [
   "Power on your robot.\nRun ./start.sh in dimos-ar on your Mac.",
-  "Enter your Mac's IP.\nUse same Wi‑Fi for robot, Mac, and Spectacles.",
+  "Enter your Mac's IP.\nWait for ./start.sh to print \"Bridge ready\".\nUse same Wi‑Fi for robot, Mac, and Spectacles.",
   buildRegistrationDescriptionAuto(NO_ROBOT_CONNECTED_LABEL),
 ];
 
@@ -123,8 +124,12 @@ export function isRegistrationFailed(state: RegistrationViewState): boolean {
 }
 
 const MANUAL_CANDIDATE_SYNC_INTERVAL_S = 0.35;
-const REGISTRATION_STATUS_LOG_INTERVAL_S = 1.0;
 const NO_RESPONSE_STATUS_MSG = "Bridge not responding";
+
+export function buildRegistrationCheckpointTitle(motion: RegistrationMotion): string {
+  const checkpoint = motion.waypoint_index - 1;
+  return `checkpoint ${checkpoint}/${motion.waypoint_total} reached\n\n- Checkpoint reached -`;
+}
 
 export function buildRegistrationDetailText(state: RegistrationViewState): string {
   const parts: string[] = [];
@@ -132,9 +137,7 @@ export function buildRegistrationDetailText(state: RegistrationViewState): strin
     parts.push(state.message);
   }
   if (state.motion) {
-    parts.push(
-      `Step ${state.motion.waypoint_index}/${state.motion.waypoint_total}`,
-    );
+    parts.push(buildRegistrationCheckpointTitle(state.motion));
   }
   return parts.join("\n");
 }
@@ -303,9 +306,9 @@ export interface SetupRegistrationFlowCallbacks {
 export class SetupRegistrationFlow {
   private _state: RegistrationViewState = createRegistrationViewState();
   private _lastManualCandidateSyncTime = -1;
-  private _lastRegistrationStatusLogTime = -1;
   private _lastLoggedRegistrationStatusKey = "";
   private _commitInFlight = false;
+  private _finishSetupDispatched = false;
 
   constructor(
     private readonly _dimosManager: DimosManager | null,
@@ -357,6 +360,7 @@ export class SetupRegistrationFlow {
   }
 
   public enter(): void {
+    this._finishSetupDispatched = false;
     const preferredMode = this._registrationClient?.preferredMode() ?? "auto";
     if (preferredMode === "manualOnly" || !this._bridgeRuntime?.hasConnection()) {
       this._beginManualMode();
@@ -367,6 +371,7 @@ export class SetupRegistrationFlow {
 
   public leave(): void {
     this._commitInFlight = false;
+    this._finishSetupDispatched = false;
     this._lastManualCandidateSyncTime = -1;
     this._registrationClient?.stop({ notifyBridge: true });
     this._registrationClient?.cancelPlacement();
@@ -419,10 +424,15 @@ export class SetupRegistrationFlow {
 
   public handleRegistrationStatus(msg: RegistrationStatusMessage): void {
     this._logRegistrationStatusIfChanged(msg);
+    if (msg.phase === "succeeded") {
+      this.handleCommitAcknowledged("registration_status", msg);
+      return;
+    }
     this._state = applyRegistrationStatusToViewState(this._state, msg);
 
     if (msg.phase === "failed") {
       this._commitInFlight = false;
+      this._finishSetupDispatched = false;
       this._callbacks.log(
         `registration failed on bridge: ${msg.message || "unknown reason"}`,
       );
@@ -430,9 +440,6 @@ export class SetupRegistrationFlow {
         this._robotRuntime?.applyInteractionFromState();
       }
       this._setupRegistrationPreview?.end();
-    } else if (msg.phase === "succeeded") {
-      this._setupRegistrationPreview?.setComplete();
-      this._tryAutoFinishSetup();
     } else if (this._state.mode === "auto") {
       this._setupRegistrationPreview?.updateFromRegistrationStatus(msg);
     }
@@ -443,6 +450,7 @@ export class SetupRegistrationFlow {
     if (!isRegistrationFailed(this._state)) {
       return;
     }
+    this._finishSetupDispatched = false;
     if (
       this._registrationClient?.preferredMode() === "manualOnly" ||
       this._state.mode === "manual"
@@ -464,13 +472,36 @@ export class SetupRegistrationFlow {
     }
   }
 
-  public handleBridgeStatus(msg: BridgeStatusMessage): void {
-    if (isRegistrationPendingCommit(this._state, this._commitInFlight) && msg.registered) {
+  public handleCommitAcknowledged(
+    source: "bridge_status" | "registration_status",
+    msg?: RegistrationStatusMessage,
+  ): void {
+    if (this._state.phase === "succeeded") {
+      this._tryAutoFinishSetup();
+      return;
+    }
+    if (source === "bridge_status" && !this._commitInFlight) {
+      return;
+    }
+    if (source === "registration_status" && msg) {
+      this._state = applyRegistrationStatusToViewState(this._state, msg);
+      if (this._state.phase !== "succeeded") {
+        return;
+      }
+    } else {
       this._registrationClient?.cancelPlacement();
       this._state = { ...this._state, phase: "succeeded", message: "" };
-      this._notify();
-      this._callbacks.log("registration confirmed via bridge_status fallback");
-      this._tryAutoFinishSetup();
+      this._callbacks.log("registration confirmed via bridge_status");
+    }
+    this._setupRegistrationPreview?.setComplete();
+    this._commitInFlight = false;
+    this._notify();
+    this._tryAutoFinishSetup();
+  }
+
+  public handleBridgeStatus(msg: BridgeStatusMessage): void {
+    if (this._commitInFlight && msg.world_frame_committed) {
+      this.handleCommitAcknowledged("bridge_status");
     }
   }
 
@@ -554,6 +585,7 @@ export class SetupRegistrationFlow {
 
   private _beginAutoMode(): void {
     this._commitInFlight = false;
+    this._finishSetupDispatched = false;
     this._lastManualCandidateSyncTime = -1;
     this._state = createRegistrationViewState();
     this._registrationClient?.cancelPlacement();
@@ -572,6 +604,7 @@ export class SetupRegistrationFlow {
 
   private _beginManualMode(): void {
     this._commitInFlight = false;
+    this._finishSetupDispatched = false;
     this._lastManualCandidateSyncTime = -1;
     this._registrationClient?.stop({ notifyBridge: true });
     this._state = createManualRegistrationState("editing");
@@ -596,15 +629,10 @@ export class SetupRegistrationFlow {
 
   private _logRegistrationStatusIfChanged(msg: RegistrationStatusMessage): void {
     const key = `${msg.phase}|${msg.mode ?? "-"}|${msg.capture}|${msg.motion?.waypoint_index ?? "-"}`;
-    const now = getTime();
-    if (
-      key === this._lastLoggedRegistrationStatusKey &&
-      now - this._lastRegistrationStatusLogTime < REGISTRATION_STATUS_LOG_INTERVAL_S
-    ) {
+    if (key === this._lastLoggedRegistrationStatusKey) {
       return;
     }
     this._lastLoggedRegistrationStatusKey = key;
-    this._lastRegistrationStatusLogTime = now;
     this._callbacks.log(
       `registration_status phase=${msg.phase} mode=${msg.mode ?? "-"} capture=${msg.capture} "${msg.message}"`,
     );
@@ -622,6 +650,10 @@ export class SetupRegistrationFlow {
     if (!isRegistrationComplete(this._state)) {
       return;
     }
+    if (this._finishSetupDispatched) {
+      return;
+    }
+    this._finishSetupDispatched = true;
     this._commitInFlight = false;
     if (this._state.mode === "manual") {
       this._callbacks.finishSetup();

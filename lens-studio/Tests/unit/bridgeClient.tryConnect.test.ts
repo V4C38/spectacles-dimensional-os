@@ -15,6 +15,7 @@ type MockConnection = {
   isConnecting: boolean;
   connect: ReturnType<typeof vi.fn>;
   disconnect: ReturnType<typeof vi.fn>;
+  cancelConnect: ReturnType<typeof vi.fn>;
 };
 
 function makeClient(overrides?: {
@@ -34,6 +35,7 @@ function makeClient(overrides?: {
     isConnecting: false,
     connect: vi.fn(async () => {}),
     disconnect: vi.fn(),
+    cancelConnect: vi.fn(),
     ...overrides?.connection,
   };
 
@@ -134,5 +136,40 @@ describe("BridgeClient.tryConnect", () => {
     await expect(second).resolves.toBe(true);
     expect(connection.connect).toHaveBeenCalledTimes(2);
     expect(client.baseUrl).toBe("192.168.1.40");
+  });
+
+  it("reuses an open socket when hello is still pending", async () => {
+    const { client, connection, inbound } = makeClient({
+      connection: {
+        isSocketOpen: vi.fn(() => true),
+        isConnecting: false,
+      },
+      inbound: {
+        helloReceived: false,
+        waitForHello: vi.fn(async () => true),
+      },
+    });
+    client.baseUrl = "192.168.1.55";
+
+    await expect(client.tryConnect("192.168.1.55")).resolves.toBe(true);
+    expect(client.disconnect).not.toHaveBeenCalled();
+    expect(connection.connect).not.toHaveBeenCalled();
+    expect(inbound.waitForHello).toHaveBeenCalled();
+  });
+
+  it("uses cancelConnect when superseding an in-flight connect", async () => {
+    const { client, connection } = makeClient({
+      connection: {
+        isConnecting: true,
+        connect: vi.fn(async () => {}),
+      },
+    });
+
+    await client.tryConnect("192.168.1.30");
+    await Promise.resolve();
+    client.tryConnect("192.168.1.40");
+    await Promise.resolve();
+
+    expect(connection.cancelConnect).toHaveBeenCalled();
   });
 });

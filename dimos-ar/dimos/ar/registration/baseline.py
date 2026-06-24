@@ -12,11 +12,12 @@ from typing import TYPE_CHECKING
 
 from dimos.ar.adapters.base import BaselineMotionRecipe, DEFAULT_BASELINE_MOTION_RECIPE
 from dimos.ar.registration.types import CaptureHint, MotionHint, RegistrationPhase
+from dimos.ar.utils.console import log_checkpoint
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
     from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
-    from dimos.ar.registration.transforms import OdomSample
+    from dimos.ar.world_frame.transforms import OdomSample
 
 logger = setup_logger()
 
@@ -29,6 +30,8 @@ WAYPOINT_TOTAL: int = 3
 
 
 class _BaselineState(StrEnum):
+    """Internal motion-recipe state; mapped to wire ``RegistrationPhase`` in ``_emit``."""
+
     IDLE = "idle"
     ESTIMATING = "estimating"
     AWAITING_CONFIRM = "awaiting_confirm"
@@ -256,10 +259,6 @@ class BaselineCollector:
                 if err is not None:
                     reason = f"{reason}: {err}"
                 self._fail(reason)
-                return
-            if self._state != _BaselineState.MOVE or self._move_phase != _MovePhase.LEG:
-                return
-            self._move_start_mono = time.monotonic()
 
     def _stop_motion(self) -> None:
         if self._move_velocity_active:
@@ -284,6 +283,7 @@ class BaselineCollector:
         )
         logger.info("BaselineCollector MOVE leg=%d", leg)
         self._submit_lateral_velocity(speed, on_complete=self._on_velocity_start_ack)
+        self._move_start_mono = time.monotonic()
 
     def _start_sample(self) -> None:
         self._stop_motion()
@@ -326,6 +326,7 @@ class BaselineCollector:
         )
         logger.info("BaselineCollector MOVE leg=%d", leg)
         self._submit_lateral_velocity(speed, on_complete=self._on_velocity_start_ack)
+        self._move_start_mono = time.monotonic()
 
     def _tick_locked(
         self,
@@ -346,6 +347,12 @@ class BaselineCollector:
                 spread = math.sqrt((max(xs) - min(xs)) ** 2 + (max(zs) - min(zs)) ** 2)
                 if spread <= ESTIMATING_SPREAD_M:
                     self._state = _BaselineState.AWAITING_CONFIRM
+                    log_checkpoint(
+                        logger,
+                        kind="milestone",
+                        event="BaselineCollector awaiting_motion",
+                        spread_m=round(spread, 3),
+                    )
                     self._emit(
                         RegistrationPhase.AWAITING_MOTION,
                         CaptureHint.STEADY,

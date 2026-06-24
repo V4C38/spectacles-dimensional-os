@@ -7,9 +7,13 @@ It lives in this monorepo as a standalone bridge package, with all
 platform-agnostic code under `dimos/ar/`.
 
 At a glance:
-- `dimos/ar/bridge/`: `ARBridge` and collaborator classes (navigation, preview, telemetry, odom buffer, status service)
-- `dimos/ar/registration/`: frame registration session, baseline collector, tag tracker, runtime refinement
-- `dimos/ar/adapters/`: `ARRobotAdapterModule`, the robot/runtime adapter layer
+- `dimos/ar/bridge/`: `ARBridge` composition root; telemetry, odom buffer, status service
+- `dimos/ar/navigation/`: `NavigateGoalHandler`, `PreviewGoalHandler`, world-frame goal transform
+- `dimos/ar/world_frame/`: committed `WorldFrameState`, registry, runtime refinement
+- `dimos/ar/tag_tracking/`: robot-mounted AprilTag detect + solve
+- `dimos/ar/registration/`: setup wizard session only (baseline, types, wire)
+- `dimos/ar/lidar/`: LiDAR height-band filtering for XR payloads
+- `dimos/ar/adapters/`: per-robot handshake, tag geometry, stream routing
 - `dimos/ar/network/protocol.py`: the AR WebSocket contract implementation
 - `dimos/ar/blueprints.py`: monorepo entrypoint used by `start.sh`
 - `PROTOCOL.md`: cross-client protocol documentation
@@ -55,7 +59,7 @@ robot family:
 
 - `hello.robot` provides display identity plus geometry such as
   `body_bounds_m`, `footprint_m`, `base_height_m`, and
-  `default_render_offset_m`; `registration_profile` carries tag geometry only
+  `default_render_offset_m`; `tag_tracking_profile` carries tag geometry only
   (`tag_ids`, `tag_total_size_m`)
 - `hello.capabilities` tells the client which features are available for the
   active runtime
@@ -139,9 +143,9 @@ frames are consumed. Always available when `registration_manual_pose` is adverti
 
 Notes:
 - Baseline strafe motion uses the same pure lateral `cmd_vel.linear.y` path as
-  the proven teleop/app controls. Go2 uses a `0.5` stick deflection streamed at
-  50 Hz; G1 uses the same robot-agnostic driver path with adapter-provided speed
-  and remains validation-pending on hardware.
+  the proven teleop/app controls. The shared `BaselineMotionRecipe.strafe_speed`
+  is raw stick deflection (default `0.2`); legs run for fixed 2 / 4 / 2 s
+  (timer-only, not odom-gated). `motion.distance_m` hints are UX-only.
 - The client authorizes each baseline move with `registration_command:
   authorize_motion`; the bridge publishes structured `motion` hints in
   `registration_status`.
@@ -175,7 +179,9 @@ and LiDAR stay co-registered within a few centimetres.
 <details>
 <summary>Protocol coupling</summary>
 
-Protocol v6 consolidates registration (`registration_command`), navigation
+Protocol v7 aligns naming with the Python package layout (`world_frame_*`,
+`tag_tracking_profile`, `world_frame_correction`) while keeping v6 message
+shapes for registration (`registration_command`), navigation
 (`goal` with `intent: navigate|preview`), and reconnect sync
 (`runtime_snapshot` on connect / `get_status`). If the AR protocol changes,
 update these together:

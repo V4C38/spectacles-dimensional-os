@@ -31,7 +31,8 @@ from dimos.ar.network.protocol import (
     encode_pong,
 )
 from dimos.ar.network.ws_send_queue import ClientSendQueue, peek_message_type
-from dimos.ar.tracking.robot_tag_tracker import parse_camera_frame
+from dimos.ar.tag_tracking.solve import parse_camera_frame
+from dimos.ar.utils.console import console_divider
 from dimos.core.global_config import global_config
 from dimos.utils.logging_config import setup_logger
 
@@ -59,12 +60,12 @@ InboundHandler = Callable[[InboundMessage, "ws_server.ServerConnection"], None]
 
 INBOUND_TEXT_LOG_INTERVAL_S = 1.0
 CAMERA_FRAME_LOG_INTERVAL_S = 2.0
-_THROTTLED_INBOUND_TYPES = frozenset({"registration_pose", "get_status", "goal"})
+_THROTTLED_INBOUND_TYPES = frozenset({"registration_pose", "goal"})
 PING_INTERVAL_S = 30
 PING_TIMEOUT_S = 30
 
 _TRACE = os.getenv("DIMOS_AR_TRACE", "") not in ("", "0", "false")
-_TRACE_ONLY_INBOUND_TYPES = frozenset({"get_status"})
+_TRACE_ONLY_INBOUND_TYPES = frozenset({"get_status", "ping"})
 
 
 def _handshake_noise_filter(record: logging.LogRecord) -> bool:
@@ -244,12 +245,23 @@ class ARWebSocketServer:
         if req is not None and req.path not in ("/", "/ws"):
             await websocket.close(1008, "Not Found")
             return
+        remote = getattr(websocket, "remote_address", None)
+        remote_ip = remote[0] if remote else None
+        if remote_ip is not None:
+            for existing in list(self._connections):
+                existing_remote = getattr(existing, "remote_address", None)
+                if existing_remote and existing_remote[0] == remote_ip:
+                    logger.info(
+                        "XR client reconnect from same remote; closing prior connection",
+                        remote=str(remote),
+                    )
+                    await existing.close(1000, "superseded by new connection")
         self._connections.add(websocket)
         outbound = ClientSendQueue(websocket)
         self._outbound[websocket] = outbound
         outbound.start()
-        remote = getattr(websocket, "remote_address", None)
         logger.info("XR client connected", remote=str(remote))
+        console_divider(f"XR client connected remote={remote}")
         try:
             hello = await asyncio.to_thread(self._hello_supplier)
             await websocket.send(encode_hello(hello) + "\n")
@@ -291,10 +303,7 @@ class ARWebSocketServer:
                         now_mono = time.monotonic()
                         _should_log = (
                             msg_type not in _THROTTLED_INBOUND_TYPES
-                            and (
-                                not _TRACE_ONLY_INBOUND_TYPES
-                                or msg_type not in _TRACE_ONLY_INBOUND_TYPES
-                            )
+                            and msg_type not in _TRACE_ONLY_INBOUND_TYPES
                         ) or (
                             msg_type in _THROTTLED_INBOUND_TYPES
                             and now_mono - _last_inbound_text_log.get(msg_type, 0.0)
@@ -320,6 +329,8 @@ class ARWebSocketServer:
                 code=exc.rcvd.code if exc.rcvd is not None else None,
                 reason=exc.rcvd.reason if exc.rcvd is not None else None,
             )
+            code = exc.rcvd.code if exc.rcvd is not None else None
+            console_divider(f"XR client disconnected remote={remote} code={code}")
         finally:
             await outbound.stop()
             self._outbound.pop(websocket, None)

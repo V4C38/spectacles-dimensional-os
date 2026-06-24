@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from dimos.ar.tracking.robot_tag_tracker import TagMount
+from dimos.ar.tag_tracking.solve import TagMount
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.spec.utils import Spec
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 
 @dataclass(frozen=True)
@@ -16,7 +20,9 @@ class CapabilityState:
 
 @dataclass(frozen=True)
 class BaselineMotionRecipe:
-    strafe_speed: float
+    """Baseline strafe parameters shared by all robot adapters."""
+
+    strafe_speed: float  # cmd_vel.linear.y stick deflection [-1, 1]; timer-controlled legs
     leg_duration_s: tuple[float, float, float]
     leg_directions: tuple[float, float, float]
     leg_distance_multipliers: tuple[float, float, float]
@@ -24,7 +30,7 @@ class BaselineMotionRecipe:
 
 
 DEFAULT_BASELINE_MOTION_RECIPE = BaselineMotionRecipe(
-    strafe_speed=0.3,
+    strafe_speed=0.2,
     leg_duration_s=(2.0, 4.0, 2.0),
     leg_directions=(1.0, -1.0, 1.0),
     leg_distance_multipliers=(1.0, 2.0, 1.0),
@@ -32,7 +38,7 @@ DEFAULT_BASELINE_MOTION_RECIPE = BaselineMotionRecipe(
 
 
 @dataclass(frozen=True)
-class RuntimeRegistrationProfile:
+class TagTrackingProfile:
     runtime_static_speed_mps: float = 0.05
     runtime_max_correct_speed_mps: float = 1.5
     runtime_cruise_window_s: float = 12.0
@@ -51,7 +57,7 @@ class RobotHandshake:
     visual_origin_frame: str = "base_link"
     base_height_m: float | None = None
     default_render_offset_m: tuple[float, float, float] | None = None
-    registration_profile: dict[str, Any] | None = None
+    tag_tracking_profile: dict[str, Any] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -80,4 +86,26 @@ class ARRobotAdapterSpec(Spec, Protocol):  # type: ignore[misc]
 
     def baseline_motion_recipe(self) -> BaselineMotionRecipe: ...
 
-    def runtime_registration_profile(self) -> RuntimeRegistrationProfile: ...
+    def runtime_tag_tracking_profile(self) -> TagTrackingProfile: ...
+
+
+def resolve_baseline_motion_recipe(adapter: ARRobotAdapterSpec) -> BaselineMotionRecipe:
+    try:
+        recipe = adapter.baseline_motion_recipe()
+        if (
+            isinstance(recipe, BaselineMotionRecipe)
+            and math.isfinite(recipe.strafe_speed)
+            and recipe.strafe_speed > 0
+        ):
+            logger.info(
+                "Baseline motion recipe resolved",
+                strafe_speed=recipe.strafe_speed,
+            )
+            return recipe
+    except Exception as exc:
+        logger.warning(
+            "baseline_motion_recipe failed; using default",
+            error=str(exc),
+            default=DEFAULT_BASELINE_MOTION_RECIPE,
+        )
+    return DEFAULT_BASELINE_MOTION_RECIPE

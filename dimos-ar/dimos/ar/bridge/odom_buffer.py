@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING, Union
 
 import numpy as np
 
-from dimos.ar.registration.transforms import Calibration, OdomSample
+from dimos.ar.world_frame.state import WorldFrameState
+from dimos.ar.world_frame.transforms import OdomSample
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -293,10 +294,10 @@ class OdomBuffer:
             )
             return dp / dt
 
-    def latest_world_position(self, calibration: Calibration) -> tuple[float, float, float] | None:
+    def latest_world_position(self, world_frame: WorldFrameState) -> tuple[float, float, float] | None:
         """Transform the latest odom position into the AR world frame."""
         odom = self.latest()
         if odom is None:
             return None
-        position, _ = calibration.transform_pose(odom.position, odom.orientation)
+        position, _ = world_frame.transform_pose(odom.position, odom.orientation)
         return position

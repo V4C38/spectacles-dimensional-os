@@ -137,6 +137,7 @@ export class DimosServices extends BaseScriptComponent {
       this._robot,
       this._navigation,
       this.frameCaptureController ?? null,
+      this._registration,
     );
   }
 }

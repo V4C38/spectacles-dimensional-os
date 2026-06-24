@@ -22,8 +22,9 @@ if TYPE_CHECKING:
 
     from dimos.ar.adapters.base import CapabilityState, RobotHandshake
     from dimos.ar.network.bridge_status import BridgeStatusSnapshot
+    from dimos.ar.world_frame.state import WorldFrameState
 
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 7
 
 NavPhase = Literal["idle", "navigating", "recovering", "succeeded", "failed"]
 PathKind = Literal["active", "preview"]
@@ -300,8 +301,8 @@ def encode_hello(handshake: RobotHandshake) -> str:
         robot["base_height_m"] = handshake.base_height_m
     if handshake.default_render_offset_m is not None:
         robot["default_render_offset_m"] = list(handshake.default_render_offset_m)
-    if handshake.registration_profile is not None:
-        robot["registration_profile"] = handshake.registration_profile
+    if handshake.tag_tracking_profile is not None:
+        robot["tag_tracking_profile"] = handshake.tag_tracking_profile
     robot.update(handshake.extra)
     return _dumps(
         {
@@ -313,27 +314,32 @@ def encode_hello(handshake: RobotHandshake) -> str:
     )
 
 
-def _bridge_status_wire(snapshot: BridgeStatusSnapshot) -> dict[str, Any]:
-    # v6 wire payloads intentionally omit streams_active (internal-only tracker field).
+def bridge_status_wire(
+    snapshot: BridgeStatusSnapshot,
+    *,
+    world_frame: WorldFrameState | None = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "robot_connected": snapshot.robot_connected,
-        "registered": snapshot.registered,
         "reconnecting": snapshot.reconnecting,
-        "registration_method": snapshot.registration_method,
-        "registration_approximate": snapshot.registration_approximate,
     }
+    if world_frame is not None:
+        payload["world_frame_committed"] = world_frame.is_committed
+        payload["world_frame_method"] = world_frame.method
+        payload["world_frame_approximate"] = world_frame.approximate
     return payload
 
 
 def encode_bridge_status(
     snapshot: BridgeStatusSnapshot,
     *,
+    world_frame: WorldFrameState | None = None,
     ts: float | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "type": "bridge_status",
         "ts": ts if ts is not None else time.time(),
-        **_bridge_status_wire(snapshot),
+        **bridge_status_wire(snapshot, world_frame=world_frame),
     }
     return _dumps(payload)
 
@@ -341,16 +347,21 @@ def encode_bridge_status(
 def encode_runtime_snapshot(
     *,
     robot_id: str,
-    bridge: BridgeStatusSnapshot,
+    bridge: BridgeStatusSnapshot | dict[str, Any],
     nav: dict[str, Any],
     path: dict[str, Any] | None = None,
     ts: float | None = None,
+    world_frame: WorldFrameState | None = None,
 ) -> str:
+    if isinstance(bridge, dict):
+        bridge_wire = bridge
+    else:
+        bridge_wire = bridge_status_wire(bridge, world_frame=world_frame)
     payload: dict[str, Any] = {
         "type": "runtime_snapshot",
         "ts": ts if ts is not None else time.time(),
         "robot_id": robot_id,
-        "bridge": _bridge_status_wire(bridge),
+        "bridge": bridge_wire,
         "nav": nav,
     }
     if path is not None:
@@ -463,28 +474,6 @@ def encode_pose(
     return _dumps(payload)
 
 
-def encode_pose_correction(
-    *,
-    ts: float | None,
-    trans_delta_m: float,
-    yaw_delta_deg: float | None,
-    yaw_corrected: bool,
-    solve_quality: float,
-    solve_method: str,
-) -> str:
-    payload: dict[str, Any] = {
-        "type": "pose_correction",
-        "ts": round(ts, 3) if ts is not None else time.time(),
-        "trans_delta_m": round(float(trans_delta_m), 4),
-        "yaw_corrected": yaw_corrected,
-        "solve_quality": round(float(solve_quality), 4),
-        "solve_method": solve_method,
-    }
-    if yaw_delta_deg is not None:
-        payload["yaw_delta_deg"] = round(float(yaw_delta_deg), 3)
-    return _dumps(payload)
-
-
 def encode_path(
     *,
     ts: float,
@@ -507,7 +496,6 @@ def nav_phase_payload(
     *,
     goal_reached: bool,
     goal_failed: bool,
-    nav_recovering: bool,
     nav_state: str,
     nav_goal_pending: bool,
     error_code: int | None = None,
@@ -516,7 +504,7 @@ def nav_phase_payload(
         phase: NavPhase = "succeeded"
     elif goal_failed:
         phase = "failed"
-    elif nav_recovering or nav_state == "recovery":
+    elif nav_state == "recovery":
         phase = "recovering"
     elif nav_state == "navigating" and nav_goal_pending:
         phase = "navigating"
@@ -533,10 +521,16 @@ def encode_nav_status(
     ts: float | None = None,
     phase: NavPhase,
     error_code: int | None = None,
+    retryable: bool | None = None,
+    stall_reason: str | None = None,
 ) -> str:
     nav: dict[str, Any] = {"phase": phase}
     if error_code is not None:
         nav["error_code"] = error_code
+    if retryable is not None:
+        nav["retryable"] = retryable
+    if stall_reason is not None:
+        nav["stall_reason"] = stall_reason
     return _dumps(
         {
             "type": "nav_status",
@@ -563,6 +557,7 @@ __all__ = [
     "RegistrationStatusPayload",
     "SetLidarModeMessage",
     "decode_inbound",
+    "bridge_status_wire",
     "encode_bridge_status",
     "encode_camera_frame_ack",
     "encode_hello",
@@ -571,7 +566,6 @@ __all__ = [
     "encode_path",
     "encode_pong",
     "encode_pose",
-    "encode_pose_correction",
     "encode_registration_status",
     "encode_runtime_snapshot",
     "nav_phase_payload",

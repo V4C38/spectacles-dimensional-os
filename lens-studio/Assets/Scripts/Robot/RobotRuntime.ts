@@ -1,7 +1,7 @@
 import { PointCloudRenderer } from "../Lidar/PointCloudRenderer";
 import { LidarPresentationController } from "../Lidar/LidarPresentationController";
 import { RobotMarker } from "../Robot/RobotMarker";
-import { ManualPoseCorrection } from "../Registration/ManualPoseCorrection";
+import { ManualRegistrationAlignment } from "../Registration/ManualRegistrationAlignment";
 import { DimosState } from "../Core/DimosState";
 import {
   DimosAppState,
@@ -11,17 +11,17 @@ import {
 } from "../Core/AppState";
 import {
   DEFAULT_LIDAR_OBSTACLE_SETTINGS,
-  PoseCorrectionMessage,
+  WorldFrameCorrectionMessage,
   PoseMessage,
   protocolMetersToLensCentimeters,
-} from "../Bridge/domain";
+} from "../Bridge/BridgeDomain";
 import { BridgeClient } from "../Bridge/BridgeClient";
 import { runtimeRenderOffsetCm } from "../Robot/RobotRuntimeModel";
 import { COLOR_WHITE } from "../UI/kit/UIKit";
 import { UILogEntry } from "../UI/UILogger";
 
 const DRIFTING_TRANSLATION_THRESHOLD_M = 0.05;
-const POSE_CORRECTION_LOG_INTERVAL_S = 1.0;
+const WORLD_FRAME_CORRECTION_LOG_INTERVAL_S = 1.0;
 // Bridge LiDAR is capped at 1 Hz; must exceed one inter-frame gap so live clouds
 // are not cleared between normal updates (0.5 s caused visible flicker).
 const LIDAR_STALE_CLEAR_S = 3.0;
@@ -40,9 +40,9 @@ export interface RobotRuntimeMenuCallbacks {
 export class RobotRuntime {
   private _lastPose: PoseMessage | null = null;
   private _pendingPose: PoseMessage | null = null;
-  private readonly _poseCorrection = new ManualPoseCorrection();
+  private readonly _manualRegistrationAlignment = new ManualRegistrationAlignment();
   private _lidar: LidarPresentationController | null = null;
-  private _lastPoseCorrectionLogTime = 0;
+  private _lastWorldFrameCorrectionLogTime = 0;
   private _lastSentBridgeLidarMode: LidarDisplayMode | null = null;
   private _menuCallbacks: RobotRuntimeMenuCallbacks | null = null;
   private _bound = false;
@@ -56,8 +56,8 @@ export class RobotRuntime {
     private readonly bridgeClient: BridgeClient | null,
   ) {}
 
-  public get poseCorrection(): ManualPoseCorrection {
-    return this._poseCorrection;
+  public get manualRegistrationAlignment(): ManualRegistrationAlignment {
+    return this._manualRegistrationAlignment;
   }
 
   public get lastPose(): PoseMessage | null {
@@ -75,7 +75,7 @@ export class RobotRuntime {
 
     if (this.robotMarker) {
       this.robotMarker.initialize({
-        poseCorrection: this._poseCorrection,
+        manualRegistrationAlignment: this._manualRegistrationAlignment,
         getLastPose: () => this._lastPose,
         getIsRuntimePhase: () => this.isRuntimePhase(),
         getOperatingMode: () => menuCallbacks.getOperatingMode(),
@@ -103,7 +103,7 @@ export class RobotRuntime {
     this._pendingPose = msg;
   }
 
-  public onPoseCorrection(msg: PoseCorrectionMessage): void {
+  public onWorldFrameCorrection(msg: WorldFrameCorrectionMessage): void {
     this.dimosState.update({
       driftState: {
         isDrifting: msg.trans_delta_m > DRIFTING_TRANSLATION_THRESHOLD_M,
@@ -118,15 +118,15 @@ export class RobotRuntime {
     });
     const now = getTime();
     if (
-      this._lastPoseCorrectionLogTime === 0 ||
-      now - this._lastPoseCorrectionLogTime >= POSE_CORRECTION_LOG_INTERVAL_S
+      this._lastWorldFrameCorrectionLogTime === 0 ||
+      now - this._lastWorldFrameCorrectionLogTime >= WORLD_FRAME_CORRECTION_LOG_INTERVAL_S
     ) {
-      this._lastPoseCorrectionLogTime = now;
+      this._lastWorldFrameCorrectionLogTime = now;
       const yawDeltaText = typeof msg.yaw_delta_deg === "number"
         ? msg.yaw_delta_deg.toFixed(2)
         : "n/a";
       print(
-        `RobotRuntime: pose_correction transDeltaM=${msg.trans_delta_m.toFixed(3)} yawDeltaDeg=${yawDeltaText} yawCorrected=${msg.yaw_corrected} solveQuality=${msg.solve_quality.toFixed(3)} solveMethod=${msg.solve_method}`,
+        `RobotRuntime: world_frame_correction transDeltaM=${msg.trans_delta_m.toFixed(3)} yawDeltaDeg=${yawDeltaText} yawCorrected=${msg.yaw_corrected} solveQuality=${msg.solve_quality.toFixed(3)} solveMethod=${msg.solve_method}`,
       );
     }
     this.dimosState.uiLogger.show(
@@ -151,11 +151,11 @@ export class RobotRuntime {
     }
     this._pendingPose = null;
     if (this.isRuntimePhase() && this.robotMarker) {
-      const resolved = this._poseCorrection.resolveDisplayPose(
+      const resolved = this._manualRegistrationAlignment.resolveRobotMarkerPose(
         msg,
         this.dimosState.snapshot.robotInteractionMode,
       );
-      this.robotMarker.applyResolvedPose(resolved, msg);
+      this.robotMarker.applyRobotMarkerPose(resolved, msg);
     }
   }
 
@@ -169,7 +169,7 @@ export class RobotRuntime {
   }
 
   public prepareForRuntime(registrationApproximate: boolean): void {
-    this._poseCorrection.prepareForRuntime(registrationApproximate);
+    this._manualRegistrationAlignment.prepareForRuntime(registrationApproximate);
   }
 
   public onDisconnect(): void {
@@ -177,7 +177,7 @@ export class RobotRuntime {
     this._lidar?.clearBuffer();
     this._lastPose = null;
     this._pendingPose = null;
-    this._poseCorrection.onDisconnected();
+    this._manualRegistrationAlignment.onDisconnected();
     this.robotMarker?.resetRuntimePoseSmoothing();
   }
 
@@ -229,6 +229,7 @@ export class RobotRuntime {
       return;
     }
     this._lastSentBridgeLidarMode = mode;
+    print(`RobotRuntime: lidarMode bridge sync mode=${mode}`);
     this.bridgeClient.sendLidarMode(mode, DEFAULT_LIDAR_OBSTACLE_SETTINGS);
   }
 

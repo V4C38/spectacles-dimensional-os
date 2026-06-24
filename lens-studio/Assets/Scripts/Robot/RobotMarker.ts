@@ -1,5 +1,5 @@
 import { DimosAppState, OperatingMode, RobotInteractionMode } from "../Core/AppState";
-import { PoseMessage, protocolMetersToLensCentimeters } from "../Bridge/domain";
+import { PoseMessage, protocolMetersToLensCentimeters } from "../Bridge/BridgeDomain";
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 import { InteractableManipulation } from "SpectaclesInteractionKit.lspkg/Components/Interaction/InteractableManipulation/InteractableManipulation";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
@@ -8,7 +8,7 @@ import {
   yawRotationFromWorldRotation,
 } from "../Core/Utilities";
 import { FrameCaptureController } from "../Camera/FrameCaptureController";
-import { ManualPoseCorrection, ResolvedDisplayPose } from "../Registration/ManualPoseCorrection";
+import { ManualRegistrationAlignment, RobotMarkerPose } from "../Registration/ManualRegistrationAlignment";
 import { RobotUiCallbacks, RobotUiView } from "./RobotUiView";
 import { UILogEntry } from "../UI/UILogger";
 
@@ -168,7 +168,7 @@ export class RobotMarker extends BaseScriptComponent {
   private _rotation = quat.quatIdentity();
   private _lastNotifiedWorldPosition: vec3 | null = null;
 
-  private _poseCorrection: ManualPoseCorrection | null = null;
+  private _manualRegistrationAlignment: ManualRegistrationAlignment | null = null;
   private _ui: RobotUiView | null = null;
   private _getLastPose: (() => PoseMessage | null) | null = null;
   private _getIsRuntimePhase: (() => boolean) | null = null;
@@ -197,14 +197,14 @@ export class RobotMarker extends BaseScriptComponent {
   }
 
   public initialize(deps: {
-    poseCorrection: ManualPoseCorrection;
+    manualRegistrationAlignment: ManualRegistrationAlignment;
     getLastPose: () => PoseMessage | null;
     getIsRuntimePhase: () => boolean;
     getOperatingMode: () => OperatingMode;
     getInteractionMode: () => RobotInteractionMode;
     onWorldPositionChanged?: (position: vec3) => void;
   }): void {
-    this._poseCorrection = deps.poseCorrection;
+    this._manualRegistrationAlignment = deps.manualRegistrationAlignment;
     this._getLastPose = deps.getLastPose;
     this._getIsRuntimePhase = deps.getIsRuntimePhase;
     this._getOperatingMode = deps.getOperatingMode;
@@ -251,35 +251,35 @@ export class RobotMarker extends BaseScriptComponent {
   }
 
   public syncPose(): void {
-    if (!this._poseCorrection || !this._getLastPose || !this._getInteractionMode) {
+    if (!this._manualRegistrationAlignment || !this._getLastPose || !this._getInteractionMode) {
       return;
     }
     const lastPose = this._getLastPose();
-    const resolved = this._poseCorrection.resolveDisplayPose(
+    const resolved = this._manualRegistrationAlignment.resolveRobotMarkerPose(
       lastPose,
       this._getInteractionMode(),
     );
-    this._applyResolvedPoseInternal(resolved, lastPose);
+    this._applyRobotMarkerPoseInternal(resolved, lastPose);
   }
 
-  public applyResolvedPose(resolved: ResolvedDisplayPose, bridgePose: PoseMessage | null): void {
-    this._applyResolvedPoseInternal(resolved, bridgePose);
+  public applyRobotMarkerPose(resolved: RobotMarkerPose, bridgePose: PoseMessage | null): void {
+    this._applyRobotMarkerPoseInternal(resolved, bridgePose);
   }
 
-  private _applyResolvedPoseInternal(
-    resolved: ResolvedDisplayPose,
+  private _applyRobotMarkerPoseInternal(
+    resolved: RobotMarkerPose,
     bridgePose: PoseMessage | null,
   ): void {
-    switch (resolved.kind) {
-      case "manual":
+    switch (resolved.source) {
+      case "registration_anchor":
         this.applyManualPose(resolved.position!, resolved.rotation!);
         break;
-      case "bridge":
+      case "world_frame_pose":
         if (bridgePose) {
           this.applyPose(bridgePose);
         }
         break;
-      case "corrected":
+      case "approximate_alignment":
         this.applyRuntimeLensPose(resolved.position!, resolved.rotation!);
         break;
       case "none":

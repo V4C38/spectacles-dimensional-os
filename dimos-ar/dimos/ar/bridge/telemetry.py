@@ -10,18 +10,21 @@ from dimos.ar.network.data_plane import (
     LIDAR_PAYLOAD_LOG_INTERVAL_S,
     build_lidar_payload,
     build_pose_payload,
+    build_pose_payload_from_sample,
 )
+from dimos.ar.network.protocol import SetLidarModeMessage
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
     from dimos.ar.bridge.odom_buffer import OdomBuffer
     from dimos.ar.bridge.sender import BridgeSender
-    from dimos.ar.registration.transforms import Calibration
-    from dimos.ar.tracking.filters import LidarFilter
+    from dimos.ar.lidar.filters import LidarFilter, LidarObstacleDistanceConfig
+    from dimos.ar.world_frame.state import WorldFrameState
+    from dimos.ar.world_frame.transforms import OdomSample
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
     from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 
-from dimos.ar.tracking.filters import LidarObstacleDistanceConfig
+from dimos.ar.lidar.filters import LidarObstacleDistanceConfig
 
 logger = setup_logger()
 
@@ -34,7 +37,7 @@ class TelemetryPublisher:
         *,
         robot_id: str,
         sender: BridgeSender,
-        calibration: Calibration,
+        world_frame: WorldFrameState,
         odom: OdomBuffer,
         lidar_filter: LidarFilter,
         target_points: int,
@@ -45,7 +48,7 @@ class TelemetryPublisher:
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
-        self._calibration = calibration
+        self._world_frame = world_frame
         self._odom = odom
         self._lidar_filter = lidar_filter
         self._full_target_points = target_points
@@ -59,16 +62,17 @@ class TelemetryPublisher:
         self._logged_lidar_stream_active: bool = False
         self._last_lidar_payload_log_mono: float = 0.0
         self._lidar_mode: str = "full"
+        self._logged_lidar_config_key: str | None = None
         self._obstacle_distance_config = LidarObstacleDistanceConfig()
 
     def publish_lidar(self, msg: PointCloud2) -> None:
-        if not self._calibration.is_registered:
+        if not self._world_frame.is_committed:
             return
         if self._lidar_mode == "off":
             return
         result = build_lidar_payload(
             msg,
-            calibration=self._calibration,
+            world_frame=self._world_frame,
             lidar_filter=self._lidar_filter,
             mode=self._lidar_mode,
             obstacle_distance_config=(
@@ -76,7 +80,7 @@ class TelemetryPublisher:
                 if self._lidar_mode == "obstacles"
                 else None
             ),
-            robot_world_pos=self._odom.latest_world_position(self._calibration),
+            robot_world_pos=self._odom.latest_world_position(self._world_frame),
             target_points=self._target_points_for_mode(),
             voxel_size=self._lidar_voxel_size_m,
         )
@@ -92,6 +96,27 @@ class TelemetryPublisher:
         self._maybe_log_lidar_payload(point_count, len(payload))
         self._sender.send_binary(payload)
 
+    def apply_set_lidar_mode(self, msg: SetLidarModeMessage) -> None:
+        defaults = LidarObstacleDistanceConfig()
+        self.set_lidar_mode(
+            mode=msg.mode,
+            obstacle_min_distance_m=(
+                msg.obstacle_min_distance_m
+                if msg.obstacle_min_distance_m is not None
+                else defaults.min_distance_m
+            ),
+            obstacle_opaque_distance_m=(
+                msg.obstacle_opaque_distance_m
+                if msg.obstacle_opaque_distance_m is not None
+                else defaults.opaque_distance_m
+            ),
+            obstacle_max_distance_m=(
+                msg.obstacle_max_distance_m
+                if msg.obstacle_max_distance_m is not None
+                else defaults.max_distance_m
+            ),
+        )
+
     def set_lidar_mode(
         self,
         *,
@@ -100,12 +125,19 @@ class TelemetryPublisher:
         obstacle_opaque_distance_m: float,
         obstacle_max_distance_m: float,
     ) -> None:
+        config_key = (
+            f"{mode}|{obstacle_min_distance_m}|{obstacle_opaque_distance_m}|"
+            f"{obstacle_max_distance_m}"
+        )
         self._lidar_mode = mode
         self._obstacle_distance_config = LidarObstacleDistanceConfig(
             min_distance_m=obstacle_min_distance_m,
             opaque_distance_m=obstacle_opaque_distance_m,
             max_distance_m=obstacle_max_distance_m,
         )
+        if config_key == self._logged_lidar_config_key:
+            return
+        self._logged_lidar_config_key = config_key
         logger.info(
             "LiDAR mode updated",
             mode=mode,
@@ -123,7 +155,7 @@ class TelemetryPublisher:
         )
 
     def publish_pose(self, msg: PoseStamped) -> None:
-        if not self._calibration.is_registered:
+        if not self._world_frame.is_committed:
             return
         now = time.monotonic()
         pose_interval = 1.0 / self._pose_max_hz if self._pose_max_hz > 0 else 0.0
@@ -133,7 +165,7 @@ class TelemetryPublisher:
         speed_mps = self._odom.speed_windowed(now, self._speed_horizon_s)
         result = build_pose_payload(
             msg,
-            calibration=self._calibration,
+            world_frame=self._world_frame,
             sample_odom=self._odom.sample,
             speed_mps=speed_mps,
         )
@@ -149,6 +181,42 @@ class TelemetryPublisher:
             return
         pose_payload, _pos, _quat = result
         self._sender.send(pose_payload)
+
+    def publish_pose_snapshot(
+        self,
+        *,
+        ts: float,
+        sample: OdomSample,
+        force: bool = True,
+    ) -> bool:
+        """Emit world-frame pose from a cached odom sample (e.g. after runtime correction)."""
+        if not self._world_frame.is_committed:
+            return False
+        now = time.monotonic()
+        pose_interval = 1.0 / self._pose_max_hz if self._pose_max_hz > 0 else 0.0
+        if not force and pose_interval > 0 and now - self._pose_last_emit < pose_interval:
+            return False
+        speed_mps = self._odom.speed_windowed(now, self._speed_horizon_s)
+        result = build_pose_payload_from_sample(
+            sample,
+            ts=ts,
+            world_frame=self._world_frame,
+            speed_mps=speed_mps,
+        )
+        if result is None:
+            self._dropped_pose_count += 1
+            now = time.monotonic()
+            if now - self._last_dropped_pose_log_mono >= DROPPED_POSE_LOG_INTERVAL_S:
+                self._last_dropped_pose_log_mono = now
+                logger.warning(
+                    "XR pose dropped (non-finite after transform)",
+                    drops=self._dropped_pose_count,
+                )
+            return False
+        pose_payload, _pos, _quat = result
+        self._sender.send(pose_payload)
+        self._pose_last_emit = time.monotonic()
+        return True
 
     def _target_points_for_mode(self) -> int:
         if self._lidar_mode == "obstacles":

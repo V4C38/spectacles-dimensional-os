@@ -24,7 +24,11 @@ import { COLOR_ERROR, COLOR_WARN, COLOR_WHITE } from "../UI/kit/UIKit";
 import { SetupWizardView } from "./SetupWizardView";
 
 const NAV_DEBOUNCE_S = 0.35;
-const AUTOCONNECT_RETRY_S = 2.0;
+const AUTOCONNECT_RETRY_BASE_S = 1.0;
+const AUTOCONNECT_RETRY_BACKOFF = 1.5;
+const AUTOCONNECT_RETRY_MAX_S = 8.0;
+const CONNECT_FAIL_STREAK_BEFORE_FALLBACK = 2;
+const CONNECT_RETRY_LOG_INTERVAL_S = 10.0;
 
 /** Three-step setup component (start → connect → register) that gates entry into runtime. */
 @component
@@ -47,6 +51,11 @@ export class SetupWizard extends BaseScriptComponent {
   private _finishPending = false;
   private _view: SetupWizardView | null = null;
   private _registrationFlow: SetupRegistrationFlow | null = null;
+  private _lastConnectRetryLogTime = -1;
+  private _connectRetryBackoffS = AUTOCONNECT_RETRY_BASE_S;
+  private _connectFailStreak = 0;
+  private _connectCandidateIndex = 0;
+  private _connectCandidates: string[] = [];
 
   onAwake() {
     this._view = new SetupWizardView(this.getSceneObject());
@@ -136,12 +145,9 @@ export class SetupWizard extends BaseScriptComponent {
 
       case WizardStep.Connect: {
         this._view?.setInputEnabled(true);
+        this._resetConnectCandidates();
 
-        const saved = this.dimosManager?.loadIp() ?? null;
-        const rawFallback =
-          this.dimosManager?.getDefaultBridgeIp() || this.dimosManager?.getBaseUrl() || "";
-        const fallback = this.dimosManager?.normalizeBridgeIp(rawFallback) ?? "";
-        const ip = saved || fallback;
+        const ip = this._currentConnectIp();
 
         if (this._view) {
           this._view.initializeInput(ip);
@@ -191,6 +197,7 @@ export class SetupWizard extends BaseScriptComponent {
 
     const regState = this._registrationFlow?.state ?? createRegistrationViewState();
     if (regState.phase === "awaiting_motion") {
+      this._log("motion authorization requested");
       if (this.dimosManager?.registrationClient.requestMotionAuthorization()) {
         this._refreshFooterButtons();
         this._renderRegistrationState();
@@ -237,11 +244,13 @@ export class SetupWizard extends BaseScriptComponent {
     if (this._currentStep !== WizardStep.Connect || !this._view?.inputField) {
       return;
     }
-    const raw = this._view.inputField.text.trim();
-    if (!raw) {
+    if (this._isConnecting) {
       return;
     }
-    const ip = this.dimosManager?.normalizeBridgeIp(raw) ?? "";
+    const raw = this._view.inputField.text.trim();
+    const ip = raw
+      ? (this.dimosManager?.normalizeBridgeIp(raw) ?? "")
+      : this._currentConnectIp();
     if (!ip) {
       return;
     }
@@ -253,7 +262,7 @@ export class SetupWizard extends BaseScriptComponent {
     this._isConnecting = true;
     this._view?.setInputText(ip);
     this._showBridgeConnectionStatus();
-    this._log(`connect attempt ${ip}`);
+    this._logConnectAttempt(ip);
     this.dimosManager?.tryConnectBridge(ip).then((ok) => {
       this._handleConnectionResult(opId, ip, ok);
     });
@@ -266,6 +275,8 @@ export class SetupWizard extends BaseScriptComponent {
     ) {
       return;
     }
+    this._isConnecting = true;
+    this._showBridgeConnectionStatus();
     this.dimosManager?.tryConnectBridge(this._retryIp).then((ok) => {
       this._handleConnectionResult(this._retryOpId, this._retryIp, ok);
     });
@@ -279,6 +290,9 @@ export class SetupWizard extends BaseScriptComponent {
       this.dimosManager?.saveIp(ip);
       this._connectCompleted = true;
       this._isConnecting = false;
+      this._connectFailStreak = 0;
+      this._connectRetryBackoffS = AUTOCONNECT_RETRY_BASE_S;
+      this._autoconnectOpId += 1;
       this._showBridgeConnectionStatus();
       this._refreshFooterButtons();
       this._log("connect succeeded");
@@ -286,10 +300,18 @@ export class SetupWizard extends BaseScriptComponent {
     }
     this._isConnecting = false;
     this._showBridgeConnectionStatus();
-    this._log("connect failed, retrying");
+    this._logConnectRetry();
+    this._connectFailStreak += 1;
+    if (this._connectFailStreak >= CONNECT_FAIL_STREAK_BEFORE_FALLBACK) {
+      this._advanceConnectCandidate();
+    }
     this._retryOpId = opId;
-    this._retryIp = ip;
-    this._retryEvent?.reset(AUTOCONNECT_RETRY_S);
+    this._retryIp = this._currentConnectIp() || ip;
+    this._retryEvent?.reset(this._connectRetryBackoffS);
+    this._connectRetryBackoffS = Math.min(
+      this._connectRetryBackoffS * AUTOCONNECT_RETRY_BACKOFF,
+      AUTOCONNECT_RETRY_MAX_S,
+    );
   }
 
   private _invalidatePending(): void {
@@ -378,6 +400,16 @@ export class SetupWizard extends BaseScriptComponent {
     linkState: BridgeLinkState,
     isConnecting: boolean,
   ): { text: string; color: vec4 } {
+    if (isConnecting && !this.dimosManager?.isBridgeSocketOpen()) {
+      return { text: "Connecting to bridge…", color: COLOR_ERROR };
+    }
+    if (
+      isConnecting &&
+      (this.dimosManager?.isBridgeSocketOpen() ?? false) &&
+      !this._isConnected()
+    ) {
+      return { text: "Waiting for handshake…", color: COLOR_ERROR };
+    }
     if (isConnecting && linkState === "disconnected") {
       return { text: "Connecting...", color: COLOR_ERROR };
     }
@@ -403,11 +435,14 @@ export class SetupWizard extends BaseScriptComponent {
   private _showBridgeConnectionStatus(): void {
     const linkState = this.dimosManager?.bridgeLinkState ?? "disconnected";
     const presentation = this._bridgeStatusForConnect(linkState, this._isConnecting);
-    this._view?.setStatus(presentation.text, presentation.color);
-    this._bridgeConnectDetailStatus(
+    const detail = this._bridgeConnectDetailStatus(
       linkState,
       this.dimosManager?.bridgeClockSyncState ?? "idle",
     );
+    const statusText = detail
+      ? `${presentation.text}\n${detail}`.trim()
+      : presentation.text;
+    this._view?.setStatus(statusText, presentation.color);
     if (this.dimosManager?.hasBridgeConnection()) {
       this.dimosManager.requestBridgeStatus();
     }
@@ -519,7 +554,73 @@ export class SetupWizard extends BaseScriptComponent {
     this.dimosManager?.enterRuntime();
   }
 
+  private _logConnectAttempt(ip: string): void {
+    const now = getTime();
+    if (this._lastConnectRetryLogTime < 0 || now - this._lastConnectRetryLogTime >= CONNECT_RETRY_LOG_INTERVAL_S) {
+      this._lastConnectRetryLogTime = now;
+      this._log(`connect attempt ${ip}`);
+    }
+  }
+
+  private _logConnectRetry(): void {
+    const now = getTime();
+    if (this._lastConnectRetryLogTime < 0 || now - this._lastConnectRetryLogTime >= CONNECT_RETRY_LOG_INTERVAL_S) {
+      this._lastConnectRetryLogTime = now;
+      this._log("connect failed, retrying");
+    }
+  }
+
   private _log(message: string): void {
     print(`SetupWizard: ${message}`);
+  }
+
+  private _buildConnectCandidates(): string[] {
+    const saved = this.dimosManager?.loadIp() ?? null;
+    const rawFallback =
+      this.dimosManager?.getDefaultBridgeIp() || this.dimosManager?.getBaseUrl() || "";
+    const fallback = this.dimosManager?.normalizeBridgeIp(rawFallback) ?? "";
+    const base = this.dimosManager?.normalizeBridgeIp(this.dimosManager?.getBaseUrl() ?? "") ?? "";
+    const candidates: string[] = [];
+    for (const raw of [saved, fallback, base]) {
+      const ip = raw ? (this.dimosManager?.normalizeBridgeIp(raw) ?? "") : "";
+      if (ip && candidates.indexOf(ip) < 0) {
+        candidates.push(ip);
+      }
+    }
+    return candidates;
+  }
+
+  private _resetConnectCandidates(): void {
+    this._connectCandidates = this._buildConnectCandidates();
+    this._connectCandidateIndex = 0;
+    this._connectFailStreak = 0;
+    this._connectRetryBackoffS = AUTOCONNECT_RETRY_BASE_S;
+  }
+
+  private _currentConnectIp(): string {
+    if (this._connectCandidates.length === 0) {
+      this._connectCandidates = this._buildConnectCandidates();
+    }
+    return this._connectCandidates[this._connectCandidateIndex] ?? "";
+  }
+
+  private _advanceConnectCandidate(): void {
+    if (this._connectCandidateIndex >= this._connectCandidates.length - 1) {
+      return;
+    }
+    const abandoned = this._connectCandidates[this._connectCandidateIndex];
+    const defaultIp =
+      this.dimosManager?.normalizeBridgeIp(this.dimosManager?.getDefaultBridgeIp() ?? "") ?? "";
+    if (abandoned && defaultIp && abandoned !== defaultIp) {
+      this.dimosManager?.clearBridgeIp();
+    }
+    this._connectCandidateIndex += 1;
+    this._connectFailStreak = 0;
+    const next = this._currentConnectIp();
+    if (next && this._view?.inputField) {
+      this._view.inputField.text = next;
+      this._view.setInputText(next);
+    }
+    this._log(`trying fallback IP ${next}`);
   }
 }

@@ -9,7 +9,27 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v6 (current) — Session-scoped identity and message consolidation
+### v7 (current) — World-frame naming alignment
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 7.**
+- **`bridge_status` / `runtime_snapshot.bridge`:** `registered` →
+  `world_frame_committed`; `registration_method` → `world_frame_method`;
+  `registration_approximate` → `world_frame_approximate`.
+- **`hello.robot`:** `registration_profile` → `tag_tracking_profile` (same
+  `{ tag_ids, tag_total_size_m }` shape).
+- **`pose_correction`** message renamed to **`world_frame_correction`** (payload
+  fields unchanged).
+- **`nav_status` (additive):** on stall recovery, bridge may emit
+  `retryable: true` and `stall_reason: "no_path" | "planner_idle"`. Clients
+  must retry navigation manually; the bridge no longer auto-dispatches recovery
+  goals.
+
+**Persistence:** committed world frame survives client disconnect for the bridge
+process lifetime (unchanged behavior, now explicit).
+
+### v6 — Session-scoped identity and message consolidation
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -57,7 +77,8 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 - Flat `hello.capabilities` map; `align_start` requires `method`.
 - Stripped `camera_frame_ack` to `ts` + `seq`.
 - `bridge_status.registration_method` and `registration_approximate` always
-  present.
+  present. Superseded in v7 by `world_frame_method` and
+  `world_frame_approximate` (see v7 changelog).
 
 ### v3 — XR Bridge PR refactor (additive, backward-compatible)
 
@@ -99,7 +120,7 @@ capability map, then sends a `runtime_snapshot` (see below).
     "visual_origin_frame": "base_link",
     "base_height_m": 0.33,
     "default_render_offset_m": [0.0, 0.0, 0.0],
-    "registration_profile": {
+    "tag_tracking_profile": {
       "tag_ids": [0],
       "tag_total_size_m": 0.070
     }
@@ -128,7 +149,7 @@ Rules:
 - The separate `disabled_capabilities` / `capability_states` arrays from v3 are
   removed; `capabilities` is the single source of truth.
 
-### `hello.robot.registration_profile`
+### `hello.robot.tag_tracking_profile`
 
 Optional field emitted when the robot adapter provides tag geometry for
 registration. Absent or `null` when the adapter does not supply one.
@@ -164,10 +185,10 @@ that reconnect mid-preview must re-issue `goal` with `intent: "preview"`.
   "robot_id": "unitree_go2",
   "bridge": {
     "robot_connected": true,
-    "registered": true,
+    "world_frame_committed": true,
     "reconnecting": false,
-    "registration_method": "manual_pose",
-    "registration_approximate": false
+    "world_frame_method": "manual_pose",
+    "world_frame_approximate": false
   },
   "nav": {
     "phase": "navigating"
@@ -200,22 +221,22 @@ change. Does **not** include `robot_id` or `streams_active`.
   "type": "bridge_status",
   "ts": 1730000000.123,
   "robot_connected": true,
-  "registered": false,
+  "world_frame_committed": false,
   "reconnecting": false,
-  "registration_method": "manual_pose",
-  "registration_approximate": true
+  "world_frame_method": "manual_pose",
+  "world_frame_approximate": true
 }
 ```
 
 Fields:
 
 - `robot_connected`: bridge has an active robot/runtime data path
-- `registered`: world-frame registration has been committed
+- `world_frame_committed`: world-frame alignment has been committed
 - `reconnecting`: reconnect/recovery is in progress
-- `registration_method`: **always present** — `"april_odom_baseline"`,
-  `"manual_pose"`, or `null` when unregistered
-- `registration_approximate`: **always present** — `true` when the active
-  registration is approximate (e.g. manual pose)
+- `world_frame_method`: **always present** — `"april_odom_baseline"`,
+  `"manual_pose"`, or `null` when uncommitted
+- `world_frame_approximate`: **always present** — `true` when the committed
+  alignment is approximate (e.g. manual pose)
 
 ### `registration_status`
 
@@ -266,7 +287,7 @@ Fields:
 During baseline **leg motion** (`phase: "moving"`), the bridge emits
 `capture: "steady"` (~1 frame/s) so tag tracking and `preview_pose` updates
 continue. `"hold"` remains in the enum for future use but is not used during
-baseline strafe. **Sampling** at each waypoint uses `capture: "burst"` (~5/s).
+baseline strafe. **Sampling** at each waypoint uses `capture: "burst"` (~2/s).
 
 ### `camera_frame_ack`
 
@@ -292,8 +313,8 @@ payload size on Wi-Fi:
 | Field | Decimal places |
 |-------|----------------|
 | `pose.position`, `pose.orientation` | 4 |
-| `pose_correction.trans_delta_m`, `pose_correction.solve_quality` | 4 |
-| `pose_correction.yaw_delta_deg` | 3 |
+| `world_frame_correction.trans_delta_m`, `world_frame_correction.solve_quality` | 4 |
+| `world_frame_correction.yaw_delta_deg` | 3 |
 | `path` waypoints and `target` | 3 |
 | `ts` on high-rate streams (`pose`, `path`) | 3 |
 
@@ -339,10 +360,10 @@ Robot pose in XR world frame:
 - `speed_mps` (optional): smoothed robot linear speed in m/s from bridge odom,
   used by the Lens for runtime static capture burst when the robot stops.
 
-### `pose_correction`
+### `world_frame_correction`
 
-Runtime pose-correction telemetry emitted when the bridge commits a tag-driven
-world-to-odom correction **that exceeds the notification deadband**
+Runtime world-frame correction telemetry emitted when the bridge commits a
+tag-driven world-to-odom correction **that exceeds the notification deadband**
 (≥ 5 cm translation or ≥ 1° yaw). Sub-threshold micro-refinements still update
 `T_world_odom` on the bridge but do not emit this message, so Lens-side
 user-visible events (e.g. "Refined Tracking" toast, realignment snap animation)
@@ -350,7 +371,7 @@ fire only when the robot position has meaningfully changed:
 
 ```json
 {
-  "type": "pose_correction",
+  "type": "world_frame_correction",
   "ts": 1730000000.123,
   "trans_delta_m": 0.1824,
   "yaw_delta_deg": 6.137,
@@ -422,9 +443,14 @@ Navigation lifecycle updates:
 Optional fields:
 
 - `error_code`: numeric code when navigation is unavailable for the session
-  (logged on the Lens; `505` = goal stalled). `"recovering"` phase indicates
-  the bridge cleared a stuck goal and the client should return to a retryable
-  placing state without treating it as a terminal failure.
+  (logged on the Lens; `505` = goal stalled).
+- `retryable` (v7): `true` when the bridge cancelled a stuck goal and the client
+  must manually retry; emitted with `phase: "recovering"`.
+- `stall_reason` (v7): `"no_path"` (watchdog timeout without path) or
+  `"planner_idle"` (planner went idle before path arrived).
+
+When `retryable` is true, `"recovering"` indicates the bridge cleared a stuck
+goal — return to a retryable placing state without treating it as terminal failure.
 
 ## Inbound Messages
 
@@ -528,7 +554,7 @@ Authorize baseline strafe motion (AprilTag flow only):
 ```
 
 Stop/cancel the current registration session. When no registration session is
-active, `stop` is a no-op for committed registration (`bridge_status.registered`
+active, `stop` is a no-op for committed world frame (`bridge_status.world_frame_committed`
 and the world→odom transform are unchanged). To replace registration, start a
 new session and commit again.
 
@@ -740,4 +766,4 @@ The following v5 message types are removed in v6:
 
 The legacy `register` / `registered` message flow remains removed from
 `dimos-ar`. Frame registration is driven by `registration_command` /
-`registration_pose` plus `registration_status` and `bridge_status.registered`.
+`registration_pose` plus `registration_status` and `bridge_status.world_frame_committed`.

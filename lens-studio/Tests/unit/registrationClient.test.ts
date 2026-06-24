@@ -7,7 +7,7 @@ function makeBridgeClient() {
   return {
     isConnected: vi.fn(() => true),
     activeRobotId: "go2",
-    lastBridgeStatus: { registered: false },
+    lastBridgeStatus: { world_frame_committed: false },
     sendRegistrationCommand: vi.fn(() => true),
     sendRegistrationPose: vi.fn(() => true),
     onRegistrationStatus: { add: vi.fn() },
@@ -29,10 +29,14 @@ describe("RegistrationClient", () => {
     setMockTime(100);
   });
 
-  it("starts april_odom_baseline session and enables setup capture", () => {
+  it("starts april_odom_baseline session and activates baseline capture latch", () => {
     const bridge = makeBridgeClient();
     const frameCapture = makeFrameCapture();
     const client = new RegistrationClient(bridge as any, frameCapture as any, null);
+    let captureChanged = 0;
+    client.onCapturePolicyInputsChanged.add(() => {
+      captureChanged += 1;
+    });
 
     client.start("april_odom_baseline");
 
@@ -40,12 +44,13 @@ describe("RegistrationClient", () => {
       "start",
       "april_odom_baseline",
     );
-    expect(frameCapture.setMode).toHaveBeenCalledWith("setup");
-    expect(frameCapture.setCapturePolicy).toHaveBeenCalledWith("steady");
+    expect(client.baselineCaptureSessionActive).toBe(true);
+    expect(client.registrationCaptureHint).toBe("steady");
+    expect(captureChanged).toBe(1);
     expect(client.hasActiveIntent()).toBe(true);
   });
 
-  it("maps registration_status capture hints to frame capture policy", () => {
+  it("maps registration_status capture hints to registrationCaptureHint", () => {
     const bridge = makeBridgeClient();
     const frameCapture = makeFrameCapture();
     const client = new RegistrationClient(bridge as any, frameCapture as any, null);
@@ -66,7 +71,7 @@ describe("RegistrationClient", () => {
       capture: "burst",
       message: "Sampling",
     });
-    expect(frameCapture.setCapturePolicy).toHaveBeenCalledWith("burst");
+    expect(client.registrationCaptureHint).toBe("burst");
 
     statusHandler({
       type: "registration_status",
@@ -77,10 +82,10 @@ describe("RegistrationClient", () => {
       capture: "hold",
       message: "Moving",
     });
-    expect(frameCapture.setCapturePolicy).toHaveBeenCalledWith("hold");
+    expect(client.registrationCaptureHint).toBe("hold");
   });
 
-  it("clears intent on failed registration_status", () => {
+  it("clears intent and baseline latch on failed registration_status", () => {
     const bridge = makeBridgeClient();
     const frameCapture = makeFrameCapture();
     const client = new RegistrationClient(bridge as any, frameCapture as any, null);
@@ -103,14 +108,15 @@ describe("RegistrationClient", () => {
     });
 
     expect(client.hasActiveIntent()).toBe(false);
-    expect(frameCapture.setMode).toHaveBeenCalledWith("off");
+    expect(client.baselineCaptureSessionActive).toBe(false);
+    expect(client.registrationCaptureHint).toBe("off");
   });
 
   it("uses registration capabilities for preferred mode", () => {
     const bridge = makeBridgeClient();
     const client = new RegistrationClient(bridge as any, null, null);
     client.initialize({
-      poseCorrection: { reset: vi.fn() } as any,
+      manualRegistrationAlignment: { reset: vi.fn() } as any,
       hasBridgeConnection: () => true,
       isCapabilityAvailable: (cap) => cap === "registration_manual_pose",
       getInteractionMode: () => "hidden",
@@ -168,22 +174,13 @@ describe("RegistrationClient", () => {
     expect(bridge.sendRegistrationCommand).not.toHaveBeenCalledWith("stop");
   });
 
-  it("clears awaitingCommit on bridge_status registered", () => {
+  it("commit sets awaitingCommit", () => {
     const bridge = makeBridgeClient();
     const client = new RegistrationClient(bridge as any, null, null);
     client.start("manual_pose");
     client.commit();
 
-    let bridgeStatusHandler: (msg: { registered: boolean }) => void = () => {};
-    bridge.onBridgeStatus.add.mockImplementation((handler: typeof bridgeStatusHandler) => {
-      bridgeStatusHandler = handler;
-    });
-    client.bind();
-
-    bridgeStatusHandler({ registered: true });
-    client.stop();
-
-    expect(bridge.sendRegistrationCommand).not.toHaveBeenCalledWith("stop");
+    expect(client.awaitingCommit).toBe(true);
   });
 
   it("requestMotionAuthorization sets pending and sends authorize_motion", () => {

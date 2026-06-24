@@ -9,6 +9,7 @@ import {
   AppStateListener,
   AppPhase,
   BridgeLinkState,
+  bridgeNavigationReady,
   defaultNavigationOutcome,
   DimosAppState,
   isRuntimePhase as isAppRuntimePhase,
@@ -103,7 +104,7 @@ export class DimosManager extends BaseScriptComponent {
         getOperatingMode: () => this.operatingMode,
       },
       {
-        poseCorrection: robot.poseCorrection,
+        manualRegistrationAlignment: robot.manualRegistrationAlignment,
         hasBridgeConnection: () => this.hasBridgeConnection(),
         isCapabilityAvailable: (cap) =>
           isCapabilityAvailable(this.appState.robotRuntime, cap),
@@ -166,8 +167,9 @@ export class DimosManager extends BaseScriptComponent {
     this.registrationClient?.cancelPlacement();
     this.registrationClient?.stop();
     this.registrationClient?.clearPose();
+    this.dimosServices.bridge.cancelRuntimeReconnect();
     this.dimosServices.bridge.disconnect();
-    this.frameCaptureController?.setMode("off");
+    this.dimosServices.bridge.applyFrameCapturePolicy(true);
     this.dimosServices.state.update({
       phase: "setup",
       navigationOutcome: defaultNavigationOutcome(),
@@ -181,19 +183,11 @@ export class DimosManager extends BaseScriptComponent {
     this.setupRegistrationPreview?.endIfActive();
     this.registrationClient?.cancelPlacement();
     this.registrationClient?.stop();
-    this.dimosServices.robot.prepareForRuntime(
-      Boolean(
-        this.dimosServices.bridgeClient?.lastBridgeStatus?.registration_approximate,
-      ),
-    );
     this.dimosServices.state.update({ phase: "runtime" });
     this._applyPhaseSideEffects("runtime");
-    if (this.frameCaptureController) {
-      const registered = Boolean(
-        this.dimosServices.bridgeClient?.lastBridgeStatus?.registered,
-      );
-      this.frameCaptureController.setMode(registered ? "runtime" : "off");
-    }
+    const bridgeSnapshot = this.appState.bridgeSnapshot;
+    this.dimosServices.robot.prepareForRuntime(bridgeSnapshot.worldFrameApproximate);
+    this.dimosServices.bridge.applyFrameCapturePolicy();
     this._setRobotInteractionMode("runtimeRobot");
     this.dimosServices.robot.robotMarker?.syncPose();
     if (this.operatingMode === "manual") {
@@ -233,6 +227,14 @@ export class DimosManager extends BaseScriptComponent {
 
   public loadIp(): string | null {
     return this.dimosServices.bridge.loadIp();
+  }
+
+  public clearBridgeIp(): void {
+    this.dimosServices.bridge.clearIp();
+  }
+
+  public isBridgeSocketOpen(): boolean {
+    return this.dimosServices.bridge.isSocketOpen();
   }
 
   public disconnect(): void {
@@ -283,6 +285,7 @@ export class DimosManager extends BaseScriptComponent {
     if (this.navigationGoalMode === mode) {
       return;
     }
+    this._log(`setNavigationGoalMode: ${mode}`);
     this.dimosServices.state.update({ navigationGoalMode: mode });
     this.dimosServices.navigation.onNavigationGoalModeChanged();
   }
@@ -295,6 +298,7 @@ export class DimosManager extends BaseScriptComponent {
     if (this.lidarMode === mode) {
       return;
     }
+    this._log(`setLidarMode: ${mode}`);
     this.dimosServices.state.update({ lidarMode: mode });
   }
 

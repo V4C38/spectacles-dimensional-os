@@ -51,7 +51,7 @@ def _wait_for_leg_timer(driver: BaselineCollector) -> float:
         if driver._move_start_mono is not None:
             return driver._move_start_mono
         time.sleep(0.01)
-    raise AssertionError("leg timer never started after velocity ack")
+    raise AssertionError("leg timer never started after velocity submit")
 
 
 def _wait_for_velocity(adapter: MagicMock, expected: float) -> None:
@@ -95,7 +95,16 @@ def test_confirm_enters_move_directly() -> None:
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
     assert driver.state == _BaselineState.MOVE
-    _wait_for_velocity(adapter, 0.3)
+    _wait_for_velocity(adapter, 0.2)
+
+
+def test_leg_timer_starts_on_velocity_submit() -> None:
+    """Leg timer must arm on submit, not after slow adapter RPC ack."""
+    driver, _adapter, _gate = _make_driver()
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    driver.authorize_motion()
+    assert driver._move_start_mono is not None
 
 
 # ── happy path: full 3-leg stop-and-sample sequence ──────────────────────────
@@ -142,7 +151,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     # --- Sample 0: deliver stable observations ---
     _drive_through_sample(driver, expected_leg_after=1)
     assert driver.state == _BaselineState.MOVE
-    _wait_for_velocity(adapter, -0.3)
+    _wait_for_velocity(adapter, -0.2)
 
     # --- Leg 1 completes (2× duration) ---
     t1 = _wait_for_leg_timer(driver)
@@ -154,7 +163,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     # --- Sample 1 ---
     _drive_through_sample(driver, expected_leg_after=2)
     assert driver.state == _BaselineState.MOVE
-    _wait_for_velocity(adapter, 0.3)
+    _wait_for_velocity(adapter, 0.2)
 
     # --- Leg 2 completes (1× duration) ---
     t2 = _wait_for_leg_timer(driver)
@@ -191,7 +200,7 @@ def test_leg_phase_emits_steady_capture_not_hold() -> None:
 
 def test_odom_present_does_not_shorten_leg() -> None:
     """Regression: bad/jumpy odom must not end a leg before the timer fires."""
-    from dimos.ar.registration.transforms import OdomSample
+    from dimos.ar.world_frame.transforms import OdomSample
 
     driver, _adapter, _gate = _make_driver()
     driver.start()

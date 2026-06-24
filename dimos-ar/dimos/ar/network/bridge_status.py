@@ -3,9 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import threading
-from typing import Literal
-
-RegistrationMethod = Literal["april_odom_baseline", "manual_pose"] | None
 
 StatusChangeCallback = Callable[[], None]
 
@@ -14,15 +11,12 @@ StatusChangeCallback = Callable[[], None]
 class BridgeStatusSnapshot:
     robot_id: str
     robot_connected: bool
-    streams_active: bool  # internal bridge health; omitted from v6 wire payloads
-    registered: bool
+    streams_active: bool  # internal bridge health; omitted from wire payloads
     reconnecting: bool
-    registration_method: RegistrationMethod
-    registration_approximate: bool
 
 
 class BridgeStatusTracker:
-    """Thread-safe bridge/robot state for WebSocket bridge_status messages."""
+    """Thread-safe bridge/robot connection state for WebSocket bridge_status messages."""
 
     def __init__(
         self,
@@ -34,10 +28,7 @@ class BridgeStatusTracker:
         self._robot_id = robot_id
         self._robot_connected = robot_connected
         self._streams_active = False
-        self._registered = False
         self._reconnecting = False
-        self._registration_method: RegistrationMethod = None
-        self._registration_approximate = False
         self._on_change: StatusChangeCallback | None = None
 
     def set_on_change(self, callback: StatusChangeCallback | None) -> None:
@@ -50,34 +41,11 @@ class BridgeStatusTracker:
             callback()
 
     def set_streams_active(self, active: bool) -> None:
-        """Update internal lidar/odom freshness; not sent on the v6 wire."""
+        """Update internal lidar/odom freshness; not sent on the wire."""
         with self._lock:
             if self._streams_active == active:
                 return
             self._streams_active = active
-        self._notify()
-
-    def set_registered(
-        self,
-        registered: bool,
-        *,
-        method: RegistrationMethod | None = None,
-        approximate: bool | None = None,
-    ) -> None:
-        with self._lock:
-            next_method = self._registration_method if method is None else method
-            next_approximate = (
-                self._registration_approximate if approximate is None else approximate
-            )
-            if (
-                self._registered == registered
-                and self._registration_method == next_method
-                and self._registration_approximate == next_approximate
-            ):
-                return
-            self._registered = registered
-            self._registration_method = next_method if registered else None
-            self._registration_approximate = next_approximate if registered else False
         self._notify()
 
     def set_reconnecting(self, reconnecting: bool) -> None:
@@ -100,8 +68,5 @@ class BridgeStatusTracker:
                 robot_id=self._robot_id,
                 robot_connected=self._robot_connected,
                 streams_active=self._streams_active,
-                registered=self._registered,
                 reconnecting=self._reconnecting,
-                registration_method=self._registration_method,
-                registration_approximate=self._registration_approximate,
             )

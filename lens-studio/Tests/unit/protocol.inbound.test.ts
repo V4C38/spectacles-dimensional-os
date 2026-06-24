@@ -4,6 +4,7 @@ import {
   parseInboundMessage,
   ProtocolParseError,
   bridgeStatusFromSnapshot,
+  parseBridgeWorldFrameFields,
   RuntimeSnapshotMessage,
 } from "../../Assets/Scripts/Bridge/Protocol";
 
@@ -17,7 +18,7 @@ describe("parseInboundMessage", () => {
           robot_id: "go2",
           display_name: "Go2",
           visual_origin_frame: "base_link",
-          registration_profile: {
+          tag_tracking_profile: {
             tag_ids: [0],
             tag_total_size_m: 0.07,
           },
@@ -28,12 +29,12 @@ describe("parseInboundMessage", () => {
     expect(msg!.type).toBe("hello");
     expect((msg as { robot: { robot_id: string } }).robot.robot_id).toBe("go2");
     expect(
-      (msg as { robot: { registration_profile: { tag_ids: number[] } } }).robot
-        .registration_profile?.tag_ids,
+      (msg as { robot: { tag_tracking_profile: { tag_ids: number[] } } }).robot
+        .tag_tracking_profile?.tag_ids,
     ).toEqual([0]);
   });
 
-  it("parses hello with full v6 capability map", () => {
+  it("parses hello with full v7 capability map", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
         type: "hello",
@@ -75,10 +76,10 @@ describe("parseInboundMessage", () => {
         robot_id: "go2",
         bridge: {
           robot_connected: true,
-          registered: false,
+          world_frame_committed: false,
           reconnecting: false,
-          registration_method: null,
-          registration_approximate: false,
+          world_frame_method: null,
+          world_frame_approximate: false,
         },
         nav: { phase: "idle" },
         path: {
@@ -93,7 +94,7 @@ describe("parseInboundMessage", () => {
     const bridge = bridgeStatusFromSnapshot(snapshot);
     expect(bridge.type).toBe("bridge_status");
     expect(bridge.robot_connected).toBe(true);
-    expect(bridge.registered).toBe(false);
+    expect(bridge.world_frame_committed).toBe(false);
   });
 
   it("parses registration_status", () => {
@@ -139,12 +140,39 @@ describe("parseInboundMessage", () => {
         type: "bridge_status",
         ts: 1,
         robot_connected: true,
-        registered: true,
+        world_frame_committed: true,
         reconnecting: false,
       }),
     );
     expect(msg!.type).toBe("bridge_status");
     expect((msg as { robot_connected: boolean }).robot_connected).toBe(true);
+  });
+
+  it("parseBridgeWorldFrameFields defaults approximate when omitted", () => {
+    expect(parseBridgeWorldFrameFields({}, false)).toEqual({
+      world_frame_approximate: false,
+    });
+  });
+
+  it("parseBridgeWorldFrameFields strict null method when committed", () => {
+    expect(
+      parseBridgeWorldFrameFields(
+        { world_frame_method: "unknown", world_frame_approximate: true },
+        true,
+      ),
+    ).toEqual({ world_frame_method: null, world_frame_approximate: true });
+  });
+
+  it("parseBridgeWorldFrameFields preserves valid method when uncommitted", () => {
+    expect(
+      parseBridgeWorldFrameFields(
+        { world_frame_method: "april_odom_baseline" },
+        false,
+      ),
+    ).toEqual({
+      world_frame_method: "april_odom_baseline",
+      world_frame_approximate: false,
+    });
   });
 
   it("returns null for JSON lidar (binary only in v6)", () => {
@@ -172,10 +200,10 @@ describe("parseInboundMessage", () => {
     expect((msg as { position: number[] }).position).toEqual([1, 2, 3]);
   });
 
-  it("parses pose_correction", () => {
+  it("parses world_frame_correction", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
-        type: "pose_correction",
+        type: "world_frame_correction",
         ts: 1,
         trans_delta_m: 0.1,
         yaw_corrected: true,
@@ -183,7 +211,7 @@ describe("parseInboundMessage", () => {
         solve_method: "apriltag_full",
       }),
     );
-    expect(msg!.type).toBe("pose_correction");
+    expect(msg!.type).toBe("world_frame_correction");
     expect((msg as { solve_method: string }).solve_method).toBe("apriltag_full");
   });
 
@@ -226,6 +254,21 @@ describe("parseInboundMessage", () => {
     );
     expect(msg!.type).toBe("nav_status");
     expect((msg as { phase: string }).phase).toBe("idle");
+  });
+
+  it("parses nav_status retryable stall fields", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "nav_status",
+        ts: 1,
+        phase: "recovering",
+        retryable: true,
+        stall_reason: "no_path",
+      }),
+    );
+    expect(msg!.type).toBe("nav_status");
+    expect((msg as { retryable: boolean }).retryable).toBe(true);
+    expect((msg as { stall_reason: string }).stall_reason).toBe("no_path");
   });
 
   it("parses pong", () => {

@@ -132,7 +132,7 @@ flowchart TB
   ├── Bridge/       (BridgeClient, BridgeConnectionManager, BridgeInboundProcessor, BridgeRuntime, Protocol)
   ├── Setup/        (SetupWizard, SetupWizardView, SetupRegistrationFlow, SetupRegistrationPreview)
   ├── UI/           (UIManager, MainMenuView, UILogger, kit/UIKit, kit/UIAnimations)
-  ├── Registration/ (RegistrationClient, ManualPoseCorrection)
+  ├── Registration/ (RegistrationClient, ManualRegistrationAlignment)
   ├── Camera/       (FrameCaptureController, DeviceCameraStream)
   ├── Navigation/   (NavigationController, NavigationModel, SurfacePlacementController, NavigationPathRenderer, NavigationTargetMarker)
   ├── Robot/        (RobotRuntime, RobotMarker, RobotUiView, RobotRuntimeModel)
@@ -147,7 +147,7 @@ flowchart TB
 
 [`dimos-ar/`](dimos-ar/) contains the Python side: `ARBridge`, `ARRobotAdapterModule`, the protocol definition, and the tests. The monorepo entrypoint is [`dimos-ar/dimos/ar/blueprints.py`](dimos-ar/dimos/ar/blueprints.py), which wraps native DimOS stack composition for the currently selected robot runtime.
 
-`ARBridge` itself ([`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py)) subclasses `dimos.core.module.Module` and stays thin: it declares the DimOS `In[...]` streams, builds its collaborators, and fans handler calls out to them. The actual logic lives in single-owner collaborators under `dimos-ar/dimos/ar/`: `registration/` (`RegistrationSession`, baseline collector, tag tracker, refinement), `bridge/` (`NavController`, `TelemetryPublisher`, `StatusService`, `OdomBuffer`, …), and adapters for Go2/G1.
+`ARBridge` itself ([`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py)) subclasses `dimos.core.module.Module` and stays thin: it declares the DimOS `In[...]` streams, builds its collaborators, and fans handler calls out to them. The actual logic lives in single-owner collaborators under `dimos-ar/dimos/ar/`: `registration/` (setup wizard — `RegistrationSession`, baseline collector), `world_frame/` (`WorldFrameState`, `WorldFrameRefiner`), `tag_tracking/` (robot-mounted AprilTag detect + solve), `navigation/` (`NavigateGoalHandler`, `PreviewGoalHandler`), `bridge/` (`TelemetryPublisher`, `StatusService`, `OdomBuffer`, …), and adapters for Go2/G1.
 
 ```mermaid
 flowchart TB
@@ -257,7 +257,7 @@ Python tests are colocated with their modules under `dimos-ar/dimos/ar/`. See [`
 
 - Tune lidar and rate limits via `ARBridgeConfig` in [`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py).
 - Add or change messages by updating the Python protocol, the protocol spec, and the Lens protocol modules together.
-- The protocol now also carries `set_lidar_mode` (client-selected `off` / `obstacles` / `full` LiDAR transmission) and `pose_correction` (runtime drift-correction telemetry, deadbanded so only meaningful jumps reach the client); see [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) for the full schema.
+- The protocol now also carries `set_lidar_mode` (client-selected `off` / `obstacles` / `full` LiDAR transmission) and `world_frame_correction` (runtime drift-correction telemetry, deadbanded so only meaningful jumps reach the client); see [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) for the full schema.
 - Keep `dimos-ar/dimos/ar/` platform-agnostic. Spectacles-specific code stays in [`lens-studio/`](lens-studio/); other XR clients should live in their own client folder or repo.
 
 </details>

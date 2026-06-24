@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import threading
+import time
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
+import pytest
 from dimos_lcm.std_msgs import Bool
 
 from dimos.ar.adapters.g1 import G1AdapterModule
-from dimos.ar.adapters.base import DEFAULT_BASELINE_MOTION_RECIPE
+from dimos.ar.adapters.base import (
+    BaselineMotionRecipe,
+    DEFAULT_BASELINE_MOTION_RECIPE,
+    resolve_baseline_motion_recipe,
+)
 from dimos.ar.adapters.go2 import Go2AdapterModule
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
+from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.std_msgs.Bool import Bool as NavBool
 
 
@@ -164,6 +172,21 @@ def test_go2_baseline_motion_recipe_matches_teleop() -> None:
     adapter = _make_go2_adapter()
 
     assert Go2AdapterModule.baseline_motion_recipe(adapter) == DEFAULT_BASELINE_MOTION_RECIPE
+    assert DEFAULT_BASELINE_MOTION_RECIPE.strafe_speed == pytest.approx(0.2)
+
+
+def test_go2_baseline_set_lateral_velocity_passes_stick_through() -> None:
+    adapter = _make_go2_adapter()
+    adapter.cmd_vel = _FakeStream(connected=True)
+
+    assert Go2AdapterModule.baseline_set_lateral_velocity(adapter, 0.2) is True
+    for _ in range(100):
+        if adapter.cmd_vel.published:
+            break
+        time.sleep(0.01)
+    twist = adapter.cmd_vel.published[0]
+    assert isinstance(twist, Twist)
+    assert twist.linear.y == pytest.approx(0.2)
 
 
 def test_g1_baseline_motion_available_and_capability_follow_cmd_vel_transport() -> None:
@@ -187,15 +210,69 @@ def test_g1_baseline_set_lateral_velocity_zero_publishes_stop_twist() -> None:
     assert twist.angular.z == 0.0
 
 
-def test_go2_runtime_registration_profile_defaults() -> None:
+def test_go2_runtime_tag_tracking_profile_defaults() -> None:
     adapter = _make_go2_adapter()
-    profile = Go2AdapterModule.runtime_registration_profile(adapter)
+    profile = Go2AdapterModule.runtime_tag_tracking_profile(adapter)
     assert profile.runtime_static_speed_mps == 0.05
     assert profile.runtime_speed_horizon_s == 0.4
 
 
-def test_g1_runtime_registration_profile_overrides() -> None:
+def test_g1_runtime_tag_tracking_profile_overrides() -> None:
     adapter = _make_g1_adapter()
-    profile = G1AdapterModule.runtime_registration_profile(adapter)
+    profile = G1AdapterModule.runtime_tag_tracking_profile(adapter)
     assert profile.runtime_static_speed_mps == 0.08
     assert profile.runtime_speed_horizon_s == 0.9
+
+
+def test_g1_ar_odom_publishes_pose_stamped_with_twist_speed() -> None:
+    adapter = _make_g1_adapter()
+    from dimos.msgs.geometry_msgs.Pose import Pose
+    from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+    from dimos.msgs.geometry_msgs.Twist import Twist
+    from dimos.msgs.geometry_msgs.Vector3 import Vector3
+
+    odom = Odometry(
+        ts=1.5,
+        frame_id="odom",
+        child_frame_id="base_link",
+        pose=Pose(
+            position=Vector3(1.0, 2.0, 0.0),
+            orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
+        ),
+        twist=Twist(linear=Vector3(0.3, 0.4, 0.0), angular=Vector3(0.0, 0.0, 0.0)),
+    )
+
+    import asyncio
+
+    asyncio.run(G1AdapterModule.handle_ar_odom_in(adapter, odom))
+
+    assert len(adapter.ar_odom.published) == 1
+    pose = adapter.ar_odom.published[0]
+    assert isinstance(pose, PoseStamped)
+    assert pose.x == 1.0
+    assert pose.y == 2.0
+    assert hasattr(pose, "vx") and pose.vx == 0.3  # type: ignore[attr-defined]
+    assert hasattr(pose, "vy") and pose.vy == 0.4  # type: ignore[attr-defined]
+
+    from dimos.ar.bridge.odom_buffer import OdomBuffer
+
+    sample = OdomBuffer().sample_from_msg(pose)
+    assert sample.measured_speed_mps == pytest.approx(0.5)
+
+
+def test_resolve_baseline_motion_recipe_uses_adapter_value() -> None:
+    recipe = BaselineMotionRecipe(
+        strafe_speed=0.25,
+        leg_duration_s=(2.0, 4.0, 2.0),
+        leg_directions=(1.0, -1.0, 1.0),
+        leg_distance_multipliers=(1.0, 2.0, 1.0),
+    )
+    adapter = MagicMock()
+    adapter.baseline_motion_recipe.return_value = recipe
+    assert resolve_baseline_motion_recipe(adapter) == recipe
+
+
+def test_resolve_baseline_motion_recipe_defaults_on_failure() -> None:
+    adapter = MagicMock()
+    adapter.baseline_motion_recipe.side_effect = RuntimeError("rpc failed")
+    assert resolve_baseline_motion_recipe(adapter) == DEFAULT_BASELINE_MOTION_RECIPE

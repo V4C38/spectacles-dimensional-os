@@ -14,13 +14,13 @@ def test_blueprints_importable() -> None:
     importlib.import_module("dimos.ar.blueprints")
 
 
-def test_registration_importable() -> None:
+def test_registration_session_importable() -> None:
     importlib.import_module("dimos.ar.registration.session")
 
 
 def test_tag_tracker_importable() -> None:
-    """dimos.ar.registration.tracker must be importable."""
-    importlib.import_module("dimos.ar.registration.tracker")
+    """dimos.ar.tag_tracking.tracker must be importable."""
+    importlib.import_module("dimos.ar.tag_tracking.tracker")
 
 
 def test_ar_bridge_module_importable() -> None:

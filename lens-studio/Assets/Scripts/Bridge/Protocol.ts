@@ -1,6 +1,6 @@
 // ================================================================
 /**
- * Protocol v6 — message types, parser, outbound builders, and unit
+ * Protocol v7 — message types, parser, outbound builders, and unit
  * conversion helpers. Single source of truth replacing the v3 trio
  * (ProtocolTypes / ProtocolParser / Protocol).
  *
@@ -8,7 +8,12 @@
  */
 // ================================================================
 
-export const PROTOCOL_VERSION = 6;
+import {
+  BridgeSnapshot,
+  createDefaultBridgeSnapshot,
+} from "../Core/AppState";
+
+export const PROTOCOL_VERSION = 7;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -42,7 +47,7 @@ export interface CapabilityState {
   reason?: string;
 }
 
-export interface RegistrationProfile {
+export interface TagTrackingProfile {
   tag_ids: number[];
   tag_total_size_m: number;
 }
@@ -55,7 +60,7 @@ export interface RobotHelloInfo {
   visual_origin_frame: string;
   base_height_m?: number;
   default_render_offset_m?: [number, number, number];
-  registration_profile?: RegistrationProfile;
+  tag_tracking_profile?: TagTrackingProfile;
 }
 
 /** Capabilities is a single unified map; disabled_capabilities removed. */
@@ -93,8 +98,8 @@ export interface PoseMessage {
   speed_mps?: number;
 }
 
-export interface PoseCorrectionMessage {
-  type: "pose_correction";
+export interface WorldFrameCorrectionMessage {
+  type: "world_frame_correction";
   ts: number;
   trans_delta_m: number;
   yaw_delta_deg?: number;
@@ -156,10 +161,39 @@ export interface BridgeStatusMessage {
   type: "bridge_status";
   ts: number;
   robot_connected: boolean;
-  registered: boolean;
+  world_frame_committed: boolean;
   reconnecting: boolean;
-  registration_method?: RegistrationMode;
-  registration_approximate?: boolean;
+  world_frame_method?: RegistrationMode | null;
+  world_frame_approximate?: boolean;
+}
+
+export interface BridgeWorldFrameFields {
+  world_frame_method?: RegistrationMode | null;
+  world_frame_approximate: boolean;
+}
+
+/** Parse optional world-frame fields from bridge_status / runtime_snapshot.bridge. */
+export function parseBridgeWorldFrameFields(
+  data: Record<string, unknown>,
+  committed: boolean,
+): BridgeWorldFrameFields {
+  const world_frame_approximate =
+    typeof data.world_frame_approximate === "boolean"
+      ? data.world_frame_approximate
+      : false;
+  if (
+    data.world_frame_method === "april_odom_baseline" ||
+    data.world_frame_method === "manual_pose"
+  ) {
+    return {
+      world_frame_method: data.world_frame_method,
+      world_frame_approximate,
+    };
+  }
+  if (committed || data.world_frame_method === null) {
+    return { world_frame_method: null, world_frame_approximate };
+  }
+  return { world_frame_approximate };
 }
 
 export type PathKind = "active" | "preview";
@@ -179,24 +213,30 @@ export type NavPhase =
   | "succeeded"
   | "failed";
 
+export type NavStallReason = "no_path" | "planner_idle";
+
 export interface NavStatusMessage {
   type: "nav_status";
   ts: number;
   phase: NavPhase;
   error_code?: number;
+  retryable?: boolean;
+  stall_reason?: NavStallReason;
 }
 
 export interface SnapshotBridgeState {
   robot_connected: boolean;
-  registered: boolean;
+  world_frame_committed: boolean;
   reconnecting: boolean;
-  registration_method?: RegistrationMode | null;
-  registration_approximate?: boolean;
+  world_frame_method?: RegistrationMode | null;
+  world_frame_approximate?: boolean;
 }
 
 export interface SnapshotNavState {
   phase: NavPhase;
   error_code?: number | null;
+  retryable?: boolean;
+  stall_reason?: NavStallReason | null;
 }
 
 export interface SnapshotPathState {
@@ -226,7 +266,7 @@ export type InboundMessage =
   | HelloMessage
   | LidarMessage
   | PoseMessage
-  | PoseCorrectionMessage
+  | WorldFrameCorrectionMessage
   | RegistrationStatusMessage
   | CameraFrameAckMessage
   | BridgeStatusMessage
@@ -276,7 +316,7 @@ export function isNonCriticalInboundMessageType(
   return (
     messageType === "lidar" ||
     messageType === "pose" ||
-    messageType === "pose_correction"
+    messageType === "world_frame_correction"
   );
 }
 
@@ -326,6 +366,13 @@ const NAV_PHASES: NavPhase[] = [
 ];
 
 const PATH_KINDS: PathKind[] = ["active", "preview"];
+
+function parseNavStallReason(raw: unknown): NavStallReason | undefined {
+  if (raw === "no_path" || raw === "planner_idle") {
+    return raw;
+  }
+  return undefined;
+}
 
 function parseRegistrationMotion(raw: unknown): RegistrationMotion | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -384,7 +431,7 @@ function parseVec3(raw: unknown): [number, number, number] {
   return [Number(raw[0]), Number(raw[1]), Number(raw[2])];
 }
 
-function parseRegistrationProfile(raw: unknown): RegistrationProfile | undefined {
+function parseTagTrackingProfile(raw: unknown): TagTrackingProfile | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return undefined;
   }
@@ -409,17 +456,17 @@ function parseSnapshotBridge(raw: unknown): SnapshotBridgeState {
   const bridge = requireObject(raw);
   const status: SnapshotBridgeState = {
     robot_connected: Boolean(bridge.robot_connected),
-    registered: Boolean(bridge.registered),
+    world_frame_committed: Boolean(bridge.world_frame_committed),
     reconnecting: Boolean(bridge.reconnecting),
   };
-  const method = bridge.registration_method;
+  const method = bridge.world_frame_method;
   if (method === "april_odom_baseline" || method === "manual_pose") {
-    status.registration_method = method;
+    status.world_frame_method = method;
   } else if (method === null) {
-    status.registration_method = null;
+    status.world_frame_method = null;
   }
-  if (typeof bridge.registration_approximate === "boolean") {
-    status.registration_approximate = bridge.registration_approximate;
+  if (typeof bridge.world_frame_approximate === "boolean") {
+    status.world_frame_approximate = bridge.world_frame_approximate;
   }
   return status;
 }
@@ -435,6 +482,15 @@ function parseSnapshotNav(raw: unknown): SnapshotNavState {
     status.error_code = nav.error_code;
   } else if (nav.error_code === null) {
     status.error_code = null;
+  }
+  if (typeof nav.retryable === "boolean") {
+    status.retryable = nav.retryable;
+  }
+  const stallReason = parseNavStallReason(nav.stall_reason);
+  if (stallReason) {
+    status.stall_reason = stallReason;
+  } else if (nav.stall_reason === null) {
+    status.stall_reason = null;
   }
   return status;
 }
@@ -547,11 +603,11 @@ function parseInboundObject(
           robot.default_render_offset_m,
         );
       }
-      const registrationProfile = parseRegistrationProfile(
-        robot.registration_profile,
+      const tagTrackingProfile = parseTagTrackingProfile(
+        robot.tag_tracking_profile,
       );
-      if (registrationProfile) {
-        hello.robot.registration_profile = registrationProfile;
+      if (tagTrackingProfile) {
+        hello.robot.tag_tracking_profile = tagTrackingProfile;
       }
       const rawCapabilities = requireObject(data.capabilities ?? {});
       Object.keys(rawCapabilities).forEach((key) => {
@@ -632,21 +688,18 @@ function parseInboundObject(
     }
 
     case "bridge_status": {
+      const committed = Boolean(data.world_frame_committed);
+      const worldFrame = parseBridgeWorldFrameFields(data, committed);
       const status: BridgeStatusMessage = {
         type: "bridge_status",
         ts: requireNumber(data, "ts"),
         robot_connected: Boolean(data.robot_connected),
-        registered: Boolean(data.registered),
+        world_frame_committed: committed,
         reconnecting: Boolean(data.reconnecting),
+        world_frame_approximate: worldFrame.world_frame_approximate,
       };
-      if (
-        data.registration_method === "april_odom_baseline" ||
-        data.registration_method === "manual_pose"
-      ) {
-        status.registration_method = data.registration_method;
-      }
-      if (typeof data.registration_approximate === "boolean") {
-        status.registration_approximate = data.registration_approximate;
+      if (worldFrame.world_frame_method !== undefined) {
+        status.world_frame_method = worldFrame.world_frame_method;
       }
       return status;
     }
@@ -665,19 +718,19 @@ function parseInboundObject(
       };
     }
 
-    case "pose_correction": {
+    case "world_frame_correction": {
       const solveMethod = data.solve_method;
       if (
         solveMethod !== "apriltag_full" &&
         solveMethod !== "apriltag_translation"
       ) {
         print(
-          `Protocol: unknown pose_correction.solve_method "${solveMethod}"; skipping`,
+          `Protocol: unknown world_frame_correction.solve_method "${solveMethod}"; skipping`,
         );
         return null;
       }
-      const msg: PoseCorrectionMessage = {
-        type: "pose_correction",
+      const msg: WorldFrameCorrectionMessage = {
+        type: "world_frame_correction",
         ts: requireNumber(data, "ts"),
         trans_delta_m: requireNumber(data, "trans_delta_m"),
         yaw_corrected: Boolean(data.yaw_corrected),
@@ -708,6 +761,13 @@ function parseInboundObject(
       if (typeof data.error_code === "number") {
         msg.error_code = data.error_code;
       }
+      if (typeof data.retryable === "boolean") {
+        msg.retryable = data.retryable;
+      }
+      const stallReason = parseNavStallReason(data.stall_reason);
+      if (stallReason) {
+        msg.stall_reason = stallReason;
+      }
       return msg;
     }
 
@@ -734,17 +794,17 @@ export function bridgeStatusFromSnapshot(
     type: "bridge_status",
     ts: snapshot.ts,
     robot_connected: snapshot.bridge.robot_connected,
-    registered: snapshot.bridge.registered,
+    world_frame_committed: snapshot.bridge.world_frame_committed,
     reconnecting: snapshot.bridge.reconnecting,
   };
   if (
-    snapshot.bridge.registration_method === "april_odom_baseline" ||
-    snapshot.bridge.registration_method === "manual_pose"
+    snapshot.bridge.world_frame_method === "april_odom_baseline" ||
+    snapshot.bridge.world_frame_method === "manual_pose"
   ) {
-    status.registration_method = snapshot.bridge.registration_method;
+    status.world_frame_method = snapshot.bridge.world_frame_method;
   }
-  if (typeof snapshot.bridge.registration_approximate === "boolean") {
-    status.registration_approximate = snapshot.bridge.registration_approximate;
+  if (typeof snapshot.bridge.world_frame_approximate === "boolean") {
+    status.world_frame_approximate = snapshot.bridge.world_frame_approximate;
   }
   return status;
 }
@@ -991,8 +1051,33 @@ export function deriveLinkState(
   if (!connected) {
     return "disconnected";
   }
-  if (!status?.robot_connected) {
+  if (status?.reconnecting || !status?.robot_connected) {
     return "connectedNoRobot";
   }
   return "connected";
+}
+
+/** Project wire bridge_status into app-facing BridgeSnapshot. */
+export function projectBridgeSnapshot(
+  handshakeReady: boolean,
+  status: BridgeStatusMessage | null,
+): BridgeSnapshot {
+  if (!handshakeReady) {
+    return createDefaultBridgeSnapshot();
+  }
+  if (!status) {
+    return {
+      ...createDefaultBridgeSnapshot(),
+      handshakeReady: true,
+    };
+  }
+  return {
+    handshakeReady: true,
+    robotConnected: status.robot_connected,
+    worldFrameCommitted: status.world_frame_committed,
+    worldFrameApproximate: status.world_frame_approximate ?? false,
+    reconnecting: status.reconnecting,
+    worldFrameMethod: status.world_frame_method ?? null,
+    statusTs: status.ts,
+  };
 }

@@ -7,6 +7,7 @@
 
 import {
   AppState,
+  bridgeNavigationReady,
   defaultNavigationOutcome,
   DimosAppState,
   NavigationOutcome,
@@ -26,7 +27,7 @@ import {
   ProtocolParseError,
   PoseMessage,
   protocolMetersToLensCentimeters,
-} from "../Bridge/domain";
+} from "../Bridge/BridgeDomain";
 import {
   isCapabilityAvailable,
   capabilityUnavailableReason,
@@ -62,6 +63,7 @@ import {
 
 const PREVIEW_INTERVAL_S = 0.25;
 const GOAL_SEND_INTERVAL_S = 0.35;
+const GOAL_COMMIT_LOG_INTERVAL_S = 2.0;
 const GOAL_SEND_MIN_DISTANCE_CM = 20.0;
 const GOAL_REACHED_RETARGET_CM = 25.0;
 const PREVIEW_STALE_TARGET_DISTANCE_CM = 12.0;
@@ -104,6 +106,7 @@ export class NavigationController {
   private _hostBound = false;
   private _placementDeferralEvent: DelayedCallbackEvent | null = null;
   private _robotRuntime: RobotRuntime | null = null;
+  private _lastGoalCommitLogTime = -1;
 
   constructor(
     private readonly _script: BaseScriptComponent,
@@ -195,6 +198,7 @@ export class NavigationController {
     marker.setDragEnabled(true);
     this._placement.attach(marker);
     this._placement.start(initialPose.position, initialPose.rotation);
+    this._log(`nav arm mode=${config.mode} allowDrag=${config.allowDrag}`);
     this._dispatch({ kind: "arm", config });
   }
 
@@ -202,6 +206,7 @@ export class NavigationController {
     if (!this._engine.activeConfig) {
       return;
     }
+    this._log("nav disarm");
     this._dispatch({ kind: "disarm" });
   }
 
@@ -439,6 +444,7 @@ export class NavigationController {
     if (!this._cancelGoalAvailable) {
       return;
     }
+    this._log("nav goal cancel requested");
     this._dispatch({ kind: "cancelRequested" });
     this._bridgeClient?.sendCancelGoal();
   }
@@ -593,6 +599,7 @@ export class NavigationController {
       commitKind,
       sendToBridge,
     });
+    this._logGoalCommit(commitKind, config.mode, sendToBridge);
     this._pendingCommitPose = null;
     return this._engine.goal !== null;
   }
@@ -681,7 +688,9 @@ export class NavigationController {
 
   private _applyNavStatusInner(msg: NavStatusMessage): string {
     if (msg.phase === "recovering") {
-      this._dispatch({ kind: "navStatusRecovering" });
+      if (msg.retryable) {
+        this._dispatch({ kind: "navStatusRecovering" });
+      }
       return "Recovering";
     }
     if (msg.phase === "succeeded" || msg.phase === "failed") {
@@ -832,9 +841,8 @@ export class NavigationController {
 
   private _canSendNavigationGoal(): boolean {
     return (
-      (this._bridgeClient?.isConnected() ?? false) &&
-      isCapabilityAvailable(this._appState.snapshot.robotRuntime, "nav") &&
-      (this._bridgeClient?.lastBridgeStatus?.registered ?? false)
+      bridgeNavigationReady(this._appState.snapshot.bridgeSnapshot) &&
+      isCapabilityAvailable(this._appState.snapshot.robotRuntime, "nav")
     );
   }
 
@@ -1062,6 +1070,25 @@ export class NavigationController {
     }
     this._marker.destroy();
     this._marker = null;
+  }
+
+  private _logGoalCommit(
+    commitKind: GoalCommitKind,
+    mode: NavGoalConfig["mode"],
+    sendToBridge: boolean,
+  ): void {
+    const now = getTime();
+    if (
+      commitKind === "stream" &&
+      this._lastGoalCommitLogTime >= 0 &&
+      now - this._lastGoalCommitLogTime < GOAL_COMMIT_LOG_INTERVAL_S
+    ) {
+      return;
+    }
+    if (commitKind === "stream") {
+      this._lastGoalCommitLogTime = now;
+    }
+    this._log(`nav goal commit kind=${commitKind} mode=${mode} sent=${sendToBridge}`);
   }
 
   private _log(message: string): void {

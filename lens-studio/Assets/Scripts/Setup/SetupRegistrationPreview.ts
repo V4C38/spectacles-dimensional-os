@@ -2,13 +2,14 @@ import {
   RegistrationMotion,
   RegistrationPhase,
   RegistrationStatusMessage,
-} from "../Bridge/domain";
+} from "../Bridge/BridgeDomain";
 import { RegistrationClient } from "../Registration/RegistrationClient";
 import { DimosState } from "../Core/DimosState";
 import { OperatingMode } from "../Core/AppState";
 import { RobotRuntime } from "../Robot/RobotRuntime";
 import { robotFloorWorldYCm } from "../Robot/RobotRuntimeModel";
 import { COLOR_ERROR, COLOR_SUCCESS, findChildRecursive } from "../UI/kit/UIKit";
+import { buildRegistrationCheckpointTitle } from "./SetupRegistrationFlow";
 
 export interface RegistrationPreviewPresentation {
   titleText: string;
@@ -35,7 +36,7 @@ export function buildRegistrationPreviewPresentation(args: {
   motion?: RegistrationMotion;
 }): RegistrationPreviewPresentation {
   const titleText = args.motion
-    ? `Step ${args.motion.waypoint_index}/${args.motion.waypoint_total}`
+    ? buildRegistrationCheckpointTitle(args.motion)
     : "Registration";
   return {
     titleText,

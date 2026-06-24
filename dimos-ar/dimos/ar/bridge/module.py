@@ -12,21 +12,19 @@ All business logic lives in the bridge/ collaborator classes.
 
 from __future__ import annotations
 
-import math
 from typing import TYPE_CHECKING, Any
 
 from dimos_lcm.std_msgs import Bool, String
 
 from dimos.ar.adapters.base import (
     ARRobotAdapterSpec,
-    BaselineMotionRecipe,
-    DEFAULT_BASELINE_MOTION_RECIPE,
     RobotHandshake,
+    resolve_baseline_motion_recipe,
 )
 from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
-from dimos.ar.bridge.navigation import NavController
 from dimos.ar.bridge.odom_buffer import OdomBuffer
-from dimos.ar.bridge.preview import PreviewService
+from dimos.ar.navigation.navigate import NavigateGoalHandler
+from dimos.ar.navigation.preview import PreviewGoalHandler
 from dimos.ar.bridge.safety import BridgeSafetyCoordinator
 from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.bridge.status_service import StatusService
@@ -38,19 +36,19 @@ from dimos.ar.network.protocol import (
 )
 from dimos.ar.network.websocket_server import ARWebSocketServer
 from dimos.ar.preview_planner import PreviewPlanner
-from dimos.ar.registration.refinement import RegisteredPoseRefiner
-from dimos.ar.registration.registry import WorldRegistry
 from dimos.ar.registration.session import RegistrationSession
-from dimos.ar.registration.tracker import RobotAprilTagTracker, RobotAprilTagTrackerConfig
-from dimos.ar.registration.transforms import Calibration
-from dimos.ar.tracking.filters import LidarFilter, LidarFilterConfig, lidar_height_band_m
+from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker, RobotAprilTagTrackerConfig
+from dimos.ar.world_frame.refinement import WorldFrameRefiner
+from dimos.ar.world_frame.registry import WorldRegistry
+from dimos.ar.world_frame.state import WorldFrameState
+from dimos.ar.lidar.filters import LidarFilter, LidarFilterConfig, lidar_height_band_m
+from dimos.ar.utils.console import console_divider
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
-from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.utils.logging_config import setup_logger
@@ -61,28 +59,6 @@ if TYPE_CHECKING:
     from dimos.ar.network.protocol import GetStatusMessage
 
 logger = setup_logger()
-
-
-def _resolve_baseline_motion_recipe(adapter: ARRobotAdapterSpec) -> BaselineMotionRecipe:
-    try:
-        recipe = adapter.baseline_motion_recipe()
-        if (
-            isinstance(recipe, BaselineMotionRecipe)
-            and math.isfinite(recipe.strafe_speed)
-            and recipe.strafe_speed > 0
-        ):
-            logger.info(
-                "Baseline motion recipe resolved",
-                strafe_speed=recipe.strafe_speed,
-            )
-            return recipe
-    except Exception as exc:
-        logger.warning(
-            "baseline_motion_recipe failed; using default",
-            error=str(exc),
-            default=DEFAULT_BASELINE_MOTION_RECIPE,
-        )
-    return DEFAULT_BASELINE_MOTION_RECIPE
 
 
 class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
@@ -124,7 +100,6 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
 class ARBridge(Module):  # type: ignore[misc]
     ar_lidar: In[PointCloud2]
     ar_odom: In[PoseStamped]
-    ar_odometry: In[Odometry]
     ar_global_costmap: In[OccupancyGrid]
     ar_path: In[Path]
     ar_goal_reached: In[Bool]
@@ -138,9 +113,9 @@ class ARBridge(Module):  # type: ignore[misc]
     _odom: OdomBuffer
     _status: StatusService
     _registration: RegistrationSession
-    _nav: NavController
+    _nav: NavigateGoalHandler
     _command_queue: AdapterCommandQueue
-    _preview: PreviewService
+    _preview: PreviewGoalHandler
     _telemetry: TelemetryPublisher
     _ws_server: ARWebSocketServer
     _robot_id: str
@@ -149,7 +124,7 @@ class ARBridge(Module):  # type: ignore[misc]
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Adapter-independent shared objects created eagerly.
-        self._calibration = Calibration()
+        self._world_frame = WorldFrameState()
         self._preview_planner = PreviewPlanner(global_config)
 
     @rpc
@@ -161,7 +136,7 @@ class ARBridge(Module):  # type: ignore[misc]
         self._robot_id = robot_id
         handshake = self._adapter.handshake_payload()
         self._connect_handshake = handshake
-        runtime_profile = self._adapter.runtime_registration_profile()
+        runtime_profile = self._adapter.runtime_tag_tracking_profile()
 
         # LiDAR height band comes from the adapter handshake only (not ARBridgeConfig).
         min_height_m, max_height_m = lidar_height_band_m(
@@ -186,6 +161,7 @@ class ARBridge(Module):  # type: ignore[misc]
         status = StatusService(
             robot_id=robot_id,
             sender=sender,
+            world_frame=self._world_frame,
             stream_stale_timeout_s=self.config.stream_stale_timeout_s,
         )
 
@@ -202,22 +178,36 @@ class ARBridge(Module):  # type: ignore[misc]
             self._adapter.tag_mounts(),
             config=tracker_config,
         )
-        pose_refiner = RegisteredPoseRefiner(
+        telemetry = TelemetryPublisher(
             robot_id=robot_id,
             sender=sender,
-            calibration=self._calibration,
+            world_frame=self._world_frame,
+            odom=odom,
+            lidar_filter=lidar_filter,
+            target_points=self.config.target_points,
+            obstacle_target_points=self.config.obstacle_target_points,
+            lidar_voxel_size_m=self.config.lidar_voxel_size_m,
+            pose_max_hz=self.config.pose_max_hz,
+            speed_horizon_s=runtime_profile.runtime_speed_horizon_s,
+        )
+        registry = WorldRegistry(self._world_frame, self.tf.publish_static)
+        world_frame_refiner = WorldFrameRefiner(
+            registry=registry,
+            telemetry=telemetry,
+            robot_id=robot_id,
+            sender=sender,
             odom=odom,
             tag_tracker=tag_tracker,
             runtime_profile=runtime_profile,
             runtime_correction_enabled=self.config.runtime_correction_enabled,
         )
-        registry = WorldRegistry(self._calibration, self.tf.publish_static)
+        registry.attach_refiner(world_frame_refiner)
         baseline_cap = handshake.capability_states.get("registration_april_odom_baseline")
         baseline_motion_available = (
             baseline_cap.available if baseline_cap is not None else False
         )
         assert self._loop is not None, "build() called before Module loop is assigned"
-        baseline_motion_recipe = _resolve_baseline_motion_recipe(self._adapter)
+        baseline_motion_recipe = resolve_baseline_motion_recipe(self._adapter)
         command_queue = AdapterCommandQueue(self._adapter)
         registration = RegistrationSession(
             robot_id=robot_id,
@@ -229,7 +219,7 @@ class ARBridge(Module):  # type: ignore[misc]
             loop=self._loop,
             frame_max_age_s=self.config.frame_max_age_s,
             manual_registration_quality=self.config.manual_registration_quality,
-            pose_refiner=pose_refiner,
+            world_frame_refiner=world_frame_refiner,
             adapter=self._adapter,
             command_queue=command_queue,
             runtime_profile=runtime_profile,
@@ -237,32 +227,19 @@ class ARBridge(Module):  # type: ignore[misc]
             baseline_motion_recipe=baseline_motion_recipe,
         )
 
-        nav = NavController(
+        nav = NavigateGoalHandler(
             robot_id=robot_id,
             sender=sender,
-            calibration=self._calibration,
+            world_frame=self._world_frame,
             command_queue=command_queue,
         )
 
-        preview = PreviewService(
+        preview = PreviewGoalHandler(
             robot_id=robot_id,
             sender=sender,
-            calibration=self._calibration,
+            world_frame=self._world_frame,
             odom=odom,
             planner=self._preview_planner,
-        )
-
-        telemetry = TelemetryPublisher(
-            robot_id=robot_id,
-            sender=sender,
-            calibration=self._calibration,
-            odom=odom,
-            lidar_filter=lidar_filter,
-            target_points=self.config.target_points,
-            obstacle_target_points=self.config.obstacle_target_points,
-            lidar_voxel_size_m=self.config.lidar_voxel_size_m,
-            pose_max_hz=self.config.pose_max_hz,
-            speed_horizon_s=runtime_profile.runtime_speed_horizon_s,
         )
 
         safety = BridgeSafetyCoordinator(
@@ -308,12 +285,13 @@ class ARBridge(Module):  # type: ignore[misc]
     @rpc
     def start(self) -> None:
         super().start()
-        self._preview.start()
-        self._nav.start()
         self._ws_server.start()
         self._status.start()
+        self._preview.start()
+        self._nav.start()
         host = global_config.listen_host
         logger.info("ARBridge started", websocket=f"ws://{host}:{self.config.port}")
+        console_divider(f"Bridge ready — ws://{host}:{self.config.port}")
         self._status.broadcast()
 
     @rpc
@@ -348,31 +326,11 @@ class ARBridge(Module):  # type: ignore[misc]
         self._status.refresh()
         self._telemetry.publish_lidar(msg)
 
-    # Go2 blueprint connects ar_odom (PoseStamped); G1 connects ar_odometry (Odometry).
-    # Only one stream is wired per deployment — both handlers support both robot stacks.
-
     async def handle_ar_odom(self, msg: PoseStamped) -> None:
         self._odom.update(msg)
         self._status.mark_odom()
         self._status.refresh()
         self._telemetry.publish_pose(msg)
-
-    async def handle_ar_odometry(self, msg: Odometry) -> None:
-        self._odom.update(msg)
-        self._status.mark_odom()
-        self._status.refresh()
-        pose = PoseStamped(
-            ts=msg.ts,
-            frame_id=msg.child_frame_id or msg.frame_id,
-            position=(msg.x, msg.y, msg.z),
-            orientation=(
-                msg.orientation.x,
-                msg.orientation.y,
-                msg.orientation.z,
-                msg.orientation.w,
-            ),
-        )
-        self._telemetry.publish_pose(pose)
 
     async def handle_ar_path(self, msg: Path) -> None:
         self._nav.on_path(msg)
@@ -397,7 +355,7 @@ class ARBridge(Module):  # type: ignore[misc]
             websocket,
             encode_runtime_snapshot(
                 robot_id=self._robot_id,
-                bridge=self._status.snapshot(),
+                bridge=self._status.merged_bridge_snapshot(),
                 nav=self._nav.nav_phase_dict(),
                 path=path,
             ),
@@ -414,27 +372,7 @@ class ARBridge(Module):  # type: ignore[misc]
         msg: SetLidarModeMessage,
         _websocket: ServerConnection,
     ) -> None:
-        from dimos.ar.tracking.filters import LidarObstacleDistanceConfig
-
-        defaults = LidarObstacleDistanceConfig()
-        self._telemetry.set_lidar_mode(
-            mode=msg.mode,
-            obstacle_min_distance_m=(
-                msg.obstacle_min_distance_m
-                if msg.obstacle_min_distance_m is not None
-                else defaults.min_distance_m
-            ),
-            obstacle_opaque_distance_m=(
-                msg.obstacle_opaque_distance_m
-                if msg.obstacle_opaque_distance_m is not None
-                else defaults.opaque_distance_m
-            ),
-            obstacle_max_distance_m=(
-                msg.obstacle_max_distance_m
-                if msg.obstacle_max_distance_m is not None
-                else defaults.max_distance_m
-            ),
-        )
+        self._telemetry.apply_set_lidar_mode(msg)
 
     # ------------------------------------------------------------------
     # Disconnect handler
@@ -447,6 +385,10 @@ class ARBridge(Module):  # type: ignore[misc]
             self._preview.on_preview_goal(msg)
 
     def _on_client_disconnect(self, _websocket: ServerConnection) -> None:
-        self._safety.on_client_disconnect()
-        if self._ws_server.connection_count == 0:
+        remaining = self._ws_server.connection_count
+        if remaining == 0:
+            self._safety.on_client_disconnect()
+            logger.info("XR bridge last client disconnected lidar_mode_reset=true")
             self._telemetry.reset_lidar_mode()
+        else:
+            logger.info("XR client disconnected", remaining_connections=remaining)

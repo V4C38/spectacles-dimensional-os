@@ -15,14 +15,14 @@ Do **not** open Lens Studio from the repo root — that creates stray `Cache/`, 
 
 ## Protocol changes
 
-The cross-repo contract is **protocol v6** (`PROTOCOL_VERSION = 6`). Update
+The cross-repo contract is **protocol v7** (`PROTOCOL_VERSION = 7`). Update
 together in one change:
 
 1. `dimos-ar/dimos/ar/network/protocol.py`
 2. `dimos-ar/PROTOCOL.md`
 3. `lens-studio/Assets/Scripts/Bridge/Protocol.ts`
 
-Key v6 surfaces to keep aligned when extending the contract:
+Key v6 surfaces (still valid):
 
 - Session robot from `hello`; most outbound JSON omits `robot_id`
 - `registration_command` (replaces four v5 registration message types)
@@ -30,6 +30,13 @@ Key v6 surfaces to keep aligned when extending the contract:
 - `runtime_snapshot` on connect and `get_status` (active path only; preview not cached)
 - `path.kind` active/preview (no separate `path_preview` type)
 - Binary-only LiDAR (`lidar_f16`); no JSON `lidar` fallback
+
+Key v7 additions (naming alignment — Python names lead, protocol and Lens follow):
+
+- `bridge_status` / `runtime_snapshot.bridge`: `world_frame_committed`, `world_frame_method`, `world_frame_approximate` (replaces `registered`, `registration_method`, `registration_approximate`)
+- `hello.robot.tag_tracking_profile` (replaces `registration_profile`)
+- `world_frame_correction` message (replaces `pose_correction`)
+- `nav_status.retryable` / `nav_status.stall_reason` on goal stall
 
 ## Python
 

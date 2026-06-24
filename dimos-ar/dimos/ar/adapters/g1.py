@@ -18,9 +18,9 @@ from dimos.ar.adapters.base import (
     CapabilityState,
     DEFAULT_BASELINE_MOTION_RECIPE,
     RobotHandshake,
-    RuntimeRegistrationProfile,
+    TagTrackingProfile,
 )
-from dimos.ar.tracking.robot_tag_tracker import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
+from dimos.ar.tag_tracking.solve import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
@@ -106,8 +106,8 @@ def g1_capabilities(
     }
 
 
-def g1_runtime_registration_profile() -> RuntimeRegistrationProfile:
-    return RuntimeRegistrationProfile(
+def g1_runtime_tag_tracking_profile() -> TagTrackingProfile:
+    return TagTrackingProfile(
         runtime_static_speed_mps=0.08,
         runtime_max_correct_speed_mps=1.2,
         runtime_cruise_window_s=14.0,
@@ -145,7 +145,7 @@ def g1_handshake(
         visual_origin_frame="base_link",
         base_height_m=0.95,
         default_render_offset_m=(0.0, 0.0, 0.0),
-        registration_profile={
+        tag_tracking_profile={
             "tag_ids": tag_ids,
             "tag_total_size_m": TAG_TOTAL_SIZE_M,
         },
@@ -170,7 +170,7 @@ class G1AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
     ar_navigation_state_in: In[String]
 
     ar_lidar: Out[PointCloud2]
-    ar_odometry: Out[Odometry]
+    ar_odom: Out[PoseStamped]
     ar_global_costmap: Out[OccupancyGrid]
     ar_path: Out[Path]
     ar_goal_reached: Out[Bool]
@@ -200,7 +200,21 @@ class G1AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         self.ar_lidar.publish(msg)
 
     async def handle_ar_odom_in(self, msg: Odometry) -> None:
-        self.ar_odometry.publish(msg)
+        pose = PoseStamped(
+            ts=msg.ts,
+            frame_id=msg.child_frame_id or msg.frame_id,
+            position=(msg.x, msg.y, msg.z),
+            orientation=(
+                msg.orientation.x,
+                msg.orientation.y,
+                msg.orientation.z,
+                msg.orientation.w,
+            ),
+        )
+        # Preserve twist for OdomBuffer.sample_from_msg speed estimation (duck-typed).
+        pose.vx = msg.vx  # type: ignore[attr-defined]
+        pose.vy = msg.vy  # type: ignore[attr-defined]
+        self.ar_odom.publish(pose)
 
     async def handle_ar_global_costmap_in(self, msg: OccupancyGrid) -> None:
         self.ar_global_costmap.publish(msg)
@@ -329,8 +343,8 @@ class G1AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         return DEFAULT_BASELINE_MOTION_RECIPE
 
     @rpc
-    def runtime_registration_profile(self) -> RuntimeRegistrationProfile:
-        return g1_runtime_registration_profile()
+    def runtime_tag_tracking_profile(self) -> TagTrackingProfile:
+        return g1_runtime_tag_tracking_profile()
 
     @rpc
     def baseline_set_lateral_velocity(self, vy_m_s: float) -> bool:
@@ -361,13 +375,13 @@ class G1AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
             self._publish_baseline_twist(vy)
             time.sleep(1.0 / 50.0)
 
-    def _publish_baseline_twist(self, vy_m_s: float) -> None:
+    def _publish_baseline_twist(self, vy: float) -> None:
         if self.cmd_vel.transport is None:
             logger.warning("G1 baseline_set_lateral_velocity: cmd_vel transport not available")
             return
         self.cmd_vel.publish(
             Twist(
-                linear=Vector3(0.0, vy_m_s, 0.0),
+                linear=Vector3(0.0, vy, 0.0),
                 angular=Vector3(0.0, 0.0, 0.0),
             )
         )

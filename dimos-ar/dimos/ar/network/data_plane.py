@@ -21,8 +21,9 @@ from dimos.ar.network.protocol import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from dimos.ar.registration.transforms import Calibration, OdomSample
-    from dimos.ar.tracking.filters import LidarFilter, LidarObstacleDistanceConfig
+    from dimos.ar.lidar.filters import LidarFilter, LidarObstacleDistanceConfig
+    from dimos.ar.world_frame.state import WorldFrameState
+    from dimos.ar.world_frame.transforms import OdomSample
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
     from dimos.msgs.nav_msgs.Path import Path
     from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -34,7 +35,7 @@ DROPPED_POSE_LOG_INTERVAL_S: float = 5.0
 def build_lidar_payload(
     msg: PointCloud2,
     *,
-    calibration: Calibration,
+    world_frame: WorldFrameState,
     lidar_filter: LidarFilter,
     mode: str,
     obstacle_distance_config: LidarObstacleDistanceConfig | None,
@@ -43,7 +44,7 @@ def build_lidar_payload(
     voxel_size: float,
 ) -> tuple[bytes, int] | None:
     """Filter, transform, and encode a PointCloud2 into a binary XR LiDAR payload."""
-    from dimos.ar.tracking.filters import (
+    from dimos.ar.lidar.filters import (
         filter_obstacle_points,
         subsample_points_near_robot,
     )
@@ -56,7 +57,7 @@ def build_lidar_payload(
     if points.size != 0:
         filtered = lidar_filter.filter(points)
         if len(filtered) != 0:
-            world_pts = calibration.transform_points(filtered)
+            world_pts = world_frame.transform_points(filtered)
             if mode == "obstacles" and obstacle_distance_config is not None:
                 world_pts = filter_obstacle_points(
                     world_pts,
@@ -76,13 +77,13 @@ def build_lidar_payload(
 def build_pose_payload(
     msg: PoseStamped,
     *,
-    calibration: Calibration,
+    world_frame: WorldFrameState,
     sample_odom: Callable[[PoseStamped], OdomSample],
     speed_mps: float | None = None,
 ) -> tuple[str, tuple[float, float, float], tuple[float, float, float, float]] | None:
     """Transform odom pose into world frame and encode as an XR pose payload."""
     sample = sample_odom(msg)
-    pos, quat = calibration.transform_pose(sample.position, sample.orientation)
+    pos, quat = world_frame.transform_pose(sample.position, sample.orientation)
     if not all(
         np.isfinite(v) for v in (pos[0], pos[1], pos[2], quat[0], quat[1], quat[2], quat[3])
     ):
@@ -96,15 +97,37 @@ def build_pose_payload(
     return payload, pos, quat
 
 
+def build_pose_payload_from_sample(
+    sample: OdomSample,
+    *,
+    ts: float,
+    world_frame: WorldFrameState,
+    speed_mps: float | None = None,
+) -> tuple[str, tuple[float, float, float], tuple[float, float, float, float]] | None:
+    """Transform a cached odom sample into world frame and encode as an XR pose payload."""
+    pos, quat = world_frame.transform_pose(sample.position, sample.orientation)
+    if not all(
+        np.isfinite(v) for v in (pos[0], pos[1], pos[2], quat[0], quat[1], quat[2], quat[3])
+    ):
+        return None
+    payload = encode_pose(
+        ts=ts,
+        position=pos,
+        orientation=quat,
+        speed_mps=speed_mps,
+    )
+    return payload, pos, quat
+
+
 def build_path_payload(
     msg: Path,
     *,
-    calibration: Calibration,
+    world_frame: WorldFrameState,
 ) -> tuple[str, list[tuple[float, float, float]]]:
     """Transform path waypoints into world frame and encode as an XR path payload."""
     waypoints: list[tuple[float, float, float]] = []
     for pose in msg.poses:
-        world_pos, _ = calibration.transform_pose(
+        world_pos, _ = world_frame.transform_pose(
             (pose.x, pose.y, pose.z),
             (pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w),
         )
@@ -131,19 +154,3 @@ def build_preview_path_payload(
         kind="preview",
         target=target_world,
     )
-
-
-def normalize_nav_state(raw: str) -> str:
-    """Normalise a raw DimOS navigation state string to one of idle/navigating/recovery."""
-    state = raw.strip().lower()
-    if state in {"idle", "navigating", "recovery"}:
-        return state
-    if "recover" in state:
-        return "recovery"
-    if any(token in state for token in ("follow", "path", "navig")):
-        return "navigating"
-    if state in {"arrived", "stopped"}:
-        return "idle"
-    if any(token in state for token in ("rotat", "initial", "final", "align", "execut", "move")):
-        return "navigating"
-    return "idle"

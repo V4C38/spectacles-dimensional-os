@@ -7,7 +7,7 @@
 // ================================================================
 
 import { RobotRuntimeState, createDefaultRobotRuntimeState } from "../Core/AppState";
-import { HelloMessage, protocolMetersToLensCentimeters } from "../Bridge/domain";
+import { HelloMessage, protocolMetersToLensCentimeters } from "../Bridge/BridgeDomain";
 
 const DEFAULT_ROBOT_BODY_HEIGHT_M = 0.55;
 const LIDAR_FLOOR_CLEARANCE_CM = 0.5;
@@ -38,7 +38,7 @@ export function projectRuntimeStateFromHello(msg: HelloMessage): RobotRuntimeSta
     footprintM: msg.robot.footprint_m ?? null,
     baseHeightM: msg.robot.base_height_m ?? null,
     defaultRenderOffsetM: msg.robot.default_render_offset_m ?? null,
-    registrationProfile: msg.robot.registration_profile ?? null,
+    tagTrackingProfile: msg.robot.tag_tracking_profile ?? null,
     capabilities,
   };
 }

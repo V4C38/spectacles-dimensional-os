@@ -24,7 +24,7 @@ function sampleHello(
 ): HelloMessage {
   return {
     type: "hello",
-    protocol_version: 6,
+    protocol_version: 7,
     robot: {
       robot_id: "go2",
       display_name: "Go2",

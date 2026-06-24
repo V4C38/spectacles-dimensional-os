@@ -51,6 +51,21 @@ When fixing a bug, investigate and identify the root cause before writing a
 plan. Plans must state the found issue and proposed solution up front, then list
 implementation steps only. Do not create "investigation plans."
 
+## dimos-ar bridge — systems design
+
+When working in `dimos-ar/`, follow `.cursor/rules/dimos-ar-bridge-design.mdc`:
+
+1. **One owner per concern** — each runtime concern has a single owning class; other
+   code delegates rather than duplicating lifecycle or mutation logic.
+2. **One source of truth** — do not mirror mutable state in two places; merge at encode
+   time or read through the owner (e.g. `WorldFrameState` for committed transforms).
+3. **Consistent, descriptive naming** — one concept, one name (`is_committed` /
+   `world_frame_committed`, not `registered` / `calibration`); prefer clarity over brevity.
+4. **Explicit failures over silent fallbacks** — when a required value, configuration,
+   or input is missing or invalid, raise or throw; do not substitute a hardcoded default
+   that masks the problem. Use a fallback only when there is a deliberate, documented
+   reason (e.g. backward-compatible wire defaults).
+
 ## Non-negotiable facts
 
 - **Never edit DimOS source.** Import from the installed `dimos` package.

@@ -25,6 +25,7 @@ _SENTINEL: object = object()
 @dataclass
 class _BaselineJob:
     vy: float
+    submitted_at: float
     on_complete: CompleteCallback | None = None
 
 
@@ -49,6 +50,7 @@ class AdapterCommandQueue:
         self._priority_queue: queue.Queue[_PriorityJob | object] = queue.Queue()
         self._state_lock = threading.Lock()
         self._pending_nav: _NavJob | None = None
+        self._baseline_in_flight = False
         self._shutdown = False
         self._wake = threading.Event()
         self._thread = threading.Thread(
@@ -64,7 +66,15 @@ class AdapterCommandQueue:
         *,
         on_complete: CompleteCallback | None = None,
     ) -> None:
-        self._baseline_queue.put(_BaselineJob(vy=vy, on_complete=on_complete))
+        submitted_at = time.monotonic()
+        if vy == 0.0:
+            with self._state_lock:
+                self._pending_nav = None
+            if self._baseline_in_flight:
+                self._drain_pending_non_stop_baseline()
+        self._baseline_queue.put(
+            _BaselineJob(vy=vy, submitted_at=submitted_at, on_complete=on_complete)
+        )
         self._wake.set()
 
     def submit_nav_goal(
@@ -103,7 +113,9 @@ class AdapterCommandQueue:
     def shutdown(self) -> None:
         self._shutdown = True
         try:
-            self._baseline_queue.put_nowait(_BaselineJob(vy=0.0))
+            self._baseline_queue.put_nowait(
+                _BaselineJob(vy=0.0, submitted_at=time.monotonic())
+            )
         except queue.Full:
             pass
         try:
@@ -117,6 +129,24 @@ class AdapterCommandQueue:
         with self._state_lock:
             self._pending_nav = None
         self.clear_pending_baseline()
+
+    def _drain_pending_non_stop_baseline(self) -> None:
+        kept: list[_BaselineJob | object] = []
+        while True:
+            try:
+                item = self._baseline_queue.get_nowait()
+            except queue.Empty:
+                break
+            if item is _SENTINEL:
+                kept.append(item)
+                continue
+            job = item
+            assert isinstance(job, _BaselineJob)
+            if job.vy != 0.0:
+                continue
+            kept.append(job)
+        for item in kept:
+            self._baseline_queue.put(item)
 
     def _worker(self) -> None:
         while True:
@@ -176,20 +206,32 @@ class AdapterCommandQueue:
         return True
 
     def _dispatch_baseline(self, job: _BaselineJob) -> None:
-        start = time.monotonic()
+        queue_wait_ms = round((time.monotonic() - job.submitted_at) * 1000.0, 1)
+        logger.info(
+            "adapter command queue dispatch starting",
+            command="baseline_set_lateral_velocity",
+            velocity=job.vy,
+            queue_wait_ms=queue_wait_ms,
+        )
+        rpc_start = time.monotonic()
         ok = True
         err: BaseException | None = None
+        self._baseline_in_flight = True
         try:
             self._adapter.baseline_set_lateral_velocity(job.vy)
         except BaseException as exc:
             ok = False
             err = exc
             logger.exception("baseline_set_lateral_velocity failed", velocity=job.vy)
+        finally:
+            self._baseline_in_flight = False
+        rpc_ms = round((time.monotonic() - rpc_start) * 1000.0, 1)
         self._log_dispatch(
             command="baseline_set_lateral_velocity",
-            start=start,
             ok=ok,
             velocity=job.vy,
+            queue_wait_ms=queue_wait_ms,
+            rpc_ms=rpc_ms,
         )
         self._invoke_complete(job.on_complete, ok, err)
 
@@ -230,14 +272,25 @@ class AdapterCommandQueue:
         self._log_dispatch(command=rpc_name, start=start, ok=ok)
         self._invoke_complete(job.on_complete, ok, err)
 
-    def _log_dispatch(self, *, command: str, start: float, ok: bool, **extra: object) -> None:
-        logger.info(
-            "adapter command queue dispatch",
-            command=command,
-            latency_ms=round((time.monotonic() - start) * 1000.0, 1),
-            ok=ok,
+    def _log_dispatch(
+        self,
+        *,
+        command: str,
+        ok: bool,
+        start: float | None = None,
+        **extra: object,
+    ) -> None:
+        payload = {
+            "command": command,
+            "ok": ok,
             **extra,
-        )
+        }
+        if command == "baseline_set_lateral_velocity":
+            logger.info("adapter command queue dispatch", **payload)
+            return
+        if start is not None:
+            payload["latency_ms"] = round((time.monotonic() - start) * 1000.0, 1)
+        logger.info("adapter command queue dispatch", **payload)
 
     @staticmethod
     def _invoke_complete(

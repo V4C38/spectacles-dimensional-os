@@ -173,3 +173,56 @@ def test_on_complete_invoked_with_error() -> None:
     assert seen == [(False, seen[0][1])]
     assert isinstance(seen[0][1], RuntimeError)
     queue.shutdown()
+
+
+def test_stop_priority_runs_before_stale_pending_velocity() -> None:
+    queue, adapter = _make_queue()
+    calls: list[float] = []
+    first_started = threading.Event()
+    first_release = threading.Event()
+
+    def slow_velocity(vy: float) -> bool:
+        calls.append(vy)
+        if vy == 0.3 and len(calls) == 1:
+            first_started.set()
+            first_release.wait(timeout=2.0)
+        return True
+
+    adapter.baseline_set_lateral_velocity.side_effect = slow_velocity
+
+    queue.submit_baseline_velocity(0.3)
+    assert first_started.wait(timeout=2.0)
+    queue.submit_baseline_velocity(0.3)
+    queue.submit_baseline_velocity(0.0)
+    queue.submit_baseline_velocity(-0.3)
+    first_release.set()
+
+    _wait_for_calls(adapter, "baseline_set_lateral_velocity", 3)
+    assert calls == [0.3, 0.0, -0.3]
+    queue.shutdown()
+
+
+def test_stop_priority_preserves_order_after_slow_start() -> None:
+    queue, adapter = _make_queue()
+    calls: list[float] = []
+    first_started = threading.Event()
+    first_release = threading.Event()
+
+    def slow_velocity(vy: float) -> bool:
+        calls.append(vy)
+        if vy == 0.3 and len([value for value in calls if value == 0.3]) == 1:
+            first_started.set()
+            first_release.wait(timeout=2.0)
+        return True
+
+    adapter.baseline_set_lateral_velocity.side_effect = slow_velocity
+
+    queue.submit_baseline_velocity(0.3)
+    assert first_started.wait(timeout=2.0)
+    queue.submit_baseline_velocity(0.0)
+    queue.submit_baseline_velocity(-0.3)
+    first_release.set()
+
+    _wait_for_calls(adapter, "baseline_set_lateral_velocity", 3)
+    assert calls == [0.3, 0.0, -0.3]
+    queue.shutdown()

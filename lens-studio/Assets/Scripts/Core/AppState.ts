@@ -8,7 +8,7 @@ import {
   COLOR_WARN,
   COLOR_WHITE,
 } from "../UI/kit/UIKit";
-import { RegistrationProfile } from "../Bridge/domain";
+import { TagTrackingProfile, RegistrationMode } from "../Bridge/BridgeDomain";
 import {
   isFollowingMode,
   NAV_GOAL_MODE_LABELS,
@@ -34,6 +34,17 @@ export type NavigationOutcome =
   | { kind: "success" }
   | { kind: "failed"; errorCode: number | null };
 export type BridgeLinkState = "disconnected" | "connectedNoRobot" | "connected";
+
+export interface BridgeSnapshot {
+  handshakeReady: boolean;
+  robotConnected: boolean;
+  worldFrameCommitted: boolean;
+  worldFrameApproximate: boolean;
+  reconnecting: boolean;
+  worldFrameMethod: RegistrationMode | null;
+  statusTs: number | null;
+}
+
 export type LidarDisplayMode = "off" | "obstacles" | "full";
 
 export type SetupSessionState = {
@@ -60,6 +71,27 @@ export const LIDAR_MODE_LABELS: Record<LidarDisplayMode, string> = {
 export interface StatusTextPresentation {
   text: string;
   color: vec4;
+}
+
+export function createDefaultBridgeSnapshot(): BridgeSnapshot {
+  return {
+    handshakeReady: false,
+    robotConnected: false,
+    worldFrameCommitted: false,
+    worldFrameApproximate: false,
+    reconnecting: false,
+    worldFrameMethod: null,
+    statusTs: null,
+  };
+}
+
+export function bridgeNavigationReady(snapshot: BridgeSnapshot): boolean {
+  return (
+    snapshot.handshakeReady &&
+    snapshot.robotConnected &&
+    snapshot.worldFrameCommitted &&
+    !snapshot.reconnecting
+  );
 }
 
 export function defaultNavigationOutcome(): NavigationOutcome {
@@ -223,7 +255,7 @@ export interface RobotRuntimeState {
   footprintM: [number, number] | null;
   baseHeightM: number | null;
   defaultRenderOffsetM: [number, number, number] | null;
-  registrationProfile: RegistrationProfile | null;
+  tagTrackingProfile: TagTrackingProfile | null;
   capabilities: Record<string, RuntimeCapabilityState>;
 }
 
@@ -249,6 +281,7 @@ export interface DimosAppState {
   robotInteractionMode: RobotInteractionMode;
   navigationOutcome: NavigationOutcome;
   bridgeLinkState: BridgeLinkState;
+  bridgeSnapshot: BridgeSnapshot;
   robotRuntime: RobotRuntimeState;
   driftState: DriftState;
 }
@@ -291,7 +324,7 @@ function cloneRobotRuntime(state: RobotRuntimeState): RobotRuntimeState {
     defaultRenderOffsetM: state.defaultRenderOffsetM
       ? [...state.defaultRenderOffsetM] as [number, number, number]
       : null,
-    registrationProfile: state.registrationProfile ? { ...state.registrationProfile } : null,
+    tagTrackingProfile: state.tagTrackingProfile ? { ...state.tagTrackingProfile } : null,
     capabilities: cloneCapabilities(state.capabilities),
   };
 }
@@ -307,9 +340,14 @@ function cloneNavigationOutcome(outcome: NavigationOutcome): NavigationOutcome {
   return { ...outcome };
 }
 
+function cloneBridgeSnapshot(snapshot: BridgeSnapshot): BridgeSnapshot {
+  return { ...snapshot };
+}
+
 function cloneState(state: DimosAppState): DimosAppState {
   return {
     ...state,
+    bridgeSnapshot: cloneBridgeSnapshot(state.bridgeSnapshot),
     navigationOutcome: cloneNavigationOutcome(state.navigationOutcome),
     robotRuntime: cloneRobotRuntime(state.robotRuntime),
     driftState: cloneDriftState(state.driftState),
@@ -333,7 +371,7 @@ export function createDefaultRobotRuntimeState(): RobotRuntimeState {
     footprintM: null,
     baseHeightM: null,
     defaultRenderOffsetM: null,
-    registrationProfile: null,
+    tagTrackingProfile: null,
     capabilities,
   };
 }
@@ -362,6 +400,7 @@ export function createDefaultDimosAppState(): DimosAppState {
     robotInteractionMode: "hidden",
     navigationOutcome: defaultNavigationOutcome(),
     bridgeLinkState: "disconnected",
+    bridgeSnapshot: createDefaultBridgeSnapshot(),
     robotRuntime: createDefaultRobotRuntimeState(),
     driftState: createDefaultDriftState(),
   });

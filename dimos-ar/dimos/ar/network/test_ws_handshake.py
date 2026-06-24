@@ -13,7 +13,6 @@ import pytest
 import websockets
 
 from dimos.ar.adapters.base import CapabilityState, RobotHandshake
-from dimos.ar.network.bridge_status import BridgeStatusSnapshot
 from dimos.ar.network.protocol import (
     DEFAULT_CAPABILITIES,
     GetStatusMessage,
@@ -53,18 +52,15 @@ def _pick_free_port() -> int:
 
 
 def _sample_runtime_snapshot(robot_id: str = "unitree_go2") -> str:
-    snap = BridgeStatusSnapshot(
-        robot_id=robot_id,
-        robot_connected=True,
-        streams_active=False,
-        registered=False,
-        reconnecting=False,
-        registration_method=None,
-        registration_approximate=False,
-    )
     return encode_runtime_snapshot(
         robot_id=robot_id,
-        bridge=snap,
+        bridge={
+            "robot_connected": True,
+            "reconnecting": False,
+            "world_frame_committed": False,
+            "world_frame_method": None,
+            "world_frame_approximate": False,
+        },
         nav={"phase": "idle"},
         ts=1.0,
     )
@@ -282,3 +278,34 @@ async def test_slow_registration_command_does_not_block_get_status(
 
     assert harness.registration_command_count == 1
     assert harness.get_status_replies == 1
+
+
+@pytest.mark.asyncio
+async def test_same_remote_reconnect_closes_prior_connection(
+    handshake_server: HandshakeServerHarness,
+) -> None:
+    harness = handshake_server
+    url = f"ws://127.0.0.1:{harness.port}"
+    first = await websockets.connect(url, open_timeout=HELLO_TIMEOUT_S)
+    try:
+        first_hello = json.loads(await asyncio.wait_for(first.recv(), timeout=HELLO_TIMEOUT_S))
+        assert first_hello["type"] == "hello"
+        assert harness._server is not None
+        assert harness._server.connection_count == 1
+
+        second = await websockets.connect(url, open_timeout=HELLO_TIMEOUT_S)
+        try:
+            second_hello = json.loads(
+                await asyncio.wait_for(second.recv(), timeout=HELLO_TIMEOUT_S)
+            )
+            assert second_hello["type"] == "hello"
+            assert harness._server.connection_count == 1
+
+            await asyncio.wait_for(first.wait_closed(), timeout=HELLO_TIMEOUT_S)
+            assert first.close_code == 1000
+        finally:
+            await second.close()
+    finally:
+        if first.state.name != "CLOSED":
+            await first.close()
+        await first.wait_closed()

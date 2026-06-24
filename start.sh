@@ -12,6 +12,7 @@
 #   ROBOT_IP       Pin a specific robot IP and skip discovery (or "fake" replay)
 #   LISTEN_HOST    WebSocket bind address (default 0.0.0.0)
 #   DIMOS_LOG_LEVEL  Log verbosity (default DEBUG; set INFO for quieter runs)
+#   DIMOS_AR_FORCE_COLOR=1  Force ANSI colors when stdout is not a TTY
 #   DIMOS_CONFIGURE_SYSTEM=1  Enable interactive sysctl/ulimit prompts (off by default)
 
 set -euo pipefail
@@ -179,6 +180,7 @@ resolve_robot_ip() {
 
   print_red_stderr "No robots found on the network — using offline replay (ROBOT_IP=fake)."
   echo "Set ROBOT_IP=<ip> and re-run to target a specific robot." >&2
+  echo "Tip: ROBOT_IP=fake ./start.sh skips discovery and starts faster." >&2
   ROBOT_IP="fake"
 }
 
@@ -201,7 +203,7 @@ echo "Blueprint:    ${SELECTED_BLUEPRINT}"
 echo "Stack:        ${STACK_LABEL}"
 echo "Equivalent:   ${EQUIVALENT}"
 echo "Robot IP:     ${ROBOT_IP}"
-echo "WebSocket:    ws://${LISTEN_HOST}:8787"
+echo "WebSocket:    ws://${LISTEN_HOST}:8787 (not listening yet — booting DimOS stack…)"
 echo "Log level:    ${DIMOS_LOG_LEVEL} (quieter: DIMOS_LOG_LEVEL=INFO ./start.sh)"
 echo "Logs:         stdout + ~/.local/state/dimos/logs/.../main.jsonl (dimos log -f)"
 print_green_stdout "Spectacles:   enter ${LAN_IP} in the lens"
@@ -214,8 +216,14 @@ echo ""
 # still coming up, not that the Lens-side ws://<host>:8787 bridge is misconfigured.
 
 exec "${PYTHON}" -c "
+import os
 import sys
 sys.path.insert(0, '${DIMOS_AR_ROOT}')
+if os.environ.get('DIMOS_AR_FORCE_COLOR', '') not in ('', '0', 'false'):
+    import dimos.utils.logging_config as _lc
+    _lc._CONSOLE_USE_COLORS = True
+from dimos.ar.utils.console import install_ar_console_styles
+install_ar_console_styles()
 from dimos.core.coordination.module_coordinator import ModuleCoordinator
 from dimos.ar.blueprints import ${SELECTED_BLUEPRINT}
 ModuleCoordinator.build(${SELECTED_BLUEPRINT}).loop()

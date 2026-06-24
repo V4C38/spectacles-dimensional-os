@@ -1,12 +1,12 @@
 import { BridgeClient } from "../Bridge/BridgeClient";
-import { buildCameraFrameBytes, buildCameraInfo, CameraFrameAckMessage, HelloMessage } from "../Bridge/domain";
+import { buildCameraFrameBytes, buildCameraInfo, CameraFrameAckMessage, HelloMessage } from "../Bridge/BridgeDomain";
 import { DeviceCameraStream } from "./DeviceCameraStream";
 import { quatFromMat4Rotation } from "../Core/Utilities";
 
 const POSE_BUFFER_CAPACITY = 360;
 // Interval measured from pipeline END (ack or finally), guaranteeing idle GC time.
 const SETUP_CAPTURE_INTERVAL_S = 1.0;
-const SAMPLING_BURST_INTERVAL_S = 0.2;
+const SAMPLING_BURST_INTERVAL_S = 0.5;
 const RUNTIME_CAPTURE_INTERVAL_S = 3.0;
 // Safety net only: ack clears _inFlight in the normal case.
 const IN_FLIGHT_TIMEOUT_S = 12.0;
@@ -17,7 +17,7 @@ const PIPELINE_LOG_INTERVAL_S = 2.0;
 const CAPTURE_TS_LOG_INTERVAL_S = 2.0;
 const CLOCK_SYNC_RACE_LOG_INTERVAL_S = 2.0;
 
-type CaptureMode = "off" | "setup" | "runtime";
+export type CaptureMode = "off" | "setup" | "runtime";
 export type CapturePolicy = "off" | "steady" | "burst" | "hold";
 
 interface PoseSample {
@@ -94,6 +94,7 @@ export class FrameCaptureController extends BaseScriptComponent {
     if (this._capturePolicy === policy) {
       return;
     }
+    print(`FrameCaptureController: capture policy ${this._capturePolicy} -> ${policy}`);
     this._capturePolicy = policy;
     this._lastPipelineEndTime = 0;
   }

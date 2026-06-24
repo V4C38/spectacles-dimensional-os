@@ -8,6 +8,9 @@ const FRAGMENT_REASSEMBLY_MAX_BYTES = 1_048_576;
 const PING_BURST_COUNT = 4;
 const PING_INTERVAL_S = 0.2;
 const PONG_TIMEOUT_S = 2.0;
+const CONNECTING_LOG_INTERVAL_S = 10.0;
+const WS_CONNECT_TIMEOUT_S = 8.0;
+const WS_CONNECT_WATCHDOG_INTERVAL_S = 0.2;
 
 export type ClockSyncState = "idle" | "pending" | "ready" | "failed";
 
@@ -39,12 +42,17 @@ export class BridgeConnectionManager {
   public baseUrl: string = "";
   public ws: WebSocket | null = null;
   public isConnecting = false;
+  private _lastConnectingLogTime = -1;
 
   private readonly internetModule: InternetModule;
   private _fragmentBuffer: string | null = null;
   private _connectTimeoutEvent: DelayedCallbackEvent | null = null;
+  private _connectWatchdogEvent: DelayedCallbackEvent | null = null;
   private _connectingSocket: WebSocket | null = null;
   private _pendingConnectReject: ((error: Error) => void) | null = null;
+  private _pendingConnectResolve: (() => void) | null = null;
+  private _connectPromise: Promise<void> | null = null;
+  private _retiredSockets = new Set<WebSocket>();
 
   private _inbound: BridgeClockSyncInbound | null = null;
   private _pingTimer: DelayedCallbackEvent | null = null;
@@ -68,16 +76,31 @@ export class BridgeConnectionManager {
       if (!this.isConnecting || this.ws !== socket || socket === null) {
         return;
       }
-      this.isConnecting = false;
-      this._connectingSocket = null;
-      this._detachSocketHandlers(socket);
-      socket.close();
+      if (socket.readyState === WS_OPEN) {
+        this._completeConnectOpen(socket);
+        return;
+      }
+      this._retireSocket(socket);
       this.ws = null;
-      const rejectFn = this._pendingConnectReject;
-      this._pendingConnectReject = null;
-      rejectFn?.(new Error("WebSocket connection timeout"));
+      this._finishConnectAttempt(new Error("WebSocket connection timeout"));
     });
     this._connectTimeoutEvent = connectTimeout;
+
+    const connectWatchdog = script.createEvent(
+      "DelayedCallbackEvent",
+    ) as DelayedCallbackEvent;
+    connectWatchdog.bind(() => {
+      const socket = this._connectingSocket;
+      if (!this.isConnecting || this.ws !== socket || socket === null) {
+        return;
+      }
+      if (socket.readyState === WS_OPEN) {
+        this._completeConnectOpen(socket);
+        return;
+      }
+      this._connectWatchdogEvent!.reset(WS_CONNECT_WATCHDOG_INTERVAL_S);
+    });
+    this._connectWatchdogEvent = connectWatchdog;
 
     const pingTimer = script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
     pingTimer.bind(() => this._sendNextPing());
@@ -146,52 +169,65 @@ export class BridgeConnectionManager {
     return null;
   }
 
+  public clearIp(): void {
+    if (this.store.has(IP_STORAGE_KEY)) {
+      this.store.remove(IP_STORAGE_KEY);
+    }
+  }
+
   private deriveWsUrl(input: string): string {
     const host = BridgeConnectionManager.normalizeIp(input);
     return `ws://${host}:${WS_PORT}`;
   }
 
-  public async connect(): Promise<void> {
+  public connect(): Promise<void> {
     if (this.ws && this.ws.readyState === WS_OPEN) {
-      return;
+      return Promise.resolve();
     }
-    if (this.isConnecting) {
-      return;
+    if (this.isConnecting && this._connectPromise) {
+      return this._connectPromise;
     }
     this.disconnect(false);
+    this._drainRetiredSockets();
     this.isConnecting = true;
 
     const wsUrl = this.deriveWsUrl(this.baseUrl);
-    print(`BridgeClient: connecting to ${wsUrl}`);
+    const now = getTime();
+    if (
+      this._lastConnectingLogTime < 0 ||
+      now - this._lastConnectingLogTime >= CONNECTING_LOG_INTERVAL_S
+    ) {
+      this._lastConnectingLogTime = now;
+      print(`BridgeClient: connecting to ${wsUrl}`);
+    }
 
-    return new Promise((resolve, reject) => {
+    this._connectPromise = new Promise((resolve, reject) => {
+      this._pendingConnectReject = reject;
+      this._pendingConnectResolve = resolve;
       try {
         this.ws = this.internetModule.createWebSocket(wsUrl);
         this.ws.binaryType = "blob";
       } catch (error) {
-        this.isConnecting = false;
-        reject(new Error(`Failed to create WebSocket: ${error}`));
+        this._finishConnectAttempt(new Error(`Failed to create WebSocket: ${error}`));
         return;
       }
 
       const socket = this.ws;
       this._connectingSocket = socket;
-      this._pendingConnectReject = reject;
 
       socket.onopen = () => {
         if (this.ws !== socket) {
           return;
         }
-        this.isConnecting = false;
-        this._connectingSocket = null;
-        print("BridgeClient: connected");
-        this.onOpen.emit();
-        resolve();
+        this._completeConnectOpen(socket);
       };
 
       socket.onmessage = (event: WebSocketMessageEvent) => {
         if (this.ws !== socket) {
           return;
+        }
+        if (this.isConnecting && this._connectingSocket === socket) {
+          this._completeConnectOpen(socket);
         }
         this._onMessage(event);
       };
@@ -200,8 +236,9 @@ export class BridgeConnectionManager {
         if (this.ws !== socket) {
           return;
         }
-        this.isConnecting = false;
-        reject(new Error("WebSocket connection error"));
+        this._retireSocket(socket);
+        this.ws = null;
+        this._finishConnectAttempt(new Error("WebSocket connection error"));
       };
 
       socket.onclose = (event: WebSocketCloseEvent) => {
@@ -211,17 +248,47 @@ export class BridgeConnectionManager {
         print(
           `BridgeClient: socket closed code=${(event as unknown as { code?: number }).code ?? "?"} reason="${(event as unknown as { reason?: string }).reason ?? ""}"`,
         );
+        const wasConnecting = this.isConnecting && this._connectingSocket === socket;
         this.ws = null;
         this._fragmentBuffer = null;
-        this.onClose.emit();
+        if (wasConnecting) {
+          this._finishConnectAttempt(new Error("WebSocket connection closed"));
+        } else {
+          this.onClose.emit();
+        }
       };
 
-      this._connectTimeoutEvent!.reset(5.0);
+      this._connectTimeoutEvent!.reset(WS_CONNECT_TIMEOUT_S);
+      this._connectWatchdogEvent!.reset(WS_CONNECT_WATCHDOG_INTERVAL_S);
     });
+
+    return this._connectPromise;
+  }
+
+  /** Abort an in-flight connect without emitting onClose or resetting inbound state. */
+  public cancelConnect(): void {
+    if (!this.isConnecting) {
+      return;
+    }
+    const socket = this._connectingSocket ?? this.ws;
+    if (socket) {
+      this._retireSocket(socket);
+    }
+    this.ws = null;
+    this._fragmentBuffer = null;
+    this._finishConnectAttempt(new Error("WebSocket connection cancelled"));
   }
 
   public disconnect(notify: boolean = true): void {
-    if (this.ws) {
+    if (this.isConnecting) {
+      const socket = this._connectingSocket ?? this.ws;
+      if (socket) {
+        this._retireSocket(socket);
+      }
+      this.ws = null;
+      this._fragmentBuffer = null;
+      this._finishConnectAttempt(new Error("WebSocket connection closed"));
+    } else if (this.ws) {
       const socket = this.ws;
       this._detachSocketHandlers(socket);
       socket.close();
@@ -393,5 +460,82 @@ export class BridgeConnectionManager {
     socket.onmessage = () => {};
     socket.onerror = () => {};
     socket.onclose = () => {};
+  }
+
+  private _clearConnectTimeout(): void {
+    this._connectTimeoutEvent?.reset(0);
+  }
+
+  private _clearConnectWatchdog(): void {
+    this._connectWatchdogEvent?.reset(0);
+  }
+
+  private _completeConnectOpen(socket: WebSocket): void {
+    if (
+      !this.isConnecting ||
+      this.ws !== socket ||
+      this._connectingSocket !== socket
+    ) {
+      return;
+    }
+    this._clearConnectTimeout();
+    this._clearConnectWatchdog();
+    this.isConnecting = false;
+    this._connectingSocket = null;
+    const resolveFn = this._pendingConnectResolve;
+    this._pendingConnectReject = null;
+    this._pendingConnectResolve = null;
+    this._connectPromise = null;
+    print("BridgeClient: connected");
+    this.onOpen.emit();
+    if (resolveFn) {
+      resolveFn();
+    }
+  }
+
+  private _retireSocket(socket: WebSocket): void {
+    if (this._retiredSockets.has(socket)) {
+      return;
+    }
+    this._detachSocketHandlers(socket);
+    this._retiredSockets.add(socket);
+    socket.onopen = () => {
+      if (this._retiredSockets.has(socket)) {
+        socket.close();
+      }
+    };
+    socket.onclose = () => {
+      this._retiredSockets.delete(socket);
+    };
+    socket.onerror = () => {};
+    socket.onmessage = () => {};
+    if (socket.readyState === WS_OPEN) {
+      socket.close();
+    }
+  }
+
+  private _drainRetiredSockets(): void {
+    for (const socket of Array.from(this._retiredSockets)) {
+      if (socket.readyState === WS_OPEN || socket.readyState === WS_CONNECTING) {
+        socket.close();
+      }
+    }
+  }
+
+  private _finishConnectAttempt(error?: Error): void {
+    this._clearConnectTimeout();
+    this._clearConnectWatchdog();
+    this.isConnecting = false;
+    this._connectingSocket = null;
+    this._connectPromise = null;
+    const rejectFn = this._pendingConnectReject;
+    const resolveFn = this._pendingConnectResolve;
+    this._pendingConnectReject = null;
+    this._pendingConnectResolve = null;
+    if (error && rejectFn) {
+      rejectFn(error);
+    } else if (!error && resolveFn) {
+      resolveFn();
+    }
   }
 }

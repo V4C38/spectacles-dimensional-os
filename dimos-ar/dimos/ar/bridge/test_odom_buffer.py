@@ -5,7 +5,7 @@ import time
 import pytest
 
 from dimos.ar.bridge.odom_buffer import OdomBuffer
-from dimos.ar.registration.transforms import OdomSample
+from dimos.ar.world_frame.transforms import OdomSample
 
 
 def _push(buffer: OdomBuffer, mono: float, x: float, *, source_ts: float | None = None) -> None:

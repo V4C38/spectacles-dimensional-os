@@ -14,7 +14,7 @@ from dimos.ar.network.ws_send_queue import (
     ClientSendQueue,
     peek_message_type,
 )
-from dimos.ar.tracking.robot_tag_tracker import CAMERA_FRAME_MAGIC, parse_camera_frame
+from dimos.ar.tag_tracking.solve import CAMERA_FRAME_MAGIC, parse_camera_frame
 
 
 class _FakeWebSocket:
@@ -48,7 +48,7 @@ async def test_outbound_coalesces_broadcast_snapshots() -> None:
 
     outbound.enqueue('{"type":"nav_status","phase":"idle"}')
     outbound.enqueue('{"type":"path","waypoints":[[1,2,3]]}')
-    outbound.enqueue('{"type":"bridge_status","registered":true}')
+    outbound.enqueue('{"type":"bridge_status","world_frame_committed":true}')
     outbound.enqueue('{"type":"nav_status","phase":"navigating"}')
 
     await asyncio.sleep(0.05)
@@ -57,7 +57,7 @@ async def test_outbound_coalesces_broadcast_snapshots() -> None:
     by_type = {(peek_message_type(text) or ""): json.loads(text) for text in ws.sent}
     assert by_type["nav_status"]["phase"] == "navigating"
     assert by_type["path"]["waypoints"] == [[1, 2, 3]]
-    assert by_type["bridge_status"]["registered"] is True
+    assert by_type["bridge_status"]["world_frame_committed"] is True
     assert len(ws.sent) == 3
 
 

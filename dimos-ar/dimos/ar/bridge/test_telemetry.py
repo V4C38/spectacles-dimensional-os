@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import time
+
 import numpy as np
 
 from dimos.ar.bridge.telemetry import TelemetryPublisher
-from dimos.ar.tracking.filters import LidarFilter, LidarFilterConfig
+from dimos.ar.lidar.filters import LidarFilter, LidarFilterConfig
+from dimos.ar.network.protocol import SetLidarModeMessage
+from dimos.ar.world_frame.state import WorldFrameState
+from dimos.ar.world_frame.transforms import OdomSample
 
 
 class _FakePointCloud2:
@@ -19,9 +24,9 @@ class _FakePointCloud2:
         return self._points
 
 
-class _FakeCalibration:
+class _FakeWorldFrame:
     def __init__(self) -> None:
-        self.is_registered = True
+        self.is_committed = True
 
     def transform_points(self, points: np.ndarray) -> np.ndarray:
         pts = np.asarray(points, dtype=np.float32)
@@ -29,17 +34,28 @@ class _FakeCalibration:
             return np.zeros((0, 3), dtype=np.float32)
         return np.column_stack([pts[:, 0], pts[:, 2], pts[:, 1]]).astype(np.float32)
 
+    def transform_pose(
+        self,
+        position: tuple[float, float, float],
+        orientation: tuple[float, float, float, float],
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+        return position, orientation
+
 
 class _FakeOdomBuffer:
     def __init__(self, world_position: tuple[float, float, float] | None = None) -> None:
         self._world_position = world_position
+        self._latest: OdomSample | None = None
 
     def latest_world_position(
         self,
-        calibration: _FakeCalibration,
+        world_frame: _FakeWorldFrame,
     ) -> tuple[float, float, float] | None:
-        _ = calibration
+        _ = world_frame
         return self._world_position
+
+    def speed_windowed(self, _now: float, _horizon_s: float) -> float | None:
+        return None
 
 
 class _RecordingSender:
@@ -64,7 +80,7 @@ def _publisher(
     publisher = TelemetryPublisher(
         robot_id="unitree_go2",
         sender=sender,  # type: ignore[arg-type]
-        calibration=_FakeCalibration(),  # type: ignore[arg-type]
+        world_frame=_FakeWorldFrame(),  # type: ignore[arg-type]
         odom=_FakeOdomBuffer(world_position),  # type: ignore[arg-type]
         lidar_filter=LidarFilter(
             LidarFilterConfig(
@@ -194,3 +210,57 @@ def test_publish_lidar_obstacle_mode_caps_binary_payload_at_200_points() -> None
 
     assert len(sender.binary_payloads) == 1
     assert len(sender.binary_payloads[0]) == 5 + (200 * 6)
+
+
+def test_apply_set_lidar_mode_fills_partial_obstacle_fields() -> None:
+    publisher, _sender = _publisher()
+    publisher.apply_set_lidar_mode(
+        SetLidarModeMessage(
+            ts=1.0,
+            robot_id="unitree_go2",
+            mode="obstacles",
+            obstacle_min_distance_m=0.15,
+            obstacle_opaque_distance_m=None,
+            obstacle_max_distance_m=None,
+        )
+    )
+    assert publisher._lidar_mode == "obstacles"
+    assert publisher._obstacle_distance_config.min_distance_m == 0.15
+    assert publisher._obstacle_distance_config.opaque_distance_m == 0.40
+    assert publisher._obstacle_distance_config.max_distance_m == 0.60
+
+
+def test_publish_pose_snapshot_bypasses_rate_limit() -> None:
+    publisher, sender = _publisher()
+    world_frame = publisher._world_frame
+    assert isinstance(world_frame, _FakeWorldFrame)
+    odom = publisher._odom
+    assert isinstance(odom, _FakeOdomBuffer)
+    odom._latest = OdomSample(  # type: ignore[attr-defined]
+        position=(1.0, 0.0, 2.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    publisher._pose_last_emit = time.monotonic()
+
+    sent = publisher.publish_pose_snapshot(
+        ts=42.0,
+        sample=odom._latest,  # type: ignore[attr-defined]
+        force=True,
+    )
+
+    assert sent is True
+    assert len(sender.text_payloads) == 1
+
+
+def test_runtime_correction_pose_not_suppressed_after_recent_stream_emit() -> None:
+    publisher, sender = _publisher()
+    odom = publisher._odom
+    sample = OdomSample(
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    odom._latest = sample  # type: ignore[attr-defined]
+    publisher._pose_last_emit = time.monotonic()
+
+    assert publisher.publish_pose_snapshot(ts=1.0, sample=sample, force=True) is True
+    assert len(sender.text_payloads) == 1
