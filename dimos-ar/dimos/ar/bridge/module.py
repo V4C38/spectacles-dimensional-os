@@ -12,11 +12,13 @@ All business logic lives in the bridge/ collaborator classes.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any
 
 from dimos_lcm.std_msgs import Bool, String
 
 from dimos.ar.adapters.base import ARRobotAdapterSpec, RobotHandshake
+from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
 from dimos.ar.bridge.navigation import NavController
 from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.bridge.preview import PreviewService
@@ -31,7 +33,7 @@ from dimos.ar.network.protocol import (
 )
 from dimos.ar.network.websocket_server import ARWebSocketServer
 from dimos.ar.preview_planner import PreviewPlanner
-from dimos.ar.registration.motion_params import resolve_baseline_motion_params
+from dimos.ar.registration.baseline import DEFAULT_BASELINE_STRAFE_SPEED
 from dimos.ar.registration.refinement import RegisteredPoseRefiner
 from dimos.ar.registration.registry import WorldRegistry
 from dimos.ar.registration.session import RegistrationSession
@@ -55,6 +57,21 @@ if TYPE_CHECKING:
     from dimos.ar.network.protocol import GetStatusMessage
 
 logger = setup_logger()
+
+
+def _resolve_baseline_strafe_speed(adapter: ARRobotAdapterSpec) -> float:
+    try:
+        speed = float(adapter.baseline_strafe_speed())
+        if math.isfinite(speed) and speed > 0:
+            logger.info("Baseline strafe speed resolved", strafe_speed=speed)
+            return speed
+    except Exception as exc:
+        logger.warning(
+            "baseline_strafe_speed failed; using default",
+            error=str(exc),
+            default=DEFAULT_BASELINE_STRAFE_SPEED,
+        )
+    return DEFAULT_BASELINE_STRAFE_SPEED
 
 
 class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
@@ -113,6 +130,7 @@ class ARBridge(Module):  # type: ignore[misc]
     _status: StatusService
     _registration: RegistrationSession
     _nav: NavController
+    _command_queue: AdapterCommandQueue
     _preview: PreviewService
     _telemetry: TelemetryPublisher
     _ws_server: ARWebSocketServer
@@ -190,7 +208,8 @@ class ARBridge(Module):  # type: ignore[misc]
             baseline_cap.available if baseline_cap is not None else False
         )
         assert self._loop is not None, "build() called before Module loop is assigned"
-        baseline_motion_params = resolve_baseline_motion_params(self._adapter)
+        baseline_strafe_speed = _resolve_baseline_strafe_speed(self._adapter)
+        command_queue = AdapterCommandQueue(self._adapter)
         registration = RegistrationSession(
             robot_id=robot_id,
             sender=sender,
@@ -203,16 +222,17 @@ class ARBridge(Module):  # type: ignore[misc]
             manual_registration_quality=self.config.manual_registration_quality,
             pose_refiner=pose_refiner,
             adapter=self._adapter,
+            command_queue=command_queue,
             runtime_profile=runtime_profile,
             baseline_motion_available=baseline_motion_available,
-            baseline_motion_params=baseline_motion_params,
+            baseline_strafe_speed=baseline_strafe_speed,
         )
 
         nav = NavController(
             robot_id=robot_id,
             sender=sender,
             calibration=self._calibration,
-            adapter=self._adapter,
+            command_queue=command_queue,
         )
 
         preview = PreviewService(
@@ -270,6 +290,7 @@ class ARBridge(Module):  # type: ignore[misc]
         self._status = status
         self._registration = registration
         self._nav = nav
+        self._command_queue = command_queue
         self._preview = preview
         self._telemetry = telemetry
         self._ws_server = ws_server
@@ -297,6 +318,9 @@ class ARBridge(Module):  # type: ignore[misc]
         registration = getattr(self, "_registration", None)
         if registration is not None:
             registration.stop()
+        command_queue = getattr(self, "_command_queue", None)
+        if command_queue is not None:
+            command_queue.shutdown()
         status = getattr(self, "_status", None)
         if status is not None:
             status.stop()

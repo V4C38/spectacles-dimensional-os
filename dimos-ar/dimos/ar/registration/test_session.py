@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from dimos.ar.registration.registry import WorldRegistry
+from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
 from dimos.ar.registration.baseline import (
     MOVE_LEG_S,
     SAMPLE_MIN_OBS,
@@ -15,8 +16,8 @@ from dimos.ar.registration.baseline import (
     _BaselineState,
     _MovePhase,
 )
+from dimos.ar.registration.registry import WorldRegistry
 from dimos.ar.registration.session import FrameAdmission, RegistrationSession
-from dimos.ar.registration.motion_params import BaselineMotionParams
 from dimos.ar.registration.tracker import FrameResult, TagSolve
 from dimos.ar.registration.transforms import Calibration
 from dimos.ar.registration.types import CaptureHint, RegistrationMode, RegistrationPhase
@@ -46,6 +47,8 @@ def _make_session(
     pose_refiner = MagicMock()
     adapter = MagicMock()
     adapter.baseline_motion_available.return_value = True
+    adapter.baseline_set_lateral_velocity.return_value = True
+    queue = AdapterCommandQueue(adapter)
     session = RegistrationSession(
         robot_id="test_robot",
         sender=sender,
@@ -58,8 +61,9 @@ def _make_session(
         manual_registration_quality=0.7,
         pose_refiner=pose_refiner,
         adapter=adapter,
+        command_queue=queue,
         baseline_motion_available=True,
-        baseline_motion_params=BaselineMotionParams(),
+        baseline_strafe_speed=0.3,
     )
     return session, sent, registry
 
@@ -238,26 +242,31 @@ def _drive_baseline_through_sample(baseline, *, expected_leg_after: int | None) 
         assert baseline._move_phase == _MovePhase.LEG
 
 
+def _wait_for_leg_timer(baseline) -> float:
+    for _ in range(100):
+        if baseline._move_start_mono is not None:
+            return baseline._move_start_mono
+        time.sleep(0.01)
+    raise AssertionError("leg timer never started after velocity ack")
+
+
 def _drive_baseline_to_done(baseline) -> None:
     _advance_baseline_to_awaiting_confirm(baseline)
     baseline.authorize_motion()
 
-    t0 = baseline._move_start_mono
-    assert t0 is not None
+    t0 = _wait_for_leg_timer(baseline)
     with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
         baseline.tick(obs_count=0, latest_obs_pos_world=None)
     _drive_baseline_through_sample(baseline, expected_leg_after=1)
 
-    t1 = baseline._move_start_mono
-    assert t1 is not None
+    t1 = _wait_for_leg_timer(baseline)
     with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t1 + 2 * MOVE_LEG_S + 0.1
         baseline.tick(obs_count=0, latest_obs_pos_world=None)
     _drive_baseline_through_sample(baseline, expected_leg_after=2)
 
-    t2 = baseline._move_start_mono
-    assert t2 is not None
+    t2 = _wait_for_leg_timer(baseline)
     with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t2 + MOVE_LEG_S + 0.1
         baseline.tick(obs_count=0, latest_obs_pos_world=None)

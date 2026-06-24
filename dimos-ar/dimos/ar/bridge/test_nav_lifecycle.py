@@ -8,9 +8,9 @@ from dimos_lcm.std_msgs import Bool
 import numpy as np
 import pytest
 
+from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
 from dimos.ar.bridge.navigation import (
     NAV_GOAL_PATH_TIMEOUT_S,
-    NAV_GOAL_PUBLISH_TIMEOUT_S,
     NavController,
 )
 from dimos.ar.bridge.odom_buffer import OdomBuffer
@@ -30,20 +30,23 @@ def _make_sender() -> tuple[BridgeSender, MagicMock]:
     return sender, mock_server
 
 
-def _make_nav(*, registered: bool = True) -> tuple[NavController, MagicMock]:
+def _make_nav(*, registered: bool = True) -> tuple[NavController, MagicMock, MagicMock]:
     calibration = Calibration()
     if registered:
         calibration.register_world_odom(np.eye(4, dtype=np.float64))
     adapter = MagicMock()
     adapter.send_nav_goal.return_value = True
+    adapter.cancel_goal.return_value = True
+    adapter.emergency_stop.return_value = None
+    queue = AdapterCommandQueue(adapter)
     sender, mock_server = _make_sender()
     nav = NavController(
         robot_id="unitree_go2",
         sender=sender,
         calibration=calibration,
-        adapter=adapter,
+        command_queue=queue,
     )
-    return nav, mock_server
+    return nav, mock_server, adapter
 
 
 def _last_nav_status(mock_server: MagicMock) -> dict:
@@ -57,7 +60,7 @@ def _last_nav_status(mock_server: MagicMock) -> dict:
 
 
 def test_on_navigate_goal_broadcasts_idle_until_path() -> None:
-    nav, mock_server = _make_nav()
+    nav, mock_server, adapter = _make_nav()
     msg = GoalMessage(
         intent="navigate",
         ts=1.0,
@@ -74,7 +77,7 @@ def test_on_navigate_goal_broadcasts_idle_until_path() -> None:
     assert nav._nav_path_received is False
     assert nav._goal_reached is False
     assert nav._goal_failed is False
-    nav._adapter.send_nav_goal.assert_called_once()
+    adapter.send_nav_goal.assert_called_once()
     nav_status = _last_nav_status(mock_server)
     assert nav_status["type"] == "nav_status"
     assert nav_status["phase"] == "idle"
@@ -83,7 +86,7 @@ def test_on_navigate_goal_broadcasts_idle_until_path() -> None:
 
 @pytest.mark.asyncio
 async def test_handle_ar_path_promotes_navigating() -> None:
-    nav, _mock_server = _make_nav()
+    nav, _mock_server, adapter = _make_nav()
     nav._nav_goal_pending = True
     nav._nav_goal_dispatch_mono = time.monotonic()
 
@@ -107,7 +110,7 @@ async def test_handle_ar_path_promotes_navigating() -> None:
 
 @pytest.mark.asyncio
 async def test_handle_ar_path_does_not_mutate_nav_state_without_pending_goal() -> None:
-    nav, mock_server = _make_nav()
+    nav, mock_server, adapter = _make_nav()
     nav._nav_state = "idle"
     nav._nav_goal_pending = False
 
@@ -134,7 +137,7 @@ async def test_handle_ar_path_does_not_mutate_nav_state_without_pending_goal() -
 
 @pytest.mark.asyncio
 async def test_late_path_after_goal_reached_does_not_revive_navigating() -> None:
-    nav, _mock_server = _make_nav()
+    nav, _mock_server, adapter = _make_nav()
     nav._nav_goal_pending = True
     nav._nav_state = "navigating"
 
@@ -162,7 +165,7 @@ async def test_late_path_after_goal_reached_does_not_revive_navigating() -> None
 
 @pytest.mark.asyncio
 async def test_handle_ar_goal_reached_failure_marks_goal_failed() -> None:
-    nav, _mock_server = _make_nav()
+    nav, _mock_server, adapter = _make_nav()
     nav._nav_goal_pending = True
     nav._nav_state = "navigating"
 
@@ -175,7 +178,7 @@ async def test_handle_ar_goal_reached_failure_marks_goal_failed() -> None:
 
 
 def test_goal_stall_triggers_recovery() -> None:
-    nav, mock_server = _make_nav()
+    nav, mock_server, adapter = _make_nav()
     nav._nav_goal_pending = True
     nav._nav_path_received = False
     nav._nav_goal_dispatch_mono = time.monotonic() - NAV_GOAL_PATH_TIMEOUT_S - 1.0
@@ -189,11 +192,11 @@ def test_goal_stall_triggers_recovery() -> None:
     nav_status = _last_nav_status(mock_server)
     assert nav_status["phase"] == "recovering"
     time.sleep(0.05)
-    nav._adapter.cancel_goal.assert_called_once()
+    adapter.cancel_goal.assert_called_once()
 
 
 def test_goal_stall_terminal_after_max_attempts() -> None:
-    nav, mock_server = _make_nav()
+    nav, mock_server, adapter = _make_nav()
     nav._nav_goal_pending = True
     nav._nav_path_received = False
     nav._nav_recovery_attempts = 2
@@ -210,7 +213,7 @@ def test_goal_stall_terminal_after_max_attempts() -> None:
 
 def test_navigate_goal_clears_degraded_session() -> None:
     """A new navigate goal clears session degradation so the user can retry."""
-    nav, _mock_server = _make_nav()
+    nav, _mock_server, adapter = _make_nav()
     nav._nav_degraded = True
     msg = GoalMessage(
         intent="navigate",
@@ -223,19 +226,19 @@ def test_navigate_goal_clears_degraded_session() -> None:
     nav.on_navigate_goal(msg)
     time.sleep(0.05)
 
-    nav._adapter.send_nav_goal.assert_called_once()
+    adapter.send_nav_goal.assert_called_once()
     assert nav._nav_degraded is False
 
 
 def test_on_navigate_goal_returns_before_adapter_publish() -> None:
     """Adapter publish runs off-thread so the WebSocket handler is not blocked."""
-    nav, _mock_server = _make_nav()
+    nav, _mock_server, adapter = _make_nav()
 
     def slow_goal(_goal: PoseStamped) -> bool:
         time.sleep(0.2)
         return True
 
-    nav._adapter.send_nav_goal.side_effect = slow_goal
+    adapter.send_nav_goal.side_effect = slow_goal
     msg = GoalMessage(
         intent="navigate",
         ts=1.0,
@@ -250,12 +253,12 @@ def test_on_navigate_goal_returns_before_adapter_publish() -> None:
 
     assert elapsed < 0.1
     time.sleep(0.25)
-    nav._adapter.send_nav_goal.assert_called_once()
+    adapter.send_nav_goal.assert_called_once()
 
 
 def test_emergency_stop_then_goal_succeeds() -> None:
     """After emergency stop, a new goal is accepted and published."""
-    nav, _mock_server = _make_nav()
+    nav, _mock_server, adapter = _make_nav()
     nav._nav_goal_pending = True
     nav._nav_state = "navigating"
     nav._nav_path_received = True
@@ -276,19 +279,19 @@ def test_emergency_stop_then_goal_succeeds() -> None:
     nav.on_navigate_goal(msg)
     time.sleep(0.05)
 
-    nav._adapter.send_nav_goal.assert_called_once()
+    adapter.send_nav_goal.assert_called_once()
     assert nav._nav_goal_pending is True
     assert nav._nav_path_received is False
 
 
 def test_cancel_goal_timeout_does_not_degrade_navigation() -> None:
-    nav, mock_server = _make_nav()
+    nav, mock_server, adapter = _make_nav()
 
     def slow_cancel() -> bool:
         time.sleep(1.2)
         return True
 
-    nav._adapter.cancel_goal.side_effect = slow_cancel
+    adapter.cancel_goal.side_effect = slow_cancel
     nav.on_cancel_goal(ts=3.0)
     time.sleep(1.05)
 
@@ -300,18 +303,43 @@ def test_cancel_goal_timeout_does_not_degrade_navigation() -> None:
     assert nav_status.get("error_code") is None
 
 
-def test_slow_send_nav_goal_fails_transiently_and_accepts_later_goal() -> None:
-    nav, _mock_server = _make_nav()
+def test_slow_send_nav_goal_waits_for_adapter_ack() -> None:
+    nav, _mock_server, adapter = _make_nav()
     publish_calls = 0
 
-    def slow_first_goal(_goal: PoseStamped) -> bool:
+    def slow_goal(_goal: PoseStamped) -> bool:
         nonlocal publish_calls
         publish_calls += 1
-        if publish_calls == 1:
-            time.sleep(NAV_GOAL_PUBLISH_TIMEOUT_S + 0.5)
+        time.sleep(0.3)
         return True
 
-    nav._adapter.send_nav_goal.side_effect = slow_first_goal
+    adapter.send_nav_goal.side_effect = slow_goal
+    msg = GoalMessage(
+        intent="navigate",
+        ts=1.0,
+        robot_id="unitree_go2",
+        position=(1.0, 0.0, 2.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    nav.on_navigate_goal(msg)
+    time.sleep(0.05)
+    assert nav._goal_failed is False
+    assert nav._nav_goal_pending is True
+    time.sleep(0.35)
+    assert publish_calls == 1
+    assert nav._goal_failed is False
+
+
+def test_concurrent_nav_goals_coalesce_to_latest() -> None:
+    nav, _mock_server, adapter = _make_nav()
+    sent_positions: list[list[float]] = []
+
+    def record(goal: PoseStamped) -> bool:
+        sent_positions.append(list(goal.position))
+        time.sleep(0.05)
+        return True
+
+    adapter.send_nav_goal.side_effect = record
     first_goal = GoalMessage(
         intent="navigate",
         ts=1.0,
@@ -319,14 +347,6 @@ def test_slow_send_nav_goal_fails_transiently_and_accepts_later_goal() -> None:
         position=(1.0, 0.0, 2.0),
         orientation=(0.0, 0.0, 0.0, 1.0),
     )
-    nav.on_navigate_goal(first_goal)
-    time.sleep(NAV_GOAL_PUBLISH_TIMEOUT_S + 0.7)
-
-    assert nav._goal_failed is True
-    assert nav._nav_degraded is False
-
-    nav._adapter.send_nav_goal.side_effect = None
-    nav._adapter.send_nav_goal.return_value = True
     second_goal = GoalMessage(
         intent="navigate",
         ts=2.0,
@@ -334,16 +354,17 @@ def test_slow_send_nav_goal_fails_transiently_and_accepts_later_goal() -> None:
         position=(2.0, 0.0, 3.0),
         orientation=(0.0, 0.0, 0.0, 1.0),
     )
+    nav.on_navigate_goal(first_goal)
     nav.on_navigate_goal(second_goal)
-    time.sleep(0.05)
+    time.sleep(0.2)
 
-    assert nav._adapter.send_nav_goal.call_count == 2
-    assert nav._nav_goal_pending is True
+    assert len(sent_positions) == 1
+    assert sent_positions[0][0] == 2.0
     assert nav._goal_failed is False
 
 
 def test_on_navigation_state_idle_while_live_emits_recovery() -> None:
-    nav, mock_server = _make_nav()
+    nav, mock_server, adapter = _make_nav()
     nav._nav_goal_pending = True
     nav._nav_path_received = True
     nav._nav_state = "navigating"

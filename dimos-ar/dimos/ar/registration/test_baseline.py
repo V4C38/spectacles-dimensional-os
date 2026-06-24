@@ -6,6 +6,7 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
 from dimos.ar.registration.baseline import (
     MOVE_LEG_S,
     SAMPLE_MIN_OBS,
@@ -15,7 +16,6 @@ from dimos.ar.registration.baseline import (
     _BaselineState,
     _MovePhase,
 )
-from dimos.ar.registration.motion_params import BaselineMotionParams
 from dimos.ar.registration.types import CaptureHint, RegistrationPhase
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -33,15 +33,24 @@ def _make_adapter(*, available: bool = True) -> MagicMock:
 def _make_driver(
     *,
     available: bool = True,
-    motion_params: BaselineMotionParams | None = None,
-) -> tuple[BaselineCollector, MagicMock]:
+    strafe_speed: float = 0.3,
+) -> tuple[BaselineCollector, MagicMock, AdapterCommandQueue]:
     adapter = _make_adapter(available=available)
+    queue = AdapterCommandQueue(adapter)
     driver = BaselineCollector(
-        adapter=adapter,
+        command_queue=queue,
         motion_available=available,
-        motion_params=motion_params or BaselineMotionParams(),
+        strafe_speed=strafe_speed,
     )
-    return driver, adapter
+    return driver, adapter, queue
+
+
+def _wait_for_leg_timer(driver: BaselineCollector) -> float:
+    for _ in range(100):
+        if driver._move_start_mono is not None:
+            return driver._move_start_mono
+        time.sleep(0.01)
+    raise AssertionError("leg timer never started after velocity ack")
 
 
 def _wait_for_velocity(adapter: MagicMock, expected: float) -> None:
@@ -57,7 +66,7 @@ def _wait_for_velocity(adapter: MagicMock, expected: float) -> None:
 
 
 def test_no_velocity_without_confirm() -> None:
-    driver, adapter = _make_driver()
+    driver, adapter, _gate = _make_driver()
     driver.start()
     assert driver.state == _BaselineState.ESTIMATING
     for _ in range(10):
@@ -80,7 +89,7 @@ def _advance_to_awaiting_confirm(driver: BaselineCollector) -> None:
 
 def test_confirm_enters_move_directly() -> None:
     """A1: authorize_motion must go AWAITING_CONFIRM→MOVE with no intermediate state."""
-    driver, adapter = _make_driver()
+    driver, adapter, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -115,7 +124,7 @@ def _drive_through_sample(
 
 
 def test_happy_path_full_3_leg_sequence() -> None:
-    driver, adapter = _make_driver()
+    driver, adapter, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -123,8 +132,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     assert driver._move_leg_index == 0
 
     # --- Leg 0 completes (time-based) ---
-    t0 = driver._move_start_mono
-    assert t0 is not None
+    t0 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
@@ -136,8 +144,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     _wait_for_velocity(adapter, -0.3)
 
     # --- Leg 1 completes (2× duration) ---
-    t1 = driver._move_start_mono
-    assert t1 is not None
+    t1 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t1 + 2 * MOVE_LEG_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
@@ -149,8 +156,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     _wait_for_velocity(adapter, 0.3)
 
     # --- Leg 2 completes (1× duration) ---
-    t2 = driver._move_start_mono
-    assert t2 is not None
+    t2 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t2 + MOVE_LEG_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
@@ -166,10 +172,11 @@ def test_leg_phase_emits_steady_capture_not_hold() -> None:
     """LEG motion must request steady capture so Lens keeps tracking during strafe."""
     statuses: list[BaselineStatus] = []
     adapter = _make_adapter()
+    gate = AdapterCommandQueue(adapter)
     driver = BaselineCollector(
-        adapter=adapter,
+        command_queue=gate,
         motion_available=True,
-        motion_params=BaselineMotionParams(),
+        strafe_speed=0.3,
         on_status=statuses.append,
     )
     driver.start()
@@ -186,13 +193,12 @@ def test_odom_present_does_not_shorten_leg() -> None:
     """Regression: bad/jumpy odom must not end a leg before the timer fires."""
     from dimos.ar.registration.transforms import OdomSample
 
-    driver, _adapter = _make_driver()
+    driver, _adapter, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
 
-    t0 = driver._move_start_mono
-    assert t0 is not None
+    t0 = _wait_for_leg_timer(driver)
     odom_jump = OdomSample(position=(10.0, 10.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
     with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + 0.1
@@ -206,13 +212,12 @@ def test_odom_present_does_not_shorten_leg() -> None:
 
 
 def test_time_based_leg_completion_when_odom_absent() -> None:
-    driver, _adapter = _make_driver()
+    driver, _adapter, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
 
-    t0 = driver._move_start_mono
-    assert t0 is not None
+    t0 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + MOVE_LEG_S - 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=None)
@@ -228,13 +233,12 @@ def test_time_based_leg_completion_when_odom_absent() -> None:
 
 
 def test_tag_loss_during_leg_does_not_abort() -> None:
-    driver, _ = _make_driver()
+    driver, _, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
     assert driver.state == _BaselineState.MOVE
-    t0 = driver._move_start_mono
-    assert t0 is not None
+    t0 = _wait_for_leg_timer(driver)
     for i in range(10):
         with patch("dimos.ar.registration.baseline.time") as mt:
             mt.monotonic.return_value = t0 + 0.1 * i
@@ -247,14 +251,13 @@ def test_tag_loss_during_leg_does_not_abort() -> None:
 
 def test_sample_holds_on_tag_loss() -> None:
     """During a SAMPLE pause with no tag, the robot holds indefinitely."""
-    driver, adapter = _make_driver()
+    driver, adapter, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
 
     # Fast-forward leg 0 to settle
-    t0 = driver._move_start_mono
-    assert t0 is not None
+    t0 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
@@ -271,13 +274,12 @@ def test_sample_holds_on_tag_loss() -> None:
 
 
 def test_sample_unstable_obs_do_not_advance() -> None:
-    driver, _ = _make_driver()
+    driver, _, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
 
-    t0 = driver._move_start_mono
-    assert t0 is not None
+    t0 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
@@ -297,7 +299,7 @@ def test_sample_unstable_obs_do_not_advance() -> None:
 
 
 def test_stop_aborts_and_stops_motion() -> None:
-    driver, adapter = _make_driver()
+    driver, adapter, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -306,7 +308,7 @@ def test_stop_aborts_and_stops_motion() -> None:
 
 
 def test_emergency_stop_fails() -> None:
-    driver, _ = _make_driver()
+    driver, _, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -315,7 +317,7 @@ def test_emergency_stop_fails() -> None:
 
 
 def test_abort_during_move_publishes_zero_velocity() -> None:
-    driver, adapter = _make_driver()
+    driver, adapter, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -328,7 +330,7 @@ def test_abort_during_move_publishes_zero_velocity() -> None:
 
 def test_restart_after_stop() -> None:
     """After stop(), start() must begin a fresh estimating session."""
-    driver, _ = _make_driver()
+    driver, _, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.stop()
@@ -344,10 +346,11 @@ def test_reset_to_idle_goes_to_idle_silently() -> None:
     """reset_to_idle must transition to IDLE without firing on_status."""
     status_changes: list[str] = []
     adapter = _make_adapter()
+    gate = AdapterCommandQueue(adapter)
     driver = BaselineCollector(
-        adapter=adapter,
+        command_queue=gate,
         motion_available=True,
-        motion_params=BaselineMotionParams(),
+        strafe_speed=0.3,
         on_status=lambda s: status_changes.append(s.phase.value),
     )
     driver.start()
@@ -362,7 +365,7 @@ def test_reset_to_idle_goes_to_idle_silently() -> None:
 
 def test_reset_to_idle_stops_motion() -> None:
     """reset_to_idle must zero the robot velocity when motion was active."""
-    driver, adapter = _make_driver()
+    driver, adapter, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -377,7 +380,7 @@ def test_reset_to_idle_stops_motion() -> None:
 
 
 def test_concurrent_ticks_do_not_corrupt_state() -> None:
-    driver, _ = _make_driver()
+    driver, _, _gate = _make_driver()
     driver.start()
     errors: list[Exception] = []
 
@@ -408,7 +411,7 @@ def test_concurrent_ticks_do_not_corrupt_state() -> None:
 
 
 def test_is_sampling_false_during_leg() -> None:
-    driver, _ = _make_driver()
+    driver, _, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -417,19 +420,18 @@ def test_is_sampling_false_during_leg() -> None:
 
 
 def test_is_estimating_true_during_estimating() -> None:
-    driver, _ = _make_driver()
+    driver, _, _gate = _make_driver()
     driver.start()
     assert driver.is_estimating is True
     assert driver.is_sampling is False
 
 
 def test_is_sampling_true_during_sample() -> None:
-    driver, _ = _make_driver()
+    driver, _, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
-    t0 = driver._move_start_mono
-    assert t0 is not None
+    t0 = _wait_for_leg_timer(driver)
     with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + MOVE_LEG_S + 0.1
         driver.tick(obs_count=0, latest_obs_pos_world=None)
@@ -437,26 +439,13 @@ def test_is_sampling_true_during_sample() -> None:
     assert driver.is_sampling is True
 
 
-def test_motion_params_are_injected_not_fetched_at_runtime() -> None:
-    """Adapter motion-param RPC must not happen during start/tick/authorize."""
-    driver, adapter = _make_driver()
-    driver.start()
-
-    _advance_to_awaiting_confirm(driver)
-    driver.authorize_motion()
-    for _ in range(10):
-        driver.tick(obs_count=0, latest_obs_pos_world=None)
-
-    adapter.baseline_strafe_speed.assert_not_called()
-
-
-def test_injected_motion_params_drive_strafe_speed() -> None:
+def test_injected_strafe_speed_drives_velocity() -> None:
     adapter = _make_adapter()
-    params = BaselineMotionParams(strafe_speed=0.2)
+    queue = AdapterCommandQueue(adapter)
     driver = BaselineCollector(
-        adapter=adapter,
+        command_queue=queue,
         motion_available=True,
-        motion_params=params,
+        strafe_speed=0.2,
     )
     driver.start()
     _advance_to_awaiting_confirm(driver)
@@ -466,7 +455,7 @@ def test_injected_motion_params_drive_strafe_speed() -> None:
 
 def test_tick_not_starved_during_authorize_motion() -> None:
     """Broadcast-style tick must complete while authorize_motion runs."""
-    driver, _ = _make_driver()
+    driver, _, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
 

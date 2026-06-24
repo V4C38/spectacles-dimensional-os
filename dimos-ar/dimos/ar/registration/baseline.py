@@ -10,17 +10,16 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-from dimos.ar.bridge.baseline_motion import BaselineMotionExecutor
-from dimos.ar.registration.motion_params import BaselineMotionParams
 from dimos.ar.registration.types import CaptureHint, MotionHint, RegistrationPhase
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
-    from dimos.ar.adapters.base import ARRobotAdapterSpec
+    from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
     from dimos.ar.registration.transforms import OdomSample
 
 logger = setup_logger()
 
+DEFAULT_BASELINE_STRAFE_SPEED: float = 0.3
 MOVE_LEG_S: float = 2.0
 MOVE_LEG_TARGET_M: float = 0.20  # UI motion-hint distance only; legs stop on timer
 SAMPLE_SETTLE_S: float = 0.3
@@ -66,15 +65,14 @@ class BaselineCollector:
     def __init__(
         self,
         *,
-        adapter: ARRobotAdapterSpec,
+        command_queue: AdapterCommandQueue,
         motion_available: bool,
-        motion_params: BaselineMotionParams,
+        strafe_speed: float = DEFAULT_BASELINE_STRAFE_SPEED,
         on_status: Callable[[BaselineStatus], None] | None = None,
     ) -> None:
-        self._adapter = adapter
+        self._command_queue = command_queue
         self._motion_available = motion_available
-        self._motion_params = motion_params
-        self._motion_executor = BaselineMotionExecutor(adapter)
+        self._strafe_speed = strafe_speed
         self._on_status = on_status
         self._lock = threading.RLock()
         self._state: _BaselineState = _BaselineState.IDLE
@@ -160,12 +158,12 @@ class BaselineCollector:
             self._state = _BaselineState.IDLE
 
     def shutdown(self) -> None:
-        """Stop the robot and tear down the velocity executor (bridge shutdown)."""
+        """Stop the robot and clear pending velocity commands (bridge shutdown)."""
         with self._lock:
+            self._command_queue.clear_pending_baseline()
             self._stop_motion()
             self._reset_internals()
             self._state = _BaselineState.IDLE
-        self._motion_executor.shutdown()
 
     def tick(
         self,
@@ -240,12 +238,29 @@ class BaselineCollector:
             waypoint_total=WAYPOINT_TOTAL,
         )
 
-    def _set_lateral_velocity_async(self, velocity: float) -> None:
-        self._motion_executor.submit_lateral_velocity(velocity)
+    def _submit_lateral_velocity(
+        self,
+        velocity: float,
+        *,
+        on_complete: Callable[[bool, BaseException | None], None] | None = None,
+    ) -> None:
+        self._command_queue.submit_baseline_velocity(velocity, on_complete=on_complete)
+
+    def _on_velocity_start_ack(self, ok: bool, err: BaseException | None) -> None:
+        with self._lock:
+            if not ok:
+                reason = "Baseline motion command failed"
+                if err is not None:
+                    reason = f"{reason}: {err}"
+                self._fail(reason)
+                return
+            if self._state != _BaselineState.MOVE or self._move_phase != _MovePhase.LEG:
+                return
+            self._move_start_mono = time.monotonic()
 
     def _stop_motion(self) -> None:
         if self._move_velocity_active:
-            self._motion_executor.stop_motion()
+            self._command_queue.submit_baseline_velocity(0.0)
             self._move_velocity_active = False
 
     def _start_move(self) -> None:
@@ -254,10 +269,10 @@ class BaselineCollector:
         self._move_phase = _MovePhase.LEG
         self._move_sample_positions = []
         self._sample_settle_mono = None
-        self._move_start_mono = time.monotonic()
+        self._move_start_mono = None
         self._move_velocity_active = True
         self._state = _BaselineState.MOVE
-        speed = self._motion_params.strafe_speed * self._LEG_DIRECTIONS[leg]
+        speed = self._strafe_speed * self._LEG_DIRECTIONS[leg]
         self._emit(
             RegistrationPhase.MOVING,
             CaptureHint.STEADY,
@@ -265,7 +280,7 @@ class BaselineCollector:
             leg_index=leg,
         )
         logger.info("BaselineCollector MOVE leg=%d", leg)
-        self._set_lateral_velocity_async(speed)
+        self._submit_lateral_velocity(speed, on_complete=self._on_velocity_start_ack)
 
     def _start_sample(self) -> None:
         self._stop_motion()
@@ -297,9 +312,9 @@ class BaselineCollector:
         self._move_phase = _MovePhase.LEG
         self._move_sample_positions = []
         self._sample_settle_mono = None
-        self._move_start_mono = time.monotonic()
+        self._move_start_mono = None
         self._move_velocity_active = True
-        speed = self._motion_params.strafe_speed * self._LEG_DIRECTIONS[leg]
+        speed = self._strafe_speed * self._LEG_DIRECTIONS[leg]
         self._emit(
             RegistrationPhase.MOVING,
             CaptureHint.STEADY,
@@ -307,7 +322,7 @@ class BaselineCollector:
             leg_index=leg,
         )
         logger.info("BaselineCollector MOVE leg=%d", leg)
-        self._set_lateral_velocity_async(speed)
+        self._submit_lateral_velocity(speed, on_complete=self._on_velocity_start_ack)
 
     def _tick_locked(
         self,

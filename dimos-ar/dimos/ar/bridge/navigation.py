@@ -11,7 +11,6 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-from dimos.ar.bridge import adapter_rpc
 from dimos.ar.network.data_plane import (
     build_empty_path_payload,
     build_path_payload,
@@ -27,17 +26,15 @@ from dimos.utils.logging_config import setup_logger
 if TYPE_CHECKING:
     from dimos_lcm.std_msgs import Bool
 
-    from dimos.ar.adapters.base import ARRobotAdapterSpec
+    from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
     from dimos.ar.bridge.sender import BridgeSender
     from dimos.msgs.nav_msgs.Path import Path
 
 logger = setup_logger()
 
 NAV_GOAL_PATH_TIMEOUT_S: float = 8.0
-NAV_GOAL_PUBLISH_TIMEOUT_S: float = 8.0
 NAV_RECOVERY_MAX_ATTEMPTS: int = 2
 NAV_WATCHDOG_POLL_INTERVAL_S: float = 0.5
-CONTROL_RPC_TIMEOUT_S: float = 1.0
 
 
 class NavController:
@@ -49,12 +46,12 @@ class NavController:
         robot_id: str,
         sender: BridgeSender,
         calibration: Calibration,
-        adapter: ARRobotAdapterSpec,
+        command_queue: AdapterCommandQueue,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
         self._calibration = calibration
-        self._adapter = adapter
+        self._command_queue = command_queue
 
         self._nav_state: str = "idle"
         self._goal_reached: bool = False
@@ -161,11 +158,16 @@ class NavController:
             frame_id="odom",
         )
         self.broadcast_nav_status(ts=msg.ts)
-        threading.Thread(
-            target=self._publish_nav_goal,
-            args=(goal, msg, odom_position, odom_orientation),
-            daemon=True,
-        ).start()
+        self._command_queue.submit_nav_goal(
+            goal,
+            on_complete=lambda ok, err: self._on_goal_dispatched(
+                ok,
+                err,
+                msg=msg,
+                odom_position=odom_position,
+                odom_orientation=odom_orientation,
+            ),
+        )
 
     def on_cancel_goal(self, ts: float | None = None) -> None:
         self._nav_degraded = False
@@ -177,7 +179,7 @@ class NavController:
         self._reset_goal_tracking(reset_recovery=True)
         self._broadcast_empty_path(ts=ts)
         self.broadcast_nav_status(ts=ts)
-        self._cancel_goal_async()
+        self._command_queue.submit_cancel_goal(on_complete=self._on_control_dispatched)
 
     def on_emergency_stop(self, ts: float | None = None) -> None:
         self._goal_reached = False
@@ -188,10 +190,7 @@ class NavController:
         self._reset_goal_tracking(reset_recovery=True)
         self._broadcast_empty_path(ts=ts)
         self.broadcast_nav_status(ts=ts)
-        adapter_rpc.run_in_thread(
-            lambda: self._cancel_or_stop(emergency=True),
-            name="ARBridge-emergency_stop",
-        )
+        self._command_queue.submit_emergency_stop(on_complete=self._on_control_dispatched)
 
     # ------------------------------------------------------------------
     # Stream handlers (called from ARBridge.handle_ar_*)
@@ -322,79 +321,24 @@ class NavController:
             if reset_recovery:
                 self._nav_recovery_attempts = 0
 
-    def _cancel_goal_async(self) -> None:
-        adapter_rpc.run_in_thread(
-            lambda: self._cancel_or_stop(emergency=False),
-            name="ARBridge-cancel_goal",
-        )
+    def _on_control_dispatched(self, ok: bool, err: BaseException | None) -> None:
+        if ok:
+            return
+        if err is not None:
+            logger.warning("XR control command failed", error=str(err))
+        else:
+            logger.warning("XR control command rejected by adapter")
 
-    def _cancel_or_stop(self, *, emergency: bool) -> None:
-        if emergency:
-            result, error = adapter_rpc.call_with_timeout(
-                self._adapter,
-                "emergency_stop",
-                timeout_s=CONTROL_RPC_TIMEOUT_S,
-            )
-            if error is not None:
-                logger.exception("XR emergency_stop failed")
-            elif result is None:
-                logger.warning(
-                    "XR emergency_stop timed out",
-                    timeout_s=CONTROL_RPC_TIMEOUT_S,
-                )
-            return
-        method_name = "cancel_goal"
-        result, error = adapter_rpc.call_with_timeout(
-            self._adapter,
-            method_name,
-            timeout_s=CONTROL_RPC_TIMEOUT_S,
-        )
-        if error is not None:
-            logger.warning(
-                "XR control command failed",
-                emergency=emergency,
-                rpc=method_name,
-                error=str(error),
-            )
-            return
-        if result is None:
-            logger.warning(
-                "XR control command timed out",
-                emergency=emergency,
-                rpc=method_name,
-                timeout_s=CONTROL_RPC_TIMEOUT_S,
-            )
-            return
-        if result is False:
-            logger.warning(
-                "XR control command rejected by adapter",
-                emergency=emergency,
-                rpc=method_name,
-            )
-
-    def _publish_nav_goal(
+    def _on_goal_dispatched(
         self,
-        goal: PoseStamped,
+        ok: bool,
+        err: BaseException | None,
+        *,
         msg: GoalMessage,
         odom_position: tuple[float, float, float],
         odom_orientation: tuple[float, float, float, float],
     ) -> None:
-        """Publish goal to the adapter off the WebSocket event loop."""
-        try:
-            published, error = adapter_rpc.call_with_timeout(
-                self._adapter,
-                "send_nav_goal",
-                goal,
-                timeout_s=NAV_GOAL_PUBLISH_TIMEOUT_S,
-            )
-            if error is not None:
-                raise error
-            if published is None:
-                raise TimeoutError(
-                    f"send_nav_goal timed out after {NAV_GOAL_PUBLISH_TIMEOUT_S}s"
-                )
-            if not published:
-                raise RuntimeError("adapter rejected goal")
+        if ok:
             logger.info(
                 "XR navigation goal published",
                 world_goal=[round(v, 3) for v in msg.position],
@@ -404,13 +348,14 @@ class NavController:
                 ),
                 odom_goal_yaw_deg=_orientation_yaw_deg(odom_orientation),
             )
-        except Exception as exc:
-            self._goal_failed = True
-            self._reset_goal_tracking(reset_recovery=False)
-            self._nav_state = "idle"
-            logger.exception("XR navigation goal publish failed", error=str(exc))
-            self._broadcast_empty_path(ts=msg.ts)
-            self.broadcast_nav_status(ts=msg.ts)
+            return
+        self._goal_failed = True
+        self._reset_goal_tracking(reset_recovery=False)
+        self._nav_state = "idle"
+        error = str(err) if err is not None else "adapter rejected goal"
+        logger.error("XR navigation goal publish failed", error=error)
+        self._broadcast_empty_path(ts=msg.ts)
+        self.broadcast_nav_status(ts=msg.ts)
 
     def _recover_stuck_goal(self) -> None:
         self._goal_reached = False
@@ -421,7 +366,7 @@ class NavController:
         self._nav_recovering = True
         self._broadcast_empty_path()
         self.broadcast_nav_status()
-        self._cancel_goal_async()
+        self._command_queue.submit_cancel_goal(on_complete=self._on_control_dispatched)
 
     def _terminal_nav_failure(self) -> None:
         self._nav_degraded = True
@@ -433,7 +378,7 @@ class NavController:
         self._reset_goal_tracking(reset_recovery=False)
         self._broadcast_empty_path()
         self.broadcast_nav_status()
-        self._cancel_goal_async()
+        self._command_queue.submit_cancel_goal(on_complete=self._on_control_dispatched)
 
     def _promote_to_navigating(self, *, ts: float | None = None) -> None:
         with self._nav_watchdog_lock:

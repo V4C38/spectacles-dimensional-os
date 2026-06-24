@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from enum import StrEnum
 import math
@@ -19,8 +20,11 @@ from dimos.ar.network.protocol import (
     RegistrationPoseMessage,
     encode_camera_frame_ack,
 )
-from dimos.ar.registration.baseline import BaselineCollector, BaselineStatus
-from dimos.ar.registration.motion_params import BaselineMotionParams
+from dimos.ar.registration.baseline import (
+    DEFAULT_BASELINE_STRAFE_SPEED,
+    BaselineCollector,
+    BaselineStatus,
+)
 from dimos.ar.registration.refinement import RegisteredPoseRefiner
 from dimos.ar.registration.registry import WorldRegistry
 from dimos.ar.registration.tracker import (
@@ -47,6 +51,7 @@ if TYPE_CHECKING:
     from websockets.asyncio.server import ServerConnection
 
     from dimos.ar.adapters.base import ARRobotAdapterSpec, RuntimeRegistrationProfile
+    from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
     from dimos.ar.bridge.odom_buffer import OdomBuffer
     from dimos.ar.bridge.sender import BridgeSender
     from dimos.ar.bridge.status_service import StatusService
@@ -97,9 +102,10 @@ class RegistrationSession:
         manual_registration_quality: float,
         pose_refiner: RegisteredPoseRefiner,
         adapter: ARRobotAdapterSpec | None = None,
+        command_queue: AdapterCommandQueue | None = None,
         runtime_profile: RuntimeRegistrationProfile | None = None,
         baseline_motion_available: bool = False,
-        baseline_motion_params: BaselineMotionParams | None = None,
+        baseline_strafe_speed: float = DEFAULT_BASELINE_STRAFE_SPEED,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
@@ -127,15 +133,16 @@ class RegistrationSession:
 
         self._broadcast_task: asyncio.Task[None] | None = None
         self._broadcast_stop_requested = False
+        self._loop_tasks: set[asyncio.Task[None]] = set()
 
         self._baseline: BaselineCollector | None = (
             BaselineCollector(
-                adapter=adapter,
+                command_queue=command_queue,
                 motion_available=baseline_motion_available,
-                motion_params=baseline_motion_params or BaselineMotionParams(),
+                strafe_speed=baseline_strafe_speed,
                 on_status=self._on_baseline_status,
             )
-            if adapter is not None
+            if command_queue is not None
             else None
         )
         self._baseline_was_sampling = False
@@ -453,7 +460,7 @@ class RegistrationSession:
         if not self._loop.is_running():
             return
         if self._is_on_loop():
-            asyncio.create_task(self._start_broadcast_on_loop())
+            self._schedule_on_loop(self._start_broadcast_on_loop())
             return
         future = asyncio.run_coroutine_threadsafe(
             self._start_broadcast_on_loop(),
@@ -531,7 +538,7 @@ class RegistrationSession:
         if not self._loop.is_running():
             return
         if self._is_on_loop():
-            asyncio.create_task(self._cancel_broadcast_on_loop())
+            self._schedule_on_loop(self._cancel_broadcast_on_loop())
             return
         future = asyncio.run_coroutine_threadsafe(
             self._cancel_broadcast_on_loop(),
@@ -561,6 +568,11 @@ class RegistrationSession:
             return asyncio.get_running_loop() is self._loop
         except RuntimeError:
             return False
+
+    def _schedule_on_loop(self, coro: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.create_task(coro)
+        self._loop_tasks.add(task)
+        task.add_done_callback(self._loop_tasks.discard)
 
     def _clear_session(self) -> None:
         self._tag_tracker.reset_window()
