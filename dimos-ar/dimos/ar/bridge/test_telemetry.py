@@ -113,7 +113,13 @@ def test_publish_lidar_obstacle_mode_reduces_binary_payload() -> None:
         )
     )
 
-    publisher.publish_lidar(msg)  # full mode by default
+    publisher.set_lidar_mode(
+        mode="full",
+        obstacle_min_distance_m=0.10,
+        obstacle_opaque_distance_m=0.40,
+        obstacle_max_distance_m=0.60,
+    )
+    publisher.publish_lidar(msg)
     assert len(sender.binary_payloads) == 1
     full_size = len(sender.binary_payloads[-1])
 
@@ -182,6 +188,12 @@ def test_publish_lidar_full_mode_caps_binary_payload_at_1000_points() -> None:
         ).astype(np.float32)
     )
 
+    publisher.set_lidar_mode(
+        mode="full",
+        obstacle_min_distance_m=0.10,
+        obstacle_opaque_distance_m=0.40,
+        obstacle_max_distance_m=0.60,
+    )
     publisher.publish_lidar(msg)
 
     assert len(sender.binary_payloads) == 1
@@ -210,6 +222,11 @@ def test_publish_lidar_obstacle_mode_caps_binary_payload_at_200_points() -> None
 
     assert len(sender.binary_payloads) == 1
     assert len(sender.binary_payloads[0]) == 5 + (200 * 6)
+
+
+def test_default_lidar_mode_is_off() -> None:
+    publisher, _sender = _publisher()
+    assert publisher._lidar_mode == "off"
 
 
 def test_apply_set_lidar_mode_fills_partial_obstacle_fields() -> None:

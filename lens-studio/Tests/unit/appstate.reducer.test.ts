@@ -100,7 +100,7 @@ describe("createDefaultDimosAppState", () => {
   it("returns expected defaults", () => {
     const state = createDefaultDimosAppState();
     expect(state.phase).toBe("registration");
-    expect(state.lidarMode).toBe("obstacles");
+    expect(state.lidarMode).toBe("off");
     expect(state.operatingMode).toBe("manual");
     expect(state.bridgeLinkState).toBe("disconnected");
     expect(state.navigationState).toBe("off");

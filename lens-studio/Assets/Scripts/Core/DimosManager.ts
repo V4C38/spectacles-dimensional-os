@@ -183,7 +183,11 @@ export class DimosManager extends BaseScriptComponent {
     this.setupRegistrationPreview?.endIfActive();
     this.registrationClient?.cancelPlacement();
     this.registrationClient?.stop();
-    this.dimosServices.state.update({ phase: "runtime" });
+    const runtimePatch: Partial<DimosAppState> = { phase: "runtime" };
+    if (this.operatingMode === "manual") {
+      runtimePatch.lidarMode = "obstacles";
+    }
+    this.dimosServices.state.update(runtimePatch);
     this._applyPhaseSideEffects("runtime");
     const bridgeSnapshot = this.appState.bridgeSnapshot;
     this.dimosServices.robot.prepareForRuntime(bridgeSnapshot.worldFrameApproximate);

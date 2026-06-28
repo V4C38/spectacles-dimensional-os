@@ -38,6 +38,9 @@ def _make_go2_adapter() -> Go2AdapterModule:
     adapter._joystick_lock = __import__("threading").Lock()
     adapter._joystick_thread = None
     adapter._joystick_target = (0.0, 0.0, 0.0)
+    adapter._joystick_publish_count = 0
+    adapter._joystick_publish_window_start = time.monotonic()
+    adapter._last_motion_rpc_log_mono = 0.0
     adapter.config = SimpleNamespace(robot_id="unitree_go2")
     adapter.goal_request = _FakeStream(connected=False)
     adapter.goal_req = _FakeStream(connected=False)
@@ -67,6 +70,9 @@ def _make_g1_adapter() -> G1AdapterModule:
     adapter._joystick_lock = threading.Lock()
     adapter._joystick_thread = None
     adapter._joystick_target = (0.0, 0.0, 0.0)
+    adapter._joystick_publish_count = 0
+    adapter._joystick_publish_window_start = time.monotonic()
+    adapter._last_motion_rpc_log_mono = 0.0
     adapter.config = SimpleNamespace(robot_id="unitree_g1")
     adapter.goal_request = _FakeStream(connected=False)
     adapter.goal_req = _FakeStream(connected=False)
@@ -173,6 +179,18 @@ def test_go2_baseline_motion_recipe_matches_teleop() -> None:
 
     assert Go2AdapterModule.baseline_motion_recipe(adapter) == DEFAULT_BASELINE_MOTION_RECIPE
     assert DEFAULT_BASELINE_MOTION_RECIPE.strafe_speed == pytest.approx(0.2)
+
+
+def test_go2_joystick_republish_hz_constant() -> None:
+    from dimos.ar.adapters.go2 import JOYSTICK_REPUBLISH_HZ
+
+    assert JOYSTICK_REPUBLISH_HZ == 12
+
+
+def test_g1_joystick_republish_hz_constant() -> None:
+    from dimos.ar.adapters.g1 import JOYSTICK_REPUBLISH_HZ
+
+    assert JOYSTICK_REPUBLISH_HZ == 12
 
 
 def test_go2_send_joystick_command_passes_stick_through() -> None:

@@ -9,7 +9,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from dimos.ar.adapters.base import DEFAULT_BASELINE_MOTION_RECIPE
-from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
+from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
+from dimos.ar.bridge.test_rpc_bindings import bind_mock_adapter_rpc
 from dimos.ar.registration.baseline import (
     SAMPLE_MIN_OBS,
     SAMPLE_SETTLE_S,
@@ -50,7 +51,8 @@ def _make_session(
     adapter = MagicMock()
     adapter.baseline_motion_available.return_value = True
     adapter.send_joystick_command.return_value = True
-    queue = AdapterCommandQueue(adapter)
+    bind_mock_adapter_rpc(adapter)
+    router = AdapterMotionRouter(adapter)
     session = RegistrationSession(
         robot_id="test_robot",
         sender=sender,
@@ -63,7 +65,7 @@ def _make_session(
         manual_registration_quality=0.7,
         world_frame_refiner=world_frame_refiner,
         adapter=adapter,
-        command_queue=queue,
+        motion_router=router,
         baseline_motion_available=True,
         baseline_motion_recipe=DEFAULT_BASELINE_MOTION_RECIPE,
     )

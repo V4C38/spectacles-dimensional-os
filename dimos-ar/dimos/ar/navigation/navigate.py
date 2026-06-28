@@ -23,7 +23,7 @@ from dimos.utils.logging_config import setup_logger
 if TYPE_CHECKING:
     from dimos_lcm.std_msgs import Bool
 
-    from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
+    from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
     from dimos.ar.navigation.world_transform import OdomGoal
     from dimos.ar.bridge.sender import BridgeSender
     from dimos.msgs.nav_msgs.Path import Path
@@ -44,12 +44,12 @@ class NavigateGoalHandler:
         robot_id: str,
         sender: BridgeSender,
         world_frame: WorldFrameState,
-        command_queue: AdapterCommandQueue,
+        motion_router: AdapterMotionRouter,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
         self._world_frame = world_frame
-        self._command_queue = command_queue
+        self._motion_router = motion_router
 
         # Normalized DimOS nav-stack state (idle / navigating / recovery).
         self._dimos_nav_state: str = "idle"
@@ -155,7 +155,7 @@ class NavigateGoalHandler:
             frame_id="odom",
         )
         self.broadcast_nav_status(ts=msg.ts)
-        self._command_queue.submit_nav_goal(
+        self._motion_router.send_nav_goal(
             goal,
             on_complete=lambda ok, err: self._on_goal_dispatched(
                 ok,
@@ -174,7 +174,7 @@ class NavigateGoalHandler:
         self._reset_goal_tracking()
         self._broadcast_empty_path(ts=ts)
         self.broadcast_nav_status(ts=ts)
-        self._command_queue.submit_cancel_goal(on_complete=self._on_control_dispatched)
+        self._motion_router.cancel_nav_goal(on_complete=self._on_control_dispatched)
 
     def on_emergency_stop(self, ts: float | None = None) -> None:
         logger.info("XR emergency_stop handled nav_reset=true")
@@ -185,7 +185,7 @@ class NavigateGoalHandler:
         self._reset_goal_tracking()
         self._broadcast_empty_path(ts=ts)
         self.broadcast_nav_status(ts=ts)
-        self._command_queue.submit_emergency_stop(on_complete=self._on_control_dispatched)
+        self._motion_router.emergency_stop(on_complete=self._on_control_dispatched)
 
     # ------------------------------------------------------------------
     # Stream handlers (called from ARBridge.handle_ar_*)
@@ -272,7 +272,7 @@ class NavigateGoalHandler:
         self._dimos_nav_state = "recovery"
         self._broadcast_empty_path()
         self._broadcast_stall_nav_status(stall_reason=stall_reason)
-        self._command_queue.submit_cancel_goal(on_complete=self._on_control_dispatched)
+        self._motion_router.cancel_nav_goal(on_complete=self._on_control_dispatched)
 
     # ------------------------------------------------------------------
     # Disconnect reset

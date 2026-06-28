@@ -16,7 +16,7 @@ from dimos.ar.utils.console import log_checkpoint
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
-    from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
+    from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
     from dimos.ar.world_frame.transforms import OdomSample
 
 logger = setup_logger()
@@ -27,6 +27,7 @@ ESTIMATING_SPREAD_M: float = 0.10
 SAMPLE_MIN_OBS: int = 3
 SAMPLE_SPREAD_M: float = 0.05
 WAYPOINT_TOTAL: int = 3
+MIN_LEG_DISPLACEMENT_FRACTION: float = 0.5
 
 
 class _BaselineState(StrEnum):
@@ -63,12 +64,12 @@ class BaselineCollector:
     def __init__(
         self,
         *,
-        command_queue: AdapterCommandQueue,
+        motion_router: AdapterMotionRouter,
         motion_available: bool,
         motion_recipe: BaselineMotionRecipe = DEFAULT_BASELINE_MOTION_RECIPE,
         on_status: Callable[[BaselineStatus], None] | None = None,
     ) -> None:
-        self._command_queue = command_queue
+        self._motion_router = motion_router
         self._motion_available = motion_available
         self._motion_recipe = motion_recipe
         self._on_status = on_status
@@ -81,6 +82,8 @@ class BaselineCollector:
         self._move_sample_positions: list[tuple[float, float, float]] = []
         self._sample_settle_mono: float | None = None
         self._estimating_positions: list[tuple[float, float, float]] = []
+        self._move_leg_start_odom: OdomSample | None = None
+        self._move_leg_latest_odom: OdomSample | None = None
 
     @property
     def state(self) -> _BaselineState:
@@ -156,9 +159,8 @@ class BaselineCollector:
             self._state = _BaselineState.IDLE
 
     def shutdown(self) -> None:
-        """Stop the robot and clear pending velocity commands (bridge shutdown)."""
+        """Stop the robot (bridge shutdown)."""
         with self._lock:
-            self._command_queue.clear_pending_baseline()
             self._stop_motion()
             self._reset_internals()
             self._state = _BaselineState.IDLE
@@ -181,6 +183,8 @@ class BaselineCollector:
         self._move_sample_positions = []
         self._sample_settle_mono = None
         self._estimating_positions = []
+        self._move_leg_start_odom = None
+        self._move_leg_latest_odom = None
 
     def _fail(self, reason: str) -> None:
         self._stop_motion()
@@ -250,7 +254,12 @@ class BaselineCollector:
         *,
         on_complete: Callable[[bool, BaseException | None], None] | None = None,
     ) -> None:
-        self._command_queue.submit_baseline_velocity(velocity, on_complete=on_complete)
+        self._motion_router.send_joystick_command(
+            0.0,
+            velocity,
+            0.0,
+            on_complete=on_complete,
+        )
 
     def _on_velocity_start_ack(self, ok: bool, err: BaseException | None) -> None:
         with self._lock:
@@ -262,7 +271,7 @@ class BaselineCollector:
 
     def _stop_motion(self) -> None:
         if self._move_velocity_active:
-            self._command_queue.submit_baseline_velocity(0.0)
+            self._motion_router.send_joystick_command(0.0, 0.0, 0.0)
             self._move_velocity_active = False
 
     def _start_move(self) -> None:
@@ -273,6 +282,8 @@ class BaselineCollector:
         self._sample_settle_mono = None
         self._move_start_mono = None
         self._move_velocity_active = True
+        self._move_leg_start_odom = None
+        self._move_leg_latest_odom = None
         self._state = _BaselineState.MOVE
         speed = self._motion_recipe.strafe_speed * self._motion_recipe.leg_directions[leg]
         self._emit(
@@ -317,6 +328,8 @@ class BaselineCollector:
         self._sample_settle_mono = None
         self._move_start_mono = None
         self._move_velocity_active = True
+        self._move_leg_start_odom = None
+        self._move_leg_latest_odom = None
         speed = self._motion_recipe.strafe_speed * self._motion_recipe.leg_directions[leg]
         self._emit(
             RegistrationPhase.MOVING,
@@ -328,11 +341,25 @@ class BaselineCollector:
         self._submit_lateral_velocity(speed, on_complete=self._on_velocity_start_ack)
         self._move_start_mono = time.monotonic()
 
+    def _leg_displacement_ok(self, leg: int) -> bool:
+        start = self._move_leg_start_odom
+        end = self._move_leg_latest_odom
+        if start is None or end is None:
+            return True
+        dx = end.position[0] - start.position[0]
+        dz = end.position[2] - start.position[2]
+        displacement = math.hypot(dx, dz)
+        target_m = (
+            self._motion_recipe.move_leg_target_m
+            * self._motion_recipe.leg_distance_multipliers[leg]
+        )
+        return displacement >= target_m * MIN_LEG_DISPLACEMENT_FRACTION
+
     def _tick_locked(
         self,
         obs_count: int,
         latest_obs_pos_world: tuple[float, float, float] | None,
-        _latest_odom: OdomSample | None,
+        latest_odom: OdomSample | None,
     ) -> None:
         state = self._state
         if state in (_BaselineState.IDLE, _BaselineState.DONE, _BaselineState.FAILED):
@@ -366,11 +393,18 @@ class BaselineCollector:
         if state == _BaselineState.MOVE:
             leg = self._move_leg_index
             if self._move_phase == _MovePhase.LEG:
+                if latest_odom is not None:
+                    if self._move_leg_start_odom is None:
+                        self._move_leg_start_odom = latest_odom
+                    self._move_leg_latest_odom = latest_odom
                 if self._move_start_mono is None:
                     return
                 elapsed = time.monotonic() - self._move_start_mono
                 leg_duration = self._motion_recipe.leg_duration_s[leg]
                 if elapsed >= leg_duration:
+                    if not self._leg_displacement_ok(leg):
+                        self._fail("Robot did not move during baseline leg")
+                        return
                     self._start_sample()
                 return
 

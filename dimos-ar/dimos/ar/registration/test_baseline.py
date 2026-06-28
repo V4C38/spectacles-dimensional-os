@@ -7,7 +7,8 @@ import time
 from unittest.mock import MagicMock, patch
 
 from dimos.ar.adapters.base import BaselineMotionRecipe, DEFAULT_BASELINE_MOTION_RECIPE
-from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
+from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
+from dimos.ar.bridge.test_rpc_bindings import bind_mock_adapter_rpc
 from dimos.ar.registration.baseline import (
     SAMPLE_MIN_OBS,
     SAMPLE_SETTLE_S,
@@ -28,6 +29,7 @@ def _make_adapter(*, available: bool = True) -> MagicMock:
         baseline_motion_available=MagicMock(return_value=available),
         send_joystick_command=MagicMock(return_value=True),
     )
+    bind_mock_adapter_rpc(adapter)
     return adapter
 
 
@@ -35,15 +37,15 @@ def _make_driver(
     *,
     available: bool = True,
     motion_recipe: BaselineMotionRecipe = DEFAULT_BASELINE_MOTION_RECIPE,
-) -> tuple[BaselineCollector, MagicMock, AdapterCommandQueue]:
+) -> tuple[BaselineCollector, MagicMock, AdapterMotionRouter]:
     adapter = _make_adapter(available=available)
-    queue = AdapterCommandQueue(adapter)
+    router = AdapterMotionRouter(adapter)
     driver = BaselineCollector(
-        command_queue=queue,
+        motion_router=router,
         motion_available=available,
         motion_recipe=motion_recipe,
     )
-    return driver, adapter, queue
+    return driver, adapter, router
 
 
 def _wait_for_leg_timer(driver: BaselineCollector) -> float:
@@ -183,9 +185,9 @@ def test_leg_phase_emits_steady_capture_not_hold() -> None:
     """LEG motion must request steady capture so Lens keeps tracking during strafe."""
     statuses: list[BaselineStatus] = []
     adapter = _make_adapter()
-    gate = AdapterCommandQueue(adapter)
+    gate = AdapterMotionRouter(adapter)
     driver = BaselineCollector(
-        command_queue=gate,
+        motion_router=gate,
         motion_available=True,
         on_status=statuses.append,
     )
@@ -209,15 +211,34 @@ def test_odom_present_does_not_shorten_leg() -> None:
     driver.authorize_motion()
 
     t0 = _wait_for_leg_timer(driver)
-    odom_jump = OdomSample(position=(10.0, 10.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
+    odom_still = OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
     with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + 0.1
-        driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=odom_jump)
+        driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=odom_still)
     assert driver._move_phase == _MovePhase.LEG
 
     with patch("dimos.ar.registration.baseline.time") as mt:
         mt.monotonic.return_value = t0 + _LEG_DURATIONS[0] + 0.1
-        driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=odom_jump)
+        driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=odom_still)
+    assert driver.state == _BaselineState.FAILED
+
+
+def test_leg_passes_displacement_gate_when_odom_moves() -> None:
+    from dimos.ar.world_frame.transforms import OdomSample
+
+    driver, _adapter, _gate = _make_driver()
+    driver.start()
+    _advance_to_awaiting_confirm(driver)
+    driver.authorize_motion()
+
+    t0 = _wait_for_leg_timer(driver)
+    odom_start = OdomSample(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
+    odom_end = OdomSample(position=(0.15, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0))
+    with patch("dimos.ar.registration.baseline.time") as mt:
+        mt.monotonic.return_value = t0 + 0.5
+        driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=odom_start)
+        mt.monotonic.return_value = t0 + _LEG_DURATIONS[0] + 0.1
+        driver.tick(obs_count=0, latest_obs_pos_world=None, latest_odom=odom_end)
     assert driver._move_phase == _MovePhase.SAMPLE
 
 
@@ -356,9 +377,9 @@ def test_reset_to_idle_goes_to_idle_silently() -> None:
     """reset_to_idle must transition to IDLE without firing on_status."""
     status_changes: list[str] = []
     adapter = _make_adapter()
-    gate = AdapterCommandQueue(adapter)
+    gate = AdapterMotionRouter(adapter)
     driver = BaselineCollector(
-        command_queue=gate,
+        motion_router=gate,
         motion_available=True,
         on_status=lambda s: status_changes.append(s.phase.value),
     )
@@ -456,9 +477,9 @@ def test_injected_motion_recipe_drives_velocity() -> None:
         leg_distance_multipliers=(1.0, 2.0, 1.0),
     )
     adapter = _make_adapter()
-    queue = AdapterCommandQueue(adapter)
+    router = AdapterMotionRouter(adapter)
     driver = BaselineCollector(
-        command_queue=queue,
+        motion_router=router,
         motion_available=True,
         motion_recipe=recipe,
     )

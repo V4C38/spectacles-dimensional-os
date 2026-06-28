@@ -17,6 +17,7 @@ from dimos.ar.network.protocol import (
     CancelNavGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
+    JoystickCommandMessage,
     NavGoalMessage,
     PingMessage,
     RegistrationCommandMessage,
@@ -172,6 +173,24 @@ def test_emergency_stop_decode() -> None:
     raw = json.dumps({"type": "emergency_stop", "ts": 3.0, "robot_id": "unitree_go2"})
     msg = decode_inbound(raw)
     assert isinstance(msg, EmergencyStopMessage)
+
+
+def test_joystick_command_decode() -> None:
+    raw = json.dumps(
+        {
+            "type": "joystick_command",
+            "ts": 3.0,
+            "robot_id": "unitree_go2",
+            "vx": 0.0,
+            "vy": 0.2,
+            "wz": -0.1,
+        }
+    )
+    msg = decode_inbound(raw)
+    assert isinstance(msg, JoystickCommandMessage)
+    assert msg.vx == 0.0
+    assert msg.vy == pytest.approx(0.2)
+    assert msg.wz == pytest.approx(-0.1)
 
 
 def test_unknown_type_rejected() -> None:

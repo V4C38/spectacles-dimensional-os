@@ -997,6 +997,22 @@ export function buildEmergencyStop(robotId: string): string {
   });
 }
 
+export function buildJoystickCommand(
+  robotId: string,
+  vx: number,
+  vy: number,
+  wz: number,
+): string {
+  return JSON.stringify({
+    type: "joystick_command",
+    ts: getTime(),
+    robot_id: robotId,
+    vx,
+    vy,
+    wz,
+  });
+}
+
 // Binary lidar frame (message_type 0x01 = lidar_f16).
 // Layout: [1B type][4B float32 ts LE][N*6B float16 xyz world-metres LE]
 const LIDAR_F16_TYPE = 0x01;

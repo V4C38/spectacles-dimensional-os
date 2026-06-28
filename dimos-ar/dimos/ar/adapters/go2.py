@@ -20,6 +20,7 @@ from dimos.ar.adapters.base import (
     RobotHandshake,
     TagTrackingProfile,
 )
+from dimos.ar.adapters.sensor_conflation import LatestWinsGate
 from dimos.ar.tag_tracking.solve import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -35,6 +36,10 @@ from dimos.robot.unitree.go2.connection_spec import GO2ConnectionSpec
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
+
+# Jun-13 working rate; 50 Hz regressed in db32731; future >12 Hz requires measured smoothness data.
+JOYSTICK_REPUBLISH_HZ = 12
+_MOTION_RPC_LOG_INTERVAL_S = 2.0
 
 GO2_CAPABILITIES: dict[str, CapabilityState] = {
     "lidar": CapabilityState(True),
@@ -139,23 +144,47 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
     _joystick_lock: threading.Lock
     _joystick_thread: threading.Thread | None
     _joystick_target: tuple[float, float, float]
+    _lidar_gate: LatestWinsGate
+    _costmap_gate: LatestWinsGate
+    _path_gate: LatestWinsGate
+    _joystick_publish_count: int
+    _joystick_publish_window_start: float
+    _last_motion_rpc_log_mono: float
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self._joystick_lock = threading.Lock()
         self._joystick_thread = None
         self._joystick_target = (0.0, 0.0, 0.0)
+        self._lidar_gate = LatestWinsGate()
+        self._costmap_gate = LatestWinsGate()
+        self._path_gate = LatestWinsGate()
+        self._joystick_publish_count = 0
+        self._joystick_publish_window_start = time.monotonic()
+        self._last_motion_rpc_log_mono = 0.0
 
     async def handle_ar_lidar_in(self, msg: PointCloud2) -> None:
+        seq = self._lidar_gate.enter()
+        await self._lidar_gate.yield_for_coalesce()
+        if not self._lidar_gate.still_latest(seq):
+            return
         self.ar_lidar.publish(msg)
 
     async def handle_ar_odom_in(self, msg: PoseStamped) -> None:
         self.ar_odom.publish(msg)
 
     async def handle_ar_global_costmap_in(self, msg: OccupancyGrid) -> None:
+        seq = self._costmap_gate.enter()
+        await self._costmap_gate.yield_for_coalesce()
+        if not self._costmap_gate.still_latest(seq):
+            return
         self.ar_global_costmap.publish(msg)
 
     async def handle_ar_path_in(self, msg: Path) -> None:
+        seq = self._path_gate.enter()
+        await self._path_gate.yield_for_coalesce()
+        if not self._path_gate.still_latest(seq):
+            return
         self.ar_path.publish(msg)
 
     async def handle_ar_goal_reached_in(self, msg: Bool) -> None:
@@ -242,6 +271,7 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
 
     @rpc
     def send_nav_goal(self, goal: PoseStamped) -> bool:
+        self._log_motion_rpc("send_nav_goal")
         if self.goal_request.transport is not None:
             self.goal_request.publish(goal)
             return True
@@ -258,6 +288,7 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
 
     @rpc
     def cancel_nav_goal(self) -> bool:
+        self._log_motion_rpc("cancel_nav_goal")
         cancelled = False
         if self.stop_movement.transport is not None:
             self.stop_movement.publish(Bool(data=True))
@@ -271,6 +302,7 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
 
     @rpc
     def emergency_stop(self) -> bool:
+        self._log_motion_rpc("emergency_stop")
         if self.stop_movement.transport is not None:
             self.stop_movement.publish(Bool(data=True))
         if self._go2_connection is not None:
@@ -314,12 +346,13 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         UnitreeWebRTCConnection.move() maps Twist.linear.y directly to the `lx`
         stick field with no m/s→stick scaling.
 
-        A ~50 Hz daemon thread continuously republishes the requested Twist so
+        A ~12 Hz daemon thread continuously republishes the requested Twist so
         the robot keeps moving (Go2 WebRTC has no deadman — if the stream goes
         silent the robot does NOT auto-stop; the republisher bridges ticks).
         Calling with (0, 0, 0) publishes a zero Twist immediately, which stops
         the robot, and lets the republisher thread exit.
         """
+        self._log_motion_rpc("send_joystick_command", vx=vx, vy=vy, wz=wz)
         target = (float(vx), float(vy), float(wz))
         with self._joystick_lock:
             self._joystick_target = target
@@ -340,19 +373,37 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         return True
 
     def _joystick_loop(self) -> None:
-        """Republish the current joystick target at ~50 Hz until zeroed."""
+        """Republish the current joystick target at JOYSTICK_REPUBLISH_HZ until zeroed."""
+        interval = 1.0 / JOYSTICK_REPUBLISH_HZ
         while True:
             with self._joystick_lock:
                 vx, vy, wz = self._joystick_target
             if (vx, vy, wz) == (0.0, 0.0, 0.0):
                 break
             self._publish_joystick_twist(vx, vy, wz)
-            time.sleep(1.0 / 50.0)
+            time.sleep(interval)
+
+    def _log_motion_rpc(self, method: str, **fields: object) -> None:
+        now = time.monotonic()
+        if now - self._last_motion_rpc_log_mono < _MOTION_RPC_LOG_INTERVAL_S:
+            return
+        self._last_motion_rpc_log_mono = now
+        logger.info("adapter motion RPC received", method=method, **fields)
 
     def _publish_joystick_twist(self, vx: float, vy: float, wz: float) -> None:
         if self.cmd_vel.transport is None:
             logger.warning("Go2 send_joystick_command: cmd_vel transport not available")
             return
+        now = time.monotonic()
+        self._joystick_publish_count += 1
+        window = now - self._joystick_publish_window_start
+        if window >= 1.0:
+            logger.info(
+                "joystick republisher Hz",
+                hz=round(self._joystick_publish_count / window, 1),
+            )
+            self._joystick_publish_count = 0
+            self._joystick_publish_window_start = now
         twist = Twist(
             linear=Vector3(vx, vy, 0.0),
             angular=Vector3(0.0, 0.0, wz),

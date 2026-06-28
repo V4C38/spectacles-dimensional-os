@@ -766,6 +766,22 @@ provides. If the capability is disabled in `hello`, clients should not send it.
 }
 ```
 
+### `joystick_command`
+
+Drive the robot via stick deflection (no Lens UI in v8; wire compat for future
+manual control). Values are raw deflection in **[-1, 1]**, not m/s.
+
+```json
+{
+  "type": "joystick_command",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "vx": 0.0,
+  "vy": 0.2,
+  "wz": 0.0
+}
+```
+
 ## Removed Legacy Flow
 
 The following v5 message types are removed in v6:

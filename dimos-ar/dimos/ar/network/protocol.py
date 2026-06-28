@@ -69,6 +69,15 @@ class EmergencyStopMessage:
 
 
 @dataclass(frozen=True)
+class JoystickCommandMessage:
+    ts: float
+    robot_id: str
+    vx: float
+    vy: float
+    wz: float
+
+
+@dataclass(frozen=True)
 class CameraInfoMessage:
     ts: float
     robot_id: str
@@ -110,6 +119,7 @@ InboundMessage = (
     NavGoalMessage
     | CancelNavGoalMessage
     | EmergencyStopMessage
+    | JoystickCommandMessage
     | RegistrationCommandMessage
     | CameraInfoMessage
     | RegistrationPoseMessage
@@ -173,6 +183,17 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         return CancelNavGoalMessage(ts=ts, robot_id=robot_id)
     if msg_type == "emergency_stop":
         return EmergencyStopMessage(ts=ts, robot_id=robot_id)
+    if msg_type == "joystick_command":
+        for axis in ("vx", "vy", "wz"):
+            if axis not in data or not isinstance(data[axis], (int, float)):
+                raise ValueError(f"Missing or invalid field: {axis}")
+        return JoystickCommandMessage(
+            ts=ts,
+            robot_id=robot_id,
+            vx=float(data["vx"]),
+            vy=float(data["vy"]),
+            wz=float(data["wz"]),
+        )
     if msg_type == "registration_command":
         command = _require_type(data, "command", str)
         if command not in ("start", "authorize_motion", "stop", "commit"):
@@ -547,6 +568,7 @@ __all__ = [
     "EmergencyStopMessage",
     "GetStatusMessage",
     "GoalIntent",
+    "JoystickCommandMessage",
     "NavGoalMessage",
     "InboundMessage",
     "NavPhase",

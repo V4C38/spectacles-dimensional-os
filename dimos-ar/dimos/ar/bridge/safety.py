@@ -10,7 +10,7 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger()
 
 if TYPE_CHECKING:
-    from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
+    from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
     from dimos.ar.navigation.navigate import NavigateGoalHandler
     from dimos.ar.registration.session import RegistrationSession
 
@@ -21,11 +21,11 @@ class BridgeSafetyCoordinator:
         *,
         nav: NavigateGoalHandler,
         registration: RegistrationSession,
-        command_queue: AdapterCommandQueue,
+        motion_router: AdapterMotionRouter,
     ) -> None:
         self._nav = nav
         self._registration = registration
-        self._command_queue = command_queue
+        self._motion_router = motion_router
 
     def on_emergency_stop(self, msg: EmergencyStopMessage) -> None:
         logger.info("XR emergency_stop received")
@@ -36,4 +36,6 @@ class BridgeSafetyCoordinator:
         logger.info("XR client disconnect handled nav_reset=true registration_cleared=true")
         self._registration.clear_on_disconnect()
         self._nav.reset_on_disconnect()
-        self._command_queue.submit_cancel_goal()
+        self._motion_router.emergency_stop()
+        self._motion_router.cancel_nav_goal()
+        self._motion_router.reset_intent()

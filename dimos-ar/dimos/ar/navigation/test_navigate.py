@@ -8,7 +8,8 @@ from dimos_lcm.std_msgs import Bool
 import numpy as np
 import pytest
 
-from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
+from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
+from dimos.ar.bridge.test_rpc_bindings import bind_mock_adapter_rpc
 from dimos.ar.navigation.navigate import (
     NAV_GOAL_PATH_TIMEOUT_S,
     NAV_WATCHDOG_POLL_INTERVAL_S,
@@ -30,7 +31,11 @@ def _make_sender() -> tuple[BridgeSender, MagicMock]:
     return sender, mock_server
 
 
-def _make_nav(*, committed: bool = True) -> tuple[NavigateGoalHandler, MagicMock, MagicMock]:
+def _make_nav(
+    *,
+    committed: bool = True,
+    async_dispatch: bool = False,
+) -> tuple[NavigateGoalHandler, MagicMock, MagicMock]:
     world_frame = WorldFrameState()
     if committed:
         world_frame.commit(np.eye(4, dtype=np.float64), method="manual_pose", approximate=False)
@@ -38,13 +43,14 @@ def _make_nav(*, committed: bool = True) -> tuple[NavigateGoalHandler, MagicMock
     adapter.send_nav_goal.return_value = True
     adapter.cancel_nav_goal.return_value = True
     adapter.emergency_stop.return_value = None
-    queue = AdapterCommandQueue(adapter)
+    bind_mock_adapter_rpc(adapter, async_dispatch=async_dispatch)
+    router = AdapterMotionRouter(adapter)
     sender, mock_server = _make_sender()
     nav = NavigateGoalHandler(
         robot_id="unitree_go2",
         sender=sender,
         world_frame=world_frame,
-        command_queue=queue,
+        motion_router=router,
     )
     return nav, mock_server, adapter
 
@@ -250,7 +256,8 @@ def test_disconnect_prevents_watchdog_stall_emission() -> None:
         nav.stop()
 
 
-def test_on_navigate_goal_does_not_set_dispatch_mono_before_adapter_ack() -> None:
+def test_on_navigate_goal_sets_dispatch_mono_on_fire_and_forget_dispatch() -> None:
+    """Router invokes on_complete immediately; dispatch_mono tracks send time, not LCM ack."""
     nav, _mock_server, adapter = _make_nav()
 
     def slow_goal(_goal: PoseStamped) -> bool:
@@ -267,15 +274,15 @@ def test_on_navigate_goal_does_not_set_dispatch_mono_before_adapter_ack() -> Non
     )
 
     nav.on_navigate_goal(msg)
-    assert nav._nav_goal_dispatch_mono is None
+    assert nav._nav_goal_dispatch_mono is not None
 
     time.sleep(0.25)
-    assert nav._nav_goal_dispatch_mono is not None
+    adapter.send_nav_goal.assert_called_once()
 
 
 def test_on_navigate_goal_returns_before_adapter_publish() -> None:
     """Adapter publish runs off-thread so the WebSocket handler is not blocked."""
-    nav, _mock_server, adapter = _make_nav()
+    nav, _mock_server, adapter = _make_nav(async_dispatch=True)
 
     def slow_goal(_goal: PoseStamped) -> bool:
         time.sleep(0.2)
@@ -372,7 +379,8 @@ def test_slow_send_nav_goal_waits_for_adapter_ack() -> None:
     assert nav._goal_failed is False
 
 
-def test_concurrent_nav_goals_coalesce_to_latest() -> None:
+def test_concurrent_nav_goals_dispatch_both() -> None:
+    """Fire-and-forget router dispatches each goal; Lens throttling owns coalescing."""
     nav, _mock_server, adapter = _make_nav()
     sent_positions: list[list[float]] = []
 
@@ -400,8 +408,8 @@ def test_concurrent_nav_goals_coalesce_to_latest() -> None:
     nav.on_navigate_goal(second_goal)
     time.sleep(0.2)
 
-    assert len(sent_positions) == 1
-    assert sent_positions[0][0] == 2.0
+    assert len(sent_positions) == 2
+    assert sent_positions[-1][0] == 2.0
     assert nav._goal_failed is False
 
 

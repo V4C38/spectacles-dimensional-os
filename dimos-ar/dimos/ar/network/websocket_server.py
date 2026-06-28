@@ -20,6 +20,7 @@ from dimos.ar.network.protocol import (
     CancelNavGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
+    JoystickCommandMessage,
     NavGoalMessage,
     InboundMessage,
     PingMessage,
@@ -49,6 +50,7 @@ RegistrationPoseHandler = Callable[[RegistrationPoseMessage, "ws_server.ServerCo
 NavGoalHandler = Callable[[NavGoalMessage], None]
 CancelNavGoalHandler = Callable[[CancelNavGoalMessage], None]
 EmergencyStopHandler = Callable[[EmergencyStopMessage], None]
+JoystickCommandHandler = Callable[[JoystickCommandMessage], None]
 GetStatusHandler = Callable[[GetStatusMessage, "ws_server.ServerConnection"], None]
 SetLidarModeHandler = Callable[[SetLidarModeMessage, "ws_server.ServerConnection"], None]
 UnsupportedHandler = Callable[[InboundMessage], None]
@@ -95,6 +97,7 @@ class ARWebSocketServer:
         on_registration_pose: RegistrationPoseHandler | None = None,
         on_nav_goal: NavGoalHandler | None = None,
         on_cancel_nav_goal: CancelNavGoalHandler | None = None,
+        on_joystick_command: JoystickCommandHandler | None = None,
         on_emergency_stop: EmergencyStopHandler | None = None,
         on_get_status: GetStatusHandler | None = None,
         on_set_lidar_mode: SetLidarModeHandler | None = None,
@@ -116,6 +119,7 @@ class ARWebSocketServer:
             on_registration_pose=on_registration_pose,
             on_nav_goal=on_nav_goal,
             on_cancel_nav_goal=on_cancel_nav_goal,
+            on_joystick_command=on_joystick_command,
             on_emergency_stop=on_emergency_stop,
             on_get_status=on_get_status,
             on_set_lidar_mode=on_set_lidar_mode,
@@ -138,6 +142,7 @@ class ARWebSocketServer:
         on_registration_pose: RegistrationPoseHandler | None,
         on_nav_goal: NavGoalHandler | None,
         on_cancel_nav_goal: CancelNavGoalHandler | None,
+        on_joystick_command: JoystickCommandHandler | None,
         on_emergency_stop: EmergencyStopHandler | None,
         on_get_status: GetStatusHandler | None,
         on_set_lidar_mode: SetLidarModeHandler | None,
@@ -172,6 +177,7 @@ class ARWebSocketServer:
 
         handlers[NavGoalMessage] = _simple_handler(on_nav_goal, "nav_goal")
         handlers[CancelNavGoalMessage] = _simple_handler(on_cancel_nav_goal, "cancel_nav_goal")
+        handlers[JoystickCommandMessage] = _simple_handler(on_joystick_command, "joystick_command")
         handlers[EmergencyStopMessage] = _simple_handler(on_emergency_stop, "emergency_stop")
 
         return handlers

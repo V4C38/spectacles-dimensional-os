@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from websockets.asyncio.server import ServerConnection
 
     from dimos.ar.adapters.base import ARRobotAdapterSpec, TagTrackingProfile
-    from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
+    from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
     from dimos.ar.bridge.odom_buffer import OdomBuffer
     from dimos.ar.bridge.sender import BridgeSender
     from dimos.ar.bridge.status_service import StatusService
@@ -79,7 +79,7 @@ class RegistrationSession(
         manual_registration_quality: float,
         world_frame_refiner: WorldFrameRefiner,
         adapter: ARRobotAdapterSpec | None = None,
-        command_queue: AdapterCommandQueue | None = None,
+        motion_router: AdapterMotionRouter | None = None,
         runtime_profile: TagTrackingProfile | None = None,
         baseline_motion_available: bool = False,
         baseline_motion_recipe: BaselineMotionRecipe = DEFAULT_BASELINE_MOTION_RECIPE,
@@ -114,12 +114,12 @@ class RegistrationSession(
 
         self._baseline: BaselineCollector | None = (
             BaselineCollector(
-                command_queue=command_queue,
+                motion_router=motion_router,
                 motion_available=baseline_motion_available,
                 motion_recipe=baseline_motion_recipe,
                 on_status=self._on_baseline_status,
             )
-            if command_queue is not None
+            if motion_router is not None
             else None
         )
         self._baseline_was_sampling = False

@@ -21,7 +21,7 @@ from dimos.ar.adapters.base import (
     RobotHandshake,
     resolve_baseline_motion_recipe,
 )
-from dimos.ar.bridge.adapter_command_queue import AdapterCommandQueue
+from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
 from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.navigation.navigate import NavigateGoalHandler
 from dimos.ar.navigation.preview import PreviewGoalHandler
@@ -30,6 +30,7 @@ from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.bridge.status_service import StatusService
 from dimos.ar.bridge.telemetry import TelemetryPublisher
 from dimos.ar.network.protocol import (
+    JoystickCommandMessage,
     NavGoalMessage,
     SetLidarModeMessage,
     encode_runtime_snapshot,
@@ -114,7 +115,7 @@ class ARBridge(Module):  # type: ignore[misc]
     _status: StatusService
     _registration: RegistrationSession
     _nav: NavigateGoalHandler
-    _command_queue: AdapterCommandQueue
+    _motion_router: AdapterMotionRouter
     _preview: PreviewGoalHandler
     _telemetry: TelemetryPublisher
     _ws_server: ARWebSocketServer
@@ -208,7 +209,7 @@ class ARBridge(Module):  # type: ignore[misc]
         )
         assert self._loop is not None, "build() called before Module loop is assigned"
         baseline_motion_recipe = resolve_baseline_motion_recipe(self._adapter)
-        command_queue = AdapterCommandQueue(self._adapter)
+        motion_router = AdapterMotionRouter(self._adapter)
         registration = RegistrationSession(
             robot_id=robot_id,
             sender=sender,
@@ -221,7 +222,7 @@ class ARBridge(Module):  # type: ignore[misc]
             manual_registration_quality=self.config.manual_registration_quality,
             world_frame_refiner=world_frame_refiner,
             adapter=self._adapter,
-            command_queue=command_queue,
+            motion_router=motion_router,
             runtime_profile=runtime_profile,
             baseline_motion_available=baseline_motion_available,
             baseline_motion_recipe=baseline_motion_recipe,
@@ -231,7 +232,7 @@ class ARBridge(Module):  # type: ignore[misc]
             robot_id=robot_id,
             sender=sender,
             world_frame=self._world_frame,
-            command_queue=command_queue,
+            motion_router=motion_router,
         )
 
         preview = PreviewGoalHandler(
@@ -245,7 +246,7 @@ class ARBridge(Module):  # type: ignore[misc]
         safety = BridgeSafetyCoordinator(
             nav=nav,
             registration=registration,
-            command_queue=command_queue,
+            motion_router=motion_router,
         )
 
         ws_server = ARWebSocketServer(
@@ -259,6 +260,7 @@ class ARBridge(Module):  # type: ignore[misc]
             on_registration_pose=registration.on_registration_pose,
             on_nav_goal=self._route_nav_goal_message,
             on_cancel_nav_goal=lambda msg: nav.on_cancel_nav_goal(msg.ts),
+            on_joystick_command=self._on_joystick_command,
             on_emergency_stop=safety.on_emergency_stop,
             on_get_status=self._on_get_status,
             on_set_lidar_mode=self._on_set_lidar_mode,
@@ -272,7 +274,7 @@ class ARBridge(Module):  # type: ignore[misc]
         self._status = status
         self._registration = registration
         self._nav = nav
-        self._command_queue = command_queue
+        self._motion_router = motion_router
         self._safety = safety
         self._preview = preview
         self._telemetry = telemetry
@@ -302,9 +304,9 @@ class ARBridge(Module):  # type: ignore[misc]
         registration = getattr(self, "_registration", None)
         if registration is not None:
             registration.stop()
-        command_queue = getattr(self, "_command_queue", None)
-        if command_queue is not None:
-            command_queue.shutdown()
+        motion_router = getattr(self, "_motion_router", None)
+        if motion_router is not None:
+            motion_router.emergency_stop()
         status = getattr(self, "_status", None)
         if status is not None:
             status.stop()
@@ -383,6 +385,9 @@ class ARBridge(Module):  # type: ignore[misc]
             self._nav.on_navigate_goal(msg)
         else:
             self._preview.on_preview_goal(msg)
+
+    def _on_joystick_command(self, msg: JoystickCommandMessage) -> None:
+        self._motion_router.send_joystick_command(msg.vx, msg.vy, msg.wz)
 
     def _on_client_disconnect(self, _websocket: ServerConnection) -> None:
         remaining = self._ws_server.connection_count

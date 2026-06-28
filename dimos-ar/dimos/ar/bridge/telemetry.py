@@ -61,7 +61,7 @@ class TelemetryPublisher:
         self._last_dropped_pose_log_mono: float = 0.0
         self._logged_lidar_stream_active: bool = False
         self._last_lidar_payload_log_mono: float = 0.0
-        self._lidar_mode: str = "full"
+        self._lidar_mode: str = "off"
         self._logged_lidar_config_key: str | None = None
         self._obstacle_distance_config = LidarObstacleDistanceConfig()
 
@@ -147,12 +147,7 @@ class TelemetryPublisher:
         )
 
     def reset_lidar_mode(self) -> None:
-        self.set_lidar_mode(
-            mode="full",
-            obstacle_min_distance_m=0.10,
-            obstacle_opaque_distance_m=0.40,
-            obstacle_max_distance_m=0.60,
-        )
+        self.set_lidar_mode(mode="off")
 
     def publish_pose(self, msg: PoseStamped) -> None:
         if not self._world_frame.is_committed:

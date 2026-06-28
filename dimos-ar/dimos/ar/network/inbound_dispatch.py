@@ -22,6 +22,7 @@ from dimos.ar.network.protocol import (
     CancelNavGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
+    JoystickCommandMessage,
     NavGoalMessage,
     InboundMessage,
     PingMessage,
@@ -59,6 +60,7 @@ MESSAGE_LANES: dict[type[InboundMessage], DispatchLane] = {
     NavGoalMessage: DispatchLane.BACKGROUND,
     CancelNavGoalMessage: DispatchLane.BACKGROUND,
     EmergencyStopMessage: DispatchLane.BACKGROUND,
+    JoystickCommandMessage: DispatchLane.BACKGROUND,
     PingMessage: DispatchLane.ASYNC,
 }
 

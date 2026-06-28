@@ -392,7 +392,7 @@ export function createDefaultDimosAppState(): DimosAppState {
   return validateSessionFields({
     phase: "registration",
     debugMode: false,
-    lidarMode: "obstacles",
+    lidarMode: "off",
     operatingMode: "manual",
     mainMenuExpandedSettingsMode: null,
     navigationGoalMode: "single",
