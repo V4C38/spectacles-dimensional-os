@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from enum import StrEnum
 import math
 import os
 import time
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from dimos.ar.network.data_plane import DROPPED_POSE_LOG_INTERVAL_S
 from dimos.ar.network.protocol import CameraInfoMessage, encode_camera_frame_ack
 from dimos.ar.registration.types import CaptureHint, RegistrationMode, RegistrationPhase
 from dimos.ar.tag_tracking.solve import build_camera_info
@@ -18,7 +17,12 @@ from dimos.utils.logging_config import setup_logger
 if TYPE_CHECKING:
     from websockets.asyncio.server import ServerConnection
 
-    from dimos.ar.registration.session.controller import RegistrationSession
+    from dimos.ar.bridge.odom_buffer import OdomBuffer
+    from dimos.ar.bridge.sender import BridgeSender
+    from dimos.ar.registration.baseline import BaselineStatus
+    from dimos.ar.tag_tracking.tracker import FrameResult, RobotAprilTagTracker
+    from dimos.ar.world_frame.refinement import WorldFrameRefiner
+    from dimos.ar.world_frame.registry import WorldRegistry
     from dimos.ar.world_frame.transforms import OdomSample
 
 _TRACE = os.getenv("DIMOS_AR_TRACE", "") not in ("", "0", "false")
@@ -34,8 +38,38 @@ class FrameAdmission(StrEnum):
 class RegistrationSessionFramesMixin:
     """XR camera intrinsics, frame admission, and async frame processing."""
 
+    if TYPE_CHECKING:
+        _tag_tracker: RobotAprilTagTracker
+        _registry: WorldRegistry
+        _world_frame_refiner: WorldFrameRefiner
+        _odom: OdomBuffer
+        _sender: BridgeSender
+        _session: Any
+        _frame_max_age_s: float
+        _frame_in_flight: bool
+
+        def _broadcast_status(
+            self,
+            *,
+            phase: RegistrationPhase | None = None,
+            message: str = "",
+            capture: CaptureHint | None = None,
+            mode: RegistrationMode | None = None,
+            tag_visible: bool | None = None,
+            ts: float | None = None,
+            override: BaselineStatus | None = None,
+        ) -> None: ...
+
+        def _apply_tracker_update(
+            self,
+            *,
+            ts: float | None = None,
+            resolved_odom: OdomSample | None = None,
+            frame_result: FrameResult | None = None,
+        ) -> None: ...
+
     def on_camera_info(
-        self: RegistrationSession,
+        self,
         msg: CameraInfoMessage,
         _websocket: ServerConnection,
     ) -> None:
@@ -55,7 +89,7 @@ class RegistrationSessionFramesMixin:
         )
 
     async def on_camera_frame(
-        self: RegistrationSession,
+        self,
         header: dict[str, Any],
         jpeg: bytes,
         _websocket: ServerConnection,
@@ -124,7 +158,7 @@ class RegistrationSessionFramesMixin:
             self._frame_in_flight = False
 
     def resolve_frame_odom(
-        self: RegistrationSession,
+        self,
         header: dict[str, Any],
     ) -> OdomSample | None:
         raw_capture_ts = header.get("capture_ts_robot")
@@ -142,7 +176,7 @@ class RegistrationSessionFramesMixin:
         return lookup(capture_ts)
 
     def _frame_admission(
-        self: RegistrationSession,
+        self,
         header: dict[str, Any],
         frame_age: float,
     ) -> FrameAdmission:
@@ -171,7 +205,7 @@ class RegistrationSessionFramesMixin:
             return FrameAdmission.ACK_ONLY
         return FrameAdmission.PROCESS
 
-    def _send_frame_ack(self: RegistrationSession, header: dict[str, Any]) -> None:
+    def _send_frame_ack(self, header: dict[str, Any]) -> None:
         self._sender.send(
             encode_camera_frame_ack(
                 seq=int(header["seq"]),

@@ -7,10 +7,10 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from dimos.ar.adapters.base import BaselineMotionRecipe, DEFAULT_BASELINE_MOTION_RECIPE
+from dimos.ar.adapters.base import DEFAULT_BASELINE_MOTION_RECIPE, BaselineMotionRecipe
 from dimos.ar.registration.baseline import BaselineCollector, BaselineStatus
-from dimos.ar.registration.session.session_frames import RegistrationSessionFramesMixin
 from dimos.ar.registration.session.flows import RegistrationFlowsMixin
+from dimos.ar.registration.session.session_frames import RegistrationSessionFramesMixin
 from dimos.ar.registration.types import (
     CaptureHint,
     RegistrationCandidate,
@@ -19,10 +19,10 @@ from dimos.ar.registration.types import (
 )
 from dimos.ar.registration.wire import RegistrationStatusPayload
 from dimos.ar.tag_tracking.tracker import FrameResult, RobotAprilTagTracker
-from dimos.ar.world_frame.registry import WorldRegistry
-from dimos.ar.world_frame.refinement import WorldFrameRefiner
-from dimos.ar.world_frame.transforms import OdomSample
 from dimos.ar.utils.console import log_checkpoint
+from dimos.ar.world_frame.refinement import WorldFrameRefiner
+from dimos.ar.world_frame.registry import WorldRegistry
+from dimos.ar.world_frame.transforms import OdomSample
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
+import math
 from typing import Any, Protocol
 
 from dimos.ar.tag_tracking.solve import TagMount

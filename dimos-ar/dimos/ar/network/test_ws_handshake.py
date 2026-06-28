@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 import json
 import socket
 import threading
 import time
-from collections.abc import Iterator
 
 import pytest
 import websockets
@@ -15,8 +15,8 @@ import websockets
 from dimos.ar.adapters.base import CapabilityState, RobotHandshake
 from dimos.ar.network.protocol import (
     DEFAULT_CAPABILITIES,
-    GetStatusMessage,
     PROTOCOL_VERSION,
+    GetStatusMessage,
     RegistrationCommandMessage,
     encode_runtime_snapshot,
 )

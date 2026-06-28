@@ -9,14 +9,13 @@ import numpy as np
 import pytest
 
 from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
+from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.bridge.test_rpc_bindings import bind_mock_adapter_rpc
 from dimos.ar.navigation.navigate import (
     NAV_GOAL_PATH_TIMEOUT_S,
     NAV_WATCHDOG_POLL_INTERVAL_S,
     NavigateGoalHandler,
 )
-from dimos.ar.bridge.odom_buffer import OdomBuffer
-from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.network.protocol import NavGoalMessage, encode_pose
 from dimos.ar.world_frame.state import WorldFrameState
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped

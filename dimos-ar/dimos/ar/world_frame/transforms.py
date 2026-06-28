@@ -44,9 +44,9 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 __all__ = [
-    "OdomSample",
-    "WORLD_UP_AXIS_INDEX",
     "SEMANTIC_FORWARD_AXIS_INDEX",
+    "WORLD_UP_AXIS_INDEX",
+    "OdomSample",
     "gravity_level_transform",
     "matrix_to_pose",
     "normalize_angle",

@@ -13,10 +13,10 @@ from dimos_lcm.std_msgs import Bool, String
 from scipy.spatial.transform import Rotation as _Rotation
 
 from dimos.ar.adapters.base import (
+    DEFAULT_BASELINE_MOTION_RECIPE,
     ARRobotAdapterSpec,
     BaselineMotionRecipe,
     CapabilityState,
-    DEFAULT_BASELINE_MOTION_RECIPE,
     RobotHandshake,
     TagTrackingProfile,
 )

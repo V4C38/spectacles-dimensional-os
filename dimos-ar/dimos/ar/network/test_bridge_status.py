@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock
 
-from dimos.ar.network.bridge_status import BridgeStatusTracker
-from dimos.ar.bridge.status_service import StatusService
 from dimos.ar.bridge.sender import BridgeSender
+from dimos.ar.bridge.status_service import StatusService
+from dimos.ar.network.bridge_status import BridgeStatusTracker
 from dimos.ar.network.protocol import bridge_status_wire, encode_bridge_status
 from dimos.ar.world_frame.state import WorldFrameState
-from unittest.mock import MagicMock
 
 
 def test_tracker_snapshot() -> None:

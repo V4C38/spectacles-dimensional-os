@@ -19,12 +19,17 @@ from dimos.ar.registration.types import (
 )
 from dimos.ar.registration.wire import RegistrationStatusPayload, encode_registration_status
 from dimos.ar.tag_tracking.solve import R_ALIGN
-from dimos.ar.world_frame.transforms import OdomSample, normalize_ground_pose, pose_to_matrix
 from dimos.ar.utils.console import console_divider, log_checkpoint
+from dimos.ar.world_frame.transforms import OdomSample, normalize_ground_pose, pose_to_matrix
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
-    from dimos.ar.registration.session.controller import RegistrationSession
+    from dimos.ar.bridge.odom_buffer import OdomBuffer
+    from dimos.ar.bridge.sender import BridgeSender
+    from dimos.ar.bridge.status_service import StatusService
+    from dimos.ar.registration.baseline import BaselineCollector
+    from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker
+    from dimos.ar.world_frame.registry import WorldRegistry
 
 logger = setup_logger()
 
@@ -32,14 +37,43 @@ logger = setup_logger()
 class RegistrationFlowsMixin:
     """Baseline/manual registration flows and status broadcasting."""
 
+    if TYPE_CHECKING:
+        _baseline: BaselineCollector | None
+        _baseline_motion_available: bool
+        _session: Any
+        _odom: OdomBuffer
+        _tag_tracker: RobotAprilTagTracker
+        _manual_registration_quality: float
+        _registry: WorldRegistry
+        _status: StatusService
+        _sender: BridgeSender
+
+        def _clear_session(self) -> None: ...
+
+        def _set_tag_tracker_active(self, active: bool, *, reason: str) -> None: ...
+
+        def _start_broadcast(self) -> None: ...
+
+        def _stop_broadcast(self) -> None: ...
+
     def _handle_registration_command_start(
-        self: RegistrationSession,
+        self,
         msg: RegistrationCommandMessage,
     ) -> None:
         if self._baseline is not None:
             self._baseline.reset_to_idle()
         self._clear_session()
-        self._session.mode = RegistrationMode(msg.mode)
+        start_mode = msg.mode
+        if start_mode is None:
+            logger.warning("registration_command start missing mode")
+            self._broadcast_status(
+                phase=RegistrationPhase.FAILED,
+                message="Registration start requires mode",
+                capture=CaptureHint.OFF,
+                ts=msg.ts,
+            )
+            return
+        self._session.mode = RegistrationMode(str(start_mode))
 
         if self._session.mode == RegistrationMode.APRIL_ODOM_BASELINE:
             if self._baseline is None or not self._baseline_motion_available:
@@ -71,7 +105,7 @@ class RegistrationFlowsMixin:
         self._start_broadcast()
 
     def on_registration_pose(
-        self: RegistrationSession,
+        self,
         msg: RegistrationPoseMessage,
         _websocket: object,
     ) -> None:
@@ -105,7 +139,7 @@ class RegistrationFlowsMixin:
             return
         self._process_manual_candidate(msg, odom)
 
-    async def _maybe_finish_baseline(self: RegistrationSession) -> None:
+    async def _maybe_finish_baseline(self) -> None:
         if self._baseline is None or not self._baseline.is_done:
             return
         solve = await asyncio.to_thread(
@@ -133,7 +167,7 @@ class RegistrationFlowsMixin:
             )
 
     def _process_manual_candidate(
-        self: RegistrationSession,
+        self,
         msg: RegistrationPoseMessage,
         odom: OdomSample,
     ) -> RegistrationCandidate:
@@ -171,7 +205,7 @@ class RegistrationFlowsMixin:
         return candidate
 
     def _finish_registration(
-        self: RegistrationSession,
+        self,
         result: RegistrationCandidate,
         ts: float | None,
     ) -> None:
@@ -203,7 +237,7 @@ class RegistrationFlowsMixin:
             ts=ts,
         )
 
-    def _default_message(self: RegistrationSession) -> str:
+    def _default_message(self) -> str:
         if self._session.mode == RegistrationMode.MANUAL_POSE:
             if self._session.pending_candidate is not None:
                 return "Manual robot pose ready — review and commit"
@@ -215,7 +249,7 @@ class RegistrationFlowsMixin:
             return f"Tag detected — collecting samples ({count})"
         return "Look at the AprilTag on your robot"
 
-    def _preview_pose(self: RegistrationSession) -> dict[str, Any] | None:
+    def _preview_pose(self) -> dict[str, Any] | None:
         if self._session.mode != RegistrationMode.APRIL_ODOM_BASELINE:
             return None
         prev = self._session.last_status
@@ -229,7 +263,7 @@ class RegistrationFlowsMixin:
         return {"position": list(pos), "orientation": list(ori)}
 
     def _broadcast_status(
-        self: RegistrationSession,
+        self,
         *,
         phase: RegistrationPhase | None = None,
         message: str = "",

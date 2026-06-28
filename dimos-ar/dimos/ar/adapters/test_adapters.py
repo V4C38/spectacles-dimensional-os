@@ -7,15 +7,15 @@ import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
 from dimos_lcm.std_msgs import Bool
+import pytest
 
-from dimos.ar.adapters.g1 import G1AdapterModule
 from dimos.ar.adapters.base import (
-    BaselineMotionRecipe,
     DEFAULT_BASELINE_MOTION_RECIPE,
+    BaselineMotionRecipe,
     resolve_baseline_motion_recipe,
 )
+from dimos.ar.adapters.g1 import G1AdapterModule
 from dimos.ar.adapters.go2 import Go2AdapterModule
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist

@@ -20,8 +20,8 @@ from dimos.ar.registration.baseline import (
 from dimos.ar.registration.session import FrameAdmission, RegistrationSession
 from dimos.ar.registration.types import CaptureHint, RegistrationMode, RegistrationPhase
 from dimos.ar.registration.wire import RegistrationCommandMessage, RegistrationStatusPayload
-from dimos.ar.tag_tracking.tracker import FrameResult
 from dimos.ar.tag_tracking.solve import TagSolve
+from dimos.ar.tag_tracking.tracker import FrameResult
 from dimos.ar.world_frame.registry import WorldRegistry
 from dimos.ar.world_frame.state import WorldFrameState
 

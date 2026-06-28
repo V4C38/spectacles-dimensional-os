@@ -15,16 +15,16 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from dimos.ar.network.protocol import (
     CameraInfoMessage,
     CancelNavGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
+    InboundMessage,
     JoystickCommandMessage,
     NavGoalMessage,
-    InboundMessage,
     PingMessage,
     RegistrationCommandMessage,
     RegistrationPoseMessage,
@@ -152,12 +152,15 @@ class InboundDispatcher:
             if executor is None:
                 logger.warning("BACKGROUND inbound dropped: dispatcher executor missing")
                 return
-            future = self._loop.run_in_executor(
-                executor,
-                self._run_sync_handler,
-                inbound,
-                websocket,
-                handler,  # type: ignore[arg-type]
+            future = cast(
+                "asyncio.Future[object]",
+                self._loop.run_in_executor(
+                    executor,
+                    InboundDispatcher._run_sync_handler,
+                    inbound,
+                    websocket,
+                    cast("SyncInboundHandler", handler),
+                ),
             )
             self._background_tasks.add(future)
             future.add_done_callback(self._background_tasks.discard)

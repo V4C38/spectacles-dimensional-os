@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
-from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker, TagSolve
-from dimos.ar.tag_tracking.solve import _yaw_from_T, build_T_world_odom
+from dimos.ar.tag_tracking.solve import TagSolve, _yaw_from_T, build_T_world_odom
+from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker
 from dimos.ar.world_frame.transforms import OdomSample, gravity_level_transform
 from dimos.ar.world_frame.wire import encode_world_frame_correction
 from dimos.utils.logging_config import setup_logger

@@ -147,7 +147,13 @@ class TelemetryPublisher:
         )
 
     def reset_lidar_mode(self) -> None:
-        self.set_lidar_mode(mode="off")
+        defaults = LidarObstacleDistanceConfig()
+        self.set_lidar_mode(
+            mode="off",
+            obstacle_min_distance_m=defaults.min_distance_m,
+            obstacle_opaque_distance_m=defaults.opaque_distance_m,
+            obstacle_max_distance_m=defaults.max_distance_m,
+        )
 
     def publish_pose(self, msg: PoseStamped) -> None:
         if not self._world_frame.is_committed:

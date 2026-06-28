@@ -9,7 +9,6 @@ import pytest
 from dimos.ar.adapters.base import CapabilityState, RobotHandshake
 from dimos.ar.adapters.g1 import g1_handshake
 from dimos.ar.network.bridge_status import BridgeStatusSnapshot
-from dimos.ar.world_frame.state import WorldFrameState
 from dimos.ar.network.protocol import (
     DEFAULT_CAPABILITIES,
     PROTOCOL_VERSION,
@@ -38,6 +37,7 @@ from dimos.ar.network.protocol import (
     nav_phase_payload,
 )
 from dimos.ar.registration.types import CaptureHint, MotionHint, RegistrationMode, RegistrationPhase
+from dimos.ar.world_frame.state import WorldFrameState
 
 
 def _sample_handshake() -> RobotHandshake:

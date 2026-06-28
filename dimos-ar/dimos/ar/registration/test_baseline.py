@@ -6,7 +6,7 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
-from dimos.ar.adapters.base import BaselineMotionRecipe, DEFAULT_BASELINE_MOTION_RECIPE
+from dimos.ar.adapters.base import DEFAULT_BASELINE_MOTION_RECIPE, BaselineMotionRecipe
 from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
 from dimos.ar.bridge.test_rpc_bindings import bind_mock_adapter_rpc
 from dimos.ar.registration.baseline import (

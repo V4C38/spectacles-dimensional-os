@@ -23,12 +23,13 @@ from dimos.ar.adapters.base import (
 )
 from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
 from dimos.ar.bridge.odom_buffer import OdomBuffer
-from dimos.ar.navigation.navigate import NavigateGoalHandler
-from dimos.ar.navigation.preview import PreviewGoalHandler
 from dimos.ar.bridge.safety import BridgeSafetyCoordinator
 from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.bridge.status_service import StatusService
 from dimos.ar.bridge.telemetry import TelemetryPublisher
+from dimos.ar.lidar.filters import LidarFilter, LidarFilterConfig, lidar_height_band_m
+from dimos.ar.navigation.navigate import NavigateGoalHandler
+from dimos.ar.navigation.preview import PreviewGoalHandler
 from dimos.ar.network.protocol import (
     JoystickCommandMessage,
     NavGoalMessage,
@@ -39,11 +40,10 @@ from dimos.ar.network.websocket_server import ARWebSocketServer
 from dimos.ar.preview_planner import PreviewPlanner
 from dimos.ar.registration.session import RegistrationSession
 from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker, RobotAprilTagTrackerConfig
+from dimos.ar.utils.console import console_divider
 from dimos.ar.world_frame.refinement import WorldFrameRefiner
 from dimos.ar.world_frame.registry import WorldRegistry
 from dimos.ar.world_frame.state import WorldFrameState
-from dimos.ar.lidar.filters import LidarFilter, LidarFilterConfig, lidar_height_band_m
-from dimos.ar.utils.console import console_divider
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig

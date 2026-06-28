@@ -28,7 +28,7 @@ it does not duplicate lifecycle or mutation logic.
 | Registration setup wizard | `RegistrationSession` |
 | Nav goal lifecycle + `nav_status` | `navigation/navigate.py` `NavigateGoalHandler` |
 | Preview path goals | `navigation/preview.py` `PreviewGoalHandler` |
-| Adapter motion RPC serialization | `AdapterCommandQueue` |
+| Adapter motion RPC serialization | `AdapterMotionRouter` |
 | Estop / client-disconnect policy | `BridgeSafetyCoordinator` |
 | LiDAR/pose XR payloads | `TelemetryPublisher` |
 | Pure payload encoding (no state) | `network/data_plane.py`, `network/protocol.py` |

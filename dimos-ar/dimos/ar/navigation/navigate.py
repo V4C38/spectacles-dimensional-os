@@ -6,26 +6,26 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-from dimos.ar.navigation.world_transform import resolve_world_goal
 from dimos.ar.navigation.nav_state import normalize_nav_state
+from dimos.ar.navigation.world_transform import resolve_world_goal
 from dimos.ar.network.data_plane import (
     build_empty_path_payload,
     build_path_payload,
 )
 from dimos.ar.network.protocol import NavGoalMessage, encode_nav_status, nav_phase_payload
 from dimos.ar.tag_tracking.solve import orientation_yaw_deg
+from dimos.ar.utils.console import log_checkpoint
+from dimos.ar.utils.log_on_change import log_info_on_change
 from dimos.ar.world_frame.state import WorldFrameState
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.ar.utils.log_on_change import log_info_on_change
-from dimos.ar.utils.console import log_checkpoint
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
     from dimos_lcm.std_msgs import Bool
 
     from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
-    from dimos.ar.navigation.world_transform import OdomGoal
     from dimos.ar.bridge.sender import BridgeSender
+    from dimos.ar.navigation.world_transform import OdomGoal
     from dimos.msgs.nav_msgs.Path import Path
 
 logger = setup_logger()

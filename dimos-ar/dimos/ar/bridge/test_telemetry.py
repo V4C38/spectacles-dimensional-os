@@ -7,7 +7,6 @@ import numpy as np
 from dimos.ar.bridge.telemetry import TelemetryPublisher
 from dimos.ar.lidar.filters import LidarFilter, LidarFilterConfig
 from dimos.ar.network.protocol import SetLidarModeMessage
-from dimos.ar.world_frame.state import WorldFrameState
 from dimos.ar.world_frame.transforms import OdomSample
 
 

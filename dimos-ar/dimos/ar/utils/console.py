@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 CheckpointKind = Literal["default", "milestone", "success", "warn"]
 
@@ -70,6 +70,7 @@ def install_ar_console_styles() -> None:
     import logging
 
     import structlog
+
     import dimos.utils.logging_config as logging_config
 
     original = logging_config._compact_console_processor
@@ -77,7 +78,7 @@ def install_ar_console_styles() -> None:
     def _wrapped_processor(logger: Any, method_name: str, event_dict: dict[str, Any]) -> str:
         event_dict = dict(event_dict)
         style = event_dict.pop(_AR_STYLE_KEY, None)
-        line = original(logger, method_name, event_dict)
+        line = cast("str", original(logger, method_name, event_dict))
         if not style or not use_console_colors():
             return line
         prefix = _STYLE_PREFIX.get(str(style), "")
@@ -102,7 +103,7 @@ def install_ar_console_styles() -> None:
         for handler in logger_obj.handlers:
             formatter = handler.formatter
             if isinstance(formatter, processor_formatter):
-                formatter.processor = _wrapped_processor
+                formatter.processor = _wrapped_processor  # type: ignore[attr-defined]
 
 
 # Ensure checkpoint styling is active before dimos-ar loggers bind console formatters.

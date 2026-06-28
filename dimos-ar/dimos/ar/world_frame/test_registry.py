@@ -9,8 +9,8 @@ import numpy as np
 import pytest
 
 from dimos.ar.registration.types import RegistrationCandidate, RegistrationMode
-from dimos.ar.world_frame.registry import WorldRegistry
 from dimos.ar.world_frame.refinement import WorldFrameRefiner
+from dimos.ar.world_frame.registry import WorldRegistry
 from dimos.ar.world_frame.state import WorldFrameState
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 

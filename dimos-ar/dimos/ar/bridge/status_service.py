@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING
 
 from dimos.ar.network.bridge_status import BridgeStatusSnapshot, BridgeStatusTracker
 from dimos.ar.network.protocol import bridge_status_wire, encode_bridge_status
-from dimos.ar.utils.log_on_change import log_info_on_change
 from dimos.ar.utils.console import log_checkpoint
+from dimos.ar.utils.log_on_change import log_info_on_change
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
