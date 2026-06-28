@@ -49,7 +49,7 @@ def _make_session(
     world_frame_refiner = MagicMock()
     adapter = MagicMock()
     adapter.baseline_motion_available.return_value = True
-    adapter.baseline_set_lateral_velocity.return_value = True
+    adapter.send_joystick_command.return_value = True
     queue = AdapterCommandQueue(adapter)
     session = RegistrationSession(
         robot_id="test_robot",

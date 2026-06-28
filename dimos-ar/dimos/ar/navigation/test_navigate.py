@@ -16,7 +16,7 @@ from dimos.ar.navigation.navigate import (
 )
 from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.bridge.sender import BridgeSender
-from dimos.ar.network.protocol import GoalMessage, encode_pose
+from dimos.ar.network.protocol import NavGoalMessage, encode_pose
 from dimos.ar.world_frame.state import WorldFrameState
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
@@ -36,7 +36,7 @@ def _make_nav(*, committed: bool = True) -> tuple[NavigateGoalHandler, MagicMock
         world_frame.commit(np.eye(4, dtype=np.float64), method="manual_pose", approximate=False)
     adapter = MagicMock()
     adapter.send_nav_goal.return_value = True
-    adapter.cancel_goal.return_value = True
+    adapter.cancel_nav_goal.return_value = True
     adapter.emergency_stop.return_value = None
     queue = AdapterCommandQueue(adapter)
     sender, mock_server = _make_sender()
@@ -69,7 +69,7 @@ def _last_nav_status(mock_server: MagicMock) -> dict:
 
 def test_on_navigate_goal_broadcasts_idle_until_path() -> None:
     nav, mock_server, adapter = _make_nav()
-    msg = GoalMessage(
+    msg = NavGoalMessage(
         intent="navigate",
         ts=1.0,
         robot_id="unitree_go2",
@@ -201,7 +201,7 @@ def test_goal_stall_no_path_emits_retryable_recovering() -> None:
     assert nav_status["retryable"] is True
     assert nav_status["stall_reason"] == "no_path"
     time.sleep(0.05)
-    adapter.cancel_goal.assert_called_once()
+    adapter.cancel_nav_goal.assert_called_once()
 
 
 def test_goal_stall_planner_idle_emits_retryable_recovering() -> None:
@@ -216,7 +216,7 @@ def test_goal_stall_planner_idle_emits_retryable_recovering() -> None:
     assert nav_status["retryable"] is True
     assert nav_status["stall_reason"] == "planner_idle"
     time.sleep(0.05)
-    adapter.cancel_goal.assert_called_once()
+    adapter.cancel_nav_goal.assert_called_once()
 
 
 def test_goal_stall_does_not_send_second_nav_goal() -> None:
@@ -229,7 +229,7 @@ def test_goal_stall_does_not_send_second_nav_goal() -> None:
 
     adapter.send_nav_goal.assert_not_called()
     time.sleep(0.05)
-    adapter.cancel_goal.assert_called_once()
+    adapter.cancel_nav_goal.assert_called_once()
 
 
 def test_disconnect_prevents_watchdog_stall_emission() -> None:
@@ -258,7 +258,7 @@ def test_on_navigate_goal_does_not_set_dispatch_mono_before_adapter_ack() -> Non
         return True
 
     adapter.send_nav_goal.side_effect = slow_goal
-    msg = GoalMessage(
+    msg = NavGoalMessage(
         intent="navigate",
         ts=1.0,
         robot_id="unitree_go2",
@@ -282,7 +282,7 @@ def test_on_navigate_goal_returns_before_adapter_publish() -> None:
         return True
 
     adapter.send_nav_goal.side_effect = slow_goal
-    msg = GoalMessage(
+    msg = NavGoalMessage(
         intent="navigate",
         ts=1.0,
         robot_id="unitree_go2",
@@ -312,7 +312,7 @@ def test_emergency_stop_then_goal_succeeds() -> None:
     assert nav._nav_goal_pending is False
     assert nav._dimos_nav_state == "idle"
 
-    msg = GoalMessage(
+    msg = NavGoalMessage(
         intent="navigate",
         ts=2.0,
         robot_id="unitree_go2",
@@ -334,8 +334,8 @@ def test_cancel_goal_timeout_does_not_mark_goal_failed() -> None:
         time.sleep(1.2)
         return True
 
-    adapter.cancel_goal.side_effect = slow_cancel
-    nav.on_cancel_goal(ts=3.0)
+    adapter.cancel_nav_goal.side_effect = slow_cancel
+    nav.on_cancel_nav_goal(ts=3.0)
     time.sleep(1.05)
 
     assert nav._goal_failed is False
@@ -356,7 +356,7 @@ def test_slow_send_nav_goal_waits_for_adapter_ack() -> None:
         return True
 
     adapter.send_nav_goal.side_effect = slow_goal
-    msg = GoalMessage(
+    msg = NavGoalMessage(
         intent="navigate",
         ts=1.0,
         robot_id="unitree_go2",
@@ -382,14 +382,14 @@ def test_concurrent_nav_goals_coalesce_to_latest() -> None:
         return True
 
     adapter.send_nav_goal.side_effect = record
-    first_goal = GoalMessage(
+    first_goal = NavGoalMessage(
         intent="navigate",
         ts=1.0,
         robot_id="unitree_go2",
         position=(1.0, 0.0, 2.0),
         orientation=(0.0, 0.0, 0.0, 1.0),
     )
-    second_goal = GoalMessage(
+    second_goal = NavGoalMessage(
         intent="navigate",
         ts=2.0,
         robot_id="unitree_go2",

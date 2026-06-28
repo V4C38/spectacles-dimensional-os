@@ -3,7 +3,7 @@ import { Signal } from "../../Assets/Scripts/Core/Utilities";
 import { BridgeRuntime } from "../../Assets/Scripts/Bridge/BridgeRuntime";
 import { DimosState } from "../../Assets/Scripts/Core/DimosState";
 
-function makeRuntime(phase: "setup" | "runtime") {
+function makeRuntime(phase: "registration" | "runtime") {
   const reconnectEvent = {
     bind: vi.fn(),
     reset: vi.fn(),
@@ -71,8 +71,8 @@ describe("BridgeRuntime runtime reconnect", () => {
     (globalThis as Record<string, unknown>).getTime = vi.fn(() => 0);
   });
 
-  it("does not schedule reconnect during setup phase", () => {
-    const { bridgeClient, reconnectEvent } = makeRuntime("setup");
+  it("does not schedule reconnect during registration phase", () => {
+    const { bridgeClient, reconnectEvent } = makeRuntime("registration");
     bridgeClient.onConnectionChanged.emit(false);
     expect(reconnectEvent.reset).not.toHaveBeenCalled();
     expect(bridgeClient.tryConnect).not.toHaveBeenCalled();

@@ -22,8 +22,8 @@ export function computeFrameCapturePolicy(
     return { mode: "off", policy: "off" };
   }
 
-  if (input.appPhase === "setup" && input.baselineCaptureSessionActive) {
-    return { mode: "setup", policy: input.registrationCaptureHint };
+  if (input.appPhase === "registration" && input.baselineCaptureSessionActive) {
+    return { mode: "registration", policy: input.registrationCaptureHint };
   }
 
   if (input.appPhase === "runtime" && input.worldFrameCommitted) {

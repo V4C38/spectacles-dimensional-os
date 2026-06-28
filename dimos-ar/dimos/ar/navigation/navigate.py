@@ -12,7 +12,7 @@ from dimos.ar.network.data_plane import (
     build_empty_path_payload,
     build_path_payload,
 )
-from dimos.ar.network.protocol import GoalMessage, encode_nav_status, nav_phase_payload
+from dimos.ar.network.protocol import NavGoalMessage, encode_nav_status, nav_phase_payload
 from dimos.ar.tag_tracking.solve import orientation_yaw_deg
 from dimos.ar.world_frame.state import WorldFrameState
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -132,7 +132,7 @@ class NavigateGoalHandler:
     # WebSocket message handlers
     # ------------------------------------------------------------------
 
-    def on_navigate_goal(self, msg: GoalMessage) -> None:
+    def on_navigate_goal(self, msg: NavGoalMessage) -> None:
         if msg.intent != "navigate":
             return
         if not self._world_frame.is_committed:
@@ -165,7 +165,7 @@ class NavigateGoalHandler:
             ),
         )
 
-    def on_cancel_goal(self, ts: float | None = None) -> None:
+    def on_cancel_nav_goal(self, ts: float | None = None) -> None:
         logger.info("XR navigation goal cancelled")
         self._goal_reached = False
         self._goal_failed = False
@@ -322,7 +322,7 @@ class NavigateGoalHandler:
         ok: bool,
         err: BaseException | None,
         *,
-        msg: GoalMessage,
+        msg: NavGoalMessage,
         odom_goal: OdomGoal,
     ) -> None:
         if ok:

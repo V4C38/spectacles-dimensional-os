@@ -91,7 +91,7 @@ def g1_capabilities(
             if plan_preview_available
             else "Global costmap is not present for preview planning in this G1 runtime.",
         ),
-        "cancel_goal": CapabilityState(
+        "cancel_nav_goal": CapabilityState(
             cancel_goal_available,
             None
             if cancel_goal_available
@@ -186,15 +186,15 @@ class G1AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
     config: G1AdapterConfig
     _g1_connection: G1ConnectionSpec | None = None
     _g1_high_level: Any = None
-    _baseline_vel_lock: threading.Lock
-    _baseline_vel_thread: threading.Thread | None
-    _baseline_vel_target: float
+    _joystick_lock: threading.Lock
+    _joystick_thread: threading.Thread | None
+    _joystick_target: tuple[float, float, float]
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self._baseline_vel_lock = threading.Lock()
-        self._baseline_vel_thread = None
-        self._baseline_vel_target = 0.0
+        self._joystick_lock = threading.Lock()
+        self._joystick_thread = None
+        self._joystick_target = (0.0, 0.0, 0.0)
 
     async def handle_ar_lidar_in(self, msg: PointCloud2) -> None:
         self.ar_lidar.publish(msg)
@@ -300,7 +300,7 @@ class G1AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         return False
 
     @rpc
-    def cancel_goal(self) -> bool:
+    def cancel_nav_goal(self) -> bool:
         cancelled = False
         if self.stop_movement.transport is not None:
             self.stop_movement.publish(Bool(data=True))
@@ -309,7 +309,7 @@ class G1AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
             self.cancel_goal_signal.publish(NavBool(data=True))
             cancelled = True
         if not cancelled:
-            logger.warning("G1 cancel_goal rejected: no navigation cancel path is available")
+            logger.warning("G1 cancel_nav_goal rejected: no navigation cancel path is available")
         return cancelled
 
     @rpc
@@ -347,41 +347,43 @@ class G1AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         return g1_runtime_tag_tracking_profile()
 
     @rpc
-    def baseline_set_lateral_velocity(self, vy_m_s: float) -> bool:
-        with self._baseline_vel_lock:
-            self._baseline_vel_target = float(vy_m_s)
+    def send_joystick_command(self, vx: float, vy: float, wz: float) -> bool:
+        """Drive via cmd_vel; values are stick deflection in [-1, 1], not m/s."""
+        target = (float(vx), float(vy), float(wz))
+        with self._joystick_lock:
+            self._joystick_target = target
 
-        if vy_m_s == 0.0:
-            self._publish_baseline_twist(0.0)
+        if target == (0.0, 0.0, 0.0):
+            self._publish_joystick_twist(*target)
             return True
 
-        with self._baseline_vel_lock:
-            if self._baseline_vel_thread is None or not self._baseline_vel_thread.is_alive():
+        with self._joystick_lock:
+            if self._joystick_thread is None or not self._joystick_thread.is_alive():
                 t = threading.Thread(
-                    target=self._baseline_vel_loop,
+                    target=self._joystick_loop,
                     daemon=True,
-                    name="ar-g1-assist-vel",
+                    name="ar-joystick-republish",
                 )
-                self._baseline_vel_thread = t
+                self._joystick_thread = t
                 t.start()
         return True
 
-    def _baseline_vel_loop(self) -> None:
+    def _joystick_loop(self) -> None:
         while True:
-            with self._baseline_vel_lock:
-                vy = self._baseline_vel_target
-            if vy == 0.0:
+            with self._joystick_lock:
+                vx, vy, wz = self._joystick_target
+            if (vx, vy, wz) == (0.0, 0.0, 0.0):
                 break
-            self._publish_baseline_twist(vy)
+            self._publish_joystick_twist(vx, vy, wz)
             time.sleep(1.0 / 50.0)
 
-    def _publish_baseline_twist(self, vy: float) -> None:
+    def _publish_joystick_twist(self, vx: float, vy: float, wz: float) -> None:
         if self.cmd_vel.transport is None:
-            logger.warning("G1 baseline_set_lateral_velocity: cmd_vel transport not available")
+            logger.warning("G1 send_joystick_command: cmd_vel transport not available")
             return
         self.cmd_vel.publish(
             Twist(
-                linear=Vector3(0.0, vy, 0.0),
-                angular=Vector3(0.0, 0.0, 0.0),
+                linear=Vector3(vx, vy, 0.0),
+                angular=Vector3(0.0, 0.0, wz),
             )
         )

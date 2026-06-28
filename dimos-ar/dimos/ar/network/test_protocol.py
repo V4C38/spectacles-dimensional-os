@@ -14,10 +14,10 @@ from dimos.ar.network.protocol import (
     DEFAULT_CAPABILITIES,
     PROTOCOL_VERSION,
     CameraInfoMessage,
-    CancelGoalMessage,
+    CancelNavGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
-    GoalMessage,
+    NavGoalMessage,
     PingMessage,
     RegistrationCommandMessage,
     RegistrationPoseMessage,
@@ -106,15 +106,15 @@ def test_encode_hello_g1_tag_registration_disabled() -> None:
 
 
 def test_robot_id_mismatch_rejected() -> None:
-    raw = json.dumps({"type": "cancel_goal", "ts": 1.0, "robot_id": "other"})
+    raw = json.dumps({"type": "cancel_nav_goal", "ts": 1.0, "robot_id": "other"})
     with pytest.raises(ValueError, match="Unknown robot_id"):
         decode_inbound(raw, expected_robot_id="unitree_go2")
 
 
-def test_goal_decode_navigate() -> None:
+def test_nav_goal_decode_navigate() -> None:
     raw = json.dumps(
         {
-            "type": "goal",
+            "type": "nav_goal",
             "intent": "navigate",
             "ts": 2.0,
             "robot_id": "unitree_go2",
@@ -122,16 +122,16 @@ def test_goal_decode_navigate() -> None:
         }
     )
     msg = decode_inbound(raw)
-    assert isinstance(msg, GoalMessage)
+    assert isinstance(msg, NavGoalMessage)
     assert msg.intent == "navigate"
     assert msg.position == (1.0, 0.0, 0.0)
     assert msg.orientation is None
 
 
-def test_goal_decode_with_orientation() -> None:
+def test_nav_goal_decode_with_orientation() -> None:
     raw = json.dumps(
         {
-            "type": "goal",
+            "type": "nav_goal",
             "intent": "navigate",
             "ts": 2.0,
             "robot_id": "unitree_go2",
@@ -140,15 +140,15 @@ def test_goal_decode_with_orientation() -> None:
         }
     )
     msg = decode_inbound(raw)
-    assert isinstance(msg, GoalMessage)
+    assert isinstance(msg, NavGoalMessage)
     assert msg.position == (1.0, 0.0, 0.0)
     assert msg.orientation == (0.0, 0.0, 0.70710678, 0.70710678)
 
 
-def test_goal_decode_preview() -> None:
+def test_nav_goal_decode_preview() -> None:
     raw = json.dumps(
         {
-            "type": "goal",
+            "type": "nav_goal",
             "intent": "preview",
             "ts": 2.5,
             "robot_id": "unitree_go2",
@@ -157,15 +157,15 @@ def test_goal_decode_preview() -> None:
         }
     )
     msg = decode_inbound(raw)
-    assert isinstance(msg, GoalMessage)
+    assert isinstance(msg, NavGoalMessage)
     assert msg.intent == "preview"
     assert msg.position == (2.0, 0.0, 1.0)
 
 
-def test_cancel_goal_decode() -> None:
-    raw = json.dumps({"type": "cancel_goal", "ts": 3.0, "robot_id": "unitree_go2"})
+def test_cancel_nav_goal_decode() -> None:
+    raw = json.dumps({"type": "cancel_nav_goal", "ts": 3.0, "robot_id": "unitree_go2"})
     msg = decode_inbound(raw)
-    assert isinstance(msg, CancelGoalMessage)
+    assert isinstance(msg, CancelNavGoalMessage)
 
 
 def test_emergency_stop_decode() -> None:

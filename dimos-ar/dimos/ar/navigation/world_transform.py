@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dimos.ar.network.protocol import GoalMessage
+from dimos.ar.network.protocol import NavGoalMessage
 from dimos.ar.world_frame.state import WorldFrameState
 
 
@@ -15,7 +15,7 @@ class OdomGoal:
     ts: float | None
 
 
-def resolve_world_goal(state: WorldFrameState, msg: GoalMessage) -> OdomGoal | None:
+def resolve_world_goal(state: WorldFrameState, msg: NavGoalMessage) -> OdomGoal | None:
     if not state.is_committed:
         return None
     if msg.orientation is not None:

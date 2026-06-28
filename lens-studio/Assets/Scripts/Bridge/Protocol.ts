@@ -13,7 +13,7 @@ import {
   createDefaultBridgeSnapshot,
 } from "../Core/AppState";
 
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -869,14 +869,14 @@ export function buildRegistrationPose(
   });
 }
 
-export function buildGoal(
+export function buildNavGoal(
   robotId: string,
   intent: GoalIntent,
   position: vec3,
   rotation?: quat | null,
 ): string {
   const payload: Record<string, unknown> = {
-    type: "goal",
+    type: "nav_goal",
     ts: getTime(),
     robot_id: robotId,
     intent,
@@ -893,7 +893,7 @@ export function buildNavigateGoal(
   position: vec3,
   rotation: quat,
 ): string {
-  return buildGoal(robotId, "navigate", position, rotation);
+  return buildNavGoal(robotId, "navigate", position, rotation);
 }
 
 export function buildPreviewGoal(
@@ -901,7 +901,7 @@ export function buildPreviewGoal(
   position: vec3,
   rotation?: quat | null,
 ): string {
-  return buildGoal(robotId, "preview", position, rotation);
+  return buildNavGoal(robotId, "preview", position, rotation);
 }
 
 export function buildPing(clientTs: number, robotId: string): string {
@@ -981,9 +981,9 @@ export function buildCameraFrameBytes(args: {
   return out;
 }
 
-export function buildCancelGoal(robotId: string): string {
+export function buildCancelNavGoal(robotId: string): string {
   return JSON.stringify({
-    type: "cancel_goal",
+    type: "cancel_nav_goal",
     ts: getTime(),
     robot_id: robotId,
   });

@@ -56,7 +56,7 @@ describe("parseInboundMessage", () => {
           nav: { available: true },
           path: { available: true },
           plan_preview: { available: true },
-          cancel_goal: { available: true },
+          cancel_nav_goal: { available: true },
           emergency_stop: { available: false, reason: "disabled" },
         },
       }),

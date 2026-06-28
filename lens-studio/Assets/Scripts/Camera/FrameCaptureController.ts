@@ -17,7 +17,7 @@ const PIPELINE_LOG_INTERVAL_S = 2.0;
 const CAPTURE_TS_LOG_INTERVAL_S = 2.0;
 const CLOCK_SYNC_RACE_LOG_INTERVAL_S = 2.0;
 
-export type CaptureMode = "off" | "setup" | "runtime";
+export type CaptureMode = "off" | "registration" | "runtime";
 export type CapturePolicy = "off" | "steady" | "burst" | "hold";
 
 interface PoseSample {
@@ -84,7 +84,7 @@ export class FrameCaptureController extends BaseScriptComponent {
       this._inFlight = false;
       this._inFlightSeq = -1;
     }
-    this._capturePolicy = mode === "setup" ? "steady" : "off";
+    this._capturePolicy = mode === "registration" ? "steady" : "off";
     // Reset pacing so the first capture in the new mode fires promptly
     // (within one interval), not after a potentially stale gap from the old mode.
     this._lastPipelineEndTime = 0;
@@ -111,7 +111,7 @@ export class FrameCaptureController extends BaseScriptComponent {
   private _onHello = (_msg: HelloMessage): void => {
     this._inFlight = false;
     this._inFlightSeq = -1;
-    this._capturePolicy = this._mode === "setup" ? "steady" : "off";
+    this._capturePolicy = this._mode === "registration" ? "steady" : "off";
     this._sentCameraInfo = false;
   };
 
@@ -161,7 +161,7 @@ export class FrameCaptureController extends BaseScriptComponent {
     if (!this.bridgeClient.isClockSyncReady) {
       return;
     }
-    if (this._mode === "setup" && (this._capturePolicy === "off" || this._capturePolicy === "hold")) {
+    if (this._mode === "registration" && (this._capturePolicy === "off" || this._capturePolicy === "hold")) {
       return;
     }
     const now = getTime();
@@ -182,7 +182,7 @@ export class FrameCaptureController extends BaseScriptComponent {
       }
     }
     const interval =
-      this._mode === "setup"
+      this._mode === "registration"
         ? (this._capturePolicy === "burst"
           ? SAMPLING_BURST_INTERVAL_S
           : SETUP_CAPTURE_INTERVAL_S)

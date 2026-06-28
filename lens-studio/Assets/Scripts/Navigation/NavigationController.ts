@@ -244,7 +244,7 @@ export class NavigationController {
     mode: DimosAppState["operatingMode"],
     _state: DimosAppState,
   ): void {
-    if (mode === "setup" || mode === "agent") {
+    if (mode === "registration" || mode === "agent") {
       this.disarm();
       return;
     }
@@ -260,7 +260,7 @@ export class NavigationController {
       ) {
         if (isCapabilityAvailable(appState.robotRuntime, "emergency_stop")) {
           this.requestEmergencyStop();
-        } else if (isCapabilityAvailable(appState.robotRuntime, "cancel_goal")) {
+        } else if (isCapabilityAvailable(appState.robotRuntime, "cancel_nav_goal")) {
           this.requestCancelGoal();
         }
       }
@@ -424,8 +424,8 @@ export class NavigationController {
       getRobotFloorWorldY: () => this._robotFloorY(),
     } as RobotGroundDeadzone);
     this.setCancelGoalAvailability(
-      isCapabilityAvailable(state, "cancel_goal"),
-      capabilityUnavailableReason(state, "cancel_goal"),
+      isCapabilityAvailable(state, "cancel_nav_goal"),
+      capabilityUnavailableReason(state, "cancel_nav_goal"),
     );
     this._syncPresentation();
     this.syncManualNavigationState();

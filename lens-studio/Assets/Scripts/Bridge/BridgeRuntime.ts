@@ -189,7 +189,7 @@ export class BridgeRuntime {
       forceOff,
     });
     this.frameCaptureController.setMode(result.mode);
-    if (result.mode === "setup") {
+    if (result.mode === "registration") {
       this.frameCaptureController.setCapturePolicy(result.policy);
     }
   }

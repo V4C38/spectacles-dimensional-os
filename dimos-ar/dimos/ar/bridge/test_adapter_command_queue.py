@@ -10,9 +10,9 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 def _make_queue() -> tuple[AdapterCommandQueue, MagicMock]:
     adapter = MagicMock()
-    adapter.baseline_set_lateral_velocity.return_value = True
+    adapter.send_joystick_command.return_value = True
     adapter.send_nav_goal.return_value = True
-    adapter.cancel_goal.return_value = True
+    adapter.cancel_nav_goal.return_value = True
     adapter.emergency_stop.return_value = None
     queue = AdapterCommandQueue(adapter)
     return queue, adapter
@@ -30,18 +30,18 @@ def test_baseline_fifo_preserves_order() -> None:
     queue, adapter = _make_queue()
     calls: list[float] = []
 
-    def record(vy: float) -> bool:
+    def record(_vx: float, vy: float, _wz: float) -> bool:
         calls.append(vy)
         time.sleep(0.01)
         return True
 
-    adapter.baseline_set_lateral_velocity.side_effect = record
+    adapter.send_joystick_command.side_effect = record
 
     queue.submit_baseline_velocity(0.3)
     queue.submit_baseline_velocity(0.0)
     queue.submit_baseline_velocity(-0.3)
 
-    _wait_for_calls(adapter, "baseline_set_lateral_velocity", 3)
+    _wait_for_calls(adapter, "send_joystick_command", 3)
     assert calls == [0.3, 0.0, -0.3]
     queue.shutdown()
 
@@ -85,11 +85,11 @@ def test_cancel_clears_pending_nav() -> None:
     nav_called = threading.Event()
     baseline_release = threading.Event()
 
-    def slow_baseline(_vy: float) -> bool:
+    def slow_baseline(_vx: float, _vy: float, _wz: float) -> bool:
         baseline_release.wait(timeout=2.0)
         return True
 
-    adapter.baseline_set_lateral_velocity.side_effect = slow_baseline
+    adapter.send_joystick_command.side_effect = slow_baseline
 
     queue.submit_baseline_velocity(0.3)
     goal = PoseStamped(position=[1.0, 0.0, 0.0], orientation=[0.0, 0.0, 0.0, 1.0])
@@ -97,7 +97,7 @@ def test_cancel_clears_pending_nav() -> None:
     queue.submit_cancel_goal()
 
     baseline_release.set()
-    _wait_for_calls(adapter, "cancel_goal", 1)
+    _wait_for_calls(adapter, "cancel_nav_goal", 1)
     time.sleep(0.2)
     assert nav_called.is_set() is False
     assert adapter.send_nav_goal.call_count == 0
@@ -110,7 +110,7 @@ def test_cancel_runs_before_remaining_baseline() -> None:
     first_started = threading.Event()
     first_release = threading.Event()
 
-    def slow_velocity(vy: float) -> bool:
+    def slow_velocity(_vx: float, vy: float, _wz: float) -> bool:
         calls.append(f"velocity:{vy}")
         if vy == 0.3:
             first_started.set()
@@ -121,8 +121,8 @@ def test_cancel_runs_before_remaining_baseline() -> None:
         calls.append("cancel")
         return True
 
-    adapter.baseline_set_lateral_velocity.side_effect = slow_velocity
-    adapter.cancel_goal.side_effect = record_cancel
+    adapter.send_joystick_command.side_effect = slow_velocity
+    adapter.cancel_nav_goal.side_effect = record_cancel
 
     queue.submit_baseline_velocity(0.3)
     assert first_started.wait(timeout=2.0)
@@ -130,7 +130,7 @@ def test_cancel_runs_before_remaining_baseline() -> None:
     queue.submit_cancel_goal()
     first_release.set()
 
-    _wait_for_calls(adapter, "cancel_goal", 1)
+    _wait_for_calls(adapter, "cancel_nav_goal", 1)
     time.sleep(0.05)
     assert calls[0] == "velocity:0.3"
     assert calls[1] == "cancel"
@@ -160,7 +160,7 @@ def test_estop_drains_pending_baseline_and_nav() -> None:
 
 def test_on_complete_invoked_with_error() -> None:
     queue, adapter = _make_queue()
-    adapter.baseline_set_lateral_velocity.side_effect = RuntimeError("boom")
+    adapter.send_joystick_command.side_effect = RuntimeError("boom")
     seen: list[tuple[bool, BaseException | None]] = []
     done = threading.Event()
 
@@ -181,14 +181,14 @@ def test_stop_priority_runs_before_stale_pending_velocity() -> None:
     first_started = threading.Event()
     first_release = threading.Event()
 
-    def slow_velocity(vy: float) -> bool:
+    def slow_velocity(_vx: float, vy: float, _wz: float) -> bool:
         calls.append(vy)
         if vy == 0.3 and len(calls) == 1:
             first_started.set()
             first_release.wait(timeout=2.0)
         return True
 
-    adapter.baseline_set_lateral_velocity.side_effect = slow_velocity
+    adapter.send_joystick_command.side_effect = slow_velocity
 
     queue.submit_baseline_velocity(0.3)
     assert first_started.wait(timeout=2.0)
@@ -197,7 +197,7 @@ def test_stop_priority_runs_before_stale_pending_velocity() -> None:
     queue.submit_baseline_velocity(-0.3)
     first_release.set()
 
-    _wait_for_calls(adapter, "baseline_set_lateral_velocity", 3)
+    _wait_for_calls(adapter, "send_joystick_command", 3)
     assert calls == [0.3, 0.0, -0.3]
     queue.shutdown()
 
@@ -208,14 +208,14 @@ def test_stop_priority_preserves_order_after_slow_start() -> None:
     first_started = threading.Event()
     first_release = threading.Event()
 
-    def slow_velocity(vy: float) -> bool:
+    def slow_velocity(_vx: float, vy: float, _wz: float) -> bool:
         calls.append(vy)
         if vy == 0.3 and len([value for value in calls if value == 0.3]) == 1:
             first_started.set()
             first_release.wait(timeout=2.0)
         return True
 
-    adapter.baseline_set_lateral_velocity.side_effect = slow_velocity
+    adapter.send_joystick_command.side_effect = slow_velocity
 
     queue.submit_baseline_velocity(0.3)
     assert first_started.wait(timeout=2.0)
@@ -223,6 +223,6 @@ def test_stop_priority_preserves_order_after_slow_start() -> None:
     queue.submit_baseline_velocity(-0.3)
     first_release.set()
 
-    _wait_for_calls(adapter, "baseline_set_lateral_velocity", 3)
+    _wait_for_calls(adapter, "send_joystick_command", 3)
     assert calls == [0.3, 0.0, -0.3]
     queue.shutdown()

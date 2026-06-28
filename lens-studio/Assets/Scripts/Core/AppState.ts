@@ -19,10 +19,10 @@ import {
 export type { NavigationGoalMode };
 export { NAV_GOAL_MODE_LABELS, nextNavigationGoalMode };
 
-/** Whole-app lifecycle: setup wizard vs live XR session. */
-export type AppPhase = "setup" | "runtime";
-/** Runtime UX mode; `"setup"` is registration preview overlay — not the same as `AppPhase.setup`. */
-export type OperatingMode = "setup" | "manual" | "agent";
+/** Whole-app lifecycle: registration wizard vs live XR session. */
+export type AppPhase = "registration" | "runtime";
+/** Runtime UX mode; `"registration"` is registration preview overlay — not the same as `AppPhase.registration`. */
+export type OperatingMode = "registration" | "manual" | "agent";
 export type RobotInteractionMode = "hidden" | "manualPlacement" | "runtimeRobot";
 export type NavigationState =
   | "off"
@@ -48,7 +48,7 @@ export interface BridgeSnapshot {
 export type LidarDisplayMode = "off" | "obstacles" | "full";
 
 export type SetupSessionState = {
-  phase: "setup";
+  phase: "registration";
   interaction: "hidden" | "manualPlacement";
 };
 
@@ -166,7 +166,7 @@ export function robotActivityPresentation(
 export function robotMarkerSteadyStatePresentation(
   state: DimosAppState,
 ): StatusTextPresentation {
-  if (state.operatingMode === "setup") {
+  if (state.operatingMode === "registration") {
     return { text: "", color: COLOR_WHITE };
   }
   if (!state.robotRuntime.capabilities.nav.available) {
@@ -185,12 +185,12 @@ export function robotMarkerSteadyStatePresentation(
 }
 
 export function toSessionState(state: DimosAppState): SessionState {
-  if (state.phase === "setup") {
+  if (state.phase === "registration") {
     const interaction =
       state.robotInteractionMode === "manualPlacement"
         ? "manualPlacement"
         : "hidden";
-    return { phase: "setup", interaction };
+    return { phase: "registration", interaction };
   }
   return {
     phase: "runtime",
@@ -204,7 +204,7 @@ export function toSessionState(state: DimosAppState): SessionState {
 export function validateSessionFields(state: DimosAppState): DimosAppState {
   const next: DimosAppState = { ...state };
 
-  if (next.phase === "setup") {
+  if (next.phase === "registration") {
     next.navigationState = "off";
     next.navigationOutcome = defaultNavigationOutcome();
     if (next.robotInteractionMode === "runtimeRobot") {
@@ -217,7 +217,7 @@ export function validateSessionFields(state: DimosAppState): DimosAppState {
       next.navigationState = "off";
     }
     if (
-      next.operatingMode === "setup" &&
+      next.operatingMode === "registration" &&
       (next.navigationState === "armed" || next.navigationState === "placingGoal")
     ) {
       next.navigationState = "off";
@@ -298,7 +298,7 @@ const DEFAULT_CAPABILITY_NAMES = [
   "nav",
   "path",
   "plan_preview",
-  "cancel_goal",
+  "cancel_nav_goal",
   "emergency_stop",
 ];
 
@@ -390,7 +390,7 @@ export function createDefaultDriftState(): DriftState {
 
 export function createDefaultDimosAppState(): DimosAppState {
   return validateSessionFields({
-    phase: "setup",
+    phase: "registration",
     debugMode: false,
     lidarMode: "obstacles",
     operatingMode: "manual",

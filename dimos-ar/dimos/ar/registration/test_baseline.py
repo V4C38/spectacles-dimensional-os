@@ -26,7 +26,7 @@ _LEG_DURATIONS = DEFAULT_BASELINE_MOTION_RECIPE.leg_duration_s
 def _make_adapter(*, available: bool = True) -> MagicMock:
     adapter = MagicMock(
         baseline_motion_available=MagicMock(return_value=available),
-        baseline_set_lateral_velocity=MagicMock(return_value=True),
+        send_joystick_command=MagicMock(return_value=True),
     )
     return adapter
 
@@ -55,12 +55,13 @@ def _wait_for_leg_timer(driver: BaselineCollector) -> float:
 
 
 def _wait_for_velocity(adapter: MagicMock, expected: float) -> None:
+    expected_args = (0.0, expected, 0.0)
     for _ in range(100):
-        if adapter.baseline_set_lateral_velocity.call_args is not None:
-            if adapter.baseline_set_lateral_velocity.call_args.args == (expected,):
+        if adapter.send_joystick_command.call_args is not None:
+            if adapter.send_joystick_command.call_args.args == expected_args:
                 return
         time.sleep(0.01)
-    adapter.baseline_set_lateral_velocity.assert_called_with(expected)
+    adapter.send_joystick_command.assert_called_with(*expected_args)
 
 
 # ── safety: no confirm → no velocity ─────────────────────────────────────────
@@ -72,7 +73,7 @@ def test_no_velocity_without_confirm() -> None:
     assert driver.state == _BaselineState.ESTIMATING
     for _ in range(10):
         driver.tick(obs_count=0, latest_obs_pos_world=None)
-    adapter.baseline_set_lateral_velocity.assert_not_called()
+    adapter.send_joystick_command.assert_not_called()
 
 
 # ── ESTIMATING → AWAITING_CONFIRM ────────────────────────────────────────────

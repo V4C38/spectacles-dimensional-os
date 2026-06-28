@@ -176,7 +176,7 @@ export class RobotUiView {
 
   public setOperatingMode(mode: OperatingMode): void {
     this._operatingMode = mode;
-    this._inSetupMode = mode === "setup";
+    this._inSetupMode = mode === "registration";
     if (this.manualModeMenu) {
       this.manualModeMenu.enabled = mode === "manual";
     }
@@ -184,7 +184,7 @@ export class RobotUiView {
       this.agentModeMenu.enabled = mode === "agent";
     }
     if (this.setupWizardMenuObj) {
-      this.setupWizardMenuObj.enabled = mode === "setup";
+      this.setupWizardMenuObj.enabled = mode === "registration";
     }
   }
 
@@ -202,18 +202,18 @@ export class RobotUiView {
 
     const title = state.robotRuntime.displayName;
     const activity = robotActivityPresentation(state);
-    if (state.operatingMode !== "setup") {
+    if (state.operatingMode !== "registration") {
       this._applyTitle(title);
       this._applyActivity(activity.text, activity.color);
     }
 
-    if (state.operatingMode !== "setup") {
+    if (state.operatingMode !== "registration") {
       const navAvailable = state.robotRuntime.capabilities.nav?.available ?? false;
       this._syncGoalModeButton(state.navigationGoalMode, navAvailable);
     }
 
     const stopAvailable = state.robotRuntime.capabilities.emergency_stop?.available ?? false;
-    if (state.operatingMode !== "setup") {
+    if (state.operatingMode !== "registration") {
       this.stopObj.enabled = true;
     }
     applyCapabilityButtonPresentation(this.stopBtn, this.stopLabel, {

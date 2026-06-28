@@ -8,8 +8,8 @@ import {
   buildCameraInfo,
   buildNavigateGoal,
   buildPreviewGoal,
-  buildGoal,
-  buildCancelGoal,
+  buildNavGoal,
+  buildCancelNavGoal,
   buildEmergencyStop,
   DEFAULT_LIDAR_OBSTACLE_SETTINGS,
 } from "../../Assets/Scripts/Bridge/Protocol";
@@ -125,7 +125,7 @@ describe("outbound protocol builders", () => {
         new quat(1, 0, 0, 0),
       ),
     );
-    expect(msg.type).toBe("goal");
+    expect(msg.type).toBe("nav_goal");
     expect(msg.robot_id).toBe("go2");
     expect(msg.intent).toBe("navigate");
     expect(msg.position).toEqual([1, 0, 2]);
@@ -153,25 +153,25 @@ describe("outbound protocol builders", () => {
     expect(msg.orientation).toEqual([0, 0, 0, 1]);
   });
 
-  it("buildGoal accepts explicit intent", () => {
+  it("buildNavGoal accepts explicit intent", () => {
     const msg = JSON.parse(
-      buildGoal("go2", "navigate", new vec3(100, 0, 200), new quat(1, 0, 0, 0)),
+      buildNavGoal("go2", "navigate", new vec3(100, 0, 200), new quat(1, 0, 0, 0)),
     );
     expect(msg.intent).toBe("navigate");
   });
 
-  it("buildGoal preview without rotation", () => {
+  it("buildNavGoal preview without rotation", () => {
     const msg = JSON.parse(
-      buildGoal("go2", "preview", new vec3(50, 0, 0)),
+      buildNavGoal("go2", "preview", new vec3(50, 0, 0)),
     );
     expect(msg.intent).toBe("preview");
     expect(msg.position).toEqual([0.5, 0, 0]);
     expect(msg).not.toHaveProperty("orientation");
   });
 
-  it("buildCancelGoal", () => {
-    const msg = JSON.parse(buildCancelGoal("go2"));
-    expect(msg.type).toBe("cancel_goal");
+  it("buildCancelNavGoal", () => {
+    const msg = JSON.parse(buildCancelNavGoal("go2"));
+    expect(msg.type).toBe("cancel_nav_goal");
     expect(msg.robot_id).toBe("go2");
     expect(msg.ts).toBe(1000);
   });

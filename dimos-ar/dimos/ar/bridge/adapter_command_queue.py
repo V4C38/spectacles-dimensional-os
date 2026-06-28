@@ -209,7 +209,7 @@ class AdapterCommandQueue:
         queue_wait_ms = round((time.monotonic() - job.submitted_at) * 1000.0, 1)
         logger.info(
             "adapter command queue dispatch starting",
-            command="baseline_set_lateral_velocity",
+            command="send_joystick_command",
             velocity=job.vy,
             queue_wait_ms=queue_wait_ms,
         )
@@ -218,16 +218,16 @@ class AdapterCommandQueue:
         err: BaseException | None = None
         self._baseline_in_flight = True
         try:
-            self._adapter.baseline_set_lateral_velocity(job.vy)
+            self._adapter.send_joystick_command(0.0, job.vy, 0.0)
         except BaseException as exc:
             ok = False
             err = exc
-            logger.exception("baseline_set_lateral_velocity failed", velocity=job.vy)
+            logger.exception("send_joystick_command failed", vy=job.vy)
         finally:
             self._baseline_in_flight = False
         rpc_ms = round((time.monotonic() - rpc_start) * 1000.0, 1)
         self._log_dispatch(
-            command="baseline_set_lateral_velocity",
+            command="send_joystick_command",
             ok=ok,
             velocity=job.vy,
             queue_wait_ms=queue_wait_ms,
@@ -260,15 +260,15 @@ class AdapterCommandQueue:
             if command == "estop":
                 self._adapter.emergency_stop()
             else:
-                result = self._adapter.cancel_goal()
+                result = self._adapter.cancel_nav_goal()
                 if result is False:
                     ok = False
-                    err = RuntimeError("adapter rejected cancel_goal")
+                    err = RuntimeError("adapter rejected cancel_nav_goal")
         except BaseException as exc:
             ok = False
             err = exc
             logger.exception("adapter priority command failed", command=command)
-        rpc_name = "emergency_stop" if command == "estop" else "cancel_goal"
+        rpc_name = "emergency_stop" if command == "estop" else "cancel_nav_goal"
         self._log_dispatch(command=rpc_name, start=start, ok=ok)
         self._invoke_complete(job.on_complete, ok, err)
 
@@ -285,7 +285,7 @@ class AdapterCommandQueue:
             "ok": ok,
             **extra,
         }
-        if command == "baseline_set_lateral_velocity":
+        if command == "send_joystick_command":
             logger.info("adapter command queue dispatch", **payload)
             return
         if start is not None:

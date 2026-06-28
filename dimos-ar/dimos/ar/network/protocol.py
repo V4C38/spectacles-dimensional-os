@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from dimos.ar.network.bridge_status import BridgeStatusSnapshot
     from dimos.ar.world_frame.state import WorldFrameState
 
-PROTOCOL_VERSION = 7
+PROTOCOL_VERSION = 8
 
 NavPhase = Literal["idle", "navigating", "recovering", "succeeded", "failed"]
 PathKind = Literal["active", "preview"]
@@ -38,7 +38,7 @@ DEFAULT_CAPABILITIES = [
     "nav",
     "path",
     "plan_preview",
-    "cancel_goal",
+    "cancel_nav_goal",
     "emergency_stop",
 ]
 
@@ -48,7 +48,7 @@ def _dumps(payload: dict[str, Any]) -> str:
 
 
 @dataclass(frozen=True)
-class GoalMessage:
+class NavGoalMessage:
     ts: float
     robot_id: str
     intent: GoalIntent
@@ -57,7 +57,7 @@ class GoalMessage:
 
 
 @dataclass(frozen=True)
-class CancelGoalMessage:
+class CancelNavGoalMessage:
     ts: float
     robot_id: str
 
@@ -107,8 +107,8 @@ class PingMessage:
 
 
 InboundMessage = (
-    GoalMessage
-    | CancelGoalMessage
+    NavGoalMessage
+    | CancelNavGoalMessage
     | EmergencyStopMessage
     | RegistrationCommandMessage
     | CameraInfoMessage
@@ -157,20 +157,20 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
             f"Unknown robot_id {robot_id!r}, expected {expected_robot_id!r}",
         )
 
-    if msg_type == "goal":
+    if msg_type == "nav_goal":
         intent = _require_type(data, "intent", str)
         if intent not in ("navigate", "preview"):
-            raise ValueError("goal.intent must be 'navigate' or 'preview'")
+            raise ValueError("nav_goal.intent must be 'navigate' or 'preview'")
         orientation = _quat(data, "orientation") if "orientation" in data else None
-        return GoalMessage(
+        return NavGoalMessage(
             ts=ts,
             robot_id=robot_id,
             intent=intent,  # type: ignore[arg-type]
             position=_vec3(data, "position"),
             orientation=orientation,
         )
-    if msg_type == "cancel_goal":
-        return CancelGoalMessage(ts=ts, robot_id=robot_id)
+    if msg_type == "cancel_nav_goal":
+        return CancelNavGoalMessage(ts=ts, robot_id=robot_id)
     if msg_type == "emergency_stop":
         return EmergencyStopMessage(ts=ts, robot_id=robot_id)
     if msg_type == "registration_command":
@@ -543,11 +543,11 @@ def encode_nav_status(
 __all__ = [
     "PROTOCOL_VERSION",
     "CameraInfoMessage",
-    "CancelGoalMessage",
+    "CancelNavGoalMessage",
     "EmergencyStopMessage",
     "GetStatusMessage",
     "GoalIntent",
-    "GoalMessage",
+    "NavGoalMessage",
     "InboundMessage",
     "NavPhase",
     "PathKind",

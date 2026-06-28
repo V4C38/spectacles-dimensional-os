@@ -67,10 +67,10 @@ export class SetupRegistrationPreview {
   private _lastStatusMsg: RegistrationStatusMessage | null = null;
 
   public begin(): void {
-    this._priorRuntimeMode = this.dimosState.snapshot.operatingMode !== "setup"
+    this._priorRuntimeMode = this.dimosState.snapshot.operatingMode !== "registration"
       ? this.dimosState.snapshot.operatingMode
       : "manual";
-    this.dimosState.update({ operatingMode: "setup", lidarMode: "off" });
+    this.dimosState.update({ operatingMode: "registration", lidarMode: "off" });
 
     this._active = true;
     this._tagVisible = false;

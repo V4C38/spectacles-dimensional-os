@@ -12,7 +12,7 @@ import {
   RuntimeSnapshotMessage,
   buildRegistrationCommand,
   buildRegistrationPose,
-  buildCancelGoal,
+  buildCancelNavGoal,
   buildEmergencyStop,
   buildGetStatus,
   buildSetLidarMode,
@@ -299,7 +299,7 @@ export class BridgeClient extends BaseScriptComponent {
   }
 
   public sendCancelGoal(): boolean {
-    return this._sendForActiveRobot("cancel_goal", buildCancelGoal);
+    return this._sendForActiveRobot("cancel_nav_goal", buildCancelNavGoal);
   }
 
   public sendEmergencyStop(): boolean {

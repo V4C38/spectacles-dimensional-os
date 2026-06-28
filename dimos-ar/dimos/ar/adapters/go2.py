@@ -44,7 +44,7 @@ GO2_CAPABILITIES: dict[str, CapabilityState] = {
     "nav": CapabilityState(True),
     "path": CapabilityState(True),
     "plan_preview": CapabilityState(True),
-    "cancel_goal": CapabilityState(True),
+    "cancel_nav_goal": CapabilityState(True),
     "emergency_stop": CapabilityState(True),
 }
 
@@ -136,15 +136,15 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
 
     config: Go2AdapterConfig
     _go2_connection: GO2ConnectionSpec | None = None
-    _baseline_vel_lock: threading.Lock
-    _baseline_vel_thread: threading.Thread | None
-    _baseline_vel_target: float
+    _joystick_lock: threading.Lock
+    _joystick_thread: threading.Thread | None
+    _joystick_target: tuple[float, float, float]
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self._baseline_vel_lock = threading.Lock()
-        self._baseline_vel_thread = None
-        self._baseline_vel_target = 0.0
+        self._joystick_lock = threading.Lock()
+        self._joystick_thread = None
+        self._joystick_target = (0.0, 0.0, 0.0)
 
     async def handle_ar_lidar_in(self, msg: PointCloud2) -> None:
         self.ar_lidar.publish(msg)
@@ -210,7 +210,7 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
                 False, "Global costmap is not present for preview planning in this runtime."
             )
         if not self._cancel_goal_available():
-            capability_states["cancel_goal"] = CapabilityState(
+            capability_states["cancel_nav_goal"] = CapabilityState(
                 False, "Goal cancellation is not available for this runtime."
             )
         if not self._emergency_stop_available():
@@ -257,7 +257,7 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         return False
 
     @rpc
-    def cancel_goal(self) -> bool:
+    def cancel_nav_goal(self) -> bool:
         cancelled = False
         if self.stop_movement.transport is not None:
             self.stop_movement.publish(Bool(data=True))
@@ -266,7 +266,7 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
             self.cancel_goal_signal.publish(Bool(data=True))
             cancelled = True
         if not cancelled:
-            logger.warning("Go2 cancel_goal rejected: no navigation cancel path is available")
+            logger.warning("Go2 cancel_nav_goal rejected: no navigation cancel path is available")
         return cancelled
 
     @rpc
@@ -307,53 +307,54 @@ class Go2AdapterModule(Module, ARRobotAdapterSpec):  # type: ignore[misc]
         return go2_runtime_tag_tracking_profile()
 
     @rpc
-    def baseline_set_lateral_velocity(self, vy_m_s: float) -> bool:
-        """Drive a lateral strafe via the proven joystick/cmd_vel path.
+    def send_joystick_command(self, vx: float, vy: float, wz: float) -> bool:
+        """Drive via the proven joystick/cmd_vel path.
 
-        The value is interpreted as **raw joystick deflection in [-1, 1]**, not
-        meters per second. UnitreeWebRTCConnection.move() maps Twist.linear.y
-        directly to the `lx` stick field with no m/s→stick scaling.
+        Values are **raw stick deflection in [-1, 1]**, not meters per second.
+        UnitreeWebRTCConnection.move() maps Twist.linear.y directly to the `lx`
+        stick field with no m/s→stick scaling.
 
         A ~50 Hz daemon thread continuously republishes the requested Twist so
         the robot keeps moving (Go2 WebRTC has no deadman — if the stream goes
         silent the robot does NOT auto-stop; the republisher bridges ticks).
-        Calling with 0.0 publishes a zero Twist immediately, which stops the
-        robot, and lets the republisher thread exit.
+        Calling with (0, 0, 0) publishes a zero Twist immediately, which stops
+        the robot, and lets the republisher thread exit.
         """
-        with self._baseline_vel_lock:
-            self._baseline_vel_target = float(vy_m_s)
+        target = (float(vx), float(vy), float(wz))
+        with self._joystick_lock:
+            self._joystick_target = target
 
-        if vy_m_s == 0.0:
-            self._publish_baseline_twist(0.0)
+        if target == (0.0, 0.0, 0.0):
+            self._publish_joystick_twist(*target)
             return True
 
-        with self._baseline_vel_lock:
-            if self._baseline_vel_thread is None or not self._baseline_vel_thread.is_alive():
+        with self._joystick_lock:
+            if self._joystick_thread is None or not self._joystick_thread.is_alive():
                 t = threading.Thread(
-                    target=self._baseline_vel_loop,
+                    target=self._joystick_loop,
                     daemon=True,
-                    name="ar-assist-vel",
+                    name="ar-joystick-republish",
                 )
-                self._baseline_vel_thread = t
+                self._joystick_thread = t
                 t.start()
         return True
 
-    def _baseline_vel_loop(self) -> None:
-        """Republish the current assist velocity at ~50 Hz until it is zeroed."""
+    def _joystick_loop(self) -> None:
+        """Republish the current joystick target at ~50 Hz until zeroed."""
         while True:
-            with self._baseline_vel_lock:
-                vy = self._baseline_vel_target
-            if vy == 0.0:
+            with self._joystick_lock:
+                vx, vy, wz = self._joystick_target
+            if (vx, vy, wz) == (0.0, 0.0, 0.0):
                 break
-            self._publish_baseline_twist(vy)
+            self._publish_joystick_twist(vx, vy, wz)
             time.sleep(1.0 / 50.0)
 
-    def _publish_baseline_twist(self, vy: float) -> None:
+    def _publish_joystick_twist(self, vx: float, vy: float, wz: float) -> None:
         if self.cmd_vel.transport is None:
-            logger.warning("Go2 baseline_set_lateral_velocity: cmd_vel transport not available")
+            logger.warning("Go2 send_joystick_command: cmd_vel transport not available")
             return
         twist = Twist(
-            linear=Vector3(0.0, vy, 0.0),
-            angular=Vector3(0.0, 0.0, 0.0),
+            linear=Vector3(vx, vy, 0.0),
+            angular=Vector3(0.0, 0.0, wz),
         )
         self.cmd_vel.publish(twist)

@@ -13,7 +13,7 @@ from dimos.utils.logging_config import setup_logger
 if TYPE_CHECKING:
     from dimos.ar.bridge.odom_buffer import OdomBuffer
     from dimos.ar.bridge.sender import BridgeSender
-    from dimos.ar.network.protocol import GoalMessage
+    from dimos.ar.network.protocol import NavGoalMessage
     from dimos.ar.preview_planner import PreviewPlanner
     from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 
@@ -83,7 +83,7 @@ class PreviewGoalHandler:
     def update_costmap(self, grid: OccupancyGrid) -> None:
         self._planner.update_costmap(grid)
 
-    def on_preview_goal(self, msg: GoalMessage) -> None:
+    def on_preview_goal(self, msg: NavGoalMessage) -> None:
         if msg.intent != "preview":
             return
         if not self._world_frame.is_committed or not self._planner.has_costmap():

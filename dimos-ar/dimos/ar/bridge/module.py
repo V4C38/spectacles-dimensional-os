@@ -30,7 +30,7 @@ from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.bridge.status_service import StatusService
 from dimos.ar.bridge.telemetry import TelemetryPublisher
 from dimos.ar.network.protocol import (
-    GoalMessage,
+    NavGoalMessage,
     SetLidarModeMessage,
     encode_runtime_snapshot,
 )
@@ -257,8 +257,8 @@ class ARBridge(Module):  # type: ignore[misc]
             on_camera_info=registration.on_camera_info,
             on_camera_frame=registration.on_camera_frame,
             on_registration_pose=registration.on_registration_pose,
-            on_goal=self._route_goal_message,
-            on_cancel_goal=lambda msg: nav.on_cancel_goal(msg.ts),
+            on_nav_goal=self._route_nav_goal_message,
+            on_cancel_nav_goal=lambda msg: nav.on_cancel_nav_goal(msg.ts),
             on_emergency_stop=safety.on_emergency_stop,
             on_get_status=self._on_get_status,
             on_set_lidar_mode=self._on_set_lidar_mode,
@@ -378,7 +378,7 @@ class ARBridge(Module):  # type: ignore[misc]
     # Disconnect handler
     # ------------------------------------------------------------------
 
-    def _route_goal_message(self, msg: GoalMessage) -> None:
+    def _route_nav_goal_message(self, msg: NavGoalMessage) -> None:
         if msg.intent == "navigate":
             self._nav.on_navigate_goal(msg)
         else:

@@ -133,7 +133,7 @@ export class DimosManager extends BaseScriptComponent {
     this.dimosServices.robot.robotMarker?.ui?.setOperatingMode(mode);
 
     const navigation = this.dimosServices.navigation;
-    if (mode === "setup") {
+    if (mode === "registration") {
       navigation.syncManualNavigationForOperatingMode(mode, state);
       return;
     }
@@ -171,10 +171,10 @@ export class DimosManager extends BaseScriptComponent {
     this.dimosServices.bridge.disconnect();
     this.dimosServices.bridge.applyFrameCapturePolicy(true);
     this.dimosServices.state.update({
-      phase: "setup",
+      phase: "registration",
       navigationOutcome: defaultNavigationOutcome(),
     });
-    this._applyPhaseSideEffects("setup");
+    this._applyPhaseSideEffects("registration");
     this._setRobotInteractionMode("hidden");
   }
 
@@ -314,7 +314,7 @@ export class DimosManager extends BaseScriptComponent {
   }
 
   public onMainMenuModeButtonPressed(mode: OperatingMode): void {
-    if (mode === "setup") {
+    if (mode === "registration") {
       return;
     }
     if (this.appState.operatingMode === mode) {
@@ -336,7 +336,7 @@ export class DimosManager extends BaseScriptComponent {
       return;
     }
     this._log(`setOperatingMode: ${mode}`);
-    if (mode === "setup") {
+    if (mode === "registration") {
       this.dimosServices.state.update({ operatingMode: mode, lidarMode: "off" });
       return;
     }

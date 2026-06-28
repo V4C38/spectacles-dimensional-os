@@ -17,10 +17,10 @@ import websockets.asyncio.server as ws_server
 from dimos.ar.network.inbound_dispatch import InboundDispatcher
 from dimos.ar.network.protocol import (
     CameraInfoMessage,
-    CancelGoalMessage,
+    CancelNavGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
-    GoalMessage,
+    NavGoalMessage,
     InboundMessage,
     PingMessage,
     RegistrationCommandMessage,
@@ -46,8 +46,8 @@ CameraFrameHandler = Callable[
     [dict[str, Any], bytes, "ws_server.ServerConnection"], Awaitable[None]
 ]
 RegistrationPoseHandler = Callable[[RegistrationPoseMessage, "ws_server.ServerConnection"], None]
-GoalHandler = Callable[[GoalMessage], None]
-CancelGoalHandler = Callable[[CancelGoalMessage], None]
+NavGoalHandler = Callable[[NavGoalMessage], None]
+CancelNavGoalHandler = Callable[[CancelNavGoalMessage], None]
 EmergencyStopHandler = Callable[[EmergencyStopMessage], None]
 GetStatusHandler = Callable[[GetStatusMessage, "ws_server.ServerConnection"], None]
 SetLidarModeHandler = Callable[[SetLidarModeMessage, "ws_server.ServerConnection"], None]
@@ -60,7 +60,7 @@ InboundHandler = Callable[[InboundMessage, "ws_server.ServerConnection"], None]
 
 INBOUND_TEXT_LOG_INTERVAL_S = 1.0
 CAMERA_FRAME_LOG_INTERVAL_S = 2.0
-_THROTTLED_INBOUND_TYPES = frozenset({"registration_pose", "goal"})
+_THROTTLED_INBOUND_TYPES = frozenset({"registration_pose", "nav_goal"})
 PING_INTERVAL_S = 30
 PING_TIMEOUT_S = 30
 
@@ -93,8 +93,8 @@ class ARWebSocketServer:
         on_camera_info: CameraInfoHandler | None = None,
         on_camera_frame: CameraFrameHandler | None = None,
         on_registration_pose: RegistrationPoseHandler | None = None,
-        on_goal: GoalHandler | None = None,
-        on_cancel_goal: CancelGoalHandler | None = None,
+        on_nav_goal: NavGoalHandler | None = None,
+        on_cancel_nav_goal: CancelNavGoalHandler | None = None,
         on_emergency_stop: EmergencyStopHandler | None = None,
         on_get_status: GetStatusHandler | None = None,
         on_set_lidar_mode: SetLidarModeHandler | None = None,
@@ -114,8 +114,8 @@ class ARWebSocketServer:
             on_registration_command=on_registration_command,
             on_camera_info=on_camera_info,
             on_registration_pose=on_registration_pose,
-            on_goal=on_goal,
-            on_cancel_goal=on_cancel_goal,
+            on_nav_goal=on_nav_goal,
+            on_cancel_nav_goal=on_cancel_nav_goal,
             on_emergency_stop=on_emergency_stop,
             on_get_status=on_get_status,
             on_set_lidar_mode=on_set_lidar_mode,
@@ -136,8 +136,8 @@ class ARWebSocketServer:
         on_registration_command: RegistrationCommandHandler | None,
         on_camera_info: CameraInfoHandler | None,
         on_registration_pose: RegistrationPoseHandler | None,
-        on_goal: GoalHandler | None,
-        on_cancel_goal: CancelGoalHandler | None,
+        on_nav_goal: NavGoalHandler | None,
+        on_cancel_nav_goal: CancelNavGoalHandler | None,
         on_emergency_stop: EmergencyStopHandler | None,
         on_get_status: GetStatusHandler | None,
         on_set_lidar_mode: SetLidarModeHandler | None,
@@ -170,8 +170,8 @@ class ARWebSocketServer:
                 f"{label} received but not supported in this blueprint"
             )
 
-        handlers[GoalMessage] = _simple_handler(on_goal, "goal")
-        handlers[CancelGoalMessage] = _simple_handler(on_cancel_goal, "cancel_goal")
+        handlers[NavGoalMessage] = _simple_handler(on_nav_goal, "nav_goal")
+        handlers[CancelNavGoalMessage] = _simple_handler(on_cancel_nav_goal, "cancel_nav_goal")
         handlers[EmergencyStopMessage] = _simple_handler(on_emergency_stop, "emergency_stop")
 
         return handlers

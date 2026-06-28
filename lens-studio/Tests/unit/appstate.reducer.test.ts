@@ -39,10 +39,10 @@ function baseState(patch: Partial<DimosAppState> = {}): DimosAppState {
 }
 
 describe("validateSessionFields", () => {
-  it("forces setup-phase navigation off and demotes runtimeRobot interaction", () => {
+  it("forces registration-phase navigation off and demotes runtimeRobot interaction", () => {
     const next = validateSessionFields(
       baseState({
-        phase: "setup",
+        phase: "registration",
         navigationState: "armed",
         navigationOutcome: { kind: "success" },
         robotInteractionMode: "runtimeRobot",
@@ -64,11 +64,11 @@ describe("validateSessionFields", () => {
     expect(next.navigationState).toBe("off");
   });
 
-  it("turns off navigation when operating mode is setup", () => {
+  it("turns off navigation when operating mode is registration", () => {
     const next = validateSessionFields(
       baseState({
         phase: "runtime",
-        operatingMode: "setup",
+        operatingMode: "registration",
         navigationState: "placingGoal",
       }),
     );
@@ -99,7 +99,7 @@ describe("nextLidarMode", () => {
 describe("createDefaultDimosAppState", () => {
   it("returns expected defaults", () => {
     const state = createDefaultDimosAppState();
-    expect(state.phase).toBe("setup");
+    expect(state.phase).toBe("registration");
     expect(state.lidarMode).toBe("obstacles");
     expect(state.operatingMode).toBe("manual");
     expect(state.bridgeLinkState).toBe("disconnected");
@@ -160,10 +160,10 @@ describe("robotActivityPresentation", () => {
 });
 
 describe("robotMarkerSteadyStatePresentation", () => {
-  it("returns empty text in setup mode", () => {
+  it("returns empty text in registration mode", () => {
     expect(
       robotMarkerSteadyStatePresentation(
-        baseState({ operatingMode: "setup" }),
+        baseState({ operatingMode: "registration" }),
       ),
     ).toEqual({ text: "", color: COLOR_WHITE });
   });
@@ -204,15 +204,15 @@ describe("robotMarkerSteadyStatePresentation", () => {
 });
 
 describe("toSessionState", () => {
-  it("maps setup phase", () => {
+  it("maps registration phase", () => {
     expect(
       toSessionState(
         baseState({
-          phase: "setup",
+          phase: "registration",
           robotInteractionMode: "manualPlacement",
         }),
       ),
-    ).toEqual({ phase: "setup", interaction: "manualPlacement" });
+    ).toEqual({ phase: "registration", interaction: "manualPlacement" });
   });
 
   it("maps runtime phase", () => {

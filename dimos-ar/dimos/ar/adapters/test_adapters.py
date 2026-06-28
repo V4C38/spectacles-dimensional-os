@@ -35,9 +35,9 @@ class _FakeStream:
 def _make_go2_adapter() -> Go2AdapterModule:
     adapter = object.__new__(Go2AdapterModule)
     adapter._go2_connection = None
-    adapter._baseline_vel_lock = __import__("threading").Lock()
-    adapter._baseline_vel_thread = None
-    adapter._baseline_vel_target = 0.0
+    adapter._joystick_lock = __import__("threading").Lock()
+    adapter._joystick_thread = None
+    adapter._joystick_target = (0.0, 0.0, 0.0)
     adapter.config = SimpleNamespace(robot_id="unitree_go2")
     adapter.goal_request = _FakeStream(connected=False)
     adapter.goal_req = _FakeStream(connected=False)
@@ -64,9 +64,9 @@ def _make_g1_adapter() -> G1AdapterModule:
     adapter = object.__new__(G1AdapterModule)
     adapter._g1_connection = None
     adapter._g1_high_level = None
-    adapter._baseline_vel_lock = threading.Lock()
-    adapter._baseline_vel_thread = None
-    adapter._baseline_vel_target = 0.0
+    adapter._joystick_lock = threading.Lock()
+    adapter._joystick_thread = None
+    adapter._joystick_target = (0.0, 0.0, 0.0)
     adapter.config = SimpleNamespace(robot_id="unitree_g1")
     adapter.goal_request = _FakeStream(connected=False)
     adapter.goal_req = _FakeStream(connected=False)
@@ -98,11 +98,11 @@ def test_go2_send_nav_goal_uses_goal_req_when_present() -> None:
     assert adapter.goal_req.published == [goal]
 
 
-def test_go2_cancel_goal_uses_cancel_signal_when_present() -> None:
+def test_go2_cancel_nav_goal_uses_cancel_signal_when_present() -> None:
     adapter = _make_go2_adapter()
     adapter.cancel_goal_signal = _FakeStream(connected=True)
 
-    assert Go2AdapterModule.cancel_goal(adapter) is True
+    assert Go2AdapterModule.cancel_nav_goal(adapter) is True
     cancel = adapter.cancel_goal_signal.published[0]
     assert isinstance(cancel, Bool)
     assert cancel.data is True
@@ -132,21 +132,21 @@ def test_g1_send_nav_goal_uses_goal_request_when_present() -> None:
     assert adapter.goal_request.published == [goal]
 
 
-def test_g1_cancel_goal_uses_stop_movement() -> None:
+def test_g1_cancel_nav_goal_uses_stop_movement() -> None:
     adapter = _make_g1_adapter()
     adapter.stop_movement = _FakeStream(connected=True)
 
-    assert G1AdapterModule.cancel_goal(adapter) is True
+    assert G1AdapterModule.cancel_nav_goal(adapter) is True
     stop = adapter.stop_movement.published[0]
     assert isinstance(stop, Bool)
     assert stop.data is True
 
 
-def test_g1_cancel_goal_uses_cancel_goal_signal_when_present() -> None:
+def test_g1_cancel_nav_goal_uses_cancel_goal_signal_when_present() -> None:
     adapter = _make_g1_adapter()
     adapter.cancel_goal_signal = _FakeStream(connected=True)
 
-    assert G1AdapterModule.cancel_goal(adapter) is True
+    assert G1AdapterModule.cancel_nav_goal(adapter) is True
     cancel = adapter.cancel_goal_signal.published[0]
     assert isinstance(cancel, NavBool)
     assert cancel.data is True
@@ -175,11 +175,11 @@ def test_go2_baseline_motion_recipe_matches_teleop() -> None:
     assert DEFAULT_BASELINE_MOTION_RECIPE.strafe_speed == pytest.approx(0.2)
 
 
-def test_go2_baseline_set_lateral_velocity_passes_stick_through() -> None:
+def test_go2_send_joystick_command_passes_stick_through() -> None:
     adapter = _make_go2_adapter()
     adapter.cmd_vel = _FakeStream(connected=True)
 
-    assert Go2AdapterModule.baseline_set_lateral_velocity(adapter, 0.2) is True
+    assert Go2AdapterModule.send_joystick_command(adapter, 0.0, 0.2, 0.0) is True
     for _ in range(100):
         if adapter.cmd_vel.published:
             break
@@ -198,11 +198,11 @@ def test_g1_baseline_motion_available_and_capability_follow_cmd_vel_transport() 
     assert G1AdapterModule.capabilities(adapter)["registration_april_odom_baseline"].available is True
 
 
-def test_g1_baseline_set_lateral_velocity_zero_publishes_stop_twist() -> None:
+def test_g1_send_joystick_command_zero_publishes_stop_twist() -> None:
     adapter = _make_g1_adapter()
     adapter.cmd_vel = _FakeStream(connected=True)
 
-    assert G1AdapterModule.baseline_set_lateral_velocity(adapter, 0.0) is True
+    assert G1AdapterModule.send_joystick_command(adapter, 0.0, 0.0, 0.0) is True
     assert len(adapter.cmd_vel.published) == 1
     twist = adapter.cmd_vel.published[0]
     assert isinstance(twist, Twist)

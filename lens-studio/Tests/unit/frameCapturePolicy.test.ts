@@ -8,7 +8,7 @@ describe("computeFrameCapturePolicy", () => {
   it("forceOff overrides all inputs", () => {
     expect(
       computeFrameCapturePolicy({
-        appPhase: "setup",
+        appPhase: "registration",
         worldFrameCommitted: true,
         baselineCaptureSessionActive: true,
         registrationCaptureHint: "burst",
@@ -20,13 +20,13 @@ describe("computeFrameCapturePolicy", () => {
   it.each(hints)("setup baseline session uses capture hint %s", (hint) => {
     expect(
       computeFrameCapturePolicy({
-        appPhase: "setup",
+        appPhase: "registration",
         worldFrameCommitted: false,
         baselineCaptureSessionActive: true,
         registrationCaptureHint: hint,
         forceOff: false,
       }),
-    ).toEqual({ mode: "setup", policy: hint });
+    ).toEqual({ mode: "registration", policy: hint });
   });
 
   it.each(hints)(
@@ -34,13 +34,13 @@ describe("computeFrameCapturePolicy", () => {
     (hint) => {
       expect(
         computeFrameCapturePolicy({
-          appPhase: "setup",
+          appPhase: "registration",
           worldFrameCommitted: true,
           baselineCaptureSessionActive: true,
           registrationCaptureHint: hint,
           forceOff: false,
         }),
-      ).toEqual({ mode: "setup", policy: hint });
+      ).toEqual({ mode: "registration", policy: hint });
     },
   );
 
@@ -71,7 +71,7 @@ describe("computeFrameCapturePolicy", () => {
   it("setup without baseline session stays off even with capture hint", () => {
     expect(
       computeFrameCapturePolicy({
-        appPhase: "setup",
+        appPhase: "registration",
         worldFrameCommitted: false,
         baselineCaptureSessionActive: false,
         registrationCaptureHint: "steady",
@@ -83,7 +83,7 @@ describe("computeFrameCapturePolicy", () => {
   it("setup committed without baseline session stays off (post-succeeded latch cleared)", () => {
     expect(
       computeFrameCapturePolicy({
-        appPhase: "setup",
+        appPhase: "registration",
         worldFrameCommitted: true,
         baselineCaptureSessionActive: false,
         registrationCaptureHint: "hold",
@@ -131,7 +131,7 @@ describe("computeFrameCapturePolicy", () => {
   it("hello reconnect setup with no baseline session stays off", () => {
     expect(
       computeFrameCapturePolicy({
-        appPhase: "setup",
+        appPhase: "registration",
         worldFrameCommitted: false,
         baselineCaptureSessionActive: false,
         registrationCaptureHint: "burst",

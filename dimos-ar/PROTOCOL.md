@@ -9,7 +9,19 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v7 (current) — World-frame naming alignment
+### v8 (current) — Motion pipeline vocabulary alignment
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 8.**
+- **`goal`** wire type renamed to **`nav_goal`** (`intent: "navigate" | "preview"` unchanged).
+- **`cancel_goal`** wire type renamed to **`cancel_nav_goal`**.
+- **`hello.capabilities`:** `cancel_goal` → `cancel_nav_goal`.
+- Lens **`AppPhase` / `OperatingMode` / `CaptureMode`:** literal `"setup"` → `"registration"`.
+- Adapter RPC **`baseline_set_lateral_velocity(vy)`** → **`send_joystick_command(vx, vy, wz)`**
+  (stick deflection in [-1, 1]; `cmd_vel` port name unchanged).
+
+### v7 — World-frame naming alignment
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -133,7 +145,7 @@ capability map, then sends a `runtime_snapshot` (see below).
     "nav":                                { "available": true,  "reason": null },
     "path":                               { "available": true,  "reason": null },
     "plan_preview":                       { "available": true,  "reason": null },
-    "cancel_goal":                        { "available": true,  "reason": null },
+    "cancel_nav_goal":                        { "available": true,  "reason": null },
     "emergency_stop":                     { "available": false, "reason": "No safe stop interface is available in this runtime." }
   }
 }
@@ -176,7 +188,7 @@ Authoritative bridge + navigation state sent once after `hello` on connect and
 again when the client sends `get_status`. Bundles the same bridge fields as live
 `bridge_status`, the current navigation phase, and an optional **active** path
 when navigation is in progress. Preview paths are **not** cached — clients
-that reconnect mid-preview must re-issue `goal` with `intent: "preview"`.
+that reconnect mid-preview must re-issue `nav_goal` with `intent: "preview"`.
 
 ```json
 {
@@ -668,7 +680,7 @@ Header fields:
   robot-mounted tag. Runtime correction does not require robot-camera
   visibility of the tag; Spectacles frames are the only camera input.
 
-### `goal`
+### `nav_goal`
 
 World-frame navigation or preview request:
 
@@ -676,7 +688,7 @@ Navigate (replaces v5 `nav_goal`):
 
 ```json
 {
-  "type": "goal",
+  "type": "nav_goal",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
   "intent": "navigate",
@@ -689,7 +701,7 @@ Preview path only (replaces v5 `plan_path`):
 
 ```json
 {
-  "type": "goal",
+  "type": "nav_goal",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
   "intent": "preview",
@@ -707,13 +719,13 @@ Fields:
 
 Preview planning must never start navigation or change robot state.
 
-### `cancel_goal`
+### `cancel_nav_goal`
 
 Cancel the active navigation goal.
 
 ```json
 {
-  "type": "cancel_goal",
+  "type": "cancel_nav_goal",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2"
 }

@@ -19,10 +19,10 @@ from typing import TYPE_CHECKING
 
 from dimos.ar.network.protocol import (
     CameraInfoMessage,
-    CancelGoalMessage,
+    CancelNavGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
-    GoalMessage,
+    NavGoalMessage,
     InboundMessage,
     PingMessage,
     RegistrationCommandMessage,
@@ -56,8 +56,8 @@ MESSAGE_LANES: dict[type[InboundMessage], DispatchLane] = {
     CameraInfoMessage: DispatchLane.BACKGROUND,
     GetStatusMessage: DispatchLane.BACKGROUND,
     SetLidarModeMessage: DispatchLane.BACKGROUND,
-    GoalMessage: DispatchLane.BACKGROUND,
-    CancelGoalMessage: DispatchLane.BACKGROUND,
+    NavGoalMessage: DispatchLane.BACKGROUND,
+    CancelNavGoalMessage: DispatchLane.BACKGROUND,
     EmergencyStopMessage: DispatchLane.BACKGROUND,
     PingMessage: DispatchLane.ASYNC,
 }
