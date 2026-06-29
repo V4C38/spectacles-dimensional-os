@@ -2,11 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   bridgeNavigationReady,
   createDefaultBridgeSnapshot,
-} from "../../Assets/Scripts/Core/AppState";
+} from "../../Assets/Scripts/App/AppState";
 import {
   deriveLinkState,
   projectBridgeSnapshot,
-} from "../../Assets/Scripts/Bridge/Protocol";
+} from "../../Assets/Scripts/ARBridge/Network/Protocol";
 
 describe("projectBridgeSnapshot", () => {
   it("returns defaults when handshake is not ready", () => {

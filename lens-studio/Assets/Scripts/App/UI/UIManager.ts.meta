@@ -1,0 +1,50 @@
+- !<AssetImportMetadata/5745e4e7-8a47-4d00-ad60-99bbd554fbbd>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> 94714778-e2e9-4240-bceb-6b27bac2ad1c
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> 94714778-e2e9-4240-bceb-6b27bac2ad1c
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> e378d13e-9e73-42d3-b802-9368578bf89c
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/e378d13e-9e73-42d3-b802-9368578bf89c>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: 0b20d1ba-5c39-4c67-b8d0-d892da6daf71
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    arBridgeCoordinator: false
+    mainUIFrame: false
+    registrationWizard: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - mainUIFrame: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      arBridgeCoordinator: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
+      registrationWizard: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - // @input SceneObject mainUIFrame
+    - // @input AssignableType arBridgeCoordinator
+    - // @input AssignableType_1 registrationWizard

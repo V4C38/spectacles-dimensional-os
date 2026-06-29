@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   validateSessionFields,
   nextLidarMode,
-  createDefaultDimosAppState,
+  createDefaultAppStateData,
   bridgeLinkPresentation,
   navigationOutcomePresentation,
   robotActivityPresentation,
@@ -10,17 +10,17 @@ import {
   toSessionState,
   defaultNavigationOutcome,
   createDefaultRobotRuntimeState,
-  type DimosAppState,
-} from "../../Assets/Scripts/Core/AppState";
+  type AppStateData,
+} from "../../Assets/Scripts/App/AppState";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WARN, COLOR_WHITE } from "../mocks/UIKit";
 
 function runtimeState(
-  patch: Partial<DimosAppState["robotRuntime"]> = {},
-): DimosAppState["robotRuntime"] {
+  patch: Partial<AppStateData["robotRuntime"]> = {},
+): AppStateData["robotRuntime"] {
   return { ...createDefaultRobotRuntimeState(), ...patch };
 }
 
-function baseState(patch: Partial<DimosAppState> = {}): DimosAppState {
+function baseState(patch: Partial<AppStateData> = {}): AppStateData {
   return {
     phase: "runtime",
     debugMode: false,
@@ -33,7 +33,7 @@ function baseState(patch: Partial<DimosAppState> = {}): DimosAppState {
     navigationGoalMode: "single",
     bridgeLinkState: "disconnected",
     robotRuntime: runtimeState(),
-    driftState: createDefaultDimosAppState().driftState,
+    driftState: createDefaultAppStateData().driftState,
     ...patch,
   };
 }
@@ -96,9 +96,9 @@ describe("nextLidarMode", () => {
   });
 });
 
-describe("createDefaultDimosAppState", () => {
+describe("createDefaultAppStateData", () => {
   it("returns expected defaults", () => {
-    const state = createDefaultDimosAppState();
+    const state = createDefaultAppStateData();
     expect(state.phase).toBe("registration");
     expect(state.lidarMode).toBe("off");
     expect(state.operatingMode).toBe("manual");

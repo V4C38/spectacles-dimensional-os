@@ -12,6 +12,14 @@ export class vec3 {
     this.z /= n;
     return this;
   }
+
+  static lerp(a: vec3, b: vec3, t: number): vec3 {
+    return new vec3(
+      a.x + (b.x - a.x) * t,
+      a.y + (b.y - a.y) * t,
+      a.z + (b.z - a.z) * t,
+    );
+  }
 }
 
 export class vec4 {
@@ -41,6 +49,41 @@ export class quat {
 
   static quatIdentity(): quat {
     return new quat(1, 0, 0, 0);
+  }
+
+  static slerp(a: quat, b: quat, t: number): quat {
+    let dot = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
+    let bx = b.w;
+    let by = b.x;
+    let bz = b.y;
+    let bw = b.z;
+    if (dot < 0) {
+      dot = -dot;
+      bx = -bx;
+      by = -by;
+      bz = -bz;
+      bw = -bw;
+    }
+    if (dot > 0.9995) {
+      const result = new quat(
+        a.w + t * (bx - a.w),
+        a.x + t * (by - a.x),
+        a.y + t * (bz - a.y),
+        a.z + t * (bw - a.z),
+      );
+      result.normalize();
+      return result;
+    }
+    const theta = Math.acos(Math.min(1, dot));
+    const sinTheta = Math.sin(theta);
+    const wa = Math.sin((1 - t) * theta) / sinTheta;
+    const wb = Math.sin(t * theta) / sinTheta;
+    return new quat(
+      wa * a.w + wb * bx,
+      wa * a.x + wb * by,
+      wa * a.y + wb * bz,
+      wa * a.z + wb * bw,
+    );
   }
 
   multiplyVec3(v: vec3): vec3 {

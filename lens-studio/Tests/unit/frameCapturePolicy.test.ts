@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { computeFrameCapturePolicy } from "../../Assets/Scripts/Camera/FrameCapturePolicy";
-import { CaptureHint } from "../../Assets/Scripts/Bridge/BridgeDomain";
+import { computeFrameCapturePolicy } from "../../Assets/Scripts/ARBridge/Session/InboundRouter";
+import { CaptureHint } from "../../Assets/Scripts/ARBridge/Network/Protocol";
 
 const hints: CaptureHint[] = ["burst", "hold", "steady", "off"];
 

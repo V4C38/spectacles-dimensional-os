@@ -1,0 +1,47 @@
+- !<AssetImportMetadata/643ebce4-cf14-4a12-a2ca-f0d8753f93f1>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> 00653a6c-f317-4f6b-96c9-2a0abe5cfff6
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> 00653a6c-f317-4f6b-96c9-2a0abe5cfff6
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> c85df25c-0ef3-4052-b24c-bfcd849c8726
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/c85df25c-0ef3-4052-b24c-bfcd849c8726>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: 1b2d9934-d1b8-4ad0-82ba-c92166da1093
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    defaultBridgeIp: false
+    internetModule: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - defaultBridgeIp: 192.168.1.62
+      internetModule: !<reference.InternetModule> 00000000-0000-0000-0000-000000000000
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - '// @input string defaultBridgeIp = "192.168.1.62"'
+    - // @input Asset.InternetModule internetModule

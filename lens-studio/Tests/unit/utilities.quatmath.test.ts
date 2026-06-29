@@ -6,7 +6,7 @@ import {
   quatAngularDistanceRad,
   quatFromMat4Rotation,
   yawRotationFromWorldRotation,
-} from "../../Assets/Scripts/Core/Utilities";
+} from "../../Assets/Scripts/App/Utilities/Utilities";
 import { vec3, quat, mat4 } from "../shims/lens-runtime";
 
 describe("cloneQuat and cloneVec3", () => {

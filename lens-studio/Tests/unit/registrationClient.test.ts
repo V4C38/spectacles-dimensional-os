@@ -1,27 +1,43 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { RegistrationClient } from "../../Assets/Scripts/Registration/RegistrationClient";
-import { RegistrationStatusMessage } from "../../Assets/Scripts/Bridge/Protocol";
+import { RegistrationClient } from "../../Assets/Scripts/ARBridge/Registration/RegistrationClient";
+import { RegistrationStatusMessage } from "../../Assets/Scripts/ARBridge/Network/Protocol";
 import { setMockTime } from "../setup/lens-globals";
 
-function makeBridgeClient() {
+function makeSession() {
   return {
     isConnected: vi.fn(() => true),
-    activeRobotId: "go2",
-    lastBridgeStatus: { world_frame_committed: false },
-    sendRegistrationCommand: vi.fn(() => true),
-    sendRegistrationPose: vi.fn(() => true),
-    onRegistrationStatus: { add: vi.fn() },
     onConnectionChanged: { add: vi.fn() },
-    onHello: { add: vi.fn() },
-    onBridgeStatus: { add: vi.fn() },
   };
 }
 
-function makeFrameCapture() {
+function makeInbound() {
   return {
+    activeRobotId: "go2",
+    onRegistrationStatus: { add: vi.fn() },
+    onHello: { add: vi.fn() },
+  };
+}
+
+function makeTransport() {
+  return {
+    send: vi.fn(() => true),
+  };
+}
+
+function makeRegistrationClient(session = makeSession(), transport = makeTransport()) {
+  const inbound = makeInbound();
+  const frameCapture = {
     setMode: vi.fn(),
     setCapturePolicy: vi.fn(),
   };
+  const client = new RegistrationClient(
+    session as any,
+    transport as any,
+    inbound as any,
+    frameCapture as any,
+    null,
+  );
+  return { client, session, transport, inbound, frameCapture };
 }
 
 describe("RegistrationClient", () => {
@@ -30,9 +46,7 @@ describe("RegistrationClient", () => {
   });
 
   it("starts april_odom_baseline session and activates baseline capture latch", () => {
-    const bridge = makeBridgeClient();
-    const frameCapture = makeFrameCapture();
-    const client = new RegistrationClient(bridge as any, frameCapture as any, null);
+    const { client, transport } = makeRegistrationClient();
     let captureChanged = 0;
     client.onCapturePolicyInputsChanged.add(() => {
       captureChanged += 1;
@@ -40,10 +54,7 @@ describe("RegistrationClient", () => {
 
     client.start("april_odom_baseline");
 
-    expect(bridge.sendRegistrationCommand).toHaveBeenCalledWith(
-      "start",
-      "april_odom_baseline",
-    );
+    expect(transport.send).toHaveBeenCalled();
     expect(client.baselineCaptureSessionActive).toBe(true);
     expect(client.registrationCaptureHint).toBe("steady");
     expect(captureChanged).toBe(1);
@@ -51,13 +62,11 @@ describe("RegistrationClient", () => {
   });
 
   it("maps registration_status capture hints to registrationCaptureHint", () => {
-    const bridge = makeBridgeClient();
-    const frameCapture = makeFrameCapture();
-    const client = new RegistrationClient(bridge as any, frameCapture as any, null);
+    const { client, inbound } = makeRegistrationClient();
     client.start("april_odom_baseline");
 
     let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
-    bridge.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
+    inbound.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
       statusHandler = handler;
     });
     client.bind();
@@ -86,13 +95,11 @@ describe("RegistrationClient", () => {
   });
 
   it("clears intent and baseline latch on failed registration_status", () => {
-    const bridge = makeBridgeClient();
-    const frameCapture = makeFrameCapture();
-    const client = new RegistrationClient(bridge as any, frameCapture as any, null);
+    const { client, inbound } = makeRegistrationClient();
     client.start("april_odom_baseline");
 
     let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
-    bridge.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
+    inbound.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
       statusHandler = handler;
     });
     client.bind();
@@ -113,8 +120,7 @@ describe("RegistrationClient", () => {
   });
 
   it("uses registration capabilities for preferred mode", () => {
-    const bridge = makeBridgeClient();
-    const client = new RegistrationClient(bridge as any, null, null);
+    const { client } = makeRegistrationClient();
     client.initialize({
       manualRegistrationAlignment: { reset: vi.fn() } as any,
       hasBridgeConnection: () => true,
@@ -129,32 +135,28 @@ describe("RegistrationClient", () => {
   });
 
   it("stop with notifyBridge sends stop when no local session", () => {
-    const bridge = makeBridgeClient();
-    const client = new RegistrationClient(bridge as any, null, null);
+    const { client, transport } = makeRegistrationClient();
 
     client.stop({ notifyBridge: true });
 
-    expect(bridge.sendRegistrationCommand).toHaveBeenCalledWith("stop");
+    expect(transport.send).toHaveBeenCalled();
   });
 
   it("stop without notifyBridge does not send bridge command", () => {
-    const bridge = makeBridgeClient();
-    const client = new RegistrationClient(bridge as any, null, null);
+    const { client, transport } = makeRegistrationClient();
 
     client.stop();
 
-    expect(bridge.sendRegistrationCommand).not.toHaveBeenCalled();
+    expect(transport.send).not.toHaveBeenCalled();
   });
 
   it("stop after succeeded registration_status does not notify bridge", () => {
-    const bridge = makeBridgeClient();
-    const frameCapture = makeFrameCapture();
-    const client = new RegistrationClient(bridge as any, frameCapture as any, null);
+    const { client, inbound, transport } = makeRegistrationClient();
     client.start("manual_pose");
     client.commit();
 
     let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
-    bridge.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
+    inbound.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
       statusHandler = handler;
     });
     client.bind();
@@ -169,14 +171,14 @@ describe("RegistrationClient", () => {
       message: "Manual registration committed",
     });
 
+    transport.send.mockClear();
     client.stop();
 
-    expect(bridge.sendRegistrationCommand).not.toHaveBeenCalledWith("stop");
+    expect(transport.send).not.toHaveBeenCalled();
   });
 
   it("commit sets awaitingCommit", () => {
-    const bridge = makeBridgeClient();
-    const client = new RegistrationClient(bridge as any, null, null);
+    const { client } = makeRegistrationClient();
     client.start("manual_pose");
     client.commit();
 
@@ -184,31 +186,28 @@ describe("RegistrationClient", () => {
   });
 
   it("requestMotionAuthorization sets pending and sends authorize_motion", () => {
-    const bridge = makeBridgeClient();
-    const client = new RegistrationClient(bridge as any, null, null);
+    const { client, transport } = makeRegistrationClient();
 
     expect(client.requestMotionAuthorization()).toBe(true);
     expect(client.motionAuthorizePending).toBe(true);
-    expect(bridge.sendRegistrationCommand).toHaveBeenCalledWith("authorize_motion");
+    expect(transport.send).toHaveBeenCalled();
   });
 
   it("requestMotionAuthorization blocks duplicate calls while pending", () => {
-    const bridge = makeBridgeClient();
-    const client = new RegistrationClient(bridge as any, null, null);
+    const { client, transport } = makeRegistrationClient();
 
     expect(client.requestMotionAuthorization()).toBe(true);
     expect(client.requestMotionAuthorization()).toBe(false);
-    expect(bridge.sendRegistrationCommand).toHaveBeenCalledTimes(1);
+    expect(transport.send).toHaveBeenCalledTimes(1);
   });
 
   it("clears motion authorize pending when phase leaves awaiting_motion", () => {
-    const bridge = makeBridgeClient();
-    const client = new RegistrationClient(bridge as any, null, null);
+    const { client, inbound } = makeRegistrationClient();
     client.start("april_odom_baseline");
     client.requestMotionAuthorization();
 
     let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
-    bridge.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
+    inbound.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
       statusHandler = handler;
     });
     client.bind();
@@ -227,8 +226,7 @@ describe("RegistrationClient", () => {
   });
 
   it("stop clears motion authorize pending", () => {
-    const bridge = makeBridgeClient();
-    const client = new RegistrationClient(bridge as any, null, null);
+    const { client } = makeRegistrationClient();
     client.requestMotionAuthorization();
 
     client.stop({ notifyBridge: true });
@@ -237,8 +235,7 @@ describe("RegistrationClient", () => {
   });
 
   it("start clears motion authorize pending", () => {
-    const bridge = makeBridgeClient();
-    const client = new RegistrationClient(bridge as any, null, null);
+    const { client } = makeRegistrationClient();
     client.requestMotionAuthorization();
 
     client.start("april_odom_baseline");

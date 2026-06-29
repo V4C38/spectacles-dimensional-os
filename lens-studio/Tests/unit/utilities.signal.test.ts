@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { Signal } from "../../Assets/Scripts/Core/Utilities";
+import { Signal } from "../../Assets/Scripts/App/Utilities/Utilities";
 
 describe("Signal", () => {
   it("calls listeners with emitted values", () => {

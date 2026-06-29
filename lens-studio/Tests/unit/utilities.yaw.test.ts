@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { yawRotationFromPlanarDirection } from "../../Assets/Scripts/Core/Utilities";
+import { yawRotationFromPlanarDirection } from "../../Assets/Scripts/App/Utilities/Utilities";
 
 describe("yawRotationFromPlanarDirection cross-language convention", () => {
   for (const [x, z] of [

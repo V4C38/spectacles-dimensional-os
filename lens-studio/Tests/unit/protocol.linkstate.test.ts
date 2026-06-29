@@ -3,7 +3,7 @@ import {
   deriveLinkState,
   sniffInboundMessageType,
   isNonCriticalInboundMessageType,
-} from "../../Assets/Scripts/Bridge/Protocol";
+} from "../../Assets/Scripts/ARBridge/Network/Protocol";
 
 describe("deriveLinkState", () => {
   it("returns disconnected when not connected", () => {

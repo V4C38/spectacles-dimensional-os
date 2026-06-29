@@ -6,7 +6,7 @@ import {
   bridgeStatusFromSnapshot,
   parseBridgeWorldFrameFields,
   RuntimeSnapshotMessage,
-} from "../../Assets/Scripts/Bridge/Protocol";
+} from "../../Assets/Scripts/ARBridge/Network/Protocol";
 
 describe("parseInboundMessage", () => {
   it("parses hello", () => {

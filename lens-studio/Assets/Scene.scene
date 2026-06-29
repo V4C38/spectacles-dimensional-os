@@ -200,7 +200,7 @@
 - !<SceneObject/006c39f6-726e-434e-9f10-582f8dc3f159>
   PrefabRemaps:
     []
-  Name: SetupWizardMenu
+  Name: RegistrationWizardMenu
   Enabled: false
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -1090,6 +1090,21 @@
     []
   Components:
     []
+- !<SceneObject/169fa578-9316-4c6c-a901-56793fa6cf03>
+  PrefabRemaps:
+    []
+  Name: ARBridgeServices
+  Enabled: true
+  Layers: 1
+  LocalTransform: !<TransformEntity>
+    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
+    HasSegmentScaleCompensation: false
+  Children:
+    []
+  Components:
+    - !<own> e1d8b5ad-3e72-491f-aeca-71a6f6cfb79a
 - !<SceneObject/17f9e44d-fd4e-4ed0-aecd-ddae01e422db>
   PrefabRemaps:
     []
@@ -2258,7 +2273,7 @@
 - !<ScriptComponent/3f25b0bd-8d4d-4305-8d53-c0955727b8a1>
   PrefabRemaps:
     []
-  Name: SetupWizard
+  Name: RegistrationWizard
   Enabled: true
   ScriptAsset: !<reference> 3ef7e409-cd5f-4e0e-af0f-cefea164f44f
   ScriptInputsDefault:
@@ -2267,7 +2282,7 @@
     {}
   ScriptInputs:
     "":
-      dimosManager: !<MappingBased.AssignableType> ef9bba3c-1138-44cc-b761-7ef88bf3856d
+      arBridgeCoordinator: !<MappingBased.AssignableType> e482a2f7-0992-4dba-adb2-26102d636bae
   ScriptTypes:
     "":
       {}
@@ -2611,8 +2626,8 @@
   ScriptInputs:
     "":
       mainUIFrame: !<reference.SceneObject> 52bc606c-3d23-4e49-88f2-dc66bd154524
-      dimosManager: !<MappingBased.AssignableType> ef9bba3c-1138-44cc-b761-7ef88bf3856d
-      setupWizard: !<MappingBased.AssignableType_1> 3f25b0bd-8d4d-4305-8d53-c0955727b8a1
+      arBridgeCoordinator: !<MappingBased.AssignableType> e482a2f7-0992-4dba-adb2-26102d636bae
+      registrationWizard: !<MappingBased.AssignableType_1> 3f25b0bd-8d4d-4305-8d53-c0955727b8a1
   ScriptTypes:
     "":
       {}
@@ -3382,7 +3397,7 @@
 - !<SceneObject/676667d2-dbed-42d1-96ef-9486c9a1d3e7>
   PrefabRemaps:
     []
-  Name: RestartSetup
+  Name: RestartRegistration
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -3409,6 +3424,23 @@
     []
   Components:
     - !<own> d0acf5fc-acea-4a5b-9ed0-b0d569984755
+- !<ScriptComponent/689f73b6-5fc9-48f2-98b7-0229a5f1e6c3>
+  PrefabRemaps:
+    []
+  Name: ARBridgeSession
+  Enabled: true
+  ScriptAsset: !<reference> 00653a6c-f317-4f6b-96c9-2a0abe5cfff6
+  ScriptInputsDefault:
+    {}
+  ScriptTypesDefault:
+    {}
+  ScriptInputs:
+    "":
+      defaultBridgeIp: 192.168.1.96
+      internetModule: !<reference.InternetModule> 79c60deb-0ecf-4df5-9713-7c5bd5dbef32
+  ScriptTypes:
+    "":
+      {}
 - !<SceneObject/6972fe66-f808-483c-97e8-8cd14463634e>
   PrefabRemaps:
     []
@@ -3880,7 +3912,7 @@
 - !<SceneObject/7be30f24-deb9-4a4b-ab37-69005965068b>
   PrefabRemaps:
     []
-  Name: ContinueSetupButton
+  Name: ContinueRegistrationButton
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -4313,28 +4345,6 @@
     []
   Components:
     - !<own> 403632c1-bd94-4e54-9777-1b641403a532
-- !<ScriptComponent/91557cd7-47f1-4bd1-a2ef-580e94599eb4>
-  PrefabRemaps:
-    []
-  Name: DimosServices
-  Enabled: true
-  ScriptAsset: !<reference> 6c42d423-1330-4de1-b30c-6cdfa3d360ef
-  ScriptInputsDefault:
-    robotGroundDeadzoneRadiusCm: true
-  ScriptTypesDefault:
-    {}
-  ScriptInputs:
-    "":
-      bridgeClient: !<MappingBased.AssignableType> d44336ee-e3d0-430c-8b0d-ae6a4a6af963
-      frameCaptureController: !<MappingBased.AssignableType_1> a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b
-      robotMarker: !<MappingBased.AssignableType_2> b749cbc7-9706-4499-8d79-19f5a03dd792
-      pointCloudRenderer: !<MappingBased.AssignableType_3> edc2d9a2-52ca-414f-acba-c9661ee12fea
-      navigationMarkerPrefab: !<reference.ObjectPrefab> 8dad663a-f2bb-438d-882b-121c3208aba4
-      assistClearanceDiscPrefab: !<reference.ObjectPrefab> 5a1e0fa9-a260-4cae-8e6f-44fd0ed80c32
-      robotGroundDeadzoneRadiusCm: !<float> 75.000000
-  ScriptTypes:
-    "":
-      {}
 - !<SceneObject/929164ef-2d41-474a-a457-1bf03d6cd9f1>
   PrefabRemaps:
     []
@@ -4833,7 +4843,7 @@
 - !<SceneObject/9d5912d5-686e-4878-a8ba-331574261592>
   PrefabRemaps:
     []
-  Name: DimOSManager
+  Name: ARBridgeCoordinator
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -4842,13 +4852,13 @@
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
   Children:
+    - !<own> 169fa578-9316-4c6c-a901-56793fa6cf03
     - !<own> 20937b64-ad12-476c-a010-dbda8811f91f
-    - !<own> 987602b0-ef22-4a53-85a8-ca0d7eaaa7b4
     - !<own> 02b4e96e-3fd3-487e-ae91-31828aea1503
+    - !<own> 987602b0-ef22-4a53-85a8-ca0d7eaaa7b4
   Components:
-    - !<own> d44336ee-e3d0-430c-8b0d-ae6a4a6af963
-    - !<own> ef9bba3c-1138-44cc-b761-7ef88bf3856d
-    - !<own> 91557cd7-47f1-4bd1-a2ef-580e94599eb4
+    - !<own> e482a2f7-0992-4dba-adb2-26102d636bae
+    - !<own> 689f73b6-5fc9-48f2-98b7-0229a5f1e6c3
 - !<SceneObject/9e02f8cb-befe-42fb-88f1-eb7f4ed5be31>
   PrefabRemaps:
     []
@@ -4996,7 +5006,7 @@
     {}
   ScriptInputs:
     "":
-      bridgeClient: !<MappingBased.AssignableType> d44336ee-e3d0-430c-8b0d-ae6a4a6af963
+      bridgeSession: !<MappingBased.AssignableType> 689f73b6-5fc9-48f2-98b7-0229a5f1e6c3
       cameraObject: !<reference.SceneObject> 00000000-0000-0065-0000-000000000064
   ScriptTypes:
     "":
@@ -6266,23 +6276,6 @@
     - !<own> 319c29db-cd9c-448c-8028-20ef49b55a70
   Components:
     []
-- !<ScriptComponent/d44336ee-e3d0-430c-8b0d-ae6a4a6af963>
-  PrefabRemaps:
-    []
-  Name: BridgeClient
-  Enabled: true
-  ScriptAsset: !<reference> caff008b-c706-414a-be2e-efaad98f9535
-  ScriptInputsDefault:
-    {}
-  ScriptTypesDefault:
-    {}
-  ScriptInputs:
-    "":
-      defaultBridgeIp: 192.168.1.96
-      internetModule: !<reference.InternetModule> 79c60deb-0ecf-4df5-9713-7c5bd5dbef32
-  ScriptTypes:
-    "":
-      {}
 - !<SceneObject/d491b31f-c593-49a0-932a-b8bbe817b1bf>
   PrefabRemaps:
     []
@@ -6554,7 +6547,7 @@
 - !<SceneObject/de62f332-a278-4f7a-a64e-b953e348cf95>
   PrefabRemaps:
     []
-  Name: SetupWizard
+  Name: RegistrationWizard
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -6715,6 +6708,44 @@
     - !<own> 5a2ca1a2-f292-4079-aebb-f491bb9f5bf5
   Components:
     []
+- !<ScriptComponent/e1d8b5ad-3e72-491f-aeca-71a6f6cfb79a>
+  PrefabRemaps:
+    []
+  Name: ARBridgeServices
+  Enabled: true
+  ScriptAsset: !<reference> d7f5d355-bf38-40fb-ada4-748417a15334
+  ScriptInputsDefault:
+    robotGroundDeadzoneRadiusCm: true
+  ScriptTypesDefault:
+    {}
+  ScriptInputs:
+    "":
+      bridgeSession: !<MappingBased.AssignableType> 689f73b6-5fc9-48f2-98b7-0229a5f1e6c3
+      frameCaptureController: !<MappingBased.AssignableType_1> a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b
+      robotMarker: !<MappingBased.AssignableType_2> b749cbc7-9706-4499-8d79-19f5a03dd792
+      pointCloudRenderer: !<MappingBased.AssignableType_3> edc2d9a2-52ca-414f-acba-c9661ee12fea
+      navigationMarkerPrefab: !<reference.ObjectPrefab> 8dad663a-f2bb-438d-882b-121c3208aba4
+      assistClearanceDiscPrefab: !<reference.ObjectPrefab> 5a1e0fa9-a260-4cae-8e6f-44fd0ed80c32
+      robotGroundDeadzoneRadiusCm: !<float> 75.000000
+  ScriptTypes:
+    "":
+      {}
+- !<ScriptComponent/e482a2f7-0992-4dba-adb2-26102d636bae>
+  PrefabRemaps:
+    []
+  Name: ARBridgeCoordinator
+  Enabled: true
+  ScriptAsset: !<reference> 8b522d43-db15-4567-b4bf-a8032cf51bd2
+  ScriptInputsDefault:
+    {}
+  ScriptTypesDefault:
+    {}
+  ScriptInputs:
+    "":
+      arBridgeServices: !<MappingBased.AssignableType> e1d8b5ad-3e72-491f-aeca-71a6f6cfb79a
+  ScriptTypes:
+    "":
+      {}
 - !<DeviceTracking/e5553c8a-0b7e-4ef4-92d9-3e1318fb82c1>
   PrefabRemaps:
     []
@@ -6743,7 +6774,7 @@
 - !<SceneObject/e6b2e17d-ad12-47b3-8070-655b957b1210>
   PrefabRemaps:
     []
-  Name: RestartSetupLabel
+  Name: RestartRegistrationLabel
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -6907,22 +6938,6 @@
     []
   Components:
     - !<own> 442feb57-3b7c-427c-8692-1ccbdcd44ade
-- !<ScriptComponent/ef9bba3c-1138-44cc-b761-7ef88bf3856d>
-  PrefabRemaps:
-    []
-  Name: DimosManager
-  Enabled: true
-  ScriptAsset: !<reference> c1e64b90-558d-45bf-b045-9d35cc7c0793
-  ScriptInputsDefault:
-    {}
-  ScriptTypesDefault:
-    {}
-  ScriptInputs:
-    "":
-      dimosServices: !<MappingBased.AssignableType> 91557cd7-47f1-4bd1-a2ef-580e94599eb4
-  ScriptTypes:
-    "":
-      {}
 - !<SceneObject/efa10b22-f190-489e-804d-3582c8eba6b3>
   PrefabRemaps:
     []
@@ -7058,7 +7073,7 @@
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
-  Text: Restart Setup
+  Text: Restart Registration
   Editable: false
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000

@@ -15,7 +15,7 @@ import {
   nextNavigationGoalMode,
   shouldRenderNavigationPath,
   shouldRequestPreviewOnTargetChange,
-} from "../../Assets/Scripts/Navigation/NavigationModel";
+} from "../../Assets/Scripts/ARBridge/Navigation/NavigationModel";
 
 describe("NavEngineState", () => {
   it("starts with no session", () => {

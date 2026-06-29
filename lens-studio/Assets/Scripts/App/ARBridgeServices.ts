@@ -1,0 +1,163 @@
+import { ARBridgeSession } from "../ARBridge/Network/ARBridgeSession";
+import { FrameCaptureController } from "../ARBridge/Camera/FrameCaptureController";
+import {
+  RegistrationClient,
+  RegistrationClientDeps,
+} from "../ARBridge/Registration/RegistrationClient";
+import { InboundRouter } from "../ARBridge/Session/InboundRouter";
+import { AppStateStore } from "./AppState";
+import { NavigationPlacement } from "./Navigation/NavigationPlacement";
+import { RobotPresenter, RobotPresenterMenuCallbacks } from "./Robot/RobotPresenter";
+import { RegistrationPreviewPresenter } from "./Registration/RegistrationPreview";
+import { PointCloudRenderer } from "./Lidar/PointCloudRenderer";
+import { RobotMarker } from "./Robot/RobotMarker";
+import { StatusClient } from "../ARBridge/Status/StatusClient";
+import { TelemetryClient } from "../ARBridge/Telemetry/TelemetryClient";
+import { NavigationClient } from "../ARBridge/Navigation/NavigationClient";
+
+/** Scene wiring hub and Lens event host for AR bridge runtime plain service classes. */
+@component
+export class ARBridgeServices extends BaseScriptComponent {
+  @input
+  bridgeSession: ARBridgeSession;
+
+  @input
+  frameCaptureController: FrameCaptureController;
+
+  @input
+  robotMarker: RobotMarker;
+
+  @input
+  pointCloudRenderer: PointCloudRenderer;
+
+  @input
+  navigationMarkerPrefab: ObjectPrefab;
+
+  @input
+  assistClearanceDiscPrefab: ObjectPrefab;
+
+  @input
+  robotGroundDeadzoneRadiusCm = 75;
+
+  private _state: AppStateStore | null = null;
+  private _robot: RobotPresenter | null = null;
+  private _navigation: NavigationPlacement | null = null;
+  private _router: InboundRouter | null = null;
+  private _registration: RegistrationClient | null = null;
+  private _status: StatusClient | null = null;
+  private _telemetry: TelemetryClient | null = null;
+  private _navClient: NavigationClient | null = null;
+  private _registrationPreview: RegistrationPreviewPresenter | null = null;
+  private _bound = false;
+
+  public get state(): AppStateStore {
+    this._ensureInstances();
+    return this._state!;
+  }
+
+  public get robot(): RobotPresenter {
+    this._ensureInstances();
+    return this._robot!;
+  }
+
+  public get navigation(): NavigationPlacement {
+    this._ensureInstances();
+    return this._navigation!;
+  }
+
+  public get router(): InboundRouter {
+    this._ensureInstances();
+    return this._router!;
+  }
+
+  public get registration(): RegistrationClient {
+    this._ensureInstances();
+    return this._registration!;
+  }
+
+  public get registrationPreview(): RegistrationPreviewPresenter {
+    this._ensureInstances();
+    return this._registrationPreview!;
+  }
+
+  public bind(
+    robotMenuCallbacks: RobotPresenterMenuCallbacks,
+    registrationDeps: RegistrationClientDeps,
+  ): void {
+    if (this._bound) {
+      return;
+    }
+    this._bound = true;
+    this._ensureInstances();
+
+    this._robot!.bind(robotMenuCallbacks);
+    this._navigation!.bindHost({
+      appStateStore: this._state!,
+      robotPresenter: this._robot!,
+    });
+    this._registration!.initialize(registrationDeps);
+    this._router!.bind();
+
+    this.createEvent("UpdateEvent").bind(() => {
+      this._router!.tick();
+    });
+  }
+
+  private _ensureInstances(): void {
+    if (this._state) {
+      return;
+    }
+    const session = this.bridgeSession ?? null;
+    const transport = session?.transport ?? null;
+    const inbound = session?.inbound ?? null;
+
+    this._state = new AppStateStore();
+    this._status = new StatusClient(session, transport, inbound);
+    this._telemetry = new TelemetryClient(this._state, session, transport, inbound);
+    this._navClient = new NavigationClient(transport, inbound);
+    this._robot = new RobotPresenter(
+      this._state,
+      this.robotMarker ?? null,
+      this.pointCloudRenderer ?? null,
+      session,
+      this._telemetry,
+    );
+    this._registration = new RegistrationClient(
+      session,
+      transport,
+      inbound,
+      this.frameCaptureController ?? null,
+      this.robotMarker ?? null,
+    );
+    this._registrationPreview = new RegistrationPreviewPresenter(
+      this._state,
+      this.assistClearanceDiscPrefab ?? null,
+      this.getSceneObject(),
+      this._robot,
+      this._registration,
+    );
+    this._navigation = NavigationPlacement.create({
+      eventHost: this,
+      pathParentFallback: this.getSceneObject(),
+      appStateStore: this._state,
+      navClient: this._navClient,
+      session,
+      statusClient: this._status,
+      robotPresenter: this._robot,
+      robotMarker: this.robotMarker ?? null,
+      navigationMarkerPrefab: this.navigationMarkerPrefab,
+      robotGroundDeadzoneRadiusCm: this.robotGroundDeadzoneRadiusCm,
+    });
+    this._router = new InboundRouter(
+      session,
+      this._state,
+      this._status,
+      this._telemetry,
+      this._navClient,
+      this._navigation,
+      this._robot,
+      this.frameCaptureController ?? null,
+      this._registration,
+    );
+  }
+}

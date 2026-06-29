@@ -188,6 +188,6 @@ update these together:
 
 - `dimos/ar/network/protocol.py`
 - `PROTOCOL.md`
-- `lens-studio/Assets/Scripts/Bridge/Protocol.ts`
+- `lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`
 
 </details>

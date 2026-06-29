@@ -12,13 +12,13 @@ import {
   isRegistrationComplete,
   isRegistrationFailed,
   isRegistrationPendingCommit,
-  SetupRegistrationFlow,
+  RegistrationFlow,
   WizardStep,
-} from "../../Assets/Scripts/Setup/SetupRegistrationFlow";
+} from "../../Assets/Scripts/App/Registration/RegistrationFlow";
 import {
   BridgeStatusMessage,
   RegistrationStatusMessage,
-} from "../../Assets/Scripts/Bridge/Protocol";
+} from "../../Assets/Scripts/ARBridge/Network/Protocol";
 
 function status(
   overrides: Partial<RegistrationStatusMessage>,
@@ -54,8 +54,8 @@ function createFlow(options: {
   preferredMode?: "auto" | "manualOnly";
   finalizeOffline?: boolean;
 } = {}) {
-  const finishSetup = vi.fn();
-  const scheduleFinishSetup = vi.fn();
+  const finishRegistration = vi.fn();
+  const scheduleFinishRegistration = vi.fn();
   const preview = {
     setComplete: vi.fn(),
     begin: vi.fn(),
@@ -75,21 +75,21 @@ function createFlow(options: {
     hasActiveIntent: vi.fn(() => false),
     isNoResponseTimeout: vi.fn(() => false),
   };
-  const dimosManager = {
+  const coordinator = {
     registrationClient,
-    bridgeRuntime: { hasConnection: () => options.hasConnection ?? true },
-    setupRegistrationPreview: preview,
-    robotRuntime: { applyInteractionFromState: vi.fn() },
+    router: { hasConnection: () => options.hasConnection ?? true },
+    registrationPreview: preview,
+    robot: { applyInteractionFromState: vi.fn() },
     frameCaptureController: { setCaptureErrorHandler: vi.fn() },
   };
-  const flow = new SetupRegistrationFlow(dimosManager as any, {
+  const flow = new RegistrationFlow(coordinator as any, {
     beginManualRegistrationPlacementFromWizard: () => true,
     render: vi.fn(),
     refreshFooter: vi.fn(),
     refreshDescription: vi.fn(),
     log: vi.fn(),
-    finishSetup,
-    scheduleFinishSetup,
+    finishRegistration,
+    scheduleFinishRegistration,
   });
   if (options.mode === "manual") {
     flow.setState(createManualRegistrationState("awaiting_commit"));
@@ -99,7 +99,7 @@ function createFlow(options: {
       phase: "awaiting_commit",
     });
   }
-  return { flow, finishSetup, scheduleFinishSetup, preview, registrationClient, dimosManager };
+  return { flow, finishRegistration, scheduleFinishRegistration, preview, registrationClient, coordinator };
 }
 
 describe("registration flow view state", () => {
@@ -242,19 +242,20 @@ describe("registration flow view state", () => {
       captureAndSubmitManualPose: vi.fn(() => true),
       freezePlacement: vi.fn(),
       preferredMode: vi.fn(() => "manualOnly" as const),
+      finalizeOffline: vi.fn(() => true),
     };
-    const dimosManager = {
+    const coordinator = {
       registrationClient,
-      bridgeRuntime: { hasConnection: () => true },
+      router: { hasConnection: () => true },
     };
-    const flow = new SetupRegistrationFlow(dimosManager as any, {
+    const flow = new RegistrationFlow(coordinator as any, {
       beginManualRegistrationPlacementFromWizard: () => true,
       render: vi.fn(),
       refreshFooter: vi.fn(),
       refreshDescription: vi.fn(),
       log: vi.fn(),
-      finishSetup: vi.fn(),
-      scheduleFinishSetup: vi.fn(),
+      finishRegistration: vi.fn(),
+      scheduleFinishRegistration: vi.fn(),
     });
     flow.setState(createManualRegistrationState("awaiting_commit"));
 
@@ -265,52 +266,52 @@ describe("registration flow view state", () => {
   });
 });
 
-describe("SetupRegistrationFlow commit coordinator", () => {
+describe("RegistrationFlow commit coordinator", () => {
   it("1: auto registration_status succeeded finishes once via delayed schedule", () => {
-    const { flow, finishSetup, scheduleFinishSetup } = createFlow();
+    const { flow, finishRegistration, scheduleFinishRegistration } = createFlow();
     flow.handleRegistrationStatus(status({ phase: "succeeded" }));
     expect(flow.state.phase).toBe("succeeded");
-    expect(scheduleFinishSetup).toHaveBeenCalledTimes(1);
-    expect(scheduleFinishSetup).toHaveBeenCalledWith(1.5);
-    expect(finishSetup).not.toHaveBeenCalled();
+    expect(scheduleFinishRegistration).toHaveBeenCalledTimes(1);
+    expect(scheduleFinishRegistration).toHaveBeenCalledWith(1.5);
+    expect(finishRegistration).not.toHaveBeenCalled();
     flow.handleRegistrationStatus(status({ phase: "succeeded" }));
-    expect(scheduleFinishSetup).toHaveBeenCalledTimes(1);
+    expect(scheduleFinishRegistration).toHaveBeenCalledTimes(1);
   });
 
   it("2: bridge_status committed during commitInFlight completes preview and finishes", () => {
-    const { flow, scheduleFinishSetup, preview } = createFlow();
+    const { flow, scheduleFinishRegistration, preview } = createFlow();
     flow.completeStep();
     expect(flow.commitInFlight).toBe(true);
     flow.handleBridgeStatus(bridgeStatus());
     expect(flow.state.phase).toBe("succeeded");
     expect(preview.setComplete).toHaveBeenCalledTimes(1);
-    expect(scheduleFinishSetup).toHaveBeenCalledTimes(1);
+    expect(scheduleFinishRegistration).toHaveBeenCalledTimes(1);
   });
 
   it("3: both acks in either order dispatch finish once", () => {
-    const { flow, scheduleFinishSetup } = createFlow();
+    const { flow, scheduleFinishRegistration } = createFlow();
     flow.completeStep();
     flow.handleBridgeStatus(bridgeStatus());
     flow.handleRegistrationStatus(status({ phase: "succeeded" }));
-    expect(scheduleFinishSetup).toHaveBeenCalledTimes(1);
+    expect(scheduleFinishRegistration).toHaveBeenCalledTimes(1);
 
     const second = createFlow();
     second.flow.completeStep();
     second.flow.handleRegistrationStatus(status({ phase: "succeeded" }));
     second.flow.handleBridgeStatus(bridgeStatus());
-    expect(second.scheduleFinishSetup).toHaveBeenCalledTimes(1);
+    expect(second.scheduleFinishRegistration).toHaveBeenCalledTimes(1);
   });
 
   it("4: bridge_status committed without commitInFlight does not complete wizard", () => {
-    const { flow, scheduleFinishSetup, preview } = createFlow();
+    const { flow, scheduleFinishRegistration, preview } = createFlow();
     flow.handleBridgeStatus(bridgeStatus());
     expect(flow.state.phase).toBe("awaiting_commit");
-    expect(scheduleFinishSetup).not.toHaveBeenCalled();
+    expect(scheduleFinishRegistration).not.toHaveBeenCalled();
     expect(preview.setComplete).not.toHaveBeenCalled();
   });
 
   it("5: mode-filtered registration_status plus bridge_status still completes", () => {
-    const { flow, scheduleFinishSetup } = createFlow();
+    const { flow, scheduleFinishRegistration } = createFlow();
     flow.completeStep();
     flow.handleRegistrationStatus(
       status({ phase: "succeeded", mode: "manual_pose" }),
@@ -318,63 +319,63 @@ describe("SetupRegistrationFlow commit coordinator", () => {
     expect(flow.state.phase).toBe("awaiting_commit");
     flow.handleBridgeStatus(bridgeStatus());
     expect(flow.state.phase).toBe("succeeded");
-    expect(scheduleFinishSetup).toHaveBeenCalledTimes(1);
+    expect(scheduleFinishRegistration).toHaveBeenCalledTimes(1);
   });
 
-  it("6: failed registration after commit does not finish setup", () => {
-    const { flow, scheduleFinishSetup } = createFlow();
+  it("6: failed registration after commit does not finish registration", () => {
+    const { flow, scheduleFinishRegistration } = createFlow();
     flow.completeStep();
     flow.handleRegistrationStatus(status({ phase: "failed", message: "nope" }));
     expect(flow.state.phase).toBe("failed");
     expect(flow.commitInFlight).toBe(false);
-    expect(scheduleFinishSetup).not.toHaveBeenCalled();
+    expect(scheduleFinishRegistration).not.toHaveBeenCalled();
   });
 
   it("7: disconnect during commit returns to editing without finish", () => {
-    const { flow, scheduleFinishSetup } = createFlow({ mode: "manual" });
+    const { flow, scheduleFinishRegistration } = createFlow({ mode: "manual" });
     flow.completeStep();
     flow.handleBridgeConnectionChanged(false);
     expect(flow.state.phase).toBe("editing");
     expect(flow.commitInFlight).toBe(false);
-    expect(scheduleFinishSetup).not.toHaveBeenCalled();
+    expect(scheduleFinishRegistration).not.toHaveBeenCalled();
   });
 
   it("8: manual online commit finishes immediately", () => {
-    const { flow, finishSetup, scheduleFinishSetup } = createFlow({ mode: "manual" });
+    const { flow, finishRegistration, scheduleFinishRegistration } = createFlow({ mode: "manual" });
     flow.handleRegistrationStatus(status({ phase: "succeeded", mode: "manual_pose" }));
-    expect(finishSetup).toHaveBeenCalledTimes(1);
-    expect(scheduleFinishSetup).not.toHaveBeenCalled();
+    expect(finishRegistration).toHaveBeenCalledTimes(1);
+    expect(scheduleFinishRegistration).not.toHaveBeenCalled();
   });
 
   it("9: offline manual finalize does not use bridge handlers", () => {
-    const { flow, finishSetup, scheduleFinishSetup } = createFlow({
+    const { flow, finishRegistration, scheduleFinishRegistration } = createFlow({
       mode: "manual",
       hasConnection: false,
       finalizeOffline: true,
     });
     flow.setState(createManualRegistrationState("editing"));
     expect(flow.completeStep()).toBe(true);
-    expect(finishSetup).not.toHaveBeenCalled();
-    expect(scheduleFinishSetup).not.toHaveBeenCalled();
+    expect(finishRegistration).not.toHaveBeenCalled();
+    expect(scheduleFinishRegistration).not.toHaveBeenCalled();
   });
 
   it("10: baseline auto-commit via registration_status only never sets commitInFlight", () => {
-    const { flow, scheduleFinishSetup } = createFlow();
+    const { flow, scheduleFinishRegistration } = createFlow();
     flow.setState(createRegistrationViewState());
     flow.handleRegistrationStatus(status({ phase: "succeeded" }));
     expect(flow.commitInFlight).toBe(false);
     expect(flow.state.phase).toBe("succeeded");
-    expect(scheduleFinishSetup).toHaveBeenCalledTimes(1);
+    expect(scheduleFinishRegistration).toHaveBeenCalledTimes(1);
   });
 
   it("11: redo after failure resets finish guard for a second completion", () => {
-    const { flow, scheduleFinishSetup } = createFlow();
+    const { flow, scheduleFinishRegistration } = createFlow();
     flow.handleRegistrationStatus(status({ phase: "succeeded" }));
-    expect(scheduleFinishSetup).toHaveBeenCalledTimes(1);
+    expect(scheduleFinishRegistration).toHaveBeenCalledTimes(1);
     flow.setState({ ...flow.state, phase: "failed", message: "retry" });
     flow.redo();
     flow.handleRegistrationStatus(status({ phase: "succeeded" }));
-    expect(scheduleFinishSetup).toHaveBeenCalledTimes(2);
+    expect(scheduleFinishRegistration).toHaveBeenCalledTimes(2);
   });
 
   it("12: bridge-only ack calls preview setComplete", () => {

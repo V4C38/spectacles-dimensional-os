@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clampCameraSmallerDimension } from "../../Assets/Scripts/Core/Utilities";
+import { clampCameraSmallerDimension } from "../../Assets/Scripts/App/Utilities/Utilities";
 
 describe("clampCameraSmallerDimension", () => {
   it("passes through when requested is within supported max", () => {
@@ -13,7 +13,7 @@ describe("clampCameraSmallerDimension", () => {
     expect(clampCameraSmallerDimension(756, supported)).toBe(682);
   });
 
-  it("returns requested when no supported resolutions are reported", () => {
+  it("uses PC preview fallback when resolution query fails", () => {
     expect(clampCameraSmallerDimension(756, [])).toBe(756);
   });
 

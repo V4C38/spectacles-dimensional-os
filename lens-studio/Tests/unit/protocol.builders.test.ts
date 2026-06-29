@@ -13,7 +13,7 @@ import {
   buildEmergencyStop,
   buildJoystickCommand,
   DEFAULT_LIDAR_OBSTACLE_SETTINGS,
-} from "../../Assets/Scripts/Bridge/Protocol";
+} from "../../Assets/Scripts/ARBridge/Network/Protocol";
 import { setMockTime } from "../setup/lens-globals";
 import { vec3, quat } from "../shims/lens-runtime";
 

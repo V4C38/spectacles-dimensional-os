@@ -1,0 +1,44 @@
+- !<AssetImportMetadata/66e0cc30-e12c-40e3-9335-d9f101b57b22>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> 3ef7e409-cd5f-4e0e-af0f-cefea164f44f
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> 3ef7e409-cd5f-4e0e-af0f-cefea164f44f
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> a23fb171-93fc-4f58-b475-3606c1d1a172
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/a23fb171-93fc-4f58-b475-3606c1d1a172>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: 9c2573cc-5fbe-4a3b-b1e6-8a066ff814e1
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    arBridgeCoordinator: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - arBridgeCoordinator: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - // @input AssignableType arBridgeCoordinator

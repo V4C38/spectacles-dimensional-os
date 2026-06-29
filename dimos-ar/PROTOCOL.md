@@ -4,7 +4,7 @@ This is the cross-platform contract between the DimOS-side AR bridge and any AR
 client. It is the real API of this project.
 
 Keep this document, `dimos/ar/network/protocol.py`, and
-`lens-studio/Assets/Scripts/Bridge/Protocol.ts` in sync. Bump
+`lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts` in sync. Bump
 `PROTOCOL_VERSION` on breaking changes.
 
 ## Changelog

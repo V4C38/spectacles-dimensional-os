@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildCameraFrameBytes,
   parseLidarBinary,
-} from "../../Assets/Scripts/Bridge/Protocol";
+} from "../../Assets/Scripts/ARBridge/Network/Protocol";
 import { vec3, quat } from "../shims/lens-runtime";
 
 function f16(bits: number): [number, number] {
