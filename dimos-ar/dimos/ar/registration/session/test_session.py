@@ -9,8 +9,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from dimos.ar.adapters.base import DEFAULT_BASELINE_MOTION_RECIPE
-from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
-from dimos.ar.bridge.test_rpc_bindings import bind_mock_adapter_rpc
+from dimos.ar.bridge.motion_router import MotionRouter
 from dimos.ar.registration.baseline import (
     SAMPLE_MIN_OBS,
     SAMPLE_SETTLE_S,
@@ -24,6 +23,7 @@ from dimos.ar.tag_tracking.solve import TagSolve
 from dimos.ar.tag_tracking.tracker import FrameResult
 from dimos.ar.world_frame.registry import WorldRegistry
 from dimos.ar.world_frame.state import WorldFrameState
+from dimos.msgs.geometry_msgs.Twist import Twist
 
 _LEG_DURATIONS = DEFAULT_BASELINE_MOTION_RECIPE.leg_duration_s
 
@@ -49,10 +49,12 @@ def _make_session(
     tag_tracker.record_latest_waypoint_observation.return_value = False
     world_frame_refiner = MagicMock()
     adapter = MagicMock()
-    adapter.baseline_motion_available.return_value = True
-    adapter.send_joystick_command.return_value = True
-    bind_mock_adapter_rpc(adapter)
-    router = AdapterMotionRouter(adapter)
+    published_cmd_vel: list[Twist] = []
+    router = MotionRouter(
+        publish_cmd_vel=published_cmd_vel.append,
+        publish_nav_goal=lambda _goal: None,
+        publish_cancel=lambda _cancel: None,
+    )
     session = RegistrationSession(
         robot_id="test_robot",
         sender=sender,

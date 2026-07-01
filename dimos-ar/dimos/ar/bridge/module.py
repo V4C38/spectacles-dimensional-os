@@ -21,7 +21,7 @@ from dimos.ar.adapters.base import (
     RobotHandshake,
     resolve_baseline_motion_recipe,
 )
-from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
+from dimos.ar.bridge.motion_router import MotionRouter
 from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.bridge.safety import BridgeSafetyCoordinator
 from dimos.ar.bridge.sender import BridgeSender
@@ -47,8 +47,9 @@ from dimos.ar.world_frame.state import WorldFrameState
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
-from dimos.core.stream import In
+from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -105,6 +106,9 @@ class ARBridge(Module):  # type: ignore[misc]
     ar_path: In[Path]
     ar_goal_reached: In[Bool]
     ar_navigation_state: In[String]
+    cmd_vel: Out[Twist]
+    goal_request: Out[PoseStamped]
+    stop_movement: Out[Bool]
 
     config: ARBridgeConfig
     _adapter: ARRobotAdapterSpec
@@ -115,7 +119,7 @@ class ARBridge(Module):  # type: ignore[misc]
     _status: StatusService
     _registration: RegistrationSession
     _nav: NavigateGoalHandler
-    _motion_router: AdapterMotionRouter
+    _motion_router: MotionRouter
     _preview: PreviewGoalHandler
     _telemetry: TelemetryPublisher
     _ws_server: ARWebSocketServer
@@ -209,7 +213,11 @@ class ARBridge(Module):  # type: ignore[misc]
         )
         assert self._loop is not None, "build() called before Module loop is assigned"
         baseline_motion_recipe = resolve_baseline_motion_recipe(self._adapter)
-        motion_router = AdapterMotionRouter(self._adapter)
+        motion_router = MotionRouter(
+            publish_cmd_vel=self.cmd_vel.publish,
+            publish_nav_goal=self.goal_request.publish,
+            publish_cancel=self.stop_movement.publish,
+        )
         registration = RegistrationSession(
             robot_id=robot_id,
             sender=sender,

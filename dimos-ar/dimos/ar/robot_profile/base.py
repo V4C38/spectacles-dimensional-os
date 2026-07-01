@@ -5,7 +5,6 @@ import math
 from typing import Any, Protocol
 
 from dimos.ar.tag_tracking.solve import TagMount
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.spec.utils import Spec
 from dimos.utils.logging_config import setup_logger
 
@@ -20,13 +19,13 @@ class CapabilityState:
 
 @dataclass(frozen=True)
 class BaselineMotionRecipe:
-    """Baseline strafe parameters shared by all robot adapters."""
+    """Baseline strafe parameters shared by all robot profiles."""
 
     strafe_speed: float  # cmd_vel.linear.y stick deflection [-1, 1]; timer-controlled legs
     leg_duration_s: tuple[float, float, float]
     leg_directions: tuple[float, float, float]
     leg_distance_multipliers: tuple[float, float, float]
-    move_leg_target_m: float = 0.20
+    move_leg_target_m: float = 0.2
 
 
 DEFAULT_BASELINE_MOTION_RECIPE = BaselineMotionRecipe(
@@ -61,7 +60,7 @@ class RobotHandshake:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-class ARRobotAdapterSpec(Spec, Protocol):  # type: ignore[misc]
+class ARRobotProfileSpec(Spec, Protocol):  # type: ignore[misc]
     def robot_id(self) -> str: ...
 
     def robot_model(self) -> str: ...
@@ -70,28 +69,20 @@ class ARRobotAdapterSpec(Spec, Protocol):  # type: ignore[misc]
 
     def handshake_payload(self) -> RobotHandshake: ...
 
-    def send_nav_goal(self, goal: PoseStamped) -> bool: ...
-
-    def cancel_nav_goal(self) -> bool: ...
-
-    def emergency_stop(self) -> bool: ...
-
     def supports_goal_orientation(self) -> bool: ...
 
     def tag_mounts(self) -> list[TagMount]: ...
 
     def baseline_motion_available(self) -> bool: ...
 
-    def send_joystick_command(self, vx: float, vy: float, wz: float) -> bool: ...
-
     def baseline_motion_recipe(self) -> BaselineMotionRecipe: ...
 
     def runtime_tag_tracking_profile(self) -> TagTrackingProfile: ...
 
 
-def resolve_baseline_motion_recipe(adapter: ARRobotAdapterSpec) -> BaselineMotionRecipe:
+def resolve_baseline_motion_recipe(profile: ARRobotProfileSpec) -> BaselineMotionRecipe:
     try:
-        recipe = adapter.baseline_motion_recipe()
+        recipe = profile.baseline_motion_recipe()
         if (
             isinstance(recipe, BaselineMotionRecipe)
             and math.isfinite(recipe.strafe_speed)

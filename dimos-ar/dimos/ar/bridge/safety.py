@@ -10,7 +10,7 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger()
 
 if TYPE_CHECKING:
-    from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
+    from dimos.ar.bridge.motion_router import MotionRouter
     from dimos.ar.navigation.navigate import NavigateGoalHandler
     from dimos.ar.registration.session import RegistrationSession
 
@@ -21,7 +21,7 @@ class BridgeSafetyCoordinator:
         *,
         nav: NavigateGoalHandler,
         registration: RegistrationSession,
-        motion_router: AdapterMotionRouter,
+        motion_router: MotionRouter,
     ) -> None:
         self._nav = nav
         self._registration = registration

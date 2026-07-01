@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import threading
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from dimos.ar.adapters.base import DEFAULT_BASELINE_MOTION_RECIPE, BaselineMotionRecipe
-from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
-from dimos.ar.bridge.test_rpc_bindings import bind_mock_adapter_rpc
+from dimos.ar.bridge.motion_router import MotionRouter
 from dimos.ar.registration.baseline import (
     SAMPLE_MIN_OBS,
     SAMPLE_SETTLE_S,
@@ -18,34 +17,30 @@ from dimos.ar.registration.baseline import (
     _MovePhase,
 )
 from dimos.ar.registration.types import CaptureHint, RegistrationPhase
+from dimos.msgs.geometry_msgs.Twist import Twist
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
 _LEG_DURATIONS = DEFAULT_BASELINE_MOTION_RECIPE.leg_duration_s
 
 
-def _make_adapter(*, available: bool = True) -> MagicMock:
-    adapter = MagicMock(
-        baseline_motion_available=MagicMock(return_value=available),
-        send_joystick_command=MagicMock(return_value=True),
-    )
-    bind_mock_adapter_rpc(adapter)
-    return adapter
-
-
 def _make_driver(
     *,
     available: bool = True,
     motion_recipe: BaselineMotionRecipe = DEFAULT_BASELINE_MOTION_RECIPE,
-) -> tuple[BaselineCollector, MagicMock, AdapterMotionRouter]:
-    adapter = _make_adapter(available=available)
-    router = AdapterMotionRouter(adapter)
+) -> tuple[BaselineCollector, list[Twist], MotionRouter]:
+    published_cmd_vel: list[Twist] = []
+    router = MotionRouter(
+        publish_cmd_vel=published_cmd_vel.append,
+        publish_nav_goal=lambda _goal: None,
+        publish_cancel=lambda _cancel: None,
+    )
     driver = BaselineCollector(
         motion_router=router,
         motion_available=available,
         motion_recipe=motion_recipe,
     )
-    return driver, adapter, router
+    return driver, published_cmd_vel, router
 
 
 def _wait_for_leg_timer(driver: BaselineCollector) -> float:
@@ -56,26 +51,26 @@ def _wait_for_leg_timer(driver: BaselineCollector) -> float:
     raise AssertionError("leg timer never started after velocity submit")
 
 
-def _wait_for_velocity(adapter: MagicMock, expected: float) -> None:
-    expected_args = (0.0, expected, 0.0)
+def _wait_for_velocity(published_cmd_vel: list[Twist], expected: float) -> None:
     for _ in range(100):
-        if adapter.send_joystick_command.call_args is not None:
-            if adapter.send_joystick_command.call_args.args == expected_args:
+        if published_cmd_vel:
+            if published_cmd_vel[-1].linear.y == expected:
                 return
         time.sleep(0.01)
-    adapter.send_joystick_command.assert_called_with(*expected_args)
+    assert published_cmd_vel
+    assert published_cmd_vel[-1].linear.y == expected
 
 
 # ── safety: no confirm → no velocity ─────────────────────────────────────────
 
 
 def test_no_velocity_without_confirm() -> None:
-    driver, adapter, _gate = _make_driver()
+    driver, published_cmd_vel, _gate = _make_driver()
     driver.start()
     assert driver.state == _BaselineState.ESTIMATING
     for _ in range(10):
         driver.tick(obs_count=0, latest_obs_pos_world=None)
-    adapter.send_joystick_command.assert_not_called()
+    assert published_cmd_vel == []
 
 
 # ── ESTIMATING → AWAITING_CONFIRM ────────────────────────────────────────────
@@ -93,17 +88,17 @@ def _advance_to_awaiting_confirm(driver: BaselineCollector) -> None:
 
 def test_confirm_enters_move_directly() -> None:
     """A1: authorize_motion must go AWAITING_CONFIRM→MOVE with no intermediate state."""
-    driver, adapter, _gate = _make_driver()
+    driver, published_cmd_vel, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
     assert driver.state == _BaselineState.MOVE
-    _wait_for_velocity(adapter, 0.2)
+    _wait_for_velocity(published_cmd_vel, 0.4)
 
 
 def test_leg_timer_starts_on_velocity_submit() -> None:
-    """Leg timer must arm on submit, not after slow adapter RPC ack."""
-    driver, _adapter, _gate = _make_driver()
+    """Leg timer must arm after direct stream publish acceptance."""
+    driver, _published_cmd_vel, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -137,7 +132,7 @@ def _drive_through_sample(
 
 
 def test_happy_path_full_3_leg_sequence() -> None:
-    driver, adapter, _gate = _make_driver()
+    driver, published_cmd_vel, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -154,7 +149,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     # --- Sample 0: deliver stable observations ---
     _drive_through_sample(driver, expected_leg_after=1)
     assert driver.state == _BaselineState.MOVE
-    _wait_for_velocity(adapter, -0.2)
+    _wait_for_velocity(published_cmd_vel, -0.4)
 
     # --- Leg 1 completes (2× duration) ---
     t1 = _wait_for_leg_timer(driver)
@@ -166,7 +161,7 @@ def test_happy_path_full_3_leg_sequence() -> None:
     # --- Sample 1 ---
     _drive_through_sample(driver, expected_leg_after=2)
     assert driver.state == _BaselineState.MOVE
-    _wait_for_velocity(adapter, 0.2)
+    _wait_for_velocity(published_cmd_vel, 0.4)
 
     # --- Leg 2 completes (1× duration) ---
     t2 = _wait_for_leg_timer(driver)
@@ -178,14 +173,17 @@ def test_happy_path_full_3_leg_sequence() -> None:
     # --- Sample 2 → DONE ---
     _drive_through_sample(driver, expected_leg_after=None)
     assert driver.state == _BaselineState.DONE
-    _wait_for_velocity(adapter, 0.0)
+    _wait_for_velocity(published_cmd_vel, 0.0)
 
 
 def test_leg_phase_emits_steady_capture_not_hold() -> None:
     """LEG motion must request steady capture so Lens keeps tracking during strafe."""
     statuses: list[BaselineStatus] = []
-    adapter = _make_adapter()
-    gate = AdapterMotionRouter(adapter)
+    gate = MotionRouter(
+        publish_cmd_vel=lambda _twist: None,
+        publish_nav_goal=lambda _goal: None,
+        publish_cancel=lambda _cancel: None,
+    )
     driver = BaselineCollector(
         motion_router=gate,
         motion_available=True,
@@ -205,7 +203,7 @@ def test_odom_present_does_not_shorten_leg() -> None:
     """Regression: bad/jumpy odom must not end a leg before the timer fires."""
     from dimos.ar.world_frame.transforms import OdomSample
 
-    driver, _adapter, _gate = _make_driver()
+    driver, _published_cmd_vel, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -226,7 +224,7 @@ def test_odom_present_does_not_shorten_leg() -> None:
 def test_leg_passes_displacement_gate_when_odom_moves() -> None:
     from dimos.ar.world_frame.transforms import OdomSample
 
-    driver, _adapter, _gate = _make_driver()
+    driver, _published_cmd_vel, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -243,7 +241,7 @@ def test_leg_passes_displacement_gate_when_odom_moves() -> None:
 
 
 def test_time_based_leg_completion_when_odom_absent() -> None:
-    driver, _adapter, _gate = _make_driver()
+    driver, _published_cmd_vel, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -282,7 +280,7 @@ def test_tag_loss_during_leg_does_not_abort() -> None:
 
 def test_sample_holds_on_tag_loss() -> None:
     """During a SAMPLE pause with no tag, the robot holds indefinitely."""
-    driver, adapter, _gate = _make_driver()
+    driver, _published_cmd_vel, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -330,7 +328,7 @@ def test_sample_unstable_obs_do_not_advance() -> None:
 
 
 def test_stop_aborts_and_stops_motion() -> None:
-    driver, adapter, _gate = _make_driver()
+    driver, _published_cmd_vel, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -348,7 +346,7 @@ def test_emergency_stop_fails() -> None:
 
 
 def test_abort_during_move_publishes_zero_velocity() -> None:
-    driver, adapter, _gate = _make_driver()
+    driver, published_cmd_vel, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -356,7 +354,7 @@ def test_abort_during_move_publishes_zero_velocity() -> None:
 
     driver.stop()
     assert driver.state == _BaselineState.IDLE
-    _wait_for_velocity(adapter, 0.0)
+    _wait_for_velocity(published_cmd_vel, 0.0)
 
 
 def test_restart_after_stop() -> None:
@@ -376,8 +374,11 @@ def test_restart_after_stop() -> None:
 def test_reset_to_idle_goes_to_idle_silently() -> None:
     """reset_to_idle must transition to IDLE without firing on_status."""
     status_changes: list[str] = []
-    adapter = _make_adapter()
-    gate = AdapterMotionRouter(adapter)
+    gate = MotionRouter(
+        publish_cmd_vel=lambda _twist: None,
+        publish_nav_goal=lambda _goal: None,
+        publish_cancel=lambda _cancel: None,
+    )
     driver = BaselineCollector(
         motion_router=gate,
         motion_available=True,
@@ -395,7 +396,7 @@ def test_reset_to_idle_goes_to_idle_silently() -> None:
 
 def test_reset_to_idle_stops_motion() -> None:
     """reset_to_idle must zero the robot velocity when motion was active."""
-    driver, adapter, _gate = _make_driver()
+    driver, published_cmd_vel, _gate = _make_driver()
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
@@ -403,7 +404,7 @@ def test_reset_to_idle_stops_motion() -> None:
 
     driver.reset_to_idle()
     assert driver.state == _BaselineState.IDLE
-    _wait_for_velocity(adapter, 0.0)
+    _wait_for_velocity(published_cmd_vel, 0.0)
 
 
 # ── concurrency ───────────────────────────────────────────────────────────────
@@ -476,8 +477,12 @@ def test_injected_motion_recipe_drives_velocity() -> None:
         leg_directions=(1.0, -1.0, 1.0),
         leg_distance_multipliers=(1.0, 2.0, 1.0),
     )
-    adapter = _make_adapter()
-    router = AdapterMotionRouter(adapter)
+    published_cmd_vel: list[Twist] = []
+    router = MotionRouter(
+        publish_cmd_vel=published_cmd_vel.append,
+        publish_nav_goal=lambda _goal: None,
+        publish_cancel=lambda _cancel: None,
+    )
     driver = BaselineCollector(
         motion_router=router,
         motion_available=True,
@@ -486,7 +491,7 @@ def test_injected_motion_recipe_drives_velocity() -> None:
     driver.start()
     _advance_to_awaiting_confirm(driver)
     driver.authorize_motion()
-    _wait_for_velocity(adapter, 0.2)
+    _wait_for_velocity(published_cmd_vel, 0.2)
 
 
 def test_tick_not_starved_during_authorize_motion() -> None:

@@ -23,7 +23,7 @@ from dimos.utils.logging_config import setup_logger
 if TYPE_CHECKING:
     from dimos_lcm.std_msgs import Bool
 
-    from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
+    from dimos.ar.bridge.motion_router import MotionRouter
     from dimos.ar.bridge.sender import BridgeSender
     from dimos.ar.navigation.world_transform import OdomGoal
     from dimos.msgs.nav_msgs.Path import Path
@@ -44,7 +44,7 @@ class NavigateGoalHandler:
         robot_id: str,
         sender: BridgeSender,
         world_frame: WorldFrameState,
-        motion_router: AdapterMotionRouter,
+        motion_router: MotionRouter,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
@@ -315,7 +315,7 @@ class NavigateGoalHandler:
         if err is not None:
             logger.warning("XR control command failed", error=str(err))
         else:
-            logger.warning("XR control command rejected by adapter")
+            logger.warning("XR control command rejected")
 
     def _on_goal_dispatched(
         self,
@@ -341,7 +341,7 @@ class NavigateGoalHandler:
         self._goal_failed = True
         self._reset_goal_tracking()
         self._dimos_nav_state = "idle"
-        error = str(err) if err is not None else "adapter rejected goal"
+        error = str(err) if err is not None else "goal publish rejected"
         logger.error("XR navigation goal publish failed", error=error)
         self._broadcast_empty_path(ts=msg.ts)
         self.broadcast_nav_status(ts=msg.ts)

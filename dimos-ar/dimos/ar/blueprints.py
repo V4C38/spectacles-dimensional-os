@@ -52,6 +52,10 @@ ar_go2 = (
             (Go2AdapterModule, "ar_goal_reached_in", "goal_reached"),
             # Navigation state string
             (Go2AdapterModule, "ar_navigation_state_in", "navigation_state"),
+            # Hot AR control path: bridge publishes directly to robot command streams.
+            (ARBridge, "cmd_vel", "cmd_vel"),
+            (ARBridge, "goal_request", "goal_request"),
+            (ARBridge, "stop_movement", "stop_movement"),
         ]
     )
     .global_config(viewer="none")

@@ -16,7 +16,7 @@ from dimos.ar.utils.console import log_checkpoint
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
-    from dimos.ar.bridge.adapter_motion_router import AdapterMotionRouter
+    from dimos.ar.bridge.motion_router import MotionRouter
     from dimos.ar.world_frame.transforms import OdomSample
 
 logger = setup_logger()
@@ -64,7 +64,7 @@ class BaselineCollector:
     def __init__(
         self,
         *,
-        motion_router: AdapterMotionRouter,
+        motion_router: MotionRouter,
         motion_available: bool,
         motion_recipe: BaselineMotionRecipe = DEFAULT_BASELINE_MOTION_RECIPE,
         on_status: Callable[[BaselineStatus], None] | None = None,
@@ -268,6 +268,9 @@ class BaselineCollector:
                 if err is not None:
                     reason = f"{reason}: {err}"
                 self._fail(reason)
+                return
+            if self._state == _BaselineState.MOVE and self._move_phase == _MovePhase.LEG:
+                self._move_start_mono = time.monotonic()
 
     def _stop_motion(self) -> None:
         if self._move_velocity_active:
@@ -294,7 +297,6 @@ class BaselineCollector:
         )
         logger.info("BaselineCollector MOVE leg=%d", leg)
         self._submit_lateral_velocity(speed, on_complete=self._on_velocity_start_ack)
-        self._move_start_mono = time.monotonic()
 
     def _start_sample(self) -> None:
         self._stop_motion()
@@ -339,7 +341,6 @@ class BaselineCollector:
         )
         logger.info("BaselineCollector MOVE leg=%d", leg)
         self._submit_lateral_velocity(speed, on_complete=self._on_velocity_start_ack)
-        self._move_start_mono = time.monotonic()
 
     def _leg_displacement_ok(self, leg: int) -> bool:
         start = self._move_leg_start_odom

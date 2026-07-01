@@ -120,6 +120,10 @@ def test_go2_capabilities_disable_preview_without_costmap() -> None:
     capabilities = Go2AdapterModule.capabilities(adapter)
 
     assert capabilities["plan_preview"].available is False
+    assert capabilities["registration_april_odom_baseline"].available is True
+    assert capabilities["nav"].available is True
+    assert capabilities["cancel_nav_goal"].available is True
+    assert capabilities["emergency_stop"].available is True
 
 
 def test_go2_robot_id_and_model() -> None:
@@ -178,7 +182,7 @@ def test_go2_baseline_motion_recipe_matches_teleop() -> None:
     adapter = _make_go2_adapter()
 
     assert Go2AdapterModule.baseline_motion_recipe(adapter) == DEFAULT_BASELINE_MOTION_RECIPE
-    assert DEFAULT_BASELINE_MOTION_RECIPE.strafe_speed == pytest.approx(0.2)
+    assert DEFAULT_BASELINE_MOTION_RECIPE.strafe_speed == pytest.approx(0.4)
 
 
 def test_go2_joystick_republish_hz_constant() -> None:
