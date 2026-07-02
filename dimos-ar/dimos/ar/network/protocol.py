@@ -20,8 +20,8 @@ from dimos.ar.registration.wire import (
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-    from dimos.ar.adapters.base import CapabilityState, RobotHandshake
     from dimos.ar.network.bridge_status import BridgeStatusSnapshot
+    from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
     from dimos.ar.world_frame.state import WorldFrameState
 
 PROTOCOL_VERSION = 8

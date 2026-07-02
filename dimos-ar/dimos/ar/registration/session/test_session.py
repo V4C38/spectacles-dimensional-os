@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from dimos.ar.adapters.base import DEFAULT_BASELINE_MOTION_RECIPE
 from dimos.ar.bridge.motion_router import MotionRouter
 from dimos.ar.registration.baseline import (
     SAMPLE_MIN_OBS,
@@ -19,6 +18,7 @@ from dimos.ar.registration.baseline import (
 from dimos.ar.registration.session import FrameAdmission, RegistrationSession
 from dimos.ar.registration.types import CaptureHint, RegistrationMode, RegistrationPhase
 from dimos.ar.registration.wire import RegistrationCommandMessage, RegistrationStatusPayload
+from dimos.ar.robot_profile.base import DEFAULT_BASELINE_MOTION_RECIPE
 from dimos.ar.tag_tracking.solve import TagSolve
 from dimos.ar.tag_tracking.tracker import FrameResult
 from dimos.ar.world_frame.registry import WorldRegistry
@@ -48,12 +48,14 @@ def _make_session(
     tag_tracker.latest_waypoint_robot_world_position.return_value = None
     tag_tracker.record_latest_waypoint_observation.return_value = False
     world_frame_refiner = MagicMock()
-    adapter = MagicMock()
+    profile = MagicMock()
     published_cmd_vel: list[Twist] = []
     router = MotionRouter(
         publish_cmd_vel=published_cmd_vel.append,
         publish_nav_goal=lambda _goal: None,
+        publish_nav_point_goal=lambda _goal: None,
         publish_cancel=lambda _cancel: None,
+        publish_cancel_signal=lambda _cancel: None,
     )
     session = RegistrationSession(
         robot_id="test_robot",
@@ -66,7 +68,7 @@ def _make_session(
         frame_max_age_s=4.0,
         manual_registration_quality=0.7,
         world_frame_refiner=world_frame_refiner,
-        adapter=adapter,
+        profile=profile,
         motion_router=router,
         baseline_motion_available=True,
         baseline_motion_recipe=DEFAULT_BASELINE_MOTION_RECIPE,

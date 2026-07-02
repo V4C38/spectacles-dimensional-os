@@ -7,7 +7,6 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from dimos.ar.adapters.base import DEFAULT_BASELINE_MOTION_RECIPE, BaselineMotionRecipe
 from dimos.ar.registration.baseline import BaselineCollector, BaselineStatus
 from dimos.ar.registration.session.flows import RegistrationFlowsMixin
 from dimos.ar.registration.session.session_frames import RegistrationSessionFramesMixin
@@ -18,6 +17,7 @@ from dimos.ar.registration.types import (
     RegistrationPhase,
 )
 from dimos.ar.registration.wire import RegistrationStatusPayload
+from dimos.ar.robot_profile.base import DEFAULT_BASELINE_MOTION_RECIPE, BaselineMotionRecipe
 from dimos.ar.tag_tracking.tracker import FrameResult, RobotAprilTagTracker
 from dimos.ar.utils.console import log_checkpoint
 from dimos.ar.world_frame.refinement import WorldFrameRefiner
@@ -28,12 +28,12 @@ from dimos.utils.logging_config import setup_logger
 if TYPE_CHECKING:
     from websockets.asyncio.server import ServerConnection
 
-    from dimos.ar.adapters.base import ARRobotAdapterSpec, TagTrackingProfile
     from dimos.ar.bridge.motion_router import MotionRouter
     from dimos.ar.bridge.odom_buffer import OdomBuffer
     from dimos.ar.bridge.sender import BridgeSender
     from dimos.ar.bridge.status_service import StatusService
     from dimos.ar.network.protocol import RegistrationCommandMessage
+    from dimos.ar.robot_profile.base import ARRobotProfileSpec, TagTrackingProfile
 
 logger = setup_logger()
 
@@ -78,7 +78,7 @@ class RegistrationSession(
         frame_max_age_s: float,
         manual_registration_quality: float,
         world_frame_refiner: WorldFrameRefiner,
-        adapter: ARRobotAdapterSpec | None = None,
+        profile: ARRobotProfileSpec | None = None,
         motion_router: MotionRouter | None = None,
         runtime_profile: TagTrackingProfile | None = None,
         baseline_motion_available: bool = False,
@@ -101,10 +101,10 @@ class RegistrationSession(
 
         if runtime_profile is not None:
             self._runtime_profile = runtime_profile
-        elif adapter is not None:
-            self._runtime_profile = adapter.runtime_tag_tracking_profile()
+        elif profile is not None:
+            self._runtime_profile = profile.runtime_tag_tracking_profile()
         else:
-            from dimos.ar.adapters.base import TagTrackingProfile
+            from dimos.ar.robot_profile.base import TagTrackingProfile
 
             self._runtime_profile = TagTrackingProfile()
 

@@ -28,9 +28,9 @@ def _make_runtime_sync_stub() -> tuple[MagicMock, BridgeSender, MagicMock, Magic
     }
     bridge._status = mock_status  # type: ignore[attr-defined]
 
-    mock_adapter = MagicMock()
-    mock_adapter.robot_id.return_value = "unitree_go2"
-    bridge._adapter = mock_adapter  # type: ignore[attr-defined]
+    mock_profile = MagicMock()
+    mock_profile.robot_id.return_value = "unitree_go2"
+    bridge._profile = mock_profile  # type: ignore[attr-defined]
     bridge._robot_id = "unitree_go2"  # type: ignore[attr-defined]
 
     mock_nav = MagicMock()

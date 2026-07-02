@@ -5,17 +5,18 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from dimos_lcm.std_msgs import Bool
 import pytest
 
 from dimos.ar.robot_profile.base import (
     DEFAULT_BASELINE_MOTION_RECIPE,
     BaselineMotionRecipe,
+    CapabilityState,
+    RobotHandshake,
+    merge_capability_availability,
     resolve_baseline_motion_recipe,
 )
 from dimos.ar.robot_profile.g1 import G1RobotProfileModule
 from dimos.ar.robot_profile.go2 import Go2RobotProfileModule
-from dimos.msgs.nav_msgs.Odometry import Odometry
 
 
 class _FakeStream:
@@ -31,24 +32,6 @@ def _make_go2_profile() -> Go2RobotProfileModule:
     profile = object.__new__(Go2RobotProfileModule)
     profile._go2_connection = None
     profile.config = SimpleNamespace(robot_id="unitree_go2")
-    profile.goal_request = _FakeStream(connected=False)
-    profile.goal_req = _FakeStream(connected=False)
-    profile.clicked_point = _FakeStream(connected=False)
-    profile.stop_movement = _FakeStream(connected=False)
-    profile.cancel_goal_signal = _FakeStream(connected=False)
-    profile.cmd_vel = _FakeStream(connected=False)
-    profile.ar_lidar = _FakeStream(connected=True)
-    profile.ar_odom = _FakeStream(connected=True)
-    profile.ar_global_costmap = _FakeStream(connected=True)
-    profile.ar_path = _FakeStream(connected=True)
-    profile.ar_goal_reached = _FakeStream(connected=True)
-    profile.ar_navigation_state = _FakeStream(connected=True)
-    profile.ar_lidar_in = _FakeStream(connected=False)
-    profile.ar_odom_in = _FakeStream(connected=False)
-    profile.ar_global_costmap_in = _FakeStream(connected=False)
-    profile.ar_path_in = _FakeStream(connected=False)
-    profile.ar_goal_reached_in = _FakeStream(connected=False)
-    profile.ar_navigation_state_in = _FakeStream(connected=False)
     return profile
 
 
@@ -57,33 +40,20 @@ def _make_g1_profile() -> G1RobotProfileModule:
     profile._g1_connection = None
     profile._g1_high_level = None
     profile.config = SimpleNamespace(robot_id="unitree_g1")
-    profile.goal_request = _FakeStream(connected=False)
-    profile.goal_req = _FakeStream(connected=False)
-    profile.clicked_point = _FakeStream(connected=False)
-    profile.stop_movement = _FakeStream(connected=False)
-    profile.cancel_goal_signal = _FakeStream(connected=False)
-    profile.cmd_vel = _FakeStream(connected=False)
-    profile.ar_lidar = _FakeStream(connected=True)
-    profile.ar_odom = _FakeStream(connected=True)
-    profile.ar_global_costmap = _FakeStream(connected=True)
-    profile.ar_path = _FakeStream(connected=True)
-    profile.ar_goal_reached = _FakeStream(connected=True)
-    profile.ar_navigation_state = _FakeStream(connected=True)
-    profile.ar_lidar_in = _FakeStream(connected=False)
-    profile.ar_odom_in = _FakeStream(connected=False)
-    profile.ar_global_costmap_in = _FakeStream(connected=False)
-    profile.ar_path_in = _FakeStream(connected=False)
-    profile.ar_goal_reached_in = _FakeStream(connected=False)
-    profile.ar_navigation_state_in = _FakeStream(connected=False)
     return profile
 
 
-def test_go2_capabilities_disable_preview_without_costmap() -> None:
+def test_merge_capability_availability_overrides_profile_defaults() -> None:
     profile = _make_go2_profile()
+    handshake = Go2RobotProfileModule.handshake_payload(profile)
 
-    capabilities = Go2RobotProfileModule.capabilities(profile)
+    merged = merge_capability_availability(
+        handshake,
+        {"plan_preview": False, "path": True},
+    )
 
-    assert capabilities["plan_preview"].available is False
+    assert merged.capability_states["plan_preview"].available is False
+    assert merged.capability_states["path"].available is True
 
 
 def test_go2_robot_id_and_model() -> None:
@@ -99,7 +69,7 @@ def test_g1_capabilities_report_emergency_stop_unavailable_without_hw() -> None:
     capabilities = G1RobotProfileModule.capabilities(profile)
 
     assert capabilities["emergency_stop"].available is False
-    assert capabilities["registration_april_odom_baseline"].available is False
+    assert capabilities["plan_preview"].available is False
 
 
 def test_g1_robot_id_and_model() -> None:
@@ -116,9 +86,8 @@ def test_go2_baseline_motion_recipe_matches_teleop() -> None:
     assert DEFAULT_BASELINE_MOTION_RECIPE.strafe_speed == pytest.approx(0.4)
 
 
-def test_g1_baseline_motion_available_and_capability_follow_cmd_vel_transport() -> None:
+def test_g1_baseline_motion_available_and_capability_are_static() -> None:
     profile = _make_g1_profile()
-    profile.cmd_vel = _FakeStream(connected=True)
 
     assert G1RobotProfileModule.baseline_motion_available(profile) is True
     assert G1RobotProfileModule.baseline_motion_recipe(profile) == DEFAULT_BASELINE_MOTION_RECIPE
@@ -142,43 +111,6 @@ def test_g1_runtime_tag_tracking_profile_overrides() -> None:
     assert runtime.runtime_speed_horizon_s == 0.9
 
 
-def test_g1_ar_odom_publishes_pose_stamped_with_twist_speed() -> None:
-    profile = _make_g1_profile()
-    from dimos.msgs.geometry_msgs.Pose import Pose
-    from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-    from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-    from dimos.msgs.geometry_msgs.Twist import Twist
-    from dimos.msgs.geometry_msgs.Vector3 import Vector3
-
-    odom = Odometry(
-        ts=1.5,
-        frame_id="odom",
-        child_frame_id="base_link",
-        pose=Pose(
-            position=Vector3(1.0, 2.0, 0.0),
-            orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
-        ),
-        twist=Twist(linear=Vector3(0.3, 0.4, 0.0), angular=Vector3(0.0, 0.0, 0.0)),
-    )
-
-    import asyncio
-
-    asyncio.run(G1RobotProfileModule.handle_ar_odom_in(profile, odom))
-
-    assert len(profile.ar_odom.published) == 1
-    pose = profile.ar_odom.published[0]
-    assert isinstance(pose, PoseStamped)
-    assert pose.x == 1.0
-    assert pose.y == 2.0
-    assert hasattr(pose, "vx") and pose.vx == 0.3  # type: ignore[attr-defined]
-    assert hasattr(pose, "vy") and pose.vy == 0.4  # type: ignore[attr-defined]
-
-    from dimos.ar.bridge.odom_buffer import OdomBuffer
-
-    sample = OdomBuffer().sample_from_msg(pose)
-    assert sample.measured_speed_mps == pytest.approx(0.5)
-
-
 def test_resolve_baseline_motion_recipe_uses_profile_value() -> None:
     recipe = BaselineMotionRecipe(
         strafe_speed=0.25,
@@ -195,3 +127,18 @@ def test_resolve_baseline_motion_recipe_defaults_on_failure() -> None:
     profile = MagicMock()
     profile.baseline_motion_recipe.side_effect = RuntimeError("rpc failed")
     assert resolve_baseline_motion_recipe(profile) == DEFAULT_BASELINE_MOTION_RECIPE
+
+
+def test_merge_capability_availability_preserves_handshake_metadata() -> None:
+    handshake = RobotHandshake(
+        robot_id="unitree_go2",
+        display_name="Unitree Go2",
+        capability_states={"nav": CapabilityState(True)},
+        body_bounds_m=(0.7, 0.5, 0.55),
+    )
+
+    merged = merge_capability_availability(handshake, {"nav": False})
+
+    assert merged.robot_id == handshake.robot_id
+    assert merged.body_bounds_m == handshake.body_bounds_m
+    assert merged.capability_states["nav"].available is False

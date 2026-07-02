@@ -9,11 +9,13 @@ import time
 from typing import TYPE_CHECKING
 
 from dimos_lcm.std_msgs import Bool
+
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
+    from dimos.msgs.geometry_msgs.PointStamped import PointStamped
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 logger = setup_logger()
@@ -38,12 +40,16 @@ class MotionRouter:
         *,
         publish_cmd_vel: Callable[[Twist], None],
         publish_nav_goal: Callable[[PoseStamped], None],
+        publish_nav_point_goal: Callable[[PointStamped], None],
         publish_cancel: Callable[[Bool], None] | None = None,
+        publish_cancel_signal: Callable[[Bool], None] | None = None,
         hard_stop: Callable[[], None] | None = None,
     ) -> None:
         self._publish_cmd_vel = publish_cmd_vel
         self._publish_nav_goal = publish_nav_goal
+        self._publish_nav_point_goal = publish_nav_point_goal
         self._publish_cancel = publish_cancel
+        self._publish_cancel_signal_out = publish_cancel_signal
         self._hard_stop = hard_stop
         self._lock = threading.Lock()
         self._active_intent = _ActiveIntent.NONE
@@ -105,6 +111,7 @@ class MotionRouter:
                     self._publish_joystick_twist(0.0, 0.0, 0.0)
                 self._active_intent = _ActiveIntent.NAVIGATING
             self._publish_nav_goal(goal)
+            self._publish_nav_point_goal(self._point_goal_from_pose(goal))
         except BaseException as exc:
             with self._lock:
                 self._active_intent = _ActiveIntent.NONE
@@ -147,6 +154,18 @@ class MotionRouter:
         with self._lock:
             self._active_intent = _ActiveIntent.NONE
 
+    def validate_transports(
+        self,
+        *,
+        has_pose_goal: bool,
+        has_point_goal: bool,
+        has_cancel: bool,
+    ) -> None:
+        if not has_pose_goal and not has_point_goal:
+            logger.warning("motion router has no navigation goal transport")
+        if not has_cancel:
+            logger.warning("motion router has no cancellation transport")
+
     def _halt_motion(self) -> None:
         self._stop_joystick_republisher()
         self._publish_joystick_twist(0.0, 0.0, 0.0)
@@ -156,9 +175,10 @@ class MotionRouter:
             self._joystick_target = (0.0, 0.0, 0.0)
 
     def _publish_cancel_signal(self) -> None:
-        if self._publish_cancel is None:
-            return
-        self._publish_cancel(Bool(data=True))
+        if self._publish_cancel is not None:
+            self._publish_cancel(Bool(data=True))
+        if self._publish_cancel_signal_out is not None:
+            self._publish_cancel_signal_out(Bool(data=True))
 
     def _invoke_hard_stop(self) -> None:
         if self._hard_stop is None:
@@ -206,6 +226,18 @@ class MotionRouter:
             method=method,
             publish_mono=round(now, 6),
             **fields,
+        )
+
+    @staticmethod
+    def _point_goal_from_pose(goal: PoseStamped) -> PointStamped:
+        from dimos.msgs.geometry_msgs.PointStamped import PointStamped
+
+        return PointStamped(
+            x=goal.x,
+            y=goal.y,
+            z=goal.z,
+            ts=goal.ts,
+            frame_id=goal.frame_id,
         )
 
     @staticmethod

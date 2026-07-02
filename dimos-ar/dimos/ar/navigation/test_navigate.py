@@ -17,6 +17,7 @@ from dimos.ar.navigation.navigate import (
 )
 from dimos.ar.network.protocol import NavGoalMessage, encode_pose
 from dimos.ar.world_frame.state import WorldFrameState
+from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.Path import Path
@@ -39,11 +40,14 @@ def _make_nav(
         world_frame.commit(np.eye(4, dtype=np.float64), method="manual_pose", approximate=False)
     published_cmd_vel: list[Twist] = []
     published_nav: list[PoseStamped] = []
+    published_point_nav: list[PointStamped] = []
     published_cancel: list[Bool] = []
     router = MotionRouter(
         publish_cmd_vel=published_cmd_vel.append,
         publish_nav_goal=published_nav.append,
+        publish_nav_point_goal=published_point_nav.append,
         publish_cancel=published_cancel.append,
+        publish_cancel_signal=published_cancel.append,
     )
     sender, mock_server = _make_sender()
     nav = NavigateGoalHandler(
@@ -207,7 +211,7 @@ def test_goal_stall_no_path_emits_retryable_recovering() -> None:
     assert nav_status["retryable"] is True
     assert nav_status["stall_reason"] == "no_path"
     time.sleep(0.05)
-    assert len(published_cancel) == 1
+    assert len(published_cancel) == 2
 
 
 def test_goal_stall_planner_idle_emits_retryable_recovering() -> None:
@@ -222,7 +226,7 @@ def test_goal_stall_planner_idle_emits_retryable_recovering() -> None:
     assert nav_status["retryable"] is True
     assert nav_status["stall_reason"] == "planner_idle"
     time.sleep(0.05)
-    assert len(published_cancel) == 1
+    assert len(published_cancel) == 2
 
 
 def test_goal_stall_does_not_send_second_nav_goal() -> None:
@@ -235,7 +239,7 @@ def test_goal_stall_does_not_send_second_nav_goal() -> None:
 
     assert published_nav == []
     time.sleep(0.05)
-    assert len(published_cancel) == 1
+    assert len(published_cancel) == 2
 
 
 def test_disconnect_prevents_watchdog_stall_emission() -> None:
@@ -314,7 +318,7 @@ def test_emergency_stop_then_goal_succeeds() -> None:
     nav.on_navigate_goal(msg)
     time.sleep(0.05)
 
-    assert len(published_cancel) == 1
+    assert len(published_cancel) == 2
     assert len(published_nav) == 1
     assert nav._nav_goal_pending is True
     assert nav._nav_path_received is False
@@ -326,7 +330,7 @@ def test_cancel_goal_timeout_does_not_mark_goal_failed() -> None:
 
     assert nav._goal_failed is False
     assert nav._nav_error_code is None
-    assert len(published_cancel) == 1
+    assert len(published_cancel) == 2
     nav_status = _last_nav_status(mock_server)
     assert nav_status["phase"] == "idle"
     assert nav_status.get("error_code") is None

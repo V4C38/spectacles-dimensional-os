@@ -21,10 +21,10 @@ from dimos.utils.logging_config import setup_logger
 from dimos.utils.transform_utils import normalize_angle
 
 if TYPE_CHECKING:
-    from dimos.ar.adapters.base import TagTrackingProfile
     from dimos.ar.bridge.odom_buffer import OdomBuffer
     from dimos.ar.bridge.sender import BridgeSender
     from dimos.ar.bridge.telemetry import TelemetryPublisher
+    from dimos.ar.robot_profile.base import TagTrackingProfile
     from dimos.ar.world_frame.registry import WorldRegistry
 
 logger = setup_logger()

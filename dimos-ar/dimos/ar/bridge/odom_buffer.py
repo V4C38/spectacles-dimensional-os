@@ -82,7 +82,7 @@ class OdomBuffer:
             "odom source_ts provenance (assume good; remove log after hardware check)",
             source_ts=round(source_ts, 6),
             receive_mono=round(receive_mono, 6),
-            delta_s=round(receive_mono - source_ts, 6),
+            wall_age_s=round(time.time() - source_ts, 6),
         )
 
     def update(self, msg: OdomMsg) -> OdomSample:

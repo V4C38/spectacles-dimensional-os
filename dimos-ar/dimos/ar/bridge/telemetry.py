@@ -28,6 +28,8 @@ from dimos.ar.lidar.filters import LidarObstacleDistanceConfig
 
 logger = setup_logger()
 
+ODOM_EGRESS_AGE_LOG_INTERVAL_S = 5.0
+
 
 class TelemetryPublisher:
     """Transforms inbound DimOS stream messages into XR WebSocket LiDAR/pose payloads."""
@@ -61,6 +63,8 @@ class TelemetryPublisher:
         self._last_dropped_pose_log_mono: float = 0.0
         self._logged_lidar_stream_active: bool = False
         self._last_lidar_payload_log_mono: float = 0.0
+        self._last_odom_egress_age_log_mono: float = 0.0
+        self._odom_egress_age_max_s: float = 0.0
         self._lidar_mode: str = "off"
         self._logged_lidar_config_key: str | None = None
         self._obstacle_distance_config = LidarObstacleDistanceConfig()
@@ -163,6 +167,7 @@ class TelemetryPublisher:
         if pose_interval > 0 and now - self._pose_last_emit < pose_interval:
             return
         self._pose_last_emit = now
+        self._maybe_log_odom_egress_age(msg)
         speed_mps = self._odom.speed_windowed(now, self._speed_horizon_s)
         result = build_pose_payload(
             msg,
@@ -235,3 +240,18 @@ class TelemetryPublisher:
             bytes=payload_bytes,
             hz=self._lidar_filter.config.max_hz,
         )
+
+    def _maybe_log_odom_egress_age(self, msg: PoseStamped) -> None:
+        age_s = max(0.0, time.time() - float(msg.ts))
+        self._odom_egress_age_max_s = max(self._odom_egress_age_max_s, age_s)
+        now = time.monotonic()
+        if now - self._last_odom_egress_age_log_mono < ODOM_EGRESS_AGE_LOG_INTERVAL_S:
+            return
+        self._last_odom_egress_age_log_mono = now
+        logger.info(
+            "odom egress age",
+            age_s=round(age_s, 3),
+            age_max_s=round(self._odom_egress_age_max_s, 3),
+            pose_hz_cap=self._pose_max_hz,
+        )
+        self._odom_egress_age_max_s = 0.0

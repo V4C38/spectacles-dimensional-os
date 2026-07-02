@@ -6,7 +6,6 @@ import threading
 import time
 from unittest.mock import patch
 
-from dimos.ar.adapters.base import DEFAULT_BASELINE_MOTION_RECIPE, BaselineMotionRecipe
 from dimos.ar.bridge.motion_router import MotionRouter
 from dimos.ar.registration.baseline import (
     SAMPLE_MIN_OBS,
@@ -17,6 +16,7 @@ from dimos.ar.registration.baseline import (
     _MovePhase,
 )
 from dimos.ar.registration.types import CaptureHint, RegistrationPhase
+from dimos.ar.robot_profile.base import DEFAULT_BASELINE_MOTION_RECIPE, BaselineMotionRecipe
 from dimos.msgs.geometry_msgs.Twist import Twist
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -33,7 +33,9 @@ def _make_driver(
     router = MotionRouter(
         publish_cmd_vel=published_cmd_vel.append,
         publish_nav_goal=lambda _goal: None,
+        publish_nav_point_goal=lambda _goal: None,
         publish_cancel=lambda _cancel: None,
+        publish_cancel_signal=lambda _cancel: None,
     )
     driver = BaselineCollector(
         motion_router=router,
@@ -182,7 +184,9 @@ def test_leg_phase_emits_steady_capture_not_hold() -> None:
     gate = MotionRouter(
         publish_cmd_vel=lambda _twist: None,
         publish_nav_goal=lambda _goal: None,
+        publish_nav_point_goal=lambda _goal: None,
         publish_cancel=lambda _cancel: None,
+        publish_cancel_signal=lambda _cancel: None,
     )
     driver = BaselineCollector(
         motion_router=gate,
@@ -377,7 +381,9 @@ def test_reset_to_idle_goes_to_idle_silently() -> None:
     gate = MotionRouter(
         publish_cmd_vel=lambda _twist: None,
         publish_nav_goal=lambda _goal: None,
+        publish_nav_point_goal=lambda _goal: None,
         publish_cancel=lambda _cancel: None,
+        publish_cancel_signal=lambda _cancel: None,
     )
     driver = BaselineCollector(
         motion_router=gate,
@@ -481,7 +487,9 @@ def test_injected_motion_recipe_drives_velocity() -> None:
     router = MotionRouter(
         publish_cmd_vel=published_cmd_vel.append,
         publish_nav_goal=lambda _goal: None,
+        publish_nav_point_goal=lambda _goal: None,
         publish_cancel=lambda _cancel: None,
+        publish_cancel_signal=lambda _cancel: None,
     )
     driver = BaselineCollector(
         motion_router=router,

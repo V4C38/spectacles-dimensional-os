@@ -8,11 +8,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from dimos.ar.adapters.base import TagTrackingProfile
 from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.bridge.telemetry import TelemetryPublisher
 from dimos.ar.lidar.filters import LidarFilter, LidarFilterConfig
+from dimos.ar.robot_profile.base import TagTrackingProfile
 from dimos.ar.tag_tracking.solve import (
     TagSolve,
     _yaw_from_T,

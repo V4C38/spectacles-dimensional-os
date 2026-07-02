@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import time
+from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
+import dimos.ar.bridge.telemetry as telemetry_module
 from dimos.ar.bridge.telemetry import TelemetryPublisher
 from dimos.ar.lidar.filters import LidarFilter, LidarFilterConfig
 from dimos.ar.network.protocol import SetLidarModeMessage
@@ -21,6 +24,22 @@ class _FakePointCloud2:
 
     def points_f32(self) -> np.ndarray:
         return self._points
+
+
+class _FakeOrientation:
+    x = 0.0
+    y = 0.0
+    z = 0.0
+    w = 1.0
+
+
+class _FakePoseStamped:
+    def __init__(self, *, ts: float) -> None:
+        self.ts = ts
+        self.x = 1.0
+        self.y = 2.0
+        self.z = 3.0
+        self.orientation = _FakeOrientation()
 
 
 class _FakeWorldFrame:
@@ -55,6 +74,13 @@ class _FakeOdomBuffer:
 
     def speed_windowed(self, _now: float, _horizon_s: float) -> float | None:
         return None
+
+    def sample(self, msg: _FakePoseStamped) -> OdomSample:
+        return OdomSample(
+            position=(msg.x, msg.y, msg.z),
+            orientation=(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w),
+            source_ts=msg.ts,
+        )
 
 
 class _RecordingSender:
@@ -266,6 +292,23 @@ def test_publish_pose_snapshot_bypasses_rate_limit() -> None:
 
     assert sent is True
     assert len(sender.text_payloads) == 1
+
+
+def test_publish_pose_logs_stale_odom_egress_age(monkeypatch: pytest.MonkeyPatch) -> None:
+    publisher, sender = _publisher()
+    msg = _FakePoseStamped(ts=time.time() - 2.0)
+    logger = MagicMock()
+    monkeypatch.setattr(telemetry_module, "logger", logger)
+
+    publisher.publish_pose(msg)  # type: ignore[arg-type]
+
+    assert len(sender.text_payloads) == 1
+    logger.info.assert_called_once()
+    assert logger.info.call_args.args == ("odom egress age",)
+    fields = logger.info.call_args.kwargs
+    assert fields["age_s"] >= 1.9
+    assert fields["age_max_s"] >= 1.9
+    assert fields["pose_hz_cap"] == 30.0
 
 
 def test_runtime_correction_pose_not_suppressed_after_recent_stream_emit() -> None:

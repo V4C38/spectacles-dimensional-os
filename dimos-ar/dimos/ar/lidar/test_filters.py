@@ -3,7 +3,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dimos.ar.adapters.go2 import go2_handshake
 from dimos.ar.lidar.filters import (
     LidarFilter,
     LidarFilterConfig,
@@ -12,6 +11,7 @@ from dimos.ar.lidar.filters import (
     lidar_height_band_m,
     subsample_points_near_robot,
 )
+from dimos.ar.robot_profile.go2 import go2_handshake
 
 
 def test_empty_points() -> None:

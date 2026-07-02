@@ -79,6 +79,35 @@ class ARRobotProfileSpec(Spec, Protocol):  # type: ignore[misc]
 
     def runtime_tag_tracking_profile(self) -> TagTrackingProfile: ...
 
+    def emergency_stop(self) -> bool: ...
+
+
+def merge_capability_availability(
+    handshake: RobotHandshake,
+    overrides: dict[str, bool],
+) -> RobotHandshake:
+    capability_states = dict(handshake.capability_states)
+    for name, available in overrides.items():
+        previous = capability_states.get(name)
+        reason = None if available else (
+            previous.reason
+            if previous is not None and previous.reason is not None
+            else f"{name} transport is not present for this runtime."
+        )
+        capability_states[name] = CapabilityState(available, reason)
+    return RobotHandshake(
+        robot_id=handshake.robot_id,
+        display_name=handshake.display_name,
+        capability_states=capability_states,
+        body_bounds_m=handshake.body_bounds_m,
+        footprint_m=handshake.footprint_m,
+        visual_origin_frame=handshake.visual_origin_frame,
+        base_height_m=handshake.base_height_m,
+        default_render_offset_m=handshake.default_render_offset_m,
+        tag_tracking_profile=handshake.tag_tracking_profile,
+        extra=handshake.extra,
+    )
+
 
 def resolve_baseline_motion_recipe(profile: ARRobotProfileSpec) -> BaselineMotionRecipe:
     try:

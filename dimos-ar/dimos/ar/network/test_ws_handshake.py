@@ -12,7 +12,6 @@ import time
 import pytest
 import websockets
 
-from dimos.ar.adapters.base import CapabilityState, RobotHandshake
 from dimos.ar.network.protocol import (
     DEFAULT_CAPABILITIES,
     PROTOCOL_VERSION,
@@ -21,6 +20,7 @@ from dimos.ar.network.protocol import (
     encode_runtime_snapshot,
 )
 from dimos.ar.network.websocket_server import ARWebSocketServer
+from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
 
 HELLO_TIMEOUT_S = 3.0
 SLOW_HANDLER_SLEEP_S = 0.5

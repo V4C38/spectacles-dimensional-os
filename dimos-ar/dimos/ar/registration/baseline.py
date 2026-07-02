@@ -10,8 +10,8 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-from dimos.ar.adapters.base import DEFAULT_BASELINE_MOTION_RECIPE, BaselineMotionRecipe
 from dimos.ar.registration.types import CaptureHint, MotionHint, RegistrationPhase
+from dimos.ar.robot_profile.base import DEFAULT_BASELINE_MOTION_RECIPE, BaselineMotionRecipe
 from dimos.ar.utils.console import log_checkpoint
 from dimos.utils.logging_config import setup_logger
 

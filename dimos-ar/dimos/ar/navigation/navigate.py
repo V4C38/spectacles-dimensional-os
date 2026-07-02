@@ -32,6 +32,7 @@ logger = setup_logger()
 
 NAV_GOAL_PATH_TIMEOUT_S: float = 8.0
 NAV_WATCHDOG_POLL_INTERVAL_S: float = 0.5
+NAV_MESSAGE_AGE_LOG_INTERVAL_S: float = 5.0
 StallReason = str
 
 
@@ -65,6 +66,8 @@ class NavigateGoalHandler:
         # Reconnect-only path cache for runtime_snapshot — not live nav authority.
         self._last_navigating_path_waypoints: list[tuple[float, float, float]] | None = None
         self._nav_state_log_store: dict[str, str] = {}
+        self._last_path_age_log_mono: float = 0.0
+        self._last_goal_reached_age_log_mono: float = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -192,6 +195,11 @@ class NavigateGoalHandler:
     # ------------------------------------------------------------------
 
     def on_path(self, msg: Path) -> None:
+        self._maybe_log_message_age(
+            msg,
+            event="XR navigation path age",
+            last_log_attr="_last_path_age_log_mono",
+        )
         path_payload, waypoints = build_path_payload(
             msg,
             world_frame=self._world_frame,
@@ -205,6 +213,11 @@ class NavigateGoalHandler:
         self._sender.send(path_payload)
 
     def on_goal_reached(self, msg: Bool) -> None:
+        self._maybe_log_message_age(
+            msg,
+            event="XR navigation goal_reached age",
+            last_log_attr="_last_goal_reached_age_log_mono",
+        )
         self._goal_reached = bool(msg.data)
         was_pending = self._nav_goal_pending
         self._goal_failed = was_pending and not self._goal_reached
@@ -373,4 +386,24 @@ class NavigateGoalHandler:
     def _broadcast_stall_nav_status(self, *, stall_reason: StallReason, ts: float | None = None) -> None:
         self._sender.send(
             self.nav_status_payload(ts=ts, retryable=True, stall_reason=stall_reason)
+        )
+
+    def _maybe_log_message_age(
+        self,
+        msg: object,
+        *,
+        event: str,
+        last_log_attr: str,
+    ) -> None:
+        source_ts = getattr(msg, "ts", None)
+        if source_ts is None:
+            return
+        now = time.monotonic()
+        last_log_mono = getattr(self, last_log_attr)
+        if now - last_log_mono < NAV_MESSAGE_AGE_LOG_INTERVAL_S:
+            return
+        setattr(self, last_log_attr, now)
+        logger.info(
+            event,
+            age_s=round(max(0.0, time.time() - float(source_ts)), 3),
         )

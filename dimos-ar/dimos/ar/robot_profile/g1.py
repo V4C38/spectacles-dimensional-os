@@ -1,4 +1,4 @@
-"""G1 robot profile: handshake data, tag geometry, and telemetry fan-in for G1.
+"""G1 robot profile: handshake data, tag geometry, and hard e-stop for G1.
 
 Stream-name reconciliation (lidar/pointcloud/registered_scan → ar_lidar, etc.)
 is handled in the blueprint via .remappings([...]) — not here.
@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from dimos_lcm.std_msgs import Bool, String
-
 from dimos.ar.robot_profile.base import (
     DEFAULT_BASELINE_MOTION_RECIPE,
     ARRobotProfileSpec,
@@ -18,20 +16,11 @@ from dimos.ar.robot_profile.base import (
     RobotHandshake,
     TagTrackingProfile,
 )
-from dimos.ar.robot_profile.sensor_conflation import LatestWinsGate
 from dimos.ar.tag_tracking.solve import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
-from dimos.core.stream import In, Out
-from dimos.msgs.geometry_msgs.PointStamped import PointStamped
-from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
-from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
-from dimos.msgs.nav_msgs.Odometry import Odometry
-from dimos.msgs.nav_msgs.Path import Path
-from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.msgs.std_msgs.Bool import Bool as NavBool
 from dimos.robot.unitree.g1.connection_spec import G1ConnectionSpec
 from dimos.utils.logging_config import setup_logger
 
@@ -156,103 +145,11 @@ class G1RobotProfileConfig(ModuleConfig):  # type: ignore[misc]
 
 
 class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
-    """G1-specific profile: telemetry fan-in and cold-path robot metadata."""
-
-    ar_lidar_in: In[PointCloud2]
-    ar_odom_in: In[Odometry]
-    ar_global_costmap_in: In[OccupancyGrid]
-    ar_path_in: In[Path]
-    ar_goal_reached_in: In[NavBool]
-    ar_navigation_state_in: In[String]
-
-    ar_lidar: Out[PointCloud2]
-    ar_odom: Out[PoseStamped]
-    ar_global_costmap: Out[OccupancyGrid]
-    ar_path: Out[Path]
-    ar_goal_reached: Out[Bool]
-    ar_navigation_state: Out[String]
-
-    goal_request: Out[PoseStamped]
-    goal_req: Out[PoseStamped]
-    clicked_point: Out[PointStamped]
-    stop_movement: Out[Bool]
-    cancel_goal_signal: Out[NavBool]
-    cmd_vel: Out[Twist]
+    """G1-specific profile: cold-path robot metadata and hard-stop RPC."""
 
     config: G1RobotProfileConfig
     _g1_connection: G1ConnectionSpec | None = None
     _g1_high_level: Any = None
-    _lidar_gate: LatestWinsGate
-    _costmap_gate: LatestWinsGate
-    _path_gate: LatestWinsGate
-
-    def __init__(self, **kwargs: object) -> None:
-        super().__init__(**kwargs)
-        self._lidar_gate = LatestWinsGate()
-        self._costmap_gate = LatestWinsGate()
-        self._path_gate = LatestWinsGate()
-
-    async def handle_ar_lidar_in(self, msg: PointCloud2) -> None:
-        seq = self._lidar_gate.enter()
-        await self._lidar_gate.yield_for_coalesce()
-        if not self._lidar_gate.still_latest(seq):
-            return
-        self.ar_lidar.publish(msg)
-
-    async def handle_ar_odom_in(self, msg: Odometry) -> None:
-        pose = PoseStamped(
-            ts=msg.ts,
-            frame_id=msg.child_frame_id or msg.frame_id,
-            position=(msg.x, msg.y, msg.z),
-            orientation=(
-                msg.orientation.x,
-                msg.orientation.y,
-                msg.orientation.z,
-                msg.orientation.w,
-            ),
-        )
-        pose.vx = msg.vx  # type: ignore[attr-defined]
-        pose.vy = msg.vy  # type: ignore[attr-defined]
-        self.ar_odom.publish(pose)
-
-    async def handle_ar_global_costmap_in(self, msg: OccupancyGrid) -> None:
-        seq = self._costmap_gate.enter()
-        await self._costmap_gate.yield_for_coalesce()
-        if not self._costmap_gate.still_latest(seq):
-            return
-        self.ar_global_costmap.publish(msg)
-
-    async def handle_ar_path_in(self, msg: Path) -> None:
-        seq = self._path_gate.enter()
-        await self._path_gate.yield_for_coalesce()
-        if not self._path_gate.still_latest(seq):
-            return
-        self.ar_path.publish(msg)
-
-    async def handle_ar_goal_reached_in(self, msg: NavBool) -> None:
-        self.ar_goal_reached.publish(Bool(data=msg.data))
-
-    async def handle_ar_navigation_state_in(self, msg: String) -> None:
-        self.ar_navigation_state.publish(msg)
-
-    def _nav_available(self) -> bool:
-        return (
-            self.goal_request.transport is not None
-            or self.goal_req.transport is not None
-            or self.clicked_point.transport is not None
-        )
-
-    def _path_available(self) -> bool:
-        return self.ar_path_in.transport is not None
-
-    def _plan_preview_available(self) -> bool:
-        return self.ar_global_costmap_in.transport is not None
-
-    def _cancel_goal_available(self) -> bool:
-        return (
-            self.stop_movement.transport is not None
-            or self.cancel_goal_signal.transport is not None
-        )
 
     def _emergency_stop_available(self) -> bool:
         return self._g1_high_level is not None or self._g1_connection is not None
@@ -268,10 +165,10 @@ class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
     @rpc
     def capabilities(self) -> dict[str, CapabilityState]:
         return g1_capabilities(
-            nav_available=self._nav_available(),
-            path_available=self._path_available(),
-            plan_preview_available=self._plan_preview_available(),
-            cancel_goal_available=self._cancel_goal_available(),
+            nav_available=True,
+            path_available=True,
+            plan_preview_available=False,
+            cancel_goal_available=True,
             emergency_stop_available=self._emergency_stop_available(),
             tag_mount_available=len(self.tag_mounts()) > 0,
             baseline_motion_available=self.baseline_motion_available(),
@@ -281,10 +178,10 @@ class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
     def handshake_payload(self) -> RobotHandshake:
         return g1_handshake(
             self.robot_id(),
-            nav_available=self._nav_available(),
-            path_available=self._path_available(),
-            plan_preview_available=self._plan_preview_available(),
-            cancel_goal_available=self._cancel_goal_available(),
+            nav_available=True,
+            path_available=True,
+            plan_preview_available=False,
+            cancel_goal_available=True,
             emergency_stop_available=self._emergency_stop_available(),
             tag_mount_available=len(self.tag_mounts()) > 0,
             baseline_motion_available=self.baseline_motion_available(),
@@ -307,7 +204,7 @@ class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
 
     @rpc
     def supports_goal_orientation(self) -> bool:
-        return self._nav_available()
+        return True
 
     @rpc
     def tag_mounts(self) -> list[TagMount]:
@@ -315,7 +212,7 @@ class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
 
     @rpc
     def baseline_motion_available(self) -> bool:
-        return self.cmd_vel.transport is not None
+        return True
 
     @rpc
     def baseline_motion_recipe(self) -> BaselineMotionRecipe:

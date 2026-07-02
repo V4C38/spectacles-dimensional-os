@@ -12,17 +12,13 @@ All business logic lives in the bridge/ collaborator classes.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from dimos_lcm.std_msgs import Bool, String
 
-from dimos.ar.adapters.base import (
-    ARRobotAdapterSpec,
-    RobotHandshake,
-    resolve_baseline_motion_recipe,
-)
 from dimos.ar.bridge.motion_router import MotionRouter
 from dimos.ar.bridge.odom_buffer import OdomBuffer
+from dimos.ar.bridge.profile_rpc_dispatch import dispatch_profile_nowait
 from dimos.ar.bridge.safety import BridgeSafetyCoordinator
 from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.bridge.status_service import StatusService
@@ -39,6 +35,12 @@ from dimos.ar.network.protocol import (
 from dimos.ar.network.websocket_server import ARWebSocketServer
 from dimos.ar.preview_planner import PreviewPlanner
 from dimos.ar.registration.session import RegistrationSession
+from dimos.ar.robot_profile.base import (
+    ARRobotProfileSpec,
+    RobotHandshake,
+    merge_capability_availability,
+    resolve_baseline_motion_recipe,
+)
 from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker, RobotAprilTagTrackerConfig
 from dimos.ar.utils.console import console_divider
 from dimos.ar.world_frame.refinement import WorldFrameRefiner
@@ -48,9 +50,11 @@ from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
+from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
+from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.utils.logging_config import setup_logger
@@ -61,6 +65,23 @@ if TYPE_CHECKING:
     from dimos.ar.network.protocol import GetStatusMessage
 
 logger = setup_logger()
+
+
+def _pose_stamped_from_odometry(msg: Odometry) -> PoseStamped:
+    pose = PoseStamped(
+        ts=msg.ts,
+        frame_id=msg.child_frame_id or msg.frame_id,
+        position=(msg.x, msg.y, msg.z),
+        orientation=(
+            msg.orientation.x,
+            msg.orientation.y,
+            msg.orientation.z,
+            msg.orientation.w,
+        ),
+    )
+    pose.vx = msg.vx  # type: ignore[attr-defined]
+    pose.vy = msg.vy  # type: ignore[attr-defined]
+    return pose
 
 
 class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
@@ -100,18 +121,23 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
 
 
 class ARBridge(Module):  # type: ignore[misc]
+    dedicated_worker: ClassVar[bool] = True
+
     ar_lidar: In[PointCloud2]
     ar_odom: In[PoseStamped]
+    ar_odometry: In[Odometry]
     ar_global_costmap: In[OccupancyGrid]
     ar_path: In[Path]
     ar_goal_reached: In[Bool]
     ar_navigation_state: In[String]
     cmd_vel: Out[Twist]
     goal_request: Out[PoseStamped]
+    goal_point_request: Out[PointStamped]
     stop_movement: Out[Bool]
+    cancel_goal_signal: Out[Bool]
 
     config: ARBridgeConfig
-    _adapter: ARRobotAdapterSpec
+    _profile: ARRobotProfileSpec
 
     # Collaborators (set in build())
     _sender: BridgeSender
@@ -134,14 +160,29 @@ class ARBridge(Module):  # type: ignore[misc]
 
     @rpc
     def build(self) -> None:
-        # Runs after the coordinator wires self._adapter (set_module_ref).
+        # Runs after the coordinator wires self._profile (set_module_ref).
         super().build()
 
-        robot_id = self._adapter.robot_id()
+        robot_id = self._profile.robot_id()
         self._robot_id = robot_id
-        handshake = self._adapter.handshake_payload()
+        handshake = merge_capability_availability(
+            self._profile.handshake_payload(),
+            {
+                "path": self.ar_path.transport is not None,
+                "plan_preview": self.ar_global_costmap.transport is not None,
+                "nav": (
+                    self.goal_request.transport is not None
+                    or self.goal_point_request.transport is not None
+                ),
+                "cancel_nav_goal": (
+                    self.stop_movement.transport is not None
+                    or self.cancel_goal_signal.transport is not None
+                ),
+                "registration_april_odom_baseline": self.cmd_vel.transport is not None,
+            },
+        )
         self._connect_handshake = handshake
-        runtime_profile = self._adapter.runtime_tag_tracking_profile()
+        runtime_profile = self._profile.runtime_tag_tracking_profile()
 
         # LiDAR height band comes from the adapter handshake only (not ARBridgeConfig).
         min_height_m, max_height_m = lidar_height_band_m(
@@ -180,7 +221,7 @@ class ARBridge(Module):  # type: ignore[misc]
             max_up_axis_tilt_deg=self.config.tag_max_up_axis_tilt_deg,
         )
         tag_tracker = RobotAprilTagTracker(
-            self._adapter.tag_mounts(),
+            self._profile.tag_mounts(),
             config=tracker_config,
         )
         telemetry = TelemetryPublisher(
@@ -212,11 +253,14 @@ class ARBridge(Module):  # type: ignore[misc]
             baseline_cap.available if baseline_cap is not None else False
         )
         assert self._loop is not None, "build() called before Module loop is assigned"
-        baseline_motion_recipe = resolve_baseline_motion_recipe(self._adapter)
+        baseline_motion_recipe = resolve_baseline_motion_recipe(self._profile)
         motion_router = MotionRouter(
             publish_cmd_vel=self.cmd_vel.publish,
             publish_nav_goal=self.goal_request.publish,
+            publish_nav_point_goal=self.goal_point_request.publish,
             publish_cancel=self.stop_movement.publish,
+            publish_cancel_signal=self.cancel_goal_signal.publish,
+            hard_stop=lambda: dispatch_profile_nowait(self._profile.emergency_stop),
         )
         registration = RegistrationSession(
             robot_id=robot_id,
@@ -229,7 +273,7 @@ class ARBridge(Module):  # type: ignore[misc]
             frame_max_age_s=self.config.frame_max_age_s,
             manual_registration_quality=self.config.manual_registration_quality,
             world_frame_refiner=world_frame_refiner,
-            adapter=self._adapter,
+            profile=self._profile,
             motion_router=motion_router,
             runtime_profile=runtime_profile,
             baseline_motion_available=baseline_motion_available,
@@ -295,6 +339,14 @@ class ARBridge(Module):  # type: ignore[misc]
     @rpc
     def start(self) -> None:
         super().start()
+        self._motion_router.validate_transports(
+            has_pose_goal=self.goal_request.transport is not None,
+            has_point_goal=self.goal_point_request.transport is not None,
+            has_cancel=(
+                self.stop_movement.transport is not None
+                or self.cancel_goal_signal.transport is not None
+            ),
+        )
         self._ws_server.start()
         self._status.start()
         self._preview.start()
@@ -341,6 +393,9 @@ class ARBridge(Module):  # type: ignore[misc]
         self._status.mark_odom()
         self._status.refresh()
         self._telemetry.publish_pose(msg)
+
+    async def handle_ar_odometry(self, msg: Odometry) -> None:
+        await self.handle_ar_odom(_pose_stamped_from_odometry(msg))
 
     async def handle_ar_path(self, msg: Path) -> None:
         self._nav.on_path(msg)

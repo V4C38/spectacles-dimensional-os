@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import pytest
 
-from dimos.ar.adapters.go2 import GO2_DEFAULT_TAG_MOUNTS
+from dimos.ar.robot_profile.go2 import GO2_DEFAULT_TAG_MOUNTS
 from dimos.ar.tag_tracking.solve import (
     CAMERA_FRAME_MAGIC,
     DEFAULT_MARKER_ID,
