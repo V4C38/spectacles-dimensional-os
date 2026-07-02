@@ -104,6 +104,18 @@ export function getFrameComponent(panel: SceneObject): Frame | null {
   return frame ?? null;
 }
 
+/** True once Frame.initialize() has finished wiring interaction and follow. */
+export function isFrameInitialized(frame: Frame | null): boolean {
+  if (!frame?.frameObject || !frame.content || !frame.transform) {
+    return false;
+  }
+  if (frame.smoothFollow !== null) {
+    return true;
+  }
+  // Frames without built-in follow finish init once hover handling is wired.
+  return frame.hoverBehavior != null && !frame.showFollowButton;
+}
+
 export function bindFrameLayout(panel: SceneObject, relayout: () => void): unsubscribe[] {
   const frame = getFrameComponent(panel);
   if (!frame) {

@@ -1,0 +1,53 @@
+- !<AssetImportMetadata/f5362028-1af8-4429-b208-19779220fa8c>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> 9b608300-b1cc-4517-a2ba-025c0da5530a
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> 9b608300-b1cc-4517-a2ba-025c0da5530a
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 3b5ad76b-c4c4-47a4-9018-a74e969b94ad
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/3b5ad76b-c4c4-47a4-9018-a74e969b94ad>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: 136bb491-7c04-46cf-8710-dacb2ef96af7
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    anchorOffset: false
+    hidePitchDeg: false
+    menuRoot: false
+    showPitchDeg: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - menuRoot: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      anchorOffset: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      showPitchDeg: !<float> 10.000000
+      hidePitchDeg: !<float> -10.000000
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - // @input SceneObject menuRoot
+    - // @input SceneObject anchorOffset
+    - // @input float showPitchDeg = 10
+    - // @input float hidePitchDeg = -10

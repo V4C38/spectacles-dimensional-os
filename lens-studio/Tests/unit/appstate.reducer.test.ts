@@ -26,7 +26,6 @@ function baseState(patch: Partial<AppStateData> = {}): AppStateData {
     debugMode: false,
     lidarMode: "obstacles",
     operatingMode: "manual",
-    mainMenuExpandedSettingsMode: null,
     navigationState: "off",
     robotInteractionMode: "hidden",
     navigationOutcome: defaultNavigationOutcome(),

@@ -184,9 +184,6 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.registrationClient?.cancelPlacement();
     this.registrationClient?.stop();
     const runtimePatch: Partial<AppStateData> = { phase: "runtime" };
-    if (this.operatingMode === "manual") {
-      runtimePatch.lidarMode = "obstacles";
-    }
     this.arBridgeServices.state.update(runtimePatch);
     this._applyPhaseSideEffects("runtime");
     const bridgeSnapshot = this.appState.bridgeSnapshot;
@@ -327,14 +324,6 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.setOperatingMode(mode);
   }
 
-  public setMainMenuSettingsExpanded(enabled: boolean): void {
-    const nextExpanded = enabled ? this.operatingMode : null;
-    if (this.appState.mainMenuExpandedSettingsMode === nextExpanded) {
-      return;
-    }
-    this.arBridgeServices.state.update({ mainMenuExpandedSettingsMode: nextExpanded });
-  }
-
   public setOperatingMode(mode: OperatingMode): void {
     if (this.appState.operatingMode === mode) {
       return;
@@ -344,13 +333,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
       this.arBridgeServices.state.update({ operatingMode: mode, lidarMode: "off" });
       return;
     }
-    const lidarMode: LidarDisplayMode = mode === "manual" ? "obstacles" : "off";
-    const settingsSubmenuOpen = this.appState.mainMenuExpandedSettingsMode !== null;
-    this.arBridgeServices.state.update({
-      operatingMode: mode,
-      lidarMode,
-      mainMenuExpandedSettingsMode: settingsSubmenuOpen ? mode : null,
-    });
+    this.arBridgeServices.state.update({ operatingMode: mode });
   }
 
   public get operatingMode(): OperatingMode {

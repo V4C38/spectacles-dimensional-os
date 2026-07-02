@@ -275,8 +275,6 @@ export interface AppStateData {
   debugMode: boolean;
   lidarMode: LidarDisplayMode;
   operatingMode: OperatingMode;
-  /** UI-only: which mode's settings submenu is open, or null when collapsed. */
-  mainMenuExpandedSettingsMode: OperatingMode | null;
   navigationGoalMode: NavigationGoalMode;
   navigationState: NavigationState;
   robotInteractionMode: RobotInteractionMode;
@@ -395,7 +393,6 @@ export function createDefaultAppStateData(): AppStateData {
     debugMode: false,
     lidarMode: "off",
     operatingMode: "manual",
-    mainMenuExpandedSettingsMode: null,
     navigationGoalMode: "single",
     navigationState: "off",
     robotInteractionMode: "hidden",

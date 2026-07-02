@@ -5,7 +5,7 @@ import {
 } from "../../ARBridge/Network/Protocol";
 import { RegistrationClient } from "../../ARBridge/Registration/RegistrationClient";
 import { AppStateStore } from "../AppState";
-import { OperatingMode } from "../AppState";
+import { LidarDisplayMode, OperatingMode } from "../AppState";
 import { RobotPresenter } from "../Robot/RobotPresenter";
 import { robotFloorWorldYCm } from "../Robot/RobotRuntimeModel";
 import { COLOR_ERROR, COLOR_SUCCESS, findChildRecursive } from "../UI/kit/UIKit";
@@ -64,12 +64,14 @@ export class RegistrationPreviewPresenter {
   private _discLeftArrow: SceneObject | null = null;
   private _discRightArrow: SceneObject | null = null;
   private _priorRuntimeMode: OperatingMode = "manual";
+  private _priorLidarMode: LidarDisplayMode = "off";
   private _lastStatusMsg: RegistrationStatusMessage | null = null;
 
   public begin(): void {
     this._priorRuntimeMode = this.appState.snapshot.operatingMode !== "registration"
       ? this.appState.snapshot.operatingMode
       : "manual";
+    this._priorLidarMode = this.appState.snapshot.lidarMode;
     this.appState.update({ operatingMode: "registration", lidarMode: "off" });
 
     this._active = true;
@@ -177,8 +179,7 @@ export class RegistrationPreviewPresenter {
     ui?.setMenuVisible(false);
 
     const prior = this._priorRuntimeMode;
-    const lidarMode = prior === "manual" ? "obstacles" : "off";
-    this.appState.update({ operatingMode: prior, lidarMode });
+    this.appState.update({ operatingMode: prior, lidarMode: this._priorLidarMode });
   }
 
   public endIfActive(): void {

@@ -29,6 +29,7 @@
     arBridgeCoordinator: false
     mainUIFrame: false
     registrationWizard: false
+    wristMenuRoot: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -41,6 +42,7 @@
     - mainUIFrame: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
       arBridgeCoordinator: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
       registrationWizard: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
+      wristMenuRoot: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
@@ -48,3 +50,4 @@
     - // @input SceneObject mainUIFrame
     - // @input AssignableType arBridgeCoordinator
     - // @input AssignableType_1 registrationWizard
+    - // @input SceneObject wristMenuRoot

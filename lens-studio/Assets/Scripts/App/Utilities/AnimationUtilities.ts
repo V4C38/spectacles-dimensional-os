@@ -117,11 +117,12 @@ export function animateLocalScale(
 export function scaleIn(
   sceneObject: SceneObject,
   duration: number = 0.5,
+  targetScale: vec3 = new vec3(1, 1, 1),
 ): Promise<void> {
   const transform = sceneObject.getTransform();
   const wasEnabled = sceneObject.enabled;
   const start = wasEnabled ? transform.getLocalScale() : new vec3(0, 0, 0);
-  const target = new vec3(1, 1, 1);
+  const target = targetScale;
   const versionKey = DEFAULT_SCALE_ANIMATION_VERSION_KEY;
   const version = nextAnimationVersion(sceneObject, versionKey);
   sceneObject.enabled = true;
