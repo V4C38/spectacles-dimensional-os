@@ -41,16 +41,18 @@ class MotionRouter:
         publish_cmd_vel: Callable[[Twist], None],
         publish_nav_goal: Callable[[PoseStamped], None],
         publish_nav_point_goal: Callable[[PointStamped], None],
-        publish_cancel: Callable[[Bool], None] | None = None,
-        publish_cancel_signal: Callable[[Bool], None] | None = None,
+        publish_stop_movement: Callable[[Bool], None] | None = None,
+        publish_cancel_goal: Callable[[Bool], None] | None = None,
         hard_stop: Callable[[], None] | None = None,
+        on_nav_preempted: Callable[[], None] | None = None,
     ) -> None:
         self._publish_cmd_vel = publish_cmd_vel
         self._publish_nav_goal = publish_nav_goal
         self._publish_nav_point_goal = publish_nav_point_goal
-        self._publish_cancel = publish_cancel
-        self._publish_cancel_signal_out = publish_cancel_signal
+        self._publish_stop_movement = publish_stop_movement
+        self._publish_cancel_goal_out = publish_cancel_goal
         self._hard_stop = hard_stop
+        self._on_nav_preempted = on_nav_preempted
         self._lock = threading.Lock()
         self._active_intent = _ActiveIntent.NONE
         self._joystick_lock = threading.Lock()
@@ -69,11 +71,15 @@ class MotionRouter:
         on_complete: CompleteCallback | None = None,
     ) -> None:
         stop = (float(vx), float(vy), float(wz)) == (0.0, 0.0, 0.0)
+        preempted = False
         try:
             with self._lock:
                 if not stop and self._active_intent == _ActiveIntent.NAVIGATING:
-                    self._publish_cancel_signal()
+                    self._publish_cancel_transports()
+                    preempted = True
                 self._active_intent = _ActiveIntent.NONE if stop else _ActiveIntent.JOYSTICK
+            if preempted and self._on_nav_preempted is not None:
+                self._on_nav_preempted()
 
             target = (float(vx), float(vy), float(wz))
             with self._joystick_lock:
@@ -125,7 +131,7 @@ class MotionRouter:
             self._halt_motion()
             with self._lock:
                 self._active_intent = _ActiveIntent.NONE
-            self._publish_cancel_signal()
+            self._publish_cancel_transports()
         except BaseException as exc:
             self._invoke_complete(on_complete, False, exc)
             return
@@ -137,7 +143,7 @@ class MotionRouter:
             self._halt_motion()
             with self._lock:
                 self._active_intent = _ActiveIntent.NONE
-            self._publish_cancel_signal()
+            self._publish_cancel_transports()
             if self._hard_stop is not None:
                 threading.Thread(
                     target=self._invoke_hard_stop,
@@ -174,11 +180,11 @@ class MotionRouter:
         with self._joystick_lock:
             self._joystick_target = (0.0, 0.0, 0.0)
 
-    def _publish_cancel_signal(self) -> None:
-        if self._publish_cancel is not None:
-            self._publish_cancel(Bool(data=True))
-        if self._publish_cancel_signal_out is not None:
-            self._publish_cancel_signal_out(Bool(data=True))
+    def _publish_cancel_transports(self) -> None:
+        if self._publish_stop_movement is not None:
+            self._publish_stop_movement(Bool(data=True))
+        if self._publish_cancel_goal_out is not None:
+            self._publish_cancel_goal_out(Bool(data=True))
 
     def _invoke_hard_stop(self) -> None:
         if self._hard_stop is None:

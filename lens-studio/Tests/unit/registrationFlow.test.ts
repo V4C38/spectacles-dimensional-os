@@ -124,15 +124,18 @@ describe("registration flow view state", () => {
   });
 
   it("builds checkpoint title from motion waypoint", () => {
-    const title = buildRegistrationCheckpointTitle({
-      frame: "robot",
-      axis: "lateral",
-      direction: "left",
+    const motion = {
+      frame: "robot" as const,
+      axis: "lateral" as const,
+      direction: "left" as const,
       distance_m: 0.5,
       waypoint_index: 1,
       waypoint_total: 3,
-    });
-    expect(title).toBe("checkpoint 0/3 reached\n\n- Checkpoint reached -");
+    };
+    expect(buildRegistrationCheckpointTitle(motion, "awaiting_motion")).toBe(
+      "\n\n\nCheckpoint 0 / 3",
+    );
+    expect(buildRegistrationCheckpointTitle(motion, "moving")).toBe("\n\n\nCheckpoint 1 / 3");
   });
 
   it("builds detail text from message and motion waypoint", () => {
@@ -147,12 +150,10 @@ describe("registration flow view state", () => {
         direction: "right",
         distance_m: 0.4,
         waypoint_index: 2,
-        waypoint_total: 2,
+        waypoint_total: 3,
       },
     });
-    expect(text).toContain("Robot moving");
-    expect(text).toContain("checkpoint 1/2 reached");
-    expect(text).toContain("- Checkpoint reached -");
+    expect(text).toBe("Robot moving\n\n\nCheckpoint 2 / 3");
   });
 
   it("footer shows Continue during awaiting_motion", () => {

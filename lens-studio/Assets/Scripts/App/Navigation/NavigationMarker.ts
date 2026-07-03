@@ -19,11 +19,9 @@ import {
 } from "../UI/kit/UIKit";
 import { yawRotationFromWorldRotation } from "../Utilities/Utilities";
 import type {
-  MarkerPresentationKind,
   NavGoalConfig,
-  NavigationMarkerPreset,
+  NavMarkerViewState,
 } from "../../ARBridge/Navigation/NavigationModel";
-import { OUTCOME_RESET_PRESET } from "../../ARBridge/Navigation/NavigationModel";
 
 const MARKER_VISIBILITY_DURATION_SECONDS = 0.18;
 const OUTCOME_CIRCLE_COLLAPSE_DURATION_SECONDS =
@@ -32,13 +30,6 @@ const OUTCOME_DOTS_TEXT_COLLAPSE_DELAY_SECONDS = 1.5;
 const VISIBILITY_ANIMATION_VERSION_KEY = "__navMarkerVisibilityVersion";
 const CIRCLE_SCALE_ANIMATION_VERSION_KEY = "__navMarkerCircleScaleVersion";
 const OUTCOME_RESET_ANIMATION_VERSION_KEY = "__navMarkerOutcomeResetVersion";
-
-export type NavigationMarkerApplyOptions = {
-  confirmAvailable?: boolean;
-  cancelAvailable?: boolean;
-  showConfirmInPreview?: boolean;
-  showCancelInPreview?: boolean;
-};
 
 function setMaterialPassProp(
   object: SceneObject | null,
@@ -96,7 +87,7 @@ function applyDotsMaterialMode(
   }
 }
 
-export class NavigationMarkerView {
+export class MarkerViewCore {
   private readonly root: SceneObject;
   private readonly headingRoot: SceneObject | null;
   private readonly rotationRoot: SceneObject | null;
@@ -119,8 +110,8 @@ export class NavigationMarkerView {
   private readonly rotationLookAt: Component | null;
   private readonly circleAnimation: any;
 
-  private _config: NavGoalConfig = { mode: "single", allowDrag: true };
-  private _presentationKind: MarkerPresentationKind | "outcomeReset" | "hidden" = "hidden";
+  private _config: NavGoalConfig = { mode: "single", source: "user", interactive: true };
+  private _appliedStyle: NavMarkerViewState["style"] | "hidden" = "hidden";
   private _confirmEnabled = false;
   private _placementAnchor: SceneObject | null = null;
   private _preAnchorParent: SceneObject | null = null;
@@ -134,22 +125,22 @@ export class NavigationMarkerView {
     this.rotationRoot = findChildRecursive(this.root, "RotationRoot");
     this.portalCircle =
       findChildRecursive(this.root, "Circle_Seeking") ??
-      requireChild(this.root, "PortalCircle", "NavigationMarkerView");
+      requireChild(this.root, "PortalCircle", "MarkerViewCore");
     this.circleNavigating = findChildRecursive(this.root, "Circle_Navigating");
-    this.confirmButtonObject = requireChild(this.root, "ConfirmButton", "NavigationMarkerView");
+    this.confirmButtonObject = requireChild(this.root, "ConfirmButton", "MarkerViewCore");
     this.confirmButton = this.confirmButtonObject.getComponent(
       RoundButton.getTypeName(),
     ) as RoundButton;
     this.confirmVfx = findChildRecursive(this.confirmButtonObject, "ButtonVFX_Confirm");
     this.cancelVfx = findChildRecursive(this.confirmButtonObject, "ButtonVFX_Cancel");
-    this.confirmLabel = requireFirstText(this.confirmButtonObject, "NavigationMarkerView");
+    this.confirmLabel = requireFirstText(this.confirmButtonObject, "MarkerViewCore");
     this.stateText = findText(this.root, "State_Text");
     this.arrow = findChildRecursive(this.root, "Arrow");
     this.moveDirectionArrow = findChildRecursive(this.root, "MoveDirectionArrow");
     this.dots = findChildRecursive(this.root, "Dots");
     if (this.moveDirectionArrow && !this.headingRoot) {
       throw new Error(
-        "NavigationMarkerView: MoveDirectionArrow requires NavigationHeadingRoot",
+        "MarkerViewCore: MoveDirectionArrow requires NavigationHeadingRoot",
       );
     }
     this.portalBaseScale = this.portalCircle.getTransform().getLocalScale();
@@ -168,7 +159,7 @@ export class NavigationMarkerView {
     );
     if (!this.confirmButton) {
       throw new Error(
-        "NavigationMarkerView: NavigationTargetMarker is missing ConfirmButton RoundButton",
+        "MarkerViewCore: NavigationTargetMarker is missing ConfirmButton RoundButton",
       );
     }
     if (this.rotationLookAt) {
@@ -182,8 +173,8 @@ export class NavigationMarkerView {
     return this._config;
   }
 
-  public get presentationKind(): MarkerPresentationKind | "outcomeReset" | "hidden" {
-    return this._presentationKind;
+  public get appliedStyle(): NavMarkerViewState["style"] | "hidden" {
+    return this._appliedStyle;
   }
 
   public get confirmActionButton(): RoundButton {
@@ -217,50 +208,50 @@ export class NavigationMarkerView {
     this._applyHeadingRootRotation();
   }
 
-  public applyPreset(
+  public apply(
     config: NavGoalConfig,
-    kind: MarkerPresentationKind | "hidden",
-    preset: NavigationMarkerPreset,
-    opts: NavigationMarkerApplyOptions = {},
+    view: NavMarkerViewState,
+    onOutcomeComplete?: () => void,
   ): void {
+    if (view.style === "outcome") {
+      this._outcomeResetCompleteCallback = onOutcomeComplete ?? null;
+    }
+    this._applyStandardOrOutcome(config, view);
+  }
+
+  private _applyStandardOrOutcome(config: NavGoalConfig, view: NavMarkerViewState): void {
     const samePresentation =
       this._config.mode === config.mode &&
-      this._config.allowDrag === config.allowDrag &&
-      this._presentationKind === kind &&
-      kind !== "hidden";
+      this._config.interactive === config.interactive &&
+      this._appliedStyle === view.style &&
+      view.visible;
 
     this._config = config;
-    this._presentationKind = kind;
+    this._appliedStyle = view.visible ? view.style : "hidden";
 
-    if (kind === "hidden") {
+    if (!view.visible) {
       this._beginHide();
       this._animateRootVisibility(false);
       return;
     }
 
-    const confirmVisible = this._resolveConfirmVisible(kind, preset.confirmVisible, opts);
-    const resolvedPreset = { ...preset, confirmVisible };
-    this._applyPresetVisuals(resolvedPreset, kind, opts, !samePresentation);
+    if (view.style === "outcome") {
+      this._applyOutcomeView(view, !samePresentation);
+      return;
+    }
+
+    this._applyStandardView(view, !samePresentation);
   }
 
-  public showOutcomeReset(
-    config: NavGoalConfig,
-    label: "Cancelled" | "Failed",
-    opts: NavigationMarkerApplyOptions = {},
-    onComplete?: () => void,
-  ): void {
-    this._config = config;
-    this._presentationKind = "outcomeReset";
-    this._outcomeResetCompleteCallback = onComplete ?? null;
-    const preset = OUTCOME_RESET_PRESET;
-    if (preset.restoreOutcomeFirst) {
+  private _applyOutcomeView(view: NavMarkerViewState, animateEntrance: boolean): void {
+    if (animateEntrance) {
       this._restoreOutcomeVisualState();
     }
-    this._applyPresetVisuals(preset, "outcomeReset", opts, true);
+    this._applyMarkerVisuals(view, animateEntrance);
     this.root.enabled = true;
     this.root.getTransform().setLocalScale(this.rootBaseScale);
     this._setDotsVisible(true);
-    this._setStateText(label, true);
+    this._setStateText(view.outcomeLabel ?? "", true);
     const animationVersion = nextAnimationVersion(
       this.root,
       OUTCOME_RESET_ANIMATION_VERSION_KEY,
@@ -269,60 +260,61 @@ export class NavigationMarkerView {
     this._animateOutcomeResetDelayedContentCollapse(animationVersion);
   }
 
-  private _applyPresetVisuals(
-    preset: NavigationMarkerPreset,
-    kind: MarkerPresentationKind | "outcomeReset",
-    opts: NavigationMarkerApplyOptions,
-    animateEntrance: boolean,
-  ): void {
-    if (preset.restoreOutcomeFirst && animateEntrance) {
+  private _applyStandardView(view: NavMarkerViewState, animateEntrance: boolean): void {
+    if (animateEntrance && view.style === "seeking") {
       this._restoreOutcomeVisualState();
-    }
-    if (this.circleNavigating) {
-      this.circleNavigating.enabled = preset.circleNavigating;
-    }
-    this.portalCircle.enabled = preset.portalCircleVisible;
-    if (this.rotationLookAt) {
-      this.rotationLookAt.enabled = preset.lookAtEnabled;
-    }
-    this.setConfirmVisible(preset.confirmVisible);
-    if (preset.useNavigatingButtonPresentation) {
-      this._cancelActionAvailable = opts.cancelAvailable ?? this._cancelActionAvailable;
-      this._applyNavigatingButtonPresentation();
-    } else if (kind === "preview") {
-      this.confirmLabel.text = opts.confirmAvailable === false
-        ? "Confirm\nUnavailable"
-        : "Confirm";
-      setButtonStyle(this.confirmButton, SnapOS2Styles.Primary);
-      this._setConfirmInteractable(opts.confirmAvailable !== false);
-    }
-    if (preset.resetCircleBeforeShow && animateEntrance) {
       this.resetCircleAnimation();
     }
-    this.setScanAnimationEnabled(preset.scanAnimation);
+    this._applyMarkerVisuals(view, animateEntrance);
+    if (view.style === "seeking" && animateEntrance) {
+      this._animateRootVisibility(true);
+      this._animateCircleScale(true);
+    }
+  }
+
+  private _applyMarkerVisuals(view: NavMarkerViewState, animateEntrance: boolean): void {
+    const navigating = view.style === "navigating";
+    const preview = view.style === "preview";
+    const seeking = view.style === "seeking";
+
+    if (this.circleNavigating) {
+      this.circleNavigating.enabled = navigating;
+    }
+    this.portalCircle.enabled = view.portalCircleVisible;
+    if (this.rotationLookAt) {
+      this.rotationLookAt.enabled = false;
+    }
+
+    const button = view.button;
+    this.setConfirmVisible(button !== null);
+    if (button?.role === "cancel") {
+      this._cancelActionAvailable = button.enabled;
+      this._applyNavigatingButtonPresentation();
+    } else if (preview && button) {
+      this.confirmLabel.text = button.label;
+      setButtonStyle(this.confirmButton, SnapOS2Styles.Primary);
+      this._setConfirmInteractable(button.enabled);
+    }
+
+    this.setScanAnimationEnabled(view.scanAnimation);
     this._setConfirmVfxState(
-      preset.confirmVfx === "confirm",
-      preset.confirmVfx === "hidden",
+      button?.role === "confirm",
+      button === null,
     );
+
     if (this.arrow) {
-      this.arrow.enabled = preset.arrowEnabled;
+      this.arrow.enabled = navigating;
     }
-    this._setMoveDirectionArrowSpeed(preset.arrowSpeed);
+    this._setMoveDirectionArrowSpeed(view.arrowSpeed);
     this._syncMoveDirectionArrowVisibility();
-    if (preset.circleSaturation) {
-      const circle =
-        preset.circleSaturation.circle === "portal"
-          ? this.portalCircle
-          : this.circleNavigating;
-      setMaterialPassProp(circle, "Saturation", preset.circleSaturation.value);
+
+    if (navigating) {
+      setMaterialPassProp(this.circleNavigating, "Saturation", 1);
+    } else if (seeking || view.style === "outcome") {
+      setMaterialPassProp(this.portalCircle, "Saturation", 0);
     }
-    applyDotsMaterialMode(this.dots, preset.dotsMode === "seeking");
-    if (preset.animateRootVisible !== null && animateEntrance) {
-      this._animateRootVisibility(preset.animateRootVisible);
-    }
-    if (preset.animateCircleExpanded !== null && animateEntrance) {
-      this._animateCircleScale(preset.animateCircleExpanded);
-    }
+
+    applyDotsMaterialMode(this.dots, seeking || view.style === "outcome");
   }
 
   public bindPlacementAnchor(
@@ -412,28 +404,21 @@ export class NavigationMarkerView {
 
   public setCancelActionAvailability(available: boolean): void {
     this._cancelActionAvailable = available;
-    if (this._presentationKind === "navigating") {
+    if (this._appliedStyle === "navigating") {
       this._applyNavigatingButtonPresentation();
     }
   }
 
   public hide(): void {
-    this.applyPreset(this._config, "hidden", {
-      circleNavigating: false,
-      portalCircleVisible: false,
-      lookAtEnabled: false,
-      confirmVisible: false,
-      useNavigatingButtonPresentation: false,
-      resetCircleBeforeShow: false,
+    this.apply(this._config, {
+      visible: false,
+      style: "seeking",
+      heading: this._rotation,
+      button: null,
+      outcomeLabel: null,
       scanAnimation: false,
-      confirmVfx: "hidden",
-      arrowEnabled: false,
       arrowSpeed: 0,
-      circleSaturation: null,
-      dotsMode: "seeking",
-      restoreOutcomeFirst: true,
-      animateRootVisible: null,
-      animateCircleExpanded: null,
+      portalCircleVisible: false,
     });
   }
 
@@ -448,7 +433,7 @@ export class NavigationMarkerView {
       {
         onEnded: () => {
           this.root.enabled = false;
-          this._presentationKind = "hidden";
+          this._appliedStyle = "hidden";
           callback();
         },
       },
@@ -467,26 +452,9 @@ export class NavigationMarkerView {
     this.setConfirmVisible(false);
     this.setScanAnimationEnabled(false);
     this.releasePlacementAnchor();
-    this._presentationKind = "hidden";
+    this._appliedStyle = "hidden";
     this.root.enabled = false;
     this.root.getTransform().setLocalScale(vec3.zero());
-  }
-
-  private _resolveConfirmVisible(
-    kind: MarkerPresentationKind | "hidden",
-    presetConfirmVisible: boolean,
-    opts: NavigationMarkerApplyOptions,
-  ): boolean {
-    if (kind === "preview") {
-      if (opts.showCancelInPreview) {
-        return presetConfirmVisible;
-      }
-      return (opts.showConfirmInPreview ?? false) && presetConfirmVisible;
-    }
-    if (kind === "navigating") {
-      return presetConfirmVisible;
-    }
-    return presetConfirmVisible;
   }
 
   private _setConfirmInteractable(enabled: boolean): void {
@@ -571,7 +539,7 @@ export class NavigationMarkerView {
   }
 
   private _beginHide(): void {
-    this._presentationKind = "hidden";
+    this._appliedStyle = "hidden";
     this._restoreOutcomeVisualState();
     nextAnimationVersion(this.portalCircle, CIRCLE_SCALE_ANIMATION_VERSION_KEY);
     this.portalCircle.enabled = true;
@@ -614,7 +582,7 @@ export class NavigationMarkerView {
     if (!this.moveDirectionArrow) {
       return;
     }
-    this.moveDirectionArrow.enabled = this._presentationKind !== "outcomeReset";
+    this.moveDirectionArrow.enabled = this._appliedStyle !== "outcome";
   }
 
   private _applyHeadingRootRotation(): void {
@@ -746,5 +714,159 @@ export class NavigationMarkerView {
         },
       },
     );
+  }
+}
+
+export type NavigationMarkerEvents = {
+  onOutcomeResetComplete?: () => void;
+  onDragTriggerStart?: (interactor: any) => void;
+  onDragTriggerEnd?: () => void;
+  onDragTriggerCanceled?: (interactor: any) => void;
+  onConfirmTriggerUp?: () => void;
+};
+
+/** Prefab-root component: marker visuals, pose, and interaction wiring. */
+@component
+export class NavigationMarker extends BaseScriptComponent {
+  private _view: MarkerViewCore | null = null;
+  private _events: NavigationMarkerEvents = {};
+  private _interactionsBound = false;
+
+  public onAwake(): void {
+    this.ensureReady();
+    this._bindInteractions();
+  }
+
+  public ensureReady(): void {
+    if (this._view) {
+      return;
+    }
+    this._view = new MarkerViewCore(this.getSceneObject());
+    this._interactionsBound = false;
+  }
+
+  public get worldPosition(): vec3 {
+    this.ensureReady();
+    return this._view!.worldPosition;
+  }
+
+  public get localPosition(): vec3 {
+    this.ensureReady();
+    return this._view!.localPosition;
+  }
+
+  public getRotation(): quat {
+    this.ensureReady();
+    return this._view!.getRotation();
+  }
+
+  public apply(
+    config: NavGoalConfig,
+    view: NavMarkerViewState,
+    onOutcomeComplete?: () => void,
+  ): void {
+    this.ensureReady();
+    this._view?.apply(config, view, onOutcomeComplete ?? this._events.onOutcomeResetComplete);
+  }
+
+  public hide(): void {
+    this._view?.hide();
+  }
+
+  public hideAndThen(callback: () => void): void {
+    this._view?.hideAndThen(callback);
+  }
+
+  public setPose(position: vec3, rotation: quat): void {
+    this.ensureReady();
+    this._view?.setPose(position, rotation);
+  }
+
+  public interpolatePose(
+    position: vec3,
+    rotation: quat,
+    lerpSpeed: number,
+    rotationLerpSpeed?: number,
+  ): void {
+    this._view?.interpolatePose(position, rotation, lerpSpeed, rotationLerpSpeed);
+  }
+
+  public setDragEnabled(enabled: boolean): void {
+    this.ensureReady();
+    this._bindInteractions();
+    const dragInteractable = this._view?.dragInteractable as any;
+    if (!dragInteractable) {
+      return;
+    }
+    dragInteractable.enabled = enabled;
+  }
+
+  public setCancelActionAvailability(available: boolean): void {
+    this._view?.setCancelActionAvailability(available);
+  }
+
+  public bindPlacementAnchor(anchor: SceneObject, initialWorldPosition: vec3): void {
+    this.ensureReady();
+    this._view?.bindPlacementAnchor(anchor, initialWorldPosition);
+  }
+
+  public releasePlacementAnchor(): void {
+    this._view?.releasePlacementAnchor();
+  }
+
+  public rebasePlacementAnchor(): void {
+    this._view?.rebasePlacementAnchor();
+  }
+
+  public bindEvents(events: Partial<NavigationMarkerEvents>): void {
+    this.ensureReady();
+    this._events = { ...this._events, ...events };
+    this._bindInteractions();
+  }
+
+  public unbindEvents(): void {
+    this._events = {};
+  }
+
+  public destroy(): void {
+    this._view?.teardownImmediate();
+    this._view = null;
+    this._events = {};
+    this._interactionsBound = false;
+    this.getSceneObject().destroy();
+  }
+
+  private _bindInteractions(): void {
+    if (this._interactionsBound || !this._view) {
+      return;
+    }
+
+    const dragInteractable = this._view.dragInteractable as any;
+    if (!dragInteractable?.onTriggerStart?.add) {
+      return;
+    }
+
+    this._interactionsBound = true;
+    dragInteractable.onTriggerStart.add((args: any) => {
+      this._events.onDragTriggerStart?.(args?.interactor ?? null);
+    });
+    if (dragInteractable.onTriggerEnd?.add) {
+      dragInteractable.onTriggerEnd.add(() => {
+        this._events.onDragTriggerEnd?.();
+      });
+    }
+    if (dragInteractable.onTriggerCanceled?.add) {
+      dragInteractable.onTriggerCanceled.add((args: any) => {
+        args?.interactor?.clearCurrentInteractable?.();
+        this._events.onDragTriggerCanceled?.(args?.interactor ?? null);
+      });
+    }
+
+    const confirmButton = this._view.confirmActionButton as any;
+    if (confirmButton?.onTriggerUp?.add) {
+      confirmButton.onTriggerUp.add(() => {
+        this._events.onConfirmTriggerUp?.();
+      });
+    }
   }
 }

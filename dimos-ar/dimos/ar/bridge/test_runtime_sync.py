@@ -39,6 +39,7 @@ def _make_runtime_sync_stub() -> tuple[MagicMock, BridgeSender, MagicMock, Magic
         "kind": "active",
         "waypoints": [[1.0, 2.0, 3.0]],
     }
+    mock_nav.runtime_snapshot_goal.return_value = None
     bridge._nav = mock_nav  # type: ignore[attr-defined]
 
     return bridge, sender, mock_status, mock_nav

@@ -2,12 +2,12 @@
 
 
 def normalize_nav_state(raw: str) -> str:
-    """Normalise a raw DimOS navigation state string to one of idle/navigating/recovery."""
+    """Normalise a raw DimOS navigation state string to one of idle/navigating/recovering."""
     state = raw.strip().lower()
-    if state in {"idle", "navigating", "recovery"}:
+    if state in {"idle", "navigating", "recovering"}:
         return state
     if "recover" in state:
-        return "recovery"
+        return "recovering"
     if any(token in state for token in ("follow", "path", "navig")):
         return "navigating"
     if state in {"arrived", "stopped"}:

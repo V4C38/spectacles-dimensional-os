@@ -3,6 +3,7 @@ import {
   buildEmergencyStop,
   buildNavigateGoal,
   buildPreviewGoal,
+  NavGoalUpdateMessage,
   NavStatusMessage,
   PathMessage,
   ProtocolParseError,
@@ -16,6 +17,7 @@ import { Signal } from "../../App/Utilities/Utilities";
 export class NavigationClient {
   public readonly onPath = new Signal<PathMessage>();
   public readonly onNavStatus = new Signal<NavStatusMessage>();
+  public readonly onNavGoalUpdate = new Signal<NavGoalUpdateMessage>();
   public readonly onProtocolError = new Signal<ProtocolParseError>();
 
   private readonly _sendDropLog = { value: -1 };
@@ -33,6 +35,7 @@ export class NavigationClient {
     this._bound = true;
     this._inbound.onPath.add((msg) => this.onPath.emit(msg));
     this._inbound.onNavStatus.add((msg) => this.onNavStatus.emit(msg));
+    this._inbound.onNavGoalUpdate.add((msg) => this.onNavGoalUpdate.emit(msg));
     this._inbound.onProtocolError.add((error) => this.onProtocolError.emit(error));
   }
 
@@ -43,7 +46,7 @@ export class NavigationClient {
     return sendForActiveRobot(
       this._transport,
       this._inbound,
-      "goal:navigate",
+      "nav_goal:navigate",
       (robotId) => buildNavigateGoal(robotId, position, rotation),
       this._sendDropLog,
     );
@@ -56,7 +59,7 @@ export class NavigationClient {
     return sendForActiveRobot(
       this._transport,
       this._inbound,
-      "goal:preview",
+      "nav_goal:preview",
       (robotId) => buildPreviewGoal(robotId, position, rotation),
       this._sendDropLog,
     );

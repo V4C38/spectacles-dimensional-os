@@ -34,8 +34,8 @@ def _make_driver(
         publish_cmd_vel=published_cmd_vel.append,
         publish_nav_goal=lambda _goal: None,
         publish_nav_point_goal=lambda _goal: None,
-        publish_cancel=lambda _cancel: None,
-        publish_cancel_signal=lambda _cancel: None,
+        publish_stop_movement=lambda _cancel: None,
+        publish_cancel_goal=lambda _cancel: None,
     )
     driver = BaselineCollector(
         motion_router=router,
@@ -185,8 +185,8 @@ def test_leg_phase_emits_steady_capture_not_hold() -> None:
         publish_cmd_vel=lambda _twist: None,
         publish_nav_goal=lambda _goal: None,
         publish_nav_point_goal=lambda _goal: None,
-        publish_cancel=lambda _cancel: None,
-        publish_cancel_signal=lambda _cancel: None,
+        publish_stop_movement=lambda _cancel: None,
+        publish_cancel_goal=lambda _cancel: None,
     )
     driver = BaselineCollector(
         motion_router=gate,
@@ -382,8 +382,8 @@ def test_reset_to_idle_goes_to_idle_silently() -> None:
         publish_cmd_vel=lambda _twist: None,
         publish_nav_goal=lambda _goal: None,
         publish_nav_point_goal=lambda _goal: None,
-        publish_cancel=lambda _cancel: None,
-        publish_cancel_signal=lambda _cancel: None,
+        publish_stop_movement=lambda _cancel: None,
+        publish_cancel_goal=lambda _cancel: None,
     )
     driver = BaselineCollector(
         motion_router=gate,
@@ -488,8 +488,8 @@ def test_injected_motion_recipe_drives_velocity() -> None:
         publish_cmd_vel=published_cmd_vel.append,
         publish_nav_goal=lambda _goal: None,
         publish_nav_point_goal=lambda _goal: None,
-        publish_cancel=lambda _cancel: None,
-        publish_cancel_signal=lambda _cancel: None,
+        publish_stop_movement=lambda _cancel: None,
+        publish_cancel_goal=lambda _cancel: None,
     )
     driver = BaselineCollector(
         motion_router=router,

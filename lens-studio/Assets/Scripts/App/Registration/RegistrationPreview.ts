@@ -36,7 +36,7 @@ export function buildRegistrationPreviewPresentation(args: {
   motion?: RegistrationMotion;
 }): RegistrationPreviewPresentation {
   const titleText = args.motion
-    ? buildRegistrationCheckpointTitle(args.motion)
+    ? buildRegistrationCheckpointTitle(args.motion, args.phase)
     : "Registration";
   return {
     titleText,

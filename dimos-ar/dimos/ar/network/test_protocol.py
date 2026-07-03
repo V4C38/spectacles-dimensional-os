@@ -506,6 +506,42 @@ def test_encode_runtime_snapshot() -> None:
     assert "streams_active" not in raw["bridge"]
 
 
+def test_encode_nav_goal_update() -> None:
+    from dimos.ar.network.protocol import encode_nav_goal_update
+
+    raw = json.loads(
+        encode_nav_goal_update(
+            ts=1.0,
+            source="xr",
+            position=(1.0, 0.0, 2.0),
+            orientation=(0.0, 0.0, 0.0, 1.0),
+            active=True,
+        )
+    )
+    assert raw["type"] == "nav_goal_update"
+    assert raw["source"] == "xr"
+    assert raw["active"] is True
+    assert raw["position"] == [1.0, 0.0, 2.0]
+
+
+def test_encode_runtime_snapshot_goal() -> None:
+    raw = json.loads(
+        encode_runtime_snapshot(
+            robot_id="unitree_go2",
+            bridge={"robot_connected": True, "world_frame_committed": True, "reconnecting": False},
+            nav={"phase": "navigating"},
+            goal={
+                "source": "agent",
+                "position": [1.0, 0.0, 2.0],
+                "active": True,
+            },
+            ts=5.0,
+        )
+    )
+    assert raw["goal"]["source"] == "agent"
+    assert raw["goal"]["active"] is True
+
+
 def test_get_status_decode() -> None:
     raw = json.dumps({"type": "get_status", "ts": 2.0, "robot_id": "unitree_go2"})
     msg = decode_inbound(raw, expected_robot_id="unitree_go2")
@@ -602,7 +638,7 @@ def test_nav_phase_payload_mapping() -> None:
     assert nav_phase_payload(
         goal_reached=False,
         goal_failed=False,
-        nav_state="recovery",
+        nav_state="recovering",
         nav_goal_pending=False,
     ) == {"phase": "recovering"}
 
@@ -696,4 +732,4 @@ def test_normalize_nav_state_active_planner_substates() -> None:
     assert normalize_nav_state("path_following") == "navigating"
     assert normalize_nav_state("arrived") == "idle"
     assert normalize_nav_state("stopped") == "idle"
-    assert normalize_nav_state("recovery_mode") == "recovery"
+    assert normalize_nav_state("recovery_mode") == "recovering"

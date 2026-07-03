@@ -33,8 +33,8 @@ def _make_router(
         publish_cmd_vel=publish_cmd_vel,
         publish_nav_goal=published_nav.append,
         publish_nav_point_goal=published_point_nav.append,
-        publish_cancel=published_cancel.append,
-        publish_cancel_signal=published_cancel.append,
+        publish_stop_movement=published_cancel.append,
+        publish_cancel_goal=published_cancel.append,
     )
     return router, published_cmd_vel, published_nav, published_point_nav, published_cancel
 
@@ -92,8 +92,8 @@ def test_emergency_stop_zeros_motion_and_publishes_cancel() -> None:
         publish_cmd_vel=published_cmd_vel.append,
         publish_nav_goal=lambda goal: None,
         publish_nav_point_goal=lambda goal: None,
-        publish_cancel=published_cancel.append,
-        publish_cancel_signal=published_cancel.append,
+        publish_stop_movement=published_cancel.append,
+        publish_cancel_goal=published_cancel.append,
         hard_stop=hard_stop,
     )
     router.send_joystick_command(0.0, 0.3, 0.0)
@@ -112,8 +112,8 @@ def test_emergency_stop_still_cancels_when_hard_stop_raises() -> None:
         publish_cmd_vel=published_cmd_vel.append,
         publish_nav_goal=lambda goal: None,
         publish_nav_point_goal=lambda goal: None,
-        publish_cancel=published_cancel.append,
-        publish_cancel_signal=published_cancel.append,
+        publish_stop_movement=published_cancel.append,
+        publish_cancel_goal=published_cancel.append,
         hard_stop=MagicMock(side_effect=RuntimeError("boom")),
     )
 

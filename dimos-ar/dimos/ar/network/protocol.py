@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
     from dimos.ar.world_frame.state import WorldFrameState
 
-PROTOCOL_VERSION = 8
+PROTOCOL_VERSION = 9
 
 NavPhase = Literal["idle", "navigating", "recovering", "succeeded", "failed"]
 PathKind = Literal["active", "preview"]
@@ -371,6 +371,7 @@ def encode_runtime_snapshot(
     bridge: BridgeStatusSnapshot | dict[str, Any],
     nav: dict[str, Any],
     path: dict[str, Any] | None = None,
+    goal: dict[str, Any] | None = None,
     ts: float | None = None,
     world_frame: WorldFrameState | None = None,
 ) -> str:
@@ -387,6 +388,8 @@ def encode_runtime_snapshot(
     }
     if path is not None:
         payload["path"] = path
+    if goal is not None:
+        payload["goal"] = goal
     return _dumps(payload)
 
 
@@ -525,7 +528,7 @@ def nav_phase_payload(
         phase: NavPhase = "succeeded"
     elif goal_failed:
         phase = "failed"
-    elif nav_state == "recovery":
+    elif nav_state == "recovering":
         phase = "recovering"
     elif nav_state == "navigating" and nav_goal_pending:
         phase = "navigating"
@@ -561,6 +564,29 @@ def encode_nav_status(
     )
 
 
+NavGoalSource = Literal["xr", "agent"]
+
+
+def encode_nav_goal_update(
+    *,
+    ts: float | None,
+    source: NavGoalSource,
+    position: tuple[float, float, float],
+    orientation: tuple[float, float, float, float] | None,
+    active: bool,
+) -> str:
+    payload: dict[str, Any] = {
+        "type": "nav_goal_update",
+        "ts": round(ts, 3) if ts is not None else time.time(),
+        "source": source,
+        "position": _round_vec3(position, decimals=3),
+        "active": active,
+    }
+    if orientation is not None:
+        payload["orientation"] = _round_quat(orientation, decimals=4)
+    return _dumps(payload)
+
+
 __all__ = [
     "PROTOCOL_VERSION",
     "CameraInfoMessage",
@@ -584,6 +610,7 @@ __all__ = [
     "encode_camera_frame_ack",
     "encode_hello",
     "encode_lidar_binary",
+    "encode_nav_goal_update",
     "encode_nav_status",
     "encode_path",
     "encode_pong",

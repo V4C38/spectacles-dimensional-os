@@ -9,7 +9,15 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v8 (current) — Motion pipeline vocabulary alignment
+### v9 (current) — Navigation goal provenance
+
+**Additive changes** — v8 clients ignore unknown outbound types:
+
+- **`PROTOCOL_VERSION` is 9.**
+- New outbound broadcast **`nav_goal_update`** (`source`, `position`, `orientation`, `active`).
+- **`runtime_snapshot`** gains optional **`goal`** mirroring active `nav_goal_update` body.
+
+### v8 — Motion pipeline vocabulary alignment
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -222,6 +230,34 @@ Fields:
   (e.g. `505` = goal stalled)
 - `path` (optional): present only when an active navigating path is cached;
   always `kind: "active"`. Omitted when idle or when only a preview exists.
+- `goal` (optional, v9): present when a navigation goal session is active;
+  mirrors the body of `nav_goal_update` with `active: true`. Omitted when idle
+  or after terminal outcomes.
+
+### `nav_goal_update` (v9)
+
+Broadcast when a navigation goal session is created, updated, or torn down.
+Deduped server-side (≈0.15 m and 0.25 s). Clients use this to visualize goals
+from any source (XR headset or agent).
+
+```json
+{
+  "type": "nav_goal_update",
+  "ts": 1730000000.123,
+  "source": "xr",
+  "position": [1.0, 0.0, 2.0],
+  "orientation": [0.0, 0.0, 0.0, 1.0],
+  "active": true
+}
+```
+
+Fields:
+
+- `source`: `"xr"` (headset) or `"agent"` (DimOS agent module / RPC)
+- `position`: world-frame goal position `[x, y, z]` in metres
+- `orientation` (optional): world-frame quaternion `[x, y, z, w]`
+- `active`: `true` on create/update; `false` on terminal paths (reached, failed,
+  cancel, e-stop, stall, preempt, disconnect-reset)
 
 ### `bridge_status`
 

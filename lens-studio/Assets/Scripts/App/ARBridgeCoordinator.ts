@@ -268,7 +268,8 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
   public submitAgentNavigationGoal(position: vec3, rotation: quat): boolean {
     return this.arBridgeServices.navigation.submitGoal(position, rotation, {
       mode: "single",
-      allowDrag: false,
+      source: "user",
+      interactive: false,
       force: true,
     });
   }

@@ -97,6 +97,49 @@ describe("parseInboundMessage", () => {
     expect(bridge.world_frame_committed).toBe(false);
   });
 
+  it("parses nav_goal_update", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "nav_goal_update",
+        ts: 1.5,
+        source: "agent",
+        position: [1, 0, 2],
+        orientation: [0, 0, 0, 1],
+        active: true,
+      }),
+    );
+    expect(msg!.type).toBe("nav_goal_update");
+    if (msg!.type === "nav_goal_update") {
+      expect(msg.source).toBe("agent");
+      expect(msg.active).toBe(true);
+      expect(msg.position).toEqual([1, 0, 2]);
+    }
+  });
+
+  it("parses runtime_snapshot goal field", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "runtime_snapshot",
+        ts: 1,
+        robot_id: "go2",
+        bridge: {
+          robot_connected: true,
+          world_frame_committed: true,
+          reconnecting: false,
+        },
+        nav: { phase: "navigating" },
+        goal: {
+          source: "xr",
+          position: [1, 0, 2],
+          active: true,
+        },
+      }),
+    );
+    const snapshot = msg as RuntimeSnapshotMessage;
+    expect(snapshot.goal?.source).toBe("xr");
+    expect(snapshot.goal?.active).toBe(true);
+  });
+
   it("parses registration_status", () => {
     const msg = parseInboundMessage(
       JSON.stringify({

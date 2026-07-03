@@ -91,6 +91,12 @@ export class ARBridgeServices extends BaseScriptComponent {
     this._ensureInstances();
 
     this._robot!.bind(robotMenuCallbacks);
+    this._telemetry!.onPose.add(() => {
+      this._navigation!.syncIdlePlacementFollow();
+    });
+    this._telemetry!.onWorldFrameCorrection.add(() => {
+      this._navigation!.syncIdlePlacementFollow();
+    });
     this._navigation!.bindHost({
       appStateStore: this._state!,
       robotPresenter: this._robot!,

@@ -54,8 +54,8 @@ def _make_session(
         publish_cmd_vel=published_cmd_vel.append,
         publish_nav_goal=lambda _goal: None,
         publish_nav_point_goal=lambda _goal: None,
-        publish_cancel=lambda _cancel: None,
-        publish_cancel_signal=lambda _cancel: None,
+        publish_stop_movement=lambda _cancel: None,
+        publish_cancel_goal=lambda _cancel: None,
     )
     session = RegistrationSession(
         robot_id="test_robot",

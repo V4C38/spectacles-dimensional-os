@@ -10,9 +10,9 @@ import { quatFromMat4Rotation } from "../../App/Utilities/Utilities";
 import { DeviceCameraStream } from "./DeviceCameraStream";
 
 const POSE_BUFFER_CAPACITY = 360;
-const SETUP_CAPTURE_INTERVAL_S = 1.0;
+const SETUP_CAPTURE_INTERVAL_S = 0.7;
 const SAMPLING_BURST_INTERVAL_S = 0.5;
-const RUNTIME_CAPTURE_INTERVAL_S = 3.0;
+const RUNTIME_CAPTURE_INTERVAL_S = 1.5;
 const IN_FLIGHT_TIMEOUT_S = 12.0;
 const MAX_HEAD_ANGULAR_VEL_DEG_S = 40.0;
 const RUNTIME_CAMERA_MAX_DISTANCE_CM = 700.0;

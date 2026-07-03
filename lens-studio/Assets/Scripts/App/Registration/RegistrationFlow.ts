@@ -126,9 +126,21 @@ export function isRegistrationFailed(state: RegistrationViewState): boolean {
 const MANUAL_CANDIDATE_SYNC_INTERVAL_S = 0.35;
 const NO_RESPONSE_STATUS_MSG = "Bridge not responding";
 
-export function buildRegistrationCheckpointTitle(motion: RegistrationMotion): string {
-  const checkpoint = motion.waypoint_index - 1;
-  return `checkpoint ${checkpoint}/${motion.waypoint_total} reached\n\n- Checkpoint reached -`;
+export function formatRegistrationCheckpointLabel(
+  motion: RegistrationMotion,
+  phase?: RegistrationPhase,
+): string {
+  const zeroBased = motion.waypoint_index - 1;
+  const checkpoint = phase === "awaiting_motion" ? zeroBased : motion.waypoint_index;
+  return `Checkpoint ${checkpoint} / ${motion.waypoint_total}`;
+}
+
+/** Robot menu title: three leading line breaks, then the checkpoint label. */
+export function buildRegistrationCheckpointTitle(
+  motion: RegistrationMotion,
+  phase?: RegistrationPhase,
+): string {
+  return `\n\n\n${formatRegistrationCheckpointLabel(motion, phase)}`;
 }
 
 export function buildRegistrationDetailText(state: RegistrationViewState): string {
@@ -137,9 +149,9 @@ export function buildRegistrationDetailText(state: RegistrationViewState): strin
     parts.push(state.message);
   }
   if (state.motion) {
-    parts.push(buildRegistrationCheckpointTitle(state.motion));
+    parts.push(formatRegistrationCheckpointLabel(state.motion, state.phase));
   }
-  return parts.join("\n");
+  return parts.join("\n\n\n");
 }
 
 export function applyRegistrationStatusToViewState(

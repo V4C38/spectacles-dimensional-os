@@ -1,0 +1,36 @@
+---
+description: Run local CI before any agent git commit
+alwaysApply: true
+---
+
+# Pre-commit CI gate
+
+Before creating any git commit, the agent **must** run the local CI script from the
+repo root and confirm it passes:
+
+```bash
+./scripts/ci-test.sh
+```
+
+This reproduces GitHub Actions (`.github/workflows/ci.yml`): dimos-ar (ruff, mypy,
+pytest) and lens-studio-tests (Vitest).
+
+## Workflow
+
+1. Finish the code changes.
+2. Run `./scripts/ci-test.sh` from the repository root.
+3. If it fails, fix the failures and re-run until it passes.
+4. Only then stage and commit.
+
+## Exceptions
+
+- Do **not** commit if CI is still failing unless the user explicitly asks to commit
+  anyway (e.g. WIP, CI fix in progress).
+- If the user only asked for a commit of files that cannot affect CI (e.g. docs-only),
+  still run CI unless the user explicitly waives the check.
+
+## Notes
+
+- Run from repo root: `spectacles-dimensional-os/`, not `dimos-ar/` or `lens-studio/`.
+- Optional env vars: `CI_PYTHON`, `CI_VENV` (see script header).
+- CI may take several minutes; wait for completion before committing.

@@ -130,6 +130,7 @@ class ARBridge(Module):  # type: ignore[misc]
     ar_path: In[Path]
     ar_goal_reached: In[Bool]
     ar_navigation_state: In[String]
+    agent_nav_goal: In[PoseStamped]
     cmd_vel: Out[Twist]
     goal_request: Out[PoseStamped]
     goal_point_request: Out[PointStamped]
@@ -254,13 +255,20 @@ class ARBridge(Module):  # type: ignore[misc]
         )
         assert self._loop is not None, "build() called before Module loop is assigned"
         baseline_motion_recipe = resolve_baseline_motion_recipe(self._profile)
+        nav_ref: NavigateGoalHandler | None = None
+
+        def _on_nav_preempted() -> None:
+            assert nav_ref is not None
+            nav_ref.on_preempted()
+
         motion_router = MotionRouter(
             publish_cmd_vel=self.cmd_vel.publish,
             publish_nav_goal=self.goal_request.publish,
             publish_nav_point_goal=self.goal_point_request.publish,
-            publish_cancel=self.stop_movement.publish,
-            publish_cancel_signal=self.cancel_goal_signal.publish,
+            publish_stop_movement=self.stop_movement.publish,
+            publish_cancel_goal=self.cancel_goal_signal.publish,
             hard_stop=lambda: dispatch_profile_nowait(self._profile.emergency_stop),
+            on_nav_preempted=_on_nav_preempted,
         )
         registration = RegistrationSession(
             robot_id=robot_id,
@@ -286,6 +294,7 @@ class ARBridge(Module):  # type: ignore[misc]
             world_frame=self._world_frame,
             motion_router=motion_router,
         )
+        nav_ref = nav
 
         preview = PreviewGoalHandler(
             robot_id=robot_id,
@@ -335,6 +344,32 @@ class ARBridge(Module):  # type: ignore[misc]
     def _connect_hello(self) -> RobotHandshake:
         """Return the handshake cached at build() — must not RPC from the WS loop."""
         return self._connect_handshake
+
+    @rpc
+    def submit_agent_nav_goal(
+        self,
+        position: tuple[float, float, float],
+        orientation: tuple[float, float, float, float] | None = None,
+    ) -> bool:
+        """Submit a world-frame navigation goal from an agent skill.
+
+        Position and orientation are in the committed world frame. Odom-native
+        producers should publish to the planner directly and forfeit XR visualization.
+        """
+        if not self._world_frame.is_committed:
+            return False
+        self._nav.submit_goal(
+            position=position,
+            orientation=orientation,
+            ts=0.0,
+            source="agent",
+        )
+        return True
+
+    @rpc
+    def cancel_agent_nav_goal(self) -> None:
+        """Cancel the active navigation goal (agent or XR)."""
+        self._nav.on_cancel_nav_goal()
 
     @rpc
     def start(self) -> None:
@@ -409,6 +444,23 @@ class ARBridge(Module):  # type: ignore[misc]
     async def handle_ar_navigation_state(self, msg: String) -> None:
         self._nav.on_navigation_state(msg.data)
 
+    async def handle_agent_nav_goal(self, msg: PoseStamped) -> None:
+        """Agent stream ingress — goals are world-frame by contract."""
+        orientation = None
+        if msg.orientation is not None:
+            orientation = (
+                msg.orientation.x,
+                msg.orientation.y,
+                msg.orientation.z,
+                msg.orientation.w,
+            )
+        self._nav.submit_goal(
+            position=(msg.x, msg.y, msg.z),
+            orientation=orientation,
+            ts=float(msg.ts) if msg.ts is not None else 0.0,
+            source="agent",
+        )
+
     # ------------------------------------------------------------------
     # Status / runtime-sync helpers
     # ------------------------------------------------------------------
@@ -416,6 +468,7 @@ class ARBridge(Module):  # type: ignore[misc]
     def _send_runtime_sync_to(self, websocket: ServerConnection) -> None:
         """Resend authoritative bridge + nav lifecycle state after connect or get_status."""
         path = self._nav.runtime_snapshot_path()
+        goal = self._nav.runtime_snapshot_goal()
         self._sender.send_to(
             websocket,
             encode_runtime_snapshot(
@@ -423,6 +476,7 @@ class ARBridge(Module):  # type: ignore[misc]
                 bridge=self._status.merged_bridge_snapshot(),
                 nav=self._nav.nav_phase_dict(),
                 path=path,
+                goal=goal,
             ),
         )
 

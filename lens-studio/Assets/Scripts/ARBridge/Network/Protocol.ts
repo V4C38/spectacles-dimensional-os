@@ -13,7 +13,7 @@ import {
   createDefaultBridgeSnapshot,
 } from "../../App/AppState";
 
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -245,6 +245,24 @@ export interface SnapshotPathState {
   target?: [number, number, number];
 }
 
+export type NavGoalSource = "xr" | "agent";
+
+export interface SnapshotGoalState {
+  source: NavGoalSource;
+  position: [number, number, number];
+  orientation?: [number, number, number, number];
+  active: boolean;
+}
+
+export interface NavGoalUpdateMessage {
+  type: "nav_goal_update";
+  ts: number;
+  source: NavGoalSource;
+  position: [number, number, number];
+  orientation?: [number, number, number, number];
+  active: boolean;
+}
+
 export interface RuntimeSnapshotMessage {
   type: "runtime_snapshot";
   ts: number;
@@ -252,6 +270,7 @@ export interface RuntimeSnapshotMessage {
   bridge: SnapshotBridgeState;
   nav: SnapshotNavState;
   path?: SnapshotPathState;
+  goal?: SnapshotGoalState;
 }
 
 export interface PongMessage {
@@ -272,6 +291,7 @@ export type InboundMessage =
   | BridgeStatusMessage
   | PathMessage
   | NavStatusMessage
+  | NavGoalUpdateMessage
   | RuntimeSnapshotMessage
   | PongMessage;
 
@@ -431,6 +451,13 @@ function parseVec3(raw: unknown): [number, number, number] {
   return [Number(raw[0]), Number(raw[1]), Number(raw[2])];
 }
 
+function parseQuat(raw: unknown): [number, number, number, number] {
+  if (!Array.isArray(raw) || raw.length !== 4) {
+    throw new Error("orientation must be [qx, qy, qz, qw]");
+  }
+  return [Number(raw[0]), Number(raw[1]), Number(raw[2]), Number(raw[3])];
+}
+
 function parseTagTrackingProfile(raw: unknown): TagTrackingProfile | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return undefined;
@@ -493,6 +520,43 @@ function parseSnapshotNav(raw: unknown): SnapshotNavState {
     status.stall_reason = null;
   }
   return status;
+}
+
+function parseSnapshotGoal(raw: unknown): SnapshotGoalState {
+  const goal = requireObject(raw);
+  const source = requireString(goal, "source");
+  if (source !== "xr" && source !== "agent") {
+    throw new Error("Missing or invalid field: source");
+  }
+  const snapshot: SnapshotGoalState = {
+    source,
+    position: parseVec3(goal.position),
+    active: Boolean(goal.active),
+  };
+  if (goal.orientation !== undefined) {
+    snapshot.orientation = parseQuat(goal.orientation);
+  }
+  return snapshot;
+}
+
+function parseNavGoalUpdateMessage(
+  data: Record<string, unknown>,
+): NavGoalUpdateMessage {
+  const source = requireString(data, "source");
+  if (source !== "xr" && source !== "agent") {
+    throw new Error("Missing or invalid field: source");
+  }
+  const msg: NavGoalUpdateMessage = {
+    type: "nav_goal_update",
+    ts: requireNumber(data, "ts"),
+    source,
+    position: parseVec3(data.position),
+    active: Boolean(data.active),
+  };
+  if (data.orientation !== undefined) {
+    msg.orientation = parseQuat(data.orientation);
+  }
+  return msg;
 }
 
 function parseSnapshotPath(raw: unknown): SnapshotPathState {
@@ -632,6 +696,9 @@ function parseInboundObject(
       if (data.path !== undefined) {
         snapshot.path = parseSnapshotPath(data.path);
       }
+      if (data.goal !== undefined) {
+        snapshot.goal = parseSnapshotGoal(data.goal);
+      }
       return snapshot;
     }
 
@@ -745,6 +812,10 @@ function parseInboundObject(
 
     case "path": {
       return parsePathMessage(data);
+    }
+
+    case "nav_goal_update": {
+      return parseNavGoalUpdateMessage(data);
     }
 
     case "nav_status": {

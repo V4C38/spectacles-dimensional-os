@@ -130,6 +130,9 @@ export class InboundRouter {
     this.navigationClient.onNavStatus.add((msg) =>
       this.navigationPlacement.applyNavStatus(msg),
     );
+    this.navigationClient.onNavGoalUpdate.add((msg) =>
+      this.navigationPlacement.applyNavGoalUpdate(msg),
+    );
     this.statusClient.onRuntimeSnapshot.add(() =>
       this.navigationPlacement.resyncPreviewGoal(),
     );
@@ -152,6 +155,7 @@ export class InboundRouter {
     this.appState.uiLogger.tick();
     this.robotPresenter.applyPendingPose();
     this.robotPresenter.tickFrame();
+    this.navigationPlacement.syncIdlePlacementFollow();
   }
 
   public tryConnect(ip: string): Promise<boolean> {

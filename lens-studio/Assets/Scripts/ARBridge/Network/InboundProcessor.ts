@@ -7,6 +7,7 @@ import {
   HelloMessage,
   LidarMessage,
   NavStatusMessage,
+  NavGoalUpdateMessage,
   PathMessage,
   PongMessage,
   WorldFrameCorrectionMessage,
@@ -44,6 +45,7 @@ export class InboundProcessor {
   public readonly onBridgeStatus = new Signal<BridgeStatusMessage>();
   public readonly onPath = new Signal<PathMessage>();
   public readonly onNavStatus = new Signal<NavStatusMessage>();
+  public readonly onNavGoalUpdate = new Signal<NavGoalUpdateMessage>();
   public readonly onRuntimeSnapshot = new Signal<RuntimeSnapshotMessage>();
   public readonly onPong = new Signal<PongMessage>();
   public readonly onProtocolError = new Signal<ProtocolParseError>();
@@ -212,6 +214,9 @@ export class InboundProcessor {
           this._logDiagnosticRx(msg);
           this.onNavStatus.emit(msg);
           break;
+        case "nav_goal_update":
+          this.onNavGoalUpdate.emit(msg);
+          break;
         case "pong":
           this._adoptRobotId(msg.robot_id);
           this.onPong.emit(msg);
@@ -256,6 +261,20 @@ export class InboundProcessor {
         pathMsg.target = snapshot.path.target;
       }
       this.onPath.emit(pathMsg);
+    }
+
+    if (snapshot.goal) {
+      const goalMsg: NavGoalUpdateMessage = {
+        type: "nav_goal_update",
+        ts: snapshot.ts,
+        source: snapshot.goal.source,
+        position: snapshot.goal.position,
+        active: snapshot.goal.active,
+      };
+      if (snapshot.goal.orientation !== undefined) {
+        goalMsg.orientation = snapshot.goal.orientation;
+      }
+      this.onNavGoalUpdate.emit(goalMsg);
     }
 
     this.onRuntimeSnapshot.emit(snapshot);

@@ -92,9 +92,17 @@ When working in `dimos-ar/`, follow `.cursor/rules/dimos-ar-bridge-design.mdc`:
   investigation and manipulation. If the MCP cannot express a change, ask the
   user — do not patch scene files by hand. See `.cursor/rules/lens-studio-scene-edits.mdc`.
 
+## Pre-commit CI (agent commits)
+
+Before any git commit, run `./scripts/ci-test.sh` from the repo root and fix failures
+until it passes. See `.cursor/rules/pre-commit-ci.mdc`.
+
 ## Dev quick reference
 
 ```bash
+# Local CI (matches GitHub Actions — run before committing)
+./scripts/ci-test.sh
+
 # Install + start bridge (from dimos-ar/)
 ./start.sh              # choose robot stack interactively; ws://0.0.0.0:8787
 
