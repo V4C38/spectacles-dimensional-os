@@ -74,6 +74,19 @@ def estimate_marker_pose(
     return rvec, tvec
 
 
+def aruco_detected_tag_id(tag_id_entry: np.ndarray | int | float) -> int:
+    """Normalize one ``detectMarkers`` id entry to ``int`` across OpenCV layouts."""
+    arr = np.asarray(tag_id_entry)
+    if arr.ndim == 0:
+        return int(arr)
+    return int(arr.reshape(-1)[0])
+
+
+def aruco_detected_tag_ids(ids: np.ndarray) -> list[int]:
+    """Normalize the full ``detectMarkers`` ids array to a list of ints."""
+    return [aruco_detected_tag_id(tag_id_entry) for tag_id_entry in ids]
+
+
 def create_aruco_detector(dictionary_name: str) -> cv2.aruco.ArucoDetector:
     if not hasattr(cv2.aruco, dictionary_name):
         raise ValueError(f"Unknown ArUco dictionary {dictionary_name!r}")

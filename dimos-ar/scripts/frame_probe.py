@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 from websockets.asyncio.server import serve
 
+from dimos.ar.tag_tracking.fiducial_helpers import aruco_detected_tag_id
 from dimos.ar.tag_tracking.solve import create_apriltag_detector, parse_camera_frame
 
 if TYPE_CHECKING:
@@ -66,7 +67,7 @@ async def handler(websocket: websockets.ServerConnection) -> None:
         detector = create_apriltag_detector()
         _corners, ids, _ = detector.detectMarkers(gray)
         if ids is not None and len(ids) > 0:
-            tag_id = int(ids[0][0])
+            tag_id = aruco_detected_tag_id(ids[0])
             logger.info("  Detected tag id=%d", tag_id)
         else:
             logger.info("  No tag detected in frame")

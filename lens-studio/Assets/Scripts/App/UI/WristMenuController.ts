@@ -1,10 +1,6 @@
 import { HandInputData } from "SpectaclesInteractionKit.lspkg/Providers/HandInputData/HandInputData";
 import { HandType } from "SpectaclesInteractionKit.lspkg/Providers/HandInputData/HandType";
-import {
-  exponentialSmoothAlpha,
-  scaleIn,
-  scaleOut,
-} from "../Utilities/AnimationUtilities";
+import { exponentialSmoothAlpha } from "../Utilities/AnimationUtilities";
 import {
   DEFAULT_PALM_GESTURE_GATE_CONFIG,
   PalmGestureGate,
@@ -22,23 +18,22 @@ export type WristMenuControllerDeps = {
   panel: SceneObject;
   anchorRoot: SceneObject;
   handType?: HandType;
-  visibleScale?: number;
   onBeforeShow?: () => void;
+  onMenuShow: () => void;
+  onMenuHide: (immediate: boolean) => void;
 };
 
 export class WristMenuController {
   private static readonly POSITION_RATE = 28.0;
-  private static readonly SCALE_IN_DURATION = 0.25;
-  private static readonly SCALE_OUT_DURATION = 0.2;
 
   private readonly _panel: SceneObject;
   private readonly _anchorRoot: SceneObject;
   private readonly _hand;
-  private readonly _visibleScale: vec3;
   private readonly _onBeforeShow?: () => void;
+  private readonly _onMenuShow: () => void;
+  private readonly _onMenuHide: (immediate: boolean) => void;
   private readonly _gestureGate = new PalmGestureGate(DEFAULT_PALM_GESTURE_GATE_CONFIG);
 
-  private _gatingActive = false;
   private _menuVisible = false;
   private _tracking = false;
   private _needsSnap = true;
@@ -50,33 +45,21 @@ export class WristMenuController {
     if (!deps.anchorRoot) {
       throw new Error("WristMenuController: anchorRoot is required");
     }
+    if (!deps.onMenuShow || !deps.onMenuHide) {
+      throw new Error("WristMenuController: onMenuShow and onMenuHide are required");
+    }
 
     this._panel = deps.panel;
     this._anchorRoot = deps.anchorRoot;
     this._hand = HandInputData.getInstance().getHand(deps.handType ?? "left");
     this._onBeforeShow = deps.onBeforeShow;
-    const scale = deps.visibleScale ?? 1.0;
-    this._visibleScale = new vec3(scale, scale, scale);
+    this._onMenuShow = deps.onMenuShow;
+    this._onMenuHide = deps.onMenuHide;
 
-    this._hidePanelImmediate();
-  }
-
-  public setGatingActive(active: boolean): void {
-    if (this._gatingActive === active) {
-      return;
-    }
-    this._gatingActive = active;
-    if (!active) {
-      this._gestureGate.reset();
-      this._hideMenu(true);
-    }
+    this._onMenuHide(true);
   }
 
   public tick(dt: number): void {
-    if (!this._gatingActive) {
-      return;
-    }
-
     const now = getTime();
     const isTracked = this._hand.isTracked();
     const input = {
@@ -112,7 +95,7 @@ export class WristMenuController {
     this._menuVisible = true;
     this._snapToAnchor();
     this._onBeforeShow?.();
-    scaleIn(this._panel, WristMenuController.SCALE_IN_DURATION, this._visibleScale);
+    this._onMenuShow();
     this._tracking = true;
   }
 
@@ -123,17 +106,8 @@ export class WristMenuController {
     }
 
     this._menuVisible = false;
-    if (immediate) {
-      this._hidePanelImmediate();
-    } else {
-      scaleOut(this._panel, WristMenuController.SCALE_OUT_DURATION);
-    }
+    this._onMenuHide(immediate);
     this._resetTracking();
-  }
-
-  private _hidePanelImmediate(): void {
-    this._panel.enabled = false;
-    this._panel.getTransform().setLocalScale(new vec3(0, 0, 0));
   }
 
   private _snapToAnchor(): void {

@@ -1,7 +1,7 @@
 require("LensStudio:TextInputModule");
 
 import { ARBridgeCoordinator } from "../ARBridgeCoordinator";
-import { BridgeLinkState, bridgeLinkPresentation, NO_ROBOT_CONNECTED_LABEL } from "../AppState";
+import { BridgeLinkState, bridgeLinkPresentation, isRuntimePhase, NO_ROBOT_CONNECTED_LABEL } from "../AppState";
 
 import {
   buildRegistrationDisplay,
@@ -58,8 +58,13 @@ export class RegistrationWizard extends BaseScriptComponent {
   private _connectFailStreak = 0;
   private _connectCandidateIndex = 0;
   private _connectCandidates: string[] = [];
+  private _authoredLocalScale: vec3 = new vec3(1, 1, 1);
 
   onAwake() {
+    const panel = this.getSceneObject();
+    if (panel) {
+      this._authoredLocalScale = panel.getTransform().getLocalScale();
+    }
     this._view = new RegistrationWizardView(this.getSceneObject());
     this.createEvent("OnStartEvent").bind(() => {
       const retryEv = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
@@ -110,11 +115,16 @@ export class RegistrationWizard extends BaseScriptComponent {
     this._registrationFlow?.leave();
     this._registrationFlow?.setState(createRegistrationViewState());
     this._invalidatePending();
-    this.arBridgeCoordinator?.enterRegistration();
+    const inRuntime =
+      this.arBridgeCoordinator !== null &&
+      isRuntimePhase(this.arBridgeCoordinator.appState);
+    if (!inRuntime) {
+      this.arBridgeCoordinator?.enterRegistration();
+    }
     const panel = this.getSceneObject();
     if (panel) {
-      panel.enabled = true;
-      scaleIn(panel, 0.5);
+      panel.enabled = false;
+      scaleIn(panel, 0.5, this._authoredLocalScale);
     }
     this._setStep(WizardStep.Start);
   }
@@ -179,6 +189,12 @@ export class RegistrationWizard extends BaseScriptComponent {
 
     if (this._currentStep === WizardStep.Start) {
       this._log("startup step completed");
+      if (
+        this.arBridgeCoordinator &&
+        isRuntimePhase(this.arBridgeCoordinator.appState)
+      ) {
+        this.arBridgeCoordinator.enterRegistration({ preserveBridge: true });
+      }
       this._setStep(WizardStep.Connect);
       return;
     }
@@ -223,7 +239,13 @@ export class RegistrationWizard extends BaseScriptComponent {
     if (!this._canNavigate()) {
       return;
     }
-    if (this._currentStep <= WizardStep.Start) {
+    if (this._currentStep === WizardStep.Start) {
+      if (
+        this.arBridgeCoordinator &&
+        isRuntimePhase(this.arBridgeCoordinator.appState)
+      ) {
+        this._dismissWizardToRuntime();
+      }
       return;
     }
     if (this._currentStep === WizardStep.Register) {
@@ -477,6 +499,9 @@ export class RegistrationWizard extends BaseScriptComponent {
       this._registrationFlow?.state ?? createRegistrationViewState(),
       this._registrationFlow?.commitInFlight ?? false,
       this.arBridgeCoordinator?.registrationClient.motionAuthorizePending ?? false,
+      this.arBridgeCoordinator
+        ? isRuntimePhase(this.arBridgeCoordinator.appState)
+        : false,
     );
     if (this._currentStep === WizardStep.Register && this._registrationFlow?.isManualOnly()) {
       footerState.showManual = false;
@@ -547,6 +572,18 @@ export class RegistrationWizard extends BaseScriptComponent {
         this._registrationFlow?.isComplete() ? "done" : "skipped"
       }`,
     );
+    const panel = this.getSceneObject();
+    if (panel) {
+      panel.enabled = false;
+    }
+    this.arBridgeCoordinator?.registrationPreview.end();
+    this.arBridgeCoordinator?.registrationClient.stop();
+    this.arBridgeCoordinator?.enterRuntime();
+  }
+
+  private _dismissWizardToRuntime(): void {
+    this._finishPending = false;
+    this._log("dismiss to runtime");
     const panel = this.getSceneObject();
     if (panel) {
       panel.enabled = false;

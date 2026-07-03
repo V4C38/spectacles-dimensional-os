@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  AppState,
   validateSessionFields,
   nextLidarMode,
   createDefaultAppStateData,
@@ -10,6 +11,8 @@ import {
   toSessionState,
   defaultNavigationOutcome,
   createDefaultRobotRuntimeState,
+  isRuntimePhase,
+  NO_ROBOT_CONNECTED_LABEL,
   type AppStateData,
 } from "../../Assets/Scripts/App/AppState";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WARN, COLOR_WHITE } from "../mocks/UIKit";
@@ -106,6 +109,16 @@ describe("createDefaultAppStateData", () => {
   });
 });
 
+describe("isRuntimePhase", () => {
+  it("is false during registration", () => {
+    expect(isRuntimePhase(createDefaultAppStateData())).toBe(false);
+  });
+
+  it("is true when phase is runtime", () => {
+    expect(isRuntimePhase(baseState())).toBe(true);
+  });
+});
+
 describe("navigationOutcomePresentation", () => {
   it("maps success and failed outcomes to status text", () => {
     expect(navigationOutcomePresentation({ kind: "success" })).toEqual({
@@ -120,18 +133,21 @@ describe("navigationOutcomePresentation", () => {
   });
 describe("bridgeLinkPresentation", () => {
   it("maps bridge link states to status text", () => {
+    AppState.connectedRobotDisplayName = NO_ROBOT_CONNECTED_LABEL;
     expect(bridgeLinkPresentation("disconnected")).toEqual({
-      text: "\n\n\nBridge disconnected",
+      text: "\n\n\nBridge not connected",
       color: COLOR_ERROR,
     });
     expect(bridgeLinkPresentation("connectedNoRobot")).toEqual({
       text: "\n\n\nBridge connected - waiting for robot",
       color: COLOR_WARN,
     });
+    AppState.connectedRobotDisplayName = "Unitree Go2";
     expect(bridgeLinkPresentation("connected")).toEqual({
-      text: "\n\n\nBridge connected",
+      text: "\n\n\nBridge connected - Unitree Go2",
       color: COLOR_SUCCESS,
     });
+    AppState.connectedRobotDisplayName = NO_ROBOT_CONNECTED_LABEL;
   });
 });
 

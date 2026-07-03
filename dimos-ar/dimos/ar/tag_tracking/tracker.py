@@ -38,6 +38,8 @@ import cv2
 import numpy as np
 
 from dimos.ar.tag_tracking.fiducial_helpers import (
+    aruco_detected_tag_id,
+    aruco_detected_tag_ids,
     camera_info_to_cv_matrices,
     create_aruco_detector,
     estimate_marker_pose,
@@ -384,7 +386,7 @@ class RobotAprilTagTracker:
                 logger.debug("Tag frame: no markers detected", seq=header.get("seq"))
             return FrameResult(False, [], None, 0)
 
-        detected_tag_ids = [int(tag_id_arr[0]) for tag_id_arr in ids]
+        detected_tag_ids = aruco_detected_tag_ids(ids)
         if _TRACE:
             logger.debug(
                 "Tag frame: markers detected",
@@ -404,7 +406,7 @@ class RobotAprilTagTracker:
         rejections = RejectionSummary()
 
         for corners, tag_id_arr in zip(corners_list, ids, strict=False):
-            tag_id = int(tag_id_arr[0])
+            tag_id = aruco_detected_tag_id(tag_id_arr)
             mount = mounts.get(tag_id)
             if mount is None:
                 continue

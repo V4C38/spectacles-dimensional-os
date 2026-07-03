@@ -2,14 +2,21 @@ import { ARBridgeCoordinator } from "../ARBridgeCoordinator";
 import { bridgeLinkPresentation, AppStateData, LidarDisplayMode, OperatingMode } from "../AppState";
 import { RegistrationWizard } from "../Registration/RegistrationWizard";
 import { scaleIn, scaleOut } from "../Utilities/AnimationUtilities";
-import { getFrameComponent, isFrameInitialized } from "./kit/UIKit";
+import { findChildRecursive, getFrameComponent, isFrameInitialized } from "./kit/UIKit";
 import { MainMenuView } from "./MainMenuView";
 import { WristMenuController } from "./WristMenuController";
 
 const EDITOR_MENU_SCALE = 1.0;
 const SPECTACLES_MENU_SCALE = 0.6;
+const EDITOR_MENU_ANIM_DURATION = 0.35;
+const SPECTACLES_MENU_SCALE_IN_DURATION = 0.25;
+const SPECTACLES_MENU_SCALE_OUT_DURATION = 0.2;
 
-/** Runtime HUD controller toggling main menu visibility and syncing with ARBridgeCoordinator app state. */
+type SetUIStateOptions = {
+  immediate?: boolean;
+};
+
+/** Runtime HUD: editor shows MainUI after registration; Spectacles uses wrist gesture only. */
 @component
 export class UIManager extends BaseScriptComponent {
   /** HUD panel only (MainUI). Must not be the parent of RegistrationWizard. */
@@ -44,9 +51,6 @@ export class UIManager extends BaseScriptComponent {
         );
       } else if (this._isEditorMode) {
         this.setUIState(0);
-      } else {
-        this._wristMenuController?.setGatingActive(false);
-        this._uiState = 0;
       }
     });
     this.createEvent("OnDestroyEvent").bind(() => {
@@ -97,6 +101,11 @@ export class UIManager extends BaseScriptComponent {
       return;
     }
 
+    const debugLogRoot = findChildRecursive(panel, "DebugLog");
+    if (debugLogRoot && this.arBridgeCoordinator) {
+      this.arBridgeCoordinator.arBridgeServices.state.uiLogger.bindConsoleOutput(debugLogRoot);
+    }
+
     if (appState) {
       this._operatingMode = appState.operatingMode;
       this._lidarMode = appState.lidarMode;
@@ -131,7 +140,7 @@ export class UIManager extends BaseScriptComponent {
       }
 
       view.applySpectaclesFrameMotion();
-      this._ensureWristMenuController(panel, SPECTACLES_MENU_SCALE);
+      this._ensureWristMenuController(panel);
     };
 
     const deferEvent = this.createEvent("UpdateEvent");
@@ -144,15 +153,14 @@ export class UIManager extends BaseScriptComponent {
     });
   }
 
-  private _ensureWristMenuController(panel: SceneObject, visibleScale: number): void {
+  private _ensureWristMenuController(panel: SceneObject): void {
     if (this._isEditorMode || this._wristMenuController) {
       return;
     }
 
     if (!this.wristMenuRoot) {
       print("UIManager: wristMenuRoot not set — wrist menu disabled");
-      panel.enabled = false;
-      panel.getTransform().setLocalScale(new vec3(0, 0, 0));
+      this.setUIState(0, { immediate: true });
       return;
     }
 
@@ -161,10 +169,10 @@ export class UIManager extends BaseScriptComponent {
         panel,
         anchorRoot: this.wristMenuRoot,
         handType: "left",
-        visibleScale,
         onBeforeShow: () => this._mainMenuView?.applySpectaclesFrameMotion(),
+        onMenuShow: () => this.setUIState(1),
+        onMenuHide: (immediate) => this.setUIState(0, { immediate }),
       });
-      this._wristMenuController.setGatingActive(this._uiState === 1);
     } catch (error) {
       print(`UIManager: ${error}`);
       return;
@@ -175,21 +183,44 @@ export class UIManager extends BaseScriptComponent {
     });
   }
 
-  public setUIState(state: number): void {
-    if (this._uiState === state) {
+  public setUIState(state: number, options?: SetUIStateOptions): void {
+    const immediate = options?.immediate ?? false;
+    if (!immediate && this._uiState === state) {
       return;
     }
     this._uiState = state;
-    const visibleScale = new vec3(EDITOR_MENU_SCALE, EDITOR_MENU_SCALE, EDITOR_MENU_SCALE);
+
+    const panel = this._panelRoot();
+    if (!panel) {
+      return;
+    }
+
+    const menuScale = this._isEditorMode ? EDITOR_MENU_SCALE : SPECTACLES_MENU_SCALE;
+    const visibleScale = new vec3(menuScale, menuScale, menuScale);
+
     if (state === 0) {
-      const panel = this._panelRoot();
-      if (panel) {
-        scaleOut(panel, 0.35);
+      if (immediate) {
+        panel.enabled = false;
+        panel.getTransform().setLocalScale(new vec3(0, 0, 0));
+        return;
       }
-    } else if (state === 1) {
-      const panel = this._panelRoot();
-      if (panel) {
-        scaleIn(panel, 0.35, visibleScale);
+      scaleOut(
+        panel,
+        this._isEditorMode ? EDITOR_MENU_ANIM_DURATION : SPECTACLES_MENU_SCALE_OUT_DURATION,
+      );
+      return;
+    }
+
+    if (state === 1) {
+      if (immediate) {
+        panel.enabled = true;
+        panel.getTransform().setLocalScale(visibleScale);
+      } else {
+        scaleIn(
+          panel,
+          this._isEditorMode ? EDITOR_MENU_ANIM_DURATION : SPECTACLES_MENU_SCALE_IN_DURATION,
+          visibleScale,
+        );
       }
       this._refreshBridgeStatus();
     }
@@ -217,8 +248,8 @@ export class UIManager extends BaseScriptComponent {
   }
 
   private _applyAppState(state: AppStateData): void {
-    const nextUiState = state.phase === "runtime" ? 1 : 0;
-    const uiStateChanged = this._uiState !== nextUiState;
+    const runtimeVisible = state.phase === "runtime";
+    const uiStateChanged = this._uiState !== (runtimeVisible ? 1 : 0);
     const operatingModeChanged = this._operatingMode !== state.operatingMode;
 
     this._lidarMode = state.lidarMode;
@@ -240,17 +271,14 @@ export class UIManager extends BaseScriptComponent {
     this._setStatus(bridgePresentation.text, bridgePresentation.color);
 
     if (this._isEditorMode) {
-      this.setUIState(nextUiState);
-      if ((uiStateChanged || operatingModeChanged) && nextUiState === 1) {
+      this.setUIState(runtimeVisible ? 1 : 0);
+      if ((uiStateChanged || operatingModeChanged) && runtimeVisible) {
         this._refreshBridgeStatus();
       }
       return;
     }
 
-    this._wristMenuController?.setGatingActive(nextUiState === 1);
-    const previousUiState = this._uiState;
-    this._uiState = nextUiState;
-    if ((previousUiState !== nextUiState || operatingModeChanged) && nextUiState === 1) {
+    if (operatingModeChanged) {
       this._refreshBridgeStatus();
     }
   }

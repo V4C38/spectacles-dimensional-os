@@ -12,12 +12,12 @@ import {
   ButtonBinding,
   configureButtonToggle,
   findButtonBinding,
+  findChildRecursive,
   findText,
   FONT_BUTTON,
   FONT_CAPTION,
   getFrameComponent,
   setButtonEnabled,
-  setButtonStyle,
   setButtonToggleState,
   SnapOS2Styles,
 } from "./kit/UIKit";
@@ -26,9 +26,10 @@ import {
 /** Main HUD panel for restart, emergency stop, LiDAR toggle, and mode controls. */
 // ================================================================
 
-interface ModeButtonConfig {
+interface ModeButtonPair {
   mode: OperatingMode;
-  button: ButtonBinding;
+  primary: ButtonBinding;
+  secondary: ButtonBinding;
 }
 
 interface MainMenuCallbacks {
@@ -49,10 +50,12 @@ export class MainMenuView {
   private readonly _emergencyStop: ButtonBinding;
   private readonly _showLiDAR: ButtonBinding;
   private readonly _debugMode: ButtonBinding;
-  private readonly _modeButtons: ModeButtonConfig[];
+  private readonly _debugLogRoot: SceneObject | null;
+  private readonly _modePairs: ModeButtonPair[];
   private readonly _onModeButtonPressed: (mode: OperatingMode) => void;
   private _operatingMode: OperatingMode;
   private _debugModeEnabled = false;
+  private _lidarMode: LidarDisplayMode = "off";
 
   constructor(
     panel: SceneObject,
@@ -65,8 +68,18 @@ export class MainMenuView {
       "EmergencyStop",
       "EmergencyStopLabel",
     );
-    const manualMode = findButtonBinding(panel, "ModeManual", "TextModeManual");
-    const agentMode = findButtonBinding(panel, "ModeAgent", "TextModeAgent");
+    const manualPrimary = findButtonBinding(panel, "ModeManualPrimary", "TextModeManual");
+    const manualSecondary = findButtonBinding(
+      panel,
+      "ModeManualSecondary",
+      "TextModeManual",
+    );
+    const agentPrimary = findButtonBinding(panel, "ModeAgentPrimary", "TextModeAgent");
+    const agentSecondary = findButtonBinding(
+      panel,
+      "ModeAgentSecondary",
+      "TextModeAgent",
+    );
     const showLiDAR = findButtonBinding(panel, "ShowLiDAR", "ShowLiDARLabel");
     const debugMode = findButtonBinding(panel, "DebugMode", "DebugModeLabel");
 
@@ -74,8 +87,10 @@ export class MainMenuView {
       !statusText ||
       !restart ||
       !emergencyStop ||
-      !manualMode ||
-      !agentMode ||
+      !manualPrimary ||
+      !manualSecondary ||
+      !agentPrimary ||
+      !agentSecondary ||
       !showLiDAR ||
       !debugMode
     ) {
@@ -88,14 +103,17 @@ export class MainMenuView {
     this._emergencyStop = emergencyStop;
     this._showLiDAR = showLiDAR;
     this._debugMode = debugMode;
-    this._modeButtons = [
+    this._debugLogRoot = findChildRecursive(panel, "DebugLog");
+    this._modePairs = [
       {
         mode: "manual",
-        button: manualMode,
+        primary: manualPrimary,
+        secondary: manualSecondary,
       },
       {
         mode: "agent",
-        button: agentMode,
+        primary: agentPrimary,
+        secondary: agentSecondary,
       },
     ];
     this._operatingMode = callbacks.getOperatingMode();
@@ -103,12 +121,11 @@ export class MainMenuView {
     this._onModeButtonPressed = callbacks.onModeButtonPressed;
 
     this._initializeStyles();
-    for (const modeButton of this._modeButtons) {
-      modeButton.button.button.onTriggerUp.add(() =>
-        this._onModeButtonPressed(modeButton.mode),
-      );
+    for (const pair of this._modePairs) {
+      pair.primary.button.onTriggerUp.add(() => this._onModeButtonPressed(pair.mode));
+      pair.secondary.button.onTriggerUp.add(() => this._onModeButtonPressed(pair.mode));
     }
-    this.setOperatingMode(this._operatingMode);
+    this._syncModeButtonPresentation();
 
     this._restart.button.onTriggerUp.add(callbacks.onRestart);
     bindToggleButton(
@@ -171,14 +188,22 @@ export class MainMenuView {
   }
 
   public setOperatingMode(mode: OperatingMode): void {
+    if (this._operatingMode === mode) {
+      return;
+    }
     this._operatingMode = mode;
     this._syncModeButtonPresentation();
   }
 
   public setLidarModeDisplay(mode: LidarDisplayMode): void {
+    if (this._lidarMode === mode) {
+      return;
+    }
+    this._lidarMode = mode;
     if (this._showLiDAR.labelText) {
       this._showLiDAR.labelText.text = LIDAR_MODE_LABELS[mode];
     }
+    setButtonToggleState(this._showLiDAR.button, mode !== "off");
   }
 
   public setLidarModeAvailability(
@@ -192,6 +217,12 @@ export class MainMenuView {
       ? LIDAR_MODE_LABELS[mode]
       : "LiDAR\nUnavailable";
     setButtonEnabled(this._showLiDAR.button, available);
+    if (available) {
+      this._lidarMode = mode;
+      setButtonToggleState(this._showLiDAR.button, mode !== "off");
+    } else {
+      setButtonToggleState(this._showLiDAR.button, false);
+    }
   }
 
   public setDebugModeToggle(enabled: boolean): void {
@@ -200,10 +231,13 @@ export class MainMenuView {
       this._debugMode.labelText.text = this._debugModeLabel(enabled);
     }
     setButtonToggleState(this._debugMode.button, enabled);
+    if (this._debugLogRoot) {
+      this._debugLogRoot.enabled = enabled;
+    }
   }
 
   private _debugModeLabel(enabled: boolean): string {
-    return enabled ? "Debug: on" : "Debug: off";
+    return enabled ? "⌕ Debug: on" : "⌕ Debug: off";
   }
 
   public setEmergencyStopAvailability(
@@ -227,12 +261,10 @@ export class MainMenuView {
   }
 
   private _syncModeButtonPresentation(): void {
-    for (const modeButton of this._modeButtons) {
-      const active = this._operatingMode === modeButton.mode;
-      setButtonStyle(
-        modeButton.button.button,
-        active ? SnapOS2Styles.Primary : SnapOS2Styles.Secondary,
-      );
+    for (const pair of this._modePairs) {
+      const active = this._operatingMode === pair.mode;
+      pair.primary.sceneObject.enabled = active;
+      pair.secondary.sceneObject.enabled = !active;
     }
   }
 
@@ -241,11 +273,14 @@ export class MainMenuView {
     this._emergencyStop.labelText && (this._emergencyStop.labelText.size = FONT_BUTTON);
     configureButtonToggle(this._emergencyStop.button, true);
     setButtonToggleState(this._emergencyStop.button, true);
-    for (const modeButton of this._modeButtons) {
-      modeButton.button.labelText && (modeButton.button.labelText.size = FONT_BUTTON);
-      (modeButton.button.button as any)._toggleable = false;
+    for (const pair of this._modePairs) {
+      for (const binding of [pair.primary, pair.secondary]) {
+        binding.labelText && (binding.labelText.size = FONT_BUTTON);
+        (binding.button as any)._toggleable = false;
+      }
     }
     this._showLiDAR.labelText && (this._showLiDAR.labelText.size = FONT_BUTTON);
+    configureButtonToggle(this._showLiDAR.button, false);
     this._debugMode.labelText && (this._debugMode.labelText.size = FONT_BUTTON);
     configureButtonToggle(this._debugMode.button, this._debugModeEnabled);
 

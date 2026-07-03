@@ -36,6 +36,8 @@ export type NavigationOutcome =
   | { kind: "failed"; errorCode: number | null };
 export type BridgeLinkState = "disconnected" | "connectedNoRobot" | "connected";
 
+export const NO_ROBOT_CONNECTED_LABEL = "No Robot connected";
+
 export interface BridgeSnapshot {
   handshakeReady: boolean;
   robotConnected: boolean;
@@ -138,7 +140,7 @@ export function bridgeLinkPresentation(
   switch (linkState) {
     case "disconnected":
       return {
-        text: "\n\n\nBridge disconnected",
+        text: "\n\n\nBridge not connected",
         color: COLOR_ERROR,
       };
     case "connectedNoRobot":
@@ -148,7 +150,7 @@ export function bridgeLinkPresentation(
       };
     case "connected":
       return {
-        text: "\n\n\nBridge connected",
+        text: `\n\n\nBridge connected - ${AppState.connectedRobotDisplayName}`,
         color: COLOR_SUCCESS,
       };
   }
@@ -272,6 +274,8 @@ export interface DriftState {
 
 export interface AppStateData {
   phase: AppPhase;
+  /** Session milestone: set when runtime is first entered; survives wizard re-entry. */
+  runtimeEstablished: boolean;
   debugMode: boolean;
   lidarMode: LidarDisplayMode;
   operatingMode: OperatingMode;
@@ -286,8 +290,6 @@ export interface AppStateData {
 }
 
 export type AppStateListener = (state: AppStateData) => void;
-
-export const NO_ROBOT_CONNECTED_LABEL = "No Robot connected";
 
 const DEFAULT_CAPABILITY_NAMES = [
   "lidar",
@@ -390,6 +392,7 @@ export function createDefaultDriftState(): DriftState {
 export function createDefaultAppStateData(): AppStateData {
   return validateSessionFields({
     phase: "registration",
+    runtimeEstablished: false,
     debugMode: false,
     lidarMode: "off",
     operatingMode: "manual",
@@ -405,6 +408,9 @@ export function createDefaultAppStateData(): AppStateData {
 }
 
 export class AppState {
+  /** Set from bridge hello; cleared on disconnect. */
+  static connectedRobotDisplayName: string = NO_ROBOT_CONNECTED_LABEL;
+
   private readonly _listeners: AppStateListener[] = [];
   private _dispatching = false;
   private _pendingPatches: Partial<AppStateData>[] = [];

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import cv2
 
+from dimos.ar.tag_tracking.fiducial_helpers import aruco_detected_tag_id
 from scripts.generate_marker import (
     A4_PAGE_MM,
     DEFAULT_APRILTAG_DICT,
@@ -58,7 +59,7 @@ def test_generated_robot_marker_detects_on_white_page() -> None:
     corners, ids, _rejected = detector.detectMarkers(cv2.cvtColor(page, cv2.COLOR_BGR2GRAY))
     assert ids is not None
     assert len(corners) == 1
-    assert int(ids[0][0]) == DEFAULT_MARKER_ID
+    assert aruco_detected_tag_id(ids[0]) == DEFAULT_MARKER_ID
 
 
 def test_robot_marker_assets_exist_after_generation() -> None:
@@ -91,4 +92,4 @@ def test_robot_marker_survives_downscaled_view() -> None:
     corners, ids, _rejected = detector.detectMarkers(cv2.cvtColor(page, cv2.COLOR_BGR2GRAY))
     assert ids is not None
     assert len(corners) == 1
-    assert int(ids[0][0]) == DEFAULT_MARKER_ID
+    assert aruco_detected_tag_id(ids[0]) == DEFAULT_MARKER_ID

@@ -23,6 +23,7 @@ import {
 } from "./AppState";
 import { isCapabilityAvailable } from "./Robot/RobotRuntimeModel";
 import { manualNavGoalConfig } from "../ARBridge/Navigation/NavigationModel";
+import { COLOR_WHITE } from "./UI/kit/UIKit";
 
 /** Phase lifecycle, operating mode, and subsystem orchestration for AR bridge runtime. */
 @component
@@ -162,13 +163,15 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     robot.refreshLidarPresentation();
   }
 
-  public enterRegistration(): void {
+  public enterRegistration(options?: { preserveBridge?: boolean }): void {
     this._log("enterRegistration");
     this.registrationClient?.cancelPlacement();
     this.registrationClient?.stop();
     this.registrationClient?.clearPose();
     this.arBridgeServices.router.cancelRuntimeReconnect();
-    this.arBridgeServices.router.disconnect();
+    if (!options?.preserveBridge) {
+      this.arBridgeServices.router.disconnect();
+    }
     this.arBridgeServices.router.applyFrameCapturePolicy(true);
     this.arBridgeServices.state.update({
       phase: "registration",
@@ -307,6 +310,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     if (this.debugMode === enabled) {
       return;
     }
+    this._log(`setDebugMode: ${enabled}`);
     this.arBridgeServices.state.update({ debugMode: enabled });
   }
 
@@ -373,6 +377,8 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
   }
 
   private _log(message: string): void {
-    print(`ARBridgeCoordinator: ${message}`);
+    const text = `ARBridgeCoordinator: ${message}`;
+    print(text);
+    this.arBridgeServices.state.uiLogger.logConsole(text, COLOR_WHITE);
   }
 }

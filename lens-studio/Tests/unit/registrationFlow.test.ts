@@ -188,6 +188,32 @@ describe("registration flow view state", () => {
     expect(footer.nextInactive).toBe(true);
   });
 
+  it("footer hides Back on step 0 while phase is registration", () => {
+    const footer = getWizardFooterState(
+      WizardStep.Start,
+      false,
+      createRegistrationViewState(),
+      false,
+      false,
+      false,
+    );
+    expect(footer.showPrev).toBe(false);
+    expect(footer.centerNext).toBe(true);
+  });
+
+  it("footer shows Back on step 0 while phase is runtime", () => {
+    const footer = getWizardFooterState(
+      WizardStep.Start,
+      false,
+      createRegistrationViewState(),
+      false,
+      false,
+      true,
+    );
+    expect(footer.showPrev).toBe(true);
+    expect(footer.centerNext).toBe(false);
+  });
+
   it("footer shows Complete when awaiting commit", () => {
     expect(hasRegistrationCandidate({
       mode: "auto",

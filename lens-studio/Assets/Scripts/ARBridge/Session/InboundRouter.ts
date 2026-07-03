@@ -10,10 +10,12 @@ import { TelemetryClient } from "../Telemetry/TelemetryClient";
 import { NavigationClient } from "../Navigation/NavigationClient";
 import { Signal } from "../../App/Utilities/Utilities";
 import {
+  AppState,
   BridgeSnapshot,
   createDefaultDriftState,
   createDefaultRobotRuntimeState,
   defaultNavigationOutcome,
+  NO_ROBOT_CONNECTED_LABEL,
 } from "../../App/AppState";
 import {
   BridgeStatusMessage,
@@ -238,6 +240,7 @@ export class InboundRouter {
 
   private _applyHello(msg: HelloMessage): void {
     const runtimeState = projectRuntimeStateFromHello(msg);
+    AppState.connectedRobotDisplayName = runtimeState.displayName;
     this.navigationPlacement.onHelloReset();
     this.telemetryClient.resetBridgeLidarModeTracking();
     this._applyBridgeProjection(this.hasConnection(), null);
@@ -275,6 +278,7 @@ export class InboundRouter {
       this.telemetryClient.onDisconnect();
       this.robotPresenter.onDisconnect();
       this.navigationPlacement.onDisconnect();
+      AppState.connectedRobotDisplayName = NO_ROBOT_CONNECTED_LABEL;
       this.appState.update({
         navigationOutcome: defaultNavigationOutcome(),
         robotRuntime: createDefaultRobotRuntimeState(),

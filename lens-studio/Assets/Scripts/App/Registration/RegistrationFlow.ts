@@ -234,6 +234,7 @@ export function getWizardFooterState(
   registrationState: RegistrationViewState,
   commitInFlight: boolean,
   motionAuthorizePending: boolean = false,
+  canGoBackAtStart: boolean = false,
 ): WizardFooterState {
   let nextLabel = "Skip";
   let nextStyle = SnapOS2Styles.PrimaryNeutral;
@@ -281,14 +282,15 @@ export function getWizardFooterState(
     nextLabel,
     nextStyle,
     nextInactive,
-    showPrev: step !== WizardStep.Start,
+    showPrev: step !== WizardStep.Start || canGoBackAtStart,
     showManual:
       step === WizardStep.Register &&
       !isRegistrationPendingCommit(registrationState, commitInFlight),
     manualLabel:
-      registrationState.mode === "manual" ? "AprilTag baseline" : "Manual pose",
+      registrationState.mode === "manual" ? "AprilTag" : "Manual Placement",
     manualStyle: SnapOS2Styles.PrimaryNeutral,
-    centerNext: step === WizardStep.Start || step === WizardStep.Register,
+    centerNext:
+      (step === WizardStep.Start && !canGoBackAtStart) || step === WizardStep.Register,
     widePrevOffset: step === WizardStep.Register,
   };
 }
