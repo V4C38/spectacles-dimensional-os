@@ -4,7 +4,9 @@ import {
   interpolatePose,
   isLatestAnimationVersion,
   lerpVec3,
+  maybeAdvanceDragHeadingTarget,
   nextAnimationVersion,
+  slerpRotationToward,
   smoothScalar,
 } from "../../Assets/Scripts/App/Utilities/AnimationUtilities";
 
@@ -49,6 +51,44 @@ describe("smoothScalar", () => {
     const result = smoothScalar(0, 10, 0.016, 10);
     expect(result).toBeGreaterThan(0);
     expect(result).toBeLessThan(10);
+  });
+});
+
+describe("maybeAdvanceDragHeadingTarget", () => {
+  it("does not update target below minimum travel", () => {
+    const result = maybeAdvanceDragHeadingTarget({ x: 0, z: 0 }, { x: 1, z: 0 }, 3);
+    expect(result.headingDirection).toBeNull();
+    expect(result.gateOrigin).toEqual({ x: 0, z: 0 });
+  });
+
+  it("updates target once travel reaches the gate", () => {
+    const result = maybeAdvanceDragHeadingTarget({ x: 0, z: 0 }, { x: 4, z: 0 }, 3);
+    expect(result.headingDirection).toEqual({ x: 1, z: 0 });
+    expect(result.gateOrigin).toEqual({ x: 4, z: 0 });
+  });
+});
+
+describe("slerpRotationToward", () => {
+  it("converges toward target over repeated steps", () => {
+    const target = new quat(0.924, 0, 0.383, 0);
+    target.normalize();
+    let current = quat.quatIdentity();
+    for (let i = 0; i < 60; i++) {
+      current = slerpRotationToward(current, target, 0.016, 8);
+    }
+    expect(quat.angleBetween(current, target)).toBeLessThan(0.1);
+  });
+
+  it("is frame-rate independent within tolerance", () => {
+    const target = new quat(0.707, 0, 0.707, 0);
+    let oneStep = quat.quatIdentity();
+    oneStep = slerpRotationToward(oneStep, target, 0.032, 8);
+
+    let twoSteps = quat.quatIdentity();
+    twoSteps = slerpRotationToward(twoSteps, target, 0.016, 8);
+    twoSteps = slerpRotationToward(twoSteps, target, 0.016, 8);
+
+    expect(quat.angleBetween(oneStep, twoSteps)).toBeLessThan(0.02);
   });
 });
 

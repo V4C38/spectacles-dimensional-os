@@ -7,6 +7,7 @@ import time
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 
 from dimos.ar.bridge.motion_router import MotionRouter
 from dimos.ar.registration.baseline import (
@@ -365,3 +366,61 @@ def test_broadcast_loop_auto_commits_when_baseline_done() -> None:
 
     assert registry.state.is_committed
     assert any('"phase":"succeeded"' in payload for payload in sent)
+
+
+@pytest.mark.asyncio
+async def test_baseline_session_frames_ignore_committed_world_frame() -> None:
+    registry = WorldRegistry(WorldFrameState(), tf_publish_static=lambda _tf: None)
+    registry.state.commit(np.eye(4, dtype=np.float64), method="manual_pose", approximate=False)
+    session, _sent, _registry = _make_session(registry=registry)
+    session.on_registration_command(
+        RegistrationCommandMessage(
+            ts=1.0,
+            robot_id="test_robot",
+            command="start",
+            mode="april_odom_baseline",
+        ),
+        MagicMock(),
+    )
+    session._tag_tracker.active = True
+    session._tag_tracker.process_frame = MagicMock(
+        return_value=FrameResult(tag_detected=False, tag_ids=[], quality=0.0, observations_added=0),
+    )
+    odom_sample = MagicMock()
+    odom_sample.position = (0.0, 0.0, 0.0)
+    odom_sample.orientation = (0.0, 0.0, 0.0, 1.0)
+    session._odom.at_or_latest_by_source.return_value = odom_sample
+
+    header = {"seq": 1, "ts": 1.0, "send_ts": 1.0, "capture_ts_robot": 1.0}
+    await session.on_camera_frame(header, b"jpeg", MagicMock())
+
+    kwargs = session._tag_tracker.process_frame.call_args.kwargs
+    assert kwargs["world_frame_committed"] is False
+    assert kwargs["T_committed"] is None
+    session._odom.at_or_latest_by_source.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_runtime_refinement_frames_use_committed_world_frame() -> None:
+    registry = WorldRegistry(WorldFrameState(), tf_publish_static=lambda _tf: None)
+    registry.state.commit(np.eye(4, dtype=np.float64), method="manual_pose", approximate=False)
+    session, _sent, _registry = _make_session(registry=registry)
+    session._tag_tracker.active = False
+    session._tag_tracker.process_frame = MagicMock(
+        return_value=FrameResult(tag_detected=False, tag_ids=[], quality=0.0, observations_added=0),
+    )
+    session._world_frame_refiner.committed_or_current_for_frame.return_value = np.eye(
+        4, dtype=np.float64
+    )
+    odom_sample = MagicMock()
+    odom_sample.position = (0.0, 0.0, 0.0)
+    odom_sample.orientation = (0.0, 0.0, 0.0, 1.0)
+    session._odom.at_interpolated_by_source.return_value = odom_sample
+
+    header = {"seq": 2, "ts": 2.0, "send_ts": 2.0, "capture_ts_robot": 2.0}
+    await session.on_camera_frame(header, b"jpeg", MagicMock())
+
+    kwargs = session._tag_tracker.process_frame.call_args.kwargs
+    assert kwargs["world_frame_committed"] is True
+    assert kwargs["T_committed"] is not None
+    session._odom.at_interpolated_by_source.assert_called_once()

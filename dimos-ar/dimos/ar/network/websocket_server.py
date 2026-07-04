@@ -300,7 +300,14 @@ class ARWebSocketServer:
                                 seq=int(header.get("seq", -1)),
                                 jpeg_bytes=len(jpeg),
                             )
-                        await self._on_camera_frame(header, jpeg, websocket)
+                        try:
+                            await self._on_camera_frame(header, jpeg, websocket)
+                        except Exception as exc:
+                            logger.exception(
+                                "XR camera frame handler error",
+                                seq=int(header.get("seq", -1)),
+                                error=str(exc),
+                            )
                         continue
                     if not isinstance(message, str):
                         raise ValueError("Unsupported WebSocket frame type")
@@ -322,7 +329,11 @@ class ARWebSocketServer:
                         inbound = decode_inbound(line, expected_robot_id=hello.robot_id)
                         await self._dispatch_inbound(inbound, websocket)
                 except ValueError as exc:
-                    logger.warning("Invalid inbound WebSocket message", error=str(exc))
+                    logger.warning(
+                        "Invalid inbound WebSocket message",
+                        error=str(exc),
+                        type=peek_message_type(message) if isinstance(message, str) else None,
+                    )
                 except Exception as exc:
                     logger.exception(
                         "Unhandled inbound WebSocket handler error",

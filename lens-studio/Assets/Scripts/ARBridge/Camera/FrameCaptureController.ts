@@ -46,4 +46,8 @@ export class FrameCaptureController extends BaseScriptComponent {
   public setCapturePolicy(policy: CapturePolicy): void {
     this._client?.setCapturePolicy(policy);
   }
+
+  public requestImmediateCapture(): void {
+    this._client?.requestImmediateCapture();
+  }
 }

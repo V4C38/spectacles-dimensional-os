@@ -102,6 +102,13 @@ export class CameraClient {
     this._maybeCapture();
   }
 
+  public requestImmediateCapture(): void {
+    if (this._mode !== "runtime") {
+      return;
+    }
+    this._lastPipelineEndTime = 0;
+  }
+
   private _onHello = (_msg: HelloMessage): void => {
     this._inFlight = false;
     this._inFlightSeq = -1;

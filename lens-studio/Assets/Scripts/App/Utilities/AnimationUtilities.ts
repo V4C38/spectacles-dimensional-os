@@ -50,6 +50,37 @@ export function smoothScalar(
   return current + (target - current) * alpha;
 }
 
+export type PlanarPoint = { x: number; z: number };
+
+/** Returns a unit heading direction once planar travel from gateOrigin reaches minTravelCm. */
+export function maybeAdvanceDragHeadingTarget(
+  gateOrigin: PlanarPoint,
+  current: PlanarPoint,
+  minTravelCm: number,
+): { gateOrigin: PlanarPoint; headingDirection: PlanarPoint | null } {
+  const dx = current.x - gateOrigin.x;
+  const dz = current.z - gateOrigin.z;
+  const travel = Math.sqrt(dx * dx + dz * dz);
+  if (travel < minTravelCm) {
+    return { gateOrigin, headingDirection: null };
+  }
+  const inv = 1 / travel;
+  return {
+    gateOrigin: { x: current.x, z: current.z },
+    headingDirection: { x: dx * inv, z: dz * inv },
+  };
+}
+
+export function slerpRotationToward(
+  current: quat,
+  target: quat,
+  dt: number,
+  rate: number,
+): quat {
+  const alpha = exponentialSmoothAlpha(dt, rate);
+  return quat.slerp(current, target, alpha);
+}
+
 export function interpolatePose(
   currentPos: vec3,
   targetPos: vec3,
@@ -68,6 +99,19 @@ export function interpolatePose(
 }
 
 export type AnimateEasing = NonNullable<Parameters<typeof animate>[0]["easing"]>;
+
+/** Returns false when the native SceneObject was destroyed (stale animate callbacks). */
+export function trySetLocalScale(object: SceneObject, scale: vec3): boolean {
+  if (!object) {
+    return false;
+  }
+  try {
+    object.getTransform().setLocalScale(scale);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export type AnimateLocalScaleOptions = {
   easing?: AnimateEasing;
@@ -99,13 +143,15 @@ export function animateLocalScale(
       if (!isLatestAnimationVersion(versionStore, versionKey, version)) {
         return;
       }
-      transform.setLocalScale(lerpVec3(start, targetScale, t));
+      trySetLocalScale(object, lerpVec3(start, targetScale, t));
     },
     ended: () => {
       if (!isLatestAnimationVersion(versionStore, versionKey, version)) {
         return;
       }
-      transform.setLocalScale(targetScale);
+      if (!trySetLocalScale(object, targetScale)) {
+        return;
+      }
       if (options?.disableOnEnd) {
         object.enabled = false;
       }
@@ -132,14 +178,19 @@ export function scaleIn(
       duration,
       easing: "ease-in-out-quad",
       update: (t: number) => {
-        transform.setLocalScale(lerpVec3(start, target, t));
+        if (!trySetLocalScale(sceneObject, lerpVec3(start, target, t))) {
+          return;
+        }
       },
       ended: () => {
         if (!isLatestAnimationVersion(sceneObject, versionKey, version)) {
           resolve();
           return;
         }
-        transform.setLocalScale(target);
+        if (!trySetLocalScale(sceneObject, target)) {
+          resolve();
+          return;
+        }
         resolve();
       },
     });
@@ -174,15 +225,18 @@ export function scaleOut(
       duration,
       easing: "ease-in-out-quad",
       update: (t: number) => {
-        transform.setLocalScale(lerpVec3(start, target, t));
+        trySetLocalScale(sceneObject, lerpVec3(start, target, t));
       },
       ended: () => {
         if (!isLatestAnimationVersion(sceneObject, versionKey, version)) {
           resolve();
           return;
         }
+        if (!trySetLocalScale(sceneObject, target)) {
+          resolve();
+          return;
+        }
         sceneObject.enabled = false;
-        transform.setLocalScale(target);
         resolve();
       },
     });

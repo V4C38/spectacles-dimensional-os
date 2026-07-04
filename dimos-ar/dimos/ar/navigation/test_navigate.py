@@ -609,6 +609,53 @@ def test_agent_submit_rejected_before_world_frame_committed() -> None:
     assert not any(m["type"] == "nav_goal_update" for m in wire)
 
 
+def test_world_frame_correction_redispatches_active_goal() -> None:
+    nav, mock_server, published_nav, _published_cancel = _make_nav()
+    nav.on_navigate_goal(_make_goal_msg())
+    assert len(published_nav) == 1
+    status_count = len(_all_nav_statuses(mock_server))
+
+    T = np.eye(4, dtype=np.float64)
+    T[0, 3] = 1.0
+    nav._world_frame.apply_transform(T)
+    nav.on_world_frame_corrected()
+
+    assert len(published_nav) == 2
+    assert len(_all_nav_statuses(mock_server)) == status_count
+    assert nav._session is not None
+    assert nav._session.odom_position is not None
+
+
+def test_world_frame_correction_skips_redispatch_below_threshold() -> None:
+    nav, _mock_server, published_nav, _published_cancel = _make_nav()
+    nav.on_navigate_goal(_make_goal_msg())
+    assert len(published_nav) == 1
+    nav.on_world_frame_corrected()
+    assert len(published_nav) == 1
+
+
+def test_world_frame_correction_noop_without_session() -> None:
+    nav, _mock_server, published_nav, _published_cancel = _make_nav()
+    nav.on_world_frame_corrected()
+    assert published_nav == []
+
+
+def test_goal_reached_logs_arrival_shortfall(caplog: pytest.LogCaptureFixture) -> None:
+    from dimos.ar.world_frame.transforms import OdomSample
+
+    nav, _mock_server, published_nav, _published_cancel = _make_nav()
+    nav._odom_latest = lambda: OdomSample(
+        position=(1.5, 0.0, 2.5),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    nav.on_navigate_goal(_make_goal_msg(position=(1.0, 0.0, 2.0)))
+    assert len(published_nav) == 1
+    nav.on_path(_make_path())
+    caplog.clear()
+    nav.on_goal_reached(Bool(data=True))
+    assert any("arrival_shortfall_m" in record.message for record in caplog.records)
+
+
 # ------------------------------------------------------------------
 # encode_pose protocol (unchanged — lives in network.protocol)
 # ------------------------------------------------------------------

@@ -238,6 +238,18 @@ class ARBridge(Module):  # type: ignore[misc]
             speed_horizon_s=runtime_profile.runtime_speed_horizon_s,
         )
         registry = WorldRegistry(self._world_frame, self.tf.publish_static)
+        baseline_cap = handshake.capability_states.get("registration_april_odom_baseline")
+        baseline_motion_available = (
+            baseline_cap.available if baseline_cap is not None else False
+        )
+        assert self._loop is not None, "build() called before Module loop is assigned"
+        baseline_motion_recipe = resolve_baseline_motion_recipe(self._profile)
+        nav_ref: NavigateGoalHandler | None = None
+
+        def _on_world_frame_corrected() -> None:
+            assert nav_ref is not None
+            nav_ref.on_world_frame_corrected()
+
         world_frame_refiner = WorldFrameRefiner(
             registry=registry,
             telemetry=telemetry,
@@ -247,15 +259,9 @@ class ARBridge(Module):  # type: ignore[misc]
             tag_tracker=tag_tracker,
             runtime_profile=runtime_profile,
             runtime_correction_enabled=self.config.runtime_correction_enabled,
+            on_correction_committed=_on_world_frame_corrected,
         )
         registry.attach_refiner(world_frame_refiner)
-        baseline_cap = handshake.capability_states.get("registration_april_odom_baseline")
-        baseline_motion_available = (
-            baseline_cap.available if baseline_cap is not None else False
-        )
-        assert self._loop is not None, "build() called before Module loop is assigned"
-        baseline_motion_recipe = resolve_baseline_motion_recipe(self._profile)
-        nav_ref: NavigateGoalHandler | None = None
 
         def _on_nav_preempted() -> None:
             assert nav_ref is not None
@@ -293,6 +299,7 @@ class ARBridge(Module):  # type: ignore[misc]
             sender=sender,
             world_frame=self._world_frame,
             motion_router=motion_router,
+            odom_latest=odom.latest,
         )
         nav_ref = nav
 

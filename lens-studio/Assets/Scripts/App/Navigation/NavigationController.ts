@@ -40,6 +40,7 @@ import {
 import { NavigationPathRenderer } from "./NavigationPathRenderer";
 import { NavigationTargetMarker } from "./NavigationTargetMarker";
 import { GroundPlacement, RobotGroundDeadzone } from "./GroundPlacement";
+import { Signal } from "../Utilities/Utilities";
 import {
   applyNavigationEvent,
   bumpNavResyncCooldown,
@@ -50,6 +51,8 @@ import {
   goalCommitAllowed,
   manualNavGoalConfig,
   shouldRequestPreviewOnTargetChange,
+  shouldSendStreamGoal,
+  GOAL_SEND_INTERVAL_S,
   touchNavStatus,
   type GoalCommitKind,
   type NavEngineState,
@@ -58,9 +61,7 @@ import {
   type NavigationEvent,
 } from "../../ARBridge/Navigation/NavigationModel";
 
-const GOAL_SEND_INTERVAL_S = 0.35;
 const GOAL_COMMIT_LOG_INTERVAL_S = 2.0;
-const GOAL_SEND_MIN_DISTANCE_CM = 20.0;
 const GOAL_REACHED_RETARGET_CM = 25.0;
 const PREVIEW_INTERVAL_S = 0.25;
 const PREVIEW_STALE_TARGET_DISTANCE_CM = 12.0;
@@ -83,6 +84,8 @@ export type NavigationControllerDeps = {
 };
 
 export class NavigationController {
+  public readonly onNavigationSettled = new Signal<"succeeded" | "failed">();
+
   private _cancelGoalAvailable = true;
   private _engine: NavEngineState = createInitialNavEngineState();
   private _lastSentGoal: { position: vec3; rotation: quat } | null = null;
@@ -355,10 +358,6 @@ export class NavigationController {
 
   public applyNavGoalUpdate(msg: NavGoalUpdateMessage): void {
     const pose = this._poseFromWire(msg.position, msg.orientation);
-    this._previewTarget = {
-      position: new vec3(pose.position.x, pose.position.y, pose.position.z),
-      rotation: pose.rotation,
-    };
     this._dispatch({
       kind: "navGoalUpdate",
       source: msg.source,
@@ -370,11 +369,15 @@ export class NavigationController {
   public applyNavStatus(msg: NavStatusMessage): void {
     this._protocolParseFailureCount = 0;
     this._engine = touchNavStatus(this._engine, getTime());
+    const hadTrackedGoal = this._engine.goal !== null;
     const navLabel = this._applyNavStatusInner(msg);
     if (msg.phase === "recovering") {
       return;
     }
     if (navLabel === "Goal reached") {
+      if (hadTrackedGoal) {
+        this.onNavigationSettled.emit("succeeded");
+      }
       const config = this._engine.activeConfig;
       if (config && config.mode === "single" && config.interactive) {
         this._setOutcome({ kind: "success" });
@@ -382,6 +385,9 @@ export class NavigationController {
       return;
     }
     if (navLabel === "Goal failed") {
+      if (hadTrackedGoal) {
+        this.onNavigationSettled.emit("failed");
+      }
       if (msg.error_code !== undefined) {
         this._disableNavRuntime(msg.error_code);
         return;
@@ -609,6 +615,10 @@ export class NavigationController {
         break;
       }
       case "ensureMarkerAt": {
+        this._previewTarget = {
+          position: new vec3(effect.pose.position.x, effect.pose.position.y, effect.pose.position.z),
+          rotation: effect.pose.rotation,
+        };
         this._ensureMarkerForGoal(effect.pose.position, effect.pose.rotation, effect.config);
         if (this._marker) {
           this._marker.setPose(effect.pose.position, effect.pose.rotation);
@@ -673,12 +683,22 @@ export class NavigationController {
     rotation: quat,
     commitKind: GoalCommitKind,
     config: NavGoalConfig,
+    force: boolean = false,
   ): boolean {
     const view = this._viewState();
     if (view && !goalCommitAllowed(view, commitKind)) {
       return false;
     }
-    if (commitKind === "stream" && !this._shouldSendGoal(position)) {
+    if (
+      commitKind === "stream" &&
+      !shouldSendStreamGoal(
+        getTime(),
+        this._lastGoalSendTime,
+        position,
+        this._lastSentGoal,
+        force,
+      )
+    ) {
       return false;
     }
     const sendToBridge =
@@ -864,23 +884,12 @@ export class NavigationController {
     };
     const view = this._viewState();
     if (view?.shouldStreamGoal) {
-      this._requestGoalCommit(position, rotation, "stream", config);
+      this._requestGoalCommit(position, rotation, "stream", config, force);
     }
     if (shouldRequestPreviewOnTargetChange(view)) {
       this._maybeRequestPreview(force, placementActive || !config.interactive);
     }
     this._applyViewState();
-  }
-
-  private _shouldSendGoal(position: vec3): boolean {
-    const now = getTime();
-    if (now - this._lastGoalSendTime < GOAL_SEND_INTERVAL_S) {
-      return false;
-    }
-    if (!this._lastSentGoal) {
-      return true;
-    }
-    return this._lastSentGoal.position.distance(position) >= GOAL_SEND_MIN_DISTANCE_CM;
   }
 
   /** Returns true when a new marker was created. */

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import math
 import threading
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from dimos.ar.bridge.motion_router import MotionRouter
     from dimos.ar.bridge.sender import BridgeSender
     from dimos.ar.navigation.world_transform import OdomGoal
+    from dimos.ar.world_frame.transforms import OdomSample
     from dimos.msgs.nav_msgs.Path import Path
 
 logger = setup_logger()
@@ -41,6 +43,8 @@ NAV_WATCHDOG_POLL_INTERVAL_S: float = 0.5
 NAV_MESSAGE_AGE_LOG_INTERVAL_S: float = 5.0
 NAV_GOAL_UPDATE_DEDUP_DISTANCE_M: float = 0.15
 NAV_GOAL_UPDATE_DEDUP_INTERVAL_S: float = 0.25
+NAV_GOAL_REDISPATCH_MIN_DELTA_M: float = 0.05
+NAV_ARRIVAL_SHORTFALL_WARN_M: float = 0.25
 StallReason = str
 NavGoalSource = Literal["xr", "agent"]
 SessionPhase = Literal["pending", "navigating", "recovering"]
@@ -56,6 +60,8 @@ class NavSession:
     path_received: bool
     last_path_mono: float | None
     phase: SessionPhase
+    odom_position: tuple[float, float, float] | None = None
+    odom_orientation: tuple[float, float, float, float] | None = None
 
 
 class NavigateGoalHandler:
@@ -68,11 +74,13 @@ class NavigateGoalHandler:
         sender: BridgeSender,
         world_frame: WorldFrameState,
         motion_router: MotionRouter,
+        odom_latest: Callable[[], OdomSample | None] | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
         self._world_frame = world_frame
         self._motion_router = motion_router
+        self._odom_latest = odom_latest
 
         self._session: NavSession | None = None
         self._last_outcome: LastOutcome | None = None
@@ -213,6 +221,8 @@ class NavigateGoalHandler:
                 path_received=True,
                 last_path_mono=self._session.last_path_mono,
                 phase="navigating",
+                odom_position=odom_goal.position,
+                odom_orientation=odom_goal.orientation,
             )
         else:
             self._session = NavSession(
@@ -223,6 +233,8 @@ class NavigateGoalHandler:
                 path_received=False,
                 last_path_mono=None,
                 phase="pending",
+                odom_position=odom_goal.position,
+                odom_orientation=odom_goal.orientation,
             )
         goal = PoseStamped(
             position=list(odom_goal.position),
@@ -286,6 +298,46 @@ class NavigateGoalHandler:
         self._broadcast_empty_path(ts=ts)
         self.broadcast_nav_status(ts=ts)
 
+    def on_world_frame_corrected(self) -> None:
+        with self._nav_watchdog_lock:
+            session = self._session
+            if session is None or self._last_outcome is not None:
+                return
+            position = session.position
+            orientation = session.orientation
+            prior_odom_position = session.odom_position
+
+        msg = NavGoalMessage(
+            intent="navigate",
+            ts=time.time(),
+            robot_id=self._robot_id,
+            position=position,
+            orientation=orientation,
+        )
+        odom_goal = resolve_world_goal(self._world_frame, msg)
+        if odom_goal is None:
+            return
+        if prior_odom_position is not None and _planar_odom_distance_m(
+            prior_odom_position,
+            odom_goal.position,
+        ) < NAV_GOAL_REDISPATCH_MIN_DELTA_M:
+            return
+
+        goal = PoseStamped(
+            position=list(odom_goal.position),
+            orientation=list(odom_goal.orientation),
+            ts=msg.ts,
+            frame_id="odom",
+        )
+        self._motion_router.send_nav_goal(
+            goal,
+            on_complete=lambda ok, err: self._on_correction_redispatched(
+                ok,
+                err,
+                odom_goal=odom_goal,
+            ),
+        )
+
     # ------------------------------------------------------------------
     # Stream handlers (called from ARBridge.handle_ar_*)
     # ------------------------------------------------------------------
@@ -323,9 +375,14 @@ class NavigateGoalHandler:
         )
         was_pending = self._session is not None and self._last_outcome is None
         reached = bool(msg.data)
+        session_odom_position: tuple[float, float, float] | None = None
+        with self._nav_watchdog_lock:
+            if self._session is not None:
+                session_odom_position = self._session.odom_position
         if was_pending and reached:
             self._last_outcome = "succeeded"
             log_checkpoint(logger, kind="success", event="XR navigation goal reached")
+            self._log_arrival_shortfall(session_odom_position)
         elif was_pending and not reached:
             self._last_outcome = "failed"
             logger.info("XR navigation goal failed")
@@ -570,6 +627,8 @@ class NavigateGoalHandler:
                 if self._session is not None:
                     self._session.dispatched_mono = time.monotonic()
                     self._session.last_path_mono = None
+                    self._session.odom_position = odom_goal.position
+                    self._session.odom_orientation = odom_goal.orientation
             logger.info(
                 "XR navigation goal published",
                 world_goal=[round(v, 3) for v in msg.position],
@@ -587,6 +646,53 @@ class NavigateGoalHandler:
         self._emit_nav_goal_update(active=False, ts=msg.ts)
         self._broadcast_empty_path(ts=msg.ts)
         self.broadcast_nav_status(ts=msg.ts)
+
+    def _on_correction_redispatched(
+        self,
+        ok: bool,
+        err: BaseException | None,
+        *,
+        odom_goal: OdomGoal,
+    ) -> None:
+        if not ok:
+            if err is not None:
+                logger.warning(
+                    "XR navigation goal redispatch after world-frame correction failed",
+                    error=str(err),
+                )
+            else:
+                logger.warning(
+                    "XR navigation goal redispatch after world-frame correction rejected",
+                )
+            return
+        with self._nav_watchdog_lock:
+            if self._session is not None:
+                self._session.dispatched_mono = time.monotonic()
+                self._session.odom_position = odom_goal.position
+                self._session.odom_orientation = odom_goal.orientation
+        logger.info(
+            "XR navigation goal redispatched after world-frame correction",
+            odom_goal=[round(v, 3) for v in odom_goal.position],
+        )
+
+    def _log_arrival_shortfall(
+        self,
+        dispatched_odom_position: tuple[float, float, float] | None,
+    ) -> None:
+        if dispatched_odom_position is None or self._odom_latest is None:
+            return
+        sample = self._odom_latest()
+        if sample is None:
+            return
+        shortfall_m = _planar_odom_distance_m(
+            dispatched_odom_position,
+            sample.position,
+        )
+        log_fn = logger.warning if shortfall_m > NAV_ARRIVAL_SHORTFALL_WARN_M else logger.info
+        log_fn(
+            "XR navigation arrival shortfall",
+            arrival_shortfall_m=round(shortfall_m, 3),
+        )
 
     def _promote_to_navigating(
         self,
@@ -678,3 +784,12 @@ class NavigateGoalHandler:
             event,
             age_s=round(max(0.0, time.time() - float(source_ts)), 3),
         )
+
+
+def _planar_odom_distance_m(
+    a: tuple[float, float, float],
+    b: tuple[float, float, float],
+) -> float:
+    dx = a[0] - b[0]
+    dz = a[2] - b[2]
+    return math.hypot(dx, dz)

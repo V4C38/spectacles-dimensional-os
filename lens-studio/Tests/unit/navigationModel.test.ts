@@ -12,6 +12,10 @@ import {
   nextNavigationGoalMode,
   remoteNavGoalConfig,
   shouldIgnoreNavGoalUpdate,
+  shouldSendStreamGoal,
+  GOAL_FORCE_NOOP_DISTANCE_CM,
+  GOAL_SEND_INTERVAL_S,
+  GOAL_SEND_MIN_DISTANCE_CM,
   shouldRenderNavigationPath,
   shouldRequestPreviewOnTargetChange,
   type NavigationEffect,
@@ -73,7 +77,7 @@ const STYLE_ORACLE: Array<{
     state: { ...createInitialNavEngineState(), activeConfig: manualNavGoalConfig("single"), goal: null },
     live: { placementActive: false, activelyDragging: false, markerExists: true, outcomeAnimating: false },
     style: "seeking",
-    markerKeys: { button: null, portalCircleVisible: true, scanAnimation: false },
+    markerKeys: { button: null, portalCircleVisible: true, navigatingCircleVisible: false, scanAnimation: false },
   },
   {
     label: "preview (single drag-before-commit)",
@@ -87,7 +91,7 @@ const STYLE_ORACLE: Array<{
     state: { ...createInitialNavEngineState(), activeConfig: manualNavGoalConfig("continuous"), goal: null },
     live: { placementActive: true, activelyDragging: false, markerExists: true, outcomeAnimating: false },
     style: "preview",
-    markerKeys: { button: { role: "cancel", enabled: true, label: "Cancel" }, portalCircleVisible: true },
+    markerKeys: { button: { role: "cancel", enabled: true, label: "Cancel" }, portalCircleVisible: true, navigatingCircleVisible: true },
   },
   {
     label: "navigating (single)",
@@ -98,7 +102,7 @@ const STYLE_ORACLE: Array<{
     },
     live: { placementActive: false, activelyDragging: false, markerExists: true, outcomeAnimating: false },
     style: "navigating",
-    markerKeys: { scanAnimation: true, portalCircleVisible: false, button: { role: "cancel", enabled: true, label: "Cancel" } },
+    markerKeys: { scanAnimation: true, portalCircleVisible: false, navigatingCircleVisible: true, button: { role: "cancel", enabled: true, label: "Cancel" } },
   },
   {
     label: "navigating (continuous)",
@@ -109,7 +113,7 @@ const STYLE_ORACLE: Array<{
     },
     live: { placementActive: false, activelyDragging: false, markerExists: true, outcomeAnimating: false },
     style: "navigating",
-    markerKeys: { portalCircleVisible: true, scanAnimation: true, button: { role: "cancel", enabled: true, label: "Cancel" } },
+    markerKeys: { portalCircleVisible: true, navigatingCircleVisible: true, scanAnimation: true, button: { role: "cancel", enabled: true, label: "Cancel" } },
   },
 ];
 
@@ -353,13 +357,18 @@ describe("derived view state", () => {
     expect(continuousView.marker.button?.role).toBe("cancel");
   });
 
-  it("disables confirm while actively dragging", () => {
-    const view = viewFrom(
+  it("hides button while actively dragging", () => {
+    const singleView = viewFrom(
       { ...createInitialNavEngineState(), activeConfig: manualNavGoalConfig("single"), goal: null },
       { placementActive: true, activelyDragging: true, markerExists: true, outcomeAnimating: false },
     );
-    expect(view.marker.button?.role).toBe("confirm");
-    expect(view.marker.button?.enabled).toBe(false);
+    expect(singleView.marker.button).toBeNull();
+
+    const continuousView = viewFrom(
+      { ...createInitialNavEngineState(), activeConfig: manualNavGoalConfig("continuous"), goal: null },
+      { placementActive: true, activelyDragging: true, markerExists: true, outcomeAnimating: false },
+    );
+    expect(continuousView.marker.button).toBeNull();
   });
 
   it("enables confirm after drag release while placement stays active", () => {
@@ -379,9 +388,80 @@ describe("derived view state", () => {
       },
       { placementActive: false, markerExists: true, outcomeAnimating: false },
     );
+    expect(view.marker.navigatingCircleVisible).toBe(true);
     expect(view.marker.portalCircleVisible).toBe(true);
     expect(view.marker.scanAnimation).toBe(true);
     expect(deriveAppNavigationState(view)).toBe("navigating");
+  });
+
+  it("derives portalCircleVisible for drag collider availability (F1 regression)", () => {
+    const cases: Array<{
+      label: string;
+      state: NavEngineState;
+      live: LiveFlags & { outcomeLabel?: "Cancelled" | "Failed" | null };
+      expected: boolean;
+    }> = [
+      {
+        label: "single seeking",
+        state: { ...createInitialNavEngineState(), activeConfig: manualNavGoalConfig("single"), goal: null },
+        live: { placementActive: false, markerExists: true, outcomeAnimating: false },
+        expected: true,
+      },
+      {
+        label: "single preview (11cm drag regression)",
+        state: { ...createInitialNavEngineState(), activeConfig: manualNavGoalConfig("single"), goal: null },
+        live: { placementActive: true, markerExists: true, outcomeAnimating: false },
+        expected: true,
+      },
+      {
+        label: "single navigating",
+        state: {
+          ...createInitialNavEngineState(),
+          activeConfig: manualNavGoalConfig("single"),
+          goal: { since: 1, navigating: true },
+        },
+        live: { placementActive: false, markerExists: true, outcomeAnimating: false },
+        expected: false,
+      },
+      {
+        label: "continuous seeking",
+        state: { ...createInitialNavEngineState(), activeConfig: manualNavGoalConfig("continuous"), goal: null },
+        live: { placementActive: false, markerExists: true, outcomeAnimating: false },
+        expected: true,
+      },
+      {
+        label: "continuous preview",
+        state: { ...createInitialNavEngineState(), activeConfig: manualNavGoalConfig("continuous"), goal: null },
+        live: { placementActive: true, markerExists: true, outcomeAnimating: false },
+        expected: true,
+      },
+      {
+        label: "continuous navigating",
+        state: {
+          ...createInitialNavEngineState(),
+          activeConfig: manualNavGoalConfig("continuous"),
+          goal: { since: 1, navigating: true },
+        },
+        live: { placementActive: false, markerExists: true, outcomeAnimating: false },
+        expected: true,
+      },
+      {
+        label: "outcome",
+        state: { ...createInitialNavEngineState(), activeConfig: manualNavGoalConfig("single"), goal: null },
+        live: {
+          placementActive: false,
+          markerExists: true,
+          outcomeAnimating: true,
+          outcomeLabel: "Cancelled",
+        },
+        expected: true,
+      },
+    ];
+
+    for (const { label, state, live, expected } of cases) {
+      const view = deriveViewState(state, { ...liveFrom(live), outcomeLabel: live.outcomeLabel ?? null }, DEFAULT_CAPS)!;
+      expect(view.marker.portalCircleVisible, label).toBe(expected);
+    }
   });
 });
 
@@ -703,5 +783,67 @@ describe("remote nav goal updates (Phase 6)", () => {
     expect(view.marker.style).toBe("navigating");
     expect(view.placement.dragEnabled).toBe(false);
     expect(deriveAppNavigationState(view)).toBe("navigating");
+  });
+});
+
+describe("shouldSendStreamGoal", () => {
+  const lastSent = { position: new vec3(0, 0, 0) };
+  const farPose = new vec3(30, 0, 0);
+  const nearPose = new vec3(1, 0, 0);
+
+  it("force bypasses interval and distance gates", () => {
+    expect(
+      shouldSendStreamGoal(1.0, 1.0, farPose, lastSent, true),
+    ).toBe(true);
+  });
+
+  it("force within 2 cm of last sent goal is a no-op", () => {
+    expect(
+      shouldSendStreamGoal(1.0, 1.0, nearPose, lastSent, true),
+    ).toBe(false);
+    expect(GOAL_FORCE_NOOP_DISTANCE_CM).toBe(2.0);
+  });
+
+  it("non-forced stream respects interval and distance gates", () => {
+    expect(
+      shouldSendStreamGoal(1.0, 1.0, farPose, lastSent, false),
+    ).toBe(false);
+    expect(
+      shouldSendStreamGoal(1.0 + GOAL_SEND_INTERVAL_S, 1.0, nearPose, lastSent, false),
+    ).toBe(false);
+    expect(
+      shouldSendStreamGoal(
+        1.0 + GOAL_SEND_INTERVAL_S,
+        1.0,
+        farPose,
+        lastSent,
+        false,
+      ),
+    ).toBe(true);
+    expect(GOAL_SEND_MIN_DISTANCE_CM).toBe(20.0);
+  });
+});
+
+describe("navigation settled signal guard", () => {
+  it("does not treat terminal status as goal reached without a tracked goal", () => {
+    const state = {
+      ...createInitialNavEngineState(),
+      activeConfig: manualNavGoalConfig("single"),
+      goal: null,
+    };
+    expect(state.goal).toBeNull();
+    const result = applyNavigationEvent(state, { kind: "navStatusGoalReached" });
+    expect(result.effects).toHaveLength(0);
+  });
+
+  it("clears a tracked goal on navStatusGoalReached", () => {
+    const state = {
+      ...createInitialNavEngineState(),
+      activeConfig: manualNavGoalConfig("continuous"),
+      goal: { since: 1, navigating: true },
+    };
+    const result = applyNavigationEvent(state, { kind: "navStatusGoalReached" });
+    expect(result.state.goal).toBeNull();
+    expect(result.effects.some((effect) => effect.kind === "clearPath")).toBe(true);
   });
 });

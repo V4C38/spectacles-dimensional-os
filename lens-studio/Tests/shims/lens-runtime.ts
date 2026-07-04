@@ -51,6 +51,11 @@ export class quat {
     return new quat(1, 0, 0, 0);
   }
 
+  static angleBetween(a: quat, b: quat): number {
+    const dot = Math.abs(a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z);
+    return 2 * Math.acos(Math.min(1, dot));
+  }
+
   static slerp(a: quat, b: quat, t: number): quat {
     let dot = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
     let bx = b.w;

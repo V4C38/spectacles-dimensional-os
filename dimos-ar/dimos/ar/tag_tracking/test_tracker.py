@@ -557,6 +557,24 @@ def test_odom_tag_straightness_straight_vs_curved() -> None:
     assert _odom_tag_straightness(straight) < _odom_tag_straightness(curved)
 
 
+def test_odom_tag_straightness_near_collinear_returns_zero() -> None:
+    collinear = [
+        TagObservation(
+            mono_ts=float(i),
+            tag_id=0,
+            p_world_tag=(float(i), 0.0, 0.0),
+            p_odom_tag=(float(i), 0.0, 0.0),
+            T_world_tag=np.eye(4),
+            T_odom_tag=np.eye(4),
+            T_odom_base=np.eye(4),
+            quality=1.0,
+            reprojection_error_px=0.0,
+        )
+        for i in range(3)
+    ]
+    assert _odom_tag_straightness(collinear) == 0.0
+
+
 def test_process_frame_uses_provided_odom() -> None:
     odom = OdomSample(
         position=(1.0, 2.0, 3.0),

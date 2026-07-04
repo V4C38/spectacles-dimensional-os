@@ -190,6 +190,7 @@ def _odom_tag_straightness(observations: list[TagObservation]) -> float:
     u_c = u - u.mean(axis=0)
     cov = (u_c.T @ u_c) / len(u_c)
     lam2, lam1 = sorted(np.linalg.eigvalsh(cov))
+    lam2 = max(0.0, float(lam2))  # guard near-singular covariance numerical noise
     if lam1 <= 1e-9:
         return 1.0
     return float(math.sqrt(lam2 / lam1))

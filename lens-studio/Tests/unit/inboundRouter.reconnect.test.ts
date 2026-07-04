@@ -37,11 +37,13 @@ function makeRouter(phase: "registration" | "runtime") {
   const navigationPlacement = {
     applyPath: vi.fn(),
     applyNavStatus: vi.fn(),
+    applyNavGoalUpdate: vi.fn(),
     resyncPreviewGoal: vi.fn(),
     onDisconnect: vi.fn(),
     onHelloReset: vi.fn(),
     handleProtocolError: vi.fn(),
     resetForUserDisconnect: vi.fn(),
+    onNavigationSettled: new Signal<"succeeded" | "failed">(),
   };
 
   const statusClient = new StatusClient(null, null, null);

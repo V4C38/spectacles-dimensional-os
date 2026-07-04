@@ -2,6 +2,10 @@ import { NavigationTargetMarker } from "./NavigationTargetMarker";
 import type { PlacementInteractionPolicy } from "../../ARBridge/Navigation/NavigationModel";
 import { yawRotationFromPlanarDirection } from "../Utilities/Utilities";
 import {
+  maybeAdvanceDragHeadingTarget,
+  slerpRotationToward,
+} from "../Utilities/AnimationUtilities";
+import {
   RobotGroundDeadzone,
   SurfaceGroundProbe,
 } from "./SurfaceGroundProbe";
@@ -13,6 +17,8 @@ export type { RobotGroundDeadzone };
 // ================================================================
 
 const DRAG_THRESHOLD_CM = 11;
+const DRAG_HEADING_MIN_DELTA_CM = 3.0;
+const DRAG_HEADING_SMOOTHING_RATE = 8.0;
 const INTERPOLATION_SPEED = 10;
 const IDLE_FOLLOW_INTERPOLATION_SPEED = 8;
 const IDLE_FOLLOW_POSITION_EPSILON_CM = 0.25;
@@ -48,6 +54,8 @@ export class GroundPlacement {
   private touchStartPosition = vec3.zero();
   private _processingButtonPress = false;
   private _previousDragPosition: vec3 | null = null;
+  private _headingTarget = quat.quatIdentity();
+  private _headingGateOrigin: { x: number; z: number } = { x: 0, z: 0 };
   private _placementAnchor: SceneObject | null = null;
   private _confirmDeferralEvent: DelayedCallbackEvent | null = null;
   private _hitTestDeferralEvent: DelayedCallbackEvent | null = null;
@@ -261,6 +269,7 @@ export class GroundPlacement {
     this.activeInteractor = interactor ?? null;
     this.touchStartPosition = this.desiredPosition;
     this._previousDragPosition = null;
+    this._resetHeadingState(this.desiredPosition, this.desiredRotation);
     if (this._hasActivatedPlacement) {
       this._isDragging = true;
     }
@@ -329,10 +338,19 @@ export class GroundPlacement {
     }
     if (this._isDragging && this.activeInteractor) {
       this._maybeRebasePlacementAnchor();
+      const dt = getDeltaTime();
+      this.desiredRotation = slerpRotationToward(
+        this.desiredRotation,
+        this._headingTarget,
+        dt,
+        DRAG_HEADING_SMOOTHING_RATE,
+      );
       this._marker.interpolatePose(
         this.desiredPosition,
         this.desiredRotation,
         INTERPOLATION_SPEED,
+        INTERPOLATION_SPEED,
+        true,
       );
       this._emitPreviewTargetChanged(false);
     }
@@ -396,20 +414,23 @@ export class GroundPlacement {
   }
 
   private _updateDragHeading(planarPoint: vec3): void {
-    if (!this._previousDragPosition) {
-      this._previousDragPosition = planarPoint;
-      return;
-    }
-    const dx = planarPoint.x - this._previousDragPosition.x;
-    const dz = planarPoint.z - this._previousDragPosition.z;
-    const deltaMag = Math.sqrt(dx * dx + dz * dz);
-    if (deltaMag > 0.001) {
-      this.desiredRotation = yawRotationFromPlanarDirection(
-        dx / deltaMag,
-        dz / deltaMag,
+    const result = maybeAdvanceDragHeadingTarget(
+      this._headingGateOrigin,
+      { x: planarPoint.x, z: planarPoint.z },
+      DRAG_HEADING_MIN_DELTA_CM,
+    );
+    this._headingGateOrigin = result.gateOrigin;
+    if (result.headingDirection) {
+      this._headingTarget = yawRotationFromPlanarDirection(
+        result.headingDirection.x,
+        result.headingDirection.z,
       );
     }
-    this._previousDragPosition = planarPoint;
+  }
+
+  private _resetHeadingState(position: vec3, rotation: quat): void {
+    this._headingTarget = rotation;
+    this._headingGateOrigin = { x: position.x, z: position.z };
   }
 
   private _syncDesiredPoseToRenderedPose(): void {
@@ -436,6 +457,7 @@ export class GroundPlacement {
     }
     this.desiredPosition = new vec3(position.x, position.y, position.z);
     this.desiredRotation = rotation;
+    this._resetHeadingState(this.desiredPosition, rotation);
     this._groundProbe.reset(position.y);
     this.touchStartPosition = this.desiredPosition;
     this._bindPlacementAnchor(position);

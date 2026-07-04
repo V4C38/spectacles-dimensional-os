@@ -103,6 +103,7 @@ export class MarkerViewCore {
   private readonly moveDirectionArrow: SceneObject | null;
   private readonly dots: SceneObject | null;
   private readonly portalBaseScale: vec3;
+  private readonly navigatingBaseScale: vec3 | null;
   private readonly rootBaseScale: vec3;
   private readonly headingBaseScale: vec3 | null;
   private readonly dotsBaseScale: vec3 | null;
@@ -144,6 +145,8 @@ export class MarkerViewCore {
       );
     }
     this.portalBaseScale = this.portalCircle.getTransform().getLocalScale();
+    this.navigatingBaseScale =
+      this.circleNavigating?.getTransform().getLocalScale() ?? null;
     this.rootBaseScale = this.root.getTransform().getLocalScale();
     this.headingBaseScale = this.headingRoot?.getTransform().getLocalScale() ?? null;
     this.dotsBaseScale = this.dots?.getTransform().getLocalScale() ?? null;
@@ -181,6 +184,7 @@ export class MarkerViewCore {
     return this.confirmButton;
   }
 
+  /** Drag collider lives on portalCircle — disabling that object revokes drag mid-gesture. */
   public get dragInteractable(): Interactable | null {
     return this.portalCircle.getComponent(
       Interactable.getTypeName(),
@@ -268,7 +272,11 @@ export class MarkerViewCore {
     this._applyMarkerVisuals(view, animateEntrance);
     if (view.style === "seeking" && animateEntrance) {
       this._animateRootVisibility(true);
-      this._animateCircleScale(true);
+      if (view.navigatingCircleVisible && this.circleNavigating && this.navigatingBaseScale) {
+        this._animateCircleScale(true, this.circleNavigating, this.navigatingBaseScale);
+      } else {
+        this._animateCircleScale(true);
+      }
     }
   }
 
@@ -278,9 +286,11 @@ export class MarkerViewCore {
     const seeking = view.style === "seeking";
 
     if (this.circleNavigating) {
-      this.circleNavigating.enabled = navigating;
+      this.circleNavigating.enabled = view.navigatingCircleVisible;
     }
+    // Keep portalCircle enabled whenever portalCircleVisible — it hosts the drag Interactable.
     this.portalCircle.enabled = view.portalCircleVisible;
+    this._setCircleMeshVisible(this.portalCircle, view.portalCircleVisible);
     if (this.rotationLookAt) {
       this.rotationLookAt.enabled = false;
     }
@@ -308,9 +318,9 @@ export class MarkerViewCore {
     this._setMoveDirectionArrowSpeed(view.arrowSpeed);
     this._syncMoveDirectionArrowVisibility();
 
-    if (navigating) {
-      setMaterialPassProp(this.circleNavigating, "Saturation", 1);
-    } else if (seeking || view.style === "outcome") {
+    if (view.navigatingCircleVisible) {
+      setMaterialPassProp(this.circleNavigating, "Saturation", navigating ? 1 : 0);
+    } else if (seeking || preview || view.style === "outcome") {
       setMaterialPassProp(this.portalCircle, "Saturation", 0);
     }
 
@@ -371,6 +381,7 @@ export class MarkerViewCore {
     desiredRotation: quat,
     lerpSpeed: number,
     rotationLerpSpeed: number = lerpSpeed,
+    exactRotation: boolean = false,
   ): void {
     const transform = this.root.getTransform();
     const dt = getDeltaTime();
@@ -386,7 +397,11 @@ export class MarkerViewCore {
         vec3.lerp(transform.getWorldPosition(), desiredPosition, alpha),
       );
     }
-    this.setRotation(quat.slerp(this._rotation, desiredRotation, rotationAlpha));
+    if (exactRotation) {
+      this.setRotation(desiredRotation);
+    } else {
+      this.setRotation(quat.slerp(this._rotation, desiredRotation, rotationAlpha));
+    }
   }
 
   public resetCircleAnimation(): void {
@@ -419,6 +434,7 @@ export class MarkerViewCore {
       scanAnimation: false,
       arrowSpeed: 0,
       portalCircleVisible: false,
+      navigatingCircleVisible: false,
     });
   }
 
@@ -444,6 +460,9 @@ export class MarkerViewCore {
   public teardownImmediate(): void {
     nextAnimationVersion(this.root, VISIBILITY_ANIMATION_VERSION_KEY);
     nextAnimationVersion(this.portalCircle, CIRCLE_SCALE_ANIMATION_VERSION_KEY);
+    if (this.circleNavigating) {
+      nextAnimationVersion(this.circleNavigating, CIRCLE_SCALE_ANIMATION_VERSION_KEY);
+    }
     nextAnimationVersion(this.root, OUTCOME_RESET_ANIMATION_VERSION_KEY);
     const dragInteractable = this.dragInteractable as any;
     if (dragInteractable) {
@@ -512,6 +531,7 @@ export class MarkerViewCore {
   private _restoreOutcomeVisualState(): void {
     nextAnimationVersion(this.root, OUTCOME_RESET_ANIMATION_VERSION_KEY);
     this.portalCircle.enabled = true;
+    this._setCircleMeshVisible(this.portalCircle, true);
     this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
     if (this.headingRoot && this.headingBaseScale) {
       this.headingRoot.getTransform().setLocalScale(this.headingBaseScale);
@@ -543,6 +563,7 @@ export class MarkerViewCore {
     this._restoreOutcomeVisualState();
     nextAnimationVersion(this.portalCircle, CIRCLE_SCALE_ANIMATION_VERSION_KEY);
     this.portalCircle.enabled = true;
+    this._setCircleMeshVisible(this.portalCircle, true);
     this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
     this.setConfirmVisible(false);
     this.setScanAnimationEnabled(false);
@@ -593,12 +614,25 @@ export class MarkerViewCore {
     this._syncMoveDirectionArrowVisibility();
   }
 
-  private _animateCircleScale(visible: boolean): void {
+  private _setCircleMeshVisible(circle: SceneObject, visible: boolean): void {
+    const visual = circle.getComponent(
+      "Component.RenderMeshVisual",
+    ) as RenderMeshVisual | null;
+    if (visual) {
+      visual.enabled = visible;
+    }
+  }
+
+  private _animateCircleScale(
+    visible: boolean,
+    target: SceneObject = this.portalCircle,
+    baseScale: vec3 = this.portalBaseScale,
+  ): void {
     animateLocalScale(
-      this.portalCircle,
-      visible ? this.portalBaseScale : vec3.zero(),
+      target,
+      visible ? baseScale : vec3.zero(),
       MARKER_VISIBILITY_DURATION_SECONDS,
-      this.portalCircle,
+      target,
       CIRCLE_SCALE_ANIMATION_VERSION_KEY,
       {
         enableOnStart: true,
@@ -787,8 +821,9 @@ export class NavigationMarker extends BaseScriptComponent {
     rotation: quat,
     lerpSpeed: number,
     rotationLerpSpeed?: number,
+    exactRotation?: boolean,
   ): void {
-    this._view?.interpolatePose(position, rotation, lerpSpeed, rotationLerpSpeed);
+    this._view?.interpolatePose(position, rotation, lerpSpeed, rotationLerpSpeed, exactRotation);
   }
 
   public setDragEnabled(enabled: boolean): void {

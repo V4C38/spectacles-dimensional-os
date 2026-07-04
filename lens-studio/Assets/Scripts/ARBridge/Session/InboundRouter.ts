@@ -133,6 +133,9 @@ export class InboundRouter {
     this.navigationClient.onNavGoalUpdate.add((msg) =>
       this.navigationPlacement.applyNavGoalUpdate(msg),
     );
+    this.navigationPlacement.onNavigationSettled.add((outcome) => {
+      this.frameCaptureController?.requestImmediateCapture();
+    });
     this.statusClient.onRuntimeSnapshot.add(() =>
       this.navigationPlacement.resyncPreviewGoal(),
     );

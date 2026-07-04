@@ -114,8 +114,13 @@ class RegistrationSessionFramesMixin:
         self._frame_in_flight = True
         try:
             receive_mono = time.monotonic()
-            world_frame_committed = self._registry.state.is_committed
-            T_committed = self._world_frame_refiner.committed_or_current_for_frame()
+            refining_committed_frame = self._refining_committed_frame()
+            world_frame_committed = refining_committed_frame
+            T_committed = (
+                self._world_frame_refiner.committed_or_current_for_frame()
+                if refining_committed_frame
+                else None
+            )
             if self._odom.latest() is None:
                 self._broadcast_status(
                     phase=RegistrationPhase.SCANNING,
@@ -145,7 +150,7 @@ class RegistrationSessionFramesMixin:
                 resolved_odom=resolved_odom,
                 frame_result=result,
             )
-            if world_frame_committed:
+            if refining_committed_frame:
                 self._world_frame_refiner.maybe_log_moving_robot_diag(
                     header=header,
                     receive_mono=receive_mono,
@@ -167,10 +172,10 @@ class RegistrationSessionFramesMixin:
         if not isinstance(raw_capture_ts, (int, float)) or not math.isfinite(float(raw_capture_ts)):
             return None
         capture_ts = float(raw_capture_ts)
-        world_frame_committed = self._registry.state.is_committed
+        refining_committed_frame = self._refining_committed_frame()
         lookup = (
             self._odom.at_interpolated_by_source
-            if world_frame_committed
+            if refining_committed_frame
             else self._odom.at_or_latest_by_source
         )
         return lookup(capture_ts)
@@ -204,6 +209,10 @@ class RegistrationSessionFramesMixin:
                 )
             return FrameAdmission.ACK_ONLY
         return FrameAdmission.PROCESS
+
+    def _refining_committed_frame(self) -> bool:
+        """Runtime refinement uses the committed frame; baseline registration must not."""
+        return self._registry.state.is_committed and not self._tag_tracker.active
 
     def _send_frame_ack(self, header: dict[str, Any]) -> None:
         self._sender.send(

@@ -36,6 +36,9 @@ export type NavEngineState = {
 };
 
 export const NAV_GOAL_ECHO_SUPPRESS_DISTANCE_CM = 25.0;
+export const GOAL_SEND_INTERVAL_S = 0.35;
+export const GOAL_SEND_MIN_DISTANCE_CM = 20.0;
+export const GOAL_FORCE_NOOP_DISTANCE_CM = 2.0;
 
 export const NAV_STATUS_STALE_TIMEOUT_S = 8.0;
 export const NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S = 2.0;
@@ -75,7 +78,10 @@ export type NavMarkerViewState = {
   outcomeLabel: string | null;
   scanAnimation: boolean;
   arrowSpeed: number;
+  /** Circle_Seeking mesh (single-mode seeking/outcome). */
   portalCircleVisible: boolean;
+  /** Circle_Navigating mesh (continuous mode). */
+  navigatingCircleVisible: boolean;
 };
 
 export type NavViewState = {
@@ -207,6 +213,31 @@ export function shouldIgnoreNavGoalUpdate(
   return false;
 }
 
+export function shouldSendStreamGoal(
+  now: number,
+  lastSendTime: number,
+  position: vec3,
+  lastSentGoal: { position: vec3 } | null,
+  force: boolean,
+): boolean {
+  if (force) {
+    if (
+      lastSentGoal &&
+      poseDistanceCm(lastSentGoal.position, position) < GOAL_FORCE_NOOP_DISTANCE_CM
+    ) {
+      return false;
+    }
+    return true;
+  }
+  if (now - lastSendTime < GOAL_SEND_INTERVAL_S) {
+    return false;
+  }
+  if (!lastSentGoal) {
+    return true;
+  }
+  return poseDistanceCm(lastSentGoal.position, position) >= GOAL_SEND_MIN_DISTANCE_CM;
+}
+
 export function deriveNavPhase(
   state: NavEngineState,
   live: NavLiveContext,
@@ -291,17 +322,20 @@ function resolveMarkerButton(
   if (style === "seeking" || style === "outcome") {
     return null;
   }
+  if (activelyDragging) {
+    return null;
+  }
   if (style === "preview") {
     if (config.mode === "continuous") {
       return {
         role: "cancel",
-        enabled: caps.cancelAvailable && !activelyDragging,
+        enabled: caps.cancelAvailable,
         label: caps.cancelAvailable ? "Cancel" : "Cancel\nUnavailable",
       };
     }
     return {
       role: "confirm",
-      enabled: caps.confirmAvailable && !activelyDragging,
+      enabled: caps.confirmAvailable,
       label: caps.confirmAvailable ? "Confirm" : "Confirm\nUnavailable",
     };
   }
@@ -396,7 +430,9 @@ export function deriveViewState(
       outcomeLabel: phase.kind === "outcome" ? phase.label : null,
       scanAnimation: navigating,
       arrowSpeed: navigating ? 1 : 0,
-      portalCircleVisible: continuous || style === "seeking" || style === "outcome",
+      portalCircleVisible: continuous || style !== "navigating",
+      navigatingCircleVisible:
+        style === "navigating" || (continuous && style !== "outcome"),
     },
     path: pathStyle ? { style: pathStyle } : null,
     placement,

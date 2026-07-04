@@ -7,6 +7,7 @@ gate, emits world_frame_correction when above deadband, and applies updated tran
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import math
 import time
 from typing import TYPE_CHECKING, Any, Literal
@@ -51,6 +52,7 @@ class WorldFrameRefiner:
         tag_tracker: RobotAprilTagTracker,
         runtime_profile: TagTrackingProfile,
         runtime_correction_enabled: bool,
+        on_correction_committed: Callable[[], None] | None = None,
     ) -> None:
         self._registry = registry
         self._telemetry = telemetry
@@ -61,6 +63,7 @@ class WorldFrameRefiner:
         self._tag_tracker = tag_tracker
         self._runtime_profile = runtime_profile
         self._runtime_correction_enabled = runtime_correction_enabled
+        self._on_correction_committed = on_correction_committed
         self._refinement_baseline: np.ndarray | None = None
         self._last_correction_log_mono: float = 0.0
         self._last_moving_diag_log_mono: float = 0.0
@@ -343,3 +346,5 @@ class WorldFrameRefiner:
             sample=odom,
             force=True,
         )
+        if self._on_correction_committed is not None:
+            self._on_correction_committed()
