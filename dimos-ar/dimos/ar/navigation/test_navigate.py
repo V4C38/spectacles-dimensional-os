@@ -183,7 +183,7 @@ async def test_late_path_after_goal_reached_does_not_revive_navigating() -> None
 
 @pytest.mark.asyncio
 async def test_handle_ar_goal_reached_failure_marks_goal_failed() -> None:
-    nav, _mock_server, _published_nav, _published_cancel = _make_nav()
+    nav, _mock_server, _published_nav, published_cancel = _make_nav()
     nav._nav_goal_pending = True
     nav._dimos_nav_state = "navigating"
 
@@ -193,6 +193,7 @@ async def test_handle_ar_goal_reached_failure_marks_goal_failed() -> None:
     assert nav._goal_reached is False
     assert nav._goal_failed is True
     assert nav._nav_goal_pending is False
+    assert len(published_cancel) == 2
 
 
 def test_goal_stall_no_path_emits_retryable_recovering() -> None:
@@ -512,7 +513,7 @@ def test_wire_sequence_estop() -> None:
 
 def test_wire_sequence_goal_failed() -> None:
     """goal reached false while pending emits failed."""
-    nav, mock_server, _published_nav, _published_cancel = _make_nav()
+    nav, mock_server, _published_nav, published_cancel = _make_nav()
     nav._nav_goal_pending = True
     nav._dimos_nav_state = "navigating"
     nav._nav_path_received = True
@@ -521,6 +522,7 @@ def test_wire_sequence_goal_failed() -> None:
 
     statuses = _all_nav_statuses(mock_server)
     assert statuses[-1]["phase"] == "failed"
+    assert len(published_cancel) == 2
 
 
 def test_goal_update_while_navigating_suppresses_idle_flap() -> None:
@@ -607,6 +609,23 @@ def test_agent_submit_rejected_before_world_frame_committed() -> None:
     assert published_nav == []
     wire = _all_wire_messages(mock_server)
     assert not any(m["type"] == "nav_goal_update" for m in wire)
+
+
+def test_submit_goal_rejected_when_robot_not_connected() -> None:
+    nav, mock_server, published_nav, _published_cancel = _make_nav()
+    nav._robot_connected = lambda: False
+    nav.submit_goal(
+        position=(1.0, 0.0, 2.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+        ts=1.0,
+        source="xr",
+    )
+    time.sleep(0.05)
+    assert published_nav == []
+    nav_status = _last_nav_status(mock_server)
+    assert nav_status["phase"] == "failed"
+    assert nav_status["error_code"] == 503
+    assert nav._session is None
 
 
 def test_world_frame_correction_redispatches_active_goal() -> None:

@@ -169,11 +169,14 @@ class TelemetryPublisher:
         self._pose_last_emit = now
         self._maybe_log_odom_egress_age(msg)
         speed_mps = self._odom.speed_windowed(now, self._speed_horizon_s)
+        velocity_mps, yaw_rate_rad_s = self._world_frame_kinematics(now)
         result = build_pose_payload(
             msg,
             world_frame=self._world_frame,
             sample_odom=self._odom.sample,
             speed_mps=speed_mps,
+            velocity_mps=velocity_mps,
+            yaw_rate_rad_s=yaw_rate_rad_s,
         )
         if result is None:
             self._dropped_pose_count += 1
@@ -203,11 +206,14 @@ class TelemetryPublisher:
         if not force and pose_interval > 0 and now - self._pose_last_emit < pose_interval:
             return False
         speed_mps = self._odom.speed_windowed(now, self._speed_horizon_s)
+        velocity_mps, yaw_rate_rad_s = self._world_frame_kinematics(now)
         result = build_pose_payload_from_sample(
             sample,
             ts=ts,
             world_frame=self._world_frame,
             speed_mps=speed_mps,
+            velocity_mps=velocity_mps,
+            yaw_rate_rad_s=yaw_rate_rad_s,
         )
         if result is None:
             self._dropped_pose_count += 1
@@ -223,6 +229,16 @@ class TelemetryPublisher:
         self._sender.send(pose_payload)
         self._pose_last_emit = time.monotonic()
         return True
+
+    def _world_frame_kinematics(
+        self, mono_ts: float
+    ) -> tuple[tuple[float, float, float] | None, float | None]:
+        odom_velocity = self._odom.velocity_windowed(mono_ts, self._speed_horizon_s)
+        velocity_mps = (
+            self._world_frame.rotate_vector(odom_velocity) if odom_velocity is not None else None
+        )
+        yaw_rate_rad_s = self._odom.yaw_rate_windowed(mono_ts, self._speed_horizon_s)
+        return velocity_mps, yaw_rate_rad_s
 
     def _target_points_for_mode(self) -> int:
         if self._lidar_mode == "obstacles":

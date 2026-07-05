@@ -75,8 +75,8 @@ export const REGISTRATION_DESCRIPTION_MANUAL =
 export const REGISTRATION_STATUS_MANUAL = "Complete to confirm manual Registration";
 
 export const WIZARD_STEP_DESCRIPTIONS: string[] = [
-  "Power on your robot.\nRun ./start.sh in dimos-ar on your Mac.",
-  "Enter your Mac's IP.\nWait for ./start.sh to print \"Bridge ready\".\nUse same Wi‑Fi for robot, Mac, and Spectacles.",
+  "Power on your robot.\nRun ./scripts/start.sh on your Mac.",
+  "Enter your Mac's IP.\nWait for ./scripts/start.sh to print \"Bridge ready\".\nUse same Wi‑Fi for robot, Mac, and Spectacles.",
   buildRegistrationDescriptionAuto(NO_ROBOT_CONNECTED_LABEL),
 ];
 
@@ -200,7 +200,7 @@ export function buildRegistrationDisplay(
       return {
         statusText: NO_RESPONSE_STATUS_MSG,
         statusColor: COLOR_ERROR,
-        detailText: "Check that ./start.sh is running, then retry or switch to Manual pose",
+        detailText: "Check that ./scripts/start.sh is running, then retry or switch to Manual pose",
         detailColor: COLOR_WHITE,
       };
     }

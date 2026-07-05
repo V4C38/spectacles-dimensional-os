@@ -2,7 +2,7 @@
 # Start the dimos-ar bridge from this monorepo package.
 #
 # Usage:
-#   ./start.sh              # choose the target robot stack interactively
+#   ./scripts/start.sh              # choose the target robot stack interactively
 #
 # The robot is auto-discovered on the LAN (Unitree multicast). When several are
 # found you get a selector; when none are found it falls back to offline replay.
@@ -17,9 +17,10 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIMOS_AR_ROOT="${ROOT}/dimos-ar"
-source "${ROOT}/scripts/_dimos_env.sh"
+source "${SCRIPT_DIR}/dimos_lib.sh"
 
 print_green_stdout() {
   if [[ -t 1 ]]; then
@@ -155,7 +156,17 @@ resolve_robot_ip() {
   echo "Discovering robots on the network..." >&2
   while IFS= read -r line; do
     [[ -n "${line}" ]] && discovered+=("${line}")
-  done < <("${PYTHON}" "${ROOT}/scripts/discover_robot.py" 2>/dev/null)
+  done < <("${PYTHON}" -c "
+from dimos.robot.unitree.go2.cli.landiscovery import discover
+
+try:
+    devices = discover(timeout=2.0)
+except OSError:
+    devices = []
+
+for device in devices:
+    print(f'{device.serial}\t{device.ip}')
+" 2>/dev/null)
 
   count=${#discovered[@]}
 
@@ -180,7 +191,7 @@ resolve_robot_ip() {
 
   print_red_stderr "No robots found on the network — using offline replay (ROBOT_IP=fake)."
   echo "Set ROBOT_IP=<ip> and re-run to target a specific robot." >&2
-  echo "Tip: ROBOT_IP=fake ./start.sh skips discovery and starts faster." >&2
+  echo "Tip: ROBOT_IP=fake ./scripts/start.sh skips discovery and starts faster." >&2
   ROBOT_IP="fake"
 }
 
@@ -204,7 +215,7 @@ echo "Stack:        ${STACK_LABEL}"
 echo "Equivalent:   ${EQUIVALENT}"
 echo "Robot IP:     ${ROBOT_IP}"
 echo "WebSocket:    ws://${LISTEN_HOST}:8787 (not listening yet — booting DimOS stack…)"
-echo "Log level:    ${DIMOS_LOG_LEVEL} (quieter: DIMOS_LOG_LEVEL=INFO ./start.sh)"
+echo "Log level:    ${DIMOS_LOG_LEVEL} (quieter: DIMOS_LOG_LEVEL=INFO ./scripts/start.sh)"
 echo "Logs:         stdout + ~/.local/state/dimos/logs/.../main.jsonl (dimos log -f)"
 print_green_stdout "Spectacles:   enter ${LAN_IP} in the lens"
 echo ""

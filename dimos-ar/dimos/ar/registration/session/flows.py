@@ -86,7 +86,12 @@ class RegistrationFlowsMixin:
                     ts=msg.ts,
                 )
                 return
+
+        self._registry.clear()
+
+        if self._session.mode == RegistrationMode.APRIL_ODOM_BASELINE:
             self._set_tag_tracker_active(True, reason="baseline_start")
+            assert self._baseline is not None
             self._baseline.start()
         else:
             self._set_tag_tracker_active(False, reason="manual_mode")

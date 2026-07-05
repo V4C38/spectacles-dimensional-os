@@ -4,7 +4,9 @@ import {
   validateSessionFields,
   nextLidarMode,
   createDefaultAppStateData,
+  createDefaultBridgeSnapshot,
   bridgeLinkPresentation,
+  bridgeLinkTransitionLog,
   navigationOutcomePresentation,
   robotActivityPresentation,
   robotMarkerSteadyStatePresentation,
@@ -26,6 +28,7 @@ function runtimeState(
 function baseState(patch: Partial<AppStateData> = {}): AppStateData {
   return {
     phase: "runtime",
+    runtimeEstablished: true,
     debugMode: false,
     lidarMode: "obstacles",
     operatingMode: "manual",
@@ -34,6 +37,7 @@ function baseState(patch: Partial<AppStateData> = {}): AppStateData {
     navigationOutcome: defaultNavigationOutcome(),
     navigationGoalMode: "single",
     bridgeLinkState: "disconnected",
+    bridgeSnapshot: createDefaultBridgeSnapshot(),
     robotRuntime: runtimeState(),
     driftState: createDefaultAppStateData().driftState,
     ...patch,
@@ -106,6 +110,7 @@ describe("createDefaultAppStateData", () => {
     expect(state.operatingMode).toBe("manual");
     expect(state.bridgeLinkState).toBe("disconnected");
     expect(state.navigationState).toBe("off");
+    expect(state.navigationGoalMode).toBe("continuous");
   });
 });
 
@@ -151,6 +156,32 @@ describe("bridgeLinkPresentation", () => {
   });
 });
 
+describe("bridgeLinkTransitionLog", () => {
+  it("returns robot disconnect when connected to connectedNoRobot", () => {
+    expect(bridgeLinkTransitionLog("connected", "connectedNoRobot")).toEqual({
+      hudText: "Robot disconnected",
+      hudColor: COLOR_ERROR,
+      consoleText: "Robot disconnected",
+      consoleColor: COLOR_ERROR,
+      hudDurationS: 3.0,
+    });
+  });
+
+  it("returns robot connected when recovering from connectedNoRobot", () => {
+    expect(bridgeLinkTransitionLog("connectedNoRobot", "connected")).toEqual({
+      hudText: "Robot connected",
+      hudColor: COLOR_SUCCESS,
+      consoleText: "Robot connected",
+      consoleColor: COLOR_SUCCESS,
+      hudDurationS: 2.0,
+    });
+  });
+
+  it("returns null when link state is unchanged", () => {
+    expect(bridgeLinkTransitionLog("connected", "connected")).toBeNull();
+  });
+});
+
 describe("robotActivityPresentation", () => {
   it("prefers navigation outcome over steady state", () => {
     expect(
@@ -169,6 +200,17 @@ describe("robotActivityPresentation", () => {
         }),
       ),
     ).toEqual({ text: "Navigating", color: COLOR_WHITE });
+  });
+
+  it("shows robot offline when bridge link is connectedNoRobot", () => {
+    expect(
+      robotActivityPresentation(
+        baseState({
+          bridgeLinkState: "connectedNoRobot",
+          navigationState: "navigating",
+        }),
+      ),
+    ).toEqual({ text: "Robot offline", color: COLOR_ERROR });
   });
 });
 
@@ -194,6 +236,14 @@ describe("robotMarkerSteadyStatePresentation", () => {
     ).toEqual({ text: "Idle", color: COLOR_WHITE });
   });
 
+  it("returns Robot offline when bridge link is connectedNoRobot", () => {
+    expect(
+      robotMarkerSteadyStatePresentation(
+        baseState({ bridgeLinkState: "connectedNoRobot" }),
+      ),
+    ).toEqual({ text: "Robot offline", color: COLOR_ERROR });
+  });
+
   it("returns Navigating for agent mode when navigation is active", () => {
     expect(
       robotMarkerSteadyStatePresentation(
@@ -205,7 +255,7 @@ describe("robotMarkerSteadyStatePresentation", () => {
     ).toEqual({ text: "Navigating", color: COLOR_WHITE });
   });
 
-  it("returns Following for agent mode with continuous goal mode", () => {
+  it("returns Navigating for agent mode with continuous goal mode", () => {
     expect(
       robotMarkerSteadyStatePresentation(
         baseState({
@@ -214,7 +264,7 @@ describe("robotMarkerSteadyStatePresentation", () => {
           navigationGoalMode: "continuous",
         }),
       ),
-    ).toEqual({ text: "Following", color: COLOR_WHITE });
+    ).toEqual({ text: "Navigating", color: COLOR_WHITE });
   });
 });
 

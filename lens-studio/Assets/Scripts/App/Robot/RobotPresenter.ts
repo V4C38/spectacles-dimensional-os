@@ -12,11 +12,8 @@ import { protocolMetersToLensCentimeters, PoseMessage } from "../../ARBridge/Net
 import { TelemetryClient } from "../../ARBridge/Telemetry/TelemetryClient";
 import { ARBridgeSession } from "../../ARBridge/Network/ARBridgeSession";
 import { runtimeRenderOffsetCm } from "./RobotRuntimeModel";
-import { COLOR_WHITE } from "../UI/kit/UIKit";
 import { UILogEntry } from "../UI/UILogger";
 
-const REFINED_TRACKING_LOG_TEXT = "- Refined Tracking -";
-const REFINED_TRACKING_LOG_DURATION_S = 0.5;
 const LIDAR_STALE_CLEAR_S = 3.0;
 
 export interface RobotPresenterMenuCallbacks {
@@ -68,6 +65,12 @@ export class RobotPresenter {
         getIsRuntimePhase: () => this.isRuntimePhase(),
         getOperatingMode: () => menuCallbacks.getOperatingMode(),
         getInteractionMode: () => this.appState.snapshot.robotInteractionMode,
+        getRobotClockNowS: () => {
+          if (this.session?.isClockSyncReady) {
+            return this.session.mapCaptureTime(getTime());
+          }
+          return null;
+        },
         onWorldPositionChanged: () => this.refreshLidarPresentation(),
       });
       this.robotMarker.bindUiCallbacks({
@@ -86,11 +89,6 @@ export class RobotPresenter {
     });
 
     this.telemetry?.onWorldFrameCorrection.add(() => {
-      this.appState.uiLogger.show(
-        REFINED_TRACKING_LOG_TEXT,
-        COLOR_WHITE,
-        REFINED_TRACKING_LOG_DURATION_S,
-      );
       this.robotMarker?.beginRealignmentSnap();
     });
 
@@ -102,10 +100,10 @@ export class RobotPresenter {
     this.refreshLidarPresentation();
   }
 
-  public applyPendingPose(): void {
+  public applyPendingPose(): boolean {
     const msg = this.telemetry?.consumePendingPose() ?? null;
     if (!msg) {
-      return;
+      return false;
     }
     if (this.isRuntimePhase() && this.robotMarker) {
       const resolved = this._manualRegistrationAlignment.resolveRobotMarkerPose(
@@ -114,6 +112,7 @@ export class RobotPresenter {
       );
       this.robotMarker.applyRobotMarkerPose(resolved, msg);
     }
+    return true;
   }
 
   public tickFrame(): void {

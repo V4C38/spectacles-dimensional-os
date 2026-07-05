@@ -37,14 +37,14 @@ flowchart LR
 
    ```bash
    cd /path/to/spectacles-dimensional-os
-   ./setup.sh
+   ./scripts/setup.sh
    ```
 
 2. Start the XR bridge:
 
    ```bash
    cd /path/to/spectacles-dimensional-os
-   ./start.sh
+   ./scripts/start.sh
    ```
 
 3. Open [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj) in Lens Studio and push to device.
@@ -92,7 +92,7 @@ The Lens side is organized around three scene-entry scripts plus one wiring hub:
 
 - [`ARBridgeServices.ts`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) owns scene `@input`s and plain runtime service instances (`AppStateStore`, `InboundRouter`, `RegistrationClient`, `RobotPresenter`, `NavigationPlacement`, …).
 - [`ARBridgeCoordinator.ts`](lens-studio/Assets/Scripts/App/ARBridgeCoordinator.ts) is the orchestration hub for phase/mode lifecycle; it delegates to `ARBridgeServices`.
-- [`RegistrationWizard.ts`](lens-studio/Assets/Scripts/App/Registration/RegistrationWizard.ts) owns the connect-and-register flow and hands off to runtime. Check Lens Studio Logger output and `./start.sh` bridge logs when registration fails.
+- [`RegistrationWizard.ts`](lens-studio/Assets/Scripts/App/Registration/RegistrationWizard.ts) owns the connect-and-register flow and hands off to runtime. Check Lens Studio Logger output and `./scripts/start.sh` bridge logs when registration fails.
 - [`UIManager.ts`](lens-studio/Assets/Scripts/App/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
 
 [`ARBridgeSession`](lens-studio/Assets/Scripts/ARBridge/Network/ARBridgeSession.ts) owns WebSocket transport and the hello handshake; [`InboundProcessor`](lens-studio/Assets/Scripts/ARBridge/Network/InboundProcessor.ts) parses inbound frames into typed signals. [`InboundRouter`](lens-studio/Assets/Scripts/ARBridge/Session/InboundRouter.ts) fans those signals out to domain `*Client` classes (`StatusClient`, `TelemetryClient`, `NavigationClient`, `RegistrationClient`) and app presenters (`RobotPresenter`, `NavigationPlacement`). `RegistrationFlow` owns registration-step UI state; `RegistrationClient` is the single owner of the bridge registration session. `DeviceCameraStream` is a singleton wrapper around the Spectacles colour camera shared by registration and runtime capture. Visuals live under `App/Robot/`, `App/Lidar/`, and `App/Navigation/`.
@@ -166,12 +166,12 @@ flowchart TB
 <details>
 <summary>Runtime support and capabilities</summary>
 
-Supported runtimes (selected interactively by `./start.sh`):
+Supported runtimes (selected interactively by `./scripts/start.sh`):
 
 - `ar-go2` — Unitree Go2 stack (full navigation and AprilTag registration when the onboard modules are available; capability states may negotiate reduced features on lighter stacks).
 - `ar-g1` — Unitree G1 nav-onboard stack (requires the Unitree DDS Python package set in the DimOS `.venv` for onboard navigation).
 
-Direct `dimos run ar-go2` / `dimos run ar-g1` work once these blueprints are registered upstream in DimOS; until then, use `./start.sh`.
+Direct `dimos run ar-go2` / `dimos run ar-g1` work once these blueprints are registered upstream in DimOS; until then, use `./scripts/start.sh`.
 
 On the Lens side, runtime behavior is negotiated from the bridge handshake:
 - `AppState` projects robot/runtime metadata from the bridge and carries the coarse bridge-link state used by the setup and runtime UI.
@@ -183,26 +183,26 @@ On the Lens side, runtime behavior is negotiated from the bridge handshake:
 <details>
 <summary>Start the blueprint</summary>
 
-The monorepo provides `start.sh` as a convenience wrapper around native DimOS composition:
+The monorepo provides `scripts/start.sh` as a convenience wrapper around native DimOS composition:
 
 ```bash
 cd /path/to/spectacles-dimensional-os
-./start.sh
+./scripts/start.sh
 ```
 
-`./start.sh` always prompts for the target robot stack, then runs the bridge against the selected composition. The equivalent native commands are:
+`./scripts/start.sh` always prompts for the target robot stack, then runs the bridge against the selected composition. The equivalent native commands are:
 
 ```bash
 dimos run ar-go2
 dimos run ar-g1
 ```
 
-Use `./start.sh` if the blueprints are not yet registered in your DimOS install.
+Use `./scripts/start.sh` if the blueprints are not yet registered in your DimOS install.
 
 If DimOS lives somewhere unusual, set `DIMOS_PYTHON` explicitly:
 
 ```bash
-DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3 ./start.sh
+DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3 ./scripts/start.sh
 ```
 
 </details>
@@ -233,11 +233,11 @@ Do not put `*.test.ts` under `lens-studio/Assets/` — the Lens compiler globs a
 **Reproduce CI locally** — GitHub Actions runs both jobs in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). From the repo root:
 
 ```bash
-chmod +x scripts/ci-test.sh   # first time only
-./scripts/ci-test.sh
+chmod +x scripts/run-ci.sh   # first time only
+./scripts/run-ci.sh
 ```
 
-That script mirrors CI exactly: `dimos-ar` installs the same pinned deps as the workflow (into a throwaway venv at `/tmp/spectacles-dimensional-os-ci-venv`), then runs `ruff check .`, `mypy dimos/ar`, and `pytest -m "not integration"`; `lens-studio-tests` runs `npm ci && npm test`. Override the interpreter with `CI_PYTHON=/path/to/python3.12 ./scripts/ci-test.sh` if needed.
+That script mirrors CI exactly: `dimos-ar` installs the same pinned deps as the workflow (into a throwaway venv at `/tmp/spectacles-dimensional-os-ci-venv`), then runs `ruff check .`, `mypy dimos/ar`, and `pytest -m "not integration"`; `lens-studio-tests` runs `npm ci && npm test`. Override the interpreter with `CI_PYTHON=/path/to/python3.12 ./scripts/run-ci.sh` if needed.
 
 To run the jobs manually instead:
 
@@ -283,7 +283,7 @@ Python tests are colocated with their modules under `dimos-ar/dimos/ar/`. See [`
 <summary>Transport, ports, and discovery</summary>
 
 - XR bridge WebSocket listens on **8787**; avoid binding port **8765** on the same machine while Foxglove is running.
-- `start.sh` chooses the stack interactively at launch, between `ar-go2` and `ar-g1`.
+- `scripts/start.sh` chooses the stack interactively at launch, between `ar-go2` and `ar-g1`.
 - `ar-g1` always composes on top of the Unitree G1 nav-onboard blueprint; navigation requires the Unitree DDS Python package set in the DimOS `.venv`, while manual registration stays available regardless.
 
 </details>

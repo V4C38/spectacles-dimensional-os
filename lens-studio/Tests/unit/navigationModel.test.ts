@@ -235,7 +235,7 @@ describe("applyNavigationEvent goal lifecycle", () => {
     expect(respawn).toEqual({ kind: "respawnMarkerAt", animated: false });
   });
 
-  it("clears goal without respawn on continuous goal reached", () => {
+  it("clears goal and respawns marker on continuous goal reached", () => {
     const config = manualNavGoalConfig("continuous");
     const state = {
       ...createInitialNavEngineState(),
@@ -243,7 +243,7 @@ describe("applyNavigationEvent goal lifecycle", () => {
       goal: { since: 1, navigating: true },
     };
     const result = applyNavigationEvent(state, { kind: "navStatusGoalReached" });
-    expect(result.effects.some((effect) => effect.kind === "respawnMarkerAt")).toBe(false);
+    expect(result.effects.some((effect) => effect.kind === "respawnMarkerAt")).toBe(true);
     expect(result.state.goal).toBeNull();
     expect(result.state.activeConfig).toEqual(config);
   });
@@ -285,6 +285,7 @@ describe("applyNavigationEvent goal lifecycle", () => {
       goal: { since: 1, navigating: true },
     };
     const result = applyNavigationEvent(state, { kind: "navStatusGoalFailed" });
+    expect(result.effects.some((effect) => effect.kind === "sendCancelGoal")).toBe(true);
     expect(
       result.effects.some(
         (effect) => effect.kind === "beginOutcomeAnimation" && effect.label === "Failed",
@@ -606,6 +607,7 @@ describe("single-mode effect sequences (Phase 0 oracle)", () => {
       { kind: "navigating" },
       { kind: "navStatusGoalFailed" },
     ]);
+    expect(allEffects[3]).toContain("sendCancelGoal");
     expect(allEffects[3]).toContain("beginOutcomeAnimation");
     expect(allEffects[3]).not.toContain("respawnMarkerAt");
   });
@@ -645,14 +647,14 @@ describe("continuous mode semantics (Phase 1L targets)", () => {
     expect(goalCommitAllowed(view, "stream")).toBe(true);
   });
 
-  it("does not respawn at robot on continuous goal reached", () => {
+  it("respawns at robot on continuous goal reached", () => {
     const state = {
       ...createInitialNavEngineState(),
       activeConfig: continuous,
       goal: { since: 1, navigating: true },
     };
     const result = applyNavigationEvent(state, { kind: "navStatusGoalReached" });
-    expect(result.effects.some((e) => e.kind === "respawnMarkerAt")).toBe(false);
+    expect(result.effects.some((e) => e.kind === "respawnMarkerAt")).toBe(true);
     expect(result.state.goal).toBeNull();
     expect(result.state.activeConfig).toEqual(continuous);
   });

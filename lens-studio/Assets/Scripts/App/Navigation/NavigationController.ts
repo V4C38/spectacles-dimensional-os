@@ -18,6 +18,8 @@ import {
   toSessionState,
 } from "../AppState";
 import { AppStateStore } from "../AppState";
+import { COLOR_ERROR } from "../UI/kit/UIKit";
+import { UILogger } from "../UI/UILogger";
 import { RobotMarker } from "../Robot/RobotMarker";
 import { RobotPresenter } from "../Robot/RobotPresenter";
 import {
@@ -65,6 +67,7 @@ const GOAL_COMMIT_LOG_INTERVAL_S = 2.0;
 const GOAL_REACHED_RETARGET_CM = 25.0;
 const PREVIEW_INTERVAL_S = 0.25;
 const PREVIEW_STALE_TARGET_DISTANCE_CM = 12.0;
+const GOAL_SEND_BLOCKED_LOG_INTERVAL_S = 2.0;
 
 const WorldQueryModule = require("LensStudio:WorldQueryModule");
 
@@ -105,6 +108,8 @@ export class NavigationController {
   private _previewTarget: { position: vec3; rotation: quat } | null = null;
   private _lastPreviewRequestTime = -PREVIEW_INTERVAL_S;
   private _protocolParseFailureCount = 0;
+  private _uiLogger: UILogger | null = null;
+  private _lastGoalSendBlockedLogTime = -GOAL_SEND_BLOCKED_LOG_INTERVAL_S;
 
   constructor(
     private readonly _script: BaseScriptComponent,
@@ -170,6 +175,7 @@ export class NavigationController {
       return;
     }
     this._hostBound = true;
+    this._uiLogger = deps.appStateStore.uiLogger;
     deps.appStateStore.subscribe((state) => this.applyRuntimeState(state.robotRuntime));
     const placementDeferral = this._script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
     placementDeferral.bind(() => this.syncManualNavigationState());
@@ -599,10 +605,20 @@ export class NavigationController {
             rotation: pose.rotation,
           };
           this._lastGoalSendTime = getTime();
+        } else if (pose) {
+          this._logGoalSendBlocked();
         }
         break;
       }
       case "respawnMarkerAt": {
+        const config = this._engine.activeConfig;
+        if (
+          config?.mode === "continuous" &&
+          config.interactive &&
+          this._placement.isActivelyDragging()
+        ) {
+          break;
+        }
         const pose = effect.pose ?? this._getNavigationPlacementStartPose();
         if (!pose) {
           break;
@@ -923,26 +939,47 @@ export class NavigationController {
     return true;
   }
 
-  public syncIdlePlacementFollow(): void {
-    this._syncIdlePlacementPose();
+  public syncIdleContinuousNavigationPlacement(snap: boolean = false): void {
+    this._syncIdlePlacementPose(snap);
   }
 
-  private _syncIdlePlacementPose(): void {
+  private _syncIdlePlacementPose(snap: boolean = false): void {
     if (!this._engine.activeConfig?.interactive) {
+      return;
+    }
+    if (this._placement.isActivelyDragging()) {
       return;
     }
     const view = this._viewState();
     if (view?.placement.followRobot) {
       this._placement.setInteractionPolicy(view.placement);
     }
-    if (!this._placement.isIdleFollowingRobot()) {
+    if (!this._placement.isIdleContinuousNavigation()) {
       return;
     }
     const pose = this._getNavigationPlacementStartPose();
     if (!pose) {
       return;
     }
-    this._placement.syncIdlePose(pose.position, pose.rotation);
+    if (snap) {
+      this._placement.snapIdlePose(pose.position, pose.rotation);
+    } else {
+      this._placement.syncIdlePose(pose.position, pose.rotation);
+    }
+  }
+
+  private _logGoalSendBlocked(): void {
+    if (!this._uiLogger) {
+      return;
+    }
+    const now = getTime();
+    if (now - this._lastGoalSendBlockedLogTime < GOAL_SEND_BLOCKED_LOG_INTERVAL_S) {
+      return;
+    }
+    this._lastGoalSendBlockedLogTime = now;
+    const message = "Cannot send goal — robot not connected";
+    this._uiLogger.logConsole(message, COLOR_ERROR);
+    this._uiLogger.show(message, COLOR_ERROR, 2.0);
   }
 
   private _poseFromWire(

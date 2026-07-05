@@ -11,7 +11,6 @@ import {
 import { UILogListener, UILogger } from "./UI/UILogger";
 import { TagTrackingProfile, RegistrationMode } from "../ARBridge/Network/Protocol";
 import {
-  isFollowingMode,
   NAV_GOAL_MODE_LABELS,
   NavigationGoalMode,
   nextNavigationGoalMode,
@@ -156,6 +155,52 @@ export function bridgeLinkPresentation(
   }
 }
 
+export interface BridgeLinkTransitionLog {
+  hudText: string;
+  hudColor: vec4;
+  consoleText: string;
+  consoleColor: vec4;
+  hudDurationS?: number;
+}
+
+/** UILogger + HUD copy when bridgeLinkState changes (runtime). */
+export function bridgeLinkTransitionLog(
+  prev: BridgeLinkState,
+  next: BridgeLinkState,
+): BridgeLinkTransitionLog | null {
+  if (prev === next) {
+    return null;
+  }
+  if (next === "disconnected") {
+    return {
+      hudText: "Bridge disconnected",
+      hudColor: COLOR_ERROR,
+      consoleText: "Bridge disconnected",
+      consoleColor: COLOR_ERROR,
+      hudDurationS: 3.0,
+    };
+  }
+  if (prev === "connected" && next === "connectedNoRobot") {
+    return {
+      hudText: "Robot disconnected",
+      hudColor: COLOR_ERROR,
+      consoleText: "Robot disconnected",
+      consoleColor: COLOR_ERROR,
+      hudDurationS: 3.0,
+    };
+  }
+  if (prev === "connectedNoRobot" && next === "connected") {
+    return {
+      hudText: "Robot connected",
+      hudColor: COLOR_SUCCESS,
+      consoleText: "Robot connected",
+      consoleColor: COLOR_SUCCESS,
+      hudDurationS: 2.0,
+    };
+  }
+  return null;
+}
+
 /** Robot HUD + menu activity line (Idle, Navigating, outcome, future agent bridge states). */
 export function robotActivityPresentation(
   state: AppStateData,
@@ -169,6 +214,9 @@ export function robotActivityPresentation(
 export function robotMarkerSteadyStatePresentation(
   state: AppStateData,
 ): StatusTextPresentation {
+  if (state.phase === "runtime" && state.bridgeLinkState === "connectedNoRobot") {
+    return { text: "Robot offline", color: COLOR_ERROR };
+  }
   if (state.operatingMode === "registration") {
     return { text: "", color: COLOR_WHITE };
   }
@@ -179,10 +227,7 @@ export function robotMarkerSteadyStatePresentation(
     }
   }
   if (state.navigationState === "navigating") {
-    return {
-      text: isFollowingMode(state.navigationGoalMode) ? "Following" : "Navigating",
-      color: COLOR_WHITE,
-    };
+    return { text: "Navigating", color: COLOR_WHITE };
   }
   return { text: "Idle", color: COLOR_WHITE };
 }
@@ -396,7 +441,7 @@ export function createDefaultAppStateData(): AppStateData {
     debugMode: false,
     lidarMode: "off",
     operatingMode: "manual",
-    navigationGoalMode: "single",
+    navigationGoalMode: "continuous",
     navigationState: "off",
     robotInteractionMode: "hidden",
     navigationOutcome: defaultNavigationOutcome(),

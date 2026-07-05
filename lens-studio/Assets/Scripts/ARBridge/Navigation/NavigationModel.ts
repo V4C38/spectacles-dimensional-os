@@ -165,7 +165,7 @@ export function nextNavigationGoalMode(mode: NavigationGoalMode): NavigationGoal
   return mode === "single" ? "continuous" : "single";
 }
 
-export function isFollowingMode(mode: NavigationGoalMode): boolean {
+export function isContinuousNavigationMode(mode: NavigationGoalMode): boolean {
   return mode === "continuous";
 }
 
@@ -513,7 +513,7 @@ export function bumpNavResyncCooldown(state: NavEngineState, now: number): NavEn
 }
 
 function shouldRespawnAtRobotOnSuccess(config: NavGoalConfig): boolean {
-  return config.mode === "single" && config.interactive;
+  return config.interactive;
 }
 
 function shouldDeleteMarkerOnSuccess(config: NavGoalConfig): boolean {
@@ -662,6 +662,7 @@ export function applyNavigationEvent(
       }
       next = clearGoal(next);
       push(
+        { kind: "sendCancelGoal" },
         { kind: "clearPath" },
         { kind: "beginOutcomeAnimation", label: "Failed" },
         { kind: "syncAppNavigationState" },

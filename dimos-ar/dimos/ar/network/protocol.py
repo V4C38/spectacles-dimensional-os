@@ -485,6 +485,8 @@ def encode_pose(
     position: tuple[float, float, float],
     orientation: tuple[float, float, float, float],
     speed_mps: float | None = None,
+    velocity_mps: tuple[float, float, float] | None = None,
+    yaw_rate_rad_s: float | None = None,
 ) -> str:
     safe_position, safe_orientation = _sanitize_pose_values(position, orientation)
     payload: dict[str, Any] = {
@@ -495,6 +497,10 @@ def encode_pose(
     }
     if speed_mps is not None:
         payload["speed_mps"] = round(float(speed_mps), 4)
+    if velocity_mps is not None:
+        payload["velocity_mps"] = _round_vec3(velocity_mps, decimals=4)
+    if yaw_rate_rad_s is not None:
+        payload["yaw_rate_rad_s"] = round(float(yaw_rate_rad_s), 4)
     return _dumps(payload)
 
 

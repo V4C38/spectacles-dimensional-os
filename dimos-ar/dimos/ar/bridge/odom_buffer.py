@@ -17,6 +17,7 @@ import numpy as np
 from dimos.ar.world_frame.state import WorldFrameState
 from dimos.ar.world_frame.transforms import OdomSample
 from dimos.utils.logging_config import setup_logger
+from dimos.utils.transform_utils import normalize_angle
 
 if TYPE_CHECKING:
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -31,6 +32,14 @@ ODOM_LOOKUP_MAX_GAP_S = 0.25
 
 _source_ts_provenance_logged = False
 _source_ts_provenance_lock = threading.Lock()
+
+
+def _yaw_from_orientation(orientation: tuple[float, float, float, float]) -> float:
+    """Yaw about world-up from quaternion [qx, qy, qz, qw] (XR semantic +X forward)."""
+    qx, qy, qz, qw = orientation
+    forward_x = 1.0 - 2.0 * (qy * qy + qz * qz)
+    forward_z = 2.0 * (qx * qz + qw * qy)
+    return math.atan2(float(-forward_z), float(forward_x))
 
 
 class OdomBuffer:
@@ -267,6 +276,60 @@ class OdomBuffer:
                 + (after_sample.position[2] - before_sample.position[2]) ** 2
             )
             return dp / dt
+
+    def velocity_windowed(
+        self, mono_ts: float, horizon_s: float
+    ) -> tuple[float, float, float] | None:
+        """Average odom-frame linear velocity (m/s) over samples within ``horizon_s``."""
+        if horizon_s <= 0.0:
+            speed = self.speed_at(mono_ts)
+            if speed is None:
+                return None
+            # Fall back to speed magnitude along +X when horizon is zero.
+            return (speed, 0.0, 0.0)
+        with self._lock:
+            if len(self._buffer) < 2:
+                return None
+            window = [
+                (ts, sample)
+                for ts, sample in self._buffer
+                if mono_ts - horizon_s <= ts <= mono_ts
+            ]
+            if len(window) < 2:
+                return None
+            first_ts, first_sample = window[0]
+            last_ts, last_sample = window[-1]
+            dt = last_ts - first_ts
+            if dt <= 1e-6:
+                return (0.0, 0.0, 0.0)
+            return (
+                (last_sample.position[0] - first_sample.position[0]) / dt,
+                (last_sample.position[1] - first_sample.position[1]) / dt,
+                (last_sample.position[2] - first_sample.position[2]) / dt,
+            )
+
+    def yaw_rate_windowed(self, mono_ts: float, horizon_s: float) -> float | None:
+        """Average yaw rate (rad/s) about odom up from orientation deltas in the window."""
+        if horizon_s <= 0.0:
+            return None
+        with self._lock:
+            if len(self._buffer) < 2:
+                return None
+            window = [
+                (ts, sample)
+                for ts, sample in self._buffer
+                if mono_ts - horizon_s <= ts <= mono_ts
+            ]
+            if len(window) < 2:
+                return None
+            first_ts, first_sample = window[0]
+            last_ts, last_sample = window[-1]
+            dt = last_ts - first_ts
+            if dt <= 1e-6:
+                return 0.0
+            yaw0 = _yaw_from_orientation(first_sample.orientation)
+            yaw1 = _yaw_from_orientation(last_sample.orientation)
+            return float(normalize_angle(yaw1 - yaw0) / dt)
 
     def speed_windowed(self, mono_ts: float, horizon_s: float) -> float | None:
         """Average linear speed (m/s) over odom samples within ``horizon_s`` of ``mono_ts``."""

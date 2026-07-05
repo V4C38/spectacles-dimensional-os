@@ -11,6 +11,7 @@ import { NavigationClient } from "../Navigation/NavigationClient";
 import { Signal } from "../../App/Utilities/Utilities";
 import {
   AppState,
+  bridgeLinkTransitionLog,
   BridgeSnapshot,
   createDefaultDriftState,
   createDefaultRobotRuntimeState,
@@ -156,9 +157,9 @@ export class InboundRouter {
 
   public tick(): void {
     this.appState.uiLogger.tick();
-    this.robotPresenter.applyPendingPose();
+    const poseApplied = this.robotPresenter.applyPendingPose();
     this.robotPresenter.tickFrame();
-    this.navigationPlacement.syncIdlePlacementFollow();
+    this.navigationPlacement.syncIdleContinuousNavigationPlacement(poseApplied);
   }
 
   public tryConnect(ip: string): Promise<boolean> {
@@ -376,9 +377,27 @@ export class InboundRouter {
     }
     if (prev.bridgeLinkState !== linkState) {
       patch.bridgeLinkState = linkState;
+      this._logBridgeLinkTransition(prev.bridgeLinkState, linkState);
     }
     if (Object.keys(patch).length > 0) {
       this.appState.update(patch);
+    }
+  }
+
+  private _logBridgeLinkTransition(
+    prev: typeof this.appState.snapshot.bridgeLinkState,
+    next: typeof this.appState.snapshot.bridgeLinkState,
+  ): void {
+    const entry = bridgeLinkTransitionLog(prev, next);
+    if (!entry) {
+      return;
+    }
+    const logger = this.appState.uiLogger;
+    logger.logConsole(entry.consoleText, entry.consoleColor);
+    if (entry.hudDurationS !== undefined) {
+      logger.show(entry.hudText, entry.hudColor, entry.hudDurationS);
+    } else {
+      logger.show(entry.hudText, entry.hudColor);
     }
   }
 }

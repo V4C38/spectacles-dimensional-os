@@ -30,9 +30,9 @@ class BaselineMotionRecipe:
 
 DEFAULT_BASELINE_MOTION_RECIPE = BaselineMotionRecipe(
     strafe_speed=0.4,
-    leg_duration_s=(2.0, 4.0, 2.0),
+    leg_duration_s=(2.0, 3.5, 2.0),
     leg_directions=(1.0, -1.0, 1.0),
-    leg_distance_multipliers=(1.0, 2.0, 1.0),
+    leg_distance_multipliers=(1.0, 1.75, 1.0),
 )
 
 

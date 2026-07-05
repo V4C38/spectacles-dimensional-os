@@ -243,6 +243,27 @@ describe("parseInboundMessage", () => {
     expect((msg as { position: number[] }).position).toEqual([1, 2, 3]);
   });
 
+  it("parses pose with optional kinematics", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "pose",
+        ts: 1,
+        position: [1, 2, 3],
+        orientation: [0, 0, 0, 1],
+        speed_mps: 0.42,
+        velocity_mps: [0.5, 0.0, -0.1],
+        yaw_rate_rad_s: 0.35,
+      }),
+    );
+    expect(msg!.type).toBe("pose");
+    if (msg!.type !== "pose") {
+      return;
+    }
+    expect(msg.speed_mps).toBe(0.42);
+    expect(msg.velocity_mps).toEqual([0.5, 0, -0.1]);
+    expect(msg.yaw_rate_rad_s).toBe(0.35);
+  });
+
   it("parses world_frame_correction", () => {
     const msg = parseInboundMessage(
       JSON.stringify({

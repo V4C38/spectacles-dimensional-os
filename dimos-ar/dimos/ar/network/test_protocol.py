@@ -667,6 +667,20 @@ def test_encode_pose_includes_optional_speed_mps() -> None:
     assert pose["speed_mps"] == 0.42
 
 
+def test_encode_pose_includes_optional_kinematics() -> None:
+    pose = json.loads(
+        encode_pose(
+            ts=1.0,
+            position=(0.0, 0.0, 0.0),
+            orientation=(0.0, 0.0, 0.0, 1.0),
+            velocity_mps=(0.5, 0.0, -0.1),
+            yaw_rate_rad_s=0.35,
+        )
+    )
+    assert pose["velocity_mps"] == [0.5, 0.0, -0.1]
+    assert pose["yaw_rate_rad_s"] == 0.35
+
+
 def test_encode_pose_rounds_high_precision_values() -> None:
     pose = json.loads(
         encode_pose(

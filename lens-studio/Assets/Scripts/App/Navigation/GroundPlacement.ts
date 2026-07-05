@@ -20,9 +20,9 @@ const DRAG_THRESHOLD_CM = 11;
 const DRAG_HEADING_MIN_DELTA_CM = 3.0;
 const DRAG_HEADING_SMOOTHING_RATE = 8.0;
 const INTERPOLATION_SPEED = 10;
-const IDLE_FOLLOW_INTERPOLATION_SPEED = 8;
-const IDLE_FOLLOW_POSITION_EPSILON_CM = 0.25;
-const IDLE_FOLLOW_ROTATION_EPSILON_RAD = 0.01;
+const IDLE_CONTINUOUS_NAV_INTERPOLATION_SPEED = 8;
+const IDLE_CONTINUOUS_NAV_POSITION_EPSILON_CM = 0.25;
+const IDLE_CONTINUOUS_NAV_ROTATION_EPSILON_RAD = 0.01;
 const PLACEMENT_ANCHOR_REBASE_DISTANCE_CM = 300;
 
 export class GroundPlacement {
@@ -199,7 +199,7 @@ export class GroundPlacement {
     });
   }
 
-  public isIdleFollowingRobot(): boolean {
+  public isIdleContinuousNavigation(): boolean {
     return (
       this.active &&
       this._followRobot &&
@@ -209,13 +209,13 @@ export class GroundPlacement {
   }
 
   public syncIdlePose(position: vec3, rotation: quat): void {
-    if (!this.isIdleFollowingRobot() || !this._marker) {
+    if (!this.isIdleContinuousNavigation() || !this._marker) {
       return;
     }
     const positionChanged =
-      this.desiredPosition.distance(position) > IDLE_FOLLOW_POSITION_EPSILON_CM;
+      this.desiredPosition.distance(position) > IDLE_CONTINUOUS_NAV_POSITION_EPSILON_CM;
     const rotationChanged =
-      quat.angleBetween(this.desiredRotation, rotation) > IDLE_FOLLOW_ROTATION_EPSILON_RAD;
+      quat.angleBetween(this.desiredRotation, rotation) > IDLE_CONTINUOUS_NAV_ROTATION_EPSILON_RAD;
     if (!positionChanged && !rotationChanged) {
       return;
     }
@@ -232,8 +232,25 @@ export class GroundPlacement {
     this._marker.interpolatePose(
       this.desiredPosition,
       this.desiredRotation,
-      IDLE_FOLLOW_INTERPOLATION_SPEED,
+      IDLE_CONTINUOUS_NAV_INTERPOLATION_SPEED,
     );
+  }
+
+  /** Immediate idle continuous-navigation snap (e.g. after world-frame pose correction). */
+  public snapIdlePose(position: vec3, rotation: quat): void {
+    if (!this.isIdleContinuousNavigation() || !this._marker) {
+      return;
+    }
+    this.desiredPosition = new vec3(position.x, position.y, position.z);
+    this.desiredRotation = rotation;
+    this._groundProbe.floorY = position.y;
+    this.touchStartPosition = this.desiredPosition;
+    this._groundProbe.reset(position.y);
+    this._resetHeadingState(this.desiredPosition, rotation);
+    if (this._placementAnchor) {
+      this._placementAnchor.getTransform().setWorldPosition(position);
+    }
+    this._marker.setPose(this.desiredPosition, rotation);
   }
 
   public setRobotGroundDeadzone(deadzone: RobotGroundDeadzone | null): void {

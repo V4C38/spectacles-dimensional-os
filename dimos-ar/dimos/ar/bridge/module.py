@@ -300,6 +300,7 @@ class ARBridge(Module):  # type: ignore[misc]
             world_frame=self._world_frame,
             motion_router=motion_router,
             odom_latest=odom.latest,
+            robot_connected=lambda: status.snapshot().robot_connected,
         )
         nav_ref = nav
 

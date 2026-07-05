@@ -16,12 +16,11 @@ spectacles-dimensional-os/
 ├── dimos-ar/                    # Python DimOS extension (platform-agnostic core)
 │   ├── dimos/ar/                # ARBridge module, adapter, protocol, transforms, filters
 │   ├── assets/                  # Generated apriltag_robot_* PNG/PDF for robot-mounted tags
-│   ├── dimos/ar/blueprints.py   # monorepo entrypoint used by start.sh
+│   ├── dimos/ar/blueprints.py   # monorepo entrypoint used by scripts/start.sh
 │   ├── scripts/                 # generate_marker.py (--sync-lens)
 │   ├── PROTOCOL.md              # JSON WebSocket contract (cross-repo)
 │   └── tests colocated under dimos/ar/
-├── start.sh                     # interactive robot chooser; WebSocket on :8787
-├── setup.sh
+├── scripts/                     # setup.sh, start.sh, run-ci.sh, dimos_lib.sh
 └── lens-studio/                 # Spectacles Lens Studio project
     ├── spectacles-dimensional-os.esproj   # open THIS file (never from repo root)
     ├── Assets/Scripts/          # Lens TypeScript (DimosManager, BridgeClient, …)
@@ -31,7 +30,7 @@ spectacles-dimensional-os/
 | Component | Location | Notes |
 |-----------|----------|-------|
 | `ARBridge`, adapter, protocol, transforms | `dimos-ar/dimos/ar/` | Platform-agnostic — no Spectacles logic |
-| Blueprint entry | `dimos-ar/dimos/ar/blueprints.py` | Run on Mac with DimOS via `./start.sh` |
+| Blueprint entry | `dimos-ar/dimos/ar/blueprints.py` | Run on Mac with DimOS via `./scripts/start.sh` |
 | Robot-mounted AprilTag PDF | `dimos-ar/assets/apriltag_robot_{a4,letter}.pdf` | Print at 100% scale (70 mm); `python scripts/generate_marker.py` |
 | Spectacles Lens | `lens-studio/` | All Lens Studio code; see [`CONTRIBUTING.md`](CONTRIBUTING.md) for scene wiring |
 | Cross-platform contract | `dimos-ar/PROTOCOL.md` | JSON WebSocket API |
@@ -80,7 +79,7 @@ When working in `dimos-ar/`, follow `.cursor/rules/dimos-ar-bridge-design.mdc`:
   - `lens-studio/Assets/Scripts/Bridge/Protocol.ts`
 - The bridge module worker must never block; WebSocket runs on a daemon thread
  (see `bridge/module.py`).
-- AR development in this monorepo uses `dimos-ar/dimos/ar/blueprints.py` (via `./start.sh`),
+- AR development in this monorepo uses `dimos-ar/dimos/ar/blueprints.py` (via `./scripts/start.sh`),
   which wraps native DimOS composition for the selected robot stack.
 - Port **8787** is the AR bridge WebSocket. Do not reuse the old Foxglove `8765` port.
 - Tests for the bridge package must run from the DimOS `.venv`.
@@ -94,17 +93,18 @@ When working in `dimos-ar/`, follow `.cursor/rules/dimos-ar-bridge-design.mdc`:
 
 ## Pre-commit CI (agent commits)
 
-Before any git commit, run `./scripts/ci-test.sh` from the repo root and fix failures
+Before any git commit, run `./scripts/run-ci.sh` from the repo root and fix failures
 until it passes. See `.cursor/rules/pre-commit-ci.mdc`.
 
 ## Dev quick reference
 
 ```bash
 # Local CI (matches GitHub Actions — run before committing)
-./scripts/ci-test.sh
+./scripts/run-ci.sh
 
-# Install + start bridge (from dimos-ar/)
-./start.sh              # choose robot stack interactively; ws://0.0.0.0:8787
+# Install + start bridge (from repo root)
+./scripts/setup.sh
+./scripts/start.sh              # choose robot stack interactively; ws://0.0.0.0:8787
 
 # Tests (with blueprint running for integration)
 cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest

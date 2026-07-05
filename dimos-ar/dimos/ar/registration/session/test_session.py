@@ -88,6 +88,34 @@ def test_registration_command_start_april_odom_broadcasts_scanning() -> None:
     assert '"phase":"scanning"' in sent[-1] or '"phase":"failed"' in sent[-1]
 
 
+def test_registration_command_start_clears_committed_world_frame() -> None:
+    registry = WorldRegistry(WorldFrameState(), tf_publish_static=lambda _tf: None)
+    registry.state.commit(
+        np.eye(4, dtype=np.float64),
+        method="april_odom_baseline",
+        approximate=False,
+    )
+    assert registry.state.is_committed
+
+    for mode in ("april_odom_baseline", "manual_pose"):
+        registry.state.commit(
+            np.eye(4, dtype=np.float64),
+            method="april_odom_baseline",
+            approximate=False,
+        )
+        session, _sent, _registry = _make_session(registry=registry)
+        session.on_registration_command(
+            RegistrationCommandMessage(
+                ts=1.0,
+                robot_id="test_robot",
+                command="start",
+                mode=mode,
+            ),
+            MagicMock(),
+        )
+        assert not registry.state.is_committed
+
+
 def test_registration_command_start_manual_enters_editing() -> None:
     session, sent, _registry = _make_session()
     session.on_registration_command(

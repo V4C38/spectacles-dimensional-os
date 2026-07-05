@@ -188,3 +188,15 @@ def test_manual_alignment_world_pose_matches_placement() -> None:
         f"Manual world-frame commit position {world_pos} does not match "
         f"marker placement {marker_position} — R_ALIGN basis change missing?"
     )
+
+
+def test_rotate_vector_applies_rotation_only() -> None:
+    state = WorldFrameState()
+    yaw = math.radians(90.0)
+    half = yaw * 0.5
+    T = pose_to_matrix((5.0, 0.0, 0.0), (0.0, math.sin(half), 0.0, math.cos(half)))
+    state.commit(T, method="manual_pose", approximate=False)
+
+    rotated = state.rotate_vector((1.0, 0.0, 0.0))
+    assert np.allclose(rotated[0], 0.0, atol=1e-5)
+    assert np.allclose(rotated[2], -1.0, atol=1e-5)

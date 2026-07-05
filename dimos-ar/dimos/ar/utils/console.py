@@ -95,7 +95,7 @@ def install_ar_console_styles() -> None:
 
     logging_config._compact_console_processor = _wrapped_processor
 
-    # Workers import dimos-ar modules before start.sh bootstrap; rebind existing formatters.
+    # Workers import dimos-ar modules before scripts/start.sh bootstrap; rebind existing formatters.
     processor_formatter = structlog.stdlib.ProcessorFormatter
     for logger_obj in logging.Logger.manager.loggerDict.values():
         if not isinstance(logger_obj, logging.Logger):

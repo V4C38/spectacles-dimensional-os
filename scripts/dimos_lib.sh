@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-
+# Shared shell helpers for scripts/setup.sh and scripts/start.sh.
+# Source this file; do not execute directly.
 python_has_dimos() {
   local py="${1:-}"
   [[ -n "${py}" && -x "${py}" ]] || return 1
@@ -63,9 +64,9 @@ Tried:
 
 Fix one of these, then retry:
   - Set DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3
-  - Run ./setup.sh and point it at your DimOS install
+  - Run ./scripts/setup.sh and point it at your DimOS install
   - Install dimos-ar into your DimOS venv manually:
-      cd "${root}" && /path/to/dimos/.venv/bin/python3 -m pip install -e ".[dev]"
+      cd "${root}/dimos-ar" && /path/to/dimos/.venv/bin/python3 -m pip install -e ".[dev]"
 EOF
 }
 

@@ -2,8 +2,8 @@
 # Set up DimOS + dimos-ar for local development.
 #
 # Usage:
-#   ./setup.sh         # interactive first-run setup
-#   ./setup.sh --yes   # non-interactive; fail fast if DimOS cannot be auto-detected
+#   ./scripts/setup.sh         # interactive first-run setup
+#   ./scripts/setup.sh --yes   # non-interactive; fail fast if DimOS cannot be auto-detected
 #
 # Environment (optional):
 #   DIMOS_PYTHON  Path to Python in an existing DimOS environment
@@ -11,9 +11,9 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIMOS_AR_ROOT="${ROOT}/dimos-ar"
-source "${ROOT}/scripts/_dimos_env.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/dimos_lib.sh"
 
 NON_INTERACTIVE=0
 if [[ "${CI:-}" == "1" ]]; then
@@ -158,7 +158,7 @@ resolve_dimos_python() {
   fi
 
   if ! bootstrap_python="$(find_python_for_venv)"; then
-    echo "Could not find Python 3.12+ on PATH. Install Python 3.12+ and re-run ./setup.sh." >&2
+    echo "Could not find Python 3.12+ on PATH. Install Python 3.12+ and re-run ./scripts/setup.sh." >&2
     exit 1
   fi
 
@@ -187,8 +187,8 @@ cat <<EOF
 Setup complete.
 
 Next steps:
-  ./start.sh
+  ./scripts/start.sh
 
 If DimOS lives somewhere unusual, you can always override auto-detection with:
-  DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3 ./start.sh
+  DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3 ./scripts/start.sh
 EOF

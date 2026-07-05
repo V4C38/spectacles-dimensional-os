@@ -146,6 +146,16 @@ class WorldFrameState:
             return _nan3, _nan4
         return matrix_to_pose(T_world)
 
+    def rotate_vector(
+        self,
+        vector: tuple[float, float, float],
+    ) -> tuple[float, float, float]:
+        """Apply the rotation block of ``T_world_odom`` to a free vector."""
+        T = self._get_T()
+        v = np.asarray(vector, dtype=np.float64)
+        out = T[:3, :3] @ v
+        return float(out[0]), float(out[1]), float(out[2])
+
     def inverse_transform_point(
         self,
         position: tuple[float, float, float],

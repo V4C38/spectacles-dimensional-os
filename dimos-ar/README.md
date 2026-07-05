@@ -15,7 +15,7 @@ At a glance:
 - `dimos/ar/lidar/`: LiDAR height-band filtering for XR payloads
 - `dimos/ar/adapters/`: per-robot handshake, tag geometry, stream routing
 - `dimos/ar/network/protocol.py`: the AR WebSocket contract implementation
-- `dimos/ar/blueprints.py`: monorepo entrypoint used by `start.sh`
+- `dimos/ar/blueprints.py`: monorepo entrypoint used by `scripts/start.sh`
 - `PROTOCOL.md`: cross-client protocol documentation
 
 <details>
@@ -25,10 +25,10 @@ Use the DimOS `.venv`, then run:
 
 ```bash
 cd /path/to/spectacles-dimensional-os
-./start.sh
+./scripts/start.sh
 ```
 
-`start.sh` always prompts for the target robot stack and then runs the matching
+`scripts/start.sh` always prompts for the target robot stack and then runs the matching
 monorepo bridge entrypoint. The equivalent native DimOS compositions are:
 
 ```bash
@@ -36,7 +36,7 @@ dimos run ar-go2
 dimos run ar-g1
 ```
 
-Use `./start.sh` if these blueprints are not yet registered in your DimOS install.
+Use `./scripts/start.sh` if these blueprints are not yet registered in your DimOS install.
 
 Capability expectations by stack (negotiated at runtime via `hello` / `capabilities`):
 
@@ -113,7 +113,7 @@ Tests are colocated with their modules under `dimos/ar/` rather than in a top-le
 |------|---------|----------|
 | Unit | `pytest -m "not integration"` | DimOS `.venv` only |
 | Handshake | included in unit (`test_ws_handshake.py`) | In-process stub server; verifies `hello` + `get_status` wire flow |
-| Integration | `pytest dimos/ar/network/test_ws_integration.py -m integration` | Live bridge on port 8787 (`./start.sh`) |
+| Integration | `pytest dimos/ar/network/test_ws_integration.py -m integration` | Live bridge on port 8787 (`./scripts/start.sh`) |
 
 Lens-side protocol tests run separately: `cd lens-studio/Tests && npm test`.
 
@@ -144,7 +144,8 @@ frames are consumed. Always available when `registration_manual_pose` is adverti
 Notes:
 - Baseline strafe motion uses the same pure lateral `cmd_vel.linear.y` path as
   the proven teleop/app controls. The shared `BaselineMotionRecipe.strafe_speed`
-  is raw stick deflection (default `0.2`); legs run for fixed 2 / 4 / 2 s
+  is raw stick deflection (default `0.4`); legs run for fixed 2 / 3.5 / 2 s
+  (20 cm right, 35 cm left, 20 cm right)
   (timer-only, not odom-gated). `motion.distance_m` hints are UX-only.
 - The client authorizes each baseline move with `registration_command:
   authorize_motion`; the bridge publishes structured `motion` hints in

@@ -401,12 +401,18 @@ Robot pose in XR world frame:
   "ts": 1730000000.123,
   "position": [x, y, z],
   "orientation": [qx, qy, qz, qw],
-  "speed_mps": 0.42
+  "speed_mps": 0.42,
+  "velocity_mps": [vx, vy, vz],
+  "yaw_rate_rad_s": 0.35
 }
 ```
 
 - `speed_mps` (optional): smoothed robot linear speed in m/s from bridge odom,
   used by the Lens for runtime static capture burst when the robot stops.
+- `velocity_mps` (optional): world-frame linear velocity in m/s (same axes as
+  `position`). Used by the Lens for client-side pose prediction.
+- `yaw_rate_rad_s` (optional): world-frame yaw rate in rad/s about the world-up
+  axis. Used by the Lens for client-side pose prediction during turns.
 
 ### `world_frame_correction`
 

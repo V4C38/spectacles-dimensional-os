@@ -21,6 +21,7 @@ import { RobotUiCallbacks, RobotUiView } from "./RobotUiView";
 export type { RobotUiAssistOverlay, RobotUiCallbacks } from "./RobotUiView";
 
 const ROBOT_UI_WORLD_UP_OFFSET_CM = 20.0;
+const PROTOCOL_M_TO_LENS_CM = 100.0;
 
 type BoolOrActive = boolean | "whenActive";
 
@@ -69,15 +70,30 @@ interface RuntimePoseTickResult {
 
 type RuntimePoseSetTargetResult = "immediate" | "track";
 
+type RuntimePoseTarget = {
+  position: vec3;
+  rotation: quat;
+  velocityCmPerS: vec3;
+  yawRateRadPerS: number;
+  poseTs: number;
+  receiveMonoS: number;
+};
+
 class RuntimePoseAnimator {
-  private static readonly SMOOTHING_RATE = 18.0;
+  private static readonly SMOOTHING_RATE_MIN = 14.0;
+  private static readonly SMOOTHING_RATE_MAX = 22.0;
+  /** Rotation eases toward bridge samples; kept lower than position to avoid overshoot. */
+  private static readonly SMOOTHING_ROTATION_RATE = 12.0;
+  /** Linear speed at which position smoothing reaches ``SMOOTHING_RATE_MAX`` (cm/s). */
+  private static readonly SMOOTHING_SPEED_REF_CM_S = 30.0;
   private static readonly REALIGN_SNAP_BOOST_RATE = 28.0;
   private static readonly REALIGN_SNAP_DURATION_S = 0.15;
+  private static readonly MAX_EXTRAP_S = 0.2;
 
   private _tracking = false;
-  private _targetPosition: vec3 | null = null;
-  private _targetRotation: quat | null = null;
+  private _base: RuntimePoseTarget | null = null;
   private _boostUntil = 0;
+  private _getRobotClockNowS: (() => number | null) | null = null;
 
   public get isTracking(): boolean {
     return this._tracking;
@@ -87,10 +103,13 @@ class RuntimePoseAnimator {
     return getTime() < this._boostUntil;
   }
 
+  public setRobotClockNowProvider(getRobotClockNowS: () => number | null): void {
+    this._getRobotClockNowS = getRobotClockNowS;
+  }
+
   public reset(): void {
     this._tracking = false;
-    this._targetPosition = null;
-    this._targetRotation = null;
+    this._base = null;
     this._boostUntil = 0;
   }
 
@@ -99,17 +118,26 @@ class RuntimePoseAnimator {
   }
 
   public setTarget(
-    position: vec3,
-    rotation: quat,
+    target: RuntimePoseTarget,
     snapImmediate: boolean,
   ): RuntimePoseSetTargetResult {
-    this._targetPosition = new vec3(position.x, position.y, position.z);
-    this._targetRotation = new quat(
-      rotation.w,
-      rotation.x,
-      rotation.y,
-      rotation.z,
-    );
+    this._base = {
+      position: new vec3(target.position.x, target.position.y, target.position.z),
+      rotation: new quat(
+        target.rotation.w,
+        target.rotation.x,
+        target.rotation.y,
+        target.rotation.z,
+      ),
+      velocityCmPerS: new vec3(
+        target.velocityCmPerS.x,
+        target.velocityCmPerS.y,
+        target.velocityCmPerS.z,
+      ),
+      yawRateRadPerS: target.yawRateRadPerS,
+      poseTs: target.poseTs,
+      receiveMonoS: target.receiveMonoS,
+    };
     this._tracking = true;
 
     if (snapImmediate) {
@@ -119,12 +147,30 @@ class RuntimePoseAnimator {
     return "track";
   }
 
+  public predictedTarget(now: number): { position: vec3; rotation: quat } | null {
+    if (!this._base) {
+      return null;
+    }
+    const ageS = this._poseAgeS(now);
+    const base = this._base;
+    const position = new vec3(
+      base.position.x + base.velocityCmPerS.x * ageS,
+      base.position.y + base.velocityCmPerS.y * ageS,
+      base.position.z + base.velocityCmPerS.z * ageS,
+    );
+    return {
+      position,
+      rotation: new quat(base.rotation.w, base.rotation.x, base.rotation.y, base.rotation.z),
+    };
+  }
+
   public tick(
     current: { position: vec3; rotation: quat },
     dt: number,
     now: number,
   ): RuntimePoseTickResult | null {
-    if (!this._targetPosition || !this._targetRotation) {
+    const predicted = this.predictedTarget(now);
+    if (!predicted || !this._base) {
       return null;
     }
 
@@ -132,24 +178,61 @@ class RuntimePoseAnimator {
       return null;
     }
 
-    const rate =
-      now < this._boostUntil
-        ? RuntimePoseAnimator.REALIGN_SNAP_BOOST_RATE
-        : RuntimePoseAnimator.SMOOTHING_RATE;
+    const positionRate = this._smoothingRate(now);
     const smoothed = interpolatePose(
       current.position,
-      this._targetPosition,
+      predicted.position,
       current.rotation,
-      this._targetRotation,
+      predicted.rotation,
       dt,
-      rate,
-      rate,
+      positionRate,
+      RuntimePoseAnimator.SMOOTHING_ROTATION_RATE,
     );
     return {
       position: smoothed.position,
       rotation: smoothed.rotation,
       realignmentVfxActive: now < this._boostUntil,
     };
+  }
+
+  private _poseAgeS(now: number): number {
+    const base = this._base!;
+    const robotNow = this._getRobotClockNowS?.() ?? null;
+    if (robotNow !== null) {
+      return Math.min(
+        Math.max(0, robotNow - base.poseTs),
+        RuntimePoseAnimator.MAX_EXTRAP_S,
+      );
+    }
+    return Math.min(
+      Math.max(0, now - base.receiveMonoS),
+      RuntimePoseAnimator.MAX_EXTRAP_S,
+    );
+  }
+
+  private _smoothingRate(now: number): number {
+    if (now < this._boostUntil) {
+      return RuntimePoseAnimator.REALIGN_SNAP_BOOST_RATE;
+    }
+    const base = this._base;
+    if (!base) {
+      return RuntimePoseAnimator.SMOOTHING_RATE_MIN;
+    }
+    const speed = Math.sqrt(
+      base.velocityCmPerS.x * base.velocityCmPerS.x
+        + base.velocityCmPerS.y * base.velocityCmPerS.y
+        + base.velocityCmPerS.z * base.velocityCmPerS.z,
+    );
+    const linearMotion = RuntimePoseAnimator._smoothstep01(
+      speed / RuntimePoseAnimator.SMOOTHING_SPEED_REF_CM_S,
+    );
+    return RuntimePoseAnimator.SMOOTHING_RATE_MIN
+      + (RuntimePoseAnimator.SMOOTHING_RATE_MAX - RuntimePoseAnimator.SMOOTHING_RATE_MIN) * linearMotion;
+  }
+
+  private static _smoothstep01(x: number): number {
+    const t = Math.max(0, Math.min(1, x));
+    return t * t * (3 - 2 * t);
   }
 }
 
@@ -218,6 +301,7 @@ export class RobotMarker extends BaseScriptComponent {
     getIsRuntimePhase: () => boolean;
     getOperatingMode: () => OperatingMode;
     getInteractionMode: () => RobotInteractionMode;
+    getRobotClockNowS?: () => number | null;
     onWorldPositionChanged?: (position: vec3) => void;
   }): void {
     this._manualRegistrationAlignment = deps.manualRegistrationAlignment;
@@ -226,6 +310,9 @@ export class RobotMarker extends BaseScriptComponent {
     this._getOperatingMode = deps.getOperatingMode;
     this._getInteractionMode = deps.getInteractionMode;
     this._onWorldPositionChanged = deps.onWorldPositionChanged ?? null;
+    this._poseAnimator.setRobotClockNowProvider(
+      deps.getRobotClockNowS ?? (() => null),
+    );
     this._ensureUi();
   }
 
@@ -312,7 +399,19 @@ export class RobotMarker extends BaseScriptComponent {
     const position = protocolMetersToLensCentimeters(msg.position);
     const rotation = new quat(q[3], q[0], q[1], q[2]);
     this.frameCapture?.setRobotWorldPosition(position);
-    this._applyRuntimePose(position, rotation);
+    const velocity = msg.velocity_mps;
+    const velocityCmPerS = velocity
+      ? new vec3(
+        velocity[0] * PROTOCOL_M_TO_LENS_CM,
+        velocity[1] * PROTOCOL_M_TO_LENS_CM,
+        velocity[2] * PROTOCOL_M_TO_LENS_CM,
+      )
+      : vec3.zero();
+    this._applyRuntimePose(position, rotation, {
+      velocityCmPerS,
+      yawRateRadPerS: msg.yaw_rate_rad_s ?? 0,
+      poseTs: msg.ts,
+    });
   }
 
   public applyManualPose(position: vec3, rotation: quat): void {
@@ -578,21 +677,41 @@ export class RobotMarker extends BaseScriptComponent {
     this._syncMenuWorldAnchor();
   }
 
-  private _applyRuntimePose(position: vec3, rotation: quat): void {
+  private _applyRuntimePose(
+    position: vec3,
+    rotation: quat,
+    kinematics?: {
+      velocityCmPerS: vec3;
+      yawRateRadPerS: number;
+      poseTs: number;
+    },
+  ): void {
     if (!this.markerRoot) {
       return;
     }
 
     const desiredRotation = yawRotationFromWorldRotation(rotation);
     const snapImmediate = !this._poseAnimator.isTracking;
+    const receiveMonoS = getTime();
     const result = this._poseAnimator.setTarget(
-      position,
-      desiredRotation,
+      {
+        position,
+        rotation: desiredRotation,
+        velocityCmPerS: kinematics?.velocityCmPerS ?? vec3.zero(),
+        yawRateRadPerS: kinematics?.yawRateRadPerS ?? 0,
+        poseTs: kinematics?.poseTs ?? receiveMonoS,
+        receiveMonoS,
+      },
       snapImmediate,
     );
 
     if (result === "immediate") {
-      this.setPose(position, desiredRotation);
+      const predicted = this._poseAnimator.predictedTarget(receiveMonoS);
+      if (predicted) {
+        this.setPose(predicted.position, predicted.rotation);
+      } else {
+        this.setPose(position, desiredRotation);
+      }
       return;
     }
 

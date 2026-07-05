@@ -59,6 +59,12 @@ class _FakeWorldFrame:
     ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
         return position, orientation
 
+    def rotate_vector(
+        self,
+        vector: tuple[float, float, float],
+    ) -> tuple[float, float, float]:
+        return vector
+
 
 class _FakeOdomBuffer:
     def __init__(self, world_position: tuple[float, float, float] | None = None) -> None:
@@ -73,6 +79,14 @@ class _FakeOdomBuffer:
         return self._world_position
 
     def speed_windowed(self, _now: float, _horizon_s: float) -> float | None:
+        return None
+
+    def velocity_windowed(
+        self, _now: float, _horizon_s: float
+    ) -> tuple[float, float, float] | None:
+        return None
+
+    def yaw_rate_windowed(self, _now: float, _horizon_s: float) -> float | None:
         return None
 
     def sample(self, msg: _FakePoseStamped) -> OdomSample:

@@ -8,11 +8,18 @@ from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.world_frame.transforms import OdomSample
 
 
-def _push(buffer: OdomBuffer, mono: float, x: float, *, source_ts: float | None = None) -> None:
+def _push(
+    buffer: OdomBuffer,
+    mono: float,
+    x: float,
+    *,
+    source_ts: float | None = None,
+    orientation: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
+) -> None:
     with buffer._lock:  # type: ignore[attr-defined]
         sample = OdomSample(
             position=(x, 0.0, 0.0),
-            orientation=(0.0, 0.0, 0.0, 1.0),
+            orientation=orientation,
             source_ts=source_ts if source_ts is not None else mono,
         )
         buffer._buffer.append((mono, sample))  # type: ignore[attr-defined]
@@ -71,3 +78,35 @@ def test_speed_windowed_smoothes_flapping_two_sample_speed() -> None:
     assert windowed is not None
     assert instant is not None
     assert windowed < instant
+
+
+def test_velocity_windowed_returns_vector() -> None:
+    buffer = OdomBuffer()
+    t0 = time.monotonic()
+    _push(buffer, t0, 0.0)
+    _push(buffer, t0 + 0.4, 0.4)
+
+    velocity = buffer.velocity_windowed(t0 + 0.4, 0.4)
+    assert velocity is not None
+    assert velocity[0] == pytest.approx(1.0, abs=1e-6)
+    assert velocity[1] == pytest.approx(0.0, abs=1e-6)
+    assert velocity[2] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_yaw_rate_windowed() -> None:
+    import math
+
+    buffer = OdomBuffer()
+    t0 = time.monotonic()
+    _push(buffer, t0, 0.0, orientation=(0.0, 0.0, 0.0, 1.0))
+    half = math.radians(45.0) * 0.5
+    _push(
+        buffer,
+        t0 + 0.5,
+        0.0,
+        orientation=(0.0, math.sin(half), 0.0, math.cos(half)),
+    )
+
+    yaw_rate = buffer.yaw_rate_windowed(t0 + 0.5, 0.5)
+    assert yaw_rate is not None
+    assert abs(yaw_rate) == pytest.approx(math.radians(90.0), abs=1e-3)

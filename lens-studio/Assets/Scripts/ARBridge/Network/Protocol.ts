@@ -96,6 +96,10 @@ export interface PoseMessage {
   orientation: [number, number, number, number];
   /** Smoothed robot speed from bridge odom (m/s); optional on older bridges. */
   speed_mps?: number;
+  /** World-frame linear velocity in m/s; optional on older bridges. */
+  velocity_mps?: [number, number, number];
+  /** World-frame yaw rate in rad/s about world-up; optional on older bridges. */
+  yaw_rate_rad_s?: number;
 }
 
 export interface WorldFrameCorrectionMessage {
@@ -781,6 +785,12 @@ function parseInboundObject(
         ts: requireNumber(data, "ts"),
         position: parseVec3(data.position),
         ...(typeof data.speed_mps === "number" ? { speed_mps: Number(data.speed_mps) } : {}),
+        ...(Array.isArray(data.velocity_mps) && data.velocity_mps.length === 3
+          ? { velocity_mps: parseVec3(data.velocity_mps) }
+          : {}),
+        ...(typeof data.yaw_rate_rad_s === "number"
+          ? { yaw_rate_rad_s: Number(data.yaw_rate_rad_s) }
+          : {}),
         orientation: [Number(q[0]), Number(q[1]), Number(q[2]), Number(q[3])],
       };
     }

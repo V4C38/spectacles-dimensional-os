@@ -80,6 +80,8 @@ def build_pose_payload(
     world_frame: WorldFrameState,
     sample_odom: Callable[[PoseStamped], OdomSample],
     speed_mps: float | None = None,
+    velocity_mps: tuple[float, float, float] | None = None,
+    yaw_rate_rad_s: float | None = None,
 ) -> tuple[str, tuple[float, float, float], tuple[float, float, float, float]] | None:
     """Transform odom pose into world frame and encode as an XR pose payload."""
     sample = sample_odom(msg)
@@ -93,6 +95,8 @@ def build_pose_payload(
         position=pos,
         orientation=quat,
         speed_mps=speed_mps,
+        velocity_mps=velocity_mps,
+        yaw_rate_rad_s=yaw_rate_rad_s,
     )
     return payload, pos, quat
 
@@ -103,6 +107,8 @@ def build_pose_payload_from_sample(
     ts: float,
     world_frame: WorldFrameState,
     speed_mps: float | None = None,
+    velocity_mps: tuple[float, float, float] | None = None,
+    yaw_rate_rad_s: float | None = None,
 ) -> tuple[str, tuple[float, float, float], tuple[float, float, float, float]] | None:
     """Transform a cached odom sample into world frame and encode as an XR pose payload."""
     pos, quat = world_frame.transform_pose(sample.position, sample.orientation)
@@ -115,6 +121,8 @@ def build_pose_payload_from_sample(
         position=pos,
         orientation=quat,
         speed_mps=speed_mps,
+        velocity_mps=velocity_mps,
+        yaw_rate_rad_s=yaw_rate_rad_s,
     )
     return payload, pos, quat
 

@@ -45,6 +45,7 @@ NAV_GOAL_UPDATE_DEDUP_DISTANCE_M: float = 0.15
 NAV_GOAL_UPDATE_DEDUP_INTERVAL_S: float = 0.25
 NAV_GOAL_REDISPATCH_MIN_DELTA_M: float = 0.05
 NAV_ARRIVAL_SHORTFALL_WARN_M: float = 0.25
+NAV_ERROR_ROBOT_OFFLINE: int = 503
 StallReason = str
 NavGoalSource = Literal["xr", "agent"]
 SessionPhase = Literal["pending", "navigating", "recovering"]
@@ -75,12 +76,14 @@ class NavigateGoalHandler:
         world_frame: WorldFrameState,
         motion_router: MotionRouter,
         odom_latest: Callable[[], OdomSample | None] | None = None,
+        robot_connected: Callable[[], bool] | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
         self._world_frame = world_frame
         self._motion_router = motion_router
         self._odom_latest = odom_latest
+        self._robot_connected = robot_connected
 
         self._session: NavSession | None = None
         self._last_outcome: LastOutcome | None = None
@@ -192,6 +195,14 @@ class NavigateGoalHandler:
     ) -> None:
         if not self._world_frame.is_committed:
             logger.warning("goal ignored before world frame committed")
+            return
+        if self._robot_connected is not None and not self._robot_connected():
+            logger.error("XR navigation goal rejected — robot not connected")
+            self._last_outcome = "failed"
+            self._nav_error_code = NAV_ERROR_ROBOT_OFFLINE
+            self._emit_nav_goal_update(active=False, ts=ts)
+            self._broadcast_empty_path(ts=ts)
+            self.broadcast_nav_status(ts=ts)
             return
         msg = NavGoalMessage(
             intent="navigate",
@@ -393,6 +404,8 @@ class NavigateGoalHandler:
         if was_pending and (reached or not reached):
             self._broadcast_empty_path()
         self.broadcast_nav_status()
+        if was_pending and not reached:
+            self._motion_router.cancel_nav_goal(on_complete=self._on_control_dispatched)
 
     def on_navigation_state(self, msg: str) -> None:
         """Upstream navigation_state — unreached on shipped blueprints; recovery uses watchdog."""

@@ -2,7 +2,7 @@
 # Reproduce GitHub Actions CI locally (.github/workflows/ci.yml).
 #
 # Usage (from repo root):
-#   ./scripts/ci-test.sh
+#   ./scripts/run-ci.sh
 #
 # Environment (optional):
 #   CI_PYTHON   Python 3.12+ interpreter for the dimos-ar job (default: python3.12, python3)
