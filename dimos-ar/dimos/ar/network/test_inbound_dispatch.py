@@ -32,7 +32,7 @@ def test_lane_for_registration_command_is_ordered() -> None:
         ts=1.0,
         robot_id="unitree_go2",
         command="start",
-        mode="april_odom_baseline",
+        mode="april_tag",
     )
 
     assert lane_for_message(msg) == DispatchLane.ORDERED
@@ -46,7 +46,7 @@ async def test_ordered_submit_returns_immediately_for_slow_handler() -> None:
         ts=1.0,
         robot_id="unitree_go2",
         command="start",
-        mode="april_odom_baseline",
+        mode="april_tag",
     )
 
     def slow_handler(_msg: InboundMessage, _ws: object) -> None:
@@ -75,13 +75,13 @@ async def test_ordered_lane_preserves_fifo() -> None:
         if len(seen) == 3:
             loop.call_soon_threadsafe(done.set)
 
-    for command in ("stop", "start", "authorize_motion"):
+    for command in ("stop", "start", "commit"):
         dispatcher.submit(
             RegistrationCommandMessage(
                 ts=1.0,
                 robot_id="unitree_go2",
                 command=command,
-                mode="april_odom_baseline" if command == "start" else None,
+                mode="april_tag" if command == "start" else None,
             ),
             MagicMock(),
             ordered_handler,
@@ -90,7 +90,7 @@ async def test_ordered_lane_preserves_fifo() -> None:
     await asyncio.wait_for(done.wait(), timeout=1.0)
     await dispatcher.stop()
 
-    assert seen == ["stop", "start", "authorize_motion"]
+    assert seen == ["stop", "start", "commit"]
 
 
 @pytest.mark.asyncio
@@ -143,7 +143,7 @@ async def test_background_handler_does_not_wait_behind_ordered() -> None:
             ts=1.0,
             robot_id="unitree_go2",
             command="start",
-            mode="april_odom_baseline",
+            mode="april_tag",
         ),
         MagicMock(),
         slow_ordered,

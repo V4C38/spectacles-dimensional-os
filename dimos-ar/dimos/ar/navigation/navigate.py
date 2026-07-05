@@ -47,7 +47,7 @@ NAV_GOAL_REDISPATCH_MIN_DELTA_M: float = 0.05
 NAV_ARRIVAL_SHORTFALL_WARN_M: float = 0.25
 NAV_ERROR_ROBOT_OFFLINE: int = 503
 StallReason = str
-NavGoalSource = Literal["xr", "agent"]
+NavGoalSource = Literal["ar", "agent"]
 SessionPhase = Literal["pending", "navigating", "recovering"]
 LastOutcome = Literal["succeeded", "failed"]
 
@@ -197,7 +197,7 @@ class NavigateGoalHandler:
             logger.warning("goal ignored before world frame committed")
             return
         if self._robot_connected is not None and not self._robot_connected():
-            logger.error("XR navigation goal rejected — robot not connected")
+            logger.error("AR navigation goal rejected — robot not connected")
             self._last_outcome = "failed"
             self._nav_error_code = NAV_ERROR_ROBOT_OFFLINE
             self._emit_nav_goal_update(active=False, ts=ts)
@@ -277,11 +277,11 @@ class NavigateGoalHandler:
             position=msg.position,
             orientation=msg.orientation,
             ts=msg.ts,
-            source="xr",
+            source="ar",
         )
 
     def on_cancel_nav_goal(self, ts: float | None = None) -> None:
-        logger.info("XR navigation goal cancelled")
+        logger.info("AR navigation goal cancelled")
         self._last_outcome = None
         self._nav_error_code = None
         self._emit_nav_goal_update(active=False, ts=ts)
@@ -291,7 +291,7 @@ class NavigateGoalHandler:
         self._motion_router.cancel_nav_goal(on_complete=self._on_control_dispatched)
 
     def on_emergency_stop(self, ts: float | None = None) -> None:
-        logger.info("XR emergency_stop handled nav_reset=true")
+        logger.info("AR emergency_stop handled nav_reset=true")
         self._last_outcome = None
         self._nav_error_code = None
         self._emit_nav_goal_update(active=False, ts=ts)
@@ -356,7 +356,7 @@ class NavigateGoalHandler:
     def on_path(self, msg: Path) -> None:
         self._maybe_log_message_age(
             msg,
-            event="XR navigation path age",
+            event="AR navigation path age",
             last_log_attr="_last_path_age_log_mono",
         )
         path_payload, waypoints = build_path_payload(
@@ -381,7 +381,7 @@ class NavigateGoalHandler:
     def on_goal_reached(self, msg: Bool) -> None:
         self._maybe_log_message_age(
             msg,
-            event="XR navigation goal_reached age",
+            event="AR navigation goal_reached age",
             last_log_attr="_last_goal_reached_age_log_mono",
         )
         was_pending = self._session is not None and self._last_outcome is None
@@ -392,11 +392,11 @@ class NavigateGoalHandler:
                 session_odom_position = self._session.odom_position
         if was_pending and reached:
             self._last_outcome = "succeeded"
-            log_checkpoint(logger, kind="success", event="XR navigation goal reached")
+            log_checkpoint(logger, kind="success", event="AR navigation goal reached")
             self._log_arrival_shortfall(session_odom_position)
         elif was_pending and not reached:
             self._last_outcome = "failed"
-            logger.info("XR navigation goal failed")
+            logger.info("AR navigation goal failed")
         self._nav_error_code = None
         if was_pending:
             self._emit_nav_goal_update(active=False, ts=getattr(msg, "ts", None))
@@ -433,7 +433,7 @@ class NavigateGoalHandler:
             self._nav_state_log_store,
             field="nav_state",
             key=normalized,
-            event="XR navigation state updated",
+            event="AR navigation state updated",
             state=normalized,
         )
         if self._session is not None and normalized == "navigating":
@@ -458,7 +458,7 @@ class NavigateGoalHandler:
             if self._session is None or self._last_outcome is not None:
                 return
         logger.warning(
-            "XR navigation goal stalled",
+            "AR navigation goal stalled",
             stall_reason=stall_reason,
         )
         self._last_outcome = None
@@ -495,7 +495,7 @@ class NavigateGoalHandler:
         if value:
             if self._session is None:
                 self._session = NavSession(
-                    source="xr",
+                    source="ar",
                     position=(0.0, 0.0, 0.0),
                     orientation=None,
                     dispatched_mono=None,
@@ -557,7 +557,7 @@ class NavigateGoalHandler:
             self._latched_recovering = False
         if self._session is None and value != "idle":
             self._session = NavSession(
-                source="xr",
+                source="ar",
                 position=(0.0, 0.0, 0.0),
                 orientation=None,
                 dispatched_mono=None,
@@ -623,9 +623,9 @@ class NavigateGoalHandler:
         if ok:
             return
         if err is not None:
-            logger.warning("XR control command failed", error=str(err))
+            logger.warning("AR control command failed", error=str(err))
         else:
-            logger.warning("XR control command rejected")
+            logger.warning("AR control command rejected")
 
     def _on_goal_dispatched(
         self,
@@ -643,7 +643,7 @@ class NavigateGoalHandler:
                     self._session.odom_position = odom_goal.position
                     self._session.odom_orientation = odom_goal.orientation
             logger.info(
-                "XR navigation goal published",
+                "AR navigation goal published",
                 world_goal=[round(v, 3) for v in msg.position],
                 odom_goal=[round(v, 3) for v in odom_goal.position],
                 world_goal_yaw_deg=(
@@ -655,7 +655,7 @@ class NavigateGoalHandler:
         self._last_outcome = "failed"
         self._clear_session()
         error = str(err) if err is not None else "goal publish rejected"
-        logger.error("XR navigation goal publish failed", error=error)
+        logger.error("AR navigation goal publish failed", error=error)
         self._emit_nav_goal_update(active=False, ts=msg.ts)
         self._broadcast_empty_path(ts=msg.ts)
         self.broadcast_nav_status(ts=msg.ts)
@@ -670,12 +670,12 @@ class NavigateGoalHandler:
         if not ok:
             if err is not None:
                 logger.warning(
-                    "XR navigation goal redispatch after world-frame correction failed",
+                    "AR navigation goal redispatch after world-frame correction failed",
                     error=str(err),
                 )
             else:
                 logger.warning(
-                    "XR navigation goal redispatch after world-frame correction rejected",
+                    "AR navigation goal redispatch after world-frame correction rejected",
                 )
             return
         with self._nav_watchdog_lock:
@@ -684,7 +684,7 @@ class NavigateGoalHandler:
                 self._session.odom_position = odom_goal.position
                 self._session.odom_orientation = odom_goal.orientation
         logger.info(
-            "XR navigation goal redispatched after world-frame correction",
+            "AR navigation goal redispatched after world-frame correction",
             odom_goal=[round(v, 3) for v in odom_goal.position],
         )
 
@@ -703,7 +703,7 @@ class NavigateGoalHandler:
         )
         log_fn = logger.warning if shortfall_m > NAV_ARRIVAL_SHORTFALL_WARN_M else logger.info
         log_fn(
-            "XR navigation arrival shortfall",
+            "AR navigation arrival shortfall",
             arrival_shortfall_m=round(shortfall_m, 3),
         )
 
@@ -721,7 +721,7 @@ class NavigateGoalHandler:
             self._session.phase = "navigating"
         self._nav_error_code = None
         logger.info(
-            "XR navigation navigating",
+            "AR navigation navigating",
             path_waypoints=path_waypoints,
         )
         self.broadcast_nav_status(ts=ts)

@@ -1,4 +1,4 @@
-"""WebSocket inbound scheduling for XR text messages.
+"""WebSocket inbound scheduling for AR text messages.
 
 The WebSocket read loop decodes text frames and submits them here. It must not
 await synchronous handlers directly. Lanes describe scheduling semantics:
@@ -95,7 +95,7 @@ class InboundDispatcher:
         self._ordered_queue = asyncio.Queue()
         self._background_executor = ThreadPoolExecutor(
             max_workers=BACKGROUND_WORKERS,
-            thread_name_prefix="XRInbound",
+            thread_name_prefix="ARInbound",
         )
         self._ordered_task = asyncio.create_task(self._ordered_worker())
         self._running = True

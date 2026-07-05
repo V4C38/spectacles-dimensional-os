@@ -54,21 +54,13 @@ describe("outbound protocol builders", () => {
 
   it("buildRegistrationCommand start with mode", () => {
     const msg = JSON.parse(
-      buildRegistrationCommand("go2", "start", "april_odom_baseline"),
+      buildRegistrationCommand("go2", "start", "april_tag"),
     );
     expect(msg.type).toBe("registration_command");
     expect(msg.robot_id).toBe("go2");
     expect(msg.command).toBe("start");
-    expect(msg.mode).toBe("april_odom_baseline");
+    expect(msg.mode).toBe("april_tag");
     expect(msg.ts).toBe(1000);
-  });
-
-  it("buildRegistrationCommand authorize_motion", () => {
-    const msg = JSON.parse(
-      buildRegistrationCommand("go2", "authorize_motion"),
-    );
-    expect(msg.command).toBe("authorize_motion");
-    expect(msg).not.toHaveProperty("mode");
   });
 
   it("buildRegistrationCommand stop and commit", () => {

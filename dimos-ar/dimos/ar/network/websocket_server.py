@@ -201,7 +201,7 @@ class ARWebSocketServer:
                 try:
                     future.result(timeout=2.0)
                 except Exception as exc:
-                    logger.warning("XR WebSocket server stop did not finish cleanly", error=str(exc))
+                    logger.warning("AR WebSocket server stop did not finish cleanly", error=str(exc))
         self._server_ready.clear()
         self.client_connected.clear()
         self._serve_future = None
@@ -230,7 +230,7 @@ class ARWebSocketServer:
                 max_size=self._max_message_bytes,
                 logger=ws_logger,
             ):
-                logger.info("XR WebSocket server listening", host=host, port=self._port)
+                logger.info("AR WebSocket server listening", host=host, port=self._port)
                 if host in ("127.0.0.1", "localhost"):
                     logger.warning(
                         "WebSocket is localhost-only; Spectacles cannot connect. "
@@ -239,7 +239,7 @@ class ARWebSocketServer:
                 self._server_ready.set()
                 await self._stop_event.wait()
         except Exception as exc:
-            logger.exception("XR WebSocket server crashed", error=str(exc))
+            logger.exception("AR WebSocket server crashed", error=str(exc))
             if not self._server_ready.is_set():
                 self._server_ready.set()
             raise
@@ -258,7 +258,7 @@ class ARWebSocketServer:
                 existing_remote = getattr(existing, "remote_address", None)
                 if existing_remote and existing_remote[0] == remote_ip:
                     logger.info(
-                        "XR client reconnect from same remote; closing prior connection",
+                        "AR client reconnect from same remote; closing prior connection",
                         remote=str(remote),
                     )
                     await existing.close(1000, "superseded by new connection")
@@ -266,8 +266,8 @@ class ARWebSocketServer:
         outbound = ClientSendQueue(websocket)
         self._outbound[websocket] = outbound
         outbound.start()
-        logger.info("XR client connected", remote=str(remote))
-        console_divider(f"XR client connected remote={remote}")
+        logger.info("AR client connected", remote=str(remote))
+        console_divider(f"AR client connected remote={remote}")
         try:
             hello = await asyncio.to_thread(self._hello_supplier)
             await websocket.send(encode_hello(hello) + "\n")
@@ -281,7 +281,7 @@ class ARWebSocketServer:
                     if isinstance(message, bytes):
                         if _TRACE:
                             logger.debug(
-                                "XR inbound binary frame",
+                                "AR inbound binary frame",
                                 bytes=len(message),
                             )
                         if self._on_camera_frame is None:
@@ -296,7 +296,7 @@ class ARWebSocketServer:
                         if now_mono - _last_camera_frame_log >= CAMERA_FRAME_LOG_INTERVAL_S:
                             _last_camera_frame_log = now_mono
                             logger.info(
-                                "XR camera frame received",
+                                "AR camera frame received",
                                 seq=int(header.get("seq", -1)),
                                 jpeg_bytes=len(jpeg),
                             )
@@ -304,7 +304,7 @@ class ARWebSocketServer:
                             await self._on_camera_frame(header, jpeg, websocket)
                         except Exception as exc:
                             logger.exception(
-                                "XR camera frame handler error",
+                                "AR camera frame handler error",
                                 seq=int(header.get("seq", -1)),
                                 error=str(exc),
                             )
@@ -325,7 +325,7 @@ class ARWebSocketServer:
                         if _should_log:
                             if msg_type is not None:
                                 _last_inbound_text_log[msg_type] = now_mono
-                            logger.info("XR inbound text message", type=msg_type)
+                            logger.info("AR inbound text message", type=msg_type)
                         inbound = decode_inbound(line, expected_robot_id=hello.robot_id)
                         await self._dispatch_inbound(inbound, websocket)
                 except ValueError as exc:
@@ -341,13 +341,13 @@ class ARWebSocketServer:
                     )
         except websockets.ConnectionClosed as exc:
             logger.info(
-                "XR client disconnected",
+                "AR client disconnected",
                 remote=str(remote),
                 code=exc.rcvd.code if exc.rcvd is not None else None,
                 reason=exc.rcvd.reason if exc.rcvd is not None else None,
             )
             code = exc.rcvd.code if exc.rcvd is not None else None
-            console_divider(f"XR client disconnected remote={remote} code={code}")
+            console_divider(f"AR client disconnected remote={remote} code={code}")
         finally:
             await outbound.stop()
             self._outbound.pop(websocket, None)

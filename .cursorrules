@@ -14,22 +14,21 @@ spectacles-dimensional-os/
 ├── README.md                    # whole-project overview, setup, doc map
 ├── assets/                      # README gifs, demo media (NOT Lens Studio Assets/)
 ├── dimos-ar/                    # Python DimOS extension (platform-agnostic core)
-│   ├── dimos/ar/                # ARBridge module, adapter, protocol, transforms, filters
+│   ├── dimos/ar/                # ARBridge module, robot_profile, protocol, transforms, filters
 │   ├── assets/                  # Generated apriltag_robot_* PNG/PDF for robot-mounted tags
 │   ├── dimos/ar/blueprints.py   # monorepo entrypoint used by scripts/start.sh
-│   ├── scripts/                 # generate_marker.py (--sync-lens)
+│   ├── scripts/                 # generate_marker.py
 │   ├── PROTOCOL.md              # JSON WebSocket contract (cross-repo)
 │   └── tests colocated under dimos/ar/
 ├── scripts/                     # setup.sh, start.sh, run-ci.sh, dimos_lib.sh
 └── lens-studio/                 # Spectacles Lens Studio project
     ├── spectacles-dimensional-os.esproj   # open THIS file (never from repo root)
-    ├── Assets/Scripts/          # Lens TypeScript (DimosManager, BridgeClient, …)
-    └── tools/                   # dev helpers (e.g. create_debug_gizmo.py)
+    ├── Assets/Scripts/          # Lens TypeScript (ARBridgeServices, ARBridgeCoordinator, …)
 ```
 
 | Component | Location | Notes |
 |-----------|----------|-------|
-| `ARBridge`, adapter, protocol, transforms | `dimos-ar/dimos/ar/` | Platform-agnostic — no Spectacles logic |
+| `ARBridge`, robot profile, protocol, transforms | `dimos-ar/dimos/ar/` | Platform-agnostic — no Spectacles logic |
 | Blueprint entry | `dimos-ar/dimos/ar/blueprints.py` | Run on Mac with DimOS via `./scripts/start.sh` |
 | Robot-mounted AprilTag PDF | `dimos-ar/assets/apriltag_robot_{a4,letter}.pdf` | Print at 100% scale (70 mm); `python scripts/generate_marker.py` |
 | Spectacles Lens | `lens-studio/` | All Lens Studio code; see [`CONTRIBUTING.md`](CONTRIBUTING.md) for scene wiring |
@@ -76,7 +75,7 @@ When working in `dimos-ar/`, follow `.cursor/rules/dimos-ar-bridge-design.mdc`:
   changes, update the Python protocol and the Lens protocol modules in the same change:
   - `dimos-ar/dimos/ar/network/protocol.py`
   - `dimos-ar/PROTOCOL.md`
-  - `lens-studio/Assets/Scripts/Bridge/Protocol.ts`
+  - `lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`
 - The bridge module worker must never block; WebSocket runs on a daemon thread
  (see `bridge/module.py`).
 - AR development in this monorepo uses `dimos-ar/dimos/ar/blueprints.py` (via `./scripts/start.sh`),

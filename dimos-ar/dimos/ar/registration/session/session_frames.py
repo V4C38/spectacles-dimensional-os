@@ -1,4 +1,4 @@
-"""XR camera frame admission and processing for registration sessions."""
+"""AR camera frame admission and processing for registration sessions."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 
     from dimos.ar.bridge.odom_buffer import OdomBuffer
     from dimos.ar.bridge.sender import BridgeSender
-    from dimos.ar.registration.baseline import BaselineStatus
     from dimos.ar.tag_tracking.tracker import FrameResult, RobotAprilTagTracker
     from dimos.ar.world_frame.refinement import WorldFrameRefiner
     from dimos.ar.world_frame.registry import WorldRegistry
@@ -36,7 +35,7 @@ class FrameAdmission(StrEnum):
 
 
 class RegistrationSessionFramesMixin:
-    """XR camera intrinsics, frame admission, and async frame processing."""
+    """AR camera intrinsics, frame admission, and async frame processing."""
 
     if TYPE_CHECKING:
         _tag_tracker: RobotAprilTagTracker
@@ -48,6 +47,9 @@ class RegistrationSessionFramesMixin:
         _frame_max_age_s: float
         _frame_in_flight: bool
 
+        @property
+        def registration_max_distance_m(self) -> float | None: ...
+
         def _broadcast_status(
             self,
             *,
@@ -57,7 +59,6 @@ class RegistrationSessionFramesMixin:
             mode: RegistrationMode | None = None,
             tag_visible: bool | None = None,
             ts: float | None = None,
-            override: BaselineStatus | None = None,
         ) -> None: ...
 
         def _apply_tracker_update(
@@ -79,11 +80,11 @@ class RegistrationSessionFramesMixin:
             height=msg.height,
             k=k,
             d=msg.distortion,
-            frame_id="xr_camera",
+            frame_id="ar_camera",
         )
         self._tag_tracker.set_camera_info(info)
         logger.info(
-            "XR camera intrinsics received",
+            "AR camera intrinsics received",
             resolution=f"{msg.width}x{msg.height}",
             device=msg.device_model,
         )
@@ -98,7 +99,7 @@ class RegistrationSessionFramesMixin:
         frame_age = float(header["send_ts"]) - float(header["ts"])
         if _TRACE:
             logger.debug(
-                "XR camera frame received",
+                "AR camera frame received",
                 seq=seq,
                 jpeg_bytes=len(jpeg),
                 frame_age_s=round(frame_age, 3),
@@ -135,10 +136,11 @@ class RegistrationSessionFramesMixin:
                 receive_mono=receive_mono,
                 T_committed=T_committed,
                 world_frame_committed=world_frame_committed,
+                max_distance_m=self.registration_max_distance_m,
             )
             if _TRACE:
                 logger.debug(
-                    "XR camera frame processed",
+                    "AR camera frame processed",
                     seq=seq,
                     tag_detected=result.tag_detected,
                     tag_ids=result.tag_ids if result.tag_ids else None,
@@ -187,11 +189,11 @@ class RegistrationSessionFramesMixin:
     ) -> FrameAdmission:
         seq = int(header.get("seq", -1))
         if self._frame_in_flight:
-            logger.warning("XR camera frame dropped: previous frame still in flight", seq=seq)
+            logger.warning("AR camera frame dropped: previous frame still in flight", seq=seq)
             return FrameAdmission.ACK_ONLY
         if frame_age > self._frame_max_age_s:
             logger.warning(
-                "XR camera frame dropped: too old",
+                "AR camera frame dropped: too old",
                 seq=seq,
                 frame_age_s=round(frame_age, 3),
                 max_age_s=self._frame_max_age_s,
@@ -200,7 +202,7 @@ class RegistrationSessionFramesMixin:
         if self._session.mode == RegistrationMode.MANUAL_POSE:
             return FrameAdmission.ACK_ONLY
         if not self._tag_tracker.has_camera_info():
-            logger.warning("XR camera frame dropped: no camera intrinsics yet", seq=seq)
+            logger.warning("AR camera frame dropped: no camera intrinsics yet", seq=seq)
             if self._tag_tracker.active:
                 self._broadcast_status(
                     phase=RegistrationPhase.FAILED,
@@ -211,7 +213,7 @@ class RegistrationSessionFramesMixin:
         return FrameAdmission.PROCESS
 
     def _refining_committed_frame(self) -> bool:
-        """Runtime refinement uses the committed frame; baseline registration must not."""
+        """Runtime refinement uses the committed frame; tag registration must not."""
         return self._registry.state.is_committed and not self._tag_tracker.active
 
     def _send_frame_ack(self, header: dict[str, Any]) -> None:

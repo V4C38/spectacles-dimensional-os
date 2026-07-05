@@ -12,7 +12,9 @@ import { DeviceCameraStream } from "./DeviceCameraStream";
 const POSE_BUFFER_CAPACITY = 360;
 const SETUP_CAPTURE_INTERVAL_S = 0.7;
 const SAMPLING_BURST_INTERVAL_S = 0.5;
-const RUNTIME_CAPTURE_INTERVAL_S = 1.5;
+const RUNTIME_CAPTURE_INTERVAL_S = 1.0;
+const RUNTIME_STOP_SPEED_MPS = 0.05;
+const RUNTIME_STOP_BURST_COUNT = 3;
 const IN_FLIGHT_TIMEOUT_S = 12.0;
 const MAX_HEAD_ANGULAR_VEL_DEG_S = 40.0;
 const RUNTIME_CAMERA_MAX_DISTANCE_CM = 700.0;
@@ -22,6 +24,15 @@ const CLOCK_SYNC_RACE_LOG_INTERVAL_S = 2.0;
 
 export type CaptureMode = "off" | "registration" | "runtime";
 export type CapturePolicy = "off" | "steady" | "burst" | "hold";
+
+export function shouldTriggerStopBurst(
+  previousSpeedMps: number | null,
+  nextSpeedMps: number | null,
+): boolean {
+  const wasMoving = previousSpeedMps !== null && previousSpeedMps >= RUNTIME_STOP_SPEED_MPS;
+  const isStopped = nextSpeedMps !== null && nextSpeedMps < RUNTIME_STOP_SPEED_MPS;
+  return wasMoving && isStopped;
+}
 
 interface PoseSample {
   t: number;
@@ -53,6 +64,8 @@ export class CameraClient {
   private _lastCaptureTsLogTime = 0;
   private _lastClockSyncRaceLogTime = 0;
   private _capturePolicy: CapturePolicy = "off";
+  private _lastSpeedMps: number | null = null;
+  private _burstCapturesRemaining = 0;
 
   constructor(private readonly _deps: CameraClientDeps) {}
 
@@ -107,6 +120,14 @@ export class CameraClient {
       return;
     }
     this._lastPipelineEndTime = 0;
+  }
+
+  public notifyRobotSpeed(speedMps: number | null): void {
+    if (this._mode === "runtime" && shouldTriggerStopBurst(this._lastSpeedMps, speedMps)) {
+      this._burstCapturesRemaining = RUNTIME_STOP_BURST_COUNT;
+      this._lastPipelineEndTime = 0;
+    }
+    this._lastSpeedMps = speedMps;
   }
 
   private _onHello = (_msg: HelloMessage): void => {
@@ -178,7 +199,9 @@ export class CameraClient {
         ? this._capturePolicy === "burst"
           ? SAMPLING_BURST_INTERVAL_S
           : SETUP_CAPTURE_INTERVAL_S
-        : RUNTIME_CAPTURE_INTERVAL_S;
+        : this._burstCapturesRemaining > 0
+          ? SAMPLING_BURST_INTERVAL_S
+          : RUNTIME_CAPTURE_INTERVAL_S;
     if (now - this._lastPipelineEndTime < interval) {
       return;
     }
@@ -271,6 +294,9 @@ export class CameraClient {
     this._pipelineBusy = true;
     this._inFlight = true;
     this._inFlightStart = getTime();
+    if (this._mode === "runtime" && this._burstCapturesRemaining > 0) {
+      this._burstCapturesRemaining--;
+    }
     const seq = ++this._seq;
     this._inFlightSeq = seq;
     return seq;

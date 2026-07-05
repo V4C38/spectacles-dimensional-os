@@ -3,17 +3,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
-
-import pytest
 
 from dimos.ar.robot_profile.base import (
-    DEFAULT_BASELINE_MOTION_RECIPE,
-    BaselineMotionRecipe,
     CapabilityState,
     RobotHandshake,
     merge_capability_availability,
-    resolve_baseline_motion_recipe,
 )
 from dimos.ar.robot_profile.g1 import G1RobotProfileModule
 from dimos.ar.robot_profile.go2 import Go2RobotProfileModule
@@ -79,20 +73,20 @@ def test_g1_robot_id_and_model() -> None:
     assert G1RobotProfileModule.robot_model(profile) == "unitree_g1"
 
 
-def test_go2_baseline_motion_recipe_matches_teleop() -> None:
+def test_go2_registration_april_tag_capability_available() -> None:
     profile = _make_go2_profile()
 
-    assert Go2RobotProfileModule.baseline_motion_recipe(profile) == DEFAULT_BASELINE_MOTION_RECIPE
-    assert DEFAULT_BASELINE_MOTION_RECIPE.strafe_speed == pytest.approx(0.4)
+    assert (
+        Go2RobotProfileModule.capabilities(profile)["registration_april_tag"].available
+        is True
+    )
 
 
-def test_g1_baseline_motion_available_and_capability_are_static() -> None:
+def test_g1_registration_april_tag_capability_available() -> None:
     profile = _make_g1_profile()
 
-    assert G1RobotProfileModule.baseline_motion_available(profile) is True
-    assert G1RobotProfileModule.baseline_motion_recipe(profile) == DEFAULT_BASELINE_MOTION_RECIPE
     assert (
-        G1RobotProfileModule.capabilities(profile)["registration_april_odom_baseline"].available
+        G1RobotProfileModule.capabilities(profile)["registration_april_tag"].available
         is True
     )
 
@@ -109,24 +103,6 @@ def test_g1_runtime_tag_tracking_profile_overrides() -> None:
     runtime = G1RobotProfileModule.runtime_tag_tracking_profile(profile)
     assert runtime.runtime_static_speed_mps == 0.08
     assert runtime.runtime_speed_horizon_s == 0.9
-
-
-def test_resolve_baseline_motion_recipe_uses_profile_value() -> None:
-    recipe = BaselineMotionRecipe(
-        strafe_speed=0.25,
-        leg_duration_s=(2.0, 4.0, 2.0),
-        leg_directions=(1.0, -1.0, 1.0),
-        leg_distance_multipliers=(1.0, 2.0, 1.0),
-    )
-    profile = MagicMock()
-    profile.baseline_motion_recipe.return_value = recipe
-    assert resolve_baseline_motion_recipe(profile) == recipe
-
-
-def test_resolve_baseline_motion_recipe_defaults_on_failure() -> None:
-    profile = MagicMock()
-    profile.baseline_motion_recipe.side_effect = RuntimeError("rpc failed")
-    assert resolve_baseline_motion_recipe(profile) == DEFAULT_BASELINE_MOTION_RECIPE
 
 
 def test_merge_capability_availability_preserves_handshake_metadata() -> None:

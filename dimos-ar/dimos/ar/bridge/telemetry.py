@@ -32,7 +32,7 @@ ODOM_EGRESS_AGE_LOG_INTERVAL_S = 5.0
 
 
 class TelemetryPublisher:
-    """Transforms inbound DimOS stream messages into XR WebSocket LiDAR/pose payloads."""
+    """Transforms inbound DimOS stream messages into AR WebSocket LiDAR/pose payloads."""
 
     def __init__(
         self,
@@ -184,7 +184,7 @@ class TelemetryPublisher:
             if now - self._last_dropped_pose_log_mono >= DROPPED_POSE_LOG_INTERVAL_S:
                 self._last_dropped_pose_log_mono = now
                 logger.warning(
-                    "XR pose dropped (non-finite after transform)",
+                    "AR pose dropped (non-finite after transform)",
                     drops=self._dropped_pose_count,
                 )
             return
@@ -221,7 +221,7 @@ class TelemetryPublisher:
             if now - self._last_dropped_pose_log_mono >= DROPPED_POSE_LOG_INTERVAL_S:
                 self._last_dropped_pose_log_mono = now
                 logger.warning(
-                    "XR pose dropped (non-finite after transform)",
+                    "AR pose dropped (non-finite after transform)",
                     drops=self._dropped_pose_count,
                 )
             return False

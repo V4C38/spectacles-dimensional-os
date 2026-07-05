@@ -158,9 +158,13 @@ class RuntimePoseAnimator {
       base.position.y + base.velocityCmPerS.y * ageS,
       base.position.z + base.velocityCmPerS.z * ageS,
     );
+    const yawDelta = base.yawRateRadPerS * ageS;
+    const halfYaw = yawDelta * 0.5;
+    const yawQuat = new quat(Math.cos(halfYaw), 0, Math.sin(halfYaw), 0);
+    const rotation = base.rotation.multiply(yawQuat);
     return {
       position,
-      rotation: new quat(base.rotation.w, base.rotation.x, base.rotation.y, base.rotation.z),
+      rotation,
     };
   }
 
@@ -179,6 +183,7 @@ class RuntimePoseAnimator {
     }
 
     const positionRate = this._smoothingRate(now);
+    const rotationRate = this._rotationSmoothingRate(now);
     const smoothed = interpolatePose(
       current.position,
       predicted.position,
@@ -186,7 +191,7 @@ class RuntimePoseAnimator {
       predicted.rotation,
       dt,
       positionRate,
-      RuntimePoseAnimator.SMOOTHING_ROTATION_RATE,
+      rotationRate,
     );
     return {
       position: smoothed.position,
@@ -228,6 +233,13 @@ class RuntimePoseAnimator {
     );
     return RuntimePoseAnimator.SMOOTHING_RATE_MIN
       + (RuntimePoseAnimator.SMOOTHING_RATE_MAX - RuntimePoseAnimator.SMOOTHING_RATE_MIN) * linearMotion;
+  }
+
+  private _rotationSmoothingRate(now: number): number {
+    if (now < this._boostUntil) {
+      return RuntimePoseAnimator.REALIGN_SNAP_BOOST_RATE;
+    }
+    return RuntimePoseAnimator.SMOOTHING_ROTATION_RATE;
   }
 
   private static _smoothstep01(x: number): number {
@@ -399,6 +411,7 @@ export class RobotMarker extends BaseScriptComponent {
     const position = protocolMetersToLensCentimeters(msg.position);
     const rotation = new quat(q[3], q[0], q[1], q[2]);
     this.frameCapture?.setRobotWorldPosition(position);
+    this.frameCapture?.notifyRobotSpeed(msg.speed_mps ?? null);
     const velocity = msg.velocity_mps;
     const velocityCmPerS = velocity
       ? new vec3(

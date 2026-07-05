@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import math
 from typing import Any, Protocol
 
 from dimos.ar.tag_tracking.solve import TagMount
@@ -18,25 +17,6 @@ class CapabilityState:
 
 
 @dataclass(frozen=True)
-class BaselineMotionRecipe:
-    """Baseline strafe parameters shared by all robot profiles."""
-
-    strafe_speed: float  # cmd_vel.linear.y stick deflection [-1, 1]; timer-controlled legs
-    leg_duration_s: tuple[float, float, float]
-    leg_directions: tuple[float, float, float]
-    leg_distance_multipliers: tuple[float, float, float]
-    move_leg_target_m: float = 0.2
-
-
-DEFAULT_BASELINE_MOTION_RECIPE = BaselineMotionRecipe(
-    strafe_speed=0.4,
-    leg_duration_s=(2.0, 3.5, 2.0),
-    leg_directions=(1.0, -1.0, 1.0),
-    leg_distance_multipliers=(1.0, 1.75, 1.0),
-)
-
-
-@dataclass(frozen=True)
 class TagTrackingProfile:
     runtime_static_speed_mps: float = 0.05
     runtime_max_correct_speed_mps: float = 1.5
@@ -44,6 +24,8 @@ class TagTrackingProfile:
     runtime_speed_horizon_s: float = 0.4
     runtime_yaw_min_baseline_m: float = 0.40
     runtime_yaw_straightness_max: float = 0.20
+    runtime_translation_window_obs: int = 3
+    runtime_translation_window_s: float = 6.0
 
 
 @dataclass(frozen=True)
@@ -72,10 +54,6 @@ class ARRobotProfileSpec(Spec, Protocol):  # type: ignore[misc]
     def supports_goal_orientation(self) -> bool: ...
 
     def tag_mounts(self) -> list[TagMount]: ...
-
-    def baseline_motion_available(self) -> bool: ...
-
-    def baseline_motion_recipe(self) -> BaselineMotionRecipe: ...
 
     def runtime_tag_tracking_profile(self) -> TagTrackingProfile: ...
 
@@ -107,25 +85,3 @@ def merge_capability_availability(
         tag_tracking_profile=handshake.tag_tracking_profile,
         extra=handshake.extra,
     )
-
-
-def resolve_baseline_motion_recipe(profile: ARRobotProfileSpec) -> BaselineMotionRecipe:
-    try:
-        recipe = profile.baseline_motion_recipe()
-        if (
-            isinstance(recipe, BaselineMotionRecipe)
-            and math.isfinite(recipe.strafe_speed)
-            and recipe.strafe_speed > 0
-        ):
-            logger.info(
-                "Baseline motion recipe resolved",
-                strafe_speed=recipe.strafe_speed,
-            )
-            return recipe
-    except Exception as exc:
-        logger.warning(
-            "baseline_motion_recipe failed; using default",
-            error=str(exc),
-            default=DEFAULT_BASELINE_MOTION_RECIPE,
-        )
-    return DEFAULT_BASELINE_MOTION_RECIPE

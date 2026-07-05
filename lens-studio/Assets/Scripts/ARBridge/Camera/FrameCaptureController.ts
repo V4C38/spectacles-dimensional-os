@@ -50,4 +50,8 @@ export class FrameCaptureController extends BaseScriptComponent {
   public requestImmediateCapture(): void {
     this._client?.requestImmediateCapture();
   }
+
+  public notifyRobotSpeed(speedMps: number | null): void {
+    this._client?.notifyRobotSpeed(speedMps);
+  }
 }

@@ -39,7 +39,6 @@ from dimos.ar.robot_profile.base import (
     ARRobotProfileSpec,
     RobotHandshake,
     merge_capability_availability,
-    resolve_baseline_motion_recipe,
 )
 from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker, RobotAprilTagTrackerConfig
 from dimos.ar.utils.console import console_divider
@@ -95,7 +94,7 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     obstacle_target_points: int = 200
     lidar_max_hz: float = 1.0
     # Voxel grid size for coarse LiDAR downsampling before the height-band filter.
-    # The DimOS default is 0.025 m; 0.05 m is chosen deliberately for XR payload budget.
+    # The DimOS default is 0.025 m; 0.05 m is chosen deliberately for AR payload budget.
     lidar_voxel_size_m: float = 0.05
     pose_max_hz: float = 30.0
     stream_stale_timeout_s: float = 10.0
@@ -179,7 +178,7 @@ class ARBridge(Module):  # type: ignore[misc]
                     self.stop_movement.transport is not None
                     or self.cancel_goal_signal.transport is not None
                 ),
-                "registration_april_odom_baseline": self.cmd_vel.transport is not None,
+                "registration_april_tag": len(self._profile.tag_mounts()) > 0,
             },
         )
         self._connect_handshake = handshake
@@ -238,12 +237,7 @@ class ARBridge(Module):  # type: ignore[misc]
             speed_horizon_s=runtime_profile.runtime_speed_horizon_s,
         )
         registry = WorldRegistry(self._world_frame, self.tf.publish_static)
-        baseline_cap = handshake.capability_states.get("registration_april_odom_baseline")
-        baseline_motion_available = (
-            baseline_cap.available if baseline_cap is not None else False
-        )
         assert self._loop is not None, "build() called before Module loop is assigned"
-        baseline_motion_recipe = resolve_baseline_motion_recipe(self._profile)
         nav_ref: NavigateGoalHandler | None = None
 
         def _on_world_frame_corrected() -> None:
@@ -287,11 +281,7 @@ class ARBridge(Module):  # type: ignore[misc]
             frame_max_age_s=self.config.frame_max_age_s,
             manual_registration_quality=self.config.manual_registration_quality,
             world_frame_refiner=world_frame_refiner,
-            profile=self._profile,
-            motion_router=motion_router,
             runtime_profile=runtime_profile,
-            baseline_motion_available=baseline_motion_available,
-            baseline_motion_recipe=baseline_motion_recipe,
         )
 
         nav = NavigateGoalHandler(
@@ -362,7 +352,7 @@ class ARBridge(Module):  # type: ignore[misc]
         """Submit a world-frame navigation goal from an agent skill.
 
         Position and orientation are in the committed world frame. Odom-native
-        producers should publish to the planner directly and forfeit XR visualization.
+        producers should publish to the planner directly and forfeit AR visualization.
         """
         if not self._world_frame.is_committed:
             return False
@@ -376,7 +366,7 @@ class ARBridge(Module):  # type: ignore[misc]
 
     @rpc
     def cancel_agent_nav_goal(self) -> None:
-        """Cancel the active navigation goal (agent or XR)."""
+        """Cancel the active navigation goal (agent or AR)."""
         self._nav.on_cancel_nav_goal()
 
     @rpc
@@ -518,7 +508,7 @@ class ARBridge(Module):  # type: ignore[misc]
         remaining = self._ws_server.connection_count
         if remaining == 0:
             self._safety.on_client_disconnect()
-            logger.info("XR bridge last client disconnected lidar_mode_reset=true")
+            logger.info("dimos-ar bridge last client disconnected lidar_mode_reset=true")
             self._telemetry.reset_lidar_mode()
         else:
-            logger.info("XR client disconnected", remaining_connections=remaining)
+            logger.info("AR client disconnected", remaining_connections=remaining)

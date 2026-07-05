@@ -1,6 +1,6 @@
 // ================================================================
 /**
- * Single owner of the bridge registration session (AprilTag baseline and manual pose).
+ * Single owner of the bridge registration session (AprilTag and manual pose).
  */
 // ================================================================
 
@@ -62,7 +62,7 @@ export class RegistrationClient {
 
   private _intent: RegistrationMode | null = null;
   private _awaitingCommit = false;
-  private _baselineCaptureSessionActive = false;
+  private _tagCaptureSessionActive = false;
   private _registrationCaptureHint: CaptureHint = "off";
   private _lastStatusTime = -1;
   private _lastCaptureLogTime = { value: -1 };
@@ -73,14 +73,13 @@ export class RegistrationClient {
   } | null = null;
   private _deps: RegistrationClientDeps | null = null;
   private _bound = false;
-  private _motionAuthorizePending = false;
 
   public get awaitingCommit(): boolean {
     return this._awaitingCommit;
   }
 
-  public get baselineCaptureSessionActive(): boolean {
-    return this._baselineCaptureSessionActive;
+  public get tagCaptureSessionActive(): boolean {
+    return this._tagCaptureSessionActive;
   }
 
   public get registrationCaptureHint(): CaptureHint {
@@ -114,61 +113,31 @@ export class RegistrationClient {
   public start(mode: RegistrationMode): void {
     this._intent = mode;
     this._awaitingCommit = false;
-    this._motionAuthorizePending = false;
     this._lastStatusTime = -1;
     this._lastSubmittedManualPose = null;
-    this._baselineCaptureSessionActive = mode === "april_odom_baseline";
-    this._registrationCaptureHint =
-      mode === "april_odom_baseline" ? "steady" : "off";
+    this._tagCaptureSessionActive = mode === "april_tag";
+    this._registrationCaptureHint = mode === "april_tag" ? "steady" : "off";
     this._tryStartBridgeSession(mode);
     this._notifyCapturePolicyInputsChanged();
     print(`RegistrationClient: start mode=${mode}`);
   }
 
-  public authorizeMotion(): void {
-    this.requestMotionAuthorization();
-  }
-
-  public requestMotionAuthorization(): boolean {
-    if (this._motionAuthorizePending) {
-      return false;
-    }
-    if (!this._transport || !this._inbound) {
-      print("RegistrationClient: requestMotionAuthorization — bridge unavailable");
-      return false;
-    }
-    this._motionAuthorizePending = true;
-    const sent = this.sendRegistrationCommand("authorize_motion");
-    if (!sent) {
-      this._motionAuthorizePending = false;
-      print("RegistrationClient: requestMotionAuthorization — send failed");
-      return false;
-    }
-    print("RegistrationClient: requestMotionAuthorization sent");
-    return true;
-  }
-
-  public get motionAuthorizePending(): boolean {
-    return this._motionAuthorizePending;
-  }
-
   public stop(options?: { notifyBridge?: boolean }): void {
     const notifyBridge = options?.notifyBridge ?? false;
-    const wasBaseline = this._intent === "april_odom_baseline";
+    const wasTag = this._intent === "april_tag";
     this._intent = null;
     this._awaitingCommit = false;
-    this._motionAuthorizePending = false;
     this._lastStatusTime = -1;
     this._lastSubmittedManualPose = null;
-    this._baselineCaptureSessionActive = false;
+    this._tagCaptureSessionActive = false;
     this._registrationCaptureHint = "off";
     if (notifyBridge && this._session?.isConnected()) {
       this.sendRegistrationCommand("stop");
     }
     this._notifyCapturePolicyInputsChanged();
     print(
-      wasBaseline
-        ? "RegistrationClient: stop (april_odom_baseline)"
+      wasTag
+        ? "RegistrationClient: stop (april_tag)"
         : "RegistrationClient: stop (manual_pose)",
     );
   }
@@ -340,13 +309,9 @@ export class RegistrationClient {
     if (!this._deps) {
       return "auto";
     }
-    const hasBaseline = this._deps.isCapabilityAvailable(
-      "registration_april_odom_baseline",
-    );
-    const hasManual = this._deps.isCapabilityAvailable(
-      "registration_manual_pose",
-    );
-    if (this._deps.hasBridgeConnection() && !hasBaseline && hasManual) {
+    const hasAprilTag = this._deps.isCapabilityAvailable("registration_april_tag");
+    const hasManual = this._deps.isCapabilityAvailable("registration_manual_pose");
+    if (this._deps.hasBridgeConnection() && !hasAprilTag && hasManual) {
       return "manualOnly";
     }
     if (hasManual) {
@@ -385,23 +350,20 @@ export class RegistrationClient {
 
   private _onRegistrationStatus = (msg: RegistrationStatusMessage): void => {
     this._lastStatusTime = getTime();
-    if (msg.phase !== "awaiting_motion") {
-      this._motionAuthorizePending = false;
-    }
     if (msg.phase === "failed" && (this._intent !== null || this._awaitingCommit)) {
       print(
         `RegistrationClient: registration_status failed "${msg.message || "unknown"}"`,
       );
       this._intent = null;
       this._awaitingCommit = false;
-      this._baselineCaptureSessionActive = false;
+      this._tagCaptureSessionActive = false;
       this._registrationCaptureHint = "off";
       this._notifyCapturePolicyInputsChanged();
     } else if (msg.phase === "succeeded") {
       this._awaitingCommit = false;
       this._intent = null;
     }
-    if (this._intent === "april_odom_baseline" || this._awaitingCommit) {
+    if (this._intent === "april_tag" || this._awaitingCommit) {
       this._registrationCaptureHint = msg.capture;
       this._notifyCapturePolicyInputsChanged();
     }

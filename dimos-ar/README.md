@@ -12,8 +12,8 @@ At a glance:
 - `dimos/ar/world_frame/`: committed `WorldFrameState`, registry, runtime refinement
 - `dimos/ar/tag_tracking/`: robot-mounted AprilTag detect + solve
 - `dimos/ar/registration/`: setup wizard session only (baseline, types, wire)
-- `dimos/ar/lidar/`: LiDAR height-band filtering for XR payloads
-- `dimos/ar/adapters/`: per-robot handshake, tag geometry, stream routing
+- `dimos/ar/lidar/`: LiDAR height-band filtering for AR payloads
+- `dimos/ar/robot_profile/`: per-robot handshake, tag geometry, capabilities
 - `dimos/ar/network/protocol.py`: the AR WebSocket contract implementation
 - `dimos/ar/blueprints.py`: monorepo entrypoint used by `scripts/start.sh`
 - `PROTOCOL.md`: cross-client protocol documentation
@@ -65,8 +65,8 @@ robot family:
   active runtime
 - after `hello`, the bridge sends `runtime_snapshot` (bridge + nav phase + optional
   active path) so reconnecting clients resync without replaying live streams
-- navigation uses `goal` with `intent: "navigate"` or `"preview"`; preview paths
-  are not cached in `runtime_snapshot`
+- navigation uses `nav_goal` with `intent: "navigate"` or `"preview"`; preview paths
+  are not cached in `runtime_snapshot`; active goals can be cancelled with `cancel_nav_goal`
 - the Lens keeps offline development affordances enabled until a bridge connects
   and completes the handshake
 - unavailable controls stay visible and switch into disabled `Special` UI states
@@ -124,17 +124,15 @@ Lens-side protocol tests run separately: `cd lens-studio/Tests && npm test`.
 
 Two flows are supported:
 
-**AprilTag + odom baseline** (`registration_command{command:"start",mode:"april_odom_baseline"}`)  
-The bridge drives the robot through a 3-leg baseline-collection move while the
-Spectacles user looks at the robot-mounted AprilTag. After each leg the robot
-stops and samples until enough stable observations are collected. When baseline
-collection completes, the bridge auto-commits. If no solve is produced the session
-enters `failed` and the user can retry.
+**AprilTag** (`registration_command{command:"start",mode:"april_tag"}`)  
+The Spectacles user looks at the robot-mounted AprilTag while the bridge
+collects stable tag observations. When position and yaw spread stay within
+configured thresholds for enough samples, the bridge auto-commits. If stability
+is not reached or the tag is lost, the session enters `failed` and the user can
+retry.
 
-Requires the robot to advertise `registration_april_odom_baseline` (i.e., the
-`cmd_vel` transport must be available and tag mounts configured). On robots
-without baseline motion the AprilTag path returns `failed` and the user must
-switch to manual pose registration.
+Requires the robot to advertise `registration_april_tag` (tag mounts must be
+configured). Robots without tag mounts must use manual pose registration.
 
 **Manual pose** (`registration_command{command:"start",mode:"manual_pose"}`)  
 The user drags the robot marker to its real-world position in the Lens, streams
@@ -142,26 +140,15 @@ The user drags the robot marker to its real-world position in the Lens, streams
 frames are consumed. Always available when `registration_manual_pose` is advertised.
 
 Notes:
-- Baseline strafe motion uses the same pure lateral `cmd_vel.linear.y` path as
-  the proven teleop/app controls. The shared `BaselineMotionRecipe.strafe_speed`
-  is raw stick deflection (default `0.4`); legs run for fixed 2 / 3.5 / 2 s
-  (20 cm right, 35 cm left, 20 cm right)
-  (timer-only, not odom-gated). `motion.distance_m` hints are UX-only.
-- The client authorizes each baseline move with `registration_command:
-  authorize_motion`; the bridge publishes structured `motion` hints in
-  `registration_status`.
 - Runtime drift correction reuses the robot-mounted Spectacles tag stream after
   registration. The bridge still uses `RobotAprilTagTracker.current_solve()` for
-  multi-observation yaw + translation updates when odom baseline is available,
+  multi-observation yaw + translation updates during cruise when the yaw gate passes,
   and falls back to a translation-only correction path when the robot is
   stationary.
-- The handheld-tag-scan flow (static robot, user collects many samples, cluster-averaged on
-  commit) has been removed. It was only reachable on robots without `cmd_vel` transport,
-  for which manual pose is the correct alternative.
 
 **Tag mount geometry (Go2)**  
 The robot marker and LiDAR share `T_world_odom`, which depends on the configured
-`TagMount.position` lever arm in `dimos/ar/adapters/go2.py`. After registration,
+`TagMount.position` lever arm in `dimos/ar/robot_profile/go2.py`. After registration,
 while the tag is visible and the robot is static, `RobotAprilTagTracker.current_translation_solve()`
 emits a one-shot `tag_mount_offset diagnostic` log comparing:
 
@@ -180,12 +167,9 @@ and LiDAR stay co-registered within a few centimetres.
 <details>
 <summary>Protocol coupling</summary>
 
-Protocol v7 aligns naming with the Python package layout (`world_frame_*`,
-`tag_tracking_profile`, `world_frame_correction`) while keeping v6 message
-shapes for registration (`registration_command`), navigation
-(`goal` with `intent: navigate|preview`), and reconnect sync
-(`runtime_snapshot` on connect / `get_status`). If the AR protocol changes,
-update these together:
+Protocol **v10** is current (`PROTOCOL_VERSION = 10` in `dimos/ar/network/protocol.py`).
+See [`PROTOCOL.md`](PROTOCOL.md) for the full changelog and wire schema. If the AR
+protocol changes, update these together:
 
 - `dimos/ar/network/protocol.py`
 - `PROTOCOL.md`

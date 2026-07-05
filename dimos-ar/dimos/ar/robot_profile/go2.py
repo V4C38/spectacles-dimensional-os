@@ -9,9 +9,7 @@ from __future__ import annotations
 from scipy.spatial.transform import Rotation as _Rotation
 
 from dimos.ar.robot_profile.base import (
-    DEFAULT_BASELINE_MOTION_RECIPE,
     ARRobotProfileSpec,
-    BaselineMotionRecipe,
     CapabilityState,
     RobotHandshake,
     TagTrackingProfile,
@@ -27,7 +25,7 @@ logger = setup_logger()
 GO2_CAPABILITIES: dict[str, CapabilityState] = {
     "lidar": CapabilityState(True),
     "odom": CapabilityState(True),
-    "registration_april_odom_baseline": CapabilityState(True),
+    "registration_april_tag": CapabilityState(True),
     "registration_manual_pose": CapabilityState(True),
     "nav": CapabilityState(True),
     "path": CapabilityState(True),
@@ -148,14 +146,6 @@ class Go2RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
     @rpc
     def tag_mounts(self) -> list[TagMount]:
         return go2_tag_mounts()
-
-    @rpc
-    def baseline_motion_available(self) -> bool:
-        return True
-
-    @rpc
-    def baseline_motion_recipe(self) -> BaselineMotionRecipe:
-        return DEFAULT_BASELINE_MOTION_RECIPE
 
     @rpc
     def runtime_tag_tracking_profile(self) -> TagTrackingProfile:

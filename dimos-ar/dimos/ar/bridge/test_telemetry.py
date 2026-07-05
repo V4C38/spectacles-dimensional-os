@@ -282,8 +282,8 @@ def test_apply_set_lidar_mode_fills_partial_obstacle_fields() -> None:
     )
     assert publisher._lidar_mode == "obstacles"
     assert publisher._obstacle_distance_config.min_distance_m == 0.15
-    assert publisher._obstacle_distance_config.opaque_distance_m == 0.40
-    assert publisher._obstacle_distance_config.max_distance_m == 0.60
+    assert publisher._obstacle_distance_config.opaque_distance_m == 0.50
+    assert publisher._obstacle_distance_config.max_distance_m == 0.80
 
 
 def test_publish_pose_snapshot_bypasses_rate_limit() -> None:

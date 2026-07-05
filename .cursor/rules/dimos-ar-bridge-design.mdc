@@ -7,7 +7,7 @@ alwaysApply: false
 # dimos-ar bridge — systems design
 
 When changing `dimos-ar/`, keep these principles. They apply to new code and refactors
-touching bridge collaborators, registration, world frame, network protocol, or adapters.
+touching bridge collaborators, registration, world frame, network protocol, or robot profile.
 
 ## One owner per concern
 
@@ -28,9 +28,9 @@ it does not duplicate lifecycle or mutation logic.
 | Registration setup wizard | `RegistrationSession` |
 | Nav goal lifecycle + `nav_status` | `navigation/navigate.py` `NavigateGoalHandler` |
 | Preview path goals | `navigation/preview.py` `PreviewGoalHandler` |
-| Adapter motion RPC serialization | `AdapterMotionRouter` |
+| Profile motion RPC serialization | `MotionRouter` (`bridge/motion_router.py`) |
 | Estop / client-disconnect policy | `BridgeSafetyCoordinator` |
-| LiDAR/pose XR payloads | `TelemetryPublisher` |
+| LiDAR/pose AR payloads | `TelemetryPublisher` |
 | Pure payload encoding (no state) | `network/data_plane.py`, `network/protocol.py` |
 
 `ARBridge` stays a thin composition root: construct collaborators in `build()`, fan out
@@ -79,7 +79,7 @@ Canonical vocabulary:
 | DimOS nav stack string | `nav_state`, `ar_navigation_state` | conflating with wire `NavPhase` |
 | Client nav lifecycle phase | `NavPhase`, `nav_status`, `nav_phase_payload` | `navigation_state` on the wire |
 
-`RegistrationMode` and `WorldFrameMethod` share wire values (`april_odom_baseline`,
+`RegistrationMode` and `WorldFrameMethod` share wire values (`april_tag`,
 `manual_pose`). At commit time, use the candidate’s mode; do not introduce a third name.
 
 New public APIs, protocol fields, and log keys should follow the canonical table. When

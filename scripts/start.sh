@@ -222,7 +222,7 @@ echo ""
 echo "Ctrl+C to stop."
 echo ""
 
-# Lens may retry WebSocket connections before the XR server finishes booting.
+# Lens may retry WebSocket connections before the AR server finishes booting.
 # A one-off Go2 :8081 /offer refusal usually means the robot-side runtime was
 # still coming up, not that the Lens-side ws://<host>:8787 bridge is misconfigured.
 

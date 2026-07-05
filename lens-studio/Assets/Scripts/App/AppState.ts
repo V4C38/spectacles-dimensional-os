@@ -19,7 +19,7 @@ import {
 export type { NavigationGoalMode };
 export { NAV_GOAL_MODE_LABELS, nextNavigationGoalMode };
 
-/** Whole-app lifecycle: registration wizard vs live XR session. */
+/** Whole-app lifecycle: registration wizard vs live AR session. */
 export type AppPhase = "registration" | "runtime";
 /** Runtime UX mode; `"registration"` is registration preview overlay — not the same as `AppPhase.registration`. */
 export type OperatingMode = "registration" | "manual" | "agent";
@@ -339,7 +339,7 @@ export type AppStateListener = (state: AppStateData) => void;
 const DEFAULT_CAPABILITY_NAMES = [
   "lidar",
   "odom",
-  "registration_april_odom_baseline",
+  "registration_april_tag",
   "registration_manual_pose",
   "nav",
   "path",

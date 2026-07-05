@@ -93,8 +93,8 @@ describe("buildCameraFrameBytes — binary contract with Python parse_camera_fra
     captureTsRobot: 42.0,
   });
 
-  it("starts with XRF1 magic and little-endian header length", () => {
-    expect(Array.from(out.slice(0, 4))).toEqual([0x58, 0x52, 0x46, 0x31]);
+  it("starts with ARF1 magic and little-endian header length", () => {
+    expect(Array.from(out.slice(0, 4))).toEqual([0x41, 0x52, 0x46, 0x31]);
     const headerLen =
       out[4] | (out[5] << 8) | (out[6] << 16) | (out[7] << 24);
     const headerJson = JSON.parse(

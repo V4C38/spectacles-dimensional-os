@@ -235,7 +235,7 @@ async def test_slow_registration_command_does_not_block_ping(
 
         await ws.send(
             '{"type":"registration_command","ts":1.0,"robot_id":"unitree_go2",'
-            '"command":"start","mode":"april_odom_baseline"}\n'
+            '"command":"start","mode":"april_tag"}\n'
         )
         ping_ts = 42.0
         await ws.send(
@@ -265,7 +265,7 @@ async def test_slow_registration_command_does_not_block_get_status(
 
         await ws.send(
             '{"type":"registration_command","ts":1.0,"robot_id":"unitree_go2",'
-            '"command":"start","mode":"april_odom_baseline"}\n'
+            '"command":"start","mode":"april_tag"}\n'
         )
         await ws.send('{"type":"get_status","ts":2.0,"robot_id":"unitree_go2"}\n')
 

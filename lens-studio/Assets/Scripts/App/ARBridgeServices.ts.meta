@@ -26,7 +26,6 @@
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
-    assistClearanceDiscPrefab: false
     bridgeSession: false
     frameCaptureController: false
     navigationMarkerPrefab: false
@@ -47,7 +46,6 @@
       robotMarker: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
       pointCloudRenderer: !<MappingBased.AssignableType_3> 00000000-0000-0000-0000-000000000000
       navigationMarkerPrefab: !<reference.ObjectPrefab> 00000000-0000-0000-0000-000000000000
-      assistClearanceDiscPrefab: !<reference.ObjectPrefab> 00000000-0000-0000-0000-000000000000
       robotGroundDeadzoneRadiusCm: !<float> 75.000000
   ScriptTypes:
     -
@@ -58,5 +56,4 @@
     - // @input AssignableType_2 robotMarker
     - // @input AssignableType_3 pointCloudRenderer
     - // @input Asset.ObjectPrefab navigationMarkerPrefab
-    - // @input Asset.ObjectPrefab assistClearanceDiscPrefab
     - // @input float robotGroundDeadzoneRadiusCm = 75

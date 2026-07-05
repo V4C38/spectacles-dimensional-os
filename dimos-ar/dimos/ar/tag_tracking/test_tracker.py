@@ -290,6 +290,47 @@ def test_tag_tracker_translation_solve_when_stationary() -> None:
     assert np.linalg.norm(solve.T_world_odom[:3, 3]) > 0.0
 
 
+def test_current_translation_solve_max_age_s_filters_stale_observations() -> None:
+    mount = TagMount(tag_id=DEFAULT_MARKER_ID, position=(0.0, 0.0, 0.0))
+    tracker = RobotAprilTagTracker([mount])
+    T_reference = build_T_world_odom(0.0, (0.0, 0.0, 0.0))
+
+    stale = _synthetic_tag_observation(mono_ts=1.0, p_world=(5.0, 0.0, -5.0))
+    fresh = _synthetic_tag_observation(mono_ts=10.0, p_world=(1.0, 0.0, -1.0))
+    tracker._observations.extend([stale, fresh])
+
+    solve = tracker.current_translation_solve(
+        T_reference,
+        max_observations=5,
+        max_age_s=5.0,
+    )
+    assert solve is not None
+    assert solve.T_world_odom[0, 3] == pytest.approx(1.0, abs=1e-3)
+    assert solve.T_world_odom[2, 3] == pytest.approx(-1.0, abs=1e-3)
+
+
+def test_current_translation_solve_median_rejects_outliers() -> None:
+    mount = TagMount(tag_id=DEFAULT_MARKER_ID, position=(0.0, 0.0, 0.0))
+    tracker = RobotAprilTagTracker(
+        [mount],
+        config=RobotAprilTagTrackerConfig(relocalize_cluster_m=0.2),
+    )
+    T_reference = build_T_world_odom(0.0, (0.0, 0.0, 0.0))
+
+    cluster = [
+        _synthetic_tag_observation(mono_ts=1.0, p_world=(1.0, 0.0, -1.0)),
+        _synthetic_tag_observation(mono_ts=2.0, p_world=(1.02, 0.0, -1.01)),
+        _synthetic_tag_observation(mono_ts=3.0, p_world=(0.98, 0.0, -0.99)),
+    ]
+    outlier = _synthetic_tag_observation(mono_ts=4.0, p_world=(3.0, 0.0, -3.0))
+    tracker._observations.extend([*cluster, outlier])
+
+    solve = tracker.current_translation_solve(T_reference, max_observations=4)
+    assert solve is not None
+    assert solve.T_world_odom[0, 3] == pytest.approx(1.0, abs=0.05)
+    assert solve.T_world_odom[2, 3] == pytest.approx(-1.0, abs=0.05)
+
+
 def test_robot_world_pose_estimate_can_use_only_recent_observations() -> None:
     mount = TagMount(tag_id=7)
     tracker = RobotAprilTagTracker([mount])
@@ -624,41 +665,3 @@ def _synthetic_tag_observation(
         quality=0.9,
         reprojection_error_px=0.5,
     )
-
-
-def test_waypoint_sample_buffer_begin_clears_positions() -> None:
-    tracker = RobotAprilTagTracker(GO2_DEFAULT_TAG_MOUNTS)
-    tracker.record_waypoint_observation(_synthetic_tag_observation())
-    assert tracker.latest_waypoint_robot_world_position() is not None
-
-    tracker.begin_waypoint_sample()
-    assert tracker.latest_waypoint_robot_world_position() is None
-
-
-def test_waypoint_sample_buffer_tracks_latest_position() -> None:
-    tracker = RobotAprilTagTracker(GO2_DEFAULT_TAG_MOUNTS)
-    tracker.begin_waypoint_sample()
-    tracker.record_waypoint_observation(
-        _synthetic_tag_observation(p_world=(1.0, 0.0, -2.0))
-    )
-    first = tracker.latest_waypoint_robot_world_position()
-    assert first is not None
-
-    tracker.record_waypoint_observation(
-        _synthetic_tag_observation(p_world=(1.05, 0.0, -2.0))
-    )
-    second = tracker.latest_waypoint_robot_world_position()
-    assert second is not None
-    assert second[0] > first[0]
-
-
-def test_record_latest_waypoint_observation_uses_global_window() -> None:
-    tracker = RobotAprilTagTracker(GO2_DEFAULT_TAG_MOUNTS)
-    tracker.begin_waypoint_sample()
-    with tracker._lock:
-        tracker._observations.append(_synthetic_tag_observation(p_world=(2.0, 0.0, -3.0)))
-
-    assert tracker.record_latest_waypoint_observation() is True
-    pos = tracker.latest_waypoint_robot_world_position()
-    assert pos is not None
-    assert abs(pos[0] - 2.0) < 0.01

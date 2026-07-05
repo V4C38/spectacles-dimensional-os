@@ -34,7 +34,7 @@ def test_committed_transforms_lidar_points() -> None:
     T_odom_robot = pose_to_matrix((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     state.commit(
         T_world_marker @ np.linalg.inv(T_odom_robot),
-        method="april_odom_baseline",
+        method="april_tag",
         approximate=False,
     )
     pts = np.array([[0.0, 0.0, 0.0]], dtype=np.float32)
@@ -139,7 +139,7 @@ def test_commit_creates_planar_floor() -> None:
     T_tilted[:3, :3] = R
     T_tilted[:3, 3] = [1.0, 0.5, 2.0]
 
-    state.commit(T_tilted, method="april_odom_baseline", approximate=False)
+    state.commit(T_tilted, method="april_tag", approximate=False)
 
     odom_up = np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float64)
     T_stored = state._get_T()

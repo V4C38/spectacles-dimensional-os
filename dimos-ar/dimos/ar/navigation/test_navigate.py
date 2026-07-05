@@ -618,7 +618,7 @@ def test_submit_goal_rejected_when_robot_not_connected() -> None:
         position=(1.0, 0.0, 2.0),
         orientation=(0.0, 0.0, 0.0, 1.0),
         ts=1.0,
-        source="xr",
+        source="ar",
     )
     time.sleep(0.05)
     assert published_nav == []

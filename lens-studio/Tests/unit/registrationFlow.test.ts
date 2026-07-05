@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   applyRegistrationStatusToViewState,
-  buildRegistrationCheckpointTitle,
   buildRegistrationDetailText,
   buildRegistrationDisplay,
   createManualRegistrationState,
@@ -27,7 +26,7 @@ function status(
     type: "registration_status",
     ts: 1,
     robot_id: "go2",
-    mode: "april_odom_baseline",
+    mode: "april_tag",
     phase: "scanning",
     capture: "steady",
     message: "Scanning tag",
@@ -105,88 +104,23 @@ function createFlow(options: {
 describe("registration flow view state", () => {
   it("maps registration_status directly into view state", () => {
     const next = applyRegistrationStatusToViewState(createRegistrationViewState(), status({
-      phase: "awaiting_motion",
-      message: "Authorize robot motion",
+      phase: "scanning",
+      message: "Look at the AprilTag on your robot",
       tag_visible: true,
-      motion: {
-        frame: "robot",
-        axis: "lateral",
-        direction: "left",
-        distance_m: 0.5,
-        waypoint_index: 1,
-        waypoint_total: 2,
-      },
     }));
-    expect(next.phase).toBe("awaiting_motion");
-    expect(next.message).toBe("Authorize robot motion");
+    expect(next.phase).toBe("scanning");
+    expect(next.message).toBe("Look at the AprilTag on your robot");
     expect(next.tagVisible).toBe(true);
-    expect(next.motion?.waypoint_index).toBe(1);
   });
 
-  it("builds checkpoint title from motion waypoint", () => {
-    const motion = {
-      frame: "robot" as const,
-      axis: "lateral" as const,
-      direction: "left" as const,
-      distance_m: 0.5,
-      waypoint_index: 1,
-      waypoint_total: 3,
-    };
-    expect(buildRegistrationCheckpointTitle(motion, "awaiting_motion")).toBe(
-      "\n\n\nCheckpoint 0 / 3",
-    );
-    expect(buildRegistrationCheckpointTitle(motion, "moving")).toBe("\n\n\nCheckpoint 1 / 3");
-  });
-
-  it("builds detail text from message and motion waypoint", () => {
+  it("builds detail text from message", () => {
     const text = buildRegistrationDetailText({
       mode: "auto",
-      phase: "moving",
-      message: "Robot moving",
+      phase: "scanning",
+      message: "Tag detected",
       tagVisible: true,
-      motion: {
-        frame: "robot",
-        axis: "lateral",
-        direction: "right",
-        distance_m: 0.4,
-        waypoint_index: 2,
-        waypoint_total: 3,
-      },
     });
-    expect(text).toBe("Robot moving\n\n\nCheckpoint 2 / 3");
-  });
-
-  it("footer shows Continue during awaiting_motion", () => {
-    const footer = getWizardFooterState(
-      WizardStep.Register,
-      true,
-      {
-        mode: "auto",
-        phase: "awaiting_motion",
-        message: "",
-        tagVisible: true,
-      },
-      false,
-    );
-    expect(footer.nextLabel).toBe("Continue");
-    expect(footer.nextInactive).toBe(false);
-  });
-
-  it("footer shows inactive Continuing while motion authorization is pending", () => {
-    const footer = getWizardFooterState(
-      WizardStep.Register,
-      true,
-      {
-        mode: "auto",
-        phase: "awaiting_motion",
-        message: "",
-        tagVisible: true,
-      },
-      false,
-      true,
-    );
-    expect(footer.nextLabel).toBe("Continuing...");
-    expect(footer.nextInactive).toBe(true);
+    expect(text).toBe("Tag detected");
   });
 
   it("footer hides Back on step 0 while phase is registration", () => {
@@ -194,7 +128,6 @@ describe("registration flow view state", () => {
       WizardStep.Start,
       false,
       createRegistrationViewState(),
-      false,
       false,
       false,
     );
@@ -207,7 +140,6 @@ describe("registration flow view state", () => {
       WizardStep.Start,
       false,
       createRegistrationViewState(),
-      false,
       false,
       true,
     );
@@ -386,7 +318,7 @@ describe("RegistrationFlow commit coordinator", () => {
     expect(scheduleFinishRegistration).not.toHaveBeenCalled();
   });
 
-  it("10: baseline auto-commit via registration_status only never sets commitInFlight", () => {
+  it("10: april_tag auto-commit via registration_status only never sets commitInFlight", () => {
     const { flow, scheduleFinishRegistration } = createFlow();
     flow.setState(createRegistrationViewState());
     flow.handleRegistrationStatus(status({ phase: "succeeded" }));

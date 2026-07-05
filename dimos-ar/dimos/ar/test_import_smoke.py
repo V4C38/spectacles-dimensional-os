@@ -10,7 +10,7 @@ import importlib
 
 
 def test_blueprints_importable() -> None:
-    """dimos.ar.blueprints must be importable (exercises tag_tracker, adapters, etc.)."""
+    """dimos.ar.blueprints must be importable (exercises tag_tracker, robot_profile, etc.)."""
     importlib.import_module("dimos.ar.blueprints")
 
 

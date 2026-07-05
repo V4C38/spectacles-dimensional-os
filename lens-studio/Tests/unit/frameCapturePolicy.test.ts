@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { computeFrameCapturePolicy } from "../../Assets/Scripts/ARBridge/Session/InboundRouter";
 import { CaptureHint } from "../../Assets/Scripts/ARBridge/Network/Protocol";
 
-const hints: CaptureHint[] = ["burst", "hold", "steady", "off"];
+const hints: CaptureHint[] = ["burst", "steady", "off"];
 
 describe("computeFrameCapturePolicy", () => {
   it("forceOff overrides all inputs", () => {
@@ -10,19 +10,19 @@ describe("computeFrameCapturePolicy", () => {
       computeFrameCapturePolicy({
         appPhase: "registration",
         worldFrameCommitted: true,
-        baselineCaptureSessionActive: true,
+        tagCaptureSessionActive: true,
         registrationCaptureHint: "burst",
         forceOff: true,
       }),
     ).toEqual({ mode: "off", policy: "off" });
   });
 
-  it.each(hints)("setup baseline session uses capture hint %s", (hint) => {
+  it.each(hints)("setup tag capture session uses capture hint %s", (hint) => {
     expect(
       computeFrameCapturePolicy({
         appPhase: "registration",
         worldFrameCommitted: false,
-        baselineCaptureSessionActive: true,
+        tagCaptureSessionActive: true,
         registrationCaptureHint: hint,
         forceOff: false,
       }),
@@ -30,13 +30,13 @@ describe("computeFrameCapturePolicy", () => {
   });
 
   it.each(hints)(
-    "post-succeeded window keeps baseline session active with hint %s",
+    "post-succeeded window keeps tag capture session active with hint %s",
     (hint) => {
       expect(
         computeFrameCapturePolicy({
           appPhase: "registration",
           worldFrameCommitted: true,
-          baselineCaptureSessionActive: true,
+          tagCaptureSessionActive: true,
           registrationCaptureHint: hint,
           forceOff: false,
         }),
@@ -49,7 +49,7 @@ describe("computeFrameCapturePolicy", () => {
       computeFrameCapturePolicy({
         appPhase: "runtime",
         worldFrameCommitted: true,
-        baselineCaptureSessionActive: false,
+        tagCaptureSessionActive: false,
         registrationCaptureHint: "off",
         forceOff: false,
       }),
@@ -61,55 +61,55 @@ describe("computeFrameCapturePolicy", () => {
       computeFrameCapturePolicy({
         appPhase: "runtime",
         worldFrameCommitted: false,
-        baselineCaptureSessionActive: false,
+        tagCaptureSessionActive: false,
         registrationCaptureHint: "off",
         forceOff: false,
       }),
     ).toEqual({ mode: "off", policy: "off" });
   });
 
-  it("setup without baseline session stays off even with capture hint", () => {
+  it("setup without tag capture session stays off even with capture hint", () => {
     expect(
       computeFrameCapturePolicy({
         appPhase: "registration",
         worldFrameCommitted: false,
-        baselineCaptureSessionActive: false,
+        tagCaptureSessionActive: false,
         registrationCaptureHint: "steady",
         forceOff: false,
       }),
     ).toEqual({ mode: "off", policy: "off" });
   });
 
-  it("setup committed without baseline session stays off (post-succeeded latch cleared)", () => {
+  it("setup committed without tag capture session stays off (post-succeeded latch cleared)", () => {
     expect(
       computeFrameCapturePolicy({
         appPhase: "registration",
         worldFrameCommitted: true,
-        baselineCaptureSessionActive: false,
-        registrationCaptureHint: "hold",
+        tagCaptureSessionActive: false,
+        registrationCaptureHint: "off",
         forceOff: false,
       }),
     ).toEqual({ mode: "off", policy: "off" });
   });
 
-  it("runtime committed ignores active baseline latch", () => {
+  it("runtime committed ignores active tag capture latch", () => {
     expect(
       computeFrameCapturePolicy({
         appPhase: "runtime",
         worldFrameCommitted: true,
-        baselineCaptureSessionActive: true,
+        tagCaptureSessionActive: true,
         registrationCaptureHint: "burst",
         forceOff: false,
       }),
     ).toEqual({ mode: "runtime", policy: "off" });
   });
 
-  it("runtime uncommitted ignores active baseline latch", () => {
+  it("runtime uncommitted ignores active tag capture latch", () => {
     expect(
       computeFrameCapturePolicy({
         appPhase: "runtime",
         worldFrameCommitted: false,
-        baselineCaptureSessionActive: true,
+        tagCaptureSessionActive: true,
         registrationCaptureHint: "burst",
         forceOff: false,
       }),
@@ -121,19 +121,19 @@ describe("computeFrameCapturePolicy", () => {
       computeFrameCapturePolicy({
         appPhase: "runtime",
         worldFrameCommitted: false,
-        baselineCaptureSessionActive: false,
+        tagCaptureSessionActive: false,
         registrationCaptureHint: "steady",
         forceOff: false,
       }),
     ).toEqual({ mode: "off", policy: "off" });
   });
 
-  it("hello reconnect setup with no baseline session stays off", () => {
+  it("hello reconnect setup with no tag capture session stays off", () => {
     expect(
       computeFrameCapturePolicy({
         appPhase: "registration",
         worldFrameCommitted: false,
-        baselineCaptureSessionActive: false,
+        tagCaptureSessionActive: false,
         registrationCaptureHint: "burst",
         forceOff: false,
       }),

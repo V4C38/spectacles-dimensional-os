@@ -741,16 +741,16 @@ describe("remote nav goal updates (Phase 6)", () => {
     expect(result.effects.some((e) => e.kind === "destroyMarker")).toBe(true);
   });
 
-  it("suppresses xr echo while local user session is active", () => {
+  it("suppresses ar echo while local user session is active", () => {
     const state = {
       ...createInitialNavEngineState(),
       activeConfig: manualNavGoalConfig("single"),
       goal: null,
     };
-    expect(shouldIgnoreNavGoalUpdate(state, "xr", agentPose())).toBe(true);
+    expect(shouldIgnoreNavGoalUpdate(state, "ar", agentPose())).toBe(true);
     const result = applyNavigationEvent(state, {
       kind: "navGoalUpdate",
-      source: "xr",
+      source: "ar",
       pose: agentPose(),
       active: true,
     });
@@ -758,7 +758,7 @@ describe("remote nav goal updates (Phase 6)", () => {
     expect(result.effects).toHaveLength(0);
   });
 
-  it("suppresses xr echo within 25 cm of last local goal", () => {
+  it("suppresses ar echo within 25 cm of last local goal", () => {
     const localPose = { position: new vec3(100, 0, 100), rotation: quat.quatIdentity() };
     const state = {
       ...createInitialNavEngineState(),
@@ -770,7 +770,7 @@ describe("remote nav goal updates (Phase 6)", () => {
       position: new vec3(110, 0, 100),
       rotation: quat.quatIdentity(),
     };
-    expect(shouldIgnoreNavGoalUpdate(state, "xr", nearby)).toBe(true);
+    expect(shouldIgnoreNavGoalUpdate(state, "ar", nearby)).toBe(true);
   });
 
   it("accepts agent updates regardless of operating mode disarm policy", () => {

@@ -34,9 +34,6 @@ export class ARBridgeServices extends BaseScriptComponent {
   navigationMarkerPrefab: ObjectPrefab;
 
   @input
-  assistClearanceDiscPrefab: ObjectPrefab;
-
-  @input
   robotGroundDeadzoneRadiusCm = 75;
 
   private _state: AppStateStore | null = null;
@@ -131,10 +128,7 @@ export class ARBridgeServices extends BaseScriptComponent {
     );
     this._registrationPreview = new RegistrationPreviewPresenter(
       this._state,
-      this.assistClearanceDiscPrefab ?? null,
-      this.getSceneObject(),
       this._robot,
-      this._registration,
     );
     this._navigation = NavigationPlacement.create({
       eventHost: this,

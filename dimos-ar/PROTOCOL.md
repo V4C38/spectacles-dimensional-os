@@ -9,7 +9,25 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v9 (current) — Navigation goal provenance
+### v10 (current) — AprilTag-only registration
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 10.**
+- Registration mode **`april_odom_baseline`** renamed to **`april_tag`**; capability
+  **`registration_april_odom_baseline`** renamed to **`registration_april_tag`**.
+- **`registration_command`:** removed **`authorize_motion`**; commands are now
+  **`start`**, **`stop`**, and **`commit`** only.
+- **`registration_status`:** removed **`motion`** field and leg phases
+  (`awaiting_motion`, `moving`, `sampling`). AprilTag registration auto-commits
+  when tag observations are stable; phases are `idle`, `scanning`, `editing`,
+  `awaiting_commit`, `succeeded`, `failed`.
+- **`registration_status.capture`:** removed **`hold`** hint (use `steady` or
+  `burst`).
+- **`world_frame_method`:** committed method literal is now **`april_tag`**
+  (was `april_odom_baseline`).
+
+### v9 — Navigation goal provenance
 
 **Additive changes** — v8 clients ignore unknown outbound types:
 
@@ -100,19 +118,19 @@ process lifetime (unchanged behavior, now explicit).
   present. Superseded in v7 by `world_frame_method` and
   `world_frame_approximate` (see v7 changelog).
 
-### v3 — XR Bridge PR refactor (additive, backward-compatible)
+### v3 — dimos-ar bridge PR refactor (additive, backward-compatible)
 
 Per-robot adapters, DimOS TF publication, and additive optional fields. Clients
 built against prior v3 wire shapes continue to work without modification.
 
 ## Transport
 
-- Plain WebSocket. The Mac runs the server; XR devices connect as clients.
+- Plain WebSocket. The Mac runs the server; AR devices connect as clients.
 - Most messages are JSON text frames. High-resolution camera stills use a binary
   `camera_frame` envelope (see below). LiDAR uses a binary `lidar_f16` frame
   (see below).
 - Every JSON message is a JSON object with a `type` field.
-- Inbound and outbound coordinates use the XR world frame. The bridge converts
+- Inbound and outbound coordinates use the AR world frame. The bridge converts
   world-frame goals and registration poses into robot odom coordinates.
 - The active session robot is declared once in `hello.robot.robot_id`. Inbound
   messages must carry a matching `robot_id`. Most outbound JSON messages omit
@@ -148,7 +166,7 @@ capability map, then sends a `runtime_snapshot` (see below).
   "capabilities": {
     "lidar":                              { "available": true,  "reason": null },
     "odom":                               { "available": true,  "reason": null },
-    "registration_april_odom_baseline":   { "available": true,  "reason": null },
+    "registration_april_tag":   { "available": true,  "reason": null },
     "registration_manual_pose":           { "available": true,  "reason": null },
     "nav":                                { "available": true,  "reason": null },
     "path":                               { "available": true,  "reason": null },
@@ -238,13 +256,13 @@ Fields:
 
 Broadcast when a navigation goal session is created, updated, or torn down.
 Deduped server-side (≈0.15 m and 0.25 s). Clients use this to visualize goals
-from any source (XR headset or agent).
+from any source (AR headset or agent).
 
 ```json
 {
   "type": "nav_goal_update",
   "ts": 1730000000.123,
-  "source": "xr",
+  "source": "ar",
   "position": [1.0, 0.0, 2.0],
   "orientation": [0.0, 0.0, 0.0, 1.0],
   "active": true
@@ -253,7 +271,7 @@ from any source (XR headset or agent).
 
 Fields:
 
-- `source`: `"xr"` (headset) or `"agent"` (DimOS agent module / RPC)
+- `source`: `"ar"` (headset) or `"agent"` (DimOS agent module / RPC)
 - `position`: world-frame goal position `[x, y, z]` in metres
 - `orientation` (optional): world-frame quaternion `[x, y, z, w]`
 - `active`: `true` on create/update; `false` on terminal paths (reached, failed,
@@ -281,7 +299,7 @@ Fields:
 - `robot_connected`: bridge has an active robot/runtime data path
 - `world_frame_committed`: world-frame alignment has been committed
 - `reconnecting`: reconnect/recovery is in progress
-- `world_frame_method`: **always present** — `"april_odom_baseline"`,
+- `world_frame_method`: **always present** — `"april_tag"`,
   `"manual_pose"`, or `null` when uncommitted
 - `world_frame_approximate`: **always present** — `true` when the committed
   alignment is approximate (e.g. manual pose)
@@ -294,19 +312,11 @@ Registration progress during a setup session:
 {
   "type": "registration_status",
   "ts": 1730000000.123,
-  "mode": "april_odom_baseline",
-  "phase": "awaiting_motion",
+  "mode": "april_tag",
+  "phase": "scanning",
   "capture": "steady",
-  "message": "Authorize robot motion to begin baseline collection",
+  "message": "Look at the AprilTag on your robot",
   "tag_visible": true,
-  "motion": {
-    "frame": "robot",
-    "axis": "lateral",
-    "direction": "left",
-    "distance_m": 0.200,
-    "waypoint_index": 1,
-    "waypoint_total": 3
-  },
   "preview_pose": {
     "position": [1.2, 0.0, -2.0],
     "orientation": [0.0, 0.0, 0.383, 0.924]
@@ -316,26 +326,23 @@ Registration progress during a setup session:
 
 Fields:
 
-- `mode` (optional): `"april_odom_baseline"` or `"manual_pose"` — matches
+- `mode` (optional): `"april_tag"` or `"manual_pose"` — matches
   `registration_command.mode` when a session is active
-- `phase`: one of `"idle"`, `"scanning"`, `"awaiting_motion"`, `"moving"`,
-  `"sampling"`, `"editing"`, `"awaiting_commit"`, `"succeeded"`, `"failed"`
-- `capture`: camera capture hint for the client — `"off"`, `"steady"`, `"burst"`,
-  or `"hold"`
+- `phase`: one of `"idle"`, `"scanning"`, `"editing"`, `"awaiting_commit"`,
+  `"succeeded"`, `"failed"`
+- `capture`: camera capture hint for the client — `"off"`, `"steady"`, or
+  `"burst"`
 - `message`: human-readable status string for display in the client HUD
-- `tag_visible` (optional): present for AprilTag baseline sessions; `true` when
-  a configured robot-mounted tag was detected in the most recent processed frame
-- `motion` (optional): structured safety hint during baseline strafe — `frame`
-  (`"robot"`), `axis` (`"lateral"`), `direction` (`"left"` | `"right"`),
-  `distance_m`, `waypoint_index`, `waypoint_total`. `distance_m` is indicative
-  for UX; Go2 baseline legs are time-controlled at the bridge, not odom-gated.
+- `tag_visible` (optional): present for AprilTag sessions; `true` when a
+  configured robot-mounted tag was detected in the most recent processed frame
 - `preview_pose` (optional): estimated robot pose in world frame (`position` xyz
   metres, `orientation` quaternion xyzw); omitted until a solve is available
 
-During baseline **leg motion** (`phase: "moving"`), the bridge emits
-`capture: "steady"` (~1 frame/s) so tag tracking and `preview_pose` updates
-continue. `"hold"` remains in the enum for future use but is not used during
-baseline strafe. **Sampling** at each waypoint uses `capture: "burst"` (~2/s).
+During AprilTag registration (`mode: "april_tag"`), the bridge uses
+`capture: "steady"` while collecting tag observations and auto-commits when
+observations are stable (minimum count, position spread, and yaw spread within
+configured thresholds). The client may use `capture: "burst"` when the bridge
+requests it via `registration_status.capture`.
 
 ### `camera_frame_ack`
 
@@ -368,7 +375,7 @@ payload size on Wi-Fi:
 
 ### `lidar` (binary)
 
-Subsampled point cloud in XR world frame, sent as a **binary WebSocket frame**
+Subsampled point cloud in AR world frame, sent as a **binary WebSocket frame**
 (message type `0x01 lidar_f16`). Each point is encoded as three IEEE 754
 half-precision (float16) values, little-endian. Up to 2500 points per frame.
 Binary frames carry **no** `robot_id`; the session robot comes from `hello`.
@@ -393,7 +400,7 @@ Point count: `N = (total_bytes − 5) / 6`.
 
 ### `pose`
 
-Robot pose in XR world frame:
+Robot pose in AR world frame:
 
 ```json
 {
@@ -447,7 +454,7 @@ Fields:
 
 ### `path`
 
-Planner path in XR world frame. The `kind` field distinguishes the active
+Planner path in AR world frame. The `kind` field distinguishes the active
 navigation route from an on-demand preview:
 
 ```json
@@ -475,7 +482,7 @@ Fields:
 
 - `kind`: `"active"` for the navigating route, `"preview"` for an unconfirmed
   target
-- `waypoints`: route in XR world frame; may be empty when no path is available
+- `waypoints`: route in AR world frame; may be empty when no path is available
 - `target` (preview only): echoed world-frame target so the client can ignore
   stale responses
 
@@ -537,8 +544,8 @@ connected client becomes the active bridge policy for all clients until another
   "robot_id": "unitree_go2",
   "mode": "obstacles",
   "obstacle_min_distance_m": 0.10,
-  "obstacle_opaque_distance_m": 0.40,
-  "obstacle_max_distance_m": 0.60
+  "obstacle_opaque_distance_m": 0.50,
+  "obstacle_max_distance_m": 0.80
 }
 ```
 
@@ -564,7 +571,7 @@ Bridge semantics by mode:
 - `off`: the bridge suppresses LiDAR transmission entirely
 - `obstacles`: the bridge sends only points inside the configured obstacle
   distance annulus after its normal height/range filtering
-- `full`: the bridge sends the standard full XR payload path
+- `full`: the bridge sends the standard full AR payload path
 
 ### `registration_command`
 
@@ -572,7 +579,7 @@ Unified registration session control. Replaces the v5
 `registration_start` / `registration_action` / `registration_stop` /
 `registration_commit` messages.
 
-Start an AprilTag baseline session:
+Start an AprilTag registration session:
 
 ```json
 {
@@ -580,7 +587,7 @@ Start an AprilTag baseline session:
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
   "command": "start",
-  "mode": "april_odom_baseline"
+  "mode": "april_tag"
 }
 ```
 
@@ -593,17 +600,6 @@ Start a manual pose session:
   "robot_id": "unitree_go2",
   "command": "start",
   "mode": "manual_pose"
-}
-```
-
-Authorize baseline strafe motion (AprilTag flow only):
-
-```json
-{
-  "type": "registration_command",
-  "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
-  "command": "authorize_motion"
 }
 ```
 
@@ -634,20 +630,18 @@ Commit manual pose registration:
 
 Fields:
 
-- `command` (**required**): `"start"`, `"authorize_motion"`, `"stop"`, or
-  `"commit"`
-- `mode` (**required when `command` is `"start"`**): `"april_odom_baseline"` or
+- `command` (**required**): `"start"`, `"stop"`, or `"commit"`
+- `mode` (**required when `command` is `"start"`**): `"april_tag"` or
   `"manual_pose"`. Must be omitted for all other commands. Requires the
-  matching capability (`registration_april_odom_baseline` or
-  `registration_manual_pose`) to be available in `hello`.
+  matching capability (`registration_april_tag` or `registration_manual_pose`)
+  to be available in `hello`.
 
-The bridge **MUST NOT** issue baseline strafe motion before receiving
-`registration_command` with `command: "authorize_motion"` for the current
-session.
+AprilTag registration auto-commits when tag observations are stable; the client
+does not send a separate commit for that flow.
 
 ### `registration_pose`
 
-Manual robot pose estimate from the XR client during a `manual_pose` session:
+Manual robot pose estimate from the AR client during a `manual_pose` session:
 
 ```json
 {
@@ -689,7 +683,7 @@ runtime-still `3200x2400` stage switches):
 
 JPEG camera frame plus pose metadata. Wire format:
 
-1. Magic `XRF1` (4 bytes)
+1. Magic `ARF1` (4 bytes)
 2. `header_len` uint32 little-endian
 3. UTF-8 JSON header
 4. Raw JPEG bytes
@@ -713,7 +707,7 @@ Header fields:
 - `capture_ts_robot` (optional): Lens capture time mapped to bridge/robot wall
   clock via connect-time ping/pong; required for exact frame↔odom pairing on
   current bridges
-- The XR client must re-send `camera_info` before the first `camera_frame` whose
+- The AR client must re-send `camera_info` before the first `camera_frame` whose
   JPEG dimensions differ from the previous stage/mode so the bridge can replace
   the active intrinsics before decoding the new stream or still resolution.
 - The bridge detects robot-mounted AprilTags in the JPEG and estimates

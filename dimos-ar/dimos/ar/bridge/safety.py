@@ -28,12 +28,12 @@ class BridgeSafetyCoordinator:
         self._motion_router = motion_router
 
     def on_emergency_stop(self, msg: EmergencyStopMessage) -> None:
-        logger.info("XR emergency_stop received")
+        logger.info("AR emergency_stop received")
         self._nav.on_emergency_stop(msg.ts)
         self._registration.on_emergency_stop()
 
     def on_client_disconnect(self) -> None:
-        logger.info("XR client disconnect handled nav_reset=true registration_cleared=true")
+        logger.info("AR client disconnect handled nav_reset=true registration_cleared=true")
         self._registration.clear_on_disconnect()
         self._nav.reset_on_disconnect()
         self._motion_router.emergency_stop()

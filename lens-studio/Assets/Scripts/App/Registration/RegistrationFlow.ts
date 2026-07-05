@@ -9,7 +9,6 @@ import { NO_ROBOT_CONNECTED_LABEL } from "../AppState";
 import { ARBridgeCoordinator } from "../ARBridgeCoordinator";
 import {
   BridgeStatusMessage,
-  RegistrationMotion,
   RegistrationPhase,
   RegistrationStatusMessage,
 } from "../../ARBridge/Network/Protocol";
@@ -32,7 +31,6 @@ export interface RegistrationViewState {
   phase: RegistrationPhase;
   message: string;
   tagVisible: boolean;
-  motion?: RegistrationStatusMessage["motion"];
   previewPose?: RegistrationStatusMessage["preview_pose"];
 }
 
@@ -126,32 +124,8 @@ export function isRegistrationFailed(state: RegistrationViewState): boolean {
 const MANUAL_CANDIDATE_SYNC_INTERVAL_S = 0.35;
 const NO_RESPONSE_STATUS_MSG = "Bridge not responding";
 
-export function formatRegistrationCheckpointLabel(
-  motion: RegistrationMotion,
-  phase?: RegistrationPhase,
-): string {
-  const zeroBased = motion.waypoint_index - 1;
-  const checkpoint = phase === "awaiting_motion" ? zeroBased : motion.waypoint_index;
-  return `Checkpoint ${checkpoint} / ${motion.waypoint_total}`;
-}
-
-/** Robot menu title: three leading line breaks, then the checkpoint label. */
-export function buildRegistrationCheckpointTitle(
-  motion: RegistrationMotion,
-  phase?: RegistrationPhase,
-): string {
-  return `\n\n\n${formatRegistrationCheckpointLabel(motion, phase)}`;
-}
-
 export function buildRegistrationDetailText(state: RegistrationViewState): string {
-  const parts: string[] = [];
-  if (state.message) {
-    parts.push(state.message);
-  }
-  if (state.motion) {
-    parts.push(formatRegistrationCheckpointLabel(state.motion, state.phase));
-  }
-  return parts.join("\n\n\n");
+  return state.message || "";
 }
 
 export function applyRegistrationStatusToViewState(
@@ -161,7 +135,7 @@ export function applyRegistrationStatusToViewState(
   if (state.mode === "auto" && msg.mode === "manual_pose") {
     return state;
   }
-  if (state.mode === "manual" && msg.mode === "april_odom_baseline") {
+  if (state.mode === "manual" && msg.mode === "april_tag") {
     return state;
   }
   return {
@@ -169,7 +143,6 @@ export function applyRegistrationStatusToViewState(
     phase: msg.phase,
     message: msg.message || state.message,
     tagVisible: msg.tag_visible ?? state.tagVisible,
-    motion: msg.motion ?? state.motion,
     previewPose: msg.preview_pose ?? state.previewPose,
   };
 }
@@ -245,7 +218,6 @@ export function getWizardFooterState(
   connected: boolean,
   registrationState: RegistrationViewState,
   commitInFlight: boolean,
-  motionAuthorizePending: boolean = false,
   canGoBackAtStart: boolean = false,
 ): WizardFooterState {
   let nextLabel = "Skip";
@@ -272,14 +244,6 @@ export function getWizardFooterState(
       } else {
         nextLabel = "Complete";
         nextStyle = SnapOS2Styles.Primary;
-      }
-    } else if (registrationState.phase === "awaiting_motion") {
-      if (motionAuthorizePending) {
-        nextLabel = "Continuing...";
-        nextInactive = true;
-      } else {
-        nextLabel = "Continue";
-        nextStyle = SnapOS2Styles.PrimaryNeutral;
       }
     } else if (hasRegistrationCandidate(registrationState)) {
       nextLabel = "Complete";
@@ -612,7 +576,7 @@ export class RegistrationFlow {
       this._notify();
     });
     this._registrationPreview?.begin();
-    this._registrationClient?.start("april_odom_baseline");
+    this._registrationClient?.start("april_tag");
     this._notify(true);
   }
 
@@ -642,7 +606,7 @@ export class RegistrationFlow {
   }
 
   private _logRegistrationStatusIfChanged(msg: RegistrationStatusMessage): void {
-    const key = `${msg.phase}|${msg.mode ?? "-"}|${msg.capture}|${msg.motion?.waypoint_index ?? "-"}`;
+    const key = `${msg.phase}|${msg.mode ?? "-"}|${msg.capture}|${msg.tag_visible ?? "-"}`;
     if (key === this._lastLoggedRegistrationStatusKey) {
       return;
     }

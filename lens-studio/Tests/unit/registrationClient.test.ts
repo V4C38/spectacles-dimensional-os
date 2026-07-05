@@ -45,17 +45,17 @@ describe("RegistrationClient", () => {
     setMockTime(100);
   });
 
-  it("starts april_odom_baseline session and activates baseline capture latch", () => {
+  it("starts april_tag session and activates tag capture latch", () => {
     const { client, transport } = makeRegistrationClient();
     let captureChanged = 0;
     client.onCapturePolicyInputsChanged.add(() => {
       captureChanged += 1;
     });
 
-    client.start("april_odom_baseline");
+    client.start("april_tag");
 
     expect(transport.send).toHaveBeenCalled();
-    expect(client.baselineCaptureSessionActive).toBe(true);
+    expect(client.tagCaptureSessionActive).toBe(true);
     expect(client.registrationCaptureHint).toBe("steady");
     expect(captureChanged).toBe(1);
     expect(client.hasActiveIntent()).toBe(true);
@@ -63,7 +63,7 @@ describe("RegistrationClient", () => {
 
   it("maps registration_status capture hints to registrationCaptureHint", () => {
     const { client, inbound } = makeRegistrationClient();
-    client.start("april_odom_baseline");
+    client.start("april_tag");
 
     let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
     inbound.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
@@ -75,10 +75,10 @@ describe("RegistrationClient", () => {
       type: "registration_status",
       ts: 1,
       robot_id: "go2",
-      mode: "april_odom_baseline",
-      phase: "sampling",
+      mode: "april_tag",
+      phase: "scanning",
       capture: "burst",
-      message: "Sampling",
+      message: "Collecting samples",
     });
     expect(client.registrationCaptureHint).toBe("burst");
 
@@ -86,17 +86,17 @@ describe("RegistrationClient", () => {
       type: "registration_status",
       ts: 2,
       robot_id: "go2",
-      mode: "april_odom_baseline",
-      phase: "moving",
-      capture: "hold",
-      message: "Moving",
+      mode: "april_tag",
+      phase: "scanning",
+      capture: "steady",
+      message: "Hold steady",
     });
-    expect(client.registrationCaptureHint).toBe("hold");
+    expect(client.registrationCaptureHint).toBe("steady");
   });
 
-  it("clears intent and baseline latch on failed registration_status", () => {
+  it("clears intent and tag latch on failed registration_status", () => {
     const { client, inbound } = makeRegistrationClient();
-    client.start("april_odom_baseline");
+    client.start("april_tag");
 
     let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
     inbound.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
@@ -108,14 +108,14 @@ describe("RegistrationClient", () => {
       type: "registration_status",
       ts: 1,
       robot_id: "go2",
-      mode: "april_odom_baseline",
+      mode: "april_tag",
       phase: "failed",
       capture: "off",
       message: "Tag lost",
     });
 
     expect(client.hasActiveIntent()).toBe(false);
-    expect(client.baselineCaptureSessionActive).toBe(false);
+    expect(client.tagCaptureSessionActive).toBe(false);
     expect(client.registrationCaptureHint).toBe("off");
   });
 
@@ -185,61 +185,12 @@ describe("RegistrationClient", () => {
     expect(client.awaitingCommit).toBe(true);
   });
 
-  it("requestMotionAuthorization sets pending and sends authorize_motion", () => {
-    const { client, transport } = makeRegistrationClient();
-
-    expect(client.requestMotionAuthorization()).toBe(true);
-    expect(client.motionAuthorizePending).toBe(true);
-    expect(transport.send).toHaveBeenCalled();
-  });
-
-  it("requestMotionAuthorization blocks duplicate calls while pending", () => {
-    const { client, transport } = makeRegistrationClient();
-
-    expect(client.requestMotionAuthorization()).toBe(true);
-    expect(client.requestMotionAuthorization()).toBe(false);
-    expect(transport.send).toHaveBeenCalledTimes(1);
-  });
-
-  it("clears motion authorize pending when phase leaves awaiting_motion", () => {
-    const { client, inbound } = makeRegistrationClient();
-    client.start("april_odom_baseline");
-    client.requestMotionAuthorization();
-
-    let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
-    inbound.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
-      statusHandler = handler;
-    });
-    client.bind();
-
-    statusHandler({
-      type: "registration_status",
-      ts: 1,
-      robot_id: "go2",
-      mode: "april_odom_baseline",
-      phase: "moving",
-      capture: "hold",
-      message: "Moving",
-    });
-
-    expect(client.motionAuthorizePending).toBe(false);
-  });
-
-  it("stop clears motion authorize pending", () => {
+  it("start clears prior session state", () => {
     const { client } = makeRegistrationClient();
-    client.requestMotionAuthorization();
+    client.start("april_tag");
+    expect(client.tagCaptureSessionActive).toBe(true);
 
-    client.stop({ notifyBridge: true });
-
-    expect(client.motionAuthorizePending).toBe(false);
-  });
-
-  it("start clears motion authorize pending", () => {
-    const { client } = makeRegistrationClient();
-    client.requestMotionAuthorization();
-
-    client.start("april_odom_baseline");
-
-    expect(client.motionAuthorizePending).toBe(false);
+    client.start("manual_pose");
+    expect(client.tagCaptureSessionActive).toBe(false);
   });
 });

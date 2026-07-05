@@ -66,7 +66,7 @@ def pose_to_matrix(
     """Build 4x4 homogeneous transform from position and quaternion [qx, qy, qz, qw].
 
     Delegates to ``dimos.utils.transform_utils.pose_to_matrix``; provides the
-    tuple-based calling convention used throughout the XR bridge.
+    tuple-based calling convention used throughout the dimos-ar bridge.
     """
     qx, qy, qz, qw = orientation
     return _dimos_pose_to_matrix(  # type: ignore[no-any-return]
@@ -80,7 +80,7 @@ def matrix_to_pose(
     """Extract position and quaternion [qx, qy, qz, qw] from a 4x4 matrix.
 
     Delegates to ``dimos.utils.transform_utils.matrix_to_pose``; returns tuples
-    used throughout the XR bridge wire-encoding layer.
+    used throughout the dimos-ar bridge wire-encoding layer.
     """
     p = _dimos_matrix_to_pose(T)
     return (
@@ -100,7 +100,7 @@ def normalize_ground_pose(
 ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
     """Keep position but flatten rotation to yaw around the world-up Y axis.
 
-    XR-specific: registration setup intentionally treats the tracked marker object's
+    AR-specific: registration setup intentionally treats the tracked marker object's
     local +X axis as the semantic "forward" direction in AR world space. This
     matches the Lens-side yaw helpers and navigation placement math.
 
@@ -136,7 +136,7 @@ def up_axis_angle_deg(T: NDArray[np.float64]) -> float:
 def gravity_level_transform(T: NDArray[np.float64]) -> NDArray[np.float64]:
     """Gravity-level a 4x4 transform so its local +Z axis maps exactly to world +Y.
 
-    XR-specific: forces the AR floor to be perfectly planar by aligning the
+    AR-specific: forces the AR floor to be perfectly planar by aligning the
     odom frame's up-axis with the world up-axis while preserving yaw and
     translation. DimOS has no equivalent for this AR coordinate convention.
     """

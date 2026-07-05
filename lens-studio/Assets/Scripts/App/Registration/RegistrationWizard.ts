@@ -214,14 +214,6 @@ export class RegistrationWizard extends BaseScriptComponent {
     }
 
     const regState = this._registrationFlow?.state ?? createRegistrationViewState();
-    if (regState.phase === "awaiting_motion") {
-      this._log("motion authorization requested");
-      if (this.arBridgeCoordinator?.registrationClient.requestMotionAuthorization()) {
-        this._refreshFooterButtons();
-        this._renderRegistrationState();
-      }
-      return;
-    }
     if (regState.phase === "failed") {
       this._registrationFlow?.redo();
       return;
@@ -498,7 +490,6 @@ export class RegistrationWizard extends BaseScriptComponent {
       this._isConnected(),
       this._registrationFlow?.state ?? createRegistrationViewState(),
       this._registrationFlow?.commitInFlight ?? false,
-      this.arBridgeCoordinator?.registrationClient.motionAuthorizePending ?? false,
       this.arBridgeCoordinator
         ? isRuntimePhase(this.arBridgeCoordinator.appState)
         : false,

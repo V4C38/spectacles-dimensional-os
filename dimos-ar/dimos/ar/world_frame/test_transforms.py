@@ -64,7 +64,7 @@ def test_inverse_transform_pose() -> None:
     T_odom_robot = pose_to_matrix((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     state.commit(
         T_world_marker @ np.linalg.inv(T_odom_robot),
-        method="april_odom_baseline",
+        method="april_tag",
         approximate=False,
     )
     pos, quat = state.inverse_transform_pose((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))

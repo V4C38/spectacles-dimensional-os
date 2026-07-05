@@ -4,7 +4,7 @@ Open the project from [`lens-studio/spectacles-dimensional-os.esproj`](lens-stud
 
 ## Scene wiring
 
-Wire cross-tree references on [`ARBridgeServices`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) (`bridgeSession`, `frameCaptureController`, `robotMarker`, `pointCloudRenderer`, `navigationMarkerPrefab`, `assistClearanceDiscPrefab`). Point `ARBridgeCoordinator` at `ARBridgeServices`; point `RegistrationWizard` and `UIManager` at `ARBridgeCoordinator`. On `UIManager`, also wire `mainUIFrame` and `registrationWizard`.
+Wire cross-tree references on [`ARBridgeServices`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) (`bridgeSession`, `frameCaptureController`, `robotMarker`, `pointCloudRenderer`, `navigationMarkerPrefab`). Point `ARBridgeCoordinator` at `ARBridgeServices`; point `RegistrationWizard` and `UIManager` at `ARBridgeCoordinator`. On `UIManager`, also wire `mainUIFrame`, `registrationWizard`, and `wristMenuRoot` (required for the Spectacles wrist menu).
 
 Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-object investigation and manipulation.
 
@@ -16,7 +16,7 @@ Same suffix = same role across feature modules.
 |--------|------|
 | **`*Presenter`** | Domain/app state → scene visuals (prefab lifecycle, drives views/renderers) |
 | **`*Flow`** | Multi-step wizard lifecycle (`RegistrationFlow`) |
-| **`*Placement`** / feature **`*Controller`** | Ongoing feature shell: state machine, bridge I/O (`NavigationPlacement`) |
+| **`*Placement`** / feature **`*Controller`** | Ongoing feature shell: state machine, bridge I/O (`NavigationPlacement` is a re-export alias for `NavigationController`) |
 | **`*View`** / **`*UiView`** | HUD or prefab visual binding; no domain logic |
 | **`*Renderer`** | World drawing (lines, point clouds) |
 | **`*Controller`** (input) | User input only (`SurfacePlacementController`) |
@@ -37,5 +37,7 @@ When the WebSocket contract changes, update in the same change:
 ```bash
 cd lens-studio/Tests && npm test
 ```
+
+Vitest covers 24 unit files under `lens-studio/Tests/unit/` (protocol, `AppState`, `InboundRouter`, registration, navigation, `palmGestureGate`, `cameraStopBurst`, and related utilities).
 
 Bridge tests run from the DimOS `.venv` under `dimos-ar/`.

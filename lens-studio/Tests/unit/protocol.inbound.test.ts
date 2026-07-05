@@ -51,7 +51,7 @@ describe("parseInboundMessage", () => {
         capabilities: {
           lidar: { available: true },
           odom: { available: true },
-          registration_april_odom_baseline: { available: true },
+          registration_april_tag: { available: true },
           registration_manual_pose: { available: true },
           nav: { available: true },
           path: { available: true },
@@ -129,14 +129,14 @@ describe("parseInboundMessage", () => {
         },
         nav: { phase: "navigating" },
         goal: {
-          source: "xr",
+          source: "ar",
           position: [1, 0, 2],
           active: true,
         },
       }),
     );
     const snapshot = msg as RuntimeSnapshotMessage;
-    expect(snapshot.goal?.source).toBe("xr");
+    expect(snapshot.goal?.source).toBe("ar");
     expect(snapshot.goal?.active).toBe(true);
   });
 
@@ -145,19 +145,11 @@ describe("parseInboundMessage", () => {
       JSON.stringify({
         type: "registration_status",
         ts: 1,
-        mode: "april_odom_baseline",
+        mode: "april_tag",
         phase: "scanning",
         capture: "steady",
         message: "Look at tag",
         tag_visible: true,
-        motion: {
-          frame: "robot",
-          axis: "lateral",
-          direction: "left",
-          distance_m: 0.5,
-          waypoint_index: 1,
-          waypoint_total: 2,
-        },
       }),
     );
     expect(msg!.type).toBe("registration_status");
@@ -209,11 +201,11 @@ describe("parseInboundMessage", () => {
   it("parseBridgeWorldFrameFields preserves valid method when uncommitted", () => {
     expect(
       parseBridgeWorldFrameFields(
-        { world_frame_method: "april_odom_baseline" },
+        { world_frame_method: "april_tag" },
         false,
       ),
     ).toEqual({
-      world_frame_method: "april_odom_baseline",
+      world_frame_method: "april_tag",
       world_frame_approximate: false,
     });
   });

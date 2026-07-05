@@ -138,7 +138,7 @@ class PreviewGoalHandler:
                 waypoints=world_waypoints,
             )
         except Exception as exc:
-            logger.exception("XR preview planning failed", error=str(exc))
+            logger.exception("AR preview planning failed", error=str(exc))
             self._send_preview_path(
                 ts=request.ts,
                 target_world=request.target_world,

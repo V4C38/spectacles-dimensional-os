@@ -1,7 +1,7 @@
-"""Outbound data-plane encoding helpers for the XR bridge.
+"""Outbound data-plane encoding helpers for the dimos-ar bridge.
 
 These are pure functions — no module state, no side effects — that transform
-inbound DimOS stream messages into XR WebSocket payloads. The bridge module
+inbound DimOS stream messages into AR WebSocket payloads. The bridge module
 delegates to these helpers from its ``handle_ar_*`` stream methods.
 """
 
@@ -43,7 +43,7 @@ def build_lidar_payload(
     target_points: int,
     voxel_size: float,
 ) -> tuple[bytes, int] | None:
-    """Filter, transform, and encode a PointCloud2 into a binary XR LiDAR payload."""
+    """Filter, transform, and encode a PointCloud2 into a binary AR LiDAR payload."""
     from dimos.ar.lidar.filters import (
         filter_obstacle_points,
         subsample_points_near_robot,
@@ -83,7 +83,7 @@ def build_pose_payload(
     velocity_mps: tuple[float, float, float] | None = None,
     yaw_rate_rad_s: float | None = None,
 ) -> tuple[str, tuple[float, float, float], tuple[float, float, float, float]] | None:
-    """Transform odom pose into world frame and encode as an XR pose payload."""
+    """Transform odom pose into world frame and encode as an AR pose payload."""
     sample = sample_odom(msg)
     pos, quat = world_frame.transform_pose(sample.position, sample.orientation)
     if not all(
@@ -110,7 +110,7 @@ def build_pose_payload_from_sample(
     velocity_mps: tuple[float, float, float] | None = None,
     yaw_rate_rad_s: float | None = None,
 ) -> tuple[str, tuple[float, float, float], tuple[float, float, float, float]] | None:
-    """Transform a cached odom sample into world frame and encode as an XR pose payload."""
+    """Transform a cached odom sample into world frame and encode as an AR pose payload."""
     pos, quat = world_frame.transform_pose(sample.position, sample.orientation)
     if not all(
         np.isfinite(v) for v in (pos[0], pos[1], pos[2], quat[0], quat[1], quat[2], quat[3])
@@ -132,7 +132,7 @@ def build_path_payload(
     *,
     world_frame: WorldFrameState,
 ) -> tuple[str, list[tuple[float, float, float]]]:
-    """Transform path waypoints into world frame and encode as an XR path payload."""
+    """Transform path waypoints into world frame and encode as an AR path payload."""
     waypoints: list[tuple[float, float, float]] = []
     for pose in msg.poses:
         world_pos, _ = world_frame.transform_pose(

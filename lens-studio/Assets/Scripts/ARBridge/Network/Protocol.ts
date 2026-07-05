@@ -1,6 +1,6 @@
 // ================================================================
 /**
- * Protocol v7 — message types, parser, outbound builders, and unit
+ * Protocol v10 — message types, parser, outbound builders, and unit
  * conversion helpers. Single source of truth replacing the v3 trio
  * (ProtocolTypes / ProtocolParser / Protocol).
  *
@@ -13,7 +13,7 @@ import {
   createDefaultBridgeSnapshot,
 } from "../../App/AppState";
 
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -85,8 +85,8 @@ export interface LidarObstacleSettings {
 
 export const DEFAULT_LIDAR_OBSTACLE_SETTINGS: LidarObstacleSettings = {
   minDistanceM: 0.10,
-  opaqueDistanceM: 0.40,
-  maxDistanceM: 0.60,
+  opaqueDistanceM: 0.50,
+  maxDistanceM: 0.80,
 };
 
 export interface PoseMessage {
@@ -112,29 +112,17 @@ export interface WorldFrameCorrectionMessage {
   solve_method: "apriltag_full" | "apriltag_translation";
 }
 
-export type RegistrationMode = "april_odom_baseline" | "manual_pose";
+export type RegistrationMode = "april_tag" | "manual_pose";
 
 export type RegistrationPhase =
   | "idle"
   | "scanning"
-  | "awaiting_motion"
-  | "moving"
-  | "sampling"
   | "editing"
   | "awaiting_commit"
   | "succeeded"
   | "failed";
 
-export type CaptureHint = "off" | "steady" | "burst" | "hold";
-
-export interface RegistrationMotion {
-  frame: "robot";
-  axis: "lateral";
-  direction: "left" | "right";
-  distance_m: number;
-  waypoint_index: number;
-  waypoint_total: number;
-}
+export type CaptureHint = "off" | "steady" | "burst";
 
 export interface RegistrationPreviewPose {
   position: [number, number, number];
@@ -150,7 +138,6 @@ export interface RegistrationStatusMessage {
   capture: CaptureHint;
   message: string;
   tag_visible?: boolean;
-  motion?: RegistrationMotion;
   preview_pose?: RegistrationPreviewPose;
 }
 
@@ -186,7 +173,7 @@ export function parseBridgeWorldFrameFields(
       ? data.world_frame_approximate
       : false;
   if (
-    data.world_frame_method === "april_odom_baseline" ||
+    data.world_frame_method === "april_tag" ||
     data.world_frame_method === "manual_pose"
   ) {
     return {
@@ -249,7 +236,7 @@ export interface SnapshotPathState {
   target?: [number, number, number];
 }
 
-export type NavGoalSource = "xr" | "agent";
+export type NavGoalSource = "ar" | "agent";
 
 export interface SnapshotGoalState {
   source: NavGoalSource;
@@ -301,7 +288,6 @@ export type InboundMessage =
 
 export type RegistrationCommandAction =
   | "start"
-  | "authorize_motion"
   | "stop"
   | "commit";
 
@@ -370,16 +356,13 @@ function requireNumber(obj: Record<string, unknown>, key: string): number {
 const REGISTRATION_PHASES: RegistrationPhase[] = [
   "idle",
   "scanning",
-  "awaiting_motion",
-  "moving",
-  "sampling",
   "editing",
   "awaiting_commit",
   "succeeded",
   "failed",
 ];
 
-const CAPTURE_HINTS: CaptureHint[] = ["off", "steady", "burst", "hold"];
+const CAPTURE_HINTS: CaptureHint[] = ["off", "steady", "burst"];
 
 const NAV_PHASES: NavPhase[] = [
   "idle",
@@ -396,25 +379,6 @@ function parseNavStallReason(raw: unknown): NavStallReason | undefined {
     return raw;
   }
   return undefined;
-}
-
-function parseRegistrationMotion(raw: unknown): RegistrationMotion | undefined {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    return undefined;
-  }
-  const motion = raw as Record<string, unknown>;
-  const direction = motion.direction;
-  if (direction !== "left" && direction !== "right") {
-    return undefined;
-  }
-  return {
-    frame: "robot",
-    axis: "lateral",
-    direction,
-    distance_m: requireNumber(motion, "distance_m"),
-    waypoint_index: requireNumber(motion, "waypoint_index"),
-    waypoint_total: requireNumber(motion, "waypoint_total"),
-  };
 }
 
 function parsePreviewPose(raw: unknown): RegistrationPreviewPose | undefined {
@@ -491,7 +455,7 @@ function parseSnapshotBridge(raw: unknown): SnapshotBridgeState {
     reconnecting: Boolean(bridge.reconnecting),
   };
   const method = bridge.world_frame_method;
-  if (method === "april_odom_baseline" || method === "manual_pose") {
+  if (method === "april_tag" || method === "manual_pose") {
     status.world_frame_method = method;
   } else if (method === null) {
     status.world_frame_method = null;
@@ -529,7 +493,7 @@ function parseSnapshotNav(raw: unknown): SnapshotNavState {
 function parseSnapshotGoal(raw: unknown): SnapshotGoalState {
   const goal = requireObject(raw);
   const source = requireString(goal, "source");
-  if (source !== "xr" && source !== "agent") {
+  if (source !== "ar" && source !== "agent") {
     throw new Error("Missing or invalid field: source");
   }
   const snapshot: SnapshotGoalState = {
@@ -547,7 +511,7 @@ function parseNavGoalUpdateMessage(
   data: Record<string, unknown>,
 ): NavGoalUpdateMessage {
   const source = requireString(data, "source");
-  if (source !== "xr" && source !== "agent") {
+  if (source !== "ar" && source !== "agent") {
     throw new Error("Missing or invalid field: source");
   }
   const msg: NavGoalUpdateMessage = {
@@ -720,7 +684,7 @@ function parseInboundObject(
       const mode = data.mode;
       if (
         mode !== undefined &&
-        mode !== "april_odom_baseline" &&
+        mode !== "april_tag" &&
         mode !== "manual_pose"
       ) {
         print(`Protocol: unknown registration_status.mode "${mode}"; skipping`);
@@ -733,15 +697,11 @@ function parseInboundObject(
         capture: capture as CaptureHint,
         message: typeof data.message === "string" ? data.message : "",
       };
-      if (mode === "april_odom_baseline" || mode === "manual_pose") {
+      if (mode === "april_tag" || mode === "manual_pose") {
         msg.mode = mode;
       }
       if (typeof data.tag_visible === "boolean") {
         msg.tag_visible = data.tag_visible;
-      }
-      const motion = parseRegistrationMotion(data.motion);
-      if (motion) {
-        msg.motion = motion;
       }
       const previewPose = parsePreviewPose(data.preview_pose);
       if (previewPose) {
@@ -879,7 +839,7 @@ export function bridgeStatusFromSnapshot(
     reconnecting: snapshot.bridge.reconnecting,
   };
   if (
-    snapshot.bridge.world_frame_method === "april_odom_baseline" ||
+    snapshot.bridge.world_frame_method === "april_tag" ||
     snapshot.bridge.world_frame_method === "manual_pose"
   ) {
     status.world_frame_method = snapshot.bridge.world_frame_method;
@@ -1020,7 +980,7 @@ export function buildCameraInfo(args: {
   });
 }
 
-const CAMERA_FRAME_MAGIC = [0x58, 0x52, 0x46, 0x31];
+const CAMERA_FRAME_MAGIC = [0x41, 0x52, 0x46, 0x31];
 
 export function buildCameraFrameBytes(args: {
   robotId: string;

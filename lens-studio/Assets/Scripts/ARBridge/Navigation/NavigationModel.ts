@@ -121,7 +121,7 @@ export type NavigationEvent =
   | { kind: "outcomeAnimationFinished" }
   | {
       kind: "navGoalUpdate";
-      source: "xr" | "agent";
+      source: "ar" | "agent";
       pose: NavPose;
       active: boolean;
     };
@@ -194,10 +194,10 @@ function poseDistanceCm(a: vec3, b: vec3): number {
 
 export function shouldIgnoreNavGoalUpdate(
   state: NavEngineState,
-  source: "xr" | "agent",
+  source: "ar" | "agent",
   pose: NavPose,
 ): boolean {
-  if (source !== "xr") {
+  if (source !== "ar") {
     return false;
   }
   if (state.activeConfig?.source === "user") {

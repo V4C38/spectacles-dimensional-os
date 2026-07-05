@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
     from dimos.ar.world_frame.state import WorldFrameState
 
-PROTOCOL_VERSION = 9
+PROTOCOL_VERSION = 10
 
 NavPhase = Literal["idle", "navigating", "recovering", "succeeded", "failed"]
 PathKind = Literal["active", "preview"]
@@ -33,7 +33,7 @@ GoalIntent = Literal["navigate", "preview"]
 DEFAULT_CAPABILITIES = [
     "lidar",
     "odom",
-    "registration_april_odom_baseline",
+    "registration_april_tag",
     "registration_manual_pose",
     "nav",
     "path",
@@ -196,18 +196,18 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         )
     if msg_type == "registration_command":
         command = _require_type(data, "command", str)
-        if command not in ("start", "authorize_motion", "stop", "commit"):
+        if command not in ("start", "stop", "commit"):
             raise ValueError(
                 "registration_command.command must be "
-                "'start', 'authorize_motion', 'stop', or 'commit'"
+                "'start', 'stop', or 'commit'"
             )
         mode: str | None = None
         if command == "start":
             mode = _require_type(data, "mode", str)
-            if mode not in ("april_odom_baseline", "manual_pose"):
+            if mode not in ("april_tag", "manual_pose"):
                 raise ValueError(
                     "registration_command.mode must be "
-                    "'april_odom_baseline' or 'manual_pose' when command is 'start'"
+                    "'april_tag' or 'manual_pose' when command is 'start'"
                 )
         elif "mode" in data:
             raise ValueError("registration_command.mode is only valid when command is 'start'")
@@ -570,7 +570,7 @@ def encode_nav_status(
     )
 
 
-NavGoalSource = Literal["xr", "agent"]
+NavGoalSource = Literal["ar", "agent"]
 
 
 def encode_nav_goal_update(

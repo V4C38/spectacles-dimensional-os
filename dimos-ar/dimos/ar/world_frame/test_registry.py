@@ -44,7 +44,7 @@ def test_commit_publishes_tf_from_leveled_state_not_raw_candidate() -> None:
     candidate = RegistrationCandidate(
         T_world_odom=raw,
         quality=0.9,
-        mode=RegistrationMode.APRIL_ODOM_BASELINE,
+        mode=RegistrationMode.APRIL_TAG,
         approximate=False,
     )
     registry.commit(candidate)

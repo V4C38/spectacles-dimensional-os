@@ -53,14 +53,14 @@ def test_tracker_notify_on_change() -> None:
     assert len(calls) == 2
 
 
-def test_april_odom_world_frame_method_uses_wire_value() -> None:
+def test_april_tag_world_frame_method_uses_wire_value() -> None:
     import numpy as np
 
     world_frame = WorldFrameState()
-    world_frame.commit(np.eye(4), method="april_odom_baseline", approximate=False)
+    world_frame.commit(np.eye(4), method="april_tag", approximate=False)
     tracker = BridgeStatusTracker(robot_id="unitree_go2", robot_connected=True)
     raw = json.loads(encode_bridge_status(tracker.snapshot(), world_frame=world_frame))
-    assert raw["world_frame_method"] == "april_odom_baseline"
+    assert raw["world_frame_method"] == "april_tag"
 
 
 def test_merged_bridge_snapshot_matches_bridge_status_wire() -> None:
@@ -70,7 +70,7 @@ def test_merged_bridge_snapshot_matches_bridge_status_wire() -> None:
     world_frame = WorldFrameState()
     import numpy as np
 
-    world_frame.commit(np.eye(4), method="april_odom_baseline", approximate=False)
+    world_frame.commit(np.eye(4), method="april_tag", approximate=False)
     service = StatusService(
         robot_id="unitree_go2",
         sender=sender,

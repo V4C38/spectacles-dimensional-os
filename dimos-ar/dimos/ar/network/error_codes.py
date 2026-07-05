@@ -1,4 +1,4 @@
-"""XR bridge client error codes surfaced in Lens setup and runtime UI."""
+"""dimos-ar bridge client error codes surfaced in Lens setup and runtime UI."""
 
 from __future__ import annotations
 

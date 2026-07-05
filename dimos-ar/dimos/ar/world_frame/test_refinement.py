@@ -6,6 +6,7 @@ import json
 import math
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 from dimos.ar.bridge.odom_buffer import OdomBuffer
@@ -84,7 +85,7 @@ def _make_world_frame_refiner(
 
 
 def _commit_state(state: WorldFrameState, T: object) -> None:
-    state.commit(T, method="april_odom_baseline", approximate=False)  # type: ignore[arg-type]
+    state.commit(T, method="april_tag", approximate=False)  # type: ignore[arg-type]
 
 
 def test_bootstrap_initializes_baseline_via_registry() -> None:
@@ -306,11 +307,78 @@ def test_runtime_yaw_gate_holds_on_curve() -> None:
         baseline_m=0.5,
         straightness=0.8,
     )
+    translation_solve = TagSolve(
+        T_world_odom=build_T_world_odom(theta, (0.2, 0.0, -0.2)),
+        method="apriltag_translation",
+        quality=0.9,
+        observation_count=1,
+        baseline_m=0.0,
+    )
     tag_tracker.current_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
+    tag_tracker.current_translation_solve = MagicMock(  # type: ignore[method-assign]
+        return_value=translation_solve,
+    )
 
     refiner.apply_tracker_update()
 
     assert _yaw_from_T(refiner.refinement_baseline) == pytest.approx(theta, abs=1e-6)
+    assert refiner.refinement_baseline[0, 3] == pytest.approx(0.2, abs=1e-3)
+
+
+def test_cruise_yaw_gate_failure_uses_translation_solve_far_from_origin() -> None:
+    """When cruise yaw gate fails, translation solve under committed yaw must not
+    accumulate distance-scaled error from a Kabsch translation hybrid."""
+    refiner, tag_tracker, state, odom, _sent, _registry = _make_world_frame_refiner()
+    odom.speed_windowed = MagicMock(return_value=0.5)  # type: ignore[method-assign]
+
+    theta_committed = math.radians(2.0)
+    T_committed = build_T_world_odom(theta_committed, (0.0, 0.0, 0.0))
+    refiner.set_refinement_baseline(T_committed)
+    _commit_state(state, T_committed)
+    odom._latest = OdomSample(  # type: ignore[attr-defined]
+        position=(10.0, 0.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+
+    # Kabsch full solve: yaw 5° ahead of committed; translation consistent with that yaw.
+    kabsch_yaw = theta_committed + math.radians(5.0)
+    odom_pos = np.array([10.0, 0.0, 0.0])
+    translation_T = build_T_world_odom(theta_committed, (0.15, 0.0, -0.1))
+    true_world = translation_T[:3, :3] @ odom_pos + translation_T[:3, 3]
+    kabsch_t = true_world - build_T_world_odom(kabsch_yaw, (0.0, 0.0, 0.0))[:3, :3] @ odom_pos
+    kabsch_T = build_T_world_odom(kabsch_yaw, tuple(kabsch_t))
+    full_solve = TagSolve(
+        T_world_odom=kabsch_T.copy(),
+        method="apriltag_full",
+        quality=0.9,
+        observation_count=6,
+        baseline_m=0.5,
+        straightness=0.8,
+    )
+    translation_solve = TagSolve(
+        T_world_odom=translation_T.copy(),
+        method="apriltag_translation",
+        quality=0.9,
+        observation_count=1,
+        baseline_m=0.0,
+    )
+    tag_tracker.current_solve = MagicMock(return_value=full_solve)  # type: ignore[method-assign]
+    tag_tracker.current_translation_solve = MagicMock(  # type: ignore[method-assign]
+        return_value=translation_solve,
+    )
+
+    refiner.apply_tracker_update()
+
+    assert _yaw_from_T(refiner.refinement_baseline) == pytest.approx(theta_committed, abs=1e-6)
+
+    true_world_pose, _ = state.transform_pose((10.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    assert list(true_world_pose) == pytest.approx(list(true_world), abs=0.05)
+
+    # Pre-fix hybrid: committed yaw + Kabsch translation vector.
+    hybrid_T = build_T_world_odom(theta_committed, tuple(kabsch_t))
+    hybrid_world = hybrid_T[:3, :3] @ odom_pos + hybrid_T[:3, 3]
+    hybrid_error = float(np.linalg.norm(hybrid_world - true_world))
+    assert hybrid_error > 0.2
 
 
 def test_runtime_yaw_gate_allows_straight_run() -> None:

@@ -32,9 +32,9 @@ def test_console_divider_plain_when_not_tty(capsys) -> None:
 
 def test_console_divider_ansi_when_tty(capsys) -> None:
     with patch("dimos.ar.utils.console.use_console_colors", return_value=True):
-        console_divider("XR client connected")
+        console_divider("AR client connected")
     out = capsys.readouterr().out
-    assert "XR client connected" in out
+    assert "AR client connected" in out
     assert "\033[" in out
     assert out.count("-" * 50) == 2
 

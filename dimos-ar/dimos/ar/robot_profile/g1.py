@@ -9,9 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from dimos.ar.robot_profile.base import (
-    DEFAULT_BASELINE_MOTION_RECIPE,
     ARRobotProfileSpec,
-    BaselineMotionRecipe,
     CapabilityState,
     RobotHandshake,
     TagTrackingProfile,
@@ -48,16 +46,15 @@ def g1_capabilities(
     cancel_goal_available: bool,
     emergency_stop_available: bool,
     tag_mount_available: bool,
-    baseline_motion_available: bool = False,
 ) -> dict[str, CapabilityState]:
     return {
         "lidar": CapabilityState(True),
         "odom": CapabilityState(True),
-        "registration_april_odom_baseline": CapabilityState(
-            baseline_motion_available and tag_mount_available,
+        "registration_april_tag": CapabilityState(
+            tag_mount_available,
             None
-            if baseline_motion_available and tag_mount_available
-            else "AprilTag baseline registration is not available for this G1 runtime.",
+            if tag_mount_available
+            else "AprilTag registration is not available for this G1 runtime.",
         ),
         "registration_manual_pose": CapabilityState(
             tag_mount_available,
@@ -112,7 +109,6 @@ def g1_handshake(
     cancel_goal_available: bool,
     emergency_stop_available: bool,
     tag_mount_available: bool,
-    baseline_motion_available: bool = False,
 ) -> RobotHandshake:
     capability_states = g1_capabilities(
         nav_available=nav_available,
@@ -121,7 +117,6 @@ def g1_handshake(
         cancel_goal_available=cancel_goal_available,
         emergency_stop_available=emergency_stop_available,
         tag_mount_available=tag_mount_available,
-        baseline_motion_available=baseline_motion_available,
     )
     tag_ids = [m.tag_id for m in G1_DEFAULT_TAG_MOUNTS]
     return RobotHandshake(
@@ -171,7 +166,6 @@ class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
             cancel_goal_available=True,
             emergency_stop_available=self._emergency_stop_available(),
             tag_mount_available=len(self.tag_mounts()) > 0,
-            baseline_motion_available=self.baseline_motion_available(),
         )
 
     @rpc
@@ -184,7 +178,6 @@ class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
             cancel_goal_available=True,
             emergency_stop_available=self._emergency_stop_available(),
             tag_mount_available=len(self.tag_mounts()) > 0,
-            baseline_motion_available=self.baseline_motion_available(),
         )
 
     @rpc
@@ -209,14 +202,6 @@ class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
     @rpc
     def tag_mounts(self) -> list[TagMount]:
         return g1_tag_mounts()
-
-    @rpc
-    def baseline_motion_available(self) -> bool:
-        return True
-
-    @rpc
-    def baseline_motion_recipe(self) -> BaselineMotionRecipe:
-        return DEFAULT_BASELINE_MOTION_RECIPE
 
     @rpc
     def runtime_tag_tracking_profile(self) -> TagTrackingProfile:

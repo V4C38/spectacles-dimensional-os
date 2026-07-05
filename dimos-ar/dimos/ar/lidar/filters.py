@@ -3,7 +3,7 @@
 Rate-limiting is handled via ``time.monotonic()`` inside ``LidarFilter``;
 the ``RateLimiter`` class has been removed in favour of inline monotonic checks.
 Use ``PointCloud2.voxel_downsample`` for initial density reduction before the
-near-robot weighting stage (which is XR-specific and has no DimOS equivalent).
+near-robot weighting stage (which is AR-specific and has no DimOS equivalent).
 """
 
 from __future__ import annotations
@@ -73,8 +73,8 @@ class LidarFilterConfig:
 @dataclass(frozen=True)
 class LidarObstacleDistanceConfig:
     min_distance_m: float = 0.10
-    opaque_distance_m: float = 0.40
-    max_distance_m: float = 0.60
+    opaque_distance_m: float = 0.50
+    max_distance_m: float = 0.80
 
 
 class LidarFilter:
@@ -153,7 +153,7 @@ def subsample_points_near_robot(
 ) -> NDArray[np.float32]:
     """Cap world-frame LiDAR with more points near the robot.
 
-    XR-specific: preserves near-robot density so AR users see detailed floor
+    AR-specific: preserves near-robot density so AR users see detailed floor
     geometry around the robot. Applies on top of PointCloud2.voxel_downsample
     output (see bridge.telemetry.TelemetryPublisher.publish_lidar).
     """

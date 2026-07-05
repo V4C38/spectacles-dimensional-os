@@ -37,7 +37,7 @@ const RECONNECT_LOG_INTERVAL_S = 10.0;
 export interface FrameCapturePolicyInput {
   appPhase: AppPhase;
   worldFrameCommitted: boolean;
-  baselineCaptureSessionActive: boolean;
+  tagCaptureSessionActive: boolean;
   registrationCaptureHint: CaptureHint;
   forceOff: boolean;
 }
@@ -54,7 +54,7 @@ export function computeFrameCapturePolicy(
     return { mode: "off", policy: "off" };
   }
 
-  if (input.appPhase === "registration" && input.baselineCaptureSessionActive) {
+  if (input.appPhase === "registration" && input.tagCaptureSessionActive) {
     return { mode: "registration", policy: input.registrationCaptureHint };
   }
 
@@ -236,7 +236,7 @@ export class InboundRouter {
     const result = computeFrameCapturePolicy({
       appPhase: snapshot.phase,
       worldFrameCommitted: snapshot.bridgeSnapshot.worldFrameCommitted,
-      baselineCaptureSessionActive: client?.baselineCaptureSessionActive ?? false,
+      tagCaptureSessionActive: client?.tagCaptureSessionActive ?? false,
       registrationCaptureHint: client?.registrationCaptureHint ?? "off",
       forceOff,
     });

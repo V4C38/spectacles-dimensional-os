@@ -22,7 +22,7 @@ DEFAULT_APRILTAG_DICT: str = "DICT_APRILTAG_36h11"
 TAG_TOTAL_SIZE_M: float = 0.070
 TAG_BLACK_SIZE_M: float = TAG_TOTAL_SIZE_M * 8 / 10  # 0.056 m — black detection square
 
-CAMERA_FRAME_MAGIC = b"XRF1"
+CAMERA_FRAME_MAGIC = b"ARF1"
 MAX_HEADER_BYTES = 4096
 
 FLIP_YZ = np.diag([1.0, -1.0, -1.0, 1.0])
@@ -43,7 +43,7 @@ def build_camera_info(
     height: int,
     k: tuple[float, ...],
     d: tuple[float, ...] | list[float],
-    frame_id: str = "xr_camera",
+    frame_id: str = "ar_camera",
 ) -> CameraInfo:
     return CameraInfo(
         frame_id=frame_id,

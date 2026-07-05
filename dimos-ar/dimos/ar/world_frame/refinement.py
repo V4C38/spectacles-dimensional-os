@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
-from dimos.ar.tag_tracking.solve import TagSolve, _yaw_from_T, build_T_world_odom
+from dimos.ar.tag_tracking.solve import TagSolve, _yaw_from_T
 from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker
 from dimos.ar.world_frame.transforms import OdomSample, gravity_level_transform
 from dimos.ar.world_frame.wire import encode_world_frame_correction
@@ -113,20 +113,34 @@ class WorldFrameRefiner:
         if T_reference is None:
             return
 
+        translation_window_obs = profile.runtime_translation_window_obs
+        translation_window_s = profile.runtime_translation_window_s
+        use_yaw = False
         if regime == "static":
             solve = self._tag_tracker.current_translation_solve(
                 T_reference,
-                max_observations=1,
+                max_observations=translation_window_obs,
+                max_age_s=translation_window_s,
             )
         else:
-            solve = self._tag_tracker.current_solve(
+            full = self._tag_tracker.current_solve(
                 max_age_s=profile.runtime_cruise_window_s,
             )
-            if solve is None:
+            use_yaw = (
+                full is not None
+                and full.method == "apriltag_full"
+                and full.baseline_m >= profile.runtime_yaw_min_baseline_m
+                and full.straightness <= profile.runtime_yaw_straightness_max
+            )
+            if use_yaw:
+                solve = full
+            else:
                 solve = self._tag_tracker.current_translation_solve(
                     T_reference,
-                    max_observations=1,
+                    max_observations=translation_window_obs,
+                    max_age_s=translation_window_s,
                 )
+                use_yaw = False
 
         if solve is None:
             return
@@ -136,17 +150,7 @@ class WorldFrameRefiner:
             self._registry.apply_runtime_transform(T_target, update_refiner_baseline=True)
             return
 
-        use_yaw = (
-            regime == "cruise"
-            and solve.method == "apriltag_full"
-            and solve.baseline_m >= profile.runtime_yaw_min_baseline_m
-            and solve.straightness <= profile.runtime_yaw_straightness_max
-        )
-        T_new = self._resolve_runtime_transform(
-            self._refinement_baseline,
-            T_target,
-            use_yaw=use_yaw,
-        )
+        T_new = self._resolve_runtime_transform(T_target)
 
         trans_delta = float(np.linalg.norm(T_new[:3, 3] - self._refinement_baseline[:3, 3]))
         yaw_delta = abs(normalize_angle(_yaw_from_T(T_new) - _yaw_from_T(self._refinement_baseline)))
@@ -313,25 +317,9 @@ class WorldFrameRefiner:
             return "static"
         return "cruise"
 
-    def _resolve_runtime_transform(
-        self,
-        T_committed: np.ndarray,
-        T_target: np.ndarray,
-        *,
-        use_yaw: bool,
-    ) -> np.ndarray:
-        T_target = gravity_level_transform(
-            np.array(T_target, dtype=np.float64, copy=True),
-        )
-        if use_yaw:
-            return T_target
-        yaw = _yaw_from_T(T_committed)
-        t = T_target[:3, 3]
+    def _resolve_runtime_transform(self, T_target: np.ndarray) -> np.ndarray:
         return gravity_level_transform(
-            build_T_world_odom(
-                yaw,
-                (float(t[0]), float(t[1]), float(t[2])),
-            ),
+            np.array(T_target, dtype=np.float64, copy=True),
         )
 
     def _commit_runtime_correction(

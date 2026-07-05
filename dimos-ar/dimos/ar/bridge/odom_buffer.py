@@ -35,7 +35,7 @@ _source_ts_provenance_lock = threading.Lock()
 
 
 def _yaw_from_orientation(orientation: tuple[float, float, float, float]) -> float:
-    """Yaw about world-up from quaternion [qx, qy, qz, qw] (XR semantic +X forward)."""
+    """Yaw about world-up from quaternion [qx, qy, qz, qw] (AR semantic +X forward)."""
     qx, qy, qz, qw = orientation
     forward_x = 1.0 - 2.0 * (qy * qy + qz * qz)
     forward_z = 2.0 * (qx * qz + qw * qy)

@@ -4,35 +4,63 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-from dimos.ar.bridge.motion_router import MotionRouter
-from dimos.ar.registration.baseline import (
-    SAMPLE_MIN_OBS,
-    SAMPLE_SETTLE_S,
-    _BaselineState,
-    _MovePhase,
-)
 from dimos.ar.registration.session import FrameAdmission, RegistrationSession
+from dimos.ar.registration.session.flows import TAG_REGISTRATION_MIN_OBS
 from dimos.ar.registration.types import CaptureHint, RegistrationMode, RegistrationPhase
 from dimos.ar.registration.wire import RegistrationCommandMessage, RegistrationStatusPayload
-from dimos.ar.robot_profile.base import DEFAULT_BASELINE_MOTION_RECIPE
-from dimos.ar.tag_tracking.solve import TagSolve
+from dimos.ar.tag_tracking.solve import TagMount, TagObservation
 from dimos.ar.tag_tracking.tracker import FrameResult
 from dimos.ar.world_frame.registry import WorldRegistry
 from dimos.ar.world_frame.state import WorldFrameState
-from dimos.msgs.geometry_msgs.Twist import Twist
 
-_LEG_DURATIONS = DEFAULT_BASELINE_MOTION_RECIPE.leg_duration_s
+
+def _stable_observations(count: int = TAG_REGISTRATION_MIN_OBS) -> list[TagObservation]:
+    base_mono = time.monotonic()
+    observations: list[TagObservation] = []
+    for i in range(count):
+        T_world_tag = np.eye(4, dtype=np.float64)
+        T_world_tag[:3, 3] = [1.0 + i * 0.001, 0.0, -2.0]
+        observations.append(
+            TagObservation(
+                mono_ts=base_mono - 0.1 * i,
+                tag_id=0,
+                p_world_tag=(1.0 + i * 0.001, 0.0, -2.0),
+                p_odom_tag=(0.0, 0.0, 0.0),
+                T_world_tag=T_world_tag,
+                T_odom_tag=np.eye(4, dtype=np.float64),
+                T_odom_base=np.eye(4, dtype=np.float64),
+                quality=0.9,
+                reprojection_error_px=1.0,
+            )
+        )
+    return observations
+
+
+def _configure_tag_tracker(tag_tracker: MagicMock) -> None:
+    mount = TagMount(tag_id=0)
+    tag_tracker.mounts_configured.return_value = True
+    tag_tracker.mounts_snapshot.return_value = {0: mount}
+    tag_tracker.recent_observations.return_value = _stable_observations()
+    tag_tracker.active = False
+    tag_tracker.has_camera_info.return_value = True
+    tag_tracker.last_tag_detected = False
+    tag_tracker.robot_world_pose_estimate.return_value = (
+        (1.0, 0.0, -2.0),
+        (0.0, 0.0, 0.0, 1.0),
+        0.9,
+    )
 
 
 def _make_session(
     *,
     registry: WorldRegistry | None = None,
-) -> tuple[RegistrationSession, list[str], WorldRegistry]:
+    tag_tracker: MagicMock | None = None,
+) -> tuple[RegistrationSession, list[str], WorldRegistry, MagicMock]:
     sent: list[str] = []
     sender = MagicMock()
     sender.send.side_effect = sent.append
@@ -41,23 +69,10 @@ def _make_session(
     odom = MagicMock()
     odom.latest.return_value = None
     status = MagicMock()
-    tag_tracker = MagicMock()
-    tag_tracker.active = False
-    tag_tracker.has_camera_info.return_value = True
-    tag_tracker.last_tag_detected = False
-    tag_tracker.robot_world_pose_estimate.return_value = None
-    tag_tracker.latest_waypoint_robot_world_position.return_value = None
-    tag_tracker.record_latest_waypoint_observation.return_value = False
+    if tag_tracker is None:
+        tag_tracker = MagicMock()
+        _configure_tag_tracker(tag_tracker)
     world_frame_refiner = MagicMock()
-    profile = MagicMock()
-    published_cmd_vel: list[Twist] = []
-    router = MotionRouter(
-        publish_cmd_vel=published_cmd_vel.append,
-        publish_nav_goal=lambda _goal: None,
-        publish_nav_point_goal=lambda _goal: None,
-        publish_stop_movement=lambda _cancel: None,
-        publish_cancel_goal=lambda _cancel: None,
-    )
     session = RegistrationSession(
         robot_id="test_robot",
         sender=sender,
@@ -69,41 +84,52 @@ def _make_session(
         frame_max_age_s=4.0,
         manual_registration_quality=0.7,
         world_frame_refiner=world_frame_refiner,
-        profile=profile,
-        motion_router=router,
-        baseline_motion_available=True,
-        baseline_motion_recipe=DEFAULT_BASELINE_MOTION_RECIPE,
     )
-    return session, sent, registry
+    return session, sent, registry, tag_tracker
 
 
-def test_registration_command_start_april_odom_broadcasts_scanning() -> None:
-    session, sent, _registry = _make_session()
+def test_registration_command_start_april_tag_broadcasts_scanning() -> None:
+    session, sent, _registry, _tag_tracker = _make_session()
     session.on_registration_command(
-        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="start", mode="april_odom_baseline"),
+        RegistrationCommandMessage(
+            ts=1.0, robot_id="test_robot", command="start", mode="april_tag"
+        ),
         MagicMock(),
     )
     assert sent
     assert '"type":"registration_status"' in sent[-1]
-    assert '"phase":"scanning"' in sent[-1] or '"phase":"failed"' in sent[-1]
+    assert '"phase":"scanning"' in sent[-1]
+
+
+def test_registration_command_start_april_tag_fails_without_mounts() -> None:
+    tag_tracker = MagicMock()
+    tag_tracker.mounts_configured.return_value = False
+    session, sent, _registry, _tag_tracker = _make_session(tag_tracker=tag_tracker)
+    session.on_registration_command(
+        RegistrationCommandMessage(
+            ts=1.0, robot_id="test_robot", command="start", mode="april_tag"
+        ),
+        MagicMock(),
+    )
+    assert '"phase":"failed"' in sent[-1]
 
 
 def test_registration_command_start_clears_committed_world_frame() -> None:
     registry = WorldRegistry(WorldFrameState(), tf_publish_static=lambda _tf: None)
     registry.state.commit(
         np.eye(4, dtype=np.float64),
-        method="april_odom_baseline",
+        method="april_tag",
         approximate=False,
     )
     assert registry.state.is_committed
 
-    for mode in ("april_odom_baseline", "manual_pose"):
+    for mode in ("april_tag", "manual_pose"):
         registry.state.commit(
             np.eye(4, dtype=np.float64),
-            method="april_odom_baseline",
+            method="april_tag",
             approximate=False,
         )
-        session, _sent, _registry = _make_session(registry=registry)
+        session, _sent, _registry, _tag_tracker = _make_session(registry=registry)
         session.on_registration_command(
             RegistrationCommandMessage(
                 ts=1.0,
@@ -117,71 +143,47 @@ def test_registration_command_start_clears_committed_world_frame() -> None:
 
 
 def test_registration_command_start_manual_enters_editing() -> None:
-    session, sent, _registry = _make_session()
+    session, sent, _registry, _tag_tracker = _make_session()
     session.on_registration_command(
-        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="start", mode="manual_pose"),
+        RegistrationCommandMessage(
+            ts=1.0, robot_id="test_robot", command="start", mode="manual_pose"
+        ),
         MagicMock(),
     )
     assert sent
     assert '"phase":"editing"' in sent[-1]
 
 
-def test_frame_admission_processes_during_baseline_estimating() -> None:
-    session, _sent, _registry = _make_session()
+def test_frame_admission_processes_during_april_tag_scanning() -> None:
+    session, _sent, _registry, _tag_tracker = _make_session()
     session.on_registration_command(
-        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="start", mode="april_odom_baseline"),
+        RegistrationCommandMessage(
+            ts=1.0, robot_id="test_robot", command="start", mode="april_tag"
+        ),
         MagicMock(),
     )
-    assert session._baseline is not None
-    assert session._baseline.state == _BaselineState.ESTIMATING
+    assert session._session.mode == RegistrationMode.APRIL_TAG
     admission = session._frame_admission({"seq": 1, "ts": 1.0, "send_ts": 1.0}, 0.0)
     assert admission == FrameAdmission.PROCESS
 
 
-def test_frame_admission_processes_during_baseline_leg() -> None:
-    session, _sent, _registry = _make_session()
+def test_apply_tracker_update_broadcasts_during_scanning() -> None:
+    session, sent, _registry, tag_tracker = _make_session()
     session.on_registration_command(
-        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="start", mode="april_odom_baseline"),
+        RegistrationCommandMessage(
+            ts=1.0, robot_id="test_robot", command="start", mode="april_tag"
+        ),
         MagicMock(),
     )
-    assert session._baseline is not None
-    baseline = session._baseline
-    pos = (1.0, 0.0, -2.0)
-    for i in range(3):
-        baseline.tick(obs_count=i, latest_obs_pos_world=pos)
-    baseline.authorize_motion()
-    assert baseline.state == _BaselineState.MOVE
-    admission = session._frame_admission({"seq": 2, "ts": 1.0, "send_ts": 1.0}, 0.0)
-    assert admission == FrameAdmission.PROCESS
-
-
-def test_apply_tracker_update_broadcasts_during_moving() -> None:
-    session, sent, _registry = _make_session()
-    session.on_registration_command(
-        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="start", mode="april_odom_baseline"),
-        MagicMock(),
-    )
-    assert session._baseline is not None
-    baseline = session._baseline
-    for i in range(3):
-        baseline.tick(obs_count=i, latest_obs_pos_world=(1.0, 0.0, -2.0))
-    baseline.authorize_motion()
     sent.clear()
-
-    session._tag_tracker.active = True
-    session._tag_tracker.last_tag_detected = True
-    session._tag_tracker.robot_world_pose_estimate.return_value = (
-        (1.0, 0.0, -2.0),
-        (0.0, 0.0, 0.0, 1.0),
-        0.9,
-    )
+    tag_tracker.active = True
+    tag_tracker.last_tag_detected = True
     session._session.last_status = RegistrationStatusPayload(
-        mode=RegistrationMode.APRIL_ODOM_BASELINE,
-        phase=RegistrationPhase.MOVING,
+        mode=RegistrationMode.APRIL_TAG,
+        phase=RegistrationPhase.SCANNING,
         capture=CaptureHint.STEADY,
-        message="Robot moving — waypoint 1/3",
+        message="Look at the AprilTag on your robot",
         tag_visible=True,
-        motion=None,
         preview_pose=None,
     )
 
@@ -190,58 +192,65 @@ def test_apply_tracker_update_broadcasts_during_moving() -> None:
     )
 
     assert sent
-    assert '"phase":"moving"' in sent[-1]
-    assert "Robot moving" in sent[-1]
+    assert '"phase":"scanning"' in sent[-1]
 
 
-def test_leg_frame_observations_do_not_tick_baseline_sample() -> None:
-    session, _sent, _registry = _make_session()
+def test_tag_registration_auto_commit_when_stable() -> None:
+    session, sent, registry, tag_tracker = _make_session()
     session.on_registration_command(
-        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="start", mode="april_odom_baseline"),
+        RegistrationCommandMessage(
+            ts=1.0, robot_id="test_robot", command="start", mode="april_tag"
+        ),
         MagicMock(),
     )
-    assert session._baseline is not None
-    baseline = session._baseline
-    for i in range(3):
-        baseline.tick(obs_count=i, latest_obs_pos_world=(1.0, 0.0, -2.0))
-    baseline.authorize_motion()
-
-    session._tag_tracker.active = True
-    baseline.tick = MagicMock(wraps=baseline.tick)  # type: ignore[method-assign]
-
-    session._apply_tracker_update(
-        frame_result=FrameResult(tag_detected=True, tag_ids=[0], quality=0.9, observations_added=1),
-    )
-
-    baseline.tick.assert_not_called()
-
-
-def test_estimating_frame_observations_advance_baseline() -> None:
-    session, _sent, _registry = _make_session()
-    session.on_registration_command(
-        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="start", mode="april_odom_baseline"),
-        MagicMock(),
-    )
-    assert session._baseline is not None
-    assert session._baseline.is_estimating
-
-    session._tag_tracker.active = True
-    session._tag_tracker.robot_world_pose_estimate.return_value = (
+    odom_sample = MagicMock()
+    odom_sample.position = (0.0, 0.0, 0.0)
+    odom_sample.orientation = (0.0, 0.0, 0.0, 1.0)
+    session._odom.latest.return_value = odom_sample
+    tag_tracker.robot_world_pose_estimate.return_value = (
         (1.0, 0.0, -2.0),
         (0.0, 0.0, 0.0, 1.0),
         0.9,
     )
+    sent.clear()
 
-    for _ in range(3):
-        session._apply_tracker_update(
-            frame_result=FrameResult(tag_detected=True, tag_ids=[0], quality=0.9, observations_added=1),
-        )
+    asyncio.run(session._maybe_finish_tag_registration())
 
-    assert session._baseline.state == _BaselineState.AWAITING_CONFIRM
+    assert registry.state.is_committed
+    assert any('"phase":"succeeded"' in payload for payload in sent)
+
+
+async def _broadcast_iteration_when_tag_stable(session: RegistrationSession) -> None:
+    await session._maybe_finish_tag_registration()
+
+
+def test_broadcast_loop_auto_commits_when_tag_stable() -> None:
+    session, sent, registry, tag_tracker = _make_session()
+    session.on_registration_command(
+        RegistrationCommandMessage(
+            ts=1.0, robot_id="test_robot", command="start", mode="april_tag"
+        ),
+        MagicMock(),
+    )
+    odom_sample = MagicMock()
+    odom_sample.position = (0.0, 0.0, 0.0)
+    odom_sample.orientation = (0.0, 0.0, 0.0, 1.0)
+    session._odom.latest.return_value = odom_sample
+    tag_tracker.robot_world_pose_estimate.return_value = (
+        (1.0, 0.0, -2.0),
+        (0.0, 0.0, 0.0, 1.0),
+        0.9,
+    )
+    sent.clear()
+
+    asyncio.run(_broadcast_iteration_when_tag_stable(session))
+
+    assert registry.state.is_committed
+    assert any('"phase":"succeeded"' in payload for payload in sent)
 
 
 def test_registration_command_stop_preserves_committed_registration_when_idle() -> None:
-    session, _sent, registry = _make_session()
+    session, _sent, registry, _tag_tracker = _make_session()
     registry.state.commit(
         np.eye(4, dtype=np.float64),
         method="manual_pose",
@@ -258,160 +267,22 @@ def test_registration_command_stop_preserves_committed_registration_when_idle() 
     session._status.broadcast.assert_not_called()
 
 
-def _advance_baseline_to_awaiting_confirm(baseline) -> None:
-    pos = (1.0, 0.0, -2.0)
-    for i in range(3):
-        baseline.tick(obs_count=i, latest_obs_pos_world=pos)
-    assert baseline.state == _BaselineState.AWAITING_CONFIRM
-
-
-def _stable_sample_positions(base: float = 1.0) -> list[tuple[float, float, float]]:
-    return [(base + i * 0.001, 0.0, -2.0) for i in range(SAMPLE_MIN_OBS)]
-
-
-def _drive_baseline_through_sample(baseline, *, expected_leg_after: int | None) -> None:
-    settle_mono = baseline._sample_settle_mono
-    assert settle_mono is not None
-    with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = settle_mono + SAMPLE_SETTLE_S + 0.01
-        for pos in _stable_sample_positions():
-            baseline.tick(obs_count=SAMPLE_MIN_OBS, latest_obs_pos_world=pos)
-    if expected_leg_after is None:
-        assert baseline.state == _BaselineState.DONE
-    else:
-        assert baseline._move_leg_index == expected_leg_after
-        assert baseline._move_phase == _MovePhase.LEG
-
-
-def _wait_for_leg_timer(baseline) -> float:
-    for _ in range(100):
-        if baseline._move_start_mono is not None:
-            return baseline._move_start_mono
-        time.sleep(0.01)
-    raise AssertionError("leg timer never started after velocity ack")
-
-
-def _drive_baseline_to_done(baseline) -> None:
-    _advance_baseline_to_awaiting_confirm(baseline)
-    baseline.authorize_motion()
-
-    t0 = _wait_for_leg_timer(baseline)
-    with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t0 + _LEG_DURATIONS[0] + 0.1
-        baseline.tick(obs_count=0, latest_obs_pos_world=None)
-    _drive_baseline_through_sample(baseline, expected_leg_after=1)
-
-    t1 = _wait_for_leg_timer(baseline)
-    with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t1 + _LEG_DURATIONS[1] + 0.1
-        baseline.tick(obs_count=0, latest_obs_pos_world=None)
-    _drive_baseline_through_sample(baseline, expected_leg_after=2)
-
-    t2 = _wait_for_leg_timer(baseline)
-    with patch("dimos.ar.registration.baseline.time") as mt:
-        mt.monotonic.return_value = t2 + _LEG_DURATIONS[2] + 0.1
-        baseline.tick(obs_count=0, latest_obs_pos_world=None)
-    _drive_baseline_through_sample(baseline, expected_leg_after=None)
-
-
-def test_authorize_motion_command_broadcasts_moving() -> None:
-    session, sent, _registry = _make_session()
-    session.on_registration_command(
-        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="start", mode="april_odom_baseline"),
-        MagicMock(),
-    )
-    assert session._baseline is not None
-    _advance_baseline_to_awaiting_confirm(session._baseline)
-    sent.clear()
-
-    session.on_registration_command(
-        RegistrationCommandMessage(ts=2.0, robot_id="test_robot", command="authorize_motion"),
-        MagicMock(),
-    )
-
-    assert any('"phase":"moving"' in payload for payload in sent)
-
-
-def test_full_baseline_auto_commit() -> None:
-    session, sent, registry = _make_session()
-    session.on_registration_command(
-        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="start", mode="april_odom_baseline"),
-        MagicMock(),
-    )
-    assert session._baseline is not None
-    _drive_baseline_to_done(session._baseline)
-
-    solve = TagSolve(
-        T_world_odom=np.eye(4, dtype=np.float64),
-        method="apriltag_full",
-        quality=0.95,
-        observation_count=8,
-        baseline_m=0.40,
-    )
-    session._tag_tracker.current_solve.return_value = solve
-    sent.clear()
-
-    asyncio.run(session._maybe_finish_baseline())
-
-    assert registry.state.is_committed
-    assert any('"phase":"succeeded"' in payload for payload in sent)
-
-
-async def _broadcast_iteration_when_baseline_done(session: RegistrationSession) -> None:
-    """One body iteration of the fixed ``_broadcast_loop`` after baseline DONE."""
-    assert session._baseline is not None
-    if session._baseline.is_active:
-        session._baseline.tick(
-            obs_count=session._tag_tracker.observation_count(),
-            latest_obs_pos_world=None,
-        )
-    await session._maybe_finish_baseline()
-
-
-def test_broadcast_loop_auto_commits_when_baseline_done() -> None:
-    """Regression: finish check must run when baseline is DONE (not is_active)."""
-    session, sent, registry = _make_session()
-    session.on_registration_command(
-        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="start", mode="april_odom_baseline"),
-        MagicMock(),
-    )
-    assert session._baseline is not None
-    _drive_baseline_to_done(session._baseline)
-    assert session._baseline.is_done
-    assert not session._baseline.is_active
-
-    solve = TagSolve(
-        T_world_odom=np.eye(4, dtype=np.float64),
-        method="apriltag_full",
-        quality=0.95,
-        observation_count=8,
-        baseline_m=0.40,
-    )
-    session._tag_tracker.current_solve.return_value = solve
-    sent.clear()
-
-    asyncio.run(_broadcast_iteration_when_baseline_done(session))
-
-    assert registry.state.is_committed
-    assert any('"phase":"succeeded"' in payload for payload in sent)
-
-
 @pytest.mark.asyncio
-async def test_baseline_session_frames_ignore_committed_world_frame() -> None:
+async def test_april_tag_session_frames_ignore_committed_world_frame() -> None:
     registry = WorldRegistry(WorldFrameState(), tf_publish_static=lambda _tf: None)
     registry.state.commit(np.eye(4, dtype=np.float64), method="manual_pose", approximate=False)
-    session, _sent, _registry = _make_session(registry=registry)
+    session, _sent, _registry, tag_tracker = _make_session(registry=registry)
     session.on_registration_command(
         RegistrationCommandMessage(
             ts=1.0,
             robot_id="test_robot",
             command="start",
-            mode="april_odom_baseline",
+            mode="april_tag",
         ),
         MagicMock(),
     )
-    session._tag_tracker.active = True
-    session._tag_tracker.process_frame = MagicMock(
+    tag_tracker.active = True
+    tag_tracker.process_frame = MagicMock(
         return_value=FrameResult(tag_detected=False, tag_ids=[], quality=0.0, observations_added=0),
     )
     odom_sample = MagicMock()
@@ -422,7 +293,7 @@ async def test_baseline_session_frames_ignore_committed_world_frame() -> None:
     header = {"seq": 1, "ts": 1.0, "send_ts": 1.0, "capture_ts_robot": 1.0}
     await session.on_camera_frame(header, b"jpeg", MagicMock())
 
-    kwargs = session._tag_tracker.process_frame.call_args.kwargs
+    kwargs = tag_tracker.process_frame.call_args.kwargs
     assert kwargs["world_frame_committed"] is False
     assert kwargs["T_committed"] is None
     session._odom.at_or_latest_by_source.assert_called_once()
@@ -432,9 +303,9 @@ async def test_baseline_session_frames_ignore_committed_world_frame() -> None:
 async def test_runtime_refinement_frames_use_committed_world_frame() -> None:
     registry = WorldRegistry(WorldFrameState(), tf_publish_static=lambda _tf: None)
     registry.state.commit(np.eye(4, dtype=np.float64), method="manual_pose", approximate=False)
-    session, _sent, _registry = _make_session(registry=registry)
-    session._tag_tracker.active = False
-    session._tag_tracker.process_frame = MagicMock(
+    session, _sent, _registry, tag_tracker = _make_session(registry=registry)
+    tag_tracker.active = False
+    tag_tracker.process_frame = MagicMock(
         return_value=FrameResult(tag_detected=False, tag_ids=[], quality=0.0, observations_added=0),
     )
     session._world_frame_refiner.committed_or_current_for_frame.return_value = np.eye(
@@ -448,7 +319,7 @@ async def test_runtime_refinement_frames_use_committed_world_frame() -> None:
     header = {"seq": 2, "ts": 2.0, "send_ts": 2.0, "capture_ts_robot": 2.0}
     await session.on_camera_frame(header, b"jpeg", MagicMock())
 
-    kwargs = session._tag_tracker.process_frame.call_args.kwargs
+    kwargs = tag_tracker.process_frame.call_args.kwargs
     assert kwargs["world_frame_committed"] is True
     assert kwargs["T_committed"] is not None
     session._odom.at_interpolated_by_source.assert_called_once()

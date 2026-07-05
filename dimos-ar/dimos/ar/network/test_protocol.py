@@ -34,7 +34,7 @@ from dimos.ar.network.protocol import (
     encode_runtime_snapshot,
     nav_phase_payload,
 )
-from dimos.ar.registration.types import CaptureHint, MotionHint, RegistrationMode, RegistrationPhase
+from dimos.ar.registration.types import CaptureHint, RegistrationMode, RegistrationPhase
 from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
 from dimos.ar.robot_profile.g1 import g1_handshake
 from dimos.ar.world_frame.state import WorldFrameState
@@ -81,12 +81,11 @@ def test_encode_hello_g1_tag_tracking_profile() -> None:
         cancel_goal_available=False,
         emergency_stop_available=True,
         tag_mount_available=True,
-        baseline_motion_available=True,
     )
     msg = json.loads(encode_hello(handshake))
     assert msg["robot"]["robot_id"] == "unitree_g1"
     assert "robot_model" not in msg["robot"]
-    assert msg["capabilities"]["registration_april_odom_baseline"]["available"] is True
+    assert msg["capabilities"]["registration_april_tag"]["available"] is True
     assert msg["capabilities"]["registration_manual_pose"]["available"] is True
     assert msg["robot"]["tag_tracking_profile"]["tag_total_size_m"] == 0.07
     assert isinstance(msg["robot"]["tag_tracking_profile"]["tag_ids"], list)
@@ -252,13 +251,13 @@ def test_registration_command_messages_decode() -> None:
                 "command": "start",
                 "ts": 1.0,
                 "robot_id": "unitree_go2",
-                "mode": "april_odom_baseline",
+                "mode": "april_tag",
             }
         )
     )
     assert isinstance(start, RegistrationCommandMessage)
     assert start.command == "start"
-    assert start.mode == "april_odom_baseline"
+    assert start.mode == "april_tag"
     start_manual = decode_inbound(
         json.dumps(
             {
@@ -272,18 +271,6 @@ def test_registration_command_messages_decode() -> None:
     )
     assert isinstance(start_manual, RegistrationCommandMessage)
     assert start_manual.mode == "manual_pose"
-    authorize = decode_inbound(
-        json.dumps(
-            {
-                "type": "registration_command",
-                "command": "authorize_motion",
-                "ts": 1.5,
-                "robot_id": "unitree_go2",
-            }
-        )
-    )
-    assert isinstance(authorize, RegistrationCommandMessage)
-    assert authorize.command == "authorize_motion"
     stop = decode_inbound(
         json.dumps(
             {
@@ -308,6 +295,23 @@ def test_registration_command_messages_decode() -> None:
     )
     assert isinstance(commit, RegistrationCommandMessage)
     assert commit.command == "commit"
+
+
+def test_registration_command_authorize_motion_rejected() -> None:
+    with pytest.raises(ValueError, match="'start', 'stop', or 'commit'"):
+        decode_inbound(
+            json.dumps(
+                {
+                    "type": "registration_command",
+                    "command": "authorize_motion",
+                    "ts": 1.5,
+                    "robot_id": "unitree_go2",
+                }
+            )
+        )
+
+
+def test_registration_command_decode_camera_info_and_pose() -> None:
     camera_info = decode_inbound(
         json.dumps(
             {
@@ -358,7 +362,7 @@ def test_registration_command_start_missing_mode_rejected() -> None:
 
 
 def test_registration_command_start_invalid_mode_rejected() -> None:
-    with pytest.raises(ValueError, match="april_odom_baseline"):
+    with pytest.raises(ValueError, match="april_tag"):
         decode_inbound(
             json.dumps(
                 {
@@ -377,7 +381,7 @@ def test_encode_registration_status() -> None:
         encode_registration_status(
             ts=1.0,
             status=RegistrationStatusPayload(
-                mode=RegistrationMode.APRIL_ODOM_BASELINE,
+                mode=RegistrationMode.APRIL_TAG,
                 phase=RegistrationPhase.SCANNING,
                 capture=CaptureHint.STEADY,
                 message="Look at the AprilTag on your robot",
@@ -386,35 +390,11 @@ def test_encode_registration_status() -> None:
         )
     )
     assert raw["type"] == "registration_status"
-    assert raw["mode"] == "april_odom_baseline"
+    assert raw["mode"] == "april_tag"
     assert raw["phase"] == "scanning"
     assert raw["capture"] == "steady"
     assert raw["tag_visible"] is True
     assert "progress" not in raw
-
-
-def test_encode_registration_status_motion_fields() -> None:
-    raw = json.loads(
-        encode_registration_status(
-            ts=1.0,
-            status=RegistrationStatusPayload(
-                mode=RegistrationMode.APRIL_ODOM_BASELINE,
-                phase=RegistrationPhase.MOVING,
-                capture=CaptureHint.HOLD,
-                message="Robot moving — waypoint 2/3",
-                motion=MotionHint(
-                    frame="robot",
-                    axis="lateral",
-                    direction="left",
-                    distance_m=0.2,
-                    waypoint_index=2,
-                    waypoint_total=3,
-                ),
-            ),
-        )
-    )
-    assert raw["motion"]["waypoint_index"] == 2
-    assert raw["motion"]["direction"] == "left"
 
 
 def test_encode_registration_status_manual() -> None:
@@ -475,9 +455,9 @@ def test_encode_bridge_status_with_method() -> None:
         reconnecting=False,
     )
     world_frame = WorldFrameState()
-    world_frame.commit(np.eye(4), method="april_odom_baseline", approximate=False)
+    world_frame.commit(np.eye(4), method="april_tag", approximate=False)
     raw = json.loads(encode_bridge_status(snap, world_frame=world_frame, ts=1.0))
-    assert raw["world_frame_method"] == "april_odom_baseline"
+    assert raw["world_frame_method"] == "april_tag"
     assert raw["world_frame_approximate"] is False
     assert raw["world_frame_committed"] is True
 
@@ -512,14 +492,14 @@ def test_encode_nav_goal_update() -> None:
     raw = json.loads(
         encode_nav_goal_update(
             ts=1.0,
-            source="xr",
+            source="ar",
             position=(1.0, 0.0, 2.0),
             orientation=(0.0, 0.0, 0.0, 1.0),
             active=True,
         )
     )
     assert raw["type"] == "nav_goal_update"
-    assert raw["source"] == "xr"
+    assert raw["source"] == "ar"
     assert raw["active"] is True
     assert raw["position"] == [1.0, 0.0, 2.0]
 

@@ -17,7 +17,7 @@ from dimos.ar.world_frame.transforms import (
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-WorldFrameMethod = Literal["april_odom_baseline", "manual_pose"] | None
+WorldFrameMethod = Literal["april_tag", "manual_pose"] | None
 
 OnChangeCallback = Callable[[], None]
 
@@ -25,7 +25,7 @@ OnChangeCallback = Callable[[], None]
 class WorldFrameState:
     """Committed world←odom transform — single source of truth for coordinate conversion.
 
-    Holds ``T_world_odom``, which maps robot odom-frame coordinates into the XR
+    Holds ``T_world_odom``, which maps robot odom-frame coordinates into the AR
     world frame. Outbound LiDAR, pose, and path payloads read through this object.
 
     Before commit: identity (odom coordinates pass through unchanged).

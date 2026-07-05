@@ -238,14 +238,14 @@ async def test_non_terminal_registration_status_can_be_overwritten() -> None:
     outbound.start()
 
     outbound.enqueue('{"type":"registration_status","phase":"scanning","robot_id":"r","v":1}')
-    outbound.enqueue('{"type":"registration_status","phase":"awaiting_motion","robot_id":"r","v":2}')
+    outbound.enqueue('{"type":"registration_status","phase":"editing","robot_id":"r","v":2}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
 
     statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "registration_status"]
     assert len(statuses) == 1
-    assert statuses[0]["phase"] == "awaiting_motion"
+    assert statuses[0]["phase"] == "editing"
 
 
 @pytest.mark.asyncio

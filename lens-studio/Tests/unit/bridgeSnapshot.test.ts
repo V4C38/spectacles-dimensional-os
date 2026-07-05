@@ -51,7 +51,7 @@ describe("bridgeNavigationReady", () => {
         worldFrameCommitted: true,
         worldFrameApproximate: false,
         reconnecting: true,
-        worldFrameMethod: "april_odom_baseline",
+        worldFrameMethod: "april_tag",
         statusTs: 1,
       }),
     ).toBe(false);
@@ -65,7 +65,7 @@ describe("bridgeNavigationReady", () => {
         worldFrameCommitted: true,
         worldFrameApproximate: false,
         reconnecting: false,
-        worldFrameMethod: "april_odom_baseline",
+        worldFrameMethod: "april_tag",
         statusTs: 1,
       }),
     ).toBe(true);

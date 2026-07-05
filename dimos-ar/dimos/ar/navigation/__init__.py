@@ -1,4 +1,4 @@
-"""Navigation and preview goal handlers for XR client goals."""
+"""Navigation and preview goal handlers for AR client goals."""
 
 from dimos.ar.navigation.navigate import NavigateGoalHandler
 from dimos.ar.navigation.preview import PreviewGoalHandler

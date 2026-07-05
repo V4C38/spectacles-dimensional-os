@@ -1,4 +1,4 @@
-"""Robot-mounted AprilTag tracking from XR client camera frames.
+"""Robot-mounted AprilTag tracking from AR client camera frames.
 
 Phase 0 validation notes (device testing via scripts/frame_probe.py):
 - Timestamp: use imageFrame.timestampMillis/1000 as capture ts (scene seconds).
@@ -12,7 +12,7 @@ Phase 0 validation notes (device testing via scripts/frame_probe.py):
 DimOS fiducial delegation note:
 Detection and PnP pose estimation here deliberately does NOT delegate to
 ``dimos.perception.fiducial.marker_tf_module.MarkerTfModule`` because:
-1. Input is XR headset camera JPEG frames over WebSocket, not a robot camera stream.
+1. Input is AR headset camera JPEG frames over WebSocket, not a robot camera stream.
 2. ``T_world_glcam`` (headset AR world pose) arrives in the ``camera_frame`` header —
    it is not in the DimOS TF graph and cannot be looked up via ``TFSpec``.
 3. The bridge computes ``T_world_odom`` directly from paired (world-space tag,
@@ -148,7 +148,6 @@ class RobotAprilTagTracker:
         self._detector = create_aruco_detector(DEFAULT_APRILTAG_DICT)
         self._lock = threading.RLock()
         self._observations: deque[TagObservation] = deque(maxlen=self._config.window_max_obs)
-        self._waypoint_sample_positions: list[tuple[float, float, float]] = []
         self._active = False
         self._last_tag_detected = False
         self._last_tag_ids: list[int] = []
@@ -169,45 +168,26 @@ class RobotAprilTagTracker:
     def reset_window(self) -> None:
         with self._lock:
             self._observations.clear()
-            self._waypoint_sample_positions.clear()
             self._last_tag_detected = False
             self._last_tag_ids = []
             self._last_quality = None
 
-    def begin_waypoint_sample(self) -> None:
+    def mounts_configured(self) -> bool:
         with self._lock:
-            self._waypoint_sample_positions.clear()
+            return bool(self._mounts)
 
-    def record_waypoint_observation(self, obs: TagObservation) -> None:
-        mount = self._mounts.get(obs.tag_id)
-        if mount is None:
-            return
-        T_world_base = gravity_level_transform(
-            obs.T_world_tag @ np.linalg.inv(mount.T_base_tag)
-        )
-        pos = (
-            float(T_world_base[0, 3]),
-            float(T_world_base[1, 3]),
-            float(T_world_base[2, 3]),
-        )
+    def mounts_snapshot(self) -> dict[int, TagMount]:
         with self._lock:
-            self._waypoint_sample_positions.append(pos)
+            return dict(self._mounts)
 
-    def record_latest_waypoint_observation(self) -> bool:
+    def recent_observations(self, *, max_age_s: float) -> list[TagObservation]:
         with self._lock:
-            if not self._observations:
-                return False
-            obs = self._observations[-1]
-        self.record_waypoint_observation(obs)
-        return True
-
-    def latest_waypoint_robot_world_position(
-        self,
-    ) -> tuple[float, float, float] | None:
-        with self._lock:
-            if not self._waypoint_sample_positions:
-                return None
-            return self._waypoint_sample_positions[-1]
+            observations = list(self._observations)
+        if not observations:
+            return []
+        newest = observations[-1].mono_ts
+        cutoff = newest - max_age_s
+        return [o for o in observations if o.mono_ts >= cutoff]
 
     def set_camera_info(self, info: CameraInfo) -> None:
         with self._lock:
@@ -254,6 +234,7 @@ class RobotAprilTagTracker:
         recv_mono: float,
         world_frame_committed: bool,
         T_committed: NDArray[np.float64] | None,
+        max_distance_m: float | None = None,
     ) -> tuple[TagObservation | None, _RejectionKey | None]:
         pose = estimate_marker_pose(
             corners,
@@ -275,7 +256,10 @@ class RobotAprilTagTracker:
         if reproj > self._config.max_reprojection_error_px:
             return None, "reproj"
         dist_cam = float(np.linalg.norm(tvec.reshape(3)))
-        if dist_cam > self._config.max_distance_m:
+        effective_max_distance = (
+            max_distance_m if max_distance_m is not None else self._config.max_distance_m
+        )
+        if dist_cam > effective_max_distance:
             return None, "dist"
 
         T_camera_tag = _rvec_tvec_to_matrix(rvec, tvec)
@@ -350,6 +334,7 @@ class RobotAprilTagTracker:
         receive_mono: float | None = None,
         T_committed: NDArray[np.float64] | None = None,
         world_frame_committed: bool = False,
+        max_distance_m: float | None = None,
     ) -> FrameResult:
         recv_mono = receive_mono if receive_mono is not None else time.monotonic()
 
@@ -421,6 +406,7 @@ class RobotAprilTagTracker:
                 recv_mono=recv_mono,
                 world_frame_committed=world_frame_committed,
                 T_committed=T_committed,
+                max_distance_m=max_distance_m,
             )
             if rejection is not None:
                 rejections.record(rejection)
@@ -581,6 +567,7 @@ class RobotAprilTagTracker:
         T_reference: NDArray[np.float64],
         *,
         max_observations: int = 5,
+        max_age_s: float | None = None,
     ) -> TagSolve | None:
         """Estimate a translation-only world<-odom update from recent tag sightings.
 
@@ -592,8 +579,18 @@ class RobotAprilTagTracker:
         robot-mounted tag observations.
         """
         with self._lock:
-            observations = list(self._observations)[-max_observations:]
+            observations = list(self._observations)
             mounts = dict(self._mounts)
+
+        if not observations:
+            return None
+
+        if max_age_s is not None:
+            newest = observations[-1].mono_ts
+            cutoff = newest - max_age_s
+            observations = [o for o in observations if o.mono_ts >= cutoff]
+        if max_observations is not None and len(observations) > max_observations:
+            observations = observations[-max_observations:]
 
         if not observations:
             return None
