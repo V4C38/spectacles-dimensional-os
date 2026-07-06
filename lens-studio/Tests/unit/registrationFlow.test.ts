@@ -1,19 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   applyRegistrationStatusToViewState,
+  buildAlignmentTitle,
   buildRegistrationDetailText,
   buildRegistrationDisplay,
   createManualRegistrationState,
   createRegistrationViewState,
   getWizardFooterState,
+  parseRegistrationSampleCount,
   REGISTRATION_STATUS_MANUAL,
   hasRegistrationCandidate,
   isRegistrationComplete,
   isRegistrationFailed,
   isRegistrationPendingCommit,
   RegistrationFlow,
+  TAG_REGISTRATION_MIN_OBS,
   WizardStep,
 } from "../../Assets/Scripts/App/Registration/RegistrationFlow";
+import { buildRegistrationPreviewPresentation } from "../../Assets/Scripts/App/Registration/RegistrationWizardView";
 import {
   BridgeStatusMessage,
   RegistrationStatusMessage,
@@ -121,6 +125,86 @@ describe("registration flow view state", () => {
       tagVisible: true,
     });
     expect(text).toBe("Tag detected");
+  });
+
+  it("parses sample count from bridge registration message", () => {
+    expect(parseRegistrationSampleCount("Tag detected — collecting samples (3)")).toBe(3);
+    expect(parseRegistrationSampleCount("Look at the AprilTag on your robot")).toBeNull();
+  });
+
+  it("builds alignment title from registration view state", () => {
+    expect(
+      buildAlignmentTitle({
+        mode: "auto",
+        phase: "scanning",
+        message: "Waiting for camera intrinsics...",
+        tagVisible: false,
+      }),
+    ).toBe("Starting…");
+    expect(
+      buildAlignmentTitle({
+        mode: "auto",
+        phase: "scanning",
+        message: "Tag detected — collecting samples (2)",
+        tagVisible: true,
+      }),
+    ).toBe(`Alignment ${Math.round((2 / TAG_REGISTRATION_MIN_OBS) * 100)}%`);
+    expect(
+      buildAlignmentTitle({
+        mode: "auto",
+        phase: "succeeded",
+        message: "",
+        tagVisible: true,
+      }),
+    ).toBe("Registration complete");
+  });
+
+  it("builds preview presentation with alignment title and tag visibility", () => {
+    const presentation = buildRegistrationPreviewPresentation({
+      mode: "auto",
+      phase: "scanning",
+      message: "Tag detected — collecting samples (4)",
+      tagVisible: true,
+    });
+    expect(presentation.titleText).toBe("Alignment 100%");
+    expect(presentation.statusText).toBe("✅ Tag visible");
+    expect(
+      buildRegistrationPreviewPresentation({
+        mode: "auto",
+        phase: "scanning",
+        message: "Look at the AprilTag on your robot",
+        tagVisible: false,
+      }).statusText,
+    ).toBe("❌ Tag not visible");
+  });
+
+  it("suppresses wizard detail text when tag is not visible during scanning", () => {
+    const display = buildRegistrationDisplay(
+      {
+        mode: "auto",
+        phase: "scanning",
+        message: "Look at the AprilTag on your robot",
+        tagVisible: false,
+      },
+      true,
+    );
+    expect(display.statusText).toBe("❌  Tag not visible");
+    expect(display.detailText).toBe("");
+  });
+
+  it("keeps wizard detail text when tag is visible and collecting samples", () => {
+    const message = "Tag detected — collecting samples (3)";
+    const display = buildRegistrationDisplay(
+      {
+        mode: "auto",
+        phase: "scanning",
+        message,
+        tagVisible: true,
+      },
+      true,
+    );
+    expect(display.statusText).toBe("✅  Tag visible");
+    expect(display.detailText).toBe(message);
   });
 
   it("footer hides Back on step 0 while phase is registration", () => {

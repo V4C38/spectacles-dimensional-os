@@ -2,7 +2,7 @@ import { ARBridgeCoordinator } from "../ARBridgeCoordinator";
 import { bridgeLinkPresentation, AppStateData, LidarDisplayMode, OperatingMode } from "../AppState";
 import { RegistrationWizard } from "../Registration/RegistrationWizard";
 import { scaleIn, scaleOut } from "../Utilities/AnimationUtilities";
-import { findChildRecursive, getFrameComponent, isFrameInitialized } from "./kit/UIKit";
+import { findChildRecursive, getFrameComponent, isFrameInitialized } from "./UIKit";
 import { MainMenuView } from "./MainMenuView";
 import { WristMenuController } from "./WristMenuController";
 

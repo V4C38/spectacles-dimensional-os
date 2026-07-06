@@ -61,7 +61,16 @@ The bridge solves `T_world_odom` so AR content stays registered to the robot. Tw
 - **AprilTag** (`registration_command{command:"start",mode:"april_tag"}`) — the Spectacles user looks at the robot-mounted AprilTag while the bridge collects stable tag observations, then auto-commits when a stability gate passes. Requires `registration_april_tag`.
 - **Manual pose** (`registration_command{command:"start",mode:"manual_pose"}`) — user places the robot marker in AR; client streams `registration_pose` and sends `registration_command{command:"commit"}`. No camera frames are consumed; always available when `registration_manual_pose` is advertised.
 
-After commit, the same robot-mounted tag continues to drive runtime drift correction from Spectacles frames: a full solve updates yaw and translation once enough baseline exists, falling back to a translation-only correction when the robot is stationary. Runtime corrections only surface to the Lens as a "Refined Tracking" notification once they cross a small deadband (≥ 5 cm translation or ≥ 1° yaw); smaller continuous refinements stay silent.
+After commit, the bridge locks the robot base **floor height** (world Y) from the committed pose. The same robot-mounted tag continues to drive runtime drift correction from Spectacles frames:
+
+- **Cruise:** full yaw+translation solve when the yaw gate and camera-distance checks pass; otherwise translation-only.
+- **Stop transition:** one-shot stop-yaw solve from recent approach observations when the robot comes to rest after moving.
+- **Static:** translation-only re-anchor.
+- **Floor shim:** on flat-ground profiles, if base Y drifts > 3 cm for 2 s, the bridge applies a Y-only correction (not emitted on the wire).
+
+Runtime corrections only surface to the Lens as a "Refined Tracking" notification once they cross a small deadband (≥ 5 cm translation or ≥ 1° yaw); smaller continuous refinements stay silent.
+
+On the Lens, `RobotMarker` extrapolates the displayed pose between bridge `pose` updates using optional `velocity_mps` and `yaw_rate_rad_s`, with displacement clamps to avoid runaway prediction.
 
 Registration requires a **printed robot-mounted tag** for the AprilTag flow:
 
@@ -77,7 +86,7 @@ Print `apriltag_robot_a4.pdf` or `apriltag_robot_letter.pdf` from `dimos-ar/asse
 <details>
 <summary>Protocol and platform boundary</summary>
 
-The Mac is always the WebSocket **server** and AR devices are **clients**. The bridge sends `hello` and a `runtime_snapshot` on connect, then streams messages such as `bridge_status`, `pose`, binary LiDAR, `path`, `nav_status`, and `registration_status`. Clients send messages such as `registration_command`, `nav_goal`, `cancel_nav_goal`, `set_lidar_mode`, and `emergency_stop`.
+The Mac is always the WebSocket **server** and AR devices are **clients**. The bridge sends `hello` and a `runtime_snapshot` on connect, then streams messages such as `bridge_status`, `pose`, binary LiDAR, `path`, `nav_status`, `nav_goal_update`, and `registration_status`. Clients send messages such as `registration_command`, `nav_goal`, `cancel_nav_goal`, `set_lidar_mode`, and `emergency_stop`.
 
 If the protocol changes, update these together in the same change:
 - [`dimos-ar/dimos/ar/network/protocol.py`](dimos-ar/dimos/ar/network/protocol.py)
@@ -118,6 +127,12 @@ flowchart TB
 
 `UIManager` subscribes to app state and updates the authored HUD. Restarting registration goes back through `RegistrationWizard`, while bridge status, operating mode changes, and the coarse `disconnected` / `connectedNoRobot` / `connected` link state still come from `ARBridgeCoordinator`.
 
+**Spectacles runtime HUD:** On device, `UIManager` drives a palm-up wrist menu (`WristMenuController` + `PalmGestureGate`) that reveals MainUI anchored to `wristMenuRoot`. In Lens Studio editor mode, MainUI stays visible as a floating panel after registration instead.
+
+**Debug mode:** MainUI includes a debug toggle (`AppState.debugMode`) that enables on-device diagnostics — direction-arrow overlays on `RobotMarker` and the rolling `UILogger` console.
+
+**Pose display:** `RobotPresenter` feeds bridge `pose` (plus optional velocity fields) into `RobotMarker`, which extrapolates and smooths the marker between updates.
+
 </details>
 
 <details>
@@ -130,11 +145,11 @@ flowchart TB
   ```text
   lens-studio/Assets/Scripts/
   ├── App/                  (ARBridgeServices, ARBridgeCoordinator, AppState, AppStateStore)
-  │   ├── Registration/     (RegistrationWizard, RegistrationWizardView, RegistrationFlow, RegistrationPreviewPresenter)
+  │   ├── Registration/     (RegistrationWizard, RegistrationWizardView, RegistrationFlow)
   │   ├── Navigation/       (NavigationController / NavigationPlacement alias, NavigationPathRenderer, GroundPlacement, …)
   │   ├── Robot/            (RobotPresenter, RobotMarker, RobotUiView, RobotRuntimeModel)
   │   ├── Lidar/            (PointCloudRenderer, LidarPresenter)
-  │   ├── UI/               (UIManager, MainMenuView, WristMenuController, PalmGestureGate, UILogger, kit/UIKit)
+  │   ├── UI/               (UIManager, MainMenuView, WristMenuController, PalmGestureGate, UILogger, UIKit)
   │   └── Utilities/        (AnimationUtilities, Utilities)
   └── ARBridge/             (platform-agnostic bridge layer)
       ├── Network/          (ARBridgeSession, WebSocketTransport, InboundProcessor, Protocol)
@@ -146,6 +161,7 @@ flowchart TB
       └── Camera/           (CameraClient, FrameCaptureController, DeviceCameraStream)
   ```
 
+- On Spectacles, the runtime menu is hidden until the user shows their palm; in the editor, MainUI appears after registration without the gesture gate.
 - `ShowLiDAR` controls the height/debug layer, while the red obstacle layer still comes from live bridge lidar when connected. The Lens can also request a bridge-side LiDAR transmit mode (`off` / `obstacles` / `full`) via `set_lidar_mode` to cut payload when only obstacle proximity matters.
 
 </details>
@@ -154,7 +170,7 @@ flowchart TB
 
 [`dimos-ar/`](dimos-ar/) contains the Python side: `ARBridge`, `Go2RobotProfileModule` / `G1RobotProfileModule`, the protocol definition, and the tests. The monorepo entrypoint is [`dimos-ar/dimos/ar/blueprints.py`](dimos-ar/dimos/ar/blueprints.py), which wraps native DimOS stack composition for the currently selected robot runtime.
 
-`ARBridge` itself ([`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py)) subclasses `dimos.core.module.Module` and stays thin: it declares the DimOS `In[...]` streams, builds its collaborators, and fans handler calls out to them. The actual logic lives in single-owner collaborators under `dimos-ar/dimos/ar/`: `registration/` (setup wizard — `RegistrationSession`, baseline collector), `world_frame/` (`WorldFrameState`, `WorldFrameRefiner`), `tag_tracking/` (robot-mounted AprilTag detect + solve), `navigation/` (`NavigateGoalHandler`, `PreviewGoalHandler`), `bridge/` (`TelemetryPublisher`, `StatusService`, `OdomBuffer`, …), and `robot_profile/` for Go2/G1 handshake and capabilities.
+`ARBridge` itself ([`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py)) subclasses `dimos.core.module.Module` and stays thin: it declares the DimOS `In[...]` streams, builds its collaborators, and fans handler calls out to them. The actual logic lives in single-owner collaborators under `dimos-ar/dimos/ar/`: `registration/` (setup wizard — `RegistrationSession`, baseline collector), `world_frame/` (`WorldFrameState`, `WorldFrameRefiner`, `WorldRegistry`), `tag_tracking/` (robot-mounted AprilTag detect + solve), `navigation/` (`NavigateGoalHandler`, `PreviewGoalHandler`), `bridge/` (`TelemetryPublisher`, `StatusService`, `OdomBuffer`, `MotionRouter`, `BridgeSafetyCoordinator`, …), and `robot_profile/` for Go2/G1 handshake and capabilities.
 
 ```mermaid
 flowchart TB

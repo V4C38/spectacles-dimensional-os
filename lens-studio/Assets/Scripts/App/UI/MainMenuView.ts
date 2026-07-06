@@ -20,7 +20,7 @@ import {
   setButtonEnabled,
   setButtonToggleState,
   SnapOS2Styles,
-} from "./kit/UIKit";
+} from "./UIKit";
 
 // ================================================================
 /** Main HUD panel for restart, emergency stop, LiDAR toggle, and mode controls. */

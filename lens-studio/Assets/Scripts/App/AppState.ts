@@ -7,7 +7,7 @@ import {
   COLOR_SUCCESS,
   COLOR_WARN,
   COLOR_WHITE,
-} from "./UI/kit/UIKit";
+} from "./UI/UIKit";
 import { UILogListener, UILogger } from "./UI/UILogger";
 import { TagTrackingProfile, RegistrationMode } from "../ARBridge/Network/Protocol";
 import {
@@ -144,7 +144,7 @@ export function bridgeLinkPresentation(
       };
     case "connectedNoRobot":
       return {
-        text: "\n\n\nBridge connected - waiting for robot",
+        text: "\n\n\nBridge connected - Robot not connected",
         color: COLOR_WARN,
       };
     case "connected":

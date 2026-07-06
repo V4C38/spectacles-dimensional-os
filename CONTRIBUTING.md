@@ -8,6 +8,13 @@ Wire cross-tree references on [`ARBridgeServices`](lens-studio/Assets/Scripts/Ap
 
 Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-object investigation and manipulation.
 
+## Runtime HUD
+
+- **Editor:** after registration, `UIManager` shows MainUI as a floating panel.
+- **Spectacles:** MainUI is hidden until the user shows their palm; `WristMenuController` interpolates the panel toward `wristMenuRoot` while `PalmGestureGate` debounces show/hide.
+- **Debug mode:** `MainMenuView` exposes a toggle wired to `AppState.debugMode`. When enabled, `RobotMarker` shows direction overlays and `UILogger` streams diagnostics into the on-device log panel.
+- **Restart registration:** MainUI "Restart" calls back into `RegistrationWizard`, which re-enters registration via `ARBridgeCoordinator.enterRegistration()`.
+
 ## App-layer naming (`lens-studio/Assets/Scripts/App/`)
 
 Same suffix = same role across feature modules.
@@ -19,7 +26,7 @@ Same suffix = same role across feature modules.
 | **`*Placement`** / feature **`*Controller`** | Ongoing feature shell: state machine, bridge I/O (`NavigationPlacement` is a re-export alias for `NavigationController`) |
 | **`*View`** / **`*UiView`** | HUD or prefab visual binding; no domain logic |
 | **`*Renderer`** | World drawing (lines, point clouds) |
-| **`*Controller`** (input) | User input only (`SurfacePlacementController`) |
+| **`*Controller`** (input) | User input only (`GroundPlacement`) |
 | **`App/Utilities/`** | Cross-cutting helpers (`AnimationUtilities`, `Utilities.ts`) |
 
 Wiring (no renames): [`ARBridgeServices.ts`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) = composition root; [`ARBridgeCoordinator.ts`](lens-studio/Assets/Scripts/App/ARBridgeCoordinator.ts) = phase orchestration.

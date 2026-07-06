@@ -1,5 +1,5 @@
 import { protocolMetersToLensCentimeters } from "../../ARBridge/Network/Protocol";
-import { findChildRecursive } from "../UI/kit/UIKit";
+import { findChildRecursive } from "../UI/UIKit";
 
 const MOCK_GRID_MIN = -2.0;
 const MOCK_GRID_MAX = 2.0;

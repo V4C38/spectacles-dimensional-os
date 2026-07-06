@@ -6,7 +6,7 @@ import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/Rou
 import {
   findChildRecursive,
   requireChild,
-} from "../UI/kit/UIKit";
+} from "../UI/UIKit";
 import {
   interpolatePose,
 } from "../Utilities/AnimationUtilities";

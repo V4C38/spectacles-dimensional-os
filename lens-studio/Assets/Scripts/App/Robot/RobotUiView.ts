@@ -21,7 +21,7 @@ import {
   setButtonEnabled,
   setButtonToggleState,
   SnapOS2Styles,
-} from "../UI/kit/UIKit";
+} from "../UI/UIKit";
 import { UILogEntry } from "../UI/UILogger";
 import { scaleIn, scaleOut } from "../Utilities/AnimationUtilities";
 
@@ -232,9 +232,8 @@ export class RobotUiView {
   }
 
   public applyAssistOverlay(overlay: RobotUiAssistOverlay): void {
-    this.menuTitleText.text = overlay.titleText;
-    this.menuStateInfoText.text = overlay.statusText;
-    this.menuStateInfoText.textFill.color = overlay.statusColor;
+    this._applyTitle(overlay.titleText);
+    this._applyActivity(overlay.statusText, overlay.statusColor);
     if (this.registrationWizardMenuObj) {
       this.registrationWizardMenuObj.enabled = overlay.showWizardMenu;
     }

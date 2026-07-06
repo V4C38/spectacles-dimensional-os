@@ -144,7 +144,7 @@ describe("bridgeLinkPresentation", () => {
       color: COLOR_ERROR,
     });
     expect(bridgeLinkPresentation("connectedNoRobot")).toEqual({
-      text: "\n\n\nBridge connected - waiting for robot",
+      text: "\n\n\nBridge connected - Robot not connected",
       color: COLOR_WARN,
     });
     AppState.connectedRobotDisplayName = "Unitree Go2";

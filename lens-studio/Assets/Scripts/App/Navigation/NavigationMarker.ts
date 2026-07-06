@@ -16,7 +16,7 @@ import {
   requireFirstText,
   setButtonStyle,
   SnapOS2Styles,
-} from "../UI/kit/UIKit";
+} from "../UI/UIKit";
 import { yawRotationFromWorldRotation } from "../Utilities/Utilities";
 import type {
   NavGoalConfig,

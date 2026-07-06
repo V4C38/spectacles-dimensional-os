@@ -13,7 +13,7 @@ import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/Rou
 import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
 import { Frame } from "SpectaclesUIKit.lspkg/Scripts/Components/Frame/Frame";
 import { SnapOS2Styles } from "SpectaclesUIKit.lspkg/Scripts/Themes/SnapOS-2.0/SnapOS2";
-import { animateScaleTo } from "../../Utilities/AnimationUtilities";
+import { animateScaleTo } from "../Utilities/AnimationUtilities";
 
 export { SnapOS2Styles };
 

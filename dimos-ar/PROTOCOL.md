@@ -120,7 +120,7 @@ process lifetime (unchanged behavior, now explicit).
 
 ### v3 — dimos-ar bridge PR refactor (additive, backward-compatible)
 
-Per-robot adapters, DimOS TF publication, and additive optional fields. Clients
+Per-robot profile modules, DimOS TF publication, and additive optional fields. Clients
 built against prior v3 wire shapes continue to work without modification.
 
 ## Transport
@@ -189,8 +189,8 @@ Rules:
 
 ### `hello.robot.tag_tracking_profile`
 
-Optional field emitted when the robot adapter provides tag geometry for
-registration. Absent or `null` when the adapter does not supply one.
+Optional field emitted when the active robot profile provides tag geometry for
+registration. Absent or `null` when the profile does not supply one.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -424,6 +424,10 @@ Robot pose in AR world frame:
 `pose.ts` and `world_frame_correction.ts` use bridge/robot wall-clock seconds
 (the same domain as robot odometry production timestamps), not Lens scene time.
 
+On the Spectacles client, `RobotMarker` extrapolates position and yaw between
+`pose` updates from `velocity_mps` and `yaw_rate_rad_s`, with displacement clamps
+to limit runaway prediction when updates are delayed.
+
 ### `world_frame_correction`
 
 Runtime world-frame correction telemetry emitted when the bridge commits a
@@ -454,6 +458,14 @@ Fields:
   `apriltag_translation` fallback solves
 - `solve_quality`: quality score reported by the tracker for the committed solve
 - `solve_method`: `"apriltag_full"` or `"apriltag_translation"`
+
+Bridge-side refinement (not additional wire fields):
+
+- On commit, the bridge locks robot base floor height (world Y) for flat-ground
+  profiles and applies tag-driven corrections by speed regime (cruise full/translation
+  solves, stop-yaw on static transition after motion, static translation re-anchor).
+- A floor-Y shim may correct sustained vertical drift without emitting this message.
+- See `dimos/ar/world_frame/refinement.py` for thresholds and gating.
 
 ### `path`
 
@@ -794,8 +806,8 @@ uses median RTT-adjusted offset to populate `capture_ts_robot` on `camera_frame`
 
 ### `emergency_stop`
 
-Request immediate stop through whatever safe stop path the active adapter
-provides. If the capability is disabled in `hello`, clients should not send it.
+Request immediate stop through whatever safe stop path the active robot profile
+provides via `MotionRouter`. If the capability is disabled in `hello`, clients should not send it.
 
 ```json
 {

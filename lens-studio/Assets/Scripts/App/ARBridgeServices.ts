@@ -8,7 +8,7 @@ import { InboundRouter } from "../ARBridge/Session/InboundRouter";
 import { AppStateStore } from "./AppState";
 import { NavigationPlacement } from "./Navigation/NavigationPlacement";
 import { RobotPresenter, RobotPresenterMenuCallbacks } from "./Robot/RobotPresenter";
-import { RegistrationPreviewPresenter } from "./Registration/RegistrationPreview";
+import { RegistrationPreviewPresenter } from "./Registration/RegistrationWizardView";
 import { PointCloudRenderer } from "./Lidar/PointCloudRenderer";
 import { RobotMarker } from "./Robot/RobotMarker";
 import { StatusClient } from "../ARBridge/Status/StatusClient";

@@ -1,4 +1,4 @@
-import { findText } from "./kit/UIKit";
+import { findText } from "./UIKit";
 
 export interface UILogEntry {
   text: string;

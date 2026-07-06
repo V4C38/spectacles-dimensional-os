@@ -1,7 +1,16 @@
 import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
 import {
+  RegistrationPhase,
+  RegistrationStatusMessage,
+} from "../../ARBridge/Network/Protocol";
+import { AppStateStore } from "../AppState";
+import { LidarDisplayMode, OperatingMode } from "../AppState";
+import { RobotPresenter } from "../Robot/RobotPresenter";
+import {
   ButtonBinding,
+  COLOR_ERROR,
   COLOR_MUTED,
+  COLOR_SUCCESS,
   COLOR_WHITE,
   CONTENT_PAD_X,
   createTextInput,
@@ -13,8 +22,14 @@ import {
   setButtonStyle,
   SLOT_INPUT,
   Z_CONTENT,
-} from "../UI/kit/UIKit";
-import { WizardFooterState, WizardStep } from "./RegistrationFlow";
+} from "../UI/UIKit";
+import {
+  buildAlignmentTitle,
+  isRegistrationPreviewPhase,
+  RegistrationViewState,
+  WizardFooterState,
+  WizardStep,
+} from "./RegistrationFlow";
 
 // ================================================================
 /** Binds and updates the registration wizard panel UI (title, IP input, registration status, footer). */
@@ -169,5 +184,158 @@ export class RegistrationWizardView {
       this._manual.labelText.text = state.manualLabel;
     }
     setButtonStyle(this._manual.button, state.manualStyle);
+  }
+}
+
+export interface RegistrationPreviewPresentation {
+  titleText: string;
+  statusText: string;
+  statusColor: vec4;
+}
+
+export function buildRegistrationPreviewPresentation(
+  state: RegistrationViewState,
+): RegistrationPreviewPresentation {
+  return {
+    titleText: buildAlignmentTitle(state),
+    statusText: state.tagVisible
+      ? "✅ Tag visible"
+      : "❌ Tag not visible",
+    statusColor: state.tagVisible ? COLOR_SUCCESS : COLOR_ERROR,
+  };
+}
+
+/** Registration assist preview (robot marker overlay during AprilTag scanning). */
+export class RegistrationPreviewPresenter {
+  private _active = false;
+
+  constructor(
+    private readonly appState: AppStateStore,
+    private readonly robotPresenter: RobotPresenter,
+  ) {}
+  private _tagVisible = false;
+  private _message = "";
+  private _phase: RegistrationPhase = "scanning";
+  private _priorRuntimeMode: OperatingMode = "manual";
+  private _priorLidarMode: LidarDisplayMode = "off";
+
+  public begin(): void {
+    this._priorRuntimeMode = this.appState.snapshot.operatingMode !== "registration"
+      ? this.appState.snapshot.operatingMode
+      : "manual";
+    this._priorLidarMode = this.appState.snapshot.lidarMode;
+    this.appState.update({ operatingMode: "registration", lidarMode: "off" });
+
+    this._active = true;
+    this._tagVisible = false;
+    this._message = "";
+    this._phase = "scanning";
+    const ui = this.robotPresenter?.robotMarker?.ui;
+    ui?.setRegistrationPreviewActive(true);
+    this.robotPresenter?.robotMarker?.setVisible(false);
+    ui?.setMenuVisible(false);
+  }
+
+  public updateFromRegistrationStatus(msg: RegistrationStatusMessage): void {
+    if (!this._active) {
+      return;
+    }
+    this._tagVisible = msg.tag_visible ?? this._tagVisible;
+    this._message = msg.message || this._message;
+    this._phase = msg.phase;
+    const previewPose = msg.preview_pose ?? null;
+    const previewStageActive = isRegistrationPreviewPhase(msg.phase);
+    const showMarker = previewStageActive && !!previewPose;
+    const ui = this.robotPresenter?.robotMarker?.ui;
+    const wasMenuVisible = ui?.isMenuVisible() ?? false;
+    const marker = this.robotPresenter?.robotMarker;
+
+    if (showMarker && previewPose) {
+      const pos = new vec3(
+        previewPose.position[0] * 100,
+        previewPose.position[1] * 100,
+        previewPose.position[2] * 100,
+      );
+      const rot = new quat(
+        previewPose.orientation[3],
+        previewPose.orientation[0],
+        previewPose.orientation[1],
+        previewPose.orientation[2],
+      );
+      marker?.setVisible(true);
+      marker?.applyRuntimeLensPose(pos, rot);
+      if (!wasMenuVisible) {
+        ui?.setMenuVisible(true);
+      }
+    } else {
+      marker?.setVisible(false);
+    }
+
+    if (previewStageActive) {
+      const presentation = buildRegistrationPreviewPresentation({
+        mode: "auto",
+        phase: this._phase,
+        message: this._message,
+        tagVisible: this._tagVisible,
+      });
+      ui?.applyAssistOverlay({
+        titleText: presentation.titleText,
+        statusText: presentation.statusText,
+        statusColor: presentation.statusColor,
+        showWizardMenu: false,
+        showContinue: false,
+        continueInactive: false,
+        showStop: false,
+      });
+    }
+  }
+
+  public setComplete(): void {
+    if (!this._active) {
+      return;
+    }
+    const GREEN = new vec4(0.2, 0.8, 0.2, 1);
+    this.robotPresenter?.robotMarker?.ui?.applyAssistOverlay({
+      titleText: "Registration complete",
+      statusText: "Registration complete",
+      statusColor: GREEN,
+      showWizardMenu: false,
+      showContinue: false,
+      continueInactive: false,
+      showStop: false,
+    });
+  }
+
+  public end(): void {
+    if (!this._active) {
+      return;
+    }
+    this._active = false;
+    this.robotPresenter?.robotMarker?.setVisible(false);
+    const ui = this.robotPresenter?.robotMarker?.ui;
+    ui?.setRegistrationPreviewActive(false);
+    ui?.applyAssistOverlay({
+      titleText: "",
+      statusText: "",
+      statusColor: COLOR_SUCCESS,
+      showWizardMenu: false,
+      showContinue: false,
+      continueInactive: false,
+      showStop: false,
+    });
+    ui?.setMenuVisible(false);
+
+    const prior = this._priorRuntimeMode;
+    this.appState.update({ operatingMode: prior, lidarMode: this._priorLidarMode });
+  }
+
+  public endIfActive(): void {
+    if (this._active) {
+      this.end();
+    }
+  }
+
+  public get isActive(): boolean {
+    return this._active;
   }
 }

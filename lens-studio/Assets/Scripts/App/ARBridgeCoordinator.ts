@@ -4,7 +4,7 @@ import { ARBridgeSession } from "../ARBridge/Network/ARBridgeSession";
 import { InboundRouter } from "../ARBridge/Session/InboundRouter";
 import { ARBridgeServices } from "./ARBridgeServices";
 import { RobotPresenter } from "./Robot/RobotPresenter";
-import { RegistrationPreviewPresenter } from "./Registration/RegistrationPreview";
+import { RegistrationPreviewPresenter } from "./Registration/RegistrationWizardView";
 import {
   AppStateListener,
   AppPhase,
@@ -23,7 +23,7 @@ import {
 } from "./AppState";
 import { isCapabilityAvailable } from "./Robot/RobotRuntimeModel";
 import { manualNavGoalConfig } from "../ARBridge/Navigation/NavigationModel";
-import { COLOR_WHITE } from "./UI/kit/UIKit";
+import { COLOR_WHITE } from "./UI/UIKit";
 
 /** Phase lifecycle, operating mode, and subsystem orchestration for AR bridge runtime. */
 @component

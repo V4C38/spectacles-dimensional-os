@@ -20,7 +20,7 @@ import {
   RegistrationStatusMessage,
 } from "./RegistrationFlow";
 import { scaleIn } from "../Utilities/AnimationUtilities";
-import { COLOR_ERROR, COLOR_WARN, COLOR_WHITE } from "../UI/kit/UIKit";
+import { COLOR_ERROR, COLOR_WARN, COLOR_WHITE } from "../UI/UIKit";
 import {
   BRIDGE_RETRY_BACKOFF_FACTOR,
   BRIDGE_RETRY_BASE_S,

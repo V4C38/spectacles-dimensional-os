@@ -7,7 +7,7 @@ It lives in this monorepo as a standalone bridge package, with all
 platform-agnostic code under `dimos/ar/`.
 
 At a glance:
-- `dimos/ar/bridge/`: `ARBridge` composition root; telemetry, odom buffer, status service
+- `dimos/ar/bridge/`: `ARBridge` composition root; telemetry, odom buffer, status service, `MotionRouter`, `BridgeSafetyCoordinator`
 - `dimos/ar/navigation/`: `NavigateGoalHandler`, `PreviewGoalHandler`, world-frame goal transform
 - `dimos/ar/world_frame/`: committed `WorldFrameState`, registry, runtime refinement
 - `dimos/ar/tag_tracking/`: robot-mounted AprilTag detect + solve
@@ -64,7 +64,7 @@ robot family:
 - `hello.capabilities` tells the client which features are available for the
   active runtime
 - after `hello`, the bridge sends `runtime_snapshot` (bridge + nav phase + optional
-  active path) so reconnecting clients resync without replaying live streams
+  active path and goal) so reconnecting clients resync without replaying live streams
 - navigation uses `nav_goal` with `intent: "navigate"` or `"preview"`; preview paths
   are not cached in `runtime_snapshot`; active goals can be cancelled with `cancel_nav_goal`
 - the Lens keeps offline development affordances enabled until a bridge connects
@@ -140,11 +140,21 @@ The user drags the robot marker to its real-world position in the Lens, streams
 frames are consumed. Always available when `registration_manual_pose` is advertised.
 
 Notes:
+- On commit, `WorldRegistry` locks the robot base floor height (world Y) into
+  `WorldFrameRefiner` for flat-ground profiles.
 - Runtime drift correction reuses the robot-mounted Spectacles tag stream after
-  registration. The bridge still uses `RobotAprilTagTracker.current_solve()` for
-  multi-observation yaw + translation updates during cruise when the yaw gate passes,
-  and falls back to a translation-only correction path when the robot is
-  stationary.
+  registration:
+  - **Cruise:** `RobotAprilTagTracker.current_solve()` for yaw+translation when the
+    yaw gate and `runtime_solve_max_dist_cam_m` pass; otherwise translation-only.
+  - **Stop transition:** one-shot stop-yaw solve from recent approach observations
+    when the robot transitions from cruise/fast to static (`runtime_stop_yaw_window_s`).
+  - **Static:** translation-only re-anchor via `current_translation_solve()`.
+  - **Floor shim:** when `flat_ground` is enabled and base Y drifts > 3 cm for 2 s,
+    `check_floor_y_drift` applies a Y-only correction without emitting
+    `world_frame_correction`.
+- Corrections that exceed the notification deadband (≥ 5 cm translation or ≥ 1° yaw)
+  are emitted as `world_frame_correction`; sub-threshold updates still commit on the
+  bridge.
 
 **Tag mount geometry (Go2)**  
 The robot marker and LiDAR share `T_world_odom`, which depends on the configured

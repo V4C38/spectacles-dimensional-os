@@ -18,7 +18,7 @@ import {
   toSessionState,
 } from "../AppState";
 import { AppStateStore } from "../AppState";
-import { COLOR_ERROR } from "../UI/kit/UIKit";
+import { COLOR_ERROR } from "../UI/UIKit";
 import { UILogger } from "../UI/UILogger";
 import { RobotMarker } from "../Robot/RobotMarker";
 import { RobotPresenter } from "../Robot/RobotPresenter";

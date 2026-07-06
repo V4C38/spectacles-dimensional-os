@@ -6,7 +6,7 @@ const animateMock = fileURLToPath(new URL("./mocks/animate.ts", import.meta.url)
 
 function isUIKitImport(source: string): boolean {
   const normalized = source.replace(/\\/g, "/");
-  return /(?:\.\/)?(?:App\/)?UI\/kit\/UIKit(\.ts)?$/.test(normalized);
+  return /(?:\.\/)?(?:App\/)?UI\/UIKit(\.ts)?$/.test(normalized);
 }
 
 function isAnimateImport(source: string): boolean {
@@ -31,12 +31,12 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      "./UI/kit/UIKit": uikitMock,
-      "../App/UI/kit/UIKit": uikitMock,
-      "../../App/UI/kit/UIKit": uikitMock,
-      "../UI/kit/UIKit": uikitMock,
-      "../../UI/kit/UIKit": uikitMock,
-      "./kit/UIKit": uikitMock,
+      "./UI/UIKit": uikitMock,
+      "./UIKit": uikitMock,
+      "../App/UI/UIKit": uikitMock,
+      "../../App/UI/UIKit": uikitMock,
+      "../UI/UIKit": uikitMock,
+      "../../UI/UIKit": uikitMock,
       "SpectaclesInteractionKit.lspkg/Utils/animate": animateMock,
     },
   },

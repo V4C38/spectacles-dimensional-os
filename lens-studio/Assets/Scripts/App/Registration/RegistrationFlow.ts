@@ -13,8 +13,7 @@ import {
   RegistrationStatusMessage,
 } from "../../ARBridge/Network/Protocol";
 export type { RegistrationStatusMessage } from "../../ARBridge/Network/Protocol";
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE, SnapOS2Styles } from "../UI/kit/UIKit";
-import { isRegistrationPreviewPhase } from "./RegistrationPreview";
+import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE, SnapOS2Styles } from "../UI/UIKit";
 
 export enum WizardStep {
   Start = 0,
@@ -128,6 +127,40 @@ export function buildRegistrationDetailText(state: RegistrationViewState): strin
   return state.message || "";
 }
 
+// Mirror dimos-ar TAG_REGISTRATION_MIN_OBS = 4
+export const TAG_REGISTRATION_MIN_OBS = 4;
+
+export function parseRegistrationSampleCount(message: string): number | null {
+  const match = message.match(/collecting samples\s*\((\d+)\)/i);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+export function isRedundantLookAtTagMessage(message: string): boolean {
+  return /look at the april\s*tag/i.test(message);
+}
+
+export function buildAlignmentTitle(state: RegistrationViewState): string {
+  if (state.phase === "succeeded") {
+    return "Registration complete";
+  }
+  if (/waiting for camera intrinsics/i.test(state.message)) {
+    return "Starting…";
+  }
+  const sampleCount = parseRegistrationSampleCount(state.message);
+  if (sampleCount !== null) {
+    const pct = Math.min(
+      100,
+      Math.round((sampleCount / TAG_REGISTRATION_MIN_OBS) * 100),
+    );
+    return `Alignment ${pct}%`;
+  }
+  return "Registration";
+}
+
+export function isRegistrationPreviewPhase(phase: RegistrationPhase): boolean {
+  return phase === "scanning";
+}
+
 export function applyRegistrationStatusToViewState(
   state: RegistrationViewState,
   msg: RegistrationStatusMessage,
@@ -180,7 +213,10 @@ export function buildRegistrationDisplay(
     const tagStatus = state.tagVisible
       ? { text: "✅  Tag visible", color: COLOR_SUCCESS }
       : { text: "❌  Tag not visible", color: COLOR_ERROR };
-    const detailText = buildRegistrationDetailText(state);
+    let detailText = buildRegistrationDetailText(state);
+    if (!state.tagVisible && isRegistrationPreviewPhase(state.phase)) {
+      detailText = "";
+    }
     if (isRegistrationPreviewPhase(state.phase)) {
       return {
         statusText: tagStatus.text,
