@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import time
 from typing import TYPE_CHECKING
 
+from dimos.ar.lidar.filters import LidarObstacleDistanceConfig
 from dimos.ar.network.data_plane import (
     DROPPED_POSE_LOG_INTERVAL_S,
     LIDAR_PAYLOAD_LOG_INTERVAL_S,
@@ -18,13 +20,11 @@ from dimos.utils.logging_config import setup_logger
 if TYPE_CHECKING:
     from dimos.ar.bridge.odom_buffer import OdomBuffer
     from dimos.ar.bridge.sender import BridgeSender
-    from dimos.ar.lidar.filters import LidarFilter, LidarObstacleDistanceConfig
+    from dimos.ar.lidar.filters import LidarFilter
     from dimos.ar.world_frame.state import WorldFrameState
     from dimos.ar.world_frame.transforms import OdomSample
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
     from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-
-from dimos.ar.lidar.filters import LidarObstacleDistanceConfig
 
 logger = setup_logger()
 
@@ -47,6 +47,7 @@ class TelemetryPublisher:
         lidar_voxel_size_m: float,
         pose_max_hz: float,
         speed_horizon_s: float = 0.4,
+        floor_y_drift_check: Callable[[OdomSample], None] | None = None,
     ) -> None:
         self._robot_id = robot_id
         self._sender = sender
@@ -58,6 +59,7 @@ class TelemetryPublisher:
         self._lidar_voxel_size_m = lidar_voxel_size_m
         self._pose_max_hz = pose_max_hz
         self._speed_horizon_s = speed_horizon_s
+        self._floor_y_drift_check = floor_y_drift_check
         self._pose_last_emit: float = 0.0
         self._dropped_pose_count: int = 0
         self._last_dropped_pose_log_mono: float = 0.0
@@ -65,6 +67,10 @@ class TelemetryPublisher:
         self._last_lidar_payload_log_mono: float = 0.0
         self._last_odom_egress_age_log_mono: float = 0.0
         self._odom_egress_age_max_s: float = 0.0
+        self._base_world_y_min_since_commit: float | None = None
+        self._base_world_y_max_since_commit: float | None = None
+        self._odom_z_min_since_commit: float | None = None
+        self._odom_z_max_since_commit: float | None = None
         self._lidar_mode: str = "off"
         self._logged_lidar_config_key: str | None = None
         self._obstacle_distance_config = LidarObstacleDistanceConfig()
@@ -190,6 +196,10 @@ class TelemetryPublisher:
             return
         pose_payload, _pos, _quat = result
         self._sender.send(pose_payload)
+        if self._floor_y_drift_check is not None:
+            sample = self._odom.sample(msg)
+            if sample is not None:
+                self._floor_y_drift_check(sample)
 
     def publish_pose_snapshot(
         self,
@@ -260,6 +270,24 @@ class TelemetryPublisher:
     def _maybe_log_odom_egress_age(self, msg: PoseStamped) -> None:
         age_s = max(0.0, time.time() - float(msg.ts))
         self._odom_egress_age_max_s = max(self._odom_egress_age_max_s, age_s)
+        sample = self._odom.sample(msg)
+        odom_z_m: float | None = None
+        base_world_y_m: float | None = None
+        if sample is not None:
+            odom_z_m = float(sample.position[2])
+            if odom_z_m < (self._odom_z_min_since_commit or odom_z_m):
+                self._odom_z_min_since_commit = odom_z_m
+            if odom_z_m > (self._odom_z_max_since_commit or odom_z_m):
+                self._odom_z_max_since_commit = odom_z_m
+            world_pos, _ = self._world_frame.transform_pose(
+                sample.position,
+                sample.orientation,
+            )
+            base_world_y_m = float(world_pos[1])
+            if base_world_y_m < (self._base_world_y_min_since_commit or base_world_y_m):
+                self._base_world_y_min_since_commit = base_world_y_m
+            if base_world_y_m > (self._base_world_y_max_since_commit or base_world_y_m):
+                self._base_world_y_max_since_commit = base_world_y_m
         now = time.monotonic()
         if now - self._last_odom_egress_age_log_mono < ODOM_EGRESS_AGE_LOG_INTERVAL_S:
             return
@@ -269,5 +297,27 @@ class TelemetryPublisher:
             age_s=round(age_s, 3),
             age_max_s=round(self._odom_egress_age_max_s, 3),
             pose_hz_cap=self._pose_max_hz,
+            odom_z_m=round(odom_z_m, 4) if odom_z_m is not None else None,
+            base_world_y_m=round(base_world_y_m, 4) if base_world_y_m is not None else None,
+            odom_z_min_m=(
+                round(self._odom_z_min_since_commit, 4)
+                if self._odom_z_min_since_commit is not None
+                else None
+            ),
+            odom_z_max_m=(
+                round(self._odom_z_max_since_commit, 4)
+                if self._odom_z_max_since_commit is not None
+                else None
+            ),
+            base_world_y_min_m=(
+                round(self._base_world_y_min_since_commit, 4)
+                if self._base_world_y_min_since_commit is not None
+                else None
+            ),
+            base_world_y_max_m=(
+                round(self._base_world_y_max_since_commit, 4)
+                if self._base_world_y_max_since_commit is not None
+                else None
+            ),
         )
         self._odom_egress_age_max_s = 0.0

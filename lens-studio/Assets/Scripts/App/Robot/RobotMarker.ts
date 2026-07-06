@@ -88,12 +88,17 @@ class RuntimePoseAnimator {
   private static readonly SMOOTHING_SPEED_REF_CM_S = 30.0;
   private static readonly REALIGN_SNAP_BOOST_RATE = 28.0;
   private static readonly REALIGN_SNAP_DURATION_S = 0.15;
-  private static readonly MAX_EXTRAP_S = 0.2;
+  private static readonly MAX_EXTRAP_S = 0.35;
+  private static readonly MAX_EXTRAP_DISPLACEMENT_CM = 40.0;
+  private static readonly POSE_AGE_LOG_INTERVAL_S = 2.0;
 
   private _tracking = false;
   private _base: RuntimePoseTarget | null = null;
   private _boostUntil = 0;
   private _getRobotClockNowS: (() => number | null) | null = null;
+  private _lastPoseAgeLogMono = 0;
+  private _recentClampHits = 0;
+  private _recentAgeSamples = 0;
 
   public get isTracking(): boolean {
     return this._tracking;
@@ -111,6 +116,8 @@ class RuntimePoseAnimator {
     this._tracking = false;
     this._base = null;
     this._boostUntil = 0;
+    this._recentClampHits = 0;
+    this._recentAgeSamples = 0;
   }
 
   public beginRealignmentSnap(): void {
@@ -151,12 +158,19 @@ class RuntimePoseAnimator {
     if (!this._base) {
       return null;
     }
-    const ageS = this._poseAgeS(now);
+    const ageS = this._poseAgeS(now, true);
     const base = this._base;
+    const extrapolation = RuntimePoseAnimator._clampDisplacement(
+      new vec3(
+        base.velocityCmPerS.x * ageS,
+        base.velocityCmPerS.y * ageS,
+        base.velocityCmPerS.z * ageS,
+      ),
+    );
     const position = new vec3(
-      base.position.x + base.velocityCmPerS.x * ageS,
-      base.position.y + base.velocityCmPerS.y * ageS,
-      base.position.z + base.velocityCmPerS.z * ageS,
+      base.position.x + extrapolation.x,
+      base.position.y + extrapolation.y,
+      base.position.z + extrapolation.z,
     );
     const yawDelta = base.yawRateRadPerS * ageS;
     const halfYaw = yawDelta * 0.5;
@@ -184,15 +198,32 @@ class RuntimePoseAnimator {
 
     const positionRate = this._smoothingRate(now);
     const rotationRate = this._rotationSmoothingRate(now);
+    const lead = RuntimePoseAnimator._clampDisplacement(
+      new vec3(
+        this._base.velocityCmPerS.x / positionRate,
+        this._base.velocityCmPerS.y / positionRate,
+        this._base.velocityCmPerS.z / positionRate,
+      ),
+    );
+    const leadYaw = this._base.yawRateRadPerS / rotationRate;
+    const halfLeadYaw = leadYaw * 0.5;
+    const leadYawQuat = new quat(Math.cos(halfLeadYaw), 0, Math.sin(halfLeadYaw), 0);
+    const targetPosition = new vec3(
+      predicted.position.x + lead.x,
+      predicted.position.y + lead.y,
+      predicted.position.z + lead.z,
+    );
+    const targetRotation = predicted.rotation.multiply(leadYawQuat);
     const smoothed = interpolatePose(
       current.position,
-      predicted.position,
+      targetPosition,
       current.rotation,
-      predicted.rotation,
+      targetRotation,
       dt,
       positionRate,
       rotationRate,
     );
+    this._maybeLogPoseAge(now);
     return {
       position: smoothed.position,
       rotation: smoothed.rotation,
@@ -200,19 +231,53 @@ class RuntimePoseAnimator {
     };
   }
 
-  private _poseAgeS(now: number): number {
-    const base = this._base!;
+  private _rawPoseAgeS(now: number): number {
+    const base = this._base;
+    if (!base) {
+      return 0;
+    }
     const robotNow = this._getRobotClockNowS?.() ?? null;
     if (robotNow !== null) {
-      return Math.min(
-        Math.max(0, robotNow - base.poseTs),
-        RuntimePoseAnimator.MAX_EXTRAP_S,
-      );
+      return robotNow - base.poseTs;
     }
-    return Math.min(
-      Math.max(0, now - base.receiveMonoS),
+    return now - base.receiveMonoS;
+  }
+
+  private _poseAgeS(now: number, recordDiagnostics: boolean): number {
+    const rawAge = this._rawPoseAgeS(now);
+    const clamped = Math.min(
+      Math.max(0, rawAge),
       RuntimePoseAnimator.MAX_EXTRAP_S,
     );
+    if (recordDiagnostics) {
+      this._recentAgeSamples += 1;
+      if (rawAge > RuntimePoseAnimator.MAX_EXTRAP_S) {
+        this._recentClampHits += 1;
+      }
+    }
+    return clamped;
+  }
+
+  private _maybeLogPoseAge(now: number): void {
+    if (now - this._lastPoseAgeLogMono < RuntimePoseAnimator.POSE_AGE_LOG_INTERVAL_S) {
+      return;
+    }
+    this._lastPoseAgeLogMono = now;
+    const rawAge = this._rawPoseAgeS(now);
+    const clampedAge = this._poseAgeS(now, false);
+    const clampFraction = this._recentAgeSamples > 0
+      ? this._recentClampHits / this._recentAgeSamples
+      : 0;
+    print(
+      `[RuntimePoseAnimator] pose_age raw=${rawAge.toFixed(3)}s `
+      + `clamped=${clampedAge.toFixed(3)}s `
+      + `clamp_hit_fraction=${clampFraction.toFixed(2)}`,
+    );
+    if (rawAge < 0) {
+      print("[RuntimePoseAnimator] pose_age negative — check clock offset sign");
+    }
+    this._recentClampHits = 0;
+    this._recentAgeSamples = 0;
   }
 
   private _smoothingRate(now: number): number {
@@ -240,6 +305,15 @@ class RuntimePoseAnimator {
       return RuntimePoseAnimator.REALIGN_SNAP_BOOST_RATE;
     }
     return RuntimePoseAnimator.SMOOTHING_ROTATION_RATE;
+  }
+
+  private static _clampDisplacement(delta: vec3): vec3 {
+    const len = Math.sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+    if (len <= RuntimePoseAnimator.MAX_EXTRAP_DISPLACEMENT_CM || len <= 1e-6) {
+      return delta;
+    }
+    const scale = RuntimePoseAnimator.MAX_EXTRAP_DISPLACEMENT_CM / len;
+    return new vec3(delta.x * scale, delta.y * scale, delta.z * scale);
   }
 
   private static _smoothstep01(x: number): number {

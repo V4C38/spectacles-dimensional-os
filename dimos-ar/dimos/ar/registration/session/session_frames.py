@@ -64,7 +64,6 @@ class RegistrationSessionFramesMixin:
         def _apply_tracker_update(
             self,
             *,
-            ts: float | None = None,
             resolved_odom: OdomSample | None = None,
             frame_result: FrameResult | None = None,
         ) -> None: ...
@@ -148,7 +147,6 @@ class RegistrationSessionFramesMixin:
                 )
             self._send_frame_ack(header)
             self._apply_tracker_update(
-                ts=float(header.get("ts", time.time())),
                 resolved_odom=resolved_odom,
                 frame_result=result,
             )

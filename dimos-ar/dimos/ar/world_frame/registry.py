@@ -10,6 +10,7 @@ import numpy as np
 
 from dimos.ar.registration.types import RegistrationCandidate
 from dimos.ar.world_frame.state import WorldFrameState
+from dimos.ar.world_frame.transforms import OdomSample, pose_to_matrix, yaw_from_T
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -35,11 +36,13 @@ class WorldRegistry:
         state: WorldFrameState,
         tf_publish_static: Callable[[Transform], None],
         refiner: WorldFrameRefiner | None = None,
+        odom_latest: Callable[[], OdomSample | None] | None = None,
     ) -> None:
         self._state = state
         self._tf_publish_static = tf_publish_static
         self._tf_publish_static_unsupported = False
         self._refiner = refiner
+        self._odom_latest = odom_latest
 
     @property
     def state(self) -> WorldFrameState:
@@ -49,7 +52,12 @@ class WorldRegistry:
         """Wire post-commit refiner after two-phase construction in ``ARBridge.build``."""
         self._refiner = refiner
 
-    def commit(self, candidate: RegistrationCandidate) -> None:
+    def commit(
+        self,
+        candidate: RegistrationCandidate,
+        *,
+        odom: OdomSample | None = None,
+    ) -> None:
         self._state.commit(
             candidate.T_world_odom,
             method=candidate.mode.value,
@@ -61,11 +69,22 @@ class WorldRegistry:
         self._publish_world_odom_tf(T_committed)
         if self._refiner is not None:
             self._refiner.set_refinement_baseline(T_committed)
+            self._refiner.set_registration_yaw(yaw_from_T(T_committed))
+            sample = odom if odom is not None else (
+                self._odom_latest() if self._odom_latest is not None else None
+            )
+            if sample is not None and self._refiner is not None:
+                T_odom_base = pose_to_matrix(sample.position, sample.orientation)
+                base_world = T_committed @ T_odom_base
+                floor_y = float(base_world[1, 3])
+                self._refiner.set_floor_lock(floor_y)
 
     def clear(self) -> None:
         self._state.clear()
         if self._refiner is not None:
             self._refiner.clear_refinement_baseline()
+            self._refiner.clear_floor_lock()
+            self._refiner.clear_registration_yaw()
 
     def apply_runtime_transform(
         self,

@@ -236,7 +236,7 @@ class ARBridge(Module):  # type: ignore[misc]
             pose_max_hz=self.config.pose_max_hz,
             speed_horizon_s=runtime_profile.runtime_speed_horizon_s,
         )
-        registry = WorldRegistry(self._world_frame, self.tf.publish_static)
+        registry = WorldRegistry(self._world_frame, self.tf.publish_static, odom_latest=odom.latest)
         assert self._loop is not None, "build() called before Module loop is assigned"
         nav_ref: NavigateGoalHandler | None = None
 
@@ -256,6 +256,7 @@ class ARBridge(Module):  # type: ignore[misc]
             on_correction_committed=_on_world_frame_corrected,
         )
         registry.attach_refiner(world_frame_refiner)
+        telemetry._floor_y_drift_check = world_frame_refiner.check_floor_y_drift
 
         def _on_nav_preempted() -> None:
             assert nav_ref is not None

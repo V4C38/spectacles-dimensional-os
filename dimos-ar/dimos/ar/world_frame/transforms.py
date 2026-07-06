@@ -53,6 +53,7 @@ __all__ = [
     "normalize_ground_pose",
     "pose_to_matrix",
     "up_axis_angle_deg",
+    "yaw_from_T",
 ]
 
 WORLD_UP_AXIS_INDEX = 1
@@ -92,6 +93,16 @@ def matrix_to_pose(
             float(p.orientation.w),
         ),
     )
+
+
+def yaw_from_T(T: NDArray[np.float64]) -> float:
+    """Heading of T's forward (x) axis. Convention: forward = (cos th, 0, -sin th).
+
+    Sign-consistent with build_T_world_odom, normalize_ground_pose, and the
+    Lens-side yawRotationFromPlanarDirection helpers.
+    """
+    forward = T[:3, 0]
+    return math.atan2(-float(forward[2]), float(forward[0]))
 
 
 def normalize_ground_pose(

@@ -26,6 +26,9 @@ class TagTrackingProfile:
     runtime_yaw_straightness_max: float = 0.20
     runtime_translation_window_obs: int = 3
     runtime_translation_window_s: float = 6.0
+    runtime_stop_yaw_window_s: float = 30.0
+    runtime_solve_max_dist_cam_m: float = 4.0
+    flat_ground: bool = True
 
 
 @dataclass(frozen=True)

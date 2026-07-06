@@ -11,8 +11,12 @@ from typing import TYPE_CHECKING, Any
 import cv2
 import numpy as np
 
-from dimos.ar.world_frame.transforms import pose_to_matrix
+from dimos.ar.world_frame.transforms import pose_to_matrix, yaw_from_T as _yaw_from_T
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
+
+__all__ = [
+    "_yaw_from_T",
+]
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -196,16 +200,6 @@ def _odom_tag_straightness(observations: list[TagObservation]) -> float:
     return float(math.sqrt(lam2 / lam1))
 
 
-def _yaw_from_T(T: NDArray[np.float64]) -> float:
-    """Heading of T's forward (x) axis. Convention: forward = (cos th, 0, -sin th).
-
-    Sign-consistent with build_T_world_odom, normalize_ground_pose, and the
-    Lens-side MathUtils.yawRotationFromPlanarDirection.
-    """
-    forward = T[:3, 0]
-    return math.atan2(-float(forward[2]), float(forward[0]))
-
-
 def orientation_yaw_deg(
     orientation: tuple[float, float, float, float],
 ) -> float:
@@ -236,6 +230,7 @@ class TagObservation:
     T_odom_base: NDArray[np.float64]
     quality: float
     reprojection_error_px: float
+    dist_cam_m: float = 0.0
 
 
 @dataclass

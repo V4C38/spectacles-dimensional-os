@@ -216,6 +216,24 @@ class RobotAprilTagTracker:
         with self._lock:
             return len(self._observations)
 
+    def _filter_observations(
+        self,
+        observations: list[TagObservation],
+        *,
+        max_age_s: float | None,
+        max_observations: int | None,
+        max_dist_cam_m: float | None,
+    ) -> list[TagObservation]:
+        if max_age_s is not None and observations:
+            newest = observations[-1].mono_ts
+            cutoff = newest - max_age_s
+            observations = [o for o in observations if o.mono_ts >= cutoff]
+        if max_observations is not None and len(observations) > max_observations:
+            observations = observations[-max_observations:]
+        if max_dist_cam_m is not None:
+            observations = [o for o in observations if o.dist_cam_m <= max_dist_cam_m]
+        return observations
+
     def _prune_old(self, now_mono: float) -> None:
         cutoff = now_mono - self._config.window_max_age_s
         while self._observations and self._observations[0].mono_ts < cutoff:
@@ -323,6 +341,7 @@ class RobotAprilTagTracker:
             T_odom_base=np.array(T_odom_base, dtype=np.float64, copy=True),
             quality=quality,
             reprojection_error_px=reproj,
+            dist_cam_m=dist_cam,
         ), None
 
     def process_frame(
@@ -457,6 +476,7 @@ class RobotAprilTagTracker:
         min_baseline_m: float | None = None,
         max_age_s: float | None = None,
         max_observations: int | None = None,
+        max_dist_cam_m: float | None = None,
     ) -> TagSolve | None:
         with self._lock:
             observations = list(self._observations)
@@ -464,12 +484,12 @@ class RobotAprilTagTracker:
         if not observations:
             return None
 
-        if max_age_s is not None:
-            newest = observations[-1].mono_ts
-            cutoff = newest - max_age_s
-            observations = [o for o in observations if o.mono_ts >= cutoff]
-        if max_observations is not None and len(observations) > max_observations:
-            observations = observations[-max_observations:]
+        observations = self._filter_observations(
+            observations,
+            max_age_s=max_age_s,
+            max_observations=max_observations,
+            max_dist_cam_m=max_dist_cam_m,
+        )
 
         if not observations:
             return None
@@ -568,6 +588,7 @@ class RobotAprilTagTracker:
         *,
         max_observations: int = 5,
         max_age_s: float | None = None,
+        max_dist_cam_m: float | None = None,
     ) -> TagSolve | None:
         """Estimate a translation-only world<-odom update from recent tag sightings.
 
@@ -585,12 +606,12 @@ class RobotAprilTagTracker:
         if not observations:
             return None
 
-        if max_age_s is not None:
-            newest = observations[-1].mono_ts
-            cutoff = newest - max_age_s
-            observations = [o for o in observations if o.mono_ts >= cutoff]
-        if max_observations is not None and len(observations) > max_observations:
-            observations = observations[-max_observations:]
+        observations = self._filter_observations(
+            observations,
+            max_age_s=max_age_s,
+            max_observations=max_observations,
+            max_dist_cam_m=max_dist_cam_m,
+        )
 
         if not observations:
             return None

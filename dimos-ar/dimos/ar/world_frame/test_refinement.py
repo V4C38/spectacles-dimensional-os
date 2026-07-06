@@ -201,6 +201,7 @@ def test_runtime_correction_emits_fresh_pose_for_stationary_robot() -> None:
     odom._latest = OdomSample(  # type: ignore[attr-defined]
         position=(0.0, 0.0, 0.0),
         orientation=(0.0, 0.0, 0.0, 1.0),
+        source_ts=123.456,
     )
 
     T_target = build_T_world_odom(theta, (1.0, 0.0, -1.0))
@@ -214,7 +215,7 @@ def test_runtime_correction_emits_fresh_pose_for_stationary_robot() -> None:
     tag_tracker.current_solve = MagicMock(return_value=None)  # type: ignore[method-assign]
     tag_tracker.current_translation_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
 
-    refiner.apply_tracker_update(ts=123.456)
+    refiner.apply_tracker_update()
 
     payloads = [json.loads(m) for m in sent]
     pose_payloads = [m for m in payloads if m["type"] == "pose"]
@@ -404,3 +405,73 @@ def test_runtime_yaw_gate_allows_straight_run() -> None:
     refiner.apply_tracker_update()
 
     assert _yaw_from_T(refiner.refinement_baseline) != pytest.approx(theta, abs=1e-6)
+
+
+def test_floor_lock_overrides_low_tag_y_on_translation_solve() -> None:
+    refiner, tag_tracker, state, odom, _sent, _registry = _make_world_frame_refiner()
+
+    theta = math.radians(10.0)
+    T_committed = build_T_world_odom(theta, (0.0, 0.5, 0.0))
+    refiner.set_refinement_baseline(T_committed)
+    refiner.set_floor_lock(0.5)
+    _commit_state(state, T_committed)
+    odom._latest = OdomSample(  # type: ignore[attr-defined]
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+
+    T_target = build_T_world_odom(theta, (1.0, 0.1, -1.0))
+    solve = TagSolve(
+        T_world_odom=T_target.copy(),
+        method="apriltag_translation",
+        quality=0.95,
+        observation_count=1,
+        baseline_m=0.0,
+    )
+    tag_tracker.current_solve = MagicMock(return_value=None)  # type: ignore[method-assign]
+    tag_tracker.current_translation_solve = MagicMock(return_value=solve)  # type: ignore[method-assign]
+
+    refiner.apply_tracker_update()
+
+    base_world = refiner._robot_base_world_position(odom._latest)  # type: ignore[arg-type]
+    assert base_world is not None
+    assert base_world[1] == pytest.approx(0.5, abs=1e-3)
+
+
+def test_stop_yaw_solve_on_static_transition() -> None:
+    refiner, tag_tracker, state, odom, sent, _registry = _make_world_frame_refiner()
+    odom.speed_windowed = MagicMock(side_effect=[0.5, 0.0])  # type: ignore[method-assign]
+
+    theta_committed = math.radians(0.0)
+    true_yaw = math.radians(5.0)
+    T_committed = build_T_world_odom(theta_committed, (0.0, 0.0, 0.0))
+    refiner.set_refinement_baseline(T_committed)
+    _commit_state(state, T_committed)
+
+    stop_yaw_solve = TagSolve(
+        T_world_odom=build_T_world_odom(true_yaw, (0.2, 0.0, -0.2)),
+        method="apriltag_full",
+        quality=0.9,
+        observation_count=8,
+        baseline_m=0.5,
+        straightness=0.1,
+    )
+
+    def solve_side_effect(**kwargs: object) -> TagSolve | None:
+        if kwargs.get("max_age_s") == 30.0:
+            return stop_yaw_solve
+        return None
+
+    tag_tracker.current_solve = MagicMock(side_effect=solve_side_effect)  # type: ignore[method-assign]
+    tag_tracker.current_translation_solve = MagicMock(return_value=None)  # type: ignore[method-assign]
+
+    refiner.apply_tracker_update()
+    refiner.apply_tracker_update()
+
+    assert _yaw_from_T(refiner.refinement_baseline) == pytest.approx(true_yaw, abs=1e-3)
+    corrections = [
+        json.loads(payload)
+        for payload in sent
+        if json.loads(payload).get("type") == "world_frame_correction"
+    ]
+    assert any(c.get("yaw_corrected") is True for c in corrections)

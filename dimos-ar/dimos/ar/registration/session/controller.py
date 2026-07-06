@@ -261,7 +261,6 @@ class RegistrationSession(
     def _apply_tracker_update(
         self,
         *,
-        ts: float | None = None,
         resolved_odom: OdomSample | None = None,
         frame_result: FrameResult | None = None,
     ) -> None:
@@ -272,7 +271,6 @@ class RegistrationSession(
                 self._broadcast_status()
             return
         self._world_frame_refiner.apply_tracker_update(
-            ts=ts,
             resolved_odom=resolved_odom,
         )
 

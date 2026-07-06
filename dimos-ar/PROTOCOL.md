@@ -421,6 +421,9 @@ Robot pose in AR world frame:
 - `yaw_rate_rad_s` (optional): world-frame yaw rate in rad/s about the world-up
   axis. Used by the Lens for client-side pose prediction during turns.
 
+`pose.ts` and `world_frame_correction.ts` use bridge/robot wall-clock seconds
+(the same domain as robot odometry production timestamps), not Lens scene time.
+
 ### `world_frame_correction`
 
 Runtime world-frame correction telemetry emitted when the bridge commits a

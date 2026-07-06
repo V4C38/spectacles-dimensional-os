@@ -262,7 +262,7 @@ class RegistrationFlowsMixin:
     ) -> None:
         self._set_tag_tracker_active(False, reason="registration_finish")
         self._stop_broadcast()
-        self._registry.commit(result)
+        self._registry.commit(result, odom=self._odom.latest())
         log_checkpoint(
             logger,
             kind="success",
