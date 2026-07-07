@@ -1,0 +1,423 @@
+/** Inbound protocol decode: text dispatch, hello-wait, binary LiDAR pump, parse recovery. */
+import {
+  RegistrationStatusMessage,
+  BridgeStatusMessage,
+  CameraFrameAckMessage,
+  CapabilityState,
+  HelloMessage,
+  LidarMessage,
+  NavStatusMessage,
+  NavGoalUpdateMessage,
+  PathMessage,
+  PongMessage,
+  WorldFrameCorrectionMessage,
+  PoseMessage,
+  RuntimeSnapshotMessage,
+  bridgeStatusFromSnapshot,
+  isNonCriticalInboundMessageType,
+  parseInboundMessage,
+  parseLidarBinary,
+  ProtocolParseError,
+  sniffInboundMessageType,
+} from "./Protocol";
+import {
+  WebSocketTransport,
+  PendingBinaryFrame,
+} from "./WebSocketTransport";
+import { Signal } from "../../App/Utilities/Utilities";
+
+const PARSE_RECONNECT_THRESHOLD = 5;
+const POSE_LOG_INTERVAL_S = 30;
+
+export interface InboundProcessorCallbacks {
+  onHelloConnection: (connected: boolean) => void;
+  onSocketClosed: () => void;
+  scheduleParseRecoveryReconnect: () => void;
+}
+
+export class InboundProcessor {
+  public readonly onHello = new Signal<HelloMessage>();
+  public readonly onLidar = new Signal<LidarMessage>();
+  public readonly onPose = new Signal<PoseMessage>();
+  public readonly onWorldFrameCorrection = new Signal<WorldFrameCorrectionMessage>();
+  public readonly onRegistrationStatus = new Signal<RegistrationStatusMessage>();
+  public readonly onCameraFrameAck = new Signal<CameraFrameAckMessage>();
+  public readonly onBridgeStatus = new Signal<BridgeStatusMessage>();
+  public readonly onPath = new Signal<PathMessage>();
+  public readonly onNavStatus = new Signal<NavStatusMessage>();
+  public readonly onNavGoalUpdate = new Signal<NavGoalUpdateMessage>();
+  public readonly onRuntimeSnapshot = new Signal<RuntimeSnapshotMessage>();
+  public readonly onPong = new Signal<PongMessage>();
+  public readonly onProtocolError = new Signal<ProtocolParseError>();
+
+  public helloReceived = false;
+  public lastBridgeStatus: BridgeStatusMessage | null = null;
+
+  private readonly _connection: WebSocketTransport;
+  private readonly _callbacks: InboundProcessorCallbacks;
+  private readonly _helloTimeoutEvent: DelayedCallbackEvent;
+
+  private _activeRobotId: string | null = null;
+  private _capabilities: Record<string, CapabilityState> = {};
+  private _consecutiveParseFailures = 0;
+  private _reconnectScheduled = false;
+  private _poseRxCount = 0;
+  private _lastPoseRxLogTime = -1;
+  private _lastBridgeStatusKey = "";
+  private _lastNavStatusKey = "";
+  private _messageRxCount = 0;
+  private _pendingBinaryFrames: PendingBinaryFrame[] = [];
+  private _binaryDecodeRunning = false;
+  private _pendingHelloFinish: ((ok: boolean) => void) | null = null;
+
+  constructor(
+    script: ScriptComponent,
+    connection: WebSocketTransport,
+    callbacks: InboundProcessorCallbacks,
+  ) {
+    this._connection = connection;
+    this._callbacks = callbacks;
+
+    const helloTimeout = script.createEvent(
+      "DelayedCallbackEvent",
+    ) as DelayedCallbackEvent;
+    helloTimeout.bind(() => {
+      const finish = this._pendingHelloFinish;
+      if (finish === null) {
+        return;
+      }
+      this._pendingHelloFinish = null;
+      finish(false);
+    });
+    this._helloTimeoutEvent = helloTimeout;
+
+    connection.onTextMessage.add((line) => {
+      this._messageRxCount++;
+      this._dispatchTextMessage(line);
+    });
+    connection.onBinaryBlob.add((frame) => {
+      this._messageRxCount++;
+      this._pendingBinaryFrames.push(frame);
+      this._pumpBinaryFrames();
+    });
+    connection.onClose.add(() => {
+      this._resetSessionState();
+      this._callbacks.onSocketClosed();
+    });
+  }
+
+  public get poseRxCount(): number {
+    return this._poseRxCount;
+  }
+
+  public get messageRxCount(): number {
+    return this._messageRxCount;
+  }
+
+  public get activeRobotId(): string | null {
+    return this._activeRobotId;
+  }
+
+  public hasCapability(capability: string): boolean {
+    return capability in this._capabilities;
+  }
+
+  public isCapabilityAvailable(capability: string): boolean {
+    const state = this._capabilities[capability];
+    return state ? state.available : true;
+  }
+
+  public resetSessionState(): void {
+    this._resetSessionState();
+  }
+
+  public waitForHello(timeoutSeconds: number = 3.0): Promise<boolean> {
+    if (this.helloReceived) {
+      return Promise.resolve(true);
+    }
+    if (!this._connection.isSocketOpen()) {
+      return Promise.resolve(false);
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      let unsub: (() => void) | null = null;
+      const finish = (ok: boolean) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        this._pendingHelloFinish = null;
+        unsub?.();
+        resolve(ok);
+      };
+      unsub = this.onHello.add(() => finish(true));
+      this._pendingHelloFinish = (ok: boolean) => finish(ok);
+      this._helloTimeoutEvent.reset(timeoutSeconds);
+    });
+  }
+
+  private _resetSessionState(): void {
+    this._pendingBinaryFrames = [];
+    this._binaryDecodeRunning = false;
+    this.helloReceived = false;
+    this._activeRobotId = null;
+    this._capabilities = {};
+    this.lastBridgeStatus = null;
+  }
+
+  private _dispatchTextMessage(payload: string): void {
+    try {
+      const msg = parseInboundMessage(payload);
+      this._consecutiveParseFailures = 0;
+      if (!msg) {
+        return;
+      }
+      switch (msg.type) {
+        case "hello":
+          this.helloReceived = true;
+          this._capabilities = msg.capabilities;
+          this._adoptRobotId(msg.robot.robot_id);
+          this._callbacks.onHelloConnection(true);
+          this.onHello.emit(msg);
+          break;
+        case "runtime_snapshot":
+          this._adoptRobotId(msg.robot_id);
+          this._emitRuntimeSnapshot(msg);
+          break;
+        case "lidar":
+          this.onLidar.emit(msg);
+          break;
+        case "pose":
+          this._logPoseRx(msg);
+          this.onPose.emit(msg);
+          break;
+        case "world_frame_correction":
+          this.onWorldFrameCorrection.emit(msg);
+          break;
+        case "registration_status":
+          this._logDiagnosticRx(msg);
+          this.onRegistrationStatus.emit(msg);
+          break;
+        case "camera_frame_ack":
+          this._logDiagnosticRx(msg);
+          this.onCameraFrameAck.emit(msg);
+          break;
+        case "bridge_status":
+          this.lastBridgeStatus = msg;
+          this._logDiagnosticRx(msg);
+          this.onBridgeStatus.emit(msg);
+          break;
+        case "path":
+          this.onPath.emit(msg);
+          break;
+        case "nav_status":
+          this._logDiagnosticRx(msg);
+          this.onNavStatus.emit(msg);
+          break;
+        case "nav_goal_update":
+          this.onNavGoalUpdate.emit(msg);
+          break;
+        case "pong":
+          this._adoptRobotId(msg.robot_id);
+          this.onPong.emit(msg);
+          break;
+      }
+    } catch (error) {
+      this._handleParseFailure(payload, error);
+    }
+  }
+
+  private _emitRuntimeSnapshot(snapshot: RuntimeSnapshotMessage): void {
+    const bridgeStatus = bridgeStatusFromSnapshot(snapshot);
+    this.lastBridgeStatus = bridgeStatus;
+    this._logDiagnosticRx(bridgeStatus);
+    this.onBridgeStatus.emit(bridgeStatus);
+
+    const navStatus: NavStatusMessage = {
+      type: "nav_status",
+      ts: snapshot.ts,
+      phase: snapshot.nav.phase,
+    };
+    if (typeof snapshot.nav.error_code === "number") {
+      navStatus.error_code = snapshot.nav.error_code;
+    }
+    if (typeof snapshot.nav.retryable === "boolean") {
+      navStatus.retryable = snapshot.nav.retryable;
+    }
+    if (snapshot.nav.stall_reason === "no_path" || snapshot.nav.stall_reason === "planner_idle") {
+      navStatus.stall_reason = snapshot.nav.stall_reason;
+    }
+    this._logDiagnosticRx(navStatus);
+    this.onNavStatus.emit(navStatus);
+
+    if (snapshot.path) {
+      const pathMsg: PathMessage = {
+        type: "path",
+        ts: snapshot.ts,
+        kind: snapshot.path.kind,
+        waypoints: snapshot.path.waypoints,
+      };
+      if (snapshot.path.target !== undefined) {
+        pathMsg.target = snapshot.path.target;
+      }
+      this.onPath.emit(pathMsg);
+    }
+
+    if (snapshot.goal) {
+      const goalMsg: NavGoalUpdateMessage = {
+        type: "nav_goal_update",
+        ts: snapshot.ts,
+        source: snapshot.goal.source,
+        position: snapshot.goal.position,
+        active: snapshot.goal.active,
+      };
+      if (snapshot.goal.orientation !== undefined) {
+        goalMsg.orientation = snapshot.goal.orientation;
+      }
+      this.onNavGoalUpdate.emit(goalMsg);
+    }
+
+    this.onRuntimeSnapshot.emit(snapshot);
+  }
+
+  private async _pumpBinaryFrames(): Promise<void> {
+    if (this._binaryDecodeRunning) {
+      return;
+    }
+    this._binaryDecodeRunning = true;
+    try {
+      while (this._pendingBinaryFrames.length > 0) {
+        if (this._pendingBinaryFrames.length > 1) {
+          this._pendingBinaryFrames.splice(0, this._pendingBinaryFrames.length - 1);
+        }
+        const frame = this._pendingBinaryFrames.shift();
+        if (!frame) {
+          continue;
+        }
+        try {
+          const bytes = await frame.blob.bytes();
+          if (this._connection.ws !== frame.socket) {
+            continue;
+          }
+          const msg = parseLidarBinary(bytes);
+          if (msg) {
+            this.onLidar.emit(msg);
+          }
+        } catch (e: unknown) {
+          print(`InboundProcessor: binary frame decode failed: ${e}`);
+        }
+      }
+    } finally {
+      this._binaryDecodeRunning = false;
+      if (this._pendingBinaryFrames.length > 0) {
+        this._pumpBinaryFrames();
+      }
+    }
+  }
+
+  private _handleParseFailure(raw: string, error: unknown): void {
+    const sniffed = sniffInboundMessageType(raw);
+    const parseError =
+      error instanceof ProtocolParseError
+        ? error
+        : new ProtocolParseError(
+            "json",
+            sniffed,
+            error instanceof Error ? error.message : String(error),
+          );
+
+    const nonCritical =
+      isNonCriticalInboundMessageType(parseError.messageType) ||
+      (parseError.kind === "json" &&
+        isNonCriticalInboundMessageType(sniffed));
+
+    if (parseError.kind === "json") {
+      return;
+    }
+
+    if (nonCritical) {
+      return;
+    }
+
+    this._consecutiveParseFailures += 1;
+    this.onProtocolError.emit(parseError);
+
+    print(
+      `InboundProcessor: protocol ${parseError.kind} error on ${parseError.messageType ?? sniffed ?? "unknown"} (${this._consecutiveParseFailures}); len=${raw.length}; first="${this._snippet(raw, 0)}" last="${this._snippet(raw, Math.max(0, raw.length - 80))}"`,
+    );
+
+    if (this._consecutiveParseFailures >= PARSE_RECONNECT_THRESHOLD) {
+      print(
+        `InboundProcessor: ${this._consecutiveParseFailures} consecutive parse failures; reconnecting`,
+      );
+      this._scheduleReconnectAfterParseFailures();
+    }
+  }
+
+  private _scheduleReconnectAfterParseFailures(): void {
+    if (this._reconnectScheduled) {
+      return;
+    }
+    this._reconnectScheduled = true;
+    this._consecutiveParseFailures = 0;
+    this._callbacks.scheduleParseRecoveryReconnect();
+  }
+
+  private _adoptRobotId(robotId: string | null): void {
+    if (!robotId) {
+      return;
+    }
+    this._activeRobotId = robotId;
+  }
+
+  private _snippet(text: string, start: number): string {
+    return text
+      .substring(start, Math.min(text.length, start + 80))
+      .replace("\n", "\\n")
+      .replace("\r", "\\r");
+  }
+
+  private _logPoseRx(msg: PoseMessage): void {
+    this._poseRxCount++;
+    const now = getTime();
+    if (this._poseRxCount === 1 || now - this._lastPoseRxLogTime >= POSE_LOG_INTERVAL_S) {
+      this._lastPoseRxLogTime = now;
+      const pos = msg.position;
+      print(
+        `InboundProcessor: RX pose #${this._poseRxCount}` +
+          ` pos=(${pos[0].toFixed(2)},${pos[1].toFixed(2)},${pos[2].toFixed(2)})`,
+      );
+    }
+  }
+
+  private _logDiagnosticRx(
+    msg: RegistrationStatusMessage | CameraFrameAckMessage | BridgeStatusMessage | NavStatusMessage,
+  ): void {
+    switch (msg.type) {
+      case "registration_status":
+        break;
+      case "camera_frame_ack":
+        break;
+      case "bridge_status": {
+        const key = `${msg.world_frame_committed}|${msg.robot_connected}|${msg.world_frame_method ?? "-"}`;
+        if (key !== this._lastBridgeStatusKey) {
+          this._lastBridgeStatusKey = key;
+          print(
+            `InboundProcessor: RX bridge_status world_frame_committed=${msg.world_frame_committed} robot_connected=${msg.robot_connected}`,
+          );
+        }
+        break;
+      }
+      case "nav_status": {
+        const key = `${msg.phase}|${msg.error_code ?? "-"}|${msg.retryable ?? "-"}|${msg.stall_reason ?? "-"}`;
+        if (key !== this._lastNavStatusKey) {
+          this._lastNavStatusKey = key;
+          print(
+            `InboundProcessor: RX nav_status phase=${msg.phase} error_code=${msg.error_code ?? "-"} retryable=${msg.retryable ?? "-"} stall_reason=${msg.stall_reason ?? "-"}`,
+          );
+        }
+        break;
+      }
+    }
+  }
+}

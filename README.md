@@ -9,13 +9,13 @@ Visualize and control **DimOS robot stacks** from **Snap Spectacles**.
   <img src="assets/rm_hero.gif" alt="Spectacles AR controlling a Unitree Go2" width="800" />
 </p>
 
-This is **not a fork of DimOS**. It is a separate package that depends on DimOS and composes into blueprints via `autoconnect`. The Spectacles client lives in [`lens-studio/`](lens-studio/), while the Python side stays platform-agnostic so future XR clients can implement the same protocol without changing `dimos/ar/`.
+This is **not a fork of DimOS**. It is a separate package that depends on DimOS and composes into blueprints via `autoconnect`. The Spectacles client lives in [`lens-studio/`](lens-studio/), while the Python side stays platform-agnostic so future AR clients can implement the same protocol without changing `dimos/ar/`.
 
 
 At a glance:
 - [`lens-studio/`](lens-studio/) contains the Spectacles Lens Studio project, setup flow, HUD, navigation interaction, and world-anchored visuals.
-- [`dimos-ar/`](dimos-ar/) contains the DimOS XR bridge package, `ARBridge`, the adapter module, and tests.
-- [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) is the cross-platform contract between the bridge and every XR client.
+- [`dimos-ar/`](dimos-ar/) contains the dimos-ar bridge package, `ARBridge`, robot profile modules, and tests.
+- [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) is the cross-platform contract between the bridge and every AR client.
 
 ```mermaid
 flowchart LR
@@ -28,7 +28,7 @@ flowchart LR
 - `dimos-ar` is a **DimOS extension**, not a platform-specific fork.
 - The shared API is the JSON WebSocket protocol in [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md).
 - The robot lives in an **odom** frame, while AR clients live in a **world** frame, so setup must solve a shared transform before runtime visuals are trustworthy.
-- The bridge is single-active-robot per process and uses adapter-declared capabilities.
+- The bridge is single-active-robot per process and uses handshake-declared capabilities.
 
 <details>
 <summary>Quick start</summary>
@@ -37,19 +37,19 @@ flowchart LR
 
    ```bash
    cd /path/to/spectacles-dimensional-os
-   ./setup.sh
+   ./scripts/setup.sh
    ```
 
-2. Start the XR bridge:
+2. Start the dimos-ar bridge:
 
    ```bash
    cd /path/to/spectacles-dimensional-os
-   ./start.sh
+   ./scripts/start.sh
    ```
 
 3. Open [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj) in Lens Studio and push to device.
 
-4. In the Lens, go through **Connect -> Register -> Complete**.
+4. In the Lens, go through **Start -> Connect -> Register**.
 
 </details>
 
@@ -58,12 +58,21 @@ flowchart LR
 
 The bridge solves `T_world_odom` so AR content stays registered to the robot. Two registration flows are supported:
 
-- **AprilTag + baseline** (`registration_command{command:"start",mode:"april_odom_baseline"}`) — the robot drives a 3-leg baseline move while the Spectacles user looks at the robot-mounted AprilTag; the bridge stops between legs to collect stable observations, then auto-commits. Requires `registration_april_odom_baseline`.
+- **AprilTag** (`registration_command{command:"start",mode:"april_tag"}`) — the Spectacles user looks at the robot-mounted AprilTag while the bridge collects stable tag observations, then auto-commits when a stability gate passes. Requires `registration_april_tag`.
 - **Manual pose** (`registration_command{command:"start",mode:"manual_pose"}`) — user places the robot marker in AR; client streams `registration_pose` and sends `registration_command{command:"commit"}`. No camera frames are consumed; always available when `registration_manual_pose` is advertised.
 
-After commit, the same robot-mounted tag continues to drive runtime drift correction from Spectacles frames: a full solve updates yaw and translation once enough baseline exists, falling back to a translation-only correction when the robot is stationary. Runtime corrections only surface to the Lens as a "Refined Tracking" notification once they cross a small deadband (≥ 5 cm translation or ≥ 1° yaw); smaller continuous refinements stay silent.
+After commit, the bridge locks the robot base **floor height** (world Y) from the committed pose. The same robot-mounted tag continues to drive runtime drift correction from Spectacles frames:
 
-Registration requires a **printed robot-mounted tag** for the AprilTag baseline flow:
+- **Cruise:** full yaw+translation solve when the yaw gate and camera-distance checks pass; otherwise translation-only.
+- **Stop transition:** one-shot stop-yaw solve from recent approach observations when the robot comes to rest after moving.
+- **Static:** translation-only re-anchor.
+- **Floor shim:** on flat-ground profiles, if base Y drifts > 3 cm for 2 s, the bridge applies a Y-only correction (not emitted on the wire).
+
+Runtime corrections only surface to the Lens as a "Refined Tracking" notification once they cross a small deadband (≥ 5 cm translation or ≥ 1° yaw); smaller continuous refinements stay silent.
+
+On the Lens, `RobotMarker` extrapolates the displayed pose between bridge `pose` updates using optional `velocity_mps` and `yaw_rate_rad_s`, with displacement clamps to avoid runaway prediction.
+
+Registration requires a **printed robot-mounted tag** for the AprilTag flow:
 
 ```bash
 cd /path/to/spectacles-dimensional-os/dimos-ar
@@ -77,12 +86,12 @@ Print `apriltag_robot_a4.pdf` or `apriltag_robot_letter.pdf` from `dimos-ar/asse
 <details>
 <summary>Protocol and platform boundary</summary>
 
-The Mac is always the WebSocket **server** and AR devices are **clients**. The bridge sends `hello` and a `runtime_snapshot` on connect, then streams messages such as `bridge_status`, `pose`, binary LiDAR, `path`, `nav_status`, and `registration_status`. Clients send messages such as `registration_command`, `goal`, `cancel_goal`, and `emergency_stop`.
+The Mac is always the WebSocket **server** and AR devices are **clients**. The bridge sends `hello` and a `runtime_snapshot` on connect, then streams messages such as `bridge_status`, `pose`, binary LiDAR, `path`, `nav_status`, `nav_goal_update`, and `registration_status`. Clients send messages such as `registration_command`, `nav_goal`, `cancel_nav_goal`, `set_lidar_mode`, and `emergency_stop`.
 
 If the protocol changes, update these together in the same change:
 - [`dimos-ar/dimos/ar/network/protocol.py`](dimos-ar/dimos/ar/network/protocol.py)
 - [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md)
-- [`lens-studio/Assets/Scripts/Bridge/Protocol.ts`](lens-studio/Assets/Scripts/Bridge/Protocol.ts)
+- [`lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`](lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts)
 
 </details>
 
@@ -90,32 +99,39 @@ If the protocol changes, update these together in the same change:
 
 The Lens side is organized around three scene-entry scripts plus one wiring hub:
 
-- [`DimosServices.ts`](lens-studio/Assets/Scripts/Core/DimosServices.ts) owns all cross-tree scene `@input`s and plain runtime service instances (`DimosState`, `BridgeRuntime`, `RobotRuntime`, `NavigationController`, `RegistrationClient`, `SetupRegistrationPreview`).
-- [`SetupWizard.ts`](lens-studio/Assets/Scripts/Setup/SetupWizard.ts) owns the connect-and-register flow and hands off to runtime. Check Lens Studio Logger output and `./start.sh` bridge logs when registration fails.
-- [`DimosManager.ts`](lens-studio/Assets/Scripts/Core/DimosManager.ts) is the orchestration hub for phase/mode lifecycle; it delegates to `DimosServices`.
-- [`UIManager.ts`](lens-studio/Assets/Scripts/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
+- [`ARBridgeServices.ts`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) owns scene `@input`s and plain runtime service instances (`AppStateStore`, `InboundRouter`, `RegistrationClient`, `RobotPresenter`, `NavigationPlacement`, …).
+- [`ARBridgeCoordinator.ts`](lens-studio/Assets/Scripts/App/ARBridgeCoordinator.ts) is the orchestration hub for phase/mode lifecycle; it delegates to `ARBridgeServices`.
+- [`RegistrationWizard.ts`](lens-studio/Assets/Scripts/App/Registration/RegistrationWizard.ts) owns the connect-and-register flow and hands off to runtime. Check Lens Studio Logger output and `./scripts/start.sh` bridge logs when registration fails.
+- [`UIManager.ts`](lens-studio/Assets/Scripts/App/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
 
-`BridgeClient` is the WebSocket transport; `BridgeConnectionManager` and `BridgeInboundProcessor` handle connection lifecycle and inbound parsing. `BridgeRuntime` owns bridge signals and routes messages to `RobotRuntime` and `NavigationController`. `SetupRegistrationFlow` owns registration-step UI state; `RegistrationClient` is the single owner of the bridge registration session. `DeviceCameraStream` is a singleton wrapper around the Spectacles colour camera shared by setup and runtime capture. Visuals live under `Robot/`, `Lidar/`, and `Navigation/`.
+[`ARBridgeSession`](lens-studio/Assets/Scripts/ARBridge/Network/ARBridgeSession.ts) owns WebSocket transport and the hello handshake; [`InboundProcessor`](lens-studio/Assets/Scripts/ARBridge/Network/InboundProcessor.ts) parses inbound frames into typed signals. [`InboundRouter`](lens-studio/Assets/Scripts/ARBridge/Session/InboundRouter.ts) fans those signals out to domain `*Client` classes (`StatusClient`, `TelemetryClient`, `NavigationClient`, `RegistrationClient`) and app presenters (`RobotPresenter`, `NavigationPlacement`). `RegistrationFlow` owns registration-step UI state; `RegistrationClient` is the single owner of the bridge registration session. `DeviceCameraStream` is a singleton wrapper around the Spectacles colour camera shared by registration and runtime capture. Visuals live under `App/Robot/`, `App/Lidar/`, and `App/Navigation/`.
 
 ```mermaid
 flowchart TB
-  Setup[SetupWizard] --> Manager[DimosManager]
-  UI[UIManager] --> Manager
-  Manager --> Services[DimosServices]
-  Services --> BridgeRuntime[BridgeRuntime]
-  BridgeRuntime --> BridgeClient[BridgeClient]
+  Registration[RegistrationWizard] --> Coordinator[ARBridgeCoordinator]
+  UI[UIManager] --> Coordinator
+  Coordinator --> Services[ARBridgeServices]
+  Services --> Router[InboundRouter]
+  Router --> Session[ARBridgeSession]
+  Session --> Transport[WebSocketTransport / InboundProcessor]
 ```
 
 <details>
 <summary>Lens setup and runtime responsibilities</summary>
 
-`SetupWizard` builds the wizard view, starts autoconnect, owns the 3-step state machine inline, and finishes by calling `DimosManager.enterRuntime()`. Registration-step state is delegated to `SetupRegistrationFlow`; the bridge registration session is owned exclusively by `RegistrationClient`, which re-arms on every `hello` so reconnects cannot leave the session stranded.
+`RegistrationWizard` builds the wizard view, starts autoconnect, owns the 3-step state machine inline, and finishes by calling `ARBridgeCoordinator.enterRuntime()`. Registration-step state is delegated to `RegistrationFlow`; the bridge registration session is owned exclusively by `RegistrationClient`, which re-arms on every `hello` so reconnects cannot leave the session stranded.
 
-`DimosManager` starts in setup mode, disconnects the bridge when re-entering setup, and switches to runtime by enabling visuals, preserving manual registration state when needed, and syncing navigation and robot interaction state. Shared app state (including bridge-link status used by setup and runtime UI) lives in `DimosState` / `AppState`. During runtime, `BridgeRuntime` routes inbound bridge messages into:
-- `RobotRuntime` for pose, drift correction, LiDAR presentation, and `RobotMarker` / `RobotUiView` controls
-- `NavigationController` for goal placement, path display, and nav status
+`ARBridgeCoordinator` starts in registration phase, disconnects the bridge when re-entering registration, and switches to runtime by enabling visuals, preserving manual registration state when needed, and syncing navigation and robot interaction state. Shared app state (including bridge-link status used by setup and runtime UI) lives in `AppStateStore` / `AppState`. During runtime, `InboundRouter` fans inbound bridge messages into:
+- `TelemetryClient` + `RobotPresenter` for pose, drift correction, LiDAR presentation, and `RobotMarker` / `RobotUiView` controls
+- `NavigationClient` + `NavigationPlacement` for goal placement, path display, and nav status
 
-`UIManager` subscribes to app state and updates the authored HUD. Restarting setup goes back through `SetupWizard`, while bridge status, operating mode changes, and the coarse `disconnected` / `connectedNoRobot` / `connected` link state still come from `DimosManager`.
+`UIManager` subscribes to app state and updates the authored HUD. Restarting registration goes back through `RegistrationWizard`, while bridge status, operating mode changes, and the coarse `disconnected` / `connectedNoRobot` / `connected` link state still come from `ARBridgeCoordinator`.
+
+**Spectacles runtime HUD:** On device, `UIManager` drives a palm-up wrist menu (`WristMenuController` + `PalmGestureGate`) that reveals MainUI anchored to `wristMenuRoot`. In Lens Studio editor mode, MainUI stays visible as a floating panel after registration instead.
+
+**Debug mode:** MainUI includes a debug toggle (`AppState.debugMode`) that enables on-device diagnostics — direction-arrow overlays on `RobotMarker` and the rolling `UILogger` console.
+
+**Pose display:** `RobotPresenter` feeds bridge `pose` (plus optional velocity fields) into `RobotMarker`, which extrapolates and smooths the marker between updates.
 
 </details>
 
@@ -123,48 +139,55 @@ flowchart TB
 <summary>Scene setup pointers</summary>
 
 - Open the project from [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj).
-- Wire cross-tree references on [`DimosServices`](lens-studio/Assets/Scripts/Core/DimosServices.ts) (`bridgeClient`, `frameCaptureController`, `robotMarker`, `pointCloudRenderer`, `navigationMarkerPrefab`, `assistClearanceDiscPrefab`). Point `DimosManager` at `DimosServices`; point `SetupWizard` and `UIManager` at `DimosManager`. On `UIManager`, also wire `mainUIFrame` and `setupWizard`. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full scene-wiring and architecture rules.
+- Wire cross-tree references on [`ARBridgeServices`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) (`bridgeSession`, `frameCaptureController`, `robotMarker`, `pointCloudRenderer`, `navigationMarkerPrefab`). Point `ARBridgeCoordinator` at `ARBridgeServices`; point `RegistrationWizard` and `UIManager` at `ARBridgeCoordinator`. On `UIManager`, also wire `mainUIFrame`, `registrationWizard`, and `wristMenuRoot`. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full scene-wiring and architecture rules.
 - The main feature folders are:
 
   ```text
   lens-studio/Assets/Scripts/
-  ├── Core/         (DimosServices, DimosManager, DimosState, AppState, Utilities)
-  ├── Bridge/       (BridgeClient, BridgeConnectionManager, BridgeInboundProcessor, BridgeRuntime, Protocol)
-  ├── Setup/        (SetupWizard, SetupWizardView, SetupRegistrationFlow, SetupRegistrationPreview)
-  ├── UI/           (UIManager, MainMenuView, UILogger, kit/UIKit, kit/UIAnimations)
-  ├── Registration/ (RegistrationClient, ManualPoseCorrection)
-  ├── Camera/       (FrameCaptureController, DeviceCameraStream)
-  ├── Navigation/   (NavigationController, NavigationModel, SurfacePlacementController, NavigationPathRenderer, NavigationTargetMarker)
-  ├── Robot/        (RobotRuntime, RobotMarker, RobotUiView, RobotRuntimeModel)
-  └── Lidar/        (PointCloudRenderer, LidarPresentationController, MockLidarPoints)
+  ├── App/                  (ARBridgeServices, ARBridgeCoordinator, AppState, AppStateStore)
+  │   ├── Registration/     (RegistrationWizard, RegistrationWizardView, RegistrationFlow)
+  │   ├── Navigation/       (NavigationController / NavigationPlacement alias, NavigationPathRenderer, GroundPlacement, …)
+  │   ├── Robot/            (RobotPresenter, RobotMarker, RobotUiView, RobotRuntimeModel)
+  │   ├── Lidar/            (PointCloudRenderer, LidarPresenter)
+  │   ├── UI/               (UIManager, MainMenuView, WristMenuController, PalmGestureGate, UILogger, UIKit)
+  │   └── Utilities/        (AnimationUtilities, Utilities)
+  └── ARBridge/             (platform-agnostic bridge layer)
+      ├── Network/          (ARBridgeSession, WebSocketTransport, InboundProcessor, Protocol)
+      ├── Session/          (InboundRouter — includes computeFrameCapturePolicy)
+      ├── Registration/     (RegistrationClient, ManualRegistrationAlignment)
+      ├── Navigation/       (NavigationClient, NavigationModel)
+      ├── Telemetry/        (TelemetryClient)
+      ├── Status/           (StatusClient)
+      └── Camera/           (CameraClient, FrameCaptureController, DeviceCameraStream)
   ```
 
+- On Spectacles, the runtime menu is hidden until the user shows their palm; in the editor, MainUI appears after registration without the gesture gate.
 - `ShowLiDAR` controls the height/debug layer, while the red obstacle layer still comes from live bridge lidar when connected. The Lens can also request a bridge-side LiDAR transmit mode (`off` / `obstacles` / `full`) via `set_lidar_mode` to cut payload when only obstacle proximity matters.
 
 </details>
 
 ## Dimensional OS Blueprint (`dimos-ar`)
 
-[`dimos-ar/`](dimos-ar/) contains the Python side: `ARBridge`, `ARRobotAdapterModule`, the protocol definition, and the tests. The monorepo entrypoint is [`dimos-ar/dimos/ar/blueprints.py`](dimos-ar/dimos/ar/blueprints.py), which wraps native DimOS stack composition for the currently selected robot runtime.
+[`dimos-ar/`](dimos-ar/) contains the Python side: `ARBridge`, `Go2RobotProfileModule` / `G1RobotProfileModule`, the protocol definition, and the tests. The monorepo entrypoint is [`dimos-ar/dimos/ar/blueprints.py`](dimos-ar/dimos/ar/blueprints.py), which wraps native DimOS stack composition for the currently selected robot runtime.
 
-`ARBridge` itself ([`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py)) subclasses `dimos.core.module.Module` and stays thin: it declares the DimOS `In[...]` streams, builds its collaborators, and fans handler calls out to them. The actual logic lives in single-owner collaborators under `dimos-ar/dimos/ar/`: `registration/` (`RegistrationSession`, baseline collector, tag tracker, refinement), `bridge/` (`NavController`, `TelemetryPublisher`, `StatusService`, `OdomBuffer`, …), and adapters for Go2/G1.
+`ARBridge` itself ([`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py)) subclasses `dimos.core.module.Module` and stays thin: it declares the DimOS `In[...]` streams, builds its collaborators, and fans handler calls out to them. The actual logic lives in single-owner collaborators under `dimos-ar/dimos/ar/`: `registration/` (setup wizard — `RegistrationSession`, baseline collector), `world_frame/` (`WorldFrameState`, `WorldFrameRefiner`, `WorldRegistry`), `tag_tracking/` (robot-mounted AprilTag detect + solve), `navigation/` (`NavigateGoalHandler`, `PreviewGoalHandler`), `bridge/` (`TelemetryPublisher`, `StatusService`, `OdomBuffer`, `MotionRouter`, `BridgeSafetyCoordinator`, …), and `robot_profile/` for Go2/G1 handshake and capabilities.
 
 ```mermaid
 flowchart TB
   DimOS[DimOS] --> Bridge[ARBridge]
-  Clients[XR clients] <-->|protocol| Bridge
+  Clients[AR clients] <-->|protocol| Bridge
   Blueprint[blueprints.py] --> Bridge
 ```
 
 <details>
 <summary>Runtime support and capabilities</summary>
 
-Supported runtimes (selected interactively by `./start.sh`):
+Supported runtimes (selected interactively by `./scripts/start.sh`):
 
 - `ar-go2` — Unitree Go2 stack (full navigation and AprilTag registration when the onboard modules are available; capability states may negotiate reduced features on lighter stacks).
 - `ar-g1` — Unitree G1 nav-onboard stack (requires the Unitree DDS Python package set in the DimOS `.venv` for onboard navigation).
 
-Direct `dimos run ar-go2` / `dimos run ar-g1` work once these blueprints are registered upstream in DimOS; until then, use `./start.sh`.
+Direct `dimos run ar-go2` / `dimos run ar-g1` work once these blueprints are registered upstream in DimOS; until then, use `./scripts/start.sh`.
 
 On the Lens side, runtime behavior is negotiated from the bridge handshake:
 - `AppState` projects robot/runtime metadata from the bridge and carries the coarse bridge-link state used by the setup and runtime UI.
@@ -176,26 +199,26 @@ On the Lens side, runtime behavior is negotiated from the bridge handshake:
 <details>
 <summary>Start the blueprint</summary>
 
-The monorepo provides `start.sh` as a convenience wrapper around native DimOS composition:
+The monorepo provides `scripts/start.sh` as a convenience wrapper around native DimOS composition:
 
 ```bash
 cd /path/to/spectacles-dimensional-os
-./start.sh
+./scripts/start.sh
 ```
 
-`./start.sh` always prompts for the target robot stack, then runs the bridge against the selected composition. The equivalent native commands are:
+`./scripts/start.sh` always prompts for the target robot stack, then runs the bridge against the selected composition. The equivalent native commands are:
 
 ```bash
 dimos run ar-go2
 dimos run ar-g1
 ```
 
-Use `./start.sh` if the blueprints are not yet registered in your DimOS install.
+Use `./scripts/start.sh` if the blueprints are not yet registered in your DimOS install.
 
 If DimOS lives somewhere unusual, set `DIMOS_PYTHON` explicitly:
 
 ```bash
-DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3 ./start.sh
+DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3 ./scripts/start.sh
 ```
 
 </details>
@@ -213,7 +236,7 @@ cd /path/to/spectacles-dimensional-os/dimos-ar
 /path/to/dimos/.venv/bin/python3 -m mypy dimos/ar
 ```
 
-**Lens TypeScript** (`lens-studio/Tests/`) — pure-logic unit tests for `Protocol.ts`, `AppState.ts`, `Utilities.ts`, `RobotRuntimeModel.ts`, `RegistrationClient`, `SetupRegistrationFlow`, and `NavigationModel` (runs in Node/Vitest, not inside Lens Studio):
+**Lens TypeScript** (`lens-studio/Tests/`) — pure-logic unit tests for `Protocol.ts`, `AppState`, `InboundRouter` (including `computeFrameCapturePolicy`), `RegistrationClient`, `RegistrationFlow`, `NavigationModel`, `RobotRuntimeModel`, `palmGestureGate`, `cameraStopBurst`, and related utilities (runs in Node/Vitest, not inside Lens Studio; see `lens-studio/Tests/unit/`):
 
 ```bash
 cd /path/to/spectacles-dimensional-os/lens-studio/Tests
@@ -223,7 +246,36 @@ npm test
 
 Do not put `*.test.ts` under `lens-studio/Assets/` — the Lens compiler globs all `Assets/**/*.ts`.
 
-**CI** — on every push and pull request, GitHub Actions runs both suites in parallel: `dimos-ar` (ruff, mypy, `pytest -m "not integration"`) and `lens-studio-tests` (`npm ci && npm test`). Changes that touch shared protocol or pure Lens logic should pass both before merge.
+**Reproduce CI locally** — GitHub Actions runs both jobs in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). From the repo root:
+
+```bash
+chmod +x scripts/run-ci.sh   # first time only
+./scripts/run-ci.sh
+```
+
+That script mirrors CI exactly: `dimos-ar` installs the same pinned deps as the workflow (into a throwaway venv at `/tmp/spectacles-dimensional-os-ci-venv`), then runs `ruff check .`, `mypy dimos/ar`, and `pytest -m "not integration"`; `lens-studio-tests` runs `npm ci && npm test`. Override the interpreter with `CI_PYTHON=/path/to/python3.12 ./scripts/run-ci.sh` if needed.
+
+To run the jobs manually instead:
+
+```bash
+# dimos-ar (use a fresh Python 3.12 venv on macOS/Homebrew — PEP 668 blocks system pip)
+cd dimos-ar
+python3.12 -m venv /tmp/spectacles-dimensional-os-ci-venv
+source /tmp/spectacles-dimensional-os-ci-venv/bin/activate
+python -m pip install --upgrade pip
+pip install websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless Pillow scipy dimos
+pip install -e . --no-deps
+ruff check .
+mypy dimos/ar
+pytest -m "not integration"
+
+# lens-studio-tests
+cd ../lens-studio/Tests
+npm ci
+npm test
+```
+
+On every push and pull request, CI runs these two jobs in parallel. Changes that touch shared protocol or pure Lens logic should pass both before merge.
 
 If you want to run `ar-g1`, make sure the same DimOS `.venv`
 also has the DDS SDK package installed:
@@ -246,8 +298,8 @@ Python tests are colocated with their modules under `dimos-ar/dimos/ar/`. See [`
 <details>
 <summary>Transport, ports, and discovery</summary>
 
-- XR bridge WebSocket listens on **8787**; avoid binding port **8765** on the same machine while Foxglove is running.
-- `start.sh` chooses the stack interactively at launch, between `ar-go2` and `ar-g1`.
+- dimos-ar bridge WebSocket listens on **8787**; avoid binding port **8765** on the same machine while Foxglove is running.
+- `scripts/start.sh` chooses the stack interactively at launch, between `ar-go2` and `ar-g1`.
 - `ar-g1` always composes on top of the Unitree G1 nav-onboard blueprint; navigation requires the Unitree DDS Python package set in the DimOS `.venv`, while manual registration stays available regardless.
 
 </details>
@@ -257,8 +309,8 @@ Python tests are colocated with their modules under `dimos-ar/dimos/ar/`. See [`
 
 - Tune lidar and rate limits via `ARBridgeConfig` in [`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py).
 - Add or change messages by updating the Python protocol, the protocol spec, and the Lens protocol modules together.
-- The protocol now also carries `set_lidar_mode` (client-selected `off` / `obstacles` / `full` LiDAR transmission) and `pose_correction` (runtime drift-correction telemetry, deadbanded so only meaningful jumps reach the client); see [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) for the full schema.
-- Keep `dimos-ar/dimos/ar/` platform-agnostic. Spectacles-specific code stays in [`lens-studio/`](lens-studio/); other XR clients should live in their own client folder or repo.
+- The protocol now also carries `set_lidar_mode` (client-selected `off` / `obstacles` / `full` LiDAR transmission) and `world_frame_correction` (runtime drift-correction telemetry, deadbanded so only meaningful jumps reach the client); see [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) for the full schema.
+- Keep `dimos-ar/dimos/ar/` platform-agnostic. Spectacles-specific code stays in [`lens-studio/`](lens-studio/); other AR clients should live in their own client folder or repo.
 
 </details>
 

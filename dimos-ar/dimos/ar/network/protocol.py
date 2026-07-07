@@ -20,10 +20,11 @@ from dimos.ar.registration.wire import (
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-    from dimos.ar.adapters.base import CapabilityState, RobotHandshake
     from dimos.ar.network.bridge_status import BridgeStatusSnapshot
+    from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
+    from dimos.ar.world_frame.state import WorldFrameState
 
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 10
 
 NavPhase = Literal["idle", "navigating", "recovering", "succeeded", "failed"]
 PathKind = Literal["active", "preview"]
@@ -32,12 +33,12 @@ GoalIntent = Literal["navigate", "preview"]
 DEFAULT_CAPABILITIES = [
     "lidar",
     "odom",
-    "registration_april_odom_baseline",
+    "registration_april_tag",
     "registration_manual_pose",
     "nav",
     "path",
     "plan_preview",
-    "cancel_goal",
+    "cancel_nav_goal",
     "emergency_stop",
 ]
 
@@ -47,7 +48,7 @@ def _dumps(payload: dict[str, Any]) -> str:
 
 
 @dataclass(frozen=True)
-class GoalMessage:
+class NavGoalMessage:
     ts: float
     robot_id: str
     intent: GoalIntent
@@ -56,7 +57,7 @@ class GoalMessage:
 
 
 @dataclass(frozen=True)
-class CancelGoalMessage:
+class CancelNavGoalMessage:
     ts: float
     robot_id: str
 
@@ -65,6 +66,15 @@ class CancelGoalMessage:
 class EmergencyStopMessage:
     ts: float
     robot_id: str
+
+
+@dataclass(frozen=True)
+class JoystickCommandMessage:
+    ts: float
+    robot_id: str
+    vx: float
+    vy: float
+    wz: float
 
 
 @dataclass(frozen=True)
@@ -106,9 +116,10 @@ class PingMessage:
 
 
 InboundMessage = (
-    GoalMessage
-    | CancelGoalMessage
+    NavGoalMessage
+    | CancelNavGoalMessage
     | EmergencyStopMessage
+    | JoystickCommandMessage
     | RegistrationCommandMessage
     | CameraInfoMessage
     | RegistrationPoseMessage
@@ -156,36 +167,47 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
             f"Unknown robot_id {robot_id!r}, expected {expected_robot_id!r}",
         )
 
-    if msg_type == "goal":
+    if msg_type == "nav_goal":
         intent = _require_type(data, "intent", str)
         if intent not in ("navigate", "preview"):
-            raise ValueError("goal.intent must be 'navigate' or 'preview'")
+            raise ValueError("nav_goal.intent must be 'navigate' or 'preview'")
         orientation = _quat(data, "orientation") if "orientation" in data else None
-        return GoalMessage(
+        return NavGoalMessage(
             ts=ts,
             robot_id=robot_id,
             intent=intent,  # type: ignore[arg-type]
             position=_vec3(data, "position"),
             orientation=orientation,
         )
-    if msg_type == "cancel_goal":
-        return CancelGoalMessage(ts=ts, robot_id=robot_id)
+    if msg_type == "cancel_nav_goal":
+        return CancelNavGoalMessage(ts=ts, robot_id=robot_id)
     if msg_type == "emergency_stop":
         return EmergencyStopMessage(ts=ts, robot_id=robot_id)
+    if msg_type == "joystick_command":
+        for axis in ("vx", "vy", "wz"):
+            if axis not in data or not isinstance(data[axis], (int, float)):
+                raise ValueError(f"Missing or invalid field: {axis}")
+        return JoystickCommandMessage(
+            ts=ts,
+            robot_id=robot_id,
+            vx=float(data["vx"]),
+            vy=float(data["vy"]),
+            wz=float(data["wz"]),
+        )
     if msg_type == "registration_command":
         command = _require_type(data, "command", str)
-        if command not in ("start", "authorize_motion", "stop", "commit"):
+        if command not in ("start", "stop", "commit"):
             raise ValueError(
                 "registration_command.command must be "
-                "'start', 'authorize_motion', 'stop', or 'commit'"
+                "'start', 'stop', or 'commit'"
             )
         mode: str | None = None
         if command == "start":
             mode = _require_type(data, "mode", str)
-            if mode not in ("april_odom_baseline", "manual_pose"):
+            if mode not in ("april_tag", "manual_pose"):
                 raise ValueError(
                     "registration_command.mode must be "
-                    "'april_odom_baseline' or 'manual_pose' when command is 'start'"
+                    "'april_tag' or 'manual_pose' when command is 'start'"
                 )
         elif "mode" in data:
             raise ValueError("registration_command.mode is only valid when command is 'start'")
@@ -300,8 +322,8 @@ def encode_hello(handshake: RobotHandshake) -> str:
         robot["base_height_m"] = handshake.base_height_m
     if handshake.default_render_offset_m is not None:
         robot["default_render_offset_m"] = list(handshake.default_render_offset_m)
-    if handshake.registration_profile is not None:
-        robot["registration_profile"] = handshake.registration_profile
+    if handshake.tag_tracking_profile is not None:
+        robot["tag_tracking_profile"] = handshake.tag_tracking_profile
     robot.update(handshake.extra)
     return _dumps(
         {
@@ -313,27 +335,32 @@ def encode_hello(handshake: RobotHandshake) -> str:
     )
 
 
-def _bridge_status_wire(snapshot: BridgeStatusSnapshot) -> dict[str, Any]:
-    # v6 wire payloads intentionally omit streams_active (internal-only tracker field).
+def bridge_status_wire(
+    snapshot: BridgeStatusSnapshot,
+    *,
+    world_frame: WorldFrameState | None = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "robot_connected": snapshot.robot_connected,
-        "registered": snapshot.registered,
         "reconnecting": snapshot.reconnecting,
-        "registration_method": snapshot.registration_method,
-        "registration_approximate": snapshot.registration_approximate,
     }
+    if world_frame is not None:
+        payload["world_frame_committed"] = world_frame.is_committed
+        payload["world_frame_method"] = world_frame.method
+        payload["world_frame_approximate"] = world_frame.approximate
     return payload
 
 
 def encode_bridge_status(
     snapshot: BridgeStatusSnapshot,
     *,
+    world_frame: WorldFrameState | None = None,
     ts: float | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "type": "bridge_status",
         "ts": ts if ts is not None else time.time(),
-        **_bridge_status_wire(snapshot),
+        **bridge_status_wire(snapshot, world_frame=world_frame),
     }
     return _dumps(payload)
 
@@ -341,20 +368,28 @@ def encode_bridge_status(
 def encode_runtime_snapshot(
     *,
     robot_id: str,
-    bridge: BridgeStatusSnapshot,
+    bridge: BridgeStatusSnapshot | dict[str, Any],
     nav: dict[str, Any],
     path: dict[str, Any] | None = None,
+    goal: dict[str, Any] | None = None,
     ts: float | None = None,
+    world_frame: WorldFrameState | None = None,
 ) -> str:
+    if isinstance(bridge, dict):
+        bridge_wire = bridge
+    else:
+        bridge_wire = bridge_status_wire(bridge, world_frame=world_frame)
     payload: dict[str, Any] = {
         "type": "runtime_snapshot",
         "ts": ts if ts is not None else time.time(),
         "robot_id": robot_id,
-        "bridge": _bridge_status_wire(bridge),
+        "bridge": bridge_wire,
         "nav": nav,
     }
     if path is not None:
         payload["path"] = path
+    if goal is not None:
+        payload["goal"] = goal
     return _dumps(payload)
 
 
@@ -450,6 +485,8 @@ def encode_pose(
     position: tuple[float, float, float],
     orientation: tuple[float, float, float, float],
     speed_mps: float | None = None,
+    velocity_mps: tuple[float, float, float] | None = None,
+    yaw_rate_rad_s: float | None = None,
 ) -> str:
     safe_position, safe_orientation = _sanitize_pose_values(position, orientation)
     payload: dict[str, Any] = {
@@ -460,28 +497,10 @@ def encode_pose(
     }
     if speed_mps is not None:
         payload["speed_mps"] = round(float(speed_mps), 4)
-    return _dumps(payload)
-
-
-def encode_pose_correction(
-    *,
-    ts: float | None,
-    trans_delta_m: float,
-    yaw_delta_deg: float | None,
-    yaw_corrected: bool,
-    solve_quality: float,
-    solve_method: str,
-) -> str:
-    payload: dict[str, Any] = {
-        "type": "pose_correction",
-        "ts": round(ts, 3) if ts is not None else time.time(),
-        "trans_delta_m": round(float(trans_delta_m), 4),
-        "yaw_corrected": yaw_corrected,
-        "solve_quality": round(float(solve_quality), 4),
-        "solve_method": solve_method,
-    }
-    if yaw_delta_deg is not None:
-        payload["yaw_delta_deg"] = round(float(yaw_delta_deg), 3)
+    if velocity_mps is not None:
+        payload["velocity_mps"] = _round_vec3(velocity_mps, decimals=4)
+    if yaw_rate_rad_s is not None:
+        payload["yaw_rate_rad_s"] = round(float(yaw_rate_rad_s), 4)
     return _dumps(payload)
 
 
@@ -507,7 +526,6 @@ def nav_phase_payload(
     *,
     goal_reached: bool,
     goal_failed: bool,
-    nav_recovering: bool,
     nav_state: str,
     nav_goal_pending: bool,
     error_code: int | None = None,
@@ -516,7 +534,7 @@ def nav_phase_payload(
         phase: NavPhase = "succeeded"
     elif goal_failed:
         phase = "failed"
-    elif nav_recovering or nav_state == "recovery":
+    elif nav_state == "recovering":
         phase = "recovering"
     elif nav_state == "navigating" and nav_goal_pending:
         phase = "navigating"
@@ -533,10 +551,16 @@ def encode_nav_status(
     ts: float | None = None,
     phase: NavPhase,
     error_code: int | None = None,
+    retryable: bool | None = None,
+    stall_reason: str | None = None,
 ) -> str:
     nav: dict[str, Any] = {"phase": phase}
     if error_code is not None:
         nav["error_code"] = error_code
+    if retryable is not None:
+        nav["retryable"] = retryable
+    if stall_reason is not None:
+        nav["stall_reason"] = stall_reason
     return _dumps(
         {
             "type": "nav_status",
@@ -546,15 +570,39 @@ def encode_nav_status(
     )
 
 
+NavGoalSource = Literal["ar", "agent"]
+
+
+def encode_nav_goal_update(
+    *,
+    ts: float | None,
+    source: NavGoalSource,
+    position: tuple[float, float, float],
+    orientation: tuple[float, float, float, float] | None,
+    active: bool,
+) -> str:
+    payload: dict[str, Any] = {
+        "type": "nav_goal_update",
+        "ts": round(ts, 3) if ts is not None else time.time(),
+        "source": source,
+        "position": _round_vec3(position, decimals=3),
+        "active": active,
+    }
+    if orientation is not None:
+        payload["orientation"] = _round_quat(orientation, decimals=4)
+    return _dumps(payload)
+
+
 __all__ = [
     "PROTOCOL_VERSION",
     "CameraInfoMessage",
-    "CancelGoalMessage",
+    "CancelNavGoalMessage",
     "EmergencyStopMessage",
     "GetStatusMessage",
     "GoalIntent",
-    "GoalMessage",
     "InboundMessage",
+    "JoystickCommandMessage",
+    "NavGoalMessage",
     "NavPhase",
     "PathKind",
     "PingMessage",
@@ -562,16 +610,17 @@ __all__ = [
     "RegistrationPoseMessage",
     "RegistrationStatusPayload",
     "SetLidarModeMessage",
+    "bridge_status_wire",
     "decode_inbound",
     "encode_bridge_status",
     "encode_camera_frame_ack",
     "encode_hello",
     "encode_lidar_binary",
+    "encode_nav_goal_update",
     "encode_nav_status",
     "encode_path",
     "encode_pong",
     "encode_pose",
-    "encode_pose_correction",
     "encode_registration_status",
     "encode_runtime_snapshot",
     "nav_phase_payload",

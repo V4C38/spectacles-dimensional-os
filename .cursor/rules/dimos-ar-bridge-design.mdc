@@ -1,0 +1,96 @@
+---
+description: Systems-design principles for dimos-ar bridge code — ownership, single source of truth, naming, explicit failures
+globs: dimos-ar/**
+alwaysApply: false
+---
+
+# dimos-ar bridge — systems design
+
+When changing `dimos-ar/`, keep these principles. They apply to new code and refactors
+touching bridge collaborators, registration, world frame, network protocol, or robot profile.
+
+## One owner per concern
+
+Each runtime concern has exactly one owning module/class. Other code reads or delegates;
+it does not duplicate lifecycle or mutation logic.
+
+| Concern | Owner |
+|---------|-------|
+| Composition + DimOS stream wiring | `bridge/module.py` (`ARBridge`) |
+| Outbound WebSocket send scheduling | `BridgeSender` → `ARWebSocketServer` |
+| Inbound text dispatch lanes | `InboundDispatcher` |
+| Stream freshness + `bridge_status` broadcast | `StatusService` |
+| Robot connection flags (`robot_connected`, …) | `BridgeStatusTracker` (updated only via `StatusService.refresh`) |
+| Odom ring buffer + speed | `OdomBuffer` |
+| Committed world←odom transform | `WorldFrameState` |
+| Commit / clear world frame + static TF + refiner baseline | `WorldRegistry` |
+| Post-commit tag refinement | `WorldFrameRefiner` |
+| Registration setup wizard | `RegistrationSession` |
+| Nav goal lifecycle + `nav_status` | `navigation/navigate.py` `NavigateGoalHandler` |
+| Preview path goals | `navigation/preview.py` `PreviewGoalHandler` |
+| Profile motion RPC serialization | `MotionRouter` (`bridge/motion_router.py`) |
+| Estop / client-disconnect policy | `BridgeSafetyCoordinator` |
+| LiDAR/pose AR payloads | `TelemetryPublisher` |
+| Pure payload encoding (no state) | `network/data_plane.py`, `network/protocol.py` |
+
+`ARBridge` stays a thin composition root: construct collaborators in `build()`, fan out
+`handle_ar_*` streams, route a few WS callbacks. Do not add business logic there.
+
+## One source of truth
+
+Avoid mirroring the same fact in two mutable places. Prefer read-through, merge-at-encode,
+or a single writer with observers.
+
+Established patterns:
+
+- **`WorldFrameState`** is the live authority for `T_world_odom`, `is_committed`,
+  `method`, and `approximate`. Read it; do not cache those fields elsewhere.
+- **`bridge_status` world-frame fields** are merged at encode time from `WorldFrameState`
+  (see `StatusService.status_payload` / `merged_bridge_snapshot`). Do not store them on
+  `BridgeStatusTracker`.
+- **`WorldFrameRefiner._refinement_baseline`** is a refinement *reference baseline* (initial
+  commit snapshot for delta gating), not a second live transform. When updating the live
+  transform, update `_state` and keep `_refinement_baseline` in sync in the same code path
+  (`WorldRegistry.commit` / `clear`, `_commit_runtime_correction`).
+- **Nav phase on the wire** is derived from `NavigateGoalHandler` internal flags
+  via `nav_phase_payload`; `_dimos_nav_state == "recovery"` is the single
+  recovering indicator (no separate boolean).
+- **Protocol schema** lives in `PROTOCOL.md` + `network/protocol.py` (+ Lens
+  `Protocol.ts`). Wire field names are defined once per language, not re-invented in
+  collaborators.
+
+When adding state, ask: *who writes this, who reads it, and can readers go to the
+owner instead?*
+
+## Consistent, descriptive naming
+
+Names should read clearly in logs and stack traces. Prefer slightly verbose over cryptic.
+**One concept → one name** across Python, tests, protocol docs, and Lens.
+
+Canonical vocabulary:
+
+| Concept | Use | Avoid |
+|---------|-----|-------|
+| World frame committed | `is_committed`, wire: `world_frame_committed` | `registered`, `calibrated` |
+| Alignment method | `world_frame_method`, `WorldFrameMethod` | `registration_method` (legacy wire) |
+| Live world←odom transform | `WorldFrameState`, `T_world_odom` | `calibration` (parameter name) |
+| Refinement reference transform | `WorldFrameRefiner._refinement_baseline`, `set_refinement_baseline` | overloading “committed” without context |
+| Setup / wizard flow | `registration_*`, `RegistrationPhase`, `RegistrationSession` | mixing with committed world-frame fields |
+| DimOS nav stack string | `nav_state`, `ar_navigation_state` | conflating with wire `NavPhase` |
+| Client nav lifecycle phase | `NavPhase`, `nav_status`, `nav_phase_payload` | `navigation_state` on the wire |
+
+`RegistrationMode` and `WorldFrameMethod` share wire values (`april_tag`,
+`manual_pose`). At commit time, use the candidate’s mode; do not introduce a third name.
+
+New public APIs, protocol fields, and log keys should follow the canonical table. When
+touching legacy names (`registered`, `calibration`, `registration_method`), migrate toward
+the canonical form in the same change when practical.
+
+## Explicit failures over silent fallbacks
+
+When a required value, configuration, or input is missing or invalid, raise or throw.
+Do not substitute a hardcoded default that masks misconfiguration or incomplete setup.
+
+Reserve fallbacks for cases with a deliberate, documented justification — for example,
+backward-compatible defaults on the wire where older clients omit an optional field.
+If you add a fallback, state why silence is acceptable there.

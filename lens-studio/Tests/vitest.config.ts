@@ -2,10 +2,16 @@ import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
 
 const uikitMock = fileURLToPath(new URL("./mocks/UIKit.ts", import.meta.url));
+const animateMock = fileURLToPath(new URL("./mocks/animate.ts", import.meta.url));
 
 function isUIKitImport(source: string): boolean {
   const normalized = source.replace(/\\/g, "/");
-  return /UI\/kit\/UIKit(\.ts)?$/.test(normalized);
+  return /(?:\.\/)?(?:App\/)?UI\/UIKit(\.ts)?$/.test(normalized);
+}
+
+function isAnimateImport(source: string): boolean {
+  const normalized = source.replace(/\\/g, "/");
+  return /SpectaclesInteractionKit\.lspkg\/Utils\/animate$/.test(normalized);
 }
 
 export default defineConfig({
@@ -16,15 +22,22 @@ export default defineConfig({
         if (isUIKitImport(source)) {
           return uikitMock;
         }
+        if (isAnimateImport(source)) {
+          return animateMock;
+        }
         return null;
       },
     },
   ],
   resolve: {
     alias: {
-      "../UI/kit/UIKit": uikitMock,
-      "../../UI/kit/UIKit": uikitMock,
-      "./kit/UIKit": uikitMock,
+      "./UI/UIKit": uikitMock,
+      "./UIKit": uikitMock,
+      "../App/UI/UIKit": uikitMock,
+      "../../App/UI/UIKit": uikitMock,
+      "../UI/UIKit": uikitMock,
+      "../../UI/UIKit": uikitMock,
+      "SpectaclesInteractionKit.lspkg/Utils/animate": animateMock,
     },
   },
   test: {
@@ -35,11 +48,11 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: [
-        "../Assets/Scripts/Bridge/Protocol.ts",
-        "../Assets/Scripts/Core/AppState.ts",
-        "../Assets/Scripts/Core/Utilities.ts",
-        "../Assets/Scripts/Robot/RobotRuntimeModel.ts",
-        "../Assets/Scripts/Navigation/NavigationModel.ts",
+        "../Assets/Scripts/ARBridge/Network/Protocol.ts",
+        "../Assets/Scripts/App/AppState.ts",
+        "../Assets/Scripts/App/Utilities/Utilities.ts",
+        "../Assets/Scripts/App/Robot/RobotRuntimeModel.ts",
+        "../Assets/Scripts/ARBridge/Navigation/NavigationModel.ts",
       ],
     },
   },

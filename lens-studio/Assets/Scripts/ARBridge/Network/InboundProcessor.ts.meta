@@ -1,0 +1,45 @@
+- !<AssetImportMetadata/db8f4b5e-b4ec-40e1-aa37-0fbc5ccfb82f>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> 82ef3f8b-4196-4756-a255-2e2767d10e01
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> 82ef3f8b-4196-4756-a255-2e2767d10e01
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 0737d1e7-75d8-4467-a5da-a644e7c5b51e
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/0737d1e7-75d8-4467-a5da-a644e7c5b51e>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: 5686d1de-46f1-441c-a4b8-98bed7244c0e
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    {}
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    -
+      {}
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    []

@@ -125,7 +125,7 @@ class ClientSendQueue:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.exception("XR WebSocket outbound sender crashed", error=str(exc))
+            logger.exception("AR WebSocket outbound sender crashed", error=str(exc))
 
     async def _flush_one_coalesced(self) -> None:
         if not self._coalesce_latest:
@@ -146,7 +146,7 @@ class ClientSendQueue:
             self._sent_count += 1
             msg_type = peek_message_type(text)
             if _TRACE and msg_type == "registration_status":
-                logger.debug("XR WebSocket outbound registration_status sent", bytes=len(text))
+                logger.debug("AR WebSocket outbound registration_status sent", bytes=len(text))
             now = time.monotonic()
             if now - self._last_backlog_log_mono >= OUTBOUND_BACKLOG_LOG_INTERVAL_S:
                 fifo_depth = self._queue.qsize()
@@ -154,7 +154,7 @@ class ClientSendQueue:
                 if fifo_depth > 0 or coalesce_depth > 0 or self._dropped_fifo_count > 0:
                     self._last_backlog_log_mono = now
                     logger.info(
-                        "XR WebSocket outbound backlog",
+                        "AR WebSocket outbound backlog",
                         fifo_depth=fifo_depth,
                         coalesce_pending=coalesce_depth,
                         dropped_fifo=self._dropped_fifo_count,
@@ -164,7 +164,7 @@ class ClientSendQueue:
         except (OSError, websockets.WebSocketException) as exc:
             msg_type = peek_message_type(text)
             logger.warning(
-                "XR WebSocket outbound send failed",
+                "AR WebSocket outbound send failed",
                 error=str(exc),
                 message_type=msg_type,
             )

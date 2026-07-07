@@ -4,8 +4,9 @@ import {
   parseInboundMessage,
   ProtocolParseError,
   bridgeStatusFromSnapshot,
+  parseBridgeWorldFrameFields,
   RuntimeSnapshotMessage,
-} from "../../Assets/Scripts/Bridge/Protocol";
+} from "../../Assets/Scripts/ARBridge/Network/Protocol";
 
 describe("parseInboundMessage", () => {
   it("parses hello", () => {
@@ -17,7 +18,7 @@ describe("parseInboundMessage", () => {
           robot_id: "go2",
           display_name: "Go2",
           visual_origin_frame: "base_link",
-          registration_profile: {
+          tag_tracking_profile: {
             tag_ids: [0],
             tag_total_size_m: 0.07,
           },
@@ -28,9 +29,43 @@ describe("parseInboundMessage", () => {
     expect(msg!.type).toBe("hello");
     expect((msg as { robot: { robot_id: string } }).robot.robot_id).toBe("go2");
     expect(
-      (msg as { robot: { registration_profile: { tag_ids: number[] } } }).robot
-        .registration_profile?.tag_ids,
+      (msg as { robot: { tag_tracking_profile: { tag_ids: number[] } } }).robot
+        .tag_tracking_profile?.tag_ids,
     ).toEqual([0]);
+  });
+
+  it("parses hello with full v7 capability map", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "hello",
+        protocol_version: PROTOCOL_VERSION,
+        robot: {
+          robot_id: "unitree_go2",
+          display_name: "Unitree Go2",
+          body_bounds_m: [0.7, 0.5, 0.55],
+          footprint_m: [0.7, 0.5],
+          visual_origin_frame: "base_link",
+          base_height_m: 0.33,
+          default_render_offset_m: [0, 0, 0],
+        },
+        capabilities: {
+          lidar: { available: true },
+          odom: { available: true },
+          registration_april_tag: { available: true },
+          registration_manual_pose: { available: true },
+          nav: { available: true },
+          path: { available: true },
+          plan_preview: { available: true },
+          cancel_nav_goal: { available: true },
+          emergency_stop: { available: false, reason: "disabled" },
+        },
+      }),
+    );
+    expect(msg!.type).toBe("hello");
+    const caps = (msg as { capabilities: Record<string, { available: boolean }> })
+      .capabilities;
+    expect(caps.lidar.available).toBe(true);
+    expect(caps.emergency_stop.available).toBe(false);
   });
 
   it("parses runtime_snapshot and bridgeStatusFromSnapshot", () => {
@@ -41,10 +76,10 @@ describe("parseInboundMessage", () => {
         robot_id: "go2",
         bridge: {
           robot_connected: true,
-          registered: false,
+          world_frame_committed: false,
           reconnecting: false,
-          registration_method: null,
-          registration_approximate: false,
+          world_frame_method: null,
+          world_frame_approximate: false,
         },
         nav: { phase: "idle" },
         path: {
@@ -59,7 +94,50 @@ describe("parseInboundMessage", () => {
     const bridge = bridgeStatusFromSnapshot(snapshot);
     expect(bridge.type).toBe("bridge_status");
     expect(bridge.robot_connected).toBe(true);
-    expect(bridge.registered).toBe(false);
+    expect(bridge.world_frame_committed).toBe(false);
+  });
+
+  it("parses nav_goal_update", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "nav_goal_update",
+        ts: 1.5,
+        source: "agent",
+        position: [1, 0, 2],
+        orientation: [0, 0, 0, 1],
+        active: true,
+      }),
+    );
+    expect(msg!.type).toBe("nav_goal_update");
+    if (msg!.type === "nav_goal_update") {
+      expect(msg.source).toBe("agent");
+      expect(msg.active).toBe(true);
+      expect(msg.position).toEqual([1, 0, 2]);
+    }
+  });
+
+  it("parses runtime_snapshot goal field", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "runtime_snapshot",
+        ts: 1,
+        robot_id: "go2",
+        bridge: {
+          robot_connected: true,
+          world_frame_committed: true,
+          reconnecting: false,
+        },
+        nav: { phase: "navigating" },
+        goal: {
+          source: "ar",
+          position: [1, 0, 2],
+          active: true,
+        },
+      }),
+    );
+    const snapshot = msg as RuntimeSnapshotMessage;
+    expect(snapshot.goal?.source).toBe("ar");
+    expect(snapshot.goal?.active).toBe(true);
   });
 
   it("parses registration_status", () => {
@@ -67,19 +145,11 @@ describe("parseInboundMessage", () => {
       JSON.stringify({
         type: "registration_status",
         ts: 1,
-        mode: "april_odom_baseline",
+        mode: "april_tag",
         phase: "scanning",
         capture: "steady",
         message: "Look at tag",
         tag_visible: true,
-        motion: {
-          frame: "robot",
-          axis: "lateral",
-          direction: "left",
-          distance_m: 0.5,
-          waypoint_index: 1,
-          waypoint_total: 2,
-        },
       }),
     );
     expect(msg!.type).toBe("registration_status");
@@ -105,12 +175,39 @@ describe("parseInboundMessage", () => {
         type: "bridge_status",
         ts: 1,
         robot_connected: true,
-        registered: true,
+        world_frame_committed: true,
         reconnecting: false,
       }),
     );
     expect(msg!.type).toBe("bridge_status");
     expect((msg as { robot_connected: boolean }).robot_connected).toBe(true);
+  });
+
+  it("parseBridgeWorldFrameFields defaults approximate when omitted", () => {
+    expect(parseBridgeWorldFrameFields({}, false)).toEqual({
+      world_frame_approximate: false,
+    });
+  });
+
+  it("parseBridgeWorldFrameFields strict null method when committed", () => {
+    expect(
+      parseBridgeWorldFrameFields(
+        { world_frame_method: "unknown", world_frame_approximate: true },
+        true,
+      ),
+    ).toEqual({ world_frame_method: null, world_frame_approximate: true });
+  });
+
+  it("parseBridgeWorldFrameFields preserves valid method when uncommitted", () => {
+    expect(
+      parseBridgeWorldFrameFields(
+        { world_frame_method: "april_tag" },
+        false,
+      ),
+    ).toEqual({
+      world_frame_method: "april_tag",
+      world_frame_approximate: false,
+    });
   });
 
   it("returns null for JSON lidar (binary only in v6)", () => {
@@ -138,10 +235,31 @@ describe("parseInboundMessage", () => {
     expect((msg as { position: number[] }).position).toEqual([1, 2, 3]);
   });
 
-  it("parses pose_correction", () => {
+  it("parses pose with optional kinematics", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
-        type: "pose_correction",
+        type: "pose",
+        ts: 1,
+        position: [1, 2, 3],
+        orientation: [0, 0, 0, 1],
+        speed_mps: 0.42,
+        velocity_mps: [0.5, 0.0, -0.1],
+        yaw_rate_rad_s: 0.35,
+      }),
+    );
+    expect(msg!.type).toBe("pose");
+    if (msg!.type !== "pose") {
+      return;
+    }
+    expect(msg.speed_mps).toBe(0.42);
+    expect(msg.velocity_mps).toEqual([0.5, 0, -0.1]);
+    expect(msg.yaw_rate_rad_s).toBe(0.35);
+  });
+
+  it("parses world_frame_correction", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "world_frame_correction",
         ts: 1,
         trans_delta_m: 0.1,
         yaw_corrected: true,
@@ -149,7 +267,7 @@ describe("parseInboundMessage", () => {
         solve_method: "apriltag_full",
       }),
     );
-    expect(msg!.type).toBe("pose_correction");
+    expect(msg!.type).toBe("world_frame_correction");
     expect((msg as { solve_method: string }).solve_method).toBe("apriltag_full");
   });
 
@@ -192,6 +310,21 @@ describe("parseInboundMessage", () => {
     );
     expect(msg!.type).toBe("nav_status");
     expect((msg as { phase: string }).phase).toBe("idle");
+  });
+
+  it("parses nav_status retryable stall fields", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "nav_status",
+        ts: 1,
+        phase: "recovering",
+        retryable: true,
+        stall_reason: "no_path",
+      }),
+    );
+    expect(msg!.type).toBe("nav_status");
+    expect((msg as { retryable: boolean }).retryable).toBe(true);
+    expect((msg as { stall_reason: string }).stall_reason).toBe("no_path");
   });
 
   it("parses pong", () => {

@@ -67,7 +67,7 @@
 - !<SceneObject/17f3728f-ffcc-4add-5a57-2bcf06959b39>
   PrefabRemaps:
     []
-  Name: Circle_Executing
+  Name: Circle_Navigating
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -324,6 +324,26 @@
   BlendNormals: false
   BlendShapes:
     {}
+- !<RenderMeshVisual/59f01332-ea9e-4dc5-8a3e-0bab10684e08>
+  PrefabRemaps:
+    []
+  Name: Render Mesh Visual
+  Enabled: true
+  RenderOrder: 0
+  StretchMode: Stretch
+  VerticalAlignment: Center
+  HorizontalAlignment: Center
+  MeshShadowMode: None
+  ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+  ShadowDensity: 1.000000
+  Materials:
+    - !<reference> a9fd9cd6-7a45-4d4b-8baa-2dfb9577bc11
+  Mesh: !<reference> 48bf52aa-7a6b-4e77-8bc2-246bda8baa70
+  Skin: !<reference> 00000000-0000-0000-0000-000000000000
+  BlendShapesEnabled: true
+  BlendNormals: false
+  BlendShapes:
+    {}
 - !<LookAtComponent/63163129-4973-4c8b-46f1-fd69c2339b65>
   PrefabRemaps:
     []
@@ -436,11 +456,11 @@
     Scale: {x: 0.400000, y: 0.400000, z: 0.400000}
     HasSegmentScaleCompensation: false
   Children:
+    - !<own> de80592b-4d3d-4f20-b6bc-fb334b38268b
     - !<own> 05cd4765-0ba6-451b-62ee-452bd4d45f27
   Components:
     - !<own> 9a61414b-a2b3-49ac-5830-701998753eb0
     - !<own> 456a4d7a-fd6c-4370-7964-9d8aec7ad0aa
-    - !<own> f0e0c52c-df31-4094-4a35-757ac79504f6
 - !<SceneObject/a94e34f9-5a84-4659-5ae2-628a18158d52>
   PrefabRemaps:
     []
@@ -514,6 +534,21 @@
   BlendNormals: false
   BlendShapes:
     {}
+- !<SceneObject/de80592b-4d3d-4f20-b6bc-fb334b38268b>
+  PrefabRemaps:
+    []
+  Name: Visual
+  Enabled: true
+  Layers: 1
+  LocalTransform: !<TransformEntity>
+    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Rotation: {x: -90.000000, y: 0.000000, z: 0.000000}
+    Scale: {x: 77.500000, y: 77.500000, z: 77.500000}
+    HasSegmentScaleCompensation: false
+  Children:
+    []
+  Components:
+    - !<own> 59f01332-ea9e-4dc5-8a3e-0bab10684e08
 - !<Text/e78b6aaf-353e-481d-55fd-7919cb4fa847>
   PrefabRemaps:
     []
@@ -625,26 +660,6 @@
   Materials:
     - !<reference> 17e7c266-e30a-4fcc-95d1-cddf8e6f9d36
   Mesh: !<reference> 48bf52aa-7a6b-4e77-8bc2-246bda8baa70
-  Skin: !<reference> 00000000-0000-0000-0000-000000000000
-  BlendShapesEnabled: true
-  BlendNormals: false
-  BlendShapes:
-    {}
-- !<RenderMeshVisual/f0e0c52c-df31-4094-4a35-757ac79504f6>
-  PrefabRemaps:
-    []
-  Name: Render Mesh Visual
-  Enabled: true
-  RenderOrder: 0
-  StretchMode: Stretch
-  VerticalAlignment: Center
-  HorizontalAlignment: Center
-  MeshShadowMode: None
-  ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
-  ShadowDensity: 1.000000
-  Materials:
-    - !<reference> 634460c1-d837-4144-86e3-ba22c3de1371
-  Mesh: !<reference> 1a9172a3-5301-44af-b311-6dd12dee99b5
   Skin: !<reference> 00000000-0000-0000-0000-000000000000
   BlendShapesEnabled: true
   BlendNormals: false

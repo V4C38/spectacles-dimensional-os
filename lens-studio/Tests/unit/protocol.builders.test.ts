@@ -8,11 +8,12 @@ import {
   buildCameraInfo,
   buildNavigateGoal,
   buildPreviewGoal,
-  buildGoal,
-  buildCancelGoal,
+  buildNavGoal,
+  buildCancelNavGoal,
   buildEmergencyStop,
+  buildJoystickCommand,
   DEFAULT_LIDAR_OBSTACLE_SETTINGS,
-} from "../../Assets/Scripts/Bridge/Protocol";
+} from "../../Assets/Scripts/ARBridge/Network/Protocol";
 import { setMockTime } from "../setup/lens-globals";
 import { vec3, quat } from "../shims/lens-runtime";
 
@@ -53,21 +54,13 @@ describe("outbound protocol builders", () => {
 
   it("buildRegistrationCommand start with mode", () => {
     const msg = JSON.parse(
-      buildRegistrationCommand("go2", "start", "april_odom_baseline"),
+      buildRegistrationCommand("go2", "start", "april_tag"),
     );
     expect(msg.type).toBe("registration_command");
     expect(msg.robot_id).toBe("go2");
     expect(msg.command).toBe("start");
-    expect(msg.mode).toBe("april_odom_baseline");
+    expect(msg.mode).toBe("april_tag");
     expect(msg.ts).toBe(1000);
-  });
-
-  it("buildRegistrationCommand authorize_motion", () => {
-    const msg = JSON.parse(
-      buildRegistrationCommand("go2", "authorize_motion"),
-    );
-    expect(msg.command).toBe("authorize_motion");
-    expect(msg).not.toHaveProperty("mode");
   });
 
   it("buildRegistrationCommand stop and commit", () => {
@@ -125,7 +118,7 @@ describe("outbound protocol builders", () => {
         new quat(1, 0, 0, 0),
       ),
     );
-    expect(msg.type).toBe("goal");
+    expect(msg.type).toBe("nav_goal");
     expect(msg.robot_id).toBe("go2");
     expect(msg.intent).toBe("navigate");
     expect(msg.position).toEqual([1, 0, 2]);
@@ -153,25 +146,25 @@ describe("outbound protocol builders", () => {
     expect(msg.orientation).toEqual([0, 0, 0, 1]);
   });
 
-  it("buildGoal accepts explicit intent", () => {
+  it("buildNavGoal accepts explicit intent", () => {
     const msg = JSON.parse(
-      buildGoal("go2", "navigate", new vec3(100, 0, 200), new quat(1, 0, 0, 0)),
+      buildNavGoal("go2", "navigate", new vec3(100, 0, 200), new quat(1, 0, 0, 0)),
     );
     expect(msg.intent).toBe("navigate");
   });
 
-  it("buildGoal preview without rotation", () => {
+  it("buildNavGoal preview without rotation", () => {
     const msg = JSON.parse(
-      buildGoal("go2", "preview", new vec3(50, 0, 0)),
+      buildNavGoal("go2", "preview", new vec3(50, 0, 0)),
     );
     expect(msg.intent).toBe("preview");
     expect(msg.position).toEqual([0.5, 0, 0]);
     expect(msg).not.toHaveProperty("orientation");
   });
 
-  it("buildCancelGoal", () => {
-    const msg = JSON.parse(buildCancelGoal("go2"));
-    expect(msg.type).toBe("cancel_goal");
+  it("buildCancelNavGoal", () => {
+    const msg = JSON.parse(buildCancelNavGoal("go2"));
+    expect(msg.type).toBe("cancel_nav_goal");
     expect(msg.robot_id).toBe("go2");
     expect(msg.ts).toBe(1000);
   });
@@ -180,6 +173,16 @@ describe("outbound protocol builders", () => {
     const msg = JSON.parse(buildEmergencyStop("go2"));
     expect(msg.type).toBe("emergency_stop");
     expect(msg.robot_id).toBe("go2");
+    expect(msg.ts).toBe(1000);
+  });
+
+  it("buildJoystickCommand", () => {
+    const msg = JSON.parse(buildJoystickCommand("go2", 0.1, 0.2, -0.3));
+    expect(msg.type).toBe("joystick_command");
+    expect(msg.robot_id).toBe("go2");
+    expect(msg.vx).toBe(0.1);
+    expect(msg.vy).toBe(0.2);
+    expect(msg.wz).toBe(-0.3);
     expect(msg.ts).toBe(1000);
   });
 });

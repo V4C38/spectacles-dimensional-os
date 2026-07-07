@@ -1,4 +1,4 @@
-"""XR bridge client error codes surfaced in Lens setup and runtime UI."""
+"""dimos-ar bridge client error codes surfaced in Lens setup and runtime UI."""
 
 from __future__ import annotations
 
@@ -28,13 +28,13 @@ REGISTRATION_COMMIT_NO_CANDIDATE = BridgeError(
         "The bridge rejected registration_command commit because no valid registration "
         "candidate was available yet."
     ),
-    fix="Wait for bridge confirmation or restart the robot and bridge (./start.sh).",
+    fix="Wait for bridge confirmation or restart the robot and bridge (./scripts/start.sh).",
 )
 
 REGISTRATION_FAILED = BridgeError(
     code=500,
     description="AprilTag or manual registration failed on the bridge.",
-    fix="Retry registration; restart the robot and bridge (./start.sh) if it persists.",
+    fix="Retry registration; restart the robot and bridge (./scripts/start.sh) if it persists.",
 )
 
 BRIDGE_DISCONNECTED_DURING_COMMIT = BridgeError(
@@ -46,7 +46,7 @@ BRIDGE_DISCONNECTED_DURING_COMMIT = BridgeError(
 REGISTRATION_SESSION_UNAVAILABLE = BridgeError(
     code=503,
     description="The bridge could not start a registration session after registration_command start.",
-    fix="Restart the robot and bridge (./start.sh), then reconnect Spectacles.",
+    fix="Restart the robot and bridge (./scripts/start.sh), then reconnect Spectacles.",
 )
 
 MANUAL_POSE_CONFIRM_TIMEOUT = BridgeError(
@@ -55,7 +55,7 @@ MANUAL_POSE_CONFIRM_TIMEOUT = BridgeError(
         "Spectacles sent manual placement updates but the bridge never "
         "confirmed a registration candidate within 5 seconds."
     ),
-    fix="Restart the robot and bridge (./start.sh), then reconnect Spectacles.",
+    fix="Restart the robot and bridge (./scripts/start.sh), then reconnect Spectacles.",
 )
 
 NAV_GOAL_STALLED = BridgeError(
@@ -64,7 +64,7 @@ NAV_GOAL_STALLED = BridgeError(
         "Navigation stopped responding after automatic recovery attempts. "
         "The robot did not start moving or publish a path for the goal."
     ),
-    fix="Reconnect Spectacles to the bridge or restart the robot and bridge (./start.sh).",
+    fix="Reconnect Spectacles to the bridge or restart the robot and bridge (./scripts/start.sh).",
 )
 
 CAMERA_CAPTURE_FAILED = BridgeError(
@@ -85,7 +85,7 @@ CONTROL_RPC_TIMEOUT = BridgeError(
         "A robot control RPC stopped responding, so the bridge could not confirm "
         "cancel-goal or emergency-stop control health."
     ),
-    fix="Use the robot's hardware/controller stop path, then restart the robot and bridge (./start.sh).",
+    fix="Use the robot's hardware/controller stop path, then restart the robot and bridge (./scripts/start.sh).",
 )
 
 BRIDGE_ERRORS: dict[int, BridgeError] = {

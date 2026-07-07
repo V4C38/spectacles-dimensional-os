@@ -1,4 +1,4 @@
-"""Registration wire encode/decode — PROTOCOL v6."""
+"""Registration wire encode/decode."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ import json
 import time
 from typing import Any, Literal
 
-from dimos.ar.registration.types import CaptureHint, MotionHint, RegistrationMode, RegistrationPhase
+from dimos.ar.registration.types import CaptureHint, RegistrationMode, RegistrationPhase
 
-RegistrationCommand = Literal["start", "authorize_motion", "stop", "commit"]
+RegistrationCommand = Literal["start", "stop", "commit"]
 
 
 def _dumps(payload: dict[str, Any]) -> str:
@@ -39,7 +39,6 @@ class RegistrationStatusPayload:
     capture: CaptureHint
     message: str
     tag_visible: bool | None = None
-    motion: MotionHint | None = None
     preview_pose: dict[str, Any] | None = None
 
 
@@ -59,8 +58,6 @@ def encode_registration_status(
         payload["mode"] = status.mode.value
     if status.tag_visible is not None:
         payload["tag_visible"] = status.tag_visible
-    if status.motion is not None:
-        payload["motion"] = status.motion.to_wire()
     if status.preview_pose is not None:
         payload["preview_pose"] = status.preview_pose
     return _dumps(payload)

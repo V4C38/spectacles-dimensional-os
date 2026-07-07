@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   protocolMetersToLensCentimeters,
   lensCentimetersToProtocolMeters,
-} from "../../Assets/Scripts/Bridge/Protocol";
+} from "../../Assets/Scripts/ARBridge/Network/Protocol";
 import { vec3 } from "../shims/lens-runtime";
 
 describe("protocol unit conversion", () => {

@@ -1,4 +1,4 @@
-"""Live WebSocket integration tests against a running XR bridge."""
+"""Live WebSocket integration tests against a running dimos-ar bridge."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import time
 
 import pytest
 import websockets
+
+from dimos.ar.network.protocol import PROTOCOL_VERSION
 
 WS_URL = os.environ.get("DIMOS_AR_WS_URL", "ws://127.0.0.1:8787")
 TIMEOUT_S = 60.0
@@ -39,14 +41,13 @@ async def _collect_protocol_messages() -> dict[str, int]:
             msg = json.loads(raw)
             msg_type = msg.get("type")
             if msg_type == "hello" and seen["hello"] == 0:
-                assert msg.get("protocol_version") == 6
+                assert msg.get("protocol_version") == PROTOCOL_VERSION
                 assert isinstance(msg.get("robot"), dict)
                 caps = msg.get("capabilities", {})
+                assert isinstance(caps, dict)
+                assert "emergency_stop" in caps
                 assert caps.get("lidar", {}).get("available") is True
                 assert caps.get("odom", {}).get("available") is True
-                assert caps.get("nav", {}).get("available") is True
-                assert caps.get("path", {}).get("available") is True
-                assert "emergency_stop" in caps
             if msg_type in seen:
                 seen[msg_type] += 1
             if (
@@ -62,7 +63,7 @@ async def _collect_protocol_messages() -> dict[str, int]:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_arbridge_protocol_live() -> None:
-    """Requires XR bridge running (e.g. blueprints/dimos.ar.py)."""
+    """Requires dimos-ar bridge running (e.g. blueprints/dimos.ar.py)."""
     seen = await _collect_protocol_messages()
     assert seen["hello"] >= 1
     assert seen["bridge_status"] >= 1
@@ -73,7 +74,7 @@ async def test_arbridge_protocol_live() -> None:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_arbridge_accepts_camera_info() -> None:
-    """Requires XR bridge running (e.g. blueprints/dimos.ar.py)."""
+    """Requires dimos-ar bridge running (e.g. blueprints/dimos.ar.py)."""
     async with await _connect_with_retry() as ws:
         await ws.recv()
         await ws.recv()

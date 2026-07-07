@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
-import type { HelloMessage } from "../../Assets/Scripts/Bridge/Protocol";
+import type { HelloMessage } from "../../Assets/Scripts/ARBridge/Network/Protocol";
 import {
   createDefaultRobotRuntimeState,
   type RobotRuntimeState,
-} from "../../Assets/Scripts/Core/AppState";
+} from "../../Assets/Scripts/App/AppState";
 import {
   projectRuntimeStateFromHello,
   runtimeDeadzoneRadiusCm,
@@ -13,7 +13,7 @@ import {
   robotFloorWorldYCm,
   isCapabilityAvailable,
   capabilityUnavailableReason,
-} from "../../Assets/Scripts/Robot/RobotRuntimeModel";
+} from "../../Assets/Scripts/App/Robot/RobotRuntimeModel";
 
 function sampleHello(
   patch: Partial<HelloMessage["robot"]> = {},
@@ -24,7 +24,7 @@ function sampleHello(
 ): HelloMessage {
   return {
     type: "hello",
-    protocol_version: 6,
+    protocol_version: 7,
     robot: {
       robot_id: "go2",
       display_name: "Go2",

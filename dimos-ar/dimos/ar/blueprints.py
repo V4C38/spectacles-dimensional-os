@@ -1,11 +1,10 @@
 """AR bridge blueprints — compositions only, no classes or logic.
 
-ar_go2: Unitree Go2 smart stack + Go2AdapterModule + ARBridge
-ar_g1:  Unitree G1 nav-onboard stack + G1AdapterModule + ARBridge
+ar_go2: Unitree Go2 smart stack + Go2RobotProfileModule + ARBridge
+ar_g1:  Unitree G1 nav-onboard stack + G1RobotProfileModule + ARBridge
 
 Stream-name reconciliation (the Go2/G1 stacks publish lidar under various names
-depending on the pipeline; the adapter modules expose unified ar_* streams to
-ARBridge) is done here via .remappings([...]).
+depending on the pipeline) is done here via .remappings([...]).
 
 To run (once registered upstream):
   dimos run ar-go2
@@ -14,9 +13,9 @@ To run (once registered upstream):
 
 from __future__ import annotations
 
-from dimos.ar.adapters.g1 import G1AdapterModule
-from dimos.ar.adapters.go2 import Go2AdapterModule
 from dimos.ar.bridge.module import ARBridge
+from dimos.ar.robot_profile.g1 import G1RobotProfileModule
+from dimos.ar.robot_profile.go2 import Go2RobotProfileModule
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 
@@ -32,29 +31,51 @@ try:
 except ModuleNotFoundError:
     unitree_g1_nav_onboard = None
 
+try:
+    from dimos.visualization.rerun.bridge import RerunBridgeModule
+    from dimos.visualization.rerun.websocket_server import RerunWebSocketServer
+    from dimos.web.websocket_vis.websocket_vis_module import WebsocketVisModule
+except ModuleNotFoundError:
+    RerunBridgeModule = None
+    RerunWebSocketServer = None
+    WebsocketVisModule = None
+
+_VIS_MODULES = tuple(
+    module
+    for module in (RerunBridgeModule, RerunWebSocketServer, WebsocketVisModule)
+    if module is not None
+)
+
 ar_go2 = (
     autoconnect(
         unitree_go2,
-        Go2AdapterModule.blueprint(),
+        Go2RobotProfileModule.blueprint(),
         ARBridge.blueprint(),
     )
     .remappings(
         [
             # Go2 smart stack: lidar lives on "lidar" (VoxelGridMapper output)
-            (Go2AdapterModule, "ar_lidar_in", "lidar"),
+            (ARBridge, "ar_lidar", "lidar"),
             # Go2 odom lives on "odom" (PoseStamped from basic stack)
-            (Go2AdapterModule, "ar_odom_in", "odom"),
+            (ARBridge, "ar_odom", "odom"),
             # Global costmap from CostMapper
-            (Go2AdapterModule, "ar_global_costmap_in", "global_costmap"),
+            (ARBridge, "ar_global_costmap", "global_costmap"),
             # Active navigation path
-            (Go2AdapterModule, "ar_path_in", "path"),
+            (ARBridge, "ar_path", "path"),
             # Goal-reached signal
-            (Go2AdapterModule, "ar_goal_reached_in", "goal_reached"),
+            (ARBridge, "ar_goal_reached", "goal_reached"),
             # Navigation state string
-            (Go2AdapterModule, "ar_navigation_state_in", "navigation_state"),
+            (ARBridge, "ar_navigation_state", "navigation_state"),
+            # Hot AR control path: bridge publishes directly to robot command streams.
+            (ARBridge, "cmd_vel", "cmd_vel"),
+            (ARBridge, "goal_request", "goal_request"),
+            (ARBridge, "stop_movement", "stop_movement"),
         ]
     )
     .global_config(viewer="none")
+    # viewer="none" alone does not remove upstream viz modules because those are
+    # selected at import time; disable them explicitly for AR runs.
+    .disabled_modules(*_VIS_MODULES)
     .configurators(ClockSyncConfigurator())
     if unitree_go2 is not None
     else None
@@ -63,28 +84,29 @@ ar_go2 = (
 ar_g1 = (
     autoconnect(
         unitree_g1_nav_onboard,
-        G1AdapterModule.blueprint(),
+        G1RobotProfileModule.blueprint(),
         ARBridge.blueprint(),
     )
     .remappings(
         [
             # G1 nav-onboard: registered_scan from FastLio2
-            (G1AdapterModule, "ar_lidar_in", "registered_scan"),
+            (ARBridge, "ar_lidar", "registered_scan"),
             # G1 odom from FastLio2 Odometry (twist + production timestamp)
-            (G1AdapterModule, "ar_odom_in", "odometry"),
-            # Global costmap
-            (G1AdapterModule, "ar_global_costmap_in", "global_costmap"),
+            (ARBridge, "ar_odometry", "odometry"),
             # Active navigation path
-            (G1AdapterModule, "ar_path_in", "path"),
+            (ARBridge, "ar_path", "path"),
             # Goal-reached signal
-            (G1AdapterModule, "ar_goal_reached_in", "goal_reached"),
-            # Navigation state string
-            (G1AdapterModule, "ar_navigation_state_in", "navigation_state"),
-            # cancel_goal routed through the nav-onboard cancel interface
-            (G1AdapterModule, "cancel_goal_signal", "cancel_goal"),
+            (ARBridge, "ar_goal_reached", "goal_reached"),
+            # Motion: cmu_nav SimplePlanner takes PointStamped goals.
+            (ARBridge, "cmd_vel", "cmd_vel"),
+            (ARBridge, "goal_point_request", "goal"),
+            (ARBridge, "cancel_goal_signal", "cancel_goal"),
         ]
     )
     .global_config(viewer="none")
+    # viewer="none" alone does not remove upstream viz modules because those are
+    # selected at import time; disable them explicitly for AR runs.
+    .disabled_modules(*_VIS_MODULES)
     .configurators(ClockSyncConfigurator())
     if unitree_g1_nav_onboard is not None
     else None

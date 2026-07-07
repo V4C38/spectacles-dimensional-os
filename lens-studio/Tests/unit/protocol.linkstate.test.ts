@@ -3,7 +3,7 @@ import {
   deriveLinkState,
   sniffInboundMessageType,
   isNonCriticalInboundMessageType,
-} from "../../Assets/Scripts/Bridge/Protocol";
+} from "../../Assets/Scripts/ARBridge/Network/Protocol";
 
 describe("deriveLinkState", () => {
   it("returns disconnected when not connected", () => {
@@ -13,7 +13,7 @@ describe("deriveLinkState", () => {
         type: "bridge_status",
         ts: 1,
         robot_connected: true,
-        registered: true,
+        world_frame_committed: true,
         reconnecting: false,
       }),
     ).toBe("disconnected");
@@ -26,8 +26,20 @@ describe("deriveLinkState", () => {
         type: "bridge_status",
         ts: 1,
         robot_connected: false,
-        registered: false,
+        world_frame_committed: false,
         reconnecting: false,
+      }),
+    ).toBe("connectedNoRobot");
+  });
+
+  it("returns connectedNoRobot when reconnecting despite robot_connected", () => {
+    expect(
+      deriveLinkState(true, {
+        type: "bridge_status",
+        ts: 1,
+        robot_connected: true,
+        world_frame_committed: true,
+        reconnecting: true,
       }),
     ).toBe("connectedNoRobot");
   });
@@ -38,7 +50,7 @@ describe("deriveLinkState", () => {
         type: "bridge_status",
         ts: 1,
         robot_connected: true,
-        registered: true,
+        world_frame_committed: true,
         reconnecting: false,
       }),
     ).toBe("connected");
@@ -56,10 +68,10 @@ describe("sniffInboundMessageType", () => {
 });
 
 describe("isNonCriticalInboundMessageType", () => {
-  it("returns true for lidar, pose, and pose_correction", () => {
+  it("returns true for lidar, pose, and world_frame_correction", () => {
     expect(isNonCriticalInboundMessageType("lidar")).toBe(true);
     expect(isNonCriticalInboundMessageType("pose")).toBe(true);
-    expect(isNonCriticalInboundMessageType("pose_correction")).toBe(true);
+    expect(isNonCriticalInboundMessageType("world_frame_correction")).toBe(true);
   });
 
   it("returns false for other message types", () => {

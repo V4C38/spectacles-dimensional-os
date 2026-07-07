@@ -1,16 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
-import { AppState, createDefaultDimosAppState } from "../../Assets/Scripts/Core/AppState";
+import { AppState, createDefaultAppStateData } from "../../Assets/Scripts/App/AppState";
 
 describe("AppState store", () => {
   it("snapshot is a deep clone (mutation does not leak into store)", () => {
-    const s = new AppState(createDefaultDimosAppState());
+    const s = new AppState(createDefaultAppStateData());
     const snap = s.snapshot;
     snap.robotRuntime.capabilities.lidar = { available: false, reason: "x" };
     expect(s.snapshot.robotRuntime.capabilities.lidar?.available).not.toBe(false);
   });
 
   it("subscribe invokes immediately and unsubscribe stops further calls", () => {
-    const s = new AppState(createDefaultDimosAppState());
+    const s = new AppState(createDefaultAppStateData());
     const seen: string[] = [];
     const off = s.subscribe((st) => seen.push(st.operatingMode));
     expect(seen.length).toBe(1);
@@ -21,7 +21,7 @@ describe("AppState store", () => {
   });
 
   it("queues reentrant updates made during dispatch (no loss, no throw)", () => {
-    const s = new AppState(createDefaultDimosAppState());
+    const s = new AppState(createDefaultAppStateData());
     let fired = false;
     s.subscribe((st) => {
       if (!fired && st.debugMode) {
@@ -37,7 +37,7 @@ describe("AppState store", () => {
   it("isolates a throwing listener and reports via print", () => {
     const printSpy = vi.fn();
     (globalThis as Record<string, unknown>).print = printSpy;
-    const s = new AppState(createDefaultDimosAppState());
+    const s = new AppState(createDefaultAppStateData());
     const other = vi.fn();
     s.subscribe((st) => {
       if (st.debugMode) {

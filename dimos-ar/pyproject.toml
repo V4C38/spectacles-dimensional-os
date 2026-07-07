@@ -85,8 +85,8 @@ ignore_missing_imports = true
 # This is a DimOS upstream issue; suppress it in all files that use @rpc.
 [[tool.mypy.overrides]]
 module = [
-    "dimos.ar.adapters.go2",
-    "dimos.ar.adapters.g1",
+    "dimos.ar.robot_profile.go2",
+    "dimos.ar.robot_profile.g1",
     "dimos.ar.bridge.module",
     "dimos.ar.preview_planner",
 ]
