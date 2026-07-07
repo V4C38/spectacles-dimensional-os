@@ -54,6 +54,7 @@ def test_inverse_transform_point() -> None:
         method="manual_pose",
         approximate=False,
     )
+    state.set_odom_scale(1.0)
     odom_pt = state.inverse_transform_point((1.0, 0.0, 0.0))
     assert np.allclose(odom_pt, (0.0, 0.0, 0.0), atol=1e-5)
 
@@ -67,6 +68,7 @@ def test_inverse_transform_pose() -> None:
         method="april_tag",
         approximate=False,
     )
+    state.set_odom_anchor_xy(1.0, 0.0)
     pos, quat = state.inverse_transform_pose((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert np.allclose(pos, (1.0, 0.0, 0.0), atol=1e-5)
     _, expected_quat = matrix_to_pose(state._get_T_inv())

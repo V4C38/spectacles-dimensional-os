@@ -16,7 +16,7 @@ from dimos.ar.navigation.navigate import (
     NavigateGoalHandler,
 )
 from dimos.ar.network.protocol import NavGoalMessage, encode_pose
-from dimos.ar.world_frame.state import WorldFrameState
+from dimos.ar.world_frame.state import ODOM_SCALE_INITIAL, WorldFrameState
 from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
@@ -374,7 +374,7 @@ def test_concurrent_nav_goals_dispatch_both() -> None:
     nav.on_navigate_goal(second_goal)
 
     assert len(published_nav) == 2
-    assert published_nav[-1].position[0] == 2.0
+    assert published_nav[-1].position[0] == pytest.approx(2.0 / ODOM_SCALE_INITIAL, abs=0.01)
     assert nav._goal_failed is False
 
 
@@ -632,6 +632,8 @@ def test_world_frame_correction_redispatches_active_goal() -> None:
     nav, mock_server, published_nav, _published_cancel = _make_nav()
     nav.on_navigate_goal(_make_goal_msg())
     assert len(published_nav) == 1
+    assert nav._session is not None
+    nav._session.phase = "navigating"
     status_count = len(_all_nav_statuses(mock_server))
 
     T = np.eye(4, dtype=np.float64)
@@ -649,6 +651,35 @@ def test_world_frame_correction_skips_redispatch_below_threshold() -> None:
     nav, _mock_server, published_nav, _published_cancel = _make_nav()
     nav.on_navigate_goal(_make_goal_msg())
     assert len(published_nav) == 1
+    assert nav._session is not None
+    nav._session.phase = "navigating"
+    nav.on_world_frame_corrected()
+    assert len(published_nav) == 1
+
+
+def test_world_frame_correction_skips_redispatch_when_not_navigating() -> None:
+    nav, _mock_server, published_nav, _published_cancel = _make_nav()
+    nav.on_navigate_goal(_make_goal_msg())
+    assert len(published_nav) == 1
+    assert nav._session is not None
+    assert nav._session.phase == "pending"
+
+    T = np.eye(4, dtype=np.float64)
+    T[0, 3] = 1.0
+    nav._world_frame.apply_transform(T)
+    nav.on_world_frame_corrected()
+    assert len(published_nav) == 1
+
+
+def test_world_frame_correction_skips_redispatch_after_small_transform() -> None:
+    nav, _mock_server, published_nav, _published_cancel = _make_nav()
+    nav.on_navigate_goal(_make_goal_msg())
+    assert nav._session is not None
+    nav._session.phase = "navigating"
+
+    T = np.eye(4, dtype=np.float64)
+    T[0, 3] = 0.05
+    nav._world_frame.apply_transform(T)
     nav.on_world_frame_corrected()
     assert len(published_nav) == 1
 

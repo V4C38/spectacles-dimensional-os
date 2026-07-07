@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 
 from dimos.ar.tag_tracking.solve import (
     R_ALIGN,
@@ -11,7 +12,7 @@ from dimos.ar.tag_tracking.solve import (
     solve_yaw_translation_2d,
 )
 from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker
-from dimos.ar.world_frame.state import WorldFrameState
+from dimos.ar.world_frame.state import ODOM_SCALE_INITIAL, WorldFrameState
 from dimos.ar.world_frame.transforms import (
     gravity_level_transform,
     normalize_ground_pose,
@@ -181,6 +182,7 @@ def test_manual_alignment_world_pose_matches_placement() -> None:
 
     state = WorldFrameState()
     state.commit(T_world_odom, method="manual_pose", approximate=False)
+    state.set_odom_anchor_xy(odom_position[0], odom_position[1])
 
     world_pos, _ = state.transform_pose(odom_position, odom_orientation)
 
@@ -200,3 +202,146 @@ def test_rotate_vector_applies_rotation_only() -> None:
     rotated = state.rotate_vector((1.0, 0.0, 0.0))
     assert np.allclose(rotated[0], 0.0, atol=1e-5)
     assert np.allclose(rotated[2], -1.0, atol=1e-5)
+
+
+def test_odom_scale_default_is_identity_behavior() -> None:
+    state = WorldFrameState()
+    T = np.eye(4, dtype=np.float64)
+    T[0, 3] = 2.0
+    T[2, 3] = -1.0
+    state.commit(T, method="manual_pose", approximate=False)
+    assert state.odom_scale == pytest.approx(ODOM_SCALE_INITIAL)
+
+    pos_before = (1.0, 0.5, 0.2)
+    ori = (0.0, 0.0, 0.0, 1.0)
+    world_pos, world_ori = state.transform_pose(pos_before, ori)
+    odom_back, ori_back = state.inverse_transform_pose(world_pos, world_ori)
+    assert np.allclose(odom_back, pos_before, atol=1e-9)
+    assert np.allclose(ori_back, ori, atol=1e-9)
+
+    pts = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
+    assert np.allclose(
+        state.transform_points(pts)[0],
+        (2.0 + ODOM_SCALE_INITIAL, 0.0, -1.0),
+        atol=1e-5,
+    )
+
+
+def test_odom_scale_round_trip_at_116() -> None:
+    state = WorldFrameState()
+    state.commit(np.eye(4, dtype=np.float64), method="manual_pose", approximate=False)
+    state.set_odom_scale(1.16)
+
+    pos = (1.0, 0.5, 0.2)
+    ori = (0.0, 0.0, 0.0, 1.0)
+    world_pos, world_ori = state.transform_pose(pos, ori)
+    odom_back, ori_back = state.inverse_transform_pose(world_pos, world_ori)
+    assert np.allclose(odom_back, pos, atol=1e-9)
+    assert np.allclose(ori_back, ori, atol=1e-9)
+
+    world_point = state.transform_pose((0.3, 0.4, 0.0), ori)[0]
+    odom_point = state.inverse_transform_point(world_point)
+    assert np.allclose(odom_point, (0.3, 0.4, 0.0), atol=1e-9)
+
+
+def test_odom_scale_inverse_transform_nav_goal() -> None:
+    state = WorldFrameState()
+    state.commit(np.eye(4, dtype=np.float64), method="manual_pose", approximate=False)
+    state.set_odom_scale(1.16)
+
+    odom_goal = state.inverse_transform_point((2.0, 0.0, 0.0))
+    assert odom_goal[0] == pytest.approx(2.0 / 1.16, abs=1e-9)
+    assert odom_goal[1] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_odom_scale_transform_points_scales_displacement() -> None:
+    state = WorldFrameState()
+    state.commit(np.eye(4, dtype=np.float64), method="manual_pose", approximate=False)
+    state.set_odom_scale(1.16)
+
+    pts = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)
+    world = state.transform_points(pts)
+    assert world[0, 0] == pytest.approx(1.16, abs=1e-5)
+
+
+def test_set_odom_scale_clamp_and_deadband() -> None:
+    state = WorldFrameState()
+
+    assert state.set_odom_scale(1.4) is True
+    assert state.odom_scale == pytest.approx(1.25)
+
+    assert state.set_odom_scale(1.16) is True
+    assert state.odom_scale == pytest.approx(1.16)
+    assert state.set_odom_scale(1.16 + 5e-7) is False
+    assert state.odom_scale == pytest.approx(1.16)
+
+
+def test_commit_and_clear_reset_odom_scale_and_fire_on_change() -> None:
+    state = WorldFrameState()
+    calls: list[int] = []
+    state.set_on_change(lambda: calls.append(1))
+
+    T = np.eye(4, dtype=np.float64)
+    state.commit(T, method="manual_pose", approximate=False)
+    state.set_odom_scale(1.16)
+    state.set_odom_anchor_xy(5.0, 2.0)
+    calls.clear()
+
+    state.commit(T, method="manual_pose", approximate=False)
+    assert state.odom_scale == pytest.approx(ODOM_SCALE_INITIAL)
+    assert state.odom_anchor_xy == (0.0, 0.0)
+    assert len(calls) == 1
+
+    state.set_odom_scale(1.12)
+    state.set_odom_anchor_xy(3.0, 1.0)
+    calls.clear()
+    state.clear()
+    assert state.odom_scale == pytest.approx(1.0)
+    assert state.odom_anchor_xy == (0.0, 0.0)
+    assert len(calls) == 1
+
+
+def test_odom_scale_anchor_zero_jump_at_registration() -> None:
+    """Changing odom_scale must not move the registration odom pose in world."""
+    state = WorldFrameState()
+    odom_reg = (5.0, 0.0, 0.0)
+    world_reg = (1.0, 0.0, -2.0)
+    ori = (0.0, 0.0, 0.0, 1.0)
+    T_world_odom = pose_to_matrix(world_reg, ori) @ np.linalg.inv(
+        pose_to_matrix(odom_reg, ori)
+    )
+    state.commit(T_world_odom, method="april_tag", approximate=False)
+    state.set_odom_anchor_xy(odom_reg[0], odom_reg[1])
+
+    world_before, _ = state.transform_pose(odom_reg, ori)
+    assert np.allclose(world_before, world_reg, atol=1e-9)
+
+    state.set_odom_scale(1.16)
+    world_after, _ = state.transform_pose(odom_reg, ori)
+    assert np.allclose(world_after, world_reg, atol=1e-9)
+
+
+def test_odom_scale_anchor_point_invariant_and_scales_displacement() -> None:
+    state = WorldFrameState()
+    state.commit(np.eye(4, dtype=np.float64), method="manual_pose", approximate=False)
+    state.set_odom_anchor_xy(5.0, 0.0)
+    state.set_odom_scale(1.16)
+
+    anchor_world, _ = state.transform_pose((5.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    state.set_odom_scale(1.25)
+    anchor_world_rescaled, _ = state.transform_pose((5.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    assert np.allclose(anchor_world, anchor_world_rescaled, atol=1e-9)
+
+    displaced_world, _ = state.transform_pose((6.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    assert displaced_world[0] == pytest.approx(5.0 + 1.25 * 1.0, abs=1e-5)
+
+
+def test_odom_scale_inverse_transform_nav_goal_with_anchor() -> None:
+    state = WorldFrameState()
+    state.commit(np.eye(4, dtype=np.float64), method="manual_pose", approximate=False)
+    state.set_odom_anchor_xy(5.0, 0.0)
+    state.set_odom_scale(1.16)
+
+    odom_goal = state.inverse_transform_point((6.16, 0.0, 0.0))
+    assert odom_goal[0] == pytest.approx(6.0, abs=1e-9)
+    assert odom_goal[1] == pytest.approx(0.0, abs=1e-9)

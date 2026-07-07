@@ -42,6 +42,7 @@ from dimos.ar.robot_profile.base import (
 )
 from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker, RobotAprilTagTrackerConfig
 from dimos.ar.utils.console import console_divider
+from dimos.ar.utils.network import detect_lan_ip
 from dimos.ar.world_frame.refinement import WorldFrameRefiner
 from dimos.ar.world_frame.registry import WorldRegistry
 from dimos.ar.world_frame.state import WorldFrameState
@@ -387,7 +388,12 @@ class ARBridge(Module):  # type: ignore[misc]
         self._nav.start()
         host = global_config.listen_host
         logger.info("ARBridge started", websocket=f"ws://{host}:{self.config.port}")
-        console_divider(f"Bridge ready — ws://{host}:{self.config.port}")
+        lan_ip = detect_lan_ip()
+        subtitle = f"Spectacles: enter {lan_ip} in the lens" if lan_ip else None
+        console_divider(
+            f"Bridge ready — ws://{host}:{self.config.port}",
+            subtitle=subtitle,
+        )
         self._status.broadcast()
 
     @rpc

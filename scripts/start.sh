@@ -69,8 +69,9 @@ export PATH="$(dirname "${PYTHON}"):${PATH}"
 # Suppress harmless macOS dylib duplicate-class warnings from cv2/av fork clash.
 export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
 
-# Detect LAN IP for the user.
+# Detect LAN IP for the user (also passed to the bridge "Bridge ready" banner).
 LAN_IP="$(detect_lan_ip)"
+export DIMOS_AR_LAN_IP="${LAN_IP}"
 
 STACK_IDS=(
   "ar_go2"

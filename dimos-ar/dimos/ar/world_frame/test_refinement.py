@@ -15,6 +15,7 @@ from dimos.ar.bridge.telemetry import TelemetryPublisher
 from dimos.ar.lidar.filters import LidarFilter, LidarFilterConfig
 from dimos.ar.robot_profile.base import TagTrackingProfile
 from dimos.ar.tag_tracking.solve import (
+    TagObservation,
     TagSolve,
     _yaw_from_T,
     build_T_world_odom,
@@ -22,8 +23,8 @@ from dimos.ar.tag_tracking.solve import (
 from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker, RobotAprilTagTrackerConfig
 from dimos.ar.world_frame.refinement import WorldFrameRefiner
 from dimos.ar.world_frame.registry import WorldRegistry
-from dimos.ar.world_frame.state import WorldFrameState
-from dimos.ar.world_frame.transforms import OdomSample
+from dimos.ar.world_frame.state import ODOM_SCALE_INITIAL, WorldFrameState
+from dimos.ar.world_frame.transforms import OdomSample, pose_to_matrix
 
 
 def _make_world_frame_refiner(
@@ -336,6 +337,7 @@ def test_cruise_yaw_gate_failure_uses_translation_solve_far_from_origin() -> Non
     T_committed = build_T_world_odom(theta_committed, (0.0, 0.0, 0.0))
     refiner.set_refinement_baseline(T_committed)
     _commit_state(state, T_committed)
+    state.set_odom_anchor_xy(10.0, 0.0)
     odom._latest = OdomSample(  # type: ignore[attr-defined]
         position=(10.0, 0.0, 0.0),
         orientation=(0.0, 0.0, 0.0, 1.0),
@@ -475,3 +477,135 @@ def test_stop_yaw_solve_on_static_transition() -> None:
         if json.loads(payload).get("type") == "world_frame_correction"
     ]
     assert any(c.get("yaw_corrected") is True for c in corrections)
+
+
+def _scale_pair_observation(
+    *,
+    mono_ts: float,
+    p_odom_xy: tuple[float, float],
+    p_world_xz: tuple[float, float],
+    dist_cam_m: float = 1.0,
+) -> TagObservation:
+    T_world = np.eye(4, dtype=np.float64)
+    T_world[:3, 3] = (p_world_xz[0], 0.0, p_world_xz[1])
+    T_odom_base = np.eye(4, dtype=np.float64)
+    T_odom_base[0, 3] = p_odom_xy[0]
+    T_odom_base[1, 3] = p_odom_xy[1]
+    return TagObservation(
+        mono_ts=mono_ts,
+        tag_id=0,
+        p_world_tag=(p_world_xz[0], 0.0, p_world_xz[1]),
+        p_odom_tag=(p_odom_xy[0], p_odom_xy[1], 0.0),
+        T_world_tag=T_world,
+        T_odom_tag=T_world,
+        T_odom_base=T_odom_base,
+        quality=0.95,
+        reprojection_error_px=0.5,
+        dist_cam_m=dist_cam_m,
+    )
+
+
+def test_odom_scale_estimator_converges_from_valid_pairs() -> None:
+    refiner, tag_tracker, state, _odom, _sent, _registry = _make_world_frame_refiner()
+    state.commit(np.eye(4, dtype=np.float64), method="april_tag", approximate=False)
+    refiner.set_refinement_baseline(np.eye(4, dtype=np.float64))
+
+    tag_tracker._observations.append(
+        _scale_pair_observation(mono_ts=0.0, p_odom_xy=(0.0, 0.0), p_world_xz=(0.0, 0.0))
+    )
+    tag_tracker._observations.append(
+        _scale_pair_observation(mono_ts=1.0, p_odom_xy=(1.5, 0.0), p_world_xz=(1.74, 0.0))
+    )
+    refiner._maybe_update_odom_scale(resolved_odom=None)
+    tag_tracker._observations.append(
+        _scale_pair_observation(mono_ts=2.0, p_odom_xy=(3.0, 0.0), p_world_xz=(3.48, 0.0))
+    )
+    refiner._maybe_update_odom_scale(resolved_odom=None)
+
+    assert 1.05 <= state.odom_scale <= 1.18
+    assert state.odom_scale >= ODOM_SCALE_INITIAL
+
+
+def test_odom_scale_estimator_rejects_bad_pairs() -> None:
+    refiner, tag_tracker, state, _odom, _sent, _registry = _make_world_frame_refiner()
+    state.commit(np.eye(4, dtype=np.float64), method="april_tag", approximate=False)
+
+    tag_tracker._observations.append(_scale_pair_observation(mono_ts=0.0, p_odom_xy=(0.0, 0.0), p_world_xz=(0.0, 0.0)))
+    tag_tracker._observations.append(
+        _scale_pair_observation(mono_ts=1.0, p_odom_xy=(0.3, 0.0), p_world_xz=(0.35, 0.0))
+    )
+    refiner._maybe_update_odom_scale(resolved_odom=None)
+    assert state.odom_scale == pytest.approx(ODOM_SCALE_INITIAL)
+
+    tag_tracker._observations.clear()
+    tag_tracker._observations.append(_scale_pair_observation(mono_ts=0.0, p_odom_xy=(0.0, 0.0), p_world_xz=(0.0, 0.0)))
+    tag_tracker._observations.append(
+        _scale_pair_observation(mono_ts=1.0, p_odom_xy=(1.0, 0.0), p_world_xz=(-1.0, 0.0))
+    )
+    refiner._maybe_update_odom_scale(resolved_odom=None)
+    assert state.odom_scale == pytest.approx(ODOM_SCALE_INITIAL)
+
+
+def test_odom_scale_estimator_apply_deadband() -> None:
+    refiner, tag_tracker, state, _odom, _sent, _registry = _make_world_frame_refiner()
+    state.commit(np.eye(4, dtype=np.float64), method="april_tag", approximate=False)
+    state.set_odom_scale(1.16)
+
+    tag_tracker._observations.append(_scale_pair_observation(mono_ts=0.0, p_odom_xy=(0.0, 0.0), p_world_xz=(0.0, 0.0)))
+    tag_tracker._observations.append(
+        _scale_pair_observation(mono_ts=1.0, p_odom_xy=(1.5, 0.0), p_world_xz=(1.5 * 1.168, 0.0))
+    )
+    refiner._maybe_update_odom_scale(resolved_odom=None)
+    assert state.odom_scale == pytest.approx(1.16)
+
+    tag_tracker._observations.clear()
+    tag_tracker._observations.append(_scale_pair_observation(mono_ts=0.0, p_odom_xy=(0.0, 0.0), p_world_xz=(0.0, 0.0)))
+    tag_tracker._observations.append(
+        _scale_pair_observation(mono_ts=1.0, p_odom_xy=(1.5, 0.0), p_world_xz=(1.5 * 1.25, 0.0))
+    )
+    refiner._maybe_update_odom_scale(resolved_odom=None)
+    assert state.odom_scale > 1.16 + 0.01
+
+
+def test_odom_scale_resets_on_clear_and_reconverges() -> None:
+    refiner, tag_tracker, state, _odom, _sent, registry = _make_world_frame_refiner()
+    state.commit(np.eye(4, dtype=np.float64), method="april_tag", approximate=False)
+    state.set_odom_scale(1.15)
+    registry.clear()
+    assert state.odom_scale == pytest.approx(1.0)
+
+    state.commit(np.eye(4, dtype=np.float64), method="april_tag", approximate=False)
+    assert state.odom_scale == pytest.approx(ODOM_SCALE_INITIAL)
+    tag_tracker._observations.append(_scale_pair_observation(mono_ts=0.0, p_odom_xy=(0.0, 0.0), p_world_xz=(0.0, 0.0)))
+    tag_tracker._observations.append(
+        _scale_pair_observation(mono_ts=1.0, p_odom_xy=(1.5, 0.0), p_world_xz=(1.74, 0.0))
+    )
+    for _ in range(8):
+        refiner._maybe_update_odom_scale(resolved_odom=None)
+    assert state.odom_scale > 1.10
+
+
+def test_odom_scale_change_does_not_jump_registration_pose() -> None:
+    refiner, tag_tracker, state, _odom, _sent, _registry = _make_world_frame_refiner()
+    odom_reg = (5.0, 0.0, 0.0)
+    world_reg = (1.0, 0.0, -2.0)
+    ori = (0.0, 0.0, 0.0, 1.0)
+    T_world_odom = pose_to_matrix(world_reg, ori) @ np.linalg.inv(
+        pose_to_matrix(odom_reg, ori)
+    )
+    state.commit(T_world_odom, method="april_tag", approximate=False)
+    state.set_odom_anchor_xy(odom_reg[0], odom_reg[1])
+    refiner.set_refinement_baseline(T_world_odom)
+
+    world_before, _ = state.transform_pose(odom_reg, ori)
+
+    tag_tracker._observations.append(
+        _scale_pair_observation(mono_ts=0.0, p_odom_xy=(5.0, 0.0), p_world_xz=(1.0, -2.0))
+    )
+    tag_tracker._observations.append(
+        _scale_pair_observation(mono_ts=1.0, p_odom_xy=(6.5, 0.0), p_world_xz=(2.74, -2.0))
+    )
+    refiner._maybe_update_odom_scale(resolved_odom=None)
+
+    world_after, _ = state.transform_pose(odom_reg, ori)
+    assert np.linalg.norm(np.asarray(world_after) - np.asarray(world_before)) < 0.01

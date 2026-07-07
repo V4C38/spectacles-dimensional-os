@@ -58,6 +58,7 @@ from dimos.ar.tag_tracking.solve import (
     reprojection_error_px,
     solve_yaw_translation_2d,
 )
+from dimos.ar.world_frame.state import WorldFrameState
 from dimos.ar.world_frame.transforms import (
     OdomSample,
     gravity_level_transform,
@@ -477,6 +478,8 @@ class RobotAprilTagTracker:
         max_age_s: float | None = None,
         max_observations: int | None = None,
         max_dist_cam_m: float | None = None,
+        odom_scale: float = 1.0,
+        odom_anchor_xy: tuple[float, float] = (0.0, 0.0),
     ) -> TagSolve | None:
         with self._lock:
             observations = list(self._observations)
@@ -499,7 +502,15 @@ class RobotAprilTagTracker:
         straightness = _odom_tag_straightness(observations)
         if len(observations) >= 2 and baseline >= effective_min_baseline:
             u = np.array(
-                [(o.p_odom_tag[0], o.p_odom_tag[1]) for o in observations],
+                [
+                    WorldFrameState.scale_odom_xy(
+                        o.p_odom_tag[0],
+                        o.p_odom_tag[1],
+                        odom_scale=odom_scale,
+                        odom_anchor_xy=odom_anchor_xy,
+                    )
+                    for o in observations
+                ],
                 dtype=np.float64,
             )
             v = np.array(
@@ -589,6 +600,8 @@ class RobotAprilTagTracker:
         max_observations: int = 5,
         max_age_s: float | None = None,
         max_dist_cam_m: float | None = None,
+        odom_scale: float = 1.0,
+        odom_anchor_xy: tuple[float, float] = (0.0, 0.0),
     ) -> TagSolve | None:
         """Estimate a translation-only world<-odom update from recent tag sightings.
 
@@ -628,10 +641,20 @@ class RobotAprilTagTracker:
             self._maybe_log_mount_offset_diagnostic(obs, mount, T_keep)
             R_odom_base = obs.T_odom_base[:3, :3]
             p_odom_base = obs.T_odom_base[:3, 3]
+            scaled_x, scaled_y = WorldFrameState.scale_odom_xy(
+                float(p_odom_base[0]),
+                float(p_odom_base[1]),
+                odom_scale=odom_scale,
+                odom_anchor_xy=odom_anchor_xy,
+            )
+            p_odom_base_scaled = np.array(
+                [scaled_x, scaled_y, p_odom_base[2]],
+                dtype=np.float64,
+            )
             p_world_tag = obs.T_world_tag[:3, 3]
             p_base_tag = np.array(mount.position, dtype=np.float64)
             p_world_base = p_world_tag - (R_world_odom_keep @ R_odom_base) @ p_base_tag
-            t_world_odom = p_world_base - R_world_odom_keep @ p_odom_base
+            t_world_odom = p_world_base - R_world_odom_keep @ p_odom_base_scaled
             if not np.all(np.isfinite(t_world_odom)):
                 continue
             translations.append(t_world_odom)

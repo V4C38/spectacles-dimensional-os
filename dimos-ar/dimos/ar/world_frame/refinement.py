@@ -14,8 +14,9 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
-from dimos.ar.tag_tracking.solve import TagSolve, _yaw_from_T
+from dimos.ar.tag_tracking.solve import TagObservation, TagSolve, _yaw_from_T
 from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker
+from dimos.ar.world_frame.state import WorldFrameState
 from dimos.ar.world_frame.transforms import OdomSample, gravity_level_transform, pose_to_matrix
 from dimos.ar.world_frame.wire import encode_world_frame_correction
 from dimos.utils.logging_config import setup_logger
@@ -38,6 +39,13 @@ MIN_REPORTED_CORRECTION_YAW_DEG: float = 1.0
 FLOOR_Y_SHIM_THRESHOLD_M: float = 0.03
 FLOOR_Y_SHIM_PERSIST_S: float = 2.0
 FLOOR_Y_SHIM_MIN_INTERVAL_S: float = 2.0
+
+ODOM_SCALE_PAIR_MIN_ODOM_M: float = 0.5
+ODOM_SCALE_PAIR_MAX_ANGLE_DEG: float = 15.0
+ODOM_SCALE_PAIR_MAX_DIST_CAM_M: float = 2.5
+ODOM_SCALE_PAIR_MAX_AGE_S: float = 60.0
+ODOM_SCALE_APPLY_DEADBAND: float = 0.01
+ODOM_SCALE_EMA_GAIN: float = 0.25
 
 RuntimeRegime = Literal["static", "cruise", "fast"]
 
@@ -128,6 +136,8 @@ class WorldFrameRefiner:
         if not self._state.is_committed or not self._runtime_correction_enabled:
             return
 
+        self._maybe_update_odom_scale(resolved_odom=resolved_odom)
+
         profile = self._runtime_profile
         if resolved_odom is not None and resolved_odom.measured_speed_mps is not None:
             speed_mps = resolved_odom.measured_speed_mps
@@ -147,6 +157,8 @@ class WorldFrameRefiner:
         max_dist_cam_m = profile.runtime_solve_max_dist_cam_m
         translation_window_obs = profile.runtime_translation_window_obs
         translation_window_s = profile.runtime_translation_window_s
+        odom_scale = self._state.odom_scale
+        odom_anchor_xy = self._state.odom_anchor_xy
         use_yaw = False
         solve: TagSolve | None = None
 
@@ -157,6 +169,8 @@ class WorldFrameRefiner:
                 stop_solve = self._tag_tracker.current_solve(
                     max_age_s=profile.runtime_stop_yaw_window_s,
                     max_dist_cam_m=max_dist_cam_m,
+                    odom_scale=odom_scale,
+                    odom_anchor_xy=odom_anchor_xy,
                 )
                 if self._yaw_solve_eligible(stop_solve, profile):
                     solve = stop_solve
@@ -168,6 +182,8 @@ class WorldFrameRefiner:
                     max_observations=translation_window_obs,
                     max_age_s=translation_window_s,
                     max_dist_cam_m=max_dist_cam_m,
+                    odom_scale=odom_scale,
+                    odom_anchor_xy=odom_anchor_xy,
                 )
         else:
             if regime == "cruise":
@@ -175,6 +191,8 @@ class WorldFrameRefiner:
             full = self._tag_tracker.current_solve(
                 max_age_s=profile.runtime_cruise_window_s,
                 max_dist_cam_m=max_dist_cam_m,
+                odom_scale=odom_scale,
+                odom_anchor_xy=odom_anchor_xy,
             )
             use_yaw = self._yaw_solve_eligible(full, profile)
             if use_yaw and full is not None:
@@ -187,6 +205,8 @@ class WorldFrameRefiner:
                     max_observations=translation_window_obs,
                     max_age_s=translation_window_s,
                     max_dist_cam_m=max_dist_cam_m,
+                    odom_scale=odom_scale,
+                    odom_anchor_xy=odom_anchor_xy,
                 )
                 use_yaw = False
 
@@ -481,6 +501,7 @@ class WorldFrameRefiner:
         *,
         resolved_odom: OdomSample | None,
     ) -> np.ndarray:
+        # Floor lock recomputes world-y from live odom; x/y use odom_scale like other consumers.
         if not self._runtime_profile.flat_ground or self._floor_base_world_y is None:
             return T_new
         odom = resolved_odom if resolved_odom is not None else self._odom.latest()
@@ -489,7 +510,16 @@ class WorldFrameRefiner:
         T_locked = np.array(T_new, dtype=np.float64, copy=True)
         R_new = T_locked[:3, :3]
         p_odom = np.asarray(odom.position, dtype=np.float64)
-        T_locked[1, 3] = self._floor_base_world_y - float((R_new @ p_odom)[1])
+        odom_scale = self._state.odom_scale
+        anchor_xy = self._state.odom_anchor_xy
+        scaled_x, scaled_y = WorldFrameState.scale_odom_xy(
+            float(p_odom[0]),
+            float(p_odom[1]),
+            odom_scale=odom_scale,
+            odom_anchor_xy=anchor_xy,
+        )
+        p_odom_scaled = np.array([scaled_x, scaled_y, p_odom[2]], dtype=np.float64)
+        T_locked[1, 3] = self._floor_base_world_y - float((R_new @ p_odom_scaled)[1])
         return T_locked
 
     def _robot_base_world_position(self, odom: OdomSample | None) -> np.ndarray | None:
@@ -562,6 +592,106 @@ class WorldFrameRefiner:
         return gravity_level_transform(
             np.array(T_target, dtype=np.float64, copy=True),
         )
+
+    @staticmethod
+    def _observation_pair_metrics(
+        a: TagObservation,
+        b: TagObservation,
+        *,
+        T_world_odom: np.ndarray,
+    ) -> tuple[float, float, float]:
+        odom_a = np.array([a.T_odom_base[0, 3], a.T_odom_base[1, 3]], dtype=np.float64)
+        odom_b = np.array([b.T_odom_base[0, 3], b.T_odom_base[1, 3]], dtype=np.float64)
+        world_a = np.array([a.p_world_tag[0], -a.p_world_tag[2]], dtype=np.float64)
+        world_b = np.array([b.p_world_tag[0], -b.p_world_tag[2]], dtype=np.float64)
+        d_odom = odom_b - odom_a
+        d_world = world_b - world_a
+        d_odom_raw = float(np.linalg.norm(d_odom))
+        d_world_m = float(np.linalg.norm(d_world))
+        if d_odom_raw < 1e-9 or d_world_m < 1e-9:
+            return d_odom_raw, d_world_m, 180.0
+
+        d_odom_3 = np.array([d_odom[0], d_odom[1], 0.0], dtype=np.float64)
+        d_rot = T_world_odom[:3, :3] @ d_odom_3
+        d_odom_in_world_plane = np.array([d_rot[0], -d_rot[2]], dtype=np.float64)
+        d_odom_plane_len = float(np.linalg.norm(d_odom_in_world_plane))
+        if d_odom_plane_len < 1e-9:
+            return d_odom_raw, d_world_m, 180.0
+
+        cos_angle = float(
+            np.dot(d_odom_in_world_plane, d_world) / (d_odom_plane_len * d_world_m)
+        )
+        cos_angle = float(np.clip(cos_angle, -1.0, 1.0))
+        angle_deg = math.degrees(math.acos(cos_angle))
+        return d_odom_raw, d_world_m, angle_deg
+
+    def _maybe_update_odom_scale(
+        self,
+        *,
+        resolved_odom: OdomSample | None,
+    ) -> None:
+        observations = self._tag_tracker.recent_observations(
+            max_age_s=ODOM_SCALE_PAIR_MAX_AGE_S,
+        )
+        if len(observations) < 2:
+            return
+
+        earlier, later = observations[-2], observations[-1]
+        T_world_odom = self._state.current_transform()
+        if T_world_odom is None:
+            return
+
+        d_odom_raw, d_world_m, angle_deg = self._observation_pair_metrics(
+            earlier,
+            later,
+            T_world_odom=T_world_odom,
+        )
+        dt_s = abs(later.mono_ts - earlier.mono_ts)
+        if d_odom_raw >= 1e-9:
+            ratio = d_world_m / d_odom_raw
+            logger.info(
+                "odom_world_displacement_ratio",
+                ratio=round(ratio, 4),
+                d_odom_raw=round(d_odom_raw, 4),
+                d_world=round(d_world_m, 4),
+                angle_deg=round(angle_deg, 2),
+                dt_s=round(dt_s, 3),
+            )
+
+        if not (
+            d_odom_raw >= ODOM_SCALE_PAIR_MIN_ODOM_M
+            and angle_deg <= ODOM_SCALE_PAIR_MAX_ANGLE_DEG
+            and earlier.dist_cam_m <= ODOM_SCALE_PAIR_MAX_DIST_CAM_M
+            and later.dist_cam_m <= ODOM_SCALE_PAIR_MAX_DIST_CAM_M
+        ):
+            return
+
+        s_applied = self._state.odom_scale
+        s_target = d_world_m / d_odom_raw
+        s_new = s_applied + ODOM_SCALE_EMA_GAIN * (s_target - s_applied)
+        if abs(s_new - s_applied) <= ODOM_SCALE_APPLY_DEADBAND:
+            return
+
+        if not self._state.set_odom_scale(s_new):
+            return
+
+        s_applied = self._state.odom_scale
+        logger.info(
+            "odom_scale_updated",
+            applied=round(s_applied, 4),
+            s_target=round(s_target, 4),
+            d_odom=round(d_odom_raw, 4),
+        )
+        sample = resolved_odom if resolved_odom is not None else self._odom.latest()
+        if sample is not None:
+            snapshot_ts = (
+                sample.source_ts if sample.source_ts is not None else time.time()
+            )
+            self._telemetry.publish_pose_snapshot(
+                ts=snapshot_ts,
+                sample=sample,
+                force=True,
+            )
 
     def _commit_runtime_correction(
         self,

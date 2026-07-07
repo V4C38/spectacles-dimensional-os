@@ -303,7 +303,9 @@ class RegistrationFlowsMixin:
     def _preview_pose(self) -> dict[str, Any] | None:
         if self._session.mode != RegistrationMode.APRIL_TAG:
             return None
-        pose_result = self._tag_tracker.robot_world_pose_estimate(max_observations=2)
+        pose_result = self._tag_tracker.robot_world_pose_estimate(
+            max_observations=2,
+        )
         if pose_result is None or len(pose_result) < 3:
             return None
         pos, ori, _conf = pose_result

@@ -317,13 +317,26 @@ def test_publish_pose_logs_stale_odom_egress_age(monkeypatch: pytest.MonkeyPatch
     publisher.publish_pose(msg)  # type: ignore[arg-type]
 
     assert len(sender.text_payloads) == 1
-    logger.info.assert_called_once()
-    assert logger.info.call_args.args == ("odom egress age",)
-    fields = logger.info.call_args.kwargs
+    logger.warning.assert_called_once()
+    assert logger.warning.call_args.args == ("odom egress age",)
+    fields = logger.warning.call_args.kwargs
     assert fields["age_s"] >= 1.9
     assert fields["age_max_s"] >= 1.9
     assert fields["pose_hz_cap"] == 30.0
 
+
+def test_publish_pose_skips_odom_egress_age_log_when_fresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publisher, sender = _publisher()
+    msg = _FakePoseStamped(ts=time.time())
+    logger = MagicMock()
+    monkeypatch.setattr(telemetry_module, "logger", logger)
+
+    publisher.publish_pose(msg)  # type: ignore[arg-type]
+
+    assert len(sender.text_payloads) == 1
+    logger.warning.assert_not_called()
 
 def test_runtime_correction_pose_not_suppressed_after_recent_stream_emit() -> None:
     publisher, sender = _publisher()

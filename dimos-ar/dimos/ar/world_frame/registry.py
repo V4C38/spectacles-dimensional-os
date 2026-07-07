@@ -73,6 +73,8 @@ class WorldRegistry:
             sample = odom if odom is not None else (
                 self._odom_latest() if self._odom_latest is not None else None
             )
+            if sample is not None:
+                self._state.set_odom_anchor_xy(sample.position[0], sample.position[1])
             if sample is not None and self._refiner is not None:
                 T_odom_base = pose_to_matrix(sample.position, sample.orientation)
                 base_world = T_committed @ T_odom_base

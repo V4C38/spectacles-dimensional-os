@@ -43,7 +43,7 @@ NAV_WATCHDOG_POLL_INTERVAL_S: float = 0.5
 NAV_MESSAGE_AGE_LOG_INTERVAL_S: float = 5.0
 NAV_GOAL_UPDATE_DEDUP_DISTANCE_M: float = 0.15
 NAV_GOAL_UPDATE_DEDUP_INTERVAL_S: float = 0.25
-NAV_GOAL_REDISPATCH_MIN_DELTA_M: float = 0.05
+NAV_GOAL_REDISPATCH_MIN_DELTA_M: float = 0.15
 NAV_ARRIVAL_SHORTFALL_WARN_M: float = 0.25
 NAV_ERROR_ROBOT_OFFLINE: int = 503
 StallReason = str
@@ -312,7 +312,11 @@ class NavigateGoalHandler:
     def on_world_frame_corrected(self) -> None:
         with self._nav_watchdog_lock:
             session = self._session
-            if session is None or self._last_outcome is not None:
+            if (
+                session is None
+                or self._last_outcome is not None
+                or session.phase != "navigating"
+            ):
                 return
             position = session.position
             orientation = session.orientation
@@ -803,6 +807,7 @@ def _planar_odom_distance_m(
     a: tuple[float, float, float],
     b: tuple[float, float, float],
 ) -> float:
+    # Odom-frame internal distance for arrival shortfall; intentionally not scaled.
     dx = a[0] - b[0]
     dz = a[2] - b[2]
     return math.hypot(dx, dz)

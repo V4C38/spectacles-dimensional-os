@@ -15,6 +15,7 @@ from dimos.ar.tag_tracking.solve import (
     DEFAULT_MARKER_ID,
     TagMount,
     TagObservation,
+    TagSolve,
     _odom_tag_straightness,
     _yaw_from_T,
     build_camera_info,
@@ -664,4 +665,162 @@ def _synthetic_tag_observation(
         T_odom_base=np.eye(4),
         quality=0.9,
         reprojection_error_px=0.5,
+    )
+
+
+def test_current_translation_solve_odom_scale_recovers_under_reported_odom() -> None:
+    """With odom_scale=1.16, under-reported odom base anchors within 2 cm."""
+    mount = TagMount(tag_id=3, position=(0.12, -0.03, 0.05))
+    tracker = RobotAprilTagTracker([mount])
+    odom_scale = 1.16
+
+    yaw_world_odom = math.radians(20.0)
+    T_reference = build_T_world_odom(yaw_world_odom, (1.0, 0.5, -0.2))
+    R_world_odom = T_reference[:3, :3]
+
+    yaw_base = math.radians(-15.0)
+    cy, sy = math.cos(yaw_base), math.sin(yaw_base)
+    R_odom_base = np.array(
+        [[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    p_odom_base_true = np.array([2.0, -1.0, 0.1], dtype=np.float64)
+    p_odom_base_reported = p_odom_base_true / odom_scale
+    T_odom_base = np.eye(4, dtype=np.float64)
+    T_odom_base[:3, :3] = R_odom_base
+    T_odom_base[:3, 3] = p_odom_base_reported
+
+    p_base_tag = np.array(mount.position, dtype=np.float64)
+    R_world_base = R_world_odom @ R_odom_base
+    p_world_base_expected = np.array([0.4, 0.0, -0.3], dtype=np.float64)
+    p_world_tag = p_world_base_expected + R_world_base @ p_base_tag
+
+    T_world_tag = np.eye(4, dtype=np.float64)
+    T_world_tag[:3, 3] = p_world_tag
+
+    tracker._observations.append(
+        TagObservation(
+            mono_ts=1.0,
+            tag_id=3,
+            p_world_tag=tuple(p_world_tag),
+            p_odom_tag=(0.0, 0.0, 0.0),
+            T_world_tag=T_world_tag,
+            T_odom_tag=np.eye(4, dtype=np.float64),
+            T_odom_base=T_odom_base,
+            quality=0.95,
+            reprojection_error_px=0.5,
+        )
+    )
+
+    solve_wrong = tracker.current_translation_solve(
+        T_reference,
+        max_observations=1,
+        odom_scale=1.0,
+    )
+    solve_scaled = tracker.current_translation_solve(
+        T_reference,
+        max_observations=1,
+        odom_scale=odom_scale,
+    )
+    assert solve_wrong is not None
+    assert solve_scaled is not None
+
+    def base_error(solve: TagSolve) -> float:
+        p_world_base_solved = solve.T_world_odom[:3, 3] + R_world_odom @ p_odom_base_true
+        return float(np.linalg.norm(p_world_base_solved - p_world_base_expected))
+
+    assert base_error(solve_wrong) > 0.14
+    assert base_error(solve_scaled) < 0.02
+
+
+def test_current_translation_solve_odom_scale_with_nonzero_anchor() -> None:
+    """Anchored scale recovers under-reported odom when anchor is at registration."""
+    mount = TagMount(tag_id=3, position=(0.12, -0.03, 0.05))
+    tracker = RobotAprilTagTracker([mount])
+    odom_scale = 1.16
+    odom_anchor_xy = (2.0, -1.0)
+
+    yaw_world_odom = math.radians(20.0)
+    T_reference = build_T_world_odom(yaw_world_odom, (1.0, 0.5, -0.2))
+    R_world_odom = T_reference[:3, :3]
+
+    yaw_base = math.radians(-15.0)
+    cy, sy = math.cos(yaw_base), math.sin(yaw_base)
+    R_odom_base = np.array(
+        [[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    p_odom_base_true = np.array([2.0, -1.0, 0.1], dtype=np.float64)
+    anchor_xyz = np.array([*odom_anchor_xy, 0.0], dtype=np.float64)
+    p_odom_base_reported = anchor_xyz + (p_odom_base_true - anchor_xyz) / odom_scale
+    T_odom_base = np.eye(4, dtype=np.float64)
+    T_odom_base[:3, :3] = R_odom_base
+    T_odom_base[:3, 3] = p_odom_base_reported
+
+    p_base_tag = np.array(mount.position, dtype=np.float64)
+    R_world_base = R_world_odom @ R_odom_base
+    p_world_base_expected = np.array([0.4, 0.0, -0.3], dtype=np.float64)
+    p_world_tag = p_world_base_expected + R_world_base @ p_base_tag
+
+    T_world_tag = np.eye(4, dtype=np.float64)
+    T_world_tag[:3, 3] = p_world_tag
+
+    tracker._observations.append(
+        TagObservation(
+            mono_ts=1.0,
+            tag_id=3,
+            p_world_tag=tuple(p_world_tag),
+            p_odom_tag=(0.0, 0.0, 0.0),
+            T_world_tag=T_world_tag,
+            T_odom_tag=np.eye(4, dtype=np.float64),
+            T_odom_base=T_odom_base,
+            quality=0.95,
+            reprojection_error_px=0.5,
+        )
+    )
+
+    solve_scaled = tracker.current_translation_solve(
+        T_reference,
+        max_observations=1,
+        odom_scale=odom_scale,
+        odom_anchor_xy=odom_anchor_xy,
+    )
+    assert solve_scaled is not None
+
+    p_world_base_solved = solve_scaled.T_world_odom[:3, 3] + R_world_odom @ p_odom_base_true
+    err = float(np.linalg.norm(p_world_base_solved - p_world_base_expected))
+    assert err < 0.02
+
+
+def test_current_solve_rotation_invariant_to_odom_scale() -> None:
+    mount = TagMount(tag_id=0, position=(0.1, 0.0, 0.05))
+    tracker = RobotAprilTagTracker([mount], config=RobotAprilTagTrackerConfig(min_baseline_m=0.5))
+
+    def append_obs(mono_ts: float, p_odom_xy: tuple[float, float], p_world_xz: tuple[float, float]) -> None:
+        T_world = np.eye(4, dtype=np.float64)
+        T_world[:3, 3] = (p_world_xz[0], 0.0, p_world_xz[1])
+        tracker._observations.append(
+            TagObservation(
+                mono_ts=mono_ts,
+                tag_id=0,
+                p_world_tag=(p_world_xz[0], 0.0, p_world_xz[1]),
+                p_odom_tag=(p_odom_xy[0], p_odom_xy[1], 0.0),
+                T_world_tag=T_world,
+                T_odom_tag=T_world,
+                T_odom_base=np.eye(4, dtype=np.float64),
+                quality=0.95,
+                reprojection_error_px=0.5,
+            )
+        )
+
+    append_obs(0.0, (0.0, 0.0), (0.0, 0.0))
+    append_obs(1.0, (1.0, 0.0), (1.16, 0.0))
+
+    solve_unit = tracker.current_solve(min_baseline_m=0.5, odom_scale=1.0)
+    solve_scaled = tracker.current_solve(min_baseline_m=0.5, odom_scale=1.16)
+    assert solve_unit is not None
+    assert solve_scaled is not None
+    assert _yaw_from_T(solve_unit.T_world_odom) == pytest.approx(
+        _yaw_from_T(solve_scaled.T_world_odom),
+        abs=1e-6,
     )

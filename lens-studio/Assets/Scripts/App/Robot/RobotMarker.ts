@@ -80,15 +80,22 @@ type RuntimePoseTarget = {
 };
 
 class RuntimePoseAnimator {
-  private static readonly SMOOTHING_RATE_MIN = 14.0;
-  private static readonly SMOOTHING_RATE_MAX = 22.0;
+  /** Exponential smoothing rates tuned for infrequent, variable-rate odom ingress. */
+  private static readonly SMOOTHING_RATE_MIN = 5.0;
+  private static readonly SMOOTHING_RATE_MAX = 9.0;
   /** Rotation eases toward bridge samples; kept lower than position to avoid overshoot. */
-  private static readonly SMOOTHING_ROTATION_RATE = 12.0;
+  private static readonly SMOOTHING_ROTATION_RATE = 4.5;
   /** Linear speed at which position smoothing reaches ``SMOOTHING_RATE_MAX`` (cm/s). */
-  private static readonly SMOOTHING_SPEED_REF_CM_S = 30.0;
+  private static readonly SMOOTHING_SPEED_REF_CM_S = 25.0;
+  /**
+   * When pose age grows (extrapolating between odom samples), scale smoothing rate
+   * down toward this fraction so the marker glides instead of chasing stale targets.
+   */
+  private static readonly STALE_AGE_RATE_FACTOR = 0.35;
   private static readonly REALIGN_SNAP_BOOST_RATE = 28.0;
   private static readonly REALIGN_SNAP_DURATION_S = 0.15;
-  private static readonly MAX_EXTRAP_S = 0.35;
+  /** Bridge odom can arrive irregularly; allow longer velocity extrapolation between samples. */
+  private static readonly MAX_EXTRAP_S = 0.55;
   private static readonly MAX_EXTRAP_DISPLACEMENT_CM = 40.0;
   private static readonly POSE_AGE_LOG_INTERVAL_S = 2.0;
 
@@ -196,29 +203,14 @@ class RuntimePoseAnimator {
       return null;
     }
 
-    const positionRate = this._smoothingRate(now);
-    const rotationRate = this._rotationSmoothingRate(now);
-    const lead = RuntimePoseAnimator._clampDisplacement(
-      new vec3(
-        this._base.velocityCmPerS.x / positionRate,
-        this._base.velocityCmPerS.y / positionRate,
-        this._base.velocityCmPerS.z / positionRate,
-      ),
-    );
-    const leadYaw = this._base.yawRateRadPerS / rotationRate;
-    const halfLeadYaw = leadYaw * 0.5;
-    const leadYawQuat = new quat(Math.cos(halfLeadYaw), 0, Math.sin(halfLeadYaw), 0);
-    const targetPosition = new vec3(
-      predicted.position.x + lead.x,
-      predicted.position.y + lead.y,
-      predicted.position.z + lead.z,
-    );
-    const targetRotation = predicted.rotation.multiply(leadYawQuat);
+    const ageRateFactor = this._ageSmoothingFactor(now);
+    const positionRate = this._smoothingRate(now) * ageRateFactor;
+    const rotationRate = this._rotationSmoothingRate(now) * ageRateFactor;
     const smoothed = interpolatePose(
       current.position,
-      targetPosition,
+      predicted.position,
       current.rotation,
-      targetRotation,
+      predicted.rotation,
       dt,
       positionRate,
       rotationRate,
@@ -305,6 +297,16 @@ class RuntimePoseAnimator {
       return RuntimePoseAnimator.REALIGN_SNAP_BOOST_RATE;
     }
     return RuntimePoseAnimator.SMOOTHING_ROTATION_RATE;
+  }
+
+  /** Slow smoothing further while extrapolating aged odom between sparse updates. */
+  private _ageSmoothingFactor(now: number): number {
+    const ageS = this._poseAgeS(now, false);
+    const staleBlend = RuntimePoseAnimator._smoothstep01(
+      ageS / RuntimePoseAnimator.MAX_EXTRAP_S,
+    );
+    return 1.0
+      - (1.0 - RuntimePoseAnimator.STALE_AGE_RATE_FACTOR) * staleBlend;
   }
 
   private static _clampDisplacement(delta: vec3): vec3 {

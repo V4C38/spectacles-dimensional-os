@@ -24,10 +24,24 @@ def test_use_console_colors_respects_force_env(monkeypatch) -> None:
 
 def test_console_divider_plain_when_not_tty(capsys) -> None:
     with patch("dimos.ar.utils.console.use_console_colors", return_value=False):
-        console_divider("Bridge ready — ws://0.0.0.0:8787")
+        console_divider(
+            "Bridge ready — ws://0.0.0.0:8787",
+            subtitle="Spectacles: enter 192.168.1.5 in the lens",
+        )
     out = capsys.readouterr().out
     assert "Bridge ready — ws://0.0.0.0:8787" in out
+    assert "Spectacles: enter 192.168.1.5 in the lens" in out
     assert "\033[" not in out
+
+
+def test_console_divider_subtitle_ansi_when_tty(capsys) -> None:
+    with patch("dimos.ar.utils.console.use_console_colors", return_value=True):
+        console_divider("Bridge ready", subtitle="Spectacles: enter 10.0.0.1 in the lens")
+    out = capsys.readouterr().out
+    assert "Bridge ready" in out
+    assert "Spectacles: enter 10.0.0.1 in the lens" in out
+    assert "\033[" in out
+    assert out.count("-" * 50) == 2
 
 
 def test_console_divider_ansi_when_tty(capsys) -> None:

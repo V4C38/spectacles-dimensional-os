@@ -14,6 +14,7 @@ _BOLD = "\033[1m"
 _DIM = "\033[2m"
 _DIVIDER_RULE = "\033[0;36m"  # cyan
 _DIVIDER_TITLE = "\033[1;37m"  # bold white
+_DIVIDER_SUBTITLE = "\033[1;32m"  # bold green
 
 _STYLE_PREFIX = {
     "success": "\033[1;32m▸ ",  # bold green
@@ -32,15 +33,21 @@ def use_console_colors() -> bool:
     return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 
 
-def console_divider(title: str) -> None:
+def console_divider(title: str, *, subtitle: str | None = None) -> None:
     """Print a framed section divider to stdout (dimos-ar milestones only)."""
     if use_console_colors():
         rule = f"{_DIVIDER_RULE}{'-' * _DIVIDER_WIDTH}{_RESET}"
         centered = f"{_DIVIDER_TITLE}{title}{_RESET}"
-        sys.stdout.write(f"{rule}\n{centered}\n{rule}\n")
+        body = f"{rule}\n{centered}"
+        if subtitle:
+            body = f"{body}\n{_DIVIDER_SUBTITLE}{subtitle}{_RESET}"
+        sys.stdout.write(f"{body}\n{rule}\n")
     else:
         rule = "-" * _DIVIDER_WIDTH
-        sys.stdout.write(f"{rule}\n{title}\n{rule}\n")
+        body = f"{rule}\n{title}"
+        if subtitle:
+            body = f"{body}\n{subtitle}"
+        sys.stdout.write(f"{body}\n{rule}\n")
     sys.stdout.flush()
 
 

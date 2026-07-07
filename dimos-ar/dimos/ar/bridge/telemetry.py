@@ -28,7 +28,8 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
-ODOM_EGRESS_AGE_LOG_INTERVAL_S = 5.0
+ODOM_EGRESS_AGE_LOG_INTERVAL_S = 60.0
+ODOM_EGRESS_AGE_WARN_THRESHOLD_S = 0.5
 
 
 class TelemetryPublisher:
@@ -292,10 +293,14 @@ class TelemetryPublisher:
         if now - self._last_odom_egress_age_log_mono < ODOM_EGRESS_AGE_LOG_INTERVAL_S:
             return
         self._last_odom_egress_age_log_mono = now
-        logger.info(
+        age_max_s = self._odom_egress_age_max_s
+        self._odom_egress_age_max_s = 0.0
+        if age_max_s < ODOM_EGRESS_AGE_WARN_THRESHOLD_S:
+            return
+        logger.warning(
             "odom egress age",
             age_s=round(age_s, 3),
-            age_max_s=round(self._odom_egress_age_max_s, 3),
+            age_max_s=round(age_max_s, 3),
             pose_hz_cap=self._pose_max_hz,
             odom_z_m=round(odom_z_m, 4) if odom_z_m is not None else None,
             base_world_y_m=round(base_world_y_m, 4) if base_world_y_m is not None else None,
@@ -320,4 +325,3 @@ class TelemetryPublisher:
                 else None
             ),
         )
-        self._odom_egress_age_max_s = 0.0
