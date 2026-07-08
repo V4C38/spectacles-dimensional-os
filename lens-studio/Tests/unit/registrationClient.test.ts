@@ -89,7 +89,7 @@ describe("RegistrationClient", () => {
       mode: "april_tag",
       phase: "scanning",
       capture: "steady",
-      message: "Hold steady",
+      message: "",
     });
     expect(client.registrationCaptureHint).toBe("steady");
   });

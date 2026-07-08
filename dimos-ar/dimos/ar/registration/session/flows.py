@@ -32,7 +32,8 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 TAG_REGISTRATION_MIN_OBS = 4
-TAG_REGISTRATION_WINDOW_S = 5.0
+# Ack-limited camera frames arrive ~3–4 s apart; 5 s window caps at 2 obs (40% progress).
+TAG_REGISTRATION_WINDOW_S = 15.0
 TAG_REGISTRATION_MAX_SPREAD_M = 0.10
 TAG_REGISTRATION_MAX_YAW_SPREAD_DEG = 6.0
 TAG_REGISTRATION_MAX_DIST_M = 2.5
@@ -63,6 +64,7 @@ class RegistrationFlowsMixin:
         msg: RegistrationCommandMessage,
     ) -> None:
         self._clear_session()
+        self._registry.clear()
         start_mode = msg.mode
         if start_mode is None:
             logger.warning("registration_command start missing mode")
@@ -87,14 +89,12 @@ class RegistrationFlowsMixin:
                 )
                 return
 
-        self._registry.clear()
-
         if self._session.mode == RegistrationMode.APRIL_TAG:
             self._set_tag_tracker_active(True, reason="april_tag_start")
             self._broadcast_status(
                 phase=RegistrationPhase.SCANNING,
                 message="Look at the AprilTag on your robot",
-                capture=CaptureHint.STEADY,
+                capture=CaptureHint.BURST,
                 ts=msg.ts,
             )
         else:
@@ -176,13 +176,15 @@ class RegistrationFlowsMixin:
         logger.info("AprilTag registration stability gate passed — auto-committing")
         self._finish_registration(candidate, time.time())
 
-    def _tag_registration_stability_met(self) -> bool:
-        observations = self._tag_tracker.recent_observations(
+    def _april_tag_window_observations(self) -> list[Any]:
+        return self._tag_tracker.recent_observations(
             max_age_s=TAG_REGISTRATION_WINDOW_S,
         )
-        if len(observations) < TAG_REGISTRATION_MIN_OBS:
-            return False
 
+    def _april_tag_window_pose_samples(
+        self,
+        observations: list[Any],
+    ) -> tuple[list[np.ndarray], list[float]]:
         mounts = self._tag_tracker.mounts_snapshot()
         positions: list[np.ndarray] = []
         yaws: list[float] = []
@@ -194,26 +196,76 @@ class RegistrationFlowsMixin:
             T_world_base = T_world_tag @ np.linalg.inv(mount.T_base_tag)
             positions.append(T_world_base[:3, 3])
             yaws.append(_yaw_from_T(T_world_base))
+        return positions, yaws
 
+    def _april_tag_window_spread_m(self, positions: list[np.ndarray]) -> float | None:
+        if len(positions) < TAG_REGISTRATION_MIN_OBS:
+            return None
+        arr = np.stack(positions, axis=0)
+        center = np.median(arr, axis=0)
+        return float(np.max(np.linalg.norm(arr - center, axis=1)))
+
+    def _april_tag_window_max_yaw_delta_deg(self, yaws: list[float]) -> float | None:
+        if len(yaws) < 2:
+            return 0.0
+        sin_sum = sum(math.sin(y) for y in yaws)
+        cos_sum = sum(math.cos(y) for y in yaws)
+        mean_yaw = math.atan2(sin_sum, cos_sum)
+        max_yaw_delta = max(
+            abs(math.atan2(math.sin(y - mean_yaw), math.cos(y - mean_yaw)))
+            for y in yaws
+        )
+        return math.degrees(max_yaw_delta)
+
+    def _april_tag_progress_percent(self, phase: RegistrationPhase) -> int | None:
+        if self._session.mode != RegistrationMode.APRIL_TAG:
+            return None
+        if phase == RegistrationPhase.SUCCEEDED:
+            return 100
+        if phase != RegistrationPhase.SCANNING:
+            return None
+        if not self._tag_tracker.has_camera_info():
+            return 0
+        if not self._tag_tracker.last_tag_detected:
+            return 0
+
+        observations = self._april_tag_window_observations()
+        count = len(observations)
+        sample_fraction = min(count / TAG_REGISTRATION_MIN_OBS, 1.0)
+        sample_part = sample_fraction * 0.8
+
+        stability_part = 0.0
+        if count >= TAG_REGISTRATION_MIN_OBS:
+            positions, yaws = self._april_tag_window_pose_samples(observations)
+            if len(positions) >= TAG_REGISTRATION_MIN_OBS:
+                spread_m = self._april_tag_window_spread_m(positions)
+                max_yaw_deg = self._april_tag_window_max_yaw_delta_deg(yaws)
+                spread_score = 1.0
+                yaw_score = 1.0
+                if spread_m is not None:
+                    spread_score = 1.0 - min(spread_m / TAG_REGISTRATION_MAX_SPREAD_M, 1.0)
+                if max_yaw_deg is not None:
+                    yaw_score = 1.0 - min(max_yaw_deg / TAG_REGISTRATION_MAX_YAW_SPREAD_DEG, 1.0)
+                stability_part = min(spread_score, yaw_score) * 0.2
+
+        return max(0, min(100, round((sample_part + stability_part) * 100)))
+
+    def _tag_registration_stability_met(self) -> bool:
+        observations = self._april_tag_window_observations()
+        if len(observations) < TAG_REGISTRATION_MIN_OBS:
+            return False
+
+        positions, yaws = self._april_tag_window_pose_samples(observations)
         if len(positions) < TAG_REGISTRATION_MIN_OBS:
             return False
 
-        arr = np.stack(positions, axis=0)
-        center = np.median(arr, axis=0)
-        spread_m = float(np.max(np.linalg.norm(arr - center, axis=1)))
-        if spread_m > TAG_REGISTRATION_MAX_SPREAD_M:
+        spread_m = self._april_tag_window_spread_m(positions)
+        if spread_m is None or spread_m > TAG_REGISTRATION_MAX_SPREAD_M:
             return False
 
-        if len(yaws) >= 2:
-            sin_sum = sum(math.sin(y) for y in yaws)
-            cos_sum = sum(math.cos(y) for y in yaws)
-            mean_yaw = math.atan2(sin_sum, cos_sum)
-            max_yaw_delta = max(
-                abs(math.atan2(math.sin(y - mean_yaw), math.cos(y - mean_yaw)))
-                for y in yaws
-            )
-            if math.degrees(max_yaw_delta) > TAG_REGISTRATION_MAX_YAW_SPREAD_DEG:
-                return False
+        max_yaw_deg = self._april_tag_window_max_yaw_delta_deg(yaws)
+        if max_yaw_deg is not None and max_yaw_deg > TAG_REGISTRATION_MAX_YAW_SPREAD_DEG:
+            return False
 
         return True
 
@@ -296,8 +348,7 @@ class RegistrationFlowsMixin:
         if not self._tag_tracker.has_camera_info():
             return "Waiting for camera intrinsics..."
         if self._tag_tracker.last_tag_detected:
-            count = self._tag_tracker.observation_count()
-            return f"Tag detected — collecting samples ({count})"
+            return ""
         return "Look at the AprilTag on your robot"
 
     def _preview_pose(self) -> dict[str, Any] | None:
@@ -327,13 +378,17 @@ class RegistrationFlowsMixin:
         effective_capture = capture or (prev.capture if prev is not None else CaptureHint.OFF)
         if message:
             effective_message = message
-        elif prev is not None:
-            effective_message = prev.message
         else:
             effective_message = self._default_message()
 
         if tag_visible is None and effective_mode == RegistrationMode.APRIL_TAG:
             tag_visible = self._tag_tracker.last_tag_detected
+
+        progress = (
+            self._april_tag_progress_percent(effective_phase)
+            if effective_mode == RegistrationMode.APRIL_TAG
+            else None
+        )
 
         payload = RegistrationStatusPayload(
             mode=effective_mode,
@@ -342,6 +397,7 @@ class RegistrationFlowsMixin:
             message=effective_message,
             tag_visible=tag_visible,
             preview_pose=self._preview_pose(),
+            progress=progress,
         )
         self._session.last_status = payload
         self._sender.send(

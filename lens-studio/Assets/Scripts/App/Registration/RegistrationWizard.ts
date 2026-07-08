@@ -118,7 +118,9 @@ export class RegistrationWizard extends BaseScriptComponent {
     const inRuntime =
       this.arBridgeCoordinator !== null &&
       isRuntimePhase(this.arBridgeCoordinator.appState);
-    if (!inRuntime) {
+    if (inRuntime) {
+      this.arBridgeCoordinator?.enterRegistration({ preserveBridge: true });
+    } else {
       this.arBridgeCoordinator?.enterRegistration();
     }
     const panel = this.getSceneObject();

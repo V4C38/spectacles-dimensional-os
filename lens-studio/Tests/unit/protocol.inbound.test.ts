@@ -150,11 +150,13 @@ describe("parseInboundMessage", () => {
         capture: "steady",
         message: "Look at tag",
         tag_visible: true,
+        progress: 55,
       }),
     );
     expect(msg!.type).toBe("registration_status");
     expect((msg as { phase: string }).phase).toBe("scanning");
     expect((msg as { capture: string }).capture).toBe("steady");
+    expect((msg as { progress: number }).progress).toBe(55);
   });
 
   it("parses camera_frame_ack", () => {

@@ -24,6 +24,7 @@ import {
   Z_CONTENT,
 } from "../UI/UIKit";
 import {
+  buildAlignmentProgressPercent,
   buildAlignmentTitle,
   isRegistrationPreviewPhase,
   RegistrationViewState,
@@ -191,6 +192,7 @@ export interface RegistrationPreviewPresentation {
   titleText: string;
   statusText: string;
   statusColor: vec4;
+  progressPercent: number | null;
 }
 
 export function buildRegistrationPreviewPresentation(
@@ -199,9 +201,10 @@ export function buildRegistrationPreviewPresentation(
   return {
     titleText: buildAlignmentTitle(state),
     statusText: state.tagVisible
-      ? "✅ Tag visible"
+      ? "✅ Tag detected - keep in view"
       : "❌ Tag not visible",
     statusColor: state.tagVisible ? COLOR_SUCCESS : COLOR_ERROR,
+    progressPercent: buildAlignmentProgressPercent(state),
   };
 }
 
@@ -215,6 +218,7 @@ export class RegistrationPreviewPresenter {
   ) {}
   private _tagVisible = false;
   private _message = "";
+  private _progress: number | undefined = undefined;
   private _phase: RegistrationPhase = "scanning";
   private _priorRuntimeMode: OperatingMode = "manual";
   private _priorLidarMode: LidarDisplayMode = "off";
@@ -229,6 +233,7 @@ export class RegistrationPreviewPresenter {
     this._active = true;
     this._tagVisible = false;
     this._message = "";
+    this._progress = undefined;
     this._phase = "scanning";
     const ui = this.robotPresenter?.robotMarker?.ui;
     ui?.setRegistrationPreviewActive(true);
@@ -242,6 +247,9 @@ export class RegistrationPreviewPresenter {
     }
     this._tagVisible = msg.tag_visible ?? this._tagVisible;
     this._message = msg.message || this._message;
+    if (typeof msg.progress === "number") {
+      this._progress = msg.progress;
+    }
     this._phase = msg.phase;
     const previewPose = msg.preview_pose ?? null;
     const previewStageActive = isRegistrationPreviewPhase(msg.phase);
@@ -277,14 +285,13 @@ export class RegistrationPreviewPresenter {
         phase: this._phase,
         message: this._message,
         tagVisible: this._tagVisible,
+        progress: this._progress,
       });
       ui?.applyAssistOverlay({
         titleText: presentation.titleText,
         statusText: presentation.statusText,
         statusColor: presentation.statusColor,
-        showWizardMenu: false,
-        showContinue: false,
-        continueInactive: false,
+        progressPercent: presentation.progressPercent,
         showStop: false,
       });
     }
@@ -299,9 +306,7 @@ export class RegistrationPreviewPresenter {
       titleText: "Registration complete",
       statusText: "Registration complete",
       statusColor: GREEN,
-      showWizardMenu: false,
-      showContinue: false,
-      continueInactive: false,
+      progressPercent: 100,
       showStop: false,
     });
   }
@@ -318,9 +323,7 @@ export class RegistrationPreviewPresenter {
       titleText: "",
       statusText: "",
       statusColor: COLOR_SUCCESS,
-      showWizardMenu: false,
-      showContinue: false,
-      continueInactive: false,
+      progressPercent: null,
       showStop: false,
     });
     ui?.setMenuVisible(false);

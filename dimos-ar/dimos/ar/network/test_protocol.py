@@ -397,6 +397,23 @@ def test_encode_registration_status() -> None:
     assert "progress" not in raw
 
 
+def test_encode_registration_status_with_progress() -> None:
+    raw = json.loads(
+        encode_registration_status(
+            ts=1.0,
+            status=RegistrationStatusPayload(
+                mode=RegistrationMode.APRIL_TAG,
+                phase=RegistrationPhase.SCANNING,
+                capture=CaptureHint.STEADY,
+                message="",
+                tag_visible=True,
+                progress=40,
+            ),
+        )
+    )
+    assert raw["progress"] == 40
+
+
 def test_encode_registration_status_manual() -> None:
     raw = json.loads(
         encode_registration_status(

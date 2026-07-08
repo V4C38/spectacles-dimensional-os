@@ -139,6 +139,8 @@ export interface RegistrationStatusMessage {
   message: string;
   tag_visible?: boolean;
   preview_pose?: RegistrationPreviewPose;
+  /** AprilTag registration progress 0–100; present during `april_tag` scanning/succeeded. */
+  progress?: number;
 }
 
 /** camera_frame_ack contains only seq. */
@@ -706,6 +708,9 @@ function parseInboundObject(
       const previewPose = parsePreviewPose(data.preview_pose);
       if (previewPose) {
         msg.preview_pose = previewPose;
+      }
+      if (typeof data.progress === "number" && Number.isFinite(data.progress)) {
+        msg.progress = Math.max(0, Math.min(100, Math.round(data.progress)));
       }
       return msg;
     }

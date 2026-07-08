@@ -120,11 +120,11 @@ class RegistrationSession(
         was_active = (
             self._session.mode is not None or self._session.pending_candidate is not None
         )
+        if not was_active:
+            return
         self._set_tag_tracker_active(False, reason="session_stop")
         self._stop_broadcast()
         self._clear_session()
-        if not was_active:
-            return
         logger.info("AR registration stopped")
         self._broadcast_status(
             phase=RegistrationPhase.IDLE,

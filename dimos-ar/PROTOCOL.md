@@ -317,6 +317,7 @@ Registration progress during a setup session:
   "capture": "steady",
   "message": "Look at the AprilTag on your robot",
   "tag_visible": true,
+  "progress": 40,
   "preview_pose": {
     "position": [1.2, 0.0, -2.0],
     "orientation": [0.0, 0.0, 0.383, 0.924]
@@ -337,6 +338,11 @@ Fields:
   configured robot-mounted tag was detected in the most recent processed frame
 - `preview_pose` (optional): estimated robot pose in world frame (`position` xyz
   metres, `orientation` quaternion xyzw); omitted until a solve is available
+- `progress` (optional): AprilTag registration progress **0–100**; present while
+  `mode` is `"april_tag"` during `scanning` and `succeeded`. Reflects sample
+  collection and stability in the bridge stability window; may decrease when
+  observations fall out of the window or stability checks worsen. Clients should
+  display this value directly rather than inferring progress from `message`.
 
 During AprilTag registration (`mode: "april_tag"`), the bridge uses
 `capture: "steady"` while collecting tag observations and auto-commits when

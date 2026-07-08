@@ -40,6 +40,7 @@ class RegistrationStatusPayload:
     message: str
     tag_visible: bool | None = None
     preview_pose: dict[str, Any] | None = None
+    progress: int | None = None
 
 
 def encode_registration_status(
@@ -60,4 +61,6 @@ def encode_registration_status(
         payload["tag_visible"] = status.tag_visible
     if status.preview_pose is not None:
         payload["preview_pose"] = status.preview_pose
+    if status.progress is not None:
+        payload["progress"] = status.progress
     return _dumps(payload)

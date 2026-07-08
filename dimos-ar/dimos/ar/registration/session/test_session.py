@@ -99,6 +99,7 @@ def test_registration_command_start_april_tag_broadcasts_scanning() -> None:
     assert sent
     assert '"type":"registration_status"' in sent[-1]
     assert '"phase":"scanning"' in sent[-1]
+    assert '"capture":"burst"' in sent[-1]
 
 
 def test_registration_command_start_april_tag_fails_without_mounts() -> None:
@@ -178,6 +179,8 @@ def test_apply_tracker_update_broadcasts_during_scanning() -> None:
     sent.clear()
     tag_tracker.active = True
     tag_tracker.last_tag_detected = True
+    tag_tracker.observation_count.return_value = 2
+    tag_tracker.recent_observations.return_value = _stable_observations(2)
     session._session.last_status = RegistrationStatusPayload(
         mode=RegistrationMode.APRIL_TAG,
         phase=RegistrationPhase.SCANNING,
@@ -193,6 +196,34 @@ def test_apply_tracker_update_broadcasts_during_scanning() -> None:
 
     assert sent
     assert '"phase":"scanning"' in sent[-1]
+    assert '"message":""' in sent[-1]
+    assert '"progress":40' in sent[-1]
+
+
+def test_periodic_broadcast_includes_bridge_progress() -> None:
+    session, sent, _registry, tag_tracker = _make_session()
+    session.on_registration_command(
+        RegistrationCommandMessage(
+            ts=1.0, robot_id="test_robot", command="start", mode="april_tag"
+        ),
+        MagicMock(),
+    )
+    sent.clear()
+    tag_tracker.last_tag_detected = True
+    tag_tracker.recent_observations.return_value = _stable_observations(2)
+    session._session.last_status = RegistrationStatusPayload(
+        mode=RegistrationMode.APRIL_TAG,
+        phase=RegistrationPhase.SCANNING,
+        capture=CaptureHint.STEADY,
+        message="Look at the AprilTag on your robot",
+        tag_visible=True,
+        preview_pose=None,
+    )
+
+    session._broadcast_status()
+
+    assert sent
+    assert '"progress":40' in sent[-1]
 
 
 def test_tag_registration_auto_commit_when_stable() -> None:
@@ -250,13 +281,14 @@ def test_broadcast_loop_auto_commits_when_tag_stable() -> None:
 
 
 def test_registration_command_stop_preserves_committed_registration_when_idle() -> None:
-    session, _sent, registry, _tag_tracker = _make_session()
+    session, _sent, registry, tag_tracker = _make_session()
     registry.state.commit(
         np.eye(4, dtype=np.float64),
         method="manual_pose",
         approximate=False,
     )
     assert registry.state.is_committed
+    tag_tracker.active = True
 
     session.on_registration_command(
         RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="stop"),
@@ -264,7 +296,131 @@ def test_registration_command_stop_preserves_committed_registration_when_idle() 
     )
 
     assert registry.state.is_committed
+    assert tag_tracker.active is True
     session._status.broadcast.assert_not_called()
+
+
+def test_idle_stop_is_noop_when_session_inactive() -> None:
+    session, _sent, registry, tag_tracker = _make_session()
+    registry.state.commit(
+        np.eye(4, dtype=np.float64),
+        method="april_tag",
+        approximate=False,
+    )
+    tag_tracker.active = False
+    tag_tracker.reset_window = MagicMock()
+
+    session.on_registration_command(
+        RegistrationCommandMessage(ts=1.0, robot_id="test_robot", command="stop"),
+        MagicMock(),
+    )
+
+    assert session._session.mode is None
+    tag_tracker.reset_window.assert_not_called()
+
+
+def test_active_stop_clears_april_tag_session() -> None:
+    session, sent, _registry, tag_tracker = _make_session()
+    session.on_registration_command(
+        RegistrationCommandMessage(
+            ts=1.0, robot_id="test_robot", command="start", mode="april_tag"
+        ),
+        MagicMock(),
+    )
+    assert session._session.mode == RegistrationMode.APRIL_TAG
+    sent.clear()
+
+    session.on_registration_command(
+        RegistrationCommandMessage(ts=2.0, robot_id="test_robot", command="stop"),
+        MagicMock(),
+    )
+
+    assert session._session.mode is None
+    assert tag_tracker.active is False
+    assert sent
+    assert '"phase":"idle"' in sent[-1]
+
+
+def _spaced_observations(
+    *,
+    count: int,
+    spacing_s: float,
+    newest_mono: float,
+) -> list[TagObservation]:
+    observations: list[TagObservation] = []
+    for i in range(count):
+        mono_ts = newest_mono - spacing_s * (count - 1 - i)
+        T_world_tag = np.eye(4, dtype=np.float64)
+        T_world_tag[:3, 3] = [1.0 + i * 0.001, 0.0, -2.0]
+        observations.append(
+            TagObservation(
+                mono_ts=mono_ts,
+                tag_id=0,
+                p_world_tag=(1.0 + i * 0.001, 0.0, -2.0),
+                p_odom_tag=(0.0, 0.0, 0.0),
+                T_world_tag=T_world_tag,
+                T_odom_tag=np.eye(4, dtype=np.float64),
+                T_odom_base=np.eye(4, dtype=np.float64),
+                quality=0.9,
+                reprojection_error_px=1.0,
+            )
+        )
+    return observations
+
+
+def test_tag_registration_stability_with_realistic_frame_spacing() -> None:
+    session, _sent, registry, tag_tracker = _make_session()
+    registry.state.commit(
+        np.eye(4, dtype=np.float64),
+        method="april_tag",
+        approximate=False,
+    )
+    session.on_registration_command(
+        RegistrationCommandMessage(
+            ts=1.0, robot_id="test_robot", command="start", mode="april_tag",
+        ),
+        MagicMock(),
+    )
+    assert not registry.state.is_committed
+    newest = time.monotonic()
+    tag_tracker.recent_observations.return_value = _spaced_observations(
+        count=TAG_REGISTRATION_MIN_OBS,
+        spacing_s=3.5,
+        newest_mono=newest,
+    )
+
+    assert session._tag_registration_stability_met() is True
+
+
+def test_second_registration_start_clears_committed_world_frame_before_mode() -> None:
+    registry = WorldRegistry(WorldFrameState(), tf_publish_static=lambda _tf: None)
+    registry.state.commit(
+        np.eye(4, dtype=np.float64),
+        method="april_tag",
+        approximate=False,
+    )
+    session, _sent, _registry, tag_tracker = _make_session(registry=registry)
+    clear_calls: list[str] = []
+
+    original_clear = registry.clear
+
+    def tracked_clear() -> None:
+        clear_calls.append("registry")
+        original_clear()
+
+    registry.clear = tracked_clear  # type: ignore[method-assign]
+
+    session.on_registration_command(
+        RegistrationCommandMessage(
+            ts=1.0, robot_id="test_robot", command="start", mode="april_tag",
+        ),
+        MagicMock(),
+    )
+
+    assert clear_calls == ["registry"]
+    assert not registry.state.is_committed
+    assert session._session.mode == RegistrationMode.APRIL_TAG
+    assert tag_tracker.active is True
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ export interface RegistrationViewState {
   phase: RegistrationPhase;
   message: string;
   tagVisible: boolean;
+  progress?: number;
   previewPose?: RegistrationStatusMessage["preview_pose"];
 }
 
@@ -73,7 +74,7 @@ export const REGISTRATION_STATUS_MANUAL = "Complete to confirm manual Registrati
 
 export const WIZARD_STEP_DESCRIPTIONS: string[] = [
   "Power on your robot.\nRun ./scripts/start.sh on your Mac.",
-  "Enter your Mac's IP.\nWait for ./scripts/start.sh to print \"Bridge ready\".\nUse same Wi‑Fi for robot, Mac, and Spectacles.",
+  "Enter your Mac's IP.\nUse same Wi‑Fi for robot, Mac, and Spectacles.",
   buildRegistrationDescriptionAuto(NO_ROBOT_CONNECTED_LABEL),
 ];
 
@@ -122,21 +123,27 @@ export function isRegistrationFailed(state: RegistrationViewState): boolean {
 
 const MANUAL_CANDIDATE_SYNC_INTERVAL_S = 0.35;
 const NO_RESPONSE_STATUS_MSG = "Bridge not responding";
+const REGISTRATION_STALL_PROGRESS_THRESHOLD = 40;
+const REGISTRATION_STALL_TIMEOUT_S = 15.0;
 
 export function buildRegistrationDetailText(state: RegistrationViewState): string {
   return state.message || "";
 }
 
-// Mirror dimos-ar TAG_REGISTRATION_MIN_OBS = 4
-export const TAG_REGISTRATION_MIN_OBS = 4;
-
-export function parseRegistrationSampleCount(message: string): number | null {
-  const match = message.match(/collecting samples\s*\((\d+)\)/i);
-  return match ? parseInt(match[1], 10) : null;
+export function buildAlignmentProgressPercent(
+  state: RegistrationViewState,
+): number | null {
+  if (typeof state.progress === "number" && Number.isFinite(state.progress)) {
+    return Math.max(0, Math.min(100, Math.round(state.progress)));
+  }
+  if (state.phase === "succeeded") {
+    return 100;
+  }
+  return null;
 }
 
-export function isRedundantLookAtTagMessage(message: string): boolean {
-  return /look at the april\s*tag/i.test(message);
+export function formatRegistrationProgressText(percent: number): string {
+  return `${Math.round(percent)}%`;
 }
 
 export function buildAlignmentTitle(state: RegistrationViewState): string {
@@ -145,14 +152,6 @@ export function buildAlignmentTitle(state: RegistrationViewState): string {
   }
   if (/waiting for camera intrinsics/i.test(state.message)) {
     return "Starting…";
-  }
-  const sampleCount = parseRegistrationSampleCount(state.message);
-  if (sampleCount !== null) {
-    const pct = Math.min(
-      100,
-      Math.round((sampleCount / TAG_REGISTRATION_MIN_OBS) * 100),
-    );
-    return `Alignment ${pct}%`;
   }
   return "Registration";
 }
@@ -174,8 +173,9 @@ export function applyRegistrationStatusToViewState(
   return {
     ...state,
     phase: msg.phase,
-    message: msg.message || state.message,
+    message: msg.message,
     tagVisible: msg.tag_visible ?? state.tagVisible,
+    progress: msg.progress,
     previewPose: msg.preview_pose ?? state.previewPose,
   };
 }
@@ -211,7 +211,7 @@ export function buildRegistrationDisplay(
       };
     }
     const tagStatus = state.tagVisible
-      ? { text: "✅  Tag visible", color: COLOR_SUCCESS }
+      ? { text: "✅  Tag detected - keep in view", color: COLOR_SUCCESS }
       : { text: "❌  Tag not visible", color: COLOR_ERROR };
     let detailText = buildRegistrationDetailText(state);
     if (!state.tagVisible && isRegistrationPreviewPhase(state.phase)) {
@@ -323,6 +323,9 @@ export class RegistrationFlow {
   private _lastLoggedRegistrationStatusKey = "";
   private _commitInFlight = false;
   private _finishRegistrationDispatched = false;
+  private _stallRecoveryProgress: number | null = null;
+  private _stallRecoverySince = -1;
+  private _stallRecoveryAttempted = false;
 
   constructor(
     private readonly _coordinator: ARBridgeCoordinator | null,
@@ -532,6 +535,8 @@ export class RegistrationFlow {
       return;
     }
 
+    this._maybeRecoverStalledAutoRegistration();
+
     if (
       this._state.mode !== "manual" ||
       isRegistrationPendingCommit(this._state, this._commitInFlight) ||
@@ -601,9 +606,14 @@ export class RegistrationFlow {
     this._commitInFlight = false;
     this._finishRegistrationDispatched = false;
     this._lastManualCandidateSyncTime = -1;
+    this._resetStallRecovery();
     this._state = createRegistrationViewState();
     this._registrationClient?.cancelPlacement();
-    this._registrationClient?.stop({ notifyBridge: true });
+    if (this._registrationClient?.hasActiveIntent()) {
+      this._registrationClient?.stop({ notifyBridge: true });
+    } else {
+      this._registrationClient?.stop();
+    }
     this._registrationClient?.clearPose();
     this._robotRuntime?.applyInteractionFromState();
     this._frameCapture?.setCaptureErrorHandler(() => {
@@ -674,5 +684,55 @@ export class RegistrationFlow {
       return;
     }
     this._callbacks.scheduleFinishRegistration(1.5);
+  }
+
+  private _resetStallRecovery(): void {
+    this._stallRecoveryProgress = null;
+    this._stallRecoverySince = -1;
+    this._stallRecoveryAttempted = false;
+  }
+
+  private _maybeRecoverStalledAutoRegistration(): void {
+    if (
+      this._state.mode !== "auto" ||
+      !isRegistrationPreviewPhase(this._state.phase) ||
+      !this._registrationClient?.hasActiveIntent() ||
+      !this._bridgeRuntime?.hasConnection() ||
+      this._stallRecoveryAttempted
+    ) {
+      return;
+    }
+
+    const progress = buildAlignmentProgressPercent(this._state);
+    if (
+      progress === null ||
+      progress > REGISTRATION_STALL_PROGRESS_THRESHOLD ||
+      progress === 100
+    ) {
+      this._resetStallRecovery();
+      return;
+    }
+
+    const now = getTime();
+    if (this._stallRecoveryProgress !== progress) {
+      this._stallRecoveryProgress = progress;
+      this._stallRecoverySince = now;
+      return;
+    }
+
+    if (
+      this._stallRecoverySince < 0 ||
+      now - this._stallRecoverySince < REGISTRATION_STALL_TIMEOUT_S
+    ) {
+      return;
+    }
+
+    this._stallRecoveryAttempted = true;
+    this._callbacks.log(
+      `auto registration stalled at ${progress}% — resending bridge session`,
+    );
+    if (this._registrationClient?.ensureSession()) {
+      this._resetStallRecovery();
+    }
   }
 }

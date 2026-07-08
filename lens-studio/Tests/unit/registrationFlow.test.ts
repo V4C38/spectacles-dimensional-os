@@ -1,20 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   applyRegistrationStatusToViewState,
+  buildAlignmentProgressPercent,
   buildAlignmentTitle,
   buildRegistrationDetailText,
   buildRegistrationDisplay,
   createManualRegistrationState,
   createRegistrationViewState,
+  formatRegistrationProgressText,
   getWizardFooterState,
-  parseRegistrationSampleCount,
   REGISTRATION_STATUS_MANUAL,
   hasRegistrationCandidate,
   isRegistrationComplete,
   isRegistrationFailed,
   isRegistrationPendingCommit,
   RegistrationFlow,
-  TAG_REGISTRATION_MIN_OBS,
   WizardStep,
 } from "../../Assets/Scripts/App/Registration/RegistrationFlow";
 import { buildRegistrationPreviewPresentation } from "../../Assets/Scripts/App/Registration/RegistrationWizardView";
@@ -22,6 +22,7 @@ import {
   BridgeStatusMessage,
   RegistrationStatusMessage,
 } from "../../Assets/Scripts/ARBridge/Network/Protocol";
+import { setMockTime } from "../setup/lens-globals";
 
 function status(
   overrides: Partial<RegistrationStatusMessage>,
@@ -77,6 +78,7 @@ function createFlow(options: {
     finalizeOffline: vi.fn(() => options.finalizeOffline ?? true),
     hasActiveIntent: vi.fn(() => false),
     isNoResponseTimeout: vi.fn(() => false),
+    ensureSession: vi.fn(() => true),
   };
   const coordinator = {
     registrationClient,
@@ -111,25 +113,39 @@ describe("registration flow view state", () => {
       phase: "scanning",
       message: "Look at the AprilTag on your robot",
       tag_visible: true,
+      progress: 25,
     }));
     expect(next.phase).toBe("scanning");
     expect(next.message).toBe("Look at the AprilTag on your robot");
     expect(next.tagVisible).toBe(true);
+    expect(next.progress).toBe(25);
+  });
+
+  it("clears view-state message when bridge sends an empty registration_status message", () => {
+    const prior = applyRegistrationStatusToViewState(createRegistrationViewState(), status({
+      phase: "scanning",
+      message: "Look at the AprilTag on your robot",
+      tag_visible: false,
+    }));
+    const next = applyRegistrationStatusToViewState(prior, status({
+      phase: "scanning",
+      message: "",
+      tag_visible: true,
+      progress: 40,
+    }));
+    expect(next.message).toBe("");
+    expect(next.tagVisible).toBe(true);
+    expect(next.progress).toBe(40);
   });
 
   it("builds detail text from message", () => {
     const text = buildRegistrationDetailText({
       mode: "auto",
       phase: "scanning",
-      message: "Tag detected",
+      message: "",
       tagVisible: true,
     });
-    expect(text).toBe("Tag detected");
-  });
-
-  it("parses sample count from bridge registration message", () => {
-    expect(parseRegistrationSampleCount("Tag detected — collecting samples (3)")).toBe(3);
-    expect(parseRegistrationSampleCount("Look at the AprilTag on your robot")).toBeNull();
+    expect(text).toBe("");
   });
 
   it("builds alignment title from registration view state", () => {
@@ -145,10 +161,11 @@ describe("registration flow view state", () => {
       buildAlignmentTitle({
         mode: "auto",
         phase: "scanning",
-        message: "Tag detected — collecting samples (2)",
+        message: "",
         tagVisible: true,
+        progress: 40,
       }),
-    ).toBe(`Alignment ${Math.round((2 / TAG_REGISTRATION_MIN_OBS) * 100)}%`);
+    ).toBe("Registration");
     expect(
       buildAlignmentTitle({
         mode: "auto",
@@ -159,15 +176,60 @@ describe("registration flow view state", () => {
     ).toBe("Registration complete");
   });
 
+  it("uses bridge progress percent from registration view state", () => {
+    expect(
+      buildAlignmentProgressPercent({
+        mode: "auto",
+        phase: "scanning",
+        message: "",
+        tagVisible: true,
+        progress: 40,
+      }),
+    ).toBe(40);
+    expect(
+      buildAlignmentProgressPercent({
+        mode: "auto",
+        phase: "scanning",
+        message: "",
+        tagVisible: true,
+        progress: 80,
+      }),
+    ).toBe(80);
+    expect(
+      buildAlignmentProgressPercent({
+        mode: "auto",
+        phase: "succeeded",
+        message: "",
+        tagVisible: true,
+        progress: 100,
+      }),
+    ).toBe(100);
+    expect(
+      buildAlignmentProgressPercent({
+        mode: "auto",
+        phase: "scanning",
+        message: "Look at the AprilTag on your robot",
+        tagVisible: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("formats registration progress text", () => {
+    expect(formatRegistrationProgressText(42)).toBe("42%");
+    expect(formatRegistrationProgressText(42.6)).toBe("43%");
+  });
+
   it("builds preview presentation with alignment title and tag visibility", () => {
     const presentation = buildRegistrationPreviewPresentation({
       mode: "auto",
       phase: "scanning",
-      message: "Tag detected — collecting samples (4)",
+      message: "",
       tagVisible: true,
+      progress: 80,
     });
-    expect(presentation.titleText).toBe("Alignment 100%");
-    expect(presentation.statusText).toBe("✅ Tag visible");
+    expect(presentation.titleText).toBe("Registration");
+    expect(presentation.progressPercent).toBe(80);
+    expect(presentation.statusText).toBe("✅ Tag detected - keep in view");
     expect(
       buildRegistrationPreviewPresentation({
         mode: "auto",
@@ -192,19 +254,19 @@ describe("registration flow view state", () => {
     expect(display.detailText).toBe("");
   });
 
-  it("keeps wizard detail text when tag is visible and collecting samples", () => {
-    const message = "Tag detected — collecting samples (3)";
+  it("hides wizard detail text when tag is visible and bridge message is empty", () => {
     const display = buildRegistrationDisplay(
       {
         mode: "auto",
         phase: "scanning",
-        message,
+        message: "",
         tagVisible: true,
+        progress: 40,
       },
       true,
     );
-    expect(display.statusText).toBe("✅  Tag visible");
-    expect(display.detailText).toBe(message);
+    expect(display.statusText).toBe("✅  Tag detected - keep in view");
+    expect(display.detailText).toBe("");
   });
 
   it("footer hides Back on step 0 while phase is registration", () => {
@@ -426,5 +488,40 @@ describe("RegistrationFlow commit coordinator", () => {
     flow.completeStep();
     flow.handleCommitAcknowledged("bridge_status");
     expect(preview.setComplete).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("RegistrationFlow second registration", () => {
+  it("enter skips bridge stop when registration client has no active intent", () => {
+    const { flow, registrationClient } = createFlow();
+    registrationClient.hasActiveIntent.mockReturnValue(false);
+    flow.setState(createRegistrationViewState());
+    flow.enter();
+    expect(registrationClient.stop).toHaveBeenCalledWith();
+    expect(registrationClient.start).toHaveBeenCalledWith("april_tag");
+  });
+
+  it("enter notifies bridge stop when registration client still has active intent", () => {
+    const { flow, registrationClient } = createFlow();
+    registrationClient.hasActiveIntent.mockReturnValue(true);
+    flow.setState(createRegistrationViewState());
+    flow.enter();
+    expect(registrationClient.stop).toHaveBeenCalledWith({ notifyBridge: true });
+    expect(registrationClient.start).toHaveBeenCalledWith("april_tag");
+  });
+
+  it("resends bridge session when auto registration progress stalls at 40%", () => {
+    setMockTime(200);
+    const { flow, registrationClient } = createFlow();
+    registrationClient.hasActiveIntent.mockReturnValue(true);
+    flow.setState({
+      ...createRegistrationViewState(),
+      phase: "scanning",
+      progress: 40,
+    });
+    flow.tick();
+    setMockTime(200 + 16);
+    flow.tick();
+    expect(registrationClient.ensureSession).toHaveBeenCalledTimes(1);
   });
 });
