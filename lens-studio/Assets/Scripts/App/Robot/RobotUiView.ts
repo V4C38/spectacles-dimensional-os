@@ -1,7 +1,6 @@
 import animate from "SpectaclesInteractionKit.lspkg/Utils/animate";
 import {
   AppStateData,
-  NAV_GOAL_MODE_LABELS,
   OperatingMode,
   robotActivityPresentation,
 } from "../AppState";
@@ -21,7 +20,6 @@ import {
   requireRectangleButton,
   requireRoundButton,
   requireText,
-  setButtonEnabled,
   setButtonToggleState,
   SnapOS2Styles,
 } from "../UI/UIKit";
@@ -29,7 +27,7 @@ import { UILogEntry } from "../UI/UILogger";
 import { scaleIn, scaleOut } from "../Utilities/AnimationUtilities";
 
 // ================================================================
-/** Binds and updates the floating robot menu / marker HUD (toggle, stop, goal mode, registration overlay). */
+/** Binds and updates the floating robot menu / marker HUD (toggle, stop, registration overlay). */
 // ================================================================
 
 const REGISTRATION_PROGRESS_ANIM_S = 0.35;
@@ -45,7 +43,6 @@ export interface RobotUiAssistOverlay {
 export interface RobotUiCallbacks {
   onToggle: () => void;
   onStop: () => void;
-  onGoalModeCycle: () => void;
   onContinue?: () => void;
 }
 
@@ -59,11 +56,8 @@ export class RobotUiView {
   private readonly hudStateInfoText: Text | null;
   private readonly menuStateInfoText: Text;
   private readonly stopLabel: Text;
-  private readonly goalModeLabel: Text;
   private readonly stopObj: SceneObject;
-  private readonly goalModeObj: SceneObject;
   private readonly stopBtn: RectangleButton;
-  private readonly goalModeBtn: RectangleButton;
   private readonly manualModeMenu: SceneObject | null;
   private readonly agentModeMenu: SceneObject | null;
   private readonly registrationModeMenu: SceneObject | null;
@@ -101,18 +95,8 @@ export class RobotUiView {
       this.registrationProgressText.size = FONT_CALIBRATE_PROGRESS;
       this.registrationProgressText.getSceneObject().enabled = false;
     }
-    this.goalModeObj = findChildRecursive(this.menuObj, "RobotMenuModeSwitch");
-    if (!this.goalModeObj) {
-      throw new Error("RobotUiView: Missing scene object RobotMenuModeSwitch");
-    }
     this.stopBtn = requireRectangleButton(this.stopObj, "RobotUiView");
-    this.goalModeBtn = requireRectangleButton(this.goalModeObj, "RobotUiView");
     this.stopLabel = requireText(this.stopObj, "RobotMenuStopLabel", "RobotUiView");
-    this.goalModeLabel = requireText(
-      this.goalModeObj,
-      "RobotMenuEnableNavigationLabel",
-      "RobotUiView",
-    );
     this.toggleBtn = requireRoundButton(toggleObj, "RobotUiView");
     this.toggleVisual = toggleObj.getComponent(
       "Component.RenderMeshVisual",
@@ -124,7 +108,11 @@ export class RobotUiView {
       setButtonToggleState(this.stopBtn, true);
     });
     bindHoverScale(this.stopBtn, this.stopObj);
-    this.goalModeBtn.onTriggerUp.add(() => this._callbacks?.onGoalModeCycle());
+
+    const goalModeObj = findChildRecursive(this.menuObj, "RobotMenuModeSwitch");
+    if (goalModeObj) {
+      goalModeObj.enabled = false;
+    }
 
     this.stopLabel.size = FONT_BUTTON;
     configureButtonToggle(this.stopBtn, true);
@@ -200,11 +188,6 @@ export class RobotUiView {
     if (state.operatingMode !== "registration") {
       this._applyTitle(title);
       this._applyActivity(activity.text, activity.color);
-    }
-
-    if (state.operatingMode !== "registration") {
-      const navAvailable = state.robotRuntime.capabilities.nav?.available ?? false;
-      this._syncGoalModeButton(state.navigationGoalMode, navAvailable);
     }
 
     const stopAvailable = state.robotRuntime.capabilities.emergency_stop?.available ?? false;
@@ -297,19 +280,6 @@ export class RobotUiView {
         this.registrationProgressText!.text = formatRegistrationProgressText(target);
       },
     });
-  }
-
-  private _syncGoalModeButton(
-    mode: AppStateData["navigationGoalMode"],
-    available: boolean,
-  ): void {
-    if (!this.goalModeBtn || !this.goalModeLabel) {
-      return;
-    }
-    this.goalModeLabel.text = available
-      ? NAV_GOAL_MODE_LABELS[mode]
-      : "Navigation\nUnavailable";
-    setButtonEnabled(this.goalModeBtn, available);
   }
 
   private _refreshDebugInfoText(): void {

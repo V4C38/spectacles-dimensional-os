@@ -86,7 +86,7 @@ Print `apriltag_robot_a4.pdf` or `apriltag_robot_letter.pdf` from `dimos-ar/asse
 <details>
 <summary>Protocol and platform boundary</summary>
 
-The Mac is always the WebSocket **server** and AR devices are **clients**. The bridge sends `hello` and a `runtime_snapshot` on connect, then streams messages such as `bridge_status`, `pose`, binary LiDAR, `path`, `nav_status`, `nav_goal_update`, and `registration_status`. Clients send messages such as `registration_command`, `nav_goal`, `cancel_nav_goal`, `set_lidar_mode`, and `emergency_stop`.
+The Mac is always the WebSocket **server** and AR devices are **clients**. The bridge sends `hello` and a `runtime_snapshot` on connect, then streams messages such as `bridge_status`, `pose`, binary LiDAR, `path`, `nav_status`, and `registration_status`. Clients send messages such as `registration_command`, `nav_goal`, `cancel_nav_goal`, `set_lidar_mode`, and `emergency_stop`.
 
 If the protocol changes, update these together in the same change:
 - [`dimos-ar/dimos/ar/network/protocol.py`](dimos-ar/dimos/ar/network/protocol.py)
@@ -170,7 +170,7 @@ flowchart TB
 
 [`dimos-ar/`](dimos-ar/) contains the Python side: `ARBridge`, `Go2RobotProfileModule` / `G1RobotProfileModule`, the protocol definition, and the tests. The monorepo entrypoint is [`dimos-ar/dimos/ar/blueprints.py`](dimos-ar/dimos/ar/blueprints.py), which wraps native DimOS stack composition for the currently selected robot runtime.
 
-`ARBridge` itself ([`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py)) subclasses `dimos.core.module.Module` and stays thin: it declares the DimOS `In[...]` streams, builds its collaborators, and fans handler calls out to them. The actual logic lives in single-owner collaborators under `dimos-ar/dimos/ar/`: `registration/` (setup wizard — `RegistrationSession`, baseline collector), `world_frame/` (`WorldFrameState`, `WorldFrameRefiner`, `WorldRegistry`), `tag_tracking/` (robot-mounted AprilTag detect + solve), `navigation/` (`NavigateGoalHandler`, `PreviewGoalHandler`), `bridge/` (`TelemetryPublisher`, `StatusService`, `OdomBuffer`, `MotionRouter`, `BridgeSafetyCoordinator`, …), and `robot_profile/` for Go2/G1 handshake and capabilities.
+`ARBridge` itself ([`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py)) subclasses `dimos.core.module.Module` and stays thin: it declares the DimOS `In[...]` streams, builds its collaborators, and fans handler calls out to them. The actual logic lives in single-owner collaborators under `dimos-ar/dimos/ar/`: `registration/` (setup wizard — `RegistrationSession`, baseline collector), `world_frame/` (`WorldFrameState`, `WorldFrameRefiner`, `WorldRegistry`), `tag_tracking/` (robot-mounted AprilTag detect + solve), `navigation/` (`NavigateGoalHandler`, world-frame goal transform), `bridge/` (`TelemetryPublisher`, `StatusService`, `OdomBuffer`, `MotionRouter`, `BridgeSafetyCoordinator`, …), and `robot_profile/` for Go2/G1 handshake and capabilities.
 
 ```mermaid
 flowchart TB

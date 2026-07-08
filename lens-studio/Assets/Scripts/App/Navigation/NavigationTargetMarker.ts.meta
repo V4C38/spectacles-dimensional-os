@@ -26,7 +26,8 @@
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
-    {}
+    circleWhiteMaterial: false
+    circleYellowMaterial: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -36,10 +37,11 @@
   Attachments:
     []
   DefaultScriptInputs:
-    -
-      {}
+    - circleWhiteMaterial: !<reference.Material> 00000000-0000-0000-0000-000000000000
+      circleYellowMaterial: !<reference.Material> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
   InputLines:
-    []
+    - // @input Asset.Material circleWhiteMaterial
+    - // @input Asset.Material circleYellowMaterial

@@ -25,7 +25,6 @@ from dimos.ar.bridge.status_service import StatusService
 from dimos.ar.bridge.telemetry import TelemetryPublisher
 from dimos.ar.lidar.filters import LidarFilter, LidarFilterConfig, lidar_height_band_m
 from dimos.ar.navigation.navigate import NavigateGoalHandler
-from dimos.ar.navigation.preview import PreviewGoalHandler
 from dimos.ar.network.protocol import (
     JoystickCommandMessage,
     NavGoalMessage,
@@ -33,7 +32,6 @@ from dimos.ar.network.protocol import (
     encode_runtime_snapshot,
 )
 from dimos.ar.network.websocket_server import ARWebSocketServer
-from dimos.ar.preview_planner import PreviewPlanner
 from dimos.ar.registration.session import RegistrationSession
 from dimos.ar.robot_profile.base import (
     ARRobotProfileSpec,
@@ -130,7 +128,6 @@ class ARBridge(Module):  # type: ignore[misc]
     ar_path: In[Path]
     ar_goal_reached: In[Bool]
     ar_navigation_state: In[String]
-    agent_nav_goal: In[PoseStamped]
     cmd_vel: Out[Twist]
     goal_request: Out[PoseStamped]
     goal_point_request: Out[PointStamped]
@@ -147,7 +144,6 @@ class ARBridge(Module):  # type: ignore[misc]
     _registration: RegistrationSession
     _nav: NavigateGoalHandler
     _motion_router: MotionRouter
-    _preview: PreviewGoalHandler
     _telemetry: TelemetryPublisher
     _ws_server: ARWebSocketServer
     _robot_id: str
@@ -157,7 +153,6 @@ class ARBridge(Module):  # type: ignore[misc]
         super().__init__(**kwargs)
         # Adapter-independent shared objects created eagerly.
         self._world_frame = WorldFrameState()
-        self._preview_planner = PreviewPlanner(global_config)
 
     @rpc
     def build(self) -> None:
@@ -170,7 +165,6 @@ class ARBridge(Module):  # type: ignore[misc]
             self._profile.handshake_payload(),
             {
                 "path": self.ar_path.transport is not None,
-                "plan_preview": self.ar_global_costmap.transport is not None,
                 "nav": (
                     self.goal_request.transport is not None
                     or self.goal_point_request.transport is not None
@@ -296,14 +290,6 @@ class ARBridge(Module):  # type: ignore[misc]
         )
         nav_ref = nav
 
-        preview = PreviewGoalHandler(
-            robot_id=robot_id,
-            sender=sender,
-            world_frame=self._world_frame,
-            odom=odom,
-            planner=self._preview_planner,
-        )
-
         safety = BridgeSafetyCoordinator(
             nav=nav,
             registration=registration,
@@ -337,39 +323,12 @@ class ARBridge(Module):  # type: ignore[misc]
         self._nav = nav
         self._motion_router = motion_router
         self._safety = safety
-        self._preview = preview
         self._telemetry = telemetry
         self._ws_server = ws_server
 
     def _connect_hello(self) -> RobotHandshake:
         """Return the handshake cached at build() — must not RPC from the WS loop."""
         return self._connect_handshake
-
-    @rpc
-    def submit_agent_nav_goal(
-        self,
-        position: tuple[float, float, float],
-        orientation: tuple[float, float, float, float] | None = None,
-    ) -> bool:
-        """Submit a world-frame navigation goal from an agent skill.
-
-        Position and orientation are in the committed world frame. Odom-native
-        producers should publish to the planner directly and forfeit AR visualization.
-        """
-        if not self._world_frame.is_committed:
-            return False
-        self._nav.submit_goal(
-            position=position,
-            orientation=orientation,
-            ts=0.0,
-            source="agent",
-        )
-        return True
-
-    @rpc
-    def cancel_agent_nav_goal(self) -> None:
-        """Cancel the active navigation goal (agent or AR)."""
-        self._nav.on_cancel_nav_goal()
 
     @rpc
     def start(self) -> None:
@@ -384,7 +343,6 @@ class ARBridge(Module):  # type: ignore[misc]
         )
         self._ws_server.start()
         self._status.start()
-        self._preview.start()
         self._nav.start()
         host = global_config.listen_host
         logger.info("ARBridge started", websocket=f"ws://{host}:{self.config.port}")
@@ -410,9 +368,6 @@ class ARBridge(Module):  # type: ignore[misc]
         status = getattr(self, "_status", None)
         if status is not None:
             status.stop()
-        preview = getattr(self, "_preview", None)
-        if preview is not None:
-            preview.stop()
         ws_server = getattr(self, "_ws_server", None)
         if ws_server is not None:
             ws_server.stop()
@@ -441,30 +396,13 @@ class ARBridge(Module):  # type: ignore[misc]
         self._nav.on_path(msg)
 
     async def handle_ar_global_costmap(self, msg: OccupancyGrid) -> None:
-        self._preview.update_costmap(msg)
+        del msg  # costmap no longer consumed by AR bridge
 
     async def handle_ar_goal_reached(self, msg: Bool) -> None:
         self._nav.on_goal_reached(msg)
 
     async def handle_ar_navigation_state(self, msg: String) -> None:
         self._nav.on_navigation_state(msg.data)
-
-    async def handle_agent_nav_goal(self, msg: PoseStamped) -> None:
-        """Agent stream ingress — goals are world-frame by contract."""
-        orientation = None
-        if msg.orientation is not None:
-            orientation = (
-                msg.orientation.x,
-                msg.orientation.y,
-                msg.orientation.z,
-                msg.orientation.w,
-            )
-        self._nav.submit_goal(
-            position=(msg.x, msg.y, msg.z),
-            orientation=orientation,
-            ts=float(msg.ts) if msg.ts is not None else 0.0,
-            source="agent",
-        )
 
     # ------------------------------------------------------------------
     # Status / runtime-sync helpers
@@ -473,7 +411,6 @@ class ARBridge(Module):  # type: ignore[misc]
     def _send_runtime_sync_to(self, websocket: ServerConnection) -> None:
         """Resend authoritative bridge + nav lifecycle state after connect or get_status."""
         path = self._nav.runtime_snapshot_path()
-        goal = self._nav.runtime_snapshot_goal()
         self._sender.send_to(
             websocket,
             encode_runtime_snapshot(
@@ -481,7 +418,6 @@ class ARBridge(Module):  # type: ignore[misc]
                 bridge=self._status.merged_bridge_snapshot(),
                 nav=self._nav.nav_phase_dict(),
                 path=path,
-                goal=goal,
             ),
         )
 
@@ -503,10 +439,7 @@ class ARBridge(Module):  # type: ignore[misc]
     # ------------------------------------------------------------------
 
     def _route_nav_goal_message(self, msg: NavGoalMessage) -> None:
-        if msg.intent == "navigate":
-            self._nav.on_navigate_goal(msg)
-        else:
-            self._preview.on_preview_goal(msg)
+        self._nav.on_navigate_goal(msg)
 
     def _on_joystick_command(self, msg: JoystickCommandMessage) -> None:
         self._motion_router.send_joystick_command(msg.vx, msg.vy, msg.wz)

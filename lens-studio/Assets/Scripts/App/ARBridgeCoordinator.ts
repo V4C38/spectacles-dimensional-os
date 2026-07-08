@@ -9,20 +9,16 @@ import {
   AppStateListener,
   AppPhase,
   BridgeLinkState,
-  bridgeNavigationReady,
   defaultNavigationOutcome,
   AppStateData,
   isRuntimePhase as isAppRuntimePhase,
   LidarDisplayMode,
   navigationPlacementToggleEnabled,
-  NavigationGoalMode,
   nextLidarMode,
-  nextNavigationGoalMode,
   OperatingMode,
   RobotInteractionMode,
 } from "./AppState";
 import { isCapabilityAvailable } from "./Robot/RobotRuntimeModel";
-import { manualNavGoalConfig } from "../ARBridge/Navigation/NavigationModel";
 import { COLOR_WHITE } from "./UI/UIKit";
 
 /** Phase lifecycle, operating mode, and subsystem orchestration for AR bridge runtime. */
@@ -101,7 +97,6 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
           robot.robotMarker?.ui?.toggleVisible();
         },
         onStopRequested: () => navigation.requestEmergencyStop(),
-        onGoalModeCycleRequested: () => this.cycleNavigationGoalMode(),
         getOperatingMode: () => this.operatingMode,
       },
       {
@@ -261,38 +256,8 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.arBridgeServices.navigation.requestEmergencyStop();
   }
 
-  public beginAgentNavigationGoal(): boolean {
-    return this.arBridgeServices.navigation.canSubmitNavigationGoal();
-  }
-
-  public submitAgentNavigationGoal(position: vec3, rotation: quat): boolean {
-    return this.arBridgeServices.navigation.submitGoal(position, rotation, {
-      mode: "single",
-      source: "user",
-      interactive: false,
-      force: true,
-    });
-  }
-
   public cycleLidarMode(): void {
     this.setLidarMode(nextLidarMode(this.lidarMode));
-  }
-
-  public cycleNavigationGoalMode(): void {
-    this.setNavigationGoalMode(nextNavigationGoalMode(this.navigationGoalMode));
-  }
-
-  public get navigationGoalMode(): NavigationGoalMode {
-    return this.appState.navigationGoalMode;
-  }
-
-  private setNavigationGoalMode(mode: NavigationGoalMode): void {
-    if (this.navigationGoalMode === mode) {
-      return;
-    }
-    this._log(`setNavigationGoalMode: ${mode}`);
-    this.arBridgeServices.state.update({ navigationGoalMode: mode });
-    this.arBridgeServices.navigation.onNavigationGoalModeChanged();
   }
 
   public get lidarMode(): LidarDisplayMode {
@@ -353,7 +318,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this._log(`setNavigationPlacementEnabled: ${enabled}`);
     const navigation = this.arBridgeServices.navigation;
     if (enabled) {
-      navigation.arm(manualNavGoalConfig(this.navigationGoalMode));
+      navigation.arm();
     } else {
       navigation.onManualNavigationToggleChanged(false);
     }

@@ -20,13 +20,16 @@ const DRAG_THRESHOLD_CM = 11;
 const DRAG_HEADING_MIN_DELTA_CM = 3.0;
 const DRAG_HEADING_SMOOTHING_RATE = 8.0;
 const INTERPOLATION_SPEED = 10;
-const IDLE_CONTINUOUS_NAV_INTERPOLATION_SPEED = 8;
-const IDLE_CONTINUOUS_NAV_POSITION_EPSILON_CM = 0.25;
-const IDLE_CONTINUOUS_NAV_ROTATION_EPSILON_RAD = 0.01;
+const IDLE_NAV_INTERPOLATION_SPEED = 8;
+const IDLE_NAV_POSITION_EPSILON_CM = 0.25;
+const IDLE_NAV_ROTATION_EPSILON_RAD = 0.01;
 const PLACEMENT_ANCHOR_REBASE_DISTANCE_CM = 300;
+const SETTLE_INTERPOLATION_SPEED = 14;
+const SETTLE_POSITION_EPSILON_CM = 0.5;
+const SETTLE_ROTATION_EPSILON_RAD = 0.02;
 
 export class GroundPlacement {
-  public onConfirmPressed: ((position: vec3, rotation: quat) => void) | null = null;
+  public onMarkerButtonPressed: ((position: vec3, rotation: quat) => void) | null = null;
   public onPreviewTargetChanged: ((
     position: vec3,
     rotation: quat,
@@ -61,6 +64,9 @@ export class GroundPlacement {
   private _hitTestDeferralEvent: DelayedCallbackEvent | null = null;
   private _pendingConfirmPosition = vec3.zero();
   private _pendingConfirmRotation = new quat(1, 0, 0, 0);
+  private _settling = false;
+  private _settleTargetPosition = vec3.zero();
+  private _settleTargetRotation = quat.quatIdentity();
 
   constructor(owner: BaseScriptComponent, worldQueryModule: any) {
     this.owner = owner;
@@ -111,6 +117,7 @@ export class GroundPlacement {
     this.active = false;
     this._isDragging = false;
     this._hasActivatedPlacement = false;
+    this._settling = false;
     this._followRobot = false;
     this._processingButtonPress = false;
     this.activeInteractor = null;
@@ -199,7 +206,7 @@ export class GroundPlacement {
     });
   }
 
-  public isIdleContinuousNavigation(): boolean {
+  public isIdleNavigation(): boolean {
     return (
       this.active &&
       this._followRobot &&
@@ -209,13 +216,13 @@ export class GroundPlacement {
   }
 
   public syncIdlePose(position: vec3, rotation: quat): void {
-    if (!this.isIdleContinuousNavigation() || !this._marker) {
+    if (!this.isIdleNavigation() || !this._marker) {
       return;
     }
     const positionChanged =
-      this.desiredPosition.distance(position) > IDLE_CONTINUOUS_NAV_POSITION_EPSILON_CM;
+      this.desiredPosition.distance(position) > IDLE_NAV_POSITION_EPSILON_CM;
     const rotationChanged =
-      quat.angleBetween(this.desiredRotation, rotation) > IDLE_CONTINUOUS_NAV_ROTATION_EPSILON_RAD;
+      quat.angleBetween(this.desiredRotation, rotation) > IDLE_NAV_ROTATION_EPSILON_RAD;
     if (!positionChanged && !rotationChanged) {
       return;
     }
@@ -232,13 +239,39 @@ export class GroundPlacement {
     this._marker.interpolatePose(
       this.desiredPosition,
       this.desiredRotation,
-      IDLE_CONTINUOUS_NAV_INTERPOLATION_SPEED,
+      IDLE_NAV_INTERPOLATION_SPEED,
     );
   }
 
-  /** Immediate idle continuous-navigation snap (e.g. after world-frame pose correction). */
+  /** Immediate idle-navigation snap (e.g. after world-frame pose correction). */
+  /** After goal reached: stay if close to robot, else glide marker to robot floor pose. */
+  public settleToRobotIfFar(
+    robotPose: { position: vec3; rotation: quat },
+    maxStayDistanceCm: number,
+  ): void {
+    if (!this.active || !this._marker || this.activeInteractor !== null) {
+      return;
+    }
+    const markerPosition = this._marker.worldPosition;
+    const horizontalDistance = Math.sqrt(
+      Math.pow(markerPosition.x - robotPose.position.x, 2) +
+        Math.pow(markerPosition.z - robotPose.position.z, 2),
+    );
+    if (horizontalDistance <= maxStayDistanceCm) {
+      this._settling = false;
+      return;
+    }
+    this._settling = true;
+    this._settleTargetPosition = new vec3(
+      robotPose.position.x,
+      robotPose.position.y,
+      robotPose.position.z,
+    );
+    this._settleTargetRotation = robotPose.rotation;
+  }
+
   public snapIdlePose(position: vec3, rotation: quat): void {
-    if (!this.isIdleContinuousNavigation() || !this._marker) {
+    if (!this.isIdleNavigation() || !this._marker) {
       return;
     }
     this.desiredPosition = new vec3(position.x, position.y, position.z);
@@ -274,7 +307,7 @@ export class GroundPlacement {
     ) as DelayedCallbackEvent;
     confirmDeferral.bind(() => {
       this._processingButtonPress = false;
-      this.onConfirmPressed?.(this._pendingConfirmPosition, this._pendingConfirmRotation);
+      this.onMarkerButtonPressed?.(this._pendingConfirmPosition, this._pendingConfirmRotation);
     });
     this._confirmDeferralEvent = confirmDeferral;
   }
@@ -283,6 +316,7 @@ export class GroundPlacement {
     if (!this.active || !this._dragEnabled) {
       return;
     }
+    this._settling = false;
     this.activeInteractor = interactor ?? null;
     this.touchStartPosition = this.desiredPosition;
     this._previousDragPosition = null;
@@ -370,6 +404,38 @@ export class GroundPlacement {
         true,
       );
       this._emitPreviewTargetChanged(false);
+      return;
+    }
+    if (this._settling) {
+      this._tickSettling();
+    }
+  }
+
+  private _tickSettling(): void {
+    if (!this._marker) {
+      this._settling = false;
+      return;
+    }
+    this.desiredPosition = new vec3(
+      this._settleTargetPosition.x,
+      this._settleTargetPosition.y,
+      this._settleTargetPosition.z,
+    );
+    this.desiredRotation = this._settleTargetRotation;
+    this._marker.interpolatePose(
+      this.desiredPosition,
+      this.desiredRotation,
+      SETTLE_INTERPOLATION_SPEED,
+    );
+    const positionReached =
+      this._marker.worldPosition.distance(this.desiredPosition) <=
+      SETTLE_POSITION_EPSILON_CM;
+    const rotationReached =
+      quat.angleBetween(this._marker.getRotation(), this.desiredRotation) <=
+      SETTLE_ROTATION_EPSILON_RAD;
+    if (positionReached && rotationReached) {
+      this._marker.setPose(this.desiredPosition, this.desiredRotation);
+      this._settling = false;
     }
   }
 

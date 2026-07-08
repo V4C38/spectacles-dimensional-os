@@ -19,7 +19,6 @@ const LIDAR_STALE_CLEAR_S = 3.0;
 export interface RobotPresenterMenuCallbacks {
   onToggleRequested: () => void;
   onStopRequested: () => void;
-  onGoalModeCycleRequested: () => void;
   onContinueRequested?: () => void;
   getOperatingMode: () => OperatingMode;
 }
@@ -76,7 +75,6 @@ export class RobotPresenter {
       this.robotMarker.bindUiCallbacks({
         onToggle: () => menuCallbacks.onToggleRequested(),
         onStop: () => menuCallbacks.onStopRequested(),
-        onGoalModeCycle: () => menuCallbacks.onGoalModeCycleRequested(),
         onContinue: menuCallbacks.onContinueRequested,
       });
     }

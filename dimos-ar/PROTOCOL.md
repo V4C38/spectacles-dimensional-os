@@ -9,7 +9,20 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v10 (current) — AprilTag-only registration
+### v11 (current) — Navigation simplification
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 11.**
+- **`nav_goal`:** removed **`intent`**; every `nav_goal` starts navigation. Preview
+  planning is removed from the wire protocol.
+- **`path`:** removed **`kind`** and **`target`**; paths are active navigation routes
+  only.
+- **`hello.capabilities`:** removed **`plan_preview`**.
+- Removed outbound **`nav_goal_update`** and optional **`runtime_snapshot.goal`**
+  (v9 goal provenance).
+
+### v10 — AprilTag-only registration
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -149,7 +162,7 @@ capability map, then sends a `runtime_snapshot` (see below).
 ```json
 {
   "type": "hello",
-  "protocol_version": 6,
+  "protocol_version": 11,
   "robot": {
     "robot_id": "unitree_go2",
     "display_name": "Unitree Go2",
@@ -170,7 +183,6 @@ capability map, then sends a `runtime_snapshot` (see below).
     "registration_manual_pose":           { "available": true,  "reason": null },
     "nav":                                { "available": true,  "reason": null },
     "path":                               { "available": true,  "reason": null },
-    "plan_preview":                       { "available": true,  "reason": null },
     "cancel_nav_goal":                        { "available": true,  "reason": null },
     "emergency_stop":                     { "available": false, "reason": "No safe stop interface is available in this runtime." }
   }
@@ -212,9 +224,8 @@ Example (Unitree Go2 / G1):
 
 Authoritative bridge + navigation state sent once after `hello` on connect and
 again when the client sends `get_status`. Bundles the same bridge fields as live
-`bridge_status`, the current navigation phase, and an optional **active** path
-when navigation is in progress. Preview paths are **not** cached — clients
-that reconnect mid-preview must re-issue `nav_goal` with `intent: "preview"`.
+`bridge_status`, the current navigation phase, and an optional cached path when
+navigation is in progress.
 
 ```json
 {
@@ -232,7 +243,6 @@ that reconnect mid-preview must re-issue `nav_goal` with `intent: "preview"`.
     "phase": "navigating"
   },
   "path": {
-    "kind": "active",
     "waypoints": [[1.0, 2.0, 3.0]]
   }
 }
@@ -246,36 +256,8 @@ Fields:
   `"failed"`
 - `nav.error_code` (optional): numeric code when navigation is unavailable
   (e.g. `505` = goal stalled)
-- `path` (optional): present only when an active navigating path is cached;
-  always `kind: "active"`. Omitted when idle or when only a preview exists.
-- `goal` (optional, v9): present when a navigation goal session is active;
-  mirrors the body of `nav_goal_update` with `active: true`. Omitted when idle
-  or after terminal outcomes.
-
-### `nav_goal_update` (v9)
-
-Broadcast when a navigation goal session is created, updated, or torn down.
-Deduped server-side (≈0.15 m and 0.25 s). Clients use this to visualize goals
-from any source (AR headset or agent).
-
-```json
-{
-  "type": "nav_goal_update",
-  "ts": 1730000000.123,
-  "source": "ar",
-  "position": [1.0, 0.0, 2.0],
-  "orientation": [0.0, 0.0, 0.0, 1.0],
-  "active": true
-}
-```
-
-Fields:
-
-- `source`: `"ar"` (headset) or `"agent"` (DimOS agent module / RPC)
-- `position`: world-frame goal position `[x, y, z]` in metres
-- `orientation` (optional): world-frame quaternion `[x, y, z, w]`
-- `active`: `true` on create/update; `false` on terminal paths (reached, failed,
-  cancel, e-stop, stall, preempt, disconnect-reset)
+- `path` (optional): present only when a navigating path is cached; omitted when
+  idle
 
 ### `bridge_status`
 
@@ -376,7 +358,7 @@ payload size on Wi-Fi:
 | `pose.position`, `pose.orientation` | 4 |
 | `world_frame_correction.trans_delta_m`, `world_frame_correction.solve_quality` | 4 |
 | `world_frame_correction.yaw_delta_deg` | 3 |
-| `path` waypoints and `target` | 3 |
+| `path` waypoints | 3 |
 | `ts` on high-rate streams (`pose`, `path`) | 3 |
 
 ### `lidar` (binary)
@@ -475,37 +457,19 @@ Bridge-side refinement (not additional wire fields):
 
 ### `path`
 
-Planner path in AR world frame. The `kind` field distinguishes the active
-navigation route from an on-demand preview:
+Active planner path in AR world frame:
 
 ```json
 {
   "type": "path",
   "ts": 1730000000.123,
-  "kind": "active",
   "waypoints": [[x, y, z]]
-}
-```
-
-Preview path (from `goal` with `intent: "preview"`):
-
-```json
-{
-  "type": "path",
-  "ts": 1730000000.123,
-  "kind": "preview",
-  "waypoints": [[x, y, z]],
-  "target": [x, y, z]
 }
 ```
 
 Fields:
 
-- `kind`: `"active"` for the navigating route, `"preview"` for an unconfirmed
-  target
 - `waypoints`: route in AR world frame; may be empty when no path is available
-- `target` (preview only): echoed world-frame target so the client can ignore
-  stale responses
 
 ### `nav_status`
 
@@ -739,29 +703,13 @@ Header fields:
 
 ### `nav_goal`
 
-World-frame navigation or preview request:
-
-Navigate (replaces v5 `nav_goal`):
+World-frame navigation goal:
 
 ```json
 {
   "type": "nav_goal",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
-  "intent": "navigate",
-  "position": [x, y, z],
-  "orientation": [qx, qy, qz, qw]
-}
-```
-
-Preview path only (replaces v5 `plan_path`):
-
-```json
-{
-  "type": "nav_goal",
-  "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
-  "intent": "preview",
   "position": [x, y, z],
   "orientation": [qx, qy, qz, qw]
 }
@@ -769,12 +717,9 @@ Preview path only (replaces v5 `plan_path`):
 
 Fields:
 
-- `intent` (**required**): `"navigate"` to start navigation, or `"preview"` to
-  request a side-effect-free preview path (`path` with `kind: "preview"`)
-- `orientation` (optional): if omitted, the bridge may route through a
-  point-based navigation path
-
-Preview planning must never start navigation or change robot state.
+- `position` (**required**): world-frame goal position `[x, y, z]` in metres
+- `orientation` (optional): world-frame quaternion `[x, y, z, w]`; if omitted,
+  the bridge may route through a point-based navigation path
 
 ### `cancel_nav_goal`
 

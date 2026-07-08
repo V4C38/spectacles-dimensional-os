@@ -140,25 +140,10 @@ def build_path_payload(
             (pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w),
         )
         waypoints.append(world_pos)
-    payload = encode_path(ts=msg.ts, waypoints=waypoints, kind="active")
+    payload = encode_path(ts=msg.ts, waypoints=waypoints)
     return payload, waypoints
 
 
 def build_empty_path_payload(*, ts: float | None = None) -> str:
     """Encode an empty path payload (used to clear the client path display)."""
-    return encode_path(ts=ts if ts is not None else time.time(), waypoints=[], kind="active")
-
-
-def build_preview_path_payload(
-    *,
-    ts: float,
-    target_world: tuple[float, float, float],
-    waypoints: list[tuple[float, float, float]],
-) -> str:
-    """Encode a preview path payload."""
-    return encode_path(
-        ts=ts,
-        waypoints=waypoints,
-        kind="preview",
-        target=target_world,
-    )
+    return encode_path(ts=ts if ts is not None else time.time(), waypoints=[])

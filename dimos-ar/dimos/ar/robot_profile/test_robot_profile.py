@@ -43,10 +43,10 @@ def test_merge_capability_availability_overrides_profile_defaults() -> None:
 
     merged = merge_capability_availability(
         handshake,
-        {"plan_preview": False, "path": True},
+        {"emergency_stop": False, "path": True},
     )
 
-    assert merged.capability_states["plan_preview"].available is False
+    assert merged.capability_states["emergency_stop"].available is False
     assert merged.capability_states["path"].available is True
 
 
@@ -63,7 +63,7 @@ def test_g1_capabilities_report_emergency_stop_unavailable_without_hw() -> None:
     capabilities = G1RobotProfileModule.capabilities(profile)
 
     assert capabilities["emergency_stop"].available is False
-    assert capabilities["plan_preview"].available is False
+    assert "plan_preview" not in capabilities
 
 
 def test_g1_robot_id_and_model() -> None:

@@ -77,7 +77,6 @@ def test_encode_hello_g1_tag_tracking_profile() -> None:
         "unitree_g1",
         nav_available=True,
         path_available=True,
-        plan_preview_available=True,
         cancel_goal_available=False,
         emergency_stop_available=True,
         tag_mount_available=True,
@@ -96,7 +95,6 @@ def test_encode_hello_g1_tag_registration_disabled() -> None:
         "unitree_g1",
         nav_available=True,
         path_available=True,
-        plan_preview_available=True,
         cancel_goal_available=False,
         emergency_stop_available=True,
         tag_mount_available=False,
@@ -115,7 +113,6 @@ def test_nav_goal_decode_navigate() -> None:
     raw = json.dumps(
         {
             "type": "nav_goal",
-            "intent": "navigate",
             "ts": 2.0,
             "robot_id": "unitree_go2",
             "position": [1.0, 0.0, 0.0],
@@ -123,7 +120,6 @@ def test_nav_goal_decode_navigate() -> None:
     )
     msg = decode_inbound(raw)
     assert isinstance(msg, NavGoalMessage)
-    assert msg.intent == "navigate"
     assert msg.position == (1.0, 0.0, 0.0)
     assert msg.orientation is None
 
@@ -132,7 +128,6 @@ def test_nav_goal_decode_with_orientation() -> None:
     raw = json.dumps(
         {
             "type": "nav_goal",
-            "intent": "navigate",
             "ts": 2.0,
             "robot_id": "unitree_go2",
             "position": [1.0, 0.0, 0.0],
@@ -143,23 +138,6 @@ def test_nav_goal_decode_with_orientation() -> None:
     assert isinstance(msg, NavGoalMessage)
     assert msg.position == (1.0, 0.0, 0.0)
     assert msg.orientation == (0.0, 0.0, 0.70710678, 0.70710678)
-
-
-def test_nav_goal_decode_preview() -> None:
-    raw = json.dumps(
-        {
-            "type": "nav_goal",
-            "intent": "preview",
-            "ts": 2.5,
-            "robot_id": "unitree_go2",
-            "position": [2.0, 0.0, 1.0],
-            "orientation": [0.0, 0.0, 0.0, 1.0],
-        }
-    )
-    msg = decode_inbound(raw)
-    assert isinstance(msg, NavGoalMessage)
-    assert msg.intent == "preview"
-    assert msg.position == (2.0, 0.0, 1.0)
 
 
 def test_cancel_nav_goal_decode() -> None:
@@ -492,51 +470,15 @@ def test_encode_runtime_snapshot() -> None:
             robot_id="unitree_go2",
             bridge=bridge,
             nav={"phase": "navigating"},
-            path={"kind": "active", "waypoints": [[1.0, 2.0, 3.0]]},
+            path={"waypoints": [[1.0, 2.0, 3.0]]},
             ts=5.0,
         )
     )
     assert raw["type"] == "runtime_snapshot"
     assert raw["robot_id"] == "unitree_go2"
     assert raw["nav"]["phase"] == "navigating"
-    assert raw["path"]["kind"] == "active"
+    assert raw["path"]["waypoints"] == [[1.0, 2.0, 3.0]]
     assert "streams_active" not in raw["bridge"]
-
-
-def test_encode_nav_goal_update() -> None:
-    from dimos.ar.network.protocol import encode_nav_goal_update
-
-    raw = json.loads(
-        encode_nav_goal_update(
-            ts=1.0,
-            source="ar",
-            position=(1.0, 0.0, 2.0),
-            orientation=(0.0, 0.0, 0.0, 1.0),
-            active=True,
-        )
-    )
-    assert raw["type"] == "nav_goal_update"
-    assert raw["source"] == "ar"
-    assert raw["active"] is True
-    assert raw["position"] == [1.0, 0.0, 2.0]
-
-
-def test_encode_runtime_snapshot_goal() -> None:
-    raw = json.loads(
-        encode_runtime_snapshot(
-            robot_id="unitree_go2",
-            bridge={"robot_connected": True, "world_frame_committed": True, "reconnecting": False},
-            nav={"phase": "navigating"},
-            goal={
-                "source": "agent",
-                "position": [1.0, 0.0, 2.0],
-                "active": True,
-            },
-            ts=5.0,
-        )
-    )
-    assert raw["goal"]["source"] == "agent"
-    assert raw["goal"]["active"] is True
 
 
 def test_get_status_decode() -> None:
@@ -587,24 +529,11 @@ def test_set_lidar_mode_rejects_invalid_threshold_order() -> None:
 
 
 def test_encode_path_and_nav_status() -> None:
-    path = json.loads(encode_path(ts=2.0, waypoints=[(1.0, 2.0, 3.0)], kind="active"))
+    path = json.loads(encode_path(ts=2.0, waypoints=[(1.0, 2.0, 3.0)]))
     assert path["type"] == "path"
-    assert path["kind"] == "active"
     assert path["waypoints"] == [[1.0, 2.0, 3.0]]
     assert "robot_id" not in path
-
-    preview = json.loads(
-        encode_path(
-            ts=2.5,
-            waypoints=[(4.0, 5.0, 6.0)],
-            kind="preview",
-            target=(7.0, 8.0, 9.0),
-        )
-    )
-    assert preview["type"] == "path"
-    assert preview["kind"] == "preview"
-    assert preview["waypoints"] == [[4.0, 5.0, 6.0]]
-    assert preview["target"] == [7.0, 8.0, 9.0]
+    assert "kind" not in path
 
     status = json.loads(encode_nav_status(ts=3.0, phase="navigating"))
     assert status["type"] == "nav_status"
@@ -696,21 +625,10 @@ def test_encode_path_rounds_waypoints() -> None:
         encode_path(
             ts=2.123456,
             waypoints=[(1.23456, 2.34567, 3.45678)],
-            kind="active",
         )
     )
     assert path["ts"] == 2.123
     assert path["waypoints"] == [[1.235, 2.346, 3.457]]
-
-    preview = json.loads(
-        encode_path(
-            ts=2.5,
-            waypoints=[(4.0, 5.0, 6.0)],
-            kind="preview",
-            target=(7.123456, 8.234567, 9.345678),
-        )
-    )
-    assert preview["target"] == [7.123, 8.235, 9.346]
 
 
 def test_decode_ping() -> None:

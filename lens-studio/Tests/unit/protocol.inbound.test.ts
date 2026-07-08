@@ -55,7 +55,6 @@ describe("parseInboundMessage", () => {
           registration_manual_pose: { available: true },
           nav: { available: true },
           path: { available: true },
-          plan_preview: { available: true },
           cancel_nav_goal: { available: true },
           emergency_stop: { available: false, reason: "disabled" },
         },
@@ -83,61 +82,17 @@ describe("parseInboundMessage", () => {
         },
         nav: { phase: "idle" },
         path: {
-          kind: "active",
           waypoints: [[1, 2, 3]],
         },
       }),
     );
     expect(msg!.type).toBe("runtime_snapshot");
     const snapshot = msg as RuntimeSnapshotMessage;
-    expect(snapshot.path?.kind).toBe("active");
+    expect(snapshot.path?.waypoints).toEqual([[1, 2, 3]]);
     const bridge = bridgeStatusFromSnapshot(snapshot);
     expect(bridge.type).toBe("bridge_status");
     expect(bridge.robot_connected).toBe(true);
     expect(bridge.world_frame_committed).toBe(false);
-  });
-
-  it("parses nav_goal_update", () => {
-    const msg = parseInboundMessage(
-      JSON.stringify({
-        type: "nav_goal_update",
-        ts: 1.5,
-        source: "agent",
-        position: [1, 0, 2],
-        orientation: [0, 0, 0, 1],
-        active: true,
-      }),
-    );
-    expect(msg!.type).toBe("nav_goal_update");
-    if (msg!.type === "nav_goal_update") {
-      expect(msg.source).toBe("agent");
-      expect(msg.active).toBe(true);
-      expect(msg.position).toEqual([1, 0, 2]);
-    }
-  });
-
-  it("parses runtime_snapshot goal field", () => {
-    const msg = parseInboundMessage(
-      JSON.stringify({
-        type: "runtime_snapshot",
-        ts: 1,
-        robot_id: "go2",
-        bridge: {
-          robot_connected: true,
-          world_frame_committed: true,
-          reconnecting: false,
-        },
-        nav: { phase: "navigating" },
-        goal: {
-          source: "ar",
-          position: [1, 0, 2],
-          active: true,
-        },
-      }),
-    );
-    const snapshot = msg as RuntimeSnapshotMessage;
-    expect(snapshot.goal?.source).toBe("ar");
-    expect(snapshot.goal?.active).toBe(true);
   });
 
   it("parses registration_status", () => {
@@ -273,33 +228,16 @@ describe("parseInboundMessage", () => {
     expect((msg as { solve_method: string }).solve_method).toBe("apriltag_full");
   });
 
-  it("parses path with kind active", () => {
+  it("parses path waypoints", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
         type: "path",
         ts: 1,
-        kind: "active",
         waypoints: [[1, 2, 3]],
       }),
     );
     expect(msg!.type).toBe("path");
-    expect((msg as { kind: string }).kind).toBe("active");
     expect((msg as { waypoints: number[][] }).waypoints).toHaveLength(1);
-  });
-
-  it("parses path with kind preview and target", () => {
-    const msg = parseInboundMessage(
-      JSON.stringify({
-        type: "path",
-        ts: 1,
-        kind: "preview",
-        waypoints: [[1, 2, 3]],
-        target: [0, 0, 0],
-      }),
-    );
-    expect(msg!.type).toBe("path");
-    expect((msg as { kind: string }).kind).toBe("preview");
-    expect((msg as { target: number[] }).target).toEqual([0, 0, 0]);
   });
 
   it("parses nav_status phase", () => {

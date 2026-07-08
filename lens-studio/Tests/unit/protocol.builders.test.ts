@@ -7,7 +7,6 @@ import {
   buildPing,
   buildCameraInfo,
   buildNavigateGoal,
-  buildPreviewGoal,
   buildNavGoal,
   buildCancelNavGoal,
   buildEmergencyStop,
@@ -120,46 +119,24 @@ describe("outbound protocol builders", () => {
     );
     expect(msg.type).toBe("nav_goal");
     expect(msg.robot_id).toBe("go2");
-    expect(msg.intent).toBe("navigate");
+    expect(msg).not.toHaveProperty("intent");
     expect(msg.position).toEqual([1, 0, 2]);
     expect(msg.ts).toBe(1000);
   });
 
-  it("buildPreviewGoal without rotation", () => {
+  it("buildNavGoal without rotation", () => {
     const msg = JSON.parse(
-      buildPreviewGoal("go2", new vec3(50, 0, 0)),
+      buildNavGoal("go2", new vec3(50, 0, 0)),
     );
-    expect(msg.intent).toBe("preview");
     expect(msg.position).toEqual([0.5, 0, 0]);
     expect(msg.orientation).toBeUndefined();
   });
 
-  it("buildPreviewGoal with rotation", () => {
+  it("buildNavGoal with rotation", () => {
     const msg = JSON.parse(
-      buildPreviewGoal(
-        "go2",
-        new vec3(50, 0, 0),
-        new quat(1, 0, 0, 0),
-      ),
+      buildNavGoal("go2", new vec3(50, 0, 0), new quat(1, 0, 0, 0)),
     );
-    expect(msg.intent).toBe("preview");
     expect(msg.orientation).toEqual([0, 0, 0, 1]);
-  });
-
-  it("buildNavGoal accepts explicit intent", () => {
-    const msg = JSON.parse(
-      buildNavGoal("go2", "navigate", new vec3(100, 0, 200), new quat(1, 0, 0, 0)),
-    );
-    expect(msg.intent).toBe("navigate");
-  });
-
-  it("buildNavGoal preview without rotation", () => {
-    const msg = JSON.parse(
-      buildNavGoal("go2", "preview", new vec3(50, 0, 0)),
-    );
-    expect(msg.intent).toBe("preview");
-    expect(msg.position).toEqual([0.5, 0, 0]);
-    expect(msg).not.toHaveProperty("orientation");
   });
 
   it("buildCancelNavGoal", () => {

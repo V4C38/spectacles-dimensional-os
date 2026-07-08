@@ -24,11 +24,9 @@ if TYPE_CHECKING:
     from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
     from dimos.ar.world_frame.state import WorldFrameState
 
-PROTOCOL_VERSION = 10
+PROTOCOL_VERSION = 11
 
 NavPhase = Literal["idle", "navigating", "recovering", "succeeded", "failed"]
-PathKind = Literal["active", "preview"]
-GoalIntent = Literal["navigate", "preview"]
 
 DEFAULT_CAPABILITIES = [
     "lidar",
@@ -37,7 +35,6 @@ DEFAULT_CAPABILITIES = [
     "registration_manual_pose",
     "nav",
     "path",
-    "plan_preview",
     "cancel_nav_goal",
     "emergency_stop",
 ]
@@ -51,7 +48,6 @@ def _dumps(payload: dict[str, Any]) -> str:
 class NavGoalMessage:
     ts: float
     robot_id: str
-    intent: GoalIntent
     position: tuple[float, float, float]
     orientation: tuple[float, float, float, float] | None = None
 
@@ -168,14 +164,10 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         )
 
     if msg_type == "nav_goal":
-        intent = _require_type(data, "intent", str)
-        if intent not in ("navigate", "preview"):
-            raise ValueError("nav_goal.intent must be 'navigate' or 'preview'")
         orientation = _quat(data, "orientation") if "orientation" in data else None
         return NavGoalMessage(
             ts=ts,
             robot_id=robot_id,
-            intent=intent,  # type: ignore[arg-type]
             position=_vec3(data, "position"),
             orientation=orientation,
         )
@@ -371,7 +363,6 @@ def encode_runtime_snapshot(
     bridge: BridgeStatusSnapshot | dict[str, Any],
     nav: dict[str, Any],
     path: dict[str, Any] | None = None,
-    goal: dict[str, Any] | None = None,
     ts: float | None = None,
     world_frame: WorldFrameState | None = None,
 ) -> str:
@@ -388,8 +379,6 @@ def encode_runtime_snapshot(
     }
     if path is not None:
         payload["path"] = path
-    if goal is not None:
-        payload["goal"] = goal
     return _dumps(payload)
 
 
@@ -508,17 +497,12 @@ def encode_path(
     *,
     ts: float,
     waypoints: list[tuple[float, float, float]],
-    kind: PathKind = "active",
-    target: tuple[float, float, float] | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "type": "path",
         "ts": round(ts, 3),
-        "kind": kind,
         "waypoints": [_round_vec3(point, decimals=3) for point in waypoints],
     }
-    if kind == "preview" and target is not None:
-        payload["target"] = _round_vec3(target, decimals=3)
     return _dumps(payload)
 
 
@@ -570,41 +554,16 @@ def encode_nav_status(
     )
 
 
-NavGoalSource = Literal["ar", "agent"]
-
-
-def encode_nav_goal_update(
-    *,
-    ts: float | None,
-    source: NavGoalSource,
-    position: tuple[float, float, float],
-    orientation: tuple[float, float, float, float] | None,
-    active: bool,
-) -> str:
-    payload: dict[str, Any] = {
-        "type": "nav_goal_update",
-        "ts": round(ts, 3) if ts is not None else time.time(),
-        "source": source,
-        "position": _round_vec3(position, decimals=3),
-        "active": active,
-    }
-    if orientation is not None:
-        payload["orientation"] = _round_quat(orientation, decimals=4)
-    return _dumps(payload)
-
-
 __all__ = [
     "PROTOCOL_VERSION",
     "CameraInfoMessage",
     "CancelNavGoalMessage",
     "EmergencyStopMessage",
     "GetStatusMessage",
-    "GoalIntent",
     "InboundMessage",
     "JoystickCommandMessage",
     "NavGoalMessage",
     "NavPhase",
-    "PathKind",
     "PingMessage",
     "RegistrationCommandMessage",
     "RegistrationPoseMessage",
@@ -616,7 +575,6 @@ __all__ = [
     "encode_camera_frame_ack",
     "encode_hello",
     "encode_lidar_binary",
-    "encode_nav_goal_update",
     "encode_nav_status",
     "encode_path",
     "encode_pong",

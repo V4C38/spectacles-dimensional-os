@@ -10,14 +10,6 @@ import {
 } from "./UI/UIKit";
 import { UILogListener, UILogger } from "./UI/UILogger";
 import { TagTrackingProfile, RegistrationMode } from "../ARBridge/Network/Protocol";
-import {
-  NAV_GOAL_MODE_LABELS,
-  NavigationGoalMode,
-  nextNavigationGoalMode,
-} from "../ARBridge/Navigation/NavigationModel";
-
-export type { NavigationGoalMode };
-export { NAV_GOAL_MODE_LABELS, nextNavigationGoalMode };
 
 /** Whole-app lifecycle: registration wizard vs live AR session. */
 export type AppPhase = "registration" | "runtime";
@@ -31,7 +23,6 @@ export type NavigationState =
   | "navigating";
 export type NavigationOutcome =
   | { kind: "none" }
-  | { kind: "success" }
   | { kind: "failed"; errorCode: number | null };
 export type BridgeLinkState = "disconnected" | "connectedNoRobot" | "connected";
 
@@ -123,9 +114,6 @@ export function navigationPlacementToggleEnabled(state: AppStateData): boolean {
 export function navigationOutcomePresentation(
   outcome: NavigationOutcome,
 ): StatusTextPresentation | null {
-  if (outcome.kind === "success") {
-    return { text: "Navigation success", color: COLOR_SUCCESS };
-  }
   if (outcome.kind === "failed") {
     return { text: "Navigation failed", color: COLOR_ERROR };
   }
@@ -324,7 +312,6 @@ export interface AppStateData {
   debugMode: boolean;
   lidarMode: LidarDisplayMode;
   operatingMode: OperatingMode;
-  navigationGoalMode: NavigationGoalMode;
   navigationState: NavigationState;
   robotInteractionMode: RobotInteractionMode;
   navigationOutcome: NavigationOutcome;
@@ -343,7 +330,6 @@ const DEFAULT_CAPABILITY_NAMES = [
   "registration_manual_pose",
   "nav",
   "path",
-  "plan_preview",
   "cancel_nav_goal",
   "emergency_stop",
 ];
@@ -441,7 +427,6 @@ export function createDefaultAppStateData(): AppStateData {
     debugMode: false,
     lidarMode: "off",
     operatingMode: "manual",
-    navigationGoalMode: "continuous",
     navigationState: "off",
     robotInteractionMode: "hidden",
     navigationOutcome: defaultNavigationOutcome(),

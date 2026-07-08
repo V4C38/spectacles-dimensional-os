@@ -1,6 +1,6 @@
 // ================================================================
 /**
- * Protocol v10 — message types, parser, outbound builders, and unit
+ * Protocol v11 — message types, parser, outbound builders, and unit
  * conversion helpers. Single source of truth replacing the v3 trio
  * (ProtocolTypes / ProtocolParser / Protocol).
  *
@@ -13,7 +13,7 @@ import {
   createDefaultBridgeSnapshot,
 } from "../../App/AppState";
 
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -189,14 +189,10 @@ export function parseBridgeWorldFrameFields(
   return { world_frame_approximate };
 }
 
-export type PathKind = "active" | "preview";
-
 export interface PathMessage {
   type: "path";
   ts: number;
-  kind: PathKind;
   waypoints: [number, number, number][];
-  target?: [number, number, number];
 }
 
 export type NavPhase =
@@ -233,27 +229,7 @@ export interface SnapshotNavState {
 }
 
 export interface SnapshotPathState {
-  kind: PathKind;
   waypoints: [number, number, number][];
-  target?: [number, number, number];
-}
-
-export type NavGoalSource = "ar" | "agent";
-
-export interface SnapshotGoalState {
-  source: NavGoalSource;
-  position: [number, number, number];
-  orientation?: [number, number, number, number];
-  active: boolean;
-}
-
-export interface NavGoalUpdateMessage {
-  type: "nav_goal_update";
-  ts: number;
-  source: NavGoalSource;
-  position: [number, number, number];
-  orientation?: [number, number, number, number];
-  active: boolean;
 }
 
 export interface RuntimeSnapshotMessage {
@@ -263,7 +239,6 @@ export interface RuntimeSnapshotMessage {
   bridge: SnapshotBridgeState;
   nav: SnapshotNavState;
   path?: SnapshotPathState;
-  goal?: SnapshotGoalState;
 }
 
 export interface PongMessage {
@@ -284,7 +259,6 @@ export type InboundMessage =
   | BridgeStatusMessage
   | PathMessage
   | NavStatusMessage
-  | NavGoalUpdateMessage
   | RuntimeSnapshotMessage
   | PongMessage;
 
@@ -292,8 +266,6 @@ export type RegistrationCommandAction =
   | "start"
   | "stop"
   | "commit";
-
-export type GoalIntent = "navigate" | "preview";
 
 // ── Parse-error taxonomy ───────────────────────────────────────
 
@@ -373,8 +345,6 @@ const NAV_PHASES: NavPhase[] = [
   "succeeded",
   "failed",
 ];
-
-const PATH_KINDS: PathKind[] = ["active", "preview"];
 
 function parseNavStallReason(raw: unknown): NavStallReason | undefined {
   if (raw === "no_path" || raw === "planner_idle") {
@@ -492,74 +462,19 @@ function parseSnapshotNav(raw: unknown): SnapshotNavState {
   return status;
 }
 
-function parseSnapshotGoal(raw: unknown): SnapshotGoalState {
-  const goal = requireObject(raw);
-  const source = requireString(goal, "source");
-  if (source !== "ar" && source !== "agent") {
-    throw new Error("Missing or invalid field: source");
-  }
-  const snapshot: SnapshotGoalState = {
-    source,
-    position: parseVec3(goal.position),
-    active: Boolean(goal.active),
-  };
-  if (goal.orientation !== undefined) {
-    snapshot.orientation = parseQuat(goal.orientation);
-  }
-  return snapshot;
-}
-
-function parseNavGoalUpdateMessage(
-  data: Record<string, unknown>,
-): NavGoalUpdateMessage {
-  const source = requireString(data, "source");
-  if (source !== "ar" && source !== "agent") {
-    throw new Error("Missing or invalid field: source");
-  }
-  const msg: NavGoalUpdateMessage = {
-    type: "nav_goal_update",
-    ts: requireNumber(data, "ts"),
-    source,
-    position: parseVec3(data.position),
-    active: Boolean(data.active),
-  };
-  if (data.orientation !== undefined) {
-    msg.orientation = parseQuat(data.orientation);
-  }
-  return msg;
-}
-
 function parseSnapshotPath(raw: unknown): SnapshotPathState {
   const path = requireObject(raw);
-  const kind = requireString(path, "kind");
-  if (!PATH_KINDS.includes(kind as PathKind)) {
-    throw new Error("Missing or invalid field: kind");
-  }
-  const snapshot: SnapshotPathState = {
-    kind: kind as PathKind,
+  return {
     waypoints: parsePoints(path.waypoints),
   };
-  if (path.target !== undefined) {
-    snapshot.target = parseVec3(path.target);
-  }
-  return snapshot;
 }
 
 function parsePathMessage(data: Record<string, unknown>): PathMessage {
-  const kind = requireString(data, "kind");
-  if (!PATH_KINDS.includes(kind as PathKind)) {
-    throw new Error("Missing or invalid field: kind");
-  }
-  const msg: PathMessage = {
+  return {
     type: "path",
     ts: requireNumber(data, "ts"),
-    kind: kind as PathKind,
     waypoints: parsePoints(data.waypoints),
   };
-  if (data.target !== undefined) {
-    msg.target = parseVec3(data.target);
-  }
-  return msg;
 }
 
 export function parseInboundJson(text: string): Record<string, unknown> {
@@ -665,9 +580,6 @@ function parseInboundObject(
       };
       if (data.path !== undefined) {
         snapshot.path = parseSnapshotPath(data.path);
-      }
-      if (data.goal !== undefined) {
-        snapshot.goal = parseSnapshotGoal(data.goal);
       }
       return snapshot;
     }
@@ -787,10 +699,6 @@ function parseInboundObject(
 
     case "path": {
       return parsePathMessage(data);
-    }
-
-    case "nav_goal_update": {
-      return parseNavGoalUpdateMessage(data);
     }
 
     case "nav_status": {
@@ -917,7 +825,6 @@ export function buildRegistrationPose(
 
 export function buildNavGoal(
   robotId: string,
-  intent: GoalIntent,
   position: vec3,
   rotation?: quat | null,
 ): string {
@@ -925,7 +832,6 @@ export function buildNavGoal(
     type: "nav_goal",
     ts: getTime(),
     robot_id: robotId,
-    intent,
     position: lensCentimetersToProtocolMeters(position),
   };
   if (rotation) {
@@ -939,15 +845,7 @@ export function buildNavigateGoal(
   position: vec3,
   rotation: quat,
 ): string {
-  return buildNavGoal(robotId, "navigate", position, rotation);
-}
-
-export function buildPreviewGoal(
-  robotId: string,
-  position: vec3,
-  rotation?: quat | null,
-): string {
-  return buildNavGoal(robotId, "preview", position, rotation);
+  return buildNavGoal(robotId, position, rotation);
 }
 
 export function buildPing(clientTs: number, robotId: string): string {

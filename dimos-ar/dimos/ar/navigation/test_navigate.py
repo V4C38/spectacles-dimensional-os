@@ -80,7 +80,6 @@ def _last_nav_status(mock_server: MagicMock) -> dict:
 def test_on_navigate_goal_broadcasts_idle_until_path() -> None:
     nav, mock_server, published_nav, _published_cancel = _make_nav()
     msg = NavGoalMessage(
-        intent="navigate",
         ts=1.0,
         robot_id="unitree_go2",
         position=(1.0, 0.0, 2.0),
@@ -186,6 +185,8 @@ async def test_handle_ar_goal_reached_failure_marks_goal_failed() -> None:
     nav, _mock_server, _published_nav, published_cancel = _make_nav()
     nav._nav_goal_pending = True
     nav._dimos_nav_state = "navigating"
+    nav._motion_router.emergency_stop = MagicMock(wraps=nav._motion_router.emergency_stop)
+    nav._motion_router.cancel_nav_goal = MagicMock(wraps=nav._motion_router.cancel_nav_goal)
 
     nav.on_goal_reached(Bool(data=False))
 
@@ -193,6 +194,8 @@ async def test_handle_ar_goal_reached_failure_marks_goal_failed() -> None:
     assert nav._goal_reached is False
     assert nav._goal_failed is True
     assert nav._nav_goal_pending is False
+    nav._motion_router.emergency_stop.assert_called_once()
+    nav._motion_router.cancel_nav_goal.assert_not_called()
     assert len(published_cancel) == 2
 
 
@@ -265,7 +268,6 @@ def test_on_navigate_goal_sets_dispatch_mono_on_direct_publish() -> None:
     """dispatch_mono tracks direct stream publish acceptance."""
     nav, _mock_server, published_nav, _published_cancel = _make_nav()
     msg = NavGoalMessage(
-        intent="navigate",
         ts=1.0,
         robot_id="unitree_go2",
         position=(1.0, 0.0, 2.0),
@@ -281,7 +283,6 @@ def test_on_navigate_goal_direct_publish_returns_quickly() -> None:
     """Direct stream publish keeps the WebSocket handler quick."""
     nav, _mock_server, published_nav, _published_cancel = _make_nav()
     msg = NavGoalMessage(
-        intent="navigate",
         ts=1.0,
         robot_id="unitree_go2",
         position=(1.0, 0.0, 2.0),
@@ -310,7 +311,6 @@ def test_emergency_stop_then_goal_succeeds() -> None:
     assert nav._dimos_nav_state == "idle"
 
     msg = NavGoalMessage(
-        intent="navigate",
         ts=2.0,
         robot_id="unitree_go2",
         position=(2.0, 0.0, 3.0),
@@ -340,7 +340,6 @@ def test_cancel_goal_timeout_does_not_mark_goal_failed() -> None:
 def test_send_nav_goal_accepts_direct_publish() -> None:
     nav, _mock_server, published_nav, _published_cancel = _make_nav()
     msg = NavGoalMessage(
-        intent="navigate",
         ts=1.0,
         robot_id="unitree_go2",
         position=(1.0, 0.0, 2.0),
@@ -357,14 +356,12 @@ def test_concurrent_nav_goals_dispatch_both() -> None:
     """Direct router dispatches each goal; Lens throttling owns coalescing."""
     nav, _mock_server, published_nav, _published_cancel = _make_nav()
     first_goal = NavGoalMessage(
-        intent="navigate",
         ts=1.0,
         robot_id="unitree_go2",
         position=(1.0, 0.0, 2.0),
         orientation=(0.0, 0.0, 0.0, 1.0),
     )
     second_goal = NavGoalMessage(
-        intent="navigate",
         ts=2.0,
         robot_id="unitree_go2",
         position=(2.0, 0.0, 3.0),
@@ -426,7 +423,6 @@ def _make_goal_msg(
     position: tuple[float, float, float] = (1.0, 0.0, 2.0),
 ) -> NavGoalMessage:
     return NavGoalMessage(
-        intent="navigate",
         ts=ts,
         robot_id="unitree_go2",
         position=position,
@@ -517,11 +513,15 @@ def test_wire_sequence_goal_failed() -> None:
     nav._nav_goal_pending = True
     nav._dimos_nav_state = "navigating"
     nav._nav_path_received = True
+    nav._motion_router.emergency_stop = MagicMock(wraps=nav._motion_router.emergency_stop)
+    nav._motion_router.cancel_nav_goal = MagicMock(wraps=nav._motion_router.cancel_nav_goal)
 
     nav.on_goal_reached(Bool(data=False))
 
     statuses = _all_nav_statuses(mock_server)
     assert statuses[-1]["phase"] == "failed"
+    nav._motion_router.emergency_stop.assert_called_once()
+    nav._motion_router.cancel_nav_goal.assert_not_called()
     assert len(published_cancel) == 2
 
 
@@ -579,38 +579,6 @@ def test_watchdog_fires_on_mid_session_path_silence() -> None:
     assert statuses[-1]["stall_reason"] == "no_path"
 
 
-def test_agent_submit_goal_emits_agent_source() -> None:
-    """Agent ingress uses source=agent on nav_goal_update."""
-    nav, mock_server, published_nav, _published_cancel = _make_nav()
-    nav.submit_goal(
-        position=(1.0, 0.0, 2.0),
-        orientation=(0.0, 0.0, 0.0, 1.0),
-        ts=1.0,
-        source="agent",
-    )
-    time.sleep(0.05)
-    wire = _all_wire_messages(mock_server)
-    updates = [m for m in wire if m["type"] == "nav_goal_update"]
-    assert len(updates) >= 1
-    assert updates[0]["source"] == "agent"
-    assert updates[0]["active"] is True
-    assert len(published_nav) == 1
-
-
-def test_agent_submit_rejected_before_world_frame_committed() -> None:
-    nav, mock_server, published_nav, _published_cancel = _make_nav(committed=False)
-    nav.submit_goal(
-        position=(1.0, 0.0, 2.0),
-        orientation=None,
-        ts=1.0,
-        source="agent",
-    )
-    time.sleep(0.05)
-    assert published_nav == []
-    wire = _all_wire_messages(mock_server)
-    assert not any(m["type"] == "nav_goal_update" for m in wire)
-
-
 def test_submit_goal_rejected_when_robot_not_connected() -> None:
     nav, mock_server, published_nav, _published_cancel = _make_nav()
     nav._robot_connected = lambda: False
@@ -618,7 +586,6 @@ def test_submit_goal_rejected_when_robot_not_connected() -> None:
         position=(1.0, 0.0, 2.0),
         orientation=(0.0, 0.0, 0.0, 1.0),
         ts=1.0,
-        source="ar",
     )
     time.sleep(0.05)
     assert published_nav == []

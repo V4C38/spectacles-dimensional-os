@@ -58,27 +58,11 @@
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
   Children:
-    - !<own> 17f3728f-ffcc-4add-5a57-2bcf06959b39
     - !<own> a361088d-0c85-4383-43ca-2dcbed568ac0
     - !<own> bd966646-55b5-4509-7d63-dcb69a063e8c
     - !<own> e807a50c-42b9-4f42-5898-e0794ebdcec9
   Components:
     - !<own> 357a86d1-5433-41ae-72ad-087f3946e2bd
-- !<SceneObject/17f3728f-ffcc-4add-5a57-2bcf06959b39>
-  PrefabRemaps:
-    []
-  Name: Circle_Navigating
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.050000, z: 0.000000}
-    Rotation: {x: -90.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 31.000000, y: 31.000008, z: 31.000008}
-    HasSegmentScaleCompensation: false
-  Children:
-    []
-  Components:
-    - !<own> 3d1fd1c7-64c2-4d4f-7c26-ff2891a6eb07
 - !<SceneObject/2cb4a552-3138-4bd3-567c-af42e39d64b8>
   PrefabRemaps:
     []
@@ -106,7 +90,8 @@
     {}
   ScriptInputs:
     "":
-      {}
+      circleWhiteMaterial: !<reference.Material> a9fd9cd6-7a45-4d4b-8baa-2dfb9577bc11
+      circleYellowMaterial: !<reference.Material> 292c5410-f592-4e05-9e04-1abe6083dfcf
   ScriptTypes:
     "":
       {}
@@ -186,7 +171,7 @@
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
   SizeToFit: false
-  FontSize: 80
+  FontSize: 65
   Font: !<reference> 00000000-0000-0000-0000-000000000000
   LayoutRect:
     left: -7.500000
@@ -250,26 +235,6 @@
     CapitalizationOverride: None
   DepthTest: false
   TwoSided: false
-- !<RenderMeshVisual/3d1fd1c7-64c2-4d4f-7c26-ff2891a6eb07>
-  PrefabRemaps:
-    []
-  Name: component_3
-  Enabled: true
-  RenderOrder: 100
-  StretchMode: Stretch
-  VerticalAlignment: Center
-  HorizontalAlignment: Center
-  MeshShadowMode: None
-  ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
-  ShadowDensity: 1.000000
-  Materials:
-    - !<reference> 292c5410-f592-4e05-9e04-1abe6083dfcf
-  Mesh: !<reference> 48bf52aa-7a6b-4e77-8bc2-246bda8baa70
-  Skin: !<reference> 00000000-0000-0000-0000-000000000000
-  BlendShapesEnabled: true
-  BlendNormals: false
-  BlendShapes:
-    {}
 - !<SceneObject/3d261d57-e3f5-4ae8-665a-b63beeccd029>
   PrefabRemaps:
     []
@@ -337,7 +302,7 @@
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
   Materials:
-    - !<reference> a9fd9cd6-7a45-4d4b-8baa-2dfb9577bc11
+    - !<reference> 292c5410-f592-4e05-9e04-1abe6083dfcf
   Mesh: !<reference> 48bf52aa-7a6b-4e77-8bc2-246bda8baa70
   Skin: !<reference> 00000000-0000-0000-0000-000000000000
   BlendShapesEnabled: true
@@ -447,7 +412,7 @@
 - !<SceneObject/a361088d-0c85-4383-43ca-2dcbed568ac0>
   PrefabRemaps:
     []
-  Name: Circle_Seeking
+  Name: DragInteractable
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>

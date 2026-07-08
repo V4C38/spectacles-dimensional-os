@@ -17,7 +17,6 @@ from dimos.ar.network.data_plane import (
 )
 from dimos.ar.network.protocol import (
     NavGoalMessage,
-    encode_nav_goal_update,
     encode_nav_status,
 )
 from dimos.ar.tag_tracking.solve import orientation_yaw_deg
@@ -41,20 +40,16 @@ logger = setup_logger()
 NAV_GOAL_PATH_TIMEOUT_S: float = 8.0
 NAV_WATCHDOG_POLL_INTERVAL_S: float = 0.5
 NAV_MESSAGE_AGE_LOG_INTERVAL_S: float = 5.0
-NAV_GOAL_UPDATE_DEDUP_DISTANCE_M: float = 0.15
-NAV_GOAL_UPDATE_DEDUP_INTERVAL_S: float = 0.25
 NAV_GOAL_REDISPATCH_MIN_DELTA_M: float = 0.15
 NAV_ARRIVAL_SHORTFALL_WARN_M: float = 0.25
 NAV_ERROR_ROBOT_OFFLINE: int = 503
 StallReason = str
-NavGoalSource = Literal["ar", "agent"]
 SessionPhase = Literal["pending", "navigating", "recovering"]
 LastOutcome = Literal["succeeded", "failed"]
 
 
 @dataclass
 class NavSession:
-    source: NavGoalSource
     position: tuple[float, float, float]
     orientation: tuple[float, float, float, float] | None
     dispatched_mono: float | None
@@ -89,8 +84,6 @@ class NavigateGoalHandler:
         self._last_outcome: LastOutcome | None = None
         self._nav_error_code: int | None = None
         self._latched_recovering: bool = False
-        self._last_goal_update_emit_mono: float | None = None
-        self._last_goal_update_position: tuple[float, float, float] | None = None
         self._nav_watchdog_lock = threading.Lock()
         self._nav_watchdog_stop = threading.Event()
         self._nav_watchdog_thread: threading.Thread | None = None
@@ -162,21 +155,8 @@ class NavigateGoalHandler:
         if self._last_navigating_path_waypoints is None:
             return None
         return {
-            "kind": "active",
             "waypoints": [list(point) for point in self._last_navigating_path_waypoints],
         }
-
-    def runtime_snapshot_goal(self) -> dict[str, object] | None:
-        if self._session is None or self._last_outcome is not None:
-            return None
-        goal: dict[str, object] = {
-            "source": self._session.source,
-            "position": list(self._session.position),
-            "active": True,
-        }
-        if self._session.orientation is not None:
-            goal["orientation"] = list(self._session.orientation)
-        return goal
 
     def broadcast_nav_status(self, *, ts: float | None = None) -> None:
         self._sender.send(self.nav_status_payload(ts=ts))
@@ -191,7 +171,6 @@ class NavigateGoalHandler:
         position: tuple[float, float, float],
         orientation: tuple[float, float, float, float] | None,
         ts: float,
-        source: NavGoalSource,
     ) -> None:
         if not self._world_frame.is_committed:
             logger.warning("goal ignored before world frame committed")
@@ -200,12 +179,10 @@ class NavigateGoalHandler:
             logger.error("AR navigation goal rejected — robot not connected")
             self._last_outcome = "failed"
             self._nav_error_code = NAV_ERROR_ROBOT_OFFLINE
-            self._emit_nav_goal_update(active=False, ts=ts)
             self._broadcast_empty_path(ts=ts)
             self.broadcast_nav_status(ts=ts)
             return
         msg = NavGoalMessage(
-            intent="navigate",
             ts=ts,
             robot_id=self._robot_id,
             position=position,
@@ -225,7 +202,6 @@ class NavigateGoalHandler:
         if was_navigating:
             assert self._session is not None
             self._session = NavSession(
-                source=source,
                 position=position,
                 orientation=orientation,
                 dispatched_mono=self._session.dispatched_mono,
@@ -237,7 +213,6 @@ class NavigateGoalHandler:
             )
         else:
             self._session = NavSession(
-                source=source,
                 position=position,
                 orientation=orientation,
                 dispatched_mono=None,
@@ -255,7 +230,6 @@ class NavigateGoalHandler:
         )
         if not was_navigating:
             self.broadcast_nav_status(ts=ts)
-        self._emit_nav_goal_update(active=True, ts=ts)
         self._motion_router.send_nav_goal(
             goal,
             on_complete=lambda ok, err: self._on_goal_dispatched(
@@ -271,20 +245,16 @@ class NavigateGoalHandler:
     # ------------------------------------------------------------------
 
     def on_navigate_goal(self, msg: NavGoalMessage) -> None:
-        if msg.intent != "navigate":
-            return
         self.submit_goal(
             position=msg.position,
             orientation=msg.orientation,
             ts=msg.ts,
-            source="ar",
         )
 
     def on_cancel_nav_goal(self, ts: float | None = None) -> None:
         logger.info("AR navigation goal cancelled")
         self._last_outcome = None
         self._nav_error_code = None
-        self._emit_nav_goal_update(active=False, ts=ts)
         self._clear_session()
         self._broadcast_empty_path(ts=ts)
         self.broadcast_nav_status(ts=ts)
@@ -294,7 +264,6 @@ class NavigateGoalHandler:
         logger.info("AR emergency_stop handled nav_reset=true")
         self._last_outcome = None
         self._nav_error_code = None
-        self._emit_nav_goal_update(active=False, ts=ts)
         self._clear_session()
         self._broadcast_empty_path(ts=ts)
         self.broadcast_nav_status(ts=ts)
@@ -304,7 +273,6 @@ class NavigateGoalHandler:
         """Joystick preemption: reset tracking without marking goal failed."""
         self._last_outcome = None
         self._nav_error_code = None
-        self._emit_nav_goal_update(active=False, ts=ts)
         self._clear_session()
         self._broadcast_empty_path(ts=ts)
         self.broadcast_nav_status(ts=ts)
@@ -323,7 +291,6 @@ class NavigateGoalHandler:
             prior_odom_position = session.odom_position
 
         msg = NavGoalMessage(
-            intent="navigate",
             ts=time.time(),
             robot_id=self._robot_id,
             position=position,
@@ -402,14 +369,12 @@ class NavigateGoalHandler:
             self._last_outcome = "failed"
             logger.info("AR navigation goal failed")
         self._nav_error_code = None
-        if was_pending:
-            self._emit_nav_goal_update(active=False, ts=getattr(msg, "ts", None))
         self._clear_session()
         if was_pending and (reached or not reached):
             self._broadcast_empty_path()
         self.broadcast_nav_status()
         if was_pending and not reached:
-            self._motion_router.cancel_nav_goal(on_complete=self._on_control_dispatched)
+            self._motion_router.emergency_stop(on_complete=self._on_control_dispatched)
 
     def on_navigation_state(self, msg: str) -> None:
         """Upstream navigation_state — unreached on shipped blueprints; recovery uses watchdog."""
@@ -470,7 +435,6 @@ class NavigateGoalHandler:
         if self._session is not None:
             self._session.phase = "recovering"
         self._latched_recovering = True
-        self._emit_nav_goal_update(active=False, ts=None)
         self._broadcast_empty_path()
         self._broadcast_stall_nav_status(stall_reason=stall_reason)
         self._clear_session()
@@ -499,7 +463,6 @@ class NavigateGoalHandler:
         if value:
             if self._session is None:
                 self._session = NavSession(
-                    source="ar",
                     position=(0.0, 0.0, 0.0),
                     orientation=None,
                     dispatched_mono=None,
@@ -561,7 +524,6 @@ class NavigateGoalHandler:
             self._latched_recovering = False
         if self._session is None and value != "idle":
             self._session = NavSession(
-                source="ar",
                 position=(0.0, 0.0, 0.0),
                 orientation=None,
                 dispatched_mono=None,
@@ -660,7 +622,6 @@ class NavigateGoalHandler:
         self._clear_session()
         error = str(err) if err is not None else "goal publish rejected"
         logger.error("AR navigation goal publish failed", error=error)
-        self._emit_nav_goal_update(active=False, ts=msg.ts)
         self._broadcast_empty_path(ts=msg.ts)
         self.broadcast_nav_status(ts=msg.ts)
 
@@ -729,49 +690,6 @@ class NavigateGoalHandler:
             path_waypoints=path_waypoints,
         )
         self.broadcast_nav_status(ts=ts)
-
-    def _emit_nav_goal_update(self, *, active: bool, ts: float | None) -> None:
-        if active:
-            if self._session is None:
-                return
-            now = time.monotonic()
-            position = self._session.position
-            if (
-                self._last_goal_update_emit_mono is not None
-                and self._last_goal_update_position is not None
-                and now - self._last_goal_update_emit_mono < NAV_GOAL_UPDATE_DEDUP_INTERVAL_S
-            ):
-                dx = position[0] - self._last_goal_update_position[0]
-                dy = position[1] - self._last_goal_update_position[1]
-                dz = position[2] - self._last_goal_update_position[2]
-                if math.sqrt(dx * dx + dy * dy + dz * dz) < NAV_GOAL_UPDATE_DEDUP_DISTANCE_M:
-                    return
-            self._last_goal_update_emit_mono = now
-            self._last_goal_update_position = position
-            self._sender.send(
-                encode_nav_goal_update(
-                    ts=ts,
-                    source=self._session.source,
-                    position=position,
-                    orientation=self._session.orientation,
-                    active=True,
-                )
-            )
-            return
-        session = self._session
-        self._last_goal_update_emit_mono = None
-        self._last_goal_update_position = None
-        if session is None:
-            return
-        self._sender.send(
-            encode_nav_goal_update(
-                ts=ts,
-                source=session.source,
-                position=session.position,
-                orientation=session.orientation,
-                active=False,
-            )
-        )
 
     def _broadcast_empty_path(self, *, ts: float | None = None) -> None:
         self._last_navigating_path_waypoints = None

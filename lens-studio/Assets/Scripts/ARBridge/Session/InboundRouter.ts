@@ -131,15 +131,9 @@ export class InboundRouter {
     this.navigationClient.onNavStatus.add((msg) =>
       this.navigationPlacement.applyNavStatus(msg),
     );
-    this.navigationClient.onNavGoalUpdate.add((msg) =>
-      this.navigationPlacement.applyNavGoalUpdate(msg),
-    );
     this.navigationPlacement.onNavigationSettled.add((outcome) => {
       this.frameCaptureController?.requestImmediateCapture();
     });
-    this.statusClient.onRuntimeSnapshot.add(() =>
-      this.navigationPlacement.resyncPreviewGoal(),
-    );
     this.statusClient.onBridgeStatus.add((msg) => this._applyBridgeStatus(msg));
     this.session.onConnectionChanged.add((connected) =>
       this._applyConnectionState(connected),
@@ -159,7 +153,7 @@ export class InboundRouter {
     this.appState.uiLogger.tick();
     const poseApplied = this.robotPresenter.applyPendingPose();
     this.robotPresenter.tickFrame();
-    this.navigationPlacement.syncIdleContinuousNavigationPlacement(poseApplied);
+    this.navigationPlacement.syncIdleNavigationPlacement(poseApplied);
   }
 
   public tryConnect(ip: string): Promise<boolean> {

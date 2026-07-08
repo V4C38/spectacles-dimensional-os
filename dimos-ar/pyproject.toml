@@ -88,6 +88,5 @@ module = [
     "dimos.ar.robot_profile.go2",
     "dimos.ar.robot_profile.g1",
     "dimos.ar.bridge.module",
-    "dimos.ar.preview_planner",
 ]
 disallow_untyped_decorators = false

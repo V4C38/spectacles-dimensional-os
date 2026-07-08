@@ -8,7 +8,7 @@ platform-agnostic code under `dimos/ar/`.
 
 At a glance:
 - `dimos/ar/bridge/`: `ARBridge` composition root; telemetry, odom buffer, status service, `MotionRouter`, `BridgeSafetyCoordinator`
-- `dimos/ar/navigation/`: `NavigateGoalHandler`, `PreviewGoalHandler`, world-frame goal transform
+- `dimos/ar/navigation/`: `NavigateGoalHandler`, world-frame goal transform
 - `dimos/ar/world_frame/`: committed `WorldFrameState`, registry, runtime refinement
 - `dimos/ar/tag_tracking/`: robot-mounted AprilTag detect + solve
 - `dimos/ar/registration/`: setup wizard session only (baseline, types, wire)
@@ -64,9 +64,9 @@ robot family:
 - `hello.capabilities` tells the client which features are available for the
   active runtime
 - after `hello`, the bridge sends `runtime_snapshot` (bridge + nav phase + optional
-  active path and goal) so reconnecting clients resync without replaying live streams
-- navigation uses `nav_goal` with `intent: "navigate"` or `"preview"`; preview paths
-  are not cached in `runtime_snapshot`; active goals can be cancelled with `cancel_nav_goal`
+  active path) so reconnecting clients resync without replaying live streams
+- navigation uses `nav_goal` to dispatch world-frame goals; active goals can be
+  cancelled with `cancel_nav_goal`
 - the Lens keeps offline development affordances enabled until a bridge connects
   and completes the handshake
 - unavailable controls stay visible and switch into disabled `Special` UI states
@@ -177,7 +177,7 @@ and LiDAR stay co-registered within a few centimetres.
 <details>
 <summary>Protocol coupling</summary>
 
-Protocol **v10** is current (`PROTOCOL_VERSION = 10` in `dimos/ar/network/protocol.py`).
+Protocol **v11** is current (`PROTOCOL_VERSION = 11` in `dimos/ar/network/protocol.py`).
 See [`PROTOCOL.md`](PROTOCOL.md) for the full changelog and wire schema. If the AR
 protocol changes, update these together:
 

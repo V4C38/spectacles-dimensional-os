@@ -14,14 +14,10 @@ import {
   findText,
   requireChild,
   requireFirstText,
-  setButtonStyle,
   SnapOS2Styles,
 } from "../UI/UIKit";
 import { yawRotationFromWorldRotation } from "../Utilities/Utilities";
-import type {
-  NavGoalConfig,
-  NavMarkerViewState,
-} from "../../ARBridge/Navigation/NavigationModel";
+import type { NavMarkerViewState } from "../../ARBridge/Navigation/NavigationModel";
 
 const MARKER_VISIBILITY_DURATION_SECONDS = 0.18;
 const OUTCOME_CIRCLE_COLLAPSE_DURATION_SECONDS =
@@ -31,36 +27,15 @@ const VISIBILITY_ANIMATION_VERSION_KEY = "__navMarkerVisibilityVersion";
 const CIRCLE_SCALE_ANIMATION_VERSION_KEY = "__navMarkerCircleScaleVersion";
 const OUTCOME_RESET_ANIMATION_VERSION_KEY = "__navMarkerOutcomeResetVersion";
 
-function setMaterialPassProp(
-  object: SceneObject | null,
-  prop: string,
-  value: unknown,
-  altProp?: string,
-): boolean {
-  if (!object) {
-    return false;
-  }
-  const visual = object.getComponent(
-    "Component.RenderMeshVisual",
-  ) as RenderMeshVisual | null;
-  if (!visual?.mainMaterial?.mainPass) {
-    return false;
-  }
-  const pass = visual.mainMaterial.mainPass as any;
-  if (prop in pass) {
-    pass[prop] = value;
-    return true;
-  }
-  if (altProp && altProp in pass) {
-    pass[altProp] = value;
-    return true;
-  }
-  return false;
+function outcomeStateText(label: "Cancelled" | "Failed"): string {
+  return label === "Cancelled"
+    ? "Navigation\nCancelled"
+    : "Navigation\nFailed";
 }
 
 function applyDotsMaterialMode(
   dots: SceneObject | null,
-  seeking: boolean,
+  idle: boolean,
 ): void {
   if (!dots) {
     return;
@@ -78,41 +53,42 @@ function applyDotsMaterialMode(
     pass.WhiteColor = DOTS_WHITE;
   }
   if ("YellowColor" in pass) {
-    pass.YellowColor = seeking ? DOTS_WHITE : DOTS_YELLOW;
+    pass.YellowColor = idle ? DOTS_WHITE : DOTS_YELLOW;
   }
   if ("AnimationSwitch" in pass) {
-    pass.AnimationSwitch = !seeking;
+    pass.AnimationSwitch = !idle;
   } else if ("animationSwitch" in pass) {
-    pass.animationSwitch = !seeking;
+    pass.animationSwitch = !idle;
   }
 }
+
+export type MarkerMaterialAssets = {
+  circleWhite: Material;
+  circleYellow: Material;
+};
 
 export class MarkerViewCore {
   private readonly root: SceneObject;
   private readonly headingRoot: SceneObject | null;
-  private readonly rotationRoot: SceneObject | null;
-  private readonly portalCircle: SceneObject;
-  private readonly circleNavigating: SceneObject | null;
+  private readonly dragInteractableObject: SceneObject;
+  private readonly circleVisual: RenderMeshVisual | null;
+  private readonly circleWhiteMaterial: Material;
+  private readonly circleYellowMaterial: Material;
   private readonly confirmButtonObject: SceneObject;
   private readonly confirmButton: RoundButton;
   private readonly confirmVfx: SceneObject | null;
   private readonly cancelVfx: SceneObject | null;
   private readonly confirmLabel: Text;
   private readonly stateText: Text | null;
-  private readonly arrow: SceneObject | null;
-  private readonly moveDirectionArrow: SceneObject | null;
   private readonly dots: SceneObject | null;
-  private readonly portalBaseScale: vec3;
-  private readonly navigatingBaseScale: vec3 | null;
+  private readonly dragInteractableBaseScale: vec3;
   private readonly rootBaseScale: vec3;
   private readonly headingBaseScale: vec3 | null;
   private readonly dotsBaseScale: vec3 | null;
   private readonly stateTextBaseScale: vec3 | null;
-  private readonly rotationLookAt: Component | null;
-  private readonly circleAnimation: any;
 
-  private _config: NavGoalConfig = { mode: "single", source: "user", interactive: true };
-  private _appliedStyle: NavMarkerViewState["style"] | "hidden" = "hidden";
+  private _visible = false;
+  private _outcomeActive = false;
   private _confirmEnabled = false;
   private _placementAnchor: SceneObject | null = null;
   private _preAnchorParent: SceneObject | null = null;
@@ -120,14 +96,16 @@ export class MarkerViewCore {
   private _rotation = quat.quatIdentity();
   private _outcomeResetCompleteCallback: (() => void) | null = null;
 
-  constructor(root: SceneObject) {
+  constructor(root: SceneObject, materials: MarkerMaterialAssets) {
     this.root = root;
     this.headingRoot = findChildRecursive(this.root, "NavigationHeadingRoot");
-    this.rotationRoot = findChildRecursive(this.root, "RotationRoot");
-    this.portalCircle =
-      findChildRecursive(this.root, "Circle_Seeking") ??
-      requireChild(this.root, "PortalCircle", "MarkerViewCore");
-    this.circleNavigating = findChildRecursive(this.root, "Circle_Navigating");
+    this.dragInteractableObject = requireChild(this.root, "DragInteractable", "MarkerViewCore");
+    const visualObject = findChildRecursive(this.dragInteractableObject, "Visual");
+    this.circleVisual = visualObject
+      ? (visualObject.getComponent("Component.RenderMeshVisual") as RenderMeshVisual | null)
+      : null;
+    this.circleWhiteMaterial = materials.circleWhite;
+    this.circleYellowMaterial = materials.circleYellow;
     this.confirmButtonObject = requireChild(this.root, "ConfirmButton", "MarkerViewCore");
     this.confirmButton = this.confirmButtonObject.getComponent(
       RoundButton.getTypeName(),
@@ -136,57 +114,30 @@ export class MarkerViewCore {
     this.cancelVfx = findChildRecursive(this.confirmButtonObject, "ButtonVFX_Cancel");
     this.confirmLabel = requireFirstText(this.confirmButtonObject, "MarkerViewCore");
     this.stateText = findText(this.root, "State_Text");
-    this.arrow = findChildRecursive(this.root, "Arrow");
-    this.moveDirectionArrow = findChildRecursive(this.root, "MoveDirectionArrow");
     this.dots = findChildRecursive(this.root, "Dots");
-    if (this.moveDirectionArrow && !this.headingRoot) {
-      throw new Error(
-        "MarkerViewCore: MoveDirectionArrow requires NavigationHeadingRoot",
-      );
-    }
-    this.portalBaseScale = this.portalCircle.getTransform().getLocalScale();
-    this.navigatingBaseScale =
-      this.circleNavigating?.getTransform().getLocalScale() ?? null;
+    this.dragInteractableBaseScale =
+      this.dragInteractableObject.getTransform().getLocalScale();
     this.rootBaseScale = this.root.getTransform().getLocalScale();
     this.headingBaseScale = this.headingRoot?.getTransform().getLocalScale() ?? null;
     this.dotsBaseScale = this.dots?.getTransform().getLocalScale() ?? null;
     this.stateTextBaseScale =
       this.stateText?.getSceneObject().getTransform().getLocalScale() ?? null;
-    this.rotationLookAt = (this.rotationRoot ?? this.root).getComponent(
-      "Component.LookAtComponent",
-    ) as Component | null;
-    this.circleAnimation = this._findScriptComponent(
-      this.portalCircle,
-      "reset",
-      "enableScanAnimation",
-    );
     if (!this.confirmButton) {
       throw new Error(
         "MarkerViewCore: NavigationTargetMarker is missing ConfirmButton RoundButton",
       );
     }
-    if (this.rotationLookAt) {
-      this.rotationLookAt.enabled = false;
-    }
     this._initializeHidden();
     this.setRotation(this._rotation);
-  }
-
-  public get config(): NavGoalConfig {
-    return this._config;
-  }
-
-  public get appliedStyle(): NavMarkerViewState["style"] | "hidden" {
-    return this._appliedStyle;
   }
 
   public get confirmActionButton(): RoundButton {
     return this.confirmButton;
   }
 
-  /** Drag collider lives on portalCircle — disabling that object revokes drag mid-gesture. */
+  /** Drag collider lives on DragInteractable — keep it enabled while visible. */
   public get dragInteractable(): Interactable | null {
-    return this.portalCircle.getComponent(
+    return this.dragInteractableObject.getComponent(
       Interactable.getTypeName(),
     ) as Interactable | null;
   }
@@ -213,25 +164,19 @@ export class MarkerViewCore {
   }
 
   public apply(
-    config: NavGoalConfig,
     view: NavMarkerViewState,
     onOutcomeComplete?: () => void,
   ): void {
-    if (view.style === "outcome") {
+    if (view.outcomeLabel) {
       this._outcomeResetCompleteCallback = onOutcomeComplete ?? null;
+      this._applyOutcomeView(view);
+      return;
     }
-    this._applyStandardOrOutcome(config, view);
-  }
 
-  private _applyStandardOrOutcome(config: NavGoalConfig, view: NavMarkerViewState): void {
-    const samePresentation =
-      this._config.mode === config.mode &&
-      this._config.interactive === config.interactive &&
-      this._appliedStyle === view.style &&
-      view.visible;
-
-    this._config = config;
-    this._appliedStyle = view.visible ? view.style : "hidden";
+    const leavingOutcome = this._outcomeActive;
+    this._outcomeActive = false;
+    const becameVisible = view.visible && !this._visible;
+    this._visible = view.visible;
 
     if (!view.visible) {
       this._beginHide();
@@ -239,92 +184,36 @@ export class MarkerViewCore {
       return;
     }
 
-    if (view.style === "outcome") {
-      this._applyOutcomeView(view, !samePresentation);
-      return;
+    if (!this._isVisuallyCollapsed() || leavingOutcome) {
+      this._restoreStandardVisualState();
     }
-
-    this._applyStandardView(view, !samePresentation);
-  }
-
-  private _applyOutcomeView(view: NavMarkerViewState, animateEntrance: boolean): void {
-    if (animateEntrance) {
-      this._restoreOutcomeVisualState();
-    }
-    this._applyMarkerVisuals(view, animateEntrance);
-    this.root.enabled = true;
-    this.root.getTransform().setLocalScale(this.rootBaseScale);
-    this._setDotsVisible(true);
-    this._setStateText(view.outcomeLabel ?? "", true);
-    const animationVersion = nextAnimationVersion(
-      this.root,
-      OUTCOME_RESET_ANIMATION_VERSION_KEY,
-    );
-    this._animateOutcomeResetCollapse(animationVersion);
-    this._animateOutcomeResetDelayedContentCollapse(animationVersion);
-  }
-
-  private _applyStandardView(view: NavMarkerViewState, animateEntrance: boolean): void {
-    if (animateEntrance && view.style === "seeking") {
-      this._restoreOutcomeVisualState();
-      this.resetCircleAnimation();
-    }
-    this._applyMarkerVisuals(view, animateEntrance);
-    if (view.style === "seeking" && animateEntrance) {
-      this._animateRootVisibility(true);
-      if (view.navigatingCircleVisible && this.circleNavigating && this.navigatingBaseScale) {
-        this._animateCircleScale(true, this.circleNavigating, this.navigatingBaseScale);
-      } else {
-        this._animateCircleScale(true);
-      }
-    }
-  }
-
-  private _applyMarkerVisuals(view: NavMarkerViewState, animateEntrance: boolean): void {
-    const navigating = view.style === "navigating";
-    const preview = view.style === "preview";
-    const seeking = view.style === "seeking";
-
-    if (this.circleNavigating) {
-      this.circleNavigating.enabled = view.navigatingCircleVisible;
-    }
-    // Keep portalCircle enabled whenever portalCircleVisible — it hosts the drag Interactable.
-    this.portalCircle.enabled = view.portalCircleVisible;
-    this._setCircleMeshVisible(this.portalCircle, view.portalCircleVisible);
-    if (this.rotationLookAt) {
-      this.rotationLookAt.enabled = false;
-    }
+    this.dragInteractableObject.enabled = true;
+    this._applyCircleMaterial(view.circleIdle);
+    applyDotsMaterialMode(this.dots, view.circleIdle);
+    this._setDotsVisible(!view.circleIdle);
+    this._setStateText("", false);
+    this.setRotation(view.heading);
 
     const button = view.button;
     this.setConfirmVisible(button !== null);
     if (button?.role === "cancel") {
-      this._cancelActionAvailable = button.enabled;
-      this._applyNavigatingButtonPresentation();
-    } else if (preview && button) {
-      this.confirmLabel.text = button.label;
-      setButtonStyle(this.confirmButton, SnapOS2Styles.Primary);
-      this._setConfirmInteractable(button.enabled);
+      applyCapabilityButtonPresentation(this.confirmButton, this.confirmLabel, {
+        available: button.label === "Cancel",
+        availableLabel: "Cancel",
+        unavailableLabel: "Cancel\nUnavailable",
+        availableStyle: SnapOS2Styles.Special,
+        unavailableStyle: SnapOS2Styles.Special,
+      });
+      this._setConfirmInteractable(true);
     }
+    this._setConfirmVfxState(false, button === null);
 
-    this.setScanAnimationEnabled(view.scanAnimation);
-    this._setConfirmVfxState(
-      button?.role === "confirm",
-      button === null,
-    );
-
-    if (this.arrow) {
-      this.arrow.enabled = navigating;
+    if (becameVisible) {
+      this._animateRootVisibility(true);
+    } else {
+      this.root.enabled = true;
+      this.root.getTransform().setLocalScale(this.rootBaseScale);
     }
-    this._setMoveDirectionArrowSpeed(view.arrowSpeed);
-    this._syncMoveDirectionArrowVisibility();
-
-    if (view.navigatingCircleVisible) {
-      setMaterialPassProp(this.circleNavigating, "Saturation", navigating ? 1 : 0);
-    } else if (seeking || preview || view.style === "outcome") {
-      setMaterialPassProp(this.portalCircle, "Saturation", 0);
-    }
-
-    applyDotsMaterialMode(this.dots, seeking || view.style === "outcome");
   }
 
   public bindPlacementAnchor(
@@ -404,14 +293,6 @@ export class MarkerViewCore {
     }
   }
 
-  public resetCircleAnimation(): void {
-    this.circleAnimation?.reset?.();
-  }
-
-  public setScanAnimationEnabled(enabled: boolean): void {
-    this.circleAnimation?.enableScanAnimation?.(enabled);
-  }
-
   public setConfirmVisible(visible: boolean): void {
     this.confirmButtonObject.enabled = visible;
     this._setConfirmInteractable(visible);
@@ -419,22 +300,16 @@ export class MarkerViewCore {
 
   public setCancelActionAvailability(available: boolean): void {
     this._cancelActionAvailable = available;
-    if (this._appliedStyle === "navigating") {
-      this._applyNavigatingButtonPresentation();
-    }
+    this._applyCancelButtonPresentation();
   }
 
   public hide(): void {
-    this.apply(this._config, {
+    this.apply({
       visible: false,
-      style: "seeking",
+      circleIdle: true,
       heading: this._rotation,
       button: null,
       outcomeLabel: null,
-      scanAnimation: false,
-      arrowSpeed: 0,
-      portalCircleVisible: false,
-      navigatingCircleVisible: false,
     });
   }
 
@@ -449,7 +324,7 @@ export class MarkerViewCore {
       {
         onEnded: () => {
           this.root.enabled = false;
-          this._appliedStyle = "hidden";
+          this._visible = false;
           callback();
         },
       },
@@ -458,22 +333,58 @@ export class MarkerViewCore {
 
   /** Cancel animations and disable interaction before scene-object destroy. */
   public teardownImmediate(): void {
-    nextAnimationVersion(this.root, VISIBILITY_ANIMATION_VERSION_KEY);
-    nextAnimationVersion(this.portalCircle, CIRCLE_SCALE_ANIMATION_VERSION_KEY);
-    if (this.circleNavigating) {
-      nextAnimationVersion(this.circleNavigating, CIRCLE_SCALE_ANIMATION_VERSION_KEY);
-    }
     nextAnimationVersion(this.root, OUTCOME_RESET_ANIMATION_VERSION_KEY);
     const dragInteractable = this.dragInteractable as any;
     if (dragInteractable) {
       dragInteractable.enabled = false;
     }
     this.setConfirmVisible(false);
-    this.setScanAnimationEnabled(false);
     this.releasePlacementAnchor();
-    this._appliedStyle = "hidden";
+    this._visible = false;
+    this._outcomeActive = false;
     this.root.enabled = false;
     this.root.getTransform().setLocalScale(vec3.zero());
+  }
+
+  private _applyOutcomeView(view: NavMarkerViewState): void {
+    const startingOutcome = !this._outcomeActive;
+    this._outcomeActive = true;
+    this._visible = view.visible;
+
+    if (startingOutcome) {
+      this._restoreStandardVisualState();
+    }
+
+    this.dragInteractableObject.enabled = true;
+    this._applyCircleMaterial(false);
+    applyDotsMaterialMode(this.dots, false);
+    this.setConfirmVisible(false);
+    this._setConfirmVfxState(true, true);
+    this.root.enabled = true;
+    this.root.getTransform().setLocalScale(this.rootBaseScale);
+    this._setDotsVisible(true);
+    const label: "Cancelled" | "Failed" =
+      view.outcomeLabel === "Cancelled" ? "Cancelled" : "Failed";
+    this._setStateText(outcomeStateText(label), true);
+
+    if (startingOutcome) {
+      const animationVersion = nextAnimationVersion(
+        this.root,
+        OUTCOME_RESET_ANIMATION_VERSION_KEY,
+      );
+      this._animateOutcomeResetCollapse(animationVersion);
+      this._animateOutcomeResetDelayedContentCollapse(animationVersion);
+    }
+  }
+
+  private _applyCircleMaterial(idle: boolean): void {
+    if (!this.circleVisual) {
+      return;
+    }
+    const nextMaterial = idle ? this.circleWhiteMaterial : this.circleYellowMaterial;
+    if (this.circleVisual.mainMaterial !== nextMaterial) {
+      this.circleVisual.mainMaterial = nextMaterial;
+    }
   }
 
   private _setConfirmInteractable(enabled: boolean): void {
@@ -496,23 +407,6 @@ export class MarkerViewCore {
     );
   }
 
-  private _findScriptComponent(
-    root: SceneObject,
-    ...methodNames: string[]
-  ): any | null {
-    const scripts = root.getComponents("ScriptComponent") ?? [];
-    for (let index = 0; index < scripts.length; index++) {
-      const script = scripts[index] as any;
-      const hasAllMethods = methodNames.every(
-        (methodName) => typeof script?.[methodName] === "function",
-      );
-      if (hasAllMethods) {
-        return script;
-      }
-    }
-    return null;
-  }
-
   private _setDotsVisible(visible: boolean): void {
     if (!this.dots) {
       return;
@@ -528,11 +422,17 @@ export class MarkerViewCore {
     this.stateText.getSceneObject().enabled = visible;
   }
 
-  private _restoreOutcomeVisualState(): void {
+  private _isVisuallyCollapsed(): boolean {
+    const scale = this.dragInteractableObject.getTransform().getLocalScale();
+    return scale.x < 0.001 && scale.y < 0.001 && scale.z < 0.001;
+  }
+
+  private _restoreStandardVisualState(): void {
     nextAnimationVersion(this.root, OUTCOME_RESET_ANIMATION_VERSION_KEY);
-    this.portalCircle.enabled = true;
-    this._setCircleMeshVisible(this.portalCircle, true);
-    this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
+    this.dragInteractableObject.enabled = true;
+    this.dragInteractableObject
+      .getTransform()
+      .setLocalScale(this.dragInteractableBaseScale);
     if (this.headingRoot && this.headingBaseScale) {
       this.headingRoot.getTransform().setLocalScale(this.headingBaseScale);
     }
@@ -542,7 +442,6 @@ export class MarkerViewCore {
     if (this.stateText && this.stateTextBaseScale) {
       this.stateText.getSceneObject().getTransform().setLocalScale(this.stateTextBaseScale);
     }
-    this._setDotsVisible(true);
     this._setStateText("", false);
   }
 
@@ -559,33 +458,28 @@ export class MarkerViewCore {
   }
 
   private _beginHide(): void {
-    this._appliedStyle = "hidden";
-    this._restoreOutcomeVisualState();
-    nextAnimationVersion(this.portalCircle, CIRCLE_SCALE_ANIMATION_VERSION_KEY);
-    this.portalCircle.enabled = true;
-    this._setCircleMeshVisible(this.portalCircle, true);
-    this.portalCircle.getTransform().setLocalScale(this.portalBaseScale);
+    this._visible = false;
+    this._outcomeActive = false;
+    if (!this._isVisuallyCollapsed()) {
+      this._restoreStandardVisualState();
+    }
     this.setConfirmVisible(false);
-    this.setScanAnimationEnabled(false);
+    this._setDotsVisible(false);
     this._setConfirmVfxState(true, true);
   }
 
   private _initializeHidden(): void {
     this.root.enabled = false;
     this.root.getTransform().setLocalScale(vec3.zero());
-    this._restoreOutcomeVisualState();
-    this.setScanAnimationEnabled(false);
+    this.dragInteractableObject.enabled = false;
+    this._restoreStandardVisualState();
+    this._setDotsVisible(false);
     this._setConfirmVfxState(true, true);
     this.confirmButtonObject.enabled = false;
     this._confirmEnabled = false;
-    if (this.arrow) {
-      this.arrow.enabled = false;
-    }
-    this._setMoveDirectionArrowSpeed(0);
-    this._syncMoveDirectionArrowVisibility();
   }
 
-  private _applyNavigatingButtonPresentation(): void {
+  private _applyCancelButtonPresentation(): void {
     applyCapabilityButtonPresentation(this.confirmButton, this.confirmLabel, {
       available: this._cancelActionAvailable,
       availableLabel: "Cancel",
@@ -595,65 +489,54 @@ export class MarkerViewCore {
     });
   }
 
-  private _setMoveDirectionArrowSpeed(speed: number): void {
-    setMaterialPassProp(this.moveDirectionArrow, "ArrowSpeed", speed);
-  }
-
-  private _syncMoveDirectionArrowVisibility(): void {
-    if (!this.moveDirectionArrow) {
-      return;
-    }
-    this.moveDirectionArrow.enabled = this._appliedStyle !== "outcome";
-  }
-
   private _applyHeadingRootRotation(): void {
     if (!this.headingRoot) {
       return;
     }
     this.headingRoot.getTransform().setLocalRotation(this._rotation);
-    this._syncMoveDirectionArrowVisibility();
   }
 
-  private _setCircleMeshVisible(circle: SceneObject, visible: boolean): void {
-    const visual = circle.getComponent(
-      "Component.RenderMeshVisual",
-    ) as RenderMeshVisual | null;
-    if (visual) {
-      visual.enabled = visible;
+  private _animateRootVisibility(visible: boolean): void {
+    if (visible) {
+      this.root.enabled = true;
     }
-  }
-
-  private _animateCircleScale(
-    visible: boolean,
-    target: SceneObject = this.portalCircle,
-    baseScale: vec3 = this.portalBaseScale,
-  ): void {
     animateLocalScale(
-      target,
-      visible ? baseScale : vec3.zero(),
+      this.root,
+      visible ? this.rootBaseScale : vec3.zero(),
       MARKER_VISIBILITY_DURATION_SECONDS,
-      target,
-      CIRCLE_SCALE_ANIMATION_VERSION_KEY,
+      this.root,
+      VISIBILITY_ANIMATION_VERSION_KEY,
       {
-        enableOnStart: true,
-        disableOnEnd: !visible,
+        onEnded: () => {
+          this.root.enabled = visible;
+        },
       },
     );
   }
 
   private _animateOutcomeResetCollapse(version: number): void {
     animateLocalScale(
-      this.portalCircle,
+      this.dragInteractableObject,
       vec3.zero(),
       OUTCOME_CIRCLE_COLLAPSE_DURATION_SECONDS,
       this.root,
       OUTCOME_RESET_ANIMATION_VERSION_KEY,
       { fixedVersion: version },
     );
+    if (this.headingRoot && this.headingBaseScale) {
+      animateLocalScale(
+        this.headingRoot,
+        vec3.zero(),
+        OUTCOME_CIRCLE_COLLAPSE_DURATION_SECONDS,
+        this.root,
+        OUTCOME_RESET_ANIMATION_VERSION_KEY,
+        { fixedVersion: version },
+      );
+    }
   }
 
   private _animateOutcomeResetDelayedContentCollapse(version: number): void {
-    if (!this.dots && !this.stateText && !this.headingRoot) {
+    if (!this.dots && !this.stateText) {
       this._outcomeResetCompleteCallback?.();
       this._outcomeResetCompleteCallback = null;
       return;
@@ -662,8 +545,6 @@ export class MarkerViewCore {
     const dotsStart = dotsTransform?.getLocalScale() ?? null;
     const stateTextTransform = this.stateText?.getSceneObject().getTransform() ?? null;
     const stateTextStart = stateTextTransform?.getLocalScale() ?? null;
-    const headingTransform = this.headingRoot?.getTransform() ?? null;
-    const headingStart = headingTransform?.getLocalScale() ?? null;
     const target = vec3.zero();
     const totalDuration =
       OUTCOME_DOTS_TEXT_COLLAPSE_DELAY_SECONDS + MARKER_VISIBILITY_DURATION_SECONDS;
@@ -688,9 +569,6 @@ export class MarkerViewCore {
           if (stateTextTransform && stateTextStart) {
             stateTextTransform.setLocalScale(stateTextStart);
           }
-          if (headingTransform && headingStart) {
-            headingTransform.setLocalScale(headingStart);
-          }
           return;
         }
         const collapseT =
@@ -702,9 +580,6 @@ export class MarkerViewCore {
         }
         if (stateTextTransform && stateTextStart) {
           stateTextTransform.setLocalScale(lerpVec3(stateTextStart, target, easedT));
-        }
-        if (headingTransform && headingStart) {
-          headingTransform.setLocalScale(lerpVec3(headingStart, target, easedT));
         }
       },
       ended: () => {
@@ -723,31 +598,10 @@ export class MarkerViewCore {
         if (stateTextTransform) {
           stateTextTransform.setLocalScale(target);
         }
-        if (headingTransform) {
-          headingTransform.setLocalScale(target);
-        }
         this._outcomeResetCompleteCallback?.();
         this._outcomeResetCompleteCallback = null;
       },
     });
-  }
-
-  private _animateRootVisibility(visible: boolean): void {
-    if (visible) {
-      this.root.enabled = true;
-    }
-    animateLocalScale(
-      this.root,
-      visible ? this.rootBaseScale : vec3.zero(),
-      MARKER_VISIBILITY_DURATION_SECONDS,
-      this.root,
-      VISIBILITY_ANIMATION_VERSION_KEY,
-      {
-        onEnded: () => {
-          this.root.enabled = visible;
-        },
-      },
-    );
   }
 }
 
@@ -762,6 +616,12 @@ export type NavigationMarkerEvents = {
 /** Prefab-root component: marker visuals, pose, and interaction wiring. */
 @component
 export class NavigationMarker extends BaseScriptComponent {
+  @input
+  private circleWhiteMaterial!: Material;
+
+  @input
+  private circleYellowMaterial!: Material;
+
   private _view: MarkerViewCore | null = null;
   private _events: NavigationMarkerEvents = {};
   private _interactionsBound = false;
@@ -775,7 +635,10 @@ export class NavigationMarker extends BaseScriptComponent {
     if (this._view) {
       return;
     }
-    this._view = new MarkerViewCore(this.getSceneObject());
+    this._view = new MarkerViewCore(this.getSceneObject(), {
+      circleWhite: this.circleWhiteMaterial,
+      circleYellow: this.circleYellowMaterial,
+    });
     this._interactionsBound = false;
   }
 
@@ -795,12 +658,11 @@ export class NavigationMarker extends BaseScriptComponent {
   }
 
   public apply(
-    config: NavGoalConfig,
     view: NavMarkerViewState,
     onOutcomeComplete?: () => void,
   ): void {
     this.ensureReady();
-    this._view?.apply(config, view, onOutcomeComplete ?? this._events.onOutcomeResetComplete);
+    this._view?.apply(view, onOutcomeComplete ?? this._events.onOutcomeResetComplete);
   }
 
   public hide(): void {
