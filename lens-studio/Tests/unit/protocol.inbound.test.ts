@@ -102,7 +102,6 @@ describe("parseInboundMessage", () => {
         ts: 1,
         mode: "april_tag",
         phase: "scanning",
-        capture: "steady",
         message: "Look at tag",
         tag_visible: true,
         progress: 55,
@@ -112,7 +111,6 @@ describe("parseInboundMessage", () => {
     );
     expect(msg!.type).toBe("registration_status");
     expect((msg as { phase: string }).phase).toBe("scanning");
-    expect((msg as { capture: string }).capture).toBe("steady");
     expect((msg as { progress: number }).progress).toBe(55);
     expect((msg as { alignment_confidence: number }).alignment_confidence).toBe(0.65);
     expect((msg as { refining: boolean }).refining).toBe(true);

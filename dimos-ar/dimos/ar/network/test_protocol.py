@@ -34,7 +34,7 @@ from dimos.ar.network.protocol import (
     encode_runtime_snapshot,
     nav_phase_payload,
 )
-from dimos.ar.registration.types import CaptureHint, RegistrationMode, RegistrationPhase
+from dimos.ar.registration.types import RegistrationMode, RegistrationPhase
 from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
 from dimos.ar.robot_profile.g1 import g1_handshake
 from dimos.ar.world_frame.state import WorldFrameState
@@ -362,7 +362,6 @@ def test_encode_registration_status() -> None:
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.APRIL_TAG,
                 phase=RegistrationPhase.SCANNING,
-                capture=CaptureHint.STEADY,
                 message="Look at the AprilTag on your robot",
                 tag_visible=True,
             ),
@@ -371,7 +370,6 @@ def test_encode_registration_status() -> None:
     assert raw["type"] == "registration_status"
     assert raw["mode"] == "april_tag"
     assert raw["phase"] == "scanning"
-    assert raw["capture"] == "steady"
     assert raw["tag_visible"] is True
     assert "progress" not in raw
 
@@ -383,7 +381,6 @@ def test_encode_registration_status_with_progress() -> None:
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.APRIL_TAG,
                 phase=RegistrationPhase.SCANNING,
-                capture=CaptureHint.STEADY,
                 message="",
                 tag_visible=True,
                 progress=40,
@@ -400,7 +397,6 @@ def test_encode_registration_status_with_alignment_fields() -> None:
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.APRIL_TAG,
                 phase=RegistrationPhase.SUCCEEDED,
-                capture=CaptureHint.OFF,
                 message="Registration successful",
                 alignment_confidence=0.65,
                 refining=True,
@@ -418,7 +414,6 @@ def test_encode_registration_status_manual() -> None:
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.MANUAL_POSE,
                 phase=RegistrationPhase.AWAITING_COMMIT,
-                capture=CaptureHint.OFF,
                 message="Manual robot pose ready — review and commit",
             ),
         )

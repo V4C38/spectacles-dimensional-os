@@ -87,6 +87,10 @@ export function wizardStepName(step: WizardStep): string {
   }
 }
 
+export function shouldShowBackOnStartStep(openedFromRuntime: boolean): boolean {
+  return openedFromRuntime;
+}
+
 export function createRegistrationViewState(): RegistrationViewState {
   return {
     mode: "auto",
@@ -198,7 +202,7 @@ export function buildRegistrationDisplay(
       return {
         statusText: state.message || "Registration failed",
         statusColor: COLOR_ERROR,
-        detailText: "Tap Redo to retry",
+        detailText: "Click Retry or switch to Manual pose",
         detailColor: COLOR_WHITE,
       };
     }
@@ -211,7 +215,7 @@ export function buildRegistrationDisplay(
       };
     }
     const tagStatus = state.tagVisible
-      ? { text: "✅  Tag detected - keep in view", color: COLOR_SUCCESS }
+      ? { text: "✅  Tag detected - move around", color: COLOR_SUCCESS }
       : { text: "❌  Tag not visible", color: COLOR_ERROR };
     let detailText = buildRegistrationDetailText(state);
     if (!state.tagVisible && isRegistrationPreviewPhase(state.phase)) {
@@ -268,7 +272,7 @@ export function getWizardFooterState(
     nextStyle = SnapOS2Styles.Primary;
   } else if (step === WizardStep.Register) {
     if (isRegistrationFailed(registrationState)) {
-      nextLabel = "Redo";
+      nextLabel = "Retry";
       nextStyle = SnapOS2Styles.PrimaryNeutral;
     } else if (isRegistrationPendingCommit(registrationState, commitInFlight)) {
       nextLabel = "Completing...";
@@ -472,11 +476,11 @@ export class RegistrationFlow {
       this._registrationClient?.preferredMode() === "manualOnly" ||
       this._state.mode === "manual"
     ) {
-      this._callbacks.log("redo requested — restarting manual registration");
+      this._callbacks.log("retry requested — restarting manual registration");
       this._beginManualMode();
       return;
     }
-    this._callbacks.log("redo requested — restarting auto registration");
+    this._callbacks.log("retry requested — restarting auto registration");
     this._beginAutoMode();
   }
 
@@ -648,13 +652,13 @@ export class RegistrationFlow {
   }
 
   private _logRegistrationStatusIfChanged(msg: RegistrationStatusMessage): void {
-    const key = `${msg.phase}|${msg.mode ?? "-"}|${msg.capture}|${msg.tag_visible ?? "-"}`;
+    const key = `${msg.phase}|${msg.mode ?? "-"}|${msg.tag_visible ?? "-"}`;
     if (key === this._lastLoggedRegistrationStatusKey) {
       return;
     }
     this._lastLoggedRegistrationStatusKey = key;
     this._callbacks.log(
-      `registration_status phase=${msg.phase} mode=${msg.mode ?? "-"} capture=${msg.capture} "${msg.message}"`,
+      `registration_status phase=${msg.phase} mode=${msg.mode ?? "-"} "${msg.message}"`,
     );
   }
 
@@ -702,6 +706,7 @@ export class RegistrationFlow {
     const progress = buildAlignmentProgressPercent(this._state);
     if (
       progress === null ||
+      progress <= 0 ||
       progress > REGISTRATION_STALL_PROGRESS_THRESHOLD ||
       progress === 100
     ) {

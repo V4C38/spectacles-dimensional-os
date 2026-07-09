@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { quat, vec3 } from "../shims/lens-runtime";
 import { Signal } from "../../Assets/Scripts/App/Utilities/Utilities";
-import { CameraClient } from "../../Assets/Scripts/ARBridge/Camera/CameraClient";
+import {
+  CameraClient,
+  CAPTURE_MIN_SPACING_S,
+} from "../../Assets/Scripts/ARBridge/Camera/CameraClient";
 import { setMockTime } from "../setup/lens-globals";
 
 vi.mock("../../Assets/Scripts/ARBridge/Network/WebSocketTransport", () => ({
@@ -10,11 +13,8 @@ vi.mock("../../Assets/Scripts/ARBridge/Network/WebSocketTransport", () => ({
 
 import { sendBinary } from "../../Assets/Scripts/ARBridge/Network/WebSocketTransport";
 
-const REGISTRATION_INTERVAL_S = 0.7;
-const RUNTIME_CAPTURE_INTERVAL_S = 1.0;
-
 type CameraClientInternals = CameraClient & {
-  _lastPipelineEndTime: number;
+  _captureSpacingDeadline: number;
   _inFlight: boolean;
   _inFlightSeq: number;
   _sentCameraInfo: boolean;
@@ -74,7 +74,7 @@ function makeClient() {
     getCameraObject: () => cameraObject as never,
   });
   client.bindInbound();
-  client.setMode("registration");
+  client.setCaptureEnabled(true);
 
   return { client, onCameraFrameAck, requestNextFrame, transportSend };
 }
@@ -84,7 +84,7 @@ async function flushAsyncCapture(): Promise<void> {
   await Promise.resolve();
 }
 
-describe("CameraClient send-gated cadence", () => {
+describe("CameraClient ACK-gated cadence", () => {
   beforeEach(() => {
     vi.mocked(sendBinary).mockClear();
     setMockTime(0);
@@ -104,25 +104,26 @@ describe("CameraClient send-gated cadence", () => {
     (globalThis as Record<string, unknown>).EncodingType = { Jpg: 0 };
   });
 
-  it("registration: resets cadence timer when camera_frame_ack arrives", () => {
+  it("resets spacing deadline when camera_frame_ack arrives", () => {
     const { client, onCameraFrameAck } = makeClient();
     const internals = client as unknown as CameraClientInternals;
-    internals._lastPipelineEndTime = 5.0;
+    internals._captureSpacingDeadline = 5.0;
     internals._inFlightSeq = 1;
 
     setMockTime(9.0);
     onCameraFrameAck.emit({ type: "camera_frame_ack", seq: 1, ts: 9.0 });
 
-    expect(internals._lastPipelineEndTime).toBe(9.0);
+    expect(internals._captureSpacingDeadline).toBe(9.0);
     expect(internals._inFlight).toBe(false);
   });
 
-  it("registration: waits for ACK before the next capture", async () => {
+  it("waits for ACK before the next capture", async () => {
     const { client, onCameraFrameAck, requestNextFrame } = makeClient();
     const internals = client as unknown as CameraClientInternals;
     internals._sentCameraInfo = true;
 
     setMockTime(1.0);
+    client.recordPose();
     client.tick();
     await flushAsyncCapture();
 
@@ -130,45 +131,39 @@ describe("CameraClient send-gated cadence", () => {
     expect(sendBinary).toHaveBeenCalledTimes(1);
     expect(internals._inFlight).toBe(true);
 
-    setMockTime(1.0 + REGISTRATION_INTERVAL_S + 0.05);
+    setMockTime(1.0 + CAPTURE_MIN_SPACING_S + 0.05);
     client.tick();
     await flushAsyncCapture();
     expect(requestNextFrame).toHaveBeenCalledTimes(1);
 
     setMockTime(1.1);
     onCameraFrameAck.emit({ type: "camera_frame_ack", seq: 1, ts: 1.1 });
-    setMockTime(1.1 + REGISTRATION_INTERVAL_S + 0.05);
+    setMockTime(1.1 + 0.05);
     client.tick();
     await flushAsyncCapture();
     expect(requestNextFrame).toHaveBeenCalledTimes(2);
     expect(sendBinary).toHaveBeenCalledTimes(2);
   });
 
-  it("runtime: permits the next capture after send plus interval without an intervening ACK", async () => {
+  it("resetCaptureSpacingDeadline zeroes capture wait", () => {
+    const { client } = makeClient();
+    const internals = client as unknown as CameraClientInternals;
+    internals._captureSpacingDeadline = 100.0;
+    setMockTime(5.0);
+    client.resetCaptureSpacingDeadline();
+    expect(internals._captureSpacingDeadline).toBe(5.0);
+  });
+
+  it("sets min spacing deadline at pipeline start", () => {
     const { client, requestNextFrame } = makeClient();
-    client.setMode("runtime");
     const internals = client as unknown as CameraClientInternals;
     internals._sentCameraInfo = true;
 
-    setMockTime(1.0);
+    setMockTime(2.0);
+    client.recordPose();
     client.tick();
-    await flushAsyncCapture();
 
+    expect(internals._captureSpacingDeadline).toBeCloseTo(2.0 + CAPTURE_MIN_SPACING_S, 5);
     expect(requestNextFrame).toHaveBeenCalledTimes(1);
-    expect(sendBinary).toHaveBeenCalledTimes(1);
-    expect(internals._lastPipelineEndTime).toBe(1.0);
-    expect(internals._inFlight).toBe(true);
-
-    setMockTime(1.0 + RUNTIME_CAPTURE_INTERVAL_S - 0.05);
-    client.tick();
-    await flushAsyncCapture();
-    expect(requestNextFrame).toHaveBeenCalledTimes(1);
-
-    setMockTime(1.0 + RUNTIME_CAPTURE_INTERVAL_S + 0.05);
-    client.tick();
-    await flushAsyncCapture();
-    expect(requestNextFrame).toHaveBeenCalledTimes(2);
-    expect(sendBinary).toHaveBeenCalledTimes(2);
-    expect(internals._inFlight).toBe(true);
   });
 });

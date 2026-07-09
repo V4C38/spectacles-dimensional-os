@@ -4,11 +4,9 @@
  */
 // ================================================================
 
-import { FrameCaptureController } from "../Camera/FrameCaptureController";
 import {
   buildRegistrationCommand,
   buildRegistrationPose,
-  CaptureHint,
   RegistrationCommandAction,
   RegistrationMode,
   RegistrationStatusMessage,
@@ -47,7 +45,8 @@ export interface RegistrationClientDeps {
 
 export class RegistrationClient {
   public readonly onRegistrationStatus = new Signal<RegistrationStatusMessage>();
-  public readonly onCapturePolicyInputsChanged = new Signal<void>();
+  public readonly onAprilTagCaptureStart = new Signal<void>();
+  public readonly onAprilTagCaptureEnd = new Signal<void>();
 
   private readonly _sendDropLog = { value: -1 };
   private _lastRegistrationCommandLogAction = "";
@@ -56,14 +55,11 @@ export class RegistrationClient {
     private readonly _session: ARBridgeSession | null,
     private readonly _transport: WebSocketTransport | null,
     private readonly _inbound: InboundProcessor | null,
-    private readonly frameCapture: FrameCaptureController | null,
     private readonly robotMarker: RobotMarker | null,
   ) {}
 
   private _intent: RegistrationMode | null = null;
   private _awaitingCommit = false;
-  private _tagCaptureSessionActive = false;
-  private _registrationCaptureHint: CaptureHint = "off";
   private _lastStatusTime = -1;
   private _lastCaptureLogTime = { value: -1 };
   private _lastSubmitLogTime = { value: -1 };
@@ -76,14 +72,6 @@ export class RegistrationClient {
 
   public get awaitingCommit(): boolean {
     return this._awaitingCommit;
-  }
-
-  public get tagCaptureSessionActive(): boolean {
-    return this._tagCaptureSessionActive;
-  }
-
-  public get registrationCaptureHint(): CaptureHint {
-    return this._registrationCaptureHint;
   }
 
   public initialize(deps: RegistrationClientDeps): void {
@@ -111,7 +99,6 @@ export class RegistrationClient {
   }
 
   public start(mode: RegistrationMode): void {
-    this.frameCapture?.resetCapturePipeline();
     if (this._session?.isConnected()) {
       this.sendRegistrationCommand("stop");
     }
@@ -119,10 +106,10 @@ export class RegistrationClient {
     this._awaitingCommit = false;
     this._lastStatusTime = -1;
     this._lastSubmittedManualPose = null;
-    this._tagCaptureSessionActive = mode === "april_tag";
-    this._registrationCaptureHint = mode === "april_tag" ? "steady" : "off";
     this._tryStartBridgeSession(mode);
-    this._notifyCapturePolicyInputsChanged();
+    if (mode === "april_tag") {
+      this.onAprilTagCaptureStart.emit();
+    }
     print(`RegistrationClient: start mode=${mode}`);
   }
 
@@ -133,12 +120,10 @@ export class RegistrationClient {
     this._awaitingCommit = false;
     this._lastStatusTime = -1;
     this._lastSubmittedManualPose = null;
-    this._tagCaptureSessionActive = false;
-    this._registrationCaptureHint = "off";
+    this.onAprilTagCaptureEnd.emit();
     if (notifyBridge && this._session?.isConnected()) {
       this.sendRegistrationCommand("stop");
     }
-    this._notifyCapturePolicyInputsChanged();
     print(
       wasTag
         ? "RegistrationClient: stop (april_tag)"
@@ -331,10 +316,6 @@ export class RegistrationClient {
     return getTime() - this._lastStatusTime > NO_RESPONSE_TIMEOUT_S;
   }
 
-  private _notifyCapturePolicyInputsChanged(): void {
-    this.onCapturePolicyInputsChanged.emit();
-  }
-
   private _tryStartBridgeSession(mode: RegistrationMode): boolean {
     const connected = Boolean(this._session?.isConnected());
     const hasRobotId = Boolean(this._inbound?.activeRobotId);
@@ -360,16 +341,11 @@ export class RegistrationClient {
       );
       this._intent = null;
       this._awaitingCommit = false;
-      this._tagCaptureSessionActive = false;
-      this._registrationCaptureHint = "off";
-      this._notifyCapturePolicyInputsChanged();
+      this.onAprilTagCaptureEnd.emit();
     } else if (msg.phase === "succeeded") {
       this._awaitingCommit = false;
       this._intent = null;
-    }
-    if (this._intent === "april_tag" || this._awaitingCommit) {
-      this._registrationCaptureHint = msg.capture;
-      this._notifyCapturePolicyInputsChanged();
+      this.onAprilTagCaptureEnd.emit();
     }
     this.onRegistrationStatus.emit(msg);
   };

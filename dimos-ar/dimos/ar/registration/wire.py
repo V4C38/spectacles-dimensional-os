@@ -7,7 +7,7 @@ import json
 import time
 from typing import Any, Literal
 
-from dimos.ar.registration.types import CaptureHint, RegistrationMode, RegistrationPhase
+from dimos.ar.registration.types import RegistrationMode, RegistrationPhase
 
 RegistrationCommand = Literal["start", "stop", "commit"]
 
@@ -36,7 +36,6 @@ class RegistrationPoseMessage:
 class RegistrationStatusPayload:
     mode: RegistrationMode | None
     phase: RegistrationPhase
-    capture: CaptureHint
     message: str
     tag_visible: bool | None = None
     preview_pose: dict[str, Any] | None = None
@@ -54,7 +53,6 @@ def encode_registration_status(
         "type": "registration_status",
         "ts": ts if ts is not None else time.time(),
         "phase": status.phase.value,
-        "capture": status.capture.value,
         "message": status.message,
     }
     if status.mode is not None:

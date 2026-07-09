@@ -26,19 +26,13 @@ function makeTransport() {
 
 function makeRegistrationClient(session = makeSession(), transport = makeTransport()) {
   const inbound = makeInbound();
-  const frameCapture = {
-    setMode: vi.fn(),
-    setCapturePolicy: vi.fn(),
-    resetCapturePipeline: vi.fn(),
-  };
   const client = new RegistrationClient(
     session as any,
     transport as any,
     inbound as any,
-    frameCapture as any,
     null,
   );
-  return { client, session, transport, inbound, frameCapture };
+  return { client, session, transport, inbound };
 }
 
 describe("RegistrationClient", () => {
@@ -46,21 +40,30 @@ describe("RegistrationClient", () => {
     setMockTime(100);
   });
 
-  it("starts april_tag session and activates tag capture latch", () => {
-    const { client, transport, frameCapture } = makeRegistrationClient();
-    let captureChanged = 0;
-    client.onCapturePolicyInputsChanged.add(() => {
-      captureChanged += 1;
+  it("emits onAprilTagCaptureStart when april_tag session starts", () => {
+    const { client, transport } = makeRegistrationClient();
+    let captureStart = 0;
+    client.onAprilTagCaptureStart.add(() => {
+      captureStart += 1;
     });
 
     client.start("april_tag");
 
-    expect(frameCapture.resetCapturePipeline).toHaveBeenCalled();
     expect(transport.send).toHaveBeenCalledTimes(2);
-    expect(client.tagCaptureSessionActive).toBe(true);
-    expect(client.registrationCaptureHint).toBe("steady");
-    expect(captureChanged).toBe(1);
+    expect(captureStart).toBe(1);
     expect(client.hasActiveIntent()).toBe(true);
+  });
+
+  it("does not emit onAprilTagCaptureStart for manual_pose", () => {
+    const { client } = makeRegistrationClient();
+    let captureStart = 0;
+    client.onAprilTagCaptureStart.add(() => {
+      captureStart += 1;
+    });
+
+    client.start("manual_pose");
+
+    expect(captureStart).toBe(0);
   });
 
   it("start sends bridge stop before start when connected", () => {
@@ -88,41 +91,25 @@ describe("RegistrationClient", () => {
     expect(client.hasActiveIntent()).toBe(true);
   });
 
-  it("maps registration_status capture hints to registrationCaptureHint", () => {
-    const { client, inbound } = makeRegistrationClient();
+  it("emits onAprilTagCaptureEnd on stop", () => {
+    const { client } = makeRegistrationClient();
+    let captureEnd = 0;
+    client.onAprilTagCaptureEnd.add(() => {
+      captureEnd += 1;
+    });
+
     client.start("april_tag");
+    client.stop();
 
-    let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
-    inbound.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
-      statusHandler = handler;
-    });
-    client.bind();
-
-    statusHandler({
-      type: "registration_status",
-      ts: 1,
-      robot_id: "go2",
-      mode: "april_tag",
-      phase: "scanning",
-      capture: "burst",
-      message: "Collecting samples",
-    });
-    expect(client.registrationCaptureHint).toBe("burst");
-
-    statusHandler({
-      type: "registration_status",
-      ts: 2,
-      robot_id: "go2",
-      mode: "april_tag",
-      phase: "scanning",
-      capture: "steady",
-      message: "",
-    });
-    expect(client.registrationCaptureHint).toBe("steady");
+    expect(captureEnd).toBe(1);
   });
 
-  it("clears intent and tag latch on failed registration_status", () => {
+  it("clears intent on failed registration_status and emits capture end", () => {
     const { client, inbound } = makeRegistrationClient();
+    let captureEnd = 0;
+    client.onAprilTagCaptureEnd.add(() => {
+      captureEnd += 1;
+    });
     client.start("april_tag");
 
     let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
@@ -137,13 +124,37 @@ describe("RegistrationClient", () => {
       robot_id: "go2",
       mode: "april_tag",
       phase: "failed",
-      capture: "off",
       message: "Tag lost",
     });
 
     expect(client.hasActiveIntent()).toBe(false);
-    expect(client.tagCaptureSessionActive).toBe(false);
-    expect(client.registrationCaptureHint).toBe("off");
+    expect(captureEnd).toBe(1);
+  });
+
+  it("emits onAprilTagCaptureEnd on succeeded registration_status", () => {
+    const { client, inbound } = makeRegistrationClient();
+    let captureEnd = 0;
+    client.onAprilTagCaptureEnd.add(() => {
+      captureEnd += 1;
+    });
+    client.start("april_tag");
+
+    let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
+    inbound.onRegistrationStatus.add.mockImplementation((handler: typeof statusHandler) => {
+      statusHandler = handler;
+    });
+    client.bind();
+
+    statusHandler({
+      type: "registration_status",
+      ts: 1,
+      robot_id: "go2",
+      mode: "april_tag",
+      phase: "succeeded",
+      message: "Registration successful",
+    });
+
+    expect(captureEnd).toBe(1);
   });
 
   it("uses registration capabilities for preferred mode", () => {
@@ -194,7 +205,6 @@ describe("RegistrationClient", () => {
       robot_id: "go2",
       mode: "manual_pose",
       phase: "succeeded",
-      capture: "off",
       message: "Manual registration committed",
     });
 
@@ -215,9 +225,9 @@ describe("RegistrationClient", () => {
   it("start clears prior session state", () => {
     const { client } = makeRegistrationClient();
     client.start("april_tag");
-    expect(client.tagCaptureSessionActive).toBe(true);
+    expect(client.hasActiveIntent()).toBe(true);
 
     client.start("manual_pose");
-    expect(client.tagCaptureSessionActive).toBe(false);
+    expect(client.hasActiveIntent()).toBe(true);
   });
 });

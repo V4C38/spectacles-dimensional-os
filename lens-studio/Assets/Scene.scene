@@ -4189,7 +4189,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: -3.279115, y: 15.000001, z: 10.901063}
+    Position: {x: -8.000000, y: 15.000002, z: 14.000000}
     Rotation: {x: 35.000000, y: 35.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -5978,7 +5978,6 @@
   ScriptInputs:
     "":
       markerRoot: !<reference.SceneObject> 5d452f16-b5e4-4fe1-b630-d1e608c2c0c7
-      frameCapture: !<MappingBased.AssignableType> a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b
   ScriptTypes:
     "":
       {}

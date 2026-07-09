@@ -133,4 +133,12 @@ describe("UILogger console output", () => {
     expect(lineText(lines, 8)).toContain("console-only");
     expect(lineText(lines, 7)).toContain("transient");
   });
+
+  it("logs camera stream start and stop to the debug console", () => {
+    logger.logCameraStreamStarted();
+    logger.logCameraStreamStopped();
+
+    expect(lineText(lines, 7)).toContain("Camera stream ON");
+    expect(lineText(lines, 8)).toContain("Camera stream OFF");
+  });
 });

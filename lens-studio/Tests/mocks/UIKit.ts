@@ -10,6 +10,12 @@ export const COLOR_SUCCESS = new (globalThis as Record<string, new (...args: num
   0,
   1,
 );
+export const COLOR_MUTED = new (globalThis as Record<string, new (...args: number[]) => { x: number; y: number; z: number; w: number }>).vec4(
+  1,
+  1,
+  1,
+  0.55,
+);
 export const COLOR_ERROR = new (globalThis as Record<string, new (...args: number[]) => { x: number; y: number; z: number; w: number }>).vec4(
   1,
   0,

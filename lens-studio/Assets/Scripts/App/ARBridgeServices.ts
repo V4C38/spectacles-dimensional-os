@@ -94,6 +94,14 @@ export class ARBridgeServices extends BaseScriptComponent {
     });
     this._registration!.initialize(registrationDeps);
     this._router!.bind();
+    this.frameCaptureController?.bind({
+      registrationClient: this._registration!,
+      telemetryClient: this._telemetry!,
+      inboundRouter: this._router!,
+      statusClient: this._status!,
+      uiLogger: this._state!.uiLogger,
+      getBridgeConnected: () => this._router!.hasConnection(),
+    });
 
     this.createEvent("UpdateEvent").bind(() => {
       this._router!.tick();
@@ -123,7 +131,6 @@ export class ARBridgeServices extends BaseScriptComponent {
       session,
       transport,
       inbound,
-      this.frameCaptureController ?? null,
       this.robotMarker ?? null,
     );
     this._registrationPreview = new RegistrationPreviewPresenter(
@@ -150,7 +157,6 @@ export class ARBridgeServices extends BaseScriptComponent {
       this._navClient,
       this._navigation,
       this._robot,
-      this.frameCaptureController ?? null,
       this._registration,
     );
   }

@@ -13,7 +13,7 @@ from dimos.ar.registration.session import RegistrationSession
 from dimos.ar.registration.session.flows import TAG_REGISTRATION_WINDOW_S
 from dimos.ar.registration.types import RegistrationMode
 from dimos.ar.registration.wire import RegistrationCommandMessage
-from dimos.ar.tag_tracking.solve import TagObservation
+from dimos.ar.tag_tracking.solve import TagMount, TagObservation
 from dimos.ar.world_frame.aligner import AlignmentEstimate
 from dimos.ar.world_frame.registry import WorldRegistry
 from dimos.ar.world_frame.state import WorldFrameState
@@ -145,6 +145,77 @@ def test_maybe_finish_tag_registration_waits_for_confidence() -> None:
     assert registry.state.is_committed is False
     assert tag_tracker.active is True
     assert not any(json.loads(payload)["phase"] == "succeeded" for payload in sent)
+
+
+def test_maybe_finish_tag_registration_commits_via_stability_fallback() -> None:
+    session, sent, registry, tag_tracker = _make_session()
+    now = time.monotonic()
+    mount = TagMount(
+        tag_id=0,
+        size_m=0.056,
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    T_world_tag = np.eye(4, dtype=np.float64)
+    T_world_tag[0, 3] = 1.0
+    observations = [
+        TagObservation(
+            mono_ts=now - 0.1 * idx,
+            tag_id=0,
+            p_world_tag=(1.0, 0.0, 0.0),
+            p_odom_tag=(0.0, 0.0, 0.0),
+            T_world_tag=np.array(T_world_tag, dtype=np.float64, copy=True),
+            T_odom_tag=np.eye(4, dtype=np.float64),
+            T_odom_base=np.eye(4, dtype=np.float64),
+            quality=0.9,
+            reprojection_error_px=0.5,
+        )
+        for idx in range(4)
+    ]
+    tag_tracker.recent_observations.return_value = observations
+    tag_tracker.mounts_snapshot.return_value = {0: mount}
+    session.on_registration_command(
+        RegistrationCommandMessage(
+            ts=1.0,
+            robot_id="test_robot",
+            command="start",
+            mode="april_tag",
+        ),
+        MagicMock(),
+    )
+    session._world_frame_refiner.registration_alignment_estimate.return_value = _estimate(
+        confidence=0.2,
+    )
+    session._odom.latest.return_value = MagicMock()
+    sent.clear()
+
+    asyncio.run(session._maybe_finish_tag_registration())
+
+    assert registry.state.is_committed is True
+    assert any(json.loads(payload)["phase"] == "succeeded" for payload in sent)
+    assert tag_tracker.active is False
+
+
+def test_april_tag_progress_uses_observations_before_confidence() -> None:
+    session, sent, _registry, tag_tracker = _make_session()
+    tag_tracker.recent_observations.return_value = _observations(2)
+    session._world_frame_refiner.registration_alignment_estimate.return_value = None
+    session.on_registration_command(
+        RegistrationCommandMessage(
+            ts=1.0,
+            robot_id="test_robot",
+            command="start",
+            mode="april_tag",
+        ),
+        MagicMock(),
+    )
+    sent.clear()
+
+    session._broadcast_status()
+
+    payload = json.loads(sent[-1])
+    assert payload["progress"] == 40
+    assert payload.get("alignment_confidence") is None
 
 
 def test_maybe_finish_tag_registration_commits_when_confident() -> None:

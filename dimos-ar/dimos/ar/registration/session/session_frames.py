@@ -10,7 +10,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from dimos.ar.network.protocol import CameraInfoMessage, encode_camera_frame_ack
-from dimos.ar.registration.types import CaptureHint, RegistrationMode, RegistrationPhase
+from dimos.ar.registration.types import RegistrationMode, RegistrationPhase
 from dimos.ar.tag_tracking.solve import build_camera_info
 from dimos.utils.logging_config import setup_logger
 
@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 _TRACE = os.getenv("DIMOS_AR_TRACE", "") not in ("", "0", "false")
 
 logger = setup_logger()
+
+REGISTRATION_SCAN_DIAG_LOG_INTERVAL_S = 2.0
 
 
 class FrameAdmission(StrEnum):
@@ -55,7 +57,6 @@ class RegistrationSessionFramesMixin:
             *,
             phase: RegistrationPhase | None = None,
             message: str = "",
-            capture: CaptureHint | None = None,
             mode: RegistrationMode | None = None,
             tag_visible: bool | None = None,
             ts: float | None = None,
@@ -109,6 +110,14 @@ class RegistrationSessionFramesMixin:
             return
         resolved_odom = self.resolve_frame_odom(header)
         if resolved_odom is None:
+            if (
+                self._session.mode == RegistrationMode.APRIL_TAG
+                and self._tag_tracker.active
+            ):
+                logger.info(
+                    "Tag frame skipped: no odom at capture time",
+                    seq=seq,
+                )
             self._send_frame_ack(header)
             return
         self._frame_in_flight = True
@@ -125,7 +134,6 @@ class RegistrationSessionFramesMixin:
                 self._broadcast_status(
                     phase=RegistrationPhase.SCANNING,
                     message="Waiting for robot odometry",
-                    capture=CaptureHint.STEADY,
                 )
             result = await asyncio.to_thread(
                 self._tag_tracker.process_frame,
@@ -150,6 +158,12 @@ class RegistrationSessionFramesMixin:
                 resolved_odom=resolved_odom,
                 frame_result=result,
             )
+            if self._session.mode == RegistrationMode.APRIL_TAG and self._tag_tracker.active:
+                self._maybe_log_registration_scan_diag(
+                    header=header,
+                    result=result,
+                    resolved_odom=resolved_odom,
+                )
             if refining_committed_frame:
                 self._world_frame_refiner.maybe_log_moving_robot_diag(
                     header=header,
@@ -172,13 +186,38 @@ class RegistrationSessionFramesMixin:
         if not isinstance(raw_capture_ts, (int, float)) or not math.isfinite(float(raw_capture_ts)):
             return None
         capture_ts = float(raw_capture_ts)
-        refining_committed_frame = self._refining_committed_frame()
-        lookup = (
-            self._odom.at_interpolated_by_source
-            if refining_committed_frame
-            else self._odom.at_or_latest_by_source
+        sample = self._odom.at_interpolated_by_source(capture_ts)
+        if sample is not None:
+            return sample
+        return self._odom.at_or_latest_by_source(capture_ts)
+
+    def _maybe_log_registration_scan_diag(
+        self,
+        *,
+        header: dict[str, Any],
+        result: FrameResult,
+        resolved_odom: OdomSample,
+    ) -> None:
+        now = time.monotonic()
+        if now - self._session.last_registration_scan_log_mono < REGISTRATION_SCAN_DIAG_LOG_INTERVAL_S:
+            return
+        self._session.last_registration_scan_log_mono = now
+        capture_ts_robot = float(header["capture_ts_robot"])
+        source_ts = resolved_odom.source_ts
+        source_ts_gap: float | None = None
+        if source_ts is not None:
+            source_ts_gap = capture_ts_robot - source_ts
+        logger.info(
+            "registration scan frame",
+            seq=int(header.get("seq", -1)),
+            tag_detected=result.tag_detected,
+            observations_added=result.observations_added,
+            observation_count=self._tag_tracker.observation_count(),
+            rejections_reprojection=result.rejections_reprojection,
+            rejections_skew=result.rejections_skew,
+            rejections_distance=result.rejections_distance,
+            source_ts_gap_s=round(source_ts_gap, 4) if source_ts_gap is not None else None,
         )
-        return lookup(capture_ts)
 
     def _frame_admission(
         self,
@@ -205,7 +244,6 @@ class RegistrationSessionFramesMixin:
                 self._broadcast_status(
                     phase=RegistrationPhase.FAILED,
                     message="No camera intrinsics received",
-                    capture=CaptureHint.OFF,
                 )
             return FrameAdmission.ACK_ONLY
         return FrameAdmission.PROCESS

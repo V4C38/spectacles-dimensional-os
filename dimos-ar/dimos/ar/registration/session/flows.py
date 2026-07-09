@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -10,7 +11,6 @@ import numpy as np
 from dimos.ar.network.data_plane import DROPPED_POSE_LOG_INTERVAL_S
 from dimos.ar.network.protocol import RegistrationCommandMessage, RegistrationPoseMessage
 from dimos.ar.registration.types import (
-    CaptureHint,
     RegistrationCandidate,
     RegistrationMode,
     RegistrationPhase,
@@ -18,7 +18,12 @@ from dimos.ar.registration.types import (
 from dimos.ar.registration.wire import RegistrationStatusPayload, encode_registration_status
 from dimos.ar.tag_tracking.solve import R_ALIGN, build_T_world_odom
 from dimos.ar.utils.console import console_divider, log_checkpoint
-from dimos.ar.world_frame.transforms import OdomSample, normalize_ground_pose, pose_to_matrix
+from dimos.ar.world_frame.transforms import (
+    OdomSample,
+    normalize_ground_pose,
+    pose_to_matrix,
+    yaw_from_T,
+)
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -32,8 +37,12 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
-TAG_REGISTRATION_WINDOW_S = 15.0
+TAG_REGISTRATION_WINDOW_S = 30.0
 TAG_REGISTRATION_MAX_DIST_M = 2.5
+TAG_REGISTRATION_MAX_SPREAD_M = 0.10
+TAG_REGISTRATION_MAX_YAW_SPREAD_DEG = 6.0
+TAG_REGISTRATION_PROGRESS_SAMPLE_WEIGHT = 0.8
+TAG_REGISTRATION_PROGRESS_CONFIDENCE_WEIGHT = 0.2
 
 
 class RegistrationFlowsMixin:
@@ -69,7 +78,6 @@ class RegistrationFlowsMixin:
             self._broadcast_status(
                 phase=RegistrationPhase.FAILED,
                 message="Registration start requires mode",
-                capture=CaptureHint.OFF,
                 ts=msg.ts,
             )
             return
@@ -82,7 +90,6 @@ class RegistrationFlowsMixin:
                 self._broadcast_status(
                     phase=RegistrationPhase.FAILED,
                     message="AprilTag registration unavailable on this robot",
-                    capture=CaptureHint.OFF,
                     ts=msg.ts,
                 )
                 return
@@ -93,7 +100,6 @@ class RegistrationFlowsMixin:
             self._broadcast_status(
                 phase=RegistrationPhase.SCANNING,
                 message="Look at the AprilTag on your robot",
-                capture=CaptureHint.BURST,
                 ts=msg.ts,
             )
         else:
@@ -101,7 +107,6 @@ class RegistrationFlowsMixin:
             self._broadcast_status(
                 phase=RegistrationPhase.EDITING,
                 message="Place the robot marker, then commit",
-                capture=CaptureHint.OFF,
                 ts=msg.ts,
             )
 
@@ -141,7 +146,6 @@ class RegistrationFlowsMixin:
             self._broadcast_status(
                 phase=RegistrationPhase.EDITING,
                 message="Waiting for robot odometry",
-                capture=CaptureHint.OFF,
                 ts=msg.ts,
             )
             return
@@ -156,7 +160,12 @@ class RegistrationFlowsMixin:
     def _registration_ready(self, estimate: AlignmentEstimate) -> bool:
         if estimate.confidence >= self._world_frame_refiner.registration_confidence_min():
             return True
-        return estimate.yaw_observable and not estimate.approximate
+        if estimate.yaw_observable and not estimate.approximate:
+            return True
+        min_obs = self._world_frame_refiner.registration_min_observations()
+        if estimate.observation_count >= min_obs and self._tag_registration_stability_met():
+            return True
+        return False
 
     def _registration_scan_timed_out(self) -> bool:
         started = self._session.april_tag_started_mono
@@ -164,12 +173,28 @@ class RegistrationFlowsMixin:
             return False
         return bool(time.monotonic() - started >= TAG_REGISTRATION_WINDOW_S)
 
+    def _april_tag_timeout_message(
+        self,
+        *,
+        estimate: AlignmentEstimate | None,
+        min_obs: int,
+    ) -> str:
+        observations = self._april_tag_window_observations()
+        if not self._tag_tracker.last_tag_detected:
+            return "Registration timed out — keep the AprilTag in view"
+        if len(observations) < min_obs:
+            return (
+                "Registration timed out — move around the robot while keeping the tag in view"
+            )
+        if estimate is not None and not self._registration_ready(estimate):
+            return "Registration timed out — move slightly around the tag for a clearer angle"
+        return "Registration timed out"
+
     def _fail_april_tag_registration(self, message: str) -> None:
         self._set_tag_tracker_active(False, reason="registration_failed")
         self._broadcast_status(
             phase=RegistrationPhase.FAILED,
             message=message,
-            capture=CaptureHint.OFF,
         )
         self._stop_broadcast()
         self._clear_session()
@@ -184,19 +209,19 @@ class RegistrationFlowsMixin:
         if estimate is None:
             if self._registration_scan_timed_out():
                 self._fail_april_tag_registration(
-                    "Registration timed out — move around the robot while keeping the tag in view",
+                    self._april_tag_timeout_message(estimate=None, min_obs=min_obs),
                 )
             return
         if estimate.observation_count < min_obs:
             if self._registration_scan_timed_out():
                 self._fail_april_tag_registration(
-                    "Registration timed out — move around the robot while keeping the tag in view",
+                    self._april_tag_timeout_message(estimate=estimate, min_obs=min_obs),
                 )
             return
         if not self._registration_ready(estimate):
             if self._registration_scan_timed_out():
                 self._fail_april_tag_registration(
-                    "Registration timed out — move around the robot while keeping the tag in view",
+                    self._april_tag_timeout_message(estimate=estimate, min_obs=min_obs),
                 )
             return
         candidate = RegistrationCandidate(
@@ -241,8 +266,69 @@ class RegistrationFlowsMixin:
         min_obs = int(self._world_frame_refiner.registration_min_observations())
         estimate = self._registration_alignment_estimate()
         obs_fraction = min(len(observations) / max(min_obs, 1), 1.0)
-        conf_fraction = estimate.confidence if estimate is not None else 0.0
-        return max(0, min(100, round(min(obs_fraction, conf_fraction) * 100)))
+        sample_part = obs_fraction * TAG_REGISTRATION_PROGRESS_SAMPLE_WEIGHT
+        confidence_part = 0.0
+        if estimate is not None and len(observations) >= min_obs:
+            confidence_part = (
+                estimate.confidence * TAG_REGISTRATION_PROGRESS_CONFIDENCE_WEIGHT
+            )
+        return max(0, min(100, round((sample_part + confidence_part) * 100)))
+
+    def _april_tag_window_pose_samples(
+        self,
+        observations: list[Any],
+    ) -> tuple[list[np.ndarray], list[float]]:
+        mounts = self._tag_tracker.mounts_snapshot()
+        positions: list[np.ndarray] = []
+        yaws: list[float] = []
+        for obs in observations:
+            mount = mounts.get(obs.tag_id)
+            if mount is None:
+                continue
+            T_world_tag = obs.T_world_tag
+            T_world_base = T_world_tag @ np.linalg.inv(mount.T_base_tag)
+            positions.append(T_world_base[:3, 3])
+            yaws.append(yaw_from_T(T_world_base))
+        return positions, yaws
+
+    def _april_tag_window_spread_m(self, positions: list[np.ndarray]) -> float | None:
+        min_obs = self._world_frame_refiner.registration_min_observations()
+        if len(positions) < min_obs:
+            return None
+        arr = np.stack(positions, axis=0)
+        center = np.median(arr, axis=0)
+        return float(np.max(np.linalg.norm(arr - center, axis=1)))
+
+    def _april_tag_window_max_yaw_delta_deg(self, yaws: list[float]) -> float | None:
+        if len(yaws) < 2:
+            return 0.0
+        sin_sum = sum(math.sin(y) for y in yaws)
+        cos_sum = sum(math.cos(y) for y in yaws)
+        mean_yaw = math.atan2(sin_sum, cos_sum)
+        max_yaw_delta = max(
+            abs(math.atan2(math.sin(y - mean_yaw), math.cos(y - mean_yaw))) for y in yaws
+        )
+        return math.degrees(max_yaw_delta)
+
+    def _tag_registration_stability_met(self) -> bool:
+        observations = self._april_tag_window_observations()
+        min_obs = self._world_frame_refiner.registration_min_observations()
+        if len(observations) < min_obs:
+            return False
+
+        positions, yaws = self._april_tag_window_pose_samples(observations)
+        if len(positions) < min_obs:
+            return False
+
+        spread_m = self._april_tag_window_spread_m(positions)
+        if spread_m is None or spread_m > TAG_REGISTRATION_MAX_SPREAD_M:
+            return False
+
+        max_yaw_deg = self._april_tag_window_max_yaw_delta_deg(yaws)
+        if max_yaw_deg is not None and max_yaw_deg > TAG_REGISTRATION_MAX_YAW_SPREAD_DEG:
+            return False
+
+        return True
 
     def _process_manual_candidate(
         self,
@@ -276,7 +362,6 @@ class RegistrationFlowsMixin:
         self._broadcast_status(
             phase=RegistrationPhase.AWAITING_COMMIT,
             message="Manual robot pose ready — review and commit",
-            capture=CaptureHint.OFF,
             tag_visible=True,
             ts=msg.ts,
         )
@@ -310,7 +395,6 @@ class RegistrationFlowsMixin:
                 if result.mode == RegistrationMode.MANUAL_POSE
                 else "Registration successful"
             ),
-            capture=CaptureHint.OFF,
             mode=result.mode,
             ts=ts,
         )
@@ -342,7 +426,6 @@ class RegistrationFlowsMixin:
         *,
         phase: RegistrationPhase | None = None,
         message: str = "",
-        capture: CaptureHint | None = None,
         mode: RegistrationMode | None = None,
         tag_visible: bool | None = None,
         ts: float | None = None,
@@ -350,7 +433,6 @@ class RegistrationFlowsMixin:
         effective_mode = mode or self._session.mode
         prev = self._session.last_status
         effective_phase = phase or (prev.phase if prev is not None else RegistrationPhase.IDLE)
-        effective_capture = capture or (prev.capture if prev is not None else CaptureHint.OFF)
         if message:
             effective_message = message
         else:
@@ -383,7 +465,6 @@ class RegistrationFlowsMixin:
         payload = RegistrationStatusPayload(
             mode=effective_mode,
             phase=effective_phase,
-            capture=effective_capture,
             message=effective_message,
             tag_visible=tag_visible,
             preview_pose=self._preview_pose(),

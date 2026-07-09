@@ -21,12 +21,6 @@ class RegistrationPhase(StrEnum):
     FAILED = "failed"
 
 
-class CaptureHint(StrEnum):
-    OFF = "off"
-    STEADY = "steady"
-    BURST = "burst"
-
-
 @dataclass(frozen=True)
 class RegistrationCandidate:
     T_world_odom: Any

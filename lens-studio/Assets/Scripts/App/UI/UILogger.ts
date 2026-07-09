@@ -1,4 +1,4 @@
-import { findText } from "./UIKit";
+import { findText, COLOR_WHITE } from "./UIKit";
 
 export interface UILogEntry {
   text: string;
@@ -110,6 +110,14 @@ export class UILogger {
   /** Append a persistent debug-console line without updating the transient HUD entry. */
   public logConsole(text: string, color: vec4): void {
     this._appendConsoleLine(text, color);
+  }
+
+  public logCameraStreamStarted(): void {
+    this.logConsole("Camera stream ON", COLOR_WHITE);
+  }
+
+  public logCameraStreamStopped(): void {
+    this.logConsole("Camera stream OFF", COLOR_WHITE);
   }
 
   public clear(): void {

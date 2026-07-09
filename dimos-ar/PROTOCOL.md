@@ -9,7 +9,16 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v12 (current) — Similarity aligner registration
+### v13 (current) — Camera stream lifecycle
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 13.**
+- **`registration_status`:** removed **`capture`** field. The Lens client owns
+  camera stream start/stop and geometric gating locally; the bridge no longer
+  emits capture hints.
+
+### v12 — Similarity aligner registration
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -50,8 +59,7 @@ Keep this document, `dimos/ar/network/protocol.py`, and
   (`awaiting_motion`, `moving`, `sampling`). AprilTag registration auto-commits
   when tag observations are stable; phases are `idle`, `scanning`, `editing`,
   `awaiting_commit`, `succeeded`, `failed`.
-- **`registration_status.capture`:** removed **`hold`** hint (use `steady` or
-  `burst`).
+- **`registration_status.capture`:** removed **`hold`** hint (v10; field removed entirely in v13).
 - **`world_frame_method`:** committed method literal is now **`april_tag`**
   (was `april_odom_baseline`).
 
@@ -311,7 +319,6 @@ Registration progress during a setup session:
   "ts": 1730000000.123,
   "mode": "april_tag",
   "phase": "scanning",
-  "capture": "steady",
   "message": "Look at the AprilTag on your robot",
   "tag_visible": true,
   "progress": 40,
@@ -330,8 +337,6 @@ Fields:
   `registration_command.mode` when a session is active
 - `phase`: one of `"idle"`, `"scanning"`, `"editing"`, `"awaiting_commit"`,
   `"succeeded"`, `"failed"`
-- `capture`: camera capture hint for the client — `"off"`, `"steady"`, or
-  `"burst"`
 - `message`: human-readable status string for display in the client HUD
 - `tag_visible` (optional): present for AprilTag sessions; `true` when a
   configured robot-mounted tag was detected in the most recent processed frame
@@ -350,8 +355,7 @@ Fields:
 
 During AprilTag registration (`mode: "april_tag"`), the robot stays still. The
 Spectacles user moves around the robot while keeping the tag in view; camera
-motion provides yaw observability. The bridge uses `capture: "steady"` or
-`"burst"` while collecting tag observations and auto-commits when the
+motion provides yaw observability. The bridge auto-commits when the
 registration estimate meets the confidence threshold (or yaw is observable).
 If confidence never rises within the registration window, `phase` becomes
 `"failed"`. After commit, the bridge may continue broadcasting `refining: true`
@@ -430,7 +434,7 @@ Robot pose in AR world frame:
 ```
 
 - `speed_mps` (optional): smoothed robot linear speed in m/s from bridge odom,
-  used by the Lens for runtime static capture burst when the robot stops.
+  used by the Lens for runtime camera stream requests when the robot stops.
 - `velocity_mps` (optional): world-frame linear velocity in m/s (same axes as
   `position`). Used by the Lens for client-side pose prediction.
 - `yaw_rate_rad_s` (optional): world-frame yaw rate in rad/s about the world-up

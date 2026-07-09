@@ -13,7 +13,6 @@ from dimos.ar.registration.session.flows import (
 )
 from dimos.ar.registration.session.session_frames import RegistrationSessionFramesMixin
 from dimos.ar.registration.types import (
-    CaptureHint,
     RegistrationCandidate,
     RegistrationMode,
     RegistrationPhase,
@@ -50,6 +49,7 @@ class _Session:
     last_manual_candidate_log_mono: float = 0.0
     last_status: RegistrationStatusPayload | None = None
     april_tag_started_mono: float | None = None
+    last_registration_scan_log_mono: float = 0.0
 
 
 class RegistrationSession(
@@ -130,7 +130,6 @@ class RegistrationSession(
         self._broadcast_status(
             phase=RegistrationPhase.IDLE,
             message="Registration cancelled",
-            capture=CaptureHint.OFF,
             mode=session_mode,
             ts=msg.ts,
         )
@@ -143,7 +142,6 @@ class RegistrationSession(
             self._broadcast_status(
                 phase=RegistrationPhase.FAILED,
                 message="Emergency stop received",
-                capture=CaptureHint.OFF,
             )
 
     def _handle_registration_command_commit(self, msg: RegistrationCommandMessage) -> None:
@@ -153,7 +151,6 @@ class RegistrationSession(
             self._broadcast_status(
                 phase=RegistrationPhase.FAILED,
                 message="No valid registration candidate yet",
-                capture=CaptureHint.OFF,
                 ts=msg.ts,
             )
             return

@@ -15,6 +15,7 @@ import {
   isRegistrationFailed,
   isRegistrationPendingCommit,
   RegistrationFlow,
+  shouldShowBackOnStartStep,
   WizardStep,
 } from "../../Assets/Scripts/App/Registration/RegistrationFlow";
 import { buildRegistrationPreviewPresentation } from "../../Assets/Scripts/App/Registration/RegistrationWizardView";
@@ -32,7 +33,6 @@ function status(
     ts: 1,
     mode: "april_tag",
     phase: "scanning",
-    capture: "steady",
     message: "Scanning tag",
     ...overrides,
   };
@@ -228,7 +228,7 @@ describe("registration flow view state", () => {
     });
     expect(presentation.titleText).toBe("Registration");
     expect(presentation.progressPercent).toBe(80);
-    expect(presentation.statusText).toBe("✅ Tag detected - keep in view");
+    expect(presentation.statusText).toBe("✅ Tag detected - move around");
     expect(
       buildRegistrationPreviewPresentation({
         mode: "auto",
@@ -264,7 +264,7 @@ describe("registration flow view state", () => {
       },
       true,
     );
-    expect(display.statusText).toBe("✅  Tag detected - keep in view");
+    expect(display.statusText).toBe("✅  Tag detected - move around");
     expect(display.detailText).toBe("");
   });
 
@@ -274,19 +274,21 @@ describe("registration flow view state", () => {
       false,
       createRegistrationViewState(),
       false,
-      false,
+      shouldShowBackOnStartStep(false),
     );
     expect(footer.showPrev).toBe(false);
     expect(footer.centerNext).toBe(true);
   });
 
-  it("footer shows Back on step 0 while phase is runtime", () => {
+  it("footer shows Back on step 0 when wizard opened from runtime", () => {
+    expect(shouldShowBackOnStartStep(true)).toBe(true);
+    expect(shouldShowBackOnStartStep(false)).toBe(false);
     const footer = getWizardFooterState(
       WizardStep.Start,
       false,
       createRegistrationViewState(),
       false,
-      true,
+      shouldShowBackOnStartStep(true),
     );
     expect(footer.showPrev).toBe(true);
     expect(footer.centerNext).toBe(false);
@@ -522,5 +524,20 @@ describe("RegistrationFlow second registration", () => {
     setMockTime(200 + 16);
     flow.tick();
     expect(registrationClient.ensureSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not resend bridge session when auto registration progress stays at 0%", () => {
+    setMockTime(200);
+    const { flow, registrationClient } = createFlow();
+    registrationClient.hasActiveIntent.mockReturnValue(true);
+    flow.setState({
+      ...createRegistrationViewState(),
+      phase: "scanning",
+      progress: 0,
+    });
+    flow.tick();
+    setMockTime(200 + 16);
+    flow.tick();
+    expect(registrationClient.ensureSession).not.toHaveBeenCalled();
   });
 });

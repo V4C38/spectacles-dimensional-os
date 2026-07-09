@@ -201,7 +201,7 @@ export function buildRegistrationPreviewPresentation(
   return {
     titleText: buildAlignmentTitle(state),
     statusText: state.tagVisible
-      ? "✅ Tag detected - keep in view"
+      ? "✅ Tag detected - move around"
       : "❌ Tag not visible",
     statusColor: state.tagVisible ? COLOR_SUCCESS : COLOR_ERROR,
     progressPercent: buildAlignmentProgressPercent(state),

@@ -121,7 +121,7 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     ALIGN_MAX_DIST_CAM_M: float = 4.0
     ALIGN_AMBIGUITY_MIN: float = 1.5
     ALIGN_AMBIGUITY_PENALTY: float = 0.3
-    ALIGN_MAX_PAIR_SKEW_S: float = 0.15
+    ALIGN_MAX_PAIR_SKEW_S: float = 0.25
     ALIGN_DIAG_LATEST_OBS: int = 1
     ALIGN_WINDOW_MAX_AGE_S: float = 8.0
     ALIGN_WINDOW_MAX_OBS: int = 24

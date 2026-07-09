@@ -167,7 +167,6 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     if (!options?.preserveBridge) {
       this.arBridgeServices.router.disconnect();
     }
-    this.arBridgeServices.router.applyFrameCapturePolicy(true);
     this.arBridgeServices.state.update({
       phase: "registration",
       navigationOutcome: defaultNavigationOutcome(),
@@ -186,7 +185,6 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this._applyPhaseSideEffects("runtime");
     const bridgeSnapshot = this.appState.bridgeSnapshot;
     this.arBridgeServices.robot.prepareForRuntime(bridgeSnapshot.worldFrameApproximate);
-    this.arBridgeServices.router.applyFrameCapturePolicy();
     this._setRobotInteractionMode("runtimeRobot");
     this.arBridgeServices.robot.robotMarker?.syncPose();
     if (this.operatingMode === "manual") {

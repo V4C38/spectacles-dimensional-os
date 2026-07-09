@@ -1,6 +1,6 @@
 // ================================================================
 /**
- * Protocol v12 — message types, parser, outbound builders, and unit
+ * Protocol v13 — message types, parser, outbound builders, and unit
  * conversion helpers. Single source of truth replacing the v3 trio
  * (ProtocolTypes / ProtocolParser / Protocol).
  *
@@ -13,7 +13,7 @@ import {
   createDefaultBridgeSnapshot,
 } from "../../App/AppState";
 
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -130,8 +130,6 @@ export type RegistrationPhase =
   | "succeeded"
   | "failed";
 
-export type CaptureHint = "off" | "steady" | "burst";
-
 export interface RegistrationPreviewPose {
   position: [number, number, number];
   orientation: [number, number, number, number];
@@ -143,7 +141,6 @@ export interface RegistrationStatusMessage {
   ts: number;
   mode?: RegistrationMode;
   phase: RegistrationPhase;
-  capture: CaptureHint;
   message: string;
   tag_visible?: boolean;
   preview_pose?: RegistrationPreviewPose;
@@ -345,8 +342,6 @@ const REGISTRATION_PHASES: RegistrationPhase[] = [
   "succeeded",
   "failed",
 ];
-
-const CAPTURE_HINTS: CaptureHint[] = ["off", "steady", "burst"];
 
 const NAV_PHASES: NavPhase[] = [
   "idle",
@@ -600,11 +595,6 @@ function parseInboundObject(
         print(`Protocol: unknown registration_status.phase "${phase}"; skipping`);
         return null;
       }
-      const capture = requireString(data, "capture");
-      if (!CAPTURE_HINTS.includes(capture as CaptureHint)) {
-        print(`Protocol: unknown registration_status.capture "${capture}"; skipping`);
-        return null;
-      }
       const mode = data.mode;
       if (
         mode !== undefined &&
@@ -618,7 +608,6 @@ function parseInboundObject(
         type: "registration_status",
         ts: requireNumber(data, "ts"),
         phase: phase as RegistrationPhase,
-        capture: capture as CaptureHint,
         message: typeof data.message === "string" ? data.message : "",
       };
       if (mode === "april_tag" || mode === "manual_pose") {

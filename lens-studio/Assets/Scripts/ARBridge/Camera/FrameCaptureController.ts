@@ -1,29 +1,29 @@
 import { ARBridgeSession } from "../Network/ARBridgeSession";
+import { InboundRouter } from "../Session/InboundRouter";
+import { StatusClient } from "../Status/StatusClient";
+import { TelemetryClient } from "../Telemetry/TelemetryClient";
+import { protocolMetersToLensCentimeters } from "../Network/Protocol";
+import { RegistrationClient } from "../Registration/RegistrationClient";
 import { CameraClient } from "./CameraClient";
 import {
-  CameraPolicyDynamicInput,
-  CameraPolicyResult,
-  CameraPolicyStaticContext,
-  CameraStreamOffReason,
-  computeCameraPolicy,
-  CaptureMode,
-  CapturePolicy,
-  shouldLogStreamOffReason,
-} from "./CameraStreamPolicy";
+  CameraStreamSession,
+  evaluateStreamGeometricGates,
+  isRobotMoving,
+  isRobotStopped,
+  isStartingMovement,
+  isStoppingMovement,
+} from "./CameraStreamSession";
 import { DeviceCameraStream } from "./DeviceCameraStream";
+import { UILogger } from "../../App/UI/UILogger";
 
-export type { CaptureMode, CapturePolicy };
-
-const DEFAULT_STREAM_CONTEXT: CameraPolicyStaticContext = {
-  forceOff: true,
-  appPhase: "registration",
-  tagCaptureSessionActive: false,
-  worldFrameCommitted: false,
-  bridgeConnected: false,
-  registrationCaptureHint: "off",
-};
-
-const STREAM_OFF_LOG_MIN_INTERVAL_S = 30.0;
+export interface FrameCaptureControllerDeps {
+  registrationClient: RegistrationClient;
+  telemetryClient: TelemetryClient;
+  inboundRouter: InboundRouter;
+  statusClient: StatusClient;
+  uiLogger: UILogger;
+  getBridgeConnected: () => boolean;
+}
 
 /** @component Scene inputs for camera capture; wire pipeline lives in CameraClient. */
 @component
@@ -36,11 +36,13 @@ export class FrameCaptureController extends BaseScriptComponent {
 
   private _client: CameraClient | null = null;
   private _camera: DeviceCameraStream | null = null;
-  private _streamEnabled = false;
-  private _appliedMode: CaptureMode = "off";
-  private _appliedPolicy: CapturePolicy = "off";
-  private _streamContext: CameraPolicyStaticContext = { ...DEFAULT_STREAM_CONTEXT };
-  private _lastStreamOffLogTime = -STREAM_OFF_LOG_MIN_INTERVAL_S;
+  private _session = new CameraStreamSession();
+  private _hardwareEnabled = false;
+  private _robotWorldPos: vec3 | null = null;
+  private _worldFrameCommitted = false;
+  private _lastSpeedMps: number | null = null;
+  private _deps: FrameCaptureControllerDeps | null = null;
+  private _bound = false;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
@@ -50,6 +52,9 @@ export class FrameCaptureController extends BaseScriptComponent {
         camera: this._camera,
         getCameraObject: () => this.cameraObject,
       });
+      this._client.setOnFrameAck(() => {
+        this._session.onFrameAck();
+      });
       this._client.bindInbound();
       this.createEvent("UpdateEvent").bind(() => {
         this._syncCameraStream();
@@ -57,108 +62,125 @@ export class FrameCaptureController extends BaseScriptComponent {
     });
   }
 
+  public bind(deps: FrameCaptureControllerDeps): void {
+    if (this._bound) {
+      return;
+    }
+    this._bound = true;
+    this._deps = deps;
+
+    deps.registrationClient.onAprilTagCaptureStart.add(() => {
+      this._session.requestStreamStart(0);
+    });
+    deps.registrationClient.onAprilTagCaptureEnd.add(() => {
+      this._session.requestStreamStop();
+    });
+
+    deps.registrationClient.onRegistrationStatus.add((msg) => {
+      if (msg.preview_pose) {
+        this._robotWorldPos = protocolMetersToLensCentimeters(msg.preview_pose.position);
+      }
+    });
+
+    deps.telemetryClient.onPose.add((msg) => {
+      this._robotWorldPos = protocolMetersToLensCentimeters(msg.position);
+      const speed = msg.speed_mps ?? null;
+      if (this._worldFrameCommitted) {
+        if (isStartingMovement(this._lastSpeedMps, speed)) {
+          this._session.requestStreamStart(0);
+        } else if (isStoppingMovement(this._lastSpeedMps, speed)) {
+          this._session.requestStreamStart(2);
+          this._client?.resetCaptureSpacingDeadline();
+        }
+      }
+      this._lastSpeedMps = speed;
+    });
+
+    deps.inboundRouter.onBridgeConnectionChanged.add((connected) => {
+      if (!connected) {
+        this._session.requestStreamStop();
+        this._worldFrameCommitted = false;
+        this._lastSpeedMps = null;
+        this._robotWorldPos = null;
+      }
+    });
+
+    deps.statusClient.onBridgeStatus.add((msg) => {
+      const wasCommitted = this._worldFrameCommitted;
+      this._worldFrameCommitted = msg.world_frame_committed;
+      if (!wasCommitted && msg.world_frame_committed) {
+        this._bootstrapRuntimeStream();
+      }
+    });
+  }
+
+  public unbind(): void {
+    this._bound = false;
+    this._deps = null;
+  }
+
   public setCaptureErrorHandler(handler: (message: string) => void): void {
     this._client?.setCaptureErrorHandler(handler);
   }
 
-  public setRobotWorldPosition(position: vec3 | null): void {
-    this._client?.setRobotWorldPosition(position);
-  }
-
-  public setStreamPolicyContext(context: CameraPolicyStaticContext): void {
-    const previous = this._streamContext;
-    const shouldResetLatch =
-      context.forceOff ||
-      !context.bridgeConnected ||
-      context.appPhase !== previous.appPhase;
-    this._streamContext = { ...context };
-    if (shouldResetLatch) {
-      this._client?.resetStreamState();
+  private _bootstrapRuntimeStream(): void {
+    if (isRobotMoving(this._lastSpeedMps)) {
+      this._session.requestStreamStart(0);
+    } else if (isRobotStopped(this._lastSpeedMps)) {
+      this._session.requestStreamStart(2);
+      this._client?.resetCaptureSpacingDeadline();
     }
-  }
-
-  public requestImmediateCapture(): void {
-    this._client?.requestImmediateCapture();
-  }
-
-  public resetCapturePipeline(): void {
-    this._client?.resetCapturePipeline();
-  }
-
-  public notifyRobotSpeed(speedMps: number | null): void {
-    this._client?.notifyRobotSpeed(speedMps);
-  }
-
-  public notifyWorldFrameCorrection(): void {
-    this._client?.notifyWorldFrameCorrection();
   }
 
   private _syncCameraStream(): void {
-    const policy = this._evaluatePolicy();
-    this._applyPolicyResult(policy);
-    if (policy.mode !== "off") {
-      this._client?.recordPose();
-    }
-    if (policy.streamEnabled) {
-      this._client?.tick();
-    }
-  }
-
-  private _evaluatePolicy(): CameraPolicyResult {
-    const cameraObject = this.cameraObject;
     const client = this._client;
-    const dynamic: CameraPolicyDynamicInput = {
-      robotWorldPos: client?.getRobotWorldPosition() ?? null,
-      cameraPos: null,
-      cameraRot: null,
-      robotSpeedMps: client?.getRobotSpeedMps() ?? null,
-      correctionSinceLastMovement: client?.getCorrectionSinceLastMovement() ?? false,
-    };
+    const camera = this._camera;
+    if (!client || !camera) {
+      return;
+    }
+
+    const bridgeConnected = this._deps?.getBridgeConnected() ?? false;
+    const cameraObject = this.cameraObject;
+    let cameraPos: vec3 | null = null;
+    let cameraRot: quat | null = null;
     if (cameraObject) {
       const transform = cameraObject.getTransform();
-      dynamic.cameraPos = transform.getWorldPosition();
-      dynamic.cameraRot = transform.getWorldRotation();
-    }
-    return computeCameraPolicy(this._streamContext, dynamic);
-  }
-
-  private _applyPolicyResult(policy: CameraPolicyResult): void {
-    if (policy.mode !== this._appliedMode) {
-      this._appliedMode = policy.mode;
-      this._client?.setMode(policy.mode);
-    }
-    if (policy.policy !== this._appliedPolicy) {
-      this._appliedPolicy = policy.policy;
-      this._client?.setCapturePolicy(policy.policy);
+      cameraPos = transform.getWorldPosition();
+      cameraRot = transform.getWorldRotation();
     }
 
-    if (policy.streamEnabled !== this._streamEnabled) {
-      this._streamEnabled = policy.streamEnabled;
-      if (policy.streamEnabled) {
-        this._camera?.start();
+    const posesReady = cameraPos !== null && cameraRot !== null;
+    const geometricGatesPass =
+      posesReady &&
+      evaluateStreamGeometricGates(cameraPos!, cameraRot!, this._robotWorldPos);
+
+    const result = this._session.evaluate(
+      {
+        bridgeConnected,
+        posesReady,
+        geometricGatesPass,
+      },
+      getTime(),
+    );
+
+    if (result.hardwareEnabled !== this._hardwareEnabled) {
+      this._hardwareEnabled = result.hardwareEnabled;
+      if (result.hardwareEnabled) {
+        camera.start();
         print("FrameCaptureController: camera stream ON");
-        if (policy.mode === "runtime" || policy.mode === "registration") {
-          this.requestImmediateCapture();
-        }
+        this._deps?.uiLogger.logCameraStreamStarted();
       } else {
-        this._camera?.stop();
-        this._client?.resetCapturePipeline();
-        this._logStreamOffTransition(policy.streamOffReason);
+        camera.stop();
+        client.resetCapturePipeline();
+        print("FrameCaptureController: camera stream OFF");
+        this._deps?.uiLogger.logCameraStreamStopped();
       }
-      return;
     }
-  }
 
-  /** Log at most once per cooldown, only on stream ON→OFF transitions. */
-  private _logStreamOffTransition(reason: CameraStreamOffReason | null): void {
-    if (!shouldLogStreamOffReason(reason)) {
-      return;
+    client.setCaptureEnabled(result.hardwareEnabled);
+    if (result.hardwareEnabled) {
+      client.recordPose();
+      client.tick();
     }
-    const now = getTime();
-    if (now - this._lastStreamOffLogTime < STREAM_OFF_LOG_MIN_INTERVAL_S) {
-      return;
-    }
-    this._lastStreamOffLogTime = now;
-    print(`FrameCaptureController: camera stream OFF (${reason})`);
   }
 }

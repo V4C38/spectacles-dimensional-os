@@ -14,7 +14,6 @@ import {
   yawRotationFromWorldRotation,
 } from "../Utilities/Utilities";
 import { ManualRegistrationAlignment, RobotMarkerPose } from "../../ARBridge/Registration/ManualRegistrationAlignment";
-import { FrameCaptureController } from "../../ARBridge/Camera/FrameCaptureController";
 import { UILogEntry } from "../UI/UILogger";
 import { RobotUiCallbacks, RobotUiView } from "./RobotUiView";
 
@@ -97,7 +96,9 @@ class RuntimePoseAnimator {
   /** Bridge odom can arrive irregularly; allow longer velocity extrapolation between samples. */
   private static readonly MAX_EXTRAP_S = 0.55;
   private static readonly MAX_EXTRAP_DISPLACEMENT_CM = 40.0;
-  private static readonly POSE_AGE_LOG_INTERVAL_S = 2.0;
+  /** Periodic pose-age diagnostics; emit only when extrapolation looks unhealthy. */
+  private static readonly POSE_AGE_LOG_INTERVAL_S = 5.0;
+  private static readonly POSE_AGE_CLAMP_HIT_LOG_THRESHOLD = 0.1;
 
   private _tracking = false;
   private _base: RuntimePoseTarget | null = null;
@@ -260,13 +261,18 @@ class RuntimePoseAnimator {
     const clampFraction = this._recentAgeSamples > 0
       ? this._recentClampHits / this._recentAgeSamples
       : 0;
-    print(
-      `[RuntimePoseAnimator] pose_age raw=${rawAge.toFixed(3)}s `
-      + `clamped=${clampedAge.toFixed(3)}s `
-      + `clamp_hit_fraction=${clampFraction.toFixed(2)}`,
-    );
-    if (rawAge < 0) {
-      print("[RuntimePoseAnimator] pose_age negative — check clock offset sign");
+    const shouldLog = rawAge < 0
+      || clampFraction >= RuntimePoseAnimator.POSE_AGE_CLAMP_HIT_LOG_THRESHOLD
+      || rawAge > RuntimePoseAnimator.MAX_EXTRAP_S;
+    if (shouldLog) {
+      print(
+        `[RuntimePoseAnimator] pose_age raw=${rawAge.toFixed(3)}s `
+        + `clamped=${clampedAge.toFixed(3)}s `
+        + `clamp_hit_fraction=${clampFraction.toFixed(2)}`,
+      );
+      if (rawAge < 0) {
+        print("[RuntimePoseAnimator] pose_age negative — check clock offset sign");
+      }
     }
     this._recentClampHits = 0;
     this._recentAgeSamples = 0;
@@ -329,9 +335,6 @@ class RuntimePoseAnimator {
 export class RobotMarker extends BaseScriptComponent {
   @input
   markerRoot: SceneObject;
-
-  @input
-  frameCapture: FrameCaptureController;
 
   private readonly _poseAnimator = new RuntimePoseAnimator();
   private _configured = false;
@@ -486,8 +489,6 @@ export class RobotMarker extends BaseScriptComponent {
     const q = msg.orientation;
     const position = protocolMetersToLensCentimeters(msg.position);
     const rotation = new quat(q[3], q[0], q[1], q[2]);
-    this.frameCapture?.setRobotWorldPosition(position);
-    this.frameCapture?.notifyRobotSpeed(msg.speed_mps ?? null);
     const velocity = msg.velocity_mps;
     const velocityCmPerS = velocity
       ? new vec3(
@@ -509,7 +510,6 @@ export class RobotMarker extends BaseScriptComponent {
     }
     this.resetRuntimePoseSmoothing();
     this.markerRoot.enabled = true;
-    this.frameCapture?.setRobotWorldPosition(position);
     this.setPose(position, rotation);
   }
 
@@ -518,7 +518,6 @@ export class RobotMarker extends BaseScriptComponent {
       return;
     }
     this.markerRoot.enabled = true;
-    this.frameCapture?.setRobotWorldPosition(position);
     this._applyRuntimePose(position, rotation);
   }
 
