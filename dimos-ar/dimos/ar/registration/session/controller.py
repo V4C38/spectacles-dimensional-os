@@ -49,6 +49,7 @@ class _Session:
     last_manual_odom_missing_log_mono: float = 0.0
     last_manual_candidate_log_mono: float = 0.0
     last_status: RegistrationStatusPayload | None = None
+    april_tag_started_mono: float | None = None
 
 
 class RegistrationSession(
@@ -255,6 +256,7 @@ class RegistrationSession(
         task.add_done_callback(self._loop_tasks.discard)
 
     def _clear_session(self) -> None:
+        self._frame_in_flight = False
         self._tag_tracker.reset_window()
         self._session = _Session()
 

@@ -111,6 +111,10 @@ export class RegistrationClient {
   }
 
   public start(mode: RegistrationMode): void {
+    this.frameCapture?.resetCapturePipeline();
+    if (this._session?.isConnected()) {
+      this.sendRegistrationCommand("stop");
+    }
     this._intent = mode;
     this._awaitingCommit = false;
     this._lastStatusTime = -1;

@@ -11,6 +11,7 @@ vi.mock("../../Assets/Scripts/ARBridge/Network/WebSocketTransport", () => ({
 import { sendBinary } from "../../Assets/Scripts/ARBridge/Network/WebSocketTransport";
 
 const REGISTRATION_INTERVAL_S = 0.7;
+const RUNTIME_CAPTURE_INTERVAL_S = 1.0;
 
 type CameraClientInternals = CameraClient & {
   _lastPipelineEndTime: number;
@@ -103,7 +104,7 @@ describe("CameraClient send-gated cadence", () => {
     (globalThis as Record<string, unknown>).EncodingType = { Jpg: 0 };
   });
 
-  it("does not reset the cadence timer when camera_frame_ack arrives", () => {
+  it("registration: resets cadence timer when camera_frame_ack arrives", () => {
     const { client, onCameraFrameAck } = makeClient();
     const internals = client as unknown as CameraClientInternals;
     internals._lastPipelineEndTime = 5.0;
@@ -112,12 +113,40 @@ describe("CameraClient send-gated cadence", () => {
     setMockTime(9.0);
     onCameraFrameAck.emit({ type: "camera_frame_ack", seq: 1, ts: 9.0 });
 
-    expect(internals._lastPipelineEndTime).toBe(5.0);
+    expect(internals._lastPipelineEndTime).toBe(9.0);
     expect(internals._inFlight).toBe(false);
   });
 
-  it("permits the next capture after send plus interval without an intervening ACK", async () => {
+  it("registration: waits for ACK before the next capture", async () => {
+    const { client, onCameraFrameAck, requestNextFrame } = makeClient();
+    const internals = client as unknown as CameraClientInternals;
+    internals._sentCameraInfo = true;
+
+    setMockTime(1.0);
+    client.tick();
+    await flushAsyncCapture();
+
+    expect(requestNextFrame).toHaveBeenCalledTimes(1);
+    expect(sendBinary).toHaveBeenCalledTimes(1);
+    expect(internals._inFlight).toBe(true);
+
+    setMockTime(1.0 + REGISTRATION_INTERVAL_S + 0.05);
+    client.tick();
+    await flushAsyncCapture();
+    expect(requestNextFrame).toHaveBeenCalledTimes(1);
+
+    setMockTime(1.1);
+    onCameraFrameAck.emit({ type: "camera_frame_ack", seq: 1, ts: 1.1 });
+    setMockTime(1.1 + REGISTRATION_INTERVAL_S + 0.05);
+    client.tick();
+    await flushAsyncCapture();
+    expect(requestNextFrame).toHaveBeenCalledTimes(2);
+    expect(sendBinary).toHaveBeenCalledTimes(2);
+  });
+
+  it("runtime: permits the next capture after send plus interval without an intervening ACK", async () => {
     const { client, requestNextFrame } = makeClient();
+    client.setMode("runtime");
     const internals = client as unknown as CameraClientInternals;
     internals._sentCameraInfo = true;
 
@@ -130,12 +159,12 @@ describe("CameraClient send-gated cadence", () => {
     expect(internals._lastPipelineEndTime).toBe(1.0);
     expect(internals._inFlight).toBe(true);
 
-    setMockTime(1.0 + REGISTRATION_INTERVAL_S - 0.05);
+    setMockTime(1.0 + RUNTIME_CAPTURE_INTERVAL_S - 0.05);
     client.tick();
     await flushAsyncCapture();
     expect(requestNextFrame).toHaveBeenCalledTimes(1);
 
-    setMockTime(1.0 + REGISTRATION_INTERVAL_S + 0.05);
+    setMockTime(1.0 + RUNTIME_CAPTURE_INTERVAL_S + 0.05);
     client.tick();
     await flushAsyncCapture();
     expect(requestNextFrame).toHaveBeenCalledTimes(2);

@@ -125,11 +125,15 @@ Lens-side protocol tests run separately: `cd lens-studio/Tests && npm test`.
 Two flows are supported:
 
 **AprilTag** (`registration_command{command:"start",mode:"april_tag"}`)  
-The Spectacles user looks at the robot-mounted AprilTag while the bridge
-collects stable tag observations. When position and yaw spread stay within
-configured thresholds for enough samples, the bridge auto-commits. If stability
-is not reached or the tag is lost, the session enters `failed` and the user can
-retry.
+The robot stays still. The Spectacles user moves around the robot while looking
+at the robot-mounted AprilTag; camera motion (not robot motion) provides yaw
+observability. The bridge collects tag/odom correspondences and runs a
+registration-mode pose aggregator until the estimate reaches
+`ALIGN_REG_CONF_MIN` (default 0.7) or yaw is observable, then auto-commits
+`(scale, yaw, translation)`. If confidence never rises within
+`TAG_REGISTRATION_WINDOW_S` (15 s), the session fails with an actionable
+message. The Lens wizard auto-dismisses on `phase=succeeded` (no manual
+Complete tap).
 
 Requires the robot to advertise `registration_april_tag` (tag mounts must be
 configured). Robots without tag mounts must use manual pose registration.
@@ -143,41 +147,32 @@ Notes:
 - On commit, `WorldRegistry` locks the robot base floor height (world Y) into
   `WorldFrameRefiner` for flat-ground profiles.
 - Runtime drift correction reuses the robot-mounted Spectacles tag stream after
-  registration:
-  - **Cruise:** `RobotAprilTagTracker.current_solve()` for yaw+translation when the
-    yaw gate and `runtime_solve_max_dist_cam_m` pass; otherwise translation-only.
-  - **Stop transition:** one-shot stop-yaw solve from recent approach observations
-    when the robot transitions from cruise/fast to static (`runtime_stop_yaw_window_s`).
-  - **Static:** translation-only re-anchor via `current_translation_solve()`.
-  - **Floor shim:** when `flat_ground` is enabled and base Y drifts > 3 cm for 2 s,
+  registration through the same `SimilarityAligner` used for commit:
+  - tag observations are weighted by quality, recency, distance, and IPPE ambiguity
+  - a robust 2D similarity fit updates `(scale, yaw, translation)` together
+  - `WorldFrameRefiner` keeps only floor-Y lock and runtime diagnostics
+  - when `flat_ground` is enabled and base Y drifts > 3 cm for 2 s,
     `check_floor_y_drift` applies a Y-only correction without emitting
-    `world_frame_correction`.
+    `world_frame_correction`
 - Corrections that exceed the notification deadband (≥ 5 cm translation or ≥ 1° yaw)
   are emitted as `world_frame_correction`; sub-threshold updates still commit on the
   bridge.
+- AprilTag registration status broadcasts also carry `alignment_confidence` and
+  `refining` on the wire. `refining` is post-commit runtime polish (the bridge
+  keeps refining alignment after commit); the Lens wizard does not surface it.
 
 **Tag mount geometry (Go2)**  
 The robot marker and LiDAR share `T_world_odom`, which depends on the configured
-`TagMount.position` lever arm in `dimos/ar/robot_profile/go2.py`. After registration,
-while the tag is visible and the robot is static, `RobotAprilTagTracker.current_translation_solve()`
-emits a one-shot `tag_mount_offset diagnostic` log comparing:
-
-- `measured_base_to_tag` — base_link→tag offset inferred from vision and the committed
-  `T_world_odom`
-- `configured_mount.position` — the lever arm used by the tracker
-- `residual` — difference; should be near zero when the marker sits on robot center
-
-To tune on hardware: register, stand at 3–5 m with a static robot, read the
-diagnostic from bridge logs, set `GO2_DEFAULT_TAG_MOUNTS[0].position` to
-`measured_base_to_tag` (restart the bridge), re-register, and confirm the marker
-and LiDAR stay co-registered within a few centimetres.
+`TagMount.position` lever arm in `dimos/ar/robot_profile/go2.py`. If the marker,
+LiDAR, and rendered robot do not stay co-registered after registration, verify
+the configured mount pose first before tuning aligner thresholds.
 
 </details>
 
 <details>
 <summary>Protocol coupling</summary>
 
-Protocol **v11** is current (`PROTOCOL_VERSION = 11` in `dimos/ar/network/protocol.py`).
+Protocol **v12** is current (`PROTOCOL_VERSION = 12` in `dimos/ar/network/protocol.py`).
 See [`PROTOCOL.md`](PROTOCOL.md) for the full changelog and wire schema. If the AR
 protocol changes, update these together:
 

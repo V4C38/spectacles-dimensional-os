@@ -41,6 +41,7 @@ from dimos.ar.robot_profile.base import (
 from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker, RobotAprilTagTrackerConfig
 from dimos.ar.utils.console import console_divider
 from dimos.ar.utils.network import detect_lan_ip
+from dimos.ar.world_frame.aligner import SimilarityAligner
 from dimos.ar.world_frame.refinement import WorldFrameRefiner
 from dimos.ar.world_frame.registry import WorldRegistry
 from dimos.ar.world_frame.state import WorldFrameState
@@ -116,6 +117,31 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     tag_max_mount_residual_m: float = 0.15
     tag_max_up_axis_tilt_deg: float = 20.0
     runtime_correction_enabled: bool = True
+    ALIGN_RECENCY_TAU_S: float = 4.0
+    ALIGN_MAX_DIST_CAM_M: float = 4.0
+    ALIGN_AMBIGUITY_MIN: float = 1.5
+    ALIGN_AMBIGUITY_PENALTY: float = 0.3
+    ALIGN_MAX_PAIR_SKEW_S: float = 0.15
+    ALIGN_DIAG_LATEST_OBS: int = 1
+    ALIGN_WINDOW_MAX_AGE_S: float = 8.0
+    ALIGN_WINDOW_MAX_OBS: int = 24
+    ALIGN_MIN_OBS: int = 3
+    ALIGN_REG_MIN_OBS: int = 4
+    ALIGN_REG_CONF_MIN: float = 0.7
+    ALIGN_HUBER_K: float = 1.5
+    ALIGN_OUTLIER_K: float = 3.0
+    ALIGN_SCALE_PLAUSIBLE_MIN: float = 1.0
+    ALIGN_SCALE_PLAUSIBLE_MAX: float = 1.6
+    ODOM_SCALE_HARD_MIN: float = 0.5
+    ODOM_SCALE_HARD_MAX: float = 2.0
+    ALIGN_BASELINE_B0: float = 0.10
+    ALIGN_BASELINE_B1: float = 0.40
+    ALIGN_RESID_REF_M: float = 0.20
+    ALIGN_REBASE_RESID_M: float = 0.30
+    ALIGN_REBASE_FRAC: float = 0.6
+    ALIGN_REBASE_DIR_STD_RAD: float = 0.5
+    ALIGN_REBASE_KEEP: int = 2
+    ALIGN_UI_CONFIDENT: float = 0.7
 
 
 class ARBridge(Module):  # type: ignore[misc]
@@ -208,6 +234,7 @@ class ARBridge(Module):  # type: ignore[misc]
 
         tracker_config = RobotAprilTagTrackerConfig(
             max_reprojection_error_px=self.config.tag_max_reprojection_error_px,
+            max_pair_skew_s=self.config.ALIGN_MAX_PAIR_SKEW_S,
             max_distance_m=self.config.tag_max_distance_m,
             min_baseline_m=self.config.tag_min_baseline_m,
             window_max_obs=self.config.tag_window_max_obs,
@@ -232,6 +259,10 @@ class ARBridge(Module):  # type: ignore[misc]
             speed_horizon_s=runtime_profile.runtime_speed_horizon_s,
         )
         registry = WorldRegistry(self._world_frame, self.tf.publish_static, odom_latest=odom.latest)
+        self._world_frame.configure_odom_scale_limits(
+            hard_min=self.config.ODOM_SCALE_HARD_MIN,
+            hard_max=self.config.ODOM_SCALE_HARD_MAX,
+        )
         assert self._loop is not None, "build() called before Module loop is assigned"
         nav_ref: NavigateGoalHandler | None = None
 
@@ -242,14 +273,23 @@ class ARBridge(Module):  # type: ignore[misc]
         world_frame_refiner = WorldFrameRefiner(
             registry=registry,
             telemetry=telemetry,
-            robot_id=robot_id,
-            sender=sender,
             odom=odom,
             tag_tracker=tag_tracker,
             runtime_profile=runtime_profile,
             runtime_correction_enabled=self.config.runtime_correction_enabled,
+            diag_latest_observations=self.config.ALIGN_DIAG_LATEST_OBS,
+        )
+        similarity_aligner = SimilarityAligner(
+            registry=registry,
+            telemetry=telemetry,
+            sender=sender,
+            odom=odom,
+            tag_tracker=tag_tracker,
+            config=self.config,
+            apply_floor_y_lock=world_frame_refiner._apply_floor_y_lock,
             on_correction_committed=_on_world_frame_corrected,
         )
+        world_frame_refiner.attach_aligner(similarity_aligner)
         registry.attach_refiner(world_frame_refiner)
         telemetry._floor_y_drift_check = world_frame_refiner.check_floor_y_drift
 

@@ -33,3 +33,4 @@ class RegistrationCandidate:
     quality: float
     mode: RegistrationMode
     approximate: bool
+    odom_scale: float | None = None

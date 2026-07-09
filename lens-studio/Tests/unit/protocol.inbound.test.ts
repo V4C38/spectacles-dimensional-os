@@ -106,12 +106,16 @@ describe("parseInboundMessage", () => {
         message: "Look at tag",
         tag_visible: true,
         progress: 55,
+        alignment_confidence: 0.65,
+        refining: true,
       }),
     );
     expect(msg!.type).toBe("registration_status");
     expect((msg as { phase: string }).phase).toBe("scanning");
     expect((msg as { capture: string }).capture).toBe("steady");
     expect((msg as { progress: number }).progress).toBe(55);
+    expect((msg as { alignment_confidence: number }).alignment_confidence).toBe(0.65);
+    expect((msg as { refining: boolean }).refining).toBe(true);
   });
 
   it("parses camera_frame_ack", () => {
@@ -221,11 +225,49 @@ describe("parseInboundMessage", () => {
         trans_delta_m: 0.1,
         yaw_corrected: true,
         solve_quality: 0.9,
-        solve_method: "apriltag_full",
+        solve_method: "similarity",
+        alignment_confidence: 0.8,
+        yaw_observable: true,
+        scale_observable: false,
       }),
     );
     expect(msg!.type).toBe("world_frame_correction");
-    expect((msg as { solve_method: string }).solve_method).toBe("apriltag_full");
+    expect((msg as { solve_method: string }).solve_method).toBe("similarity");
+    expect((msg as { alignment_confidence: number }).alignment_confidence).toBe(0.8);
+    expect((msg as { yaw_observable: boolean }).yaw_observable).toBe(true);
+    expect((msg as { scale_observable: boolean }).scale_observable).toBe(false);
+  });
+
+  it("parses legacy world_frame_correction solve_method values", () => {
+    for (const solveMethod of ["apriltag_full", "apriltag_translation"] as const) {
+      const msg = parseInboundMessage(
+        JSON.stringify({
+          type: "world_frame_correction",
+          ts: 1,
+          trans_delta_m: 0.1,
+          yaw_corrected: true,
+          solve_quality: 0.9,
+          solve_method: solveMethod,
+        }),
+      );
+      expect(msg!.type).toBe("world_frame_correction");
+      expect((msg as { solve_method: string }).solve_method).toBe(solveMethod);
+    }
+  });
+
+  it("skips world_frame_correction with unknown solve_method", () => {
+    expect(
+      parseInboundMessage(
+        JSON.stringify({
+          type: "world_frame_correction",
+          ts: 1,
+          trans_delta_m: 0.1,
+          yaw_corrected: true,
+          solve_quality: 0.9,
+          solve_method: "mystery_method",
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("parses path waypoints", () => {

@@ -38,6 +38,7 @@ from dimos.ar.registration.types import CaptureHint, RegistrationMode, Registrat
 from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
 from dimos.ar.robot_profile.g1 import g1_handshake
 from dimos.ar.world_frame.state import WorldFrameState
+from dimos.ar.world_frame.wire import encode_world_frame_correction
 
 
 def _sample_handshake() -> RobotHandshake:
@@ -392,6 +393,24 @@ def test_encode_registration_status_with_progress() -> None:
     assert raw["progress"] == 40
 
 
+def test_encode_registration_status_with_alignment_fields() -> None:
+    raw = json.loads(
+        encode_registration_status(
+            ts=1.0,
+            status=RegistrationStatusPayload(
+                mode=RegistrationMode.APRIL_TAG,
+                phase=RegistrationPhase.SUCCEEDED,
+                capture=CaptureHint.OFF,
+                message="Registration successful",
+                alignment_confidence=0.65,
+                refining=True,
+            ),
+        )
+    )
+    assert raw["alignment_confidence"] == pytest.approx(0.65)
+    assert raw["refining"] is True
+
+
 def test_encode_registration_status_manual() -> None:
     raw = json.loads(
         encode_registration_status(
@@ -407,6 +426,30 @@ def test_encode_registration_status_manual() -> None:
     assert raw["mode"] == "manual_pose"
     assert raw["phase"] == "awaiting_commit"
     assert "tag_visible" not in raw
+
+
+@pytest.mark.parametrize(
+    "solve_method",
+    ["apriltag_full", "apriltag_translation", "similarity"],
+)
+def test_encode_world_frame_correction_v12_fields(solve_method: str) -> None:
+    raw = json.loads(
+        encode_world_frame_correction(
+            ts=1.0,
+            trans_delta_m=0.12,
+            yaw_delta_deg=4.5,
+            yaw_corrected=True,
+            solve_quality=0.9,
+            solve_method=solve_method,
+            alignment_confidence=0.8,
+            yaw_observable=True,
+            scale_observable=False,
+        )
+    )
+    assert raw["solve_method"] == solve_method
+    assert raw["alignment_confidence"] == pytest.approx(0.8)
+    assert raw["yaw_observable"] is True
+    assert raw["scale_observable"] is False
 
 
 def test_encode_camera_frame_ack() -> None:

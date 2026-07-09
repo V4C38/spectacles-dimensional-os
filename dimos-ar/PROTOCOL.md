@@ -9,7 +9,22 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v11 (current) — Navigation simplification
+### v12 (current) — Similarity aligner registration
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 12.**
+- **`world_frame_correction.solve_method`:** may now be **`"similarity"`** in
+  addition to legacy **`"apriltag_full"`** and **`"apriltag_translation"`**.
+- **`world_frame_correction`:** adds **`alignment_confidence`**,
+  **`yaw_observable`**, and **`scale_observable`**.
+- **`registration_status`:** adds optional **`alignment_confidence`** and
+  **`refining`**. During scanning, `alignment_confidence` reflects registration
+  estimate quality (Spectacles/camera motion around a static robot). After
+  commit, `refining` indicates post-commit runtime polish on the wire; clients
+  may ignore it for wizard UX.
+
+### v11 — Navigation simplification
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -162,7 +177,7 @@ capability map, then sends a `runtime_snapshot` (see below).
 ```json
 {
   "type": "hello",
-  "protocol_version": 11,
+  "protocol_version": 12,
   "robot": {
     "robot_id": "unitree_go2",
     "display_name": "Unitree Go2",
@@ -300,6 +315,8 @@ Registration progress during a setup session:
   "message": "Look at the AprilTag on your robot",
   "tag_visible": true,
   "progress": 40,
+  "alignment_confidence": 0.42,
+  "refining": false,
   "preview_pose": {
     "position": [1.2, 0.0, -2.0],
     "orientation": [0.0, 0.0, 0.383, 0.924]
@@ -321,16 +338,26 @@ Fields:
 - `preview_pose` (optional): estimated robot pose in world frame (`position` xyz
   metres, `orientation` quaternion xyzw); omitted until a solve is available
 - `progress` (optional): AprilTag registration progress **0–100**; present while
-  `mode` is `"april_tag"` during `scanning` and `succeeded`. Reflects sample
-  collection and stability in the bridge stability window; may decrease when
-  observations fall out of the window or stability checks worsen. Clients should
-  display this value directly rather than inferring progress from `message`.
+  `mode` is `"april_tag"` during `scanning` and `succeeded`. Reflects
+  registration readiness (observation count blended with
+  `alignment_confidence`), not raw frame count alone. Clients should display
+  this value directly rather than inferring progress from `message`.
+- `alignment_confidence` (optional): bridge-computed confidence **0–1** for the
+  current registration or runtime alignment estimate
+- `refining` (optional): after AprilTag commit, `true` while the bridge keeps
+  refining alignment from continued tag observations at runtime (wire field;
+  clients may ignore for wizard UX)
 
-During AprilTag registration (`mode: "april_tag"`), the bridge uses
-`capture: "steady"` while collecting tag observations and auto-commits when
-observations are stable (minimum count, position spread, and yaw spread within
-configured thresholds). The client may use `capture: "burst"` when the bridge
-requests it via `registration_status.capture`.
+During AprilTag registration (`mode: "april_tag"`), the robot stays still. The
+Spectacles user moves around the robot while keeping the tag in view; camera
+motion provides yaw observability. The bridge uses `capture: "steady"` or
+`"burst"` while collecting tag observations and auto-commits when the
+registration estimate meets the confidence threshold (or yaw is observable).
+If confidence never rises within the registration window, `phase` becomes
+`"failed"`. After commit, the bridge may continue broadcasting `refining: true`
+while runtime similarity refinement continues from tag observations during
+navigation. The client auto-finishes the wizard on `phase: "succeeded"`; no
+separate commit message is required.
 
 ### `camera_frame_ack`
 
@@ -431,9 +458,12 @@ fire only when the robot position has meaningfully changed:
   "ts": 1730000000.123,
   "trans_delta_m": 0.1824,
   "yaw_delta_deg": 6.137,
-  "yaw_corrected": false,
+  "yaw_corrected": true,
   "solve_quality": 0.9521,
-  "solve_method": "apriltag_translation"
+  "solve_method": "similarity",
+  "alignment_confidence": 0.81,
+  "yaw_observable": true,
+  "scale_observable": true
 }
 ```
 
@@ -441,19 +471,24 @@ Fields:
 
 - `trans_delta_m`: translation magnitude before the correction commit, in metres
 - `yaw_delta_deg` (optional): yaw magnitude before the correction commit, in degrees
-- `yaw_corrected`: `true` when the correction came from a full
-  `apriltag_full` solve that can update yaw; `false` for
-  `apriltag_translation` fallback solves
+- `yaw_corrected`: `true` when the correction can safely update yaw; for the
+  similarity aligner this mirrors `yaw_observable`
 - `solve_quality`: quality score reported by the tracker for the committed solve
-- `solve_method`: `"apriltag_full"` or `"apriltag_translation"`
+- `solve_method`: `"similarity"`, `"apriltag_full"`, or `"apriltag_translation"`
+- `alignment_confidence` (optional): bridge-computed confidence **0–1** for the
+  active similarity fit
+- `yaw_observable` (optional): `true` when the current observation geometry
+  supports yaw correction
+- `scale_observable` (optional): `true` when the current observation geometry
+  supports scale correction
 
 Bridge-side refinement (not additional wire fields):
 
 - On commit, the bridge locks robot base floor height (world Y) for flat-ground
-  profiles and applies tag-driven corrections by speed regime (cruise full/translation
-  solves, stop-yaw on static transition after motion, static translation re-anchor).
+  profiles and applies a single similarity aligner over tag-observation windows.
 - A floor-Y shim may correct sustained vertical drift without emitting this message.
-- See `dimos/ar/world_frame/refinement.py` for thresholds and gating.
+- See `dimos/ar/world_frame/aligner.py` and `dimos/ar/world_frame/refinement.py`
+  for thresholds and gating.
 
 ### `path`
 
@@ -621,8 +656,9 @@ Fields:
   matching capability (`registration_april_tag` or `registration_manual_pose`)
   to be available in `hello`.
 
-AprilTag registration auto-commits when tag observations are stable; the client
-does not send a separate commit for that flow.
+AprilTag registration auto-commits when the registration estimate is confident
+enough (or yaw is observable); the client does not send a separate commit for
+that flow. Keep the robot still and move Spectacles around it for observability.
 
 ### `registration_pose`
 

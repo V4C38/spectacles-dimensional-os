@@ -46,8 +46,8 @@ def estimate_marker_pose(
     dist_coeffs: np.ndarray,
     *,
     distortion_model: str | None = None,
-) -> tuple[np.ndarray, np.ndarray] | None:
-    """Return ``(rvec, tvec)`` for camera optical <- marker from undistorted solvePnP."""
+) -> tuple[np.ndarray, np.ndarray, float] | None:
+    """Return best ``(rvec, tvec, ambiguity_ratio)`` from IPPE square hypotheses."""
     obj = _aruco_marker_object_points(marker_length_m)
     img: np.ndarray = corners_px.reshape(4, 1, 2).astype(np.float32)
     if _is_fisheye_model(distortion_model):
@@ -62,7 +62,7 @@ def estimate_marker_pose(
         solve_dist: np.ndarray = np.zeros((0, 1), dtype=np.float64)
     else:
         solve_dist = dist_coeffs
-    ok, rvec, tvec = cv2.solvePnP(
+    ok, rvecs, tvecs, reproj = cv2.solvePnPGeneric(
         obj,
         img,
         camera_matrix,
@@ -71,7 +71,54 @@ def estimate_marker_pose(
     )
     if not ok:
         return None
-    return rvec, tvec
+    rvec_candidates = [np.asarray(candidate, dtype=np.float64) for candidate in rvecs]
+    tvec_candidates = [np.asarray(candidate, dtype=np.float64) for candidate in tvecs]
+    errors = (
+        np.asarray(reproj, dtype=np.float64).reshape(-1)
+        if reproj is not None
+        else np.array([], dtype=np.float64)
+    )
+    if len(rvec_candidates) == 0 or len(tvec_candidates) == 0:
+        return None
+    if errors.size != len(rvec_candidates):
+        errors = np.array(
+            [
+                np.sqrt(
+                    np.mean(
+                        np.sum(
+                            (
+                                corners_px.reshape(-1, 2)
+                                - cv2.projectPoints(
+                                    obj,
+                                    rvec_candidate,
+                                    tvec_candidate,
+                                    camera_matrix,
+                                    solve_dist,
+                                )[0].reshape(-1, 2)
+                            )
+                            ** 2,
+                            axis=1,
+                        )
+                    )
+                )
+                for rvec_candidate, tvec_candidate in zip(
+                    rvec_candidates,
+                    tvec_candidates,
+                    strict=False,
+                )
+            ],
+            dtype=np.float64,
+        )
+    order = np.argsort(errors)
+    best_idx = int(order[0])
+    best_rvec = rvec_candidates[best_idx]
+    best_tvec = tvec_candidates[best_idx]
+    ambiguity_ratio = 1.0
+    if len(order) >= 2:
+        best_error = max(float(errors[best_idx]), 1e-9)
+        second_error = float(errors[int(order[1])])
+        ambiguity_ratio = max(1.0, second_error / best_error)
+    return best_rvec, best_tvec, ambiguity_ratio
 
 
 def aruco_detected_tag_id(tag_id_entry: np.ndarray | int | float) -> int:

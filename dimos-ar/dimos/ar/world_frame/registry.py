@@ -10,7 +10,7 @@ import numpy as np
 
 from dimos.ar.registration.types import RegistrationCandidate
 from dimos.ar.world_frame.state import WorldFrameState
-from dimos.ar.world_frame.transforms import OdomSample, pose_to_matrix, yaw_from_T
+from dimos.ar.world_frame.transforms import OdomSample, pose_to_matrix
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
@@ -58,23 +58,29 @@ class WorldRegistry:
         *,
         odom: OdomSample | None = None,
     ) -> None:
-        self._state.commit(
-            candidate.T_world_odom,
-            method=candidate.mode.value,
-            approximate=candidate.approximate,
-        )
+        if candidate.odom_scale is None:
+            self._state.commit(
+                candidate.T_world_odom,
+                method=candidate.mode.value,
+                approximate=candidate.approximate,
+            )
+        else:
+            self._state.commit(
+                candidate.T_world_odom,
+                method=candidate.mode.value,
+                approximate=candidate.approximate,
+                odom_scale=float(candidate.odom_scale),
+            )
         T_committed = self._state.current_transform()
         if T_committed is None:
             raise RuntimeError("WorldFrameState not committed after registry.commit()")
         self._publish_world_odom_tf(T_committed)
         if self._refiner is not None:
             self._refiner.set_refinement_baseline(T_committed)
-            self._refiner.set_registration_yaw(yaw_from_T(T_committed))
             sample = odom if odom is not None else (
                 self._odom_latest() if self._odom_latest is not None else None
             )
-            if sample is not None:
-                self._state.set_odom_anchor_xy(sample.position[0], sample.position[1])
+            self._state.set_odom_anchor_xy(0.0, 0.0)
             if sample is not None and self._refiner is not None:
                 T_odom_base = pose_to_matrix(sample.position, sample.orientation)
                 base_world = T_committed @ T_odom_base
@@ -86,7 +92,6 @@ class WorldRegistry:
         if self._refiner is not None:
             self._refiner.clear_refinement_baseline()
             self._refiner.clear_floor_lock()
-            self._refiner.clear_registration_yaw()
 
     def apply_runtime_transform(
         self,

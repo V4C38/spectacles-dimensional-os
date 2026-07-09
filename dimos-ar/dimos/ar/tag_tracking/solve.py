@@ -1,4 +1,4 @@
-"""AprilTag solve helpers: camera frames, 2D Kabsch, and observation types."""
+"""AprilTag solve helpers: camera frames, similarity fitting, and observation types."""
 
 from __future__ import annotations
 
@@ -11,8 +11,13 @@ from typing import TYPE_CHECKING, Any
 import cv2
 import numpy as np
 
-from dimos.ar.world_frame.transforms import pose_to_matrix, yaw_from_T as _yaw_from_T
+from dimos.ar.world_frame.transforms import (
+    gravity_level_transform,
+    pose_to_matrix,
+    yaw_from_T as _yaw_from_T,
+)
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
+from dimos.utils.transform_utils import normalize_angle
 
 __all__ = [
     "_yaw_from_T",
@@ -139,24 +144,56 @@ def parse_camera_frame(data: bytes) -> tuple[dict[str, Any], bytes]:
     return header, data[header_end:]
 
 
-def solve_yaw_translation_2d(
+@dataclass(frozen=True)
+class SimilaritySolve:
+    yaw: float
+    scale: float
+    t2: NDArray[np.float64]
+    resid_rms: float
+    suu: float
+    total_weight: float
+    observation_count: int
+
+
+def solve_similarity_2d(
     u: NDArray[np.float64],
     v: NDArray[np.float64],
-) -> tuple[float, NDArray[np.float64]]:
-    """2D Kabsch: u (odom XY) -> v (world X, -world Z)."""
+    w: NDArray[np.float64],
+) -> SimilaritySolve:
+    """Weighted 2D similarity fit: raw odom XY -> world (X, -Z)."""
+    if u.shape != v.shape or u.ndim != 2 or u.shape[1] != 2:
+        raise ValueError("u and v must be Nx2 arrays with matching shape")
+    if w.ndim != 1 or w.shape[0] != u.shape[0]:
+        raise ValueError("w must be a length-N vector")
     if u.shape[0] < 2:
         raise ValueError("need at least 2 points")
-    mean_u = u.mean(axis=0)
-    mean_v = v.mean(axis=0)
+    weights = np.asarray(w, dtype=np.float64)
+    if not np.all(np.isfinite(weights)) or float(np.sum(weights)) <= 0.0:
+        raise ValueError("weights must be finite and sum to > 0")
+    total_weight = float(np.sum(weights))
+    mean_u = np.sum(u * weights[:, np.newaxis], axis=0) / total_weight
+    mean_v = np.sum(v * weights[:, np.newaxis], axis=0) / total_weight
     u_c = u - mean_u
     v_c = v - mean_v
-    numerator = float(np.sum(u_c[:, 0] * v_c[:, 1] - u_c[:, 1] * v_c[:, 0]))
-    denominator = float(np.sum(u_c[:, 0] * v_c[:, 0] + u_c[:, 1] * v_c[:, 1]))
+    numerator = float(np.sum(weights * (u_c[:, 0] * v_c[:, 1] - u_c[:, 1] * v_c[:, 0])))
+    denominator = float(np.sum(weights * (u_c[:, 0] * v_c[:, 0] + u_c[:, 1] * v_c[:, 1])))
     yaw = math.atan2(numerator, denominator)
+    suu = float(np.sum(weights * np.sum(u_c * u_c, axis=1)))
+    scale = math.hypot(numerator, denominator) / max(suu, 1e-9)
     c, s = math.cos(yaw), math.sin(yaw)
-    R2 = np.array([[c, -s], [s, c]], dtype=np.float64)
-    t2 = mean_v - R2 @ mean_u
-    return yaw, t2
+    r2 = np.array([[c, -s], [s, c]], dtype=np.float64)
+    t2 = mean_v - scale * (r2 @ mean_u)
+    residuals = np.linalg.norm(v - ((scale * (r2 @ u.T)).T + t2), axis=1)
+    resid_rms = math.sqrt(float(np.sum(weights * residuals * residuals)) / total_weight)
+    return SimilaritySolve(
+        yaw=yaw,
+        scale=scale,
+        t2=t2,
+        resid_rms=resid_rms,
+        suu=suu,
+        total_weight=total_weight,
+        observation_count=u.shape[0],
+    )
 
 
 def build_T_world_odom(yaw: float, t_world: tuple[float, float, float]) -> NDArray[np.float64]:
@@ -171,6 +208,89 @@ def build_T_world_odom(yaw: float, t_world: tuple[float, float, float]) -> NDArr
     return T
 
 
+def _view_baseline_m(observations: list[TagObservation]) -> float:
+    """Max pairwise camera-position spread (Spectacles motion during static registration)."""
+    positions: list[NDArray[np.float64]] = []
+    for obs in observations:
+        if obs.cam_pos is None:
+            continue
+        positions.append(np.asarray(obs.cam_pos, dtype=np.float64))
+    if len(positions) < 2:
+        return _implied_yaw_baseline_m(observations)
+    max_dist = 0.0
+    for i in range(len(positions)):
+        for j in range(i + 1, len(positions)):
+            d = float(np.linalg.norm(positions[i] - positions[j]))
+            max_dist = max(max_dist, d)
+    return max_dist
+
+
+def _implied_yaw_baseline_m(observations: list[TagObservation]) -> float:
+    """Fallback view baseline from per-observation implied yaw spread."""
+    yaws: list[float] = []
+    for obs in observations:
+        T_raw = obs.T_world_tag @ np.linalg.inv(obs.T_odom_tag)
+        T = gravity_level_transform(T_raw)
+        yaws.append(_yaw_from_T(T))
+    if len(yaws) < 2:
+        return 0.0
+    max_dyaw = 0.0
+    for i in range(len(yaws)):
+        for j in range(i + 1, len(yaws)):
+            dyaw = abs(normalize_angle(yaws[i] - yaws[j]))
+            max_dyaw = max(max_dyaw, dyaw)
+    return max_dyaw * 2.0
+
+
+@dataclass(frozen=True)
+class RegistrationPoseAggregate:
+    yaw_rad: float
+    translation_world: tuple[float, float, float]
+    resid_rms_m: float
+
+
+def aggregate_registration_pose(
+    observations: list[TagObservation],
+    weights: NDArray[np.float64],
+) -> RegistrationPoseAggregate:
+    """Weighted mean of per-observation world←odom poses (static robot / camera motion)."""
+    w = np.asarray(weights, dtype=np.float64)
+    total_weight = float(np.sum(w))
+    if total_weight <= 0.0 or len(observations) < 1:
+        raise ValueError("aggregate_registration_pose needs positive weights and observations")
+
+    yaws: list[float] = []
+    translations: list[NDArray[np.float64]] = []
+    for obs, _weight in zip(observations, w, strict=True):
+        T_raw = obs.T_world_tag @ np.linalg.inv(obs.T_odom_tag)
+        T = gravity_level_transform(T_raw)
+        yaws.append(_yaw_from_T(T))
+        translations.append(np.asarray(T[:3, 3], dtype=np.float64))
+
+    sin_sum = float(np.sum(w * np.sin(yaws)))
+    cos_sum = float(np.sum(w * np.cos(yaws)))
+    mean_yaw = math.atan2(sin_sum, cos_sum)
+    mean_trans = np.sum(np.stack(translations) * w[:, np.newaxis], axis=0) / total_weight
+
+    sq_err = 0.0
+    for yaw, trans, weight in zip(yaws, translations, w, strict=True):
+        dyaw = normalize_angle(yaw - mean_yaw)
+        pos_err = float(np.linalg.norm(trans - mean_trans))
+        err = math.hypot(dyaw, pos_err)
+        sq_err += float(weight) * err * err
+    resid_rms = math.sqrt(sq_err / total_weight)
+
+    return RegistrationPoseAggregate(
+        yaw_rad=mean_yaw,
+        translation_world=(
+            float(mean_trans[0]),
+            float(mean_trans[1]),
+            float(mean_trans[2]),
+        ),
+        resid_rms_m=resid_rms,
+    )
+
+
 def _ground_baseline_m(observations: list[TagObservation]) -> float:
     if len(observations) < 2:
         return 0.0
@@ -181,23 +301,6 @@ def _ground_baseline_m(observations: list[TagObservation]) -> float:
             d = float(np.linalg.norm(pts[i] - pts[j]))
             max_dist = max(max_dist, d)
     return max_dist
-
-
-def _odom_tag_straightness(observations: list[TagObservation]) -> float:
-    """Path straightness from odom-tag XY spread (0 = straight, →1 = curved)."""
-    if len(observations) < 2:
-        return 1.0
-    u = np.array(
-        [(o.p_odom_tag[0], o.p_odom_tag[1]) for o in observations],
-        dtype=np.float64,
-    )
-    u_c = u - u.mean(axis=0)
-    cov = (u_c.T @ u_c) / len(u_c)
-    lam2, lam1 = sorted(np.linalg.eigvalsh(cov))
-    lam2 = max(0.0, float(lam2))  # guard near-singular covariance numerical noise
-    if lam1 <= 1e-9:
-        return 1.0
-    return float(math.sqrt(lam2 / lam1))
 
 
 def orientation_yaw_deg(
@@ -231,13 +334,9 @@ class TagObservation:
     quality: float
     reprojection_error_px: float
     dist_cam_m: float = 0.0
+    ambiguity_ratio: float = 1.0
+    pair_skew_s: float = 0.0
+    capture_ts_robot: float | None = None
+    cam_pos: tuple[float, float, float] | None = None
 
 
-@dataclass
-class TagSolve:
-    T_world_odom: NDArray[np.float64]
-    method: str
-    quality: float
-    observation_count: int
-    baseline_m: float
-    straightness: float = 1.0

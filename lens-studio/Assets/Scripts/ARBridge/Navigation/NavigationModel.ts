@@ -152,6 +152,17 @@ export function shouldSendStreamGoal(
   return poseDistanceCm(lastSentGoal.position, position) >= GOAL_SEND_MIN_DISTANCE_CM;
 }
 
+export function shouldSuppressTerminalNavStatus(live: {
+  placementActive: boolean;
+  activelyDragging: boolean;
+  markerMovedSinceLastGoal: boolean;
+}): boolean {
+  return (
+    live.placementActive &&
+    (live.activelyDragging || live.markerMovedSinceLastGoal)
+  );
+}
+
 export function deriveNavPhase(
   state: NavEngineState,
   live: NavLiveContext,

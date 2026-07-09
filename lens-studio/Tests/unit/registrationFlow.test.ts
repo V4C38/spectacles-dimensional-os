@@ -30,7 +30,6 @@ function status(
   return {
     type: "registration_status",
     ts: 1,
-    robot_id: "go2",
     mode: "april_tag",
     phase: "scanning",
     capture: "steady",
@@ -492,12 +491,12 @@ describe("RegistrationFlow commit coordinator", () => {
 });
 
 describe("RegistrationFlow second registration", () => {
-  it("enter skips bridge stop when registration client has no active intent", () => {
+  it("enter always notifies bridge stop before starting auto registration", () => {
     const { flow, registrationClient } = createFlow();
     registrationClient.hasActiveIntent.mockReturnValue(false);
     flow.setState(createRegistrationViewState());
     flow.enter();
-    expect(registrationClient.stop).toHaveBeenCalledWith();
+    expect(registrationClient.stop).toHaveBeenCalledWith({ notifyBridge: true });
     expect(registrationClient.start).toHaveBeenCalledWith("april_tag");
   });
 

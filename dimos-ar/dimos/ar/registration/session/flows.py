@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -17,7 +16,7 @@ from dimos.ar.registration.types import (
     RegistrationPhase,
 )
 from dimos.ar.registration.wire import RegistrationStatusPayload, encode_registration_status
-from dimos.ar.tag_tracking.solve import R_ALIGN, _yaw_from_T
+from dimos.ar.tag_tracking.solve import R_ALIGN, build_T_world_odom
 from dimos.ar.utils.console import console_divider, log_checkpoint
 from dimos.ar.world_frame.transforms import OdomSample, normalize_ground_pose, pose_to_matrix
 from dimos.utils.logging_config import setup_logger
@@ -27,15 +26,13 @@ if TYPE_CHECKING:
     from dimos.ar.bridge.sender import BridgeSender
     from dimos.ar.bridge.status_service import StatusService
     from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker
+    from dimos.ar.world_frame.aligner import AlignmentEstimate
+    from dimos.ar.world_frame.refinement import WorldFrameRefiner
     from dimos.ar.world_frame.registry import WorldRegistry
 
 logger = setup_logger()
 
-TAG_REGISTRATION_MIN_OBS = 4
-# Ack-limited camera frames arrive ~3–4 s apart; 5 s window caps at 2 obs (40% progress).
 TAG_REGISTRATION_WINDOW_S = 15.0
-TAG_REGISTRATION_MAX_SPREAD_M = 0.10
-TAG_REGISTRATION_MAX_YAW_SPREAD_DEG = 6.0
 TAG_REGISTRATION_MAX_DIST_M = 2.5
 
 
@@ -50,6 +47,7 @@ class RegistrationFlowsMixin:
         _registry: WorldRegistry
         _status: StatusService
         _sender: BridgeSender
+        _world_frame_refiner: WorldFrameRefiner
 
         def _clear_session(self) -> None: ...
 
@@ -90,6 +88,7 @@ class RegistrationFlowsMixin:
                 return
 
         if self._session.mode == RegistrationMode.APRIL_TAG:
+            self._session.april_tag_started_mono = time.monotonic()
             self._set_tag_tracker_active(True, reason="april_tag_start")
             self._broadcast_status(
                 phase=RegistrationPhase.SCANNING,
@@ -148,74 +147,83 @@ class RegistrationFlowsMixin:
             return
         self._process_manual_candidate(msg, odom)
 
+    def _registration_alignment_estimate(self) -> AlignmentEstimate | None:
+        return self._world_frame_refiner.registration_alignment_estimate(
+            now_mono=time.monotonic(),
+            max_age_s=TAG_REGISTRATION_WINDOW_S,
+        )
+
+    def _registration_ready(self, estimate: AlignmentEstimate) -> bool:
+        if estimate.confidence >= self._world_frame_refiner.registration_confidence_min():
+            return True
+        return estimate.yaw_observable and not estimate.approximate
+
+    def _registration_scan_timed_out(self) -> bool:
+        started = self._session.april_tag_started_mono
+        if started is None:
+            return False
+        return bool(time.monotonic() - started >= TAG_REGISTRATION_WINDOW_S)
+
+    def _fail_april_tag_registration(self, message: str) -> None:
+        self._set_tag_tracker_active(False, reason="registration_failed")
+        self._broadcast_status(
+            phase=RegistrationPhase.FAILED,
+            message=message,
+            capture=CaptureHint.OFF,
+        )
+        self._stop_broadcast()
+        self._clear_session()
+
     async def _maybe_finish_tag_registration(self) -> None:
         if self._session.mode != RegistrationMode.APRIL_TAG:
             return
-        if not self._tag_registration_stability_met():
+        if self._registry.state.is_committed:
             return
-        odom = self._odom.latest()
-        if odom is None:
+        min_obs = self._world_frame_refiner.registration_min_observations()
+        estimate = self._registration_alignment_estimate()
+        if estimate is None:
+            if self._registration_scan_timed_out():
+                self._fail_april_tag_registration(
+                    "Registration timed out — move around the robot while keeping the tag in view",
+                )
             return
-        pose_result = self._tag_tracker.robot_world_pose_estimate()
-        if pose_result is None:
+        if estimate.observation_count < min_obs:
+            if self._registration_scan_timed_out():
+                self._fail_april_tag_registration(
+                    "Registration timed out — move around the robot while keeping the tag in view",
+                )
             return
-        pos, ori, confidence = pose_result
-        T_world_base = pose_to_matrix(pos, ori)
-        T_world_base[:3, :3] = T_world_base[:3, :3] @ R_ALIGN
-        T_odom_base = pose_to_matrix(odom.position, odom.orientation)
+        if not self._registration_ready(estimate):
+            if self._registration_scan_timed_out():
+                self._fail_april_tag_registration(
+                    "Registration timed out — move around the robot while keeping the tag in view",
+                )
+            return
         candidate = RegistrationCandidate(
             T_world_odom=np.array(
-                T_world_base @ np.linalg.inv(T_odom_base),
+                build_T_world_odom(estimate.yaw_rad, estimate.translation_world),
                 dtype=np.float64,
                 copy=True,
             ),
-            quality=confidence,
+            quality=estimate.confidence,
             mode=RegistrationMode.APRIL_TAG,
-            approximate=False,
+            approximate=estimate.approximate,
+            odom_scale=estimate.scale,
         )
-        logger.info("AprilTag registration stability gate passed — auto-committing")
+        logger.info(
+            "AprilTag registration aligner commit",
+            approximate=estimate.approximate,
+            yaw_observable=estimate.yaw_observable,
+            scale_observable=estimate.scale_observable,
+            alignment_confidence=round(estimate.confidence, 4),
+            n_obs=estimate.observation_count,
+        )
         self._finish_registration(candidate, time.time())
 
     def _april_tag_window_observations(self) -> list[Any]:
         return self._tag_tracker.recent_observations(
             max_age_s=TAG_REGISTRATION_WINDOW_S,
         )
-
-    def _april_tag_window_pose_samples(
-        self,
-        observations: list[Any],
-    ) -> tuple[list[np.ndarray], list[float]]:
-        mounts = self._tag_tracker.mounts_snapshot()
-        positions: list[np.ndarray] = []
-        yaws: list[float] = []
-        for obs in observations:
-            mount = mounts.get(obs.tag_id)
-            if mount is None:
-                continue
-            T_world_tag = obs.T_world_tag
-            T_world_base = T_world_tag @ np.linalg.inv(mount.T_base_tag)
-            positions.append(T_world_base[:3, 3])
-            yaws.append(_yaw_from_T(T_world_base))
-        return positions, yaws
-
-    def _april_tag_window_spread_m(self, positions: list[np.ndarray]) -> float | None:
-        if len(positions) < TAG_REGISTRATION_MIN_OBS:
-            return None
-        arr = np.stack(positions, axis=0)
-        center = np.median(arr, axis=0)
-        return float(np.max(np.linalg.norm(arr - center, axis=1)))
-
-    def _april_tag_window_max_yaw_delta_deg(self, yaws: list[float]) -> float | None:
-        if len(yaws) < 2:
-            return 0.0
-        sin_sum = sum(math.sin(y) for y in yaws)
-        cos_sum = sum(math.cos(y) for y in yaws)
-        mean_yaw = math.atan2(sin_sum, cos_sum)
-        max_yaw_delta = max(
-            abs(math.atan2(math.sin(y - mean_yaw), math.cos(y - mean_yaw)))
-            for y in yaws
-        )
-        return math.degrees(max_yaw_delta)
 
     def _april_tag_progress_percent(self, phase: RegistrationPhase) -> int | None:
         if self._session.mode != RegistrationMode.APRIL_TAG:
@@ -230,44 +238,11 @@ class RegistrationFlowsMixin:
             return 0
 
         observations = self._april_tag_window_observations()
-        count = len(observations)
-        sample_fraction = min(count / TAG_REGISTRATION_MIN_OBS, 1.0)
-        sample_part = sample_fraction * 0.8
-
-        stability_part = 0.0
-        if count >= TAG_REGISTRATION_MIN_OBS:
-            positions, yaws = self._april_tag_window_pose_samples(observations)
-            if len(positions) >= TAG_REGISTRATION_MIN_OBS:
-                spread_m = self._april_tag_window_spread_m(positions)
-                max_yaw_deg = self._april_tag_window_max_yaw_delta_deg(yaws)
-                spread_score = 1.0
-                yaw_score = 1.0
-                if spread_m is not None:
-                    spread_score = 1.0 - min(spread_m / TAG_REGISTRATION_MAX_SPREAD_M, 1.0)
-                if max_yaw_deg is not None:
-                    yaw_score = 1.0 - min(max_yaw_deg / TAG_REGISTRATION_MAX_YAW_SPREAD_DEG, 1.0)
-                stability_part = min(spread_score, yaw_score) * 0.2
-
-        return max(0, min(100, round((sample_part + stability_part) * 100)))
-
-    def _tag_registration_stability_met(self) -> bool:
-        observations = self._april_tag_window_observations()
-        if len(observations) < TAG_REGISTRATION_MIN_OBS:
-            return False
-
-        positions, yaws = self._april_tag_window_pose_samples(observations)
-        if len(positions) < TAG_REGISTRATION_MIN_OBS:
-            return False
-
-        spread_m = self._april_tag_window_spread_m(positions)
-        if spread_m is None or spread_m > TAG_REGISTRATION_MAX_SPREAD_M:
-            return False
-
-        max_yaw_deg = self._april_tag_window_max_yaw_delta_deg(yaws)
-        if max_yaw_deg is not None and max_yaw_deg > TAG_REGISTRATION_MAX_YAW_SPREAD_DEG:
-            return False
-
-        return True
+        min_obs = int(self._world_frame_refiner.registration_min_observations())
+        estimate = self._registration_alignment_estimate()
+        obs_fraction = min(len(observations) / max(min_obs, 1), 1.0)
+        conf_fraction = estimate.confidence if estimate is not None else 0.0
+        return max(0, min(100, round(min(obs_fraction, conf_fraction) * 100)))
 
     def _process_manual_candidate(
         self,
@@ -313,7 +288,6 @@ class RegistrationFlowsMixin:
         ts: float | None,
     ) -> None:
         self._set_tag_tracker_active(False, reason="registration_finish")
-        self._stop_broadcast()
         self._registry.commit(result, odom=self._odom.latest())
         log_checkpoint(
             logger,
@@ -326,8 +300,9 @@ class RegistrationFlowsMixin:
         console_divider(
             f"Registration succeeded mode={result.mode.value} quality={round(result.quality, 2)}",
         )
-        self._clear_session()
         self._status.broadcast()
+        self._stop_broadcast()
+        self._clear_session()
         self._broadcast_status(
             phase=RegistrationPhase.SUCCEEDED,
             message=(
@@ -389,6 +364,21 @@ class RegistrationFlowsMixin:
             if effective_mode == RegistrationMode.APRIL_TAG
             else None
         )
+        estimate = None
+        if effective_mode == RegistrationMode.APRIL_TAG:
+            if self._registry.state.is_committed:
+                estimate = self._world_frame_refiner.current_alignment_estimate(
+                    now_mono=time.monotonic(),
+                    min_observations=1,
+                )
+            else:
+                estimate = self._registration_alignment_estimate()
+        refining = (
+            effective_mode == RegistrationMode.APRIL_TAG
+            and self._registry.state.is_committed
+            and self._registry.state.approximate
+            and not self._tag_tracker.active
+        )
 
         payload = RegistrationStatusPayload(
             mode=effective_mode,
@@ -398,6 +388,8 @@ class RegistrationFlowsMixin:
             tag_visible=tag_visible,
             preview_pose=self._preview_pose(),
             progress=progress,
+            alignment_confidence=estimate.confidence if estimate is not None else None,
+            refining=refining if effective_mode == RegistrationMode.APRIL_TAG else None,
         )
         self._session.last_status = payload
         self._sender.send(

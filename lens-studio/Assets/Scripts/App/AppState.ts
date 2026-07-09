@@ -9,7 +9,11 @@ import {
   COLOR_WHITE,
 } from "./UI/UIKit";
 import { UILogListener, UILogger } from "./UI/UILogger";
-import { TagTrackingProfile, RegistrationMode } from "../ARBridge/Network/Protocol";
+import {
+  TagTrackingProfile,
+  RegistrationMode,
+  type WorldFrameSolveMethod,
+} from "../ARBridge/Network/Protocol";
 
 /** Whole-app lifecycle: registration wizard vs live AR session. */
 export type AppPhase = "registration" | "runtime";
@@ -301,7 +305,7 @@ export interface DriftState {
   yawDeltaDeg: number | null;
   yawCorrected: boolean;
   solveQuality: number;
-  solveMethod: "apriltag_full" | "apriltag_translation" | null;
+  solveMethod: WorldFrameSolveMethod | null;
   lastUpdateTs: number | null;
 }
 

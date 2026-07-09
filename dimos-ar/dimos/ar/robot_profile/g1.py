@@ -31,6 +31,8 @@ G1_DEFAULT_TAG_MOUNTS: list[TagMount] = [
         position=(0.10, 0.0, 0.35),
         orientation=(0.0, -0.70710678, 0.0, 0.70710678),
     ),
+    # Uncomment and set the real pose to enable per-frame yaw observability.
+    # TagMount(tag_id=1, size_m=0.056, position=(0.0, 0.0, 0.0), orientation=(0.0, -0.70710678, 0.0, 0.70710678)),
 ]
 
 
@@ -87,8 +89,6 @@ def g1_capabilities(
 def g1_runtime_tag_tracking_profile() -> TagTrackingProfile:
     return TagTrackingProfile(
         runtime_static_speed_mps=0.08,
-        runtime_max_correct_speed_mps=1.2,
-        runtime_cruise_window_s=14.0,
         runtime_speed_horizon_s=0.9,
     )
 

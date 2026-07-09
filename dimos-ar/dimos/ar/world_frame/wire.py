@@ -19,6 +19,9 @@ def encode_world_frame_correction(
     yaw_corrected: bool,
     solve_quality: float,
     solve_method: str,
+    alignment_confidence: float | None = None,
+    yaw_observable: bool | None = None,
+    scale_observable: bool | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "type": "world_frame_correction",
@@ -30,4 +33,10 @@ def encode_world_frame_correction(
     }
     if yaw_delta_deg is not None:
         payload["yaw_delta_deg"] = round(float(yaw_delta_deg), 3)
+    if alignment_confidence is not None:
+        payload["alignment_confidence"] = round(float(alignment_confidence), 4)
+    if yaw_observable is not None:
+        payload["yaw_observable"] = bool(yaw_observable)
+    if scale_observable is not None:
+        payload["scale_observable"] = bool(scale_observable)
     return _dumps(payload)

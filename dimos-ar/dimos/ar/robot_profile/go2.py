@@ -49,6 +49,8 @@ GO2_DEFAULT_TAG_MOUNTS: list[TagMount] = [
         position=(0.18, 0.0, 0.06),
         orientation=_GO2_TAG_QUAT,
     ),
+    # Uncomment and set the real pose to enable per-frame yaw observability.
+    # TagMount(tag_id=1, size_m=0.056, position=(0.0, 0.0, 0.0), orientation=_GO2_TAG_QUAT),
 ]
 
 

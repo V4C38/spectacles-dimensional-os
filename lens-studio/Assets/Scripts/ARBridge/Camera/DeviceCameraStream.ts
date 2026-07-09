@@ -37,7 +37,10 @@ export class DeviceCameraStream {
   private _provider: CameraTextureProvider | null = null;
   private _frameRegistration: EventRegistration | null = null;
   private _latestFrame: DeviceCameraStreamFrame | null = null;
-  private _pendingResolvers: ((frame: DeviceCameraStreamFrame) => void)[] = [];
+  private _pendingResolvers: {
+    resolve: (frame: DeviceCameraStreamFrame) => void;
+    reject: (error: Error) => void;
+  }[] = [];
   private _running = false;
   private _loggedFirstFrameSize = false;
 
@@ -82,10 +85,9 @@ export class DeviceCameraStream {
     this._texture = null;
     this._latestFrame = null;
     this._running = false;
-    // Reject any pending requestNextFrame callers so they don't hang.
     const pending = this._pendingResolvers.splice(0);
-    for (const resolve of pending) {
-      void resolve;
+    for (const waiter of pending) {
+      waiter.reject(new Error("DeviceCameraStream stopped"));
     }
     print("DeviceCameraStream: stopped");
   }
@@ -108,8 +110,8 @@ export class DeviceCameraStream {
    * Promise that resolves on the next frame delivered by onNewFrame.
    */
   public requestNextFrame(): Promise<DeviceCameraStreamFrame> {
-    return new Promise<DeviceCameraStreamFrame>((resolve) => {
-      this._pendingResolvers.push(resolve);
+    return new Promise<DeviceCameraStreamFrame>((resolve, reject) => {
+      this._pendingResolvers.push({ resolve, reject });
     });
   }
 
@@ -201,9 +203,9 @@ export class DeviceCameraStream {
     }
 
     if (this._pendingResolvers.length > 0) {
-      const resolvers = this._pendingResolvers.splice(0);
-      for (const resolve of resolvers) {
-        resolve(streamFrame);
+      const waiters = this._pendingResolvers.splice(0);
+      for (const waiter of waiters) {
+        waiter.resolve(streamFrame);
       }
     }
   }

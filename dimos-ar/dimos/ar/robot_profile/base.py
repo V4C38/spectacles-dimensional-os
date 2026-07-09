@@ -19,15 +19,7 @@ class CapabilityState:
 @dataclass(frozen=True)
 class TagTrackingProfile:
     runtime_static_speed_mps: float = 0.05
-    runtime_max_correct_speed_mps: float = 1.5
-    runtime_cruise_window_s: float = 12.0
     runtime_speed_horizon_s: float = 0.4
-    runtime_yaw_min_baseline_m: float = 0.40
-    runtime_yaw_straightness_max: float = 0.20
-    runtime_translation_window_obs: int = 3
-    runtime_translation_window_s: float = 6.0
-    runtime_stop_yaw_window_s: float = 30.0
-    runtime_solve_max_dist_cam_m: float = 4.0
     flat_ground: bool = True
 
 

@@ -49,16 +49,11 @@ from dimos.ar.tag_tracking.solve import (
     FLIP_YZ,
     TagMount,
     TagObservation,
-    TagSolve,
     _ground_baseline_m,
-    _odom_tag_straightness,
     _rvec_tvec_to_matrix,
     _yaw_from_T,
-    build_T_world_odom,
     reprojection_error_px,
-    solve_yaw_translation_2d,
 )
-from dimos.ar.world_frame.state import WorldFrameState
 from dimos.ar.world_frame.transforms import (
     OdomSample,
     gravity_level_transform,
@@ -75,12 +70,6 @@ logger = setup_logger()
 
 create_apriltag_detector = create_aruco_detector
 
-# One-shot mount-offset diagnostic (see _maybe_log_mount_offset_diagnostic).
-_MOUNT_OFFSET_DIAG_EMITTED: bool = False
-_MOUNT_OFFSET_DIAG_LOCK = threading.Lock()
-_MOUNT_OFFSET_DIAG_INTERVAL_S: float = 30.0
-_MOUNT_OFFSET_DIAG_LAST_MONO: float = 0.0
-
 
 @dataclass
 class FrameResult:
@@ -91,18 +80,20 @@ class FrameResult:
     # Counts of per-observation rejections after world-frame commit,
     # populated only when process_frame is called with world_frame_committed=True.
     rejections_reprojection: int = 0
+    rejections_skew: int = 0
     rejections_distance: int = 0
     rejections_up_tilt: int = 0
     rejections_mount_residual: int = 0
     rejections_innovation: int = 0
 
 
-_RejectionKey = Literal["reproj", "dist", "tilt", "mount", "innov"]
+_RejectionKey = Literal["reproj", "skew", "dist", "tilt", "mount", "innov"]
 
 
 @dataclass
 class RejectionSummary:
     reprojection: int = 0
+    skew: int = 0
     distance: int = 0
     up_tilt: int = 0
     mount_residual: int = 0
@@ -111,6 +102,8 @@ class RejectionSummary:
     def record(self, key: _RejectionKey) -> None:
         if key == "reproj":
             self.reprojection += 1
+        elif key == "skew":
+            self.skew += 1
         elif key == "dist":
             self.distance += 1
         elif key == "tilt":
@@ -124,6 +117,7 @@ class RejectionSummary:
 @dataclass
 class RobotAprilTagTrackerConfig:
     max_reprojection_error_px: float = 3.0
+    max_pair_skew_s: float = 0.15
     max_distance_m: float = 6.0
     min_baseline_m: float = 0.15
     window_max_obs: int = 40
@@ -251,6 +245,9 @@ class RobotAprilTagTracker:
         T_world_glcam: NDArray[np.float64],
         T_odom_base: NDArray[np.float64],
         recv_mono: float,
+        capture_ts_robot: float,
+        odom_source_ts: float | None,
+        cam_pos: tuple[float, float, float],
         world_frame_committed: bool,
         T_committed: NDArray[np.float64] | None,
         max_distance_m: float | None = None,
@@ -260,10 +257,11 @@ class RobotAprilTagTracker:
             mount.size_m,
             camera_matrix,
             dist_coeffs,
+            distortion_model=getattr(self._camera_info, "distortion_model", None),
         )
         if pose is None:
             return None, None
-        rvec, tvec = pose
+        rvec, tvec, ambiguity_ratio = pose
         reproj = reprojection_error_px(
             corners,
             mount.size_m,
@@ -274,6 +272,11 @@ class RobotAprilTagTracker:
         )
         if reproj > self._config.max_reprojection_error_px:
             return None, "reproj"
+        if odom_source_ts is None:
+            return None, "skew"
+        pair_skew_s = float(capture_ts_robot - odom_source_ts)
+        if abs(pair_skew_s) > self._config.max_pair_skew_s:
+            return None, "skew"
         dist_cam = float(np.linalg.norm(tvec.reshape(3)))
         effective_max_distance = (
             max_distance_m if max_distance_m is not None else self._config.max_distance_m
@@ -343,6 +346,10 @@ class RobotAprilTagTracker:
             quality=quality,
             reprojection_error_px=reproj,
             dist_cam_m=dist_cam,
+            ambiguity_ratio=float(ambiguity_ratio),
+            pair_skew_s=pair_skew_s,
+            capture_ts_robot=capture_ts_robot,
+            cam_pos=cam_pos,
         ), None
 
     def process_frame(
@@ -371,6 +378,13 @@ class RobotAprilTagTracker:
                 seq=header.get("seq"),
             )
             return FrameResult(False, [], None, 0)
+        raw_capture_ts_robot = header.get("capture_ts_robot")
+        if not isinstance(raw_capture_ts_robot, (int, float)) or not math.isfinite(
+            float(raw_capture_ts_robot)
+        ):
+            logger.warning("Tag frame skipped: missing capture_ts_robot", seq=header.get("seq"))
+            return FrameResult(False, [], None, 0)
+        capture_ts_robot = float(raw_capture_ts_robot)
 
         gray = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_GRAYSCALE)
         if gray is None:
@@ -403,6 +417,11 @@ class RobotAprilTagTracker:
             tuple(header["cam_pos"]),
             tuple(header["cam_rot"]),
         )
+        cam_pos = (
+            float(header["cam_pos"][0]),
+            float(header["cam_pos"][1]),
+            float(header["cam_pos"][2]),
+        )
         T_odom_base = pose_to_matrix(odom.position, odom.orientation)
 
         detected_ids: list[int] = []
@@ -424,6 +443,9 @@ class RobotAprilTagTracker:
                 T_world_glcam=T_world_glcam,
                 T_odom_base=T_odom_base,
                 recv_mono=recv_mono,
+                capture_ts_robot=capture_ts_robot,
+                odom_source_ts=odom.source_ts,
+                cam_pos=cam_pos,
                 world_frame_committed=world_frame_committed,
                 T_committed=T_committed,
                 max_distance_m=max_distance_m,
@@ -451,6 +473,7 @@ class RobotAprilTagTracker:
             quality=best_quality if detected_ids else None,
             observations_added=added,
             rejections_reprojection=rejections.reprojection,
+            rejections_skew=rejections.skew,
             rejections_distance=rejections.distance,
             rejections_up_tilt=rejections.up_tilt,
             rejections_mount_residual=rejections.mount_residual,
@@ -471,225 +494,10 @@ class RobotAprilTagTracker:
         p_odom_base = T_odom_base[:3, 3]
         return R_odom_base.T @ (p_odom_tag_meas - p_odom_base)
 
-    def current_solve(
-        self,
-        *,
-        min_baseline_m: float | None = None,
-        max_age_s: float | None = None,
-        max_observations: int | None = None,
-        max_dist_cam_m: float | None = None,
-        odom_scale: float = 1.0,
-        odom_anchor_xy: tuple[float, float] = (0.0, 0.0),
-    ) -> TagSolve | None:
-        with self._lock:
-            observations = list(self._observations)
-
-        if not observations:
-            return None
-
-        observations = self._filter_observations(
-            observations,
-            max_age_s=max_age_s,
-            max_observations=max_observations,
-            max_dist_cam_m=max_dist_cam_m,
-        )
-
-        if not observations:
-            return None
-
-        effective_min_baseline = min_baseline_m if min_baseline_m is not None else self._config.min_baseline_m
-        baseline = _ground_baseline_m(observations)
-        straightness = _odom_tag_straightness(observations)
-        if len(observations) >= 2 and baseline >= effective_min_baseline:
-            u = np.array(
-                [
-                    WorldFrameState.scale_odom_xy(
-                        o.p_odom_tag[0],
-                        o.p_odom_tag[1],
-                        odom_scale=odom_scale,
-                        odom_anchor_xy=odom_anchor_xy,
-                    )
-                    for o in observations
-                ],
-                dtype=np.float64,
-            )
-            v = np.array(
-                [(o.p_world_tag[0], -o.p_world_tag[2]) for o in observations],
-                dtype=np.float64,
-            )
-            yaw, t2 = solve_yaw_translation_2d(u, v)
-            mean_world_y = float(np.mean([o.p_world_tag[1] for o in observations]))
-            mean_odom_z = float(np.mean([o.p_odom_tag[2] for o in observations]))
-            t_world = (float(t2[0]), mean_world_y - mean_odom_z, -float(t2[1]))
-            T = build_T_world_odom(yaw, t_world)
-            T = gravity_level_transform(T)
-            quality = float(np.mean([o.quality for o in observations]))
-            return TagSolve(
-                T_world_odom=T,
-                method="apriltag_full",
-                quality=quality,
-                observation_count=len(observations),
-                baseline_m=baseline,
-                straightness=straightness,
-            )
-        return None
-
     def baseline_m(self) -> float:
         with self._lock:
             return _ground_baseline_m(list(self._observations))
 
-    def _maybe_log_mount_offset_diagnostic(
-        self,
-        obs: TagObservation,
-        mount: TagMount,
-        T_world_odom: NDArray[np.float64],
-    ) -> None:
-        """Log measured base->tag offset vs configured mount.position (rate-limited).
-
-        Uses the committed world<-odom transform and a vision-derived tag pose so
-        the residual reflects true lever-arm error rather than the mount model.
-        """
-        global _MOUNT_OFFSET_DIAG_EMITTED, _MOUNT_OFFSET_DIAG_LAST_MONO
-
-        T_world_odom = np.asarray(T_world_odom, dtype=np.float64)
-        if not np.all(np.isfinite(T_world_odom)):
-            return
-
-        T_odom_world = np.linalg.inv(T_world_odom)
-        T_odom_tag_meas = T_odom_world @ obs.T_world_tag
-        p_odom_tag_meas = T_odom_tag_meas[:3, 3]
-
-        R_odom_base = obs.T_odom_base[:3, :3]
-        p_odom_base = obs.T_odom_base[:3, 3]
-        measured_p_base_tag = R_odom_base.T @ (p_odom_tag_meas - p_odom_base)
-
-        configured = np.asarray(mount.position, dtype=np.float64)
-        residual = measured_p_base_tag - configured
-
-        R_world_odom = T_world_odom[:3, :3]
-        p_world_tag = obs.T_world_tag[:3, 3]
-        p_base_tag = configured
-        p_world_base_from_mount = p_world_tag - (R_world_odom @ R_odom_base) @ p_base_tag
-
-        now = time.monotonic()
-        with _MOUNT_OFFSET_DIAG_LOCK:
-            emit_one_shot = not _MOUNT_OFFSET_DIAG_EMITTED
-            emit_periodic = now - _MOUNT_OFFSET_DIAG_LAST_MONO >= _MOUNT_OFFSET_DIAG_INTERVAL_S
-            if not emit_one_shot and not emit_periodic:
-                return
-            if emit_one_shot:
-                _MOUNT_OFFSET_DIAG_EMITTED = True
-            _MOUNT_OFFSET_DIAG_LAST_MONO = now
-
-        logger.info(
-            "tag_mount_offset diagnostic tag_id=%s "
-            "measured_base_to_tag=%s configured_mount.position=%s residual=%s "
-            "p_world_tag=%s p_world_base_from_mount=%s",
-            mount.tag_id,
-            np.array2string(measured_p_base_tag, precision=4),
-            np.array2string(configured, precision=4),
-            np.array2string(residual, precision=4),
-            np.array2string(p_world_tag, precision=4),
-            np.array2string(p_world_base_from_mount, precision=4),
-        )
-
-    def current_translation_solve(
-        self,
-        T_reference: NDArray[np.float64],
-        *,
-        max_observations: int = 5,
-        max_age_s: float | None = None,
-        max_dist_cam_m: float | None = None,
-        odom_scale: float = 1.0,
-        odom_anchor_xy: tuple[float, float] = (0.0, 0.0),
-    ) -> TagSolve | None:
-        """Estimate a translation-only world<-odom update from recent tag sightings.
-
-        This runtime path is intentionally separate from ``current_solve()``.
-        ``current_solve()`` uses baseline across multiple odom-tag samples to
-        recover yaw and translation; that geometry breaks down when the robot is
-        stationary.  Here we preserve the committed gravity-levelled rotation
-        from ``T_reference`` and solve only for translation from one or more
-        robot-mounted tag observations.
-        """
-        with self._lock:
-            observations = list(self._observations)
-            mounts = dict(self._mounts)
-
-        if not observations:
-            return None
-
-        observations = self._filter_observations(
-            observations,
-            max_age_s=max_age_s,
-            max_observations=max_observations,
-            max_dist_cam_m=max_dist_cam_m,
-        )
-
-        if not observations:
-            return None
-
-        T_keep = gravity_level_transform(np.array(T_reference, dtype=np.float64, copy=True))
-        R_world_odom_keep = T_keep[:3, :3]
-
-        translations: list[np.ndarray] = []
-        qualities: list[float] = []
-        for obs in observations:
-            mount = mounts.get(obs.tag_id)
-            if mount is None:
-                continue
-            self._maybe_log_mount_offset_diagnostic(obs, mount, T_keep)
-            R_odom_base = obs.T_odom_base[:3, :3]
-            p_odom_base = obs.T_odom_base[:3, 3]
-            scaled_x, scaled_y = WorldFrameState.scale_odom_xy(
-                float(p_odom_base[0]),
-                float(p_odom_base[1]),
-                odom_scale=odom_scale,
-                odom_anchor_xy=odom_anchor_xy,
-            )
-            p_odom_base_scaled = np.array(
-                [scaled_x, scaled_y, p_odom_base[2]],
-                dtype=np.float64,
-            )
-            p_world_tag = obs.T_world_tag[:3, 3]
-            p_base_tag = np.array(mount.position, dtype=np.float64)
-            p_world_base = p_world_tag - (R_world_odom_keep @ R_odom_base) @ p_base_tag
-            t_world_odom = p_world_base - R_world_odom_keep @ p_odom_base_scaled
-            if not np.all(np.isfinite(t_world_odom)):
-                continue
-            translations.append(t_world_odom)
-            qualities.append(max(obs.quality, 1e-3))
-
-        if not translations:
-            return None
-
-        if len(translations) >= 3:
-            arr = np.stack(translations, axis=0)
-            center = np.median(arr, axis=0)
-            dists = np.linalg.norm(arr - center, axis=1)
-            keep_mask = dists <= self._config.relocalize_cluster_m
-            if np.any(keep_mask):
-                translations = [translations[i] for i, keep in enumerate(keep_mask) if keep]
-                qualities = [qualities[i] for i, keep in enumerate(keep_mask) if keep]
-
-        weights = np.asarray(qualities, dtype=np.float64)
-        weights /= np.sum(weights)
-        mean_translation = np.sum(
-            np.stack(translations, axis=0) * weights[:, np.newaxis],
-            axis=0,
-        )
-        T_new = np.array(T_keep, dtype=np.float64, copy=True)
-        T_new[:3, 3] = mean_translation
-        T_new = gravity_level_transform(T_new)
-        window_obs = observations[-max_observations:] if max_observations else observations
-        return TagSolve(
-            T_world_odom=T_new,
-            method="apriltag_translation",
-            quality=float(np.mean(qualities)),
-            observation_count=len(translations),
-            baseline_m=_ground_baseline_m(window_obs),
-            straightness=_odom_tag_straightness(window_obs),
-        )
 
     def robot_world_pose_estimate(
         self,

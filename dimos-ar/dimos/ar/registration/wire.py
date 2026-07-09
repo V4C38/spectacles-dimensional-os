@@ -41,6 +41,8 @@ class RegistrationStatusPayload:
     tag_visible: bool | None = None
     preview_pose: dict[str, Any] | None = None
     progress: int | None = None
+    alignment_confidence: float | None = None
+    refining: bool | None = None
 
 
 def encode_registration_status(
@@ -63,4 +65,8 @@ def encode_registration_status(
         payload["preview_pose"] = status.preview_pose
     if status.progress is not None:
         payload["progress"] = status.progress
+    if status.alignment_confidence is not None:
+        payload["alignment_confidence"] = round(float(status.alignment_confidence), 4)
+    if status.refining is not None:
+        payload["refining"] = status.refining
     return _dumps(payload)

@@ -88,6 +88,7 @@ export class RobotPresenter {
 
     this.telemetry?.onWorldFrameCorrection.add(() => {
       this.robotMarker?.beginRealignmentSnap();
+      this.robotMarker?.frameCapture?.notifyWorldFrameCorrection();
     });
 
     this._unsubscribeUILog = this.appState.uiLogger.subscribe((entry) => {

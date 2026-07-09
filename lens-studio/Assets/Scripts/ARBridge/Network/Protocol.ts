@@ -1,6 +1,6 @@
 // ================================================================
 /**
- * Protocol v11 — message types, parser, outbound builders, and unit
+ * Protocol v12 — message types, parser, outbound builders, and unit
  * conversion helpers. Single source of truth replacing the v3 trio
  * (ProtocolTypes / ProtocolParser / Protocol).
  *
@@ -13,7 +13,7 @@ import {
   createDefaultBridgeSnapshot,
 } from "../../App/AppState";
 
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -109,8 +109,16 @@ export interface WorldFrameCorrectionMessage {
   yaw_delta_deg?: number;
   yaw_corrected: boolean;
   solve_quality: number;
-  solve_method: "apriltag_full" | "apriltag_translation";
+  solve_method: WorldFrameSolveMethod;
+  alignment_confidence?: number;
+  yaw_observable?: boolean;
+  scale_observable?: boolean;
 }
+
+export type WorldFrameSolveMethod =
+  | "apriltag_full"
+  | "apriltag_translation"
+  | "similarity";
 
 export type RegistrationMode = "april_tag" | "manual_pose";
 
@@ -141,6 +149,8 @@ export interface RegistrationStatusMessage {
   preview_pose?: RegistrationPreviewPose;
   /** AprilTag registration progress 0–100; present during `april_tag` scanning/succeeded. */
   progress?: number;
+  alignment_confidence?: number;
+  refining?: boolean;
 }
 
 /** camera_frame_ack contains only seq. */
@@ -624,6 +634,15 @@ function parseInboundObject(
       if (typeof data.progress === "number" && Number.isFinite(data.progress)) {
         msg.progress = Math.max(0, Math.min(100, Math.round(data.progress)));
       }
+      if (
+        typeof data.alignment_confidence === "number" &&
+        Number.isFinite(data.alignment_confidence)
+      ) {
+        msg.alignment_confidence = Math.max(0, Math.min(1, data.alignment_confidence));
+      }
+      if (typeof data.refining === "boolean") {
+        msg.refining = data.refining;
+      }
       return msg;
     }
 
@@ -676,7 +695,8 @@ function parseInboundObject(
       const solveMethod = data.solve_method;
       if (
         solveMethod !== "apriltag_full" &&
-        solveMethod !== "apriltag_translation"
+        solveMethod !== "apriltag_translation" &&
+        solveMethod !== "similarity"
       ) {
         print(
           `Protocol: unknown world_frame_correction.solve_method "${solveMethod}"; skipping`,
@@ -693,6 +713,18 @@ function parseInboundObject(
       };
       if (typeof data.yaw_delta_deg === "number") {
         msg.yaw_delta_deg = data.yaw_delta_deg;
+      }
+      if (
+        typeof data.alignment_confidence === "number" &&
+        Number.isFinite(data.alignment_confidence)
+      ) {
+        msg.alignment_confidence = Math.max(0, Math.min(1, data.alignment_confidence));
+      }
+      if (typeof data.yaw_observable === "boolean") {
+        msg.yaw_observable = data.yaw_observable;
+      }
+      if (typeof data.scale_observable === "boolean") {
+        msg.scale_observable = data.scale_observable;
       }
       return msg;
     }

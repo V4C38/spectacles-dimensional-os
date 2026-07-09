@@ -29,6 +29,7 @@ function makeRegistrationClient(session = makeSession(), transport = makeTranspo
   const frameCapture = {
     setMode: vi.fn(),
     setCapturePolicy: vi.fn(),
+    resetCapturePipeline: vi.fn(),
   };
   const client = new RegistrationClient(
     session as any,
@@ -46,7 +47,7 @@ describe("RegistrationClient", () => {
   });
 
   it("starts april_tag session and activates tag capture latch", () => {
-    const { client, transport } = makeRegistrationClient();
+    const { client, transport, frameCapture } = makeRegistrationClient();
     let captureChanged = 0;
     client.onCapturePolicyInputsChanged.add(() => {
       captureChanged += 1;
@@ -54,10 +55,36 @@ describe("RegistrationClient", () => {
 
     client.start("april_tag");
 
-    expect(transport.send).toHaveBeenCalled();
+    expect(frameCapture.resetCapturePipeline).toHaveBeenCalled();
+    expect(transport.send).toHaveBeenCalledTimes(2);
     expect(client.tagCaptureSessionActive).toBe(true);
     expect(client.registrationCaptureHint).toBe("steady");
     expect(captureChanged).toBe(1);
+    expect(client.hasActiveIntent()).toBe(true);
+  });
+
+  it("start sends bridge stop before start when connected", () => {
+    const { client, transport } = makeRegistrationClient();
+
+    client.start("april_tag");
+
+    const payloads = transport.send.mock.calls.map((call) =>
+      JSON.parse(String(call[0]).trim()),
+    );
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0].command).toBe("stop");
+    expect(payloads[1].command).toBe("start");
+    expect(payloads[1].mode).toBe("april_tag");
+  });
+
+  it("start skips bridge stop when disconnected", () => {
+    const session = makeSession();
+    session.isConnected = vi.fn(() => false);
+    const { client, transport } = makeRegistrationClient(session);
+
+    client.start("april_tag");
+
+    expect(transport.send).not.toHaveBeenCalled();
     expect(client.hasActiveIntent()).toBe(true);
   });
 

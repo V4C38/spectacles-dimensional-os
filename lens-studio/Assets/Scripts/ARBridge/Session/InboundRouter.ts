@@ -1,7 +1,6 @@
 import { ARBridgeSession } from "../Network/ARBridgeSession";
 import { FrameCaptureController } from "../Camera/FrameCaptureController";
-import { CaptureMode, CapturePolicy } from "../Camera/CameraClient";
-import { AppStateStore, AppPhase } from "../../App/AppState";
+import { AppStateStore } from "../../App/AppState";
 import { RobotPresenter } from "../../App/Robot/RobotPresenter";
 import { NavigationPlacement } from "../../App/Navigation/NavigationPlacement";
 import { RegistrationClient } from "../Registration/RegistrationClient";
@@ -20,7 +19,6 @@ import {
 } from "../../App/AppState";
 import {
   BridgeStatusMessage,
-  CaptureHint,
   deriveLinkState,
   HelloMessage,
   projectBridgeSnapshot,
@@ -33,37 +31,6 @@ import {
 } from "../Network/WebSocketTransport";
 
 const RECONNECT_LOG_INTERVAL_S = 10.0;
-
-export interface FrameCapturePolicyInput {
-  appPhase: AppPhase;
-  worldFrameCommitted: boolean;
-  tagCaptureSessionActive: boolean;
-  registrationCaptureHint: CaptureHint;
-  forceOff: boolean;
-}
-
-export interface FrameCapturePolicyResult {
-  mode: CaptureMode;
-  policy: CapturePolicy;
-}
-
-export function computeFrameCapturePolicy(
-  input: FrameCapturePolicyInput,
-): FrameCapturePolicyResult {
-  if (input.forceOff) {
-    return { mode: "off", policy: "off" };
-  }
-
-  if (input.appPhase === "registration" && input.tagCaptureSessionActive) {
-    return { mode: "registration", policy: input.registrationCaptureHint };
-  }
-
-  if (input.appPhase === "runtime" && input.worldFrameCommitted) {
-    return { mode: "runtime", policy: "off" };
-  }
-
-  return { mode: "off", policy: "off" };
-}
 
 function bridgeSnapshotsEqual(a: BridgeSnapshot, b: BridgeSnapshot): boolean {
   return (
@@ -227,17 +194,14 @@ export class InboundRouter {
     }
     const snapshot = this.appState.snapshot;
     const client = this.registrationClient;
-    const result = computeFrameCapturePolicy({
-      appPhase: snapshot.phase,
-      worldFrameCommitted: snapshot.bridgeSnapshot.worldFrameCommitted,
-      tagCaptureSessionActive: client?.tagCaptureSessionActive ?? false,
-      registrationCaptureHint: client?.registrationCaptureHint ?? "off",
+    this.frameCaptureController.setStreamPolicyContext({
       forceOff,
+      appPhase: snapshot.phase,
+      tagCaptureSessionActive: client?.tagCaptureSessionActive ?? false,
+      worldFrameCommitted: snapshot.bridgeSnapshot.worldFrameCommitted,
+      bridgeConnected: this.hasConnection(),
+      registrationCaptureHint: client?.registrationCaptureHint ?? "off",
     });
-    this.frameCaptureController.setMode(result.mode);
-    if (result.mode === "registration") {
-      this.frameCaptureController.setCapturePolicy(result.policy);
-    }
   }
 
   private _applyHello(msg: HelloMessage): void {

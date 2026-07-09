@@ -8,21 +8,27 @@ import {
 import { sendBinary } from "../Network/WebSocketTransport";
 import { quatFromMat4Rotation } from "../../App/Utilities/Utilities";
 import { DeviceCameraStream } from "./DeviceCameraStream";
+import {
+  CameraStreamLatch,
+  CaptureMode,
+  CapturePolicy,
+  isRobotMoving,
+  RUNTIME_STOP_SPEED_MPS,
+} from "./CameraStreamPolicy";
+
+export type { CaptureMode, CapturePolicy };
+export { RUNTIME_STOP_SPEED_MPS };
 
 const POSE_BUFFER_CAPACITY = 360;
 const SETUP_CAPTURE_INTERVAL_S = 0.7;
 const SAMPLING_BURST_INTERVAL_S = 0.5;
 const RUNTIME_CAPTURE_INTERVAL_S = 1.0;
-const RUNTIME_STOP_SPEED_MPS = 0.05;
 const RUNTIME_STOP_BURST_COUNT = 3;
+const REGISTRATION_IN_FLIGHT_TIMEOUT_S = 12.0;
 const MAX_HEAD_ANGULAR_VEL_DEG_S = 40.0;
-const RUNTIME_CAMERA_MAX_DISTANCE_CM = 700.0;
 const PIPELINE_LOG_INTERVAL_S = 2.0;
 const CAPTURE_TS_LOG_INTERVAL_S = 2.0;
 const CLOCK_SYNC_RACE_LOG_INTERVAL_S = 2.0;
-
-export type CaptureMode = "off" | "registration" | "runtime";
-export type CapturePolicy = "off" | "steady" | "burst" | "hold";
 
 export function shouldTriggerStopBurst(
   previousSpeedMps: number | null,
@@ -65,6 +71,7 @@ export class CameraClient {
   private _capturePolicy: CapturePolicy = "off";
   private _lastSpeedMps: number | null = null;
   private _burstCapturesRemaining = 0;
+  private readonly _streamLatch = new CameraStreamLatch();
 
   constructor(private readonly _deps: CameraClientDeps) {}
 
@@ -83,6 +90,34 @@ export class CameraClient {
 
   public setRobotWorldPosition(position: vec3 | null): void {
     this._robotWorldPos = position;
+  }
+
+  public getRobotWorldPosition(): vec3 | null {
+    return this._robotWorldPos;
+  }
+
+  public getRobotSpeedMps(): number | null {
+    return this._lastSpeedMps;
+  }
+
+  public getCorrectionSinceLastMovement(): boolean {
+    return this._streamLatch.correctionSinceLastMovement;
+  }
+
+  public resetCapturePipeline(): void {
+    this._pipelineBusy = false;
+    this._inFlight = false;
+    this._inFlightSeq = -1;
+    this._burstCapturesRemaining = 0;
+    this._sentCameraInfo = false;
+    this._seq = 0;
+    this._poseBuffer = [];
+  }
+
+  public resetStreamState(): void {
+    this._streamLatch.reset();
+    this._lastSpeedMps = null;
+    this.resetCapturePipeline();
   }
 
   public setMode(mode: CaptureMode): void {
@@ -114,19 +149,29 @@ export class CameraClient {
     this._maybeCapture();
   }
 
+  /** Pose history for frame timestamp lookup; also called before the stream starts. */
+  public recordPose(): void {
+    this._recordPose();
+  }
+
   public requestImmediateCapture(): void {
-    if (this._mode !== "runtime") {
+    if (this._mode === "off") {
       return;
     }
     this._lastPipelineEndTime = 0;
   }
 
   public notifyRobotSpeed(speedMps: number | null): void {
+    this._streamLatch.onRobotSpeed(speedMps);
     if (this._mode === "runtime" && shouldTriggerStopBurst(this._lastSpeedMps, speedMps)) {
       this._burstCapturesRemaining = RUNTIME_STOP_BURST_COUNT;
       this._lastPipelineEndTime = 0;
     }
     this._lastSpeedMps = speedMps;
+  }
+
+  public notifyWorldFrameCorrection(): void {
+    this._streamLatch.onWorldFrameCorrection();
   }
 
   private _onHello = (_msg: HelloMessage): void => {
@@ -140,7 +185,10 @@ export class CameraClient {
     if (msg.seq === this._inFlightSeq) {
       this._inFlight = false;
       this._inFlightSeq = -1;
-      // Cadence is send-gated (see _sendCapturedFrame); ACK no longer drives the interval timer.
+      if (this._usesAckGatedCadence()) {
+        // Registration: bridge processes one frame at a time — cadence starts after ACK.
+        this._lastPipelineEndTime = getTime();
+      }
     } else {
       print(`CameraClient: ack seq=${msg.seq} expected=${this._inFlightSeq} (mismatch)`);
     }
@@ -178,11 +226,17 @@ export class CameraClient {
       return;
     }
     const now = getTime();
-    if (this._mode === "runtime" && !this._shouldRunRuntimeCaptureWindow()) {
-      return;
-    }
     if (this._pipelineBusy) {
       return;
+    }
+    if (this._usesAckGatedCadence() && this._inFlight) {
+      if (now - this._inFlightStart > REGISTRATION_IN_FLIGHT_TIMEOUT_S) {
+        this._inFlight = false;
+        this._inFlightSeq = -1;
+        this._lastPipelineEndTime = now;
+      } else {
+        return;
+      }
     }
     const interval =
       this._mode === "registration"
@@ -191,7 +245,9 @@ export class CameraClient {
           : SETUP_CAPTURE_INTERVAL_S
         : this._burstCapturesRemaining > 0
           ? SAMPLING_BURST_INTERVAL_S
-          : RUNTIME_CAPTURE_INTERVAL_S;
+          : isRobotMoving(this._lastSpeedMps)
+            ? SAMPLING_BURST_INTERVAL_S
+            : RUNTIME_CAPTURE_INTERVAL_S;
     if (now - this._lastPipelineEndTime < interval) {
       return;
     }
@@ -203,17 +259,9 @@ export class CameraClient {
     });
   }
 
-  private _shouldRunRuntimeCaptureWindow(): boolean {
-    if (this._mode !== "runtime") {
-      return true;
-    }
-    const robot = this._robotWorldPos;
-    const cameraObject = this._deps.getCameraObject();
-    if (!robot || !cameraObject) {
-      return true;
-    }
-    const cameraPos = cameraObject.getTransform().getWorldPosition();
-    return cameraPos.distance(robot) <= RUNTIME_CAMERA_MAX_DISTANCE_CM;
+  /** Registration waits for bridge ACK — the bridge admits one frame at a time. */
+  private _usesAckGatedCadence(): boolean {
+    return this._mode === "registration";
   }
 
   private _headAngularVelocityDegS(): number {
@@ -350,9 +398,10 @@ export class CameraClient {
     const transport = session.transport;
     if (transport) {
       sendBinary(transport, bytes);
-      // Send-gated cadence: the interval timer starts when the frame leaves the device,
-      // not when the bridge ACK returns. Decouples frame rate from round-trip latency.
-      this._lastPipelineEndTime = getTime();
+      if (!this._usesAckGatedCadence()) {
+        // Runtime send-gated cadence: interval starts when the frame leaves the device.
+        this._lastPipelineEndTime = getTime();
+      }
     }
     const now = getTime();
     if (now - this._lastCaptureTsLogTime >= CAPTURE_TS_LOG_INTERVAL_S) {

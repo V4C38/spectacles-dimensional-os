@@ -49,7 +49,9 @@ import {
   deriveAppNavigationState,
   deriveViewState,
   shouldSendStreamGoal,
+  shouldSuppressTerminalNavStatus,
   GOAL_SEND_INTERVAL_S,
+  GOAL_SEND_MIN_DISTANCE_CM,
   touchNavStatus,
   type NavEngineState,
   type NavigationEffect,
@@ -57,7 +59,6 @@ import {
 } from "../../ARBridge/Navigation/NavigationModel";
 
 const GOAL_COMMIT_LOG_INTERVAL_S = 2.0;
-const GOAL_REACHED_RETARGET_CM = 25.0;
 const GOAL_SEND_BLOCKED_LOG_INTERVAL_S = 2.0;
 
 const WorldQueryModule = require("LensStudio:WorldQueryModule");
@@ -618,7 +619,11 @@ export class NavigationController {
   private _applyNavStatusInner(msg: NavStatusMessage): string {
     if (msg.phase === "recovering") {
       if (msg.retryable) {
-        this._dispatch({ kind: "navStatusRecovering" });
+        if (this._shouldSuppressTerminalNavStatus()) {
+          this._continuePlacementNavigation();
+        } else {
+          this._dispatch({ kind: "navStatusRecovering" });
+        }
       }
       return "Recovering";
     }
@@ -627,9 +632,16 @@ export class NavigationController {
         return "Idle";
       }
       if (msg.phase === "succeeded") {
-        this._finishRetargetIfNeeded();
+        if (this._shouldSuppressTerminalNavStatus()) {
+          this._continuePlacementNavigation();
+          return "Goal reached (streaming)";
+        }
         this._dispatch({ kind: "navStatusGoalReached" });
         return "Goal reached";
+      }
+      if (this._shouldSuppressTerminalNavStatus()) {
+        this._continuePlacementNavigation();
+        return "Goal failed (suppressed)";
       }
       this._dispatch({ kind: "navStatusGoalFailed" });
       return "Goal failed";
@@ -643,14 +655,24 @@ export class NavigationController {
     return "Idle";
   }
 
-  private _finishRetargetIfNeeded(): void {
-    const markerPose = this._placement.getCurrentPose();
+  private _shouldSuppressTerminalNavStatus(): boolean {
+    const pose = this._placement.getCurrentPose();
     const markerMoved =
-      markerPose &&
-      this._lastSentGoal &&
-      markerPose.position.distance(this._lastSentGoal.position) > GOAL_REACHED_RETARGET_CM;
-    if (markerMoved && markerPose) {
-      this._requestGoalCommit(markerPose.position, markerPose.rotation);
+      pose !== null &&
+      this._lastSentGoal !== null &&
+      pose.position.distance(this._lastSentGoal.position) >= GOAL_SEND_MIN_DISTANCE_CM;
+    return shouldSuppressTerminalNavStatus({
+      placementActive: this._placement.isPlacementActive(),
+      activelyDragging: this._placement.isActivelyDragging(),
+      markerMovedSinceLastGoal: markerMoved,
+    });
+  }
+
+  private _continuePlacementNavigation(): void {
+    this.cancelOutcome();
+    const pose = this._placement.getCurrentPose();
+    if (pose) {
+      this._requestGoalCommit(pose.position, pose.rotation, true);
     }
   }
 

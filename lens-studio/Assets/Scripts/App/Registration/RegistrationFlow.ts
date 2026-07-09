@@ -609,11 +609,7 @@ export class RegistrationFlow {
     this._resetStallRecovery();
     this._state = createRegistrationViewState();
     this._registrationClient?.cancelPlacement();
-    if (this._registrationClient?.hasActiveIntent()) {
-      this._registrationClient?.stop({ notifyBridge: true });
-    } else {
-      this._registrationClient?.stop();
-    }
+    this._registrationClient?.stop({ notifyBridge: true });
     this._registrationClient?.clearPose();
     this._robotRuntime?.applyInteractionFromState();
     this._frameCapture?.setCaptureErrorHandler(() => {

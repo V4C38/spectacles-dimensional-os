@@ -7,6 +7,7 @@ import {
   deriveNavPhase,
   deriveViewState,
   shouldSendStreamGoal,
+  shouldSuppressTerminalNavStatus,
   GOAL_FORCE_NOOP_DISTANCE_CM,
   GOAL_SEND_INTERVAL_S,
   GOAL_SEND_MIN_DISTANCE_CM,
@@ -135,6 +136,48 @@ describe("NavigationModel stream commit", () => {
         { position: pos },
         true,
       ),
+    ).toBe(false);
+  });
+});
+
+describe("shouldSuppressTerminalNavStatus", () => {
+  it("suppresses when placement active and actively dragging", () => {
+    expect(
+      shouldSuppressTerminalNavStatus({
+        placementActive: true,
+        activelyDragging: true,
+        markerMovedSinceLastGoal: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("suppresses when placement active and marker moved since last goal", () => {
+    expect(
+      shouldSuppressTerminalNavStatus({
+        placementActive: true,
+        activelyDragging: false,
+        markerMovedSinceLastGoal: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress when placement active but settled", () => {
+    expect(
+      shouldSuppressTerminalNavStatus({
+        placementActive: true,
+        activelyDragging: false,
+        markerMovedSinceLastGoal: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not suppress when not placement active", () => {
+    expect(
+      shouldSuppressTerminalNavStatus({
+        placementActive: false,
+        activelyDragging: true,
+        markerMovedSinceLastGoal: true,
+      }),
     ).toBe(false);
   });
 });
