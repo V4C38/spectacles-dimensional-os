@@ -159,16 +159,17 @@ describe("NavigationModel placement policy", () => {
 });
 
 describe("NavigationModel lifecycle", () => {
-  it("navStatusGoalReached reanchors marker to robot when far", () => {
+  it("navStatusGoalReached resumes idle anchoring", () => {
     const result = applyNavigationEvent(
       armedState({ since: 0, navigating: true }),
       { kind: "navStatusGoalReached" },
     );
     expect(result.state.goal).toBeNull();
     expect(effectKinds(result.effects)).toEqual(
-      expect.arrayContaining(["clearPath", "reanchorMarkerToRobot"]),
+      expect.arrayContaining(["clearPath", "resumeIdleAnchoring"]),
     );
     expect(effectKinds(result.effects)).not.toContain("respawnMarkerAt");
+    expect(effectKinds(result.effects)).not.toContain("reanchorMarkerToRobot");
   });
 
   it("cancelRequested plays cancelled outcome", () => {
@@ -199,13 +200,24 @@ describe("NavigationModel lifecycle", () => {
     expect(outcomeEffect).toMatchObject({ label: "Failed" });
   });
 
-  it("navStatusRecovering respawns marker animated", () => {
+  it("navStatusRecovering resumes idle anchoring", () => {
     const result = applyNavigationEvent(
       armedState({ since: 0, navigating: true }),
       { kind: "navStatusRecovering" },
     );
     expect(effectKinds(result.effects)).toEqual(
-      expect.arrayContaining(["respawnMarkerAt", "clearPath"]),
+      expect.arrayContaining(["resumeIdleAnchoring", "clearPath"]),
+    );
+    expect(effectKinds(result.effects)).not.toContain("respawnMarkerAt");
+  });
+
+  it("outcomeAnimationFinished resumes idle anchoring", () => {
+    const result = applyNavigationEvent(
+      armedState({ since: 0, navigating: false }),
+      { kind: "outcomeAnimationFinished" },
+    );
+    expect(effectKinds(result.effects)).toEqual(
+      expect.arrayContaining(["resumeIdleAnchoring", "syncAppNavigationState"]),
     );
   });
 

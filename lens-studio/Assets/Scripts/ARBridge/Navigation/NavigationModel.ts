@@ -100,8 +100,7 @@ export type NavigationEffect =
   | { kind: "clearPath" }
   | { kind: "resetNavigationOutcome" }
   | { kind: "destroyMarker" }
-  | { kind: "respawnMarkerAt"; pose?: NavPose; animated?: boolean }
-  | { kind: "reanchorMarkerToRobot" }
+  | { kind: "resumeIdleAnchoring" }
   | { kind: "setPlacementInteraction"; policy: PlacementInteractionPolicy }
   | { kind: "beginOutcomeAnimation"; label: "Cancelled" | "Failed" }
   | { kind: "stopPlacement" };
@@ -414,7 +413,7 @@ export function applyNavigationEvent(
       next = clearGoal(next);
       push(
         { kind: "clearPath" },
-        { kind: "reanchorMarkerToRobot" },
+        { kind: "resumeIdleAnchoring" },
         { kind: "syncAppNavigationState" },
         { kind: "syncMarkerPresentation" },
       );
@@ -440,7 +439,7 @@ export function applyNavigationEvent(
       next = clearGoal(next);
       push(
         { kind: "clearPath" },
-        { kind: "respawnMarkerAt", animated: true },
+        { kind: "resumeIdleAnchoring" },
         { kind: "syncAppNavigationState" },
         { kind: "syncMarkerPresentation" },
       );
@@ -457,7 +456,11 @@ export function applyNavigationEvent(
       break;
     }
     case "outcomeAnimationFinished": {
-      push({ kind: "syncAppNavigationState" }, { kind: "syncMarkerPresentation" });
+      push(
+        { kind: "resumeIdleAnchoring" },
+        { kind: "syncAppNavigationState" },
+        { kind: "syncMarkerPresentation" },
+      );
       break;
     }
     case "disconnect": {

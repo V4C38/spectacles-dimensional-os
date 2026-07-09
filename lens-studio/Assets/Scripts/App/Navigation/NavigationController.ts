@@ -59,7 +59,6 @@ import {
 const GOAL_COMMIT_LOG_INTERVAL_S = 2.0;
 const GOAL_REACHED_RETARGET_CM = 25.0;
 const GOAL_SEND_BLOCKED_LOG_INTERVAL_S = 2.0;
-const REANCHOR_MAX_STAY_DISTANCE_CM = 25.0;
 
 const WorldQueryModule = require("LensStudio:WorldQueryModule");
 
@@ -518,32 +517,11 @@ export class NavigationController {
         }
         break;
       }
-      case "respawnMarkerAt": {
-        if (this._placement.isActivelyDragging()) {
-          break;
-        }
-        const pose = effect.pose ?? this._getNavigationPlacementStartPose();
-        if (!pose) {
-          break;
-        }
-        if (effect.animated) {
-          this._placement.respawnPlacingAt(() => pose);
-        } else {
-          this._placement.respawnPlacingImmediately(() => pose);
+      case "resumeIdleAnchoring":
+        if (!this._placement.isActivelyDragging()) {
+          this._placement.resetToIdleAnchoring();
         }
         break;
-      }
-      case "reanchorMarkerToRobot": {
-        if (this._placement.isActivelyDragging()) {
-          break;
-        }
-        const robotPose = this._getNavigationPlacementStartPose();
-        if (!robotPose) {
-          break;
-        }
-        this._placement.settleToRobotIfFar(robotPose, REANCHOR_MAX_STAY_DISTANCE_CM);
-        break;
-      }
       case "sendCancelGoal":
         if (this._cancelGoalAvailable && this._canSendNavigationGoal()) {
           this._navClient?.sendCancelGoal();
@@ -930,11 +908,6 @@ export class NavigationController {
   }
 
   private _onOutcomeAnimationFinished(): void {
-    if (this._engine.armed && this._placement.isActive()) {
-      this._placement.respawnPlacingImmediately(() =>
-        this._getNavigationPlacementStartPose(),
-      );
-    }
     this._dispatch({ kind: "outcomeAnimationFinished" });
   }
 

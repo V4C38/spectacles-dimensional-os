@@ -24,9 +24,6 @@ const IDLE_NAV_INTERPOLATION_SPEED = 8;
 const IDLE_NAV_POSITION_EPSILON_CM = 0.25;
 const IDLE_NAV_ROTATION_EPSILON_RAD = 0.01;
 const PLACEMENT_ANCHOR_REBASE_DISTANCE_CM = 300;
-const SETTLE_INTERPOLATION_SPEED = 14;
-const SETTLE_POSITION_EPSILON_CM = 0.5;
-const SETTLE_ROTATION_EPSILON_RAD = 0.02;
 
 export class GroundPlacement {
   public onMarkerButtonPressed: ((position: vec3, rotation: quat) => void) | null = null;
@@ -64,9 +61,6 @@ export class GroundPlacement {
   private _hitTestDeferralEvent: DelayedCallbackEvent | null = null;
   private _pendingConfirmPosition = vec3.zero();
   private _pendingConfirmRotation = new quat(1, 0, 0, 0);
-  private _settling = false;
-  private _settleTargetPosition = vec3.zero();
-  private _settleTargetRotation = quat.quatIdentity();
 
   constructor(owner: BaseScriptComponent, worldQueryModule: any) {
     this.owner = owner;
@@ -117,7 +111,6 @@ export class GroundPlacement {
     this.active = false;
     this._isDragging = false;
     this._hasActivatedPlacement = false;
-    this._settling = false;
     this._followRobot = false;
     this._processingButtonPress = false;
     this.activeInteractor = null;
@@ -169,41 +162,10 @@ export class GroundPlacement {
     return this._marker?.worldPosition ?? this.desiredPosition;
   }
 
-  public respawnPlacingImmediately(
-    getPose: () => { position: vec3; rotation: quat } | null,
-  ): void {
-    if (!this.active || !this._marker) {
-      return;
-    }
+  public resetToIdleAnchoring(): void {
+    this._hasActivatedPlacement = false;
     this._isDragging = false;
-    this._setDragEnabled(false);
-    this._resetGestureState();
-    const pose = getPose();
-    if (!pose) {
-      return;
-    }
-    this._beginPlacingAtPose(pose.position, pose.rotation, true);
-  }
-
-  public respawnPlacingAt(
-    getPose: () => { position: vec3; rotation: quat } | null,
-  ): void {
-    if (!this.active || !this._marker) {
-      return;
-    }
-    this._isDragging = false;
-    this._setDragEnabled(false);
-    this._resetGestureState();
-    this._marker.hideAndThen(() => {
-      if (!this.active) {
-        return;
-      }
-      const pose = getPose();
-      if (!pose) {
-        return;
-      }
-      this._beginPlacingAtPose(pose.position, pose.rotation, true);
-    });
+    this.activeInteractor = null;
   }
 
   public isIdleNavigation(): boolean {
@@ -244,32 +206,6 @@ export class GroundPlacement {
   }
 
   /** Immediate idle-navigation snap (e.g. after world-frame pose correction). */
-  /** After goal reached: stay if close to robot, else glide marker to robot floor pose. */
-  public settleToRobotIfFar(
-    robotPose: { position: vec3; rotation: quat },
-    maxStayDistanceCm: number,
-  ): void {
-    if (!this.active || !this._marker || this.activeInteractor !== null) {
-      return;
-    }
-    const markerPosition = this._marker.worldPosition;
-    const horizontalDistance = Math.sqrt(
-      Math.pow(markerPosition.x - robotPose.position.x, 2) +
-        Math.pow(markerPosition.z - robotPose.position.z, 2),
-    );
-    if (horizontalDistance <= maxStayDistanceCm) {
-      this._settling = false;
-      return;
-    }
-    this._settling = true;
-    this._settleTargetPosition = new vec3(
-      robotPose.position.x,
-      robotPose.position.y,
-      robotPose.position.z,
-    );
-    this._settleTargetRotation = robotPose.rotation;
-  }
-
   public snapIdlePose(position: vec3, rotation: quat): void {
     if (!this.isIdleNavigation() || !this._marker) {
       return;
@@ -316,7 +252,6 @@ export class GroundPlacement {
     if (!this.active || !this._dragEnabled) {
       return;
     }
-    this._settling = false;
     this.activeInteractor = interactor ?? null;
     this.touchStartPosition = this.desiredPosition;
     this._previousDragPosition = null;
@@ -404,38 +339,6 @@ export class GroundPlacement {
         true,
       );
       this._emitPreviewTargetChanged(false);
-      return;
-    }
-    if (this._settling) {
-      this._tickSettling();
-    }
-  }
-
-  private _tickSettling(): void {
-    if (!this._marker) {
-      this._settling = false;
-      return;
-    }
-    this.desiredPosition = new vec3(
-      this._settleTargetPosition.x,
-      this._settleTargetPosition.y,
-      this._settleTargetPosition.z,
-    );
-    this.desiredRotation = this._settleTargetRotation;
-    this._marker.interpolatePose(
-      this.desiredPosition,
-      this.desiredRotation,
-      SETTLE_INTERPOLATION_SPEED,
-    );
-    const positionReached =
-      this._marker.worldPosition.distance(this.desiredPosition) <=
-      SETTLE_POSITION_EPSILON_CM;
-    const rotationReached =
-      quat.angleBetween(this._marker.getRotation(), this.desiredRotation) <=
-      SETTLE_ROTATION_EPSILON_RAD;
-    if (positionReached && rotationReached) {
-      this._marker.setPose(this.desiredPosition, this.desiredRotation);
-      this._settling = false;
     }
   }
 
