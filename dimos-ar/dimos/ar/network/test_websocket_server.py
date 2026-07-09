@@ -28,6 +28,15 @@ class _FakeWebSocket:
         self.sent.append(text)
 
 
+def _messages_from_sent(sent: list[str]) -> list[dict]:
+    messages: list[dict] = []
+    for chunk in sent:
+        for line in chunk.split("\n"):
+            if line:
+                messages.append(json.loads(line))
+    return messages
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
@@ -54,11 +63,11 @@ async def test_outbound_coalesces_broadcast_snapshots() -> None:
     await asyncio.sleep(0.05)
     await outbound.stop()
 
-    by_type = {(peek_message_type(text) or ""): json.loads(text) for text in ws.sent}
+    by_type = {msg["type"]: msg for msg in _messages_from_sent(ws.sent)}
     assert by_type["nav_status"]["phase"] == "navigating"
     assert by_type["path"]["waypoints"] == [[1, 2, 3]]
     assert by_type["bridge_status"]["world_frame_committed"] is True
-    assert len(ws.sent) == 3
+    assert len(ws.sent) == 1
 
 
 @pytest.mark.asyncio
@@ -77,8 +86,8 @@ async def test_outbound_coalesces_pose_and_lidar() -> None:
     await asyncio.sleep(0.05)
     await outbound.stop()
 
-    assert len(ws.sent) == 4
-    by_type = {(peek_message_type(text) or ""): json.loads(text) for text in ws.sent}
+    assert len(ws.sent) == 1
+    by_type = {msg["type"]: msg for msg in _messages_from_sent(ws.sent)}
     assert by_type["nav_status"]["phase"] == "navigating"
     assert by_type["pose"]["position"] == [4, 5, 6]
     assert by_type["lidar"]["points_flat"] == [7, 8, 9]
@@ -99,7 +108,8 @@ async def test_outbound_interleaves_coalesced_after_fifo() -> None:
     await asyncio.sleep(0.05)
     await outbound.stop()
 
-    types = [peek_message_type(text) for text in ws.sent]
+    messages = _messages_from_sent(ws.sent)
+    types = [msg["type"] for msg in messages]
     assert types[0] == "hello"
     assert types[1] in {"pose", "lidar"}
     assert "hello" in types
@@ -189,10 +199,46 @@ def test_coalesce_message_types_cover_streams() -> None:
             "nav_status",
             "bridge_status",
             "registration_status",
-            "camera_frame_ack",
             "runtime_snapshot",
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_outbound_fifo_ack_before_coalesced_pose() -> None:
+    ws = _FakeWebSocket()
+    outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
+    outbound.start()
+
+    outbound.enqueue('{"type":"pose","position":[1,2,3]}')
+    outbound.enqueue('{"type":"camera_frame_ack","seq":7,"ts":1.0}')
+
+    await asyncio.sleep(0.05)
+    await outbound.stop()
+
+    messages = _messages_from_sent(ws.sent)
+    assert len(messages) == 2
+    assert messages[0]["type"] == "camera_frame_ack"
+    assert messages[0]["seq"] == 7
+    assert messages[1]["type"] == "pose"
+
+
+@pytest.mark.asyncio
+async def test_outbound_coalesced_batch_single_send() -> None:
+    ws = _FakeWebSocket()
+    outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
+    outbound.start()
+
+    outbound.enqueue('{"type":"pose","position":[1,2,3]}')
+    outbound.enqueue('{"type":"nav_status","phase":"idle"}')
+    outbound.enqueue('{"type":"bridge_status","world_frame_committed":true}')
+
+    await asyncio.sleep(0.05)
+    await outbound.stop()
+
+    assert len(ws.sent) == 1
+    messages = _messages_from_sent(ws.sent)
+    assert [msg["type"] for msg in messages] == ["pose", "nav_status", "bridge_status"]
 
 
 @pytest.mark.asyncio

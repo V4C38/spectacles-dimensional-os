@@ -95,7 +95,7 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     # Voxel grid size for coarse LiDAR downsampling before the height-band filter.
     # The DimOS default is 0.025 m; 0.05 m is chosen deliberately for AR payload budget.
     lidar_voxel_size_m: float = 0.05
-    pose_max_hz: float = 30.0
+    pose_max_hz: float = 15.0
     stream_stale_timeout_s: float = 10.0
     manual_registration_quality: float = 0.35
     # still-capture + JPEG-encode on device can take 2-4 s; this gate must be

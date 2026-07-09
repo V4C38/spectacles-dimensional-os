@@ -15,7 +15,6 @@ const SAMPLING_BURST_INTERVAL_S = 0.5;
 const RUNTIME_CAPTURE_INTERVAL_S = 1.0;
 const RUNTIME_STOP_SPEED_MPS = 0.05;
 const RUNTIME_STOP_BURST_COUNT = 3;
-const IN_FLIGHT_TIMEOUT_S = 12.0;
 const MAX_HEAD_ANGULAR_VEL_DEG_S = 40.0;
 const RUNTIME_CAMERA_MAX_DISTANCE_CM = 700.0;
 const PIPELINE_LOG_INTERVAL_S = 2.0;
@@ -141,7 +140,7 @@ export class CameraClient {
     if (msg.seq === this._inFlightSeq) {
       this._inFlight = false;
       this._inFlightSeq = -1;
-      this._lastPipelineEndTime = getTime();
+      // Cadence is send-gated (see _sendCapturedFrame); ACK no longer drives the interval timer.
     } else {
       print(`CameraClient: ack seq=${msg.seq} expected=${this._inFlightSeq} (mismatch)`);
     }
@@ -184,15 +183,6 @@ export class CameraClient {
     }
     if (this._pipelineBusy) {
       return;
-    }
-    if (this._inFlight) {
-      if (now - this._inFlightStart > IN_FLIGHT_TIMEOUT_S) {
-        this._inFlight = false;
-        this._inFlightSeq = -1;
-        this._lastPipelineEndTime = now;
-      } else {
-        return;
-      }
     }
     const interval =
       this._mode === "registration"
@@ -360,6 +350,9 @@ export class CameraClient {
     const transport = session.transport;
     if (transport) {
       sendBinary(transport, bytes);
+      // Send-gated cadence: the interval timer starts when the frame leaves the device,
+      // not when the bridge ACK returns. Decouples frame rate from round-trip latency.
+      this._lastPipelineEndTime = getTime();
     }
     const now = getTime();
     if (now - this._lastCaptureTsLogTime >= CAPTURE_TS_LOG_INTERVAL_S) {
