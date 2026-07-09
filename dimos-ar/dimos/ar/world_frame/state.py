@@ -23,7 +23,7 @@ logger = setup_logger()
 
 ODOM_SCALE_HARD_MIN: float = 0.5
 ODOM_SCALE_HARD_MAX: float = 2.0
-ODOM_SCALE_INITIAL: float = 1.15
+ODOM_SCALE_INITIAL: float = 1.25
 _ODOM_SCALE_CHANGE_EPS: float = 1e-6
 
 WorldFrameMethod = Literal["april_tag", "manual_pose"] | None

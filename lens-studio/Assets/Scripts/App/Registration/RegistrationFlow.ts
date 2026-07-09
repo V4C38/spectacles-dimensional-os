@@ -32,6 +32,8 @@ export interface RegistrationViewState {
   tagVisible: boolean;
   progress?: number;
   previewPose?: RegistrationStatusMessage["preview_pose"];
+  scaleLocked?: boolean;
+  alignmentConfidence?: number;
 }
 
 export interface WizardFooterState {
@@ -129,6 +131,25 @@ const MANUAL_CANDIDATE_SYNC_INTERVAL_S = 0.35;
 const NO_RESPONSE_STATUS_MSG = "Bridge not responding";
 const REGISTRATION_STALL_PROGRESS_THRESHOLD = 40;
 const REGISTRATION_STALL_TIMEOUT_S = 15.0;
+export const ALIGN_UI_CONFIDENT = 0.7;
+export const SCALE_LOCK_WALK_HINT =
+  "Alignment set — walk the robot a few steps to lock distance";
+
+export function shouldShowScaleLockHint(state: RegistrationViewState): boolean {
+  if (state.phase !== "succeeded" || state.mode !== "auto") {
+    return false;
+  }
+  if (state.scaleLocked === true) {
+    return false;
+  }
+  if (
+    typeof state.alignmentConfidence === "number" &&
+    state.alignmentConfidence >= ALIGN_UI_CONFIDENT
+  ) {
+    return false;
+  }
+  return state.scaleLocked === false;
+}
 
 export function buildRegistrationDetailText(state: RegistrationViewState): string {
   return state.message || "";
@@ -181,6 +202,8 @@ export function applyRegistrationStatusToViewState(
     tagVisible: msg.tag_visible ?? state.tagVisible,
     progress: msg.progress,
     previewPose: msg.preview_pose ?? state.previewPose,
+    scaleLocked: msg.scale_locked ?? state.scaleLocked,
+    alignmentConfidence: msg.alignment_confidence ?? state.alignmentConfidence,
   };
 }
 
@@ -191,10 +214,11 @@ export function buildRegistrationDisplay(
 ): RegistrationDisplayModel {
   if (state.mode === "auto") {
     if (state.phase === "succeeded") {
+      const detailText = shouldShowScaleLockHint(state) ? SCALE_LOCK_WALK_HINT : "";
       return {
         statusText: "Registration completed",
         statusColor: COLOR_SUCCESS,
-        detailText: "",
+        detailText,
         detailColor: COLOR_WHITE,
       };
     }

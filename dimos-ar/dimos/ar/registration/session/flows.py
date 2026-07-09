@@ -471,6 +471,13 @@ class RegistrationFlowsMixin:
             progress=progress,
             alignment_confidence=estimate.confidence if estimate is not None else None,
             refining=refining if effective_mode == RegistrationMode.APRIL_TAG else None,
+            scale_confidence=estimate.scale_confidence if estimate is not None else None,
+            scale_locked=(
+                estimate.scale_confidence
+                >= self._world_frame_refiner.scale_lock_confidence_threshold()
+                if estimate is not None
+                else None
+            ),
         )
         self._session.last_status = payload
         self._sender.send(

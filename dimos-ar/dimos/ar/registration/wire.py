@@ -42,6 +42,8 @@ class RegistrationStatusPayload:
     progress: int | None = None
     alignment_confidence: float | None = None
     refining: bool | None = None
+    scale_confidence: float | None = None
+    scale_locked: bool | None = None
 
 
 def encode_registration_status(
@@ -67,4 +69,8 @@ def encode_registration_status(
         payload["alignment_confidence"] = round(float(status.alignment_confidence), 4)
     if status.refining is not None:
         payload["refining"] = status.refining
+    if status.scale_confidence is not None:
+        payload["scale_confidence"] = round(float(status.scale_confidence), 4)
+    if status.scale_locked is not None:
+        payload["scale_locked"] = status.scale_locked
     return _dumps(payload)

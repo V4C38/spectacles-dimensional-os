@@ -82,6 +82,15 @@ class WorldFrameRefiner:
     def attach_aligner(self, aligner: SimilarityAligner) -> None:
         self._similarity_aligner = aligner
 
+    def seed_aligner_from_commit(
+        self,
+        T_committed: np.ndarray,
+        odom_scale: float,
+    ) -> None:
+        if self._similarity_aligner is None:
+            return
+        self._similarity_aligner.seed_from_commit(T_committed, odom_scale)
+
     def current_alignment_estimate(
         self,
         *,
@@ -125,6 +134,11 @@ class WorldFrameRefiner:
         if self._similarity_aligner is None:
             return 4
         return self._similarity_aligner._config.ALIGN_REG_MIN_OBS
+
+    def scale_lock_confidence_threshold(self) -> float:
+        if self._similarity_aligner is None:
+            return 0.6
+        return float(self._similarity_aligner._config.ALIGN_SCALE_LOCK_CONF)
 
     def committed_or_current_for_frame(self) -> np.ndarray | None:
         if self._refinement_baseline is not None:

@@ -22,6 +22,10 @@ def encode_world_frame_correction(
     alignment_confidence: float | None = None,
     yaw_observable: bool | None = None,
     scale_observable: bool | None = None,
+    scale_confidence: float | None = None,
+    yaw_confidence: float | None = None,
+    scale_held: bool | None = None,
+    yaw_held: bool | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "type": "world_frame_correction",
@@ -39,4 +43,12 @@ def encode_world_frame_correction(
         payload["yaw_observable"] = bool(yaw_observable)
     if scale_observable is not None:
         payload["scale_observable"] = bool(scale_observable)
+    if scale_confidence is not None:
+        payload["scale_confidence"] = round(float(scale_confidence), 4)
+    if yaw_confidence is not None:
+        payload["yaw_confidence"] = round(float(yaw_confidence), 4)
+    if scale_held is not None:
+        payload["scale_held"] = bool(scale_held)
+    if yaw_held is not None:
+        payload["yaw_held"] = bool(yaw_held)
     return _dumps(payload)

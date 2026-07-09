@@ -447,6 +447,47 @@ def test_encode_world_frame_correction_v12_fields(solve_method: str) -> None:
     assert raw["scale_observable"] is False
 
 
+def test_encode_world_frame_correction_v14_fields() -> None:
+    raw = json.loads(
+        encode_world_frame_correction(
+            ts=1.0,
+            trans_delta_m=0.12,
+            yaw_delta_deg=4.5,
+            yaw_corrected=True,
+            solve_quality=0.9,
+            solve_method="similarity",
+            alignment_confidence=0.8,
+            yaw_observable=True,
+            scale_observable=True,
+            scale_confidence=0.72,
+            yaw_confidence=0.81,
+            scale_held=False,
+            yaw_held=False,
+        )
+    )
+    assert raw["scale_confidence"] == pytest.approx(0.72)
+    assert raw["yaw_confidence"] == pytest.approx(0.81)
+    assert raw["scale_held"] is False
+    assert raw["yaw_held"] is False
+
+
+def test_encode_registration_status_scale_fields() -> None:
+    raw = json.loads(
+        encode_registration_status(
+            ts=1.0,
+            status=RegistrationStatusPayload(
+                mode=RegistrationMode.APRIL_TAG,
+                phase=RegistrationPhase.SUCCEEDED,
+                message="Registration successful",
+                scale_confidence=0.15,
+                scale_locked=False,
+            ),
+        )
+    )
+    assert raw["scale_confidence"] == pytest.approx(0.15)
+    assert raw["scale_locked"] is False
+
+
 def test_encode_camera_frame_ack() -> None:
     raw = json.loads(
         encode_camera_frame_ack(

@@ -9,7 +9,18 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v13 (current) — Camera stream lifecycle
+### v14 (current) — Persistent similarity alignment telemetry
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 14.**
+- **`world_frame_correction`:** adds optional **`scale_confidence`**, **`yaw_confidence`**,
+  **`scale_held`**, and **`yaw_held`**. `scale_held` / `yaw_held` are `true` when the
+  bridge held that DOF this window because observability was insufficient.
+- **`registration_status`:** adds optional **`scale_confidence`** and **`scale_locked`**
+  (`true` when scale confidence meets the bridge lock threshold).
+
+### v13 — Camera stream lifecycle
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -324,6 +335,8 @@ Registration progress during a setup session:
   "progress": 40,
   "alignment_confidence": 0.42,
   "refining": false,
+  "scale_confidence": 0.0,
+  "scale_locked": false,
   "preview_pose": {
     "position": [1.2, 0.0, -2.0],
     "orientation": [0.0, 0.0, 0.383, 0.924]
@@ -352,6 +365,10 @@ Fields:
 - `refining` (optional): after AprilTag commit, `true` while the bridge keeps
   refining alignment from continued tag observations at runtime (wire field;
   clients may ignore for wizard UX)
+- `scale_confidence` (optional): bridge-computed confidence **0–1** for the
+  persistent odom scale estimate
+- `scale_locked` (optional): `true` when scale confidence meets the bridge lock
+  threshold (scale has converged)
 
 During AprilTag registration (`mode: "april_tag"`), the robot stays still. The
 Spectacles user moves around the robot while keeping the tag in view; camera
@@ -467,7 +484,11 @@ fire only when the robot position has meaningfully changed:
   "solve_method": "similarity",
   "alignment_confidence": 0.81,
   "yaw_observable": true,
-  "scale_observable": true
+  "scale_observable": true,
+  "scale_confidence": 0.72,
+  "yaw_confidence": 0.81,
+  "scale_held": false,
+  "yaw_held": false
 }
 ```
 
@@ -485,6 +506,14 @@ Fields:
   supports yaw correction
 - `scale_observable` (optional): `true` when the current observation geometry
   supports scale correction
+- `scale_confidence` (optional): bridge-computed confidence **0–1** for the
+  persistent scale estimate
+- `yaw_confidence` (optional): bridge-computed confidence **0–1** for the
+  persistent yaw estimate
+- `scale_held` (optional): `true` when scale was held this window (insufficient
+  translational baseline)
+- `yaw_held` (optional): `true` when yaw was held this window (insufficient
+  yaw observability baseline)
 
 Bridge-side refinement (not additional wire fields):
 

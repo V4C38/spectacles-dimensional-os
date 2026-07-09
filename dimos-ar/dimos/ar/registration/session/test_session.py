@@ -62,6 +62,10 @@ def _estimate(
         mean_ambiguity_ratio=1.6,
         max_pair_skew_s=0.02,
         approximate=approximate,
+        scale_confidence=0.0,
+        yaw_confidence=0.3 if yaw_observable else 0.0,
+        scale_held=not scale_observable,
+        yaw_held=not yaw_observable,
     )
 
 
@@ -86,6 +90,7 @@ def _make_session() -> tuple[RegistrationSession, list[str], WorldRegistry, Magi
     world_frame_refiner = MagicMock()
     world_frame_refiner.registration_min_observations.return_value = 4
     world_frame_refiner.registration_confidence_min.return_value = 0.7
+    world_frame_refiner.scale_lock_confidence_threshold.return_value = 0.6
     world_frame_refiner.registration_alignment_estimate.return_value = _estimate()
     world_frame_refiner.current_alignment_estimate.return_value = _estimate()
     session = RegistrationSession(

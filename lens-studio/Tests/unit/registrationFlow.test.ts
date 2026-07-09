@@ -15,7 +15,9 @@ import {
   isRegistrationFailed,
   isRegistrationPendingCommit,
   RegistrationFlow,
+  SCALE_LOCK_WALK_HINT,
   shouldShowBackOnStartStep,
+  shouldShowScaleLockHint,
   WizardStep,
 } from "../../Assets/Scripts/App/Registration/RegistrationFlow";
 import { buildRegistrationPreviewPresentation } from "../../Assets/Scripts/App/Registration/RegistrationWizardView";
@@ -118,6 +120,30 @@ describe("registration flow view state", () => {
     expect(next.message).toBe("Look at the AprilTag on your robot");
     expect(next.tagVisible).toBe(true);
     expect(next.progress).toBe(25);
+  });
+
+  it("shows walk-to-lock hint after succeeded when scale is not locked", () => {
+    const state = {
+      ...createRegistrationViewState(),
+      phase: "succeeded" as const,
+      scaleLocked: false,
+      alignmentConfidence: 0.2,
+    };
+    expect(shouldShowScaleLockHint(state)).toBe(true);
+    const display = buildRegistrationDisplay(state, true);
+    expect(display.detailText).toBe(SCALE_LOCK_WALK_HINT);
+  });
+
+  it("clears walk-to-lock hint when scale_locked is true", () => {
+    const state = {
+      ...createRegistrationViewState(),
+      phase: "succeeded" as const,
+      scaleLocked: true,
+      alignmentConfidence: 0.2,
+    };
+    expect(shouldShowScaleLockHint(state)).toBe(false);
+    const display = buildRegistrationDisplay(state, true);
+    expect(display.detailText).toBe("");
   });
 
   it("clears view-state message when bridge sends an empty registration_status message", () => {

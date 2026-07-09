@@ -116,6 +116,23 @@ describe("parseInboundMessage", () => {
     expect((msg as { refining: boolean }).refining).toBe(true);
   });
 
+  it("parses registration_status scale lock fields", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "registration_status",
+        ts: 1,
+        mode: "april_tag",
+        phase: "succeeded",
+        message: "Registration successful",
+        scale_confidence: 0.15,
+        scale_locked: false,
+      }),
+    );
+    expect(msg!.type).toBe("registration_status");
+    expect((msg as { scale_confidence: number }).scale_confidence).toBe(0.15);
+    expect((msg as { scale_locked: boolean }).scale_locked).toBe(false);
+  });
+
   it("parses camera_frame_ack", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
@@ -236,7 +253,29 @@ describe("parseInboundMessage", () => {
     expect((msg as { scale_observable: boolean }).scale_observable).toBe(false);
   });
 
-  it("parses legacy world_frame_correction solve_method values", () => {
+  it("parses world_frame_correction v14 confidence and held fields", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "world_frame_correction",
+        ts: 1,
+        trans_delta_m: 0.1,
+        yaw_corrected: true,
+        solve_quality: 0.9,
+        solve_method: "similarity",
+        scale_confidence: 0.72,
+        yaw_confidence: 0.81,
+        scale_held: false,
+        yaw_held: true,
+      }),
+    );
+    expect(msg!.type).toBe("world_frame_correction");
+    expect((msg as { scale_confidence: number }).scale_confidence).toBe(0.72);
+    expect((msg as { yaw_confidence: number }).yaw_confidence).toBe(0.81);
+    expect((msg as { scale_held: boolean }).scale_held).toBe(false);
+    expect((msg as { yaw_held: boolean }).yaw_held).toBe(true);
+  });
+
+  it("parses legacy world_frame_correction without v14 fields", () => {
     for (const solveMethod of ["apriltag_full", "apriltag_translation"] as const) {
       const msg = parseInboundMessage(
         JSON.stringify({

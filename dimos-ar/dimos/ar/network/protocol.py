@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
     from dimos.ar.world_frame.state import WorldFrameState
 
-PROTOCOL_VERSION = 13
+PROTOCOL_VERSION = 14
 
 NavPhase = Literal["idle", "navigating", "recovering", "succeeded", "failed"]
 

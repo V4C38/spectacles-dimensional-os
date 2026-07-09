@@ -86,6 +86,7 @@ class WorldRegistry:
                 base_world = T_committed @ T_odom_base
                 floor_y = float(base_world[1, 3])
                 self._refiner.set_floor_lock(floor_y)
+            self._refiner.seed_aligner_from_commit(T_committed, self._state.odom_scale)
 
     def clear(self) -> None:
         self._state.clear()

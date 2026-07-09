@@ -143,6 +143,9 @@ class RobotAprilTagTracker:
         self._detector = create_aruco_detector(DEFAULT_APRILTAG_DICT)
         self._lock = threading.RLock()
         self._observations: deque[TagObservation] = deque(maxlen=self._config.window_max_obs)
+        self._append_seq: int = 0
+        self._up_axis_check_samples: list[float] = []
+        self._up_axis_check_logged = False
         self._active = False
         self._last_tag_detected = False
         self._last_tag_ids: list[int] = []
@@ -160,12 +163,19 @@ class RobotAprilTagTracker:
             if not value:
                 self.reset_window()
 
+    @property
+    def append_seq(self) -> int:
+        with self._lock:
+            return self._append_seq
+
     def reset_window(self) -> None:
         with self._lock:
             self._observations.clear()
             self._last_tag_detected = False
             self._last_tag_ids = []
             self._last_quality = None
+            self._up_axis_check_samples.clear()
+            self._up_axis_check_logged = False
 
     def mounts_configured(self) -> bool:
         with self._lock:
@@ -302,6 +312,7 @@ class RobotAprilTagTracker:
 
         if world_frame_committed and T_committed is not None:
             up_tilt_deg = up_axis_angle_deg(T_candidate_raw)
+            self._record_up_axis_check(up_tilt_deg)
             if up_tilt_deg > self._config.max_up_axis_tilt_deg:
                 return None, "tilt"
             measured_mount = self._measured_mount_position(
@@ -458,6 +469,7 @@ class RobotAprilTagTracker:
             with self._lock:
                 self._prune_old(recv_mono)
                 self._observations.append(obs)
+                self._append_seq += 1
             detected_ids.append(tag_id)
             best_quality = max(best_quality, obs.quality)
             added += 1
@@ -493,6 +505,23 @@ class RobotAprilTagTracker:
         R_odom_base = T_odom_base[:3, :3]
         p_odom_base = T_odom_base[:3, 3]
         return R_odom_base.T @ (p_odom_tag_meas - p_odom_base)
+
+    def _record_up_axis_check(self, up_tilt_deg: float) -> None:
+        """Log median raw up-axis tilt once after commit (mount orientation diagnostic)."""
+        _TAG_MOUNT_UP_AXIS_CHECK_N = 10
+        with self._lock:
+            if self._up_axis_check_logged:
+                return
+            self._up_axis_check_samples.append(float(up_tilt_deg))
+            if len(self._up_axis_check_samples) < _TAG_MOUNT_UP_AXIS_CHECK_N:
+                return
+            median_tilt = float(np.median(self._up_axis_check_samples))
+            self._up_axis_check_logged = True
+        logger.info(
+            "tag_mount_up_axis_check",
+            median_up_axis_tilt_deg=round(median_tilt, 2),
+            sample_count=_TAG_MOUNT_UP_AXIS_CHECK_N,
+        )
 
     def baseline_m(self) -> float:
         with self._lock:

@@ -34,7 +34,7 @@ GO2_CAPABILITIES: dict[str, CapabilityState] = {
 }
 
 _GO2_TAG_YAW_DEG: float = -90.0
-_GO2_TAG_PITCH_DEG: float = -5.0
+_GO2_TAG_PITCH_DEG: float = 15.0
 _GO2_TAG_QUAT: tuple[float, float, float, float] = tuple(  # type: ignore[assignment]
     (
         _Rotation.from_euler("y", _GO2_TAG_PITCH_DEG, degrees=True)

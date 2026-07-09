@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 import math
@@ -53,13 +54,35 @@ class _AlignerConfig(Protocol):
     ALIGN_OUTLIER_K: float
     ALIGN_SCALE_PLAUSIBLE_MIN: float
     ALIGN_SCALE_PLAUSIBLE_MAX: float
-    ALIGN_BASELINE_B0: float
-    ALIGN_BASELINE_B1: float
+    ALIGN_YAW_BASELINE_B0: float
+    ALIGN_YAW_BASELINE_B1: float
+    ALIGN_SCALE_BASELINE_B0: float
+    ALIGN_SCALE_BASELINE_B1: float
+    ALIGN_LEARN_LR: float
+    ALIGN_LEARN_LR_MAX: float
+    ALIGN_CONF_DECAY: float
+    ALIGN_SCALE_JUMP_FRAC: float
+    ALIGN_SCALE_LOCK_CONF: float
+    ALIGN_SCALE_REGIME_N: int
+    ALIGN_SCALE_JUMP_DAMP: float
+    ALIGN_SCALE_PRIOR: float
+    ALIGN_REG_YAW_CONF: float
     ALIGN_RESID_REF_M: float
     ALIGN_REBASE_RESID_M: float
     ALIGN_REBASE_FRAC: float
     ALIGN_REBASE_DIR_STD_RAD: float
     ALIGN_REBASE_KEEP: int
+    ALIGN_UI_CONFIDENT: float
+
+
+@dataclass
+class _PersistentSimilarity:
+    scale: float
+    yaw_rad: float
+    scale_confidence: float = 0.0
+    yaw_confidence: float = 0.0
+    scale_regime_agree: int = 0
+    scale_jump_direction: int | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +105,10 @@ class AlignmentEstimate:
     max_pair_skew_s: float
     approximate: bool
     rebase_detected: bool = False
+    scale_confidence: float = 0.0
+    yaw_confidence: float = 0.0
+    scale_held: bool = True
+    yaw_held: bool = True
 
 
 @dataclass(frozen=True)
@@ -99,6 +126,7 @@ class _PreparedWindow:
     max_pair_skew_s: float
     baseline_m: float
     view_baseline_m: float
+    yaw_baseline_m: float
 
     @property
     def observation_count(self) -> int:
@@ -114,6 +142,23 @@ def _smoothstep(value: float, low: float, high: float) -> float:
         return 1.0 if value >= high else 0.0
     t = _clamp((value - low) / (high - low), 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t)
+
+
+def _per_frame_mount_separation(observations: list[TagObservation]) -> float:
+    """Max world-frame distance between tag mounts seen in the same frame."""
+    by_ts: dict[float, list[TagObservation]] = defaultdict(list)
+    for obs in observations:
+        by_ts[obs.mono_ts].append(obs)
+    max_sep = 0.0
+    for frame_obs in by_ts.values():
+        if len(frame_obs) < 2:
+            continue
+        positions = [np.asarray(obs.p_world_tag, dtype=np.float64) for obs in frame_obs]
+        for i in range(len(positions)):
+            for j in range(i + 1, len(positions)):
+                d = float(np.linalg.norm(positions[i] - positions[j]))
+                max_sep = max(max_sep, d)
+    return max_sep
 
 
 class SimilarityAligner:
@@ -140,10 +185,37 @@ class SimilarityAligner:
         self._on_correction_committed = on_correction_committed
         self._last_estimate: AlignmentEstimate | None = None
         self._out_of_band_consecutive = 0
+        self._last_applied_seq: int = -1
+        self._held_logged = False
+        self._skip_log_reason: str | None = None
+        self._persistent = _PersistentSimilarity(
+            scale=self._config.ALIGN_SCALE_PRIOR,
+            yaw_rad=0.0,
+        )
 
     @property
     def last_estimate(self) -> AlignmentEstimate | None:
         return self._last_estimate
+
+    @property
+    def persistent(self) -> _PersistentSimilarity:
+        return self._persistent
+
+    def seed_from_commit(
+        self,
+        T_committed: NDArray[np.float64],
+        odom_scale: float,
+    ) -> None:
+        """Seed persistent estimator from a registration commit."""
+        self._persistent.scale = float(odom_scale)
+        self._persistent.yaw_rad = normalize_angle(yaw_from_T(T_committed))
+        self._persistent.scale_confidence = 0.0
+        self._persistent.yaw_confidence = self._config.ALIGN_REG_YAW_CONF
+        self._persistent.scale_regime_agree = 0
+        self._persistent.scale_jump_direction = None
+        self._last_applied_seq = -1
+        self._held_logged = False
+        self._skip_log_reason = None
 
     def current_estimate(
         self,
@@ -164,88 +236,16 @@ class SimilarityAligner:
                     observation_count=0 if prepared is None else prepared.observation_count,
                 )
             return None
-
-        current_yaw = 0.0
-        current_scale = 1.0
-        current_transform = self._state.current_transform()
-        if current_transform is not None:
-            current_yaw = yaw_from_T(current_transform)
-            current_scale = self._state.odom_scale
-
         fit, rejected_mask = self._robust_fit(prepared)
-        rebase_detected = False
-        force_hold = False
         if fit is None:
             return None
-        if self._should_rebase(prepared, fit):
-            rebase_detected = True
-            keep = min(self._config.ALIGN_REBASE_KEEP, prepared.observation_count)
-            logger.warning(
-                "world_rebase_detected",
-                observation_count=prepared.observation_count,
-                residual_threshold_m=self._config.ALIGN_REBASE_RESID_M,
-                keep_observations=keep,
-                dropped_observations=max(prepared.observation_count - keep, 0),
-            )
-            prepared = self._keep_newest(prepared, keep)
-            fit, rejected_mask = self._robust_fit(prepared)
-            if fit is None:
-                return None
-            force_hold = True
-
-        alpha_yaw = _smoothstep(
-            prepared.baseline_m,
-            self._config.ALIGN_BASELINE_B0,
-            self._config.ALIGN_BASELINE_B1,
+        return self._build_estimate(
+            prepared,
+            fit,
+            rejected_mask,
+            apply_learning=False,
+            rebase_detected=False,
         )
-        alpha_scale = _smoothstep(
-            prepared.baseline_m,
-            self._config.ALIGN_BASELINE_B0,
-            self._config.ALIGN_BASELINE_B1,
-        )
-        if force_hold:
-            alpha_yaw = 0.0
-            alpha_scale = 0.0
-
-        yaw_out = current_yaw + alpha_yaw * normalize_angle(fit.yaw - current_yaw)
-        yaw_out = normalize_angle(yaw_out)
-        scale_out = current_scale + alpha_scale * (fit.scale - current_scale)
-        c, s = math.cos(yaw_out), math.sin(yaw_out)
-        r2 = np.array([[c, -s], [s, c]], dtype=np.float64)
-        t2_out = prepared.mean_v - scale_out * (r2 @ prepared.mean_u)
-        confidence = _clamp(
-            min(alpha_yaw, alpha_scale)
-            * prepared.quality_term
-            * (1.0 - min(fit.resid_rms, self._config.ALIGN_RESID_REF_M) / self._config.ALIGN_RESID_REF_M),
-            0.0,
-            1.0,
-        )
-        estimate = AlignmentEstimate(
-            method="similarity",
-            scale=scale_out,
-            yaw_rad=yaw_out,
-            translation_world=(
-                float(t2_out[0]),
-                prepared.mean_world_y - prepared.mean_odom_z,
-                -float(t2_out[1]),
-            ),
-            confidence=confidence,
-            yaw_observable=alpha_yaw >= 0.5,
-            scale_observable=alpha_scale >= 0.5,
-            residual_rms_m=fit.resid_rms,
-            baseline_m=prepared.baseline_m,
-            observation_count=prepared.observation_count,
-            rejected_count=int(np.count_nonzero(rejected_mask)),
-            alpha_yaw=alpha_yaw,
-            alpha_scale=alpha_scale,
-            quality_term=prepared.quality_term,
-            mean_ambiguity_ratio=prepared.mean_ambiguity_ratio,
-            max_pair_skew_s=prepared.max_pair_skew_s,
-            approximate=not (alpha_yaw >= 0.5 and alpha_scale >= 0.5),
-            rebase_detected=rebase_detected,
-        )
-        self._last_estimate = estimate
-        return estimate
 
     def registration_estimate(
         self,
@@ -263,7 +263,7 @@ class SimilarityAligner:
 
         odom_baseline = prepared.baseline_m
         view_baseline = prepared.view_baseline_m
-        use_static_pose = odom_baseline < self._config.ALIGN_BASELINE_B0
+        use_static_pose = odom_baseline < self._config.ALIGN_YAW_BASELINE_B0
 
         if use_static_pose:
             try:
@@ -275,16 +275,16 @@ class SimilarityAligner:
                 return None
             alpha_yaw = _smoothstep(
                 view_baseline,
-                self._config.ALIGN_BASELINE_B0,
-                self._config.ALIGN_BASELINE_B1,
+                self._config.ALIGN_YAW_BASELINE_B0,
+                self._config.ALIGN_YAW_BASELINE_B1,
             )
             alpha_scale = _smoothstep(
                 odom_baseline,
-                self._config.ALIGN_BASELINE_B0,
-                self._config.ALIGN_BASELINE_B1,
+                self._config.ALIGN_SCALE_BASELINE_B0,
+                self._config.ALIGN_SCALE_BASELINE_B1,
             )
             yaw_out = normalize_angle(aggregate.yaw_rad)
-            scale_out = 1.0
+            scale_out = self._config.ALIGN_SCALE_PRIOR
             resid_rms = aggregate.resid_rms_m
             rejected_count = 0
             confidence = _clamp(
@@ -316,6 +316,10 @@ class SimilarityAligner:
                 mean_ambiguity_ratio=prepared.mean_ambiguity_ratio,
                 max_pair_skew_s=prepared.max_pair_skew_s,
                 approximate=not (alpha_yaw >= 0.5 and alpha_scale >= 0.5),
+                scale_confidence=0.0,
+                yaw_confidence=self._config.ALIGN_REG_YAW_CONF if alpha_yaw >= 0.5 else 0.0,
+                scale_held=alpha_scale < 0.5,
+                yaw_held=alpha_yaw < 0.5,
             )
             self._last_estimate = estimate
             return estimate
@@ -327,10 +331,14 @@ class SimilarityAligner:
         observability_baseline = max(odom_baseline, view_baseline)
         alpha_yaw = _smoothstep(
             observability_baseline,
-            self._config.ALIGN_BASELINE_B0,
-            self._config.ALIGN_BASELINE_B1,
+            self._config.ALIGN_YAW_BASELINE_B0,
+            self._config.ALIGN_YAW_BASELINE_B1,
         )
-        alpha_scale = alpha_yaw
+        alpha_scale = _smoothstep(
+            odom_baseline,
+            self._config.ALIGN_SCALE_BASELINE_B0,
+            self._config.ALIGN_SCALE_BASELINE_B1,
+        )
         yaw_out = normalize_angle(fit.yaw)
         scale_out = fit.scale
         c, s = math.cos(yaw_out), math.sin(yaw_out)
@@ -369,6 +377,10 @@ class SimilarityAligner:
             mean_ambiguity_ratio=prepared.mean_ambiguity_ratio,
             max_pair_skew_s=prepared.max_pair_skew_s,
             approximate=not (alpha_yaw >= 0.5 and alpha_scale >= 0.5),
+            scale_confidence=alpha_scale,
+            yaw_confidence=alpha_yaw,
+            scale_held=alpha_scale < 0.5,
+            yaw_held=alpha_yaw < 0.5,
         )
         self._last_estimate = estimate
         return estimate
@@ -381,13 +393,63 @@ class SimilarityAligner:
     ) -> AlignmentEstimate | None:
         if not self._state.is_committed:
             return None
-        estimate = self.current_estimate(now_mono=now_mono, emit_skip_log=True)
+
+        seq = self._tag_tracker.append_seq
+        if seq == self._last_applied_seq:
+            if not self._held_logged:
+                logger.info("alignment_held", append_seq=seq)
+                self._held_logged = True
+            return None
+        self._held_logged = False
+
+        now = time.monotonic() if now_mono is None else now_mono
+        prepared = self._prepare_window(now_mono=now)
+        if prepared is None or prepared.observation_count < self._config.ALIGN_MIN_OBS:
+            self._emit_skip_log(
+                skip_reason="insufficient_obs",
+                observation_count=0 if prepared is None else prepared.observation_count,
+            )
+            return None
+
+        fit, rejected_mask = self._robust_fit(prepared)
+        if fit is None:
+            return None
+
+        rebase_detected = False
+        if self._should_rebase(prepared, fit):
+            rebase_detected = True
+            preserved_scale = self._persistent.scale
+            keep = min(self._config.ALIGN_REBASE_KEEP, prepared.observation_count)
+            logger.warning(
+                "world_rebase_detected",
+                observation_count=prepared.observation_count,
+                residual_threshold_m=self._config.ALIGN_REBASE_RESID_M,
+                keep_observations=keep,
+                dropped_observations=max(prepared.observation_count - keep, 0),
+                scale_preserved=round(preserved_scale, 4),
+            )
+            prepared = self._keep_newest(prepared, keep)
+            fit, rejected_mask = self._robust_fit(prepared)
+            if fit is None:
+                return None
+            self._persistent.yaw_rad = normalize_angle(fit.yaw)
+            self._persistent.yaw_confidence = self._config.ALIGN_REG_YAW_CONF
+
+        estimate = self._build_estimate(
+            prepared,
+            fit,
+            rejected_mask,
+            apply_learning=not rebase_detected,
+            rebase_detected=rebase_detected,
+        )
         if estimate is None:
             return None
 
         self._handle_scale_band(estimate.scale)
-        if not self._state.set_odom_scale(estimate.scale):
-            return None
+        requested_scale = float(estimate.scale)
+        if not self._state.set_odom_scale(requested_scale):
+            if abs(requested_scale - self._state.odom_scale) > 1e-6:
+                return None
 
         current_transform = self._state.current_transform()
         if current_transform is None:
@@ -407,6 +469,8 @@ class SimilarityAligner:
         if self._state.method == "april_tag":
             self._state.set_approximate(estimate.approximate)
 
+        self._last_applied_seq = seq
+
         if (
             trans_delta >= MIN_REPORTED_CORRECTION_TRANS_M
             or yaw_delta_deg >= MIN_REPORTED_CORRECTION_YAW_DEG
@@ -422,6 +486,10 @@ class SimilarityAligner:
                     alignment_confidence=estimate.confidence,
                     yaw_observable=estimate.yaw_observable,
                     scale_observable=estimate.scale_observable,
+                    scale_confidence=estimate.scale_confidence,
+                    yaw_confidence=estimate.yaw_confidence,
+                    scale_held=estimate.scale_held,
+                    yaw_held=estimate.yaw_held,
                 )
             )
 
@@ -446,6 +514,149 @@ class SimilarityAligner:
             marker_jump_m=round(marker_jump_m, 3) if marker_jump_m is not None else None,
         )
         return estimate
+
+    def _build_estimate(
+        self,
+        prepared: _PreparedWindow,
+        fit: SimilaritySolve,
+        rejected_mask: NDArray[np.bool_],
+        *,
+        apply_learning: bool,
+        rebase_detected: bool,
+    ) -> AlignmentEstimate | None:
+        alpha_yaw = _smoothstep(
+            prepared.yaw_baseline_m,
+            self._config.ALIGN_YAW_BASELINE_B0,
+            self._config.ALIGN_YAW_BASELINE_B1,
+        )
+        alpha_scale = _smoothstep(
+            prepared.baseline_m,
+            self._config.ALIGN_SCALE_BASELINE_B0,
+            self._config.ALIGN_SCALE_BASELINE_B1,
+        )
+
+        if apply_learning:
+            self._learn_persistent(
+                fit,
+                alpha_yaw=alpha_yaw,
+                alpha_scale=alpha_scale,
+                quality_term=prepared.quality_term,
+            )
+
+        scale_out = self._persistent.scale
+        yaw_out = self._persistent.yaw_rad
+        c, s = math.cos(yaw_out), math.sin(yaw_out)
+        r2 = np.array([[c, -s], [s, c]], dtype=np.float64)
+        t2_out = prepared.mean_v - scale_out * (r2 @ prepared.mean_u)
+
+        residual_gate = 1.0 - min(
+            fit.resid_rms,
+            self._config.ALIGN_RESID_REF_M,
+        ) / self._config.ALIGN_RESID_REF_M
+        confidence = _clamp(
+            min(self._persistent.scale_confidence, self._persistent.yaw_confidence)
+            * prepared.quality_term
+            * residual_gate,
+            0.0,
+            1.0,
+        )
+        scale_held = alpha_scale < 0.5
+        yaw_held = alpha_yaw < 0.5
+
+        estimate = AlignmentEstimate(
+            method="similarity",
+            scale=scale_out,
+            yaw_rad=yaw_out,
+            translation_world=(
+                float(t2_out[0]),
+                prepared.mean_world_y - prepared.mean_odom_z,
+                -float(t2_out[1]),
+            ),
+            confidence=confidence,
+            yaw_observable=alpha_yaw >= 0.5,
+            scale_observable=alpha_scale >= 0.5,
+            residual_rms_m=fit.resid_rms,
+            baseline_m=prepared.baseline_m,
+            observation_count=prepared.observation_count,
+            rejected_count=int(np.count_nonzero(rejected_mask)),
+            alpha_yaw=alpha_yaw,
+            alpha_scale=alpha_scale,
+            quality_term=prepared.quality_term,
+            mean_ambiguity_ratio=prepared.mean_ambiguity_ratio,
+            max_pair_skew_s=prepared.max_pair_skew_s,
+            approximate=not (alpha_yaw >= 0.5 and alpha_scale >= 0.5),
+            rebase_detected=rebase_detected,
+            scale_confidence=self._persistent.scale_confidence,
+            yaw_confidence=self._persistent.yaw_confidence,
+            scale_held=scale_held,
+            yaw_held=yaw_held,
+        )
+        self._last_estimate = estimate
+        return estimate
+
+    def _learn_persistent(
+        self,
+        fit: SimilaritySolve,
+        *,
+        alpha_yaw: float,
+        alpha_scale: float,
+        quality_term: float,
+    ) -> None:
+        self._learn_yaw(fit.yaw, alpha_yaw, quality_term)
+        self._learn_scale(fit.scale, alpha_scale, quality_term)
+
+    def _learn_yaw(self, yaw_fit: float, alpha: float, quality_term: float) -> None:
+        if alpha < 0.5:
+            self._persistent.yaw_confidence = max(
+                0.0,
+                self._persistent.yaw_confidence - self._config.ALIGN_CONF_DECAY,
+            )
+            return
+        step_lr = _clamp(
+            self._config.ALIGN_LEARN_LR * alpha * quality_term,
+            0.0,
+            self._config.ALIGN_LEARN_LR_MAX,
+        )
+        delta = normalize_angle(yaw_fit - self._persistent.yaw_rad)
+        self._persistent.yaw_rad = normalize_angle(
+            self._persistent.yaw_rad + step_lr * delta
+        )
+        c = self._persistent.yaw_confidence
+        self._persistent.yaw_confidence = c + (1.0 - c) * step_lr
+
+    def _learn_scale(self, scale_fit: float, alpha: float, quality_term: float) -> None:
+        if alpha < 0.5:
+            self._persistent.scale_confidence = max(
+                0.0,
+                self._persistent.scale_confidence - self._config.ALIGN_CONF_DECAY,
+            )
+            return
+        step_lr = _clamp(
+            self._config.ALIGN_LEARN_LR * alpha * quality_term,
+            0.0,
+            self._config.ALIGN_LEARN_LR_MAX,
+        )
+        scale = self._persistent.scale
+        rel = abs(scale_fit - scale) / max(scale, 1e-6)
+        if (
+            rel > self._config.ALIGN_SCALE_JUMP_FRAC
+            and self._persistent.scale_confidence >= self._config.ALIGN_SCALE_LOCK_CONF
+        ):
+            direction = 1 if scale_fit > scale else -1
+            if self._persistent.scale_jump_direction == direction:
+                self._persistent.scale_regime_agree += 1
+            else:
+                self._persistent.scale_regime_agree = 1
+                self._persistent.scale_jump_direction = direction
+            if self._persistent.scale_regime_agree < self._config.ALIGN_SCALE_REGIME_N:
+                step_lr *= self._config.ALIGN_SCALE_JUMP_DAMP
+        else:
+            self._persistent.scale_regime_agree = 0
+            self._persistent.scale_jump_direction = None
+
+        self._persistent.scale = scale + step_lr * (scale_fit - scale)
+        c = self._persistent.scale_confidence
+        self._persistent.scale_confidence = c + (1.0 - c) * step_lr
 
     def _prepare_window(
         self,
@@ -500,6 +711,8 @@ class SimilarityAligner:
         v = np.asarray(v_rows, dtype=np.float64)
         w = np.asarray(weights, dtype=np.float64)
         total_weight = float(np.sum(w))
+        ground_baseline = _ground_baseline_m(kept_observations)
+        mount_sep = _per_frame_mount_separation(kept_observations)
         return _PreparedWindow(
             observations=kept_observations,
             u=u,
@@ -512,8 +725,9 @@ class SimilarityAligner:
             mean_odom_z=float(np.mean(odom_z)),
             mean_ambiguity_ratio=float(np.mean(ambiguity)),
             max_pair_skew_s=float(max(skew)),
-            baseline_m=_ground_baseline_m(kept_observations),
+            baseline_m=ground_baseline,
             view_baseline_m=_view_baseline_m(kept_observations),
+            yaw_baseline_m=max(ground_baseline, mount_sep),
         )
 
     def _robust_fit(
@@ -574,6 +788,8 @@ class SimilarityAligner:
     def _keep_newest(self, prepared: _PreparedWindow, keep: int) -> _PreparedWindow:
         start = max(prepared.observation_count - keep, 0)
         kept = prepared.observations[start:]
+        ground_baseline = _ground_baseline_m(kept)
+        mount_sep = _per_frame_mount_separation(kept)
         return _PreparedWindow(
             observations=kept,
             u=prepared.u[start:],
@@ -594,8 +810,9 @@ class SimilarityAligner:
             mean_odom_z=float(np.mean([obs.p_odom_tag[2] for obs in kept])),
             mean_ambiguity_ratio=float(np.mean([obs.ambiguity_ratio for obs in kept])),
             max_pair_skew_s=float(max(abs(obs.pair_skew_s) for obs in kept)),
-            baseline_m=_ground_baseline_m(kept),
+            baseline_m=ground_baseline,
             view_baseline_m=_view_baseline_m(kept),
+            yaw_baseline_m=max(ground_baseline, mount_sep),
         )
 
     def _mad_sigma(self, residuals: NDArray[np.float64]) -> float:
@@ -604,6 +821,9 @@ class SimilarityAligner:
         return 1.4826 * mad
 
     def _emit_skip_log(self, *, skip_reason: str, observation_count: int) -> None:
+        if self._skip_log_reason == skip_reason:
+            return
+        self._skip_log_reason = skip_reason
         logger.info(
             "alignment_update",
             method="similarity",
@@ -613,6 +833,7 @@ class SimilarityAligner:
         )
 
     def _emit_alignment_update(self, estimate: AlignmentEstimate) -> None:
+        self._skip_log_reason = None
         logger.info(
             "alignment_update",
             method=estimate.method,
@@ -621,6 +842,8 @@ class SimilarityAligner:
             confidence=round(estimate.confidence, 4),
             yaw_observable=estimate.yaw_observable,
             scale_observable=estimate.scale_observable,
+            scale_held=estimate.scale_held,
+            yaw_held=estimate.yaw_held,
             baseline_m=round(estimate.baseline_m, 4),
             alpha_yaw=round(estimate.alpha_yaw, 4),
             alpha_scale=round(estimate.alpha_scale, 4),

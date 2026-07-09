@@ -13,7 +13,7 @@ import {
   createDefaultBridgeSnapshot,
 } from "../../App/AppState";
 
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -113,6 +113,10 @@ export interface WorldFrameCorrectionMessage {
   alignment_confidence?: number;
   yaw_observable?: boolean;
   scale_observable?: boolean;
+  scale_confidence?: number;
+  yaw_confidence?: number;
+  scale_held?: boolean;
+  yaw_held?: boolean;
 }
 
 export type WorldFrameSolveMethod =
@@ -148,6 +152,8 @@ export interface RegistrationStatusMessage {
   progress?: number;
   alignment_confidence?: number;
   refining?: boolean;
+  scale_confidence?: number;
+  scale_locked?: boolean;
 }
 
 /** camera_frame_ack contains only seq. */
@@ -632,6 +638,15 @@ function parseInboundObject(
       if (typeof data.refining === "boolean") {
         msg.refining = data.refining;
       }
+      if (
+        typeof data.scale_confidence === "number" &&
+        Number.isFinite(data.scale_confidence)
+      ) {
+        msg.scale_confidence = Math.max(0, Math.min(1, data.scale_confidence));
+      }
+      if (typeof data.scale_locked === "boolean") {
+        msg.scale_locked = data.scale_locked;
+      }
       return msg;
     }
 
@@ -714,6 +729,24 @@ function parseInboundObject(
       }
       if (typeof data.scale_observable === "boolean") {
         msg.scale_observable = data.scale_observable;
+      }
+      if (
+        typeof data.scale_confidence === "number" &&
+        Number.isFinite(data.scale_confidence)
+      ) {
+        msg.scale_confidence = Math.max(0, Math.min(1, data.scale_confidence));
+      }
+      if (
+        typeof data.yaw_confidence === "number" &&
+        Number.isFinite(data.yaw_confidence)
+      ) {
+        msg.yaw_confidence = Math.max(0, Math.min(1, data.yaw_confidence));
+      }
+      if (typeof data.scale_held === "boolean") {
+        msg.scale_held = data.scale_held;
+      }
+      if (typeof data.yaw_held === "boolean") {
+        msg.yaw_held = data.yaw_held;
       }
       return msg;
     }
