@@ -10,6 +10,7 @@ import {
   PathMessage,
   PongMessage,
   WorldFrameCorrectionMessage,
+  CapturePolicyMessage,
   PoseMessage,
   RuntimeSnapshotMessage,
   bridgeStatusFromSnapshot,
@@ -39,6 +40,7 @@ export class InboundProcessor {
   public readonly onLidar = new Signal<LidarMessage>();
   public readonly onPose = new Signal<PoseMessage>();
   public readonly onWorldFrameCorrection = new Signal<WorldFrameCorrectionMessage>();
+  public readonly onCapturePolicy = new Signal<CapturePolicyMessage>();
   public readonly onRegistrationStatus = new Signal<RegistrationStatusMessage>();
   public readonly onCameraFrameAck = new Signal<CameraFrameAckMessage>();
   public readonly onBridgeStatus = new Signal<BridgeStatusMessage>();
@@ -191,6 +193,9 @@ export class InboundProcessor {
           break;
         case "world_frame_correction":
           this.onWorldFrameCorrection.emit(msg);
+          break;
+        case "capture_policy":
+          this.onCapturePolicy.emit(msg);
           break;
         case "registration_status":
           this._logDiagnosticRx(msg);

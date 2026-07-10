@@ -1,4 +1,9 @@
-import { findText, COLOR_WHITE } from "./UIKit";
+import {
+  findText,
+  COLOR_SUCCESS,
+  COLOR_WARN,
+  COLOR_WHITE,
+} from "./UIKit";
 
 export interface UILogEntry {
   text: string;
@@ -8,7 +13,7 @@ export interface UILogEntry {
 
 export type UILogListener = (entry: UILogEntry | null) => void;
 
-export const DEBUG_CONSOLE_LINE_NAMES = [
+export const DEBUG_CONSOLE_SCROLL_LINE_NAMES = [
   "ConsoleOutput_Line1",
   "ConsoleOutput_Line2",
   "ConsoleOutput_Line3",
@@ -17,10 +22,16 @@ export const DEBUG_CONSOLE_LINE_NAMES = [
   "ConsoleOutput_Line6",
   "ConsoleOutput_Line7",
   "ConsoleOutput_Line8",
-  "ConsoleOutput_Line9",
 ] as const;
 
-export const DEBUG_CONSOLE_LINE_COUNT = DEBUG_CONSOLE_LINE_NAMES.length;
+export const DEBUG_CONSOLE_CAMERA_STATUS_LINE_NAME = "ConsoleOutput_Line9";
+
+export const DEBUG_CONSOLE_SCROLL_LINE_COUNT = DEBUG_CONSOLE_SCROLL_LINE_NAMES.length;
+
+export const DEBUG_CONSOLE_TOTAL_LINE_COUNT =
+  DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1;
+
+export type CameraStreamLogStatus = "on" | "waiting" | "off";
 
 export interface UILogConsoleEntry {
   text: string;
@@ -61,39 +72,53 @@ export class UILogger {
   private _pendingEntries: (UILogEntry | null)[] = [];
   private _entry: UILogEntry | null = null;
   private _consoleTexts: (Text | null)[] = [];
+  private _cameraStatusText: Text | null = null;
   private _consoleBuffer: UILogConsoleEntry[] = [];
+  private _cameraStatusEntry: UILogConsoleEntry | null = null;
+  private _lastCameraStreamStatus: CameraStreamLogStatus | null = null;
 
   public get snapshot(): UILogEntry | null {
     return cloneEntry(this._entry);
   }
 
   public bindConsoleOutput(debugLogRoot: SceneObject): void {
-    const lines: Text[] = [];
-    for (const name of DEBUG_CONSOLE_LINE_NAMES) {
+    const scrollLines: Text[] = [];
+    for (const name of DEBUG_CONSOLE_SCROLL_LINE_NAMES) {
       const text = findText(debugLogRoot, name);
       if (!text) {
         print(`UILogger: missing debug console line ${name}`);
         continue;
       }
-      lines.push(text);
+      scrollLines.push(text);
     }
-    if (lines.length !== DEBUG_CONSOLE_LINE_COUNT) {
+    const cameraStatusText = findText(debugLogRoot, DEBUG_CONSOLE_CAMERA_STATUS_LINE_NAME);
+    if (!cameraStatusText) {
       print(
-        `UILogger: expected ${DEBUG_CONSOLE_LINE_COUNT} debug console lines, found ${lines.length}`,
+        `UILogger: missing debug console line ${DEBUG_CONSOLE_CAMERA_STATUS_LINE_NAME}`,
+      );
+    }
+    if (
+      scrollLines.length !== DEBUG_CONSOLE_SCROLL_LINE_COUNT ||
+      !cameraStatusText
+    ) {
+      print(
+        `UILogger: expected ${DEBUG_CONSOLE_TOTAL_LINE_COUNT} debug console lines, found ${scrollLines.length + (cameraStatusText ? 1 : 0)}`,
       );
       return;
     }
-    this.bindConsoleOutputLines(lines);
+    this.bindConsoleOutputLines([...scrollLines, cameraStatusText]);
   }
 
   public bindConsoleOutputLines(lines: Text[]): void {
-    if (lines.length !== DEBUG_CONSOLE_LINE_COUNT) {
+    if (lines.length !== DEBUG_CONSOLE_TOTAL_LINE_COUNT) {
       throw new Error(
-        `UILogger: expected ${DEBUG_CONSOLE_LINE_COUNT} console lines, got ${lines.length}`,
+        `UILogger: expected ${DEBUG_CONSOLE_TOTAL_LINE_COUNT} console lines, got ${lines.length}`,
       );
     }
-    this._consoleTexts = lines.slice();
+    this._consoleTexts = lines.slice(0, DEBUG_CONSOLE_SCROLL_LINE_COUNT);
+    this._cameraStatusText = lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT] ?? null;
     this._renderConsole();
+    this._renderCameraStatusLine();
   }
 
   public show(text: string, color: vec4, durationSecs: number | null = null): void {
@@ -112,12 +137,26 @@ export class UILogger {
     this._appendConsoleLine(text, color);
   }
 
-  public logCameraStreamStarted(): void {
-    this.logConsole("Camera stream ON", COLOR_WHITE);
-  }
-
-  public logCameraStreamStopped(): void {
-    this.logConsole("Camera stream OFF", COLOR_WHITE);
+  public setCameraStreamStatus(status: CameraStreamLogStatus): void {
+    if (status === this._lastCameraStreamStatus) {
+      return;
+    }
+    this._lastCameraStreamStatus = status;
+    const statusLabel =
+      status === "on" ? "ON" : status === "waiting" ? "Waiting" : "OFF";
+    const text = `Camera stream status: ${statusLabel}`;
+    const color =
+      status === "on"
+        ? COLOR_SUCCESS
+        : status === "waiting"
+          ? COLOR_WARN
+          : COLOR_WHITE;
+    this._cameraStatusEntry = {
+      text,
+      color: cloneColor(color),
+      loggedAt: new Date(),
+    };
+    this._renderCameraStatusLine();
   }
 
   public clear(): void {
@@ -156,7 +195,7 @@ export class UILogger {
       color: cloneColor(color),
       loggedAt: new Date(),
     });
-    while (this._consoleBuffer.length > DEBUG_CONSOLE_LINE_COUNT) {
+    while (this._consoleBuffer.length > DEBUG_CONSOLE_SCROLL_LINE_COUNT) {
       this._consoleBuffer.shift();
     }
     this._renderConsole();
@@ -166,8 +205,8 @@ export class UILogger {
     if (this._consoleTexts.length === 0) {
       return;
     }
-    const offset = DEBUG_CONSOLE_LINE_COUNT - this._consoleBuffer.length;
-    for (let lineIndex = 0; lineIndex < DEBUG_CONSOLE_LINE_COUNT; lineIndex++) {
+    const offset = DEBUG_CONSOLE_SCROLL_LINE_COUNT - this._consoleBuffer.length;
+    for (let lineIndex = 0; lineIndex < DEBUG_CONSOLE_SCROLL_LINE_COUNT; lineIndex++) {
       const textComponent = this._consoleTexts[lineIndex] ?? null;
       if (!textComponent) {
         continue;
@@ -183,6 +222,20 @@ export class UILogger {
       } else {
         textComponent.text = "";
       }
+    }
+  }
+
+  private _renderCameraStatusLine(): void {
+    const textComponent = this._cameraStatusText;
+    if (!textComponent) {
+      return;
+    }
+    const entry = this._cameraStatusEntry;
+    if (entry) {
+      textComponent.text = formatConsoleLine(entry);
+      textComponent.textFill.color = cloneColor(entry.color);
+    } else {
+      textComponent.text = "";
     }
   }
 

@@ -181,6 +181,13 @@ class RobotAprilTagTracker:
         with self._lock:
             return bool(self._mounts)
 
+    @property
+    def primary_tag_size_m(self) -> float:
+        with self._lock:
+            if not self._mounts:
+                raise RuntimeError("primary_tag_size_m requires configured tag mounts")
+            return min(mount.size_m for mount in self._mounts.values())
+
     def mounts_snapshot(self) -> dict[int, TagMount]:
         with self._lock:
             return dict(self._mounts)

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
     from dimos.ar.world_frame.state import WorldFrameState
 
-PROTOCOL_VERSION = 14
+PROTOCOL_VERSION = 15
 
 NavPhase = Literal["idle", "navigating", "recovering", "succeeded", "failed"]
 
@@ -440,12 +440,38 @@ def encode_camera_frame_ack(
     *,
     ts: float | None = None,
     seq: int,
+    obs_added: bool = False,
+    refinement_complete: bool = False,
 ) -> str:
     return _dumps(
         {
             "type": "camera_frame_ack",
             "ts": ts if ts is not None else time.time(),
             "seq": seq,
+            "obs_added": bool(obs_added),
+            "refinement_complete": bool(refinement_complete),
+        }
+    )
+
+
+def encode_capture_policy(
+    *,
+    ts: float | None = None,
+    max_stream_distance_m: float,
+    min_stream_distance_m: float,
+    max_capture_speed_mps: float,
+    static_speed_mps: float,
+    min_observations: int,
+) -> str:
+    return _dumps(
+        {
+            "type": "capture_policy",
+            "ts": ts if ts is not None else time.time(),
+            "max_stream_distance_m": round(float(max_stream_distance_m), 4),
+            "min_stream_distance_m": round(float(min_stream_distance_m), 4),
+            "max_capture_speed_mps": round(float(max_capture_speed_mps), 4),
+            "static_speed_mps": round(float(static_speed_mps), 4),
+            "min_observations": int(min_observations),
         }
     )
 
@@ -573,6 +599,7 @@ __all__ = [
     "decode_inbound",
     "encode_bridge_status",
     "encode_camera_frame_ack",
+    "encode_capture_policy",
     "encode_hello",
     "encode_lidar_binary",
     "encode_nav_status",

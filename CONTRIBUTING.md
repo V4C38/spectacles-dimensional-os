@@ -12,8 +12,33 @@ Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-
 
 - **Editor:** after registration, `UIManager` shows MainUI as a floating panel.
 - **Spectacles:** MainUI is hidden until the user shows their palm; `WristMenuController` interpolates the panel toward `wristMenuRoot` while `PalmGestureGate` debounces show/hide.
-- **Debug mode:** `MainMenuView` exposes a toggle wired to `AppState.debugMode`. When enabled, `RobotMarker` shows direction overlays and `UILogger` streams diagnostics into the on-device log panel.
+- **Debug mode:** `MainMenuView` exposes a toggle wired to `AppState.debugMode`. When enabled, `RobotMarker` shows direction overlays and `UILogger` streams diagnostics into the on-device log panel, including a dedicated camera stream status line (**ON** / **Waiting** / **OFF**) driven by `DeviceCameraStream.isRunning()` and active capture intent.
 - **Restart registration:** MainUI "Restart" calls back into `RegistrationWizard`, which re-enters registration via `ARBridgeCoordinator.enterRegistration()`.
+
+## Runtime camera capture
+
+Ownership (do not duplicate lifecycle elsewhere):
+
+| Component | Owns |
+|-----------|------|
+| `CameraStreamSession` | Capture phases (`off`, `registration`, `tracking_motion`, `refining_stop`), gate debounce, episode arming from pose speed |
+| `FrameCaptureController` | Physical `DeviceCameraStream` start/stop, drain-before-stop, UILogger status |
+| `CameraClient` | `camera_info`, JPEG pipeline, ACK-gated cadence |
+| `StatusClient` | Inbound `capture_policy` |
+| `WorldFrameRefiner` / `SimilarityAligner` (bridge) | Stop-refinement episodes; sets `refinement_complete` on the frame ACK |
+
+Runtime arming uses **pose speed** from `TelemetryClient`, not `nav_status`. The bridge sends `capture_policy` after the first `camera_info`; the Lens must not use hardcoded gate defaults at runtime. Hardware turns off on sustained gate failure while the episode stays armed (**Waiting**); it turns off fully on `refinement_complete`, registration end, or disconnect.
+
+**Log signatures (hardware acceptance):**
+
+| Log | Meaning |
+|-----|---------|
+| Lens `FrameCaptureController: camera stream ON phase=... reason=...` | Physical camera started |
+| Lens `FrameCaptureController: camera stream OFF phase=... reason=gate_pause` | Gated pause; episode still armed |
+| Lens `FrameCaptureController: camera stream OFF ... reason=episode_complete` | Stop refinement finished |
+| Lens `DeviceCameraStream: stopped` | Hardware torn down |
+| Bridge `refinement_episode_complete` | Stop solve committed; expect `refinement_complete=true` on next ACK |
+| Bridge `AR camera intrinsics received` | Usually once per hardware activation (`camera_info`) |
 
 ## App-layer naming (`lens-studio/Assets/Scripts/App/`)
 
@@ -45,6 +70,6 @@ When the WebSocket contract changes, update in the same change:
 cd lens-studio/Tests && npm test
 ```
 
-Vitest covers 24 unit files under `lens-studio/Tests/unit/` (protocol, `AppState`, `InboundRouter`, registration, navigation, `palmGestureGate`, `cameraStopBurst`, and related utilities).
+Vitest covers unit files under `lens-studio/Tests/unit/` (protocol, `AppState`, `InboundRouter`, registration, navigation, camera lifecycle — `CameraStreamSession`, `FrameCaptureController`, `hardwareTransition`, `cameraClientCadence` — `palmGestureGate`, `cameraStopBurst`, and related utilities).
 
 Bridge tests run from the DimOS `.venv` under `dimos-ar/`.

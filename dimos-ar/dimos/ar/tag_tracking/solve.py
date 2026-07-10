@@ -20,7 +20,10 @@ from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.utils.transform_utils import normalize_angle
 
 __all__ = [
+    "CAPTURE_MAX_DISTANCE_MARGIN",
     "_yaw_from_T",
+    "capture_max_stream_distance_m",
+    "max_detection_distance_m",
 ]
 
 if TYPE_CHECKING:
@@ -30,6 +33,28 @@ DEFAULT_MARKER_ID: int = 0
 DEFAULT_APRILTAG_DICT: str = "DICT_APRILTAG_36h11"
 TAG_TOTAL_SIZE_M: float = 0.070
 TAG_BLACK_SIZE_M: float = TAG_TOTAL_SIZE_M * 8 / 10  # 0.056 m — black detection square
+
+# Headroom on pinhole max distance before sending capture_policy / applying frame gates.
+CAPTURE_MAX_DISTANCE_MARGIN: float = 1.25
+
+
+def max_detection_distance_m(fx: float, tag_size_m: float, min_tag_px: float) -> float:
+    if fx <= 0.0 or tag_size_m <= 0.0 or min_tag_px <= 0.0:
+        raise ValueError("max_detection_distance_m requires positive fx, tag_size_m, min_tag_px")
+    return fx * tag_size_m / min_tag_px
+
+
+def capture_max_stream_distance_m(
+    fx: float,
+    tag_size_m: float,
+    min_tag_px: float,
+    *,
+    margin: float = CAPTURE_MAX_DISTANCE_MARGIN,
+) -> float:
+    if margin <= 0.0:
+        raise ValueError("capture_max_stream_distance_m requires positive margin")
+    return max_detection_distance_m(fx, tag_size_m, min_tag_px) * margin
+
 
 CAMERA_FRAME_MAGIC = b"ARF1"
 MAX_HEADER_BYTES = 4096

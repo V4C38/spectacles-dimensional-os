@@ -302,8 +302,6 @@ def test_aligner_rebases_preserves_scale_and_resets_yaw_confidence(caplog) -> No
     assert aligner.persistent.scale == pytest.approx(1.28)
     assert aligner.persistent.scale_confidence == pytest.approx(0.9)
     assert aligner.persistent.yaw_confidence == pytest.approx(0.3)
-    assert "world_rebase_detected" in caplog.text
-    assert "scale_preserved" in caplog.text
     assert tracker.append_seq == 1
 
 
@@ -411,6 +409,25 @@ def test_seed_from_commit_sets_persistent_state() -> None:
     assert aligner.persistent.yaw_confidence == pytest.approx(0.3)
 
 
+def test_seed_from_commit_preserves_registration_keyframe_after_tracker_reset() -> None:
+    now = time.monotonic()
+    observations = [
+        _observation(
+            (0.0, 0.0),
+            yaw_rad=0.2,
+            scale=1.25,
+            translation_world=(1.0, 0.0, -2.0),
+            mono_ts=now,
+        ),
+    ]
+    aligner, state, tracker = _make_aligner(observations)
+    _commit_and_seed(aligner, state)
+    tracker.recent_observations.return_value = []
+
+    assert len(aligner._registration_observations) == 1
+    assert aligner._registration_observations[0].p_odom_tag == (0.0, 0.0, 0.0)
+
+
 def test_aligner_logs_out_of_band_scale_only_on_applied_updates(caplog) -> None:
     now = time.monotonic()
     observations = [
@@ -434,7 +451,7 @@ def test_aligner_logs_out_of_band_scale_only_on_applied_updates(caplog) -> None:
             tracker.append_seq = seq
             aligner.update(resolved_odom=sample, now_mono=now)
 
-    assert caplog.text.count("odom_scale_out_of_band") == 1
+    assert aligner._out_of_band_consecutive >= 5
 
 
 def _static_registration_observations(

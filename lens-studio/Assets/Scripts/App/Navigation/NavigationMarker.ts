@@ -22,7 +22,7 @@ import type { NavMarkerViewState } from "../../ARBridge/Navigation/NavigationMod
 const MARKER_VISIBILITY_DURATION_SECONDS = 0.18;
 const OUTCOME_CIRCLE_COLLAPSE_DURATION_SECONDS =
   MARKER_VISIBILITY_DURATION_SECONDS / 0.5;
-const OUTCOME_DOTS_TEXT_COLLAPSE_DELAY_SECONDS = 1.5;
+const OUTCOME_TEXT_COLLAPSE_DELAY_SECONDS = 1.5;
 const VISIBILITY_ANIMATION_VERSION_KEY = "__navMarkerVisibilityVersion";
 const CIRCLE_SCALE_ANIMATION_VERSION_KEY = "__navMarkerCircleScaleVersion";
 const OUTCOME_RESET_ANIMATION_VERSION_KEY = "__navMarkerOutcomeResetVersion";
@@ -31,35 +31,6 @@ function outcomeStateText(label: "Cancelled" | "Failed"): string {
   return label === "Cancelled"
     ? "Navigation\nCancelled"
     : "Navigation\nFailed";
-}
-
-function applyDotsMaterialMode(
-  dots: SceneObject | null,
-  idle: boolean,
-): void {
-  if (!dots) {
-    return;
-  }
-  const visual = dots.getComponent(
-    "Component.RenderMeshVisual",
-  ) as RenderMeshVisual | null;
-  if (!visual?.mainMaterial?.mainPass) {
-    return;
-  }
-  const pass = visual.mainMaterial.mainPass as any;
-  const DOTS_WHITE = new vec4(1, 1, 1, 0.457359);
-  const DOTS_YELLOW = new vec4(0.976471, 0.929412, 0.423529, 0.500008);
-  if ("WhiteColor" in pass) {
-    pass.WhiteColor = DOTS_WHITE;
-  }
-  if ("YellowColor" in pass) {
-    pass.YellowColor = idle ? DOTS_WHITE : DOTS_YELLOW;
-  }
-  if ("AnimationSwitch" in pass) {
-    pass.AnimationSwitch = !idle;
-  } else if ("animationSwitch" in pass) {
-    pass.animationSwitch = !idle;
-  }
 }
 
 export type MarkerMaterialAssets = {
@@ -80,11 +51,9 @@ export class MarkerViewCore {
   private readonly cancelVfx: SceneObject | null;
   private readonly confirmLabel: Text;
   private readonly stateText: Text | null;
-  private readonly dots: SceneObject | null;
   private readonly dragInteractableBaseScale: vec3;
   private readonly rootBaseScale: vec3;
   private readonly headingBaseScale: vec3 | null;
-  private readonly dotsBaseScale: vec3 | null;
   private readonly stateTextBaseScale: vec3 | null;
 
   private _visible = false;
@@ -114,12 +83,10 @@ export class MarkerViewCore {
     this.cancelVfx = findChildRecursive(this.confirmButtonObject, "ButtonVFX_Cancel");
     this.confirmLabel = requireFirstText(this.confirmButtonObject, "MarkerViewCore");
     this.stateText = findText(this.root, "State_Text");
-    this.dots = findChildRecursive(this.root, "Dots");
     this.dragInteractableBaseScale =
       this.dragInteractableObject.getTransform().getLocalScale();
     this.rootBaseScale = this.root.getTransform().getLocalScale();
     this.headingBaseScale = this.headingRoot?.getTransform().getLocalScale() ?? null;
-    this.dotsBaseScale = this.dots?.getTransform().getLocalScale() ?? null;
     this.stateTextBaseScale =
       this.stateText?.getSceneObject().getTransform().getLocalScale() ?? null;
     if (!this.confirmButton) {
@@ -189,8 +156,6 @@ export class MarkerViewCore {
     }
     this.dragInteractableObject.enabled = true;
     this._applyCircleMaterial(view.circleIdle);
-    applyDotsMaterialMode(this.dots, view.circleIdle);
-    this._setDotsVisible(!view.circleIdle);
     this._setStateText("", false);
     this.setRotation(view.heading);
 
@@ -357,12 +322,10 @@ export class MarkerViewCore {
 
     this.dragInteractableObject.enabled = true;
     this._applyCircleMaterial(false);
-    applyDotsMaterialMode(this.dots, false);
     this.setConfirmVisible(false);
     this._setConfirmVfxState(true, true);
     this.root.enabled = true;
     this.root.getTransform().setLocalScale(this.rootBaseScale);
-    this._setDotsVisible(true);
     const label: "Cancelled" | "Failed" =
       view.outcomeLabel === "Cancelled" ? "Cancelled" : "Failed";
     this._setStateText(outcomeStateText(label), true);
@@ -407,13 +370,6 @@ export class MarkerViewCore {
     );
   }
 
-  private _setDotsVisible(visible: boolean): void {
-    if (!this.dots) {
-      return;
-    }
-    this.dots.enabled = visible;
-  }
-
   private _setStateText(text: string, visible: boolean): void {
     if (!this.stateText) {
       return;
@@ -435,9 +391,6 @@ export class MarkerViewCore {
       .setLocalScale(this.dragInteractableBaseScale);
     if (this.headingRoot && this.headingBaseScale) {
       this.headingRoot.getTransform().setLocalScale(this.headingBaseScale);
-    }
-    if (this.dots && this.dotsBaseScale) {
-      this.dots.getTransform().setLocalScale(this.dotsBaseScale);
     }
     if (this.stateText && this.stateTextBaseScale) {
       this.stateText.getSceneObject().getTransform().setLocalScale(this.stateTextBaseScale);
@@ -464,7 +417,6 @@ export class MarkerViewCore {
       this._restoreStandardVisualState();
     }
     this.setConfirmVisible(false);
-    this._setDotsVisible(false);
     this._setConfirmVfxState(true, true);
   }
 
@@ -473,7 +425,6 @@ export class MarkerViewCore {
     this.root.getTransform().setLocalScale(vec3.zero());
     this.dragInteractableObject.enabled = false;
     this._restoreStandardVisualState();
-    this._setDotsVisible(false);
     this._setConfirmVfxState(true, true);
     this.confirmButtonObject.enabled = false;
     this._confirmEnabled = false;
@@ -536,18 +487,16 @@ export class MarkerViewCore {
   }
 
   private _animateOutcomeResetDelayedContentCollapse(version: number): void {
-    if (!this.dots && !this.stateText) {
+    if (!this.stateText) {
       this._outcomeResetCompleteCallback?.();
       this._outcomeResetCompleteCallback = null;
       return;
     }
-    const dotsTransform = this.dots?.getTransform() ?? null;
-    const dotsStart = dotsTransform?.getLocalScale() ?? null;
-    const stateTextTransform = this.stateText?.getSceneObject().getTransform() ?? null;
-    const stateTextStart = stateTextTransform?.getLocalScale() ?? null;
+    const stateTextTransform = this.stateText.getSceneObject().getTransform();
+    const stateTextStart = stateTextTransform.getLocalScale();
     const target = vec3.zero();
     const totalDuration =
-      OUTCOME_DOTS_TEXT_COLLAPSE_DELAY_SECONDS + MARKER_VISIBILITY_DURATION_SECONDS;
+      OUTCOME_TEXT_COLLAPSE_DELAY_SECONDS + MARKER_VISIBILITY_DURATION_SECONDS;
     animate({
       duration: totalDuration,
       easing: "linear",
@@ -562,25 +511,15 @@ export class MarkerViewCore {
           return;
         }
         const elapsed = t * totalDuration;
-        if (elapsed < OUTCOME_DOTS_TEXT_COLLAPSE_DELAY_SECONDS) {
-          if (dotsTransform && dotsStart) {
-            dotsTransform.setLocalScale(dotsStart);
-          }
-          if (stateTextTransform && stateTextStart) {
-            stateTextTransform.setLocalScale(stateTextStart);
-          }
+        if (elapsed < OUTCOME_TEXT_COLLAPSE_DELAY_SECONDS) {
+          stateTextTransform.setLocalScale(stateTextStart);
           return;
         }
         const collapseT =
-          (elapsed - OUTCOME_DOTS_TEXT_COLLAPSE_DELAY_SECONDS) /
+          (elapsed - OUTCOME_TEXT_COLLAPSE_DELAY_SECONDS) /
           MARKER_VISIBILITY_DURATION_SECONDS;
         const easedT = Math.min(1, collapseT);
-        if (dotsTransform && dotsStart) {
-          dotsTransform.setLocalScale(lerpVec3(dotsStart, target, easedT));
-        }
-        if (stateTextTransform && stateTextStart) {
-          stateTextTransform.setLocalScale(lerpVec3(stateTextStart, target, easedT));
-        }
+        stateTextTransform.setLocalScale(lerpVec3(stateTextStart, target, easedT));
       },
       ended: () => {
         if (
@@ -592,12 +531,7 @@ export class MarkerViewCore {
         ) {
           return;
         }
-        if (dotsTransform) {
-          dotsTransform.setLocalScale(target);
-        }
-        if (stateTextTransform) {
-          stateTextTransform.setLocalScale(target);
-        }
+        stateTextTransform.setLocalScale(target);
         this._outcomeResetCompleteCallback?.();
         this._outcomeResetCompleteCallback = null;
       },

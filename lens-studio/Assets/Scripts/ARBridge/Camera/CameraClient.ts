@@ -11,10 +11,6 @@ import { DeviceCameraStream } from "./DeviceCameraStream";
 import { RUNTIME_STOP_SPEED_MPS } from "./CameraStreamSession";
 
 export { RUNTIME_STOP_SPEED_MPS };
-export {
-  isStartingMovement,
-  isStoppingMovement,
-} from "./CameraStreamSession";
 
 const POSE_BUFFER_CAPACITY = 360;
 export const CAPTURE_MIN_SPACING_S = 1.5;
@@ -49,7 +45,7 @@ export class CameraClient {
   private _helloBound = false;
   private _sentCameraInfo = false;
   private _onCaptureError: ((message: string) => void) | null = null;
-  private _onFrameAck: (() => void) | null = null;
+  private _onFrameAck: ((obsAdded: boolean, refinementComplete: boolean) => void) | null = null;
   private _lastPipelineLogTime = 0;
   private _lastCaptureTsLogTime = 0;
   private _lastClockSyncRaceLogTime = 0;
@@ -69,19 +65,23 @@ export class CameraClient {
     this._onCaptureError = handler;
   }
 
-  public setOnFrameAck(handler: () => void): void {
+  public setOnFrameAck(
+    handler: (obsAdded: boolean, refinementComplete: boolean) => void,
+  ): void {
     this._onFrameAck = handler;
   }
 
+  public hasInFlightCapture(): boolean {
+    return this._inFlight;
+  }
+
   public setCaptureEnabled(enabled: boolean): void {
-    if (this._captureEnabled === enabled) {
-      return;
-    }
     this._captureEnabled = enabled;
-    if (!enabled) {
-      this._inFlight = false;
-      this._inFlightSeq = -1;
-    }
+  }
+
+  /** Gate pause: hardware stopped but capture episode remains armed. */
+  public prepareForHardwarePause(): void {
+    this._sentCameraInfo = false;
   }
 
   public resetCapturePipeline(): void {
@@ -119,7 +119,7 @@ export class CameraClient {
       this._inFlight = false;
       this._inFlightSeq = -1;
       this._captureSpacingDeadline = getTime();
-      this._onFrameAck?.();
+      this._onFrameAck?.(msg.obs_added, msg.refinement_complete);
     } else {
       print(`CameraClient: ack seq=${msg.seq} expected=${this._inFlightSeq} (mismatch)`);
     }
@@ -200,6 +200,10 @@ export class CameraClient {
     const pipelineStart = getTime();
     try {
       const frame = await this._deps.camera.requestNextFrame();
+      if (!this._captureEnabled) {
+        this._finishPipelineWithoutAck(seq);
+        return;
+      }
       await this._captureFromStream(frame.texture, frame.timestampSeconds, robotId, seq, pipelineStart);
     } catch (error) {
       this._finishPipelineWithoutAck(seq);
@@ -265,6 +269,10 @@ export class CameraClient {
   }): Promise<void> {
     const session = this._deps.session;
     if (!session) {
+      this._finishPipelineWithoutAck(args.seq);
+      return;
+    }
+    if (!this._captureEnabled) {
       this._finishPipelineWithoutAck(args.seq);
       return;
     }

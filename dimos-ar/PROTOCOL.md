@@ -9,7 +9,19 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v14 (current) — Persistent similarity alignment telemetry
+### v15 (current) — Observation-driven capture and anchored stop refinement
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 15.**
+- **`camera_frame_ack`:** adds required **`obs_added`** and **`refinement_complete`**
+  (`bool`) fields. The latter is true only when the bridge committed the single
+  refinement for the current motion-to-stop episode.
+- **`capture_policy`** (new, bridge → Lens): sent after the first **`camera_info`**;
+  carries **`max_stream_distance_m`**, **`min_stream_distance_m`**,
+  **`max_capture_speed_mps`**, **`static_speed_mps`**, and **`min_observations`**.
+
+### v14 — Persistent similarity alignment telemetry
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -392,9 +404,41 @@ single-flight capture state:
 {
   "type": "camera_frame_ack",
   "ts": 1730000000.123,
-  "seq": 42
+  "seq": 42,
+  "obs_added": true,
+  "refinement_complete": false
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `obs_added` | `boolean` | `true` when the bridge accepted at least one tag observation from this frame |
+| `refinement_complete` | `boolean` | `true` when the bridge committed the current stop-refinement episode |
+
+### `capture_policy`
+
+Bridge → Lens. Sent once after the first **`camera_info`** for the session. The Lens
+uses these thresholds for geometric and speed gating; it does not derive them locally.
+
+```json
+{
+  "type": "capture_policy",
+  "ts": 1730000000.123,
+  "max_stream_distance_m": 2.5000,
+  "min_stream_distance_m": 0.3500,
+  "max_capture_speed_mps": 0.4500,
+  "static_speed_mps": 0.0500,
+  "min_observations": 3
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `max_stream_distance_m` | `number` | Maximum camera–robot distance for capture: pinhole estimate from intrinsics, 70 mm printed tag size, and minimum tag pixel floor, then scaled by bridge headroom (default 25%). Same limit applies to bridge frame admission after `camera_info`. |
+| `min_stream_distance_m` | `number` | Minimum camera–robot distance for capture |
+| `max_capture_speed_mps` | `number` | Do not capture while robot speed exceeds this |
+| `static_speed_mps` | `number` | Speed threshold shared with the bridge for static vs moving (Lens arms stop-refinement on the stop edge) |
+| `min_observations` | `integer` | Bridge `ALIGN_MIN_OBS`; minimum accepted static endpoint observations before a stop solve |
 
 ### Numeric precision (outbound)
 
@@ -406,6 +450,7 @@ payload size on Wi-Fi:
 | `pose.position`, `pose.orientation` | 4 |
 | `world_frame_correction.trans_delta_m`, `world_frame_correction.solve_quality` | 4 |
 | `world_frame_correction.yaw_delta_deg` | 3 |
+| `capture_policy.max_stream_distance_m`, `capture_policy.min_stream_distance_m`, `capture_policy.max_capture_speed_mps` | 4 |
 | `path` waypoints | 3 |
 | `ts` on high-rate streams (`pose`, `path`) | 3 |
 

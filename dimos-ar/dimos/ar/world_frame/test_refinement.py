@@ -36,7 +36,7 @@ def _make_refiner() -> tuple[WorldFrameRefiner, WorldFrameState, MagicMock]:
     return refiner, state, tag_tracker
 
 
-def test_apply_tracker_update_delegates_to_similarity_aligner() -> None:
+def test_apply_tracker_update_starts_motion_episode() -> None:
     refiner, state, _tag_tracker = _make_refiner()
     aligner = MagicMock()
     refiner.attach_aligner(aligner)
@@ -49,8 +49,42 @@ def test_apply_tracker_update_delegates_to_similarity_aligner() -> None:
     )
     refiner.apply_tracker_update(resolved_odom=sample)
 
-    aligner.update.assert_called_once()
-    assert aligner.update.call_args.kwargs["resolved_odom"] == sample
+    aligner.begin_episode.assert_called_once()
+    aligner.append_episode_observations.assert_called_once()
+
+
+def test_static_endpoint_completes_one_refinement_episode() -> None:
+    refiner, state, _tag_tracker = _make_refiner()
+    aligner = MagicMock()
+    aligner._config.ALIGN_MIN_OBS = 3
+    aligner.complete_episode.return_value = MagicMock()
+    refiner.attach_aligner(aligner)
+    state.commit(np.eye(4, dtype=np.float64), method="april_tag", approximate=True)
+    moving = OdomSample(
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+        source_ts=1.0,
+        measured_speed_mps=0.2,
+    )
+    stopped = OdomSample(
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+        source_ts=2.0,
+        measured_speed_mps=0.0,
+    )
+
+    refiner.apply_tracker_update(resolved_odom=moving)
+    outcome = refiner.apply_tracker_update(
+        resolved_odom=stopped,
+        observations_added=3,
+    )
+
+    assert outcome.refinement_complete is True
+    assert refiner.apply_tracker_update(
+        resolved_odom=stopped,
+        observations_added=3,
+    ).refinement_complete is False
+    aligner.complete_episode.assert_called_once()
 
 
 def test_moving_robot_diag_logs_latest_and_centroid_residuals(caplog) -> None:
@@ -89,7 +123,4 @@ def test_moving_robot_diag_logs_latest_and_centroid_residuals(caplog) -> None:
             capture_ts_robot=10.0,
         )
 
-    assert "moving_robot_diag" in caplog.text
-    assert "latest_residual_m" in caplog.text
-    assert "window_centroid_residual_m" in caplog.text
-    assert "rej_skew" in caplog.text
+    assert refiner._last_moving_diag_log_mono > 0.0

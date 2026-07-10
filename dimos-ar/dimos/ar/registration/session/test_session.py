@@ -104,6 +104,11 @@ def _make_session() -> tuple[RegistrationSession, list[str], WorldRegistry, Magi
         frame_max_age_s=4.0,
         manual_registration_quality=0.7,
         world_frame_refiner=world_frame_refiner,
+        capture_min_tag_px=24.0,
+        capture_max_distance_margin=1.25,
+        capture_max_speed_mps=0.45,
+        capture_min_distance_m=0.35,
+        align_min_obs=3,
     )
     return session, sent, registry, tag_tracker
 

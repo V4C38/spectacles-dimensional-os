@@ -25,6 +25,8 @@ function makeClient() {
     type: "camera_frame_ack";
     seq: number;
     ts: number;
+    obs_added: boolean;
+    refinement_complete: boolean;
   }>();
   const onHello = new Signal();
   const transportSend = vi.fn();
@@ -111,7 +113,7 @@ describe("CameraClient ACK-gated cadence", () => {
     internals._inFlightSeq = 1;
 
     setMockTime(9.0);
-    onCameraFrameAck.emit({ type: "camera_frame_ack", seq: 1, ts: 9.0 });
+    onCameraFrameAck.emit({ type: "camera_frame_ack", seq: 1, ts: 9.0, obs_added: false, refinement_complete: false });
 
     expect(internals._captureSpacingDeadline).toBe(9.0);
     expect(internals._inFlight).toBe(false);
@@ -137,7 +139,7 @@ describe("CameraClient ACK-gated cadence", () => {
     expect(requestNextFrame).toHaveBeenCalledTimes(1);
 
     setMockTime(1.1);
-    onCameraFrameAck.emit({ type: "camera_frame_ack", seq: 1, ts: 1.1 });
+    onCameraFrameAck.emit({ type: "camera_frame_ack", seq: 1, ts: 1.1, obs_added: true, refinement_complete: false });
     setMockTime(1.1 + 0.05);
     client.tick();
     await flushAsyncCapture();
@@ -164,6 +166,47 @@ describe("CameraClient ACK-gated cadence", () => {
     client.tick();
 
     expect(internals._captureSpacingDeadline).toBeCloseTo(2.0 + CAPTURE_MIN_SPACING_S, 5);
+    expect(requestNextFrame).toHaveBeenCalledTimes(1);
+  });
+
+  it("prepareForHardwarePause clears camera_info without resetting seq", () => {
+    const { client } = makeClient();
+    const internals = client as unknown as CameraClientInternals;
+    internals._sentCameraInfo = true;
+    internals._seq = 7;
+
+    client.prepareForHardwarePause();
+
+    expect(internals._sentCameraInfo).toBe(false);
+    expect(internals._seq).toBe(7);
+  });
+
+  it("resetCapturePipeline clears seq and camera_info state", () => {
+    const { client } = makeClient();
+    const internals = client as unknown as CameraClientInternals;
+    internals._sentCameraInfo = true;
+    internals._seq = 7;
+
+    client.resetCapturePipeline();
+
+    expect(internals._sentCameraInfo).toBe(false);
+    expect(internals._seq).toBe(0);
+  });
+
+  it("does not abort in-flight capture when capture is paused", async () => {
+    const { client, requestNextFrame } = makeClient();
+    const internals = client as unknown as CameraClientInternals;
+    internals._sentCameraInfo = true;
+
+    setMockTime(1.0);
+    client.recordPose();
+    client.tick();
+    await flushAsyncCapture();
+
+    expect(internals._inFlight).toBe(true);
+    client.setCaptureEnabled(false);
+    expect(internals._inFlight).toBe(true);
+    expect(internals._inFlightSeq).toBe(1);
     expect(requestNextFrame).toHaveBeenCalledTimes(1);
   });
 });

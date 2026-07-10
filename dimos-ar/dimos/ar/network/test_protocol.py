@@ -24,6 +24,7 @@ from dimos.ar.network.protocol import (
     decode_inbound,
     encode_bridge_status,
     encode_camera_frame_ack,
+    encode_capture_policy,
     encode_hello,
     encode_lidar_binary,
     encode_nav_status,
@@ -492,13 +493,35 @@ def test_encode_camera_frame_ack() -> None:
     raw = json.loads(
         encode_camera_frame_ack(
             seq=9,
+            obs_added=True,
+            refinement_complete=True,
         )
     )
     assert raw["type"] == "camera_frame_ack"
     assert raw["seq"] == 9
+    assert raw["obs_added"] is True
+    assert raw["refinement_complete"] is True
     assert "tag_detected" not in raw
     assert "tag_ids" not in raw
     assert "quality" not in raw
+
+
+def test_encode_capture_policy() -> None:
+    raw = json.loads(
+        encode_capture_policy(
+            max_stream_distance_m=2.5,
+            min_stream_distance_m=0.35,
+            max_capture_speed_mps=0.45,
+            static_speed_mps=0.05,
+            min_observations=3,
+        )
+    )
+    assert raw["type"] == "capture_policy"
+    assert raw["max_stream_distance_m"] == pytest.approx(2.5)
+    assert raw["min_stream_distance_m"] == pytest.approx(0.35)
+    assert raw["max_capture_speed_mps"] == pytest.approx(0.45)
+    assert raw["static_speed_mps"] == pytest.approx(0.05)
+    assert raw["min_observations"] == 3
 
 
 def test_encode_bridge_status() -> None:

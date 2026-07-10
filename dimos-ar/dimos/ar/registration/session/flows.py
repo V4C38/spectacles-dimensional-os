@@ -38,7 +38,6 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 TAG_REGISTRATION_WINDOW_S = 30.0
-TAG_REGISTRATION_MAX_DIST_M = 2.5
 TAG_REGISTRATION_MAX_SPREAD_M = 0.10
 TAG_REGISTRATION_MAX_YAW_SPREAD_DEG = 6.0
 TAG_REGISTRATION_PROGRESS_SAMPLE_WEIGHT = 0.8
@@ -173,23 +172,6 @@ class RegistrationFlowsMixin:
             return False
         return bool(time.monotonic() - started >= TAG_REGISTRATION_WINDOW_S)
 
-    def _april_tag_timeout_message(
-        self,
-        *,
-        estimate: AlignmentEstimate | None,
-        min_obs: int,
-    ) -> str:
-        observations = self._april_tag_window_observations()
-        if not self._tag_tracker.last_tag_detected:
-            return "Registration timed out — keep the AprilTag in view"
-        if len(observations) < min_obs:
-            return (
-                "Registration timed out — move around the robot while keeping the tag in view"
-            )
-        if estimate is not None and not self._registration_ready(estimate):
-            return "Registration timed out — move slightly around the tag for a clearer angle"
-        return "Registration timed out"
-
     def _fail_april_tag_registration(self, message: str) -> None:
         self._set_tag_tracker_active(False, reason="registration_failed")
         self._broadcast_status(
@@ -208,21 +190,15 @@ class RegistrationFlowsMixin:
         estimate = self._registration_alignment_estimate()
         if estimate is None:
             if self._registration_scan_timed_out():
-                self._fail_april_tag_registration(
-                    self._april_tag_timeout_message(estimate=None, min_obs=min_obs),
-                )
+                self._fail_april_tag_registration("Registration timed out")
             return
         if estimate.observation_count < min_obs:
             if self._registration_scan_timed_out():
-                self._fail_april_tag_registration(
-                    self._april_tag_timeout_message(estimate=estimate, min_obs=min_obs),
-                )
+                self._fail_april_tag_registration("Registration timed out")
             return
         if not self._registration_ready(estimate):
             if self._registration_scan_timed_out():
-                self._fail_april_tag_registration(
-                    self._april_tag_timeout_message(estimate=estimate, min_obs=min_obs),
-                )
+                self._fail_april_tag_registration("Registration timed out")
             return
         candidate = RegistrationCandidate(
             T_world_odom=np.array(
@@ -372,8 +348,11 @@ class RegistrationFlowsMixin:
         result: RegistrationCandidate,
         ts: float | None,
     ) -> None:
-        self._set_tag_tracker_active(False, reason="registration_finish")
+        # The registry seeds the runtime aligner from the accepted registration
+        # observations.  Deactivate only after commit: the tracker clears its
+        # disposable detector window when deactivated.
         self._registry.commit(result, odom=self._odom.latest())
+        self._set_tag_tracker_active(False, reason="registration_finish")
         log_checkpoint(
             logger,
             kind="success",

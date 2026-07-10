@@ -7,10 +7,7 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from dimos.ar.registration.session.flows import (
-    TAG_REGISTRATION_MAX_DIST_M,
-    RegistrationFlowsMixin,
-)
+from dimos.ar.registration.session.flows import RegistrationFlowsMixin
 from dimos.ar.registration.session.session_frames import RegistrationSessionFramesMixin
 from dimos.ar.registration.types import (
     RegistrationCandidate,
@@ -71,6 +68,11 @@ class RegistrationSession(
         frame_max_age_s: float,
         manual_registration_quality: float,
         world_frame_refiner: WorldFrameRefiner,
+        capture_min_tag_px: float,
+        capture_max_distance_margin: float,
+        capture_max_speed_mps: float,
+        capture_min_distance_m: float,
+        align_min_obs: int,
         runtime_profile: TagTrackingProfile | None = None,
     ) -> None:
         self._robot_id = robot_id
@@ -83,6 +85,12 @@ class RegistrationSession(
         self._loop = loop
         self._frame_max_age_s = frame_max_age_s
         self._manual_registration_quality = manual_registration_quality
+        self._capture_min_tag_px = capture_min_tag_px
+        self._capture_max_distance_margin = capture_max_distance_margin
+        self._capture_max_speed_mps = capture_max_speed_mps
+        self._capture_min_distance_m = capture_min_distance_m
+        self._align_min_obs = align_min_obs
+        self._capture_max_stream_distance_m: float | None = None
 
         self._frame_in_flight = False
         self._session = _Session()
@@ -262,19 +270,21 @@ class RegistrationSession(
         *,
         resolved_odom: OdomSample | None = None,
         frame_result: FrameResult | None = None,
-    ) -> None:
+    ) -> Any:
         if self._tag_tracker.active:
             if self._session.last_status is None or self._session.last_status.phase in (
                 RegistrationPhase.SCANNING,
             ):
                 self._broadcast_status()
-            return
-        self._world_frame_refiner.apply_tracker_update(
+            from dimos.ar.world_frame.refinement import RefinementOutcome
+
+            return RefinementOutcome(state="idle")
+        return self._world_frame_refiner.apply_tracker_update(
             resolved_odom=resolved_odom,
+            observations_added=0 if frame_result is None else frame_result.observations_added,
         )
 
     @property
-    def registration_max_distance_m(self) -> float | None:
-        if self._session.mode == RegistrationMode.APRIL_TAG:
-            return TAG_REGISTRATION_MAX_DIST_M
-        return None
+    def capture_max_stream_distance_m(self) -> float | None:
+        """Max camera-tag distance from last camera_info (same value as capture_policy)."""
+        return self._capture_max_stream_distance_m

@@ -13,7 +13,7 @@ import {
   createDefaultBridgeSnapshot,
 } from "../../App/AppState";
 
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -156,11 +156,23 @@ export interface RegistrationStatusMessage {
   scale_locked?: boolean;
 }
 
-/** camera_frame_ack contains only seq. */
+/** camera_frame_ack carries seq and whether the bridge accepted an observation. */
 export interface CameraFrameAckMessage {
   type: "camera_frame_ack";
   ts: number;
   seq: number;
+  obs_added: boolean;
+  refinement_complete: boolean;
+}
+
+export interface CapturePolicyMessage {
+  type: "capture_policy";
+  ts: number;
+  max_stream_distance_m: number;
+  min_stream_distance_m: number;
+  max_capture_speed_mps: number;
+  static_speed_mps: number;
+  min_observations: number;
 }
 
 export interface BridgeStatusMessage {
@@ -269,6 +281,7 @@ export type InboundMessage =
   | WorldFrameCorrectionMessage
   | RegistrationStatusMessage
   | CameraFrameAckMessage
+  | CapturePolicyMessage
   | BridgeStatusMessage
   | PathMessage
   | NavStatusMessage
@@ -338,6 +351,14 @@ function requireNumber(obj: Record<string, unknown>, key: string): number {
     throw new Error(`Missing or invalid field: ${key}`);
   }
   return v;
+}
+
+function requireBoolean(obj: Record<string, unknown>, key: string): boolean {
+  const value = obj[key];
+  if (typeof value !== "boolean") {
+    throw new Error(`Missing or invalid boolean field: ${key}`);
+  }
+  return value;
 }
 
 const REGISTRATION_PHASES: RegistrationPhase[] = [
@@ -655,6 +676,20 @@ function parseInboundObject(
         type: "camera_frame_ack",
         ts: requireNumber(data, "ts"),
         seq: requireNumber(data, "seq"),
+        obs_added: requireBoolean(data, "obs_added"),
+        refinement_complete: requireBoolean(data, "refinement_complete"),
+      };
+    }
+
+    case "capture_policy": {
+      return {
+        type: "capture_policy",
+        ts: requireNumber(data, "ts"),
+        max_stream_distance_m: requireNumber(data, "max_stream_distance_m"),
+        min_stream_distance_m: requireNumber(data, "min_stream_distance_m"),
+        max_capture_speed_mps: requireNumber(data, "max_capture_speed_mps"),
+        static_speed_mps: requireNumber(data, "static_speed_mps"),
+        min_observations: requireNumber(data, "min_observations"),
       };
     }
 

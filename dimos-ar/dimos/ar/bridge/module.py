@@ -126,6 +126,12 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     ALIGN_WINDOW_MAX_AGE_S: float = 8.0
     ALIGN_WINDOW_MAX_OBS: int = 24
     ALIGN_MIN_OBS: int = 3
+    # Pinhole tag-size floor for capture max distance (~1.6 m at Spectacles fx=560,
+    # 70 mm printed tag); CAPTURE_MAX_DISTANCE_MARGIN brings policy to ~2 m.
+    CAPTURE_MIN_TAG_PX: float = 24.0
+    CAPTURE_MAX_DISTANCE_MARGIN: float = 1.25
+    CAPTURE_MAX_SPEED_MPS: float = 0.45
+    CAPTURE_MIN_DISTANCE_M: float = 0.35
     ALIGN_REG_MIN_OBS: int = 4
     ALIGN_REG_CONF_MIN: float = 0.7
     ALIGN_HUBER_K: float = 1.5
@@ -328,6 +334,11 @@ class ARBridge(Module):  # type: ignore[misc]
             frame_max_age_s=self.config.frame_max_age_s,
             manual_registration_quality=self.config.manual_registration_quality,
             world_frame_refiner=world_frame_refiner,
+            capture_min_tag_px=self.config.CAPTURE_MIN_TAG_PX,
+            capture_max_distance_margin=self.config.CAPTURE_MAX_DISTANCE_MARGIN,
+            capture_max_speed_mps=self.config.CAPTURE_MAX_SPEED_MPS,
+            capture_min_distance_m=self.config.CAPTURE_MIN_DISTANCE_M,
+            align_min_obs=self.config.ALIGN_MIN_OBS,
             runtime_profile=runtime_profile,
         )
 

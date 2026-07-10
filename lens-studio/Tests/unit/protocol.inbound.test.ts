@@ -139,10 +139,29 @@ describe("parseInboundMessage", () => {
         type: "camera_frame_ack",
         ts: 1,
         seq: 5,
+        obs_added: true,
+        refinement_complete: false,
       }),
     );
     expect(msg!.type).toBe("camera_frame_ack");
     expect((msg as { seq: number }).seq).toBe(5);
+    expect((msg as { obs_added: boolean }).obs_added).toBe(true);
+  });
+
+  it("parses capture_policy", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "capture_policy",
+        ts: 1,
+        max_stream_distance_m: 2.5,
+        min_stream_distance_m: 0.35,
+        max_capture_speed_mps: 0.45,
+        static_speed_mps: 0.05,
+        min_observations: 3,
+      }),
+    );
+    expect(msg!.type).toBe("capture_policy");
+    expect((msg as { min_observations: number }).min_observations).toBe(3);
   });
 
   it("parses bridge_status", () => {

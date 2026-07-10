@@ -188,6 +188,13 @@ class SimilarityAligner:
         self._last_applied_seq: int = -1
         self._held_logged = False
         self._skip_log_reason: str | None = None
+        # Registration observations are the only long-lived correspondence
+        # anchor.  The tracker deliberately clears its rolling detector window
+        # after registration, so keeping this immutable snapshot here prevents
+        # each runtime stop from being solved as an unrelated local recenter.
+        self._registration_observations: list[TagObservation] = []
+        self._episode_observations: list[TagObservation] = []
+        self._episode_complete = False
         self._persistent = _PersistentSimilarity(
             scale=self._config.ALIGN_SCALE_PRIOR,
             yaw_rad=0.0,
@@ -207,6 +214,12 @@ class SimilarityAligner:
         odom_scale: float,
     ) -> None:
         """Seed persistent estimator from a registration commit."""
+        self._registration_observations = self._merge_spatial_keyframes(
+            self._tag_tracker.recent_observations(
+                max_age_s=self._config.ALIGN_WINDOW_MAX_AGE_S,
+            )
+        )
+        self.begin_episode()
         self._persistent.scale = float(odom_scale)
         self._persistent.yaw_rad = normalize_angle(yaw_from_T(T_committed))
         self._persistent.scale_confidence = 0.0
@@ -216,6 +229,82 @@ class SimilarityAligner:
         self._last_applied_seq = -1
         self._held_logged = False
         self._skip_log_reason = None
+
+    def begin_episode(self) -> None:
+        """Start one motion-to-stop refinement episode."""
+        self._episode_observations = []
+        self._episode_complete = False
+
+    def append_episode_observations(self) -> int:
+        """Merge newly accepted tracker observations into the active episode."""
+        if self._episode_complete:
+            return 0
+        before = len(self._episode_observations)
+        known = {
+            (observation.mono_ts, observation.tag_id)
+            for observation in self._episode_observations
+        }
+        for observation in self._tag_tracker.recent_observations(
+            max_age_s=self._config.ALIGN_WINDOW_MAX_AGE_S,
+        ):
+            key = (observation.mono_ts, observation.tag_id)
+            if key not in known:
+                self._episode_observations.append(observation)
+                known.add(key)
+        self._episode_observations = self._episode_observations[
+            -self._config.ALIGN_WINDOW_MAX_OBS :
+        ]
+        return len(self._episode_observations) - before
+
+    def complete_episode(
+        self,
+        *,
+        resolved_odom: OdomSample | None,
+        now_mono: float | None = None,
+    ) -> AlignmentEstimate | None:
+        """Apply at most one well-observed transform for the active episode."""
+        if self._episode_complete:
+            return None
+        now = time.monotonic() if now_mono is None else now_mono
+        available_episode_slots = max(
+            self._config.ALIGN_WINDOW_MAX_OBS - len(self._registration_observations),
+            1,
+        )
+        observations = [
+            *self._registration_observations,
+            *self._episode_observations[-available_episode_slots:],
+        ]
+        prepared = self._prepare_observations(observations, now_mono=now)
+        if prepared is None or prepared.observation_count < self._config.ALIGN_MIN_OBS:
+            return None
+        fit, rejected_mask = self._robust_fit(prepared)
+        if fit is None:
+            return None
+        estimate = self._build_estimate(
+            prepared,
+            fit,
+            rejected_mask,
+            apply_learning=True,
+            rebase_detected=False,
+        )
+        if estimate is None:
+            return None
+        if (
+            estimate.baseline_m < self._config.ALIGN_YAW_BASELINE_B0
+            or not (estimate.yaw_observable or estimate.scale_observable)
+            or estimate.quality_term <= 0.0
+        ):
+            logger.info(
+                "refinement_episode_held",
+                baseline_m=round(estimate.baseline_m, 3),
+                yaw_observable=estimate.yaw_observable,
+                scale_observable=estimate.scale_observable,
+                quality=round(estimate.quality_term, 3),
+            )
+            return None
+        self._apply_estimate(estimate, resolved_odom)
+        self._episode_complete = True
+        return estimate
 
     def current_estimate(
         self,
@@ -515,6 +604,52 @@ class SimilarityAligner:
         )
         return estimate
 
+    def _apply_estimate(
+        self,
+        estimate: AlignmentEstimate,
+        resolved_odom: OdomSample | None,
+    ) -> None:
+        self._handle_scale_band(estimate.scale)
+        if not self._state.set_odom_scale(float(estimate.scale)):
+            if abs(estimate.scale - self._state.odom_scale) > 1e-6:
+                raise RuntimeError("refinement scale rejected by WorldFrameState")
+        current_transform = self._state.current_transform()
+        if current_transform is None:
+            raise RuntimeError("refinement requires committed world frame")
+        base_before = self._robot_base_world_position(resolved_odom)
+        target = np.array(
+            build_T_world_odom(estimate.yaw_rad, estimate.translation_world),
+            dtype=np.float64,
+            copy=True,
+        )
+        target = self._apply_floor_y_lock(target, resolved_odom)
+        trans_delta = float(np.linalg.norm(target[:3, 3] - current_transform[:3, 3]))
+        yaw_delta_deg = math.degrees(
+            abs(normalize_angle(yaw_from_T(target) - yaw_from_T(current_transform)))
+        )
+        self._registry.apply_runtime_transform(target, update_refiner_baseline=True)
+        if self._state.method == "april_tag":
+            self._state.set_approximate(estimate.approximate)
+        self._emit_alignment_update(estimate)
+        self._publish_pose_snapshot(resolved_odom)
+        if self._on_correction_committed is not None:
+            self._on_correction_committed()
+        base_after = self._robot_base_world_position(resolved_odom)
+        marker_jump_m = (
+            float(np.linalg.norm(base_after - base_before))
+            if base_before is not None and base_after is not None
+            else None
+        )
+        logger.info(
+            "refinement_episode_complete",
+            solve_quality=round(estimate.quality_term, 3),
+            observation_count=estimate.observation_count,
+            baseline_m=round(estimate.baseline_m, 3),
+            trans_delta_m=round(trans_delta, 3),
+            yaw_delta_deg=round(yaw_delta_deg, 2),
+            marker_jump_m=round(marker_jump_m, 3) if marker_jump_m is not None else None,
+        )
+
     def _build_estimate(
         self,
         prepared: _PreparedWindow,
@@ -670,6 +805,14 @@ class SimilarityAligner:
         observations = self._tag_tracker.recent_observations(
             max_age_s=window_age_s,
         )
+        return self._prepare_observations(observations, now_mono=now_mono)
+
+    def _prepare_observations(
+        self,
+        observations: list[TagObservation],
+        *,
+        now_mono: float,
+    ) -> _PreparedWindow | None:
         if not observations:
             return None
         observations = observations[-self._config.ALIGN_WINDOW_MAX_OBS :]
@@ -729,6 +872,29 @@ class SimilarityAligner:
             view_baseline_m=_view_baseline_m(kept_observations),
             yaw_baseline_m=max(ground_baseline, mount_sep),
         )
+
+    @staticmethod
+    def _merge_spatial_keyframes(
+        observations: list[TagObservation],
+        *,
+        min_separation_m: float = 0.03,
+    ) -> list[TagObservation]:
+        """Keep one representative per robot position, preserving chronology."""
+        merged: list[TagObservation] = []
+        for observation in observations:
+            point = np.asarray(observation.p_odom_tag[:2], dtype=np.float64)
+            if any(
+                float(
+                    np.linalg.norm(
+                        point - np.asarray(existing.p_odom_tag[:2], dtype=np.float64)
+                    )
+                )
+                < min_separation_m
+                for existing in merged
+            ):
+                continue
+            merged.append(observation)
+        return merged
 
     def _robust_fit(
         self,

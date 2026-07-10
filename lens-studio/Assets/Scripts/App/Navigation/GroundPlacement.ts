@@ -9,6 +9,7 @@ import {
   RobotGroundDeadzone,
   SurfaceGroundProbe,
 } from "./SurfaceGroundProbe";
+import WorldCameraFinderProvider from "SpectaclesInteractionKit.lspkg/Providers/CameraProvider/WorldCameraFinderProvider";
 
 export type { RobotGroundDeadzone };
 
@@ -266,7 +267,11 @@ export class GroundPlacement {
     this._isDragging = false;
     this._previousDragPosition = null;
     this._syncDesiredPoseToRenderedPose();
-    const resolved = this._groundProbe.resolveDragPoint(this.desiredPosition, getDeltaTime());
+    const resolved = this._groundProbe.resolveDragPoint(
+      this.desiredPosition,
+      getDeltaTime(),
+      this._getCameraWorldPosition(),
+    );
     this.desiredPosition = resolved;
     this._marker?.setPose(this.desiredPosition, this.desiredRotation);
     this._emitPreviewTargetChanged(true);
@@ -389,12 +394,17 @@ export class GroundPlacement {
     );
     const dragDistance = pointPosition.distance(this.touchStartPosition);
     if (dragDistance > DRAG_THRESHOLD_CM && !this._isDragging) {
-      this._activatePlacement();
       this._syncDesiredPoseToRenderedPose();
+      this._groundProbe.setDragBaseline(this.desiredPosition.y);
+      this._activatePlacement();
     }
     if (this._isDragging) {
       this._groundProbe.probeSurfaceY(pointPosition, this.hitTestSession);
-      this.desiredPosition = this._groundProbe.resolveDragPoint(pointPosition, getDeltaTime());
+      this.desiredPosition = this._groundProbe.resolveDragPoint(
+        pointPosition,
+        getDeltaTime(),
+        this._getCameraWorldPosition(),
+      );
       this._updateDragHeading(pointPosition);
     }
   }
@@ -481,6 +491,14 @@ export class GroundPlacement {
     this._marker?.setDragEnabled(enabled);
     if (!enabled) {
       this.activeInteractor = null;
+    }
+  }
+
+  private _getCameraWorldPosition(): vec3 | null {
+    try {
+      return WorldCameraFinderProvider.getInstance().getTransform().getWorldPosition();
+    } catch {
+      return null;
     }
   }
 }
