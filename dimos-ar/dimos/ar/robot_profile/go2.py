@@ -29,13 +29,12 @@ GO2_CAPABILITIES: dict[str, CapabilityState] = {
     "registration_manual_pose": CapabilityState(True),
     "nav": CapabilityState(True),
     "path": CapabilityState(True),
-    "plan_preview": CapabilityState(True),
     "cancel_nav_goal": CapabilityState(True),
     "emergency_stop": CapabilityState(True),
 }
 
 _GO2_TAG_YAW_DEG: float = -90.0
-_GO2_TAG_PITCH_DEG: float = -5.0
+_GO2_TAG_PITCH_DEG: float = -15.0
 _GO2_TAG_QUAT: tuple[float, float, float, float] = tuple(  # type: ignore[assignment]
     (
         _Rotation.from_euler("y", _GO2_TAG_PITCH_DEG, degrees=True)
@@ -50,6 +49,8 @@ GO2_DEFAULT_TAG_MOUNTS: list[TagMount] = [
         position=(0.18, 0.0, 0.06),
         orientation=_GO2_TAG_QUAT,
     ),
+    # Uncomment and set the real pose to enable per-frame yaw observability.
+    # TagMount(tag_id=1, size_m=0.056, position=(0.0, 0.0, 0.0), orientation=_GO2_TAG_QUAT),
 ]
 
 

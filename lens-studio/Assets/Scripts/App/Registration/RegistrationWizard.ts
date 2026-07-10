@@ -13,6 +13,7 @@ import {
   getWizardFooterState,
   isRegistrationFailed,
   LAST_WIZARD_STEP,
+  shouldShowBackOnStartStep,
   WIZARD_STEP_DESCRIPTIONS,
   WIZARD_STEP_TITLES,
   WizardStep,
@@ -59,6 +60,7 @@ export class RegistrationWizard extends BaseScriptComponent {
   private _connectCandidateIndex = 0;
   private _connectCandidates: string[] = [];
   private _authoredLocalScale: vec3 = new vec3(1, 1, 1);
+  private _openedFromRuntime = false;
 
   onAwake() {
     const panel = this.getSceneObject();
@@ -112,13 +114,16 @@ export class RegistrationWizard extends BaseScriptComponent {
     this._connectCompleted = false;
     this._isConnecting = false;
     this._lastNavigationTime = -1;
-    this._registrationFlow?.leave();
-    this._registrationFlow?.setState(createRegistrationViewState());
     this._invalidatePending();
     const inRuntime =
       this.arBridgeCoordinator !== null &&
       isRuntimePhase(this.arBridgeCoordinator.appState);
-    if (!inRuntime) {
+    this._openedFromRuntime = inRuntime;
+    if (inRuntime) {
+      // Defer pose reset and enterRegistration until Complete on Start.
+    } else {
+      this._registrationFlow?.leave();
+      this._registrationFlow?.setState(createRegistrationViewState());
       this.arBridgeCoordinator?.enterRegistration();
     }
     const panel = this.getSceneObject();
@@ -142,7 +147,7 @@ export class RegistrationWizard extends BaseScriptComponent {
     this._view?.setStepContent(WIZARD_STEP_TITLES[clamped], WIZARD_STEP_DESCRIPTIONS[clamped]);
     this._view?.applyStepLayout(clamped);
 
-    if (clamped !== WizardStep.Register) {
+    if (clamped !== WizardStep.Register && !this._shouldDeferRegistrationRestart()) {
       this.arBridgeCoordinator?.registrationClient.stop({ notifyBridge: true });
       this._registrationFlow?.leave();
       this.arBridgeCoordinator?.registrationPreview.end();
@@ -193,7 +198,7 @@ export class RegistrationWizard extends BaseScriptComponent {
         this.arBridgeCoordinator &&
         isRuntimePhase(this.arBridgeCoordinator.appState)
       ) {
-        this.arBridgeCoordinator.enterRegistration({ preserveBridge: true });
+        this._commitRegistrationRestartFromRuntime();
       }
       this._setStep(WizardStep.Connect);
       return;
@@ -232,10 +237,7 @@ export class RegistrationWizard extends BaseScriptComponent {
       return;
     }
     if (this._currentStep === WizardStep.Start) {
-      if (
-        this.arBridgeCoordinator &&
-        isRuntimePhase(this.arBridgeCoordinator.appState)
-      ) {
+      if (this._openedFromRuntime) {
         this._dismissWizardToRuntime();
       }
       return;
@@ -490,9 +492,7 @@ export class RegistrationWizard extends BaseScriptComponent {
       this._isConnected(),
       this._registrationFlow?.state ?? createRegistrationViewState(),
       this._registrationFlow?.commitInFlight ?? false,
-      this.arBridgeCoordinator
-        ? isRuntimePhase(this.arBridgeCoordinator.appState)
-        : false,
+      shouldShowBackOnStartStep(this._openedFromRuntime),
     );
     if (this._currentStep === WizardStep.Register && this._registrationFlow?.isManualOnly()) {
       footerState.showManual = false;
@@ -556,8 +556,23 @@ export class RegistrationWizard extends BaseScriptComponent {
     this._finishEvent?.reset(delaySecs);
   }
 
+  private _shouldDeferRegistrationRestart(): boolean {
+    return (
+      this._openedFromRuntime &&
+      this.arBridgeCoordinator !== null &&
+      isRuntimePhase(this.arBridgeCoordinator.appState)
+    );
+  }
+
+  private _commitRegistrationRestartFromRuntime(): void {
+    this._registrationFlow?.leave();
+    this._registrationFlow?.setState(createRegistrationViewState());
+    this.arBridgeCoordinator?.enterRegistration({ preserveBridge: true });
+  }
+
   private _finishRegistration(): void {
     this._finishPending = false;
+    this._openedFromRuntime = false;
     this._log(
       `finish connect=${this._connectCompleted ? "done" : "skipped"} registration=${
         this._registrationFlow?.isComplete() ? "done" : "skipped"
@@ -574,10 +589,17 @@ export class RegistrationWizard extends BaseScriptComponent {
 
   private _dismissWizardToRuntime(): void {
     this._finishPending = false;
+    this._openedFromRuntime = false;
     this._log("dismiss to runtime");
     const panel = this.getSceneObject();
     if (panel) {
       panel.enabled = false;
+    }
+    if (
+      this.arBridgeCoordinator !== null &&
+      isRuntimePhase(this.arBridgeCoordinator.appState)
+    ) {
+      return;
     }
     this.arBridgeCoordinator?.registrationPreview.end();
     this.arBridgeCoordinator?.registrationClient.stop();

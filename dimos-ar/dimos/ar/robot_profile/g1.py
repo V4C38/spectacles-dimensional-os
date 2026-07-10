@@ -31,6 +31,8 @@ G1_DEFAULT_TAG_MOUNTS: list[TagMount] = [
         position=(0.10, 0.0, 0.35),
         orientation=(0.0, -0.70710678, 0.0, 0.70710678),
     ),
+    # Uncomment and set the real pose to enable per-frame yaw observability.
+    # TagMount(tag_id=1, size_m=0.056, position=(0.0, 0.0, 0.0), orientation=(0.0, -0.70710678, 0.0, 0.70710678)),
 ]
 
 
@@ -42,7 +44,6 @@ def g1_capabilities(
     *,
     nav_available: bool,
     path_available: bool,
-    plan_preview_available: bool,
     cancel_goal_available: bool,
     emergency_stop_available: bool,
     tag_mount_available: bool,
@@ -70,12 +71,6 @@ def g1_capabilities(
             path_available,
             None if path_available else "Active path output is not present for this G1 runtime.",
         ),
-        "plan_preview": CapabilityState(
-            plan_preview_available,
-            None
-            if plan_preview_available
-            else "Global costmap is not present for preview planning in this G1 runtime.",
-        ),
         "cancel_nav_goal": CapabilityState(
             cancel_goal_available,
             None
@@ -94,8 +89,6 @@ def g1_capabilities(
 def g1_runtime_tag_tracking_profile() -> TagTrackingProfile:
     return TagTrackingProfile(
         runtime_static_speed_mps=0.08,
-        runtime_max_correct_speed_mps=1.2,
-        runtime_cruise_window_s=14.0,
         runtime_speed_horizon_s=0.9,
     )
 
@@ -105,7 +98,6 @@ def g1_handshake(
     *,
     nav_available: bool,
     path_available: bool,
-    plan_preview_available: bool,
     cancel_goal_available: bool,
     emergency_stop_available: bool,
     tag_mount_available: bool,
@@ -113,7 +105,6 @@ def g1_handshake(
     capability_states = g1_capabilities(
         nav_available=nav_available,
         path_available=path_available,
-        plan_preview_available=plan_preview_available,
         cancel_goal_available=cancel_goal_available,
         emergency_stop_available=emergency_stop_available,
         tag_mount_available=tag_mount_available,
@@ -162,7 +153,6 @@ class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
         return g1_capabilities(
             nav_available=True,
             path_available=True,
-            plan_preview_available=False,
             cancel_goal_available=True,
             emergency_stop_available=self._emergency_stop_available(),
             tag_mount_available=len(self.tag_mounts()) > 0,
@@ -174,7 +164,6 @@ class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
             self.robot_id(),
             nav_available=True,
             path_available=True,
-            plan_preview_available=False,
             cancel_goal_available=True,
             emergency_stop_available=self._emergency_stop_available(),
             tag_mount_available=len(self.tag_mounts()) > 0,

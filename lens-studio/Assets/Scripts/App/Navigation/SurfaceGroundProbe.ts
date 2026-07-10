@@ -11,6 +11,8 @@ const ROBOT_GROUND_DEADZONE_EXIT_MARGIN_CM = 12;
 const Y_SAMPLE_WINDOW_S = 0.35;
 const Y_MAX_SAMPLES = 24;
 const Y_MIN_SAMPLES_FOR_MEDIAN = 3;
+const Y_PROBE_FADE_START_DIST_CM = 200;
+const Y_PROBE_FADE_END_DIST_CM = 350;
 
 export type RobotGroundDeadzone = {
   radiusCm: number;
@@ -39,6 +41,24 @@ function average(values: number[]): number {
     sum += values[index];
   }
   return sum / values.length;
+}
+
+function horizontalDistanceCm(a: vec3, b: vec3): number {
+  const dx = a.x - b.x;
+  const dz = a.z - b.z;
+  return Math.sqrt(dx * dx + dz * dz);
+}
+
+function yProbeWeight(distanceCm: number): number {
+  if (distanceCm <= Y_PROBE_FADE_START_DIST_CM) {
+    return 1.0;
+  }
+  if (distanceCm >= Y_PROBE_FADE_END_DIST_CM) {
+    return 0.0;
+  }
+  const fadeSpan = Y_PROBE_FADE_END_DIST_CM - Y_PROBE_FADE_START_DIST_CM;
+  const t = (distanceCm - Y_PROBE_FADE_START_DIST_CM) / fadeSpan;
+  return 1.0 - t;
 }
 
 class SurfaceYFilter {
@@ -85,6 +105,7 @@ class SurfaceYFilter {
 export class SurfaceGroundProbe {
   private readonly _yFilter = new SurfaceYFilter();
   private _floorY = 0;
+  private _baselineY = 0;
   private _wasDragInsideDeadzone = false;
   private _robotGroundDeadzone: RobotGroundDeadzone | null = null;
 
@@ -98,8 +119,13 @@ export class SurfaceGroundProbe {
 
   public reset(y: number): void {
     this._floorY = y;
+    this._baselineY = y;
     this._wasDragInsideDeadzone = false;
     this._yFilter.reset(y);
+  }
+
+  public setDragBaseline(y: number): void {
+    this._baselineY = y;
   }
 
   public setRobotGroundDeadzone(deadzone: RobotGroundDeadzone | null): void {
@@ -116,7 +142,11 @@ export class SurfaceGroundProbe {
     };
   }
 
-  public resolveDragPoint(planarPoint: vec3, dt: number): vec3 {
+  public resolveDragPoint(
+    planarPoint: vec3,
+    dt: number,
+    cameraPosition: vec3 | null = null,
+  ): vec3 {
     const insideDeadzone = this._isDragInsideDeadzone(planarPoint);
 
     if (insideDeadzone) {
@@ -133,7 +163,12 @@ export class SurfaceGroundProbe {
       this._wasDragInsideDeadzone = false;
     }
 
-    const targetY = this._yFilter.filteredY();
+    const probedY = this._yFilter.filteredY();
+    let targetY = probedY;
+    if (cameraPosition) {
+      const weight = yProbeWeight(horizontalDistanceCm(cameraPosition, planarPoint));
+      targetY = this._baselineY + weight * (probedY - this._baselineY);
+    }
     const smoothedY = this._yFilter.smoothTo(targetY, dt);
     this._floorY = smoothedY;
     return new vec3(planarPoint.x, smoothedY, planarPoint.z);

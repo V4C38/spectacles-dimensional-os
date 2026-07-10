@@ -25,7 +25,6 @@ from dimos.ar.bridge.status_service import StatusService
 from dimos.ar.bridge.telemetry import TelemetryPublisher
 from dimos.ar.lidar.filters import LidarFilter, LidarFilterConfig, lidar_height_band_m
 from dimos.ar.navigation.navigate import NavigateGoalHandler
-from dimos.ar.navigation.preview import PreviewGoalHandler
 from dimos.ar.network.protocol import (
     JoystickCommandMessage,
     NavGoalMessage,
@@ -33,7 +32,6 @@ from dimos.ar.network.protocol import (
     encode_runtime_snapshot,
 )
 from dimos.ar.network.websocket_server import ARWebSocketServer
-from dimos.ar.preview_planner import PreviewPlanner
 from dimos.ar.registration.session import RegistrationSession
 from dimos.ar.robot_profile.base import (
     ARRobotProfileSpec,
@@ -43,6 +41,7 @@ from dimos.ar.robot_profile.base import (
 from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker, RobotAprilTagTrackerConfig
 from dimos.ar.utils.console import console_divider
 from dimos.ar.utils.network import detect_lan_ip
+from dimos.ar.world_frame.aligner import SimilarityAligner
 from dimos.ar.world_frame.refinement import WorldFrameRefiner
 from dimos.ar.world_frame.registry import WorldRegistry
 from dimos.ar.world_frame.state import WorldFrameState
@@ -97,7 +96,7 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     # Voxel grid size for coarse LiDAR downsampling before the height-band filter.
     # The DimOS default is 0.025 m; 0.05 m is chosen deliberately for AR payload budget.
     lidar_voxel_size_m: float = 0.05
-    pose_max_hz: float = 30.0
+    pose_max_hz: float = 15.0
     stream_stale_timeout_s: float = 10.0
     manual_registration_quality: float = 0.35
     # still-capture + JPEG-encode on device can take 2-4 s; this gate must be
@@ -118,6 +117,48 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     tag_max_mount_residual_m: float = 0.15
     tag_max_up_axis_tilt_deg: float = 20.0
     runtime_correction_enabled: bool = True
+    ALIGN_RECENCY_TAU_S: float = 4.0
+    ALIGN_MAX_DIST_CAM_M: float = 4.0
+    ALIGN_AMBIGUITY_MIN: float = 1.5
+    ALIGN_AMBIGUITY_PENALTY: float = 0.3
+    ALIGN_MAX_PAIR_SKEW_S: float = 0.25
+    ALIGN_DIAG_LATEST_OBS: int = 1
+    ALIGN_WINDOW_MAX_AGE_S: float = 8.0
+    ALIGN_WINDOW_MAX_OBS: int = 24
+    ALIGN_MIN_OBS: int = 3
+    # Pinhole tag-size floor for capture max distance (~1.6 m at Spectacles fx=560,
+    # 70 mm printed tag); CAPTURE_MAX_DISTANCE_MARGIN brings policy to ~2 m.
+    CAPTURE_MIN_TAG_PX: float = 24.0
+    CAPTURE_MAX_DISTANCE_MARGIN: float = 1.25
+    CAPTURE_MAX_SPEED_MPS: float = 0.45
+    CAPTURE_MIN_DISTANCE_M: float = 0.35
+    ALIGN_REG_MIN_OBS: int = 4
+    ALIGN_REG_CONF_MIN: float = 0.7
+    ALIGN_HUBER_K: float = 1.5
+    ALIGN_OUTLIER_K: float = 3.0
+    ALIGN_SCALE_PLAUSIBLE_MIN: float = 1.0
+    ALIGN_SCALE_PLAUSIBLE_MAX: float = 1.6
+    ODOM_SCALE_HARD_MIN: float = 0.5
+    ODOM_SCALE_HARD_MAX: float = 2.0
+    ALIGN_YAW_BASELINE_B0: float = 0.15
+    ALIGN_YAW_BASELINE_B1: float = 0.35
+    ALIGN_SCALE_BASELINE_B0: float = 0.45
+    ALIGN_SCALE_BASELINE_B1: float = 0.90
+    ALIGN_LEARN_LR: float = 0.5
+    ALIGN_LEARN_LR_MAX: float = 0.5
+    ALIGN_CONF_DECAY: float = 0.02
+    ALIGN_SCALE_JUMP_FRAC: float = 0.15
+    ALIGN_SCALE_LOCK_CONF: float = 0.6
+    ALIGN_SCALE_REGIME_N: int = 3
+    ALIGN_SCALE_JUMP_DAMP: float = 0.15
+    ALIGN_SCALE_PRIOR: float = 1.25
+    ALIGN_REG_YAW_CONF: float = 0.3
+    ALIGN_RESID_REF_M: float = 0.20
+    ALIGN_REBASE_RESID_M: float = 0.30
+    ALIGN_REBASE_FRAC: float = 0.6
+    ALIGN_REBASE_DIR_STD_RAD: float = 0.5
+    ALIGN_REBASE_KEEP: int = 2
+    ALIGN_UI_CONFIDENT: float = 0.7
 
 
 class ARBridge(Module):  # type: ignore[misc]
@@ -130,7 +171,6 @@ class ARBridge(Module):  # type: ignore[misc]
     ar_path: In[Path]
     ar_goal_reached: In[Bool]
     ar_navigation_state: In[String]
-    agent_nav_goal: In[PoseStamped]
     cmd_vel: Out[Twist]
     goal_request: Out[PoseStamped]
     goal_point_request: Out[PointStamped]
@@ -147,7 +187,6 @@ class ARBridge(Module):  # type: ignore[misc]
     _registration: RegistrationSession
     _nav: NavigateGoalHandler
     _motion_router: MotionRouter
-    _preview: PreviewGoalHandler
     _telemetry: TelemetryPublisher
     _ws_server: ARWebSocketServer
     _robot_id: str
@@ -157,7 +196,6 @@ class ARBridge(Module):  # type: ignore[misc]
         super().__init__(**kwargs)
         # Adapter-independent shared objects created eagerly.
         self._world_frame = WorldFrameState()
-        self._preview_planner = PreviewPlanner(global_config)
 
     @rpc
     def build(self) -> None:
@@ -170,7 +208,6 @@ class ARBridge(Module):  # type: ignore[misc]
             self._profile.handshake_payload(),
             {
                 "path": self.ar_path.transport is not None,
-                "plan_preview": self.ar_global_costmap.transport is not None,
                 "nav": (
                     self.goal_request.transport is not None
                     or self.goal_point_request.transport is not None
@@ -214,6 +251,7 @@ class ARBridge(Module):  # type: ignore[misc]
 
         tracker_config = RobotAprilTagTrackerConfig(
             max_reprojection_error_px=self.config.tag_max_reprojection_error_px,
+            max_pair_skew_s=self.config.ALIGN_MAX_PAIR_SKEW_S,
             max_distance_m=self.config.tag_max_distance_m,
             min_baseline_m=self.config.tag_min_baseline_m,
             window_max_obs=self.config.tag_window_max_obs,
@@ -238,6 +276,10 @@ class ARBridge(Module):  # type: ignore[misc]
             speed_horizon_s=runtime_profile.runtime_speed_horizon_s,
         )
         registry = WorldRegistry(self._world_frame, self.tf.publish_static, odom_latest=odom.latest)
+        self._world_frame.configure_odom_scale_limits(
+            hard_min=self.config.ODOM_SCALE_HARD_MIN,
+            hard_max=self.config.ODOM_SCALE_HARD_MAX,
+        )
         assert self._loop is not None, "build() called before Module loop is assigned"
         nav_ref: NavigateGoalHandler | None = None
 
@@ -248,14 +290,23 @@ class ARBridge(Module):  # type: ignore[misc]
         world_frame_refiner = WorldFrameRefiner(
             registry=registry,
             telemetry=telemetry,
-            robot_id=robot_id,
-            sender=sender,
             odom=odom,
             tag_tracker=tag_tracker,
             runtime_profile=runtime_profile,
             runtime_correction_enabled=self.config.runtime_correction_enabled,
+            diag_latest_observations=self.config.ALIGN_DIAG_LATEST_OBS,
+        )
+        similarity_aligner = SimilarityAligner(
+            registry=registry,
+            telemetry=telemetry,
+            sender=sender,
+            odom=odom,
+            tag_tracker=tag_tracker,
+            config=self.config,
+            apply_floor_y_lock=world_frame_refiner._apply_floor_y_lock,
             on_correction_committed=_on_world_frame_corrected,
         )
+        world_frame_refiner.attach_aligner(similarity_aligner)
         registry.attach_refiner(world_frame_refiner)
         telemetry._floor_y_drift_check = world_frame_refiner.check_floor_y_drift
 
@@ -283,6 +334,11 @@ class ARBridge(Module):  # type: ignore[misc]
             frame_max_age_s=self.config.frame_max_age_s,
             manual_registration_quality=self.config.manual_registration_quality,
             world_frame_refiner=world_frame_refiner,
+            capture_min_tag_px=self.config.CAPTURE_MIN_TAG_PX,
+            capture_max_distance_margin=self.config.CAPTURE_MAX_DISTANCE_MARGIN,
+            capture_max_speed_mps=self.config.CAPTURE_MAX_SPEED_MPS,
+            capture_min_distance_m=self.config.CAPTURE_MIN_DISTANCE_M,
+            align_min_obs=self.config.ALIGN_MIN_OBS,
             runtime_profile=runtime_profile,
         )
 
@@ -295,14 +351,6 @@ class ARBridge(Module):  # type: ignore[misc]
             robot_connected=lambda: status.snapshot().robot_connected,
         )
         nav_ref = nav
-
-        preview = PreviewGoalHandler(
-            robot_id=robot_id,
-            sender=sender,
-            world_frame=self._world_frame,
-            odom=odom,
-            planner=self._preview_planner,
-        )
 
         safety = BridgeSafetyCoordinator(
             nav=nav,
@@ -337,39 +385,12 @@ class ARBridge(Module):  # type: ignore[misc]
         self._nav = nav
         self._motion_router = motion_router
         self._safety = safety
-        self._preview = preview
         self._telemetry = telemetry
         self._ws_server = ws_server
 
     def _connect_hello(self) -> RobotHandshake:
         """Return the handshake cached at build() — must not RPC from the WS loop."""
         return self._connect_handshake
-
-    @rpc
-    def submit_agent_nav_goal(
-        self,
-        position: tuple[float, float, float],
-        orientation: tuple[float, float, float, float] | None = None,
-    ) -> bool:
-        """Submit a world-frame navigation goal from an agent skill.
-
-        Position and orientation are in the committed world frame. Odom-native
-        producers should publish to the planner directly and forfeit AR visualization.
-        """
-        if not self._world_frame.is_committed:
-            return False
-        self._nav.submit_goal(
-            position=position,
-            orientation=orientation,
-            ts=0.0,
-            source="agent",
-        )
-        return True
-
-    @rpc
-    def cancel_agent_nav_goal(self) -> None:
-        """Cancel the active navigation goal (agent or AR)."""
-        self._nav.on_cancel_nav_goal()
 
     @rpc
     def start(self) -> None:
@@ -384,7 +405,6 @@ class ARBridge(Module):  # type: ignore[misc]
         )
         self._ws_server.start()
         self._status.start()
-        self._preview.start()
         self._nav.start()
         host = global_config.listen_host
         logger.info("ARBridge started", websocket=f"ws://{host}:{self.config.port}")
@@ -410,9 +430,6 @@ class ARBridge(Module):  # type: ignore[misc]
         status = getattr(self, "_status", None)
         if status is not None:
             status.stop()
-        preview = getattr(self, "_preview", None)
-        if preview is not None:
-            preview.stop()
         ws_server = getattr(self, "_ws_server", None)
         if ws_server is not None:
             ws_server.stop()
@@ -441,30 +458,13 @@ class ARBridge(Module):  # type: ignore[misc]
         self._nav.on_path(msg)
 
     async def handle_ar_global_costmap(self, msg: OccupancyGrid) -> None:
-        self._preview.update_costmap(msg)
+        del msg  # costmap no longer consumed by AR bridge
 
     async def handle_ar_goal_reached(self, msg: Bool) -> None:
         self._nav.on_goal_reached(msg)
 
     async def handle_ar_navigation_state(self, msg: String) -> None:
         self._nav.on_navigation_state(msg.data)
-
-    async def handle_agent_nav_goal(self, msg: PoseStamped) -> None:
-        """Agent stream ingress — goals are world-frame by contract."""
-        orientation = None
-        if msg.orientation is not None:
-            orientation = (
-                msg.orientation.x,
-                msg.orientation.y,
-                msg.orientation.z,
-                msg.orientation.w,
-            )
-        self._nav.submit_goal(
-            position=(msg.x, msg.y, msg.z),
-            orientation=orientation,
-            ts=float(msg.ts) if msg.ts is not None else 0.0,
-            source="agent",
-        )
 
     # ------------------------------------------------------------------
     # Status / runtime-sync helpers
@@ -473,7 +473,6 @@ class ARBridge(Module):  # type: ignore[misc]
     def _send_runtime_sync_to(self, websocket: ServerConnection) -> None:
         """Resend authoritative bridge + nav lifecycle state after connect or get_status."""
         path = self._nav.runtime_snapshot_path()
-        goal = self._nav.runtime_snapshot_goal()
         self._sender.send_to(
             websocket,
             encode_runtime_snapshot(
@@ -481,7 +480,6 @@ class ARBridge(Module):  # type: ignore[misc]
                 bridge=self._status.merged_bridge_snapshot(),
                 nav=self._nav.nav_phase_dict(),
                 path=path,
-                goal=goal,
             ),
         )
 
@@ -503,10 +501,7 @@ class ARBridge(Module):  # type: ignore[misc]
     # ------------------------------------------------------------------
 
     def _route_nav_goal_message(self, msg: NavGoalMessage) -> None:
-        if msg.intent == "navigate":
-            self._nav.on_navigate_goal(msg)
-        else:
-            self._preview.on_preview_goal(msg)
+        self._nav.on_navigate_goal(msg)
 
     def _on_joystick_command(self, msg: JoystickCommandMessage) -> None:
         self._motion_router.send_joystick_command(msg.vx, msg.vy, msg.wz)

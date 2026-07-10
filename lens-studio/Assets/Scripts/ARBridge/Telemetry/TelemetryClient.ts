@@ -136,8 +136,12 @@ export class TelemetryClient {
       this._lastWorldFrameCorrectionLogTime = now;
       const yawDeltaText =
         typeof msg.yaw_delta_deg === "number" ? msg.yaw_delta_deg.toFixed(2) : "n/a";
+      const confidenceText =
+        typeof msg.alignment_confidence === "number"
+          ? msg.alignment_confidence.toFixed(2)
+          : "n/a";
       print(
-        `TelemetryClient: world_frame_correction transDeltaM=${msg.trans_delta_m.toFixed(3)} yawDeltaDeg=${yawDeltaText} yawCorrected=${msg.yaw_corrected} solveQuality=${msg.solve_quality.toFixed(3)} solveMethod=${msg.solve_method}`,
+        `TelemetryClient: world_frame_correction transDeltaM=${msg.trans_delta_m.toFixed(3)} yawDeltaDeg=${yawDeltaText} yawCorrected=${msg.yaw_corrected} solveQuality=${msg.solve_quality.toFixed(3)} solveMethod=${msg.solve_method} confidence=${confidenceText} yawObservable=${msg.yaw_observable ?? "n/a"} scaleObservable=${msg.scale_observable ?? "n/a"}`,
       );
     }
     this.onWorldFrameCorrection.emit(msg);

@@ -1,6 +1,6 @@
 // ================================================================
 /**
- * Protocol v10 — message types, parser, outbound builders, and unit
+ * Protocol v13 — message types, parser, outbound builders, and unit
  * conversion helpers. Single source of truth replacing the v3 trio
  * (ProtocolTypes / ProtocolParser / Protocol).
  *
@@ -13,7 +13,7 @@ import {
   createDefaultBridgeSnapshot,
 } from "../../App/AppState";
 
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 15;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -109,8 +109,20 @@ export interface WorldFrameCorrectionMessage {
   yaw_delta_deg?: number;
   yaw_corrected: boolean;
   solve_quality: number;
-  solve_method: "apriltag_full" | "apriltag_translation";
+  solve_method: WorldFrameSolveMethod;
+  alignment_confidence?: number;
+  yaw_observable?: boolean;
+  scale_observable?: boolean;
+  scale_confidence?: number;
+  yaw_confidence?: number;
+  scale_held?: boolean;
+  yaw_held?: boolean;
 }
+
+export type WorldFrameSolveMethod =
+  | "apriltag_full"
+  | "apriltag_translation"
+  | "similarity";
 
 export type RegistrationMode = "april_tag" | "manual_pose";
 
@@ -121,8 +133,6 @@ export type RegistrationPhase =
   | "awaiting_commit"
   | "succeeded"
   | "failed";
-
-export type CaptureHint = "off" | "steady" | "burst";
 
 export interface RegistrationPreviewPose {
   position: [number, number, number];
@@ -135,17 +145,34 @@ export interface RegistrationStatusMessage {
   ts: number;
   mode?: RegistrationMode;
   phase: RegistrationPhase;
-  capture: CaptureHint;
   message: string;
   tag_visible?: boolean;
   preview_pose?: RegistrationPreviewPose;
+  /** AprilTag registration progress 0–100; present during `april_tag` scanning/succeeded. */
+  progress?: number;
+  alignment_confidence?: number;
+  refining?: boolean;
+  scale_confidence?: number;
+  scale_locked?: boolean;
 }
 
-/** camera_frame_ack contains only seq. */
+/** camera_frame_ack carries seq and whether the bridge accepted an observation. */
 export interface CameraFrameAckMessage {
   type: "camera_frame_ack";
   ts: number;
   seq: number;
+  obs_added: boolean;
+  refinement_complete: boolean;
+}
+
+export interface CapturePolicyMessage {
+  type: "capture_policy";
+  ts: number;
+  max_stream_distance_m: number;
+  min_stream_distance_m: number;
+  max_capture_speed_mps: number;
+  static_speed_mps: number;
+  min_observations: number;
 }
 
 export interface BridgeStatusMessage {
@@ -187,14 +214,10 @@ export function parseBridgeWorldFrameFields(
   return { world_frame_approximate };
 }
 
-export type PathKind = "active" | "preview";
-
 export interface PathMessage {
   type: "path";
   ts: number;
-  kind: PathKind;
   waypoints: [number, number, number][];
-  target?: [number, number, number];
 }
 
 export type NavPhase =
@@ -231,27 +254,7 @@ export interface SnapshotNavState {
 }
 
 export interface SnapshotPathState {
-  kind: PathKind;
   waypoints: [number, number, number][];
-  target?: [number, number, number];
-}
-
-export type NavGoalSource = "ar" | "agent";
-
-export interface SnapshotGoalState {
-  source: NavGoalSource;
-  position: [number, number, number];
-  orientation?: [number, number, number, number];
-  active: boolean;
-}
-
-export interface NavGoalUpdateMessage {
-  type: "nav_goal_update";
-  ts: number;
-  source: NavGoalSource;
-  position: [number, number, number];
-  orientation?: [number, number, number, number];
-  active: boolean;
 }
 
 export interface RuntimeSnapshotMessage {
@@ -261,7 +264,6 @@ export interface RuntimeSnapshotMessage {
   bridge: SnapshotBridgeState;
   nav: SnapshotNavState;
   path?: SnapshotPathState;
-  goal?: SnapshotGoalState;
 }
 
 export interface PongMessage {
@@ -279,10 +281,10 @@ export type InboundMessage =
   | WorldFrameCorrectionMessage
   | RegistrationStatusMessage
   | CameraFrameAckMessage
+  | CapturePolicyMessage
   | BridgeStatusMessage
   | PathMessage
   | NavStatusMessage
-  | NavGoalUpdateMessage
   | RuntimeSnapshotMessage
   | PongMessage;
 
@@ -290,8 +292,6 @@ export type RegistrationCommandAction =
   | "start"
   | "stop"
   | "commit";
-
-export type GoalIntent = "navigate" | "preview";
 
 // ── Parse-error taxonomy ───────────────────────────────────────
 
@@ -353,6 +353,14 @@ function requireNumber(obj: Record<string, unknown>, key: string): number {
   return v;
 }
 
+function requireBoolean(obj: Record<string, unknown>, key: string): boolean {
+  const value = obj[key];
+  if (typeof value !== "boolean") {
+    throw new Error(`Missing or invalid boolean field: ${key}`);
+  }
+  return value;
+}
+
 const REGISTRATION_PHASES: RegistrationPhase[] = [
   "idle",
   "scanning",
@@ -362,8 +370,6 @@ const REGISTRATION_PHASES: RegistrationPhase[] = [
   "failed",
 ];
 
-const CAPTURE_HINTS: CaptureHint[] = ["off", "steady", "burst"];
-
 const NAV_PHASES: NavPhase[] = [
   "idle",
   "navigating",
@@ -371,8 +377,6 @@ const NAV_PHASES: NavPhase[] = [
   "succeeded",
   "failed",
 ];
-
-const PATH_KINDS: PathKind[] = ["active", "preview"];
 
 function parseNavStallReason(raw: unknown): NavStallReason | undefined {
   if (raw === "no_path" || raw === "planner_idle") {
@@ -490,74 +494,19 @@ function parseSnapshotNav(raw: unknown): SnapshotNavState {
   return status;
 }
 
-function parseSnapshotGoal(raw: unknown): SnapshotGoalState {
-  const goal = requireObject(raw);
-  const source = requireString(goal, "source");
-  if (source !== "ar" && source !== "agent") {
-    throw new Error("Missing or invalid field: source");
-  }
-  const snapshot: SnapshotGoalState = {
-    source,
-    position: parseVec3(goal.position),
-    active: Boolean(goal.active),
-  };
-  if (goal.orientation !== undefined) {
-    snapshot.orientation = parseQuat(goal.orientation);
-  }
-  return snapshot;
-}
-
-function parseNavGoalUpdateMessage(
-  data: Record<string, unknown>,
-): NavGoalUpdateMessage {
-  const source = requireString(data, "source");
-  if (source !== "ar" && source !== "agent") {
-    throw new Error("Missing or invalid field: source");
-  }
-  const msg: NavGoalUpdateMessage = {
-    type: "nav_goal_update",
-    ts: requireNumber(data, "ts"),
-    source,
-    position: parseVec3(data.position),
-    active: Boolean(data.active),
-  };
-  if (data.orientation !== undefined) {
-    msg.orientation = parseQuat(data.orientation);
-  }
-  return msg;
-}
-
 function parseSnapshotPath(raw: unknown): SnapshotPathState {
   const path = requireObject(raw);
-  const kind = requireString(path, "kind");
-  if (!PATH_KINDS.includes(kind as PathKind)) {
-    throw new Error("Missing or invalid field: kind");
-  }
-  const snapshot: SnapshotPathState = {
-    kind: kind as PathKind,
+  return {
     waypoints: parsePoints(path.waypoints),
   };
-  if (path.target !== undefined) {
-    snapshot.target = parseVec3(path.target);
-  }
-  return snapshot;
 }
 
 function parsePathMessage(data: Record<string, unknown>): PathMessage {
-  const kind = requireString(data, "kind");
-  if (!PATH_KINDS.includes(kind as PathKind)) {
-    throw new Error("Missing or invalid field: kind");
-  }
-  const msg: PathMessage = {
+  return {
     type: "path",
     ts: requireNumber(data, "ts"),
-    kind: kind as PathKind,
     waypoints: parsePoints(data.waypoints),
   };
-  if (data.target !== undefined) {
-    msg.target = parseVec3(data.target);
-  }
-  return msg;
 }
 
 export function parseInboundJson(text: string): Record<string, unknown> {
@@ -664,9 +613,6 @@ function parseInboundObject(
       if (data.path !== undefined) {
         snapshot.path = parseSnapshotPath(data.path);
       }
-      if (data.goal !== undefined) {
-        snapshot.goal = parseSnapshotGoal(data.goal);
-      }
       return snapshot;
     }
 
@@ -674,11 +620,6 @@ function parseInboundObject(
       const phase = requireString(data, "phase");
       if (!REGISTRATION_PHASES.includes(phase as RegistrationPhase)) {
         print(`Protocol: unknown registration_status.phase "${phase}"; skipping`);
-        return null;
-      }
-      const capture = requireString(data, "capture");
-      if (!CAPTURE_HINTS.includes(capture as CaptureHint)) {
-        print(`Protocol: unknown registration_status.capture "${capture}"; skipping`);
         return null;
       }
       const mode = data.mode;
@@ -694,7 +635,6 @@ function parseInboundObject(
         type: "registration_status",
         ts: requireNumber(data, "ts"),
         phase: phase as RegistrationPhase,
-        capture: capture as CaptureHint,
         message: typeof data.message === "string" ? data.message : "",
       };
       if (mode === "april_tag" || mode === "manual_pose") {
@@ -707,6 +647,27 @@ function parseInboundObject(
       if (previewPose) {
         msg.preview_pose = previewPose;
       }
+      if (typeof data.progress === "number" && Number.isFinite(data.progress)) {
+        msg.progress = Math.max(0, Math.min(100, Math.round(data.progress)));
+      }
+      if (
+        typeof data.alignment_confidence === "number" &&
+        Number.isFinite(data.alignment_confidence)
+      ) {
+        msg.alignment_confidence = Math.max(0, Math.min(1, data.alignment_confidence));
+      }
+      if (typeof data.refining === "boolean") {
+        msg.refining = data.refining;
+      }
+      if (
+        typeof data.scale_confidence === "number" &&
+        Number.isFinite(data.scale_confidence)
+      ) {
+        msg.scale_confidence = Math.max(0, Math.min(1, data.scale_confidence));
+      }
+      if (typeof data.scale_locked === "boolean") {
+        msg.scale_locked = data.scale_locked;
+      }
       return msg;
     }
 
@@ -715,6 +676,20 @@ function parseInboundObject(
         type: "camera_frame_ack",
         ts: requireNumber(data, "ts"),
         seq: requireNumber(data, "seq"),
+        obs_added: requireBoolean(data, "obs_added"),
+        refinement_complete: requireBoolean(data, "refinement_complete"),
+      };
+    }
+
+    case "capture_policy": {
+      return {
+        type: "capture_policy",
+        ts: requireNumber(data, "ts"),
+        max_stream_distance_m: requireNumber(data, "max_stream_distance_m"),
+        min_stream_distance_m: requireNumber(data, "min_stream_distance_m"),
+        max_capture_speed_mps: requireNumber(data, "max_capture_speed_mps"),
+        static_speed_mps: requireNumber(data, "static_speed_mps"),
+        min_observations: requireNumber(data, "min_observations"),
       };
     }
 
@@ -759,7 +734,8 @@ function parseInboundObject(
       const solveMethod = data.solve_method;
       if (
         solveMethod !== "apriltag_full" &&
-        solveMethod !== "apriltag_translation"
+        solveMethod !== "apriltag_translation" &&
+        solveMethod !== "similarity"
       ) {
         print(
           `Protocol: unknown world_frame_correction.solve_method "${solveMethod}"; skipping`,
@@ -777,15 +753,41 @@ function parseInboundObject(
       if (typeof data.yaw_delta_deg === "number") {
         msg.yaw_delta_deg = data.yaw_delta_deg;
       }
+      if (
+        typeof data.alignment_confidence === "number" &&
+        Number.isFinite(data.alignment_confidence)
+      ) {
+        msg.alignment_confidence = Math.max(0, Math.min(1, data.alignment_confidence));
+      }
+      if (typeof data.yaw_observable === "boolean") {
+        msg.yaw_observable = data.yaw_observable;
+      }
+      if (typeof data.scale_observable === "boolean") {
+        msg.scale_observable = data.scale_observable;
+      }
+      if (
+        typeof data.scale_confidence === "number" &&
+        Number.isFinite(data.scale_confidence)
+      ) {
+        msg.scale_confidence = Math.max(0, Math.min(1, data.scale_confidence));
+      }
+      if (
+        typeof data.yaw_confidence === "number" &&
+        Number.isFinite(data.yaw_confidence)
+      ) {
+        msg.yaw_confidence = Math.max(0, Math.min(1, data.yaw_confidence));
+      }
+      if (typeof data.scale_held === "boolean") {
+        msg.scale_held = data.scale_held;
+      }
+      if (typeof data.yaw_held === "boolean") {
+        msg.yaw_held = data.yaw_held;
+      }
       return msg;
     }
 
     case "path": {
       return parsePathMessage(data);
-    }
-
-    case "nav_goal_update": {
-      return parseNavGoalUpdateMessage(data);
     }
 
     case "nav_status": {
@@ -912,7 +914,6 @@ export function buildRegistrationPose(
 
 export function buildNavGoal(
   robotId: string,
-  intent: GoalIntent,
   position: vec3,
   rotation?: quat | null,
 ): string {
@@ -920,7 +921,6 @@ export function buildNavGoal(
     type: "nav_goal",
     ts: getTime(),
     robot_id: robotId,
-    intent,
     position: lensCentimetersToProtocolMeters(position),
   };
   if (rotation) {
@@ -934,15 +934,7 @@ export function buildNavigateGoal(
   position: vec3,
   rotation: quat,
 ): string {
-  return buildNavGoal(robotId, "navigate", position, rotation);
-}
-
-export function buildPreviewGoal(
-  robotId: string,
-  position: vec3,
-  rotation?: quat | null,
-): string {
-  return buildNavGoal(robotId, "preview", position, rotation);
+  return buildNavGoal(robotId, position, rotation);
 }
 
 export function buildPing(clientTs: number, robotId: string): string {

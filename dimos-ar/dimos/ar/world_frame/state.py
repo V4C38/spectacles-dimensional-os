@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import math
 import threading
 from typing import TYPE_CHECKING, Literal
 
@@ -20,9 +21,9 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
-ODOM_SCALE_MIN: float = 0.80
-ODOM_SCALE_MAX: float = 1.25
-ODOM_SCALE_INITIAL: float = 1.15
+ODOM_SCALE_HARD_MIN: float = 0.5
+ODOM_SCALE_HARD_MAX: float = 2.0
+ODOM_SCALE_INITIAL: float = 1.25
 _ODOM_SCALE_CHANGE_EPS: float = 1e-6
 
 WorldFrameMethod = Literal["april_tag", "manual_pose"] | None
@@ -45,6 +46,8 @@ class WorldFrameState:
         self._lock = threading.Lock()
         self._T_world_odom = np.eye(4, dtype=np.float64)
         self._odom_scale: float = 1.0
+        self._odom_scale_hard_min = ODOM_SCALE_HARD_MIN
+        self._odom_scale_hard_max = ODOM_SCALE_HARD_MAX
         self._odom_anchor_xy: tuple[float, float] = (0.0, 0.0)
         self._committed = False
         self._method: WorldFrameMethod = None
@@ -85,22 +88,51 @@ class WorldFrameState:
         with self._lock:
             self._odom_anchor_xy = (float(x), float(y))
 
-    def set_odom_scale(self, value: float) -> bool:
-        """Clamp and store planar odom x/y scale; fire ``on_change`` when it changes."""
-        clamped = float(np.clip(value, ODOM_SCALE_MIN, ODOM_SCALE_MAX))
+    def configure_odom_scale_limits(self, *, hard_min: float, hard_max: float) -> None:
+        if not math.isfinite(hard_min) or not math.isfinite(hard_max) or hard_min <= 0.0:
+            raise ValueError("odom scale hard limits must be finite and positive")
+        if hard_max <= hard_min:
+            raise ValueError("odom scale hard_max must be > hard_min")
+        with self._lock:
+            self._odom_scale_hard_min = float(hard_min)
+            self._odom_scale_hard_max = float(hard_max)
+
+    def set_approximate(self, value: bool) -> bool:
         on_change: OnChangeCallback | None
         changed = False
         with self._lock:
-            if abs(clamped - value) > _ODOM_SCALE_CHANGE_EPS:
+            if self._approximate != bool(value):
+                self._approximate = bool(value)
+                changed = True
+                on_change = self._on_change
+            else:
+                on_change = None
+        if on_change is not None:
+            on_change()
+        return changed
+
+    def set_odom_scale(self, value: float) -> bool:
+        """Store planar odom x/y scale within hard sanity rails."""
+        requested = float(value)
+        if not math.isfinite(requested):
+            logger.warning("odom_scale_rejected", requested=value, reason="non_finite")
+            return False
+        on_change: OnChangeCallback | None
+        changed = False
+        with self._lock:
+            hard_min = self._odom_scale_hard_min
+            hard_max = self._odom_scale_hard_max
+            if requested < hard_min or requested > hard_max:
                 logger.warning(
-                    "odom_scale clamped",
-                    requested=round(value, 4),
-                    applied=round(clamped, 4),
-                    min=ODOM_SCALE_MIN,
-                    max=ODOM_SCALE_MAX,
+                    "odom_scale_rejected",
+                    requested=round(requested, 4),
+                    hard_min=hard_min,
+                    hard_max=hard_max,
+                    reason="outside_hard_rails",
                 )
-            if abs(clamped - self._odom_scale) > _ODOM_SCALE_CHANGE_EPS:
-                self._odom_scale = clamped
+                return False
+            if abs(requested - self._odom_scale) > _ODOM_SCALE_CHANGE_EPS:
+                self._odom_scale = requested
                 changed = True
                 on_change = self._on_change
             else:
@@ -168,16 +200,25 @@ class WorldFrameState:
         *,
         method: WorldFrameMethod,
         approximate: bool,
+        odom_scale: float = ODOM_SCALE_INITIAL,
     ) -> None:
         """Apply a precomputed world←odom transform from the alignment pipeline.
 
         Gravity-levels the transform to ensure the AR floor is perfectly planar.
         """
         T_flat = gravity_level_transform(T_world_odom)
+        requested_scale = float(odom_scale)
         on_change: OnChangeCallback | None
         with self._lock:
+            if not math.isfinite(requested_scale):
+                raise ValueError("commit odom_scale must be finite")
+            if (
+                requested_scale < self._odom_scale_hard_min
+                or requested_scale > self._odom_scale_hard_max
+            ):
+                raise ValueError("commit odom_scale outside hard rails")
             self._T_world_odom = T_flat.astype(np.float64)
-            self._odom_scale = ODOM_SCALE_INITIAL
+            self._odom_scale = requested_scale
             self._odom_anchor_xy = (0.0, 0.0)
             self._committed = True
             self._method = method

@@ -11,7 +11,6 @@ import {
   defaultNavigationOutcome,
   AppStateData,
   NavigationOutcome,
-  navigationOutcomeHasNavRuntimeError,
   navigationOutcomeIsNone,
   navigationPlacementToggleEnabled,
   RobotRuntimeState,
@@ -24,7 +23,6 @@ import { RobotMarker } from "../Robot/RobotMarker";
 import { RobotPresenter } from "../Robot/RobotPresenter";
 import {
   NavStatusMessage,
-  NavGoalUpdateMessage,
   PathMessage,
   ProtocolParseError,
   PoseMessage,
@@ -50,28 +48,20 @@ import {
   createInitialNavEngineState,
   deriveAppNavigationState,
   deriveViewState,
-  goalCommitAllowed,
-  manualNavGoalConfig,
-  shouldRequestPreviewOnTargetChange,
   shouldSendStreamGoal,
+  shouldSuppressTerminalNavStatus,
   GOAL_SEND_INTERVAL_S,
+  GOAL_SEND_MIN_DISTANCE_CM,
   touchNavStatus,
-  type GoalCommitKind,
   type NavEngineState,
-  type NavGoalConfig,
   type NavigationEffect,
   type NavigationEvent,
 } from "../../ARBridge/Navigation/NavigationModel";
 
 const GOAL_COMMIT_LOG_INTERVAL_S = 2.0;
-const GOAL_REACHED_RETARGET_CM = 25.0;
-const PREVIEW_INTERVAL_S = 0.25;
-const PREVIEW_STALE_TARGET_DISTANCE_CM = 12.0;
 const GOAL_SEND_BLOCKED_LOG_INTERVAL_S = 2.0;
 
 const WorldQueryModule = require("LensStudio:WorldQueryModule");
-
-export type { NavGoalConfig } from "../../ARBridge/Navigation/NavigationModel";
 
 export type NavigationControllerDeps = {
   eventHost: BaseScriptComponent;
@@ -103,10 +93,7 @@ export class NavigationController {
   private _outcomeAnimating = false;
   private _outcomeLabel: "Cancelled" | "Failed" | null = null;
   private _bridgePath: vec3[] | null = null;
-  private _previewBasePath: vec3[] | null = null;
 
-  private _previewTarget: { position: vec3; rotation: quat } | null = null;
-  private _lastPreviewRequestTime = -PREVIEW_INTERVAL_S;
   private _protocolParseFailureCount = 0;
   private _uiLogger: UILogger | null = null;
   private _lastGoalSendBlockedLogTime = -GOAL_SEND_BLOCKED_LOG_INTERVAL_S;
@@ -126,26 +113,19 @@ export class NavigationController {
   ) {
     this._placement.onDragActivated = () => this._handleDragActivated();
     this._placement.onPresentationSync = () => this._applyViewState();
-    this._placement.onConfirmPressed = (position, rotation) => {
-      const config = this._engine.activeConfig;
-      if (this._engine.goal !== null || config?.mode === "continuous") {
+    this._placement.onMarkerButtonPressed = () => {
+      if (this._engine.goal !== null || this._placement.isPlacementActive()) {
         this.requestCancelGoal();
-      } else {
-        this.confirmTarget(position, rotation);
       }
     };
-    this._placement.onPreviewTargetChanged = (pos, rot, active, force) =>
-      this._handlePreviewTargetChanged(pos, rot, active, force);
+    this._placement.onPreviewTargetChanged = (pos, rot, _active, force) =>
+      this._handleTargetChanged(pos, rot, force);
 
     this._placement.setRobotGroundDeadzone({
       radiusCm: _robotGroundDeadzoneRadiusCm,
       getRobotWorldPosition: () => this._robotMarker?.getWorldPosition() ?? null,
       getRobotFloorWorldY: () => this._getRobotFloorY(),
     } as RobotGroundDeadzone);
-
-    this._appState.subscribe((state) => {
-      this._handleGoalModeChanged(state.navigationGoalMode);
-    });
   }
 
   public static create(deps: NavigationControllerDeps): NavigationController {
@@ -187,8 +167,8 @@ export class NavigationController {
     this._placementDeferralEvent?.reset(0.0);
   }
 
-  public arm(config: NavGoalConfig): void {
-    if (this._engine.activeConfig?.interactive && this._placement.isActive()) {
+  public arm(): void {
+    if (this._engine.armed && this._placement.isActive()) {
       return;
     }
     if (!this._canStartManualNavigation()) {
@@ -198,43 +178,21 @@ export class NavigationController {
     if (!initialPose) {
       return;
     }
-    this._resetPreviewState();
+    this._clearPathState();
     this._pathRenderer.clear();
     const marker = this._createDragMarker();
     this._placement.attach(marker);
     this._placement.start(initialPose.position, initialPose.rotation);
-    this._log(`nav arm mode=${config.mode} interactive=${config.interactive}`);
-    this._dispatch({ kind: "arm", config });
+    this._log("nav arm");
+    this._dispatch({ kind: "arm" });
   }
 
   public disarm(): void {
-    if (!this._engine.activeConfig) {
+    if (!this._engine.armed) {
       return;
     }
     this._log("nav disarm");
     this._dispatch({ kind: "disarm" });
-  }
-
-  public submitGoal(position: vec3, rotation: quat, config: NavGoalConfig): boolean {
-    if (!this._sharedNavigationPreconditions()) {
-      return false;
-    }
-    if (!config.interactive && !this._canSendNavigationGoal() && !config.force) {
-      return false;
-    }
-    this._ensureMarkerForGoal(position, rotation, config);
-    return this._requestGoalCommit(position, rotation, "direct", config);
-  }
-
-  public confirmTarget(position: vec3, rotation: quat): void {
-    if (!this._engine.activeConfig?.interactive) {
-      return;
-    }
-    if (this._engine.goal !== null) {
-      this.requestCancelGoal();
-      return;
-    }
-    this._requestGoalCommit(position, rotation, "confirm", this._engine.activeConfig);
   }
 
   public cancelGoal(): void {
@@ -242,18 +200,14 @@ export class NavigationController {
   }
 
   public get placementEnabled(): boolean {
-    return this._engine.activeConfig?.interactive === true;
+    return this._engine.armed;
   }
 
   public syncManualNavigationForOperatingMode(
     mode: AppStateData["operatingMode"],
     _state: AppStateData,
   ): void {
-    if (mode === "registration") {
-      this.disarm();
-      return;
-    }
-    if (mode === "agent" && this._engine.activeConfig?.source !== "remote") {
+    if (mode === "registration" || mode === "agent") {
       this.disarm();
       return;
     }
@@ -294,14 +248,14 @@ export class NavigationController {
       (navigationPlacementToggleEnabled(state) && canMaintain);
 
     if (wantsManual && canMaintain) {
-      if (this._engine.activeConfig?.interactive) {
+      if (this._engine.armed) {
         this._syncIdlePlacementPose();
         return;
       }
-      this.arm(manualNavGoalConfig(state.navigationGoalMode));
+      this.arm();
       return;
     }
-    if (this._engine.activeConfig?.interactive) {
+    if (this._engine.armed) {
       this.disarm();
     }
   }
@@ -333,19 +287,6 @@ export class NavigationController {
         ? msg.waypoints.map((point) => protocolMetersToLensCentimeters(point))
         : null;
 
-    if (msg.kind === "preview") {
-      if (!this._previewTarget) {
-        return;
-      }
-      if (msg.target && !this._previewTargetMatches(msg.target)) {
-        return;
-      }
-      this._updatePathHeightRange();
-      this._previewBasePath = waypoints;
-      this._applyViewState();
-      return;
-    }
-
     this._updatePathHeightRange();
     this._bridgePath = waypoints;
     if (this._engine.goal !== null) {
@@ -353,23 +294,6 @@ export class NavigationController {
       return;
     }
     this._applyViewState();
-  }
-
-  public resyncPreviewGoal(): void {
-    if (!this._previewTarget || this._engine.goal !== null) {
-      return;
-    }
-    this._maybeRequestPreview(true, this._placement.isPlacementActive());
-  }
-
-  public applyNavGoalUpdate(msg: NavGoalUpdateMessage): void {
-    const pose = this._poseFromWire(msg.position, msg.orientation);
-    this._dispatch({
-      kind: "navGoalUpdate",
-      source: msg.source,
-      pose,
-      active: msg.active,
-    });
   }
 
   public applyNavStatus(msg: NavStatusMessage): void {
@@ -384,10 +308,6 @@ export class NavigationController {
       if (hadTrackedGoal) {
         this.onNavigationSettled.emit("succeeded");
       }
-      const config = this._engine.activeConfig;
-      if (config && config.mode === "single" && config.interactive) {
-        this._setOutcome({ kind: "success" });
-      }
       return;
     }
     if (navLabel === "Goal failed") {
@@ -396,9 +316,7 @@ export class NavigationController {
       }
       if (msg.error_code !== undefined) {
         this._disableNavRuntime(msg.error_code);
-        return;
       }
-      this._setOutcome({ kind: "failed", errorCode: null });
     }
   }
 
@@ -416,7 +334,12 @@ export class NavigationController {
   }
 
   public cancelOutcome(): void {
-    // Outcome flash timer removed; no-op for hello reset compatibility.
+    if (!this._outcomeAnimating) {
+      return;
+    }
+    this._outcomeAnimating = false;
+    this._outcomeLabel = null;
+    this._applyViewState();
   }
 
   public clearForDisconnect(): void {
@@ -464,12 +387,14 @@ export class NavigationController {
   }
 
   public requestCancelGoal(): void {
-    if (!this._cancelGoalAvailable) {
+    if (!this._canCancelLocally()) {
       return;
     }
     this._log("nav goal cancel requested");
     this._dispatch({ kind: "cancelRequested" });
-    this._navClient?.sendCancelGoal();
+    if (this._cancelGoalAvailable && this._canSendNavigationGoal()) {
+      this._navClient?.sendCancelGoal();
+    }
   }
 
   public setCancelGoalAvailability(available: boolean, _reason: string | null = null): void {
@@ -477,12 +402,8 @@ export class NavigationController {
     this._applyViewState();
   }
 
-  public onNavigationGoalModeChanged(): void {
-    this._handleGoalModeChanged(this._appState.snapshot.navigationGoalMode);
-  }
-
-  public canSubmitNavigationGoal(): boolean {
-    return this._sharedNavigationPreconditions();
+  public syncIdleNavigationPlacement(snap: boolean = false): void {
+    this._syncIdlePlacementPose(snap);
   }
 
   private _viewState() {
@@ -504,27 +425,23 @@ export class NavigationController {
       },
       {
         cancelAvailable: this._cancelGoalAvailable,
-        confirmAvailable: this._canConfirmNavigationGoal(),
-        sessionActive: this._engine.activeConfig !== null,
+        sessionActive: this._engine.armed,
       },
     );
   }
 
   private _applyViewState(): void {
-    const config = this._engine.activeConfig;
-    if (!config || this._outcomeAnimating) {
+    if (!this._engine.armed || this._outcomeAnimating) {
       return;
     }
-    if (!this._marker && !config.interactive) {
+    if (!this._marker) {
       return;
     }
 
-    const markerPose = this._marker
-      ? {
-          position: this._marker.worldPosition,
-          rotation: this._marker.getRotation(),
-        }
-      : null;
+    const markerPose = {
+      position: this._marker.worldPosition,
+      rotation: this._marker.getRotation(),
+    };
 
     const view = deriveViewState(
       this._engine,
@@ -538,19 +455,17 @@ export class NavigationController {
       },
       {
         cancelAvailable: this._cancelGoalAvailable,
-        confirmAvailable: this._canConfirmNavigationGoal(),
-        sessionActive: this._engine.activeConfig !== null,
+        sessionActive: this._engine.armed,
       },
     );
     if (!view) {
       return;
     }
 
-    this._marker?.apply(config, view.marker);
+    this._marker.apply(view.marker);
     this._placement.setInteractionPolicy(view.placement);
 
-    const path = view.path;
-    if (!path) {
+    if (!view.path) {
       this._pathRenderer?.clear();
       return;
     }
@@ -558,8 +473,7 @@ export class NavigationController {
     const robotPosition = this._getRobotFloorPosition() ?? null;
     const goalPosition =
       this._placement.getRenderedPosition() ??
-      this._previewTarget?.position ??
-      this._marker?.worldPosition ??
+      this._marker.worldPosition ??
       null;
     if (!robotPosition || !goalPosition) {
       this._pathRenderer?.clear();
@@ -567,17 +481,11 @@ export class NavigationController {
     }
     this._pathRenderer.setHeightRange(robotPosition.y, goalPosition.y);
 
-    let points: vec3[] | null = null;
-    if (path.style === "navigating" && this._bridgePath && this._bridgePath.length >= 2) {
-      points = this._bridgePath;
-    } else if (this._previewBasePath && this._previewBasePath.length >= 2) {
-      points = this._previewBasePath;
-    }
-    if (!points) {
+    if (!this._bridgePath || this._bridgePath.length < 2) {
       this._pathRenderer?.clear();
       return;
     }
-    this._pathRenderer.setLensPath(points, path.style);
+    this._pathRenderer.setLensPath(this._bridgePath);
   }
 
   private _dispatch(event: NavigationEvent): void {
@@ -598,7 +506,7 @@ export class NavigationController {
         break;
       case "sendNavGoal": {
         const pose = effect.pose;
-        if (pose && (this._canSendNavigationGoal() || this._engine.activeConfig?.force)) {
+        if (pose && this._canSendNavigationGoal()) {
           this._navClient?.sendNavGoal(pose.position, pose.rotation);
           this._lastSentGoal = {
             position: new vec3(pose.position.x, pose.position.y, pose.position.z),
@@ -610,44 +518,18 @@ export class NavigationController {
         }
         break;
       }
-      case "respawnMarkerAt": {
-        const config = this._engine.activeConfig;
-        if (
-          config?.mode === "continuous" &&
-          config.interactive &&
-          this._placement.isActivelyDragging()
-        ) {
-          break;
-        }
-        const pose = effect.pose ?? this._getNavigationPlacementStartPose();
-        if (!pose) {
-          break;
-        }
-        if (effect.animated) {
-          this._placement.respawnPlacingAt(() => pose);
-        } else {
-          this._placement.respawnPlacingImmediately(() => pose);
+      case "resumeIdleAnchoring":
+        if (!this._placement.isActivelyDragging()) {
+          this._placement.resetToIdleAnchoring();
         }
         break;
-      }
-      case "ensureMarkerAt": {
-        this._previewTarget = {
-          position: new vec3(effect.pose.position.x, effect.pose.position.y, effect.pose.position.z),
-          rotation: effect.pose.rotation,
-        };
-        this._ensureMarkerForGoal(effect.pose.position, effect.pose.rotation, effect.config);
-        if (this._marker) {
-          this._marker.setPose(effect.pose.position, effect.pose.rotation);
-        }
-        break;
-      }
       case "sendCancelGoal":
         if (this._cancelGoalAvailable && this._canSendNavigationGoal()) {
           this._navClient?.sendCancelGoal();
         }
         break;
       case "clearPath":
-        this._resetPreviewState();
+        this._clearPathState();
         this._lastSentGoal = null;
         break;
       case "resetNavigationOutcome":
@@ -697,16 +579,11 @@ export class NavigationController {
   private _requestGoalCommit(
     position: vec3,
     rotation: quat,
-    commitKind: GoalCommitKind,
-    config: NavGoalConfig,
     force: boolean = false,
   ): boolean {
     const view = this._viewState();
-    if (view && !goalCommitAllowed(view, commitKind)) {
-      return false;
-    }
     if (
-      commitKind === "stream" &&
+      view?.shouldStreamGoal &&
       !shouldSendStreamGoal(
         getTime(),
         this._lastGoalSendTime,
@@ -717,55 +594,36 @@ export class NavigationController {
     ) {
       return false;
     }
-    const sendToBridge =
-      commitKind === "direct"
-        ? this._canSendNavigationGoal() || Boolean(config.force)
-        : this._canSendNavigationGoal();
-    this._previewTarget = {
-      position: new vec3(position.x, position.y, position.z),
-      rotation,
-    };
+    const sendToBridge = this._canSendNavigationGoal();
     this._dispatch({
       kind: "goalCommitRequested",
-      config,
-      commitKind,
       sendToBridge,
       pose: {
         position: new vec3(position.x, position.y, position.z),
         rotation,
       },
     });
-    this._logGoalCommit(commitKind, config.mode, sendToBridge);
+    this._logGoalCommit(sendToBridge);
     return this._engine.goal !== null;
-  }
-
-  private _handleGoalModeChanged(mode: AppStateData["navigationGoalMode"]): void {
-    const config = manualNavGoalConfig(mode);
-    if (
-      this._engine.activeConfig?.mode === config.mode &&
-      this._engine.activeConfig?.interactive === config.interactive
-    ) {
-      return;
-    }
-    if (this._engine.activeConfig?.interactive) {
-      this._dispatch({ kind: "configChanged", config });
-    }
   }
 
   private _handleDragActivated(): void {
     this._applyViewState();
     const pose = this._placement.getCurrentPose();
-    const config = this._engine.activeConfig;
-    if (!pose || !config || config.mode !== "continuous" || this._engine.goal !== null) {
+    if (!pose || this._engine.goal !== null) {
       return;
     }
-    this._requestGoalCommit(pose.position, pose.rotation, "stream", config);
+    this._requestGoalCommit(pose.position, pose.rotation);
   }
 
   private _applyNavStatusInner(msg: NavStatusMessage): string {
     if (msg.phase === "recovering") {
       if (msg.retryable) {
-        this._dispatch({ kind: "navStatusRecovering" });
+        if (this._shouldSuppressTerminalNavStatus()) {
+          this._continuePlacementNavigation();
+        } else {
+          this._dispatch({ kind: "navStatusRecovering" });
+        }
       }
       return "Recovering";
     }
@@ -774,9 +632,16 @@ export class NavigationController {
         return "Idle";
       }
       if (msg.phase === "succeeded") {
-        this._finishContinuousRetargetIfNeeded();
+        if (this._shouldSuppressTerminalNavStatus()) {
+          this._continuePlacementNavigation();
+          return "Goal reached (streaming)";
+        }
         this._dispatch({ kind: "navStatusGoalReached" });
         return "Goal reached";
+      }
+      if (this._shouldSuppressTerminalNavStatus()) {
+        this._continuePlacementNavigation();
+        return "Goal failed (suppressed)";
       }
       this._dispatch({ kind: "navStatusGoalFailed" });
       return "Goal failed";
@@ -790,18 +655,24 @@ export class NavigationController {
     return "Idle";
   }
 
-  private _finishContinuousRetargetIfNeeded(): void {
-    const config = this._engine.activeConfig;
-    if (!config || config.mode !== "continuous") {
-      return;
-    }
-    const markerPose = this._placement.getCurrentPose();
+  private _shouldSuppressTerminalNavStatus(): boolean {
+    const pose = this._placement.getCurrentPose();
     const markerMoved =
-      markerPose &&
-      this._lastSentGoal &&
-      markerPose.position.distance(this._lastSentGoal.position) > GOAL_REACHED_RETARGET_CM;
-    if (markerMoved && markerPose) {
-      this._requestGoalCommit(markerPose.position, markerPose.rotation, "stream", config);
+      pose !== null &&
+      this._lastSentGoal !== null &&
+      pose.position.distance(this._lastSentGoal.position) >= GOAL_SEND_MIN_DISTANCE_CM;
+    return shouldSuppressTerminalNavStatus({
+      placementActive: this._placement.isPlacementActive(),
+      activelyDragging: this._placement.isActivelyDragging(),
+      markerMovedSinceLastGoal: markerMoved,
+    });
+  }
+
+  private _continuePlacementNavigation(): void {
+    this.cancelOutcome();
+    const pose = this._placement.getCurrentPose();
+    if (pose) {
+      this._requestGoalCommit(pose.position, pose.rotation, true);
     }
   }
 
@@ -814,7 +685,6 @@ export class NavigationController {
     if (action === "request_resync") {
       this._engine = bumpNavResyncCooldown(this._engine, getTime());
       this._statusClient?.requestStatus();
-      this.resyncPreviewGoal();
       return;
     }
     if (action === "recover_local") {
@@ -877,74 +747,54 @@ export class NavigationController {
     );
   }
 
-  private _canConfirmNavigationGoal(): boolean {
-    return (
-      isCapabilityAvailable(this._appState.snapshot.robotRuntime, "nav") &&
-      !navigationOutcomeHasNavRuntimeError(this._appState.snapshot.navigationOutcome)
-    );
-  }
-
-  private _handlePreviewTargetChanged(
+  private _handleTargetChanged(
     position: vec3,
     rotation: quat,
-    placementActive: boolean,
     force: boolean,
   ): void {
-    const config = this._engine.activeConfig;
-    if (!config) {
+    if (!this._engine.armed) {
       return;
     }
-    this._previewTarget = {
-      position: new vec3(position.x, position.y, position.z),
-      rotation,
-    };
     const view = this._viewState();
     if (view?.shouldStreamGoal) {
-      this._requestGoalCommit(position, rotation, "stream", config, force);
-    }
-    if (shouldRequestPreviewOnTargetChange(view)) {
-      this._maybeRequestPreview(force, placementActive || !config.interactive);
+      this._requestGoalCommit(position, rotation, force);
     }
     this._applyViewState();
   }
 
-  /** Returns true when a new marker was created. */
-  private _ensureMarkerForGoal(
-    position: vec3,
-    rotation: quat,
-    config: NavGoalConfig,
-  ): boolean {
-    if (this._marker) {
-      if (!config.interactive) {
-        this._marker.setPose(position, rotation);
-        this._marker.setDragEnabled(false);
-        this._bindDisplayOnlyMarkerEvents(this._marker);
-      }
-      return false;
+  private _createDragMarker(): NavigationTargetMarker {
+    this._destroyMarker();
+    const root = this._navigationMarkerPrefab.instantiate(
+      this._script.getSceneObject(),
+    );
+    const marker = root.getComponent(
+      NavigationTargetMarker.getTypeName(),
+    ) as NavigationTargetMarker | null;
+    if (!marker) {
+      root.destroy();
+      throw new Error(
+        "NavigationController: prefab is missing NavigationTargetMarker component",
+      );
     }
-    const marker = this._spawnMarker();
-    marker.setPose(position, rotation);
-    marker.setDragEnabled(config.interactive);
-    if (!config.interactive) {
-      this._bindDisplayOnlyMarkerEvents(marker);
-    }
-    if (config.interactive && this._engine.activeConfig?.interactive) {
-      this._placement.attach(marker);
-    }
-    this._previewTarget = {
-      position: new vec3(position.x, position.y, position.z),
-      rotation,
-    };
-    this._maybeRequestPreview(true, !config.interactive);
-    return true;
-  }
-
-  public syncIdleContinuousNavigationPlacement(snap: boolean = false): void {
-    this._syncIdlePlacementPose(snap);
+    marker.ensureReady();
+    marker.setDragEnabled(true);
+    marker.bindEvents({
+      onOutcomeResetComplete: () => {
+        this._handleOutcomeResetComplete();
+      },
+      onConfirmTriggerUp: () => {
+        const view = this._viewState();
+        if (view !== null && (this._engine.goal !== null || this._placement.isPlacementActive())) {
+          this.requestCancelGoal();
+        }
+      },
+    });
+    this._marker = marker;
+    return marker;
   }
 
   private _syncIdlePlacementPose(snap: boolean = false): void {
-    if (!this._engine.activeConfig?.interactive) {
+    if (!this._engine.armed) {
       return;
     }
     if (this._placement.isActivelyDragging()) {
@@ -954,7 +804,7 @@ export class NavigationController {
     if (view?.placement.followRobot) {
       this._placement.setInteractionPolicy(view.placement);
     }
-    if (!this._placement.isIdleContinuousNavigation()) {
+    if (!this._placement.isIdleNavigation()) {
       return;
     }
     const pose = this._getNavigationPlacementStartPose();
@@ -980,19 +830,6 @@ export class NavigationController {
     const message = "Cannot send goal — robot not connected";
     this._uiLogger.logConsole(message, COLOR_ERROR);
     this._uiLogger.show(message, COLOR_ERROR, 2.0);
-  }
-
-  private _poseFromWire(
-    positionMeters: [number, number, number],
-    orientation?: [number, number, number, number],
-  ): { position: vec3; rotation: quat } {
-    const rotation = orientation
-      ? new quat(orientation[3], orientation[0], orientation[1], orientation[2])
-      : quat.quatIdentity();
-    return {
-      position: protocolMetersToLensCentimeters(positionMeters),
-      rotation,
-    };
   }
 
   private _getNavigationPlacementStartPose(): { position: vec3; rotation: quat } | null {
@@ -1041,66 +878,20 @@ export class NavigationController {
     return new vec3(position.x, floorY, position.z);
   }
 
-  private _resetPreviewState(): void {
-    this._previewTarget = null;
-    this._bridgePath = null;
-    this._previewBasePath = null;
-    this._pathRenderer?.clear();
-    this._lastPreviewRequestTime = -PREVIEW_INTERVAL_S;
-  }
-
-  private _maybeRequestPreview(force: boolean, placementActive: boolean): void {
-    if (!this._previewTarget) {
-      return;
-    }
-    const now = getTime();
-    if (!force && now - this._lastPreviewRequestTime < PREVIEW_INTERVAL_S) {
-      return;
-    }
-    this._lastPreviewRequestTime = now;
-    if (this._canRequestPreviewPath(placementActive)) {
-      const sent =
-        this._navClient?.sendPreviewGoal(
-          this._previewTarget.position,
-          this._previewTarget.rotation,
-        ) ?? false;
-      if (sent) {
-        return;
-      }
-    }
-    this._previewBasePath = null;
-  }
-
-  private _canRequestPreviewPath(placementActive: boolean): boolean {
-    const appState = this._appState.snapshot;
-    return (
-      (placementActive || !this._engine.activeConfig?.interactive) &&
-      bridgeNavigationReady(appState.bridgeSnapshot) &&
-      isCapabilityAvailable(appState.robotRuntime, "nav") &&
-      isCapabilityAvailable(appState.robotRuntime, "plan_preview")
-    );
-  }
-
-  private _previewTargetMatches(targetMeters: [number, number, number]): boolean {
-    if (!this._previewTarget) {
+  private _canCancelLocally(): boolean {
+    if (!this._engine.armed) {
       return false;
     }
-    return (
-      this._previewTarget.position.distance(
-        protocolMetersToLensCentimeters(targetMeters),
-      ) <= PREVIEW_STALE_TARGET_DISTANCE_CM
-    );
+    return this._engine.goal !== null || this._placement.isPlacementActive();
   }
 
-  private _createDragMarker(): NavigationTargetMarker {
-    const marker = this._spawnMarker();
-    marker.setDragEnabled(true);
-    return marker;
+  private _clearPathState(): void {
+    this._bridgePath = null;
+    this._pathRenderer?.clear();
   }
 
   private _beginOutcomeAnimation(label: "Cancelled" | "Failed"): void {
-    const config = this._engine.activeConfig;
-    if (!config) {
+    if (!this._engine.armed) {
       return;
     }
     this._outcomeAnimating = true;
@@ -1123,14 +914,23 @@ export class NavigationController {
       },
       {
         cancelAvailable: this._cancelGoalAvailable,
-        confirmAvailable: false,
         sessionActive: true,
       },
     );
     if (view) {
-      this._marker?.apply(config, view.marker);
+      this._marker?.apply(view.marker);
     }
     this._placement.setInteractionPolicy({ dragEnabled: false, followRobot: false });
+  }
+
+  private _handleOutcomeResetComplete(): void {
+    this._outcomeAnimating = false;
+    this._outcomeLabel = null;
+    this._onOutcomeAnimationFinished();
+  }
+
+  private _onOutcomeAnimationFinished(): void {
+    this._dispatch({ kind: "outcomeAnimationFinished" });
   }
 
   private _updatePathHeightRange(): void {
@@ -1141,50 +941,6 @@ export class NavigationController {
     }
   }
 
-  private _bindDisplayOnlyMarkerEvents(marker: NavigationTargetMarker): void {
-    marker.bindEvents({
-      onConfirmTriggerUp: () => {
-        const view = this._viewState();
-        if (view !== null && (this._engine.goal !== null || this._placement.isPlacementActive())) {
-          this.requestCancelGoal();
-        }
-      },
-      onOutcomeResetComplete: () => {
-        this._handleOutcomeResetComplete();
-      },
-    });
-  }
-
-  private _handleOutcomeResetComplete(): void {
-    this._outcomeAnimating = false;
-    this._outcomeLabel = null;
-    this._onOutcomeAnimationFinished();
-  }
-
-  private _spawnMarker(): NavigationTargetMarker {
-    this._destroyMarker();
-    const root = this._navigationMarkerPrefab.instantiate(
-      this._script.getSceneObject(),
-    );
-    const marker = root.getComponent(
-      NavigationTargetMarker.getTypeName(),
-    ) as NavigationTargetMarker | null;
-    if (!marker) {
-      root.destroy();
-      throw new Error(
-        "NavigationController: prefab is missing NavigationTargetMarker component",
-      );
-    }
-    marker.ensureReady();
-    marker.bindEvents({
-      onOutcomeResetComplete: () => {
-        this._handleOutcomeResetComplete();
-      },
-    });
-    this._marker = marker;
-    return marker;
-  }
-
   private _destroyMarker(): void {
     if (!this._marker) {
       return;
@@ -1193,30 +949,16 @@ export class NavigationController {
     this._marker = null;
   }
 
-  private _onOutcomeAnimationFinished(): void {
-    this._dispatch({ kind: "outcomeAnimationFinished" });
-    if (this._engine.activeConfig?.interactive && this._placement.isActive()) {
-      this._placement.respawnPlacingAt(() => this._getNavigationPlacementStartPose());
-    }
-  }
-
-  private _logGoalCommit(
-    commitKind: GoalCommitKind,
-    mode: NavGoalConfig["mode"],
-    sendToBridge: boolean,
-  ): void {
+  private _logGoalCommit(sendToBridge: boolean): void {
     const now = getTime();
     if (
-      commitKind === "stream" &&
       this._lastGoalCommitLogTime >= 0 &&
       now - this._lastGoalCommitLogTime < GOAL_COMMIT_LOG_INTERVAL_S
     ) {
       return;
     }
-    if (commitKind === "stream") {
-      this._lastGoalCommitLogTime = now;
-    }
-    this._log(`nav goal commit kind=${commitKind} mode=${mode} sent=${sendToBridge}`);
+    this._lastGoalCommitLogTime = now;
+    this._log(`nav goal commit sent=${sendToBridge}`);
   }
 
   private _log(message: string): void {

@@ -9,7 +9,67 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v10 (current) — AprilTag-only registration
+### v15 (current) — Observation-driven capture and anchored stop refinement
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 15.**
+- **`camera_frame_ack`:** adds required **`obs_added`** and **`refinement_complete`**
+  (`bool`) fields. The latter is true only when the bridge committed the single
+  refinement for the current motion-to-stop episode.
+- **`capture_policy`** (new, bridge → Lens): sent after the first **`camera_info`**;
+  carries **`max_stream_distance_m`**, **`min_stream_distance_m`**,
+  **`max_capture_speed_mps`**, **`static_speed_mps`**, and **`min_observations`**.
+
+### v14 — Persistent similarity alignment telemetry
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 14.**
+- **`world_frame_correction`:** adds optional **`scale_confidence`**, **`yaw_confidence`**,
+  **`scale_held`**, and **`yaw_held`**. `scale_held` / `yaw_held` are `true` when the
+  bridge held that DOF this window because observability was insufficient.
+- **`registration_status`:** adds optional **`scale_confidence`** and **`scale_locked`**
+  (`true` when scale confidence meets the bridge lock threshold).
+
+### v13 — Camera stream lifecycle
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 13.**
+- **`registration_status`:** removed **`capture`** field. The Lens client owns
+  camera stream start/stop and geometric gating locally; the bridge no longer
+  emits capture hints.
+
+### v12 — Similarity aligner registration
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 12.**
+- **`world_frame_correction.solve_method`:** may now be **`"similarity"`** in
+  addition to legacy **`"apriltag_full"`** and **`"apriltag_translation"`**.
+- **`world_frame_correction`:** adds **`alignment_confidence`**,
+  **`yaw_observable`**, and **`scale_observable`**.
+- **`registration_status`:** adds optional **`alignment_confidence`** and
+  **`refining`**. During scanning, `alignment_confidence` reflects registration
+  estimate quality (Spectacles/camera motion around a static robot). After
+  commit, `refining` indicates post-commit runtime polish on the wire; clients
+  may ignore it for wizard UX.
+
+### v11 — Navigation simplification
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 11.**
+- **`nav_goal`:** removed **`intent`**; every `nav_goal` starts navigation. Preview
+  planning is removed from the wire protocol.
+- **`path`:** removed **`kind`** and **`target`**; paths are active navigation routes
+  only.
+- **`hello.capabilities`:** removed **`plan_preview`**.
+- Removed outbound **`nav_goal_update`** and optional **`runtime_snapshot.goal`**
+  (v9 goal provenance).
+
+### v10 — AprilTag-only registration
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -22,8 +82,7 @@ Keep this document, `dimos/ar/network/protocol.py`, and
   (`awaiting_motion`, `moving`, `sampling`). AprilTag registration auto-commits
   when tag observations are stable; phases are `idle`, `scanning`, `editing`,
   `awaiting_commit`, `succeeded`, `failed`.
-- **`registration_status.capture`:** removed **`hold`** hint (use `steady` or
-  `burst`).
+- **`registration_status.capture`:** removed **`hold`** hint (v10; field removed entirely in v13).
 - **`world_frame_method`:** committed method literal is now **`april_tag`**
   (was `april_odom_baseline`).
 
@@ -149,7 +208,7 @@ capability map, then sends a `runtime_snapshot` (see below).
 ```json
 {
   "type": "hello",
-  "protocol_version": 6,
+  "protocol_version": 12,
   "robot": {
     "robot_id": "unitree_go2",
     "display_name": "Unitree Go2",
@@ -170,7 +229,6 @@ capability map, then sends a `runtime_snapshot` (see below).
     "registration_manual_pose":           { "available": true,  "reason": null },
     "nav":                                { "available": true,  "reason": null },
     "path":                               { "available": true,  "reason": null },
-    "plan_preview":                       { "available": true,  "reason": null },
     "cancel_nav_goal":                        { "available": true,  "reason": null },
     "emergency_stop":                     { "available": false, "reason": "No safe stop interface is available in this runtime." }
   }
@@ -212,9 +270,8 @@ Example (Unitree Go2 / G1):
 
 Authoritative bridge + navigation state sent once after `hello` on connect and
 again when the client sends `get_status`. Bundles the same bridge fields as live
-`bridge_status`, the current navigation phase, and an optional **active** path
-when navigation is in progress. Preview paths are **not** cached — clients
-that reconnect mid-preview must re-issue `nav_goal` with `intent: "preview"`.
+`bridge_status`, the current navigation phase, and an optional cached path when
+navigation is in progress.
 
 ```json
 {
@@ -232,7 +289,6 @@ that reconnect mid-preview must re-issue `nav_goal` with `intent: "preview"`.
     "phase": "navigating"
   },
   "path": {
-    "kind": "active",
     "waypoints": [[1.0, 2.0, 3.0]]
   }
 }
@@ -246,36 +302,8 @@ Fields:
   `"failed"`
 - `nav.error_code` (optional): numeric code when navigation is unavailable
   (e.g. `505` = goal stalled)
-- `path` (optional): present only when an active navigating path is cached;
-  always `kind: "active"`. Omitted when idle or when only a preview exists.
-- `goal` (optional, v9): present when a navigation goal session is active;
-  mirrors the body of `nav_goal_update` with `active: true`. Omitted when idle
-  or after terminal outcomes.
-
-### `nav_goal_update` (v9)
-
-Broadcast when a navigation goal session is created, updated, or torn down.
-Deduped server-side (≈0.15 m and 0.25 s). Clients use this to visualize goals
-from any source (AR headset or agent).
-
-```json
-{
-  "type": "nav_goal_update",
-  "ts": 1730000000.123,
-  "source": "ar",
-  "position": [1.0, 0.0, 2.0],
-  "orientation": [0.0, 0.0, 0.0, 1.0],
-  "active": true
-}
-```
-
-Fields:
-
-- `source`: `"ar"` (headset) or `"agent"` (DimOS agent module / RPC)
-- `position`: world-frame goal position `[x, y, z]` in metres
-- `orientation` (optional): world-frame quaternion `[x, y, z, w]`
-- `active`: `true` on create/update; `false` on terminal paths (reached, failed,
-  cancel, e-stop, stall, preempt, disconnect-reset)
+- `path` (optional): present only when a navigating path is cached; omitted when
+  idle
 
 ### `bridge_status`
 
@@ -314,9 +342,13 @@ Registration progress during a setup session:
   "ts": 1730000000.123,
   "mode": "april_tag",
   "phase": "scanning",
-  "capture": "steady",
   "message": "Look at the AprilTag on your robot",
   "tag_visible": true,
+  "progress": 40,
+  "alignment_confidence": 0.42,
+  "refining": false,
+  "scale_confidence": 0.0,
+  "scale_locked": false,
   "preview_pose": {
     "position": [1.2, 0.0, -2.0],
     "orientation": [0.0, 0.0, 0.383, 0.924]
@@ -330,19 +362,35 @@ Fields:
   `registration_command.mode` when a session is active
 - `phase`: one of `"idle"`, `"scanning"`, `"editing"`, `"awaiting_commit"`,
   `"succeeded"`, `"failed"`
-- `capture`: camera capture hint for the client — `"off"`, `"steady"`, or
-  `"burst"`
 - `message`: human-readable status string for display in the client HUD
 - `tag_visible` (optional): present for AprilTag sessions; `true` when a
   configured robot-mounted tag was detected in the most recent processed frame
 - `preview_pose` (optional): estimated robot pose in world frame (`position` xyz
   metres, `orientation` quaternion xyzw); omitted until a solve is available
+- `progress` (optional): AprilTag registration progress **0–100**; present while
+  `mode` is `"april_tag"` during `scanning` and `succeeded`. Reflects
+  registration readiness (observation count blended with
+  `alignment_confidence`), not raw frame count alone. Clients should display
+  this value directly rather than inferring progress from `message`.
+- `alignment_confidence` (optional): bridge-computed confidence **0–1** for the
+  current registration or runtime alignment estimate
+- `refining` (optional): after AprilTag commit, `true` while the bridge keeps
+  refining alignment from continued tag observations at runtime (wire field;
+  clients may ignore for wizard UX)
+- `scale_confidence` (optional): bridge-computed confidence **0–1** for the
+  persistent odom scale estimate
+- `scale_locked` (optional): `true` when scale confidence meets the bridge lock
+  threshold (scale has converged)
 
-During AprilTag registration (`mode: "april_tag"`), the bridge uses
-`capture: "steady"` while collecting tag observations and auto-commits when
-observations are stable (minimum count, position spread, and yaw spread within
-configured thresholds). The client may use `capture: "burst"` when the bridge
-requests it via `registration_status.capture`.
+During AprilTag registration (`mode: "april_tag"`), the robot stays still. The
+Spectacles user moves around the robot while keeping the tag in view; camera
+motion provides yaw observability. The bridge auto-commits when the
+registration estimate meets the confidence threshold (or yaw is observable).
+If confidence never rises within the registration window, `phase` becomes
+`"failed"`. After commit, the bridge may continue broadcasting `refining: true`
+while runtime similarity refinement continues from tag observations during
+navigation. The client auto-finishes the wizard on `phase: "succeeded"`; no
+separate commit message is required.
 
 ### `camera_frame_ack`
 
@@ -356,9 +404,41 @@ single-flight capture state:
 {
   "type": "camera_frame_ack",
   "ts": 1730000000.123,
-  "seq": 42
+  "seq": 42,
+  "obs_added": true,
+  "refinement_complete": false
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `obs_added` | `boolean` | `true` when the bridge accepted at least one tag observation from this frame |
+| `refinement_complete` | `boolean` | `true` when the bridge committed the current stop-refinement episode |
+
+### `capture_policy`
+
+Bridge → Lens. Sent once after the first **`camera_info`** for the session. The Lens
+uses these thresholds for geometric and speed gating; it does not derive them locally.
+
+```json
+{
+  "type": "capture_policy",
+  "ts": 1730000000.123,
+  "max_stream_distance_m": 2.5000,
+  "min_stream_distance_m": 0.3500,
+  "max_capture_speed_mps": 0.4500,
+  "static_speed_mps": 0.0500,
+  "min_observations": 3
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `max_stream_distance_m` | `number` | Maximum camera–robot distance for capture: pinhole estimate from intrinsics, 70 mm printed tag size, and minimum tag pixel floor, then scaled by bridge headroom (default 25%). Same limit applies to bridge frame admission after `camera_info`. |
+| `min_stream_distance_m` | `number` | Minimum camera–robot distance for capture |
+| `max_capture_speed_mps` | `number` | Do not capture while robot speed exceeds this |
+| `static_speed_mps` | `number` | Speed threshold shared with the bridge for static vs moving (Lens arms stop-refinement on the stop edge) |
+| `min_observations` | `integer` | Bridge `ALIGN_MIN_OBS`; minimum accepted static endpoint observations before a stop solve |
 
 ### Numeric precision (outbound)
 
@@ -370,7 +450,8 @@ payload size on Wi-Fi:
 | `pose.position`, `pose.orientation` | 4 |
 | `world_frame_correction.trans_delta_m`, `world_frame_correction.solve_quality` | 4 |
 | `world_frame_correction.yaw_delta_deg` | 3 |
-| `path` waypoints and `target` | 3 |
+| `capture_policy.max_stream_distance_m`, `capture_policy.min_stream_distance_m`, `capture_policy.max_capture_speed_mps` | 4 |
+| `path` waypoints | 3 |
 | `ts` on high-rate streams (`pose`, `path`) | 3 |
 
 ### `lidar` (binary)
@@ -415,7 +496,7 @@ Robot pose in AR world frame:
 ```
 
 - `speed_mps` (optional): smoothed robot linear speed in m/s from bridge odom,
-  used by the Lens for runtime static capture burst when the robot stops.
+  used by the Lens for runtime camera stream requests when the robot stops.
 - `velocity_mps` (optional): world-frame linear velocity in m/s (same axes as
   `position`). Used by the Lens for client-side pose prediction.
 - `yaw_rate_rad_s` (optional): world-frame yaw rate in rad/s about the world-up
@@ -443,9 +524,16 @@ fire only when the robot position has meaningfully changed:
   "ts": 1730000000.123,
   "trans_delta_m": 0.1824,
   "yaw_delta_deg": 6.137,
-  "yaw_corrected": false,
+  "yaw_corrected": true,
   "solve_quality": 0.9521,
-  "solve_method": "apriltag_translation"
+  "solve_method": "similarity",
+  "alignment_confidence": 0.81,
+  "yaw_observable": true,
+  "scale_observable": true,
+  "scale_confidence": 0.72,
+  "yaw_confidence": 0.81,
+  "scale_held": false,
+  "yaw_held": false
 }
 ```
 
@@ -453,53 +541,48 @@ Fields:
 
 - `trans_delta_m`: translation magnitude before the correction commit, in metres
 - `yaw_delta_deg` (optional): yaw magnitude before the correction commit, in degrees
-- `yaw_corrected`: `true` when the correction came from a full
-  `apriltag_full` solve that can update yaw; `false` for
-  `apriltag_translation` fallback solves
+- `yaw_corrected`: `true` when the correction can safely update yaw; for the
+  similarity aligner this mirrors `yaw_observable`
 - `solve_quality`: quality score reported by the tracker for the committed solve
-- `solve_method`: `"apriltag_full"` or `"apriltag_translation"`
+- `solve_method`: `"similarity"`, `"apriltag_full"`, or `"apriltag_translation"`
+- `alignment_confidence` (optional): bridge-computed confidence **0–1** for the
+  active similarity fit
+- `yaw_observable` (optional): `true` when the current observation geometry
+  supports yaw correction
+- `scale_observable` (optional): `true` when the current observation geometry
+  supports scale correction
+- `scale_confidence` (optional): bridge-computed confidence **0–1** for the
+  persistent scale estimate
+- `yaw_confidence` (optional): bridge-computed confidence **0–1** for the
+  persistent yaw estimate
+- `scale_held` (optional): `true` when scale was held this window (insufficient
+  translational baseline)
+- `yaw_held` (optional): `true` when yaw was held this window (insufficient
+  yaw observability baseline)
 
 Bridge-side refinement (not additional wire fields):
 
 - On commit, the bridge locks robot base floor height (world Y) for flat-ground
-  profiles and applies tag-driven corrections by speed regime (cruise full/translation
-  solves, stop-yaw on static transition after motion, static translation re-anchor).
+  profiles and applies a single similarity aligner over tag-observation windows.
 - A floor-Y shim may correct sustained vertical drift without emitting this message.
-- See `dimos/ar/world_frame/refinement.py` for thresholds and gating.
+- See `dimos/ar/world_frame/aligner.py` and `dimos/ar/world_frame/refinement.py`
+  for thresholds and gating.
 
 ### `path`
 
-Planner path in AR world frame. The `kind` field distinguishes the active
-navigation route from an on-demand preview:
+Active planner path in AR world frame:
 
 ```json
 {
   "type": "path",
   "ts": 1730000000.123,
-  "kind": "active",
   "waypoints": [[x, y, z]]
-}
-```
-
-Preview path (from `goal` with `intent: "preview"`):
-
-```json
-{
-  "type": "path",
-  "ts": 1730000000.123,
-  "kind": "preview",
-  "waypoints": [[x, y, z]],
-  "target": [x, y, z]
 }
 ```
 
 Fields:
 
-- `kind`: `"active"` for the navigating route, `"preview"` for an unconfirmed
-  target
 - `waypoints`: route in AR world frame; may be empty when no path is available
-- `target` (preview only): echoed world-frame target so the client can ignore
-  stale responses
 
 ### `nav_status`
 
@@ -651,8 +734,9 @@ Fields:
   matching capability (`registration_april_tag` or `registration_manual_pose`)
   to be available in `hello`.
 
-AprilTag registration auto-commits when tag observations are stable; the client
-does not send a separate commit for that flow.
+AprilTag registration auto-commits when the registration estimate is confident
+enough (or yaw is observable); the client does not send a separate commit for
+that flow. Keep the robot still and move Spectacles around it for observability.
 
 ### `registration_pose`
 
@@ -733,29 +817,13 @@ Header fields:
 
 ### `nav_goal`
 
-World-frame navigation or preview request:
-
-Navigate (replaces v5 `nav_goal`):
+World-frame navigation goal:
 
 ```json
 {
   "type": "nav_goal",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
-  "intent": "navigate",
-  "position": [x, y, z],
-  "orientation": [qx, qy, qz, qw]
-}
-```
-
-Preview path only (replaces v5 `plan_path`):
-
-```json
-{
-  "type": "nav_goal",
-  "ts": 1730000000.123,
-  "robot_id": "unitree_go2",
-  "intent": "preview",
   "position": [x, y, z],
   "orientation": [qx, qy, qz, qw]
 }
@@ -763,12 +831,9 @@ Preview path only (replaces v5 `plan_path`):
 
 Fields:
 
-- `intent` (**required**): `"navigate"` to start navigation, or `"preview"` to
-  request a side-effect-free preview path (`path` with `kind: "preview"`)
-- `orientation` (optional): if omitted, the bridge may route through a
-  point-based navigation path
-
-Preview planning must never start navigation or change robot state.
+- `position` (**required**): world-frame goal position `[x, y, z]` in metres
+- `orientation` (optional): world-frame quaternion `[x, y, z, w]`; if omitted,
+  the bridge may route through a point-based navigation path
 
 ### `cancel_nav_goal`
 

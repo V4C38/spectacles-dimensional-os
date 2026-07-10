@@ -73,8 +73,6 @@ def test_commit_syncs_refiner_baseline() -> None:
     refiner = WorldFrameRefiner(
         registry=registry,
         telemetry=MagicMock(),
-        robot_id="test",
-        sender=MagicMock(),
         odom=MagicMock(),
         tag_tracker=MagicMock(),
         runtime_profile=MagicMock(),
@@ -96,14 +94,28 @@ def test_commit_syncs_refiner_baseline() -> None:
     assert np.allclose(refiner.refinement_baseline, leveled, atol=1e-6)
 
 
+def test_commit_applies_candidate_odom_scale_immediately() -> None:
+    state = WorldFrameState()
+    registry = WorldRegistry(state, lambda _tf: None)
+    registry.commit(
+        RegistrationCandidate(
+            T_world_odom=np.eye(4, dtype=np.float64),
+            quality=0.9,
+            mode=RegistrationMode.APRIL_TAG,
+            approximate=False,
+            odom_scale=1.23,
+        )
+    )
+
+    assert state.odom_scale == pytest.approx(1.23)
+
+
 def test_clear_resets_state_and_refiner_baseline() -> None:
     state = WorldFrameState()
     registry = WorldRegistry(state, lambda _tf: None)
     refiner = WorldFrameRefiner(
         registry=registry,
         telemetry=MagicMock(),
-        robot_id="test",
-        sender=MagicMock(),
         odom=MagicMock(),
         tag_tracker=MagicMock(),
         runtime_profile=MagicMock(),
@@ -136,8 +148,6 @@ def test_apply_runtime_transform_updates_state_and_baseline() -> None:
     refiner = WorldFrameRefiner(
         registry=registry,
         telemetry=MagicMock(),
-        robot_id="test",
-        sender=MagicMock(),
         odom=MagicMock(),
         tag_tracker=MagicMock(),
         runtime_profile=MagicMock(),

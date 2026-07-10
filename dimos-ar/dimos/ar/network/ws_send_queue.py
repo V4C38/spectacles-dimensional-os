@@ -23,7 +23,6 @@ COALESCE_MESSAGE_TYPES = frozenset(
         "nav_status",
         "bridge_status",
         "registration_status",
-        "camera_frame_ack",
         "runtime_snapshot",
     }
 )
@@ -118,10 +117,10 @@ class ClientSendQueue:
                 try:
                     _seq, text = self._queue.get_nowait()
                 except asyncio.QueueEmpty:
-                    await self._flush_coalesced_batch()
+                    await self._flush_coalesced_all()
                     continue
                 await self._send(text)
-                await self._flush_one_coalesced()
+                await self._flush_coalesced_all()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -133,6 +132,46 @@ class ClientSendQueue:
         msg_type = next(iter(self._coalesce_latest))
         text = self._coalesce_latest.pop(msg_type)
         await self._send(text)
+
+    async def _flush_coalesced_all(self) -> None:
+        if not self._coalesce_latest or self._closed:
+            return
+        pending = list(self._coalesce_latest.values())
+        self._coalesce_latest.clear()
+        batch = "".join(text + "\n" for text in pending)
+        import time
+
+        try:
+            await self._websocket.send(batch)
+            self._sent_count += len(pending)
+            if _TRACE:
+                for text in pending:
+                    msg_type = peek_message_type(text)
+                    if msg_type == "registration_status":
+                        logger.debug(
+                            "AR WebSocket outbound registration_status sent",
+                            bytes=len(text),
+                        )
+            now = time.monotonic()
+            if now - self._last_backlog_log_mono >= OUTBOUND_BACKLOG_LOG_INTERVAL_S:
+                fifo_depth = self._queue.qsize()
+                coalesce_depth = len(self._coalesce_latest)
+                if fifo_depth > 0 or coalesce_depth > 0 or self._dropped_fifo_count > 0:
+                    self._last_backlog_log_mono = now
+                    logger.info(
+                        "AR WebSocket outbound backlog",
+                        fifo_depth=fifo_depth,
+                        coalesce_pending=coalesce_depth,
+                        dropped_fifo=self._dropped_fifo_count,
+                    )
+        except websockets.ConnectionClosed:
+            self._closed = True
+        except (OSError, websockets.WebSocketException) as exc:
+            logger.warning(
+                "AR WebSocket outbound send failed",
+                error=str(exc),
+                message_type="coalesced_batch",
+            )
 
     async def _flush_coalesced_batch(self) -> None:
         while self._coalesce_latest and not self._closed:

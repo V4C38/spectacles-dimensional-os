@@ -7,10 +7,10 @@ import {
   HelloMessage,
   LidarMessage,
   NavStatusMessage,
-  NavGoalUpdateMessage,
   PathMessage,
   PongMessage,
   WorldFrameCorrectionMessage,
+  CapturePolicyMessage,
   PoseMessage,
   RuntimeSnapshotMessage,
   bridgeStatusFromSnapshot,
@@ -40,12 +40,12 @@ export class InboundProcessor {
   public readonly onLidar = new Signal<LidarMessage>();
   public readonly onPose = new Signal<PoseMessage>();
   public readonly onWorldFrameCorrection = new Signal<WorldFrameCorrectionMessage>();
+  public readonly onCapturePolicy = new Signal<CapturePolicyMessage>();
   public readonly onRegistrationStatus = new Signal<RegistrationStatusMessage>();
   public readonly onCameraFrameAck = new Signal<CameraFrameAckMessage>();
   public readonly onBridgeStatus = new Signal<BridgeStatusMessage>();
   public readonly onPath = new Signal<PathMessage>();
   public readonly onNavStatus = new Signal<NavStatusMessage>();
-  public readonly onNavGoalUpdate = new Signal<NavGoalUpdateMessage>();
   public readonly onRuntimeSnapshot = new Signal<RuntimeSnapshotMessage>();
   public readonly onPong = new Signal<PongMessage>();
   public readonly onProtocolError = new Signal<ProtocolParseError>();
@@ -194,6 +194,9 @@ export class InboundProcessor {
         case "world_frame_correction":
           this.onWorldFrameCorrection.emit(msg);
           break;
+        case "capture_policy":
+          this.onCapturePolicy.emit(msg);
+          break;
         case "registration_status":
           this._logDiagnosticRx(msg);
           this.onRegistrationStatus.emit(msg);
@@ -213,9 +216,6 @@ export class InboundProcessor {
         case "nav_status":
           this._logDiagnosticRx(msg);
           this.onNavStatus.emit(msg);
-          break;
-        case "nav_goal_update":
-          this.onNavGoalUpdate.emit(msg);
           break;
         case "pong":
           this._adoptRobotId(msg.robot_id);
@@ -254,27 +254,9 @@ export class InboundProcessor {
       const pathMsg: PathMessage = {
         type: "path",
         ts: snapshot.ts,
-        kind: snapshot.path.kind,
         waypoints: snapshot.path.waypoints,
       };
-      if (snapshot.path.target !== undefined) {
-        pathMsg.target = snapshot.path.target;
-      }
       this.onPath.emit(pathMsg);
-    }
-
-    if (snapshot.goal) {
-      const goalMsg: NavGoalUpdateMessage = {
-        type: "nav_goal_update",
-        ts: snapshot.ts,
-        source: snapshot.goal.source,
-        position: snapshot.goal.position,
-        active: snapshot.goal.active,
-      };
-      if (snapshot.goal.orientation !== undefined) {
-        goalMsg.orientation = snapshot.goal.orientation;
-      }
-      this.onNavGoalUpdate.emit(goalMsg);
     }
 
     this.onRuntimeSnapshot.emit(snapshot);

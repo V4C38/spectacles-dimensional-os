@@ -1,6 +1,7 @@
 import {
   buildGetStatus,
   BridgeStatusMessage,
+  CapturePolicyMessage,
   HelloMessage,
   PongMessage,
   RuntimeSnapshotMessage,
@@ -14,6 +15,7 @@ import { ARBridgeSession } from "../Network/ARBridgeSession";
 export class StatusClient {
   public readonly onHello = new Signal<HelloMessage>();
   public readonly onBridgeStatus = new Signal<BridgeStatusMessage>();
+  public readonly onCapturePolicy = new Signal<CapturePolicyMessage>();
   public readonly onRuntimeSnapshot = new Signal<RuntimeSnapshotMessage>();
   public readonly onPong = new Signal<PongMessage>();
 
@@ -36,6 +38,7 @@ export class StatusClient {
       this.requestStatus();
     });
     this._inbound.onBridgeStatus.add((msg) => this.onBridgeStatus.emit(msg));
+    this._inbound.onCapturePolicy.add((msg) => this.onCapturePolicy.emit(msg));
     this._inbound.onRuntimeSnapshot.add((msg) => this.onRuntimeSnapshot.emit(msg));
     this._inbound.onPong.add((msg) => this.onPong.emit(msg));
 

@@ -9,6 +9,7 @@ import {
   RobotGroundDeadzone,
   SurfaceGroundProbe,
 } from "./SurfaceGroundProbe";
+import WorldCameraFinderProvider from "SpectaclesInteractionKit.lspkg/Providers/CameraProvider/WorldCameraFinderProvider";
 
 export type { RobotGroundDeadzone };
 
@@ -20,13 +21,13 @@ const DRAG_THRESHOLD_CM = 11;
 const DRAG_HEADING_MIN_DELTA_CM = 3.0;
 const DRAG_HEADING_SMOOTHING_RATE = 8.0;
 const INTERPOLATION_SPEED = 10;
-const IDLE_CONTINUOUS_NAV_INTERPOLATION_SPEED = 8;
-const IDLE_CONTINUOUS_NAV_POSITION_EPSILON_CM = 0.25;
-const IDLE_CONTINUOUS_NAV_ROTATION_EPSILON_RAD = 0.01;
+const IDLE_NAV_INTERPOLATION_SPEED = 8;
+const IDLE_NAV_POSITION_EPSILON_CM = 0.25;
+const IDLE_NAV_ROTATION_EPSILON_RAD = 0.01;
 const PLACEMENT_ANCHOR_REBASE_DISTANCE_CM = 300;
 
 export class GroundPlacement {
-  public onConfirmPressed: ((position: vec3, rotation: quat) => void) | null = null;
+  public onMarkerButtonPressed: ((position: vec3, rotation: quat) => void) | null = null;
   public onPreviewTargetChanged: ((
     position: vec3,
     rotation: quat,
@@ -162,44 +163,13 @@ export class GroundPlacement {
     return this._marker?.worldPosition ?? this.desiredPosition;
   }
 
-  public respawnPlacingImmediately(
-    getPose: () => { position: vec3; rotation: quat } | null,
-  ): void {
-    if (!this.active || !this._marker) {
-      return;
-    }
+  public resetToIdleAnchoring(): void {
+    this._hasActivatedPlacement = false;
     this._isDragging = false;
-    this._setDragEnabled(false);
-    this._resetGestureState();
-    const pose = getPose();
-    if (!pose) {
-      return;
-    }
-    this._beginPlacingAtPose(pose.position, pose.rotation, true);
+    this.activeInteractor = null;
   }
 
-  public respawnPlacingAt(
-    getPose: () => { position: vec3; rotation: quat } | null,
-  ): void {
-    if (!this.active || !this._marker) {
-      return;
-    }
-    this._isDragging = false;
-    this._setDragEnabled(false);
-    this._resetGestureState();
-    this._marker.hideAndThen(() => {
-      if (!this.active) {
-        return;
-      }
-      const pose = getPose();
-      if (!pose) {
-        return;
-      }
-      this._beginPlacingAtPose(pose.position, pose.rotation, true);
-    });
-  }
-
-  public isIdleContinuousNavigation(): boolean {
+  public isIdleNavigation(): boolean {
     return (
       this.active &&
       this._followRobot &&
@@ -209,13 +179,13 @@ export class GroundPlacement {
   }
 
   public syncIdlePose(position: vec3, rotation: quat): void {
-    if (!this.isIdleContinuousNavigation() || !this._marker) {
+    if (!this.isIdleNavigation() || !this._marker) {
       return;
     }
     const positionChanged =
-      this.desiredPosition.distance(position) > IDLE_CONTINUOUS_NAV_POSITION_EPSILON_CM;
+      this.desiredPosition.distance(position) > IDLE_NAV_POSITION_EPSILON_CM;
     const rotationChanged =
-      quat.angleBetween(this.desiredRotation, rotation) > IDLE_CONTINUOUS_NAV_ROTATION_EPSILON_RAD;
+      quat.angleBetween(this.desiredRotation, rotation) > IDLE_NAV_ROTATION_EPSILON_RAD;
     if (!positionChanged && !rotationChanged) {
       return;
     }
@@ -232,13 +202,13 @@ export class GroundPlacement {
     this._marker.interpolatePose(
       this.desiredPosition,
       this.desiredRotation,
-      IDLE_CONTINUOUS_NAV_INTERPOLATION_SPEED,
+      IDLE_NAV_INTERPOLATION_SPEED,
     );
   }
 
-  /** Immediate idle continuous-navigation snap (e.g. after world-frame pose correction). */
+  /** Immediate idle-navigation snap (e.g. after world-frame pose correction). */
   public snapIdlePose(position: vec3, rotation: quat): void {
-    if (!this.isIdleContinuousNavigation() || !this._marker) {
+    if (!this.isIdleNavigation() || !this._marker) {
       return;
     }
     this.desiredPosition = new vec3(position.x, position.y, position.z);
@@ -274,7 +244,7 @@ export class GroundPlacement {
     ) as DelayedCallbackEvent;
     confirmDeferral.bind(() => {
       this._processingButtonPress = false;
-      this.onConfirmPressed?.(this._pendingConfirmPosition, this._pendingConfirmRotation);
+      this.onMarkerButtonPressed?.(this._pendingConfirmPosition, this._pendingConfirmRotation);
     });
     this._confirmDeferralEvent = confirmDeferral;
   }
@@ -297,7 +267,11 @@ export class GroundPlacement {
     this._isDragging = false;
     this._previousDragPosition = null;
     this._syncDesiredPoseToRenderedPose();
-    const resolved = this._groundProbe.resolveDragPoint(this.desiredPosition, getDeltaTime());
+    const resolved = this._groundProbe.resolveDragPoint(
+      this.desiredPosition,
+      getDeltaTime(),
+      this._getCameraWorldPosition(),
+    );
     this.desiredPosition = resolved;
     this._marker?.setPose(this.desiredPosition, this.desiredRotation);
     this._emitPreviewTargetChanged(true);
@@ -420,12 +394,17 @@ export class GroundPlacement {
     );
     const dragDistance = pointPosition.distance(this.touchStartPosition);
     if (dragDistance > DRAG_THRESHOLD_CM && !this._isDragging) {
-      this._activatePlacement();
       this._syncDesiredPoseToRenderedPose();
+      this._groundProbe.setDragBaseline(this.desiredPosition.y);
+      this._activatePlacement();
     }
     if (this._isDragging) {
       this._groundProbe.probeSurfaceY(pointPosition, this.hitTestSession);
-      this.desiredPosition = this._groundProbe.resolveDragPoint(pointPosition, getDeltaTime());
+      this.desiredPosition = this._groundProbe.resolveDragPoint(
+        pointPosition,
+        getDeltaTime(),
+        this._getCameraWorldPosition(),
+      );
       this._updateDragHeading(pointPosition);
     }
   }
@@ -512,6 +491,14 @@ export class GroundPlacement {
     this._marker?.setDragEnabled(enabled);
     if (!enabled) {
       this.activeInteractor = null;
+    }
+  }
+
+  private _getCameraWorldPosition(): vec3 | null {
+    try {
+      return WorldCameraFinderProvider.getInstance().getTransform().getWorldPosition();
+    } catch {
+      return null;
     }
   }
 }

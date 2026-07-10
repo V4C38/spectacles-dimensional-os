@@ -20,6 +20,10 @@ export class vec3 {
       a.z + (b.z - a.z) * t,
     );
   }
+
+  add(other: vec3): vec3 {
+    return new vec3(this.x + other.x, this.y + other.y, this.z + other.z);
+  }
 }
 
 export class vec4 {
@@ -45,6 +49,19 @@ export class quat {
     this.x /= n;
     this.y /= n;
     this.z /= n;
+  }
+
+  dot(other: quat): number {
+    return this.w * other.w + this.x * other.x + this.y * other.y + this.z * other.z;
+  }
+
+  multiply(other: quat): quat {
+    return new quat(
+      this.w * other.w - this.x * other.x - this.y * other.y - this.z * other.z,
+      this.w * other.x + this.x * other.w + this.y * other.z - this.z * other.y,
+      this.w * other.y - this.x * other.z + this.y * other.w + this.z * other.x,
+      this.w * other.z + this.x * other.y - this.y * other.x + this.z * other.w,
+    );
   }
 
   static quatIdentity(): quat {

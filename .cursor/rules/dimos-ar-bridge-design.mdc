@@ -27,7 +27,6 @@ it does not duplicate lifecycle or mutation logic.
 | Post-commit tag refinement | `WorldFrameRefiner` |
 | Registration setup wizard | `RegistrationSession` |
 | Nav goal lifecycle + `nav_status` | `navigation/navigate.py` `NavigateGoalHandler` |
-| Preview path goals | `navigation/preview.py` `PreviewGoalHandler` |
 | Profile motion RPC serialization | `MotionRouter` (`bridge/motion_router.py`) |
 | Estop / client-disconnect policy | `BridgeSafetyCoordinator` |
 | LiDAR/pose AR payloads | `TelemetryPublisher` |

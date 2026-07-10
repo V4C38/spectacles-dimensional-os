@@ -9,9 +9,16 @@ import os
 import time
 from typing import TYPE_CHECKING, Any
 
-from dimos.ar.network.protocol import CameraInfoMessage, encode_camera_frame_ack
-from dimos.ar.registration.types import CaptureHint, RegistrationMode, RegistrationPhase
-from dimos.ar.tag_tracking.solve import build_camera_info
+from dimos.ar.network.protocol import (
+    CameraInfoMessage,
+    encode_camera_frame_ack,
+    encode_capture_policy,
+)
+from dimos.ar.registration.types import RegistrationMode, RegistrationPhase
+from dimos.ar.tag_tracking.solve import (
+    build_camera_info,
+    capture_max_stream_distance_m,
+)
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -27,6 +34,8 @@ if TYPE_CHECKING:
 _TRACE = os.getenv("DIMOS_AR_TRACE", "") not in ("", "0", "false")
 
 logger = setup_logger()
+
+REGISTRATION_SCAN_DIAG_LOG_INTERVAL_S = 2.0
 
 
 class FrameAdmission(StrEnum):
@@ -46,16 +55,22 @@ class RegistrationSessionFramesMixin:
         _session: Any
         _frame_max_age_s: float
         _frame_in_flight: bool
+        _capture_min_tag_px: float
+        _capture_max_distance_margin: float
+        _capture_max_speed_mps: float
+        _capture_min_distance_m: float
+        _align_min_obs: int
+        _runtime_profile: Any
+        _capture_max_stream_distance_m: float | None
 
         @property
-        def registration_max_distance_m(self) -> float | None: ...
+        def capture_max_stream_distance_m(self) -> float | None: ...
 
         def _broadcast_status(
             self,
             *,
             phase: RegistrationPhase | None = None,
             message: str = "",
-            capture: CaptureHint | None = None,
             mode: RegistrationMode | None = None,
             tag_visible: bool | None = None,
             ts: float | None = None,
@@ -66,7 +81,7 @@ class RegistrationSessionFramesMixin:
             *,
             resolved_odom: OdomSample | None = None,
             frame_result: FrameResult | None = None,
-        ) -> None: ...
+        ) -> Any: ...
 
     def on_camera_info(
         self,
@@ -82,10 +97,27 @@ class RegistrationSessionFramesMixin:
             frame_id="ar_camera",
         )
         self._tag_tracker.set_camera_info(info)
+        d_max = capture_max_stream_distance_m(
+            msg.fx,
+            self._tag_tracker.primary_tag_size_m,
+            self._capture_min_tag_px,
+            margin=self._capture_max_distance_margin,
+        )
+        self._capture_max_stream_distance_m = d_max
+        self._sender.send(
+            encode_capture_policy(
+                max_stream_distance_m=d_max,
+                min_stream_distance_m=self._capture_min_distance_m,
+                max_capture_speed_mps=self._capture_max_speed_mps,
+                static_speed_mps=self._runtime_profile.runtime_static_speed_mps,
+                min_observations=self._align_min_obs,
+            )
+        )
         logger.info(
             "AR camera intrinsics received",
             resolution=f"{msg.width}x{msg.height}",
             device=msg.device_model,
+            capture_max_stream_distance_m=round(d_max, 4),
         )
 
     async def on_camera_frame(
@@ -105,11 +137,19 @@ class RegistrationSessionFramesMixin:
             )
         admission = self._frame_admission(header, frame_age)
         if admission == FrameAdmission.ACK_ONLY:
-            self._send_frame_ack(header)
+            self._send_frame_ack(header, obs_added=False)
             return
         resolved_odom = self.resolve_frame_odom(header)
         if resolved_odom is None:
-            self._send_frame_ack(header)
+            if (
+                self._session.mode == RegistrationMode.APRIL_TAG
+                and self._tag_tracker.active
+            ):
+                logger.info(
+                    "Tag frame skipped: no odom at capture time",
+                    seq=seq,
+                )
+            self._send_frame_ack(header, obs_added=False)
             return
         self._frame_in_flight = True
         try:
@@ -125,7 +165,6 @@ class RegistrationSessionFramesMixin:
                 self._broadcast_status(
                     phase=RegistrationPhase.SCANNING,
                     message="Waiting for robot odometry",
-                    capture=CaptureHint.STEADY,
                 )
             result = await asyncio.to_thread(
                 self._tag_tracker.process_frame,
@@ -135,7 +174,7 @@ class RegistrationSessionFramesMixin:
                 receive_mono=receive_mono,
                 T_committed=T_committed,
                 world_frame_committed=world_frame_committed,
-                max_distance_m=self.registration_max_distance_m,
+                max_distance_m=self.capture_max_stream_distance_m,
             )
             if _TRACE:
                 logger.debug(
@@ -145,11 +184,21 @@ class RegistrationSessionFramesMixin:
                     tag_ids=result.tag_ids if result.tag_ids else None,
                     quality=round(result.quality, 3) if result.quality else None,
                 )
-            self._send_frame_ack(header)
-            self._apply_tracker_update(
+            outcome = self._apply_tracker_update(
                 resolved_odom=resolved_odom,
                 frame_result=result,
             )
+            self._send_frame_ack(
+                header,
+                obs_added=result.observations_added > 0,
+                refinement_complete=outcome.refinement_complete,
+            )
+            if self._session.mode == RegistrationMode.APRIL_TAG and self._tag_tracker.active:
+                self._maybe_log_registration_scan_diag(
+                    header=header,
+                    result=result,
+                    resolved_odom=resolved_odom,
+                )
             if refining_committed_frame:
                 self._world_frame_refiner.maybe_log_moving_robot_diag(
                     header=header,
@@ -172,13 +221,38 @@ class RegistrationSessionFramesMixin:
         if not isinstance(raw_capture_ts, (int, float)) or not math.isfinite(float(raw_capture_ts)):
             return None
         capture_ts = float(raw_capture_ts)
-        refining_committed_frame = self._refining_committed_frame()
-        lookup = (
-            self._odom.at_interpolated_by_source
-            if refining_committed_frame
-            else self._odom.at_or_latest_by_source
+        sample = self._odom.at_interpolated_by_source(capture_ts)
+        if sample is not None:
+            return sample
+        return self._odom.at_or_latest_by_source(capture_ts)
+
+    def _maybe_log_registration_scan_diag(
+        self,
+        *,
+        header: dict[str, Any],
+        result: FrameResult,
+        resolved_odom: OdomSample,
+    ) -> None:
+        now = time.monotonic()
+        if now - self._session.last_registration_scan_log_mono < REGISTRATION_SCAN_DIAG_LOG_INTERVAL_S:
+            return
+        self._session.last_registration_scan_log_mono = now
+        capture_ts_robot = float(header["capture_ts_robot"])
+        source_ts = resolved_odom.source_ts
+        source_ts_gap: float | None = None
+        if source_ts is not None:
+            source_ts_gap = capture_ts_robot - source_ts
+        logger.info(
+            "registration scan frame",
+            seq=int(header.get("seq", -1)),
+            tag_detected=result.tag_detected,
+            observations_added=result.observations_added,
+            observation_count=self._tag_tracker.observation_count(),
+            rejections_reprojection=result.rejections_reprojection,
+            rejections_skew=result.rejections_skew,
+            rejections_distance=result.rejections_distance,
+            source_ts_gap_s=round(source_ts_gap, 4) if source_ts_gap is not None else None,
         )
-        return lookup(capture_ts)
 
     def _frame_admission(
         self,
@@ -205,7 +279,6 @@ class RegistrationSessionFramesMixin:
                 self._broadcast_status(
                     phase=RegistrationPhase.FAILED,
                     message="No camera intrinsics received",
-                    capture=CaptureHint.OFF,
                 )
             return FrameAdmission.ACK_ONLY
         return FrameAdmission.PROCESS
@@ -214,9 +287,17 @@ class RegistrationSessionFramesMixin:
         """Runtime refinement uses the committed frame; tag registration must not."""
         return self._registry.state.is_committed and not self._tag_tracker.active
 
-    def _send_frame_ack(self, header: dict[str, Any]) -> None:
+    def _send_frame_ack(
+        self,
+        header: dict[str, Any],
+        *,
+        obs_added: bool = False,
+        refinement_complete: bool = False,
+    ) -> None:
         self._sender.send(
             encode_camera_frame_ack(
                 seq=int(header["seq"]),
+                obs_added=obs_added,
+                refinement_complete=refinement_complete,
             )
         )

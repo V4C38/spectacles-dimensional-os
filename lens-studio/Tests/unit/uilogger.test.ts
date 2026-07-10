@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
-  DEBUG_CONSOLE_LINE_COUNT,
+  DEBUG_CONSOLE_SCROLL_LINE_COUNT,
+  DEBUG_CONSOLE_TOTAL_LINE_COUNT,
   formatConsoleLine,
   formatConsoleTimestamp,
   UILogConsoleEntry,
@@ -19,12 +20,16 @@ function createMockText(): MockText {
   };
 }
 
-function createMockLines(count = DEBUG_CONSOLE_LINE_COUNT): MockText[] {
+function createMockLines(count = DEBUG_CONSOLE_TOTAL_LINE_COUNT): MockText[] {
   return Array.from({ length: count }, () => createMockText());
 }
 
-function lineText(lines: MockText[], index: number): string {
+function scrollLineText(lines: MockText[], index: number): string {
   return lines[index]?.text ?? "";
+}
+
+function statusLineText(lines: MockText[]): string {
+  return lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT]?.text ?? "";
 }
 
 describe("formatConsoleTimestamp", () => {
@@ -61,33 +66,34 @@ describe("UILogger console output", () => {
     vi.useRealTimers();
   });
 
-  it("renders the first message on the bottom line", () => {
+  it("renders the first message on the bottom scroll line", () => {
     logger.show("first", new vec4(1, 0, 0, 1));
 
-    expect(lineText(lines, 8)).toBe("[12:00:00] first");
-    for (let i = 0; i < DEBUG_CONSOLE_LINE_COUNT - 1; i++) {
-      expect(lineText(lines, i)).toBe("");
+    expect(scrollLineText(lines, 7)).toBe("[12:00:00] first");
+    for (let i = 0; i < DEBUG_CONSOLE_SCROLL_LINE_COUNT - 1; i++) {
+      expect(scrollLineText(lines, i)).toBe("");
     }
+    expect(statusLineText(lines)).toBe("");
   });
 
   it("keeps newest messages on the bottom as more lines arrive", () => {
     logger.show("one", new vec4(1, 1, 1, 1));
     logger.show("two", new vec4(1, 1, 1, 1));
 
-    expect(lineText(lines, 7)).toContain("one");
-    expect(lineText(lines, 8)).toContain("two");
+    expect(scrollLineText(lines, 6)).toContain("one");
+    expect(scrollLineText(lines, 7)).toContain("two");
   });
 
   it("evicts the oldest message after the buffer overflows", () => {
-    for (let i = 1; i <= DEBUG_CONSOLE_LINE_COUNT; i++) {
+    for (let i = 1; i <= DEBUG_CONSOLE_SCROLL_LINE_COUNT; i++) {
       logger.show(`msg-${i}`, new vec4(1, 1, 1, 1));
     }
-    expect(lineText(lines, 0)).toContain("msg-1");
+    expect(scrollLineText(lines, 0)).toContain("msg-1");
 
-    logger.show("msg-10", new vec4(1, 1, 1, 1));
+    logger.show("msg-9", new vec4(1, 1, 1, 1));
 
-    expect(lineText(lines, 0)).toContain("msg-2");
-    expect(lineText(lines, 8)).toContain("msg-10");
+    expect(scrollLineText(lines, 0)).toContain("msg-2");
+    expect(scrollLineText(lines, 7)).toContain("msg-9");
     expect(lines.every((line) => !line.text.endsWith(" msg-1"))).toBe(true);
   });
 
@@ -95,8 +101,8 @@ describe("UILogger console output", () => {
     logger.show("red", new vec4(1, 0, 0, 1));
     logger.show("green", new vec4(0, 1, 0, 1));
 
-    expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 0, z: 0, w: 1 });
-    expect(lines[8]?.textFill.color).toEqual({ x: 0, y: 1, z: 0, w: 1 });
+    expect(lines[6]?.textFill.color).toEqual({ x: 1, y: 0, z: 0, w: 1 });
+    expect(lines[7]?.textFill.color).toEqual({ x: 0, y: 1, z: 0, w: 1 });
   });
 
   it("uses the timestamp captured at log time", () => {
@@ -104,24 +110,26 @@ describe("UILogger console output", () => {
 
     logger.show("timed", new vec4(1, 1, 1, 1));
 
-    expect(lineText(lines, 8)).toBe("[12:34:56] timed");
+    expect(scrollLineText(lines, 7)).toBe("[12:34:56] timed");
   });
 
   it("does not remove console lines when the transient entry expires", () => {
     logger.show("persistent", new vec4(1, 1, 1, 1), 0.5);
     logger.tick(1.0);
 
-    expect(lineText(lines, 8)).toContain("persistent");
+    expect(scrollLineText(lines, 7)).toContain("persistent");
     expect(logger.snapshot).toBeNull();
   });
 
-  it("clears console lines", () => {
+  it("clears scroll lines but preserves the camera status line", () => {
     logger.show("remove me", new vec4(1, 1, 1, 1));
+    logger.setCameraStreamStatus("on");
     logger.clear();
 
-    for (const line of lines) {
-      expect(line.text).toBe("");
+    for (let i = 0; i < DEBUG_CONSOLE_SCROLL_LINE_COUNT; i++) {
+      expect(scrollLineText(lines, i)).toBe("");
     }
+    expect(statusLineText(lines)).toBe("[12:00:00] Camera stream status: ON");
     expect(logger.snapshot).toBeNull();
   });
 
@@ -130,7 +138,61 @@ describe("UILogger console output", () => {
     logger.logConsole("console-only", new vec4(0, 1, 0, 1));
 
     expect(logger.snapshot?.text).toBe("transient");
-    expect(lineText(lines, 8)).toContain("console-only");
-    expect(lineText(lines, 7)).toContain("transient");
+    expect(scrollLineText(lines, 7)).toContain("console-only");
+    expect(scrollLineText(lines, 6)).toContain("transient");
+    expect(statusLineText(lines)).toBe("");
+  });
+
+  it("does not write scroll logs to the camera status line", () => {
+    logger.show("scroll-only", new vec4(1, 1, 1, 1));
+
+    expect(statusLineText(lines)).toBe("");
+  });
+});
+
+describe("UILogger camera status line", () => {
+  let logger: UILogger;
+  let lines: MockText[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 3, 12, 0, 0));
+    logger = new UILogger();
+    lines = createMockLines();
+    logger.bindConsoleOutputLines(lines as unknown as Text[]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("renders ON in green on the dedicated status line", () => {
+    logger.setCameraStreamStatus("on");
+
+    expect(statusLineText(lines)).toBe("[12:00:00] Camera stream status: ON");
+    expect(lines[8]?.textFill.color).toEqual({ x: 0, y: 1, z: 0, w: 1 });
+  });
+
+  it("renders Waiting in yellow on the dedicated status line", () => {
+    logger.setCameraStreamStatus("waiting");
+
+    expect(statusLineText(lines)).toBe("[12:00:00] Camera stream status: Waiting");
+    expect(lines[8]?.textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
+  });
+
+  it("renders OFF in white on the dedicated status line", () => {
+    logger.setCameraStreamStatus("off");
+
+    expect(statusLineText(lines)).toBe("[12:00:00] Camera stream status: OFF");
+    expect(lines[8]?.textFill.color).toEqual({ x: 1, y: 1, z: 1, w: 1 });
+  });
+
+  it("does not refresh the timestamp when status is unchanged", () => {
+    logger.setCameraStreamStatus("on");
+    vi.setSystemTime(new Date(2026, 6, 3, 12, 5, 0));
+
+    logger.setCameraStreamStatus("on");
+
+    expect(statusLineText(lines)).toBe("[12:00:00] Camera stream status: ON");
   });
 });

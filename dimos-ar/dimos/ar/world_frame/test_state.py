@@ -8,8 +8,6 @@ import pytest
 from dimos.ar.tag_tracking.solve import (
     R_ALIGN,
     TagMount,
-    build_T_world_odom,
-    solve_yaw_translation_2d,
 )
 from dimos.ar.tag_tracking.tracker import RobotAprilTagTracker
 from dimos.ar.world_frame.state import ODOM_SCALE_INITIAL, WorldFrameState
@@ -51,16 +49,6 @@ def test_commit_world_odom() -> None:
     assert state.is_committed is True
     pos, _ = state.transform_pose((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert np.allclose(pos[0], 5.0, atol=1e-5)
-
-
-def test_solve_yaw_translation_2d_recovers_planar_shift() -> None:
-    u = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float64)
-    v = np.array([[2.0, 3.0], [3.0, 3.0]], dtype=np.float64)
-    yaw, t2 = solve_yaw_translation_2d(u, v)
-    T = build_T_world_odom(yaw, (float(t2[0]), 0.0, -float(t2[1])))
-    world = (T @ np.array([0.0, 0.0, 0.0, 1.0]))[:3]
-    assert np.allclose(world[0], 2.0, atol=1e-5)
-    assert np.allclose(world[2], -3.0, atol=1e-5)
 
 
 def test_tag_tracker_starts_inactive_without_camera_info() -> None:
@@ -264,15 +252,17 @@ def test_odom_scale_transform_points_scales_displacement() -> None:
     assert world[0, 0] == pytest.approx(1.16, abs=1e-5)
 
 
-def test_set_odom_scale_clamp_and_deadband() -> None:
+def test_set_odom_scale_hard_rails_and_deadband() -> None:
     state = WorldFrameState()
 
     assert state.set_odom_scale(1.4) is True
-    assert state.odom_scale == pytest.approx(1.25)
+    assert state.odom_scale == pytest.approx(1.4)
 
     assert state.set_odom_scale(1.16) is True
     assert state.odom_scale == pytest.approx(1.16)
     assert state.set_odom_scale(1.16 + 5e-7) is False
+    assert state.odom_scale == pytest.approx(1.16)
+    assert state.set_odom_scale(2.1) is False
     assert state.odom_scale == pytest.approx(1.16)
 
 
@@ -299,6 +289,18 @@ def test_commit_and_clear_reset_odom_scale_and_fire_on_change() -> None:
     assert state.odom_scale == pytest.approx(1.0)
     assert state.odom_anchor_xy == (0.0, 0.0)
     assert len(calls) == 1
+
+
+def test_commit_accepts_explicit_odom_scale() -> None:
+    state = WorldFrameState()
+    state.commit(
+        np.eye(4, dtype=np.float64),
+        method="april_tag",
+        approximate=False,
+        odom_scale=1.24,
+    )
+
+    assert state.odom_scale == pytest.approx(1.24)
 
 
 def test_odom_scale_anchor_zero_jump_at_registration() -> None:

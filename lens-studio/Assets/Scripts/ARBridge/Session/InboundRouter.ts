@@ -1,7 +1,5 @@
 import { ARBridgeSession } from "../Network/ARBridgeSession";
-import { FrameCaptureController } from "../Camera/FrameCaptureController";
-import { CaptureMode, CapturePolicy } from "../Camera/CameraClient";
-import { AppStateStore, AppPhase } from "../../App/AppState";
+import { AppStateStore } from "../../App/AppState";
 import { RobotPresenter } from "../../App/Robot/RobotPresenter";
 import { NavigationPlacement } from "../../App/Navigation/NavigationPlacement";
 import { RegistrationClient } from "../Registration/RegistrationClient";
@@ -20,7 +18,6 @@ import {
 } from "../../App/AppState";
 import {
   BridgeStatusMessage,
-  CaptureHint,
   deriveLinkState,
   HelloMessage,
   projectBridgeSnapshot,
@@ -33,37 +30,6 @@ import {
 } from "../Network/WebSocketTransport";
 
 const RECONNECT_LOG_INTERVAL_S = 10.0;
-
-export interface FrameCapturePolicyInput {
-  appPhase: AppPhase;
-  worldFrameCommitted: boolean;
-  tagCaptureSessionActive: boolean;
-  registrationCaptureHint: CaptureHint;
-  forceOff: boolean;
-}
-
-export interface FrameCapturePolicyResult {
-  mode: CaptureMode;
-  policy: CapturePolicy;
-}
-
-export function computeFrameCapturePolicy(
-  input: FrameCapturePolicyInput,
-): FrameCapturePolicyResult {
-  if (input.forceOff) {
-    return { mode: "off", policy: "off" };
-  }
-
-  if (input.appPhase === "registration" && input.tagCaptureSessionActive) {
-    return { mode: "registration", policy: input.registrationCaptureHint };
-  }
-
-  if (input.appPhase === "runtime" && input.worldFrameCommitted) {
-    return { mode: "runtime", policy: "off" };
-  }
-
-  return { mode: "off", policy: "off" };
-}
 
 function bridgeSnapshotsEqual(a: BridgeSnapshot, b: BridgeSnapshot): boolean {
   return (
@@ -97,7 +63,6 @@ export class InboundRouter {
     private readonly navigationClient: NavigationClient,
     private readonly navigationPlacement: NavigationPlacement,
     private readonly robotPresenter: RobotPresenter,
-    private readonly frameCaptureController: FrameCaptureController | null,
     private readonly registrationClient: RegistrationClient | null,
   ) {}
 
@@ -111,10 +76,6 @@ export class InboundRouter {
     this.telemetryClient.bind();
     this.navigationClient.bind();
     this.registrationClient?.bind();
-
-    this.registrationClient?.onCapturePolicyInputsChanged.add(() => {
-      this.applyFrameCapturePolicy();
-    });
 
     this.statusClient.onHello.add((msg) => {
       this._applyHello(msg);
@@ -130,15 +91,6 @@ export class InboundRouter {
     this.navigationClient.onPath.add((msg) => this.navigationPlacement.applyPath(msg));
     this.navigationClient.onNavStatus.add((msg) =>
       this.navigationPlacement.applyNavStatus(msg),
-    );
-    this.navigationClient.onNavGoalUpdate.add((msg) =>
-      this.navigationPlacement.applyNavGoalUpdate(msg),
-    );
-    this.navigationPlacement.onNavigationSettled.add((outcome) => {
-      this.frameCaptureController?.requestImmediateCapture();
-    });
-    this.statusClient.onRuntimeSnapshot.add(() =>
-      this.navigationPlacement.resyncPreviewGoal(),
     );
     this.statusClient.onBridgeStatus.add((msg) => this._applyBridgeStatus(msg));
     this.session.onConnectionChanged.add((connected) =>
@@ -159,7 +111,7 @@ export class InboundRouter {
     this.appState.uiLogger.tick();
     const poseApplied = this.robotPresenter.applyPendingPose();
     this.robotPresenter.tickFrame();
-    this.navigationPlacement.syncIdleContinuousNavigationPlacement(poseApplied);
+    this.navigationPlacement.syncIdleNavigationPlacement(poseApplied);
   }
 
   public tryConnect(ip: string): Promise<boolean> {
@@ -227,25 +179,6 @@ export class InboundRouter {
     }
   }
 
-  public applyFrameCapturePolicy(forceOff = false): void {
-    if (!this.frameCaptureController) {
-      return;
-    }
-    const snapshot = this.appState.snapshot;
-    const client = this.registrationClient;
-    const result = computeFrameCapturePolicy({
-      appPhase: snapshot.phase,
-      worldFrameCommitted: snapshot.bridgeSnapshot.worldFrameCommitted,
-      tagCaptureSessionActive: client?.tagCaptureSessionActive ?? false,
-      registrationCaptureHint: client?.registrationCaptureHint ?? "off",
-      forceOff,
-    });
-    this.frameCaptureController.setMode(result.mode);
-    if (result.mode === "registration") {
-      this.frameCaptureController.setCapturePolicy(result.policy);
-    }
-  }
-
   private _applyHello(msg: HelloMessage): void {
     const runtimeState = projectRuntimeStateFromHello(msg);
     AppState.connectedRobotDisplayName = runtimeState.displayName;
@@ -257,7 +190,6 @@ export class InboundRouter {
       driftState: createDefaultDriftState(),
       navigationOutcome: defaultNavigationOutcome(),
     });
-    this.applyFrameCapturePolicy();
   }
 
   private _applyBridgeStatus(msg: BridgeStatusMessage): void {
@@ -269,7 +201,6 @@ export class InboundRouter {
       this.robotPresenter.manualRegistrationAlignment.reset();
     }
     this._applyBridgeProjection(true, msg);
-    this.applyFrameCapturePolicy();
     this.onBridgeStatusChanged.emit(msg);
   }
 
@@ -293,7 +224,6 @@ export class InboundRouter {
       });
       this._maybeScheduleRuntimeReconnect();
     }
-    this.applyFrameCapturePolicy();
   }
 
   private _maybeScheduleRuntimeReconnect(): void {

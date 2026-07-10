@@ -30,7 +30,10 @@ export interface RegistrationViewState {
   phase: RegistrationPhase;
   message: string;
   tagVisible: boolean;
+  progress?: number;
   previewPose?: RegistrationStatusMessage["preview_pose"];
+  scaleLocked?: boolean;
+  alignmentConfidence?: number;
 }
 
 export interface WizardFooterState {
@@ -73,7 +76,7 @@ export const REGISTRATION_STATUS_MANUAL = "Complete to confirm manual Registrati
 
 export const WIZARD_STEP_DESCRIPTIONS: string[] = [
   "Power on your robot.\nRun ./scripts/start.sh on your Mac.",
-  "Enter your Mac's IP.\nWait for ./scripts/start.sh to print \"Bridge ready\".\nUse same Wi‑Fi for robot, Mac, and Spectacles.",
+  "Enter your Mac's IP.\nUse same Wi‑Fi for robot, Mac, and Spectacles.",
   buildRegistrationDescriptionAuto(NO_ROBOT_CONNECTED_LABEL),
 ];
 
@@ -84,6 +87,10 @@ export function wizardStepName(step: WizardStep): string {
     case WizardStep.Register: return "register";
     default: return "unknown";
   }
+}
+
+export function shouldShowBackOnStartStep(openedFromRuntime: boolean): boolean {
+  return openedFromRuntime;
 }
 
 export function createRegistrationViewState(): RegistrationViewState {
@@ -122,21 +129,46 @@ export function isRegistrationFailed(state: RegistrationViewState): boolean {
 
 const MANUAL_CANDIDATE_SYNC_INTERVAL_S = 0.35;
 const NO_RESPONSE_STATUS_MSG = "Bridge not responding";
+const REGISTRATION_STALL_PROGRESS_THRESHOLD = 40;
+const REGISTRATION_STALL_TIMEOUT_S = 15.0;
+export const ALIGN_UI_CONFIDENT = 0.7;
+export const SCALE_LOCK_WALK_HINT =
+  "Alignment set — walk the robot a few steps to lock distance";
+
+export function shouldShowScaleLockHint(state: RegistrationViewState): boolean {
+  if (state.phase !== "succeeded" || state.mode !== "auto") {
+    return false;
+  }
+  if (state.scaleLocked === true) {
+    return false;
+  }
+  if (
+    typeof state.alignmentConfidence === "number" &&
+    state.alignmentConfidence >= ALIGN_UI_CONFIDENT
+  ) {
+    return false;
+  }
+  return state.scaleLocked === false;
+}
 
 export function buildRegistrationDetailText(state: RegistrationViewState): string {
   return state.message || "";
 }
 
-// Mirror dimos-ar TAG_REGISTRATION_MIN_OBS = 4
-export const TAG_REGISTRATION_MIN_OBS = 4;
-
-export function parseRegistrationSampleCount(message: string): number | null {
-  const match = message.match(/collecting samples\s*\((\d+)\)/i);
-  return match ? parseInt(match[1], 10) : null;
+export function buildAlignmentProgressPercent(
+  state: RegistrationViewState,
+): number | null {
+  if (typeof state.progress === "number" && Number.isFinite(state.progress)) {
+    return Math.max(0, Math.min(100, Math.round(state.progress)));
+  }
+  if (state.phase === "succeeded") {
+    return 100;
+  }
+  return null;
 }
 
-export function isRedundantLookAtTagMessage(message: string): boolean {
-  return /look at the april\s*tag/i.test(message);
+export function formatRegistrationProgressText(percent: number): string {
+  return `${Math.round(percent)}%`;
 }
 
 export function buildAlignmentTitle(state: RegistrationViewState): string {
@@ -145,14 +177,6 @@ export function buildAlignmentTitle(state: RegistrationViewState): string {
   }
   if (/waiting for camera intrinsics/i.test(state.message)) {
     return "Starting…";
-  }
-  const sampleCount = parseRegistrationSampleCount(state.message);
-  if (sampleCount !== null) {
-    const pct = Math.min(
-      100,
-      Math.round((sampleCount / TAG_REGISTRATION_MIN_OBS) * 100),
-    );
-    return `Alignment ${pct}%`;
   }
   return "Registration";
 }
@@ -174,9 +198,12 @@ export function applyRegistrationStatusToViewState(
   return {
     ...state,
     phase: msg.phase,
-    message: msg.message || state.message,
+    message: msg.message,
     tagVisible: msg.tag_visible ?? state.tagVisible,
+    progress: msg.progress,
     previewPose: msg.preview_pose ?? state.previewPose,
+    scaleLocked: msg.scale_locked ?? state.scaleLocked,
+    alignmentConfidence: msg.alignment_confidence ?? state.alignmentConfidence,
   };
 }
 
@@ -187,10 +214,11 @@ export function buildRegistrationDisplay(
 ): RegistrationDisplayModel {
   if (state.mode === "auto") {
     if (state.phase === "succeeded") {
+      const detailText = shouldShowScaleLockHint(state) ? SCALE_LOCK_WALK_HINT : "";
       return {
         statusText: "Registration completed",
         statusColor: COLOR_SUCCESS,
-        detailText: "",
+        detailText,
         detailColor: COLOR_WHITE,
       };
     }
@@ -198,7 +226,7 @@ export function buildRegistrationDisplay(
       return {
         statusText: state.message || "Registration failed",
         statusColor: COLOR_ERROR,
-        detailText: "Tap Redo to retry",
+        detailText: "Click Retry or switch to Manual pose",
         detailColor: COLOR_WHITE,
       };
     }
@@ -211,7 +239,7 @@ export function buildRegistrationDisplay(
       };
     }
     const tagStatus = state.tagVisible
-      ? { text: "✅  Tag visible", color: COLOR_SUCCESS }
+      ? { text: "✅  Tag detected - move around", color: COLOR_SUCCESS }
       : { text: "❌  Tag not visible", color: COLOR_ERROR };
     let detailText = buildRegistrationDetailText(state);
     if (!state.tagVisible && isRegistrationPreviewPhase(state.phase)) {
@@ -268,7 +296,7 @@ export function getWizardFooterState(
     nextStyle = SnapOS2Styles.Primary;
   } else if (step === WizardStep.Register) {
     if (isRegistrationFailed(registrationState)) {
-      nextLabel = "Redo";
+      nextLabel = "Retry";
       nextStyle = SnapOS2Styles.PrimaryNeutral;
     } else if (isRegistrationPendingCommit(registrationState, commitInFlight)) {
       nextLabel = "Completing...";
@@ -323,6 +351,9 @@ export class RegistrationFlow {
   private _lastLoggedRegistrationStatusKey = "";
   private _commitInFlight = false;
   private _finishRegistrationDispatched = false;
+  private _stallRecoveryProgress: number | null = null;
+  private _stallRecoverySince = -1;
+  private _stallRecoveryAttempted = false;
 
   constructor(
     private readonly _coordinator: ARBridgeCoordinator | null,
@@ -469,11 +500,11 @@ export class RegistrationFlow {
       this._registrationClient?.preferredMode() === "manualOnly" ||
       this._state.mode === "manual"
     ) {
-      this._callbacks.log("redo requested — restarting manual registration");
+      this._callbacks.log("retry requested — restarting manual registration");
       this._beginManualMode();
       return;
     }
-    this._callbacks.log("redo requested — restarting auto registration");
+    this._callbacks.log("retry requested — restarting auto registration");
     this._beginAutoMode();
   }
 
@@ -531,6 +562,8 @@ export class RegistrationFlow {
       }
       return;
     }
+
+    this._maybeRecoverStalledAutoRegistration();
 
     if (
       this._state.mode !== "manual" ||
@@ -601,6 +634,7 @@ export class RegistrationFlow {
     this._commitInFlight = false;
     this._finishRegistrationDispatched = false;
     this._lastManualCandidateSyncTime = -1;
+    this._resetStallRecovery();
     this._state = createRegistrationViewState();
     this._registrationClient?.cancelPlacement();
     this._registrationClient?.stop({ notifyBridge: true });
@@ -642,13 +676,13 @@ export class RegistrationFlow {
   }
 
   private _logRegistrationStatusIfChanged(msg: RegistrationStatusMessage): void {
-    const key = `${msg.phase}|${msg.mode ?? "-"}|${msg.capture}|${msg.tag_visible ?? "-"}`;
+    const key = `${msg.phase}|${msg.mode ?? "-"}|${msg.tag_visible ?? "-"}`;
     if (key === this._lastLoggedRegistrationStatusKey) {
       return;
     }
     this._lastLoggedRegistrationStatusKey = key;
     this._callbacks.log(
-      `registration_status phase=${msg.phase} mode=${msg.mode ?? "-"} capture=${msg.capture} "${msg.message}"`,
+      `registration_status phase=${msg.phase} mode=${msg.mode ?? "-"} "${msg.message}"`,
     );
   }
 
@@ -674,5 +708,56 @@ export class RegistrationFlow {
       return;
     }
     this._callbacks.scheduleFinishRegistration(1.5);
+  }
+
+  private _resetStallRecovery(): void {
+    this._stallRecoveryProgress = null;
+    this._stallRecoverySince = -1;
+    this._stallRecoveryAttempted = false;
+  }
+
+  private _maybeRecoverStalledAutoRegistration(): void {
+    if (
+      this._state.mode !== "auto" ||
+      !isRegistrationPreviewPhase(this._state.phase) ||
+      !this._registrationClient?.hasActiveIntent() ||
+      !this._bridgeRuntime?.hasConnection() ||
+      this._stallRecoveryAttempted
+    ) {
+      return;
+    }
+
+    const progress = buildAlignmentProgressPercent(this._state);
+    if (
+      progress === null ||
+      progress <= 0 ||
+      progress > REGISTRATION_STALL_PROGRESS_THRESHOLD ||
+      progress === 100
+    ) {
+      this._resetStallRecovery();
+      return;
+    }
+
+    const now = getTime();
+    if (this._stallRecoveryProgress !== progress) {
+      this._stallRecoveryProgress = progress;
+      this._stallRecoverySince = now;
+      return;
+    }
+
+    if (
+      this._stallRecoverySince < 0 ||
+      now - this._stallRecoverySince < REGISTRATION_STALL_TIMEOUT_S
+    ) {
+      return;
+    }
+
+    this._stallRecoveryAttempted = true;
+    this._callbacks.log(
+      `auto registration stalled at ${progress}% — resending bridge session`,
+    );
+    if (this._registrationClient?.ensureSession()) {
+      this._resetStallRecovery();
+    }
   }
 }

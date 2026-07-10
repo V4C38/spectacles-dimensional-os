@@ -1,9 +1,10 @@
+import animate from "SpectaclesInteractionKit.lspkg/Utils/animate";
 import {
   AppStateData,
-  NAV_GOAL_MODE_LABELS,
   OperatingMode,
   robotActivityPresentation,
 } from "../AppState";
+import { formatRegistrationProgressText } from "../Registration/RegistrationFlow";
 import { RectangleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RectangleButton";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import {
@@ -14,11 +15,11 @@ import {
   findChildRecursive,
   findText,
   FONT_BUTTON,
+  FONT_CALIBRATE_PROGRESS,
   requireChild,
   requireRectangleButton,
   requireRoundButton,
   requireText,
-  setButtonEnabled,
   setButtonToggleState,
   SnapOS2Styles,
 } from "../UI/UIKit";
@@ -26,23 +27,22 @@ import { UILogEntry } from "../UI/UILogger";
 import { scaleIn, scaleOut } from "../Utilities/AnimationUtilities";
 
 // ================================================================
-/** Binds and updates the floating robot menu / marker HUD (toggle, stop, goal mode, registration overlay). */
+/** Binds and updates the floating robot menu / marker HUD (toggle, stop, registration overlay). */
 // ================================================================
+
+const REGISTRATION_PROGRESS_ANIM_S = 0.35;
 
 export interface RobotUiAssistOverlay {
   titleText: string;
   statusText: string;
   statusColor: vec4;
-  showWizardMenu: boolean;
-  showContinue: boolean;
-  continueInactive: boolean;
+  progressPercent: number | null;
   showStop: boolean;
 }
 
 export interface RobotUiCallbacks {
   onToggle: () => void;
   onStop: () => void;
-  onGoalModeCycle: () => void;
   onContinue?: () => void;
 }
 
@@ -56,25 +56,21 @@ export class RobotUiView {
   private readonly hudStateInfoText: Text | null;
   private readonly menuStateInfoText: Text;
   private readonly stopLabel: Text;
-  private readonly goalModeLabel: Text;
   private readonly stopObj: SceneObject;
-  private readonly goalModeObj: SceneObject;
   private readonly stopBtn: RectangleButton;
-  private readonly goalModeBtn: RectangleButton;
   private readonly manualModeMenu: SceneObject | null;
   private readonly agentModeMenu: SceneObject | null;
-  private readonly registrationWizardMenuObj: SceneObject | null;
-  private readonly continueRegistrationObj: SceneObject | null;
-  private readonly continueRegistrationBtn: RectangleButton | null;
+  private readonly registrationModeMenu: SceneObject | null;
+  private readonly registrationProgressText: Text | null;
   private readonly _debugInfoText: Text | null;
   private _operatingMode: OperatingMode = "manual";
   private _inRegistrationMode = false;
   private _debugMode = false;
   private _uiLogEntry: UILogEntry | null = null;
   private _callbacks: RobotUiCallbacks | null = null;
-  private _menuContinueHandler: (() => void) | null = null;
-  private _registrationContinueHandler: (() => void) | null = null;
   private _registrationPreviewActive = false;
+  private _displayedProgressPercent: number | null = null;
+  private _progressAnimToken = 0;
 
   constructor(markerRoot: SceneObject, menuRoot: SceneObject) {
     this.markerRoot = markerRoot;
@@ -91,18 +87,16 @@ export class RobotUiView {
     this.stopObj = requireChild(this.menuObj, "RobotMenuStop", "RobotUiView");
     this.manualModeMenu = findChildRecursive(this.menuObj, "ManualModeMenu");
     this.agentModeMenu = findChildRecursive(this.menuObj, "AgentModeMenu");
-    this.goalModeObj = findChildRecursive(this.menuObj, "RobotMenuModeSwitch");
-    if (!this.goalModeObj) {
-      throw new Error("RobotUiView: Missing scene object RobotMenuModeSwitch");
+    this.registrationModeMenu = findChildRecursive(this.menuObj, "RegistrationModeMenu");
+    this.registrationProgressText = this.registrationModeMenu
+      ? findText(this.registrationModeMenu, "RegistrationProgressText")
+      : null;
+    if (this.registrationProgressText) {
+      this.registrationProgressText.size = FONT_CALIBRATE_PROGRESS;
+      this.registrationProgressText.getSceneObject().enabled = false;
     }
     this.stopBtn = requireRectangleButton(this.stopObj, "RobotUiView");
-    this.goalModeBtn = requireRectangleButton(this.goalModeObj, "RobotUiView");
     this.stopLabel = requireText(this.stopObj, "RobotMenuStopLabel", "RobotUiView");
-    this.goalModeLabel = requireText(
-      this.goalModeObj,
-      "RobotMenuEnableNavigationLabel",
-      "RobotUiView",
-    );
     this.toggleBtn = requireRoundButton(toggleObj, "RobotUiView");
     this.toggleVisual = toggleObj.getComponent(
       "Component.RenderMeshVisual",
@@ -114,17 +108,10 @@ export class RobotUiView {
       setButtonToggleState(this.stopBtn, true);
     });
     bindHoverScale(this.stopBtn, this.stopObj);
-    this.goalModeBtn.onTriggerUp.add(() => this._callbacks?.onGoalModeCycle());
 
-    this.registrationWizardMenuObj = findChildRecursive(this.menuObj, "RegistrationWizardMenu");
-    this.continueRegistrationObj = this.registrationWizardMenuObj
-      ? findChildRecursive(this.registrationWizardMenuObj, "ContinueRegistrationButton")
-      : null;
-    this.continueRegistrationBtn = this.continueRegistrationObj
-      ? requireRectangleButton(this.continueRegistrationObj, "RobotUiView")
-      : null;
-    if (this.continueRegistrationBtn) {
-      this.continueRegistrationBtn.onTriggerUp.add(() => this._invokeContinueHandler());
+    const goalModeObj = findChildRecursive(this.menuObj, "RobotMenuModeSwitch");
+    if (goalModeObj) {
+      goalModeObj.enabled = false;
     }
 
     this.stopLabel.size = FONT_BUTTON;
@@ -139,9 +126,6 @@ export class RobotUiView {
 
   public bindCallbacks(callbacks: RobotUiCallbacks): void {
     this._callbacks = callbacks;
-    if (callbacks.onContinue !== undefined) {
-      this._menuContinueHandler = callbacks.onContinue;
-    }
   }
 
   public setRegistrationPreviewActive(active: boolean): void {
@@ -183,13 +167,12 @@ export class RobotUiView {
     if (this.agentModeMenu) {
       this.agentModeMenu.enabled = mode === "agent";
     }
-    if (this.registrationWizardMenuObj) {
-      this.registrationWizardMenuObj.enabled = mode === "registration";
+    if (this.registrationModeMenu) {
+      this.registrationModeMenu.enabled = mode === "registration";
     }
-  }
-
-  public setOnContinue(handler: (() => void) | null): void {
-    this._registrationContinueHandler = handler;
+    if (mode !== "registration") {
+      this._setRegistrationProgressPercent(null);
+    }
   }
 
   public syncFromState(state: AppStateData, uiLogEntry: UILogEntry | null = null): void {
@@ -205,11 +188,6 @@ export class RobotUiView {
     if (state.operatingMode !== "registration") {
       this._applyTitle(title);
       this._applyActivity(activity.text, activity.color);
-    }
-
-    if (state.operatingMode !== "registration") {
-      const navAvailable = state.robotRuntime.capabilities.nav?.available ?? false;
-      this._syncGoalModeButton(state.navigationGoalMode, navAvailable);
     }
 
     const stopAvailable = state.robotRuntime.capabilities.emergency_stop?.available ?? false;
@@ -234,20 +212,8 @@ export class RobotUiView {
   public applyAssistOverlay(overlay: RobotUiAssistOverlay): void {
     this._applyTitle(overlay.titleText);
     this._applyActivity(overlay.statusText, overlay.statusColor);
-    if (this.registrationWizardMenuObj) {
-      this.registrationWizardMenuObj.enabled = overlay.showWizardMenu;
-    }
-    this.menuTitleText.getSceneObject().enabled = !overlay.showWizardMenu;
-    this.menuStateInfoText.getSceneObject().enabled = !overlay.showWizardMenu;
-    if (this.continueRegistrationObj) {
-      this.continueRegistrationObj.enabled =
-        overlay.showContinue && !overlay.continueInactive;
-    }
+    this._setRegistrationProgressPercent(overlay.progressPercent);
     this.stopObj.enabled = overlay.showStop;
-  }
-
-  private _invokeContinueHandler(): void {
-    (this._registrationContinueHandler ?? this._menuContinueHandler)?.();
   }
 
   private _applyTitle(title: string): void {
@@ -266,17 +232,54 @@ export class RobotUiView {
     }
   }
 
-  private _syncGoalModeButton(
-    mode: AppStateData["navigationGoalMode"],
-    available: boolean,
-  ): void {
-    if (!this.goalModeBtn || !this.goalModeLabel) {
+  private _setRegistrationProgressPercent(target: number | null): void {
+    if (!this.registrationProgressText) {
       return;
     }
-    this.goalModeLabel.text = available
-      ? NAV_GOAL_MODE_LABELS[mode]
-      : "Navigation\nUnavailable";
-    setButtonEnabled(this.goalModeBtn, available);
+    const textObj = this.registrationProgressText.getSceneObject();
+    if (target === null) {
+      this._progressAnimToken += 1;
+      this._displayedProgressPercent = null;
+      textObj.enabled = false;
+      this.registrationProgressText.text = "";
+      return;
+    }
+
+    textObj.enabled = true;
+    if (
+      this._displayedProgressPercent === null ||
+      target < this._displayedProgressPercent
+    ) {
+      this._progressAnimToken += 1;
+      this._displayedProgressPercent = target;
+      this.registrationProgressText.text = formatRegistrationProgressText(target);
+      return;
+    }
+    if (target === this._displayedProgressPercent) {
+      return;
+    }
+
+    const start = this._displayedProgressPercent;
+    const token = ++this._progressAnimToken;
+    animate({
+      duration: REGISTRATION_PROGRESS_ANIM_S,
+      easing: "ease-out-quad",
+      update: (t: number) => {
+        if (token !== this._progressAnimToken) {
+          return;
+        }
+        const value = start + (target - start) * t;
+        this._displayedProgressPercent = value;
+        this.registrationProgressText!.text = formatRegistrationProgressText(value);
+      },
+      ended: () => {
+        if (token !== this._progressAnimToken) {
+          return;
+        }
+        this._displayedProgressPercent = target;
+        this.registrationProgressText!.text = formatRegistrationProgressText(target);
+      },
+    });
   }
 
   private _refreshDebugInfoText(): void {

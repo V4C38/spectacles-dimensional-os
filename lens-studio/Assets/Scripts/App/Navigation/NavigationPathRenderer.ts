@@ -18,11 +18,8 @@ const PATH_REBUILD_POSITION_EPSILON_CM = 0.5;
 // (VisualStyle.FadedStart = start only, FadedEnd = end only; 4 is both — not in the TS enum.)
 const PATH_LINE_VISUAL_STYLE = 4 as VisualStyle;
 
-export type PathRenderStyle = "navigating" | "preview";
-
-// SIK interactor yellow (#FFFC00); used for the navigating path.
+// SIK interactor yellow (#FFFC00).
 const PATH_LINE_YELLOW = new vec4(1, 1, 0, 1);
-const PATH_LINE_WHITE = new vec4(1, 1, 1, 1);
 
 function transparentColor(base: vec4): vec4 {
   return new vec4(base.x, base.y, base.z, 0);
@@ -31,10 +28,6 @@ function transparentColor(base: vec4): vec4 {
 const DEFAULT_PATH_MATERIAL = requireAsset(
   "SpectaclesInteractionKit.lspkg/Components/Interaction/InteractorLineVisual/InteractorLineMaterial.mat",
 ) as Material;
-
-function styleColor(style: PathRenderStyle): vec4 {
-  return style === "preview" ? PATH_LINE_WHITE : PATH_LINE_YELLOW;
-}
 
 function configurePathLinePass(pass: Pass, color: vec4): void {
   const linePass = pass as any;
@@ -139,13 +132,13 @@ function filletPathCorners(points: vec3[]): vec3[] {
   return filleted;
 }
 
-function createPathLineMaterial(style: PathRenderStyle): Material | null {
+function createPathLineMaterial(): Material | null {
   if (!DEFAULT_PATH_MATERIAL) {
     return null;
   }
 
   const material = DEFAULT_PATH_MATERIAL.clone();
-  configurePathLinePass(material.mainPass, styleColor(style));
+  configurePathLinePass(material.mainPass, PATH_LINE_YELLOW);
   return material;
 }
 
@@ -155,9 +148,7 @@ export class NavigationPathRenderer {
   private readonly lineRenderer: InteractorLineRenderer | null = null;
   private _startY: number | null = null;
   private _endY: number | null = null;
-  private _style: PathRenderStyle = "navigating";
   private _lastRenderedPoints: vec3[] = [];
-  private _lastRenderedStyle: PathRenderStyle = "navigating";
 
   constructor(parent: SceneObject) {
     // Create container with identity world transform so world-cm waypoints map 1:1 to mesh-local points
@@ -168,19 +159,19 @@ export class NavigationPathRenderer {
     transform.setWorldRotation(quat.quatIdentity());
     transform.setWorldScale(vec3.one());
 
-    this.pathMaterial = createPathLineMaterial(this._style);
+    this.pathMaterial = createPathLineMaterial();
     if (this.pathMaterial) {
       try {
         this.lineRenderer = new InteractorLineRenderer({
           material: this.pathMaterial,
           startWidth: LINE_WIDTH_CM,
           endWidth: LINE_WIDTH_CM,
-          startColor: styleColor(this._style),
-          endColor: styleColor(this._style),
+          startColor: PATH_LINE_YELLOW,
+          endColor: PATH_LINE_YELLOW,
           points: [],
         });
         this.lineRenderer.visualStyle = PATH_LINE_VISUAL_STYLE;
-        this.lineRenderer.setSolidColor(styleColor(this._style));
+        this.lineRenderer.setSolidColor(PATH_LINE_YELLOW);
         this.lineRenderer.getSceneObject().setParent(this.container);
       } catch (e) {
         print(`NavigationPathRenderer: Failed to create LineRenderer: ${e}`);
@@ -205,22 +196,15 @@ export class NavigationPathRenderer {
     this._endY = null;
   }
 
-  public setProtocolPath(
-    waypoints: [number, number, number][],
-    style: PathRenderStyle = "navigating",
-  ): void {
+  public setProtocolPath(waypoints: [number, number, number][]): void {
     const lensPoints = waypoints.map((point) => protocolMetersToLensCentimeters(point));
-    this.setLensPath(lensPoints, style);
+    this.setLensPath(lensPoints);
   }
 
-  public setLensPath(
-    points: vec3[],
-    style: PathRenderStyle = "navigating",
-  ): void {
+  public setLensPath(points: vec3[]): void {
     if (!this.lineRenderer) {
       return;
     }
-    this._applyStyle(style);
 
     if (points.length < 2) {
       this.clear();
@@ -236,19 +220,14 @@ export class NavigationPathRenderer {
       return new vec3(p.x, y, p.z);
     });
 
-    if (this._matchesLastRendered(liftedPoints, style)) {
+    if (this._matchesLastRendered(liftedPoints)) {
       this.container.enabled = true;
       return;
     }
 
     this.lineRenderer.points = liftedPoints;
     this._lastRenderedPoints = liftedPoints.map((p) => new vec3(p.x, p.y, p.z));
-    this._lastRenderedStyle = style;
     this.container.enabled = true;
-  }
-
-  public restyle(style: PathRenderStyle): void {
-    this._applyStyle(style);
   }
 
   public clear(): void {
@@ -260,8 +239,8 @@ export class NavigationPathRenderer {
     this.container.enabled = false;
   }
 
-  private _matchesLastRendered(points: vec3[], style: PathRenderStyle): boolean {
-    if (this._lastRenderedStyle !== style || this._lastRenderedPoints.length !== points.length) {
+  private _matchesLastRendered(points: vec3[]): boolean {
+    if (this._lastRenderedPoints.length !== points.length) {
       return false;
     }
     for (let i = 0; i < points.length; i++) {
@@ -270,33 +249,5 @@ export class NavigationPathRenderer {
       }
     }
     return true;
-  }
-
-  private _applyStyle(style: PathRenderStyle): void {
-    if (this._style === style || !this.lineRenderer) {
-      return;
-    }
-    this._style = style;
-    const color = styleColor(style);
-    // InteractorLineRenderer clones the config material internally, so the material
-    // actually drawn is meshComponent.mainMaterial, not this.pathMaterial. Restyle the
-    // rendered material directly so the fade-tip ports (Port_Value*_N077) match the body
-    // color; otherwise the ends keep their original-style color (e.g. yellow tips on a
-    // white preview line).
-    const renderedPass = this._renderedLinePass();
-    if (renderedPass) {
-      configurePathLinePass(renderedPass, color);
-    }
-    this.lineRenderer.setSolidColor(color);
-  }
-
-  private _renderedLinePass(): Pass | null {
-    if (!this.lineRenderer) {
-      return null;
-    }
-    const meshVisual = this.lineRenderer
-      .getSceneObject()
-      .getComponent("Component.RenderMeshVisual");
-    return meshVisual?.mainMaterial?.mainPass ?? null;
   }
 }

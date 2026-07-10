@@ -35,7 +35,6 @@ function baseState(patch: Partial<AppStateData> = {}): AppStateData {
     navigationState: "off",
     robotInteractionMode: "hidden",
     navigationOutcome: defaultNavigationOutcome(),
-    navigationGoalMode: "single",
     bridgeLinkState: "disconnected",
     bridgeSnapshot: createDefaultBridgeSnapshot(),
     robotRuntime: runtimeState(),
@@ -50,7 +49,7 @@ describe("validateSessionFields", () => {
       baseState({
         phase: "registration",
         navigationState: "armed",
-        navigationOutcome: { kind: "success" },
+        navigationOutcome: { kind: "failed", errorCode: null },
         robotInteractionMode: "runtimeRobot",
       }),
     );
@@ -110,7 +109,6 @@ describe("createDefaultAppStateData", () => {
     expect(state.operatingMode).toBe("manual");
     expect(state.bridgeLinkState).toBe("disconnected");
     expect(state.navigationState).toBe("off");
-    expect(state.navigationGoalMode).toBe("continuous");
   });
 });
 
@@ -125,17 +123,15 @@ describe("isRuntimePhase", () => {
 });
 
 describe("navigationOutcomePresentation", () => {
-  it("maps success and failed outcomes to status text", () => {
-    expect(navigationOutcomePresentation({ kind: "success" })).toEqual({
-      text: "Navigation success",
-      color: COLOR_SUCCESS,
-    });
+  it("maps failed outcomes to status text", () => {
     expect(navigationOutcomePresentation({ kind: "failed", errorCode: 1 })).toEqual({
       text: "Navigation failed",
       color: COLOR_ERROR,
     });
     expect(navigationOutcomePresentation({ kind: "none" })).toBeNull();
   });
+});
+
 describe("bridgeLinkPresentation", () => {
   it("maps bridge link states to status text", () => {
     AppState.connectedRobotDisplayName = NO_ROBOT_CONNECTED_LABEL;
@@ -186,9 +182,9 @@ describe("robotActivityPresentation", () => {
   it("prefers navigation outcome over steady state", () => {
     expect(
       robotActivityPresentation(
-        baseState({ navigationOutcome: { kind: "success" } }),
+        baseState({ navigationOutcome: { kind: "failed", errorCode: 1 } }),
       ),
-    ).toEqual({ text: "Navigation success", color: COLOR_SUCCESS });
+    ).toEqual({ text: "Navigation failed", color: COLOR_ERROR });
   });
 
   it("falls back to steady state when no outcome", () => {
@@ -212,8 +208,6 @@ describe("robotActivityPresentation", () => {
       ),
     ).toEqual({ text: "Robot offline", color: COLOR_ERROR });
   });
-});
-
 });
 
 describe("robotMarkerSteadyStatePresentation", () => {
@@ -254,18 +248,6 @@ describe("robotMarkerSteadyStatePresentation", () => {
       ),
     ).toEqual({ text: "Navigating", color: COLOR_WHITE });
   });
-
-  it("returns Navigating for agent mode with continuous goal mode", () => {
-    expect(
-      robotMarkerSteadyStatePresentation(
-        baseState({
-          operatingMode: "agent",
-          navigationState: "navigating",
-          navigationGoalMode: "continuous",
-        }),
-      ),
-    ).toEqual({ text: "Navigating", color: COLOR_WHITE });
-  });
 });
 
 describe("toSessionState", () => {
@@ -288,7 +270,7 @@ describe("toSessionState", () => {
           operatingMode: "agent",
           robotInteractionMode: "runtimeRobot",
           navigationState: "navigating",
-          navigationOutcome: { kind: "success" },
+          navigationOutcome: { kind: "none" },
         }),
       ),
     ).toEqual({
@@ -296,7 +278,7 @@ describe("toSessionState", () => {
       operating: "agent",
       interaction: "runtimeRobot",
       navigation: "navigating",
-      outcome: { kind: "success" },
+      outcome: { kind: "none" },
     });
   });
 });

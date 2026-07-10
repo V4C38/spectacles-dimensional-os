@@ -26,7 +26,6 @@
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
-    frameCapture: false
     markerRoot: false
   ScriptTypesHidden:
     {}
@@ -38,10 +37,8 @@
     []
   DefaultScriptInputs:
     - markerRoot: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
-      frameCapture: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
   InputLines:
     - // @input SceneObject markerRoot
-    - // @input AssignableType frameCapture

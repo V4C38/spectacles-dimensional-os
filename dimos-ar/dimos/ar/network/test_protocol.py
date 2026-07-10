@@ -24,6 +24,7 @@ from dimos.ar.network.protocol import (
     decode_inbound,
     encode_bridge_status,
     encode_camera_frame_ack,
+    encode_capture_policy,
     encode_hello,
     encode_lidar_binary,
     encode_nav_status,
@@ -34,10 +35,11 @@ from dimos.ar.network.protocol import (
     encode_runtime_snapshot,
     nav_phase_payload,
 )
-from dimos.ar.registration.types import CaptureHint, RegistrationMode, RegistrationPhase
+from dimos.ar.registration.types import RegistrationMode, RegistrationPhase
 from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
 from dimos.ar.robot_profile.g1 import g1_handshake
 from dimos.ar.world_frame.state import WorldFrameState
+from dimos.ar.world_frame.wire import encode_world_frame_correction
 
 
 def _sample_handshake() -> RobotHandshake:
@@ -77,7 +79,6 @@ def test_encode_hello_g1_tag_tracking_profile() -> None:
         "unitree_g1",
         nav_available=True,
         path_available=True,
-        plan_preview_available=True,
         cancel_goal_available=False,
         emergency_stop_available=True,
         tag_mount_available=True,
@@ -96,7 +97,6 @@ def test_encode_hello_g1_tag_registration_disabled() -> None:
         "unitree_g1",
         nav_available=True,
         path_available=True,
-        plan_preview_available=True,
         cancel_goal_available=False,
         emergency_stop_available=True,
         tag_mount_available=False,
@@ -115,7 +115,6 @@ def test_nav_goal_decode_navigate() -> None:
     raw = json.dumps(
         {
             "type": "nav_goal",
-            "intent": "navigate",
             "ts": 2.0,
             "robot_id": "unitree_go2",
             "position": [1.0, 0.0, 0.0],
@@ -123,7 +122,6 @@ def test_nav_goal_decode_navigate() -> None:
     )
     msg = decode_inbound(raw)
     assert isinstance(msg, NavGoalMessage)
-    assert msg.intent == "navigate"
     assert msg.position == (1.0, 0.0, 0.0)
     assert msg.orientation is None
 
@@ -132,7 +130,6 @@ def test_nav_goal_decode_with_orientation() -> None:
     raw = json.dumps(
         {
             "type": "nav_goal",
-            "intent": "navigate",
             "ts": 2.0,
             "robot_id": "unitree_go2",
             "position": [1.0, 0.0, 0.0],
@@ -143,23 +140,6 @@ def test_nav_goal_decode_with_orientation() -> None:
     assert isinstance(msg, NavGoalMessage)
     assert msg.position == (1.0, 0.0, 0.0)
     assert msg.orientation == (0.0, 0.0, 0.70710678, 0.70710678)
-
-
-def test_nav_goal_decode_preview() -> None:
-    raw = json.dumps(
-        {
-            "type": "nav_goal",
-            "intent": "preview",
-            "ts": 2.5,
-            "robot_id": "unitree_go2",
-            "position": [2.0, 0.0, 1.0],
-            "orientation": [0.0, 0.0, 0.0, 1.0],
-        }
-    )
-    msg = decode_inbound(raw)
-    assert isinstance(msg, NavGoalMessage)
-    assert msg.intent == "preview"
-    assert msg.position == (2.0, 0.0, 1.0)
 
 
 def test_cancel_nav_goal_decode() -> None:
@@ -383,7 +363,6 @@ def test_encode_registration_status() -> None:
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.APRIL_TAG,
                 phase=RegistrationPhase.SCANNING,
-                capture=CaptureHint.STEADY,
                 message="Look at the AprilTag on your robot",
                 tag_visible=True,
             ),
@@ -392,9 +371,41 @@ def test_encode_registration_status() -> None:
     assert raw["type"] == "registration_status"
     assert raw["mode"] == "april_tag"
     assert raw["phase"] == "scanning"
-    assert raw["capture"] == "steady"
     assert raw["tag_visible"] is True
     assert "progress" not in raw
+
+
+def test_encode_registration_status_with_progress() -> None:
+    raw = json.loads(
+        encode_registration_status(
+            ts=1.0,
+            status=RegistrationStatusPayload(
+                mode=RegistrationMode.APRIL_TAG,
+                phase=RegistrationPhase.SCANNING,
+                message="",
+                tag_visible=True,
+                progress=40,
+            ),
+        )
+    )
+    assert raw["progress"] == 40
+
+
+def test_encode_registration_status_with_alignment_fields() -> None:
+    raw = json.loads(
+        encode_registration_status(
+            ts=1.0,
+            status=RegistrationStatusPayload(
+                mode=RegistrationMode.APRIL_TAG,
+                phase=RegistrationPhase.SUCCEEDED,
+                message="Registration successful",
+                alignment_confidence=0.65,
+                refining=True,
+            ),
+        )
+    )
+    assert raw["alignment_confidence"] == pytest.approx(0.65)
+    assert raw["refining"] is True
 
 
 def test_encode_registration_status_manual() -> None:
@@ -404,7 +415,6 @@ def test_encode_registration_status_manual() -> None:
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.MANUAL_POSE,
                 phase=RegistrationPhase.AWAITING_COMMIT,
-                capture=CaptureHint.OFF,
                 message="Manual robot pose ready — review and commit",
             ),
         )
@@ -414,17 +424,104 @@ def test_encode_registration_status_manual() -> None:
     assert "tag_visible" not in raw
 
 
+@pytest.mark.parametrize(
+    "solve_method",
+    ["apriltag_full", "apriltag_translation", "similarity"],
+)
+def test_encode_world_frame_correction_v12_fields(solve_method: str) -> None:
+    raw = json.loads(
+        encode_world_frame_correction(
+            ts=1.0,
+            trans_delta_m=0.12,
+            yaw_delta_deg=4.5,
+            yaw_corrected=True,
+            solve_quality=0.9,
+            solve_method=solve_method,
+            alignment_confidence=0.8,
+            yaw_observable=True,
+            scale_observable=False,
+        )
+    )
+    assert raw["solve_method"] == solve_method
+    assert raw["alignment_confidence"] == pytest.approx(0.8)
+    assert raw["yaw_observable"] is True
+    assert raw["scale_observable"] is False
+
+
+def test_encode_world_frame_correction_v14_fields() -> None:
+    raw = json.loads(
+        encode_world_frame_correction(
+            ts=1.0,
+            trans_delta_m=0.12,
+            yaw_delta_deg=4.5,
+            yaw_corrected=True,
+            solve_quality=0.9,
+            solve_method="similarity",
+            alignment_confidence=0.8,
+            yaw_observable=True,
+            scale_observable=True,
+            scale_confidence=0.72,
+            yaw_confidence=0.81,
+            scale_held=False,
+            yaw_held=False,
+        )
+    )
+    assert raw["scale_confidence"] == pytest.approx(0.72)
+    assert raw["yaw_confidence"] == pytest.approx(0.81)
+    assert raw["scale_held"] is False
+    assert raw["yaw_held"] is False
+
+
+def test_encode_registration_status_scale_fields() -> None:
+    raw = json.loads(
+        encode_registration_status(
+            ts=1.0,
+            status=RegistrationStatusPayload(
+                mode=RegistrationMode.APRIL_TAG,
+                phase=RegistrationPhase.SUCCEEDED,
+                message="Registration successful",
+                scale_confidence=0.15,
+                scale_locked=False,
+            ),
+        )
+    )
+    assert raw["scale_confidence"] == pytest.approx(0.15)
+    assert raw["scale_locked"] is False
+
+
 def test_encode_camera_frame_ack() -> None:
     raw = json.loads(
         encode_camera_frame_ack(
             seq=9,
+            obs_added=True,
+            refinement_complete=True,
         )
     )
     assert raw["type"] == "camera_frame_ack"
     assert raw["seq"] == 9
+    assert raw["obs_added"] is True
+    assert raw["refinement_complete"] is True
     assert "tag_detected" not in raw
     assert "tag_ids" not in raw
     assert "quality" not in raw
+
+
+def test_encode_capture_policy() -> None:
+    raw = json.loads(
+        encode_capture_policy(
+            max_stream_distance_m=2.5,
+            min_stream_distance_m=0.35,
+            max_capture_speed_mps=0.45,
+            static_speed_mps=0.05,
+            min_observations=3,
+        )
+    )
+    assert raw["type"] == "capture_policy"
+    assert raw["max_stream_distance_m"] == pytest.approx(2.5)
+    assert raw["min_stream_distance_m"] == pytest.approx(0.35)
+    assert raw["max_capture_speed_mps"] == pytest.approx(0.45)
+    assert raw["static_speed_mps"] == pytest.approx(0.05)
+    assert raw["min_observations"] == 3
 
 
 def test_encode_bridge_status() -> None:
@@ -475,51 +572,15 @@ def test_encode_runtime_snapshot() -> None:
             robot_id="unitree_go2",
             bridge=bridge,
             nav={"phase": "navigating"},
-            path={"kind": "active", "waypoints": [[1.0, 2.0, 3.0]]},
+            path={"waypoints": [[1.0, 2.0, 3.0]]},
             ts=5.0,
         )
     )
     assert raw["type"] == "runtime_snapshot"
     assert raw["robot_id"] == "unitree_go2"
     assert raw["nav"]["phase"] == "navigating"
-    assert raw["path"]["kind"] == "active"
+    assert raw["path"]["waypoints"] == [[1.0, 2.0, 3.0]]
     assert "streams_active" not in raw["bridge"]
-
-
-def test_encode_nav_goal_update() -> None:
-    from dimos.ar.network.protocol import encode_nav_goal_update
-
-    raw = json.loads(
-        encode_nav_goal_update(
-            ts=1.0,
-            source="ar",
-            position=(1.0, 0.0, 2.0),
-            orientation=(0.0, 0.0, 0.0, 1.0),
-            active=True,
-        )
-    )
-    assert raw["type"] == "nav_goal_update"
-    assert raw["source"] == "ar"
-    assert raw["active"] is True
-    assert raw["position"] == [1.0, 0.0, 2.0]
-
-
-def test_encode_runtime_snapshot_goal() -> None:
-    raw = json.loads(
-        encode_runtime_snapshot(
-            robot_id="unitree_go2",
-            bridge={"robot_connected": True, "world_frame_committed": True, "reconnecting": False},
-            nav={"phase": "navigating"},
-            goal={
-                "source": "agent",
-                "position": [1.0, 0.0, 2.0],
-                "active": True,
-            },
-            ts=5.0,
-        )
-    )
-    assert raw["goal"]["source"] == "agent"
-    assert raw["goal"]["active"] is True
 
 
 def test_get_status_decode() -> None:
@@ -570,24 +631,11 @@ def test_set_lidar_mode_rejects_invalid_threshold_order() -> None:
 
 
 def test_encode_path_and_nav_status() -> None:
-    path = json.loads(encode_path(ts=2.0, waypoints=[(1.0, 2.0, 3.0)], kind="active"))
+    path = json.loads(encode_path(ts=2.0, waypoints=[(1.0, 2.0, 3.0)]))
     assert path["type"] == "path"
-    assert path["kind"] == "active"
     assert path["waypoints"] == [[1.0, 2.0, 3.0]]
     assert "robot_id" not in path
-
-    preview = json.loads(
-        encode_path(
-            ts=2.5,
-            waypoints=[(4.0, 5.0, 6.0)],
-            kind="preview",
-            target=(7.0, 8.0, 9.0),
-        )
-    )
-    assert preview["type"] == "path"
-    assert preview["kind"] == "preview"
-    assert preview["waypoints"] == [[4.0, 5.0, 6.0]]
-    assert preview["target"] == [7.0, 8.0, 9.0]
+    assert "kind" not in path
 
     status = json.loads(encode_nav_status(ts=3.0, phase="navigating"))
     assert status["type"] == "nav_status"
@@ -679,21 +727,10 @@ def test_encode_path_rounds_waypoints() -> None:
         encode_path(
             ts=2.123456,
             waypoints=[(1.23456, 2.34567, 3.45678)],
-            kind="active",
         )
     )
     assert path["ts"] == 2.123
     assert path["waypoints"] == [[1.235, 2.346, 3.457]]
-
-    preview = json.loads(
-        encode_path(
-            ts=2.5,
-            waypoints=[(4.0, 5.0, 6.0)],
-            kind="preview",
-            target=(7.123456, 8.234567, 9.345678),
-        )
-    )
-    assert preview["target"] == [7.123, 8.235, 9.346]
 
 
 def test_decode_ping() -> None:
