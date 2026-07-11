@@ -14,9 +14,103 @@ import {
   type NavigationInputs,
   type NavigationSession,
 } from "../../ARBridge/Navigation/NavigationModel";
-import type { GroundPlacement } from "./GroundPlacement";
+import animate from "SpectaclesInteractionKit.lspkg/Utils/animate";
+import {
+  isLatestAnimationVersion,
+  nextAnimationVersion,
+} from "../Utilities/AnimationUtilities";
+import type { GroundPlacement, MeshBlockReason } from "./GroundPlacement";
 import type { NavigationMarker } from "./NavigationMarker";
 import type { NavigationPathRenderer } from "./NavigationPathRenderer";
+
+const OPACITY_VERSION_KEY = "__worldMeshHintOpacityVersion";
+const FADE_IN_S = 0.2;
+const FADE_OUT_S = 0.2;
+const TINT_UNSCANNED = new vec4(1, 0.576, 0, 1);
+const TINT_WALL = new vec4(1, 0.2, 0.2, 1);
+
+export type WorldMeshHintState = {
+  blockReason: MeshBlockReason;
+  visible: boolean;
+};
+
+export function createWorldMeshHintState(): WorldMeshHintState {
+  return { blockReason: "none", visible: false };
+}
+
+function applyWorldMeshHint(
+  state: WorldMeshHintState,
+  worldMeshObject: SceneObject,
+  pass: any,
+  blockReason: MeshBlockReason,
+  highlightWorldPos: vec3,
+): void {
+  const blocked = blockReason !== "none";
+  const wasBlocked = state.blockReason !== "none";
+  state.blockReason = blockReason;
+
+  if (blocked) {
+    pass.HighlightLocationWS = highlightWorldPos;
+    pass.TintColor = blockReason === "wall" ? TINT_WALL : TINT_UNSCANNED;
+    if (!wasBlocked) {
+      fadeWorldMeshHintOpacity(state, worldMeshObject, pass, 1, FADE_IN_S, true);
+    } else if (state.visible) {
+      worldMeshObject.enabled = true;
+    }
+    return;
+  }
+
+  if (wasBlocked || state.visible) {
+    fadeWorldMeshHintOpacity(state, worldMeshObject, pass, 0, FADE_OUT_S, false);
+  }
+}
+
+export function resetWorldMeshHint(
+  state: WorldMeshHintState,
+  worldMeshObject: SceneObject,
+  pass: any,
+): void {
+  nextAnimationVersion(state, OPACITY_VERSION_KEY);
+  state.blockReason = "none";
+  state.visible = false;
+  worldMeshObject.enabled = false;
+  pass.Opacity = 0;
+}
+
+function fadeWorldMeshHintOpacity(
+  state: WorldMeshHintState,
+  worldMeshObject: SceneObject,
+  pass: any,
+  targetOpacity: number,
+  duration: number,
+  enableOnStart: boolean,
+): void {
+  const version = nextAnimationVersion(state, OPACITY_VERSION_KEY);
+  const startOpacity = pass.Opacity ?? 0;
+  if (enableOnStart) {
+    worldMeshObject.enabled = true;
+  }
+  animate({
+    duration,
+    easing: "ease-in-out-quad",
+    update: (t: number) => {
+      if (!isLatestAnimationVersion(state, OPACITY_VERSION_KEY, version)) {
+        return;
+      }
+      pass.Opacity = startOpacity + (targetOpacity - startOpacity) * t;
+    },
+    ended: () => {
+      if (!isLatestAnimationVersion(state, OPACITY_VERSION_KEY, version)) {
+        return;
+      }
+      pass.Opacity = targetOpacity;
+      state.visible = targetOpacity > 0;
+      if (targetOpacity <= 0) {
+        worldMeshObject.enabled = false;
+      }
+    },
+  });
+}
 
 // ================================================================
 /** Presentation, AppState sync, and nav-status ingress planning for NavigationController. */
@@ -79,6 +173,10 @@ export type ApplyNavigationPresentationArgs = {
   cancelAvailable: boolean;
   appState: AppState;
   robotFloorPosition: vec3 | null;
+  worldMeshObject: SceneObject;
+  worldMeshVisual: RenderMeshVisual;
+  worldMeshHintState: WorldMeshHintState;
+  placementBlockReason: MeshBlockReason;
 };
 
 export function applyNavigationPresentation(args: ApplyNavigationPresentationArgs): void {
@@ -91,9 +189,18 @@ export function applyNavigationPresentation(args: ApplyNavigationPresentationArg
     cancelAvailable,
     appState,
     robotFloorPosition,
+    worldMeshObject,
+    worldMeshVisual,
+    worldMeshHintState,
+    placementBlockReason,
   } = args;
 
   if (!session.navSessionActive) {
+    resetWorldMeshHint(
+      worldMeshHintState,
+      worldMeshObject,
+      worldMeshVisual.mainMaterial.mainPass as any,
+    );
     return;
   }
 
@@ -112,6 +219,24 @@ export function applyNavigationPresentation(args: ApplyNavigationPresentationArg
 
   placement.setIdleAnchor(idleAnchorEnabled(navigationState));
   placement.setDragEnabled(dragEnabledForState(navigationState));
+
+  if (inputs.activelyDragging) {
+    applyWorldMeshHint(
+      worldMeshHintState,
+      worldMeshObject,
+      worldMeshVisual.mainMaterial.mainPass as any,
+      placementBlockReason,
+      placement.getRenderedPosition(),
+    );
+  } else {
+    applyWorldMeshHint(
+      worldMeshHintState,
+      worldMeshObject,
+      worldMeshVisual.mainMaterial.mainPass as any,
+      "none",
+      vec3.zero(),
+    );
+  }
 
   if (!shouldRenderNavigationPath(navigationState)) {
     pathRenderer.clear();

@@ -43,8 +43,11 @@ import { GroundPlacement, RobotGroundDeadzone } from "./GroundPlacement";
 import {
   applyNavigationPresentation,
   buildNavigationInputs,
+  createWorldMeshHintState,
   planNavStatusEvent,
+  resetWorldMeshHint,
   shouldStreamGoalNow,
+  type WorldMeshHintState,
 } from "./NavigationPresentation";
 import { Signal } from "../Utilities/Utilities";
 import {
@@ -69,8 +72,6 @@ import {
 const GOAL_COMMIT_LOG_INTERVAL_S = 2.0;
 const GOAL_SEND_BLOCKED_LOG_INTERVAL_S = 2.0;
 
-const WorldQueryModule = require("LensStudio:WorldQueryModule");
-
 export type NavigationControllerDeps = {
   eventHost: BaseScriptComponent;
   pathParentFallback: SceneObject;
@@ -82,6 +83,9 @@ export type NavigationControllerDeps = {
   robotMarker: RobotMarker | null;
   navigationMarkerPrefab: ObjectPrefab;
   robotGroundDeadzoneRadiusCm: number;
+  deviceTracking: DeviceTracking;
+  worldMeshObject: SceneObject;
+  worldMeshVisual: RenderMeshVisual;
 };
 
 export class NavigationController {
@@ -103,6 +107,9 @@ export class NavigationController {
   private _protocolParseFailureCount = 0;
   private _uiLogger: UILogger | null = null;
   private _lastGoalSendBlockedLogTime = -GOAL_SEND_BLOCKED_LOG_INTERVAL_S;
+  private _worldMeshHintState: WorldMeshHintState = createWorldMeshHintState();
+  private readonly _worldMeshObject: SceneObject;
+  private readonly _worldMeshVisual: RenderMeshVisual;
 
   constructor(
     private readonly _script: BaseScriptComponent,
@@ -114,9 +121,14 @@ export class NavigationController {
     private readonly _navigationMarkerPrefab: ObjectPrefab,
     private readonly _pathRenderer: NavigationPathRenderer,
     private readonly _placement: GroundPlacement,
+    private readonly _deviceTracking: DeviceTracking,
+    worldMeshObject: SceneObject,
+    worldMeshVisual: RenderMeshVisual,
     private readonly _robotGroundDeadzoneRadiusCm: number,
     private readonly _getLastPose: () => PoseMessage | null,
   ) {
+    this._worldMeshObject = worldMeshObject;
+    this._worldMeshVisual = worldMeshVisual;
     this._placement.onDragActivated = () => this._handleDragActivated();
     this._placement.onPresentationSync = () => this._applyPresentation();
     this._placement.onMarkerButtonPressed = () => {
@@ -140,7 +152,7 @@ export class NavigationController {
     }
     const parent = deps.robotMarker?.markerRoot?.getParent() ?? deps.pathParentFallback;
     const pathRenderer = new NavigationPathRenderer(parent);
-    const placement = new GroundPlacement(deps.eventHost, WorldQueryModule);
+    const placement = new GroundPlacement(deps.eventHost, deps.deviceTracking);
     return new NavigationController(
       deps.eventHost,
       deps.navClient,
@@ -151,6 +163,9 @@ export class NavigationController {
       deps.navigationMarkerPrefab,
       pathRenderer,
       placement,
+      deps.deviceTracking,
+      deps.worldMeshObject,
+      deps.worldMeshVisual,
       deps.robotGroundDeadzoneRadiusCm,
       () => deps.robotPresenter?.lastPose ?? null,
     );
@@ -161,6 +176,7 @@ export class NavigationController {
       return;
     }
     this._hostBound = true;
+    this._deviceTracking.worldOptions.enableWorldMeshesTracking = true;
     this._uiLogger = deps.appStateStore.uiLogger;
     deps.appStateStore.subscribe((state) => this.applyRuntimeState(state.robotRuntime));
     const placementDeferral = this._script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
@@ -430,6 +446,10 @@ export class NavigationController {
       cancelAvailable: this._cancelGoalAvailable,
       appState: this._appState,
       robotFloorPosition: this._getRobotFloorPosition(),
+      worldMeshObject: this._worldMeshObject,
+      worldMeshVisual: this._worldMeshVisual,
+      worldMeshHintState: this._worldMeshHintState,
+      placementBlockReason: this._placement.getPlacementBlockReason(),
     });
   }
 
@@ -496,6 +516,11 @@ export class NavigationController {
         break;
       case "disconnect":
       case "sessionOff":
+        resetWorldMeshHint(
+          this._worldMeshHintState,
+          this._worldMeshObject,
+          this._worldMeshVisual.mainMaterial.mainPass as any,
+        );
         break;
       default:
         break;

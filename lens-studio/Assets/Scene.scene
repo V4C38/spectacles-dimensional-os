@@ -4,6 +4,7 @@
     - !<own> 00000000-0000-0065-0000-000000000064
     - !<own> 0005641c-028d-459a-0000-000000014b4d
     - !<own> 5aa0f98b-e799-448c-a2dc-cae5d04fa2a4
+    - !<own> 87343065-62b9-445a-874d-76d42ea6c7e2
     - !<own> 9d5912d5-686e-4878-a8ba-331574261592
   layers: !<Layers/267ee9a7-aff2-4f9d-9a49-f71214747d03>
     userLayers:
@@ -449,6 +450,26 @@
     - !<own> c89d7e48-75a6-414e-a253-874f80bfe792
   Components:
     []
+- !<RenderMeshVisual/0516edf2-e618-4b7c-a66e-544199834756>
+  PrefabRemaps:
+    []
+  Name: Render Mesh Visual
+  Enabled: true
+  RenderOrder: 0
+  StretchMode: Stretch
+  VerticalAlignment: Center
+  HorizontalAlignment: Center
+  MeshShadowMode: None
+  ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+  ShadowDensity: 1.000000
+  Materials:
+    - !<reference> 58b94df0-8ee8-46a2-86a2-f449c6cb6b0f
+  Mesh: !<reference> c149515d-d613-4bca-a984-ddfcfcc766fd
+  Skin: !<reference> 00000000-0000-0000-0000-000000000000
+  BlendShapesEnabled: true
+  BlendNormals: false
+  BlendShapes:
+    {}
 - !<RenderMeshVisual/08cbf213-e1ce-473b-bca3-c123c4afb03e>
   PrefabRemaps:
     []
@@ -4720,6 +4741,21 @@
     - !<own> 9a14c486-688a-4af4-a99a-084652f3efa1
   Components:
     []
+- !<SceneObject/87343065-62b9-445a-874d-76d42ea6c7e2>
+  PrefabRemaps:
+    []
+  Name: World Mesh
+  Enabled: true
+  Layers: 1
+  LocalTransform: !<TransformEntity>
+    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
+    HasSegmentScaleCompensation: false
+  Children:
+    []
+  Components:
+    - !<own> 0516edf2-e618-4b7c-a66e-544199834756
 - !<SceneObject/876856b0-0b08-4488-9e57-976a4ddd348f>
   PrefabRemaps:
     []
@@ -7374,6 +7410,9 @@
       robotMarker: !<MappingBased.AssignableType_2> b749cbc7-9706-4499-8d79-19f5a03dd792
       pointCloudRenderer: !<MappingBased.AssignableType_3> edc2d9a2-52ca-414f-acba-c9661ee12fea
       navigationMarkerPrefab: !<reference.ObjectPrefab> 8dad663a-f2bb-438d-882b-121c3208aba4
+      deviceTracking: !<reference.DeviceTracking> e5553c8a-0b7e-4ef4-92d9-3e1318fb82c1
+      worldMeshObject: !<reference.SceneObject> 87343065-62b9-445a-874d-76d42ea6c7e2
+      worldMeshVisual: !<reference.RenderMeshVisual> 0516edf2-e618-4b7c-a66e-544199834756
       robotGroundDeadzoneRadiusCm: !<float> 75.000000
   ScriptTypes:
     "":

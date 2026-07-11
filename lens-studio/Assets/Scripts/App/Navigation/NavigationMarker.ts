@@ -42,6 +42,7 @@ export class MarkerViewCore {
   private readonly root: SceneObject;
   private readonly headingRoot: SceneObject | null;
   private readonly dragInteractableObject: SceneObject;
+  private readonly hintAnchorObject: SceneObject;
   private readonly circleVisual: RenderMeshVisual | null;
   private readonly circleWhiteMaterial: Material;
   private readonly circleYellowMaterial: Material;
@@ -69,7 +70,12 @@ export class MarkerViewCore {
     this.root = root;
     this.headingRoot = findChildRecursive(this.root, "NavigationHeadingRoot");
     this.dragInteractableObject = requireChild(this.root, "DragInteractable", "MarkerViewCore");
-    const visualObject = findChildRecursive(this.dragInteractableObject, "Visual");
+    this.hintAnchorObject = requireChild(
+      this.dragInteractableObject,
+      "HintAnchor",
+      "MarkerViewCore",
+    );
+    const visualObject = findChildRecursive(this.headingRoot ?? this.root, "Visual");
     this.circleVisual = visualObject
       ? (visualObject.getComponent("Component.RenderMeshVisual") as RenderMeshVisual | null)
       : null;
@@ -228,6 +234,10 @@ export class MarkerViewCore {
       transform.setWorldPosition(position);
     }
     this.setRotation(rotation);
+  }
+
+  public setDragProbeWorldPosition(position: vec3): void {
+    this.hintAnchorObject.getTransform().setWorldPosition(position);
   }
 
   public interpolatePose(
@@ -610,6 +620,11 @@ export class NavigationMarker extends BaseScriptComponent {
   public setPose(position: vec3, rotation: quat): void {
     this.ensureReady();
     this._view?.setPose(position, rotation);
+  }
+
+  public setDragProbeWorldPosition(position: vec3): void {
+    this.ensureReady();
+    this._view?.setDragProbeWorldPosition(position);
   }
 
   public interpolatePose(

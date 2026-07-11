@@ -1,0 +1,150 @@
+- !<Material/58b94df0-8ee8-46a2-86a2-f449c6cb6b0f>
+  PackagePath: ""
+  PassesInfo:
+    - !<own> 3f044fdb-cd1d-4602-9ece-80d3d8ef9d3a
+- !<PassInfo/3f044fdb-cd1d-4602-9ece-80d3d8ef9d3a>
+  CachedProperties:
+    - Distance:
+        typeIdx: 1
+        value: 255.000000
+    - OriginLocation:
+        typeIdx: 4
+        value: {x: 1.000000, y: 1.000000, z: 1.000000}
+    - Port_Depth_N004:
+        typeIdx: 1
+        value: 1.000000
+    - Port_FinalColor1_N004:
+        typeIdx: 5
+        value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+    - Port_FinalColor2_N004:
+        typeIdx: 5
+        value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+    - Port_FinalColor3_N004:
+        typeIdx: 5
+        value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+    - Port_GSplatPointSize_N004:
+        typeIdx: 1
+        value: 0.000000
+    - Port_GSplatRotation_N004:
+        typeIdx: 5
+        value: {x: 0.000000, y: 0.000000, z: 0.000000, w: 1.000000}
+    - Port_GSplatScale_N004:
+        typeIdx: 4
+        value: {x: 0.000000, y: 0.000000, z: 0.000000}
+    - Port_Input0_N013:
+        typeIdx: 5
+        value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+    - Port_Input0_N014:
+        typeIdx: 5
+        value: {x: 0.000000, y: 0.000000, z: 0.000000, w: 0.000000}
+    - Port_Input0_N017:
+        typeIdx: 1
+        value: 25.000000
+    - Port_Input1_N002:
+        typeIdx: 1
+        value: 1.000000
+    - Port_Input1_N013:
+        typeIdx: 5
+        value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 0.500008}
+    - Port_Input1_N015:
+        typeIdx: 5
+        value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+    - Port_Input1_N017:
+        typeIdx: 1
+        value: 30.000000
+    - Port_Input2_N013:
+        typeIdx: 5
+        value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+    - Port_Input2_N017:
+        typeIdx: 5
+        value: {x: 0.000000, y: 0.000000, z: 0.000000, w: 0.000000}
+    - Port_Normal_N025:
+        typeIdx: 4
+        value: {x: 0.000000, y: 0.000000, z: 1.000000}
+    - Port_PrevWorldPosition_N004:
+        typeIdx: 4
+        value: {x: 0.000000, y: 0.000000, z: 0.000000}
+    - Port_RayDirection_N004:
+        typeIdx: 4
+        value: {x: 0.000000, y: 1.000000, z: 0.000000}
+    - Port_RayOrigin_N004:
+        typeIdx: 4
+        value: {x: 0.000000, y: 0.000000, z: 0.000000}
+    - Port_Value3_N113:
+        typeIdx: 1
+        value: 0.000000
+    - Port_Value4_N010:
+        typeIdx: 1
+        value: 0.000000
+    - Port_Value4_N113:
+        typeIdx: 1
+        value: 0.000000
+    - Port_WorldNormal_N004:
+        typeIdx: 4
+        value: {x: 0.000000, y: 1.000000, z: 0.000000}
+    - Port_WorldPosition_N004:
+        typeIdx: 4
+        value: {x: 0.000000, y: 0.000000, z: 0.000000}
+    - Port_WorldTangent_N004:
+        typeIdx: 4
+        value: {x: 0.000000, y: 0.000000, z: 1.000000}
+  DepthWrite: true
+  DepthTest: true
+  DepthFunction: Always
+  TwoSided: false
+  ColorMask: {x: true, y: true, z: true, w: true}
+  CullMode: Back
+  PolygonOffset: {x: 0.000000, y: 0.000000}
+  FrustumCulling: Auto
+  FrustumCullPad: 0.000000
+  InstanceCount: 4
+  Defines:
+    []
+  BlendMode: PremultipliedAlphaAuto
+  Properties:
+    HighlightLocationWS:
+      typeIdx: 4
+      value: {x: 1.000000, y: 1.000000, z: 1.000000}
+    Opacity:
+      typeIdx: 1
+      value: 0.000000
+    Port_Exponent_N025:
+      typeIdx: 1
+      value: 1.000000
+    Port_Input0_N000:
+      typeIdx: 1
+      value: 0.500000
+    Port_Input0_N007:
+      typeIdx: 1
+      value: 0.000000
+    Port_Input1_N014:
+      typeIdx: 1
+      value: 0.000000
+    Port_Input2_N014:
+      typeIdx: 1
+      value: 0.400000
+    Port_Intensity_N025:
+      typeIdx: 1
+      value: 0.350000
+    Port_Value1_N010:
+      typeIdx: 1
+      value: 0.000000
+    Port_Value2_N010:
+      typeIdx: 1
+      value: 0.000000
+    Port_Value3_N010:
+      typeIdx: 1
+      value: 0.000000
+    Port_Value_N012:
+      typeIdx: 5
+      value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+    PreviewEnabled:
+      typeIdx: 0
+      value: 0
+    Radius:
+      typeIdx: 1
+      value: 60.000000
+    TintColor:
+      typeIdx: 5
+      value: {x: 1.000000, y: 0.576379, z: 0.000000, w: 1.000000}
+  Pass: !<reference> e3a0f2d3-4321-409f-beb0-42d1b190da66

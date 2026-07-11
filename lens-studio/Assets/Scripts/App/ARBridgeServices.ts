@@ -34,6 +34,15 @@ export class ARBridgeServices extends BaseScriptComponent {
   navigationMarkerPrefab: ObjectPrefab;
 
   @input
+  deviceTracking: DeviceTracking;
+
+  @input
+  worldMeshObject: SceneObject;
+
+  @input
+  worldMeshVisual: RenderMeshVisual;
+
+  @input
   robotGroundDeadzoneRadiusCm = 75;
 
   private _state: AppStateStore | null = null;
@@ -148,6 +157,9 @@ export class ARBridgeServices extends BaseScriptComponent {
       robotMarker: this.robotMarker ?? null,
       navigationMarkerPrefab: this.navigationMarkerPrefab,
       robotGroundDeadzoneRadiusCm: this.robotGroundDeadzoneRadiusCm,
+      deviceTracking: this.deviceTracking,
+      worldMeshObject: this.worldMeshObject,
+      worldMeshVisual: this.worldMeshVisual,
     });
     this._router = new InboundRouter(
       session,

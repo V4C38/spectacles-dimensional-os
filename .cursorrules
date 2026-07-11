@@ -43,11 +43,15 @@ spectacles-dimensional-os/
 | Spectacles / Lens Studio | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Contributing | `CONTRIBUTING.md` |
 
-## Bugfix planning
+## Planning
 
 When fixing a bug, investigate and identify the root cause before writing a
 plan. Plans must state the found issue and proposed solution up front, then list
 implementation steps only. Do not create "investigation plans."
+
+Plans are standalone documents: write only the final design and actionable
+steps. Do not include Q&A history, rejected alternatives, migration tables from
+earlier drafts, or "we decided against X" notes from prior plan iterations.
 
 ## dimos-ar bridge — systems design
 

@@ -274,8 +274,8 @@
   Enabled: true
   Shape: !<Cylinder>
     Axis: Y
-    Length: 15.000000
-    Radius: 45.000000
+    Length: 5.000000
+    Radius: 40.000000
   Matter: !<reference> 00000000-0000-0000-0000-000000000000
   Filter: !<reference> 00000000-0000-0000-0000-000000000000
   OverlapFilter: !<reference> 00000000-0000-0000-0000-000000000000
@@ -315,7 +315,7 @@
   LocalTransform: !<TransformEntity>
     Position: {x: 0.000000, y: 0.000000, z: 0.000000}
     Rotation: {x: -90.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 77.500000, y: 77.500000, z: 77.500000}
+    Scale: {x: 31.000000, y: 31.000002, z: 31.000002}
     HasSegmentScaleCompensation: false
   Children:
     []
@@ -433,7 +433,6 @@
     Scale: {x: 0.400000, y: 0.400000, z: 0.400000}
     HasSegmentScaleCompensation: false
   Children:
-    - !<own> 5c3e71d1-1213-45af-af3c-d9928ce33b25
     - !<own> 05cd4765-0ba6-451b-9d11-bad42b2ba0d8
   Components:
     - !<own> 9a61414b-a2b3-49ac-a7cf-8fe6678ac14f
@@ -619,6 +618,7 @@
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
   Children:
+    - !<own> 5c3e71d1-1213-45af-af3c-d9928ce33b25
     - !<own> fc465da3-8037-4292-b601-a3c4b324560b
   Components:
     []
