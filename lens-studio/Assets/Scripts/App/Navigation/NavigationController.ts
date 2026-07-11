@@ -502,6 +502,9 @@ export class NavigationController {
           this._lastSentGoal = null;
           if (!this._placement.isActivelyDragging()) {
             this._placement.resetToIdleAnchoring();
+            if (event.outcome === "succeeded") {
+              this._syncIdlePlacementPose(true);
+            }
           }
         }
         break;

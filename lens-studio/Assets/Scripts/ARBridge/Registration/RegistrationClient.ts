@@ -45,8 +45,6 @@ export interface RegistrationClientDeps {
 
 export class RegistrationClient {
   public readonly onRegistrationStatus = new Signal<RegistrationStatusMessage>();
-  public readonly onAprilTagCaptureStart = new Signal<void>();
-  public readonly onAprilTagCaptureEnd = new Signal<void>();
 
   private readonly _sendDropLog = { value: -1 };
   private _lastRegistrationCommandLogAction = "";
@@ -107,9 +105,6 @@ export class RegistrationClient {
     this._lastStatusTime = -1;
     this._lastSubmittedManualPose = null;
     this._tryStartBridgeSession(mode);
-    if (mode === "april_tag") {
-      this.onAprilTagCaptureStart.emit();
-    }
     print(`RegistrationClient: start mode=${mode}`);
   }
 
@@ -120,7 +115,6 @@ export class RegistrationClient {
     this._awaitingCommit = false;
     this._lastStatusTime = -1;
     this._lastSubmittedManualPose = null;
-    this.onAprilTagCaptureEnd.emit();
     if (notifyBridge && this._session?.isConnected()) {
       this.sendRegistrationCommand("stop");
     }
@@ -341,11 +335,9 @@ export class RegistrationClient {
       );
       this._intent = null;
       this._awaitingCommit = false;
-      this.onAprilTagCaptureEnd.emit();
     } else if (msg.phase === "succeeded") {
       this._awaitingCommit = false;
       this._intent = null;
-      this.onAprilTagCaptureEnd.emit();
     }
     this.onRegistrationStatus.emit(msg);
   };

@@ -158,10 +158,11 @@ Notes:
   - Tag observations are weighted by quality, recency, distance, and IPPE ambiguity;
     a robust 2D similarity fit updates `(scale, yaw, translation)` together when
     observability and fit quality pass.
-  - **`camera_frame_ack`:** carries `obs_added` per frame and
-    `refinement_complete=true` when the current stop episode commits (protocol v15).
-  - **`capture_policy`:** sent after first `camera_info` with bridge-computed distance
-    limits, `max_capture_speed_mps`, `static_speed_mps`, and `min_observations`.
+  - **`camera_frame_ack`:** carries `capturing_budgeted_complete=true` when the
+    current budgeted capture episode commits (protocol v16).
+  - **`capture_policy`:** sent after first `camera_info` with bridge-computed
+    `max_capture_distance_m`, `min_capture_distance_m`, `max_capture_speed_mps`,
+    `static_speed_mps`, and `min_observations`.
   - When `flat_ground` is enabled and base Y drifts > 3 cm for 2 s,
     `check_floor_y_drift` applies a Y-only correction without emitting
     `world_frame_correction`
@@ -169,8 +170,7 @@ Notes:
   are emitted as `world_frame_correction`; sub-threshold updates still commit on the
   bridge.
 - AprilTag registration status broadcasts also carry `alignment_confidence` and
-  `refining` on the wire. `refining` is post-commit runtime polish (the bridge
-  keeps refining alignment after commit); the Lens wizard does not surface it.
+  `scale_locked` on the wire.
 
 **Tag mount geometry (Go2)**  
 The robot marker and LiDAR share `T_world_odom`, which depends on the configured
@@ -183,10 +183,11 @@ the configured mount pose first before tuning aligner thresholds.
 <details>
 <summary>Protocol coupling</summary>
 
-Protocol **v15** is current (`PROTOCOL_VERSION = 15` in `dimos/ar/network/protocol.py`).
-See [`PROTOCOL.md`](PROTOCOL.md) for the full changelog and wire schema. Key v15
-additions: `capture_policy`, `camera_frame_ack.obs_added`, and
-`camera_frame_ack.refinement_complete`. If the AR protocol changes, update these together:
+Protocol **v16** is current (`PROTOCOL_VERSION = 16` in `dimos/ar/network/protocol.py`).
+See [`PROTOCOL.md`](PROTOCOL.md) for the full changelog and wire schema. Key v16
+capture vocabulary: `capture_policy.max_capture_distance_m` /
+`min_capture_distance_m`, `camera_frame_ack.capturing_budgeted_complete`. If the AR
+protocol changes, update these together:
 
 - `dimos/ar/network/protocol.py`
 - `PROTOCOL.md`

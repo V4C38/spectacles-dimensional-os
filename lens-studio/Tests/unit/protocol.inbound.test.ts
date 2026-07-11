@@ -106,14 +106,12 @@ describe("parseInboundMessage", () => {
         tag_visible: true,
         progress: 55,
         alignment_confidence: 0.65,
-        refining: true,
       }),
     );
     expect(msg!.type).toBe("registration_status");
     expect((msg as { phase: string }).phase).toBe("scanning");
     expect((msg as { progress: number }).progress).toBe(55);
     expect((msg as { alignment_confidence: number }).alignment_confidence).toBe(0.65);
-    expect((msg as { refining: boolean }).refining).toBe(true);
   });
 
   it("parses registration_status scale lock fields", () => {
@@ -139,13 +137,12 @@ describe("parseInboundMessage", () => {
         type: "camera_frame_ack",
         ts: 1,
         seq: 5,
-        obs_added: true,
-        refinement_complete: false,
+        capturing_budgeted_complete: false,
       }),
     );
     expect(msg!.type).toBe("camera_frame_ack");
     expect((msg as { seq: number }).seq).toBe(5);
-    expect((msg as { obs_added: boolean }).obs_added).toBe(true);
+    expect((msg as { capturing_budgeted_complete: boolean }).capturing_budgeted_complete).toBe(false);
   });
 
   it("parses capture_policy", () => {
@@ -153,8 +150,8 @@ describe("parseInboundMessage", () => {
       JSON.stringify({
         type: "capture_policy",
         ts: 1,
-        max_stream_distance_m: 2.5,
-        min_stream_distance_m: 0.35,
+        max_capture_distance_m: 2.5,
+        min_capture_distance_m: 0.35,
         max_capture_speed_mps: 0.45,
         static_speed_mps: 0.05,
         min_observations: 3,

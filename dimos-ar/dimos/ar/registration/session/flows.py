@@ -434,12 +434,6 @@ class RegistrationFlowsMixin:
                 )
             else:
                 estimate = self._registration_alignment_estimate()
-        refining = (
-            effective_mode == RegistrationMode.APRIL_TAG
-            and self._registry.state.is_committed
-            and self._registry.state.approximate
-            and not self._tag_tracker.active
-        )
 
         payload = RegistrationStatusPayload(
             mode=effective_mode,
@@ -449,7 +443,6 @@ class RegistrationFlowsMixin:
             preview_pose=self._preview_pose(),
             progress=progress,
             alignment_confidence=estimate.confidence if estimate is not None else None,
-            refining=refining if effective_mode == RegistrationMode.APRIL_TAG else None,
             scale_confidence=estimate.scale_confidence if estimate is not None else None,
             scale_locked=(
                 estimate.scale_confidence

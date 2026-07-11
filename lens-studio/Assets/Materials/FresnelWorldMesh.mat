@@ -4,9 +4,15 @@
     - !<own> 46c89618-4fb8-4d92-a3f9-e32332fc9789
 - !<PassInfo/46c89618-4fb8-4d92-a3f9-e32332fc9789>
   CachedProperties:
+    - Distance:
+        typeIdx: 1
+        value: 150.000000
     - Distance_Deadzone:
         typeIdx: 1
         value: 5.000000
+    - OriginLocation:
+        typeIdx: 4
+        value: {x: 1.000000, y: 1.000000, z: 1.000000}
     - Port_Depth_N004:
         typeIdx: 1
         value: 1.000000
@@ -67,6 +73,9 @@
     - Port_Input0_N015:
         typeIdx: 1
         value: 1.000000
+    - Port_Input0_N017:
+        typeIdx: 1
+        value: 25.000000
     - Port_Input0_N018:
         typeIdx: 1
         value: 50.000000
@@ -88,24 +97,24 @@
     - Port_Input1_N013:
         typeIdx: 1
         value: 0.000000
-    - Port_Input1_N014:
-        typeIdx: 1
-        value: 25.000000
     - Port_Input1_N015:
         typeIdx: 1
         value: 1.000000
+    - Port_Input1_N017:
+        typeIdx: 1
+        value: 30.000000
     - Port_Input1_N018:
         typeIdx: 1
         value: 0.000000
     - Port_Input2_N007:
         typeIdx: 5
         value: {x: 0.000000, y: 0.000000, z: 0.000000, w: 0.000000}
-    - Port_Input2_N014:
-        typeIdx: 5
-        value: {x: 0.000000, y: 0.000000, z: 0.000000, w: 0.000000}
     - Port_Input2_N017:
         typeIdx: 1
         value: 0.000000
+    - Port_Normal_N025:
+        typeIdx: 4
+        value: {x: 0.000000, y: 0.000000, z: 1.000000}
     - Port_Output_N010:
         typeIdx: 5
         value: {x: 0.000000, y: 0.000000, z: 0.000000, w: 0.000000}
@@ -142,9 +151,6 @@
     - Port_WorldTangent_N004:
         typeIdx: 4
         value: {x: 0.000000, y: 0.000000, z: 1.000000}
-    - Radius:
-        typeIdx: 1
-        value: 1.000000
     - Tweak_N10:
         typeIdx: 1
         value: 15.000000
@@ -171,15 +177,12 @@
     []
   BlendMode: PremultipliedAlphaAuto
   Properties:
-    Distance:
-      typeIdx: 1
-      value: 150.000000
+    HighlightLocationWS:
+      typeIdx: 4
+      value: {x: 1.000000, y: 1.000000, z: 1.000000}
     Opacity:
       typeIdx: 1
       value: 0.000000
-    OriginLocation:
-      typeIdx: 4
-      value: {x: 1.000000, y: 1.000000, z: 1.000000}
     Port_Exponent_N025:
       typeIdx: 1
       value: 1.000000
@@ -189,19 +192,34 @@
     Port_Input0_N007:
       typeIdx: 1
       value: 0.000000
-    Port_Input0_N017:
+    Port_Input1_N014:
       typeIdx: 1
       value: 25.000000
-    Port_Input1_N017:
+    Port_Input2_N014:
       typeIdx: 1
-      value: 30.000000
+      value: 0.000000
     Port_Intensity_N025:
       typeIdx: 1
       value: 0.650000
-    Port_Normal_N025:
-      typeIdx: 4
-      value: {x: 0.000000, y: 0.000000, z: 1.000000}
+    Port_Value1_N010:
+      typeIdx: 1
+      value: 0.000000
+    Port_Value2_N010:
+      typeIdx: 1
+      value: 0.000000
+    Port_Value3_N010:
+      typeIdx: 1
+      value: 0.000000
+    Port_Value_N012:
+      typeIdx: 5
+      value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
     PreviewEnabled:
       typeIdx: 0
       value: 0
+    Radius:
+      typeIdx: 1
+      value: 1.000000
+    TintColor:
+      typeIdx: 5
+      value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   Pass: !<reference> e3a0f2d3-4321-409f-beb0-42d1b190da66

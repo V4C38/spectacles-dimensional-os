@@ -153,25 +153,23 @@ export interface RegistrationStatusMessage {
   /** AprilTag registration progress 0–100; present during `april_tag` scanning/succeeded. */
   progress?: number;
   alignment_confidence?: number;
-  refining?: boolean;
   scale_confidence?: number;
   scale_locked?: boolean;
 }
 
-/** camera_frame_ack carries seq and whether the bridge accepted an observation. */
+/** camera_frame_ack clears Lens single-flight capture state. */
 export interface CameraFrameAckMessage {
   type: "camera_frame_ack";
   ts: number;
   seq: number;
-  obs_added: boolean;
-  refinement_complete: boolean;
+  capturing_budgeted_complete: boolean;
 }
 
 export interface CapturePolicyMessage {
   type: "capture_policy";
   ts: number;
-  max_stream_distance_m: number;
-  min_stream_distance_m: number;
+  max_capture_distance_m: number;
+  min_capture_distance_m: number;
   max_capture_speed_mps: number;
   static_speed_mps: number;
   min_observations: number;
@@ -662,9 +660,6 @@ function parseInboundObject(
       ) {
         msg.alignment_confidence = Math.max(0, Math.min(1, data.alignment_confidence));
       }
-      if (typeof data.refining === "boolean") {
-        msg.refining = data.refining;
-      }
       if (
         typeof data.scale_confidence === "number" &&
         Number.isFinite(data.scale_confidence)
@@ -682,8 +677,7 @@ function parseInboundObject(
         type: "camera_frame_ack",
         ts: requireNumber(data, "ts"),
         seq: requireNumber(data, "seq"),
-        obs_added: requireBoolean(data, "obs_added"),
-        refinement_complete: requireBoolean(data, "refinement_complete"),
+        capturing_budgeted_complete: requireBoolean(data, "capturing_budgeted_complete"),
       };
     }
 
@@ -691,8 +685,8 @@ function parseInboundObject(
       return {
         type: "capture_policy",
         ts: requireNumber(data, "ts"),
-        max_stream_distance_m: requireNumber(data, "max_stream_distance_m"),
-        min_stream_distance_m: requireNumber(data, "min_stream_distance_m"),
+        max_capture_distance_m: requireNumber(data, "max_capture_distance_m"),
+        min_capture_distance_m: requireNumber(data, "min_capture_distance_m"),
         max_capture_speed_mps: requireNumber(data, "max_capture_speed_mps"),
         static_speed_mps: requireNumber(data, "static_speed_mps"),
         min_observations: requireNumber(data, "min_observations"),

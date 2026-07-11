@@ -1,46 +1,45 @@
 import { describe, expect, it } from "vitest";
 import {
-  isStartingMovement,
-  isStoppingMovement,
-} from "../../Assets/Scripts/ARBridge/Camera/CameraStreamSession";
+  CameraCaptureSession,
+  isRobotMoving,
+} from "../../Assets/Scripts/ARBridge/Camera/CameraCaptureSession";
+import { CapturePolicyMessage } from "../../Assets/Scripts/ARBridge/Network/Protocol";
 
-describe("isStartingMovement", () => {
-  it("detects stopped to moving transition", () => {
-    expect(isStartingMovement(0.0, 0.5)).toBe(true);
-    expect(isStartingMovement(0.04, 0.05)).toBe(true);
-    expect(isStartingMovement(null, 0.2)).toBe(true);
+const samplePolicy: CapturePolicyMessage = {
+  type: "capture_policy",
+  ts: 1,
+  max_capture_distance_m: 3.0,
+  min_capture_distance_m: 0.35,
+  max_capture_speed_mps: 0.45,
+  static_speed_mps: 0.05,
+  min_observations: 3,
+};
+
+describe("isRobotMoving", () => {
+  it("detects movement above static threshold", () => {
+    expect(isRobotMoving(0.5, 0.05)).toBe(true);
+    expect(isRobotMoving(0.06, 0.05)).toBe(true);
+    expect(isRobotMoving(null, 0.05)).toBe(false);
   });
 
-  it("does not trigger when already moving", () => {
-    expect(isStartingMovement(0.5, 0.3)).toBe(false);
-  });
-
-  it("does not trigger when still stopped", () => {
-    expect(isStartingMovement(0.0, 0.0)).toBe(false);
-    expect(isStartingMovement(0.02, 0.01)).toBe(false);
+  it("treats speeds at or below threshold as stopped", () => {
+    expect(isRobotMoving(0.05, 0.05)).toBe(false);
+    expect(isRobotMoving(0.0, 0.05)).toBe(false);
   });
 });
 
-describe("isStoppingMovement", () => {
-  it("detects moving to stopped transition", () => {
-    expect(isStoppingMovement(0.5, 0.0)).toBe(true);
-    expect(isStoppingMovement(0.05, 0.04)).toBe(true);
+describe("onSpeedChanged", () => {
+  it("arms unbounded capture on start edge when policy is applied", () => {
+    const session = new CameraCaptureSession();
+    session.applyPolicy(samplePolicy);
+    session.onSpeedChanged(0.0, 0.2);
+    expect(session.obsBudget).toBe(0);
   });
 
-  it("does not trigger when already stopped", () => {
-    expect(isStoppingMovement(0.0, 0.0)).toBe(false);
-    expect(isStoppingMovement(0.02, 0.01)).toBe(false);
-  });
-
-  it("does not trigger when still moving", () => {
-    expect(isStoppingMovement(0.5, 0.3)).toBe(false);
-  });
-
-  it("does not trigger on first sample without prior speed", () => {
-    expect(isStoppingMovement(null, 0.0)).toBe(false);
-  });
-
-  it("does not trigger when speed becomes unknown", () => {
-    expect(isStoppingMovement(0.5, null)).toBe(false);
+  it("arms budgeted capture on stop edge when policy is applied", () => {
+    const session = new CameraCaptureSession();
+    session.applyPolicy(samplePolicy);
+    session.onSpeedChanged(0.2, 0.0);
+    expect(session.obsBudget).toBe(3);
   });
 });

@@ -308,7 +308,7 @@ function applyNavStatusEvent(
     return clearGoal(next);
   }
   if (event.state === "resolved" && event.outcome === "succeeded") {
-    return clearGoal(next);
+    return { ...clearGoal(next), wireState: "idle" };
   }
   if (event.state === "resolved" && event.outcome === "failed") {
     return {

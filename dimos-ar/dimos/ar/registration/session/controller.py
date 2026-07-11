@@ -90,7 +90,7 @@ class RegistrationSession(
         self._capture_max_speed_mps = capture_max_speed_mps
         self._capture_min_distance_m = capture_min_distance_m
         self._align_min_obs = align_min_obs
-        self._capture_max_stream_distance_m: float | None = None
+        self._max_capture_distance_m: float | None = None
 
         self._frame_in_flight = False
         self._session = _Session()
@@ -276,15 +276,15 @@ class RegistrationSession(
                 RegistrationPhase.SCANNING,
             ):
                 self._broadcast_status()
-            from dimos.ar.world_frame.refinement import RefinementOutcome
+            from dimos.ar.world_frame.refinement import CaptureEpisodeOutcome
 
-            return RefinementOutcome(state="idle")
+            return CaptureEpisodeOutcome(state="idle")
         return self._world_frame_refiner.apply_tracker_update(
             resolved_odom=resolved_odom,
             observations_added=0 if frame_result is None else frame_result.observations_added,
         )
 
     @property
-    def capture_max_stream_distance_m(self) -> float | None:
+    def max_capture_distance_m(self) -> float | None:
         """Max camera-tag distance from last camera_info (same value as capture_policy)."""
-        return self._capture_max_stream_distance_m
+        return self._max_capture_distance_m

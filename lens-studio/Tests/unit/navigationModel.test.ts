@@ -182,6 +182,27 @@ describe("navStatus events", () => {
     expect(result.state.wireState).toBe("navIntent");
   });
 
+  it("resolved succeeded clears goal and resets wire to idle", () => {
+    const result = applyNavigationEvent(
+      { ...activeSession({ since: 0 }), wireState: "navigating" },
+      {
+        kind: "navStatus",
+        state: "resolved",
+        outcome: "succeeded",
+      },
+    );
+    expect(result.state.goal).toBeNull();
+    expect(result.state.wireState).toBe("idle");
+    expect(result.state.presentation).toEqual({ kind: "none" });
+    expect(
+      deriveNavigationState(
+        result.state,
+        inputsFrom({ placementActive: false, markerExists: true }),
+      ),
+    ).toBe("idle");
+    expect(dragEnabledForState("idle")).toBe(true);
+  });
+
   it("resolved failed latches presentation", () => {
     const result = applyNavigationEvent(activeSession({ since: 0 }), {
       kind: "navStatus",

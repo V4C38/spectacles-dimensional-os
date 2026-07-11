@@ -399,12 +399,11 @@ def test_encode_registration_status_with_alignment_fields() -> None:
                 phase=RegistrationPhase.SUCCEEDED,
                 message="Registration successful",
                 alignment_confidence=0.65,
-                refining=True,
             ),
         )
     )
     assert raw["alignment_confidence"] == pytest.approx(0.65)
-    assert raw["refining"] is True
+    assert "refining" not in raw
 
 
 def test_encode_registration_status_manual() -> None:
@@ -492,14 +491,13 @@ def test_encode_camera_frame_ack() -> None:
     raw = json.loads(
         encode_camera_frame_ack(
             seq=9,
-            obs_added=True,
-            refinement_complete=True,
+            capturing_budgeted_complete=True,
         )
     )
     assert raw["type"] == "camera_frame_ack"
     assert raw["seq"] == 9
-    assert raw["obs_added"] is True
-    assert raw["refinement_complete"] is True
+    assert raw["capturing_budgeted_complete"] is True
+    assert "obs_added" not in raw
     assert "tag_detected" not in raw
     assert "tag_ids" not in raw
     assert "quality" not in raw
@@ -508,16 +506,16 @@ def test_encode_camera_frame_ack() -> None:
 def test_encode_capture_policy() -> None:
     raw = json.loads(
         encode_capture_policy(
-            max_stream_distance_m=2.5,
-            min_stream_distance_m=0.35,
+            max_capture_distance_m=2.5,
+            min_capture_distance_m=0.35,
             max_capture_speed_mps=0.45,
             static_speed_mps=0.05,
             min_observations=3,
         )
     )
     assert raw["type"] == "capture_policy"
-    assert raw["max_stream_distance_m"] == pytest.approx(2.5)
-    assert raw["min_stream_distance_m"] == pytest.approx(0.35)
+    assert raw["max_capture_distance_m"] == pytest.approx(2.5)
+    assert raw["min_capture_distance_m"] == pytest.approx(0.35)
     assert raw["max_capture_speed_mps"] == pytest.approx(0.45)
     assert raw["static_speed_mps"] == pytest.approx(0.05)
     assert raw["min_observations"] == 3

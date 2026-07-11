@@ -131,7 +131,7 @@ def test_broadcast_status_uses_aligner_observation_threshold() -> None:
     payload = json.loads(sent[-1])
     assert payload["progress"] == 40
     assert payload["alignment_confidence"] == 0.4
-    assert payload["refining"] is False
+    assert "refining" not in payload
 
 
 def test_maybe_finish_tag_registration_waits_for_confidence() -> None:
@@ -310,7 +310,7 @@ def test_maybe_finish_tag_registration_fails_on_scan_timeout() -> None:
     assert any(json.loads(payload)["phase"] == "failed" for payload in sent)
 
 
-def test_broadcast_status_marks_refining_after_provisional_commit() -> None:
+def test_broadcast_status_after_provisional_commit() -> None:
     session, sent, registry, tag_tracker = _make_session()
     registry.state.commit(np.eye(4, dtype=np.float64), method="april_tag", approximate=True)
     tag_tracker.active = False
@@ -321,7 +321,7 @@ def test_broadcast_status_marks_refining_after_provisional_commit() -> None:
 
     payload = json.loads(sent[-1])
     assert payload["alignment_confidence"] == 0.4
-    assert payload["refining"] is True
+    assert "refining" not in payload
 
 
 def test_registration_start_clears_post_success_state() -> None:

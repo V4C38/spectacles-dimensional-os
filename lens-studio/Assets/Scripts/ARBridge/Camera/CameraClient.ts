@@ -8,7 +8,7 @@ import {
 import { sendBinary } from "../Network/WebSocketTransport";
 import { quatFromMat4Rotation } from "../../App/Utilities/Utilities";
 import { DeviceCameraStream } from "./DeviceCameraStream";
-import { RUNTIME_STOP_SPEED_MPS } from "./CameraStreamSession";
+import { RUNTIME_STOP_SPEED_MPS } from "./CameraCaptureSession";
 
 export { RUNTIME_STOP_SPEED_MPS };
 
@@ -45,7 +45,7 @@ export class CameraClient {
   private _helloBound = false;
   private _sentCameraInfo = false;
   private _onCaptureError: ((message: string) => void) | null = null;
-  private _onFrameAck: ((obsAdded: boolean, refinementComplete: boolean) => void) | null = null;
+  private _onFrameAck: ((msg: CameraFrameAckMessage) => void) | null = null;
   private _lastPipelineLogTime = 0;
   private _lastCaptureTsLogTime = 0;
   private _lastClockSyncRaceLogTime = 0;
@@ -65,9 +65,7 @@ export class CameraClient {
     this._onCaptureError = handler;
   }
 
-  public setOnFrameAck(
-    handler: (obsAdded: boolean, refinementComplete: boolean) => void,
-  ): void {
+  public setOnFrameAck(handler: (msg: CameraFrameAckMessage) => void): void {
     this._onFrameAck = handler;
   }
 
@@ -119,7 +117,7 @@ export class CameraClient {
       this._inFlight = false;
       this._inFlightSeq = -1;
       this._captureSpacingDeadline = getTime();
-      this._onFrameAck?.(msg.obs_added, msg.refinement_complete);
+      this._onFrameAck?.(msg);
     } else {
       print(`CameraClient: ack seq=${msg.seq} expected=${this._inFlightSeq} (mismatch)`);
     }

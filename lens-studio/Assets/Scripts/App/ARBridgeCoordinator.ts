@@ -162,6 +162,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this._log("enterRegistration");
     this.registrationClient?.cancelPlacement();
     this.registrationClient?.stop();
+    this.frameCaptureController?.endCameraCaptureSession();
     this.registrationClient?.clearPose();
     this.arBridgeServices.router.cancelRuntimeReconnect();
     if (!options?.preserveBridge) {
@@ -180,6 +181,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.registrationPreview?.endIfActive();
     this.registrationClient?.cancelPlacement();
     this.registrationClient?.stop();
+    this.frameCaptureController?.endCameraCaptureSession();
     const runtimePatch: Partial<AppStateData> = { phase: "runtime" };
     this.arBridgeServices.state.update(runtimePatch);
     this._applyPhaseSideEffects("runtime");

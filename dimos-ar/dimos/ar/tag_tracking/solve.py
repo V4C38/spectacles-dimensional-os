@@ -22,7 +22,7 @@ from dimos.utils.transform_utils import normalize_angle
 __all__ = [
     "CAPTURE_MAX_DISTANCE_MARGIN",
     "_yaw_from_T",
-    "capture_max_stream_distance_m",
+    "capture_max_distance_m",
     "max_detection_distance_m",
 ]
 
@@ -44,7 +44,7 @@ def max_detection_distance_m(fx: float, tag_size_m: float, min_tag_px: float) ->
     return fx * tag_size_m / min_tag_px
 
 
-def capture_max_stream_distance_m(
+def capture_max_distance_m(
     fx: float,
     tag_size_m: float,
     min_tag_px: float,
@@ -52,7 +52,7 @@ def capture_max_stream_distance_m(
     margin: float = CAPTURE_MAX_DISTANCE_MARGIN,
 ) -> float:
     if margin <= 0.0:
-        raise ValueError("capture_max_stream_distance_m requires positive margin")
+        raise ValueError("capture_max_distance_m requires positive margin")
     return max_detection_distance_m(fx, tag_size_m, min_tag_px) * margin
 
 

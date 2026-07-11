@@ -9,7 +9,7 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v16 (current) — Unified NavigationState vocabulary
+### v16 (current) — Unified NavigationState and capture vocabulary
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -18,6 +18,13 @@ Keep this document, `dimos/ar/network/protocol.py`, and
   Terminal results use `state: "resolved"` with optional **`outcome`** (`succeeded` | `failed`).
   Retryable stalls use `state: "navIntent"` with **`retryable`** and **`stall_reason`**.
 - **`runtime_snapshot.nav`:** same shape (`state` replaces `phase`; optional `outcome`).
+- **`capture_policy`:** `max_stream_distance_m` / `min_stream_distance_m` renamed to
+  **`max_capture_distance_m`** / **`min_capture_distance_m`**.
+- **`camera_frame_ack`:** removed **`obs_added`**; **`refinement_complete`** renamed to
+  **`capturing_budgeted_complete`**.
+- **`registration_status`:** removed **`refining`**.
+- **`pose.speed_mps`:** used by the Lens to arm **`beginCameraCapture`** on speed edges
+  after world-frame commit (not bridge-driven stream requests).
 
 ### v15 — Observation-driven capture and anchored stop refinement
 
@@ -357,7 +364,6 @@ Registration progress during a setup session:
   "tag_visible": true,
   "progress": 40,
   "alignment_confidence": 0.42,
-  "refining": false,
   "scale_confidence": 0.0,
   "scale_locked": false,
   "preview_pose": {
@@ -385,9 +391,6 @@ Fields:
   this value directly rather than inferring progress from `message`.
 - `alignment_confidence` (optional): bridge-computed confidence **0–1** for the
   current registration or runtime alignment estimate
-- `refining` (optional): after AprilTag commit, `true` while the bridge keeps
-  refining alignment from continued tag observations at runtime (wire field;
-  clients may ignore for wizard UX)
 - `scale_confidence` (optional): bridge-computed confidence **0–1** for the
   persistent odom scale estimate
 - `scale_locked` (optional): `true` when scale confidence meets the bridge lock
@@ -398,10 +401,9 @@ Spectacles user moves around the robot while keeping the tag in view; camera
 motion provides yaw observability. The bridge auto-commits when the
 registration estimate meets the confidence threshold (or yaw is observable).
 If confidence never rises within the registration window, `phase` becomes
-`"failed"`. After commit, the bridge may continue broadcasting `refining: true`
-while runtime similarity refinement continues from tag observations during
-navigation. The client auto-finishes the wizard on `phase: "succeeded"`; no
-separate commit message is required.
+`"failed"`. After commit, runtime similarity alignment may continue from tag
+observations during navigation. The client auto-finishes the wizard on
+`phase: "succeeded"`; no separate commit message is required.
 
 ### `camera_frame_ack`
 
@@ -416,15 +418,13 @@ single-flight capture state:
   "type": "camera_frame_ack",
   "ts": 1730000000.123,
   "seq": 42,
-  "obs_added": true,
-  "refinement_complete": false
+  "capturing_budgeted_complete": false
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `obs_added` | `boolean` | `true` when the bridge accepted at least one tag observation from this frame |
-| `refinement_complete` | `boolean` | `true` when the bridge committed the current stop-refinement episode |
+| `capturing_budgeted_complete` | `boolean` | `true` when the bridge committed the current budgeted capture episode |
 
 ### `capture_policy`
 
@@ -435,8 +435,8 @@ uses these thresholds for geometric and speed gating; it does not derive them lo
 {
   "type": "capture_policy",
   "ts": 1730000000.123,
-  "max_stream_distance_m": 2.5000,
-  "min_stream_distance_m": 0.3500,
+  "max_capture_distance_m": 2.5000,
+  "min_capture_distance_m": 0.3500,
   "max_capture_speed_mps": 0.4500,
   "static_speed_mps": 0.0500,
   "min_observations": 3
@@ -445,8 +445,8 @@ uses these thresholds for geometric and speed gating; it does not derive them lo
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `max_stream_distance_m` | `number` | Maximum camera–robot distance for capture: pinhole estimate from intrinsics, 70 mm printed tag size, and minimum tag pixel floor, then scaled by bridge headroom (default 25%). Same limit applies to bridge frame admission after `camera_info`. |
-| `min_stream_distance_m` | `number` | Minimum camera–robot distance for capture |
+| `max_capture_distance_m` | `number` | Maximum camera–robot distance for capture: pinhole estimate from intrinsics, 70 mm printed tag size, and minimum tag pixel floor, then scaled by bridge headroom (default 25%). Same limit applies to bridge frame admission after `camera_info`. |
+| `min_capture_distance_m` | `number` | Minimum camera–robot distance for capture |
 | `max_capture_speed_mps` | `number` | Do not capture while robot speed exceeds this |
 | `static_speed_mps` | `number` | Speed threshold shared with the bridge for static vs moving (Lens arms stop-refinement on the stop edge) |
 | `min_observations` | `integer` | Bridge `ALIGN_MIN_OBS`; minimum accepted static endpoint observations before a stop solve |
@@ -461,7 +461,7 @@ payload size on Wi-Fi:
 | `pose.position`, `pose.orientation` | 4 |
 | `world_frame_correction.trans_delta_m`, `world_frame_correction.solve_quality` | 4 |
 | `world_frame_correction.yaw_delta_deg` | 3 |
-| `capture_policy.max_stream_distance_m`, `capture_policy.min_stream_distance_m`, `capture_policy.max_capture_speed_mps` | 4 |
+| `capture_policy.max_capture_distance_m`, `capture_policy.min_capture_distance_m`, `capture_policy.max_capture_speed_mps` | 4 |
 | `path` waypoints | 3 |
 | `ts` on high-rate streams (`pose`, `path`) | 3 |
 
@@ -507,7 +507,7 @@ Robot pose in AR world frame:
 ```
 
 - `speed_mps` (optional): smoothed robot linear speed in m/s from bridge odom,
-  used by the Lens for runtime camera stream requests when the robot stops.
+  used by the Lens to arm `beginCameraCapture` on speed edges after world-frame commit.
 - `velocity_mps` (optional): world-frame linear velocity in m/s (same axes as
   `position`). Used by the Lens for client-side pose prediction.
 - `yaw_rate_rad_s` (optional): world-frame yaw rate in rad/s about the world-up
