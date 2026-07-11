@@ -1,3 +1,4 @@
+import { CameraCaptureState } from "../../ARBridge/Camera/CameraCaptureSession";
 import {
   findText,
   COLOR_SUCCESS,
@@ -30,8 +31,6 @@ export const DEBUG_CONSOLE_SCROLL_LINE_COUNT = DEBUG_CONSOLE_SCROLL_LINE_NAMES.l
 
 export const DEBUG_CONSOLE_TOTAL_LINE_COUNT =
   DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1;
-
-export type CameraStreamLogStatus = "on" | "waiting" | "off";
 
 export interface UILogConsoleEntry {
   text: string;
@@ -75,7 +74,7 @@ export class UILogger {
   private _cameraStatusText: Text | null = null;
   private _consoleBuffer: UILogConsoleEntry[] = [];
   private _cameraStatusEntry: UILogConsoleEntry | null = null;
-  private _lastCameraStreamStatus: CameraStreamLogStatus | null = null;
+  private _lastCameraCaptureState: CameraCaptureState | null = null;
 
   public get snapshot(): UILogEntry | null {
     return cloneEntry(this._entry);
@@ -137,20 +136,18 @@ export class UILogger {
     this._appendConsoleLine(text, color);
   }
 
-  public setCameraStreamStatus(status: CameraStreamLogStatus): void {
-    if (status === this._lastCameraStreamStatus) {
+  public setCameraCaptureState(state: CameraCaptureState): void {
+    if (state === this._lastCameraCaptureState) {
       return;
     }
-    this._lastCameraStreamStatus = status;
-    const statusLabel =
-      status === "on" ? "ON" : status === "waiting" ? "Waiting" : "OFF";
-    const text = `Camera stream status: ${statusLabel}`;
+    this._lastCameraCaptureState = state;
+    const text = `Camera capture: ${state}`;
     const color =
-      status === "on"
-        ? COLOR_SUCCESS
-        : status === "waiting"
+      state === "off"
+        ? COLOR_WHITE
+        : state === "waiting"
           ? COLOR_WARN
-          : COLOR_WHITE;
+          : COLOR_SUCCESS;
     this._cameraStatusEntry = {
       text,
       color: cloneColor(color),

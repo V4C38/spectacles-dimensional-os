@@ -42,7 +42,12 @@ export class MarkerViewCore {
   private readonly root: SceneObject;
   private readonly headingRoot: SceneObject | null;
   private readonly dragInteractableObject: SceneObject;
+  private readonly hintAnchorObject: SceneObject;
   private readonly circleVisual: RenderMeshVisual | null;
+  private readonly moveDirectionArrowObject: SceneObject | null;
+  private readonly moveDirectionArrowMaterial: Material | null;
+  private readonly dotsObject: SceneObject | null;
+  private readonly dotsMaterial: Material | null;
   private readonly circleWhiteMaterial: Material;
   private readonly circleYellowMaterial: Material;
   private readonly confirmButtonObject: SceneObject;
@@ -69,10 +74,30 @@ export class MarkerViewCore {
     this.root = root;
     this.headingRoot = findChildRecursive(this.root, "NavigationHeadingRoot");
     this.dragInteractableObject = requireChild(this.root, "DragInteractable", "MarkerViewCore");
-    const visualObject = findChildRecursive(this.dragInteractableObject, "Visual");
+    this.hintAnchorObject = requireChild(
+      this.dragInteractableObject,
+      "HintAnchor",
+      "MarkerViewCore",
+    );
+    const visualObject = findChildRecursive(this.headingRoot ?? this.root, "Visual");
     this.circleVisual = visualObject
       ? (visualObject.getComponent("Component.RenderMeshVisual") as RenderMeshVisual | null)
       : null;
+    this.moveDirectionArrowObject = findChildRecursive(
+      this.headingRoot ?? this.root,
+      "MoveDirectionArrow",
+    );
+    const moveDirectionArrowVisual = this.moveDirectionArrowObject
+      ? (this.moveDirectionArrowObject.getComponent(
+          "Component.RenderMeshVisual",
+        ) as RenderMeshVisual | null)
+      : null;
+    this.moveDirectionArrowMaterial = moveDirectionArrowVisual?.mainMaterial ?? null;
+    this.dotsObject = findChildRecursive(this.root, "Dots");
+    const dotsVisual = this.dotsObject
+      ? (this.dotsObject.getComponent("Component.RenderMeshVisual") as RenderMeshVisual | null)
+      : null;
+    this.dotsMaterial = dotsVisual?.mainMaterial ?? null;
     this.circleWhiteMaterial = materials.circleWhite;
     this.circleYellowMaterial = materials.circleYellow;
     this.confirmButtonObject = requireChild(this.root, "ConfirmButton", "MarkerViewCore");
@@ -91,7 +116,7 @@ export class MarkerViewCore {
       this.stateText?.getSceneObject().getTransform().getLocalScale() ?? null;
     if (!this.confirmButton) {
       throw new Error(
-        "MarkerViewCore: NavigationTargetMarker is missing ConfirmButton RoundButton",
+        "MarkerViewCore: NavigationMarker is missing ConfirmButton RoundButton",
       );
     }
     this._initializeHidden();
@@ -155,7 +180,9 @@ export class MarkerViewCore {
       this._restoreStandardVisualState();
     }
     this.dragInteractableObject.enabled = true;
-    this._applyCircleMaterial(view.circleIdle);
+    this._applyCircleMaterial(!view.active);
+    this._applyMoveDirectionArrow(!view.active);
+    this._applyDots(!view.active);
     this._setStateText("", false);
     this.setRotation(view.heading);
 
@@ -230,6 +257,10 @@ export class MarkerViewCore {
     this.setRotation(rotation);
   }
 
+  public setDragProbeWorldPosition(position: vec3): void {
+    this.hintAnchorObject.getTransform().setWorldPosition(position);
+  }
+
   public interpolatePose(
     desiredPosition: vec3,
     desiredRotation: quat,
@@ -271,7 +302,7 @@ export class MarkerViewCore {
   public hide(): void {
     this.apply({
       visible: false,
-      circleIdle: true,
+      active: true,
       heading: this._rotation,
       button: null,
       outcomeLabel: null,
@@ -322,6 +353,8 @@ export class MarkerViewCore {
 
     this.dragInteractableObject.enabled = true;
     this._applyCircleMaterial(false);
+    this._applyMoveDirectionArrow(false);
+    this._applyDots(false);
     this.setConfirmVisible(false);
     this._setConfirmVfxState(true, true);
     this.root.enabled = true;
@@ -348,6 +381,23 @@ export class MarkerViewCore {
     if (this.circleVisual.mainMaterial !== nextMaterial) {
       this.circleVisual.mainMaterial = nextMaterial;
     }
+  }
+
+  private _applyMoveDirectionArrow(idle: boolean): void {
+    const pass = this.moveDirectionArrowMaterial?.mainPass as any;
+    if (!pass) {
+      return;
+    }
+    pass.Opacity_Override = idle ? 0.2 : 0.6;
+    pass.ArrowSpeed = idle ? 0.0 : 1.0;
+  }
+
+  private _applyDots(idle: boolean): void {
+    const pass = this.dotsMaterial?.mainPass as any;
+    if (!pass) {
+      return;
+    }
+    pass.Opacity_Override = idle ? 0.4 : 0.75;
   }
 
   private _setConfirmInteractable(enabled: boolean): void {
@@ -610,6 +660,11 @@ export class NavigationMarker extends BaseScriptComponent {
   public setPose(position: vec3, rotation: quat): void {
     this.ensureReady();
     this._view?.setPose(position, rotation);
+  }
+
+  public setDragProbeWorldPosition(position: vec3): void {
+    this.ensureReady();
+    this._view?.setDragProbeWorldPosition(position);
   }
 
   public interpolatePose(

@@ -43,11 +43,15 @@ spectacles-dimensional-os/
 | Spectacles / Lens Studio | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Contributing | `CONTRIBUTING.md` |
 
-## Bugfix planning
+## Planning
 
 When fixing a bug, investigate and identify the root cause before writing a
 plan. Plans must state the found issue and proposed solution up front, then list
 implementation steps only. Do not create "investigation plans."
+
+Plans are standalone documents: write only the final design and actionable
+steps. Do not include Q&A history, rejected alternatives, migration tables from
+earlier drafts, or "we decided against X" notes from prior plan iterations.
 
 ## dimos-ar bridge — systems design
 
@@ -63,6 +67,17 @@ When working in `dimos-ar/`, follow `.cursor/rules/dimos-ar-bridge-design.mdc`:
    or input is missing or invalid, raise or throw; do not substitute a hardcoded default
    that masks the problem. Use a fallback only when there is a deliberate, documented
    reason (e.g. backward-compatible wire defaults).
+
+## State & lifecycle authoring
+
+When adding lifecycle, wire handlers, coordinators, or presentation logic, follow
+`.cursor/rules/state-lifecycle-authoring.mdc`:
+
+- **One concept, one name** — canonical type once; no parallel enums for the same flow.
+- **Session + inputs + derive** — store event-sourced facts; rebuild inputs each read; never store derived UX state.
+- **Derive; do not mirror** — one derivation function; wire owns execution truth.
+- **Wire effects only** — reducer emits sends; controller owns presentation/teardown.
+- **Presentation from state** — coupled UI from derived flags, not policy structs or duplicate bools.
 
 ## Non-negotiable facts
 

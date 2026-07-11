@@ -8,18 +8,21 @@ import {
   requireChild,
 } from "../UI/UIKit";
 import {
-  interpolatePose,
-} from "../Utilities/AnimationUtilities";
-import {
   yawRotationFromWorldRotation,
 } from "../Utilities/Utilities";
-import { ManualRegistrationAlignment, RobotMarkerPose } from "../../ARBridge/Registration/ManualRegistrationAlignment";
+import { ManualRegistrationPlacement, RobotMarkerPose } from "../../ARBridge/Registration/ManualRegistrationPlacement";
 import { UILogEntry } from "../UI/UILogger";
 import { RobotUiCallbacks, RobotUiView } from "./RobotUiView";
+import { RuntimePoseAnimator } from "./RuntimePoseAnimator";
+import { RobotRuntimeState } from "../AppState";
+import {
+  runtimeBodyBoundsCenterOffsetCm,
+  runtimeBodyBoundsScaleCm,
+} from "./RobotRuntimeModel";
 
 export type { RobotUiAssistOverlay, RobotUiCallbacks } from "./RobotUiView";
 
-const ROBOT_UI_WORLD_UP_OFFSET_CM = 20.0;
+const ROBOT_UI_WORLD_UP_OFFSET_CM = 10.0;
 const PROTOCOL_M_TO_LENS_CM = 100.0;
 
 type BoolOrActive = boolean | "whenActive";
@@ -43,7 +46,7 @@ const INTERACTION_MODE_CONFIG: Record<
     syncPose: false,
     menuWhenVisible: "hide",
   },
-  manualPlacement: {
+  manual_placement: {
     visible: true,
     manualPlacement: true,
     toggle: false,
@@ -61,275 +64,6 @@ const INTERACTION_MODE_CONFIG: Record<
   },
 };
 
-interface RuntimePoseTickResult {
-  position: vec3;
-  rotation: quat;
-  realignmentVfxActive: boolean;
-}
-
-type RuntimePoseSetTargetResult = "immediate" | "track";
-
-type RuntimePoseTarget = {
-  position: vec3;
-  rotation: quat;
-  velocityCmPerS: vec3;
-  yawRateRadPerS: number;
-  poseTs: number;
-  receiveMonoS: number;
-};
-
-class RuntimePoseAnimator {
-  /** Exponential smoothing rates tuned for infrequent, variable-rate odom ingress. */
-  private static readonly SMOOTHING_RATE_MIN = 5.0;
-  private static readonly SMOOTHING_RATE_MAX = 9.0;
-  /** Rotation eases toward bridge samples; kept lower than position to avoid overshoot. */
-  private static readonly SMOOTHING_ROTATION_RATE = 4.5;
-  /** Linear speed at which position smoothing reaches ``SMOOTHING_RATE_MAX`` (cm/s). */
-  private static readonly SMOOTHING_SPEED_REF_CM_S = 25.0;
-  /**
-   * When pose age grows (extrapolating between odom samples), scale smoothing rate
-   * down toward this fraction so the marker glides instead of chasing stale targets.
-   */
-  private static readonly STALE_AGE_RATE_FACTOR = 0.35;
-  private static readonly REALIGN_SNAP_BOOST_RATE = 28.0;
-  private static readonly REALIGN_SNAP_DURATION_S = 0.15;
-  /** Bridge odom can arrive irregularly; allow longer velocity extrapolation between samples. */
-  private static readonly MAX_EXTRAP_S = 0.55;
-  private static readonly MAX_EXTRAP_DISPLACEMENT_CM = 40.0;
-  /** Periodic pose-age diagnostics; emit only when extrapolation looks unhealthy. */
-  private static readonly POSE_AGE_LOG_INTERVAL_S = 5.0;
-  private static readonly POSE_AGE_CLAMP_HIT_LOG_THRESHOLD = 0.1;
-
-  private _tracking = false;
-  private _base: RuntimePoseTarget | null = null;
-  private _boostUntil = 0;
-  private _getRobotClockNowS: (() => number | null) | null = null;
-  private _lastPoseAgeLogMono = 0;
-  private _recentClampHits = 0;
-  private _recentAgeSamples = 0;
-
-  public get isTracking(): boolean {
-    return this._tracking;
-  }
-
-  public get realignmentVfxActive(): boolean {
-    return getTime() < this._boostUntil;
-  }
-
-  public setRobotClockNowProvider(getRobotClockNowS: () => number | null): void {
-    this._getRobotClockNowS = getRobotClockNowS;
-  }
-
-  public reset(): void {
-    this._tracking = false;
-    this._base = null;
-    this._boostUntil = 0;
-    this._recentClampHits = 0;
-    this._recentAgeSamples = 0;
-  }
-
-  public beginRealignmentSnap(): void {
-    this._boostUntil = getTime() + RuntimePoseAnimator.REALIGN_SNAP_DURATION_S;
-  }
-
-  public setTarget(
-    target: RuntimePoseTarget,
-    snapImmediate: boolean,
-  ): RuntimePoseSetTargetResult {
-    this._base = {
-      position: new vec3(target.position.x, target.position.y, target.position.z),
-      rotation: new quat(
-        target.rotation.w,
-        target.rotation.x,
-        target.rotation.y,
-        target.rotation.z,
-      ),
-      velocityCmPerS: new vec3(
-        target.velocityCmPerS.x,
-        target.velocityCmPerS.y,
-        target.velocityCmPerS.z,
-      ),
-      yawRateRadPerS: target.yawRateRadPerS,
-      poseTs: target.poseTs,
-      receiveMonoS: target.receiveMonoS,
-    };
-    this._tracking = true;
-
-    if (snapImmediate) {
-      return "immediate";
-    }
-
-    return "track";
-  }
-
-  public predictedTarget(now: number): { position: vec3; rotation: quat } | null {
-    if (!this._base) {
-      return null;
-    }
-    const ageS = this._poseAgeS(now, true);
-    const base = this._base;
-    const extrapolation = RuntimePoseAnimator._clampDisplacement(
-      new vec3(
-        base.velocityCmPerS.x * ageS,
-        base.velocityCmPerS.y * ageS,
-        base.velocityCmPerS.z * ageS,
-      ),
-    );
-    const position = new vec3(
-      base.position.x + extrapolation.x,
-      base.position.y + extrapolation.y,
-      base.position.z + extrapolation.z,
-    );
-    const yawDelta = base.yawRateRadPerS * ageS;
-    const halfYaw = yawDelta * 0.5;
-    const yawQuat = new quat(Math.cos(halfYaw), 0, Math.sin(halfYaw), 0);
-    const rotation = base.rotation.multiply(yawQuat);
-    return {
-      position,
-      rotation,
-    };
-  }
-
-  public tick(
-    current: { position: vec3; rotation: quat },
-    dt: number,
-    now: number,
-  ): RuntimePoseTickResult | null {
-    const predicted = this.predictedTarget(now);
-    if (!predicted || !this._base) {
-      return null;
-    }
-
-    if (dt <= 0) {
-      return null;
-    }
-
-    const ageRateFactor = this._ageSmoothingFactor(now);
-    const positionRate = this._smoothingRate(now) * ageRateFactor;
-    const rotationRate = this._rotationSmoothingRate(now) * ageRateFactor;
-    const smoothed = interpolatePose(
-      current.position,
-      predicted.position,
-      current.rotation,
-      predicted.rotation,
-      dt,
-      positionRate,
-      rotationRate,
-    );
-    this._maybeLogPoseAge(now);
-    return {
-      position: smoothed.position,
-      rotation: smoothed.rotation,
-      realignmentVfxActive: now < this._boostUntil,
-    };
-  }
-
-  private _rawPoseAgeS(now: number): number {
-    const base = this._base;
-    if (!base) {
-      return 0;
-    }
-    const robotNow = this._getRobotClockNowS?.() ?? null;
-    if (robotNow !== null) {
-      return robotNow - base.poseTs;
-    }
-    return now - base.receiveMonoS;
-  }
-
-  private _poseAgeS(now: number, recordDiagnostics: boolean): number {
-    const rawAge = this._rawPoseAgeS(now);
-    const clamped = Math.min(
-      Math.max(0, rawAge),
-      RuntimePoseAnimator.MAX_EXTRAP_S,
-    );
-    if (recordDiagnostics) {
-      this._recentAgeSamples += 1;
-      if (rawAge > RuntimePoseAnimator.MAX_EXTRAP_S) {
-        this._recentClampHits += 1;
-      }
-    }
-    return clamped;
-  }
-
-  private _maybeLogPoseAge(now: number): void {
-    if (now - this._lastPoseAgeLogMono < RuntimePoseAnimator.POSE_AGE_LOG_INTERVAL_S) {
-      return;
-    }
-    this._lastPoseAgeLogMono = now;
-    const rawAge = this._rawPoseAgeS(now);
-    const clampedAge = this._poseAgeS(now, false);
-    const clampFraction = this._recentAgeSamples > 0
-      ? this._recentClampHits / this._recentAgeSamples
-      : 0;
-    const shouldLog = rawAge < 0
-      || clampFraction >= RuntimePoseAnimator.POSE_AGE_CLAMP_HIT_LOG_THRESHOLD
-      || rawAge > RuntimePoseAnimator.MAX_EXTRAP_S;
-    if (shouldLog) {
-      print(
-        `[RuntimePoseAnimator] pose_age raw=${rawAge.toFixed(3)}s `
-        + `clamped=${clampedAge.toFixed(3)}s `
-        + `clamp_hit_fraction=${clampFraction.toFixed(2)}`,
-      );
-      if (rawAge < 0) {
-        print("[RuntimePoseAnimator] pose_age negative — check clock offset sign");
-      }
-    }
-    this._recentClampHits = 0;
-    this._recentAgeSamples = 0;
-  }
-
-  private _smoothingRate(now: number): number {
-    if (now < this._boostUntil) {
-      return RuntimePoseAnimator.REALIGN_SNAP_BOOST_RATE;
-    }
-    const base = this._base;
-    if (!base) {
-      return RuntimePoseAnimator.SMOOTHING_RATE_MIN;
-    }
-    const speed = Math.sqrt(
-      base.velocityCmPerS.x * base.velocityCmPerS.x
-        + base.velocityCmPerS.y * base.velocityCmPerS.y
-        + base.velocityCmPerS.z * base.velocityCmPerS.z,
-    );
-    const linearMotion = RuntimePoseAnimator._smoothstep01(
-      speed / RuntimePoseAnimator.SMOOTHING_SPEED_REF_CM_S,
-    );
-    return RuntimePoseAnimator.SMOOTHING_RATE_MIN
-      + (RuntimePoseAnimator.SMOOTHING_RATE_MAX - RuntimePoseAnimator.SMOOTHING_RATE_MIN) * linearMotion;
-  }
-
-  private _rotationSmoothingRate(now: number): number {
-    if (now < this._boostUntil) {
-      return RuntimePoseAnimator.REALIGN_SNAP_BOOST_RATE;
-    }
-    return RuntimePoseAnimator.SMOOTHING_ROTATION_RATE;
-  }
-
-  /** Slow smoothing further while extrapolating aged odom between sparse updates. */
-  private _ageSmoothingFactor(now: number): number {
-    const ageS = this._poseAgeS(now, false);
-    const staleBlend = RuntimePoseAnimator._smoothstep01(
-      ageS / RuntimePoseAnimator.MAX_EXTRAP_S,
-    );
-    return 1.0
-      - (1.0 - RuntimePoseAnimator.STALE_AGE_RATE_FACTOR) * staleBlend;
-  }
-
-  private static _clampDisplacement(delta: vec3): vec3 {
-    const len = Math.sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
-    if (len <= RuntimePoseAnimator.MAX_EXTRAP_DISPLACEMENT_CM || len <= 1e-6) {
-      return delta;
-    }
-    const scale = RuntimePoseAnimator.MAX_EXTRAP_DISPLACEMENT_CM / len;
-    return new vec3(delta.x * scale, delta.y * scale, delta.z * scale);
-  }
-
-  private static _smoothstep01(x: number): number {
-    const t = Math.max(0, Math.min(1, x));
-    return t * t * (3 - 2 * t);
-  }
-}
-
 /** World-space robot marker with live pose, manual placement, floating robot menu anchor, and interaction-mode switching. */
 @component
 export class RobotMarker extends BaseScriptComponent {
@@ -343,22 +77,20 @@ export class RobotMarker extends BaseScriptComponent {
   private _manualInteractable: Interactable | null = null;
   private _manualManipulation: InteractableManipulation | null = null;
   private _toggleRoot: SceneObject | null = null;
-  private _directionArrow: SceneObject | null = null;
+  private _debugView: SceneObject | null = null;
+  private _boundingBox: SceneObject | null = null;
   private _toggleCollider: ColliderComponent | null = null;
   private _toggleButton: RoundButton | null = null;
   private _menuRoot: SceneObject | null = null;
-  private _buttonVfxActive: SceneObject | null = null;
-  private _buttonVfxInactive: SceneObject | null = null;
   private _manualPlacementActive = false;
   private _debugMode = false;
   private _renderOffsetCm = vec3.zero();
   private _toggleBaseLocalPosition: vec3 | null = null;
-  private _directionArrowBaseLocalPosition: vec3 | null = null;
   private _placementHandleBaseLocalPosition: vec3 | null = null;
   private _rotation = quat.quatIdentity();
   private _lastNotifiedWorldPosition: vec3 | null = null;
 
-  private _manualRegistrationAlignment: ManualRegistrationAlignment | null = null;
+  private _manualRegistrationPlacement: ManualRegistrationPlacement | null = null;
   private _ui: RobotUiView | null = null;
   private _getLastPose: (() => PoseMessage | null) | null = null;
   private _getIsRuntimePhase: (() => boolean) | null = null;
@@ -387,7 +119,7 @@ export class RobotMarker extends BaseScriptComponent {
   }
 
   public initialize(deps: {
-    manualRegistrationAlignment: ManualRegistrationAlignment;
+    manualRegistrationPlacement: ManualRegistrationPlacement;
     getLastPose: () => PoseMessage | null;
     getIsRuntimePhase: () => boolean;
     getOperatingMode: () => OperatingMode;
@@ -395,7 +127,7 @@ export class RobotMarker extends BaseScriptComponent {
     getRobotClockNowS?: () => number | null;
     onWorldPositionChanged?: (position: vec3) => void;
   }): void {
-    this._manualRegistrationAlignment = deps.manualRegistrationAlignment;
+    this._manualRegistrationPlacement = deps.manualRegistrationPlacement;
     this._getLastPose = deps.getLastPose;
     this._getIsRuntimePhase = deps.getIsRuntimePhase;
     this._getOperatingMode = deps.getOperatingMode;
@@ -445,11 +177,11 @@ export class RobotMarker extends BaseScriptComponent {
   }
 
   public syncPose(): void {
-    if (!this._manualRegistrationAlignment || !this._getLastPose || !this._getInteractionMode) {
+    if (!this._manualRegistrationPlacement || !this._getLastPose || !this._getInteractionMode) {
       return;
     }
     const lastPose = this._getLastPose();
-    const resolved = this._manualRegistrationAlignment.resolveRobotMarkerPose(
+    const resolved = this._manualRegistrationPlacement.resolveRobotMarkerPose(
       lastPose,
       this._getInteractionMode(),
     );
@@ -465,7 +197,7 @@ export class RobotMarker extends BaseScriptComponent {
     bridgePose: PoseMessage | null,
   ): void {
     switch (resolved.source) {
-      case "registration_anchor":
+      case "manual_anchor":
         this.applyManualPose(resolved.position!, resolved.rotation!);
         break;
       case "world_frame_pose":
@@ -473,7 +205,7 @@ export class RobotMarker extends BaseScriptComponent {
           this.applyPose(bridgePose);
         }
         break;
-      case "approximate_alignment":
+      case "approximate_pose":
         this.applyRuntimeLensPose(resolved.position!, resolved.rotation!);
         break;
       case "none":
@@ -500,6 +232,7 @@ export class RobotMarker extends BaseScriptComponent {
     this._applyRuntimePose(position, rotation, {
       velocityCmPerS,
       yawRateRadPerS: msg.yaw_rate_rad_s ?? 0,
+      speedMps: typeof msg.speed_mps === "number" ? msg.speed_mps : null,
       poseTs: msg.ts,
     });
   }
@@ -521,13 +254,16 @@ export class RobotMarker extends BaseScriptComponent {
     this._applyRuntimePose(position, rotation);
   }
 
-  public beginRealignmentSnap(): void {
-    this._poseAnimator.beginRealignmentSnap();
-  }
-
   public setDebugMode(enabled: boolean): void {
     this._debugMode = enabled;
-    this._syncDirectionArrowVisibility();
+    this._syncDebugViewVisibility();
+  }
+
+  public setDebugBoundsFromRuntime(runtime: RobotRuntimeState): void {
+    if (!this._configured) {
+      this._configureVisuals();
+    }
+    this._syncDebugBounds(runtime);
   }
 
   public setVisible(visible: boolean): void {
@@ -544,10 +280,11 @@ export class RobotMarker extends BaseScriptComponent {
   }
 
   public resetRuntimePoseSmoothing(): void {
-    if (this._poseAnimator.realignmentVfxActive) {
-      this._setRealignmentVfx(false);
-    }
     this._poseAnimator.reset();
+  }
+
+  public setPathGoal(goal: vec3 | null): void {
+    this._poseAnimator.setPathGoal(goal);
   }
 
   public setMenuEnabled(enabled: boolean): void {
@@ -596,7 +333,7 @@ export class RobotMarker extends BaseScriptComponent {
     if (enabled) {
       this.syncRotationFromScene();
     }
-    this._syncDirectionArrowVisibility();
+    this._syncDebugViewVisibility();
   }
 
   public getWorldPosition(): vec3 | null {
@@ -701,11 +438,11 @@ export class RobotMarker extends BaseScriptComponent {
         },
       },
       {
-        name: "RobotDirectionArrow",
+        name: "RobotDebugView",
         assign: (obj) => {
-          this._directionArrow = obj;
-          this._directionArrow.enabled = false;
-          this._directionArrowBaseLocalPosition = obj.getTransform().getLocalPosition();
+          this._debugView = obj;
+          this._debugView.enabled = false;
+          this._boundingBox = findChildRecursive(obj, "BoundingBox");
         },
       },
     ];
@@ -735,8 +472,6 @@ export class RobotMarker extends BaseScriptComponent {
       this._toggleButton = this._toggleRoot.getComponent(
         RoundButton.getTypeName(),
       ) as RoundButton;
-      this._buttonVfxActive = findChildRecursive(this._toggleRoot, "ButtonVFX_Active");
-      this._buttonVfxInactive = findChildRecursive(this._toggleRoot, "ButtonVFX_Inactive");
     }
 
     if (
@@ -771,6 +506,7 @@ export class RobotMarker extends BaseScriptComponent {
     kinematics?: {
       velocityCmPerS: vec3;
       yawRateRadPerS: number;
+      speedMps: number | null;
       poseTs: number;
     },
   ): void {
@@ -787,6 +523,7 @@ export class RobotMarker extends BaseScriptComponent {
         rotation: desiredRotation,
         velocityCmPerS: kinematics?.velocityCmPerS ?? vec3.zero(),
         yawRateRadPerS: kinematics?.yawRateRadPerS ?? 0,
+        speedMps: kinematics?.speedMps ?? null,
         poseTs: kinematics?.poseTs ?? receiveMonoS,
         receiveMonoS,
       },
@@ -794,16 +531,13 @@ export class RobotMarker extends BaseScriptComponent {
     );
 
     if (result === "immediate") {
-      const predicted = this._poseAnimator.predictedTarget(receiveMonoS);
-      if (predicted) {
-        this.setPose(predicted.position, predicted.rotation);
+      const unified = this._poseAnimator.computeUnifiedTarget(receiveMonoS);
+      if (unified) {
+        this.setPose(unified.position, unified.rotation);
       } else {
         this.setPose(position, desiredRotation);
       }
-      return;
     }
-
-    this._setRealignmentVfx(this._poseAnimator.realignmentVfxActive);
   }
 
   private _tickRuntimePoseSmoothing(): void {
@@ -826,7 +560,6 @@ export class RobotMarker extends BaseScriptComponent {
 
     transform.setWorldPosition(tickResult.position);
     this.setRotation(tickResult.rotation);
-    this._setRealignmentVfx(tickResult.realignmentVfxActive);
   }
 
   private _notifyWorldPositionIfMoved(): void {
@@ -867,34 +600,37 @@ export class RobotMarker extends BaseScriptComponent {
     );
   }
 
-  private _syncDirectionArrowVisibility(): void {
-    if (!this._directionArrow && this.markerRoot) {
-      this._directionArrow = findChildRecursive(this.markerRoot, "RobotDirectionArrow");
+  private _syncDebugViewVisibility(): void {
+    if (!this._debugView && this.markerRoot) {
+      this._debugView = findChildRecursive(this.markerRoot, "RobotDebugView");
     }
-    if (!this._directionArrow) {
+    if (!this._debugView) {
       return;
     }
-    this._directionArrow.enabled = this._debugMode || this._manualPlacementActive;
+    this._debugView.enabled = this._debugMode || this._manualPlacementActive;
   }
 
-  private _setRealignmentVfx(snapping: boolean): void {
-    if (this._buttonVfxActive) {
-      this._buttonVfxActive.enabled = !snapping;
+  private _syncDebugBounds(runtime: RobotRuntimeState): void {
+    if (!this._boundingBox && this._debugView) {
+      this._boundingBox = findChildRecursive(this._debugView, "BoundingBox");
     }
-    if (this._buttonVfxInactive) {
-      this._buttonVfxInactive.enabled = snapping;
+    if (!this._boundingBox) {
+      return;
     }
+    const scale = runtimeBodyBoundsScaleCm(runtime);
+    const centerOffset = runtimeBodyBoundsCenterOffsetCm(runtime);
+    if (!scale || !centerOffset) {
+      return;
+    }
+    const transform = this._boundingBox.getTransform();
+    transform.setLocalScale(scale);
+    transform.setLocalPosition(centerOffset);
   }
 
   private _syncVisualOffsets(): void {
     if (this._toggleRoot && this._toggleBaseLocalPosition) {
       this._toggleRoot.getTransform().setLocalPosition(
         this._toggleBaseLocalPosition.add(this._renderOffsetCm),
-      );
-    }
-    if (this._directionArrow && this._directionArrowBaseLocalPosition) {
-      this._directionArrow.getTransform().setLocalPosition(
-        this._directionArrowBaseLocalPosition.add(this._renderOffsetCm),
       );
     }
     if (this._placementHandle && this._placementHandleBaseLocalPosition) {

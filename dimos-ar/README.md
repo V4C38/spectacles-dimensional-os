@@ -132,16 +132,16 @@ registration-mode pose aggregator until the estimate reaches
 `ALIGN_REG_CONF_MIN` (default 0.7) or yaw is observable, then auto-commits
 `(scale, yaw, translation)`. If confidence never rises within
 `TAG_REGISTRATION_WINDOW_S` (15 s), the session fails with an actionable
-message. The Lens wizard auto-dismisses on `phase=succeeded` (no manual
+message. The Lens wizard auto-dismisses on `state=succeeded` (no manual
 Complete tap).
 
-Requires the robot to advertise `registration_april_tag` (tag mounts must be
-configured). Robots without tag mounts must use manual pose registration.
+AprilTag registration requires tag mounts on the robot profile. Robots without
+tag mounts receive `state: failed` when the client sends `start april_tag`.
 
 **Manual pose** (`registration_command{command:"start",mode:"manual_pose"}`)  
 The user drags the robot marker to its real-world position in the Lens, streams
 `registration_pose`, then sends `registration_command{command:"commit"}`. No camera
-frames are consumed. Always available when `registration_manual_pose` is advertised.
+frames are consumed. The bridge rejects unavailable modes at command time.
 
 Notes:
 - On commit, `WorldRegistry` locks the robot base floor height (world Y) into
@@ -158,19 +158,19 @@ Notes:
   - Tag observations are weighted by quality, recency, distance, and IPPE ambiguity;
     a robust 2D similarity fit updates `(scale, yaw, translation)` together when
     observability and fit quality pass.
-  - **`camera_frame_ack`:** carries `obs_added` per frame and
-    `refinement_complete=true` when the current stop episode commits (protocol v15).
-  - **`capture_policy`:** sent after first `camera_info` with bridge-computed distance
-    limits, `max_capture_speed_mps`, `static_speed_mps`, and `min_observations`.
+  - **`camera_frame_ack`:** carries `capturing_budgeted_complete=true` when the
+    current budgeted capture episode commits (protocol v16).
+  - **`capture_policy`:** sent after first `camera_info` with bridge-computed
+    `max_capture_distance_m`, `min_capture_distance_m`, `max_capture_speed_mps`,
+    `static_speed_mps`, and `min_observations`.
   - When `flat_ground` is enabled and base Y drifts > 3 cm for 2 s,
     `check_floor_y_drift` applies a Y-only correction without emitting
     `world_frame_correction`
 - Corrections that exceed the notification deadband (≥ 5 cm translation or ≥ 1° yaw)
   are emitted as `world_frame_correction`; sub-threshold updates still commit on the
   bridge.
-- AprilTag registration status broadcasts also carry `alignment_confidence` and
-  `refining` on the wire. `refining` is post-commit runtime polish (the bridge
-  keeps refining alignment after commit); the Lens wizard does not surface it.
+- AprilTag registration status broadcasts also carry `registration_confidence` and
+  `scale_locked` on the wire.
 
 **Tag mount geometry (Go2)**  
 The robot marker and LiDAR share `T_world_odom`, which depends on the configured
@@ -183,10 +183,11 @@ the configured mount pose first before tuning aligner thresholds.
 <details>
 <summary>Protocol coupling</summary>
 
-Protocol **v15** is current (`PROTOCOL_VERSION = 15` in `dimos/ar/network/protocol.py`).
-See [`PROTOCOL.md`](PROTOCOL.md) for the full changelog and wire schema. Key v15
-additions: `capture_policy`, `camera_frame_ack.obs_added`, and
-`camera_frame_ack.refinement_complete`. If the AR protocol changes, update these together:
+Protocol **v16** is current (`PROTOCOL_VERSION = 16` in `dimos/ar/network/protocol.py`).
+See [`PROTOCOL.md`](PROTOCOL.md) for the full changelog and wire schema. Key v16
+capture vocabulary: `capture_policy.max_capture_distance_m` /
+`min_capture_distance_m`, `camera_frame_ack.capturing_budgeted_complete`. If the AR
+protocol changes, update these together:
 
 - `dimos/ar/network/protocol.py`
 - `PROTOCOL.md`

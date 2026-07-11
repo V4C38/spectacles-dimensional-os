@@ -6,13 +6,13 @@ import { protocolMetersToLensCentimeters } from "../Network/Protocol";
 import { RegistrationClient } from "../Registration/RegistrationClient";
 import { CameraClient } from "./CameraClient";
 import {
-  CameraStreamSession,
-  CapturePhase,
-  cameraStreamLogStatus,
+  CameraCaptureSession,
+  CameraCaptureState,
+  deriveCameraCapture,
   evaluateOptionalGeometricGates,
   evaluateOptionalSpeedGate,
-  resolveHardwareTransition,
-} from "./CameraStreamSession";
+  isActiveCaptureState,
+} from "./CameraCaptureSession";
 import { DeviceCameraStream } from "./DeviceCameraStream";
 import { UILogger } from "../../App/UI/UILogger";
 
@@ -23,6 +23,7 @@ export interface FrameCaptureControllerDeps {
   statusClient: StatusClient;
   uiLogger: UILogger;
   getBridgeConnected: () => boolean;
+  getWorldFrameCommitted: () => boolean;
 }
 
 /** @component Scene inputs for camera capture; wire pipeline lives in CameraClient. */
@@ -36,14 +37,12 @@ export class FrameCaptureController extends BaseScriptComponent {
 
   private _client: CameraClient | null = null;
   private _camera: DeviceCameraStream | null = null;
-  private _session = new CameraStreamSession();
-  private _hardwareEnabled = false;
+  private _session = new CameraCaptureSession();
+  private _captureState: CameraCaptureState = "off";
   private _robotWorldPos: vec3 | null = null;
-  private _worldFrameCommitted = false;
   private _lastSpeedMps: number | null = null;
   private _deps: FrameCaptureControllerDeps | null = null;
   private _bound = false;
-  private _pendingHardwareOff = false;
 
   onAwake() {
     this.createEvent("OnStartEvent").bind(() => {
@@ -53,12 +52,12 @@ export class FrameCaptureController extends BaseScriptComponent {
         camera: this._camera,
         getCameraObject: () => this.cameraObject,
       });
-      this._client.setOnFrameAck((obsAdded, refinementComplete) => {
-        this._session.onFrameAck(obsAdded, refinementComplete);
+      this._client.setOnFrameAck((msg) => {
+        this._session.onFrameAck(msg);
       });
       this._client.bindInbound();
       this.createEvent("UpdateEvent").bind(() => {
-        this._syncCameraStream();
+        this._syncCameraCapture();
       });
     });
   }
@@ -70,16 +69,18 @@ export class FrameCaptureController extends BaseScriptComponent {
     this._bound = true;
     this._deps = deps;
 
-    deps.registrationClient.onAprilTagCaptureStart.add(() => {
-      this._session.startRegistration();
-    });
-    deps.registrationClient.onAprilTagCaptureEnd.add(() => {
-      this._session.requestStreamStop();
-    });
-
     deps.registrationClient.onRegistrationStatus.add((msg) => {
       if (msg.preview_pose) {
         this._robotWorldPos = protocolMetersToLensCentimeters(msg.preview_pose.position);
+      }
+      if (msg.state === "april_tag" && msg.mode === "april_tag") {
+        this._session.beginCameraCapture();
+      } else if (
+        msg.state === "succeeded" ||
+        msg.state === "failed" ||
+        msg.state === "idle"
+      ) {
+        this._session.endCameraCapture();
       }
     });
 
@@ -90,7 +91,7 @@ export class FrameCaptureController extends BaseScriptComponent {
     deps.telemetryClient.onPose.add((msg) => {
       this._robotWorldPos = protocolMetersToLensCentimeters(msg.position);
       const speed = msg.speed_mps ?? null;
-      if (this._worldFrameCommitted) {
+      if (deps.getWorldFrameCommitted()) {
         this._session.onSpeedChanged(this._lastSpeedMps, speed);
       }
       this._lastSpeedMps = speed;
@@ -98,17 +99,13 @@ export class FrameCaptureController extends BaseScriptComponent {
 
     deps.inboundRouter.onBridgeConnectionChanged.add((connected) => {
       if (!connected) {
-        this._session.requestStreamStop();
-        this._worldFrameCommitted = false;
+        this._applyCapture(this._captureState, "off");
+        this._captureState = "off";
+        this._session.endCameraCapture();
         this._lastSpeedMps = null;
         this._robotWorldPos = null;
-        this._pendingHardwareOff = false;
-        this._stopHardwareIfRunning("disconnect", true);
+        this._client?.resetCapturePipeline();
       }
-    });
-
-    deps.statusClient.onBridgeStatus.add((msg) => {
-      this._worldFrameCommitted = msg.world_frame_committed;
     });
   }
 
@@ -121,7 +118,16 @@ export class FrameCaptureController extends BaseScriptComponent {
     this._client?.setCaptureErrorHandler(handler);
   }
 
-  private _syncCameraStream(): void {
+  public endCameraCaptureSession(): void {
+    if (this._captureState !== "off") {
+      this._applyCapture(this._captureState, "off");
+      this._captureState = "off";
+      this._deps?.uiLogger.setCameraCaptureState("off");
+    }
+    this._session.endCameraCapture();
+  }
+
+  private _syncCameraCapture(): void {
     const client = this._client;
     const camera = this._camera;
     if (!client || !camera) {
@@ -129,6 +135,7 @@ export class FrameCaptureController extends BaseScriptComponent {
     }
 
     const bridgeConnected = this._deps?.getBridgeConnected() ?? false;
+    const worldFrameCommitted = this._deps?.getWorldFrameCommitted() ?? false;
     const cameraObject = this.cameraObject;
     let cameraPos: vec3 | null = null;
     let cameraRot: quat | null = null;
@@ -140,131 +147,118 @@ export class FrameCaptureController extends BaseScriptComponent {
 
     const cameraReady = cameraPos !== null && cameraRot !== null;
     const distanceGate = this._session.getDistanceGateCm();
-    const runtimePolicyReady = !this._worldFrameCommitted || this._session.policyApplied;
+    const runtimePolicyReady = !worldFrameCommitted || this._session.policyApplied;
     const geometricGatesPass =
-      runtimePolicyReady && (!cameraReady ||
-      evaluateOptionalGeometricGates(
-        cameraPos!,
-        cameraRot!,
-        this._worldFrameCommitted ? this._robotWorldPos : null,
-        distanceGate.minDistanceCm,
-        distanceGate.maxDistanceCm,
-        this._session.policyApplied,
-      ));
+      runtimePolicyReady &&
+      (!cameraReady ||
+        evaluateOptionalGeometricGates(
+          cameraPos!,
+          cameraRot!,
+          worldFrameCommitted ? this._robotWorldPos : null,
+          distanceGate.minDistanceCm,
+          distanceGate.maxDistanceCm,
+          this._session.policyApplied,
+        ));
     const speedGatePass = evaluateOptionalSpeedGate(
       this._lastSpeedMps,
       this._session.maxSpeedMps,
       this._session.policyApplied,
     );
 
-    const result = this._session.evaluate(
-      {
-        bridgeConnected,
-        posesReady: cameraReady,
-        geometricGatesPass,
-        speedGatePass,
-      },
+    const gates = {
+      bridgeConnected,
+      posesReady: cameraReady,
+      geometricGatesPass,
+      speedGatePass,
+      hasInFlightCapture: client.hasInFlightCapture(),
+    };
+
+    this._session.updateGateDebounce(gates, getTime());
+    const nextState = deriveCameraCapture(this._session.getFacts(), gates, getTime());
+    this._session.updatePendingDrain(nextState, gates.hasInFlightCapture);
+    const resolvedState = deriveCameraCapture(
+      this._session.getFacts(),
+      gates,
       getTime(),
     );
 
-    const transition = resolveHardwareTransition({
-      evalHardwareEnabled: result.hardwareEnabled,
-      requestActive: result.requestActive,
-      hardwareCurrentlyEnabled: this._hardwareEnabled,
-      pendingHardwareOff: this._pendingHardwareOff,
-      hasInFlightCapture: client.hasInFlightCapture(),
-    });
-    this._pendingHardwareOff = transition.nextPendingHardwareOff;
-
-    if (transition.targetHardwareEnabled !== this._hardwareEnabled) {
-      if (transition.targetHardwareEnabled) {
-        this._startHardware(this._hardwareStartReason(result));
-      } else {
-        this._stopHardware(
-          transition.stopIsLifecycleEnd
-            ? this._lifecycleStopReason()
-            : "gate_pause",
-          transition.stopIsLifecycleEnd,
-        );
-      }
-      this._hardwareEnabled = transition.targetHardwareEnabled;
+    if (resolvedState !== this._captureState) {
+      this._applyCapture(this._captureState, resolvedState);
+      this._captureState = resolvedState;
     }
 
-    const displayStatus = cameraStreamLogStatus(
-      camera.isRunning(),
-      result.requestActive,
-    );
-    this._deps?.uiLogger.setCameraStreamStatus(displayStatus);
+    this._deps?.uiLogger.setCameraCaptureState(resolvedState);
 
-    client.setCaptureEnabled(transition.captureEnabled);
-    if (transition.targetHardwareEnabled) {
+    const pipelineEnabled =
+      isActiveCaptureState(resolvedState) ||
+      (this._session.getFacts().pendingDrain && gates.hasInFlightCapture);
+    client.setCaptureEnabled(pipelineEnabled);
+    if (isActiveCaptureState(resolvedState)) {
       client.recordPose();
       client.tick();
     }
   }
 
-  private _hardwareStartReason(result: { requestActive: boolean }): string {
-    if (this._session.phase === "registration") {
-      return "registration";
-    }
-    if (!result.requestActive) {
-      return "resume";
-    }
-    if (this._session.phase === "tracking_motion") {
-      return "motion";
-    }
-    if (this._session.phase === "refining_stop") {
-      return "stop_refine";
-    }
-    return "resume";
-  }
-
-  private _lifecycleStopReason(): string {
-    if (!this._worldFrameCommitted) {
-      return "registration_end";
-    }
-    return "episode_complete";
-  }
-
-  private _startHardware(reason: string): void {
-    const camera = this._camera;
-    if (!camera) {
-      return;
-    }
-    camera.start();
-    this._logHardwareTransition(true, reason);
-  }
-
-  private _stopHardware(reason: string, lifecycleEnd: boolean): void {
+  private _applyCapture(prev: CameraCaptureState, next: CameraCaptureState): void {
     const camera = this._camera;
     const client = this._client;
     if (!camera || !client) {
       return;
     }
-    camera.stop();
-    if (lifecycleEnd) {
-      client.resetCapturePipeline();
-    } else {
-      client.prepareForHardwarePause();
-    }
-    this._logHardwareTransition(false, reason);
-  }
 
-  private _stopHardwareIfRunning(reason: string, lifecycleEnd: boolean): void {
-    if (!this._hardwareEnabled) {
-      if (lifecycleEnd) {
-        this._client?.resetCapturePipeline();
+    const wasActive = isActiveCaptureState(prev);
+    const isActive = isActiveCaptureState(next);
+
+    if (isActive && !wasActive) {
+      camera.start();
+      this._logCaptureTransition(next, true, this._startReason());
+      return;
+    }
+
+    if (!isActive && wasActive) {
+      camera.stop();
+      if (next === "off") {
+        client.resetCapturePipeline();
+        this._logCaptureTransition(next, false, this._lifecycleStopReason());
+      } else {
+        client.prepareForHardwarePause();
+        this._logCaptureTransition(next, false, "gate_pause");
       }
       return;
     }
-    this._stopHardware(reason, lifecycleEnd);
-    this._hardwareEnabled = false;
+
+    if (!isActive && next === "off" && prev !== "off") {
+      client.resetCapturePipeline();
+      this._logCaptureTransition(next, false, this._lifecycleStopReason());
+    }
   }
 
-  private _logHardwareTransition(running: boolean, reason: string): void {
-    const phase: CapturePhase = this._session.phase;
+  private _startReason(): string {
+    const worldFrameCommitted = this._deps?.getWorldFrameCommitted() ?? false;
+    if (!worldFrameCommitted) {
+      return "registration";
+    }
+    if ((this._session.obsBudget ?? 0) > 0) {
+      return "stop_refine";
+    }
+    return "motion";
+  }
+
+  private _lifecycleStopReason(): string {
+    const worldFrameCommitted = this._deps?.getWorldFrameCommitted() ?? false;
+    if (!worldFrameCommitted) {
+      return "registration_end";
+    }
+    return "episode_complete";
+  }
+
+  private _logCaptureTransition(
+    state: CameraCaptureState,
+    running: boolean,
+    reason: string,
+  ): void {
     print(
-      `FrameCaptureController: camera stream ${running ? "ON" : "OFF"} phase=${phase} reason=${reason}`,
+      `FrameCaptureController: camera capture ${running ? "ON" : "OFF"} state=${state} reason=${reason}`,
     );
   }
 }

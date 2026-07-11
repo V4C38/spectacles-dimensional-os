@@ -25,8 +25,7 @@ function makeClient() {
     type: "camera_frame_ack";
     seq: number;
     ts: number;
-    obs_added: boolean;
-    refinement_complete: boolean;
+    capturing_budgeted_complete: boolean;
   }>();
   const onHello = new Signal();
   const transportSend = vi.fn();
@@ -113,7 +112,7 @@ describe("CameraClient ACK-gated cadence", () => {
     internals._inFlightSeq = 1;
 
     setMockTime(9.0);
-    onCameraFrameAck.emit({ type: "camera_frame_ack", seq: 1, ts: 9.0, obs_added: false, refinement_complete: false });
+    onCameraFrameAck.emit({ type: "camera_frame_ack", seq: 1, ts: 9.0, capturing_budgeted_complete: false });
 
     expect(internals._captureSpacingDeadline).toBe(9.0);
     expect(internals._inFlight).toBe(false);
@@ -139,7 +138,7 @@ describe("CameraClient ACK-gated cadence", () => {
     expect(requestNextFrame).toHaveBeenCalledTimes(1);
 
     setMockTime(1.1);
-    onCameraFrameAck.emit({ type: "camera_frame_ack", seq: 1, ts: 1.1, obs_added: true, refinement_complete: false });
+    onCameraFrameAck.emit({ type: "camera_frame_ack", seq: 1, ts: 1.1, capturing_budgeted_complete: false });
     setMockTime(1.1 + 0.05);
     client.tick();
     await flushAsyncCapture();

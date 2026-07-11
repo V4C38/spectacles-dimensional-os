@@ -1,22 +1,24 @@
 import { describe, it, expect } from "vitest";
 import {
-  AppState,
   validateSessionFields,
   nextLidarMode,
   createDefaultAppStateData,
   createDefaultBridgeSnapshot,
-  bridgeLinkPresentation,
-  bridgeLinkTransitionLog,
-  navigationOutcomePresentation,
+  navigationErrorPresentation,
   robotActivityPresentation,
   robotMarkerSteadyStatePresentation,
   toSessionState,
-  defaultNavigationOutcome,
+  defaultNavigationError,
   createDefaultRobotRuntimeState,
   isRuntimePhase,
-  NO_ROBOT_CONNECTED_LABEL,
+  AppStateStore,
   type AppStateData,
 } from "../../Assets/Scripts/App/AppState";
+import {
+  bridgeLinkPresentation,
+  bridgeLinkTransitionLog,
+  bridgeConnectPresentation,
+} from "../../Assets/Scripts/App/Bridge/BridgePresentation";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WARN, COLOR_WHITE } from "../mocks/UIKit";
 
 function runtimeState(
@@ -28,14 +30,12 @@ function runtimeState(
 function baseState(patch: Partial<AppStateData> = {}): AppStateData {
   return {
     phase: "runtime",
-    runtimeEstablished: true,
     debugMode: false,
     lidarMode: "obstacles",
     operatingMode: "manual",
-    navigationState: "off",
+    navigationState: "disabled",
     robotInteractionMode: "hidden",
-    navigationOutcome: defaultNavigationOutcome(),
-    bridgeLinkState: "disconnected",
+    navigationError: defaultNavigationError(),
     bridgeSnapshot: createDefaultBridgeSnapshot(),
     robotRuntime: runtimeState(),
     driftState: createDefaultAppStateData().driftState,
@@ -48,13 +48,13 @@ describe("validateSessionFields", () => {
     const next = validateSessionFields(
       baseState({
         phase: "registration",
-        navigationState: "armed",
-        navigationOutcome: { kind: "failed", errorCode: null },
+        navigationState: "idle",
+        navigationError: { kind: "failed", errorCode: null },
         robotInteractionMode: "runtimeRobot",
       }),
     );
-    expect(next.navigationState).toBe("off");
-    expect(next.navigationOutcome).toEqual(defaultNavigationOutcome());
+    expect(next.navigationState).toBe("disabled");
+    expect(next.navigationError).toEqual(defaultNavigationError());
     expect(next.robotInteractionMode).toBe("hidden");
   });
 
@@ -62,22 +62,22 @@ describe("validateSessionFields", () => {
     const next = validateSessionFields(
       baseState({
         phase: "runtime",
-        navigationState: "armed",
+        navigationState: "idle",
         operatingMode: "agent",
       }),
     );
-    expect(next.navigationState).toBe("off");
+    expect(next.navigationState).toBe("disabled");
   });
 
   it("turns off navigation when operating mode is registration", () => {
     const next = validateSessionFields(
       baseState({
         phase: "runtime",
-        operatingMode: "registration",
-        navigationState: "placingGoal",
+        operatingMode: "registrationMode",
+        navigationState: "navIntent",
       }),
     );
-    expect(next.navigationState).toBe("off");
+    expect(next.navigationState).toBe("disabled");
   });
 
   it("turns off lidar mode when capability unavailable", () => {
@@ -104,11 +104,12 @@ describe("nextLidarMode", () => {
 describe("createDefaultAppStateData", () => {
   it("returns expected defaults", () => {
     const state = createDefaultAppStateData();
+    const store = new AppStateStore();
     expect(state.phase).toBe("registration");
     expect(state.lidarMode).toBe("off");
     expect(state.operatingMode).toBe("manual");
-    expect(state.bridgeLinkState).toBe("disconnected");
-    expect(state.navigationState).toBe("off");
+    expect(store.bridgeLinkState).toBe("disconnected");
+    expect(state.navigationState).toBe("disabled");
   });
 });
 
@@ -122,19 +123,18 @@ describe("isRuntimePhase", () => {
   });
 });
 
-describe("navigationOutcomePresentation", () => {
-  it("maps failed outcomes to status text", () => {
-    expect(navigationOutcomePresentation({ kind: "failed", errorCode: 1 })).toEqual({
+describe("navigationErrorPresentation", () => {
+  it("maps failed errors to status text", () => {
+    expect(navigationErrorPresentation({ kind: "failed", errorCode: 1 })).toEqual({
       text: "Navigation failed",
       color: COLOR_ERROR,
     });
-    expect(navigationOutcomePresentation({ kind: "none" })).toBeNull();
+    expect(navigationErrorPresentation({ kind: "none" })).toBeNull();
   });
 });
 
 describe("bridgeLinkPresentation", () => {
   it("maps bridge link states to status text", () => {
-    AppState.connectedRobotDisplayName = NO_ROBOT_CONNECTED_LABEL;
     expect(bridgeLinkPresentation("disconnected")).toEqual({
       text: "\n\n\nBridge not connected",
       color: COLOR_ERROR,
@@ -143,12 +143,47 @@ describe("bridgeLinkPresentation", () => {
       text: "\n\n\nBridge connected - Robot not connected",
       color: COLOR_WARN,
     });
-    AppState.connectedRobotDisplayName = "Unitree Go2";
-    expect(bridgeLinkPresentation("connected")).toEqual({
+    expect(bridgeLinkPresentation("connected", "Unitree Go2")).toEqual({
       text: "\n\n\nBridge connected - Unitree Go2",
       color: COLOR_SUCCESS,
     });
-    AppState.connectedRobotDisplayName = NO_ROBOT_CONNECTED_LABEL;
+  });
+});
+
+describe("bridgeConnectPresentation", () => {
+  it("shows connecting before socket opens", () => {
+    const result = bridgeConnectPresentation({
+      linkState: "disconnected",
+      isConnecting: true,
+      socketOpen: false,
+      handshakeReady: false,
+      clockSync: "idle",
+    });
+    expect(result.primary.text).toBe("Connecting to bridge…");
+    expect(result.detail).toBeNull();
+  });
+
+  it("shows handshake wait when socket is open", () => {
+    const result = bridgeConnectPresentation({
+      linkState: "disconnected",
+      isConnecting: true,
+      socketOpen: true,
+      handshakeReady: false,
+      clockSync: "idle",
+    });
+    expect(result.primary.text).toBe("Waiting for handshake…");
+  });
+
+  it("shows clock sync detail when connected", () => {
+    const result = bridgeConnectPresentation({
+      linkState: "connected",
+      isConnecting: false,
+      socketOpen: true,
+      handshakeReady: true,
+      clockSync: "pending",
+      displayName: "Unitree Go2",
+    });
+    expect(result.detail).toBe("Syncing clock…");
   });
 });
 
@@ -182,7 +217,7 @@ describe("robotActivityPresentation", () => {
   it("prefers navigation outcome over steady state", () => {
     expect(
       robotActivityPresentation(
-        baseState({ navigationOutcome: { kind: "failed", errorCode: 1 } }),
+        baseState({ navigationError: { kind: "failed", errorCode: 1 } }),
       ),
     ).toEqual({ text: "Navigation failed", color: COLOR_ERROR });
   });
@@ -198,11 +233,15 @@ describe("robotActivityPresentation", () => {
     ).toEqual({ text: "Navigating", color: COLOR_WHITE });
   });
 
-  it("shows robot offline when bridge link is connectedNoRobot", () => {
+  it("shows robot offline when bridge snapshot has no robot", () => {
     expect(
       robotActivityPresentation(
         baseState({
-          bridgeLinkState: "connectedNoRobot",
+          bridgeSnapshot: {
+            ...createDefaultBridgeSnapshot(),
+            handshakeReady: true,
+            robotConnected: false,
+          },
           navigationState: "navigating",
         }),
       ),
@@ -214,7 +253,7 @@ describe("robotMarkerSteadyStatePresentation", () => {
   it("returns empty text in registration mode", () => {
     expect(
       robotMarkerSteadyStatePresentation(
-        baseState({ operatingMode: "registration" }),
+        baseState({ operatingMode: "registrationMode" }),
       ),
     ).toEqual({ text: "", color: COLOR_WHITE });
   });
@@ -224,16 +263,22 @@ describe("robotMarkerSteadyStatePresentation", () => {
       robotMarkerSteadyStatePresentation(
         baseState({
           operatingMode: "agent",
-          navigationState: "off",
+          navigationState: "disabled",
         }),
       ),
     ).toEqual({ text: "Idle", color: COLOR_WHITE });
   });
 
-  it("returns Robot offline when bridge link is connectedNoRobot", () => {
+  it("returns Robot offline when bridge snapshot has no robot", () => {
     expect(
       robotMarkerSteadyStatePresentation(
-        baseState({ bridgeLinkState: "connectedNoRobot" }),
+        baseState({
+          bridgeSnapshot: {
+            ...createDefaultBridgeSnapshot(),
+            handshakeReady: true,
+            robotConnected: false,
+          },
+        }),
       ),
     ).toEqual({ text: "Robot offline", color: COLOR_ERROR });
   });
@@ -256,10 +301,10 @@ describe("toSessionState", () => {
       toSessionState(
         baseState({
           phase: "registration",
-          robotInteractionMode: "manualPlacement",
+          robotInteractionMode: "manual_placement",
         }),
       ),
-    ).toEqual({ phase: "registration", interaction: "manualPlacement" });
+    ).toEqual({ phase: "registration", interaction: "manual_placement" });
   });
 
   it("maps runtime phase", () => {
@@ -270,7 +315,7 @@ describe("toSessionState", () => {
           operatingMode: "agent",
           robotInteractionMode: "runtimeRobot",
           navigationState: "navigating",
-          navigationOutcome: { kind: "none" },
+          navigationError: { kind: "none" },
         }),
       ),
     ).toEqual({
@@ -278,7 +323,7 @@ describe("toSessionState", () => {
       operating: "agent",
       interaction: "runtimeRobot",
       navigation: "navigating",
-      outcome: { kind: "none" },
+      error: { kind: "none" },
     });
   });
 });

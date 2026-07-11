@@ -27,11 +27,14 @@
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
     bridgeSession: false
+    deviceTracking: false
     frameCaptureController: false
     navigationMarkerPrefab: false
     pointCloudRenderer: false
     robotGroundDeadzoneRadiusCm: false
     robotMarker: false
+    worldMeshObject: false
+    worldMeshVisual: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -46,6 +49,9 @@
       robotMarker: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
       pointCloudRenderer: !<MappingBased.AssignableType_3> 00000000-0000-0000-0000-000000000000
       navigationMarkerPrefab: !<reference.ObjectPrefab> 00000000-0000-0000-0000-000000000000
+      deviceTracking: !<reference.DeviceTracking> 00000000-0000-0000-0000-000000000000
+      worldMeshObject: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      worldMeshVisual: !<reference.RenderMeshVisual> 00000000-0000-0000-0000-000000000000
       robotGroundDeadzoneRadiusCm: !<float> 75.000000
   ScriptTypes:
     -
@@ -56,4 +62,7 @@
     - // @input AssignableType_2 robotMarker
     - // @input AssignableType_3 pointCloudRenderer
     - // @input Asset.ObjectPrefab navigationMarkerPrefab
+    - // @input Component.DeviceTracking deviceTracking
+    - // @input SceneObject worldMeshObject
+    - // @input Component.RenderMeshVisual worldMeshVisual
     - // @input float robotGroundDeadzoneRadiusCm = 75

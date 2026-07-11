@@ -14,6 +14,7 @@ from dimos.ar.navigation.navigate import (
     NAV_GOAL_PATH_TIMEOUT_S,
     NAV_WATCHDOG_POLL_INTERVAL_S,
     NavigateGoalHandler,
+    NavSession,
 )
 from dimos.ar.network.protocol import NavGoalMessage, encode_pose
 from dimos.ar.world_frame.state import ODOM_SCALE_INITIAL, WorldFrameState
@@ -72,6 +73,27 @@ def _last_nav_status(mock_server: MagicMock) -> dict:
     return _all_nav_statuses(mock_server)[-1]
 
 
+def _intent_session(**kwargs: object) -> NavSession:
+    defaults: dict[str, object] = {
+        "position": (1.0, 0.0, 2.0),
+        "orientation": (0.0, 0.0, 0.0, 1.0),
+        "dispatched_mono": time.monotonic(),
+        "path_received": False,
+        "last_path_mono": None,
+        "phase": "intent",
+    }
+    defaults.update(kwargs)
+    return NavSession(**defaults)  # type: ignore[arg-type]
+
+
+def _set_intent_session(nav: NavigateGoalHandler, **kwargs: object) -> None:
+    nav._session = _intent_session(**kwargs)
+
+
+def _set_navigating_session(nav: NavigateGoalHandler, **kwargs: object) -> None:
+    nav._session = _intent_session(path_received=True, phase="navigating", **kwargs)
+
+
 # ------------------------------------------------------------------
 # NavigateGoalHandler unit tests
 # ------------------------------------------------------------------
@@ -89,23 +111,22 @@ def test_on_navigate_goal_broadcasts_idle_until_path() -> None:
     nav.on_navigate_goal(msg)
 
     time.sleep(0.05)
-    assert nav._dimos_nav_state == "idle"
-    assert nav._nav_goal_pending is True
-    assert nav._nav_path_received is False
-    assert nav._goal_reached is False
-    assert nav._goal_failed is False
-    assert nav._nav_goal_dispatch_mono is not None
+    assert nav.nav_wire_dict()["state"] == "navIntent"
+    assert nav._session is not None
+    assert nav._session.path_received is False
+    assert nav._terminalOutcome is None
+    assert nav._session is not None
+    assert nav._session.dispatched_mono is not None
     assert len(published_nav) == 1
     nav_status = _last_nav_status(mock_server)
     assert nav_status["type"] == "nav_status"
-    assert nav_status["phase"] == "idle"
+    assert nav_status["state"] == "navIntent"
 
 
 @pytest.mark.asyncio
 async def test_handle_ar_path_promotes_navigating() -> None:
     nav, _mock_server, _published_nav, _published_cancel = _make_nav()
-    nav._nav_goal_pending = True
-    nav._nav_goal_dispatch_mono = time.monotonic()
+    _set_intent_session(nav, dispatched_mono=time.monotonic())
 
     path = Path()
     path.poses = [
@@ -120,16 +141,16 @@ async def test_handle_ar_path_promotes_navigating() -> None:
 
     nav.on_path(path)
 
-    assert nav._dimos_nav_state == "navigating"
-    assert nav._nav_path_received is True
-    assert nav._nav_goal_dispatch_mono is None
+    assert nav.nav_wire_dict()["state"] == "navigating"
+    assert nav._session.path_received is True
+    assert nav._session is not None
+    assert nav._session.dispatched_mono is None
 
 
 @pytest.mark.asyncio
 async def test_handle_ar_path_does_not_mutate_nav_state_without_pending_goal() -> None:
     nav, mock_server, _published_nav, _published_cancel = _make_nav()
-    nav._dimos_nav_state = "idle"
-    nav._nav_goal_pending = False
+    nav._session = None
 
     path = Path()
     path.poses = [
@@ -144,8 +165,8 @@ async def test_handle_ar_path_does_not_mutate_nav_state_without_pending_goal() -
 
     nav.on_path(path)
 
-    assert nav._dimos_nav_state == "idle"
-    assert nav._nav_goal_pending is False
+    assert nav.nav_wire_dict()["state"] == "idle"
+    assert nav._session is None
     mock_server.schedule_send.assert_called_once()
     payload = json.loads(mock_server.schedule_send.call_args.args[0])
     assert payload["type"] == "path"
@@ -155,14 +176,14 @@ async def test_handle_ar_path_does_not_mutate_nav_state_without_pending_goal() -
 @pytest.mark.asyncio
 async def test_late_path_after_goal_reached_does_not_revive_navigating() -> None:
     nav, _mock_server, _published_nav, _published_cancel = _make_nav()
-    nav._nav_goal_pending = True
-    nav._dimos_nav_state = "navigating"
+    _set_intent_session(nav)
+    _set_navigating_session(nav)
 
     nav.on_goal_reached(Bool(data=True))
 
-    assert nav._dimos_nav_state == "idle"
-    assert nav._nav_goal_pending is False
-    assert nav._goal_reached is True
+    assert nav.nav_wire_dict()["state"] == "resolved"
+    assert nav._session is None
+    assert nav._terminalOutcome == "succeeded"
 
     path = Path()
     path.poses = [
@@ -176,24 +197,23 @@ async def test_late_path_after_goal_reached_does_not_revive_navigating() -> None
     path.ts = 3.0
     nav.on_path(path)
 
-    assert nav._dimos_nav_state == "idle"
-    assert nav._nav_goal_pending is False
+    assert nav.nav_wire_dict()["state"] == "resolved"
+    assert nav._session is None
 
 
 @pytest.mark.asyncio
 async def test_handle_ar_goal_reached_failure_marks_goal_failed() -> None:
     nav, _mock_server, _published_nav, published_cancel = _make_nav()
-    nav._nav_goal_pending = True
-    nav._dimos_nav_state = "navigating"
+    _set_intent_session(nav)
+    _set_navigating_session(nav)
     nav._motion_router.emergency_stop = MagicMock(wraps=nav._motion_router.emergency_stop)
     nav._motion_router.cancel_nav_goal = MagicMock(wraps=nav._motion_router.cancel_nav_goal)
 
     nav.on_goal_reached(Bool(data=False))
 
-    assert nav._dimos_nav_state == "idle"
-    assert nav._goal_reached is False
-    assert nav._goal_failed is True
-    assert nav._nav_goal_pending is False
+    assert nav.nav_wire_dict()["state"] == "resolved"
+    assert nav._terminalOutcome == "failed"
+    assert nav._session is None
     nav._motion_router.emergency_stop.assert_called_once()
     nav._motion_router.cancel_nav_goal.assert_not_called()
     assert len(published_cancel) == 2
@@ -201,17 +221,18 @@ async def test_handle_ar_goal_reached_failure_marks_goal_failed() -> None:
 
 def test_goal_stall_no_path_emits_retryable_recovering() -> None:
     nav, mock_server, _published_nav, published_cancel = _make_nav()
-    nav._nav_goal_pending = True
-    nav._nav_path_received = False
-    nav._nav_goal_dispatch_mono = time.monotonic() - NAV_GOAL_PATH_TIMEOUT_S - 1.0
+    _set_intent_session(
+        nav,
+        dispatched_mono=time.monotonic() - NAV_GOAL_PATH_TIMEOUT_S - 1.0,
+    )
 
     nav.handle_goal_stall(stall_reason="no_path")
 
-    assert nav._dimos_nav_state == "recovering"
-    assert nav._goal_failed is False
-    assert nav._nav_goal_pending is False
+    assert nav.nav_wire_dict()["state"] == "navIntent"
+    assert nav._terminalOutcome is None
+    assert nav._session is None
     nav_status = _last_nav_status(mock_server)
-    assert nav_status["phase"] == "recovering"
+    assert nav_status["state"] == "navIntent"
     assert nav_status["retryable"] is True
     assert nav_status["stall_reason"] == "no_path"
     time.sleep(0.05)
@@ -220,13 +241,12 @@ def test_goal_stall_no_path_emits_retryable_recovering() -> None:
 
 def test_goal_stall_planner_idle_emits_retryable_recovering() -> None:
     nav, mock_server, _published_nav, published_cancel = _make_nav()
-    nav._nav_goal_pending = True
-    nav._nav_path_received = False
+    _set_intent_session(nav, path_received=False)
 
     nav.on_navigation_state("idle")
 
     nav_status = _last_nav_status(mock_server)
-    assert nav_status["phase"] == "recovering"
+    assert nav_status["state"] == "navIntent"
     assert nav_status["retryable"] is True
     assert nav_status["stall_reason"] == "planner_idle"
     time.sleep(0.05)
@@ -235,9 +255,10 @@ def test_goal_stall_planner_idle_emits_retryable_recovering() -> None:
 
 def test_goal_stall_does_not_send_second_nav_goal() -> None:
     nav, _mock_server, published_nav, published_cancel = _make_nav()
-    nav._nav_goal_pending = True
-    nav._nav_path_received = False
-    nav._nav_goal_dispatch_mono = time.monotonic() - NAV_GOAL_PATH_TIMEOUT_S - 1.0
+    _set_intent_session(
+        nav,
+        dispatched_mono=time.monotonic() - NAV_GOAL_PATH_TIMEOUT_S - 1.0,
+    )
 
     nav.handle_goal_stall(stall_reason="no_path")
 
@@ -250,9 +271,10 @@ def test_disconnect_prevents_watchdog_stall_emission() -> None:
     nav, mock_server, _published_nav, _published_cancel = _make_nav()
     nav.start()
     try:
-        nav._nav_goal_pending = True
-        nav._nav_path_received = False
-        nav._nav_goal_dispatch_mono = time.monotonic() - NAV_GOAL_PATH_TIMEOUT_S - 1.0
+        _set_intent_session(
+            nav,
+            dispatched_mono=time.monotonic() - NAV_GOAL_PATH_TIMEOUT_S - 1.0,
+        )
         mock_server.schedule_send.reset_mock()
 
         nav.reset_on_disconnect()
@@ -275,7 +297,8 @@ def test_on_navigate_goal_sets_dispatch_mono_on_direct_publish() -> None:
     )
 
     nav.on_navigate_goal(msg)
-    assert nav._nav_goal_dispatch_mono is not None
+    assert nav._session is not None
+    assert nav._session.dispatched_mono is not None
     assert len(published_nav) == 1
 
 
@@ -300,15 +323,13 @@ def test_on_navigate_goal_direct_publish_returns_quickly() -> None:
 def test_emergency_stop_then_goal_succeeds() -> None:
     """After emergency stop, a new goal is accepted and published."""
     nav, _mock_server, published_nav, published_cancel = _make_nav()
-    nav._nav_goal_pending = True
-    nav._dimos_nav_state = "navigating"
-    nav._nav_path_received = True
+    _set_navigating_session(nav)
 
     nav.on_emergency_stop()
     time.sleep(0.05)
 
-    assert nav._nav_goal_pending is False
-    assert nav._dimos_nav_state == "idle"
+    assert nav._session is None
+    assert nav.nav_wire_dict()["state"] == "idle"
 
     msg = NavGoalMessage(
         ts=2.0,
@@ -321,19 +342,19 @@ def test_emergency_stop_then_goal_succeeds() -> None:
 
     assert len(published_cancel) == 2
     assert len(published_nav) == 1
-    assert nav._nav_goal_pending is True
-    assert nav._nav_path_received is False
+    assert nav._session is not None
+    assert nav._session.path_received is False
 
 
 def test_cancel_goal_timeout_does_not_mark_goal_failed() -> None:
     nav, mock_server, _published_nav, published_cancel = _make_nav()
     nav.on_cancel_nav_goal(ts=3.0)
 
-    assert nav._goal_failed is False
+    assert nav._terminalOutcome is None
     assert nav._nav_error_code is None
     assert len(published_cancel) == 2
     nav_status = _last_nav_status(mock_server)
-    assert nav_status["phase"] == "idle"
+    assert nav_status["state"] == "idle"
     assert nav_status.get("error_code") is None
 
 
@@ -346,10 +367,10 @@ def test_send_nav_goal_accepts_direct_publish() -> None:
         orientation=(0.0, 0.0, 0.0, 1.0),
     )
     nav.on_navigate_goal(msg)
-    assert nav._goal_failed is False
-    assert nav._nav_goal_pending is True
+    assert nav._terminalOutcome is None
+    assert nav._session is not None
     assert len(published_nav) == 1
-    assert nav._goal_failed is False
+    assert nav._terminalOutcome is None
 
 
 def test_concurrent_nav_goals_dispatch_both() -> None:
@@ -372,22 +393,18 @@ def test_concurrent_nav_goals_dispatch_both() -> None:
 
     assert len(published_nav) == 2
     assert published_nav[-1].position[0] == pytest.approx(2.0 / ODOM_SCALE_INITIAL, abs=0.01)
-    assert nav._goal_failed is False
+    assert nav._terminalOutcome is None
 
 
 def test_on_navigation_state_idle_while_live_emits_recovery() -> None:
     nav, mock_server, _published_nav, _published_cancel = _make_nav()
-    nav._nav_goal_pending = True
-    nav._nav_path_received = True
-    nav._dimos_nav_state = "navigating"
-    nav._goal_reached = False
-    nav._goal_failed = False
+    _set_navigating_session(nav)
 
     nav.on_navigation_state("idle")
 
-    assert nav._dimos_nav_state == "recovering"
+    assert nav.nav_wire_dict()["state"] == "navIntent"
     nav_status = _last_nav_status(mock_server)
-    assert nav_status["phase"] == "recovering"
+    assert nav_status["state"] == "navIntent"
 
 
 def test_on_navigation_state_initial_rotation_maps_to_navigating() -> None:
@@ -410,9 +427,9 @@ def _all_wire_messages(mock_server: MagicMock) -> list[dict]:
 
 
 def _wire_sequence(mock_server: MagicMock) -> list[tuple[str, str | None]]:
-    """Return (type, phase) pairs for nav_status; other types have phase=None."""
+    """Return (type, state) pairs for nav_status; other types have state=None."""
     return [
-        (msg["type"], msg.get("phase") if msg["type"] == "nav_status" else None)
+        (msg["type"], msg.get("state") if msg["type"] == "nav_status" else None)
         for msg in _all_wire_messages(mock_server)
     ]
 
@@ -453,10 +470,10 @@ def test_wire_sequence_goal_path_reached() -> None:
     nav.on_goal_reached(Bool(data=True))
 
     statuses = _all_nav_statuses(mock_server)
-    phases = [s["phase"] for s in statuses]
-    assert "idle" in phases
+    phases = [s["state"] for s in statuses]
+    assert "navIntent" in phases
     assert "navigating" in phases
-    assert phases[-1] == "succeeded"
+    assert phases[-1] == "resolved"
     wire = _wire_sequence(mock_server)
     assert any(t == "path" for t, _ in wire)
 
@@ -466,11 +483,14 @@ def test_wire_sequence_goal_stall() -> None:
     nav, mock_server, _published_nav, _published_cancel = _make_nav()
     nav.on_navigate_goal(_make_goal_msg())
     time.sleep(0.05)
-    nav._nav_goal_dispatch_mono = time.monotonic() - NAV_GOAL_PATH_TIMEOUT_S - 1.0
+    _set_intent_session(
+        nav,
+        dispatched_mono=time.monotonic() - NAV_GOAL_PATH_TIMEOUT_S - 1.0,
+    )
     nav.handle_goal_stall(stall_reason="no_path")
 
     statuses = _all_nav_statuses(mock_server)
-    assert any(s["phase"] == "recovering" for s in statuses)
+    assert any(s["state"] == "navIntent" for s in statuses)
     assert statuses[-1]["retryable"] is True
     assert statuses[-1]["stall_reason"] == "no_path"
 
@@ -478,16 +498,14 @@ def test_wire_sequence_goal_stall() -> None:
 def test_wire_sequence_cancel() -> None:
     """cancel during navigation emits idle, not failed."""
     nav, mock_server, _published_nav, _published_cancel = _make_nav()
-    nav._nav_goal_pending = True
-    nav._dimos_nav_state = "navigating"
-    nav._nav_path_received = True
+    _set_navigating_session(nav)
 
     nav.on_cancel_nav_goal(ts=3.0)
     time.sleep(0.05)
 
     statuses = _all_nav_statuses(mock_server)
-    assert statuses[-1]["phase"] == "idle"
-    assert nav._goal_failed is False
+    assert statuses[-1]["state"] == "idle"
+    assert nav._terminalOutcome is None
     wire = _wire_sequence(mock_server)
     assert any(t == "path" for t, _ in wire)
 
@@ -495,31 +513,27 @@ def test_wire_sequence_cancel() -> None:
 def test_wire_sequence_estop() -> None:
     """e-stop during navigation emits idle, not failed."""
     nav, mock_server, _published_nav, _published_cancel = _make_nav()
-    nav._nav_goal_pending = True
-    nav._dimos_nav_state = "navigating"
-    nav._nav_path_received = True
+    _set_navigating_session(nav)
 
     nav.on_emergency_stop(ts=4.0)
     time.sleep(0.05)
 
     statuses = _all_nav_statuses(mock_server)
-    assert statuses[-1]["phase"] == "idle"
-    assert nav._goal_failed is False
+    assert statuses[-1]["state"] == "idle"
+    assert nav._terminalOutcome is None
 
 
 def test_wire_sequence_goal_failed() -> None:
     """goal reached false while pending emits failed."""
     nav, mock_server, _published_nav, published_cancel = _make_nav()
-    nav._nav_goal_pending = True
-    nav._dimos_nav_state = "navigating"
-    nav._nav_path_received = True
+    _set_navigating_session(nav)
     nav._motion_router.emergency_stop = MagicMock(wraps=nav._motion_router.emergency_stop)
     nav._motion_router.cancel_nav_goal = MagicMock(wraps=nav._motion_router.cancel_nav_goal)
 
     nav.on_goal_reached(Bool(data=False))
 
     statuses = _all_nav_statuses(mock_server)
-    assert statuses[-1]["phase"] == "failed"
+    assert statuses[-1]["state"] == "resolved"
     nav._motion_router.emergency_stop.assert_called_once()
     nav._motion_router.cancel_nav_goal.assert_not_called()
     assert len(published_cancel) == 2
@@ -537,9 +551,9 @@ def test_goal_update_while_navigating_suppresses_idle_flap() -> None:
     time.sleep(0.05)
 
     statuses = _all_nav_statuses(mock_server)
-    assert not any(s["phase"] == "idle" for s in statuses)
-    assert nav._dimos_nav_state == "navigating"
-    assert nav._nav_goal_pending is True
+    assert not any(s["state"] == "navIntent" and s.get("retryable") is not True for s in statuses)
+    assert nav.nav_wire_dict()["state"] == "navigating"
+    assert nav._session is not None
 
 
 def test_joystick_preemption_emits_idle_not_failed() -> None:
@@ -558,8 +572,8 @@ def test_joystick_preemption_emits_idle_not_failed() -> None:
     nav.on_goal_reached(Bool(data=False))
 
     statuses = _all_nav_statuses(mock_server)
-    assert nav._goal_failed is False
-    assert statuses[-1]["phase"] == "idle"
+    assert nav._terminalOutcome is None
+    assert statuses[-1]["state"] == "idle"
 
 
 def test_watchdog_fires_on_mid_session_path_silence() -> None:
@@ -568,14 +582,15 @@ def test_watchdog_fires_on_mid_session_path_silence() -> None:
     nav.on_navigate_goal(_make_goal_msg())
     time.sleep(0.05)
     nav.on_path(_make_path())
-    nav._nav_goal_dispatch_mono = time.monotonic() - NAV_GOAL_PATH_TIMEOUT_S - 1.0
-    nav._last_path_mono = time.monotonic() - NAV_GOAL_PATH_TIMEOUT_S - 1.0
+    assert nav._session is not None
+    nav._session.dispatched_mono = time.monotonic() - NAV_GOAL_PATH_TIMEOUT_S - 1.0
+    nav._session.last_path_mono = time.monotonic() - NAV_GOAL_PATH_TIMEOUT_S - 1.0
     mock_server.schedule_send.reset_mock()
 
     nav.handle_goal_stall(stall_reason="no_path")
 
     statuses = _all_nav_statuses(mock_server)
-    assert statuses[-1]["phase"] == "recovering"
+    assert statuses[-1]["state"] == "navIntent"
     assert statuses[-1]["stall_reason"] == "no_path"
 
 
@@ -590,7 +605,7 @@ def test_submit_goal_rejected_when_robot_not_connected() -> None:
     time.sleep(0.05)
     assert published_nav == []
     nav_status = _last_nav_status(mock_server)
-    assert nav_status["phase"] == "failed"
+    assert nav_status["state"] == "resolved"
     assert nav_status["error_code"] == 503
     assert nav._session is None
 
@@ -629,7 +644,7 @@ def test_world_frame_correction_skips_redispatch_when_not_navigating() -> None:
     nav.on_navigate_goal(_make_goal_msg())
     assert len(published_nav) == 1
     assert nav._session is not None
-    assert nav._session.phase == "pending"
+    assert nav._session.phase == "intent"
 
     T = np.eye(4, dtype=np.float64)
     T[0, 3] = 1.0
@@ -668,9 +683,13 @@ def test_goal_reached_logs_arrival_shortfall(caplog: pytest.LogCaptureFixture) -
     nav.on_navigate_goal(_make_goal_msg(position=(1.0, 0.0, 2.0)))
     assert len(published_nav) == 1
     nav.on_path(_make_path())
-    caplog.clear()
-    nav.on_goal_reached(Bool(data=True))
-    assert any("arrival_shortfall_m" in record.message for record in caplog.records)
+    with caplog.at_level("WARNING"):
+        caplog.clear()
+        nav.on_goal_reached(Bool(data=True))
+    assert any(
+        "arrival_shortfall_m" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 # ------------------------------------------------------------------

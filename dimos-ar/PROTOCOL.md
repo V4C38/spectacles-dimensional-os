@@ -9,7 +9,24 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v15 (current) — Observation-driven capture and anchored stop refinement
+### v16 (current) — Unified NavigationState and capture vocabulary
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 16.**
+- **`nav_status`:** `phase` renamed to **`state`** (`idle` | `navIntent` | `navigating` | `resolved`).
+  Terminal results use `state: "resolved"` with optional **`outcome`** (`succeeded` | `failed`).
+  Retryable stalls use `state: "navIntent"` with **`retryable`** and **`stall_reason`**.
+- **`runtime_snapshot.nav`:** same shape (`state` replaces `phase`; optional `outcome`).
+- **`capture_policy`:** `max_stream_distance_m` / `min_stream_distance_m` renamed to
+  **`max_capture_distance_m`** / **`min_capture_distance_m`**.
+- **`camera_frame_ack`:** removed **`obs_added`**; **`refinement_complete`** renamed to
+  **`capturing_budgeted_complete`**.
+- **`registration_status`:** removed **`refining`**.
+- **`pose.speed_mps`:** used by the Lens to arm **`beginCameraCapture`** on speed edges
+  after world-frame commit (not bridge-driven stream requests).
+
+### v15 — Observation-driven capture and anchored stop refinement
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -225,8 +242,6 @@ capability map, then sends a `runtime_snapshot` (see below).
   "capabilities": {
     "lidar":                              { "available": true,  "reason": null },
     "odom":                               { "available": true,  "reason": null },
-    "registration_april_tag":   { "available": true,  "reason": null },
-    "registration_manual_pose":           { "available": true,  "reason": null },
     "nav":                                { "available": true,  "reason": null },
     "path":                               { "available": true,  "reason": null },
     "cancel_nav_goal":                        { "available": true,  "reason": null },
@@ -244,6 +259,23 @@ Rules:
   currently disabled. Clients should render these as disabled, not hidden.
 - The separate `disabled_capabilities` / `capability_states` arrays from v3 are
   removed; `capabilities` is the single source of truth.
+
+### `hello.robot` geometry fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `body_bounds_m` | `[number, number, number]` | Axis-aligned body envelope in metres: `[length_x, width_z, height_y]` in the robot odom frame (same axes as `pose`). Height is world-up (Y). |
+| `footprint_m` | `[number, number]` | Ground-plane footprint `[length_x, width_z]` in metres for navigation deadzone sizing. |
+| `visual_origin_frame` | `string` | Robot frame used for `pose` (typically `base_link`). |
+| `base_height_m` | `number` | Height of `visual_origin_frame` above ground contact in metres. |
+| `default_render_offset_m` | `[number, number, number]` | Optional local offset (metres) applied to child UI visuals on the Lens, not to `pose`. |
+
+**Grounded bounding box convention:** `body_bounds_m` describes a box whose bottom
+face rests on the ground plane (ground contact at Y = 0 in robot odom). The box is
+centered horizontally on `visual_origin_frame`; vertically, its bottom is at
+`-base_height_m` and its top at `body_bounds_m[2] - base_height_m` relative to the
+marker origin. Clients may derive debug-visual center offset as
+`(body_bounds_m[2] / 2 - base_height_m)` on the world-up axis.
 
 ### `hello.robot.tag_tracking_profile`
 
@@ -286,7 +318,7 @@ navigation is in progress.
     "world_frame_approximate": false
   },
   "nav": {
-    "phase": "navigating"
+    "state": "navigating"
   },
   "path": {
     "waypoints": [[1.0, 2.0, 3.0]]
@@ -298,10 +330,11 @@ Fields:
 
 - `robot_id`: session robot (same as `hello.robot.robot_id`)
 - `bridge`: same shape as live `bridge_status` (without `type` / `ts`)
-- `nav.phase`: one of `"idle"`, `"navigating"`, `"recovering"`, `"succeeded"`,
-  `"failed"`
+- `nav.state`: one of `"idle"`, `"navIntent"`, `"navigating"`, `"resolved"`
+- `nav.outcome` (optional): `"succeeded"` or `"failed"` when `state` is `"resolved"`
 - `nav.error_code` (optional): numeric code when navigation is unavailable
   (e.g. `505` = goal stalled)
+- `nav.retryable` / `nav.stall_reason` (optional): present with `state: "navIntent"`
 - `path` (optional): present only when a navigating path is cached; omitted when
   idle
 
@@ -332,6 +365,22 @@ Fields:
 - `world_frame_approximate`: **always present** — `true` when the committed
   alignment is approximate (e.g. manual pose)
 
+**Lens client mapping** (`BridgeSnapshot` in `AppState.ts`):
+
+| Wire field | App field |
+|------------|-----------|
+| `robot_connected` | `robotConnected` |
+| `world_frame_committed` | `worldFrameCommitted` |
+| `world_frame_approximate` | `worldFrameApproximate` |
+| `reconnecting` | `reconnecting` |
+| `world_frame_method` | `worldFrameMethod` |
+| `ts` | `statusTs` |
+| hello received (session) | `handshakeReady` |
+
+Live `bridge_status` and `runtime_snapshot.bridge` share the same field shapes;
+`runtime_snapshot` bundles bridge + nav + optional path on connect and
+`get_status`.
+
 ### `registration_status`
 
 Registration progress during a setup session:
@@ -341,13 +390,11 @@ Registration progress during a setup session:
   "type": "registration_status",
   "ts": 1730000000.123,
   "mode": "april_tag",
-  "phase": "scanning",
+  "state": "april_tag",
   "message": "Look at the AprilTag on your robot",
   "tag_visible": true,
   "progress": 40,
-  "alignment_confidence": 0.42,
-  "refining": false,
-  "scale_confidence": 0.0,
+  "registration_confidence": 0.42,
   "scale_locked": false,
   "preview_pose": {
     "position": [1.2, 0.0, -2.0],
@@ -360,25 +407,20 @@ Fields:
 
 - `mode` (optional): `"april_tag"` or `"manual_pose"` — matches
   `registration_command.mode` when a session is active
-- `phase`: one of `"idle"`, `"scanning"`, `"editing"`, `"awaiting_commit"`,
-  `"succeeded"`, `"failed"`
+- `state`: one of `"idle"`, `"april_tag"`, `"manual_placement"`,
+  `"awaiting_commit"`, `"succeeded"`, `"failed"`
 - `message`: human-readable status string for display in the client HUD
 - `tag_visible` (optional): present for AprilTag sessions; `true` when a
   configured robot-mounted tag was detected in the most recent processed frame
 - `preview_pose` (optional): estimated robot pose in world frame (`position` xyz
   metres, `orientation` quaternion xyzw); omitted until a solve is available
 - `progress` (optional): AprilTag registration progress **0–100**; present while
-  `mode` is `"april_tag"` during `scanning` and `succeeded`. Reflects
+  `mode` is `"april_tag"` during `april_tag` and `succeeded`. Reflects
   registration readiness (observation count blended with
-  `alignment_confidence`), not raw frame count alone. Clients should display
+  `registration_confidence`), not raw frame count alone. Clients should display
   this value directly rather than inferring progress from `message`.
-- `alignment_confidence` (optional): bridge-computed confidence **0–1** for the
+- `registration_confidence` (optional): bridge-computed confidence **0–1** for the
   current registration or runtime alignment estimate
-- `refining` (optional): after AprilTag commit, `true` while the bridge keeps
-  refining alignment from continued tag observations at runtime (wire field;
-  clients may ignore for wizard UX)
-- `scale_confidence` (optional): bridge-computed confidence **0–1** for the
-  persistent odom scale estimate
 - `scale_locked` (optional): `true` when scale confidence meets the bridge lock
   threshold (scale has converged)
 
@@ -386,11 +428,10 @@ During AprilTag registration (`mode: "april_tag"`), the robot stays still. The
 Spectacles user moves around the robot while keeping the tag in view; camera
 motion provides yaw observability. The bridge auto-commits when the
 registration estimate meets the confidence threshold (or yaw is observable).
-If confidence never rises within the registration window, `phase` becomes
-`"failed"`. After commit, the bridge may continue broadcasting `refining: true`
-while runtime similarity refinement continues from tag observations during
-navigation. The client auto-finishes the wizard on `phase: "succeeded"`; no
-separate commit message is required.
+If confidence never rises within the registration window, `state` becomes
+`"failed"`. After commit, runtime similarity alignment may continue from tag
+observations during navigation. The client auto-finishes the wizard on
+`state: "succeeded"`; no separate commit message is required.
 
 ### `camera_frame_ack`
 
@@ -405,15 +446,13 @@ single-flight capture state:
   "type": "camera_frame_ack",
   "ts": 1730000000.123,
   "seq": 42,
-  "obs_added": true,
-  "refinement_complete": false
+  "capturing_budgeted_complete": false
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `obs_added` | `boolean` | `true` when the bridge accepted at least one tag observation from this frame |
-| `refinement_complete` | `boolean` | `true` when the bridge committed the current stop-refinement episode |
+| `capturing_budgeted_complete` | `boolean` | `true` when the bridge committed the current budgeted capture episode |
 
 ### `capture_policy`
 
@@ -424,8 +463,8 @@ uses these thresholds for geometric and speed gating; it does not derive them lo
 {
   "type": "capture_policy",
   "ts": 1730000000.123,
-  "max_stream_distance_m": 2.5000,
-  "min_stream_distance_m": 0.3500,
+  "max_capture_distance_m": 2.5000,
+  "min_capture_distance_m": 0.3500,
   "max_capture_speed_mps": 0.4500,
   "static_speed_mps": 0.0500,
   "min_observations": 3
@@ -434,8 +473,8 @@ uses these thresholds for geometric and speed gating; it does not derive them lo
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `max_stream_distance_m` | `number` | Maximum camera–robot distance for capture: pinhole estimate from intrinsics, 70 mm printed tag size, and minimum tag pixel floor, then scaled by bridge headroom (default 25%). Same limit applies to bridge frame admission after `camera_info`. |
-| `min_stream_distance_m` | `number` | Minimum camera–robot distance for capture |
+| `max_capture_distance_m` | `number` | Maximum camera–robot distance for capture: pinhole estimate from intrinsics, 70 mm printed tag size, and minimum tag pixel floor, then scaled by bridge headroom (default 25%). Same limit applies to bridge frame admission after `camera_info`. |
+| `min_capture_distance_m` | `number` | Minimum camera–robot distance for capture |
 | `max_capture_speed_mps` | `number` | Do not capture while robot speed exceeds this |
 | `static_speed_mps` | `number` | Speed threshold shared with the bridge for static vs moving (Lens arms stop-refinement on the stop edge) |
 | `min_observations` | `integer` | Bridge `ALIGN_MIN_OBS`; minimum accepted static endpoint observations before a stop solve |
@@ -450,7 +489,7 @@ payload size on Wi-Fi:
 | `pose.position`, `pose.orientation` | 4 |
 | `world_frame_correction.trans_delta_m`, `world_frame_correction.solve_quality` | 4 |
 | `world_frame_correction.yaw_delta_deg` | 3 |
-| `capture_policy.max_stream_distance_m`, `capture_policy.min_stream_distance_m`, `capture_policy.max_capture_speed_mps` | 4 |
+| `capture_policy.max_capture_distance_m`, `capture_policy.min_capture_distance_m`, `capture_policy.max_capture_speed_mps` | 4 |
 | `path` waypoints | 3 |
 | `ts` on high-rate streams (`pose`, `path`) | 3 |
 
@@ -496,7 +535,7 @@ Robot pose in AR world frame:
 ```
 
 - `speed_mps` (optional): smoothed robot linear speed in m/s from bridge odom,
-  used by the Lens for runtime camera stream requests when the robot stops.
+  used by the Lens to arm `beginCameraCapture` on speed edges after world-frame commit.
 - `velocity_mps` (optional): world-frame linear velocity in m/s (same axes as
   `position`). Used by the Lens for client-side pose prediction.
 - `yaw_rate_rad_s` (optional): world-frame yaw rate in rad/s about the world-up
@@ -592,23 +631,43 @@ Navigation lifecycle updates:
 {
   "type": "nav_status",
   "ts": 1730000000.123,
-  "phase": "navigating"
+  "state": "navigating"
 }
 ```
 
-`phase` is one of `"idle"`, `"navigating"`, `"recovering"`, `"succeeded"`,
-`"failed"`.
+```json
+{
+  "type": "nav_status",
+  "ts": 1730000000.123,
+  "state": "resolved",
+  "outcome": "failed",
+  "error_code": 505
+}
+```
+
+```json
+{
+  "type": "nav_status",
+  "ts": 1730000000.456,
+  "state": "navIntent",
+  "retryable": true,
+  "stall_reason": "no_path"
+}
+```
+
+`state` is one of `"idle"`, `"navIntent"`, `"navigating"`, `"resolved"`.
 
 Optional fields:
 
+- `outcome`: `"succeeded"` or `"failed"` — only with `state: "resolved"`.
 - `error_code`: numeric code when navigation is unavailable for the session
   (logged on the Lens; `505` = goal stalled).
-- `retryable` (v7): `true` when the bridge cancelled a stuck goal and the client
-  must manually retry; emitted with `phase: "recovering"`.
-- `stall_reason` (v7): `"no_path"` (watchdog timeout without path) or
+- `retryable`: `true` when the bridge cancelled a stuck goal and the client
+  must manually retry; emitted with `state: "navIntent"`.
+- `stall_reason`: `"no_path"` (watchdog timeout without path) or
   `"planner_idle"` (planner went idle before path arrived).
 
-When `retryable` is true, `"recovering"` indicates the bridge cleared a stuck
+When `retryable` is true, `"navIntent"` indicates the bridge cleared a stuck
 goal — return to a retryable placing state without treating it as terminal failure.
 
 ## Inbound Messages
@@ -730,9 +789,8 @@ Fields:
 
 - `command` (**required**): `"start"`, `"stop"`, or `"commit"`
 - `mode` (**required when `command` is `"start"`**): `"april_tag"` or
-  `"manual_pose"`. Must be omitted for all other commands. Requires the
-  matching capability (`registration_april_tag` or `registration_manual_pose`)
-  to be available in `hello`.
+  `"manual_pose"`. Must be omitted for all other commands. The bridge rejects
+  unavailable modes at start time (e.g. AprilTag when no tag mounts are configured).
 
 AprilTag registration auto-commits when the registration estimate is confident
 enough (or yaw is observable); the client does not send a separate commit for

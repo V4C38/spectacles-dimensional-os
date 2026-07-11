@@ -59,8 +59,8 @@ def test_on_camera_info_sends_capture_policy() -> None:
     assert len(sent) == 1
     payload = json.loads(sent[0])
     assert payload["type"] == "capture_policy"
-    assert payload["max_stream_distance_m"] == pytest.approx(1.6333, abs=1e-4)
-    assert payload["min_stream_distance_m"] == 0.35
+    assert payload["max_capture_distance_m"] == pytest.approx(1.6333, abs=1e-4)
+    assert payload["min_capture_distance_m"] == 0.35
     assert payload["max_capture_speed_mps"] == 0.45
     assert payload["static_speed_mps"] == 0.05
     assert payload["min_observations"] == 3
@@ -82,19 +82,20 @@ def test_on_camera_info_stores_shared_max_distance_for_frames() -> None:
         device_model="spectacles",
     )
 
-    assert session.capture_max_stream_distance_m is None
+    assert session.max_capture_distance_m is None
     session.on_camera_info(msg, MagicMock())
 
     expected = 560.0 * 0.056 / 24.0 * CAPTURE_MAX_DISTANCE_MARGIN
-    assert session.capture_max_stream_distance_m == pytest.approx(expected, abs=1e-4)
+    assert session.max_capture_distance_m == pytest.approx(expected, abs=1e-4)
 
 
-def test_send_frame_ack_carries_obs_added() -> None:
+def test_send_frame_ack_carries_capturing_budgeted_complete() -> None:
     session, sent, _tag_tracker = _make_session()
 
-    session._send_frame_ack({"seq": 7}, obs_added=True)
+    session._send_frame_ack({"seq": 7}, capturing_budgeted_complete=True)
 
     payload = json.loads(sent[0])
     assert payload["type"] == "camera_frame_ack"
     assert payload["seq"] == 7
-    assert payload["obs_added"] is True
+    assert payload["capturing_budgeted_complete"] is True
+    assert "obs_added" not in payload

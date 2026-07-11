@@ -3,7 +3,8 @@ import {
   PROTOCOL_VERSION,
   parseInboundMessage,
   ProtocolParseError,
-  bridgeStatusFromSnapshot,
+  bridgeSnapshotToStatusMessage,
+  projectBridgeSession,
   parseBridgeWorldFrameFields,
   RuntimeSnapshotMessage,
 } from "../../Assets/Scripts/ARBridge/Network/Protocol";
@@ -67,7 +68,7 @@ describe("parseInboundMessage", () => {
     expect(caps.emergency_stop.available).toBe(false);
   });
 
-  it("parses runtime_snapshot and bridgeStatusFromSnapshot", () => {
+  it("parses runtime_snapshot and projects bridge fields", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
         type: "runtime_snapshot",
@@ -80,7 +81,7 @@ describe("parseInboundMessage", () => {
           world_frame_method: null,
           world_frame_approximate: false,
         },
-        nav: { phase: "idle" },
+        nav: { state: "idle" },
         path: {
           waypoints: [[1, 2, 3]],
         },
@@ -89,10 +90,12 @@ describe("parseInboundMessage", () => {
     expect(msg!.type).toBe("runtime_snapshot");
     const snapshot = msg as RuntimeSnapshotMessage;
     expect(snapshot.path?.waypoints).toEqual([[1, 2, 3]]);
-    const bridge = bridgeStatusFromSnapshot(snapshot);
-    expect(bridge.type).toBe("bridge_status");
-    expect(bridge.robot_connected).toBe(true);
-    expect(bridge.world_frame_committed).toBe(false);
+    const bridgeSnapshot = projectBridgeSession(true, snapshot.bridge, snapshot.ts);
+    expect(bridgeSnapshot.robotConnected).toBe(true);
+    expect(bridgeSnapshot.worldFrameCommitted).toBe(false);
+    const bridge = bridgeSnapshotToStatusMessage(bridgeSnapshot);
+    expect(bridge?.type).toBe("bridge_status");
+    expect(bridge?.robot_connected).toBe(true);
   });
 
   it("parses registration_status", () => {
@@ -101,19 +104,30 @@ describe("parseInboundMessage", () => {
         type: "registration_status",
         ts: 1,
         mode: "april_tag",
-        phase: "scanning",
+        state: "april_tag",
         message: "Look at tag",
         tag_visible: true,
         progress: 55,
-        alignment_confidence: 0.65,
-        refining: true,
+        registration_confidence: 0.65,
       }),
     );
     expect(msg!.type).toBe("registration_status");
-    expect((msg as { phase: string }).phase).toBe("scanning");
+    expect((msg as { state: string }).state).toBe("april_tag");
     expect((msg as { progress: number }).progress).toBe(55);
-    expect((msg as { alignment_confidence: number }).alignment_confidence).toBe(0.65);
-    expect((msg as { refining: boolean }).refining).toBe(true);
+    expect((msg as { registration_confidence: number }).registration_confidence).toBe(0.65);
+  });
+
+  it("rejects legacy registration_status.phase", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "registration_status",
+        ts: 1,
+        mode: "april_tag",
+        phase: "scanning",
+        message: "legacy",
+      }),
+    );
+    expect(msg).toBeNull();
   });
 
   it("parses registration_status scale lock fields", () => {
@@ -122,14 +136,12 @@ describe("parseInboundMessage", () => {
         type: "registration_status",
         ts: 1,
         mode: "april_tag",
-        phase: "succeeded",
+        state: "succeeded",
         message: "Registration successful",
-        scale_confidence: 0.15,
         scale_locked: false,
       }),
     );
     expect(msg!.type).toBe("registration_status");
-    expect((msg as { scale_confidence: number }).scale_confidence).toBe(0.15);
     expect((msg as { scale_locked: boolean }).scale_locked).toBe(false);
   });
 
@@ -139,13 +151,12 @@ describe("parseInboundMessage", () => {
         type: "camera_frame_ack",
         ts: 1,
         seq: 5,
-        obs_added: true,
-        refinement_complete: false,
+        capturing_budgeted_complete: false,
       }),
     );
     expect(msg!.type).toBe("camera_frame_ack");
     expect((msg as { seq: number }).seq).toBe(5);
-    expect((msg as { obs_added: boolean }).obs_added).toBe(true);
+    expect((msg as { capturing_budgeted_complete: boolean }).capturing_budgeted_complete).toBe(false);
   });
 
   it("parses capture_policy", () => {
@@ -153,8 +164,8 @@ describe("parseInboundMessage", () => {
       JSON.stringify({
         type: "capture_policy",
         ts: 1,
-        max_stream_distance_m: 2.5,
-        min_stream_distance_m: 0.35,
+        max_capture_distance_m: 2.5,
+        min_capture_distance_m: 0.35,
         max_capture_speed_mps: 0.45,
         static_speed_mps: 0.05,
         min_observations: 3,
@@ -338,16 +349,31 @@ describe("parseInboundMessage", () => {
     expect((msg as { waypoints: number[][] }).waypoints).toHaveLength(1);
   });
 
-  it("parses nav_status phase", () => {
+  it("parses nav_status state", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
         type: "nav_status",
         ts: 1,
-        phase: "idle",
+        state: "idle",
       }),
     );
     expect(msg!.type).toBe("nav_status");
-    expect((msg as { phase: string }).phase).toBe("idle");
+    expect((msg as { state: string }).state).toBe("idle");
+  });
+
+  it("parses nav_status resolved outcome", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "nav_status",
+        ts: 1,
+        state: "resolved",
+        outcome: "failed",
+        error_code: 505,
+      }),
+    );
+    expect(msg!.type).toBe("nav_status");
+    expect((msg as { state: string }).state).toBe("resolved");
+    expect((msg as { outcome: string }).outcome).toBe("failed");
   });
 
   it("parses nav_status retryable stall fields", () => {
@@ -355,7 +381,7 @@ describe("parseInboundMessage", () => {
       JSON.stringify({
         type: "nav_status",
         ts: 1,
-        phase: "recovering",
+        state: "navIntent",
         retryable: true,
         stall_reason: "no_path",
       }),

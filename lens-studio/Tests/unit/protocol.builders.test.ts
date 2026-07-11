@@ -10,7 +10,6 @@ import {
   buildNavGoal,
   buildCancelNavGoal,
   buildEmergencyStop,
-  buildJoystickCommand,
   DEFAULT_LIDAR_OBSTACLE_SETTINGS,
 } from "../../Assets/Scripts/ARBridge/Network/Protocol";
 import { setMockTime } from "../setup/lens-globals";
@@ -150,16 +149,6 @@ describe("outbound protocol builders", () => {
     const msg = JSON.parse(buildEmergencyStop("go2"));
     expect(msg.type).toBe("emergency_stop");
     expect(msg.robot_id).toBe("go2");
-    expect(msg.ts).toBe(1000);
-  });
-
-  it("buildJoystickCommand", () => {
-    const msg = JSON.parse(buildJoystickCommand("go2", 0.1, 0.2, -0.3));
-    expect(msg.type).toBe("joystick_command");
-    expect(msg.robot_id).toBe("go2");
-    expect(msg.vx).toBe(0.1);
-    expect(msg.vy).toBe(0.2);
-    expect(msg.wz).toBe(-0.3);
     expect(msg.ts).toBe(1000);
   });
 });

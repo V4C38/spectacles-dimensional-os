@@ -24,15 +24,14 @@ if TYPE_CHECKING:
     from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
     from dimos.ar.world_frame.state import WorldFrameState
 
-PROTOCOL_VERSION = 15
+PROTOCOL_VERSION = 16
 
-NavPhase = Literal["idle", "navigating", "recovering", "succeeded", "failed"]
+WireNavigationState = Literal["idle", "navIntent", "navigating", "resolved"]
+NavTerminalOutcome = Literal["succeeded", "failed"]
 
 DEFAULT_CAPABILITIES = [
     "lidar",
     "odom",
-    "registration_april_tag",
-    "registration_manual_pose",
     "nav",
     "path",
     "cancel_nav_goal",
@@ -440,16 +439,14 @@ def encode_camera_frame_ack(
     *,
     ts: float | None = None,
     seq: int,
-    obs_added: bool = False,
-    refinement_complete: bool = False,
+    capturing_budgeted_complete: bool = False,
 ) -> str:
     return _dumps(
         {
             "type": "camera_frame_ack",
             "ts": ts if ts is not None else time.time(),
             "seq": seq,
-            "obs_added": bool(obs_added),
-            "refinement_complete": bool(refinement_complete),
+            "capturing_budgeted_complete": bool(capturing_budgeted_complete),
         }
     )
 
@@ -457,8 +454,8 @@ def encode_camera_frame_ack(
 def encode_capture_policy(
     *,
     ts: float | None = None,
-    max_stream_distance_m: float,
-    min_stream_distance_m: float,
+    max_capture_distance_m: float,
+    min_capture_distance_m: float,
     max_capture_speed_mps: float,
     static_speed_mps: float,
     min_observations: int,
@@ -467,8 +464,8 @@ def encode_capture_policy(
         {
             "type": "capture_policy",
             "ts": ts if ts is not None else time.time(),
-            "max_stream_distance_m": round(float(max_stream_distance_m), 4),
-            "min_stream_distance_m": round(float(min_stream_distance_m), 4),
+            "max_capture_distance_m": round(float(max_capture_distance_m), 4),
+            "min_capture_distance_m": round(float(min_capture_distance_m), 4),
             "max_capture_speed_mps": round(float(max_capture_speed_mps), 4),
             "static_speed_mps": round(float(static_speed_mps), 4),
             "min_observations": int(min_observations),
@@ -532,39 +529,18 @@ def encode_path(
     return _dumps(payload)
 
 
-def nav_phase_payload(
-    *,
-    goal_reached: bool,
-    goal_failed: bool,
-    nav_state: str,
-    nav_goal_pending: bool,
-    error_code: int | None = None,
-) -> dict[str, Any]:
-    if goal_reached:
-        phase: NavPhase = "succeeded"
-    elif goal_failed:
-        phase = "failed"
-    elif nav_state == "recovering":
-        phase = "recovering"
-    elif nav_state == "navigating" and nav_goal_pending:
-        phase = "navigating"
-    else:
-        phase = "idle"
-    payload: dict[str, Any] = {"phase": phase}
-    if error_code is not None:
-        payload["error_code"] = error_code
-    return payload
-
-
 def encode_nav_status(
     *,
     ts: float | None = None,
-    phase: NavPhase,
+    state: WireNavigationState,
+    outcome: NavTerminalOutcome | None = None,
     error_code: int | None = None,
     retryable: bool | None = None,
     stall_reason: str | None = None,
 ) -> str:
-    nav: dict[str, Any] = {"phase": phase}
+    nav: dict[str, Any] = {"state": state}
+    if outcome is not None:
+        nav["outcome"] = outcome
     if error_code is not None:
         nav["error_code"] = error_code
     if retryable is not None:
@@ -589,12 +565,13 @@ __all__ = [
     "InboundMessage",
     "JoystickCommandMessage",
     "NavGoalMessage",
-    "NavPhase",
+    "NavTerminalOutcome",
     "PingMessage",
     "RegistrationCommandMessage",
     "RegistrationPoseMessage",
     "RegistrationStatusPayload",
     "SetLidarModeMessage",
+    "WireNavigationState",
     "bridge_status_wire",
     "decode_inbound",
     "encode_bridge_status",
@@ -608,5 +585,4 @@ __all__ = [
     "encode_pose",
     "encode_registration_status",
     "encode_runtime_snapshot",
-    "nav_phase_payload",
 ]

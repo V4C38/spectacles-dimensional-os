@@ -1,15 +1,9 @@
 import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
-import {
-  RegistrationPhase,
-  RegistrationStatusMessage,
-} from "../../ARBridge/Network/Protocol";
 import { AppStateStore } from "../AppState";
 import { LidarDisplayMode, OperatingMode } from "../AppState";
 import { RobotPresenter } from "../Robot/RobotPresenter";
 import {
   ButtonBinding,
-  COLOR_ERROR,
-  COLOR_MUTED,
   COLOR_SUCCESS,
   COLOR_WHITE,
   CONTENT_PAD_X,
@@ -20,16 +14,16 @@ import {
   findText,
   FONT_WIZARD_INPUT,
   setButtonStyle,
+  SnapOS2Styles,
   SLOT_INPUT,
   Z_CONTENT,
 } from "../UI/UIKit";
 import {
-  buildAlignmentProgressPercent,
-  buildAlignmentTitle,
-  isRegistrationPreviewPhase,
-  RegistrationViewState,
-  WizardFooterState,
-  WizardStep,
+  buildRegistrationPresentationForWizard,
+  RegistrationPresentation,
+  RegistrationSessionView,
+  RegistrationStep,
+  projectRegistrationPresentation,
 } from "./RegistrationFlow";
 
 // ================================================================
@@ -154,9 +148,9 @@ export class RegistrationWizardView {
     this._statusText.textFill.color = color;
   }
 
-  public applyStepLayout(step: WizardStep): void {
+  public applyStepLayout(step: RegistrationStep): void {
     const statusY =
-      step === WizardStep.Register
+      step === RegistrationStep.RegisterRobot
         ? RegistrationWizardView.STATUS_Y_CALIBRATE
         : RegistrationWizardView.STATUS_Y_DEFAULT;
     this._statusObj.getTransform().setLocalPosition(
@@ -164,7 +158,7 @@ export class RegistrationWizardView {
     );
 
     const descriptionY =
-      step === WizardStep.Start
+      step === RegistrationStep.StartRobot
         ? RegistrationWizardView.DESCRIPTION_Y_START
         : RegistrationWizardView.DESCRIPTION_Y_DEFAULT;
     this._descriptionObj.getTransform().setLocalPosition(
@@ -172,88 +166,66 @@ export class RegistrationWizardView {
     );
   }
 
-  public applyFooterState(_step: WizardStep, state: WizardFooterState): void {
-    setButtonStyle(this._next.button, state.nextStyle);
-    this._next.button.inactive = state.nextInactive;
+  public applyFooterState(
+    _step: RegistrationStep,
+    presentation: RegistrationPresentation,
+  ): void {
+    setButtonStyle(
+      this._next.button,
+      presentation.footerNextLabel === "Complete"
+        ? SnapOS2Styles.Primary
+        : SnapOS2Styles.PrimaryNeutral,
+    );
+    this._next.button.inactive = !presentation.footerNextEnabled;
     if (this._next.labelText) {
-      this._next.labelText.text = state.nextLabel;
+      this._next.labelText.text = presentation.footerNextLabel;
     }
 
-    this._prev.sceneObject.enabled = state.showPrev;
-    this._manual.sceneObject.enabled = state.showManual;
+    this._prev.sceneObject.enabled = presentation.footerShowPrev;
+    this._manual.sceneObject.enabled = presentation.footerShowModeToggle;
     if (this._manual.labelText) {
-      this._manual.labelText.text = state.manualLabel;
+      this._manual.labelText.text = presentation.footerModeToggleLabel;
     }
-    setButtonStyle(this._manual.button, state.manualStyle);
+    setButtonStyle(this._manual.button, SnapOS2Styles.PrimaryNeutral);
   }
-}
-
-export interface RegistrationPreviewPresentation {
-  titleText: string;
-  statusText: string;
-  statusColor: vec4;
-  progressPercent: number | null;
-}
-
-export function buildRegistrationPreviewPresentation(
-  state: RegistrationViewState,
-): RegistrationPreviewPresentation {
-  return {
-    titleText: buildAlignmentTitle(state),
-    statusText: state.tagVisible
-      ? "✅ Tag detected - move around"
-      : "❌ Tag not visible",
-    statusColor: state.tagVisible ? COLOR_SUCCESS : COLOR_ERROR,
-    progressPercent: buildAlignmentProgressPercent(state),
-  };
 }
 
 /** Registration assist preview (robot marker overlay during AprilTag scanning). */
 export class RegistrationPreviewPresenter {
   private _active = false;
+  private _priorRuntimeMode: OperatingMode = "manual";
+  private _priorLidarMode: LidarDisplayMode = "off";
 
   constructor(
     private readonly appState: AppStateStore,
     private readonly robotPresenter: RobotPresenter,
   ) {}
-  private _tagVisible = false;
-  private _message = "";
-  private _progress: number | undefined = undefined;
-  private _phase: RegistrationPhase = "scanning";
-  private _priorRuntimeMode: OperatingMode = "manual";
-  private _priorLidarMode: LidarDisplayMode = "off";
 
   public begin(): void {
-    this._priorRuntimeMode = this.appState.snapshot.operatingMode !== "registration"
-      ? this.appState.snapshot.operatingMode
-      : "manual";
+    this._priorRuntimeMode =
+      this.appState.snapshot.operatingMode !== "registrationMode"
+        ? this.appState.snapshot.operatingMode
+        : "manual";
     this._priorLidarMode = this.appState.snapshot.lidarMode;
-    this.appState.update({ operatingMode: "registration", lidarMode: "off" });
+    this.appState.update({ operatingMode: "registrationMode", lidarMode: "off" });
 
     this._active = true;
-    this._tagVisible = false;
-    this._message = "";
-    this._progress = undefined;
-    this._phase = "scanning";
     const ui = this.robotPresenter?.robotMarker?.ui;
     ui?.setRegistrationPreviewActive(true);
     this.robotPresenter?.robotMarker?.setVisible(false);
     ui?.setMenuVisible(false);
   }
 
-  public updateFromRegistrationStatus(msg: RegistrationStatusMessage): void {
+  public render(session: RegistrationSessionView): void {
     if (!this._active) {
       return;
     }
-    this._tagVisible = msg.tag_visible ?? this._tagVisible;
-    this._message = msg.message || this._message;
-    if (typeof msg.progress === "number") {
-      this._progress = msg.progress;
-    }
-    this._phase = msg.phase;
-    const previewPose = msg.preview_pose ?? null;
-    const previewStageActive = isRegistrationPreviewPhase(msg.phase);
-    const showMarker = previewStageActive && !!previewPose;
+    const presentation = projectRegistrationPresentation(session, {
+      step: "registerRobot",
+      connected: true,
+    });
+    const previewPose = session.previewPose ?? null;
+    const showMarker = presentation.showTagScanOverlay && !!previewPose;
     const ui = this.robotPresenter?.robotMarker?.ui;
     const wasMenuVisible = ui?.isMenuVisible() ?? false;
     const marker = this.robotPresenter?.robotMarker;
@@ -279,36 +251,15 @@ export class RegistrationPreviewPresenter {
       marker?.setVisible(false);
     }
 
-    if (previewStageActive) {
-      const presentation = buildRegistrationPreviewPresentation({
-        mode: "auto",
-        phase: this._phase,
-        message: this._message,
-        tagVisible: this._tagVisible,
-        progress: this._progress,
-      });
+    if (presentation.overlayVisible || session.state === "succeeded") {
       ui?.applyAssistOverlay({
-        titleText: presentation.titleText,
-        statusText: presentation.statusText,
-        statusColor: presentation.statusColor,
-        progressPercent: presentation.progressPercent,
+        titleText: presentation.overlayTitle,
+        statusText: presentation.overlayStatus,
+        statusColor: presentation.overlayStatusColor,
+        progressPercent: presentation.overlayProgress,
         showStop: false,
       });
     }
-  }
-
-  public setComplete(): void {
-    if (!this._active) {
-      return;
-    }
-    const GREEN = new vec4(0.2, 0.8, 0.2, 1);
-    this.robotPresenter?.robotMarker?.ui?.applyAssistOverlay({
-      titleText: "Registration complete",
-      statusText: "Registration complete",
-      statusColor: GREEN,
-      progressPercent: 100,
-      showStop: false,
-    });
   }
 
   public end(): void {

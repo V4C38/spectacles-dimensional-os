@@ -6,7 +6,7 @@ Phase 0 validation notes (device testing via scripts/frame_probe.py):
 - Reprojection gate: 3.0 px default; fallback 6.0 px if stills prove non-rectified.
 - JPEG size: expect 0.3-1.5 MB at IntermediateQuality over binary WS.
 - Serialization: the Lens must keep at most one requestImage + encode pipeline
-  in flight at a time (_pipelineBusy guard in FrameCaptureController). Overlapping
+  in flight at a time (CameraClient single-flight guard). Overlapping
   stills at 3200x2400 exhaust Lens memory.
 
 DimOS fiducial delegation note:

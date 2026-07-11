@@ -28,7 +28,7 @@ function makeRouter(phase: "registration" | "runtime") {
     onDisconnect: vi.fn(),
     applyPendingPose: vi.fn(),
     tickFrame: vi.fn(),
-    manualRegistrationAlignment: {
+    manualRegistrationPlacement: {
       onBridgeStatus: vi.fn(() => false),
       reset: vi.fn(),
     },
@@ -41,7 +41,7 @@ function makeRouter(phase: "registration" | "runtime") {
     onHelloReset: vi.fn(),
     handleProtocolError: vi.fn(),
     resetForUserDisconnect: vi.fn(),
-    onNavigationSettled: new Signal<"succeeded" | "failed">(),
+    onNavigationResolved: new Signal<"succeeded" | "failed">(),
   };
 
   const statusClient = new StatusClient(null, null, null);

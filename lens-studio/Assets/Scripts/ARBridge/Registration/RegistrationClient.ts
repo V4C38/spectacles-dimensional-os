@@ -23,7 +23,7 @@ import {
   vec3Distance,
 } from "../../App/Utilities/Utilities";
 import { RobotMarker } from "../../App/Robot/RobotMarker";
-import { ManualRegistrationAlignment } from "./ManualRegistrationAlignment";
+import { ManualRegistrationPlacement } from "./ManualRegistrationPlacement";
 import { RobotInteractionMode } from "../../App/AppState";
 import { ARBridgeSession } from "../Network/ARBridgeSession";
 
@@ -34,9 +34,8 @@ const MANUAL_POSE_POSITION_EPS_CM = 0.5;
 const MANUAL_POSE_ROTATION_EPS_RAD = 0.02;
 
 export interface RegistrationClientDeps {
-  manualRegistrationAlignment: ManualRegistrationAlignment;
-  hasBridgeConnection: () => boolean;
-  isCapabilityAvailable: (cap: string) => boolean;
+  manualRegistrationPlacement: ManualRegistrationPlacement;
+  isBridgeSessionReady: () => boolean;
   getInteractionMode: () => RobotInteractionMode;
   setInteractionMode: (mode: RobotInteractionMode) => void;
   getIsRuntimePhase: () => boolean;
@@ -45,8 +44,6 @@ export interface RegistrationClientDeps {
 
 export class RegistrationClient {
   public readonly onRegistrationStatus = new Signal<RegistrationStatusMessage>();
-  public readonly onAprilTagCaptureStart = new Signal<void>();
-  public readonly onAprilTagCaptureEnd = new Signal<void>();
 
   private readonly _sendDropLog = { value: -1 };
   private _lastRegistrationCommandLogAction = "";
@@ -59,7 +56,6 @@ export class RegistrationClient {
   ) {}
 
   private _intent: RegistrationMode | null = null;
-  private _awaitingCommit = false;
   private _lastStatusTime = -1;
   private _lastCaptureLogTime = { value: -1 };
   private _lastSubmitLogTime = { value: -1 };
@@ -69,10 +65,6 @@ export class RegistrationClient {
   } | null = null;
   private _deps: RegistrationClientDeps | null = null;
   private _bound = false;
-
-  public get awaitingCommit(): boolean {
-    return this._awaitingCommit;
-  }
 
   public initialize(deps: RegistrationClientDeps): void {
     this._deps = deps;
@@ -103,13 +95,9 @@ export class RegistrationClient {
       this.sendRegistrationCommand("stop");
     }
     this._intent = mode;
-    this._awaitingCommit = false;
     this._lastStatusTime = -1;
     this._lastSubmittedManualPose = null;
     this._tryStartBridgeSession(mode);
-    if (mode === "april_tag") {
-      this.onAprilTagCaptureStart.emit();
-    }
     print(`RegistrationClient: start mode=${mode}`);
   }
 
@@ -117,10 +105,8 @@ export class RegistrationClient {
     const notifyBridge = options?.notifyBridge ?? false;
     const wasTag = this._intent === "april_tag";
     this._intent = null;
-    this._awaitingCommit = false;
     this._lastStatusTime = -1;
     this._lastSubmittedManualPose = null;
-    this.onAprilTagCaptureEnd.emit();
     if (notifyBridge && this._session?.isConnected()) {
       this.sendRegistrationCommand("stop");
     }
@@ -134,7 +120,6 @@ export class RegistrationClient {
   public commit(): boolean {
     const sent = this.sendRegistrationCommand("commit");
     if (sent) {
-      this._awaitingCommit = true;
       this._intent = null;
       print("RegistrationClient: registration_command commit sent");
     }
@@ -196,7 +181,7 @@ export class RegistrationClient {
     }
     this._deps.disableNavigationPlacementForRegistration();
     const pose = this._poseFromReference(position, rotation);
-    this._deps.manualRegistrationAlignment.setAnchorPose(pose);
+    this._deps.manualRegistrationPlacement.setAnchorPose(pose);
     const p = pose.position;
     const r = pose.rotation;
     print(
@@ -205,14 +190,14 @@ export class RegistrationClient {
     if (this.robotMarker) {
       this.robotMarker.applyManualPose(pose.position, pose.rotation);
     }
-    this._deps.setInteractionMode("manualPlacement");
+    this._deps.setInteractionMode("manual_placement");
   }
 
   public cancelPlacement(): void {
     if (!this._deps) {
       return;
     }
-    if (this._deps.getInteractionMode() === "manualPlacement") {
+    if (this._deps.getInteractionMode() === "manual_placement") {
       this._deps.setInteractionMode(
         this._deps.getIsRuntimePhase() ? "runtimeRobot" : "hidden",
       );
@@ -220,7 +205,7 @@ export class RegistrationClient {
   }
 
   public freezePlacement(): void {
-    if (!this._deps || this._deps.getInteractionMode() !== "manualPlacement") {
+    if (!this._deps || this._deps.getInteractionMode() !== "manual_placement") {
       return;
     }
     const rm = this.robotMarker;
@@ -234,7 +219,7 @@ export class RegistrationClient {
   }
 
   public clearPose(): void {
-    this._deps?.manualRegistrationAlignment.reset();
+    this._deps?.manualRegistrationPlacement.reset();
   }
 
   public captureAndSubmitManualPose(force: boolean = false): boolean {
@@ -249,9 +234,9 @@ export class RegistrationClient {
     }
     const pose = this._poseFromMarkerWorld(position, rotation);
     if (this._deps) {
-      this._deps.manualRegistrationAlignment.setAnchorPose(pose);
+      this._deps.manualRegistrationPlacement.setAnchorPose(pose);
     }
-    if (!this._deps?.hasBridgeConnection()) {
+    if (!this._deps?.isBridgeSessionReady()) {
       return true;
     }
     if (
@@ -276,37 +261,22 @@ export class RegistrationClient {
     return sent;
   }
 
-  public finalizeOffline(): boolean {
+  public commitManualPlacementOffline(): boolean {
     const position = this.robotMarker?.getWorldPosition() ?? null;
     const rotation = this.robotMarker?.getRotation() ?? null;
     if (!position || !rotation) {
-      print("RegistrationClient: finalizeOffline — marker position unavailable");
+      print("RegistrationClient: commitManualPlacementOffline — marker position unavailable");
       return false;
     }
     const pose = this._poseFromMarkerWorld(position, rotation);
     if (this._deps) {
-      this._deps.manualRegistrationAlignment.setAnchorPose(pose);
+      this._deps.manualRegistrationPlacement.setAnchorPose(pose);
     }
     const r = rotation;
     print(
-      `RegistrationClient: finalizeOffline pos=(${position.x.toFixed(1)},${position.y.toFixed(1)},${position.z.toFixed(1)}) rot=(${r.x.toFixed(3)},${r.y.toFixed(3)},${r.z.toFixed(3)},${r.w.toFixed(3)})`,
+      `RegistrationClient: commitManualPlacementOffline pos=(${position.x.toFixed(1)},${position.y.toFixed(1)},${position.z.toFixed(1)}) rot=(${r.x.toFixed(3)},${r.y.toFixed(3)},${r.z.toFixed(3)},${r.w.toFixed(3)})`,
     );
     return true;
-  }
-
-  public preferredMode(): "auto" | "manualOnly" | "manualAvailable" {
-    if (!this._deps) {
-      return "auto";
-    }
-    const hasAprilTag = this._deps.isCapabilityAvailable("registration_april_tag");
-    const hasManual = this._deps.isCapabilityAvailable("registration_manual_pose");
-    if (this._deps.hasBridgeConnection() && !hasAprilTag && hasManual) {
-      return "manualOnly";
-    }
-    if (hasManual) {
-      return "manualAvailable";
-    }
-    return "auto";
   }
 
   public isNoResponseTimeout(): boolean {
@@ -335,17 +305,13 @@ export class RegistrationClient {
 
   private _onRegistrationStatus = (msg: RegistrationStatusMessage): void => {
     this._lastStatusTime = getTime();
-    if (msg.phase === "failed" && (this._intent !== null || this._awaitingCommit)) {
+    if (msg.state === "failed" && this._intent !== null) {
       print(
         `RegistrationClient: registration_status failed "${msg.message || "unknown"}"`,
       );
       this._intent = null;
-      this._awaitingCommit = false;
-      this.onAprilTagCaptureEnd.emit();
-    } else if (msg.phase === "succeeded") {
-      this._awaitingCommit = false;
+    } else if (msg.state === "succeeded") {
       this._intent = null;
-      this.onAprilTagCaptureEnd.emit();
     }
     this.onRegistrationStatus.emit(msg);
   };

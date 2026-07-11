@@ -9,7 +9,8 @@ import {
   AppStateListener,
   AppPhase,
   BridgeLinkState,
-  defaultNavigationOutcome,
+  createDefaultRobotRuntimeState,
+  defaultNavigationError,
   AppStateData,
   isRuntimePhase as isAppRuntimePhase,
   LidarDisplayMode,
@@ -18,7 +19,6 @@ import {
   OperatingMode,
   RobotInteractionMode,
 } from "./AppState";
-import { isCapabilityAvailable } from "./Robot/RobotRuntimeModel";
 import { COLOR_WHITE } from "./UI/UIKit";
 
 /** Phase lifecycle, operating mode, and subsystem orchestration for AR bridge runtime. */
@@ -45,7 +45,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
   }
 
   public get bridgeLinkState(): BridgeLinkState {
-    return this.appState.bridgeLinkState;
+    return this.arBridgeServices.state.bridgeLinkState;
   }
 
   public get onBridgeReady() {
@@ -100,10 +100,8 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
         getOperatingMode: () => this.operatingMode,
       },
       {
-        manualRegistrationAlignment: robot.manualRegistrationAlignment,
-        hasBridgeConnection: () => this.hasBridgeConnection(),
-        isCapabilityAvailable: (cap) =>
-          isCapabilityAvailable(this.appState.robotRuntime, cap),
+        manualRegistrationPlacement: robot.manualRegistrationPlacement,
+        isBridgeSessionReady: () => this.isBridgeSessionReady(),
         getInteractionMode: () => this.appState.robotInteractionMode,
         setInteractionMode: (mode) => this._setRobotInteractionMode(mode),
         getIsRuntimePhase: () => this.isRuntimePhase(),
@@ -115,9 +113,23 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
       },
     );
 
+    this.arBridgeServices.router.setOnBridgeDisconnected(() =>
+      this.onBridgeDisconnected(),
+    );
+
     this.arBridgeServices.state.subscribe((state) =>
       this._syncOperatingModeSideEffects(state),
     );
+  }
+
+  public onBridgeDisconnected(): void {
+    this.arBridgeServices.telemetry.onDisconnect();
+    this.arBridgeServices.robot.onDisconnect();
+    this.arBridgeServices.navigation.onDisconnect();
+    this.arBridgeServices.state.update({
+      navigationError: defaultNavigationError(),
+      robotRuntime: createDefaultRobotRuntimeState(),
+    });
   }
 
   private _syncOperatingModeSideEffects(state: AppStateData): void {
@@ -129,7 +141,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.arBridgeServices.robot.robotMarker?.ui?.setOperatingMode(mode);
 
     const navigation = this.arBridgeServices.navigation;
-    if (mode === "registration") {
+    if (mode === "registrationMode") {
       navigation.syncManualNavigationForOperatingMode(mode, state);
       return;
     }
@@ -162,6 +174,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this._log("enterRegistration");
     this.registrationClient?.cancelPlacement();
     this.registrationClient?.stop();
+    this.frameCaptureController?.endCameraCaptureSession();
     this.registrationClient?.clearPose();
     this.arBridgeServices.router.cancelRuntimeReconnect();
     if (!options?.preserveBridge) {
@@ -169,7 +182,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     }
     this.arBridgeServices.state.update({
       phase: "registration",
-      navigationOutcome: defaultNavigationOutcome(),
+      navigationError: defaultNavigationError(),
     });
     this._applyPhaseSideEffects("registration");
     this._setRobotInteractionMode("hidden");
@@ -180,6 +193,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.registrationPreview?.endIfActive();
     this.registrationClient?.cancelPlacement();
     this.registrationClient?.stop();
+    this.frameCaptureController?.endCameraCaptureSession();
     const runtimePatch: Partial<AppStateData> = { phase: "runtime" };
     this.arBridgeServices.state.update(runtimePatch);
     this._applyPhaseSideEffects("runtime");
@@ -238,8 +252,8 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.arBridgeServices.router.disconnect();
   }
 
-  public hasBridgeConnection(): boolean {
-    return this.arBridgeServices.router.hasConnection();
+  public isBridgeSessionReady(): boolean {
+    return this.arBridgeServices.router.isBridgeSessionReady();
   }
 
   public requestBridgeStatus(): boolean {
@@ -283,7 +297,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
   }
 
   public onMainMenuModeButtonPressed(mode: OperatingMode): void {
-    if (mode === "registration") {
+    if (mode === "registrationMode") {
       return;
     }
     if (this.appState.operatingMode === mode) {
@@ -297,7 +311,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
       return;
     }
     this._log(`setOperatingMode: ${mode}`);
-    if (mode === "registration") {
+    if (mode === "registrationMode") {
       this.arBridgeServices.state.update({ operatingMode: mode, lidarMode: "off" });
       return;
     }

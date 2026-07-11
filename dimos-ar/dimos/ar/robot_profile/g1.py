@@ -51,18 +51,6 @@ def g1_capabilities(
     return {
         "lidar": CapabilityState(True),
         "odom": CapabilityState(True),
-        "registration_april_tag": CapabilityState(
-            tag_mount_available,
-            None
-            if tag_mount_available
-            else "AprilTag registration is not available for this G1 runtime.",
-        ),
-        "registration_manual_pose": CapabilityState(
-            tag_mount_available,
-            None
-            if tag_mount_available
-            else "Manual registration is not available for the active G1 runtime.",
-        ),
         "nav": CapabilityState(
             nav_available,
             None if nav_available else "Navigation stack is not present for this G1 runtime.",

@@ -14,10 +14,10 @@ from dimos.ar.network.protocol import (
     encode_camera_frame_ack,
     encode_capture_policy,
 )
-from dimos.ar.registration.types import RegistrationMode, RegistrationPhase
+from dimos.ar.registration.types import RegistrationMode, RegistrationState
 from dimos.ar.tag_tracking.solve import (
     build_camera_info,
-    capture_max_stream_distance_m,
+    capture_max_distance_m,
 )
 from dimos.utils.logging_config import setup_logger
 
@@ -61,15 +61,15 @@ class RegistrationSessionFramesMixin:
         _capture_min_distance_m: float
         _align_min_obs: int
         _runtime_profile: Any
-        _capture_max_stream_distance_m: float | None
+        _max_capture_distance_m: float | None
 
         @property
-        def capture_max_stream_distance_m(self) -> float | None: ...
+        def max_capture_distance_m(self) -> float | None: ...
 
         def _broadcast_status(
             self,
             *,
-            phase: RegistrationPhase | None = None,
+            state: RegistrationState | None = None,
             message: str = "",
             mode: RegistrationMode | None = None,
             tag_visible: bool | None = None,
@@ -97,17 +97,17 @@ class RegistrationSessionFramesMixin:
             frame_id="ar_camera",
         )
         self._tag_tracker.set_camera_info(info)
-        d_max = capture_max_stream_distance_m(
+        d_max = capture_max_distance_m(
             msg.fx,
             self._tag_tracker.primary_tag_size_m,
             self._capture_min_tag_px,
             margin=self._capture_max_distance_margin,
         )
-        self._capture_max_stream_distance_m = d_max
+        self._max_capture_distance_m = d_max
         self._sender.send(
             encode_capture_policy(
-                max_stream_distance_m=d_max,
-                min_stream_distance_m=self._capture_min_distance_m,
+                max_capture_distance_m=d_max,
+                min_capture_distance_m=self._capture_min_distance_m,
                 max_capture_speed_mps=self._capture_max_speed_mps,
                 static_speed_mps=self._runtime_profile.runtime_static_speed_mps,
                 min_observations=self._align_min_obs,
@@ -117,7 +117,7 @@ class RegistrationSessionFramesMixin:
             "AR camera intrinsics received",
             resolution=f"{msg.width}x{msg.height}",
             device=msg.device_model,
-            capture_max_stream_distance_m=round(d_max, 4),
+            max_capture_distance_m=round(d_max, 4),
         )
 
     async def on_camera_frame(
@@ -137,7 +137,7 @@ class RegistrationSessionFramesMixin:
             )
         admission = self._frame_admission(header, frame_age)
         if admission == FrameAdmission.ACK_ONLY:
-            self._send_frame_ack(header, obs_added=False)
+            self._send_frame_ack(header)
             return
         resolved_odom = self.resolve_frame_odom(header)
         if resolved_odom is None:
@@ -149,7 +149,7 @@ class RegistrationSessionFramesMixin:
                     "Tag frame skipped: no odom at capture time",
                     seq=seq,
                 )
-            self._send_frame_ack(header, obs_added=False)
+            self._send_frame_ack(header)
             return
         self._frame_in_flight = True
         try:
@@ -163,7 +163,7 @@ class RegistrationSessionFramesMixin:
             )
             if self._odom.latest() is None:
                 self._broadcast_status(
-                    phase=RegistrationPhase.SCANNING,
+                    state=RegistrationState.APRIL_TAG,
                     message="Waiting for robot odometry",
                 )
             result = await asyncio.to_thread(
@@ -174,7 +174,7 @@ class RegistrationSessionFramesMixin:
                 receive_mono=receive_mono,
                 T_committed=T_committed,
                 world_frame_committed=world_frame_committed,
-                max_distance_m=self.capture_max_stream_distance_m,
+                max_distance_m=self.max_capture_distance_m,
             )
             if _TRACE:
                 logger.debug(
@@ -190,8 +190,7 @@ class RegistrationSessionFramesMixin:
             )
             self._send_frame_ack(
                 header,
-                obs_added=result.observations_added > 0,
-                refinement_complete=outcome.refinement_complete,
+                capturing_budgeted_complete=outcome.capturing_budgeted_complete,
             )
             if self._session.mode == RegistrationMode.APRIL_TAG and self._tag_tracker.active:
                 self._maybe_log_registration_scan_diag(
@@ -277,7 +276,7 @@ class RegistrationSessionFramesMixin:
             logger.warning("AR camera frame dropped: no camera intrinsics yet", seq=seq)
             if self._tag_tracker.active:
                 self._broadcast_status(
-                    phase=RegistrationPhase.FAILED,
+                    state=RegistrationState.FAILED,
                     message="No camera intrinsics received",
                 )
             return FrameAdmission.ACK_ONLY
@@ -291,13 +290,11 @@ class RegistrationSessionFramesMixin:
         self,
         header: dict[str, Any],
         *,
-        obs_added: bool = False,
-        refinement_complete: bool = False,
+        capturing_budgeted_complete: bool = False,
     ) -> None:
         self._sender.send(
             encode_camera_frame_ack(
                 seq=int(header["seq"]),
-                obs_added=obs_added,
-                refinement_complete=refinement_complete,
+                capturing_budgeted_complete=capturing_budgeted_complete,
             )
         )

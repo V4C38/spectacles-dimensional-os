@@ -41,7 +41,7 @@ def _messages_from_sent(sent: list[str]) -> list[dict]:
     ("payload", "expected"),
     [
         ('{"type":"lidar","points_flat":[1]}', "lidar"),
-        ('{"type":"nav_status","phase":"idle"}', "nav_status"),
+        ('{"type":"nav_status","state":"idle"}', "nav_status"),
         ("not json", None),
     ],
 )
@@ -55,16 +55,16 @@ async def test_outbound_coalesces_broadcast_snapshots() -> None:
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"nav_status","phase":"idle"}')
+    outbound.enqueue('{"type":"nav_status","state":"idle"}')
     outbound.enqueue('{"type":"path","waypoints":[[1,2,3]]}')
     outbound.enqueue('{"type":"bridge_status","world_frame_committed":true}')
-    outbound.enqueue('{"type":"nav_status","phase":"navigating"}')
+    outbound.enqueue('{"type":"nav_status","state":"navigating"}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
 
     by_type = {msg["type"]: msg for msg in _messages_from_sent(ws.sent)}
-    assert by_type["nav_status"]["phase"] == "navigating"
+    assert by_type["nav_status"]["state"] == "navigating"
     assert by_type["path"]["waypoints"] == [[1, 2, 3]]
     assert by_type["bridge_status"]["world_frame_committed"] is True
     assert len(ws.sent) == 1
@@ -76,7 +76,7 @@ async def test_outbound_coalesces_pose_and_lidar() -> None:
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"nav_status","phase":"navigating"}')
+    outbound.enqueue('{"type":"nav_status","state":"navigating"}')
     outbound.enqueue('{"type":"pose","position":[1,2,3]}')
     outbound.enqueue('{"type":"pose","position":[4,5,6]}')
     outbound.enqueue('{"type":"lidar","points_flat":[1,2,3]}')
@@ -88,7 +88,7 @@ async def test_outbound_coalesces_pose_and_lidar() -> None:
 
     assert len(ws.sent) == 1
     by_type = {msg["type"]: msg for msg in _messages_from_sent(ws.sent)}
-    assert by_type["nav_status"]["phase"] == "navigating"
+    assert by_type["nav_status"]["state"] == "navigating"
     assert by_type["pose"]["position"] == [4, 5, 6]
     assert by_type["lidar"]["points_flat"] == [7, 8, 9]
     assert by_type["path"]["waypoints"] == [[0, 0, 0]]
@@ -230,7 +230,7 @@ async def test_outbound_coalesced_batch_single_send() -> None:
     outbound.start()
 
     outbound.enqueue('{"type":"pose","position":[1,2,3]}')
-    outbound.enqueue('{"type":"nav_status","phase":"idle"}')
+    outbound.enqueue('{"type":"nav_status","state":"idle"}')
     outbound.enqueue('{"type":"bridge_status","world_frame_committed":true}')
 
     await asyncio.sleep(0.05)
@@ -249,15 +249,15 @@ async def test_terminal_registration_status_not_overwritten_by_non_terminal() ->
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"registration_status","phase":"succeeded","robot_id":"r"}')
-    outbound.enqueue('{"type":"registration_status","phase":"scanning","robot_id":"r"}')
+    outbound.enqueue('{"type":"registration_status","state":"succeeded","robot_id":"r"}')
+    outbound.enqueue('{"type":"registration_status","state":"april_tag","robot_id":"r"}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
 
     statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "registration_status"]
     assert statuses
-    assert statuses[-1]["phase"] == "succeeded"
+    assert statuses[-1]["state"] == "succeeded"
 
 
 @pytest.mark.asyncio
@@ -266,15 +266,15 @@ async def test_terminal_failed_not_overwritten_by_non_terminal() -> None:
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"registration_status","phase":"failed","robot_id":"r"}')
-    outbound.enqueue('{"type":"registration_status","phase":"scanning","robot_id":"r"}')
+    outbound.enqueue('{"type":"registration_status","state":"failed","robot_id":"r"}')
+    outbound.enqueue('{"type":"registration_status","state":"april_tag","robot_id":"r"}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
 
     statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "registration_status"]
     assert statuses
-    assert statuses[-1]["phase"] == "failed"
+    assert statuses[-1]["state"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -283,15 +283,15 @@ async def test_non_terminal_registration_status_can_be_overwritten() -> None:
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"registration_status","phase":"scanning","robot_id":"r","v":1}')
-    outbound.enqueue('{"type":"registration_status","phase":"editing","robot_id":"r","v":2}')
+    outbound.enqueue('{"type":"registration_status","state":"april_tag","robot_id":"r","v":1}')
+    outbound.enqueue('{"type":"registration_status","state":"manual_placement","robot_id":"r","v":2}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
 
     statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "registration_status"]
     assert len(statuses) == 1
-    assert statuses[0]["phase"] == "editing"
+    assert statuses[0]["state"] == "manual_placement"
 
 
 @pytest.mark.asyncio
@@ -300,7 +300,7 @@ async def test_outbound_text_frames_are_newline_delimited() -> None:
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"nav_status","phase":"idle"}')
+    outbound.enqueue('{"type":"nav_status","state":"idle"}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
@@ -309,7 +309,7 @@ async def test_outbound_text_frames_are_newline_delimited() -> None:
     assert ws.sent[0].endswith("\n")
     msg = json.loads(ws.sent[0].strip())
     assert msg["type"] == "nav_status"
-    assert msg["phase"] == "idle"
+    assert msg["state"] == "idle"
 
 
 def test_newline_framing_client_round_trip() -> None:
@@ -318,7 +318,7 @@ def test_newline_framing_client_round_trip() -> None:
     messages: list[dict] = []
     for frame in (
         '{"type":"path","waypoints":[[1,2',
-        ',3]]}\n{"type":"nav_status","phase":"idle"}\n',
+        ',3]]}\n{"type":"nav_status","state":"idle"}\n',
     ):
         buffer += frame
         parts = buffer.split("\n")
@@ -331,7 +331,7 @@ def test_newline_framing_client_round_trip() -> None:
     assert len(messages) == 2
     assert messages[0]["type"] == "path"
     assert messages[0]["waypoints"] == [[1, 2, 3]]
-    assert messages[1]["phase"] == "idle"
+    assert messages[1]["state"] == "idle"
 
 
 def test_split_inbound_text_lines_splits_concatenated_messages() -> None:

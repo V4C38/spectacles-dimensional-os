@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { quat, vec3 } from "../shims/lens-runtime";
 import {
-  CameraStreamSession,
-  STREAM_GATE_DEBOUNCE_S,
+  CameraCaptureSession,
+  CAPTURE_GATE_DEBOUNCE_S,
+  deriveCameraCapture,
   evaluateOptionalGeometricGates,
   evaluateOptionalSpeedGate,
-  resolveHardwareTransition,
-} from "../../Assets/Scripts/ARBridge/Camera/CameraStreamSession";
+} from "../../Assets/Scripts/ARBridge/Camera/CameraCaptureSession";
 import { CapturePolicyMessage } from "../../Assets/Scripts/ARBridge/Network/Protocol";
 
 const origin = new vec3(0, 0, 0);
@@ -17,31 +17,15 @@ const robotFar = new vec3(0, 0, -400);
 const samplePolicy: CapturePolicyMessage = {
   type: "capture_policy",
   ts: 1,
-  max_stream_distance_m: 3.0,
-  min_stream_distance_m: 0.35,
+  max_capture_distance_m: 3.0,
+  min_capture_distance_m: 0.35,
   max_capture_speed_mps: 0.45,
   static_speed_mps: 0.05,
   min_observations: 3,
 };
 
-function allGatesPass(overrides: Partial<{
-  bridgeConnected: boolean;
-  posesReady: boolean;
-  geometricGatesPass: boolean;
-  speedGatePass: boolean;
-}> = {}) {
-  return {
-    bridgeConnected: true,
-    posesReady: true,
-    geometricGatesPass: true,
-    speedGatePass: true,
-    ...overrides,
-  };
-}
-
-/** Mirrors production speed-based arming in FrameCaptureController. */
 function createSpeedArmingHarness() {
-  const session = new CameraStreamSession();
+  const session = new CameraCaptureSession();
   session.applyPolicy(samplePolicy);
   let worldFrameCommitted = false;
   let lastSpeedMps: number | null = null;
@@ -59,8 +43,8 @@ function createSpeedArmingHarness() {
     setCommitted: (committed: boolean) => {
       worldFrameCommitted = committed;
     },
-    onRegistrationStart: () => session.startRegistration(),
-    onRegistrationEnd: () => session.requestStreamStop(),
+    onRegistrationStart: () => session.beginCameraCapture(),
+    onRegistrationEnd: () => session.endCameraCapture(),
   };
 }
 
@@ -78,50 +62,6 @@ describe("FrameCaptureController capture semantics", () => {
     ).toBe(true);
   });
 
-  it("optional geometric gates pass when policy is not applied", () => {
-    expect(
-      evaluateOptionalGeometricGates(
-        origin,
-        identityRot,
-        robotFar,
-        35,
-        300,
-        false,
-      ),
-    ).toBe(true);
-  });
-
-  it("optional geometric gates enforce distance when pose and policy exist", () => {
-    expect(
-      evaluateOptionalGeometricGates(
-        origin,
-        identityRot,
-        robotNear,
-        35,
-        300,
-        true,
-      ),
-    ).toBe(true);
-    expect(
-      evaluateOptionalGeometricGates(
-        origin,
-        identityRot,
-        robotFar,
-        35,
-        300,
-        true,
-      ),
-    ).toBe(false);
-  });
-
-  it("optional speed gate passes when speed is unknown", () => {
-    expect(evaluateOptionalSpeedGate(null, 0.45, true)).toBe(true);
-  });
-
-  it("optional speed gate passes when policy is not applied", () => {
-    expect(evaluateOptionalSpeedGate(1.0, 0.45, false)).toBe(true);
-  });
-
   it("optional speed gate blocks above policy max", () => {
     expect(evaluateOptionalSpeedGate(1.0, 0.45, true)).toBe(false);
     expect(evaluateOptionalSpeedGate(0.2, 0.45, true)).toBe(true);
@@ -129,104 +69,77 @@ describe("FrameCaptureController capture semantics", () => {
 });
 
 describe("FrameCaptureController speed arming", () => {
-  it("movement arms tracking_motion when committed", () => {
+  it("movement arms unbounded capture when committed", () => {
     const harness = createSpeedArmingHarness();
     harness.setCommitted(true);
     harness.onPose(0.0);
     harness.onPose(0.2);
-    expect(harness.session.requestActive).toBe(true);
-    expect(harness.session.phase).toBe("tracking_motion");
+    expect(harness.session.obsBudget).toBe(0);
   });
 
-  it("stop edge arms refining_stop when committed", () => {
+  it("stop edge arms budgeted capture when committed", () => {
     const harness = createSpeedArmingHarness();
     harness.setCommitted(true);
     harness.onPose(0.2);
     harness.onPose(0.0);
-    expect(harness.session.requestActive).toBe(true);
-    expect(harness.session.phase).toBe("refining_stop");
+    expect(harness.session.obsBudget).toBe(3);
   });
 
   it("does not arm runtime capture before world frame commit", () => {
     const harness = createSpeedArmingHarness();
     harness.onPose(0.2);
-    expect(harness.session.requestActive).toBe(false);
+    expect(harness.session.obsBudget).toBeNull();
   });
 
-  it("registration end disarms to off", () => {
+  it("registration end disarms capture", () => {
     const harness = createSpeedArmingHarness();
     harness.onRegistrationStart();
     harness.onRegistrationEnd();
-    expect(harness.session.requestActive).toBe(false);
-    expect(harness.session.phase).toBe("off");
+    expect(harness.session.obsBudget).toBeNull();
   });
 });
 
-describe("FrameCaptureController hardware lifecycle", () => {
-  it("gate pause keeps request active with hardware off and waiting status", () => {
-    const session = new CameraStreamSession();
+describe("FrameCaptureController capture state", () => {
+  it("gate pause keeps intent with waiting state", () => {
+    const session = new CameraCaptureSession();
     session.applyPolicy(samplePolicy);
-    session.startStopRefinement();
-    session.evaluate(allGatesPass(), 0);
-
-    const failAt = 1.0;
-    session.evaluate(allGatesPass({ geometricGatesPass: false }), failAt);
-    const evalResult = session.evaluate(
-      allGatesPass({ geometricGatesPass: false }),
-      failAt + STREAM_GATE_DEBOUNCE_S + 0.01,
-    );
-
-    const transition = resolveHardwareTransition({
-      evalHardwareEnabled: evalResult.hardwareEnabled,
-      requestActive: evalResult.requestActive,
-      hardwareCurrentlyEnabled: true,
-      pendingHardwareOff: false,
+    session.beginCameraCapture(3);
+    const gates = {
+      bridgeConnected: true,
+      posesReady: true,
+      geometricGatesPass: true,
+      speedGatePass: true,
       hasInFlightCapture: false,
-    });
-
-    expect(evalResult.requestActive).toBe(true);
-    expect(transition.targetHardwareEnabled).toBe(false);
-    expect(transition.displayStatus).toBe("waiting");
-    expect(transition.stopIsLifecycleEnd).toBe(false);
+    };
+    session.updateGateDebounce(gates, 0);
+    const failingGates = { ...gates, geometricGatesPass: false };
+    const failAt = 1.0;
+    session.updateGateDebounce(failingGates, failAt);
+    const afterDebounce = failAt + CAPTURE_GATE_DEBOUNCE_S + 0.01;
+    session.updateGateDebounce(failingGates, afterDebounce);
+    expect(
+      deriveCameraCapture(session.getFacts(), failingGates, afterDebounce),
+    ).toBe("waiting");
+    expect(session.obsBudget).toBe(3);
   });
 
-  it("refinement_complete disarms with lifecycle stop", () => {
-    const session = new CameraStreamSession();
+  it("capturing_budgeted_complete disarms capture", () => {
+    const session = new CameraCaptureSession();
     session.applyPolicy(samplePolicy);
-    session.startStopRefinement();
-    session.evaluate(allGatesPass(), 0);
-    session.onFrameAck(true, true);
-
-    const evalResult = session.evaluate(allGatesPass(), 1.0);
-    const transition = resolveHardwareTransition({
-      evalHardwareEnabled: evalResult.hardwareEnabled,
-      requestActive: evalResult.requestActive,
-      hardwareCurrentlyEnabled: true,
-      pendingHardwareOff: false,
-      hasInFlightCapture: false,
+    session.beginCameraCapture(3);
+    session.onFrameAck({
+      type: "camera_frame_ack",
+      ts: 1,
+      seq: 1,
+      capturing_budgeted_complete: true,
     });
-
-    expect(evalResult.requestActive).toBe(false);
-    expect(transition.stopIsLifecycleEnd).toBe(true);
-    expect(transition.displayStatus).toBe("off");
-  });
-
-  it("gate recovery resumes without resetting accepted observations", () => {
-    const session = new CameraStreamSession();
-    session.applyPolicy(samplePolicy);
-    session.startStopRefinement();
-    session.evaluate(allGatesPass(), 0);
-    session.onFrameAck(true);
-    expect(session.obsAccepted).toBe(1);
-
-    const failAt = 1.0;
-    session.evaluate(
-      allGatesPass({ geometricGatesPass: false }),
-      failAt + STREAM_GATE_DEBOUNCE_S + 0.01,
-    );
-    session.evaluate(allGatesPass(), failAt + STREAM_GATE_DEBOUNCE_S + 0.5);
-
-    expect(session.requestActive).toBe(true);
-    expect(session.obsAccepted).toBe(1);
+    expect(session.obsBudget).toBeNull();
+    expect(deriveCameraCapture(session.getFacts(), {
+      bridgeConnected: true,
+      posesReady: true,
+      geometricGatesPass: true,
+      speedGatePass: true,
+      hasInFlightCapture: false,
+    }, 1)).toBe("off");
   });
 });

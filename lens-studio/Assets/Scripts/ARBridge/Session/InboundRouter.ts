@@ -1,26 +1,27 @@
 import { ARBridgeSession } from "../Network/ARBridgeSession";
 import { AppStateStore } from "../../App/AppState";
 import { RobotPresenter } from "../../App/Robot/RobotPresenter";
-import { NavigationPlacement } from "../../App/Navigation/NavigationPlacement";
+import { NavigationController } from "../../App/Navigation/NavigationController";
 import { RegistrationClient } from "../Registration/RegistrationClient";
 import { StatusClient } from "../Status/StatusClient";
 import { TelemetryClient } from "../Telemetry/TelemetryClient";
 import { NavigationClient } from "../Navigation/NavigationClient";
 import { Signal } from "../../App/Utilities/Utilities";
 import {
-  AppState,
-  bridgeLinkTransitionLog,
+  BridgeLinkState,
   BridgeSnapshot,
   createDefaultDriftState,
   createDefaultRobotRuntimeState,
-  defaultNavigationOutcome,
-  NO_ROBOT_CONNECTED_LABEL,
+  defaultNavigationError,
+  type AppStateData,
 } from "../../App/AppState";
+import { bridgeLinkTransitionLog } from "../../App/Bridge/BridgePresentation";
 import {
   BridgeStatusMessage,
-  deriveLinkState,
+  bridgeSnapshotToStatusMessage,
+  deriveLinkStateFromSnapshot,
   HelloMessage,
-  projectBridgeSnapshot,
+  projectBridgeSession,
 } from "../Network/Protocol";
 import { projectRuntimeStateFromHello } from "../../App/Robot/RobotRuntimeModel";
 import {
@@ -43,6 +44,8 @@ function bridgeSnapshotsEqual(a: BridgeSnapshot, b: BridgeSnapshot): boolean {
   );
 }
 
+export type BridgeDisconnectedHandler = () => void;
+
 /** Inbound fan-out, link-state projection, reconnect — mirrors ARBridge module wiring. */
 export class InboundRouter {
   public readonly onBridgeReady = new Signal<void>();
@@ -51,9 +54,11 @@ export class InboundRouter {
 
   private _bound = false;
   private _reconnectEvent: DelayedCallbackEvent | null = null;
-  private _reconnectActive = false;
+  private _runtimeWsReconnectActive = false;
   private _reconnectBackoffS = BRIDGE_RETRY_BASE_S;
   private _lastReconnectLogTime = -1;
+  private _lastLinkState: BridgeLinkState = "disconnected";
+  private _onBridgeDisconnected: BridgeDisconnectedHandler | null = null;
 
   constructor(
     private readonly session: ARBridgeSession | null,
@@ -61,10 +66,14 @@ export class InboundRouter {
     private readonly statusClient: StatusClient,
     private readonly telemetryClient: TelemetryClient,
     private readonly navigationClient: NavigationClient,
-    private readonly navigationPlacement: NavigationPlacement,
+    private readonly navigationController: NavigationController,
     private readonly robotPresenter: RobotPresenter,
     private readonly registrationClient: RegistrationClient | null,
   ) {}
+
+  public setOnBridgeDisconnected(handler: BridgeDisconnectedHandler | null): void {
+    this._onBridgeDisconnected = handler;
+  }
 
   public bind(): void {
     if (this._bound || !this.session) {
@@ -88,16 +97,16 @@ export class InboundRouter {
       }
     });
 
-    this.navigationClient.onPath.add((msg) => this.navigationPlacement.applyPath(msg));
+    this.navigationClient.onPath.add((msg) => this.navigationController.applyPath(msg));
     this.navigationClient.onNavStatus.add((msg) =>
-      this.navigationPlacement.applyNavStatus(msg),
+      this.navigationController.applyNavStatus(msg),
     );
     this.statusClient.onBridgeStatus.add((msg) => this._applyBridgeStatus(msg));
     this.session.onConnectionChanged.add((connected) =>
       this._applyConnectionState(connected),
     );
     this.navigationClient.onProtocolError.add((error) =>
-      this.navigationPlacement.handleProtocolError(error),
+      this.navigationController.handleProtocolError(error),
     );
 
     const reconnectEv = this.session.createEvent(
@@ -111,7 +120,7 @@ export class InboundRouter {
     this.appState.uiLogger.tick();
     const poseApplied = this.robotPresenter.applyPendingPose();
     this.robotPresenter.tickFrame();
-    this.navigationPlacement.syncIdleNavigationPlacement(poseApplied);
+    this.navigationController.syncIdleNavigationPlacement(poseApplied);
   }
 
   public tryConnect(ip: string): Promise<boolean> {
@@ -151,15 +160,15 @@ export class InboundRouter {
   public disconnect(): void {
     this.cancelRuntimeReconnect();
     this.session?.disconnect();
-    this.navigationPlacement.resetForUserDisconnect();
+    this.navigationController.resetForUserDisconnect();
   }
 
   public cancelRuntimeReconnect(): void {
-    this._reconnectActive = false;
+    this._runtimeWsReconnectActive = false;
     this._reconnectBackoffS = BRIDGE_RETRY_BASE_S;
   }
 
-  public hasConnection(): boolean {
+  public isBridgeSessionReady(): boolean {
     return this.session?.isConnected() ?? false;
   }
 
@@ -167,73 +176,74 @@ export class InboundRouter {
     return this.statusClient.requestStatus();
   }
 
-  public get bridgeLinkState() {
-    return this.appState.snapshot.bridgeLinkState;
+  public get bridgeLinkState(): BridgeLinkState {
+    return this.appState.bridgeLinkState;
   }
 
   public reapplyBridgeStatusIfConnected(): void {
+    if (!this.isBridgeSessionReady()) {
+      this._applyConnectionState(false);
+      return;
+    }
+    const wireStatus = bridgeSnapshotToStatusMessage(this.appState.snapshot.bridgeSnapshot);
+    if (wireStatus) {
+      this._applyBridgeStatus(wireStatus);
+      return;
+    }
     if (this.session?.lastBridgeStatus) {
       this._applyBridgeStatus(this.session.lastBridgeStatus);
-    } else {
-      this._applyConnectionState(this.hasConnection());
+      return;
     }
+    this._applyBridgeProjection();
   }
 
   private _applyHello(msg: HelloMessage): void {
     const runtimeState = projectRuntimeStateFromHello(msg);
-    AppState.connectedRobotDisplayName = runtimeState.displayName;
-    this.navigationPlacement.onHelloReset();
+    this.navigationController.onHelloReset();
     this.telemetryClient.resetBridgeLidarModeTracking();
-    this._applyBridgeProjection(this.hasConnection(), null);
+    this._applyBridgeProjection();
     this.appState.update({
       robotRuntime: runtimeState,
       driftState: createDefaultDriftState(),
-      navigationOutcome: defaultNavigationOutcome(),
+      navigationError: defaultNavigationError(),
     });
+    this.robotPresenter.setDebugBoundsFromRuntime(runtimeState);
   }
 
   private _applyBridgeStatus(msg: BridgeStatusMessage): void {
-    const shouldClearAnchor = this.robotPresenter.manualRegistrationAlignment.onBridgeStatus(
+    const shouldClearAnchor = this.robotPresenter.manualRegistrationPlacement.onBridgeStatus(
       msg,
-      this.appState.snapshot.robotInteractionMode === "manualPlacement",
+      this.appState.snapshot.robotInteractionMode === "manual_placement",
     );
     if (shouldClearAnchor) {
-      this.robotPresenter.manualRegistrationAlignment.reset();
+      this.robotPresenter.manualRegistrationPlacement.reset();
     }
-    this._applyBridgeProjection(true, msg);
+    this._applyBridgeProjection(msg);
     this.onBridgeStatusChanged.emit(msg);
   }
 
   private _applyConnectionState(connected: boolean): void {
     print(`InboundRouter: bridge connection: ${connected ? "connected" : "disconnected"}`);
     this._applyBridgeProjection(
-      connected,
       connected ? this.session?.lastBridgeStatus ?? null : null,
     );
     this.onBridgeConnectionChanged.emit(connected);
     if (connected) {
       this.cancelRuntimeReconnect();
-    } else {
-      this.telemetryClient.onDisconnect();
-      this.robotPresenter.onDisconnect();
-      this.navigationPlacement.onDisconnect();
-      AppState.connectedRobotDisplayName = NO_ROBOT_CONNECTED_LABEL;
-      this.appState.update({
-        navigationOutcome: defaultNavigationOutcome(),
-        robotRuntime: createDefaultRobotRuntimeState(),
-      });
-      this._maybeScheduleRuntimeReconnect();
+      return;
     }
+    this._onBridgeDisconnected?.();
+    this._maybeScheduleRuntimeReconnect();
   }
 
   private _maybeScheduleRuntimeReconnect(): void {
     if (this.appState.snapshot.phase !== "runtime") {
       return;
     }
-    if (this._reconnectActive) {
+    if (this._runtimeWsReconnectActive) {
       return;
     }
-    this._reconnectActive = true;
+    this._runtimeWsReconnectActive = true;
     this._reconnectBackoffS = BRIDGE_RETRY_BASE_S;
     this._reconnectEvent?.reset(this._reconnectBackoffS);
   }
@@ -251,14 +261,14 @@ export class InboundRouter {
   }
 
   private _onRuntimeReconnectFired(): void {
-    if (!this._reconnectActive) {
+    if (!this._runtimeWsReconnectActive) {
       return;
     }
     if (this.appState.snapshot.phase !== "runtime") {
       this.cancelRuntimeReconnect();
       return;
     }
-    if (this.hasConnection()) {
+    if (this.isBridgeSessionReady()) {
       this.cancelRuntimeReconnect();
       return;
     }
@@ -276,7 +286,7 @@ export class InboundRouter {
       print(`InboundRouter: reconnect attempt ${ip}`);
     }
     this.tryConnect(ip).then((ok) => {
-      if (!this._reconnectActive) {
+      if (!this._runtimeWsReconnectActive) {
         return;
       }
       if (ok) {
@@ -287,37 +297,26 @@ export class InboundRouter {
     });
   }
 
-  private _applyBridgeProjection(
-    connected: boolean,
-    status: BridgeStatusMessage | null,
-  ): void {
+  private _applyBridgeProjection(status: BridgeStatusMessage | null = null): void {
     const handshakeReady = this.session?.isConnected() ?? false;
-    let effectiveConnected = connected;
-    let effectiveStatus = status;
-    if (!handshakeReady) {
-      effectiveConnected = false;
-      effectiveStatus = null;
-    }
-    const snapshot = projectBridgeSnapshot(handshakeReady, effectiveConnected ? effectiveStatus : null);
-    const linkState = deriveLinkState(effectiveConnected, effectiveConnected ? effectiveStatus : null);
-    const prev = this.appState.snapshot;
-    const patch: Partial<typeof prev> = {};
-    if (!bridgeSnapshotsEqual(prev.bridgeSnapshot, snapshot)) {
+    const effectiveStatus = handshakeReady ? status : null;
+    const snapshot = projectBridgeSession(handshakeReady, effectiveStatus);
+    const linkState = deriveLinkStateFromSnapshot(snapshot);
+    const prevSnapshot = this.appState.snapshot.bridgeSnapshot;
+    const patch: Partial<AppStateData> = {};
+    if (!bridgeSnapshotsEqual(prevSnapshot, snapshot)) {
       patch.bridgeSnapshot = snapshot;
-    }
-    if (prev.bridgeLinkState !== linkState) {
-      patch.bridgeLinkState = linkState;
-      this._logBridgeLinkTransition(prev.bridgeLinkState, linkState);
     }
     if (Object.keys(patch).length > 0) {
       this.appState.update(patch);
     }
+    if (this._lastLinkState !== linkState) {
+      this._logBridgeLinkTransition(this._lastLinkState, linkState);
+      this._lastLinkState = linkState;
+    }
   }
 
-  private _logBridgeLinkTransition(
-    prev: typeof this.appState.snapshot.bridgeLinkState,
-    next: typeof this.appState.snapshot.bridgeLinkState,
-  ): void {
+  private _logBridgeLinkTransition(prev: BridgeLinkState, next: BridgeLinkState): void {
     const entry = bridgeLinkTransitionLog(prev, next);
     if (!entry) {
       return;

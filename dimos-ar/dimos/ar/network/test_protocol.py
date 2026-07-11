@@ -33,9 +33,8 @@ from dimos.ar.network.protocol import (
     encode_pose,
     encode_registration_status,
     encode_runtime_snapshot,
-    nav_phase_payload,
 )
-from dimos.ar.registration.types import RegistrationMode, RegistrationPhase
+from dimos.ar.registration.types import RegistrationMode, RegistrationState
 from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
 from dimos.ar.robot_profile.g1 import g1_handshake
 from dimos.ar.world_frame.state import WorldFrameState
@@ -86,8 +85,8 @@ def test_encode_hello_g1_tag_tracking_profile() -> None:
     msg = json.loads(encode_hello(handshake))
     assert msg["robot"]["robot_id"] == "unitree_g1"
     assert "robot_model" not in msg["robot"]
-    assert msg["capabilities"]["registration_april_tag"]["available"] is True
-    assert msg["capabilities"]["registration_manual_pose"]["available"] is True
+    assert "registration_april_tag" not in msg["capabilities"]
+    assert "registration_manual_pose" not in msg["capabilities"]
     assert msg["robot"]["tag_tracking_profile"]["tag_total_size_m"] == 0.07
     assert isinstance(msg["robot"]["tag_tracking_profile"]["tag_ids"], list)
 
@@ -102,7 +101,7 @@ def test_encode_hello_g1_tag_registration_disabled() -> None:
         tag_mount_available=False,
     )
     msg = json.loads(encode_hello(handshake))
-    assert msg["capabilities"]["registration_manual_pose"]["available"] is False
+    assert "registration_manual_pose" not in msg["capabilities"]
 
 
 def test_robot_id_mismatch_rejected() -> None:
@@ -362,7 +361,7 @@ def test_encode_registration_status() -> None:
             ts=1.0,
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.APRIL_TAG,
-                phase=RegistrationPhase.SCANNING,
+                state=RegistrationState.APRIL_TAG,
                 message="Look at the AprilTag on your robot",
                 tag_visible=True,
             ),
@@ -370,7 +369,7 @@ def test_encode_registration_status() -> None:
     )
     assert raw["type"] == "registration_status"
     assert raw["mode"] == "april_tag"
-    assert raw["phase"] == "scanning"
+    assert raw["state"] == "april_tag"
     assert raw["tag_visible"] is True
     assert "progress" not in raw
 
@@ -381,7 +380,7 @@ def test_encode_registration_status_with_progress() -> None:
             ts=1.0,
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.APRIL_TAG,
-                phase=RegistrationPhase.SCANNING,
+                state=RegistrationState.APRIL_TAG,
                 message="",
                 tag_visible=True,
                 progress=40,
@@ -397,15 +396,14 @@ def test_encode_registration_status_with_alignment_fields() -> None:
             ts=1.0,
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.APRIL_TAG,
-                phase=RegistrationPhase.SUCCEEDED,
+                state=RegistrationState.SUCCEEDED,
                 message="Registration successful",
-                alignment_confidence=0.65,
-                refining=True,
+                registration_confidence=0.65,
             ),
         )
     )
-    assert raw["alignment_confidence"] == pytest.approx(0.65)
-    assert raw["refining"] is True
+    assert raw["registration_confidence"] == pytest.approx(0.65)
+    assert "refining" not in raw
 
 
 def test_encode_registration_status_manual() -> None:
@@ -414,13 +412,13 @@ def test_encode_registration_status_manual() -> None:
             ts=1.0,
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.MANUAL_POSE,
-                phase=RegistrationPhase.AWAITING_COMMIT,
+                state=RegistrationState.AWAITING_COMMIT,
                 message="Manual robot pose ready — review and commit",
             ),
         )
     )
     assert raw["mode"] == "manual_pose"
-    assert raw["phase"] == "awaiting_commit"
+    assert raw["state"] == "awaiting_commit"
     assert "tag_visible" not in raw
 
 
@@ -478,7 +476,7 @@ def test_encode_registration_status_scale_fields() -> None:
             ts=1.0,
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.APRIL_TAG,
-                phase=RegistrationPhase.SUCCEEDED,
+                state=RegistrationState.SUCCEEDED,
                 message="Registration successful",
                 scale_confidence=0.15,
                 scale_locked=False,
@@ -493,14 +491,13 @@ def test_encode_camera_frame_ack() -> None:
     raw = json.loads(
         encode_camera_frame_ack(
             seq=9,
-            obs_added=True,
-            refinement_complete=True,
+            capturing_budgeted_complete=True,
         )
     )
     assert raw["type"] == "camera_frame_ack"
     assert raw["seq"] == 9
-    assert raw["obs_added"] is True
-    assert raw["refinement_complete"] is True
+    assert raw["capturing_budgeted_complete"] is True
+    assert "obs_added" not in raw
     assert "tag_detected" not in raw
     assert "tag_ids" not in raw
     assert "quality" not in raw
@@ -509,16 +506,16 @@ def test_encode_camera_frame_ack() -> None:
 def test_encode_capture_policy() -> None:
     raw = json.loads(
         encode_capture_policy(
-            max_stream_distance_m=2.5,
-            min_stream_distance_m=0.35,
+            max_capture_distance_m=2.5,
+            min_capture_distance_m=0.35,
             max_capture_speed_mps=0.45,
             static_speed_mps=0.05,
             min_observations=3,
         )
     )
     assert raw["type"] == "capture_policy"
-    assert raw["max_stream_distance_m"] == pytest.approx(2.5)
-    assert raw["min_stream_distance_m"] == pytest.approx(0.35)
+    assert raw["max_capture_distance_m"] == pytest.approx(2.5)
+    assert raw["min_capture_distance_m"] == pytest.approx(0.35)
     assert raw["max_capture_speed_mps"] == pytest.approx(0.45)
     assert raw["static_speed_mps"] == pytest.approx(0.05)
     assert raw["min_observations"] == 3
@@ -571,14 +568,14 @@ def test_encode_runtime_snapshot() -> None:
         encode_runtime_snapshot(
             robot_id="unitree_go2",
             bridge=bridge,
-            nav={"phase": "navigating"},
+            nav={"state": "navigating"},
             path={"waypoints": [[1.0, 2.0, 3.0]]},
             ts=5.0,
         )
     )
     assert raw["type"] == "runtime_snapshot"
     assert raw["robot_id"] == "unitree_go2"
-    assert raw["nav"]["phase"] == "navigating"
+    assert raw["nav"]["state"] == "navigating"
     assert raw["path"]["waypoints"] == [[1.0, 2.0, 3.0]]
     assert "streams_active" not in raw["bridge"]
 
@@ -637,38 +634,23 @@ def test_encode_path_and_nav_status() -> None:
     assert "robot_id" not in path
     assert "kind" not in path
 
-    status = json.loads(encode_nav_status(ts=3.0, phase="navigating"))
+    status = json.loads(encode_nav_status(ts=3.0, state="navigating"))
     assert status["type"] == "nav_status"
-    assert status["phase"] == "navigating"
-    assert "state" not in status
+    assert status["state"] == "navigating"
+    assert "phase" not in status
 
-    recovering = json.loads(encode_nav_status(ts=3.5, phase="recovering"))
-    assert recovering["phase"] == "recovering"
+    retryable = json.loads(
+        encode_nav_status(ts=3.5, state="navIntent", retryable=True, stall_reason="no_path")
+    )
+    assert retryable["state"] == "navIntent"
+    assert retryable["retryable"] is True
 
-    failed = json.loads(encode_nav_status(ts=4.0, phase="failed", error_code=505))
-    assert failed["phase"] == "failed"
+    failed = json.loads(
+        encode_nav_status(ts=4.0, state="resolved", outcome="failed", error_code=505)
+    )
+    assert failed["state"] == "resolved"
+    assert failed["outcome"] == "failed"
     assert failed["error_code"] == 505
-
-
-def test_nav_phase_payload_mapping() -> None:
-    assert nav_phase_payload(
-        goal_reached=False,
-        goal_failed=False,
-        nav_state="navigating",
-        nav_goal_pending=True,
-    ) == {"phase": "navigating"}
-    assert nav_phase_payload(
-        goal_reached=True,
-        goal_failed=False,
-        nav_state="idle",
-        nav_goal_pending=False,
-    ) == {"phase": "succeeded"}
-    assert nav_phase_payload(
-        goal_reached=False,
-        goal_failed=False,
-        nav_state="recovering",
-        nav_goal_pending=False,
-    ) == {"phase": "recovering"}
 
 
 def test_encode_pose() -> None:

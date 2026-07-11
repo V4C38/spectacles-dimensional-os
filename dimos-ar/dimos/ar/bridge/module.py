@@ -216,7 +216,6 @@ class ARBridge(Module):  # type: ignore[misc]
                     self.stop_movement.transport is not None
                     or self.cancel_goal_signal.transport is not None
                 ),
-                "registration_april_tag": len(self._profile.tag_mounts()) > 0,
             },
         )
         self._connect_handshake = handshake
@@ -478,7 +477,7 @@ class ARBridge(Module):  # type: ignore[misc]
             encode_runtime_snapshot(
                 robot_id=self._robot_id,
                 bridge=self._status.merged_bridge_snapshot(),
-                nav=self._nav.nav_phase_dict(),
+                nav=self._nav.nav_wire_dict(),
                 path=path,
             ),
         )

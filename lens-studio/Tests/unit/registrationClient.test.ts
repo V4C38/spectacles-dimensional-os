@@ -40,30 +40,13 @@ describe("RegistrationClient", () => {
     setMockTime(100);
   });
 
-  it("emits onAprilTagCaptureStart when april_tag session starts", () => {
+  it("starts april_tag session when connected", () => {
     const { client, transport } = makeRegistrationClient();
-    let captureStart = 0;
-    client.onAprilTagCaptureStart.add(() => {
-      captureStart += 1;
-    });
 
     client.start("april_tag");
 
     expect(transport.send).toHaveBeenCalledTimes(2);
-    expect(captureStart).toBe(1);
     expect(client.hasActiveIntent()).toBe(true);
-  });
-
-  it("does not emit onAprilTagCaptureStart for manual_pose", () => {
-    const { client } = makeRegistrationClient();
-    let captureStart = 0;
-    client.onAprilTagCaptureStart.add(() => {
-      captureStart += 1;
-    });
-
-    client.start("manual_pose");
-
-    expect(captureStart).toBe(0);
   });
 
   it("start sends bridge stop before start when connected", () => {
@@ -91,25 +74,17 @@ describe("RegistrationClient", () => {
     expect(client.hasActiveIntent()).toBe(true);
   });
 
-  it("emits onAprilTagCaptureEnd on stop", () => {
+  it("stop clears intent", () => {
     const { client } = makeRegistrationClient();
-    let captureEnd = 0;
-    client.onAprilTagCaptureEnd.add(() => {
-      captureEnd += 1;
-    });
 
     client.start("april_tag");
     client.stop();
 
-    expect(captureEnd).toBe(1);
+    expect(client.hasActiveIntent()).toBe(false);
   });
 
-  it("clears intent on failed registration_status and emits capture end", () => {
+  it("clears intent on failed registration_status", () => {
     const { client, inbound } = makeRegistrationClient();
-    let captureEnd = 0;
-    client.onAprilTagCaptureEnd.add(() => {
-      captureEnd += 1;
-    });
     client.start("april_tag");
 
     let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
@@ -121,22 +96,16 @@ describe("RegistrationClient", () => {
     statusHandler({
       type: "registration_status",
       ts: 1,
-      robot_id: "go2",
       mode: "april_tag",
-      phase: "failed",
+      state: "failed",
       message: "Tag lost",
     });
 
     expect(client.hasActiveIntent()).toBe(false);
-    expect(captureEnd).toBe(1);
   });
 
-  it("emits onAprilTagCaptureEnd on succeeded registration_status", () => {
+  it("clears intent on succeeded registration_status", () => {
     const { client, inbound } = makeRegistrationClient();
-    let captureEnd = 0;
-    client.onAprilTagCaptureEnd.add(() => {
-      captureEnd += 1;
-    });
     client.start("april_tag");
 
     let statusHandler: (msg: RegistrationStatusMessage) => void = () => {};
@@ -148,28 +117,12 @@ describe("RegistrationClient", () => {
     statusHandler({
       type: "registration_status",
       ts: 1,
-      robot_id: "go2",
       mode: "april_tag",
-      phase: "succeeded",
+      state: "succeeded",
       message: "Registration successful",
     });
 
-    expect(captureEnd).toBe(1);
-  });
-
-  it("uses registration capabilities for preferred mode", () => {
-    const { client } = makeRegistrationClient();
-    client.initialize({
-      manualRegistrationAlignment: { reset: vi.fn() } as any,
-      hasBridgeConnection: () => true,
-      isCapabilityAvailable: (cap) => cap === "registration_manual_pose",
-      getInteractionMode: () => "hidden",
-      setInteractionMode: vi.fn(),
-      getIsRuntimePhase: () => false,
-      disableNavigationPlacementForRegistration: vi.fn(),
-    });
-
-    expect(client.preferredMode()).toBe("manualOnly");
+    expect(client.hasActiveIntent()).toBe(false);
   });
 
   it("stop with notifyBridge sends stop when no local session", () => {
@@ -202,9 +155,8 @@ describe("RegistrationClient", () => {
     statusHandler({
       type: "registration_status",
       ts: 1,
-      robot_id: "go2",
       mode: "manual_pose",
-      phase: "succeeded",
+      state: "succeeded",
       message: "Manual registration committed",
     });
 
@@ -212,14 +164,6 @@ describe("RegistrationClient", () => {
     client.stop();
 
     expect(transport.send).not.toHaveBeenCalled();
-  });
-
-  it("commit sets awaitingCommit", () => {
-    const { client } = makeRegistrationClient();
-    client.start("manual_pose");
-    client.commit();
-
-    expect(client.awaitingCommit).toBe(true);
   });
 
   it("start clears prior session state", () => {

@@ -13,7 +13,7 @@ from dimos.ar.network.protocol import RegistrationCommandMessage, RegistrationPo
 from dimos.ar.registration.types import (
     RegistrationCandidate,
     RegistrationMode,
-    RegistrationPhase,
+    RegistrationState,
 )
 from dimos.ar.registration.wire import RegistrationStatusPayload, encode_registration_status
 from dimos.ar.tag_tracking.solve import R_ALIGN, build_T_world_odom
@@ -75,7 +75,7 @@ class RegistrationFlowsMixin:
         if start_mode is None:
             logger.warning("registration_command start missing mode")
             self._broadcast_status(
-                phase=RegistrationPhase.FAILED,
+                state=RegistrationState.FAILED,
                 message="Registration start requires mode",
                 ts=msg.ts,
             )
@@ -87,7 +87,7 @@ class RegistrationFlowsMixin:
                 logger.warning("registration_command start april_tag unavailable")
                 self._session.mode = None
                 self._broadcast_status(
-                    phase=RegistrationPhase.FAILED,
+                    state=RegistrationState.FAILED,
                     message="AprilTag registration unavailable on this robot",
                     ts=msg.ts,
                 )
@@ -97,14 +97,14 @@ class RegistrationFlowsMixin:
             self._session.april_tag_started_mono = time.monotonic()
             self._set_tag_tracker_active(True, reason="april_tag_start")
             self._broadcast_status(
-                phase=RegistrationPhase.SCANNING,
+                state=RegistrationState.APRIL_TAG,
                 message="Look at the AprilTag on your robot",
                 ts=msg.ts,
             )
         else:
             self._set_tag_tracker_active(False, reason="manual_mode")
             self._broadcast_status(
-                phase=RegistrationPhase.EDITING,
+                state=RegistrationState.MANUAL_PLACEMENT,
                 message="Place the robot marker, then commit",
                 ts=msg.ts,
             )
@@ -143,7 +143,7 @@ class RegistrationFlowsMixin:
                 self._session.last_manual_odom_missing_log_mono = now
                 logger.warning("Manual registration waiting on robot odometry")
             self._broadcast_status(
-                phase=RegistrationPhase.EDITING,
+                state=RegistrationState.MANUAL_PLACEMENT,
                 message="Waiting for robot odometry",
                 ts=msg.ts,
             )
@@ -175,7 +175,7 @@ class RegistrationFlowsMixin:
     def _fail_april_tag_registration(self, message: str) -> None:
         self._set_tag_tracker_active(False, reason="registration_failed")
         self._broadcast_status(
-            phase=RegistrationPhase.FAILED,
+            state=RegistrationState.FAILED,
             message=message,
         )
         self._stop_broadcast()
@@ -216,7 +216,7 @@ class RegistrationFlowsMixin:
             approximate=estimate.approximate,
             yaw_observable=estimate.yaw_observable,
             scale_observable=estimate.scale_observable,
-            alignment_confidence=round(estimate.confidence, 4),
+            registration_confidence=round(estimate.confidence, 4),
             n_obs=estimate.observation_count,
         )
         self._finish_registration(candidate, time.time())
@@ -226,12 +226,12 @@ class RegistrationFlowsMixin:
             max_age_s=TAG_REGISTRATION_WINDOW_S,
         )
 
-    def _april_tag_progress_percent(self, phase: RegistrationPhase) -> int | None:
+    def _april_tag_progress_percent(self, state: RegistrationState) -> int | None:
         if self._session.mode != RegistrationMode.APRIL_TAG:
             return None
-        if phase == RegistrationPhase.SUCCEEDED:
+        if state == RegistrationState.SUCCEEDED:
             return 100
-        if phase != RegistrationPhase.SCANNING:
+        if state != RegistrationState.APRIL_TAG:
             return None
         if not self._tag_tracker.has_camera_info():
             return 0
@@ -336,9 +336,8 @@ class RegistrationFlowsMixin:
                 position=[round(v, 3) for v in norm_position],
             )
         self._broadcast_status(
-            phase=RegistrationPhase.AWAITING_COMMIT,
+            state=RegistrationState.AWAITING_COMMIT,
             message="Manual robot pose ready — review and commit",
-            tag_visible=True,
             ts=msg.ts,
         )
         return candidate
@@ -368,7 +367,7 @@ class RegistrationFlowsMixin:
         self._stop_broadcast()
         self._clear_session()
         self._broadcast_status(
-            phase=RegistrationPhase.SUCCEEDED,
+            state=RegistrationState.SUCCEEDED,
             message=(
                 "Manual registration committed"
                 if result.mode == RegistrationMode.MANUAL_POSE
@@ -403,7 +402,7 @@ class RegistrationFlowsMixin:
     def _broadcast_status(
         self,
         *,
-        phase: RegistrationPhase | None = None,
+        state: RegistrationState | None = None,
         message: str = "",
         mode: RegistrationMode | None = None,
         tag_visible: bool | None = None,
@@ -411,7 +410,7 @@ class RegistrationFlowsMixin:
     ) -> None:
         effective_mode = mode or self._session.mode
         prev = self._session.last_status
-        effective_phase = phase or (prev.phase if prev is not None else RegistrationPhase.IDLE)
+        effective_state = state or (prev.state if prev is not None else RegistrationState.IDLE)
         if message:
             effective_message = message
         else:
@@ -421,7 +420,7 @@ class RegistrationFlowsMixin:
             tag_visible = self._tag_tracker.last_tag_detected
 
         progress = (
-            self._april_tag_progress_percent(effective_phase)
+            self._april_tag_progress_percent(effective_state)
             if effective_mode == RegistrationMode.APRIL_TAG
             else None
         )
@@ -434,22 +433,15 @@ class RegistrationFlowsMixin:
                 )
             else:
                 estimate = self._registration_alignment_estimate()
-        refining = (
-            effective_mode == RegistrationMode.APRIL_TAG
-            and self._registry.state.is_committed
-            and self._registry.state.approximate
-            and not self._tag_tracker.active
-        )
 
         payload = RegistrationStatusPayload(
             mode=effective_mode,
-            phase=effective_phase,
+            state=effective_state,
             message=effective_message,
             tag_visible=tag_visible,
             preview_pose=self._preview_pose(),
             progress=progress,
-            alignment_confidence=estimate.confidence if estimate is not None else None,
-            refining=refining if effective_mode == RegistrationMode.APRIL_TAG else None,
+            registration_confidence=estimate.confidence if estimate is not None else None,
             scale_confidence=estimate.scale_confidence if estimate is not None else None,
             scale_locked=(
                 estimate.scale_confidence

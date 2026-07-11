@@ -79,11 +79,11 @@ def test_static_endpoint_completes_one_refinement_episode() -> None:
         observations_added=3,
     )
 
-    assert outcome.refinement_complete is True
+    assert outcome.capturing_budgeted_complete is True
     assert refiner.apply_tracker_update(
         resolved_odom=stopped,
         observations_added=3,
-    ).refinement_complete is False
+    ).capturing_budgeted_complete is False
     aligner.complete_episode.assert_called_once()
 
 

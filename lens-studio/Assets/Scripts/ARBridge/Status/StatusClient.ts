@@ -4,7 +4,6 @@ import {
   CapturePolicyMessage,
   HelloMessage,
   PongMessage,
-  RuntimeSnapshotMessage,
 } from "../Network/Protocol";
 import { InboundProcessor } from "../Network/InboundProcessor";
 import { sendForActiveRobot, WebSocketTransport } from "../Network/WebSocketTransport";
@@ -16,7 +15,6 @@ export class StatusClient {
   public readonly onHello = new Signal<HelloMessage>();
   public readonly onBridgeStatus = new Signal<BridgeStatusMessage>();
   public readonly onCapturePolicy = new Signal<CapturePolicyMessage>();
-  public readonly onRuntimeSnapshot = new Signal<RuntimeSnapshotMessage>();
   public readonly onPong = new Signal<PongMessage>();
 
   private readonly _sendDropLog = { value: -1 };
@@ -35,14 +33,10 @@ export class StatusClient {
     this._bound = true;
     this._inbound.onHello.add((msg) => {
       this.onHello.emit(msg);
-      this.requestStatus();
     });
     this._inbound.onBridgeStatus.add((msg) => this.onBridgeStatus.emit(msg));
     this._inbound.onCapturePolicy.add((msg) => this.onCapturePolicy.emit(msg));
-    this._inbound.onRuntimeSnapshot.add((msg) => this.onRuntimeSnapshot.emit(msg));
     this._inbound.onPong.add((msg) => this.onPong.emit(msg));
-
-    this._session?.setOnSessionReady(() => this.requestStatus());
   }
 
   public requestStatus(): boolean {

@@ -1,23 +1,24 @@
 require("LensStudio:TextInputModule");
 
 import { ARBridgeCoordinator } from "../ARBridgeCoordinator";
-import { BridgeLinkState, bridgeLinkPresentation, isRuntimePhase, NO_ROBOT_CONNECTED_LABEL } from "../AppState";
+import { isRuntimePhase, NO_ROBOT_CONNECTED_LABEL } from "../AppState";
+import {
+  bridgeConnectPresentation,
+} from "../Bridge/BridgePresentation";
 
 import {
-  buildRegistrationDisplay,
-  buildRegistrationDescriptionAuto,
-  buildRegistrationStepTitle,
+  buildRegistrationPresentationForWizard,
+  buildAprilTagDescription,
+  createRegistrationSessionView,
   RegistrationFlow,
   REGISTRATION_DESCRIPTION_MANUAL,
-  createRegistrationViewState,
-  getWizardFooterState,
-  isRegistrationFailed,
-  LAST_WIZARD_STEP,
+  LAST_REGISTRATION_STEP,
   shouldShowBackOnStartStep,
   WIZARD_STEP_DESCRIPTIONS,
   WIZARD_STEP_TITLES,
-  WizardStep,
-  wizardStepName,
+  RegistrationStep,
+  registrationStepName,
+  registrationStepTitle,
   RegistrationStatusMessage,
 } from "./RegistrationFlow";
 import { scaleIn } from "../Utilities/AnimationUtilities";
@@ -39,8 +40,8 @@ export class RegistrationWizard extends BaseScriptComponent {
   @input
   arBridgeCoordinator: ARBridgeCoordinator;
 
-  private _currentStep = WizardStep.Start;
-  private _connectCompleted = false;
+  private _currentStep = RegistrationStep.StartRobot;
+  private _connectStepCompleted = false;
   private _isConnecting = false;
   private _registrationHandlersBound = false;
   private _bridgeHandlersBound = false;
@@ -111,7 +112,7 @@ export class RegistrationWizard extends BaseScriptComponent {
   public startRegistrationWizard(): void {
     this._log("start");
     this._finishPending = false;
-    this._connectCompleted = false;
+    this._connectStepCompleted = false;
     this._isConnecting = false;
     this._lastNavigationTime = -1;
     this._invalidatePending();
@@ -123,7 +124,7 @@ export class RegistrationWizard extends BaseScriptComponent {
       // Defer pose reset and enterRegistration until Complete on Start.
     } else {
       this._registrationFlow?.leave();
-      this._registrationFlow?.setState(createRegistrationViewState());
+      this._registrationFlow?.setSession(createRegistrationSessionView());
       this.arBridgeCoordinator?.enterRegistration();
     }
     const panel = this.getSceneObject();
@@ -131,36 +132,39 @@ export class RegistrationWizard extends BaseScriptComponent {
       panel.enabled = false;
       scaleIn(panel, 0.5, this._authoredLocalScale);
     }
-    this._setStep(WizardStep.Start);
+    this._setStep(RegistrationStep.StartRobot);
   }
 
-  private _setStep(step: WizardStep): void {
+  private _setStep(step: RegistrationStep): void {
     const previousStep = this._currentStep;
-    const clamped = Math.max(WizardStep.Start, Math.min(step, LAST_WIZARD_STEP)) as WizardStep;
+    const clamped = Math.max(
+      RegistrationStep.StartRobot,
+      Math.min(step, LAST_REGISTRATION_STEP),
+    ) as RegistrationStep;
     this._invalidatePending();
     this._currentStep = clamped;
 
     if (previousStep !== clamped) {
-      this._log(`step ${wizardStepName(previousStep)} -> ${wizardStepName(clamped)}`);
+      this._log(`step ${registrationStepName(previousStep)} -> ${registrationStepName(clamped)}`);
     }
 
     this._view?.setStepContent(WIZARD_STEP_TITLES[clamped], WIZARD_STEP_DESCRIPTIONS[clamped]);
     this._view?.applyStepLayout(clamped);
 
-    if (clamped !== WizardStep.Register && !this._shouldDeferRegistrationRestart()) {
+    if (clamped !== RegistrationStep.RegisterRobot && !this._shouldDeferRegistrationRestart()) {
       this.arBridgeCoordinator?.registrationClient.stop({ notifyBridge: true });
       this._registrationFlow?.leave();
       this.arBridgeCoordinator?.registrationPreview.end();
     }
 
     switch (clamped) {
-      case WizardStep.Start:
+      case RegistrationStep.StartRobot:
         this._view?.setInputEnabled(false);
         this._view?.setStatus("", COLOR_WHITE);
         this._refreshFooterButtons();
         break;
 
-      case WizardStep.Connect: {
+      case RegistrationStep.ConnectBridge: {
         this._view?.setInputEnabled(true);
         this._resetConnectCandidates();
 
@@ -180,7 +184,7 @@ export class RegistrationWizard extends BaseScriptComponent {
         break;
       }
 
-      case WizardStep.Register:
+      case RegistrationStep.RegisterRobot:
         this._view?.setInputEnabled(false);
         this._registrationFlow?.enter();
         break;
@@ -192,7 +196,7 @@ export class RegistrationWizard extends BaseScriptComponent {
       return;
     }
 
-    if (this._currentStep === WizardStep.Start) {
+    if (this._currentStep === RegistrationStep.StartRobot) {
       this._log("startup step completed");
       if (
         this.arBridgeCoordinator &&
@@ -200,34 +204,34 @@ export class RegistrationWizard extends BaseScriptComponent {
       ) {
         this._commitRegistrationRestartFromRuntime();
       }
-      this._setStep(WizardStep.Connect);
+      this._setStep(RegistrationStep.ConnectBridge);
       return;
     }
 
-    if (this._currentStep === WizardStep.Connect) {
+    if (this._currentStep === RegistrationStep.ConnectBridge) {
       if (!this._isConnected()) {
         this._cancelAutoconnect("connect step skipped", true);
       } else {
         this._log("connect step completed");
       }
-      this._setStep(WizardStep.Register);
+      this._setStep(RegistrationStep.RegisterRobot);
       return;
     }
 
-    if (this._currentStep !== WizardStep.Register) {
+    if (this._currentStep !== RegistrationStep.RegisterRobot) {
       return;
     }
 
-    const regState = this._registrationFlow?.state ?? createRegistrationViewState();
-    if (regState.phase === "failed") {
-      this._registrationFlow?.redo();
+    const regState = this._registrationFlow?.session ?? createRegistrationSessionView();
+    if (regState.state === "failed") {
+      this._registrationFlow?.retryRegistration();
       return;
     }
-    if (regState.phase === "succeeded") {
+    if (regState.state === "succeeded") {
       this._finishRegistration();
       return;
     }
-    if (this._registrationFlow?.completeStep()) {
+    if (this._registrationFlow?.completeRegistration()) {
       this._finishRegistration();
     }
   }
@@ -236,17 +240,17 @@ export class RegistrationWizard extends BaseScriptComponent {
     if (!this._canNavigate()) {
       return;
     }
-    if (this._currentStep === WizardStep.Start) {
+    if (this._currentStep === RegistrationStep.StartRobot) {
       if (this._openedFromRuntime) {
         this._dismissWizardToRuntime();
       }
       return;
     }
-    if (this._currentStep === WizardStep.Register) {
+    if (this._currentStep === RegistrationStep.RegisterRobot) {
       this.arBridgeCoordinator?.registrationClient.stop({ notifyBridge: true });
       this.arBridgeCoordinator?.registrationPreview.end();
     }
-    this._setStep((this._currentStep - 1) as WizardStep);
+    this._setStep((this._currentStep - 1) as RegistrationStep);
   }
 
   private _canNavigate(): boolean {
@@ -259,7 +263,7 @@ export class RegistrationWizard extends BaseScriptComponent {
   }
 
   private _startAutoconnect(): void {
-    if (this._currentStep !== WizardStep.Connect || !this._view?.inputField) {
+    if (this._currentStep !== RegistrationStep.ConnectBridge || !this._view?.inputField) {
       return;
     }
     if (this._isConnecting) {
@@ -289,7 +293,7 @@ export class RegistrationWizard extends BaseScriptComponent {
   private _onRetryFired(): void {
     if (
       this._retryOpId !== this._autoconnectOpId ||
-      this._currentStep !== WizardStep.Connect
+      this._currentStep !== RegistrationStep.ConnectBridge
     ) {
       return;
     }
@@ -301,12 +305,12 @@ export class RegistrationWizard extends BaseScriptComponent {
   }
 
   private _handleConnectionResult(opId: number, ip: string, ok: boolean): void {
-    if (opId !== this._autoconnectOpId || this._currentStep !== WizardStep.Connect) {
+    if (opId !== this._autoconnectOpId || this._currentStep !== RegistrationStep.ConnectBridge) {
       return;
     }
     if (ok) {
       this.arBridgeCoordinator?.saveIp(ip);
-      this._connectCompleted = true;
+      this._connectStepCompleted = true;
       this._isConnecting = false;
       this._connectFailStreak = 0;
       this._connectRetryBackoffS = BRIDGE_RETRY_BASE_S;
@@ -345,7 +349,7 @@ export class RegistrationWizard extends BaseScriptComponent {
   }
 
   private _isConnected(): boolean {
-    return this.arBridgeCoordinator?.hasBridgeConnection() ?? false;
+    return this.arBridgeCoordinator?.isBridgeSessionReady() ?? false;
   }
 
   private _bindRegistrationHandlers(): void {
@@ -364,13 +368,13 @@ export class RegistrationWizard extends BaseScriptComponent {
     }
     this._bridgeHandlersBound = true;
     this.arBridgeCoordinator.onBridgeReady.add(() => {
-      if (this._currentStep === WizardStep.Connect) {
-        this._connectCompleted = true;
+      if (this._currentStep === RegistrationStep.ConnectBridge) {
+        this._connectStepCompleted = true;
         this._isConnecting = false;
         this._showBridgeConnectionStatus();
         this._refreshFooterButtons();
       }
-      if (this._currentStep === WizardStep.Register) {
+      if (this._currentStep === RegistrationStep.RegisterRobot) {
         this._refreshRegistrationDescription();
         if (this.arBridgeCoordinator!.registrationClient.ensureSession()) {
           this._renderRegistrationState();
@@ -381,22 +385,19 @@ export class RegistrationWizard extends BaseScriptComponent {
       if (!connected) {
         this._isConnecting = false;
       }
-      if (this._currentStep === WizardStep.Connect) {
+      if (this._currentStep === RegistrationStep.ConnectBridge) {
         this._showBridgeConnectionStatus();
         this._refreshFooterButtons();
       }
-      if (this._currentStep === WizardStep.Register) {
+      if (this._currentStep === RegistrationStep.RegisterRobot) {
         this._registrationFlow?.handleBridgeConnectionChanged(connected);
         this._refreshRegistrationDescription();
         this._renderRegistrationState();
       }
     });
     this.arBridgeCoordinator.onBridgeStatusChanged.add((msg) => {
-      if (this._currentStep === WizardStep.Connect) {
+      if (this._currentStep === RegistrationStep.ConnectBridge) {
         this._showBridgeConnectionStatus();
-      }
-      if (this._currentStep === WizardStep.Register) {
-        this._registrationFlow?.handleBridgeStatus(msg);
       }
     });
     this._bindClockSyncHandler();
@@ -408,120 +409,87 @@ export class RegistrationWizard extends BaseScriptComponent {
     }
     this._clockSyncHandlerBound = true;
     this.arBridgeCoordinator.onBridgeClockSyncStateChanged.add(() => {
-      if (this._currentStep === WizardStep.Connect) {
+      if (this._currentStep === RegistrationStep.ConnectBridge) {
         this._showBridgeConnectionStatus();
       }
     });
   }
 
-  private _bridgeStatusForConnect(
-    linkState: BridgeLinkState,
-    isConnecting: boolean,
-  ): { text: string; color: vec4 } {
-    if (isConnecting && !this.arBridgeCoordinator?.isBridgeSocketOpen()) {
-      return { text: "Connecting to bridge…", color: COLOR_ERROR };
-    }
-    if (
-      isConnecting &&
-      (this.arBridgeCoordinator?.isBridgeSocketOpen() ?? false) &&
-      !this._isConnected()
-    ) {
-      return { text: "Waiting for handshake…", color: COLOR_ERROR };
-    }
-    if (isConnecting && linkState === "disconnected") {
-      return { text: "Connecting...", color: COLOR_ERROR };
-    }
-    return bridgeLinkPresentation(linkState);
-  }
-
-  private _bridgeConnectDetailStatus(
-    linkState: BridgeLinkState,
-    clockSyncState: "idle" | "pending" | "ready" | "failed",
-  ): string | null {
-    if (linkState === "disconnected" || linkState === "connectedNoRobot") {
-      return null;
-    }
-    if (clockSyncState === "pending") {
-      return "Syncing clock…";
-    }
-    if (clockSyncState === "failed") {
-      return "Clock sync failed — reconnect or continue without registration frames";
-    }
-    return null;
-  }
-
   private _showBridgeConnectionStatus(): void {
-    const linkState = this.arBridgeCoordinator?.bridgeLinkState ?? "disconnected";
-    const presentation = this._bridgeStatusForConnect(linkState, this._isConnecting);
-    const detail = this._bridgeConnectDetailStatus(
+    const coordinator = this.arBridgeCoordinator;
+    const linkState = coordinator?.bridgeLinkState ?? "disconnected";
+    const connectPresentation = bridgeConnectPresentation({
       linkState,
-      this.arBridgeCoordinator?.bridgeClockSyncState ?? "idle",
-    );
-    const statusText = detail
-      ? `${presentation.text}\n${detail}`.trim()
-      : presentation.text;
-    this._view?.setStatus(statusText, presentation.color);
-    if (this.arBridgeCoordinator?.hasBridgeConnection()) {
-      this.arBridgeCoordinator.requestBridgeStatus();
+      isConnecting: this._isConnecting,
+      socketOpen: coordinator?.isBridgeSocketOpen() ?? false,
+      handshakeReady: this._isConnected(),
+      clockSync: coordinator?.bridgeClockSyncState ?? "idle",
+      displayName:
+        coordinator?.appState.robotRuntime.displayName ?? NO_ROBOT_CONNECTED_LABEL,
+    });
+    const statusText = connectPresentation.detail
+      ? `${connectPresentation.primary.text}\n${connectPresentation.detail}`.trim()
+      : connectPresentation.primary.text;
+    this._view?.setStatus(statusText, connectPresentation.primary.color);
+    if (coordinator?.isBridgeSessionReady()) {
+      coordinator.requestBridgeStatus();
     }
   }
 
   private _renderRegistrationState(): void {
-    if (this._currentStep !== WizardStep.Register) {
+    if (this._currentStep !== RegistrationStep.RegisterRobot) {
       return;
     }
-    const display = buildRegistrationDisplay(
-      this._registrationFlow?.state ?? createRegistrationViewState(),
-      this.arBridgeCoordinator?.hasBridgeConnection() ?? false,
-      this._registrationFlow?.commitInFlight ?? false,
+    const session = this._registrationFlow?.session ?? createRegistrationSessionView();
+    const presentation = buildRegistrationPresentationForWizard(
+      session,
+      this._currentStep,
+      this._isConnected(),
+      shouldShowBackOnStartStep(this._openedFromRuntime),
     );
-    const detailText = display.detailText;
-    if (display.statusText || detailText) {
+    const detailText = presentation.panelDetailText;
+    if (presentation.panelStatusText || detailText) {
       const statusText = detailText
-        ? `${display.statusText}\n${detailText}`.trim()
-        : display.statusText;
-      this._view?.setStatus(statusText, display.statusColor);
+        ? `${presentation.panelStatusText}\n${detailText}`.trim()
+        : presentation.panelStatusText;
+      this._view?.setStatus(statusText, presentation.panelStatusColor);
     } else {
       this._view?.setStatus("", COLOR_WHITE);
     }
   }
 
   private _refreshFooterButtons(): void {
-    const footerState = getWizardFooterState(
+    const presentation = buildRegistrationPresentationForWizard(
+      this._registrationFlow?.session ?? createRegistrationSessionView(),
       this._currentStep,
       this._isConnected(),
-      this._registrationFlow?.state ?? createRegistrationViewState(),
-      this._registrationFlow?.commitInFlight ?? false,
       shouldShowBackOnStartStep(this._openedFromRuntime),
     );
-    if (this._currentStep === WizardStep.Register && this._registrationFlow?.isManualOnly()) {
-      footerState.showManual = false;
-    }
-    this._view?.applyFooterState(this._currentStep, footerState);
+    this._view?.applyFooterState(this._currentStep, presentation);
   }
 
   private _refreshRegistrationDescription(): void {
-    const mode = this._registrationFlow?.state.mode ?? "auto";
-    const title = buildRegistrationStepTitle(mode);
-    if (mode === "manual") {
+    const mode = this._registrationFlow?.session.mode ?? "april_tag";
+    const title = registrationStepTitle(mode);
+    if (mode === "manual_pose") {
       this._view?.setStepContent(title, REGISTRATION_DESCRIPTION_MANUAL);
       return;
     }
-    if (!this.arBridgeCoordinator?.hasBridgeConnection()) {
+    if (!this.arBridgeCoordinator?.isBridgeSessionReady()) {
       this._view?.setStepContent(title, NO_ROBOT_CONNECTED_LABEL, COLOR_WARN);
       return;
     }
     const displayName =
       this.arBridgeCoordinator.appState.robotRuntime.displayName ?? NO_ROBOT_CONNECTED_LABEL;
-    this._view?.setStepContent(title, buildRegistrationDescriptionAuto(displayName));
+    this._view?.setStepContent(title, buildAprilTagDescription(displayName));
   }
 
   private _toggleManualRegistration(): void {
-    if (this._currentStep !== WizardStep.Register) {
+    if (this._currentStep !== RegistrationStep.RegisterRobot) {
       return;
     }
     this.arBridgeCoordinator?.registrationPreview.end();
-    this._registrationFlow?.toggleMode();
+    this._registrationFlow?.toggleRegistrationMode();
   }
 
   private _beginManualRegistrationPlacementFromWizard(): boolean {
@@ -540,13 +508,13 @@ export class RegistrationWizard extends BaseScriptComponent {
   }
 
   private _onRegistrationStatus(msg: RegistrationStatusMessage): void {
-    if (this._currentStep !== WizardStep.Register) {
+    if (this._currentStep !== RegistrationStep.RegisterRobot) {
       return;
     }
     this._registrationFlow?.handleRegistrationStatus(msg);
-    if (msg.phase === "succeeded") {
+    if (msg.state === "succeeded") {
       this._log("registration succeeded");
-    } else if (msg.phase === "failed") {
+    } else if (msg.state === "failed") {
       this._log(`registration failed: ${msg.message || "unknown"}`);
     }
   }
@@ -566,7 +534,7 @@ export class RegistrationWizard extends BaseScriptComponent {
 
   private _commitRegistrationRestartFromRuntime(): void {
     this._registrationFlow?.leave();
-    this._registrationFlow?.setState(createRegistrationViewState());
+    this._registrationFlow?.setSession(createRegistrationSessionView());
     this.arBridgeCoordinator?.enterRegistration({ preserveBridge: true });
   }
 
@@ -574,7 +542,7 @@ export class RegistrationWizard extends BaseScriptComponent {
     this._finishPending = false;
     this._openedFromRuntime = false;
     this._log(
-      `finish connect=${this._connectCompleted ? "done" : "skipped"} registration=${
+      `finish connect=${this._connectStepCompleted ? "done" : "skipped"} registration=${
         this._registrationFlow?.isComplete() ? "done" : "skipped"
       }`,
     );

@@ -13,7 +13,8 @@ import {
   CapturePolicyMessage,
   PoseMessage,
   RuntimeSnapshotMessage,
-  bridgeStatusFromSnapshot,
+  projectBridgeSession,
+  bridgeSnapshotToStatusMessage,
   isNonCriticalInboundMessageType,
   parseInboundMessage,
   parseLidarBinary,
@@ -46,7 +47,6 @@ export class InboundProcessor {
   public readonly onBridgeStatus = new Signal<BridgeStatusMessage>();
   public readonly onPath = new Signal<PathMessage>();
   public readonly onNavStatus = new Signal<NavStatusMessage>();
-  public readonly onRuntimeSnapshot = new Signal<RuntimeSnapshotMessage>();
   public readonly onPong = new Signal<PongMessage>();
   public readonly onProtocolError = new Signal<ProtocolParseError>();
 
@@ -228,16 +228,25 @@ export class InboundProcessor {
   }
 
   private _emitRuntimeSnapshot(snapshot: RuntimeSnapshotMessage): void {
-    const bridgeStatus = bridgeStatusFromSnapshot(snapshot);
-    this.lastBridgeStatus = bridgeStatus;
-    this._logDiagnosticRx(bridgeStatus);
-    this.onBridgeStatus.emit(bridgeStatus);
+    const bridgeSnapshot = projectBridgeSession(
+      this.helloReceived,
+      snapshot.bridge,
+      snapshot.ts,
+    );
+    this.lastBridgeStatus = bridgeSnapshotToStatusMessage(bridgeSnapshot);
+    if (this.lastBridgeStatus) {
+      this._logDiagnosticRx(this.lastBridgeStatus);
+      this.onBridgeStatus.emit(this.lastBridgeStatus);
+    }
 
     const navStatus: NavStatusMessage = {
       type: "nav_status",
       ts: snapshot.ts,
-      phase: snapshot.nav.phase,
+      state: snapshot.nav.state,
     };
+    if (snapshot.nav.outcome === "succeeded" || snapshot.nav.outcome === "failed") {
+      navStatus.outcome = snapshot.nav.outcome;
+    }
     if (typeof snapshot.nav.error_code === "number") {
       navStatus.error_code = snapshot.nav.error_code;
     }
@@ -258,8 +267,6 @@ export class InboundProcessor {
       };
       this.onPath.emit(pathMsg);
     }
-
-    this.onRuntimeSnapshot.emit(snapshot);
   }
 
   private async _pumpBinaryFrames(): Promise<void> {
@@ -381,21 +388,21 @@ export class InboundProcessor {
       case "camera_frame_ack":
         break;
       case "bridge_status": {
-        const key = `${msg.world_frame_committed}|${msg.robot_connected}|${msg.world_frame_method ?? "-"}`;
+        const key = `${msg.world_frame_committed}|${msg.robot_connected}|${msg.reconnecting}|${msg.world_frame_method ?? "-"}`;
         if (key !== this._lastBridgeStatusKey) {
           this._lastBridgeStatusKey = key;
           print(
-            `InboundProcessor: RX bridge_status world_frame_committed=${msg.world_frame_committed} robot_connected=${msg.robot_connected}`,
+            `InboundProcessor: RX bridge_status world_frame_committed=${msg.world_frame_committed} robot_connected=${msg.robot_connected} reconnecting=${msg.reconnecting}`,
           );
         }
         break;
       }
       case "nav_status": {
-        const key = `${msg.phase}|${msg.error_code ?? "-"}|${msg.retryable ?? "-"}|${msg.stall_reason ?? "-"}`;
+        const key = `${msg.state}|${msg.outcome ?? "-"}|${msg.error_code ?? "-"}|${msg.retryable ?? "-"}|${msg.stall_reason ?? "-"}`;
         if (key !== this._lastNavStatusKey) {
           this._lastNavStatusKey = key;
           print(
-            `InboundProcessor: RX nav_status phase=${msg.phase} error_code=${msg.error_code ?? "-"} retryable=${msg.retryable ?? "-"} stall_reason=${msg.stall_reason ?? "-"}`,
+            `InboundProcessor: RX nav_status state=${msg.state} outcome=${msg.outcome ?? "-"} error_code=${msg.error_code ?? "-"} retryable=${msg.retryable ?? "-"} stall_reason=${msg.stall_reason ?? "-"}`,
           );
         }
         break;

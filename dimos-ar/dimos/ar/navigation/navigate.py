@@ -17,6 +17,7 @@ from dimos.ar.network.data_plane import (
 )
 from dimos.ar.network.protocol import (
     NavGoalMessage,
+    NavTerminalOutcome,
     encode_nav_status,
 )
 from dimos.ar.tag_tracking.solve import orientation_yaw_deg
@@ -44,8 +45,7 @@ NAV_GOAL_REDISPATCH_MIN_DELTA_M: float = 0.15
 NAV_ARRIVAL_SHORTFALL_WARN_M: float = 0.25
 NAV_ERROR_ROBOT_OFFLINE: int = 503
 StallReason = str
-SessionPhase = Literal["pending", "navigating", "recovering"]
-LastOutcome = Literal["succeeded", "failed"]
+SessionPhase = Literal["intent", "navigating"]
 
 
 @dataclass
@@ -81,9 +81,9 @@ class NavigateGoalHandler:
         self._robot_connected = robot_connected
 
         self._session: NavSession | None = None
-        self._last_outcome: LastOutcome | None = None
+        self._terminalOutcome: NavTerminalOutcome | None = None
         self._nav_error_code: int | None = None
-        self._latched_recovering: bool = False
+        self._stallLatched: bool = False
         self._nav_watchdog_lock = threading.Lock()
         self._nav_watchdog_stop = threading.Event()
         self._nav_watchdog_thread: threading.Thread | None = None
@@ -119,21 +119,22 @@ class NavigateGoalHandler:
     # Public accessors
     # ------------------------------------------------------------------
 
-    def nav_phase_dict(self) -> dict[str, object]:
-        if self._last_outcome is not None:
-            payload: dict[str, object] = {"phase": self._last_outcome}
+    def nav_wire_dict(self) -> dict[str, object]:
+        if self._terminalOutcome is not None:
+            payload: dict[str, object] = {
+                "state": "resolved",
+                "outcome": self._terminalOutcome,
+            }
             if self._nav_error_code is not None:
                 payload["error_code"] = self._nav_error_code
             return payload
-        if self._latched_recovering:
-            return {"phase": "recovering"}
+        if self._stallLatched:
+            return {"state": "navIntent"}
         if self._session is None:
-            return {"phase": "idle"}
-        if self._session.phase == "recovering":
-            return {"phase": "recovering"}
+            return {"state": "idle"}
         if self._session.phase == "navigating":
-            return {"phase": "navigating"}
-        return {"phase": "idle"}
+            return {"state": "navigating"}
+        return {"state": "navIntent"}
 
     def nav_status_payload(
         self,
@@ -142,11 +143,24 @@ class NavigateGoalHandler:
         retryable: bool | None = None,
         stall_reason: StallReason | None = None,
     ) -> str:
-        phase_payload = self.nav_phase_dict()
+        wire = self.nav_wire_dict()
+        state = wire["state"]
+        outcome = wire.get("outcome")
+        resolved_outcome = (
+            outcome
+            if state == "resolved" and isinstance(outcome, str)
+            else None
+        )
+        error_code = (
+            self._nav_error_code
+            if state == "resolved" and resolved_outcome == "failed"
+            else None
+        )
         return encode_nav_status(
             ts=ts,
-            phase=phase_payload["phase"],  # type: ignore[arg-type]
-            error_code=self._nav_error_code,
+            state=state,  # type: ignore[arg-type]
+            outcome=resolved_outcome,  # type: ignore[arg-type]
+            error_code=error_code,
             retryable=retryable,
             stall_reason=stall_reason,
         )
@@ -177,7 +191,7 @@ class NavigateGoalHandler:
             return
         if self._robot_connected is not None and not self._robot_connected():
             logger.error("AR navigation goal rejected — robot not connected")
-            self._last_outcome = "failed"
+            self._terminalOutcome = "failed"
             self._nav_error_code = NAV_ERROR_ROBOT_OFFLINE
             self._broadcast_empty_path(ts=ts)
             self.broadcast_nav_status(ts=ts)
@@ -194,11 +208,11 @@ class NavigateGoalHandler:
         was_navigating = (
             self._session is not None
             and self._session.phase == "navigating"
-            and self._last_outcome is None
+            and self._terminalOutcome is None
         )
-        self._last_outcome = None
+        self._terminalOutcome = None
         self._nav_error_code = None
-        self._latched_recovering = False
+        self._stallLatched = False
         if was_navigating:
             assert self._session is not None
             self._session = NavSession(
@@ -218,7 +232,7 @@ class NavigateGoalHandler:
                 dispatched_mono=None,
                 path_received=False,
                 last_path_mono=None,
-                phase="pending",
+                phase="intent",
                 odom_position=odom_goal.position,
                 odom_orientation=odom_goal.orientation,
             )
@@ -253,7 +267,7 @@ class NavigateGoalHandler:
 
     def on_cancel_nav_goal(self, ts: float | None = None) -> None:
         logger.info("AR navigation goal cancelled")
-        self._last_outcome = None
+        self._terminalOutcome = None
         self._nav_error_code = None
         self._clear_session()
         self._broadcast_empty_path(ts=ts)
@@ -262,7 +276,7 @@ class NavigateGoalHandler:
 
     def on_emergency_stop(self, ts: float | None = None) -> None:
         logger.info("AR emergency_stop handled nav_reset=true")
-        self._last_outcome = None
+        self._terminalOutcome = None
         self._nav_error_code = None
         self._clear_session()
         self._broadcast_empty_path(ts=ts)
@@ -271,7 +285,7 @@ class NavigateGoalHandler:
 
     def on_preempted(self, ts: float | None = None) -> None:
         """Joystick preemption: reset tracking without marking goal failed."""
-        self._last_outcome = None
+        self._terminalOutcome = None
         self._nav_error_code = None
         self._clear_session()
         self._broadcast_empty_path(ts=ts)
@@ -282,7 +296,7 @@ class NavigateGoalHandler:
             session = self._session
             if (
                 session is None
-                or self._last_outcome is not None
+                or self._terminalOutcome is not None
                 or session.phase != "navigating"
             ):
                 return
@@ -337,7 +351,7 @@ class NavigateGoalHandler:
         if (
             waypoints
             and self._session is not None
-            and self._last_outcome is None
+            and self._terminalOutcome is None
             and not self._session.path_received
         ):
             self._promote_to_navigating(ts=msg.ts, path_waypoints=len(waypoints))
@@ -345,7 +359,7 @@ class NavigateGoalHandler:
             self._last_navigating_path_waypoints = waypoints
             if self._session is not None:
                 self._session.last_path_mono = time.monotonic()
-        elif self._session is None or self._session.phase == "pending":
+        elif self._session is None or self._session.phase == "intent":
             self._last_navigating_path_waypoints = None
         self._sender.send(path_payload)
 
@@ -355,25 +369,25 @@ class NavigateGoalHandler:
             event="AR navigation goal_reached age",
             last_log_attr="_last_goal_reached_age_log_mono",
         )
-        was_pending = self._session is not None and self._last_outcome is None
+        had_session = self._session is not None and self._terminalOutcome is None
         reached = bool(msg.data)
         session_odom_position: tuple[float, float, float] | None = None
         with self._nav_watchdog_lock:
             if self._session is not None:
                 session_odom_position = self._session.odom_position
-        if was_pending and reached:
-            self._last_outcome = "succeeded"
+        if had_session and reached:
+            self._terminalOutcome = "succeeded"
             log_checkpoint(logger, kind="success", event="AR navigation goal reached")
             self._log_arrival_shortfall(session_odom_position)
-        elif was_pending and not reached:
-            self._last_outcome = "failed"
+        elif had_session and not reached:
+            self._terminalOutcome = "failed"
             logger.info("AR navigation goal failed")
         self._nav_error_code = None
         self._clear_session()
-        if was_pending and (reached or not reached):
+        if had_session and (reached or not reached):
             self._broadcast_empty_path()
         self.broadcast_nav_status()
-        if was_pending and not reached:
+        if had_session and not reached:
             self._motion_router.emergency_stop(on_complete=self._on_control_dispatched)
 
     def on_navigation_state(self, msg: str) -> None:
@@ -382,7 +396,7 @@ class NavigateGoalHandler:
         if (
             normalized == "idle"
             and self._session is not None
-            and self._last_outcome is None
+            and self._terminalOutcome is None
             and not self._session.path_received
         ):
             self.handle_goal_stall(stall_reason="planner_idle")
@@ -390,11 +404,11 @@ class NavigateGoalHandler:
         if (
             normalized == "idle"
             and self._session is not None
-            and self._last_outcome is None
+            and self._terminalOutcome is None
             and self._session.path_received
             and self._session.phase == "navigating"
         ):
-            self._session.phase = "recovering"
+            self._stallLatched = True
             self.broadcast_nav_status()
             return
         log_info_on_change(
@@ -406,14 +420,14 @@ class NavigateGoalHandler:
             state=normalized,
         )
         if self._session is not None and normalized == "navigating":
-            self._last_outcome = None
+            self._terminalOutcome = None
             self._nav_error_code = None
             self._session.phase = "navigating"
             if not self._session.path_received:
                 self._session.path_received = True
                 self._session.dispatched_mono = None
-        elif normalized == "recovering" and self._session is not None:
-            self._session.phase = "recovering"
+        elif normalized == "recovering":
+            self._stallLatched = True
         elif normalized == "idle":
             pass
         self.broadcast_nav_status()
@@ -424,17 +438,15 @@ class NavigateGoalHandler:
 
     def handle_goal_stall(self, *, stall_reason: StallReason) -> None:
         with self._nav_watchdog_lock:
-            if self._session is None or self._last_outcome is not None:
+            if self._session is None or self._terminalOutcome is not None:
                 return
         logger.warning(
             "AR navigation goal stalled",
             stall_reason=stall_reason,
         )
-        self._last_outcome = None
+        self._terminalOutcome = None
         self._nav_error_code = None
-        if self._session is not None:
-            self._session.phase = "recovering"
-        self._latched_recovering = True
+        self._stallLatched = True
         self._broadcast_empty_path()
         self._broadcast_stall_nav_status(stall_reason=stall_reason)
         self._clear_session()
@@ -446,120 +458,9 @@ class NavigateGoalHandler:
 
     def reset_on_disconnect(self) -> None:
         self._nav_error_code = None
-        self._last_outcome = None
-        self._latched_recovering = False
+        self._terminalOutcome = None
+        self._stallLatched = False
         self._clear_session()
-
-    # ------------------------------------------------------------------
-    # Backward-compatible test accessors (Phase 0 pins)
-    # ------------------------------------------------------------------
-
-    @property
-    def _nav_goal_pending(self) -> bool:
-        return self._session is not None and self._last_outcome is None
-
-    @_nav_goal_pending.setter
-    def _nav_goal_pending(self, value: bool) -> None:
-        if value:
-            if self._session is None:
-                self._session = NavSession(
-                    position=(0.0, 0.0, 0.0),
-                    orientation=None,
-                    dispatched_mono=None,
-                    path_received=False,
-                    last_path_mono=None,
-                    phase="pending",
-                )
-        elif self._session is not None:
-            self._session = None
-
-    @property
-    def _nav_path_received(self) -> bool:
-        return self._session is not None and self._session.path_received
-
-    @_nav_path_received.setter
-    def _nav_path_received(self, value: bool) -> None:
-        if self._session is not None:
-            self._session.path_received = value
-
-    @property
-    def _goal_reached(self) -> bool:
-        return self._last_outcome == "succeeded"
-
-    @_goal_reached.setter
-    def _goal_reached(self, value: bool) -> None:
-        if value:
-            self._last_outcome = "succeeded"
-        elif self._last_outcome == "succeeded":
-            self._last_outcome = None
-
-    @property
-    def _goal_failed(self) -> bool:
-        return self._last_outcome == "failed"
-
-    @_goal_failed.setter
-    def _goal_failed(self, value: bool) -> None:
-        if value:
-            self._last_outcome = "failed"
-        elif self._last_outcome == "failed":
-            self._last_outcome = None
-
-    @property
-    def _dimos_nav_state(self) -> str:
-        if self._latched_recovering:
-            return "recovering"
-        if self._session is None:
-            return "idle"
-        if self._session.phase == "recovering":
-            return "recovering"
-        if self._session.phase == "navigating":
-            return "navigating"
-        return "idle"
-
-    @_dimos_nav_state.setter
-    def _dimos_nav_state(self, value: str) -> None:
-        if value == "recovering":
-            self._latched_recovering = True
-        elif value != "recovering":
-            self._latched_recovering = False
-        if self._session is None and value != "idle":
-            self._session = NavSession(
-                position=(0.0, 0.0, 0.0),
-                orientation=None,
-                dispatched_mono=None,
-                path_received=False,
-                last_path_mono=None,
-                phase="pending",
-            )
-        if self._session is not None:
-            if value == "navigating":
-                self._session.phase = "navigating"
-            elif value == "recovering":
-                self._session.phase = "recovering"
-            else:
-                self._session.phase = "pending"
-
-    @property
-    def _nav_goal_dispatch_mono(self) -> float | None:
-        if self._session is None:
-            return None
-        return self._session.dispatched_mono
-
-    @_nav_goal_dispatch_mono.setter
-    def _nav_goal_dispatch_mono(self, value: float | None) -> None:
-        if self._session is not None:
-            self._session.dispatched_mono = value
-
-    @property
-    def _last_path_mono(self) -> float | None:
-        if self._session is None:
-            return None
-        return self._session.last_path_mono
-
-    @_last_path_mono.setter
-    def _last_path_mono(self, value: float | None) -> None:
-        if self._session is not None:
-            self._session.last_path_mono = value
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -568,7 +469,7 @@ class NavigateGoalHandler:
     def _watchdog_loop(self) -> None:
         while not self._nav_watchdog_stop.wait(timeout=NAV_WATCHDOG_POLL_INTERVAL_S):
             with self._nav_watchdog_lock:
-                if self._session is None or self._last_outcome is not None:
+                if self._session is None or self._terminalOutcome is not None:
                     continue
                 dispatch_mono = self._session.dispatched_mono
                 if dispatch_mono is None:
@@ -618,7 +519,7 @@ class NavigateGoalHandler:
                 odom_goal_yaw_deg=orientation_yaw_deg(odom_goal.orientation),
             )
             return
-        self._last_outcome = "failed"
+        self._terminalOutcome = "failed"
         self._clear_session()
         error = str(err) if err is not None else "goal publish rejected"
         logger.error("AR navigation goal publish failed", error=error)
@@ -679,7 +580,7 @@ class NavigateGoalHandler:
         path_waypoints: int | None = None,
     ) -> None:
         with self._nav_watchdog_lock:
-            if self._session is None or self._last_outcome is not None:
+            if self._session is None or self._terminalOutcome is not None:
                 return
             self._session.path_received = True
             self._session.dispatched_mono = None

@@ -1,5 +1,6 @@
 import { ARBridgeCoordinator } from "../ARBridgeCoordinator";
-import { bridgeLinkPresentation, AppStateData, LidarDisplayMode, OperatingMode } from "../AppState";
+import { bridgeLinkPresentation } from "../Bridge/BridgePresentation";
+import { AppStateData, LidarDisplayMode, OperatingMode } from "../AppState";
 import { RegistrationWizard } from "../Registration/RegistrationWizard";
 import { scaleIn, scaleOut } from "../Utilities/AnimationUtilities";
 import { findChildRecursive, getFrameComponent, isFrameInitialized } from "./UIKit";
@@ -113,7 +114,10 @@ export class UIManager extends BaseScriptComponent {
     }
 
     if (this.arBridgeCoordinator) {
-      const presentation = bridgeLinkPresentation(this.arBridgeCoordinator.bridgeLinkState);
+      const presentation = bridgeLinkPresentation(
+        this.arBridgeCoordinator.bridgeLinkState,
+        this.arBridgeCoordinator.appState.robotRuntime.displayName,
+      );
       this._setStatus(presentation.text, presentation.color);
     }
     this._mainMenuView?.setLidarModeDisplay(this._lidarMode);
@@ -236,9 +240,12 @@ export class UIManager extends BaseScriptComponent {
       this._setStatus(presentation.text, presentation.color);
       return;
     }
-    const presentation = bridgeLinkPresentation(this.arBridgeCoordinator.bridgeLinkState);
+    const presentation = bridgeLinkPresentation(
+      this.arBridgeCoordinator.bridgeLinkState,
+      this.arBridgeCoordinator.appState.robotRuntime.displayName,
+    );
     this._setStatus(presentation.text, presentation.color);
-    if (this.arBridgeCoordinator.hasBridgeConnection()) {
+    if (this.arBridgeCoordinator.isBridgeSessionReady()) {
       this.arBridgeCoordinator.requestBridgeStatus();
     }
   }
@@ -267,7 +274,10 @@ export class UIManager extends BaseScriptComponent {
       state.robotRuntime.capabilities.emergency_stop?.available ?? true,
       state.robotRuntime.capabilities.emergency_stop?.reason ?? null,
     );
-    const bridgePresentation = bridgeLinkPresentation(state.bridgeLinkState);
+    const bridgePresentation = bridgeLinkPresentation(
+      this.arBridgeCoordinator.bridgeLinkState,
+      state.robotRuntime.displayName,
+    );
     this._setStatus(bridgePresentation.text, bridgePresentation.color);
 
     if (this._isEditorMode) {

@@ -9,11 +9,14 @@
 // ================================================================
 
 import {
+  BridgeLinkState,
   BridgeSnapshot,
   createDefaultBridgeSnapshot,
+  type NavTerminalOutcome,
+  type WireNavigationState,
 } from "../../App/AppState";
 
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -126,10 +129,10 @@ export type WorldFrameSolveMethod =
 
 export type RegistrationMode = "april_tag" | "manual_pose";
 
-export type RegistrationPhase =
+export type RegistrationState =
   | "idle"
-  | "scanning"
-  | "editing"
+  | "april_tag"
+  | "manual_placement"
   | "awaiting_commit"
   | "succeeded"
   | "failed";
@@ -144,32 +147,29 @@ export interface RegistrationStatusMessage {
   type: "registration_status";
   ts: number;
   mode?: RegistrationMode;
-  phase: RegistrationPhase;
+  state: RegistrationState;
   message: string;
   tag_visible?: boolean;
   preview_pose?: RegistrationPreviewPose;
-  /** AprilTag registration progress 0–100; present during `april_tag` scanning/succeeded. */
+  /** AprilTag registration progress 0–100; present during `april_tag` state/succeeded. */
   progress?: number;
-  alignment_confidence?: number;
-  refining?: boolean;
-  scale_confidence?: number;
+  registration_confidence?: number;
   scale_locked?: boolean;
 }
 
-/** camera_frame_ack carries seq and whether the bridge accepted an observation. */
+/** camera_frame_ack clears Lens single-flight capture state. */
 export interface CameraFrameAckMessage {
   type: "camera_frame_ack";
   ts: number;
   seq: number;
-  obs_added: boolean;
-  refinement_complete: boolean;
+  capturing_budgeted_complete: boolean;
 }
 
 export interface CapturePolicyMessage {
   type: "capture_policy";
   ts: number;
-  max_stream_distance_m: number;
-  min_stream_distance_m: number;
+  max_capture_distance_m: number;
+  min_capture_distance_m: number;
   max_capture_speed_mps: number;
   static_speed_mps: number;
   min_observations: number;
@@ -190,6 +190,28 @@ export interface BridgeWorldFrameFields {
   world_frame_approximate: boolean;
 }
 
+function resolveBridgeWorldFrameFields(
+  world_frame_method: RegistrationMode | null | undefined,
+  world_frame_approximate: boolean | undefined,
+  committed: boolean,
+): BridgeWorldFrameFields {
+  const approximate =
+    typeof world_frame_approximate === "boolean" ? world_frame_approximate : false;
+  if (
+    world_frame_method === "april_tag" ||
+    world_frame_method === "manual_pose"
+  ) {
+    return {
+      world_frame_method,
+      world_frame_approximate: approximate,
+    };
+  }
+  if (committed || world_frame_method === null) {
+    return { world_frame_method: null, world_frame_approximate: approximate };
+  }
+  return { world_frame_approximate: approximate };
+}
+
 /** Parse optional world-frame fields from bridge_status / runtime_snapshot.bridge. */
 export function parseBridgeWorldFrameFields(
   data: Record<string, unknown>,
@@ -198,20 +220,23 @@ export function parseBridgeWorldFrameFields(
   const world_frame_approximate =
     typeof data.world_frame_approximate === "boolean"
       ? data.world_frame_approximate
-      : false;
+      : undefined;
+  let world_frame_method: RegistrationMode | null | undefined;
   if (
     data.world_frame_method === "april_tag" ||
     data.world_frame_method === "manual_pose"
   ) {
-    return {
-      world_frame_method: data.world_frame_method,
-      world_frame_approximate,
-    };
+    world_frame_method = data.world_frame_method;
+  } else if (data.world_frame_method === null) {
+    world_frame_method = null;
+  } else {
+    world_frame_method = undefined;
   }
-  if (committed || data.world_frame_method === null) {
-    return { world_frame_method: null, world_frame_approximate };
-  }
-  return { world_frame_approximate };
+  return resolveBridgeWorldFrameFields(
+    world_frame_method,
+    world_frame_approximate,
+    committed,
+  );
 }
 
 export interface PathMessage {
@@ -220,19 +245,13 @@ export interface PathMessage {
   waypoints: [number, number, number][];
 }
 
-export type NavPhase =
-  | "idle"
-  | "navigating"
-  | "recovering"
-  | "succeeded"
-  | "failed";
-
 export type NavStallReason = "no_path" | "planner_idle";
 
 export interface NavStatusMessage {
   type: "nav_status";
   ts: number;
-  phase: NavPhase;
+  state: WireNavigationState;
+  outcome?: NavTerminalOutcome;
   error_code?: number;
   retryable?: boolean;
   stall_reason?: NavStallReason;
@@ -247,7 +266,8 @@ export interface SnapshotBridgeState {
 }
 
 export interface SnapshotNavState {
-  phase: NavPhase;
+  state: WireNavigationState;
+  outcome?: NavTerminalOutcome | null;
   error_code?: number | null;
   retryable?: boolean;
   stall_reason?: NavStallReason | null;
@@ -361,22 +381,23 @@ function requireBoolean(obj: Record<string, unknown>, key: string): boolean {
   return value;
 }
 
-const REGISTRATION_PHASES: RegistrationPhase[] = [
+const REGISTRATION_STATES: RegistrationState[] = [
   "idle",
-  "scanning",
-  "editing",
+  "april_tag",
+  "manual_placement",
   "awaiting_commit",
   "succeeded",
   "failed",
 ];
 
-const NAV_PHASES: NavPhase[] = [
+const WIRE_NAV_STATES: WireNavigationState[] = [
   "idle",
+  "navIntent",
   "navigating",
-  "recovering",
-  "succeeded",
-  "failed",
+  "resolved",
 ];
+
+const NAV_TERMINAL_OUTCOMES: NavTerminalOutcome[] = ["succeeded", "failed"];
 
 function parseNavStallReason(raw: unknown): NavStallReason | undefined {
   if (raw === "no_path" || raw === "planner_idle") {
@@ -472,11 +493,19 @@ function parseSnapshotBridge(raw: unknown): SnapshotBridgeState {
 
 function parseSnapshotNav(raw: unknown): SnapshotNavState {
   const nav = requireObject(raw);
-  const phase = requireString(nav, "phase");
-  if (!NAV_PHASES.includes(phase as NavPhase)) {
-    throw new Error(`Missing or invalid field: phase`);
+  const state = requireString(nav, "state");
+  if (!WIRE_NAV_STATES.includes(state as WireNavigationState)) {
+    throw new Error(`Missing or invalid field: state`);
   }
-  const status: SnapshotNavState = { phase: phase as NavPhase };
+  const status: SnapshotNavState = { state: state as WireNavigationState };
+  if (typeof nav.outcome === "string") {
+    if (!NAV_TERMINAL_OUTCOMES.includes(nav.outcome as NavTerminalOutcome)) {
+      throw new Error(`Missing or invalid field: outcome`);
+    }
+    status.outcome = nav.outcome as NavTerminalOutcome;
+  } else if (nav.outcome === null) {
+    status.outcome = null;
+  }
   if (typeof nav.error_code === "number") {
     status.error_code = nav.error_code;
   } else if (nav.error_code === null) {
@@ -617,9 +646,13 @@ function parseInboundObject(
     }
 
     case "registration_status": {
-      const phase = requireString(data, "phase");
-      if (!REGISTRATION_PHASES.includes(phase as RegistrationPhase)) {
-        print(`Protocol: unknown registration_status.phase "${phase}"; skipping`);
+      if (typeof data.phase === "string") {
+        print(`Protocol: legacy registration_status.phase rejected; use state`);
+        return null;
+      }
+      const state = requireString(data, "state");
+      if (!REGISTRATION_STATES.includes(state as RegistrationState)) {
+        print(`Protocol: unknown registration_status.state "${state}"; skipping`);
         return null;
       }
       const mode = data.mode;
@@ -634,7 +667,7 @@ function parseInboundObject(
       const msg: RegistrationStatusMessage = {
         type: "registration_status",
         ts: requireNumber(data, "ts"),
-        phase: phase as RegistrationPhase,
+        state: state as RegistrationState,
         message: typeof data.message === "string" ? data.message : "",
       };
       if (mode === "april_tag" || mode === "manual_pose") {
@@ -651,19 +684,13 @@ function parseInboundObject(
         msg.progress = Math.max(0, Math.min(100, Math.round(data.progress)));
       }
       if (
-        typeof data.alignment_confidence === "number" &&
-        Number.isFinite(data.alignment_confidence)
+        typeof data.registration_confidence === "number" &&
+        Number.isFinite(data.registration_confidence)
       ) {
-        msg.alignment_confidence = Math.max(0, Math.min(1, data.alignment_confidence));
-      }
-      if (typeof data.refining === "boolean") {
-        msg.refining = data.refining;
-      }
-      if (
-        typeof data.scale_confidence === "number" &&
-        Number.isFinite(data.scale_confidence)
-      ) {
-        msg.scale_confidence = Math.max(0, Math.min(1, data.scale_confidence));
+        msg.registration_confidence = Math.max(
+          0,
+          Math.min(1, data.registration_confidence),
+        );
       }
       if (typeof data.scale_locked === "boolean") {
         msg.scale_locked = data.scale_locked;
@@ -676,8 +703,7 @@ function parseInboundObject(
         type: "camera_frame_ack",
         ts: requireNumber(data, "ts"),
         seq: requireNumber(data, "seq"),
-        obs_added: requireBoolean(data, "obs_added"),
-        refinement_complete: requireBoolean(data, "refinement_complete"),
+        capturing_budgeted_complete: requireBoolean(data, "capturing_budgeted_complete"),
       };
     }
 
@@ -685,8 +711,8 @@ function parseInboundObject(
       return {
         type: "capture_policy",
         ts: requireNumber(data, "ts"),
-        max_stream_distance_m: requireNumber(data, "max_stream_distance_m"),
-        min_stream_distance_m: requireNumber(data, "min_stream_distance_m"),
+        max_capture_distance_m: requireNumber(data, "max_capture_distance_m"),
+        min_capture_distance_m: requireNumber(data, "min_capture_distance_m"),
         max_capture_speed_mps: requireNumber(data, "max_capture_speed_mps"),
         static_speed_mps: requireNumber(data, "static_speed_mps"),
         min_observations: requireNumber(data, "min_observations"),
@@ -791,16 +817,23 @@ function parseInboundObject(
     }
 
     case "nav_status": {
-      const phase = requireString(data, "phase");
-      if (!NAV_PHASES.includes(phase as NavPhase)) {
-        print(`Protocol: unknown nav_status.phase "${phase}"; skipping`);
+      const state = requireString(data, "state");
+      if (!WIRE_NAV_STATES.includes(state as WireNavigationState)) {
+        print(`Protocol: unknown nav_status.state "${state}"; skipping`);
         return null;
       }
       const msg: NavStatusMessage = {
         type: "nav_status",
         ts: requireNumber(data, "ts"),
-        phase: phase as NavPhase,
+        state: state as WireNavigationState,
       };
+      if (typeof data.outcome === "string") {
+        if (!NAV_TERMINAL_OUTCOMES.includes(data.outcome as NavTerminalOutcome)) {
+          print(`Protocol: unknown nav_status.outcome "${data.outcome}"; skipping`);
+          return null;
+        }
+        msg.outcome = data.outcome as NavTerminalOutcome;
+      }
       if (typeof data.error_code === "number") {
         msg.error_code = data.error_code;
       }
@@ -829,27 +862,92 @@ function parseInboundObject(
   }
 }
 
-/** Build a live bridge_status view from a runtime_snapshot for shared handlers. */
-export function bridgeStatusFromSnapshot(
-  snapshot: RuntimeSnapshotMessage,
-): BridgeStatusMessage {
-  const status: BridgeStatusMessage = {
+export type BridgeWireStatus = BridgeStatusMessage | SnapshotBridgeState;
+
+function bridgeWireFieldsFromStatus(
+  status: BridgeWireStatus,
+  ts: number,
+): BridgeSnapshot {
+  const worldFrame = resolveBridgeWorldFrameFields(
+    status.world_frame_method,
+    status.world_frame_approximate,
+    status.world_frame_committed,
+  );
+  return {
+    handshakeReady: true,
+    robotConnected: status.robot_connected,
+    worldFrameCommitted: status.world_frame_committed,
+    worldFrameApproximate: worldFrame.world_frame_approximate,
+    reconnecting: status.reconnecting,
+    worldFrameMethod: worldFrame.world_frame_method ?? null,
+    statusTs: ts,
+  };
+}
+
+/** Project wire bridge fields + session flags into app bridge session state. */
+export function projectBridgeSession(
+  handshakeReady: boolean,
+  status: BridgeWireStatus | null,
+  statusTs: number | null = status && "ts" in status ? status.ts : null,
+): BridgeSnapshot {
+  if (!handshakeReady) {
+    return createDefaultBridgeSnapshot();
+  }
+  if (!status) {
+    return {
+      ...createDefaultBridgeSnapshot(),
+      handshakeReady: true,
+    };
+  }
+  const ts = statusTs ?? ("ts" in status ? status.ts : null);
+  if (ts === null) {
+    return {
+      handshakeReady: true,
+      robotConnected: status.robot_connected,
+      worldFrameCommitted: status.world_frame_committed,
+      worldFrameApproximate: status.world_frame_approximate ?? false,
+      reconnecting: status.reconnecting,
+      worldFrameMethod: status.world_frame_method ?? null,
+      statusTs: null,
+    };
+  }
+  return bridgeWireFieldsFromStatus(status, ts);
+}
+
+export function deriveLinkStateFromSnapshot(
+  snapshot: BridgeSnapshot,
+): BridgeLinkState {
+  if (!snapshot.handshakeReady) {
+    return "disconnected";
+  }
+  if (snapshot.reconnecting || !snapshot.robotConnected) {
+    return "connectedNoRobot";
+  }
+  return "connected";
+}
+
+/** Reconstruct wire-shaped bridge_status for handlers that expect the message type. */
+export function bridgeSnapshotToStatusMessage(
+  snapshot: BridgeSnapshot,
+): BridgeStatusMessage | null {
+  if (!snapshot.handshakeReady || snapshot.statusTs === null) {
+    return null;
+  }
+  const msg: BridgeStatusMessage = {
     type: "bridge_status",
-    ts: snapshot.ts,
-    robot_connected: snapshot.bridge.robot_connected,
-    world_frame_committed: snapshot.bridge.world_frame_committed,
-    reconnecting: snapshot.bridge.reconnecting,
+    ts: snapshot.statusTs,
+    robot_connected: snapshot.robotConnected,
+    world_frame_committed: snapshot.worldFrameCommitted,
+    reconnecting: snapshot.reconnecting,
+    world_frame_approximate: snapshot.worldFrameApproximate,
   };
   if (
-    snapshot.bridge.world_frame_method === "april_tag" ||
-    snapshot.bridge.world_frame_method === "manual_pose"
+    snapshot.worldFrameMethod === "april_tag" ||
+    snapshot.worldFrameMethod === "manual_pose"
   ) {
-    status.world_frame_method = snapshot.bridge.world_frame_method;
+    msg.world_frame_method = snapshot.worldFrameMethod;
   }
-  if (typeof snapshot.bridge.world_frame_approximate === "boolean") {
-    status.world_frame_approximate = snapshot.bridge.world_frame_approximate;
-  }
-  return status;
+  return msg;
 }
 
 // ── Outbound builders ──────────────────────────────────────────
@@ -1030,22 +1128,6 @@ export function buildEmergencyStop(robotId: string): string {
   });
 }
 
-export function buildJoystickCommand(
-  robotId: string,
-  vx: number,
-  vy: number,
-  wz: number,
-): string {
-  return JSON.stringify({
-    type: "joystick_command",
-    ts: getTime(),
-    robot_id: robotId,
-    vx,
-    vy,
-    wz,
-  });
-}
-
 // Binary lidar frame (message_type 0x01 = lidar_f16).
 // Layout: [1B type][4B float32 ts LE][N*6B float16 xyz world-metres LE]
 const LIDAR_F16_TYPE = 0x01;
@@ -1096,37 +1178,19 @@ export function parseLidarBinary(data: Uint8Array): LidarMessage | null {
 export function deriveLinkState(
   connected: boolean,
   status: BridgeStatusMessage | null,
-): "disconnected" | "connectedNoRobot" | "connected" {
+): BridgeLinkState {
   if (!connected) {
     return "disconnected";
   }
-  if (status?.reconnecting || !status?.robot_connected) {
-    return "connectedNoRobot";
-  }
-  return "connected";
+  return deriveLinkStateFromSnapshot(
+    projectBridgeSession(true, status),
+  );
 }
 
-/** Project wire bridge_status into app-facing BridgeSnapshot. */
+/** @deprecated Use projectBridgeSession */
 export function projectBridgeSnapshot(
   handshakeReady: boolean,
   status: BridgeStatusMessage | null,
 ): BridgeSnapshot {
-  if (!handshakeReady) {
-    return createDefaultBridgeSnapshot();
-  }
-  if (!status) {
-    return {
-      ...createDefaultBridgeSnapshot(),
-      handshakeReady: true,
-    };
-  }
-  return {
-    handshakeReady: true,
-    robotConnected: status.robot_connected,
-    worldFrameCommitted: status.world_frame_committed,
-    worldFrameApproximate: status.world_frame_approximate ?? false,
-    reconnecting: status.reconnecting,
-    worldFrameMethod: status.world_frame_method ?? null,
-    statusTs: status.ts,
-  };
+  return projectBridgeSession(handshakeReady, status);
 }

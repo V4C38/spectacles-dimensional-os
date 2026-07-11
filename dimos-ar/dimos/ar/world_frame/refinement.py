@@ -29,13 +29,13 @@ FLOOR_Y_SHIM_PERSIST_S: float = 2.0
 FLOOR_Y_SHIM_MIN_INTERVAL_S: float = 2.0
 
 
-RefinementEpisodeState = Literal["idle", "moving", "awaiting_static_evidence", "complete"]
+CaptureEpisodeState = Literal["idle", "capturing", "capturing_budgeted", "complete"]
 
 
 @dataclass(frozen=True)
-class RefinementOutcome:
-    state: RefinementEpisodeState
-    refinement_complete: bool = False
+class CaptureEpisodeOutcome:
+    state: CaptureEpisodeState
+    capturing_budgeted_complete: bool = False
 
 
 class WorldFrameRefiner:
@@ -66,7 +66,7 @@ class WorldFrameRefiner:
         self._floor_base_world_y: float | None = None
         self._floor_y_exceed_since_mono: float | None = None
         self._last_floor_y_shim_mono: float = 0.0
-        self._episode_state: RefinementEpisodeState = "idle"
+        self._episode_state: CaptureEpisodeState = "idle"
         self._static_observations = 0
 
     @property
@@ -167,43 +167,43 @@ class WorldFrameRefiner:
         *,
         resolved_odom: OdomSample | None = None,
         observations_added: int = 0,
-    ) -> RefinementOutcome:
+    ) -> CaptureEpisodeOutcome:
         if (
             not self._state.is_committed
             or not self._runtime_correction_enabled
             or self._similarity_aligner is None
         ):
-            return RefinementOutcome(state="idle")
+            return CaptureEpisodeOutcome(state="idle")
         speed_mps = self._speed_for_sample(resolved_odom)
         is_moving = speed_mps > self._runtime_profile.runtime_static_speed_mps
         if is_moving:
-            if self._episode_state != "moving":
+            if self._episode_state != "capturing":
                 self._similarity_aligner.begin_episode()
                 self._static_observations = 0
-            self._episode_state = "moving"
+            self._episode_state = "capturing"
             self._similarity_aligner.append_episode_observations()
-            return RefinementOutcome(state=self._episode_state)
+            return CaptureEpisodeOutcome(state=self._episode_state)
         if self._episode_state == "idle":
             # The initial post-registration stop is not a movement cycle.
-            return RefinementOutcome(state="idle")
-        if self._episode_state == "moving":
-            self._episode_state = "awaiting_static_evidence"
+            return CaptureEpisodeOutcome(state="idle")
+        if self._episode_state == "capturing":
+            self._episode_state = "capturing_budgeted"
             self._static_observations = 0
         if self._episode_state == "complete":
-            return RefinementOutcome(state="complete")
+            return CaptureEpisodeOutcome(state="complete")
         if observations_added > 0:
             self._static_observations += observations_added
             self._similarity_aligner.append_episode_observations()
         if self._static_observations < self._similarity_aligner._config.ALIGN_MIN_OBS:
-            return RefinementOutcome(state=self._episode_state)
+            return CaptureEpisodeOutcome(state=self._episode_state)
         estimate = self._similarity_aligner.complete_episode(
             resolved_odom=resolved_odom,
             now_mono=time.monotonic(),
         )
         if estimate is None:
-            return RefinementOutcome(state=self._episode_state)
+            return CaptureEpisodeOutcome(state=self._episode_state)
         self._episode_state = "complete"
-        return RefinementOutcome(state="complete", refinement_complete=True)
+        return CaptureEpisodeOutcome(state="complete", capturing_budgeted_complete=True)
 
     def _speed_for_sample(self, sample: OdomSample | None) -> float:
         if sample is not None and sample.measured_speed_mps is not None:
@@ -317,7 +317,7 @@ class WorldFrameRefiner:
                 if residual_along_camera_ray_m is not None
                 else None
             ),
-            obs_added=result.observations_added,
+            observations_added=result.observations_added,
             total_rejections=total_rej,
             rej_reprojection=result.rejections_reprojection,
             rej_skew=result.rejections_skew,
