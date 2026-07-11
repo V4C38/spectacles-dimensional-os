@@ -176,7 +176,6 @@ export class NavigationController {
       return;
     }
     this._hostBound = true;
-    this._deviceTracking.worldOptions.enableWorldMeshesTracking = true;
     this._uiLogger = deps.appStateStore.uiLogger;
     deps.appStateStore.subscribe((state) => this.applyRuntimeState(state.robotRuntime));
     const placementDeferral = this._script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
@@ -315,6 +314,7 @@ export class NavigationController {
 
     this._updatePathHeightRange();
     this._bridgePath = waypoints;
+    this._robotMarker?.setPathGoal(waypoints?.[waypoints.length - 1] ?? null);
     this._dispatch({ kind: "pathReceived" });
   }
 
@@ -831,6 +831,7 @@ export class NavigationController {
 
   private _clearPathState(): void {
     this._bridgePath = null;
+    this._robotMarker?.setPathGoal(null);
     this._pathRenderer?.clear();
   }
 

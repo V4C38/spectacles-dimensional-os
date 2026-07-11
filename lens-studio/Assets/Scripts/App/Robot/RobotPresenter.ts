@@ -86,10 +86,6 @@ export class RobotPresenter {
       }
     });
 
-    this.telemetry?.onWorldFrameCorrection.add(() => {
-      this.robotMarker?.beginRealignmentSnap();
-    });
-
     this._unsubscribeUILog = this.appState.uiLogger.subscribe((entry) => {
       this._latestUiLogEntry = entry;
       this._applyAppState(this.appState.snapshot);

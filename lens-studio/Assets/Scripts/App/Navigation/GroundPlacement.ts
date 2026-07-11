@@ -266,6 +266,7 @@ const PLACEMENT_ANCHOR_REBASE_DISTANCE_CM = 300;
 const Y_SMOOTHING_RATE = 10;
 const DRAG_Y_SMOOTHING_RATE = 16;
 const DEADZONE_TRANSITION_Y_SMOOTHING_RATE = 9;
+const WORLD_MESH_TRACKING_RELEASE_LATCH_S = 1.0;
 
 export class GroundPlacement {
   public onMarkerButtonPressed: ((position: vec3, rotation: quat) => void) | null = null;
@@ -306,6 +307,9 @@ export class GroundPlacement {
   private _goalSmoothedX = 0;
   private _goalSmoothedZ = 0;
   private _robotGroundDeadzone: RobotGroundDeadzone | null = null;
+  private _worldMeshLatchEvent: DelayedCallbackEvent | null = null;
+  private _worldMeshLatchToken = 0;
+  private _worldMeshDisableToken = 0;
 
   constructor(owner: BaseScriptComponent, deviceTracking: DeviceTracking) {
     this.owner = owner;
@@ -321,6 +325,7 @@ export class GroundPlacement {
       onDragTriggerEnd: () => this._handleDragTriggerEnd(),
       onDragTriggerCanceled: () => {
         this.activeInteractor = null;
+        this._releaseWorldMeshTracking();
         this._emitPreviewTargetChanged(true);
       },
       onConfirmTriggerUp: () => this._handleConfirmTriggerUp(),
@@ -359,6 +364,8 @@ export class GroundPlacement {
     this.activeInteractor = null;
     this._blockReason = "none";
     this._setDragEnabled(false);
+    this._worldMeshLatchToken++;
+    this._deviceTracking.worldOptions.enableWorldMeshesTracking = false;
     if (this.updateEvent) {
       this.owner.removeEvent(this.updateEvent);
       this.updateEvent = null;
@@ -417,6 +424,7 @@ export class GroundPlacement {
     this._hasActivatedPlacement = false;
     this._isDragging = false;
     this.activeInteractor = null;
+    this._releaseWorldMeshTracking();
   }
 
   public isIdleNavigation(): boolean {
@@ -486,12 +494,25 @@ export class GroundPlacement {
       this.onMarkerButtonPressed?.(this._pendingConfirmPosition, this._pendingConfirmRotation);
     });
     this._confirmDeferralEvent = confirmDeferral;
+
+    const worldMeshLatch = this.owner.createEvent(
+      "DelayedCallbackEvent",
+    ) as DelayedCallbackEvent;
+    worldMeshLatch.bind(() => {
+      if (this._worldMeshLatchToken !== this._worldMeshDisableToken) {
+        return;
+      }
+      this._deviceTracking.worldOptions.enableWorldMeshesTracking = false;
+    });
+    this._worldMeshLatchEvent = worldMeshLatch;
   }
 
   private _handleDragTriggerStart(interactor: any): void {
     if (!this.active || !this._dragEnabled) {
       return;
     }
+    this._worldMeshLatchToken++;
+    this._deviceTracking.worldOptions.enableWorldMeshesTracking = true;
     this.activeInteractor = interactor ?? null;
     this.touchStartPosition = this.desiredPosition;
     this._resetHeadingState(this.desiredPosition, this.desiredRotation);
@@ -502,6 +523,7 @@ export class GroundPlacement {
 
   private _handleDragTriggerEnd(): void {
     this.activeInteractor = null;
+    this._releaseWorldMeshTracking();
     this._isDragging = false;
     this._syncDesiredPoseToRenderedPose();
     this._dragProbePosition = new vec3(
@@ -765,7 +787,13 @@ export class GroundPlacement {
     this._marker?.setDragEnabled(enabled);
     if (!enabled) {
       this.activeInteractor = null;
+      this._releaseWorldMeshTracking();
     }
+  }
+
+  private _releaseWorldMeshTracking(): void {
+    this._worldMeshDisableToken = this._worldMeshLatchToken;
+    this._worldMeshLatchEvent?.reset(WORLD_MESH_TRACKING_RELEASE_LATCH_S);
   }
 
   private _horizontalDistance(a: vec3, b: vec3): number {
