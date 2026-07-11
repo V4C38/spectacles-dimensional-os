@@ -35,7 +35,7 @@ const MANUAL_POSE_ROTATION_EPS_RAD = 0.02;
 
 export interface RegistrationClientDeps {
   manualRegistrationPlacement: ManualRegistrationPlacement;
-  hasBridgeConnection: () => boolean;
+  isBridgeSessionReady: () => boolean;
   getInteractionMode: () => RobotInteractionMode;
   setInteractionMode: (mode: RobotInteractionMode) => void;
   getIsRuntimePhase: () => boolean;
@@ -236,7 +236,7 @@ export class RegistrationClient {
     if (this._deps) {
       this._deps.manualRegistrationPlacement.setAnchorPose(pose);
     }
-    if (!this._deps?.hasBridgeConnection()) {
+    if (!this._deps?.isBridgeSessionReady()) {
       return true;
     }
     if (

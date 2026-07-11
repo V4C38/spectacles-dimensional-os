@@ -177,7 +177,7 @@ export class RegistrationFlow {
 
   public enter(): void {
     this._finishRegistrationDispatched = false;
-    if (!this._bridgeRuntime?.hasConnection()) {
+    if (!this._bridgeRuntime?.isBridgeSessionReady()) {
       this._beginManualPlacement();
       return;
     }
@@ -292,7 +292,7 @@ export class RegistrationFlow {
     if (
       this._registrationClient?.hasActiveIntent() &&
       this._registrationClient.isNoResponseTimeout() &&
-      this._bridgeRuntime?.hasConnection()
+      this._bridgeRuntime?.isBridgeSessionReady()
     ) {
       if (this._session.statusDetail !== NO_RESPONSE_STATUS_MSG) {
         this._session = { ...this._session, statusDetail: NO_RESPONSE_STATUS_MSG };
@@ -305,7 +305,7 @@ export class RegistrationFlow {
       this._session.mode !== "manual_pose" ||
       isCommitPending(this._session.state) ||
       isRegistrationComplete(this._session.state) ||
-      !this._bridgeRuntime?.hasConnection()
+      !this._bridgeRuntime?.isBridgeSessionReady()
     ) {
       this._lastManualCandidateSyncTime = -1;
       return;
@@ -323,7 +323,7 @@ export class RegistrationFlow {
   }
 
   private _completeManualStep(): boolean {
-    if (!this._bridgeRuntime?.hasConnection()) {
+    if (!this._bridgeRuntime?.isBridgeSessionReady()) {
       const finalized = this._registrationClient?.commitManualPlacementOffline() ?? false;
       if (!finalized) {
         this._callbacks.log(

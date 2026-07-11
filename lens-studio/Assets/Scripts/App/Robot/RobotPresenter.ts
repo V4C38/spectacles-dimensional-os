@@ -113,7 +113,7 @@ export class RobotPresenter {
     this._lidar?.tickFrame(
       this.isRuntimePhase(),
       this.appState.snapshot.lidarMode,
-      this.hasBridgeConnection(),
+      this.isBridgeSessionReady(),
       LIDAR_STALE_CLEAR_S,
     );
   }
@@ -145,7 +145,7 @@ export class RobotPresenter {
     this._lidar?.apply({
       mode: snapshot.lidarMode,
       active: this.isRuntimePhase(),
-      connected: this.hasBridgeConnection(),
+      connected: this.isBridgeSessionReady(),
       points: this._lidar?.lastPoints ?? null,
       anchor: this._resolveLidarAnchor(),
       runtime: snapshot.robotRuntime,
@@ -180,7 +180,7 @@ export class RobotPresenter {
     return isAppRuntimePhase(this.appState.snapshot);
   }
 
-  private hasBridgeConnection(): boolean {
+  private isBridgeSessionReady(): boolean {
     return this.session?.isConnected() ?? false;
   }
 }

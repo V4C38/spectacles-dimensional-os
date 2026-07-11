@@ -9,6 +9,7 @@
 // ================================================================
 
 import {
+  BridgeLinkState,
   BridgeSnapshot,
   createDefaultBridgeSnapshot,
   type NavTerminalOutcome,
@@ -189,6 +190,28 @@ export interface BridgeWorldFrameFields {
   world_frame_approximate: boolean;
 }
 
+function resolveBridgeWorldFrameFields(
+  world_frame_method: RegistrationMode | null | undefined,
+  world_frame_approximate: boolean | undefined,
+  committed: boolean,
+): BridgeWorldFrameFields {
+  const approximate =
+    typeof world_frame_approximate === "boolean" ? world_frame_approximate : false;
+  if (
+    world_frame_method === "april_tag" ||
+    world_frame_method === "manual_pose"
+  ) {
+    return {
+      world_frame_method,
+      world_frame_approximate: approximate,
+    };
+  }
+  if (committed || world_frame_method === null) {
+    return { world_frame_method: null, world_frame_approximate: approximate };
+  }
+  return { world_frame_approximate: approximate };
+}
+
 /** Parse optional world-frame fields from bridge_status / runtime_snapshot.bridge. */
 export function parseBridgeWorldFrameFields(
   data: Record<string, unknown>,
@@ -197,20 +220,23 @@ export function parseBridgeWorldFrameFields(
   const world_frame_approximate =
     typeof data.world_frame_approximate === "boolean"
       ? data.world_frame_approximate
-      : false;
+      : undefined;
+  let world_frame_method: RegistrationMode | null | undefined;
   if (
     data.world_frame_method === "april_tag" ||
     data.world_frame_method === "manual_pose"
   ) {
-    return {
-      world_frame_method: data.world_frame_method,
-      world_frame_approximate,
-    };
+    world_frame_method = data.world_frame_method;
+  } else if (data.world_frame_method === null) {
+    world_frame_method = null;
+  } else {
+    world_frame_method = undefined;
   }
-  if (committed || data.world_frame_method === null) {
-    return { world_frame_method: null, world_frame_approximate };
-  }
-  return { world_frame_approximate };
+  return resolveBridgeWorldFrameFields(
+    world_frame_method,
+    world_frame_approximate,
+    committed,
+  );
 }
 
 export interface PathMessage {
@@ -836,27 +862,92 @@ function parseInboundObject(
   }
 }
 
-/** Build a live bridge_status view from a runtime_snapshot for shared handlers. */
-export function bridgeStatusFromSnapshot(
-  snapshot: RuntimeSnapshotMessage,
-): BridgeStatusMessage {
-  const status: BridgeStatusMessage = {
+export type BridgeWireStatus = BridgeStatusMessage | SnapshotBridgeState;
+
+function bridgeWireFieldsFromStatus(
+  status: BridgeWireStatus,
+  ts: number,
+): BridgeSnapshot {
+  const worldFrame = resolveBridgeWorldFrameFields(
+    status.world_frame_method,
+    status.world_frame_approximate,
+    status.world_frame_committed,
+  );
+  return {
+    handshakeReady: true,
+    robotConnected: status.robot_connected,
+    worldFrameCommitted: status.world_frame_committed,
+    worldFrameApproximate: worldFrame.world_frame_approximate,
+    reconnecting: status.reconnecting,
+    worldFrameMethod: worldFrame.world_frame_method ?? null,
+    statusTs: ts,
+  };
+}
+
+/** Project wire bridge fields + session flags into app bridge session state. */
+export function projectBridgeSession(
+  handshakeReady: boolean,
+  status: BridgeWireStatus | null,
+  statusTs: number | null = status && "ts" in status ? status.ts : null,
+): BridgeSnapshot {
+  if (!handshakeReady) {
+    return createDefaultBridgeSnapshot();
+  }
+  if (!status) {
+    return {
+      ...createDefaultBridgeSnapshot(),
+      handshakeReady: true,
+    };
+  }
+  const ts = statusTs ?? ("ts" in status ? status.ts : null);
+  if (ts === null) {
+    return {
+      handshakeReady: true,
+      robotConnected: status.robot_connected,
+      worldFrameCommitted: status.world_frame_committed,
+      worldFrameApproximate: status.world_frame_approximate ?? false,
+      reconnecting: status.reconnecting,
+      worldFrameMethod: status.world_frame_method ?? null,
+      statusTs: null,
+    };
+  }
+  return bridgeWireFieldsFromStatus(status, ts);
+}
+
+export function deriveLinkStateFromSnapshot(
+  snapshot: BridgeSnapshot,
+): BridgeLinkState {
+  if (!snapshot.handshakeReady) {
+    return "disconnected";
+  }
+  if (snapshot.reconnecting || !snapshot.robotConnected) {
+    return "connectedNoRobot";
+  }
+  return "connected";
+}
+
+/** Reconstruct wire-shaped bridge_status for handlers that expect the message type. */
+export function bridgeSnapshotToStatusMessage(
+  snapshot: BridgeSnapshot,
+): BridgeStatusMessage | null {
+  if (!snapshot.handshakeReady || snapshot.statusTs === null) {
+    return null;
+  }
+  const msg: BridgeStatusMessage = {
     type: "bridge_status",
-    ts: snapshot.ts,
-    robot_connected: snapshot.bridge.robot_connected,
-    world_frame_committed: snapshot.bridge.world_frame_committed,
-    reconnecting: snapshot.bridge.reconnecting,
+    ts: snapshot.statusTs,
+    robot_connected: snapshot.robotConnected,
+    world_frame_committed: snapshot.worldFrameCommitted,
+    reconnecting: snapshot.reconnecting,
+    world_frame_approximate: snapshot.worldFrameApproximate,
   };
   if (
-    snapshot.bridge.world_frame_method === "april_tag" ||
-    snapshot.bridge.world_frame_method === "manual_pose"
+    snapshot.worldFrameMethod === "april_tag" ||
+    snapshot.worldFrameMethod === "manual_pose"
   ) {
-    status.world_frame_method = snapshot.bridge.world_frame_method;
+    msg.world_frame_method = snapshot.worldFrameMethod;
   }
-  if (typeof snapshot.bridge.world_frame_approximate === "boolean") {
-    status.world_frame_approximate = snapshot.bridge.world_frame_approximate;
-  }
-  return status;
+  return msg;
 }
 
 // ── Outbound builders ──────────────────────────────────────────
@@ -1037,22 +1128,6 @@ export function buildEmergencyStop(robotId: string): string {
   });
 }
 
-export function buildJoystickCommand(
-  robotId: string,
-  vx: number,
-  vy: number,
-  wz: number,
-): string {
-  return JSON.stringify({
-    type: "joystick_command",
-    ts: getTime(),
-    robot_id: robotId,
-    vx,
-    vy,
-    wz,
-  });
-}
-
 // Binary lidar frame (message_type 0x01 = lidar_f16).
 // Layout: [1B type][4B float32 ts LE][N*6B float16 xyz world-metres LE]
 const LIDAR_F16_TYPE = 0x01;
@@ -1103,37 +1178,19 @@ export function parseLidarBinary(data: Uint8Array): LidarMessage | null {
 export function deriveLinkState(
   connected: boolean,
   status: BridgeStatusMessage | null,
-): "disconnected" | "connectedNoRobot" | "connected" {
+): BridgeLinkState {
   if (!connected) {
     return "disconnected";
   }
-  if (status?.reconnecting || !status?.robot_connected) {
-    return "connectedNoRobot";
-  }
-  return "connected";
+  return deriveLinkStateFromSnapshot(
+    projectBridgeSession(true, status),
+  );
 }
 
-/** Project wire bridge_status into app-facing BridgeSnapshot. */
+/** @deprecated Use projectBridgeSession */
 export function projectBridgeSnapshot(
   handshakeReady: boolean,
   status: BridgeStatusMessage | null,
 ): BridgeSnapshot {
-  if (!handshakeReady) {
-    return createDefaultBridgeSnapshot();
-  }
-  if (!status) {
-    return {
-      ...createDefaultBridgeSnapshot(),
-      handshakeReady: true,
-    };
-  }
-  return {
-    handshakeReady: true,
-    robotConnected: status.robot_connected,
-    worldFrameCommitted: status.world_frame_committed,
-    worldFrameApproximate: status.world_frame_approximate ?? false,
-    reconnecting: status.reconnecting,
-    worldFrameMethod: status.world_frame_method ?? null,
-    statusTs: status.ts,
-  };
+  return projectBridgeSession(handshakeReady, status);
 }

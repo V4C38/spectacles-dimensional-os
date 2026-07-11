@@ -35,7 +35,7 @@ function status(
 
 function createFlow(options: {
   mode?: "april_tag" | "manual_pose";
-  hasConnection?: boolean;
+  isBridgeSessionReady?: boolean;
   commitManualPlacementOffline?: boolean;
 } = {}) {
   const finishRegistration = vi.fn();
@@ -60,7 +60,7 @@ function createFlow(options: {
   };
   const coordinator = {
     registrationClient,
-    router: { hasConnection: () => options.hasConnection ?? true },
+    router: { isBridgeSessionReady: () => options.isBridgeSessionReady ?? true },
     registrationPreview: preview,
     robot: { applyInteractionFromState: vi.fn() },
     frameCaptureController: { setCaptureErrorHandler: vi.fn() },
@@ -244,7 +244,7 @@ describe("RegistrationFlow", () => {
   it("offline manual finalize does not use bridge handlers", () => {
     const { flow, finishRegistration, scheduleFinishRegistration } = createFlow({
       mode: "manual_pose",
-      hasConnection: false,
+      isBridgeSessionReady: false,
       commitManualPlacementOffline: true,
     });
     flow.setSession(createRegistrationSessionView("manual_pose"));
@@ -262,7 +262,7 @@ describe("RegistrationFlow", () => {
   });
 
   it("enter starts manual_pose when bridge is disconnected", () => {
-    const { flow, registrationClient } = createFlow({ hasConnection: false });
+    const { flow, registrationClient } = createFlow({ isBridgeSessionReady: false });
     flow.enter();
     expect(registrationClient.start).toHaveBeenCalledWith("manual_pose");
   });
@@ -279,7 +279,7 @@ describe("RegistrationFlow", () => {
     };
     const coordinator = {
       registrationClient,
-      router: { hasConnection: () => true },
+      router: { isBridgeSessionReady: () => true },
       registrationPreview: { render: vi.fn(), begin: vi.fn(), end: vi.fn() },
       robot: { applyInteractionFromState: vi.fn() },
       frameCaptureController: { setCaptureErrorHandler: vi.fn() },

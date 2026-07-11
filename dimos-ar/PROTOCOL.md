@@ -348,6 +348,22 @@ Fields:
 - `world_frame_approximate`: **always present** — `true` when the committed
   alignment is approximate (e.g. manual pose)
 
+**Lens client mapping** (`BridgeSnapshot` in `AppState.ts`):
+
+| Wire field | App field |
+|------------|-----------|
+| `robot_connected` | `robotConnected` |
+| `world_frame_committed` | `worldFrameCommitted` |
+| `world_frame_approximate` | `worldFrameApproximate` |
+| `reconnecting` | `reconnecting` |
+| `world_frame_method` | `worldFrameMethod` |
+| `ts` | `statusTs` |
+| hello received (session) | `handshakeReady` |
+
+Live `bridge_status` and `runtime_snapshot.bridge` share the same field shapes;
+`runtime_snapshot` bundles bridge + nav + optional path on connect and
+`get_status`.
+
 ### `registration_status`
 
 Registration progress during a setup session:

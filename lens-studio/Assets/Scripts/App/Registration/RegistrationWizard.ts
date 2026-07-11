@@ -1,7 +1,10 @@
 require("LensStudio:TextInputModule");
 
 import { ARBridgeCoordinator } from "../ARBridgeCoordinator";
-import { BridgeLinkState, bridgeLinkPresentation, isRuntimePhase, NO_ROBOT_CONNECTED_LABEL } from "../AppState";
+import { isRuntimePhase, NO_ROBOT_CONNECTED_LABEL } from "../AppState";
+import {
+  bridgeConnectPresentation,
+} from "../Bridge/BridgePresentation";
 
 import {
   buildRegistrationPresentationForWizard,
@@ -346,7 +349,7 @@ export class RegistrationWizard extends BaseScriptComponent {
   }
 
   private _isConnected(): boolean {
-    return this.arBridgeCoordinator?.hasBridgeConnection() ?? false;
+    return this.arBridgeCoordinator?.isBridgeSessionReady() ?? false;
   }
 
   private _bindRegistrationHandlers(): void {
@@ -412,55 +415,24 @@ export class RegistrationWizard extends BaseScriptComponent {
     });
   }
 
-  private _bridgeStatusForConnect(
-    linkState: BridgeLinkState,
-    isConnecting: boolean,
-  ): { text: string; color: vec4 } {
-    if (isConnecting && !this.arBridgeCoordinator?.isBridgeSocketOpen()) {
-      return { text: "Connecting to bridge…", color: COLOR_ERROR };
-    }
-    if (
-      isConnecting &&
-      (this.arBridgeCoordinator?.isBridgeSocketOpen() ?? false) &&
-      !this._isConnected()
-    ) {
-      return { text: "Waiting for handshake…", color: COLOR_ERROR };
-    }
-    if (isConnecting && linkState === "disconnected") {
-      return { text: "Connecting...", color: COLOR_ERROR };
-    }
-    return bridgeLinkPresentation(linkState);
-  }
-
-  private _bridgeConnectDetailStatus(
-    linkState: BridgeLinkState,
-    clockSyncState: "idle" | "pending" | "ready" | "failed",
-  ): string | null {
-    if (linkState === "disconnected" || linkState === "connectedNoRobot") {
-      return null;
-    }
-    if (clockSyncState === "pending") {
-      return "Syncing clock…";
-    }
-    if (clockSyncState === "failed") {
-      return "Clock sync failed — reconnect or continue without registration frames";
-    }
-    return null;
-  }
-
   private _showBridgeConnectionStatus(): void {
-    const linkState = this.arBridgeCoordinator?.bridgeLinkState ?? "disconnected";
-    const presentation = this._bridgeStatusForConnect(linkState, this._isConnecting);
-    const detail = this._bridgeConnectDetailStatus(
+    const coordinator = this.arBridgeCoordinator;
+    const linkState = coordinator?.bridgeLinkState ?? "disconnected";
+    const connectPresentation = bridgeConnectPresentation({
       linkState,
-      this.arBridgeCoordinator?.bridgeClockSyncState ?? "idle",
-    );
-    const statusText = detail
-      ? `${presentation.text}\n${detail}`.trim()
-      : presentation.text;
-    this._view?.setStatus(statusText, presentation.color);
-    if (this.arBridgeCoordinator?.hasBridgeConnection()) {
-      this.arBridgeCoordinator.requestBridgeStatus();
+      isConnecting: this._isConnecting,
+      socketOpen: coordinator?.isBridgeSocketOpen() ?? false,
+      handshakeReady: this._isConnected(),
+      clockSync: coordinator?.bridgeClockSyncState ?? "idle",
+      displayName:
+        coordinator?.appState.robotRuntime.displayName ?? NO_ROBOT_CONNECTED_LABEL,
+    });
+    const statusText = connectPresentation.detail
+      ? `${connectPresentation.primary.text}\n${connectPresentation.detail}`.trim()
+      : connectPresentation.primary.text;
+    this._view?.setStatus(statusText, connectPresentation.primary.color);
+    if (coordinator?.isBridgeSessionReady()) {
+      coordinator.requestBridgeStatus();
     }
   }
 
@@ -503,7 +475,7 @@ export class RegistrationWizard extends BaseScriptComponent {
       this._view?.setStepContent(title, REGISTRATION_DESCRIPTION_MANUAL);
       return;
     }
-    if (!this.arBridgeCoordinator?.hasBridgeConnection()) {
+    if (!this.arBridgeCoordinator?.isBridgeSessionReady()) {
       this._view?.setStepContent(title, NO_ROBOT_CONNECTED_LABEL, COLOR_WARN);
       return;
     }

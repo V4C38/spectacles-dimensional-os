@@ -9,6 +9,7 @@ import {
   AppStateListener,
   AppPhase,
   BridgeLinkState,
+  createDefaultRobotRuntimeState,
   defaultNavigationError,
   AppStateData,
   isRuntimePhase as isAppRuntimePhase,
@@ -44,7 +45,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
   }
 
   public get bridgeLinkState(): BridgeLinkState {
-    return this.appState.bridgeLinkState;
+    return this.arBridgeServices.state.bridgeLinkState;
   }
 
   public get onBridgeReady() {
@@ -100,7 +101,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
       },
       {
         manualRegistrationPlacement: robot.manualRegistrationPlacement,
-        hasBridgeConnection: () => this.hasBridgeConnection(),
+        isBridgeSessionReady: () => this.isBridgeSessionReady(),
         getInteractionMode: () => this.appState.robotInteractionMode,
         setInteractionMode: (mode) => this._setRobotInteractionMode(mode),
         getIsRuntimePhase: () => this.isRuntimePhase(),
@@ -112,9 +113,23 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
       },
     );
 
+    this.arBridgeServices.router.setOnBridgeDisconnected(() =>
+      this.onBridgeDisconnected(),
+    );
+
     this.arBridgeServices.state.subscribe((state) =>
       this._syncOperatingModeSideEffects(state),
     );
+  }
+
+  public onBridgeDisconnected(): void {
+    this.arBridgeServices.telemetry.onDisconnect();
+    this.arBridgeServices.robot.onDisconnect();
+    this.arBridgeServices.navigation.onDisconnect();
+    this.arBridgeServices.state.update({
+      navigationError: defaultNavigationError(),
+      robotRuntime: createDefaultRobotRuntimeState(),
+    });
   }
 
   private _syncOperatingModeSideEffects(state: AppStateData): void {
@@ -237,8 +252,8 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.arBridgeServices.router.disconnect();
   }
 
-  public hasBridgeConnection(): boolean {
-    return this.arBridgeServices.router.hasConnection();
+  public isBridgeSessionReady(): boolean {
+    return this.arBridgeServices.router.isBridgeSessionReady();
   }
 
   public requestBridgeStatus(): boolean {

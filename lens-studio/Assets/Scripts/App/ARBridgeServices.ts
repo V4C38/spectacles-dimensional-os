@@ -86,6 +86,11 @@ export class ARBridgeServices extends BaseScriptComponent {
     return this._registrationPreview!;
   }
 
+  public get telemetry(): TelemetryClient {
+    this._ensureInstances();
+    return this._telemetry!;
+  }
+
   public bind(
     robotMenuCallbacks: RobotPresenterMenuCallbacks,
     registrationDeps: RegistrationClientDeps,
@@ -109,7 +114,7 @@ export class ARBridgeServices extends BaseScriptComponent {
       inboundRouter: this._router!,
       statusClient: this._status!,
       uiLogger: this._state!.uiLogger,
-      getBridgeConnected: () => this._router!.hasConnection(),
+      getBridgeConnected: () => this._router!.isBridgeSessionReady(),
       getWorldFrameCommitted: () =>
         this._state!.snapshot.bridgeSnapshot.worldFrameCommitted,
     });

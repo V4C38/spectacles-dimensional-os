@@ -3,7 +3,8 @@ import {
   PROTOCOL_VERSION,
   parseInboundMessage,
   ProtocolParseError,
-  bridgeStatusFromSnapshot,
+  bridgeSnapshotToStatusMessage,
+  projectBridgeSession,
   parseBridgeWorldFrameFields,
   RuntimeSnapshotMessage,
 } from "../../Assets/Scripts/ARBridge/Network/Protocol";
@@ -67,7 +68,7 @@ describe("parseInboundMessage", () => {
     expect(caps.emergency_stop.available).toBe(false);
   });
 
-  it("parses runtime_snapshot and bridgeStatusFromSnapshot", () => {
+  it("parses runtime_snapshot and projects bridge fields", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
         type: "runtime_snapshot",
@@ -89,10 +90,12 @@ describe("parseInboundMessage", () => {
     expect(msg!.type).toBe("runtime_snapshot");
     const snapshot = msg as RuntimeSnapshotMessage;
     expect(snapshot.path?.waypoints).toEqual([[1, 2, 3]]);
-    const bridge = bridgeStatusFromSnapshot(snapshot);
-    expect(bridge.type).toBe("bridge_status");
-    expect(bridge.robot_connected).toBe(true);
-    expect(bridge.world_frame_committed).toBe(false);
+    const bridgeSnapshot = projectBridgeSession(true, snapshot.bridge, snapshot.ts);
+    expect(bridgeSnapshot.robotConnected).toBe(true);
+    expect(bridgeSnapshot.worldFrameCommitted).toBe(false);
+    const bridge = bridgeSnapshotToStatusMessage(bridgeSnapshot);
+    expect(bridge?.type).toBe("bridge_status");
+    expect(bridge?.robot_connected).toBe(true);
   });
 
   it("parses registration_status", () => {
