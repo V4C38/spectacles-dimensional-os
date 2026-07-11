@@ -21,11 +21,14 @@ export type AppPhase = "registration" | "runtime";
 export type OperatingMode = "registration" | "manual" | "agent";
 export type RobotInteractionMode = "hidden" | "manualPlacement" | "runtimeRobot";
 export type NavigationState =
-  | "off"
-  | "armed"
-  | "placingGoal"
-  | "navigating";
-export type NavigationOutcome =
+  | "disabled"
+  | "idle"
+  | "navIntent"
+  | "navigating"
+  | "resolved";
+export type WireNavigationState = Exclude<NavigationState, "disabled">;
+export type NavTerminalOutcome = "succeeded" | "failed";
+export type NavigationErrorState =
   | { kind: "none" }
   | { kind: "failed"; errorCode: number | null };
 export type BridgeLinkState = "disconnected" | "connectedNoRobot" | "connected";
@@ -54,7 +57,7 @@ export type RuntimeSessionState = {
   operating: OperatingMode;
   interaction: RobotInteractionMode;
   navigation: NavigationState;
-  outcome: NavigationOutcome;
+  error: NavigationErrorState;
 };
 
 export type SessionState = RegistrationSessionState | RuntimeSessionState;
@@ -91,7 +94,7 @@ export function bridgeNavigationReady(snapshot: BridgeSnapshot): boolean {
   );
 }
 
-export function defaultNavigationOutcome(): NavigationOutcome {
+export function defaultNavigationError(): NavigationErrorState {
   return { kind: "none" };
 }
 
@@ -99,26 +102,26 @@ export function isRuntimePhase(state: AppStateData): boolean {
   return state.phase === "runtime";
 }
 
-export function navigationOutcomeIsNone(outcome: NavigationOutcome): boolean {
-  return outcome.kind === "none";
+export function navigationErrorIsNone(error: NavigationErrorState): boolean {
+  return error.kind === "none";
 }
 
-export function navigationOutcomeIsFailed(outcome: NavigationOutcome): boolean {
-  return outcome.kind === "failed";
+export function navigationErrorIsFailed(error: NavigationErrorState): boolean {
+  return error.kind === "failed";
 }
 
-export function navigationOutcomeHasNavRuntimeError(outcome: NavigationOutcome): boolean {
-  return outcome.kind === "failed" && outcome.errorCode !== null;
+export function navigationErrorHasNavRuntimeError(error: NavigationErrorState): boolean {
+  return error.kind === "failed" && error.errorCode !== null;
 }
 
 export function navigationPlacementToggleEnabled(state: AppStateData): boolean {
-  return state.navigationState !== "off";
+  return state.navigationState !== "disabled";
 }
 
-export function navigationOutcomePresentation(
-  outcome: NavigationOutcome,
+export function navigationErrorPresentation(
+  error: NavigationErrorState,
 ): StatusTextPresentation | null {
-  if (outcome.kind === "failed") {
+  if (error.kind === "failed") {
     return { text: "Navigation failed", color: COLOR_ERROR };
   }
   return null;
@@ -198,7 +201,7 @@ export function robotActivityPresentation(
   state: AppStateData,
 ): StatusTextPresentation {
   return (
-    navigationOutcomePresentation(state.navigationOutcome)
+    navigationErrorPresentation(state.navigationError)
     ?? robotMarkerSteadyStatePresentation(state)
   );
 }
@@ -221,6 +224,9 @@ export function robotMarkerSteadyStatePresentation(
   if (state.navigationState === "navigating") {
     return { text: "Navigating", color: COLOR_WHITE };
   }
+  if (state.navigationState === "navIntent") {
+    return { text: "Preparing Navigation", color: COLOR_WHITE };
+  }
   return { text: "Idle", color: COLOR_WHITE };
 }
 
@@ -237,7 +243,7 @@ export function toSessionState(state: AppStateData): SessionState {
     operating: state.operatingMode,
     interaction: state.robotInteractionMode,
     navigation: state.navigationState,
-    outcome: state.navigationOutcome,
+    error: state.navigationError,
   };
 }
 
@@ -245,22 +251,19 @@ export function validateSessionFields(state: AppStateData): AppStateData {
   const next: AppStateData = { ...state };
 
   if (next.phase === "registration") {
-    next.navigationState = "off";
-    next.navigationOutcome = defaultNavigationOutcome();
+    next.navigationState = "disabled";
+    next.navigationError = defaultNavigationError();
     if (next.robotInteractionMode === "runtimeRobot") {
       next.robotInteractionMode = "hidden";
     }
   }
 
   if (next.phase === "runtime") {
-    if (next.navigationState === "armed" && next.operatingMode !== "manual") {
-      next.navigationState = "off";
+    if (next.navigationState !== "disabled" && next.operatingMode !== "manual") {
+      next.navigationState = "disabled";
     }
-    if (
-      next.operatingMode === "registration" &&
-      (next.navigationState === "armed" || next.navigationState === "placingGoal")
-    ) {
-      next.navigationState = "off";
+    if (next.operatingMode === "registration" && next.navigationState !== "disabled") {
+      next.navigationState = "disabled";
     }
   }
 
@@ -318,7 +321,7 @@ export interface AppStateData {
   operatingMode: OperatingMode;
   navigationState: NavigationState;
   robotInteractionMode: RobotInteractionMode;
-  navigationOutcome: NavigationOutcome;
+  navigationError: NavigationErrorState;
   bridgeLinkState: BridgeLinkState;
   bridgeSnapshot: BridgeSnapshot;
   robotRuntime: RobotRuntimeState;
@@ -369,11 +372,11 @@ function cloneDriftState(state: DriftState): DriftState {
   return { ...state };
 }
 
-function cloneNavigationOutcome(outcome: NavigationOutcome): NavigationOutcome {
-  if (outcome.kind === "failed") {
-    return { kind: "failed", errorCode: outcome.errorCode };
+function cloneNavigationError(error: NavigationErrorState): NavigationErrorState {
+  if (error.kind === "failed") {
+    return { kind: "failed", errorCode: error.errorCode };
   }
-  return { ...outcome };
+  return { ...error };
 }
 
 function cloneBridgeSnapshot(snapshot: BridgeSnapshot): BridgeSnapshot {
@@ -384,7 +387,7 @@ function cloneState(state: AppStateData): AppStateData {
   return {
     ...state,
     bridgeSnapshot: cloneBridgeSnapshot(state.bridgeSnapshot),
-    navigationOutcome: cloneNavigationOutcome(state.navigationOutcome),
+    navigationError: cloneNavigationError(state.navigationError),
     robotRuntime: cloneRobotRuntime(state.robotRuntime),
     driftState: cloneDriftState(state.driftState),
   };
@@ -431,9 +434,9 @@ export function createDefaultAppStateData(): AppStateData {
     debugMode: false,
     lidarMode: "off",
     operatingMode: "manual",
-    navigationState: "off",
+    navigationState: "disabled",
     robotInteractionMode: "hidden",
-    navigationOutcome: defaultNavigationOutcome(),
+    navigationError: defaultNavigationError(),
     bridgeLinkState: "disconnected",
     bridgeSnapshot: createDefaultBridgeSnapshot(),
     robotRuntime: createDefaultRobotRuntimeState(),

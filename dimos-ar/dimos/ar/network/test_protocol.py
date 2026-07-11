@@ -33,7 +33,6 @@ from dimos.ar.network.protocol import (
     encode_pose,
     encode_registration_status,
     encode_runtime_snapshot,
-    nav_phase_payload,
 )
 from dimos.ar.registration.types import RegistrationMode, RegistrationPhase
 from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
@@ -571,14 +570,14 @@ def test_encode_runtime_snapshot() -> None:
         encode_runtime_snapshot(
             robot_id="unitree_go2",
             bridge=bridge,
-            nav={"phase": "navigating"},
+            nav={"state": "navigating"},
             path={"waypoints": [[1.0, 2.0, 3.0]]},
             ts=5.0,
         )
     )
     assert raw["type"] == "runtime_snapshot"
     assert raw["robot_id"] == "unitree_go2"
-    assert raw["nav"]["phase"] == "navigating"
+    assert raw["nav"]["state"] == "navigating"
     assert raw["path"]["waypoints"] == [[1.0, 2.0, 3.0]]
     assert "streams_active" not in raw["bridge"]
 
@@ -637,38 +636,23 @@ def test_encode_path_and_nav_status() -> None:
     assert "robot_id" not in path
     assert "kind" not in path
 
-    status = json.loads(encode_nav_status(ts=3.0, phase="navigating"))
+    status = json.loads(encode_nav_status(ts=3.0, state="navigating"))
     assert status["type"] == "nav_status"
-    assert status["phase"] == "navigating"
-    assert "state" not in status
+    assert status["state"] == "navigating"
+    assert "phase" not in status
 
-    recovering = json.loads(encode_nav_status(ts=3.5, phase="recovering"))
-    assert recovering["phase"] == "recovering"
+    retryable = json.loads(
+        encode_nav_status(ts=3.5, state="navIntent", retryable=True, stall_reason="no_path")
+    )
+    assert retryable["state"] == "navIntent"
+    assert retryable["retryable"] is True
 
-    failed = json.loads(encode_nav_status(ts=4.0, phase="failed", error_code=505))
-    assert failed["phase"] == "failed"
+    failed = json.loads(
+        encode_nav_status(ts=4.0, state="resolved", outcome="failed", error_code=505)
+    )
+    assert failed["state"] == "resolved"
+    assert failed["outcome"] == "failed"
     assert failed["error_code"] == 505
-
-
-def test_nav_phase_payload_mapping() -> None:
-    assert nav_phase_payload(
-        goal_reached=False,
-        goal_failed=False,
-        nav_state="navigating",
-        nav_goal_pending=True,
-    ) == {"phase": "navigating"}
-    assert nav_phase_payload(
-        goal_reached=True,
-        goal_failed=False,
-        nav_state="idle",
-        nav_goal_pending=False,
-    ) == {"phase": "succeeded"}
-    assert nav_phase_payload(
-        goal_reached=False,
-        goal_failed=False,
-        nav_state="recovering",
-        nav_goal_pending=False,
-    ) == {"phase": "recovering"}
 
 
 def test_encode_pose() -> None:

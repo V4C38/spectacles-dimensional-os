@@ -34,7 +34,7 @@ def _make_runtime_sync_stub() -> tuple[MagicMock, BridgeSender, MagicMock, Magic
     bridge._robot_id = "unitree_go2"  # type: ignore[attr-defined]
 
     mock_nav = MagicMock()
-    mock_nav.nav_phase_dict.return_value = {"phase": "navigating"}
+    mock_nav.nav_wire_dict.return_value = {"state": "navigating"}
     mock_nav.runtime_snapshot_path.return_value = {
         "kind": "active",
         "waypoints": [[1.0, 2.0, 3.0]],
@@ -56,7 +56,7 @@ def test_runtime_sync_sends_single_runtime_snapshot() -> None:
     payload = json.loads(send_to_calls[0].args[1])
     assert payload["type"] == "runtime_snapshot"
     assert payload["robot_id"] == "unitree_go2"
-    assert payload["nav"]["phase"] == "navigating"
+    assert payload["nav"]["state"] == "navigating"
     assert payload["path"]["kind"] == "active"
     assert payload["bridge"]["world_frame_committed"] is True
     assert "streams_active" not in payload["bridge"]

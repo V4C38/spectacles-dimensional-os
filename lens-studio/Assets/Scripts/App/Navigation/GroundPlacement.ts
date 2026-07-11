@@ -1,5 +1,4 @@
-import { NavigationTargetMarker } from "./NavigationTargetMarker";
-import type { PlacementInteractionPolicy } from "../../ARBridge/Navigation/NavigationModel";
+import { NavigationMarker } from "./NavigationMarker";
 import { yawRotationFromPlanarDirection } from "../Utilities/Utilities";
 import {
   maybeAdvanceDragHeadingTarget,
@@ -41,11 +40,11 @@ export class GroundPlacement {
   private readonly worldQueryModule: any;
   private readonly _groundProbe = new SurfaceGroundProbe();
 
-  private _marker: NavigationTargetMarker | null = null;
+  private _marker: NavigationMarker | null = null;
   private active = false;
   private _isDragging = false;
   private _hasActivatedPlacement = false;
-  private _followRobot = false;
+  private _idleAnchor = false;
   private _dragEnabled = false;
   private hitTestSession: any = null;
   private updateEvent: SceneEvent | null = null;
@@ -69,7 +68,7 @@ export class GroundPlacement {
     this._initDeferredEvents();
   }
 
-  public attach(marker: NavigationTargetMarker): void {
+  public attach(marker: NavigationMarker): void {
     this.detach();
     this._marker = marker;
     marker.bindEvents({
@@ -112,7 +111,7 @@ export class GroundPlacement {
     this.active = false;
     this._isDragging = false;
     this._hasActivatedPlacement = false;
-    this._followRobot = false;
+    this._idleAnchor = false;
     this._processingButtonPress = false;
     this.activeInteractor = null;
     this._setDragEnabled(false);
@@ -143,9 +142,12 @@ export class GroundPlacement {
     return this.activeInteractor !== null;
   }
 
-  public setInteractionPolicy(policy: PlacementInteractionPolicy): void {
-    this._followRobot = policy.followRobot;
-    this._setDragEnabled(policy.dragEnabled);
+  public setIdleAnchor(enabled: boolean): void {
+    this._idleAnchor = enabled;
+  }
+
+  public setDragEnabled(enabled: boolean): void {
+    this._setDragEnabled(enabled);
   }
 
   public getCurrentPose(): { position: vec3; rotation: quat } | null {
@@ -172,7 +174,7 @@ export class GroundPlacement {
   public isIdleNavigation(): boolean {
     return (
       this.active &&
-      this._followRobot &&
+      this._idleAnchor &&
       !this._isDragging &&
       this.activeInteractor === null
     );

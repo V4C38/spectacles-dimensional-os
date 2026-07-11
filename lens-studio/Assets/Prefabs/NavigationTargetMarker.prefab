@@ -98,9 +98,9 @@
 - !<ScriptComponent/357a86d1-5433-41ae-8d52-f780c6b91d42>
   PrefabRemaps:
     []
-  Name: NavigationTargetMarker
+  Name: NavigationMarker
   Enabled: true
-  ScriptAsset: !<reference> 53e65dae-35cf-48e5-9ee5-e1b4c0d51cc3
+  ScriptAsset: !<reference> 5023abf8-c014-4966-93de-39fd1d5acb89
   ScriptInputsDefault:
     {}
   ScriptTypesDefault:

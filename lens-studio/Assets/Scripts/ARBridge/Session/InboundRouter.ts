@@ -1,7 +1,7 @@
 import { ARBridgeSession } from "../Network/ARBridgeSession";
 import { AppStateStore } from "../../App/AppState";
 import { RobotPresenter } from "../../App/Robot/RobotPresenter";
-import { NavigationPlacement } from "../../App/Navigation/NavigationPlacement";
+import { NavigationController } from "../../App/Navigation/NavigationController";
 import { RegistrationClient } from "../Registration/RegistrationClient";
 import { StatusClient } from "../Status/StatusClient";
 import { TelemetryClient } from "../Telemetry/TelemetryClient";
@@ -13,7 +13,7 @@ import {
   BridgeSnapshot,
   createDefaultDriftState,
   createDefaultRobotRuntimeState,
-  defaultNavigationOutcome,
+  defaultNavigationError,
   NO_ROBOT_CONNECTED_LABEL,
 } from "../../App/AppState";
 import {
@@ -61,7 +61,7 @@ export class InboundRouter {
     private readonly statusClient: StatusClient,
     private readonly telemetryClient: TelemetryClient,
     private readonly navigationClient: NavigationClient,
-    private readonly navigationPlacement: NavigationPlacement,
+    private readonly navigationController: NavigationController,
     private readonly robotPresenter: RobotPresenter,
     private readonly registrationClient: RegistrationClient | null,
   ) {}
@@ -88,16 +88,16 @@ export class InboundRouter {
       }
     });
 
-    this.navigationClient.onPath.add((msg) => this.navigationPlacement.applyPath(msg));
+    this.navigationClient.onPath.add((msg) => this.navigationController.applyPath(msg));
     this.navigationClient.onNavStatus.add((msg) =>
-      this.navigationPlacement.applyNavStatus(msg),
+      this.navigationController.applyNavStatus(msg),
     );
     this.statusClient.onBridgeStatus.add((msg) => this._applyBridgeStatus(msg));
     this.session.onConnectionChanged.add((connected) =>
       this._applyConnectionState(connected),
     );
     this.navigationClient.onProtocolError.add((error) =>
-      this.navigationPlacement.handleProtocolError(error),
+      this.navigationController.handleProtocolError(error),
     );
 
     const reconnectEv = this.session.createEvent(
@@ -111,7 +111,7 @@ export class InboundRouter {
     this.appState.uiLogger.tick();
     const poseApplied = this.robotPresenter.applyPendingPose();
     this.robotPresenter.tickFrame();
-    this.navigationPlacement.syncIdleNavigationPlacement(poseApplied);
+    this.navigationController.syncIdleNavigationPlacement(poseApplied);
   }
 
   public tryConnect(ip: string): Promise<boolean> {
@@ -151,7 +151,7 @@ export class InboundRouter {
   public disconnect(): void {
     this.cancelRuntimeReconnect();
     this.session?.disconnect();
-    this.navigationPlacement.resetForUserDisconnect();
+    this.navigationController.resetForUserDisconnect();
   }
 
   public cancelRuntimeReconnect(): void {
@@ -182,13 +182,13 @@ export class InboundRouter {
   private _applyHello(msg: HelloMessage): void {
     const runtimeState = projectRuntimeStateFromHello(msg);
     AppState.connectedRobotDisplayName = runtimeState.displayName;
-    this.navigationPlacement.onHelloReset();
+    this.navigationController.onHelloReset();
     this.telemetryClient.resetBridgeLidarModeTracking();
     this._applyBridgeProjection(this.hasConnection(), null);
     this.appState.update({
       robotRuntime: runtimeState,
       driftState: createDefaultDriftState(),
-      navigationOutcome: defaultNavigationOutcome(),
+      navigationError: defaultNavigationError(),
     });
   }
 
@@ -216,10 +216,10 @@ export class InboundRouter {
     } else {
       this.telemetryClient.onDisconnect();
       this.robotPresenter.onDisconnect();
-      this.navigationPlacement.onDisconnect();
+      this.navigationController.onDisconnect();
       AppState.connectedRobotDisplayName = NO_ROBOT_CONNECTED_LABEL;
       this.appState.update({
-        navigationOutcome: defaultNavigationOutcome(),
+        navigationError: defaultNavigationError(),
         robotRuntime: createDefaultRobotRuntimeState(),
       });
       this._maybeScheduleRuntimeReconnect();

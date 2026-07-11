@@ -7,11 +7,11 @@ import {
   createDefaultBridgeSnapshot,
   bridgeLinkPresentation,
   bridgeLinkTransitionLog,
-  navigationOutcomePresentation,
+  navigationErrorPresentation,
   robotActivityPresentation,
   robotMarkerSteadyStatePresentation,
   toSessionState,
-  defaultNavigationOutcome,
+  defaultNavigationError,
   createDefaultRobotRuntimeState,
   isRuntimePhase,
   NO_ROBOT_CONNECTED_LABEL,
@@ -32,9 +32,9 @@ function baseState(patch: Partial<AppStateData> = {}): AppStateData {
     debugMode: false,
     lidarMode: "obstacles",
     operatingMode: "manual",
-    navigationState: "off",
+    navigationState: "disabled",
     robotInteractionMode: "hidden",
-    navigationOutcome: defaultNavigationOutcome(),
+    navigationError: defaultNavigationError(),
     bridgeLinkState: "disconnected",
     bridgeSnapshot: createDefaultBridgeSnapshot(),
     robotRuntime: runtimeState(),
@@ -48,13 +48,13 @@ describe("validateSessionFields", () => {
     const next = validateSessionFields(
       baseState({
         phase: "registration",
-        navigationState: "armed",
-        navigationOutcome: { kind: "failed", errorCode: null },
+        navigationState: "idle",
+        navigationError: { kind: "failed", errorCode: null },
         robotInteractionMode: "runtimeRobot",
       }),
     );
-    expect(next.navigationState).toBe("off");
-    expect(next.navigationOutcome).toEqual(defaultNavigationOutcome());
+    expect(next.navigationState).toBe("disabled");
+    expect(next.navigationError).toEqual(defaultNavigationError());
     expect(next.robotInteractionMode).toBe("hidden");
   });
 
@@ -62,11 +62,11 @@ describe("validateSessionFields", () => {
     const next = validateSessionFields(
       baseState({
         phase: "runtime",
-        navigationState: "armed",
+        navigationState: "idle",
         operatingMode: "agent",
       }),
     );
-    expect(next.navigationState).toBe("off");
+    expect(next.navigationState).toBe("disabled");
   });
 
   it("turns off navigation when operating mode is registration", () => {
@@ -74,10 +74,10 @@ describe("validateSessionFields", () => {
       baseState({
         phase: "runtime",
         operatingMode: "registration",
-        navigationState: "placingGoal",
+        navigationState: "navIntent",
       }),
     );
-    expect(next.navigationState).toBe("off");
+    expect(next.navigationState).toBe("disabled");
   });
 
   it("turns off lidar mode when capability unavailable", () => {
@@ -108,7 +108,7 @@ describe("createDefaultAppStateData", () => {
     expect(state.lidarMode).toBe("off");
     expect(state.operatingMode).toBe("manual");
     expect(state.bridgeLinkState).toBe("disconnected");
-    expect(state.navigationState).toBe("off");
+    expect(state.navigationState).toBe("disabled");
   });
 });
 
@@ -122,13 +122,13 @@ describe("isRuntimePhase", () => {
   });
 });
 
-describe("navigationOutcomePresentation", () => {
-  it("maps failed outcomes to status text", () => {
-    expect(navigationOutcomePresentation({ kind: "failed", errorCode: 1 })).toEqual({
+describe("navigationErrorPresentation", () => {
+  it("maps failed errors to status text", () => {
+    expect(navigationErrorPresentation({ kind: "failed", errorCode: 1 })).toEqual({
       text: "Navigation failed",
       color: COLOR_ERROR,
     });
-    expect(navigationOutcomePresentation({ kind: "none" })).toBeNull();
+    expect(navigationErrorPresentation({ kind: "none" })).toBeNull();
   });
 });
 
@@ -182,7 +182,7 @@ describe("robotActivityPresentation", () => {
   it("prefers navigation outcome over steady state", () => {
     expect(
       robotActivityPresentation(
-        baseState({ navigationOutcome: { kind: "failed", errorCode: 1 } }),
+        baseState({ navigationError: { kind: "failed", errorCode: 1 } }),
       ),
     ).toEqual({ text: "Navigation failed", color: COLOR_ERROR });
   });
@@ -224,7 +224,7 @@ describe("robotMarkerSteadyStatePresentation", () => {
       robotMarkerSteadyStatePresentation(
         baseState({
           operatingMode: "agent",
-          navigationState: "off",
+          navigationState: "disabled",
         }),
       ),
     ).toEqual({ text: "Idle", color: COLOR_WHITE });
@@ -270,7 +270,7 @@ describe("toSessionState", () => {
           operatingMode: "agent",
           robotInteractionMode: "runtimeRobot",
           navigationState: "navigating",
-          navigationOutcome: { kind: "none" },
+          navigationError: { kind: "none" },
         }),
       ),
     ).toEqual({
@@ -278,7 +278,7 @@ describe("toSessionState", () => {
       operating: "agent",
       interaction: "runtimeRobot",
       navigation: "navigating",
-      outcome: { kind: "none" },
+      error: { kind: "none" },
     });
   });
 });

@@ -1,4 +1,9 @@
-import type { NavigationState as AppNavigationState } from "../../App/AppState";
+import type {
+  NavigationState,
+  NavTerminalOutcome,
+  WireNavigationState,
+} from "../../App/AppState";
+import type { NavStallReason } from "../Network/Protocol";
 
 // ================================================================
 /** Pure navigation model: stored facts, derived presentation, event rule book. */
@@ -9,19 +14,28 @@ export type NavPose = {
   rotation: quat;
 };
 
-export type ActiveGoal = {
-  since: number;
-  navigating: boolean;
-};
+export type GoalTrack = { since: number } | null;
 
-export type GoalTrack = ActiveGoal | null;
+export type NavPresentationLatch =
+  | { kind: "none" }
+  | { kind: "resolved"; label: "Cancelled" | "Failed" };
 
-export type NavEngineState = {
-  armed: boolean;
+export type NavigationSession = {
+  navSessionActive: boolean;
+  wireState: WireNavigationState | null;
   goal: GoalTrack;
+  presentation: NavPresentationLatch;
   lastNavStatusTime: number;
   lastNavStatusResyncTime: number;
   navStatusResyncCooldownS: number;
+};
+
+export type NavigationInputs = {
+  placementActive: boolean;
+  activelyDragging: boolean;
+  markerExists: boolean;
+  markerPose: NavPose | null;
+  cancelAvailable: boolean;
 };
 
 export const GOAL_SEND_INTERVAL_S = 0.35;
@@ -33,92 +47,60 @@ export const NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S = 2.0;
 export const NAV_STATUS_RESYNC_MAX_COOLDOWN_S = 8.0;
 export const NAV_STATUS_LOCAL_RECOVERY_S = 16.0;
 
-export type NavPhase =
-  | { kind: "idle" }
-  | { kind: "placing"; pose: NavPose }
-  | { kind: "committed"; pose: NavPose; navigating: boolean; since: number };
-
-export type NavLiveContext = {
-  placementActive: boolean;
-  activelyDragging: boolean;
-  markerExists: boolean;
-  outcomeAnimating: boolean;
-  outcomeLabel?: "Cancelled" | "Failed" | null;
-  markerPose?: NavPose | null;
-};
-
-export type CapabilityView = {
-  cancelAvailable: boolean;
-  sessionActive: boolean;
-};
-
 export type NavMarkerViewState = {
   visible: boolean;
-  circleIdle: boolean;
+  active: boolean;
   heading: quat;
   button: { role: "cancel"; enabled: boolean; label: string } | null;
-  /** Non-null while playing cancel/fail outcome animation. */
   outcomeLabel: string | null;
 };
 
-export type NavViewState = {
-  marker: NavMarkerViewState;
-  path: { visible: boolean } | null;
-  placement: { dragEnabled: boolean; followRobot: boolean };
-  appNavigationState: AppNavigationState;
-  shouldStreamGoal: boolean;
-};
-
-export type PlacementInteractionPolicy = {
-  dragEnabled: boolean;
-  followRobot: boolean;
-};
-
 export type NavigationEvent =
-  | { kind: "arm" }
-  | { kind: "disarm" }
+  | { kind: "sessionOn" }
+  | { kind: "sessionOff" }
   | {
-      kind: "goalCommitRequested";
+      kind: "commitGoal";
       sendToBridge: boolean;
       pose: NavPose;
     }
-  | { kind: "navigating" }
-  | { kind: "navStatusGoalReached" }
-  | { kind: "navStatusGoalFailed" }
-  | { kind: "navStatusRecovering" }
+  | {
+      kind: "navStatus";
+      state: WireNavigationState;
+      outcome?: NavTerminalOutcome;
+      retryable?: boolean;
+      stall_reason?: NavStallReason;
+    }
   | { kind: "cancelRequested" }
   | { kind: "estopRequested" }
   | { kind: "disconnect" }
-  | { kind: "staleRecovery" }
-  | { kind: "outcomeAnimationFinished" };
+  | { kind: "watchdogFailed" }
+  | { kind: "pathReceived" }
+  | { kind: "presentationCleared" }
+  | { kind: "resolvedPresentationFinished" };
 
 export type NavigationEffect =
-  | { kind: "syncAppNavigationState" }
-  | { kind: "syncMarkerPresentation" }
   | { kind: "sendNavGoal"; pose: NavPose }
-  | { kind: "sendCancelGoal" }
-  | { kind: "clearPath" }
-  | { kind: "resetNavigationOutcome" }
-  | { kind: "destroyMarker" }
-  | { kind: "resumeIdleAnchoring" }
-  | { kind: "setPlacementInteraction"; policy: PlacementInteractionPolicy }
-  | { kind: "beginOutcomeAnimation"; label: "Cancelled" | "Failed" }
-  | { kind: "stopPlacement" };
+  | { kind: "sendCancelGoal" };
 
 export type NavigationModelResult = {
-  state: NavEngineState;
-  effects: NavigationEffect[];
+  state: NavigationSession;
+  wireEffects: NavigationEffect[];
 };
 
-export function createInitialNavEngineState(now: number = 0): NavEngineState {
+export function createInitialNavigationSession(now: number = 0): NavigationSession {
   return {
-    armed: false,
+    navSessionActive: false,
+    wireState: null,
     goal: null,
+    presentation: { kind: "none" },
     lastNavStatusTime: now - NAV_STATUS_STALE_TIMEOUT_S,
     lastNavStatusResyncTime: now - NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S,
     navStatusResyncCooldownS: NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S,
   };
 }
+
+/** @deprecated Use createInitialNavigationSession */
+export const createInitialNavEngineState = createInitialNavigationSession;
 
 function poseDistanceCm(a: vec3, b: vec3): number {
   const dx = a.x - b.x;
@@ -152,7 +134,37 @@ export function shouldSendStreamGoal(
   return poseDistanceCm(lastSentGoal.position, position) >= GOAL_SEND_MIN_DISTANCE_CM;
 }
 
-export function shouldSuppressTerminalNavStatus(live: {
+export function deriveNavigationState(
+  session: NavigationSession,
+  inputs: NavigationInputs,
+): NavigationState {
+  if (!session.navSessionActive) {
+    return "disabled";
+  }
+  if (session.presentation.kind === "resolved") {
+    return "resolved";
+  }
+  if (inputs.placementActive && session.wireState !== "navigating") {
+    return "navIntent";
+  }
+  if (session.wireState !== null) {
+    return session.wireState;
+  }
+  if (session.goal !== null || inputs.placementActive) {
+    return "navIntent";
+  }
+  return "idle";
+}
+
+export function markerActive(state: NavigationState): boolean {
+  return state === "navIntent" || state === "navigating";
+}
+
+export function shouldRenderNavigationPath(navigationState: NavigationState): boolean {
+  return markerActive(navigationState);
+}
+
+export function shouldSuppressTerminalNavState(live: {
   placementActive: boolean;
   activelyDragging: boolean;
   markerMovedSinceLastGoal: boolean;
@@ -163,331 +175,260 @@ export function shouldSuppressTerminalNavStatus(live: {
   );
 }
 
-export function deriveNavPhase(
-  state: NavEngineState,
-  live: NavLiveContext,
-): NavPhase {
-  if (!state.armed || !live.markerExists) {
-    return { kind: "idle" };
+export type RetryableNavIntentAction =
+  | "holdNavIntent"
+  | "holdNavigating"
+  | "clearGoal";
+
+export function resolveRetryableNavIntent(
+  session: NavigationSession,
+  suppressTerminal: boolean,
+): RetryableNavIntentAction {
+  if (suppressTerminal) {
+    return "holdNavIntent";
   }
-  const pose = live.markerPose ?? {
-    position: new vec3(0, 0, 0),
-    rotation: quat.quatIdentity(),
-  };
-  if (state.goal !== null) {
-    return {
-      kind: "committed",
-      pose,
-      navigating: state.goal.navigating,
-      since: state.goal.since,
-    };
+  if (session.wireState === "navigating") {
+    return "holdNavigating";
   }
-  return { kind: "placing", pose };
+  return "clearGoal";
 }
 
-function resolveMarkerButton(
-  state: NavEngineState,
-  live: NavLiveContext,
-  caps: CapabilityView,
-): NavMarkerViewState["button"] {
-  if (!live.placementActive && state.goal === null) {
-    return null;
-  }
-  if (live.activelyDragging) {
-    return null;
-  }
-  return {
-    role: "cancel",
-    enabled: true,
-    label: caps.cancelAvailable ? "Cancel" : "Cancel\nUnavailable",
-  };
+export function shouldSkipStaleLocalRecovery(
+  session: NavigationSession,
+  bridgePathWaypointCount: number,
+): boolean {
+  return session.wireState === "navigating" && bridgePathWaypointCount >= 2;
 }
 
-export function deriveViewState(
-  state: NavEngineState,
-  live: NavLiveContext,
-  caps: CapabilityView,
-): NavViewState | null {
-  if (!state.armed) {
+export function deriveMarkerViewState(
+  session: NavigationSession,
+  inputs: NavigationInputs,
+  navigationState: NavigationState,
+): NavMarkerViewState | null {
+  if (!session.navSessionActive || !inputs.markerExists) {
     return null;
   }
 
-  const phase = deriveNavPhase(state, live);
-  const markerVisible = live.markerExists && phase.kind !== "idle";
-  const heading = live.markerPose?.rotation ?? quat.quatIdentity();
-  const navigating = state.goal?.navigating ?? false;
+  const active = markerActive(navigationState);
   const outcomeLabel =
-    live.outcomeAnimating && live.outcomeLabel ? live.outcomeLabel : null;
-
-  const placement: PlacementInteractionPolicy = (() => {
-    if (live.outcomeAnimating) {
-      return { dragEnabled: false, followRobot: false };
-    }
-    if (state.goal === null) {
-      return {
-        dragEnabled: true,
-        followRobot: !live.placementActive,
-      };
-    }
-    return {
-      dragEnabled: true,
-      followRobot: false,
-    };
-  })();
-
-  let appNavigationState: AppNavigationState = "off";
-  if (caps.sessionActive) {
-    if (navigating) {
-      appNavigationState = "navigating";
-    } else if (live.placementActive) {
-      appNavigationState = "placingGoal";
-    } else {
-      appNavigationState = "armed";
-    }
-  }
-
-  const shouldStreamGoal = live.placementActive;
-  const renderPath = state.goal !== null || live.placementActive;
+    session.presentation.kind === "resolved"
+      ? session.presentation.label
+      : null;
+  const heading = inputs.markerPose?.rotation ?? quat.quatIdentity();
 
   return {
-    marker: {
-      visible: markerVisible,
-      circleIdle: outcomeLabel === null && !live.placementActive,
-      heading,
-      button:
-        markerVisible && outcomeLabel === null
-          ? resolveMarkerButton(state, live, caps)
-          : null,
-      outcomeLabel,
-    },
-    path: renderPath ? { visible: true } : null,
-    placement,
-    appNavigationState,
-    shouldStreamGoal,
+    visible: navigationState !== "disabled",
+    active: outcomeLabel === null && active,
+    heading,
+    button:
+      outcomeLabel === null && active && !inputs.activelyDragging
+        ? {
+            role: "cancel",
+            enabled: true,
+            label: inputs.cancelAvailable ? "Cancel" : "Cancel\nUnavailable",
+          }
+        : null,
+    outcomeLabel,
   };
 }
 
-export function shouldRenderNavigationPath(view: NavViewState | null): boolean {
-  return Boolean(view?.path?.visible);
+export function idleAnchorEnabled(navigationState: NavigationState): boolean {
+  return navigationState === "idle";
 }
 
-export function deriveAppNavigationState(
-  view: NavViewState | null,
-): AppNavigationState {
-  return view?.appNavigationState ?? "off";
+export function dragEnabledForState(navigationState: NavigationState): boolean {
+  return (
+    navigationState === "idle" ||
+    navigationState === "navIntent" ||
+    navigationState === "navigating"
+  );
 }
 
-export function touchNavStatus(state: NavEngineState, now: number): NavEngineState {
+export function touchNavStatus(session: NavigationSession, now: number): NavigationSession {
   return {
-    ...state,
+    ...session,
     lastNavStatusTime: now,
     navStatusResyncCooldownS: NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S,
   };
 }
 
 export function checkNavLifecycleStaleness(
-  state: NavEngineState,
+  session: NavigationSession,
   now: number = 0,
 ): "ok" | "request_resync" | "recover_local" {
-  if (state.goal === null) {
+  if (session.goal === null) {
     return "ok";
   }
-  const elapsed = now - state.lastNavStatusTime;
+  const elapsed = now - session.lastNavStatusTime;
   if (elapsed < NAV_STATUS_STALE_TIMEOUT_S) {
     return "ok";
   }
-  if (now - state.lastNavStatusResyncTime >= state.navStatusResyncCooldownS) {
+  if (now - session.lastNavStatusResyncTime >= session.navStatusResyncCooldownS) {
     return "request_resync";
   }
-  if (now - state.goal.since >= NAV_STATUS_LOCAL_RECOVERY_S) {
+  if (now - session.goal.since >= NAV_STATUS_LOCAL_RECOVERY_S) {
     return "recover_local";
   }
   return "ok";
 }
 
-export function bumpNavResyncCooldown(state: NavEngineState, now: number): NavEngineState {
+export function bumpNavResyncCooldown(session: NavigationSession, now: number): NavigationSession {
   return {
-    ...state,
+    ...session,
     lastNavStatusResyncTime: now,
     navStatusResyncCooldownS: Math.min(
-      state.navStatusResyncCooldownS * 2.0,
+      session.navStatusResyncCooldownS * 2.0,
       NAV_STATUS_RESYNC_MAX_COOLDOWN_S,
     ),
   };
 }
 
-function clearGoal(state: NavEngineState): NavEngineState {
-  return { ...state, goal: null };
+function clearGoal(session: NavigationSession): NavigationSession {
+  return { ...session, goal: null };
 }
 
-function startGoal(state: NavEngineState, now: number, navigating: boolean): NavEngineState {
+function startGoal(session: NavigationSession, now: number): NavigationSession {
   return {
-    ...state,
-    goal: { since: now, navigating },
+    ...session,
+    goal: { since: now },
     lastNavStatusTime: now,
   };
 }
 
-function markNavigating(state: NavEngineState, now: number): NavEngineState {
-  if (state.goal === null) {
-    return state;
+function applyNavStatusEvent(
+  session: NavigationSession,
+  event: Extract<NavigationEvent, { kind: "navStatus" }>,
+): NavigationSession {
+  let next: NavigationSession = {
+    ...session,
+    wireState: event.state,
+  };
+
+  if (event.state === "navIntent" && event.retryable) {
+    return clearGoal(next);
   }
-  return {
-    ...state,
-    goal: { since: state.goal.since, navigating: true },
-    lastNavStatusTime: now,
-  };
-}
-
-function derivePlacementInteractionPolicy(
-  state: NavEngineState,
-  placementActive: boolean,
-): PlacementInteractionPolicy {
-  const view = deriveViewState(
-    state,
-    {
-      placementActive,
-      activelyDragging: false,
-      markerExists: true,
-      outcomeAnimating: false,
-    },
-    { cancelAvailable: true, sessionActive: state.armed },
-  );
-  return view?.placement ?? { dragEnabled: false, followRobot: false };
+  if (event.state === "resolved" && event.outcome === "succeeded") {
+    return clearGoal(next);
+  }
+  if (event.state === "resolved" && event.outcome === "failed") {
+    return {
+      ...clearGoal(next),
+      presentation: { kind: "resolved", label: "Failed" },
+    };
+  }
+  if (event.state === "idle") {
+    return { ...next, wireState: "idle" };
+  }
+  return next;
 }
 
 export function applyNavigationEvent(
-  state: NavEngineState,
+  session: NavigationSession,
   event: NavigationEvent,
   now: number = 0,
 ): NavigationModelResult {
-  const effects: NavigationEffect[] = [];
-  let next: NavEngineState = { ...state };
+  const wireEffects: NavigationEffect[] = [];
+  let next: NavigationSession = { ...session };
 
   const push = (...items: NavigationEffect[]): void => {
-    effects.push(...items);
+    wireEffects.push(...items);
   };
 
   switch (event.kind) {
-    case "arm": {
-      next.armed = true;
+    case "sessionOn": {
+      next.navSessionActive = true;
       next.goal = null;
-      push(
-        { kind: "clearPath" },
-        { kind: "syncAppNavigationState" },
-        { kind: "syncMarkerPresentation" },
-        {
-          kind: "setPlacementInteraction",
-          policy: derivePlacementInteractionPolicy(next, false),
-        },
-      );
+      next.wireState = null;
+      next.presentation = { kind: "none" };
       break;
     }
-    case "disarm": {
-      next = clearGoal({ ...next, armed: false });
+    case "sessionOff": {
+      next = clearGoal({
+        ...next,
+        navSessionActive: false,
+        wireState: null,
+        presentation: { kind: "none" },
+      });
       next.navStatusResyncCooldownS = NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S;
-      push(
-        { kind: "stopPlacement" },
-        { kind: "destroyMarker" },
-        { kind: "clearPath" },
-        { kind: "syncAppNavigationState" },
-      );
       break;
     }
-    case "goalCommitRequested": {
+    case "commitGoal": {
       const starting = next.goal === null;
       if (starting) {
-        next = startGoal(next, now, false);
+        next = startGoal(next, now);
       } else {
         next = { ...next, lastNavStatusTime: now };
-      }
-      if (starting) {
-        push({ kind: "resetNavigationOutcome" });
       }
       if (event.sendToBridge) {
         push({ kind: "sendNavGoal", pose: event.pose });
       }
-      push({ kind: "syncAppNavigationState" }, { kind: "syncMarkerPresentation" });
       break;
     }
-    case "navigating": {
-      if (next.goal !== null) {
-        next = markNavigating(next, now);
-        push({ kind: "syncAppNavigationState" }, { kind: "syncMarkerPresentation" });
-      }
+    case "navStatus": {
+      next = applyNavStatusEvent(next, event);
       break;
     }
-    case "navStatusGoalReached": {
-      if (next.goal === null) {
-        break;
-      }
-      next = clearGoal(next);
-      push(
-        { kind: "clearPath" },
-        { kind: "resumeIdleAnchoring" },
-        { kind: "syncAppNavigationState" },
-        { kind: "syncMarkerPresentation" },
-      );
+    case "cancelRequested": {
+      next = {
+        ...clearGoal(next),
+        wireState: "idle",
+        presentation: { kind: "resolved", label: "Cancelled" },
+      };
+      push({ kind: "sendCancelGoal" });
       break;
     }
-    case "navStatusGoalFailed":
-    case "staleRecovery": {
-      if (next.goal === null) {
-        break;
-      }
-      next = clearGoal(next);
-      push(
-        { kind: "clearPath" },
-        { kind: "beginOutcomeAnimation", label: "Failed" },
-        { kind: "syncAppNavigationState" },
-      );
-      break;
-    }
-    case "navStatusRecovering": {
-      if (next.goal === null) {
-        break;
-      }
-      next = clearGoal(next);
-      push(
-        { kind: "clearPath" },
-        { kind: "resumeIdleAnchoring" },
-        { kind: "syncAppNavigationState" },
-        { kind: "syncMarkerPresentation" },
-      );
-      break;
-    }
-    case "cancelRequested":
     case "estopRequested": {
-      next = clearGoal(next);
-      push(
-        { kind: "clearPath" },
-        { kind: "beginOutcomeAnimation", label: "Cancelled" },
-        { kind: "syncAppNavigationState" },
-      );
+      next = {
+        ...clearGoal(next),
+        wireState: "idle",
+        presentation: { kind: "resolved", label: "Cancelled" },
+      };
       break;
     }
-    case "outcomeAnimationFinished": {
-      push(
-        { kind: "resumeIdleAnchoring" },
-        { kind: "syncAppNavigationState" },
-        { kind: "syncMarkerPresentation" },
-      );
+    case "pathReceived": {
+      next = touchNavStatus(next, now);
+      if (next.goal !== null) {
+        next = { ...next, wireState: "navigating" };
+      }
+      break;
+    }
+    case "presentationCleared": {
+      if (next.presentation.kind === "resolved") {
+        next.presentation = { kind: "none" };
+      }
+      break;
+    }
+    case "watchdogFailed": {
+      if (next.goal === null) {
+        break;
+      }
+      next = {
+        ...clearGoal(next),
+        wireState: "idle",
+        presentation: { kind: "resolved", label: "Failed" },
+      };
+      break;
+    }
+    case "resolvedPresentationFinished": {
+      next.presentation = { kind: "none" };
+      if (next.wireState === "resolved") {
+        next.wireState = "idle";
+      }
       break;
     }
     case "disconnect": {
-      next = clearGoal({ ...next, armed: false });
+      next = clearGoal({
+        ...next,
+        navSessionActive: false,
+        wireState: null,
+        presentation: { kind: "none" },
+      });
       next.navStatusResyncCooldownS = NAV_STATUS_RESYNC_INITIAL_COOLDOWN_S;
-      push(
-        { kind: "stopPlacement" },
-        { kind: "destroyMarker" },
-        { kind: "clearPath" },
-        { kind: "syncAppNavigationState" },
-      );
       break;
     }
     default:
       break;
   }
 
-  return { state: next, effects };
+  return { state: next, wireEffects };
 }

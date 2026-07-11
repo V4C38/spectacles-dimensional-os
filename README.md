@@ -109,12 +109,12 @@ If the protocol changes, update these together in the same change:
 
 The Lens side is organized around three scene-entry scripts plus one wiring hub:
 
-- [`ARBridgeServices.ts`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) owns scene `@input`s and plain runtime service instances (`AppStateStore`, `InboundRouter`, `RegistrationClient`, `RobotPresenter`, `NavigationPlacement`, …).
+- [`ARBridgeServices.ts`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) owns scene `@input`s and plain runtime service instances (`AppStateStore`, `InboundRouter`, `RegistrationClient`, `RobotPresenter`, `NavigationController`, …).
 - [`ARBridgeCoordinator.ts`](lens-studio/Assets/Scripts/App/ARBridgeCoordinator.ts) is the orchestration hub for phase/mode lifecycle; it delegates to `ARBridgeServices`.
 - [`RegistrationWizard.ts`](lens-studio/Assets/Scripts/App/Registration/RegistrationWizard.ts) owns the connect-and-register flow and hands off to runtime. Check Lens Studio Logger output and `./scripts/start.sh` bridge logs when registration fails.
 - [`UIManager.ts`](lens-studio/Assets/Scripts/App/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
 
-[`ARBridgeSession`](lens-studio/Assets/Scripts/ARBridge/Network/ARBridgeSession.ts) owns WebSocket transport and the hello handshake; [`InboundProcessor`](lens-studio/Assets/Scripts/ARBridge/Network/InboundProcessor.ts) parses inbound frames into typed signals. [`InboundRouter`](lens-studio/Assets/Scripts/ARBridge/Session/InboundRouter.ts) fans those signals out to domain `*Client` classes (`StatusClient`, `TelemetryClient`, `NavigationClient`, `RegistrationClient`) and app presenters (`RobotPresenter`, `NavigationPlacement`). `RegistrationFlow` owns registration-step UI state; `RegistrationClient` is the single owner of the bridge registration session. `DeviceCameraStream` is a singleton wrapper around the Spectacles colour camera; [`FrameCaptureController`](lens-studio/Assets/Scripts/ARBridge/Camera/FrameCaptureController.ts) + [`CameraStreamSession`](lens-studio/Assets/Scripts/ARBridge/Camera/CameraStreamSession.ts) own runtime capture intent, gate evaluation, and hardware on/off (separate from episode arming). Visuals live under `App/Robot/`, `App/Lidar/`, and `App/Navigation/`.
+[`ARBridgeSession`](lens-studio/Assets/Scripts/ARBridge/Network/ARBridgeSession.ts) owns WebSocket transport and the hello handshake; [`InboundProcessor`](lens-studio/Assets/Scripts/ARBridge/Network/InboundProcessor.ts) parses inbound frames into typed signals. [`InboundRouter`](lens-studio/Assets/Scripts/ARBridge/Session/InboundRouter.ts) fans those signals out to domain `*Client` classes (`StatusClient`, `TelemetryClient`, `NavigationClient`, `RegistrationClient`) and app presenters (`RobotPresenter`, `NavigationController`). `RegistrationFlow` owns registration-step UI state; `RegistrationClient` is the single owner of the bridge registration session. `DeviceCameraStream` is a singleton wrapper around the Spectacles colour camera; [`FrameCaptureController`](lens-studio/Assets/Scripts/ARBridge/Camera/FrameCaptureController.ts) + [`CameraStreamSession`](lens-studio/Assets/Scripts/ARBridge/Camera/CameraStreamSession.ts) own runtime capture intent, gate evaluation, and hardware on/off (separate from episode arming). Visuals live under `App/Robot/`, `App/Lidar/`, and `App/Navigation/`.
 
 ```mermaid
 flowchart TB
@@ -133,7 +133,7 @@ flowchart TB
 
 `ARBridgeCoordinator` starts in registration phase, disconnects the bridge when re-entering registration, and switches to runtime by enabling visuals, preserving manual registration state when needed, and syncing navigation and robot interaction state. Shared app state (including bridge-link status used by setup and runtime UI) lives in `AppStateStore` / `AppState`. During runtime, `InboundRouter` fans inbound bridge messages into:
 - `TelemetryClient` + `RobotPresenter` for pose, drift correction, LiDAR presentation, and `RobotMarker` / `RobotUiView` controls
-- `NavigationClient` + `NavigationPlacement` for goal placement, path display, and nav status
+- `NavigationClient` + `NavigationController` for goal placement, path display, and nav status
 
 `UIManager` subscribes to app state and updates the authored HUD. Restarting registration goes back through `RegistrationWizard`, while bridge status, operating mode changes, and the coarse `disconnected` / `connectedNoRobot` / `connected` link state still come from `ARBridgeCoordinator`.
 
@@ -158,7 +158,7 @@ flowchart TB
   lens-studio/Assets/Scripts/
   ├── App/                  (ARBridgeServices, ARBridgeCoordinator, AppState, AppStateStore)
   │   ├── Registration/     (RegistrationWizard, RegistrationWizardView, RegistrationFlow)
-  │   ├── Navigation/       (NavigationController / NavigationPlacement alias, NavigationPathRenderer, GroundPlacement, …)
+  │   ├── Navigation/       (NavigationController, NavigationPathRenderer, GroundPlacement, …)
   │   ├── Robot/            (RobotPresenter, RobotMarker, RobotUiView, RobotRuntimeModel)
   │   ├── Lidar/            (PointCloudRenderer, LidarPresenter)
   │   ├── UI/               (UIManager, MainMenuView, WristMenuController, PalmGestureGate, UILogger, UIKit)

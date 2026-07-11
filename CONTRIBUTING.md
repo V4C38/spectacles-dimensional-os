@@ -48,7 +48,7 @@ Same suffix = same role across feature modules.
 |--------|------|
 | **`*Presenter`** | Domain/app state → scene visuals (prefab lifecycle, drives views/renderers) |
 | **`*Flow`** | Multi-step wizard lifecycle (`RegistrationFlow`) |
-| **`*Placement`** / feature **`*Controller`** | Ongoing feature shell: state machine, bridge I/O (`NavigationPlacement` is a re-export alias for `NavigationController`) |
+| **`*Placement`** / feature **`*Controller`** | Ongoing feature shell: state machine, bridge I/O (`NavigationController`) |
 | **`*View`** / **`*UiView`** | HUD or prefab visual binding; no domain logic |
 | **`*Renderer`** | World drawing (lines, point clouds) |
 | **`*Controller`** (input) | User input only (`GroundPlacement`) |

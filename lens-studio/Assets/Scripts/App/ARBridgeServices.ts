@@ -6,7 +6,7 @@ import {
 } from "../ARBridge/Registration/RegistrationClient";
 import { InboundRouter } from "../ARBridge/Session/InboundRouter";
 import { AppStateStore } from "./AppState";
-import { NavigationPlacement } from "./Navigation/NavigationPlacement";
+import { NavigationController } from "./Navigation/NavigationController";
 import { RobotPresenter, RobotPresenterMenuCallbacks } from "./Robot/RobotPresenter";
 import { RegistrationPreviewPresenter } from "./Registration/RegistrationWizardView";
 import { PointCloudRenderer } from "./Lidar/PointCloudRenderer";
@@ -38,7 +38,7 @@ export class ARBridgeServices extends BaseScriptComponent {
 
   private _state: AppStateStore | null = null;
   private _robot: RobotPresenter | null = null;
-  private _navigation: NavigationPlacement | null = null;
+  private _navigation: NavigationController | null = null;
   private _router: InboundRouter | null = null;
   private _registration: RegistrationClient | null = null;
   private _status: StatusClient | null = null;
@@ -57,7 +57,7 @@ export class ARBridgeServices extends BaseScriptComponent {
     return this._robot!;
   }
 
-  public get navigation(): NavigationPlacement {
+  public get navigation(): NavigationController {
     this._ensureInstances();
     return this._navigation!;
   }
@@ -137,7 +137,7 @@ export class ARBridgeServices extends BaseScriptComponent {
       this._state,
       this._robot,
     );
-    this._navigation = NavigationPlacement.create({
+    this._navigation = NavigationController.create({
       eventHost: this,
       pathParentFallback: this.getSceneObject(),
       appStateStore: this._state,

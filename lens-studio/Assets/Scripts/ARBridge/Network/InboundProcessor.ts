@@ -236,8 +236,11 @@ export class InboundProcessor {
     const navStatus: NavStatusMessage = {
       type: "nav_status",
       ts: snapshot.ts,
-      phase: snapshot.nav.phase,
+      state: snapshot.nav.state,
     };
+    if (snapshot.nav.outcome === "succeeded" || snapshot.nav.outcome === "failed") {
+      navStatus.outcome = snapshot.nav.outcome;
+    }
     if (typeof snapshot.nav.error_code === "number") {
       navStatus.error_code = snapshot.nav.error_code;
     }
@@ -391,11 +394,11 @@ export class InboundProcessor {
         break;
       }
       case "nav_status": {
-        const key = `${msg.phase}|${msg.error_code ?? "-"}|${msg.retryable ?? "-"}|${msg.stall_reason ?? "-"}`;
+        const key = `${msg.state}|${msg.outcome ?? "-"}|${msg.error_code ?? "-"}|${msg.retryable ?? "-"}|${msg.stall_reason ?? "-"}`;
         if (key !== this._lastNavStatusKey) {
           this._lastNavStatusKey = key;
           print(
-            `InboundProcessor: RX nav_status phase=${msg.phase} error_code=${msg.error_code ?? "-"} retryable=${msg.retryable ?? "-"} stall_reason=${msg.stall_reason ?? "-"}`,
+            `InboundProcessor: RX nav_status state=${msg.state} outcome=${msg.outcome ?? "-"} error_code=${msg.error_code ?? "-"} retryable=${msg.retryable ?? "-"} stall_reason=${msg.stall_reason ?? "-"}`,
           );
         }
         break;

@@ -64,6 +64,17 @@ When working in `dimos-ar/`, follow `.cursor/rules/dimos-ar-bridge-design.mdc`:
    that masks the problem. Use a fallback only when there is a deliberate, documented
    reason (e.g. backward-compatible wire defaults).
 
+## State & lifecycle authoring
+
+When adding lifecycle, wire handlers, coordinators, or presentation logic, follow
+`.cursor/rules/state-lifecycle-authoring.mdc`:
+
+- **One concept, one name** — canonical type once; no parallel enums for the same flow.
+- **Session + inputs + derive** — store event-sourced facts; rebuild inputs each read; never store derived UX state.
+- **Derive; do not mirror** — one derivation function; wire owns execution truth.
+- **Wire effects only** — reducer emits sends; controller owns presentation/teardown.
+- **Presentation from state** — coupled UI from derived flags, not policy structs or duplicate bools.
+
 ## Non-negotiable facts
 
 - **Never edit DimOS source.** Import from the installed `dimos` package.

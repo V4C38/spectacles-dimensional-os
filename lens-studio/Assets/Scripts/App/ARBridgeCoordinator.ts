@@ -9,7 +9,7 @@ import {
   AppStateListener,
   AppPhase,
   BridgeLinkState,
-  defaultNavigationOutcome,
+  defaultNavigationError,
   AppStateData,
   isRuntimePhase as isAppRuntimePhase,
   LidarDisplayMode,
@@ -169,7 +169,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     }
     this.arBridgeServices.state.update({
       phase: "registration",
-      navigationOutcome: defaultNavigationOutcome(),
+      navigationError: defaultNavigationError(),
     });
     this._applyPhaseSideEffects("registration");
     this._setRobotInteractionMode("hidden");

@@ -1,52 +1,50 @@
 import { describe, expect, it } from "vitest";
 import {
   applyNavigationEvent,
-  createInitialNavEngineState,
   checkNavLifecycleStaleness,
-  deriveAppNavigationState,
-  deriveNavPhase,
-  deriveViewState,
+  createInitialNavigationSession,
+  deriveMarkerViewState,
+  deriveNavigationState,
+  dragEnabledForState,
+  idleAnchorEnabled,
+  markerActive,
+  resolveRetryableNavIntent,
+  shouldRenderNavigationPath,
   shouldSendStreamGoal,
-  shouldSuppressTerminalNavStatus,
+  shouldSkipStaleLocalRecovery,
+  shouldSuppressTerminalNavState,
   GOAL_FORCE_NOOP_DISTANCE_CM,
   GOAL_SEND_INTERVAL_S,
   GOAL_SEND_MIN_DISTANCE_CM,
-  shouldRenderNavigationPath,
   type NavigationEffect,
-  type NavEngineState,
-  type NavLiveContext,
+  type NavigationInputs,
+  type NavigationSession,
 } from "../../Assets/Scripts/ARBridge/Navigation/NavigationModel";
 
-type LiveFlags = {
+type InputFlags = {
   placementActive: boolean;
   activelyDragging?: boolean;
   markerExists: boolean;
-  outcomeAnimating?: boolean;
 };
 
-const DEFAULT_CAPS = {
-  cancelAvailable: true,
-  sessionActive: true,
-};
-
-function armedState(goal: NavEngineState["goal"] = null): NavEngineState {
-  return { ...createInitialNavEngineState(), armed: true, goal };
+function activeSession(goal: NavigationSession["goal"] = null): NavigationSession {
+  return {
+    ...createInitialNavigationSession(),
+    navSessionActive: true,
+    goal,
+  };
 }
 
-function liveFrom(flags: LiveFlags): NavLiveContext {
+function inputsFrom(flags: InputFlags): NavigationInputs {
   return {
     placementActive: flags.placementActive,
     activelyDragging: flags.activelyDragging ?? false,
     markerExists: flags.markerExists,
-    outcomeAnimating: flags.outcomeAnimating ?? false,
     markerPose: flags.markerExists
       ? { position: new vec3(0, 0, 0), rotation: quat.quatIdentity() }
       : null,
+    cancelAvailable: true,
   };
-}
-
-function viewFrom(state: NavEngineState, live: LiveFlags) {
-  return deriveViewState(state, liveFrom(live), DEFAULT_CAPS)!;
 }
 
 function mockPose() {
@@ -60,326 +58,327 @@ function effectKinds(effects: NavigationEffect[]): string[] {
   return effects.map((effect) => effect.kind);
 }
 
-describe("NavigationModel armed flag", () => {
-  it("arm sets armed and clears goal", () => {
-    const result = applyNavigationEvent(createInitialNavEngineState(), { kind: "arm" });
-    expect(result.state.armed).toBe(true);
+describe("NavigationSession lifecycle", () => {
+  it("sessionOn activates session and clears goal", () => {
+    const result = applyNavigationEvent(createInitialNavigationSession(), {
+      kind: "sessionOn",
+    });
+    expect(result.state.navSessionActive).toBe(true);
     expect(result.state.goal).toBeNull();
-    expect(effectKinds(result.effects)).toContain("clearPath");
+    expect(result.wireEffects).toEqual([]);
   });
 
-  it("disarm clears armed and destroys marker", () => {
-    const result = applyNavigationEvent(armedState(), { kind: "disarm" });
-    expect(result.state.armed).toBe(false);
-    expect(effectKinds(result.effects)).toEqual(
-      expect.arrayContaining(["stopPlacement", "destroyMarker", "clearPath"]),
-    );
+  it("sessionOff deactivates session", () => {
+    const result = applyNavigationEvent(activeSession({ since: 0 }), {
+      kind: "sessionOff",
+    });
+    expect(result.state.navSessionActive).toBe(false);
+    expect(result.state.goal).toBeNull();
   });
 
-  it("deriveViewState returns null when not armed", () => {
-    expect(
-      deriveViewState(
-        createInitialNavEngineState(),
-        liveFrom({ placementActive: false, markerExists: true }),
-        DEFAULT_CAPS,
-      ),
-    ).toBeNull();
+  it("commitGoal starts goal and can send nav goal", () => {
+    const result = applyNavigationEvent(activeSession(), {
+      kind: "commitGoal",
+      sendToBridge: true,
+      pose: mockPose(),
+    });
+    expect(result.state.goal).not.toBeNull();
+    expect(effectKinds(result.wireEffects)).toEqual(["sendNavGoal"]);
   });
 });
 
-describe("NavigationModel stream commit", () => {
-  it("goalCommitRequested starts goal and sends nav goal", () => {
-    const result = applyNavigationEvent(armedState(), {
-      kind: "goalCommitRequested",
-      sendToBridge: true,
-      pose: mockPose(),
-    }, 1);
-    expect(result.state.goal).toEqual({ since: 1, navigating: false });
-    expect(effectKinds(result.effects)).toEqual(
-      expect.arrayContaining(["sendNavGoal", "resetNavigationOutcome"]),
-    );
+describe("deriveNavigationState", () => {
+  it("returns disabled when session inactive", () => {
+    expect(
+      deriveNavigationState(
+        createInitialNavigationSession(),
+        inputsFrom({ placementActive: false, markerExists: true }),
+      ),
+    ).toBe("disabled");
   });
 
-  it("shouldStreamGoal when armed and placement active", () => {
-    const view = viewFrom(armedState(), {
-      placementActive: true,
-      markerExists: true,
+  it("returns idle when armed without goal or placement", () => {
+    expect(
+      deriveNavigationState(
+        activeSession(),
+        inputsFrom({ placementActive: false, markerExists: true }),
+      ),
+    ).toBe("idle");
+  });
+
+  it("returns navIntent during placement", () => {
+    expect(
+      deriveNavigationState(
+        activeSession(),
+        inputsFrom({ placementActive: true, markerExists: true }),
+      ),
+    ).toBe("navIntent");
+  });
+
+  it("returns navigating from wire state", () => {
+    expect(
+      deriveNavigationState(
+        { ...activeSession({ since: 0 }), wireState: "navigating" },
+        inputsFrom({ placementActive: false, markerExists: true }),
+      ),
+    ).toBe("navigating");
+  });
+
+  it("returns resolved from presentation latch", () => {
+    expect(
+      deriveNavigationState(
+        {
+          ...activeSession(),
+          presentation: { kind: "resolved", label: "Failed" },
+        },
+        inputsFrom({ placementActive: false, markerExists: true }),
+      ),
+    ).toBe("resolved");
+  });
+});
+
+describe("markerActive and presentation helpers", () => {
+  it("markerActive is true for navIntent and navigating", () => {
+    expect(markerActive("navIntent")).toBe(true);
+    expect(markerActive("navigating")).toBe(true);
+    expect(markerActive("idle")).toBe(false);
+    expect(markerActive("resolved")).toBe(false);
+  });
+
+  it("idle anchor only on idle state", () => {
+    expect(idleAnchorEnabled("idle")).toBe(true);
+    expect(idleAnchorEnabled("navIntent")).toBe(false);
+  });
+
+  it("drag disabled on resolved", () => {
+    expect(dragEnabledForState("resolved")).toBe(false);
+    expect(dragEnabledForState("navIntent")).toBe(true);
+  });
+
+  it("marker view active follows markerActive", () => {
+    const session = activeSession({ since: 0 });
+    const inputs = inputsFrom({ placementActive: true, markerExists: true });
+    const view = deriveMarkerViewState(session, inputs, "navIntent");
+    expect(view?.active).toBe(true);
+  });
+
+  it("marker view inactive before placement", () => {
+    const session = activeSession();
+    const inputs = inputsFrom({ placementActive: false, markerExists: true });
+    const view = deriveMarkerViewState(session, inputs, "idle");
+    expect(view?.active).toBe(false);
+  });
+});
+
+describe("navStatus events", () => {
+  it("retryable navIntent clears goal", () => {
+    const result = applyNavigationEvent(activeSession({ since: 0 }), {
+      kind: "navStatus",
+      state: "navIntent",
+      retryable: true,
+      stall_reason: "no_path",
     });
-    expect(view.shouldStreamGoal).toBe(true);
+    expect(result.state.goal).toBeNull();
+    expect(result.state.wireState).toBe("navIntent");
   });
 
+  it("resolved failed latches presentation", () => {
+    const result = applyNavigationEvent(activeSession({ since: 0 }), {
+      kind: "navStatus",
+      state: "resolved",
+      outcome: "failed",
+    });
+    expect(result.state.goal).toBeNull();
+    expect(result.state.presentation).toEqual({
+      kind: "resolved",
+      label: "Failed",
+    });
+  });
+
+  it("watchdogFailed clears goal and latches failed presentation", () => {
+    const result = applyNavigationEvent(activeSession({ since: 0 }), {
+      kind: "watchdogFailed",
+    });
+    expect(result.state.goal).toBeNull();
+    expect(result.state.wireState).toBe("idle");
+    expect(result.state.presentation).toEqual({
+      kind: "resolved",
+      label: "Failed",
+    });
+  });
+
+  it("cancelRequested clears goal, resets wire to idle, latches cancelled presentation", () => {
+    const result = applyNavigationEvent(
+      { ...activeSession({ since: 0 }), wireState: "navigating" },
+      { kind: "cancelRequested" },
+    );
+    expect(result.state.goal).toBeNull();
+    expect(result.state.wireState).toBe("idle");
+    expect(result.state.presentation).toEqual({
+      kind: "resolved",
+      label: "Cancelled",
+    });
+    expect(effectKinds(result.wireEffects)).toEqual(["sendCancelGoal"]);
+  });
+
+  it("estopRequested does not emit sendCancelGoal", () => {
+    const result = applyNavigationEvent(activeSession({ since: 0 }), {
+      kind: "estopRequested",
+    });
+    expect(effectKinds(result.wireEffects)).toEqual([]);
+  });
+
+  it("pathReceived with goal sets navigating wire state and touches timestamps", () => {
+    const session = {
+      ...activeSession({ since: 0 }),
+      lastNavStatusTime: 0,
+      wireState: "navIntent" as const,
+    };
+    const result = applyNavigationEvent(session, { kind: "pathReceived" }, 5);
+    expect(result.state.wireState).toBe("navigating");
+    expect(result.state.lastNavStatusTime).toBe(5);
+    expect(result.state.goal).toEqual({ since: 0 });
+  });
+
+  it("pathReceived without goal only touches timestamps", () => {
+    const session = {
+      ...activeSession(),
+      lastNavStatusTime: 0,
+      wireState: null,
+    };
+    const result = applyNavigationEvent(session, { kind: "pathReceived" }, 5);
+    expect(result.state.wireState).toBeNull();
+    expect(result.state.lastNavStatusTime).toBe(5);
+    expect(result.state.goal).toBeNull();
+  });
+
+  it("presentationCleared clears resolved latch", () => {
+    const result = applyNavigationEvent(
+      {
+        ...activeSession(),
+        presentation: { kind: "resolved", label: "Cancelled" },
+      },
+      { kind: "presentationCleared" },
+    );
+    expect(result.state.presentation).toEqual({ kind: "none" });
+  });
+
+  it("presentationCleared is no-op when presentation is none", () => {
+    const result = applyNavigationEvent(activeSession(), {
+      kind: "presentationCleared",
+    });
+    expect(result.state.presentation).toEqual({ kind: "none" });
+  });
+
+  it("returns idle after cancel presentation finishes without placement active", () => {
+    const cancelled = applyNavigationEvent(
+      { ...activeSession({ since: 0 }), wireState: "navigating" },
+      { kind: "cancelRequested" },
+    ).state;
+    const finished = applyNavigationEvent(cancelled, {
+      kind: "resolvedPresentationFinished",
+    }).state;
+    expect(
+      deriveNavigationState(
+        finished,
+        inputsFrom({ placementActive: false, markerExists: true }),
+      ),
+    ).toBe("idle");
+  });
+
+  it("resolvedPresentationFinished clears resolved wire state to idle", () => {
+    const result = applyNavigationEvent(
+      {
+        ...activeSession(),
+        wireState: "resolved",
+        presentation: { kind: "resolved", label: "Failed" },
+      },
+      { kind: "resolvedPresentationFinished" },
+    );
+    expect(result.state.wireState).toBe("idle");
+    expect(result.state.presentation).toEqual({ kind: "none" });
+    expect(
+      deriveNavigationState(
+        result.state,
+        inputsFrom({ placementActive: false, markerExists: true }),
+      ),
+    ).toBe("idle");
+  });
+});
+
+describe("goal streaming guards", () => {
   it("shouldSendStreamGoal respects interval and distance", () => {
-    const pos = new vec3(0, 0, 0);
+    const position = new vec3(0, 0, 0);
+    const lastSent = { position: new vec3(0, 0, 0) };
     expect(
-      shouldSendStreamGoal(GOAL_SEND_INTERVAL_S + 1, 0, pos, null, false),
-    ).toBe(true);
-    expect(
-      shouldSendStreamGoal(0.1, 0, pos, { position: pos }, false),
+      shouldSendStreamGoal(10, 10, position, lastSent, false),
     ).toBe(false);
     expect(
       shouldSendStreamGoal(
-        GOAL_SEND_INTERVAL_S + 1,
-        0,
-        new vec3(100, 0, 0),
-        { position: pos },
+        10 + GOAL_SEND_INTERVAL_S + 0.1,
+        10,
+        new vec3(30, 0, 0),
+        lastSent,
         false,
       ),
     ).toBe(true);
     expect(
-      shouldSendStreamGoal(0, 0, new vec3(100, 0, 0), { position: pos }, true),
-    ).toBe(true);
-    expect(
       shouldSendStreamGoal(
-        0,
-        0,
-        new vec3(GOAL_FORCE_NOOP_DISTANCE_CM - 0.5, 0, 0),
-        { position: pos },
+        10 + GOAL_SEND_INTERVAL_S,
+        10,
+        new vec3(GOAL_FORCE_NOOP_DISTANCE_CM - 1, 0, 0),
+        lastSent,
         true,
       ),
     ).toBe(false);
   });
 });
 
-describe("shouldSuppressTerminalNavStatus", () => {
-  it("suppresses when placement active and actively dragging", () => {
+describe("staleness and retryable nav intent", () => {
+  it("resolveRetryableNavIntent holds navigating wire state", () => {
     expect(
-      shouldSuppressTerminalNavStatus({
-        placementActive: true,
-        activelyDragging: true,
-        markerMovedSinceLastGoal: false,
-      }),
-    ).toBe(true);
+      resolveRetryableNavIntent(
+        { ...activeSession({ since: 0 }), wireState: "navigating" },
+        false,
+      ),
+    ).toBe("holdNavigating");
   });
 
-  it("suppresses when placement active and marker moved since last goal", () => {
+  it("shouldSkipStaleLocalRecovery with navigating wire and path", () => {
     expect(
-      shouldSuppressTerminalNavStatus({
-        placementActive: true,
-        activelyDragging: false,
-        markerMovedSinceLastGoal: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not suppress when placement active but settled", () => {
-    expect(
-      shouldSuppressTerminalNavStatus({
-        placementActive: true,
-        activelyDragging: false,
-        markerMovedSinceLastGoal: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not suppress when not placement active", () => {
-    expect(
-      shouldSuppressTerminalNavStatus({
-        placementActive: false,
-        activelyDragging: true,
-        markerMovedSinceLastGoal: true,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("NavigationModel placement policy", () => {
-  it("idle follow-robot when armed without active goal", () => {
-    const view = viewFrom(armedState(), {
-      placementActive: false,
-      markerExists: true,
-    });
-    expect(view.placement).toEqual({ dragEnabled: true, followRobot: true });
-  });
-
-  it("drag enabled while goal active", () => {
-    const view = viewFrom(
-      armedState({ since: 0, navigating: true }),
-      { placementActive: false, markerExists: true },
-    );
-    expect(view.placement.dragEnabled).toBe(true);
-    expect(view.placement.followRobot).toBe(false);
-  });
-});
-
-describe("NavigationModel lifecycle", () => {
-  it("navStatusGoalReached resumes idle anchoring", () => {
-    const result = applyNavigationEvent(
-      armedState({ since: 0, navigating: true }),
-      { kind: "navStatusGoalReached" },
-    );
-    expect(result.state.goal).toBeNull();
-    expect(effectKinds(result.effects)).toEqual(
-      expect.arrayContaining(["clearPath", "resumeIdleAnchoring"]),
-    );
-    expect(effectKinds(result.effects)).not.toContain("respawnMarkerAt");
-    expect(effectKinds(result.effects)).not.toContain("reanchorMarkerToRobot");
-  });
-
-  it("cancelRequested plays cancelled outcome", () => {
-    const result = applyNavigationEvent(
-      armedState({ since: 0, navigating: true }),
-      { kind: "cancelRequested" },
-    );
-    expect(result.state.goal).toBeNull();
-    expect(effectKinds(result.effects)).toContain("beginOutcomeAnimation");
-    expect(effectKinds(result.effects)).not.toContain("sendCancelGoal");
-    const outcomeEffect = result.effects.find(
-      (effect) => effect.kind === "beginOutcomeAnimation",
-    );
-    expect(outcomeEffect).toMatchObject({ label: "Cancelled" });
-  });
-
-  it("navStatusGoalFailed plays failed outcome without sendCancelGoal", () => {
-    const result = applyNavigationEvent(
-      armedState({ since: 0, navigating: true }),
-      { kind: "navStatusGoalFailed" },
-    );
-    expect(result.state.goal).toBeNull();
-    expect(effectKinds(result.effects)).toContain("beginOutcomeAnimation");
-    expect(effectKinds(result.effects)).not.toContain("sendCancelGoal");
-    const outcomeEffect = result.effects.find(
-      (effect) => effect.kind === "beginOutcomeAnimation",
-    );
-    expect(outcomeEffect).toMatchObject({ label: "Failed" });
-  });
-
-  it("navStatusRecovering resumes idle anchoring", () => {
-    const result = applyNavigationEvent(
-      armedState({ since: 0, navigating: true }),
-      { kind: "navStatusRecovering" },
-    );
-    expect(effectKinds(result.effects)).toEqual(
-      expect.arrayContaining(["resumeIdleAnchoring", "clearPath"]),
-    );
-    expect(effectKinds(result.effects)).not.toContain("respawnMarkerAt");
-  });
-
-  it("outcomeAnimationFinished resumes idle anchoring", () => {
-    const result = applyNavigationEvent(
-      armedState({ since: 0, navigating: false }),
-      { kind: "outcomeAnimationFinished" },
-    );
-    expect(effectKinds(result.effects)).toEqual(
-      expect.arrayContaining(["resumeIdleAnchoring", "syncAppNavigationState"]),
-    );
-  });
-
-  it("disconnect disarms and clears session", () => {
-    const result = applyNavigationEvent(
-      armedState({ since: 0, navigating: true }),
-      { kind: "disconnect" },
-    );
-    expect(result.state.armed).toBe(false);
-    expect(result.state.goal).toBeNull();
-  });
-});
-
-describe("NavigationModel marker presentation", () => {
-  it("circleIdle true before first drag", () => {
-    const view = viewFrom(armedState(), {
-      placementActive: false,
-      markerExists: true,
-    });
-    expect(view.marker.circleIdle).toBe(true);
-  });
-
-  it("circleIdle false after placement activated", () => {
-    const view = viewFrom(armedState(), {
-      placementActive: true,
-      markerExists: true,
-    });
-    expect(view.marker.circleIdle).toBe(false);
-  });
-
-  it("shows cancel button while placing", () => {
-    const view = viewFrom(armedState(), {
-      placementActive: true,
-      markerExists: true,
-    });
-    expect(view.marker.button?.role).toBe("cancel");
-  });
-
-  it("cancel button stays enabled when bridge cancel unavailable", () => {
-    const view = deriveViewState(
-      armedState({ since: 0, navigating: true }),
-      liveFrom({ placementActive: true, markerExists: true }),
-      { cancelAvailable: false, sessionActive: true },
-    )!;
-    expect(view.marker.button?.enabled).toBe(true);
-    expect(view.marker.button?.label).toBe("Cancel\nUnavailable");
-  });
-
-  it("outcome label set while outcome animating", () => {
-    const view = deriveViewState(
-      armedState({ since: 0, navigating: false }),
-      {
-        placementActive: false,
-        activelyDragging: false,
-        markerExists: true,
-        outcomeAnimating: true,
-        outcomeLabel: "Cancelled",
-        markerPose: { position: new vec3(0, 0, 0), rotation: quat.quatIdentity() },
-      },
-      DEFAULT_CAPS,
-    )!;
-    expect(view.marker.outcomeLabel).toBe("Cancelled");
-    expect(view.marker.button).toBeNull();
-  });
-
-  it("hides cancel button before first drag", () => {
-    const view = viewFrom(armedState(), {
-      placementActive: false,
-      markerExists: true,
-    });
-    expect(view.marker.button).toBeNull();
-  });
-
-  it("committed phase when goal is navigating", () => {
-    const phase = deriveNavPhase(
-      armedState({ since: 0, navigating: true }),
-      liveFrom({ placementActive: false, markerExists: true }),
-    );
-    expect(phase.kind).toBe("committed");
-    if (phase.kind === "committed") {
-      expect(phase.navigating).toBe(true);
-    }
-  });
-
-  it("shouldRenderNavigationPath when goal or placement active", () => {
-    expect(
-      shouldRenderNavigationPath(
-        viewFrom(armedState(), {
-          placementActive: true,
-          markerExists: true,
-        }),
+      shouldSkipStaleLocalRecovery(
+        { ...activeSession({ since: 0 }), wireState: "navigating" },
+        4,
       ),
     ).toBe(true);
   });
 
-  it("deriveAppNavigationState maps armed idle to armed", () => {
-    expect(
-      deriveAppNavigationState(
-        viewFrom(armedState(), {
-          placementActive: false,
-          markerExists: true,
-        }),
-      ),
-    ).toBe("armed");
-  });
-});
-
-describe("NavigationModel staleness", () => {
-  it("checkNavLifecycleStaleness ok when no goal", () => {
-    expect(checkNavLifecycleStaleness(armedState(), 100)).toBe("ok");
-  });
-
-  it("checkNavLifecycleStaleness requests resync when stale", () => {
-    const state = {
-      ...armedState({ since: 0, navigating: true }),
+  it("checkNavLifecycleStaleness requests resync after stale timeout", () => {
+    const session = {
+      ...activeSession({ since: 0 }),
       lastNavStatusTime: 0,
       lastNavStatusResyncTime: -100,
       navStatusResyncCooldownS: 2,
     };
-    expect(checkNavLifecycleStaleness(state, 20)).toBe("request_resync");
+    expect(checkNavLifecycleStaleness(session, 20)).toBe("request_resync");
+  });
+});
+
+describe("path rendering gate", () => {
+  it("shouldRenderNavigationPath follows markerActive", () => {
+    expect(shouldRenderNavigationPath("navIntent")).toBe(true);
+    expect(shouldRenderNavigationPath("idle")).toBe(false);
+  });
+});
+
+describe("terminal suppression", () => {
+  it("shouldSuppressTerminalNavState during active drag placement", () => {
+    expect(
+      shouldSuppressTerminalNavState({
+        placementActive: true,
+        activelyDragging: true,
+        markerMovedSinceLastGoal: false,
+      }),
+    ).toBe(true);
   });
 });

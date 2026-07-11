@@ -11,9 +11,11 @@
 import {
   BridgeSnapshot,
   createDefaultBridgeSnapshot,
+  type NavTerminalOutcome,
+  type WireNavigationState,
 } from "../../App/AppState";
 
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -220,19 +222,13 @@ export interface PathMessage {
   waypoints: [number, number, number][];
 }
 
-export type NavPhase =
-  | "idle"
-  | "navigating"
-  | "recovering"
-  | "succeeded"
-  | "failed";
-
 export type NavStallReason = "no_path" | "planner_idle";
 
 export interface NavStatusMessage {
   type: "nav_status";
   ts: number;
-  phase: NavPhase;
+  state: WireNavigationState;
+  outcome?: NavTerminalOutcome;
   error_code?: number;
   retryable?: boolean;
   stall_reason?: NavStallReason;
@@ -247,7 +243,8 @@ export interface SnapshotBridgeState {
 }
 
 export interface SnapshotNavState {
-  phase: NavPhase;
+  state: WireNavigationState;
+  outcome?: NavTerminalOutcome | null;
   error_code?: number | null;
   retryable?: boolean;
   stall_reason?: NavStallReason | null;
@@ -370,13 +367,14 @@ const REGISTRATION_PHASES: RegistrationPhase[] = [
   "failed",
 ];
 
-const NAV_PHASES: NavPhase[] = [
+const WIRE_NAV_STATES: WireNavigationState[] = [
   "idle",
+  "navIntent",
   "navigating",
-  "recovering",
-  "succeeded",
-  "failed",
+  "resolved",
 ];
+
+const NAV_TERMINAL_OUTCOMES: NavTerminalOutcome[] = ["succeeded", "failed"];
 
 function parseNavStallReason(raw: unknown): NavStallReason | undefined {
   if (raw === "no_path" || raw === "planner_idle") {
@@ -472,11 +470,19 @@ function parseSnapshotBridge(raw: unknown): SnapshotBridgeState {
 
 function parseSnapshotNav(raw: unknown): SnapshotNavState {
   const nav = requireObject(raw);
-  const phase = requireString(nav, "phase");
-  if (!NAV_PHASES.includes(phase as NavPhase)) {
-    throw new Error(`Missing or invalid field: phase`);
+  const state = requireString(nav, "state");
+  if (!WIRE_NAV_STATES.includes(state as WireNavigationState)) {
+    throw new Error(`Missing or invalid field: state`);
   }
-  const status: SnapshotNavState = { phase: phase as NavPhase };
+  const status: SnapshotNavState = { state: state as WireNavigationState };
+  if (typeof nav.outcome === "string") {
+    if (!NAV_TERMINAL_OUTCOMES.includes(nav.outcome as NavTerminalOutcome)) {
+      throw new Error(`Missing or invalid field: outcome`);
+    }
+    status.outcome = nav.outcome as NavTerminalOutcome;
+  } else if (nav.outcome === null) {
+    status.outcome = null;
+  }
   if (typeof nav.error_code === "number") {
     status.error_code = nav.error_code;
   } else if (nav.error_code === null) {
@@ -791,16 +797,23 @@ function parseInboundObject(
     }
 
     case "nav_status": {
-      const phase = requireString(data, "phase");
-      if (!NAV_PHASES.includes(phase as NavPhase)) {
-        print(`Protocol: unknown nav_status.phase "${phase}"; skipping`);
+      const state = requireString(data, "state");
+      if (!WIRE_NAV_STATES.includes(state as WireNavigationState)) {
+        print(`Protocol: unknown nav_status.state "${state}"; skipping`);
         return null;
       }
       const msg: NavStatusMessage = {
         type: "nav_status",
         ts: requireNumber(data, "ts"),
-        phase: phase as NavPhase,
+        state: state as WireNavigationState,
       };
+      if (typeof data.outcome === "string") {
+        if (!NAV_TERMINAL_OUTCOMES.includes(data.outcome as NavTerminalOutcome)) {
+          print(`Protocol: unknown nav_status.outcome "${data.outcome}"; skipping`);
+          return null;
+        }
+        msg.outcome = data.outcome as NavTerminalOutcome;
+      }
       if (typeof data.error_code === "number") {
         msg.error_code = data.error_code;
       }

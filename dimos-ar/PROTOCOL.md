@@ -9,7 +9,17 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v15 (current) — Observation-driven capture and anchored stop refinement
+### v16 (current) — Unified NavigationState vocabulary
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 16.**
+- **`nav_status`:** `phase` renamed to **`state`** (`idle` | `navIntent` | `navigating` | `resolved`).
+  Terminal results use `state: "resolved"` with optional **`outcome`** (`succeeded` | `failed`).
+  Retryable stalls use `state: "navIntent"` with **`retryable`** and **`stall_reason`**.
+- **`runtime_snapshot.nav`:** same shape (`state` replaces `phase`; optional `outcome`).
+
+### v15 — Observation-driven capture and anchored stop refinement
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -286,7 +296,7 @@ navigation is in progress.
     "world_frame_approximate": false
   },
   "nav": {
-    "phase": "navigating"
+    "state": "navigating"
   },
   "path": {
     "waypoints": [[1.0, 2.0, 3.0]]
@@ -298,10 +308,11 @@ Fields:
 
 - `robot_id`: session robot (same as `hello.robot.robot_id`)
 - `bridge`: same shape as live `bridge_status` (without `type` / `ts`)
-- `nav.phase`: one of `"idle"`, `"navigating"`, `"recovering"`, `"succeeded"`,
-  `"failed"`
+- `nav.state`: one of `"idle"`, `"navIntent"`, `"navigating"`, `"resolved"`
+- `nav.outcome` (optional): `"succeeded"` or `"failed"` when `state` is `"resolved"`
 - `nav.error_code` (optional): numeric code when navigation is unavailable
   (e.g. `505` = goal stalled)
+- `nav.retryable` / `nav.stall_reason` (optional): present with `state: "navIntent"`
 - `path` (optional): present only when a navigating path is cached; omitted when
   idle
 
@@ -592,23 +603,43 @@ Navigation lifecycle updates:
 {
   "type": "nav_status",
   "ts": 1730000000.123,
-  "phase": "navigating"
+  "state": "navigating"
 }
 ```
 
-`phase` is one of `"idle"`, `"navigating"`, `"recovering"`, `"succeeded"`,
-`"failed"`.
+```json
+{
+  "type": "nav_status",
+  "ts": 1730000000.123,
+  "state": "resolved",
+  "outcome": "failed",
+  "error_code": 505
+}
+```
+
+```json
+{
+  "type": "nav_status",
+  "ts": 1730000000.456,
+  "state": "navIntent",
+  "retryable": true,
+  "stall_reason": "no_path"
+}
+```
+
+`state` is one of `"idle"`, `"navIntent"`, `"navigating"`, `"resolved"`.
 
 Optional fields:
 
+- `outcome`: `"succeeded"` or `"failed"` — only with `state: "resolved"`.
 - `error_code`: numeric code when navigation is unavailable for the session
   (logged on the Lens; `505` = goal stalled).
-- `retryable` (v7): `true` when the bridge cancelled a stuck goal and the client
-  must manually retry; emitted with `phase: "recovering"`.
-- `stall_reason` (v7): `"no_path"` (watchdog timeout without path) or
+- `retryable`: `true` when the bridge cancelled a stuck goal and the client
+  must manually retry; emitted with `state: "navIntent"`.
+- `stall_reason`: `"no_path"` (watchdog timeout without path) or
   `"planner_idle"` (planner went idle before path arrived).
 
-When `retryable` is true, `"recovering"` indicates the bridge cleared a stuck
+When `retryable` is true, `"navIntent"` indicates the bridge cleared a stuck
 goal — return to a retryable placing state without treating it as terminal failure.
 
 ## Inbound Messages

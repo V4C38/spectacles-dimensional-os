@@ -91,7 +91,7 @@ export class MarkerViewCore {
       this.stateText?.getSceneObject().getTransform().getLocalScale() ?? null;
     if (!this.confirmButton) {
       throw new Error(
-        "MarkerViewCore: NavigationTargetMarker is missing ConfirmButton RoundButton",
+        "MarkerViewCore: NavigationMarker is missing ConfirmButton RoundButton",
       );
     }
     this._initializeHidden();
@@ -155,7 +155,7 @@ export class MarkerViewCore {
       this._restoreStandardVisualState();
     }
     this.dragInteractableObject.enabled = true;
-    this._applyCircleMaterial(view.circleIdle);
+    this._applyCircleMaterial(!view.active);
     this._setStateText("", false);
     this.setRotation(view.heading);
 
@@ -271,7 +271,7 @@ export class MarkerViewCore {
   public hide(): void {
     this.apply({
       visible: false,
-      circleIdle: true,
+      active: true,
       heading: this._rotation,
       button: null,
       outcomeLabel: null,

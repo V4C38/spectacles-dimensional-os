@@ -80,7 +80,7 @@ describe("parseInboundMessage", () => {
           world_frame_method: null,
           world_frame_approximate: false,
         },
-        nav: { phase: "idle" },
+        nav: { state: "idle" },
         path: {
           waypoints: [[1, 2, 3]],
         },
@@ -338,16 +338,31 @@ describe("parseInboundMessage", () => {
     expect((msg as { waypoints: number[][] }).waypoints).toHaveLength(1);
   });
 
-  it("parses nav_status phase", () => {
+  it("parses nav_status state", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
         type: "nav_status",
         ts: 1,
-        phase: "idle",
+        state: "idle",
       }),
     );
     expect(msg!.type).toBe("nav_status");
-    expect((msg as { phase: string }).phase).toBe("idle");
+    expect((msg as { state: string }).state).toBe("idle");
+  });
+
+  it("parses nav_status resolved outcome", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "nav_status",
+        ts: 1,
+        state: "resolved",
+        outcome: "failed",
+        error_code: 505,
+      }),
+    );
+    expect(msg!.type).toBe("nav_status");
+    expect((msg as { state: string }).state).toBe("resolved");
+    expect((msg as { outcome: string }).outcome).toBe("failed");
   });
 
   it("parses nav_status retryable stall fields", () => {
@@ -355,7 +370,7 @@ describe("parseInboundMessage", () => {
       JSON.stringify({
         type: "nav_status",
         ts: 1,
-        phase: "recovering",
+        state: "navIntent",
         retryable: true,
         stall_reason: "no_path",
       }),
