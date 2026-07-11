@@ -14,7 +14,7 @@ from dimos.ar.network.protocol import (
     encode_camera_frame_ack,
     encode_capture_policy,
 )
-from dimos.ar.registration.types import RegistrationMode, RegistrationPhase
+from dimos.ar.registration.types import RegistrationMode, RegistrationState
 from dimos.ar.tag_tracking.solve import (
     build_camera_info,
     capture_max_distance_m,
@@ -69,7 +69,7 @@ class RegistrationSessionFramesMixin:
         def _broadcast_status(
             self,
             *,
-            phase: RegistrationPhase | None = None,
+            state: RegistrationState | None = None,
             message: str = "",
             mode: RegistrationMode | None = None,
             tag_visible: bool | None = None,
@@ -163,7 +163,7 @@ class RegistrationSessionFramesMixin:
             )
             if self._odom.latest() is None:
                 self._broadcast_status(
-                    phase=RegistrationPhase.SCANNING,
+                    state=RegistrationState.APRIL_TAG,
                     message="Waiting for robot odometry",
                 )
             result = await asyncio.to_thread(
@@ -276,7 +276,7 @@ class RegistrationSessionFramesMixin:
             logger.warning("AR camera frame dropped: no camera intrinsics yet", seq=seq)
             if self._tag_tracker.active:
                 self._broadcast_status(
-                    phase=RegistrationPhase.FAILED,
+                    state=RegistrationState.FAILED,
                     message="No camera intrinsics received",
                 )
             return FrameAdmission.ACK_ONLY

@@ -12,10 +12,10 @@ class RegistrationMode(StrEnum):
     MANUAL_POSE = "manual_pose"
 
 
-class RegistrationPhase(StrEnum):
+class RegistrationState(StrEnum):
     IDLE = "idle"
-    SCANNING = "scanning"
-    EDITING = "editing"
+    APRIL_TAG = "april_tag"
+    MANUAL_PLACEMENT = "manual_placement"
     AWAITING_COMMIT = "awaiting_commit"
     SUCCEEDED = "succeeded"
     FAILED = "failed"

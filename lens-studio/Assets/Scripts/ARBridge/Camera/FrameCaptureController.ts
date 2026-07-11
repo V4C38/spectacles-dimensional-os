@@ -73,12 +73,12 @@ export class FrameCaptureController extends BaseScriptComponent {
       if (msg.preview_pose) {
         this._robotWorldPos = protocolMetersToLensCentimeters(msg.preview_pose.position);
       }
-      if (msg.phase === "scanning" && msg.mode === "april_tag") {
+      if (msg.state === "april_tag" && msg.mode === "april_tag") {
         this._session.beginCameraCapture();
       } else if (
-        msg.phase === "succeeded" ||
-        msg.phase === "failed" ||
-        msg.phase === "idle"
+        msg.state === "succeeded" ||
+        msg.state === "failed" ||
+        msg.state === "idle"
       ) {
         this._session.endCameraCapture();
       }

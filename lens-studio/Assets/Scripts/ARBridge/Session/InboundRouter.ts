@@ -193,12 +193,12 @@ export class InboundRouter {
   }
 
   private _applyBridgeStatus(msg: BridgeStatusMessage): void {
-    const shouldClearAnchor = this.robotPresenter.manualRegistrationAlignment.onBridgeStatus(
+    const shouldClearAnchor = this.robotPresenter.manualRegistrationPlacement.onBridgeStatus(
       msg,
-      this.appState.snapshot.robotInteractionMode === "manualPlacement",
+      this.appState.snapshot.robotInteractionMode === "manual_placement",
     );
     if (shouldClearAnchor) {
-      this.robotPresenter.manualRegistrationAlignment.reset();
+      this.robotPresenter.manualRegistrationPlacement.reset();
     }
     this._applyBridgeProjection(true, msg);
     this.onBridgeStatusChanged.emit(msg);

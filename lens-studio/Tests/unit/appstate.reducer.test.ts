@@ -28,7 +28,6 @@ function runtimeState(
 function baseState(patch: Partial<AppStateData> = {}): AppStateData {
   return {
     phase: "runtime",
-    runtimeEstablished: true,
     debugMode: false,
     lidarMode: "obstacles",
     operatingMode: "manual",
@@ -73,7 +72,7 @@ describe("validateSessionFields", () => {
     const next = validateSessionFields(
       baseState({
         phase: "runtime",
-        operatingMode: "registration",
+        operatingMode: "registrationMode",
         navigationState: "navIntent",
       }),
     );
@@ -214,7 +213,7 @@ describe("robotMarkerSteadyStatePresentation", () => {
   it("returns empty text in registration mode", () => {
     expect(
       robotMarkerSteadyStatePresentation(
-        baseState({ operatingMode: "registration" }),
+        baseState({ operatingMode: "registrationMode" }),
       ),
     ).toEqual({ text: "", color: COLOR_WHITE });
   });
@@ -256,10 +255,10 @@ describe("toSessionState", () => {
       toSessionState(
         baseState({
           phase: "registration",
-          robotInteractionMode: "manualPlacement",
+          robotInteractionMode: "manual_placement",
         }),
       ),
-    ).toEqual({ phase: "registration", interaction: "manualPlacement" });
+    ).toEqual({ phase: "registration", interaction: "manual_placement" });
   });
 
   it("maps runtime phase", () => {

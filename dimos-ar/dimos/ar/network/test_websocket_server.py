@@ -249,15 +249,15 @@ async def test_terminal_registration_status_not_overwritten_by_non_terminal() ->
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"registration_status","phase":"succeeded","robot_id":"r"}')
-    outbound.enqueue('{"type":"registration_status","phase":"scanning","robot_id":"r"}')
+    outbound.enqueue('{"type":"registration_status","state":"succeeded","robot_id":"r"}')
+    outbound.enqueue('{"type":"registration_status","state":"april_tag","robot_id":"r"}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
 
     statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "registration_status"]
     assert statuses
-    assert statuses[-1]["phase"] == "succeeded"
+    assert statuses[-1]["state"] == "succeeded"
 
 
 @pytest.mark.asyncio
@@ -266,15 +266,15 @@ async def test_terminal_failed_not_overwritten_by_non_terminal() -> None:
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"registration_status","phase":"failed","robot_id":"r"}')
-    outbound.enqueue('{"type":"registration_status","phase":"scanning","robot_id":"r"}')
+    outbound.enqueue('{"type":"registration_status","state":"failed","robot_id":"r"}')
+    outbound.enqueue('{"type":"registration_status","state":"april_tag","robot_id":"r"}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
 
     statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "registration_status"]
     assert statuses
-    assert statuses[-1]["phase"] == "failed"
+    assert statuses[-1]["state"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -283,15 +283,15 @@ async def test_non_terminal_registration_status_can_be_overwritten() -> None:
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
 
-    outbound.enqueue('{"type":"registration_status","phase":"scanning","robot_id":"r","v":1}')
-    outbound.enqueue('{"type":"registration_status","phase":"editing","robot_id":"r","v":2}')
+    outbound.enqueue('{"type":"registration_status","state":"april_tag","robot_id":"r","v":1}')
+    outbound.enqueue('{"type":"registration_status","state":"manual_placement","robot_id":"r","v":2}')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
 
     statuses = [json.loads(t) for t in ws.sent if json.loads(t)["type"] == "registration_status"]
     assert len(statuses) == 1
-    assert statuses[0]["phase"] == "editing"
+    assert statuses[0]["state"] == "manual_placement"
 
 
 @pytest.mark.asyncio

@@ -25,8 +25,6 @@ logger = setup_logger()
 GO2_CAPABILITIES: dict[str, CapabilityState] = {
     "lidar": CapabilityState(True),
     "odom": CapabilityState(True),
-    "registration_april_tag": CapabilityState(True),
-    "registration_manual_pose": CapabilityState(True),
     "nav": CapabilityState(True),
     "path": CapabilityState(True),
     "cancel_nav_goal": CapabilityState(True),

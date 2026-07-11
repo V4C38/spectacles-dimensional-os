@@ -13,7 +13,7 @@ import {
 import {
   yawRotationFromWorldRotation,
 } from "../Utilities/Utilities";
-import { ManualRegistrationAlignment, RobotMarkerPose } from "../../ARBridge/Registration/ManualRegistrationAlignment";
+import { ManualRegistrationPlacement, RobotMarkerPose } from "../../ARBridge/Registration/ManualRegistrationPlacement";
 import { UILogEntry } from "../UI/UILogger";
 import { RobotUiCallbacks, RobotUiView } from "./RobotUiView";
 
@@ -43,7 +43,7 @@ const INTERACTION_MODE_CONFIG: Record<
     syncPose: false,
     menuWhenVisible: "hide",
   },
-  manualPlacement: {
+  manual_placement: {
     visible: true,
     manualPlacement: true,
     toggle: false,
@@ -358,7 +358,7 @@ export class RobotMarker extends BaseScriptComponent {
   private _rotation = quat.quatIdentity();
   private _lastNotifiedWorldPosition: vec3 | null = null;
 
-  private _manualRegistrationAlignment: ManualRegistrationAlignment | null = null;
+  private _manualRegistrationPlacement: ManualRegistrationPlacement | null = null;
   private _ui: RobotUiView | null = null;
   private _getLastPose: (() => PoseMessage | null) | null = null;
   private _getIsRuntimePhase: (() => boolean) | null = null;
@@ -387,7 +387,7 @@ export class RobotMarker extends BaseScriptComponent {
   }
 
   public initialize(deps: {
-    manualRegistrationAlignment: ManualRegistrationAlignment;
+    manualRegistrationPlacement: ManualRegistrationPlacement;
     getLastPose: () => PoseMessage | null;
     getIsRuntimePhase: () => boolean;
     getOperatingMode: () => OperatingMode;
@@ -395,7 +395,7 @@ export class RobotMarker extends BaseScriptComponent {
     getRobotClockNowS?: () => number | null;
     onWorldPositionChanged?: (position: vec3) => void;
   }): void {
-    this._manualRegistrationAlignment = deps.manualRegistrationAlignment;
+    this._manualRegistrationPlacement = deps.manualRegistrationPlacement;
     this._getLastPose = deps.getLastPose;
     this._getIsRuntimePhase = deps.getIsRuntimePhase;
     this._getOperatingMode = deps.getOperatingMode;
@@ -445,11 +445,11 @@ export class RobotMarker extends BaseScriptComponent {
   }
 
   public syncPose(): void {
-    if (!this._manualRegistrationAlignment || !this._getLastPose || !this._getInteractionMode) {
+    if (!this._manualRegistrationPlacement || !this._getLastPose || !this._getInteractionMode) {
       return;
     }
     const lastPose = this._getLastPose();
-    const resolved = this._manualRegistrationAlignment.resolveRobotMarkerPose(
+    const resolved = this._manualRegistrationPlacement.resolveRobotMarkerPose(
       lastPose,
       this._getInteractionMode(),
     );
@@ -465,7 +465,7 @@ export class RobotMarker extends BaseScriptComponent {
     bridgePose: PoseMessage | null,
   ): void {
     switch (resolved.source) {
-      case "registration_anchor":
+      case "manual_anchor":
         this.applyManualPose(resolved.position!, resolved.rotation!);
         break;
       case "world_frame_pose":
@@ -473,7 +473,7 @@ export class RobotMarker extends BaseScriptComponent {
           this.applyPose(bridgePose);
         }
         break;
-      case "approximate_alignment":
+      case "approximate_pose":
         this.applyRuntimeLensPose(resolved.position!, resolved.rotation!);
         break;
       case "none":

@@ -233,7 +233,7 @@ export class NavigationController {
     mode: AppStateData["operatingMode"],
     _state: AppStateData,
   ): void {
-    if (mode === "registration" || mode === "agent") {
+    if (mode === "registrationMode" || mode === "agent") {
       this.disarm();
       return;
     }

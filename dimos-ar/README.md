@@ -132,16 +132,16 @@ registration-mode pose aggregator until the estimate reaches
 `ALIGN_REG_CONF_MIN` (default 0.7) or yaw is observable, then auto-commits
 `(scale, yaw, translation)`. If confidence never rises within
 `TAG_REGISTRATION_WINDOW_S` (15 s), the session fails with an actionable
-message. The Lens wizard auto-dismisses on `phase=succeeded` (no manual
+message. The Lens wizard auto-dismisses on `state=succeeded` (no manual
 Complete tap).
 
-Requires the robot to advertise `registration_april_tag` (tag mounts must be
-configured). Robots without tag mounts must use manual pose registration.
+AprilTag registration requires tag mounts on the robot profile. Robots without
+tag mounts receive `state: failed` when the client sends `start april_tag`.
 
 **Manual pose** (`registration_command{command:"start",mode:"manual_pose"}`)  
 The user drags the robot marker to its real-world position in the Lens, streams
 `registration_pose`, then sends `registration_command{command:"commit"}`. No camera
-frames are consumed. Always available when `registration_manual_pose` is advertised.
+frames are consumed. The bridge rejects unavailable modes at command time.
 
 Notes:
 - On commit, `WorldRegistry` locks the robot base floor height (world Y) into
@@ -169,7 +169,7 @@ Notes:
 - Corrections that exceed the notification deadband (≥ 5 cm translation or ≥ 1° yaw)
   are emitted as `world_frame_correction`; sub-threshold updates still commit on the
   bridge.
-- AprilTag registration status broadcasts also carry `alignment_confidence` and
+- AprilTag registration status broadcasts also carry `registration_confidence` and
   `scale_locked` on the wire.
 
 **Tag mount geometry (Go2)**  

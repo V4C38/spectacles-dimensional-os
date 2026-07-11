@@ -1,7 +1,7 @@
 import { PointCloudRenderer } from "../Lidar/PointCloudRenderer";
 import { LidarPresenter } from "../Lidar/LidarPresenter";
 import { RobotMarker } from "./RobotMarker";
-import { ManualRegistrationAlignment } from "../../ARBridge/Registration/ManualRegistrationAlignment";
+import { ManualRegistrationPlacement } from "../../ARBridge/Registration/ManualRegistrationPlacement";
 import { AppStateStore } from "../AppState";
 import {
   AppStateData,
@@ -25,7 +25,7 @@ export interface RobotPresenterMenuCallbacks {
 
 /** Robot marker orchestration and LiDAR spatial presentation in the AR scene. */
 export class RobotPresenter {
-  private readonly _manualRegistrationAlignment = new ManualRegistrationAlignment();
+  private readonly _manualRegistrationPlacement = new ManualRegistrationPlacement();
   private _lidar: LidarPresenter | null = null;
   private _menuCallbacks: RobotPresenterMenuCallbacks | null = null;
   private _bound = false;
@@ -40,8 +40,8 @@ export class RobotPresenter {
     private readonly telemetry: TelemetryClient | null,
   ) {}
 
-  public get manualRegistrationAlignment(): ManualRegistrationAlignment {
-    return this._manualRegistrationAlignment;
+  public get manualRegistrationPlacement(): ManualRegistrationPlacement {
+    return this._manualRegistrationPlacement;
   }
 
   public get lastPose(): PoseMessage | null {
@@ -59,7 +59,7 @@ export class RobotPresenter {
 
     if (this.robotMarker) {
       this.robotMarker.initialize({
-        manualRegistrationAlignment: this._manualRegistrationAlignment,
+        manualRegistrationPlacement: this._manualRegistrationPlacement,
         getLastPose: () => this.lastPose,
         getIsRuntimePhase: () => this.isRuntimePhase(),
         getOperatingMode: () => menuCallbacks.getOperatingMode(),
@@ -104,7 +104,7 @@ export class RobotPresenter {
       return false;
     }
     if (this.isRuntimePhase() && this.robotMarker) {
-      const resolved = this._manualRegistrationAlignment.resolveRobotMarkerPose(
+      const resolved = this._manualRegistrationPlacement.resolveRobotMarkerPose(
         msg,
         this.appState.snapshot.robotInteractionMode,
       );
@@ -123,12 +123,12 @@ export class RobotPresenter {
   }
 
   public prepareForRuntime(registrationApproximate: boolean): void {
-    this._manualRegistrationAlignment.prepareForRuntime(registrationApproximate);
+    this._manualRegistrationPlacement.prepareForRuntime(registrationApproximate);
   }
 
   public onDisconnect(): void {
     this._lidar?.clearBuffer();
-    this._manualRegistrationAlignment.onDisconnected();
+    this._manualRegistrationPlacement.onDisconnected();
     this.robotMarker?.resetRuntimePoseSmoothing();
   }
 

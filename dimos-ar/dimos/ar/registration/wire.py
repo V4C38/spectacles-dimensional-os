@@ -7,7 +7,7 @@ import json
 import time
 from typing import Any, Literal
 
-from dimos.ar.registration.types import RegistrationMode, RegistrationPhase
+from dimos.ar.registration.types import RegistrationMode, RegistrationState
 
 RegistrationCommand = Literal["start", "stop", "commit"]
 
@@ -35,12 +35,12 @@ class RegistrationPoseMessage:
 @dataclass(frozen=True)
 class RegistrationStatusPayload:
     mode: RegistrationMode | None
-    phase: RegistrationPhase
+    state: RegistrationState
     message: str
     tag_visible: bool | None = None
     preview_pose: dict[str, Any] | None = None
     progress: int | None = None
-    alignment_confidence: float | None = None
+    registration_confidence: float | None = None
     scale_confidence: float | None = None
     scale_locked: bool | None = None
 
@@ -53,7 +53,7 @@ def encode_registration_status(
     payload: dict[str, Any] = {
         "type": "registration_status",
         "ts": ts if ts is not None else time.time(),
-        "phase": status.phase.value,
+        "state": status.state.value,
         "message": status.message,
     }
     if status.mode is not None:
@@ -64,8 +64,8 @@ def encode_registration_status(
         payload["preview_pose"] = status.preview_pose
     if status.progress is not None:
         payload["progress"] = status.progress
-    if status.alignment_confidence is not None:
-        payload["alignment_confidence"] = round(float(status.alignment_confidence), 4)
+    if status.registration_confidence is not None:
+        payload["registration_confidence"] = round(float(status.registration_confidence), 4)
     if status.scale_confidence is not None:
         payload["scale_confidence"] = round(float(status.scale_confidence), 4)
     if status.scale_locked is not None:

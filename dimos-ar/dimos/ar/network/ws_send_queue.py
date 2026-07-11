@@ -27,8 +27,8 @@ COALESCE_MESSAGE_TYPES = frozenset(
     }
 )
 _MESSAGE_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
-_REGISTRATION_STATUS_PHASE_RE = re.compile(r'"phase"\s*:\s*"([^"]+)"')
-_REGISTRATION_STATUS_TERMINAL_PHASES = frozenset({"succeeded", "failed"})
+_REGISTRATION_STATUS_STATE_RE = re.compile(r'"state"\s*:\s*"([^"]+)"')
+_REGISTRATION_STATUS_TERMINAL_STATES = frozenset({"succeeded", "failed"})
 
 _TRACE = os.getenv("DIMOS_AR_TRACE", "") not in ("", "0", "false")
 
@@ -78,14 +78,14 @@ class ClientSendQueue:
             if msg_type == "registration_status":
                 pending = self._coalesce_latest.get("registration_status")
                 if pending is not None:
-                    pending_phase_match = _REGISTRATION_STATUS_PHASE_RE.search(pending)
+                    pending_state_match = _REGISTRATION_STATUS_STATE_RE.search(pending)
                     if (
-                        pending_phase_match
-                        and pending_phase_match.group(1) in _REGISTRATION_STATUS_TERMINAL_PHASES
+                        pending_state_match
+                        and pending_state_match.group(1) in _REGISTRATION_STATUS_TERMINAL_STATES
                     ):
-                        new_phase_match = _REGISTRATION_STATUS_PHASE_RE.search(text)
-                        new_phase = new_phase_match.group(1) if new_phase_match else ""
-                        if new_phase not in _REGISTRATION_STATUS_TERMINAL_PHASES:
+                        new_state_match = _REGISTRATION_STATUS_STATE_RE.search(text)
+                        new_state = new_state_match.group(1) if new_state_match else ""
+                        if new_state not in _REGISTRATION_STATUS_TERMINAL_STATES:
                             self._work_available.set()
                             return
             self._coalesce_latest[msg_type] = text

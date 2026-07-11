@@ -73,24 +73,6 @@ def test_g1_robot_id_and_model() -> None:
     assert G1RobotProfileModule.robot_model(profile) == "unitree_g1"
 
 
-def test_go2_registration_april_tag_capability_available() -> None:
-    profile = _make_go2_profile()
-
-    assert (
-        Go2RobotProfileModule.capabilities(profile)["registration_april_tag"].available
-        is True
-    )
-
-
-def test_g1_registration_april_tag_capability_available() -> None:
-    profile = _make_g1_profile()
-
-    assert (
-        G1RobotProfileModule.capabilities(profile)["registration_april_tag"].available
-        is True
-    )
-
-
 def test_go2_runtime_tag_tracking_profile_defaults() -> None:
     profile = _make_go2_profile()
     runtime = Go2RobotProfileModule.runtime_tag_tracking_profile(profile)

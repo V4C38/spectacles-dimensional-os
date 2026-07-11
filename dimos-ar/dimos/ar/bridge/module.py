@@ -216,7 +216,6 @@ class ARBridge(Module):  # type: ignore[misc]
                     self.stop_movement.transport is not None
                     or self.cancel_goal_signal.transport is not None
                 ),
-                "registration_april_tag": len(self._profile.tag_mounts()) > 0,
             },
         )
         self._connect_handshake = handshake

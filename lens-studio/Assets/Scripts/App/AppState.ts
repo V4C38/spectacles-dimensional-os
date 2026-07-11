@@ -17,9 +17,9 @@ import {
 
 /** Whole-app lifecycle: registration wizard vs live AR session. */
 export type AppPhase = "registration" | "runtime";
-/** Runtime UX mode; `"registration"` is registration preview overlay — not the same as `AppPhase.registration`. */
-export type OperatingMode = "registration" | "manual" | "agent";
-export type RobotInteractionMode = "hidden" | "manualPlacement" | "runtimeRobot";
+/** Runtime UX mode; `"registrationMode"` is registration preview overlay — not the same as `AppPhase.registration`. */
+export type OperatingMode = "registrationMode" | "manual" | "agent";
+export type RobotInteractionMode = "hidden" | "manual_placement" | "runtimeRobot";
 export type NavigationState =
   | "disabled"
   | "idle"
@@ -49,7 +49,7 @@ export type LidarDisplayMode = "off" | "obstacles" | "full";
 
 export type RegistrationSessionState = {
   phase: "registration";
-  interaction: "hidden" | "manualPlacement";
+  interaction: "hidden" | "manual_placement";
 };
 
 export type RuntimeSessionState = {
@@ -212,7 +212,7 @@ export function robotMarkerSteadyStatePresentation(
   if (state.phase === "runtime" && state.bridgeLinkState === "connectedNoRobot") {
     return { text: "Robot offline", color: COLOR_ERROR };
   }
-  if (state.operatingMode === "registration") {
+  if (state.operatingMode === "registrationMode") {
     return { text: "", color: COLOR_WHITE };
   }
   if (!state.robotRuntime.capabilities.nav.available) {
@@ -233,8 +233,8 @@ export function robotMarkerSteadyStatePresentation(
 export function toSessionState(state: AppStateData): SessionState {
   if (state.phase === "registration") {
     const interaction =
-      state.robotInteractionMode === "manualPlacement"
-        ? "manualPlacement"
+      state.robotInteractionMode === "manual_placement"
+        ? "manual_placement"
         : "hidden";
     return { phase: "registration", interaction };
   }
@@ -262,7 +262,7 @@ export function validateSessionFields(state: AppStateData): AppStateData {
     if (next.navigationState !== "disabled" && next.operatingMode !== "manual") {
       next.navigationState = "disabled";
     }
-    if (next.operatingMode === "registration" && next.navigationState !== "disabled") {
+    if (next.operatingMode === "registrationMode" && next.navigationState !== "disabled") {
       next.navigationState = "disabled";
     }
   }
@@ -314,8 +314,6 @@ export interface DriftState {
 
 export interface AppStateData {
   phase: AppPhase;
-  /** Session milestone: set when runtime is first entered; survives wizard re-entry. */
-  runtimeEstablished: boolean;
   debugMode: boolean;
   lidarMode: LidarDisplayMode;
   operatingMode: OperatingMode;
@@ -333,8 +331,6 @@ export type AppStateListener = (state: AppStateData) => void;
 const DEFAULT_CAPABILITY_NAMES = [
   "lidar",
   "odom",
-  "registration_april_tag",
-  "registration_manual_pose",
   "nav",
   "path",
   "cancel_nav_goal",
@@ -430,7 +426,6 @@ export function createDefaultDriftState(): DriftState {
 export function createDefaultAppStateData(): AppStateData {
   return validateSessionFields({
     phase: "registration",
-    runtimeEstablished: false,
     debugMode: false,
     lidarMode: "off",
     operatingMode: "manual",

@@ -130,7 +130,7 @@ def test_broadcast_status_uses_aligner_observation_threshold() -> None:
 
     payload = json.loads(sent[-1])
     assert payload["progress"] == 40
-    assert payload["alignment_confidence"] == 0.4
+    assert payload["registration_confidence"] == 0.4
     assert "refining" not in payload
 
 
@@ -154,7 +154,7 @@ def test_maybe_finish_tag_registration_waits_for_confidence() -> None:
 
     assert registry.state.is_committed is False
     assert tag_tracker.active is True
-    assert not any(json.loads(payload)["phase"] == "succeeded" for payload in sent)
+    assert not any(json.loads(payload)["state"] == "succeeded" for payload in sent)
 
 
 def test_maybe_finish_tag_registration_commits_via_stability_fallback() -> None:
@@ -202,7 +202,7 @@ def test_maybe_finish_tag_registration_commits_via_stability_fallback() -> None:
     asyncio.run(session._maybe_finish_tag_registration())
 
     assert registry.state.is_committed is True
-    assert any(json.loads(payload)["phase"] == "succeeded" for payload in sent)
+    assert any(json.loads(payload)["state"] == "succeeded" for payload in sent)
     assert tag_tracker.active is False
 
 
@@ -225,7 +225,7 @@ def test_april_tag_progress_uses_observations_before_confidence() -> None:
 
     payload = json.loads(sent[-1])
     assert payload["progress"] == 40
-    assert payload.get("alignment_confidence") is None
+    assert payload.get("registration_confidence") is None
 
 
 def test_maybe_finish_tag_registration_commits_when_confident() -> None:
@@ -250,7 +250,7 @@ def test_maybe_finish_tag_registration_commits_when_confident() -> None:
     asyncio.run(session._maybe_finish_tag_registration())
 
     assert registry.state.is_committed is True
-    assert any(json.loads(payload)["phase"] == "succeeded" for payload in sent)
+    assert any(json.loads(payload)["state"] == "succeeded" for payload in sent)
     assert tag_tracker.active is False
 
 
@@ -282,7 +282,7 @@ def test_maybe_finish_tag_registration_commits_aligner_candidate() -> None:
     assert transform is not None
     assert transform[0, 3] == 1.5
     assert transform[2, 3] == -0.5
-    assert any(json.loads(payload)["phase"] == "succeeded" for payload in sent)
+    assert any(json.loads(payload)["state"] == "succeeded" for payload in sent)
     assert tag_tracker.active is False
 
 
@@ -307,7 +307,7 @@ def test_maybe_finish_tag_registration_fails_on_scan_timeout() -> None:
 
     assert registry.state.is_committed is False
     assert tag_tracker.active is False
-    assert any(json.loads(payload)["phase"] == "failed" for payload in sent)
+    assert any(json.loads(payload)["state"] == "failed" for payload in sent)
 
 
 def test_broadcast_status_after_provisional_commit() -> None:
@@ -320,7 +320,7 @@ def test_broadcast_status_after_provisional_commit() -> None:
     session._broadcast_status()
 
     payload = json.loads(sent[-1])
-    assert payload["alignment_confidence"] == 0.4
+    assert payload["registration_confidence"] == 0.4
     assert "refining" not in payload
 
 
@@ -370,4 +370,4 @@ def test_finish_april_tag_registration_clears_session() -> None:
 
     assert registry.state.is_committed is True
     assert session._session.mode is None
-    assert any(json.loads(payload)["phase"] == "succeeded" for payload in sent)
+    assert any(json.loads(payload)["state"] == "succeeded" for payload in sent)

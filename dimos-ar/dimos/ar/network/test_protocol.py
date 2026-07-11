@@ -34,7 +34,7 @@ from dimos.ar.network.protocol import (
     encode_registration_status,
     encode_runtime_snapshot,
 )
-from dimos.ar.registration.types import RegistrationMode, RegistrationPhase
+from dimos.ar.registration.types import RegistrationMode, RegistrationState
 from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
 from dimos.ar.robot_profile.g1 import g1_handshake
 from dimos.ar.world_frame.state import WorldFrameState
@@ -85,8 +85,8 @@ def test_encode_hello_g1_tag_tracking_profile() -> None:
     msg = json.loads(encode_hello(handshake))
     assert msg["robot"]["robot_id"] == "unitree_g1"
     assert "robot_model" not in msg["robot"]
-    assert msg["capabilities"]["registration_april_tag"]["available"] is True
-    assert msg["capabilities"]["registration_manual_pose"]["available"] is True
+    assert "registration_april_tag" not in msg["capabilities"]
+    assert "registration_manual_pose" not in msg["capabilities"]
     assert msg["robot"]["tag_tracking_profile"]["tag_total_size_m"] == 0.07
     assert isinstance(msg["robot"]["tag_tracking_profile"]["tag_ids"], list)
 
@@ -101,7 +101,7 @@ def test_encode_hello_g1_tag_registration_disabled() -> None:
         tag_mount_available=False,
     )
     msg = json.loads(encode_hello(handshake))
-    assert msg["capabilities"]["registration_manual_pose"]["available"] is False
+    assert "registration_manual_pose" not in msg["capabilities"]
 
 
 def test_robot_id_mismatch_rejected() -> None:
@@ -361,7 +361,7 @@ def test_encode_registration_status() -> None:
             ts=1.0,
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.APRIL_TAG,
-                phase=RegistrationPhase.SCANNING,
+                state=RegistrationState.APRIL_TAG,
                 message="Look at the AprilTag on your robot",
                 tag_visible=True,
             ),
@@ -369,7 +369,7 @@ def test_encode_registration_status() -> None:
     )
     assert raw["type"] == "registration_status"
     assert raw["mode"] == "april_tag"
-    assert raw["phase"] == "scanning"
+    assert raw["state"] == "april_tag"
     assert raw["tag_visible"] is True
     assert "progress" not in raw
 
@@ -380,7 +380,7 @@ def test_encode_registration_status_with_progress() -> None:
             ts=1.0,
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.APRIL_TAG,
-                phase=RegistrationPhase.SCANNING,
+                state=RegistrationState.APRIL_TAG,
                 message="",
                 tag_visible=True,
                 progress=40,
@@ -396,13 +396,13 @@ def test_encode_registration_status_with_alignment_fields() -> None:
             ts=1.0,
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.APRIL_TAG,
-                phase=RegistrationPhase.SUCCEEDED,
+                state=RegistrationState.SUCCEEDED,
                 message="Registration successful",
-                alignment_confidence=0.65,
+                registration_confidence=0.65,
             ),
         )
     )
-    assert raw["alignment_confidence"] == pytest.approx(0.65)
+    assert raw["registration_confidence"] == pytest.approx(0.65)
     assert "refining" not in raw
 
 
@@ -412,13 +412,13 @@ def test_encode_registration_status_manual() -> None:
             ts=1.0,
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.MANUAL_POSE,
-                phase=RegistrationPhase.AWAITING_COMMIT,
+                state=RegistrationState.AWAITING_COMMIT,
                 message="Manual robot pose ready — review and commit",
             ),
         )
     )
     assert raw["mode"] == "manual_pose"
-    assert raw["phase"] == "awaiting_commit"
+    assert raw["state"] == "awaiting_commit"
     assert "tag_visible" not in raw
 
 
@@ -476,7 +476,7 @@ def test_encode_registration_status_scale_fields() -> None:
             ts=1.0,
             status=RegistrationStatusPayload(
                 mode=RegistrationMode.APRIL_TAG,
-                phase=RegistrationPhase.SUCCEEDED,
+                state=RegistrationState.SUCCEEDED,
                 message="Registration successful",
                 scale_confidence=0.15,
                 scale_locked=False,

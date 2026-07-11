@@ -32,8 +32,6 @@ NavTerminalOutcome = Literal["succeeded", "failed"]
 DEFAULT_CAPABILITIES = [
     "lidar",
     "odom",
-    "registration_april_tag",
-    "registration_manual_pose",
     "nav",
     "path",
     "cancel_nav_goal",

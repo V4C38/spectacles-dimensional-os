@@ -128,10 +128,10 @@ export type WorldFrameSolveMethod =
 
 export type RegistrationMode = "april_tag" | "manual_pose";
 
-export type RegistrationPhase =
+export type RegistrationState =
   | "idle"
-  | "scanning"
-  | "editing"
+  | "april_tag"
+  | "manual_placement"
   | "awaiting_commit"
   | "succeeded"
   | "failed";
@@ -146,14 +146,13 @@ export interface RegistrationStatusMessage {
   type: "registration_status";
   ts: number;
   mode?: RegistrationMode;
-  phase: RegistrationPhase;
+  state: RegistrationState;
   message: string;
   tag_visible?: boolean;
   preview_pose?: RegistrationPreviewPose;
-  /** AprilTag registration progress 0–100; present during `april_tag` scanning/succeeded. */
+  /** AprilTag registration progress 0–100; present during `april_tag` state/succeeded. */
   progress?: number;
-  alignment_confidence?: number;
-  scale_confidence?: number;
+  registration_confidence?: number;
   scale_locked?: boolean;
 }
 
@@ -356,10 +355,10 @@ function requireBoolean(obj: Record<string, unknown>, key: string): boolean {
   return value;
 }
 
-const REGISTRATION_PHASES: RegistrationPhase[] = [
+const REGISTRATION_STATES: RegistrationState[] = [
   "idle",
-  "scanning",
-  "editing",
+  "april_tag",
+  "manual_placement",
   "awaiting_commit",
   "succeeded",
   "failed",
@@ -621,9 +620,13 @@ function parseInboundObject(
     }
 
     case "registration_status": {
-      const phase = requireString(data, "phase");
-      if (!REGISTRATION_PHASES.includes(phase as RegistrationPhase)) {
-        print(`Protocol: unknown registration_status.phase "${phase}"; skipping`);
+      if (typeof data.phase === "string") {
+        print(`Protocol: legacy registration_status.phase rejected; use state`);
+        return null;
+      }
+      const state = requireString(data, "state");
+      if (!REGISTRATION_STATES.includes(state as RegistrationState)) {
+        print(`Protocol: unknown registration_status.state "${state}"; skipping`);
         return null;
       }
       const mode = data.mode;
@@ -638,7 +641,7 @@ function parseInboundObject(
       const msg: RegistrationStatusMessage = {
         type: "registration_status",
         ts: requireNumber(data, "ts"),
-        phase: phase as RegistrationPhase,
+        state: state as RegistrationState,
         message: typeof data.message === "string" ? data.message : "",
       };
       if (mode === "april_tag" || mode === "manual_pose") {
@@ -655,16 +658,13 @@ function parseInboundObject(
         msg.progress = Math.max(0, Math.min(100, Math.round(data.progress)));
       }
       if (
-        typeof data.alignment_confidence === "number" &&
-        Number.isFinite(data.alignment_confidence)
+        typeof data.registration_confidence === "number" &&
+        Number.isFinite(data.registration_confidence)
       ) {
-        msg.alignment_confidence = Math.max(0, Math.min(1, data.alignment_confidence));
-      }
-      if (
-        typeof data.scale_confidence === "number" &&
-        Number.isFinite(data.scale_confidence)
-      ) {
-        msg.scale_confidence = Math.max(0, Math.min(1, data.scale_confidence));
+        msg.registration_confidence = Math.max(
+          0,
+          Math.min(1, data.registration_confidence),
+        );
       }
       if (typeof data.scale_locked === "boolean") {
         msg.scale_locked = data.scale_locked;

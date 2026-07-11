@@ -18,7 +18,6 @@ import {
   OperatingMode,
   RobotInteractionMode,
 } from "./AppState";
-import { isCapabilityAvailable } from "./Robot/RobotRuntimeModel";
 import { COLOR_WHITE } from "./UI/UIKit";
 
 /** Phase lifecycle, operating mode, and subsystem orchestration for AR bridge runtime. */
@@ -100,10 +99,8 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
         getOperatingMode: () => this.operatingMode,
       },
       {
-        manualRegistrationAlignment: robot.manualRegistrationAlignment,
+        manualRegistrationPlacement: robot.manualRegistrationPlacement,
         hasBridgeConnection: () => this.hasBridgeConnection(),
-        isCapabilityAvailable: (cap) =>
-          isCapabilityAvailable(this.appState.robotRuntime, cap),
         getInteractionMode: () => this.appState.robotInteractionMode,
         setInteractionMode: (mode) => this._setRobotInteractionMode(mode),
         getIsRuntimePhase: () => this.isRuntimePhase(),
@@ -129,7 +126,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.arBridgeServices.robot.robotMarker?.ui?.setOperatingMode(mode);
 
     const navigation = this.arBridgeServices.navigation;
-    if (mode === "registration") {
+    if (mode === "registrationMode") {
       navigation.syncManualNavigationForOperatingMode(mode, state);
       return;
     }
@@ -285,7 +282,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
   }
 
   public onMainMenuModeButtonPressed(mode: OperatingMode): void {
-    if (mode === "registration") {
+    if (mode === "registrationMode") {
       return;
     }
     if (this.appState.operatingMode === mode) {
@@ -299,7 +296,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
       return;
     }
     this._log(`setOperatingMode: ${mode}`);
-    if (mode === "registration") {
+    if (mode === "registrationMode") {
       this.arBridgeServices.state.update({ operatingMode: mode, lidarMode: "off" });
       return;
     }

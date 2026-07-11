@@ -96,9 +96,8 @@ describe("RegistrationClient", () => {
     statusHandler({
       type: "registration_status",
       ts: 1,
-      robot_id: "go2",
       mode: "april_tag",
-      phase: "failed",
+      state: "failed",
       message: "Tag lost",
     });
 
@@ -118,28 +117,12 @@ describe("RegistrationClient", () => {
     statusHandler({
       type: "registration_status",
       ts: 1,
-      robot_id: "go2",
       mode: "april_tag",
-      phase: "succeeded",
+      state: "succeeded",
       message: "Registration successful",
     });
 
     expect(client.hasActiveIntent()).toBe(false);
-  });
-
-  it("uses registration capabilities for preferred mode", () => {
-    const { client } = makeRegistrationClient();
-    client.initialize({
-      manualRegistrationAlignment: { reset: vi.fn() } as any,
-      hasBridgeConnection: () => true,
-      isCapabilityAvailable: (cap) => cap === "registration_manual_pose",
-      getInteractionMode: () => "hidden",
-      setInteractionMode: vi.fn(),
-      getIsRuntimePhase: () => false,
-      disableNavigationPlacementForRegistration: vi.fn(),
-    });
-
-    expect(client.preferredMode()).toBe("manualOnly");
   });
 
   it("stop with notifyBridge sends stop when no local session", () => {
@@ -172,9 +155,8 @@ describe("RegistrationClient", () => {
     statusHandler({
       type: "registration_status",
       ts: 1,
-      robot_id: "go2",
       mode: "manual_pose",
-      phase: "succeeded",
+      state: "succeeded",
       message: "Manual registration committed",
     });
 
@@ -182,14 +164,6 @@ describe("RegistrationClient", () => {
     client.stop();
 
     expect(transport.send).not.toHaveBeenCalled();
-  });
-
-  it("commit sets awaitingCommit", () => {
-    const { client } = makeRegistrationClient();
-    client.start("manual_pose");
-    client.commit();
-
-    expect(client.awaitingCommit).toBe(true);
   });
 
   it("start clears prior session state", () => {

@@ -28,7 +28,7 @@ function makeRouter(phase: "registration" | "runtime") {
     onDisconnect: vi.fn(),
     applyPendingPose: vi.fn(),
     tickFrame: vi.fn(),
-    manualRegistrationAlignment: {
+    manualRegistrationPlacement: {
       onBridgeStatus: vi.fn(() => false),
       reset: vi.fn(),
     },

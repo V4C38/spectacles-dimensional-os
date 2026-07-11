@@ -101,17 +101,30 @@ describe("parseInboundMessage", () => {
         type: "registration_status",
         ts: 1,
         mode: "april_tag",
-        phase: "scanning",
+        state: "april_tag",
         message: "Look at tag",
         tag_visible: true,
         progress: 55,
-        alignment_confidence: 0.65,
+        registration_confidence: 0.65,
       }),
     );
     expect(msg!.type).toBe("registration_status");
-    expect((msg as { phase: string }).phase).toBe("scanning");
+    expect((msg as { state: string }).state).toBe("april_tag");
     expect((msg as { progress: number }).progress).toBe(55);
-    expect((msg as { alignment_confidence: number }).alignment_confidence).toBe(0.65);
+    expect((msg as { registration_confidence: number }).registration_confidence).toBe(0.65);
+  });
+
+  it("rejects legacy registration_status.phase", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "registration_status",
+        ts: 1,
+        mode: "april_tag",
+        phase: "scanning",
+        message: "legacy",
+      }),
+    );
+    expect(msg).toBeNull();
   });
 
   it("parses registration_status scale lock fields", () => {
@@ -120,14 +133,12 @@ describe("parseInboundMessage", () => {
         type: "registration_status",
         ts: 1,
         mode: "april_tag",
-        phase: "succeeded",
+        state: "succeeded",
         message: "Registration successful",
-        scale_confidence: 0.15,
         scale_locked: false,
       }),
     );
     expect(msg!.type).toBe("registration_status");
-    expect((msg as { scale_confidence: number }).scale_confidence).toBe(0.15);
     expect((msg as { scale_locked: boolean }).scale_locked).toBe(false);
   });
 

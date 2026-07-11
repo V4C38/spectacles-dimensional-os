@@ -12,7 +12,7 @@ from dimos.ar.registration.session.session_frames import RegistrationSessionFram
 from dimos.ar.registration.types import (
     RegistrationCandidate,
     RegistrationMode,
-    RegistrationPhase,
+    RegistrationState,
 )
 from dimos.ar.registration.wire import RegistrationStatusPayload
 from dimos.ar.tag_tracking.tracker import FrameResult, RobotAprilTagTracker
@@ -136,7 +136,7 @@ class RegistrationSession(
         self._clear_session()
         logger.info("AR registration stopped")
         self._broadcast_status(
-            phase=RegistrationPhase.IDLE,
+            state=RegistrationState.IDLE,
             message="Registration cancelled",
             mode=session_mode,
             ts=msg.ts,
@@ -148,7 +148,7 @@ class RegistrationSession(
             self._stop_broadcast()
             self._clear_session()
             self._broadcast_status(
-                phase=RegistrationPhase.FAILED,
+                state=RegistrationState.FAILED,
                 message="Emergency stop received",
             )
 
@@ -157,7 +157,7 @@ class RegistrationSession(
         if cand is None:
             logger.warning("AR registration commit rejected", reason="no_candidate")
             self._broadcast_status(
-                phase=RegistrationPhase.FAILED,
+                state=RegistrationState.FAILED,
                 message="No valid registration candidate yet",
                 ts=msg.ts,
             )
@@ -272,8 +272,8 @@ class RegistrationSession(
         frame_result: FrameResult | None = None,
     ) -> Any:
         if self._tag_tracker.active:
-            if self._session.last_status is None or self._session.last_status.phase in (
-                RegistrationPhase.SCANNING,
+            if self._session.last_status is None or self._session.last_status.state in (
+                RegistrationState.APRIL_TAG,
             ):
                 self._broadcast_status()
             from dimos.ar.world_frame.refinement import CaptureEpisodeOutcome

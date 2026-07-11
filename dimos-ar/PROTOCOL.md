@@ -242,8 +242,6 @@ capability map, then sends a `runtime_snapshot` (see below).
   "capabilities": {
     "lidar":                              { "available": true,  "reason": null },
     "odom":                               { "available": true,  "reason": null },
-    "registration_april_tag":   { "available": true,  "reason": null },
-    "registration_manual_pose":           { "available": true,  "reason": null },
     "nav":                                { "available": true,  "reason": null },
     "path":                               { "available": true,  "reason": null },
     "cancel_nav_goal":                        { "available": true,  "reason": null },
@@ -359,12 +357,11 @@ Registration progress during a setup session:
   "type": "registration_status",
   "ts": 1730000000.123,
   "mode": "april_tag",
-  "phase": "scanning",
+  "state": "april_tag",
   "message": "Look at the AprilTag on your robot",
   "tag_visible": true,
   "progress": 40,
-  "alignment_confidence": 0.42,
-  "scale_confidence": 0.0,
+  "registration_confidence": 0.42,
   "scale_locked": false,
   "preview_pose": {
     "position": [1.2, 0.0, -2.0],
@@ -377,22 +374,20 @@ Fields:
 
 - `mode` (optional): `"april_tag"` or `"manual_pose"` — matches
   `registration_command.mode` when a session is active
-- `phase`: one of `"idle"`, `"scanning"`, `"editing"`, `"awaiting_commit"`,
-  `"succeeded"`, `"failed"`
+- `state`: one of `"idle"`, `"april_tag"`, `"manual_placement"`,
+  `"awaiting_commit"`, `"succeeded"`, `"failed"`
 - `message`: human-readable status string for display in the client HUD
 - `tag_visible` (optional): present for AprilTag sessions; `true` when a
   configured robot-mounted tag was detected in the most recent processed frame
 - `preview_pose` (optional): estimated robot pose in world frame (`position` xyz
   metres, `orientation` quaternion xyzw); omitted until a solve is available
 - `progress` (optional): AprilTag registration progress **0–100**; present while
-  `mode` is `"april_tag"` during `scanning` and `succeeded`. Reflects
+  `mode` is `"april_tag"` during `april_tag` and `succeeded`. Reflects
   registration readiness (observation count blended with
-  `alignment_confidence`), not raw frame count alone. Clients should display
+  `registration_confidence`), not raw frame count alone. Clients should display
   this value directly rather than inferring progress from `message`.
-- `alignment_confidence` (optional): bridge-computed confidence **0–1** for the
+- `registration_confidence` (optional): bridge-computed confidence **0–1** for the
   current registration or runtime alignment estimate
-- `scale_confidence` (optional): bridge-computed confidence **0–1** for the
-  persistent odom scale estimate
 - `scale_locked` (optional): `true` when scale confidence meets the bridge lock
   threshold (scale has converged)
 
@@ -400,10 +395,10 @@ During AprilTag registration (`mode: "april_tag"`), the robot stays still. The
 Spectacles user moves around the robot while keeping the tag in view; camera
 motion provides yaw observability. The bridge auto-commits when the
 registration estimate meets the confidence threshold (or yaw is observable).
-If confidence never rises within the registration window, `phase` becomes
+If confidence never rises within the registration window, `state` becomes
 `"failed"`. After commit, runtime similarity alignment may continue from tag
 observations during navigation. The client auto-finishes the wizard on
-`phase: "succeeded"`; no separate commit message is required.
+`state: "succeeded"`; no separate commit message is required.
 
 ### `camera_frame_ack`
 
@@ -761,9 +756,8 @@ Fields:
 
 - `command` (**required**): `"start"`, `"stop"`, or `"commit"`
 - `mode` (**required when `command` is `"start"`**): `"april_tag"` or
-  `"manual_pose"`. Must be omitted for all other commands. Requires the
-  matching capability (`registration_april_tag` or `registration_manual_pose`)
-  to be available in `hello`.
+  `"manual_pose"`. Must be omitted for all other commands. The bridge rejects
+  unavailable modes at start time (e.g. AprilTag when no tag mounts are configured).
 
 AprilTag registration auto-commits when the registration estimate is confident
 enough (or yaw is observable); the client does not send a separate commit for

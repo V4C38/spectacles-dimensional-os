@@ -13,26 +13,26 @@ export interface ManualRegistrationAnchor {
 // ================================================================
 /**
  * Encapsulates manual-registration anchor state and the quaternion
- * alignment math used to remap bridge-frame robot poses to the
+ * placement math used to remap bridge-frame robot poses to the
  * manually placed anchor frame.
  */
 // ================================================================
 
 export type RobotMarkerPoseSource =
-  | "registration_anchor"
-  | "approximate_alignment"
+  | "manual_anchor"
+  | "approximate_pose"
   | "world_frame_pose"
   | "none";
 
 export interface RobotMarkerPose {
   source: RobotMarkerPoseSource;
-  /** World-space position (cm) — set for registration_anchor and approximate_alignment. */
+  /** World-space position (cm) — set for manual_anchor and approximate_pose. */
   position?: vec3;
-  /** World-space rotation — set for registration_anchor and approximate_alignment. */
+  /** World-space rotation — set for manual_anchor and approximate_pose. */
   rotation?: quat;
 }
 
-export class ManualRegistrationAlignment {
+export class ManualRegistrationPlacement {
   private _registrationAnchor: ManualRegistrationAnchor | null = null;
   private _preferRegistrationAnchorUntilNextRuntimePose = false;
   private _useApproximateAlignment = false;
@@ -101,36 +101,23 @@ export class ManualRegistrationAlignment {
     this._approximateAlignmentTranslation = null;
   }
 
-  /**
-   * Resolve which pose to display and compute its world-space position/rotation.
-   *
-   * Decision order:
-   *   1. Registration anchor during placement mode or while awaiting first runtime pose.
-   *   2. Bridge pose with optional approximate alignment (anchorRotation * bridgeRotation⁻¹,
-   *      lazily computed and cached on the first received bridge pose).
-   *   3. Registration anchor fallback when no bridge pose has arrived yet.
-   *   4. None — caller does nothing.
-   *
-   * Side-effects: may set _preferRegistrationAnchorUntilNextRuntimePose = false and may
-   * lazily compute/cache the alignment transform.
-   */
   public resolveRobotMarkerPose(
     bridgePose: PoseMessage | null,
     interactionMode: RobotInteractionMode,
   ): RobotMarkerPose {
     if (
       this._registrationAnchor &&
-      (interactionMode === "manualPlacement" ||
+      (interactionMode === "manual_placement" ||
         (this._preferRegistrationAnchorUntilNextRuntimePose && !bridgePose))
     ) {
       return {
-        source: "registration_anchor",
+        source: "manual_anchor",
         position: this._registrationAnchor.position,
         rotation: this._registrationAnchor.rotation,
       };
     }
 
-    if (bridgePose && interactionMode !== "manualPlacement") {
+    if (bridgePose && interactionMode !== "manual_placement") {
       const shouldApplyAlignment =
         this._registrationAnchor !== null && this._useApproximateAlignment;
 
@@ -165,7 +152,7 @@ export class ManualRegistrationAlignment {
         .add(this._approximateAlignmentTranslation);
       this._preferRegistrationAnchorUntilNextRuntimePose = false;
       return {
-        source: "approximate_alignment",
+        source: "approximate_pose",
         position: alignedPosition,
         rotation: alignedRotation,
       };
@@ -173,7 +160,7 @@ export class ManualRegistrationAlignment {
 
     if (this._registrationAnchor) {
       return {
-        source: "registration_anchor",
+        source: "manual_anchor",
         position: this._registrationAnchor.position,
         rotation: this._registrationAnchor.rotation,
       };
