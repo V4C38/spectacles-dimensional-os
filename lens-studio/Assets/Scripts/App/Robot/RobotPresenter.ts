@@ -140,6 +140,10 @@ export class RobotPresenter {
     );
   }
 
+  public setDebugBoundsFromRuntime(runtime: AppStateData["robotRuntime"]): void {
+    this.robotMarker?.setDebugBoundsFromRuntime(runtime);
+  }
+
   public refreshLidarPresentation(state?: AppStateData): void {
     const snapshot = state ?? this.appState.snapshot;
     this._lidar?.apply({

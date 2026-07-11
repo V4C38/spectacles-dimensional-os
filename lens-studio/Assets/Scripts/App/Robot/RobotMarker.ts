@@ -14,10 +14,15 @@ import { ManualRegistrationPlacement, RobotMarkerPose } from "../../ARBridge/Reg
 import { UILogEntry } from "../UI/UILogger";
 import { RobotUiCallbacks, RobotUiView } from "./RobotUiView";
 import { RuntimePoseAnimator } from "./RuntimePoseAnimator";
+import { RobotRuntimeState } from "../AppState";
+import {
+  runtimeBodyBoundsCenterOffsetCm,
+  runtimeBodyBoundsScaleCm,
+} from "./RobotRuntimeModel";
 
 export type { RobotUiAssistOverlay, RobotUiCallbacks } from "./RobotUiView";
 
-const ROBOT_UI_WORLD_UP_OFFSET_CM = 20.0;
+const ROBOT_UI_WORLD_UP_OFFSET_CM = 10.0;
 const PROTOCOL_M_TO_LENS_CM = 100.0;
 
 type BoolOrActive = boolean | "whenActive";
@@ -72,7 +77,8 @@ export class RobotMarker extends BaseScriptComponent {
   private _manualInteractable: Interactable | null = null;
   private _manualManipulation: InteractableManipulation | null = null;
   private _toggleRoot: SceneObject | null = null;
-  private _directionArrow: SceneObject | null = null;
+  private _debugView: SceneObject | null = null;
+  private _boundingBox: SceneObject | null = null;
   private _toggleCollider: ColliderComponent | null = null;
   private _toggleButton: RoundButton | null = null;
   private _menuRoot: SceneObject | null = null;
@@ -80,7 +86,6 @@ export class RobotMarker extends BaseScriptComponent {
   private _debugMode = false;
   private _renderOffsetCm = vec3.zero();
   private _toggleBaseLocalPosition: vec3 | null = null;
-  private _directionArrowBaseLocalPosition: vec3 | null = null;
   private _placementHandleBaseLocalPosition: vec3 | null = null;
   private _rotation = quat.quatIdentity();
   private _lastNotifiedWorldPosition: vec3 | null = null;
@@ -251,7 +256,14 @@ export class RobotMarker extends BaseScriptComponent {
 
   public setDebugMode(enabled: boolean): void {
     this._debugMode = enabled;
-    this._syncDirectionArrowVisibility();
+    this._syncDebugViewVisibility();
+  }
+
+  public setDebugBoundsFromRuntime(runtime: RobotRuntimeState): void {
+    if (!this._configured) {
+      this._configureVisuals();
+    }
+    this._syncDebugBounds(runtime);
   }
 
   public setVisible(visible: boolean): void {
@@ -321,7 +333,7 @@ export class RobotMarker extends BaseScriptComponent {
     if (enabled) {
       this.syncRotationFromScene();
     }
-    this._syncDirectionArrowVisibility();
+    this._syncDebugViewVisibility();
   }
 
   public getWorldPosition(): vec3 | null {
@@ -426,11 +438,11 @@ export class RobotMarker extends BaseScriptComponent {
         },
       },
       {
-        name: "RobotDirectionArrow",
+        name: "RobotDebugView",
         assign: (obj) => {
-          this._directionArrow = obj;
-          this._directionArrow.enabled = false;
-          this._directionArrowBaseLocalPosition = obj.getTransform().getLocalPosition();
+          this._debugView = obj;
+          this._debugView.enabled = false;
+          this._boundingBox = findChildRecursive(obj, "BoundingBox");
         },
       },
     ];
@@ -588,25 +600,37 @@ export class RobotMarker extends BaseScriptComponent {
     );
   }
 
-  private _syncDirectionArrowVisibility(): void {
-    if (!this._directionArrow && this.markerRoot) {
-      this._directionArrow = findChildRecursive(this.markerRoot, "RobotDirectionArrow");
+  private _syncDebugViewVisibility(): void {
+    if (!this._debugView && this.markerRoot) {
+      this._debugView = findChildRecursive(this.markerRoot, "RobotDebugView");
     }
-    if (!this._directionArrow) {
+    if (!this._debugView) {
       return;
     }
-    this._directionArrow.enabled = this._debugMode || this._manualPlacementActive;
+    this._debugView.enabled = this._debugMode || this._manualPlacementActive;
+  }
+
+  private _syncDebugBounds(runtime: RobotRuntimeState): void {
+    if (!this._boundingBox && this._debugView) {
+      this._boundingBox = findChildRecursive(this._debugView, "BoundingBox");
+    }
+    if (!this._boundingBox) {
+      return;
+    }
+    const scale = runtimeBodyBoundsScaleCm(runtime);
+    const centerOffset = runtimeBodyBoundsCenterOffsetCm(runtime);
+    if (!scale || !centerOffset) {
+      return;
+    }
+    const transform = this._boundingBox.getTransform();
+    transform.setLocalScale(scale);
+    transform.setLocalPosition(centerOffset);
   }
 
   private _syncVisualOffsets(): void {
     if (this._toggleRoot && this._toggleBaseLocalPosition) {
       this._toggleRoot.getTransform().setLocalPosition(
         this._toggleBaseLocalPosition.add(this._renderOffsetCm),
-      );
-    }
-    if (this._directionArrow && this._directionArrowBaseLocalPosition) {
-      this._directionArrow.getTransform().setLocalPosition(
-        this._directionArrowBaseLocalPosition.add(this._renderOffsetCm),
       );
     }
     if (this._placementHandle && this._placementHandleBaseLocalPosition) {

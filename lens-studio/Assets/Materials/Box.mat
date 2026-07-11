@@ -1,12 +1,12 @@
-- !<Material/292c5410-f592-4e05-9e04-1abe6083dfcf>
+- !<Material/0357bc25-0c02-47d5-b17d-66d392fc7cab>
   PackagePath: ""
   PassesInfo:
-    - !<own> af02dbee-cd40-4932-a5f4-67249a336c38
-- !<PassInfo/af02dbee-cd40-4932-a5f4-67249a336c38>
+    - !<own> ede14006-09e0-43a7-8322-f17adfa03655
+- !<PassInfo/ede14006-09e0-43a7-8322-f17adfa03655>
   CachedProperties:
-    - Opacity:
-        typeIdx: 1
-        value: 0.500000
+    - Color:
+        typeIdx: 5
+        value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 0.500008}
     - Port_Depth_N004:
         typeIdx: 1
         value: 1.000000
@@ -19,6 +19,9 @@
     - Port_FinalColor3_N004:
         typeIdx: 5
         value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+    - Port_FinalColor_N004:
+        typeIdx: 5
+        value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
     - Port_GSplatPointSize_N004:
         typeIdx: 1
         value: 0.000000
@@ -28,15 +31,18 @@
     - Port_GSplatScale_N004:
         typeIdx: 4
         value: {x: 0.000000, y: 0.000000, z: 0.000000}
-    - Port_Input0_N001:
-        typeIdx: 5
-        value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
-    - Port_Input1_N001:
-        typeIdx: 5
-        value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
-    - Port_Output_N005:
-        typeIdx: 5
-        value: {x: 0.000000, y: 0.000000, z: 0.000000, w: 0.000000}
+    - Port_Input1_N013:
+        typeIdx: 1
+        value: 0.000000
+    - Port_Input1_N016:
+        typeIdx: 1
+        value: 0.000000
+    - Port_Input1_N017:
+        typeIdx: 1
+        value: 0.500000
+    - Port_Input1_N024:
+        typeIdx: 1
+        value: 0.000000
     - Port_PrevWorldPosition_N004:
         typeIdx: 4
         value: {x: 0.000000, y: 0.000000, z: 0.000000}
@@ -46,16 +52,10 @@
     - Port_RayOrigin_N004:
         typeIdx: 4
         value: {x: 0.000000, y: 0.000000, z: 0.000000}
-    - Port_Value3_N007:
-        typeIdx: 1
-        value: 0.000000
-    - Port_Value4_N002:
-        typeIdx: 1
-        value: 0.000000
-    - Port_Value4_N007:
-        typeIdx: 1
-        value: 0.000000
-    - Port_Value_N002:
+    - Port_Value1_N015:
+        typeIdx: 5
+        value: {x: 0.000000, y: 0.000000, z: 0.000000, w: 1.000000}
+    - Port_Value1_N022:
         typeIdx: 5
         value: {x: 0.000000, y: 0.000000, z: 0.000000, w: 0.000000}
     - Port_WorldNormal_N004:
@@ -67,51 +67,42 @@
     - Port_WorldTangent_N004:
         typeIdx: 4
         value: {x: 0.000000, y: 0.000000, z: 1.000000}
+    - alphaTestThreshold:
+        typeIdx: 1
+        value: 0.447000
+    - lineColor:
+        typeIdx: 5
+        value: {x: 0.000000, y: 0.976806, z: 0.000000, w: 1.000000}
+    - lineWeight:
+        typeIdx: 1
+        value: 0.030000
   DepthWrite: false
-  DepthTest: true
+  DepthTest: false
   DepthFunction: LessEqual
   TwoSided: true
   ColorMask: {x: true, y: true, z: true, w: true}
   CullMode: Back
   PolygonOffset: {x: 0.000000, y: 0.000000}
   FrustumCulling: Auto
-  FrustumCullPad: 10000.000000
+  FrustumCullPad: 0.000000
   InstanceCount: 1
   Defines:
     []
   BlendMode: PremultipliedAlphaAuto
   Properties:
-    Color:
-      typeIdx: 5
-      value: {x: 0.999420, y: 0.985550, z: 0.000000, w: 1.000000}
     Opacity_Override:
       typeIdx: 1
-      value: 0.700000
-    Port_Input0_N015:
-      typeIdx: 1
-      value: 0.499000
-    Port_Input0_N016:
-      typeIdx: 1
-      value: 0.430000
-    Port_Input1_N013:
-      typeIdx: 3
-      value: {x: 0.500000, y: 0.500000}
-    Port_Input1_N015:
-      typeIdx: 1
-      value: 0.500000
-    Port_Input1_N016:
-      typeIdx: 1
-      value: 0.431000
-    Port_Value1_N002:
+      value: 0.100000
+    Port_Value1_N035:
       typeIdx: 1
       value: 1.000000
-    Port_Value2_N002:
+    Port_Value2_N035:
       typeIdx: 1
       value: 1.000000
-    Port_Value3_N002:
+    Port_Value3_N035:
       typeIdx: 1
       value: 1.000000
     PreviewEnabled:
       typeIdx: 0
       value: 0
-  Pass: !<reference> 93889122-a14f-4d39-93e3-5fed5c9c46b9
+  Pass: !<reference> e2d30019-bf06-4a93-a0ce-17b9de09f9ac

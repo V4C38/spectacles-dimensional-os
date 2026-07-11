@@ -116,6 +116,31 @@ export function buildRegistrationPresentationForWizard(
   });
 }
 
+/**
+ * Bridge manual_pose uses awaiting_commit when a pose candidate is ready.
+ * Lens session state awaiting_commit is reserved for after the user presses Complete.
+ */
+export function reconcileManualRegistrationSessionState(
+  session: RegistrationSessionView,
+  msg: RegistrationStatusMessage,
+  commitRequested: boolean,
+): RegistrationSessionView {
+  const merged = mergeRegistrationStatus(session, msg);
+  if (merged.mode !== "manual_pose") {
+    return merged;
+  }
+  if (commitRequested) {
+    if (msg.state !== "succeeded" && msg.state !== "failed") {
+      return { ...merged, state: "awaiting_commit" };
+    }
+    return merged;
+  }
+  if (msg.state === "awaiting_commit") {
+    return { ...merged, state: "manual_placement" };
+  }
+  return merged;
+}
+
 const MANUAL_CANDIDATE_SYNC_INTERVAL_S = 0.35;
 
 export interface RegistrationFlowCallbacks {
@@ -133,6 +158,7 @@ export class RegistrationFlow {
   private _lastManualCandidateSyncTime = -1;
   private _lastLoggedRegistrationStatusKey = "";
   private _finishRegistrationDispatched = false;
+  private _commitRequested = false;
 
   constructor(
     private readonly _coordinator: ARBridgeCoordinator | null,
@@ -177,6 +203,7 @@ export class RegistrationFlow {
 
   public enter(): void {
     this._finishRegistrationDispatched = false;
+    this._commitRequested = false;
     if (!this._bridgeRuntime?.isBridgeSessionReady()) {
       this._beginManualPlacement();
       return;
@@ -186,6 +213,7 @@ export class RegistrationFlow {
 
   public leave(): void {
     this._finishRegistrationDispatched = false;
+    this._commitRequested = false;
     this._lastManualCandidateSyncTime = -1;
     this._registrationClient?.stop({ notifyBridge: true });
     this._registrationClient?.cancelPlacement();
@@ -215,6 +243,7 @@ export class RegistrationFlow {
     }
     if (hasRegistrationCandidate(this._session.state)) {
       if (this._registrationClient?.commit()) {
+        this._commitRequested = true;
         this._session = {
           ...this._session,
           state: "awaiting_commit",
@@ -238,9 +267,14 @@ export class RegistrationFlow {
 
   public handleRegistrationStatus(msg: RegistrationStatusMessage): void {
     this._logRegistrationStatusIfChanged(msg);
-    this._session = mergeRegistrationStatus(this._session, msg);
+    this._session = reconcileManualRegistrationSessionState(
+      this._session,
+      msg,
+      this._commitRequested,
+    );
 
     if (msg.state === "succeeded") {
+      this._commitRequested = false;
       this._registrationPreview?.render(this._session);
       this._tryAutoFinishRegistration();
       this._notify();
@@ -248,6 +282,7 @@ export class RegistrationFlow {
     }
 
     if (msg.state === "failed") {
+      this._commitRequested = false;
       this._finishRegistrationDispatched = false;
       this._callbacks.log(
         `registration failed on bridge: ${msg.message || "unknown reason"}`,
@@ -277,7 +312,8 @@ export class RegistrationFlow {
   }
 
   public handleBridgeConnectionChanged(connected: boolean): void {
-    if (!connected && isCommitPending(this._session.state)) {
+    if (!connected && this._commitRequested) {
+      this._commitRequested = false;
       this._callbacks.log("manual registration: bridge disconnected during commit");
       this._session = {
         ...this._session,
@@ -352,6 +388,7 @@ export class RegistrationFlow {
     }
 
     if (this._registrationClient?.commit()) {
+      this._commitRequested = true;
       this._registrationClient?.freezePlacement();
       this._session = { ...this._session, state: "awaiting_commit", statusDetail: "" };
       this._notify();
@@ -367,6 +404,7 @@ export class RegistrationFlow {
 
   private _beginAprilTag(): void {
     this._finishRegistrationDispatched = false;
+    this._commitRequested = false;
     this._lastManualCandidateSyncTime = -1;
     this._session = createRegistrationSessionView("april_tag");
     this._registrationClient?.cancelPlacement();
@@ -385,6 +423,7 @@ export class RegistrationFlow {
 
   private _beginManualPlacement(): void {
     this._finishRegistrationDispatched = false;
+    this._commitRequested = false;
     this._lastManualCandidateSyncTime = -1;
     this._registrationClient?.stop({ notifyBridge: true });
     this._session = createRegistrationSessionView("manual_pose");

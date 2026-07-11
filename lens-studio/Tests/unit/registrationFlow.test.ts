@@ -9,6 +9,7 @@ import {
   mergeRegistrationStatus,
   projectRegistrationPresentation,
   registrationProgressPercent,
+  reconcileManualRegistrationSessionState,
   RegistrationFlow,
   RegistrationStep,
   REGISTRATION_STATUS_MANUAL,
@@ -164,6 +165,36 @@ describe("registration presentation", () => {
     expect(isRegistrationFailed("failed")).toBe(true);
   });
 
+  it("keeps manual Complete enabled when bridge reports candidate ready", () => {
+    const session = reconcileManualRegistrationSessionState(
+      createRegistrationSessionView("manual_pose"),
+      status({ state: "awaiting_commit", mode: "manual_pose" }),
+      false,
+    );
+    expect(session.state).toBe("manual_placement");
+    const presentation = projectRegistrationPresentation(session, {
+      step: "registerRobot",
+      connected: true,
+    });
+    expect(presentation.footerNextLabel).toBe("Complete");
+    expect(presentation.footerNextEnabled).toBe(true);
+  });
+
+  it("shows Completing after manual commit is requested", () => {
+    const session = reconcileManualRegistrationSessionState(
+      createRegistrationSessionView("manual_pose"),
+      status({ state: "manual_placement", mode: "manual_pose" }),
+      true,
+    );
+    expect(session.state).toBe("awaiting_commit");
+    const presentation = projectRegistrationPresentation(session, {
+      step: "registerRobot",
+      connected: true,
+    });
+    expect(presentation.footerNextLabel).toBe("Completing...");
+    expect(presentation.footerNextEnabled).toBe(false);
+  });
+
   it("formats registration progress text", () => {
     expect(formatRegistrationProgressText(42)).toBe("42%");
     expect(formatRegistrationProgressText(42.6)).toBe("43%");
@@ -226,10 +257,29 @@ describe("RegistrationFlow", () => {
 
   it("disconnect during commit returns to manual_placement without finish", () => {
     const { flow, scheduleFinishRegistration } = createFlow({ mode: "manual_pose" });
+    flow.setSession({
+      ...createRegistrationSessionView("manual_pose"),
+      state: "manual_placement",
+    });
     flow.completeRegistration();
     flow.handleBridgeConnectionChanged(false);
     expect(flow.session.state).toBe("manual_placement");
     expect(scheduleFinishRegistration).not.toHaveBeenCalled();
+  });
+
+  it("bridge awaiting_commit during manual placement does not block Complete", () => {
+    const { flow, registrationClient } = createFlow({ mode: "manual_pose" });
+    flow.setSession({
+      ...createRegistrationSessionView("manual_pose"),
+      state: "manual_placement",
+    });
+    flow.handleRegistrationStatus(
+      status({ state: "awaiting_commit", mode: "manual_pose" }),
+    );
+    expect(flow.session.state).toBe("manual_placement");
+    expect(flow.completeRegistration()).toBe(false);
+    expect(registrationClient.commit).toHaveBeenCalled();
+    expect(flow.session.state).toBe("awaiting_commit");
   });
 
   it("manual online commit finishes immediately", () => {

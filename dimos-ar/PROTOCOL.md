@@ -260,6 +260,23 @@ Rules:
 - The separate `disabled_capabilities` / `capability_states` arrays from v3 are
   removed; `capabilities` is the single source of truth.
 
+### `hello.robot` geometry fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `body_bounds_m` | `[number, number, number]` | Axis-aligned body envelope in metres: `[length_x, width_z, height_y]` in the robot odom frame (same axes as `pose`). Height is world-up (Y). |
+| `footprint_m` | `[number, number]` | Ground-plane footprint `[length_x, width_z]` in metres for navigation deadzone sizing. |
+| `visual_origin_frame` | `string` | Robot frame used for `pose` (typically `base_link`). |
+| `base_height_m` | `number` | Height of `visual_origin_frame` above ground contact in metres. |
+| `default_render_offset_m` | `[number, number, number]` | Optional local offset (metres) applied to child UI visuals on the Lens, not to `pose`. |
+
+**Grounded bounding box convention:** `body_bounds_m` describes a box whose bottom
+face rests on the ground plane (ground contact at Y = 0 in robot odom). The box is
+centered horizontally on `visual_origin_frame`; vertically, its bottom is at
+`-base_height_m` and its top at `body_bounds_m[2] - base_height_m` relative to the
+marker origin. Clients may derive debug-visual center offset as
+`(body_bounds_m[2] / 2 - base_height_m)` on the world-up axis.
+
 ### `hello.robot.tag_tracking_profile`
 
 Optional field emitted when the active robot profile provides tag geometry for

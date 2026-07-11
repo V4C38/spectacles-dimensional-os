@@ -8,6 +8,8 @@ import {
   projectRuntimeStateFromHello,
   runtimeDeadzoneRadiusCm,
   runtimeRenderOffsetCm,
+  runtimeBodyBoundsScaleCm,
+  runtimeBodyBoundsCenterOffsetCm,
   robotBodyHeightM,
   lidarVerticalBandCm,
   robotFloorWorldYCm,
@@ -84,6 +86,78 @@ describe("runtimeRenderOffsetCm", () => {
     expect(offset.x).toBe(100);
     expect(offset.y).toBe(200);
     expect(offset.z).toBe(300);
+  });
+});
+
+describe("runtimeBodyBoundsScaleCm", () => {
+  it("returns null when not negotiated", () => {
+    expect(
+      runtimeBodyBoundsScaleCm({
+        ...createDefaultRobotRuntimeState(),
+        negotiated: false,
+        bodyBoundsM: [0.7, 0.5, 0.55],
+      }),
+    ).toBeNull();
+  });
+
+  it("maps Go2 body bounds to Lens scale cm", () => {
+    const scale = runtimeBodyBoundsScaleCm({
+      ...createDefaultRobotRuntimeState(),
+      negotiated: true,
+      bodyBoundsM: [0.7, 0.5, 0.55],
+    });
+    expect(scale).not.toBeNull();
+    expect(scale!.x).toBeCloseTo(70, 5);
+    expect(scale!.y).toBeCloseTo(55, 5);
+    expect(scale!.z).toBeCloseTo(50, 5);
+  });
+
+  it("maps G1 body bounds to Lens scale cm", () => {
+    const scale = runtimeBodyBoundsScaleCm({
+      ...createDefaultRobotRuntimeState(),
+      negotiated: true,
+      bodyBoundsM: [0.65, 0.45, 1.35],
+    });
+    expect(scale).not.toBeNull();
+    expect(scale!.x).toBeCloseTo(65, 5);
+    expect(scale!.y).toBeCloseTo(135, 5);
+    expect(scale!.z).toBeCloseTo(45, 5);
+  });
+});
+
+describe("runtimeBodyBoundsCenterOffsetCm", () => {
+  it("returns null when body bounds missing", () => {
+    expect(
+      runtimeBodyBoundsCenterOffsetCm({
+        ...createDefaultRobotRuntimeState(),
+        negotiated: true,
+        bodyBoundsM: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("computes Go2 center offset below marker", () => {
+    const offset = runtimeBodyBoundsCenterOffsetCm({
+      ...createDefaultRobotRuntimeState(),
+      negotiated: true,
+      bodyBoundsM: [0.7, 0.5, 0.55],
+      baseHeightM: 0.33,
+    });
+    expect(offset).not.toBeNull();
+    expect(offset!.x).toBe(0);
+    expect(offset!.y).toBeCloseTo(-5.5, 5);
+    expect(offset!.z).toBe(0);
+  });
+
+  it("computes G1 center offset below marker", () => {
+    const offset = runtimeBodyBoundsCenterOffsetCm({
+      ...createDefaultRobotRuntimeState(),
+      negotiated: true,
+      bodyBoundsM: [0.65, 0.45, 1.35],
+      baseHeightM: 0.95,
+    });
+    expect(offset).not.toBeNull();
+    expect(offset!.y).toBeCloseTo(-27.5, 5);
   });
 });
 

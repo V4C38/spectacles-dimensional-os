@@ -59,6 +59,33 @@ export function runtimeDeadzoneRadiusCm(
   return Math.max(20.0, maxDimensionCm * 0.5 + 20.0);
 }
 
+/**
+ * Debug bounding-box scale (cm) from negotiated body_bounds_m.
+ * Maps protocol [length, width, height] to Lens local X, Z, Y.
+ */
+export function runtimeBodyBoundsScaleCm(state: RobotRuntimeState): vec3 | null {
+  const bounds = state.bodyBoundsM;
+  if (!state.negotiated || !bounds) {
+    return null;
+  }
+  return new vec3(bounds[0] * 100.0, bounds[2] * 100.0, bounds[1] * 100.0);
+}
+
+/**
+ * Local offset (cm) from visual_origin_frame to the body-bounds center.
+ * Grounded convention: BB bottom on floor plane (base_height_m above ground).
+ */
+export function runtimeBodyBoundsCenterOffsetCm(state: RobotRuntimeState): vec3 | null {
+  const bounds = state.bodyBoundsM;
+  if (!state.negotiated || !bounds) {
+    return null;
+  }
+  const heightM = bounds[2];
+  const baseHeightM = state.baseHeightM ?? heightM / 2.0;
+  const centerOffsetYM = heightM / 2.0 - baseHeightM;
+  return new vec3(0, centerOffsetYM * 100.0, 0);
+}
+
 /** Compute the robot marker render offset (cm) from the negotiated default offset. */
 export function runtimeRenderOffsetCm(state: RobotRuntimeState): vec3 {
   const offset = state.defaultRenderOffsetM;

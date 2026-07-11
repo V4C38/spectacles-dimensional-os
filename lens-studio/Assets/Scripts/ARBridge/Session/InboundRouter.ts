@@ -207,6 +207,7 @@ export class InboundRouter {
       driftState: createDefaultDriftState(),
       navigationError: defaultNavigationError(),
     });
+    this.robotPresenter.setDebugBoundsFromRuntime(runtimeState);
   }
 
   private _applyBridgeStatus(msg: BridgeStatusMessage): void {
