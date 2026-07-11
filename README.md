@@ -58,8 +58,8 @@ flowchart LR
 
 The bridge solves `T_world_odom` so AR content stays registered to the robot. Two registration flows are supported:
 
-- **AprilTag** (`registration_command{command:"start",mode:"april_tag"}`) — the Spectacles user looks at the robot-mounted AprilTag while the bridge collects stable tag observations, then auto-commits when a stability gate passes. Requires `registration_april_tag`.
-- **Manual pose** (`registration_command{command:"start",mode:"manual_pose"}`) — user places the robot marker in AR; client streams `registration_pose` and sends `registration_command{command:"commit"}`. No camera frames are consumed; always available when `registration_manual_pose` is advertised.
+- **AprilTag** (`registration_command{command:"start",mode:"april_tag"}`) — the Spectacles user looks at the robot-mounted AprilTag while the bridge collects stable tag observations, then auto-commits when a stability gate passes. Requires tag mounts on the robot profile; the bridge rejects unavailable modes at command time (registration modes are no longer advertised via `hello.capabilities`).
+- **Manual pose** (`registration_command{command:"start",mode:"manual_pose"}`) — user places the robot marker in AR; client streams `registration_pose` and sends `registration_command{command:"commit"}`. No camera frames are consumed; always available unless the bridge rejects the mode at command time.
 
 After commit, the bridge locks the robot base **floor height** (world Y) from the committed pose. The same robot-mounted tag continues to drive **runtime drift correction** from Spectacles frames using an **anchored, episode-driven** model (protocol **v16**):
 
@@ -72,7 +72,7 @@ Runtime corrections only surface to the Lens as a "Refined Tracking" notificatio
 
 **Camera capture (Lens, observation-driven):** after the first `camera_info`, the bridge sends **`capture_policy`** (`max_capture_distance_m`, `min_capture_distance_m`, max capture speed, static speed threshold, `min_observations`). The Lens derives **`CameraCaptureState`** (`off`, `waiting`, `capturing`, `capturing_budgeted`) and turns physical camera hardware on only when gates pass. Gate pauses preserve capture intent (`waiting`); capture ends on registration end, disconnect, or `capturing_budgeted_complete`. See [`FrameCaptureController`](lens-studio/Assets/Scripts/ARBridge/Camera/FrameCaptureController.ts) and [`CameraCaptureSession`](lens-studio/Assets/Scripts/ARBridge/Camera/CameraCaptureSession.ts).
 
-On the Lens, `RobotMarker` extrapolates the displayed pose between bridge `pose` updates using optional `velocity_mps` and `yaw_rate_rad_s`, with displacement clamps to avoid runaway prediction.
+On the Lens, [`RuntimePoseAnimator`](lens-studio/Assets/Scripts/App/Robot/RuntimePoseAnimator.ts) fuses each bridge `pose` sample with optional `velocity_mps` and `yaw_rate_rad_s` into a single display target (one constant-rate smooth pass — no stacked smoothing layers). Prediction scales down near the active navigation goal so the marker does not overshoot the endpoint.
 
 Registration requires a **printed robot-mounted tag** for the AprilTag flow:
 
@@ -88,9 +88,20 @@ Print `apriltag_robot_a4.pdf` or `apriltag_robot_letter.pdf` from `dimos-ar/asse
 <details>
 <summary>Protocol and platform boundary</summary>
 
-The Mac is always the WebSocket **server** and AR devices are **clients**. The bridge sends `hello` and a `runtime_snapshot` on connect, then streams messages such as `bridge_status`, `pose`, binary LiDAR, `path`, `nav_status`, and `registration_status`. Clients send messages such as `registration_command`, `nav_goal`, `cancel_nav_goal`, `set_lidar_mode`, and `emergency_stop`.
+The Mac is always the WebSocket **server** and AR devices are **clients**. The bridge sends `hello` and a `runtime_snapshot` on connect, then streams messages such as `bridge_status`, `pose`, binary LiDAR, `path`, `nav_status` (with `state`, not `phase`), and `registration_status`. Clients send messages such as `registration_command`, `nav_goal`, `cancel_nav_goal`, `set_lidar_mode`, and `emergency_stop`.
 
-**Protocol v16** adds bridge-authoritative runtime capture signalling:
+**Protocol v16** unifies lifecycle vocabulary across bridge and Lens and adds bridge-authoritative runtime capture signalling:
+
+| Area | v16 change |
+|------|------------|
+| `nav_status` | `phase` renamed to **`state`** (`idle` \| `navIntent` \| `navigating` \| `resolved`); terminal results use `state: "resolved"` with optional `outcome` |
+| `runtime_snapshot.nav` | Same `state` / `outcome` shape as `nav_status` |
+| `registration_status` | Wire **`state`** uses `RegistrationState` (`idle`, `april_tag`, `manual_placement`, `awaiting_commit`, `succeeded`, `failed`); **`registration_confidence`** replaces separate alignment/scale confidence fields; **`refining`** removed |
+| `capture_policy` | `max_capture_distance_m` / `min_capture_distance_m` (renamed from `max_stream_distance_m` / `min_stream_distance_m`) |
+| `camera_frame_ack` | **`capturing_budgeted_complete`** (replaces `refinement_complete`); **`obs_added`** removed |
+| Lens capture API | `CameraCaptureState` (`off`, `waiting`, `capturing`, `capturing_budgeted`); `CameraCaptureSession.beginCameraCapture` / `endCameraCapture` |
+| `hello.robot` | Adds negotiated geometry (`body_bounds_m`, `footprint_m`, `base_height_m`, `default_render_offset_m`) for display and debug visuals |
+| `hello.capabilities` | Registration mode flags removed; bridge rejects unavailable modes on `registration_command` |
 
 | Message | Direction | Role |
 |---------|-----------|------|
@@ -106,14 +117,26 @@ If the protocol changes, update these together in the same change:
 
 ## Lens Studio Project
 
-The Lens side is organized around three scene-entry scripts plus one wiring hub:
+The Lens side is organized around three scene-entry scripts plus one wiring hub. **Protocol v16** slimmed the app layer: domain `*Client` classes own wire I/O, `*Presentation` modules own reducer-driven session mutations and HUD copy, and `AppState` holds a single derived view of bridge link + navigation + registration state.
 
 - [`ARBridgeServices.ts`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) owns scene `@input`s and plain runtime service instances (`AppStateStore`, `InboundRouter`, `RegistrationClient`, `RobotPresenter`, `NavigationController`, …).
-- [`ARBridgeCoordinator.ts`](lens-studio/Assets/Scripts/App/ARBridgeCoordinator.ts) is the orchestration hub for phase/mode lifecycle; it delegates to `ARBridgeServices`.
+- [`ARBridgeCoordinator.ts`](lens-studio/Assets/Scripts/App/ARBridgeCoordinator.ts) is the orchestration hub for phase/mode lifecycle and centralized disconnect teardown; it delegates to `ARBridgeServices`.
 - [`RegistrationWizard.ts`](lens-studio/Assets/Scripts/App/Registration/RegistrationWizard.ts) owns the connect-and-register flow and hands off to runtime. Check Lens Studio Logger output and `./scripts/start.sh` bridge logs when registration fails.
 - [`UIManager.ts`](lens-studio/Assets/Scripts/App/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
 
-[`ARBridgeSession`](lens-studio/Assets/Scripts/ARBridge/Network/ARBridgeSession.ts) owns WebSocket transport and the hello handshake; [`InboundProcessor`](lens-studio/Assets/Scripts/ARBridge/Network/InboundProcessor.ts) parses inbound frames into typed signals. [`InboundRouter`](lens-studio/Assets/Scripts/ARBridge/Session/InboundRouter.ts) fans those signals out to domain `*Client` classes (`StatusClient`, `TelemetryClient`, `NavigationClient`, `RegistrationClient`) and app presenters (`RobotPresenter`, `NavigationController`). `RegistrationFlow` owns registration-step UI state; `RegistrationClient` is the single owner of the bridge registration session. `DeviceCameraStream` is a singleton wrapper around the Spectacles colour camera; [`FrameCaptureController`](lens-studio/Assets/Scripts/ARBridge/Camera/FrameCaptureController.ts) + [`CameraCaptureSession`](lens-studio/Assets/Scripts/ARBridge/Camera/CameraCaptureSession.ts) own runtime capture intent, gate evaluation, and hardware on/off (separate from episode arming). Visuals live under `App/Robot/`, `App/Lidar/`, and `App/Navigation/`.
+[`ARBridgeSession`](lens-studio/Assets/Scripts/ARBridge/Network/ARBridgeSession.ts) owns WebSocket transport and the hello handshake; [`InboundProcessor`](lens-studio/Assets/Scripts/ARBridge/Network/InboundProcessor.ts) parses inbound frames into typed signals. [`InboundRouter`](lens-studio/Assets/Scripts/ARBridge/Session/InboundRouter.ts) fans those signals out to domain `*Client` classes (`StatusClient`, `TelemetryClient`, `NavigationClient`, `RegistrationClient`) and app shells (`RobotPresenter`, `NavigationController`). Wire `bridge_status` and `runtime_snapshot.bridge` are projected into a single [`BridgeSnapshot`](lens-studio/Assets/Scripts/App/AppState.ts) via `projectBridgeSession`; **`bridgeLinkState`** (`disconnected` / `connectedNoRobot` / `connected`) is derived from that snapshot — not stored separately.
+
+| Module | Role |
+|--------|------|
+| `RegistrationClient` | Single owner of the bridge registration session (re-arms on every `hello`) |
+| `RegistrationFlow` | Registration-step UI/session state; routes wire updates through `RegistrationPresentation` |
+| `NavigationController` | Navigation shell; routes wire updates through `NavigationPresentation` |
+| `BridgePresentation` | Connect-step and HUD copy from `bridgeLinkState` |
+| `GroundPlacement` | World-mesh goal drag (`DeviceTracking.raycastWorldMesh`); replaces depth-ray `SurfaceGroundProbe` |
+| `RuntimePoseAnimator` | Single fusion target for `RobotMarker` pose display |
+| `FrameCaptureController` + `CameraCaptureSession` | Runtime capture intent, `CameraCaptureState` derivation, gate evaluation, hardware on/off |
+
+Visuals live under `App/Robot/`, `App/Lidar/`, and `App/Navigation/`.
 
 ```mermaid
 flowchart TB
@@ -128,21 +151,23 @@ flowchart TB
 <details>
 <summary>Lens setup and runtime responsibilities</summary>
 
-`RegistrationWizard` builds the wizard view, starts autoconnect, owns the 3-step state machine inline, and finishes by calling `ARBridgeCoordinator.enterRuntime()`. Registration-step state is delegated to `RegistrationFlow`; the bridge registration session is owned exclusively by `RegistrationClient`, which re-arms on every `hello` so reconnects cannot leave the session stranded.
+`RegistrationWizard` builds the wizard view, starts autoconnect, owns the 3-step state machine inline, and finishes by calling `ARBridgeCoordinator.enterRuntime()`. Registration-step state is delegated to `RegistrationFlow` (with `RegistrationPresentation` applying wire `registration_status` into the reducer); the bridge registration session is owned exclusively by `RegistrationClient`, which re-arms on every `hello` so reconnects cannot leave the session stranded.
 
-`ARBridgeCoordinator` starts in registration phase, disconnects the bridge when re-entering registration, and switches to runtime by enabling visuals, preserving manual registration state when needed, and syncing navigation and robot interaction state. Shared app state (including bridge-link status used by setup and runtime UI) lives in `AppStateStore` / `AppState`. During runtime, `InboundRouter` fans inbound bridge messages into:
+`ARBridgeCoordinator` starts in registration phase, disconnects the bridge when re-entering registration, and switches to runtime by enabling visuals, preserving manual registration state when needed, and syncing navigation and robot interaction state. Shared app state lives in `AppStateStore` / `AppState` — including `BridgeSnapshot`, derived `bridgeLinkState`, and `NavigationState` (`disabled`, `idle`, `navIntent`, `navigating`, `resolved`). During runtime, `InboundRouter` fans inbound bridge messages into:
 - `TelemetryClient` + `RobotPresenter` for pose, drift correction, LiDAR presentation, and `RobotMarker` / `RobotUiView` controls
-- `NavigationClient` + `NavigationController` for goal placement, path display, and nav status
+- `NavigationClient` + `NavigationController` for goal placement, path display, and nav status (`NavigationPresentation` owns marker/path visuals and idle anchoring after cancel)
 
-`UIManager` subscribes to app state and updates the authored HUD. Restarting registration goes back through `RegistrationWizard`, while bridge status, operating mode changes, and the coarse `disconnected` / `connectedNoRobot` / `connected` link state still come from `ARBridgeCoordinator`.
+`UIManager` subscribes to app state and updates the authored HUD via `BridgePresentation` for bridge-link copy. Restarting registration goes back through `RegistrationWizard`, while bridge status, operating mode changes, and the coarse `disconnected` / `connectedNoRobot` / `connected` link state still come from `ARBridgeCoordinator`.
+
+**Navigation placement:** goal drag uses always-on **world mesh** raycasting (`GroundPlacement` + `DeviceTracking.raycastWorldMesh`), not depth-ray surface probes. `NavigationPresentation` drives world-mesh hint tints during drag (wall / unscanned) and blends robot-floor vs mesh Y at the deadzone edge. World mesh tracking is gated to placement drag only.
 
 **Spectacles runtime HUD:** On device, `UIManager` drives a palm-up wrist menu (`WristMenuController` + `PalmGestureGate`) that reveals MainUI anchored to `wristMenuRoot`. In Lens Studio editor mode, MainUI stays visible as a floating panel after registration instead.
 
-**Debug mode:** MainUI includes a debug toggle (`AppState.debugMode`) that enables on-device diagnostics — direction-arrow overlays on `RobotMarker` and the rolling `UILogger` console (including a dedicated **camera stream status** line: ON / Waiting / OFF).
+**Debug mode:** MainUI includes a debug toggle (`AppState.debugMode`) that enables on-device diagnostics — direction-arrow overlays on `RobotMarker`, a negotiated **body-bounds debug box** from `hello.robot.body_bounds_m`, and the rolling `UILogger` console (including a dedicated **camera capture status** line driven by `CameraCaptureState`: OFF / Waiting / ON).
 
 **Runtime camera lifecycle:** pose-speed edges (not `nav_status`) call `beginCameraCapture()` / `beginCameraCapture(minObs)`; `camera_frame_ack.capturing_budgeted_complete` calls `endCameraCapture()`. Gate failure yields `waiting` while intent remains active. In-flight captures drain before hardware stop.
 
-**Pose display:** `RobotPresenter` feeds bridge `pose` (plus optional velocity fields) into `RobotMarker`, which extrapolates and smooths the marker between updates.
+**Pose display:** `RobotPresenter` feeds bridge `pose` (plus optional velocity fields) into `RuntimePoseAnimator` inside `RobotMarker`, which fuses prediction and applies a single display smooth pass.
 
 </details>
 
@@ -156,15 +181,16 @@ flowchart TB
   ```text
   lens-studio/Assets/Scripts/
   ├── App/                  (ARBridgeServices, ARBridgeCoordinator, AppState, AppStateStore)
-  │   ├── Registration/     (RegistrationWizard, RegistrationWizardView, RegistrationFlow)
-  │   ├── Navigation/       (NavigationController, NavigationPathRenderer, GroundPlacement, …)
-  │   ├── Robot/            (RobotPresenter, RobotMarker, RobotUiView, RobotRuntimeModel)
+  │   ├── Bridge/           (BridgePresentation)
+  │   ├── Registration/     (RegistrationWizard, RegistrationWizardView, RegistrationFlow, RegistrationPresentation)
+  │   ├── Navigation/       (NavigationController, NavigationPresentation, NavigationPathRenderer, GroundPlacement, …)
+  │   ├── Robot/            (RobotPresenter, RobotMarker, RuntimePoseAnimator, RobotUiView, RobotRuntimeModel)
   │   ├── Lidar/            (PointCloudRenderer, LidarPresenter)
   │   ├── UI/               (UIManager, MainMenuView, WristMenuController, PalmGestureGate, UILogger, UIKit)
   │   └── Utilities/        (AnimationUtilities, Utilities)
   └── ARBridge/             (platform-agnostic bridge layer)
       ├── Network/          (ARBridgeSession, WebSocketTransport, InboundProcessor, Protocol)
-      ├── Session/          (InboundRouter — includes computeFrameCapturePolicy)
+      ├── Session/          (InboundRouter — projectBridgeSession, capture policy)
       ├── Registration/     (RegistrationClient, ManualRegistrationAlignment)
       ├── Navigation/       (NavigationClient, NavigationModel)
       ├── Telemetry/        (TelemetryClient)
@@ -247,7 +273,7 @@ cd /path/to/spectacles-dimensional-os/dimos-ar
 /path/to/dimos/.venv/bin/python3 -m mypy dimos/ar
 ```
 
-**Lens TypeScript** (`lens-studio/Tests/`) — pure-logic unit tests for `Protocol.ts`, `AppState`, `InboundRouter`, `RegistrationClient`, `RegistrationFlow`, `NavigationModel`, `RobotRuntimeModel`, `CameraCaptureSession`, `FrameCaptureController`, `cameraClientCadence`, `palmGestureGate`, `cameraStopBurst`, and related utilities (runs in Node/Vitest, not inside Lens Studio; see `lens-studio/Tests/unit/`):
+**Lens TypeScript** (`lens-studio/Tests/`) — pure-logic unit tests for `Protocol.ts`, `AppState`, `InboundRouter`, `RegistrationClient`, `RegistrationFlow`, `RegistrationPresentation`, `NavigationModel`, `NavigationPresentation`, `RobotRuntimeModel`, `RuntimePoseAnimator`, `CameraCaptureSession`, `FrameCaptureController`, `bridgeSnapshot`, `meshPlacementSolver`, `cameraClientCadence`, `palmGestureGate`, `cameraStopBurst`, and related utilities (runs in Node/Vitest, not inside Lens Studio; see `lens-studio/Tests/unit/`):
 
 ```bash
 cd /path/to/spectacles-dimensional-os/lens-studio/Tests
@@ -320,7 +346,7 @@ Python tests are colocated with their modules under `dimos-ar/dimos/ar/`. See [`
 
 - Tune lidar and rate limits via `ARBridgeConfig` in [`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py).
 - Add or change messages by updating the Python protocol, the protocol spec, and the Lens protocol modules together.
-- The protocol now also carries `set_lidar_mode` (client-selected `off` / `obstacles` / `full` LiDAR transmission), `world_frame_correction` (runtime drift-correction telemetry, deadbanded so only meaningful jumps reach the client), `capture_policy` and `camera_frame_ack.capturing_budgeted_complete` (v16 capture lifecycle); see [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) for the full schema.
+- The protocol now also carries `set_lidar_mode` (client-selected `off` / `obstacles` / `full` LiDAR transmission), `world_frame_correction` (runtime drift-correction telemetry, deadbanded so only meaningful jumps reach the client), `capture_policy` and `camera_frame_ack.capturing_budgeted_complete` (v16 capture lifecycle), unified `NavigationState` / `RegistrationState` on the wire, and `hello.robot` geometry for negotiated display bounds; see [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) for the full schema.
 - Keep `dimos-ar/dimos/ar/` platform-agnostic. Spectacles-specific code stays in [`lens-studio/`](lens-studio/); other AR clients should live in their own client folder or repo.
 
 </details>
