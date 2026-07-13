@@ -28,10 +28,15 @@ function createSpeedArmingHarness() {
   const session = new CameraCaptureSession();
   session.applyPolicy(samplePolicy);
   let worldFrameCommitted = false;
+  let appPhase: "registration" | "runtime" = "registration";
   let lastSpeedMps: number | null = null;
 
+  function runtimeCaptureArmed(): boolean {
+    return appPhase === "runtime" && worldFrameCommitted;
+  }
+
   function onPose(speedMps: number | null): void {
-    if (worldFrameCommitted) {
+    if (runtimeCaptureArmed()) {
       session.onSpeedChanged(lastSpeedMps, speedMps);
     }
     lastSpeedMps = speedMps;
@@ -43,9 +48,34 @@ function createSpeedArmingHarness() {
     setCommitted: (committed: boolean) => {
       worldFrameCommitted = committed;
     },
-    onRegistrationStart: () => session.beginCameraCapture(),
+    setPhase: (phase: "registration" | "runtime") => {
+      appPhase = phase;
+    },
+    onRegistrationStart: () => {
+      session.endCameraCapture();
+      session.beginCameraCapture();
+    },
     onRegistrationEnd: () => session.endCameraCapture(),
+    resetCapturePipeline: () => {
+      lastSpeedMps = null;
+      session.endCameraCapture();
+    },
   };
+}
+
+function registrationGeometricGatesPass(
+  worldFrameCommitted: boolean,
+  robotWorldPos: vec3 | null,
+): boolean {
+  const useRuntimeGates = worldFrameCommitted;
+  return evaluateOptionalGeometricGates(
+    origin,
+    identityRot,
+    useRuntimeGates ? robotWorldPos : null,
+    35,
+    300,
+    true,
+  );
 }
 
 describe("FrameCaptureController capture semantics", () => {
@@ -71,6 +101,7 @@ describe("FrameCaptureController capture semantics", () => {
 describe("FrameCaptureController speed arming", () => {
   it("movement arms unbounded capture when committed", () => {
     const harness = createSpeedArmingHarness();
+    harness.setPhase("runtime");
     harness.setCommitted(true);
     harness.onPose(0.0);
     harness.onPose(0.2);
@@ -79,6 +110,7 @@ describe("FrameCaptureController speed arming", () => {
 
   it("stop edge arms budgeted capture when committed", () => {
     const harness = createSpeedArmingHarness();
+    harness.setPhase("runtime");
     harness.setCommitted(true);
     harness.onPose(0.2);
     harness.onPose(0.0);
@@ -97,9 +129,78 @@ describe("FrameCaptureController speed arming", () => {
     harness.onRegistrationEnd();
     expect(harness.session.obsBudget).toBeNull();
   });
+
+  it("does not arm capture from telemetry during registration even when committed", () => {
+    const harness = createSpeedArmingHarness();
+    harness.setPhase("registration");
+    harness.setCommitted(true);
+    harness.onPose(0.2);
+    expect(harness.session.obsBudget).toBeNull();
+  });
+
+  it("arms capture from telemetry during runtime when committed", () => {
+    const harness = createSpeedArmingHarness();
+    harness.setPhase("runtime");
+    harness.setCommitted(true);
+    harness.onPose(0.0);
+    harness.onPose(0.2);
+    expect(harness.session.obsBudget).toBe(0);
+  });
+
+  it("registration restart clears pre-armed capture intent", () => {
+    const harness = createSpeedArmingHarness();
+    harness.setPhase("runtime");
+    harness.setCommitted(true);
+    harness.onPose(0.0);
+    harness.onPose(0.2);
+    expect(harness.session.obsBudget).toBe(0);
+
+    harness.resetCapturePipeline();
+    harness.setPhase("registration");
+    harness.setCommitted(false);
+    harness.onRegistrationStart();
+    expect(harness.session.obsBudget).toBe(0);
+  });
 });
 
 describe("FrameCaptureController capture state", () => {
+  it("registration phase ignores committed snapshot for geometric gates", () => {
+    expect(registrationGeometricGatesPass(false, robotFar)).toBe(true);
+  });
+
+  it("runtime phase enforces geometric gates when committed", () => {
+    expect(registrationGeometricGatesPass(true, robotFar)).toBe(false);
+    expect(registrationGeometricGatesPass(true, robotNear)).toBe(true);
+  });
+
+  it("registration status re-arm resets gate debounce after end+begin", () => {
+    const session = new CameraCaptureSession();
+    session.beginCameraCapture(0);
+    const failingGates = {
+      bridgeConnected: true,
+      posesReady: true,
+      geometricGatesPass: false,
+      speedGatePass: true,
+      hasInFlightCapture: false,
+    };
+    const passGates = { ...failingGates, geometricGatesPass: true };
+    session.updateGateDebounce(passGates, 0);
+    const failAt = 1.0;
+    session.updateGateDebounce(failingGates, failAt);
+    const afterDebounce = failAt + CAPTURE_GATE_DEBOUNCE_S + 0.01;
+    session.updateGateDebounce(failingGates, afterDebounce);
+    expect(
+      deriveCameraCapture(session.getFacts(), failingGates, afterDebounce),
+    ).toBe("waiting");
+
+    session.endCameraCapture();
+    session.beginCameraCapture(0);
+    session.updateGateDebounce(passGates, afterDebounce + 1);
+    expect(
+      deriveCameraCapture(session.getFacts(), passGates, afterDebounce + 1),
+    ).toBe("capturing");
+  });
+
   it("gate pause keeps intent with waiting state", () => {
     const session = new CameraCaptureSession();
     session.applyPolicy(samplePolicy);

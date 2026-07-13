@@ -1,91 +1,104 @@
 # dimos-ar
 
 `dimos-ar` is the bridge package in this monorepo that exposes a platform-agnostic
-AR WebSocket interface on top of DimOS robot stacks.
+AR WebSocket interface on top of DimOS robot stacks. The Spectacles client that
+implements the same contract lives in [`../lens-studio/`](../lens-studio/).
 
-It lives in this monorepo as a standalone bridge package, with all
-platform-agnostic code under `dimos/ar/`.
+All platform-agnostic code is under `dimos/ar/`. The cross-platform API is
+[`PROTOCOL.md`](PROTOCOL.md) (currently **v16**, port **8787**).
 
-At a glance:
-- `dimos/ar/bridge/`: `ARBridge` composition root; telemetry, odom buffer, status service, `MotionRouter`, `BridgeSafetyCoordinator`
-- `dimos/ar/navigation/`: `NavigateGoalHandler`, world-frame goal transform
-- `dimos/ar/world_frame/`: committed `WorldFrameState`, registry, runtime refinement
-- `dimos/ar/tag_tracking/`: robot-mounted AprilTag detect + solve
-- `dimos/ar/registration/`: setup wizard session only (baseline, types, wire)
-- `dimos/ar/lidar/`: LiDAR height-band filtering for AR payloads
-- `dimos/ar/robot_profile/`: per-robot handshake, tag geometry, capabilities
-- `dimos/ar/network/protocol.py`: the AR WebSocket contract implementation
-- `dimos/ar/blueprints.py`: monorepo entrypoint used by `scripts/start.sh`
-- `PROTOCOL.md`: cross-client protocol documentation
+## Layout
+
+| Path | Role |
+|------|------|
+| `dimos/ar/bridge/` | `ARBridge` composition root; telemetry, odom buffer, status, `MotionRouter`, safety |
+| `dimos/ar/navigation/` | `NavigateGoalHandler`, world-frame goal transform |
+| `dimos/ar/world_frame/` | Committed `WorldFrameState`, registry, runtime refinement |
+| `dimos/ar/tag_tracking/` | Robot-mounted AprilTag detect + solve |
+| `dimos/ar/registration/` | Setup wizard session (AprilTag + manual pose) |
+| `dimos/ar/lidar/` | LiDAR height-band filtering for AR payloads |
+| `dimos/ar/robot_profile/` | Per-robot handshake, tag geometry, capabilities (Go2, G1) |
+| `dimos/ar/network/protocol.py` | Wire schema implementation |
+| `dimos/ar/blueprints.py` | Monorepo entrypoint used by [`../scripts/start.sh`](../scripts/start.sh) |
+| `assets/` | Printable AprilTag assets (see below) |
+
+## AprilTag print assets
+
+Per-tag files in [`assets/`](assets/):
+
+| Tag ID | PNG | A4 PDF | Letter PDF |
+|--------|-----|--------|------------|
+| `0` | `apriltag_robot_0.png` | `apriltag_robot_0_a4.pdf` | `apriltag_robot_0_letter.pdf` |
+| `1` | `apriltag_robot_1.png` | `apriltag_robot_1_a4.pdf` | `apriltag_robot_1_letter.pdf` |
+
+Regenerate with:
+
+```bash
+cd dimos-ar
+/path/to/dimos/.venv/bin/python3 scripts/generate_marker.py --ids 0 1
+```
+
+Mount geometry (`tag_id`, `size_m`, `position`, `orientation`) is configured per robot in `dimos/ar/robot_profile/go2.py` and `g1.py`.
 
 <details>
 <summary>Start</summary>
 
-Use the DimOS `.venv`, then run:
+Use the DimOS `.venv`, then run from the monorepo root:
 
 ```bash
 cd /path/to/spectacles-dimensional-os
 ./scripts/start.sh
 ```
 
-`scripts/start.sh` always prompts for the target robot stack and then runs the matching
-monorepo bridge entrypoint. The equivalent native DimOS compositions are:
+`scripts/start.sh` prompts for the robot stack (`ar-go2` / `ar-g1`), then starts the bridge. Wait for:
+
+```text
+Bridge ready — ws://0.0.0.0:8787
+Spectacles: enter <your-mac-lan-ip> in the lens
+```
+
+Equivalent native DimOS commands (when blueprints are registered upstream):
 
 ```bash
 dimos run ar-go2
 dimos run ar-g1
 ```
 
-Use `./scripts/start.sh` if these blueprints are not yet registered in your DimOS install.
+**Supported hardware** (see [main README](../README.md#prerequisites)):
 
-Capability expectations by stack (negotiated at runtime via `hello` / `capabilities`):
-
-- `ar-go2`: Go2 family — full navigation and AprilTag registration when the selected
-  onboard stack exposes those modules; lighter stacks may negotiate unavailable
-  navigation/path/cancel while keeping the same AR contract
-- `ar-g1`: G1 nav-onboard — navigation-capable when the Unitree DDS dependency
-  set is present in the DimOS `.venv`; manual registration is always supported,
-  AprilTag baseline registration only when the runtime exposes the required camera path
-
-The default AR WebSocket port is `8787`.
+- **Go2 pro/air** — primary development target; full navigation + AprilTag when onboard modules are available
+- **G1** — supported in code, not field-tested; navigation needs Unitree DDS packages in the DimOS `.venv`
 
 </details>
 
 <details>
-<summary>Runtime behavior contract</summary>
+<summary>Runtime behavior</summary>
 
-The bridge and Lens are handshake-driven to automatically adapt to any supported
-robot family:
+Handshake-driven — the Lens adapts to whatever the active robot profile advertises:
 
-- `hello.robot` provides display identity plus geometry such as
-  `body_bounds_m`, `footprint_m`, `base_height_m`, and
-  `default_render_offset_m`; `tag_tracking_profile` carries tag geometry only
-  (`tag_ids`, `tag_total_size_m`)
-- `hello.capabilities` tells the client which features are available for the
-  active runtime
-- after `hello`, the bridge sends `runtime_snapshot` (bridge + nav phase + optional
-  active path) so reconnecting clients resync without replaying live streams
-- navigation uses `nav_goal` to dispatch world-frame goals; active goals can be
-  cancelled with `cancel_nav_goal`
-- the Lens keeps offline development affordances enabled until a bridge connects
-  and completes the handshake
-- unavailable controls stay visible and switch into disabled `Special` UI states
-  with explanatory labels when the active runtime does not support them
+- `hello.robot` — display identity, body geometry, `tag_tracking_profile` (`tag_ids`, `tag_total_size_m`)
+- `hello.capabilities` — flat map of feature availability + reasons
+- `runtime_snapshot` — bridge + nav state + optional active path on connect / `get_status`
+- World-frame goals via `nav_goal`; cancel with `cancel_nav_goal`
+- Registration via `registration_command` (`april_tag` or `manual_pose`)
 
-Capability expectations by stack:
+</details>
 
-- `ar-go2`: full intended Go2 experience when navigation-capable modules are
-  present; AprilTag registration support depends on the active onboard stack
-- `ar-g1`: navigation-capable G1 runtime when DDS dependencies are installed;
-  manual registration always supported, AprilTag baseline negotiated from the
-  active camera path and calibrated robot-camera geometry
+<details>
+<summary>Registration</summary>
+
+**AprilTag** — robot stays still; Spectacles user moves around the tag. Bridge auto-commits when the registration estimate is confident (or yaw is observable). Requires configured `TagMount` entries on the robot profile.
+
+**Manual pose** — user places the robot marker in AR, streams `registration_pose`, sends `commit`. No camera frames consumed.
+
+After commit, runtime drift correction continues from Spectacles camera frames via `WorldFrameRefiner` / `SimilarityAligner`. Corrections above the notification deadband (≥ 5 cm / ≥ 1°) emit `world_frame_correction`.
 
 </details>
 
 <details>
 <summary>Tests</summary>
 
-Run tests from the DimOS `.venv`, not an arbitrary Python environment.
+Run from the DimOS `.venv`:
 
 ```bash
 cd /path/to/spectacles-dimensional-os/dimos-ar
@@ -94,103 +107,24 @@ cd /path/to/spectacles-dimensional-os/dimos-ar
 /path/to/dimos/.venv/bin/python3 -m mypy dimos/ar
 ```
 
-If you need the G1 onboard runtime in that environment, install its DDS
-dependency set first:
-
-```bash
-/path/to/dimos/.venv/bin/pip3 install "unitree-sdk2py-dimos>=1.0.2"
-```
-
-For the integration test, start the blueprint first, then run:
-
-```bash
-/path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/network/test_ws_integration.py -m integration
-```
-
-Tests are colocated with their modules under `dimos/ar/` rather than in a top-level `tests/` directory.
-
 | Tier | Command | Requires |
 |------|---------|----------|
-| Unit | `pytest -m "not integration"` | DimOS `.venv` only |
-| Handshake | included in unit (`test_ws_handshake.py`) | In-process stub server; verifies `hello` + `get_status` wire flow |
-| Integration | `pytest dimos/ar/network/test_ws_integration.py -m integration` | Live bridge on port 8787 (`./scripts/start.sh`) |
+| Unit | `pytest -m "not integration"` | DimOS `.venv` |
+| Integration | `pytest dimos/ar/network/test_ws_integration.py -m integration` | Live bridge on :8787 |
 
-Lens-side protocol tests run separately: `cd lens-studio/Tests && npm test`.
+Lens protocol tests: `cd ../lens-studio/Tests && npm test`.
 
-</details>
-
-<details>
-<summary>Registration flows</summary>
-
-Two flows are supported:
-
-**AprilTag** (`registration_command{command:"start",mode:"april_tag"}`)  
-The robot stays still. The Spectacles user moves around the robot while looking
-at the robot-mounted AprilTag; camera motion (not robot motion) provides yaw
-observability. The bridge collects tag/odom correspondences and runs a
-registration-mode pose aggregator until the estimate reaches
-`ALIGN_REG_CONF_MIN` (default 0.7) or yaw is observable, then auto-commits
-`(scale, yaw, translation)`. If confidence never rises within
-`TAG_REGISTRATION_WINDOW_S` (15 s), the session fails with an actionable
-message. The Lens wizard auto-dismisses on `state=succeeded` (no manual
-Complete tap).
-
-AprilTag registration requires tag mounts on the robot profile. Robots without
-tag mounts receive `state: failed` when the client sends `start april_tag`.
-
-**Manual pose** (`registration_command{command:"start",mode:"manual_pose"}`)  
-The user drags the robot marker to its real-world position in the Lens, streams
-`registration_pose`, then sends `registration_command{command:"commit"}`. No camera
-frames are consumed. The bridge rejects unavailable modes at command time.
-
-Notes:
-- On commit, `WorldRegistry` locks the robot base floor height (world Y) into
-  `WorldFrameRefiner` for flat-ground profiles.
-- Runtime drift correction reuses the robot-mounted Spectacles tag stream after
-  registration through `SimilarityAligner`, orchestrated by `WorldFrameRefiner`:
-  - **Registration anchor:** registration observations are snapshotted at commit and
-    retained as a long-lived keyframe; stop solves merge anchor + episode observations
-    so baseline from the registration point drives yaw/scale observability.
-  - **Motion → stop episodes:** one refinement cycle per movement. Observations
-    accumulate while moving; the bridge applies **at most one** similarity update
-    after static evidence at the endpoint (`ALIGN_MIN_OBS` accepted frames). Moving
-    frames never mutate `WorldFrameState`.
-  - Tag observations are weighted by quality, recency, distance, and IPPE ambiguity;
-    a robust 2D similarity fit updates `(scale, yaw, translation)` together when
-    observability and fit quality pass.
-  - **`camera_frame_ack`:** carries `capturing_budgeted_complete=true` when the
-    current budgeted capture episode commits (protocol v16).
-  - **`capture_policy`:** sent after first `camera_info` with bridge-computed
-    `max_capture_distance_m`, `min_capture_distance_m`, `max_capture_speed_mps`,
-    `static_speed_mps`, and `min_observations`.
-  - When `flat_ground` is enabled and base Y drifts > 3 cm for 2 s,
-    `check_floor_y_drift` applies a Y-only correction without emitting
-    `world_frame_correction`
-- Corrections that exceed the notification deadband (≥ 5 cm translation or ≥ 1° yaw)
-  are emitted as `world_frame_correction`; sub-threshold updates still commit on the
-  bridge.
-- AprilTag registration status broadcasts also carry `registration_confidence` and
-  `scale_locked` on the wire.
-
-**Tag mount geometry (Go2)**  
-The robot marker and LiDAR share `T_world_odom`, which depends on the configured
-`TagMount.position` lever arm in `dimos/ar/robot_profile/go2.py`. If the marker,
-LiDAR, and rendered robot do not stay co-registered after registration, verify
-the configured mount pose first before tuning aligner thresholds.
+Reproduce full CI from repo root: `./scripts/run-ci.sh`.
 
 </details>
 
 <details>
 <summary>Protocol coupling</summary>
 
-Protocol **v16** is current (`PROTOCOL_VERSION = 16` in `dimos/ar/network/protocol.py`).
-See [`PROTOCOL.md`](PROTOCOL.md) for the full changelog and wire schema. Key v16
-capture vocabulary: `capture_policy.max_capture_distance_m` /
-`min_capture_distance_m`, `camera_frame_ack.capturing_budgeted_complete`. If the AR
-protocol changes, update these together:
+`PROTOCOL_VERSION = 16` in `dimos/ar/network/protocol.py`. If the wire contract changes, update together:
 
 - `dimos/ar/network/protocol.py`
 - `PROTOCOL.md`
-- `lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`
+- `../lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`
 
 </details>
