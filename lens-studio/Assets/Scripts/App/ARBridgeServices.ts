@@ -115,8 +115,13 @@ export class ARBridgeServices extends BaseScriptComponent {
       statusClient: this._status!,
       uiLogger: this._state!.uiLogger,
       getBridgeConnected: () => this._router!.isBridgeSessionReady(),
-      getWorldFrameCommitted: () =>
-        this._state!.snapshot.bridgeSnapshot.worldFrameCommitted,
+      getWorldFrameCommitted: () => {
+        const snapshot = this._state!.snapshot;
+        return (
+          snapshot.phase === "runtime" &&
+          snapshot.bridgeSnapshot.worldFrameCommitted
+        );
+      },
     });
 
     this.createEvent("UpdateEvent").bind(() => {

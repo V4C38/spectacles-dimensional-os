@@ -1,12 +1,52 @@
-# Contributing — Spectacles Lens Studio
+# Contributing — spectacles-dimensional-os
 
-Open the project from [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj), not the repo root.
+This monorepo has two main parts:
+
+| Part | Path | Role |
+|------|------|------|
+| **dimos-ar** | [`dimos-ar/`](dimos-ar/) | Platform-agnostic WebSocket bridge on top of DimOS (`ARBridge`, protocol, robot profiles) |
+| **Spectacles Lens** | [`lens-studio/`](lens-studio/) | Lens Studio client — setup wizard, runtime HUD, navigation, robot visuals |
+
+The cross-platform contract is [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) (currently **v16**). The Mac runs the WebSocket server on port **8787**; Spectacles connects as a client.
+
+Open the Lens project from [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj), **not** the repo root.
+
+## Before you open a PR
+
+```bash
+./scripts/run-ci.sh
+```
+
+This runs `dimos-ar` (ruff, mypy, pytest) and `lens-studio/Tests` (Vitest), matching [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## Scene wiring
 
 Wire cross-tree references on [`ARBridgeServices`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) (`bridgeSession`, `frameCaptureController`, `robotMarker`, `pointCloudRenderer`, `navigationMarkerPrefab`). Point `ARBridgeCoordinator` at `ARBridgeServices`; point `RegistrationWizard` and `UIManager` at `ARBridgeCoordinator`. On `UIManager`, also wire `mainUIFrame`, `registrationWizard`, and `wristMenuRoot` (required for the Spectacles wrist menu).
 
 Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-object investigation and manipulation.
+
+## Lens architecture
+
+**Scene entry scripts**
+
+| Script | Role |
+|--------|------|
+| [`ARBridgeServices.ts`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) | Composition root — `@input`s and plain runtime service instances |
+| [`ARBridgeCoordinator.ts`](lens-studio/Assets/Scripts/App/ARBridgeCoordinator.ts) | Phase/mode lifecycle, disconnect teardown |
+| [`RegistrationWizard.ts`](lens-studio/Assets/Scripts/App/Registration/RegistrationWizard.ts) | Connect → register → hand off to runtime |
+| [`UIManager.ts`](lens-studio/Assets/Scripts/App/UI/UIManager.ts) | HUD from derived app state |
+
+**Bridge layer** (`lens-studio/Assets/Scripts/ARBridge/`)
+
+| Module | Role |
+|--------|------|
+| `Network/` | `ARBridgeSession`, `WebSocketTransport`, `InboundProcessor`, `Protocol.ts` |
+| `Session/InboundRouter` | Fan-out inbound signals to domain clients |
+| `Registration/RegistrationClient` | Single owner of bridge registration session |
+| `Navigation/NavigationClient` | Goal send/cancel, nav status |
+| `Telemetry/`, `Status/`, `Camera/` | Pose, bridge status, capture lifecycle |
+
+**Operating modes** (runtime, after registration): `manual` (spatial navigation), `agent` (in development on `development/agentic`), `registrationMode`.
 
 ## Runtime HUD
 
@@ -29,15 +69,6 @@ Ownership (do not duplicate lifecycle elsewhere):
 
 Runtime arming uses **pose speed** from `TelemetryClient`, not `nav_status`. The bridge sends `capture_policy` after the first `camera_info`; the Lens must not use hardcoded gate defaults at runtime. Gate failure while intent remains active yields `waiting`; capture ends on `capturing_budgeted_complete`, registration end, or disconnect.
 
-**Log signatures:**
-
-| Log | Meaning |
-|-----|---------|
-| Lens `FrameCaptureController: camera capture ON state=... reason=...` | Physical camera started |
-| Lens `FrameCaptureController: camera capture OFF state=waiting reason=gate_pause` | Gated pause; intent still active |
-| Lens `FrameCaptureController: camera capture OFF state=off reason=episode_complete` | Budgeted episode finished |
-| Bridge `AR camera intrinsics received` | Usually once per hardware activation (`camera_info`) |
-
 ## App-layer naming (`lens-studio/Assets/Scripts/App/`)
 
 Same suffix = same role across feature modules.
@@ -52,8 +83,6 @@ Same suffix = same role across feature modules.
 | **`*Controller`** (input) | User input only (`GroundPlacement`) |
 | **`App/Utilities/`** | Cross-cutting helpers (`AnimationUtilities`, `Utilities.ts`) |
 
-Wiring (no renames): [`ARBridgeServices.ts`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) = composition root; [`ARBridgeCoordinator.ts`](lens-studio/Assets/Scripts/App/ARBridgeCoordinator.ts) = phase orchestration.
-
 ## Protocol changes
 
 When the WebSocket contract changes, update in the same change:
@@ -62,12 +91,17 @@ When the WebSocket contract changes, update in the same change:
 - `dimos-ar/PROTOCOL.md`
 - `lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`
 
+Never edit DimOS source — import from the installed `dimos` package. Keep `dimos-ar/dimos/ar/` platform-agnostic; Spectacles-specific code stays under `lens-studio/`.
+
 ## Tests
 
 ```bash
+# Lens (Vitest)
 cd lens-studio/Tests && npm test
+
+# Bridge (DimOS .venv)
+cd dimos-ar
+/path/to/dimos/.venv/bin/python3 -m pytest
 ```
 
-Vitest covers unit files under `lens-studio/Tests/unit/` (protocol, `AppState`, `InboundRouter`, registration, navigation, camera lifecycle — `CameraCaptureSession`, `FrameCaptureController`, `cameraClientCadence` — `palmGestureGate`, `cameraStopBurst`, and related utilities).
-
-Bridge tests run from the DimOS `.venv` under `dimos-ar/`.
+Vitest covers unit files under `lens-studio/Tests/unit/` (protocol, `AppState`, `InboundRouter`, registration, navigation, camera lifecycle, and related utilities). Do not put `*.test.ts` under `lens-studio/Assets/`.

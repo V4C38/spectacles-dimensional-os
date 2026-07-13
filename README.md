@@ -1,358 +1,302 @@
-# Spectacles AR + Dimensional OS
-
-> **Lens Studio:** open [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj), not the repo root.
-
-Visualize and control **DimOS robot stacks** from **Snap Spectacles**.
-[`dimos-ar/`](dimos-ar/) is a WebSocket based bridge between [Dimensional OS](https://github.com/dimensionalOS/dimos) for low-level robot control and orchestration and a Spectacles Lens for spatial UI/UX.
+<h1 align="center">Spectacles AR for Robotics and Physical AI</h1>
 
 <p align="center">
-  <img src="assets/rm_hero.gif" alt="Spectacles AR controlling a Unitree Go2" width="800" />
+  Control and visualize robots from <b>Snap Spectacles</b> (currently 2024 dev-kit) using a Websocket bridge for
+  <a href="https://github.com/dimensionalOS/dimos">Dimensional OS</a>. Dimensional OS (DimOS) is an open-source robot operating system that runs the physical robot stack. <br>
+  Two modes are available in the spatial interface: manually drag a move-to target, or send voice commands to an llm based agent.
 </p>
 
-This is **not a fork of DimOS**. It is a separate package that depends on DimOS and composes into blueprints via `autoconnect`. The Spectacles client lives in [`lens-studio/`](lens-studio/), while the Python side stays platform-agnostic so future AR clients can implement the same protocol without changing `dimos/ar/`.
+<p align="center">
+  <a href="#setup">Setup</a> •
+  <a href="#system-overview">System Overview</a> •
+  <a href="#manual-mode">Manual Mode</a> •
+  <a href="#agent-mode">Agent Mode</a> 
+</p>
 
 
-At a glance:
-- [`lens-studio/`](lens-studio/) contains the Spectacles Lens Studio project, setup flow, HUD, navigation interaction, and world-anchored visuals.
-- [`dimos-ar/`](dimos-ar/) contains the dimos-ar bridge package, `ARBridge`, robot profile modules, and tests.
-- [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) is the cross-platform contract between the bridge and every AR client.
+<img src="assets/specs_dimos_hero.gif" alt="Spectacles AR manual control of a Unitree Go2" width="800" />
 
-```mermaid
-flowchart LR
-  DimOS[DimOS robot stack] --> Bridge[ARBridge]
-  Lens[Spectacles Lens] <-->|"WebSocket :8787"| Bridge
-```
 
-## Core concepts / Overview
+<a id="prerequisites"></a>
 
-- `dimos-ar` is a **DimOS extension**, not a platform-specific fork.
-- The shared API is the JSON WebSocket protocol in [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md).
-- The robot lives in an **odom** frame, while AR clients live in a **world** frame, so setup must solve a shared transform before runtime visuals are trustworthy.
-- The bridge is single-active-robot per process and uses handshake-declared capabilities.
+### Supported Hardware
 
-<details>
-<summary>Quick start</summary>
+<table>
+  <tr>
+    <th>Quadruped</th>
+    <th>Humanoid</th>
+  </tr>
+  <tr>
+    <td>🟩 Unitree Go2 pro/air<br><sub>Fully supported &amp; tested - primary development target</sub></td>
+    <td>🟧 Unitree G1<br><sub>Supported, not tested - looking for collaborators</sub></td>
+  </tr>
+</table>
 
-1. Install and test the Python side:
 
-   ```bash
-   cd /path/to/spectacles-dimensional-os
-   ./scripts/setup.sh
-   ```
-
-2. Start the dimos-ar bridge:
-
-   ```bash
-   cd /path/to/spectacles-dimensional-os
-   ./scripts/start.sh
-   ```
-
-3. Open [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj) in Lens Studio and push to device.
-
-4. In the Lens, go through **Start -> Connect -> Register**.
-
-</details>
+<a id="setup"></a>
 
 <details>
-<summary>Frame registration</summary>
+<summary><h3>Setup</h3></summary>
 
-The bridge solves `T_world_odom` so AR content stays registered to the robot. Two registration flows are supported:
+### Supported Operating Systems
 
-- **AprilTag** (`registration_command{command:"start",mode:"april_tag"}`) — the Spectacles user looks at the robot-mounted AprilTag while the bridge collects stable tag observations, then auto-commits when a stability gate passes. Requires tag mounts on the robot profile; the bridge rejects unavailable modes at command time (registration modes are no longer advertised via `hello.capabilities`).
-- **Manual pose** (`registration_command{command:"start",mode:"manual_pose"}`) — user places the robot marker in AR; client streams `registration_pose` and sends `registration_command{command:"commit"}`. No camera frames are consumed; always available unless the bridge rejects the mode at command time.
+<table>
+  <tr>
+    <th>macOS</th>
+    <th>Linux</th>
+    <th>Windows</th>
+  </tr>
+  <tr>
+    <td>🟩 supported</td>
+    <td>🟧 not tested, generally supported</td>
+    <td>🟥 not supported</td>
+  </tr>
+</table>
 
-After commit, the bridge locks the robot base **floor height** (world Y) from the committed pose. The same robot-mounted tag continues to drive **runtime drift correction** from Spectacles frames using an **anchored, episode-driven** model (protocol **v16**):
+### Installation
 
-- **Registration anchor:** at commit, the bridge snapshots registration tag observations into `SimilarityAligner` before clearing the tracker window. Later stop solves always include that anchor so displacement from the registration point contributes to yaw and (with enough baseline) scale — not just a local translation recentre at the current pose.
-- **Motion → stop episodes:** `WorldFrameRefiner` owns one capture episode per movement. While the robot moves, observations accumulate but **no transform is applied**. After a static stop with enough accepted frames, the bridge runs **at most one** similarity solve and sets `camera_frame_ack.capturing_budgeted_complete=true`.
-- **Held DOFs:** yaw and scale are learned independently when their observability gates pass; sub-threshold or zero-baseline episodes are rejected rather than applying translation-only nudges every frame.
-- **Floor shim:** on flat-ground profiles, if base Y drifts > 3 cm for 2 s, the bridge applies a Y-only correction (not emitted on the wire).
-
-Runtime corrections only surface to the Lens as a "Refined Tracking" notification once they cross a small deadband (≥ 5 cm translation or ≥ 1° yaw); smaller continuous refinements stay silent.
-
-**Camera capture (Lens, observation-driven):** after the first `camera_info`, the bridge sends **`capture_policy`** (`max_capture_distance_m`, `min_capture_distance_m`, max capture speed, static speed threshold, `min_observations`). The Lens derives **`CameraCaptureState`** (`off`, `waiting`, `capturing`, `capturing_budgeted`) and turns physical camera hardware on only when gates pass. Gate pauses preserve capture intent (`waiting`); capture ends on registration end, disconnect, or `capturing_budgeted_complete`. See [`FrameCaptureController`](lens-studio/Assets/Scripts/ARBridge/Camera/FrameCaptureController.ts) and [`CameraCaptureSession`](lens-studio/Assets/Scripts/ARBridge/Camera/CameraCaptureSession.ts).
-
-On the Lens, [`RuntimePoseAnimator`](lens-studio/Assets/Scripts/App/Robot/RuntimePoseAnimator.ts) fuses each bridge `pose` sample with optional `velocity_mps` and `yaw_rate_rad_s` into a single display target (one constant-rate smooth pass — no stacked smoothing layers). Prediction scales down near the active navigation goal so the marker does not overshoot the endpoint.
-
-Registration requires a **printed robot-mounted tag** for the AprilTag flow:
+Install [Dimensional OS](https://github.com/dimensionalOS/dimos) manually ([Installation](https://github.com/dimensionalOS/dimos#installation)), or use [`scripts/setup.sh`](scripts/setup.sh), which sets up all required dependencies for Dimensional OS and the WebSocket bridge (`dimos-ar`).
 
 ```bash
-cd /path/to/spectacles-dimensional-os/dimos-ar
+cd /path/to/spectacles-dimensional-os
+./scripts/setup.sh
+```
+
+### Quickstart
+
+Ensure Spectacles, Mac, and the robot are on the same WiFi. An internet connection is not required for basic operation. Agentic mode requires an internet connection for the OpenAI API.
+
+### Robot
+
+If you want to use registration via a robot-mounted AprilTag (recommended), print [`dimos-ar/assets/apriltag_robot_a4.pdf`](dimos-ar/assets/apriltag_robot_a4.pdf) (EU paper) or [`dimos-ar/assets/apriltag_robot_letter.pdf`](dimos-ar/assets/apriltag_robot_letter.pdf) (US paper).
+
+The default size is **7×7 cm** for Go2 and **10×10 cm** for G1. Multiple tags can be mounted (front & back on G1, etc.); this improves tracking and yaw alignment.
+
+Printable tag assets live in [`dimos-ar/assets/`](dimos-ar/assets/)
+
+Tag count, printed size, and each mount’s position/rotation in the robot frame are configured per robot profile in:
+
+| Robot | Profile file | What to edit |
+|-------|--------------|--------------|
+| Go2 | [`dimos-ar/dimos/ar/robot_profile/go2.py`](dimos-ar/dimos/ar/robot_profile/go2.py) | `GO2_DEFAULT_TAG_MOUNTS` - list of `TagMount(tag_id, size_m, position, orientation)` |
+| G1 | [`dimos-ar/dimos/ar/robot_profile/g1.py`](dimos-ar/dimos/ar/robot_profile/g1.py) | `G1_DEFAULT_TAG_MOUNTS` - same shape |
+
+Each `TagMount` entry defines:
+
+- **`tag_id`** - AprilTag 36h11 ID (default `0`; add `tag_id=1`, etc. for extra mounts)
+- **`size_m`** - black detection square edge length in metres (default `0.056` for a 70 mm printed tag)
+- **`position`** - `(x, y, z)` of the tag centre in the robot `base_link` frame (metres)
+- **`orientation`** - quaternion `(x, y, z, w)` of the tag on the robot
+
+The handshake advertises `tag_total_size_m` (outer printed edge, default **0.070 m**) via `TAG_TOTAL_SIZE_M` in [`dimos-ar/dimos/ar/tag_tracking/solve.py`](dimos-ar/dimos/ar/tag_tracking/solve.py). Regenerate PDFs after changing size:
+
+```bash
+cd dimos-ar
 python scripts/generate_marker.py
 ```
 
-Print `apriltag_robot_a4.pdf` or `apriltag_robot_letter.pdf` from `dimos-ar/assets/` at **actual size** (no "fit to page") and verify the outer edge measures 70 mm with a ruler before mounting on the robot.
+Print at **100% scale** (no “fit to page”) and verify the outer edge with a ruler before mounting.
 
-</details>
+The default location for the Go2 is shown below:
 
-<details>
-<summary>Protocol and platform boundary</summary>
+<p align="center">
+  <img src="assets/specs_dimos_go2tagmount.jpg" alt="Recommended AprilTag mount location on Unitree Go2" width="600" />
+</p>
 
-The Mac is always the WebSocket **server** and AR devices are **clients**. The bridge sends `hello` and a `runtime_snapshot` on connect, then streams messages such as `bridge_status`, `pose`, binary LiDAR, `path`, `nav_status` (with `state`, not `phase`), and `registration_status`. Clients send messages such as `registration_command`, `nav_goal`, `cancel_nav_goal`, `set_lidar_mode`, and `emergency_stop`.
+### macOS
 
-**Protocol v16** unifies lifecycle vocabulary across bridge and Lens and adds bridge-authoritative runtime capture signalling:
+Use [`scripts/start.sh`](scripts/start.sh) for an interactive setup that runs all required steps automatically. Select the robot type (Go2 / G1) and wait until the bridge prints:
 
-| Area | v16 change |
-|------|------------|
-| `nav_status` | `phase` renamed to **`state`** (`idle` \| `navIntent` \| `navigating` \| `resolved`); terminal results use `state: "resolved"` with optional `outcome` |
-| `runtime_snapshot.nav` | Same `state` / `outcome` shape as `nav_status` |
-| `registration_status` | Wire **`state`** uses `RegistrationState` (`idle`, `april_tag`, `manual_placement`, `awaiting_commit`, `succeeded`, `failed`); **`registration_confidence`** replaces separate alignment/scale confidence fields; **`refining`** removed |
-| `capture_policy` | `max_capture_distance_m` / `min_capture_distance_m` (renamed from `max_stream_distance_m` / `min_stream_distance_m`) |
-| `camera_frame_ack` | **`capturing_budgeted_complete`** (replaces `refinement_complete`); **`obs_added`** removed |
-| Lens capture API | `CameraCaptureState` (`off`, `waiting`, `capturing`, `capturing_budgeted`); `CameraCaptureSession.beginCameraCapture` / `endCameraCapture` |
-| `hello.robot` | Adds negotiated geometry (`body_bounds_m`, `footprint_m`, `base_height_m`, `default_render_offset_m`) for display and debug visuals |
-| `hello.capabilities` | Registration mode flags removed; bridge rejects unavailable modes on `registration_command` |
-
-| Message | Direction | Role |
-|---------|-----------|------|
-| `capture_policy` | bridge → Lens | Distance/speed thresholds after first `camera_info`; Lens must not invent defaults |
-| `camera_frame_ack.capturing_budgeted_complete` | bridge → Lens | Budgeted episode committed; Lens calls `endCameraCapture()` |
-
-If the protocol changes, update these together in the same change:
-- [`dimos-ar/dimos/ar/network/protocol.py`](dimos-ar/dimos/ar/network/protocol.py)
-- [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md)
-- [`lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`](lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts)
-
-</details>
-
-## Lens Studio Project
-
-The Lens side is organized around three scene-entry scripts plus one wiring hub. **Protocol v16** slimmed the app layer: domain `*Client` classes own wire I/O, `*Presentation` modules own reducer-driven session mutations and HUD copy, and `AppState` holds a single derived view of bridge link + navigation + registration state.
-
-- [`ARBridgeServices.ts`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) owns scene `@input`s and plain runtime service instances (`AppStateStore`, `InboundRouter`, `RegistrationClient`, `RobotPresenter`, `NavigationController`, …).
-- [`ARBridgeCoordinator.ts`](lens-studio/Assets/Scripts/App/ARBridgeCoordinator.ts) is the orchestration hub for phase/mode lifecycle and centralized disconnect teardown; it delegates to `ARBridgeServices`.
-- [`RegistrationWizard.ts`](lens-studio/Assets/Scripts/App/Registration/RegistrationWizard.ts) owns the connect-and-register flow and hands off to runtime. Check Lens Studio Logger output and `./scripts/start.sh` bridge logs when registration fails.
-- [`UIManager.ts`](lens-studio/Assets/Scripts/App/UI/UIManager.ts) mirrors app state and bridge status into the authored HUD; it does not own the runtime lifecycle.
-
-[`ARBridgeSession`](lens-studio/Assets/Scripts/ARBridge/Network/ARBridgeSession.ts) owns WebSocket transport and the hello handshake; [`InboundProcessor`](lens-studio/Assets/Scripts/ARBridge/Network/InboundProcessor.ts) parses inbound frames into typed signals. [`InboundRouter`](lens-studio/Assets/Scripts/ARBridge/Session/InboundRouter.ts) fans those signals out to domain `*Client` classes (`StatusClient`, `TelemetryClient`, `NavigationClient`, `RegistrationClient`) and app shells (`RobotPresenter`, `NavigationController`). Wire `bridge_status` and `runtime_snapshot.bridge` are projected into a single [`BridgeSnapshot`](lens-studio/Assets/Scripts/App/AppState.ts) via `projectBridgeSession`; **`bridgeLinkState`** (`disconnected` / `connectedNoRobot` / `connected`) is derived from that snapshot — not stored separately.
-
-| Module | Role |
-|--------|------|
-| `RegistrationClient` | Single owner of the bridge registration session (re-arms on every `hello`) |
-| `RegistrationFlow` | Registration-step UI/session state; routes wire updates through `RegistrationPresentation` |
-| `NavigationController` | Navigation shell; routes wire updates through `NavigationPresentation` |
-| `BridgePresentation` | Connect-step and HUD copy from `bridgeLinkState` |
-| `GroundPlacement` | World-mesh goal drag (`DeviceTracking.raycastWorldMesh`); replaces depth-ray `SurfaceGroundProbe` |
-| `RuntimePoseAnimator` | Single fusion target for `RobotMarker` pose display |
-| `FrameCaptureController` + `CameraCaptureSession` | Runtime capture intent, `CameraCaptureState` derivation, gate evaluation, hardware on/off |
-
-Visuals live under `App/Robot/`, `App/Lidar/`, and `App/Navigation/`.
-
-```mermaid
-flowchart TB
-  Registration[RegistrationWizard] --> Coordinator[ARBridgeCoordinator]
-  UI[UIManager] --> Coordinator
-  Coordinator --> Services[ARBridgeServices]
-  Services --> Router[InboundRouter]
-  Router --> Session[ARBridgeSession]
-  Session --> Transport[WebSocketTransport / InboundProcessor]
+```text
+Bridge ready - ws://0.0.0.0:8787
+Spectacles: enter <your-mac-lan-ip> in the lens
 ```
 
-<details>
-<summary>Lens setup and runtime responsibilities</summary>
-
-`RegistrationWizard` builds the wizard view, starts autoconnect, owns the 3-step state machine inline, and finishes by calling `ARBridgeCoordinator.enterRuntime()`. Registration-step state is delegated to `RegistrationFlow` (with `RegistrationPresentation` applying wire `registration_status` into the reducer); the bridge registration session is owned exclusively by `RegistrationClient`, which re-arms on every `hello` so reconnects cannot leave the session stranded.
-
-`ARBridgeCoordinator` starts in registration phase, disconnects the bridge when re-entering registration, and switches to runtime by enabling visuals, preserving manual registration state when needed, and syncing navigation and robot interaction state. Shared app state lives in `AppStateStore` / `AppState` — including `BridgeSnapshot`, derived `bridgeLinkState`, and `NavigationState` (`disabled`, `idle`, `navIntent`, `navigating`, `resolved`). During runtime, `InboundRouter` fans inbound bridge messages into:
-- `TelemetryClient` + `RobotPresenter` for pose, drift correction, LiDAR presentation, and `RobotMarker` / `RobotUiView` controls
-- `NavigationClient` + `NavigationController` for goal placement, path display, and nav status (`NavigationPresentation` owns marker/path visuals and idle anchoring after cancel)
-
-`UIManager` subscribes to app state and updates the authored HUD via `BridgePresentation` for bridge-link copy. Restarting registration goes back through `RegistrationWizard`, while bridge status, operating mode changes, and the coarse `disconnected` / `connectedNoRobot` / `connected` link state still come from `ARBridgeCoordinator`.
-
-**Navigation placement:** goal drag uses always-on **world mesh** raycasting (`GroundPlacement` + `DeviceTracking.raycastWorldMesh`), not depth-ray surface probes. `NavigationPresentation` drives world-mesh hint tints during drag (wall / unscanned) and blends robot-floor vs mesh Y at the deadzone edge. World mesh tracking is gated to placement drag only.
-
-**Spectacles runtime HUD:** On device, `UIManager` drives a palm-up wrist menu (`WristMenuController` + `PalmGestureGate`) that reveals MainUI anchored to `wristMenuRoot`. In Lens Studio editor mode, MainUI stays visible as a floating panel after registration instead.
-
-**Debug mode:** MainUI includes a debug toggle (`AppState.debugMode`) that enables on-device diagnostics — direction-arrow overlays on `RobotMarker`, a negotiated **body-bounds debug box** from `hello.robot.body_bounds_m`, and the rolling `UILogger` console (including a dedicated **camera capture status** line driven by `CameraCaptureState`: OFF / Waiting / ON).
-
-**Runtime camera lifecycle:** pose-speed edges (not `nav_status`) call `beginCameraCapture()` / `beginCameraCapture(minObs)`; `camera_frame_ack.capturing_budgeted_complete` calls `endCameraCapture()`. Gate failure yields `waiting` while intent remains active. In-flight captures drain before hardware stop.
-
-**Pose display:** `RobotPresenter` feeds bridge `pose` (plus optional velocity fields) into `RuntimePoseAnimator` inside `RobotMarker`, which fuses prediction and applies a single display smooth pass.
-
-</details>
-
-<details>
-<summary>Scene setup pointers</summary>
-
-- Open the project from [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj).
-- Wire cross-tree references on [`ARBridgeServices`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) (`bridgeSession`, `frameCaptureController`, `robotMarker`, `pointCloudRenderer`, `navigationMarkerPrefab`). Point `ARBridgeCoordinator` at `ARBridgeServices`; point `RegistrationWizard` and `UIManager` at `ARBridgeCoordinator`. On `UIManager`, also wire `mainUIFrame`, `registrationWizard`, and `wristMenuRoot`. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full scene-wiring and architecture rules.
-- The main feature folders are:
-
-  ```text
-  lens-studio/Assets/Scripts/
-  ├── App/                  (ARBridgeServices, ARBridgeCoordinator, AppState, AppStateStore)
-  │   ├── Bridge/           (BridgePresentation)
-  │   ├── Registration/     (RegistrationWizard, RegistrationWizardView, RegistrationFlow, RegistrationPresentation)
-  │   ├── Navigation/       (NavigationController, NavigationPresentation, NavigationPathRenderer, GroundPlacement, …)
-  │   ├── Robot/            (RobotPresenter, RobotMarker, RuntimePoseAnimator, RobotUiView, RobotRuntimeModel)
-  │   ├── Lidar/            (PointCloudRenderer, LidarPresenter)
-  │   ├── UI/               (UIManager, MainMenuView, WristMenuController, PalmGestureGate, UILogger, UIKit)
-  │   └── Utilities/        (AnimationUtilities, Utilities)
-  └── ARBridge/             (platform-agnostic bridge layer)
-      ├── Network/          (ARBridgeSession, WebSocketTransport, InboundProcessor, Protocol)
-      ├── Session/          (InboundRouter — projectBridgeSession, capture policy)
-      ├── Registration/     (RegistrationClient, ManualRegistrationAlignment)
-      ├── Navigation/       (NavigationClient, NavigationModel)
-      ├── Telemetry/        (TelemetryClient)
-      ├── Status/           (StatusClient)
-      └── Camera/           (CameraClient, CameraCaptureSession, FrameCaptureController, DeviceCameraStream)
-  ```
-
-- On Spectacles, the runtime menu is hidden until the user shows their palm; in the editor, MainUI appears after registration without the gesture gate.
-- `ShowLiDAR` controls the height/debug layer, while the red obstacle layer still comes from live bridge lidar when connected. The Lens can also request a bridge-side LiDAR transmit mode (`off` / `obstacles` / `full`) via `set_lidar_mode` to cut payload when only obstacle proximity matters.
-
-</details>
-
-## Dimensional OS Blueprint (`dimos-ar`)
-
-[`dimos-ar/`](dimos-ar/) contains the Python side: `ARBridge`, `Go2RobotProfileModule` / `G1RobotProfileModule`, the protocol definition, and the tests. The monorepo entrypoint is [`dimos-ar/dimos/ar/blueprints.py`](dimos-ar/dimos/ar/blueprints.py), which wraps native DimOS stack composition for the currently selected robot runtime.
-
-`ARBridge` itself ([`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py)) subclasses `dimos.core.module.Module` and stays thin: it declares the DimOS `In[...]` streams, builds its collaborators, and fans handler calls out to them. The actual logic lives in single-owner collaborators under `dimos-ar/dimos/ar/`: `registration/` (setup wizard — `RegistrationSession`, baseline collector), `world_frame/` (`WorldFrameState`, `WorldFrameRefiner`, `SimilarityAligner`, `WorldRegistry`), `tag_tracking/` (robot-mounted AprilTag detect + solve), `navigation/` (`NavigateGoalHandler`, world-frame goal transform), `bridge/` (`TelemetryPublisher`, `StatusService`, `OdomBuffer`, `MotionRouter`, `BridgeSafetyCoordinator`, …), and `robot_profile/` for Go2/G1 handshake and capabilities.
-
-```mermaid
-flowchart TB
-  DimOS[DimOS] --> Bridge[ARBridge]
-  Clients[AR clients] <-->|protocol| Bridge
-  Blueprint[blueprints.py] --> Bridge
-```
-
-<details>
-<summary>Runtime support and capabilities</summary>
-
-Supported runtimes (selected interactively by `./scripts/start.sh`):
-
-- `ar-go2` — Unitree Go2 stack (full navigation and AprilTag registration when the onboard modules are available; capability states may negotiate reduced features on lighter stacks).
-- `ar-g1` — Unitree G1 nav-onboard stack (requires the Unitree DDS Python package set in the DimOS `.venv` for onboard navigation).
-
-Direct `dimos run ar-go2` / `dimos run ar-g1` work once these blueprints are registered upstream in DimOS; until then, use `./scripts/start.sh`.
-
-On the Lens side, runtime behavior is negotiated from the bridge handshake:
-- `AppState` projects robot/runtime metadata from the bridge and carries the coarse bridge-link state used by the setup and runtime UI.
-- offline development stays permissive until a bridge connects and completes the handshake.
-- unavailable controls stay visible and switch into disabled explanatory UI states with labels explaining why.
-
-</details>
-
-<details>
-<summary>Start the blueprint</summary>
-
-The monorepo provides `scripts/start.sh` as a convenience wrapper around native DimOS composition:
+The LAN IP in the second line is the address to enter on Spectacles during setup.
 
 ```bash
 cd /path/to/spectacles-dimensional-os
 ./scripts/start.sh
 ```
 
-`./scripts/start.sh` always prompts for the target robot stack, then runs the bridge against the selected composition. The equivalent native commands are:
+### Spectacles
 
-```bash
-dimos run ar-go2
-dimos run ar-g1
+Launch the lens **spectacles-dimensional-os**: open the Lens Studio project and upload the Lens to your Specs.
+
+Follow the Registration Wizard step-by-step. You will need to enter the IP of the machine running the WebSocket bridge. The IP is shown in the bridge log for convenience.
+
+<img src="assets/specs_dimos_registrationwizard.gif" alt="Registration wizard on Spectacles: connect, scan tag, finish setup" width="800" />
+
+If the tag is not detected, move closer. Depending on the lighting, the detection range is approx. **1.5 meters / 5 foot**. It is best to move around during the tag scanning step.
+
+Initial alignment / calibration will be imperfect - it improves significantly as the robot moves around.
+
+</details>
+
+## System overview
+
+DimOS owns the robot stack (connection, odometry, navigation, LiDAR, motion). `dimos-ar` runs as a DimOS module (`ARBridge`) and exposes a JSON WebSocket API on port **8787**. The Spectacles Lens is a client: it connects, completes registration to solve the shared **world ↔ odom** transform, then drives and visualizes the robot in AR.
+
+```mermaid
+flowchart LR
+  Robot["Physical robot<br>Unitree Go2 or G1"] <-->|"WebRTC"| Bridge["Dimensional OS <br> dimos-ar (ARBridge)"]
+  Bridge <-->|"WebSocket protocol"| Lens["Spectacles Lens"]
 ```
 
-Use `./scripts/start.sh` if the blueprints are not yet registered in your DimOS install.
+<details>
+<summary><h3>Bridge and Lens structure</h3></summary>
 
-If DimOS lives somewhere unusual, set `DIMOS_PYTHON` explicitly:
+[`PROTOCOL.md`](dimos-ar/PROTOCOL.md) is the shared contract between both sides - same message types, field names, and lifecycle vocabulary on Python and TypeScript. Everything else implements against it.
 
-```bash
-DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3 ./scripts/start.sh
+```mermaid
+flowchart LR
+  subgraph DimOSAR["dimos-ar (Python)"]
+    direction TB
+    AB["ARBridge"]
+    RS["Registration"]
+    WF["World frame"]
+    NAV["Navigation"]
+    TP["Telemetry"]
+    AB --> RS
+    AB --> WF
+    AB --> NAV
+    AB --> TP
+  end
+
+  subgraph Lens["lens-studio (TypeScript)"]
+    direction TB
+    RW["RegistrationWizard"]
+    Coord["ARBridgeCoordinator"]
+    Sess["ARBridgeSession"]
+    RC["RegistrationClient"]
+    NC["NavigationClient"]
+    RW --> Coord
+    Coord --> Sess
+    Coord --> RC
+    Coord --> NC
+  end
+
+  AB <-->|"WebSocket :8787"| Sess
 ```
 
 </details>
 
 <details>
-<summary>Manual setup and tests</summary>
+<summary><h3>Protocol</h3></summary>
 
-**Python** (`dimos-ar/`) — install from the DimOS Python environment:
+[`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) is the cross-platform contract (currently **v16**). The Mac is always the WebSocket **server**; AR devices are **clients**. Most messages are JSON; camera stills and LiDAR use binary frames.
+
+**Handshake (bridge → Lens)**
+
+| Message | Key fields |
+|---------|------------|
+| `hello` | `protocol_version`, `robot` (`robot_id`, `display_name`, `body_bounds_m`, `footprint_m`, `tag_tracking_profile`), `capabilities` |
+| `runtime_snapshot` | `bridge`, `nav.state`, optional `path` |
+
+**Live telemetry (bridge → Lens)**
+
+| Message | Key fields |
+|---------|------------|
+| `bridge_status` | `robot_connected`, `world_frame_committed`, `world_frame_method`, `reconnecting` |
+| `registration_status` | `mode`, `state`, `message`, `progress`, `tag_visible`, `preview_pose` |
+| `pose` | `position`, `orientation`, optional `speed_mps`, `velocity_mps`, `yaw_rate_rad_s` |
+| `path` | `waypoints` |
+| `nav_status` | `state` (`idle` \| `navIntent` \| `navigating` \| `resolved`), optional `outcome`, `retryable` |
+| `world_frame_correction` | `trans_delta_m`, `yaw_delta_deg`, `alignment_confidence` |
+| `capture_policy` | `max_capture_distance_m`, `min_capture_distance_m`, `max_capture_speed_mps`, `static_speed_mps`, `min_observations` |
+| `camera_frame_ack` | `seq`, `capturing_budgeted_complete` |
+| `lidar_f16` | binary float16 point cloud |
+
+**Client commands (Lens → bridge)**
+
+| Message | Key fields |
+|---------|------------|
+| `registration_command` | `command` (`start` \| `stop` \| `commit`), `mode` (`april_tag` \| `manual_pose`) when starting |
+| `registration_pose` | `position`, `orientation` (manual placement) |
+| `camera_info` / `camera_frame` | intrinsics + JPEG with camera pose metadata |
+| `nav_goal` | `position`, optional `orientation` |
+| `cancel_nav_goal` | - |
+| `set_lidar_mode` | `mode` (`off` \| `obstacles` \| `full`) |
+| `joystick_command` | `vx`, `vy`, `wz` stick deflection in [-1, 1] |
+| `emergency_stop` | - |
+| `ping` / `pong` | clock sync for frame timestamps |
+
+When the protocol changes, update these together in one change:
+
+- [`dimos-ar/dimos/ar/network/protocol.py`](dimos-ar/dimos/ar/network/protocol.py)
+- [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md)
+- [`lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`](lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts)
+
+</details>
+
+## DimOS AR WebSocket bridge
+
+This is **not a fork of DimOS**. It is a separate package that depends on DimOS and composes into blueprints via `autoconnect`. The Python bridge stays platform-agnostic under [`dimos-ar/`](dimos-ar/).
+
+> **Note:** Once the bridge protocol and setup are stable enough, a PR into [Dimensional OS](https://github.com/dimensionalOS/dimos) upstream is planned. That would resolve the current monorepo structure and leave only a clean Lens Studio / Spectacles client, which is easier to set up for AR developers.
+
+<a id="manual-mode"></a>
+
+<details>
+<summary><h3>Manual Mode</h3></summary>
+
+<img src="assets/specs_dimos_hero.gif" alt="Manual mode: spatial direction control on Spectacles" width="800" />
+
+After registration, **Manual Mode** anchors a spatial controller in front of the robot. Tilt and rotate your hand (or pinch-drag the navigation marker) to aim the direction arrow; the Lens streams world-frame `nav_goal` messages to the bridge, DimOS plans a path, and the robot walks in that direction. Live `pose` updates keep the AR robot marker aligned with the physical machine; optional LiDAR layers show obstacles and height bands around the robot.
+
+Toggle Manual Mode from the runtime wrist menu. While navigating, the yellow direction disc animates toward the commanded heading; release or cancel to stop. The bridge can also accept direct `joystick_command` stick input on the wire for teleop-style control.
+
+</details>
+
+<a id="agent-mode"></a>
+
+<details>
+<summary><h3>Agent Mode</h3></summary>
+
+> **Note:** Agent mode is currently under development. Check out the branch [`development/agentic`](../../tree/development/agentic) for the latest updates.
+
+In Agent Mode, voice commands on Spectacles are routed to a DimOS agent (OpenAI API on the Mac). The agent reasons over robot state and skills - e.g. “go to the kitchen” - instead of the user placing goals by hand. This requires an internet connection for the LLM API.
+
+</details>
+
+<details>
+<summary><h3>Development &amp; Troubleshooting</h3></summary>
+
+Reproduce CI locally before opening a PR:
 
 ```bash
-cd /path/to/spectacles-dimensional-os/dimos-ar
-/path/to/dimos/.venv/bin/python3 -m pip install -e ".[dev]"
-/path/to/dimos/.venv/bin/python3 -m pytest
-/path/to/dimos/.venv/bin/python3 -m ruff check .
-/path/to/dimos/.venv/bin/python3 -m mypy dimos/ar
-```
-
-**Lens TypeScript** (`lens-studio/Tests/`) — pure-logic unit tests for `Protocol.ts`, `AppState`, `InboundRouter`, `RegistrationClient`, `RegistrationFlow`, `RegistrationPresentation`, `NavigationModel`, `NavigationPresentation`, `RobotRuntimeModel`, `RuntimePoseAnimator`, `CameraCaptureSession`, `FrameCaptureController`, `bridgeSnapshot`, `meshPlacementSolver`, `cameraClientCadence`, `palmGestureGate`, `cameraStopBurst`, and related utilities (runs in Node/Vitest, not inside Lens Studio; see `lens-studio/Tests/unit/`):
-
-```bash
-cd /path/to/spectacles-dimensional-os/lens-studio/Tests
-npm install   # first time only
-npm test
-```
-
-Do not put `*.test.ts` under `lens-studio/Assets/` — the Lens compiler globs all `Assets/**/*.ts`.
-
-**Reproduce CI locally** — GitHub Actions runs both jobs in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). From the repo root:
-
-```bash
-chmod +x scripts/run-ci.sh   # first time only
 ./scripts/run-ci.sh
 ```
 
-That script mirrors CI exactly: `dimos-ar` installs the same pinned deps as the workflow (into a throwaway venv at `/tmp/spectacles-dimensional-os-ci-venv`), then runs `ruff check .`, `mypy dimos/ar`, and `pytest -m "not integration"`; `lens-studio-tests` runs `npm ci && npm test`. Override the interpreter with `CI_PYTHON=/path/to/python3.12 ./scripts/run-ci.sh` if needed.
-
-To run the jobs manually instead:
+**Python tests** (from the DimOS `.venv`):
 
 ```bash
-# dimos-ar (use a fresh Python 3.12 venv on macOS/Homebrew — PEP 668 blocks system pip)
 cd dimos-ar
-python3.12 -m venv /tmp/spectacles-dimensional-os-ci-venv
-source /tmp/spectacles-dimensional-os-ci-venv/bin/activate
-python -m pip install --upgrade pip
-pip install websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless Pillow scipy dimos
-pip install -e . --no-deps
-ruff check .
-mypy dimos/ar
-pytest -m "not integration"
+/path/to/dimos/.venv/bin/python3 -m pytest
+```
 
-# lens-studio-tests
-cd ../lens-studio/Tests
-npm ci
+**Lens TypeScript tests** (Vitest, no Lens Studio required):
+
+```bash
+cd lens-studio/Tests
 npm test
 ```
 
-On every push and pull request, CI runs these two jobs in parallel. Changes that touch shared protocol or pure Lens logic should pass both before merge.
+## Troubleshooting
 
-If you want to run `ar-g1`, make sure the same DimOS `.venv`
-also has the DDS SDK package installed:
-
-```bash
-/path/to/dimos/.venv/bin/pip3 install "unitree-sdk2py-dimos>=1.0.2"
-```
-
-Optional live protocol check while the blueprint is already running:
-
-```bash
-cd /path/to/spectacles-dimensional-os/dimos-ar
-/path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/network/test_ws_integration.py -m integration
-```
-
-Python tests are colocated with their modules under `dimos-ar/dimos/ar/`. See [`dimos-ar/README.md`](dimos-ar/README.md) for the unit vs integration test split.
+| Symptom | Things to try |
+|---------|----------------|
+| Lens cannot connect | Confirm Spectacles and Mac share WiFi; use the LAN IP from the `Bridge ready` banner, not `127.0.0.1`. |
+| AprilTag not detected | Move within ~1.5 m; improve lighting; walk around the robot during scan; verify print scale (70 mm outer edge for default Go2 tag). |
+| Drift after registration | Normal at first - refinement improves as the robot moves and stops; watch for “Refined Tracking” after larger corrections. |
+| Navigation unavailable | Check `hello.capabilities.nav` in bridge logs; G1 navigation needs the Unitree DDS Python packages in the DimOS `.venv`. |
 
 </details>
 
-<details>
-<summary>Transport, ports, and discovery</summary>
+## Contributing
 
-- dimos-ar bridge WebSocket listens on **8787**; avoid binding port **8765** on the same machine while Foxglove is running.
-- `scripts/start.sh` chooses the stack interactively at launch, between `ar-go2` and `ar-g1`.
-- `ar-g1` always composes on top of the Unitree G1 nav-onboard blueprint; navigation requires the Unitree DDS Python package set in the DimOS `.venv`, while manual registration stays available regardless.
-
-</details>
-
-<details>
-<summary>Extension points</summary>
-
-- Tune lidar and rate limits via `ARBridgeConfig` in [`dimos-ar/dimos/ar/bridge/module.py`](dimos-ar/dimos/ar/bridge/module.py).
-- Add or change messages by updating the Python protocol, the protocol spec, and the Lens protocol modules together.
-- The protocol now also carries `set_lidar_mode` (client-selected `off` / `obstacles` / `full` LiDAR transmission), `world_frame_correction` (runtime drift-correction telemetry, deadbanded so only meaningful jumps reach the client), `capture_policy` and `camera_frame_ack.capturing_budgeted_complete` (v16 capture lifecycle), unified `NavigationState` / `RegistrationState` on the wire, and `hello.robot` geometry for negotiated display bounds; see [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) for the full schema.
-- Keep `dimos-ar/dimos/ar/` platform-agnostic. Spectacles-specific code stays in [`lens-studio/`](lens-studio/); other AR clients should live in their own client folder or repo.
-
-</details>
-
-Contributions, ideas, and bug reports are welcome. If you are changing behavior that crosses the bridge boundary, also check [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a PR.
+Contributions, ideas, and bug reports are welcome. If you are changing behavior that crosses the bridge boundary, read [`CONTRIBUTING.md`](CONTRIBUTING.md) first - especially protocol sync rules and scene-wiring constraints.
 
 ## License
 
-MIT License — see [LICENSE](LICENSE).
+MIT License - see [LICENSE](LICENSE).

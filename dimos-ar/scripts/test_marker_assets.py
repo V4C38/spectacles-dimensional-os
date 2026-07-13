@@ -10,12 +10,12 @@ from scripts.generate_marker import (
     DEFAULT_APRILTAG_DICT,
     DEFAULT_MARKER_ID,
     LETTER_PAGE_MM,
-    MARKER_PDF_A4,
-    MARKER_PDF_LETTER,
     TAG_BLACK_SIZE_M,
     TAG_MODULES_TOTAL,
     TAG_TOTAL_SIZE_M,
     generate_tag_raster,
+    marker_pdf_a4_name,
+    marker_pdf_letter_name,
     marker_png_name,
 )
 
@@ -69,8 +69,8 @@ def test_robot_marker_assets_exist_after_generation() -> None:
     marker = cv2.imread(str(png), cv2.IMREAD_COLOR)
     assert marker is not None
     assert marker.shape[0] == marker.shape[1]
-    assert (assets_dir / MARKER_PDF_A4).is_file()
-    assert (assets_dir / MARKER_PDF_LETTER).is_file()
+    assert (assets_dir / marker_pdf_a4_name(DEFAULT_MARKER_ID)).is_file()
+    assert (assets_dir / marker_pdf_letter_name(DEFAULT_MARKER_ID)).is_file()
 
 
 def test_robot_marker_survives_downscaled_view() -> None:

@@ -290,7 +290,9 @@ export function shouldStreamGoalNow(
   session: NavigationSession,
   inputs: NavigationInputs,
 ): boolean {
-  return (
-    deriveNavigationState(session, inputs) === "navIntent" && inputs.placementActive
-  );
+  if (!inputs.placementActive) {
+    return false;
+  }
+  const navigationState = deriveNavigationState(session, inputs);
+  return navigationState === "navIntent" || navigationState === "navigating";
 }

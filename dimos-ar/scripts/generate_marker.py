@@ -2,8 +2,8 @@
 """Generate plain robot-mounted AprilTag 36h11 assets for print.
 
 Outputs per tag ID:
-  - ``apriltag_robot_{id}.png`` — 70 mm total (56 mm black square)
-  - Combined ``apriltag_robot_a4.pdf`` and ``apriltag_robot_letter.pdf``
+  - ``apriltag_robot_{id}.png`` - 70 mm total (56 mm black square)
+  - ``apriltag_robot_{id}_a4.pdf`` and ``apriltag_robot_{id}_letter.pdf``
 
 Print at 100% scale (no "fit to page") and verify the sticker measures 70 mm.
 Mount on a flat rigid backing — do not bend or wrap around curves.
@@ -22,12 +22,16 @@ DEFAULT_APRILTAG_DICT: str = "DICT_APRILTAG_36h11"
 TAG_TOTAL_SIZE_M: float = 0.070
 TAG_MODULES_TOTAL: int = 10
 TAG_BLACK_SIZE_M: float = TAG_TOTAL_SIZE_M * 8 / TAG_MODULES_TOTAL
-MARKER_PDF_A4: str = "apriltag_robot_a4.pdf"
-MARKER_PDF_LETTER: str = "apriltag_robot_letter.pdf"
-
-
 def marker_png_name(tag_id: int) -> str:
     return f"apriltag_robot_{tag_id}.png"
+
+
+def marker_pdf_a4_name(tag_id: int) -> str:
+    return f"apriltag_robot_{tag_id}_a4.pdf"
+
+
+def marker_pdf_letter_name(tag_id: int) -> str:
+    return f"apriltag_robot_{tag_id}_letter.pdf"
 
 
 A4_PAGE_MM = (210.0, 297.0)
@@ -99,7 +103,7 @@ def write_page_pdf(
     label_y = y + marker_height_px + int(0.01 * dpi)
     lines = [
         f"AprilTag 36h11 ID {tag_id}",
-        "70 mm total / 56 mm black square — print at 100% scale",
+        "70 mm total / 56 mm black square - print at 100% scale",
         "Mount FLAT (rigid backing). Do not bend or wrap.",
     ]
     for i, line in enumerate(lines):
@@ -115,30 +119,28 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=assets, help="Output directory")
     args = parser.parse_args()
     marker_mm = TAG_TOTAL_SIZE_M * 1000.0
+    args.out.mkdir(parents=True, exist_ok=True)
     for tag_id in args.ids:
         raster = generate_tag_raster(marker_id=tag_id)
         png_path = args.out / marker_png_name(tag_id)
-        args.out.mkdir(parents=True, exist_ok=True)
         if not cv2.imwrite(str(png_path), raster):
             raise SystemExit(f"Failed to write {png_path}")
         print(f"Wrote {png_path} ({raster.shape[1]}x{raster.shape[0]} px)")
-    first_id = args.ids[0]
-    first_raster = generate_tag_raster(marker_id=first_id)
-    for pdf_name, (page_w, page_h) in (
-        (MARKER_PDF_A4, A4_PAGE_MM),
-        (MARKER_PDF_LETTER, LETTER_PAGE_MM),
-    ):
-        pdf_path = args.out / pdf_name
-        write_page_pdf(
-            first_raster,
-            pdf_path,
-            page_width_mm=page_w,
-            page_height_mm=page_h,
-            marker_width_mm=marker_mm,
-            marker_height_mm=marker_mm,
-            tag_id=first_id,
-        )
-        print(f"Wrote {pdf_path} (tag {first_id}, {marker_mm:.0f} mm total)")
+        for pdf_name, (page_w, page_h) in (
+            (marker_pdf_a4_name(tag_id), A4_PAGE_MM),
+            (marker_pdf_letter_name(tag_id), LETTER_PAGE_MM),
+        ):
+            pdf_path = args.out / pdf_name
+            write_page_pdf(
+                raster,
+                pdf_path,
+                page_width_mm=page_w,
+                page_height_mm=page_h,
+                marker_width_mm=marker_mm,
+                marker_height_mm=marker_mm,
+                tag_id=tag_id,
+            )
+            print(f"Wrote {pdf_path} (tag {tag_id}, {marker_mm:.0f} mm total)")
 
 
 if __name__ == "__main__":

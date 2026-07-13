@@ -119,6 +119,15 @@ describe("shouldStreamGoalNow", () => {
     ).toBe(true);
   });
 
+  it("is true during active placement while navigating", () => {
+    expect(
+      shouldStreamGoalNow(
+        { ...activeSession({ since: 0 }), wireState: "navigating" },
+        inputs({ placementActive: true }),
+      ),
+    ).toBe(true);
+  });
+
   it("is false when idle without placement", () => {
     expect(
       shouldStreamGoalNow(activeSession(), inputs({ placementActive: false })),

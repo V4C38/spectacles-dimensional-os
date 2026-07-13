@@ -74,7 +74,13 @@ export class FrameCaptureController extends BaseScriptComponent {
         this._robotWorldPos = protocolMetersToLensCentimeters(msg.preview_pose.position);
       }
       if (msg.state === "april_tag" && msg.mode === "april_tag") {
+        this._lastSpeedMps = null;
+        if (!msg.preview_pose) {
+          this._robotWorldPos = null;
+        }
+        this._session.endCameraCapture();
         this._session.beginCameraCapture();
+        this._client?.resetCapturePipeline();
       } else if (
         msg.state === "succeeded" ||
         msg.state === "failed" ||
@@ -121,10 +127,13 @@ export class FrameCaptureController extends BaseScriptComponent {
   public endCameraCaptureSession(): void {
     if (this._captureState !== "off") {
       this._applyCapture(this._captureState, "off");
-      this._captureState = "off";
-      this._deps?.uiLogger.setCameraCaptureState("off");
     }
+    this._captureState = "off";
     this._session.endCameraCapture();
+    this._lastSpeedMps = null;
+    this._robotWorldPos = null;
+    this._client?.resetCapturePipeline();
+    this._deps?.uiLogger.setCameraCaptureState("off");
   }
 
   private _syncCameraCapture(): void {
