@@ -215,14 +215,14 @@ def test_publish_lidar_obstacle_mode_uses_robot_world_position() -> None:
     assert len(sender.binary_payloads[0]) == 11
 
 
-def test_publish_lidar_full_mode_caps_binary_payload_at_1000_points() -> None:
-    publisher, sender = _publisher(target_points=1000, obstacle_target_points=200)
+def test_publish_lidar_full_mode_caps_binary_payload_at_1500_points() -> None:
+    publisher, sender = _publisher(target_points=1500, obstacle_target_points=200)
     msg = _FakePointCloud2(
         np.column_stack(
             [
-                np.linspace(0.0, 4.0, 1100, dtype=np.float32),
-                np.zeros(1100, dtype=np.float32),
-                np.full(1100, 0.5, dtype=np.float32),
+                np.linspace(0.0, 4.0, 1600, dtype=np.float32),
+                np.zeros(1600, dtype=np.float32),
+                np.full(1600, 0.5, dtype=np.float32),
             ]
         ).astype(np.float32)
     )
@@ -236,11 +236,11 @@ def test_publish_lidar_full_mode_caps_binary_payload_at_1000_points() -> None:
     publisher.publish_lidar(msg)
 
     assert len(sender.binary_payloads) == 1
-    assert len(sender.binary_payloads[0]) == 5 + (1000 * 6)
+    assert len(sender.binary_payloads[0]) == 5 + (1500 * 6)
 
 
 def test_publish_lidar_obstacle_mode_caps_binary_payload_at_200_points() -> None:
-    publisher, sender = _publisher(target_points=1000, obstacle_target_points=200)
+    publisher, sender = _publisher(target_points=1500, obstacle_target_points=200)
     msg = _FakePointCloud2(
         np.column_stack(
             [

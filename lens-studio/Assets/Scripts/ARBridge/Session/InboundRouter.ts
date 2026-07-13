@@ -91,12 +91,6 @@ export class InboundRouter {
       this.onBridgeReady.emit();
     });
 
-    this.telemetryClient.onLidar.add((msg) => {
-      if (this.appState.snapshot.lidarMode !== "off") {
-        this.robotPresenter.refreshLidarPresentation();
-      }
-    });
-
     this.navigationClient.onPath.add((msg) => this.navigationController.applyPath(msg));
     this.navigationClient.onNavStatus.add((msg) =>
       this.navigationController.applyNavStatus(msg),

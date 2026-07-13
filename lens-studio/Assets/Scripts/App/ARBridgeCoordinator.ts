@@ -167,7 +167,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
       robot.robotMarker?.syncPose();
     }
     navigation.applyRuntimeStateFromSnapshot();
-    robot.refreshLidarPresentation();
+    robot.syncLidarPresentation();
   }
 
   public enterRegistration(options?: { preserveBridge?: boolean }): void {

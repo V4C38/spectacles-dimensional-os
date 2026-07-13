@@ -497,7 +497,11 @@ payload size on Wi-Fi:
 
 Subsampled point cloud in AR world frame, sent as a **binary WebSocket frame**
 (message type `0x01 lidar_f16`). Each point is encoded as three IEEE 754
-half-precision (float16) values, little-endian. Up to 2500 points per frame.
+half-precision (float16) values, little-endian. Up to **2500** points per frame
+(wire maximum). Operational bridge caps: **1500** in `full` mode, **200** in
+`obstacles` mode (`target_points` / `obstacle_target_points` in
+`dimos/ar/bridge/module.py`; mirrored as `LIDAR_FULL_POINT_CAP` /
+`LIDAR_OBSTACLE_POINT_CAP` in protocol modules).
 Binary frames carry **no** `robot_id`; the session robot comes from `hello`.
 
 The emitted point set depends on the active bridge-side LiDAR mode selected by

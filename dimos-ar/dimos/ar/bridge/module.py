@@ -26,6 +26,8 @@ from dimos.ar.bridge.telemetry import TelemetryPublisher
 from dimos.ar.lidar.filters import LidarFilter, LidarFilterConfig, lidar_height_band_m
 from dimos.ar.navigation.navigate import NavigateGoalHandler
 from dimos.ar.network.protocol import (
+    LIDAR_FULL_POINT_CAP,
+    LIDAR_OBSTACLE_POINT_CAP,
     JoystickCommandMessage,
     NavGoalMessage,
     SetLidarModeMessage,
@@ -90,8 +92,8 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     max_message_bytes: int = 4_194_304
     max_range_m: float | None = None
     obstacle_height_threshold_m: float = 0.08
-    target_points: int = 1000
-    obstacle_target_points: int = 200
+    target_points: int = LIDAR_FULL_POINT_CAP
+    obstacle_target_points: int = LIDAR_OBSTACLE_POINT_CAP
     lidar_max_hz: float = 1.0
     # Voxel grid size for coarse LiDAR downsampling before the height-band filter.
     # The DimOS default is 0.025 m; 0.05 m is chosen deliberately for AR payload budget.

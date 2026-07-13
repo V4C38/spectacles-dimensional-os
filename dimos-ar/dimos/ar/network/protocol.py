@@ -417,6 +417,11 @@ def _sanitize_pose_values(
     )
 
 
+# LiDAR point budgets — keep in sync with lens-studio Protocol.ts and PROTOCOL.md.
+LIDAR_WIRE_MAX_POINTS: int = 2500
+LIDAR_FULL_POINT_CAP: int = 1500
+LIDAR_OBSTACLE_POINT_CAP: int = 200
+
 # Binary lidar frame (message_type 0x01 = lidar_f16).
 # Format: [1B type=0x01][4B float32 ts little-endian][N*6B float16 xyz world-metres]
 _LIDAR_F16_TYPE: int = 0x01
@@ -557,6 +562,9 @@ def encode_nav_status(
 
 
 __all__ = [
+    "LIDAR_FULL_POINT_CAP",
+    "LIDAR_OBSTACLE_POINT_CAP",
+    "LIDAR_WIRE_MAX_POINTS",
     "PROTOCOL_VERSION",
     "CameraInfoMessage",
     "CancelNavGoalMessage",

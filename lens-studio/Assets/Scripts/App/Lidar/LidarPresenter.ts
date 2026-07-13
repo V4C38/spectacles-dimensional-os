@@ -6,44 +6,70 @@ import {
 } from "../Robot/RobotRuntimeModel";
 import { DEFAULT_LIDAR_OBSTACLE_SETTINGS } from "../../ARBridge/Network/Protocol";
 
-export interface LidarPresentationInput {
+export interface LidarRenderContext {
   mode: LidarDisplayMode;
   active: boolean;
   connected: boolean;
-  points: [number, number, number][] | null;
   anchor: vec3 | null;
   runtime: RobotRuntimeState;
 }
 
-/** Owns LiDAR point buffer and point-cloud presentation (live, mock, off). */
+/** Owns LiDAR presentation: packet-driven mesh builds and mode lifecycle. */
 export class LidarPresenter {
-  private _lastPoints: [number, number, number][] | null = null;
   private _lastRxTime = 0;
-  private _meshDirty = false;
+  private _lastMode: LidarDisplayMode = "off";
 
   constructor(private readonly _renderer: PointCloudRenderer | null) {}
 
-  public onLidarReceived(points: [number, number, number][]): void {
-    this._lastPoints = points;
+  /** Render one incoming LiDAR packet immediately; sole live mesh-build trigger. */
+  public onLidarReceived(
+    points: [number, number, number][],
+    ctx: LidarRenderContext,
+  ): void {
+    if (!ctx.active || ctx.mode === "off" || !ctx.connected) {
+      return;
+    }
     this._lastRxTime = getTime();
-    this._meshDirty = true;
+    this._lastMode = ctx.mode;
+    this._applyFilterGeometry(ctx);
+    this._renderer?.setFullLidarVisible(ctx.mode === "full");
+    this._renderer?.renderPointCloud(points, ctx.mode);
+  }
+
+  /** Mode/off/phase changes: clear inactive layers; never rebuild stale packets. */
+  public onPresentationStateChanged(ctx: LidarRenderContext): void {
+    if (!ctx.active || ctx.mode === "off") {
+      this.clearBuffer();
+      this._renderer?.clearAll();
+      this._lastMode = ctx.mode;
+      return;
+    }
+
+    const modeChanged = ctx.mode !== this._lastMode;
+    if (modeChanged) {
+      this._clearInactiveLayer(ctx.mode);
+      this._lastMode = ctx.mode;
+    }
+
+    this._renderer?.setFullLidarVisible(ctx.mode === "full");
+
+    if (!ctx.connected) {
+      const anchor = ctx.anchor ?? vec3.zero();
+      this._applyFilterGeometry(ctx);
+      this._renderer?.renderMockLidar(anchor, ctx.mode);
+      return;
+    }
+
+    if (modeChanged) {
+      this._applyFilterGeometry(ctx);
+    }
   }
 
   public clearBuffer(): void {
-    this._lastPoints = null;
     this._lastRxTime = 0;
-    this._meshDirty = false;
   }
 
-  public get lastPoints(): [number, number, number][] | null {
-    return this._lastPoints;
-  }
-
-  public markMeshDirty(): void {
-    this._meshDirty = true;
-  }
-
-  /** Frame pump: stale clear + render when dirty. Returns true if stale clear ran. */
+  /** Frame pump: stale clear only. */
   public tickFrame(
     active: boolean,
     mode: LidarDisplayMode,
@@ -51,66 +77,33 @@ export class LidarPresenter {
     staleClearS: number,
   ): void {
     if (
-      !this._meshDirty &&
       active &&
       mode !== "off" &&
       connected &&
-      this._lastPoints !== null &&
       this._lastRxTime > 0 &&
       getTime() - this._lastRxTime >= staleClearS
     ) {
       this.clearBuffer();
       this._renderer?.clearAll();
-      return;
     }
-    if (
-      !this._meshDirty ||
-      !active ||
-      mode === "off" ||
-      !this._lastPoints
-    ) {
-      return;
-    }
-    this._meshDirty = false;
-    this._renderer?.renderPointCloud(this._lastPoints);
   }
 
-  public apply(input: LidarPresentationInput): void {
-    if (!input.active || input.mode === "off") {
-      this.clearBuffer();
-      this._renderer?.clearAll();
+  private _clearInactiveLayer(mode: LidarDisplayMode): void {
+    if (mode === "full") {
+      this._renderer?.clearObstacleLidar();
       return;
     }
-
-    const mode = input.mode;
-    this._renderer?.setFullLidarVisible(mode === "full");
-
-    if (input.connected) {
-      if (mode !== "full") {
-        this._renderer?.clearFullLidar();
-      }
-      if (input.anchor) {
-        this._applyAnchorGeometry(input.anchor, input.runtime);
-      }
-      if (this._lastPoints) {
-        this._renderer?.renderPointCloud(this._lastPoints);
-        this._meshDirty = false;
-      } else {
-        this._renderer?.clearAll();
-        this._renderer?.setFullLidarVisible(mode === "full");
-      }
-      return;
-    }
-
-    const anchor = input.anchor ?? vec3.zero();
-    this._applyAnchorGeometry(anchor, input.runtime);
-    this._renderer?.renderMockLidar(anchor);
+    this._renderer?.clearFullLidar();
   }
 
-  private _applyAnchorGeometry(position: vec3, runtime: RobotRuntimeState): void {
-    this._renderer?.setRobotWorldPosition(position);
-    this._renderer?.setRobotFloorWorldY(robotFloorWorldYCm(position.y, runtime));
-    const band = lidarVerticalBandCm(runtime);
+  private _applyFilterGeometry(ctx: LidarRenderContext): void {
+    if (ctx.anchor) {
+      this._renderer?.setRobotWorldPosition(ctx.anchor);
+      this._renderer?.setRobotFloorWorldY(
+        robotFloorWorldYCm(ctx.anchor.y, ctx.runtime),
+      );
+    }
+    const band = lidarVerticalBandCm(ctx.runtime);
     this._renderer?.setLidarVerticalBand(band.minAboveFloorCm, band.maxAboveFloorCm);
     this._renderer?.setObstacleDistanceBand(
       DEFAULT_LIDAR_OBSTACLE_SETTINGS.minDistanceM * 100.0,

@@ -1,5 +1,5 @@
 import { PointCloudRenderer } from "../Lidar/PointCloudRenderer";
-import { LidarPresenter } from "../Lidar/LidarPresenter";
+import { LidarPresenter, LidarRenderContext } from "../Lidar/LidarPresenter";
 import { RobotMarker } from "./RobotMarker";
 import { ManualRegistrationPlacement } from "../../ARBridge/Registration/ManualRegistrationPlacement";
 import { AppStateStore } from "../AppState";
@@ -70,7 +70,6 @@ export class RobotPresenter {
           }
           return null;
         },
-        onWorldPositionChanged: () => this.refreshLidarPresentation(),
       });
       this.robotMarker.bindUiCallbacks({
         onToggle: () => menuCallbacks.onToggleRequested(),
@@ -81,8 +80,7 @@ export class RobotPresenter {
 
     this.telemetry?.onLidar.add((msg) => {
       if (this.isRuntimePhase() && this.appState.snapshot.lidarMode !== "off") {
-        this._lidar?.onLidarReceived(msg.points);
-        this.refreshLidarPresentation();
+        this._lidar?.onLidarReceived(msg.points, this._lidarContext());
       }
     });
 
@@ -91,7 +89,7 @@ export class RobotPresenter {
       this._applyAppState(this.appState.snapshot);
     });
     this.appState.subscribe((state) => this._syncFromState(state));
-    this.refreshLidarPresentation();
+    this.syncLidarPresentation();
   }
 
   public applyPendingPose(): boolean {
@@ -144,16 +142,13 @@ export class RobotPresenter {
     this.robotMarker?.setDebugBoundsFromRuntime(runtime);
   }
 
+  public syncLidarPresentation(state?: AppStateData): void {
+    this._lidar?.onPresentationStateChanged(this._lidarContext(state));
+  }
+
+  /** @deprecated Use syncLidarPresentation */
   public refreshLidarPresentation(state?: AppStateData): void {
-    const snapshot = state ?? this.appState.snapshot;
-    this._lidar?.apply({
-      mode: snapshot.lidarMode,
-      active: this.isRuntimePhase(),
-      connected: this.isBridgeSessionReady(),
-      points: this._lidar?.lastPoints ?? null,
-      anchor: this._resolveLidarAnchor(),
-      runtime: snapshot.robotRuntime,
-    });
+    this.syncLidarPresentation(state);
   }
 
   private _applyAppState(state: AppStateData): void {
@@ -164,8 +159,19 @@ export class RobotPresenter {
     this.robotMarker?.setRenderOffsetCm(runtimeRenderOffsetCm(state.robotRuntime));
     this.robotMarker?.setDebugMode(state.debugMode);
     this._applyAppState(state);
-    this.refreshLidarPresentation(state);
+    this.syncLidarPresentation(state);
     this.telemetry?.syncLidarMode(state.lidarMode);
+  }
+
+  private _lidarContext(state?: AppStateData): LidarRenderContext {
+    const snapshot = state ?? this.appState.snapshot;
+    return {
+      mode: snapshot.lidarMode,
+      active: this.isRuntimePhase(),
+      connected: this.isBridgeSessionReady(),
+      anchor: this._resolveLidarAnchor(),
+      runtime: snapshot.robotRuntime,
+    };
   }
 
   private _resolveLidarAnchor(): vec3 | null {

@@ -18,6 +18,11 @@ import {
 
 export const PROTOCOL_VERSION = 16;
 
+/** Wire maximum; operational caps are mode-specific (see PROTOCOL.md). */
+export const LIDAR_WIRE_MAX_POINTS = 2500;
+export const LIDAR_FULL_POINT_CAP = 1500;
+export const LIDAR_OBSTACLE_POINT_CAP = 200;
+
 // ── Unit conversion ────────────────────────────────────────────
 
 const LENS_CM_TO_PROTOCOL_M = 0.01;

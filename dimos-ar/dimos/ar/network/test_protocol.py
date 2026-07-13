@@ -9,6 +9,9 @@ import pytest
 from dimos.ar.network.bridge_status import BridgeStatusSnapshot
 from dimos.ar.network.protocol import (
     DEFAULT_CAPABILITIES,
+    LIDAR_FULL_POINT_CAP,
+    LIDAR_OBSTACLE_POINT_CAP,
+    LIDAR_WIRE_MAX_POINTS,
     PROTOCOL_VERSION,
     CameraInfoMessage,
     CancelNavGoalMessage,
@@ -746,3 +749,9 @@ def test_normalize_nav_state_active_planner_substates() -> None:
     assert normalize_nav_state("arrived") == "idle"
     assert normalize_nav_state("stopped") == "idle"
     assert normalize_nav_state("recovery_mode") == "recovering"
+
+
+def test_lidar_point_caps_match_protocol_docs() -> None:
+    assert LIDAR_WIRE_MAX_POINTS == 2500
+    assert LIDAR_FULL_POINT_CAP == 1500
+    assert LIDAR_OBSTACLE_POINT_CAP == 200

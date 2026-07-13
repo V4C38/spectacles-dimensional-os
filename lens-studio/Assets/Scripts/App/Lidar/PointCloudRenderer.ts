@@ -1,10 +1,15 @@
-import { protocolMetersToLensCentimeters } from "../../ARBridge/Network/Protocol";
+import {
+  LIDAR_FULL_POINT_CAP,
+  LIDAR_OBSTACLE_POINT_CAP,
+  protocolMetersToLensCentimeters,
+} from "../../ARBridge/Network/Protocol";
+import { LidarDisplayMode } from "../AppState";
 import { findChildRecursive } from "../UI/UIKit";
 
 const MOCK_GRID_MIN = -2.0;
 const MOCK_GRID_MAX = 2.0;
 const MOCK_GRID_STEP = 0.4;
-const MAX_MOCK_POINTS = 1000;
+const MAX_MOCK_POINTS = LIDAR_FULL_POINT_CAP;
 
 function pushMockPoint(
   points: [number, number, number][],
@@ -73,15 +78,15 @@ function buildMockLidarPoints(): [number, number, number][] {
   return points;
 }
 
-const MAX_POINTS = 1000;
-const POINT_SIZE_CM = 2.4;
+const MAX_POINTS = LIDAR_FULL_POINT_CAP;
+const POINT_SIZE_CM = 3.0;
 const DEFAULT_MIN_ABOVE_FLOOR_CM = 0.5;
 const DEFAULT_MAX_ABOVE_FLOOR_CM = 155;
 const LIDAR_FILTER_DEBUG_INTERVAL_S = 5.0;
 const DEFAULT_OBSTACLE_MIN_DIST_CM = 10;
 const DEFAULT_OBSTACLE_OPAQUE_CM = 50;
 const DEFAULT_OBSTACLE_FADE_END_CM = 80;
-const FULL_LIDAR_POINT_ALPHA = 0.4;
+const FULL_LIDAR_POINT_ALPHA = 0.8;
 const FLOATS_PER_VERTEX = 7;
 const VERTS_PER_POINT = 8;
 const INDICES_PER_POINT = 36;
@@ -164,7 +169,10 @@ export class PointCloudRenderer extends BaseScriptComponent {
   }
 
   /** Offline mock point cloud anchored at the robot marker (or origin). */
-  public renderMockLidar(anchorCm: vec3 = vec3.zero()): void {
+  public renderMockLidar(
+    anchorCm: vec3 = vec3.zero(),
+    mode: LidarDisplayMode = "full",
+  ): void {
     const offsetM = anchorCm.uniformScale(0.01);
     const anchored = buildMockLidarPoints().map(
       (p) =>
@@ -174,14 +182,20 @@ export class PointCloudRenderer extends BaseScriptComponent {
           number,
         ],
     );
-    this.renderPointCloud(anchored);
+    this.renderPointCloud(anchored, mode);
   }
 
-  /** Rebuild obstacle mesh always; rebuild full mesh only when full LiDAR is visible. */
-  public renderPointCloud(points: [number, number, number][]): void {
-    this._rebuildObstacleLidarMesh(points);
-    if (this._fullLidarVisible) {
-      this._rebuildFullLidarMesh(points);
+  /** Rebuild only the mesh for the active LiDAR display mode. */
+  public renderPointCloud(
+    points: [number, number, number][],
+    mode: LidarDisplayMode,
+  ): void {
+    if (mode === "obstacles") {
+      this._rebuildObstacleLidarMesh(points, LIDAR_OBSTACLE_POINT_CAP);
+      return;
+    }
+    if (mode === "full") {
+      this._rebuildFullLidarMesh(points, LIDAR_FULL_POINT_CAP);
     }
   }
 
@@ -219,9 +233,17 @@ export class PointCloudRenderer extends BaseScriptComponent {
   }
 
   public clearFullLidar(): void {
+    this._fullLidarVisible = false;
     this._clearMesh(this._fullLidarBuilder, this.fullLidarVisual);
     if (this.fullLidarVisual) {
       this.fullLidarVisual.getSceneObject().enabled = false;
+    }
+  }
+
+  public clearObstacleLidar(): void {
+    this._clearMesh(this._obstacleLidarBuilder, this.obstacleVisual);
+    if (this.obstacleVisual) {
+      this.obstacleVisual.getSceneObject().enabled = false;
     }
   }
 
@@ -335,7 +357,10 @@ export class PointCloudRenderer extends BaseScriptComponent {
     }
   }
 
-  private _rebuildFullLidarMesh(points: [number, number, number][]): void {
+  private _rebuildFullLidarMesh(
+    points: [number, number, number][],
+    maxPoints: number,
+  ): void {
     const builder = this._fullLidarBuilder;
     const visual = this.fullLidarVisual;
     if (!builder || !visual) {
@@ -348,7 +373,7 @@ export class PointCloudRenderer extends BaseScriptComponent {
     let vertOffset = 0;
     let pointCount = 0;
 
-    for (let i = 0; i < points.length && pointCount < MAX_POINTS; i++) {
+    for (let i = 0; i < points.length && pointCount < maxPoints; i++) {
       const heightAboveFloor = this._heightAboveFloorWorldCm(points[i]);
       if (!this._passesVerticalBand(heightAboveFloor)) {
         continue;
@@ -360,8 +385,9 @@ export class PointCloudRenderer extends BaseScriptComponent {
         0,
         1,
       );
-      const r = t;
-      const g = t;
+      const heightFade = 1 - t;
+      const r = heightFade;
+      const g = heightFade;
       const b = 1.0;
       const a = FULL_LIDAR_POINT_ALPHA;
 
@@ -385,7 +411,10 @@ export class PointCloudRenderer extends BaseScriptComponent {
     this._uploadMesh(builder, visual, pointCount);
   }
 
-  private _rebuildObstacleLidarMesh(points: [number, number, number][]): void {
+  private _rebuildObstacleLidarMesh(
+    points: [number, number, number][],
+    maxPoints: number,
+  ): void {
     const builder = this._obstacleLidarBuilder;
     const visual = this.obstacleVisual;
     if (!builder || !visual) {
@@ -398,7 +427,7 @@ export class PointCloudRenderer extends BaseScriptComponent {
     let vertOffset = 0;
     let pointCount = 0;
 
-    for (let i = 0; i < points.length && pointCount < MAX_POINTS; i++) {
+    for (let i = 0; i < points.length && pointCount < maxPoints; i++) {
       const heightAboveFloor = this._heightAboveFloorWorldCm(points[i]);
       if (!this._passesVerticalBand(heightAboveFloor)) {
         continue;
