@@ -14,6 +14,8 @@ from dimos.ar.network.inbound_dispatch import (
     lane_for_message,
 )
 from dimos.ar.network.protocol import (
+    AgentCommandMessage,
+    ArSkillResultMessage,
     CameraInfoMessage,
     GetStatusMessage,
     InboundMessage,
@@ -193,4 +195,36 @@ async def test_camera_info_policy_is_background() -> None:
         device_model="test",
     )
 
+    assert lane_for_message(msg) == DispatchLane.BACKGROUND
+
+
+def test_lane_for_agent_command_is_background() -> None:
+    msg = AgentCommandMessage(ts=1.0, robot_id="unitree_go2", text="hi")
+    assert lane_for_message(msg) == DispatchLane.BACKGROUND
+
+
+def test_lane_for_ar_skill_result_is_background() -> None:
+    msg = ArSkillResultMessage(
+        ts=1.0,
+        robot_id="unitree_go2",
+        request_id="req-1",
+        ok=True,
+        skill="get_user_hmd_transform",
+    )
+    assert lane_for_message(msg) == DispatchLane.BACKGROUND
+
+
+def test_lane_for_agent_command_is_background() -> None:
+    msg = AgentCommandMessage(ts=1.0, robot_id="unitree_go2", text="hi")
+    assert lane_for_message(msg) == DispatchLane.BACKGROUND
+
+
+def test_lane_for_ar_skill_result_is_background() -> None:
+    msg = ArSkillResultMessage(
+        ts=1.0,
+        robot_id="unitree_go2",
+        request_id="req-1",
+        ok=True,
+        skill="get_user_hmd_transform",
+    )
     assert lane_for_message(msg) == DispatchLane.BACKGROUND

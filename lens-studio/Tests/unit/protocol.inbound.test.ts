@@ -473,4 +473,45 @@ describe("parseInboundMessage", () => {
   it("returns null for unknown message type", () => {
     expect(parseInboundMessage('{"type":"banana"}')).toBeNull();
   });
+
+  it("parses agent_response", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "agent_response",
+        ts: 1,
+        text: "On my way.",
+      }),
+    );
+    expect(msg!.type).toBe("agent_response");
+    expect((msg as { text: string }).text).toBe("On my way.");
+  });
+
+  it("parses agent_status", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "agent_status",
+        ts: 1,
+        state: "busy",
+        detail: "thinking",
+      }),
+    );
+    expect(msg!.type).toBe("agent_status");
+    expect((msg as { state: string }).state).toBe("busy");
+  });
+
+  it("parses ar_skill with opaque args", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "ar_skill",
+        ts: 1,
+        request_id: "req-1",
+        skill: "draw_world_annotation",
+        args: { id: "chair-1", duration_s: 30 },
+      }),
+    );
+    expect(msg!.type).toBe("ar_skill");
+    const skill = msg as { skill: string; args: { duration_s: number } };
+    expect(skill.skill).toBe("draw_world_annotation");
+    expect(skill.args.duration_s).toBe(30);
+  });
 });

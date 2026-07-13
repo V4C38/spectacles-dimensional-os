@@ -68,10 +68,13 @@ describe("sniffInboundMessageType", () => {
 });
 
 describe("isNonCriticalInboundMessageType", () => {
-  it("returns true for lidar, pose, and world_frame_correction", () => {
+  it("returns true for lidar, pose, world_frame_correction, and agent types", () => {
     expect(isNonCriticalInboundMessageType("lidar")).toBe(true);
     expect(isNonCriticalInboundMessageType("pose")).toBe(true);
     expect(isNonCriticalInboundMessageType("world_frame_correction")).toBe(true);
+    expect(isNonCriticalInboundMessageType("agent_response")).toBe(true);
+    expect(isNonCriticalInboundMessageType("agent_status")).toBe(true);
+    expect(isNonCriticalInboundMessageType("ar_skill")).toBe(true);
   });
 
   it("returns false for other message types", () => {

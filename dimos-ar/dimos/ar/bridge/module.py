@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from dimos_lcm.std_msgs import Bool, String
 
+from dimos.ar.agent import AgentHandlers
 from dimos.ar.bridge.motion_router import MotionRouter
 from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.bridge.profile_rpc_dispatch import dispatch_profile_nowait
@@ -358,6 +359,7 @@ class ARBridge(Module):  # type: ignore[misc]
             registration=registration,
             motion_router=motion_router,
         )
+        agent_handlers = AgentHandlers()
 
         ws_server = ARWebSocketServer(
             port=self.config.port,
@@ -374,6 +376,8 @@ class ARBridge(Module):  # type: ignore[misc]
             on_emergency_stop=safety.on_emergency_stop,
             on_get_status=self._on_get_status,
             on_set_lidar_mode=self._on_set_lidar_mode,
+            on_agent_command=agent_handlers.on_agent_command,
+            on_ar_skill_result=agent_handlers.on_ar_skill_result,
             on_status_connect=self._send_status_to,
             on_disconnect=self._on_client_disconnect,
         )

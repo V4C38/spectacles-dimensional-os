@@ -10,6 +10,16 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
+from dimos.ar.agent.wire import (
+    AgentCommandMessage,
+    ArSkillResultMessage,
+    WireAgentState,
+    decode_agent_command,
+    decode_ar_skill_result,
+    encode_agent_response,
+    encode_agent_status,
+    encode_ar_skill,
+)
 from dimos.ar.registration.wire import (
     RegistrationCommandMessage,
     RegistrationPoseMessage,
@@ -24,7 +34,7 @@ if TYPE_CHECKING:
     from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
     from dimos.ar.world_frame.state import WorldFrameState
 
-PROTOCOL_VERSION = 16
+PROTOCOL_VERSION = 17
 
 WireNavigationState = Literal["idle", "navIntent", "navigating", "resolved"]
 NavTerminalOutcome = Literal["succeeded", "failed"]
@@ -121,6 +131,8 @@ InboundMessage = (
     | GetStatusMessage
     | SetLidarModeMessage
     | PingMessage
+    | AgentCommandMessage
+    | ArSkillResultMessage
 )
 
 
@@ -280,6 +292,10 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         if "client_ts" not in data or not isinstance(data["client_ts"], (int, float)):
             raise ValueError("Missing or invalid field: client_ts")
         return PingMessage(ts=ts, robot_id=robot_id, client_ts=float(data["client_ts"]))
+    if msg_type == "agent_command":
+        return decode_agent_command(data, ts=ts, robot_id=robot_id)
+    if msg_type == "ar_skill_result":
+        return decode_ar_skill_result(data, ts=ts, robot_id=robot_id)
     raise ValueError(f"Unknown inbound message type: {msg_type!r}")
 
 
@@ -566,6 +582,8 @@ __all__ = [
     "LIDAR_OBSTACLE_POINT_CAP",
     "LIDAR_WIRE_MAX_POINTS",
     "PROTOCOL_VERSION",
+    "AgentCommandMessage",
+    "ArSkillResultMessage",
     "CameraInfoMessage",
     "CancelNavGoalMessage",
     "EmergencyStopMessage",
@@ -579,9 +597,13 @@ __all__ = [
     "RegistrationPoseMessage",
     "RegistrationStatusPayload",
     "SetLidarModeMessage",
+    "WireAgentState",
     "WireNavigationState",
     "bridge_status_wire",
     "decode_inbound",
+    "encode_agent_response",
+    "encode_agent_status",
+    "encode_ar_skill",
     "encode_bridge_status",
     "encode_camera_frame_ack",
     "encode_capture_policy",

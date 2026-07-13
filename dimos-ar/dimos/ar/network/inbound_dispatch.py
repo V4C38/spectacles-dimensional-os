@@ -18,6 +18,8 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, cast
 
 from dimos.ar.network.protocol import (
+    AgentCommandMessage,
+    ArSkillResultMessage,
     CameraInfoMessage,
     CancelNavGoalMessage,
     EmergencyStopMessage,
@@ -62,6 +64,8 @@ MESSAGE_LANES: dict[type[InboundMessage], DispatchLane] = {
     EmergencyStopMessage: DispatchLane.BACKGROUND,
     JoystickCommandMessage: DispatchLane.BACKGROUND,
     PingMessage: DispatchLane.ASYNC,
+    AgentCommandMessage: DispatchLane.BACKGROUND,
+    ArSkillResultMessage: DispatchLane.BACKGROUND,
 }
 
 

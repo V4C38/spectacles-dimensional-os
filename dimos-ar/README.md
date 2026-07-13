@@ -121,7 +121,7 @@ Reproduce full CI from repo root: `./scripts/run-ci.sh`.
 <details>
 <summary>Protocol coupling</summary>
 
-`PROTOCOL_VERSION = 16` in `dimos/ar/network/protocol.py`. If the wire contract changes, update together:
+`PROTOCOL_VERSION = 17` in `dimos/ar/network/protocol.py`. If the wire contract changes, update together:
 
 - `dimos/ar/network/protocol.py`
 - `PROTOCOL.md`

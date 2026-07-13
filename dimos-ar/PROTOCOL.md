@@ -9,7 +9,28 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v16 (current) — Unified NavigationState and capture vocabulary
+### v17 (current) — Agent mode wire + AR skills
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 17.**
+- **Agent conversation (new):** `agent_command` (Lens → bridge), `agent_response` and
+  `agent_status` (bridge → Lens).
+- **AR skills (new):** `ar_skill` (bridge → Lens) and `ar_skill_result` (Lens → bridge).
+  Envelope-only validation — `skill`, `request_id`, opaque `args` / `data`; no per-skill
+  schema enforcement on the bridge.
+- **`hello.capabilities`:** adds agent-operation keys (`navigation`, `spatial_memory`,
+  `object_detection`, …) alongside transport keys. Informational only — agent mode is
+  always available in the Lens UI; these keys never gate the mode.
+- **Non-blocking:** agent inbound messages use the bridge `BACKGROUND` dispatch lane;
+  handlers must return immediately (no LLM turn waits, no synchronous `ar_skill`
+  round-trips on the WebSocket read loop). No wire timeouts.
+- **`runtime_snapshot`:** does not include agent state in v17; reconnecting clients assume
+  `agent_status: idle` until the next event.
+
+See **Agent messages** and **Reference AR skills** sections below.
+
+### v16 — Unified NavigationState and capture vocabulary
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -225,7 +246,7 @@ capability map, then sends a `runtime_snapshot` (see below).
 ```json
 {
   "type": "hello",
-  "protocol_version": 12,
+  "protocol_version": 17,
   "robot": {
     "robot_id": "unitree_go2",
     "display_name": "Unitree Go2",
@@ -245,7 +266,10 @@ capability map, then sends a `runtime_snapshot` (see below).
     "nav":                                { "available": true,  "reason": null },
     "path":                               { "available": true,  "reason": null },
     "cancel_nav_goal":                        { "available": true,  "reason": null },
-    "emergency_stop":                     { "available": false, "reason": "No safe stop interface is available in this runtime." }
+    "emergency_stop":                     { "available": false, "reason": "No safe stop interface is available in this runtime." },
+    "navigation":                         { "available": true,  "reason": null },
+    "spatial_memory":                     { "available": false, "reason": "Not in ar_go2 stack" },
+    "object_detection":                   { "available": false, "reason": "Not in ar_go2 stack" }
   }
 }
 ```
@@ -337,6 +361,9 @@ Fields:
 - `nav.retryable` / `nav.stall_reason` (optional): present with `state: "navIntent"`
 - `path` (optional): present only when a navigating path is cached; omitted when
   idle
+
+**Agent state (v17):** `runtime_snapshot` does **not** include agent busy/idle state.
+After reconnect, clients assume `idle` until the next `agent_status` event.
 
 ### `bridge_status`
 
@@ -674,6 +701,77 @@ Optional fields:
 When `retryable` is true, `"navIntent"` indicates the bridge cleared a stuck
 goal — return to a retryable placing state without treating it as terminal failure.
 
+### Agent messages (v17)
+
+Fire-and-forget on both sides. The bridge dispatches `agent_command` and
+`ar_skill_result` on the `BACKGROUND` lane; the Lens emits agent outbound
+messages via signals and runs `ar_skill` handlers off the WebSocket callback.
+
+#### `agent_response` (bridge → Lens)
+
+```json
+{ "type": "agent_response", "ts": 1730000000.123, "text": "On my way to the kitchen." }
+```
+
+#### `agent_status` (bridge → Lens)
+
+```json
+{ "type": "agent_status", "ts": 1730000000.123, "state": "busy", "detail": "navigating" }
+```
+
+- `state`: `"idle"` or `"busy"`
+- `detail` (optional): human-readable sub-state
+
+#### `ar_skill` (bridge → Lens)
+
+```json
+{ "type": "ar_skill", "ts": 1730000000.123, "request_id": "abc123", "skill": "get_user_hmd_transform" }
+```
+
+```json
+{
+  "type": "ar_skill",
+  "ts": 1730000000.123,
+  "request_id": "def456",
+  "skill": "draw_world_annotation",
+  "args": {
+    "id": "chair-1",
+    "kind": "marker",
+    "points": [[1.0, 0.0, 2.0]],
+    "active": true,
+    "duration_s": 30.0,
+    "label": "Chair"
+  }
+}
+```
+
+- `request_id`: correlates with `ar_skill_result`
+- `skill`: non-empty string naming the Lens-side operation
+- `args` (optional): opaque JSON object — bridge does not validate per-skill schemas
+
+#### Reference AR skills (examples only)
+
+**`get_user_hmd_transform`** — no `args`; result `data`:
+
+```json
+{ "position": [x, y, z], "orientation": [qx, qy, qz, qw] }
+```
+
+World frame, metres.
+
+**`draw_world_annotation`** — example `args`:
+
+| Field | Purpose |
+|-------|---------|
+| `id` | Stable annotation key |
+| `kind` | Lens rendering hint (`marker`, `line`, …) |
+| `points` | World-frame positions in metres |
+| `active` | `false` removes; default `true` |
+| `duration_s` | Auto-remove after N seconds; omit = persist until `active: false` |
+| `label` | Optional text |
+
+Custom skills use any `args` shape; document in this appendix when adding handlers.
+
 ## Inbound Messages
 
 All inbound JSON messages require `type`, `ts`, and `robot_id` (matching the
@@ -959,6 +1057,54 @@ manual control). Values are raw deflection in **[-1, 1]**, not m/s.
   "wz": 0.0
 }
 ```
+
+### `agent_command`
+
+Transcribed voice (or typed) user command for the DimOS agent.
+
+```json
+{
+  "type": "agent_command",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "text": "go to the kitchen"
+}
+```
+
+Fire-and-forget: the Lens does not wait for `agent_response` on the send path.
+
+### `ar_skill_result`
+
+Response to a bridge-issued `ar_skill`. The Lens SHOULD reply exactly once per
+`request_id` (client expectation; bridge correlation is implementation-defined).
+
+```json
+{
+  "type": "ar_skill_result",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "request_id": "abc123",
+  "ok": true,
+  "skill": "get_user_hmd_transform",
+  "data": { "position": [1.0, 0.0, 2.0], "orientation": [0, 0, 0, 1] }
+}
+```
+
+```json
+{
+  "type": "ar_skill_result",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "request_id": "def456",
+  "ok": false,
+  "skill": "my_custom_skill",
+  "error": "unknown skill"
+}
+```
+
+- `ok`: boolean
+- `data` (optional): opaque JSON object (allowed for both `ok: true` and `ok: false`)
+- `error` (optional): string when `ok` is false
 
 ## Removed Legacy Flow
 

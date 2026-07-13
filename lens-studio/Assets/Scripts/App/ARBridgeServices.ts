@@ -14,6 +14,7 @@ import { RobotMarker } from "./Robot/RobotMarker";
 import { StatusClient } from "../ARBridge/Status/StatusClient";
 import { TelemetryClient } from "../ARBridge/Telemetry/TelemetryClient";
 import { NavigationClient } from "../ARBridge/Navigation/NavigationClient";
+import { AgentClient } from "../ARBridge/Agent/AgentClient";
 
 /** Scene wiring hub and Lens event host for AR bridge runtime plain service classes. */
 @component
@@ -53,6 +54,7 @@ export class ARBridgeServices extends BaseScriptComponent {
   private _status: StatusClient | null = null;
   private _telemetry: TelemetryClient | null = null;
   private _navClient: NavigationClient | null = null;
+  private _agentClient: AgentClient | null = null;
   private _registrationPreview: RegistrationPreviewPresenter | null = null;
   private _bound = false;
 
@@ -89,6 +91,11 @@ export class ARBridgeServices extends BaseScriptComponent {
   public get telemetry(): TelemetryClient {
     this._ensureInstances();
     return this._telemetry!;
+  }
+
+  public get agent(): AgentClient {
+    this._ensureInstances();
+    return this._agentClient!;
   }
 
   public bind(
@@ -141,6 +148,7 @@ export class ARBridgeServices extends BaseScriptComponent {
     this._status = new StatusClient(session, transport, inbound);
     this._telemetry = new TelemetryClient(this._state, session, transport, inbound);
     this._navClient = new NavigationClient(transport, inbound);
+    this._agentClient = new AgentClient(this, transport, inbound);
     this._robot = new RobotPresenter(
       this._state,
       this.robotMarker ?? null,
@@ -179,6 +187,7 @@ export class ARBridgeServices extends BaseScriptComponent {
       this._status,
       this._telemetry,
       this._navClient,
+      this._agentClient,
       this._navigation,
       this._robot,
       this._registration,

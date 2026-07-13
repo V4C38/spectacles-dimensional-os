@@ -1,6 +1,9 @@
 /** Inbound protocol decode: text dispatch, hello-wait, binary LiDAR pump, parse recovery. */
 import {
   RegistrationStatusMessage,
+  AgentResponseMessage,
+  AgentStatusMessage,
+  ArSkillMessage,
   BridgeStatusMessage,
   CameraFrameAckMessage,
   CapabilityState,
@@ -48,6 +51,9 @@ export class InboundProcessor {
   public readonly onPath = new Signal<PathMessage>();
   public readonly onNavStatus = new Signal<NavStatusMessage>();
   public readonly onPong = new Signal<PongMessage>();
+  public readonly onAgentResponse = new Signal<AgentResponseMessage>();
+  public readonly onAgentStatus = new Signal<AgentStatusMessage>();
+  public readonly onArSkill = new Signal<ArSkillMessage>();
   public readonly onProtocolError = new Signal<ProtocolParseError>();
 
   public helloReceived = false;
@@ -220,6 +226,15 @@ export class InboundProcessor {
         case "pong":
           this._adoptRobotId(msg.robot_id);
           this.onPong.emit(msg);
+          break;
+        case "agent_response":
+          this.onAgentResponse.emit(msg);
+          break;
+        case "agent_status":
+          this.onAgentStatus.emit(msg);
+          break;
+        case "ar_skill":
+          this.onArSkill.emit(msg);
           break;
       }
     } catch (error) {

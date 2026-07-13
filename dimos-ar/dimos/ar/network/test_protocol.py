@@ -13,6 +13,8 @@ from dimos.ar.network.protocol import (
     LIDAR_OBSTACLE_POINT_CAP,
     LIDAR_WIRE_MAX_POINTS,
     PROTOCOL_VERSION,
+    AgentCommandMessage,
+    ArSkillResultMessage,
     CameraInfoMessage,
     CancelNavGoalMessage,
     EmergencyStopMessage,
@@ -25,6 +27,9 @@ from dimos.ar.network.protocol import (
     RegistrationStatusPayload,
     SetLidarModeMessage,
     decode_inbound,
+    encode_agent_response,
+    encode_agent_status,
+    encode_ar_skill,
     encode_bridge_status,
     encode_camera_frame_ack,
     encode_capture_policy,
@@ -755,3 +760,41 @@ def test_lidar_point_caps_match_protocol_docs() -> None:
     assert LIDAR_WIRE_MAX_POINTS == 2500
     assert LIDAR_FULL_POINT_CAP == 1500
     assert LIDAR_OBSTACLE_POINT_CAP == 200
+
+
+def test_decode_agent_command() -> None:
+    msg = decode_inbound(
+        '{"type":"agent_command","ts":1.0,"robot_id":"unitree_go2","text":"go home"}'
+    )
+    assert isinstance(msg, AgentCommandMessage)
+    assert msg.text == "go home"
+
+
+def test_decode_ar_skill_result() -> None:
+    msg = decode_inbound(
+        '{"type":"ar_skill_result","ts":1.0,"robot_id":"unitree_go2",'
+        '"request_id":"req-1","ok":true,"skill":"get_user_hmd_transform",'
+        '"data":{"position":[1,0,2]}}'
+    )
+    assert isinstance(msg, ArSkillResultMessage)
+    assert msg.request_id == "req-1"
+    assert msg.data == {"position": [1, 0, 2]}
+
+
+def test_encode_agent_outbound() -> None:
+    response = json.loads(encode_agent_response(text="hello"))
+    assert response["type"] == "agent_response"
+    assert response["text"] == "hello"
+    status = json.loads(encode_agent_status(state="busy", detail="thinking"))
+    assert status["type"] == "agent_status"
+    assert status["state"] == "busy"
+    assert status["detail"] == "thinking"
+    skill = json.loads(
+        encode_ar_skill(
+            request_id="abc",
+            skill="draw_world_annotation",
+            args={"id": "x", "duration_s": 30.0},
+        )
+    )
+    assert skill["type"] == "ar_skill"
+    assert skill["args"]["duration_s"] == 30.0

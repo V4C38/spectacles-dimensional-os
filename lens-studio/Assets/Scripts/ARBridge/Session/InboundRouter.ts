@@ -6,6 +6,7 @@ import { RegistrationClient } from "../Registration/RegistrationClient";
 import { StatusClient } from "../Status/StatusClient";
 import { TelemetryClient } from "../Telemetry/TelemetryClient";
 import { NavigationClient } from "../Navigation/NavigationClient";
+import { AgentClient } from "../Agent/AgentClient";
 import { Signal } from "../../App/Utilities/Utilities";
 import {
   BridgeLinkState,
@@ -66,6 +67,7 @@ export class InboundRouter {
     private readonly statusClient: StatusClient,
     private readonly telemetryClient: TelemetryClient,
     private readonly navigationClient: NavigationClient,
+    private readonly agentClient: AgentClient,
     private readonly navigationController: NavigationController,
     private readonly robotPresenter: RobotPresenter,
     private readonly registrationClient: RegistrationClient | null,
@@ -84,6 +86,7 @@ export class InboundRouter {
     this.statusClient.bind();
     this.telemetryClient.bind();
     this.navigationClient.bind();
+    this.agentClient.bind();
     this.registrationClient?.bind();
 
     this.statusClient.onHello.add((msg) => {
