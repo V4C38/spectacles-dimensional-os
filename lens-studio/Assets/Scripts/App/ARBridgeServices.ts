@@ -15,6 +15,7 @@ import { StatusClient } from "../ARBridge/Status/StatusClient";
 import { TelemetryClient } from "../ARBridge/Telemetry/TelemetryClient";
 import { NavigationClient } from "../ARBridge/Navigation/NavigationClient";
 import { AgentClient } from "../ARBridge/Agent/AgentClient";
+import { AgentSpeechController } from "./Agent/AgentSpeechController";
 
 /** Scene wiring hub and Lens event host for AR bridge runtime plain service classes. */
 @component
@@ -55,6 +56,7 @@ export class ARBridgeServices extends BaseScriptComponent {
   private _telemetry: TelemetryClient | null = null;
   private _navClient: NavigationClient | null = null;
   private _agentClient: AgentClient | null = null;
+  private _agentSpeechController: AgentSpeechController | null = null;
   private _registrationPreview: RegistrationPreviewPresenter | null = null;
   private _bound = false;
 
@@ -130,6 +132,7 @@ export class ARBridgeServices extends BaseScriptComponent {
         );
       },
     });
+    this._agentSpeechController!.bind();
 
     this.createEvent("UpdateEvent").bind(() => {
       this._router!.tick();
@@ -192,5 +195,14 @@ export class ARBridgeServices extends BaseScriptComponent {
       this._robot,
       this._registration,
     );
+    this._agentSpeechController = new AgentSpeechController({
+      eventHost: this,
+      asrModule: require("LensStudio:AsrModule") as AsrModule,
+      agentClient: this._agentClient,
+      navigation: this._navigation,
+      appStateStore: this._state,
+      uiLogger: this._state.uiLogger,
+      getBridgeSessionReady: () => this._router!.isBridgeSessionReady(),
+    });
   }
 }

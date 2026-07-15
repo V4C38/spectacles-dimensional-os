@@ -179,7 +179,7 @@ export class InboundRouter {
 
   public reapplyBridgeStatusIfConnected(): void {
     if (!this.isBridgeSessionReady()) {
-      this._applyConnectionState(false);
+      this._applyBridgeProjection(null);
       return;
     }
     const wireStatus = bridgeSnapshotToStatusMessage(this.appState.snapshot.bridgeSnapshot);

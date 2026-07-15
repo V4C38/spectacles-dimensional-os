@@ -33,6 +33,12 @@ export type NavigationErrorState =
   | { kind: "none" }
   | { kind: "failed"; errorCode: number | null };
 export type BridgeLinkState = "disconnected" | "connectedNoRobot" | "connected";
+export type AgentActivityState = "idle" | "busy";
+
+export interface AgentActivity {
+  state: AgentActivityState;
+  detail: string | null;
+}
 
 export const NO_ROBOT_CONNECTED_LABEL = "No Robot connected";
 
@@ -138,6 +144,31 @@ export function robotActivityPresentation(
   );
 }
 
+export function agentBusyVfxActive(state: AppStateData): boolean {
+  if (state.operatingMode !== "agent") {
+    return false;
+  }
+  // Busy VFX while executing, or while asleep (waiting for wake word).
+  // Idle VFX only while Listening (session open, not executing).
+  return state.agentActivity.state === "busy" || !state.agentSpeechSessionActive;
+}
+
+export function agentModeActivityPresentation(
+  state: AppStateData,
+): StatusTextPresentation {
+  if (state.agentActivity.state === "busy") {
+    return { text: "Executing Command", color: COLOR_WHITE };
+  }
+  if (state.agentSpeechSessionActive) {
+    return { text: "Listening", color: COLOR_WHITE };
+  }
+  return { text: "Asleep", color: COLOR_WHITE };
+}
+
+export function createDefaultAgentActivity(): AgentActivity {
+  return { state: "idle", detail: null };
+}
+
 export function robotMarkerSteadyStatePresentation(
   state: AppStateData,
 ): StatusTextPresentation {
@@ -150,6 +181,9 @@ export function robotMarkerSteadyStatePresentation(
   }
   if (state.operatingMode === "registrationMode") {
     return { text: "", color: COLOR_WHITE };
+  }
+  if (state.operatingMode === "agent") {
+    return agentModeActivityPresentation(state);
   }
   if (!state.robotRuntime.capabilities.nav.available) {
     const reason = state.robotRuntime.capabilities.nav.reason;
@@ -259,6 +293,8 @@ export interface AppStateData {
   bridgeSnapshot: BridgeSnapshot;
   robotRuntime: RobotRuntimeState;
   driftState: DriftState;
+  agentActivity: AgentActivity;
+  agentSpeechSessionActive: boolean;
 }
 
 export type AppStateListener = (state: AppStateData) => void;
@@ -314,6 +350,13 @@ function cloneBridgeSnapshot(snapshot: BridgeSnapshot): BridgeSnapshot {
   return { ...snapshot };
 }
 
+function cloneAgentActivity(activity: AgentActivity): AgentActivity {
+  return {
+    state: activity.state,
+    detail: activity.detail,
+  };
+}
+
 function cloneState(state: AppStateData): AppStateData {
   return {
     ...state,
@@ -321,6 +364,7 @@ function cloneState(state: AppStateData): AppStateData {
     navigationError: cloneNavigationError(state.navigationError),
     robotRuntime: cloneRobotRuntime(state.robotRuntime),
     driftState: cloneDriftState(state.driftState),
+    agentActivity: cloneAgentActivity(state.agentActivity),
   };
 }
 
@@ -370,6 +414,8 @@ export function createDefaultAppStateData(): AppStateData {
     bridgeSnapshot: createDefaultBridgeSnapshot(),
     robotRuntime: createDefaultRobotRuntimeState(),
     driftState: createDefaultDriftState(),
+    agentActivity: createDefaultAgentActivity(),
+    agentSpeechSessionActive: false,
   });
 }
 

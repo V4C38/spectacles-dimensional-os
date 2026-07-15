@@ -311,10 +311,10 @@ describe("RegistrationFlow", () => {
     expect(registrationClient.start).toHaveBeenCalledWith("april_tag");
   });
 
-  it("enter starts manual_pose when bridge is disconnected", () => {
+  it("enter starts april_tag when bridge is disconnected", () => {
     const { flow, registrationClient } = createFlow({ isBridgeSessionReady: false });
     flow.enter();
-    expect(registrationClient.start).toHaveBeenCalledWith("manual_pose");
+    expect(registrationClient.start).toHaveBeenCalledWith("april_tag");
   });
 
   it("completeRegistration commits manual registration when bridge is awaiting_commit", () => {

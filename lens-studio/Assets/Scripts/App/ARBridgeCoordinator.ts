@@ -129,6 +129,8 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.arBridgeServices.state.update({
       navigationError: defaultNavigationError(),
       robotRuntime: createDefaultRobotRuntimeState(),
+      agentActivity: { state: "idle", detail: null },
+      agentSpeechSessionActive: false,
     });
   }
 

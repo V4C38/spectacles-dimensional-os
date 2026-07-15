@@ -28,8 +28,16 @@ function scrollLineText(lines: MockText[], index: number): string {
   return lines[index]?.text ?? "";
 }
 
-function statusLineText(lines: MockText[]): string {
+function agentPromptLineText(lines: MockText[]): string {
   return lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT]?.text ?? "";
+}
+
+function agentResponseLineText(lines: MockText[]): string {
+  return lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1]?.text ?? "";
+}
+
+function statusLineText(lines: MockText[]): string {
+  return lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT + 2]?.text ?? "";
 }
 
 describe("formatConsoleTimestamp", () => {
@@ -69,7 +77,7 @@ describe("UILogger console output", () => {
   it("renders the first message on the bottom scroll line", () => {
     logger.show("first", new vec4(1, 0, 0, 1));
 
-    expect(scrollLineText(lines, 7)).toBe("[12:00:00] first");
+    expect(scrollLineText(lines, 5)).toBe("[12:00:00] first");
     for (let i = 0; i < DEBUG_CONSOLE_SCROLL_LINE_COUNT - 1; i++) {
       expect(scrollLineText(lines, i)).toBe("");
     }
@@ -80,8 +88,8 @@ describe("UILogger console output", () => {
     logger.show("one", new vec4(1, 1, 1, 1));
     logger.show("two", new vec4(1, 1, 1, 1));
 
-    expect(scrollLineText(lines, 6)).toContain("one");
-    expect(scrollLineText(lines, 7)).toContain("two");
+    expect(scrollLineText(lines, 4)).toContain("one");
+    expect(scrollLineText(lines, 5)).toContain("two");
   });
 
   it("evicts the oldest message after the buffer overflows", () => {
@@ -90,10 +98,10 @@ describe("UILogger console output", () => {
     }
     expect(scrollLineText(lines, 0)).toContain("msg-1");
 
-    logger.show("msg-9", new vec4(1, 1, 1, 1));
+    logger.show("msg-7", new vec4(1, 1, 1, 1));
 
     expect(scrollLineText(lines, 0)).toContain("msg-2");
-    expect(scrollLineText(lines, 7)).toContain("msg-9");
+    expect(scrollLineText(lines, 5)).toContain("msg-7");
     expect(lines.every((line) => !line.text.endsWith(" msg-1"))).toBe(true);
   });
 
@@ -101,8 +109,8 @@ describe("UILogger console output", () => {
     logger.show("red", new vec4(1, 0, 0, 1));
     logger.show("green", new vec4(0, 1, 0, 1));
 
-    expect(lines[6]?.textFill.color).toEqual({ x: 1, y: 0, z: 0, w: 1 });
-    expect(lines[7]?.textFill.color).toEqual({ x: 0, y: 1, z: 0, w: 1 });
+    expect(lines[4]?.textFill.color).toEqual({ x: 1, y: 0, z: 0, w: 1 });
+    expect(lines[5]?.textFill.color).toEqual({ x: 0, y: 1, z: 0, w: 1 });
   });
 
   it("uses the timestamp captured at log time", () => {
@@ -110,25 +118,29 @@ describe("UILogger console output", () => {
 
     logger.show("timed", new vec4(1, 1, 1, 1));
 
-    expect(scrollLineText(lines, 7)).toBe("[12:34:56] timed");
+    expect(scrollLineText(lines, 5)).toBe("[12:34:56] timed");
   });
 
   it("does not remove console lines when the transient entry expires", () => {
     logger.show("persistent", new vec4(1, 1, 1, 1), 0.5);
     logger.tick(1.0);
 
-    expect(scrollLineText(lines, 7)).toContain("persistent");
+    expect(scrollLineText(lines, 5)).toContain("persistent");
     expect(logger.snapshot).toBeNull();
   });
 
-  it("clears scroll lines but preserves the camera status line", () => {
+  it("clears scroll lines but preserves reserved lines", () => {
     logger.show("remove me", new vec4(1, 1, 1, 1));
     logger.setCameraCaptureState("capturing");
+    logger.setAgentPrompt({ text: "robot go", valid: true });
+    logger.setAgentResponse({ text: "On my way", state: "idle" });
     logger.clear();
 
     for (let i = 0; i < DEBUG_CONSOLE_SCROLL_LINE_COUNT; i++) {
       expect(scrollLineText(lines, i)).toBe("");
     }
+    expect(agentPromptLineText(lines)).toContain("User ASR: robot go");
+    expect(agentResponseLineText(lines)).toContain("Agent response: On my way");
     expect(statusLineText(lines)).toBe("[12:00:00] Camera capture: capturing");
     expect(logger.snapshot).toBeNull();
   });
@@ -138,15 +150,111 @@ describe("UILogger console output", () => {
     logger.logConsole("console-only", new vec4(0, 1, 0, 1));
 
     expect(logger.snapshot?.text).toBe("transient");
-    expect(scrollLineText(lines, 7)).toContain("console-only");
-    expect(scrollLineText(lines, 6)).toContain("transient");
+    expect(scrollLineText(lines, 5)).toContain("console-only");
+    expect(scrollLineText(lines, 4)).toContain("transient");
     expect(statusLineText(lines)).toBe("");
   });
 
-  it("does not write scroll logs to the camera status line", () => {
+  it("does not write scroll logs to reserved lines", () => {
     logger.show("scroll-only", new vec4(1, 1, 1, 1));
 
+    expect(agentPromptLineText(lines)).toContain("User ASR: ...");
+    expect(agentResponseLineText(lines)).toContain("Agent response: ...");
     expect(statusLineText(lines)).toBe("");
+  });
+
+  it("pre-fills agent reserved lines on bind", () => {
+    expect(agentPromptLineText(lines)).toBe("[12:00:00] User ASR: ...");
+    expect(agentResponseLineText(lines)).toBe("[12:00:00] Agent response: ...");
+  });
+});
+
+describe("UILogger agent prompt line", () => {
+  let logger: UILogger;
+  let lines: MockText[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 3, 12, 0, 0));
+    logger = new UILogger();
+    lines = createMockLines();
+    logger.bindConsoleOutputLines(lines as unknown as Text[]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("renders valid prompts in green", () => {
+    logger.setAgentPrompt({ text: "robot move forward", valid: true });
+
+    expect(agentPromptLineText(lines)).toBe("[12:00:00] User ASR: robot move forward");
+    expect(lines[6]?.textFill.color).toEqual({ x: 0, y: 1, z: 0, w: 1 });
+  });
+
+  it("renders invalid prompts in yellow", () => {
+    logger.setAgentPrompt({ text: "hello there", valid: false });
+
+    expect(agentPromptLineText(lines)).toBe("[12:00:00] User ASR: hello there");
+    expect(lines[6]?.textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
+  });
+
+  it("restores the prompt placeholder when null", () => {
+    logger.setAgentPrompt({ text: "robot", valid: true });
+    logger.setAgentPrompt(null);
+
+    expect(agentPromptLineText(lines)).toBe("[12:00:00] User ASR: ...");
+  });
+});
+
+describe("UILogger agent response line", () => {
+  let logger: UILogger;
+  let lines: MockText[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 3, 12, 0, 0));
+    logger = new UILogger();
+    lines = createMockLines();
+    logger.bindConsoleOutputLines(lines as unknown as Text[]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("renders busy responses in yellow", () => {
+    logger.setAgentResponse({ text: "Working on it", state: "busy" });
+
+    expect(agentResponseLineText(lines)).toBe("[12:00:00] Agent response: Working on it");
+    expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
+  });
+
+  it("renders idle responses in white", () => {
+    logger.setAgentResponse({ text: "Done", state: "idle" });
+
+    expect(agentResponseLineText(lines)).toBe("[12:00:00] Agent response: Done");
+    expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 1, z: 1, w: 1 });
+  });
+
+  it("renders warn idle responses in yellow", () => {
+    logger.setAgentResponse({
+      text: "command not sent (bridge not ready)",
+      state: "idle",
+      warn: true,
+    });
+
+    expect(agentResponseLineText(lines)).toBe(
+      "[12:00:00] Agent response: command not sent (bridge not ready)",
+    );
+    expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
+  });
+
+  it("restores the response placeholder when null", () => {
+    logger.setAgentResponse({ text: "Done", state: "idle" });
+    logger.setAgentResponse(null);
+
+    expect(agentResponseLineText(lines)).toBe("[12:00:00] Agent response: ...");
   });
 });
 

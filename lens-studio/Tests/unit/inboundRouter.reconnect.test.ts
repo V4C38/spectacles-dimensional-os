@@ -25,6 +25,8 @@ function makeRouter(phase: "registration" | "runtime") {
   const appState = new AppStateStore();
   appState.update({ phase });
 
+  const onBridgeDisconnected = vi.fn();
+
   const robotPresenter = {
     onDisconnect: vi.fn(),
     applyPendingPose: vi.fn(),
@@ -61,9 +63,10 @@ function makeRouter(phase: "registration" | "runtime") {
     robotPresenter as never,
     null,
   );
+  router.setOnBridgeDisconnected(onBridgeDisconnected);
   router.bind();
 
-  return { router, session, reconnectEvent };
+  return { router, session, reconnectEvent, onBridgeDisconnected };
 }
 
 describe("InboundRouter runtime reconnect", () => {
@@ -80,8 +83,16 @@ describe("InboundRouter runtime reconnect", () => {
   });
 
   it("schedules reconnect after disconnect in runtime phase", () => {
-    const { session, reconnectEvent } = makeRouter("runtime");
+    const { session, reconnectEvent, onBridgeDisconnected } = makeRouter("runtime");
     session.onConnectionChanged.emit(false);
     expect(reconnectEvent.reset).toHaveBeenCalledWith(1.0);
+    expect(onBridgeDisconnected).toHaveBeenCalledTimes(1);
+  });
+
+  it("reapplyBridgeStatusIfConnected while disconnected does not tear down or reconnect", () => {
+    const { router, reconnectEvent, onBridgeDisconnected } = makeRouter("runtime");
+    router.reapplyBridgeStatusIfConnected();
+    expect(onBridgeDisconnected).not.toHaveBeenCalled();
+    expect(reconnectEvent.reset).not.toHaveBeenCalled();
   });
 });
