@@ -1,6 +1,6 @@
 // ================================================================
 /**
- * Protocol v17 — message types, parser, outbound builders, and unit
+ * Protocol v18 — message types, parser, outbound builders, and unit
  * conversion helpers. Single source of truth replacing the v3 trio
  * (ProtocolTypes / ProtocolParser / Protocol).
  *
@@ -16,7 +16,7 @@ import {
   type WireNavigationState,
 } from "../../App/AppState";
 
-export const PROTOCOL_VERSION = 17;
+export const PROTOCOL_VERSION = 18;
 
 /** Wire maximum; operational caps are mode-specific (see PROTOCOL.md). */
 export const LIDAR_WIRE_MAX_POINTS = 2500;
@@ -252,6 +252,14 @@ export interface PathMessage {
 
 export type NavStallReason = "no_path" | "planner_idle";
 
+export type WireGoalSource = "user" | "agent";
+
+export interface NavGoalBlock {
+  source: WireGoalSource;
+  position: [number, number, number];
+  orientation: [number, number, number, number];
+}
+
 export interface NavStatusMessage {
   type: "nav_status";
   ts: number;
@@ -260,6 +268,7 @@ export interface NavStatusMessage {
   error_code?: number;
   retryable?: boolean;
   stall_reason?: NavStallReason;
+  goal?: NavGoalBlock;
 }
 
 export interface SnapshotBridgeState {
@@ -276,6 +285,11 @@ export interface SnapshotNavState {
   error_code?: number | null;
   retryable?: boolean;
   stall_reason?: NavStallReason | null;
+  goal?: NavGoalBlock;
+}
+
+export interface SnapshotAgentState {
+  state: WireAgentState;
 }
 
 export interface SnapshotPathState {
@@ -288,6 +302,7 @@ export interface RuntimeSnapshotMessage {
   robot_id: string;
   bridge: SnapshotBridgeState;
   nav: SnapshotNavState;
+  agent: SnapshotAgentState;
   path?: SnapshotPathState;
 }
 
@@ -525,6 +540,22 @@ function parseSnapshotBridge(raw: unknown): SnapshotBridgeState {
   return status;
 }
 
+function parseNavGoalBlock(raw: unknown): NavGoalBlock | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  const goal = requireObject(raw);
+  const source = requireString(goal, "source");
+  if (source !== "user" && source !== "agent") {
+    throw new Error(`Missing or invalid field: source`);
+  }
+  return {
+    source,
+    position: parseVec3(goal.position),
+    orientation: parseQuat(goal.orientation),
+  };
+}
+
 function parseSnapshotNav(raw: unknown): SnapshotNavState {
   const nav = requireObject(raw);
   const state = requireString(nav, "state");
@@ -554,7 +585,20 @@ function parseSnapshotNav(raw: unknown): SnapshotNavState {
   } else if (nav.stall_reason === null) {
     status.stall_reason = null;
   }
+  const goal = parseNavGoalBlock(nav.goal);
+  if (goal) {
+    status.goal = goal;
+  }
   return status;
+}
+
+function parseSnapshotAgent(raw: unknown): SnapshotAgentState {
+  const agent = requireObject(raw);
+  const state = requireString(agent, "state");
+  if (state !== "idle" && state !== "busy") {
+    throw new Error(`Missing or invalid field: state`);
+  }
+  return { state };
 }
 
 function parseSnapshotPath(raw: unknown): SnapshotPathState {
@@ -672,6 +716,7 @@ function parseInboundObject(
         robot_id: requireString(data, "robot_id"),
         bridge: parseSnapshotBridge(data.bridge),
         nav: parseSnapshotNav(data.nav),
+        agent: parseSnapshotAgent(data.agent),
       };
       if (data.path !== undefined) {
         snapshot.path = parseSnapshotPath(data.path);
@@ -877,6 +922,17 @@ function parseInboundObject(
       const stallReason = parseNavStallReason(data.stall_reason);
       if (stallReason) {
         msg.stall_reason = stallReason;
+      }
+      try {
+        const goal = parseNavGoalBlock(data.goal);
+        if (goal) {
+          msg.goal = goal;
+        }
+      } catch (error) {
+        print(
+          `Protocol: invalid nav_status.goal; skipping (${error instanceof Error ? error.message : String(error)})`,
+        );
+        return null;
       }
       return msg;
     }
@@ -1121,9 +1177,9 @@ export function buildPing(clientTs: number, robotId: string): string {
   });
 }
 
-export function buildAgentCommand(robotId: string, text: string): string {
+export function buildUserCommand(robotId: string, text: string): string {
   return JSON.stringify({
-    type: "agent_command",
+    type: "user_command",
     ts: getTime(),
     robot_id: robotId,
     text,

@@ -269,6 +269,7 @@ export function planNavStatusEvent(
     outcome: msg.outcome,
     retryable: msg.retryable,
     stall_reason: msg.stall_reason,
+    goal: msg.goal,
   };
 
   if (msg.state === "resolved") {

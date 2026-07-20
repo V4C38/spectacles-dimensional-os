@@ -46,7 +46,7 @@ Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-
 | `Navigation/NavigationClient` | Goal send/cancel, nav status |
 | `Telemetry/`, `Status/`, `Camera/` | Pose, bridge status, capture lifecycle |
 
-**Operating modes** (runtime, after registration): `manual` (spatial navigation), `agent` (in development on `development/agentic`), `registrationMode`.
+**Operating modes** (runtime, after registration): `manual` and `agent` both keep the navigation UI armed (marker, path, cancel). Goal provenance is `nav_status.goal.source` (`user` \| `agent`). `registrationMode` disarms navigation.
 
 ## Runtime HUD
 

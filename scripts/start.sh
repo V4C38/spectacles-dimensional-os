@@ -75,15 +75,21 @@ export DIMOS_AR_LAN_IP="${LAN_IP}"
 
 STACK_IDS=(
   "ar_go2"
+  "ar_go2_full_agentic"
   "ar_g1"
+  "ar_g1_full_agentic"
 )
 MENU_LABELS=(
   "Unitree Go2"
+  "Unitree Go2 (full agentic stack)"
   "Unitree G1"
+  "Unitree G1 (full agentic stack)"
 )
 SUMMARY_LABELS=(
   "Unitree Go2"
+  "Unitree Go2 (full agentic stack)"
   "Unitree G1"
+  "Unitree G1 (full agentic stack)"
 )
 
 # Interactive arrow-key menu: up/down to move, Enter to select.
@@ -201,6 +207,15 @@ arrow_menu "Choose the robot stack to run (↑/↓ then Enter):" "${MENU_LABELS[
 SELECTED_BLUEPRINT="${STACK_IDS[$SELECTED_INDEX]}"
 STACK_LABEL="${SUMMARY_LABELS[$SELECTED_INDEX]}"
 EQUIVALENT="dimos run ${SELECTED_BLUEPRINT//_/-}"
+
+if [[ "${SELECTED_BLUEPRINT}" == "ar_go2_full_agentic" || "${SELECTED_BLUEPRINT}" == "ar_g1_full_agentic" ]]; then
+  print_red_stderr "${SELECTED_BLUEPRINT} is not implemented yet — choose Unitree Go2 or Unitree G1."
+  exit 1
+fi
+
+if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+  echo "Warning: OPENAI_API_KEY is unset — agent mode will not work until it is set." >&2
+fi
 
 # DimOS GlobalConfig reads ROBOT_IP (or a .env file) to open the robot
 # connection; without it the connection module aborts with "IP address must be

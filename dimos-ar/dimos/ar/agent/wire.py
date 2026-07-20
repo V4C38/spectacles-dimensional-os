@@ -8,6 +8,7 @@ import time
 from typing import Any, Literal
 
 WireAgentState = Literal["idle", "busy"]
+WireGoalSource = Literal["user", "agent"]
 
 
 def _dumps(payload: dict[str, Any]) -> str:
@@ -15,7 +16,7 @@ def _dumps(payload: dict[str, Any]) -> str:
 
 
 @dataclass(frozen=True)
-class AgentCommandMessage:
+class UserCommandMessage:
     ts: float
     robot_id: str
     text: str
@@ -32,16 +33,16 @@ class ArSkillResultMessage:
     error: str | None = None
 
 
-def decode_agent_command(
+def decode_user_command(
     data: dict[str, Any],
     *,
     ts: float,
     robot_id: str,
-) -> AgentCommandMessage:
+) -> UserCommandMessage:
     text = data.get("text")
     if not isinstance(text, str) or not text.strip():
         raise ValueError("Missing or invalid field: text")
-    return AgentCommandMessage(ts=ts, robot_id=robot_id, text=text)
+    return UserCommandMessage(ts=ts, robot_id=robot_id, text=text)
 
 
 def decode_ar_skill_result(

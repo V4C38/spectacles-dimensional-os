@@ -63,7 +63,7 @@ describe("validateSessionFields", () => {
     expect(next.robotInteractionMode).toBe("hidden");
   });
 
-  it("turns off armed navigation when operating mode is not manual", () => {
+  it("allows armed navigation in agent mode", () => {
     const next = validateSessionFields(
       baseState({
         phase: "runtime",
@@ -71,7 +71,7 @@ describe("validateSessionFields", () => {
         operatingMode: "agent",
       }),
     );
-    expect(next.navigationState).toBe("disabled");
+    expect(next.navigationState).toBe("idle");
   });
 
   it("turns off navigation when operating mode is registration", () => {

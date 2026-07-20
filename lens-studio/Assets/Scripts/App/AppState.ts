@@ -229,7 +229,9 @@ export function validateSessionFields(state: AppStateData): AppStateData {
   }
 
   if (next.phase === "runtime") {
-    if (next.navigationState !== "disabled" && next.operatingMode !== "manual") {
+    const navModesArmed =
+      next.operatingMode === "manual" || next.operatingMode === "agent";
+    if (next.navigationState !== "disabled" && !navModesArmed) {
       next.navigationState = "disabled";
     }
     if (next.operatingMode === "registrationMode" && next.navigationState !== "disabled") {

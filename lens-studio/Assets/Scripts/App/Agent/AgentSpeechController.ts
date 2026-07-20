@@ -175,7 +175,7 @@ export class AgentSpeechController {
 
     if (action.kind === "send") {
       this._deps.appStateStore.update({ agentSpeechSessionActive: true });
-      const sent = this._deps.agentClient.sendAgentCommand(action.text);
+      const sent = this._deps.agentClient.sendUserCommand(action.text);
       if (!sent) {
         this._deps.uiLogger.setAgentResponse({
           text: BRIDGE_NOT_READY_RESPONSE,

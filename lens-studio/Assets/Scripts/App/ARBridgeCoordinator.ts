@@ -144,16 +144,14 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
 
     const navigation = this.arBridgeServices.navigation;
     if (mode === "registrationMode") {
-      navigation.syncManualNavigationForOperatingMode(mode, state);
+      navigation.syncNavigationForOperatingMode(mode, state);
       return;
     }
 
-    if (mode === "manual") {
+    if (mode === "manual" || mode === "agent") {
       navigation.syncManualNavigationState({ forceEnable: true });
-    } else if (mode === "agent") {
-      navigation.onManualNavigationToggleChanged(false);
     }
-    navigation.syncManualNavigationForOperatingMode(mode, state);
+    navigation.syncNavigationForOperatingMode(mode, state);
   }
 
   private _applyPhaseSideEffects(phase: AppPhase): void {
@@ -203,7 +201,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.arBridgeServices.robot.prepareForRuntime(bridgeSnapshot.worldFrameApproximate);
     this._setRobotInteractionMode("runtimeRobot");
     this.arBridgeServices.robot.robotMarker?.syncPose();
-    if (this.operatingMode === "manual") {
+    if (this.operatingMode === "manual" || this.operatingMode === "agent") {
       this.arBridgeServices.navigation.syncManualNavigationState({ forceEnable: true });
     } else {
       this.arBridgeServices.navigation.deferPlacementSync();

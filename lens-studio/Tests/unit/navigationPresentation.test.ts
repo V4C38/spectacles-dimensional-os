@@ -50,7 +50,7 @@ describe("planNavStatusEvent", () => {
 
   it("continues placement when terminal status is suppressed", () => {
     const plan = planNavStatusEvent(
-      activeSession({ since: 0 }),
+      activeSession({ since: 0, source: "user" }),
       { type: "nav_status", ts: 1, state: "resolved", outcome: "succeeded" },
       true,
     );
@@ -59,7 +59,7 @@ describe("planNavStatusEvent", () => {
 
   it("continues placement on suppressed failed terminal", () => {
     const plan = planNavStatusEvent(
-      activeSession({ since: 0 }),
+      activeSession({ since: 0, source: "user" }),
       { type: "nav_status", ts: 1, state: "resolved", outcome: "failed" },
       true,
     );
@@ -68,7 +68,7 @@ describe("planNavStatusEvent", () => {
 
   it("passes through retryable navIntent", () => {
     const plan = planNavStatusEvent(
-      activeSession({ since: 0 }),
+      activeSession({ since: 0, source: "user" }),
       {
         type: "nav_status",
         ts: 1,
@@ -92,7 +92,7 @@ describe("planNavStatusEvent", () => {
 
   it("dispatches navigating when terminal is not suppressed", () => {
     const plan = planNavStatusEvent(
-      activeSession({ since: 0 }),
+      activeSession({ since: 0, source: "user" }),
       { type: "nav_status", ts: 1, state: "navigating" },
       false,
     );
@@ -122,7 +122,7 @@ describe("shouldStreamGoalNow", () => {
   it("is true during active placement while navigating", () => {
     expect(
       shouldStreamGoalNow(
-        { ...activeSession({ since: 0 }), wireState: "navigating" },
+        { ...activeSession({ since: 0, source: "user" }), wireState: "navigating" },
         inputs({ placementActive: true }),
       ),
     ).toBe(true);

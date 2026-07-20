@@ -1,5 +1,5 @@
-"""Agent wire types and inbound handlers."""
+"""Agent wire types, relay, and navigation skills.
 
-from dimos.ar.agent.handlers import AgentHandlers
-
-__all__ = ["AgentHandlers"]
+Import submodules directly (`dimos.ar.agent.wire`, `.relay`, `.skills`) so that
+lightweight protocol imports do not pull LangChain.
+"""

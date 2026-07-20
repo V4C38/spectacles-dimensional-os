@@ -9,7 +9,22 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v17 (current) — Agent mode wire + AR skills
+### v18 (current) — user_command rename, nav goal provenance, agent snapshot
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 18.**
+- **Rename:** inbound `agent_command` → **`user_command`**. No backward-compat alias for
+  the v17 type string.
+- **`nav_status.goal` (optional):** present exactly while a navigation session is active:
+  `{"source": "user" | "agent", "position": [x,y,z], "orientation": [qx,qy,qz,qw]}`
+  in AR world frame (same conventions as `nav_goal`). Agent-issued and user-issued goals
+  share this message; distinguish by `source`.
+- **`runtime_snapshot.nav.goal`:** same optional block (derived from the same wire dict).
+- **`runtime_snapshot.agent`:** `{"state": "idle" | "busy"}` so reconnecting clients restore
+  agent activity instead of assuming idle.
+
+### v17 — Agent mode wire + AR skills
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -342,7 +357,15 @@ navigation is in progress.
     "world_frame_approximate": false
   },
   "nav": {
-    "state": "navigating"
+    "state": "navigating",
+    "goal": {
+      "source": "agent",
+      "position": [1.0, 0.0, 2.0],
+      "orientation": [0.0, 0.0, 0.0, 1.0]
+    }
+  },
+  "agent": {
+    "state": "busy"
   },
   "path": {
     "waypoints": [[1.0, 2.0, 3.0]]
@@ -359,11 +382,11 @@ Fields:
 - `nav.error_code` (optional): numeric code when navigation is unavailable
   (e.g. `505` = goal stalled)
 - `nav.retryable` / `nav.stall_reason` (optional): present with `state: "navIntent"`
+- `nav.goal` (optional): active goal pose + provenance — same shape as `nav_status.goal`;
+  present while a session is active
+- `agent.state`: `"idle"` or `"busy"`
 - `path` (optional): present only when a navigating path is cached; omitted when
   idle
-
-**Agent state (v17):** `runtime_snapshot` does **not** include agent busy/idle state.
-After reconnect, clients assume `idle` until the next `agent_status` event.
 
 ### `bridge_status`
 
@@ -662,7 +685,12 @@ Navigation lifecycle updates:
 {
   "type": "nav_status",
   "ts": 1730000000.123,
-  "state": "navigating"
+  "state": "navigating",
+  "goal": {
+    "source": "user",
+    "position": [1.0, 0.0, 2.0],
+    "orientation": [0.0, 0.0, 0.0, 1.0]
+  }
 }
 ```
 
@@ -697,13 +725,17 @@ Optional fields:
   must manually retry; emitted with `state: "navIntent"`.
 - `stall_reason`: `"no_path"` (watchdog timeout without path) or
   `"planner_idle"` (planner went idle before path arrived).
+- `goal`: active goal in AR world frame — present exactly while a session is active.
+  - `source`: `"user"` (Lens `nav_goal`) or `"agent"` (skill-issued relative move)
+  - `position`: `[x, y, z]` meters
+  - `orientation`: `[qx, qy, qz, qw]`
 
 When `retryable` is true, `"navIntent"` indicates the bridge cleared a stuck
 goal — return to a retryable placing state without treating it as terminal failure.
 
-### Agent messages (v17)
+### Agent messages
 
-Fire-and-forget on both sides. The bridge dispatches `agent_command` and
+Fire-and-forget on both sides. The bridge dispatches `user_command` and
 `ar_skill_result` on the `BACKGROUND` lane; the Lens emits agent outbound
 messages via signals and runs `ar_skill` handlers off the WebSocket callback.
 
@@ -1058,13 +1090,13 @@ manual control). Values are raw deflection in **[-1, 1]**, not m/s.
 }
 ```
 
-### `agent_command`
+### `user_command`
 
 Transcribed voice (or typed) user command for the DimOS agent.
 
 ```json
 {
-  "type": "agent_command",
+  "type": "user_command",
   "ts": 1730000000.123,
   "robot_id": "unitree_go2",
   "text": "go to the kitchen"

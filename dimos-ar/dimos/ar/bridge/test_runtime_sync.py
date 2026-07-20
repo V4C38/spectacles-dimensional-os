@@ -34,13 +34,23 @@ def _make_runtime_sync_stub() -> tuple[MagicMock, BridgeSender, MagicMock, Magic
     bridge._robot_id = "unitree_go2"  # type: ignore[attr-defined]
 
     mock_nav = MagicMock()
-    mock_nav.nav_wire_dict.return_value = {"state": "navigating"}
+    mock_nav.nav_wire_dict.return_value = {
+        "state": "navigating",
+        "goal": {
+            "source": "agent",
+            "position": [1.0, 0.0, 2.0],
+            "orientation": [0.0, 0.0, 0.0, 1.0],
+        },
+    }
     mock_nav.runtime_snapshot_path.return_value = {
         "kind": "active",
         "waypoints": [[1.0, 2.0, 3.0]],
     }
-    mock_nav.runtime_snapshot_goal.return_value = None
     bridge._nav = mock_nav  # type: ignore[attr-defined]
+
+    mock_relay = MagicMock()
+    mock_relay.agent_wire_dict.return_value = {"state": "busy"}
+    bridge._agent_relay = mock_relay  # type: ignore[attr-defined]
 
     return bridge, sender, mock_status, mock_nav
 
@@ -57,6 +67,8 @@ def test_runtime_sync_sends_single_runtime_snapshot() -> None:
     assert payload["type"] == "runtime_snapshot"
     assert payload["robot_id"] == "unitree_go2"
     assert payload["nav"]["state"] == "navigating"
+    assert payload["nav"]["goal"]["source"] == "agent"
+    assert payload["agent"]["state"] == "busy"
     assert payload["path"]["kind"] == "active"
     assert payload["bridge"]["world_frame_committed"] is True
     assert "streams_active" not in payload["bridge"]

@@ -78,15 +78,17 @@ module = [
     "scipy.*",
     "unitree_webrtc_connect.*",
     "websockets.*",
+    "langchain_core.*",
 ]
 ignore_missing_imports = true
 
-# @rpc from DimOS is untyped, causing [untyped-decorator] on every @rpc method.
-# This is a DimOS upstream issue; suppress it in all files that use @rpc.
+# @rpc / @skill from DimOS are untyped, causing [untyped-decorator].
+# This is a DimOS upstream issue; suppress it in files that use those decorators.
 [[tool.mypy.overrides]]
 module = [
     "dimos.ar.robot_profile.go2",
     "dimos.ar.robot_profile.g1",
     "dimos.ar.bridge.module",
+    "dimos.ar.agent.skills",
 ]
 disallow_untyped_decorators = false

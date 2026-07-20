@@ -3,7 +3,7 @@ import type {
   NavTerminalOutcome,
   WireNavigationState,
 } from "../../App/AppState";
-import type { NavStallReason } from "../Network/Protocol";
+import type { NavStallReason, WireGoalSource } from "../Network/Protocol";
 
 // ================================================================
 /** Pure navigation model: stored facts, derived presentation, event rule book. */
@@ -14,7 +14,12 @@ export type NavPose = {
   rotation: quat;
 };
 
-export type GoalTrack = { since: number } | null;
+export type GoalTrack = {
+  since: number;
+  source: WireGoalSource;
+  position?: [number, number, number];
+  orientation?: [number, number, number, number];
+} | null;
 
 export type NavPresentationLatch =
   | { kind: "none" }
@@ -69,6 +74,11 @@ export type NavigationEvent =
       outcome?: NavTerminalOutcome;
       retryable?: boolean;
       stall_reason?: NavStallReason;
+      goal?: {
+        source: WireGoalSource;
+        position: [number, number, number];
+        orientation: [number, number, number, number];
+      };
     }
   | { kind: "cancelRequested" }
   | { kind: "estopRequested" }
@@ -290,7 +300,7 @@ function clearGoal(session: NavigationSession): NavigationSession {
 function startGoal(session: NavigationSession, now: number): NavigationSession {
   return {
     ...session,
-    goal: { since: now },
+    goal: { since: now, source: "user" },
     lastNavStatusTime: now,
   };
 }
@@ -298,6 +308,7 @@ function startGoal(session: NavigationSession, now: number): NavigationSession {
 function applyNavStatusEvent(
   session: NavigationSession,
   event: Extract<NavigationEvent, { kind: "navStatus" }>,
+  now: number,
 ): NavigationSession {
   let next: NavigationSession = {
     ...session,
@@ -317,7 +328,18 @@ function applyNavStatusEvent(
     };
   }
   if (event.state === "idle") {
-    return { ...next, wireState: "idle" };
+    return { ...clearGoal(next), wireState: "idle" };
+  }
+  if (event.goal) {
+    next = {
+      ...next,
+      goal: {
+        since: session.goal?.since ?? now,
+        source: event.goal.source,
+        position: event.goal.position,
+        orientation: event.goal.orientation,
+      },
+    };
   }
   return next;
 }
@@ -357,7 +379,17 @@ export function applyNavigationEvent(
       if (starting) {
         next = startGoal(next, now);
       } else {
-        next = { ...next, lastNavStatusTime: now };
+        next = {
+          ...next,
+          lastNavStatusTime: now,
+          goal: {
+            since: next.goal!.since,
+            source: "user",
+            // Keep prior wire pose until the next nav_status confirms the new goal.
+            position: next.goal!.position,
+            orientation: next.goal!.orientation,
+          },
+        };
       }
       if (event.sendToBridge) {
         push({ kind: "sendNavGoal", pose: event.pose });
@@ -365,7 +397,7 @@ export function applyNavigationEvent(
       break;
     }
     case "navStatus": {
-      next = applyNavStatusEvent(next, event);
+      next = applyNavStatusEvent(next, event, now);
       break;
     }
     case "cancelRequested": {

@@ -481,6 +481,23 @@ export class GroundPlacement {
     this._marker.setPose(this.desiredPosition, rotation);
   }
 
+  /** Place the marker at a bridge-authoritative goal while the user is not dragging. */
+  public applyAuthoritativePose(position: vec3, rotation: quat): void {
+    if (!this.active || !this._marker || this._isDragging) {
+      return;
+    }
+    this.desiredPosition = new vec3(position.x, position.y, position.z);
+    this.desiredRotation = rotation;
+    this._syncSmoothedGoal(this.desiredPosition);
+    this.touchStartPosition = this.desiredPosition;
+    this._wasInsideDeadzone = false;
+    this._resetHeadingState(this.desiredPosition, rotation);
+    if (this._placementAnchor) {
+      this._placementAnchor.getTransform().setWorldPosition(position);
+    }
+    this._marker.setPose(this.desiredPosition, rotation);
+  }
+
   public setRobotGroundDeadzone(deadzone: RobotGroundDeadzone | null): void {
     this._robotGroundDeadzone = deadzone;
   }

@@ -271,8 +271,19 @@ export class InboundProcessor {
     if (snapshot.nav.stall_reason === "no_path" || snapshot.nav.stall_reason === "planner_idle") {
       navStatus.stall_reason = snapshot.nav.stall_reason;
     }
+    if (snapshot.nav.goal) {
+      navStatus.goal = snapshot.nav.goal;
+    }
     this._logDiagnosticRx(navStatus);
     this.onNavStatus.emit(navStatus);
+
+    const agentStatus: AgentStatusMessage = {
+      type: "agent_status",
+      ts: snapshot.ts,
+      state: snapshot.agent.state,
+    };
+    this._logDiagnosticRx(agentStatus);
+    this.onAgentStatus.emit(agentStatus);
 
     if (snapshot.path) {
       const pathMsg: PathMessage = {

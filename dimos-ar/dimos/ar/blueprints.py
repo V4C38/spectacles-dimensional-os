@@ -1,7 +1,10 @@
 """AR bridge blueprints — compositions only, no classes or logic.
 
-ar_go2: Unitree Go2 smart stack + Go2RobotProfileModule + ARBridge
-ar_g1:  Unitree G1 nav-onboard stack + G1RobotProfileModule + ARBridge
+ar_go2: Unitree Go2 smart stack + lightweight agent runtime + ARBridge
+ar_g1:  Unitree G1 nav-simple stack + lightweight agent runtime + ARBridge
+
+Full-agentic placeholders (ar_go2_full_agentic / ar_g1_full_agentic) fail clearly
+until spatial memory / object detection stacks are composed.
 
 Stream-name reconciliation (the Go2/G1 stacks publish lidar under various names
 depending on the pipeline) is done here via .remappings([...]).
@@ -12,6 +15,8 @@ To run (once registered upstream):
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from dimos.ar.bridge.module import ARBridge
 from dimos.ar.robot_profile.g1 import G1RobotProfileModule
@@ -25,11 +30,24 @@ except ModuleNotFoundError:
     unitree_go2 = None
 
 try:
-    from dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_onboard import (
-        unitree_g1_nav_onboard,
+    from dimos.robot.unitree.g1.blueprints.navigation.unitree_g1_nav_simple import (
+        unitree_g1_nav_simple,
     )
 except ModuleNotFoundError:
-    unitree_g1_nav_onboard = None
+    unitree_g1_nav_simple = None
+
+try:
+    from dimos.agents.mcp.mcp_client import McpClient
+    from dimos.agents.mcp.mcp_server import McpServer
+    from dimos.ar.agent.skills import AR_AGENT_SYSTEM_PROMPT, ArNavigationSkillContainer
+
+    _AGENT_MODULES: tuple[Any, ...] = (
+        McpServer.blueprint(),
+        McpClient.blueprint(system_prompt=AR_AGENT_SYSTEM_PROMPT),
+        ArNavigationSkillContainer.blueprint(),
+    )
+except ModuleNotFoundError:
+    _AGENT_MODULES = ()
 
 try:
     from dimos.visualization.rerun.bridge import RerunBridgeModule
@@ -51,6 +69,7 @@ ar_go2 = (
         unitree_go2,
         Go2RobotProfileModule.blueprint(),
         ARBridge.blueprint(),
+        *_AGENT_MODULES,
     )
     .remappings(
         [
@@ -83,24 +102,29 @@ ar_go2 = (
 
 ar_g1 = (
     autoconnect(
-        unitree_g1_nav_onboard,
+        unitree_g1_nav_simple,
         G1RobotProfileModule.blueprint(),
         ARBridge.blueprint(),
+        *_AGENT_MODULES,
     )
     .remappings(
         [
-            # G1 nav-onboard: registered_scan from FastLio2
-            (ARBridge, "ar_lidar", "registered_scan"),
+            # G1 nav-simple: lidar from onboard FastLio2
+            (ARBridge, "ar_lidar", "lidar"),
             # G1 odom from FastLio2 Odometry (twist + production timestamp)
             (ARBridge, "ar_odometry", "odometry"),
+            # Global costmap from CostMapper
+            (ARBridge, "ar_global_costmap", "global_costmap"),
             # Active navigation path
             (ARBridge, "ar_path", "path"),
             # Goal-reached signal
             (ARBridge, "ar_goal_reached", "goal_reached"),
-            # Motion: cmu_nav SimplePlanner takes PointStamped goals.
+            # Navigation state string
+            (ARBridge, "ar_navigation_state", "navigation_state"),
+            # Hot AR control path: pose goals via ReplanningAStarPlanner
             (ARBridge, "cmd_vel", "cmd_vel"),
-            (ARBridge, "goal_point_request", "goal"),
-            (ARBridge, "cancel_goal_signal", "cancel_goal"),
+            (ARBridge, "goal_request", "goal_request"),
+            (ARBridge, "stop_movement", "stop_movement"),
         ]
     )
     .global_config(viewer="none")
@@ -108,6 +132,24 @@ ar_g1 = (
     # selected at import time; disable them explicitly for AR runs.
     .disabled_modules(*_VIS_MODULES)
     .configurators(ClockSyncConfigurator())
-    if unitree_g1_nav_onboard is not None
+    if unitree_g1_nav_simple is not None
     else None
 )
+
+# Full-agentic placeholders — intended future composition:
+# spatial memory, object detection, DimOS NavigationSkillContainer, etc.
+# Invariant: all future navigation tools must submit through NavigateGoalHandler
+# (via ARBridge.submit_relative_goal / cancel_navigation), never publish planner
+# streams in parallel.
+
+
+def __getattr__(name: str) -> Any:
+    if name == "ar_go2_full_agentic":
+        raise NotImplementedError(
+            "ar_go2_full_agentic is not implemented yet — use ar_go2"
+        )
+    if name == "ar_g1_full_agentic":
+        raise NotImplementedError(
+            "ar_g1_full_agentic is not implemented yet — use ar_g1"
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

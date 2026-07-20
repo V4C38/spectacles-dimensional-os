@@ -105,7 +105,7 @@ The default location for the Go2 is shown below:
 
 ### macOS
 
-Use [`scripts/start.sh`](scripts/start.sh) for an interactive setup that runs all required steps automatically. Select the robot type (Go2 / G1) and wait until the bridge prints:
+Use [`scripts/start.sh`](scripts/start.sh) for an interactive setup that runs all required steps automatically. Select a stack — **Unitree Go2**, **Unitree Go2 (full agentic stack)**, **Unitree G1**, or **Unitree G1 (full agentic stack)** — and wait until the bridge prints:
 
 ```text
 Bridge ready - ws://0.0.0.0:8787
@@ -184,7 +184,7 @@ flowchart LR
 <details>
 <summary><h3>Protocol</h3></summary>
 
-[`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) is the cross-platform contract (currently **v16**). The Mac is always the WebSocket **server**; AR devices are **clients**. Most messages are JSON; camera stills and LiDAR use binary frames.
+[`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) is the cross-platform contract (currently **v18**). The Mac is always the WebSocket **server**; AR devices are **clients**. Most messages are JSON; camera stills and LiDAR use binary frames.
 
 **Handshake (bridge → Lens)**
 
@@ -201,7 +201,7 @@ flowchart LR
 | `registration_status` | `mode`, `state`, `message`, `progress`, `tag_visible`, `preview_pose` |
 | `pose` | `position`, `orientation`, optional `speed_mps`, `velocity_mps`, `yaw_rate_rad_s` |
 | `path` | `waypoints` |
-| `nav_status` | `state` (`idle` \| `navIntent` \| `navigating` \| `resolved`), optional `outcome`, `retryable` |
+| `nav_status` | `state` (`idle` \| `navIntent` \| `navigating` \| `resolved`), optional `outcome`, `retryable`, `goal` (`source`, pose) |
 | `world_frame_correction` | `trans_delta_m`, `yaw_delta_deg`, `alignment_confidence` |
 | `capture_policy` | `max_capture_distance_m`, `min_capture_distance_m`, `max_capture_speed_mps`, `static_speed_mps`, `min_observations` |
 | `camera_frame_ack` | `seq`, `capturing_budgeted_complete` |
@@ -219,6 +219,7 @@ flowchart LR
 | `set_lidar_mode` | `mode` (`off` \| `obstacles` \| `full`) |
 | `joystick_command` | `vx`, `vy`, `wz` stick deflection in [-1, 1] |
 | `emergency_stop` | - |
+| `user_command` | transcribed voice / typed text for the DimOS agent |
 | `ping` / `pong` | clock sync for frame timestamps |
 
 When the protocol changes, update these together in one change:
@@ -253,9 +254,7 @@ Toggle Manual Mode from the runtime wrist menu. While navigating, the yellow dir
 <details>
 <summary><h3>Agent Mode</h3></summary>
 
-> **Note:** Agent mode is currently under development. Check out the branch [`development/agentic`](../../tree/development/agentic) for the latest updates.
-
-In Agent Mode, voice commands on Spectacles are routed to a DimOS agent (OpenAI API on the Mac). The agent reasons over robot state and skills - e.g. “go to the kitchen” - instead of the user placing goals by hand. This requires an internet connection for the LLM API.
+In Agent Mode, wake-word voice on Spectacles becomes a `user_command` on the bridge. The DimOS LLM agent (OpenAI API on the Mac) calls `relative_move` / `cancel_navigation`; the bridge owns the goal and publishes the same `nav_status` + `path` stream as Manual Mode so the navigation marker snaps to the goal. Dragging the marker during an agent goal takes over with a normal `nav_goal` (latest wins). Requires `OPENAI_API_KEY` and an internet connection for the LLM API. Full-agentic menu entries are stubs and exit clearly as not implemented.
 
 </details>
 

@@ -18,12 +18,14 @@ from dimos.ar.network.data_plane import (
 from dimos.ar.network.protocol import (
     NavGoalMessage,
     NavTerminalOutcome,
+    WireGoalSource,
     encode_nav_status,
 )
 from dimos.ar.tag_tracking.solve import orientation_yaw_deg
 from dimos.ar.utils.console import log_checkpoint
 from dimos.ar.utils.log_on_change import log_info_on_change
 from dimos.ar.world_frame.state import WorldFrameState
+from dimos.ar.world_frame.transforms import pose_to_matrix, yaw_from_T
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.utils.logging_config import setup_logger
 
@@ -56,6 +58,7 @@ class NavSession:
     path_received: bool
     last_path_mono: float | None
     phase: SessionPhase
+    source: WireGoalSource = "user"
     odom_position: tuple[float, float, float] | None = None
     odom_orientation: tuple[float, float, float, float] | None = None
 
@@ -132,9 +135,19 @@ class NavigateGoalHandler:
             return {"state": "navIntent"}
         if self._session is None:
             return {"state": "idle"}
+        goal = self._goal_wire_block(self._session)
         if self._session.phase == "navigating":
-            return {"state": "navigating"}
-        return {"state": "navIntent"}
+            return {"state": "navigating", "goal": goal}
+        return {"state": "navIntent", "goal": goal}
+
+    @staticmethod
+    def _goal_wire_block(session: NavSession) -> dict[str, object]:
+        orientation = session.orientation if session.orientation is not None else (0.0, 0.0, 0.0, 1.0)
+        return {
+            "source": session.source,
+            "position": list(session.position),
+            "orientation": list(orientation),
+        }
 
     def nav_status_payload(
         self,
@@ -156,6 +169,7 @@ class NavigateGoalHandler:
             if state == "resolved" and resolved_outcome == "failed"
             else None
         )
+        goal = wire.get("goal")
         return encode_nav_status(
             ts=ts,
             state=state,  # type: ignore[arg-type]
@@ -163,6 +177,7 @@ class NavigateGoalHandler:
             error_code=error_code,
             retryable=retryable,
             stall_reason=stall_reason,
+            goal=goal if isinstance(goal, dict) else None,
         )
 
     def runtime_snapshot_path(self) -> dict[str, object] | None:
@@ -185,6 +200,7 @@ class NavigateGoalHandler:
         position: tuple[float, float, float],
         orientation: tuple[float, float, float, float] | None,
         ts: float,
+        source: WireGoalSource = "user",
     ) -> None:
         if not self._world_frame.is_committed:
             logger.warning("goal ignored before world frame committed")
@@ -222,6 +238,7 @@ class NavigateGoalHandler:
                 path_received=True,
                 last_path_mono=self._session.last_path_mono,
                 phase="navigating",
+                source=source,
                 odom_position=odom_goal.position,
                 odom_orientation=odom_goal.orientation,
             )
@@ -233,6 +250,7 @@ class NavigateGoalHandler:
                 path_received=False,
                 last_path_mono=None,
                 phase="intent",
+                source=source,
                 odom_position=odom_goal.position,
                 odom_orientation=odom_goal.orientation,
             )
@@ -254,6 +272,57 @@ class NavigateGoalHandler:
             ),
         )
 
+    def submit_relative_goal(
+        self,
+        forward: float,
+        left: float,
+        degrees: float,
+    ) -> str:
+        """Compute an odom-relative pose, transform to world, submit as agent goal."""
+        if self._robot_connected is not None and not self._robot_connected():
+            message = "Robot is not connected"
+            logger.warning("submit_relative_goal rejected", reason=message)
+            return message
+        if not self._world_frame.is_committed:
+            message = "World frame is not committed"
+            logger.warning("submit_relative_goal rejected", reason=message)
+            return message
+        if self._odom_latest is None:
+            message = "No odometry available yet"
+            logger.warning("submit_relative_goal rejected", reason=message)
+            return message
+        sample = self._odom_latest()
+        if sample is None:
+            message = "No odometry available yet"
+            logger.warning("submit_relative_goal rejected", reason=message)
+            return message
+
+        yaw = yaw_from_T(pose_to_matrix((0.0, 0.0, 0.0), sample.orientation))
+        # Y-up AR semantic: forward=(cos yaw, 0, -sin yaw); left=(-sin yaw, 0, -cos yaw).
+        cos_y = math.cos(yaw)
+        sin_y = math.sin(yaw)
+        odom_x = sample.position[0] + float(forward) * cos_y + float(left) * (-sin_y)
+        odom_y = sample.position[1]
+        odom_z = sample.position[2] + float(forward) * (-sin_y) + float(left) * (-cos_y)
+        target_yaw = yaw + math.radians(float(degrees))
+        half = target_yaw * 0.5
+        odom_orientation = (0.0, math.sin(half), 0.0, math.cos(half))
+        world_position, world_orientation = self._world_frame.transform_pose(
+            (odom_x, odom_y, odom_z),
+            odom_orientation,
+        )
+        ts = time.time()
+        self.submit_goal(
+            position=world_position,
+            orientation=world_orientation,
+            ts=ts,
+            source="agent",
+        )
+        return (
+            f"Navigating relative move forward={forward:.2f}m "
+            f"left={left:.2f}m degrees={degrees:.1f}"
+        )
+
     # ------------------------------------------------------------------
     # WebSocket message handlers
     # ------------------------------------------------------------------
@@ -263,6 +332,7 @@ class NavigateGoalHandler:
             position=msg.position,
             orientation=msg.orientation,
             ts=msg.ts,
+            source="user",
         )
 
     def on_cancel_nav_goal(self, ts: float | None = None) -> None:

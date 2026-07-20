@@ -11,11 +11,12 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 
 from dimos.ar.agent.wire import (
-    AgentCommandMessage,
     ArSkillResultMessage,
+    UserCommandMessage,
     WireAgentState,
-    decode_agent_command,
+    WireGoalSource,
     decode_ar_skill_result,
+    decode_user_command,
     encode_agent_response,
     encode_agent_status,
     encode_ar_skill,
@@ -34,10 +35,11 @@ if TYPE_CHECKING:
     from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
     from dimos.ar.world_frame.state import WorldFrameState
 
-PROTOCOL_VERSION = 17
+PROTOCOL_VERSION = 18
 
 WireNavigationState = Literal["idle", "navIntent", "navigating", "resolved"]
 NavTerminalOutcome = Literal["succeeded", "failed"]
+NavGoalWire = dict[str, Any]
 
 DEFAULT_CAPABILITIES = [
     "lidar",
@@ -131,7 +133,7 @@ InboundMessage = (
     | GetStatusMessage
     | SetLidarModeMessage
     | PingMessage
-    | AgentCommandMessage
+    | UserCommandMessage
     | ArSkillResultMessage
 )
 
@@ -292,8 +294,8 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         if "client_ts" not in data or not isinstance(data["client_ts"], (int, float)):
             raise ValueError("Missing or invalid field: client_ts")
         return PingMessage(ts=ts, robot_id=robot_id, client_ts=float(data["client_ts"]))
-    if msg_type == "agent_command":
-        return decode_agent_command(data, ts=ts, robot_id=robot_id)
+    if msg_type == "user_command":
+        return decode_user_command(data, ts=ts, robot_id=robot_id)
     if msg_type == "ar_skill_result":
         return decode_ar_skill_result(data, ts=ts, robot_id=robot_id)
     raise ValueError(f"Unknown inbound message type: {msg_type!r}")
@@ -378,6 +380,7 @@ def encode_runtime_snapshot(
     bridge: BridgeStatusSnapshot | dict[str, Any],
     nav: dict[str, Any],
     path: dict[str, Any] | None = None,
+    agent: dict[str, Any] | None = None,
     ts: float | None = None,
     world_frame: WorldFrameState | None = None,
 ) -> str:
@@ -391,6 +394,7 @@ def encode_runtime_snapshot(
         "robot_id": robot_id,
         "bridge": bridge_wire,
         "nav": nav,
+        "agent": agent if agent is not None else {"state": "idle"},
     }
     if path is not None:
         payload["path"] = path
@@ -558,6 +562,7 @@ def encode_nav_status(
     error_code: int | None = None,
     retryable: bool | None = None,
     stall_reason: str | None = None,
+    goal: NavGoalWire | None = None,
 ) -> str:
     nav: dict[str, Any] = {"state": state}
     if outcome is not None:
@@ -568,6 +573,8 @@ def encode_nav_status(
         nav["retryable"] = retryable
     if stall_reason is not None:
         nav["stall_reason"] = stall_reason
+    if goal is not None:
+        nav["goal"] = goal
     return _dumps(
         {
             "type": "nav_status",
@@ -582,7 +589,6 @@ __all__ = [
     "LIDAR_OBSTACLE_POINT_CAP",
     "LIDAR_WIRE_MAX_POINTS",
     "PROTOCOL_VERSION",
-    "AgentCommandMessage",
     "ArSkillResultMessage",
     "CameraInfoMessage",
     "CancelNavGoalMessage",
@@ -597,7 +603,9 @@ __all__ = [
     "RegistrationPoseMessage",
     "RegistrationStatusPayload",
     "SetLidarModeMessage",
+    "UserCommandMessage",
     "WireAgentState",
+    "WireGoalSource",
     "WireNavigationState",
     "bridge_status_wire",
     "decode_inbound",

@@ -2,7 +2,7 @@ import {
   AgentResponseMessage,
   AgentStatusMessage,
   ArSkillMessage,
-  buildAgentCommand,
+  buildUserCommand,
   buildArSkillResult,
   ProtocolParseError,
 } from "../Network/Protocol";
@@ -39,15 +39,15 @@ export class AgentClient {
     this._inbound.onProtocolError.add((error) => this.onProtocolError.emit(error));
   }
 
-  public sendAgentCommand(text: string): boolean {
+  public sendUserCommand(text: string): boolean {
     if (!this._transport || !this._inbound) {
       return false;
     }
     return sendForActiveRobot(
       this._transport,
       this._inbound,
-      "agent_command",
-      (robotId) => buildAgentCommand(robotId, text),
+      "user_command",
+      (robotId) => buildUserCommand(robotId, text),
       this._sendDropLog,
     );
   }

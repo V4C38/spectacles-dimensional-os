@@ -13,7 +13,6 @@ from dimos.ar.network.protocol import (
     LIDAR_OBSTACLE_POINT_CAP,
     LIDAR_WIRE_MAX_POINTS,
     PROTOCOL_VERSION,
-    AgentCommandMessage,
     ArSkillResultMessage,
     CameraInfoMessage,
     CancelNavGoalMessage,
@@ -26,6 +25,7 @@ from dimos.ar.network.protocol import (
     RegistrationPoseMessage,
     RegistrationStatusPayload,
     SetLidarModeMessage,
+    UserCommandMessage,
     decode_inbound,
     encode_agent_response,
     encode_agent_status,
@@ -572,18 +572,26 @@ def test_encode_runtime_snapshot() -> None:
         "world_frame_method": "manual_pose",
         "world_frame_approximate": False,
     }
+    goal = {
+        "source": "user",
+        "position": [1.0, 0.0, 2.0],
+        "orientation": [0.0, 0.0, 0.0, 1.0],
+    }
     raw = json.loads(
         encode_runtime_snapshot(
             robot_id="unitree_go2",
             bridge=bridge,
-            nav={"state": "navigating"},
+            nav={"state": "navigating", "goal": goal},
             path={"waypoints": [[1.0, 2.0, 3.0]]},
+            agent={"state": "busy"},
             ts=5.0,
         )
     )
     assert raw["type"] == "runtime_snapshot"
     assert raw["robot_id"] == "unitree_go2"
     assert raw["nav"]["state"] == "navigating"
+    assert raw["nav"]["goal"] == goal
+    assert raw["agent"]["state"] == "busy"
     assert raw["path"]["waypoints"] == [[1.0, 2.0, 3.0]]
     assert "streams_active" not in raw["bridge"]
 
@@ -642,9 +650,15 @@ def test_encode_path_and_nav_status() -> None:
     assert "robot_id" not in path
     assert "kind" not in path
 
-    status = json.loads(encode_nav_status(ts=3.0, state="navigating"))
+    goal = {
+        "source": "agent",
+        "position": [1.0, 0.0, 2.0],
+        "orientation": [0.0, 0.0, 0.0, 1.0],
+    }
+    status = json.loads(encode_nav_status(ts=3.0, state="navigating", goal=goal))
     assert status["type"] == "nav_status"
     assert status["state"] == "navigating"
+    assert status["goal"] == goal
     assert "phase" not in status
 
     retryable = json.loads(
@@ -659,6 +673,7 @@ def test_encode_path_and_nav_status() -> None:
     assert failed["state"] == "resolved"
     assert failed["outcome"] == "failed"
     assert failed["error_code"] == 505
+    assert "goal" not in failed
 
 
 def test_encode_pose() -> None:
@@ -762,12 +777,19 @@ def test_lidar_point_caps_match_protocol_docs() -> None:
     assert LIDAR_OBSTACLE_POINT_CAP == 200
 
 
-def test_decode_agent_command() -> None:
+def test_decode_user_command() -> None:
     msg = decode_inbound(
-        '{"type":"agent_command","ts":1.0,"robot_id":"unitree_go2","text":"go home"}'
+        '{"type":"user_command","ts":1.0,"robot_id":"unitree_go2","text":"go home"}'
     )
-    assert isinstance(msg, AgentCommandMessage)
+    assert isinstance(msg, UserCommandMessage)
     assert msg.text == "go home"
+
+
+def test_decode_rejects_agent_command() -> None:
+    with pytest.raises(ValueError, match="Unknown inbound message type"):
+        decode_inbound(
+            '{"type":"agent_command","ts":1.0,"robot_id":"unitree_go2","text":"go home"}'
+        )
 
 
 def test_decode_ar_skill_result() -> None:

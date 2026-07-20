@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from dimos_lcm.std_msgs import Bool, String
 
-from dimos.ar.agent import AgentHandlers
+from dimos.ar.agent.relay import AgentRelay
 from dimos.ar.bridge.motion_router import MotionRouter
 from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.bridge.profile_rpc_dispatch import dispatch_profile_nowait
@@ -52,7 +52,6 @@ from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
-from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
@@ -61,10 +60,18 @@ from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.utils.logging_config import setup_logger
 
+try:
+    from langchain_core.messages import BaseMessage as _BaseMessage
+except ModuleNotFoundError:  # pragma: no cover - CI base dimos wheel omits langchain
+    _BaseMessage = object  # type: ignore[misc,assignment]
+
 if TYPE_CHECKING:
+    from langchain_core.messages import BaseMessage
     from websockets.asyncio.server import ServerConnection
 
     from dimos.ar.network.protocol import GetStatusMessage
+else:
+    BaseMessage = _BaseMessage
 
 logger = setup_logger()
 
@@ -176,9 +183,10 @@ class ARBridge(Module):  # type: ignore[misc]
     ar_navigation_state: In[String]
     cmd_vel: Out[Twist]
     goal_request: Out[PoseStamped]
-    goal_point_request: Out[PointStamped]
     stop_movement: Out[Bool]
-    cancel_goal_signal: Out[Bool]
+    human_input: Out[str]
+    agent: In[BaseMessage]
+    agent_idle: In[bool]
 
     config: ARBridgeConfig
     _profile: ARRobotProfileSpec
@@ -190,6 +198,7 @@ class ARBridge(Module):  # type: ignore[misc]
     _registration: RegistrationSession
     _nav: NavigateGoalHandler
     _motion_router: MotionRouter
+    _agent_relay: AgentRelay
     _telemetry: TelemetryPublisher
     _ws_server: ARWebSocketServer
     _robot_id: str
@@ -211,14 +220,8 @@ class ARBridge(Module):  # type: ignore[misc]
             self._profile.handshake_payload(),
             {
                 "path": self.ar_path.transport is not None,
-                "nav": (
-                    self.goal_request.transport is not None
-                    or self.goal_point_request.transport is not None
-                ),
-                "cancel_nav_goal": (
-                    self.stop_movement.transport is not None
-                    or self.cancel_goal_signal.transport is not None
-                ),
+                "nav": self.goal_request.transport is not None,
+                "cancel_nav_goal": self.stop_movement.transport is not None,
             },
         )
         self._connect_handshake = handshake
@@ -319,9 +322,7 @@ class ARBridge(Module):  # type: ignore[misc]
         motion_router = MotionRouter(
             publish_cmd_vel=self.cmd_vel.publish,
             publish_nav_goal=self.goal_request.publish,
-            publish_nav_point_goal=self.goal_point_request.publish,
             publish_stop_movement=self.stop_movement.publish,
-            publish_cancel_goal=self.cancel_goal_signal.publish,
             hard_stop=lambda: dispatch_profile_nowait(self._profile.emergency_stop),
             on_nav_preempted=_on_nav_preempted,
         )
@@ -359,7 +360,10 @@ class ARBridge(Module):  # type: ignore[misc]
             registration=registration,
             motion_router=motion_router,
         )
-        agent_handlers = AgentHandlers()
+        agent_relay = AgentRelay(
+            sender=sender,
+            publish_human_input=self.human_input.publish,
+        )
 
         ws_server = ARWebSocketServer(
             port=self.config.port,
@@ -376,8 +380,8 @@ class ARBridge(Module):  # type: ignore[misc]
             on_emergency_stop=safety.on_emergency_stop,
             on_get_status=self._on_get_status,
             on_set_lidar_mode=self._on_set_lidar_mode,
-            on_agent_command=agent_handlers.on_agent_command,
-            on_ar_skill_result=agent_handlers.on_ar_skill_result,
+            on_user_command=agent_relay.on_user_command,
+            on_ar_skill_result=agent_relay.on_ar_skill_result,
             on_status_connect=self._send_status_to,
             on_disconnect=self._on_client_disconnect,
         )
@@ -389,6 +393,7 @@ class ARBridge(Module):  # type: ignore[misc]
         self._registration = registration
         self._nav = nav
         self._motion_router = motion_router
+        self._agent_relay = agent_relay
         self._safety = safety
         self._telemetry = telemetry
         self._ws_server = ws_server
@@ -402,11 +407,7 @@ class ARBridge(Module):  # type: ignore[misc]
         super().start()
         self._motion_router.validate_transports(
             has_pose_goal=self.goal_request.transport is not None,
-            has_point_goal=self.goal_point_request.transport is not None,
-            has_cancel=(
-                self.stop_movement.transport is not None
-                or self.cancel_goal_signal.transport is not None
-            ),
+            has_cancel=self.stop_movement.transport is not None,
         )
         self._ws_server.start()
         self._status.start()
@@ -471,6 +472,26 @@ class ARBridge(Module):  # type: ignore[misc]
     async def handle_ar_navigation_state(self, msg: String) -> None:
         self._nav.on_navigation_state(msg.data)
 
+    async def handle_agent(self, msg: BaseMessage) -> None:
+        self._agent_relay.on_agent_message(msg)
+
+    async def handle_agent_idle(self, idle: bool) -> None:
+        self._agent_relay.on_agent_idle(bool(idle))
+
+    @rpc
+    def submit_relative_goal(
+        self,
+        forward: float = 0.0,
+        left: float = 0.0,
+        degrees: float = 0.0,
+    ) -> str:
+        return self._nav.submit_relative_goal(forward, left, degrees)
+
+    @rpc
+    def cancel_navigation(self) -> str:
+        self._nav.on_cancel_nav_goal()
+        return "Navigation cancelled"
+
     # ------------------------------------------------------------------
     # Status / runtime-sync helpers
     # ------------------------------------------------------------------
@@ -485,6 +506,7 @@ class ARBridge(Module):  # type: ignore[misc]
                 bridge=self._status.merged_bridge_snapshot(),
                 nav=self._nav.nav_wire_dict(),
                 path=path,
+                agent=self._agent_relay.agent_wire_dict(),
             ),
         )
 

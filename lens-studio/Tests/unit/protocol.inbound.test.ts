@@ -81,7 +81,15 @@ describe("parseInboundMessage", () => {
           world_frame_method: null,
           world_frame_approximate: false,
         },
-        nav: { state: "idle" },
+        nav: {
+          state: "navigating",
+          goal: {
+            source: "agent",
+            position: [1, 0, 2],
+            orientation: [0, 0, 0, 1],
+          },
+        },
+        agent: { state: "busy" },
         path: {
           waypoints: [[1, 2, 3]],
         },
@@ -90,6 +98,8 @@ describe("parseInboundMessage", () => {
     expect(msg!.type).toBe("runtime_snapshot");
     const snapshot = msg as RuntimeSnapshotMessage;
     expect(snapshot.path?.waypoints).toEqual([[1, 2, 3]]);
+    expect(snapshot.nav.goal?.source).toBe("agent");
+    expect(snapshot.agent.state).toBe("busy");
     const bridgeSnapshot = projectBridgeSession(true, snapshot.bridge, snapshot.ts);
     expect(bridgeSnapshot.robotConnected).toBe(true);
     expect(bridgeSnapshot.worldFrameCommitted).toBe(false);
@@ -389,6 +399,26 @@ describe("parseInboundMessage", () => {
     expect(msg!.type).toBe("nav_status");
     expect((msg as { retryable: boolean }).retryable).toBe(true);
     expect((msg as { stall_reason: string }).stall_reason).toBe("no_path");
+  });
+
+  it("parses nav_status goal block", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "nav_status",
+        ts: 1,
+        state: "navigating",
+        goal: {
+          source: "user",
+          position: [1, 0, 2],
+          orientation: [0, 0, 0, 1],
+        },
+      }),
+    );
+    expect(msg!.type).toBe("nav_status");
+    expect((msg as { goal: { source: string } }).goal.source).toBe("user");
+    expect((msg as { goal: { position: number[] } }).goal.position).toEqual([
+      1, 0, 2,
+    ]);
   });
 
   it("parses pong", () => {

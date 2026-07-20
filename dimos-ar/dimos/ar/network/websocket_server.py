@@ -16,7 +16,6 @@ import websockets.asyncio.server as ws_server
 
 from dimos.ar.network.inbound_dispatch import InboundDispatcher
 from dimos.ar.network.protocol import (
-    AgentCommandMessage,
     ArSkillResultMessage,
     CameraInfoMessage,
     CancelNavGoalMessage,
@@ -29,6 +28,7 @@ from dimos.ar.network.protocol import (
     RegistrationCommandMessage,
     RegistrationPoseMessage,
     SetLidarModeMessage,
+    UserCommandMessage,
     decode_inbound,
     encode_hello,
     encode_pong,
@@ -55,7 +55,7 @@ EmergencyStopHandler = Callable[[EmergencyStopMessage], None]
 JoystickCommandHandler = Callable[[JoystickCommandMessage], None]
 GetStatusHandler = Callable[[GetStatusMessage, "ws_server.ServerConnection"], None]
 SetLidarModeHandler = Callable[[SetLidarModeMessage, "ws_server.ServerConnection"], None]
-AgentCommandHandler = Callable[[AgentCommandMessage], None]
+UserCommandHandler = Callable[[UserCommandMessage], None]
 ArSkillResultHandler = Callable[[ArSkillResultMessage], None]
 UnsupportedHandler = Callable[[InboundMessage], None]
 StatusOnConnectHandler = Callable[["ws_server.ServerConnection"], None]
@@ -105,7 +105,7 @@ class ARWebSocketServer:
         on_emergency_stop: EmergencyStopHandler | None = None,
         on_get_status: GetStatusHandler | None = None,
         on_set_lidar_mode: SetLidarModeHandler | None = None,
-        on_agent_command: AgentCommandHandler | None = None,
+        on_user_command: UserCommandHandler | None = None,
         on_ar_skill_result: ArSkillResultHandler | None = None,
         on_unsupported: UnsupportedHandler | None = None,
         on_status_connect: StatusOnConnectHandler | None = None,
@@ -129,7 +129,7 @@ class ARWebSocketServer:
             on_emergency_stop=on_emergency_stop,
             on_get_status=on_get_status,
             on_set_lidar_mode=on_set_lidar_mode,
-            on_agent_command=on_agent_command,
+            on_user_command=on_user_command,
             on_ar_skill_result=on_ar_skill_result,
             on_unsupported=on_unsupported,
         )
@@ -154,7 +154,7 @@ class ARWebSocketServer:
         on_emergency_stop: EmergencyStopHandler | None,
         on_get_status: GetStatusHandler | None,
         on_set_lidar_mode: SetLidarModeHandler | None,
-        on_agent_command: AgentCommandHandler | None,
+        on_user_command: UserCommandHandler | None,
         on_ar_skill_result: ArSkillResultHandler | None,
         on_unsupported: UnsupportedHandler | None,
     ) -> dict[type[InboundMessage], InboundHandler]:
@@ -189,7 +189,7 @@ class ARWebSocketServer:
         handlers[CancelNavGoalMessage] = _simple_handler(on_cancel_nav_goal, "cancel_nav_goal")
         handlers[JoystickCommandMessage] = _simple_handler(on_joystick_command, "joystick_command")
         handlers[EmergencyStopMessage] = _simple_handler(on_emergency_stop, "emergency_stop")
-        handlers[AgentCommandMessage] = _simple_handler(on_agent_command, "agent_command")
+        handlers[UserCommandMessage] = _simple_handler(on_user_command, "user_command")
         handlers[ArSkillResultMessage] = _simple_handler(on_ar_skill_result, "ar_skill_result")
 
         return handlers

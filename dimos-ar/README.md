@@ -5,7 +5,7 @@ AR WebSocket interface on top of DimOS robot stacks. The Spectacles client that
 implements the same contract lives in [`../lens-studio/`](../lens-studio/).
 
 All platform-agnostic code is under `dimos/ar/`. The cross-platform API is
-[`PROTOCOL.md`](PROTOCOL.md) (currently **v16**, port **8787**).
+[`PROTOCOL.md`](PROTOCOL.md) (currently **v18**, port **8787**).
 
 ## Layout
 
@@ -50,7 +50,14 @@ cd /path/to/spectacles-dimensional-os
 ./scripts/start.sh
 ```
 
-`scripts/start.sh` prompts for the robot stack (`ar-go2` / `ar-g1`), then starts the bridge. Wait for:
+`scripts/start.sh` prompts for the robot stack:
+
+- `ar_go2` — Unitree Go2 (lightweight agentic)
+- `ar_go2_full_agentic` — not implemented yet (exits clearly)
+- `ar_g1` — Unitree G1 via `unitree_g1_nav_simple` (pose goals; lightweight agentic)
+- `ar_g1_full_agentic` — not implemented yet (exits clearly)
+
+Then starts the bridge. Wait for:
 
 ```text
 Bridge ready — ws://0.0.0.0:8787
@@ -64,10 +71,12 @@ dimos run ar-go2
 dimos run ar-g1
 ```
 
+Set `OPENAI_API_KEY` for agent mode on the lightweight stacks.
+
 **Supported hardware** (see [main README](../README.md#prerequisites)):
 
 - **Go2 pro/air** — primary development target; full navigation + AprilTag when onboard modules are available
-- **G1** — supported in code, not field-tested; navigation needs Unitree DDS packages in the DimOS `.venv`
+- **G1** — supported in code, not field-tested; uses `unitree_g1_nav_simple` pose goals; needs Unitree DDS packages in the DimOS `.venv`
 
 </details>
 
@@ -121,7 +130,7 @@ Reproduce full CI from repo root: `./scripts/run-ci.sh`.
 <details>
 <summary>Protocol coupling</summary>
 
-`PROTOCOL_VERSION = 17` in `dimos/ar/network/protocol.py`. If the wire contract changes, update together:
+`PROTOCOL_VERSION = 18` in `dimos/ar/network/protocol.py`. If the wire contract changes, update together:
 
 - `dimos/ar/network/protocol.py`
 - `PROTOCOL.md`
