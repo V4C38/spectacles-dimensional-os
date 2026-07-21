@@ -5,7 +5,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from dimos.ar.agent.relay import AgentRelay
-from dimos.ar.agent.wire import ArSkillResultMessage, UserCommandMessage
+from dimos.ar.agent.wire import UserCommandMessage
 from dimos.ar.bridge.sender import BridgeSender
 
 
@@ -86,16 +86,3 @@ def test_on_agent_idle_emits_status_on_change() -> None:
     assert payloads[1]["state"] == "idle"
     assert relay.agent_wire_dict() == {"state": "idle"}
 
-
-def test_on_ar_skill_result_is_noop() -> None:
-    relay, _published, server = _make_relay()
-    relay.on_ar_skill_result(
-        ArSkillResultMessage(
-            ts=1.0,
-            robot_id="unitree_go2",
-            request_id="req-1",
-            ok=True,
-            skill="get_user_hmd_transform",
-        )
-    )
-    assert server.schedule_send.call_count == 0

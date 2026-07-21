@@ -46,6 +46,8 @@ NAV_MESSAGE_AGE_LOG_INTERVAL_S: float = 5.0
 NAV_GOAL_REDISPATCH_MIN_DELTA_M: float = 0.75
 NAV_ARRIVAL_SHORTFALL_WARN_M: float = 0.25
 NAV_ERROR_ROBOT_OFFLINE: int = 503
+APPROACH_STANDOFF_M: float = 0.8
+APPROACH_MIN_HORIZONTAL_M: float = 0.05
 StallReason = str
 SessionPhase = Literal["intent", "navigating"]
 
@@ -272,6 +274,105 @@ class NavigateGoalHandler:
             ),
         )
 
+    def _nav_context(self) -> tuple[OdomSample, float] | str:
+        """Return ``(odom_sample, yaw_rad)`` or an explicit failure string."""
+        if self._robot_connected is not None and not self._robot_connected():
+            return "Robot is not connected"
+        if not self._world_frame.is_committed:
+            return "World frame is not committed"
+        if self._odom_latest is None:
+            return "No odometry available yet"
+        sample = self._odom_latest()
+        if sample is None:
+            return "No odometry available yet"
+        yaw = yaw_from_T(pose_to_matrix((0.0, 0.0, 0.0), sample.orientation))
+        return sample, yaw
+
+    @staticmethod
+    def _relative_offset_odom(
+        sample: OdomSample,
+        yaw: float,
+        forward: float,
+        left: float,
+        up: float = 0.0,
+    ) -> tuple[float, float, float]:
+        """Robot-relative meters → odom position (Y-up semantic on odom axes)."""
+        # Y-up AR semantic: forward=(cos yaw, 0, -sin yaw); left=(-sin yaw, 0, -cos yaw).
+        cos_y = math.cos(yaw)
+        sin_y = math.sin(yaw)
+        odom_x = sample.position[0] + float(forward) * cos_y + float(left) * (-sin_y)
+        odom_y = sample.position[1] + float(up)
+        odom_z = sample.position[2] + float(forward) * (-sin_y) + float(left) * (-cos_y)
+        return odom_x, odom_y, odom_z
+
+    def robot_relative_to_world(
+        self,
+        forward: float,
+        left: float,
+        up: float = 0.0,
+    ) -> tuple[float, float, float] | str:
+        """Convert robot-relative meters to AR world position, or a failure string."""
+        ctx = self._nav_context()
+        if isinstance(ctx, str):
+            return ctx
+        sample, yaw = ctx
+        odom_position = self._relative_offset_odom(sample, yaw, forward, left, up)
+        world_position, _ = self._world_frame.transform_pose(
+            odom_position,
+            sample.orientation,
+        )
+        return world_position
+
+    def world_to_robot_relative(
+        self,
+        world_position: tuple[float, float, float],
+    ) -> tuple[float, float, float] | str:
+        """Convert AR world position to robot-relative (forward, left, up) meters."""
+        ctx = self._nav_context()
+        if isinstance(ctx, str):
+            return ctx
+        sample, yaw = ctx
+        odom_x, odom_y, odom_z = self._world_frame.inverse_transform_point(
+            (
+                float(world_position[0]),
+                float(world_position[1]),
+                float(world_position[2]),
+            )
+        )
+        dx = odom_x - sample.position[0]
+        dy = odom_y - sample.position[1]
+        dz = odom_z - sample.position[2]
+        cos_y = math.cos(yaw)
+        sin_y = math.sin(yaw)
+        # Inverse of _relative_offset_odom horizontal basis.
+        forward = dx * cos_y - dz * sin_y
+        left = -dx * sin_y - dz * cos_y
+        return float(forward), float(left), float(dy)
+
+    def world_yaw_degrees_ccw_from_robot(
+        self,
+        world_orientation: tuple[float, float, float, float],
+    ) -> float | str:
+        """World-frame yaw relative to the robot heading, in degrees CCW."""
+        ctx = self._nav_context()
+        if isinstance(ctx, str):
+            return ctx
+        sample, _robot_odom_yaw = ctx
+        _robot_world, robot_world_ori = self._world_frame.transform_pose(
+            sample.position,
+            sample.orientation,
+        )
+        robot_world_yaw = yaw_from_T(
+            pose_to_matrix((0.0, 0.0, 0.0), robot_world_ori)
+        )
+        user_yaw = yaw_from_T(pose_to_matrix((0.0, 0.0, 0.0), world_orientation))
+        delta = math.degrees(user_yaw - robot_world_yaw)
+        while delta <= -180.0:
+            delta += 360.0
+        while delta > 180.0:
+            delta -= 360.0
+        return delta
+
     def submit_relative_goal(
         self,
         forward: float,
@@ -279,36 +380,23 @@ class NavigateGoalHandler:
         degrees: float,
     ) -> str:
         """Compute an odom-relative pose, transform to world, submit as agent goal."""
-        if self._robot_connected is not None and not self._robot_connected():
-            message = "Robot is not connected"
-            logger.warning("submit_relative_goal rejected", reason=message)
-            return message
-        if not self._world_frame.is_committed:
-            message = "World frame is not committed"
-            logger.warning("submit_relative_goal rejected", reason=message)
-            return message
-        if self._odom_latest is None:
-            message = "No odometry available yet"
-            logger.warning("submit_relative_goal rejected", reason=message)
-            return message
-        sample = self._odom_latest()
-        if sample is None:
-            message = "No odometry available yet"
-            logger.warning("submit_relative_goal rejected", reason=message)
-            return message
-
-        yaw = yaw_from_T(pose_to_matrix((0.0, 0.0, 0.0), sample.orientation))
-        # Y-up AR semantic: forward=(cos yaw, 0, -sin yaw); left=(-sin yaw, 0, -cos yaw).
-        cos_y = math.cos(yaw)
-        sin_y = math.sin(yaw)
-        odom_x = sample.position[0] + float(forward) * cos_y + float(left) * (-sin_y)
-        odom_y = sample.position[1]
-        odom_z = sample.position[2] + float(forward) * (-sin_y) + float(left) * (-cos_y)
+        ctx = self._nav_context()
+        if isinstance(ctx, str):
+            logger.warning("submit_relative_goal rejected", reason=ctx)
+            return ctx
+        sample, yaw = ctx
+        odom_position = self._relative_offset_odom(
+            sample,
+            yaw,
+            float(forward),
+            float(left),
+            up=0.0,
+        )
         target_yaw = yaw + math.radians(float(degrees))
         half = target_yaw * 0.5
         odom_orientation = (0.0, math.sin(half), 0.0, math.cos(half))
         world_position, world_orientation = self._world_frame.transform_pose(
-            (odom_x, odom_y, odom_z),
+            odom_position,
             odom_orientation,
         )
         ts = time.time()
@@ -321,6 +409,89 @@ class NavigateGoalHandler:
         return (
             f"Navigating relative move forward={forward:.2f}m "
             f"left={left:.2f}m degrees={degrees:.1f}"
+        )
+
+    def submit_approach_goal(
+        self,
+        user_position: tuple[float, float, float],
+        *,
+        standoff_m: float = APPROACH_STANDOFF_M,
+    ) -> str:
+        """Navigate near the user (world frame), facing them, with ground standoff."""
+        if self._robot_connected is not None and not self._robot_connected():
+            message = "Robot is not connected"
+            logger.warning("submit_approach_goal rejected", reason=message)
+            return message
+        if not self._world_frame.is_committed:
+            message = "World frame is not committed"
+            logger.warning("submit_approach_goal rejected", reason=message)
+            return message
+        if self._odom_latest is None:
+            message = "No odometry available yet"
+            logger.warning("submit_approach_goal rejected", reason=message)
+            return message
+        sample = self._odom_latest()
+        if sample is None:
+            message = "No odometry available yet"
+            logger.warning("submit_approach_goal rejected", reason=message)
+            return message
+
+        robot_world, _robot_ori = self._world_frame.transform_pose(
+            sample.position,
+            sample.orientation,
+        )
+        user_x, _user_y, user_z = (
+            float(user_position[0]),
+            float(user_position[1]),
+            float(user_position[2]),
+        )
+        # Y-up AR world: horizontal plane is XZ; keep robot ground height.
+        ground_y = robot_world[1]
+        dx = robot_world[0] - user_x
+        dz = robot_world[2] - user_z
+        horizontal = math.hypot(dx, dz)
+        if horizontal < APPROACH_MIN_HORIZONTAL_M:
+            # Degenerate: user is above/near the robot — approach along robot +X.
+            yaw = yaw_from_T(pose_to_matrix((0.0, 0.0, 0.0), sample.orientation))
+            robot_forward_world, _ = self._world_frame.transform_pose(
+                (
+                    sample.position[0] + math.cos(yaw),
+                    sample.position[1],
+                    sample.position[2] - math.sin(yaw),
+                ),
+                sample.orientation,
+            )
+            dx = robot_world[0] - robot_forward_world[0]
+            dz = robot_world[2] - robot_forward_world[2]
+            horizontal = math.hypot(dx, dz)
+            if horizontal < APPROACH_MIN_HORIZONTAL_M:
+                dx, dz, horizontal = 1.0, 0.0, 1.0
+
+        dir_x = dx / horizontal
+        dir_z = dz / horizontal
+        standoff = max(0.0, float(standoff_m))
+        goal_x = user_x + dir_x * standoff
+        goal_z = user_z + dir_z * standoff
+        # Face the user: forward=(cos yaw, 0, -sin yaw) toward user from goal.
+        face_x = user_x - goal_x
+        face_z = user_z - goal_z
+        face_norm = math.hypot(face_x, face_z)
+        if face_norm < APPROACH_MIN_HORIZONTAL_M:
+            target_yaw = 0.0
+        else:
+            target_yaw = math.atan2(-face_z / face_norm, face_x / face_norm)
+        half = target_yaw * 0.5
+        world_orientation = (0.0, math.sin(half), 0.0, math.cos(half))
+        ts = time.time()
+        self.submit_goal(
+            position=(goal_x, ground_y, goal_z),
+            orientation=world_orientation,
+            ts=ts,
+            source="agent",
+        )
+        return (
+            f"Navigating to user "
+            f"(standoff={standoff:.2f}m, goal=[{goal_x:.2f}, {ground_y:.2f}, {goal_z:.2f}])"
         )
 
     # ------------------------------------------------------------------

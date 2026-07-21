@@ -15,3 +15,4 @@ g.quat = quat;
 g.mat4 = mat4;
 g.getTime = () => mockNow;
 g.print = (..._args: unknown[]) => {};
+g.requireAsset = (_path: string) => null;

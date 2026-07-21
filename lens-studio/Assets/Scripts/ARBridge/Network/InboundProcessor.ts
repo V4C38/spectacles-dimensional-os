@@ -282,7 +282,6 @@ export class InboundProcessor {
       ts: snapshot.ts,
       state: snapshot.agent.state,
     };
-    this._logDiagnosticRx(agentStatus);
     this.onAgentStatus.emit(agentStatus);
 
     if (snapshot.path) {

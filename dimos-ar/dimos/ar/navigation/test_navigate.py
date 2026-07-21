@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from unittest.mock import MagicMock
 
@@ -11,6 +12,7 @@ import pytest
 from dimos.ar.bridge.motion_router import MotionRouter
 from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.navigation.navigate import (
+    APPROACH_STANDOFF_M,
     NAV_GOAL_PATH_TIMEOUT_S,
     NAV_WATCHDOG_POLL_INTERVAL_S,
     NavigateGoalHandler,
@@ -764,6 +766,123 @@ def test_submit_relative_goal_failures() -> None:
         robot_connected=lambda: False,
     )
     assert "not connected" in nav3.submit_relative_goal(1.0, 0.0, 0.0).lower()
+    assert published3 == []
+
+
+def test_robot_relative_world_round_trip() -> None:
+    sample = OdomSample(
+        position=(1.0, 0.0, 2.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    nav, _server, _published, _cancel = _make_nav(
+        odom_latest=lambda: sample,
+        robot_connected=lambda: True,
+    )
+    nav._world_frame.set_odom_scale(1.0)
+    world = nav.robot_relative_to_world(forward=2.0, left=1.0, up=0.5)
+    assert not isinstance(world, str)
+    relative = nav.world_to_robot_relative(world)
+    assert not isinstance(relative, str)
+    assert relative[0] == pytest.approx(2.0, abs=1e-6)
+    assert relative[1] == pytest.approx(1.0, abs=1e-6)
+    assert relative[2] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_robot_relative_to_world_nonzero_yaw() -> None:
+    # 90° CCW about Y: forward=(0,0,-1) wait — yaw=+90° ⇒ forward=(0,0,-1)?
+    # yaw_from_T: forward=(cos th, 0, -sin th); th=π/2 ⇒ (0, 0, -1).
+    half = math.pi * 0.25
+    sample = OdomSample(
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, math.sin(half), 0.0, math.cos(half)),
+    )
+    nav, _server, _published, _cancel = _make_nav(
+        odom_latest=lambda: sample,
+        robot_connected=lambda: True,
+    )
+    nav._world_frame.set_odom_scale(1.0)
+    world = nav.robot_relative_to_world(forward=1.0, left=0.0, up=0.0)
+    assert not isinstance(world, str)
+    relative = nav.world_to_robot_relative(world)
+    assert not isinstance(relative, str)
+    assert relative[0] == pytest.approx(1.0, abs=1e-5)
+    assert relative[1] == pytest.approx(0.0, abs=1e-5)
+
+
+def test_robot_relative_helpers_failures() -> None:
+    nav, _server, _p, _c = _make_nav(
+        committed=False,
+        odom_latest=lambda: None,
+        robot_connected=lambda: True,
+    )
+    assert "World frame" in nav.robot_relative_to_world(1.0, 0.0)
+    assert "World frame" in nav.world_to_robot_relative((1.0, 0.0, 0.0))
+
+    nav2, _s2, _p2, _c2 = _make_nav(
+        odom_latest=lambda: None,
+        robot_connected=lambda: True,
+    )
+    assert "odometry" in nav2.robot_relative_to_world(1.0, 0.0).lower()
+
+    nav3, _s3, _p3, _c3 = _make_nav(
+        odom_latest=lambda: OdomSample((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
+        robot_connected=lambda: False,
+    )
+    assert "not connected" in nav3.world_to_robot_relative((0.0, 0.0, 0.0)).lower()
+
+
+def test_submit_approach_goal_standoff_facing_and_ground() -> None:
+    sample = OdomSample(
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    nav, mock_server, published_nav, _cancel = _make_nav(
+        odom_latest=lambda: sample,
+        robot_connected=lambda: True,
+    )
+    nav._world_frame.set_odom_scale(1.0)
+    robot_world, _ = nav._world_frame.transform_pose(sample.position, sample.orientation)
+    # Place the user 3 m along +X in world from the robot.
+    user = (robot_world[0] + 3.0, robot_world[1] + 1.2, robot_world[2])
+    result = nav.submit_approach_goal(user)
+    assert "Navigating to user" in result
+    assert nav._session is not None
+    assert nav._session.source == "agent"
+    goal = nav._session.position
+    # Ground height matches robot world Y; standoff along user→robot (+X from user toward robot is -X).
+    assert goal[1] == pytest.approx(robot_world[1])
+    assert goal[0] == pytest.approx(user[0] - APPROACH_STANDOFF_M)
+    assert goal[2] == pytest.approx(user[2])
+    # Facing user: forward toward +X ⇒ yaw ≈ 0 ⇒ quat (0, 0, 0, 1).
+    assert nav._session.orientation is not None
+    assert nav._session.orientation[1] == pytest.approx(0.0, abs=1e-6)
+    assert nav._session.orientation[3] == pytest.approx(1.0, abs=1e-6)
+    assert len(published_nav) == 1
+    statuses = _all_nav_statuses(mock_server)
+    assert statuses[-1]["goal"]["source"] == "agent"
+
+
+def test_submit_approach_goal_failures() -> None:
+    nav, _server, published_nav, _cancel = _make_nav(
+        committed=False,
+        odom_latest=lambda: None,
+        robot_connected=lambda: True,
+    )
+    assert "World frame" in nav.submit_approach_goal((1.0, 0.0, 0.0))
+    assert published_nav == []
+
+    nav2, _s2, published2, _c2 = _make_nav(
+        odom_latest=lambda: None,
+        robot_connected=lambda: True,
+    )
+    assert "odometry" in nav2.submit_approach_goal((1.0, 0.0, 0.0)).lower()
+    assert published2 == []
+
+    nav3, _s3, published3, _c3 = _make_nav(
+        odom_latest=lambda: OdomSample((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
+        robot_connected=lambda: False,
+    )
+    assert "not connected" in nav3.submit_approach_goal((1.0, 0.0, 0.0)).lower()
     assert published3 == []
 
 

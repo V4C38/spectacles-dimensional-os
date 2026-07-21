@@ -37,13 +37,13 @@ import {
   robotFloorWorldYCm,
   runtimeDeadzoneRadiusCm,
 } from "../Robot/RobotRuntimeModel";
-import { NavigationPathRenderer } from "./NavigationPathRenderer";
 import { NavigationMarker } from "./NavigationMarker";
 import { GroundPlacement, RobotGroundDeadzone } from "./GroundPlacement";
 import {
   applyNavigationPresentation,
   buildNavigationInputs,
   createWorldMeshHintState,
+  NavigationPathRenderer,
   planNavStatusEvent,
   resetWorldMeshHint,
   shouldStreamGoalNow,

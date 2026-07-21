@@ -6,7 +6,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from dimos.ar.agent.wire import (
-    ArSkillResultMessage,
     UserCommandMessage,
     WireAgentState,
     encode_agent_response,
@@ -87,14 +86,3 @@ class AgentRelay:
             return
         self._state = next_state
         self._sender.send(encode_agent_status(state=next_state))
-
-    def on_ar_skill_result(self, msg: ArSkillResultMessage) -> None:
-        # AR skill execution (bridge → Lens → result) is a later increment.
-        logger.info(
-            "ar_skill_result received (no-op)",
-            robot_id=msg.robot_id,
-            request_id=msg.request_id,
-            skill=msg.skill,
-            ok=msg.ok,
-            error=msg.error,
-        )

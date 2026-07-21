@@ -126,6 +126,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.arBridgeServices.telemetry.onDisconnect();
     this.arBridgeServices.robot.onDisconnect();
     this.arBridgeServices.navigation.onDisconnect();
+    this.arBridgeServices.worldAnnotations.clearAll();
     this.arBridgeServices.state.update({
       navigationError: defaultNavigationError(),
       robotRuntime: createDefaultRobotRuntimeState(),
@@ -138,6 +139,9 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     const mode = state.operatingMode;
     if (this._lastSyncedOperatingMode === mode) {
       return;
+    }
+    if (this._lastSyncedOperatingMode === "agent" && mode !== "agent") {
+      this.arBridgeServices.worldAnnotations.clearAll();
     }
     this._lastSyncedOperatingMode = mode;
     this.arBridgeServices.robot.robotMarker?.ui?.setOperatingMode(mode);
@@ -160,6 +164,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     if (phase !== "runtime") {
       robot.clearInactiveState();
       navigation.clearInactiveState();
+      this.arBridgeServices.worldAnnotations.clearAll();
     }
     robot.applyInteractionFromState();
     if (phase === "runtime") {

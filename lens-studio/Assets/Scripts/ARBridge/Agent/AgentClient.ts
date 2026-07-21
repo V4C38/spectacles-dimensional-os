@@ -18,7 +18,7 @@ export class AgentClient {
   public readonly onArSkill = new Signal<ArSkillMessage>();
   public readonly onProtocolError = new Signal<ProtocolParseError>();
 
-  private readonly _skillHandlers = new ArSkillHandlers();
+  private readonly _skillHandlers: ArSkillHandlers;
   private readonly _sendDropLog = { value: -1 };
   private _bound = false;
 
@@ -26,7 +26,15 @@ export class AgentClient {
     private readonly _eventHost: ScriptComponent,
     private readonly _transport: WebSocketTransport | null,
     private readonly _inbound: InboundProcessor | null,
-  ) {}
+    skillHandlers?: ArSkillHandlers,
+  ) {
+    this._skillHandlers =
+      skillHandlers ??
+      new ArSkillHandlers({
+        getHmdWorldTransform: () => null,
+        annotations: null,
+      });
+  }
 
   public bind(): void {
     if (this._bound || !this._inbound) {
@@ -61,6 +69,7 @@ export class AgentClient {
   }
 
   private _handleArSkill(msg: ArSkillMessage): void {
+    this.onArSkill.emit(msg);
     const result = this._skillHandlers.handle(msg);
     if (!this._transport || !this._inbound) {
       return;

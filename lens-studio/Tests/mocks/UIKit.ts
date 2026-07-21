@@ -34,3 +34,15 @@ export const SnapOS2Styles = {
   PrimaryNeutral: "primary-neutral",
   Special: "special",
 };
+
+export function findText(_root: unknown, _name: string): null {
+  return null;
+}
+
+export function findChildRecursive(_root: unknown, _name: string): null {
+  return null;
+}
+
+export function findFirstText(_root: unknown): null {
+  return null;
+}

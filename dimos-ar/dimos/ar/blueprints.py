@@ -39,12 +39,17 @@ except ModuleNotFoundError:
 try:
     from dimos.agents.mcp.mcp_client import McpClient
     from dimos.agents.mcp.mcp_server import McpServer
-    from dimos.ar.agent.skills import AR_AGENT_SYSTEM_PROMPT, ArNavigationSkillContainer
+    from dimos.ar.agent.skills import (
+        AR_AGENT_SYSTEM_PROMPT,
+        ArAnnotationSkillContainer,
+        ArNavigationSkillContainer,
+    )
 
     _AGENT_MODULES: tuple[Any, ...] = (
         McpServer.blueprint(),
         McpClient.blueprint(system_prompt=AR_AGENT_SYSTEM_PROMPT),
         ArNavigationSkillContainer.blueprint(),
+        ArAnnotationSkillContainer.blueprint(),
     )
 except ModuleNotFoundError:
     _AGENT_MODULES = ()

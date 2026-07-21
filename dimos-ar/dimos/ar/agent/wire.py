@@ -135,3 +135,34 @@ def encode_ar_skill(
     if args is not None:
         payload["args"] = args
     return _dumps(payload)
+
+
+def decode_hmd_transform(
+    data: dict[str, Any] | None,
+) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+    """Parse get_user_hmd_transform result data into (position, orientation)."""
+    if not isinstance(data, dict):
+        raise ValueError("HMD transform data must be a JSON object")
+    position = data.get("position")
+    orientation = data.get("orientation")
+    if (
+        not isinstance(position, (list, tuple))
+        or len(position) != 3
+        or not all(isinstance(v, (int, float)) for v in position)
+    ):
+        raise ValueError("HMD transform position must be [x, y, z]")
+    if (
+        not isinstance(orientation, (list, tuple))
+        or len(orientation) != 4
+        or not all(isinstance(v, (int, float)) for v in orientation)
+    ):
+        raise ValueError("HMD transform orientation must be [qx, qy, qz, qw]")
+    return (
+        (float(position[0]), float(position[1]), float(position[2])),
+        (
+            float(orientation[0]),
+            float(orientation[1]),
+            float(orientation[2]),
+            float(orientation[3]),
+        ),
+    )

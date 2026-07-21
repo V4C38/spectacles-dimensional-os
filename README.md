@@ -254,7 +254,7 @@ Toggle Manual Mode from the runtime wrist menu. While navigating, the yellow dir
 <details>
 <summary><h3>Agent Mode</h3></summary>
 
-In Agent Mode, wake-word voice on Spectacles becomes a `user_command` on the bridge. The DimOS LLM agent (OpenAI API on the Mac) calls `relative_move` / `cancel_navigation`; the bridge owns the goal and publishes the same `nav_status` + `path` stream as Manual Mode so the navigation marker snaps to the goal. Dragging the marker during an agent goal takes over with a normal `nav_goal` (latest wins). Requires `OPENAI_API_KEY` and an internet connection for the LLM API. Full-agentic menu entries are stubs and exit clearly as not implemented.
+In Agent Mode, wake-word voice on Spectacles becomes a `user_command` on the bridge. The DimOS LLM agent (OpenAI API on the Mac) can call `relative_move`, `navigate_to_user` ("come to me" / "come here"), `cancel_navigation`, `get_user_pose`, and world-annotation tools (`place_marker`, `draw_line`, `clear_annotation`). Agent tool coordinates are robot-relative meters (forward/left/up); the bridge converts to AR world frame for the Lens. Call `get_user_pose` before "mark where I am" style annotation commands. Navigation goals are owned by the bridge and publish the same `nav_status` + `path` stream as Manual Mode so the navigation marker snaps to the goal. Dragging the marker during an agent goal takes over with a normal `nav_goal` (latest wins). Requires `OPENAI_API_KEY` and an internet connection for the LLM API. Full-agentic menu entries are stubs and exit clearly as not implemented.
 
 </details>
 

@@ -781,28 +781,40 @@ messages via signals and runs `ar_skill` handlers off the WebSocket callback.
 - `skill`: non-empty string naming the Lens-side operation
 - `args` (optional): opaque JSON object — bridge does not validate per-skill schemas
 
-#### Reference AR skills (examples only)
+#### Implemented AR skills
 
-**`get_user_hmd_transform`** — no `args`; result `data`:
+Bridge RPC/skill callers block on a correlated `ar_skill_result` with an
+implementation timeout (`ARBridgeConfig.ar_skill_timeout_s`, default 10 s). The
+wire protocol itself has no timeout field — late or unknown `request_id` results
+are dropped.
+
+**`get_user_hmd_transform`** — no `args`; result `data` on success:
 
 ```json
 { "position": [x, y, z], "orientation": [qx, qy, qz, qw] }
 ```
 
-World frame, metres.
+World frame, metres (Lens camera world pose). Also backs the agent's
+`get_user_pose` LLM tool (bridge converts the result to robot-relative
+meters before returning it to the model). On failure the Lens returns
+`ok: false` with `error` (e.g. `"camera transform unavailable"`).
 
-**`draw_world_annotation`** — example `args`:
+**`draw_world_annotation`** — `args`:
 
 | Field | Purpose |
 |-------|---------|
-| `id` | Stable annotation key |
-| `kind` | Lens rendering hint (`marker`, `line`, …) |
-| `points` | World-frame positions in metres |
-| `active` | `false` removes; default `true` |
+| `id` | Stable annotation key (required) |
+| `kind` | `"marker"` or `"line"` (required when `active` is not `false`) |
+| `points` | World-frame positions in metres — marker: exactly 1; line: ≥2 |
+| `active` | `false` removes by `id`; default `true` |
 | `duration_s` | Auto-remove after N seconds; omit = persist until `active: false` |
-| `label` | Optional text |
+| `label` | Optional text (marker) |
+| `color` | Optional `[r, g, b]` in 0..1 — one uniform color for the whole line |
 
-Custom skills use any `args` shape; document in this appendix when adding handlers.
+Marker: one point + optional `label`. Line: start/stop required; optional
+in-between points are rendered as a polyline. When only two points are given,
+the Lens samples a slight quadratic bezier (~12 points). Custom skills may use
+any `args` shape; document them here when adding handlers.
 
 ## Inbound Messages
 

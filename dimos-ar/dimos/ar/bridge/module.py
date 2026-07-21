@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from dimos_lcm.std_msgs import Bool, String
 
 from dimos.ar.agent.relay import AgentRelay
+from dimos.ar.agent.skill_dispatcher import ArSkillDispatcher, ArSkillError
+from dimos.ar.agent.wire import decode_hmd_transform
 from dimos.ar.bridge.motion_router import MotionRouter
 from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.bridge.profile_rpc_dispatch import dispatch_profile_nowait
@@ -169,6 +171,7 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     ALIGN_REBASE_DIR_STD_RAD: float = 0.5
     ALIGN_REBASE_KEEP: int = 2
     ALIGN_UI_CONFIDENT: float = 0.7
+    ar_skill_timeout_s: float = 10.0
 
 
 class ARBridge(Module):  # type: ignore[misc]
@@ -199,6 +202,7 @@ class ARBridge(Module):  # type: ignore[misc]
     _nav: NavigateGoalHandler
     _motion_router: MotionRouter
     _agent_relay: AgentRelay
+    _ar_skill_dispatcher: ArSkillDispatcher
     _telemetry: TelemetryPublisher
     _ws_server: ARWebSocketServer
     _robot_id: str
@@ -364,6 +368,10 @@ class ARBridge(Module):  # type: ignore[misc]
             sender=sender,
             publish_human_input=self.human_input.publish,
         )
+        ar_skill_dispatcher = ArSkillDispatcher(
+            sender=sender,
+            default_timeout_s=self.config.ar_skill_timeout_s,
+        )
 
         ws_server = ARWebSocketServer(
             port=self.config.port,
@@ -381,11 +389,12 @@ class ARBridge(Module):  # type: ignore[misc]
             on_get_status=self._on_get_status,
             on_set_lidar_mode=self._on_set_lidar_mode,
             on_user_command=agent_relay.on_user_command,
-            on_ar_skill_result=agent_relay.on_ar_skill_result,
+            on_ar_skill_result=ar_skill_dispatcher.on_ar_skill_result,
             on_status_connect=self._send_status_to,
             on_disconnect=self._on_client_disconnect,
         )
         sender.bind(ws_server)
+        ar_skill_dispatcher.bind_connection_count(lambda: ws_server.connection_count)
 
         self._sender = sender
         self._odom = odom
@@ -394,6 +403,7 @@ class ARBridge(Module):  # type: ignore[misc]
         self._nav = nav
         self._motion_router = motion_router
         self._agent_relay = agent_relay
+        self._ar_skill_dispatcher = ar_skill_dispatcher
         self._safety = safety
         self._telemetry = telemetry
         self._ws_server = ws_server
@@ -486,6 +496,100 @@ class ARBridge(Module):  # type: ignore[misc]
         degrees: float = 0.0,
     ) -> str:
         return self._nav.submit_relative_goal(forward, left, degrees)
+
+    @rpc
+    def navigate_to_user(self) -> str:
+        try:
+            result = self._ar_skill_dispatcher.request("get_user_hmd_transform")
+        except ArSkillError as exc:
+            return str(exc)
+        if not result.ok:
+            return result.error or "get_user_hmd_transform failed"
+        try:
+            position, _orientation = decode_hmd_transform(result.data)
+        except ValueError as exc:
+            return str(exc)
+        return self._nav.submit_approach_goal(position)
+
+    @rpc
+    def get_user_pose(self) -> str:
+        """Return the user's pose in robot-relative meters / degrees for the LLM."""
+        try:
+            result = self._ar_skill_dispatcher.request("get_user_hmd_transform")
+        except ArSkillError as exc:
+            return str(exc)
+        if not result.ok:
+            return result.error or "get_user_hmd_transform failed"
+        try:
+            position, orientation = decode_hmd_transform(result.data)
+        except ValueError as exc:
+            return str(exc)
+        relative = self._nav.world_to_robot_relative(position)
+        if isinstance(relative, str):
+            return relative
+        facing = self._nav.world_yaw_degrees_ccw_from_robot(orientation)
+        if isinstance(facing, str):
+            return facing
+        forward, left, up = relative
+        return (
+            f"User is {forward:.2f}m ahead, {left:.2f}m left, {up:.2f}m up "
+            f"from the robot; facing {facing:.1f} degrees CCW from robot heading"
+        )
+
+    @rpc
+    def draw_world_annotation(
+        self,
+        *,
+        annotation_id: str,
+        kind: str | None = None,
+        points: list[list[float]] | None = None,
+        label: str | None = None,
+        active: bool = True,
+        duration_s: float | None = None,
+        color: list[float] | None = None,
+    ) -> str:
+        """Draw or clear a world annotation.
+
+        When ``active`` and ``points`` are provided, each point is
+        ``[forward, left, up]`` meters robot-relative; converted to AR world
+        frame before the Lens ``ar_skill`` round-trip.
+        """
+        args: dict[str, Any] = {"id": annotation_id, "active": bool(active)}
+        if kind is not None:
+            args["kind"] = kind
+        if points is not None and active:
+            world_points: list[list[float]] = []
+            for point in points:
+                if not isinstance(point, (list, tuple)) or len(point) < 2:
+                    return "Annotation points must be [forward, left] or [forward, left, up]"
+                forward = float(point[0])
+                left = float(point[1])
+                up = float(point[2]) if len(point) > 2 else 0.0
+                world = self._nav.robot_relative_to_world(forward, left, up)
+                if isinstance(world, str):
+                    return world
+                world_points.append([world[0], world[1], world[2]])
+            args["points"] = world_points
+        elif points is not None:
+            args["points"] = points
+        if label is not None:
+            args["label"] = label
+        if duration_s is not None:
+            args["duration_s"] = float(duration_s)
+        if color is not None:
+            args["color"] = color
+        try:
+            result = self._ar_skill_dispatcher.request(
+                "draw_world_annotation",
+                args,
+            )
+        except ArSkillError as exc:
+            return str(exc)
+        if not result.ok:
+            return result.error or "draw_world_annotation failed"
+        if active:
+            return f"Annotation '{annotation_id}' drawn"
+        return f"Annotation '{annotation_id}' cleared"
 
     @rpc
     def cancel_navigation(self) -> str:
