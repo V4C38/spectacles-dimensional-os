@@ -52,8 +52,8 @@ cd /path/to/spectacles-dimensional-os
 
 `launcher/scripts/start.sh` prompts for the robot stack:
 
-- `ar_go2` — Unitree Go2 (lightweight agentic)
-- `ar_g1` — Unitree G1 via `unitree_g1_nav_simple` (pose goals; lightweight agentic)
+- `ar_go2` — Unitree Go2 (with agent: MCP + OpenAI)
+- `ar_g1` — Unitree G1 via `unitree_g1_nav_simple` (pose goals; with agent: MCP + OpenAI)
 
 Then starts the bridge. Wait for:
 
@@ -69,7 +69,7 @@ dimos run ar-go2
 dimos run ar-g1
 ```
 
-Set `OPENAI_API_KEY` for agent mode on the lightweight stacks.
+Set `OPENAI_API_KEY` for agent mode. Voice UX and tool list: [main README — Agent Mode](../README.md#agent-mode).
 
 **Supported hardware** (see [main README](../README.md#prerequisites)):
 
@@ -85,7 +85,7 @@ Handshake-driven — the Lens adapts to whatever the active robot profile advert
 
 - `hello.robot` — display identity, body geometry, `tag_tracking_profile` (`tag_ids`, `tag_total_size_m`)
 - `hello.capabilities` — flat map of feature availability + reasons
-- `runtime_snapshot` — bridge + nav state + optional active path on connect / `get_status`
+- `runtime_snapshot` — bridge + nav + optional agent state/detail + optional active path on connect / `get_status`
 - World-frame goals via `nav_goal`; cancel with `cancel_nav_goal`
 - Registration via `registration_command` (`april_tag` or `manual_pose`)
 

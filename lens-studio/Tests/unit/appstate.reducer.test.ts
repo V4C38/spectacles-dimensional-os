@@ -256,7 +256,7 @@ describe("robotActivityPresentation", () => {
           agentSpeechSessionActive: true,
         }),
       ),
-    ).toEqual({ text: "Listening", color: COLOR_WHITE });
+    ).toEqual({ text: "Idle", color: COLOR_WHITE });
 
     expect(
       agentModeActivityPresentation(
@@ -265,7 +265,37 @@ describe("robotActivityPresentation", () => {
           agentActivity: { state: "busy", detail: null },
         }),
       ),
-    ).toEqual({ text: "Executing Command", color: COLOR_WHITE });
+    ).toEqual({ text: "Working", color: COLOR_WHITE });
+
+    expect(
+      agentModeActivityPresentation(
+        baseState({
+          operatingMode: "agent",
+          agentActivity: { state: "busy", detail: "planning route" },
+        }),
+      ),
+    ).toEqual({ text: "Working: planning route", color: COLOR_WHITE });
+
+    expect(
+      agentModeActivityPresentation(
+        baseState({
+          operatingMode: "agent",
+          agentActivity: { state: "busy", detail: "thinking" },
+          navigationState: "navigating",
+          agentSpeechSessionActive: true,
+        }),
+      ),
+    ).toEqual({ text: "Navigating", color: COLOR_WHITE });
+
+    expect(
+      agentModeActivityPresentation(
+        baseState({
+          operatingMode: "agent",
+          agentActivity: { state: "busy", detail: "planning route" },
+          navigationState: "navIntent",
+        }),
+      ),
+    ).toEqual({ text: "Preparing Navigation", color: COLOR_WHITE });
   });
 
   it("shows robot offline when bridge snapshot has no robot", () => {
@@ -304,7 +334,7 @@ describe("robotMarkerSteadyStatePresentation", () => {
     ).toEqual({ text: "Asleep", color: COLOR_WHITE });
   });
 
-  it("agentBusyVfxActive is true for Asleep and Executing, false for Listening and non-agent", () => {
+  it("agentBusyVfxActive is true for Asleep and busy, false for Idle session and non-agent", () => {
     expect(
       agentBusyVfxActive(
         baseState({

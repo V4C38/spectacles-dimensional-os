@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -15,6 +16,9 @@ def _make_bridge_stub() -> ARBridge:
     bridge = ARBridge.__new__(ARBridge)
     bridge._nav = MagicMock()
     bridge._ar_skill_dispatcher = MagicMock()
+    relay = MagicMock()
+    relay.detail_phase.side_effect = lambda *_a, **_k: nullcontext()
+    bridge._agent_relay = relay
     return bridge
 
 

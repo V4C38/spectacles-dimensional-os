@@ -15,7 +15,7 @@ function activeSession(goal: NavigationSession["goal"] = null): NavigationSessio
   };
 }
 
-describe("NavigationController lifecycle decisions", () => {
+describe("NavigationModel lifecycle decisions", () => {
   describe("resolveRetryableNavIntent", () => {
     it("holds navigating when wire state is navigating", () => {
       expect(

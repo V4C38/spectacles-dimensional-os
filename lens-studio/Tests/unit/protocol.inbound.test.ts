@@ -89,7 +89,7 @@ describe("parseInboundMessage", () => {
             orientation: [0, 0, 0, 1],
           },
         },
-        agent: { state: "busy" },
+        agent: { state: "busy", detail: "thinking" },
         path: {
           waypoints: [[1, 2, 3]],
         },
@@ -100,6 +100,7 @@ describe("parseInboundMessage", () => {
     expect(snapshot.path?.waypoints).toEqual([[1, 2, 3]]);
     expect(snapshot.nav.goal?.source).toBe("agent");
     expect(snapshot.agent.state).toBe("busy");
+    expect(snapshot.agent.detail).toBe("thinking");
     const bridgeSnapshot = projectBridgeSession(true, snapshot.bridge, snapshot.ts);
     expect(bridgeSnapshot.robotConnected).toBe(true);
     expect(bridgeSnapshot.worldFrameCommitted).toBe(false);

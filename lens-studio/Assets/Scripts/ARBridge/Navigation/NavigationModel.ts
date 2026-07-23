@@ -109,9 +109,6 @@ export function createInitialNavigationSession(now: number = 0): NavigationSessi
   };
 }
 
-/** @deprecated Use createInitialNavigationSession */
-export const createInitialNavEngineState = createInitialNavigationSession;
-
 function poseDistanceCm(a: vec3, b: vec3): number {
   const dx = a.x - b.x;
   const dy = a.y - b.y;

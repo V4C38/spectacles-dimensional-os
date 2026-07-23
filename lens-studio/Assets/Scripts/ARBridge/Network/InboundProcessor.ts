@@ -282,6 +282,9 @@ export class InboundProcessor {
       ts: snapshot.ts,
       state: snapshot.agent.state,
     };
+    if (snapshot.agent.detail !== undefined) {
+      agentStatus.detail = snapshot.agent.detail;
+    }
     this.onAgentStatus.emit(agentStatus);
 
     if (snapshot.path) {

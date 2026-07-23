@@ -1,7 +1,7 @@
 """AR bridge blueprints — compositions only, no classes or logic.
 
-ar_go2: Unitree Go2 smart stack + lightweight agent runtime + ARBridge
-ar_g1:  Unitree G1 nav-simple stack + lightweight agent runtime + ARBridge
+ar_go2: Unitree Go2 smart stack + agent runtime + ARBridge
+ar_g1:  Unitree G1 nav-simple stack + agent runtime + ARBridge
 
 Stream-name reconciliation (the Go2/G1 stacks publish lidar under various names
 depending on the pipeline) is done here via .remappings([...]).

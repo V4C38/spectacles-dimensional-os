@@ -208,11 +208,6 @@ export class ARBridgeSession extends BaseScriptComponent {
     }
   }
 
-  /** @deprecated Prefer robotRuntime.capabilities from app state after hello. */
-  public hasCapability(capability: string): boolean {
-    return this._inbound?.hasCapability(capability) ?? false;
-  }
-
   public isCapabilityAvailable(capability: string): boolean {
     return this._inbound?.isCapabilityAvailable(capability) ?? true;
   }

@@ -96,14 +96,6 @@ async def api_status() -> dict[str, Any]:
     return manager.snapshot()
 
 
-@app.post("/api/setup/check", dependencies=[Depends(require_local_launcher)])
-async def api_setup_check() -> dict[str, Any]:
-    try:
-        return await manager.run_check()
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
 @app.post("/api/setup", dependencies=[Depends(require_local_launcher)])
 async def api_setup(body: SetupBody) -> dict[str, Any]:
     try:

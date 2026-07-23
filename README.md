@@ -68,7 +68,7 @@ Ensure Spectacles, Mac, and the robot are on the same WiFi. An internet connecti
 
 ### Robot
 
-If you want to use registration via a robot-mounted AprilTag (recommended), print [`dimos-ar/assets/apriltag_robot_a4.pdf`](dimos-ar/assets/apriltag_robot_a4.pdf) (EU paper) or [`dimos-ar/assets/apriltag_robot_letter.pdf`](dimos-ar/assets/apriltag_robot_letter.pdf) (US paper).
+If you want to use registration via a robot-mounted AprilTag (recommended), print [`dimos-ar/assets/apriltag_robot_0_a4.pdf`](dimos-ar/assets/apriltag_robot_0_a4.pdf) (EU paper) or [`dimos-ar/assets/apriltag_robot_0_letter.pdf`](dimos-ar/assets/apriltag_robot_0_letter.pdf) (US paper).
 
 The default size is **7×7 cm** for Go2 and **10×10 cm** for G1. Multiple tags can be mounted (front & back on G1, etc.); this improves tracking and yaw alignment.
 
@@ -204,7 +204,7 @@ flowchart LR
 | Message | Key fields |
 |---------|------------|
 | `hello` | `protocol_version`, `robot` (`robot_id`, `display_name`, `body_bounds_m`, `footprint_m`, `tag_tracking_profile`), `capabilities` |
-| `runtime_snapshot` | `bridge`, `nav.state`, optional `path` |
+| `runtime_snapshot` | `bridge`, `nav.state`, optional `nav.goal`, optional `path`, optional `agent.state` / `agent.detail` |
 
 **Live telemetry (bridge → Lens)**
 
@@ -215,6 +215,9 @@ flowchart LR
 | `pose` | `position`, `orientation`, optional `speed_mps`, `velocity_mps`, `yaw_rate_rad_s` |
 | `path` | `waypoints` |
 | `nav_status` | `state` (`idle` \| `navIntent` \| `navigating` \| `resolved`), optional `outcome`, `retryable`, `goal` (`source`, pose) |
+| `agent_response` | `text` (LLM reply for debug line 8) |
+| `agent_status` | `state` (`idle` \| `busy`), optional `detail` (`thinking`, `planning route`, `locating you`, `marking space`) |
+| `ar_skill` | `request_id`, `skill`, optional `args` (Lens executes; replies with `ar_skill_result`) |
 | `world_frame_correction` | `trans_delta_m`, `yaw_delta_deg`, `alignment_confidence` |
 | `capture_policy` | `max_capture_distance_m`, `min_capture_distance_m`, `max_capture_speed_mps`, `static_speed_mps`, `min_observations` |
 | `camera_frame_ack` | `seq`, `capturing_budgeted_complete` |
@@ -233,6 +236,7 @@ flowchart LR
 | `joystick_command` | `vx`, `vy`, `wz` stick deflection in [-1, 1] |
 | `emergency_stop` | - |
 | `user_command` | transcribed voice / typed text for the DimOS agent |
+| `ar_skill_result` | `request_id`, `skill`, `ok`, optional `data` / `error` |
 | `ping` / `pong` | clock sync for frame timestamps |
 
 When the protocol changes, update these together in one change:
@@ -267,7 +271,39 @@ Toggle Manual Mode from the runtime wrist menu. While navigating, the yellow dir
 <details>
 <summary><h3>Agent Mode</h3></summary>
 
-In Agent Mode, wake-word voice on Spectacles becomes a `user_command` on the bridge. The DimOS LLM agent (OpenAI API on the Mac) can call `relative_move`, `navigate_to_user` ("come to me" / "come here"), `cancel_navigation`, `get_user_pose`, and world-annotation tools (`place_marker`, `draw_line`, `clear_annotation`). Agent tool coordinates are robot-relative meters (forward/left/up); the bridge converts to AR world frame for the Lens. Call `get_user_pose` before "mark where I am" style annotation commands. Navigation goals are owned by the bridge and publish the same `nav_status` + `path` stream as Manual Mode so the navigation marker snaps to the goal. Dragging the marker during an agent goal takes over with a normal `nav_goal` (latest wins). Requires `OPENAI_API_KEY` and an internet connection for the LLM API.
+In **Agent Mode**, wake-word voice on Spectacles becomes a `user_command` on the bridge. The DimOS LLM agent (OpenAI API on the Mac) runs tools and replies with short text shown on the AR debug console (line 8). There is no speech output from the agent.
+
+**Prerequisites**
+
+- Set `OPENAI_API_KEY` in the web launcher (`http://127.0.0.1:8790`) or in the environment before `./launcher/scripts/start.sh`. The launcher warns if the key is unset.
+- Internet on the Mac is required for the LLM API only (robot control itself stays on the local network).
+
+**Voice UX**
+
+- Wake with a listed variant (“robot”, “rowbot”, “robo”, …). The session stays open for **15 s** of silence, then returns to wake-wait.
+- Say **“stop”** for emergency stop (same capability gate as Manual Mode).
+- Activity line labels:
+  - **Asleep** — waiting for the wake word
+  - **Idle** — speech session open, not executing
+  - **Working: …** — LLM/tool phases (`thinking`, `planning route`, `locating you`, `marking space`)
+  - **Preparing Navigation** / **Navigating** — shared with Manual Mode while a nav session is active
+- Debug console line 7 shows ASR / prompt; line 8 shows the agent reply (red/yellow when classified as error/warn).
+
+**Supported tools**
+
+| Tool | Use |
+|------|-----|
+| `relative_move` | Move forward/left/yaw in robot-relative meters / degrees |
+| `navigate_to_user` | “Come here” / approach the headset |
+| `cancel_navigation` | Cancel the current nav goal |
+| `get_user_pose` | Locate the user before “mark where I am” style annotations |
+| `place_marker` / `draw_line` / `clear_annotation` | World-anchored AR annotations |
+
+Coordinates for agent tools are robot-relative meters (forward/left/up); the bridge converts to AR world frame for the Lens.
+
+**Shared nav UI**
+
+Agent goals publish the same `nav_status` + `path` stream as Manual Mode, so the navigation marker snaps to the goal. Dragging the marker during an agent goal takes over with a normal `nav_goal` (latest wins).
 
 </details>
 
@@ -301,7 +337,11 @@ npm test
 | Lens cannot connect | Confirm Spectacles and Mac share WiFi; use the LAN IP from the `Bridge ready` banner, not `127.0.0.1`. |
 | AprilTag not detected | Move within ~1.5 m; improve lighting; walk around the robot during scan; verify print scale (70 mm outer edge for default Go2 tag). |
 | Drift after registration | Normal at first - refinement improves as the robot moves and stops; watch for “Refined Tracking” after larger corrections. |
-| Navigation unavailable | Check `hello.capabilities.nav` in bridge logs; G1 navigation needs the Unitree DDS Python packages in the DimOS `.venv`. |
+| Navigation unavailable | Check `hello.capabilities.navigation` in bridge logs; G1 navigation needs the Unitree DDS Python packages in the DimOS `.venv`. |
+| Agent does not respond | Confirm `OPENAI_API_KEY` is set; check the launcher warning; verify internet on the Mac. |
+| Wake word ignored | Say a listed variant; check line 7 for ASR text; ensure Agent mode is selected in the wrist menu. |
+| Command sent but robot does not move | World frame must be committed; robot connected; read red/yellow agent response on line 8. |
+| “Navigation failed” after agent command | Same as manual nav — check `hello.capabilities.navigation`, planner logs. |
 
 </details>
 

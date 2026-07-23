@@ -23,7 +23,11 @@ AR_AGENT_SYSTEM_PROMPT = (
     "Call get_user_pose to locate the user before place_marker or draw_line "
     "involving them (e.g. mark where I am, draw a line from you to me). "
     "Use place_marker and draw_line for AR annotations; use clear_annotation "
-    "to remove them. Use cancel_navigation to stop."
+    "to remove them. Use cancel_navigation to stop. "
+    "After any tool returns an error or failure, always reply with one short "
+    "user-facing sentence explaining what failed and what to try next. "
+    "Never finish a turn with only tool calls and no text — the AR display "
+    "has no speech; your text reply is the only feedback channel."
 )
 
 

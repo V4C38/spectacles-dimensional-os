@@ -10,8 +10,9 @@ import {
 import { AppStateStore } from "../AppState";
 import { isCapabilityAvailable } from "../Robot/RobotRuntimeModel";
 import { NavigationController } from "../Navigation/NavigationController";
-import { COLOR_WARN } from "../UI/UIKit";
+import { COLOR_ERROR, COLOR_WARN } from "../UI/UIKit";
 import { UILogger } from "../UI/UILogger";
+import { classifyAgentResponseText } from "./AgentResponseClassification";
 import {
   AGENT_SESSION_IDLE_TIMEOUT_S,
   closeAgentSpeechSession,
@@ -180,8 +181,9 @@ export class AgentSpeechController {
         this._deps.uiLogger.setAgentResponse({
           text: BRIDGE_NOT_READY_RESPONSE,
           state: "idle",
-          warn: true,
+          severity: "error",
         });
+        this._deps.uiLogger.show(BRIDGE_NOT_READY_RESPONSE, COLOR_ERROR, 3.0);
       }
       this._restartAsrForSilenceWindow();
     }
@@ -195,8 +197,9 @@ export class AgentSpeechController {
       this._deps.uiLogger.setAgentResponse({
         text: ESTOP_NOT_SENT_RESPONSE,
         state: "idle",
-        warn: true,
+        severity: "error",
       });
+      this._deps.uiLogger.show(ESTOP_NOT_SENT_RESPONSE, COLOR_ERROR, 3.0);
     }
   }
 
@@ -214,6 +217,16 @@ export class AgentSpeechController {
       errorCode === AsrModule.AsrStatusCode.Unauthenticated
       || errorCode === AsrModule.AsrStatusCode.NoInternet
     ) {
+      const asrUserMessage =
+        errorCode === AsrModule.AsrStatusCode.Unauthenticated
+          ? "Speech recognition unavailable (not authenticated)"
+          : "Speech recognition unavailable (no internet)";
+      this._deps.uiLogger.setAgentResponse({
+        text: asrUserMessage,
+        state: "idle",
+        severity: "error",
+      });
+      this._deps.uiLogger.show(asrUserMessage, COLOR_ERROR, 3.0);
       print("AgentSpeechController: ASR not restarted (connectivity/auth error)");
       return;
     }
@@ -265,6 +278,7 @@ export class AgentSpeechController {
       this._deps.uiLogger.setAgentResponse({
         text: this._latestAgentResponseText,
         state: msg.state,
+        severity: classifyAgentResponseText(this._latestAgentResponseText),
       });
     }
   }
@@ -272,9 +286,14 @@ export class AgentSpeechController {
   private _onAgentResponse(msg: AgentResponseMessage): void {
     this._latestAgentResponseText = msg.text;
     const agentState = this._deps.appStateStore.snapshot.agentActivity.state;
+    const severity = classifyAgentResponseText(msg.text);
     this._deps.uiLogger.setAgentResponse({
       text: msg.text,
       state: agentState,
+      severity,
     });
+    if (severity === "error") {
+      this._deps.uiLogger.show(msg.text, COLOR_ERROR, 3.0);
+    }
   }
 }

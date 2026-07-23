@@ -66,7 +66,7 @@ describe("InboundProcessor runtime_snapshot emit", () => {
             orientation: [0, 0, 0, 1],
           },
         },
-        agent: { state: "busy" },
+        agent: { state: "busy", detail: "planning route" },
       }),
     );
 
@@ -82,7 +82,12 @@ describe("InboundProcessor runtime_snapshot emit", () => {
       },
     });
     expect(agentStatuses).toEqual([
-      { type: "agent_status", ts: 12, state: "busy" },
+      {
+        type: "agent_status",
+        ts: 12,
+        state: "busy",
+        detail: "planning route",
+      },
     ]);
   });
 });

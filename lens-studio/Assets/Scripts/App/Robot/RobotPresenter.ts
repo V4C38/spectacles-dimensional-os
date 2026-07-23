@@ -146,11 +146,6 @@ export class RobotPresenter {
     this._lidar?.onPresentationStateChanged(this._lidarContext(state));
   }
 
-  /** @deprecated Use syncLidarPresentation */
-  public refreshLidarPresentation(state?: AppStateData): void {
-    this.syncLidarPresentation(state);
-  }
-
   private _applyAppState(state: AppStateData): void {
     this.robotMarker?.applyAppState(state, this._latestUiLogEntry);
   }

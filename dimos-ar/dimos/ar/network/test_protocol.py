@@ -583,7 +583,7 @@ def test_encode_runtime_snapshot() -> None:
             bridge=bridge,
             nav={"state": "navigating", "goal": goal},
             path={"waypoints": [[1.0, 2.0, 3.0]]},
-            agent={"state": "busy"},
+            agent={"state": "busy", "detail": "planning route"},
             ts=5.0,
         )
     )
@@ -591,7 +591,7 @@ def test_encode_runtime_snapshot() -> None:
     assert raw["robot_id"] == "unitree_go2"
     assert raw["nav"]["state"] == "navigating"
     assert raw["nav"]["goal"] == goal
-    assert raw["agent"]["state"] == "busy"
+    assert raw["agent"] == {"state": "busy", "detail": "planning route"}
     assert raw["path"]["waypoints"] == [[1.0, 2.0, 3.0]]
     assert "streams_active" not in raw["bridge"]
 

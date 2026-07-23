@@ -16,7 +16,12 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from dimos_lcm.std_msgs import Bool, String
 
-from dimos.ar.agent.relay import AgentRelay
+from dimos.ar.agent.relay import (
+    DETAIL_LOCATING_YOU,
+    DETAIL_MARKING_SPACE,
+    DETAIL_PLANNING_ROUTE,
+    AgentRelay,
+)
 from dimos.ar.agent.skill_dispatcher import ArSkillDispatcher, ArSkillError
 from dimos.ar.agent.wire import decode_hmd_transform
 from dimos.ar.bridge.motion_router import MotionRouter
@@ -97,8 +102,8 @@ def _pose_stamped_from_odometry(msg: Odometry) -> PoseStamped:
 
 class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     port: int = 8787
-    # max_message_bytes: Spectacles IntermediateQuality stills are 0.3-1.5 MB (see
-    # scripts/frame_probe.py). 4 MB is a comfortable upper bound.
+    # max_message_bytes: Spectacles IntermediateQuality stills are 0.3-1.5 MB.
+    # 4 MB is a comfortable upper bound.
     max_message_bytes: int = 4_194_304
     max_range_m: float | None = None
     obstacle_height_threshold_m: float = 0.08
@@ -495,46 +500,50 @@ class ARBridge(Module):  # type: ignore[misc]
         left: float = 0.0,
         degrees: float = 0.0,
     ) -> str:
-        return self._nav.submit_relative_goal(forward, left, degrees)
+        with self._agent_relay.detail_phase(DETAIL_PLANNING_ROUTE):
+            return self._nav.submit_relative_goal(forward, left, degrees)
 
     @rpc
     def navigate_to_user(self) -> str:
-        try:
-            result = self._ar_skill_dispatcher.request("get_user_hmd_transform")
-        except ArSkillError as exc:
-            return str(exc)
-        if not result.ok:
-            return result.error or "get_user_hmd_transform failed"
-        try:
-            position, _orientation = decode_hmd_transform(result.data)
-        except ValueError as exc:
-            return str(exc)
-        return self._nav.submit_approach_goal(position)
+        with self._agent_relay.detail_phase(DETAIL_LOCATING_YOU):
+            try:
+                result = self._ar_skill_dispatcher.request("get_user_hmd_transform")
+            except ArSkillError as exc:
+                return str(exc)
+            if not result.ok:
+                return result.error or "get_user_hmd_transform failed"
+            try:
+                position, _orientation = decode_hmd_transform(result.data)
+            except ValueError as exc:
+                return str(exc)
+        with self._agent_relay.detail_phase(DETAIL_PLANNING_ROUTE):
+            return self._nav.submit_approach_goal(position)
 
     @rpc
     def get_user_pose(self) -> str:
         """Return the user's pose in robot-relative meters / degrees for the LLM."""
-        try:
-            result = self._ar_skill_dispatcher.request("get_user_hmd_transform")
-        except ArSkillError as exc:
-            return str(exc)
-        if not result.ok:
-            return result.error or "get_user_hmd_transform failed"
-        try:
-            position, orientation = decode_hmd_transform(result.data)
-        except ValueError as exc:
-            return str(exc)
-        relative = self._nav.world_to_robot_relative(position)
-        if isinstance(relative, str):
-            return relative
-        facing = self._nav.world_yaw_degrees_ccw_from_robot(orientation)
-        if isinstance(facing, str):
-            return facing
-        forward, left, up = relative
-        return (
-            f"User is {forward:.2f}m ahead, {left:.2f}m left, {up:.2f}m up "
-            f"from the robot; facing {facing:.1f} degrees CCW from robot heading"
-        )
+        with self._agent_relay.detail_phase(DETAIL_LOCATING_YOU):
+            try:
+                result = self._ar_skill_dispatcher.request("get_user_hmd_transform")
+            except ArSkillError as exc:
+                return str(exc)
+            if not result.ok:
+                return result.error or "get_user_hmd_transform failed"
+            try:
+                position, orientation = decode_hmd_transform(result.data)
+            except ValueError as exc:
+                return str(exc)
+            relative = self._nav.world_to_robot_relative(position)
+            if isinstance(relative, str):
+                return relative
+            facing = self._nav.world_yaw_degrees_ccw_from_robot(orientation)
+            if isinstance(facing, str):
+                return facing
+            forward, left, up = relative
+            return (
+                f"User is {forward:.2f}m ahead, {left:.2f}m left, {up:.2f}m up "
+                f"from the robot; facing {facing:.1f} degrees CCW from robot heading"
+            )
 
     @rpc
     def draw_world_annotation(
@@ -554,42 +563,46 @@ class ARBridge(Module):  # type: ignore[misc]
         ``[forward, left, up]`` meters robot-relative; converted to AR world
         frame before the Lens ``ar_skill`` round-trip.
         """
-        args: dict[str, Any] = {"id": annotation_id, "active": bool(active)}
-        if kind is not None:
-            args["kind"] = kind
-        if points is not None and active:
-            world_points: list[list[float]] = []
-            for point in points:
-                if not isinstance(point, (list, tuple)) or len(point) < 2:
-                    return "Annotation points must be [forward, left] or [forward, left, up]"
-                forward = float(point[0])
-                left = float(point[1])
-                up = float(point[2]) if len(point) > 2 else 0.0
-                world = self._nav.robot_relative_to_world(forward, left, up)
-                if isinstance(world, str):
-                    return world
-                world_points.append([world[0], world[1], world[2]])
-            args["points"] = world_points
-        elif points is not None:
-            args["points"] = points
-        if label is not None:
-            args["label"] = label
-        if duration_s is not None:
-            args["duration_s"] = float(duration_s)
-        if color is not None:
-            args["color"] = color
-        try:
-            result = self._ar_skill_dispatcher.request(
-                "draw_world_annotation",
-                args,
-            )
-        except ArSkillError as exc:
-            return str(exc)
-        if not result.ok:
-            return result.error or "draw_world_annotation failed"
-        if active:
-            return f"Annotation '{annotation_id}' drawn"
-        return f"Annotation '{annotation_id}' cleared"
+        with self._agent_relay.detail_phase(DETAIL_MARKING_SPACE):
+            args: dict[str, Any] = {"id": annotation_id, "active": bool(active)}
+            if kind is not None:
+                args["kind"] = kind
+            if points is not None and active:
+                world_points: list[list[float]] = []
+                for point in points:
+                    if not isinstance(point, (list, tuple)) or len(point) < 2:
+                        return (
+                            "Annotation points must be [forward, left] or "
+                            "[forward, left, up]"
+                        )
+                    forward = float(point[0])
+                    left = float(point[1])
+                    up = float(point[2]) if len(point) > 2 else 0.0
+                    world = self._nav.robot_relative_to_world(forward, left, up)
+                    if isinstance(world, str):
+                        return world
+                    world_points.append([world[0], world[1], world[2]])
+                args["points"] = world_points
+            elif points is not None:
+                args["points"] = points
+            if label is not None:
+                args["label"] = label
+            if duration_s is not None:
+                args["duration_s"] = float(duration_s)
+            if color is not None:
+                args["color"] = color
+            try:
+                result = self._ar_skill_dispatcher.request(
+                    "draw_world_annotation",
+                    args,
+                )
+            except ArSkillError as exc:
+                return str(exc)
+            if not result.ok:
+                return result.error or "draw_world_annotation failed"
+            if active:
+                return f"Annotation '{annotation_id}' drawn"
+            return f"Annotation '{annotation_id}' cleared"
 
     @rpc
     def cancel_navigation(self) -> str:

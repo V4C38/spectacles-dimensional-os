@@ -21,10 +21,10 @@ Keep this document, `dimos/ar/network/protocol.py`, and
   in AR world frame (same conventions as `nav_goal`). Agent-issued and user-issued goals
   share this message; distinguish by `source`.
 - **`runtime_snapshot.nav.goal`:** same optional block (derived from the same wire dict).
-- **`runtime_snapshot.agent`:** `{"state": "idle" | "busy"}` so reconnecting clients restore
-  agent activity instead of assuming idle.
-- **`hello.capabilities`:** drops unused stub keys `spatial_memory` and `object_detection`
-  (always unavailable; never gated agent mode). Keeps `navigation` alongside transport keys.
+- **`runtime_snapshot.agent`:** `{"state": "idle" | "busy", "detail"?: string}` so
+  reconnecting clients restore agent activity instead of assuming idle.
+- **`hello.capabilities`:** removes unused capability keys; keeps `navigation` alongside
+  transport keys.
 
 ### v17 — Agent mode wire + AR skills
 
@@ -36,8 +36,7 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 - **AR skills (new):** `ar_skill` (bridge → Lens) and `ar_skill_result` (Lens → bridge).
   Envelope-only validation — `skill`, `request_id`, opaque `args` / `data`; no per-skill
   schema enforcement on the bridge.
-- **`hello.capabilities`:** adds agent-operation keys (`navigation`, plus later-removed
-  stubs `spatial_memory` / `object_detection`) alongside transport keys. Informational
+- **`hello.capabilities`:** adds `navigation` alongside transport keys. Informational
   only — agent mode is always available in the Lens UI; these keys never gate the mode.
 - **Non-blocking:** agent inbound messages use the bridge `BACKGROUND` dispatch lane;
   handlers must return immediately (no LLM turn waits, no synchronous `ar_skill`
@@ -365,7 +364,8 @@ navigation is in progress.
     }
   },
   "agent": {
-    "state": "busy"
+    "state": "busy",
+    "detail": "planning route"
   },
   "path": {
     "waypoints": [[1.0, 2.0, 3.0]]
@@ -385,6 +385,7 @@ Fields:
 - `nav.goal` (optional): active goal pose + provenance — same shape as `nav_status.goal`;
   present while a session is active
 - `agent.state`: `"idle"` or `"busy"`
+- `agent.detail` (optional): coarse busy-phase label (same vocabulary as `agent_status.detail`)
 - `path` (optional): present only when a navigating path is cached; omitted when
   idle
 
@@ -748,11 +749,17 @@ messages via signals and runs `ar_skill` handlers off the WebSocket callback.
 #### `agent_status` (bridge → Lens)
 
 ```json
-{ "type": "agent_status", "ts": 1730000000.123, "state": "busy", "detail": "navigating" }
+{ "type": "agent_status", "ts": 1730000000.123, "state": "busy", "detail": "planning route" }
 ```
 
 - `state`: `"idle"` or `"busy"`
-- `detail` (optional): human-readable sub-state
+- `detail` (optional): coarse busy-phase label for the Lens activity line. Fixed vocabulary:
+  - `"thinking"` — LLM turn started; default until a more specific phase
+  - `"planning route"` — computing/dispatching a nav goal
+  - `"locating you"` — HMD pose round-trip (`get_user_pose`, `navigate_to_user`)
+  - `"marking space"` — drawing/clearing an AR annotation
+  Walking after a goal is accepted uses shared `nav_status` (`Navigating` /
+  `Preparing Navigation` on the Lens), not a wire detail.
 
 #### `ar_skill` (bridge → Lens)
 

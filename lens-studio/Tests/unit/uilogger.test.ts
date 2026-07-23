@@ -133,7 +133,7 @@ describe("UILogger console output", () => {
     logger.show("remove me", new vec4(1, 1, 1, 1));
     logger.setCameraCaptureState("capturing");
     logger.setAgentPrompt({ text: "robot go", valid: true });
-    logger.setAgentResponse({ text: "On my way", state: "idle" });
+    logger.setAgentResponse({ text: "On my way", state: "idle", severity: "ok" });
     logger.clear();
 
     for (let i = 0; i < DEBUG_CONSOLE_SCROLL_LINE_COUNT; i++) {
@@ -224,14 +224,14 @@ describe("UILogger agent response line", () => {
   });
 
   it("renders busy responses in yellow", () => {
-    logger.setAgentResponse({ text: "Working on it", state: "busy" });
+    logger.setAgentResponse({ text: "Working on it", state: "busy", severity: "ok" });
 
     expect(agentResponseLineText(lines)).toBe("[12:00:00] Agent response: Working on it");
     expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
   });
 
-  it("renders idle responses in white", () => {
-    logger.setAgentResponse({ text: "Done", state: "idle" });
+  it("renders idle ok responses in white", () => {
+    logger.setAgentResponse({ text: "Done", state: "idle", severity: "ok" });
 
     expect(agentResponseLineText(lines)).toBe("[12:00:00] Agent response: Done");
     expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 1, z: 1, w: 1 });
@@ -239,19 +239,32 @@ describe("UILogger agent response line", () => {
 
   it("renders warn idle responses in yellow", () => {
     logger.setAgentResponse({
+      text: "Navigation cancelled",
+      state: "idle",
+      severity: "warn",
+    });
+
+    expect(agentResponseLineText(lines)).toBe(
+      "[12:00:00] Agent response: Navigation cancelled",
+    );
+    expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
+  });
+
+  it("renders error idle responses in red", () => {
+    logger.setAgentResponse({
       text: "command not sent (bridge not ready)",
       state: "idle",
-      warn: true,
+      severity: "error",
     });
 
     expect(agentResponseLineText(lines)).toBe(
       "[12:00:00] Agent response: command not sent (bridge not ready)",
     );
-    expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
+    expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 0, z: 0, w: 1 });
   });
 
   it("restores the response placeholder when null", () => {
-    logger.setAgentResponse({ text: "Done", state: "idle" });
+    logger.setAgentResponse({ text: "Done", state: "idle", severity: "ok" });
     logger.setAgentResponse(null);
 
     expect(agentResponseLineText(lines)).toBe("[12:00:00] Agent response: ...");

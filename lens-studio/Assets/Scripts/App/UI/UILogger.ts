@@ -1,11 +1,13 @@
 import { CameraCaptureState } from "../../ARBridge/Camera/CameraCaptureSession";
 import {
   findText,
+  COLOR_ERROR,
   COLOR_SUCCESS,
   COLOR_WARN,
   COLOR_WHITE,
 } from "./UIKit";
 import type { AgentActivityState } from "../AppState";
+import type { AgentResponseSeverity } from "../Agent/AgentResponseClassification";
 
 export interface UILogEntry {
   text: string;
@@ -49,7 +51,7 @@ export interface AgentPromptPresentation {
 export interface AgentResponsePresentation {
   text: string;
   state: AgentActivityState;
-  warn?: boolean;
+  severity: AgentResponseSeverity;
 }
 
 export const AGENT_PROMPT_PLACEHOLDER = "User ASR: ...";
@@ -203,10 +205,12 @@ export class UILogger {
       this._renderAgentResponseLine();
       return;
     }
-    const color =
-      presentation.state === "busy" || presentation.warn === true
-        ? COLOR_WARN
-        : COLOR_WHITE;
+    let color = COLOR_WHITE;
+    if (presentation.severity === "error") {
+      color = COLOR_ERROR;
+    } else if (presentation.severity === "warn" || presentation.state === "busy") {
+      color = COLOR_WARN;
+    }
     this._agentResponseEntry = {
       text: `Agent response: ${presentation.text}`,
       color: cloneColor(color),

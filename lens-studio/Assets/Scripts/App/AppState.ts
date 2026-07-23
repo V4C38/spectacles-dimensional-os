@@ -134,7 +134,7 @@ export function navigationErrorPresentation(
   return null;
 }
 
-/** Robot HUD + menu activity line (Idle, Navigating, outcome, future agent bridge states). */
+/** Robot HUD + menu activity line (Idle/Asleep, Navigating, Working, navigation outcomes). */
 export function robotActivityPresentation(
   state: AppStateData,
 ): StatusTextPresentation {
@@ -149,18 +149,28 @@ export function agentBusyVfxActive(state: AppStateData): boolean {
     return false;
   }
   // Busy VFX while executing, or while asleep (waiting for wake word).
-  // Idle VFX only while Listening (session open, not executing).
+  // Idle VFX only while session open and not executing.
   return state.agentActivity.state === "busy" || !state.agentSpeechSessionActive;
 }
 
 export function agentModeActivityPresentation(
   state: AppStateData,
 ): StatusTextPresentation {
+  if (state.navigationState === "navigating") {
+    return { text: "Navigating", color: COLOR_WHITE };
+  }
+  if (state.navigationState === "navIntent") {
+    return { text: "Preparing Navigation", color: COLOR_WHITE };
+  }
   if (state.agentActivity.state === "busy") {
-    return { text: "Executing Command", color: COLOR_WHITE };
+    const detail = state.agentActivity.detail;
+    if (detail && detail.trim().length > 0) {
+      return { text: `Working: ${detail}`, color: COLOR_WHITE };
+    }
+    return { text: "Working", color: COLOR_WHITE };
   }
   if (state.agentSpeechSessionActive) {
-    return { text: "Listening", color: COLOR_WHITE };
+    return { text: "Idle", color: COLOR_WHITE };
   }
   return { text: "Asleep", color: COLOR_WHITE };
 }

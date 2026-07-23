@@ -77,12 +77,45 @@ def test_on_agent_idle_emits_status_on_change() -> None:
     assert relay.state == "idle"
     relay.on_agent_idle(False)
     assert relay.state == "busy"
+    assert relay.detail == "thinking"
     relay.on_agent_idle(False)  # no duplicate
     relay.on_agent_idle(True)
     assert relay.state == "idle"
+    assert relay.detail is None
     payloads = [json.loads(call.args[0]) for call in server.schedule_send.call_args_list]
     assert [p["type"] for p in payloads] == ["agent_status", "agent_status"]
     assert payloads[0]["state"] == "busy"
+    assert payloads[0]["detail"] == "thinking"
     assert payloads[1]["state"] == "idle"
+    assert "detail" not in payloads[1]
     assert relay.agent_wire_dict() == {"state": "idle"}
+
+
+def test_set_detail_emits_while_busy() -> None:
+    relay, _published, server = _make_relay()
+    relay.on_agent_idle(False)
+    server.schedule_send.reset_mock()
+    relay.set_detail("planning route")
+    assert relay.detail == "planning route"
+    payloads = [json.loads(call.args[0]) for call in server.schedule_send.call_args_list]
+    assert payloads == [
+        {
+            "type": "agent_status",
+            "ts": payloads[0]["ts"],
+            "state": "busy",
+            "detail": "planning route",
+        }
+    ]
+    assert relay.agent_wire_dict() == {"state": "busy", "detail": "planning route"}
+
+
+def test_detail_phase_restores_previous() -> None:
+    relay, _published, server = _make_relay()
+    relay.on_agent_idle(False)
+    server.schedule_send.reset_mock()
+    with relay.detail_phase("marking space"):
+        assert relay.detail == "marking space"
+    assert relay.detail == "thinking"
+    payloads = [json.loads(call.args[0]) for call in server.schedule_send.call_args_list]
+    assert [p.get("detail") for p in payloads] == ["marking space", "thinking"]
 

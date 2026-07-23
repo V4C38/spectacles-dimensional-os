@@ -290,6 +290,7 @@ export interface SnapshotNavState {
 
 export interface SnapshotAgentState {
   state: WireAgentState;
+  detail?: string;
 }
 
 export interface SnapshotPathState {
@@ -598,7 +599,11 @@ function parseSnapshotAgent(raw: unknown): SnapshotAgentState {
   if (state !== "idle" && state !== "busy") {
     throw new Error(`Missing or invalid field: state`);
   }
-  return { state };
+  const parsed: SnapshotAgentState = { state };
+  if (typeof agent.detail === "string") {
+    parsed.detail = agent.detail;
+  }
+  return parsed;
 }
 
 function parseSnapshotPath(raw: unknown): SnapshotPathState {
@@ -1352,12 +1357,4 @@ export function deriveLinkState(
   return deriveLinkStateFromSnapshot(
     projectBridgeSession(true, status),
   );
-}
-
-/** @deprecated Use projectBridgeSession */
-export function projectBridgeSnapshot(
-  handshakeReady: boolean,
-  status: BridgeStatusMessage | null,
-): BridgeSnapshot {
-  return projectBridgeSession(handshakeReady, status);
 }
