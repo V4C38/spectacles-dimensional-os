@@ -73,8 +73,6 @@ def g1_capabilities(
             else "No safe G1 high-level stop interface is available in this runtime.",
         ),
         "navigation": CapabilityState(True),
-        "spatial_memory": CapabilityState(False, "Not in ar_g1 stack"),
-        "object_detection": CapabilityState(False, "Not in ar_g1 stack"),
     }
 
 

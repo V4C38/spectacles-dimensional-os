@@ -23,6 +23,8 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 - **`runtime_snapshot.nav.goal`:** same optional block (derived from the same wire dict).
 - **`runtime_snapshot.agent`:** `{"state": "idle" | "busy"}` so reconnecting clients restore
   agent activity instead of assuming idle.
+- **`hello.capabilities`:** drops unused stub keys `spatial_memory` and `object_detection`
+  (always unavailable; never gated agent mode). Keeps `navigation` alongside transport keys.
 
 ### v17 — Agent mode wire + AR skills
 
@@ -34,9 +36,9 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 - **AR skills (new):** `ar_skill` (bridge → Lens) and `ar_skill_result` (Lens → bridge).
   Envelope-only validation — `skill`, `request_id`, opaque `args` / `data`; no per-skill
   schema enforcement on the bridge.
-- **`hello.capabilities`:** adds agent-operation keys (`navigation`, `spatial_memory`,
-  `object_detection`, …) alongside transport keys. Informational only — agent mode is
-  always available in the Lens UI; these keys never gate the mode.
+- **`hello.capabilities`:** adds agent-operation keys (`navigation`, plus later-removed
+  stubs `spatial_memory` / `object_detection`) alongside transport keys. Informational
+  only — agent mode is always available in the Lens UI; these keys never gate the mode.
 - **Non-blocking:** agent inbound messages use the bridge `BACKGROUND` dispatch lane;
   handlers must return immediately (no LLM turn waits, no synchronous `ar_skill`
   round-trips on the WebSocket read loop). No wire timeouts.
@@ -282,9 +284,7 @@ capability map, then sends a `runtime_snapshot` (see below).
     "path":                               { "available": true,  "reason": null },
     "cancel_nav_goal":                        { "available": true,  "reason": null },
     "emergency_stop":                     { "available": false, "reason": "No safe stop interface is available in this runtime." },
-    "navigation":                         { "available": true,  "reason": null },
-    "spatial_memory":                     { "available": false, "reason": "Not in ar_go2 stack" },
-    "object_detection":                   { "available": false, "reason": "Not in ar_go2 stack" }
+    "navigation":                         { "available": true,  "reason": null }
   }
 }
 ```

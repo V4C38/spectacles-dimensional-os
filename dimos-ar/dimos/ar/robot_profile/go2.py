@@ -31,8 +31,6 @@ GO2_CAPABILITIES: dict[str, CapabilityState] = {
     "cancel_nav_goal": CapabilityState(True),
     "emergency_stop": CapabilityState(True),
     "navigation": CapabilityState(True),
-    "spatial_memory": CapabilityState(False, "Not in ar_go2 stack"),
-    "object_detection": CapabilityState(False, "Not in ar_go2 stack"),
 }
 
 _GO2_TAG_YAW_DEG: float = -90.0

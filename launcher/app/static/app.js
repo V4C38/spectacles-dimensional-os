@@ -23,10 +23,6 @@
   const robotIpOverrideField = $("robotIpOverrideField");
   const apiKey = $("apiKey");
   const revealKey = $("revealKey");
-  const spatialMemory = $("spatialMemory");
-  const objectDetection = $("objectDetection");
-  const spatialMemoryNote = $("spatialMemoryNote");
-  const objectDetectionNote = $("objectDetectionNote");
   const logEl = $("log");
   const copyLogBtn = $("copyLogBtn");
   const clearLogBtn = $("clearLogBtn");
@@ -131,11 +127,6 @@
     }
   }
 
-  function syncModuleNotes() {
-    spatialMemoryNote.classList.toggle("hidden", !spatialMemory.checked);
-    objectDetectionNote.classList.toggle("hidden", !objectDetection.checked);
-  }
-
   function isProtectedDefaultTag(tag) {
     return defaultTagIds[stack]?.has(Number(tag.tag_id));
   }
@@ -172,8 +163,6 @@
     document.querySelectorAll(".tab").forEach((btn) => {
       btn.disabled = locked;
     });
-    spatialMemory.disabled = locked;
-    objectDetection.disabled = locked;
     apiKey.disabled = locked;
     revealKey.disabled = locked;
     robotIp.disabled = locked;
@@ -665,9 +654,6 @@
     }
   });
 
-  spatialMemory.addEventListener("change", syncModuleNotes);
-  objectDetection.addEventListener("change", syncModuleNotes);
-
   function syncRobotIpOverride() {
     robotIpOverrideField.classList.toggle("hidden", robotIpAuto.checked);
   }
@@ -678,7 +664,6 @@
     el.addEventListener("change", syncSetupMode);
   });
   syncSetupMode();
-  syncModuleNotes();
   initSplitter();
   applyStackInfo(stack);
   renderTagEditor();
@@ -721,8 +706,6 @@
     const body = {
       stack,
       robot_ip: robotIpAuto.checked ? null : robotIp.value.trim() || null,
-      spatial_memory: spatialMemory.checked,
-      object_detection: objectDetection.checked,
     };
     const typedKey = apiKey.value.trim();
     if (typedKey) {

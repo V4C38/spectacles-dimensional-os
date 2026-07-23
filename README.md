@@ -118,7 +118,7 @@ This opens `http://127.0.0.1:8790`. The UI shells out to the same scripts below.
 
 On first Start after each reboot, macOS shows a standard administrator prompt (Touch ID / password). DimOS needs a couple of network settings for LCM (a multicast loopback route and socket buffers) that require admin rights; the launcher applies them once via [`launcher/scripts/configure-system.sh`](launcher/scripts/configure-system.sh) so the bridge can start unattended. From the terminal, `start.sh` applies the same step with a normal `sudo` prompt.
 
-**Terminal:** use [`launcher/scripts/start.sh`](launcher/scripts/start.sh) for an interactive setup that runs all required steps automatically. Select a stack — **Unitree Go2**, **Unitree Go2 (full agentic stack)**, **Unitree G1**, or **Unitree G1 (full agentic stack)** — and wait until the bridge prints:
+**Terminal:** use [`launcher/scripts/start.sh`](launcher/scripts/start.sh) for an interactive setup that runs all required steps automatically. Select a stack — **Unitree Go2** or **Unitree G1** — and wait until the bridge prints:
 
 ```text
 Bridge ready - ws://0.0.0.0:8787
@@ -267,7 +267,7 @@ Toggle Manual Mode from the runtime wrist menu. While navigating, the yellow dir
 <details>
 <summary><h3>Agent Mode</h3></summary>
 
-In Agent Mode, wake-word voice on Spectacles becomes a `user_command` on the bridge. The DimOS LLM agent (OpenAI API on the Mac) can call `relative_move`, `navigate_to_user` ("come to me" / "come here"), `cancel_navigation`, `get_user_pose`, and world-annotation tools (`place_marker`, `draw_line`, `clear_annotation`). Agent tool coordinates are robot-relative meters (forward/left/up); the bridge converts to AR world frame for the Lens. Call `get_user_pose` before "mark where I am" style annotation commands. Navigation goals are owned by the bridge and publish the same `nav_status` + `path` stream as Manual Mode so the navigation marker snaps to the goal. Dragging the marker during an agent goal takes over with a normal `nav_goal` (latest wins). Requires `OPENAI_API_KEY` and an internet connection for the LLM API. Full-agentic menu entries are stubs and exit clearly as not implemented.
+In Agent Mode, wake-word voice on Spectacles becomes a `user_command` on the bridge. The DimOS LLM agent (OpenAI API on the Mac) can call `relative_move`, `navigate_to_user` ("come to me" / "come here"), `cancel_navigation`, `get_user_pose`, and world-annotation tools (`place_marker`, `draw_line`, `clear_annotation`). Agent tool coordinates are robot-relative meters (forward/left/up); the bridge converts to AR world frame for the Lens. Call `get_user_pose` before "mark where I am" style annotation commands. Navigation goals are owned by the bridge and publish the same `nav_status` + `path` stream as Manual Mode so the navigation marker snaps to the goal. Dragging the marker during an agent goal takes over with a normal `nav_goal` (latest wins). Requires `OPENAI_API_KEY` and an internet connection for the LLM API.
 
 </details>
 

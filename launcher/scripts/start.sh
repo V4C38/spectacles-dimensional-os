@@ -5,7 +5,6 @@
 #   ./launcher/scripts/start.sh
 #   ./launcher/scripts/start.sh --stack go2|g1
 #   ./launcher/scripts/start.sh --stack go2 --robot-ip <ip|simulated>
-#   ./launcher/scripts/start.sh --stack go2 --spatial-memory --object-detection
 #
 # The robot is auto-discovered on the LAN (Unitree multicast) unless --robot-ip
 # (or ROBOT_IP) pins an address. When several are found interactively you get a
@@ -66,8 +65,6 @@ print_red_stderr() {
 
 STACK_FLAG=""
 ROBOT_IP_FLAG=""
-SPATIAL_MEMORY=0
-OBJECT_DETECTION=0
 NON_INTERACTIVE=0
 
 while [[ $# -gt 0 ]]; do
@@ -89,16 +86,8 @@ while [[ $# -gt 0 ]]; do
       ROBOT_IP_FLAG="$2"
       shift 2
       ;;
-    --spatial-memory)
-      SPATIAL_MEMORY=1
-      shift
-      ;;
-    --object-detection)
-      OBJECT_DETECTION=1
-      shift
-      ;;
     -h|--help)
-      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -165,15 +154,11 @@ export DIMOS_AR_LAN_IP="${LAN_IP}"
 
 STACK_IDS=(
   "ar_go2"
-  "ar_go2_full_agentic"
   "ar_g1"
-  "ar_g1_full_agentic"
 )
 MENU_LABELS=(
   "Unitree Go2"
-  "Unitree Go2 (full agentic stack)"
   "Unitree G1"
-  "Unitree G1 (full agentic stack)"
 )
 
 # Interactive arrow-key menu: up/down to move, Enter to select.
@@ -299,7 +284,7 @@ if [[ -n "${STACK_FLAG}" ]]; then
       SELECTED_INDEX=0
       ;;
     g1|ar_g1)
-      SELECTED_INDEX=2
+      SELECTED_INDEX=1
       ;;
     *)
       echo "Unknown stack: ${STACK_FLAG} (expected go2 or g1)" >&2
@@ -313,18 +298,6 @@ fi
 SELECTED_BLUEPRINT="${STACK_IDS[$SELECTED_INDEX]}"
 STACK_LABEL="${MENU_LABELS[$SELECTED_INDEX]}"
 EQUIVALENT="dimos run ${SELECTED_BLUEPRINT//_/-}"
-
-if [[ "${SELECTED_BLUEPRINT}" == "ar_go2_full_agentic" || "${SELECTED_BLUEPRINT}" == "ar_g1_full_agentic" ]]; then
-  print_red_stderr "${SELECTED_BLUEPRINT} is not implemented yet — choose Unitree Go2 or Unitree G1."
-  exit 1
-fi
-
-if [[ "${SPATIAL_MEMORY}" -eq 1 ]]; then
-  echo "Module flag (stub): spatial-memory"
-fi
-if [[ "${OBJECT_DETECTION}" -eq 1 ]]; then
-  echo "Module flag (stub): object-detection"
-fi
 
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
   echo "Warning: OPENAI_API_KEY is unset — agent mode will not work until it is set." >&2

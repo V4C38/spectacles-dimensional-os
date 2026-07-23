@@ -65,8 +65,6 @@ class StartBody(BaseModel):
     stack: Literal["go2", "g1"]
     robot_ip: str | None = None
     openai_api_key: str | None = None
-    spatial_memory: bool = False
-    object_detection: bool = False
 
 
 class TagMountBody(BaseModel):
@@ -133,8 +131,6 @@ async def api_bridge_start(body: StartBody) -> dict[str, Any]:
             stack=body.stack,
             robot_ip=robot_ip,
             openai_api_key=body.openai_api_key,
-            spatial_memory=body.spatial_memory,
-            object_detection=body.object_detection,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

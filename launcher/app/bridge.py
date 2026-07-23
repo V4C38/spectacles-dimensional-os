@@ -218,18 +218,12 @@ class ProcessManager:
         *,
         stack: str,
         robot_ip: str | None = None,
-        spatial_memory: bool = False,
-        object_detection: bool = False,
     ) -> list[str]:
         if stack not in ("go2", "g1"):
             raise ValueError("stack must be 'go2' or 'g1'")
         argv = [str(self.scripts / "start.sh"), "--stack", stack]
         if robot_ip:
             argv.extend(["--robot-ip", robot_ip])
-        if spatial_memory:
-            argv.append("--spatial-memory")
-        if object_detection:
-            argv.append("--object-detection")
         return argv
 
     def build_setup_argv(
@@ -384,8 +378,6 @@ class ProcessManager:
         stack: str,
         robot_ip: str | None = None,
         openai_api_key: str | None = None,
-        spatial_memory: bool = False,
-        object_detection: bool = False,
     ) -> None:
         async with self._lock:
             if self._proc is not None:
@@ -429,8 +421,6 @@ class ProcessManager:
             argv = self.build_start_argv(
                 stack=stack,
                 robot_ip=pinned_ip,
-                spatial_memory=spatial_memory,
-                object_detection=object_detection,
             )
             self._set_status(
                 phase=Phase.STARTING,

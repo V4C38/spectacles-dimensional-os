@@ -53,9 +53,7 @@ cd /path/to/spectacles-dimensional-os
 `launcher/scripts/start.sh` prompts for the robot stack:
 
 - `ar_go2` — Unitree Go2 (lightweight agentic)
-- `ar_go2_full_agentic` — not implemented yet (exits clearly)
 - `ar_g1` — Unitree G1 via `unitree_g1_nav_simple` (pose goals; lightweight agentic)
-- `ar_g1_full_agentic` — not implemented yet (exits clearly)
 
 Then starts the bridge. Wait for:
 

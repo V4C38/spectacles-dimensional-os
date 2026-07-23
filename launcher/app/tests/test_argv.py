@@ -22,10 +22,10 @@ def test_start_argv_pins_robot_ip(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
     (tmp_path / "launcher" / "scripts").mkdir(parents=True)
     (tmp_path / "launcher" / "scripts" / "start.sh").write_text("#!/bin/sh\n")
-    argv = mgr.build_start_argv(stack="g1", robot_ip="192.168.1.10", spatial_memory=True)
+    argv = mgr.build_start_argv(stack="g1", robot_ip="192.168.1.10")
     assert "--stack" in argv and "g1" in argv
     assert argv[argv.index("--robot-ip") + 1] == "192.168.1.10"
-    assert "--spatial-memory" in argv
+    assert "--spatial-memory" not in argv
     assert "--object-detection" not in argv
 
 

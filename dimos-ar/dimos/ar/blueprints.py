@@ -3,9 +3,6 @@
 ar_go2: Unitree Go2 smart stack + lightweight agent runtime + ARBridge
 ar_g1:  Unitree G1 nav-simple stack + lightweight agent runtime + ARBridge
 
-Full-agentic placeholders (ar_go2_full_agentic / ar_g1_full_agentic) fail clearly
-until spatial memory / object detection stacks are composed.
-
 Stream-name reconciliation (the Go2/G1 stacks publish lidar under various names
 depending on the pipeline) is done here via .remappings([...]).
 
@@ -140,21 +137,3 @@ ar_g1 = (
     if unitree_g1_nav_simple is not None
     else None
 )
-
-# Full-agentic placeholders — intended future composition:
-# spatial memory, object detection, DimOS NavigationSkillContainer, etc.
-# Invariant: all future navigation tools must submit through NavigateGoalHandler
-# (via ARBridge.submit_relative_goal / cancel_navigation), never publish planner
-# streams in parallel.
-
-
-def __getattr__(name: str) -> Any:
-    if name == "ar_go2_full_agentic":
-        raise NotImplementedError(
-            "ar_go2_full_agentic is not implemented yet — use ar_go2"
-        )
-    if name == "ar_g1_full_agentic":
-        raise NotImplementedError(
-            "ar_g1_full_agentic is not implemented yet — use ar_g1"
-        )
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
