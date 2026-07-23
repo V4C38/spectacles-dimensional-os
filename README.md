@@ -55,11 +55,11 @@
 
 ### Installation
 
-Install [Dimensional OS](https://github.com/dimensionalOS/dimos) manually ([Installation](https://github.com/dimensionalOS/dimos#installation)), or use [`scripts/setup.sh`](scripts/setup.sh), which sets up all required dependencies for Dimensional OS and the WebSocket bridge (`dimos-ar`).
+Install [Dimensional OS](https://github.com/dimensionalOS/dimos) manually ([Installation](https://github.com/dimensionalOS/dimos#installation)), or use [`launcher/scripts/setup.sh`](launcher/scripts/setup.sh), which sets up all required dependencies for Dimensional OS and the WebSocket bridge (`dimos-ar`).
 
 ```bash
 cd /path/to/spectacles-dimensional-os
-./scripts/setup.sh
+./launcher/scripts/setup.sh
 ```
 
 ### Quickstart
@@ -105,7 +105,20 @@ The default location for the Go2 is shown below:
 
 ### macOS
 
-Use [`scripts/start.sh`](scripts/start.sh) for an interactive setup that runs all required steps automatically. Select a stack — **Unitree Go2**, **Unitree Go2 (full agentic stack)**, **Unitree G1**, or **Unitree G1 (full agentic stack)** — and wait until the bridge prints:
+**Web UI (recommended for non-terminal use):** launch the bridge control panel, which runs setup health checks, optional install, and Start/Stop:
+
+```bash
+cd /path/to/spectacles-dimensional-os
+./launcher/scripts/start-launcher.sh
+```
+
+Or double-click [`launcher/Start Launcher.command`](launcher/Start%20Launcher.command) in Finder (opens Terminal + browser). Leave that window open while using the UI; Ctrl+C stops it.
+
+This opens `http://127.0.0.1:8790`. The UI shells out to the same scripts below.
+
+On first Start after each reboot, macOS shows a standard administrator prompt (Touch ID / password). DimOS needs a couple of network settings for LCM (a multicast loopback route and socket buffers) that require admin rights; the launcher applies them once via [`launcher/scripts/configure-system.sh`](launcher/scripts/configure-system.sh) so the bridge can start unattended. From the terminal, `start.sh` applies the same step with a normal `sudo` prompt.
+
+**Terminal:** use [`launcher/scripts/start.sh`](launcher/scripts/start.sh) for an interactive setup that runs all required steps automatically. Select a stack — **Unitree Go2**, **Unitree Go2 (full agentic stack)**, **Unitree G1**, or **Unitree G1 (full agentic stack)** — and wait until the bridge prints:
 
 ```text
 Bridge ready - ws://0.0.0.0:8787
@@ -116,7 +129,7 @@ The LAN IP in the second line is the address to enter on Spectacles during setup
 
 ```bash
 cd /path/to/spectacles-dimensional-os
-./scripts/start.sh
+./launcher/scripts/start.sh
 ```
 
 ### Spectacles
@@ -264,7 +277,7 @@ In Agent Mode, wake-word voice on Spectacles becomes a `user_command` on the bri
 Reproduce CI locally before opening a PR:
 
 ```bash
-./scripts/run-ci.sh
+./launcher/scripts/run-ci.sh
 ```
 
 **Python tests** (from the DimOS `.venv`):

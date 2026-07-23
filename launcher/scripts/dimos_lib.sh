@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared shell helpers for scripts/setup.sh and scripts/start.sh.
+# Shared shell helpers for launcher/scripts/setup.sh and launcher/scripts/start.sh.
 # Source this file; do not execute directly.
 python_has_dimos() {
   local py="${1:-}"
@@ -8,7 +8,7 @@ python_has_dimos() {
 }
 
 find_dimos_python() {
-  local root="${1:-${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}"
+  local root="${1:-${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}}"
   local candidates=()
   local system_python=""
   local py
@@ -49,7 +49,7 @@ find_dimos_python() {
 }
 
 print_dimos_python_help() {
-  local root="${1:-${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}"
+  local root="${1:-${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}}"
   local system_python
   system_python="$(command -v python3 2>/dev/null || echo "python3")"
 
@@ -64,7 +64,7 @@ Tried:
 
 Fix one of these, then retry:
   - Set DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3
-  - Run ./scripts/setup.sh and point it at your DimOS install
+  - Run ./launcher/scripts/setup.sh and point it at your DimOS install
   - Install dimos-ar into your DimOS venv manually:
       cd "${root}/dimos-ar" && /path/to/dimos/.venv/bin/python3 -m pip install -e ".[dev]"
 EOF

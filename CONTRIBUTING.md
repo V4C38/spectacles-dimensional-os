@@ -14,7 +14,7 @@ Open the Lens project from [`lens-studio/spectacles-dimensional-os.esproj`](lens
 ## Before you open a PR
 
 ```bash
-./scripts/run-ci.sh
+./launcher/scripts/run-ci.sh
 ```
 
 This runs `dimos-ar` (ruff, mypy, pytest) and `lens-studio/Tests` (Vitest), matching [`.github/workflows/ci.yml`](.github/workflows/ci.yml).

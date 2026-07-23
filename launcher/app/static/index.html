@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DimOS AR Bridge</title>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="panel" id="sidePanel">
+        <div class="panel-top">
+          <section class="card status-card" id="statusCard">
+            <div class="status-row state-row">
+              <span class="label">DimOS AR Bridge</span>
+              <div class="state-block">
+                <span class="value state-value" id="stateValue" data-phase="idle">…</span>
+                <span class="state-detail hidden" id="stateDetail"></span>
+              </div>
+            </div>
+            <p class="warning hidden" id="warningText"></p>
+            <p class="error hidden" id="errorText"></p>
+          </section>
+        </div>
+
+        <div class="panel-scroll">
+          <details class="card ip-card" id="ipCard">
+            <summary class="ip-summary">
+              <span class="ip-summary-collapsed">
+                <span class="label">Bridge IP</span>
+                <span class="value mono" id="bridgeIpSummary">—</span>
+              </span>
+              <span class="ip-summary-expanded label">Connection</span>
+            </summary>
+            <div class="ip-body">
+              <div class="status-row">
+                <span class="label">Bridge IP</span>
+                <span class="value mono" id="bridgeIp">—</span>
+              </div>
+              <div class="status-row">
+                <span class="label">Robot IP</span>
+                <span class="value mono" id="robotValue">—</span>
+              </div>
+              <label class="check ip-auto">
+                <input type="checkbox" id="robotIpAuto" checked />
+                <span class="check-box" aria-hidden="true"></span>
+                <span>auto</span>
+              </label>
+              <label class="field ip-override hidden" id="robotIpOverrideField">
+                <span>Robot IP override</span>
+                <input type="text" id="robotIp" autocomplete="off" />
+              </label>
+            </div>
+          </details>
+
+          <section class="card setup-card hidden" id="setupCard">
+            <h2>Setup required</h2>
+            <p class="hint">
+              DimOS or dimos-ar is not ready. Choose how to install, then approve.
+            </p>
+            <fieldset class="radio-group">
+              <label>
+                <input type="radio" name="setupMode" value="clone" checked />
+                Fresh install (clone DimOS + create .venv)
+              </label>
+              <label>
+                <input type="radio" name="setupMode" value="existing" />
+                Use existing DimOS Python
+              </label>
+            </fieldset>
+            <label class="field" id="cloneDirField">
+              <span>Clone directory</span>
+              <input type="text" id="cloneDir" autocomplete="off" />
+            </label>
+            <label class="field hidden" id="dimosPythonField">
+              <span>DimOS Python path</span>
+              <input
+                type="text"
+                id="dimosPython"
+                placeholder="/path/to/dimos/.venv/bin/python3"
+                autocomplete="off"
+              />
+            </label>
+            <button type="button" class="btn primary" id="installBtn">
+              Approve &amp; install
+            </button>
+          </section>
+
+          <section class="controls" id="controlsCard">
+            <div class="tabs" role="tablist">
+              <button type="button" class="tab active" data-stack="go2">Unitree Go2</button>
+              <button type="button" class="tab" data-stack="g1">Unitree G1</button>
+            </div>
+
+            <fieldset class="info-box" id="stackInfoBox">
+              <legend>Stack</legend>
+              <dl class="info-list" id="stackInfoList"></dl>
+            </fieldset>
+
+            <fieldset class="modules">
+              <legend>Optional modules</legend>
+              <label class="check">
+                <input type="checkbox" id="spatialMemory" />
+                <span class="check-box" aria-hidden="true"></span>
+                <span>Spatial Memory</span>
+              </label>
+              <p class="module-note hidden" id="spatialMemoryNote">
+                Uses CLIP embeddings + ChromaDB — higher RAM/CPU (GPU if available).
+              </p>
+              <label class="check">
+                <input type="checkbox" id="objectDetection" />
+                <span class="check-box" aria-hidden="true"></span>
+                <span>Object Detection</span>
+              </label>
+              <p class="module-note hidden" id="objectDetectionNote">
+                Runs YOLO inference — GPU recommended; heavy on CPU otherwise.
+              </p>
+              <label class="field module-key">
+                <span>OPENAI_API_KEY</span>
+                <div class="secret-row">
+                  <input
+                    type="password"
+                    id="apiKey"
+                    placeholder="sk-…"
+                    autocomplete="off"
+                  />
+                  <button type="button" class="btn ghost" id="revealKey" aria-label="Show API key">
+                    Show
+                  </button>
+                </div>
+              </label>
+            </fieldset>
+
+            <fieldset class="info-box tag-config-box" id="tagConfigBox">
+              <legend>AprilTag config</legend>
+              <div id="tagList" class="tag-list"></div>
+              <div class="tag-actions">
+                <button type="button" class="btn ghost btn-compact" id="addTagBtn">
+                  Add tag
+                </button>
+                <button type="button" class="btn ghost btn-compact" id="restoreTagsBtn">
+                  Restore defaults
+                </button>
+              </div>
+            </fieldset>
+          </section>
+        </div>
+
+        <div class="panel-bottom" id="actionsBar">
+          <div class="actions">
+            <button type="button" class="btn primary" id="startBtn">Start</button>
+            <button type="button" class="btn" id="stopBtn">Stop</button>
+          </div>
+        </div>
+      </aside>
+
+      <div
+        class="splitter"
+        id="splitter"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize panels"
+        tabindex="0"
+      ></div>
+
+      <main class="log-panel">
+        <header class="log-header">
+          <h2>Log</h2>
+          <div class="log-actions">
+            <button type="button" class="btn ghost" id="copyLogBtn">Copy</button>
+            <button type="button" class="btn ghost" id="clearLogBtn">Clear</button>
+          </div>
+        </header>
+        <pre class="log" id="log" aria-live="polite"></pre>
+      </main>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

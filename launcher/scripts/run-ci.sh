@@ -2,7 +2,7 @@
 # Reproduce GitHub Actions CI locally (.github/workflows/ci.yml).
 #
 # Usage (from repo root):
-#   ./scripts/run-ci.sh
+#   ./launcher/scripts/run-ci.sh
 #
 # Environment (optional):
 #   CI_PYTHON   Python 3.12+ interpreter for the dimos-ar job (default: python3.12, python3)
@@ -10,10 +10,12 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIMOS_AR="${ROOT}/dimos-ar"
+LAUNCHER_APP="${ROOT}/launcher/app"
 LENS_TESTS="${ROOT}/lens-studio/Tests"
 CI_VENV="${CI_VENV:-/tmp/spectacles-dimensional-os-ci-venv}"
+LAUNCHER_VENV="${LAUNCHER_VENV:-/tmp/spectacles-dimensional-os-launcher-ci-venv}"
 
 find_ci_python() {
   local candidate=""
@@ -55,6 +57,28 @@ run_dimos_ar_job() {
   pytest -m "not integration"
 }
 
+run_launcher_job() {
+  local py
+  py="$(find_ci_python)"
+  echo "==> launcher job (matches .github/workflows/ci.yml)"
+  echo "    Python: ${py}"
+  echo "    venv:   ${LAUNCHER_VENV}"
+
+  if [[ ! -d "${LAUNCHER_VENV}" ]]; then
+    "${py}" -m venv "${LAUNCHER_VENV}"
+  fi
+
+  # shellcheck disable=SC1091
+  source "${LAUNCHER_VENV}/bin/activate"
+  cd "${LAUNCHER_APP}"
+
+  python -m pip install --upgrade pip
+  pip install -r requirements-dev.txt
+
+  ruff check .
+  pytest
+}
+
 run_lens_studio_job() {
   echo "==> lens-studio-tests job (matches .github/workflows/ci.yml)"
   cd "${LENS_TESTS}"
@@ -63,6 +87,7 @@ run_lens_studio_job() {
 }
 
 run_dimos_ar_job
+run_launcher_job
 run_lens_studio_job
 
 echo ""

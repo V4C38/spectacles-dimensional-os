@@ -19,7 +19,7 @@ All platform-agnostic code is under `dimos/ar/`. The cross-platform API is
 | `dimos/ar/lidar/` | LiDAR height-band filtering for AR payloads |
 | `dimos/ar/robot_profile/` | Per-robot handshake, tag geometry, capabilities (Go2, G1) |
 | `dimos/ar/network/protocol.py` | Wire schema implementation |
-| `dimos/ar/blueprints.py` | Monorepo entrypoint used by [`../scripts/start.sh`](../scripts/start.sh) |
+| `dimos/ar/blueprints.py` | Monorepo entrypoint used by [`../launcher/scripts/start.sh`](../launcher/scripts/start.sh) |
 | `assets/` | Printable AprilTag assets (see below) |
 
 ## AprilTag print assets
@@ -47,10 +47,10 @@ Use the DimOS `.venv`, then run from the monorepo root:
 
 ```bash
 cd /path/to/spectacles-dimensional-os
-./scripts/start.sh
+./launcher/scripts/start.sh
 ```
 
-`scripts/start.sh` prompts for the robot stack:
+`launcher/scripts/start.sh` prompts for the robot stack:
 
 - `ar_go2` — Unitree Go2 (lightweight agentic)
 - `ar_go2_full_agentic` — not implemented yet (exits clearly)
@@ -123,7 +123,7 @@ cd /path/to/spectacles-dimensional-os/dimos-ar
 
 Lens protocol tests: `cd ../lens-studio/Tests && npm test`.
 
-Reproduce full CI from repo root: `./scripts/run-ci.sh`.
+Reproduce full CI from repo root: `./launcher/scripts/run-ci.sh`.
 
 </details>
 

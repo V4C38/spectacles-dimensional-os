@@ -14,6 +14,7 @@ from dimos.ar.robot_profile.base import (
     RobotHandshake,
     TagTrackingProfile,
 )
+from dimos.ar.robot_profile.tag_mount_override import resolve_tag_mounts
 from dimos.ar.tag_tracking.solve import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -37,7 +38,7 @@ G1_DEFAULT_TAG_MOUNTS: list[TagMount] = [
 
 
 def g1_tag_mounts() -> list[TagMount]:
-    return list(G1_DEFAULT_TAG_MOUNTS)
+    return resolve_tag_mounts(G1_DEFAULT_TAG_MOUNTS)
 
 
 def g1_capabilities(
@@ -92,6 +93,7 @@ def g1_handshake(
     cancel_goal_available: bool,
     emergency_stop_available: bool,
     tag_mount_available: bool,
+    mounts: list[TagMount] | None = None,
 ) -> RobotHandshake:
     capability_states = g1_capabilities(
         nav_available=nav_available,
@@ -100,7 +102,8 @@ def g1_handshake(
         emergency_stop_available=emergency_stop_available,
         tag_mount_available=tag_mount_available,
     )
-    tag_ids = [m.tag_id for m in G1_DEFAULT_TAG_MOUNTS]
+    effective = mounts if mounts is not None else g1_tag_mounts()
+    tag_ids = [m.tag_id for m in effective]
     return RobotHandshake(
         robot_id=robot_id,
         display_name="Unitree G1",
@@ -151,13 +154,15 @@ class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
 
     @rpc
     def handshake_payload(self) -> RobotHandshake:
+        mounts = self.tag_mounts()
         return g1_handshake(
             self.robot_id(),
             nav_available=True,
             path_available=True,
             cancel_goal_available=True,
             emergency_stop_available=self._emergency_stop_available(),
-            tag_mount_available=len(self.tag_mounts()) > 0,
+            tag_mount_available=len(mounts) > 0,
+            mounts=mounts,
         )
 
     @rpc

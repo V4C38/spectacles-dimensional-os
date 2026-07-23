@@ -41,6 +41,7 @@ lens-studio/Assets/Assets/
 .Python
 .env
 .envrc
+.dimos-ar-launcher/
 .venv/
 venv/
 ENV/
