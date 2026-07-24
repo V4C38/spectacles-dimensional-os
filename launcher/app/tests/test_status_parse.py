@@ -56,3 +56,28 @@ def test_parse_strips_ansi_and_simulated_robot_ip(tmp_path: Path) -> None:
 
     mgr._parse_bridge_line("Robot IP:     simulated")
     assert mgr.status.robot_ip == "simulated"
+
+
+def test_snapshot_includes_per_stack_readiness(tmp_path: Path) -> None:
+    mgr = ProcessManager(root=tmp_path)
+    mgr.status.ready_go2 = True
+    mgr.status.ready_g1 = False
+    mgr.status.check_ok = True
+    snap = mgr.snapshot()
+    assert snap["ready_go2"] is True
+    assert snap["ready_g1"] is False
+    assert snap["check_ok"] is True
+    assert "default_clone_dir" in snap
+
+
+def test_check_ok_regexes_match_setup_output() -> None:
+    from bridge import _RE_CHECK_OK, _RE_CHECK_OK_G1, _RE_CHECK_OK_GO2, _RE_DIMOS_PYTHON
+
+    assert _RE_CHECK_OK_GO2.match("CHECK_OK_GO2=1")
+    assert _RE_CHECK_OK_GO2.match("CHECK_OK_GO2=0")
+    assert _RE_CHECK_OK_G1.match("CHECK_OK_G1=1")
+    assert _RE_CHECK_OK_G1.match("CHECK_OK_G1=0")
+    assert _RE_CHECK_OK.match("CHECK_OK=1")
+    assert _RE_DIMOS_PYTHON.match("DIMOS_PYTHON=/tmp/dimos/.venv/bin/python3")
+    assert _RE_CHECK_OK_GO2.match("CHECK_OK_GO2=1 ") is not None
+    assert _RE_CHECK_OK_G1.match("CHECK_OK=1") is None

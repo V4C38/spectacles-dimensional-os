@@ -31,7 +31,7 @@ def parse_tag_mounts_json(raw: str) -> list[TagMount]:
     mounts: list[TagMount] = []
     for i, item in enumerate(data):
         if not isinstance(item, dict):
-            raise ValueError(f"mount[{i}] must be an object")
+            raise TypeError(f"mount[{i}] must be an object")
         if "tag_id" not in item:
             raise ValueError(f"mount[{i}] missing tag_id")
         tag_id = int(item["tag_id"])

@@ -625,7 +625,7 @@ class NavigateGoalHandler:
             logger.info("AR navigation goal failed")
         self._nav_error_code = None
         self._clear_session()
-        if had_session and (reached or not reached):
+        if had_session:
             self._broadcast_empty_path()
         self.broadcast_nav_status()
         if had_session and not reached:

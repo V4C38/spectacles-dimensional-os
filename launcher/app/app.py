@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Literal
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -20,6 +22,7 @@ from tag_config import restore_tag_config, save_tag_config, tag_config_api_paylo
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LAUNCHER_HOSTS = frozenset({"127.0.0.1:8790", "localhost:8790", "[::1]:8790"})
+logger = logging.getLogger(__name__)
 manager = ProcessManager()
 
 
@@ -48,7 +51,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:
             await manager.stop_bridge()
         except Exception:
-            pass
+            logger.exception("Bridge stop during launcher shutdown failed")
 
 
 app = FastAPI(title="DimOS AR Bridge", lifespan=lifespan)
@@ -57,6 +60,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 class SetupBody(BaseModel):
     mode: Literal["existing", "clone"] = "clone"
+    stack: Literal["go2", "g1"] = "go2"
     dimos_python: str | None = None
     clone_dir: str | None = None
 
@@ -102,10 +106,15 @@ async def api_setup(body: SetupBody) -> dict[str, Any]:
         if body.mode == "existing":
             if not body.dimos_python or not body.dimos_python.strip():
                 raise HTTPException(status_code=400, detail="dimos_python is required")
-            await manager.run_setup(dimos_python=body.dimos_python.strip())
+            await manager.run_setup(
+                stack=body.stack,
+                dimos_python=body.dimos_python.strip(),
+            )
         else:
-            clone_dir = (body.clone_dir or "").strip() or str(repo_root().parent / "dimos")
-            await manager.run_setup(clone_dir=clone_dir)
+            clone_dir = (body.clone_dir or "").strip() or str(
+                (repo_root().parent / "dimos").resolve()
+            )
+            await manager.run_setup(stack=body.stack, clone_dir=clone_dir)
     except HTTPException:
         raise
     except RuntimeError as exc:
@@ -113,6 +122,14 @@ async def api_setup(body: SetupBody) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return manager.snapshot()
+
+
+@app.post("/api/check", dependencies=[Depends(require_local_launcher)])
+async def api_check() -> dict[str, Any]:
+    try:
+        return await manager.run_check()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/api/bridge/start", dependencies=[Depends(require_local_launcher)])

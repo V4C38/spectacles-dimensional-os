@@ -10,10 +10,11 @@ import signal
 import socket
 import sys
 from collections import deque
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from config import merge_env, read_env, repo_root, scripts_dir
 from tag_config import mounts_env_json
@@ -29,6 +30,8 @@ _RE_WEBSOCKET_STARTED = re.compile(r"websocket=(ws://\S+)", re.IGNORECASE)
 _RE_SPECTACLES = re.compile(r"Spectacles:\s+enter\s+(\S+)", re.IGNORECASE)
 _RE_ROBOT_IP = re.compile(r"Robot IP:\s+(\S+)", re.IGNORECASE)
 _RE_CHECK_OK = re.compile(r"^CHECK_OK=([01])\s*$")
+_RE_CHECK_OK_GO2 = re.compile(r"^CHECK_OK_GO2=([01])\s*$")
+_RE_CHECK_OK_G1 = re.compile(r"^CHECK_OK_G1=([01])\s*$")
 _RE_DIMOS_PYTHON = re.compile(r"^DIMOS_PYTHON=(.+)$")
 
 
@@ -52,6 +55,8 @@ class Phase(str, Enum):
 class BridgeStatus:
     phase: Phase = Phase.IDLE
     check_ok: bool | None = None
+    ready_go2: bool | None = None
+    ready_g1: bool | None = None
     dimos_python: str | None = None
     websocket_url: str | None = None
     spectacles_ip: str | None = None
@@ -82,6 +87,8 @@ class ProcessManager:
         return {
             "phase": self.status.phase.value,
             "check_ok": self.status.check_ok,
+            "ready_go2": self.status.ready_go2,
+            "ready_g1": self.status.ready_g1,
             "dimos_python": self.status.dimos_python,
             "websocket_url": self.status.websocket_url,
             "spectacles_ip": self.status.spectacles_ip,
@@ -89,7 +96,7 @@ class ProcessManager:
             "warning": self.status.warning,
             "stack": self.status.stack,
             "error": self.status.error,
-            "default_clone_dir": str(self.root.parent / "dimos"),
+            "default_clone_dir": str((self.root.parent / "dimos").resolve()),
         }
 
     async def subscribe(self) -> AsyncIterator[dict[str, Any]]:
@@ -229,10 +236,13 @@ class ProcessManager:
     def build_setup_argv(
         self,
         *,
+        stack: str = "go2",
         dimos_python: str | None = None,
         clone_dir: str | None = None,
     ) -> list[str]:
-        argv = [str(self.scripts / "setup.sh"), "--yes"]
+        if stack not in ("go2", "g1"):
+            raise ValueError("stack must be 'go2' or 'g1'")
+        argv = [str(self.scripts / "setup.sh"), "--yes", "--stack", stack]
         if dimos_python and clone_dir:
             raise ValueError("provide either dimos_python or clone_dir, not both")
         if dimos_python:
@@ -254,36 +264,74 @@ class ProcessManager:
             self._set_status(
                 phase=Phase.CHECKING,
                 check_ok=None,
+                ready_go2=None,
+                ready_g1=None,
                 error=None,
                 warning=None,
             )
             argv = [str(self.scripts / "setup.sh"), "--check"]
             check_ok = False
+            ready_go2 = False
+            ready_g1 = False
+            saw_go2 = False
+            saw_g1 = False
             dimos_python: str | None = None
 
             async def on_line(line: str) -> None:
-                nonlocal check_ok, dimos_python
+                nonlocal check_ok, ready_go2, ready_g1, saw_go2, saw_g1, dimos_python
                 plain = _strip_ansi(line)
-                if m := _RE_CHECK_OK.match(plain):
+                if m := _RE_CHECK_OK_GO2.match(plain):
+                    ready_go2 = m.group(1) == "1"
+                    saw_go2 = True
+                elif m := _RE_CHECK_OK_G1.match(plain):
+                    ready_g1 = m.group(1) == "1"
+                    saw_g1 = True
+                elif m := _RE_CHECK_OK.match(plain):
                     check_ok = m.group(1) == "1"
                 elif m := _RE_DIMOS_PYTHON.match(plain):
-                    dimos_python = m.group(1).strip()
+                    raw = m.group(1).strip()
+                    try:
+                        dimos_python = str(Path(raw).resolve())
+                    except OSError:
+                        dimos_python = raw
 
             env = os.environ.copy()
             # Force ANSI colors into the SSE log (stdout is a pipe, not a TTY).
             env["DIMOS_AR_FORCE_COLOR"] = "1"
             code = await self._run_tracked(argv, env=env, on_line=on_line)
-            if code == 0 and check_ok:
+            # Prefer per-stack flags; fall back to legacy CHECK_OK for Go2.
+            if not saw_go2:
+                ready_go2 = check_ok
+            if not saw_g1:
+                ready_g1 = False
+            check_ok = ready_go2
+
+            if ready_go2 or ready_g1:
+                self._set_status(
+                    phase=Phase.READY,
+                    check_ok=check_ok,
+                    ready_go2=ready_go2,
+                    ready_g1=ready_g1,
+                    dimos_python=dimos_python,
+                    error=None,
+                )
+            elif code == 0 and check_ok:
                 self._set_status(
                     phase=Phase.READY,
                     check_ok=True,
+                    ready_go2=True,
+                    ready_g1=ready_g1,
                     dimos_python=dimos_python,
                     error=None,
                 )
             else:
+                # No DimOS / dimos-ar at all — still READY for UI (tabs stay
+                # visible); per-stack flags gate Start + install banner.
                 self._set_status(
-                    phase=Phase.NEEDS_SETUP,
+                    phase=Phase.NEEDS_SETUP if not ready_go2 and not ready_g1 else Phase.READY,
                     check_ok=False,
+                    ready_go2=False,
+                    ready_g1=False,
                     dimos_python=dimos_python,
                     error=None,
                 )
@@ -292,23 +340,30 @@ class ProcessManager:
     async def run_setup(
         self,
         *,
+        stack: str = "go2",
         dimos_python: str | None = None,
         clone_dir: str | None = None,
     ) -> None:
         async with self._lock:
             if self._proc is not None:
                 raise RuntimeError("another process is already running")
-            argv = self.build_setup_argv(dimos_python=dimos_python, clone_dir=clone_dir)
-            self._append_log("Installing…")
-            self._set_status(phase=Phase.INSTALLING, error=None)
+            argv = self.build_setup_argv(
+                stack=stack,
+                dimos_python=dimos_python,
+                clone_dir=clone_dir,
+            )
+            self._append_log(f"Installing {stack} dependencies…")
+            self._set_status(phase=Phase.INSTALLING, stack=stack, error=None)
             env = os.environ.copy()
             env["DIMOS_AR_FORCE_COLOR"] = "1"
             code = await self._run_tracked(argv, env=env)
             if code != 0:
+                # Keep the real failure reason in the log only — do not put a
+                # generic exit-code string into status.error for the status card.
                 self._set_status(
                     phase=Phase.NEEDS_SETUP,
                     check_ok=False,
-                    error=f"setup.sh exited with code {code}",
+                    error=None,
                 )
                 raise RuntimeError(f"setup.sh exited with code {code}")
 
@@ -385,6 +440,14 @@ class ProcessManager:
             if self.port_in_use():
                 raise RuntimeError(
                     f"port {BRIDGE_PORT} is already in use — stop the other bridge first"
+                )
+            if stack == "g1" and self.status.ready_g1 is False:
+                raise RuntimeError(
+                    "G1 dependencies are not installed — use Install G1 dependencies first"
+                )
+            if stack == "go2" and self.status.ready_go2 is False:
+                raise RuntimeError(
+                    "Go2 dependencies are not installed — use Install Go2 dependencies first"
                 )
 
             await self._configure_system_if_needed()

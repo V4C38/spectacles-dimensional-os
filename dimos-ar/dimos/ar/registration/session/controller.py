@@ -214,8 +214,6 @@ class RegistrationSession(
                     self._broadcast_status()
                 except Exception:
                     logger.exception("registration broadcast tick failed")
-        except asyncio.CancelledError:
-            raise
         finally:
             if asyncio.current_task() is self._broadcast_task:
                 self._broadcast_task = None

@@ -121,7 +121,7 @@ def estimate_marker_pose(
     return best_rvec, best_tvec, ambiguity_ratio
 
 
-def aruco_detected_tag_id(tag_id_entry: np.ndarray | int | float) -> int:
+def aruco_detected_tag_id(tag_id_entry: np.ndarray | float) -> int:
     """Normalize one ``detectMarkers`` id entry to ``int`` across OpenCV layouts."""
     arr = np.asarray(tag_id_entry)
     if arr.ndim == 0:

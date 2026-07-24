@@ -41,7 +41,6 @@ async def test_start_bridge_sets_tag_mounts_env(tmp_path: Path) -> None:
 
     async def fake_spawn(argv, *, env, parse_bridge):  # type: ignore[no-untyped-def]
         captured.update(env)
-        return None
 
     with (
         patch.object(mgr, "port_in_use", return_value=False),

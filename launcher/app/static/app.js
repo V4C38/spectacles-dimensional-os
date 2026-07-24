@@ -8,9 +8,10 @@
   const robotValue = $("robotValue");
   const warningText = $("warningText");
   const errorText = $("errorText");
-  const setupCard = $("setupCard");
   const controlsCard = $("controlsCard");
   const actionsBar = $("actionsBar");
+  const installBanner = $("installBanner");
+  const installHint = $("installHint");
   const cloneDir = $("cloneDir");
   const dimosPython = $("dimosPython");
   const cloneDirField = $("cloneDirField");
@@ -35,6 +36,8 @@
 
   let stack = "go2";
   let phase = "idle";
+  let readyByStack = { go2: null, g1: null };
+  let lastStatus = {};
   let keyVisible = false;
   const logLines = [];
 
@@ -63,6 +66,15 @@
       ["Streams", "lidar · odometry · path · costmap"],
     ],
   };
+
+  const INSTALL_HINTS = {
+    go2: "DimOS or dimos-ar is not installed for Go2. Install dependencies to continue.",
+    g1: "G1 needs DimOS native source (FastLio2 + RayTracingVoxelMap). Install G1 dependencies to continue.",
+  };
+
+  function stackReady(selected) {
+    return readyByStack[selected] === true;
+  }
 
   const FIELD_META = [
     { field: "tag_id", label: "ID", step: 1, min: 0, max: 586 },
@@ -334,25 +346,35 @@
 
   function describeState(status) {
     const p = status.phase || "idle";
-    const stackLabel = STACK_LABELS[status.stack] || null;
+    const selectedLabel = STACK_LABELS[stack] || "Stack";
+    const stackLabel = STACK_LABELS[status.stack] || selectedLabel;
+    const selectedReady = stackReady(stack);
+    const depsDetail = selectedReady
+      ? `${selectedLabel} dependencies installed`
+      : `${selectedLabel} dependencies missing`;
     switch (p) {
       case "checking":
         return { label: "Checking setup", detail: "" };
       case "needs_setup":
-        return { label: "Setup required", detail: "" };
       case "ready":
-        return { label: "Ready to start", detail: "" };
+        return {
+          label: selectedReady ? "Bridge Ready" : "Install required",
+          detail: depsDetail,
+        };
       case "installing":
-        return { label: "Installing", detail: "Running setup.sh…" };
+        return {
+          label: "Installing",
+          detail: `Installing ${stackLabel} dependencies…`,
+        };
       case "starting":
         return {
           label: "Starting",
-          detail: stackLabel ? `Booting ${stackLabel}…` : "Booting DimOS stack…",
+          detail: `Booting ${stackLabel}…`,
         };
       case "running":
         return {
           label: "Running",
-          detail: stackLabel ? `${stackLabel} bridge listening` : "Bridge listening",
+          detail: `${stackLabel} bridge listening`,
         };
       case "stopping":
         return { label: "Stopping", detail: "Shutting down bridge…" };
@@ -365,6 +387,36 @@
       default:
         return { label: "Idle", detail: "" };
     }
+  }
+
+  function setupMode() {
+    return document.querySelector('input[name="setupMode"]:checked')?.value || "existing";
+  }
+
+  function syncInstallBanner() {
+    const ready = stackReady(stack);
+    const busy =
+      phase === "checking" ||
+      phase === "installing" ||
+      phase === "starting" ||
+      phase === "stopping";
+    const needsInstall = !ready;
+    const cloning = setupMode() === "clone";
+    // Show install when the selected stack is missing deps, or when the user
+    // explicitly chose a fresh download (allows additional installs).
+    const showInstall = needsInstall || cloning;
+    const label = STACK_LABELS[stack] || stack;
+
+    installHint.textContent = needsInstall
+      ? INSTALL_HINTS[stack] || INSTALL_HINTS.go2
+      : "Download DimOS into the folder below. You can keep multiple installs.";
+    installHint.classList.toggle("hidden", !showInstall);
+    installBtn.textContent = cloning
+      ? "Download & install DimOS"
+      : `Install ${label} dependencies`;
+    installBtn.classList.toggle("hidden", !showInstall);
+    installBtn.disabled = busy || phase === "installing" || phase === "checking";
+    installBanner.classList.toggle("needs-install", needsInstall);
   }
 
   const ANSI_RE = /\u001b\[([0-9;]*)m/g;
@@ -478,11 +530,25 @@
   }
 
   function applyStatus(status) {
+    lastStatus = status || {};
     phase = status.phase || "idle";
+    if ("ready_go2" in status) readyByStack.go2 = status.ready_go2;
+    if ("ready_g1" in status) readyByStack.g1 = status.ready_g1;
+    // Legacy fallback when older check output only had check_ok.
+    if (!("ready_go2" in status) && typeof status.check_ok === "boolean") {
+      readyByStack.go2 = status.check_ok;
+    }
+
     const info = describeState(status);
+    const selectedReady = stackReady(stack);
+    let displayPhase = phase;
+    if (phase === "ready" || phase === "needs_setup") {
+      displayPhase = selectedReady ? "ready" : "needs_setup";
+    }
     stateValue.textContent = info.label;
-    stateValue.dataset.phase = phase;
+    stateValue.dataset.phase = displayPhase;
     stateDetail.textContent = info.detail;
+    stateDetail.dataset.phase = displayPhase;
     stateDetail.classList.toggle("hidden", !info.detail);
     setText(bridgeIp, status.spectacles_ip);
     setText(bridgeIpSummary, status.spectacles_ip);
@@ -502,7 +568,6 @@
       errorText.classList.add("hidden");
     }
 
-    const needsSetup = phase === "needs_setup";
     const busy =
       phase === "checking" ||
       phase === "installing" ||
@@ -510,10 +575,12 @@
       phase === "stopping";
     const running = phase === "running" || phase === "starting";
     const locked = phase === "starting" || phase === "running" || phase === "stopping";
+    const ready = stackReady(stack);
 
-    setupCard.classList.toggle("hidden", !needsSetup);
-    controlsCard.classList.toggle("hidden", needsSetup);
-    actionsBar.classList.toggle("hidden", needsSetup);
+    // Tabs + controls stay visible; install banner gates missing deps.
+    controlsCard.classList.remove("hidden");
+    actionsBar.classList.remove("hidden");
+    syncInstallBanner();
 
     if (status.default_clone_dir && !cloneDir.value) {
       cloneDir.value = status.default_clone_dir;
@@ -522,21 +589,20 @@
       dimosPython.value = status.dimos_python;
     }
 
-    startBtn.disabled = busy || running || needsSetup;
+    startBtn.disabled = busy || running || !ready;
     stopBtn.disabled = false;
     stopBtn.classList.toggle(
       "danger",
       phase === "running" || phase === "starting" || phase === "stopping"
     );
-    installBtn.disabled = phase === "installing" || phase === "checking";
     setConfigLocked(locked);
   }
 
   function syncSetupMode() {
-    const mode = document.querySelector('input[name="setupMode"]:checked')?.value;
-    const existing = mode === "existing";
+    const existing = setupMode() === "existing";
     cloneDirField.classList.toggle("hidden", existing);
     dimosPythonField.classList.toggle("hidden", !existing);
+    syncInstallBanner();
   }
 
   function initSplitter() {
@@ -604,6 +670,8 @@
       stack = btn.dataset.stack;
       applyStackInfo(stack);
       renderTagEditor();
+      // Re-evaluate Start + install banner from cached per-stack readiness.
+      applyStatus(lastStatus);
     });
   });
 
@@ -678,11 +746,19 @@
   clearLogBtn.addEventListener("click", clearLog);
 
   installBtn.addEventListener("click", async () => {
-    const mode = document.querySelector('input[name="setupMode"]:checked')?.value || "clone";
+    const mode = setupMode();
     const body =
       mode === "existing"
-        ? { mode: "existing", dimos_python: dimosPython.value.trim() }
-        : { mode: "clone", clone_dir: cloneDir.value.trim() };
+        ? {
+            mode: "existing",
+            stack,
+            dimos_python: dimosPython.value.trim(),
+          }
+        : {
+            mode: "clone",
+            stack,
+            clone_dir: cloneDir.value.trim(),
+          };
     installBtn.disabled = true;
     try {
       const res = await fetch("/api/setup", {
@@ -693,10 +769,12 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         appendLog(`Setup error: ${data.detail || res.statusText}`);
+        installBtn.disabled = false;
       }
-      if (data.phase) applyStatus(data);
+      if (data.phase || "ready_go2" in data) applyStatus(data);
     } catch (err) {
       appendLog(`Setup error: ${err}`);
+      installBtn.disabled = false;
     }
   });
 

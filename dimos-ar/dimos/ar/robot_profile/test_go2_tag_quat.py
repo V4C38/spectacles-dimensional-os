@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from scipy.spatial.transform import Rotation as Rotation
+from scipy.spatial.transform import Rotation
 
 from dimos.ar.robot_profile.go2 import _GO2_TAG_PITCH_DEG, _GO2_TAG_QUAT, _GO2_TAG_YAW_DEG
 

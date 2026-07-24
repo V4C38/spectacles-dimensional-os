@@ -82,16 +82,18 @@ class RegistrationFlowsMixin:
             return
         self._session.mode = RegistrationMode(str(start_mode))
 
-        if self._session.mode == RegistrationMode.APRIL_TAG:
-            if not self._tag_tracker.mounts_configured():
-                logger.warning("registration_command start april_tag unavailable")
-                self._session.mode = None
-                self._broadcast_status(
-                    state=RegistrationState.FAILED,
-                    message="AprilTag registration unavailable on this robot",
-                    ts=msg.ts,
-                )
-                return
+        if (
+            self._session.mode == RegistrationMode.APRIL_TAG
+            and not self._tag_tracker.mounts_configured()
+        ):
+            logger.warning("registration_command start april_tag unavailable")
+            self._session.mode = None
+            self._broadcast_status(
+                state=RegistrationState.FAILED,
+                message="AprilTag registration unavailable on this robot",
+                ts=msg.ts,
+            )
+            return
 
         if self._session.mode == RegistrationMode.APRIL_TAG:
             self._session.april_tag_started_mono = time.monotonic()
@@ -162,9 +164,7 @@ class RegistrationFlowsMixin:
         if estimate.yaw_observable and not estimate.approximate:
             return True
         min_obs = self._world_frame_refiner.registration_min_observations()
-        if estimate.observation_count >= min_obs and self._tag_registration_stability_met():
-            return True
-        return False
+        return estimate.observation_count >= min_obs and self._tag_registration_stability_met()
 
     def _registration_scan_timed_out(self) -> bool:
         started = self._session.april_tag_started_mono
@@ -301,10 +301,7 @@ class RegistrationFlowsMixin:
             return False
 
         max_yaw_deg = self._april_tag_window_max_yaw_delta_deg(yaws)
-        if max_yaw_deg is not None and max_yaw_deg > TAG_REGISTRATION_MAX_YAW_SPREAD_DEG:
-            return False
-
-        return True
+        return max_yaw_deg is None or max_yaw_deg <= TAG_REGISTRATION_MAX_YAW_SPREAD_DEG
 
     def _process_manual_candidate(
         self,

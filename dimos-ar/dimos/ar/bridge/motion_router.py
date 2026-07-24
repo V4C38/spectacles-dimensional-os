@@ -93,7 +93,8 @@ class MotionRouter:
                         )
                         self._joystick_thread = thread
                         thread.start()
-        except BaseException as exc:
+        except Exception as exc:
+            logger.exception("motion router send_joystick_command failed")
             self._invoke_complete(on_complete, False, exc)
             return
         self._log_motion("send_joystick_command", vx=vx, vy=vy, wz=wz)
@@ -112,7 +113,8 @@ class MotionRouter:
                     self._publish_joystick_twist(0.0, 0.0, 0.0)
                 self._active_intent = _ActiveIntent.NAVIGATING
             self._publish_nav_goal(goal)
-        except BaseException as exc:
+        except Exception as exc:
+            logger.exception("motion router send_nav_goal failed")
             with self._lock:
                 self._active_intent = _ActiveIntent.NONE
             self._invoke_complete(on_complete, False, exc)
@@ -126,7 +128,8 @@ class MotionRouter:
             with self._lock:
                 self._active_intent = _ActiveIntent.NONE
             self._publish_cancel_transports()
-        except BaseException as exc:
+        except Exception as exc:
+            logger.exception("motion router cancel_nav_goal failed")
             self._invoke_complete(on_complete, False, exc)
             return
         self._log_motion("cancel_nav_goal")
@@ -144,7 +147,8 @@ class MotionRouter:
                     daemon=True,
                     name="ar-hard-stop",
                 ).start()
-        except BaseException as exc:
+        except Exception as exc:
+            logger.exception("motion router emergency_stop failed")
             self._invoke_complete(on_complete, False, exc)
             return
         self._log_motion("emergency_stop")

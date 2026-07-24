@@ -212,8 +212,10 @@ class ARWebSocketServer:
             if future is not None:
                 try:
                     future.result(timeout=2.0)
-                except Exception as exc:
-                    logger.warning("AR WebSocket server stop did not finish cleanly", error=str(exc))
+                except TimeoutError:
+                    logger.warning("AR WebSocket server stop timed out")
+                except Exception:
+                    logger.exception("AR WebSocket server stop did not finish cleanly")
         self._server_ready.clear()
         self.client_connected.clear()
         self._serve_future = None
@@ -322,7 +324,7 @@ class ARWebSocketServer:
                             )
                         continue
                     if not isinstance(message, str):
-                        raise ValueError("Unsupported WebSocket frame type")
+                        raise TypeError("Unsupported WebSocket frame type")
                     for line in split_inbound_text_lines(message):
                         msg_type = peek_message_type(line)
                         now_mono = time.monotonic()
@@ -407,8 +409,8 @@ class ARWebSocketServer:
         for websocket in list(self._outbound.keys()):
             try:
                 await websocket.send(data)
-            except Exception:
-                pass
+            except websockets.ConnectionClosed:
+                continue
 
     async def _enqueue_one(self, websocket: ws_server.ServerConnection, text: str) -> None:
         outbound = self._outbound.get(websocket)

@@ -32,16 +32,26 @@ DEFAULT_TAGS: dict[str, list[dict[str, Any]]] = {
             "pitch_deg": -15.0,
         }
     ],
+    # G1: two 120 mm tags (chest + back). print 120 mm → black square 96 mm.
     "g1": [
         {
             "tag_id": 0,
-            "print_size_mm": DEFAULT_PRINT_SIZE_MM,
-            "forward_m": 0.10,
+            "print_size_mm": 120.0,
+            "forward_m": 0.12,
             "lateral_m": 0.0,
-            "up_m": 0.35,
+            "up_m": 0.40,
             "yaw_deg": 0.0,
             "pitch_deg": -90.0,
-        }
+        },
+        {
+            "tag_id": 1,
+            "print_size_mm": 120.0,
+            "forward_m": -0.12,
+            "lateral_m": 0.0,
+            "up_m": 0.40,
+            "yaw_deg": 180.0,
+            "pitch_deg": -90.0,
+        },
     ],
 }
 

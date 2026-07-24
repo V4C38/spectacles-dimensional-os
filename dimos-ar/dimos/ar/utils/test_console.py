@@ -74,7 +74,7 @@ def test_install_ar_console_styles_rebinds_existing_formatter() -> None:
     import structlog
 
     import dimos.ar.utils.console as console_mod
-    import dimos.utils.logging_config as logging_config
+    from dimos.utils import logging_config
 
     stdlib_logger = logging.getLogger("dimos.ar.utils.test_rebind")
     stdlib_logger.handlers.clear()

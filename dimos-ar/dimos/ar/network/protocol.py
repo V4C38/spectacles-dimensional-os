@@ -143,7 +143,7 @@ def _require_type(data: dict[str, Any], key: str, expected: type) -> Any:
         raise ValueError(f"Missing required field: {key}")
     value = data[key]
     if not isinstance(value, expected):
-        raise ValueError(f"Field {key!r} must be {expected.__name__}, got {type(value).__name__}")
+        raise TypeError(f"Field {key!r} must be {expected.__name__}, got {type(value).__name__}")
     return value
 
 
@@ -165,7 +165,7 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
     """Parse an inbound JSON message. Raises ValueError on malformed input."""
     data = json.loads(text)
     if not isinstance(data, dict):
-        raise ValueError("Message must be a JSON object")
+        raise TypeError("Message must be a JSON object")
     msg_type = _require_type(data, "type", str)
     if "ts" not in data or not isinstance(data["ts"], (int, float)):
         raise ValueError("Missing or invalid field: ts")

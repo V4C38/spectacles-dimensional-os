@@ -142,7 +142,7 @@ def decode_hmd_transform(
 ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
     """Parse get_user_hmd_transform result data into (position, orientation)."""
     if not isinstance(data, dict):
-        raise ValueError("HMD transform data must be a JSON object")
+        raise TypeError("HMD transform data must be a JSON object")
     position = data.get("position")
     orientation = data.get("orientation")
     if (

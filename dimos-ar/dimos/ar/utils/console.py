@@ -78,7 +78,7 @@ def install_ar_console_styles() -> None:
 
     import structlog
 
-    import dimos.utils.logging_config as logging_config
+    from dimos.utils import logging_config
 
     original = logging_config._compact_console_processor
 

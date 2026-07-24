@@ -12,7 +12,7 @@
         <div class="panel-top">
           <section class="card status-card" id="statusCard">
             <div class="status-row state-row">
-              <span class="label">DimOS AR Bridge</span>
+              <span class="brand-title">DimOS AR Bridge</span>
               <div class="state-block">
                 <span class="value state-value" id="stateValue" data-phase="idle">…</span>
                 <span class="state-detail hidden" id="stateDetail"></span>
@@ -53,38 +53,42 @@
             </div>
           </details>
 
-          <section class="card setup-card hidden" id="setupCard">
-            <h2>Setup required</h2>
-            <p class="hint">
-              DimOS or dimos-ar is not ready. Choose how to install, then approve.
-            </p>
-            <fieldset class="radio-group">
-              <label>
-                <input type="radio" name="setupMode" value="clone" checked />
-                Fresh install (clone DimOS + create .venv)
+          <details class="card deps-card" id="installBanner">
+            <summary class="deps-summary">
+              <span class="label">Dependencies</span>
+            </summary>
+            <div class="deps-body">
+              <fieldset class="radio-group">
+                <label>
+                  <input type="radio" name="setupMode" value="existing" checked />
+                  Reuse DimOS already installed on this Mac
+                </label>
+                <label>
+                  <input type="radio" name="setupMode" value="clone" />
+                  Download DimOS from GitHub into a new folder
+                </label>
+              </fieldset>
+              <label class="field" id="dimosPythonField">
+                <span>Path to DimOS Python (…/.venv/bin/python3)</span>
+                <input
+                  type="text"
+                  id="dimosPython"
+                  placeholder="/path/to/dimos/.venv/bin/python3"
+                  autocomplete="off"
+                />
               </label>
-              <label>
-                <input type="radio" name="setupMode" value="existing" />
-                Use existing DimOS Python
+              <label class="field hidden" id="cloneDirField">
+                <span>Folder to download DimOS into</span>
+                <input type="text" id="cloneDir" autocomplete="off" />
               </label>
-            </fieldset>
-            <label class="field" id="cloneDirField">
-              <span>Clone directory</span>
-              <input type="text" id="cloneDir" autocomplete="off" />
-            </label>
-            <label class="field hidden" id="dimosPythonField">
-              <span>DimOS Python path</span>
-              <input
-                type="text"
-                id="dimosPython"
-                placeholder="/path/to/dimos/.venv/bin/python3"
-                autocomplete="off"
-              />
-            </label>
-            <button type="button" class="btn primary" id="installBtn">
-              Approve &amp; install
-            </button>
-          </section>
+              <p class="hint hidden" id="installHint">
+                This stack is not ready yet. Install its dependencies to continue.
+              </p>
+              <button type="button" class="btn primary hidden" id="installBtn">
+                Install dependencies
+              </button>
+            </div>
+          </details>
 
           <section class="controls" id="controlsCard">
             <div class="tabs" role="tablist">
@@ -97,9 +101,9 @@
               <dl class="info-list" id="stackInfoList"></dl>
             </fieldset>
 
-            <fieldset class="modules">
-              <legend>Agent</legend>
-              <label class="field module-key">
+            <fieldset class="info-box config-box" id="configBox">
+              <legend>Config</legend>
+              <label class="field config-key">
                 <span>OPENAI_API_KEY</span>
                 <div class="secret-row">
                   <input
@@ -113,10 +117,7 @@
                   </button>
                 </div>
               </label>
-            </fieldset>
-
-            <fieldset class="info-box tag-config-box" id="tagConfigBox">
-              <legend>AprilTag config</legend>
+              <div class="config-section-label">AprilTags</div>
               <div id="tagList" class="tag-list"></div>
               <div class="tag-actions">
                 <button type="button" class="btn ghost btn-compact" id="addTagBtn">

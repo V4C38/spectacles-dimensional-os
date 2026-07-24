@@ -25,16 +25,36 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
+# 36h11: black square is 80% of outer print size. 120 mm print → 96 mm black.
+_G1_TAG_BLACK_SIZE_M = 0.096
+
 G1_DEFAULT_TAG_MOUNTS: list[TagMount] = [
+    # Chest / front — faces +X (forward).
     TagMount(
         tag_id=DEFAULT_MARKER_ID,
-        size_m=0.056,
-        position=(0.10, 0.0, 0.35),
+        size_m=_G1_TAG_BLACK_SIZE_M,
+        position=(0.12, 0.0, 0.40),
         orientation=(0.0, -0.70710678, 0.0, 0.70710678),
     ),
-    # Uncomment and set the real pose to enable per-frame yaw observability.
-    # TagMount(tag_id=1, size_m=0.056, position=(0.0, 0.0, 0.0), orientation=(0.0, -0.70710678, 0.0, 0.70710678)),
+    # Back / rear — faces -X.
+    TagMount(
+        tag_id=1,
+        size_m=_G1_TAG_BLACK_SIZE_M,
+        position=(-0.12, 0.0, 0.40),
+        orientation=(-0.70710678, 0.0, 0.70710678, 0.0),
+    ),
 ]
+
+
+def _g1_tag_total_size_m(mounts: list[TagMount]) -> float:
+    """Outer print size for the Lens handshake (black / 0.8)."""
+    if not mounts:
+        return TAG_TOTAL_SIZE_M
+    totals = {round(m.size_m / 0.8, 6) for m in mounts}
+    if len(totals) == 1:
+        return next(iter(totals))
+    # Mixed sizes: report the largest so the Lens never under-sizes a tag.
+    return max(totals)
 
 
 def g1_tag_mounts() -> list[TagMount]:
@@ -113,7 +133,7 @@ def g1_handshake(
         default_render_offset_m=(0.0, 0.0, 0.0),
         tag_tracking_profile={
             "tag_ids": tag_ids,
-            "tag_total_size_m": TAG_TOTAL_SIZE_M,
+            "tag_total_size_m": _g1_tag_total_size_m(effective),
         },
     )
 

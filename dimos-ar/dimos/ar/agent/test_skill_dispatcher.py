@@ -83,13 +83,9 @@ def test_late_result_dropped() -> None:
 def test_concurrent_requests_correlate_by_request_id() -> None:
     dispatcher, mock_server = _make_dispatcher()
     results: dict[str, ArSkillResultMessage] = {}
-    errors: list[BaseException] = []
 
     def worker(skill: str) -> None:
-        try:
-            results[skill] = dispatcher.request(skill, timeout_s=1.0)
-        except BaseException as exc:
-            errors.append(exc)
+        results[skill] = dispatcher.request(skill, timeout_s=1.0)
 
     threads = [
         threading.Thread(target=worker, args=("skill_a",), daemon=True),
@@ -129,7 +125,6 @@ def test_concurrent_requests_correlate_by_request_id() -> None:
     )
     for t in threads:
         t.join(timeout=1.0)
-    assert errors == []
     assert results["skill_a"].data == {"which": "a"}
     assert results["skill_b"].data == {"which": "b"}
 

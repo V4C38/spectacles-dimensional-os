@@ -26,7 +26,10 @@
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
-    {}
+    anchorOffset: false
+    hidePitchDeg: false
+    menuRoot: false
+    showPitchDeg: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -36,10 +39,15 @@
   Attachments:
     []
   DefaultScriptInputs:
-    -
-      {}
+    - menuRoot: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      anchorOffset: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      showPitchDeg: !<float> 10.000000
+      hidePitchDeg: !<float> -10.000000
   ScriptTypes:
     -
       {}
   InputLines:
-    []
+    - // @input SceneObject menuRoot
+    - // @input SceneObject anchorOffset
+    - // @input float showPitchDeg = 10
+    - // @input float hidePitchDeg = -10

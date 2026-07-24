@@ -7,6 +7,7 @@ from pathlib import Path
 
 from tag_config import (
     DEFAULT_TAGS,
+    _yaw_pitch_to_quat,
     load_tag_config,
     mounts_env_json,
     mounts_payload_for_env,
@@ -14,7 +15,6 @@ from tag_config import (
     save_tag_config,
     tag_config_api_payload,
     tag_config_path,
-    _yaw_pitch_to_quat,
 )
 
 
@@ -56,7 +56,10 @@ def test_save_and_load_roundtrip(tmp_path: Path) -> None:
 def test_api_payload_includes_defaults(tmp_path: Path) -> None:
     payload = tag_config_api_payload(tmp_path)
     assert payload["default_tag_ids"]["go2"] == [0]
+    assert payload["default_tag_ids"]["g1"] == [0, 1]
     assert payload["defaults"]["go2"][0]["forward_m"] == DEFAULT_TAGS["go2"][0]["forward_m"]
+    assert payload["defaults"]["g1"][0]["print_size_mm"] == 120.0
+    assert len(payload["defaults"]["g1"]) == 2
     assert payload["go2"][0]["tag_id"] == 0
 
 
@@ -124,7 +127,9 @@ def test_restore_tag_config_resets_stack(tmp_path: Path) -> None:
     restored = restore_tag_config(tmp_path, stack="go2")
     assert restored["go2"][0]["forward_m"] == DEFAULT_TAGS["go2"][0]["forward_m"]
     assert restored["go2"][0]["yaw_deg"] == DEFAULT_TAGS["go2"][0]["yaw_deg"]
-    assert restored["g1"][0]["up_m"] == 0.77
+    g1_by_id = {t["tag_id"]: t for t in restored["g1"]}
+    assert g1_by_id[0]["up_m"] == 0.77
+    assert 1 in g1_by_id
 
 
 def test_yaw_pitch_to_quat_go2_convention() -> None:
@@ -139,3 +144,15 @@ def test_g1_default_pitch_minus_90() -> None:
     # Pure -90° about Y → (0, -√2/2, 0, √2/2)
     assert abs(payload["orientation"][1] + 0.7071067811865475) < 1e-9
     assert abs(payload["orientation"][3] - 0.7071067811865476) < 1e-9
+
+
+def test_g1_defaults_are_two_120mm_chest_back_tags() -> None:
+    assert len(DEFAULT_TAGS["g1"]) == 2
+    by_id = {t["tag_id"]: t for t in DEFAULT_TAGS["g1"]}
+    assert by_id[0]["print_size_mm"] == 120.0
+    assert by_id[0]["forward_m"] == 0.12
+    assert by_id[1]["print_size_mm"] == 120.0
+    assert by_id[1]["forward_m"] == -0.12
+    mounts = mounts_payload_for_env(DEFAULT_TAGS["g1"])
+    assert abs(mounts[0]["size_m"] - 0.096) < 1e-9
+    assert abs(mounts[1]["size_m"] - 0.096) < 1e-9

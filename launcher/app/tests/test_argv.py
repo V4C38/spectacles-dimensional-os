@@ -35,6 +35,22 @@ def test_setup_argv_clone_vs_python(tmp_path: Path) -> None:
     (tmp_path / "launcher" / "scripts" / "setup.sh").write_text("#!/bin/sh\n")
     clone = mgr.build_setup_argv(clone_dir="/tmp/dimos")
     assert "--yes" in clone
+    assert clone[clone.index("--stack") + 1] == "go2"
     assert clone[clone.index("--clone-dir") + 1] == "/tmp/dimos"
-    existing = mgr.build_setup_argv(dimos_python="/tmp/dimos/.venv/bin/python3")
+    existing = mgr.build_setup_argv(
+        stack="g1",
+        dimos_python="/tmp/dimos/.venv/bin/python3",
+    )
+    assert existing[existing.index("--stack") + 1] == "g1"
     assert existing[existing.index("--dimos-python") + 1] == "/tmp/dimos/.venv/bin/python3"
+
+
+def test_setup_argv_requires_valid_stack(tmp_path: Path) -> None:
+    mgr = ProcessManager(root=tmp_path)
+    (tmp_path / "launcher" / "scripts").mkdir(parents=True)
+    (tmp_path / "launcher" / "scripts" / "setup.sh").write_text("#!/bin/sh\n")
+    try:
+        mgr.build_setup_argv(stack="spot", clone_dir="/tmp/dimos")
+        raise AssertionError("expected ValueError for invalid stack")
+    except ValueError as exc:
+        assert "stack" in str(exc)

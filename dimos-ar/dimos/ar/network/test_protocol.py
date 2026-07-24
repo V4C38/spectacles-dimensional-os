@@ -95,7 +95,8 @@ def test_encode_hello_g1_tag_tracking_profile() -> None:
     assert "robot_model" not in msg["robot"]
     assert "registration_april_tag" not in msg["capabilities"]
     assert "registration_manual_pose" not in msg["capabilities"]
-    assert msg["robot"]["tag_tracking_profile"]["tag_total_size_m"] == 0.07
+    assert msg["robot"]["tag_tracking_profile"]["tag_total_size_m"] == 0.12
+    assert msg["robot"]["tag_tracking_profile"]["tag_ids"] == [0, 1]
     assert isinstance(msg["robot"]["tag_tracking_profile"]["tag_ids"], list)
 
 
