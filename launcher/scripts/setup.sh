@@ -205,6 +205,11 @@ run_check() {
   echo "DimOS: ${dimos_status}"
   echo "dimos-ar: ${ar_status}"
   echo "native source (G1): ${native_status}"
+  if openai_api_key_is_set "${ROOT}"; then
+    print_green "OPENAI_API_KEY = true"
+  else
+    print_red "OPENAI_API_KEY = false"
+  fi
   echo "CHECK_OK_GO2=${go2_ok}"
   echo "CHECK_OK_G1=${g1_ok}"
   # Legacy: mirrors Go2 readiness so older clients keep working.

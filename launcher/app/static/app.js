@@ -39,7 +39,10 @@
   let readyByStack = { go2: null, g1: null };
   let lastStatus = {};
   let keyVisible = false;
+  const MAX_LOG_LINES = 5000;
   const logLines = [];
+  const pendingLines = [];
+  let frameHandle = null;
 
   /** Populated from GET /api/tag-config (backend owns robot_profile defaults). */
   let defaultTagIds = { go2: new Set(), g1: new Set() };
@@ -483,21 +486,53 @@
     return text.replace(ANSI_RE, "");
   }
 
-  function renderLog() {
+  function makeLogLineEl(line) {
+    const el = document.createElement("div");
+    el.className = "log-line";
+    el.innerHTML = ansiToHtml(line);
+    return el;
+  }
+
+  function flushLog() {
+    frameHandle = null;
+    if (!pendingLines.length) return;
     const nearBottom =
       logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 48;
-    logEl.innerHTML = logLines.map((line) => ansiToHtml(line)).join("\n");
+    const fragment = document.createDocumentFragment();
+    for (const line of pendingLines) {
+      fragment.appendChild(makeLogLineEl(line));
+      logLines.push(line);
+    }
+    pendingLines.length = 0;
+    logEl.appendChild(fragment);
+
+    const excess = logLines.length - MAX_LOG_LINES;
+    if (excess > 0) {
+      for (let i = 0; i < excess; i++) {
+        const first = logEl.firstElementChild;
+        if (first) logEl.removeChild(first);
+      }
+      logLines.splice(0, excess);
+    }
+
     if (nearBottom) {
       logEl.scrollTop = logEl.scrollHeight;
     }
   }
 
   function appendLog(line) {
-    logLines.push(line);
-    renderLog();
+    pendingLines.push(line);
+    if (frameHandle === null) {
+      frameHandle = requestAnimationFrame(flushLog);
+    }
   }
 
   function clearLog() {
+    if (frameHandle !== null) {
+      cancelAnimationFrame(frameHandle);
+      frameHandle = null;
+    }
+    pendingLines.length = 0;
     logLines.length = 0;
     logEl.textContent = "";
   }
@@ -566,6 +601,10 @@
       errorText.classList.remove("hidden");
     } else {
       errorText.classList.add("hidden");
+    }
+
+    if ("openai_api_key" in status && document.activeElement !== apiKey) {
+      apiKey.value = status.openai_api_key || "";
     }
 
     const busy =
@@ -778,17 +817,32 @@
     }
   });
 
+  async function saveSettings() {
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ openai_api_key: apiKey.value.trim() || null }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.phase) applyStatus(data);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  apiKey.addEventListener("blur", () => {
+    void saveSettings();
+  });
+
   startBtn.addEventListener("click", async () => {
     startBtn.disabled = true;
     await persistTagConfig();
+    await saveSettings();
     const body = {
       stack,
       robot_ip: robotIpAuto.checked ? null : robotIp.value.trim() || null,
     };
-    const typedKey = apiKey.value.trim();
-    if (typedKey) {
-      body.openai_api_key = typedKey;
-    }
     try {
       const res = await fetch("/api/bridge/start", {
         method: "POST",
@@ -801,9 +855,6 @@
         startBtn.disabled = false;
       }
       if (data.phase) applyStatus(data);
-      if (res.ok && typedKey) {
-        apiKey.value = "";
-      }
     } catch (err) {
       appendLog(`Start error: ${err}`);
       startBtn.disabled = false;
@@ -823,8 +874,7 @@
   async function loadConfig() {
     try {
       const res = await fetch("/api/tag-config");
-      if (!res.ok) return;
-      applyTagConfigPayload(await res.json());
+      if (res.ok) applyTagConfigPayload(await res.json());
     } catch (_) {
       /* ignore */
     }

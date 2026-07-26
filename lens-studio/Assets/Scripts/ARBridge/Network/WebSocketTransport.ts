@@ -52,6 +52,9 @@ export class WebSocketTransport {
   public baseUrl: string = "";
   public ws: WebSocket | null = null;
   public isConnecting = false;
+  /** Host of the currently open socket (null when not open). */
+  private _openHost: string | null = null;
+  private _connectingHost: string | null = null;
   private _lastConnectingLogTime = -1;
 
   private readonly internetModule: InternetModule;
@@ -126,6 +129,11 @@ export class WebSocketTransport {
     this._pongTimeoutTimer = pongTimeoutTimer;
   }
 
+  /** Normalized host of the open socket, or null if not open. */
+  public get openHost(): string | null {
+    return this._openHost;
+  }
+
   public wireClockSync(inbound: ClockSyncInbound): void {
     this._inbound = inbound;
     inbound.onHello.add(this._onHelloForClockSync);
@@ -169,17 +177,16 @@ export class WebSocketTransport {
   }
 
   public saveIp(ip: string): void {
-    this.store.putString(IP_STORAGE_KEY, WebSocketTransport.normalizeIp(ip));
+    // Reachy-parity: persist the string as given; normalize only in deriveWsUrl.
+    this.store.putString(IP_STORAGE_KEY, ip);
   }
 
   public loadIp(): string | null {
     if (this.store.has(IP_STORAGE_KEY)) {
-      return WebSocketTransport.normalizeIp(this.store.getString(IP_STORAGE_KEY));
+      return this.store.getString(IP_STORAGE_KEY);
     }
     if (this.store.has(LEGACY_IP_STORAGE_KEY)) {
-      const legacy = WebSocketTransport.normalizeIp(
-        this.store.getString(LEGACY_IP_STORAGE_KEY),
-      );
+      const legacy = this.store.getString(LEGACY_IP_STORAGE_KEY);
       this.saveIp(legacy);
       return legacy;
     }
@@ -200,16 +207,27 @@ export class WebSocketTransport {
     return `ws://${host}:${WS_PORT}`;
   }
 
+  /**
+   * Open a WebSocket to baseUrl. Resolves when open; rejects on failure/timeout.
+   * Spectacles-safe abort (retire CONNECTING sockets — never hard-close them).
+   * Host change forces reconnect.
+   */
   public connect(): Promise<void> {
-    if (this.ws && this.ws.readyState === WS_OPEN) {
+    const targetHost = WebSocketTransport.normalizeIp(this.baseUrl);
+    if (this.ws && this.ws.readyState === WS_OPEN && this._openHost === targetHost) {
       return Promise.resolve();
     }
+    // Reachy guard: never start a second socket while one is CONNECTING —
+    // even for a different host. Callers get the in-flight attempt; a new
+    // host is picked up by the next attempt after this one settles.
     if (this.isConnecting && this._connectPromise) {
       return this._connectPromise;
     }
+
     this.disconnect(false);
     this._drainRetiredSockets();
     this.isConnecting = true;
+    this._connectingHost = targetHost;
 
     const wsUrl = this.deriveWsUrl(this.baseUrl);
     const now = getTime();
@@ -246,6 +264,7 @@ export class WebSocketTransport {
         if (this.ws !== socket) {
           return;
         }
+        // Spectacles may deliver traffic before a reliable onopen.
         if (this.isConnecting && this._connectingSocket === socket) {
           this._completeConnectOpen(socket);
         }
@@ -270,6 +289,7 @@ export class WebSocketTransport {
         );
         const wasConnecting = this.isConnecting && this._connectingSocket === socket;
         this.ws = null;
+        this._openHost = null;
         this._fragmentBuffer = null;
         if (wasConnecting) {
           this._finishConnectAttempt(new Error("WebSocket connection closed"));
@@ -285,20 +305,6 @@ export class WebSocketTransport {
     return this._connectPromise;
   }
 
-  /** Abort an in-flight connect without emitting onClose or resetting inbound state. */
-  public cancelConnect(): void {
-    if (!this.isConnecting) {
-      return;
-    }
-    const socket = this._connectingSocket ?? this.ws;
-    if (socket) {
-      this._retireSocket(socket);
-    }
-    this.ws = null;
-    this._fragmentBuffer = null;
-    this._finishConnectAttempt(new Error("WebSocket connection cancelled"));
-  }
-
   public disconnect(notify: boolean = true): void {
     if (this.isConnecting) {
       const socket = this._connectingSocket ?? this.ws;
@@ -306,13 +312,16 @@ export class WebSocketTransport {
         this._retireSocket(socket);
       }
       this.ws = null;
+      this._openHost = null;
       this._fragmentBuffer = null;
       this._finishConnectAttempt(new Error("WebSocket connection closed"));
     } else if (this.ws) {
       const socket = this.ws;
+      // Spectacles rejects null handlers — use no-ops.
       this._detachSocketHandlers(socket);
       socket.close();
       this.ws = null;
+      this._openHost = null;
     }
     this._fragmentBuffer = null;
     this.isConnecting = false;
@@ -502,6 +511,8 @@ export class WebSocketTransport {
     this._clearConnectWatchdog();
     this.isConnecting = false;
     this._connectingSocket = null;
+    this._openHost = this._connectingHost;
+    this._connectingHost = null;
     const resolveFn = this._pendingConnectResolve;
     this._pendingConnectReject = null;
     this._pendingConnectResolve = null;
@@ -513,6 +524,10 @@ export class WebSocketTransport {
     }
   }
 
+  /**
+   * Abort a socket without hard-closing while CONNECTING (Spectacles freeze risk).
+   * Close only if already OPEN; if it opens later while retired, close then.
+   */
   private _retireSocket(socket: WebSocket): void {
     if (this._retiredSockets.has(socket)) {
       return;
@@ -536,7 +551,9 @@ export class WebSocketTransport {
 
   private _drainRetiredSockets(): void {
     for (const socket of Array.from(this._retiredSockets)) {
-      if (socket.readyState === WS_OPEN || socket.readyState === WS_CONNECTING) {
+      // Never hard-close a CONNECTING native socket (freezes Spectacles).
+      // A retired socket closes itself via its own onopen, or dies natively.
+      if (socket.readyState === WS_OPEN) {
         socket.close();
       }
     }
@@ -547,6 +564,10 @@ export class WebSocketTransport {
     this._clearConnectWatchdog();
     this.isConnecting = false;
     this._connectingSocket = null;
+    this._connectingHost = null;
+    if (error) {
+      this._openHost = null;
+    }
     this._connectPromise = null;
     const rejectFn = this._pendingConnectReject;
     const resolveFn = this._pendingConnectResolve;

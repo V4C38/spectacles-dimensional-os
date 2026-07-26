@@ -147,9 +147,9 @@ export class AgentSpeechController {
     const text = eventArgs.text;
     const isFinal = eventArgs.isFinal;
 
-    print(
-      `AgentSpeechController: ${isFinal ? `ASR final: ${text}` : `ASR: ${text}`}`,
-    );
+    if (isFinal) {
+      print(`AgentSpeechController: ASR final: ${text}`);
+    }
 
     if (this._stopMatcher.check(text, isFinal)) {
       this._handleStopCommand();

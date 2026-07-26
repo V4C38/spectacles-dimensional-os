@@ -213,6 +213,11 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     }
   }
 
+  /** Reachy-shaped: ensure socket open to current baseUrl, then hello. */
+  public checkConnection(): Promise<boolean> {
+    return this.arBridgeServices.router.checkConnection();
+  }
+
   public tryConnectBridge(ip: string): Promise<boolean> {
     return this.arBridgeServices.router.tryConnect(ip);
   }
@@ -231,6 +236,10 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
 
   public getBaseUrl(): string {
     return this.arBridgeServices.router.getBaseUrl();
+  }
+
+  public setBridgeBaseUrl(url: string): void {
+    this.arBridgeServices.router.setBaseUrl(url);
   }
 
   public getDefaultBridgeIp(): string {

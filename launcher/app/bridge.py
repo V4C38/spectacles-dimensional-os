@@ -16,11 +16,19 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from config import merge_env, read_env, repo_root, scripts_dir
+from config import (
+    env_path,
+    merge_env,
+    migrate_legacy_env,
+    read_env,
+    repo_root,
+    scripts_dir,
+)
 from tag_config import mounts_env_json
 
 BRIDGE_PORT = 8787
 LOG_BUFFER_SIZE = 500
+SUBSCRIBER_QUEUE_SIZE = 2000
 STOP_GRACE_SECONDS = 8.0
 
 _RE_ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -68,12 +76,15 @@ class BridgeStatus:
 
 @dataclass
 class _Subscriber:
-    queue: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
+    queue: asyncio.Queue[dict[str, Any]] = field(
+        default_factory=lambda: asyncio.Queue(maxsize=SUBSCRIBER_QUEUE_SIZE)
+    )
 
 
 class ProcessManager:
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or repo_root()
+        migrate_legacy_env(self.root)
         self.scripts = scripts_dir(self.root)
         self.status = BridgeStatus()
         self._log: deque[str] = deque(maxlen=LOG_BUFFER_SIZE)
@@ -96,6 +107,7 @@ class ProcessManager:
             "warning": self.status.warning,
             "stack": self.status.stack,
             "error": self.status.error,
+            "openai_api_key": read_env(env_path(self.root)).get("OPENAI_API_KEY", ""),
             "default_clone_dir": str((self.root.parent / "dimos").resolve()),
         }
 
@@ -115,7 +127,30 @@ class ProcessManager:
 
     def _emit(self, event: dict[str, Any]) -> None:
         for sub in list(self._subs):
-            sub.queue.put_nowait(event)
+            try:
+                sub.queue.put_nowait(event)
+            except asyncio.QueueFull:
+                dropped = 0
+                # Make room for the incoming event, truncation marker, and status.
+                while sub.queue.qsize() > max(0, SUBSCRIBER_QUEUE_SIZE - 3):
+                    try:
+                        old = sub.queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    if old.get("type") == "log":
+                        dropped += 1
+                try:
+                    sub.queue.put_nowait(event)
+                    if dropped:
+                        sub.queue.put_nowait(
+                            {
+                                "type": "log",
+                                "line": f"… {dropped} log lines dropped",
+                            }
+                        )
+                    sub.queue.put_nowait({"type": "status", **self.snapshot()})
+                except asyncio.QueueFull:
+                    pass
 
     def _append_log(self, line: str) -> None:
         self._log.append(line)
@@ -127,6 +162,14 @@ class ProcessManager:
         self._emit({"type": "status", **self.snapshot()})
 
     def _parse_bridge_line(self, line: str) -> None:
+        # Banner patterns only match during startup; skip once resolved.
+        if (
+            self.status.phase == Phase.RUNNING
+            and self.status.websocket_url
+            and self.status.spectacles_ip
+            and self.status.robot_ip is not None
+        ):
+            return
         plain = _strip_ansi(line)
         if m := _RE_BRIDGE_READY.search(plain):
             self._set_status(websocket_url=m.group(1), phase=Phase.RUNNING, error=None)
@@ -144,8 +187,6 @@ class ProcessManager:
         if m := _RE_ROBOT_IP.search(plain):
             self._set_status(robot_ip=m.group(1))
             return
-        if "OPENAI_API_KEY is unset" in plain:
-            self._set_status(warning="OPENAI_API_KEY is unset — agent mode will not work")
 
     def port_in_use(self, port: int = BRIDGE_PORT) -> bool:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -432,7 +473,6 @@ class ProcessManager:
         *,
         stack: str,
         robot_ip: str | None = None,
-        openai_api_key: str | None = None,
     ) -> None:
         async with self._lock:
             if self._proc is not None:
@@ -452,19 +492,13 @@ class ProcessManager:
 
             await self._configure_system_if_needed()
 
-            updates: dict[str, str | None] = {}
-            if openai_api_key is not None:
-                key = openai_api_key.strip()
-                updates["OPENAI_API_KEY"] = key if key else None
-            # Persist ROBOT_IP only when pinned; clear otherwise so DimOS .env
+            # Persist ROBOT_IP only when pinned; clear otherwise so DimOS env
             # read cannot override discovery. Keep user-facing "simulated";
             # start.sh maps simulated|fake → DimOS offline replay.
             pinned_ip = robot_ip.strip() if robot_ip else None
             if pinned_ip in ("simulated", "fake"):
                 pinned_ip = "simulated"
-            updates["ROBOT_IP"] = pinned_ip
-            if updates:
-                merge_env(updates, self.root / ".env")
+            merge_env({"ROBOT_IP": pinned_ip}, env_path(self.root))
 
             env = os.environ.copy()
             # System config already applied above via the native admin prompt;
@@ -475,11 +509,9 @@ class ProcessManager:
             # Force ANSI colors into the SSE log (stdout is a pipe, not a TTY).
             env["DIMOS_AR_FORCE_COLOR"] = "1"
             env["DIMOS_AR_TAG_MOUNTS"] = mounts_env_json(stack, self.root)
-            stored = read_env(self.root / ".env")
+            stored = read_env(env_path(self.root))
             if stored.get("OPENAI_API_KEY"):
                 env["OPENAI_API_KEY"] = stored["OPENAI_API_KEY"]
-            if openai_api_key is not None and openai_api_key.strip():
-                env["OPENAI_API_KEY"] = openai_api_key.strip()
 
             argv = self.build_start_argv(
                 stack=stack,

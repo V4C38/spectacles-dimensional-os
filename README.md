@@ -271,7 +271,7 @@ Toggle Manual Mode from the runtime wrist menu. While navigating, the yellow dir
 <details>
 <summary><h3>Agent Mode</h3></summary>
 
-In **Agent Mode**, wake-word voice on Spectacles becomes a `user_command` on the bridge. The DimOS LLM agent (OpenAI API on the Mac) runs tools and replies with short text shown on the AR debug console (line 8). There is no speech output from the agent.
+In **Agent Mode**, wake-word voice on Spectacles becomes a `user_command` on the bridge. The DimOS LLM agent (OpenAI API on the Mac) runs tools and acts immediately — it never asks the user a clarifying question, since there is no speech output and the AR debug console (line 8) isn't a real conversation surface. For an underspecified command (e.g. "move left" with no distance), the agent picks a safe default itself (20 cm move, 90° turn) rather than stalling. Its text reply is a short (5-word-or-fewer) status log, not user-facing feedback.
 
 **Prerequisites**
 
@@ -315,6 +315,10 @@ Reproduce CI locally before opening a PR:
 ```bash
 ./launcher/scripts/run-ci.sh
 ```
+
+Run this in a normal terminal (or with the Cursor agent sandbox disabled /
+`all` permissions). Inside the sandbox it fails: DimOS pytest collection needs
+to write logs under `~/.local/state/dimos/logs/`.
 
 **Python tests** (from the DimOS `.venv`):
 

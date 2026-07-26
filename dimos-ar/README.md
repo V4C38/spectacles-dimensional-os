@@ -121,7 +121,9 @@ cd /path/to/spectacles-dimensional-os/dimos-ar
 
 Lens protocol tests: `cd ../lens-studio/Tests && npm test`.
 
-Reproduce full CI from repo root: `./launcher/scripts/run-ci.sh`.
+Reproduce full CI from repo root: `./launcher/scripts/run-ci.sh`
+(outside the Cursor agent sandbox — DimOS needs write access under
+`~/.local/state/dimos/logs/`).
 
 </details>
 

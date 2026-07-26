@@ -4,6 +4,10 @@
 # Usage (from repo root):
 #   ./launcher/scripts/run-ci.sh
 #
+# Must run outside the Cursor agent sandbox (normal terminal, or agent with
+# unrestricted / "all" permissions). Sandboxed runs fail when DimOS logging
+# tries to write under ~/.local/state/dimos/logs/.
+#
 # Environment (optional):
 #   CI_PYTHON   Python 3.12+ interpreter for the dimos-ar job (default: python3.12, python3)
 #   CI_VENV     Path to reuse/create for dimos-ar deps (default: /tmp/spectacles-dimensional-os-ci-venv)

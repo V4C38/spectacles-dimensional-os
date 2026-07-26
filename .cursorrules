@@ -113,10 +113,16 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic, follo
 Before any git commit, run `./launcher/scripts/run-ci.sh` from the repo root and fix failures
 until it passes. See `.cursor/rules/pre-commit-ci.mdc`.
 
+**Agents:** `run-ci.sh` must run **outside the Cursor sandbox** (`required_permissions: ["all"]`
+or a normal terminal). Sandboxed runs fail when DimOS tries to write logs under
+`~/.local/state/dimos/logs/`.
+
 ## Dev quick reference
 
 ```bash
 # Local CI (matches GitHub Actions — run before committing)
+# Must NOT run inside the Cursor agent sandbox — needs write access outside the repo
+# (DimOS logs under ~/.local/state/dimos/logs/). Use a normal terminal or all perms.
 ./launcher/scripts/run-ci.sh
 
 # Install + start bridge (from repo root)

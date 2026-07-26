@@ -42,8 +42,38 @@ echo "Starting AR Bridge launcher at ${URL}"
 echo "Leave this window open. Press Ctrl+C to stop."
 cd "${LAUNCHER_DIR}"
 
-if command -v open >/dev/null 2>&1; then
-  (sleep 1 && open "${URL}") &
+wait_for_server() {
+  local attempt=0
+  local max_attempts=50
+  while [[ "${attempt}" -lt "${max_attempts}" ]]; do
+    if curl -sf "${URL}/api/status" >/dev/null 2>&1; then
+      return 0
+    fi
+    if ! kill -0 "${UVICORN_PID}" 2>/dev/null; then
+      echo "Launcher exited before becoming ready." >&2
+      wait "${UVICORN_PID}" || true
+      return 1
+    fi
+    sleep 0.2
+    attempt=$((attempt + 1))
+  done
+  echo "Timed out waiting for launcher at ${URL}" >&2
+  return 1
+}
+
+cleanup() {
+  if [[ -n "${UVICORN_PID:-}" ]] && kill -0 "${UVICORN_PID}" 2>/dev/null; then
+    kill "${UVICORN_PID}" 2>/dev/null || true
+    wait "${UVICORN_PID}" 2>/dev/null || true
+  fi
+}
+trap cleanup INT TERM
+
+"${VENV_PYTHON}" -m uvicorn app:app --host "${HOST}" --port "${PORT}" &
+UVICORN_PID=$!
+
+if wait_for_server && command -v open >/dev/null 2>&1; then
+  open "${URL}"
 fi
 
-exec "${VENV_PYTHON}" -m uvicorn app:app --host "${HOST}" --port "${PORT}"
+wait "${UVICORN_PID}"

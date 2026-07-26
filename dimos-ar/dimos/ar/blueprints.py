@@ -66,7 +66,10 @@ _VIS_MODULES = tuple(
     if module is not None
 )
 
-ar_go2 = (
+# One worker per active module so MCP agent modules are not GIL-starved by the
+# sensor/mapping pipeline (e.g. McpClient sharing a process with VoxelGridMapper).
+# Overrides upstream unitree_go2 / unitree_g1_nav_simple n_workers=10.
+_ar_go2_base = (
     autoconnect(
         unitree_go2,
         Go2RobotProfileModule.blueprint(),
@@ -97,12 +100,19 @@ ar_go2 = (
     # viewer="none" alone does not remove upstream viz modules because those are
     # selected at import time; disable them explicitly for AR runs.
     .disabled_modules(*_VIS_MODULES)
-    .configurators(ClockSyncConfigurator())
     if unitree_go2 is not None
     else None
 )
 
-ar_g1 = (
+ar_go2 = (
+    _ar_go2_base.global_config(n_workers=len(_ar_go2_base.active_blueprints)).configurators(
+        ClockSyncConfigurator()
+    )
+    if _ar_go2_base is not None
+    else None
+)
+
+_ar_g1_base = (
     autoconnect(
         unitree_g1_nav_simple,
         G1RobotProfileModule.blueprint(),
@@ -133,7 +143,14 @@ ar_g1 = (
     # viewer="none" alone does not remove upstream viz modules because those are
     # selected at import time; disable them explicitly for AR runs.
     .disabled_modules(*_VIS_MODULES)
-    .configurators(ClockSyncConfigurator())
     if unitree_g1_nav_simple is not None
+    else None
+)
+
+ar_g1 = (
+    _ar_g1_base.global_config(n_workers=len(_ar_g1_base.active_blueprints)).configurators(
+        ClockSyncConfigurator()
+    )
+    if _ar_g1_base is not None
     else None
 )

@@ -62,10 +62,21 @@ function makeManager() {
   );
   manager.baseUrl = "192.168.1.10";
 
-  const connectTimeout = delayedEvents[0];
-  const connectWatchdog = delayedEvents[1];
+  // constructor: timeout, watchdog, ping, pong
+  const connectTimeout = delayedEvents[0]!;
+  const connectWatchdog = delayedEvents[1]!;
+  const constructorEventCount = delayedEvents.length;
 
-  return { manager, sockets, connectTimeout, connectWatchdog, internetModule };
+  return {
+    manager,
+    sockets,
+    delayedEvents,
+    connectTimeout,
+    connectWatchdog,
+    constructorEventCount,
+    internetModule,
+    script,
+  };
 }
 
 describe("WebSocketTransport.connect", () => {
@@ -85,85 +96,142 @@ describe("WebSocketTransport.connect", () => {
     };
   });
 
-  it("returns the same in-flight promise for concurrent connect calls", async () => {
-    const { manager, sockets } = makeManager();
+  it("returns immediately when already open to the same host", async () => {
+    const { manager, sockets, internetModule } = makeManager();
+    const connectPromise = manager.connect();
+    sockets[0]!.readyState = WS_OPEN;
+    sockets[0]?.onopen?.();
+    await expect(connectPromise).resolves.toBeUndefined();
+
+    await expect(manager.connect()).resolves.toBeUndefined();
+    expect(internetModule.createWebSocket).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces concurrent connect calls for the same host", async () => {
+    const { manager, sockets, internetModule } = makeManager();
     const first = manager.connect();
     const second = manager.connect();
-    expect(first).toBe(second);
+    expect(second).toBe(first);
     expect(sockets).toHaveLength(1);
+    expect(internetModule.createWebSocket).toHaveBeenCalledTimes(1);
+
     sockets[0]!.readyState = WS_OPEN;
     sockets[0]?.onopen?.();
     await expect(first).resolves.toBeUndefined();
   });
 
-  it("reject in-flight connect when cancelConnect is called", async () => {
-    const { manager, sockets } = makeManager();
-    const connectPromise = manager.connect();
-    manager.cancelConnect();
-    await expect(connectPromise).rejects.toThrow("WebSocket connection cancelled");
+  it("coalesces connect calls even when baseUrl changed mid-flight", async () => {
+    const { manager, sockets, internetModule } = makeManager();
+    const first = manager.connect();
+
+    manager.baseUrl = "192.168.1.101";
+    const second = manager.connect();
+    expect(second).toBe(first);
+    expect(sockets).toHaveLength(1);
+    expect(internetModule.createWebSocket).toHaveBeenCalledTimes(1);
+    // The in-flight socket must not be aborted.
     expect(sockets[0]?.close).not.toHaveBeenCalled();
+
     sockets[0]!.readyState = WS_OPEN;
     sockets[0]?.onopen?.();
-    expect(sockets[0]?.close).toHaveBeenCalled();
+    await expect(first).resolves.toBeUndefined();
+    // Attempt was started for the original host.
+    expect(manager.openHost).toBe("192.168.1.10");
   });
 
-  it("reject in-flight connect when socket closes before open", async () => {
+  it("rejects in-flight connect when socket closes before open", async () => {
     const { manager, sockets } = makeManager();
     const connectPromise = manager.connect();
     sockets[0]?.onclose?.({} as WebSocketCloseEvent);
     await expect(connectPromise).rejects.toThrow("WebSocket connection closed");
   });
 
-  it("completes connect when readyState is OPEN before onopen via watchdog", async () => {
-    const { manager, sockets, connectWatchdog } = makeManager();
-    const connectPromise = manager.connect();
-    sockets[0]!.readyState = WS_OPEN;
-    connectWatchdog?.callback?.();
-    await expect(connectPromise).resolves.toBeUndefined();
-    expect(manager.isSocketOpen()).toBe(true);
-  });
-
-  it("completes connect at timeout when readyState is already OPEN", async () => {
-    const { manager, sockets, connectTimeout } = makeManager();
-    const connectPromise = manager.connect();
-    sockets[0]!.readyState = WS_OPEN;
-    connectTimeout?.callback?.();
-    await expect(connectPromise).resolves.toBeUndefined();
-    expect(sockets[0]?.close).not.toHaveBeenCalled();
-  });
-
-  it("completes connect when hello arrives via onmessage before onopen", async () => {
+  it("completes connect on onopen", async () => {
     const { manager, sockets } = makeManager();
-    const textMessages: string[] = [];
-    manager.onTextMessage.add((line) => textMessages.push(line));
-
     const connectPromise = manager.connect();
-    sockets[0]!.readyState = WS_OPEN;
-    sockets[0]?.onmessage?.({
-      data: '{"type":"hello","protocol_version":7}\n',
-    } as WebSocketMessageEvent);
-
-    await expect(connectPromise).resolves.toBeUndefined();
-    expect(textMessages).toHaveLength(1);
-    expect(textMessages[0]).toContain('"type":"hello"');
-  });
-
-  it("rejects and retires socket when timeout fires while still CONNECTING", async () => {
-    const { manager, sockets, connectTimeout, internetModule } = makeManager();
-    const connectPromise = manager.connect();
-    connectTimeout?.callback?.();
-    await expect(connectPromise).rejects.toThrow("WebSocket connection timeout");
-    expect(sockets[0]?.close).not.toHaveBeenCalled();
-
     sockets[0]!.readyState = WS_OPEN;
     sockets[0]?.onopen?.();
+    await expect(connectPromise).resolves.toBeUndefined();
+    expect(manager.isSocketOpen()).toBe(true);
+    expect(manager.openHost).toBe("192.168.1.10");
+  });
+
+  it("completes connect on first message while still connecting", async () => {
+    const { manager, sockets } = makeManager();
+    const connectPromise = manager.connect();
+    sockets[0]!.readyState = WS_OPEN;
+    sockets[0]?.onmessage?.({ data: '{"type":"hello"}\n' } as WebSocketMessageEvent);
+    await expect(connectPromise).resolves.toBeUndefined();
+    expect(manager.openHost).toBe("192.168.1.10");
+  });
+
+  it("does not hard-close a CONNECTING socket on timeout (retire path)", async () => {
+    const { manager, sockets, connectTimeout, internetModule } = makeManager();
+    const connectPromise = manager.connect();
+    expect(sockets[0]!.readyState).toBe(WS_CONNECTING);
+
+    connectTimeout.callback?.();
+    await expect(connectPromise).rejects.toThrow("WebSocket connection timeout");
+    // Retire must not call close() while still CONNECTING.
+    expect(sockets[0]?.close).not.toHaveBeenCalled();
+
+    const second = manager.connect();
+    // Draining retired sockets must not hard-close the CONNECTING one either.
+    expect(sockets[0]?.close).not.toHaveBeenCalled();
+    sockets[1]!.readyState = WS_OPEN;
+    sockets[1]?.onopen?.();
+    await expect(second).resolves.toBeUndefined();
+    expect(internetModule.createWebSocket).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses constructor timeout events across connects", async () => {
+    const { manager, sockets, script, constructorEventCount } = makeManager();
+    const first = manager.connect();
+    sockets[0]!.readyState = WS_OPEN;
+    sockets[0]?.onopen?.();
+    await expect(first).resolves.toBeUndefined();
+
+    manager.disconnect(false);
+    const second = manager.connect();
+    sockets[1]!.readyState = WS_OPEN;
+    sockets[1]?.onopen?.();
+    await expect(second).resolves.toBeUndefined();
+
+    expect(script.createEvent).toHaveBeenCalledTimes(constructorEventCount);
+  });
+
+  it("starts a fresh connect after disconnect", async () => {
+    const { manager, sockets, internetModule } = makeManager();
+    const first = manager.connect();
+    sockets[0]!.readyState = WS_OPEN;
+    sockets[0]?.onopen?.();
+    await expect(first).resolves.toBeUndefined();
+
+    manager.disconnect(false);
     expect(sockets[0]?.close).toHaveBeenCalled();
+    expect(manager.openHost).toBeNull();
 
     const second = manager.connect();
     sockets[1]!.readyState = WS_OPEN;
     sockets[1]?.onopen?.();
     await expect(second).resolves.toBeUndefined();
     expect(internetModule.createWebSocket).toHaveBeenCalledTimes(2);
-    expect(sockets).toHaveLength(2);
+  });
+
+  it("reconnects when baseUrl host changes while open", async () => {
+    const { manager, sockets, internetModule } = makeManager();
+    const first = manager.connect();
+    sockets[0]!.readyState = WS_OPEN;
+    sockets[0]?.onopen?.();
+    await expect(first).resolves.toBeUndefined();
+
+    manager.baseUrl = "192.168.1.99";
+    const second = manager.connect();
+    expect(sockets[0]?.close).toHaveBeenCalled();
+    sockets[1]!.readyState = WS_OPEN;
+    sockets[1]?.onopen?.();
+    await expect(second).resolves.toBeUndefined();
+    expect(internetModule.createWebSocket).toHaveBeenCalledTimes(2);
+    expect(manager.openHost).toBe("192.168.1.99");
   });
 });

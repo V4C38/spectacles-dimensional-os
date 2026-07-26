@@ -17,22 +17,18 @@ from pydantic import BaseModel, Field
 
 from apriltag_assets import ensure_pdf, ensure_png
 from bridge import ProcessManager
-from config import repo_root
+from config import env_path, merge_env, read_env, repo_root
 from tag_config import restore_tag_config, save_tag_config, tag_config_api_payload
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-LAUNCHER_HOSTS = frozenset({"127.0.0.1:8790", "localhost:8790", "[::1]:8790"})
 logger = logging.getLogger(__name__)
 manager = ProcessManager()
 
 
 def require_local_launcher(request: Request) -> None:
-    """Reject non-loopback clients and cross-origin Host spoofing."""
+    """Reject non-loopback clients (server binds 127.0.0.1 only)."""
     client = request.client.host if request.client else ""
     if client not in ("127.0.0.1", "::1", "localhost"):
-        raise HTTPException(status_code=403, detail="launcher is localhost-only")
-    host = (request.headers.get("host") or "").strip().lower()
-    if host and host not in LAUNCHER_HOSTS:
         raise HTTPException(status_code=403, detail="launcher is localhost-only")
 
 
@@ -68,6 +64,9 @@ class SetupBody(BaseModel):
 class StartBody(BaseModel):
     stack: Literal["go2", "g1"]
     robot_ip: str | None = None
+
+
+class SettingsBody(BaseModel):
     openai_api_key: str | None = None
 
 
@@ -132,6 +131,22 @@ async def api_check() -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@app.get("/api/settings", dependencies=[Depends(require_local_launcher)])
+async def api_settings_get() -> dict[str, str]:
+    return {"openai_api_key": read_env(env_path()).get("OPENAI_API_KEY", "")}
+
+
+@app.put("/api/settings", dependencies=[Depends(require_local_launcher)])
+async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
+    key = body.openai_api_key.strip() if body.openai_api_key and body.openai_api_key.strip() else None
+    path = env_path()
+    merge_env({"OPENAI_API_KEY": key}, path)
+    try:
+        return await manager.run_check()
+    except RuntimeError:
+        return manager.snapshot()
+
+
 @app.post("/api/bridge/start", dependencies=[Depends(require_local_launcher)])
 async def api_bridge_start(body: StartBody) -> dict[str, Any]:
     robot_ip = body.robot_ip.strip() if body.robot_ip and body.robot_ip.strip() else None
@@ -139,7 +154,6 @@ async def api_bridge_start(body: StartBody) -> dict[str, Any]:
         await manager.start_bridge(
             stack=body.stack,
             robot_ip=robot_ip,
-            openai_api_key=body.openai_api_key,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

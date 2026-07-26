@@ -1,4 +1,4 @@
-"""Repo-root .env persistence for the bridge launcher."""
+"""Launcher-local .env persistence (launcher/.env)."""
 
 from __future__ import annotations
 
@@ -7,18 +7,37 @@ import re
 from pathlib import Path
 
 _KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_LEGACY_ENV_KEYS = ("OPENAI_API_KEY", "ROBOT_IP")
 
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def launcher_dir(root: Path | None = None) -> Path:
+    return (root or repo_root()) / "launcher"
+
+
 def env_path(root: Path | None = None) -> Path:
-    return (root or repo_root()) / ".env"
+    return launcher_dir(root) / ".env"
 
 
 def scripts_dir(root: Path | None = None) -> Path:
-    return (root or repo_root()) / "launcher" / "scripts"
+    return launcher_dir(root) / "scripts"
+
+
+def migrate_legacy_env(root: Path | None = None) -> None:
+    """One-time copy of launcher keys from repo-root .env into launcher/.env."""
+    target = env_path(root)
+    if target.is_file():
+        return
+    legacy = (root or repo_root()) / ".env"
+    if not legacy.is_file():
+        return
+    values = read_env(legacy)
+    updates = {k: values[k] for k in _LEGACY_ENV_KEYS if values.get(k)}
+    if updates:
+        merge_env(updates, target)
 
 
 def read_env(path: Path | None = None) -> dict[str, str]:

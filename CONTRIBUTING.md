@@ -19,6 +19,11 @@ Open the Lens project from [`lens-studio/spectacles-dimensional-os.esproj`](lens
 
 This runs `dimos-ar` (ruff, mypy, pytest) and `lens-studio/Tests` (Vitest), matching [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
+Do **not** run it inside the Cursor agent sandbox — DimOS logging writes under
+`~/.local/state/dimos/logs/`, and sandboxed runs fail with
+`PermissionError: [Errno 1] Operation not permitted`. Use a normal terminal, or
+ask the agent to run with unrestricted (`all`) permissions.
+
 ## Scene wiring
 
 Wire cross-tree references on [`ARBridgeServices`](lens-studio/Assets/Scripts/App/ARBridgeServices.ts) (`bridgeSession`, `frameCaptureController`, `robotMarker`, `pointCloudRenderer`, `navigationMarkerPrefab`). Point `ARBridgeCoordinator` at `ARBridgeServices`; point `RegistrationWizard` and `UIManager` at `ARBridgeCoordinator`. On `UIManager`, also wire `mainUIFrame`, `registrationWizard`, and `wristMenuRoot` (required for the Spectacles wrist menu).

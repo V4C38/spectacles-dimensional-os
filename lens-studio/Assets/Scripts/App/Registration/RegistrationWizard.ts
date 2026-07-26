@@ -23,15 +23,10 @@ import {
 } from "./RegistrationFlow";
 import { scaleIn } from "../Utilities/AnimationUtilities";
 import { COLOR_ERROR, COLOR_WARN, COLOR_WHITE } from "../UI/UIKit";
-import {
-  BRIDGE_RETRY_BACKOFF_FACTOR,
-  BRIDGE_RETRY_BASE_S,
-  BRIDGE_RETRY_MAX_S,
-} from "../../ARBridge/Network/WebSocketTransport";
 import { RegistrationWizardView } from "./RegistrationWizardView";
 
 const NAV_DEBOUNCE_S = 0.35;
-const CONNECT_FAIL_STREAK_BEFORE_FALLBACK = 2;
+const CONNECT_RETRY_S = 2.0;
 const CONNECT_RETRY_LOG_INTERVAL_S = 10.0;
 
 /** Three-step registration component (start → connect → register) that gates entry into runtime. */
@@ -50,16 +45,11 @@ export class RegistrationWizard extends BaseScriptComponent {
   private _autoconnectOpId = 0;
   private _retryEvent: DelayedCallbackEvent | null = null;
   private _retryOpId = 0;
-  private _retryIp = "";
   private _finishEvent: DelayedCallbackEvent | null = null;
   private _finishPending = false;
   private _view: RegistrationWizardView | null = null;
   private _registrationFlow: RegistrationFlow | null = null;
   private _lastConnectRetryLogTime = -1;
-  private _connectRetryBackoffS = BRIDGE_RETRY_BASE_S;
-  private _connectFailStreak = 0;
-  private _connectCandidateIndex = 0;
-  private _connectCandidates: string[] = [];
   private _authoredLocalScale: vec3 = new vec3(1, 1, 1);
   private _openedFromRuntime = false;
 
@@ -166,12 +156,16 @@ export class RegistrationWizard extends BaseScriptComponent {
 
       case RegistrationStep.ConnectBridge: {
         this._view?.setInputEnabled(true);
-        this._resetConnectCandidates();
 
-        const ip = this._currentConnectIp();
+        const savedIp = this.arBridgeCoordinator?.loadIp();
+        if (savedIp) {
+          this.arBridgeCoordinator?.setBridgeBaseUrl(savedIp);
+        }
 
         if (this._view) {
-          this._view.initializeInput(ip);
+          this._view.initializeInput(
+            savedIp || this.arBridgeCoordinator?.getBaseUrl() || "",
+          );
         }
 
         this._refreshFooterButtons();
@@ -262,78 +256,88 @@ export class RegistrationWizard extends BaseScriptComponent {
     return true;
   }
 
+  /** Reachy SetupWizard-shaped autoconnect: setBaseUrl → saveIp → checkConnection. */
   private _startAutoconnect(): void {
-    if (this._currentStep !== RegistrationStep.ConnectBridge || !this._view?.inputField) {
-      return;
-    }
-    if (this._isConnecting) {
-      return;
-    }
-    const raw = this._view.inputField.text.trim();
-    const ip = raw
-      ? (this.arBridgeCoordinator?.normalizeBridgeIp(raw) ?? "")
-      : this._currentConnectIp();
-    if (!ip) {
-      return;
-    }
-    if (ip !== raw) {
-      this._view.inputField.text = ip;
-    }
-    this._invalidatePending();
+    this._autoconnectOpId++;
     const opId = this._autoconnectOpId;
+
+    if (
+      !this.arBridgeCoordinator ||
+      !this._view ||
+      this._currentStep !== RegistrationStep.ConnectBridge
+    ) {
+      return;
+    }
+
+    const ip = this._view.getInputText();
+    this.arBridgeCoordinator.setBridgeBaseUrl(ip);
+    if (ip) {
+      // Persist immediately: the submitted IP must survive Back/forward and
+      // relaunch even when the connect attempt has not succeeded yet.
+      this.arBridgeCoordinator.saveIp(ip);
+    }
+
     this._isConnecting = true;
-    this._view?.setInputText(ip);
     this._showBridgeConnectionStatus();
     this._logConnectAttempt(ip);
-    this.arBridgeCoordinator?.tryConnectBridge(ip).then((ok) => {
-      this._handleConnectionResult(opId, ip, ok);
+
+    this.arBridgeCoordinator.checkConnection().then((ok) => {
+      if (opId !== this._autoconnectOpId) {
+        return;
+      }
+      if (ok) {
+        this._connectStepCompleted = true;
+        this._isConnecting = false;
+        this._showBridgeConnectionStatus();
+        this._refreshFooterButtons();
+        this._log("connect succeeded");
+        return;
+      }
+      this._isConnecting = false;
+      this._showBridgeConnectionStatus();
+      this._scheduleAutoconnectRetry(opId);
     });
+  }
+
+  private _scheduleAutoconnectRetry(opId: number): void {
+    this._logConnectRetry();
+    this._retryOpId = opId;
+    this._retryEvent?.reset(CONNECT_RETRY_S);
   }
 
   private _onRetryFired(): void {
     if (
       this._retryOpId !== this._autoconnectOpId ||
-      this._currentStep !== RegistrationStep.ConnectBridge
+      this._currentStep !== RegistrationStep.ConnectBridge ||
+      !this._view ||
+      !this.arBridgeCoordinator
     ) {
       return;
     }
+
+    const ip = this._view.getInputText();
+    this.arBridgeCoordinator.setBridgeBaseUrl(ip);
+
     this._isConnecting = true;
     this._showBridgeConnectionStatus();
-    this.arBridgeCoordinator?.tryConnectBridge(this._retryIp).then((ok) => {
-      this._handleConnectionResult(this._retryOpId, this._retryIp, ok);
-    });
-  }
 
-  private _handleConnectionResult(opId: number, ip: string, ok: boolean): void {
-    if (opId !== this._autoconnectOpId || this._currentStep !== RegistrationStep.ConnectBridge) {
-      return;
-    }
-    if (ok) {
-      this.arBridgeCoordinator?.saveIp(ip);
-      this._connectStepCompleted = true;
+    this.arBridgeCoordinator.checkConnection().then((ok) => {
+      if (this._retryOpId !== this._autoconnectOpId) {
+        return;
+      }
+      if (ok) {
+        this.arBridgeCoordinator?.saveIp(ip);
+        this._connectStepCompleted = true;
+        this._isConnecting = false;
+        this._showBridgeConnectionStatus();
+        this._refreshFooterButtons();
+        this._log("connect succeeded");
+        return;
+      }
       this._isConnecting = false;
-      this._connectFailStreak = 0;
-      this._connectRetryBackoffS = BRIDGE_RETRY_BASE_S;
-      this._autoconnectOpId += 1;
       this._showBridgeConnectionStatus();
-      this._refreshFooterButtons();
-      this._log("connect succeeded");
-      return;
-    }
-    this._isConnecting = false;
-    this._showBridgeConnectionStatus();
-    this._logConnectRetry();
-    this._connectFailStreak += 1;
-    if (this._connectFailStreak >= CONNECT_FAIL_STREAK_BEFORE_FALLBACK) {
-      this._advanceConnectCandidate();
-    }
-    this._retryOpId = opId;
-    this._retryIp = this._currentConnectIp() || ip;
-    this._retryEvent?.reset(this._connectRetryBackoffS);
-    this._connectRetryBackoffS = Math.min(
-      this._connectRetryBackoffS * BRIDGE_RETRY_BACKOFF_FACTOR,
-      BRIDGE_RETRY_MAX_S,
-    );
+      this._scheduleAutoconnectRetry(this._retryOpId);
+    });
   }
 
   private _invalidatePending(): void {
@@ -592,55 +596,5 @@ export class RegistrationWizard extends BaseScriptComponent {
 
   private _log(message: string): void {
     print(`RegistrationWizard: ${message}`);
-  }
-
-  private _buildConnectCandidates(): string[] {
-    const saved = this.arBridgeCoordinator?.loadIp() ?? null;
-    const rawFallback =
-      this.arBridgeCoordinator?.getDefaultBridgeIp() || this.arBridgeCoordinator?.getBaseUrl() || "";
-    const fallback = this.arBridgeCoordinator?.normalizeBridgeIp(rawFallback) ?? "";
-    const base = this.arBridgeCoordinator?.normalizeBridgeIp(this.arBridgeCoordinator?.getBaseUrl() ?? "") ?? "";
-    const candidates: string[] = [];
-    for (const raw of [saved, fallback, base]) {
-      const ip = raw ? (this.arBridgeCoordinator?.normalizeBridgeIp(raw) ?? "") : "";
-      if (ip && candidates.indexOf(ip) < 0) {
-        candidates.push(ip);
-      }
-    }
-    return candidates;
-  }
-
-  private _resetConnectCandidates(): void {
-    this._connectCandidates = this._buildConnectCandidates();
-    this._connectCandidateIndex = 0;
-    this._connectFailStreak = 0;
-    this._connectRetryBackoffS = BRIDGE_RETRY_BASE_S;
-  }
-
-  private _currentConnectIp(): string {
-    if (this._connectCandidates.length === 0) {
-      this._connectCandidates = this._buildConnectCandidates();
-    }
-    return this._connectCandidates[this._connectCandidateIndex] ?? "";
-  }
-
-  private _advanceConnectCandidate(): void {
-    if (this._connectCandidateIndex >= this._connectCandidates.length - 1) {
-      return;
-    }
-    const abandoned = this._connectCandidates[this._connectCandidateIndex];
-    const defaultIp =
-      this.arBridgeCoordinator?.normalizeBridgeIp(this.arBridgeCoordinator?.getDefaultBridgeIp() ?? "") ?? "";
-    if (abandoned && defaultIp && abandoned !== defaultIp) {
-      this.arBridgeCoordinator?.clearBridgeIp();
-    }
-    this._connectCandidateIndex += 1;
-    this._connectFailStreak = 0;
-    const next = this._currentConnectIp();
-    if (next && this._view?.inputField) {
-      this._view.inputField.text = next;
-      this._view.setInputText(next);
-    }
-    this._log(`trying fallback IP ${next}`);
   }
 }

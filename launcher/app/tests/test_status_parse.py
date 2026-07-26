@@ -42,11 +42,10 @@ def test_parse_bridge_ready_ascii_dash(tmp_path: Path) -> None:
     assert mgr.status.websocket_url == "ws://127.0.0.1:8787"
 
 
-def test_openai_warning(tmp_path: Path) -> None:
+def test_start_sh_openai_log_does_not_set_status_warning(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
     mgr._parse_bridge_line("Warning: OPENAI_API_KEY is unset — agent mode will not work until it is set.")
-    assert mgr.status.warning is not None
-    assert "OPENAI_API_KEY" in mgr.status.warning
+    assert mgr.status.warning is None
 
 
 def test_parse_strips_ansi_and_simulated_robot_ip(tmp_path: Path) -> None:

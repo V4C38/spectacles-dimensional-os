@@ -137,3 +137,15 @@ detect_lan_ip() {
 
   printf '%s\n' "unknown"
 }
+
+# True when OPENAI_API_KEY is non-empty in the environment or launcher/.env.
+openai_api_key_is_set() {
+  local root="${1:-${ROOT:-}}"
+  local env_file=""
+  [[ -n "${OPENAI_API_KEY:-}" ]] && return 0
+  for env_file in "${root}/launcher/.env" "${root}/.env"; do
+    [[ -f "${env_file}" ]] || continue
+    grep -qE '^[[:space:]]*OPENAI_API_KEY=[[:space:]]*[^[:space:]#]+' "${env_file}" 2>/dev/null && return 0
+  done
+  return 1
+}

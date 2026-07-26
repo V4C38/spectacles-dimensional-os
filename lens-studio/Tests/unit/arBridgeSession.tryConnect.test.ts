@@ -1,21 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ARBridgeSession } from "../../Assets/Scripts/ARBridge/Network/ARBridgeSession";
-import { Signal } from "../../Assets/Scripts/App/Utilities/Utilities";
 
 type MockInbound = {
   helloReceived: boolean;
   waitForHello: ReturnType<typeof vi.fn>;
-  onProtocolError: Signal<Error>;
   resetSessionState: ReturnType<typeof vi.fn>;
 };
 
 type MockTransport = {
   baseUrl: string;
+  openHost: string | null;
   isSocketOpen: ReturnType<typeof vi.fn>;
   isConnecting: boolean;
   connect: ReturnType<typeof vi.fn>;
   disconnect: ReturnType<typeof vi.fn>;
-  cancelConnect: ReturnType<typeof vi.fn>;
+  onBridgeConnectionChanged: ReturnType<typeof vi.fn>;
 };
 
 function makeSession(overrides?: {
@@ -25,126 +24,89 @@ function makeSession(overrides?: {
   const inbound: MockInbound = {
     helloReceived: false,
     waitForHello: vi.fn(async () => true),
-    onProtocolError: new Signal<Error>(),
-    resetSessionState: vi.fn(),
+    resetSessionState: vi.fn(() => {
+      inbound.helloReceived = false;
+    }),
     ...overrides?.inbound,
   };
   const transport: MockTransport = {
     baseUrl: "",
+    openHost: null,
     isSocketOpen: vi.fn(() => false),
     isConnecting: false,
-    connect: vi.fn(async () => {}),
-    disconnect: vi.fn(),
-    cancelConnect: vi.fn(),
+    connect: vi.fn(async () => {
+      transport.openHost = WebSocketTransportNormalize(transport.baseUrl);
+      transport.isSocketOpen.mockReturnValue(true);
+    }),
+    disconnect: vi.fn(() => {
+      transport.openHost = null;
+      transport.isSocketOpen.mockReturnValue(false);
+    }),
+    onBridgeConnectionChanged: vi.fn(),
     ...overrides?.transport,
   };
 
   const session = new ARBridgeSession() as ARBridgeSession & {
     _transport: MockTransport;
     _inbound: MockInbound;
-    _connectAttemptId: number;
-    _connectInFlight: Promise<boolean> | null;
-    _connectInFlightIp: string | null;
     baseUrl: string;
-    disconnect: ReturnType<typeof vi.fn>;
-    isConnected: ReturnType<typeof vi.fn>;
   };
 
   session.baseUrl = "";
   session._transport = transport;
   session._inbound = inbound;
-  session._connectAttemptId = 0;
-  session._connectInFlight = null;
-  session._connectInFlightIp = null;
-  session.disconnect = vi.fn();
-  session.isConnected = vi.fn(() => inbound.helloReceived && transport.isSocketOpen());
 
   return { session, inbound, transport };
 }
 
-describe("ARBridgeSession.tryConnect", () => {
+function WebSocketTransportNormalize(raw: string): string {
+  return ARBridgeSession.normalizeIp(raw);
+}
+
+describe("ARBridgeSession.checkConnection", () => {
   beforeEach(() => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     (globalThis as Record<string, unknown>).print = vi.fn();
   });
 
   it("returns true when already connected to the same IP", async () => {
-    const { session } = makeSession({
+    const { session, transport, inbound } = makeSession({
       inbound: { helloReceived: true },
-      transport: { isSocketOpen: vi.fn(() => true) },
+      transport: {
+        isSocketOpen: vi.fn(() => true),
+        openHost: "192.168.1.10",
+      },
     });
     session.baseUrl = "192.168.1.10";
+    transport.baseUrl = "192.168.1.10";
     let sessionReady = false;
     session.setOnSessionReady(() => {
       sessionReady = true;
     });
 
-    await expect(session.tryConnect("192.168.1.10")).resolves.toBe(true);
-    expect(session.disconnect).not.toHaveBeenCalled();
+    await expect(session.checkConnection()).resolves.toBe(true);
+    expect(transport.connect).not.toHaveBeenCalled();
+    expect(inbound.waitForHello).not.toHaveBeenCalled();
     expect(sessionReady).toBe(true);
   });
 
   it("disconnects when hello handshake times out", async () => {
-    const { session, inbound } = makeSession({
+    const { session, inbound, transport } = makeSession({
       inbound: { waitForHello: vi.fn(async () => false) },
     });
+    session.baseUrl = "192.168.1.10";
 
-    await expect(session.tryConnect("192.168.1.10")).resolves.toBe(false);
-    expect(session.disconnect).toHaveBeenCalled();
+    await expect(session.checkConnection()).resolves.toBe(false);
+    expect(transport.connect).toHaveBeenCalled();
     expect(inbound.waitForHello).toHaveBeenCalled();
+    expect(inbound.resetSessionState).toHaveBeenCalled();
   });
 
-  it("coalesces concurrent tryConnect calls for the same IP", async () => {
-    const { session, transport } = makeSession({
-      inbound: {
-        waitForHello: vi.fn(
-          () =>
-            new Promise<boolean>((resolve) => {
-              setTimeout(() => resolve(true), 20);
-            }),
-        ),
-      },
-    });
-
-    const first = session.tryConnect("192.168.1.20");
-    const second = session.tryConnect("192.168.1.20");
-    expect(first).toBe(second);
-
-    await expect(first).resolves.toBe(true);
-    expect(transport.connect).toHaveBeenCalledTimes(1);
-  }, 10000);
-
-  it("cancels an in-flight connect when the IP changes", async () => {
-    const resolvers: Array<(ok: boolean) => void> = [];
-    const { session, transport } = makeSession({
-      inbound: {
-        waitForHello: vi.fn(
-          () =>
-            new Promise<boolean>((resolve) => {
-              resolvers.push(resolve);
-            }),
-        ),
-      },
-    });
-
-    const first = session.tryConnect("192.168.1.30");
-    await Promise.resolve();
-    const second = session.tryConnect("192.168.1.40");
-
-    resolvers[0]?.(true);
-    await expect(first).resolves.toBe(false);
-
-    resolvers[1]?.(true);
-    await expect(second).resolves.toBe(true);
-    expect(transport.connect).toHaveBeenCalledTimes(2);
-    expect(session.baseUrl).toBe("192.168.1.40");
-  });
-
-  it("reuses an open socket when hello is still pending", async () => {
+  it("waits for hello when socket is already open to the same host", async () => {
     const { session, transport, inbound } = makeSession({
       transport: {
         isSocketOpen: vi.fn(() => true),
-        isConnecting: false,
+        openHost: "192.168.1.55",
       },
       inbound: {
         helloReceived: false,
@@ -152,26 +114,78 @@ describe("ARBridgeSession.tryConnect", () => {
       },
     });
     session.baseUrl = "192.168.1.55";
+    transport.baseUrl = "192.168.1.55";
 
-    await expect(session.tryConnect("192.168.1.55")).resolves.toBe(true);
-    expect(session.disconnect).not.toHaveBeenCalled();
+    await expect(session.checkConnection()).resolves.toBe(true);
     expect(transport.connect).not.toHaveBeenCalled();
     expect(inbound.waitForHello).toHaveBeenCalled();
   });
 
-  it("uses cancelConnect when superseding an in-flight connect", async () => {
-    const { session, transport } = makeSession({
+  it("reconnects when already connected to a different IP", async () => {
+    const { session, transport, inbound } = makeSession({
+      inbound: {
+        helloReceived: true,
+        waitForHello: vi.fn(async () => true),
+      },
       transport: {
-        isConnecting: true,
-        connect: vi.fn(async () => {}),
+        isSocketOpen: vi.fn(() => true),
+        openHost: "192.168.1.10",
       },
     });
+    session.baseUrl = "192.168.1.11";
 
-    await session.tryConnect("192.168.1.30");
-    await Promise.resolve();
-    session.tryConnect("192.168.1.40");
-    await Promise.resolve();
+    await expect(session.checkConnection()).resolves.toBe(true);
+    expect(transport.disconnect).toHaveBeenCalled();
+    expect(transport.connect).toHaveBeenCalled();
+    expect(session.baseUrl).toBe("192.168.1.11");
+    expect(inbound.waitForHello).toHaveBeenCalled();
+  });
 
-    expect(transport.cancelConnect).toHaveBeenCalled();
+  it("tryConnect sets baseUrl then checkConnection", async () => {
+    const { session, transport } = makeSession();
+
+    await expect(session.tryConnect("192.168.1.40")).resolves.toBe(true);
+    expect(session.baseUrl).toBe("192.168.1.40");
+    expect(transport.baseUrl).toBe("192.168.1.40");
+    expect(transport.connect).toHaveBeenCalled();
+  });
+
+  it("does not disconnect while a connect is in flight", async () => {
+    const { session, transport } = makeSession({
+      transport: { isConnecting: true },
+    });
+    session.baseUrl = "192.168.1.101";
+
+    await expect(session.checkConnection()).resolves.toBe(true);
+    expect(transport.disconnect).not.toHaveBeenCalled();
+    expect(transport.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns false when the in-flight attempt lands on a different host", async () => {
+    const { session, transport, inbound } = makeSession();
+    transport.connect = vi.fn(async () => {
+      // Attempt was already targeting the old host when awaited.
+      transport.openHost = "192.168.1.96";
+      transport.isSocketOpen.mockReturnValue(true);
+    });
+    session.baseUrl = "192.168.1.101";
+
+    await expect(session.checkConnection()).resolves.toBe(false);
+    expect(inbound.waitForHello).not.toHaveBeenCalled();
+    // The mismatched socket is left for the next retry to replace.
+    expect(transport.disconnect).not.toHaveBeenCalled();
+  });
+
+  it("does not disconnect from the failure path when connect rejects", async () => {
+    const { session, transport } = makeSession();
+    transport.connect = vi.fn(async () => {
+      throw new Error("WebSocket connection timeout");
+    });
+    session.baseUrl = "192.168.1.101";
+
+    await expect(session.checkConnection()).resolves.toBe(false);
+    // Transport cleaned up its own attempt; session must not cascade a
+    // disconnect that could kill a newer attempt.
+    expect(transport.disconnect).not.toHaveBeenCalled();
   });
 });

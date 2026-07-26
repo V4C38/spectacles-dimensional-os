@@ -34,3 +34,8 @@ pytest) and lens-studio-tests (Vitest).
 - Run from repo root: `spectacles-dimensional-os/`, not `dimos-ar/` or `lens-studio/`.
 - Optional env vars: `CI_PYTHON`, `CI_VENV` (see script header).
 - CI may take several minutes; wait for completion before committing.
+- **Must run outside the Cursor agent sandbox.** DimOS logging writes under
+  `~/.local/state/dimos/logs/`; a sandboxed run fails collection with
+  `PermissionError: [Errno 1] Operation not permitted`. Request unrestricted /
+  `all` permissions (or run the script in a normal terminal) — do not treat a
+  sandbox permission failure as a test failure.

@@ -120,6 +120,10 @@ export class InboundRouter {
     this.navigationController.syncIdleNavigationPlacement(poseApplied);
   }
 
+  public checkConnection(): Promise<boolean> {
+    return this.session?.checkConnection() ?? Promise.resolve(false);
+  }
+
   public tryConnect(ip: string): Promise<boolean> {
     return this.session?.tryConnect(ip) ?? Promise.resolve(false);
   }
@@ -148,6 +152,10 @@ export class InboundRouter {
 
   public getBaseUrl(): string {
     return this.session ? this.session.baseUrl : "";
+  }
+
+  public setBaseUrl(url: string): void {
+    this.session?.setBaseUrl(url);
   }
 
   public normalizeBridgeIp(raw: string): string {
