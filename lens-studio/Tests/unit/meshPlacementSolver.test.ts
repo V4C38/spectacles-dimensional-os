@@ -62,7 +62,7 @@ describe("solveMeshPlacement", () => {
       fallbackY: 50,
     });
     expect(result.status).toBe("ok");
-    expect(result.goalPosition?.y).toBe(105);
+    expect(result.goalPosition?.y).toBe(100);
     expect(result.wasInsideDeadzone).toBe(true);
   });
 
@@ -107,7 +107,7 @@ describe("solveMeshPlacement", () => {
       fallbackY: 50,
     });
     expect(result.status).toBe("ok");
-    expect(result.goalPosition).toEqual(vec(0, 25, 300));
+    expect(result.goalPosition).toEqual(vec(0, 20, 300));
   });
 
   it("blocks when the nearest hit is a wall even if ground exists farther along the ray", () => {

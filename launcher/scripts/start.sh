@@ -17,6 +17,7 @@
 #   DIMOS_LOG_LEVEL  Log verbosity (default DEBUG; set INFO for quieter runs)
 #   DIMOS_AR_FORCE_COLOR=1  Force ANSI colors when stdout is not a TTY
 #   DIMOS_CONFIGURE_SYSTEM=1  Enable interactive sysctl/ulimit prompts (off by default)
+#   DIMOS_AR_SKIP_OPENAI_CHECK=1  Skip the OpenAI API reachability probe at startup
 
 set -euo pipefail
 
@@ -87,7 +88,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -301,6 +302,13 @@ EQUIVALENT="dimos run ${SELECTED_BLUEPRINT//_/-}"
 
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
   echo "Warning: OPENAI_API_KEY is unset — agent mode will not work until it is set." >&2
+elif [[ -z "${DIMOS_AR_SKIP_OPENAI_CHECK:-}" ]]; then
+  if openai_api_reachable; then
+    print_green_stderr "OpenAI API: reachable"
+  else
+    print_red_stderr "OpenAI API: unreachable — voice commands will hang at \"Working: thinking...\""
+    echo "Check network/DNS (router parental controls, hotspot, VPN). Bridge will still start." >&2
+  fi
 fi
 
 # DimOS GlobalConfig reads ROBOT_IP (or a .env file) to open the robot

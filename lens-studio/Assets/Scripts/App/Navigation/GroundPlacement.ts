@@ -7,7 +7,6 @@ import {
 } from "../Utilities/AnimationUtilities";
 
 export const GROUND_NORMAL_MIN_Y = Math.cos((65 * Math.PI) / 180);
-export const GROUND_Y_OFFSET_CM = 5;
 export const DEADZONE_EXIT_MARGIN_CM = 12;
 export const ROBOT_GROUND_DEADZONE_RADIUS_CM = 75;
 export const PINCH_RAY_LENGTH_CM = 2000;
@@ -173,16 +172,11 @@ export function solveMeshPlacement(args: SolveMeshPlacementArgs): MeshPlacementR
   const meshHit = args.hits.length > 0 ? args.hits[0] : null;
   const meshGroundGoal =
     meshHit && isGroundNormal(meshHit.normal)
-      ? new vec3(
-          meshHit.position.x,
-          meshHit.position.y + GROUND_Y_OFFSET_CM,
-          meshHit.position.z,
-        )
+      ? new vec3(meshHit.position.x, meshHit.position.y, meshHit.position.z)
       : null;
 
   if (insideDeadzone && args.deadzone) {
-    const robotGoalY =
-      (args.deadzone.getRobotFloorWorldY() ?? args.fallbackY) + GROUND_Y_OFFSET_CM;
+    const robotGoalY = args.deadzone.getRobotFloorWorldY() ?? args.fallbackY;
     const goalY =
       meshGroundGoal !== null
         ? blendDeadzoneMeshGoalY(
@@ -215,10 +209,9 @@ export function solveMeshPlacement(args: SolveMeshPlacementArgs): MeshPlacementR
 
   const firstHit = args.hits[0];
   if (isGroundNormal(firstHit.normal)) {
-    let goalY = firstHit.position.y + GROUND_Y_OFFSET_CM;
+    let goalY = firstHit.position.y;
     if (args.deadzone?.getRobotWorldPosition()) {
-      const robotGoalY =
-        (args.deadzone.getRobotFloorWorldY() ?? args.fallbackY) + GROUND_Y_OFFSET_CM;
+      const robotGoalY = args.deadzone.getRobotFloorWorldY() ?? args.fallbackY;
       goalY = blendDeadzoneMeshGoalY(
         planarPoint,
         args.deadzone,

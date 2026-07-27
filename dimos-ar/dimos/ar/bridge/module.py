@@ -354,11 +354,16 @@ class ARBridge(Module):  # type: ignore[misc]
             runtime_profile=runtime_profile,
         )
 
+        if handshake.base_height_m is None:
+            raise ValueError(
+                f"Robot handshake for {robot_id!r} is missing required base_height_m"
+            )
         nav = NavigateGoalHandler(
             robot_id=robot_id,
             sender=sender,
             world_frame=self._world_frame,
             motion_router=motion_router,
+            base_height_m=handshake.base_height_m,
             odom_latest=odom.latest,
             robot_connected=lambda: status.snapshot().robot_connected,
         )

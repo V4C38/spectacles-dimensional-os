@@ -219,6 +219,15 @@ class MotionRouter:
 
     def _log_motion(self, method: str, **fields: object) -> None:
         now = time.monotonic()
+        if method == "send_nav_goal":
+            # High-frequency during drag retargets — never INFO.
+            logger.debug(
+                "motion router direct publish",
+                method=method,
+                publish_mono=round(now, 6),
+                **fields,
+            )
+            return
         if now - self._last_motion_log_mono < _MOTION_LOG_INTERVAL_S:
             return
         self._last_motion_log_mono = now

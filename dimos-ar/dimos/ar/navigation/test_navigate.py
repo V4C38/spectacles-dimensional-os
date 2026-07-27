@@ -39,6 +39,7 @@ def _make_nav(
     committed: bool = True,
     odom_latest: object | None = None,
     robot_connected: object | None = None,
+    base_height_m: float = 0.33,
 ) -> tuple[NavigateGoalHandler, MagicMock, list[PoseStamped], list[Bool]]:
     world_frame = WorldFrameState()
     if committed:
@@ -57,6 +58,7 @@ def _make_nav(
         sender=sender,
         world_frame=world_frame,
         motion_router=router,
+        base_height_m=base_height_m,
         odom_latest=odom_latest,  # type: ignore[arg-type]
         robot_connected=robot_connected,  # type: ignore[arg-type]
     )
@@ -675,8 +677,8 @@ def test_world_frame_correction_noop_without_session() -> None:
     assert published_nav == []
 
 
-def test_goal_reached_logs_arrival_shortfall(caplog: pytest.LogCaptureFixture) -> None:
-    from dimos.ar.world_frame.transforms import OdomSample
+def test_goal_reached_logs_arrival_shortfall() -> None:
+    from unittest.mock import patch
 
     nav, _mock_server, published_nav, _published_cancel = _make_nav()
     nav._odom_latest = lambda: OdomSample(
@@ -686,13 +688,69 @@ def test_goal_reached_logs_arrival_shortfall(caplog: pytest.LogCaptureFixture) -
     nav.on_navigate_goal(_make_goal_msg(position=(1.0, 0.0, 2.0)))
     assert len(published_nav) == 1
     nav.on_path(_make_path())
-    with caplog.at_level("WARNING"):
-        caplog.clear()
+    with patch("dimos.ar.navigation.navigate.logger") as mock_logger:
         nav.on_goal_reached(Bool(data=True))
-    assert any(
-        "arrival_shortfall_m" in record.getMessage()
-        for record in caplog.records
+    warn_events = [call.args[0] for call in mock_logger.warning.call_args_list]
+    assert "AR navigation arrival shortfall" in warn_events
+    shortfall_calls = [
+        call
+        for call in mock_logger.warning.call_args_list
+        if call.args and call.args[0] == "AR navigation arrival shortfall"
+    ]
+    assert shortfall_calls
+    assert shortfall_calls[0].kwargs["arrival_shortfall_m"] > 0.25
+
+
+def test_goal_reached_omits_shortfall_when_within_warn_threshold() -> None:
+    """Good arrivals must not emit shortfall log noise."""
+    from unittest.mock import patch
+
+    nav, _mock_server, published_nav, _published_cancel = _make_nav()
+    nav.on_navigate_goal(_make_goal_msg(position=(1.0, 0.0, 2.0)))
+    assert len(published_nav) == 1
+    goal_pos = tuple(float(v) for v in published_nav[0].position)
+    nav._odom_latest = lambda: OdomSample(
+        position=goal_pos,
+        orientation=(0.0, 0.0, 0.0, 1.0),
     )
+    nav.on_path(_make_path())
+    with patch("dimos.ar.navigation.navigate.logger") as mock_logger:
+        nav.on_goal_reached(Bool(data=True))
+    warn_events = [call.args[0] for call in mock_logger.warning.call_args_list]
+    info_events = [call.args[0] for call in mock_logger.info.call_args_list]
+    assert "AR navigation arrival shortfall" not in warn_events
+    assert "AR navigation arrival shortfall" not in info_events
+
+
+def test_first_goal_logs_published_at_info() -> None:
+    from unittest.mock import patch
+
+    nav, _mock_server, published_nav, _published_cancel = _make_nav()
+    with patch("dimos.ar.navigation.navigate.logger") as mock_logger:
+        nav.on_navigate_goal(_make_goal_msg())
+    assert len(published_nav) == 1
+    info_events = [call.args[0] for call in mock_logger.info.call_args_list]
+    assert "AR navigation goal published" in info_events
+    debug_events = [call.args[0] for call in mock_logger.debug.call_args_list]
+    assert "AR navigation goal updated" not in debug_events
+
+
+def test_inflight_goal_update_logs_at_debug_only() -> None:
+    from unittest.mock import patch
+
+    nav, _mock_server, published_nav, _published_cancel = _make_nav()
+    nav.on_navigate_goal(_make_goal_msg())
+    nav.on_path(_make_path())
+    assert nav._session is not None
+    assert nav._session.phase == "navigating"
+
+    with patch("dimos.ar.navigation.navigate.logger") as mock_logger:
+        nav.on_navigate_goal(_make_goal_msg(ts=3.0, position=(2.0, 0.0, 3.0)))
+    assert len(published_nav) == 2
+    info_events = [call.args[0] for call in mock_logger.info.call_args_list]
+    assert "AR navigation goal published" not in info_events
+    debug_events = [call.args[0] for call in mock_logger.debug.call_args_list]
+    assert "AR navigation goal updated" in debug_events
 
 
 # ------------------------------------------------------------------
@@ -718,13 +776,16 @@ def test_submit_relative_goal_math_and_source() -> None:
     assert len(cancel) == 0
     # Planner receives odom-frame goal (Y-up relative math: +X forward).
     assert published_nav[0].position[0] == pytest.approx(2.0)
-    assert published_nav[0].position[2] == pytest.approx(0.0)
     assert nav._session is not None
     assert nav._session.source == "agent"
     # Gravity-levelled identity keeps +X; scale=1 so world X == odom X.
     assert nav._session.position[0] == pytest.approx(2.0)
+    robot_world, _ = nav._world_frame.transform_pose(sample.position, sample.orientation)
+    # Agent goals pin world Y to ground contact (marker − base_height_m).
+    assert nav._session.position[1] == pytest.approx(robot_world[1] - 0.33)
     statuses = _all_nav_statuses(mock_server)
     assert statuses[-1]["goal"]["source"] == "agent"
+    assert statuses[-1]["goal"]["position"][1] == pytest.approx(robot_world[1] - 0.33)
 
 
 def test_submit_relative_goal_left_offset() -> None:
@@ -737,12 +798,15 @@ def test_submit_relative_goal_left_offset() -> None:
         robot_connected=lambda: True,
     )
     nav._world_frame.set_odom_scale(1.0)
+    # Relative left at yaw=0 is -Z in the Y-up odom semantic used by the helper.
+    odom_left = NavigateGoalHandler._relative_offset_odom(sample, yaw=0.0, forward=0.0, left=1.0)
+    assert odom_left[2] == pytest.approx(-1.0)
     nav.submit_relative_goal(forward=0.0, left=1.0, degrees=0.0)
     assert nav._session is not None
-    # Y-up relative: left at yaw=0 is -Z in odom.
-    assert published_nav[0].position[2] == pytest.approx(-1.0)
-    # Gravity-level maps odom -Z → world -Y.
-    assert nav._session.position[1] == pytest.approx(-1.0)
+    assert len(published_nav) == 1
+    robot_world, _ = nav._world_frame.transform_pose(sample.position, sample.orientation)
+    # Agent goals always pin world Y to ground contact.
+    assert nav._session.position[1] == pytest.approx(robot_world[1] - 0.33)
 
 
 def test_submit_relative_goal_failures() -> None:
@@ -849,8 +913,8 @@ def test_submit_approach_goal_standoff_facing_and_ground() -> None:
     assert nav._session is not None
     assert nav._session.source == "agent"
     goal = nav._session.position
-    # Ground height matches robot world Y; standoff along user→robot (+X from user toward robot is -X).
-    assert goal[1] == pytest.approx(robot_world[1])
+    # Ground contact = visual-origin Y − base_height_m; standoff along user→robot.
+    assert goal[1] == pytest.approx(robot_world[1] - 0.33)
     assert goal[0] == pytest.approx(user[0] - APPROACH_STANDOFF_M)
     assert goal[2] == pytest.approx(user[2])
     # Facing user: forward toward +X ⇒ yaw ≈ 0 ⇒ quat (0, 0, 0, 1).

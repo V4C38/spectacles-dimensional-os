@@ -280,7 +280,7 @@ In **Agent Mode**, wake-word voice on Spectacles becomes a `user_command` on the
 
 **Voice UX**
 
-- Wake with a listed variant (“robot”, “rowbot”, “robo”, …). The session stays open for **15 s** of silence, then returns to wake-wait.
+- Wake with a listed variant (“robot”, “rowbot”, “robo”, Cyrillic “робот”, …). The session stays open for **30 s** of silence, then returns to wake-wait.
 - Say **“stop”** for emergency stop (same capability gate as Manual Mode).
 - Activity line labels:
   - **Asleep** — waiting for the wake word

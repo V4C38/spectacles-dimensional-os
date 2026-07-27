@@ -34,12 +34,48 @@ describe("matchWakeWord", () => {
       remainder: "",
     });
   });
+
+  it("matches Cyrillic robot", () => {
+    expect(matchWakeWord("Робот")).toEqual({
+      matched: true,
+      remainder: "",
+    });
+  });
+
+  it("matches Cyrillic with trailing ASR punctuation", () => {
+    expect(matchWakeWord("Робот.")).toEqual({
+      matched: true,
+      remainder: "",
+    });
+  });
+
+  it("matches stretched Cyrillic and extracts remainder", () => {
+    expect(matchWakeWord("Рооообот, go forward")).toEqual({
+      matched: true,
+      remainder: "go forward",
+    });
+  });
+
+  it("matches stretched Latin vowels", () => {
+    expect(matchWakeWord("Roooobot")).toEqual({
+      matched: true,
+      remainder: "",
+    });
+  });
 });
 
 describe("reduceFinalTranscript", () => {
   it("opens session on wake word alone", () => {
     const state = createAgentSpeechSessionState();
     const result = reduceFinalTranscript(state, "Robot", 10);
+
+    expect(result.action).toEqual({ kind: "wake_only" });
+    expect(result.state.active).toBe(true);
+  });
+
+  it("opens session on Cyrillic wake word alone", () => {
+    const state = createAgentSpeechSessionState();
+    const result = reduceFinalTranscript(state, "Робот", 10);
 
     expect(result.action).toEqual({ kind: "wake_only" });
     expect(result.state.active).toBe(true);
@@ -120,6 +156,10 @@ describe("session expiry", () => {
 describe("containsWakeWord", () => {
   it("matches rowboat variant", () => {
     expect(containsWakeWord("hey rowboat")).toBe(true);
+  });
+
+  it("matches Cyrillic robot", () => {
+    expect(containsWakeWord("Робот.")).toBe(true);
   });
 });
 

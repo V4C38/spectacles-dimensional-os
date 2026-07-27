@@ -75,6 +75,7 @@ class NavigateGoalHandler:
         sender: BridgeSender,
         world_frame: WorldFrameState,
         motion_router: MotionRouter,
+        base_height_m: float,
         odom_latest: Callable[[], OdomSample | None] | None = None,
         robot_connected: Callable[[], bool] | None = None,
     ) -> None:
@@ -82,6 +83,7 @@ class NavigateGoalHandler:
         self._sender = sender
         self._world_frame = world_frame
         self._motion_router = motion_router
+        self._base_height_m = float(base_height_m)
         self._odom_latest = odom_latest
         self._robot_connected = robot_connected
 
@@ -305,6 +307,23 @@ class NavigateGoalHandler:
         odom_z = sample.position[2] + float(forward) * (-sin_y) + float(left) * (-cos_y)
         return odom_x, odom_y, odom_z
 
+    def _robot_floor_world_y(self, robot_world_y: float) -> float:
+        """Ground-contact world Y from visual-origin (marker / base_link) height."""
+        return float(robot_world_y) - self._base_height_m
+
+    def _pin_floor_y(
+        self,
+        world_position: tuple[float, float, float],
+        *,
+        robot_world_y: float,
+    ) -> tuple[float, float, float]:
+        """Keep world X/Z; replace Y with robot ground-contact height."""
+        return (
+            float(world_position[0]),
+            self._robot_floor_world_y(robot_world_y),
+            float(world_position[2]),
+        )
+
     def robot_relative_to_world(
         self,
         forward: float,
@@ -399,6 +418,14 @@ class NavigateGoalHandler:
             odom_position,
             odom_orientation,
         )
+        robot_world, _ = self._world_frame.transform_pose(
+            sample.position,
+            sample.orientation,
+        )
+        world_position = self._pin_floor_y(
+            world_position,
+            robot_world_y=robot_world[1],
+        )
         ts = time.time()
         self.submit_goal(
             position=world_position,
@@ -445,8 +472,9 @@ class NavigateGoalHandler:
             float(user_position[1]),
             float(user_position[2]),
         )
-        # Y-up AR world: horizontal plane is XZ; keep robot ground height.
-        ground_y = robot_world[1]
+        # Y-up AR world: horizontal plane is XZ; pin to ground contact
+        # (visual origin is base_height_m above the floor).
+        ground_y = self._robot_floor_world_y(robot_world[1])
         dx = robot_world[0] - user_x
         dz = robot_world[2] - user_z
         horizontal = math.hypot(dx, dz)
@@ -744,21 +772,27 @@ class NavigateGoalHandler:
         odom_goal: OdomGoal,
     ) -> None:
         if ok:
+            session_phase: SessionPhase | None = None
             with self._nav_watchdog_lock:
                 if self._session is not None:
+                    session_phase = self._session.phase
                     self._session.dispatched_mono = time.monotonic()
                     self._session.last_path_mono = None
                     self._session.odom_position = odom_goal.position
                     self._session.odom_orientation = odom_goal.orientation
-            logger.info(
-                "AR navigation goal published",
-                world_goal=[round(v, 3) for v in msg.position],
-                odom_goal=[round(v, 3) for v in odom_goal.position],
-                world_goal_yaw_deg=(
+            goal_fields = {
+                "world_goal": [round(v, 3) for v in msg.position],
+                "odom_goal": [round(v, 3) for v in odom_goal.position],
+                "world_goal_yaw_deg": (
                     orientation_yaw_deg(msg.orientation) if msg.orientation is not None else None
                 ),
-                odom_goal_yaw_deg=orientation_yaw_deg(odom_goal.orientation),
-            )
+                "odom_goal_yaw_deg": orientation_yaw_deg(odom_goal.orientation),
+            }
+            # INFO only for first dispatch of a session; in-flight retargets at DEBUG.
+            if session_phase == "intent":
+                logger.info("AR navigation goal published", **goal_fields)
+            else:
+                logger.debug("AR navigation goal updated", **goal_fields)
             return
         self._terminalOutcome = "failed"
         self._clear_session()
@@ -790,7 +824,7 @@ class NavigateGoalHandler:
                 self._session.dispatched_mono = time.monotonic()
                 self._session.odom_position = odom_goal.position
                 self._session.odom_orientation = odom_goal.orientation
-        logger.info(
+        logger.debug(
             "AR navigation goal redispatched after world-frame correction",
             odom_goal=[round(v, 3) for v in odom_goal.position],
         )
@@ -808,8 +842,9 @@ class NavigateGoalHandler:
             dispatched_odom_position,
             sample.position,
         )
-        log_fn = logger.warning if shortfall_m > NAV_ARRIVAL_SHORTFALL_WARN_M else logger.info
-        log_fn(
+        if shortfall_m <= NAV_ARRIVAL_SHORTFALL_WARN_M:
+            return
+        logger.warning(
             "AR navigation arrival shortfall",
             arrival_shortfall_m=round(shortfall_m, 3),
         )
@@ -827,7 +862,7 @@ class NavigateGoalHandler:
             self._session.dispatched_mono = None
             self._session.phase = "navigating"
         self._nav_error_code = None
-        logger.info(
+        logger.debug(
             "AR navigation navigating",
             path_waypoints=path_waypoints,
         )
@@ -857,7 +892,7 @@ class NavigateGoalHandler:
         if now - last_log_mono < NAV_MESSAGE_AGE_LOG_INTERVAL_S:
             return
         setattr(self, last_log_attr, now)
-        logger.info(
+        logger.debug(
             event,
             age_s=round(max(0.0, time.time() - float(source_ts)), 3),
         )

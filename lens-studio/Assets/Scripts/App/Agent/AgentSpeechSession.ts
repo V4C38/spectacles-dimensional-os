@@ -2,6 +2,7 @@
 /** Pure wake-word, session, e-stop, and prompt-derivation logic for agent speech. */
 // ================================================================
 
+/** Documented Latin examples; matching uses WAKE_WORD_PATTERN (also Cyrillic / stretched). */
 export const WAKE_WORD_VARIANTS = [
   "robot",
   "robots",
@@ -13,9 +14,14 @@ export const WAKE_WORD_VARIANTS = [
   "robat",
   "robit",
   "rowboat",
+  "робот",
 ] as const;
 
-export const AGENT_SESSION_IDLE_TIMEOUT_S = 15.0;
+/** Latin variants, stretched vowels (roooobot), and Cyrillic робот / рооообот. */
+const WAKE_WORD_PATTERN =
+  /(?:r+o+b+o+t+s?|row\s*bot|rowbots?|robo|robert|roboto|robat|robit|rowboat|р+о+б+о+т+)/i;
+
+export const AGENT_SESSION_IDLE_TIMEOUT_S = 30.0;
 
 export type FinalTranscriptAction =
   | { kind: "send"; text: string }
@@ -67,26 +73,16 @@ export function isAgentSpeechSessionExpired(
 }
 
 export function containsWakeWord(text: string): boolean {
-  const lowerText = text.toLowerCase();
-  return WAKE_WORD_VARIANTS.some((variant) => lowerText.includes(variant));
+  return WAKE_WORD_PATTERN.test(text.toLowerCase());
 }
 
 export function matchWakeWord(text: string): { matched: boolean; remainder: string } {
   const lowerText = text.toLowerCase();
-  let wakeIndex = -1;
-  let matchedLength = 0;
-  for (const variant of WAKE_WORD_VARIANTS) {
-    const idx = lowerText.indexOf(variant);
-    if (idx >= 0) {
-      wakeIndex = idx;
-      matchedLength = variant.length;
-      break;
-    }
-  }
-  if (wakeIndex < 0) {
+  const match = lowerText.match(WAKE_WORD_PATTERN);
+  if (!match || match.index === undefined) {
     return { matched: false, remainder: "" };
   }
-  const afterWake = text.substring(wakeIndex + matchedLength).trim();
+  const afterWake = text.substring(match.index + match[0].length).trim();
   const remainder = afterWake.replace(/^[,.\s!?]+/, "").trim();
   return { matched: true, remainder };
 }

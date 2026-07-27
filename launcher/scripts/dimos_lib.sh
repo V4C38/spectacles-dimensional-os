@@ -149,3 +149,19 @@ openai_api_key_is_set() {
   done
   return 1
 }
+
+# Exit 0 when https://api.openai.com responds within timeout (401/200 = reachable).
+# Exit 1 on DNS failure, connect timeout, or TLS error.
+openai_api_reachable() {
+  local connect_s="${1:-10}"
+  local max_s="${2:-15}"
+  local code=""
+  if ! command -v curl >/dev/null 2>&1; then
+    return 1
+  fi
+  code="$(curl -sS -o /dev/null -w '%{http_code}' \
+    --connect-timeout "${connect_s}" --max-time "${max_s}" \
+    https://api.openai.com/v1/models 2>/dev/null)" || return 1
+  # 401 = reachable, no/invalid auth; 200 = reachable with valid auth if header added later
+  [[ "${code}" == "401" || "${code}" == "200" ]]
+}

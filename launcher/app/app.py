@@ -141,10 +141,7 @@ async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
     key = body.openai_api_key.strip() if body.openai_api_key and body.openai_api_key.strip() else None
     path = env_path()
     merge_env({"OPENAI_API_KEY": key}, path)
-    try:
-        return await manager.run_check()
-    except RuntimeError:
-        return manager.snapshot()
+    return manager.snapshot()
 
 
 @app.post("/api/bridge/start", dependencies=[Depends(require_local_launcher)])

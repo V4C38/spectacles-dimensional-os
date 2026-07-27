@@ -24,7 +24,7 @@ import {
   type AgentSpeechSessionState,
 } from "./AgentSpeechSession";
 
-const WAKE_SILENCE_MS = 1500;
+const WAKE_SILENCE_MS = 3000;
 const CONVO_SILENCE_MS = 2000;
 const MAX_ASR_ERROR_RETRIES = 3;
 const ASR_ERROR_RETRY_DELAY_SEC = 0.5;

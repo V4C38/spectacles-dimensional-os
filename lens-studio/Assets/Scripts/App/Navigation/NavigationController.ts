@@ -334,7 +334,7 @@ export class NavigationController {
     } else {
       this._dispatch(plan.event);
     }
-    this._syncAuthoritativeGoalPose();
+    this._applyAgentGoalFromNavStatus(msg);
     if (msg.state === "navIntent" && msg.retryable) {
       return;
     }
@@ -748,9 +748,6 @@ export class NavigationController {
     if (this._placement.isActivelyDragging()) {
       return;
     }
-    if (this._syncAuthoritativeGoalPose()) {
-      return;
-    }
     const navigationState = deriveNavigationState(
       this._navSession,
       buildNavigationInputs(this._placement, this._marker, this._cancelGoalAvailable),
@@ -770,19 +767,21 @@ export class NavigationController {
     }
   }
 
-  private _syncAuthoritativeGoalPose(): boolean {
-    if (!this._navSession.navSessionActive || this._placement.isActivelyDragging()) {
-      return false;
+  private _applyAgentGoalFromNavStatus(msg: NavStatusMessage): void {
+    const goal = msg.goal;
+    if (goal?.source !== "agent" || this._placement.isActivelyDragging()) {
+      return;
     }
-    const goal = this._navSession.goal;
-    if (!goal?.position || !goal.orientation) {
-      return false;
+    if (!this._navSession.navSessionActive) {
+      this.syncManualNavigationState({ forceEnable: true });
+    }
+    if (!this._placement.isActive()) {
+      return;
     }
     const position = protocolMetersToLensCentimeters(goal.position);
     const q = goal.orientation;
     const rotation = new quat(q[3], q[0], q[1], q[2]);
     this._placement.applyAuthoritativePose(position, rotation);
-    return true;
   }
 
   private _logGoalSendBlocked(): void {

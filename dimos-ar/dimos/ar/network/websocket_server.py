@@ -66,12 +66,12 @@ InboundHandler = Callable[[InboundMessage, "ws_server.ServerConnection"], None]
 
 INBOUND_TEXT_LOG_INTERVAL_S = 1.0
 CAMERA_FRAME_LOG_INTERVAL_S = 2.0
-_THROTTLED_INBOUND_TYPES = frozenset({"registration_pose", "nav_goal"})
+_THROTTLED_INBOUND_TYPES = frozenset({"registration_pose"})
 PING_INTERVAL_S = 30
 PING_TIMEOUT_S = 30
 
 _TRACE = os.getenv("DIMOS_AR_TRACE", "") not in ("", "0", "false")
-_TRACE_ONLY_INBOUND_TYPES = frozenset({"get_status", "ping"})
+_TRACE_ONLY_INBOUND_TYPES = frozenset({"get_status", "ping", "nav_goal"})
 
 
 def _handshake_noise_filter(record: logging.LogRecord) -> bool:

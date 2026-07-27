@@ -1,4 +1,4 @@
-"""Saving settings re-runs setup check without UI warnings."""
+"""Setup check must not surface OPENAI_API_KEY as a launcher warning."""
 
 from __future__ import annotations
 
