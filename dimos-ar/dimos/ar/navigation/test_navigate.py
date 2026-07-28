@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from unittest.mock import MagicMock
 
@@ -11,6 +12,7 @@ import pytest
 from dimos.ar.bridge.motion_router import MotionRouter
 from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.navigation.navigate import (
+    APPROACH_STANDOFF_M,
     NAV_GOAL_PATH_TIMEOUT_S,
     NAV_WATCHDOG_POLL_INTERVAL_S,
     NavigateGoalHandler,
@@ -18,7 +20,7 @@ from dimos.ar.navigation.navigate import (
 )
 from dimos.ar.network.protocol import NavGoalMessage, encode_pose
 from dimos.ar.world_frame.state import ODOM_SCALE_INITIAL, WorldFrameState
-from dimos.msgs.geometry_msgs.PointStamped import PointStamped
+from dimos.ar.world_frame.transforms import OdomSample
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.Path import Path
@@ -35,20 +37,20 @@ def _make_sender() -> tuple[BridgeSender, MagicMock]:
 def _make_nav(
     *,
     committed: bool = True,
+    odom_latest: object | None = None,
+    robot_connected: object | None = None,
+    base_height_m: float = 0.33,
 ) -> tuple[NavigateGoalHandler, MagicMock, list[PoseStamped], list[Bool]]:
     world_frame = WorldFrameState()
     if committed:
         world_frame.commit(np.eye(4, dtype=np.float64), method="manual_pose", approximate=False)
     published_cmd_vel: list[Twist] = []
     published_nav: list[PoseStamped] = []
-    published_point_nav: list[PointStamped] = []
     published_cancel: list[Bool] = []
     router = MotionRouter(
         publish_cmd_vel=published_cmd_vel.append,
         publish_nav_goal=published_nav.append,
-        publish_nav_point_goal=published_point_nav.append,
         publish_stop_movement=published_cancel.append,
-        publish_cancel_goal=published_cancel.append,
     )
     sender, mock_server = _make_sender()
     nav = NavigateGoalHandler(
@@ -56,6 +58,9 @@ def _make_nav(
         sender=sender,
         world_frame=world_frame,
         motion_router=router,
+        base_height_m=base_height_m,
+        odom_latest=odom_latest,  # type: ignore[arg-type]
+        robot_connected=robot_connected,  # type: ignore[arg-type]
     )
     return nav, mock_server, published_nav, published_cancel
 
@@ -216,7 +221,7 @@ async def test_handle_ar_goal_reached_failure_marks_goal_failed() -> None:
     assert nav._session is None
     nav._motion_router.emergency_stop.assert_called_once()
     nav._motion_router.cancel_nav_goal.assert_not_called()
-    assert len(published_cancel) == 2
+    assert len(published_cancel) == 1
 
 
 def test_goal_stall_no_path_emits_retryable_recovering() -> None:
@@ -236,7 +241,7 @@ def test_goal_stall_no_path_emits_retryable_recovering() -> None:
     assert nav_status["retryable"] is True
     assert nav_status["stall_reason"] == "no_path"
     time.sleep(0.05)
-    assert len(published_cancel) == 2
+    assert len(published_cancel) == 1
 
 
 def test_goal_stall_planner_idle_emits_retryable_recovering() -> None:
@@ -250,7 +255,7 @@ def test_goal_stall_planner_idle_emits_retryable_recovering() -> None:
     assert nav_status["retryable"] is True
     assert nav_status["stall_reason"] == "planner_idle"
     time.sleep(0.05)
-    assert len(published_cancel) == 2
+    assert len(published_cancel) == 1
 
 
 def test_goal_stall_does_not_send_second_nav_goal() -> None:
@@ -264,7 +269,7 @@ def test_goal_stall_does_not_send_second_nav_goal() -> None:
 
     assert published_nav == []
     time.sleep(0.05)
-    assert len(published_cancel) == 2
+    assert len(published_cancel) == 1
 
 
 def test_disconnect_prevents_watchdog_stall_emission() -> None:
@@ -340,7 +345,7 @@ def test_emergency_stop_then_goal_succeeds() -> None:
     nav.on_navigate_goal(msg)
     time.sleep(0.05)
 
-    assert len(published_cancel) == 2
+    assert len(published_cancel) == 1
     assert len(published_nav) == 1
     assert nav._session is not None
     assert nav._session.path_received is False
@@ -352,7 +357,7 @@ def test_cancel_goal_timeout_does_not_mark_goal_failed() -> None:
 
     assert nav._terminalOutcome is None
     assert nav._nav_error_code is None
-    assert len(published_cancel) == 2
+    assert len(published_cancel) == 1
     nav_status = _last_nav_status(mock_server)
     assert nav_status["state"] == "idle"
     assert nav_status.get("error_code") is None
@@ -536,7 +541,7 @@ def test_wire_sequence_goal_failed() -> None:
     assert statuses[-1]["state"] == "resolved"
     nav._motion_router.emergency_stop.assert_called_once()
     nav._motion_router.cancel_nav_goal.assert_not_called()
-    assert len(published_cancel) == 2
+    assert len(published_cancel) == 1
 
 
 def test_goal_update_while_navigating_suppresses_idle_flap() -> None:
@@ -672,8 +677,8 @@ def test_world_frame_correction_noop_without_session() -> None:
     assert published_nav == []
 
 
-def test_goal_reached_logs_arrival_shortfall(caplog: pytest.LogCaptureFixture) -> None:
-    from dimos.ar.world_frame.transforms import OdomSample
+def test_goal_reached_logs_arrival_shortfall() -> None:
+    from unittest.mock import patch
 
     nav, _mock_server, published_nav, _published_cancel = _make_nav()
     nav._odom_latest = lambda: OdomSample(
@@ -683,13 +688,310 @@ def test_goal_reached_logs_arrival_shortfall(caplog: pytest.LogCaptureFixture) -
     nav.on_navigate_goal(_make_goal_msg(position=(1.0, 0.0, 2.0)))
     assert len(published_nav) == 1
     nav.on_path(_make_path())
-    with caplog.at_level("WARNING"):
-        caplog.clear()
+    with patch("dimos.ar.navigation.navigate.logger") as mock_logger:
         nav.on_goal_reached(Bool(data=True))
-    assert any(
-        "arrival_shortfall_m" in record.getMessage()
-        for record in caplog.records
+    warn_events = [call.args[0] for call in mock_logger.warning.call_args_list]
+    assert "AR navigation arrival shortfall" in warn_events
+    shortfall_calls = [
+        call
+        for call in mock_logger.warning.call_args_list
+        if call.args and call.args[0] == "AR navigation arrival shortfall"
+    ]
+    assert shortfall_calls
+    assert shortfall_calls[0].kwargs["arrival_shortfall_m"] > 0.25
+
+
+def test_goal_reached_omits_shortfall_when_within_warn_threshold() -> None:
+    """Good arrivals must not emit shortfall log noise."""
+    from unittest.mock import patch
+
+    nav, _mock_server, published_nav, _published_cancel = _make_nav()
+    nav.on_navigate_goal(_make_goal_msg(position=(1.0, 0.0, 2.0)))
+    assert len(published_nav) == 1
+    goal_pos = tuple(float(v) for v in published_nav[0].position)
+    nav._odom_latest = lambda: OdomSample(
+        position=goal_pos,
+        orientation=(0.0, 0.0, 0.0, 1.0),
     )
+    nav.on_path(_make_path())
+    with patch("dimos.ar.navigation.navigate.logger") as mock_logger:
+        nav.on_goal_reached(Bool(data=True))
+    warn_events = [call.args[0] for call in mock_logger.warning.call_args_list]
+    info_events = [call.args[0] for call in mock_logger.info.call_args_list]
+    assert "AR navigation arrival shortfall" not in warn_events
+    assert "AR navigation arrival shortfall" not in info_events
+
+
+def test_first_goal_logs_published_at_info() -> None:
+    from unittest.mock import patch
+
+    nav, _mock_server, published_nav, _published_cancel = _make_nav()
+    with patch("dimos.ar.navigation.navigate.logger") as mock_logger:
+        nav.on_navigate_goal(_make_goal_msg())
+    assert len(published_nav) == 1
+    info_events = [call.args[0] for call in mock_logger.info.call_args_list]
+    assert "AR navigation goal published" in info_events
+    debug_events = [call.args[0] for call in mock_logger.debug.call_args_list]
+    assert "AR navigation goal updated" not in debug_events
+
+
+def test_inflight_goal_update_logs_at_debug_only() -> None:
+    from unittest.mock import patch
+
+    nav, _mock_server, published_nav, _published_cancel = _make_nav()
+    nav.on_navigate_goal(_make_goal_msg())
+    nav.on_path(_make_path())
+    assert nav._session is not None
+    assert nav._session.phase == "navigating"
+
+    with patch("dimos.ar.navigation.navigate.logger") as mock_logger:
+        nav.on_navigate_goal(_make_goal_msg(ts=3.0, position=(2.0, 0.0, 3.0)))
+    assert len(published_nav) == 2
+    info_events = [call.args[0] for call in mock_logger.info.call_args_list]
+    assert "AR navigation goal published" not in info_events
+    debug_events = [call.args[0] for call in mock_logger.debug.call_args_list]
+    assert "AR navigation goal updated" in debug_events
+
+
+# ------------------------------------------------------------------
+# Relative / agent goals
+# ------------------------------------------------------------------
+
+
+def test_submit_relative_goal_math_and_source() -> None:
+    sample = OdomSample(
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    nav, mock_server, published_nav, cancel = _make_nav(
+        odom_latest=lambda: sample,
+        robot_connected=lambda: True,
+    )
+    # Identity commit gravity-levels Z-up→Y-up and defaults odom_scale=1.25;
+    # pin scale so world X matches the odom-relative forward offset.
+    nav._world_frame.set_odom_scale(1.0)
+    result = nav.submit_relative_goal(forward=2.0, left=0.0, degrees=0.0)
+    assert "Navigating" in result
+    assert len(published_nav) == 1
+    assert len(cancel) == 0
+    # Planner receives odom-frame goal (Y-up relative math: +X forward).
+    assert published_nav[0].position[0] == pytest.approx(2.0)
+    assert nav._session is not None
+    assert nav._session.source == "agent"
+    # Gravity-levelled identity keeps +X; scale=1 so world X == odom X.
+    assert nav._session.position[0] == pytest.approx(2.0)
+    robot_world, _ = nav._world_frame.transform_pose(sample.position, sample.orientation)
+    # Agent goals pin world Y to ground contact (marker − base_height_m).
+    assert nav._session.position[1] == pytest.approx(robot_world[1] - 0.33)
+    statuses = _all_nav_statuses(mock_server)
+    assert statuses[-1]["goal"]["source"] == "agent"
+    assert statuses[-1]["goal"]["position"][1] == pytest.approx(robot_world[1] - 0.33)
+
+
+def test_submit_relative_goal_left_offset() -> None:
+    sample = OdomSample(
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    nav, _server, published_nav, _cancel = _make_nav(
+        odom_latest=lambda: sample,
+        robot_connected=lambda: True,
+    )
+    nav._world_frame.set_odom_scale(1.0)
+    # Relative left at yaw=0 is -Z in the Y-up odom semantic used by the helper.
+    odom_left = NavigateGoalHandler._relative_offset_odom(sample, yaw=0.0, forward=0.0, left=1.0)
+    assert odom_left[2] == pytest.approx(-1.0)
+    nav.submit_relative_goal(forward=0.0, left=1.0, degrees=0.0)
+    assert nav._session is not None
+    assert len(published_nav) == 1
+    robot_world, _ = nav._world_frame.transform_pose(sample.position, sample.orientation)
+    # Agent goals always pin world Y to ground contact.
+    assert nav._session.position[1] == pytest.approx(robot_world[1] - 0.33)
+
+
+def test_submit_relative_goal_failures() -> None:
+    nav, _server, published_nav, _cancel = _make_nav(
+        committed=False,
+        odom_latest=lambda: None,
+        robot_connected=lambda: True,
+    )
+    assert "World frame" in nav.submit_relative_goal(1.0, 0.0, 0.0)
+    assert published_nav == []
+
+    nav2, _s2, published2, _c2 = _make_nav(
+        odom_latest=lambda: None,
+        robot_connected=lambda: True,
+    )
+    assert "odometry" in nav2.submit_relative_goal(1.0, 0.0, 0.0).lower()
+    assert published2 == []
+
+    nav3, _s3, published3, _c3 = _make_nav(
+        odom_latest=lambda: OdomSample((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
+        robot_connected=lambda: False,
+    )
+    assert "not connected" in nav3.submit_relative_goal(1.0, 0.0, 0.0).lower()
+    assert published3 == []
+
+
+def test_robot_relative_world_round_trip() -> None:
+    sample = OdomSample(
+        position=(1.0, 0.0, 2.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    nav, _server, _published, _cancel = _make_nav(
+        odom_latest=lambda: sample,
+        robot_connected=lambda: True,
+    )
+    nav._world_frame.set_odom_scale(1.0)
+    world = nav.robot_relative_to_world(forward=2.0, left=1.0, up=0.5)
+    assert not isinstance(world, str)
+    relative = nav.world_to_robot_relative(world)
+    assert not isinstance(relative, str)
+    assert relative[0] == pytest.approx(2.0, abs=1e-6)
+    assert relative[1] == pytest.approx(1.0, abs=1e-6)
+    assert relative[2] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_robot_relative_to_world_nonzero_yaw() -> None:
+    # 90° CCW about Y: forward=(0,0,-1) wait — yaw=+90° ⇒ forward=(0,0,-1)?
+    # yaw_from_T: forward=(cos th, 0, -sin th); th=π/2 ⇒ (0, 0, -1).
+    half = math.pi * 0.25
+    sample = OdomSample(
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, math.sin(half), 0.0, math.cos(half)),
+    )
+    nav, _server, _published, _cancel = _make_nav(
+        odom_latest=lambda: sample,
+        robot_connected=lambda: True,
+    )
+    nav._world_frame.set_odom_scale(1.0)
+    world = nav.robot_relative_to_world(forward=1.0, left=0.0, up=0.0)
+    assert not isinstance(world, str)
+    relative = nav.world_to_robot_relative(world)
+    assert not isinstance(relative, str)
+    assert relative[0] == pytest.approx(1.0, abs=1e-5)
+    assert relative[1] == pytest.approx(0.0, abs=1e-5)
+
+
+def test_robot_relative_helpers_failures() -> None:
+    nav, _server, _p, _c = _make_nav(
+        committed=False,
+        odom_latest=lambda: None,
+        robot_connected=lambda: True,
+    )
+    assert "World frame" in nav.robot_relative_to_world(1.0, 0.0)
+    assert "World frame" in nav.world_to_robot_relative((1.0, 0.0, 0.0))
+
+    nav2, _s2, _p2, _c2 = _make_nav(
+        odom_latest=lambda: None,
+        robot_connected=lambda: True,
+    )
+    assert "odometry" in nav2.robot_relative_to_world(1.0, 0.0).lower()
+
+    nav3, _s3, _p3, _c3 = _make_nav(
+        odom_latest=lambda: OdomSample((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
+        robot_connected=lambda: False,
+    )
+    assert "not connected" in nav3.world_to_robot_relative((0.0, 0.0, 0.0)).lower()
+
+
+def test_submit_approach_goal_standoff_facing_and_ground() -> None:
+    sample = OdomSample(
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    nav, mock_server, published_nav, _cancel = _make_nav(
+        odom_latest=lambda: sample,
+        robot_connected=lambda: True,
+    )
+    nav._world_frame.set_odom_scale(1.0)
+    robot_world, _ = nav._world_frame.transform_pose(sample.position, sample.orientation)
+    # Place the user 3 m along +X in world from the robot.
+    user = (robot_world[0] + 3.0, robot_world[1] + 1.2, robot_world[2])
+    result = nav.submit_approach_goal(user)
+    assert "Navigating to user" in result
+    assert nav._session is not None
+    assert nav._session.source == "agent"
+    goal = nav._session.position
+    # Ground contact = visual-origin Y − base_height_m; standoff along user→robot.
+    assert goal[1] == pytest.approx(robot_world[1] - 0.33)
+    assert goal[0] == pytest.approx(user[0] - APPROACH_STANDOFF_M)
+    assert goal[2] == pytest.approx(user[2])
+    # Facing user: forward toward +X ⇒ yaw ≈ 0 ⇒ quat (0, 0, 0, 1).
+    assert nav._session.orientation is not None
+    assert nav._session.orientation[1] == pytest.approx(0.0, abs=1e-6)
+    assert nav._session.orientation[3] == pytest.approx(1.0, abs=1e-6)
+    assert len(published_nav) == 1
+    statuses = _all_nav_statuses(mock_server)
+    assert statuses[-1]["goal"]["source"] == "agent"
+
+
+def test_submit_approach_goal_failures() -> None:
+    nav, _server, published_nav, _cancel = _make_nav(
+        committed=False,
+        odom_latest=lambda: None,
+        robot_connected=lambda: True,
+    )
+    assert "World frame" in nav.submit_approach_goal((1.0, 0.0, 0.0))
+    assert published_nav == []
+
+    nav2, _s2, published2, _c2 = _make_nav(
+        odom_latest=lambda: None,
+        robot_connected=lambda: True,
+    )
+    assert "odometry" in nav2.submit_approach_goal((1.0, 0.0, 0.0)).lower()
+    assert published2 == []
+
+    nav3, _s3, published3, _c3 = _make_nav(
+        odom_latest=lambda: OdomSample((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
+        robot_connected=lambda: False,
+    )
+    assert "not connected" in nav3.submit_approach_goal((1.0, 0.0, 0.0)).lower()
+    assert published3 == []
+
+
+def test_user_goal_replaces_agent_goal_without_cancel() -> None:
+    sample = OdomSample(
+        position=(0.0, 0.0, 0.0),
+        orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+    nav, mock_server, published_nav, cancel = _make_nav(
+        odom_latest=lambda: sample,
+        robot_connected=lambda: True,
+    )
+    nav.submit_relative_goal(forward=1.0, left=0.0, degrees=0.0)
+    mock_server.schedule_send.reset_mock()
+    nav.on_navigate_goal(
+        NavGoalMessage(
+            ts=2.0,
+            robot_id="unitree_go2",
+            position=(3.0, 0.0, 0.0),
+            orientation=(0.0, 0.0, 0.0, 1.0),
+        )
+    )
+    assert len(published_nav) == 2
+    assert len(cancel) == 0
+    assert nav._session is not None
+    assert nav._session.source == "user"
+    wire = nav.nav_wire_dict()
+    assert wire["goal"]["source"] == "user"  # type: ignore[index]
+
+
+def test_nav_wire_dict_goal_lifecycle() -> None:
+    nav, _server, _published, _cancel = _make_nav()
+    assert "goal" not in nav.nav_wire_dict()
+    nav.on_navigate_goal(
+        NavGoalMessage(
+            ts=1.0,
+            robot_id="unitree_go2",
+            position=(1.0, 0.0, 2.0),
+            orientation=(0.0, 0.0, 0.0, 1.0),
+        )
+    )
+    wire = nav.nav_wire_dict()
+    assert wire["goal"]["source"] == "user"  # type: ignore[index]
+    nav.on_goal_reached(Bool(data=True))
+    assert "goal" not in nav.nav_wire_dict()
 
 
 # ------------------------------------------------------------------

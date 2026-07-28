@@ -6,6 +6,7 @@ import { RegistrationClient } from "../Registration/RegistrationClient";
 import { StatusClient } from "../Status/StatusClient";
 import { TelemetryClient } from "../Telemetry/TelemetryClient";
 import { NavigationClient } from "../Navigation/NavigationClient";
+import { AgentClient } from "../Agent/AgentClient";
 import { Signal } from "../../App/Utilities/Utilities";
 import {
   BridgeLinkState,
@@ -66,6 +67,7 @@ export class InboundRouter {
     private readonly statusClient: StatusClient,
     private readonly telemetryClient: TelemetryClient,
     private readonly navigationClient: NavigationClient,
+    private readonly agentClient: AgentClient,
     private readonly navigationController: NavigationController,
     private readonly robotPresenter: RobotPresenter,
     private readonly registrationClient: RegistrationClient | null,
@@ -84,17 +86,12 @@ export class InboundRouter {
     this.statusClient.bind();
     this.telemetryClient.bind();
     this.navigationClient.bind();
+    this.agentClient.bind();
     this.registrationClient?.bind();
 
     this.statusClient.onHello.add((msg) => {
       this._applyHello(msg);
       this.onBridgeReady.emit();
-    });
-
-    this.telemetryClient.onLidar.add((msg) => {
-      if (this.appState.snapshot.lidarMode !== "off") {
-        this.robotPresenter.refreshLidarPresentation();
-      }
     });
 
     this.navigationClient.onPath.add((msg) => this.navigationController.applyPath(msg));
@@ -121,6 +118,10 @@ export class InboundRouter {
     const poseApplied = this.robotPresenter.applyPendingPose();
     this.robotPresenter.tickFrame();
     this.navigationController.syncIdleNavigationPlacement(poseApplied);
+  }
+
+  public checkConnection(): Promise<boolean> {
+    return this.session?.checkConnection() ?? Promise.resolve(false);
   }
 
   public tryConnect(ip: string): Promise<boolean> {
@@ -153,6 +154,10 @@ export class InboundRouter {
     return this.session ? this.session.baseUrl : "";
   }
 
+  public setBaseUrl(url: string): void {
+    this.session?.setBaseUrl(url);
+  }
+
   public normalizeBridgeIp(raw: string): string {
     return ARBridgeSession.normalizeIp(raw);
   }
@@ -182,7 +187,7 @@ export class InboundRouter {
 
   public reapplyBridgeStatusIfConnected(): void {
     if (!this.isBridgeSessionReady()) {
-      this._applyConnectionState(false);
+      this._applyBridgeProjection(null);
       return;
     }
     const wireStatus = bridgeSnapshotToStatusMessage(this.appState.snapshot.bridgeSnapshot);

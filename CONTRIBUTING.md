@@ -14,10 +14,15 @@ Open the Lens project from [`lens-studio/spectacles-dimensional-os.esproj`](lens
 ## Before you open a PR
 
 ```bash
-./scripts/run-ci.sh
+./launcher/scripts/run-ci.sh
 ```
 
 This runs `dimos-ar` (ruff, mypy, pytest) and `lens-studio/Tests` (Vitest), matching [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+Do **not** run it inside the Cursor agent sandbox — DimOS logging writes under
+`~/.local/state/dimos/logs/`, and sandboxed runs fail with
+`PermissionError: [Errno 1] Operation not permitted`. Use a normal terminal, or
+ask the agent to run with unrestricted (`all`) permissions.
 
 ## Scene wiring
 
@@ -46,7 +51,7 @@ Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-
 | `Navigation/NavigationClient` | Goal send/cancel, nav status |
 | `Telemetry/`, `Status/`, `Camera/` | Pose, bridge status, capture lifecycle |
 
-**Operating modes** (runtime, after registration): `manual` (spatial navigation), `agent` (in development on `development/agentic`), `registrationMode`.
+**Operating modes** (runtime, after registration): `manual` and `agent` both keep the navigation UI armed (marker, path, cancel). Goal provenance is `nav_status.goal.source` (`user` \| `agent`). `registrationMode` disarms navigation.
 
 ## Runtime HUD
 

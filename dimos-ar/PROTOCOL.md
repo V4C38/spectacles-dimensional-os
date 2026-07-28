@@ -9,7 +9,44 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v16 (current) — Unified NavigationState and capture vocabulary
+### v18 (current) — user_command rename, nav goal provenance, agent snapshot
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 18.**
+- **Rename:** inbound `agent_command` → **`user_command`**. No backward-compat alias for
+  the v17 type string.
+- **`nav_status.goal` (optional):** present exactly while a navigation session is active:
+  `{"source": "user" | "agent", "position": [x,y,z], "orientation": [qx,qy,qz,qw]}`
+  in AR world frame (same conventions as `nav_goal`). Agent-issued and user-issued goals
+  share this message; distinguish by `source`.
+- **`runtime_snapshot.nav.goal`:** same optional block (derived from the same wire dict).
+- **`runtime_snapshot.agent`:** `{"state": "idle" | "busy", "detail"?: string}` so
+  reconnecting clients restore agent activity instead of assuming idle.
+- **`hello.capabilities`:** removes unused capability keys; keeps `navigation` alongside
+  transport keys.
+
+### v17 — Agent mode wire + AR skills
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 17.**
+- **Agent conversation (new):** `agent_command` (Lens → bridge), `agent_response` and
+  `agent_status` (bridge → Lens).
+- **AR skills (new):** `ar_skill` (bridge → Lens) and `ar_skill_result` (Lens → bridge).
+  Envelope-only validation — `skill`, `request_id`, opaque `args` / `data`; no per-skill
+  schema enforcement on the bridge.
+- **`hello.capabilities`:** adds `navigation` alongside transport keys. Informational
+  only — agent mode is always available in the Lens UI; these keys never gate the mode.
+- **Non-blocking:** agent inbound messages use the bridge `BACKGROUND` dispatch lane;
+  handlers must return immediately (no LLM turn waits, no synchronous `ar_skill`
+  round-trips on the WebSocket read loop). No wire timeouts.
+- **`runtime_snapshot`:** does not include agent state in v17; reconnecting clients assume
+  `agent_status: idle` until the next event.
+
+See **Agent messages** and **Reference AR skills** sections below.
+
+### v16 — Unified NavigationState and capture vocabulary
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -225,7 +262,7 @@ capability map, then sends a `runtime_snapshot` (see below).
 ```json
 {
   "type": "hello",
-  "protocol_version": 12,
+  "protocol_version": 17,
   "robot": {
     "robot_id": "unitree_go2",
     "display_name": "Unitree Go2",
@@ -245,7 +282,8 @@ capability map, then sends a `runtime_snapshot` (see below).
     "nav":                                { "available": true,  "reason": null },
     "path":                               { "available": true,  "reason": null },
     "cancel_nav_goal":                        { "available": true,  "reason": null },
-    "emergency_stop":                     { "available": false, "reason": "No safe stop interface is available in this runtime." }
+    "emergency_stop":                     { "available": false, "reason": "No safe stop interface is available in this runtime." },
+    "navigation":                         { "available": true,  "reason": null }
   }
 }
 ```
@@ -318,7 +356,16 @@ navigation is in progress.
     "world_frame_approximate": false
   },
   "nav": {
-    "state": "navigating"
+    "state": "navigating",
+    "goal": {
+      "source": "agent",
+      "position": [1.0, 0.0, 2.0],
+      "orientation": [0.0, 0.0, 0.0, 1.0]
+    }
+  },
+  "agent": {
+    "state": "busy",
+    "detail": "planning route"
   },
   "path": {
     "waypoints": [[1.0, 2.0, 3.0]]
@@ -335,6 +382,10 @@ Fields:
 - `nav.error_code` (optional): numeric code when navigation is unavailable
   (e.g. `505` = goal stalled)
 - `nav.retryable` / `nav.stall_reason` (optional): present with `state: "navIntent"`
+- `nav.goal` (optional): active goal pose + provenance — same shape as `nav_status.goal`;
+  present while a session is active
+- `agent.state`: `"idle"` or `"busy"`
+- `agent.detail` (optional): coarse busy-phase label (same vocabulary as `agent_status.detail`)
 - `path` (optional): present only when a navigating path is cached; omitted when
   idle
 
@@ -497,7 +548,11 @@ payload size on Wi-Fi:
 
 Subsampled point cloud in AR world frame, sent as a **binary WebSocket frame**
 (message type `0x01 lidar_f16`). Each point is encoded as three IEEE 754
-half-precision (float16) values, little-endian. Up to 2500 points per frame.
+half-precision (float16) values, little-endian. Up to **2500** points per frame
+(wire maximum). Operational bridge caps: **1500** in `full` mode, **200** in
+`obstacles` mode (`target_points` / `obstacle_target_points` in
+`dimos/ar/bridge/module.py`; mirrored as `LIDAR_FULL_POINT_CAP` /
+`LIDAR_OBSTACLE_POINT_CAP` in protocol modules).
 Binary frames carry **no** `robot_id`; the session robot comes from `hello`.
 
 The emitted point set depends on the active bridge-side LiDAR mode selected by
@@ -631,7 +686,12 @@ Navigation lifecycle updates:
 {
   "type": "nav_status",
   "ts": 1730000000.123,
-  "state": "navigating"
+  "state": "navigating",
+  "goal": {
+    "source": "user",
+    "position": [1.0, 0.0, 2.0],
+    "orientation": [0.0, 0.0, 0.0, 1.0]
+  }
 }
 ```
 
@@ -666,9 +726,102 @@ Optional fields:
   must manually retry; emitted with `state: "navIntent"`.
 - `stall_reason`: `"no_path"` (watchdog timeout without path) or
   `"planner_idle"` (planner went idle before path arrived).
+- `goal`: active goal in AR world frame — present exactly while a session is active.
+  - `source`: `"user"` (Lens `nav_goal`) or `"agent"` (skill-issued relative move)
+  - `position`: `[x, y, z]` meters
+  - `orientation`: `[qx, qy, qz, qw]`
 
 When `retryable` is true, `"navIntent"` indicates the bridge cleared a stuck
 goal — return to a retryable placing state without treating it as terminal failure.
+
+### Agent messages
+
+Fire-and-forget on both sides. The bridge dispatches `user_command` and
+`ar_skill_result` on the `BACKGROUND` lane; the Lens emits agent outbound
+messages via signals and runs `ar_skill` handlers off the WebSocket callback.
+
+#### `agent_response` (bridge → Lens)
+
+```json
+{ "type": "agent_response", "ts": 1730000000.123, "text": "On my way to the kitchen." }
+```
+
+#### `agent_status` (bridge → Lens)
+
+```json
+{ "type": "agent_status", "ts": 1730000000.123, "state": "busy", "detail": "planning route" }
+```
+
+- `state`: `"idle"` or `"busy"`
+- `detail` (optional): coarse busy-phase label for the Lens activity line. Fixed vocabulary:
+  - `"thinking"` — LLM turn started; default until a more specific phase
+  - `"planning route"` — computing/dispatching a nav goal
+  - `"locating you"` — HMD pose round-trip (`get_user_pose`, `navigate_to_user`)
+  - `"marking space"` — drawing/clearing an AR annotation
+  Walking after a goal is accepted uses shared `nav_status` (`Navigating` /
+  `Preparing Navigation` on the Lens), not a wire detail.
+
+#### `ar_skill` (bridge → Lens)
+
+```json
+{ "type": "ar_skill", "ts": 1730000000.123, "request_id": "abc123", "skill": "get_user_hmd_transform" }
+```
+
+```json
+{
+  "type": "ar_skill",
+  "ts": 1730000000.123,
+  "request_id": "def456",
+  "skill": "draw_world_annotation",
+  "args": {
+    "id": "chair-1",
+    "kind": "marker",
+    "points": [[1.0, 0.0, 2.0]],
+    "active": true,
+    "duration_s": 30.0,
+    "label": "Chair"
+  }
+}
+```
+
+- `request_id`: correlates with `ar_skill_result`
+- `skill`: non-empty string naming the Lens-side operation
+- `args` (optional): opaque JSON object — bridge does not validate per-skill schemas
+
+#### Implemented AR skills
+
+Bridge RPC/skill callers block on a correlated `ar_skill_result` with an
+implementation timeout (`ARBridgeConfig.ar_skill_timeout_s`, default 10 s). The
+wire protocol itself has no timeout field — late or unknown `request_id` results
+are dropped.
+
+**`get_user_hmd_transform`** — no `args`; result `data` on success:
+
+```json
+{ "position": [x, y, z], "orientation": [qx, qy, qz, qw] }
+```
+
+World frame, metres (Lens camera world pose). Also backs the agent's
+`get_user_pose` LLM tool (bridge converts the result to robot-relative
+meters before returning it to the model). On failure the Lens returns
+`ok: false` with `error` (e.g. `"camera transform unavailable"`).
+
+**`draw_world_annotation`** — `args`:
+
+| Field | Purpose |
+|-------|---------|
+| `id` | Stable annotation key (required) |
+| `kind` | `"marker"` or `"line"` (required when `active` is not `false`) |
+| `points` | World-frame positions in metres — marker: exactly 1; line: ≥2 |
+| `active` | `false` removes by `id`; default `true` |
+| `duration_s` | Auto-remove after N seconds; omit = persist until `active: false` |
+| `label` | Optional text (marker) |
+| `color` | Optional `[r, g, b]` in 0..1 — one uniform color for the whole line |
+
+Marker: one point + optional `label`. Line: start/stop required; optional
+in-between points are rendered as a polyline. When only two points are given,
+the Lens samples a slight quadratic bezier (~12 points). Custom skills may use
+any `args` shape; document them here when adding handlers.
 
 ## Inbound Messages
 
@@ -955,6 +1108,54 @@ manual control). Values are raw deflection in **[-1, 1]**, not m/s.
   "wz": 0.0
 }
 ```
+
+### `user_command`
+
+Transcribed voice (or typed) user command for the DimOS agent.
+
+```json
+{
+  "type": "user_command",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "text": "go to the kitchen"
+}
+```
+
+Fire-and-forget: the Lens does not wait for `agent_response` on the send path.
+
+### `ar_skill_result`
+
+Response to a bridge-issued `ar_skill`. The Lens SHOULD reply exactly once per
+`request_id` (client expectation; bridge correlation is implementation-defined).
+
+```json
+{
+  "type": "ar_skill_result",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "request_id": "abc123",
+  "ok": true,
+  "skill": "get_user_hmd_transform",
+  "data": { "position": [1.0, 0.0, 2.0], "orientation": [0, 0, 0, 1] }
+}
+```
+
+```json
+{
+  "type": "ar_skill_result",
+  "ts": 1730000000.123,
+  "robot_id": "unitree_go2",
+  "request_id": "def456",
+  "ok": false,
+  "skill": "my_custom_skill",
+  "error": "unknown skill"
+}
+```
+
+- `ok`: boolean
+- `data` (optional): opaque JSON object (allowed for both `ok: true` and `ok: false`)
+- `error` (optional): string when `ok` is false
 
 ## Removed Legacy Flow
 

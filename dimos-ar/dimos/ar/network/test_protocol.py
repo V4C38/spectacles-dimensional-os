@@ -9,7 +9,11 @@ import pytest
 from dimos.ar.network.bridge_status import BridgeStatusSnapshot
 from dimos.ar.network.protocol import (
     DEFAULT_CAPABILITIES,
+    LIDAR_FULL_POINT_CAP,
+    LIDAR_OBSTACLE_POINT_CAP,
+    LIDAR_WIRE_MAX_POINTS,
     PROTOCOL_VERSION,
+    ArSkillResultMessage,
     CameraInfoMessage,
     CancelNavGoalMessage,
     EmergencyStopMessage,
@@ -21,7 +25,11 @@ from dimos.ar.network.protocol import (
     RegistrationPoseMessage,
     RegistrationStatusPayload,
     SetLidarModeMessage,
+    UserCommandMessage,
     decode_inbound,
+    encode_agent_response,
+    encode_agent_status,
+    encode_ar_skill,
     encode_bridge_status,
     encode_camera_frame_ack,
     encode_capture_policy,
@@ -87,7 +95,8 @@ def test_encode_hello_g1_tag_tracking_profile() -> None:
     assert "robot_model" not in msg["robot"]
     assert "registration_april_tag" not in msg["capabilities"]
     assert "registration_manual_pose" not in msg["capabilities"]
-    assert msg["robot"]["tag_tracking_profile"]["tag_total_size_m"] == 0.07
+    assert msg["robot"]["tag_tracking_profile"]["tag_total_size_m"] == 0.12
+    assert msg["robot"]["tag_tracking_profile"]["tag_ids"] == [0, 1]
     assert isinstance(msg["robot"]["tag_tracking_profile"]["tag_ids"], list)
 
 
@@ -564,18 +573,26 @@ def test_encode_runtime_snapshot() -> None:
         "world_frame_method": "manual_pose",
         "world_frame_approximate": False,
     }
+    goal = {
+        "source": "user",
+        "position": [1.0, 0.0, 2.0],
+        "orientation": [0.0, 0.0, 0.0, 1.0],
+    }
     raw = json.loads(
         encode_runtime_snapshot(
             robot_id="unitree_go2",
             bridge=bridge,
-            nav={"state": "navigating"},
+            nav={"state": "navigating", "goal": goal},
             path={"waypoints": [[1.0, 2.0, 3.0]]},
+            agent={"state": "busy", "detail": "planning route"},
             ts=5.0,
         )
     )
     assert raw["type"] == "runtime_snapshot"
     assert raw["robot_id"] == "unitree_go2"
     assert raw["nav"]["state"] == "navigating"
+    assert raw["nav"]["goal"] == goal
+    assert raw["agent"] == {"state": "busy", "detail": "planning route"}
     assert raw["path"]["waypoints"] == [[1.0, 2.0, 3.0]]
     assert "streams_active" not in raw["bridge"]
 
@@ -634,9 +651,15 @@ def test_encode_path_and_nav_status() -> None:
     assert "robot_id" not in path
     assert "kind" not in path
 
-    status = json.loads(encode_nav_status(ts=3.0, state="navigating"))
+    goal = {
+        "source": "agent",
+        "position": [1.0, 0.0, 2.0],
+        "orientation": [0.0, 0.0, 0.0, 1.0],
+    }
+    status = json.loads(encode_nav_status(ts=3.0, state="navigating", goal=goal))
     assert status["type"] == "nav_status"
     assert status["state"] == "navigating"
+    assert status["goal"] == goal
     assert "phase" not in status
 
     retryable = json.loads(
@@ -651,6 +674,7 @@ def test_encode_path_and_nav_status() -> None:
     assert failed["state"] == "resolved"
     assert failed["outcome"] == "failed"
     assert failed["error_code"] == 505
+    assert "goal" not in failed
 
 
 def test_encode_pose() -> None:
@@ -746,3 +770,54 @@ def test_normalize_nav_state_active_planner_substates() -> None:
     assert normalize_nav_state("arrived") == "idle"
     assert normalize_nav_state("stopped") == "idle"
     assert normalize_nav_state("recovery_mode") == "recovering"
+
+
+def test_lidar_point_caps_match_protocol_docs() -> None:
+    assert LIDAR_WIRE_MAX_POINTS == 2500
+    assert LIDAR_FULL_POINT_CAP == 1500
+    assert LIDAR_OBSTACLE_POINT_CAP == 200
+
+
+def test_decode_user_command() -> None:
+    msg = decode_inbound(
+        '{"type":"user_command","ts":1.0,"robot_id":"unitree_go2","text":"go home"}'
+    )
+    assert isinstance(msg, UserCommandMessage)
+    assert msg.text == "go home"
+
+
+def test_decode_rejects_agent_command() -> None:
+    with pytest.raises(ValueError, match="Unknown inbound message type"):
+        decode_inbound(
+            '{"type":"agent_command","ts":1.0,"robot_id":"unitree_go2","text":"go home"}'
+        )
+
+
+def test_decode_ar_skill_result() -> None:
+    msg = decode_inbound(
+        '{"type":"ar_skill_result","ts":1.0,"robot_id":"unitree_go2",'
+        '"request_id":"req-1","ok":true,"skill":"get_user_hmd_transform",'
+        '"data":{"position":[1,0,2]}}'
+    )
+    assert isinstance(msg, ArSkillResultMessage)
+    assert msg.request_id == "req-1"
+    assert msg.data == {"position": [1, 0, 2]}
+
+
+def test_encode_agent_outbound() -> None:
+    response = json.loads(encode_agent_response(text="hello"))
+    assert response["type"] == "agent_response"
+    assert response["text"] == "hello"
+    status = json.loads(encode_agent_status(state="busy", detail="thinking"))
+    assert status["type"] == "agent_status"
+    assert status["state"] == "busy"
+    assert status["detail"] == "thinking"
+    skill = json.loads(
+        encode_ar_skill(
+            request_id="abc",
+            skill="draw_world_annotation",
+            args={"id": "x", "duration_s": 30.0},
+        )
+    )
+    assert skill["type"] == "ar_skill"
+    assert skill["args"]["duration_s"] == 30.0

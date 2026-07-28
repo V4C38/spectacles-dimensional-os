@@ -2166,7 +2166,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: -7.500000, y: -3.500000, z: 0.750000}
+    Position: {x: -7.500000, y: -4.000000, z: 0.750000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -2410,7 +2410,7 @@
 - !<SceneObject/3cd50a21-2474-4c3a-8ed8-4c0e2ba4dfef>
   PrefabRemaps:
     []
-  Name: ButtonVFX_Active
+  Name: ButtonVFX_Idle
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -3785,7 +3785,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: -7.500000, y: -4.500000, z: 0.750000}
+    Position: {x: -7.500000, y: -5.000000, z: 0.750000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
@@ -3978,7 +3978,7 @@
     {}
   ScriptInputs:
     "":
-      defaultBridgeIp: 192.168.0.100
+      defaultBridgeIp: 192.168.1.101
       internetModule: !<reference.InternetModule> 79c60deb-0ecf-4df5-9713-7c5bd5dbef32
   ScriptTypes:
     "":
@@ -5645,7 +5645,7 @@
 - !<SceneObject/a94605a8-3636-4c8e-a443-2df500864a2d>
   PrefabRemaps:
     []
-  Name: ButtonVFX_Inactive
+  Name: ButtonVFX_Busy
   Enabled: false
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -7426,6 +7426,7 @@
       robotMarker: !<MappingBased.AssignableType_2> b749cbc7-9706-4499-8d79-19f5a03dd792
       pointCloudRenderer: !<MappingBased.AssignableType_3> edc2d9a2-52ca-414f-acba-c9661ee12fea
       navigationMarkerPrefab: !<reference.ObjectPrefab> 8dad663a-f2bb-438d-882b-121c3208aba4
+      annotationMarkerPrefab: !<reference.ObjectPrefab> bb47d936-adfb-479d-966f-fc30cdacfa21
       deviceTracking: !<reference.DeviceTracking> e5553c8a-0b7e-4ef4-92d9-3e1318fb82c1
       worldMeshObject: !<reference.SceneObject> 87343065-62b9-445a-874d-76d42ea6c7e2
       worldMeshVisual: !<reference.RenderMeshVisual> 0516edf2-e618-4b7c-a66e-544199834756

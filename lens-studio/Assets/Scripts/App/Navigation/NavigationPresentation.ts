@@ -19,15 +19,168 @@ import {
   isLatestAnimationVersion,
   nextAnimationVersion,
 } from "../Utilities/AnimationUtilities";
+import { protocolMetersToLensCentimeters } from "../../ARBridge/Network/Protocol";
+import { LineRenderer } from "../Utilities/LineRenderer";
 import type { GroundPlacement, MeshBlockReason } from "./GroundPlacement";
 import type { NavigationMarker } from "./NavigationMarker";
-import type { NavigationPathRenderer } from "./NavigationPathRenderer";
 
 const OPACITY_VERSION_KEY = "__worldMeshHintOpacityVersion";
 const FADE_IN_S = 0.2;
 const FADE_OUT_S = 0.2;
 const TINT_UNSCANNED = new vec4(1, 0.576, 0, 1);
 const TINT_WALL = new vec4(1, 0.2, 0.2, 1);
+
+const PATH_POINT_LIFT_CM = 15.8;
+const CORNER_FILLET_MAX_CM = 10.0;
+const CORNER_FILLET_ANGLE_DEG = 40.0;
+const CORNER_FILLET_SEGMENTS = 2;
+const PATH_LINE_YELLOW: [number, number, number] = [1, 1, 0];
+
+function normalizePlanar(vec: vec3): vec3 | null {
+  const length = Math.sqrt(vec.x * vec.x + vec.z * vec.z);
+  if (length <= 0.0001) {
+    return null;
+  }
+  return new vec3(vec.x / length, 0, vec.z / length);
+}
+
+function cornerTurnAngleDeg(prev: vec3, corner: vec3, next: vec3): number {
+  const incoming = normalizePlanar(new vec3(
+    corner.x - prev.x,
+    0,
+    corner.z - prev.z,
+  ));
+  const outgoing = normalizePlanar(new vec3(
+    next.x - corner.x,
+    0,
+    next.z - corner.z,
+  ));
+  if (!incoming || !outgoing) {
+    return 0;
+  }
+  const dot = Math.max(-1, Math.min(1, incoming.x * outgoing.x + incoming.z * outgoing.z));
+  return Math.acos(dot) * (180.0 / Math.PI);
+}
+
+function lerpPoint(a: vec3, b: vec3, t: number): vec3 {
+  return new vec3(
+    a.x + (b.x - a.x) * t,
+    a.y + (b.y - a.y) * t,
+    a.z + (b.z - a.z) * t,
+  );
+}
+
+/** Insert short fillet segments at sharp corners to limit SIK line miter flare. */
+function filletPathCorners(points: vec3[]): vec3[] {
+  if (points.length < 3) {
+    return points;
+  }
+
+  const filleted: vec3[] = [new vec3(points[0].x, points[0].y, points[0].z)];
+  for (let index = 1; index < points.length - 1; index++) {
+    const prev = points[index - 1];
+    const corner = points[index];
+    const next = points[index + 1];
+    const turnAngle = cornerTurnAngleDeg(prev, corner, next);
+    if (turnAngle < CORNER_FILLET_ANGLE_DEG) {
+      filleted.push(new vec3(corner.x, corner.y, corner.z));
+      continue;
+    }
+
+    const incomingLength = Math.sqrt(
+      (corner.x - prev.x) * (corner.x - prev.x) +
+      (corner.z - prev.z) * (corner.z - prev.z),
+    );
+    const outgoingLength = Math.sqrt(
+      (next.x - corner.x) * (next.x - corner.x) +
+      (next.z - corner.z) * (next.z - corner.z),
+    );
+    const filletDistance = Math.min(
+      CORNER_FILLET_MAX_CM,
+      incomingLength * 0.45,
+      outgoingLength * 0.45,
+    );
+    if (filletDistance <= 0.5) {
+      filleted.push(new vec3(corner.x, corner.y, corner.z));
+      continue;
+    }
+
+    const incomingT = filletDistance / incomingLength;
+    const outgoingT = filletDistance / outgoingLength;
+    const incomingFillet = lerpPoint(corner, prev, incomingT);
+    const outgoingFillet = lerpPoint(corner, next, outgoingT);
+    filleted.push(incomingFillet);
+    for (let segment = 1; segment <= CORNER_FILLET_SEGMENTS; segment++) {
+      const t = segment / (CORNER_FILLET_SEGMENTS + 1);
+      filleted.push(lerpPoint(incomingFillet, outgoingFillet, t));
+    }
+    filleted.push(outgoingFillet);
+  }
+
+  filleted.push(new vec3(
+    points[points.length - 1].x,
+    points[points.length - 1].y,
+    points[points.length - 1].z,
+  ));
+  return filleted;
+}
+
+/** Draws navigation paths as SIK interactor lines in world space. */
+export class NavigationPathRenderer {
+  private readonly line: LineRenderer;
+  private _startY: number | null = null;
+  private _endY: number | null = null;
+
+  constructor(parent: SceneObject) {
+    this.line = new LineRenderer({
+      parent,
+      name: "NavigationPathRenderer",
+    });
+    this.line.setColor(PATH_LINE_YELLOW);
+  }
+
+  /**
+   * Override the Y axis of the rendered path.
+   * startY is used at the robot end (first waypoint), endY at the goal end (last waypoint).
+   * All intermediate waypoints are linearly interpolated by waypoint index.
+   */
+  public setHeightRange(startY: number, endY: number): void {
+    this._startY = startY;
+    this._endY = endY;
+  }
+
+  public clearHeightRange(): void {
+    this._startY = null;
+    this._endY = null;
+  }
+
+  public setProtocolPath(waypoints: [number, number, number][]): void {
+    const lensPoints = waypoints.map((point) => protocolMetersToLensCentimeters(point));
+    this.setLensPath(lensPoints);
+  }
+
+  public setLensPath(points: vec3[]): void {
+    if (points.length < 2) {
+      this.clear();
+      return;
+    }
+
+    const smoothedPoints = filletPathCorners(points);
+    const liftedPoints = smoothedPoints.map((p, i) => {
+      const progress = smoothedPoints.length > 1 ? i / (smoothedPoints.length - 1) : 0;
+      const y = (this._startY !== null && this._endY !== null)
+        ? this._startY + (this._endY - this._startY) * progress
+        : p.y + PATH_POINT_LIFT_CM;
+      return new vec3(p.x, y, p.z);
+    });
+    this.line.setPoints(liftedPoints);
+  }
+
+  public clear(): void {
+    this.line.clear();
+    this.clearHeightRange();
+  }
+}
 
 export type WorldMeshHintState = {
   blockReason: MeshBlockReason;
@@ -269,6 +422,7 @@ export function planNavStatusEvent(
     outcome: msg.outcome,
     retryable: msg.retryable,
     stall_reason: msg.stall_reason,
+    goal: msg.goal,
   };
 
   if (msg.state === "resolved") {

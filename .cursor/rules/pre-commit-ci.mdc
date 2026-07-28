@@ -9,7 +9,7 @@ Before creating any git commit, the agent **must** run the local CI script from 
 repo root and confirm it passes:
 
 ```bash
-./scripts/run-ci.sh
+./launcher/scripts/run-ci.sh
 ```
 
 This reproduces GitHub Actions (`.github/workflows/ci.yml`): dimos-ar (ruff, mypy,
@@ -18,7 +18,7 @@ pytest) and lens-studio-tests (Vitest).
 ## Workflow
 
 1. Finish the code changes.
-2. Run `./scripts/run-ci.sh` from the repository root.
+2. Run `./launcher/scripts/run-ci.sh` from the repository root.
 3. If it fails, fix the failures and re-run until it passes.
 4. Only then stage and commit.
 
@@ -34,3 +34,8 @@ pytest) and lens-studio-tests (Vitest).
 - Run from repo root: `spectacles-dimensional-os/`, not `dimos-ar/` or `lens-studio/`.
 - Optional env vars: `CI_PYTHON`, `CI_VENV` (see script header).
 - CI may take several minutes; wait for completion before committing.
+- **Must run outside the Cursor agent sandbox.** DimOS logging writes under
+  `~/.local/state/dimos/logs/`; a sandboxed run fails collection with
+  `PermissionError: [Errno 1] Operation not permitted`. Request unrestricted /
+  `all` permissions (or run the script in a normal terminal) — do not treat a
+  sandbox permission failure as a test failure.

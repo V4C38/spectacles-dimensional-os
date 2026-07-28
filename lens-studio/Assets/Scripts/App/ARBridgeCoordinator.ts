@@ -126,9 +126,12 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.arBridgeServices.telemetry.onDisconnect();
     this.arBridgeServices.robot.onDisconnect();
     this.arBridgeServices.navigation.onDisconnect();
+    this.arBridgeServices.worldAnnotations.clearAll();
     this.arBridgeServices.state.update({
       navigationError: defaultNavigationError(),
       robotRuntime: createDefaultRobotRuntimeState(),
+      agentActivity: { state: "idle", detail: null },
+      agentSpeechSessionActive: false,
     });
   }
 
@@ -137,21 +140,22 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     if (this._lastSyncedOperatingMode === mode) {
       return;
     }
+    if (this._lastSyncedOperatingMode === "agent" && mode !== "agent") {
+      this.arBridgeServices.worldAnnotations.clearAll();
+    }
     this._lastSyncedOperatingMode = mode;
     this.arBridgeServices.robot.robotMarker?.ui?.setOperatingMode(mode);
 
     const navigation = this.arBridgeServices.navigation;
     if (mode === "registrationMode") {
-      navigation.syncManualNavigationForOperatingMode(mode, state);
+      navigation.syncNavigationForOperatingMode(mode, state);
       return;
     }
 
-    if (mode === "manual") {
+    if (mode === "manual" || mode === "agent") {
       navigation.syncManualNavigationState({ forceEnable: true });
-    } else if (mode === "agent") {
-      navigation.onManualNavigationToggleChanged(false);
     }
-    navigation.syncManualNavigationForOperatingMode(mode, state);
+    navigation.syncNavigationForOperatingMode(mode, state);
   }
 
   private _applyPhaseSideEffects(phase: AppPhase): void {
@@ -160,6 +164,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     if (phase !== "runtime") {
       robot.clearInactiveState();
       navigation.clearInactiveState();
+      this.arBridgeServices.worldAnnotations.clearAll();
     }
     robot.applyInteractionFromState();
     if (phase === "runtime") {
@@ -167,7 +172,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
       robot.robotMarker?.syncPose();
     }
     navigation.applyRuntimeStateFromSnapshot();
-    robot.refreshLidarPresentation();
+    robot.syncLidarPresentation();
   }
 
   public enterRegistration(options?: { preserveBridge?: boolean }): void {
@@ -201,11 +206,16 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.arBridgeServices.robot.prepareForRuntime(bridgeSnapshot.worldFrameApproximate);
     this._setRobotInteractionMode("runtimeRobot");
     this.arBridgeServices.robot.robotMarker?.syncPose();
-    if (this.operatingMode === "manual") {
+    if (this.operatingMode === "manual" || this.operatingMode === "agent") {
       this.arBridgeServices.navigation.syncManualNavigationState({ forceEnable: true });
     } else {
       this.arBridgeServices.navigation.deferPlacementSync();
     }
+  }
+
+  /** Reachy-shaped: ensure socket open to current baseUrl, then hello. */
+  public checkConnection(): Promise<boolean> {
+    return this.arBridgeServices.router.checkConnection();
   }
 
   public tryConnectBridge(ip: string): Promise<boolean> {
@@ -226,6 +236,10 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
 
   public getBaseUrl(): string {
     return this.arBridgeServices.router.getBaseUrl();
+  }
+
+  public setBridgeBaseUrl(url: string): void {
+    this.arBridgeServices.router.setBaseUrl(url);
   }
 
   public getDefaultBridgeIp(): string {

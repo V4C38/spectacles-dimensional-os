@@ -16,6 +16,14 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from dimos_lcm.std_msgs import Bool, String
 
+from dimos.ar.agent.relay import (
+    DETAIL_LOCATING_YOU,
+    DETAIL_MARKING_SPACE,
+    DETAIL_PLANNING_ROUTE,
+    AgentRelay,
+)
+from dimos.ar.agent.skill_dispatcher import ArSkillDispatcher, ArSkillError
+from dimos.ar.agent.wire import decode_hmd_transform
 from dimos.ar.bridge.motion_router import MotionRouter
 from dimos.ar.bridge.odom_buffer import OdomBuffer
 from dimos.ar.bridge.profile_rpc_dispatch import dispatch_profile_nowait
@@ -26,6 +34,8 @@ from dimos.ar.bridge.telemetry import TelemetryPublisher
 from dimos.ar.lidar.filters import LidarFilter, LidarFilterConfig, lidar_height_band_m
 from dimos.ar.navigation.navigate import NavigateGoalHandler
 from dimos.ar.network.protocol import (
+    LIDAR_FULL_POINT_CAP,
+    LIDAR_OBSTACLE_POINT_CAP,
     JoystickCommandMessage,
     NavGoalMessage,
     SetLidarModeMessage,
@@ -49,7 +59,6 @@ from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
-from dimos.msgs.geometry_msgs.PointStamped import PointStamped
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
@@ -58,10 +67,18 @@ from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.utils.logging_config import setup_logger
 
+try:
+    from langchain_core.messages import BaseMessage as _BaseMessage
+except ModuleNotFoundError:  # pragma: no cover - CI base dimos wheel omits langchain
+    _BaseMessage = object  # type: ignore[misc,assignment]
+
 if TYPE_CHECKING:
+    from langchain_core.messages import BaseMessage
     from websockets.asyncio.server import ServerConnection
 
     from dimos.ar.network.protocol import GetStatusMessage
+else:
+    BaseMessage = _BaseMessage
 
 logger = setup_logger()
 
@@ -85,13 +102,13 @@ def _pose_stamped_from_odometry(msg: Odometry) -> PoseStamped:
 
 class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     port: int = 8787
-    # max_message_bytes: Spectacles IntermediateQuality stills are 0.3-1.5 MB (see
-    # scripts/frame_probe.py). 4 MB is a comfortable upper bound.
+    # max_message_bytes: Spectacles IntermediateQuality stills are 0.3-1.5 MB.
+    # 4 MB is a comfortable upper bound.
     max_message_bytes: int = 4_194_304
     max_range_m: float | None = None
     obstacle_height_threshold_m: float = 0.08
-    target_points: int = 1000
-    obstacle_target_points: int = 200
+    target_points: int = LIDAR_FULL_POINT_CAP
+    obstacle_target_points: int = LIDAR_OBSTACLE_POINT_CAP
     lidar_max_hz: float = 1.0
     # Voxel grid size for coarse LiDAR downsampling before the height-band filter.
     # The DimOS default is 0.025 m; 0.05 m is chosen deliberately for AR payload budget.
@@ -159,6 +176,7 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     ALIGN_REBASE_DIR_STD_RAD: float = 0.5
     ALIGN_REBASE_KEEP: int = 2
     ALIGN_UI_CONFIDENT: float = 0.7
+    ar_skill_timeout_s: float = 10.0
 
 
 class ARBridge(Module):  # type: ignore[misc]
@@ -173,9 +191,10 @@ class ARBridge(Module):  # type: ignore[misc]
     ar_navigation_state: In[String]
     cmd_vel: Out[Twist]
     goal_request: Out[PoseStamped]
-    goal_point_request: Out[PointStamped]
     stop_movement: Out[Bool]
-    cancel_goal_signal: Out[Bool]
+    human_input: Out[str]
+    agent: In[BaseMessage]
+    agent_idle: In[bool]
 
     config: ARBridgeConfig
     _profile: ARRobotProfileSpec
@@ -187,6 +206,8 @@ class ARBridge(Module):  # type: ignore[misc]
     _registration: RegistrationSession
     _nav: NavigateGoalHandler
     _motion_router: MotionRouter
+    _agent_relay: AgentRelay
+    _ar_skill_dispatcher: ArSkillDispatcher
     _telemetry: TelemetryPublisher
     _ws_server: ARWebSocketServer
     _robot_id: str
@@ -208,14 +229,8 @@ class ARBridge(Module):  # type: ignore[misc]
             self._profile.handshake_payload(),
             {
                 "path": self.ar_path.transport is not None,
-                "nav": (
-                    self.goal_request.transport is not None
-                    or self.goal_point_request.transport is not None
-                ),
-                "cancel_nav_goal": (
-                    self.stop_movement.transport is not None
-                    or self.cancel_goal_signal.transport is not None
-                ),
+                "nav": self.goal_request.transport is not None,
+                "cancel_nav_goal": self.stop_movement.transport is not None,
             },
         )
         self._connect_handshake = handshake
@@ -316,9 +331,7 @@ class ARBridge(Module):  # type: ignore[misc]
         motion_router = MotionRouter(
             publish_cmd_vel=self.cmd_vel.publish,
             publish_nav_goal=self.goal_request.publish,
-            publish_nav_point_goal=self.goal_point_request.publish,
             publish_stop_movement=self.stop_movement.publish,
-            publish_cancel_goal=self.cancel_goal_signal.publish,
             hard_stop=lambda: dispatch_profile_nowait(self._profile.emergency_stop),
             on_nav_preempted=_on_nav_preempted,
         )
@@ -341,11 +354,16 @@ class ARBridge(Module):  # type: ignore[misc]
             runtime_profile=runtime_profile,
         )
 
+        if handshake.base_height_m is None:
+            raise ValueError(
+                f"Robot handshake for {robot_id!r} is missing required base_height_m"
+            )
         nav = NavigateGoalHandler(
             robot_id=robot_id,
             sender=sender,
             world_frame=self._world_frame,
             motion_router=motion_router,
+            base_height_m=handshake.base_height_m,
             odom_latest=odom.latest,
             robot_connected=lambda: status.snapshot().robot_connected,
         )
@@ -355,6 +373,14 @@ class ARBridge(Module):  # type: ignore[misc]
             nav=nav,
             registration=registration,
             motion_router=motion_router,
+        )
+        agent_relay = AgentRelay(
+            sender=sender,
+            publish_human_input=self.human_input.publish,
+        )
+        ar_skill_dispatcher = ArSkillDispatcher(
+            sender=sender,
+            default_timeout_s=self.config.ar_skill_timeout_s,
         )
 
         ws_server = ARWebSocketServer(
@@ -372,10 +398,13 @@ class ARBridge(Module):  # type: ignore[misc]
             on_emergency_stop=safety.on_emergency_stop,
             on_get_status=self._on_get_status,
             on_set_lidar_mode=self._on_set_lidar_mode,
+            on_user_command=agent_relay.on_user_command,
+            on_ar_skill_result=ar_skill_dispatcher.on_ar_skill_result,
             on_status_connect=self._send_status_to,
             on_disconnect=self._on_client_disconnect,
         )
         sender.bind(ws_server)
+        ar_skill_dispatcher.bind_connection_count(lambda: ws_server.connection_count)
 
         self._sender = sender
         self._odom = odom
@@ -383,6 +412,8 @@ class ARBridge(Module):  # type: ignore[misc]
         self._registration = registration
         self._nav = nav
         self._motion_router = motion_router
+        self._agent_relay = agent_relay
+        self._ar_skill_dispatcher = ar_skill_dispatcher
         self._safety = safety
         self._telemetry = telemetry
         self._ws_server = ws_server
@@ -396,11 +427,7 @@ class ARBridge(Module):  # type: ignore[misc]
         super().start()
         self._motion_router.validate_transports(
             has_pose_goal=self.goal_request.transport is not None,
-            has_point_goal=self.goal_point_request.transport is not None,
-            has_cancel=(
-                self.stop_movement.transport is not None
-                or self.cancel_goal_signal.transport is not None
-            ),
+            has_cancel=self.stop_movement.transport is not None,
         )
         self._ws_server.start()
         self._status.start()
@@ -465,6 +492,128 @@ class ARBridge(Module):  # type: ignore[misc]
     async def handle_ar_navigation_state(self, msg: String) -> None:
         self._nav.on_navigation_state(msg.data)
 
+    async def handle_agent(self, msg: BaseMessage) -> None:
+        self._agent_relay.on_agent_message(msg)
+
+    async def handle_agent_idle(self, idle: bool) -> None:
+        self._agent_relay.on_agent_idle(bool(idle))
+
+    @rpc
+    def submit_relative_goal(
+        self,
+        forward: float = 0.0,
+        left: float = 0.0,
+        degrees: float = 0.0,
+    ) -> str:
+        with self._agent_relay.detail_phase(DETAIL_PLANNING_ROUTE):
+            return self._nav.submit_relative_goal(forward, left, degrees)
+
+    @rpc
+    def navigate_to_user(self) -> str:
+        with self._agent_relay.detail_phase(DETAIL_LOCATING_YOU):
+            try:
+                result = self._ar_skill_dispatcher.request("get_user_hmd_transform")
+            except ArSkillError as exc:
+                return str(exc)
+            if not result.ok:
+                return result.error or "get_user_hmd_transform failed"
+            try:
+                position, _orientation = decode_hmd_transform(result.data)
+            except ValueError as exc:
+                return str(exc)
+        with self._agent_relay.detail_phase(DETAIL_PLANNING_ROUTE):
+            return self._nav.submit_approach_goal(position)
+
+    @rpc
+    def get_user_pose(self) -> str:
+        """Return the user's pose in robot-relative meters / degrees for the LLM."""
+        with self._agent_relay.detail_phase(DETAIL_LOCATING_YOU):
+            try:
+                result = self._ar_skill_dispatcher.request("get_user_hmd_transform")
+            except ArSkillError as exc:
+                return str(exc)
+            if not result.ok:
+                return result.error or "get_user_hmd_transform failed"
+            try:
+                position, orientation = decode_hmd_transform(result.data)
+            except ValueError as exc:
+                return str(exc)
+            relative = self._nav.world_to_robot_relative(position)
+            if isinstance(relative, str):
+                return relative
+            facing = self._nav.world_yaw_degrees_ccw_from_robot(orientation)
+            if isinstance(facing, str):
+                return facing
+            forward, left, up = relative
+            return (
+                f"User is {forward:.2f}m ahead, {left:.2f}m left, {up:.2f}m up "
+                f"from the robot; facing {facing:.1f} degrees CCW from robot heading"
+            )
+
+    @rpc
+    def draw_world_annotation(
+        self,
+        *,
+        annotation_id: str,
+        kind: str | None = None,
+        points: list[list[float]] | None = None,
+        label: str | None = None,
+        active: bool = True,
+        duration_s: float | None = None,
+        color: list[float] | None = None,
+    ) -> str:
+        """Draw or clear a world annotation.
+
+        When ``active`` and ``points`` are provided, each point is
+        ``[forward, left, up]`` meters robot-relative; converted to AR world
+        frame before the Lens ``ar_skill`` round-trip.
+        """
+        with self._agent_relay.detail_phase(DETAIL_MARKING_SPACE):
+            args: dict[str, Any] = {"id": annotation_id, "active": bool(active)}
+            if kind is not None:
+                args["kind"] = kind
+            if points is not None and active:
+                world_points: list[list[float]] = []
+                for point in points:
+                    if not isinstance(point, (list, tuple)) or len(point) < 2:
+                        return (
+                            "Annotation points must be [forward, left] or "
+                            "[forward, left, up]"
+                        )
+                    forward = float(point[0])
+                    left = float(point[1])
+                    up = float(point[2]) if len(point) > 2 else 0.0
+                    world = self._nav.robot_relative_to_world(forward, left, up)
+                    if isinstance(world, str):
+                        return world
+                    world_points.append([world[0], world[1], world[2]])
+                args["points"] = world_points
+            elif points is not None:
+                args["points"] = points
+            if label is not None:
+                args["label"] = label
+            if duration_s is not None:
+                args["duration_s"] = float(duration_s)
+            if color is not None:
+                args["color"] = color
+            try:
+                result = self._ar_skill_dispatcher.request(
+                    "draw_world_annotation",
+                    args,
+                )
+            except ArSkillError as exc:
+                return str(exc)
+            if not result.ok:
+                return result.error or "draw_world_annotation failed"
+            if active:
+                return f"Annotation '{annotation_id}' drawn"
+            return f"Annotation '{annotation_id}' cleared"
+
+    @rpc
+    def cancel_navigation(self) -> str:
+        self._nav.on_cancel_nav_goal()
+        return "Navigation cancelled"
+
     # ------------------------------------------------------------------
     # Status / runtime-sync helpers
     # ------------------------------------------------------------------
@@ -479,6 +628,7 @@ class ARBridge(Module):  # type: ignore[misc]
                 bridge=self._status.merged_bridge_snapshot(),
                 nav=self._nav.nav_wire_dict(),
                 path=path,
+                agent=self._agent_relay.agent_wire_dict(),
             ),
         )
 

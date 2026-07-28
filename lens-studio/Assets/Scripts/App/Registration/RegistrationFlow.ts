@@ -204,10 +204,6 @@ export class RegistrationFlow {
   public enter(): void {
     this._finishRegistrationDispatched = false;
     this._commitRequested = false;
-    if (!this._bridgeRuntime?.isBridgeSessionReady()) {
-      this._beginManualPlacement();
-      return;
-    }
     this._beginAprilTag();
   }
 

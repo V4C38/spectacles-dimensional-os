@@ -7,9 +7,12 @@ import {
   navigationErrorPresentation,
   robotActivityPresentation,
   robotMarkerSteadyStatePresentation,
+  agentBusyVfxActive,
+  agentModeActivityPresentation,
   toSessionState,
   defaultNavigationError,
   createDefaultRobotRuntimeState,
+  createDefaultAgentActivity,
   isRuntimePhase,
   AppStateStore,
   type AppStateData,
@@ -39,6 +42,8 @@ function baseState(patch: Partial<AppStateData> = {}): AppStateData {
     bridgeSnapshot: createDefaultBridgeSnapshot(),
     robotRuntime: runtimeState(),
     driftState: createDefaultAppStateData().driftState,
+    agentActivity: createDefaultAgentActivity(),
+    agentSpeechSessionActive: false,
     ...patch,
   };
 }
@@ -58,7 +63,7 @@ describe("validateSessionFields", () => {
     expect(next.robotInteractionMode).toBe("hidden");
   });
 
-  it("turns off armed navigation when operating mode is not manual", () => {
+  it("allows armed navigation in agent mode", () => {
     const next = validateSessionFields(
       baseState({
         phase: "runtime",
@@ -66,7 +71,7 @@ describe("validateSessionFields", () => {
         operatingMode: "agent",
       }),
     );
-    expect(next.navigationState).toBe("disabled");
+    expect(next.navigationState).toBe("idle");
   });
 
   it("turns off navigation when operating mode is registration", () => {
@@ -226,11 +231,71 @@ describe("robotActivityPresentation", () => {
     expect(
       robotActivityPresentation(
         baseState({
-          operatingMode: "agent",
+          operatingMode: "manual",
           navigationState: "navigating",
         }),
       ),
     ).toEqual({ text: "Navigating", color: COLOR_WHITE });
+  });
+
+  it("shows agent mode labels from session and wire state", () => {
+    expect(
+      agentModeActivityPresentation(
+        baseState({
+          operatingMode: "agent",
+          agentActivity: { state: "idle", detail: null },
+          agentSpeechSessionActive: false,
+        }),
+      ),
+    ).toEqual({ text: "Asleep", color: COLOR_WHITE });
+
+    expect(
+      agentModeActivityPresentation(
+        baseState({
+          operatingMode: "agent",
+          agentSpeechSessionActive: true,
+        }),
+      ),
+    ).toEqual({ text: "Idle", color: COLOR_WHITE });
+
+    expect(
+      agentModeActivityPresentation(
+        baseState({
+          operatingMode: "agent",
+          agentActivity: { state: "busy", detail: null },
+        }),
+      ),
+    ).toEqual({ text: "Working", color: COLOR_WHITE });
+
+    expect(
+      agentModeActivityPresentation(
+        baseState({
+          operatingMode: "agent",
+          agentActivity: { state: "busy", detail: "planning route" },
+        }),
+      ),
+    ).toEqual({ text: "Working: planning route", color: COLOR_WHITE });
+
+    expect(
+      agentModeActivityPresentation(
+        baseState({
+          operatingMode: "agent",
+          agentActivity: { state: "busy", detail: "thinking" },
+          navigationState: "navigating",
+          agentSpeechSessionActive: true,
+        }),
+      ),
+    ).toEqual({ text: "Navigating", color: COLOR_WHITE });
+
+    expect(
+      agentModeActivityPresentation(
+        baseState({
+          operatingMode: "agent",
+          agentActivity: { state: "busy", detail: "planning route" },
+          navigationState: "navIntent",
+        }),
+      ),
+    ).toEqual({ text: "Preparing Navigation", color: COLOR_WHITE });
   });
 
   it("shows robot offline when bridge snapshot has no robot", () => {
@@ -258,7 +323,7 @@ describe("robotMarkerSteadyStatePresentation", () => {
     ).toEqual({ text: "", color: COLOR_WHITE });
   });
 
-  it("returns Idle for agent mode when navigation is off", () => {
+  it("returns Asleep for agent mode when navigation is off", () => {
     expect(
       robotMarkerSteadyStatePresentation(
         baseState({
@@ -266,7 +331,45 @@ describe("robotMarkerSteadyStatePresentation", () => {
           navigationState: "disabled",
         }),
       ),
-    ).toEqual({ text: "Idle", color: COLOR_WHITE });
+    ).toEqual({ text: "Asleep", color: COLOR_WHITE });
+  });
+
+  it("agentBusyVfxActive is true for Asleep and busy, false for Idle session and non-agent", () => {
+    expect(
+      agentBusyVfxActive(
+        baseState({
+          operatingMode: "manual",
+          agentActivity: { state: "busy", detail: null },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      agentBusyVfxActive(
+        baseState({
+          operatingMode: "agent",
+          agentActivity: { state: "idle", detail: null },
+          agentSpeechSessionActive: false,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      agentBusyVfxActive(
+        baseState({
+          operatingMode: "agent",
+          agentActivity: { state: "idle", detail: null },
+          agentSpeechSessionActive: true,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      agentBusyVfxActive(
+        baseState({
+          operatingMode: "agent",
+          agentActivity: { state: "busy", detail: null },
+          agentSpeechSessionActive: true,
+        }),
+      ),
+    ).toBe(true);
   });
 
   it("returns Robot offline when bridge snapshot has no robot", () => {
@@ -283,11 +386,11 @@ describe("robotMarkerSteadyStatePresentation", () => {
     ).toEqual({ text: "Robot offline", color: COLOR_ERROR });
   });
 
-  it("returns Navigating for agent mode when navigation is active", () => {
+  it("returns Navigating for manual mode when navigation is active", () => {
     expect(
       robotMarkerSteadyStatePresentation(
         baseState({
-          operatingMode: "agent",
+          operatingMode: "manual",
           navigationState: "navigating",
         }),
       ),

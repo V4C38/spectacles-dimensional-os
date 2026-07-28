@@ -10,6 +10,17 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
+from dimos.ar.agent.wire import (
+    ArSkillResultMessage,
+    UserCommandMessage,
+    WireAgentState,
+    WireGoalSource,
+    decode_ar_skill_result,
+    decode_user_command,
+    encode_agent_response,
+    encode_agent_status,
+    encode_ar_skill,
+)
 from dimos.ar.registration.wire import (
     RegistrationCommandMessage,
     RegistrationPoseMessage,
@@ -24,10 +35,11 @@ if TYPE_CHECKING:
     from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
     from dimos.ar.world_frame.state import WorldFrameState
 
-PROTOCOL_VERSION = 16
+PROTOCOL_VERSION = 18
 
 WireNavigationState = Literal["idle", "navIntent", "navigating", "resolved"]
 NavTerminalOutcome = Literal["succeeded", "failed"]
+NavGoalWire = dict[str, Any]
 
 DEFAULT_CAPABILITIES = [
     "lidar",
@@ -121,6 +133,8 @@ InboundMessage = (
     | GetStatusMessage
     | SetLidarModeMessage
     | PingMessage
+    | UserCommandMessage
+    | ArSkillResultMessage
 )
 
 
@@ -129,7 +143,7 @@ def _require_type(data: dict[str, Any], key: str, expected: type) -> Any:
         raise ValueError(f"Missing required field: {key}")
     value = data[key]
     if not isinstance(value, expected):
-        raise ValueError(f"Field {key!r} must be {expected.__name__}, got {type(value).__name__}")
+        raise TypeError(f"Field {key!r} must be {expected.__name__}, got {type(value).__name__}")
     return value
 
 
@@ -151,7 +165,7 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
     """Parse an inbound JSON message. Raises ValueError on malformed input."""
     data = json.loads(text)
     if not isinstance(data, dict):
-        raise ValueError("Message must be a JSON object")
+        raise TypeError("Message must be a JSON object")
     msg_type = _require_type(data, "type", str)
     if "ts" not in data or not isinstance(data["ts"], (int, float)):
         raise ValueError("Missing or invalid field: ts")
@@ -280,6 +294,10 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
         if "client_ts" not in data or not isinstance(data["client_ts"], (int, float)):
             raise ValueError("Missing or invalid field: client_ts")
         return PingMessage(ts=ts, robot_id=robot_id, client_ts=float(data["client_ts"]))
+    if msg_type == "user_command":
+        return decode_user_command(data, ts=ts, robot_id=robot_id)
+    if msg_type == "ar_skill_result":
+        return decode_ar_skill_result(data, ts=ts, robot_id=robot_id)
     raise ValueError(f"Unknown inbound message type: {msg_type!r}")
 
 
@@ -362,6 +380,7 @@ def encode_runtime_snapshot(
     bridge: BridgeStatusSnapshot | dict[str, Any],
     nav: dict[str, Any],
     path: dict[str, Any] | None = None,
+    agent: dict[str, Any] | None = None,
     ts: float | None = None,
     world_frame: WorldFrameState | None = None,
 ) -> str:
@@ -375,6 +394,7 @@ def encode_runtime_snapshot(
         "robot_id": robot_id,
         "bridge": bridge_wire,
         "nav": nav,
+        "agent": agent if agent is not None else {"state": "idle"},
     }
     if path is not None:
         payload["path"] = path
@@ -416,6 +436,11 @@ def _sanitize_pose_values(
         (float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])),
     )
 
+
+# LiDAR point budgets — keep in sync with lens-studio Protocol.ts and PROTOCOL.md.
+LIDAR_WIRE_MAX_POINTS: int = 2500
+LIDAR_FULL_POINT_CAP: int = 1500
+LIDAR_OBSTACLE_POINT_CAP: int = 200
 
 # Binary lidar frame (message_type 0x01 = lidar_f16).
 # Format: [1B type=0x01][4B float32 ts little-endian][N*6B float16 xyz world-metres]
@@ -537,6 +562,7 @@ def encode_nav_status(
     error_code: int | None = None,
     retryable: bool | None = None,
     stall_reason: str | None = None,
+    goal: NavGoalWire | None = None,
 ) -> str:
     nav: dict[str, Any] = {"state": state}
     if outcome is not None:
@@ -547,6 +573,8 @@ def encode_nav_status(
         nav["retryable"] = retryable
     if stall_reason is not None:
         nav["stall_reason"] = stall_reason
+    if goal is not None:
+        nav["goal"] = goal
     return _dumps(
         {
             "type": "nav_status",
@@ -557,7 +585,11 @@ def encode_nav_status(
 
 
 __all__ = [
+    "LIDAR_FULL_POINT_CAP",
+    "LIDAR_OBSTACLE_POINT_CAP",
+    "LIDAR_WIRE_MAX_POINTS",
     "PROTOCOL_VERSION",
+    "ArSkillResultMessage",
     "CameraInfoMessage",
     "CancelNavGoalMessage",
     "EmergencyStopMessage",
@@ -571,9 +603,15 @@ __all__ = [
     "RegistrationPoseMessage",
     "RegistrationStatusPayload",
     "SetLidarModeMessage",
+    "UserCommandMessage",
+    "WireAgentState",
+    "WireGoalSource",
     "WireNavigationState",
     "bridge_status_wire",
     "decode_inbound",
+    "encode_agent_response",
+    "encode_agent_status",
+    "encode_ar_skill",
     "encode_bridge_status",
     "encode_camera_frame_ack",
     "encode_capture_policy",

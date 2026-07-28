@@ -3,6 +3,9 @@ import { fileURLToPath } from "node:url";
 
 const uikitMock = fileURLToPath(new URL("./mocks/UIKit.ts", import.meta.url));
 const animateMock = fileURLToPath(new URL("./mocks/animate.ts", import.meta.url));
+const interactorLineRendererMock = fileURLToPath(
+  new URL("./mocks/InteractorLineRenderer.ts", import.meta.url),
+);
 
 function isUIKitImport(source: string): boolean {
   const normalized = source.replace(/\\/g, "/");
@@ -12,6 +15,13 @@ function isUIKitImport(source: string): boolean {
 function isAnimateImport(source: string): boolean {
   const normalized = source.replace(/\\/g, "/");
   return /SpectaclesInteractionKit\.lspkg\/Utils\/animate$/.test(normalized);
+}
+
+function isInteractorLineRendererImport(source: string): boolean {
+  const normalized = source.replace(/\\/g, "/");
+  return /SpectaclesInteractionKit\.lspkg\/Components\/Interaction\/InteractorLineVisual\/InteractorLineRenderer$/.test(
+    normalized,
+  );
 }
 
 export default defineConfig({
@@ -24,6 +34,9 @@ export default defineConfig({
         }
         if (isAnimateImport(source)) {
           return animateMock;
+        }
+        if (isInteractorLineRendererImport(source)) {
+          return interactorLineRendererMock;
         }
         return null;
       },
@@ -38,6 +51,8 @@ export default defineConfig({
       "../UI/UIKit": uikitMock,
       "../../UI/UIKit": uikitMock,
       "SpectaclesInteractionKit.lspkg/Utils/animate": animateMock,
+      "SpectaclesInteractionKit.lspkg/Components/Interaction/InteractorLineVisual/InteractorLineRenderer":
+        interactorLineRendererMock,
     },
   },
   test: {

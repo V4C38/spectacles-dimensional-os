@@ -69,7 +69,7 @@ describe("NavigationSession lifecycle", () => {
   });
 
   it("sessionOff deactivates session", () => {
-    const result = applyNavigationEvent(activeSession({ since: 0 }), {
+    const result = applyNavigationEvent(activeSession({ since: 0, source: "user" }), {
       kind: "sessionOff",
     });
     expect(result.state.navSessionActive).toBe(false);
@@ -118,7 +118,7 @@ describe("deriveNavigationState", () => {
   it("returns navigating from wire state", () => {
     expect(
       deriveNavigationState(
-        { ...activeSession({ since: 0 }), wireState: "navigating" },
+        { ...activeSession({ since: 0, source: "user" }), wireState: "navigating" },
         inputsFrom({ placementActive: false, markerExists: true }),
       ),
     ).toBe("navigating");
@@ -156,7 +156,7 @@ describe("markerActive and presentation helpers", () => {
   });
 
   it("marker view active follows markerActive", () => {
-    const session = activeSession({ since: 0 });
+    const session = activeSession({ since: 0, source: "user" });
     const inputs = inputsFrom({ placementActive: true, markerExists: true });
     const view = deriveMarkerViewState(session, inputs, "navIntent");
     expect(view?.active).toBe(true);
@@ -171,8 +171,27 @@ describe("markerActive and presentation helpers", () => {
 });
 
 describe("navStatus events", () => {
+  it("stores authoritative goal pose and source from nav status", () => {
+    const result = applyNavigationEvent(activeSession(), {
+      kind: "navStatus",
+      state: "navigating",
+      goal: {
+        source: "agent",
+        position: [1, 0, 2],
+        orientation: [0, 0, 0, 1],
+      },
+    });
+    expect(result.state.goal).toEqual({
+      since: 0,
+      source: "agent",
+      position: [1, 0, 2],
+      orientation: [0, 0, 0, 1],
+    });
+    expect(dragEnabledForState("navigating")).toBe(true);
+  });
+
   it("retryable navIntent clears goal", () => {
-    const result = applyNavigationEvent(activeSession({ since: 0 }), {
+    const result = applyNavigationEvent(activeSession({ since: 0, source: "user" }), {
       kind: "navStatus",
       state: "navIntent",
       retryable: true,
@@ -184,7 +203,7 @@ describe("navStatus events", () => {
 
   it("resolved succeeded clears goal and resets wire to idle", () => {
     const result = applyNavigationEvent(
-      { ...activeSession({ since: 0 }), wireState: "navigating" },
+      { ...activeSession({ since: 0, source: "user" }), wireState: "navigating" },
       {
         kind: "navStatus",
         state: "resolved",
@@ -204,7 +223,7 @@ describe("navStatus events", () => {
   });
 
   it("resolved failed latches presentation", () => {
-    const result = applyNavigationEvent(activeSession({ since: 0 }), {
+    const result = applyNavigationEvent(activeSession({ since: 0, source: "user" }), {
       kind: "navStatus",
       state: "resolved",
       outcome: "failed",
@@ -217,7 +236,7 @@ describe("navStatus events", () => {
   });
 
   it("watchdogFailed clears goal and latches failed presentation", () => {
-    const result = applyNavigationEvent(activeSession({ since: 0 }), {
+    const result = applyNavigationEvent(activeSession({ since: 0, source: "user" }), {
       kind: "watchdogFailed",
     });
     expect(result.state.goal).toBeNull();
@@ -230,7 +249,7 @@ describe("navStatus events", () => {
 
   it("cancelRequested clears goal, resets wire to idle, latches cancelled presentation", () => {
     const result = applyNavigationEvent(
-      { ...activeSession({ since: 0 }), wireState: "navigating" },
+      { ...activeSession({ since: 0, source: "user" }), wireState: "navigating" },
       { kind: "cancelRequested" },
     );
     expect(result.state.goal).toBeNull();
@@ -243,7 +262,7 @@ describe("navStatus events", () => {
   });
 
   it("estopRequested does not emit sendCancelGoal", () => {
-    const result = applyNavigationEvent(activeSession({ since: 0 }), {
+    const result = applyNavigationEvent(activeSession({ since: 0, source: "user" }), {
       kind: "estopRequested",
     });
     expect(effectKinds(result.wireEffects)).toEqual([]);
@@ -251,14 +270,14 @@ describe("navStatus events", () => {
 
   it("pathReceived with goal sets navigating wire state and touches timestamps", () => {
     const session = {
-      ...activeSession({ since: 0 }),
+      ...activeSession({ since: 0, source: "user" }),
       lastNavStatusTime: 0,
       wireState: "navIntent" as const,
     };
     const result = applyNavigationEvent(session, { kind: "pathReceived" }, 5);
     expect(result.state.wireState).toBe("navigating");
     expect(result.state.lastNavStatusTime).toBe(5);
-    expect(result.state.goal).toEqual({ since: 0 });
+    expect(result.state.goal).toEqual({ since: 0, source: "user" });
   });
 
   it("pathReceived without goal only touches timestamps", () => {
@@ -293,7 +312,7 @@ describe("navStatus events", () => {
 
   it("returns idle after cancel presentation finishes without placement active", () => {
     const cancelled = applyNavigationEvent(
-      { ...activeSession({ since: 0 }), wireState: "navigating" },
+      { ...activeSession({ since: 0, source: "user" }), wireState: "navigating" },
       { kind: "cancelRequested" },
     ).state;
     const finished = applyNavigationEvent(cancelled, {
@@ -359,7 +378,7 @@ describe("staleness and retryable nav intent", () => {
   it("resolveRetryableNavIntent holds navigating wire state", () => {
     expect(
       resolveRetryableNavIntent(
-        { ...activeSession({ since: 0 }), wireState: "navigating" },
+        { ...activeSession({ since: 0, source: "user" }), wireState: "navigating" },
         false,
       ),
     ).toBe("holdNavigating");
@@ -368,7 +387,7 @@ describe("staleness and retryable nav intent", () => {
   it("shouldSkipStaleLocalRecovery with navigating wire and path", () => {
     expect(
       shouldSkipStaleLocalRecovery(
-        { ...activeSession({ since: 0 }), wireState: "navigating" },
+        { ...activeSession({ since: 0, source: "user" }), wireState: "navigating" },
         4,
       ),
     ).toBe(true);
@@ -376,7 +395,7 @@ describe("staleness and retryable nav intent", () => {
 
   it("checkNavLifecycleStaleness requests resync after stale timeout", () => {
     const session = {
-      ...activeSession({ since: 0 }),
+      ...activeSession({ since: 0, source: "user" }),
       lastNavStatusTime: 0,
       lastNavStatusResyncTime: -100,
       navStatusResyncCooldownS: 2,

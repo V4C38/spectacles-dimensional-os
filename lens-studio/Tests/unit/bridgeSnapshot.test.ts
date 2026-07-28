@@ -5,23 +5,23 @@ import {
 } from "../../Assets/Scripts/App/AppState";
 import {
   deriveLinkState,
-  projectBridgeSnapshot,
+  projectBridgeSession,
 } from "../../Assets/Scripts/ARBridge/Network/Protocol";
 
-describe("projectBridgeSnapshot", () => {
+describe("projectBridgeSession", () => {
   it("returns defaults when handshake is not ready", () => {
-    expect(projectBridgeSnapshot(false, null)).toEqual(createDefaultBridgeSnapshot());
+    expect(projectBridgeSession(false, null)).toEqual(createDefaultBridgeSnapshot());
   });
 
   it("returns handshake-only snapshot before status arrives", () => {
-    expect(projectBridgeSnapshot(true, null)).toEqual({
+    expect(projectBridgeSession(true, null)).toEqual({
       ...createDefaultBridgeSnapshot(),
       handshakeReady: true,
     });
   });
 
   it("maps bridge_status fields", () => {
-    const snapshot = projectBridgeSnapshot(true, {
+    const snapshot = projectBridgeSession(true, {
       type: "bridge_status",
       ts: 42,
       robot_connected: true,

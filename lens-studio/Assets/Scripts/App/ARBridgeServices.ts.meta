@@ -26,6 +26,7 @@
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
+    annotationMarkerPrefab: false
     bridgeSession: false
     deviceTracking: false
     frameCaptureController: false
@@ -49,6 +50,7 @@
       robotMarker: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
       pointCloudRenderer: !<MappingBased.AssignableType_3> 00000000-0000-0000-0000-000000000000
       navigationMarkerPrefab: !<reference.ObjectPrefab> 00000000-0000-0000-0000-000000000000
+      annotationMarkerPrefab: !<reference.ObjectPrefab> 00000000-0000-0000-0000-000000000000
       deviceTracking: !<reference.DeviceTracking> 00000000-0000-0000-0000-000000000000
       worldMeshObject: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
       worldMeshVisual: !<reference.RenderMeshVisual> 00000000-0000-0000-0000-000000000000
@@ -62,6 +64,7 @@
     - // @input AssignableType_2 robotMarker
     - // @input AssignableType_3 pointCloudRenderer
     - // @input Asset.ObjectPrefab navigationMarkerPrefab
+    - // @input Asset.ObjectPrefab annotationMarkerPrefab
     - // @input Component.DeviceTracking deviceTracking
     - // @input SceneObject worldMeshObject
     - // @input Component.RenderMeshVisual worldMeshVisual

@@ -109,6 +109,11 @@ export class RegistrationWizardView {
     this._prev.button.onTriggerUp.add(onPrevious);
     this._manual.button.onTriggerUp.add(onToggleManual);
     this._inputField.onReturnKeyPressed.add(onInputSubmit);
+    this._inputField.onKeyboardStateChanged.add((isOpen: boolean) => {
+      if (!isOpen) {
+        onInputSubmit();
+      }
+    });
   }
 
   public get panel(): SceneObject {

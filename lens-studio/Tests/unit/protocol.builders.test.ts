@@ -10,6 +10,7 @@ import {
   buildNavGoal,
   buildCancelNavGoal,
   buildEmergencyStop,
+  buildUserCommand,
   DEFAULT_LIDAR_OBSTACLE_SETTINGS,
 } from "../../Assets/Scripts/ARBridge/Network/Protocol";
 import { setMockTime } from "../setup/lens-globals";
@@ -149,6 +150,14 @@ describe("outbound protocol builders", () => {
     const msg = JSON.parse(buildEmergencyStop("go2"));
     expect(msg.type).toBe("emergency_stop");
     expect(msg.robot_id).toBe("go2");
+    expect(msg.ts).toBe(1000);
+  });
+
+  it("buildUserCommand", () => {
+    const msg = JSON.parse(buildUserCommand("go2", "move forward 2 meters"));
+    expect(msg.type).toBe("user_command");
+    expect(msg.robot_id).toBe("go2");
+    expect(msg.text).toBe("move forward 2 meters");
     expect(msg.ts).toBe(1000);
   });
 });

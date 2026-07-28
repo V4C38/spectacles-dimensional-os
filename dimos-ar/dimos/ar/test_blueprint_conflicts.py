@@ -13,6 +13,6 @@ def test_ar_go2_has_no_stream_type_conflicts() -> None:
     _verify_no_name_conflicts(ar_go2)
 
 
-@pytest.mark.skipif(ar_g1 is None, reason="requires full DimOS install with G1 nav-onboard stack")
+@pytest.mark.skipif(ar_g1 is None, reason="requires full DimOS install with G1 nav-simple stack")
 def test_ar_g1_has_no_stream_type_conflicts() -> None:
     _verify_no_name_conflicts(ar_g1)

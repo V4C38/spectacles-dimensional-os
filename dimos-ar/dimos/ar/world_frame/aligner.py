@@ -536,9 +536,11 @@ class SimilarityAligner:
 
         self._handle_scale_band(estimate.scale)
         requested_scale = float(estimate.scale)
-        if not self._state.set_odom_scale(requested_scale):
-            if abs(requested_scale - self._state.odom_scale) > 1e-6:
-                return None
+        if (
+            not self._state.set_odom_scale(requested_scale)
+            and abs(requested_scale - self._state.odom_scale) > 1e-6
+        ):
+            return None
 
         current_transform = self._state.current_transform()
         if current_transform is None:
@@ -610,9 +612,11 @@ class SimilarityAligner:
         resolved_odom: OdomSample | None,
     ) -> None:
         self._handle_scale_band(estimate.scale)
-        if not self._state.set_odom_scale(float(estimate.scale)):
-            if abs(estimate.scale - self._state.odom_scale) > 1e-6:
-                raise RuntimeError("refinement scale rejected by WorldFrameState")
+        if (
+            not self._state.set_odom_scale(float(estimate.scale))
+            and abs(estimate.scale - self._state.odom_scale) > 1e-6
+        ):
+            raise RuntimeError("refinement scale rejected by WorldFrameState")
         current_transform = self._state.current_transform()
         if current_transform is None:
             raise RuntimeError("refinement requires committed world frame")

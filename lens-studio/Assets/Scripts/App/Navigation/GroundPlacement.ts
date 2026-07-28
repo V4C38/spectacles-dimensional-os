@@ -7,7 +7,6 @@ import {
 } from "../Utilities/AnimationUtilities";
 
 export const GROUND_NORMAL_MIN_Y = Math.cos((65 * Math.PI) / 180);
-export const GROUND_Y_OFFSET_CM = 5;
 export const DEADZONE_EXIT_MARGIN_CM = 12;
 export const ROBOT_GROUND_DEADZONE_RADIUS_CM = 75;
 export const PINCH_RAY_LENGTH_CM = 2000;
@@ -173,16 +172,11 @@ export function solveMeshPlacement(args: SolveMeshPlacementArgs): MeshPlacementR
   const meshHit = args.hits.length > 0 ? args.hits[0] : null;
   const meshGroundGoal =
     meshHit && isGroundNormal(meshHit.normal)
-      ? new vec3(
-          meshHit.position.x,
-          meshHit.position.y + GROUND_Y_OFFSET_CM,
-          meshHit.position.z,
-        )
+      ? new vec3(meshHit.position.x, meshHit.position.y, meshHit.position.z)
       : null;
 
   if (insideDeadzone && args.deadzone) {
-    const robotGoalY =
-      (args.deadzone.getRobotFloorWorldY() ?? args.fallbackY) + GROUND_Y_OFFSET_CM;
+    const robotGoalY = args.deadzone.getRobotFloorWorldY() ?? args.fallbackY;
     const goalY =
       meshGroundGoal !== null
         ? blendDeadzoneMeshGoalY(
@@ -215,10 +209,9 @@ export function solveMeshPlacement(args: SolveMeshPlacementArgs): MeshPlacementR
 
   const firstHit = args.hits[0];
   if (isGroundNormal(firstHit.normal)) {
-    let goalY = firstHit.position.y + GROUND_Y_OFFSET_CM;
+    let goalY = firstHit.position.y;
     if (args.deadzone?.getRobotWorldPosition()) {
-      const robotGoalY =
-        (args.deadzone.getRobotFloorWorldY() ?? args.fallbackY) + GROUND_Y_OFFSET_CM;
+      const robotGoalY = args.deadzone.getRobotFloorWorldY() ?? args.fallbackY;
       goalY = blendDeadzoneMeshGoalY(
         planarPoint,
         args.deadzone,
@@ -467,6 +460,23 @@ export class GroundPlacement {
   /** Immediate idle-navigation snap (e.g. after world-frame pose correction). */
   public snapIdlePose(position: vec3, rotation: quat): void {
     if (!this.isIdleNavigation() || !this._marker) {
+      return;
+    }
+    this.desiredPosition = new vec3(position.x, position.y, position.z);
+    this.desiredRotation = rotation;
+    this._syncSmoothedGoal(this.desiredPosition);
+    this.touchStartPosition = this.desiredPosition;
+    this._wasInsideDeadzone = false;
+    this._resetHeadingState(this.desiredPosition, rotation);
+    if (this._placementAnchor) {
+      this._placementAnchor.getTransform().setWorldPosition(position);
+    }
+    this._marker.setPose(this.desiredPosition, rotation);
+  }
+
+  /** Place the marker at a bridge-authoritative goal while the user is not dragging. */
+  public applyAuthoritativePose(position: vec3, rotation: quat): void {
+    if (!this.active || !this._marker || this._isDragging) {
       return;
     }
     this.desiredPosition = new vec3(position.x, position.y, position.z);

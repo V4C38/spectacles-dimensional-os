@@ -1,6 +1,9 @@
 /** Inbound protocol decode: text dispatch, hello-wait, binary LiDAR pump, parse recovery. */
 import {
   RegistrationStatusMessage,
+  AgentResponseMessage,
+  AgentStatusMessage,
+  ArSkillMessage,
   BridgeStatusMessage,
   CameraFrameAckMessage,
   CapabilityState,
@@ -48,6 +51,9 @@ export class InboundProcessor {
   public readonly onPath = new Signal<PathMessage>();
   public readonly onNavStatus = new Signal<NavStatusMessage>();
   public readonly onPong = new Signal<PongMessage>();
+  public readonly onAgentResponse = new Signal<AgentResponseMessage>();
+  public readonly onAgentStatus = new Signal<AgentStatusMessage>();
+  public readonly onArSkill = new Signal<ArSkillMessage>();
   public readonly onProtocolError = new Signal<ProtocolParseError>();
 
   public helloReceived = false;
@@ -221,6 +227,15 @@ export class InboundProcessor {
           this._adoptRobotId(msg.robot_id);
           this.onPong.emit(msg);
           break;
+        case "agent_response":
+          this.onAgentResponse.emit(msg);
+          break;
+        case "agent_status":
+          this.onAgentStatus.emit(msg);
+          break;
+        case "ar_skill":
+          this.onArSkill.emit(msg);
+          break;
       }
     } catch (error) {
       this._handleParseFailure(payload, error);
@@ -256,8 +271,21 @@ export class InboundProcessor {
     if (snapshot.nav.stall_reason === "no_path" || snapshot.nav.stall_reason === "planner_idle") {
       navStatus.stall_reason = snapshot.nav.stall_reason;
     }
+    if (snapshot.nav.goal) {
+      navStatus.goal = snapshot.nav.goal;
+    }
     this._logDiagnosticRx(navStatus);
     this.onNavStatus.emit(navStatus);
+
+    const agentStatus: AgentStatusMessage = {
+      type: "agent_status",
+      ts: snapshot.ts,
+      state: snapshot.agent.state,
+    };
+    if (snapshot.agent.detail !== undefined) {
+      agentStatus.detail = snapshot.agent.detail;
+    }
+    this.onAgentStatus.emit(agentStatus);
 
     if (snapshot.path) {
       const pathMsg: PathMessage = {

@@ -2,6 +2,7 @@ import animate from "SpectaclesInteractionKit.lspkg/Utils/animate";
 import {
   AppStateData,
   OperatingMode,
+  agentBusyVfxActive,
   robotActivityPresentation,
 } from "../AppState";
 import { formatRegistrationProgressText } from "../Registration/RegistrationFlow";
@@ -61,6 +62,8 @@ export class RobotUiView {
   private readonly manualModeMenu: SceneObject | null;
   private readonly agentModeMenu: SceneObject | null;
   private readonly registrationModeMenu: SceneObject | null;
+  private readonly buttonVfxBusy: SceneObject | null;
+  private readonly buttonVfxIdle: SceneObject | null;
   private readonly registrationProgressText: Text | null;
   private readonly _debugInfoText: Text | null;
   private _operatingMode: OperatingMode = "manual";
@@ -88,6 +91,8 @@ export class RobotUiView {
     this.manualModeMenu = findChildRecursive(this.menuObj, "ManualModeMenu");
     this.agentModeMenu = findChildRecursive(this.menuObj, "AgentModeMenu");
     this.registrationModeMenu = findChildRecursive(this.menuObj, "RegistrationModeMenu");
+    this.buttonVfxBusy = findChildRecursive(this.markerRoot, "ButtonVFX_Busy");
+    this.buttonVfxIdle = findChildRecursive(this.markerRoot, "ButtonVFX_Idle");
     this.registrationProgressText = this.registrationModeMenu
       ? findText(this.registrationModeMenu, "RegistrationProgressText")
       : null;
@@ -206,7 +211,19 @@ export class RobotUiView {
     }
     this.stopLabel.text = stopAvailable ? "Emergency Stop" : "Stop";
 
+    this._syncAgentButtonVfx(state);
+
     this._refreshDebugInfoText();
+  }
+
+  private _syncAgentButtonVfx(state: AppStateData): void {
+    const busyActive = agentBusyVfxActive(state);
+    if (this.buttonVfxBusy) {
+      this.buttonVfxBusy.enabled = busyActive;
+    }
+    if (this.buttonVfxIdle) {
+      this.buttonVfxIdle.enabled = !busyActive;
+    }
   }
 
   public applyAssistOverlay(overlay: RobotUiAssistOverlay): void {

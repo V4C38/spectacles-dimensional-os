@@ -1,10 +1,13 @@
 import { CameraCaptureState } from "../../ARBridge/Camera/CameraCaptureSession";
 import {
   findText,
+  COLOR_ERROR,
   COLOR_SUCCESS,
   COLOR_WARN,
   COLOR_WHITE,
 } from "./UIKit";
+import type { AgentActivityState } from "../AppState";
+import type { AgentResponseSeverity } from "../Agent/AgentResponseClassification";
 
 export interface UILogEntry {
   text: string;
@@ -21,22 +24,38 @@ export const DEBUG_CONSOLE_SCROLL_LINE_NAMES = [
   "ConsoleOutput_Line4",
   "ConsoleOutput_Line5",
   "ConsoleOutput_Line6",
-  "ConsoleOutput_Line7",
-  "ConsoleOutput_Line8",
 ] as const;
 
+export const DEBUG_CONSOLE_AGENT_PROMPT_LINE_NAME = "ConsoleOutput_Line7";
+export const DEBUG_CONSOLE_AGENT_RESPONSE_LINE_NAME = "ConsoleOutput_Line8";
 export const DEBUG_CONSOLE_CAMERA_STATUS_LINE_NAME = "ConsoleOutput_Line9";
 
 export const DEBUG_CONSOLE_SCROLL_LINE_COUNT = DEBUG_CONSOLE_SCROLL_LINE_NAMES.length;
 
+export const DEBUG_CONSOLE_RESERVED_LINE_COUNT = 3;
+
 export const DEBUG_CONSOLE_TOTAL_LINE_COUNT =
-  DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1;
+  DEBUG_CONSOLE_SCROLL_LINE_COUNT + DEBUG_CONSOLE_RESERVED_LINE_COUNT;
 
 export interface UILogConsoleEntry {
   text: string;
   color: vec4;
   loggedAt: Date;
 }
+
+export interface AgentPromptPresentation {
+  text: string;
+  valid: boolean;
+}
+
+export interface AgentResponsePresentation {
+  text: string;
+  state: AgentActivityState;
+  severity: AgentResponseSeverity;
+}
+
+export const AGENT_PROMPT_PLACEHOLDER = "User ASR: ...";
+export const AGENT_RESPONSE_PLACEHOLDER = "Agent response: ...";
 
 export function formatConsoleTimestamp(loggedAt: Date): string {
   const hours = String(loggedAt.getHours()).padStart(2, "0");
@@ -71,8 +90,12 @@ export class UILogger {
   private _pendingEntries: (UILogEntry | null)[] = [];
   private _entry: UILogEntry | null = null;
   private _consoleTexts: (Text | null)[] = [];
+  private _agentPromptText: Text | null = null;
+  private _agentResponseText: Text | null = null;
   private _cameraStatusText: Text | null = null;
   private _consoleBuffer: UILogConsoleEntry[] = [];
+  private _agentPromptEntry: UILogConsoleEntry | null = null;
+  private _agentResponseEntry: UILogConsoleEntry | null = null;
   private _cameraStatusEntry: UILogConsoleEntry | null = null;
   private _lastCameraCaptureState: CameraCaptureState | null = null;
 
@@ -90,6 +113,18 @@ export class UILogger {
       }
       scrollLines.push(text);
     }
+    const agentPromptText = findText(debugLogRoot, DEBUG_CONSOLE_AGENT_PROMPT_LINE_NAME);
+    if (!agentPromptText) {
+      print(
+        `UILogger: missing debug console line ${DEBUG_CONSOLE_AGENT_PROMPT_LINE_NAME}`,
+      );
+    }
+    const agentResponseText = findText(debugLogRoot, DEBUG_CONSOLE_AGENT_RESPONSE_LINE_NAME);
+    if (!agentResponseText) {
+      print(
+        `UILogger: missing debug console line ${DEBUG_CONSOLE_AGENT_RESPONSE_LINE_NAME}`,
+      );
+    }
     const cameraStatusText = findText(debugLogRoot, DEBUG_CONSOLE_CAMERA_STATUS_LINE_NAME);
     if (!cameraStatusText) {
       print(
@@ -98,14 +133,21 @@ export class UILogger {
     }
     if (
       scrollLines.length !== DEBUG_CONSOLE_SCROLL_LINE_COUNT ||
+      !agentPromptText ||
+      !agentResponseText ||
       !cameraStatusText
     ) {
       print(
-        `UILogger: expected ${DEBUG_CONSOLE_TOTAL_LINE_COUNT} debug console lines, found ${scrollLines.length + (cameraStatusText ? 1 : 0)}`,
+        `UILogger: expected ${DEBUG_CONSOLE_TOTAL_LINE_COUNT} debug console lines, found ${scrollLines.length + (agentPromptText ? 1 : 0) + (agentResponseText ? 1 : 0) + (cameraStatusText ? 1 : 0)}`,
       );
       return;
     }
-    this.bindConsoleOutputLines([...scrollLines, cameraStatusText]);
+    this.bindConsoleOutputLines([
+      ...scrollLines,
+      agentPromptText,
+      agentResponseText,
+      cameraStatusText,
+    ]);
   }
 
   public bindConsoleOutputLines(lines: Text[]): void {
@@ -115,8 +157,14 @@ export class UILogger {
       );
     }
     this._consoleTexts = lines.slice(0, DEBUG_CONSOLE_SCROLL_LINE_COUNT);
-    this._cameraStatusText = lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT] ?? null;
+    this._agentPromptText = lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT] ?? null;
+    this._agentResponseText = lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1] ?? null;
+    this._cameraStatusText = lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT + 2] ?? null;
+    this._resetAgentPromptPlaceholder();
+    this._resetAgentResponsePlaceholder();
     this._renderConsole();
+    this._renderAgentPromptLine();
+    this._renderAgentResponseLine();
     this._renderCameraStatusLine();
   }
 
@@ -134,6 +182,41 @@ export class UILogger {
   /** Append a persistent debug-console line without updating the transient HUD entry. */
   public logConsole(text: string, color: vec4): void {
     this._appendConsoleLine(text, color);
+  }
+
+  public setAgentPrompt(presentation: AgentPromptPresentation | null): void {
+    if (!presentation || presentation.text.trim().length === 0) {
+      this._resetAgentPromptPlaceholder();
+      this._renderAgentPromptLine();
+      return;
+    }
+    const color = presentation.valid ? COLOR_SUCCESS : COLOR_WARN;
+    this._agentPromptEntry = {
+      text: `User ASR: ${presentation.text}`,
+      color: cloneColor(color),
+      loggedAt: new Date(),
+    };
+    this._renderAgentPromptLine();
+  }
+
+  public setAgentResponse(presentation: AgentResponsePresentation | null): void {
+    if (!presentation || presentation.text.trim().length === 0) {
+      this._resetAgentResponsePlaceholder();
+      this._renderAgentResponseLine();
+      return;
+    }
+    let color = COLOR_WHITE;
+    if (presentation.severity === "error") {
+      color = COLOR_ERROR;
+    } else if (presentation.severity === "warn" || presentation.state === "busy") {
+      color = COLOR_WARN;
+    }
+    this._agentResponseEntry = {
+      text: `Agent response: ${presentation.text}`,
+      color: cloneColor(color),
+      loggedAt: new Date(),
+    };
+    this._renderAgentResponseLine();
   }
 
   public setCameraCaptureState(state: CameraCaptureState): void {
@@ -222,12 +305,41 @@ export class UILogger {
     }
   }
 
+  private _resetAgentPromptPlaceholder(): void {
+    this._agentPromptEntry = {
+      text: AGENT_PROMPT_PLACEHOLDER,
+      color: cloneColor(COLOR_WHITE),
+      loggedAt: new Date(),
+    };
+  }
+
+  private _resetAgentResponsePlaceholder(): void {
+    this._agentResponseEntry = {
+      text: AGENT_RESPONSE_PLACEHOLDER,
+      color: cloneColor(COLOR_WHITE),
+      loggedAt: new Date(),
+    };
+  }
+
+  private _renderAgentPromptLine(): void {
+    this._renderReservedLine(this._agentPromptText, this._agentPromptEntry);
+  }
+
+  private _renderAgentResponseLine(): void {
+    this._renderReservedLine(this._agentResponseText, this._agentResponseEntry);
+  }
+
   private _renderCameraStatusLine(): void {
-    const textComponent = this._cameraStatusText;
+    this._renderReservedLine(this._cameraStatusText, this._cameraStatusEntry);
+  }
+
+  private _renderReservedLine(
+    textComponent: Text | null,
+    entry: UILogConsoleEntry | null,
+  ): void {
     if (!textComponent) {
       return;
     }
-    const entry = this._cameraStatusEntry;
     if (entry) {
       textComponent.text = formatConsoleLine(entry);
       textComponent.textFill.color = cloneColor(entry.color);

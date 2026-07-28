@@ -14,6 +14,7 @@ from dimos.ar.robot_profile.base import (
     RobotHandshake,
     TagTrackingProfile,
 )
+from dimos.ar.robot_profile.tag_mount_override import resolve_tag_mounts
 from dimos.ar.tag_tracking.solve import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -24,20 +25,40 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
+# 36h11: black square is 80% of outer print size. 120 mm print → 96 mm black.
+_G1_TAG_BLACK_SIZE_M = 0.096
+
 G1_DEFAULT_TAG_MOUNTS: list[TagMount] = [
+    # Chest / front — faces +X (forward).
     TagMount(
         tag_id=DEFAULT_MARKER_ID,
-        size_m=0.056,
-        position=(0.10, 0.0, 0.35),
+        size_m=_G1_TAG_BLACK_SIZE_M,
+        position=(0.12, 0.0, 0.40),
         orientation=(0.0, -0.70710678, 0.0, 0.70710678),
     ),
-    # Uncomment and set the real pose to enable per-frame yaw observability.
-    # TagMount(tag_id=1, size_m=0.056, position=(0.0, 0.0, 0.0), orientation=(0.0, -0.70710678, 0.0, 0.70710678)),
+    # Back / rear — faces -X.
+    TagMount(
+        tag_id=1,
+        size_m=_G1_TAG_BLACK_SIZE_M,
+        position=(-0.12, 0.0, 0.40),
+        orientation=(-0.70710678, 0.0, 0.70710678, 0.0),
+    ),
 ]
 
 
+def _g1_tag_total_size_m(mounts: list[TagMount]) -> float:
+    """Outer print size for the Lens handshake (black / 0.8)."""
+    if not mounts:
+        return TAG_TOTAL_SIZE_M
+    totals = {round(m.size_m / 0.8, 6) for m in mounts}
+    if len(totals) == 1:
+        return next(iter(totals))
+    # Mixed sizes: report the largest so the Lens never under-sizes a tag.
+    return max(totals)
+
+
 def g1_tag_mounts() -> list[TagMount]:
-    return list(G1_DEFAULT_TAG_MOUNTS)
+    return resolve_tag_mounts(G1_DEFAULT_TAG_MOUNTS)
 
 
 def g1_capabilities(
@@ -71,6 +92,7 @@ def g1_capabilities(
             if emergency_stop_available
             else "No safe G1 high-level stop interface is available in this runtime.",
         ),
+        "navigation": CapabilityState(True),
     }
 
 
@@ -89,6 +111,7 @@ def g1_handshake(
     cancel_goal_available: bool,
     emergency_stop_available: bool,
     tag_mount_available: bool,
+    mounts: list[TagMount] | None = None,
 ) -> RobotHandshake:
     capability_states = g1_capabilities(
         nav_available=nav_available,
@@ -97,7 +120,8 @@ def g1_handshake(
         emergency_stop_available=emergency_stop_available,
         tag_mount_available=tag_mount_available,
     )
-    tag_ids = [m.tag_id for m in G1_DEFAULT_TAG_MOUNTS]
+    effective = mounts if mounts is not None else g1_tag_mounts()
+    tag_ids = [m.tag_id for m in effective]
     return RobotHandshake(
         robot_id=robot_id,
         display_name="Unitree G1",
@@ -109,7 +133,7 @@ def g1_handshake(
         default_render_offset_m=(0.0, 0.0, 0.0),
         tag_tracking_profile={
             "tag_ids": tag_ids,
-            "tag_total_size_m": TAG_TOTAL_SIZE_M,
+            "tag_total_size_m": _g1_tag_total_size_m(effective),
         },
     )
 
@@ -148,13 +172,15 @@ class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
 
     @rpc
     def handshake_payload(self) -> RobotHandshake:
+        mounts = self.tag_mounts()
         return g1_handshake(
             self.robot_id(),
             nav_available=True,
             path_available=True,
             cancel_goal_available=True,
             emergency_stop_available=self._emergency_stop_available(),
-            tag_mount_available=len(self.tag_mounts()) > 0,
+            tag_mount_available=len(mounts) > 0,
+            mounts=mounts,
         )
 
     @rpc

@@ -87,6 +87,24 @@ def test_g1_runtime_tag_tracking_profile_overrides() -> None:
     assert runtime.runtime_speed_horizon_s == 0.9
 
 
+def test_g1_handshake_two_120mm_tags() -> None:
+    from dimos.ar.robot_profile.g1 import G1_DEFAULT_TAG_MOUNTS, g1_handshake
+
+    hs = g1_handshake(
+        "unitree_g1",
+        nav_available=True,
+        path_available=True,
+        cancel_goal_available=True,
+        emergency_stop_available=False,
+        tag_mount_available=True,
+    )
+    assert hs.tag_tracking_profile["tag_ids"] == [0, 1]
+    assert abs(hs.tag_tracking_profile["tag_total_size_m"] - 0.12) < 1e-9
+    assert len(G1_DEFAULT_TAG_MOUNTS) == 2
+    assert abs(G1_DEFAULT_TAG_MOUNTS[0].size_m - 0.096) < 1e-9
+    assert abs(G1_DEFAULT_TAG_MOUNTS[1].position[0] + 0.12) < 1e-9
+
+
 def test_merge_capability_availability_preserves_handshake_metadata() -> None:
     handshake = RobotHandshake(
         robot_id="unitree_go2",

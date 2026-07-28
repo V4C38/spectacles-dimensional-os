@@ -1,6 +1,6 @@
 """Robot-mounted AprilTag tracking from AR client camera frames.
 
-Phase 0 validation notes (device testing via scripts/frame_probe.py):
+Phase 0 validation notes (device testing):
 - Timestamp: use imageFrame.timestampMillis/1000 as capture ts (scene seconds).
 - Intrinsics: scale DeviceCamera focal/principal by still/camera resolution ratio.
 - Reprojection gate: 3.0 px default; fallback 6.0 px if stills prove non-rectified.

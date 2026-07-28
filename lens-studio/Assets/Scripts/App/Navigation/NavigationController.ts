@@ -37,13 +37,13 @@ import {
   robotFloorWorldYCm,
   runtimeDeadzoneRadiusCm,
 } from "../Robot/RobotRuntimeModel";
-import { NavigationPathRenderer } from "./NavigationPathRenderer";
 import { NavigationMarker } from "./NavigationMarker";
 import { GroundPlacement, RobotGroundDeadzone } from "./GroundPlacement";
 import {
   applyNavigationPresentation,
   buildNavigationInputs,
   createWorldMeshHintState,
+  NavigationPathRenderer,
   planNavStatusEvent,
   resetWorldMeshHint,
   shouldStreamGoalNow,
@@ -228,11 +228,11 @@ export class NavigationController {
     return this._navSession.navSessionActive;
   }
 
-  public syncManualNavigationForOperatingMode(
+  public syncNavigationForOperatingMode(
     mode: AppStateData["operatingMode"],
     _state: AppStateData,
   ): void {
-    if (mode === "registrationMode" || mode === "agent") {
+    if (mode === "registrationMode") {
       this.disarm();
       return;
     }
@@ -263,16 +263,18 @@ export class NavigationController {
     if (state.navigationState === "navigating" && this._navSession.goal !== null) {
       return;
     }
+    const navModeArmed =
+      state.operatingMode === "manual" || state.operatingMode === "agent";
     const canMaintain =
-      state.operatingMode === "manual" &&
+      navModeArmed &&
       state.phase === "runtime" &&
       state.robotInteractionMode === "runtimeRobot" &&
       isCapabilityAvailable(state.robotRuntime, "nav");
-    const wantsManual =
+    const wantsArmed =
       Boolean(opts?.forceEnable) ||
       (navigationPlacementToggleEnabled(state) && canMaintain);
 
-    if (wantsManual && canMaintain) {
+    if (wantsArmed && canMaintain) {
       if (this._navSession.navSessionActive) {
         this._syncIdlePlacementPose();
         return;
@@ -332,6 +334,7 @@ export class NavigationController {
     } else {
       this._dispatch(plan.event);
     }
+    this._applyAgentGoalFromNavStatus(msg);
     if (msg.state === "navIntent" && msg.retryable) {
       return;
     }
@@ -568,10 +571,12 @@ export class NavigationController {
   private _handleDragActivated(): void {
     this._applyPresentation();
     const pose = this._placement.getCurrentPose();
-    if (!pose || this._navSession.goal !== null) {
+    if (!pose) {
       return;
     }
-    this._requestGoalCommit(pose.position, pose.rotation);
+    // Latest-wins takeover: a drag during an active (user or agent) goal commits a
+    // new user goal without an explicit cancel.
+    this._requestGoalCommit(pose.position, pose.rotation, true);
   }
 
   private _handleRetryableNavIntent(): void {
@@ -760,6 +765,23 @@ export class NavigationController {
     } else {
       this._placement.syncIdlePose(pose.position, pose.rotation);
     }
+  }
+
+  private _applyAgentGoalFromNavStatus(msg: NavStatusMessage): void {
+    const goal = msg.goal;
+    if (goal?.source !== "agent" || this._placement.isActivelyDragging()) {
+      return;
+    }
+    if (!this._navSession.navSessionActive) {
+      this.syncManualNavigationState({ forceEnable: true });
+    }
+    if (!this._placement.isActive()) {
+      return;
+    }
+    const position = protocolMetersToLensCentimeters(goal.position);
+    const q = goal.orientation;
+    const rotation = new quat(q[3], q[0], q[1], q[2]);
+    this._placement.applyAuthoritativePose(position, rotation);
   }
 
   private _logGoalSendBlocked(): void {

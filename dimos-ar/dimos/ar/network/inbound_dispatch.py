@@ -18,6 +18,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, cast
 
 from dimos.ar.network.protocol import (
+    ArSkillResultMessage,
     CameraInfoMessage,
     CancelNavGoalMessage,
     EmergencyStopMessage,
@@ -29,6 +30,7 @@ from dimos.ar.network.protocol import (
     RegistrationCommandMessage,
     RegistrationPoseMessage,
     SetLidarModeMessage,
+    UserCommandMessage,
 )
 from dimos.utils.logging_config import setup_logger
 
@@ -62,6 +64,8 @@ MESSAGE_LANES: dict[type[InboundMessage], DispatchLane] = {
     EmergencyStopMessage: DispatchLane.BACKGROUND,
     JoystickCommandMessage: DispatchLane.BACKGROUND,
     PingMessage: DispatchLane.ASYNC,
+    UserCommandMessage: DispatchLane.BACKGROUND,
+    ArSkillResultMessage: DispatchLane.BACKGROUND,
 }
 
 

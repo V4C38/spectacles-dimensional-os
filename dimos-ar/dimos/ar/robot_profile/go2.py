@@ -14,6 +14,7 @@ from dimos.ar.robot_profile.base import (
     RobotHandshake,
     TagTrackingProfile,
 )
+from dimos.ar.robot_profile.tag_mount_override import resolve_tag_mounts
 from dimos.ar.tag_tracking.solve import DEFAULT_MARKER_ID, TAG_TOTAL_SIZE_M, TagMount
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -29,6 +30,7 @@ GO2_CAPABILITIES: dict[str, CapabilityState] = {
     "path": CapabilityState(True),
     "cancel_nav_goal": CapabilityState(True),
     "emergency_stop": CapabilityState(True),
+    "navigation": CapabilityState(True),
 }
 
 _GO2_TAG_YAW_DEG: float = -90.0
@@ -53,15 +55,16 @@ GO2_DEFAULT_TAG_MOUNTS: list[TagMount] = [
 
 
 def go2_tag_mounts() -> list[TagMount]:
-    return list(GO2_DEFAULT_TAG_MOUNTS)
+    return resolve_tag_mounts(GO2_DEFAULT_TAG_MOUNTS)
 
 
 def go2_runtime_tag_tracking_profile() -> TagTrackingProfile:
     return TagTrackingProfile()
 
 
-def go2_handshake(robot_id: str) -> RobotHandshake:
-    tag_ids = [m.tag_id for m in GO2_DEFAULT_TAG_MOUNTS]
+def go2_handshake(robot_id: str, *, mounts: list[TagMount] | None = None) -> RobotHandshake:
+    effective = mounts if mounts is not None else go2_tag_mounts()
+    tag_ids = [m.tag_id for m in effective]
     return RobotHandshake(
         robot_id=robot_id,
         display_name="Unitree Go2",
@@ -111,7 +114,7 @@ class Go2RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
     @rpc
     def handshake_payload(self) -> RobotHandshake:
         capability_states = self.capabilities()
-        handshake = go2_handshake(self.robot_id())
+        handshake = go2_handshake(self.robot_id(), mounts=self.tag_mounts())
         return RobotHandshake(
             robot_id=handshake.robot_id,
             display_name=handshake.display_name,

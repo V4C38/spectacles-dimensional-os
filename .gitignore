@@ -10,6 +10,7 @@ Thumbs.db
 
 # README / demo media at repo root (not Lens Studio Assets/)
 # Add GIFs/PNGs here when ready; optional LFS via .gitattributes
+Logs.md
 
 # Accidental Lens Studio open at repo root (always use lens-studio/spectacles-dimensional-os.esproj)
 /*.esproj
@@ -41,6 +42,7 @@ lens-studio/Assets/Assets/
 .Python
 .env
 .envrc
+.dimos-ar-launcher/
 .venv/
 venv/
 ENV/

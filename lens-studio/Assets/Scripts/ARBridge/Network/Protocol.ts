@@ -1,6 +1,6 @@
 // ================================================================
 /**
- * Protocol v13 — message types, parser, outbound builders, and unit
+ * Protocol v18 — message types, parser, outbound builders, and unit
  * conversion helpers. Single source of truth replacing the v3 trio
  * (ProtocolTypes / ProtocolParser / Protocol).
  *
@@ -16,7 +16,12 @@ import {
   type WireNavigationState,
 } from "../../App/AppState";
 
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 18;
+
+/** Wire maximum; operational caps are mode-specific (see PROTOCOL.md). */
+export const LIDAR_WIRE_MAX_POINTS = 2500;
+export const LIDAR_FULL_POINT_CAP = 1500;
+export const LIDAR_OBSTACLE_POINT_CAP = 200;
 
 // ── Unit conversion ────────────────────────────────────────────
 
@@ -247,6 +252,14 @@ export interface PathMessage {
 
 export type NavStallReason = "no_path" | "planner_idle";
 
+export type WireGoalSource = "user" | "agent";
+
+export interface NavGoalBlock {
+  source: WireGoalSource;
+  position: [number, number, number];
+  orientation: [number, number, number, number];
+}
+
 export interface NavStatusMessage {
   type: "nav_status";
   ts: number;
@@ -255,6 +268,7 @@ export interface NavStatusMessage {
   error_code?: number;
   retryable?: boolean;
   stall_reason?: NavStallReason;
+  goal?: NavGoalBlock;
 }
 
 export interface SnapshotBridgeState {
@@ -271,6 +285,12 @@ export interface SnapshotNavState {
   error_code?: number | null;
   retryable?: boolean;
   stall_reason?: NavStallReason | null;
+  goal?: NavGoalBlock;
+}
+
+export interface SnapshotAgentState {
+  state: WireAgentState;
+  detail?: string;
 }
 
 export interface SnapshotPathState {
@@ -283,6 +303,7 @@ export interface RuntimeSnapshotMessage {
   robot_id: string;
   bridge: SnapshotBridgeState;
   nav: SnapshotNavState;
+  agent: SnapshotAgentState;
   path?: SnapshotPathState;
 }
 
@@ -292,6 +313,29 @@ export interface PongMessage {
   robot_id: string;
   client_ts: number;
   bridge_ts: number;
+}
+
+export type WireAgentState = "idle" | "busy";
+
+export interface AgentResponseMessage {
+  type: "agent_response";
+  ts: number;
+  text: string;
+}
+
+export interface AgentStatusMessage {
+  type: "agent_status";
+  ts: number;
+  state: WireAgentState;
+  detail?: string;
+}
+
+export interface ArSkillMessage {
+  type: "ar_skill";
+  ts: number;
+  request_id: string;
+  skill: string;
+  args?: Record<string, unknown>;
 }
 
 export type InboundMessage =
@@ -306,7 +350,10 @@ export type InboundMessage =
   | PathMessage
   | NavStatusMessage
   | RuntimeSnapshotMessage
-  | PongMessage;
+  | PongMessage
+  | AgentResponseMessage
+  | AgentStatusMessage
+  | ArSkillMessage;
 
 export type RegistrationCommandAction =
   | "start"
@@ -346,7 +393,10 @@ export function isNonCriticalInboundMessageType(
   return (
     messageType === "lidar" ||
     messageType === "pose" ||
-    messageType === "world_frame_correction"
+    messageType === "world_frame_correction" ||
+    messageType === "agent_response" ||
+    messageType === "agent_status" ||
+    messageType === "ar_skill"
   );
 }
 
@@ -491,6 +541,22 @@ function parseSnapshotBridge(raw: unknown): SnapshotBridgeState {
   return status;
 }
 
+function parseNavGoalBlock(raw: unknown): NavGoalBlock | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  const goal = requireObject(raw);
+  const source = requireString(goal, "source");
+  if (source !== "user" && source !== "agent") {
+    throw new Error(`Missing or invalid field: source`);
+  }
+  return {
+    source,
+    position: parseVec3(goal.position),
+    orientation: parseQuat(goal.orientation),
+  };
+}
+
 function parseSnapshotNav(raw: unknown): SnapshotNavState {
   const nav = requireObject(raw);
   const state = requireString(nav, "state");
@@ -520,7 +586,24 @@ function parseSnapshotNav(raw: unknown): SnapshotNavState {
   } else if (nav.stall_reason === null) {
     status.stall_reason = null;
   }
+  const goal = parseNavGoalBlock(nav.goal);
+  if (goal) {
+    status.goal = goal;
+  }
   return status;
+}
+
+function parseSnapshotAgent(raw: unknown): SnapshotAgentState {
+  const agent = requireObject(raw);
+  const state = requireString(agent, "state");
+  if (state !== "idle" && state !== "busy") {
+    throw new Error(`Missing or invalid field: state`);
+  }
+  const parsed: SnapshotAgentState = { state };
+  if (typeof agent.detail === "string") {
+    parsed.detail = agent.detail;
+  }
+  return parsed;
 }
 
 function parseSnapshotPath(raw: unknown): SnapshotPathState {
@@ -638,6 +721,7 @@ function parseInboundObject(
         robot_id: requireString(data, "robot_id"),
         bridge: parseSnapshotBridge(data.bridge),
         nav: parseSnapshotNav(data.nav),
+        agent: parseSnapshotAgent(data.agent),
       };
       if (data.path !== undefined) {
         snapshot.path = parseSnapshotPath(data.path);
@@ -844,6 +928,17 @@ function parseInboundObject(
       if (stallReason) {
         msg.stall_reason = stallReason;
       }
+      try {
+        const goal = parseNavGoalBlock(data.goal);
+        if (goal) {
+          msg.goal = goal;
+        }
+      } catch (error) {
+        print(
+          `Protocol: invalid nav_status.goal; skipping (${error instanceof Error ? error.message : String(error)})`,
+        );
+        return null;
+      }
       return msg;
     }
 
@@ -855,6 +950,49 @@ function parseInboundObject(
         client_ts: requireNumber(data, "client_ts"),
         bridge_ts: requireNumber(data, "bridge_ts"),
       };
+    }
+
+    case "agent_response": {
+      return {
+        type: "agent_response",
+        ts: requireNumber(data, "ts"),
+        text: requireString(data, "text"),
+      };
+    }
+
+    case "agent_status": {
+      const state = requireString(data, "state");
+      if (state !== "idle" && state !== "busy") {
+        print(`Protocol: unknown agent_status.state "${state}"; skipping`);
+        return null;
+      }
+      const msg: AgentStatusMessage = {
+        type: "agent_status",
+        ts: requireNumber(data, "ts"),
+        state,
+      };
+      if (typeof data.detail === "string") {
+        msg.detail = data.detail;
+      }
+      return msg;
+    }
+
+    case "ar_skill": {
+      const requestId = requireString(data, "request_id");
+      const skill = requireString(data, "skill");
+      if (!requestId || !skill) {
+        throw new Error("ar_skill requires non-empty request_id and skill");
+      }
+      const msg: ArSkillMessage = {
+        type: "ar_skill",
+        ts: requireNumber(data, "ts"),
+        request_id: requestId,
+        skill,
+      };
+      if (data.args !== undefined) {
+        msg.args = requireObject(data.args);
+      }
+      return msg;
     }
 
     default:
@@ -1044,6 +1182,40 @@ export function buildPing(clientTs: number, robotId: string): string {
   });
 }
 
+export function buildUserCommand(robotId: string, text: string): string {
+  return JSON.stringify({
+    type: "user_command",
+    ts: getTime(),
+    robot_id: robotId,
+    text,
+  });
+}
+
+export function buildArSkillResult(args: {
+  robotId: string;
+  requestId: string;
+  ok: boolean;
+  skill: string;
+  data?: Record<string, unknown>;
+  error?: string;
+}): string {
+  const payload: Record<string, unknown> = {
+    type: "ar_skill_result",
+    ts: getTime(),
+    robot_id: args.robotId,
+    request_id: args.requestId,
+    ok: args.ok,
+    skill: args.skill,
+  };
+  if (args.data !== undefined) {
+    payload.data = args.data;
+  }
+  if (args.error !== undefined) {
+    payload.error = args.error;
+  }
+  return JSON.stringify(payload);
+}
+
 export function buildCameraInfo(args: {
   robotId: string;
   width: number;
@@ -1185,12 +1357,4 @@ export function deriveLinkState(
   return deriveLinkStateFromSnapshot(
     projectBridgeSession(true, status),
   );
-}
-
-/** @deprecated Use projectBridgeSession */
-export function projectBridgeSnapshot(
-  handshakeReady: boolean,
-  status: BridgeStatusMessage | null,
-): BridgeSnapshot {
-  return projectBridgeSession(handshakeReady, status);
 }

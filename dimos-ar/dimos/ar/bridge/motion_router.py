@@ -15,7 +15,6 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
-    from dimos.msgs.geometry_msgs.PointStamped import PointStamped
     from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 logger = setup_logger()
@@ -40,17 +39,13 @@ class MotionRouter:
         *,
         publish_cmd_vel: Callable[[Twist], None],
         publish_nav_goal: Callable[[PoseStamped], None],
-        publish_nav_point_goal: Callable[[PointStamped], None],
         publish_stop_movement: Callable[[Bool], None] | None = None,
-        publish_cancel_goal: Callable[[Bool], None] | None = None,
         hard_stop: Callable[[], None] | None = None,
         on_nav_preempted: Callable[[], None] | None = None,
     ) -> None:
         self._publish_cmd_vel = publish_cmd_vel
         self._publish_nav_goal = publish_nav_goal
-        self._publish_nav_point_goal = publish_nav_point_goal
         self._publish_stop_movement = publish_stop_movement
-        self._publish_cancel_goal_out = publish_cancel_goal
         self._hard_stop = hard_stop
         self._on_nav_preempted = on_nav_preempted
         self._lock = threading.Lock()
@@ -98,7 +93,8 @@ class MotionRouter:
                         )
                         self._joystick_thread = thread
                         thread.start()
-        except BaseException as exc:
+        except Exception as exc:
+            logger.exception("motion router send_joystick_command failed")
             self._invoke_complete(on_complete, False, exc)
             return
         self._log_motion("send_joystick_command", vx=vx, vy=vy, wz=wz)
@@ -117,8 +113,8 @@ class MotionRouter:
                     self._publish_joystick_twist(0.0, 0.0, 0.0)
                 self._active_intent = _ActiveIntent.NAVIGATING
             self._publish_nav_goal(goal)
-            self._publish_nav_point_goal(self._point_goal_from_pose(goal))
-        except BaseException as exc:
+        except Exception as exc:
+            logger.exception("motion router send_nav_goal failed")
             with self._lock:
                 self._active_intent = _ActiveIntent.NONE
             self._invoke_complete(on_complete, False, exc)
@@ -132,7 +128,8 @@ class MotionRouter:
             with self._lock:
                 self._active_intent = _ActiveIntent.NONE
             self._publish_cancel_transports()
-        except BaseException as exc:
+        except Exception as exc:
+            logger.exception("motion router cancel_nav_goal failed")
             self._invoke_complete(on_complete, False, exc)
             return
         self._log_motion("cancel_nav_goal")
@@ -150,7 +147,8 @@ class MotionRouter:
                     daemon=True,
                     name="ar-hard-stop",
                 ).start()
-        except BaseException as exc:
+        except Exception as exc:
+            logger.exception("motion router emergency_stop failed")
             self._invoke_complete(on_complete, False, exc)
             return
         self._log_motion("emergency_stop")
@@ -164,10 +162,9 @@ class MotionRouter:
         self,
         *,
         has_pose_goal: bool,
-        has_point_goal: bool,
         has_cancel: bool,
     ) -> None:
-        if not has_pose_goal and not has_point_goal:
+        if not has_pose_goal:
             logger.warning("motion router has no navigation goal transport")
         if not has_cancel:
             logger.warning("motion router has no cancellation transport")
@@ -183,8 +180,6 @@ class MotionRouter:
     def _publish_cancel_transports(self) -> None:
         if self._publish_stop_movement is not None:
             self._publish_stop_movement(Bool(data=True))
-        if self._publish_cancel_goal_out is not None:
-            self._publish_cancel_goal_out(Bool(data=True))
 
     def _invoke_hard_stop(self) -> None:
         if self._hard_stop is None:
@@ -224,6 +219,15 @@ class MotionRouter:
 
     def _log_motion(self, method: str, **fields: object) -> None:
         now = time.monotonic()
+        if method == "send_nav_goal":
+            # High-frequency during drag retargets — never INFO.
+            logger.debug(
+                "motion router direct publish",
+                method=method,
+                publish_mono=round(now, 6),
+                **fields,
+            )
+            return
         if now - self._last_motion_log_mono < _MOTION_LOG_INTERVAL_S:
             return
         self._last_motion_log_mono = now
@@ -232,18 +236,6 @@ class MotionRouter:
             method=method,
             publish_mono=round(now, 6),
             **fields,
-        )
-
-    @staticmethod
-    def _point_goal_from_pose(goal: PoseStamped) -> PointStamped:
-        from dimos.msgs.geometry_msgs.PointStamped import PointStamped
-
-        return PointStamped(
-            x=goal.x,
-            y=goal.y,
-            z=goal.z,
-            ts=goal.ts,
-            frame_id=goal.frame_id,
         )
 
     @staticmethod

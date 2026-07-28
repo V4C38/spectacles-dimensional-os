@@ -33,6 +33,12 @@ export type NavigationErrorState =
   | { kind: "none" }
   | { kind: "failed"; errorCode: number | null };
 export type BridgeLinkState = "disconnected" | "connectedNoRobot" | "connected";
+export type AgentActivityState = "idle" | "busy";
+
+export interface AgentActivity {
+  state: AgentActivityState;
+  detail: string | null;
+}
 
 export const NO_ROBOT_CONNECTED_LABEL = "No Robot connected";
 
@@ -128,7 +134,7 @@ export function navigationErrorPresentation(
   return null;
 }
 
-/** Robot HUD + menu activity line (Idle, Navigating, outcome, future agent bridge states). */
+/** Robot HUD + menu activity line (Idle/Asleep, Navigating, Working, navigation outcomes). */
 export function robotActivityPresentation(
   state: AppStateData,
 ): StatusTextPresentation {
@@ -136,6 +142,41 @@ export function robotActivityPresentation(
     navigationErrorPresentation(state.navigationError)
     ?? robotMarkerSteadyStatePresentation(state)
   );
+}
+
+export function agentBusyVfxActive(state: AppStateData): boolean {
+  if (state.operatingMode !== "agent") {
+    return false;
+  }
+  // Busy VFX while executing, or while asleep (waiting for wake word).
+  // Idle VFX only while session open and not executing.
+  return state.agentActivity.state === "busy" || !state.agentSpeechSessionActive;
+}
+
+export function agentModeActivityPresentation(
+  state: AppStateData,
+): StatusTextPresentation {
+  if (state.navigationState === "navigating") {
+    return { text: "Navigating", color: COLOR_WHITE };
+  }
+  if (state.navigationState === "navIntent") {
+    return { text: "Preparing Navigation", color: COLOR_WHITE };
+  }
+  if (state.agentActivity.state === "busy") {
+    const detail = state.agentActivity.detail;
+    if (detail && detail.trim().length > 0) {
+      return { text: `Working: ${detail}`, color: COLOR_WHITE };
+    }
+    return { text: "Working", color: COLOR_WHITE };
+  }
+  if (state.agentSpeechSessionActive) {
+    return { text: "Idle", color: COLOR_WHITE };
+  }
+  return { text: "Asleep", color: COLOR_WHITE };
+}
+
+export function createDefaultAgentActivity(): AgentActivity {
+  return { state: "idle", detail: null };
 }
 
 export function robotMarkerSteadyStatePresentation(
@@ -150,6 +191,9 @@ export function robotMarkerSteadyStatePresentation(
   }
   if (state.operatingMode === "registrationMode") {
     return { text: "", color: COLOR_WHITE };
+  }
+  if (state.operatingMode === "agent") {
+    return agentModeActivityPresentation(state);
   }
   if (!state.robotRuntime.capabilities.nav.available) {
     const reason = state.robotRuntime.capabilities.nav.reason;
@@ -195,7 +239,9 @@ export function validateSessionFields(state: AppStateData): AppStateData {
   }
 
   if (next.phase === "runtime") {
-    if (next.navigationState !== "disabled" && next.operatingMode !== "manual") {
+    const navModesArmed =
+      next.operatingMode === "manual" || next.operatingMode === "agent";
+    if (next.navigationState !== "disabled" && !navModesArmed) {
       next.navigationState = "disabled";
     }
     if (next.operatingMode === "registrationMode" && next.navigationState !== "disabled") {
@@ -259,6 +305,8 @@ export interface AppStateData {
   bridgeSnapshot: BridgeSnapshot;
   robotRuntime: RobotRuntimeState;
   driftState: DriftState;
+  agentActivity: AgentActivity;
+  agentSpeechSessionActive: boolean;
 }
 
 export type AppStateListener = (state: AppStateData) => void;
@@ -314,6 +362,13 @@ function cloneBridgeSnapshot(snapshot: BridgeSnapshot): BridgeSnapshot {
   return { ...snapshot };
 }
 
+function cloneAgentActivity(activity: AgentActivity): AgentActivity {
+  return {
+    state: activity.state,
+    detail: activity.detail,
+  };
+}
+
 function cloneState(state: AppStateData): AppStateData {
   return {
     ...state,
@@ -321,6 +376,7 @@ function cloneState(state: AppStateData): AppStateData {
     navigationError: cloneNavigationError(state.navigationError),
     robotRuntime: cloneRobotRuntime(state.robotRuntime),
     driftState: cloneDriftState(state.driftState),
+    agentActivity: cloneAgentActivity(state.agentActivity),
   };
 }
 
@@ -370,6 +426,8 @@ export function createDefaultAppStateData(): AppStateData {
     bridgeSnapshot: createDefaultBridgeSnapshot(),
     robotRuntime: createDefaultRobotRuntimeState(),
     driftState: createDefaultDriftState(),
+    agentActivity: createDefaultAgentActivity(),
+    agentSpeechSessionActive: false,
   });
 }
 

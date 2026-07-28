@@ -5,7 +5,7 @@ AR WebSocket interface on top of DimOS robot stacks. The Spectacles client that
 implements the same contract lives in [`../lens-studio/`](../lens-studio/).
 
 All platform-agnostic code is under `dimos/ar/`. The cross-platform API is
-[`PROTOCOL.md`](PROTOCOL.md) (currently **v16**, port **8787**).
+[`PROTOCOL.md`](PROTOCOL.md) (currently **v18**, port **8787**).
 
 ## Layout
 
@@ -19,7 +19,7 @@ All platform-agnostic code is under `dimos/ar/`. The cross-platform API is
 | `dimos/ar/lidar/` | LiDAR height-band filtering for AR payloads |
 | `dimos/ar/robot_profile/` | Per-robot handshake, tag geometry, capabilities (Go2, G1) |
 | `dimos/ar/network/protocol.py` | Wire schema implementation |
-| `dimos/ar/blueprints.py` | Monorepo entrypoint used by [`../scripts/start.sh`](../scripts/start.sh) |
+| `dimos/ar/blueprints.py` | Monorepo entrypoint used by [`../launcher/scripts/start.sh`](../launcher/scripts/start.sh) |
 | `assets/` | Printable AprilTag assets (see below) |
 
 ## AprilTag print assets
@@ -47,10 +47,15 @@ Use the DimOS `.venv`, then run from the monorepo root:
 
 ```bash
 cd /path/to/spectacles-dimensional-os
-./scripts/start.sh
+./launcher/scripts/start.sh
 ```
 
-`scripts/start.sh` prompts for the robot stack (`ar-go2` / `ar-g1`), then starts the bridge. Wait for:
+`launcher/scripts/start.sh` prompts for the robot stack:
+
+- `ar_go2` — Unitree Go2 (with agent: MCP + OpenAI)
+- `ar_g1` — Unitree G1 via `unitree_g1_nav_simple` (pose goals; with agent: MCP + OpenAI)
+
+Then starts the bridge. Wait for:
 
 ```text
 Bridge ready — ws://0.0.0.0:8787
@@ -64,10 +69,12 @@ dimos run ar-go2
 dimos run ar-g1
 ```
 
+Set `OPENAI_API_KEY` for agent mode. Voice UX and tool list: [main README — Agent Mode](../README.md#agent-mode).
+
 **Supported hardware** (see [main README](../README.md#prerequisites)):
 
 - **Go2 pro/air** — primary development target; full navigation + AprilTag when onboard modules are available
-- **G1** — supported in code, not field-tested; navigation needs Unitree DDS packages in the DimOS `.venv`
+- **G1** — supported in code, not field-tested; uses `unitree_g1_nav_simple` pose goals; needs Unitree DDS packages in the DimOS `.venv`
 
 </details>
 
@@ -78,7 +85,7 @@ Handshake-driven — the Lens adapts to whatever the active robot profile advert
 
 - `hello.robot` — display identity, body geometry, `tag_tracking_profile` (`tag_ids`, `tag_total_size_m`)
 - `hello.capabilities` — flat map of feature availability + reasons
-- `runtime_snapshot` — bridge + nav state + optional active path on connect / `get_status`
+- `runtime_snapshot` — bridge + nav + optional agent state/detail + optional active path on connect / `get_status`
 - World-frame goals via `nav_goal`; cancel with `cancel_nav_goal`
 - Registration via `registration_command` (`april_tag` or `manual_pose`)
 
@@ -114,14 +121,16 @@ cd /path/to/spectacles-dimensional-os/dimos-ar
 
 Lens protocol tests: `cd ../lens-studio/Tests && npm test`.
 
-Reproduce full CI from repo root: `./scripts/run-ci.sh`.
+Reproduce full CI from repo root: `./launcher/scripts/run-ci.sh`
+(outside the Cursor agent sandbox — DimOS needs write access under
+`~/.local/state/dimos/logs/`).
 
 </details>
 
 <details>
 <summary>Protocol coupling</summary>
 
-`PROTOCOL_VERSION = 16` in `dimos/ar/network/protocol.py`. If the wire contract changes, update together:
+`PROTOCOL_VERSION = 18` in `dimos/ar/network/protocol.py`. If the wire contract changes, update together:
 
 - `dimos/ar/network/protocol.py`
 - `PROTOCOL.md`

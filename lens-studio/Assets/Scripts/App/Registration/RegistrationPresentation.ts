@@ -20,7 +20,7 @@ export const REGISTRATION_STEP_TITLES: Record<RegistrationStep, string> = {
 };
 
 export const REGISTRATION_STEP_DESCRIPTIONS: Record<RegistrationStep, string> = {
-  startRobot: "Power on your robot.\nRun ./scripts/start.sh on your Mac.",
+  startRobot: "Power on your robot.\nRun ./launcher/scripts/start.sh on your Mac.",
   connectBridge:
     "Enter your Mac's IP.\nUse same Wi‑Fi for robot, Mac, and Spectacles.",
   registerRobot: "",
@@ -181,7 +181,7 @@ export function projectRegistrationPresentation(
       panelStatusText = NO_RESPONSE_STATUS_MSG;
       panelStatusColor = COLOR_ERROR;
       panelDetailText =
-        "Check that ./scripts/start.sh is running, then retry or switch to Manual pose";
+        "Check that ./launcher/scripts/start.sh is running, then retry or switch to Manual pose";
     } else if (showTagScanOverlay) {
       panelStatusText = tagStatus.text;
       panelStatusColor = tagStatus.color;

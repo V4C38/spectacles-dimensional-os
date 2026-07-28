@@ -16,6 +16,7 @@ import websockets.asyncio.server as ws_server
 
 from dimos.ar.network.inbound_dispatch import InboundDispatcher
 from dimos.ar.network.protocol import (
+    ArSkillResultMessage,
     CameraInfoMessage,
     CancelNavGoalMessage,
     EmergencyStopMessage,
@@ -27,6 +28,7 @@ from dimos.ar.network.protocol import (
     RegistrationCommandMessage,
     RegistrationPoseMessage,
     SetLidarModeMessage,
+    UserCommandMessage,
     decode_inbound,
     encode_hello,
     encode_pong,
@@ -53,6 +55,8 @@ EmergencyStopHandler = Callable[[EmergencyStopMessage], None]
 JoystickCommandHandler = Callable[[JoystickCommandMessage], None]
 GetStatusHandler = Callable[[GetStatusMessage, "ws_server.ServerConnection"], None]
 SetLidarModeHandler = Callable[[SetLidarModeMessage, "ws_server.ServerConnection"], None]
+UserCommandHandler = Callable[[UserCommandMessage], None]
+ArSkillResultHandler = Callable[[ArSkillResultMessage], None]
 UnsupportedHandler = Callable[[InboundMessage], None]
 StatusOnConnectHandler = Callable[["ws_server.ServerConnection"], None]
 DisconnectHandler = Callable[["ws_server.ServerConnection"], None]
@@ -62,12 +66,12 @@ InboundHandler = Callable[[InboundMessage, "ws_server.ServerConnection"], None]
 
 INBOUND_TEXT_LOG_INTERVAL_S = 1.0
 CAMERA_FRAME_LOG_INTERVAL_S = 2.0
-_THROTTLED_INBOUND_TYPES = frozenset({"registration_pose", "nav_goal"})
+_THROTTLED_INBOUND_TYPES = frozenset({"registration_pose"})
 PING_INTERVAL_S = 30
 PING_TIMEOUT_S = 30
 
 _TRACE = os.getenv("DIMOS_AR_TRACE", "") not in ("", "0", "false")
-_TRACE_ONLY_INBOUND_TYPES = frozenset({"get_status", "ping"})
+_TRACE_ONLY_INBOUND_TYPES = frozenset({"get_status", "ping", "nav_goal"})
 
 
 def _handshake_noise_filter(record: logging.LogRecord) -> bool:
@@ -101,6 +105,8 @@ class ARWebSocketServer:
         on_emergency_stop: EmergencyStopHandler | None = None,
         on_get_status: GetStatusHandler | None = None,
         on_set_lidar_mode: SetLidarModeHandler | None = None,
+        on_user_command: UserCommandHandler | None = None,
+        on_ar_skill_result: ArSkillResultHandler | None = None,
         on_unsupported: UnsupportedHandler | None = None,
         on_status_connect: StatusOnConnectHandler | None = None,
         on_disconnect: DisconnectHandler | None = None,
@@ -123,6 +129,8 @@ class ARWebSocketServer:
             on_emergency_stop=on_emergency_stop,
             on_get_status=on_get_status,
             on_set_lidar_mode=on_set_lidar_mode,
+            on_user_command=on_user_command,
+            on_ar_skill_result=on_ar_skill_result,
             on_unsupported=on_unsupported,
         )
 
@@ -146,6 +154,8 @@ class ARWebSocketServer:
         on_emergency_stop: EmergencyStopHandler | None,
         on_get_status: GetStatusHandler | None,
         on_set_lidar_mode: SetLidarModeHandler | None,
+        on_user_command: UserCommandHandler | None,
+        on_ar_skill_result: ArSkillResultHandler | None,
         on_unsupported: UnsupportedHandler | None,
     ) -> dict[type[InboundMessage], InboundHandler]:
         handlers: dict[type[InboundMessage], InboundHandler] = {}
@@ -179,6 +189,8 @@ class ARWebSocketServer:
         handlers[CancelNavGoalMessage] = _simple_handler(on_cancel_nav_goal, "cancel_nav_goal")
         handlers[JoystickCommandMessage] = _simple_handler(on_joystick_command, "joystick_command")
         handlers[EmergencyStopMessage] = _simple_handler(on_emergency_stop, "emergency_stop")
+        handlers[UserCommandMessage] = _simple_handler(on_user_command, "user_command")
+        handlers[ArSkillResultMessage] = _simple_handler(on_ar_skill_result, "ar_skill_result")
 
         return handlers
 
@@ -200,8 +212,10 @@ class ARWebSocketServer:
             if future is not None:
                 try:
                     future.result(timeout=2.0)
-                except Exception as exc:
-                    logger.warning("AR WebSocket server stop did not finish cleanly", error=str(exc))
+                except TimeoutError:
+                    logger.warning("AR WebSocket server stop timed out")
+                except Exception:
+                    logger.exception("AR WebSocket server stop did not finish cleanly")
         self._server_ready.clear()
         self.client_connected.clear()
         self._serve_future = None
@@ -310,7 +324,7 @@ class ARWebSocketServer:
                             )
                         continue
                     if not isinstance(message, str):
-                        raise ValueError("Unsupported WebSocket frame type")
+                        raise TypeError("Unsupported WebSocket frame type")
                     for line in split_inbound_text_lines(message):
                         msg_type = peek_message_type(line)
                         now_mono = time.monotonic()
@@ -395,8 +409,8 @@ class ARWebSocketServer:
         for websocket in list(self._outbound.keys()):
             try:
                 await websocket.send(data)
-            except Exception:
-                pass
+            except websockets.ConnectionClosed:
+                continue
 
     async def _enqueue_one(self, websocket: ws_server.ServerConnection, text: str) -> None:
         outbound = self._outbound.get(websocket)

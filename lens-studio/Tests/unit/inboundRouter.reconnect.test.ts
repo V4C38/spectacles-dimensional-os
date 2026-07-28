@@ -5,6 +5,7 @@ import { AppStateStore } from "../../Assets/Scripts/App/AppState";
 import { StatusClient } from "../../Assets/Scripts/ARBridge/Status/StatusClient";
 import { TelemetryClient } from "../../Assets/Scripts/ARBridge/Telemetry/TelemetryClient";
 import { NavigationClient } from "../../Assets/Scripts/ARBridge/Navigation/NavigationClient";
+import { AgentClient } from "../../Assets/Scripts/ARBridge/Agent/AgentClient";
 
 function makeRouter(phase: "registration" | "runtime") {
   const reconnectEvent = {
@@ -23,6 +24,8 @@ function makeRouter(phase: "registration" | "runtime") {
 
   const appState = new AppStateStore();
   appState.update({ phase });
+
+  const onBridgeDisconnected = vi.fn();
 
   const robotPresenter = {
     onDisconnect: vi.fn(),
@@ -47,6 +50,7 @@ function makeRouter(phase: "registration" | "runtime") {
   const statusClient = new StatusClient(null, null, null);
   const telemetryClient = new TelemetryClient(appState, null, null, null);
   const navigationClient = new NavigationClient(null, null);
+  const agentClient = new AgentClient({ createEvent: vi.fn() } as never, null, null);
 
   const router = new InboundRouter(
     session as never,
@@ -54,14 +58,15 @@ function makeRouter(phase: "registration" | "runtime") {
     statusClient,
     telemetryClient,
     navigationClient,
+    agentClient,
     navigationPlacement as never,
     robotPresenter as never,
     null,
-    null,
   );
+  router.setOnBridgeDisconnected(onBridgeDisconnected);
   router.bind();
 
-  return { router, session, reconnectEvent };
+  return { router, session, reconnectEvent, onBridgeDisconnected };
 }
 
 describe("InboundRouter runtime reconnect", () => {
@@ -78,8 +83,16 @@ describe("InboundRouter runtime reconnect", () => {
   });
 
   it("schedules reconnect after disconnect in runtime phase", () => {
-    const { session, reconnectEvent } = makeRouter("runtime");
+    const { session, reconnectEvent, onBridgeDisconnected } = makeRouter("runtime");
     session.onConnectionChanged.emit(false);
     expect(reconnectEvent.reset).toHaveBeenCalledWith(1.0);
+    expect(onBridgeDisconnected).toHaveBeenCalledTimes(1);
+  });
+
+  it("reapplyBridgeStatusIfConnected while disconnected does not tear down or reconnect", () => {
+    const { router, reconnectEvent, onBridgeDisconnected } = makeRouter("runtime");
+    router.reapplyBridgeStatusIfConnected();
+    expect(onBridgeDisconnected).not.toHaveBeenCalled();
+    expect(reconnectEvent.reset).not.toHaveBeenCalled();
   });
 });

@@ -16,11 +16,14 @@ spectacles-dimensional-os/
 ├── dimos-ar/                    # Python DimOS extension (platform-agnostic core)
 │   ├── dimos/ar/                # ARBridge module, robot_profile, protocol, transforms, filters
 │   ├── assets/                  # Generated apriltag_robot_* PNG/PDF for robot-mounted tags
-│   ├── dimos/ar/blueprints.py   # monorepo entrypoint used by scripts/start.sh
+│   ├── dimos/ar/blueprints.py   # monorepo entrypoint used by launcher/scripts/start.sh
 │   ├── scripts/                 # generate_marker.py
 │   ├── PROTOCOL.md              # JSON WebSocket contract (cross-repo)
 │   └── tests colocated under dimos/ar/
-├── scripts/                     # setup.sh, start.sh, run-ci.sh, dimos_lib.sh
+├── launcher/                    # CLI scripts + web UI for setup/start
+│   ├── Start Launcher.command   # Finder double-click entry (http://127.0.0.1:8790)
+│   ├── scripts/                 # setup.sh, start.sh, start-launcher.sh, run-ci.sh, …
+│   └── app/                     # FastAPI bridge launcher
 └── lens-studio/                 # Spectacles Lens Studio project
     ├── spectacles-dimensional-os.esproj   # open THIS file (never from repo root)
     ├── Assets/Scripts/          # Lens TypeScript (ARBridgeServices, ARBridgeCoordinator, …)
@@ -29,7 +32,7 @@ spectacles-dimensional-os/
 | Component | Location | Notes |
 |-----------|----------|-------|
 | `ARBridge`, robot profile, protocol, transforms | `dimos-ar/dimos/ar/` | Platform-agnostic — no Spectacles logic |
-| Blueprint entry | `dimos-ar/dimos/ar/blueprints.py` | Run on Mac with DimOS via `./scripts/start.sh` |
+| Blueprint entry | `dimos-ar/dimos/ar/blueprints.py` | Run on Mac with DimOS via `./launcher/scripts/start.sh` |
 | Robot-mounted AprilTag PDF | `dimos-ar/assets/apriltag_robot_{a4,letter}.pdf` | Print at 100% scale (70 mm); `python scripts/generate_marker.py` |
 | Spectacles Lens | `lens-studio/` | All Lens Studio code; see [`CONTRIBUTING.md`](CONTRIBUTING.md) for scene wiring |
 | Cross-platform contract | `dimos-ar/PROTOCOL.md` | JSON WebSocket API |
@@ -93,7 +96,7 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic, follo
   - `lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`
 - The bridge module worker must never block; WebSocket runs on a daemon thread
  (see `bridge/module.py`).
-- AR development in this monorepo uses `dimos-ar/dimos/ar/blueprints.py` (via `./scripts/start.sh`),
+- AR development in this monorepo uses `dimos-ar/dimos/ar/blueprints.py` (via `./launcher/scripts/start.sh`),
   which wraps native DimOS composition for the selected robot stack.
 - Port **8787** is the AR bridge WebSocket. Do not reuse the old Foxglove `8765` port.
 - Tests for the bridge package must run from the DimOS `.venv`.
@@ -107,18 +110,25 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic, follo
 
 ## Pre-commit CI (agent commits)
 
-Before any git commit, run `./scripts/run-ci.sh` from the repo root and fix failures
+Before any git commit, run `./launcher/scripts/run-ci.sh` from the repo root and fix failures
 until it passes. See `.cursor/rules/pre-commit-ci.mdc`.
+
+**Agents:** `run-ci.sh` must run **outside the Cursor sandbox** (`required_permissions: ["all"]`
+or a normal terminal). Sandboxed runs fail when DimOS tries to write logs under
+`~/.local/state/dimos/logs/`.
 
 ## Dev quick reference
 
 ```bash
 # Local CI (matches GitHub Actions — run before committing)
-./scripts/run-ci.sh
+# Must NOT run inside the Cursor agent sandbox — needs write access outside the repo
+# (DimOS logs under ~/.local/state/dimos/logs/). Use a normal terminal or all perms.
+./launcher/scripts/run-ci.sh
 
 # Install + start bridge (from repo root)
-./scripts/setup.sh
-./scripts/start.sh              # choose robot stack interactively; ws://0.0.0.0:8787
+./launcher/scripts/setup.sh
+./launcher/scripts/start.sh              # choose robot stack interactively; ws://0.0.0.0:8787
+./launcher/scripts/start-launcher.sh     # web UI wrapper (http://127.0.0.1:8790)
 
 # Tests (with blueprint running for integration)
 cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest

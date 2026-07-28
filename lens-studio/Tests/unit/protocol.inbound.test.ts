@@ -81,7 +81,15 @@ describe("parseInboundMessage", () => {
           world_frame_method: null,
           world_frame_approximate: false,
         },
-        nav: { state: "idle" },
+        nav: {
+          state: "navigating",
+          goal: {
+            source: "agent",
+            position: [1, 0, 2],
+            orientation: [0, 0, 0, 1],
+          },
+        },
+        agent: { state: "busy", detail: "thinking" },
         path: {
           waypoints: [[1, 2, 3]],
         },
@@ -90,6 +98,9 @@ describe("parseInboundMessage", () => {
     expect(msg!.type).toBe("runtime_snapshot");
     const snapshot = msg as RuntimeSnapshotMessage;
     expect(snapshot.path?.waypoints).toEqual([[1, 2, 3]]);
+    expect(snapshot.nav.goal?.source).toBe("agent");
+    expect(snapshot.agent.state).toBe("busy");
+    expect(snapshot.agent.detail).toBe("thinking");
     const bridgeSnapshot = projectBridgeSession(true, snapshot.bridge, snapshot.ts);
     expect(bridgeSnapshot.robotConnected).toBe(true);
     expect(bridgeSnapshot.worldFrameCommitted).toBe(false);
@@ -391,6 +402,26 @@ describe("parseInboundMessage", () => {
     expect((msg as { stall_reason: string }).stall_reason).toBe("no_path");
   });
 
+  it("parses nav_status goal block", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "nav_status",
+        ts: 1,
+        state: "navigating",
+        goal: {
+          source: "user",
+          position: [1, 0, 2],
+          orientation: [0, 0, 0, 1],
+        },
+      }),
+    );
+    expect(msg!.type).toBe("nav_status");
+    expect((msg as { goal: { source: string } }).goal.source).toBe("user");
+    expect((msg as { goal: { position: number[] } }).goal.position).toEqual([
+      1, 0, 2,
+    ]);
+  });
+
   it("parses pong", () => {
     const msg = parseInboundMessage(
       JSON.stringify({
@@ -472,5 +503,46 @@ describe("parseInboundMessage", () => {
 
   it("returns null for unknown message type", () => {
     expect(parseInboundMessage('{"type":"banana"}')).toBeNull();
+  });
+
+  it("parses agent_response", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "agent_response",
+        ts: 1,
+        text: "On my way.",
+      }),
+    );
+    expect(msg!.type).toBe("agent_response");
+    expect((msg as { text: string }).text).toBe("On my way.");
+  });
+
+  it("parses agent_status", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "agent_status",
+        ts: 1,
+        state: "busy",
+        detail: "thinking",
+      }),
+    );
+    expect(msg!.type).toBe("agent_status");
+    expect((msg as { state: string }).state).toBe("busy");
+  });
+
+  it("parses ar_skill with opaque args", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "ar_skill",
+        ts: 1,
+        request_id: "req-1",
+        skill: "draw_world_annotation",
+        args: { id: "chair-1", duration_s: 30 },
+      }),
+    );
+    expect(msg!.type).toBe("ar_skill");
+    const skill = msg as { skill: string; args: { duration_s: number } };
+    expect(skill.skill).toBe("draw_world_annotation");
+    expect(skill.args.duration_s).toBe(30);
   });
 });
