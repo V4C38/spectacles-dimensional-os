@@ -7416,7 +7416,6 @@
   Enabled: true
   ScriptAsset: !<reference> d7f5d355-bf38-40fb-ada4-748417a15334
   ScriptInputsDefault:
-    annotationMarkerPrefab: true
     robotGroundDeadzoneRadiusCm: true
   ScriptTypesDefault:
     {}
@@ -7427,7 +7426,7 @@
       robotMarker: !<MappingBased.AssignableType_2> b749cbc7-9706-4499-8d79-19f5a03dd792
       pointCloudRenderer: !<MappingBased.AssignableType_3> edc2d9a2-52ca-414f-acba-c9661ee12fea
       navigationMarkerPrefab: !<reference.ObjectPrefab> 8dad663a-f2bb-438d-882b-121c3208aba4
-      annotationMarkerPrefab: !<reference.ObjectPrefab> 00000000-0000-0000-0000-000000000000
+      annotationMarkerPrefab: !<reference.ObjectPrefab> bb47d936-adfb-479d-966f-fc30cdacfa21
       deviceTracking: !<reference.DeviceTracking> e5553c8a-0b7e-4ef4-92d9-3e1318fb82c1
       worldMeshObject: !<reference.SceneObject> 87343065-62b9-445a-874d-76d42ea6c7e2
       worldMeshVisual: !<reference.RenderMeshVisual> 0516edf2-e618-4b7c-a66e-544199834756

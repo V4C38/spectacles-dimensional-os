@@ -14,18 +14,21 @@
 </p>
 
 <p>
-  This project explores the use of <b>Augmented Reality as an interface for robotics and physical AI</b> in the context of navigation tasks and sensor data visualization. The AR glasses used are the 2024 <b>Snap Spectacles</b> 2024 developer kit. A <b>Unitree Go2 quadruped or G1 humanoid</b> is controlled via <a href="https://github.com/dimensionalOS/dimos">Dimensional OS</a> which handles navigation and path planning. A custom Websocket extension for DimOS is used as a bridge between the Spectacles Lens (App) and physical stack.
+  This project explores the use of <b>Augmented Reality as an interface for robotics and physical AI</b> in the context of navigation tasks and sensor data visualization. <br>
+  AR glasses: <b>Snap Spectacles</b> 2024 developer kit. Robot: <b>Unitree Go2 quadruped or G1 humanoid</b>. Controlled via <a href="https://github.com/dimensionalOS/dimos">Dimensional OS</a> which handles the entire physical stack, incl. navigation and LiDAR data streaming.
 </p>
 
 <p align="center">
   <a href="#setup">Setup</a> •
-  <a href="#systems-design">Systems Design</a> •
-  <a href="#ar-interactions">AR Interactions</a> •
+  <a href="#system-design">System Design</a> •
+  <a href="#augmented-reality-interface">Augmented Reality Interface</a> •
   <a href="#pose-drift">Pose Drift</a>
 </p>
 
 
-<img src="assets/specs_dimos_hero.gif" alt="Spectacles AR manual control of a Unitree Go2" width="800" />
+<p align="center">
+  <img src="assets/specs_dimos_hero.gif" alt="Spectacles AR manual control of a Unitree Go2" width="800" />
+</p>
 
 
 <a id="prerequisites"></a>
@@ -38,7 +41,7 @@
     <th>Humanoid</th>
   </tr>
   <tr>
-    <td>🟩 Unitree Go2 pro/air<br><sub>Fully supported &amp; tested - primary development target</sub></td>
+    <td>🟩 Unitree Go2 pro/air<br><sub>Fully supported &amp; tested</sub></td>
     <td>🟧 Unitree G1<br><sub>Supported, not tested - looking for collaborators</sub></td>
   </tr>
 </table>
@@ -48,15 +51,18 @@
 
 ### Setup
 
-You need a Mac, Spectacles and the robot on the same WiFi. Nothing else needs an internet connection, except Agent Mode, which calls the OpenAI API from the Mac.
+Mac which runs DimOS, Spectacles AR glasses and the robot need to be on the <b>same WiFi</b> with a stable internet connection. 
 
 <a id="vialauncher"></a>
-<details>
-<summary><strong>Via launcher</strong></summary>
+<details open>
+<summary><strong>Via launcher (recommended)</strong></summary>
 
-The launcher is a small web app that runs on your Mac and handles everything outside the Lens. It checks what is already installed, installs Dimensional OS and the bridge for you, finds the robot on your network, keeps your OpenAI key, generates and configures the AprilTag, and starts or stops the bridge with one button. A live log next to it shows what the robot stack is doing, so you can see problems without reading terminal output.
 
-This is the recommended path. Once it is open you do not need the terminal again.
+<img src="assets/specs_dimos_bridgelauncher.png" alt="DimOS AR Bridge launcher: robot stack, Bridge IP, OPENAI_API_KEY, AprilTags, and log" width="640" />
+
+
+The launcher is a small web app that runs on your Mac and manages <b>Dimensional OS</b> and the <b>AR Bridge</b> in a clean UI. <br> It installs and configures both if needed, handles robot network discovery, generates and configures the <b>AprilTag</b> settings, and starts or stops the bridge. The <b>Log</b> also shows detailed output which is useful for debugging.
+
 
 Double-click [`launcher/Start Launcher.command`](launcher/Start%20Launcher.command) in Finder, or run:
 
@@ -67,9 +73,9 @@ cd /path/to/spectacles-dimensional-os
 
 Your browser opens at `http://127.0.0.1:8790`. Leave the terminal window it started from open, closing it stops the launcher.
 
-**First run:** open **Dependencies**, choose whether to reuse a Dimensional OS install you already have or download a fresh one, then press **Install**. This takes a while.
+The **Dependencies** tab allows installing and configuring dependencies based on your selected stack (Go2 / G1), choose whether to reuse a Dimensional OS install you already have or download a fresh one, then press **Install**. This can take a while.
 
-**Every run:** pick **Unitree Go2** or **Unitree G1**, press **Start**, and wait for the log. The value shown as **Bridge IP** is the address you type into the Lens. If no robot answers on the network, the bridge starts with a simulated robot instead.
+**Every run:** pick **Unitree Go2** or **Unitree G1**, press **Start**, and wait for status to turn to **Bridge Ready**. The value shown as **Bridge IP** is the address you type into the Lens during the setup wizard. If no robot answers on the network, the bridge starts with a simulated robot instead.
 
 macOS asks for your admin password the first time you start after a reboot. Dimensional OS needs a local network route and larger socket buffers for its internal messaging.
 
@@ -118,7 +124,8 @@ Use `ar_g1` instead of `ar_go2` for the humanoid.
 <details>
 <summary><strong>AprilTag setup</strong></summary>
 
-The Lens finds the robot by looking at a printed AprilTag on it. The launcher generates the tag for you, so you only need to print and stick it on. Open **Config**, click the tag image to get a printable PDF, and print it at **100% scale** with no page scaling.
+The frames of the glasses and the robot are aligned by the glasses detecting a mounted <b>AprilTag</b> at a known location on the robot. <br>
+In the Launcher, open <b>Config</b>, click the tag image to get a printable PDF, and print it at <b>100% scale</b> with no page scaling. Then mount it at the location as indicated in the table below. You can change the size, count and transform of the tag(s) as you see fit.
 
 <table>
   <tr>
@@ -136,45 +143,46 @@ The Lens finds the robot by looking at a printed AprilTag on it. The launcher ge
   <tr>
     <td valign="top">
       One tag, ID 0, printed at <b>70 mm</b>.<br><br>
-      It lies flat on top of the body, 18 cm ahead of the robot center and 6 cm up, tilted slightly backwards so you can read it while standing next to the robot.
+      It lies flat on top of the body, 18 cm ahead of the robot center and 6 cm up, tilted slightly backwards due to body shape.
     </td>
     <td valign="top">
       Two tags, ID 0 and ID 1, printed at <b>70 mm</b>.<br><br>
-      ID 0 goes upright on the chest panel, 17.8 cm above the pelvis; ID 1 goes upright on the back panel, 23.7 cm up. Both are centered left to right. Two tags let the Lens see the robot from either side. The torso shell is curved, so a larger tag would not seat flat.
+      ID 0 sits on the chest panel, ID 1 sits on the back panel. Both are centered left to right. Two tags let the Lens see the robot from either side. The torso shell is curved, so a larger tag would not seat flat. <br>
+      Note: this has not been tested on a G1 yet.
     </td>
   </tr>
 </table>
 
 If you want to mount a tag somewhere else, change its ID, size and offsets in the launcher under **Config**. Adding a second tag that is visible from the start will significantly improve the initial yaw calibration.
 
-Prefer editing code? The same defaults live in [`go2.py`](dimos-ar/dimos/ar/robot_profile/go2.py) and [`g1.py`](dimos-ar/dimos/ar/robot_profile/g1.py).
+The defaults can be found in [`go2.py`](dimos-ar/dimos/ar/robot_profile/go2.py) and [`g1.py`](dimos-ar/dimos/ar/robot_profile/g1.py) if you do not want to use the launcher.
 
 </details>
 
 #### Register inside Spectacles Lens
 
-Open [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj) in Lens Studio and send the Lens to your Spectacles. The Registration Wizard walks you through connecting and locating the robot. Enter the bridge IP from the launcher when asked.
+Open [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj) in Lens Studio and send the Lens to your Spectacles (Lens with experimental API enabled cannot be published so you need to upload via LS). The <b>Registration Wizard</b> walks you through connecting and locating the robot. Enter the <b>Bridge IP</b> from the launcher when asked.
 
 <p align="center">
   <img src="assets/specs_dimos_registrationwizard.gif" alt="Registration wizard on Spectacles: connect, scan tag, finish setup" width="480" />
 </p>
 
-Leave the robot standing still and walk around it while looking at the tag. Registration finishes on its own once it has gathered sufficient tag sightings. Keep viewing distance about 0.5 - 1.5 meters.
-Alternatively, switch to **Manual Placement**, where you drag a marker onto the robot by hand - this doesn`t require printing and mounting the tag but yields much lower accuracy and will not support runtime drift correction.
+Leave the robot standing still and walk around it while looking at the tag. Registration finishes on its own once it has gathered sufficient tag sightings. Keep viewing distance about <b>0.5 - 1.5 meters</b>.
+Alternatively, switch to <b>Manual Placement</b>, where you drag a marker onto the robot by hand - this doesn`t require printing and mounting the tag but yields much lower accuracy and will not support <b>runtime drift correction</b>.
 
 Alignment is rough at first and gets better as the robot moves and more tag sightings are integrated into the world frame calibration.
 
-<a id="systems-design"></a>
+<a id="system-design"></a>
 
-## Systems Design
+## System Design
 
-**Dimensional OS** runs the robot. It owns the connection to the Go2 or G1, builds a map out of the LiDAR, plans routes through that map and handles the navigation. In Agent Mode it also runs the language model behind your voice commands. 
+<b>Dimensional OS</b> runs the robot. It owns the connection to the Go2 or G1, builds a map out of the LiDAR, plans routes through that map and handles the navigation. In <b>Agent Mode</b> it also runs the language model behind your voice commands. 
 
-**The DimOS AR-Bridge** is the main addition of this repo. It streams the robot's position, route and LiDAR over a WebSocket and takes navigation goals and other commands back. It is responsible for aligning both glasses and robot coordinate systems via the mounted april tag.
+The <b>DimOS AR-Bridge</b> is the main addition of this repo. It streams the robot's position, route and LiDAR over a <b>WebSocket</b> and takes navigation goals and other commands back. It is responsible for aligning both glasses and robot coordinate systems via the mounted AprilTag.
 
-The bridge is designed to be device agnostic. Clients implement [`PROTOCOL.md`](dimos-ar/PROTOCOL.md) as the communication protocol for all messages.
+The bridge is designed to be <b>device agnostic</b>. Clients implement [`PROTOCOL.md`](dimos-ar/PROTOCOL.md) as the communication protocol for all messages.
 
-**The Spectacles Lens** is the reference client. It renders the robot and its route, reads hand gestures, sends camera images the bridge requires for april tag based frame alignment and handles speech.
+The <b>Spectacles Lens</b> is the reference client. It renders the robot and its route, reads hand gestures, sends camera images the bridge requires for AprilTag based frame alignment and handles speech.
 
 ```mermaid
 flowchart LR
@@ -198,55 +206,79 @@ flowchart LR
 
 **DimOS AR-Bridge**
 
-`ARBridge` is the module Dimensional OS loads. It builds everything below and receives the robot's sensor streams.
+Python package under `dimos/ar/`, loaded by Dimensional OS as a module. One package per concern:
 
-| Class | Role |
-|-------|------|
-| `Go2RobotProfileModule` / `G1RobotProfileModule` | Everything specific to one robot: its name, size, what it can do, and where the tags are mounted. Adding a new robot mostly means adding a profile. |
-| `ARWebSocketServer` | The socket clients connect to. `BridgeSender` queues what goes out so nothing blocks the robot stack. |
-| `RegistrationSession` | Runs setup, either scanning the tag or taking a manually placed pose, until the two worlds are locked together. |
-| `RobotAprilTagTracker` | Finds tags in the camera images the client sends and works out where the robot is from them. |
-| `WorldFrameState` | The committed link between the AR world and the robot's own coordinates. Everything that converts between the two reads it. |
-| `WorldFrameRefiner` | Watches later tag sightings and nudges that link back into place as the robot drifts. |
-| `NavigateGoalHandler` | Takes a goal from the client, hands it to the planner, and reports progress or failure back. |
-| `TelemetryPublisher` | Sends robot position and LiDAR out to the client. |
-| `BridgeSafetyCoordinator` | Emergency stops, and stopping the robot if a client vanishes mid-goal. |
-| `AgentRelay` | Voice commands in, agent replies and status out. |
+- `ARBridge` (`bridge/`) is the composition root. It builds the collaborators and fans out the robot's sensor streams. No business logic lives here.
+- `WorldFrameState` (`world_frame/`) holds the committed AR↔robot transform. Registration writes it, telemetry and navigation read it.
+- The remaining packages own one job each: WebSocket server in `network/`, tag detection in `tag_tracking/`, setup in `registration/`, goals in `navigation/`.
+
+```mermaid
+flowchart LR
+  Module["bridge/<br>ARBridge"]
+  Net["network/"]
+  Align["registration/<br>tag_tracking/"]
+  World["world_frame/"]
+  Rest["navigation/ · agent/<br>robot_profile/ · …"]
+
+  Module --> Net
+  Module --> Align
+  Module --> World
+  Module --> Rest
+```
 
 **Spectacles Lens**
 
-`ARBridgeCoordinator` is the entry point. It moves the app from registration into runtime and connects the pieces below.
+Lens Studio project with scripts split into two folders, wired by two scene scripts:
 
-| Class | Role |
-|-------|------|
-| `ARBridgeSession` | The connection itself, including the handshake that tells the Lens which robot it is talking to. |
-| `InboundRouter` | Hands each incoming message to whoever cares about it. |
-| `AppState` | One observable store for the current mode, the robot's state and the connection. The UI reacts to it rather than to messages. |
-| `RegistrationWizard` | The setup steps you walk through, backed by `RegistrationFlow` for the actual logic. |
-| `NavigationController` | Marker placement, the path line, and sending goals to the bridge. |
-| `RobotPresenter` | The robot marker, its menu, and keeping it on the real robot as pose updates arrive. |
-| `LidarPresenter` | Turns incoming points into the obstacle and full point cloud views. |
-| `UIManager` | The wrist menu and the debug console, via `WristMenuController` and `MainMenuView`. |
-| `AgentSpeechController` | Wake word, speech session, and passing transcripts to the bridge. |
-| `FrameCaptureController` | Captures camera stills and sends them over when the bridge asks for them. |
+- `ARBridge/` implements [`PROTOCOL.md`](dimos-ar/PROTOCOL.md): WebSocket session, inbound routing, and one client per domain (registration, telemetry, navigation, camera, agent).
+- `App/` is the Spectacles side: UI, presenters, registration wizard, and hand input.
+- `ARBridgeServices` is the composition root. It holds the scene inputs and builds the runtime services.
+- `ARBridgeCoordinator` owns phase and mode. It starts in registration, hands off to runtime, and tears down on disconnect.
+
+Inbound messages land in `AppState`, and the UI reacts to that store rather than to raw messages.
+
+```mermaid
+flowchart LR
+  subgraph App["App/"]
+    Services["ARBridgeServices<br>composition root"]
+    Coord["ARBridgeCoordinator<br>lifecycle"]
+    UI["UI · Robot · Nav · Wizard"]
+  end
+
+  subgraph BridgeLayer["ARBridge/"]
+    Net["Network · Session"]
+    Clients["Domain clients"]
+  end
+
+  Coord --> Services
+  Services --> UI
+  Services --> Net
+  Services --> Clients
+```
 
 </details>
 
-<a id="ar-interactions"></a>
+<a id="augmented-reality-interface"></a>
 
-## AR Interactions
+## Augmented Reality Interface
 
-Hold your left palm up to open the wrist menu. That is where you switch between Manual and Agent Mode, restart registration, show the debug console, and hit the emergency stop.
+<p align="center">
+  <img src="assets/specs_dimos_arwalk.gif" alt="Spectacles AR interface with Unitree Go2 outdoors: wrist menu and LiDAR visualization" width="800" />
+</p>
 
-The LiDAR button in the wrist menu cycles three states: off, obstacles only, and the full point cloud around the robot.
+Hold your left palm up to open the <b>wrist menu</b>. Switch between <b>Manual</b> and <b>Agent Mode</b>, restart registration (i.e. re-calibrate the frame alignment), show the <b>debug console</b>, and request <b>emergency stop</b> (will immediately cancel all navigation).
+
+<p align="center">
+  <img src="assets/specs_dimos_wristui.gif" alt="Wrist menu on Spectacles: Manual/Agent mode, LiDAR, registration, debug console, and emergency stop" width="480" />
+</p>
+
+The <b>LiDAR</b> button in the wrist menu cycles three states: <b>off</b>, <b>obstacles only</b> (filters the point cloud by proximity to the robot bridge-side — performance friendly), and the <b>full point cloud</b> around the robot (performance heavy, can cause glasses to overheat over a long period).
 
 <a id="manual-mode"></a>
 
 ### Manual Mode
 
-<img src="assets/specs_dimos_hero.gif" alt="Manual mode: placing a navigation goal on Spectacles" width="800" />
-
-The NavigationMarker is initially attached to the robot and allows the user to drag it at any time. The direction you drag sets the heading it should face when it arrives, as inidicated by the arrow. The robot will continuously move towards the marker.
+The <b>NavigationMarker</b> is initially attached to the robot and allows the user to drag it at any time. The direction you drag sets the heading it should face when it arrives, as indicated by the arrow. The robot will continuously move towards the marker.
 The yellow path line shown is the real navigation path the planner sends back, rendered in world space. 
 
 
@@ -254,11 +286,12 @@ The yellow path line shown is the real navigation path the planner sends back, r
 
 ### Agent Mode
 
-Say **"Robot"** to wake it, then tell it what to do. Speech to text runs on the Spectacles and the transcript goes to a GPT-4o agent on the Mac, which picks from the tools below. The session closes after 30 seconds of silence. Say **"stop"** and the robot stops immediately.
+Wake word <b>"Robot"</b> activates receival of voice commands. This state is indicated on the Robot Marker by <b>Idle</b> vs <b>Asleep</b> (before wake word detected). <br>
+Speech to text runs on the Spectacles and the transcript goes to a <b>GPT-4o</b> agent on the Mac, which picks from the tools below. The session closes after <b>30 seconds</b> of silence. Say <b>"stop"</b> and the robot stops immediately (same Emergency Stop path as in the wrist UI).
 
 Anything the agent starts looks and behaves exactly like a manually placed navigation goal. You can grab the marker and take over at any point which will override the goal set by the agent immediately.
 
-The agent does not talk back. It replies in a few words on the robot and in the debug console. It will assume reasonable defaults when user commands are unspecific.
+The agent does respond in a few words on the robot and in the debug console. It would be possible to implement TTS into the Lens if needed. It will assume reasonable defaults when user commands are unspecific.
 
 | Tool | What it does |
 |------|--------------|
@@ -270,20 +303,25 @@ The agent does not talk back. It replies in a few words on the robot and in the 
 | `draw_line` | Draw a line between two points in the room |
 | `clear_annotation` | Remove a marker or line it drew earlier |
 
-Agent Mode needs `OPENAI_API_KEY` set in the launcher and and internet connection on the Mac.
+> [!NOTE]
+> Agent Mode needs `OPENAI_API_KEY` set in the launcher and an internet connection on the Mac.
 
 <a id="pose-drift"></a>
 
 ## Pose Drift
 
-The RobotMarker you see in AR drifts directly proportional to travelled distance. The amount of drift varies but is aprox. 25cm at a total travel distance of 5m. 
+<p align="center">
+  <img src="assets/specs_dimos_drift.gif" alt="Runtime pose drift: AR robot marker and path slowly misalign as the Go2 walks" width="800" />
+</p>
 
-The cause is inconsistent odometry data from the robot itself. In simple terms, the robot estimates it´s current world pose by adding up how far it has moved, and on Unitree hardware those numbers are not consistent, so small errors accumulate over time and distance. 
+During fast movements (as shown in the GIF above) the <b>RobotMarker</b> can lag behind the real robot position, but will quickly recover when the velocity reduces (i.e. coming to a hold). Drift is also directly proportional to travelled distance and as a function of network quality. The amount of drift varies but is approx. <b>25 cm</b> at a total travel distance of <b>5 m</b>.
 
-The bridge corrects for this whenever it gets a valid camera frameat the AprilTag. It compares where the tag really is against where the robot reports to be and corrects the alignment to match the observation. Between those corrections the error grows again.
+The cause is <b>inconsistent odometry data</b> from the robot itself. In simple terms, the robot estimates its current world pose by adding up how far it has moved, and on Unitree hardware those numbers are not consistent, so small errors accumulate over time and distance.
 
-Practically: expect it to be off after a long run, look at the robot to force the correction.
+The bridge corrects for this whenever it gets a valid camera frame at the <b>AprilTag</b>. It compares where the tag really is against where the robot reports to be and corrects the alignment to match the observation. Between those corrections the error grows again.
 
+> [!NOTE]
+> Expect drift to accumulate over long distance walks - it is automatically corrected when the April Tag is sighted by the glasses camera.
 <details>
 <summary><h3>Development &amp; Troubleshooting</h3></summary>
 
