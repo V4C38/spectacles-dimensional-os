@@ -18,7 +18,6 @@ from dimos.ar.network.inbound_dispatch import InboundDispatcher
 from dimos.ar.network.protocol import (
     ArSkillResultMessage,
     CameraInfoMessage,
-    CancelNavGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
     InboundMessage,
@@ -50,7 +49,6 @@ CameraFrameHandler = Callable[
 ]
 RegistrationPoseHandler = Callable[[RegistrationPoseMessage, "ws_server.ServerConnection"], None]
 NavGoalHandler = Callable[[NavGoalMessage], None]
-CancelNavGoalHandler = Callable[[CancelNavGoalMessage], None]
 EmergencyStopHandler = Callable[[EmergencyStopMessage], None]
 JoystickCommandHandler = Callable[[JoystickCommandMessage], None]
 GetStatusHandler = Callable[[GetStatusMessage, "ws_server.ServerConnection"], None]
@@ -66,12 +64,12 @@ InboundHandler = Callable[[InboundMessage, "ws_server.ServerConnection"], None]
 
 INBOUND_TEXT_LOG_INTERVAL_S = 1.0
 CAMERA_FRAME_LOG_INTERVAL_S = 2.0
-_THROTTLED_INBOUND_TYPES = frozenset({"registration_pose"})
+_THROTTLED_INBOUND_TYPES = frozenset({"registration_pose", "nav_goal"})
 PING_INTERVAL_S = 30
 PING_TIMEOUT_S = 30
 
 _TRACE = os.getenv("DIMOS_AR_TRACE", "") not in ("", "0", "false")
-_TRACE_ONLY_INBOUND_TYPES = frozenset({"get_status", "ping", "nav_goal"})
+_TRACE_ONLY_INBOUND_TYPES = frozenset({"get_status", "ping"})
 
 
 def _handshake_noise_filter(record: logging.LogRecord) -> bool:
@@ -100,7 +98,6 @@ class ARWebSocketServer:
         on_camera_frame: CameraFrameHandler | None = None,
         on_registration_pose: RegistrationPoseHandler | None = None,
         on_nav_goal: NavGoalHandler | None = None,
-        on_cancel_nav_goal: CancelNavGoalHandler | None = None,
         on_joystick_command: JoystickCommandHandler | None = None,
         on_emergency_stop: EmergencyStopHandler | None = None,
         on_get_status: GetStatusHandler | None = None,
@@ -124,7 +121,6 @@ class ARWebSocketServer:
             on_camera_info=on_camera_info,
             on_registration_pose=on_registration_pose,
             on_nav_goal=on_nav_goal,
-            on_cancel_nav_goal=on_cancel_nav_goal,
             on_joystick_command=on_joystick_command,
             on_emergency_stop=on_emergency_stop,
             on_get_status=on_get_status,
@@ -149,7 +145,6 @@ class ARWebSocketServer:
         on_camera_info: CameraInfoHandler | None,
         on_registration_pose: RegistrationPoseHandler | None,
         on_nav_goal: NavGoalHandler | None,
-        on_cancel_nav_goal: CancelNavGoalHandler | None,
         on_joystick_command: JoystickCommandHandler | None,
         on_emergency_stop: EmergencyStopHandler | None,
         on_get_status: GetStatusHandler | None,
@@ -186,7 +181,6 @@ class ARWebSocketServer:
             )
 
         handlers[NavGoalMessage] = _simple_handler(on_nav_goal, "nav_goal")
-        handlers[CancelNavGoalMessage] = _simple_handler(on_cancel_nav_goal, "cancel_nav_goal")
         handlers[JoystickCommandMessage] = _simple_handler(on_joystick_command, "joystick_command")
         handlers[EmergencyStopMessage] = _simple_handler(on_emergency_stop, "emergency_stop")
         handlers[UserCommandMessage] = _simple_handler(on_user_command, "user_command")
@@ -289,6 +283,7 @@ class ARWebSocketServer:
                 await asyncio.to_thread(self._on_status_connect, websocket)
             self.client_connected.set()
             _last_inbound_text_log: dict[str, float] = {}
+            _inbound_type_counts: dict[str, int] = {}
             _last_camera_frame_log = 0.0
             async for message in websocket:
                 try:
@@ -328,6 +323,10 @@ class ARWebSocketServer:
                     for line in split_inbound_text_lines(message):
                         msg_type = peek_message_type(line)
                         now_mono = time.monotonic()
+                        if msg_type is not None:
+                            _inbound_type_counts[msg_type] = (
+                                _inbound_type_counts.get(msg_type, 0) + 1
+                            )
                         _should_log = (
                             msg_type not in _THROTTLED_INBOUND_TYPES
                             and msg_type not in _TRACE_ONLY_INBOUND_TYPES
@@ -337,9 +336,21 @@ class ARWebSocketServer:
                             >= INBOUND_TEXT_LOG_INTERVAL_S
                         ) or (msg_type in _TRACE_ONLY_INBOUND_TYPES and _TRACE)
                         if _should_log:
+                            count = (
+                                _inbound_type_counts.pop(msg_type, 1)
+                                if msg_type is not None
+                                else 1
+                            )
                             if msg_type is not None:
                                 _last_inbound_text_log[msg_type] = now_mono
-                            logger.info("AR inbound text message", type=msg_type)
+                            if msg_type in _THROTTLED_INBOUND_TYPES and count > 1:
+                                logger.info(
+                                    "AR inbound text message",
+                                    type=msg_type,
+                                    count=count,
+                                )
+                            else:
+                                logger.info("AR inbound text message", type=msg_type)
                         inbound = decode_inbound(line, expected_robot_id=hello.robot_id)
                         await self._dispatch_inbound(inbound, websocket)
                 except ValueError as exc:

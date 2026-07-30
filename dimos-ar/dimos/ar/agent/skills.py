@@ -127,7 +127,7 @@ class ArNavigationSkillContainer(Module):  # type: ignore[misc]
 
     @skill(uses=[CAP_MOVEMENT])
     def cancel_navigation(self) -> str:
-        """Cancel the active navigation goal and stop the robot."""
+        """Emergency-stop the robot and clear the active navigation goal."""
         return self._ar_navigation.cancel_navigation()
 
 

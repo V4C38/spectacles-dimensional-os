@@ -122,19 +122,6 @@ class MotionRouter:
         self._log_motion("send_nav_goal")
         self._invoke_complete(on_complete, True, None)
 
-    def cancel_nav_goal(self, *, on_complete: CompleteCallback | None = None) -> None:
-        try:
-            self._halt_motion()
-            with self._lock:
-                self._active_intent = _ActiveIntent.NONE
-            self._publish_cancel_transports()
-        except Exception as exc:
-            logger.exception("motion router cancel_nav_goal failed")
-            self._invoke_complete(on_complete, False, exc)
-            return
-        self._log_motion("cancel_nav_goal")
-        self._invoke_complete(on_complete, True, None)
-
     def emergency_stop(self, *, on_complete: CompleteCallback | None = None) -> None:
         try:
             self._halt_motion()

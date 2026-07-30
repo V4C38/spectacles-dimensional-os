@@ -33,7 +33,6 @@ import { ARBridgeSession } from "../../ARBridge/Network/ARBridgeSession";
 import { StatusClient } from "../../ARBridge/Status/StatusClient";
 import {
   isCapabilityAvailable,
-  capabilityUnavailableReason,
   robotFloorWorldYCm,
   runtimeDeadzoneRadiusCm,
 } from "../Robot/RobotRuntimeModel";
@@ -91,7 +90,7 @@ export type NavigationControllerDeps = {
 export class NavigationController {
   public readonly onNavigationResolved = new Signal<"succeeded" | "failed">();
 
-  private _cancelGoalAvailable = true;
+  private _estopAvailable = true;
   private _navSession: NavigationSession = createInitialNavigationSession();
   private _lastSentGoal: { position: vec3; rotation: quat } | null = null;
   private _lastGoalSendTime = -GOAL_SEND_INTERVAL_S;
@@ -133,7 +132,7 @@ export class NavigationController {
     this._placement.onPresentationSync = () => this._applyPresentation();
     this._placement.onMarkerButtonPressed = () => {
       if (this._navSession.goal !== null || this._placement.isPlacementActive()) {
-        this.requestCancelGoal();
+        this.requestEmergencyStop();
       }
     };
     this._placement.onPreviewTargetChanged = (pos, rot, _active, force) =>
@@ -220,10 +219,6 @@ export class NavigationController {
     this._clearPathState();
   }
 
-  public cancelGoal(): void {
-    this.requestCancelGoal();
-  }
-
   public get placementEnabled(): boolean {
     return this._navSession.navSessionActive;
   }
@@ -246,11 +241,7 @@ export class NavigationController {
         appState.operatingMode === "manual" &&
         appState.navigationState === "navigating"
       ) {
-        if (isCapabilityAvailable(appState.robotRuntime, "emergency_stop")) {
-          this.requestEmergencyStop();
-        } else if (isCapabilityAvailable(appState.robotRuntime, "cancel_nav_goal")) {
-          this.requestCancelGoal();
-        }
+        this.requestEmergencyStop();
       }
       this.disarm();
       return;
@@ -405,10 +396,7 @@ export class NavigationController {
       getRobotWorldPosition: () => this._robotMarker?.getWorldPosition() ?? null,
       getRobotFloorWorldY: () => this._getRobotFloorY(),
     } as RobotGroundDeadzone);
-    this.setCancelGoalAvailability(
-      isCapabilityAvailable(state, "cancel_nav_goal"),
-      capabilityUnavailableReason(state, "cancel_nav_goal"),
-    );
+    this._estopAvailable = isCapabilityAvailable(state, "emergency_stop");
     this._applyPresentation();
     this.syncManualNavigationState();
   }
@@ -419,20 +407,6 @@ export class NavigationController {
     }
     this._log("requestEmergencyStop");
     this._dispatch({ kind: "estopRequested" });
-    this._navClient?.sendEmergencyStop();
-  }
-
-  public requestCancelGoal(): void {
-    if (!this._canCancelLocally()) {
-      return;
-    }
-    this._log("nav goal cancel requested");
-    this._dispatch({ kind: "cancelRequested" });
-  }
-
-  public setCancelGoalAvailability(available: boolean, _reason: string | null = null): void {
-    this._cancelGoalAvailable = available;
-    this._applyPresentation();
   }
 
   public syncIdleNavigationPlacement(snap: boolean = false): void {
@@ -446,7 +420,7 @@ export class NavigationController {
       pathRenderer: this._pathRenderer,
       bridgePath: this._bridgePath,
       session: this._navSession,
-      cancelAvailable: this._cancelGoalAvailable,
+      stopAvailable: this._estopAvailable,
       appState: this._appState,
       robotFloorPosition: this._getRobotFloorPosition(),
       worldMeshObject: this._worldMeshObject,
@@ -482,9 +456,9 @@ export class NavigationController {
         }
         break;
       }
-      case "sendCancelGoal":
-        if (this._cancelGoalAvailable && this._canSendNavigationGoal()) {
-          this._navClient?.sendCancelGoal();
+      case "sendEmergencyStop":
+        if (bridgeNavigationReady(this._appState.snapshot.bridgeSnapshot)) {
+          this._navClient?.sendEmergencyStop();
         }
         break;
       default:
@@ -511,7 +485,6 @@ export class NavigationController {
           }
         }
         break;
-      case "cancelRequested":
       case "estopRequested":
       case "watchdogFailed":
         this._clearPathState();
@@ -541,7 +514,7 @@ export class NavigationController {
     const inputs = buildNavigationInputs(
       this._placement,
       this._marker,
-      this._cancelGoalAvailable,
+      this._estopAvailable,
     );
     if (
       shouldStreamGoalNow(this._navSession, inputs) &&
@@ -703,7 +676,7 @@ export class NavigationController {
     const inputs = buildNavigationInputs(
       this._placement,
       this._marker,
-      this._cancelGoalAvailable,
+      this._estopAvailable,
     );
     if (shouldStreamGoalNow(this._navSession, inputs)) {
       this._requestGoalCommit(position, rotation, force);
@@ -731,11 +704,6 @@ export class NavigationController {
       onOutcomeResetComplete: () => {
         this._handleOutcomeResetComplete();
       },
-      onConfirmTriggerUp: () => {
-        if (this._navSession.goal !== null || this._placement.isPlacementActive()) {
-          this.requestCancelGoal();
-        }
-      },
     });
     this._marker = marker;
     return marker;
@@ -750,7 +718,7 @@ export class NavigationController {
     }
     const navigationState = deriveNavigationState(
       this._navSession,
-      buildNavigationInputs(this._placement, this._marker, this._cancelGoalAvailable),
+      buildNavigationInputs(this._placement, this._marker, this._estopAvailable),
     );
     this._placement.setIdleAnchor(idleAnchorEnabled(navigationState));
     if (!this._placement.isIdleNavigation()) {
@@ -842,13 +810,6 @@ export class NavigationController {
       return null;
     }
     return new vec3(position.x, floorY, position.z);
-  }
-
-  private _canCancelLocally(): boolean {
-    if (!this._navSession.navSessionActive) {
-      return false;
-    }
-    return this._navSession.goal !== null || this._placement.isPlacementActive();
   }
 
   private _clearPathState(): void {

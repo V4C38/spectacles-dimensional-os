@@ -176,7 +176,7 @@ class ARBridgeConfig(ModuleConfig):  # type: ignore[misc]
     ALIGN_REBASE_DIR_STD_RAD: float = 0.5
     ALIGN_REBASE_KEEP: int = 2
     ALIGN_UI_CONFIDENT: float = 0.7
-    ar_skill_timeout_s: float = 10.0
+    ar_skill_timeout_s: float = 5.0
 
 
 class ARBridge(Module):  # type: ignore[misc]
@@ -230,8 +230,17 @@ class ARBridge(Module):  # type: ignore[misc]
             {
                 "path": self.ar_path.transport is not None,
                 "nav": self.goal_request.transport is not None,
-                "cancel_nav_goal": self.stop_movement.transport is not None,
             },
+        )
+        # emergency_stop is available when the profile hard-stop OR the bridge
+        # stop transport can halt motion (MotionRouter always zeroes cmd_vel).
+        profile_estop = handshake.capability_states.get("emergency_stop")
+        estop_available = (profile_estop.available if profile_estop else False) or (
+            self.stop_movement.transport is not None
+        )
+        handshake = merge_capability_availability(
+            handshake,
+            {"emergency_stop": estop_available},
         )
         self._connect_handshake = handshake
         runtime_profile = self._profile.runtime_tag_tracking_profile()
@@ -369,11 +378,6 @@ class ARBridge(Module):  # type: ignore[misc]
         )
         nav_ref = nav
 
-        safety = BridgeSafetyCoordinator(
-            nav=nav,
-            registration=registration,
-            motion_router=motion_router,
-        )
         agent_relay = AgentRelay(
             sender=sender,
             publish_human_input=self.human_input.publish,
@@ -381,6 +385,12 @@ class ARBridge(Module):  # type: ignore[misc]
         ar_skill_dispatcher = ArSkillDispatcher(
             sender=sender,
             default_timeout_s=self.config.ar_skill_timeout_s,
+        )
+        safety = BridgeSafetyCoordinator(
+            nav=nav,
+            registration=registration,
+            motion_router=motion_router,
+            ar_skill_dispatcher=ar_skill_dispatcher,
         )
 
         ws_server = ARWebSocketServer(
@@ -393,7 +403,6 @@ class ARBridge(Module):  # type: ignore[misc]
             on_camera_frame=registration.on_camera_frame,
             on_registration_pose=registration.on_registration_pose,
             on_nav_goal=self._route_nav_goal_message,
-            on_cancel_nav_goal=lambda msg: nav.on_cancel_nav_goal(msg.ts),
             on_joystick_command=self._on_joystick_command,
             on_emergency_stop=safety.on_emergency_stop,
             on_get_status=self._on_get_status,
@@ -611,8 +620,8 @@ class ARBridge(Module):  # type: ignore[misc]
 
     @rpc
     def cancel_navigation(self) -> str:
-        self._nav.on_cancel_nav_goal()
-        return "Navigation cancelled"
+        self._nav.on_emergency_stop()
+        return "Emergency stop"
 
     # ------------------------------------------------------------------
     # Status / runtime-sync helpers

@@ -17,6 +17,19 @@ from tag_config import (
     tag_config_path,
 )
 
+Vec3 = tuple[float, float, float]
+
+
+def normal_and_up(quat: list[float]) -> tuple[Vec3, Vec3]:
+    """Tag outward normal and up axis in base_link, from a mount quaternion (x,y,z,w)."""
+    x, y, z, w = quat
+    up = (2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w))
+    normal = (2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y))
+    return (
+        tuple(round(v, 9) + 0.0 for v in normal),  # type: ignore[return-value]
+        tuple(round(v, 9) + 0.0 for v in up),  # type: ignore[return-value]
+    )
+
 
 def test_defaults_when_missing(tmp_path: Path) -> None:
     cfg = load_tag_config(tmp_path)
@@ -58,7 +71,7 @@ def test_api_payload_includes_defaults(tmp_path: Path) -> None:
     assert payload["default_tag_ids"]["go2"] == [0]
     assert payload["default_tag_ids"]["g1"] == [0, 1]
     assert payload["defaults"]["go2"][0]["forward_m"] == DEFAULT_TAGS["go2"][0]["forward_m"]
-    assert payload["defaults"]["g1"][0]["print_size_mm"] == 120.0
+    assert payload["defaults"]["g1"][0]["print_size_mm"] == 70.0
     assert len(payload["defaults"]["g1"]) == 2
     assert payload["go2"][0]["tag_id"] == 0
 
@@ -139,20 +152,20 @@ def test_yaw_pitch_to_quat_go2_convention() -> None:
     assert abs(quat[3] - 0.7010573846499779) < 1e-9
 
 
-def test_g1_default_pitch_minus_90() -> None:
-    payload = mounts_payload_for_env(DEFAULT_TAGS["g1"])[0]
-    # Pure -90° about Y → (0, -√2/2, 0, √2/2)
-    assert abs(payload["orientation"][1] + 0.7071067811865475) < 1e-9
-    assert abs(payload["orientation"][3] - 0.7071067811865476) < 1e-9
+def test_g1_default_tags_face_front_and_back() -> None:
+    """Chest tag normal must point +X and back tag -X, both upright."""
+    mounts = {m["tag_id"]: m for m in mounts_payload_for_env(DEFAULT_TAGS["g1"])}
+    assert normal_and_up(mounts[0]["orientation"]) == ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+    assert normal_and_up(mounts[1]["orientation"]) == ((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0))
 
 
-def test_g1_defaults_are_two_120mm_chest_back_tags() -> None:
+def test_g1_defaults_are_two_70mm_chest_back_tags() -> None:
     assert len(DEFAULT_TAGS["g1"]) == 2
     by_id = {t["tag_id"]: t for t in DEFAULT_TAGS["g1"]}
-    assert by_id[0]["print_size_mm"] == 120.0
-    assert by_id[0]["forward_m"] == 0.12
-    assert by_id[1]["print_size_mm"] == 120.0
-    assert by_id[1]["forward_m"] == -0.12
+    assert by_id[0]["print_size_mm"] == 70.0
+    assert (by_id[0]["forward_m"], by_id[0]["up_m"]) == (0.072, 0.178)
+    assert by_id[1]["print_size_mm"] == 70.0
+    assert (by_id[1]["forward_m"], by_id[1]["up_m"]) == (-0.070, 0.237)
     mounts = mounts_payload_for_env(DEFAULT_TAGS["g1"])
-    assert abs(mounts[0]["size_m"] - 0.096) < 1e-9
-    assert abs(mounts[1]["size_m"] - 0.096) < 1e-9
+    assert abs(mounts[0]["size_m"] - 0.056) < 1e-9
+    assert abs(mounts[1]["size_m"] - 0.056) < 1e-9

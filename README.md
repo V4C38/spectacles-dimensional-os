@@ -130,8 +130,7 @@ The Lens finds the robot by looking at a printed AprilTag on it. The launcher ge
       <img src="assets/specs_dimos_go2tagmount.jpg" alt="Default AprilTag mount location on Unitree Go2" width="100%" />
     </td>
     <td valign="top">
-      <!-- G1 mount photo to be added -->
-      <sub>Photo coming soon.</sub>
+      <img src="assets/specs_dimos_g1tagmount.jpg" alt="Default AprilTag mount locations on Unitree G1" width="100%" />
     </td>
   </tr>
   <tr>
@@ -140,8 +139,8 @@ The Lens finds the robot by looking at a printed AprilTag on it. The launcher ge
       It lies flat on top of the body, 18 cm ahead of the robot center and 6 cm up, tilted slightly backwards so you can read it while standing next to the robot.
     </td>
     <td valign="top">
-      Two tags, ID 0 and ID 1, printed at <b>120 mm</b>.<br><br>
-      Both sit at chest height, 40 cm up. One faces forward, 12 cm ahead of center, the other faces backwards, 12 cm behind it. Two tags let the Lens see the robot from either side.
+      Two tags, ID 0 and ID 1, printed at <b>70 mm</b>.<br><br>
+      ID 0 goes upright on the chest panel, 17.8 cm above the pelvis; ID 1 goes upright on the back panel, 23.7 cm up. Both are centered left to right. Two tags let the Lens see the robot from either side. The torso shell is curved, so a larger tag would not seat flat.
     </td>
   </tr>
 </table>
@@ -266,7 +265,7 @@ The agent does not talk back. It replies in a few words on the robot and in the 
 | `relative_move` | Walk or turn by an amount relative to where the robot is now |
 | `navigate_to_user` | Come to you, using the position of your headset |
 | `get_user_pose` | Find out where you are standing and which way you face |
-| `cancel_navigation` | Drop the current goal |
+| `cancel_navigation` | Emergency-stop the robot and clear the current goal |
 | `place_marker` | Leave a marker floating in the room |
 | `draw_line` | Draw a line between two points in the room |
 | `clear_annotation` | Remove a marker or line it drew earlier |

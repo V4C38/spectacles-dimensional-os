@@ -66,7 +66,6 @@ export class MarkerViewCore {
   private _confirmEnabled = false;
   private _placementAnchor: SceneObject | null = null;
   private _preAnchorParent: SceneObject | null = null;
-  private _cancelActionAvailable = true;
   private _rotation = quat.quatIdentity();
   private _outcomeResetCompleteCallback: (() => void) | null = null;
 
@@ -196,7 +195,6 @@ export class MarkerViewCore {
         availableStyle: SnapOS2Styles.Special,
         unavailableStyle: SnapOS2Styles.Special,
       });
-      this._setConfirmInteractable(true);
     }
     this._setConfirmVfxState(false, button === null);
 
@@ -292,11 +290,6 @@ export class MarkerViewCore {
   public setConfirmVisible(visible: boolean): void {
     this.confirmButtonObject.enabled = visible;
     this._setConfirmInteractable(visible);
-  }
-
-  public setCancelActionAvailability(available: boolean): void {
-    this._cancelActionAvailable = available;
-    this._applyCancelButtonPresentation();
   }
 
   public hide(): void {
@@ -478,16 +471,6 @@ export class MarkerViewCore {
     this._setConfirmVfxState(true, true);
     this.confirmButtonObject.enabled = false;
     this._confirmEnabled = false;
-  }
-
-  private _applyCancelButtonPresentation(): void {
-    applyCapabilityButtonPresentation(this.confirmButton, this.confirmLabel, {
-      available: this._cancelActionAvailable,
-      availableLabel: "Cancel",
-      unavailableLabel: "Cancel\nUnavailable",
-      availableStyle: SnapOS2Styles.Special,
-      unavailableStyle: SnapOS2Styles.Special,
-    });
   }
 
   private _applyHeadingRootRotation(): void {
@@ -685,10 +668,6 @@ export class NavigationMarker extends BaseScriptComponent {
       return;
     }
     dragInteractable.enabled = enabled;
-  }
-
-  public setCancelActionAvailability(available: boolean): void {
-    this._view?.setCancelActionAvailability(available);
   }
 
   public bindPlacementAnchor(anchor: SceneObject, initialWorldPosition: vec3): void {

@@ -41,7 +41,8 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 NAV_GOAL_PATH_TIMEOUT_S: float = 8.0
-NAV_WATCHDOG_POLL_INTERVAL_S: float = 0.5
+NAV_WATCHDOG_POLL_INTERVAL_S: float = 0.2
+NAV_GOAL_REPUBLISH_MIN_INTERVAL_S: float = 1.0
 NAV_MESSAGE_AGE_LOG_INTERVAL_S: float = 5.0
 NAV_GOAL_REDISPATCH_MIN_DELTA_M: float = 0.75
 NAV_ARRIVAL_SHORTFALL_WARN_M: float = 0.25
@@ -63,6 +64,15 @@ class NavSession:
     source: WireGoalSource = "user"
     odom_position: tuple[float, float, float] | None = None
     odom_orientation: tuple[float, float, float, float] | None = None
+
+
+@dataclass
+class _PendingRetarget:
+    position: tuple[float, float, float]
+    orientation: tuple[float, float, float, float] | None
+    ts: float
+    source: WireGoalSource
+    coalesced_count: int
 
 
 class NavigateGoalHandler:
@@ -91,7 +101,9 @@ class NavigateGoalHandler:
         self._terminalOutcome: NavTerminalOutcome | None = None
         self._nav_error_code: int | None = None
         self._stallLatched: bool = False
-        self._nav_watchdog_lock = threading.Lock()
+        self._goal_lock = threading.Lock()
+        # Alias: existing call sites / tests may still refer to the watchdog lock name.
+        self._nav_watchdog_lock = self._goal_lock
         self._nav_watchdog_stop = threading.Event()
         self._nav_watchdog_thread: threading.Thread | None = None
         # Reconnect-only path cache for runtime_snapshot — not live nav authority.
@@ -99,6 +111,8 @@ class NavigateGoalHandler:
         self._nav_state_log_store: dict[str, str] = {}
         self._last_path_age_log_mono: float = 0.0
         self._last_goal_reached_age_log_mono: float = 0.0
+        self._last_goal_publish_mono: float | None = None
+        self._pending_retarget: _PendingRetarget | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -205,14 +219,18 @@ class NavigateGoalHandler:
         orientation: tuple[float, float, float, float] | None,
         ts: float,
         source: WireGoalSource = "user",
+        bypass_rate_limit: bool = False,
+        coalesced_count: int = 0,
     ) -> None:
         if not self._world_frame.is_committed:
             logger.warning("goal ignored before world frame committed")
             return
         if self._robot_connected is not None and not self._robot_connected():
             logger.error("AR navigation goal rejected — robot not connected")
-            self._terminalOutcome = "failed"
-            self._nav_error_code = NAV_ERROR_ROBOT_OFFLINE
+            with self._goal_lock:
+                self._terminalOutcome = "failed"
+                self._nav_error_code = NAV_ERROR_ROBOT_OFFLINE
+                self._pending_retarget = None
             self._broadcast_empty_path(ts=ts)
             self.broadcast_nav_status(ts=ts)
             return
@@ -225,46 +243,86 @@ class NavigateGoalHandler:
         odom_goal = resolve_world_goal(self._world_frame, msg)
         if odom_goal is None:
             return
-        was_navigating = (
-            self._session is not None
-            and self._session.phase == "navigating"
-            and self._terminalOutcome is None
-        )
-        self._terminalOutcome = None
-        self._nav_error_code = None
-        self._stallLatched = False
-        if was_navigating:
-            assert self._session is not None
-            self._session = NavSession(
-                position=position,
-                orientation=orientation,
-                dispatched_mono=self._session.dispatched_mono,
-                path_received=True,
-                last_path_mono=self._session.last_path_mono,
-                phase="navigating",
-                source=source,
-                odom_position=odom_goal.position,
-                odom_orientation=odom_goal.orientation,
+
+        broadcast_status = False
+        publish_coalesced = coalesced_count
+        with self._goal_lock:
+            was_navigating = (
+                self._session is not None
+                and self._session.phase == "navigating"
+                and self._terminalOutcome is None
             )
-        else:
-            self._session = NavSession(
-                position=position,
-                orientation=orientation,
-                dispatched_mono=None,
-                path_received=False,
-                last_path_mono=None,
-                phase="intent",
-                source=source,
-                odom_position=odom_goal.position,
-                odom_orientation=odom_goal.orientation,
-            )
+            now = time.monotonic()
+            if (
+                was_navigating
+                and not bypass_rate_limit
+                and self._last_goal_publish_mono is not None
+                and (now - self._last_goal_publish_mono) < NAV_GOAL_REPUBLISH_MIN_INTERVAL_S
+            ):
+                prev = self._pending_retarget
+                merged = (prev.coalesced_count + 1) if prev is not None else 1
+                self._pending_retarget = _PendingRetarget(
+                    position=position,
+                    orientation=orientation,
+                    ts=ts,
+                    source=source,
+                    coalesced_count=merged,
+                )
+                assert self._session is not None
+                self._session = NavSession(
+                    position=position,
+                    orientation=orientation,
+                    dispatched_mono=self._session.dispatched_mono,
+                    path_received=True,
+                    last_path_mono=self._session.last_path_mono,
+                    phase="navigating",
+                    source=source,
+                    odom_position=odom_goal.position,
+                    odom_orientation=odom_goal.orientation,
+                )
+                return
+
+            if self._pending_retarget is not None and bypass_rate_limit:
+                publish_coalesced = max(publish_coalesced, self._pending_retarget.coalesced_count)
+            self._pending_retarget = None
+            self._terminalOutcome = None
+            self._nav_error_code = None
+            self._stallLatched = False
+            if was_navigating:
+                assert self._session is not None
+                self._session = NavSession(
+                    position=position,
+                    orientation=orientation,
+                    dispatched_mono=self._session.dispatched_mono,
+                    path_received=True,
+                    last_path_mono=self._session.last_path_mono,
+                    phase="navigating",
+                    source=source,
+                    odom_position=odom_goal.position,
+                    odom_orientation=odom_goal.orientation,
+                )
+            else:
+                self._session = NavSession(
+                    position=position,
+                    orientation=orientation,
+                    dispatched_mono=None,
+                    path_received=False,
+                    last_path_mono=None,
+                    phase="intent",
+                    source=source,
+                    odom_position=odom_goal.position,
+                    odom_orientation=odom_goal.orientation,
+                )
+            self._last_goal_publish_mono = now
+            broadcast_status = not was_navigating
+
         goal = PoseStamped(
             position=list(odom_goal.position),
             orientation=list(odom_goal.orientation),
             ts=ts,
             frame_id="odom",
         )
-        if not was_navigating:
+        if broadcast_status:
             self.broadcast_nav_status(ts=ts)
         self._motion_router.send_nav_goal(
             goal,
@@ -273,6 +331,8 @@ class NavigateGoalHandler:
                 err,
                 msg=msg,
                 odom_goal=odom_goal,
+                source=source,
+                coalesced_count=publish_coalesced,
             ),
         )
 
@@ -534,15 +594,6 @@ class NavigateGoalHandler:
             source="user",
         )
 
-    def on_cancel_nav_goal(self, ts: float | None = None) -> None:
-        logger.info("AR navigation goal cancelled")
-        self._terminalOutcome = None
-        self._nav_error_code = None
-        self._clear_session()
-        self._broadcast_empty_path(ts=ts)
-        self.broadcast_nav_status(ts=ts)
-        self._motion_router.cancel_nav_goal(on_complete=self._on_control_dispatched)
-
     def on_emergency_stop(self, ts: float | None = None) -> None:
         logger.info("AR emergency_stop handled nav_reset=true")
         self._terminalOutcome = None
@@ -719,7 +770,7 @@ class NavigateGoalHandler:
         self._broadcast_empty_path()
         self._broadcast_stall_nav_status(stall_reason=stall_reason)
         self._clear_session()
-        self._motion_router.cancel_nav_goal(on_complete=self._on_control_dispatched)
+        self._motion_router.emergency_stop(on_complete=self._on_control_dispatched)
 
     # ------------------------------------------------------------------
     # Disconnect reset
@@ -737,7 +788,8 @@ class NavigateGoalHandler:
 
     def _watchdog_loop(self) -> None:
         while not self._nav_watchdog_stop.wait(timeout=NAV_WATCHDOG_POLL_INTERVAL_S):
-            with self._nav_watchdog_lock:
+            self._flush_pending_retarget_if_due()
+            with self._goal_lock:
                 if self._session is None or self._terminalOutcome is not None:
                     continue
                 dispatch_mono = self._session.dispatched_mono
@@ -751,9 +803,37 @@ class NavigateGoalHandler:
                     continue
             self.handle_goal_stall(stall_reason="no_path")
 
+    def _flush_pending_retarget_if_due(self) -> None:
+        with self._goal_lock:
+            pending = self._pending_retarget
+            if pending is None:
+                return
+            last = self._last_goal_publish_mono
+            if (
+                last is not None
+                and (time.monotonic() - last) < NAV_GOAL_REPUBLISH_MIN_INTERVAL_S
+            ):
+                return
+            # Claim under lock so a concurrent retarget cannot be dropped silently.
+            self._pending_retarget = None
+            position = pending.position
+            orientation = pending.orientation
+            ts = pending.ts
+            source = pending.source
+            coalesced = pending.coalesced_count
+        self.submit_goal(
+            position=position,
+            orientation=orientation,
+            ts=ts,
+            source=source,
+            bypass_rate_limit=True,
+            coalesced_count=coalesced,
+        )
+
     def _clear_session(self) -> None:
-        with self._nav_watchdog_lock:
+        with self._goal_lock:
             self._session = None
+            self._pending_retarget = None
 
     def _on_control_dispatched(self, ok: bool, err: BaseException | None) -> None:
         if ok:
@@ -770,10 +850,12 @@ class NavigateGoalHandler:
         *,
         msg: NavGoalMessage,
         odom_goal: OdomGoal,
+        source: WireGoalSource = "user",
+        coalesced_count: int = 0,
     ) -> None:
         if ok:
             session_phase: SessionPhase | None = None
-            with self._nav_watchdog_lock:
+            with self._goal_lock:
                 if self._session is not None:
                     session_phase = self._session.phase
                     self._session.dispatched_mono = time.monotonic()
@@ -787,6 +869,8 @@ class NavigateGoalHandler:
                     orientation_yaw_deg(msg.orientation) if msg.orientation is not None else None
                 ),
                 "odom_goal_yaw_deg": orientation_yaw_deg(odom_goal.orientation),
+                "source": source,
+                "coalesced": coalesced_count,
             }
             # INFO only for first dispatch of a session; in-flight retargets at DEBUG.
             if session_phase == "intent":

@@ -19,6 +19,7 @@ from dimos.ar.bridge.module import ARBridge
 from dimos.ar.robot_profile.g1 import G1RobotProfileModule
 from dimos.ar.robot_profile.go2 import Go2RobotProfileModule
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.protocol.rpc.spec import DEFAULT_RPC_TIMEOUTS as _DEFAULT_RPC_TIMEOUTS
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 
 try:
@@ -42,8 +43,18 @@ try:
         ArNavigationSkillContainer,
     )
 
+    # Per-method RPC timeouts on McpServer (caller of skill RPCs). Bounds the agent
+    # tool turn when an LCM response is dropped; ar_skill_timeout_s bounds the Lens wait.
+    _AGENT_RPC_TIMEOUTS: dict[str, float] = {
+        **dict(_DEFAULT_RPC_TIMEOUTS),
+        "navigate_to_user": 6.0,
+        "get_user_pose": 6.0,
+        "submit_relative_goal": 6.0,
+        "cancel_navigation": 6.0,
+        "draw_world_annotation": 6.0,
+    }
     _AGENT_MODULES: tuple[Any, ...] = (
-        McpServer.blueprint(),
+        McpServer.blueprint(rpc_timeouts=_AGENT_RPC_TIMEOUTS),
         McpClient.blueprint(system_prompt=AR_AGENT_SYSTEM_PROMPT),
         ArNavigationSkillContainer.blueprint(),
         ArAnnotationSkillContainer.blueprint(),

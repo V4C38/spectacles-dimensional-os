@@ -14,6 +14,7 @@ from dimos.ar.bridge.sender import BridgeSender
 from dimos.ar.navigation.navigate import (
     APPROACH_STANDOFF_M,
     NAV_GOAL_PATH_TIMEOUT_S,
+    NAV_GOAL_REPUBLISH_MIN_INTERVAL_S,
     NAV_WATCHDOG_POLL_INTERVAL_S,
     NavigateGoalHandler,
     NavSession,
@@ -212,7 +213,6 @@ async def test_handle_ar_goal_reached_failure_marks_goal_failed() -> None:
     _set_intent_session(nav)
     _set_navigating_session(nav)
     nav._motion_router.emergency_stop = MagicMock(wraps=nav._motion_router.emergency_stop)
-    nav._motion_router.cancel_nav_goal = MagicMock(wraps=nav._motion_router.cancel_nav_goal)
 
     nav.on_goal_reached(Bool(data=False))
 
@@ -220,7 +220,6 @@ async def test_handle_ar_goal_reached_failure_marks_goal_failed() -> None:
     assert nav._terminalOutcome == "failed"
     assert nav._session is None
     nav._motion_router.emergency_stop.assert_called_once()
-    nav._motion_router.cancel_nav_goal.assert_not_called()
     assert len(published_cancel) == 1
 
 
@@ -353,7 +352,7 @@ def test_emergency_stop_then_goal_succeeds() -> None:
 
 def test_cancel_goal_timeout_does_not_mark_goal_failed() -> None:
     nav, mock_server, _published_nav, published_cancel = _make_nav()
-    nav.on_cancel_nav_goal(ts=3.0)
+    nav.on_emergency_stop(ts=3.0)
 
     assert nav._terminalOutcome is None
     assert nav._nav_error_code is None
@@ -378,8 +377,8 @@ def test_send_nav_goal_accepts_direct_publish() -> None:
     assert nav._terminalOutcome is None
 
 
-def test_concurrent_nav_goals_dispatch_both() -> None:
-    """Direct router dispatches each goal; Lens throttling owns coalescing."""
+def test_concurrent_nav_goals_coalesce_while_navigating() -> None:
+    """In-flight retargets within the republish window coalesce on the bridge."""
     nav, _mock_server, published_nav, _published_cancel = _make_nav()
     first_goal = NavGoalMessage(
         ts=1.0,
@@ -394,10 +393,15 @@ def test_concurrent_nav_goals_dispatch_both() -> None:
         orientation=(0.0, 0.0, 0.0, 1.0),
     )
     nav.on_navigate_goal(first_goal)
-    nav.on_navigate_goal(second_goal)
+    nav.on_path(_make_path(ts=1.5))
+    assert nav._session is not None
+    assert nav._session.phase == "navigating"
+    assert len(published_nav) == 1
 
-    assert len(published_nav) == 2
-    assert published_nav[-1].position[0] == pytest.approx(2.0 / ODOM_SCALE_INITIAL, abs=0.01)
+    nav.on_navigate_goal(second_goal)
+    assert len(published_nav) == 1
+    assert nav._pending_retarget is not None
+    assert nav._pending_retarget.position == (2.0, 0.0, 3.0)
     assert nav._terminalOutcome is None
 
 
@@ -505,7 +509,7 @@ def test_wire_sequence_cancel() -> None:
     nav, mock_server, _published_nav, _published_cancel = _make_nav()
     _set_navigating_session(nav)
 
-    nav.on_cancel_nav_goal(ts=3.0)
+    nav.on_emergency_stop(ts=3.0)
     time.sleep(0.05)
 
     statuses = _all_nav_statuses(mock_server)
@@ -533,14 +537,12 @@ def test_wire_sequence_goal_failed() -> None:
     nav, mock_server, _published_nav, published_cancel = _make_nav()
     _set_navigating_session(nav)
     nav._motion_router.emergency_stop = MagicMock(wraps=nav._motion_router.emergency_stop)
-    nav._motion_router.cancel_nav_goal = MagicMock(wraps=nav._motion_router.cancel_nav_goal)
 
     nav.on_goal_reached(Bool(data=False))
 
     statuses = _all_nav_statuses(mock_server)
     assert statuses[-1]["state"] == "resolved"
     nav._motion_router.emergency_stop.assert_called_once()
-    nav._motion_router.cancel_nav_goal.assert_not_called()
     assert len(published_cancel) == 1
 
 
@@ -743,9 +745,15 @@ def test_inflight_goal_update_logs_at_debug_only() -> None:
     nav.on_path(_make_path())
     assert nav._session is not None
     assert nav._session.phase == "navigating"
-
+    # Bypass rate-cap so the retarget publishes and logs at DEBUG.
     with patch("dimos.ar.navigation.navigate.logger") as mock_logger:
-        nav.on_navigate_goal(_make_goal_msg(ts=3.0, position=(2.0, 0.0, 3.0)))
+        nav.submit_goal(
+            position=(2.0, 0.0, 3.0),
+            orientation=(0.0, 0.0, 0.0, 1.0),
+            ts=3.0,
+            source="user",
+            bypass_rate_limit=True,
+        )
     assert len(published_nav) == 2
     info_events = [call.args[0] for call in mock_logger.info.call_args_list]
     assert "AR navigation goal published" not in info_events
@@ -1010,3 +1018,44 @@ def test_encode_pose_accepts_non_finite_inputs() -> None:
     assert raw["type"] == "pose"
     assert all(np.isfinite(value) for value in raw["position"])
     assert all(np.isfinite(value) for value in raw["orientation"])
+
+
+
+def test_retarget_flush_after_republish_window() -> None:
+    """Coalesced retarget publishes once the republish window elapses."""
+    nav, _mock_server, published_nav, _published_cancel = _make_nav()
+    nav.start()
+    try:
+        nav.on_navigate_goal(_make_goal_msg(ts=1.0))
+        nav.on_path(_make_path(ts=1.5))
+        assert len(published_nav) == 1
+        nav.on_navigate_goal(_make_goal_msg(ts=2.0, position=(2.0, 0.0, 3.0)))
+        assert len(published_nav) == 1
+        assert nav._pending_retarget is not None
+        # Expire the republish window and let the watchdog flush.
+        nav._last_goal_publish_mono = time.monotonic() - (
+            NAV_GOAL_REPUBLISH_MIN_INTERVAL_S + 0.05
+        )
+        deadline = time.monotonic() + 2.0
+        while len(published_nav) < 2 and time.monotonic() < deadline:
+            time.sleep(NAV_WATCHDOG_POLL_INTERVAL_S)
+        assert len(published_nav) == 2
+        assert published_nav[-1].position[0] == pytest.approx(
+            2.0 / ODOM_SCALE_INITIAL, abs=0.01
+        )
+        assert nav._pending_retarget is None
+    finally:
+        nav.stop()
+
+
+def test_fresh_goal_after_estop_publishes_immediately() -> None:
+    nav, _mock_server, published_nav, _published_cancel = _make_nav()
+    nav.on_navigate_goal(_make_goal_msg(ts=1.0))
+    nav.on_path(_make_path(ts=1.5))
+    nav.on_navigate_goal(_make_goal_msg(ts=2.0, position=(2.0, 0.0, 3.0)))
+    assert nav._pending_retarget is not None
+    nav.on_emergency_stop(ts=3.0)
+    assert nav._pending_retarget is None
+    published_before = len(published_nav)
+    nav.on_navigate_goal(_make_goal_msg(ts=4.0, position=(3.0, 0.0, 4.0)))
+    assert len(published_nav) == published_before + 1

@@ -24,7 +24,7 @@ function inputs(overrides: Partial<NavigationInputs>): NavigationInputs {
     activelyDragging: false,
     markerExists: true,
     markerPose: { position: new vec3(0, 0, 0), rotation: quat.quatIdentity() },
-    cancelAvailable: true,
+    stopAvailable: true,
     ...overrides,
   };
 }

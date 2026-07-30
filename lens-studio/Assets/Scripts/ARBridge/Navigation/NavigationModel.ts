@@ -40,7 +40,7 @@ export type NavigationInputs = {
   activelyDragging: boolean;
   markerExists: boolean;
   markerPose: NavPose | null;
-  cancelAvailable: boolean;
+  stopAvailable: boolean;
 };
 
 export const GOAL_SEND_INTERVAL_S = 0.35;
@@ -80,7 +80,6 @@ export type NavigationEvent =
         orientation: [number, number, number, number];
       };
     }
-  | { kind: "cancelRequested" }
   | { kind: "estopRequested" }
   | { kind: "disconnect" }
   | { kind: "watchdogFailed" }
@@ -90,7 +89,7 @@ export type NavigationEvent =
 
 export type NavigationEffect =
   | { kind: "sendNavGoal"; pose: NavPose }
-  | { kind: "sendCancelGoal" };
+  | { kind: "sendEmergencyStop" };
 
 export type NavigationModelResult = {
   state: NavigationSession;
@@ -232,7 +231,7 @@ export function deriveMarkerViewState(
         ? {
             role: "cancel",
             enabled: true,
-            label: inputs.cancelAvailable ? "Cancel" : "Cancel\nUnavailable",
+            label: inputs.stopAvailable ? "Cancel" : "Cancel\nUnavailable",
           }
         : null,
     outcomeLabel,
@@ -397,21 +396,13 @@ export function applyNavigationEvent(
       next = applyNavStatusEvent(next, event, now);
       break;
     }
-    case "cancelRequested": {
-      next = {
-        ...clearGoal(next),
-        wireState: "idle",
-        presentation: { kind: "resolved", label: "Cancelled" },
-      };
-      push({ kind: "sendCancelGoal" });
-      break;
-    }
     case "estopRequested": {
       next = {
         ...clearGoal(next),
         wireState: "idle",
         presentation: { kind: "resolved", label: "Cancelled" },
       };
+      push({ kind: "sendEmergencyStop" });
       break;
     }
     case "pathReceived": {

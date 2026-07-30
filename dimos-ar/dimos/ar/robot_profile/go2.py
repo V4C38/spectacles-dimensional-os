@@ -28,7 +28,6 @@ GO2_CAPABILITIES: dict[str, CapabilityState] = {
     "odom": CapabilityState(True),
     "nav": CapabilityState(True),
     "path": CapabilityState(True),
-    "cancel_nav_goal": CapabilityState(True),
     "emergency_stop": CapabilityState(True),
     "navigation": CapabilityState(True),
 }

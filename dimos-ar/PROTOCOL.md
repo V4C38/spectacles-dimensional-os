@@ -9,7 +9,17 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v18 (current) — user_command rename, nav goal provenance, agent snapshot
+### v19 (current) — emergency_stop only; cancel_nav_goal removed
+
+**Breaking changes** — monorepo clients must be updated in the same release:
+
+- **`PROTOCOL_VERSION` is 19.**
+- **Removed inbound message `cancel_nav_goal`.** Clients stop navigation via
+  **`emergency_stop`** only (marker Cancel, E-Stop UI, agent `cancel_navigation` skill).
+- **`hello.capabilities`:** removes `cancel_nav_goal`. `emergency_stop` is available when
+  the profile hard-stop **or** the bridge stop transport can halt motion.
+
+### v18 — user_command rename, nav goal provenance, agent snapshot
 
 **Breaking changes** — monorepo clients must be updated in the same release:
 
@@ -281,7 +291,6 @@ capability map, then sends a `runtime_snapshot` (see below).
     "odom":                               { "available": true,  "reason": null },
     "nav":                                { "available": true,  "reason": null },
     "path":                               { "available": true,  "reason": null },
-    "cancel_nav_goal":                        { "available": true,  "reason": null },
     "emergency_stop":                     { "available": false, "reason": "No safe stop interface is available in this runtime." },
     "navigation":                         { "available": true,  "reason": null }
   }
@@ -791,7 +800,7 @@ messages via signals and runs `ar_skill` handlers off the WebSocket callback.
 #### Implemented AR skills
 
 Bridge RPC/skill callers block on a correlated `ar_skill_result` with an
-implementation timeout (`ARBridgeConfig.ar_skill_timeout_s`, default 10 s). The
+implementation timeout (`ARBridgeConfig.ar_skill_timeout_s`, default 5 s). The
 wire protocol itself has no timeout field — late or unknown `request_id` results
 are dropped.
 
@@ -1046,18 +1055,6 @@ Fields:
 - `orientation` (optional): world-frame quaternion `[x, y, z, w]`; if omitted,
   the bridge may route through a point-based navigation path
 
-### `cancel_nav_goal`
-
-Cancel the active navigation goal.
-
-```json
-{
-  "type": "cancel_nav_goal",
-  "ts": 1730000000.123,
-  "robot_id": "unitree_go2"
-}
-```
-
 ### `ping` / `pong`
 
 Connect-time clock sync (Lens → bridge). The Lens sends several `ping`
@@ -1082,8 +1079,10 @@ uses median RTT-adjusted offset to populate `capture_ts_robot` on `camera_frame`
 
 ### `emergency_stop`
 
-Request immediate stop through whatever safe stop path the active robot profile
-provides via `MotionRouter`. If the capability is disabled in `hello`, clients should not send it.
+Request immediate stop: zero motion, publish the stop transport, and invoke the
+profile hard-stop when available. This is the only client stop path (replaces the
+removed `cancel_nav_goal` message). If the capability is disabled in `hello`,
+clients should not send it.
 
 ```json
 {

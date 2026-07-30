@@ -137,3 +137,52 @@ def test_decode_hmd_transform() -> None:
     assert ori == (0.0, 0.0, 0.0, 1.0)
     with pytest.raises(ValueError, match="position"):
         decode_hmd_transform({"orientation": [0, 0, 0, 1]})
+
+
+def test_cancel_all_fails_pending_waiters() -> None:
+    dispatcher, mock_server = _make_dispatcher()
+    errors: list[ArSkillError] = []
+
+    def worker() -> None:
+        try:
+            dispatcher.request("get_user_hmd_transform", timeout_s=2.0)
+        except ArSkillError as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 1.0
+    while mock_server.schedule_send.call_count < 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert mock_server.schedule_send.call_count == 1
+    assert dispatcher.cancel_all("emergency_stop") == 1
+    thread.join(timeout=1.0)
+    assert len(errors) == 1
+    assert isinstance(errors[0], ArSkillError)
+    assert "cancelled" in str(errors[0])
+
+
+def test_request_logs_round_trip_latency() -> None:
+    from unittest.mock import patch
+
+    dispatcher, mock_server = _make_dispatcher()
+
+    def reply() -> None:
+        time.sleep(0.02)
+        payload = json.loads(mock_server.schedule_send.call_args.args[0])
+        dispatcher.on_ar_skill_result(
+            ArSkillResultMessage(
+                ts=1.0,
+                robot_id="unitree_go2",
+                request_id=payload["request_id"],
+                ok=True,
+                skill="get_user_hmd_transform",
+                data={"position": [0.0, 0.0, 0.0], "orientation": [0.0, 0.0, 0.0, 1.0]},
+            )
+        )
+
+    threading.Thread(target=reply, daemon=True).start()
+    with patch("dimos.ar.agent.skill_dispatcher.logger") as mock_logger:
+        dispatcher.request("get_user_hmd_transform")
+    info_events = [call.args[0] for call in mock_logger.info.call_args_list]
+    assert "ar_skill round-trip" in info_events

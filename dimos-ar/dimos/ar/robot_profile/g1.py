@@ -25,23 +25,31 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
-# 36h11: black square is 80% of outer print size. 120 mm print → 96 mm black.
-_G1_TAG_BLACK_SIZE_M = 0.096
+# Tag poses are in base_link (G1 base_link == URDF pelvis). Measured from the Unitree G1
+# chest/back mounting drawing, scaled by the shoulder-roll actuator spacing (g1.urdf:
+# y = ±140.6 mm) and cross-checked against the 62.4 mm chest hole pitch and the torso_link
+# mesh extent; forward offsets are the outer shell depth at each tag height. Orientation
+# columns are (tag right, tag up, tag outward normal) in base_link, so the chest tag faces
+# +X and the back tag faces -X, both upright. See assets/specs_dimos_g1tagmount.jpg.
+#
+# The torso shell bows ~6 mm over 120 mm, so a rigid tag larger than ~70 mm would not seat
+# flat on the chest panel. 36h11: black square is 80% of print → 70 mm gives 56 mm.
+_G1_TAG_BLACK_SIZE_M = TAG_TOTAL_SIZE_M * 0.8
 
 G1_DEFAULT_TAG_MOUNTS: list[TagMount] = [
-    # Chest / front — faces +X (forward).
+    # Chest panel — faces +X (forward).
     TagMount(
         tag_id=DEFAULT_MARKER_ID,
         size_m=_G1_TAG_BLACK_SIZE_M,
-        position=(0.12, 0.0, 0.40),
-        orientation=(0.0, -0.70710678, 0.0, 0.70710678),
+        position=(0.072, 0.0, 0.178),
+        orientation=(0.5, 0.5, 0.5, 0.5),
     ),
-    # Back / rear — faces -X.
+    # Back panel — faces -X.
     TagMount(
         tag_id=1,
         size_m=_G1_TAG_BLACK_SIZE_M,
-        position=(-0.12, 0.0, 0.40),
-        orientation=(-0.70710678, 0.0, 0.70710678, 0.0),
+        position=(-0.070, 0.0, 0.237),
+        orientation=(0.5, -0.5, -0.5, 0.5),
     ),
 ]
 
@@ -65,7 +73,6 @@ def g1_capabilities(
     *,
     nav_available: bool,
     path_available: bool,
-    cancel_goal_available: bool,
     emergency_stop_available: bool,
     tag_mount_available: bool,
 ) -> dict[str, CapabilityState]:
@@ -79,12 +86,6 @@ def g1_capabilities(
         "path": CapabilityState(
             path_available,
             None if path_available else "Active path output is not present for this G1 runtime.",
-        ),
-        "cancel_nav_goal": CapabilityState(
-            cancel_goal_available,
-            None
-            if cancel_goal_available
-            else "Goal cancellation is not available for this G1 runtime.",
         ),
         "emergency_stop": CapabilityState(
             emergency_stop_available,
@@ -108,7 +109,6 @@ def g1_handshake(
     *,
     nav_available: bool,
     path_available: bool,
-    cancel_goal_available: bool,
     emergency_stop_available: bool,
     tag_mount_available: bool,
     mounts: list[TagMount] | None = None,
@@ -116,7 +116,6 @@ def g1_handshake(
     capability_states = g1_capabilities(
         nav_available=nav_available,
         path_available=path_available,
-        cancel_goal_available=cancel_goal_available,
         emergency_stop_available=emergency_stop_available,
         tag_mount_available=tag_mount_available,
     )
@@ -165,7 +164,6 @@ class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
         return g1_capabilities(
             nav_available=True,
             path_available=True,
-            cancel_goal_available=True,
             emergency_stop_available=self._emergency_stop_available(),
             tag_mount_available=len(self.tag_mounts()) > 0,
         )
@@ -177,7 +175,6 @@ class G1RobotProfileModule(Module, ARRobotProfileSpec):  # type: ignore[misc]
             self.robot_id(),
             nav_available=True,
             path_available=True,
-            cancel_goal_available=True,
             emergency_stop_available=self._emergency_stop_available(),
             tag_mount_available=len(mounts) > 0,
             mounts=mounts,

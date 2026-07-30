@@ -15,7 +15,6 @@ from dimos.ar.network.protocol import (
     PROTOCOL_VERSION,
     ArSkillResultMessage,
     CameraInfoMessage,
-    CancelNavGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
     JoystickCommandMessage,
@@ -86,7 +85,6 @@ def test_encode_hello_g1_tag_tracking_profile() -> None:
         "unitree_g1",
         nav_available=True,
         path_available=True,
-        cancel_goal_available=False,
         emergency_stop_available=True,
         tag_mount_available=True,
     )
@@ -95,7 +93,7 @@ def test_encode_hello_g1_tag_tracking_profile() -> None:
     assert "robot_model" not in msg["robot"]
     assert "registration_april_tag" not in msg["capabilities"]
     assert "registration_manual_pose" not in msg["capabilities"]
-    assert msg["robot"]["tag_tracking_profile"]["tag_total_size_m"] == 0.12
+    assert msg["robot"]["tag_tracking_profile"]["tag_total_size_m"] == 0.07
     assert msg["robot"]["tag_tracking_profile"]["tag_ids"] == [0, 1]
     assert isinstance(msg["robot"]["tag_tracking_profile"]["tag_ids"], list)
 
@@ -105,7 +103,6 @@ def test_encode_hello_g1_tag_registration_disabled() -> None:
         "unitree_g1",
         nav_available=True,
         path_available=True,
-        cancel_goal_available=False,
         emergency_stop_available=True,
         tag_mount_available=False,
     )
@@ -114,7 +111,7 @@ def test_encode_hello_g1_tag_registration_disabled() -> None:
 
 
 def test_robot_id_mismatch_rejected() -> None:
-    raw = json.dumps({"type": "cancel_nav_goal", "ts": 1.0, "robot_id": "other"})
+    raw = json.dumps({"type": "emergency_stop", "ts": 1.0, "robot_id": "other"})
     with pytest.raises(ValueError, match="Unknown robot_id"):
         decode_inbound(raw, expected_robot_id="unitree_go2")
 
@@ -150,10 +147,6 @@ def test_nav_goal_decode_with_orientation() -> None:
     assert msg.orientation == (0.0, 0.0, 0.70710678, 0.70710678)
 
 
-def test_cancel_nav_goal_decode() -> None:
-    raw = json.dumps({"type": "cancel_nav_goal", "ts": 3.0, "robot_id": "unitree_go2"})
-    msg = decode_inbound(raw)
-    assert isinstance(msg, CancelNavGoalMessage)
 
 
 def test_emergency_stop_decode() -> None:

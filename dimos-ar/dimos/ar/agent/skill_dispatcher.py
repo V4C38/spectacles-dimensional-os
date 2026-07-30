@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import threading
+import time
 from typing import TYPE_CHECKING, Any
 import uuid
 
@@ -28,6 +29,8 @@ class ArSkillError(Exception):
 class _PendingRequest:
     event: threading.Event
     result: ArSkillResultMessage | None = None
+    error: ArSkillError | None = None
+    started_mono: float = 0.0
 
 
 class ArSkillDispatcher:
@@ -66,7 +69,7 @@ class ArSkillDispatcher:
 
         wait_s = self._default_timeout_s if timeout_s is None else float(timeout_s)
         request_id = uuid.uuid4().hex
-        pending = _PendingRequest(event=threading.Event())
+        pending = _PendingRequest(event=threading.Event(), started_mono=time.monotonic())
         with self._lock:
             self._pending[request_id] = pending
 
@@ -75,14 +78,43 @@ class ArSkillDispatcher:
                 encode_ar_skill(request_id=request_id, skill=skill, args=args)
             )
             if not pending.event.wait(timeout=wait_s):
-                raise ArSkillError(f"AR skill timed out after {wait_s:.1f}s: {skill}")
+                elapsed_s = time.monotonic() - pending.started_mono
+                raise ArSkillError(
+                    f"AR skill timed out after {elapsed_s:.1f}s "
+                    f"(limit={wait_s:.1f}s): {skill}"
+                )
+            if pending.error is not None:
+                raise pending.error
             result = pending.result
             if result is None:
                 raise ArSkillError(f"AR skill returned no result: {skill}")
+            elapsed_s = time.monotonic() - pending.started_mono
+            logger.info(
+                "ar_skill round-trip",
+                skill=skill,
+                ok=result.ok,
+                elapsed_s=round(elapsed_s, 3),
+            )
             return result
         finally:
             with self._lock:
                 self._pending.pop(request_id, None)
+
+    def cancel_all(self, reason: str) -> int:
+        """Fail every pending waiter (estop / disconnect). Returns cancelled count."""
+        with self._lock:
+            pending_items = list(self._pending.items())
+            self._pending.clear()
+        for _request_id, pending in pending_items:
+            pending.error = ArSkillError(f"AR skill cancelled: {reason}")
+            pending.event.set()
+        if pending_items:
+            logger.info(
+                "ar_skill pending cancelled",
+                reason=reason,
+                count=len(pending_items),
+            )
+        return len(pending_items)
 
     def on_ar_skill_result(self, msg: ArSkillResultMessage) -> None:
         with self._lock:

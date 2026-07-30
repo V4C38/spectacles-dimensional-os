@@ -316,7 +316,6 @@ const DEFAULT_CAPABILITY_NAMES = [
   "odom",
   "nav",
   "path",
-  "cancel_nav_goal",
   "emergency_stop",
 ];
 

@@ -1,5 +1,4 @@
 import {
-  buildCancelNavGoal,
   buildEmergencyStop,
   buildNavigateGoal,
   NavStatusMessage,
@@ -11,7 +10,7 @@ import { WebSocketTransport } from "../Network/WebSocketTransport";
 import { sendForActiveRobot } from "../Network/WebSocketTransport";
 import { Signal } from "../../App/Utilities/Utilities";
 
-/** Navigate/cancel/e-stop wire I/O — mirrors NavigateGoalHandler. */
+/** Navigate/e-stop wire I/O — mirrors NavigateGoalHandler. */
 export class NavigationClient {
   public readonly onPath = new Signal<PathMessage>();
   public readonly onNavStatus = new Signal<NavStatusMessage>();
@@ -44,19 +43,6 @@ export class NavigationClient {
       this._inbound,
       "nav_goal:navigate",
       (robotId) => buildNavigateGoal(robotId, position, rotation),
-      this._sendDropLog,
-    );
-  }
-
-  public sendCancelGoal(): boolean {
-    if (!this._transport || !this._inbound) {
-      return false;
-    }
-    return sendForActiveRobot(
-      this._transport,
-      this._inbound,
-      "cancel_nav_goal",
-      buildCancelNavGoal,
       this._sendDropLog,
     );
   }

@@ -67,18 +67,6 @@ def test_nav_goal_zeros_active_joystick() -> None:
     assert nav == [goal]
 
 
-def test_cancel_nav_goal_clears_intent() -> None:
-    router, cmd_vel, _nav, cancel = _make_router()
-    goal = PoseStamped(position=[1.0, 0.0, 0.0], orientation=[0.0, 0.0, 0.0, 1.0])
-    router.send_nav_goal(goal)
-    router.cancel_nav_goal()
-    cmd_vel.clear()
-    router.send_joystick_command(0.0, 0.2, 0.0)
-
-    assert len(cancel) == 1
-    assert cmd_vel[-1].linear.y == pytest.approx(0.2)
-
-
 def test_emergency_stop_zeros_motion_and_publishes_cancel() -> None:
     hard_stop = MagicMock()
     published_cmd_vel: list[Twist] = []

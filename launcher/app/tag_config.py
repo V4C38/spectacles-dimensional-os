@@ -32,24 +32,26 @@ DEFAULT_TAGS: dict[str, list[dict[str, Any]]] = {
             "pitch_deg": -15.0,
         }
     ],
-    # G1: two 120 mm tags (chest + back). print 120 mm → black square 96 mm.
+    # G1: two 70 mm tags on the torso shell — ID 0 on the chest panel, ID 1 on the back
+    # panel. Poses are measured from the Unitree G1 chest/back mounting drawing against
+    # the g1.urdf torso geometry (see assets/specs_dimos_g1tagmount.jpg).
     "g1": [
         {
             "tag_id": 0,
-            "print_size_mm": 120.0,
-            "forward_m": 0.12,
+            "print_size_mm": DEFAULT_PRINT_SIZE_MM,
+            "forward_m": 0.072,
             "lateral_m": 0.0,
-            "up_m": 0.40,
-            "yaw_deg": 0.0,
-            "pitch_deg": -90.0,
+            "up_m": 0.178,
+            "yaw_deg": 90.0,
+            "pitch_deg": 90.0,
         },
         {
             "tag_id": 1,
-            "print_size_mm": 120.0,
-            "forward_m": -0.12,
+            "print_size_mm": DEFAULT_PRINT_SIZE_MM,
+            "forward_m": -0.070,
             "lateral_m": 0.0,
-            "up_m": 0.40,
-            "yaw_deg": 180.0,
+            "up_m": 0.237,
+            "yaw_deg": -90.0,
             "pitch_deg": -90.0,
         },
     ],

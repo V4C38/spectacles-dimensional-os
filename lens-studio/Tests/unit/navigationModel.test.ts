@@ -43,7 +43,7 @@ function inputsFrom(flags: InputFlags): NavigationInputs {
     markerPose: flags.markerExists
       ? { position: new vec3(0, 0, 0), rotation: quat.quatIdentity() }
       : null,
-    cancelAvailable: true,
+    stopAvailable: true,
   };
 }
 
@@ -247,10 +247,10 @@ describe("navStatus events", () => {
     });
   });
 
-  it("cancelRequested clears goal, resets wire to idle, latches cancelled presentation", () => {
+  it("estopRequested clears goal, resets wire to idle, latches cancelled presentation, emits sendEmergencyStop", () => {
     const result = applyNavigationEvent(
       { ...activeSession({ since: 0, source: "user" }), wireState: "navigating" },
-      { kind: "cancelRequested" },
+      { kind: "estopRequested" },
     );
     expect(result.state.goal).toBeNull();
     expect(result.state.wireState).toBe("idle");
@@ -258,14 +258,7 @@ describe("navStatus events", () => {
       kind: "resolved",
       label: "Cancelled",
     });
-    expect(effectKinds(result.wireEffects)).toEqual(["sendCancelGoal"]);
-  });
-
-  it("estopRequested does not emit sendCancelGoal", () => {
-    const result = applyNavigationEvent(activeSession({ since: 0, source: "user" }), {
-      kind: "estopRequested",
-    });
-    expect(effectKinds(result.wireEffects)).toEqual([]);
+    expect(effectKinds(result.wireEffects)).toEqual(["sendEmergencyStop"]);
   });
 
   it("pathReceived with goal sets navigating wire state and touches timestamps", () => {
@@ -313,7 +306,7 @@ describe("navStatus events", () => {
   it("returns idle after cancel presentation finishes without placement active", () => {
     const cancelled = applyNavigationEvent(
       { ...activeSession({ since: 0, source: "user" }), wireState: "navigating" },
-      { kind: "cancelRequested" },
+      { kind: "estopRequested" },
     ).state;
     const finished = applyNavigationEvent(cancelled, {
       kind: "resolvedPresentationFinished",

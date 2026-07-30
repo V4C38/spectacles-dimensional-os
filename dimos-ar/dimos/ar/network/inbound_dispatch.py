@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, cast
 from dimos.ar.network.protocol import (
     ArSkillResultMessage,
     CameraInfoMessage,
-    CancelNavGoalMessage,
     EmergencyStopMessage,
     GetStatusMessage,
     InboundMessage,
@@ -60,7 +59,6 @@ MESSAGE_LANES: dict[type[InboundMessage], DispatchLane] = {
     GetStatusMessage: DispatchLane.BACKGROUND,
     SetLidarModeMessage: DispatchLane.BACKGROUND,
     NavGoalMessage: DispatchLane.BACKGROUND,
-    CancelNavGoalMessage: DispatchLane.BACKGROUND,
     EmergencyStopMessage: DispatchLane.BACKGROUND,
     JoystickCommandMessage: DispatchLane.BACKGROUND,
     PingMessage: DispatchLane.ASYNC,

@@ -16,7 +16,7 @@ import {
   type WireNavigationState,
 } from "../../App/AppState";
 
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 19;
 
 /** Wire maximum; operational caps are mode-specific (see PROTOCOL.md). */
 export const LIDAR_WIRE_MAX_POINTS = 2500;
@@ -1282,14 +1282,6 @@ export function buildCameraFrameBytes(args: {
   out.set(headerBytes, 8);
   out.set(args.jpegBytes, 8 + headerLen);
   return out;
-}
-
-export function buildCancelNavGoal(robotId: string): string {
-  return JSON.stringify({
-    type: "cancel_nav_goal",
-    ts: getTime(),
-    robot_id: robotId,
-  });
 }
 
 export function buildEmergencyStop(robotId: string): string {

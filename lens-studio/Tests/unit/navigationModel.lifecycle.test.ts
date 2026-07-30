@@ -117,7 +117,7 @@ describe("NavigationModel lifecycle decisions", () => {
       expect(result.state.goal?.source).toBe("user");
       expect(result.state.goal?.position).toEqual([1, 0, 2]);
       expect(result.wireEffects.map((e) => e.kind)).toEqual(["sendNavGoal"]);
-      expect(result.wireEffects.some((e) => e.kind === "sendCancelGoal")).toBe(
+      expect(result.wireEffects.some((e) => e.kind === "sendEmergencyStop")).toBe(
         false,
       );
     });

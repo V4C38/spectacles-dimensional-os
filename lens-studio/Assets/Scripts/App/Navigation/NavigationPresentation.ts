@@ -276,7 +276,7 @@ export type NavStatusIngressPlan =
 export function buildNavigationInputs(
   placement: GroundPlacement,
   marker: NavigationMarker | null,
-  cancelAvailable: boolean,
+  stopAvailable: boolean,
 ): NavigationInputs {
   const markerPose = marker
     ? {
@@ -289,7 +289,7 @@ export function buildNavigationInputs(
     activelyDragging: placement.isActivelyDragging(),
     markerExists: marker !== null,
     markerPose,
-    cancelAvailable,
+    stopAvailable,
   };
 }
 
@@ -323,7 +323,7 @@ export type ApplyNavigationPresentationArgs = {
   pathRenderer: NavigationPathRenderer;
   bridgePath: vec3[] | null;
   session: NavigationSession;
-  cancelAvailable: boolean;
+  stopAvailable: boolean;
   appState: AppState;
   robotFloorPosition: vec3 | null;
   worldMeshObject: SceneObject;
@@ -339,7 +339,7 @@ export function applyNavigationPresentation(args: ApplyNavigationPresentationArg
     pathRenderer,
     bridgePath,
     session,
-    cancelAvailable,
+    stopAvailable,
     appState,
     robotFloorPosition,
     worldMeshObject,
@@ -357,7 +357,7 @@ export function applyNavigationPresentation(args: ApplyNavigationPresentationArg
     return;
   }
 
-  const inputs = buildNavigationInputs(placement, marker, cancelAvailable);
+  const inputs = buildNavigationInputs(placement, marker, stopAvailable);
   const navigationState = deriveNavigationState(session, inputs);
   syncAppNavigationState(appState, navigationState);
 

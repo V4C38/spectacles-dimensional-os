@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from dimos.ar.robot_profile.base import CapabilityState, RobotHandshake
     from dimos.ar.world_frame.state import WorldFrameState
 
-PROTOCOL_VERSION = 18
+PROTOCOL_VERSION = 19
 
 WireNavigationState = Literal["idle", "navIntent", "navigating", "resolved"]
 NavTerminalOutcome = Literal["succeeded", "failed"]
@@ -46,7 +46,6 @@ DEFAULT_CAPABILITIES = [
     "odom",
     "nav",
     "path",
-    "cancel_nav_goal",
     "emergency_stop",
 ]
 
@@ -61,12 +60,6 @@ class NavGoalMessage:
     robot_id: str
     position: tuple[float, float, float]
     orientation: tuple[float, float, float, float] | None = None
-
-
-@dataclass(frozen=True)
-class CancelNavGoalMessage:
-    ts: float
-    robot_id: str
 
 
 @dataclass(frozen=True)
@@ -124,7 +117,6 @@ class PingMessage:
 
 InboundMessage = (
     NavGoalMessage
-    | CancelNavGoalMessage
     | EmergencyStopMessage
     | JoystickCommandMessage
     | RegistrationCommandMessage
@@ -184,8 +176,6 @@ def decode_inbound(text: str, *, expected_robot_id: str | None = None) -> Inboun
             position=_vec3(data, "position"),
             orientation=orientation,
         )
-    if msg_type == "cancel_nav_goal":
-        return CancelNavGoalMessage(ts=ts, robot_id=robot_id)
     if msg_type == "emergency_stop":
         return EmergencyStopMessage(ts=ts, robot_id=robot_id)
     if msg_type == "joystick_command":
@@ -591,7 +581,6 @@ __all__ = [
     "PROTOCOL_VERSION",
     "ArSkillResultMessage",
     "CameraInfoMessage",
-    "CancelNavGoalMessage",
     "EmergencyStopMessage",
     "GetStatusMessage",
     "InboundMessage",

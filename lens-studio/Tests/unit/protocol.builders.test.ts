@@ -8,7 +8,6 @@ import {
   buildCameraInfo,
   buildNavigateGoal,
   buildNavGoal,
-  buildCancelNavGoal,
   buildEmergencyStop,
   buildUserCommand,
   DEFAULT_LIDAR_OBSTACLE_SETTINGS,
@@ -139,12 +138,6 @@ describe("outbound protocol builders", () => {
     expect(msg.orientation).toEqual([0, 0, 0, 1]);
   });
 
-  it("buildCancelNavGoal", () => {
-    const msg = JSON.parse(buildCancelNavGoal("go2"));
-    expect(msg.type).toBe("cancel_nav_goal");
-    expect(msg.robot_id).toBe("go2");
-    expect(msg.ts).toBe(1000);
-  });
 
   it("buildEmergencyStop", () => {
     const msg = JSON.parse(buildEmergencyStop("go2"));

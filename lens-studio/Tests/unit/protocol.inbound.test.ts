@@ -56,7 +56,6 @@ describe("parseInboundMessage", () => {
           registration_manual_pose: { available: true },
           nav: { available: true },
           path: { available: true },
-          cancel_nav_goal: { available: true },
           emergency_stop: { available: false, reason: "disabled" },
         },
       }),

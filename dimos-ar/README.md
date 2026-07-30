@@ -86,7 +86,7 @@ Handshake-driven — the Lens adapts to whatever the active robot profile advert
 - `hello.robot` — display identity, body geometry, `tag_tracking_profile` (`tag_ids`, `tag_total_size_m`)
 - `hello.capabilities` — flat map of feature availability + reasons
 - `runtime_snapshot` — bridge + nav + optional agent state/detail + optional active path on connect / `get_status`
-- World-frame goals via `nav_goal`; cancel with `cancel_nav_goal`
+- World-frame goals via `nav_goal`; stop with `emergency_stop`
 - Registration via `registration_command` (`april_tag` or `manual_pose`)
 
 </details>
@@ -130,7 +130,7 @@ Reproduce full CI from repo root: `./launcher/scripts/run-ci.sh`
 <details>
 <summary>Protocol coupling</summary>
 
-`PROTOCOL_VERSION = 18` in `dimos/ar/network/protocol.py`. If the wire contract changes, update together:
+`PROTOCOL_VERSION = 19` in `dimos/ar/network/protocol.py`. If the wire contract changes, update together:
 
 - `dimos/ar/network/protocol.py`
 - `PROTOCOL.md`
