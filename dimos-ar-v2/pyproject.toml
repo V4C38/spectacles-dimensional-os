@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dimos-ar"
+version = "0.2.0"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = ["dimos", "websockets>=12.0"]
+
+[project.optional-dependencies]
+unitree = ["dimos[base,unitree]"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.8", "mypy>=1.13"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dimos.ar*"]
+
+[tool.pytest.ini_options]
+testpaths = ["dimos/ar"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+markers = [
+    "integration: live WebSocket check against a running AR bridge",
+]
+addopts = "--import-mode=importlib -m 'not integration'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["E", "W", "F", "B", "UP", "N", "I", "C90", "A", "RUF", "TCH"]
+ignore = [
+    "A001", "A002", "A003", "B008", "B017", "B019", "B024", "B026", "B904", "C901",
+    "E402", "E501", "E721", "E722", "E741",
+    "F811", "F821",
+    "N801", "N802", "N803", "N806", "N817", "N999",
+    "RUF003", "RUF009", "RUF012", "RUF034", "RUF043", "RUF059",
+    "TC001", "TC002", "TC003",
+]
+
+[tool.ruff.format]
+line-ending = "lf"
+
+[tool.ruff.lint.isort]
+known-first-party = ["dimos", "dimos.ar"]
+combine-as-imports = true
+force-sort-within-sections = true
+
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = ["dimos.core.module.Module"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = false
+disallow_untyped_defs = true
+strict = true
+files = ["dimos/ar"]
+explicit_package_bases = true
+exclude = ".*/test_."
+
+[[tool.mypy.overrides]]
+module = [
+    "dimos.*",
+    "dimos_lcm.*",
+    "cv2.*",
+    "scipy.*",
+    "unitree_webrtc_connect.*",
+    "websockets.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "dimos.ar.robot_profile.go2",
+    "dimos.ar.bridge.module",
+]
+disallow_untyped_decorators = false
