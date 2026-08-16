@@ -4,10 +4,11 @@ This monorepo has two main parts:
 
 | Part | Path | Role |
 |------|------|------|
-| **dimos-ar** | [`dimos-ar/`](dimos-ar/) | Platform-agnostic WebSocket bridge on top of DimOS (`ARBridge`, protocol, robot profiles) |
+| **dimos-ar-v2** | [`dimos-ar-v2/`](dimos-ar-v2/) | `ARModule` (`dimos.ar`) |
+| **dimos-ar** | [`dimos-ar/`](dimos-ar/) | Frozen v1 reference — do not edit |
 | **Spectacles Lens** | [`lens-studio/`](lens-studio/) | Lens Studio client — setup wizard, runtime HUD, navigation, robot visuals |
 
-The cross-platform contract is [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md) (currently **v16**). The Mac runs the WebSocket server on port **8787**; Spectacles connects as a client.
+The cross-platform contract is [`dimos-ar-v2/PROTOCOL.md`](dimos-ar-v2/PROTOCOL.md). The Mac runs the WebSocket server on port **8787**; Spectacles connects as a client.
 
 Open the Lens project from [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj), **not** the repo root.
 
@@ -17,7 +18,7 @@ Open the Lens project from [`lens-studio/spectacles-dimensional-os.esproj`](lens
 ./launcher/scripts/run-ci.sh
 ```
 
-This runs `dimos-ar` (ruff, mypy, pytest) and `lens-studio/Tests` (Vitest), matching [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+This runs `dimos-ar-v2` (ruff, mypy, pytest) and `lens-studio/Tests` (Vitest), matching [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 Do **not** run it inside the Cursor agent sandbox — DimOS logging writes under
 `~/.local/state/dimos/logs/`, and sandboxed runs fail with
@@ -92,11 +93,11 @@ Same suffix = same role across feature modules.
 
 When the WebSocket contract changes, update in the same change:
 
-- `dimos-ar/dimos/ar/network/protocol.py`
-- `dimos-ar/PROTOCOL.md`
+- `dimos-ar-v2/dimos/ar/network/protocol.py`
+- `dimos-ar-v2/PROTOCOL.md`
 - `lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`
 
-Never edit DimOS source — import from the installed `dimos` package. Keep `dimos-ar/dimos/ar/` platform-agnostic; Spectacles-specific code stays under `lens-studio/`.
+Never edit DimOS source — import from the installed `dimos` package. Keep `dimos-ar-v2/dimos/ar/` platform-agnostic; Spectacles-specific code stays under `lens-studio/`.
 
 ## Tests
 
@@ -104,8 +105,8 @@ Never edit DimOS source — import from the installed `dimos` package. Keep `dim
 # Lens (Vitest)
 cd lens-studio/Tests && npm test
 
-# Bridge (DimOS .venv)
-cd dimos-ar
+# ARModule (DimOS .venv)
+cd dimos-ar-v2
 /path/to/dimos/.venv/bin/python3 -m pytest
 ```
 

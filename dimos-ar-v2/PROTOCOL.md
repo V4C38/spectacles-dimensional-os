@@ -1,6 +1,6 @@
 # Protocol — dimos-ar-v2 WebSocket message schema
 
-Cross-platform contract between the DimOS-side AR bridge and any AR client.
+Cross-platform contract between `ARModule` and any AR client.
 
 Keep this document, `dimos/ar/network/protocol.py`, and
 `lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts` in sync. Bump
@@ -8,33 +8,33 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 
 ## Changelog
 
-### v1 — minimal world-frame bridge
+### v1 — minimal world-frame protocol
 
 Fresh protocol for the v2 rebuild. Not compatible with v19, and not compatible
 with any earlier draft of this document.
 
 - **`PROTOCOL_VERSION` is 1.**
 - **Wire frame:** DimOS `world`, in DimOS's own right-handed Z-up axes. The
-  bridge performs **no axis conversion**. Each client converts on receipt,
+  ARModule performs **no axis conversion**. Each client converts on receipt,
   because a Spectacles client, a Quest client and a desktop viewer do not share
   one convention.
 - **13 message types** — 7 outbound, 6 inbound.
-- **No `robot_id` echo** on inbound messages. One bridge process serves one
+- **No `robot_id` echo** on inbound messages. One ARModule process serves one
   robot, declared once in `hello`.
 - **No registration session.** Alignment is a single `localize` → `localization`
   exchange, and `localization` may also arrive unsolicited.
 - **Merged status.** `state` replaces `runtime_snapshot`, `bridge_status` and
   `nav_status`.
 - **`time_sync` / `time`.** Application-level clock exchange for pairing
-  `capture_ts` with the robot pose buffer. WebSocket Ping/Pong (RFC 6455) remains
-  for liveness only.
+  `capture_ts` with the robot pose buffer. Server stamps are `server_recv_ts` and
+  `server_send_ts`. WebSocket Ping/Pong (RFC 6455) remains for liveness only.
 
 ## Transport
 
-- Plain WebSocket on port **8787**. The DimOS host runs the server; AR devices
+- Plain WebSocket on port **8787**. The DimOS machine runs the server; AR devices
   connect as clients.
 - JSON text frames for control and telemetry. Binary frames for `localize`
-  (client → bridge) and `lidar` (bridge → client).
+  (client → server) and `lidar` (server → client).
 - Every JSON message is an object with a `type` field.
 - **Text framing:** outbound JSON text frames end with a single newline (`\n`).
   Clients accumulate incoming text and split on `\n` to recover complete
@@ -54,7 +54,7 @@ DimOS's axes:
 
 Right-handed, Z-up, metres. This is the ROS convention that DimOS follows
 throughout, and `world` is the string DimOS puts in `frame_id` on the messages
-the bridge reads.
+ARModule reads.
 
 Poses are position `[x, y, z]` and orientation `[qx, qy, qz, qw]` — quaternion,
 scalar-last.
@@ -66,7 +66,7 @@ its odometry started, and it **drifts** — it is dead reckoning, not a survey. 
 consequences for clients:
 
 - Content anchored in `world` slowly diverges from the physical room.
-- The bridge issues corrections through `localization` (see below). A client
+- ARModule issues corrections through `localization` (see below). A client
   should apply the newest one it has rather than assuming its first alignment
   holds forever.
 
@@ -76,7 +76,7 @@ throughout, matching the data.
 
 ### Axis conversion is the client's job
 
-The bridge never remaps axes. A client with a different convention converts on
+ARModule never remaps axes. A client with a different convention converts on
 receipt and inverts the conversion on anything it sends.
 
 Informative example, for a left-handed Y-up client such as Lens Studio (X right,
@@ -96,7 +96,7 @@ the normative worked example rather than re-deriving it per platform.
 ### Odometry scale correction
 
 The Go2 under-reports how far it has travelled, because its odometry is derived
-from leg kinematics and feet slip during stance. The bridge corrects this with a
+from leg kinematics and feet slip during stance. ARModule corrects this with a
 fixed per-robot constant before anything reaches the wire, so clients do not
 need to know it exists.
 
@@ -132,12 +132,12 @@ Any number of clients may connect at once.
   view to reconcile.
 - **Alignment is per connection.** `localization` is addressed to the connection
   that needs it, since each client has its own tracking origin.
-- **Control is last-command-wins.** The bridge does not arbitrate. The most
+- **Control is last-command-wins.** ARModule does not arbitrate. The most
   recent `nav_goal` or `stop` takes effect regardless of which client sent it.
 
 `hello` assigns each connection a `client_id`, and `state.nav.goal.source`
 reports which client issued the active goal, so a client can show "someone else
-is driving" without the bridge needing a locking scheme.
+is driving" without ARModule needing a locking scheme.
 
 ## Handshake
 
@@ -168,7 +168,7 @@ On connect the server sends `hello`, then `state`.
 | Field | Type | Notes |
 |-------|------|-------|
 | `protocol_version` | int | Client must refuse to proceed on mismatch. |
-| `client_id` | string | Bridge-assigned, unique per connection. Appears in `state.nav.goal.source`. |
+| `client_id` | string | Server-assigned, unique per connection. Appears in `state.nav.goal.source`. |
 | `robot.display_name` | string | For client UI. |
 | `robot.body_bounds_m` | `[L, W, H]` | Axis-aligned envelope in `world` axes: length X, width Y, height Z. |
 | `robot.footprint_m` | `[L, W]` | Ground footprint for nav UI. |
@@ -182,7 +182,7 @@ fact, and a client that behaves differently per provider has a coupling it
 should not have. `requires_robot_in_view` is the one behavioural difference a
 client genuinely needs.
 
-## Outbound messages (bridge → client)
+## Outbound messages (server → client)
 
 ### `hello`
 
@@ -196,7 +196,7 @@ whenever any field changes.
 ```json
 {
   "type": "state",
-  "bridge": {
+  "server": {
     "connected_clients": 1
   },
   "lidar": {
@@ -215,6 +215,8 @@ whenever any field changes.
   }
 }
 ```
+
+**`server.connected_clients`:** live WebSocket connections to this process.
 
 **`nav.state`:** `"idle"` | `"navigating"` | `"resolved"`
 
@@ -236,7 +238,7 @@ observed on a DimOS input stream — a web UI click, or anything else driving th
 planner. Observed goals live inside `state` rather than in a message of their
 own, so a reconnecting client and a live one see identical data.
 
-**`alignment.stale`:** `true` when the bridge believes the client's alignment
+**`alignment.stale`:** `true` when ARModule believes the client's alignment
 has drifted and cannot fix it without help. This only ever becomes `true` under
 a provider that needs the user to act, so a client should read it as "prompt the
 user to look at the robot again". Providers that correct on their own leave it
@@ -260,22 +262,22 @@ coordinates. Apply the newest one received.
 | Field | Notes |
 |-------|-------|
 | `confidence` | 0.0–1.0. A client may submit a fresh `localize` when this is low. |
-| `ts` | Bridge time when the fix was produced. |
+| `ts` | Server time when the fix was produced. |
 
-Sent in response to `localize`, and also **unsolicited** whenever the bridge
+Sent in response to `localize`, and also **unsolicited** whenever ARModule
 learns that a previously delivered answer has moved — for example when a room
 anchor is refreshed and every connection's pose changes without any new
 observation. There is no flag distinguishing the two cases, because a client
 should treat them identically: replace the transform it is using.
 
-Unsolicited updates are rate-limited and deadbanded on the bridge, so small
+Unsolicited updates are rate-limited and deadbanded on ARModule, so small
 jitter does not produce a stream of corrections. A client should still animate
 toward a new transform rather than snapping to it, since a correction can be
 large after a long drift.
 
 Always in `world`, regardless of which frame the underlying provider works in.
-When a provider answers in a scanned-map frame the bridge composes it into
-`world` before sending, because only the bridge knows that relationship.
+When a provider answers in a scanned-map frame ARModule composes it into
+`world` before sending, because only ARModule knows that relationship.
 
 ### `pose`
 
@@ -292,7 +294,7 @@ Robot pose in `world`, at high rate.
 
 | Field | Notes |
 |-------|-------|
-| `ts` | Bridge timestamp, seconds, floating point. |
+| `ts` | Server timestamp, seconds, floating point. |
 
 X and Y carry the odometry scale correction; Z and orientation do not. Optional
 fields may be added later (`speed_mps`, `yaw_rate_rad_s`) without a version bump,
@@ -320,16 +322,16 @@ plan exists. X and Y carry the scale correction, matching `pose`.
 | 0 | 4 | Magic `0x4C444152` (`"LDAR"`) |
 | 4 | 2 | Header version `1` |
 | 6 | 2 | Reserved, zero |
-| 8 | 8 | `ts` float64, bridge timestamp |
+| 8 | 8 | `ts` float64, server timestamp |
 | 16 | 4 | `point_count` uint32 |
 | 20 | 4 | Reserved, zero |
 | 24 | `point_count * 12` | Points: `[x, y, z]` float32 triplets in `world` |
 
-Points are pre-filtered on the bridge: height band, range, and subsampling
+Points are pre-filtered on ARModule: height band, range, and subsampling
 toward the robot. They carry **no scale correction** — see the coordinate section
 above for why, and for why they must not be reconciled against `pose`.
 
-## Inbound messages (client → bridge)
+## Inbound messages (client → server)
 
 Inbound messages do not carry `robot_id`.
 
@@ -353,7 +355,7 @@ Then `observation_count` records, each:
 | Offset | Size | Field |
 |--------|------|-------|
 | 0 | 4 | `record_len` uint32, byte count after this field |
-| 4 | 8 | `capture_ts` float64, bridge clock at exposure |
+| 4 | 8 | `capture_ts` float64, server clock at exposure |
 | 12 | 4 | `jpeg_len` uint32 |
 | 16 | 4 | `intrinsics_len` uint32 |
 | 20 | 12 | Camera position, float32 × 3 |
@@ -381,7 +383,7 @@ append fields without a version bump.
 
 `distortion_model` is one of `"none"`, `"plumb_bob"` or `"equidistant"`.
 `distortion` is the coefficient array for that model (empty for `"none"`).
-The bridge undistorts to pinhole when a provider needs it (VPS always; AprilTag
+ARModule undistorts to pinhole when a provider needs it (VPS always; AprilTag
 handles fisheye corners internally via DimOS).
 
 **Camera pose** is the **camera optical frame** (X right, Y down, Z along the
@@ -390,10 +392,10 @@ right-handed, gravity-aligned Z-up and metric — the same convention as DimOS
 `world`. A left-handed client (Spectacles) converts its camera pose on the way
 in and converts `localization.pose` back on the way out.
 
-**`capture_ts` is required and must be the exposure time in bridge clock**,
+**`capture_ts` is required and must be the exposure time in server clock**,
 not the client's local clock and not the time the message was assembled. The
-client obtains bridge time via `time_sync` / `time` before sending. A
-localization round trip can take seconds, and the bridge pairs each observation
+client obtains server time via `time_sync` / `time` before sending. A
+localization round trip can take seconds, and ARModule pairs each observation
 against where the robot was at capture. A send-time stamp or an unsynchronised
 clock silently produces a fix that is wrong by however far the robot moved in
 the interim.
@@ -409,8 +411,8 @@ Response: `localization`.
 }
 ```
 
-Client sends its local send time. The bridge replies with `time` (stateless — no
-per-connection offset is stored on the bridge).
+Client sends its local send time. ARModule replies with `time` (stateless — no
+per-connection offset is stored on ARModule).
 
 ### `time`
 
@@ -418,15 +420,16 @@ per-connection offset is stored on the bridge).
 {
   "type": "time",
   "client_send_ts": 1234.567,
-  "bridge_recv_ts": 5678.901,
-  "bridge_send_ts": 5678.905
+  "server_recv_ts": 5678.901,
+  "server_send_ts": 5678.905
 }
 ```
 
 The client records its receive time locally and computes offset from the four
-timestamps (standard NTP-style exchange). Keep the sample with the smallest
-round-trip delay. Convert each observation's exposure time to bridge time before
-encoding `capture_ts`.
+timestamps (standard NTP-style exchange): echoed `client_send_ts`,
+`server_recv_ts`, `server_send_ts`, and the client's own receive time. Keep the
+sample with the smallest round-trip delay. Convert each observation's exposure
+time to server time before encoding `capture_ts`.
 
 ### `nav_goal`
 
@@ -439,7 +442,7 @@ encoding `capture_ts`.
 ```
 
 Goal in `world`. Send it in the same coordinates you receive `pose` in — the
-bridge inverts the scale correction on ingress, so a goal placed on top of the
+ARModule inverts the scale correction on ingress, so a goal placed on top of the
 robot's rendered position resolves to the robot's actual odometry position.
 
 ### `stop`
@@ -454,10 +457,10 @@ Halts motion immediately. **There is no payload and no latch to release.**
 
 Stopping is an event, not a mode. A latch that only the client can clear is a
 footgun: a client that stops and then disconnects would leave the robot
-immobilised with no way back short of restarting the bridge. The resume path is
+immobilised with no way back short of restarting ARModule. The resume path is
 issuing a new `nav_goal`.
 
-The bridge also stops the robot on its own when the last client disconnects, so
+ARModule also stops the robot on its own when the last client disconnects, so
 losing the headset cannot leave the robot walking.
 
 ### `set_lidar`
@@ -484,7 +487,7 @@ There is no mode enum. v19 offered `"off"`, `"full"` and `"obstacles"`, but
 other modes also accept. One boolean plus the parameters expresses all three
 states without an enum whose values overlap.
 
-Omitting an optional field leaves the bridge's current value alone. Sending a
+Omitting an optional field leaves ARModule's current value alone. Sending a
 non-finite or inverted band (`min_height_m` above `max_height_m`) is an error and
 is rejected, not silently clamped.
 
@@ -512,12 +515,12 @@ Response: `state`.
 | → client | `pose` | JSON |
 | → client | `path` | JSON |
 | → client | `lidar` | binary |
-| → bridge | `localize` | binary |
-| → bridge | `time_sync` | JSON |
-| → bridge | `nav_goal` | JSON |
-| → bridge | `stop` | JSON |
-| → bridge | `set_lidar` | JSON |
-| → bridge | `get_state` | JSON |
+| → server | `localize` | binary |
+| → server | `time_sync` | JSON |
+| → server | `nav_goal` | JSON |
+| → server | `stop` | JSON |
+| → server | `set_lidar` | JSON |
+| → server | `get_state` | JSON |
 
 ## Dropped from v19
 
@@ -539,7 +542,7 @@ Not carried into v1:
 - v19 `ping` and `pong`. Replaced by `time_sync` / `time` for clock offset;
   WebSocket Ping/Pong remains for liveness.
 - Every scale field — `scale_confidence`, `scale_locked`, `scale_observable`.
-  Scale is a fixed robot constant applied on the bridge and is not a client
+  Scale is a fixed robot constant applied on ARModule and is not a client
   concern.
 - Robot AprilTag profile. Tag IDs and sizes matter when printing a marker, which
   is a launcher concern, not something a running client needs.

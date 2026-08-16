@@ -22,7 +22,7 @@ testpaths = ["dimos/ar"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 markers = [
-    "integration: live WebSocket check against a running AR bridge",
+    "integration: live WebSocket check against a running ARModule",
 ]
 addopts = "--import-mode=importlib -m 'not integration'"
 
@@ -77,6 +77,6 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = [
     "dimos.ar.robot_profile.go2",
-    "dimos.ar.bridge.module",
+    "dimos.ar.module",
 ]
 disallow_untyped_decorators = false

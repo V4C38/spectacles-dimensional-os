@@ -1,15 +1,15 @@
 # Upstream DimOS PR — goal observation tap
 
 This document records a small upstream change to DimOS. **No PR is filed in the
-v2 learning phase.** File it when the bridge needs universal goal observation or
-when agent/patrolling modules are added to the `ar_go2` blueprint.
+v2 learning phase.** File it when ARModule needs universal goal observation or
+when agent/patrolling modules are added to the `unitree_go2_ar` blueprint.
 
 ## Problem
 
 `GlobalPlanner.handle_goal_request` is the single funnel for every navigation
 goal in DimOS:
 
-- `goal_request` stream (WebSocket bridge, other modules)
+- `goal_request` stream (WebSocket server, other modules)
 - `target` stream
 - `clicked_point` stream (via `MovementManager.goal`)
 - `set_goal` RPC (`ReplanningAStarPlanner.set_goal` → `handle_goal_request`)
@@ -19,7 +19,7 @@ private behind a lock inside `GlobalPlanner`. `get_state()` returns only the
 `NavigationState` enum (`IDLE`, `FOLLOWING_PATH`, `RECOVERY`) — not the goal
 pose.
 
-Any UI or bridge that wants to **relay observed goals** (regardless of source)
+Any UI or ARModule that wants to **relay observed goals** (regardless of source)
 has no clean hook today.
 
 ### Evidence
@@ -43,7 +43,7 @@ self.target.subscribe(self._planner.handle_goal_request)
 
 `navigation_state: Out[String]` is declared on `ReplanningAStarPlanner` but
 **never published** anywhere in DimOS (`# TODO: set it` in module.py). The v1
-bridge subscribed to it in `navigation/nav_state.py` — that code never ran.
+package subscribed to it in `navigation/nav_state.py` — that code never ran.
 
 ## Proposed change (~6 lines)
 
@@ -88,14 +88,14 @@ self.register_disposable(
 - **Useful beyond AR** — any DimOS UI or logger that wants “goal accepted” gets
   it without subscribing to three input streams and guessing which fired.
 
-## What the v2 bridge does until this lands
+## What ARModule does until this lands
 
-Subscribe to the planner's **public input streams** that `ar_go2` actually
+Subscribe to the planner's **public input streams** that `unitree_go2_ar` actually
 wires:
 
 | Stream | Covers |
 |--------|--------|
-| `goal_request` | Client `nav_goal` from the AR bridge |
+| `goal_request` | Client `nav_goal` from ARModule |
 | `target` | External target injection |
 
 The web UI click path runs `clicked_point` → `MovementManager` → `goal`
@@ -113,7 +113,7 @@ Direct `set_goal` RPC calls bypass all streams. Known callers in DimOS:
 - `navigation/frontier_exploration/`
 - `robot/unitree/unitree_skill_container.py`
 
-**None of these are composed in `ar_go2` today**, so the gap is real but
+**None of these are composed in `unitree_go2_ar` today**, so the gap is real but
 currently unreachable. Document in `navigation/goals.py`; fix with this PR
 before adding agent or patrolling modules to the blueprint.
 
