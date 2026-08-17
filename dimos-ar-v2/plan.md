@@ -540,7 +540,7 @@ Each of these is a v19 habit that the rewrite deliberately does not keep.
 
 **`emergency_stop {active: bool}` → `stop`, no payload.** A latch only the client can clear is a footgun: a client that stops and disconnects leaves the robot immobilised with no way back except a restart. Stopping is an event, not a mode. The resume path is issuing a new `nav_goal`.
 
-**`set_lidar_mode` three modes → `set_lidar {enabled, min_height_m?, max_height_m?, max_range_m?}`.** `"obstacles"` was not a mode, it was a preset of the filter parameters that the other two modes also accept. One boolean plus the parameters expresses all three states without an enum whose values overlap.
+**`set_lidar_mode` three modes → `set_lidar {enabled, min_height_m, max_height_m, max_range_m}` (all required).** `"obstacles"` was not a mode, it was a preset of the filter parameters that the other two modes also accept. One boolean plus the parameters expresses all three states without an enum whose values overlap.
 
 **Dropped `localization.unsolicited`.** The client applies the newest result regardless of why it arrived, so the flag is decoration.
 

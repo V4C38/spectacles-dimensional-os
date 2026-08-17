@@ -3,8 +3,7 @@
 Cross-platform contract between `ARModule` and any AR client.
 
 Keep this document, `dimos/ar/network/protocol.py`, and
-`lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts` in sync. Bump
-`PROTOCOL_VERSION` on breaking changes.
+`lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts` in sync.
 
 ## Changelog
 
@@ -13,7 +12,6 @@ Keep this document, `dimos/ar/network/protocol.py`, and
 Fresh protocol for the v2 rebuild. Not compatible with v19, and not compatible
 with any earlier draft of this document.
 
-- **`PROTOCOL_VERSION` is 1.**
 - **Wire frame:** DimOS `world`, in DimOS's own right-handed Z-up axes. The
   ARModule performs **no axis conversion**. Each client converts on receipt,
   because a Spectacles client, a Quest client and a desktop viewer do not share
@@ -146,7 +144,6 @@ On connect the server sends `hello`, then `state`.
 ```json
 {
   "type": "hello",
-  "protocol_version": 1,
   "client_id": "c3f1a9",
   "robot": {
     "display_name": "Unitree Go2",
@@ -167,7 +164,6 @@ On connect the server sends `hello`, then `state`.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `protocol_version` | int | Client must refuse to proceed on mismatch. |
 | `client_id` | string | Server-assigned, unique per connection. Appears in `state.nav.goal.source`. |
 | `robot.display_name` | string | For client UI. |
 | `robot.body_bounds_m` | `[L, W, H]` | Axis-aligned envelope in `world` axes: length X, width Y, height Z. |
@@ -297,8 +293,7 @@ Robot pose in `world`, at high rate.
 | `ts` | Server timestamp, seconds, floating point. |
 
 X and Y carry the odometry scale correction; Z and orientation do not. Optional
-fields may be added later (`speed_mps`, `yaw_rate_rad_s`) without a version bump,
-provided clients ignore unknown keys.
+fields may be added later (`speed_mps`, `yaw_rate_rad_s`); clients ignore unknown keys.
 
 ### `path`
 
@@ -319,13 +314,10 @@ plan exists. X and Y carry the scale correction, matching `pose`.
 
 | Offset | Size | Field |
 |--------|------|-------|
-| 0 | 4 | Magic `0x4C444152` (`"LDAR"`) |
-| 4 | 2 | Header version `1` |
-| 6 | 2 | Reserved, zero |
-| 8 | 8 | `ts` float64, server timestamp |
-| 16 | 4 | `point_count` uint32 |
-| 20 | 4 | Reserved, zero |
-| 24 | `point_count * 12` | Points: `[x, y, z]` float32 triplets in `world` |
+| 0 | 4 | FourCC `0x4C444152` (`"LDAR"`) |
+| 4 | 8 | `ts` float64, server timestamp |
+| 12 | 4 | `point_count` uint32 |
+| 16 | `point_count * 12` | Points: `[x, y, z]` float32 triplets in `world` |
 
 Points are pre-filtered on ARModule: height band, range, and subsampling
 toward the robot. They carry **no scale correction** — see the coordinate section
@@ -346,9 +338,8 @@ Header:
 
 | Offset | Size | Field |
 |--------|------|-------|
-| 0 | 4 | Magic `0x4C4F4341` (`"LOCA"`) |
-| 4 | 2 | Header version `1` |
-| 6 | 2 | `observation_count` uint16, at least 1 |
+| 0 | 4 | FourCC `0x4C4F4341` (`"LOCA"`) |
+| 4 | 2 | `observation_count` uint16, at least 1 |
 
 Then `observation_count` records, each:
 
@@ -363,8 +354,7 @@ Then `observation_count` records, each:
 | 48 | `jpeg_len` | JPEG bytes |
 | 48 + `jpeg_len` | `intrinsics_len` | Intrinsics, JSON UTF-8 |
 
-`record_len` lets a reader skip a record it cannot parse and lets later versions
-append fields without a version bump.
+`record_len` lets a reader skip a record it cannot parse.
 
 **Intrinsics JSON**, for the frame in this record:
 
@@ -478,18 +468,18 @@ losing the headset cannot leave the robot walking.
 | Field | Type | Notes |
 |-------|------|-------|
 | `enabled` | bool | Required. `false` stops `lidar` frames entirely. |
-| `min_height_m` | float | Optional. Lower bound of the height band, in `world` Z. |
-| `max_height_m` | float | Optional. Upper bound of the height band. |
-| `max_range_m` | float | Optional. Horizontal radius around the robot to keep. |
+| `min_height_m` | float | Required. Lower bound of the height band, in `world` Z. |
+| `max_height_m` | float | Required. Upper bound of the height band. |
+| `max_range_m` | float | Required. Horizontal radius around the robot to keep. |
 
 There is no mode enum. v19 offered `"off"`, `"full"` and `"obstacles"`, but
 `"obstacles"` was not a mode — it was a preset of the same filter parameters the
 other modes also accept. One boolean plus the parameters expresses all three
 states without an enum whose values overlap.
 
-Omitting an optional field leaves ARModule's current value alone. Sending a
-non-finite or inverted band (`min_height_m` above `max_height_m`) is an error and
-is rejected, not silently clamped.
+All four fields are required on every `set_lidar`. A non-finite or inverted band
+(`min_height_m` above `max_height_m`) is an error and is rejected, not silently
+clamped.
 
 `state.lidar` reflects the result, and because telemetry is broadcast, one client
 changing the filter changes it for everyone.
