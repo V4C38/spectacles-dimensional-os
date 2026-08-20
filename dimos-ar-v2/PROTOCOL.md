@@ -131,7 +131,7 @@ Any number of clients may connect at once.
 - **Alignment is per connection.** `localization` is addressed to the connection
   that needs it, since each client has its own tracking origin.
 - **Control is last-command-wins.** ARModule does not arbitrate. The most
-  recent `nav_goal` or `stop` takes effect regardless of which client sent it.
+  recent `nav_goal` or `estop` takes effect regardless of which client sent it.
 
 `hello` assigns each connection a `client_id`, and `state.nav.goal.source`
 reports which client issued the active goal, so a client can show "someone else
@@ -157,7 +157,7 @@ On connect the server sends `hello`, then `state`.
   "capabilities": {
     "lidar": { "available": true, "reason": null },
     "navigation": { "available": true, "reason": null },
-    "stop": { "available": true, "reason": null }
+    "estop": { "available": true, "reason": null }
   }
 }
 ```
@@ -435,15 +435,15 @@ Goal in `world`. Send it in the same coordinates you receive `pose` in — the
 ARModule inverts the scale correction on ingress, so a goal placed on top of the
 robot's rendered position resolves to the robot's actual odometry position.
 
-### `stop`
+### `estop`
 
 ```json
 {
-  "type": "stop"
+  "type": "estop"
 }
 ```
 
-Halts motion immediately. **There is no payload and no latch to release.**
+Emergency stop — halts motion immediately. **There is no payload and no latch to release.**
 
 Stopping is an event, not a mode. A latch that only the client can clear is a
 footgun: a client that stops and then disconnects would leave the robot
@@ -508,7 +508,7 @@ Response: `state`.
 | → server | `localize` | binary |
 | → server | `time_sync` | JSON |
 | → server | `nav_goal` | JSON |
-| → server | `stop` | JSON |
+| → server | `estop` | JSON |
 | → server | `set_lidar` | JSON |
 | → server | `get_state` | JSON |
 
@@ -526,7 +526,7 @@ Not carried into v1:
 - Joystick and teleop.
 - Inbound `robot_id` echo.
 - JSON `lidar`. Binary only.
-- `cancel_nav_goal`. Use `stop`.
+- `cancel_nav_goal`. Use `estop`.
 - The `active` flag on `emergency_stop`, and the `"off"` / `"full"` /
   `"obstacles"` mode enum on `set_lidar_mode`.
 - v19 `ping` and `pong`. Replaced by `time_sync` / `time` for clock offset;

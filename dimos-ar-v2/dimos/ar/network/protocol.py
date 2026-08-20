@@ -72,7 +72,7 @@ class NavGoalMessage:
 
 
 @dataclass(frozen=True)
-class StopMessage:
+class EstopMessage:
     pass
 
 
@@ -89,7 +89,7 @@ class GetStateMessage:
     pass
 
 
-InboundMessage = TimeSyncMessage | NavGoalMessage | StopMessage | LidarData | GetStateMessage
+InboundMessage = TimeSyncMessage | NavGoalMessage | EstopMessage | LidarData | GetStateMessage
 
 
 def decode_inbound(text: str) -> InboundMessage:
@@ -109,8 +109,8 @@ def decode_inbound(text: str) -> InboundMessage:
         orientation = _quat(data, "orientation") if "orientation" in data else None
         return NavGoalMessage(position=_vec3(data, "position"), orientation=orientation)
 
-    if msg_type == "stop":
-        return StopMessage()
+    if msg_type == "estop":
+        return EstopMessage()
 
     if msg_type == "set_lidar":
         enabled = _require_type(data, "enabled", bool)
@@ -236,7 +236,7 @@ def _decode_intrinsics(data: dict[str, Any]) -> Intrinsics:
         raise ValueError("intrinsics.distortion_model must be none, plumb_bob, or equidistant")
     distortion_raw = data.get("distortion", [])
     if not isinstance(distortion_raw, list):
-        raise ValueError("intrinsics.distortion must be a list")
+        raise TypeError("intrinsics.distortion must be a list")
     distortion = tuple(float(v) for v in distortion_raw)
     return Intrinsics(
         fx=float(data["fx"]),

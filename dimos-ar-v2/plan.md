@@ -302,7 +302,7 @@ The design supports several clients at once, with one honest limit.
 
 **Viewing is genuinely multi-client.** Telemetry is a broadcast — identical bytes to every connection, because ARModule holds no per-client transform and does no per-client math. N clients cost N sends and nothing else. Each client holds its own localization result privately and applies it to its own scene graph. This is a direct consequence of the two decisions above, and it is something the current single-AR-world design cannot do at all.
 
-**Control is last-command-wins, and ARModule does not arbitrate.** DimOS has exactly one active goal: `GlobalPlanner.handle_goal_request` overwrites `_current_goal` under a lock. Two clients sending goals will fight, and the newest wins. A stop from any client stops the robot, and stop-on-disconnect fires on the *last* disconnect, not the first.
+**Control is last-command-wins, and ARModule does not arbitrate.** DimOS has exactly one active goal: `GlobalPlanner.handle_goal_request` overwrites `_current_goal` under a lock. Two clients sending goals will fight, and the newest wins. An `estop` from any client stops the robot, and estop-on-disconnect fires on the *last* disconnect, not the first.
 
 What ARModule does add is **identity, not arbitration**. It assigns each connection a `client_id` and returns it in that client's `hello`; `state.nav.goal.source` then carries the `client_id` of whoever set the active goal, or `"dimos"` for goals observed on the planner's input streams. Every client can therefore see who is driving and render it, which is enough for a small co-located group to coordinate socially without ARModule holding a control lock. A lock is addable later without changing this shape — it would be two new messages and a held `client_id`, and nothing above would have to move.
 
@@ -516,7 +516,7 @@ Client to server:
 - `localize` — binary: one or more observations, each a JPEG, a pinhole intrinsic with its distortion model and coefficients, the camera optical pose in the caller's tracking frame, and a capture timestamp in server time.
 - `time_sync` — the client's send stamp. Stateless on ARModule.
 - `nav_goal` — goal in `world`, inverse-scaled and then published to `goal_request`.
-- `stop`, `set_lidar`, `get_state`.
+- `estop`, `set_lidar`, `get_state`.
 
 Three things drive the reduction from 27. The whole registration vocabulary (`registration_command`, `registration_pose`, `registration_status`, `capture_policy`, `camera_frame_ack`) disappears because there is no session to drive. `world_frame_correction` disappears because ARModule no longer runs a continuous solver whose internals the client had to track. And merging the three overlapping status messages kills a recurring bug class: five changelog entries (v6, v7, v9, v16, v18) exist purely to keep `runtime_snapshot`, `bridge_status` and `nav_status` agreeing with each other.
 
@@ -538,7 +538,7 @@ Each of these is a v19 habit that the rewrite deliberately does not keep.
 
 **Trimmed the `hello.robot` block.** `visual_origin_frame` and `default_render_offset_m` are v19 leftovers, informational and all-zero respectively. `tag_profile` describes a provider that does not exist yet and returns with the AprilTag work. Keeps `display_name`, `body_bounds_m`, `footprint_m`, `base_height_m`.
 
-**`emergency_stop {active: bool}` → `stop`, no payload.** A latch only the client can clear is a footgun: a client that stops and disconnects leaves the robot immobilised with no way back except a restart. Stopping is an event, not a mode. The resume path is issuing a new `nav_goal`.
+**`emergency_stop {active: bool}` → `estop`, no payload.** A latch only the client can clear is a footgun: a client that stops and disconnects leaves the robot immobilised with no way back except a restart. Stopping is an event, not a mode. The resume path is issuing a new `nav_goal`.
 
 **`set_lidar_mode` three modes → `set_lidar {enabled, min_height_m, max_height_m, max_range_m}` (all required).** `"obstacles"` was not a mode, it was a preset of the filter parameters that the other two modes also accept. One boolean plus the parameters expresses all three states without an enum whose values overlap.
 
@@ -566,7 +566,7 @@ Under `dimos-ar-v2/dimos/ar/`, grouped by subsystem rather than by file, so each
 
 **6. The localization seam** — `alignment/provider.py` and `alignment/stub.py`. The one-method interface taking a sequence of observations and returning a frame-labelled result, and a stub returning a config pose in `world` at confidence `1.0`. Teaches `typing.Protocol`, structural typing and frozen dataclasses.
 
-**7. Safety and robot profile** — `safety.py`, `robot_profile/base.py`, `robot_profile/go2.py`, and removing the G1 stack choice from the launcher. Stop, stop-on-last-disconnect, and the extension point for future robots.
+**7. Safety and robot profile** — `safety.py`, `robot_profile/base.py`, `robot_profile/go2.py`, and removing the G1 stack choice from the launcher. Estop, estop-on-last-disconnect, and the extension point for future robots.
 
 **8. Tests and CI** — tests grow with each group; this closes it out and gets `./launcher/scripts/run-ci.sh` green from a normal terminal.
 
