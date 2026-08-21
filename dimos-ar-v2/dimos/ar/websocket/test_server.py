@@ -8,13 +8,13 @@ import threading
 import pytest
 import websockets
 
-from dimos.ar.network.protocol import (
+from dimos.ar.websocket.protocol import (
     CapabilityWire,
     HelloRobotWire,
     HelloWire,
     NavGoalMessage,
 )
-from dimos.ar.network.server import WebSocketServer, split_inbound_text_lines
+from dimos.ar.websocket.server import WebSocketServer, split_inbound_text_lines
 
 
 def _pick_free_port() -> int:

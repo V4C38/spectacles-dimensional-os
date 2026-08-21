@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import websockets
 import websockets.asyncio.server as ws_server
 
-from dimos.ar.network.protocol import (
+from dimos.ar.websocket.protocol import (
     LOCALIZE_FOURCC,
     EstopMessage,
     GetStateMessage,
@@ -29,7 +29,7 @@ from dimos.ar.network.protocol import (
     encode_hello,
     encode_time,
 )
-from dimos.ar.network.send_queue import ClientSendQueue
+from dimos.ar.websocket.send_queue import ClientSendQueue
 from dimos.core.global_config import global_config
 from dimos.utils.logging_config import setup_logger
 
@@ -208,9 +208,12 @@ class WebSocketServer:
             )
         finally:
             self._connections.discard(websocket)
-            outbound = self._outbound.pop(websocket, None)
-            if outbound is not None:
-                await outbound.stop()
+            try:
+                queued = self._outbound.pop(websocket)
+            except KeyError:
+                pass
+            else:
+                await queued.stop()
             if self._on_disconnect is not None:
                 self._on_disconnect(websocket)
 

@@ -5,7 +5,9 @@ from typing import ClassVar
 from dimos_lcm.std_msgs import Bool, String
 import websockets.asyncio.server as ws_server
 
-from dimos.ar.network.protocol import (
+from dimos.ar.robot.go2 import GO2_PROFILE
+from dimos.ar.robot.state_publisher import RobotStatePublisher
+from dimos.ar.websocket.protocol import (
     CapabilityWire,
     EstopMessage,
     GetStateMessage,
@@ -18,7 +20,7 @@ from dimos.ar.network.protocol import (
     StateWire,
     encode_state,
 )
-from dimos.ar.network.server import WebSocketServer
+from dimos.ar.websocket.server import WebSocketServer
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
@@ -57,6 +59,7 @@ class ARModule(Module):  # type: ignore[misc]
     config: ARModuleConfig
 
     _ws_server: WebSocketServer
+    _state_publisher: RobotStatePublisher
     _lidar: LidarData
 
     @rpc
@@ -75,6 +78,11 @@ class ARModule(Module):  # type: ignore[misc]
             on_get_state=self._on_get_state,
             on_localize=self._on_localize,
             on_disconnect=self._on_client_disconnect,
+        )
+        self._state_publisher = RobotStatePublisher(
+            self._ws_server,
+            lidar=self._lidar,
+            odom_correction_factor=GO2_PROFILE.odom_correction_factor,
         )
         logger.info("ARModule build complete")
 
@@ -97,10 +105,10 @@ class ARModule(Module):  # type: ignore[misc]
         return HelloWire(
             client_id=client_id,
             robot=HelloRobotWire(
-                display_name="Unitree Go2",
-                body_bounds_m=(0.70, 0.50, 0.55),
-                footprint_m=(0.70, 0.50),
-                base_height_m=0.33,
+                display_name=GO2_PROFILE.display_name,
+                body_bounds_m=GO2_PROFILE.body_bounds_m,
+                footprint_m=GO2_PROFILE.footprint_m,
+                base_height_m=GO2_PROFILE.base_height_m,
             ),
             requires_robot_in_view=False,
             capabilities={
@@ -150,6 +158,7 @@ class ARModule(Module):  # type: ignore[misc]
         _websocket: ws_server.ServerConnection,
     ) -> None:
         self._lidar = msg
+        self._state_publisher.set_lidar(msg)
         self._broadcast_state()
 
     def _on_get_state(
@@ -175,13 +184,13 @@ class ARModule(Module):  # type: ignore[misc]
         self.stop_movement.publish(Bool(True))
 
     async def handle_lidar(self, msg: PointCloud2) -> None:
-        del msg
+        self._state_publisher.publish_lidar(msg)
 
     async def handle_odom(self, msg: PoseStamped) -> None:
-        del msg
+        self._state_publisher.publish_odom(msg)
 
     async def handle_path(self, msg: Path) -> None:
-        del msg
+        self._state_publisher.publish_path(msg)
 
     async def handle_goal_reached(self, msg: Bool) -> None:
         del msg

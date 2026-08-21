@@ -14,6 +14,11 @@ disk as reference — never edited, never installed, not in CI — and deleted o
 v2 replaces it. Both publish `dimos.ar*`, so only one can be installed at a
 time; v2 keeps the `dimos/ar/` module path so nothing has to be renamed later.
 
+v2 **package layout and file names** describe what each subsystem actually is
+(DimOS-shaped where upstream has precedent, e.g. `websocket/` like
+`dimos/web/websocket_vis/`). Frozen `dimos-ar/` is reference for behaviour and
+edge cases, not a directory map to mirror.
+
 For each file: I explain what it does, why it needs to exist, which DimOS API it
 touches with a concrete path, and what alternatives I rejected. Then I pause for
 your questions. Then I write it. Then I walk through the finished code, naming
@@ -39,7 +44,7 @@ Same shape as DimOS (`RelocalizationModule` / `dimos.mapping.relocalization` /
 `unitree_go2_relocalization`):
 
 - **Class:** `ARModule` in `dimos/ar/module.py` — DimOS `In`/`Out` surface.
-  The WebSocket accept loop lives in `network/server.py`.
+  The WebSocket accept loop lives in `websocket/server.py`.
 - **Import:** `dimos.ar`.
 - **Blueprint:** `unitree_go2_ar` (`dimos run unitree-go2-ar`).
 - **Wire peer:** `server` (WebSocket role). Clock stamps are `server_recv_ts` /
@@ -89,7 +94,7 @@ Each client converts to its own convention on receipt. Spectacles is left-handed
 
 What this buys:
 
-- `network/protocol.py` contains no coordinate math at all — it is field copying and JSON.
+- `websocket/protocol.py` contains no coordinate math at all — it is field copying and JSON.
 - LiDAR points are forwarded straight through, untouched.
 - There is nothing to get subtly wrong in a shared axis-conversion helper, and no shared helper to test.
 
@@ -103,7 +108,7 @@ The rule that decides every case of this kind: **a property of the client platfo
 
 ### The provider is fully stubbed to start
 
-There is no real implementation of `localize` in this build at all. One `StubAlignmentProvider` returns a pose read from config with `frame_id="world"` and confidence `1.0`, and no AprilTag or VPS file gets created yet. That is deliberate: you get to see the whole ARModule working — WebSocket, nav goals both directions, telemetry, safety — before any camera geometry enters the picture, and the seam gets validated by a real caller before anything is built behind it.
+There is no real implementation of `localize` in this build at all. One `StubAlignmentProvider` returns a pose read from config with `frame_id="world"` and confidence `1.0`, and no AprilTag or VPS file gets created yet. That is deliberate: you get to see the whole ARModule working — WebSocket, nav goals both directions, robot state outbound, safety — before any camera geometry enters the picture, and the seam gets validated by a real caller before anything is built behind it.
 
 Both providers are then built. The designs below are recorded now so the seam does not need retrofitting when they arrive.
 
@@ -384,9 +389,9 @@ v2 does not, because the points are metric range measurements rather than dead-r
 
 Scaling a cloud about the odometry origin inflates within-scan separations too, so a 4 m wall would read as 5 m. Room geometry is already metric and the factor would break it.
 
-**Two spaces, and one trap that follows.** Because the cloud stays metric while pose and path are scaled, ARModule now has two horizontal spaces where v1 had one. The visible cost is that the robot and its path drift off the cloud with distance from the odometry origin, which the room anchor corrects at each nav-goal arrival.
+**Two spaces, and one trap that follows — pending the measurement below.** If the cloud is metric while pose and path are scaled, ARModule has two horizontal spaces where v1 had one. The visible cost is that the robot and its path drift off the cloud with distance from the odometry origin, which the room anchor corrects at each nav-goal arrival.
 
-The trap is that any code comparing cloud points against the robot position must use the **unscaled** robot position, not the one on the wire. v1's obstacle band and near-robot subsample both do exactly that comparison and both take the scaled position, which was correct there and would be a silent 25% error here:
+The trap, in that case, is that any code comparing cloud points against the robot position must use the **unscaled** robot position, not the one on the wire. v1's obstacle band and near-robot subsample both do exactly that comparison and both take the scaled position, which was correct there and would be a silent 25% error here:
 
 ```61:72:/Users/johannestscharn/Repositories/spectacles-dimensional-os/dimos-ar/dimos/ar/network/data_plane.py
             if mode == "obstacles" and obstacle_distance_config is not None:
@@ -403,13 +408,22 @@ The trap is that any code comparing cloud points against the robot position must
             )
 ```
 
-So `telemetry/lidar_filter.py` takes the raw odometry position and never the published one, and a test asserts that a cloud filtered at 10 m from the origin keeps the same points whether or not the scale constant is 1.0.
+So `robot/lidar_filter.py` takes the raw odometry position and never the published one, and a test asserts that a cloud filtered at 10 m from the origin keeps the same points whether or not the scale constant is 1.0.
+
+**Footnote — verify one space or two on hardware.** The LiDAR rule above assumes the Go2 cloud is metric range in a `world` that is *not* the under-reporting odom. The code does not settle that. DimOS stamps the cloud `frame_id="world"` (`robot/unitree/type/lidar.py:81`), `Map` accumulates it with no pose applied (`robot/unitree/type/map.py:88`), and the same `utlidar` namespace also publishes `rt/utlidar/robot_odom` — the stream DimOS itself loads as the "leg-odom trajectory" under `world/leg_odom/lidar` (`go2/dds/cli/render.py:206`, `:233-234`). If the on-board cloud is registered with that same estimate, the accumulated cloud is compressed by the same factor, is not metric, and v1 was right to route it through the same seam.
+
+Measure it: walk a tape-measured 10 m, then compare the odom delta against the separation of two identifiable features in the accumulated cloud.
+
+- **Cloud ~10 m, odom ~8 m — two spaces, keep the current LiDAR rule.** Pose and path stay scaled; the cloud stays unscaled. Filtering keeps using the raw robot position. Relocalization's `T_world_map` is then also in the unscaled space (it registers that cloud against the premap, `mapping/relocalization/module.py:150-156`), so the composition `T_world_map ∘ P_map` needs an explicit rule that the LiDAR paragraph currently omits: leave the TF raw and anchored content disagrees with the robot marker by up to 25% of the distance from the odom origin; scale the TF translation and the same silent 25% error the filter trap warns about appears in every composed client pose. Pick one and pin it with a test.
+- **Cloud ~8 m as well — one space, revert the LiDAR departure.** Scale the cloud about the odometry origin the way v1 does (`network/data_plane.py:59-60`). Filtering goes back to the published (scaled) robot position. `T_world_map` is in that same compressed space, so scale its translation through the same function as pose. The two-space trap, the unscaled-position filter contract, and the "robot drifts off the cloud" overlay cost all go away.
+
+The 1.25 on pose, path and `nav_goal` does not wait on this measurement. A room anchor is a rigid transform and cannot cancel a scale error; the planner still walks in odom metres.
 
 ### Mechanics
 
-One constant on `robot_profile/go2.py`. One function in `telemetry/scale.py`, taking the factor as a plain float so `telemetry/publisher.py` and `navigation/goals.py` do not import the profile and group ordering stays free. It returns a corrected copy rather than mutating, so the raw value stays available for the LiDAR path. Applied at encode for `pose` and `path` positions, inverted at decode for `nav_goal`, and applied to nothing else.
+One constant on `robot/go2.py`. `robot/odom_correction.py` takes the factor as a plain float so `robot/state_publisher.py` and `navigation/goals.py` do not import the profile and group ordering stays free. It returns a corrected copy rather than mutating, so the raw value stays available for the LiDAR path. Applied at encode for `pose` and `path` positions, inverted at decode for `nav_goal`, and applied to nothing else.
 
-Applied about the odometry origin, with no anchor point — v1 needs `odom_anchor_xy` (`world_frame/state.py:155-166`) only so that *changing* a live estimate does not teleport already-placed content, and that need disappears once the factor is fixed. Because the factor is constant, scaling accumulated position is identical to scaling each increment, so telemetry stays byte-identical for every client and the broadcast property survives.
+Applied about the odometry origin, with no anchor point — v1 needs `odom_anchor_xy` (`world_frame/state.py:155-166`) only so that *changing* a live estimate does not teleport already-placed content, and that need disappears once the factor is fixed. Because the factor is constant, scaling accumulated position is identical to scaling each increment, so robot-state outbound stays byte-identical for every client and the broadcast property survives.
 
 Nothing about scale appears on the wire: no factor, no confidence, no lock. The client receives corrected coordinates and never learns that a correction happened.
 
@@ -558,15 +572,15 @@ Under `dimos-ar-v2/dimos/ar/`, grouped by subsystem rather than by file, so each
 
 **2. The DimOS module and blueprint** — `module.py` and `blueprints.py`, plus `launcher/scripts/start.sh` and `dimos_lib.sh`. The whole DimOS integration surface in two files: `In`/`Out` stream ports, `@rpc build/start/stop`, the `handle_<stream>` auto-binding in `dimos/core/module.py`, and how `autoconnect` matches ports by name. First runnable milestone: `unitree_go2_ar` starts against the real Go2 and logs odometry.
 
-**3. The network layer** — `network/server.py`, `network/protocol.py`, `network/send_queue.py`. Everything about talking to a client: the `websockets` accept loop, the asyncio-versus-module-thread boundary, typed encode/decode with no coordinate math, and latest-wins coalescing so a slow headset cannot stall the robot. `time_sync` lands here too, since answering it is three timestamps and no state. Runnable with `wscat`, no Lens needed.
+**3. The WebSocket layer** — `websocket/server.py`, `websocket/protocol.py`, `websocket/send_queue.py`. Everything about talking to a client: the `websockets` accept loop, the asyncio-versus-module-thread boundary, typed encode/decode with no coordinate math, and latest-wins coalescing so a slow headset cannot stall the robot. `time_sync` lands here too, since answering it is three timestamps and no state. Runnable with `wscat`, no Lens needed.
 
-**4. Telemetry out** — `telemetry/publisher.py`, `telemetry/scale.py` and `telemetry/lidar_filter.py`. Reactive subscription patterns, rate limiting, and the binary LiDAR frame: height band, subsample, pack. `scale.py` is the single owner of applying the odometry scale constant — one function taking the factor as a float, correcting horizontal position on `pose` and `path` and nothing else. `lidar_filter.py` is the one consumer that must take the *unscaled* robot position, since its cloud is unscaled.
+**4. Robot state out** — `robot/state_publisher.py`, `robot/odom_correction.py`, `robot/lidar_filter.py`, `robot/profile.py`, and `robot/go2.py`. Reactive subscription patterns, rate limiting, and the binary LiDAR frame: height band, subsample, pack. `odom_correction.py` is the single owner of applying the odometry scale constant — functions taking the factor as a plain float, correcting horizontal position on `pose` and `path` and nothing else. `lidar_filter.py` is the one consumer that must take the *unscaled* robot position, since its cloud is unscaled.
 
-**5. Navigation both directions** — `navigation/goals.py`. Client `nav_goal` inverse-scaled through the same `telemetry/scale.py` helper and published to `goal_request`, goals observed on the planner's input streams relayed back out, and nav status derived from `goal_reached` and empty-`path`. The one file where ARModule writes into DimOS rather than reading from it.
+**5. Navigation both directions** — `navigation/goals.py`. Client `nav_goal` inverse-scaled through the same `robot/odom_correction.py` helper and published to `goal_request`, goals observed on the planner's input streams relayed back out, and nav status derived from `goal_reached` and empty-`path`. The one file where ARModule writes into DimOS rather than reading from it.
 
 **6. The localization seam** — `alignment/provider.py` and `alignment/stub.py`. The one-method interface taking a sequence of observations and returning a frame-labelled result, and a stub returning a config pose in `world` at confidence `1.0`. Teaches `typing.Protocol`, structural typing and frozen dataclasses.
 
-**7. Safety and robot profile** — `safety.py`, `robot_profile/base.py`, `robot_profile/go2.py`, and removing the G1 stack choice from the launcher. Estop, estop-on-last-disconnect, and the extension point for future robots.
+**7. Safety and robot profile** — `safety.py`, and expanding `robot/profile.py` and `robot/go2.py` (tag mounts, handshake, estop). Estop, estop-on-last-disconnect, and the extension point for future robots.
 
 **8. Tests and CI** — tests grow with each group; this closes it out and gets `./launcher/scripts/run-ci.sh` green from a normal terminal.
 
@@ -580,7 +594,7 @@ Three shared files arrive with the first real provider, none of them provider-sp
 
 Then the providers:
 
-- `alignment/apriltag_provider.py` — detect, solve, compose, gate, fuse. Built on `dimos/perception/fiducial/marker_pose.py`, so the file is mostly composition and gating rather than geometry. The tag mount moves into `robot_profile/go2.py` alongside the scale constant, and `scripts/generate_marker.py` plus the printed assets come across from v1 unchanged.
+- `alignment/apriltag_provider.py` — detect, solve, compose, gate, fuse. Built on `dimos/perception/fiducial/marker_pose.py`, so the file is mostly composition and gating rather than geometry. The tag mount moves into `robot/go2.py` alongside the scale constant, and `scripts/generate_marker.py` plus the printed assets come across from v1 unchanged.
 - `alignment/chain.py` — ordered fallback, first non-`None` wins. Twenty lines including its tests.
 - `alignment/vps_client.py` — the `VpsClient` protocol and `RestVpsClient`, the only file in the tree that knows a cloud API exists. Token cache, retry, handedness flag, hint conversion.
 - `alignment/vps_provider.py` — undistort, query, compose to `T_map_client`, fuse, answer in `map`.
@@ -621,8 +635,8 @@ The honest caveat: this is not free simplification. Roughly 1,900 lines of it is
 - Robot-side localization is restricted to a stationary robot until DimOS exposes camera capture timestamps, because reception timestamps and robot-clock odometry stamps cannot be paired accurately while moving.
 - A fixed 1.25 leaves a residual, since the true factor moves around 1.10 to 1.35 with gait. It accumulates over one leg of travel and is cleared at nav-goal arrival by whichever correction source is configured. Long legs in a large space are where it will be visible.
 - Rotation error is not corrected at all between nav goals, because it is not a linear factor and there is nothing sound to scale. Heading drift shows up as anchored content rotating slowly about the robot until the next fix.
-- Scale-corrected `pose` and `path` alongside an unscaled `lidar` cloud is a deliberate departure from v1, which scales all three together. The robot and its path will not line up exactly with the cloud far from the odometry origin. Accepted because scaling a cloud about the origin also inflates within-scan geometry, which would misreport room dimensions — but it is the one place where v2 diverges from a configuration known to work, so it is the first thing to revisit if the overlay looks wrong on hardware.
-- The two-space split makes the unscaled robot position a required input to LiDAR filtering. Passing the published position instead is a silent 25% error at 10 m, not a crash.
+- Scale-corrected `pose` and `path` alongside an unscaled `lidar` cloud is a deliberate departure from v1, which scales all three together. Whether that split is physically real is unmeasured: walk 10 m on tape and compare odom against two features in the accumulated cloud (see the footnote under Odometry scale). Two spaces: keep the current rule, and write down how `T_world_map` is composed across them. One space: scale the cloud and the TF translation with pose, like v1. Until that result exists, the overlay looking wrong on hardware is the first thing to revisit.
+- If the two-space split holds, the unscaled robot position is a required input to LiDAR filtering. Passing the published position instead is a silent 25% error at 10 m, not a crash.
 - Goals are resolved once at submit time. A later localization correction does not retarget an in-flight goal; the client can cancel and re-send if it cares.
 - Axis conversion moves to the clients, so each new client platform reimplements it. A wrong conversion is a client bug that looks like an ARModule bug. Mitigate with a reference implementation and a precise `PROTOCOL.md`.
 - The Lens client breaks, and it gains two responsibilities: converting DimOS Z-up coordinates to Lens axes, and applying its localization result to its own scene graph.

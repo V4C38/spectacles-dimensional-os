@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from dimos.ar.network.send_queue import (
+from dimos.ar.websocket.send_queue import (
     COALESCE_MESSAGE_TYPES,
     OUTBOUND_FIFO_MAXSIZE,
     ClientSendQueue,
@@ -49,7 +49,7 @@ def test_peek_message_type(payload: str, expected: str | None) -> None:
     assert peek_message_type(payload) == expected
 
 
-def test_coalesce_message_types_match_v2_telemetry() -> None:
+def test_coalesce_message_types_match_v2_robot_state() -> None:
     assert COALESCE_MESSAGE_TYPES == frozenset({"pose", "path", "state", "localization"})
 
 

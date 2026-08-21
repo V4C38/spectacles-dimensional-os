@@ -93,7 +93,7 @@ Same suffix = same role across feature modules.
 
 When the WebSocket contract changes, update in the same change:
 
-- `dimos-ar-v2/dimos/ar/network/protocol.py`
+- `dimos-ar-v2/dimos/ar/websocket/protocol.py`
 - `dimos-ar-v2/PROTOCOL.md`
 - `lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`
 

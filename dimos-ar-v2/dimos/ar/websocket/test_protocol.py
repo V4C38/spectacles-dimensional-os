@@ -5,7 +5,7 @@ import struct
 
 import pytest
 
-from dimos.ar.network.protocol import (
+from dimos.ar.websocket.protocol import (
     LIDAR_FOURCC,
     LOCALIZE_FOURCC,
     CapabilityWire,

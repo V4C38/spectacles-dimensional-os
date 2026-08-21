@@ -2,7 +2,7 @@
 
 Cross-platform contract between `ARModule` and any AR client.
 
-Keep this document, `dimos/ar/network/protocol.py`, and
+Keep this document, `dimos/ar/websocket/protocol.py`, and
 `lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts` in sync.
 
 ## Changelog
