@@ -6,7 +6,7 @@ from dimos.ar.robot.odom_correction import (
     correct_odom_path,
     correct_odom_pose,
     correct_odom_xy,
-    uncorrect_odom_position,
+    uncorrect_odom_pose,
     uncorrect_odom_xy,
 )
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
@@ -74,8 +74,19 @@ def test_correct_odom_path_corrects_every_waypoint() -> None:
     assert [pose.z for pose in corrected.poses] == [pose.z for pose in path.poses]
 
 
-def test_uncorrect_odom_position_leaves_height_unchanged() -> None:
-    assert uncorrect_odom_position((5.0, 10.0, 0.33), factor=1.25) == (4.0, 8.0, 0.33)
+def test_uncorrect_odom_pose_leaves_z_and_orientation_unchanged() -> None:
+    corrected = PoseStamped(
+        ts=12.5,
+        frame_id="world",
+        position=[5.0, 10.0, 0.33],
+        orientation=[0.0, 0.0, 0.7071068, 0.7071068],
+    )
+    uncorrected = uncorrect_odom_pose(corrected, factor=1.25)
+
+    assert uncorrected.x == pytest.approx(4.0)
+    assert uncorrected.y == pytest.approx(8.0)
+    assert uncorrected.z == corrected.z
+    assert uncorrected.orientation.x == corrected.orientation.x
 
 
 def test_factor_one_is_identity() -> None:

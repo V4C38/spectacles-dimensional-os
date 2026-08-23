@@ -9,10 +9,10 @@ import pytest
 import websockets
 
 from dimos.ar.websocket.protocol import (
-    CapabilityWire,
-    HelloRobotWire,
-    HelloWire,
-    NavGoalMessage,
+    Capability,
+    Hello,
+    NavGoal,
+    RobotDescription,
 )
 from dimos.ar.websocket.server import WebSocketServer, split_inbound_text_lines
 
@@ -23,10 +23,10 @@ def _pick_free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _sample_hello(client_id: str) -> HelloWire:
-    return HelloWire(
+def _sample_hello(client_id: str) -> Hello:
+    return Hello(
         client_id=client_id,
-        robot=HelloRobotWire(
+        robot=RobotDescription(
             display_name="Unitree Go2",
             body_bounds_m=(0.7, 0.5, 0.55),
             footprint_m=(0.7, 0.5),
@@ -34,9 +34,9 @@ def _sample_hello(client_id: str) -> HelloWire:
         ),
         requires_robot_in_view=False,
         capabilities={
-            "lidar": CapabilityWire(available=True, reason=None),
-            "navigation": CapabilityWire(available=True, reason=None),
-            "estop": CapabilityWire(available=True, reason=None),
+            "lidar": Capability(available=True, reason=None),
+            "navigation": Capability(available=True, reason=None),
+            "estop": Capability(available=True, reason=None),
         },
     )
 
@@ -47,14 +47,14 @@ class ServerHarness:
         self.loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._server: WebSocketServer | None = None
-        self.nav_goals: list[NavGoalMessage] = []
+        self.nav_goals: list[NavGoal] = []
         self._handler_kwargs = handler_kwargs
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
 
-    def _on_nav_goal(self, msg: NavGoalMessage, _websocket: object) -> None:
+    def _on_nav_goal(self, msg: NavGoal, _websocket: object, _client_id: str) -> None:
         self.nav_goals.append(msg)
 
     def start(self) -> None:
@@ -116,7 +116,13 @@ async def test_nav_goal_reaches_handler(harness: ServerHarness) -> None:
     async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as ws:
         await ws.recv()
         await ws.send(
-            json.dumps({"type": "nav_goal", "position": [1.0, 2.0, 0.0]})
+            json.dumps(
+                {
+                    "type": "nav_goal",
+                    "position": [1.0, 2.0, 0.0],
+                    "orientation": [0.0, 0.0, 0.0, 1.0],
+                }
+            )
         )
         await asyncio.sleep(0.05)
     assert len(harness.nav_goals) == 1

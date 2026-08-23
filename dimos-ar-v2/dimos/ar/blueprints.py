@@ -23,7 +23,8 @@ _unitree_go2_ar_base = (
 unitree_go2_ar = (
     _unitree_go2_ar_base.global_config(
         n_workers=len(_unitree_go2_ar_base.active_blueprints),
-    ).configurators(ClockSyncConfigurator())
+    )
+    .configurators(ClockSyncConfigurator())
     if _unitree_go2_ar_base is not None
     else None
 )

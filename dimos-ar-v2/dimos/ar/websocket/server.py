@@ -16,14 +16,14 @@ import websockets.asyncio.server as ws_server
 
 from dimos.ar.websocket.protocol import (
     LOCALIZE_FOURCC,
-    EstopMessage,
-    GetStateMessage,
-    HelloWire,
-    InboundMessage,
-    LidarData,
+    Estop,
+    GetStateRequest,
+    Hello,
+    Inbound,
+    LidarSettings,
     LocalizeObservation,
-    NavGoalMessage,
-    TimeSyncMessage,
+    NavGoal,
+    TimeSyncRequest,
     decode_inbound,
     decode_localize,
     encode_hello,
@@ -38,12 +38,12 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
-HelloSupplier = Callable[[str], HelloWire]
+HelloSupplier = Callable[[str], Hello]
 ConnectHandler = Callable[[ws_server.ServerConnection, str], None]
-NavGoalHandler = Callable[[NavGoalMessage, ws_server.ServerConnection], None]
-EstopHandler = Callable[[EstopMessage, ws_server.ServerConnection], None]
-LidarHandler = Callable[[LidarData, ws_server.ServerConnection], None]
-GetStateHandler = Callable[[GetStateMessage, ws_server.ServerConnection], None]
+NavGoalHandler = Callable[[NavGoal, ws_server.ServerConnection, str], None]
+EstopHandler = Callable[[Estop, ws_server.ServerConnection], None]
+LidarSettingsHandler = Callable[[LidarSettings, ws_server.ServerConnection], None]
+GetStateHandler = Callable[[GetStateRequest, ws_server.ServerConnection], None]
 LocalizeHandler = Callable[
     [tuple[LocalizeObservation, ...], ws_server.ServerConnection],
     Awaitable[None] | None,
@@ -52,7 +52,7 @@ DisconnectHandler = Callable[[ws_server.ServerConnection], None]
 
 PING_INTERVAL_S = 30.0
 PING_TIMEOUT_S = 30.0
-DEFAULT_MAX_MESSAGE_BYTES = 4_194_304
+DEFAULT_MAX_FRAME_BYTES = 4_194_304
 
 
 def _handshake_noise_filter(record: logging.LogRecord) -> bool:
@@ -69,7 +69,7 @@ def _new_client_id() -> str:
 
 
 class WebSocketServer:
-    """Accepts AR client connections and dispatches inbound protocol messages."""
+    """Accepts AR client connections and dispatches inbound protocol frames."""
 
     def __init__(
         self,
@@ -77,11 +77,11 @@ class WebSocketServer:
         port: int,
         loop: asyncio.AbstractEventLoop,
         hello_supplier: HelloSupplier,
-        max_message_bytes: int = DEFAULT_MAX_MESSAGE_BYTES,
+        max_frame_bytes: int = DEFAULT_MAX_FRAME_BYTES,
         on_connect: ConnectHandler | None = None,
         on_nav_goal: NavGoalHandler | None = None,
         on_estop: EstopHandler | None = None,
-        on_set_lidar: LidarHandler | None = None,
+        on_lidar_settings: LidarSettingsHandler | None = None,
         on_get_state: GetStateHandler | None = None,
         on_localize: LocalizeHandler | None = None,
         on_disconnect: DisconnectHandler | None = None,
@@ -89,11 +89,11 @@ class WebSocketServer:
         self._port = port
         self._loop = loop
         self._hello_supplier = hello_supplier
-        self._max_message_bytes = max_message_bytes
+        self._max_frame_bytes = max_frame_bytes
         self._on_connect = on_connect
         self._on_nav_goal = on_nav_goal
         self._on_estop = on_estop
-        self._on_set_lidar = on_set_lidar
+        self._on_lidar_settings = on_lidar_settings
         self._on_get_state = on_get_state
         self._on_localize = on_localize
         self._on_disconnect = on_disconnect
@@ -145,7 +145,7 @@ class WebSocketServer:
                 self._port,
                 ping_interval=PING_INTERVAL_S,
                 ping_timeout=PING_TIMEOUT_S,
-                max_size=self._max_message_bytes,
+                max_size=self._max_frame_bytes,
                 logger=ws_logger,
             ):
                 logger.info("WebSocket server listening", host=host, port=self._port)
@@ -194,9 +194,9 @@ class WebSocketServer:
                         raise TypeError("Unsupported WebSocket frame type")
                     for line in split_inbound_text_lines(message):
                         inbound = decode_inbound(line)
-                        await self._dispatch_inbound(inbound, websocket)
+                        await self._dispatch_inbound(inbound, websocket, client_id)
                 except (TypeError, ValueError) as exc:
-                    logger.warning("Invalid inbound WebSocket message", error=str(exc))
+                    logger.warning("Invalid inbound WebSocket frame", error=str(exc))
                 except Exception:
                     logger.exception("Unhandled inbound WebSocket handler error")
         except websockets.ConnectionClosed as exc:
@@ -237,10 +237,11 @@ class WebSocketServer:
 
     async def _dispatch_inbound(
         self,
-        inbound: InboundMessage,
+        inbound: Inbound,
         websocket: ws_server.ServerConnection,
+        client_id: str,
     ) -> None:
-        if isinstance(inbound, TimeSyncMessage):
+        if isinstance(inbound, TimeSyncRequest):
             server_recv_ts = time.time()
             await websocket.send(
                 encode_time(
@@ -250,19 +251,19 @@ class WebSocketServer:
                 )
             )
             return
-        if isinstance(inbound, NavGoalMessage):
+        if isinstance(inbound, NavGoal):
             if self._on_nav_goal is not None:
-                self._on_nav_goal(inbound, websocket)
+                self._on_nav_goal(inbound, websocket, client_id)
             return
-        if isinstance(inbound, EstopMessage):
+        if isinstance(inbound, Estop):
             if self._on_estop is not None:
                 self._on_estop(inbound, websocket)
             return
-        if isinstance(inbound, LidarData):
-            if self._on_set_lidar is not None:
-                self._on_set_lidar(inbound, websocket)
+        if isinstance(inbound, LidarSettings):
+            if self._on_lidar_settings is not None:
+                self._on_lidar_settings(inbound, websocket)
             return
-        if isinstance(inbound, GetStateMessage):
+        if isinstance(inbound, GetStateRequest):
             if self._on_get_state is not None:
                 self._on_get_state(inbound, websocket)
             return

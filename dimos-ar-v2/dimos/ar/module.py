@@ -5,19 +5,19 @@ from typing import ClassVar
 from dimos_lcm.std_msgs import Bool, String
 import websockets.asyncio.server as ws_server
 
+from dimos.ar.navigation.nav_goals import NavGoalCoordinator
 from dimos.ar.robot.go2 import GO2_PROFILE
 from dimos.ar.robot.state_publisher import RobotStatePublisher
 from dimos.ar.websocket.protocol import (
-    CapabilityWire,
-    EstopMessage,
-    GetStateMessage,
-    HelloRobotWire,
-    HelloWire,
-    LidarData,
+    Capability,
+    Estop,
+    GetStateRequest,
+    Hello,
+    LidarSettings,
     LocalizeObservation,
-    NavGoalMessage,
-    StateNavWire,
-    StateWire,
+    NavGoal,
+    RobotDescription,
+    StateSnapshot,
     encode_state,
 )
 from dimos.ar.websocket.server import WebSocketServer
@@ -32,7 +32,7 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
-_DEFAULT_LIDAR = LidarData(
+_DEFAULT_LIDAR = LidarSettings(
     enabled=False,
     min_height_m=0.1,
     max_height_m=1.5,
@@ -60,7 +60,8 @@ class ARModule(Module):  # type: ignore[misc]
 
     _ws_server: WebSocketServer
     _state_publisher: RobotStatePublisher
-    _lidar: LidarData
+    _nav_goal_coordinator: NavGoalCoordinator
+    _lidar: LidarSettings
 
     @rpc
     def build(self) -> None:
@@ -74,10 +75,13 @@ class ARModule(Module):  # type: ignore[misc]
             on_connect=self._on_client_connect,
             on_nav_goal=self._on_nav_goal,
             on_estop=self._on_estop,
-            on_set_lidar=self._on_set_lidar,
+            on_lidar_settings=self._on_lidar_settings,
             on_get_state=self._on_get_state,
             on_localize=self._on_localize,
             on_disconnect=self._on_client_disconnect,
+        )
+        self._nav_goal_coordinator = NavGoalCoordinator(
+            odom_correction_factor=GO2_PROFILE.odom_correction_factor,
         )
         self._state_publisher = RobotStatePublisher(
             self._ws_server,
@@ -101,10 +105,10 @@ class ARModule(Module):  # type: ignore[misc]
             ws_server_obj.stop()
         super().stop()
 
-    def _hello_for_client(self, client_id: str) -> HelloWire:
-        return HelloWire(
+    def _hello_for_client(self, client_id: str) -> Hello:
+        return Hello(
             client_id=client_id,
-            robot=HelloRobotWire(
+            robot=RobotDescription(
                 display_name=GO2_PROFILE.display_name,
                 body_bounds_m=GO2_PROFILE.body_bounds_m,
                 footprint_m=GO2_PROFILE.footprint_m,
@@ -112,22 +116,22 @@ class ARModule(Module):  # type: ignore[misc]
             ),
             requires_robot_in_view=False,
             capabilities={
-                "lidar": CapabilityWire(available=True, reason=None),
-                "navigation": CapabilityWire(available=True, reason=None),
-                "estop": CapabilityWire(available=True, reason=None),
+                "lidar": Capability(available=True, reason=None),
+                "navigation": Capability(available=True, reason=None),
+                "estop": Capability(available=True, reason=None),
             },
         )
 
-    def _state_wire(self) -> StateWire:
-        return StateWire(
+    def _state_snapshot(self) -> StateSnapshot:
+        return StateSnapshot(
             connected_clients=self._ws_server.connection_count,
             lidar=self._lidar,
-            nav=StateNavWire(state="idle", outcome=None, goal=None),
+            nav=self._nav_goal_coordinator.nav_state(),
             alignment_stale=False,
         )
 
     def _broadcast_state(self) -> None:
-        self._ws_server.schedule_broadcast_text(encode_state(self._state_wire()))
+        self._ws_server.schedule_broadcast_text(encode_state(self._state_snapshot()))
 
     def _on_client_connect(
         self,
@@ -144,17 +148,26 @@ class ARModule(Module):  # type: ignore[misc]
 
     def _on_nav_goal(
         self,
-        msg: NavGoalMessage,
+        msg: NavGoal,
         _websocket: ws_server.ServerConnection,
+        client_id: str,
     ) -> None:
-        logger.info("nav_goal received", position=msg.position)
+        goal = self._nav_goal_coordinator.submit_client_goal(msg)
+        if self.goal_request.transport is None:
+            logger.warning("nav_goal ignored — goal_request transport is not wired")
+            return
+        self.goal_request.publish(goal)
+        logger.info("nav_goal published", client_id=client_id, position=msg.position)
+        self._broadcast_state()
 
-    def _on_estop(self, _msg: EstopMessage, _websocket: ws_server.ServerConnection) -> None:
+    def _on_estop(self, _msg: Estop, _websocket: ws_server.ServerConnection) -> None:
+        if self._nav_goal_coordinator.on_estop():
+            self._broadcast_state()
         self._publish_stop()
 
-    def _on_set_lidar(
+    def _on_lidar_settings(
         self,
-        msg: LidarData,
+        msg: LidarSettings,
         _websocket: ws_server.ServerConnection,
     ) -> None:
         self._lidar = msg
@@ -163,7 +176,7 @@ class ARModule(Module):  # type: ignore[misc]
 
     def _on_get_state(
         self,
-        _msg: GetStateMessage,
+        _msg: GetStateRequest,
         _websocket: ws_server.ServerConnection,
     ) -> None:
         self._broadcast_state()
@@ -193,7 +206,8 @@ class ARModule(Module):  # type: ignore[misc]
         self._state_publisher.publish_path(msg)
 
     async def handle_goal_reached(self, msg: Bool) -> None:
-        del msg
+        if self._nav_goal_coordinator.on_goal_reached(msg):
+            self._broadcast_state()
 
     async def handle_navigation_state(self, msg: String) -> None:
         del msg

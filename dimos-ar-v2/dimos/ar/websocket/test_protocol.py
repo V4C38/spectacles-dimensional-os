@@ -8,17 +8,17 @@ import pytest
 from dimos.ar.websocket.protocol import (
     LIDAR_FOURCC,
     LOCALIZE_FOURCC,
-    CapabilityWire,
-    EstopMessage,
-    GetStateMessage,
-    HelloRobotWire,
-    HelloWire,
-    LidarData,
+    Capability,
+    Estop,
+    GetStateRequest,
+    Hello,
+    LidarSettings,
     LocalizeObservation,
-    NavGoalMessage,
-    StateNavWire,
-    StateWire,
-    TimeSyncMessage,
+    NavGoal,
+    NavState,
+    RobotDescription,
+    StateSnapshot,
+    TimeSyncRequest,
     decode_inbound,
     decode_localize,
     encode_hello,
@@ -30,10 +30,10 @@ from dimos.ar.websocket.protocol import (
 )
 
 
-def _sample_hello(client_id: str = "abc123") -> HelloWire:
-    return HelloWire(
+def _sample_hello(client_id: str = "abc123") -> Hello:
+    return Hello(
         client_id=client_id,
-        robot=HelloRobotWire(
+        robot=RobotDescription(
             display_name="Unitree Go2",
             body_bounds_m=(0.7, 0.5, 0.55),
             footprint_m=(0.7, 0.5),
@@ -41,9 +41,9 @@ def _sample_hello(client_id: str = "abc123") -> HelloWire:
         ),
         requires_robot_in_view=False,
         capabilities={
-            "lidar": CapabilityWire(available=True, reason=None),
-            "navigation": CapabilityWire(available=True, reason=None),
-            "estop": CapabilityWire(available=True, reason=None),
+            "lidar": Capability(available=True, reason=None),
+            "navigation": Capability(available=True, reason=None),
+            "estop": Capability(available=True, reason=None),
         },
     )
 
@@ -65,17 +65,17 @@ def test_encode_hello_has_no_protocol_version() -> None:
 
 
 def test_encode_state_round_trip_fields() -> None:
-    wire = StateWire(
+    snapshot = StateSnapshot(
         connected_clients=2,
-        lidar=LidarData(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0),
-        nav=StateNavWire(state="navigating", outcome=None, goal=None),
+        lidar=LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0),
+        nav=NavState(state="following_path", outcome=None),
         alignment_stale=False,
     )
-    msg = _parse_json_line(encode_state(wire))
+    msg = _parse_json_line(encode_state(snapshot))
     assert msg["type"] == "state"
     assert msg["server"]["connected_clients"] == 2
     assert msg["lidar"]["max_range_m"] == 5.0
-    assert msg["nav"]["state"] == "navigating"
+    assert msg["nav"]["state"] == "following_path"
 
 
 def test_encode_time_and_pose() -> None:
@@ -98,13 +98,25 @@ def test_encode_time_and_pose() -> None:
 
 def test_decode_nav_goal_and_estop() -> None:
     nav = decode_inbound(
-        json.dumps({"type": "nav_goal", "position": [1.0, 0.0, 0.0]})
+        json.dumps(
+            {
+                "type": "nav_goal",
+                "position": [1.0, 0.0, 0.0],
+                "orientation": [0.0, 0.0, 0.0, 1.0],
+            }
+        )
     )
-    assert isinstance(nav, NavGoalMessage)
+    assert isinstance(nav, NavGoal)
     assert nav.position == (1.0, 0.0, 0.0)
+    assert nav.orientation == (0.0, 0.0, 0.0, 1.0)
 
     estop = decode_inbound(json.dumps({"type": "estop"}))
-    assert isinstance(estop, EstopMessage)
+    assert isinstance(estop, Estop)
+
+
+def test_decode_nav_goal_requires_orientation() -> None:
+    with pytest.raises(ValueError, match="orientation"):
+        decode_inbound(json.dumps({"type": "nav_goal", "position": [1.0, 0.0, 0.0]}))
 
 
 def test_decode_set_lidar_requires_all_fields() -> None:
@@ -122,7 +134,7 @@ def test_decode_set_lidar_requires_all_fields() -> None:
             }
         )
     )
-    assert isinstance(msg, LidarData)
+    assert isinstance(msg, LidarSettings)
     assert msg.max_range_m == 5.0
 
 
@@ -143,11 +155,11 @@ def test_decode_set_lidar_rejects_inverted_band() -> None:
 
 def test_decode_time_sync_and_get_state() -> None:
     sync = decode_inbound(json.dumps({"type": "time_sync", "client_send_ts": 99.5}))
-    assert isinstance(sync, TimeSyncMessage)
+    assert isinstance(sync, TimeSyncRequest)
     assert sync.client_send_ts == 99.5
 
     state = decode_inbound(json.dumps({"type": "get_state"}))
-    assert isinstance(state, GetStateMessage)
+    assert isinstance(state, GetStateRequest)
 
 
 def test_decode_unknown_type_rejected() -> None:

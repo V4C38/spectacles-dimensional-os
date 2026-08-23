@@ -1,4 +1,4 @@
-"""WebSocket wire codec — keep in sync with PROTOCOL.md."""
+"""WebSocket protocol codec — keep in sync with PROTOCOL.md."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Any, Literal
 LIDAR_FOURCC = 0x4C444152
 LOCALIZE_FOURCC = 0x4C4F4341
 
-WireNavState = Literal["idle", "navigating", "resolved"]
+NavPhase = Literal["idle", "following_path", "recovery", "resolved"]
 NavOutcome = Literal["succeeded", "failed"]
 CameraDistortionModel = Literal["none", "plumb_bob", "equidistant"]
 
@@ -61,23 +61,23 @@ def _quat(data: dict[str, Any], key: str) -> tuple[float, float, float, float]:
 
 
 @dataclass(frozen=True)
-class TimeSyncMessage:
+class TimeSyncRequest:
     client_send_ts: float
 
 
 @dataclass(frozen=True)
-class NavGoalMessage:
+class NavGoal:
     position: tuple[float, float, float]
-    orientation: tuple[float, float, float, float] | None = None
+    orientation: tuple[float, float, float, float]
 
 
 @dataclass(frozen=True)
-class EstopMessage:
+class Estop:
     pass
 
 
 @dataclass(frozen=True)
-class LidarData:
+class LidarSettings:
     enabled: bool
     min_height_m: float
     max_height_m: float
@@ -85,32 +85,34 @@ class LidarData:
 
 
 @dataclass(frozen=True)
-class GetStateMessage:
+class GetStateRequest:
     pass
 
 
-InboundMessage = TimeSyncMessage | NavGoalMessage | EstopMessage | LidarData | GetStateMessage
+Inbound = TimeSyncRequest | NavGoal | Estop | LidarSettings | GetStateRequest
 
 
-def decode_inbound(text: str) -> InboundMessage:
-    """Parse an inbound JSON message. Raises ValueError on malformed input."""
+def decode_inbound(text: str) -> Inbound:
+    """Parse an inbound JSON frame. Raises ValueError on malformed input."""
     data = json.loads(text)
     if not isinstance(data, dict):
-        raise TypeError("Message must be a JSON object")
+        raise TypeError("Frame must be a JSON object")
     msg_type = _require_type(data, "type", str)
 
     if msg_type == "time_sync":
         raw_ts = data.get("client_send_ts")
         if not isinstance(raw_ts, (int, float)):
             raise ValueError("Missing or invalid field: client_send_ts")
-        return TimeSyncMessage(client_send_ts=float(raw_ts))
+        return TimeSyncRequest(client_send_ts=float(raw_ts))
 
     if msg_type == "nav_goal":
-        orientation = _quat(data, "orientation") if "orientation" in data else None
-        return NavGoalMessage(position=_vec3(data, "position"), orientation=orientation)
+        return NavGoal(
+            position=_vec3(data, "position"),
+            orientation=_quat(data, "orientation"),
+        )
 
     if msg_type == "estop":
-        return EstopMessage()
+        return Estop()
 
     if msg_type == "set_lidar":
         enabled = _require_type(data, "enabled", bool)
@@ -119,7 +121,7 @@ def decode_inbound(text: str) -> InboundMessage:
         max_range_m = _finite_float(data, "max_range_m")
         if min_height_m > max_height_m:
             raise ValueError("min_height_m must be <= max_height_m")
-        return LidarData(
+        return LidarSettings(
             enabled=enabled,
             min_height_m=min_height_m,
             max_height_m=max_height_m,
@@ -127,9 +129,9 @@ def decode_inbound(text: str) -> InboundMessage:
         )
 
     if msg_type == "get_state":
-        return GetStateMessage()
+        return GetStateRequest()
 
-    raise ValueError(f"Unknown inbound message type: {msg_type!r}")
+    raise ValueError(f"Unknown inbound frame type: {msg_type!r}")
 
 
 @dataclass(frozen=True)
@@ -251,13 +253,13 @@ def _decode_intrinsics(data: dict[str, Any]) -> Intrinsics:
 
 
 @dataclass(frozen=True)
-class CapabilityWire:
+class Capability:
     available: bool
     reason: str | None
 
 
 @dataclass(frozen=True)
-class HelloRobotWire:
+class RobotDescription:
     display_name: str
     body_bounds_m: tuple[float, float, float]
     footprint_m: tuple[float, float]
@@ -265,14 +267,14 @@ class HelloRobotWire:
 
 
 @dataclass(frozen=True)
-class HelloWire:
+class Hello:
     client_id: str
-    robot: HelloRobotWire
+    robot: RobotDescription
     requires_robot_in_view: bool
-    capabilities: dict[str, CapabilityWire]
+    capabilities: dict[str, Capability]
 
 
-def encode_hello(payload: HelloWire) -> str:
+def encode_hello(payload: Hello) -> str:
     return encode_text(
         {
             "type": "hello",
@@ -293,36 +295,20 @@ def encode_hello(payload: HelloWire) -> str:
 
 
 @dataclass(frozen=True)
-class NavGoalWire:
-    source: str
-    position: tuple[float, float, float]
-    orientation: tuple[float, float, float, float]
-
-
-@dataclass(frozen=True)
-class StateNavWire:
-    state: WireNavState
+class NavState:
+    state: NavPhase
     outcome: NavOutcome | None
-    goal: NavGoalWire | None
 
 
 @dataclass(frozen=True)
-class StateWire:
+class StateSnapshot:
     connected_clients: int
-    lidar: LidarData
-    nav: StateNavWire
+    lidar: LidarSettings
+    nav: NavState
     alignment_stale: bool
 
 
-def encode_state(payload: StateWire) -> str:
-    nav_goal: dict[str, Any] | None = None
-    if payload.nav.goal is not None:
-        goal = payload.nav.goal
-        nav_goal = {
-            "source": goal.source,
-            "position": list(goal.position),
-            "orientation": list(goal.orientation),
-        }
+def encode_state(payload: StateSnapshot) -> str:
     return encode_text(
         {
             "type": "state",
@@ -336,7 +322,6 @@ def encode_state(payload: StateWire) -> str:
             "nav": {
                 "state": payload.nav.state,
                 "outcome": payload.nav.outcome,
-                "goal": nav_goal,
             },
             "alignment": {"stale": payload.alignment_stale},
         }

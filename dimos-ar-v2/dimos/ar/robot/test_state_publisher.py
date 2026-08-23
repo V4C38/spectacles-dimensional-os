@@ -8,7 +8,7 @@ import pytest
 
 from dimos.ar.robot.go2 import ODOM_CORRECTION_FACTOR
 from dimos.ar.robot.state_publisher import RobotStatePublisher
-from dimos.ar.websocket.protocol import LIDAR_FOURCC, LidarData
+from dimos.ar.websocket.protocol import LIDAR_FOURCC, LidarSettings
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
 
@@ -99,7 +99,7 @@ def test_publish_lidar_disabled_skips_binary() -> None:
     sink = _RecordingBroadcast()
     publisher = RobotStatePublisher(
         sink,
-        lidar=LidarData(enabled=False, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0),
+        lidar=LidarSettings(enabled=False, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0),
         lidar_max_hz=0.0,
     )
     points = np.array([[0.5, 0.0, 0.5]], dtype=np.float32)
@@ -114,7 +114,7 @@ def test_publish_lidar_enabled_uses_raw_robot_position() -> None:
     sink = _RecordingBroadcast()
     publisher = RobotStatePublisher(
         sink,
-        lidar=LidarData(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=15.0),
+        lidar=LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=15.0),
         lidar_max_hz=0.0,
         lidar_target_points=1,
         odom_correction_factor=ODOM_CORRECTION_FACTOR,
@@ -137,7 +137,7 @@ def test_publish_lidar_enabled_uses_raw_robot_position() -> None:
 def test_set_lidar_updates_filter_settings() -> None:
     sink = _RecordingBroadcast()
     publisher = RobotStatePublisher(sink)
-    updated = LidarData(enabled=True, min_height_m=0.2, max_height_m=1.2, max_range_m=4.0)
+    updated = LidarSettings(enabled=True, min_height_m=0.2, max_height_m=1.2, max_range_m=4.0)
 
     publisher.set_lidar(updated)
 

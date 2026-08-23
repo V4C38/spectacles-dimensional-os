@@ -12,7 +12,7 @@ from dimos.ar.robot.lidar_filter import (
 )
 from dimos.ar.robot.odom_correction import correct_odom_path, correct_odom_pose
 from dimos.ar.websocket.protocol import (
-    LidarData,
+    LidarSettings,
     encode_lidar_binary,
     encode_path,
     encode_pose,
@@ -35,7 +35,7 @@ class _BroadcastSink(Protocol):
 
 
 class RobotStatePublisher:
-    """DimOS stream handlers → wire-ready pose, path, and LiDAR for all clients."""
+    """DimOS stream handlers → client-ready pose, path, and LiDAR for all clients."""
 
     def __init__(
         self,
@@ -46,7 +46,7 @@ class RobotStatePublisher:
         lidar_max_hz: float = DEFAULT_LIDAR_MAX_HZ,
         lidar_voxel_size_m: float = 0.05,
         lidar_target_points: int = DEFAULT_TARGET_POINTS,
-        lidar: LidarData | None = None,
+        lidar: LidarSettings | None = None,
     ) -> None:
         self._ws = ws_server
         self._odom_correction_factor = odom_correction_factor
@@ -54,7 +54,7 @@ class RobotStatePublisher:
         self._lidar_max_hz = lidar_max_hz
         self._lidar_voxel_size_m = lidar_voxel_size_m
         self._lidar_target_points = lidar_target_points
-        self._lidar = lidar or LidarData(
+        self._lidar = lidar or LidarSettings(
             enabled=False,
             min_height_m=0.1,
             max_height_m=1.5,
@@ -65,10 +65,10 @@ class RobotStatePublisher:
         self._lidar_last_emit_mono = 0.0
 
     @property
-    def lidar(self) -> LidarData:
+    def lidar(self) -> LidarSettings:
         return self._lidar
 
-    def set_lidar(self, lidar: LidarData) -> None:
+    def set_lidar(self, lidar: LidarSettings) -> None:
         self._lidar = lidar
 
     def publish_odom(self, msg: PoseStamped) -> None:
@@ -109,7 +109,7 @@ class RobotStatePublisher:
         robot_position = self._raw_robot_position()
         downsampled = msg.voxel_downsample(voxel_size=self._lidar_voxel_size_m)
         points = downsampled.points_f32()
-        settings = LidarFilterSettings.from_wire(
+        settings = LidarFilterSettings.from_settings(
             self._lidar,
             target_points=self._lidar_target_points,
         )
@@ -118,10 +118,10 @@ class RobotStatePublisher:
             settings=settings,
             robot_position=robot_position,
         )
-        wire_points = [tuple(point) for point in prepared]
+        points = [tuple(point) for point in prepared]
         self._lidar_last_emit_mono = time.monotonic()
         self._ws.schedule_broadcast_binary(
-            encode_lidar_binary(ts=msg.ts, points=wire_points),
+            encode_lidar_binary(ts=msg.ts, points=points),
         )
 
     def _raw_robot_position(self) -> tuple[float, float, float] | None:

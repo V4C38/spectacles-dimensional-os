@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from dimos.ar.websocket.protocol import LidarData
+from dimos.ar.websocket.protocol import LidarSettings
 
 DEFAULT_TARGET_POINTS = 2500
 
@@ -26,7 +26,9 @@ class LidarFilterSettings:
     target_points: int = DEFAULT_TARGET_POINTS
 
     @classmethod
-    def from_wire(cls, lidar: LidarData, *, target_points: int = DEFAULT_TARGET_POINTS) -> LidarFilterSettings:
+    def from_settings(
+        cls, lidar: LidarSettings, *, target_points: int = DEFAULT_TARGET_POINTS
+    ) -> LidarFilterSettings:
         return cls(
             min_height_m=lidar.min_height_m,
             max_height_m=lidar.max_height_m,
@@ -134,7 +136,7 @@ def prepare_lidar_points(
     settings: LidarFilterSettings,
     robot_position: tuple[float, float, float] | None,
 ) -> NDArray[np.float32]:
-    """Band-filter then subsample. ``robot_position`` must be raw odom, not wire-corrected."""
+    """Band-filter then subsample. ``robot_position`` must be raw odom, not display-scaled."""
     filtered = filter_points(points, settings=settings)
     return subsample_near_robot(
         filtered,

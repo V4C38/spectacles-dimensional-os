@@ -15,12 +15,12 @@ logger = setup_logger()
 
 OUTBOUND_FIFO_MAXSIZE = 64
 OUTBOUND_BACKLOG_LOG_INTERVAL_S = 5.0
-COALESCE_MESSAGE_TYPES = frozenset({"pose", "path", "state", "localization"})
-_MESSAGE_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
+COALESCE_FRAME_TYPES = frozenset({"pose", "path", "state", "localization"})
+_FRAME_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
 
 
-def peek_message_type(text: str) -> str | None:
-    match = _MESSAGE_TYPE_RE.search(text)
+def peek_frame_type(text: str) -> str | None:
+    match = _FRAME_TYPE_RE.search(text)
     return match.group(1) if match else None
 
 
@@ -59,9 +59,9 @@ class ClientSendQueue:
     def enqueue(self, text: str) -> None:
         if self._closed:
             return
-        msg_type = peek_message_type(text)
-        if msg_type in COALESCE_MESSAGE_TYPES:
-            self._coalesce_latest[msg_type] = text
+        frame_type = peek_frame_type(text)
+        if frame_type in COALESCE_FRAME_TYPES:
+            self._coalesce_latest[frame_type] = text
         else:
             self._sequence += 1
             item = (self._sequence, text)
@@ -131,7 +131,7 @@ class ClientSendQueue:
             logger.warning(
                 "WebSocket outbound text send failed",
                 error=str(exc),
-                message_type=peek_message_type(text),
+                frame_type=peek_frame_type(text),
             )
 
     async def _send_binary(self, data: bytes) -> None:

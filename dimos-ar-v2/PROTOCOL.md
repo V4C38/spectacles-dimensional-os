@@ -133,9 +133,9 @@ Any number of clients may connect at once.
 - **Control is last-command-wins.** ARModule does not arbitrate. The most
   recent `nav_goal` or `estop` takes effect regardless of which client sent it.
 
-`hello` assigns each connection a `client_id`, and `state.nav.goal.source`
-reports which client issued the active goal, so a client can show "someone else
-is driving" without ARModule needing a locking scheme.
+`hello` assigns each connection a `client_id` for logging and future features.
+Navigation overlay uses `path` and `pose`; `state.nav` tracks client-issued
+goal sessions only.
 
 ## Handshake
 
@@ -164,7 +164,7 @@ On connect the server sends `hello`, then `state`.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `client_id` | string | Server-assigned, unique per connection. Appears in `state.nav.goal.source`. |
+| `client_id` | string | Server-assigned, unique per connection. |
 | `robot.display_name` | string | For client UI. |
 | `robot.body_bounds_m` | `[L, W, H]` | Axis-aligned envelope in `world` axes: length X, width Y, height Z. |
 | `robot.footprint_m` | `[L, W]` | Ground footprint for nav UI. |
@@ -203,8 +203,7 @@ whenever any field changes.
   },
   "nav": {
     "state": "idle",
-    "outcome": null,
-    "goal": null
+    "outcome": null
   },
   "alignment": {
     "stale": false
@@ -214,25 +213,19 @@ whenever any field changes.
 
 **`server.connected_clients`:** live WebSocket connections to this process.
 
-**`nav.state`:** `"idle"` | `"navigating"` | `"resolved"`
+**`nav.state`:** `"idle"` | `"following_path"` | `"recovery"` | `"resolved"`
+
+DimOS `NavigationState` uses the first three (`idle`, `following_path`, `recovery`).
+`resolved` is AR-specific: the planner finished and `nav.outcome` carries the result.
 
 **`nav.outcome`:** non-null exactly when `nav.state` is `"resolved"`:
 `"succeeded"` | `"failed"`
 
-**`nav.goal`:** non-null exactly when `nav.state` is `"navigating"`:
-
-```json
-{
-  "source": "c3f1a9",
-  "position": [1.0, 2.0, 0.0],
-  "orientation": [0.0, 0.0, 0.0, 1.0]
-}
-```
-
-`source` is the `client_id` of the issuing client, or `"dimos"` for a goal
-observed on a DimOS input stream — a web UI click, or anything else driving the
-planner. Observed goals live inside `state` rather than in a message of their
-own, so a reconnecting client and a live one see identical data.
+Where the robot is going, use `path` (and `pose` for the robot). `state.nav`
+does not mirror planner goals — it only reflects a **client `nav_goal` session**:
+`following_path` after the client sends a goal, `resolved` when `goal_reached`
+fires for that session. DimOS-initiated navigation (MCP, patrolling, etc.) still
+shows up on `path` without changing `state.nav`.
 
 **`alignment.stale`:** `true` when ARModule believes the client's alignment
 has drifted and cannot fix it without help. This only ever becomes `true` under
@@ -431,9 +424,9 @@ time to server time before encoding `capture_ts`.
 }
 ```
 
-Goal in `world`. Send it in the same coordinates you receive `pose` in — the
-ARModule inverts the scale correction on ingress, so a goal placed on top of the
-robot's rendered position resolves to the robot's actual odometry position.
+Goal in `world`. **`position` and `orientation` are both required** — same fields
+as `pose`. Send them in the same coordinates you receive `pose` in; ARModule
+inverts the scale correction on ingress.
 
 ### `estop`
 

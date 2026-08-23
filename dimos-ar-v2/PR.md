@@ -90,20 +90,15 @@ self.register_disposable(
 
 ## What ARModule does until this lands
 
-Subscribe to the planner's **public input streams** that `unitree_go2_ar` actually
-wires:
+Client overlay uses **`path`** (route + target position) and **`pose`**
+(robot). **`goal_reached`** drives `state.nav.outcome` for client-issued
+`nav_goal` sessions only. ARModule does not subscribe to planner input streams
+or mirror accepted goals into `state`.
 
-| Stream | Covers |
-|--------|--------|
-| `goal_request` | Client `nav_goal` from ARModule |
-| `target` | External target injection |
+`goal_active` remains useful if a future UI needs the accepted goal pose on the
+DimOS bus (including `set_goal` RPC) without inferring it from `path`.
 
-The web UI click path runs `clicked_point` → `MovementManager` → `goal`
-(`PointStamped`), which the mobile blueprint connects to the planner. That path
-is covered when the blueprint remaps `MovementManager.goal` into the planner's
-goal input.
-
-### Blind spot
+### Blind spot (observers only, not overlay)
 
 Direct `set_goal` RPC calls bypass all streams. Known callers in DimOS:
 
@@ -113,17 +108,15 @@ Direct `set_goal` RPC calls bypass all streams. Known callers in DimOS:
 - `navigation/frontier_exploration/`
 - `robot/unitree/unitree_skill_container.py`
 
-**None of these are composed in `unitree_go2_ar` today**, so the gap is real but
-currently unreachable. Document in `navigation/goals.py`; fix with this PR
-before adding agent or patrolling modules to the blueprint.
+**None of these are composed in `unitree_go2_ar` today.** The RPC path still
+plans and publishes `path`; only observers that need the accepted goal pose on a
+stream would miss it until this PR lands.
 
-### Nav status without `goal_active`
+### Nav status today
 
-Derive from:
-
-- Goals observed on subscribed input streams (see above)
-- `goal_reached: Out[Bool]` — terminal success/failure
-- `path: Out[Path]` — planner publishes an empty `Path()` on cancel or arrival
+- **`path`** — route and whether the robot is moving (non-empty vs empty)
+- **`goal_reached`** — terminal success/failure for client `nav_goal` sessions
+- **`state.nav.state`** — `following_path` / `resolved` / `idle` for those sessions
 
 ```python
 # global_planner.py cancel_goal
@@ -145,8 +138,5 @@ either wiring it or removing the port in a follow-up.
 
 ## After merge
 
-In `dimos-ar-v2/dimos/ar/navigation/goals.py`:
-
-1. Subscribe to `goal_active` instead of (or in addition to) input streams.
-2. Remove the `set_goal` blind-spot docstring caveat.
-3. Drop redundant multi-stream subscription if `goal_active` is sufficient.
+Optional: subscribe to `goal_active` if ARModule needs to observe DimOS-originated
+goals on a stream. Overlay clients can keep using `path` and `pose`.

@@ -1,8 +1,33 @@
 # Cursor rules — spectacles-dimensional-os (monorepo)
 
-This repository combines the DimOS AR bridge and the Spectacles Lens client.
-It is **not a fork of DimOS** — a separate package that depends on DimOS and
-composes into blueprints via `autoconnect`.
+This repository composes **`ARModule`** into DimOS blueprints and ships a
+Spectacles Lens client. It is **not a fork of DimOS** — import the installed
+`dimos` package and wire via `autoconnect`.
+
+## Names (DimOS-shaped)
+
+Same pattern as `RelocalizationModule` / `dimos.mapping.relocalization` /
+`unitree_go2_relocalization`:
+
+| Role | Name |
+|------|------|
+| Class | `ARModule` in `dimos/ar/module.py` |
+| Import | `dimos.ar` |
+| Blueprint | `unitree_go2_ar` (`dimos run unitree-go2-ar`) |
+| Wire peer | `server` — `server_recv_ts` / `server_send_ts`, `state.server` |
+
+Do **not** call it a bridge, an AR package, or `ar_go2`. Prose uses **`ARModule`**.
+The WebSocket accept loop is a collaborator (`websocket/server.py`), not the class.
+Lens `ARBridge/` stays until the Lens adaptation phase.
+
+Frozen v1 (`dimos-ar/`) still uses `ARBridge` / `ar_go2` — leave it.
+
+## Chat — correct imprecise terms
+
+When the user uses a technical term that does not match the protocol, API, or
+abstraction layer under discussion, correct it in the reply before continuing.
+Give the canonical term for that context. If a related term is also acceptable
+at that layer, say so. Do not silently adopt the incorrect word.
 
 ## Layout
 
@@ -10,16 +35,17 @@ composes into blueprints via `autoconnect`.
 spectacles-dimensional-os/
 ├── README.md                    # whole-project overview, setup, doc map
 ├── assets/                      # README gifs, demo media (NOT Lens Studio Assets/)
-├── dimos-ar-v2/                 # active bridge (learning-first rebuild)
-│   ├── dimos/ar/                # ARBridge module, protocol, alignment seam, …
+├── dimos-ar-v2/                 # ARModule (learning-first rebuild)
+│   ├── dimos/ar/module.py       # ARModule — DimOS In/Out surface
+│   ├── dimos/ar/blueprints.py   # unitree_go2_ar
 │   ├── PROTOCOL.md              # JSON WebSocket contract (cross-repo)
 │   ├── PR.md                    # documented upstream DimOS change (not yet filed)
 │   └── tests colocated under dimos/ar/
-├── dimos-ar/                    # frozen reference — do not edit, not installed, not in CI
+├── dimos-ar/                    # frozen v1 — do not edit, not installed, not in CI
 ├── launcher/                    # CLI scripts + web UI for setup/start
 │   ├── Start Launcher.command   # Finder double-click entry (http://127.0.0.1:8790)
 │   ├── scripts/                 # setup.sh, start.sh, start-launcher.sh, run-ci.sh, …
-│   └── app/                     # FastAPI bridge launcher
+│   └── app/                     # FastAPI launcher
 └── lens-studio/                 # Spectacles Lens Studio project
     ├── spectacles-dimensional-os.esproj   # open THIS file (never from repo root)
     └── Assets/Scripts/          # Lens TypeScript (ARBridgeServices, …)
@@ -27,14 +53,14 @@ spectacles-dimensional-os/
 
 | Component | Location | Notes |
 |-----------|----------|-------|
-| Active bridge | `dimos-ar-v2/dimos/ar/` | Platform-agnostic — no Spectacles logic |
-| Frozen reference | `dimos-ar/` | Read-only; deleted once v2 replaces it |
-| Blueprint entry | `dimos-ar-v2/dimos/ar/blueprints.py` | Run via `./launcher/scripts/start.sh` |
-| Cross-platform contract | `dimos-ar-v2/PROTOCOL.md` | JSON WebSocket API |
+| ARModule | `dimos-ar-v2/dimos/ar/` | Platform-agnostic — no Spectacles logic |
+| Frozen v1 | `dimos-ar/` | Read-only; deleted once v2 replaces it |
+| Blueprint | `dimos-ar-v2/dimos/ar/blueprints.py` | `unitree_go2_ar` |
+| Contract | `dimos-ar-v2/PROTOCOL.md` | JSON WebSocket API |
 | Spectacles Lens | `lens-studio/` | See [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
-Both `dimos-ar/` and `dimos-ar-v2/` publish `dimos.ar*`. Only one may be
-installed at a time.
+Both trees publish `dimos.ar*`. Only one may be installed at a time. Active work
+is `dimos-ar-v2/`.
 
 ## How we build dimos-ar-v2
 
@@ -42,7 +68,7 @@ installed at a time.
 comprehension, not for throughput.
 
 - **Subsystem groups.** Work proceeds in coherent groups (packaging, DimOS module,
-  network layer, …). Within a group, finish one file at a time unless explicitly
+  WebSocket layer, …). Within a group, finish one file at a time unless explicitly
   asked otherwise.
 - **Explain before writing.** For each file, first state what it does, why it
   needs to exist, which DimOS API it touches (concrete path, line range when it
@@ -50,8 +76,18 @@ comprehension, not for throughput.
 - **Walk through after writing.** Explain the finished code and name the Python
   features it uses — dataclasses, protocols, context managers, async
   generators, descriptors. Assume the language itself is being learned.
-- **Explanations go in chat, not in comments.** Good code should mostly be
-  self-explanatory; do not narrate in comments.
+- **Python ↔ TypeScript.** When explaining a Python-specific concept, give the
+  TypeScript equivalent in one short clause, and vice versa. Same idea, two
+  spellings — e.g. asyncio event loop ↔ JS/TS event loop; `Protocol` ↔
+  `interface`; `async`/`await` ↔ `Promise`.
+- **Match DimOS comment density.** Template files:
+  `dimos/mapping/relocalization/module.py` and
+  `dimos/robot/unitree/go2/blueprints/smart/unitree_go2.py`. No module-level
+  essays, no class docstrings that restate the class, no section banners
+  (`# --- … ---` — DimOS forbids them in `dimos/codebase_checks/test_no_sections.py`),
+  no per-field comments that repeat the next line. A comment stays only when
+  the code looks wrong or the constraint is invisible (surprising WHY, TODOs,
+  end-of-line notes on config examples). Explanations go in chat.
 - **Ask, do not assume.** When a real design fork appears mid-implementation,
   stop and ask in plain language with enough context to decide. Give at least
   two options, a recommendation, and the reason for it.
@@ -79,10 +115,10 @@ Plans are standalone documents: write only the final design and actionable
 steps. Do not include Q&A history, rejected alternatives, migration tables from
 earlier drafts, or "we decided against X" notes from prior plan iterations.
 
-## dimos-ar bridge — systems design
+## ARModule — systems design
 
-When working in `dimos-ar-v2/`, follow these constraints (inherited from the v1
-bridge and still applicable):
+When working in `dimos-ar-v2/`, follow these constraints (inherited from v1
+and still applicable):
 
 1. **One owner per concern** — each runtime concern has a single owning class; other
    code delegates rather than duplicating lifecycle or mutation logic.
@@ -115,13 +151,13 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic:
   root — opening at root creates stray `Cache/`, `Packages/`, etc.
 - The cross-repo contract is `dimos-ar-v2/PROTOCOL.md`. When the protocol
   changes, update the Python protocol and the Lens protocol modules in the same change:
-  - `dimos-ar-v2/dimos/ar/network/protocol.py`
+  - `dimos-ar-v2/dimos/ar/websocket/protocol.py`
   - `dimos-ar-v2/PROTOCOL.md`
   - `lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`
-- The bridge module worker must never block; WebSocket runs on a daemon thread.
-- AR development uses `dimos-ar-v2/dimos/ar/blueprints.py` (via `./launcher/scripts/start.sh`).
-- Port **8787** is the AR bridge WebSocket. Do not reuse the old Foxglove `8765` port.
-- Tests for the bridge package must run from the DimOS `.venv`.
+- The ARModule worker must never block; WebSocket runs on a daemon thread.
+- Blueprint is `unitree_go2_ar` (`dimos-ar-v2/dimos/ar/blueprints.py`).
+- Port **8787** is ARModule's WebSocket. Do not reuse the old Foxglove `8765` port.
+- Tests for `dimos.ar` must run from the DimOS `.venv`.
 - For Lens Studio verification, do **not** run `CompileWithLogs` by default.
   Use normal compile checks first, and only run compile-with-logs when there is
   an actual compile/runtime error that needs investigation.
@@ -147,13 +183,13 @@ or a normal terminal). Sandboxed runs fail when DimOS tries to write logs under
 # (DimOS logs under ~/.local/state/dimos/logs/). Use a normal terminal or all perms.
 ./launcher/scripts/run-ci.sh
 
-# Install + start bridge (from repo root)
+# Install + start ARModule (from repo root)
 ./launcher/scripts/setup.sh
 ./launcher/scripts/start.sh              # ws://0.0.0.0:8787
 ./launcher/scripts/start-launcher.sh     # web UI wrapper (http://127.0.0.1:8790)
 
 # Tests (with blueprint running for integration)
 cd dimos-ar-v2 && /path/to/dimos/.venv/bin/python3 -m pytest
-cd dimos-ar-v2 && /path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/network/test_ws_integration.py -m integration
+cd dimos-ar-v2 && /path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/websocket/test_ws_integration.py -m integration
 cd lens-studio/Tests && npm test   # Lens pure TS (Vitest); CI job lens-studio-tests
 ```

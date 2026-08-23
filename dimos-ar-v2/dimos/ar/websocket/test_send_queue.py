@@ -6,10 +6,10 @@ import json
 import pytest
 
 from dimos.ar.websocket.send_queue import (
-    COALESCE_MESSAGE_TYPES,
+    COALESCE_FRAME_TYPES,
     OUTBOUND_FIFO_MAXSIZE,
     ClientSendQueue,
-    peek_message_type,
+    peek_frame_type,
 )
 
 
@@ -45,12 +45,12 @@ def _messages_from_sent(sent: list[str]) -> list[dict]:
         ("not json", None),
     ],
 )
-def test_peek_message_type(payload: str, expected: str | None) -> None:
-    assert peek_message_type(payload) == expected
+def test_peek_frame_type(payload: str, expected: str | None) -> None:
+    assert peek_frame_type(payload) == expected
 
 
-def test_coalesce_message_types_match_v2_robot_state() -> None:
-    assert COALESCE_MESSAGE_TYPES == frozenset({"pose", "path", "state", "localization"})
+def test_coalesce_frame_types_match_state_streams() -> None:
+    assert COALESCE_FRAME_TYPES == frozenset({"pose", "path", "state", "localization"})
 
 
 @pytest.mark.asyncio
