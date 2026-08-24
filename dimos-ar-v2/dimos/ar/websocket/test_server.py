@@ -11,7 +11,7 @@ import websockets
 from dimos.ar.websocket.protocol import (
     Capability,
     Hello,
-    NavGoal,
+    NavGoalRequest,
     RobotDescription,
 )
 from dimos.ar.websocket.server import WebSocketServer, split_inbound_text_lines
@@ -47,15 +47,17 @@ class ServerHarness:
         self.loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._server: WebSocketServer | None = None
-        self.nav_goals: list[NavGoal] = []
+        self.nav_goal_requests: list[NavGoalRequest] = []
         self._handler_kwargs = handler_kwargs
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
 
-    def _on_nav_goal(self, msg: NavGoal, _websocket: object, _client_id: str) -> None:
-        self.nav_goals.append(msg)
+    def _on_nav_goal_request(
+        self, msg: NavGoalRequest, _websocket: object, _client_id: str
+    ) -> None:
+        self.nav_goal_requests.append(msg)
 
     def start(self) -> None:
         self._thread.start()
@@ -63,7 +65,7 @@ class ServerHarness:
             port=self.port,
             loop=self.loop,
             hello_supplier=_sample_hello,
-            on_nav_goal=self._on_nav_goal,
+            on_nav_goal_request=self._on_nav_goal_request,
             **self._handler_kwargs,  # type: ignore[arg-type]
         )
         self._server.start()
@@ -86,7 +88,7 @@ def harness() -> ServerHarness:
 
 
 def test_split_inbound_text_lines() -> None:
-    assert split_inbound_text_lines('{"type":"estop"}\n\n') == ['{"type":"estop"}']
+    assert split_inbound_text_lines('{"type":"estop_request"}\n\n') == ['{"type":"estop_request"}']
 
 
 @pytest.mark.asyncio
@@ -100,33 +102,33 @@ async def test_connect_receives_hello(harness: ServerHarness) -> None:
 
 
 @pytest.mark.asyncio
-async def test_time_sync_receives_time(harness: ServerHarness) -> None:
+async def test_time_sync_request_receives_time_sync(harness: ServerHarness) -> None:
     async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as ws:
         await ws.recv()
-        await ws.send(json.dumps({"type": "time_sync", "client_send_ts": 42.0}))
+        await ws.send(json.dumps({"type": "time_sync_request", "client_send_ts": 42.0}))
         raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
         msg = json.loads(raw)
-        assert msg["type"] == "time"
+        assert msg["type"] == "time_sync"
         assert msg["client_send_ts"] == 42.0
         assert msg["server_recv_ts"] <= msg["server_send_ts"]
 
 
 @pytest.mark.asyncio
-async def test_nav_goal_reaches_handler(harness: ServerHarness) -> None:
+async def test_nav_goal_request_reaches_handler(harness: ServerHarness) -> None:
     async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as ws:
         await ws.recv()
         await ws.send(
             json.dumps(
                 {
-                    "type": "nav_goal",
+                    "type": "nav_goal_request",
                     "position": [1.0, 2.0, 0.0],
                     "orientation": [0.0, 0.0, 0.0, 1.0],
                 }
             )
         )
         await asyncio.sleep(0.05)
-    assert len(harness.nav_goals) == 1
-    assert harness.nav_goals[0].position == (1.0, 2.0, 0.0)
+    assert len(harness.nav_goal_requests) == 1
+    assert harness.nav_goal_requests[0].position == (1.0, 2.0, 0.0)
 
 
 @pytest.mark.asyncio

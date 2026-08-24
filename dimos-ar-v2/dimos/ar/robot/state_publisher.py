@@ -10,15 +10,9 @@ from dimos.ar.robot.lidar_filter import (
     LidarFilterSettings,
     prepare_lidar_points,
 )
-from dimos.ar.robot.odom_correction import correct_odom_path, correct_odom_pose
-from dimos.ar.websocket.protocol import (
-    LidarSettings,
-    encode_lidar_binary,
-    encode_path,
-    encode_pose,
-)
+from dimos.ar.robot.odom_correction import correct_odom_pose
+from dimos.ar.websocket.protocol import LidarSettings, encode_lidar_binary, encode_pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 
 if TYPE_CHECKING:
@@ -35,7 +29,7 @@ class _BroadcastSink(Protocol):
 
 
 class RobotStatePublisher:
-    """DimOS stream handlers → client-ready pose, path, and LiDAR for all clients."""
+    """DimOS stream handlers → client-ready pose and LiDAR for all clients."""
 
     def __init__(
         self,
@@ -46,7 +40,6 @@ class RobotStatePublisher:
         lidar_max_hz: float = DEFAULT_LIDAR_MAX_HZ,
         lidar_voxel_size_m: float = 0.05,
         lidar_target_points: int = DEFAULT_TARGET_POINTS,
-        lidar: LidarSettings | None = None,
     ) -> None:
         self._ws = ws_server
         self._odom_correction_factor = odom_correction_factor
@@ -54,22 +47,9 @@ class RobotStatePublisher:
         self._lidar_max_hz = lidar_max_hz
         self._lidar_voxel_size_m = lidar_voxel_size_m
         self._lidar_target_points = lidar_target_points
-        self._lidar = lidar or LidarSettings(
-            enabled=False,
-            min_height_m=0.1,
-            max_height_m=1.5,
-            max_range_m=5.0,
-        )
         self._last_raw_odom: PoseStamped | None = None
         self._pose_last_emit_mono = 0.0
         self._lidar_last_emit_mono = 0.0
-
-    @property
-    def lidar(self) -> LidarSettings:
-        return self._lidar
-
-    def set_lidar(self, lidar: LidarSettings) -> None:
-        self._lidar = lidar
 
     def publish_odom(self, msg: PoseStamped) -> None:
         self._last_raw_odom = msg
@@ -94,23 +74,18 @@ class RobotStatePublisher:
             )
         )
 
-    def publish_path(self, msg: Path) -> None:
-        corrected = correct_odom_path(msg, factor=self._odom_correction_factor)
-        points = [(pose.x, pose.y, pose.z) for pose in corrected.poses]
-        self._ws.schedule_broadcast_text(
-            encode_path(points=points, ts=corrected.ts),
-        )
-
-    def publish_lidar(self, msg: PointCloud2) -> None:
-        if not self._lidar.enabled:
+    def publish_lidar(self, msg: PointCloud2, *, lidar: LidarSettings) -> None:
+        if not lidar.enabled:
             return
         if not self._allow_emit(self._lidar_last_emit_mono, self._lidar_max_hz):
             return
         robot_position = self._raw_robot_position()
+        if robot_position is None:
+            return
         downsampled = msg.voxel_downsample(voxel_size=self._lidar_voxel_size_m)
         points = downsampled.points_f32()
         settings = LidarFilterSettings.from_settings(
-            self._lidar,
+            lidar,
             target_points=self._lidar_target_points,
         )
         prepared = prepare_lidar_points(

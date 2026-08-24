@@ -50,11 +50,11 @@ def test_peek_frame_type(payload: str, expected: str | None) -> None:
 
 
 def test_coalesce_frame_types_match_state_streams() -> None:
-    assert COALESCE_FRAME_TYPES == frozenset({"pose", "path", "state", "localization"})
+    assert COALESCE_FRAME_TYPES == frozenset({"pose", "nav_goal", "state", "localization"})
 
 
 @pytest.mark.asyncio
-async def test_outbound_coalesces_pose_path_state() -> None:
+async def test_outbound_coalesces_pose_nav_goal_state() -> None:
     ws = _FakeWebSocket()
     outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
     outbound.start()
@@ -62,7 +62,9 @@ async def test_outbound_coalesces_pose_path_state() -> None:
     outbound.enqueue('{"type":"state","nav":{"state":"idle"}}\n')
     outbound.enqueue('{"type":"pose","position":[1,2,3]}\n')
     outbound.enqueue('{"type":"pose","position":[4,5,6]}\n')
-    outbound.enqueue('{"type":"path","points":[[0,0,0]]}\n')
+    outbound.enqueue(
+        '{"type":"nav_goal","pose":[0,0,0,0],"path_poses":[[0,0,0,0]]}\n'
+    )
 
     await asyncio.sleep(0.05)
     await outbound.stop()
@@ -70,7 +72,7 @@ async def test_outbound_coalesces_pose_path_state() -> None:
     assert len(ws.sent_text) == 1
     by_type = {msg["type"]: msg for msg in _messages_from_sent(ws.sent_text)}
     assert by_type["pose"]["position"] == [4, 5, 6]
-    assert by_type["path"]["points"] == [[0, 0, 0]]
+    assert by_type["nav_goal"]["path_poses"] == [[0, 0, 0, 0]]
     assert by_type["state"]["nav"]["state"] == "idle"
 
 
@@ -83,7 +85,7 @@ async def test_outbound_interleaves_fifo_before_coalesced() -> None:
     outbound.enqueue('{"type":"hello","client_id":"a"}\n')
     outbound.enqueue('{"type":"pose","position":[1,1,1]}\n')
     outbound.enqueue('{"type":"hello","client_id":"b"}\n')
-    outbound.enqueue('{"type":"path","points":[[1,2,3]]}\n')
+    outbound.enqueue('{"type":"nav_goal","pose":[1,2,3,0],"path_poses":[[1,2,3,0]]}\n')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
@@ -93,7 +95,7 @@ async def test_outbound_interleaves_fifo_before_coalesced() -> None:
     assert types[0] == "hello"
     assert types.count("hello") == 2
     assert "pose" in types
-    assert "path" in types
+    assert "nav_goal" in types
 
 
 @pytest.mark.asyncio

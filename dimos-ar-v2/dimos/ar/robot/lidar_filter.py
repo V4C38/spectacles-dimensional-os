@@ -41,20 +41,23 @@ def filter_points(
     points: NDArray[np.floating],
     *,
     settings: LidarFilterSettings,
+    robot_position: tuple[float, float, float] | None = None,
 ) -> NDArray[np.float32]:
-    """Height and horizontal-range band in DimOS Z-up world coordinates."""
+    """Height band, plus horizontal range around the robot when its pose is known."""
     if points.size == 0:
         return np.zeros((0, 3), dtype=np.float32)
     pts = np.asarray(points, dtype=np.float32)
     if pts.ndim != 2 or pts.shape[1] != 3:
         raise ValueError(f"Expected Nx3 points, got shape {pts.shape}")
 
-    horizontal = np.linalg.norm(pts[:, :2], axis=1)
-    mask = (
-        (horizontal <= settings.max_range_m)
-        & (pts[:, 2] >= settings.min_height_m)
-        & (pts[:, 2] <= settings.max_height_m)
-    )
+    mask = (pts[:, 2] >= settings.min_height_m) & (pts[:, 2] <= settings.max_height_m)
+    if robot_position is not None:
+        robot = np.asarray(robot_position, dtype=np.float32)
+        if robot.shape != (3,):
+            raise ValueError(f"Expected robot_position shape (3,), got {robot.shape}")
+        dx = pts[:, 0] - robot[0]
+        dy = pts[:, 1] - robot[1]
+        mask &= np.sqrt(dx * dx + dy * dy) <= settings.max_range_m
     return pts[mask]
 
 
@@ -137,7 +140,7 @@ def prepare_lidar_points(
     robot_position: tuple[float, float, float] | None,
 ) -> NDArray[np.float32]:
     """Band-filter then subsample. ``robot_position`` must be raw odom, not display-scaled."""
-    filtered = filter_points(points, settings=settings)
+    filtered = filter_points(points, settings=settings, robot_position=robot_position)
     return subsample_near_robot(
         filtered,
         robot_position,

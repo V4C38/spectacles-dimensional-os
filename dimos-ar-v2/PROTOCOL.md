@@ -19,20 +19,24 @@ with any earlier draft of this document.
 - **13 message types** — 7 outbound, 6 inbound.
 - **No `robot_id` echo** on inbound messages. One ARModule process serves one
   robot, declared once in `hello`.
-- **No registration session.** Alignment is a single `localize` → `localization`
-  exchange, and `localization` may also arrive unsolicited.
+- **No registration session.** Alignment is a single `localization_request` →
+  `localization` exchange, and `localization` may also arrive unsolicited.
 - **Merged status.** `state` replaces `runtime_snapshot`, `bridge_status` and
   `nav_status`.
-- **`time_sync` / `time`.** Application-level clock exchange for pairing
-  `capture_ts` with the robot pose buffer. Server stamps are `server_recv_ts` and
-  `server_send_ts`. WebSocket Ping/Pong (RFC 6455) remains for liveness only.
+- **`time_sync_request` / `time_sync`.** Application-level clock exchange for
+  pairing `capture_ts` with the robot pose buffer. Server stamps are
+  `server_recv_ts` and `server_send_ts`. WebSocket Ping/Pong (RFC 6455) remains
+  for liveness only.
+- **Request/result naming.** Client commands use `*_request`; server replies and
+  telemetry use the bare noun (`state`, `nav_goal`, `time_sync`, …). `hello` is
+  the handshake exception.
 
 ## Transport
 
 - Plain WebSocket on port **8787**. The DimOS machine runs the server; AR devices
   connect as clients.
-- JSON text frames for control and telemetry. Binary frames for `localize`
-  (client → server) and `lidar` (server → client).
+- JSON text frames for control and telemetry. Binary frames for
+  `localization_request` (client → server) and `lidar` (server → client).
 - Every JSON message is an object with a `type` field.
 - **Text framing:** outbound JSON text frames end with a single newline (`\n`).
   Clients accumulate incoming text and split on `\n` to recover complete
@@ -103,8 +107,8 @@ What carries the correction, and what does not:
 | Data | Corrected |
 |------|-----------|
 | `pose` position, X and Y | yes |
-| `path` point X and Y | yes |
-| `nav_goal` position X and Y (inverted on ingress) | yes |
+| `nav_goal` pose and `path_poses` X and Y | yes |
+| `nav_goal_request` position X and Y (inverted on ingress) | yes |
 | Height (Z) on any message | no |
 | Orientation on any message | no |
 | `speed_mps` and any other rate or direction | no |
@@ -125,17 +129,17 @@ re-anchor the cloud. Each `localization` re-anchoring resets the divergence.
 
 Any number of clients may connect at once.
 
-- **Telemetry is broadcast.** Every client receives identical `pose`, `path`,
+- **Telemetry is broadcast.** Every client receives identical `pose`, `nav_goal`,
   `lidar` and `state`. Payloads are byte-identical, so there is no per-client
   view to reconcile.
 - **Alignment is per connection.** `localization` is addressed to the connection
   that needs it, since each client has its own tracking origin.
 - **Control is last-command-wins.** ARModule does not arbitrate. The most
-  recent `nav_goal` or `estop` takes effect regardless of which client sent it.
+  recent `nav_goal_request` or `estop_request` takes effect regardless of which client sent it.
 
 `hello` assigns each connection a `client_id` for logging and future features.
-Navigation overlay uses `path` and `pose`; `state.nav` tracks client-issued
-goal sessions only.
+Navigation overlay uses `nav_goal` and `pose`. `state.nav` tracks planner
+navigation regardless of who issued the goal.
 
 ## Handshake
 
@@ -186,7 +190,7 @@ Sent once per connection. See handshake above.
 
 ### `state`
 
-Merged runtime snapshot. Sent on connect, in response to `get_state`, and
+Merged runtime snapshot. Sent on connect, in response to `state_request`, and
 whenever any field changes.
 
 ```json
@@ -213,19 +217,24 @@ whenever any field changes.
 
 **`server.connected_clients`:** live WebSocket connections to this process.
 
-**`nav.state`:** `"idle"` | `"following_path"` | `"recovery"` | `"resolved"`
+**`nav.state`:** `"idle"` | `"following_path"` | `"resolved"`
 
-DimOS `NavigationState` uses the first three (`idle`, `following_path`, `recovery`).
-`resolved` is AR-specific: the planner finished and `nav.outcome` carries the result.
+ARModule derives this from DimOS `path` and `goal_reached`. DimOS also declares a
+`recovery` phase on `navigation_state`, but that stream is never published (see
+`PR.md`); it is not on the wire until it can actually be emitted.
 
 **`nav.outcome`:** non-null exactly when `nav.state` is `"resolved"`:
 `"succeeded"` | `"failed"`
 
-Where the robot is going, use `path` (and `pose` for the robot). `state.nav`
-does not mirror planner goals — it only reflects a **client `nav_goal` session**:
-`following_path` after the client sends a goal, `resolved` when `goal_reached`
-fires for that session. DimOS-initiated navigation (MCP, patrolling, etc.) still
-shows up on `path` without changing `state.nav`.
+Where the robot is going, use **`nav_goal`** (route + terminal pose) and **`pose`**
+(robot). `state.nav` reflects any active navigation — `nav_goal_request`, MCP
+`set_goal`, or any other DimOS goal source:
+
+- **`following_path`** while a non-empty planner path is active
+- **`resolved`** when `goal_reached` fires (success or failure)
+- **`idle`** otherwise
+
+ARModule does not record who started navigation.
 
 **`alignment.stale`:** `true` when ARModule believes the client's alignment
 has drifted and cannot fix it without help. This only ever becomes `true` under
@@ -250,10 +259,10 @@ coordinates. Apply the newest one received.
 
 | Field | Notes |
 |-------|-------|
-| `confidence` | 0.0–1.0. A client may submit a fresh `localize` when this is low. |
+| `confidence` | 0.0–1.0. A client may submit a fresh `localization_request` when this is low. |
 | `ts` | Server time when the fix was produced. |
 
-Sent in response to `localize`, and also **unsolicited** whenever ARModule
+Sent in response to `localization_request`, and also **unsolicited** whenever ARModule
 learns that a previously delivered answer has moved — for example when a room
 anchor is refreshed and every connection's pose changes without any new
 observation. There is no flag distinguishing the two cases, because a client
@@ -288,20 +297,42 @@ Robot pose in `world`, at high rate.
 X and Y carry the odometry scale correction; Z and orientation do not. Optional
 fields may be added later (`speed_mps`, `yaw_rate_rad_s`); clients ignore unknown keys.
 
-### `path`
+### `nav_goal`
 
-Planned navigation path in `world`.
+Active navigation in `world`: the planned route plus the terminal pose where
+the robot intends to finish. Sent whenever DimOS publishes a path update.
 
 ```json
 {
-  "type": "path",
-  "points": [[0.0, 0.0, 0.0], [1.0, 1.0, 0.0]],
+  "type": "nav_goal",
+  "pose": [1.0, 1.0, 0.0, 0.785],
+  "path_poses": [[0.0, 0.0, 0.0, 0.785], [0.5, 0.5, 0.0, 0.785], [1.0, 1.0, 0.0, 0.785]],
   "ts": 1710000000.123
 }
 ```
 
-Empty `points` clears the visualization — the goal was reached, cancelled, or no
-plan exists. X and Y carry the scale correction, matching `pose`.
+| Field | Notes |
+|-------|-------|
+| `pose` | Terminal pose in `world` as `[x, y, z, yaw]` radians — maps to the last
+  `PoseStamped` on DimOS `path`. Position X/Y are scale-corrected; Z and yaw are
+  not. Today this duplicates the last `path_poses` entry; clients should treat
+  `pose` as authoritative for the target. |
+| `path_poses` | Route polyline as `[x, y, z, yaw]` waypoints — maps to `Path.poses`.
+  Same units and rounding as `pose`. Yaw comes from each DimOS path pose
+  (approach direction along the segment). Wire values are rounded to 3 decimal
+  places on position and 4 on yaw (~1 mm, ~0.006°). |
+| `ts` | Server timestamp when the planner published the path. |
+
+Empty `path_poses` clears the visualization — navigation finished, was cancelled,
+or no plan exists. `pose` is omitted on clear:
+
+```json
+{
+  "type": "nav_goal",
+  "path_poses": [],
+  "ts": 1710000000.123
+}
+```
 
 ### `lidar` (binary)
 
@@ -320,7 +351,7 @@ above for why, and for why they must not be reconciled against `pose`.
 
 Inbound messages do not carry `robot_id`.
 
-### `localize` (binary)
+### `localization_request` (binary)
 
 Submits one or more camera observations and asks "where am I in `world`?".
 
@@ -377,7 +408,7 @@ in and converts `localization.pose` back on the way out.
 
 **`capture_ts` is required and must be the exposure time in server clock**,
 not the client's local clock and not the time the message was assembled. The
-client obtains server time via `time_sync` / `time` before sending. A
+client obtains server time via `time_sync_request` / `time_sync` before sending. A
 localization round trip can take seconds, and ARModule pairs each observation
 against where the robot was at capture. A send-time stamp or an unsynchronised
 clock silently produces a fix that is wrong by however far the robot moved in
@@ -385,23 +416,23 @@ the interim.
 
 Response: `localization`.
 
+### `time_sync_request`
+
+```json
+{
+  "type": "time_sync_request",
+  "client_send_ts": 1234.567
+}
+```
+
+Client sends its local send time. ARModule replies with `time_sync` (stateless —
+no per-connection offset is stored on ARModule).
+
 ### `time_sync`
 
 ```json
 {
   "type": "time_sync",
-  "client_send_ts": 1234.567
-}
-```
-
-Client sends its local send time. ARModule replies with `time` (stateless — no
-per-connection offset is stored on ARModule).
-
-### `time`
-
-```json
-{
-  "type": "time",
   "client_send_ts": 1234.567,
   "server_recv_ts": 5678.901,
   "server_send_ts": 5678.905
@@ -414,11 +445,11 @@ timestamps (standard NTP-style exchange): echoed `client_send_ts`,
 sample with the smallest round-trip delay. Convert each observation's exposure
 time to server time before encoding `capture_ts`.
 
-### `nav_goal`
+### `nav_goal_request`
 
 ```json
 {
-  "type": "nav_goal",
+  "type": "nav_goal_request",
   "position": [1.0, 2.0, 0.0],
   "orientation": [0.0, 0.0, 0.0, 1.0]
 }
@@ -426,13 +457,13 @@ time to server time before encoding `capture_ts`.
 
 Goal in `world`. **`position` and `orientation` are both required** — same fields
 as `pose`. Send them in the same coordinates you receive `pose` in; ARModule
-inverts the scale correction on ingress.
+inverts the scale correction on ingress and publishes to DimOS `goal_request`.
 
-### `estop`
+### `estop_request`
 
 ```json
 {
-  "type": "estop"
+  "type": "estop_request"
 }
 ```
 
@@ -441,16 +472,16 @@ Emergency stop — halts motion immediately. **There is no payload and no latch 
 Stopping is an event, not a mode. A latch that only the client can clear is a
 footgun: a client that stops and then disconnects would leave the robot
 immobilised with no way back short of restarting ARModule. The resume path is
-issuing a new `nav_goal`.
+issuing a new `nav_goal_request`.
 
 ARModule also stops the robot on its own when the last client disconnects, so
 losing the headset cannot leave the robot walking.
 
-### `set_lidar`
+### `lidar_settings_request`
 
 ```json
 {
-  "type": "set_lidar",
+  "type": "lidar_settings_request",
   "enabled": true,
   "min_height_m": 0.1,
   "max_height_m": 1.5,
@@ -470,18 +501,18 @@ There is no mode enum. v19 offered `"off"`, `"full"` and `"obstacles"`, but
 other modes also accept. One boolean plus the parameters expresses all three
 states without an enum whose values overlap.
 
-All four fields are required on every `set_lidar`. A non-finite or inverted band
+All four fields are required on every `lidar_settings_request`. A non-finite or inverted band
 (`min_height_m` above `max_height_m`) is an error and is rejected, not silently
 clamped.
 
 `state.lidar` reflects the result, and because telemetry is broadcast, one client
 changing the filter changes it for everyone.
 
-### `get_state`
+### `state_request`
 
 ```json
 {
-  "type": "get_state"
+  "type": "state_request"
 }
 ```
 
@@ -489,21 +520,21 @@ Response: `state`.
 
 ## Message inventory
 
-| Direction | Type | Format |
-|-----------|------|--------|
-| → client | `hello` | JSON |
-| → client | `state` | JSON |
-| → client | `localization` | JSON |
-| → client | `time` | JSON |
-| → client | `pose` | JSON |
-| → client | `path` | JSON |
-| → client | `lidar` | binary |
-| → server | `localize` | binary |
-| → server | `time_sync` | JSON |
-| → server | `nav_goal` | JSON |
-| → server | `estop` | JSON |
-| → server | `set_lidar` | JSON |
-| → server | `get_state` | JSON |
+| Client → server | Server → client |
+|-----------------|-----------------|
+| `state_request` | `hello` |
+| `localization_request` (binary) | `state` |
+| `time_sync_request` | `localization` |
+| `nav_goal_request` | `time_sync` |
+| `estop_request` | `nav_goal` |
+| `lidar_settings_request` | `pose` |
+| | `lidar` (binary) |
+
+Paired requests: `state_request` → `state`, `localization_request` →
+`localization`, `time_sync_request` → `time_sync`, `nav_goal_request` →
+`nav_goal` (via DimOS planner). `estop_request` and `lidar_settings_request` take
+effect through a broadcast `state` update. `hello`, `pose`, and `lidar` are
+unsolicited telemetry.
 
 ## Dropped from v19
 
@@ -519,10 +550,10 @@ Not carried into v1:
 - Joystick and teleop.
 - Inbound `robot_id` echo.
 - JSON `lidar`. Binary only.
-- `cancel_nav_goal`. Use `estop`.
+- `cancel_nav_goal`. Use `estop_request`.
 - The `active` flag on `emergency_stop`, and the `"off"` / `"full"` /
   `"obstacles"` mode enum on `set_lidar_mode`.
-- v19 `ping` and `pong`. Replaced by `time_sync` / `time` for clock offset;
+- v19 `ping` and `pong`. Replaced by `time_sync_request` / `time_sync` for clock offset;
   WebSocket Ping/Pong remains for liveness.
 - Every scale field — `scale_confidence`, `scale_locked`, `scale_observable`.
   Scale is a fixed robot constant applied on ARModule and is not a client

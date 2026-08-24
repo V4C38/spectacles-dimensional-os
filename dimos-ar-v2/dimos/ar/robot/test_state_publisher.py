@@ -10,7 +10,6 @@ from dimos.ar.robot.go2 import ODOM_CORRECTION_FACTOR
 from dimos.ar.robot.state_publisher import RobotStatePublisher
 from dimos.ar.websocket.protocol import LIDAR_FOURCC, LidarSettings
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.nav_msgs.Path import Path
 
 
 class _RecordingBroadcast:
@@ -74,38 +73,14 @@ def test_publish_odom_rate_limits() -> None:
     assert len(sink.text_payloads) == 1
 
 
-def test_publish_path_scales_waypoints() -> None:
-    sink = _RecordingBroadcast()
-    publisher = RobotStatePublisher(
-        sink,
-        odom_correction_factor=1.25,
-    )
-    path = Path(
-        ts=3.0,
-        frame_id="world",
-        poses=[_pose(2.0, 4.0), _pose(6.0, 8.0)],
-    )
-
-    publisher.publish_path(path)
-
-    payload = json.loads(sink.text_payloads[0])
-    assert payload["type"] == "path"
-    assert len(payload["points"]) == 2
-    assert payload["points"][0] == pytest.approx([2.5, 5.0, 0.33])
-    assert payload["points"][1] == pytest.approx([7.5, 10.0, 0.33])
-
-
 def test_publish_lidar_disabled_skips_binary() -> None:
     sink = _RecordingBroadcast()
-    publisher = RobotStatePublisher(
-        sink,
-        lidar=LidarSettings(enabled=False, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0),
-        lidar_max_hz=0.0,
-    )
+    publisher = RobotStatePublisher(sink, lidar_max_hz=0.0)
+    lidar = LidarSettings(enabled=False, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
     points = np.array([[0.5, 0.0, 0.5]], dtype=np.float32)
 
     publisher.publish_odom(_pose())
-    publisher.publish_lidar(_FakePointCloud2(points))  # type: ignore[arg-type]
+    publisher.publish_lidar(_FakePointCloud2(points), lidar=lidar)  # type: ignore[arg-type]
 
     assert sink.binary_payloads == []
 
@@ -114,15 +89,15 @@ def test_publish_lidar_enabled_uses_raw_robot_position() -> None:
     sink = _RecordingBroadcast()
     publisher = RobotStatePublisher(
         sink,
-        lidar=LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=15.0),
         lidar_max_hz=0.0,
         lidar_target_points=1,
         odom_correction_factor=ODOM_CORRECTION_FACTOR,
     )
+    lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=15.0)
     points = np.array([[8.2, 0.0, 0.5], [10.2, 0.0, 0.5]], dtype=np.float32)
 
     publisher.publish_odom(_pose(x=8.0, y=0.0))
-    publisher.publish_lidar(_FakePointCloud2(points, ts=2.0))  # type: ignore[arg-type]
+    publisher.publish_lidar(_FakePointCloud2(points, ts=2.0), lidar=lidar)  # type: ignore[arg-type]
 
     assert len(sink.binary_payloads) == 1
     payload = sink.binary_payloads[0]
@@ -134,11 +109,48 @@ def test_publish_lidar_enabled_uses_raw_robot_position() -> None:
     assert (x, y, z) == pytest.approx((8.2, 0.0, 0.5))
 
 
-def test_set_lidar_updates_filter_settings() -> None:
+def test_publish_lidar_skips_until_odom_is_known() -> None:
     sink = _RecordingBroadcast()
-    publisher = RobotStatePublisher(sink)
-    updated = LidarSettings(enabled=True, min_height_m=0.2, max_height_m=1.2, max_range_m=4.0)
+    publisher = RobotStatePublisher(sink, lidar_max_hz=0.0)
+    lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
+    points = np.array([[0.5, 0.0, 0.5]], dtype=np.float32)
 
-    publisher.set_lidar(updated)
+    publisher.publish_lidar(_FakePointCloud2(points), lidar=lidar)  # type: ignore[arg-type]
 
-    assert publisher.lidar == updated
+    assert sink.binary_payloads == []
+
+
+def test_publish_lidar_range_is_around_robot_not_origin() -> None:
+    sink = _RecordingBroadcast()
+    publisher = RobotStatePublisher(
+        sink,
+        lidar_max_hz=0.0,
+        lidar_target_points=10,
+    )
+    lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
+    points = np.array([[0.5, 0.0, 0.5], [10.5, 0.0, 0.5]], dtype=np.float32)
+
+    publisher.publish_odom(_pose(x=10.0, y=0.0))
+    publisher.publish_lidar(_FakePointCloud2(points, ts=2.0), lidar=lidar)  # type: ignore[arg-type]
+
+    assert len(sink.binary_payloads) == 1
+    payload = sink.binary_payloads[0]
+    _fourcc, _ts, count = struct.unpack_from("<IdI", payload, 0)
+    assert count == 1
+    x, y, z = struct.unpack_from("<3f", payload, 16)
+    assert (x, y, z) == pytest.approx((10.5, 0.0, 0.5))
+
+
+def test_publish_lidar_uses_passed_settings_per_call() -> None:
+    sink = _RecordingBroadcast()
+    publisher = RobotStatePublisher(sink, lidar_max_hz=0.0, lidar_target_points=10)
+    disabled = LidarSettings(enabled=False, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
+    enabled = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
+    points = np.array([[0.5, 0.0, 0.5]], dtype=np.float32)
+
+    publisher.publish_odom(_pose())
+    publisher.publish_lidar(_FakePointCloud2(points, ts=2.0), lidar=disabled)  # type: ignore[arg-type]
+    assert sink.binary_payloads == []
+
+    publisher.publish_lidar(_FakePointCloud2(points, ts=3.0), lidar=enabled)  # type: ignore[arg-type]
+    assert len(sink.binary_payloads) == 1

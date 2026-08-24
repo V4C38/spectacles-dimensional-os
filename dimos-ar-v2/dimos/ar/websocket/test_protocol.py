@@ -7,26 +7,28 @@ import pytest
 
 from dimos.ar.websocket.protocol import (
     LIDAR_FOURCC,
-    LOCALIZE_FOURCC,
+    LOCALIZATION_REQUEST_FOURCC,
     Capability,
-    Estop,
-    GetStateRequest,
+    EstopRequest,
     Hello,
     LidarSettings,
     LocalizeObservation,
-    NavGoal,
+    NavGoalFrame,
+    NavGoalRequest,
     NavState,
     RobotDescription,
+    StateRequest,
     StateSnapshot,
     TimeSyncRequest,
     decode_inbound,
-    decode_localize,
+    decode_localization_request,
     encode_hello,
     encode_lidar_binary,
+    encode_nav_goal,
     encode_pose,
     encode_state,
     encode_text,
-    encode_time,
+    encode_time_sync,
 )
 
 
@@ -53,7 +55,7 @@ def _parse_json_line(text: str) -> dict:
 
 
 def test_encode_text_ends_with_newline() -> None:
-    assert encode_text({"type": "get_state"}) == '{"type":"get_state"}\n'
+    assert encode_text({"type": "state_request"}) == '{"type":"state_request"}\n'
 
 
 def test_encode_hello_has_no_protocol_version() -> None:
@@ -78,11 +80,39 @@ def test_encode_state_round_trip_fields() -> None:
     assert msg["nav"]["state"] == "following_path"
 
 
-def test_encode_time_and_pose() -> None:
-    time_msg = _parse_json_line(
-        encode_time(client_send_ts=1.0, server_recv_ts=2.0, server_send_ts=3.0)
+def test_encode_nav_goal_shape() -> None:
+    payload = _parse_json_line(
+        encode_nav_goal(
+            NavGoalFrame(
+                pose=(1.0, 2.0, 0.0, 0.7854),
+                path_poses=[(0.0, 0.0, 0.0, 0.0), (1.0, 2.0, 0.0, 0.7854)],
+                ts=5.0,
+            )
+        )
     )
-    assert time_msg["type"] == "time"
+    assert payload["type"] == "nav_goal"
+    assert payload["pose"] == [1.0, 2.0, 0.0, 0.7854]
+    assert payload["path_poses"] == [[0.0, 0.0, 0.0, 0.0], [1.0, 2.0, 0.0, 0.7854]]
+
+    clear_payload = _parse_json_line(
+        encode_nav_goal(
+            NavGoalFrame(
+                pose=None,
+                path_poses=[],
+                ts=6.0,
+            )
+        )
+    )
+    assert clear_payload["type"] == "nav_goal"
+    assert clear_payload["path_poses"] == []
+    assert "pose" not in clear_payload
+
+
+def test_encode_time_sync_and_pose() -> None:
+    time_msg = _parse_json_line(
+        encode_time_sync(client_send_ts=1.0, server_recv_ts=2.0, server_send_ts=3.0)
+    )
+    assert time_msg["type"] == "time_sync"
     assert time_msg["server_recv_ts"] == 2.0
 
     pose_msg = _parse_json_line(
@@ -96,37 +126,39 @@ def test_encode_time_and_pose() -> None:
     assert pose_msg["position"] == [1.0, 2.0, 3.0]
 
 
-def test_decode_nav_goal_and_estop() -> None:
+def test_decode_nav_goal_request_and_estop_request() -> None:
     nav = decode_inbound(
         json.dumps(
             {
-                "type": "nav_goal",
+                "type": "nav_goal_request",
                 "position": [1.0, 0.0, 0.0],
                 "orientation": [0.0, 0.0, 0.0, 1.0],
             }
         )
     )
-    assert isinstance(nav, NavGoal)
+    assert isinstance(nav, NavGoalRequest)
     assert nav.position == (1.0, 0.0, 0.0)
     assert nav.orientation == (0.0, 0.0, 0.0, 1.0)
 
-    estop = decode_inbound(json.dumps({"type": "estop"}))
-    assert isinstance(estop, Estop)
+    estop = decode_inbound(json.dumps({"type": "estop_request"}))
+    assert isinstance(estop, EstopRequest)
 
 
-def test_decode_nav_goal_requires_orientation() -> None:
+def test_decode_nav_goal_request_requires_orientation() -> None:
     with pytest.raises(ValueError, match="orientation"):
-        decode_inbound(json.dumps({"type": "nav_goal", "position": [1.0, 0.0, 0.0]}))
+        decode_inbound(
+            json.dumps({"type": "nav_goal_request", "position": [1.0, 0.0, 0.0]})
+        )
 
 
-def test_decode_set_lidar_requires_all_fields() -> None:
+def test_decode_lidar_settings_request_requires_all_fields() -> None:
     with pytest.raises(ValueError, match="Missing required field"):
-        decode_inbound(json.dumps({"type": "set_lidar", "enabled": True}))
+        decode_inbound(json.dumps({"type": "lidar_settings_request", "enabled": True}))
 
     msg = decode_inbound(
         json.dumps(
             {
-                "type": "set_lidar",
+                "type": "lidar_settings_request",
                 "enabled": True,
                 "min_height_m": 0.1,
                 "max_height_m": 1.5,
@@ -138,12 +170,12 @@ def test_decode_set_lidar_requires_all_fields() -> None:
     assert msg.max_range_m == 5.0
 
 
-def test_decode_set_lidar_rejects_inverted_band() -> None:
+def test_decode_lidar_settings_request_rejects_inverted_band() -> None:
     with pytest.raises(ValueError, match="min_height_m"):
         decode_inbound(
             json.dumps(
                 {
-                    "type": "set_lidar",
+                    "type": "lidar_settings_request",
                     "enabled": True,
                     "min_height_m": 2.0,
                     "max_height_m": 1.0,
@@ -153,13 +185,13 @@ def test_decode_set_lidar_rejects_inverted_band() -> None:
         )
 
 
-def test_decode_time_sync_and_get_state() -> None:
-    sync = decode_inbound(json.dumps({"type": "time_sync", "client_send_ts": 99.5}))
+def test_decode_time_sync_request_and_state_request() -> None:
+    sync = decode_inbound(json.dumps({"type": "time_sync_request", "client_send_ts": 99.5}))
     assert isinstance(sync, TimeSyncRequest)
     assert sync.client_send_ts == 99.5
 
-    state = decode_inbound(json.dumps({"type": "get_state"}))
-    assert isinstance(state, GetStateRequest)
+    state = decode_inbound(json.dumps({"type": "state_request"}))
+    assert isinstance(state, StateRequest)
 
 
 def test_decode_unknown_type_rejected() -> None:
@@ -177,7 +209,7 @@ def test_encode_lidar_binary_layout() -> None:
     assert (x, y, z) == pytest.approx((1.0, 2.0, 3.0))
 
 
-def _encode_localize_frame(jpeg: bytes, intrinsics_json: bytes) -> bytes:
+def _encode_localization_request_frame(jpeg: bytes, intrinsics_json: bytes) -> bytes:
     capture_ts = 1.0
     camera_position = struct.pack("<3f", 0.0, 0.0, 0.0)
     camera_orientation = struct.pack("<4f", 0.0, 0.0, 0.0, 1.0)
@@ -190,10 +222,10 @@ def _encode_localize_frame(jpeg: bytes, intrinsics_json: bytes) -> bytes:
         + intrinsics_json
     )
     record = struct.pack("<I", len(record_body)) + record_body
-    return struct.pack("<IH", LOCALIZE_FOURCC, 1) + record
+    return struct.pack("<IH", LOCALIZATION_REQUEST_FOURCC, 1) + record
 
 
-def test_decode_localize_single_observation() -> None:
+def test_decode_localization_request_single_observation() -> None:
     intrinsics = json.dumps(
         {
             "fx": 100.0,
@@ -208,7 +240,9 @@ def test_decode_localize_single_observation() -> None:
         separators=(",", ":"),
     ).encode("utf-8")
     jpeg = b"\xff\xd8\xff\xd9"
-    observations = decode_localize(_encode_localize_frame(jpeg, intrinsics))
+    observations = decode_localization_request(
+        _encode_localization_request_frame(jpeg, intrinsics)
+    )
     assert len(observations) == 1
     obs: LocalizeObservation = observations[0]
     assert obs.jpeg == jpeg

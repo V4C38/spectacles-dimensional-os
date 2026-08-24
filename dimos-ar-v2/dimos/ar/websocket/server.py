@@ -15,19 +15,19 @@ import websockets
 import websockets.asyncio.server as ws_server
 
 from dimos.ar.websocket.protocol import (
-    LOCALIZE_FOURCC,
-    Estop,
-    GetStateRequest,
+    LOCALIZATION_REQUEST_FOURCC,
+    EstopRequest,
     Hello,
     Inbound,
     LidarSettings,
     LocalizeObservation,
-    NavGoal,
+    NavGoalRequest,
+    StateRequest,
     TimeSyncRequest,
     decode_inbound,
-    decode_localize,
+    decode_localization_request,
     encode_hello,
-    encode_time,
+    encode_time_sync,
 )
 from dimos.ar.websocket.send_queue import ClientSendQueue
 from dimos.core.global_config import global_config
@@ -40,11 +40,11 @@ logger = setup_logger()
 
 HelloSupplier = Callable[[str], Hello]
 ConnectHandler = Callable[[ws_server.ServerConnection, str], None]
-NavGoalHandler = Callable[[NavGoal, ws_server.ServerConnection, str], None]
-EstopHandler = Callable[[Estop, ws_server.ServerConnection], None]
-LidarSettingsHandler = Callable[[LidarSettings, ws_server.ServerConnection], None]
-GetStateHandler = Callable[[GetStateRequest, ws_server.ServerConnection], None]
-LocalizeHandler = Callable[
+NavGoalRequestHandler = Callable[[NavGoalRequest, ws_server.ServerConnection, str], None]
+EstopRequestHandler = Callable[[EstopRequest, ws_server.ServerConnection], None]
+LidarSettingsRequestHandler = Callable[[LidarSettings, ws_server.ServerConnection], None]
+StateRequestHandler = Callable[[StateRequest, ws_server.ServerConnection], None]
+LocalizationRequestHandler = Callable[
     [tuple[LocalizeObservation, ...], ws_server.ServerConnection],
     Awaitable[None] | None,
 ]
@@ -79,11 +79,11 @@ class WebSocketServer:
         hello_supplier: HelloSupplier,
         max_frame_bytes: int = DEFAULT_MAX_FRAME_BYTES,
         on_connect: ConnectHandler | None = None,
-        on_nav_goal: NavGoalHandler | None = None,
-        on_estop: EstopHandler | None = None,
-        on_lidar_settings: LidarSettingsHandler | None = None,
-        on_get_state: GetStateHandler | None = None,
-        on_localize: LocalizeHandler | None = None,
+        on_nav_goal_request: NavGoalRequestHandler | None = None,
+        on_estop_request: EstopRequestHandler | None = None,
+        on_lidar_settings_request: LidarSettingsRequestHandler | None = None,
+        on_state_request: StateRequestHandler | None = None,
+        on_localization_request: LocalizationRequestHandler | None = None,
         on_disconnect: DisconnectHandler | None = None,
     ) -> None:
         self._port = port
@@ -91,11 +91,11 @@ class WebSocketServer:
         self._hello_supplier = hello_supplier
         self._max_frame_bytes = max_frame_bytes
         self._on_connect = on_connect
-        self._on_nav_goal = on_nav_goal
-        self._on_estop = on_estop
-        self._on_lidar_settings = on_lidar_settings
-        self._on_get_state = on_get_state
-        self._on_localize = on_localize
+        self._on_nav_goal_request = on_nav_goal_request
+        self._on_estop_request = on_estop_request
+        self._on_lidar_settings_request = on_lidar_settings_request
+        self._on_state_request = on_state_request
+        self._on_localization_request = on_localization_request
         self._on_disconnect = on_disconnect
 
         self._stop_event: asyncio.Event | None = None
@@ -225,13 +225,13 @@ class WebSocketServer:
         if len(message) < 4:
             raise ValueError("binary frame too short")
         (fourcc,) = struct.unpack_from("<I", message, 0)
-        if fourcc != LOCALIZE_FOURCC:
+        if fourcc != LOCALIZATION_REQUEST_FOURCC:
             raise ValueError(f"unsupported binary fourcc: {fourcc:#010x}")
-        if self._on_localize is None:
-            logger.warning("localize received but no handler is configured")
+        if self._on_localization_request is None:
+            logger.warning("localization_request received but no handler is configured")
             return
-        observations = decode_localize(message)
-        result = self._on_localize(observations, websocket)
+        observations = decode_localization_request(message)
+        result = self._on_localization_request(observations, websocket)
         if asyncio.iscoroutine(result):
             await result
 
@@ -244,28 +244,28 @@ class WebSocketServer:
         if isinstance(inbound, TimeSyncRequest):
             server_recv_ts = time.time()
             await websocket.send(
-                encode_time(
+                encode_time_sync(
                     client_send_ts=inbound.client_send_ts,
                     server_recv_ts=server_recv_ts,
                     server_send_ts=time.time(),
                 )
             )
             return
-        if isinstance(inbound, NavGoal):
-            if self._on_nav_goal is not None:
-                self._on_nav_goal(inbound, websocket, client_id)
+        if isinstance(inbound, NavGoalRequest):
+            if self._on_nav_goal_request is not None:
+                self._on_nav_goal_request(inbound, websocket, client_id)
             return
-        if isinstance(inbound, Estop):
-            if self._on_estop is not None:
-                self._on_estop(inbound, websocket)
+        if isinstance(inbound, EstopRequest):
+            if self._on_estop_request is not None:
+                self._on_estop_request(inbound, websocket)
             return
         if isinstance(inbound, LidarSettings):
-            if self._on_lidar_settings is not None:
-                self._on_lidar_settings(inbound, websocket)
+            if self._on_lidar_settings_request is not None:
+                self._on_lidar_settings_request(inbound, websocket)
             return
-        if isinstance(inbound, GetStateRequest):
-            if self._on_get_state is not None:
-                self._on_get_state(inbound, websocket)
+        if isinstance(inbound, StateRequest):
+            if self._on_state_request is not None:
+                self._on_state_request(inbound, websocket)
             return
 
     def schedule_broadcast_text(self, text: str) -> None:

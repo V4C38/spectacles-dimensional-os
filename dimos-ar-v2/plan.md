@@ -150,7 +150,7 @@ Five properties of that signature carry weight:
 
 **The answer is labelled with its frame.** Providers do not share a native reference: AprilTag resolves into `world` because the tag is bolted to the robot, a VPS resolves into the scanned `map`. Pretending otherwise would mean one of them lying about what it computed.
 
-**The observer's tracking frame must be right-handed, gravity-aligned Z-up and metric — DimOS convention.** This is the one demand the seam makes of a caller, and it is not stylistic. The answer is a rotation plus a translation, and no rotation can relate a left-handed frame to a right-handed one; that needs a mirror, which is not a rigid transform and would quietly corrupt every composition downstream. Spectacles is left-handed Y-up, so the Lens client converts its camera poses on the way in and converts `Localization.pose` back on the way out — the same fixed conversion it already owes for `pose`, `path` and `lidar`, applied in both directions instead of one. Demanding Z-up specifically, rather than merely right-handed, is what makes gravity levelling possible; see the AprilTag design.
+**The observer's tracking frame must be right-handed, gravity-aligned Z-up and metric — DimOS convention.** This is the one demand the seam makes of a caller, and it is not stylistic. The answer is a rotation plus a translation, and no rotation can relate a left-handed frame to a right-handed one; that needs a mirror, which is not a rigid transform and would quietly corrupt every composition downstream. Spectacles is left-handed Y-up, so the Lens client converts its camera poses on the way in and converts `Localization.pose` back on the way out — the same fixed conversion it already owes for `pose`, `nav_goal` and `lidar`, applied in both directions instead of one. Demanding Z-up specifically, rather than merely right-handed, is what makes gravity levelling possible; see the AprilTag design.
 
 `camera_pose` is the pose of the **camera optical frame** — X right, Y down, Z along the view direction — which is what PnP natively produces and what DimOS calls `camera_optical` (`dimos/robot/unitree/go2/connection.py:115-120`). v1 instead carried the Lens camera convention on the wire and corrected for it inside the tracker with a `FLIP_YZ` constant (`tag_tracking/solve.py:62`). That constant does not come across: ARModule whose geometry names one client's camera convention has already lost the platform independence the rest of the design is built on.
 
@@ -160,7 +160,7 @@ Five properties of that signature carry weight:
 
 The seam has exactly two callers, and only one of them is on the network.
 
-**The WebSocket handler**, on behalf of a connected client. It builds `Observation`s from an inbound `localize` frame and sends the result back as `localization`, converted to `world`.
+**The WebSocket handler**, on behalf of a connected client. It builds `Observation`s from an inbound `localization_request` frame and sends the result back as `localization`, converted to `world`.
 
 **The room-anchor loop**, in-process, when the anchor comes from a VPS. The Go2 already publishes `color_image` at roughly 14 Hz and `camera_info` as ordinary DimOS streams, with `frame_id` `camera_optical`, so the robot never speaks the wire protocol to localize itself: it is inside the same process and its frames are already there. It asks the same `localize` and pairs the `map` answer with the robot's `world` pose at capture time to produce `T_world_map`.
 
@@ -189,7 +189,7 @@ This makes the stationary requirement below load-bearing for correctness rather 
 
 Pairing an observation with a robot pose means putting a client's exposure time into the same number line as the odometry stamps in the pose buffer. Three clocks are involved and no two of them are the same: the client's, the server's, and the Go2's. So there are two mappings to establish, and keeping them separate is what makes each one testable on its own.
 
-**Client to server, measured by the client.** Two messages, `time_sync` out and `time` back. The client stamps `client_send_ts`; ARModule replies with that value echoed plus `server_recv_ts` and `server_send_ts`; the client notes its own receive time and has the four numbers of an NTP exchange. Offset is the mean of the two crossings, round-trip delay is the difference of the two spans, and the client keeps the sample with the smallest delay out of a handful — the standard best-of-N, because the lowest-latency exchange is the least biased. The client then sends `capture_ts` already in server time.
+**Client to server, measured by the client.** Two messages, `time_sync_request` out and `time_sync` back. The client stamps `client_send_ts`; ARModule replies with that value echoed plus `server_recv_ts` and `server_send_ts`; the client notes its own receive time and has the four numbers of an NTP exchange. Offset is the mean of the two crossings, round-trip delay is the difference of the two spans, and the client keeps the sample with the smallest delay out of a handful — the standard best-of-N, because the lowest-latency exchange is the least biased. The client then sends `capture_ts` already in server time.
 
 ARModule holds **no state at all** for this. It answers with two of its own timestamps and forgets. The estimate lives entirely on the client, which is the only party that can measure its own receive time, and a client that never syncs simply cannot localize — a clear failure rather than a silently misaligned one.
 
@@ -307,9 +307,9 @@ The design supports several clients at once, with one honest limit.
 
 **Viewing is genuinely multi-client.** Telemetry is a broadcast — identical bytes to every connection, because ARModule holds no per-client transform and does no per-client math. N clients cost N sends and nothing else. Each client holds its own localization result privately and applies it to its own scene graph. This is a direct consequence of the two decisions above, and it is something the current single-AR-world design cannot do at all.
 
-**Control is last-command-wins, and ARModule does not arbitrate.** DimOS has exactly one active goal: `GlobalPlanner.handle_goal_request` overwrites `_current_goal` under a lock. Two clients sending goals will fight, and the newest wins. An `estop` from any client stops the robot, and estop-on-disconnect fires on the *last* disconnect, not the first.
+**Control is last-command-wins, and ARModule does not arbitrate.** DimOS has exactly one active goal: `GlobalPlanner.handle_goal_request` overwrites `_current_goal` under a lock. Two clients sending goals will fight, and the newest wins. An `estop_request` from any client stops the robot, and estop-on-disconnect fires on the *last* disconnect, not the first.
 
-What ARModule does add is **identity, not arbitration**. It assigns each connection a `client_id` and returns it in that client's `hello`; `state.nav.goal.source` then carries the `client_id` of whoever set the active goal, or `"dimos"` for goals observed on the planner's input streams. Every client can therefore see who is driving and render it, which is enough for a small co-located group to coordinate socially without ARModule holding a control lock. A lock is addable later without changing this shape — it would be two new messages and a held `client_id`, and nothing above would have to move.
+`hello` assigns each connection a `client_id` for logging. ARModule does not record who is driving: `state.nav` tracks planner navigation regardless of source, and overlay uses `nav_goal` plus `pose`.
 
 ## Drift, and what DimOS already does about it
 
@@ -408,7 +408,7 @@ The trap, in that case, is that any code comparing cloud points against the robo
             )
 ```
 
-So `robot/lidar_filter.py` takes the raw odometry position and never the published one, and a test asserts that a cloud filtered at 10 m from the origin keeps the same points whether or not the scale constant is 1.0.
+So `robot/lidar_filter.py` takes the raw odometry position and never the published one. Range is a horizontal radius around that robot pose, not around the odometry origin; a test keeps a point next to the robot at 10 m from origin and drops a point at the origin.
 
 **Footnote — verify one space or two on hardware.** The LiDAR rule above assumes the Go2 cloud is metric range in a `world` that is *not* the under-reporting odom. The code does not settle that. DimOS stamps the cloud `frame_id="world"` (`robot/unitree/type/lidar.py:81`), `Map` accumulates it with no pose applied (`robot/unitree/type/map.py:88`), and the same `utlidar` namespace also publishes `rt/utlidar/robot_odom` — the stream DimOS itself loads as the "leg-odom trajectory" under `world/leg_odom/lidar` (`go2/dds/cli/render.py:206`, `:233-234`). If the on-board cloud is registered with that same estimate, the accumulated cloud is compressed by the same factor, is not metric, and v1 was right to route it through the same seam.
 
@@ -417,11 +417,11 @@ Measure it: walk a tape-measured 10 m, then compare the odom delta against the s
 - **Cloud ~10 m, odom ~8 m — two spaces, keep the current LiDAR rule.** Pose and path stay scaled; the cloud stays unscaled. Filtering keeps using the raw robot position. Relocalization's `T_world_map` is then also in the unscaled space (it registers that cloud against the premap, `mapping/relocalization/module.py:150-156`), so the composition `T_world_map ∘ P_map` needs an explicit rule that the LiDAR paragraph currently omits: leave the TF raw and anchored content disagrees with the robot marker by up to 25% of the distance from the odom origin; scale the TF translation and the same silent 25% error the filter trap warns about appears in every composed client pose. Pick one and pin it with a test.
 - **Cloud ~8 m as well — one space, revert the LiDAR departure.** Scale the cloud about the odometry origin the way v1 does (`network/data_plane.py:59-60`). Filtering goes back to the published (scaled) robot position. `T_world_map` is in that same compressed space, so scale its translation through the same function as pose. The two-space trap, the unscaled-position filter contract, and the "robot drifts off the cloud" overlay cost all go away.
 
-The 1.25 on pose, path and `nav_goal` does not wait on this measurement. A room anchor is a rigid transform and cannot cancel a scale error; the planner still walks in odom metres.
+The 1.25 on pose and `nav_goal` does not wait on this measurement. A room anchor is a rigid transform and cannot cancel a scale error; the planner still walks in odom metres.
 
 ### Mechanics
 
-One constant on `robot/go2.py`. `robot/odom_correction.py` takes the factor as a plain float so `robot/state_publisher.py` and `navigation/nav_goals.py` do not import the profile and group ordering stays free. It returns a corrected copy rather than mutating, so the raw value stays available for the LiDAR path. Applied at encode for `pose` and `path` positions, inverted at decode for `nav_goal`, and applied to nothing else.
+One constant on `robot/go2.py`. `robot/odom_correction.py` takes the factor as a plain float so `robot/state_publisher.py` and `navigation/nav_goals.py` do not import the profile and group ordering stays free. It returns a corrected copy rather than mutating, so the raw value stays available for the LiDAR path. Applied at encode for `pose` and `nav_goal` positions, inverted at decode for `nav_goal_request`, and applied to nothing else.
 
 Applied about the odometry origin, with no anchor point — v1 needs `odom_anchor_xy` (`world_frame/state.py:155-166`) only so that *changing* a live estimate does not teleport already-placed content, and that need disappears once the factor is fixed. Because the factor is constant, scaling accumulated position is identical to scaling each increment, so robot-state outbound stays byte-identical for every client and the broadcast property survives.
 
@@ -447,8 +447,8 @@ Point-LIO is LiDAR-inertial and therefore metric by construction, but in DimOS i
 
 ```mermaid
 flowchart LR
-    Lens[AR client] -->|nav_goal| WS[WebSocket server]
-    Lens -->|localize| WS
+    Lens[AR client] -->|nav_goal_request| WS[WebSocket server]
+    Lens -->|localization_request| WS
     WS --> Align[AlignmentProvider]
     Align -->|Localization| WS
     Anchor[Room anchor: T_world_map] --> WS
@@ -459,7 +459,7 @@ flowchart LR
     Planner -->|"path, goal_reached"| Nav
     Planner --> Tel[Telemetry]
     Nav --> WS
-    Tel -->|"pose and path scaled, lidar raw"| WS
+    Tel -->|"pose and nav_goal scaled, lidar raw"| WS
     WS --> Lens
 ```
 
@@ -481,26 +481,17 @@ The problem it solves: `GlobalPlanner.handle_goal_request` is the single funnel 
 
 The proposed change: add `goal_accepted: Subject[PoseStamped]` to `GlobalPlanner`, emit it in `handle_goal_request`, and expose `goal_active: Out[PoseStamped]` on `ReplanningAStarPlanner`, wired in `start()` exactly like the existing `path` and `goal_reached` subjects. Roughly six lines, matching the established pattern.
 
-`PR.md` also notes that `navigation_state: Out[String]` is declared on the planner but never published anywhere in DimOS. v1 subscribed to it in `navigation/nav_state.py`, which means that code has never run.
+`PR.md` also notes that `navigation_state: Out[String]` is declared on the planner but never published anywhere in DimOS. v1 subscribed to it; ARModule does not — `recovery` is not on the wire until DimOS actually emits it.
 
 A second upstream change is now a candidate: re-enabling sensor timestamps, or at least exposing capture time for the WebRTC video stream, so robot-side localization is not restricted to a stationary robot. See the capture-time section above.
 
 ### What ARModule does until then
 
-Subscribe to the goal input streams the `unitree_go2_ar` blueprint actually wires, which is the same set the planner itself subscribes to in `start()`:
+Overlay and `state.nav` come from DimOS `path` and `goal_reached`. ARModule does
+not subscribe to planner input streams or record goal source. Terminal pose and
+yaw are the last pose on the published path.
 
-```91:96:/Users/johannestscharn/Repositories/dimos/.venv/lib/python3.12/site-packages/dimos/navigation/replanning_a_star/module.py
-        self.register_disposable(
-            Disposable(self.goal_request.subscribe(self._planner.handle_goal_request))
-        )
-        self.register_disposable(
-            Disposable(self.target.subscribe(self._planner.handle_goal_request))
-        )
-```
-
-This is observing the planner's public inputs, not reaching into it. It covers goals from our own clients, from `target`, and from the web UI's click path — which in the mobile blueprint runs `clicked_point` into `MovementManager`, whose `goal: Out[PointStamped]` feeds the planner.
-
-The precise blind spot is a caller invoking the `set_goal` RPC directly. In DimOS that means `agents/skills/navigation.py`, `navigation/patrolling/module.py`, `navigation/bbox_navigation.py`, `navigation/frontier_exploration/`, and `robot/unitree/unitree_skill_container.py` — none of which `unitree_go2_ar` composes. So the gap is real but currently unreachable in our blueprint. `navigation/nav_goals.py` states this in a docstring and `PR.md` is the fix.
+The precise blind spot is a caller invoking the `set_goal` RPC directly. In DimOS that means `agents/skills/navigation.py`, `navigation/patrolling/module.py`, `navigation/bbox_navigation.py`, `navigation/frontier_exploration/`, and `robot/unitree/unitree_skill_container.py` — none of which `unitree_go2_ar` composes. So the gap is real but currently unreachable in our blueprint. The RPC path still plans and publishes `path`; only observers that need the accepted goal pose on a stream would miss it. `PR.md` is the fix.
 
 Nav status is derived from goal arrivals plus `goal_reached`, and from `path`, which the planner publishes empty on cancel or arrival:
 
@@ -518,23 +509,25 @@ Today `dimos-ar/PROTOCOL.md` is at v19: 27 message types over 1,172 lines. The r
 
 Server to client:
 
-- `hello` — protocol version, this connection's `client_id`, robot geometry, capabilities.
-- `state` — one merged message replacing `runtime_snapshot`, `bridge_status` and `nav_status`. Four blocks: connection count, the live LiDAR filter settings, the nav block (state, outcome, active goal, and the `client_id` or `"dimos"` that set it), and the alignment staleness flag.
+- `hello` — this connection's `client_id`, robot geometry, capabilities. No protocol version field.
+- `state` — one merged message replacing `runtime_snapshot`, `bridge_status` and `nav_status`. Four blocks: connection count, the live LiDAR filter settings, `nav` (`state` + `outcome`), and the alignment staleness flag.
 - `localization` — the observer's pose in `world`, plus confidence. May arrive unsolicited.
-- `time` — the client's echoed send stamp plus ARModule's receive and send stamps.
-- `pose`, `path` — DimOS `world` coordinates with the odometry scale constant applied to horizontal position only. Axes unconverted.
+- `time_sync` — the client's echoed send stamp plus ARModule's receive and send stamps.
+- `pose`, `nav_goal` — DimOS `world` coordinates with the odometry scale constant applied to horizontal position only. Axes unconverted. `nav_goal` carries terminal `pose` plus `path_poses`.
 - binary `lidar` — raw DimOS coordinates, forwarded unmodified, no scale.
 
 Client to server:
 
-- `localize` — binary: one or more observations, each a JPEG, a pinhole intrinsic with its distortion model and coefficients, the camera optical pose in the caller's tracking frame, and a capture timestamp in server time.
-- `time_sync` — the client's send stamp. Stateless on ARModule.
-- `nav_goal` — goal in `world`, inverse-scaled and then published to `goal_request`.
-- `estop`, `set_lidar`, `get_state`.
+- `localization_request` — binary: one or more observations, each a JPEG, a pinhole intrinsic with its distortion model and coefficients, the camera optical pose in the caller's tracking frame, and a capture timestamp in server time.
+- `time_sync_request` — the client's send stamp. Stateless on ARModule.
+- `nav_goal_request` — goal in `world`, inverse-scaled and then published to `goal_request`.
+- `estop_request`, `lidar_settings_request`, `state_request`.
+
+Client commands use `*_request`; server replies and telemetry use the bare noun. `hello` is the handshake exception.
 
 Three things drive the reduction from 27. The whole registration vocabulary (`registration_command`, `registration_pose`, `registration_status`, `capture_policy`, `camera_frame_ack`) disappears because there is no session to drive. `world_frame_correction` disappears because ARModule no longer runs a continuous solver whose internals the client had to track. And merging the three overlapping status messages kills a recurring bug class: five changelog entries (v6, v7, v9, v16, v18) exist purely to keep `runtime_snapshot`, `bridge_status` and `nav_status` agreeing with each other.
 
-The observed DimOS goal rides inside `state.nav` rather than as its own message, so a reconnecting client and a live client see identical data by construction.
+The observed DimOS route rides in `nav_goal` rather than inside `state.nav`, so overlay and status stay separate. A reconnecting client asks `state_request` and then sees the next `nav_goal` when the planner republishes.
 
 No message mentions the room anchor, the active provider, or the scale constant. All three are internal to ARModule: the client is told where it is and gets corrections when they are available, and nothing about how.
 
@@ -544,17 +537,17 @@ The one exception is a staleness flag in `state`. When correction requires the u
 
 Each of these is a v19 habit that the rewrite deliberately does not keep.
 
-**`ping` / `pong` becomes `time_sync` / `time`.** WebSocket has protocol-level ping/pong in RFC 6455 and the `websockets` library runs keepalive automatically, so an application-level copy adds nothing for liveness — and liveness was only ever half of what v19's pair carried. The other half was clock offset, which the capture-time pairing genuinely needs and which nothing else can supply. So the pair survives, stripped of the liveness pretence and named for the one job it has. ARModule keeps no state for it; see the three-clocks section.
+**`ping` / `pong` becomes `time_sync_request` / `time_sync`.** WebSocket has protocol-level ping/pong in RFC 6455 and the `websockets` library runs keepalive automatically, so an application-level copy adds nothing for liveness — and liveness was only ever half of what v19's pair carried. The other half was clock offset, which the capture-time pairing genuinely needs and which nothing else can supply. So the pair survives, stripped of the liveness pretence and named for the one job it has. ARModule keeps no state for it; see the three-clocks section.
 
-**Renamed `localize_request` → `localize` and `localize_result` → `localization`.** Matches the seam and reads as verb-in, noun-out.
+**Renamed `localize_request` → `localization_request` and `localize_result` → `localization`.** Request in, noun out — same pattern as the rest of the protocol.
 
 **Cut `alignment.provider` and `alignment.supports_unsolicited_updates` from `hello`.** The client does not need to know which solver is running, and it should apply the newest localization it receives whether or not it asked for it — a flag saying pushes are possible changes no client behaviour. What *does* change client behaviour is whether the user must point at the robot, which AprilTag requires and VPS does not. So the whole block collapses to `alignment.requires_robot_in_view: bool`.
 
 **Trimmed the `hello.robot` block.** `visual_origin_frame` and `default_render_offset_m` are v19 leftovers, informational and all-zero respectively. `tag_profile` describes a provider that does not exist yet and returns with the AprilTag work. Keeps `display_name`, `body_bounds_m`, `footprint_m`, `base_height_m`.
 
-**`emergency_stop {active: bool}` → `estop`, no payload.** A latch only the client can clear is a footgun: a client that stops and disconnects leaves the robot immobilised with no way back except a restart. Stopping is an event, not a mode. The resume path is issuing a new `nav_goal`.
+**`emergency_stop {active: bool}` → `estop_request`, no payload.** A latch only the client can clear is a footgun: a client that stops and disconnects leaves the robot immobilised with no way back except a restart. Stopping is an event, not a mode. The resume path is issuing a new `nav_goal_request`.
 
-**`set_lidar_mode` three modes → `set_lidar {enabled, min_height_m, max_height_m, max_range_m}` (all required).** `"obstacles"` was not a mode, it was a preset of the filter parameters that the other two modes also accept. One boolean plus the parameters expresses all three states without an enum whose values overlap.
+**`set_lidar_mode` three modes → `lidar_settings_request {enabled, min_height_m, max_height_m, max_range_m}` (all required).** `"obstacles"` was not a mode, it was a preset of the filter parameters that the other two modes also accept. One boolean plus the parameters expresses all three states without an enum whose values overlap.
 
 **Dropped `localization.unsolicited`.** The client applies the newest result regardless of why it arrived, so the flag is decoration.
 
@@ -562,7 +555,7 @@ Each of these is a v19 habit that the rewrite deliberately does not keep.
 
 **Kept `capabilities`.** Genuinely gates client UI — do not render a stop button when nothing can halt motion. `reason` stays as an optional human-readable string for the case where a capability is missing.
 
-**Coordinates keep DimOS axes — in both directions.** Every position and orientation on the wire is right-handed Z-up. Everything ARModule sends is in `world`; the one exception is the camera poses inside a `localize` request, which are in the caller's own tracking frame, necessarily, since the request exists to discover how that frame relates to `world`. That frame must itself be right-handed Z-up and metric, so a left-handed client converts on the way out as well as on the way in. The seam section explains why this is a correctness requirement rather than a convention. `PROTOCOL.md` states the convention once, describes `world` in plain language, notes that DimOS names the stream `odom` while the frame is `world`, and leaves axis conversion to the client. It also states that `pose`, `path` and `nav_goal` carry the odometry scale correction on horizontal position while `lidar`, height, orientation and speed do not, so a client implementer is never left wondering why one stream would need a factor the others do not.
+**Coordinates keep DimOS axes — in both directions.** Every position and orientation on the wire is right-handed Z-up. Everything ARModule sends is in `world`; the one exception is the camera poses inside a `localization_request`, which are in the caller's own tracking frame, necessarily, since the request exists to discover how that frame relates to `world`. That frame must itself be right-handed Z-up and metric, so a left-handed client converts on the way out as well as on the way in. The seam section explains why this is a correctness requirement rather than a convention. `PROTOCOL.md` states the convention once, describes `world` in plain language, notes that DimOS names the stream `odom` while the frame is `world`, and leaves axis conversion to the client. It also states that `pose` and `nav_goal` carry the odometry scale correction on horizontal position while `lidar`, height, orientation and speed do not, so a client implementer is never left wondering why one stream would need a factor the others do not.
 
 ## Build order
 
@@ -572,11 +565,11 @@ Under `dimos-ar-v2/dimos/ar/`, grouped by subsystem rather than by file, so each
 
 **2. The DimOS module and blueprint** — `module.py` and `blueprints.py`, plus `launcher/scripts/start.sh` and `dimos_lib.sh`. The whole DimOS integration surface in two files: `In`/`Out` stream ports, `@rpc build/start/stop`, the `handle_<stream>` auto-binding in `dimos/core/module.py`, and how `autoconnect` matches ports by name. First runnable milestone: `unitree_go2_ar` starts against the real Go2 and logs odometry.
 
-**3. The WebSocket layer** — `websocket/server.py`, `websocket/protocol.py`, `websocket/send_queue.py`. Everything about talking to a client: the `websockets` accept loop, the asyncio-versus-module-thread boundary, typed encode/decode with no coordinate math, and latest-wins coalescing so a slow headset cannot stall the robot. `time_sync` lands here too, since answering it is three timestamps and no state. Runnable with `wscat`, no Lens needed.
+**3. The WebSocket layer** — `websocket/server.py`, `websocket/protocol.py`, `websocket/send_queue.py`. Everything about talking to a client: the `websockets` accept loop, the asyncio-versus-module-thread boundary, typed encode/decode with no coordinate math, and latest-wins coalescing so a slow headset cannot stall the robot. `time_sync_request` / `time_sync` land here too, since answering is three timestamps and no state. Runnable with `wscat`, no Lens needed.
 
-**4. Robot state out** — `robot/state_publisher.py`, `robot/odom_correction.py`, `robot/lidar_filter.py`, `robot/profile.py`, and `robot/go2.py`. Reactive subscription patterns, rate limiting, and the binary LiDAR frame: height band, subsample, pack. `odom_correction.py` is the single owner of applying the odometry scale constant — functions taking the factor as a plain float, correcting horizontal position on `pose` and `path` and nothing else. `lidar_filter.py` is the one consumer that must take the *unscaled* robot position, since its cloud is unscaled.
+**4. Robot state out** — `robot/state_publisher.py`, `robot/odom_correction.py`, `robot/lidar_filter.py`, `robot/profile.py`, and `robot/go2.py`. Reactive subscription patterns, rate limiting, and the binary LiDAR frame: height band, subsample, pack. `odom_correction.py` is the single owner of applying the odometry scale constant — functions taking the factor as a plain float, correcting horizontal position on `pose` and `nav_goal` and nothing else. `lidar_filter.py` is the one consumer that must take the *unscaled* robot position, since its cloud is unscaled.
 
-**5. Navigation both directions** — `navigation/nav_goals.py`. Client `nav_goal` inverse-scaled through the same `robot/odom_correction.py` helper and published to `goal_request`, goals observed on the planner's input streams relayed back out, and nav status derived from `goal_reached` and empty-`path`. The one file where ARModule writes into DimOS rather than reading from it.
+**5. Navigation both directions** — `navigation/nav_goals.py`. Client `nav_goal_request` inverse-scaled through the same `robot/odom_correction.py` helper and published to `goal_request`; outbound `nav_goal` derived from DimOS `path`; nav status derived from `goal_reached` and `path`. The one file where ARModule writes into DimOS rather than reading from it.
 
 **6. The localization seam** — `alignment/provider.py` and `alignment/stub.py`. The one-method interface taking a sequence of observations and returning a frame-labelled result, and a stub returning a config pose in `world` at confidence `1.0`. Teaches `typing.Protocol`, structural typing and frozen dataclasses.
 
@@ -626,7 +619,7 @@ The honest caveat: this is not free simplification. Roughly 1,900 lines of it is
 
 ## Risks worth knowing
 
-- **Clock sync is load-bearing.** A client that never runs `time_sync` cannot localize: `capture_ts` is in server time and the pose buffer will not find a match. ARModule holds no offset state for the client side; getting it wrong is a silent misalignment, not a protocol error.
+- **Clock sync is load-bearing.** A client that never runs `time_sync_request` cannot localize: `capture_ts` is in server time and the pose buffer will not find a match. ARModule holds no offset state for the client side; getting it wrong is a silent misalignment, not a protocol error.
 - **Go2 fisheye must be undistorted before VPS.** The robot's front camera is equidistant fisheye at 1280×720; a VPS query expects pinhole intrinsics. Skipping undistortion on robot-side anchor queries will fail or drift.
 - **VPS handedness must stay right-handed.** A left-handed map answer makes `T_world_map` a mirror, not a rigid transform, and every composed client pose is wrong in a way that looks like calibration error.
 - **Chain latency when the robot is out of view.** AprilTag fails fast; VPS adds ~2.5 s per attempt. A client looking at an empty room waits for the full chain before getting `None` back.
@@ -635,7 +628,7 @@ The honest caveat: this is not free simplification. Roughly 1,900 lines of it is
 - Robot-side localization is restricted to a stationary robot until DimOS exposes camera capture timestamps, because reception timestamps and robot-clock odometry stamps cannot be paired accurately while moving.
 - A fixed 1.25 leaves a residual, since the true factor moves around 1.10 to 1.35 with gait. It accumulates over one leg of travel and is cleared at nav-goal arrival by whichever correction source is configured. Long legs in a large space are where it will be visible.
 - Rotation error is not corrected at all between nav goals, because it is not a linear factor and there is nothing sound to scale. Heading drift shows up as anchored content rotating slowly about the robot until the next fix.
-- Scale-corrected `pose` and `path` alongside an unscaled `lidar` cloud is a deliberate departure from v1, which scales all three together. Whether that split is physically real is unmeasured: walk 10 m on tape and compare odom against two features in the accumulated cloud (see the footnote under Odometry scale). Two spaces: keep the current rule, and write down how `T_world_map` is composed across them. One space: scale the cloud and the TF translation with pose, like v1. Until that result exists, the overlay looking wrong on hardware is the first thing to revisit.
+- Scale-corrected `pose` and `nav_goal` alongside an unscaled `lidar` cloud is a deliberate departure from v1, which scales all three together. Whether that split is physically real is unmeasured: walk 10 m on tape and compare odom against two features in the accumulated cloud (see the footnote under Odometry scale). Two spaces: keep the current rule, and write down how `T_world_map` is composed across them. One space: scale the cloud and the TF translation with pose, like v1. Until that result exists, the overlay looking wrong on hardware is the first thing to revisit.
 - If the two-space split holds, the unscaled robot position is a required input to LiDAR filtering. Passing the published position instead is a silent 25% error at 10 m, not a crash.
 - Goals are resolved once at submit time. A later localization correction does not retarget an in-flight goal; the client can cancel and re-send if it cares.
 - Axis conversion moves to the clients, so each new client platform reimplements it. A wrong conversion is a client bug that looks like an ARModule bug. Mitigate with a reference implementation and a precise `PROTOCOL.md`.
@@ -644,4 +637,4 @@ The honest caveat: this is not free simplification. Roughly 1,900 lines of it is
 
 ## What comes after this phase
 
-The provider phase above is the remainder of this build. Once AprilTag, the RelocalizationModule anchor and VPS are all green on hardware, the Lens client is adapted — including the bidirectional DimOS-axis conversion for `localize` camera poses and answers, and the `time_sync` exchange — and `dimos-ar/` is deleted.
+The provider phase above is the remainder of this build. Once AprilTag, the RelocalizationModule anchor and VPS are all green on hardware, the Lens client is adapted — including the bidirectional DimOS-axis conversion for `localization_request` camera poses and `localization` answers, and the `time_sync_request` / `time_sync` exchange — and `dimos-ar/` is deleted.

@@ -4,7 +4,7 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
 
 # Go2 leg odometry under-reports horizontal travel; this file applies a fixed
-# multiplier to raw odom X/Y at the protocol boundary (pose/path out, nav_goal in).
+# multiplier to raw odom X/Y at the protocol boundary (pose/nav_goal out, nav_goal_request in).
 # Z, orientation, and LiDAR stay uncorrected — slip is ground-plane only.
 
 

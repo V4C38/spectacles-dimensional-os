@@ -90,10 +90,12 @@ self.register_disposable(
 
 ## What ARModule does until this lands
 
-Client overlay uses **`path`** (route + target position) and **`pose`**
-(robot). **`goal_reached`** drives `state.nav.outcome` for client-issued
-`nav_goal` sessions only. ARModule does not subscribe to planner input streams
-or mirror accepted goals into `state`.
+Client overlay uses **`nav_goal`** (route + terminal pose) and **`pose`**
+(robot). **`goal_reached`** drives `state.nav.outcome` for any navigation.
+ARModule reads terminal position and orientation from the last pose on the DimOS
+path (via `smooth_resample_path` / `_add_orientations_to_path` in
+`dimos/mapping/occupancy/path_resampling.py`). ARModule does not subscribe to
+planner input streams or record goal source.
 
 `goal_active` remains useful if a future UI needs the accepted goal pose on the
 DimOS bus (including `set_goal` RPC) without inferring it from `path`.
@@ -114,9 +116,10 @@ stream would miss it until this PR lands.
 
 ### Nav status today
 
-- **`path`** — route and whether the robot is moving (non-empty vs empty)
-- **`goal_reached`** — terminal success/failure for client `nav_goal` sessions
-- **`state.nav.state`** — `following_path` / `resolved` / `idle` for those sessions
+- **`nav_goal`** — outbound frame; `pose` terminal `[x, y, z, yaw]` plus `path_poses`
+- **`goal_reached`** — terminal success/failure for any navigation
+- **`state.nav.state`** — `following_path` / `resolved` / `idle` (`recovery` is
+  not on the wire: DimOS declares `navigation_state` but never publishes it)
 
 ```python
 # global_planner.py cancel_goal

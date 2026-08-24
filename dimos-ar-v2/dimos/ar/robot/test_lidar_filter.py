@@ -42,9 +42,45 @@ def test_filter_points_height_and_range() -> None:
         ],
         dtype=np.float32,
     )
-    filtered = filter_points(points, settings=_settings(max_range_m=5.0))
+    filtered = filter_points(
+        points,
+        settings=_settings(max_range_m=5.0),
+        robot_position=(0.0, 0.0, 0.33),
+    )
     assert len(filtered) == 1
     assert np.allclose(filtered[0], [0.5, 0.0, 0.5])
+
+
+def test_filter_points_range_is_around_robot_not_origin() -> None:
+    points = np.array(
+        [
+            [0.5, 0.0, 0.5],
+            [10.5, 0.0, 0.5],
+        ],
+        dtype=np.float32,
+    )
+    filtered = filter_points(
+        points,
+        settings=_settings(max_range_m=5.0),
+        robot_position=(10.0, 0.0, 0.33),
+    )
+    assert len(filtered) == 1
+    assert np.allclose(filtered[0], [10.5, 0.0, 0.5])
+
+
+def test_filter_points_without_robot_applies_height_only() -> None:
+    points = np.array(
+        [
+            [0.5, 0.0, 0.5],
+            [20.0, 0.0, 0.5],
+            [0.5, 0.0, 2.0],
+        ],
+        dtype=np.float32,
+    )
+    filtered = filter_points(points, settings=_settings(max_range_m=5.0))
+    assert len(filtered) == 2
+    assert np.allclose(filtered[0], [0.5, 0.0, 0.5])
+    assert np.allclose(filtered[1], [20.0, 0.0, 0.5])
 
 
 def test_filter_points_does_not_subsample() -> None:
@@ -90,17 +126,16 @@ def test_subsample_prefers_near_robot_in_xy_plane() -> None:
     assert int(np.sum(horiz < 1.0)) >= 400
 
 
-def test_band_filter_independent_of_odom_scale() -> None:
-    """Height/range band does not use robot position — scale factor is irrelevant."""
+def test_band_filter_uses_raw_robot_position_not_scaled() -> None:
     points = np.array(
-        [[9.0, 0.0, 0.5], [10.0, 0.0, 0.5], [11.0, 0.0, 0.5]],
+        [[8.2, 0.0, 0.5], [10.2, 0.0, 0.5]],
         dtype=np.float32,
     )
-    settings = _settings(max_range_m=10.5)
-    assert np.array_equal(
-        filter_points(points, settings=settings),
-        np.array([[9.0, 0.0, 0.5], [10.0, 0.0, 0.5]], dtype=np.float32),
-    )
+    settings = _settings(max_range_m=1.0)
+    kept = filter_points(points, settings=settings, robot_position=(8.0, 0.0, 0.33))
+    dropped = filter_points(points, settings=settings, robot_position=(10.0, 0.0, 0.33))
+    assert np.allclose(kept, np.array([[8.2, 0.0, 0.5]], dtype=np.float32))
+    assert np.allclose(dropped, np.array([[10.2, 0.0, 0.5]], dtype=np.float32))
 
 
 def test_subsample_uses_raw_robot_position_not_corrected() -> None:

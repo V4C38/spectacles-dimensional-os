@@ -15,7 +15,7 @@ logger = setup_logger()
 
 OUTBOUND_FIFO_MAXSIZE = 64
 OUTBOUND_BACKLOG_LOG_INTERVAL_S = 5.0
-COALESCE_FRAME_TYPES = frozenset({"pose", "path", "state", "localization"})
+COALESCE_FRAME_TYPES = frozenset({"pose", "nav_goal", "state", "localization"})
 _FRAME_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
 
 

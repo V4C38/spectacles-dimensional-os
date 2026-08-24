@@ -9,9 +9,9 @@ import struct
 from typing import Any, Literal
 
 LIDAR_FOURCC = 0x4C444152
-LOCALIZE_FOURCC = 0x4C4F4341
+LOCALIZATION_REQUEST_FOURCC = 0x4C4F4341
 
-NavPhase = Literal["idle", "following_path", "recovery", "resolved"]
+NavPhase = Literal["idle", "following_path", "resolved"]
 NavOutcome = Literal["succeeded", "failed"]
 CameraDistortionModel = Literal["none", "plumb_bob", "equidistant"]
 
@@ -66,13 +66,13 @@ class TimeSyncRequest:
 
 
 @dataclass(frozen=True)
-class NavGoal:
+class NavGoalRequest:
     position: tuple[float, float, float]
     orientation: tuple[float, float, float, float]
 
 
 @dataclass(frozen=True)
-class Estop:
+class EstopRequest:
     pass
 
 
@@ -84,12 +84,20 @@ class LidarSettings:
     max_range_m: float
 
 
+DEFAULT_LIDAR_SETTINGS = LidarSettings(
+    enabled=False,
+    min_height_m=0.1,
+    max_height_m=1.5,
+    max_range_m=5.0,
+)
+
+
 @dataclass(frozen=True)
-class GetStateRequest:
+class StateRequest:
     pass
 
 
-Inbound = TimeSyncRequest | NavGoal | Estop | LidarSettings | GetStateRequest
+Inbound = TimeSyncRequest | NavGoalRequest | EstopRequest | LidarSettings | StateRequest
 
 
 def decode_inbound(text: str) -> Inbound:
@@ -99,22 +107,22 @@ def decode_inbound(text: str) -> Inbound:
         raise TypeError("Frame must be a JSON object")
     msg_type = _require_type(data, "type", str)
 
-    if msg_type == "time_sync":
+    if msg_type == "time_sync_request":
         raw_ts = data.get("client_send_ts")
         if not isinstance(raw_ts, (int, float)):
             raise ValueError("Missing or invalid field: client_send_ts")
         return TimeSyncRequest(client_send_ts=float(raw_ts))
 
-    if msg_type == "nav_goal":
-        return NavGoal(
+    if msg_type == "nav_goal_request":
+        return NavGoalRequest(
             position=_vec3(data, "position"),
             orientation=_quat(data, "orientation"),
         )
 
-    if msg_type == "estop":
-        return Estop()
+    if msg_type == "estop_request":
+        return EstopRequest()
 
-    if msg_type == "set_lidar":
+    if msg_type == "lidar_settings_request":
         enabled = _require_type(data, "enabled", bool)
         min_height_m = _finite_float(data, "min_height_m")
         max_height_m = _finite_float(data, "max_height_m")
@@ -128,8 +136,8 @@ def decode_inbound(text: str) -> Inbound:
             max_range_m=max_range_m,
         )
 
-    if msg_type == "get_state":
-        return GetStateRequest()
+    if msg_type == "state_request":
+        return StateRequest()
 
     raise ValueError(f"Unknown inbound frame type: {msg_type!r}")
 
@@ -155,15 +163,15 @@ class LocalizeObservation:
     camera_orientation: tuple[float, float, float, float]
 
 
-def decode_localize(data: bytes) -> tuple[LocalizeObservation, ...]:
-    """Parse a binary ``localize`` frame."""
+def decode_localization_request(data: bytes) -> tuple[LocalizeObservation, ...]:
+    """Parse a binary ``localization_request`` frame."""
     if len(data) < 6:
-        raise ValueError("localize frame too short")
+        raise ValueError("localization_request frame too short")
     fourcc, observation_count = struct.unpack_from("<IH", data, 0)
-    if fourcc != LOCALIZE_FOURCC:
-        raise ValueError(f"bad localize fourcc: {fourcc:#010x}")
+    if fourcc != LOCALIZATION_REQUEST_FOURCC:
+        raise ValueError(f"bad localization_request fourcc: {fourcc:#010x}")
     if observation_count < 1:
-        raise ValueError("localize requires at least one observation")
+        raise ValueError("localization_request requires at least one observation")
 
     offset = 6
     observations: list[LocalizeObservation] = []
@@ -295,6 +303,13 @@ def encode_hello(payload: Hello) -> str:
 
 
 @dataclass(frozen=True)
+class NavGoalFrame:
+    pose: tuple[float, float, float, float] | None
+    path_poses: list[tuple[float, float, float, float]]
+    ts: float
+
+
+@dataclass(frozen=True)
 class NavState:
     state: NavPhase
     outcome: NavOutcome | None
@@ -328,7 +343,7 @@ def encode_state(payload: StateSnapshot) -> str:
     )
 
 
-def encode_time(
+def encode_time_sync(
     *,
     client_send_ts: float,
     server_recv_ts: float,
@@ -336,7 +351,7 @@ def encode_time(
 ) -> str:
     return encode_text(
         {
-            "type": "time",
+            "type": "time_sync",
             "client_send_ts": client_send_ts,
             "server_recv_ts": server_recv_ts,
             "server_send_ts": server_send_ts,
@@ -378,18 +393,20 @@ def encode_pose(
     )
 
 
-def encode_path(
-    *,
-    points: list[tuple[float, float, float]],
-    ts: float,
-) -> str:
-    return encode_text(
-        {
-            "type": "path",
-            "points": [list(point) for point in points],
-            "ts": ts,
-        }
-    )
+def _wire_waypoint(x: float, y: float, z: float, yaw: float) -> list[float]:
+    """Compact waypoint for JSON — mm position, ~0.006° yaw."""
+    return [round(x, 3), round(y, 3), round(z, 3), round(yaw, 4)]
+
+
+def encode_nav_goal(payload: NavGoalFrame) -> str:
+    body: dict[str, Any] = {
+        "type": "nav_goal",
+        "path_poses": [_wire_waypoint(*point) for point in payload.path_poses],
+        "ts": payload.ts,
+    }
+    if payload.pose is not None:
+        body["pose"] = _wire_waypoint(*payload.pose)
+    return encode_text(body)
 
 
 def encode_lidar_binary(
