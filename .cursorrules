@@ -14,7 +14,7 @@ Same pattern as `RelocalizationModule` / `dimos.mapping.relocalization` /
 | Class | `ARModule` in `dimos/ar/module.py` |
 | Import | `dimos.ar` |
 | Blueprint | `unitree_go2_ar` (`dimos run unitree-go2-ar`) |
-| Wire peer | `server` — `server_recv_ts` / `server_send_ts`, `state.server` |
+| Wire peer | `server` — `time_sync.ts_client` / `time_sync.ts_server`, `state.server` |
 
 Do **not** call it a bridge, an AR package, or `ar_go2`. Prose uses **`ARModule`**.
 The WebSocket accept loop is a collaborator (`websocket/server.py`), not the class.

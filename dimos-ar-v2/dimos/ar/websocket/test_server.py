@@ -10,7 +10,7 @@ import websockets
 
 from dimos.ar.websocket.protocol import (
     Capability,
-    Hello,
+    HelloBody,
     NavGoalRequest,
     RobotDescription,
 )
@@ -23,9 +23,8 @@ def _pick_free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _sample_hello(client_id: str) -> Hello:
-    return Hello(
-        client_id=client_id,
+def _sample_hello(_client_id: str) -> HelloBody:
+    return HelloBody(
         robot=RobotDescription(
             display_name="Unitree Go2",
             body_bounds_m=(0.7, 0.5, 0.55),
@@ -39,6 +38,12 @@ def _sample_hello(client_id: str) -> Hello:
             "estop": Capability(available=True, reason=None),
         },
     )
+
+
+async def _send_hello_request(ws: websockets.ClientConnection, ts_client: float = 1000.0) -> dict:
+    await ws.send(json.dumps({"type": "hello_request", "ts_client": ts_client}))
+    raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
+    return json.loads(raw)
 
 
 class ServerHarness:
@@ -92,31 +97,20 @@ def test_split_inbound_text_lines() -> None:
 
 
 @pytest.mark.asyncio
-async def test_connect_receives_hello(harness: ServerHarness) -> None:
+async def test_connect_receives_hello_after_hello_request(harness: ServerHarness) -> None:
     async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as ws:
-        raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
-        msg = json.loads(raw)
+        msg = await _send_hello_request(ws, ts_client=42.0)
         assert msg["type"] == "hello"
         assert "client_id" in msg
+        assert msg["time_sync"]["ts_client"] == 42.0
+        assert isinstance(msg["time_sync"]["ts_server"], float)
         assert "protocol_version" not in msg
-
-
-@pytest.mark.asyncio
-async def test_time_sync_request_receives_time_sync(harness: ServerHarness) -> None:
-    async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as ws:
-        await ws.recv()
-        await ws.send(json.dumps({"type": "time_sync_request", "client_send_ts": 42.0}))
-        raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
-        msg = json.loads(raw)
-        assert msg["type"] == "time_sync"
-        assert msg["client_send_ts"] == 42.0
-        assert msg["server_recv_ts"] <= msg["server_send_ts"]
 
 
 @pytest.mark.asyncio
 async def test_nav_goal_request_reaches_handler(harness: ServerHarness) -> None:
     async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as ws:
-        await ws.recv()
+        await _send_hello_request(ws)
         await ws.send(
             json.dumps(
                 {

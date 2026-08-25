@@ -12,13 +12,14 @@ from dimos.ar.websocket.protocol import (
     DEFAULT_LIDAR_SETTINGS,
     Capability,
     EstopRequest,
-    Hello,
+    HelloBody,
     LidarSettings,
     LocalizeObservation,
     NavGoalRequest,
     RobotDescription,
     StateRequest,
     StateSnapshot,
+    TimeSync,
     encode_nav_goal,
     encode_state,
 )
@@ -65,7 +66,7 @@ class ARModule(Module):  # type: ignore[misc]
         self._ws_server = WebSocketServer(
             port=self.config.port,
             loop=self._loop,
-            hello_supplier=self._hello_for_client,
+            hello_supplier=self._hello_body,
             on_connect=self._on_client_connect,
             on_nav_goal_request=self._on_nav_goal_request,
             on_estop_request=self._on_estop_request,
@@ -98,9 +99,8 @@ class ARModule(Module):  # type: ignore[misc]
             ws_server_obj.stop()
         super().stop()
 
-    def _hello_for_client(self, client_id: str) -> Hello:
-        return Hello(
-            client_id=client_id,
+    def _hello_body(self, _client_id: str) -> HelloBody:
+        return HelloBody(
             robot=RobotDescription(
                 display_name=GO2_PROFILE.display_name,
                 body_bounds_m=GO2_PROFILE.body_bounds_m,
@@ -177,6 +177,7 @@ class ARModule(Module):  # type: ignore[misc]
         self,
         observations: tuple[LocalizeObservation, ...],
         _websocket: ws_server.ServerConnection,
+        _time_sync: TimeSync,
     ) -> None:
         logger.warning(
             "localization_request received but alignment is not configured",

@@ -18,16 +18,17 @@ from dimos.ar.websocket.protocol import (
     LOCALIZATION_REQUEST_FOURCC,
     EstopRequest,
     Hello,
+    HelloBody,
     Inbound,
     LidarSettings,
     LocalizeObservation,
     NavGoalRequest,
     StateRequest,
-    TimeSyncRequest,
+    TimeSync,
+    decode_hello_request,
     decode_inbound,
     decode_localization_request,
     encode_hello,
-    encode_time_sync,
 )
 from dimos.ar.websocket.send_queue import ClientSendQueue
 from dimos.core.global_config import global_config
@@ -38,14 +39,14 @@ if TYPE_CHECKING:
 
 logger = setup_logger()
 
-HelloSupplier = Callable[[str], Hello]
+HelloSupplier = Callable[[str], HelloBody]
 ConnectHandler = Callable[[ws_server.ServerConnection, str], None]
 NavGoalRequestHandler = Callable[[NavGoalRequest, ws_server.ServerConnection, str], None]
 EstopRequestHandler = Callable[[EstopRequest, ws_server.ServerConnection], None]
 LidarSettingsRequestHandler = Callable[[LidarSettings, ws_server.ServerConnection], None]
 StateRequestHandler = Callable[[StateRequest, ws_server.ServerConnection], None]
 LocalizationRequestHandler = Callable[
-    [tuple[LocalizeObservation, ...], ws_server.ServerConnection],
+    [tuple[LocalizeObservation, ...], ws_server.ServerConnection, TimeSync],
     Awaitable[None] | None,
 ]
 DisconnectHandler = Callable[[ws_server.ServerConnection], None]
@@ -102,6 +103,7 @@ class WebSocketServer:
         self._server_ready = threading.Event()
         self._connections: set[ws_server.ServerConnection] = set()
         self._outbound: dict[ws_server.ServerConnection, ClientSendQueue] = {}
+        self._time_sync: dict[ws_server.ServerConnection, TimeSync] = {}
         self._serve_future: Future[None] | None = None
 
     @property
@@ -181,8 +183,7 @@ class WebSocketServer:
         outbound.start()
         logger.info("AR client connected", remote=str(remote), client_id=client_id)
         try:
-            hello = await asyncio.to_thread(self._hello_supplier, client_id)
-            await websocket.send(encode_hello(hello))
+            await self._complete_handshake(websocket, client_id)
             if self._on_connect is not None:
                 await asyncio.to_thread(self._on_connect, websocket, client_id)
             async for message in websocket:
@@ -208,6 +209,7 @@ class WebSocketServer:
             )
         finally:
             self._connections.discard(websocket)
+            self._time_sync.pop(websocket, None)
             try:
                 queued = self._outbound.pop(websocket)
             except KeyError:
@@ -216,6 +218,31 @@ class WebSocketServer:
                 await queued.stop()
             if self._on_disconnect is not None:
                 self._on_disconnect(websocket)
+
+    async def _complete_handshake(
+        self,
+        websocket: ws_server.ServerConnection,
+        client_id: str,
+    ) -> None:
+        message = await websocket.recv()
+        if not isinstance(message, str):
+            raise TypeError("hello_request must be a text frame")
+        lines = split_inbound_text_lines(message)
+        if len(lines) != 1:
+            raise ValueError("hello_request must be the only JSON object in the first text frame")
+        hello_request = decode_hello_request(lines[0])
+        ts_server = time.time()
+        time_sync = TimeSync(ts_client=hello_request.ts_client, ts_server=ts_server)
+        self._time_sync[websocket] = time_sync
+        body = await asyncio.to_thread(self._hello_supplier, client_id)
+        hello = Hello(
+            client_id=client_id,
+            time_sync=time_sync,
+            robot=body.robot,
+            requires_robot_in_view=body.requires_robot_in_view,
+            capabilities=body.capabilities,
+        )
+        await websocket.send(encode_hello(hello))
 
     async def _handle_binary(
         self,
@@ -230,8 +257,11 @@ class WebSocketServer:
         if self._on_localization_request is None:
             logger.warning("localization_request received but no handler is configured")
             return
+        time_sync = self._time_sync.get(websocket)
+        if time_sync is None:
+            raise RuntimeError("localization_request before hello handshake completed")
         observations = decode_localization_request(message)
-        result = self._on_localization_request(observations, websocket)
+        result = self._on_localization_request(observations, websocket, time_sync)
         if asyncio.iscoroutine(result):
             await result
 
@@ -241,16 +271,6 @@ class WebSocketServer:
         websocket: ws_server.ServerConnection,
         client_id: str,
     ) -> None:
-        if isinstance(inbound, TimeSyncRequest):
-            server_recv_ts = time.time()
-            await websocket.send(
-                encode_time_sync(
-                    client_send_ts=inbound.client_send_ts,
-                    server_recv_ts=server_recv_ts,
-                    server_send_ts=time.time(),
-                )
-            )
-            return
         if isinstance(inbound, NavGoalRequest):
             if self._on_nav_goal_request is not None:
                 self._on_nav_goal_request(inbound, websocket, client_id)

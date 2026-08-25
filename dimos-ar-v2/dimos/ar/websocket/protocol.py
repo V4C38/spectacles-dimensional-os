@@ -61,8 +61,8 @@ def _quat(data: dict[str, Any], key: str) -> tuple[float, float, float, float]:
 
 
 @dataclass(frozen=True)
-class TimeSyncRequest:
-    client_send_ts: float
+class HelloRequest:
+    ts_client: float
 
 
 @dataclass(frozen=True)
@@ -97,7 +97,18 @@ class StateRequest:
     pass
 
 
-Inbound = TimeSyncRequest | NavGoalRequest | EstopRequest | LidarSettings | StateRequest
+Inbound = NavGoalRequest | EstopRequest | LidarSettings | StateRequest
+
+
+def decode_hello_request(text: str) -> HelloRequest:
+    """Parse the first-frame ``hello_request``. Raises ValueError on malformed input."""
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise TypeError("Frame must be a JSON object")
+    msg_type = _require_type(data, "type", str)
+    if msg_type != "hello_request":
+        raise ValueError(f"Expected hello_request, got {msg_type!r}")
+    return HelloRequest(ts_client=_finite_float(data, "ts_client"))
 
 
 def decode_inbound(text: str) -> Inbound:
@@ -107,11 +118,8 @@ def decode_inbound(text: str) -> Inbound:
         raise TypeError("Frame must be a JSON object")
     msg_type = _require_type(data, "type", str)
 
-    if msg_type == "time_sync_request":
-        raw_ts = data.get("client_send_ts")
-        if not isinstance(raw_ts, (int, float)):
-            raise ValueError("Missing or invalid field: client_send_ts")
-        return TimeSyncRequest(client_send_ts=float(raw_ts))
+    if msg_type == "hello_request":
+        raise ValueError("hello_request is handled during handshake, not in the message loop")
 
     if msg_type == "nav_goal_request":
         return NavGoalRequest(
@@ -275,28 +283,49 @@ class RobotDescription:
 
 
 @dataclass(frozen=True)
-class Hello:
-    client_id: str
+class TimeSync:
+    ts_client: float
+    ts_server: float
+
+    def to_server_ts(self, ts_client: float) -> float:
+        return ts_client + (self.ts_server - self.ts_client)
+
+
+@dataclass(frozen=True)
+class HelloBody:
     robot: RobotDescription
     requires_robot_in_view: bool
     capabilities: dict[str, Capability]
 
 
-def encode_hello(payload: Hello) -> str:
+@dataclass(frozen=True)
+class Hello:
+    client_id: str
+    time_sync: TimeSync
+    robot: RobotDescription
+    requires_robot_in_view: bool
+    capabilities: dict[str, Capability]
+
+
+def encode_hello(hello: Hello) -> str:
     return encode_text(
         {
             "type": "hello",
-            "client_id": payload.client_id,
-            "robot": {
-                "display_name": payload.robot.display_name,
-                "body_bounds_m": list(payload.robot.body_bounds_m),
-                "footprint_m": list(payload.robot.footprint_m),
-                "base_height_m": payload.robot.base_height_m,
+            "client_id": hello.client_id,
+            "time_sync": {
+                "ts_client": hello.time_sync.ts_client,
+                "ts_server": hello.time_sync.ts_server,
             },
-            "alignment": {"requires_robot_in_view": payload.requires_robot_in_view},
+            "robot": {
+                "display_name": hello.robot.display_name,
+                "body_bounds_m": list(hello.robot.body_bounds_m),
+                "footprint_m": list(hello.robot.footprint_m),
+                "base_height_m": hello.robot.base_height_m,
+            },
+            "alignment": {"requires_robot_in_view": hello.requires_robot_in_view},
             "capabilities": {
                 name: {"available": cap.available, "reason": cap.reason}
-                for name, cap in payload.capabilities.items()
+                for name, cap in hello.capabilities.items()
             },
         }
     )
@@ -343,28 +372,12 @@ def encode_state(payload: StateSnapshot) -> str:
     )
 
 
-def encode_time_sync(
-    *,
-    client_send_ts: float,
-    server_recv_ts: float,
-    server_send_ts: float,
-) -> str:
-    return encode_text(
-        {
-            "type": "time_sync",
-            "client_send_ts": client_send_ts,
-            "server_recv_ts": server_recv_ts,
-            "server_send_ts": server_send_ts,
-        }
-    )
-
-
 def encode_localization(
     *,
     position: tuple[float, float, float],
     orientation: tuple[float, float, float, float],
     confidence: float,
-    ts: float,
+    ts_server: float,
 ) -> str:
     return encode_text(
         {
@@ -372,7 +385,7 @@ def encode_localization(
             "position": list(position),
             "orientation": list(orientation),
             "confidence": confidence,
-            "ts": ts,
+            "ts": ts_server,
         }
     )
 

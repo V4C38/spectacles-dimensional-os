@@ -16,20 +16,21 @@ with any earlier draft of this document.
   ARModule performs **no axis conversion**. Each client converts on receipt,
   because a Spectacles client, a Quest client and a desktop viewer do not share
   one convention.
-- **13 message types** — 7 outbound, 6 inbound.
+- **12 message types** — 6 outbound, 6 inbound.
 - **No `robot_id` echo** on inbound messages. One ARModule process serves one
   robot, declared once in `hello`.
 - **No registration session.** Alignment is a single `localization_request` →
   `localization` exchange, and `localization` may also arrive unsolicited.
 - **Merged status.** `state` replaces `runtime_snapshot`, `bridge_status` and
   `nav_status`.
-- **`time_sync_request` / `time_sync`.** Application-level clock exchange for
-  pairing `capture_ts` with the robot pose buffer. Server stamps are
-  `server_recv_ts` and `server_send_ts`. WebSocket Ping/Pong (RFC 6455) remains
-  for liveness only.
+- **Clock sync in `hello`.** Client sends `hello_request` with `ts_client`;
+  server replies with `hello` including echoed `ts_client` and paired `ts_server`
+  (when the request arrived). ARModule stores the offset per connection and
+  converts inbound `capture_ts` from client time to server time. WebSocket
+  Ping/Pong (RFC 6455) remains for liveness only.
 - **Request/result naming.** Client commands use `*_request`; server replies and
-  telemetry use the bare noun (`state`, `nav_goal`, `time_sync`, …). `hello` is
-  the handshake exception.
+  telemetry use the bare noun (`state`, `nav_goal`, `localization`, …). `hello` is
+  the handshake reply.
 
 ## Transport
 
@@ -143,12 +144,36 @@ navigation regardless of who issued the goal.
 
 ## Handshake
 
-On connect the server sends `hello`, then `state`.
+On connect the client sends `hello_request`, then the server sends `hello` and
+`state`.
+
+### `hello_request` (client → server, first text frame)
+
+```json
+{
+  "type": "hello_request",
+  "ts_client": 1234.567
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `ts_client` | float | Client local time when the frame was sent (`ts_client`). |
+
+The client must send exactly one JSON object in the first text frame. ARModule
+records `ts_server` on receipt, stores the client/server offset for this
+connection, and replies with `hello`.
+
+### `hello` (server → client)
 
 ```json
 {
   "type": "hello",
   "client_id": "c3f1a9",
+  "time_sync": {
+    "ts_client": 1234.567,
+    "ts_server": 5678.901
+  },
   "robot": {
     "display_name": "Unitree Go2",
     "body_bounds_m": [0.70, 0.50, 0.55],
@@ -169,6 +194,8 @@ On connect the server sends `hello`, then `state`.
 | Field | Type | Notes |
 |-------|------|-------|
 | `client_id` | string | Server-assigned, unique per connection. |
+| `time_sync.ts_client` | float | Echo of `hello_request.ts_client`. |
+| `time_sync.ts_server` | float | Server time when `hello_request` arrived. |
 | `robot.display_name` | string | For client UI. |
 | `robot.body_bounds_m` | `[L, W, H]` | Axis-aligned envelope in `world` axes: length X, width Y, height Z. |
 | `robot.footprint_m` | `[L, W]` | Ground footprint for nav UI. |
@@ -176,6 +203,10 @@ On connect the server sends `hello`, then `state`.
 | `alignment.requires_robot_in_view` | bool | `true` when the active provider needs the robot visible in the submitted frames. Drives client capture guidance. |
 | `capabilities.*.available` | bool | Feature gate for client UI. |
 | `capabilities.*.reason` | string \| null | Human-readable, non-null exactly when `available` is `false`. |
+
+ARModule keeps `ts_server - ts_client` as the per-connection offset. The client
+may use the same pair for its own UI timing; localization does not require the
+client to know server time.
 
 The active provider is not named. Which provider is configured is a deployment
 fact, and a client that behaves differently per provider has a coupling it
@@ -186,7 +217,7 @@ client genuinely needs.
 
 ### `hello`
 
-Sent once per connection. See handshake above.
+Sent once per connection after `hello_request`. See handshake above.
 
 ### `state`
 
@@ -260,7 +291,7 @@ coordinates. Apply the newest one received.
 | Field | Notes |
 |-------|-------|
 | `confidence` | 0.0–1.0. A client may submit a fresh `localization_request` when this is low. |
-| `ts` | Server time when the fix was produced. |
+| `ts` | `ts_server` when the fix was produced. Wire key stays `ts`. |
 
 Sent in response to `localization_request`, and also **unsolicited** whenever ARModule
 learns that a previously delivered answer has moved — for example when a room
@@ -292,7 +323,7 @@ Robot pose in `world`, at high rate.
 
 | Field | Notes |
 |-------|-------|
-| `ts` | Server timestamp, seconds, floating point. |
+| `ts` | Odometry timestamp (`ts_odom`): DimOS `PoseStamped.ts` from the Go2, seconds, floating point. Not server time. |
 
 X and Y carry the odometry scale correction; Z and orientation do not. Optional
 fields may be added later (`speed_mps`, `yaw_rate_rad_s`); clients ignore unknown keys.
@@ -321,7 +352,7 @@ the robot intends to finish. Sent whenever DimOS publishes a path update.
   Same units and rounding as `pose`. Yaw comes from each DimOS path pose
   (approach direction along the segment). Wire values are rounded to 3 decimal
   places on position and 4 on yaw (~1 mm, ~0.006°). |
-| `ts` | Server timestamp when the planner published the path. |
+| `ts` | DimOS `Path.ts` (same clock family as `pose.ts` / `ts_odom`). |
 
 Empty `path_poses` clears the visualization — navigation finished, was cancelled,
 or no plan exists. `pose` is omitted on clear:
@@ -339,7 +370,7 @@ or no plan exists. `pose` is omitted on clear:
 | Offset | Size | Field |
 |--------|------|-------|
 | 0 | 4 | FourCC `0x4C444152` (`"LDAR"`) |
-| 4 | 8 | `ts` float64, server timestamp |
+| 4 | 8 | `ts` float64, DimOS `PointCloud2.ts` |
 | 12 | 4 | `point_count` uint32 |
 | 16 | `point_count * 12` | Points: `[x, y, z]` float32 triplets in `world` |
 
@@ -370,7 +401,7 @@ Then `observation_count` records, each:
 | Offset | Size | Field |
 |--------|------|-------|
 | 0 | 4 | `record_len` uint32, byte count after this field |
-| 4 | 8 | `capture_ts` float64, server clock at exposure |
+| 4 | 8 | `capture_ts` float64, `ts_client` at exposure |
 | 12 | 4 | `jpeg_len` uint32 |
 | 16 | 4 | `intrinsics_len` uint32 |
 | 20 | 12 | Camera position, float32 × 3 |
@@ -406,44 +437,12 @@ right-handed, gravity-aligned Z-up and metric — the same convention as DimOS
 `world`. A left-handed client (Spectacles) converts its camera pose on the way
 in and converts `localization.pose` back on the way out.
 
-**`capture_ts` is required and must be the exposure time in server clock**,
-not the client's local clock and not the time the message was assembled. The
-client obtains server time via `time_sync_request` / `time_sync` before sending. A
-localization round trip can take seconds, and ARModule pairs each observation
-against where the robot was at capture. A send-time stamp or an unsynchronised
-clock silently produces a fix that is wrong by however far the robot moved in
-the interim.
+**`capture_ts` is required and must be the exposure time in `ts_client`**,
+not the time the message was assembled. ARModule converts it to `ts_server`
+using the per-connection offset from `hello` before pose lookup. A localization
+round trip can take seconds; pairing uses shutter time, not send time.
 
 Response: `localization`.
-
-### `time_sync_request`
-
-```json
-{
-  "type": "time_sync_request",
-  "client_send_ts": 1234.567
-}
-```
-
-Client sends its local send time. ARModule replies with `time_sync` (stateless —
-no per-connection offset is stored on ARModule).
-
-### `time_sync`
-
-```json
-{
-  "type": "time_sync",
-  "client_send_ts": 1234.567,
-  "server_recv_ts": 5678.901,
-  "server_send_ts": 5678.905
-}
-```
-
-The client records its receive time locally and computes offset from the four
-timestamps (standard NTP-style exchange): echoed `client_send_ts`,
-`server_recv_ts`, `server_send_ts`, and the client's own receive time. Keep the
-sample with the smallest round-trip delay. Convert each observation's exposure
-time to server time before encoding `capture_ts`.
 
 ### `nav_goal_request`
 
@@ -522,19 +521,17 @@ Response: `state`.
 
 | Client → server | Server → client |
 |-----------------|-----------------|
-| `state_request` | `hello` |
-| `localization_request` (binary) | `state` |
-| `time_sync_request` | `localization` |
-| `nav_goal_request` | `time_sync` |
-| `estop_request` | `nav_goal` |
-| `lidar_settings_request` | `pose` |
-| | `lidar` (binary) |
+| `hello_request` | `hello` |
+| `state_request` | `state` |
+| `localization_request` (binary) | `localization` |
+| `nav_goal_request` | `nav_goal` |
+| `estop_request` | `pose` |
+| `lidar_settings_request` | `lidar` (binary) |
 
-Paired requests: `state_request` → `state`, `localization_request` →
-`localization`, `time_sync_request` → `time_sync`, `nav_goal_request` →
-`nav_goal` (via DimOS planner). `estop_request` and `lidar_settings_request` take
-effect through a broadcast `state` update. `hello`, `pose`, and `lidar` are
-unsolicited telemetry.
+Paired requests: `hello_request` → `hello`, `state_request` → `state`,
+`localization_request` → `localization`, `nav_goal_request` → `nav_goal` (via
+DimOS planner). `estop_request` and `lidar_settings_request` take effect through
+a broadcast `state` update. `pose` and `lidar` are unsolicited telemetry.
 
 ## Dropped from v19
 
@@ -553,8 +550,8 @@ Not carried into v1:
 - `cancel_nav_goal`. Use `estop_request`.
 - The `active` flag on `emergency_stop`, and the `"off"` / `"full"` /
   `"obstacles"` mode enum on `set_lidar_mode`.
-- v19 `ping` and `pong`. Replaced by `time_sync_request` / `time_sync` for clock offset;
-  WebSocket Ping/Pong remains for liveness.
+- v19 `ping` and `pong`. Clock offset now rides in the `hello_request` /
+  `hello` handshake; WebSocket Ping/Pong remains for liveness.
 - Every scale field — `scale_confidence`, `scale_locked`, `scale_observable`.
   Scale is a fixed robot constant applied on ARModule and is not a client
   concern.

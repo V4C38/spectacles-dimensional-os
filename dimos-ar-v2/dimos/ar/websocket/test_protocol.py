@@ -19,7 +19,8 @@ from dimos.ar.websocket.protocol import (
     RobotDescription,
     StateRequest,
     StateSnapshot,
-    TimeSyncRequest,
+    TimeSync,
+    decode_hello_request,
     decode_inbound,
     decode_localization_request,
     encode_hello,
@@ -28,13 +29,13 @@ from dimos.ar.websocket.protocol import (
     encode_pose,
     encode_state,
     encode_text,
-    encode_time_sync,
 )
 
 
 def _sample_hello(client_id: str = "abc123") -> Hello:
     return Hello(
         client_id=client_id,
+        time_sync=TimeSync(ts_client=1000.0, ts_server=2000.0),
         robot=RobotDescription(
             display_name="Unitree Go2",
             body_bounds_m=(0.7, 0.5, 0.55),
@@ -62,8 +63,37 @@ def test_encode_hello_has_no_protocol_version() -> None:
     msg = _parse_json_line(encode_hello(_sample_hello()))
     assert msg["type"] == "hello"
     assert msg["client_id"] == "abc123"
+    assert msg["time_sync"]["ts_client"] == 1000.0
+    assert msg["time_sync"]["ts_server"] == 2000.0
     assert "protocol_version" not in msg
     assert msg["robot"]["display_name"] == "Unitree Go2"
+
+
+def test_decode_hello_request() -> None:
+    req = decode_hello_request(json.dumps({"type": "hello_request", "ts_client": 99.5}))
+    assert req.ts_client == 99.5
+
+
+def test_decode_inbound_rejects_hello_request() -> None:
+    with pytest.raises(ValueError, match="hello_request"):
+        decode_inbound(json.dumps({"type": "hello_request", "ts_client": 1.0}))
+
+
+def test_encode_pose() -> None:
+    pose_msg = _parse_json_line(
+        encode_pose(
+            position=(1.0, 2.0, 3.0),
+            orientation=(0.0, 0.0, 0.0, 1.0),
+            ts=4.0,
+        )
+    )
+    assert pose_msg["type"] == "pose"
+    assert pose_msg["position"] == [1.0, 2.0, 3.0]
+
+
+def test_time_sync_converts_capture_ts() -> None:
+    sync = TimeSync(ts_client=1000.0, ts_server=2000.5)
+    assert sync.to_server_ts(1001.0) == pytest.approx(2001.5)
 
 
 def test_encode_state_round_trip_fields() -> None:
@@ -108,25 +138,7 @@ def test_encode_nav_goal_shape() -> None:
     assert "pose" not in clear_payload
 
 
-def test_encode_time_sync_and_pose() -> None:
-    time_msg = _parse_json_line(
-        encode_time_sync(client_send_ts=1.0, server_recv_ts=2.0, server_send_ts=3.0)
-    )
-    assert time_msg["type"] == "time_sync"
-    assert time_msg["server_recv_ts"] == 2.0
-
-    pose_msg = _parse_json_line(
-        encode_pose(
-            position=(1.0, 2.0, 3.0),
-            orientation=(0.0, 0.0, 0.0, 1.0),
-            ts=4.0,
-        )
-    )
-    assert pose_msg["type"] == "pose"
-    assert pose_msg["position"] == [1.0, 2.0, 3.0]
-
-
-def test_decode_nav_goal_request_and_estop_request() -> None:
+def test_encode_state_round_trip_fields() -> None:
     nav = decode_inbound(
         json.dumps(
             {
@@ -185,11 +197,7 @@ def test_decode_lidar_settings_request_rejects_inverted_band() -> None:
         )
 
 
-def test_decode_time_sync_request_and_state_request() -> None:
-    sync = decode_inbound(json.dumps({"type": "time_sync_request", "client_send_ts": 99.5}))
-    assert isinstance(sync, TimeSyncRequest)
-    assert sync.client_send_ts == 99.5
-
+def test_decode_state_request() -> None:
     state = decode_inbound(json.dumps({"type": "state_request"}))
     assert isinstance(state, StateRequest)
 
