@@ -37,7 +37,7 @@ def test_submit_goal_uncorrects_xy_for_planner() -> None:
     published = goals.submit_goal(_nav_goal_request())
 
     assert (published.x, published.y, published.z) == pytest.approx((4.0, 8.0, 0.33))
-    assert published.frame_id == "world"
+    assert published.frame_id == "odom"
     assert goals.nav_state().state == "idle"
 
 

@@ -7,15 +7,15 @@ Keep this document, `dimos/ar/websocket/protocol.py`, and
 
 ## Changelog
 
-### v1 — minimal world-frame protocol
+### v1 — minimal alignment protocol
 
 Fresh protocol for the v2 rebuild. Not compatible with v19, and not compatible
 with any earlier draft of this document.
 
-- **Wire frame:** DimOS `world`, in DimOS's own right-handed Z-up axes. The
-  ARModule performs **no axis conversion**. Each client converts on receipt,
-  because a Spectacles client, a Quest client and a desktop viewer do not share
-  one convention.
+- **Wire frame:** **`odom`** — the robot's drifting leg-odometry frame, in
+  DimOS's right-handed Z-up axes. ARModule performs **no axis conversion**. Each
+  client converts on receipt, because a Spectacles client, a Quest client and a
+  desktop viewer do not share one convention.
 - **12 message types** — 6 outbound, 6 inbound.
 - **No `robot_id` echo** on inbound messages. One ARModule process serves one
   robot, declared once in `hello`.
@@ -46,7 +46,7 @@ with any earlier draft of this document.
 
 ## Coordinate conventions
 
-Every position and orientation on the wire is in the **`world`** frame, in
+Every position and orientation on the wire is in the **`odom`** frame, in
 DimOS's axes:
 
 | Axis | Direction |
@@ -56,26 +56,25 @@ DimOS's axes:
 | Z | Up |
 
 Right-handed, Z-up, metres. This is the ROS convention that DimOS follows
-throughout, and `world` is the string DimOS puts in `frame_id` on the messages
-ARModule reads.
+throughout.
 
 Poses are position `[x, y, z]` and orientation `[qx, qy, qz, qw]` — quaternion,
 scalar-last.
 
-### What `world` is
+### What `odom` is
 
-`world` is the robot's odometry frame. Its origin is wherever the robot was when
+`odom` is the robot's odometry frame. Its origin is wherever the robot was when
 its odometry started, and it **drifts** — it is dead reckoning, not a survey. Two
 consequences for clients:
 
-- Content anchored in `world` slowly diverges from the physical room.
+- Content anchored in `odom` slowly diverges from the physical room.
 - ARModule issues corrections through `localization` (see below). A client
   should apply the newest one it has rather than assuming its first alignment
   holds forever.
 
-A naming wart worth knowing: DimOS names the *stream* `odom` while the
-`frame_id` *inside* those messages is `world`. This document uses `world`
-throughout, matching the data.
+DimOS Go2 drivers currently stamp this frame as `frame_id="world"` on incoming
+messages; ARModule normalizes that to `odom` at the import boundary and uses
+`odom` everywhere on the wire and in client-facing docs.
 
 ### Axis conversion is the client's job
 
@@ -86,9 +85,9 @@ Informative example, for a left-handed Y-up client such as Lens Studio (X right,
 Y up, Z forward):
 
 ```text
-x_client = -y_world
-y_client =  z_world
-z_client =  x_world
+x_client = -y_odom
+y_client =  z_odom
+z_client =  x_odom
 ```
 
 Orientation must be converted with the same basis change, which for a
@@ -197,7 +196,7 @@ connection, and replies with `hello`.
 | `time_sync.ts_client` | float | Echo of `hello_request.ts_client`. |
 | `time_sync.ts_server` | float | Server time when `hello_request` arrived. |
 | `robot.display_name` | string | For client UI. |
-| `robot.body_bounds_m` | `[L, W, H]` | Axis-aligned envelope in `world` axes: length X, width Y, height Z. |
+| `robot.body_bounds_m` | `[L, W, H]` | Axis-aligned envelope in `odom` axes: length X, width Y, height Z. |
 | `robot.footprint_m` | `[L, W]` | Ground footprint for nav UI. |
 | `robot.base_height_m` | float | Height of the odometry pose origin above the ground, so a client can place a ground marker under a `pose`. |
 | `alignment.requires_robot_in_view` | bool | `true` when the active provider needs the robot visible in the submitted frames. Drives client capture guidance. |
@@ -275,7 +274,7 @@ user to look at the robot again". Providers that correct on their own leave it
 
 ### `localization`
 
-The client's own pose in `world` — its tracking origin expressed in world
+The client's own pose in `odom` — its tracking origin expressed in odom
 coordinates. Apply the newest one received.
 
 ```json
@@ -304,13 +303,13 @@ jitter does not produce a stream of corrections. A client should still animate
 toward a new transform rather than snapping to it, since a correction can be
 large after a long drift.
 
-Always in `world`, regardless of which frame the underlying provider works in.
+Always in `odom`, regardless of which frame the underlying provider works in.
 When a provider answers in a scanned-map frame ARModule composes it into
-`world` before sending, because only ARModule knows that relationship.
+`odom` before sending, because only ARModule knows that relationship.
 
 ### `pose`
 
-Robot pose in `world`, at high rate.
+Robot pose in `odom`, at high rate.
 
 ```json
 {
@@ -330,7 +329,7 @@ fields may be added later (`speed_mps`, `yaw_rate_rad_s`); clients ignore unknow
 
 ### `nav_goal`
 
-Active navigation in `world`: the planned route plus the terminal pose where
+Active navigation in `odom`: the planned route plus the terminal pose where
 the robot intends to finish. Sent whenever DimOS publishes a path update.
 
 ```json
@@ -344,7 +343,7 @@ the robot intends to finish. Sent whenever DimOS publishes a path update.
 
 | Field | Notes |
 |-------|-------|
-| `pose` | Terminal pose in `world` as `[x, y, z, yaw]` radians — maps to the last
+| `pose` | Terminal pose in `odom` as `[x, y, z, yaw]` radians — maps to the last
   `PoseStamped` on DimOS `path`. Position X/Y are scale-corrected; Z and yaw are
   not. Today this duplicates the last `path_poses` entry; clients should treat
   `pose` as authoritative for the target. |
@@ -372,7 +371,7 @@ or no plan exists. `pose` is omitted on clear:
 | 0 | 4 | FourCC `0x4C444152` (`"LDAR"`) |
 | 4 | 8 | `ts` float64, DimOS `PointCloud2.ts` |
 | 12 | 4 | `point_count` uint32 |
-| 16 | `point_count * 12` | Points: `[x, y, z]` float32 triplets in `world` |
+| 16 | `point_count * 12` | Points: `[x, y, z]` float32 triplets in `odom` |
 
 Points are pre-filtered on ARModule: height band, range, and subsampling
 toward the robot. They carry **no scale correction** — see the coordinate section
@@ -384,7 +383,7 @@ Inbound messages do not carry `robot_id`.
 
 ### `localization_request` (binary)
 
-Submits one or more camera observations and asks "where am I in `world`?".
+Submits one or more camera observations and asks "where am I in `odom`?".
 
 Multiple observations in one request let a provider fuse viewpoints, which
 matters when a single frame is ambiguous. A client may send one.
@@ -434,7 +433,7 @@ handles fisheye corners internally via DimOS).
 **Camera pose** is the **camera optical frame** (X right, Y down, Z along the
 view direction) expressed in the caller's own tracking frame. That frame must be
 right-handed, gravity-aligned Z-up and metric — the same convention as DimOS
-`world`. A left-handed client (Spectacles) converts its camera pose on the way
+`odom`. A left-handed client (Spectacles) converts its camera pose on the way
 in and converts `localization.pose` back on the way out.
 
 **`capture_ts` is required and must be the exposure time in `ts_client`**,
@@ -454,7 +453,7 @@ Response: `localization`.
 }
 ```
 
-Goal in `world`. **`position` and `orientation` are both required** — same fields
+Goal in `odom`. **`position` and `orientation` are both required** — same fields
 as `pose`. Send them in the same coordinates you receive `pose` in; ARModule
 inverts the scale correction on ingress and publishes to DimOS `goal_request`.
 
@@ -491,7 +490,7 @@ losing the headset cannot leave the robot walking.
 | Field | Type | Notes |
 |-------|------|-------|
 | `enabled` | bool | Required. `false` stops `lidar` frames entirely. |
-| `min_height_m` | float | Required. Lower bound of the height band, in `world` Z. |
+| `min_height_m` | float | Required. Lower bound of the height band, in `odom` Z. |
 | `max_height_m` | float | Required. Upper bound of the height band. |
 | `max_range_m` | float | Required. Horizontal radius around the robot to keep. |
 

@@ -22,7 +22,7 @@ def correct_odom_pose(pose: PoseStamped, *, factor: float) -> PoseStamped:
     corrected_x, corrected_y = correct_odom_xy(pose.x, pose.y, factor=factor)
     return PoseStamped(
         ts=pose.ts,
-        frame_id=pose.frame_id,
+        frame_id="odom",
         position=[corrected_x, corrected_y, pose.z],
         orientation=[
             pose.orientation.x,
@@ -36,7 +36,7 @@ def correct_odom_pose(pose: PoseStamped, *, factor: float) -> PoseStamped:
 def correct_odom_path(path: Path, *, factor: float) -> Path:
     return Path(
         ts=path.ts,
-        frame_id=path.frame_id,
+        frame_id="odom",
         poses=[correct_odom_pose(pose, factor=factor) for pose in path.poses],
     )
 
@@ -45,7 +45,7 @@ def uncorrect_odom_pose(pose: PoseStamped, *, factor: float) -> PoseStamped:
     uncorrected_x, uncorrected_y = uncorrect_odom_xy(pose.x, pose.y, factor=factor)
     return PoseStamped(
         ts=pose.ts,
-        frame_id=pose.frame_id,
+        frame_id="odom",
         position=[uncorrected_x, uncorrected_y, pose.z],
         orientation=[
             pose.orientation.x,

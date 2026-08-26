@@ -29,7 +29,7 @@ class NavGoalCoordinator:
     def submit_goal(self, msg: NavGoalRequest) -> PoseStamped:
         client_pose = PoseStamped(
             ts=time.time(),
-            frame_id="world",
+            frame_id="odom",
             position=list(msg.position),
             orientation=list(msg.orientation),
         )

@@ -5,6 +5,7 @@ from typing import ClassVar
 from dimos_lcm.std_msgs import Bool
 import websockets.asyncio.server as ws_server
 
+from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.navigation.nav_goals import NavGoalCoordinator
 from dimos.ar.robot.go2 import GO2_PROFILE
 from dimos.ar.robot.state_publisher import RobotStatePublisher
@@ -56,6 +57,7 @@ class ARModule(Module):  # type: ignore[misc]
     _ws_server: WebSocketServer
     _state_publisher: RobotStatePublisher
     _nav_goal_coordinator: NavGoalCoordinator
+    _pose_buffer: PoseBuffer
     _lidar: LidarSettings
 
     @rpc
@@ -82,6 +84,7 @@ class ARModule(Module):  # type: ignore[misc]
             self._ws_server,
             odom_correction_factor=GO2_PROFILE.odom_correction_factor,
         )
+        self._pose_buffer = PoseBuffer()
         logger.info("ARModule build complete")
 
     @rpc
@@ -193,6 +196,7 @@ class ARModule(Module):  # type: ignore[misc]
         self._state_publisher.publish_lidar(msg, lidar=self._lidar)
 
     async def handle_odom(self, msg: PoseStamped) -> None:
+        self._pose_buffer.push(msg)
         self._state_publisher.publish_odom(msg)
 
     async def handle_path(self, msg: Path) -> None:

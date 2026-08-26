@@ -40,7 +40,7 @@ def test_correct_odom_pose_preserves_z_orientation_and_metadata() -> None:
     corrected = correct_odom_pose(pose, factor=1.25)
 
     assert corrected.ts == pose.ts
-    assert corrected.frame_id == pose.frame_id
+    assert corrected.frame_id == "odom"
     assert corrected.x == pytest.approx(5.0)
     assert corrected.y == pytest.approx(10.0)
     assert corrected.z == pose.z
@@ -69,7 +69,7 @@ def test_correct_odom_path_corrects_every_waypoint() -> None:
     corrected = correct_odom_path(path, factor=1.25)
 
     assert corrected.ts == path.ts
-    assert corrected.frame_id == path.frame_id
+    assert corrected.frame_id == "odom"
     assert [(pose.x, pose.y) for pose in corrected.poses] == [(2.5, 5.0), (7.5, 10.0)]
     assert [pose.z for pose in corrected.poses] == [pose.z for pose in path.poses]
 

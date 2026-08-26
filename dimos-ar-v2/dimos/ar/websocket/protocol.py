@@ -8,13 +8,13 @@ import math
 import struct
 from typing import Any, Literal
 
+from dimos.ar.localization.provider import Intrinsics
+
 LIDAR_FOURCC = 0x4C444152
 LOCALIZATION_REQUEST_FOURCC = 0x4C4F4341
 
 NavPhase = Literal["idle", "following_path", "resolved"]
 NavOutcome = Literal["succeeded", "failed"]
-CameraDistortionModel = Literal["none", "plumb_bob", "equidistant"]
-
 
 def _dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"), allow_nan=False)
@@ -148,18 +148,6 @@ def decode_inbound(text: str) -> Inbound:
         return StateRequest()
 
     raise ValueError(f"Unknown inbound frame type: {msg_type!r}")
-
-
-@dataclass(frozen=True)
-class Intrinsics:
-    fx: float
-    fy: float
-    cx: float
-    cy: float
-    width: int
-    height: int
-    distortion_model: CameraDistortionModel
-    distortion: tuple[float, ...]
 
 
 @dataclass(frozen=True)
