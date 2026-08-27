@@ -26,15 +26,15 @@ class Observation:
     jpeg: bytes
     intrinsics: Intrinsics
     camera_pose: Pose
-    capture_ts: float
+    ts_server: float
 
 
 @dataclass(frozen=True)
-class Localization:
+class LocalizedPose:
     pose: Pose
     frame_id: str
     confidence: float
 
 
-class AlignmentProvider(Protocol):
-    def localize(self, observations: Sequence[Observation]) -> Localization | None: ...
+class Localizer(Protocol):
+    def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None: ...

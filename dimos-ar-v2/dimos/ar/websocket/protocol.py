@@ -8,7 +8,8 @@ import math
 import struct
 from typing import Any, Literal
 
-from dimos.ar.localization.provider import Intrinsics
+from dimos.ar.localization.types import Intrinsics, Observation
+from dimos.msgs.geometry_msgs.Pose import Pose
 
 LIDAR_FOURCC = 0x4C444152
 LOCALIZATION_REQUEST_FOURCC = 0x4C4F4341
@@ -279,10 +280,23 @@ class TimeSync:
         return ts_client + (self.ts_server - self.ts_client)
 
 
+def observation_from_localize(
+    wire: LocalizeObservation,
+    *,
+    time_sync: TimeSync,
+) -> Observation:
+    """Convert wire observation to domain; ``capture_ts`` becomes ``ts_server``."""
+    return Observation(
+        jpeg=wire.jpeg,
+        intrinsics=wire.intrinsics,
+        camera_pose=Pose(*wire.camera_position, *wire.camera_orientation),
+        ts_server=time_sync.to_server_ts(wire.capture_ts),
+    )
+
+
 @dataclass(frozen=True)
 class HelloBody:
     robot: RobotDescription
-    requires_robot_in_view: bool
     capabilities: dict[str, Capability]
 
 
@@ -291,7 +305,6 @@ class Hello:
     client_id: str
     time_sync: TimeSync
     robot: RobotDescription
-    requires_robot_in_view: bool
     capabilities: dict[str, Capability]
 
 
@@ -310,7 +323,6 @@ def encode_hello(hello: Hello) -> str:
                 "footprint_m": list(hello.robot.footprint_m),
                 "base_height_m": hello.robot.base_height_m,
             },
-            "alignment": {"requires_robot_in_view": hello.requires_robot_in_view},
             "capabilities": {
                 name: {"available": cap.available, "reason": cap.reason}
                 for name, cap in hello.capabilities.items()

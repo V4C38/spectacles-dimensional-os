@@ -27,9 +27,9 @@ class PoseBuffer:
     """Interpolate the robot pose in ``odom`` at a past ``ts_server``.
 
     Odom samples are indexed by the server time each message arrived
-    (``handle_odom``). Localization converts the client's ``capture_ts``
-    (``ts_client``) to ``ts_server`` using per-connection ``TimeSync``,
-    then calls ``at_server_ts`` for the pose at shutter time.
+    (``handle_odom``). The WebSocket layer converts wire ``capture_ts`` to
+    ``ts_server`` before building domain ``Observation``s, then providers call
+    ``at_server_ts`` for the pose at shutter time.
     """
 
     def __init__(

@@ -239,7 +239,6 @@ class WebSocketServer:
             client_id=client_id,
             time_sync=time_sync,
             robot=body.robot,
-            requires_robot_in_view=body.requires_robot_in_view,
             capabilities=body.capabilities,
         )
         await websocket.send(encode_hello(hello))

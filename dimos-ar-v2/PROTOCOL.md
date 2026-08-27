@@ -179,9 +179,6 @@ connection, and replies with `hello`.
     "footprint_m": [0.70, 0.50],
     "base_height_m": 0.33
   },
-  "alignment": {
-    "requires_robot_in_view": false
-  },
   "capabilities": {
     "lidar": { "available": true, "reason": null },
     "navigation": { "available": true, "reason": null },
@@ -199,7 +196,6 @@ connection, and replies with `hello`.
 | `robot.body_bounds_m` | `[L, W, H]` | Axis-aligned envelope in `odom` axes: length X, width Y, height Z. |
 | `robot.footprint_m` | `[L, W]` | Ground footprint for nav UI. |
 | `robot.base_height_m` | float | Height of the odometry pose origin above the ground, so a client can place a ground marker under a `pose`. |
-| `alignment.requires_robot_in_view` | bool | `true` when the active provider needs the robot visible in the submitted frames. Drives client capture guidance. |
 | `capabilities.*.available` | bool | Feature gate for client UI. |
 | `capabilities.*.reason` | string \| null | Human-readable, non-null exactly when `available` is `false`. |
 
@@ -207,10 +203,10 @@ ARModule keeps `ts_server - ts_client` as the per-connection offset. The client
 may use the same pair for its own UI timing; localization does not require the
 client to know server time.
 
-The active provider is not named. Which provider is configured is a deployment
-fact, and a client that behaves differently per provider has a coupling it
-should not have. `requires_robot_in_view` is the one behavioural difference a
-client genuinely needs.
+Which alignment provider is configured is a deployment fact. Capture guidance
+(look at the robot vs the room) belongs in the Lens or launcher config for that
+site — not in `hello`. The client submits `localization_request` the same way
+either way; `state.alignment.stale` is the only alignment signal on the wire.
 
 ## Outbound messages (server → client)
 
@@ -427,7 +423,9 @@ Then `observation_count` records, each:
 
 `distortion_model` is one of `"none"`, `"plumb_bob"` or `"equidistant"`.
 `distortion` is the coefficient array for that model (empty for `"none"`).
-ARModule undistorts to pinhole when a provider needs it (VPS always; AprilTag
+`width` and `height` must match the decoded JPEG dimensions; ARModule rejects a
+record whose calibration describes a different image size.
+ARModule undistorts to pinhole when a provider needs it (VPS always; fiducial marker
 handles fisheye corners internally via DimOS).
 
 **Camera pose** is the **camera optical frame** (X right, Y down, Z along the
@@ -554,7 +552,7 @@ Not carried into v1:
 - Every scale field — `scale_confidence`, `scale_locked`, `scale_observable`.
   Scale is a fixed robot constant applied on ARModule and is not a client
   concern.
-- Robot AprilTag profile. Tag IDs and sizes matter when printing a marker, which
+- Robot fiducial marker profile. Marker IDs and print sizes matter when generating a marker sheet, which
   is a launcher concern, not something a running client needs.
 
 The Lens client is not compatible with v1 and needs its protocol module

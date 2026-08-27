@@ -2,28 +2,28 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from dimos.ar.localization.provider import (
-    AlignmentProvider,
+from dimos.ar.localization.types import (
     Intrinsics,
-    Localization,
+    LocalizedPose,
+    Localizer,
     Observation,
 )
 from dimos.msgs.geometry_msgs.Pose import Pose
 
 
-class _FixedProvider:
-    def localize(self, observations: Sequence[Observation]) -> Localization | None:
+class _FixedLocalizer:
+    def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None:
         if not observations:
             return None
-        return Localization(
+        return LocalizedPose(
             pose=Pose(1.0, 2.0, 3.0),
             frame_id="odom",
             confidence=0.9,
         )
 
 
-def test_alignment_provider_protocol() -> None:
-    provider: AlignmentProvider = _FixedProvider()
+def test_localizer_protocol() -> None:
+    localizer: Localizer = _FixedLocalizer()
     observation = Observation(
         jpeg=b"\xff\xd8\xff",
         intrinsics=Intrinsics(
@@ -37,10 +37,10 @@ def test_alignment_provider_protocol() -> None:
             distortion=(),
         ),
         camera_pose=Pose(0.0, 0.0, 1.5),
-        capture_ts=100.0,
+        ts_server=100.0,
     )
 
-    result = provider.localize([observation])
+    result = localizer.localize([observation])
 
     assert result is not None
     assert result.frame_id == "odom"
@@ -51,6 +51,6 @@ def test_alignment_provider_protocol() -> None:
 
 
 def test_localize_empty_observations_returns_none() -> None:
-    provider: AlignmentProvider = _FixedProvider()
+    localizer: Localizer = _FixedLocalizer()
 
-    assert provider.localize([]) is None
+    assert localizer.localize([]) is None

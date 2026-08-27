@@ -128,7 +128,7 @@ def subsample_near_robot(
             size=target_points,
             replace=False,
         )
-        return pts[chosen].astype(np.float32)
+        return np.asarray(pts[chosen], dtype=np.float32)
 
     return pts[np.asarray(selected, dtype=np.int64)].astype(np.float32)
 

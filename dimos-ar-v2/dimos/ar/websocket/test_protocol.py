@@ -5,6 +5,7 @@ import struct
 
 import pytest
 
+from dimos.ar.localization.types import Intrinsics
 from dimos.ar.websocket.protocol import (
     LIDAR_FOURCC,
     LOCALIZATION_REQUEST_FOURCC,
@@ -29,6 +30,7 @@ from dimos.ar.websocket.protocol import (
     encode_pose,
     encode_state,
     encode_text,
+    observation_from_localize,
 )
 
 
@@ -42,7 +44,6 @@ def _sample_hello(client_id: str = "abc123") -> Hello:
             footprint_m=(0.7, 0.5),
             base_height_m=0.33,
         ),
-        requires_robot_in_view=False,
         capabilities={
             "lidar": Capability(available=True, reason=None),
             "navigation": Capability(available=True, reason=None),
@@ -66,6 +67,7 @@ def test_encode_hello_has_no_protocol_version() -> None:
     assert msg["time_sync"]["ts_client"] == 1000.0
     assert msg["time_sync"]["ts_server"] == 2000.0
     assert "protocol_version" not in msg
+    assert "alignment" not in msg
     assert msg["robot"]["display_name"] == "Unitree Go2"
 
 
@@ -94,6 +96,31 @@ def test_encode_pose() -> None:
 def test_time_sync_converts_capture_ts() -> None:
     sync = TimeSync(ts_client=1000.0, ts_server=2000.5)
     assert sync.to_server_ts(1001.0) == pytest.approx(2001.5)
+
+
+def test_observation_from_localize_converts_capture_ts() -> None:
+    sync = TimeSync(ts_client=1000.0, ts_server=2000.5)
+    wire = LocalizeObservation(
+        capture_ts=1001.0,
+        jpeg=b"\xff\xd8\xff",
+        intrinsics=Intrinsics(
+            fx=100.0,
+            fy=100.0,
+            cx=50.0,
+            cy=50.0,
+            width=100,
+            height=100,
+            distortion_model="none",
+            distortion=(),
+        ),
+        camera_position=(0.0, 0.0, 0.0),
+        camera_orientation=(0.0, 0.0, 0.0, 1.0),
+    )
+
+    domain = observation_from_localize(wire, time_sync=sync)
+
+    assert domain.ts_server == pytest.approx(2001.5)
+    assert domain.jpeg == wire.jpeg
 
 
 def test_encode_state_round_trip_fields() -> None:

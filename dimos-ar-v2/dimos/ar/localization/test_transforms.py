@@ -17,9 +17,7 @@ from dimos.utils.transform_utils import pose_to_matrix
 
 def test_normalize_client_alignment_removes_small_tilt() -> None:
     half_roll = math.radians(2.0)
-    tilted = pose_to_matrix(
-        Pose(1.0, 2.0, 3.0, math.sin(half_roll), 0.0, 0.0, math.cos(half_roll))
-    )
+    tilted = pose_to_matrix(Pose(1.0, 2.0, 3.0, math.sin(half_roll), 0.0, 0.0, math.cos(half_roll)))
     normalized = normalize_client_alignment(
         tilted,
         max_tilt_rad=math.radians(5.0),
@@ -35,9 +33,7 @@ def test_normalize_client_alignment_removes_small_tilt() -> None:
 
 def test_normalize_client_alignment_rejects_excessive_tilt() -> None:
     half_roll = math.radians(10.0)
-    tilted = pose_to_matrix(
-        Pose(0.0, 0.0, 0.0, math.sin(half_roll), 0.0, 0.0, math.cos(half_roll))
-    )
+    tilted = pose_to_matrix(Pose(0.0, 0.0, 0.0, math.sin(half_roll), 0.0, 0.0, math.cos(half_roll)))
 
     assert (
         normalize_client_alignment(
@@ -61,8 +57,11 @@ def test_fuse_pose_estimates_rejects_position_outlier() -> None:
     )
 
     assert fused is not None
-    assert fused[0, 3] == pytest.approx(1.025, abs=0.05)
-    assert fused[1, 3] == pytest.approx(0.01, abs=0.05)
+    assert fused.transform[0, 3] == pytest.approx(1.025, abs=0.05)
+    assert fused.transform[1, 3] == pytest.approx(0.01, abs=0.05)
+    assert fused.inlier_indices == (0, 1)
+    assert fused.max_position_residual_m > 0.0
+    assert fused.max_yaw_residual_rad > 0.0
 
 
 def test_fuse_pose_estimates_returns_none_when_all_rejected() -> None:
@@ -96,7 +95,10 @@ def test_fuse_pose_estimates_accepts_one_estimate() -> None:
     )
 
     assert fused is not None
-    assert np.allclose(fused, matrix_from_position_and_yaw((1.0, 2.0, 3.0), 0.0))
+    assert np.allclose(fused.transform, matrix_from_position_and_yaw((1.0, 2.0, 3.0), 0.0))
+    assert fused.inlier_indices == (0,)
+    assert fused.max_position_residual_m == 0.0
+    assert fused.max_yaw_residual_rad == 0.0
 
 
 def test_yaw_from_transform_matches_pose_yaw() -> None:

@@ -31,7 +31,6 @@ def _sample_hello(_client_id: str) -> HelloBody:
             footprint_m=(0.7, 0.5),
             base_height_m=0.33,
         ),
-        requires_robot_in_view=False,
         capabilities={
             "lidar": Capability(available=True, reason=None),
             "navigation": Capability(available=True, reason=None),

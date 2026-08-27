@@ -1,13 +1,22 @@
 from __future__ import annotations
 
-from typing import ClassVar
+import asyncio
+from typing import ClassVar, Literal
 
 from dimos_lcm.std_msgs import Bool
+from pydantic import BaseModel, Field
 import websockets.asyncio.server as ws_server
 
+from dimos.ar.localization.fiducial_marker.localizer import FiducialMarkerLocalizer
 from dimos.ar.localization.pose_buffer import PoseBuffer
+from dimos.ar.localization.reply import encode_odom_localization_reply
+from dimos.ar.localization.types import LocalizedPose, Localizer, Observation
 from dimos.ar.navigation.nav_goals import NavGoalCoordinator
-from dimos.ar.robot.go2 import GO2_PROFILE
+from dimos.ar.robot.go2 import (
+    GO2_FIDUCIAL_DICTIONARY,
+    GO2_FIDUCIAL_MARKER_MOUNTS,
+    GO2_PROFILE,
+)
 from dimos.ar.robot.state_publisher import RobotStatePublisher
 from dimos.ar.websocket.protocol import (
     DEFAULT_LIDAR_SETTINGS,
@@ -23,6 +32,7 @@ from dimos.ar.websocket.protocol import (
     TimeSync,
     encode_nav_goal,
     encode_state,
+    observation_from_localize,
 )
 from dimos.ar.websocket.server import WebSocketServer
 from dimos.core.core import rpc
@@ -37,8 +47,17 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger()
 
 
+class AlignmentProviderConfig(BaseModel):
+    type: Literal["fiducial_marker", "vps"]
+
+
+class AlignmentConfig(BaseModel):
+    providers: list[AlignmentProviderConfig] = Field(default_factory=list)
+
+
 class ARModuleConfig(ModuleConfig):  # type: ignore[misc]
     port: int = 8787
+    alignment: AlignmentConfig = Field(default_factory=AlignmentConfig)
 
 
 class ARModule(Module):  # type: ignore[misc]
@@ -58,6 +77,7 @@ class ARModule(Module):  # type: ignore[misc]
     _state_publisher: RobotStatePublisher
     _nav_goal_coordinator: NavGoalCoordinator
     _pose_buffer: PoseBuffer
+    _localizers: list[Localizer]
     _lidar: LidarSettings
 
     @rpc
@@ -85,7 +105,23 @@ class ARModule(Module):  # type: ignore[misc]
             odom_correction_factor=GO2_PROFILE.odom_correction_factor,
         )
         self._pose_buffer = PoseBuffer()
+        self._localizers = self._build_localizers()
         logger.info("ARModule build complete")
+
+    def _build_localizers(self) -> list[Localizer]:
+        localizers: list[Localizer] = []
+        for provider in self.config.alignment.providers:
+            if provider.type == "fiducial_marker":
+                localizers.append(
+                    FiducialMarkerLocalizer(
+                        pose_buffer=self._pose_buffer,
+                        marker_mounts=GO2_FIDUCIAL_MARKER_MOUNTS,
+                        dictionary_name=GO2_FIDUCIAL_DICTIONARY,
+                    )
+                )
+            elif provider.type == "vps":
+                logger.warning("VPS alignment provider is configured but not wired yet")
+        return localizers
 
     @rpc
     def start(self) -> None:
@@ -110,7 +146,6 @@ class ARModule(Module):  # type: ignore[misc]
                 footprint_m=GO2_PROFILE.footprint_m,
                 base_height_m=GO2_PROFILE.base_height_m,
             ),
-            requires_robot_in_view=False,
             capabilities={
                 "lidar": Capability(available=True, reason=None),
                 "navigation": Capability(available=True, reason=None),
@@ -176,16 +211,58 @@ class ARModule(Module):  # type: ignore[misc]
     ) -> None:
         self._broadcast_state()
 
-    def _on_localization_request(
+    async def _on_localization_request(
         self,
         observations: tuple[LocalizeObservation, ...],
-        _websocket: ws_server.ServerConnection,
-        _time_sync: TimeSync,
+        websocket: ws_server.ServerConnection,
+        time_sync: TimeSync,
     ) -> None:
-        logger.warning(
-            "localization_request received but alignment is not configured",
-            observation_count=len(observations),
+        if not self._localizers:
+            logger.warning(
+                "localization_request received but alignment is not configured",
+                observation_count=len(observations),
+            )
+            return
+
+        domain_observations = self._observations_from_wire(observations, time_sync=time_sync)
+        ts_server = max(observation.ts_server for observation in domain_observations)
+
+        localized = await self._localize(domain_observations)
+        if localized is None:
+            return
+        if localized.frame_id != "odom":
+            logger.warning(
+                "localization result is not in odom and OdomMap wiring is not implemented",
+                frame_id=localized.frame_id,
+            )
+            return
+
+        self._ws_server.schedule_send_to(
+            websocket,
+            encode_odom_localization_reply(
+                localized,
+                odom_correction_factor=GO2_PROFILE.odom_correction_factor,
+                ts_server=ts_server,
+            ),
         )
+
+    def _observations_from_wire(
+        self,
+        observations: tuple[LocalizeObservation, ...],
+        *,
+        time_sync: TimeSync,
+    ) -> list[Observation]:
+        return [
+            observation_from_localize(observation, time_sync=time_sync)
+            for observation in observations
+        ]
+
+    async def _localize(self, observations: list[Observation]) -> LocalizedPose | None:
+        for localizer in self._localizers:
+            result = await asyncio.to_thread(localizer.localize, observations)
+            if result is not None:
+                return result
+        return None
 
     def _publish_stop(self) -> None:
         if self.stop_movement.transport is None:

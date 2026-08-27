@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,14 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 _ODOM_UP = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+
+
+@dataclass(frozen=True)
+class PoseFusionResult:
+    transform: NDArray[np.float64]
+    inlier_indices: tuple[int, ...]
+    max_position_residual_m: float
+    max_yaw_residual_rad: float
 
 
 def yaw_from_transform(T: NDArray[np.float64]) -> float:
@@ -73,20 +82,20 @@ def fuse_pose_estimates(
     max_tilt_rad: float,
     max_position_residual_m: float,
     max_yaw_residual_rad: float,
-) -> NDArray[np.float64] | None:
+) -> PoseFusionResult | None:
     if not transforms:
         return None
 
     normalized = [
-        estimate
-        for T in transforms
+        (index, estimate)
+        for index, T in enumerate(transforms)
         if (estimate := normalize_client_alignment(T, max_tilt_rad=max_tilt_rad)) is not None
     ]
     if not normalized:
         return None
 
-    positions = np.stack([T[:3, 3] for T in normalized], axis=0)
-    yaws = np.array([yaw_from_transform(T) for T in normalized], dtype=np.float64)
+    positions = np.stack([T[:3, 3] for _, T in normalized], axis=0)
+    yaws = np.array([yaw_from_transform(T) for _, T in normalized], dtype=np.float64)
 
     median_position = np.median(positions, axis=0)
     median_yaw = math.atan2(
@@ -94,28 +103,41 @@ def fuse_pose_estimates(
         float(np.median(np.cos(yaws))),
     )
 
-    keep = []
-    for index, transform in enumerate(normalized):
-        position = positions[index]
+    keep: list[tuple[int, NDArray[np.float64]]] = []
+    for normalized_index, (source_index, transform) in enumerate(normalized):
+        position = positions[normalized_index]
         position_residual = float(np.linalg.norm(position - median_position))
-        yaw_residual = abs(normalize_angle(yaws[index] - median_yaw))
+        yaw_residual = abs(normalize_angle(yaws[normalized_index] - median_yaw))
         if position_residual <= max_position_residual_m and yaw_residual <= max_yaw_residual_rad:
-            keep.append(transform)
+            keep.append((source_index, transform))
 
     if not keep:
         return None
 
     if len(keep) == 1:
-        return keep[0]
+        fused = keep[0][1]
+        max_position_residual = 0.0
+        max_yaw_residual = 0.0
+    else:
+        kept_positions = np.stack([T[:3, 3] for _, T in keep], axis=0)
+        kept_yaws = np.array([yaw_from_transform(T) for _, T in keep], dtype=np.float64)
+        fused_position = np.median(kept_positions, axis=0)
+        fused_yaw = math.atan2(
+            float(np.median(np.sin(kept_yaws))),
+            float(np.median(np.cos(kept_yaws))),
+        )
+        fused = matrix_from_position_and_yaw(
+            (float(fused_position[0]), float(fused_position[1]), float(fused_position[2])),
+            fused_yaw,
+        )
+        max_position_residual = max(
+            float(np.linalg.norm(position - fused_position)) for position in kept_positions
+        )
+        max_yaw_residual = max(abs(normalize_angle(float(yaw) - fused_yaw)) for yaw in kept_yaws)
 
-    kept_positions = np.stack([T[:3, 3] for T in keep], axis=0)
-    kept_yaws = np.array([yaw_from_transform(T) for T in keep], dtype=np.float64)
-    fused_position = np.median(kept_positions, axis=0)
-    fused_yaw = math.atan2(
-        float(np.median(np.sin(kept_yaws))),
-        float(np.median(np.cos(kept_yaws))),
-    )
-    return matrix_from_position_and_yaw(
-        (float(fused_position[0]), float(fused_position[1]), float(fused_position[2])),
-        fused_yaw,
+    return PoseFusionResult(
+        transform=fused,
+        inlier_indices=tuple(index for index, _ in keep),
+        max_position_residual_m=max_position_residual,
+        max_yaw_residual_rad=max_yaw_residual,
     )
