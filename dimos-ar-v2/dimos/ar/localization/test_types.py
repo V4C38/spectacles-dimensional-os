@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from dimos.ar.localization.types import (
+    CapturePolicy,
     Intrinsics,
+    LocalizationProviderType,
     LocalizedPose,
     Localizer,
     Observation,
@@ -54,3 +56,15 @@ def test_localize_empty_observations_returns_none() -> None:
     localizer: Localizer = _FixedLocalizer()
 
     assert localizer.localize([]) is None
+
+
+def test_capture_policy_wire_values() -> None:
+    assert CapturePolicy.ROBOT_LOS_REQUIRED == "robot_los_required"
+    assert CapturePolicy.ROBOT_LOS_PREFERRED == "robot_los_preferred"
+    assert CapturePolicy.ANY_ANGLE == "any_angle"
+    assert CapturePolicy("any_angle") is CapturePolicy.ANY_ANGLE
+
+
+def test_localization_provider_type_wire_values() -> None:
+    assert LocalizationProviderType.FIDUCIAL_MARKER == "fiducial_marker"
+    assert LocalizationProviderType.VPS == "vps"

@@ -15,19 +15,20 @@ import websockets
 import websockets.asyncio.server as ws_server
 
 from dimos.ar.websocket.protocol import (
-    LOCALIZATION_REQUEST_FOURCC,
+    LOCALIZATION_OBSERVATIONS_FOURCC,
     EstopRequest,
     Hello,
     HelloBody,
     Inbound,
-    LidarSettings,
-    LocalizeObservation,
+    LidarSettingsRequest,
+    LocalizationObservation,
+    LocalizationStartRequest,
     NavGoalRequest,
     StateRequest,
     TimeSync,
     decode_hello_request,
     decode_inbound,
-    decode_localization_request,
+    decode_localization_observations,
     encode_hello,
 )
 from dimos.ar.websocket.send_queue import ClientSendQueue
@@ -43,13 +44,14 @@ HelloSupplier = Callable[[str], HelloBody]
 ConnectHandler = Callable[[ws_server.ServerConnection, str], None]
 NavGoalRequestHandler = Callable[[NavGoalRequest, ws_server.ServerConnection, str], None]
 EstopRequestHandler = Callable[[EstopRequest, ws_server.ServerConnection], None]
-LidarSettingsRequestHandler = Callable[[LidarSettings, ws_server.ServerConnection], None]
+LidarSettingsRequestHandler = Callable[[LidarSettingsRequest, ws_server.ServerConnection], None]
 StateRequestHandler = Callable[[StateRequest, ws_server.ServerConnection], None]
-LocalizationRequestHandler = Callable[
-    [tuple[LocalizeObservation, ...], ws_server.ServerConnection, TimeSync],
+LocalizationStartRequestHandler = Callable[[LocalizationStartRequest, str], None]
+LocalizationObservationsHandler = Callable[
+    [tuple[LocalizationObservation, ...], str, TimeSync],
     Awaitable[None] | None,
 ]
-DisconnectHandler = Callable[[ws_server.ServerConnection], None]
+DisconnectHandler = Callable[[ws_server.ServerConnection, str], None]
 
 PING_INTERVAL_S = 30.0
 PING_TIMEOUT_S = 30.0
@@ -84,7 +86,8 @@ class WebSocketServer:
         on_estop_request: EstopRequestHandler | None = None,
         on_lidar_settings_request: LidarSettingsRequestHandler | None = None,
         on_state_request: StateRequestHandler | None = None,
-        on_localization_request: LocalizationRequestHandler | None = None,
+        on_localization_start_request: LocalizationStartRequestHandler | None = None,
+        on_localization_observations: LocalizationObservationsHandler | None = None,
         on_disconnect: DisconnectHandler | None = None,
     ) -> None:
         self._port = port
@@ -96,12 +99,14 @@ class WebSocketServer:
         self._on_estop_request = on_estop_request
         self._on_lidar_settings_request = on_lidar_settings_request
         self._on_state_request = on_state_request
-        self._on_localization_request = on_localization_request
+        self._on_localization_start_request = on_localization_start_request
+        self._on_localization_observations = on_localization_observations
         self._on_disconnect = on_disconnect
 
         self._stop_event: asyncio.Event | None = None
         self._server_ready = threading.Event()
-        self._connections: set[ws_server.ServerConnection] = set()
+        self._connections: dict[str, ws_server.ServerConnection] = {}
+        self._client_ids: dict[ws_server.ServerConnection, str] = {}
         self._outbound: dict[ws_server.ServerConnection, ClientSendQueue] = {}
         self._time_sync: dict[ws_server.ServerConnection, TimeSync] = {}
         self._serve_future: Future[None] | None = None
@@ -168,7 +173,7 @@ class WebSocketServer:
         remote = getattr(websocket, "remote_address", None)
         remote_ip = remote[0] if remote else None
         if remote_ip is not None:
-            for existing in list(self._connections):
+            for existing in list(self._connections.values()):
                 existing_remote = getattr(existing, "remote_address", None)
                 if existing_remote and existing_remote[0] == remote_ip:
                     logger.info(
@@ -177,7 +182,8 @@ class WebSocketServer:
                     )
                     await existing.close(1000, "superseded by new connection")
         client_id = _new_client_id()
-        self._connections.add(websocket)
+        self._connections[client_id] = websocket
+        self._client_ids[websocket] = client_id
         outbound = ClientSendQueue(websocket)
         self._outbound[websocket] = outbound
         outbound.start()
@@ -189,7 +195,7 @@ class WebSocketServer:
             async for message in websocket:
                 try:
                     if isinstance(message, bytes):
-                        await self._handle_binary(message, websocket)
+                        await self._handle_binary(message, websocket, client_id)
                         continue
                     if not isinstance(message, str):
                         raise TypeError("Unsupported WebSocket frame type")
@@ -208,7 +214,9 @@ class WebSocketServer:
                 code=exc.rcvd.code if exc.rcvd is not None else None,
             )
         finally:
-            self._connections.discard(websocket)
+            if self._connections.get(client_id) is websocket:
+                self._connections.pop(client_id, None)
+            self._client_ids.pop(websocket, None)
             self._time_sync.pop(websocket, None)
             try:
                 queued = self._outbound.pop(websocket)
@@ -217,7 +225,7 @@ class WebSocketServer:
             else:
                 await queued.stop()
             if self._on_disconnect is not None:
-                self._on_disconnect(websocket)
+                self._on_disconnect(websocket, client_id)
 
     async def _complete_handshake(
         self,
@@ -247,20 +255,21 @@ class WebSocketServer:
         self,
         message: bytes,
         websocket: ws_server.ServerConnection,
+        client_id: str,
     ) -> None:
         if len(message) < 4:
             raise ValueError("binary frame too short")
         (fourcc,) = struct.unpack_from("<I", message, 0)
-        if fourcc != LOCALIZATION_REQUEST_FOURCC:
+        if fourcc != LOCALIZATION_OBSERVATIONS_FOURCC:
             raise ValueError(f"unsupported binary fourcc: {fourcc:#010x}")
-        if self._on_localization_request is None:
-            logger.warning("localization_request received but no handler is configured")
+        if self._on_localization_observations is None:
+            logger.warning("localization_observations received but no handler is configured")
             return
         time_sync = self._time_sync.get(websocket)
         if time_sync is None:
-            raise RuntimeError("localization_request before hello handshake completed")
-        observations = decode_localization_request(message)
-        result = self._on_localization_request(observations, websocket, time_sync)
+            raise RuntimeError("localization_observations before hello handshake completed")
+        observations = decode_localization_observations(message)
+        result = self._on_localization_observations(observations, client_id, time_sync)
         if asyncio.iscoroutine(result):
             await result
 
@@ -278,13 +287,17 @@ class WebSocketServer:
             if self._on_estop_request is not None:
                 self._on_estop_request(inbound, websocket)
             return
-        if isinstance(inbound, LidarSettings):
+        if isinstance(inbound, LidarSettingsRequest):
             if self._on_lidar_settings_request is not None:
                 self._on_lidar_settings_request(inbound, websocket)
             return
         if isinstance(inbound, StateRequest):
             if self._on_state_request is not None:
                 self._on_state_request(inbound, websocket)
+            return
+        if isinstance(inbound, LocalizationStartRequest):
+            if self._on_localization_start_request is not None:
+                self._on_localization_start_request(inbound, client_id)
             return
 
     def schedule_broadcast_text(self, text: str) -> None:
@@ -295,6 +308,12 @@ class WebSocketServer:
 
     def schedule_send_to(self, websocket: ws_server.ServerConnection, text: str) -> None:
         asyncio.run_coroutine_threadsafe(self._enqueue_one_text(websocket, text), self._loop)
+
+    def schedule_send_to_client(self, client_id: str, text: str) -> None:
+        websocket = self._connections.get(client_id)
+        if websocket is None:
+            return
+        self.schedule_send_to(websocket, text)
 
     async def _enqueue_all_text(self, text: str) -> None:
         for outbound in list(self._outbound.values()):

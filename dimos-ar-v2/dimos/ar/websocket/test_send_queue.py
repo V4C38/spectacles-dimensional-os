@@ -50,7 +50,7 @@ def test_peek_frame_type(payload: str, expected: str | None) -> None:
 
 
 def test_coalesce_frame_types_match_state_streams() -> None:
-    assert COALESCE_FRAME_TYPES == frozenset({"pose", "nav_goal", "state", "localization"})
+    assert COALESCE_FRAME_TYPES == frozenset({"pose", "nav_goal", "state", "localization_result"})
 
 
 @pytest.mark.asyncio

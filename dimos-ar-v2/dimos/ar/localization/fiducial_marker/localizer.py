@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
-from dimos.ar.localization.pose_buffer import PoseBuffer, RobotPoseSample
+from dimos.ar.localization.robot_pose_buffer import RobotPoseBuffer, RobotPoseSample
 from dimos.ar.localization.transforms import fuse_pose_estimates
 from dimos.ar.localization.types import Intrinsics, LocalizedPose, Localizer, Observation
 from dimos.ar.robot.profile import FiducialMarkerMount
@@ -69,12 +69,12 @@ class FiducialMarkerLocalizer(Localizer):
     def __init__(
         self,
         *,
-        pose_buffer: PoseBuffer,
+        robot_pose_buffer: RobotPoseBuffer,
         marker_mounts: Sequence[FiducialMarkerMount],
         dictionary_name: str,
         config: FiducialMarkerLocalizerConfig | None = None,
     ) -> None:
-        self._pose_buffer = pose_buffer
+        self._robot_pose_buffer = robot_pose_buffer
         self._mounts: dict[int, FiducialMarkerMount] = {}
         for mount in marker_mounts:
             if mount.marker_id in self._mounts:
@@ -135,7 +135,7 @@ class FiducialMarkerLocalizer(Localizer):
                 f"{observation.intrinsics.width}x{observation.intrinsics.height}"
             )
 
-        robot = self._pose_buffer.at_server_ts(observation.ts_server)
+        robot = self._robot_pose_buffer.at_server_ts(observation.ts_server)
         if robot is None:
             return None
 

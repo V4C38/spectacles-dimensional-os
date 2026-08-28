@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from dimos.ar.localization.pose_buffer import PoseBuffer
+from dimos.ar.localization.robot_pose_buffer import RobotPoseBuffer
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 
@@ -22,7 +22,7 @@ def _pose(
 
 
 def test_push_and_latest() -> None:
-    buffer = PoseBuffer()
+    buffer = RobotPoseBuffer()
     sample = buffer.push(_pose(10.0, 1.0, 2.0), ts_server=20.0)
 
     assert sample.position == (1.0, 2.0, 0.33)
@@ -33,7 +33,7 @@ def test_push_and_latest() -> None:
 
 
 def test_at_server_ts_interpolates_position() -> None:
-    buffer = PoseBuffer()
+    buffer = RobotPoseBuffer()
     buffer.push(_pose(10.0, 0.0), ts_server=20.0)
     buffer.push(_pose(10.1, 2.0), ts_server=20.1)
 
@@ -46,13 +46,13 @@ def test_at_server_ts_interpolates_position() -> None:
 
 
 def test_at_server_ts_returns_none_when_gap_too_large() -> None:
-    buffer = PoseBuffer(max_gap_s=0.25)
+    buffer = RobotPoseBuffer(max_gap_s=0.25)
     buffer.push(_pose(ts=10.0), ts_server=20.0)
 
     assert buffer.at_server_ts(21.0) is None
 
 
 def test_at_server_ts_returns_none_when_empty() -> None:
-    buffer = PoseBuffer()
+    buffer = RobotPoseBuffer()
 
     assert buffer.at_server_ts(100.0) is None

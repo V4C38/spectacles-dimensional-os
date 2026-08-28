@@ -2,11 +2,23 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal, Protocol
 
 from dimos.msgs.geometry_msgs.Pose import Pose
 
 DistortionModel = Literal["none", "plumb_bob", "equidistant"]
+
+
+class CapturePolicy(StrEnum):
+    ROBOT_LOS_REQUIRED = "robot_los_required"
+    ROBOT_LOS_PREFERRED = "robot_los_preferred"
+    ANY_ANGLE = "any_angle"
+
+
+class LocalizationProviderType(StrEnum):
+    FIDUCIAL_MARKER = "fiducial_marker"
+    VPS = "vps"
 
 
 @dataclass(frozen=True)

@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 import json
 import math
 import struct
 from typing import Any, Literal
 
-from dimos.ar.localization.types import Intrinsics, Observation
+from dimos.ar.localization.types import CapturePolicy, Intrinsics, Observation
 from dimos.msgs.geometry_msgs.Pose import Pose
 
 LIDAR_FOURCC = 0x4C444152
-LOCALIZATION_REQUEST_FOURCC = 0x4C4F4341
+LOCALIZATION_OBSERVATIONS_FOURCC = 0x4C4F4341
 
 NavPhase = Literal["idle", "following_path", "resolved"]
 NavOutcome = Literal["succeeded", "failed"]
@@ -78,11 +79,21 @@ class EstopRequest:
 
 
 @dataclass(frozen=True)
+class LocalizationStartRequest:
+    pass
+
+
+@dataclass(frozen=True)
 class LidarSettings:
     enabled: bool
     min_height_m: float
     max_height_m: float
     max_range_m: float
+
+
+@dataclass(frozen=True)
+class LidarSettingsRequest(LidarSettings):
+    pass
 
 
 DEFAULT_LIDAR_SETTINGS = LidarSettings(
@@ -98,7 +109,13 @@ class StateRequest:
     pass
 
 
-Inbound = NavGoalRequest | EstopRequest | LidarSettings | StateRequest
+Inbound = (
+    NavGoalRequest
+    | EstopRequest
+    | LidarSettingsRequest
+    | StateRequest
+    | LocalizationStartRequest
+)
 
 
 def decode_hello_request(text: str) -> HelloRequest:
@@ -138,7 +155,7 @@ def decode_inbound(text: str) -> Inbound:
         max_range_m = _finite_float(data, "max_range_m")
         if min_height_m > max_height_m:
             raise ValueError("min_height_m must be <= max_height_m")
-        return LidarSettings(
+        return LidarSettingsRequest(
             enabled=enabled,
             min_height_m=min_height_m,
             max_height_m=max_height_m,
@@ -148,53 +165,56 @@ def decode_inbound(text: str) -> Inbound:
     if msg_type == "state_request":
         return StateRequest()
 
+    if msg_type == "localization_start_request":
+        return LocalizationStartRequest()
+
     raise ValueError(f"Unknown inbound frame type: {msg_type!r}")
 
 
 @dataclass(frozen=True)
-class LocalizeObservation:
-    capture_ts: float
+class LocalizationObservation:
+    ts_capture: float
     jpeg: bytes
     intrinsics: Intrinsics
     camera_position: tuple[float, float, float]
     camera_orientation: tuple[float, float, float, float]
 
 
-def decode_localization_request(data: bytes) -> tuple[LocalizeObservation, ...]:
-    """Parse a binary ``localization_request`` frame."""
+def decode_localization_observations(data: bytes) -> tuple[LocalizationObservation, ...]:
+    """Parse a binary ``localization_observations`` frame."""
     if len(data) < 6:
-        raise ValueError("localization_request frame too short")
+        raise ValueError("localization_observations frame too short")
     fourcc, observation_count = struct.unpack_from("<IH", data, 0)
-    if fourcc != LOCALIZATION_REQUEST_FOURCC:
-        raise ValueError(f"bad localization_request fourcc: {fourcc:#010x}")
+    if fourcc != LOCALIZATION_OBSERVATIONS_FOURCC:
+        raise ValueError(f"bad localization_observations fourcc: {fourcc:#010x}")
     if observation_count < 1:
-        raise ValueError("localization_request requires at least one observation")
+        raise ValueError("localization_observations requires at least one observation")
 
     offset = 6
-    observations: list[LocalizeObservation] = []
+    observations: list[LocalizationObservation] = []
     for _ in range(observation_count):
-        observation, offset = _decode_localize_observation(data, offset)
+        observation, offset = _decode_localization_observation(data, offset)
         observations.append(observation)
     return tuple(observations)
 
 
-def _decode_localize_observation(
+def _decode_localization_observation(
     data: bytes,
     offset: int,
-) -> tuple[LocalizeObservation, int]:
+) -> tuple[LocalizationObservation, int]:
     if len(data) - offset < 4:
-        raise ValueError("truncated localize observation")
+        raise ValueError("truncated localization observation")
     (record_len,) = struct.unpack_from("<I", data, offset)
     record_start = offset + 4
     record_end = record_start + record_len
     if record_end > len(data):
-        raise ValueError("localize observation record_len exceeds frame")
+        raise ValueError("localization observation record_len exceeds frame")
 
     header_end = record_start + 48
     if record_end < header_end:
-        raise ValueError("localize observation header truncated")
+        raise ValueError("localization observation header truncated")
 
-    capture_ts, jpeg_len, intrinsics_len = struct.unpack_from("<dII", data, record_start)
+    ts_capture, jpeg_len, intrinsics_len = struct.unpack_from("<dII", data, record_start)
     camera_position = struct.unpack_from("<3f", data, record_start + 20)
     camera_orientation = struct.unpack_from("<4f", data, record_start + 32)
 
@@ -202,7 +222,7 @@ def _decode_localize_observation(
     jpeg_end = payload_offset + jpeg_len
     intrinsics_end = jpeg_end + intrinsics_len
     if intrinsics_end > record_end:
-        raise ValueError("localize observation payload exceeds record")
+        raise ValueError("localization observation payload exceeds record")
 
     jpeg = data[payload_offset:jpeg_end]
     intrinsics_raw = json.loads(data[jpeg_end:intrinsics_end].decode("utf-8"))
@@ -211,8 +231,8 @@ def _decode_localize_observation(
     intrinsics = _decode_intrinsics(intrinsics_raw)
 
     return (
-        LocalizeObservation(
-            capture_ts=float(capture_ts),
+        LocalizationObservation(
+            ts_capture=float(ts_capture),
             jpeg=jpeg,
             intrinsics=intrinsics,
             camera_position=(
@@ -257,6 +277,13 @@ def _decode_intrinsics(data: dict[str, Any]) -> Intrinsics:
     )
 
 
+class CapabilityName(StrEnum):
+    LIDAR = "lidar"
+    NAVIGATION = "navigation"
+    LOCALIZATION = "localization"
+    ESTOP = "estop"
+
+
 @dataclass(frozen=True)
 class Capability:
     available: bool
@@ -280,24 +307,24 @@ class TimeSync:
         return ts_client + (self.ts_server - self.ts_client)
 
 
-def observation_from_localize(
-    wire: LocalizeObservation,
+def observation_from_localization(
+    wire: LocalizationObservation,
     *,
     time_sync: TimeSync,
 ) -> Observation:
-    """Convert wire observation to domain; ``capture_ts`` becomes ``ts_server``."""
+    """Convert wire observation to domain; ``ts_capture`` becomes ``ts_server``."""
     return Observation(
         jpeg=wire.jpeg,
         intrinsics=wire.intrinsics,
         camera_pose=Pose(*wire.camera_position, *wire.camera_orientation),
-        ts_server=time_sync.to_server_ts(wire.capture_ts),
+        ts_server=time_sync.to_server_ts(wire.ts_capture),
     )
 
 
 @dataclass(frozen=True)
 class HelloBody:
     robot: RobotDescription
-    capabilities: dict[str, Capability]
+    capabilities: dict[CapabilityName, Capability]
 
 
 @dataclass(frozen=True)
@@ -305,7 +332,7 @@ class Hello:
     client_id: str
     time_sync: TimeSync
     robot: RobotDescription
-    capabilities: dict[str, Capability]
+    capabilities: dict[CapabilityName, Capability]
 
 
 def encode_hello(hello: Hello) -> str:
@@ -332,6 +359,42 @@ def encode_hello(hello: Hello) -> str:
 
 
 @dataclass(frozen=True)
+class LocalizationObservationsRequest:
+    capture_policy: CapturePolicy
+    observation_count: int
+    wait_timeout_s: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.observation_count < 1:
+            raise ValueError(
+                f"observation_count must be at least 1, got {self.observation_count}"
+            )
+        if self.capture_policy is CapturePolicy.ROBOT_LOS_PREFERRED:
+            if self.wait_timeout_s is None:
+                raise ValueError(
+                    "wait_timeout_s is required when capture_policy is robot_los_preferred"
+                )
+            if not math.isfinite(self.wait_timeout_s) or self.wait_timeout_s < 0.0:
+                raise ValueError(
+                    "wait_timeout_s must be finite and non-negative, "
+                    f"got {self.wait_timeout_s}"
+                )
+        elif self.wait_timeout_s is not None:
+            raise ValueError("wait_timeout_s is only valid for robot_los_preferred")
+
+
+def encode_localization_observations_request(request: LocalizationObservationsRequest) -> str:
+    body: dict[str, Any] = {
+        "type": "localization_observations_request",
+        "capture_policy": str(request.capture_policy),
+        "observation_count": request.observation_count,
+    }
+    if request.wait_timeout_s is not None:
+        body["wait_timeout_s"] = request.wait_timeout_s
+    return encode_text(body)
+
+
+@dataclass(frozen=True)
 class NavGoalFrame:
     pose: tuple[float, float, float, float] | None
     path_poses: list[tuple[float, float, float, float]]
@@ -349,7 +412,6 @@ class StateSnapshot:
     connected_clients: int
     lidar: LidarSettings
     nav: NavState
-    alignment_stale: bool
 
 
 def encode_state(payload: StateSnapshot) -> str:
@@ -367,12 +429,11 @@ def encode_state(payload: StateSnapshot) -> str:
                 "state": payload.nav.state,
                 "outcome": payload.nav.outcome,
             },
-            "alignment": {"stale": payload.alignment_stale},
         }
     )
 
 
-def encode_localization(
+def encode_localization_result(
     *,
     position: tuple[float, float, float],
     orientation: tuple[float, float, float, float],
@@ -381,7 +442,7 @@ def encode_localization(
 ) -> str:
     return encode_text(
         {
-            "type": "localization",
+            "type": "localization_result",
             "position": list(position),
             "orientation": list(orientation),
             "confidence": confidence,

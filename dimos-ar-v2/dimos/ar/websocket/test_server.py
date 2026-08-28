@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import socket
 import threading
@@ -10,7 +11,9 @@ import websockets
 
 from dimos.ar.websocket.protocol import (
     Capability,
+    CapabilityName,
     HelloBody,
+    LocalizationStartRequest,
     NavGoalRequest,
     RobotDescription,
 )
@@ -32,9 +35,10 @@ def _sample_hello(_client_id: str) -> HelloBody:
             base_height_m=0.33,
         ),
         capabilities={
-            "lidar": Capability(available=True, reason=None),
-            "navigation": Capability(available=True, reason=None),
-            "estop": Capability(available=True, reason=None),
+            CapabilityName.LIDAR: Capability(available=True, reason=None),
+            CapabilityName.NAVIGATION: Capability(available=True, reason=None),
+            CapabilityName.LOCALIZATION: Capability(available=True, reason=None),
+            CapabilityName.ESTOP: Capability(available=True, reason=None),
         },
     )
 
@@ -52,6 +56,8 @@ class ServerHarness:
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._server: WebSocketServer | None = None
         self.nav_goal_requests: list[NavGoalRequest] = []
+        self.localization_start_requests: list[str] = []
+        self.disconnected_client_ids: list[str] = []
         self._handler_kwargs = handler_kwargs
 
     def _run_loop(self) -> None:
@@ -63,6 +69,12 @@ class ServerHarness:
     ) -> None:
         self.nav_goal_requests.append(msg)
 
+    def _on_localization_start_request(self, _msg: LocalizationStartRequest, client_id: str) -> None:
+        self.localization_start_requests.append(client_id)
+
+    def _on_disconnect(self, _websocket: object, client_id: str) -> None:
+        self.disconnected_client_ids.append(client_id)
+
     def start(self) -> None:
         self._thread.start()
         self._server = WebSocketServer(
@@ -70,6 +82,8 @@ class ServerHarness:
             loop=self.loop,
             hello_supplier=_sample_hello,
             on_nav_goal_request=self._on_nav_goal_request,
+            on_localization_start_request=self._on_localization_start_request,
+            on_disconnect=self._on_disconnect,
             **self._handler_kwargs,  # type: ignore[arg-type]
         )
         self._server.start()
@@ -134,3 +148,36 @@ async def test_invalid_path_rejected() -> None:
                 await ws.recv()
     finally:
         h.stop()
+
+
+@pytest.mark.asyncio
+async def test_localization_start_request_reaches_handler(harness: ServerHarness) -> None:
+    async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as ws:
+        hello = await _send_hello_request(ws)
+        await ws.send(json.dumps({"type": "localization_start_request"}))
+        await asyncio.sleep(0.05)
+    assert harness.localization_start_requests == [hello["client_id"]]
+
+
+@pytest.mark.asyncio
+async def test_schedule_send_to_client_targets_one_connection(harness: ServerHarness) -> None:
+    assert harness._server is not None
+    async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as ws:
+        hello = await _send_hello_request(ws)
+        harness._server.schedule_send_to_client(
+            hello["client_id"],
+            '{"type":"localization_observations_request","capture_policy":"any_angle","observation_count":1}\n',
+        )
+        raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
+        msg = json.loads(raw)
+        assert msg["type"] == "localization_observations_request"
+
+
+def test_server_does_not_import_localization_policy() -> None:
+    import dimos.ar.websocket.server as server_mod
+
+    assert not hasattr(server_mod, "LocalizationPolicy")
+    source = inspect.getsource(server_mod)
+    assert "LocalizationPolicy" not in source
+    assert "OdomMapTransform" not in source
+

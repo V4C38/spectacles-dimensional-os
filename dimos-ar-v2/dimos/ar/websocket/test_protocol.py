@@ -5,15 +5,19 @@ import struct
 
 import pytest
 
-from dimos.ar.localization.types import Intrinsics
+from dimos.ar.localization.types import CapturePolicy, Intrinsics
 from dimos.ar.websocket.protocol import (
     LIDAR_FOURCC,
-    LOCALIZATION_REQUEST_FOURCC,
+    LOCALIZATION_OBSERVATIONS_FOURCC,
     Capability,
+    CapabilityName,
     EstopRequest,
     Hello,
     LidarSettings,
-    LocalizeObservation,
+    LidarSettingsRequest,
+    LocalizationObservation,
+    LocalizationObservationsRequest,
+    LocalizationStartRequest,
     NavGoalFrame,
     NavGoalRequest,
     NavState,
@@ -23,14 +27,16 @@ from dimos.ar.websocket.protocol import (
     TimeSync,
     decode_hello_request,
     decode_inbound,
-    decode_localization_request,
+    decode_localization_observations,
     encode_hello,
     encode_lidar_binary,
+    encode_localization_observations_request,
+    encode_localization_result,
     encode_nav_goal,
     encode_pose,
     encode_state,
     encode_text,
-    observation_from_localize,
+    observation_from_localization,
 )
 
 
@@ -45,9 +51,10 @@ def _sample_hello(client_id: str = "abc123") -> Hello:
             base_height_m=0.33,
         ),
         capabilities={
-            "lidar": Capability(available=True, reason=None),
-            "navigation": Capability(available=True, reason=None),
-            "estop": Capability(available=True, reason=None),
+            CapabilityName.LIDAR: Capability(available=True, reason=None),
+            CapabilityName.NAVIGATION: Capability(available=True, reason=None),
+            CapabilityName.LOCALIZATION: Capability(available=True, reason=None),
+            CapabilityName.ESTOP: Capability(available=True, reason=None),
         },
     )
 
@@ -68,6 +75,7 @@ def test_encode_hello_has_no_protocol_version() -> None:
     assert msg["time_sync"]["ts_server"] == 2000.0
     assert "protocol_version" not in msg
     assert "alignment" not in msg
+    assert msg["capabilities"]["estop"]["available"] is True
     assert msg["robot"]["display_name"] == "Unitree Go2"
 
 
@@ -93,15 +101,15 @@ def test_encode_pose() -> None:
     assert pose_msg["position"] == [1.0, 2.0, 3.0]
 
 
-def test_time_sync_converts_capture_ts() -> None:
+def test_time_sync_converts_ts_capture() -> None:
     sync = TimeSync(ts_client=1000.0, ts_server=2000.5)
     assert sync.to_server_ts(1001.0) == pytest.approx(2001.5)
 
 
-def test_observation_from_localize_converts_capture_ts() -> None:
+def test_observation_from_localization_converts_ts_capture() -> None:
     sync = TimeSync(ts_client=1000.0, ts_server=2000.5)
-    wire = LocalizeObservation(
-        capture_ts=1001.0,
+    wire = LocalizationObservation(
+        ts_capture=1001.0,
         jpeg=b"\xff\xd8\xff",
         intrinsics=Intrinsics(
             fx=100.0,
@@ -117,24 +125,24 @@ def test_observation_from_localize_converts_capture_ts() -> None:
         camera_orientation=(0.0, 0.0, 0.0, 1.0),
     )
 
-    domain = observation_from_localize(wire, time_sync=sync)
+    domain = observation_from_localization(wire, time_sync=sync)
 
     assert domain.ts_server == pytest.approx(2001.5)
     assert domain.jpeg == wire.jpeg
 
 
-def test_encode_state_round_trip_fields() -> None:
+def test_encode_state_has_no_alignment_block() -> None:
     snapshot = StateSnapshot(
         connected_clients=2,
         lidar=LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0),
         nav=NavState(state="following_path", outcome=None),
-        alignment_stale=False,
     )
     msg = _parse_json_line(encode_state(snapshot))
     assert msg["type"] == "state"
     assert msg["server"]["connected_clients"] == 2
     assert msg["lidar"]["max_range_m"] == 5.0
     assert msg["nav"]["state"] == "following_path"
+    assert "alignment" not in msg
 
 
 def test_encode_nav_goal_shape() -> None:
@@ -165,7 +173,7 @@ def test_encode_nav_goal_shape() -> None:
     assert "pose" not in clear_payload
 
 
-def test_encode_state_round_trip_fields() -> None:
+def test_decode_inbound_nav_goal_and_estop() -> None:
     nav = decode_inbound(
         json.dumps(
             {
@@ -181,6 +189,63 @@ def test_encode_state_round_trip_fields() -> None:
 
     estop = decode_inbound(json.dumps({"type": "estop_request"}))
     assert isinstance(estop, EstopRequest)
+
+
+def test_decode_localization_start_request() -> None:
+    start = decode_inbound(json.dumps({"type": "localization_start_request"}))
+    assert isinstance(start, LocalizationStartRequest)
+
+
+def test_encode_localization_observations_request_marker() -> None:
+    msg = _parse_json_line(
+        encode_localization_observations_request(
+            LocalizationObservationsRequest(
+                capture_policy=CapturePolicy.ROBOT_LOS_REQUIRED,
+                observation_count=3,
+            )
+        )
+    )
+    assert msg["type"] == "localization_observations_request"
+    assert msg["capture_policy"] == "robot_los_required"
+    assert msg["observation_count"] == 3
+    assert "wait_timeout_s" not in msg
+
+
+def test_encode_localization_observations_request_mixed() -> None:
+    msg = _parse_json_line(
+        encode_localization_observations_request(
+            LocalizationObservationsRequest(
+                capture_policy=CapturePolicy.ROBOT_LOS_PREFERRED,
+                observation_count=3,
+                wait_timeout_s=2.0,
+            )
+        )
+    )
+    assert msg["capture_policy"] == "robot_los_preferred"
+    assert msg["wait_timeout_s"] == 2.0
+
+
+def test_encode_localization_observations_request_requires_timeout_for_preferred() -> None:
+    with pytest.raises(ValueError, match="wait_timeout_s"):
+        LocalizationObservationsRequest(
+            capture_policy=CapturePolicy.ROBOT_LOS_PREFERRED,
+            observation_count=3,
+        )
+
+
+def test_encode_localization_result() -> None:
+    msg = _parse_json_line(
+        encode_localization_result(
+            position=(1.0, 2.0, 3.0),
+            orientation=(0.0, 0.0, 0.0, 1.0),
+            confidence=0.8,
+            ts_server=100.0,
+        )
+    )
+    assert msg["type"] == "localization_result"
+    assert msg["position"] == [1.0, 2.0, 3.0]
+    assert msg["confidence"] == 0.8
+    assert msg["ts"] == 100.0
 
 
 def test_decode_nav_goal_request_requires_orientation() -> None:
@@ -205,7 +270,7 @@ def test_decode_lidar_settings_request_requires_all_fields() -> None:
             }
         )
     )
-    assert isinstance(msg, LidarSettings)
+    assert isinstance(msg, LidarSettingsRequest)
     assert msg.max_range_m == 5.0
 
 
@@ -244,12 +309,12 @@ def test_encode_lidar_binary_layout() -> None:
     assert (x, y, z) == pytest.approx((1.0, 2.0, 3.0))
 
 
-def _encode_localization_request_frame(jpeg: bytes, intrinsics_json: bytes) -> bytes:
-    capture_ts = 1.0
+def _encode_localization_observations_frame(jpeg: bytes, intrinsics_json: bytes) -> bytes:
+    ts_capture = 1.0
     camera_position = struct.pack("<3f", 0.0, 0.0, 0.0)
     camera_orientation = struct.pack("<4f", 0.0, 0.0, 0.0, 1.0)
     record_body = (
-        struct.pack("<dII", capture_ts, len(jpeg), len(intrinsics_json))
+        struct.pack("<dII", ts_capture, len(jpeg), len(intrinsics_json))
         + struct.pack("<I", 0)
         + camera_position
         + camera_orientation
@@ -257,10 +322,10 @@ def _encode_localization_request_frame(jpeg: bytes, intrinsics_json: bytes) -> b
         + intrinsics_json
     )
     record = struct.pack("<I", len(record_body)) + record_body
-    return struct.pack("<IH", LOCALIZATION_REQUEST_FOURCC, 1) + record
+    return struct.pack("<IH", LOCALIZATION_OBSERVATIONS_FOURCC, 1) + record
 
 
-def test_decode_localization_request_single_observation() -> None:
+def test_decode_localization_observations_single_observation() -> None:
     intrinsics = json.dumps(
         {
             "fx": 100.0,
@@ -275,11 +340,11 @@ def test_decode_localization_request_single_observation() -> None:
         separators=(",", ":"),
     ).encode("utf-8")
     jpeg = b"\xff\xd8\xff\xd9"
-    observations = decode_localization_request(
-        _encode_localization_request_frame(jpeg, intrinsics)
+    observations = decode_localization_observations(
+        _encode_localization_observations_frame(jpeg, intrinsics)
     )
     assert len(observations) == 1
-    obs: LocalizeObservation = observations[0]
+    obs: LocalizationObservation = observations[0]
     assert obs.jpeg == jpeg
     assert obs.intrinsics.fx == 100.0
-    assert obs.capture_ts == pytest.approx(1.0)
+    assert obs.ts_capture == pytest.approx(1.0)

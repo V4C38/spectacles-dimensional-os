@@ -7,6 +7,29 @@ Keep this document, `dimos/ar/websocket/protocol.py`, and
 
 ## Changelog
 
+### v2 — ARModule-owned localization
+
+- **14 message types** — 7 outbound, 7 inbound.
+- **Server-to-client `*_request` is allowed** when ARModule needs the client to act.
+  `localization_observations_request` is that exception. Other client commands
+  still use `*_request`; other server replies still use the bare noun.
+- **`localization_observations_request`** — ARModule → one client. Fields:
+  `capture_policy` (`robot_los_required` | `robot_los_preferred` | `any_angle`),
+  `observation_count`, and `wait_timeout_s` when the policy is `robot_los_preferred`.
+  No provider names on the wire.
+- **`localization_start_request`** — client → ARModule JSON with no camera payload.
+  Completeness only; the shipped client does not use it.
+- **`localization_observations`** — renamed from `localization_request`. Same
+  binary layout; FourCC remains `"LOCA"`.
+- **`localization_result`** — renamed from `localization`. Sent only after a
+  successful capture episode. Never unsolicited.
+- **`state.alignment` removed.** `localization_observations_request` is the only
+  prompt to capture.
+- **`hello.capabilities`** — keys `lidar`, `navigation`, `localization`, `estop`.
+  `localization` is `available=false` with `reason` when no provider is configured.
+- **`ts_capture`** — exposure time on `localization_observations` (was `capture_ts`).
+  Same clock family as `ts_client` / `ts_server` / `ts_odom`.
+
 ### v1 — minimal alignment protocol
 
 Fresh protocol for the v2 rebuild. Not compatible with v19, and not compatible
@@ -16,28 +39,29 @@ with any earlier draft of this document.
   DimOS's right-handed Z-up axes. ARModule performs **no axis conversion**. Each
   client converts on receipt, because a Spectacles client, a Quest client and a
   desktop viewer do not share one convention.
-- **12 message types** — 6 outbound, 6 inbound.
+- **12 message types** — 6 outbound, 6 inbound. Superseded by v2 above.
 - **No `robot_id` echo** on inbound messages. One ARModule process serves one
   robot, declared once in `hello`.
-- **No registration session.** Alignment is a single `localization_request` →
-  `localization` exchange, and `localization` may also arrive unsolicited.
+- **No registration session.** Alignment is a capture episode, not a continuous
+  solver.
 - **Merged status.** `state` replaces `runtime_snapshot`, `bridge_status` and
   `nav_status`.
 - **Clock sync in `hello`.** Client sends `hello_request` with `ts_client`;
   server replies with `hello` including echoed `ts_client` and paired `ts_server`
   (when the request arrived). ARModule stores the offset per connection and
-  converts inbound `capture_ts` from client time to server time. WebSocket
+  converts inbound `ts_capture` from client time to server time. WebSocket
   Ping/Pong (RFC 6455) remains for liveness only.
 - **Request/result naming.** Client commands use `*_request`; server replies and
-  telemetry use the bare noun (`state`, `nav_goal`, `localization`, …). `hello` is
-  the handshake reply.
+  telemetry use the bare noun (`state`, `nav_goal`, `localization_result`, …).
+  `hello` is the handshake reply. See v2 for the `localization_observations_request`
+  exception.
 
 ## Transport
 
 - Plain WebSocket on port **8787**. The DimOS machine runs the server; AR devices
   connect as clients.
 - JSON text frames for control and telemetry. Binary frames for
-  `localization_request` (client → server) and `lidar` (server → client).
+  `localization_observations` (client → server) and `lidar` (server → client).
 - Every JSON message is an object with a `type` field.
 - **Text framing:** outbound JSON text frames end with a single newline (`\n`).
   Clients accumulate incoming text and split on `\n` to recover complete
@@ -68,7 +92,7 @@ its odometry started, and it **drifts** — it is dead reckoning, not a survey. 
 consequences for clients:
 
 - Content anchored in `odom` slowly diverges from the physical room.
-- ARModule issues corrections through `localization` (see below). A client
+- ARModule issues corrections through `localization_result` (see below). A client
   should apply the newest one it has rather than assuming its first alignment
   holds forever.
 
@@ -123,7 +147,7 @@ misreport the size of the room.
 The practical consequence for a client: **`lidar` and `pose` are both correct but
 are not perfectly mutually consistent**, and they diverge with distance from the
 odometry origin. Do not derive one from the other, and do not use `pose` to
-re-anchor the cloud. Each `localization` re-anchoring resets the divergence.
+re-anchor the cloud. Each `localization_result` re-anchoring resets the divergence.
 
 ## Multiple clients
 
@@ -132,8 +156,9 @@ Any number of clients may connect at once.
 - **Telemetry is broadcast.** Every client receives identical `pose`, `nav_goal`,
   `lidar` and `state`. Payloads are byte-identical, so there is no per-client
   view to reconcile.
-- **Alignment is per connection.** `localization` is addressed to the connection
-  that needs it, since each client has its own tracking origin.
+- **Localization is per connection.** `localization_observations_request` and
+  `localization_result` are addressed to one connection, since each client has
+  its own tracking origin.
 - **Control is last-command-wins.** ARModule does not arbitrate. The most
   recent `nav_goal_request` or `estop_request` takes effect regardless of which client sent it.
 
@@ -182,6 +207,7 @@ connection, and replies with `hello`.
   "capabilities": {
     "lidar": { "available": true, "reason": null },
     "navigation": { "available": true, "reason": null },
+    "localization": { "available": true, "reason": null },
     "estop": { "available": true, "reason": null }
   }
 }
@@ -196,17 +222,17 @@ connection, and replies with `hello`.
 | `robot.body_bounds_m` | `[L, W, H]` | Axis-aligned envelope in `odom` axes: length X, width Y, height Z. |
 | `robot.footprint_m` | `[L, W]` | Ground footprint for nav UI. |
 | `robot.base_height_m` | float | Height of the odometry pose origin above the ground, so a client can place a ground marker under a `pose`. |
-| `capabilities.*.available` | bool | Feature gate for client UI. |
+| `capabilities.*.available` | bool | Feature gate for client UI. Keys are `lidar`, `navigation`, `localization`, and `estop`. |
 | `capabilities.*.reason` | string \| null | Human-readable, non-null exactly when `available` is `false`. |
 
 ARModule keeps `ts_server - ts_client` as the per-connection offset. The client
 may use the same pair for its own UI timing; localization does not require the
 client to know server time.
 
-Which alignment provider is configured is a deployment fact. Capture guidance
-(look at the robot vs the room) belongs in the Lens or launcher config for that
-site — not in `hello`. The client submits `localization_request` the same way
-either way; `state.alignment.stale` is the only alignment signal on the wire.
+Which localization provider is configured is a deployment fact and is not on
+the wire. `hello.capabilities.localization.available` is `false` (with `reason`)
+when no provider is configured. Capture geometry is a `capture_policy` on each
+`localization_observations_request`, not a hello field.
 
 ## Outbound messages (server → client)
 
@@ -234,9 +260,6 @@ whenever any field changes.
   "nav": {
     "state": "idle",
     "outcome": null
-  },
-  "alignment": {
-    "stale": false
   }
 }
 ```
@@ -262,20 +285,49 @@ Where the robot is going, use **`nav_goal`** (route + terminal pose) and **`pose
 
 ARModule does not record who started navigation.
 
-**`alignment.stale`:** `true` when ARModule believes the client's alignment
-has drifted and cannot fix it without help. This only ever becomes `true` under
-a provider that needs the user to act, so a client should read it as "prompt the
-user to look at the robot again". Providers that correct on their own leave it
-`false` permanently.
+### `localization_observations_request`
 
-### `localization`
+ARModule → one client. Prompt to capture a camera batch and send
+`localization_observations`. This is a server-to-client `*_request`: ARModule
+needs the client to act.
+
+```json
+{
+  "type": "localization_observations_request",
+  "capture_policy": "robot_los_required",
+  "observation_count": 3
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `capture_policy` | string | `robot_los_required` \| `robot_los_preferred` \| `any_angle`. Geometric gate only — not a provider name. |
+| `observation_count` | uint | Exact batch size. The client always sends this many frames. |
+| `wait_timeout_s` | float | Required when `capture_policy` is `robot_los_preferred`. Omitted otherwise. |
+
+`robot_los_required`: wait until robot line-of-sight gates pass, then capture.
+`robot_los_preferred`: wait for those gates until `wait_timeout_s`, then capture
+anyway (including after timeout). `any_angle`: capture with no robot LOS gates.
+
+Example with timeout:
+
+```json
+{
+  "type": "localization_observations_request",
+  "capture_policy": "robot_los_preferred",
+  "observation_count": 3,
+  "wait_timeout_s": 2.0
+}
+```
+
+### `localization_result`
 
 The client's own pose in `odom` — its tracking origin expressed in odom
 coordinates. Apply the newest one received.
 
 ```json
 {
-  "type": "localization",
+  "type": "localization_result",
   "position": [1.2, -0.4, 0.0],
   "orientation": [0.0, 0.0, 0.38, 0.92],
   "confidence": 0.87,
@@ -285,19 +337,13 @@ coordinates. Apply the newest one received.
 
 | Field | Notes |
 |-------|-------|
-| `confidence` | 0.0–1.0. A client may submit a fresh `localization_request` when this is low. |
+| `confidence` | 0.0–1.0. |
 | `ts` | `ts_server` when the fix was produced. Wire key stays `ts`. |
 
-Sent in response to `localization_request`, and also **unsolicited** whenever ARModule
-learns that a previously delivered answer has moved — for example when a room
-anchor is refreshed and every connection's pose changes without any new
-observation. There is no flag distinguishing the two cases, because a client
-should treat them identically: replace the transform it is using.
-
-Unsolicited updates are rate-limited and deadbanded on ARModule, so small
-jitter does not produce a stream of corrections. A client should still animate
-toward a new transform rather than snapping to it, since a correction can be
-large after a long drift.
+Sent only after a successful capture episode that started with
+`localization_observations_request` (or the completeness-only
+`localization_start_request` path, which uses the same capture). Never
+unsolicited — a `T_odom_map` refresh does not push a new result.
 
 Always in `odom`, regardless of which frame the underlying provider works in.
 When a provider answers in a scanned-map frame ARModule composes it into
@@ -377,9 +423,22 @@ above for why, and for why they must not be reconciled against `pose`.
 
 Inbound messages do not carry `robot_id`.
 
-### `localization_request` (binary)
+### `localization_start_request`
 
-Submits one or more camera observations and asks "where am I in `odom`?".
+```json
+{
+  "type": "localization_start_request"
+}
+```
+
+Client-initiated capture. No payload. Completeness only — the shipped client
+does not use it. ARModule responds with `localization_observations_request`
+using the same capture policy as a server-initiated prompt. The client then
+sends `localization_observations` as usual.
+
+### `localization_observations` (binary)
+
+Submits one or more camera observations after `localization_observations_request`.
 
 Multiple observations in one request let a provider fuse viewpoints, which
 matters when a single frame is ambiguous. A client may send one.
@@ -396,7 +455,7 @@ Then `observation_count` records, each:
 | Offset | Size | Field |
 |--------|------|-------|
 | 0 | 4 | `record_len` uint32, byte count after this field |
-| 4 | 8 | `capture_ts` float64, `ts_client` at exposure |
+| 4 | 8 | `ts_capture` float64, `ts_client` at exposure |
 | 12 | 4 | `jpeg_len` uint32 |
 | 16 | 4 | `intrinsics_len` uint32 |
 | 20 | 12 | Camera position, float32 × 3 |
@@ -432,14 +491,15 @@ handles fisheye corners internally via DimOS).
 view direction) expressed in the caller's own tracking frame. That frame must be
 right-handed, gravity-aligned Z-up and metric — the same convention as DimOS
 `odom`. A left-handed client (Spectacles) converts its camera pose on the way
-in and converts `localization.pose` back on the way out.
+in and converts `localization_result.pose` back on the way out.
 
-**`capture_ts` is required and must be the exposure time in `ts_client`**,
+**`ts_capture` is required and must be the exposure time in `ts_client`**,
 not the time the message was assembled. ARModule converts it to `ts_server`
 using the per-connection offset from `hello` before pose lookup. A localization
 round trip can take seconds; pairing uses shutter time, not send time.
 
-Response: `localization`.
+Response: `localization_result` after a successful episode. No frame is sent on
+failure.
 
 ### `nav_goal_request`
 
@@ -520,13 +580,15 @@ Response: `state`.
 |-----------------|-----------------|
 | `hello_request` | `hello` |
 | `state_request` | `state` |
-| `localization_request` (binary) | `localization` |
+| `localization_start_request` | `localization_observations_request` |
+| `localization_observations` (binary) | `localization_result` |
 | `nav_goal_request` | `nav_goal` |
 | `estop_request` | `pose` |
 | `lidar_settings_request` | `lidar` (binary) |
 
 Paired requests: `hello_request` → `hello`, `state_request` → `state`,
-`localization_request` → `localization`, `nav_goal_request` → `nav_goal` (via
+`localization_observations_request` → `localization_observations` →
+`localization_result` (on success), `nav_goal_request` → `nav_goal` (via
 DimOS planner). `estop_request` and `lidar_settings_request` take effect through
 a broadcast `state` update. `pose` and `lidar` are unsolicited telemetry.
 
@@ -535,9 +597,12 @@ a broadcast `state` update. `pose` and `lidar` are unsolicited telemetry.
 Not carried into v1:
 
 - Registration session messages — `registration_command`, `registration_status`,
-  `registration_pose`, `capture_policy`, `camera_frame_ack`. Alignment is one
-  request and one answer.
-- `world_frame_correction`. An unsolicited `localization` says the same thing.
+  `registration_pose`, `capture_policy`, `camera_frame_ack`. Capture uses
+  `localization_observations_request` / `localization_observations` instead.
+  Wire field `capture_policy` on that request is the v2 `CapturePolicy` enum,
+  not v19's `capture_policy` message.
+- `world_frame_correction`. A `localization_result` after a new capture says
+  the same thing; ARModule does not push unsolicited updates.
 - Separate `runtime_snapshot`, `bridge_status` and `nav_status`, merged into
   `state`.
 - Agent messages — `user_command`, `agent_response`, `ar_skill` and the rest.
