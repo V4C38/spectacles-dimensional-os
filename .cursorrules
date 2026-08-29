@@ -20,7 +20,6 @@ Do **not** call it a bridge, an AR package, or `ar_go2`. Prose uses **`ARModule`
 The WebSocket accept loop is a collaborator (`websocket/server.py`), not the class.
 Lens `ARBridge/` stays until the Lens adaptation phase.
 
-Frozen v1 (`dimos-ar/`) still uses `ARBridge` / `ar_go2` — leave it.
 
 ## Chat — correct imprecise terms
 
@@ -35,13 +34,12 @@ at that layer, say so. Do not silently adopt the incorrect word.
 spectacles-dimensional-os/
 ├── README.md                    # whole-project overview, setup, doc map
 ├── assets/                      # README gifs, demo media (NOT Lens Studio Assets/)
-├── dimos-ar-v2/                 # ARModule (learning-first rebuild)
+│   └── markers/                 # printable AprilTags + generate_marker.py
+├── dimos-ar/                    # ARModule
 │   ├── dimos/ar/module.py       # ARModule — DimOS In/Out surface
 │   ├── dimos/ar/blueprints.py   # unitree_go2_ar
 │   ├── PROTOCOL.md              # JSON WebSocket contract (cross-repo)
-│   ├── PR.md                    # documented upstream DimOS change (not yet filed)
 │   └── tests colocated under dimos/ar/
-├── dimos-ar/                    # frozen v1 — do not edit, not installed, not in CI
 ├── launcher/                    # CLI scripts + web UI for setup/start
 │   ├── Start Launcher.command   # Finder double-click entry (http://127.0.0.1:8790)
 │   ├── scripts/                 # setup.sh, start.sh, start-launcher.sh, run-ci.sh, …
@@ -53,18 +51,16 @@ spectacles-dimensional-os/
 
 | Component | Location | Notes |
 |-----------|----------|-------|
-| ARModule | `dimos-ar-v2/dimos/ar/` | Platform-agnostic — no Spectacles logic |
-| Frozen v1 | `dimos-ar/` | Read-only; deleted once v2 replaces it |
-| Blueprint | `dimos-ar-v2/dimos/ar/blueprints.py` | `unitree_go2_ar` |
-| Contract | `dimos-ar-v2/PROTOCOL.md` | JSON WebSocket API |
+| ARModule | `dimos-ar/dimos/ar/` | Platform-agnostic — no Spectacles logic |
+| Blueprint | `dimos-ar/dimos/ar/blueprints.py` | `unitree_go2_ar` |
+| Contract | `dimos-ar/PROTOCOL.md` | JSON WebSocket API |
 | Spectacles Lens | `lens-studio/` | See [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
-Both trees publish `dimos.ar*`. Only one may be installed at a time. Active work
-is `dimos-ar-v2/`.
+The package publishes `dimos.ar*`. Active work is `dimos-ar/`.
 
-## How we build dimos-ar-v2
+## How we build dimos-ar
 
-`dimos-ar-v2/` is a learning-first rebuild. Optimise for the human's
+`dimos-ar/` is a learning-first rebuild. Optimise for the human's
 comprehension, not for throughput.
 
 - **Subsystem groups.** Work proceeds in coherent groups (packaging, DimOS module,
@@ -100,8 +96,7 @@ comprehension, not for throughput.
 | Area | Read |
 |------|------|
 | Whole project | `README.md` |
-| WebSocket message schema | `dimos-ar-v2/PROTOCOL.md` |
-| Upstream DimOS PR (documented) | `dimos-ar-v2/PR.md` |
+| WebSocket message schema | `dimos-ar/PROTOCOL.md` |
 | Spectacles / Lens Studio | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Contributing | `CONTRIBUTING.md` |
 
@@ -117,7 +112,7 @@ earlier drafts, or "we decided against X" notes from prior plan iterations.
 
 ## ARModule — systems design
 
-When working in `dimos-ar-v2/`, follow these constraints (inherited from v1
+When working in `dimos-ar/`, follow these constraints (inherited from v1
 and still applicable):
 
 1. **One owner per concern** — each runtime concern has a single owning class; other
@@ -143,19 +138,18 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic:
 ## Non-negotiable facts
 
 - **Never edit DimOS source.** Import from the installed `dimos` package. Upstream
-  changes are documented in `dimos-ar-v2/PR.md` and filed as separate PRs.
-- `dimos-ar-v2/dimos/ar/` stays platform-agnostic. Spectacles-specific code lives
+  changes are filed as separate PRs.
+- `dimos-ar/dimos/ar/` stays platform-agnostic. Spectacles-specific code lives
   only under `lens-studio/`.
-- **`dimos-ar/` is frozen.** Do not edit it. It is not installed and not in CI.
 - **Open Lens Studio from `lens-studio/spectacles-dimensional-os.esproj`**, not the repo
   root — opening at root creates stray `Cache/`, `Packages/`, etc.
-- The cross-repo contract is `dimos-ar-v2/PROTOCOL.md`. When the protocol
+- The cross-repo contract is `dimos-ar/PROTOCOL.md`. When the protocol
   changes, update the Python protocol and the Lens protocol modules in the same change:
-  - `dimos-ar-v2/dimos/ar/websocket/protocol.py`
-  - `dimos-ar-v2/PROTOCOL.md`
+  - `dimos-ar/dimos/ar/websocket/protocol.py`
+  - `dimos-ar/PROTOCOL.md`
   - `lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`
 - The ARModule worker must never block; WebSocket runs on a daemon thread.
-- Blueprint is `unitree_go2_ar` (`dimos-ar-v2/dimos/ar/blueprints.py`).
+- Blueprint is `unitree_go2_ar` (`dimos-ar/dimos/ar/blueprints.py`).
 - Port **8787** is ARModule's WebSocket. Do not reuse the old Foxglove `8765` port.
 - Tests for `dimos.ar` must run from the DimOS `.venv`.
 - For Lens Studio verification, do **not** run `CompileWithLogs` by default.
@@ -189,7 +183,7 @@ or a normal terminal). Sandboxed runs fail when DimOS tries to write logs under
 ./launcher/scripts/start-launcher.sh     # web UI wrapper (http://127.0.0.1:8790)
 
 # Tests (with blueprint running for integration)
-cd dimos-ar-v2 && /path/to/dimos/.venv/bin/python3 -m pytest
-cd dimos-ar-v2 && /path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/websocket/test_ws_integration.py -m integration
+cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest
+cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/websocket/test_ws_integration.py -m integration
 cd lens-studio/Tests && npm test   # Lens pure TS (Vitest); CI job lens-studio-tests
 ```

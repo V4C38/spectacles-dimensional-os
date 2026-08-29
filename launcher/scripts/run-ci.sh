@@ -9,13 +9,13 @@
 # tries to write under ~/.local/state/dimos/logs/.
 #
 # Environment (optional):
-#   CI_PYTHON   Python 3.12+ interpreter for the dimos-ar-v2 job (default: python3.12, python3)
-#   CI_VENV     Path to reuse/create for dimos-ar-v2 deps (default: /tmp/spectacles-dimensional-os-ci-venv)
+#   CI_PYTHON   Python 3.12+ interpreter for the dimos-ar job (default: python3.12, python3)
+#   CI_VENV     Path to reuse/create for dimos-ar deps (default: /tmp/spectacles-dimensional-os-ci-venv)
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DIMOS_AR="${ROOT}/dimos-ar-v2"
+DIMOS_AR="${ROOT}/dimos-ar"
 LAUNCHER_APP="${ROOT}/launcher/app"
 LENS_TESTS="${ROOT}/lens-studio/Tests"
 CI_VENV="${CI_VENV:-/tmp/spectacles-dimensional-os-ci-venv}"
@@ -40,7 +40,7 @@ find_ci_python() {
 run_dimos_ar_job() {
   local py
   py="$(find_ci_python)"
-  echo "==> dimos-ar-v2 job (matches .github/workflows/ci.yml)"
+  echo "==> dimos-ar job (matches .github/workflows/ci.yml)"
   echo "    Python: ${py}"
   echo "    venv:   ${CI_VENV}"
 

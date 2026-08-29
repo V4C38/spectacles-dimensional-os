@@ -5,11 +5,11 @@ on:
   pull_request:
 
 jobs:
-  dimos-ar-v2:
+  dimos-ar:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: dimos-ar-v2
+        working-directory: dimos-ar
 
     steps:
       - uses: actions/checkout@v6

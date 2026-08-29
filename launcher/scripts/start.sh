@@ -18,7 +18,7 @@
 #   DIMOS_AR_FORCE_COLOR=1  Force ANSI colors when stdout is not a TTY
 #   DIMOS_CONFIGURE_SYSTEM=1  Enable interactive sysctl/ulimit prompts (off by default)
 #   DIMOS_AR_SKIP_OPENAI_CHECK=1  Skip the OpenAI API reachability probe at startup
-#   Localization (dimos-ar-v2 / unitree_go2_ar, DimOS config — not this script's argv):
+#   Localization (dimos-ar / unitree_go2_ar, DimOS config — not this script's argv):
 #     ~/.config/dimos/config.json  armodule.localization.providers
 #     armodule__localization__providers  env override (JSON list)
 #     MULTISET_CLIENT_ID / MULTISET_CLIENT_SECRET  VPS credentials (not in config file)

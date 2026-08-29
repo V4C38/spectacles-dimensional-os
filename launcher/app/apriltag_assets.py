@@ -14,11 +14,10 @@ from tag_config import DEFAULT_PRINT_SIZE_MM
 
 
 def _marker_api() -> tuple[Callable[..., Any], Callable[..., None], tuple[float, float]]:
-    dimos_ar = repo_root() / "dimos-ar"
-    scripts = str(dimos_ar)
-    if scripts not in sys.path:
-        sys.path.insert(0, scripts)
-    from scripts.generate_marker import (  # noqa: WPS433
+    markers = str(repo_root() / "assets" / "markers")
+    if markers not in sys.path:
+        sys.path.insert(0, markers)
+    from generate_marker import (  # noqa: WPS433
         LETTER_PAGE_MM,
         generate_tag_raster,
         write_page_pdf,

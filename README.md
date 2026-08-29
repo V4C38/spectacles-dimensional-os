@@ -99,7 +99,7 @@ The launcher runs two scripts, and you can run them yourself.
 ./launcher/scripts/start.sh
 ```
 
-To skip the scripts entirely, install [Dimensional OS](https://github.com/dimensionalOS/dimos) yourself, add the bridge to the same environment, and start a blueprint directly:
+To skip the scripts entirely, install [Dimensional OS](https://github.com/dimensionalOS/dimos) yourself, add `dimos-ar` to the same environment, and start the blueprint:
 
 ```bash
 cd /path/to/spectacles-dimensional-os/dimos-ar
@@ -109,53 +109,38 @@ sudo ../launcher/scripts/configure-system.sh --apply
 
 export ROBOT_IP=<robot-lan-ip>   # or "fake" for a simulated robot
 /path/to/dimos/.venv/bin/python3 -c "
-import sys
-sys.path.insert(0, '.')
 from dimos.core.coordination.module_coordinator import ModuleCoordinator
-from dimos.ar.blueprints import ar_go2
-ModuleCoordinator.build(ar_go2).loop()
+from dimos.ar.blueprints import unitree_go2_ar
+ModuleCoordinator.build(unitree_go2_ar).loop()
 "
 ```
 
-Use `ar_g1` instead of `ar_go2` for the humanoid.
+Equivalent once the blueprint is registered in DimOS: `dimos run unitree-go2-ar`.
 
 </details>
 
 <details>
 <summary><strong>AprilTag setup</strong></summary>
 
-The frames of the glasses and the robot are aligned by the glasses detecting a mounted <b>AprilTag</b> at a known location on the robot. <br>
-In the Launcher, open <b>Config</b>, click the tag image to get a printable PDF, and print it at <b>100% scale</b> with no page scaling. Then mount it at the location as indicated in the table below. You can change the size, count and transform of the tag(s) as you see fit.
+Fiducial localization uses a robot-mounted <b>AprilTag 36h11</b> at a pose known to ARModule. Print assets and the generator live in [`assets/markers/`](assets/markers/), not inside `dimos-ar/`.
 
-<table>
-  <tr>
-    <th width="50%">Unitree Go2</th>
-    <th width="50%">Unitree G1</th>
-  </tr>
-  <tr>
-    <td valign="top">
-      <img src="assets/specs_dimos_go2tagmount.jpg" alt="Default AprilTag mount location on Unitree Go2" width="100%" />
-    </td>
-    <td valign="top">
-      <img src="assets/specs_dimos_g1tagmount.jpg" alt="Default AprilTag mount locations on Unitree G1" width="100%" />
-    </td>
-  </tr>
-  <tr>
-    <td valign="top">
-      One tag, ID 0, printed at <b>70 mm</b>.<br><br>
-      It lies flat on top of the body, 18 cm ahead of the robot center and 6 cm up, tilted slightly backwards due to body shape.
-    </td>
-    <td valign="top">
-      Two tags, ID 0 and ID 1, printed at <b>70 mm</b>.<br><br>
-      ID 0 sits on the chest panel, ID 1 sits on the back panel. Both are centered left to right. Two tags let the Lens see the robot from either side. The torso shell is curved, so a larger tag would not seat flat. <br>
-      Note: this has not been tested on a G1 yet.
-    </td>
-  </tr>
-</table>
+**Print:** use [`apriltag_robot_0_a4.pdf`](assets/markers/apriltag_robot_0_a4.pdf) or [`apriltag_robot_0_letter.pdf`](assets/markers/apriltag_robot_0_letter.pdf). Print at <b>100% scale</b> (no “fit to page”) and check that the sticker is <b>70 mm</b> total (56 mm black square). Mount it flat on a rigid backing.
 
-If you want to mount a tag somewhere else, change its ID, size and offsets in the launcher under **Config**. Adding a second tag that is visible from the start will significantly improve the initial yaw calibration.
+**Regenerate or add IDs:**
 
-The defaults can be found in [`go2.py`](dimos-ar/dimos/ar/robot_profile/go2.py) and [`g1.py`](dimos-ar/dimos/ar/robot_profile/g1.py) if you do not want to use the launcher.
+```bash
+python3 assets/markers/generate_marker.py --ids 0
+```
+
+**Go2 mount** (from [`UNITREE_GO2_PROFILE`](dimos-ar/dimos/ar/robot/profiles/unitree_go2.py)): one tag, ID 0, on top of the body, 18 cm ahead of the robot center and 6 cm up, pitched slightly back.
+
+<p align="center">
+  <img src="assets/specs_dimos_go2tagmount.jpg" alt="Default AprilTag mount location on Unitree Go2" width="480" />
+</p>
+
+Mount geometry is part of the robot profile, not launcher config. A G1 profile is not in this package yet; ID 1 print files in `assets/markers/` are leftover sheets only.
+
+Enable the fiducial provider in DimOS config (`armodule.localization.providers`) when you want ARModule to request marker observations.
 
 </details>
 
@@ -178,9 +163,9 @@ Alignment is rough at first and gets better as the robot moves and more tag sigh
 
 <b>Dimensional OS</b> runs the robot. It owns the connection to the Go2 or G1, builds a map out of the LiDAR, plans routes through that map and handles the navigation. In <b>Agent Mode</b> it also runs the language model behind your voice commands. 
 
-The <b>DimOS AR-Bridge</b> is the main addition of this repo. It streams the robot's position, route and LiDAR over a <b>WebSocket</b> and takes navigation goals and other commands back. It is responsible for aligning both glasses and robot coordinate systems via the mounted AprilTag.
+<b>ARModule</b> (`dimos.ar`) is the main addition of this repo. It streams the robot's position, route and LiDAR over a <b>WebSocket</b> and takes navigation goals and localization observations back. Fiducial or VPS localization relates the client's tracking frame to robot `odom`.
 
-The bridge is designed to be <b>device agnostic</b>. Clients implement [`PROTOCOL.md`](dimos-ar/PROTOCOL.md) as the communication protocol for all messages.
+ARModule is <b>device agnostic</b>. Clients implement [`PROTOCOL.md`](dimos-ar/PROTOCOL.md) as the communication protocol for all messages.
 
 The <b>Spectacles Lens</b> is the reference client. It renders the robot and its route, reads hand gestures, sends camera images the bridge requires for AprilTag based frame alignment and handles speech.
 
@@ -204,25 +189,26 @@ flowchart LR
 <details>
 <summary><strong>Architecture overview</strong></summary>
 
-**DimOS AR-Bridge**
+**ARModule**
 
-Python package under `dimos/ar/`, loaded by Dimensional OS as a module. One package per concern:
+Python package under `dimos-ar/dimos/ar/`, loaded by Dimensional OS. Blueprint is `unitree_go2_ar`. One owner per concern:
 
-- `ARBridge` (`bridge/`) is the composition root. It builds the collaborators and fans out the robot's sensor streams. No business logic lives here.
-- `WorldFrameState` (`world_frame/`) holds the committed AR↔robot transform. Registration writes it, telemetry and navigation read it.
-- The remaining packages own one job each: WebSocket server in `network/`, tag detection in `tag_tracking/`, setup in `registration/`, goals in `navigation/`.
+- `ARModule` (`module.py`) is the DimOS `In`/`Out` surface.
+- `websocket/` talks to AR clients (port **8787**).
+- `localization/` owns fiducial and VPS episodes; marker geometry lives in `robot/profiles/`.
+- `navigation/`, `robot/`, and `sensors/` own goals, safety, odometry correction, and LiDAR.
+
+Printable AprilTags and `generate_marker.py` live in [`assets/markers/`](assets/markers/).
 
 ```mermaid
 flowchart LR
-  Module["bridge/<br>ARBridge"]
-  Net["network/"]
-  Align["registration/<br>tag_tracking/"]
-  World["world_frame/"]
-  Rest["navigation/ · agent/<br>robot_profile/ · …"]
+  Module["module.py<br>ARModule"]
+  Net["websocket/"]
+  Loc["localization/"]
+  Rest["navigation/ · robot/<br>sensors/"]
 
   Module --> Net
-  Module --> Align
-  Module --> World
+  Module --> Loc
   Module --> Rest
 ```
 
