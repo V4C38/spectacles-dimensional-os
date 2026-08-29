@@ -47,6 +47,7 @@ from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
@@ -106,7 +107,7 @@ class ARModule(Module):  # type: ignore[misc]
         self._lidar = DEFAULT_LIDAR_SETTINGS
         self._speed_mps = 0.0
         self._last_corrected_xy: tuple[float, float, float] | None = None
-        self._last_reloc_tf_ingest_at = 0.0
+        self._last_relocalization_transform_poll_at = 0.0
         self._episode_tasks: set[asyncio.Task[None]] = set()
         self._ws_server = WebSocketServer(
             port=self.config.port,
@@ -373,21 +374,28 @@ class ARModule(Module):  # type: ignore[misc]
         prompts, episodes = self._policy.on_odom(corrected_x, corrected_y)
         self._robot_observations.expire(self._policy.travel_m)
         self._flush_localization(prompts, episodes)
-        self._maybe_ingest_relocalization_tf()
+        self._maybe_ingest_relocalization_transform(ts_server)
 
-    def _maybe_ingest_relocalization_tf(self) -> None:
+    def _maybe_ingest_relocalization_transform(self, ts_server: float) -> None:
         now = time.monotonic()
-        if now - self._last_reloc_tf_ingest_at < 2.0:
+        if now - self._last_relocalization_transform_poll_at < 2.0:
             return
-        self._last_reloc_tf_ingest_at = now
+        self._last_relocalization_transform_poll_at = now
         if "map" not in self.tf.get_frames():
             return
         transform = self.tf.get("world", "map")
         if transform is None:
-            transform = self.tf.get("odom", "map")
-        if transform is None:
             return
-        self._coordinator.on_relocalization_tf(transform)
+        self._coordinator.on_relocalization_transform(
+            Transform(
+                translation=transform.translation,
+                rotation=transform.rotation,
+                frame_id="odom",
+                child_frame_id=transform.child_frame_id,
+                ts=transform.ts,
+            ),
+            ts_server=ts_server,
+        )
 
     async def handle_camera_info(self, msg: CameraInfo) -> None:
         if self._profile.T_base_camera_optical is None:

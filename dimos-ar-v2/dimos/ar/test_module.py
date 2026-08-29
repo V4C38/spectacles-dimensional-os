@@ -155,11 +155,17 @@ def test_state_snapshot_has_no_alignment() -> None:
     assert '"nav"' in text
 
 
-def test_ingest_relocalization_tf_when_map_frame_present() -> None:
+def test_ingest_relocalization_transform_when_map_frame_present() -> None:
     module = object.__new__(ARModule)
-    captured: list[Transform] = []
-    module._coordinator = SimpleNamespace(on_relocalization_tf=captured.append)
-    module._last_reloc_tf_ingest_at = 0.0
+    captured: list[tuple[Transform, float]] = []
+
+    def on_relocalization_transform(transform: Transform, *, ts_server: float) -> None:
+        captured.append((transform, ts_server))
+
+    module._coordinator = SimpleNamespace(
+        on_relocalization_transform=on_relocalization_transform
+    )
+    module._last_relocalization_transform_poll_at = 0.0
     transform = Transform(
         translation=Vector3(5.0, 0.0, 0.0),
         rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
@@ -176,22 +182,35 @@ def test_ingest_relocalization_tf_when_map_frame_present() -> None:
         return None
 
     module._tf = SimpleNamespace(get_frames=lambda: {"world", "map"}, get=get)
-    module._maybe_ingest_relocalization_tf()
-    assert captured == [transform]
+    module._maybe_ingest_relocalization_transform(100.0)
+    assert len(captured) == 1
+    forwarded, ts_server = captured[0]
+    assert forwarded.frame_id == "odom"
+    assert forwarded.child_frame_id == "map"
+    assert forwarded.ts == pytest.approx(42.0)
+    assert forwarded.translation == transform.translation
+    assert forwarded.rotation == transform.rotation
+    assert ts_server == pytest.approx(100.0)
     assert gets == [("world", "map")]
 
 
-def test_ingest_relocalization_tf_skips_without_map_frame() -> None:
+def test_ingest_relocalization_transform_skips_without_map_frame() -> None:
     module = object.__new__(ARModule)
-    captured: list[Transform] = []
-    module._coordinator = SimpleNamespace(on_relocalization_tf=captured.append)
-    module._last_reloc_tf_ingest_at = 0.0
+    captured: list[tuple[Transform, float]] = []
+
+    def on_relocalization_transform(transform: Transform, *, ts_server: float) -> None:
+        captured.append((transform, ts_server))
+
+    module._coordinator = SimpleNamespace(
+        on_relocalization_transform=on_relocalization_transform
+    )
+    module._last_relocalization_transform_poll_at = 0.0
     gets: list[tuple[str, str]] = []
     module._tf = SimpleNamespace(
         get_frames=lambda: set(),
         get=lambda parent, child: gets.append((parent, child)) or None,
     )
-    module._maybe_ingest_relocalization_tf()
+    module._maybe_ingest_relocalization_transform(100.0)
     assert captured == []
     assert gets == []
 
@@ -387,7 +406,7 @@ async def test_handle_odom_runs_without_optional_capabilities() -> None:
     )
     module._robot_observations = SimpleNamespace(expire=lambda _travel: None)  # type: ignore[assignment]
     module._flush_localization = lambda *_args: None  # type: ignore[method-assign]
-    module._maybe_ingest_relocalization_tf = lambda: None  # type: ignore[method-assign]
+    module._maybe_ingest_relocalization_transform = lambda _ts_server: None  # type: ignore[method-assign]
     pose = PoseStamped(
         ts=1.0,
         frame_id="world",

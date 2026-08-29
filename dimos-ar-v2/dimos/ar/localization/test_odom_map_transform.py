@@ -15,6 +15,16 @@ from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 
 
+def _relocalization_transform(*, frame_id: str = "odom") -> Transform:
+    return Transform(
+        translation=Vector3(5.0, 0.0, 0.0),
+        rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
+        frame_id=frame_id,
+        child_frame_id="map",
+        ts=42.0,
+    )
+
+
 def test_compose_odom_from_map_multiplies_transform_and_client() -> None:
     T_odom_map = np.eye(4)
     T_odom_map[0, 3] = 10.0
@@ -35,16 +45,13 @@ def test_update_from_vps_stores_inverse_of_map_odom_pose() -> None:
     )
 
     assert odom_map_transform.update_from_vps(localization, ts_server=100.0, travel_m=0.0) is True
-    sample = odom_map_transform.current()
+    sample = odom_map_transform.vps_sample()
 
     assert sample is not None
-    assert sample.source == "vps"
     assert sample.confidence == pytest.approx(0.9)
     assert sample.ts_server == pytest.approx(100.0)
-    T_odom_map = odom_map_transform.T_odom_map()
-    assert T_odom_map is not None
-    assert T_odom_map[0, 3] == pytest.approx(-4.0)
-    assert T_odom_map[1, 3] == pytest.approx(-2.0)
+    assert sample.T_odom_map[0, 3] == pytest.approx(-4.0)
+    assert sample.T_odom_map[1, 3] == pytest.approx(-2.0)
 
 
 def test_update_from_vps_rejects_low_confidence() -> None:
@@ -56,28 +63,37 @@ def test_update_from_vps_rejects_low_confidence() -> None:
     )
 
     assert odom_map_transform.update_from_vps(localization, ts_server=100.0, travel_m=0.0) is False
-    assert odom_map_transform.current() is None
+    assert odom_map_transform.vps_sample() is None
 
 
-def test_update_from_relocalization_accepts_world_parent() -> None:
+def test_update_from_relocalization_accepts_odom_parent() -> None:
     odom_map_transform = OdomMapTransform()
-    transform = Transform(
-        translation=Vector3(5.0, 0.0, 0.0),
-        rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
-        frame_id="world",
-        child_frame_id="map",
-        ts=42.0,
-    )
 
-    assert odom_map_transform.update_from_relocalization(transform) is True
-    sample = odom_map_transform.current()
+    assert (
+        odom_map_transform.update_from_relocalization(
+            _relocalization_transform(), ts_server=100.0
+        )
+        is True
+    )
+    sample = odom_map_transform.relocalization_sample()
 
     assert sample is not None
-    assert sample.source == "relocalization"
-    assert sample.ts_server == pytest.approx(42.0)
-    T_odom_map = odom_map_transform.T_odom_map()
-    assert T_odom_map is not None
-    assert T_odom_map[0, 3] == pytest.approx(5.0)
+    assert sample.confidence is None
+    assert sample.ts_server == pytest.approx(100.0)
+    assert sample.T_odom_map[0, 3] == pytest.approx(5.0)
+    assert odom_map_transform.vps_sample() is None
+
+
+def test_update_from_relocalization_rejects_world_parent() -> None:
+    odom_map_transform = OdomMapTransform()
+
+    assert (
+        odom_map_transform.update_from_relocalization(
+            _relocalization_transform(frame_id="world"), ts_server=100.0
+        )
+        is False
+    )
+    assert odom_map_transform.relocalization_sample() is None
 
 
 def test_localization_in_odom_passthrough_for_odom_frame() -> None:
@@ -120,7 +136,7 @@ def test_localization_in_odom_composes_map_answer() -> None:
     assert result.confidence == pytest.approx(0.7)
 
 
-def test_localization_in_odom_returns_none_without_sample() -> None:
+def test_localization_in_odom_returns_none_without_vps_sample() -> None:
     odom_map_transform = OdomMapTransform()
 
     result = odom_map_transform.localization_in_odom(
@@ -158,7 +174,7 @@ def test_vps_anchor_reusable_within_travel() -> None:
         travel_m=2.0,
         map_code="office",
     )
-    sample = odom_map_transform.current()
+    sample = odom_map_transform.vps_sample()
     assert sample is not None
     assert sample.travel_m == pytest.approx(2.0)
     assert sample.map_code == "office"
@@ -179,17 +195,9 @@ def test_vps_anchor_stale_after_travel() -> None:
     assert odom_map_transform.is_vps_reusable(current_travel_m=2.01) is False
 
 
-def test_localization_in_odom_rejects_relocalization_source() -> None:
+def test_localization_in_odom_ignores_relocalization_sample() -> None:
     odom_map_transform = OdomMapTransform()
-    odom_map_transform.update_from_relocalization(
-        Transform(
-            translation=Vector3(5.0, 0.0, 0.0),
-            rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
-            frame_id="world",
-            child_frame_id="map",
-            ts=42.0,
-        )
-    )
+    odom_map_transform.update_from_relocalization(_relocalization_transform(), ts_server=100.0)
 
     result = odom_map_transform.localization_in_odom(
         LocalizedPose(
@@ -201,3 +209,41 @@ def test_localization_in_odom_rejects_relocalization_source() -> None:
 
     assert result is None
     assert odom_map_transform.is_vps_reusable(current_travel_m=0.0) is False
+
+
+def test_vps_sample_survives_relocalization_update() -> None:
+    odom_map_transform = OdomMapTransform()
+    odom_map_transform.update_from_vps(
+        LocalizedPose(
+            pose=Pose(10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+            frame_id="map",
+            confidence=0.9,
+        ),
+        ts_server=100.0,
+        travel_m=0.0,
+    )
+    vps_before = odom_map_transform.vps_sample()
+    assert vps_before is not None
+
+    assert (
+        odom_map_transform.update_from_relocalization(_relocalization_transform(), ts_server=200.0)
+        is True
+    )
+
+    vps_after = odom_map_transform.vps_sample()
+    assert vps_after is vps_before
+    assert odom_map_transform.is_vps_reusable(current_travel_m=0.5) is True
+    result = odom_map_transform.localization_in_odom(
+        LocalizedPose(
+            pose=Pose(1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+            frame_id="map",
+            confidence=0.7,
+        )
+    )
+    assert result is not None
+    assert result.pose.x == pytest.approx(-9.0)
+    assert result.pose.y == pytest.approx(2.0)
+    reloc = odom_map_transform.relocalization_sample()
+    assert reloc is not None
+    assert reloc.ts_server == pytest.approx(200.0)
+    assert reloc.T_odom_map[0, 3] == pytest.approx(5.0)

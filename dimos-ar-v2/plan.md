@@ -84,11 +84,12 @@ Transforms read `T_odom_client` and `T_odom_map`. Wire messages and internal
 `LocalizedPose.frame_id` use `odom` or `map`; `map` never escapes to clients on
 the wire — ARModule composes map answers into `odom` first.
 
-**DimOS boundary.** Go2 odometry and LiDAR arrive with `frame_id="odom"`
+**DimOS boundary.** Go2 odometry and LiDAR are stamped `world`
 (`dimos/robot/unitree/type/odometry.py:101`, `lidar.py:81`). Relocalization
-publishes TF parent `odom → map` (`dimos/mapping/relocalization/module.py:151-156`).
-ARModule normalizes the drifting robot frame to `odom` on ingest
-(`robot_pose_buffer`, `odom_correction`); do not carry both names inside dimos-ar.
+publishes `world → map` (`dimos/mapping/relocalization/module.py:151-156`).
+ARModule renames that drifting frame to `odom` on ingest
+(`robot_pose_buffer`, relocalization transform poll); do not carry both names
+inside dimos-ar.
 
 `PROTOCOL.md` describes `odom` as the selected stack's robot reference pose.
 A mobile stack may drift; a fixed-base stack may publish a stable pose. Every
@@ -288,11 +289,14 @@ Two concerns must remain separate:
 
 Fiducial marker, VPS, or both are valid client-localization configurations. DimOS
 relocalization is an optional `OdomMapTransform` input and is never a requirement for
-either provider. A DimOS relocalization TF is a different map; do not compose a
-Multiset client result through it.
+either provider. `OdomMapTransform` stores a VPS sample and a relocalization sample
+independently. Client VPS composition reads only the VPS sample: the LiDAR premap
+and the VPS `map` are not interchangeable. Relocalization is storage-only in this
+phase.
 
-ARModule polls DimOS TF (`world` / `odom` → `map`) from `handle_odom` and stores
-it via `OdomMapTransform.update_from_relocalization`. `unitree_go2_ar` does not
+ARModule polls `self.tf.get("world", "map")` from `handle_odom`, rebuilds that
+`Transform` with parent `odom`, and stores it via
+`OdomMapTransform.update_from_relocalization`. `unitree_go2_ar` does not
 include `RelocalizationModule`, so the lookup is a no-op until that module is
 autoconnected and started with `relocalizationmodule.map_file`.
 
@@ -405,10 +409,10 @@ result as a TF:
 ```
 
 That transform has the same role as the `T_odom_map` estimated by a VPS robot
-loop, but it belongs to the DimOS LiDAR premap rather than the Multiset visual
-map; the two map coordinates are not interchangeable. DimOS relocalization is
-an optional `OdomMapTransform` adapter, not a dependency of ARModule or either client
-provider.
+loop, but it belongs to the DimOS LiDAR premap rather than the VPS `map`;
+the two map coordinates are not interchangeable. DimOS relocalization is
+an optional `OdomMapTransform` input, not a dependency of ARModule or either client
+provider. Multiset stays in `MultisetVpsClient`.
 
 Three qualifications, the first of which is easy to get backwards:
 
@@ -710,7 +714,7 @@ Concrete implementations and orchestration:
 - `localization/vps/localizer.py` — the `VpsClient` protocol plus localizer logic: undistort, query, compose to `T_map_client`, fuse, answer in `map`.
 - `localization/vps/multiset_client.py` — the concrete `MultisetVpsClient`: M2M token cache and refresh, `/vps/map/query-form`, vendor axes converted to canonical right-handed Z-up `map`, left-handed spatial hints, timeout and response validation.
 - `localization/vps/robot_observation_buffer.py` — ring buffer of Go2 frames captured while stationary; retain until corrected travel since capture exceeds `1.0 m`.
-- `localization/odom_map_transform.py` — owns live `T_odom_map`; composes map-frame `LocalizedPose` into wire `odom`. Reuses a VPS anchor while travel since capture is `<= 1.0 m`. Does not compose a Multiset result through a DimOS relocalization TF. Stays at `localization/` because DimOS relocalization is also an input; it is not a VPS adapter.
+- `localization/odom_map_transform.py` — owns independent VPS and relocalization `T_odom_map` samples; composes a VPS `map` pose into wire `odom`. Reuses a VPS sample while travel since capture is `<= 1.0 m`. Relocalization is storage-only and is not used for client VPS composition. Stays at `localization/` because DimOS relocalization is also an input; it is not a VPS adapter.
 - `localization/policy.py` — configured provider order, `CapturePolicy`, cumulative travel, per-connection episodes, global client-VPS cooldown, separate robot-VPS cooldown.
 - `localization/coordinator.py` — episode owner: marker then VPS, `OdomMapTransform` reuse/refresh, `correct_odom_xy`, `encode_localization_result`. `module.py` stays the DimOS `In`/`Out` surface.
 
@@ -800,9 +804,9 @@ The honest caveat: this is not free simplification. Roughly 1,900 lines of it is
   consumes a cloud request. Client VPS and robot VPS each have a 30 s cooldown.
   Policy waits rather than dispatching VPS because another provider returned no
   result during cooldown.
-- With no `T_odom_map`, drift degrades localization until the next capture
-  episode. Optional DimOS relocalization exposes a rigid correction TF but does
-  not rewrite odometry and is not composed with Multiset client results.
+- With no VPS `T_odom_map`, drift degrades localization until the next capture
+  episode. Optional DimOS relocalization is stored separately and does
+  not rewrite odometry or compose with a VPS client result.
 - **The one unproven assumption in the VPS anchor:** a Go2 camera 30 cm off the floor has to localize against a map scanned at human height. Spike it with real frames before building the loop. If it fails, VPS still works for client alignment but cannot serve as the anchor, and relocalization becomes the only anchor source.
 - Robot-side localization is restricted to a stationary robot until DimOS exposes camera capture timestamps, because reception timestamps and robot-clock odometry stamps cannot be paired accurately while moving.
 - A fixed 1.25 leaves a residual, since the true factor moves around 1.10 to

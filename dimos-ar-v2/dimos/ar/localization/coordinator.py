@@ -44,8 +44,10 @@ class LocalizationCoordinator:
         self._odom_scale_correction_factor = odom_scale_correction_factor
         self._map_code = map_code
 
-    def on_relocalization_tf(self, transform: Transform) -> bool:
-        return self._odom_map_transform.update_from_relocalization(transform)
+    def on_relocalization_transform(self, transform: Transform, *, ts_server: float) -> bool:
+        return self._odom_map_transform.update_from_relocalization(
+            transform, ts_server=ts_server
+        )
 
     def run(self, observations: Sequence[Observation]) -> LocalizationOutcome:
         if not observations:

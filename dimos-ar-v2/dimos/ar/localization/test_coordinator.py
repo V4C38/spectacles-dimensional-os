@@ -154,20 +154,21 @@ def test_vps_fails_without_robot_observation() -> None:
     assert outcome.used_vps is True
 
 
-def test_on_relocalization_tf_stores_sample() -> None:
+def test_on_relocalization_transform_stores_sample() -> None:
     coordinator = _coordinator(providers=[])
     transform = Transform(
         translation=Vector3(5.0, 0.0, 0.0),
         rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
-        frame_id="world",
+        frame_id="odom",
         child_frame_id="map",
         ts=42.0,
     )
 
-    assert coordinator.on_relocalization_tf(transform) is True
-    sample = coordinator._odom_map_transform.current()
+    assert coordinator.on_relocalization_transform(transform, ts_server=100.0) is True
+    sample = coordinator._odom_map_transform.relocalization_sample()
     assert sample is not None
-    assert sample.source == "relocalization"
+    assert sample.confidence is None
+    assert sample.ts_server == pytest.approx(100.0)
 
 
 def test_result_in_odom_rejects_non_odom_frame() -> None:
