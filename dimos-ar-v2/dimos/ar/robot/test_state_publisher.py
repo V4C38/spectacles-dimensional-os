@@ -6,9 +6,9 @@ import struct
 import numpy as np
 import pytest
 
-from dimos.ar.robot.go2 import ODOM_CORRECTION_FACTOR
+from dimos.ar.lidar.settings import LidarSettings
 from dimos.ar.robot.state_publisher import RobotStatePublisher
-from dimos.ar.websocket.protocol import LIDAR_FOURCC, LidarSettings
+from dimos.ar.websocket.protocol import LIDAR_FOURCC
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 
@@ -46,12 +46,17 @@ def _pose(x: float = 4.0, y: float = 8.0, z: float = 0.33) -> PoseStamped:
     )
 
 
+def _publisher(sink: _RecordingBroadcast, **kwargs: object) -> RobotStatePublisher:
+    kwargs.setdefault("odom_scale_correction_factor", 1.25)
+    return RobotStatePublisher(sink, **kwargs)  # type: ignore[arg-type]
+
+
 def test_publish_odom_applies_odom_correction() -> None:
     sink = _RecordingBroadcast()
-    publisher = RobotStatePublisher(
+    publisher = _publisher(
         sink,
         pose_max_hz=0.0,
-        odom_correction_factor=1.25,
+        odom_scale_correction_factor=1.25,
     )
 
     publisher.publish_odom(_pose())
@@ -65,7 +70,7 @@ def test_publish_odom_applies_odom_correction() -> None:
 
 def test_publish_odom_rate_limits() -> None:
     sink = _RecordingBroadcast()
-    publisher = RobotStatePublisher(sink, pose_max_hz=10.0)
+    publisher = _publisher(sink, pose_max_hz=10.0)
 
     publisher.publish_odom(_pose())
     publisher.publish_odom(_pose(x=1.0, y=2.0))
@@ -75,7 +80,7 @@ def test_publish_odom_rate_limits() -> None:
 
 def test_publish_lidar_disabled_skips_binary() -> None:
     sink = _RecordingBroadcast()
-    publisher = RobotStatePublisher(sink, lidar_max_hz=0.0)
+    publisher = _publisher(sink, lidar_max_hz=0.0)
     lidar = LidarSettings(enabled=False, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
     points = np.array([[0.5, 0.0, 0.5]], dtype=np.float32)
 
@@ -87,11 +92,11 @@ def test_publish_lidar_disabled_skips_binary() -> None:
 
 def test_publish_lidar_enabled_uses_raw_robot_position() -> None:
     sink = _RecordingBroadcast()
-    publisher = RobotStatePublisher(
+    publisher = _publisher(
         sink,
         lidar_max_hz=0.0,
         lidar_target_points=1,
-        odom_correction_factor=ODOM_CORRECTION_FACTOR,
+        odom_scale_correction_factor=1.25,
     )
     lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=15.0)
     points = np.array([[8.2, 0.0, 0.5], [10.2, 0.0, 0.5]], dtype=np.float32)
@@ -111,7 +116,7 @@ def test_publish_lidar_enabled_uses_raw_robot_position() -> None:
 
 def test_publish_lidar_skips_until_odom_is_known() -> None:
     sink = _RecordingBroadcast()
-    publisher = RobotStatePublisher(sink, lidar_max_hz=0.0)
+    publisher = _publisher(sink, lidar_max_hz=0.0)
     lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
     points = np.array([[0.5, 0.0, 0.5]], dtype=np.float32)
 
@@ -122,7 +127,7 @@ def test_publish_lidar_skips_until_odom_is_known() -> None:
 
 def test_publish_lidar_range_is_around_robot_not_origin() -> None:
     sink = _RecordingBroadcast()
-    publisher = RobotStatePublisher(
+    publisher = _publisher(
         sink,
         lidar_max_hz=0.0,
         lidar_target_points=10,
@@ -143,7 +148,7 @@ def test_publish_lidar_range_is_around_robot_not_origin() -> None:
 
 def test_publish_lidar_uses_passed_settings_per_call() -> None:
     sink = _RecordingBroadcast()
-    publisher = RobotStatePublisher(sink, lidar_max_hz=0.0, lidar_target_points=10)
+    publisher = _publisher(sink, lidar_max_hz=0.0, lidar_target_points=10)
     disabled = LidarSettings(enabled=False, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
     enabled = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
     points = np.array([[0.5, 0.0, 0.5]], dtype=np.float32)

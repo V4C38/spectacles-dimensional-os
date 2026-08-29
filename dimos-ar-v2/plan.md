@@ -76,7 +76,7 @@ DimOS upstream is inconsistent; ARModule uses one vocabulary everywhere we contr
 
 | Frame | Meaning |
 |-------|---------|
-| **`odom`** | Drifting robot frame (boot origin, leg odometry) |
+| **`odom`** | Robot reference pose (drifting on mobile stacks; may be stable on a fixed base) |
 | **`map`** | Scanned / premapped room frame (VPS, relocalization premap) |
 | **`client`** | Observer tracking frame (headset, phone, …) |
 
@@ -90,8 +90,12 @@ publishes TF parent `odom → map` (`dimos/mapping/relocalization/module.py:151-
 ARModule normalizes the drifting robot frame to `odom` on ingest
 (`robot_pose_buffer`, `odom_correction`); do not carry both names inside dimos-ar.
 
-`PROTOCOL.md` describes `odom` in plain language — "the robot frame: origin where
-the robot booted, X forward, Z up, drifts over time."
+`PROTOCOL.md` describes `odom` as the selected stack's robot reference pose.
+A mobile stack may drift; a fixed-base stack may publish a stable pose. Every
+compatible stack still publishes `odom`. Fiducial marker and robot-side VPS
+need that pose at shutter time; robot-side VPS also needs
+`T_base_camera_optical`. Unused LiDAR and navigation ports stay declared and
+are capability-gated.
 
 ### ARModule does not remap axes
 
@@ -286,6 +290,11 @@ Fiducial marker, VPS, or both are valid client-localization configurations. DimO
 relocalization is an optional `OdomMapTransform` input and is never a requirement for
 either provider. A DimOS relocalization TF is a different map; do not compose a
 Multiset client result through it.
+
+ARModule polls DimOS TF (`world` / `odom` → `map`) from `handle_odom` and stores
+it via `OdomMapTransform.update_from_relocalization`. `unitree_go2_ar` does not
+include `RelocalizationModule`, so the lookup is a no-op until that module is
+autoconnected and started with `relocalizationmodule.map_file`.
 
 Providers answer in their native frame: fiducial marker in `odom`, VPS in its scanned
 `map`. ARModule always emits `odom` on the wire. Odometry scale correction is
@@ -493,7 +502,7 @@ The trap, in that case, is that any code comparing cloud points against the robo
             )
 ```
 
-So `robot/lidar_filter.py` takes the raw odometry position and never the published one. Range is a horizontal radius around that robot pose, not around the odometry origin; a test keeps a point next to the robot at 10 m from origin and drops a point at the origin.
+So `lidar/filter.py` takes the raw odometry position and never the published one. Range is a horizontal radius around that robot pose, not around the odometry origin; a test keeps a point next to the robot at 10 m from origin and drops a point at the origin.
 
 **Footnote — verify one space or two on hardware.** The LiDAR rule above assumes the Go2 cloud is metric range in an `odom` that is *not* the under-reporting odom. The code does not settle that. DimOS stamps the cloud `frame_id="world"` (`robot/unitree/type/lidar.py:81`), `Map` accumulates it with no pose applied (`robot/unitree/type/map.py:88`), and the same `utlidar` namespace also publishes `rt/utlidar/robot_odom` — the stream DimOS itself loads as the "leg-odom trajectory" under `world/leg_odom/lidar` (`go2/dds/cli/render.py:206`, `:233-234`). If the on-board cloud is registered with that same estimate, the accumulated cloud is compressed by the same factor, is not metric, and v1 was right to route it through the same seam.
 
@@ -506,7 +515,7 @@ The 1.25 on pose and `nav_goal` does not wait on this measurement. An odom_map t
 
 ### Mechanics
 
-One constant on `robot/go2.py`. `robot/odom_correction.py` takes the factor as a plain float so `robot/state_publisher.py` and `navigation/nav_goals.py` do not import the profile and group ordering stays free. It returns a corrected copy rather than mutating, so the raw value stays available for the LiDAR path. Applied at encode for `pose` and `nav_goal` positions, inverted at decode for `nav_goal_request`, and applied to nothing else.
+One constant on `robot/go2.py`. `robot/odom_correction.py` takes the factor as a plain float so `robot/state_publisher.py` and `navigation/coordinator.py` do not import the profile and group ordering stays free. It returns a corrected copy rather than mutating, so the raw value stays available for the LiDAR path. Applied at encode for `pose` and `nav_goal` positions, inverted at decode for `nav_goal_request`, and applied to nothing else.
 
 Applied about the odometry origin, with no anchor point — v1 needs `odom_anchor_xy` (`world_frame/state.py:155-166`) only so that *changing* a live estimate does not teleport already-placed content, and that need disappears once the factor is fixed. Because the factor is constant, scaling accumulated position is identical to scaling each increment, so robot-state outbound stays byte-identical for every client and the broadcast property survives.
 
@@ -666,9 +675,9 @@ is the unit we discuss, review and finish.
 
 **3. The WebSocket layer** — `websocket/server.py`, `websocket/protocol.py`, `websocket/send_queue.py`. Everything about talking to a client: the `websockets` accept loop, the asyncio-versus-module-thread boundary, typed encode/decode with no coordinate math, and latest-wins coalescing so a slow headset cannot stall the robot. Clock sync is part of the `hello_request` / `hello` handshake. Runnable with `wscat`, no Lens needed.
 
-**4. Robot state out** — `robot/state_publisher.py`, `robot/odom_correction.py`, `robot/lidar_filter.py`, `robot/profile.py`, and `robot/go2.py`. Reactive subscription patterns, rate limiting, and the binary LiDAR frame: height band, subsample, pack. `odom_correction.py` is the single owner of applying the odometry scale constant — functions taking the factor as a plain float, correcting horizontal position on `pose` and `nav_goal` and nothing else. `lidar_filter.py` is the one consumer that must take the *unscaled* robot position, since its cloud is unscaled.
+**4. Robot state out** — `robot/state_publisher.py`, `robot/odom_correction.py`, `lidar/filter.py`, `lidar/settings.py`, `robot/profile.py`, and `robot/go2.py`. Reactive subscription patterns, rate limiting, and the binary LiDAR frame: height band, subsample, pack. `odom_correction.py` is the single owner of applying the odometry scale constant — functions taking the factor as a plain float, correcting horizontal position on `pose` and `nav_goal` and nothing else. `lidar/filter.py` is the one consumer that must take the *unscaled* robot position, since its cloud is unscaled.
 
-**5. Navigation both directions** — `navigation/nav_goals.py`. Client `nav_goal_request` inverse-scaled through the same `robot/odom_correction.py` helper and published to `goal_request`; outbound `nav_goal` derived from DimOS `path`; nav status derived from `goal_reached` and `path`. The one file where ARModule writes into DimOS rather than reading from it.
+**5. Navigation both directions** — `navigation/coordinator.py`. Client `nav_goal_request` inverse-scaled through the same `robot/odom_correction.py` helper and published to `goal_request`; outbound `nav_goal` derived from DimOS `path`; nav status derived from `goal_reached` and `path`. The one file where ARModule writes into DimOS rather than reading from it.
 
 **6. Complete localization** — the final provider contract and real fiducial marker
 and VPS implementations, the Multiset adapter, pose buffering, transforms,

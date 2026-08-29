@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-import json
 
 import numpy as np
 import pytest
@@ -16,6 +15,9 @@ from dimos.ar.localization.vps.robot_observation_buffer import (
     RobotObservationSample,
 )
 from dimos.msgs.geometry_msgs.Pose import Pose
+from dimos.msgs.geometry_msgs.Quaternion import Quaternion
+from dimos.msgs.geometry_msgs.Transform import Transform
+from dimos.msgs.geometry_msgs.Vector3 import Vector3
 
 
 def _observation(ts_server: float = 10.0) -> Observation:
@@ -55,19 +57,19 @@ def _coordinator(
 ) -> LocalizationCoordinator:
     policy = LocalizationPolicy(providers)
     odom_map_transform = OdomMapTransform()
-    robot_buffer = RobotObservationBuffer(
+    robot_observations = RobotObservationBuffer(
         robot_pose_buffer=RobotPoseBuffer(),
-        T_base_camopt=np.eye(4),
+        T_base_camera_optical=np.eye(4),
     )
     if robot_sample is not None:
-        robot_buffer._samples.append(robot_sample)
+        robot_observations._samples.append(robot_sample)
     return LocalizationCoordinator(
         policy=policy,
         odom_map_transform=odom_map_transform,
-        robot_buffer=robot_buffer,
+        robot_observations=robot_observations,
         marker=marker,
         vps=vps,
-        odom_correction_factor=1.25,
+        odom_scale_correction_factor=1.25,
         map_code="office",
     )
 
@@ -83,12 +85,10 @@ def test_marker_success_applies_xy_scale() -> None:
     coordinator = _coordinator(providers=["fiducial_marker"], marker=marker)
     outcome = coordinator.run([_observation(ts_server=100.0)])
 
-    assert outcome.payload is not None
+    assert outcome.result is not None
     assert outcome.used_vps is False
-    msg = json.loads(outcome.payload.strip())
-    assert msg["type"] == "localization_result"
-    assert msg["position"] == [1.25, 2.5, 3.0]
-    assert msg["ts"] == 100.0
+    assert outcome.result.position == (1.25, 2.5, 3.0)
+    assert outcome.result.ts_server == 100.0
 
 
 def test_mixed_falls_through_to_vps_on_newest_observation() -> None:
@@ -116,7 +116,7 @@ def test_mixed_falls_through_to_vps_on_newest_observation() -> None:
     assert vps.calls[0][0] is robot.observation
     assert vps.calls[1][0] is newest
     assert outcome.used_vps is True
-    assert outcome.payload is not None
+    assert outcome.result is not None
 
 
 def test_vps_defers_during_client_cooldown() -> None:
@@ -133,7 +133,7 @@ def test_vps_defers_during_client_cooldown() -> None:
     outcome = coordinator.run([_observation()])
 
     assert outcome.defer_vps is True
-    assert outcome.payload is None
+    assert outcome.result is None
     assert vps.calls == []
 
 
@@ -149,15 +149,31 @@ def test_vps_fails_without_robot_observation() -> None:
 
     outcome = coordinator.run([_observation()])
 
-    assert outcome.payload is None
+    assert outcome.result is None
     assert outcome.defer_vps is False
     assert outcome.used_vps is True
 
 
-def test_encode_rejects_non_odom_frame() -> None:
+def test_on_relocalization_tf_stores_sample() -> None:
+    coordinator = _coordinator(providers=[])
+    transform = Transform(
+        translation=Vector3(5.0, 0.0, 0.0),
+        rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
+        frame_id="world",
+        child_frame_id="map",
+        ts=42.0,
+    )
+
+    assert coordinator.on_relocalization_tf(transform) is True
+    sample = coordinator._odom_map_transform.current()
+    assert sample is not None
+    assert sample.source == "relocalization"
+
+
+def test_result_in_odom_rejects_non_odom_frame() -> None:
     coordinator = _coordinator(providers=["fiducial_marker"])
     with pytest.raises(ValueError, match="odom"):
-        coordinator._encode_odom(
+        coordinator._result_in_odom(
             LocalizedPose(pose=Pose(0.0, 0.0, 0.0), frame_id="map", confidence=1.0),
             1.0,
         )

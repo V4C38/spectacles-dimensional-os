@@ -3,8 +3,8 @@ from __future__ import annotations
 from dimos_lcm.std_msgs import Bool
 import pytest
 
-from dimos.ar.navigation.nav_goals import NavGoalCoordinator
-from dimos.ar.websocket.protocol import NavGoalRequest
+from dimos.ar.navigation.coordinator import NavGoalCoordinator
+from dimos.ar.navigation.types import NavGoalRequest
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
 
@@ -32,7 +32,7 @@ def _path(
 
 
 def test_submit_goal_uncorrects_xy_for_planner() -> None:
-    goals = NavGoalCoordinator(odom_correction_factor=1.25)
+    goals = NavGoalCoordinator(odom_scale_correction_factor=1.25)
 
     published = goals.submit_goal(_nav_goal_request())
 
@@ -42,7 +42,7 @@ def test_submit_goal_uncorrects_xy_for_planner() -> None:
 
 
 def test_path_sets_following_path_and_goal_from_dimos_path() -> None:
-    goals = NavGoalCoordinator(odom_correction_factor=1.25)
+    goals = NavGoalCoordinator(odom_scale_correction_factor=1.25)
 
     nav_goal_frame, state_changed = goals.on_path(
         _path(
@@ -60,7 +60,7 @@ def test_path_sets_following_path_and_goal_from_dimos_path() -> None:
 
 
 def test_path_terminal_yaw_comes_from_last_dimos_pose() -> None:
-    goals = NavGoalCoordinator(odom_correction_factor=1.0)
+    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
     goals.submit_goal(_nav_goal_request(orientation=(0.0, 0.0, 0.0, 1.0)))
 
     nav_goal_frame, _state_changed = goals.on_path(
@@ -72,7 +72,7 @@ def test_path_terminal_yaw_comes_from_last_dimos_pose() -> None:
 
 
 def test_empty_path_clears_goal_points_without_changing_nav_state() -> None:
-    goals = NavGoalCoordinator(odom_correction_factor=1.0)
+    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
     goals.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
 
     nav_goal_frame, state_changed = goals.on_path(Path(frame_id="world", poses=[]))
@@ -84,7 +84,7 @@ def test_empty_path_clears_goal_points_without_changing_nav_state() -> None:
 
 
 def test_goal_reached_resolves_any_navigation() -> None:
-    goals = NavGoalCoordinator(odom_correction_factor=1.0)
+    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
     goals.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
 
     goals.on_goal_reached(Bool(True))
@@ -95,7 +95,7 @@ def test_goal_reached_resolves_any_navigation() -> None:
 
 
 def test_goal_reached_without_path_still_resolves() -> None:
-    goals = NavGoalCoordinator(odom_correction_factor=1.0)
+    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
 
     goals.on_goal_reached(Bool(True))
 
@@ -105,7 +105,7 @@ def test_goal_reached_without_path_still_resolves() -> None:
 
 
 def test_goal_reached_failure() -> None:
-    goals = NavGoalCoordinator(odom_correction_factor=1.0)
+    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
     goals.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
 
     goals.on_goal_reached(Bool(False))
@@ -116,7 +116,7 @@ def test_goal_reached_failure() -> None:
 
 
 def test_estop_clears_following_path_without_resolved_outcome() -> None:
-    goals = NavGoalCoordinator(odom_correction_factor=1.0)
+    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
     goals.submit_goal(_nav_goal_request())
     goals.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
 
@@ -127,7 +127,7 @@ def test_estop_clears_following_path_without_resolved_outcome() -> None:
 
 
 def test_new_goal_clears_previous_outcome() -> None:
-    goals = NavGoalCoordinator(odom_correction_factor=1.0)
+    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
     goals.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
     goals.on_goal_reached(Bool(True))
 

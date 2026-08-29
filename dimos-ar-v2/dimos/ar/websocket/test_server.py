@@ -9,14 +9,11 @@ import threading
 import pytest
 import websockets
 
-from dimos.ar.websocket.protocol import (
-    Capability,
-    CapabilityName,
-    HelloBody,
-    LocalizationStartRequest,
-    NavGoalRequest,
-    RobotDescription,
-)
+from dimos.ar.navigation.types import NavGoalRequest
+from dimos.ar.robot.capabilities import Capability, CapabilityName
+from dimos.ar.robot.go2 import GO2_PROFILE
+from dimos.ar.robot.profile import RobotDescription
+from dimos.ar.websocket.protocol import HelloBody, LocalizationStartRequest
 from dimos.ar.websocket.server import WebSocketServer, split_inbound_text_lines
 
 
@@ -29,10 +26,10 @@ def _pick_free_port() -> int:
 def _sample_hello(_client_id: str) -> HelloBody:
     return HelloBody(
         robot=RobotDescription(
-            display_name="Unitree Go2",
-            body_bounds_m=(0.7, 0.5, 0.55),
-            footprint_m=(0.7, 0.5),
-            base_height_m=0.33,
+            display_name=GO2_PROFILE.display_name,
+            body_bounds_m=GO2_PROFILE.body_bounds_m,
+            footprint_m=GO2_PROFILE.footprint_m,
+            base_height_m=GO2_PROFILE.base_height_m,
         ),
         capabilities={
             CapabilityName.LIDAR: Capability(available=True, reason=None),
@@ -69,7 +66,9 @@ class ServerHarness:
     ) -> None:
         self.nav_goal_requests.append(msg)
 
-    def _on_localization_start_request(self, _msg: LocalizationStartRequest, client_id: str) -> None:
+    def _on_localization_start_request(
+        self, _msg: LocalizationStartRequest, client_id: str
+    ) -> None:
         self.localization_start_requests.append(client_id)
 
     def _on_disconnect(self, _websocket: object, client_id: str) -> None:
@@ -180,4 +179,3 @@ def test_server_does_not_import_localization_policy() -> None:
     source = inspect.getsource(server_mod)
     assert "LocalizationPolicy" not in source
     assert "OdomMapTransform" not in source
-

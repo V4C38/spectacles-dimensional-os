@@ -5,15 +5,15 @@ import time
 
 from dimos_lcm.std_msgs import Bool
 
+from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavOutcome, NavState
 from dimos.ar.robot.odom_correction import correct_odom_path, uncorrect_odom_pose
-from dimos.ar.websocket.protocol import NavGoalFrame, NavGoalRequest, NavOutcome, NavState
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
 
 
 class NavGoalCoordinator:
-    def __init__(self, *, odom_correction_factor: float) -> None:
-        self._odom_correction_factor = odom_correction_factor
+    def __init__(self, *, odom_scale_correction_factor: float) -> None:
+        self._odom_scale_correction_factor = odom_scale_correction_factor
         self._lock = threading.Lock()
         self._following_path = False
         self._outcome: NavOutcome | None = None
@@ -33,13 +33,13 @@ class NavGoalCoordinator:
             position=list(msg.position),
             orientation=list(msg.orientation),
         )
-        goal = uncorrect_odom_pose(client_pose, factor=self._odom_correction_factor)
+        goal = uncorrect_odom_pose(client_pose, factor=self._odom_scale_correction_factor)
         with self._lock:
             self._outcome = None
         return goal
 
     def on_path(self, msg: Path) -> tuple[NavGoalFrame, bool]:
-        corrected = correct_odom_path(msg, factor=self._odom_correction_factor)
+        corrected = correct_odom_path(msg, factor=self._odom_scale_correction_factor)
         with self._lock:
             if not corrected.poses:
                 return NavGoalFrame(

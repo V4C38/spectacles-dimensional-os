@@ -9,6 +9,7 @@ from dimos_lcm.std_msgs import Bool
 from pydantic import BaseModel, Field
 import websockets.asyncio.server as ws_server
 
+from dimos.ar.lidar.settings import DEFAULT_LIDAR_SETTINGS, LidarSettings
 from dimos.ar.localization.coordinator import LocalizationCoordinator, LocalizationOutcome
 from dimos.ar.localization.fiducial_marker.localizer import FiducialMarkerLocalizer
 from dimos.ar.localization.odom_map_transform import OdomMapTransform
@@ -18,32 +19,24 @@ from dimos.ar.localization.types import Localizer
 from dimos.ar.localization.vps.localizer import VpsLocalizer
 from dimos.ar.localization.vps.multiset_client import MultisetVpsClient, MultisetVpsClientConfig
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
-from dimos.ar.navigation.nav_goals import NavGoalCoordinator
-from dimos.ar.robot.go2 import (
-    GO2_FIDUCIAL_DICTIONARY,
-    GO2_FIDUCIAL_MARKER_MOUNTS,
-    GO2_PROFILE,
-    GO2_T_BASE_CAMERA_OPTICAL,
-)
+from dimos.ar.navigation.coordinator import NavGoalCoordinator
+from dimos.ar.navigation.types import NavGoalRequest
+from dimos.ar.robot.capabilities import CapabilityName, CapabilitySet
 from dimos.ar.robot.odom_correction import correct_odom_xy
+from dimos.ar.robot.profile import RobotName, RobotProfile, get_profile
 from dimos.ar.robot.state_publisher import RobotStatePublisher
 from dimos.ar.websocket.protocol import (
-    DEFAULT_LIDAR_SETTINGS,
-    Capability,
-    CapabilityName,
     EstopRequest,
     HelloBody,
-    LidarSettings,
     LidarSettingsRequest,
     LocalizationObservation,
     LocalizationObservationsRequest,
     LocalizationStartRequest,
-    NavGoalRequest,
-    RobotDescription,
     StateRequest,
     StateSnapshot,
     TimeSync,
     encode_localization_observations_request,
+    encode_localization_result,
     encode_nav_goal,
     encode_state,
     observation_from_localization,
@@ -73,6 +66,7 @@ class LocalizationConfig(BaseModel):
 
 
 class ARModuleConfig(ModuleConfig):  # type: ignore[misc]
+    robot: RobotName = RobotName.UNITREE_GO2
     port: int = 8787
     localization: LocalizationConfig = Field(default_factory=LocalizationConfig)
 
@@ -99,6 +93,8 @@ class ARModule(Module):  # type: ignore[misc]
     _policy: LocalizationPolicy
     _coordinator: LocalizationCoordinator
     _robot_observations: RobotObservationBuffer
+    _profile: RobotProfile
+    _capabilities: CapabilitySet
     _lidar: LidarSettings
     _speed_mps: float
 
@@ -106,9 +102,11 @@ class ARModule(Module):  # type: ignore[misc]
     def build(self) -> None:
         super().build()
         assert self._loop is not None
+        self._profile = get_profile(self.config.robot)
         self._lidar = DEFAULT_LIDAR_SETTINGS
         self._speed_mps = 0.0
         self._last_corrected_xy: tuple[float, float, float] | None = None
+        self._last_reloc_tf_ingest_at = 0.0
         self._episode_tasks: set[asyncio.Task[None]] = set()
         self._ws_server = WebSocketServer(
             port=self.config.port,
@@ -124,11 +122,11 @@ class ARModule(Module):  # type: ignore[misc]
             on_disconnect=self._on_client_disconnect,
         )
         self._nav_goal_coordinator = NavGoalCoordinator(
-            odom_correction_factor=GO2_PROFILE.odom_correction_factor,
+            odom_scale_correction_factor=self._profile.odom_scale_correction_factor,
         )
         self._state_publisher = RobotStatePublisher(
             self._ws_server,
-            odom_correction_factor=GO2_PROFILE.odom_correction_factor,
+            odom_scale_correction_factor=self._profile.odom_scale_correction_factor,
         )
         self._robot_pose_buffer = RobotPoseBuffer()
         self._policy = LocalizationPolicy(
@@ -136,16 +134,20 @@ class ARModule(Module):  # type: ignore[misc]
         )
         self._robot_observations = RobotObservationBuffer(
             robot_pose_buffer=self._robot_pose_buffer,
-            T_base_camopt=GO2_T_BASE_CAMERA_OPTICAL,
+            T_base_camera_optical=self._profile.T_base_camera_optical,
         )
         marker, vps, map_code = self._build_localizers()
+        self._capabilities = CapabilitySet.from_supported(
+            self._profile.supported_capabilities,
+            localization_available=bool(self._policy.providers),
+        )
         self._coordinator = LocalizationCoordinator(
             policy=self._policy,
             odom_map_transform=OdomMapTransform(),
-            robot_buffer=self._robot_observations,
+            robot_observations=self._robot_observations,
             marker=marker,
             vps=vps,
-            odom_correction_factor=GO2_PROFILE.odom_correction_factor,
+            odom_scale_correction_factor=self._profile.odom_scale_correction_factor,
             map_code=map_code,
         )
         logger.info("ARModule build complete")
@@ -156,14 +158,23 @@ class ARModule(Module):  # type: ignore[misc]
         map_code: str | None = None
         for provider in self.config.localization.providers:
             if provider.type == "fiducial_marker" and marker is None:
+                if (
+                    not self._profile.fiducial_dictionary
+                    or not self._profile.fiducial_marker_mounts
+                ):
+                    raise ValueError(
+                        "fiducial_marker provider requires fiducial dictionary and mounts"
+                    )
                 marker = FiducialMarkerLocalizer(
                     robot_pose_buffer=self._robot_pose_buffer,
-                    marker_mounts=GO2_FIDUCIAL_MARKER_MOUNTS,
-                    dictionary_name=GO2_FIDUCIAL_DICTIONARY,
+                    marker_mounts=self._profile.fiducial_marker_mounts,
+                    dictionary_name=self._profile.fiducial_dictionary,
                 )
             elif provider.type == "vps" and vps is None:
                 if not provider.map_code:
                     raise ValueError("VPS localization provider requires map_code")
+                if self._profile.T_base_camera_optical is None:
+                    raise ValueError("VPS localization provider requires T_base_camera_optical")
                 map_code = provider.map_code
                 vps = VpsLocalizer(
                     client=MultisetVpsClient.from_env(
@@ -188,23 +199,9 @@ class ARModule(Module):  # type: ignore[misc]
         super().stop()
 
     def _hello_body(self, _client_id: str) -> HelloBody:
-        localization_available = bool(self._policy.providers)
         return HelloBody(
-            robot=RobotDescription(
-                display_name=GO2_PROFILE.display_name,
-                body_bounds_m=GO2_PROFILE.body_bounds_m,
-                footprint_m=GO2_PROFILE.footprint_m,
-                base_height_m=GO2_PROFILE.base_height_m,
-            ),
-            capabilities={
-                CapabilityName.LIDAR: Capability(available=True, reason=None),
-                CapabilityName.NAVIGATION: Capability(available=True, reason=None),
-                CapabilityName.LOCALIZATION: Capability(
-                    available=localization_available,
-                    reason=None if localization_available else "no localization provider configured",
-                ),
-                CapabilityName.ESTOP: Capability(available=True, reason=None),
-            },
+            robot=self._profile.description,
+            capabilities=self._capabilities.as_mapping(),
         )
 
     def _state_snapshot(self) -> StateSnapshot:
@@ -255,9 +252,7 @@ class ARModule(Module):  # type: ignore[misc]
         if requested_client_id is not None:
             self._send_observations_request(requested_client_id)
 
-    def _on_client_disconnect(
-        self, _websocket: ws_server.ServerConnection, client_id: str
-    ) -> None:
+    def _on_client_disconnect(self, _websocket: ws_server.ServerConnection, client_id: str) -> None:
         self._policy.on_disconnect(client_id)
         self._broadcast_state()
         if self._ws_server.connection_count == 0:
@@ -269,6 +264,8 @@ class ARModule(Module):  # type: ignore[misc]
         _websocket: ws_server.ServerConnection,
         client_id: str,
     ) -> None:
+        if not self._capabilities.supports(CapabilityName.NAVIGATION):
+            return
         goal = self._nav_goal_coordinator.submit_goal(msg)
         if self.goal_request.transport is None:
             logger.warning("nav_goal_request ignored — goal_request transport is not wired")
@@ -278,6 +275,8 @@ class ARModule(Module):  # type: ignore[misc]
         self._broadcast_state()
 
     def _on_estop_request(self, _msg: EstopRequest, _websocket: ws_server.ServerConnection) -> None:
+        if not self._capabilities.supports(CapabilityName.ESTOP):
+            return
         if self._nav_goal_coordinator.on_estop():
             self._broadcast_state()
         self._publish_stop()
@@ -287,6 +286,8 @@ class ARModule(Module):  # type: ignore[misc]
         msg: LidarSettingsRequest,
         _websocket: ws_server.ServerConnection,
     ) -> None:
+        if not self._capabilities.supports(CapabilityName.LIDAR):
+            return
         self._lidar = LidarSettings(
             enabled=msg.enabled,
             min_height_m=msg.min_height_m,
@@ -335,18 +336,24 @@ class ARModule(Module):  # type: ignore[misc]
         if outcome.defer_vps:
             self._policy.hold_for_client_vps(work.client_id, work.observations)
             return
-        if outcome.payload is None:
+        if outcome.result is None:
             self._policy.on_failure(work.client_id)
             return
         self._policy.on_success(work.client_id)
-        self._ws_server.schedule_send_to_client(work.client_id, outcome.payload)
+        self._ws_server.schedule_send_to_client(
+            work.client_id, encode_localization_result(outcome.result)
+        )
 
     def _publish_stop(self) -> None:
+        if not self._capabilities.supports(CapabilityName.ESTOP):
+            return
         if self.stop_movement.transport is None:
             return
         self.stop_movement.publish(Bool(True))
 
     async def handle_lidar(self, msg: PointCloud2) -> None:
+        if not self._capabilities.supports(CapabilityName.LIDAR):
+            return
         self._state_publisher.publish_lidar(msg, lidar=self._lidar)
 
     async def handle_odom(self, msg: PoseStamped) -> None:
@@ -354,7 +361,7 @@ class ARModule(Module):  # type: ignore[misc]
         self._robot_pose_buffer.push(msg, ts_server=ts_server)
         self._state_publisher.publish_odom(msg)
         corrected_x, corrected_y = correct_odom_xy(
-            msg.x, msg.y, factor=GO2_PROFILE.odom_correction_factor
+            msg.x, msg.y, factor=self._profile.odom_scale_correction_factor
         )
         last = self._last_corrected_xy
         if last is not None:
@@ -366,11 +373,30 @@ class ARModule(Module):  # type: ignore[misc]
         prompts, episodes = self._policy.on_odom(corrected_x, corrected_y)
         self._robot_observations.expire(self._policy.travel_m)
         self._flush_localization(prompts, episodes)
+        self._maybe_ingest_relocalization_tf()
+
+    def _maybe_ingest_relocalization_tf(self) -> None:
+        now = time.monotonic()
+        if now - self._last_reloc_tf_ingest_at < 2.0:
+            return
+        self._last_reloc_tf_ingest_at = now
+        if "map" not in self.tf.get_frames():
+            return
+        transform = self.tf.get("world", "map")
+        if transform is None:
+            transform = self.tf.get("odom", "map")
+        if transform is None:
+            return
+        self._coordinator.on_relocalization_tf(transform)
 
     async def handle_camera_info(self, msg: CameraInfo) -> None:
+        if self._profile.T_base_camera_optical is None:
+            return
         self._robot_observations.set_camera_info(msg)
 
     async def handle_color_image(self, msg: Image) -> None:
+        if self._profile.T_base_camera_optical is None:
+            return
         self._robot_observations.push_image(
             msg,
             ts_server=time.time(),
@@ -379,12 +405,16 @@ class ARModule(Module):  # type: ignore[misc]
         )
 
     async def handle_path(self, msg: Path) -> None:
+        if not self._capabilities.supports(CapabilityName.NAVIGATION):
+            return
         nav_goal_frame, state_changed = self._nav_goal_coordinator.on_path(msg)
         self._ws_server.schedule_broadcast_text(encode_nav_goal(nav_goal_frame))
         if state_changed:
             self._broadcast_state()
 
     async def handle_goal_reached(self, msg: Bool) -> None:
+        if not self._capabilities.supports(CapabilityName.NAVIGATION):
+            return
         self._nav_goal_coordinator.on_goal_reached(msg)
         self._broadcast_state()
         if msg.data:

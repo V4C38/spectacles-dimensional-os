@@ -3,20 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 import json
 import math
 import struct
-from typing import Any, Literal
+from typing import Any
 
-from dimos.ar.localization.types import CapturePolicy, Intrinsics, Observation
+from dimos.ar.lidar.settings import LidarSettings
+from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult, Observation
+from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavState
+from dimos.ar.robot.capabilities import Capability, CapabilityName
+from dimos.ar.robot.profile import RobotDescription
 from dimos.msgs.geometry_msgs.Pose import Pose
 
 LIDAR_FOURCC = 0x4C444152
 LOCALIZATION_OBSERVATIONS_FOURCC = 0x4C4F4341
 
-NavPhase = Literal["idle", "following_path", "resolved"]
-NavOutcome = Literal["succeeded", "failed"]
 
 def _dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"), allow_nan=False)
@@ -68,12 +69,6 @@ class HelloRequest:
 
 
 @dataclass(frozen=True)
-class NavGoalRequest:
-    position: tuple[float, float, float]
-    orientation: tuple[float, float, float, float]
-
-
-@dataclass(frozen=True)
 class EstopRequest:
     pass
 
@@ -84,24 +79,8 @@ class LocalizationStartRequest:
 
 
 @dataclass(frozen=True)
-class LidarSettings:
-    enabled: bool
-    min_height_m: float
-    max_height_m: float
-    max_range_m: float
-
-
-@dataclass(frozen=True)
 class LidarSettingsRequest(LidarSettings):
     pass
-
-
-DEFAULT_LIDAR_SETTINGS = LidarSettings(
-    enabled=False,
-    min_height_m=0.1,
-    max_height_m=1.5,
-    max_range_m=5.0,
-)
 
 
 @dataclass(frozen=True)
@@ -110,11 +89,7 @@ class StateRequest:
 
 
 Inbound = (
-    NavGoalRequest
-    | EstopRequest
-    | LidarSettingsRequest
-    | StateRequest
-    | LocalizationStartRequest
+    NavGoalRequest | EstopRequest | LidarSettingsRequest | StateRequest | LocalizationStartRequest
 )
 
 
@@ -277,27 +252,6 @@ def _decode_intrinsics(data: dict[str, Any]) -> Intrinsics:
     )
 
 
-class CapabilityName(StrEnum):
-    LIDAR = "lidar"
-    NAVIGATION = "navigation"
-    LOCALIZATION = "localization"
-    ESTOP = "estop"
-
-
-@dataclass(frozen=True)
-class Capability:
-    available: bool
-    reason: str | None
-
-
-@dataclass(frozen=True)
-class RobotDescription:
-    display_name: str
-    body_bounds_m: tuple[float, float, float]
-    footprint_m: tuple[float, float]
-    base_height_m: float
-
-
 @dataclass(frozen=True)
 class TimeSync:
     ts_client: float
@@ -366,9 +320,7 @@ class LocalizationObservationsRequest:
 
     def __post_init__(self) -> None:
         if self.observation_count < 1:
-            raise ValueError(
-                f"observation_count must be at least 1, got {self.observation_count}"
-            )
+            raise ValueError(f"observation_count must be at least 1, got {self.observation_count}")
         if self.capture_policy is CapturePolicy.ROBOT_LOS_PREFERRED:
             if self.wait_timeout_s is None:
                 raise ValueError(
@@ -376,8 +328,7 @@ class LocalizationObservationsRequest:
                 )
             if not math.isfinite(self.wait_timeout_s) or self.wait_timeout_s < 0.0:
                 raise ValueError(
-                    "wait_timeout_s must be finite and non-negative, "
-                    f"got {self.wait_timeout_s}"
+                    f"wait_timeout_s must be finite and non-negative, got {self.wait_timeout_s}"
                 )
         elif self.wait_timeout_s is not None:
             raise ValueError("wait_timeout_s is only valid for robot_los_preferred")
@@ -395,58 +346,39 @@ def encode_localization_observations_request(request: LocalizationObservationsRe
 
 
 @dataclass(frozen=True)
-class NavGoalFrame:
-    pose: tuple[float, float, float, float] | None
-    path_poses: list[tuple[float, float, float, float]]
-    ts: float
-
-
-@dataclass(frozen=True)
-class NavState:
-    state: NavPhase
-    outcome: NavOutcome | None
-
-
-@dataclass(frozen=True)
 class StateSnapshot:
     connected_clients: int
     lidar: LidarSettings
     nav: NavState
 
 
-def encode_state(payload: StateSnapshot) -> str:
+def encode_state(snapshot: StateSnapshot) -> str:
     return encode_text(
         {
             "type": "state",
-            "server": {"connected_clients": payload.connected_clients},
+            "server": {"connected_clients": snapshot.connected_clients},
             "lidar": {
-                "enabled": payload.lidar.enabled,
-                "min_height_m": payload.lidar.min_height_m,
-                "max_height_m": payload.lidar.max_height_m,
-                "max_range_m": payload.lidar.max_range_m,
+                "enabled": snapshot.lidar.enabled,
+                "min_height_m": snapshot.lidar.min_height_m,
+                "max_height_m": snapshot.lidar.max_height_m,
+                "max_range_m": snapshot.lidar.max_range_m,
             },
             "nav": {
-                "state": payload.nav.state,
-                "outcome": payload.nav.outcome,
+                "state": snapshot.nav.state,
+                "outcome": snapshot.nav.outcome,
             },
         }
     )
 
 
-def encode_localization_result(
-    *,
-    position: tuple[float, float, float],
-    orientation: tuple[float, float, float, float],
-    confidence: float,
-    ts_server: float,
-) -> str:
+def encode_localization_result(result: LocalizationResult) -> str:
     return encode_text(
         {
             "type": "localization_result",
-            "position": list(position),
-            "orientation": list(orientation),
-            "confidence": confidence,
-            "ts": ts_server,
+            "position": list(result.position),
+            "orientation": list(result.orientation),
+            "confidence": result.confidence,
+            "ts": result.ts_server,
         }
     )
 
@@ -472,14 +404,14 @@ def _wire_waypoint(x: float, y: float, z: float, yaw: float) -> list[float]:
     return [round(x, 3), round(y, 3), round(z, 3), round(yaw, 4)]
 
 
-def encode_nav_goal(payload: NavGoalFrame) -> str:
+def encode_nav_goal(nav_goal: NavGoalFrame) -> str:
     body: dict[str, Any] = {
         "type": "nav_goal",
-        "path_poses": [_wire_waypoint(*point) for point in payload.path_poses],
-        "ts": payload.ts,
+        "path_poses": [_wire_waypoint(*point) for point in nav_goal.path_poses],
+        "ts": nav_goal.ts,
     }
-    if payload.pose is not None:
-        body["pose"] = _wire_waypoint(*payload.pose)
+    if nav_goal.pose is not None:
+        body["pose"] = _wire_waypoint(*nav_goal.pose)
     return encode_text(body)
 
 

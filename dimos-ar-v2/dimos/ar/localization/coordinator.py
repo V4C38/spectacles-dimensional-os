@@ -7,18 +7,19 @@ from dimos.ar.localization.odom_map_transform import OdomMapTransform
 from dimos.ar.localization.policy import LocalizationPolicy
 from dimos.ar.localization.types import (
     LocalizationProviderType,
+    LocalizationResult,
     LocalizedPose,
     Localizer,
     Observation,
 )
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
 from dimos.ar.robot.odom_correction import correct_odom_xy
-from dimos.ar.websocket.protocol import encode_localization_result
+from dimos.msgs.geometry_msgs.Transform import Transform
 
 
 @dataclass(frozen=True)
 class LocalizationOutcome:
-    payload: str | None = None
+    result: LocalizationResult | None = None
     used_vps: bool = False
     defer_vps: bool = False
 
@@ -29,19 +30,22 @@ class LocalizationCoordinator:
         *,
         policy: LocalizationPolicy,
         odom_map_transform: OdomMapTransform,
-        robot_buffer: RobotObservationBuffer,
+        robot_observations: RobotObservationBuffer,
         marker: Localizer | None,
         vps: Localizer | None,
-        odom_correction_factor: float,
+        odom_scale_correction_factor: float,
         map_code: str | None = None,
     ) -> None:
         self._policy = policy
         self._odom_map_transform = odom_map_transform
-        self._robot_buffer = robot_buffer
+        self._robot_observations = robot_observations
         self._marker = marker
         self._vps = vps
-        self._odom_correction_factor = odom_correction_factor
+        self._odom_scale_correction_factor = odom_scale_correction_factor
         self._map_code = map_code
+
+    def on_relocalization_tf(self, transform: Transform) -> bool:
+        return self._odom_map_transform.update_from_relocalization(transform)
 
     def run(self, observations: Sequence[Observation]) -> LocalizationOutcome:
         if not observations:
@@ -54,7 +58,7 @@ class LocalizationCoordinator:
             localized = self._marker.localize(list(observations))
             if localized is not None:
                 return LocalizationOutcome(
-                    payload=self._encode_odom(localized, ts_server),
+                    result=self._result_in_odom(localized, ts_server),
                     used_vps=False,
                 )
         if self._vps is None or LocalizationProviderType.VPS not in self._policy.providers:
@@ -79,7 +83,7 @@ class LocalizationCoordinator:
         if odom_pose is None:
             return LocalizationOutcome(used_vps=True)
         return LocalizationOutcome(
-            payload=self._encode_odom(odom_pose, ts_server),
+            result=self._result_in_odom(odom_pose, ts_server),
             used_vps=True,
         )
 
@@ -88,7 +92,7 @@ class LocalizationCoordinator:
             return True
         if not self._policy.robot_vps_ready():
             return False
-        sample = self._robot_buffer.newest()
+        sample = self._robot_observations.newest()
         vps = self._vps
         if sample is None or vps is None:
             return False
@@ -103,7 +107,7 @@ class LocalizationCoordinator:
             map_code=self._map_code,
         )
 
-    def _encode_odom(self, localized: LocalizedPose, ts_server: float) -> str:
+    def _result_in_odom(self, localized: LocalizedPose, ts_server: float) -> LocalizationResult:
         if localized.frame_id != "odom":
             raise ValueError(
                 f"localization_result expects frame_id='odom', got {localized.frame_id!r}"
@@ -111,9 +115,9 @@ class LocalizationCoordinator:
         x, y = correct_odom_xy(
             localized.pose.x,
             localized.pose.y,
-            factor=self._odom_correction_factor,
+            factor=self._odom_scale_correction_factor,
         )
-        return encode_localization_result(
+        return LocalizationResult(
             position=(x, y, localized.pose.z),
             orientation=(
                 localized.pose.orientation.x,

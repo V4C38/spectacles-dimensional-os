@@ -34,7 +34,7 @@ class RobotObservationBuffer:
         self,
         *,
         robot_pose_buffer: RobotPoseBuffer,
-        T_base_camopt: NDArray[np.float64],
+        T_base_camera_optical: NDArray[np.float64] | None,
         maxlen: int = DEFAULT_MAXLEN,
         static_speed_mps: float = DEFAULT_STATIC_SPEED_MPS,
         max_travel_m: float = DEFAULT_MAX_TRAVEL_M,
@@ -48,7 +48,7 @@ class RobotObservationBuffer:
         if not math.isfinite(max_travel_m) or max_travel_m <= 0.0:
             raise ValueError(f"max_travel_m must be finite and positive, got {max_travel_m}")
         self._robot_pose_buffer = robot_pose_buffer
-        self._T_base_camopt = T_base_camopt
+        self._T_base_camera_optical = T_base_camera_optical
         self._maxlen = maxlen
         self._static_speed_mps = static_speed_mps
         self._max_travel_m = max_travel_m
@@ -72,6 +72,8 @@ class RobotObservationBuffer:
         speed_mps: float,
         travel_m: float,
     ) -> None:
+        if self._T_base_camera_optical is None:
+            return
         if not math.isfinite(speed_mps) or speed_mps > self._static_speed_mps:
             with self._lock:
                 self._drop_stale(travel_m)
@@ -87,7 +89,7 @@ class RobotObservationBuffer:
             image=image,
             camera_info=camera_info,
             robot_pose_buffer=self._robot_pose_buffer,
-            T_base_camopt=self._T_base_camopt,
+            T_base_camera_optical=self._T_base_camera_optical,
             ts_server=ts_server,
         )
         if observation is None:
@@ -113,7 +115,7 @@ def observation_from_robot_frame(
     image: Image,
     camera_info: CameraInfo,
     robot_pose_buffer: RobotPoseBuffer,
-    T_base_camopt: NDArray[np.float64],
+    T_base_camera_optical: NDArray[np.float64],
     ts_server: float | None = None,
 ) -> Observation | None:
     if ts_server is None:
@@ -123,11 +125,11 @@ def observation_from_robot_frame(
         return None
 
     T_odom_base = _sample_to_matrix(robot_pose)
-    T_odom_camopt = T_odom_base @ np.asarray(T_base_camopt, dtype=np.float64)
+    T_odom_camera_optical = T_odom_base @ np.asarray(T_base_camera_optical, dtype=np.float64)
     return Observation(
         jpeg=image.to_jpeg_bytes(),
         intrinsics=intrinsics_from_camera_info(camera_info),
-        camera_pose=matrix_to_pose(T_odom_camopt),
+        camera_pose=matrix_to_pose(T_odom_camera_optical),
         ts_server=ts_server,
     )
 

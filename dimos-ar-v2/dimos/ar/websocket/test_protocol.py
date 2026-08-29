@@ -5,23 +5,21 @@ import struct
 
 import pytest
 
-from dimos.ar.localization.types import CapturePolicy, Intrinsics
+from dimos.ar.lidar.settings import LidarSettings
+from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult
+from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavState
+from dimos.ar.robot.capabilities import Capability, CapabilityName
+from dimos.ar.robot.go2 import GO2_PROFILE
+from dimos.ar.robot.profile import RobotDescription
 from dimos.ar.websocket.protocol import (
     LIDAR_FOURCC,
     LOCALIZATION_OBSERVATIONS_FOURCC,
-    Capability,
-    CapabilityName,
     EstopRequest,
     Hello,
-    LidarSettings,
     LidarSettingsRequest,
     LocalizationObservation,
     LocalizationObservationsRequest,
     LocalizationStartRequest,
-    NavGoalFrame,
-    NavGoalRequest,
-    NavState,
-    RobotDescription,
     StateRequest,
     StateSnapshot,
     TimeSync,
@@ -45,10 +43,10 @@ def _sample_hello(client_id: str = "abc123") -> Hello:
         client_id=client_id,
         time_sync=TimeSync(ts_client=1000.0, ts_server=2000.0),
         robot=RobotDescription(
-            display_name="Unitree Go2",
-            body_bounds_m=(0.7, 0.5, 0.55),
-            footprint_m=(0.7, 0.5),
-            base_height_m=0.33,
+            display_name=GO2_PROFILE.display_name,
+            body_bounds_m=GO2_PROFILE.body_bounds_m,
+            footprint_m=GO2_PROFILE.footprint_m,
+            base_height_m=GO2_PROFILE.base_height_m,
         ),
         capabilities={
             CapabilityName.LIDAR: Capability(available=True, reason=None),
@@ -236,10 +234,12 @@ def test_encode_localization_observations_request_requires_timeout_for_preferred
 def test_encode_localization_result() -> None:
     msg = _parse_json_line(
         encode_localization_result(
-            position=(1.0, 2.0, 3.0),
-            orientation=(0.0, 0.0, 0.0, 1.0),
-            confidence=0.8,
-            ts_server=100.0,
+            LocalizationResult(
+                position=(1.0, 2.0, 3.0),
+                orientation=(0.0, 0.0, 0.0, 1.0),
+                confidence=0.8,
+                ts_server=100.0,
+            )
         )
     )
     assert msg["type"] == "localization_result"
@@ -250,9 +250,7 @@ def test_encode_localization_result() -> None:
 
 def test_decode_nav_goal_request_requires_orientation() -> None:
     with pytest.raises(ValueError, match="orientation"):
-        decode_inbound(
-            json.dumps({"type": "nav_goal_request", "position": [1.0, 0.0, 0.0]})
-        )
+        decode_inbound(json.dumps({"type": "nav_goal_request", "position": [1.0, 0.0, 0.0]}))
 
 
 def test_decode_lidar_settings_request_requires_all_fields() -> None:

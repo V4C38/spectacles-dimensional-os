@@ -26,7 +26,9 @@ Keep this document, `dimos/ar/websocket/protocol.py`, and
 - **`state.alignment` removed.** `localization_observations_request` is the only
   prompt to capture.
 - **`hello.capabilities`** — keys `lidar`, `navigation`, `localization`, `estop`.
-  `localization` is `available=false` with `reason` when no provider is configured.
+  Any key may be `available=false` with `reason`. `localization` is false when
+  no provider is configured; `lidar` / `navigation` / `estop` follow the
+  selected robot profile.
 - **`ts_capture`** — exposure time on `localization_observations` (was `capture_ts`).
   Same clock family as `ts_client` / `ts_server` / `ts_odom`.
 
@@ -87,14 +89,22 @@ scalar-last.
 
 ### What `odom` is
 
-`odom` is the robot's odometry frame. Its origin is wherever the robot was when
-its odometry started, and it **drifts** — it is dead reckoning, not a survey. Two
-consequences for clients:
+`odom` is the selected stack's robot reference pose. Every compatible DimOS
+stack must publish `odom: PoseStamped`. On a mobile platform this pose usually
+drifts (dead reckoning from a boot origin). A fixed-base stack may publish a
+stable pose, including identity, for as long as the base does not move.
+
+Two consequences for clients on a drifting stack:
 
 - Content anchored in `odom` slowly diverges from the physical room.
 - ARModule issues corrections through `localization_result` (see below). A client
   should apply the newest one it has rather than assuming its first alignment
   holds forever.
+
+Fiducial marker localization and robot-side VPS anchoring look up that pose at
+shutter time. Robot-side VPS also needs an onboard camera extrinsic
+(`T_base_camera_optical`). Declared DimOS ports for LiDAR and navigation stay
+on `ARModule`; they no-op when `hello.capabilities` reports them unavailable.
 
 DimOS Go2 drivers currently stamp this frame as `frame_id="world"` on incoming
 messages; ARModule normalizes that to `odom` at the import boundary and uses
@@ -231,7 +241,9 @@ client to know server time.
 
 Which localization provider is configured is a deployment fact and is not on
 the wire. `hello.capabilities.localization.available` is `false` (with `reason`)
-when no provider is configured. Capture geometry is a `capture_policy` on each
+when no provider is configured. `lidar`, `navigation`, and `estop` may also be
+`available=false` with `reason` when the selected robot profile does not offer
+them. Capture geometry is a `capture_policy` on each
 `localization_observations_request`, not a hello field.
 
 ## Outbound messages (server → client)

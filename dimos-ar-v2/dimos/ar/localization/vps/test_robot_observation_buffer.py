@@ -47,10 +47,23 @@ def _buffer() -> tuple[RobotObservationBuffer, RobotPoseBuffer]:
     robot_pose_buffer = RobotPoseBuffer()
     robot_buffer = RobotObservationBuffer(
         robot_pose_buffer=robot_pose_buffer,
-        T_base_camopt=np.eye(4),
+        T_base_camera_optical=np.eye(4),
     )
     robot_buffer.set_camera_info(_camera_info())
     return robot_buffer, robot_pose_buffer
+
+
+def test_push_image_without_camera_extrinsic_is_noop() -> None:
+    robot_pose_buffer = RobotPoseBuffer()
+    robot_buffer = RobotObservationBuffer(
+        robot_pose_buffer=robot_pose_buffer,
+        T_base_camera_optical=None,
+    )
+    robot_buffer.set_camera_info(_camera_info())
+    _push_pose(robot_pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
+    robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.0, travel_m=0.0)  # type: ignore[arg-type]
+
+    assert robot_buffer.newest() is None
 
 
 def test_push_image_while_stationary() -> None:
@@ -131,8 +144,8 @@ def test_intrinsics_from_camera_info_maps_equidistant() -> None:
 def test_observation_from_robot_frame_pairs_pose_and_image() -> None:
     buffer = RobotPoseBuffer()
     _push_pose(buffer, ts_server=100.0, position=(1.0, 2.0, 0.0))
-    T_base_camopt = np.eye(4)
-    T_base_camopt[0, 3] = 0.3
+    T_base_camera_optical = np.eye(4)
+    T_base_camera_optical[0, 3] = 0.3
     image = SimpleNamespace(ts=100.0, to_jpeg_bytes=lambda: b"jpeg-bytes")
     camera_info = CameraInfo(
         width=640,
@@ -146,7 +159,7 @@ def test_observation_from_robot_frame_pairs_pose_and_image() -> None:
         image=image,  # type: ignore[arg-type]
         camera_info=camera_info,
         robot_pose_buffer=buffer,
-        T_base_camopt=T_base_camopt,
+        T_base_camera_optical=T_base_camera_optical,
     )
 
     assert observation is not None
@@ -172,7 +185,7 @@ def test_observation_from_robot_frame_requires_robot_pose_buffer_hit() -> None:
             image=image,  # type: ignore[arg-type]
             camera_info=camera_info,
             robot_pose_buffer=buffer,
-            T_base_camopt=np.eye(4),
+            T_base_camera_optical=np.eye(4),
         )
         is None
     )

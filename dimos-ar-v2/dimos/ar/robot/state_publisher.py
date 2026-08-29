@@ -4,14 +4,14 @@ import math
 import time
 from typing import TYPE_CHECKING, Protocol
 
-from dimos.ar.robot.go2 import ODOM_CORRECTION_FACTOR
-from dimos.ar.robot.lidar_filter import (
+from dimos.ar.lidar.filter import (
     DEFAULT_TARGET_POINTS,
     LidarFilterSettings,
     prepare_lidar_points,
 )
+from dimos.ar.lidar.settings import LidarSettings
 from dimos.ar.robot.odom_correction import correct_odom_pose
-from dimos.ar.websocket.protocol import LidarSettings, encode_lidar_binary, encode_pose
+from dimos.ar.websocket.protocol import encode_lidar_binary, encode_pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 
@@ -35,14 +35,14 @@ class RobotStatePublisher:
         self,
         ws_server: WebSocketServer | _BroadcastSink,
         *,
-        odom_correction_factor: float = ODOM_CORRECTION_FACTOR,
+        odom_scale_correction_factor: float,
         pose_max_hz: float = DEFAULT_POSE_MAX_HZ,
         lidar_max_hz: float = DEFAULT_LIDAR_MAX_HZ,
         lidar_voxel_size_m: float = 0.05,
         lidar_target_points: int = DEFAULT_TARGET_POINTS,
     ) -> None:
         self._ws = ws_server
-        self._odom_correction_factor = odom_correction_factor
+        self._odom_scale_correction_factor = odom_scale_correction_factor
         self._pose_max_hz = pose_max_hz
         self._lidar_max_hz = lidar_max_hz
         self._lidar_voxel_size_m = lidar_voxel_size_m
@@ -55,7 +55,7 @@ class RobotStatePublisher:
         self._last_raw_odom = msg
         if not self._allow_emit(self._pose_last_emit_mono, self._pose_max_hz):
             return
-        corrected = correct_odom_pose(msg, factor=self._odom_correction_factor)
+        corrected = correct_odom_pose(msg, factor=self._odom_scale_correction_factor)
         position = (corrected.x, corrected.y, corrected.z)
         orientation = (
             corrected.orientation.x,
@@ -84,7 +84,7 @@ class RobotStatePublisher:
             return
         downsampled = msg.voxel_downsample(voxel_size=self._lidar_voxel_size_m)
         points = downsampled.points_f32()
-        settings = LidarFilterSettings.from_settings(
+        settings = LidarFilterSettings.from_lidar_settings(
             lidar,
             target_points=self._lidar_target_points,
         )

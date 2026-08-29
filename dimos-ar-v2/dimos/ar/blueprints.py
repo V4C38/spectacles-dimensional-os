@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dimos.ar.module import ARModule
+from dimos.ar.robot.profile import RobotName
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 
@@ -14,7 +15,7 @@ except ModuleNotFoundError:
 _unitree_go2_ar_base = (
     autoconnect(
         unitree_go2,
-        ARModule.blueprint(),
+        ARModule.blueprint(robot=RobotName.UNITREE_GO2),
     )
     if unitree_go2 is not None
     else None
@@ -23,8 +24,7 @@ _unitree_go2_ar_base = (
 unitree_go2_ar = (
     _unitree_go2_ar_base.global_config(
         n_workers=len(_unitree_go2_ar_base.active_blueprints),
-    )
-    .configurators(ClockSyncConfigurator())
+    ).configurators(ClockSyncConfigurator())
     if _unitree_go2_ar_base is not None
     else None
 )

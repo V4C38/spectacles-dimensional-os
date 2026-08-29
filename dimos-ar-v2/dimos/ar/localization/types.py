@@ -48,5 +48,13 @@ class LocalizedPose:
     confidence: float
 
 
+@dataclass(frozen=True)
+class LocalizationResult:
+    position: tuple[float, float, float]
+    orientation: tuple[float, float, float, float]
+    confidence: float
+    ts_server: float
+
+
 class Localizer(Protocol):
     def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None: ...

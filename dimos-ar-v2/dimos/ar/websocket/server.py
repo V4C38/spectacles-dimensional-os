@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import websockets
 import websockets.asyncio.server as ws_server
 
+from dimos.ar.navigation.types import NavGoalRequest
 from dimos.ar.websocket.protocol import (
     LOCALIZATION_OBSERVATIONS_FOURCC,
     EstopRequest,
@@ -23,7 +24,6 @@ from dimos.ar.websocket.protocol import (
     LidarSettingsRequest,
     LocalizationObservation,
     LocalizationStartRequest,
-    NavGoalRequest,
     StateRequest,
     TimeSync,
     decode_hello_request,

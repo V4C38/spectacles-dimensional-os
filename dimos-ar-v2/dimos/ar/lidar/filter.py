@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from dimos.ar.websocket.protocol import LidarSettings
+from dimos.ar.lidar.settings import LidarSettings
 
 DEFAULT_TARGET_POINTS = 2500
 
@@ -26,7 +26,7 @@ class LidarFilterSettings:
     target_points: int = DEFAULT_TARGET_POINTS
 
     @classmethod
-    def from_settings(
+    def from_lidar_settings(
         cls, lidar: LidarSettings, *, target_points: int = DEFAULT_TARGET_POINTS
     ) -> LidarFilterSettings:
         return cls(
