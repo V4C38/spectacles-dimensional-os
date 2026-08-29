@@ -5,12 +5,12 @@ import struct
 
 import pytest
 
-from dimos.ar.lidar.settings import LidarSettings
 from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavState
 from dimos.ar.robot.capabilities import Capability, CapabilityName
-from dimos.ar.robot.go2 import GO2_PROFILE
-from dimos.ar.robot.profile import RobotDescription
+from dimos.ar.robot.profiles import RobotDescription
+from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
+from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.ar.websocket.protocol import (
     LIDAR_FOURCC,
     LOCALIZATION_OBSERVATIONS_FOURCC,
@@ -43,10 +43,10 @@ def _sample_hello(client_id: str = "abc123") -> Hello:
         client_id=client_id,
         time_sync=TimeSync(ts_client=1000.0, ts_server=2000.0),
         robot=RobotDescription(
-            display_name=GO2_PROFILE.display_name,
-            body_bounds_m=GO2_PROFILE.body_bounds_m,
-            footprint_m=GO2_PROFILE.footprint_m,
-            base_height_m=GO2_PROFILE.base_height_m,
+            display_name=UNITREE_GO2_PROFILE.display_name,
+            body_bounds_m=UNITREE_GO2_PROFILE.body_bounds_m,
+            footprint_m=UNITREE_GO2_PROFILE.footprint_m,
+            base_height_m=UNITREE_GO2_PROFILE.base_height_m,
         ),
         capabilities={
             CapabilityName.LIDAR: Capability(available=True, reason=None),

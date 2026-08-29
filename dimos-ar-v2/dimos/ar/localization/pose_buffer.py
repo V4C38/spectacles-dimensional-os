@@ -15,7 +15,7 @@ DEFAULT_MAX_GAP_S = 0.25
 
 
 @dataclass(frozen=True)
-class RobotPoseSample:
+class PoseSample:
     position: tuple[float, float, float]
     orientation: tuple[float, float, float, float]
     ts_odom: float
@@ -23,12 +23,12 @@ class RobotPoseSample:
     frame_id: str
 
 
-class RobotPoseBuffer:
+class PoseBuffer:
     """Interpolate the robot pose in ``odom`` at a past ``ts_server``.
 
     Odom samples are indexed by the server time each message arrived
     (``handle_odom``). The WebSocket layer converts wire ``ts_capture`` to
-    ``ts_server`` before building domain ``Observation``s, then providers call
+    ``ts_server`` before building domain ``Observation``s, then localizers call
     ``at_server_ts`` for the pose at shutter time.
     """
 
@@ -40,10 +40,10 @@ class RobotPoseBuffer:
     ) -> None:
         self._max_gap_s = max_gap_s
         self._lock = threading.Lock()
-        self._samples: deque[RobotPoseSample] = deque(maxlen=maxlen)
-        self._latest: RobotPoseSample | None = None
+        self._samples: deque[PoseSample] = deque(maxlen=maxlen)
+        self._latest: PoseSample | None = None
 
-    def push(self, msg: PoseStamped, *, ts_server: float | None = None) -> RobotPoseSample:
+    def push(self, msg: PoseStamped, *, ts_server: float | None = None) -> PoseSample:
         if ts_server is None:
             ts_server = time.time()
         sample = _sample_from_pose(msg, ts_server=ts_server)
@@ -52,16 +52,16 @@ class RobotPoseBuffer:
             self._samples.append(sample)
         return sample
 
-    def latest(self) -> RobotPoseSample | None:
+    def latest(self) -> PoseSample | None:
         with self._lock:
             return self._latest
 
-    def at_server_ts(self, ts_server: float) -> RobotPoseSample | None:
+    def at_server_ts(self, ts_server: float) -> PoseSample | None:
         with self._lock:
             return _interpolate(self._samples, ts_server, max_gap_s=self._max_gap_s)
 
 
-def _sample_from_pose(msg: PoseStamped, *, ts_server: float) -> RobotPoseSample:
+def _sample_from_pose(msg: PoseStamped, *, ts_server: float) -> PoseSample:
     orientation = _normalize_quaternion(
         (
             float(msg.orientation.x),
@@ -70,7 +70,7 @@ def _sample_from_pose(msg: PoseStamped, *, ts_server: float) -> RobotPoseSample:
             float(msg.orientation.w),
         )
     )
-    return RobotPoseSample(
+    return PoseSample(
         position=(float(msg.x), float(msg.y), float(msg.z)),
         orientation=orientation,
         ts_odom=float(msg.ts),
@@ -90,19 +90,19 @@ def _normalize_quaternion(
 
 
 def _interpolate(
-    samples: deque[RobotPoseSample],
+    samples: deque[PoseSample],
     ts_server: float,
     *,
     max_gap_s: float,
-) -> RobotPoseSample | None:
+) -> PoseSample | None:
     if not samples:
         return None
     if len(samples) == 1:
         sample = samples[0]
         return sample if abs(sample.ts_server - ts_server) <= max_gap_s else None
 
-    before: RobotPoseSample | None = None
-    after: RobotPoseSample | None = None
+    before: PoseSample | None = None
+    after: PoseSample | None = None
     for sample in samples:
         if sample.ts_server <= ts_server:
             before = sample
@@ -143,7 +143,7 @@ def _interpolate(
 
     ts_odom = before.ts_odom + alpha * (after.ts_odom - before.ts_odom)
 
-    return RobotPoseSample(
+    return PoseSample(
         position=(float(pos[0]), float(pos[1]), float(pos[2])),
         orientation=quat_out,
         ts_odom=ts_odom,

@@ -3,13 +3,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dimos.ar.lidar.filter import (
+from dimos.ar.sensors.lidar_filter import (
     LidarFilterSettings,
     filter_points,
     prepare_lidar_points,
     subsample_near_robot,
 )
-from dimos.ar.lidar.settings import LidarSettings
+from dimos.ar.sensors.lidar_settings import LidarSettings
 
 
 def _settings(**overrides: float) -> LidarFilterSettings:

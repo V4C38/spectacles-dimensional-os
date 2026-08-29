@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from dimos.ar.localization.robot_pose_buffer import RobotPoseBuffer, RobotPoseSample
+from dimos.ar.localization.pose_buffer import PoseBuffer, PoseSample
 from dimos.ar.localization.types import DistortionModel, Intrinsics, Observation
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
@@ -33,7 +33,7 @@ class RobotObservationBuffer:
     def __init__(
         self,
         *,
-        robot_pose_buffer: RobotPoseBuffer,
+        pose_buffer: PoseBuffer,
         T_base_camera_optical: NDArray[np.float64] | None,
         maxlen: int = DEFAULT_MAXLEN,
         static_speed_mps: float = DEFAULT_STATIC_SPEED_MPS,
@@ -47,7 +47,7 @@ class RobotObservationBuffer:
             )
         if not math.isfinite(max_travel_m) or max_travel_m <= 0.0:
             raise ValueError(f"max_travel_m must be finite and positive, got {max_travel_m}")
-        self._robot_pose_buffer = robot_pose_buffer
+        self._pose_buffer = pose_buffer
         self._T_base_camera_optical = T_base_camera_optical
         self._maxlen = maxlen
         self._static_speed_mps = static_speed_mps
@@ -88,7 +88,7 @@ class RobotObservationBuffer:
         observation = observation_from_robot_frame(
             image=image,
             camera_info=camera_info,
-            robot_pose_buffer=self._robot_pose_buffer,
+            pose_buffer=self._pose_buffer,
             T_base_camera_optical=self._T_base_camera_optical,
             ts_server=ts_server,
         )
@@ -114,13 +114,13 @@ def observation_from_robot_frame(
     *,
     image: Image,
     camera_info: CameraInfo,
-    robot_pose_buffer: RobotPoseBuffer,
+    pose_buffer: PoseBuffer,
     T_base_camera_optical: NDArray[np.float64],
     ts_server: float | None = None,
 ) -> Observation | None:
     if ts_server is None:
         ts_server = float(image.ts)
-    robot_pose = robot_pose_buffer.at_server_ts(ts_server)
+    robot_pose = pose_buffer.at_server_ts(ts_server)
     if robot_pose is None:
         return None
 
@@ -166,7 +166,7 @@ def _distortion_model_from_camera_info(model: str) -> DistortionModel:
     raise ValueError(f"unsupported camera distortion model {model!r}")
 
 
-def _sample_to_matrix(sample: RobotPoseSample) -> NDArray[np.float64]:
+def _sample_to_matrix(sample: PoseSample) -> NDArray[np.float64]:
     return np.asarray(
         pose_to_matrix(Pose(*sample.position, *sample.orientation)),
         dtype=np.float64,

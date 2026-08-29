@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from dimos.ar.localization.robot_pose_buffer import RobotPoseBuffer
+from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.vps.robot_observation_buffer import (
     RobotObservationBuffer,
     intrinsics_from_camera_info,
@@ -26,7 +26,7 @@ def _camera_info() -> CameraInfo:
 
 
 def _push_pose(
-    buffer: RobotPoseBuffer, *, ts_server: float, position: tuple[float, float, float]
+    buffer: PoseBuffer, *, ts_server: float, position: tuple[float, float, float]
 ) -> None:
     buffer.push(
         PoseStamped(
@@ -43,32 +43,32 @@ def _image(ts: float = 100.0) -> SimpleNamespace:
     return SimpleNamespace(ts=ts, to_jpeg_bytes=lambda: b"jpeg-bytes")
 
 
-def _buffer() -> tuple[RobotObservationBuffer, RobotPoseBuffer]:
-    robot_pose_buffer = RobotPoseBuffer()
+def _buffer() -> tuple[RobotObservationBuffer, PoseBuffer]:
+    pose_buffer = PoseBuffer()
     robot_buffer = RobotObservationBuffer(
-        robot_pose_buffer=robot_pose_buffer,
+        pose_buffer=pose_buffer,
         T_base_camera_optical=np.eye(4),
     )
     robot_buffer.set_camera_info(_camera_info())
-    return robot_buffer, robot_pose_buffer
+    return robot_buffer, pose_buffer
 
 
 def test_push_image_without_camera_extrinsic_is_noop() -> None:
-    robot_pose_buffer = RobotPoseBuffer()
+    pose_buffer = PoseBuffer()
     robot_buffer = RobotObservationBuffer(
-        robot_pose_buffer=robot_pose_buffer,
+        pose_buffer=pose_buffer,
         T_base_camera_optical=None,
     )
     robot_buffer.set_camera_info(_camera_info())
-    _push_pose(robot_pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
+    _push_pose(pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
     robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.0, travel_m=0.0)  # type: ignore[arg-type]
 
     assert robot_buffer.newest() is None
 
 
 def test_push_image_while_stationary() -> None:
-    robot_buffer, robot_pose_buffer = _buffer()
-    _push_pose(robot_pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
+    robot_buffer, pose_buffer = _buffer()
+    _push_pose(pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
     robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.0, travel_m=0.0)  # type: ignore[arg-type]
 
     sample = robot_buffer.newest()
@@ -78,16 +78,16 @@ def test_push_image_while_stationary() -> None:
 
 
 def test_skips_frames_while_moving() -> None:
-    robot_buffer, robot_pose_buffer = _buffer()
-    _push_pose(robot_pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
+    robot_buffer, pose_buffer = _buffer()
+    _push_pose(pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
     robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.2, travel_m=0.0)  # type: ignore[arg-type]
 
     assert robot_buffer.newest() is None
 
 
 def test_retains_frames_after_movement_starts() -> None:
-    robot_buffer, robot_pose_buffer = _buffer()
-    _push_pose(robot_pose_buffer, ts_server=100.0, position=(0.0, 0.0, 0.0))
+    robot_buffer, pose_buffer = _buffer()
+    _push_pose(pose_buffer, ts_server=100.0, position=(0.0, 0.0, 0.0))
     robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.0, travel_m=0.0)  # type: ignore[arg-type]
     robot_buffer.expire(travel_m=0.2)
 
@@ -97,8 +97,8 @@ def test_retains_frames_after_movement_starts() -> None:
 
 
 def test_drops_frames_after_travel_threshold() -> None:
-    robot_buffer, robot_pose_buffer = _buffer()
-    _push_pose(robot_pose_buffer, ts_server=100.0, position=(0.0, 0.0, 0.0))
+    robot_buffer, pose_buffer = _buffer()
+    _push_pose(pose_buffer, ts_server=100.0, position=(0.0, 0.0, 0.0))
     robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.0, travel_m=0.0)  # type: ignore[arg-type]
     robot_buffer.expire(travel_m=1.01)
 
@@ -106,10 +106,10 @@ def test_drops_frames_after_travel_threshold() -> None:
 
 
 def test_keeps_three_recent_samples() -> None:
-    robot_buffer, robot_pose_buffer = _buffer()
+    robot_buffer, pose_buffer = _buffer()
     for index in range(5):
         ts = 100.0 + index
-        _push_pose(robot_pose_buffer, ts_server=ts, position=(0.0, 0.0, 0.0))
+        _push_pose(pose_buffer, ts_server=ts, position=(0.0, 0.0, 0.0))
         robot_buffer.push_image(
             _image(ts),  # type: ignore[arg-type]
             ts_server=ts,
@@ -142,7 +142,7 @@ def test_intrinsics_from_camera_info_maps_equidistant() -> None:
 
 
 def test_observation_from_robot_frame_pairs_pose_and_image() -> None:
-    buffer = RobotPoseBuffer()
+    buffer = PoseBuffer()
     _push_pose(buffer, ts_server=100.0, position=(1.0, 2.0, 0.0))
     T_base_camera_optical = np.eye(4)
     T_base_camera_optical[0, 3] = 0.3
@@ -158,7 +158,7 @@ def test_observation_from_robot_frame_pairs_pose_and_image() -> None:
     observation = observation_from_robot_frame(
         image=image,  # type: ignore[arg-type]
         camera_info=camera_info,
-        robot_pose_buffer=buffer,
+        pose_buffer=buffer,
         T_base_camera_optical=T_base_camera_optical,
     )
 
@@ -169,8 +169,8 @@ def test_observation_from_robot_frame_pairs_pose_and_image() -> None:
     assert observation.camera_pose.y == pytest.approx(2.0)
 
 
-def test_observation_from_robot_frame_requires_robot_pose_buffer_hit() -> None:
-    buffer = RobotPoseBuffer()
+def test_observation_from_robot_frame_requires_pose_buffer_hit() -> None:
+    buffer = PoseBuffer()
     image = SimpleNamespace(ts=100.0, to_jpeg_bytes=lambda: b"jpeg-bytes")
     camera_info = CameraInfo(
         width=640,
@@ -184,7 +184,7 @@ def test_observation_from_robot_frame_requires_robot_pose_buffer_hit() -> None:
         observation_from_robot_frame(
             image=image,  # type: ignore[arg-type]
             camera_info=camera_info,
-            robot_pose_buffer=buffer,
+            pose_buffer=buffer,
             T_base_camera_optical=np.eye(4),
         )
         is None

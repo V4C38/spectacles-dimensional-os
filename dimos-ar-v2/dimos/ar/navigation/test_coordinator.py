@@ -32,19 +32,19 @@ def _path(
 
 
 def test_submit_goal_uncorrects_xy_for_planner() -> None:
-    goals = NavGoalCoordinator(odom_scale_correction_factor=1.25)
+    coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.25)
 
-    published = goals.submit_goal(_nav_goal_request())
+    published = coordinator.submit_goal(_nav_goal_request())
 
     assert (published.x, published.y, published.z) == pytest.approx((4.0, 8.0, 0.33))
     assert published.frame_id == "odom"
-    assert goals.nav_state().state == "idle"
+    assert coordinator.nav_state().state == "idle"
 
 
 def test_path_sets_following_path_and_goal_from_dimos_path() -> None:
-    goals = NavGoalCoordinator(odom_scale_correction_factor=1.25)
+    coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.25)
 
-    nav_goal_frame, state_changed = goals.on_path(
+    nav_goal_frame, state_changed = coordinator.on_path(
         _path(
             ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
             ((2.5, 5.0, 0.0), (0.0, 0.0, 0.707, 0.707)),
@@ -56,14 +56,14 @@ def test_path_sets_following_path_and_goal_from_dimos_path() -> None:
     assert nav_goal_frame.path_poses[1][:3] == pytest.approx((3.125, 6.25, 0.0))
     assert nav_goal_frame.path_poses[1][3] == pytest.approx(1.5707963, abs=1e-4)
     assert nav_goal_frame.pose == nav_goal_frame.path_poses[-1]
-    assert goals.nav_state().state == "following_path"
+    assert coordinator.nav_state().state == "following_path"
 
 
 def test_path_terminal_yaw_comes_from_last_dimos_pose() -> None:
-    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
-    goals.submit_goal(_nav_goal_request(orientation=(0.0, 0.0, 0.0, 1.0)))
+    coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
+    coordinator.submit_goal(_nav_goal_request(orientation=(0.0, 0.0, 0.0, 1.0)))
 
-    nav_goal_frame, _state_changed = goals.on_path(
+    nav_goal_frame, _state_changed = coordinator.on_path(
         _path(((1.0, 2.0, 0.0), (0.0, 0.0, 0.3826834, 0.9238795)))
     )
 
@@ -72,68 +72,68 @@ def test_path_terminal_yaw_comes_from_last_dimos_pose() -> None:
 
 
 def test_empty_path_clears_goal_points_without_changing_nav_state() -> None:
-    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
-    goals.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
+    coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
+    coordinator.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
 
-    nav_goal_frame, state_changed = goals.on_path(Path(frame_id="world", poses=[]))
+    nav_goal_frame, state_changed = coordinator.on_path(Path(frame_id="world", poses=[]))
 
     assert nav_goal_frame.pose is None
     assert nav_goal_frame.path_poses == []
     assert state_changed is False
-    assert goals.nav_state().state == "following_path"
+    assert coordinator.nav_state().state == "following_path"
 
 
 def test_goal_reached_resolves_any_navigation() -> None:
-    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
-    goals.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
+    coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
+    coordinator.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
 
-    goals.on_goal_reached(Bool(True))
+    coordinator.on_goal_reached(Bool(True))
 
-    nav = goals.nav_state()
+    nav = coordinator.nav_state()
     assert nav.state == "resolved"
     assert nav.outcome == "succeeded"
 
 
 def test_goal_reached_without_path_still_resolves() -> None:
-    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
+    coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
 
-    goals.on_goal_reached(Bool(True))
+    coordinator.on_goal_reached(Bool(True))
 
-    nav = goals.nav_state()
+    nav = coordinator.nav_state()
     assert nav.state == "resolved"
     assert nav.outcome == "succeeded"
 
 
 def test_goal_reached_failure() -> None:
-    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
-    goals.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
+    coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
+    coordinator.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
 
-    goals.on_goal_reached(Bool(False))
+    coordinator.on_goal_reached(Bool(False))
 
-    nav = goals.nav_state()
+    nav = coordinator.nav_state()
     assert nav.state == "resolved"
     assert nav.outcome == "failed"
 
 
 def test_estop_clears_following_path_without_resolved_outcome() -> None:
-    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
-    goals.submit_goal(_nav_goal_request())
-    goals.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
+    coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
+    coordinator.submit_goal(_nav_goal_request())
+    coordinator.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
 
-    assert goals.on_estop() is True
-    nav = goals.nav_state()
+    assert coordinator.on_estop() is True
+    nav = coordinator.nav_state()
     assert nav.state == "idle"
     assert nav.outcome is None
 
 
 def test_new_goal_clears_previous_outcome() -> None:
-    goals = NavGoalCoordinator(odom_scale_correction_factor=1.0)
-    goals.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
-    goals.on_goal_reached(Bool(True))
+    coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
+    coordinator.on_path(_path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
+    coordinator.on_goal_reached(Bool(True))
 
-    goals.submit_goal(_nav_goal_request(x=3.0, y=4.0))
-    goals.on_path(_path(((3.0, 4.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
+    coordinator.submit_goal(_nav_goal_request(x=3.0, y=4.0))
+    coordinator.on_path(_path(((3.0, 4.0, 0.0), (0.0, 0.0, 0.0, 1.0))))
 
-    nav = goals.nav_state()
+    nav = coordinator.nav_state()
     assert nav.state == "following_path"
     assert nav.outcome is None

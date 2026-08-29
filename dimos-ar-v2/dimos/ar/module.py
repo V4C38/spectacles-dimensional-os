@@ -9,12 +9,11 @@ from dimos_lcm.std_msgs import Bool
 from pydantic import BaseModel, Field
 import websockets.asyncio.server as ws_server
 
-from dimos.ar.lidar.settings import DEFAULT_LIDAR_SETTINGS, LidarSettings
 from dimos.ar.localization.coordinator import LocalizationCoordinator, LocalizationOutcome
 from dimos.ar.localization.fiducial_marker.localizer import FiducialMarkerLocalizer
 from dimos.ar.localization.odom_map_transform import OdomMapTransform
 from dimos.ar.localization.policy import EpisodeWork, LocalizationPolicy
-from dimos.ar.localization.robot_pose_buffer import RobotPoseBuffer
+from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.types import Localizer
 from dimos.ar.localization.vps.localizer import VpsLocalizer
 from dimos.ar.localization.vps.multiset_client import MultisetVpsClient, MultisetVpsClientConfig
@@ -22,9 +21,11 @@ from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationB
 from dimos.ar.navigation.coordinator import NavGoalCoordinator
 from dimos.ar.navigation.types import NavGoalRequest
 from dimos.ar.robot.capabilities import CapabilityName, CapabilitySet
-from dimos.ar.robot.odom_correction import correct_odom_xy
-from dimos.ar.robot.profile import RobotName, RobotProfile, get_profile
+from dimos.ar.robot.odometry_correction import correct_odom_xy
+from dimos.ar.robot.profiles import RobotName, RobotProfile, get_profile
+from dimos.ar.robot.safety import Safety
 from dimos.ar.robot.state_publisher import RobotStatePublisher
+from dimos.ar.sensors.lidar_settings import DEFAULT_LIDAR_SETTINGS, LidarSettings
 from dimos.ar.websocket.protocol import (
     EstopRequest,
     HelloBody,
@@ -90,13 +91,14 @@ class ARModule(Module):  # type: ignore[misc]
     _ws_server: WebSocketServer
     _state_publisher: RobotStatePublisher
     _nav_goal_coordinator: NavGoalCoordinator
-    _robot_pose_buffer: RobotPoseBuffer
+    _pose_buffer: PoseBuffer
     _policy: LocalizationPolicy
     _coordinator: LocalizationCoordinator
     _robot_observations: RobotObservationBuffer
     _profile: RobotProfile
     _capabilities: CapabilitySet
-    _lidar: LidarSettings
+    _safety: Safety
+    _lidar_settings: LidarSettings
     _speed_mps: float
 
     @rpc
@@ -104,7 +106,7 @@ class ARModule(Module):  # type: ignore[misc]
         super().build()
         assert self._loop is not None
         self._profile = get_profile(self.config.robot)
-        self._lidar = DEFAULT_LIDAR_SETTINGS
+        self._lidar_settings = DEFAULT_LIDAR_SETTINGS
         self._speed_mps = 0.0
         self._last_corrected_xy: tuple[float, float, float] | None = None
         self._last_relocalization_transform_poll_at = 0.0
@@ -129,18 +131,22 @@ class ARModule(Module):  # type: ignore[misc]
             self._ws_server,
             odom_scale_correction_factor=self._profile.odom_scale_correction_factor,
         )
-        self._robot_pose_buffer = RobotPoseBuffer()
+        self._pose_buffer = PoseBuffer()
         self._policy = LocalizationPolicy(
             [provider.type for provider in self.config.localization.providers]
         )
         self._robot_observations = RobotObservationBuffer(
-            robot_pose_buffer=self._robot_pose_buffer,
+            pose_buffer=self._pose_buffer,
             T_base_camera_optical=self._profile.T_base_camera_optical,
         )
         marker, vps, map_code = self._build_localizers()
         self._capabilities = CapabilitySet.from_supported(
             self._profile.supported_capabilities,
             localization_available=bool(self._policy.providers),
+        )
+        self._safety = Safety(
+            estop_available=self._capabilities.supports(CapabilityName.ESTOP),
+            effects=(self._clear_navigation, self._publish_stop),
         )
         self._coordinator = LocalizationCoordinator(
             policy=self._policy,
@@ -167,7 +173,7 @@ class ARModule(Module):  # type: ignore[misc]
                         "fiducial_marker provider requires fiducial dictionary and mounts"
                     )
                 marker = FiducialMarkerLocalizer(
-                    robot_pose_buffer=self._robot_pose_buffer,
+                    pose_buffer=self._pose_buffer,
                     marker_mounts=self._profile.fiducial_marker_mounts,
                     dictionary_name=self._profile.fiducial_dictionary,
                 )
@@ -208,7 +214,7 @@ class ARModule(Module):  # type: ignore[misc]
     def _state_snapshot(self) -> StateSnapshot:
         return StateSnapshot(
             connected_clients=self._ws_server.connection_count,
-            lidar=self._lidar,
+            lidar=self._lidar_settings,
             nav=self._nav_goal_coordinator.nav_state(),
         )
 
@@ -255,9 +261,9 @@ class ARModule(Module):  # type: ignore[misc]
 
     def _on_client_disconnect(self, _websocket: ws_server.ServerConnection, client_id: str) -> None:
         self._policy.on_disconnect(client_id)
-        self._broadcast_state()
         if self._ws_server.connection_count == 0:
-            self._publish_stop()
+            self._safety.on_last_disconnect()
+        self._broadcast_state()
 
     def _on_nav_goal_request(
         self,
@@ -276,11 +282,8 @@ class ARModule(Module):  # type: ignore[misc]
         self._broadcast_state()
 
     def _on_estop_request(self, _msg: EstopRequest, _websocket: ws_server.ServerConnection) -> None:
-        if not self._capabilities.supports(CapabilityName.ESTOP):
-            return
-        if self._nav_goal_coordinator.on_estop():
+        if self._safety.on_estop_request():
             self._broadcast_state()
-        self._publish_stop()
 
     def _on_lidar_settings_request(
         self,
@@ -289,7 +292,7 @@ class ARModule(Module):  # type: ignore[misc]
     ) -> None:
         if not self._capabilities.supports(CapabilityName.LIDAR):
             return
-        self._lidar = LidarSettings(
+        self._lidar_settings = LidarSettings(
             enabled=msg.enabled,
             min_height_m=msg.min_height_m,
             max_height_m=msg.max_height_m,
@@ -345,21 +348,23 @@ class ARModule(Module):  # type: ignore[misc]
             work.client_id, encode_localization_result(outcome.result)
         )
 
-    def _publish_stop(self) -> None:
-        if not self._capabilities.supports(CapabilityName.ESTOP):
-            return
+    def _clear_navigation(self) -> bool:
+        return self._nav_goal_coordinator.on_estop()
+
+    def _publish_stop(self) -> bool:
         if self.stop_movement.transport is None:
-            return
+            return False
         self.stop_movement.publish(Bool(True))
+        return True
 
     async def handle_lidar(self, msg: PointCloud2) -> None:
         if not self._capabilities.supports(CapabilityName.LIDAR):
             return
-        self._state_publisher.publish_lidar(msg, lidar=self._lidar)
+        self._state_publisher.publish_lidar(msg, lidar=self._lidar_settings)
 
     async def handle_odom(self, msg: PoseStamped) -> None:
         ts_server = time.time()
-        self._robot_pose_buffer.push(msg, ts_server=ts_server)
+        self._pose_buffer.push(msg, ts_server=ts_server)
         self._state_publisher.publish_odom(msg)
         corrected_x, corrected_y = correct_odom_xy(
             msg.x, msg.y, factor=self._profile.odom_scale_correction_factor

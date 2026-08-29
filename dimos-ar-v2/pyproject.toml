@@ -77,7 +77,7 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
-    "dimos.ar.robot.go2",
+    "dimos.ar.robot.profiles.unitree_go2",
     "dimos.ar.module",
 ]
 disallow_untyped_decorators = false

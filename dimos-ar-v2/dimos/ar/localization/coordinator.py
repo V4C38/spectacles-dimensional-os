@@ -13,7 +13,7 @@ from dimos.ar.localization.types import (
     Observation,
 )
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
-from dimos.ar.robot.odom_correction import correct_odom_xy
+from dimos.ar.robot.odometry_correction import correct_odom_xy
 from dimos.msgs.geometry_msgs.Transform import Transform
 
 

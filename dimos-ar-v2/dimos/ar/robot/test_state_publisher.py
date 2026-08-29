@@ -6,8 +6,8 @@ import struct
 import numpy as np
 import pytest
 
-from dimos.ar.lidar.settings import LidarSettings
 from dimos.ar.robot.state_publisher import RobotStatePublisher
+from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.ar.websocket.protocol import LIDAR_FOURCC
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 

@@ -12,12 +12,12 @@ from dimos.ar.localization.fiducial_marker.localizer import (
     FiducialMarkerLocalizerConfig,
     compose_odom_client,
 )
-from dimos.ar.localization.robot_pose_buffer import RobotPoseBuffer
+from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.types import Intrinsics, Observation
-from dimos.ar.robot.go2 import GO2_PROFILE
-from dimos.ar.robot.profile import FiducialMarkerMount
+from dimos.ar.robot.profiles import FiducialMarkerMount
+from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 
-assert GO2_PROFILE.fiducial_dictionary is not None
+assert UNITREE_GO2_PROFILE.fiducial_dictionary is not None
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
@@ -59,7 +59,7 @@ def _observation(
     )
 
 
-def _seed_robot_pose_buffer(buffer: RobotPoseBuffer, *, ts_server: float = 100.0) -> None:
+def _seed_pose_buffer(buffer: PoseBuffer, *, ts_server: float = 100.0) -> None:
     buffer.push(
         PoseStamped(
             ts=ts_server,
@@ -87,30 +87,30 @@ def test_compose_odom_client_inverts_client_marker_chain() -> None:
 
 
 def test_localize_empty_observations_returns_none() -> None:
-    provider = FiducialMarkerLocalizer(
-        robot_pose_buffer=RobotPoseBuffer(),
-        marker_mounts=GO2_PROFILE.fiducial_marker_mounts,
-        dictionary_name=GO2_PROFILE.fiducial_dictionary,
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=PoseBuffer(),
+        marker_mounts=UNITREE_GO2_PROFILE.fiducial_marker_mounts,
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
     )
 
-    assert provider.localize([]) is None
+    assert localizer.localize([]) is None
 
 
 def test_localize_without_robot_pose_returns_none() -> None:
-    provider = FiducialMarkerLocalizer(
-        robot_pose_buffer=RobotPoseBuffer(),
-        marker_mounts=GO2_PROFILE.fiducial_marker_mounts,
-        dictionary_name=GO2_PROFILE.fiducial_dictionary,
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=PoseBuffer(),
+        marker_mounts=UNITREE_GO2_PROFILE.fiducial_marker_mounts,
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
     )
 
-    assert provider.localize([_observation()]) is None
+    assert localizer.localize([_observation()]) is None
 
 
 def test_localize_accepts_candidate_and_fuses(monkeypatch: pytest.MonkeyPatch) -> None:
-    buffer = RobotPoseBuffer()
-    _seed_robot_pose_buffer(buffer, ts_server=100.0)
-    provider = FiducialMarkerLocalizer(
-        robot_pose_buffer=buffer,
+    buffer = PoseBuffer()
+    _seed_pose_buffer(buffer, ts_server=100.0)
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=buffer,
         marker_mounts=[
             FiducialMarkerMount(
                 marker_id=0,
@@ -119,13 +119,13 @@ def test_localize_accepts_candidate_and_fuses(monkeypatch: pytest.MonkeyPatch) -
                 orientation=(0.0, 0.0, 0.0, 1.0),
             )
         ],
-        dictionary_name=GO2_PROFILE.fiducial_dictionary,
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
         config=FiducialMarkerLocalizerConfig(
             max_reprojection_error_px=8.0,
             max_tilt_rad=math.pi,
         ),
     )
-    provider._detector = SimpleNamespace(  # type: ignore[attr-defined]
+    localizer._detector = SimpleNamespace(  # type: ignore[attr-defined]
         detectMarkers=lambda _gray: (
             [np.array([[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]], dtype=np.float32)],
             np.array([[0]], dtype=np.int32),
@@ -147,7 +147,7 @@ def test_localize_accepts_candidate_and_fuses(monkeypatch: pytest.MonkeyPatch) -
         lambda *_args, **_kwargs: 0.5,
     )
 
-    result = provider.localize([_observation(ts_server=100.0)])
+    result = localizer.localize([_observation(ts_server=100.0)])
 
     assert result is not None
     assert result.frame_id == "odom"
@@ -159,19 +159,19 @@ def test_localize_accepts_candidate_and_fuses(monkeypatch: pytest.MonkeyPatch) -
 
 def test_fiducial_marker_localizer_implements_localizer() -> None:
     localizer = FiducialMarkerLocalizer(
-        robot_pose_buffer=RobotPoseBuffer(),
-        marker_mounts=GO2_PROFILE.fiducial_marker_mounts,
-        dictionary_name=GO2_PROFILE.fiducial_dictionary,
+        pose_buffer=PoseBuffer(),
+        marker_mounts=UNITREE_GO2_PROFILE.fiducial_marker_mounts,
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
     )
 
     assert localizer.localize([]) is None
 
 
 def test_unknown_marker_id_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
-    buffer = RobotPoseBuffer()
-    _seed_robot_pose_buffer(buffer, ts_server=100.0)
-    provider = FiducialMarkerLocalizer(
-        robot_pose_buffer=buffer,
+    buffer = PoseBuffer()
+    _seed_pose_buffer(buffer, ts_server=100.0)
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=buffer,
         marker_mounts=[
             FiducialMarkerMount(
                 marker_id=99,
@@ -180,23 +180,23 @@ def test_unknown_marker_id_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
                 orientation=(0.0, 0.0, 0.0, 1.0),
             )
         ],
-        dictionary_name=GO2_PROFILE.fiducial_dictionary,
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
     )
-    provider._detector = SimpleNamespace(  # type: ignore[attr-defined]
+    localizer._detector = SimpleNamespace(  # type: ignore[attr-defined]
         detectMarkers=lambda _gray: (
             [np.array([[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]], dtype=np.float32)],
             np.array([[0]], dtype=np.int32),
             None,
         )
     )
-    assert provider.localize([_observation()]) is None
+    assert localizer.localize([_observation()]) is None
 
 
 def test_image_dimensions_must_match_intrinsics() -> None:
-    provider = FiducialMarkerLocalizer(
-        robot_pose_buffer=RobotPoseBuffer(),
-        marker_mounts=GO2_PROFILE.fiducial_marker_mounts,
-        dictionary_name=GO2_PROFILE.fiducial_dictionary,
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=PoseBuffer(),
+        marker_mounts=UNITREE_GO2_PROFILE.fiducial_marker_mounts,
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
     )
     observation = _observation(
         image_width=640,
@@ -205,20 +205,20 @@ def test_image_dimensions_must_match_intrinsics() -> None:
     )
 
     with pytest.raises(ValueError, match="do not match intrinsics"):
-        provider.localize([observation])
+        localizer.localize([observation])
 
 
 def test_reprojection_error_above_threshold_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    buffer = RobotPoseBuffer()
-    _seed_robot_pose_buffer(buffer)
-    provider = FiducialMarkerLocalizer(
-        robot_pose_buffer=buffer,
-        marker_mounts=GO2_PROFILE.fiducial_marker_mounts,
-        dictionary_name=GO2_PROFILE.fiducial_dictionary,
+    buffer = PoseBuffer()
+    _seed_pose_buffer(buffer)
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=buffer,
+        marker_mounts=UNITREE_GO2_PROFILE.fiducial_marker_mounts,
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
     )
-    provider._detector = SimpleNamespace(  # type: ignore[attr-defined]
+    localizer._detector = SimpleNamespace(  # type: ignore[attr-defined]
         detectMarkers=lambda _gray: (
             [np.zeros((1, 4, 2), dtype=np.float32)],
             np.array([[0]], dtype=np.int32),
@@ -239,14 +239,14 @@ def test_reprojection_error_above_threshold_is_rejected(
         lambda *_args, **_kwargs: 3.01,
     )
 
-    assert provider.localize([_observation()]) is None
+    assert localizer.localize([_observation()]) is None
 
 
 def test_confidence_uses_only_fusion_inliers(monkeypatch: pytest.MonkeyPatch) -> None:
-    provider = FiducialMarkerLocalizer(
-        robot_pose_buffer=RobotPoseBuffer(),
-        marker_mounts=GO2_PROFILE.fiducial_marker_mounts,
-        dictionary_name=GO2_PROFILE.fiducial_dictionary,
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=PoseBuffer(),
+        marker_mounts=UNITREE_GO2_PROFILE.fiducial_marker_mounts,
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
         config=FiducialMarkerLocalizerConfig(max_tilt_rad=math.pi),
     )
     transforms = [np.eye(4) for _ in range(3)]
@@ -258,12 +258,12 @@ def test_confidence_uses_only_fusion_inliers(monkeypatch: pytest.MonkeyPatch) ->
         fiducial_module._FiducialCandidate(transform=transforms[2], reprojection_error_px=0.0),
     ]
     monkeypatch.setattr(
-        provider,
+        localizer,
         "_candidate_from_observation",
         lambda _observation: candidates.pop(0),
     )
 
-    result = provider.localize([_observation(), _observation(), _observation()])
+    result = localizer.localize([_observation(), _observation(), _observation()])
 
     assert result is not None
     assert result.pose.x == pytest.approx(0.05)
@@ -287,36 +287,36 @@ def test_invalid_localizer_config_is_rejected(field: str, value: float) -> None:
 
 
 def test_duplicate_marker_ids_are_rejected() -> None:
-    mount = GO2_PROFILE.fiducial_marker_mounts[0]
+    mount = UNITREE_GO2_PROFILE.fiducial_marker_mounts[0]
 
     with pytest.raises(ValueError, match="duplicate fiducial marker ID 0"):
         FiducialMarkerLocalizer(
-            robot_pose_buffer=RobotPoseBuffer(),
+            pose_buffer=PoseBuffer(),
             marker_mounts=[mount, mount],
-            dictionary_name=GO2_PROFILE.fiducial_dictionary,
+            dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
         )
 
 
 def test_empty_marker_mounts_are_rejected() -> None:
     with pytest.raises(ValueError, match="at least one mount"):
         FiducialMarkerLocalizer(
-            robot_pose_buffer=RobotPoseBuffer(),
+            pose_buffer=PoseBuffer(),
             marker_mounts=[],
-            dictionary_name=GO2_PROFILE.fiducial_dictionary,
+            dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
         )
 
 
 def test_detector_output_length_mismatch_is_explicit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    buffer = RobotPoseBuffer()
-    _seed_robot_pose_buffer(buffer)
-    provider = FiducialMarkerLocalizer(
-        robot_pose_buffer=buffer,
-        marker_mounts=GO2_PROFILE.fiducial_marker_mounts,
-        dictionary_name=GO2_PROFILE.fiducial_dictionary,
+    buffer = PoseBuffer()
+    _seed_pose_buffer(buffer)
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=buffer,
+        marker_mounts=UNITREE_GO2_PROFILE.fiducial_marker_mounts,
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
     )
-    provider._detector = SimpleNamespace(  # type: ignore[attr-defined]
+    localizer._detector = SimpleNamespace(  # type: ignore[attr-defined]
         detectMarkers=lambda _gray: (
             [np.zeros((1, 4, 2), dtype=np.float32)],
             np.array([[0], [0]], dtype=np.int32),
@@ -330,4 +330,4 @@ def test_detector_output_length_mismatch_is_explicit(
     )
 
     with pytest.raises(ValueError, match="zip\\(\\) argument 2 is longer"):
-        provider.localize([_observation()])
+        localizer.localize([_observation()])

@@ -4,7 +4,7 @@ import pytest
 
 from dimos.ar.blueprints import unitree_go2_ar
 from dimos.ar.module import ARModule
-from dimos.ar.robot.profile import RobotName
+from dimos.ar.robot.profiles import RobotName
 
 
 def test_unitree_go2_ar_selects_robot_explicitly() -> None:

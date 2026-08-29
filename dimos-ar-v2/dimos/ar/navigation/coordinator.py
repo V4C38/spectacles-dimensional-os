@@ -6,7 +6,7 @@ import time
 from dimos_lcm.std_msgs import Bool
 
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavOutcome, NavState
-from dimos.ar.robot.odom_correction import correct_odom_path, uncorrect_odom_pose
+from dimos.ar.robot.odometry_correction import correct_odom_path, uncorrect_odom_pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
 

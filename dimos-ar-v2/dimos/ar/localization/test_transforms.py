@@ -8,17 +8,17 @@ import pytest
 from dimos.ar.localization.transforms import (
     fuse_pose_estimates,
     matrix_from_position_and_yaw,
-    normalize_client_alignment,
+    normalize_pose_estimate,
     yaw_from_transform,
 )
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.utils.transform_utils import pose_to_matrix
 
 
-def test_normalize_client_alignment_removes_small_tilt() -> None:
+def test_normalize_pose_estimate_removes_small_tilt() -> None:
     half_roll = math.radians(2.0)
     tilted = pose_to_matrix(Pose(1.0, 2.0, 3.0, math.sin(half_roll), 0.0, 0.0, math.cos(half_roll)))
-    normalized = normalize_client_alignment(
+    normalized = normalize_pose_estimate(
         tilted,
         max_tilt_rad=math.radians(5.0),
     )
@@ -31,12 +31,12 @@ def test_normalize_client_alignment_removes_small_tilt() -> None:
     assert normalized[:3, 3] == pytest.approx([1.0, 2.0, 3.0])
 
 
-def test_normalize_client_alignment_rejects_excessive_tilt() -> None:
+def test_normalize_pose_estimate_rejects_excessive_tilt() -> None:
     half_roll = math.radians(10.0)
     tilted = pose_to_matrix(Pose(0.0, 0.0, 0.0, math.sin(half_roll), 0.0, 0.0, math.cos(half_roll)))
 
     assert (
-        normalize_client_alignment(
+        normalize_pose_estimate(
             tilted,
             max_tilt_rad=math.radians(5.0),
         )

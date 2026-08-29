@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
-from dimos.ar.localization.robot_pose_buffer import RobotPoseBuffer, RobotPoseSample
+from dimos.ar.localization.pose_buffer import PoseBuffer, PoseSample
 from dimos.ar.localization.transforms import fuse_pose_estimates
 from dimos.ar.localization.types import Intrinsics, LocalizedPose, Localizer, Observation
-from dimos.ar.robot.profile import FiducialMarkerMount
+from dimos.ar.robot.profiles import FiducialMarkerMount
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.perception.fiducial.marker_pose import (
     create_aruco_detector,
@@ -69,12 +69,12 @@ class FiducialMarkerLocalizer(Localizer):
     def __init__(
         self,
         *,
-        robot_pose_buffer: RobotPoseBuffer,
+        pose_buffer: PoseBuffer,
         marker_mounts: Sequence[FiducialMarkerMount],
         dictionary_name: str,
         config: FiducialMarkerLocalizerConfig | None = None,
     ) -> None:
-        self._robot_pose_buffer = robot_pose_buffer
+        self._pose_buffer = pose_buffer
         self._mounts: dict[int, FiducialMarkerMount] = {}
         for mount in marker_mounts:
             if mount.marker_id in self._mounts:
@@ -135,7 +135,7 @@ class FiducialMarkerLocalizer(Localizer):
                 f"{observation.intrinsics.width}x{observation.intrinsics.height}"
             )
 
-        robot = self._robot_pose_buffer.at_server_ts(observation.ts_server)
+        robot = self._pose_buffer.at_server_ts(observation.ts_server)
         if robot is None:
             return None
 
@@ -241,7 +241,7 @@ def _intrinsics_to_cv(intrinsics: Intrinsics) -> tuple[NDArray[np.float64], NDAr
     return camera_matrix, dist_coeffs
 
 
-def _sample_to_matrix(sample: RobotPoseSample) -> NDArray[np.float64]:
+def _sample_to_matrix(sample: PoseSample) -> NDArray[np.float64]:
     return np.asarray(
         pose_to_matrix(Pose(*sample.position, *sample.orientation)),
         dtype=np.float64,

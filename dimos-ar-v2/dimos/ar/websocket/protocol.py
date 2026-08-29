@@ -8,11 +8,11 @@ import math
 import struct
 from typing import Any
 
-from dimos.ar.lidar.settings import LidarSettings
 from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult, Observation
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavState
 from dimos.ar.robot.capabilities import Capability, CapabilityName
-from dimos.ar.robot.profile import RobotDescription
+from dimos.ar.robot.profiles import RobotDescription
+from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.msgs.geometry_msgs.Pose import Pose
 
 LIDAR_FOURCC = 0x4C444152

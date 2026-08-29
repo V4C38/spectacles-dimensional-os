@@ -120,9 +120,9 @@ class RobotProfile:
 
 def get_profile(name: RobotName) -> RobotProfile:
     if name is RobotName.UNITREE_GO2:
-        from dimos.ar.robot.go2 import GO2_PROFILE
+        from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 
-        return GO2_PROFILE
+        return UNITREE_GO2_PROFILE
     raise ValueError(f"unknown robot {name!r}")
 
 

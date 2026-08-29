@@ -45,18 +45,17 @@ def matrix_from_position_and_yaw(
     )
 
 
-def normalize_client_alignment(
+def normalize_pose_estimate(
     T: NDArray[np.float64],
     *,
     max_tilt_rad: float,
 ) -> NDArray[np.float64] | None:
-    """Reject excessive tilt, then align client +Z with reference-frame +Z."""
     if max_tilt_rad < 0.0:
         raise ValueError(f"max_tilt_rad must be non-negative, got {max_tilt_rad}")
 
     transform = np.asarray(T, dtype=np.float64)
     if transform.shape != (4, 4):
-        raise ValueError(f"client alignment must be a 4x4 matrix, got {transform.shape}")
+        raise ValueError(f"pose estimate must be a 4x4 matrix, got {transform.shape}")
 
     rotation = transform[:3, :3]
     up_axis = rotation[:, 2]
@@ -89,7 +88,7 @@ def fuse_pose_estimates(
     normalized = [
         (index, estimate)
         for index, T in enumerate(transforms)
-        if (estimate := normalize_client_alignment(T, max_tilt_rad=max_tilt_rad)) is not None
+        if (estimate := normalize_pose_estimate(T, max_tilt_rad=max_tilt_rad)) is not None
     ]
     if not normalized:
         return None

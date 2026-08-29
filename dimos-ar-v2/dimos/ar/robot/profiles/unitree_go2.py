@@ -4,7 +4,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from dimos.ar.robot.capabilities import CapabilityName
-from dimos.ar.robot.profile import FiducialMarkerMount, RobotProfile
+from dimos.ar.robot.profiles.profile import FiducialMarkerMount, RobotProfile
 from dimos.robot.unitree.go2.dds.extrinsics import BASE_TO_CAMERA
 
 ODOM_SCALE_CORRECTION_FACTOR = 1.25
@@ -22,7 +22,7 @@ _FIDUCIAL_QUAT: tuple[float, float, float, float] = tuple(
     ).as_quat()
 )
 
-GO2_PROFILE = RobotProfile(
+UNITREE_GO2_PROFILE = RobotProfile(
     display_name="Unitree Go2",
     body_bounds_m=(0.70, 0.50, 0.55),
     footprint_m=(0.70, 0.50),

@@ -1,4 +1,4 @@
-# Protocol — dimos-ar-v2 WebSocket message schema
+# Protocol — ARModule WebSocket message schema
 
 Cross-platform contract between `ARModule` and any AR client.
 
@@ -281,8 +281,8 @@ whenever any field changes.
 **`nav.state`:** `"idle"` | `"following_path"` | `"resolved"`
 
 ARModule derives this from DimOS `path` and `goal_reached`. DimOS also declares a
-`recovery` phase on `navigation_state`, but that stream is never published (see
-`PR.md`); it is not on the wire until it can actually be emitted.
+`recovery` phase on `navigation_state`, but that stream is never published; it is
+not on the wire until it can actually be emitted.
 
 **`nav.outcome`:** non-null exactly when `nav.state` is `"resolved"`:
 `"succeeded"` | `"failed"`
@@ -632,5 +632,5 @@ Not carried into v1:
 - Robot fiducial marker profile. Marker IDs and print sizes matter when generating a marker sheet, which
   is a launcher concern, not something a running client needs.
 
-The Lens client is not compatible with v1 and needs its protocol module
-rewritten.
+The Lens client is not compatible with this protocol schema and needs its
+protocol module rewritten.

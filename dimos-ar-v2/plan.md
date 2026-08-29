@@ -88,7 +88,7 @@ the wire — ARModule composes map answers into `odom` first.
 (`dimos/robot/unitree/type/odometry.py:101`, `lidar.py:81`). Relocalization
 publishes `world → map` (`dimos/mapping/relocalization/module.py:151-156`).
 ARModule renames that drifting frame to `odom` on ingest
-(`robot_pose_buffer`, relocalization transform poll); do not carry both names
+(`pose_buffer`, relocalization transform poll); do not carry both names
 inside dimos-ar.
 
 `PROTOCOL.md` describes `odom` as the selected stack's robot reference pose.
@@ -193,7 +193,7 @@ and why no new wire message is needed for robot-side localization.
 
 #### Capture-time pose pairing is mandatory, not an optimisation
 
-A localization answer describes where the observer was **when the shutter opened**, not when the answer arrived. A cloud round trip is on the order of two seconds, during which the robot can have walked a metre. The wire carries `ts_capture` in `ts_client`; `websocket/protocol.py` converts to `ts_server` before building domain `Observation`s. `localization/robot_pose_buffer.py` keeps a short ring buffer of recent robot poses keyed on `ts_server`, and composition interpolates the pose at that time. Without this the anchor is wrong by however far the robot moved during the query.
+A localization answer describes where the observer was **when the shutter opened**, not when the answer arrived. A cloud round trip is on the order of two seconds, during which the robot can have walked a metre. The wire carries `ts_capture` in `ts_client`; `websocket/protocol.py` converts to `ts_server` before building domain `Observation`s. `localization/pose_buffer.py` keeps a short ring buffer of recent robot poses keyed on `ts_server`, and composition interpolates the pose at that time. Without this the anchor is wrong by however far the robot moved during the query.
 
 There is a DimOS limitation here that ARModule cannot fix and must design around:
 
@@ -219,7 +219,7 @@ into the same number line as the pose buffer. Three clocks are involved:
 |-------|---------|----------------------------|
 | **`ts_client`** | Client local time (hello send, camera shutter) | Hello pair stored per connection as `TimeSync.ts_client` (offset anchor). Later `ts_capture` values are converted and not stored. |
 | **`ts_server`** | ARModule host `time.time()` | Pose buffer lookup key; `TimeSync.ts_server` from hello; converted capture time for pose lookup; wire `ts` on `localization_result`. |
-| **`ts_odom`** | DimOS `PoseStamped.ts` from Go2 DDS | Metadata on each buffer sample (`RobotPoseSample.ts_odom`); wire `ts` on outbound `pose` / `nav_goal`. LiDAR wire `ts` is DimOS `PointCloud2.ts`. |
+| **`ts_odom`** | DimOS `PoseStamped.ts` from Go2 DDS | Metadata on each buffer sample (`PoseSample.ts_odom`); wire `ts` on outbound `pose` / `nav_goal`. LiDAR wire `ts` is DimOS `PointCloud2.ts`. |
 
 **Client → server, measured once at hello.** Client sends `hello_request` with
 `ts_client`; ARModule records `ts_server` on receipt and stores a `TimeSync`
@@ -229,7 +229,7 @@ before pose lookup: `time_sync.to_server_ts(ts_capture)`.
 **Pose lookup on server.** Pose buffer keyed on `ts_server` (odom receive time).
 `buffer.at_server_ts(observation.ts_server)` — `ts_odom` retained as metadata only.
 There is no separate provider time gate: if no odom sample lies within
-`RobotPoseBuffer.max_gap_s` (0.25 s) of `ts_server`, the observation is dropped.
+`PoseBuffer.max_gap_s` (0.25 s) of `ts_server`, the observation is dropped.
 
 WebSocket RFC ping/pong is liveness only. DimOS `ClockSyncConfigurator` checks
 host vs NTP at startup; it does not sync client or odom clocks.
@@ -324,13 +324,13 @@ Per observation:
 2. `estimate_marker_pose` solves the 56 mm black square against the observation's intrinsics and returns `T_camopt_marker`. `IPPE_SQUARE` is the right solver here because the target is a known planar square, and the helper undistorts fisheye corners into the pinhole `K` first, so a distorted client camera costs nothing extra.
 3. `T_odom_marker = T_odom_base(ts_server) ∘ T_base_marker`, with the robot pose interpolated out of the pose buffer at `observation.ts_server` and the mount offset read from the robot profile.
 4. `T_odom_client = T_odom_marker ∘ (T_client_camopt ∘ T_camopt_marker)⁻¹` — the marker seen from the client, walked backwards through the client's own camera pose, gives where the client's origin sits in `odom`.
-5. Gate: reprojection RMS only (3.0 px, from v1 `module.py:133`). Time pairing uses `RobotPoseBuffer.max_gap_s` (0.25 s): if no odom sample lies near `observation.ts_server`, the observation is rejected — there is no separate provider time knob. Distance is not gated server-side; marker size is declared in the robot profile and PnP/reprojection quality is the check.
+5. Gate: reprojection RMS only (3.0 px, from v1 `module.py:133`). Time pairing uses `PoseBuffer.max_gap_s` (0.25 s): if no odom sample lies near `observation.ts_server`, the observation is rejected — there is no separate provider time knob. Distance is not gated server-side; marker size is declared in the robot profile and PnP/reprojection quality is the check.
 
 Every request, including a request with one observation, passes its final client-alignment candidates through `fuse_pose_estimates`. Each candidate is already `T_odom_client`, not a physical camera pose. `normalize_client_alignment` rejects tilt above 5°, removes small residual roll and pitch, and preserves translation and yaw. The survivors are filtered against the componentwise median translation and circular median yaw, then fused. This projects PnP noise onto the contract between two gravity-aligned Z-up tracking frames without hiding a badly tilted solve. Confidence is one minus the worst normalized accepted-candidate signal: mean reprojection error, maximum position residual, or maximum yaw residual. Rejected outliers never contribute.
 
 **Reuse DimOS, do not vendor.** `dimos/perception/fiducial/marker_pose.py` supplies `create_aruco_detector`, `camera_info_to_cv_matrices`, `estimate_marker_pose` and `marker_reprojection_error` — the entire per-frame stack. v1 vendored its own copy for one reason: it called `solvePnPGeneric`, which returns both solutions of the planar-square ambiguity, and used the ratio between them as a quality gate (`tag_tracking/fiducial_helpers.py:65-71`, `:112-120`). The DimOS version returns only the best solution, so that gate is unavailable. The reprojection gate plus the cross-observation median is the replacement: a wrongly flipped solve lands far from the cluster and gets dropped as an outlier. Adding the ambiguity ratio to DimOS is a small, well-motivated upstream proposal for `PR.md` rather than grounds for a local fork.
 
-Go2 numbers, all carried over unchanged and all verified in v1: family 36h11, marker ID 0, printed at 70 mm with a 56 mm black square, mounted at `(0.18, 0.0, 0.06)` in `base_link` with yaw −90° and pitch −15° (`robot_profile/go2.py:35-53`). `FiducialMarkerMount` is robot-domain geometry in `robot/profile.py`; `robot/go2.py` supplies the Go2 values and dictionary to the generic provider. PnP is fed the 56 mm black square, never the 70 mm sheet; that distinction is load-bearing and `0.070 / 0.056` being exactly 1.25 is the coincidence noted in the scale section.
+Go2 numbers, all carried over unchanged and all verified in v1: family 36h11, marker ID 0, printed at 70 mm with a 56 mm black square, mounted at `(0.18, 0.0, 0.06)` in `base_link` with yaw −90° and pitch −15° (`robot_profile/go2.py:35-53`). `FiducialMarkerMount` is robot-domain geometry in `robot/profiles/profile.py`; `robot/profiles/unitree_go2.py` supplies the Go2 values and dictionary to the generic provider. PnP is fed the 56 mm black square, never the 70 mm sheet; that distinction is load-bearing and `0.070 / 0.056` being exactly 1.25 is the coincidence noted in the scale section.
 
 Fiducial marker never pushes updates by itself. A later `T_odom_map` refresh does
 not send an unsolicited `localization_result`; the next capture episode recaptures.
@@ -506,7 +506,7 @@ The trap, in that case, is that any code comparing cloud points against the robo
             )
 ```
 
-So `lidar/filter.py` takes the raw odometry position and never the published one. Range is a horizontal radius around that robot pose, not around the odometry origin; a test keeps a point next to the robot at 10 m from origin and drops a point at the origin.
+So `sensors/lidar_filter.py` takes the raw odometry position and never the published one. Range is a horizontal radius around that robot pose, not around the odometry origin; a test keeps a point next to the robot at 10 m from origin and drops a point at the origin.
 
 **Footnote — verify one space or two on hardware.** The LiDAR rule above assumes the Go2 cloud is metric range in an `odom` that is *not* the under-reporting odom. The code does not settle that. DimOS stamps the cloud `frame_id="world"` (`robot/unitree/type/lidar.py:81`), `Map` accumulates it with no pose applied (`robot/unitree/type/map.py:88`), and the same `utlidar` namespace also publishes `rt/utlidar/robot_odom` — the stream DimOS itself loads as the "leg-odom trajectory" under `world/leg_odom/lidar` (`go2/dds/cli/render.py:206`, `:233-234`). If the on-board cloud is registered with that same estimate, the accumulated cloud is compressed by the same factor, is not metric, and v1 was right to route it through the same seam.
 
@@ -519,7 +519,7 @@ The 1.25 on pose and `nav_goal` does not wait on this measurement. An odom_map t
 
 ### Mechanics
 
-One constant on `robot/go2.py`. `robot/odom_correction.py` takes the factor as a plain float so `robot/state_publisher.py` and `navigation/coordinator.py` do not import the profile and group ordering stays free. It returns a corrected copy rather than mutating, so the raw value stays available for the LiDAR path. Applied at encode for `pose` and `nav_goal` positions, inverted at decode for `nav_goal_request`, and applied to nothing else.
+One constant on `robot/profiles/unitree_go2.py`. `robot/odometry_correction.py` takes the factor as a plain float so `robot/state_publisher.py` and `navigation/coordinator.py` do not import the profile and group ordering stays free. It returns a corrected copy rather than mutating, so the raw value stays available for the LiDAR path. Applied at encode for `pose` and `nav_goal` positions, inverted at decode for `nav_goal_request`, and applied to nothing else.
 
 Applied about the odometry origin, with no anchor point — v1 needs `odom_anchor_xy` (`world_frame/state.py:155-166`) only so that *changing* a live estimate does not teleport already-placed content, and that need disappears once the factor is fixed. Because the factor is constant, scaling accumulated position is identical to scaling each increment, so robot-state outbound stays byte-identical for every client and the broadcast property survives.
 
@@ -679,9 +679,9 @@ is the unit we discuss, review and finish.
 
 **3. The WebSocket layer** — `websocket/server.py`, `websocket/protocol.py`, `websocket/send_queue.py`. Everything about talking to a client: the `websockets` accept loop, the asyncio-versus-module-thread boundary, typed encode/decode with no coordinate math, and latest-wins coalescing so a slow headset cannot stall the robot. Clock sync is part of the `hello_request` / `hello` handshake. Runnable with `wscat`, no Lens needed.
 
-**4. Robot state out** — `robot/state_publisher.py`, `robot/odom_correction.py`, `lidar/filter.py`, `lidar/settings.py`, `robot/profile.py`, and `robot/go2.py`. Reactive subscription patterns, rate limiting, and the binary LiDAR frame: height band, subsample, pack. `odom_correction.py` is the single owner of applying the odometry scale constant — functions taking the factor as a plain float, correcting horizontal position on `pose` and `nav_goal` and nothing else. `lidar/filter.py` is the one consumer that must take the *unscaled* robot position, since its cloud is unscaled.
+**4. Robot state out** — `robot/state_publisher.py`, `robot/odometry_correction.py`, `sensors/lidar_filter.py`, `sensors/lidar_settings.py`, `robot/profiles/profile.py`, and `robot/profiles/unitree_go2.py`. Reactive subscription patterns, rate limiting, and the binary LiDAR frame: height band, subsample, pack. `odometry_correction.py` is the single owner of applying the odometry scale constant — functions taking the factor as a plain float, correcting horizontal position on `pose` and `nav_goal` and nothing else. `sensors/lidar_filter.py` is the one consumer that must take the *unscaled* robot position, since its cloud is unscaled.
 
-**5. Navigation both directions** — `navigation/coordinator.py`. Client `nav_goal_request` inverse-scaled through the same `robot/odom_correction.py` helper and published to `goal_request`; outbound `nav_goal` derived from DimOS `path`; nav status derived from `goal_reached` and `path`. The one file where ARModule writes into DimOS rather than reading from it.
+**5. Navigation both directions** — `navigation/coordinator.py`. Client `nav_goal_request` inverse-scaled through the same `robot/odometry_correction.py` helper and published to `goal_request`; outbound `nav_goal` derived from DimOS `path`; nav status derived from `goal_reached` and `path`. The one file where ARModule writes into DimOS rather than reading from it.
 
 **6. Complete localization** — the final provider contract and real fiducial marker
 and VPS implementations, the Multiset adapter, pose buffering, transforms,
@@ -690,8 +690,8 @@ coordinator, robot marker geometry, ARModule integration and tests. There is no
 stub and no later provider phase. The group supports fiducial marker, VPS, or
 both, with fixed marker-then-VPS fallback when both are configured.
 
-**7. Safety and robot profile** — `safety.py`, and completing the handshake and
-estop portions of `robot/profile.py` and `robot/go2.py`. Estop,
+**7. Safety and robot profile** — `robot/safety.py`, and completing the handshake and
+estop portions of `robot/profiles/profile.py` and `robot/profiles/unitree_go2.py`. Estop,
 estop-on-last-disconnect, and the extension point for future robots.
 
 **8. Tests and CI** — tests grow with each group; this closes it out and gets `./launcher/scripts/run-ci.sh` green from a normal terminal.
@@ -700,7 +700,7 @@ estop-on-last-disconnect, and the extension point for future robots.
 
 Shared foundations:
 
-- `localization/robot_pose_buffer.py` — recent robot poses in `odom`, interpolated at `ts_server`. Named `robot_pose_buffer` rather than `odom_buffer` because what it buffers is robot poses, not raw odom messages.
+- `localization/pose_buffer.py` — recent robot poses in `odom`, interpolated at `ts_server`. Named `pose_buffer` rather than `odom_buffer` because what it buffers is robot poses, not raw odom messages.
 - `localization/types.py` — `Intrinsics`, `Observation`, `LocalizedPose`, `CapturePolicy`, provider type names, and the one-method `Localizer` protocol.
 - `localization/transforms.py` — localization-specific pose-estimate processing:
   heading extraction, final client-alignment normalization, and the
@@ -710,7 +710,7 @@ Shared foundations:
 
 Concrete implementations and orchestration:
 
-- `localization/fiducial_marker/localizer.py` — detect, solve, compose, gate, fuse. Built on `dimos/perception/fiducial/marker_pose.py`, so the file is mostly composition and gating rather than geometry. Marker mounts live in `robot/go2.py` alongside the scale constant, and `scripts/generate_marker.py` plus the printed assets come across from v1 unchanged.
+- `localization/fiducial_marker/localizer.py` — detect, solve, compose, gate, fuse. Built on `dimos/perception/fiducial/marker_pose.py`, so the file is mostly composition and gating rather than geometry. Marker mounts live in `robot/profiles/unitree_go2.py` alongside the scale constant, and `scripts/generate_marker.py` plus the printed assets come across from v1 unchanged.
 - `localization/vps/localizer.py` — the `VpsClient` protocol plus localizer logic: undistort, query, compose to `T_map_client`, fuse, answer in `map`.
 - `localization/vps/multiset_client.py` — the concrete `MultisetVpsClient`: M2M token cache and refresh, `/vps/map/query-form`, vendor axes converted to canonical right-handed Z-up `map`, left-handed spatial hints, timeout and response validation.
 - `localization/vps/robot_observation_buffer.py` — ring buffer of Go2 frames captured while stationary; retain until corrected travel since capture exceeds `1.0 m`.
@@ -718,8 +718,8 @@ Concrete implementations and orchestration:
 - `localization/policy.py` — configured provider order, `CapturePolicy`, cumulative travel, per-connection episodes, global client-VPS cooldown, separate robot-VPS cooldown.
 - `localization/coordinator.py` — episode owner: marker then VPS, `OdomMapTransform` reuse/refresh, `correct_odom_xy`, `encode_localization_result`. `module.py` stays the DimOS `In`/`Out` surface.
 
-Group 6 also wires these files through `module.py`, `robot/profile.py`,
-`robot/go2.py`, `websocket/protocol.py` where needed, and adds unit and
+Group 6 also wires these files through `module.py`, `robot/profiles/profile.py`,
+`robot/profiles/unitree_go2.py`, `websocket/protocol.py` where needed, and adds unit and
 integration tests. Fiducial marker is implemented before VPS because it has no account
 or network dependency; that is implementation order, not runtime priority.
 
@@ -752,7 +752,7 @@ Joystick teleop and `MotionRouter` (239 lines — without joystick there is no a
 When `ARModuleConfig.localization` lands, the launcher must match DimOS CLI behaviour:
 
 - **`load_config_args()` before `ModuleCoordinator.build()`** — `launcher/scripts/start.sh` currently skips this; without it, `~/.config/dimos` JSON and `armodule__…` env overrides are ignored compared to `dimos run unitree-go2-ar -o …`.
-- **Localizer wiring** — construct `FiducialMarkerLocalizer` / `VpsLocalizer` from config, pass marker mounts from `robot/go2.py` when fiducial is enabled.
+- **Localizer wiring** — construct `FiducialMarkerLocalizer` / `VpsLocalizer` from config, pass marker mounts from `robot/profiles/unitree_go2.py` when fiducial is enabled.
 - **Printed marker assets** — `scripts/generate_marker.py` and tag PDFs stay a launcher/setup concern, not wire protocol.
 
 ## ARModule configuration (DimOS blueprint config)

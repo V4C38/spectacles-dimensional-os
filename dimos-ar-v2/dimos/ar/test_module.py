@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import subprocess
+import sys
 from types import SimpleNamespace
 
 from dimos_lcm.std_msgs import Bool
 import pytest
 
-from dimos.ar.lidar.settings import LidarSettings
 from dimos.ar.localization.policy import LocalizationPolicy
 from dimos.ar.module import (
     ARModule,
@@ -16,8 +17,10 @@ from dimos.ar.module import (
 )
 from dimos.ar.navigation.types import NavGoalRequest, NavState
 from dimos.ar.robot.capabilities import CapabilityName, CapabilitySet
-from dimos.ar.robot.go2 import GO2_PROFILE
-from dimos.ar.robot.profile import RobotName, RobotProfile
+from dimos.ar.robot.profiles import RobotName, RobotProfile
+from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
+from dimos.ar.robot.safety import Safety
+from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.ar.websocket.protocol import encode_state
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
@@ -39,7 +42,7 @@ class _FakeWs:
         self.broadcasts.append(text)
 
 
-def _arm_profile() -> RobotProfile:
+def _anvil_openyam_profile() -> RobotProfile:
     return RobotProfile(
         display_name="Anvil OpenYAM",
         body_bounds_m=(0.40, 0.40, 0.80),
@@ -53,7 +56,7 @@ def _arm_profile() -> RobotProfile:
     )
 
 
-def _module_with_policy(providers: list[str], *, profile: RobotProfile = GO2_PROFILE) -> ARModule:
+def _module_with_policy(providers: list[str], *, profile: RobotProfile = UNITREE_GO2_PROFILE) -> ARModule:
     module = object.__new__(ARModule)
     module._policy = LocalizationPolicy(providers)
     module._ws_server = _FakeWs()  # type: ignore[assignment]
@@ -62,14 +65,22 @@ def _module_with_policy(providers: list[str], *, profile: RobotProfile = GO2_PRO
         profile.supported_capabilities,
         localization_available=bool(providers),
     )
-    module._lidar = LidarSettings(
+    module._lidar_settings = LidarSettings(
         enabled=False, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0
     )
-    module._nav_goal_coordinator = SimpleNamespace(nav_state=lambda: NavState("idle", None))
+    module._nav_goal_coordinator = SimpleNamespace(
+        nav_state=lambda: NavState("idle", None),
+        on_estop=lambda: False,
+    )
+    module.stop_movement = SimpleNamespace(transport=None, publish=lambda _msg: None)
+    module._safety = Safety(
+        estop_available=module._capabilities.supports(CapabilityName.ESTOP),
+        effects=(module._clear_navigation, module._publish_stop),
+    )
     return module
 
 
-def test_armodule_declares_stable_port_superset() -> None:
+def test_ar_module_declares_stable_port_superset() -> None:
     ports = ARModule.__annotations__
     assert ports["odom"] == "In[PoseStamped]"
     assert ports["lidar"] == "In[PointCloud2]"
@@ -79,6 +90,22 @@ def test_armodule_declares_stable_port_superset() -> None:
     assert ports["camera_info"] == "In[CameraInfo]"
     assert ports["goal_request"] == "Out[PoseStamped]"
     assert ports["stop_movement"] == "Out[Bool]"
+
+
+def test_importing_ar_module_does_not_load_unitree_go2() -> None:
+    script = (
+        "import sys\n"
+        "from dimos.ar.module import ARModule\n"
+        "assert ARModule.__name__ == 'ARModule'\n"
+        "assert 'dimos.ar.robot.profiles.unitree_go2' not in sys.modules\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_localization_config_defaults_empty() -> None:
@@ -105,11 +132,11 @@ def test_hello_includes_estop_capability() -> None:
     assert hello.capabilities[CapabilityName.ESTOP].reason is None
     assert hello.capabilities[CapabilityName.LOCALIZATION].available is True
     assert hello.capabilities[CapabilityName.LOCALIZATION].reason is None
-    assert hello.robot.display_name == GO2_PROFILE.display_name
+    assert hello.robot.display_name == UNITREE_GO2_PROFILE.display_name
 
 
 def test_hello_lidar_nav_estop_follow_profile() -> None:
-    profile = replace(GO2_PROFILE, supported_capabilities=frozenset())
+    profile = replace(UNITREE_GO2_PROFILE, supported_capabilities=frozenset())
     module = _module_with_policy(["fiducial_marker"], profile=profile)
     hello = module._hello_body("c1")
     assert hello.capabilities[CapabilityName.LIDAR].available is False
@@ -121,8 +148,8 @@ def test_hello_lidar_nav_estop_follow_profile() -> None:
     assert hello.capabilities[CapabilityName.LOCALIZATION].available is True
 
 
-def test_hello_arm_profile_has_no_mobile_capabilities() -> None:
-    module = _module_with_policy([], profile=_arm_profile())
+def test_hello_anvil_openyam_profile_has_no_mobile_capabilities() -> None:
+    module = _module_with_policy([], profile=_anvil_openyam_profile())
     hello = module._hello_body("c1")
     assert hello.robot.display_name == "Anvil OpenYAM"
     assert hello.capabilities[CapabilityName.LIDAR].available is False
@@ -220,8 +247,8 @@ def test_vps_provider_requires_map_code() -> None:
     module.config = ARModuleConfig(
         localization=LocalizationConfig(providers=[LocalizationProviderConfig(type="vps")]),
     )
-    module._profile = GO2_PROFILE
-    module._robot_pose_buffer = SimpleNamespace()  # type: ignore[assignment]
+    module._profile = UNITREE_GO2_PROFILE
+    module._pose_buffer = SimpleNamespace()  # type: ignore[assignment]
     with pytest.raises(ValueError, match="map_code"):
         module._build_localizers()
 
@@ -233,15 +260,15 @@ def test_vps_provider_requires_camera_extrinsic() -> None:
             providers=[LocalizationProviderConfig(type="vps", map_code="office")]
         ),
     )
-    module._profile = replace(GO2_PROFILE, T_base_camera_optical=None)
-    module._robot_pose_buffer = SimpleNamespace()  # type: ignore[assignment]
+    module._profile = replace(UNITREE_GO2_PROFILE, T_base_camera_optical=None)
+    module._pose_buffer = SimpleNamespace()  # type: ignore[assignment]
     with pytest.raises(ValueError, match="T_base_camera_optical"):
         module._build_localizers()
 
 
 def test_nav_goal_request_noops_without_navigation() -> None:
     profile = replace(
-        GO2_PROFILE,
+        UNITREE_GO2_PROFILE,
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
     )
     module = _module_with_policy([], profile=profile)
@@ -261,7 +288,7 @@ def test_nav_goal_request_noops_without_navigation() -> None:
 
 
 def test_estop_request_noops_without_estop() -> None:
-    profile = replace(GO2_PROFILE, supported_capabilities=frozenset())
+    profile = replace(UNITREE_GO2_PROFILE, supported_capabilities=frozenset())
     module = _module_with_policy([], profile=profile)
     called = False
 
@@ -274,14 +301,79 @@ def test_estop_request_noops_without_estop() -> None:
         nav_state=lambda: NavState("idle", None),
         on_estop=on_estop,
     )
-    module.stop_movement = SimpleNamespace(transport=object(), publish=lambda _msg: None)
+    published: list[object] = []
+    module.stop_movement = SimpleNamespace(transport=object(), publish=published.append)
     module._on_estop_request(SimpleNamespace(), None)  # type: ignore[arg-type]
     assert called is False
+    assert published == []
+
+
+def test_estop_request_clears_navigation_and_publishes_stop() -> None:
+    module = _module_with_policy([])
+    called = False
+
+    def on_estop() -> bool:
+        nonlocal called
+        called = True
+        return True
+
+    module._nav_goal_coordinator = SimpleNamespace(
+        nav_state=lambda: NavState("idle", None),
+        on_estop=on_estop,
+    )
+    published: list[object] = []
+    module.stop_movement = SimpleNamespace(transport=object(), publish=published.append)
+    module._on_estop_request(SimpleNamespace(), None)  # type: ignore[arg-type]
+    assert called is True
+    assert [msg.data for msg in published] == [True]
+    assert module._ws_server.broadcasts  # type: ignore[union-attr]
+
+
+def test_last_disconnect_runs_safety() -> None:
+    module = _module_with_policy([])
+    called = False
+
+    def on_estop() -> bool:
+        nonlocal called
+        called = True
+        return True
+
+    module._nav_goal_coordinator = SimpleNamespace(
+        nav_state=lambda: NavState("idle", None),
+        on_estop=on_estop,
+    )
+    published: list[object] = []
+    module.stop_movement = SimpleNamespace(transport=object(), publish=published.append)
+    module._ws_server.connection_count = 0  # type: ignore[union-attr]
+    module._on_client_disconnect(None, "c1")  # type: ignore[arg-type]
+    assert called is True
+    assert [msg.data for msg in published] == [True]
+
+
+def test_disconnect_does_not_stop_while_clients_remain() -> None:
+    module = _module_with_policy([])
+    called = False
+
+    def on_estop() -> bool:
+        nonlocal called
+        called = True
+        return True
+
+    module._nav_goal_coordinator = SimpleNamespace(
+        nav_state=lambda: NavState("idle", None),
+        on_estop=on_estop,
+    )
+    published: list[object] = []
+    module.stop_movement = SimpleNamespace(transport=object(), publish=published.append)
+    module._ws_server.connection_count = 1  # type: ignore[union-attr]
+    module._on_client_disconnect(None, "c1")  # type: ignore[arg-type]
+    assert called is False
+    assert published == []
 
 
 def test_lidar_settings_request_noops_without_lidar() -> None:
     profile = replace(
-        GO2_PROFILE,
+        UNITREE_GO2_PROFILE,
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
     )
     module = _module_with_policy([], profile=profile)
@@ -289,31 +381,14 @@ def test_lidar_settings_request_noops_without_lidar() -> None:
         SimpleNamespace(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0),
         None,  # type: ignore[arg-type]
     )
-    assert module._lidar.enabled is False
+    assert module._lidar_settings.enabled is False
     assert module._ws_server.broadcasts == []  # type: ignore[union-attr]
-
-
-def test_publish_stop_noops_without_estop() -> None:
-    profile = replace(GO2_PROFILE, supported_capabilities=frozenset())
-    module = _module_with_policy([], profile=profile)
-    published: list[object] = []
-    module.stop_movement = SimpleNamespace(transport=object(), publish=published.append)
-    module._publish_stop()
-    assert published == []
-
-
-def test_publish_stop_publishes_when_estop_supported() -> None:
-    module = _module_with_policy([])
-    published: list[object] = []
-    module.stop_movement = SimpleNamespace(transport=object(), publish=published.append)
-    module._publish_stop()
-    assert [msg.data for msg in published] == [True]
 
 
 @pytest.mark.asyncio
 async def test_handle_goal_reached_skips_policy_without_navigation() -> None:
     profile = replace(
-        GO2_PROFILE,
+        UNITREE_GO2_PROFILE,
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
     )
     module = _module_with_policy(["fiducial_marker"], profile=profile)
@@ -334,7 +409,7 @@ async def test_handle_goal_reached_skips_policy_without_navigation() -> None:
 @pytest.mark.asyncio
 async def test_handle_path_noops_without_navigation() -> None:
     profile = replace(
-        GO2_PROFILE,
+        UNITREE_GO2_PROFILE,
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
     )
     module = _module_with_policy([], profile=profile)
@@ -357,7 +432,7 @@ async def test_handle_path_noops_without_navigation() -> None:
 @pytest.mark.asyncio
 async def test_handle_lidar_noops_without_lidar() -> None:
     profile = replace(
-        GO2_PROFILE,
+        UNITREE_GO2_PROFILE,
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
     )
     module = _module_with_policy([], profile=profile)
@@ -371,7 +446,7 @@ async def test_handle_lidar_noops_without_lidar() -> None:
 
 @pytest.mark.asyncio
 async def test_handle_camera_streams_noop_without_extrinsic() -> None:
-    module = _module_with_policy([], profile=_arm_profile())
+    module = _module_with_policy([], profile=_anvil_openyam_profile())
     called = False
 
     def unexpected(*_args: object, **_kwargs: object) -> None:
@@ -389,10 +464,10 @@ async def test_handle_camera_streams_noop_without_extrinsic() -> None:
 
 @pytest.mark.asyncio
 async def test_handle_odom_runs_without_optional_capabilities() -> None:
-    module = _module_with_policy([], profile=_arm_profile())
+    module = _module_with_policy([], profile=_anvil_openyam_profile())
     pushed: list[object] = []
     published: list[object] = []
-    module._robot_pose_buffer = SimpleNamespace(  # type: ignore[assignment]
+    module._pose_buffer = SimpleNamespace(  # type: ignore[assignment]
         push=lambda msg, ts_server: pushed.append(msg)
     )
     module._state_publisher = SimpleNamespace(  # type: ignore[assignment]

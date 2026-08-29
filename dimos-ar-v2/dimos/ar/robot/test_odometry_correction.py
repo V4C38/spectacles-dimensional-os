@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from dimos.ar.robot.odom_correction import (
+from dimos.ar.robot.odometry_correction import (
     correct_odom_path,
     correct_odom_pose,
     correct_odom_xy,

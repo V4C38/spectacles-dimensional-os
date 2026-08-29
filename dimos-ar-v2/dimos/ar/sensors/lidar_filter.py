@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from dimos.ar.lidar.settings import LidarSettings
+from dimos.ar.sensors.lidar_settings import LidarSettings
 
 DEFAULT_TARGET_POINTS = 2500
 

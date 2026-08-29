@@ -282,12 +282,12 @@ def test_query_sends_form_fields_and_converts_found_pose(monkeypatch: pytest.Mon
 def test_vps_localizer_accepts_multiset_client_result(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeSession([_token_response(), _found_response()])
     client = _client(session, monkeypatch)
-    provider = VpsLocalizer(
+    localizer = VpsLocalizer(
         client=client,
         config=VpsLocalizerConfig(max_tilt_rad=math.pi),
     )
 
-    result = provider.localize([_observation()])
+    result = localizer.localize([_observation()])
 
     assert result is not None
     assert result.frame_id == "map"

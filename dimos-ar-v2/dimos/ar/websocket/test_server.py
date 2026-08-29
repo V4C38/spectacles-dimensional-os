@@ -11,8 +11,8 @@ import websockets
 
 from dimos.ar.navigation.types import NavGoalRequest
 from dimos.ar.robot.capabilities import Capability, CapabilityName
-from dimos.ar.robot.go2 import GO2_PROFILE
-from dimos.ar.robot.profile import RobotDescription
+from dimos.ar.robot.profiles import RobotDescription
+from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 from dimos.ar.websocket.protocol import HelloBody, LocalizationStartRequest
 from dimos.ar.websocket.server import WebSocketServer, split_inbound_text_lines
 
@@ -26,10 +26,10 @@ def _pick_free_port() -> int:
 def _sample_hello(_client_id: str) -> HelloBody:
     return HelloBody(
         robot=RobotDescription(
-            display_name=GO2_PROFILE.display_name,
-            body_bounds_m=GO2_PROFILE.body_bounds_m,
-            footprint_m=GO2_PROFILE.footprint_m,
-            base_height_m=GO2_PROFILE.base_height_m,
+            display_name=UNITREE_GO2_PROFILE.display_name,
+            body_bounds_m=UNITREE_GO2_PROFILE.body_bounds_m,
+            footprint_m=UNITREE_GO2_PROFILE.footprint_m,
+            base_height_m=UNITREE_GO2_PROFILE.base_height_m,
         ),
         capabilities={
             CapabilityName.LIDAR: Capability(available=True, reason=None),

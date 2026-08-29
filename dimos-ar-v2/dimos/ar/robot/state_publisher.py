@@ -4,13 +4,13 @@ import math
 import time
 from typing import TYPE_CHECKING, Protocol
 
-from dimos.ar.lidar.filter import (
+from dimos.ar.robot.odometry_correction import correct_odom_pose
+from dimos.ar.sensors.lidar_filter import (
     DEFAULT_TARGET_POINTS,
     LidarFilterSettings,
     prepare_lidar_points,
 )
-from dimos.ar.lidar.settings import LidarSettings
-from dimos.ar.robot.odom_correction import correct_odom_pose
+from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.ar.websocket.protocol import encode_lidar_binary, encode_pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2

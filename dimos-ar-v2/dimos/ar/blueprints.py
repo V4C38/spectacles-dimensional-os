@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dimos.ar.module import ARModule
-from dimos.ar.robot.profile import RobotName
+from dimos.ar.robot.profiles import RobotName
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 

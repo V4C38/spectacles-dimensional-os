@@ -8,7 +8,7 @@ import pytest
 from dimos.ar.localization.coordinator import LocalizationCoordinator
 from dimos.ar.localization.odom_map_transform import OdomMapTransform
 from dimos.ar.localization.policy import LocalizationPolicy
-from dimos.ar.localization.robot_pose_buffer import RobotPoseBuffer
+from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.types import Intrinsics, LocalizedPose, Observation
 from dimos.ar.localization.vps.robot_observation_buffer import (
     RobotObservationBuffer,
@@ -58,7 +58,7 @@ def _coordinator(
     policy = LocalizationPolicy(providers)
     odom_map_transform = OdomMapTransform()
     robot_observations = RobotObservationBuffer(
-        robot_pose_buffer=RobotPoseBuffer(),
+        pose_buffer=PoseBuffer(),
         T_base_camera_optical=np.eye(4),
     )
     if robot_sample is not None:
