@@ -18,7 +18,8 @@ Keep this document, `dimos/ar/websocket/protocol.py`, and
   `observation_count`, and `wait_timeout_s` when the policy is `robot_los_preferred`.
   No provider names on the wire.
 - **`localization_start_request`** — client → ARModule JSON with no camera payload.
-  Completeness only; the shipped client does not use it.
+  A client asks for an episode with it; no frame is sent when localization fails,
+  so this is also how a client retries.
 - **`localization_observations`** — renamed from `localization_request`. Same
   binary layout; FourCC remains `"LOCA"`.
 - **`localization_result`** — renamed from `localization`. Sent only after a
@@ -353,8 +354,8 @@ coordinates. Apply the newest one received.
 | `ts` | `ts_server` when the fix was produced. Wire key stays `ts`. |
 
 Sent only after a successful capture episode that started with
-`localization_observations_request` (or the completeness-only
-`localization_start_request` path, which uses the same capture). Never
+`localization_observations_request` (whether ARModule prompted on its own or a
+client asked with `localization_start_request`). Never
 unsolicited — a `T_odom_map` refresh does not push a new result.
 
 Always in `odom`, regardless of which frame the underlying provider works in.
@@ -443,10 +444,16 @@ Inbound messages do not carry `robot_id`.
 }
 ```
 
-Client-initiated capture. No payload. Completeness only — the shipped client
-does not use it. ARModule responds with `localization_observations_request`
-using the same capture policy as a server-initiated prompt. The client then
-sends `localization_observations` as usual.
+Client-initiated capture. No payload. ARModule responds with
+`localization_observations_request` using the same capture policy as a
+server-initiated prompt. The client then sends `localization_observations` as
+usual.
+
+Because no frame is sent when localization fails, this is the retry path: a
+client that gets no `localization_result` before its own deadline asks for
+another episode. ARModule may withhold the prompt until a provider cooldown
+expires and send `localization_observations_request` later, so clients back off
+between attempts rather than assuming a prompt per request.
 
 ### `localization_observations` (binary)
 
