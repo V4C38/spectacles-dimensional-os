@@ -323,6 +323,28 @@ def _encode_localization_observations_frame(jpeg: bytes, intrinsics_json: bytes)
     return struct.pack("<IH", LOCALIZATION_OBSERVATIONS_FOURCC, 1) + record
 
 
+TYPESCRIPT_LOCA_ONE = bytes.fromhex(
+    "41434f4c01009a000000000000000000f03f0400000066000000000000000000803f"
+    "00000040000040400000000000000000000000000000803fffd8ffd97b226678223a"
+    "3130302c226679223a3130302c226378223a35302c226379223a35302c2277696474"
+    "68223a3130302c22686569676874223a3130302c22646973746f7274696f6e5f6d6f"
+    "64656c223a226e6f6e65222c22646973746f7274696f6e223a5b5d7d"
+)
+
+
+def test_decode_typescript_localization_observations_golden() -> None:
+    observations = decode_localization_observations(TYPESCRIPT_LOCA_ONE)
+    assert len(observations) == 1
+    observation = observations[0]
+    assert observation.ts_capture == pytest.approx(1.0)
+    assert observation.jpeg == b"\xff\xd8\xff\xd9"
+    assert observation.camera_position == pytest.approx((1.0, 2.0, 3.0))
+    assert observation.camera_orientation == pytest.approx((0.0, 0.0, 0.0, 1.0))
+    assert observation.intrinsics.fx == 100.0
+    assert observation.intrinsics.distortion_model == "none"
+    assert observation.intrinsics.distortion == ()
+
+
 def test_decode_localization_observations_single_observation() -> None:
     intrinsics = json.dumps(
         {

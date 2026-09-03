@@ -94,7 +94,7 @@ When the WebSocket contract changes, update in the same change:
 
 - `dimos-ar/dimos/ar/websocket/protocol.py`
 - `dimos-ar/PROTOCOL.md`
-- `lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`
+- `lens-studio/Assets/Scripts/ARModuleClient/websocket/protocol.ts`
 
 Never edit DimOS source — import from the installed `dimos` package. Keep `dimos-ar/dimos/ar/` platform-agnostic; Spectacles-specific code stays under `lens-studio/`.
 
@@ -109,4 +109,4 @@ cd dimos-ar
 /path/to/dimos/.venv/bin/python3 -m pytest
 ```
 
-Vitest covers unit files under `lens-studio/Tests/unit/` (protocol, `AppState`, `InboundRouter`, registration, navigation, camera lifecycle, and related utilities). Do not put `*.test.ts` under `lens-studio/Assets/`.
+Vitest covers v19 files under `lens-studio/Tests/unit/` and portable-core files under `lens-studio/Tests/ARModuleClient/`. Do not put `*.test.ts` under `lens-studio/Assets/`.

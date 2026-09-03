@@ -58,11 +58,24 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
-    include: ["unit/**/*.test.ts"],
+    include: ["unit/**/*.test.ts", "ARModuleClient/**/*.test.ts"],
     setupFiles: ["./setup/lens-globals.ts"],
     coverage: {
       provider: "v8",
+      allowExternal: true,
       include: [
+        fileURLToPath(
+          new URL("../Assets/Scripts/ARModuleClient/websocket/types.ts", import.meta.url),
+        ),
+        fileURLToPath(
+          new URL("../Assets/Scripts/ARModuleClient/websocket/protocol.ts", import.meta.url),
+        ),
+        fileURLToPath(
+          new URL(
+            "../Assets/Scripts/ARModuleClient/coordinates/coordinates.ts",
+            import.meta.url,
+          ),
+        ),
         "../Assets/Scripts/ARBridge/Network/Protocol.ts",
         "../Assets/Scripts/App/AppState.ts",
         "../Assets/Scripts/App/Utilities/Utilities.ts",

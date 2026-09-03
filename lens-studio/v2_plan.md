@@ -152,16 +152,54 @@ scene state.
 lens-studio/Assets/Scripts/ARModuleClient/
 ```
 
+Its folders use the same names as `dimos/ar/`, so each client package maps
+to one `ARModule` package. `coordinates/` is the extra: `ARModule` does no
+axis conversion.
+
+```text
+ARModuleClient/                 dimos/ar/
+├── websocket/                  websocket/      # types, framing, codec
+├── coordinates/                —               # basis; client-only
+├── localization/               localization/   # T_odom_client, capture episode
+├── navigation/                 navigation/     # nav_goal_request, nav_goal
+└── sensors/                    sensors/        # lidar_settings_request, lidar
+```
+
+Create a folder only when its group lands; do not add empty placeholders.
+Connection facts (`hello`, `state`, `pose`) live in `websocket/` with the
+codec. There is no client `robot/` package: `hello.robot` and `estop_request`
+stay on the wire types and later session/control code, they do not become a
+second robot profile.
+
 Lens Studio compiles everything under `Assets/Scripts/`. A file without
 `@component` is not a scene object — it is a module. Spectacles scripts import
 it with a relative path, the same way today's `Protocol.ts` is imported:
 
 ```ts
-import { decodeHello, odomToClient } from "../ARModuleClient/protocol";
+import { decodeOutbound } from "../ARModuleClient/websocket/protocol";
+import { odomToClientPosition } from "../ARModuleClient/coordinates/coordinates";
 ```
 
-Vitest (`lens-studio/Tests`) already imports from `Assets/Scripts/` the same
-way. A later WebXR app copies this folder, or extracts it to a package.
+Tests do not live below `Assets/Scripts/ARModuleClient/`: Lens Studio would
+compile Vitest imports and test globals into the production Lens. All
+`ARModuleClient` tests live together in `lens-studio/Tests/ARModuleClient/`,
+outside the v19 `Tests/unit/` tree:
+
+```text
+Tests/ARModuleClient/
+├── protocol.test.ts
+├── coordinates.test.ts
+├── localization.test.ts
+├── navigation.test.ts
+└── sensors.test.ts
+```
+
+Create a test file only when its source lands. This keeps every portable-core
+test in one folder while preserving the Lens build boundary. A later extracted
+package can place the same source and test trees under one package root.
+
+Vitest imports from `Assets/Scripts/` using relative paths. A later WebXR app
+copies this folder, or extracts it to a package.
 
 **The rule that makes it copyable:** `ARModuleClient` must not use Lens
 globals (`vec3`, `quat`, `print`, `getTime`, `BaseScriptComponent`,
@@ -228,7 +266,7 @@ second application store.
 
 ## Six groups
 
-### 1. Protocol and coordinates — `ARModuleClient`
+### 1. Protocol and coordinates — `ARModuleClient/websocket`, `ARModuleClient/coordinates`
 
 The contract, and the one piece of math every headset must get right.
 
@@ -256,7 +294,50 @@ The coordinate helper receives a basis implementation. Spectacles and WebXR
 select different basis tables without changing protocol or transform
 composition code.
 
-### 2. Session and alignment — `ARModuleClient`
+```text
+lens-studio/Assets/Scripts/ARModuleClient/websocket/types.ts
+lens-studio/Assets/Scripts/ARModuleClient/websocket/protocol.ts
+lens-studio/Assets/Scripts/ARModuleClient/coordinates/coordinates.ts
+lens-studio/Tests/ARModuleClient/protocol.test.ts
+lens-studio/Tests/ARModuleClient/coordinates.test.ts
+```
+
+Group 1 is complete only when all seven outbound and seven inbound message
+types have portable representations. The binary types count too:
+`lidar` belongs to the outbound union and `localization_observations` belongs
+to the inbound union as a batch of `LocalizationObservation` records. Encoding
+or decoding may operate on the records directly, but the public type inventory
+must still match the 14-message contract.
+
+Both binary layouts have strict portable decoders. `decodeLidar` validates
+`"LDAR"` and its exact point payload; `decodeLocalizationObservations`
+validates `"LOCA"`, every `record_len`, the reserved word, payload boundaries,
+intrinsics JSON, and that no unexplained bytes remain. The client primarily
+encodes `"LOCA"`, but its decoder provides round-trip and cross-language
+contract verification before capture depends on it.
+
+The runtime validators enforce the same invariants as the types and contract:
+
+- `capabilities.*.reason` is required and is `null` exactly when available.
+- `state.nav.outcome` is required and is non-null exactly when resolved.
+- `distortion` is empty when `distortion_model` is `none`.
+- Every exported coordinate conversion validates finite input, a non-zero
+  quaternion where applicable, and an orthonormal basis. Public raw-matrix
+  helpers do not bypass basis validation.
+- Degenerate yaw geometry raises an explicit error; it never silently returns
+  yaw `0`.
+
+Tests cover omitted required-null fields as well as wrong non-null values,
+non-finite coordinates and quaternions, and all public conversion entry
+points. JSON fixtures cover every outbound message and every valid navigation
+phase, unavailable capabilities, confidence bounds, and observation-count
+validation. Binary tests cover multiple `"LOCA"` observations and malformed
+record lengths and intrinsics. Compatibility uses committed golden bytes
+produced by the Python codec (or decodes TypeScript `"LOCA"` bytes with it in
+a repeatable test), rather than only rebuilding the Python layout independently
+in the TypeScript test.
+
+### 2. Session and alignment — `ARModuleClient/websocket`, `ARModuleClient/localization`
 
 How a client talks to `ARModule` and where it thinks it is.
 
@@ -269,6 +350,9 @@ these), and `hello.capabilities` (`lidar`, `navigation`, `localization`,
 no ping/pong burst; WebSocket Ping/Pong is liveness only. `ARModule` sends
 `state` immediately after the handshake, so `ready` and the first `state`
 arrive together.
+
+Connection lifecycle and cached `hello` / `state` / `pose` live in
+`websocket/`, next to the codec. `T_odom_client` lives in `localization/`.
 
 Build the portable session over the transport and clock ports. It recognizes
 every outbound (server → client) v2 message and exposes typed subscriptions,
@@ -291,9 +375,10 @@ No camera. Fixtures are enough. `state.nav.state` is `idle` |
 `world_frame_committed` on the wire — “aligned” means the client has applied
 a `localization_result`.
 
-### 3. Capture episode — `ARModuleClient`
+### 3. Capture episode — `ARModuleClient/localization`
 
-The only remaining client-owned localization job.
+The only remaining client-owned localization job. It lands in
+`localization/` beside `T_odom_client`.
 
 `localization_observations_request` carries `capture_policy` and an exact
 `observation_count` (`wait_timeout_s` when the policy is
@@ -352,9 +437,11 @@ qualifying navigation goal, and the wearer can send
 No standing capture session, no ACK/`seq`, no motion-triggered recapture, no
 separate `camera_info` message.
 
-### 4. Control — `ARModuleClient`
+### 4. Control — `ARModuleClient/navigation`, `ARModuleClient/sensors`
 
-Outbound commands, portable.
+Outbound commands, portable. `nav_goal_request` lives in `navigation/`.
+`lidar_settings_request` lives in `sensors/`. `estop_request` and
+`state_request` stay with the session in `websocket/`.
 
 `nav_goal_request` (position and orientation both required, in `odom` after
 axis conversion), `estop_request` (event, no latch — resume is a new
@@ -446,6 +533,15 @@ Groups 5–6 keep tests for portable helpers; scene behaviour is checked in the
 editor / on device. `Tests/vitest.config.ts` lists v19 paths in its coverage
 `include`; point it at `ARModuleClient` as those files land.
 
+`lens-studio/Tests` is the Vitest project root, so `Assets/Scripts` is external
+to it. Coverage configuration must set `coverage.allowExternal: true` and use
+absolute source paths resolved from `import.meta.url`; `../Assets/...` glob
+entries produce an empty 0% report under the current Vitest version. Keep all
+portable-core tests under `Tests/ARModuleClient/` and verify that coverage
+lists the actual source files, not only that the test command exits zero.
+`vitest.config.ts` must include `ARModuleClient/**/*.test.ts` as well as the
+v19 `unit/**/*.test.ts` glob.
+
 `./launcher/scripts/run-ci.sh` from the repo root remains the pre-commit
 gate (DimOS tests + Lens Vitest). Run it outside the Cursor sandbox.
 
@@ -455,12 +551,18 @@ same change:
 
 - `dimos-ar/dimos/ar/websocket/protocol.py`
 - `dimos-ar/PROTOCOL.md`
-- `lens-studio/Assets/Scripts/ARModuleClient/protocol.ts`
+- `lens-studio/Assets/Scripts/ARModuleClient/websocket/protocol.ts`
 
-When the new protocol module becomes authoritative, update `.cursorrules` and
-`CONTRIBUTING.md` to replace the old
-`lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts` path. Delete the old
-module only when its imports have migrated.
+Keep `PROTOCOL.md` on the `ARModule` package paths, including the normative
+coordinate-helper path
+(`lens-studio/Assets/Scripts/ARModuleClient/coordinates/coordinates.ts`).
+Keep examples on the actual wire fields (`localization_result.position` and
+`.orientation`, not a nonexistent `.pose`) and describe `"LOCA"` offsets from
+one origin consistently.
+
+`.cursorrules` and `CONTRIBUTING.md` now point protocol-sync at
+`lens-studio/Assets/Scripts/ARModuleClient/websocket/protocol.ts`. Delete the
+v19 `ARBridge/Network/Protocol.ts` module only when its imports have migrated.
 
 ## Outcome
 

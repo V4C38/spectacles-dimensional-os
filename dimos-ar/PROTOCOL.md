@@ -3,7 +3,7 @@
 Cross-platform contract between `ARModule` and any AR client.
 
 Keep this document, `dimos/ar/websocket/protocol.py`, and
-`lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts` in sync.
+`lens-studio/Assets/Scripts/ARModuleClient/websocket/protocol.ts` in sync.
 
 ## Changelog
 
@@ -127,8 +127,9 @@ z_client =  x_odom
 
 Orientation must be converted with the same basis change, which for a
 handedness flip is easy to get subtly wrong. Treat
-`lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts` and its unit tests as
-the normative worked example rather than re-deriving it per platform.
+`lens-studio/Assets/Scripts/ARModuleClient/coordinates/coordinates.ts` and its
+unit tests as the normative worked example rather than re-deriving it per
+platform.
 
 ### Odometry scale correction
 
@@ -469,7 +470,9 @@ Header:
 | 0 | 4 | FourCC `0x4C4F4341` (`"LOCA"`) |
 | 4 | 2 | `observation_count` uint16, at least 1 |
 
-Then `observation_count` records, each:
+Then `observation_count` records, each. Offsets include `record_len`. After
+that field (`record_start` in `protocol.py`) the reserved word is at +16 and
+camera position at +20.
 
 | Offset | Size | Field |
 |--------|------|-------|
@@ -477,10 +480,11 @@ Then `observation_count` records, each:
 | 4 | 8 | `ts_capture` float64, `ts_client` at exposure |
 | 12 | 4 | `jpeg_len` uint32 |
 | 16 | 4 | `intrinsics_len` uint32 |
-| 20 | 12 | Camera position, float32 × 3 |
-| 32 | 16 | Camera orientation, float32 × 4, scalar-last |
-| 48 | `jpeg_len` | JPEG bytes |
-| 48 + `jpeg_len` | `intrinsics_len` | Intrinsics, JSON UTF-8 |
+| 20 | 4 | reserved uint32, must be 0 |
+| 24 | 12 | Camera position, float32 × 3 |
+| 36 | 16 | Camera orientation, float32 × 4, scalar-last |
+| 52 | `jpeg_len` | JPEG bytes |
+| 52 + `jpeg_len` | `intrinsics_len` | Intrinsics, JSON UTF-8 |
 
 `record_len` lets a reader skip a record it cannot parse.
 
@@ -510,7 +514,8 @@ handles fisheye corners internally via DimOS).
 view direction) expressed in the caller's own tracking frame. That frame must be
 right-handed, gravity-aligned Z-up and metric — the same convention as DimOS
 `odom`. A left-handed client (Spectacles) converts its camera pose on the way
-in and converts `localization_result.pose` back on the way out.
+in and converts `localization_result.position` and
+`localization_result.orientation` back on the way out.
 
 **`ts_capture` is required and must be the exposure time in `ts_client`**,
 not the time the message was assembled. ARModule converts it to `ts_server`
