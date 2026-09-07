@@ -696,6 +696,12 @@ estop-on-last-disconnect, and the extension point for future robots.
 
 **8. Tests and CI** — tests grow with each group; this closes it out and gets `./launcher/scripts/run-ci.sh` green from a normal terminal.
 
+**9. DimOS agent relay** — *not started*. After Groups 1–8. Inverse DimOS
+ports so a headset can talk to `McpClient`, plus one generic `agent_skill`
+envelope and `draw_geometry`. Keep `unitree_go2_ar` agent-free; add
+`unitree_go2_agentic_ar`. See the Group 9 section below. Do not implement
+during the current rebuild.
+
 ### Group 6 file order
 
 Shared foundations:
@@ -738,7 +744,12 @@ No Lens files. Recorded here so the later client matches the wire:
 
 ## Not carried over
 
-Joystick teleop and `MotionRouter` (239 lines — without joystick there is no arbitration to do), the entire `agent/` LLM and MCP layer (660), the G1 profile (208), the 6-state registration UX machine, the similarity aligner and runtime refiner including all online scale estimation, the nav watchdog and re-dispatch machinery, the inbound dispatch lanes (224), and the dead costmap subscription. `scripts/generate_marker.py` and the printed tag assets get copied across when the fiducial marker provider is built, since the marker stays robot-mounted.
+Joystick teleop and `MotionRouter` (239 lines — without joystick there is no arbitration to do), the entire v1 custom `agent/` LLM and MCP layer (660), the G1 profile (208), the 6-state registration UX machine, the similarity aligner and runtime refiner including all online scale estimation, the nav watchdog and re-dispatch machinery, the inbound dispatch lanes (224), and the dead costmap subscription. `scripts/generate_marker.py` and the printed tag assets get copied across when the fiducial marker provider is built, since the marker stays robot-mounted.
+
+Group 9 is not that v1 layer. It is a later DimOS-native relay: inverse
+`human_input` / `agent` / `agent_idle` ports, `McpClient` as the agent, and
+a generic `agent_skill` envelope. Do not port `user_command`,
+`agent_response`, or `ar_skill`.
 
 ## Repo-level changes outside the package
 
@@ -822,6 +833,81 @@ The honest caveat: this is not free simplification. Roughly 1,900 lines of it is
 - The Lens client breaks, and it gains two responsibilities: converting DimOS Z-up coordinates to Lens axes, and applying its localization result to its own scene graph.
 - Both trees publish `dimos.ar*`, so switching between them means a reinstall. Only v2 is installed from group 1 onward.
 
+## Group 9 — DimOS agent relay (later)
+
+Not started. After Groups 1–8 and a working `unitree_go2_ar`. Client-side
+steps live in `clients/v2_plan.md` (**Later: DimOS agent relay**).
+
+User-facing loop is plain text only. No audio on the wire or in `ARModule`.
+
+1. Host STT → inbound `human_input` string.
+2. `ARModule` publishes DimOS `human_input: Out[str]`. `McpClient` is the agent.
+3. Existing DimOS skills (navigation, …) stay on those streams. Overlay stays
+   `nav_goal` / `state.nav`. No second nav channel.
+4. `ARModule` `@skill` methods (first: `draw_geometry`) each broadcast one
+   `agent_skill` envelope `{ name, args }`.
+5. Assistant text comes back as outbound `agent`. Host TTS.
+
+### Ports and collaborator
+
+Inverse the usual agent ports on `ARModule`:
+
+- `human_input: Out[str]`
+- `agent: In[BaseMessage]` — real LangChain `BaseMessage` on the annotation
+- `agent_idle: In[bool]`
+
+Optional `_agent: AgentSpec | None` exists only to derive
+`hello.capabilities.agent`. Unavailable reason:
+`current blueprint has no DimOS agent`.
+
+Collaborator `agent/relay.py`: keep an idle fact; forward textual `AIMessage`
+only (ignore human / tool / tool-only / empty). Guard publish like
+navigation: capability plus `human_input.transport is not None`.
+
+### `draw_geometry`
+
+```text
+draw_geometry(transform, geometry, duration, additional_parameters="")
+```
+
+LLM-shallow types. `transform` is odom `[x, y, z, qx, qy, qz, qw]`.
+`geometry` is `marker` | `line` | `box`. `duration` `0` = until cleared.
+`additional_parameters` is a JSON object string. Invalid input → error
+string. No client → `"No AR client connected"`. Broadcast `agent_skill`;
+do not wait for ACK.
+
+### Blueprint
+
+Keep `unitree_go2_ar` agent-free. Add `unitree_go2_agentic_ar` =
+upstream `unitree_go2_agentic` + `ARModule.blueprint(...)`, same
+`n_workers` / `ClockSyncConfigurator` pattern as today's AR blueprint.
+
+### Protocol
+
+When this group starts, the 14-type contract becomes 17. Update in the
+same change:
+
+- `dimos-ar/dimos/ar/websocket/protocol.py`
+- `dimos-ar/PROTOCOL.md`
+- `clients/core/websocket/protocol.ts`
+
+| Frame | Direction | Body |
+|-------|-----------|------|
+| `human_input` | inbound | `{ text }` non-blank, max 4000 chars. No audio. |
+| `agent` | outbound | `{ text }` assistant-only, non-blank. Do **not** apply the 4000-char inbound cap. |
+| `agent_skill` | outbound | `{ name, args }` opaque JSON object. |
+
+Also: `hello.capabilities.agent`, `state.agent.idle` (not a separate
+`agent_idle` frame). Wire names stay DimOS-native (`human_input`, `agent`,
+`agent_idle`). Frame type for overlay skills is `agent_skill`. Conversation
+is process-global (broadcast). No client IDs or private routing.
+
+### Verification (when implemented)
+
+Relay filters, protocol, capability, blueprint stream wiring without
+starting an LLM, ClientCore frames / disconnect, `draw_geometry`
+validation, no-client failure.
+
 ## What comes after this phase
 
 Once Group 6's fiducial marker, VPS, Multiset adapter and `OdomMapTransform` paths are
@@ -829,3 +915,6 @@ green on hardware, the Lens client is adapted — including the bidirectional
 DimOS-axis conversion for `localization_observations` camera poses and
 `localization_result` answers, the `hello_request` / `hello` clock exchange,
 and the `CapturePolicy` latch described above — and `dimos-ar/` is deleted.
+
+Group 9 (DimOS agent relay) is separate later work, after the current
+rebuild can run without an agent.

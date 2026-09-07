@@ -1,0 +1,547 @@
+import { describe, it, expect } from "vitest";
+import {
+  PROTOCOL_VERSION,
+  parseInboundMessage,
+  ProtocolParseError,
+  bridgeSnapshotToStatusMessage,
+  projectBridgeSession,
+  parseBridgeWorldFrameFields,
+  RuntimeSnapshotMessage,
+} from "../../Assets/Scripts/ARBridge/Network/Protocol";
+
+describe("parseInboundMessage", () => {
+  it("parses hello", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "hello",
+        protocol_version: PROTOCOL_VERSION,
+        robot: {
+          robot_id: "go2",
+          display_name: "Go2",
+          visual_origin_frame: "base_link",
+          tag_tracking_profile: {
+            tag_ids: [0],
+            tag_total_size_m: 0.07,
+          },
+        },
+        capabilities: { lidar: { available: true } },
+      }),
+    );
+    expect(msg!.type).toBe("hello");
+    expect((msg as { robot: { robot_id: string } }).robot.robot_id).toBe("go2");
+    expect(
+      (msg as { robot: { tag_tracking_profile: { tag_ids: number[] } } }).robot
+        .tag_tracking_profile?.tag_ids,
+    ).toEqual([0]);
+  });
+
+  it("parses hello with full v7 capability map", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "hello",
+        protocol_version: PROTOCOL_VERSION,
+        robot: {
+          robot_id: "unitree_go2",
+          display_name: "Unitree Go2",
+          body_bounds_m: [0.7, 0.5, 0.55],
+          footprint_m: [0.7, 0.5],
+          visual_origin_frame: "base_link",
+          base_height_m: 0.33,
+          default_render_offset_m: [0, 0, 0],
+        },
+        capabilities: {
+          lidar: { available: true },
+          odom: { available: true },
+          registration_april_tag: { available: true },
+          registration_manual_pose: { available: true },
+          nav: { available: true },
+          path: { available: true },
+          emergency_stop: { available: false, reason: "disabled" },
+        },
+      }),
+    );
+    expect(msg!.type).toBe("hello");
+    const caps = (msg as { capabilities: Record<string, { available: boolean }> })
+      .capabilities;
+    expect(caps.lidar.available).toBe(true);
+    expect(caps.emergency_stop.available).toBe(false);
+  });
+
+  it("parses runtime_snapshot and projects bridge fields", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "runtime_snapshot",
+        ts: 1,
+        robot_id: "go2",
+        bridge: {
+          robot_connected: true,
+          world_frame_committed: false,
+          reconnecting: false,
+          world_frame_method: null,
+          world_frame_approximate: false,
+        },
+        nav: {
+          state: "navigating",
+          goal: {
+            source: "agent",
+            position: [1, 0, 2],
+            orientation: [0, 0, 0, 1],
+          },
+        },
+        agent: { state: "busy", detail: "thinking" },
+        path: {
+          waypoints: [[1, 2, 3]],
+        },
+      }),
+    );
+    expect(msg!.type).toBe("runtime_snapshot");
+    const snapshot = msg as RuntimeSnapshotMessage;
+    expect(snapshot.path?.waypoints).toEqual([[1, 2, 3]]);
+    expect(snapshot.nav.goal?.source).toBe("agent");
+    expect(snapshot.agent.state).toBe("busy");
+    expect(snapshot.agent.detail).toBe("thinking");
+    const bridgeSnapshot = projectBridgeSession(true, snapshot.bridge, snapshot.ts);
+    expect(bridgeSnapshot.robotConnected).toBe(true);
+    expect(bridgeSnapshot.worldFrameCommitted).toBe(false);
+    const bridge = bridgeSnapshotToStatusMessage(bridgeSnapshot);
+    expect(bridge?.type).toBe("bridge_status");
+    expect(bridge?.robot_connected).toBe(true);
+  });
+
+  it("parses registration_status", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "registration_status",
+        ts: 1,
+        mode: "april_tag",
+        state: "april_tag",
+        message: "Look at tag",
+        tag_visible: true,
+        progress: 55,
+        registration_confidence: 0.65,
+      }),
+    );
+    expect(msg!.type).toBe("registration_status");
+    expect((msg as { state: string }).state).toBe("april_tag");
+    expect((msg as { progress: number }).progress).toBe(55);
+    expect((msg as { registration_confidence: number }).registration_confidence).toBe(0.65);
+  });
+
+  it("rejects legacy registration_status.phase", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "registration_status",
+        ts: 1,
+        mode: "april_tag",
+        phase: "scanning",
+        message: "legacy",
+      }),
+    );
+    expect(msg).toBeNull();
+  });
+
+  it("parses registration_status scale lock fields", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "registration_status",
+        ts: 1,
+        mode: "april_tag",
+        state: "succeeded",
+        message: "Registration successful",
+        scale_locked: false,
+      }),
+    );
+    expect(msg!.type).toBe("registration_status");
+    expect((msg as { scale_locked: boolean }).scale_locked).toBe(false);
+  });
+
+  it("parses camera_frame_ack", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "camera_frame_ack",
+        ts: 1,
+        seq: 5,
+        capturing_budgeted_complete: false,
+      }),
+    );
+    expect(msg!.type).toBe("camera_frame_ack");
+    expect((msg as { seq: number }).seq).toBe(5);
+    expect((msg as { capturing_budgeted_complete: boolean }).capturing_budgeted_complete).toBe(false);
+  });
+
+  it("parses capture_policy", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "capture_policy",
+        ts: 1,
+        max_capture_distance_m: 2.5,
+        min_capture_distance_m: 0.35,
+        max_capture_speed_mps: 0.45,
+        static_speed_mps: 0.05,
+        min_observations: 3,
+      }),
+    );
+    expect(msg!.type).toBe("capture_policy");
+    expect((msg as { min_observations: number }).min_observations).toBe(3);
+  });
+
+  it("parses bridge_status", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "bridge_status",
+        ts: 1,
+        robot_connected: true,
+        world_frame_committed: true,
+        reconnecting: false,
+      }),
+    );
+    expect(msg!.type).toBe("bridge_status");
+    expect((msg as { robot_connected: boolean }).robot_connected).toBe(true);
+  });
+
+  it("parseBridgeWorldFrameFields defaults approximate when omitted", () => {
+    expect(parseBridgeWorldFrameFields({}, false)).toEqual({
+      world_frame_approximate: false,
+    });
+  });
+
+  it("parseBridgeWorldFrameFields strict null method when committed", () => {
+    expect(
+      parseBridgeWorldFrameFields(
+        { world_frame_method: "unknown", world_frame_approximate: true },
+        true,
+      ),
+    ).toEqual({ world_frame_method: null, world_frame_approximate: true });
+  });
+
+  it("parseBridgeWorldFrameFields preserves valid method when uncommitted", () => {
+    expect(
+      parseBridgeWorldFrameFields(
+        { world_frame_method: "april_tag" },
+        false,
+      ),
+    ).toEqual({
+      world_frame_method: "april_tag",
+      world_frame_approximate: false,
+    });
+  });
+
+  it("returns null for JSON lidar (binary only in v6)", () => {
+    expect(
+      parseInboundMessage(
+        JSON.stringify({
+          type: "lidar",
+          ts: 1,
+          points: [[1, 2, 3]],
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("parses pose", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "pose",
+        ts: 1,
+        position: [1, 2, 3],
+        orientation: [0, 0, 0, 1],
+      }),
+    );
+    expect(msg!.type).toBe("pose");
+    expect((msg as { position: number[] }).position).toEqual([1, 2, 3]);
+  });
+
+  it("parses pose with optional kinematics", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "pose",
+        ts: 1,
+        position: [1, 2, 3],
+        orientation: [0, 0, 0, 1],
+        speed_mps: 0.42,
+        velocity_mps: [0.5, 0.0, -0.1],
+        yaw_rate_rad_s: 0.35,
+      }),
+    );
+    expect(msg!.type).toBe("pose");
+    if (msg!.type !== "pose") {
+      return;
+    }
+    expect(msg.speed_mps).toBe(0.42);
+    expect(msg.velocity_mps).toEqual([0.5, 0, -0.1]);
+    expect(msg.yaw_rate_rad_s).toBe(0.35);
+  });
+
+  it("parses world_frame_correction", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "world_frame_correction",
+        ts: 1,
+        trans_delta_m: 0.1,
+        yaw_corrected: true,
+        solve_quality: 0.9,
+        solve_method: "similarity",
+        alignment_confidence: 0.8,
+        yaw_observable: true,
+        scale_observable: false,
+      }),
+    );
+    expect(msg!.type).toBe("world_frame_correction");
+    expect((msg as { solve_method: string }).solve_method).toBe("similarity");
+    expect((msg as { alignment_confidence: number }).alignment_confidence).toBe(0.8);
+    expect((msg as { yaw_observable: boolean }).yaw_observable).toBe(true);
+    expect((msg as { scale_observable: boolean }).scale_observable).toBe(false);
+  });
+
+  it("parses world_frame_correction v14 confidence and held fields", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "world_frame_correction",
+        ts: 1,
+        trans_delta_m: 0.1,
+        yaw_corrected: true,
+        solve_quality: 0.9,
+        solve_method: "similarity",
+        scale_confidence: 0.72,
+        yaw_confidence: 0.81,
+        scale_held: false,
+        yaw_held: true,
+      }),
+    );
+    expect(msg!.type).toBe("world_frame_correction");
+    expect((msg as { scale_confidence: number }).scale_confidence).toBe(0.72);
+    expect((msg as { yaw_confidence: number }).yaw_confidence).toBe(0.81);
+    expect((msg as { scale_held: boolean }).scale_held).toBe(false);
+    expect((msg as { yaw_held: boolean }).yaw_held).toBe(true);
+  });
+
+  it("parses legacy world_frame_correction without v14 fields", () => {
+    for (const solveMethod of ["apriltag_full", "apriltag_translation"] as const) {
+      const msg = parseInboundMessage(
+        JSON.stringify({
+          type: "world_frame_correction",
+          ts: 1,
+          trans_delta_m: 0.1,
+          yaw_corrected: true,
+          solve_quality: 0.9,
+          solve_method: solveMethod,
+        }),
+      );
+      expect(msg!.type).toBe("world_frame_correction");
+      expect((msg as { solve_method: string }).solve_method).toBe(solveMethod);
+    }
+  });
+
+  it("skips world_frame_correction with unknown solve_method", () => {
+    expect(
+      parseInboundMessage(
+        JSON.stringify({
+          type: "world_frame_correction",
+          ts: 1,
+          trans_delta_m: 0.1,
+          yaw_corrected: true,
+          solve_quality: 0.9,
+          solve_method: "mystery_method",
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("parses path waypoints", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "path",
+        ts: 1,
+        waypoints: [[1, 2, 3]],
+      }),
+    );
+    expect(msg!.type).toBe("path");
+    expect((msg as { waypoints: number[][] }).waypoints).toHaveLength(1);
+  });
+
+  it("parses nav_status state", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "nav_status",
+        ts: 1,
+        state: "idle",
+      }),
+    );
+    expect(msg!.type).toBe("nav_status");
+    expect((msg as { state: string }).state).toBe("idle");
+  });
+
+  it("parses nav_status resolved outcome", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "nav_status",
+        ts: 1,
+        state: "resolved",
+        outcome: "failed",
+        error_code: 505,
+      }),
+    );
+    expect(msg!.type).toBe("nav_status");
+    expect((msg as { state: string }).state).toBe("resolved");
+    expect((msg as { outcome: string }).outcome).toBe("failed");
+  });
+
+  it("parses nav_status retryable stall fields", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "nav_status",
+        ts: 1,
+        state: "navIntent",
+        retryable: true,
+        stall_reason: "no_path",
+      }),
+    );
+    expect(msg!.type).toBe("nav_status");
+    expect((msg as { retryable: boolean }).retryable).toBe(true);
+    expect((msg as { stall_reason: string }).stall_reason).toBe("no_path");
+  });
+
+  it("parses nav_status goal block", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "nav_status",
+        ts: 1,
+        state: "navigating",
+        goal: {
+          source: "user",
+          position: [1, 0, 2],
+          orientation: [0, 0, 0, 1],
+        },
+      }),
+    );
+    expect(msg!.type).toBe("nav_status");
+    expect((msg as { goal: { source: string } }).goal.source).toBe("user");
+    expect((msg as { goal: { position: number[] } }).goal.position).toEqual([
+      1, 0, 2,
+    ]);
+  });
+
+  it("parses pong", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "pong",
+        ts: 1,
+        robot_id: "go2",
+        client_ts: 2,
+        bridge_ts: 3,
+      }),
+    );
+    expect(msg!.type).toBe("pong");
+    expect((msg as { client_ts: number }).client_ts).toBe(2);
+  });
+
+  it("rejects unsupported hello protocol version", () => {
+    expect(() =>
+      parseInboundMessage(
+        JSON.stringify({
+          type: "hello",
+          protocol_version: 3,
+          robot: {
+            robot_id: "go2",
+            display_name: "Go2",
+            visual_origin_frame: "base_link",
+          },
+          capabilities: {},
+        }),
+      ),
+    ).toThrow(ProtocolParseError);
+    try {
+      parseInboundMessage(
+        JSON.stringify({
+          type: "hello",
+          protocol_version: 3,
+          robot: {
+            robot_id: "go2",
+            display_name: "Go2",
+            visual_origin_frame: "base_link",
+          },
+          capabilities: {},
+        }),
+      );
+    } catch (err) {
+      expect((err as ProtocolParseError).kind).toBe("schema");
+    }
+  });
+
+  it("throws schema error when pose is missing position", () => {
+    expect(() =>
+      parseInboundMessage(
+        JSON.stringify({
+          type: "pose",
+          ts: 1,
+          orientation: [0, 0, 0, 1],
+        }),
+      ),
+    ).toThrow(ProtocolParseError);
+    try {
+      parseInboundMessage(
+        JSON.stringify({
+          type: "pose",
+          ts: 1,
+          orientation: [0, 0, 0, 1],
+        }),
+      );
+    } catch (err) {
+      expect((err as ProtocolParseError).kind).toBe("schema");
+    }
+  });
+
+  it("throws json error on invalid JSON", () => {
+    expect(() => parseInboundMessage("{not json")).toThrow(ProtocolParseError);
+    try {
+      parseInboundMessage("{not json");
+    } catch (err) {
+      expect((err as ProtocolParseError).kind).toBe("json");
+    }
+  });
+
+  it("returns null for unknown message type", () => {
+    expect(parseInboundMessage('{"type":"banana"}')).toBeNull();
+  });
+
+  it("parses agent_response", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "agent_response",
+        ts: 1,
+        text: "On my way.",
+      }),
+    );
+    expect(msg!.type).toBe("agent_response");
+    expect((msg as { text: string }).text).toBe("On my way.");
+  });
+
+  it("parses agent_status", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "agent_status",
+        ts: 1,
+        state: "busy",
+        detail: "thinking",
+      }),
+    );
+    expect(msg!.type).toBe("agent_status");
+    expect((msg as { state: string }).state).toBe("busy");
+  });
+
+  it("parses ar_skill with opaque args", () => {
+    const msg = parseInboundMessage(
+      JSON.stringify({
+        type: "ar_skill",
+        ts: 1,
+        request_id: "req-1",
+        skill: "draw_world_annotation",
+        args: { id: "chair-1", duration_s: 30 },
+      }),
+    );
+    expect(msg!.type).toBe("ar_skill");
+    const skill = msg as { skill: string; args: { duration_s: number } };
+    expect(skill.skill).toBe("draw_world_annotation");
+    expect(skill.args.duration_s).toBe(30);
+  });
+});

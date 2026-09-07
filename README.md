@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-Lens-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
-  <img src="https://img.shields.io/badge/Python-bridge-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/Python-ARModule-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
 </p>
 
 <p>
@@ -58,10 +58,10 @@ Mac which runs DimOS, Spectacles AR glasses and the robot need to be on the <b>s
 <summary><strong>Via launcher (recommended)</strong></summary>
 
 
-<img src="assets/specs_dimos_bridgelauncher.png" alt="DimOS AR Bridge launcher: robot stack, Bridge IP, OPENAI_API_KEY, AprilTags, and log" width="640" />
+<img src="assets/specs_dimos_bridgelauncher.png" alt="DimOS ARModule launcher: robot stack, ARModule IP, OPENAI_API_KEY, AprilTags, and log" width="640" />
 
 
-The launcher is a small web app that runs on your Mac and manages <b>Dimensional OS</b> and the <b>AR Bridge</b> in a clean UI. <br> It installs and configures both if needed, handles robot network discovery, generates and configures the <b>AprilTag</b> settings, and starts or stops the bridge. The <b>Log</b> also shows detailed output which is useful for debugging.
+The launcher is a small web app that runs on your Mac and manages <b>Dimensional OS</b> and <b>ARModule</b> in a clean UI. <br> It installs and configures both if needed, handles robot network discovery, generates and configures the <b>AprilTag</b> settings, and starts or stops ARModule. The <b>Log</b> also shows detailed output which is useful for debugging.
 
 
 Double-click [`launcher/Start Launcher.command`](launcher/Start%20Launcher.command) in Finder, or run:
@@ -75,7 +75,7 @@ Your browser opens at `http://127.0.0.1:8790`. Leave the terminal window it star
 
 The **Dependencies** tab allows installing and configuring dependencies based on your selected stack (Go2 / G1), choose whether to reuse a Dimensional OS install you already have or download a fresh one, then press **Install**. This can take a while.
 
-**Every run:** pick **Unitree Go2** or **Unitree G1**, press **Start**, and wait for status to turn to **Bridge Ready**. The value shown as **Bridge IP** is the address you type into the Lens during the setup wizard. If no robot answers on the network, the bridge starts with a simulated robot instead.
+**Every run:** pick **Unitree Go2** or **Unitree G1**, press **Start**, and wait for status to turn to **ARModule Ready**. The value shown as **ARModule IP** is the address you type into the Lens during the setup wizard. If no robot answers on the network, ARModule starts with a simulated robot instead.
 
 macOS asks for your admin password the first time you start after a reboot. Dimensional OS needs a local network route and larger socket buffers for its internal messaging.
 
@@ -93,7 +93,7 @@ The launcher runs two scripts, and you can run them yourself.
 ./launcher/scripts/setup.sh
 ```
 
-[`launcher/scripts/start.sh`](launcher/scripts/start.sh) applies the macOS network settings, asks which robot stack to run, looks for the robot on the network, and boots the bridge on port **8787**. The log prints the address to enter on Spectacles. Set `OPENAI_API_KEY` beforehand if you want Agent Mode, and `ROBOT_IP` to skip discovery.
+[`launcher/scripts/start.sh`](launcher/scripts/start.sh) applies the macOS network settings, asks which robot stack to run, looks for the robot on the network, and starts ARModule on port **8787**. The log prints the address to enter on Spectacles. Set `OPENAI_API_KEY` beforehand if you want Agent Mode, and `ROBOT_IP` to skip discovery.
 
 ```bash
 ./launcher/scripts/start.sh
@@ -146,7 +146,7 @@ Enable the fiducial provider in DimOS config (`armodule.localization.providers`)
 
 #### Register inside Spectacles Lens
 
-Open [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dimensional-os.esproj) in Lens Studio and send the Lens to your Spectacles (Lens with experimental API enabled cannot be published so you need to upload via LS). The <b>Registration Wizard</b> walks you through connecting and locating the robot. Enter the <b>Bridge IP</b> from the launcher when asked.
+Open [`clients/specs/spectacles-dimensional-os.esproj`](clients/specs/spectacles-dimensional-os.esproj) in Lens Studio and send the Lens to your Spectacles (Lens with experimental API enabled cannot be published so you need to upload via LS). The <b>Registration Wizard</b> walks you through connecting and locating the robot. Enter the <b>ARModule IP</b> from the launcher when asked.
 
 <p align="center">
   <img src="assets/specs_dimos_registrationwizard.gif" alt="Registration wizard on Spectacles: connect, scan tag, finish setup" width="480" />
@@ -155,7 +155,7 @@ Open [`lens-studio/spectacles-dimensional-os.esproj`](lens-studio/spectacles-dim
 Leave the robot standing still and walk around it while looking at the tag. Registration finishes on its own once it has gathered sufficient tag sightings. Keep viewing distance about <b>0.5 - 1.5 meters</b>.
 Alternatively, switch to <b>Manual Placement</b>, where you drag a marker onto the robot by hand - this doesn`t require printing and mounting the tag but yields much lower accuracy and will not support <b>runtime drift correction</b>.
 
-Alignment is rough at first and gets better as the robot moves and more tag sightings are integrated into the world frame calibration.
+The tracking origin is rough at first and gets better as the robot moves and more tag sightings are integrated.
 
 <a id="system-design"></a>
 
@@ -167,7 +167,7 @@ Alignment is rough at first and gets better as the robot moves and more tag sigh
 
 ARModule is <b>device agnostic</b>. Clients implement [`PROTOCOL.md`](dimos-ar/PROTOCOL.md) as the communication protocol for all messages.
 
-The <b>Spectacles Lens</b> is the reference client. It renders the robot and its route, reads hand gestures, sends camera images the bridge requires for AprilTag based frame alignment and handles speech.
+The <b>Spectacles Lens</b> is the reference client. It renders the robot and its route, reads hand gestures, sends camera images ARModule requires for AprilTag localization and handles speech.
 
 ```mermaid
 flowchart LR
@@ -176,14 +176,14 @@ flowchart LR
   subgraph DimOS["Dimensional OS (Mac)"]
     direction TB
     Stack["Robot stack<br>connection · mapping · planning · agent"]
-    Bridge["AR-Bridge · dimos-ar<br>world alignment · WebSocket server"]
-    Stack <--> Bridge
+    ARModule["ARModule · dimos-ar<br>localization · WebSocket"]
+    Stack <--> ARModule
   end
 
-  Lens["Spectacles Lens<br>lens-studio"]
+  Lens["Spectacles Lens<br>clients/specs"]
 
   Robot <-->|"WebRTC / DDS"| Stack
-  Bridge <-->|"WebSocket protocol"| Lens
+  ARModule <-->|"WebSocket protocol"| Lens
 ```
 
 <details>
@@ -252,13 +252,13 @@ flowchart LR
   <img src="assets/specs_dimos_arwalk.gif" alt="Spectacles AR interface with Unitree Go2 outdoors: wrist menu and LiDAR visualization" width="800" />
 </p>
 
-Hold your left palm up to open the <b>wrist menu</b>. Switch between <b>Manual</b> and <b>Agent Mode</b>, restart registration (i.e. re-calibrate the frame alignment), show the <b>debug console</b>, and request <b>emergency stop</b> (will immediately cancel all navigation).
+Hold your left palm up to open the <b>wrist menu</b>. Switch between <b>Manual</b> and <b>Agent Mode</b>, restart registration (i.e. recapture the tracking origin), show the <b>debug console</b>, and request <b>emergency stop</b> (will immediately cancel all navigation).
 
 <p align="center">
   <img src="assets/specs_dimos_wristui.gif" alt="Wrist menu on Spectacles: Manual/Agent mode, LiDAR, registration, debug console, and emergency stop" width="480" />
 </p>
 
-The <b>LiDAR</b> button in the wrist menu cycles three states: <b>off</b>, <b>obstacles only</b> (filters the point cloud by proximity to the robot bridge-side — performance friendly), and the <b>full point cloud</b> around the robot (performance heavy, can cause glasses to overheat over a long period).
+The <b>LiDAR</b> button in the wrist menu cycles three states: <b>off</b>, <b>obstacles only</b> (filters the point cloud by proximity to the robot on ARModule — performance friendly), and the <b>full point cloud</b> around the robot (performance heavy, can cause glasses to overheat over a long period).
 
 <a id="manual-mode"></a>
 
@@ -304,7 +304,7 @@ During fast movements (as shown in the GIF above) the <b>RobotMarker</b> can lag
 
 The cause is <b>inconsistent odometry data</b> from the robot itself. In simple terms, the robot estimates its current world pose by adding up how far it has moved, and on Unitree hardware those numbers are not consistent, so small errors accumulate over time and distance.
 
-The bridge corrects for this whenever it gets a valid camera frame at the <b>AprilTag</b>. It compares where the tag really is against where the robot reports to be and corrects the alignment to match the observation. Between those corrections the error grows again.
+ARModule corrects for this whenever it gets a valid camera frame at the <b>AprilTag</b>. It compares where the tag really is against where the robot reports to be and updates the tracking origin to match the observation. Between those corrections the error grows again.
 
 > [!NOTE]
 > Expect drift to accumulate over long distance walks - it is automatically corrected when the April Tag is sighted by the glasses camera.
@@ -324,10 +324,17 @@ cd dimos-ar
 /path/to/dimos/.venv/bin/python3 -m pytest
 ```
 
-Lens tests on their own. These are plain TypeScript and do not need Lens Studio:
+Portable client tests on their own:
 
 ```bash
-cd lens-studio/Tests
+cd clients/core
+npm test
+```
+
+Lens v19 tests on their own. These are plain TypeScript and do not need Lens Studio:
+
+```bash
+cd clients/specs/Tests
 npm test
 ```
 
@@ -335,10 +342,10 @@ npm test
 
 | Symptom | Things to try |
 |---------|----------------|
-| Lens cannot connect | Check that Spectacles and the Mac are on the same WiFi and that you typed the Bridge IP from the launcher, not `127.0.0.1`. |
+| Lens cannot connect | Check that Spectacles and the Mac are on the same WiFi and that you typed the ARModule IP from the launcher, not `127.0.0.1`. |
 | AprilTag not detected | Get closer, improve the lighting, keep walking around the robot, and check that the tag printed at full size. |
-| Drift after registration | Expected, see [Pose Drift](#pose-drift). Look at the tag while the robot stands still so the bridge can correct itself. |
-| Navigation unavailable | The bridge log reports which capabilities the robot advertised. G1 navigation needs the Unitree DDS packages in the DimOS environment. |
+| Drift after registration | Expected, see [Pose Drift](#pose-drift). Look at the tag while the robot stands still so ARModule can correct itself. |
+| Navigation unavailable | The ARModule log reports which capabilities the robot advertised. G1 navigation needs the Unitree DDS packages in the DimOS environment. |
 | Agent does not respond | Check that `OPENAI_API_KEY` is set in the launcher and that the Mac has internet. |
 | Wake word ignored | Turn on the debug console and watch line 7 to see what was transcribed, and check that you are in Agent Mode. |
 | Robot does not move | Registration has to be finished and the robot connected. The agent reply on line 8 turns red or yellow when something failed. |
@@ -347,7 +354,7 @@ npm test
 
 ## Contributing
 
-Contributions, ideas and bug reports are welcome. If you are changing something that crosses between the bridge and the Lens, read [`CONTRIBUTING.md`](CONTRIBUTING.md) first, especially the rules on keeping the protocol in sync.
+Contributions, ideas and bug reports are welcome. If you are changing something that crosses between ARModule and the Lens, read [`CONTRIBUTING.md`](CONTRIBUTING.md) first, especially the rules on keeping the protocol in sync.
 
 ## License
 

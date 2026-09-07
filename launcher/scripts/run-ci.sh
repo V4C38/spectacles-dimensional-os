@@ -17,7 +17,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIMOS_AR="${ROOT}/dimos-ar"
 LAUNCHER_APP="${ROOT}/launcher/app"
-LENS_TESTS="${ROOT}/lens-studio/Tests"
+CLIENT_CORE="${ROOT}/clients/core"
+LENS_TESTS="${ROOT}/clients/specs/Tests"
 CI_VENV="${CI_VENV:-/tmp/spectacles-dimensional-os-ci-venv}"
 LAUNCHER_VENV="${LAUNCHER_VENV:-/tmp/spectacles-dimensional-os-launcher-ci-venv}"
 
@@ -83,8 +84,15 @@ run_launcher_job() {
   pytest
 }
 
-run_lens_studio_job() {
-  echo "==> lens-studio-tests job (matches .github/workflows/ci.yml)"
+run_client_core_job() {
+  echo "==> client-core-tests job (matches .github/workflows/ci.yml)"
+  cd "${CLIENT_CORE}"
+  npm ci
+  npm test
+}
+
+run_client_specs_job() {
+  echo "==> client-specs-tests job (matches .github/workflows/ci.yml)"
   cd "${LENS_TESTS}"
   npm ci
   npm test
@@ -92,7 +100,8 @@ run_lens_studio_job() {
 
 run_dimos_ar_job
 run_launcher_job
-run_lens_studio_job
+run_client_core_job
+run_client_specs_job
 
 echo ""
 echo "All CI jobs passed."

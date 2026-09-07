@@ -1,0 +1,44 @@
+- !<AssetImportMetadata/ec936e7b-8aca-41b7-b348-a51e4010614c>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> b376bd82-6b1f-4f69-84b3-cdaf143e452a
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> b376bd82-6b1f-4f69-84b3-cdaf143e452a
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 7520f61e-9235-498c-b288-1c09c6abdc4d
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/7520f61e-9235-498c-b288-1c09c6abdc4d>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: f23b8adf-162e-481e-bb4b-e653fb931d56
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    markerRoot: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - markerRoot: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - // @input SceneObject markerRoot
