@@ -189,6 +189,7 @@ outside the v19 `Tests/unit/` tree:
 Tests/ARModuleClient/
 ├── protocol.test.ts
 ├── coordinates.test.ts
+├── session.test.ts
 ├── localization.test.ts
 ├── navigation.test.ts
 └── sensors.test.ts
@@ -374,6 +375,27 @@ No camera. Fixtures are enough. `state.nav.state` is `idle` |
 `failed`) non-null exactly when `resolved`. There is no
 `world_frame_committed` on the wire — “aligned” means the client has applied
 a `localization_result`.
+
+```text
+lens-studio/Assets/Scripts/ARModuleClient/websocket/ports.ts
+lens-studio/Assets/Scripts/ARModuleClient/websocket/session.ts
+lens-studio/Assets/Scripts/ARModuleClient/localization/alignment.ts
+lens-studio/Assets/Scripts/ARModuleClient/localization/compose.ts
+lens-studio/Tests/ARModuleClient/session.test.ts
+lens-studio/Tests/ARModuleClient/localization.test.ts
+```
+
+Hello timeout and reconnect delay are required session configuration. The
+session does not pick Spectacles numbers.
+
+Group 2 is complete only when the session recognizes every outbound v2
+message, `hello.time_sync.ts_client` must echo the `hello_request` that opened
+the connection, and `T_odom_client` has a single owner. Wrong-phase transport
+events throw; protocol and timeout failures go to `failed` and schedule
+reconnect. Compose is one SE(3) inverse of `T_odom_client` plus the group 1
+basis, in both directions, for points, poses, and yaw poses. Tests cover
+handshake, hello timeout, echo mismatch, reconnect, alignment replacement,
+alignment cleared on disconnect, and invalid lifecycle transitions.
 
 ### 3. Capture episode — `ARModuleClient/localization`
 

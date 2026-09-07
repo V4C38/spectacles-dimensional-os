@@ -76,6 +76,21 @@ export default defineConfig({
             import.meta.url,
           ),
         ),
+        fileURLToPath(
+          new URL("../Assets/Scripts/ARModuleClient/websocket/ports.ts", import.meta.url),
+        ),
+        fileURLToPath(
+          new URL("../Assets/Scripts/ARModuleClient/websocket/session.ts", import.meta.url),
+        ),
+        fileURLToPath(
+          new URL(
+            "../Assets/Scripts/ARModuleClient/localization/alignment.ts",
+            import.meta.url,
+          ),
+        ),
+        fileURLToPath(
+          new URL("../Assets/Scripts/ARModuleClient/localization/compose.ts", import.meta.url),
+        ),
         "../Assets/Scripts/ARBridge/Network/Protocol.ts",
         "../Assets/Scripts/App/AppState.ts",
         "../Assets/Scripts/App/Utilities/Utilities.ts",
