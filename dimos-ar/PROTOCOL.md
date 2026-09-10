@@ -2,8 +2,8 @@
 
 Cross-platform contract between `ARModule` and any AR client.
 
-Keep this document, `dimos/ar/websocket/protocol.py`, and
-`lens-studio/Assets/Scripts/ARModuleClient/websocket/protocol.ts` in sync.
+Keep this document and `dimos/ar/websocket/protocol.py` in sync. Implementing
+clients update their protocol module in the same change.
 
 ## Changelog
 
@@ -40,8 +40,7 @@ with any earlier draft of this document.
 
 - **Wire frame:** **`odom`** — the robot's drifting leg-odometry frame, in
   DimOS's right-handed Z-up axes. ARModule performs **no axis conversion**. Each
-  client converts on receipt, because a Spectacles client, a Quest client and a
-  desktop viewer do not share one convention.
+  client converts on receipt; clients do not share one scene convention.
 - **12 message types** — 6 outbound, 6 inbound. Superseded by v2 above.
 - **No `robot_id` echo** on inbound messages. One ARModule process serves one
   robot, declared once in `hello`.
@@ -116,8 +115,7 @@ messages; ARModule normalizes that to `odom` at the import boundary and uses
 ARModule never remaps axes. A client with a different convention converts on
 receipt and inverts the conversion on anything it sends.
 
-Informative example, for a left-handed Y-up client such as Lens Studio (X right,
-Y up, Z forward):
+Informative example, for a left-handed Y-up client (X right, Y up, Z forward):
 
 ```text
 x_client = -y_odom
@@ -126,10 +124,8 @@ z_client =  x_odom
 ```
 
 Orientation must be converted with the same basis change, which for a
-handedness flip is easy to get subtly wrong. Treat
-`lens-studio/Assets/Scripts/ARModuleClient/coordinates/coordinates.ts` and its
-unit tests as the normative worked example rather than re-deriving it per
-platform.
+handedness flip is easy to get subtly wrong. This matrix is the contract;
+each client owns its implementation.
 
 ### Odometry scale correction
 
@@ -513,9 +509,9 @@ handles fisheye corners internally via DimOS).
 **Camera pose** is the **camera optical frame** (X right, Y down, Z along the
 view direction) expressed in the caller's own tracking frame. That frame must be
 right-handed, gravity-aligned Z-up and metric — the same convention as DimOS
-`odom`. A left-handed client (Spectacles) converts its camera pose on the way
-in and converts `localization_result.position` and
-`localization_result.orientation` back on the way out.
+`odom`. A left-handed client converts its camera pose on the way in and
+converts `localization_result.position` and `localization_result.orientation`
+back on the way out.
 
 **`ts_capture` is required and must be the exposure time in `ts_client`**,
 not the time the message was assembled. ARModule converts it to `ts_server`
@@ -644,5 +640,5 @@ Not carried into v1:
 - Robot fiducial marker profile. Marker IDs and print sizes matter when generating a marker sheet, which
   is a launcher concern, not something a running client needs.
 
-The Lens client is not compatible with this protocol schema and needs its
-protocol module rewritten.
+A client speaking a prior protocol is not compatible and needs its protocol
+module rewritten.

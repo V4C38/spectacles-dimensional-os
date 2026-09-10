@@ -212,34 +212,20 @@ flowchart LR
   Module --> Rest
 ```
 
-**Spectacles Lens**
+**Spectacles host**
 
-Lens Studio project with scripts split into two folders, wired by two scene scripts:
-
-- `ARBridge/` implements [`PROTOCOL.md`](dimos-ar/PROTOCOL.md): WebSocket session, inbound routing, and one client per domain (registration, telemetry, navigation, camera, agent).
-- `App/` is the Spectacles side: UI, presenters, registration wizard, and hand input.
-- `ARBridgeServices` is the composition root. It holds the scene inputs and builds the runtime services.
-- `ARBridgeCoordinator` owns phase and mode. It starts in registration, hands off to runtime, and tears down on disconnect.
-
-Inbound messages land in `AppState`, and the UI reacts to that store rather than to raw messages.
+Portable [`ClientCore`](clients/core/) speaks [`PROTOCOL.md`](dimos-ar/PROTOCOL.md). The Lens composition root is **`SpectaclesHost`**: it constructs that core, drives time, and routes typed facts to room presenters and derived UX. Axis conversion stays in the host (`SpectaclesCoordinates`). The Lens on disk is still the v19 project until Groups 5–10 of [`clients/v2_plan.md`](clients/v2_plan.md) land.
 
 ```mermaid
 flowchart LR
-  subgraph App["App/"]
-    Services["ARBridgeServices<br>composition root"]
-    Coord["ARBridgeCoordinator<br>lifecycle"]
-    UI["UI · Robot · Nav · Wizard"]
-  end
+  Core["ClientCore<br>session · T_odom_client · capture"]
+  Host["SpectaclesHost"]
+  Room["Robot · Lidar · NavGoal"]
+  UX["Connect wizard · HUD"]
 
-  subgraph BridgeLayer["ARBridge/"]
-    Net["Network · Session"]
-    Clients["Domain clients"]
-  end
-
-  Coord --> Services
-  Services --> UI
-  Services --> Net
-  Services --> Clients
+  Host --> Core
+  Host --> Room
+  Host --> UX
 ```
 
 </details>
@@ -247,6 +233,8 @@ flowchart LR
 <a id="augmented-reality-interface"></a>
 
 ## Augmented Reality Interface
+
+The shipping Lens is still v19. The v2 host rebuild is [`clients/v2_plan.md`](clients/v2_plan.md) Groups 5–10.
 
 <p align="center">
   <img src="assets/specs_dimos_arwalk.gif" alt="Spectacles AR interface with Unitree Go2 outdoors: wrist menu and LiDAR visualization" width="800" />

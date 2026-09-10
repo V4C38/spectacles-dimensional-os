@@ -49,7 +49,6 @@ Same shape as DimOS (`RelocalizationModule` / `dimos.mapping.relocalization` /
 - **Blueprint:** `unitree_go2_ar` (`dimos run unitree-go2-ar`).
 - **Wire peer:** `server` (WebSocket role). Clock stamps are `time_sync.ts_client` /
   `time_sync.ts_server`; connection count is `state.server`.
-- Lens `ARBridge/` stays until the Lens adaptation phase.
 
 ## The core idea
 
@@ -104,7 +103,10 @@ There is no axis remap anywhere in ARModule. Coordinates stay in DimOS's convent
 
 DimOS follows ROS conventions: right-handed, Z-up, X-forward. Frame names are plain strings carried on the message — `frame_id` on `PoseStamped` at `dimos/msgs/geometry_msgs/PoseStamped.py:49`.
 
-Each client converts to its own convention on receipt. Spectacles is left-handed Y-up, Quest is right-handed Y-up, a browser viewer might be Z-up. Baking one client's convention into the wire privileges that client and forces every other one to undo it first. ARModule has no business knowing what a Lens scene graph looks like.
+Each client converts to its own convention on receipt. One client may be
+left-handed Y-up, another right-handed Y-up, another Z-up. Baking one client's
+convention into the wire privileges that client and forces every other one to
+undo it first. ARModule has no business knowing a client's scene graph.
 
 What this buys:
 
@@ -112,7 +114,7 @@ What this buys:
 - LiDAR points are forwarded straight through, untouched.
 - There is nothing to get subtly wrong in a shared axis-conversion helper, and no shared helper to test.
 
-The cost is that the conversion is now written once per client platform instead of once on ARModule. Mitigate it by shipping a reference implementation in the Lens client and stating the exact convention precisely in `PROTOCOL.md`.
+The cost is that the conversion is now written once per client platform instead of once on ARModule. Mitigate it by stating the exact convention precisely in `PROTOCOL.md`.
 
 The rule that decides every case of this kind: **a property of the client platform belongs to the client; a property of the robot belongs to ARModule; anything requiring knowledge only ARModule has belongs to ARModule.**
 
@@ -166,9 +168,9 @@ Five properties of that signature carry weight:
 
 **The answer is labelled with its frame.** Providers do not share a native reference: fiducial marker resolves into `odom` because the marker is bolted to the robot, a VPS resolves into the scanned `map`. Pretending otherwise would mean one of them lying about what it computed.
 
-**The observer's tracking frame must be right-handed, gravity-aligned Z-up and metric — DimOS convention.** This is the one demand the seam makes of a caller, and it is not stylistic. The answer is a rotation plus a translation, and no rotation can relate a left-handed frame to a right-handed one; that needs a mirror, which is not a rigid transform and would quietly corrupt every composition downstream. Spectacles is left-handed Y-up, so the Lens client converts its camera poses on the way in and converts `LocalizedPose.pose` back on the way out — the same fixed conversion it already owes for `pose`, `nav_goal` and `lidar`, applied in both directions instead of one. This requirement applies to the tracking coordinate system, not the physical camera pose inside it: the camera may have arbitrary roll and pitch.
+**The observer's tracking frame must be right-handed, gravity-aligned Z-up and metric — DimOS convention.** This is the one demand the seam makes of a caller, and it is not stylistic. The answer is a rotation plus a translation, and no rotation can relate a left-handed frame to a right-handed one; that needs a mirror, which is not a rigid transform and would quietly corrupt every composition downstream. A left-handed client converts its camera poses on the way in and converts `LocalizedPose.pose` back on the way out — the same fixed conversion it already owes for `pose`, `nav_goal` and `lidar`, applied in both directions instead of one. This requirement applies to the tracking coordinate system, not the physical camera pose inside it: the camera may have arbitrary roll and pitch.
 
-`camera_pose` is the pose of the **camera optical frame** — X right, Y down, Z along the view direction — which is what PnP natively produces and what DimOS calls `camera_optical` (`dimos/robot/unitree/go2/connection.py:115-120`). v1 instead carried the Lens camera convention on the wire and corrected for it inside the tracker with a `FLIP_YZ` constant (`tag_tracking/solve.py:62`). That constant does not come across: ARModule whose geometry names one client's camera convention has already lost the platform independence the rest of the design is built on.
+`camera_pose` is the pose of the **camera optical frame** — X right, Y down, Z along the view direction — which is what PnP natively produces and what DimOS calls `camera_optical` (`dimos/robot/unitree/go2/connection.py:115-120`). v1 instead carried one client's camera convention on the wire and corrected for it inside the tracker with a `FLIP_YZ` constant (`tag_tracking/solve.py:62`). That constant does not come across: ARModule whose geometry names one client's camera convention has already lost the platform independence the rest of the design is built on.
 
 **Intrinsics carry distortion, and ARModule removes it when a provider needs it gone.** The Go2's own front camera is a fisheye — `distortion_model: equidistant`, four coefficients, 1280×720 (`dimos/robot/unitree/go2/front_camera_720.yaml:1-25`) — and a VPS accepts a pinhole intrinsic only, so undistortion has to happen somewhere. ARModule must own that code for the robot's own frames regardless, so clients get it for free rather than each reimplementing it per platform. The fiducial marker path needs no help: DimOS's `estimate_marker_pose` already undistorts fisheye corners into the pinhole `K` before solving (`dimos/perception/fiducial/marker_pose.py:86-90`).
 
@@ -531,7 +533,7 @@ Nothing about scale appears on the wire: no factor, no confidence, no lock. The 
 
 **No speed-dependent factor.** `sportmodestate.velocity` is available (read by DimOS at `go2/dds/cli/render.py:81`), but making the factor a function of it assumes speed is the explanatory variable. Revisit only with a measurement showing the correlation.
 
-**Tag size was not the cause.** `0.070 / 0.056 = 1.25` exactly is a real coincidence in the codebase, and it is worth recording that inspection cleared it so nobody re-opens it: PnP is fed `mount.size_m = 0.056`, the black detection square (`tag_tracking/tracker.py:274`), with object points built from that same value (`tag_tracking/fiducial_helpers.py:28-51`). The 0.070 total is only sent to the Lens for printing and used in the max-detection-distance estimate.
+**Tag size was not the cause.** `0.070 / 0.056 = 1.25` exactly is a real coincidence in the codebase, and it is worth recording that inspection cleared it so nobody re-opens it: PnP is fed `mount.size_m = 0.056`, the black detection square (`tag_tracking/tracker.py:274`), with object points built from that same value (`tag_tracking/fiducial_helpers.py:28-51`). The 0.070 total is only used when generating a marker sheet and in the max-detection-distance estimate.
 
 ### The residual, and who clears it
 
@@ -545,10 +547,10 @@ Point-LIO is LiDAR-inertial and therefore metric by construction, but in DimOS i
 
 ```mermaid
 flowchart LR
-    Lens[AR client] -->|nav_goal_request| WS[WebSocket server]
-    Lens -->|localization_start_request| WS
-    Lens -->|localization_observations| WS
-    WS -->|localization_observations_request| Lens
+    Client[AR client] -->|nav_goal_request| WS[WebSocket server]
+    Client -->|localization_start_request| WS
+    Client -->|localization_observations| WS
+    WS -->|localization_observations_request| Client
     WS --> Coord[LocalizationCoordinator]
     Policy[LocalizationPolicy] --> Coord
     Coord -->|LocalizedPose| WS
@@ -561,7 +563,7 @@ flowchart LR
     Planner --> Tel[Telemetry]
     Nav --> WS
     Tel -->|"pose and nav_goal scaled, lidar raw"| WS
-    WS --> Lens
+    WS --> Client
 ```
 
 ## `dimos-ar-v2/PR.md` — the upstream change, documented not opened
@@ -677,7 +679,7 @@ is the unit we discuss, review and finish.
 
 **2. The DimOS module and blueprint** — `module.py` and `blueprints.py`, plus `launcher/scripts/start.sh` and `dimos_lib.sh`. The whole DimOS integration surface in two files: `In`/`Out` stream ports, `@rpc build/start/stop`, the `handle_<stream>` auto-binding in `dimos/core/module.py`, and how `autoconnect` matches ports by name. First runnable milestone: `unitree_go2_ar` starts against the real Go2 and logs odometry.
 
-**3. The WebSocket layer** — `websocket/server.py`, `websocket/protocol.py`, `websocket/send_queue.py`. Everything about talking to a client: the `websockets` accept loop, the asyncio-versus-module-thread boundary, typed encode/decode with no coordinate math, and latest-wins coalescing so a slow headset cannot stall the robot. Clock sync is part of the `hello_request` / `hello` handshake. Runnable with `wscat`, no Lens needed.
+**3. The WebSocket layer** — `websocket/server.py`, `websocket/protocol.py`, `websocket/send_queue.py`. Everything about talking to a client: the `websockets` accept loop, the asyncio-versus-module-thread boundary, typed encode/decode with no coordinate math, and latest-wins coalescing so a slow headset cannot stall the robot. Clock sync is part of the `hello_request` / `hello` handshake. Runnable with `wscat`, no client needed.
 
 **4. Robot state out** — `robot/state_publisher.py`, `robot/odometry_correction.py`, `sensors/lidar_filter.py`, `sensors/lidar_settings.py`, `robot/profiles/profile.py`, and `robot/profiles/unitree_go2.py`. Reactive subscription patterns, rate limiting, and the binary LiDAR frame: height band, subsample, pack. `odometry_correction.py` is the single owner of applying the odometry scale constant — functions taking the factor as a plain float, correcting horizontal position on `pose` and `nav_goal` and nothing else. `sensors/lidar_filter.py` is the one consumer that must take the *unscaled* robot position, since its cloud is unscaled.
 
@@ -729,15 +731,15 @@ Group 6 also wires these files through `module.py`, `robot/profiles/profile.py`,
 integration tests. Fiducial marker is implemented before VPS because it has no account
 or network dependency; that is implementation order, not runtime priority.
 
-### Future client (Lens) — not implemented in this phase
+### Future AR client — not implemented in this phase
 
-No Lens files. Recorded here so the later client matches the wire:
+No client files in this package. Recorded here so a later client matches the wire:
 
 - No provider names on the client.
 - `robot_los_required`: wait for distance + look-at LOS gates, then capture `observation_count`.
 - `robot_los_preferred`: wait for those gates until `wait_timeout_s`, then capture `observation_count` anyway (including after timeout).
 - `any_angle`: capture `observation_count` with no robot LOS gates.
-- Batch into one `localization_observations` frame. v1 Lens cadence (`1.5 s` spacing, budget 3) is the practical reference.
+- Batch into one `localization_observations` frame. v1 capture cadence (`1.5 s` spacing, budget 3) is the practical reference.
 - `localization_start_request` is completeness-only.
 - Clear the latch after one batch or disconnect.
 - Do not implement unsolicited `localization_result`. Apply the newest received result.
@@ -829,14 +831,14 @@ The honest caveat: this is not free simplification. Roughly 1,900 lines of it is
 - Scale-corrected `pose` and `nav_goal` alongside an unscaled `lidar` cloud is a deliberate departure from v1, which scales all three together. Whether that split is physically real is unmeasured: walk 10 m on tape and compare odom against two features in the accumulated cloud (see the footnote under Odometry scale). Two spaces: keep the current rule, and write down how `T_odom_map` is composed across them. One space: scale the cloud and the TF translation with pose, like v1. Until that result exists, the overlay looking wrong on hardware is the first thing to revisit.
 - If the two-space split holds, the unscaled robot position is a required input to LiDAR filtering. Passing the published position instead is a silent 25% error at 10 m, not a crash.
 - Goals are resolved once at submit time. A later localization correction does not retarget an in-flight goal; the client can cancel and re-send if it cares.
-- Axis conversion moves to the clients, so each new client platform reimplements it. A wrong conversion is a client bug that looks like an ARModule bug. Mitigate with a reference implementation and a precise `PROTOCOL.md`.
-- The Lens client breaks, and it gains two responsibilities: converting DimOS Z-up coordinates to Lens axes, and applying its localization result to its own scene graph.
+- Axis conversion moves to the clients, so each new client platform reimplements it. A wrong conversion is a client bug that looks like an ARModule bug. Mitigate with a precise `PROTOCOL.md`.
+- Existing clients speaking a prior protocol break. Each new client converts DimOS Z-up coordinates to its own axes and applies its localization result to its own scene graph.
 - Both trees publish `dimos.ar*`, so switching between them means a reinstall. Only v2 is installed from group 1 onward.
 
 ## Group 9 — DimOS agent relay (later)
 
 Not started. After Groups 1–8 and a working `unitree_go2_ar`. Client-side
-steps live in `clients/v2_plan.md` (**Later: DimOS agent relay**).
+steps are outside this package.
 
 User-facing loop is plain text only. No audio on the wire or in `ARModule`.
 
@@ -889,7 +891,6 @@ same change:
 
 - `dimos-ar/dimos/ar/websocket/protocol.py`
 - `dimos-ar/PROTOCOL.md`
-- `clients/core/websocket/protocol.ts`
 
 | Frame | Direction | Body |
 |-------|-----------|------|
@@ -905,16 +906,16 @@ is process-global (broadcast). No client IDs or private routing.
 ### Verification (when implemented)
 
 Relay filters, protocol, capability, blueprint stream wiring without
-starting an LLM, ClientCore frames / disconnect, `draw_geometry`
+starting an LLM, inbound frames / disconnect, `draw_geometry`
 validation, no-client failure.
 
 ## What comes after this phase
 
 Once Group 6's fiducial marker, VPS, Multiset adapter and `OdomMapTransform` paths are
-green on hardware, the Lens client is adapted — including the bidirectional
-DimOS-axis conversion for `localization_observations` camera poses and
-`localization_result` answers, the `hello_request` / `hello` clock exchange,
-and the `CapturePolicy` latch described above — and `dimos-ar/` is deleted.
+green on hardware, AR clients implement bidirectional DimOS-axis conversion for
+`localization_observations` camera poses and `localization_result` answers,
+the `hello_request` / `hello` clock exchange, and capture episodes. Client
+implementation is outside this package.
 
 Group 9 (DimOS agent relay) is separate later work, after the current
 rebuild can run without an agent.
