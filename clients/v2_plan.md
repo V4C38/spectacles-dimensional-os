@@ -2,7 +2,7 @@
 
 This is a learning project. The measure of success is that you understand every
 line and why it exists, not that a demo ships quickly. The architecture below is
-settled. Groups 1–4 (`ClientCore`) are complete. Groups 5–10 are the Spectacles
+settled. Groups 1–4 (`ClientCore`) are complete. Groups 5–10 are the Specs
 host; their file lists are filled in below.
 
 The app does **not** need to run between groups. Groups 1–4 are a library plus
@@ -52,7 +52,7 @@ from localization is the newest `localization_result`.
 Call that module **`ARModule`**, not a bridge and not the WebSocket server.
 The leftover folder name `ARBridge/` stays on disk as inactive reference until
 the group that takes each file deletes the original. Rename happens in that
-group, not as a pass. Groups 5–10 **build a new Spectacles host** that imports
+group, not as a pass. Groups 5–10 **build a new Specs host** that imports
 `ClientCore` and **takes** only Lens/hardware pieces that still have a job.
 They do not morph the v19 tree in place.
 
@@ -68,11 +68,11 @@ They do not morph the v19 tree in place.
 | Connect wizard, HUD, wrist menu | Client (this app only) |
 
 On the wire everything `ARModule` sends is in **`odom`**: right-handed, Z-up,
-metres (ROS / DimOS). Spectacles is left-handed Y-up (X right, Y up, Z
+metres (ROS / DimOS). Specs is left-handed Y-up (X right, Y up, Z
 forward). The client converts on receipt and inverts the conversion on
 anything it sends. Camera poses inside `localization_observations` are in the
 caller's tracking frame, but that frame must itself be right-handed,
-gravity-aligned Z-up, and metric — so Spectacles converts those on the way
+gravity-aligned Z-up, and metric — so Specs converts those on the way
 out too.
 
 `localization_result` is the client's tracking origin in `odom`. Apply the newest one.
@@ -128,9 +128,9 @@ objects use PascalCase, and wire fields retain protocol spelling such as
 | **`ARModule`** | DimOS module (`unitree_go2_ar`). | bridge, WebSocket server, robot process |
 | **`websocket/server.py`** | Accept loop collaborator. | `ARModule` itself |
 | **`ClientCore`** | Headset-agnostic TypeScript: wire protocol, session, client tracking origin, localization capture, control. No Lens APIs. | |
-| **`SpectaclesHost`** | Lens composition root. Constructs dependencies, drives time, routes typed facts, tears down. | bridge, `ARModule`, `ARModuleHost`, `ARBridgeCoordinator` |
-| **Spectacles logic** | Adapters and 3D runtime: transport, device camera, apply poses to scene objects, ground placement as input. | |
-| **Spectacles UX** | Wizard, HUD, wrist / palm, copy, buttons. | |
+| **`DimosARClient`** | Composition root in each AR client (Specs, later WebXR). Constructs dependencies, drives time, routes typed facts, tears down. | bridge, `ARModule`, `ARModuleHost`, `ARBridgeCoordinator`, `SpectaclesHost` |
+| **Specs logic** | Adapters and 3D runtime: transport, device camera, apply poses to scene objects, ground placement as input. | |
+| **Specs UX** | Wizard, HUD, wrist / palm, copy, buttons. | |
 | **`localization_result` / `T_odom_client`** | Client's tracking origin in `odom`. | headset origin, world frame |
 | **fiducial marker** | Printed tag on the robot (`fiducial_marker` provider). | AprilTag (except as the Go2 family), robot marker |
 | **robot** | Scene body from `hello.robot` (`body_bounds_m`, `base_height_m`). | robot marker |
@@ -145,33 +145,31 @@ objects use PascalCase, and wire fields retain protocol spelling such as
 | **`state.nav.state`** | `idle` \| `following_path` \| `resolved`. | `state.nav` as the phase |
 | **outbound / inbound** | Server → client / client → server, as in `PROTOCOL.md`. | flipping those from the headset |
 
-The boundary between Spectacles logic and UX is concrete:
+The boundary between Specs logic and UX is concrete:
 
-- **Spectacles logic is what exists or happens in the tracked room:**
+- **Specs logic is what exists or happens in the tracked room:**
   `localization_observations`, the robot, `nav_goal.path_poses`, `lidar`,
   ground hit, and scene-object transforms.
-- **Spectacles UX is what the wearer reads or presses:** wizard steps, status
+- **Specs UX is what the wearer reads or presses:** wizard steps, status
   copy, buttons, presets, debug text, and wrist / palm presentation.
 
-Presenters that bind portable poses to `SceneObject`s are Spectacles logic,
+Presenters that bind portable poses to `SceneObject`s are Specs logic,
 even when the result is visible. UX may call them, but does not own their
 scene state.
 
 `ClientCore` lives at
 
 ```text
-clients/core/
+clients/specs/Assets/Scripts/DimosARClient/core/
 ```
 
-That directory is the only editable source for portable code. Hosts do not
-hand-copy it. The Lens cannot import TypeScript from outside its project, so
-`clients/specs/Assets/Scripts/core/` is a committed generated mirror of the
-four production packages (`websocket`, `localization`, `navigation`,
-`sensors`). Never edit the mirror. Lens `.meta` files stay in the Specs
-project. [`clients/specs/scripts/sync-client-core.mjs`](specs/scripts/sync-client-core.mjs)
-regenerates it; `--check` fails CI on drift. No symlinks.
+That is the only copy until ClientCore ships as an `.lspkg`. `clients/core/`
+is empty (`.gitkeep`) for that later split. Do not duplicate the packages.
+ClientCore still must not use Lens APIs; it just lives inside the Specs
+project so the Lens can compile it. Lens `.meta` files stay next to the
+`.ts` files. There is no sync script and no generated mirror.
 
-The Specs host is `clients/specs/` (the Lens Studio project; v19 remains on
+The Specs client is `clients/specs/` (the Lens Studio project; v19 remains on
 disk until Groups 5–10 complete). `clients/webxr/` is empty.
 
 Its folders use the same names as `dimos/ar/`, so each client package maps
@@ -193,14 +191,15 @@ Do not create that folder until that work starts.
 Create a folder only when its group lands; do not add empty placeholders.
 Connection facts (`hello`, `state`, `pose`) live in `websocket/` with the
 codec. There is no portable `robot/` package: `hello.robot` and `estop_request`
-stay on the wire types and session/control code. The Spectacles host adds
+stay on the wire types and session/control code. The Specs host adds
 `robot/` in Group 9 for scene presentation only.
 
-Portable tests live with `ClientCore`, not under `clients/specs/Assets/`
-(Lens Studio would compile Vitest into the production Lens):
+Portable tests live with the Specs Vitest project, not under
+`clients/specs/Assets/` (Lens Studio would compile Vitest into the production
+Lens):
 
 ```text
-clients/core/tests/
+clients/specs/Tests/core/
 ├── protocol.test.ts
 ├── session.test.ts
 ├── localization.test.ts
@@ -212,7 +211,7 @@ Host helper tests land under `clients/specs/Tests/unit/` as their source
 lands. `clients/specs/Tests` still holds v19 tests until Group 10 removes
 them. Do not put `*.test.ts` under `clients/specs/Assets/`.
 
-Run portable tests with `cd clients/core && npm test`.
+Run ClientCore and Specs tests with `cd clients/specs/Tests && npm test`.
 
 **The rule that makes it portable:** `ClientCore` must not use Lens
 globals (`vec3`, `quat`, `print`, `getTime`, `BaseScriptComponent`,
@@ -220,8 +219,8 @@ globals (`vec3`, `quat`, `print`, `getTime`, `BaseScriptComponent`,
 (`[x, y, z]`, `[qx, qy, qz, qw]`). Specs converts to `vec3` / `quat` at
 the adapter boundary.
 
-Import direction is one way: host logic and UX import `ClientCore` (on Specs,
-through the generated mirror). `ClientCore` never imports them.
+Import direction is one way: Specs logic and UX import `ClientCore`.
+`ClientCore` never imports them.
 
 Open the Lens from `clients/specs/spectacles-dimensional-os.esproj`, not the
 repo root. Do not edit `.scene` files by hand; use the Lens Studio MCP tools.
@@ -230,7 +229,7 @@ repo root. Do not edit `.scene` files by hand; use the Lens Studio MCP tools.
 
 `ClientCore` depends on small TypeScript interfaces supplied by the host:
 
-| Port | Portable code needs | Spectacles implementation |
+| Port | Portable code needs | Specs implementation |
 |------|---------------------|----------------------------|
 | Transport | Connect/close, send whole text/binary frames, receive them, and report connection events | `InternetModule` WebSocket adapter |
 | Clock | Monotonic `now()` in the `ts_client` clock family | Lens `getTime()` adapter |
@@ -260,9 +259,9 @@ Each mutable concern has one owner:
   `state`, `pose`, `nav_goal`, and `lidar` values.
 - `ClientTrackingOriginStore` owns the newest `localization_result` (`T_odom_client`).
 - `LocalizationCaptureEpisode` owns its active request and captured observations.
-- Spectacles presenters mutate only scene presentation and teardown.
+- Specs presenters mutate only scene presentation and teardown.
 
-`SpectaclesHost` constructs dependencies, drives time, routes typed facts,
+`DimosARClient` constructs dependencies, drives time, routes typed facts,
 and tears down. It does not mirror portable facts. UX reads derived views and
 calls existing command APIs.
 
@@ -279,67 +278,68 @@ It does not store duplicate booleans such as `handshakeReady`,
 - navigation from `state.nav` (`state` / `outcome`)
 
 State transitions produce wire-send effects. The session executes those
-effects through the transport; Spectacles presenters consume derived state
+effects through the transport; Specs presenters consume derived state
 to present or tear down scene. UX does not mirror portable state in a
 second application store.
 
-## Spectacles host layout (after Group 10)
+## Specs host layout (after Group 10)
 
 ```text
 clients/specs/
-├── scripts/
-│   └── sync-client-core.mjs
 ├── Tests/
+│   ├── core/
 │   └── unit/
-│       ├── spectaclesCoordinates.test.ts
-│       └── spectaclesCameraSource.test.ts
+│       ├── specsCoordinates.test.ts
+│       └── specsCameraSource.test.ts
 └── Assets/Scripts/
-    ├── core/                                  # generated; never edit here
-    │   ├── websocket/
-    │   │   ├── arModuleSession.ts
-    │   │   ├── hostPorts.ts
-    │   │   ├── protocol.ts
-    │   │   └── protocolTypes.ts
-    │   ├── localization/
-    │   │   ├── clientTrackingOrigin.ts
-    │   │   ├── clientTrackingTransforms.ts
-    │   │   ├── geometricGate.ts
-    │   │   └── localizationCaptureEpisode.ts
-    │   ├── navigation/
-    │   │   └── navGoalRequest.ts
-    │   └── sensors/
-    │       └── lidarSettingsRequest.ts
-    ├── SpectaclesConfig.ts
-    ├── SpectaclesHost.ts
-    ├── coordinates/
-    │   └── SpectaclesCoordinates.ts
-    ├── websocket/
-    │   ├── SpectaclesClock.ts
-    │   └── SpectaclesWebSocketTransport.ts
-    ├── localization/
-    │   ├── DeviceCameraStream.ts
-    │   └── SpectaclesCameraSource.ts
-    ├── robot/
-    │   └── RobotPresenter.ts
-    ├── navigation/
-    │   ├── GroundPlacement.ts
-    │   ├── LineRenderer.ts
-    │   ├── NavGoalMarker.ts
-    │   ├── NavGoalPresenter.ts
-    │   └── NavigationController.ts
-    ├── sensors/
-    │   ├── LidarPresenter.ts
-    │   └── PointCloudRenderer.ts
-    ├── ux/
-    │   ├── ConnectWizard.ts
-    │   ├── ConnectWizardView.ts
-    │   ├── PalmGestureGate.ts
-    │   ├── RuntimeHudView.ts
-    │   ├── UIKit.ts
-    │   ├── UILogger.ts
-    │   └── WristMenuController.ts
-    └── utilities/
-        └── AnimationUtilities.ts              # create only if retained UX uses it
+    ├── ARBridge/                              # v19 reference until Group 10 deletes it
+    ├── App/                                   # v19 reference until Group 10 deletes it
+    └── DimosARClient/
+        ├── DimosARClient.ts                   # composition root
+        ├── SpecsCoordinates.ts
+        ├── SpecsConfig.ts
+        ├── core/                              # ClientCore until .lspkg split
+        │   ├── websocket/
+        │   │   ├── arModuleSession.ts
+        │   │   ├── hostPorts.ts
+        │   │   ├── protocol.ts
+        │   │   └── protocolTypes.ts
+        │   ├── localization/
+        │   │   ├── clientTrackingOrigin.ts
+        │   │   ├── clientTrackingTransforms.ts
+        │   │   ├── geometricGate.ts
+        │   │   └── localizationCaptureEpisode.ts
+        │   ├── navigation/
+        │   │   └── navGoalRequest.ts
+        │   └── sensors/
+        │       └── lidarSettingsRequest.ts
+        ├── websocket/
+        │   ├── SpecsClock.ts
+        │   └── SpecsWebSocketTransport.ts
+        ├── localization/
+        │   ├── DeviceCameraStream.ts
+        │   └── SpecsCameraSource.ts
+        ├── robot/
+        │   └── RobotPresenter.ts
+        ├── navigation/
+        │   ├── GroundPlacement.ts
+        │   ├── LineRenderer.ts
+        │   ├── NavGoalMarker.ts
+        │   ├── NavGoalPresenter.ts
+        │   └── NavigationController.ts
+        ├── sensors/
+        │   ├── LidarPresenter.ts
+        │   └── PointCloudRenderer.ts
+        ├── ux/
+        │   ├── ConnectWizard.ts
+        │   ├── ConnectWizardView.ts
+        │   ├── PalmGestureGate.ts
+        │   ├── RuntimeHudView.ts
+        │   ├── UIKit.ts
+        │   ├── UILogger.ts
+        │   └── WristMenuController.ts
+        └── utilities/
+            └── AnimationUtilities.ts          # create only if retained UX uses it
 ```
 
 Platform scene objects remain `Camera Object`, `Lighting`,
@@ -373,9 +373,9 @@ axis table, not by negating a number at the call site.
 No sockets. No scene. Tests against fixtures and `PROTOCOL.md`.
 
 ```text
-clients/core/websocket/protocolTypes.ts
-clients/core/websocket/protocol.ts
-clients/core/tests/protocol.test.ts
+clients/specs/Assets/Scripts/DimosARClient/core/websocket/protocolTypes.ts
+clients/specs/Assets/Scripts/DimosARClient/core/websocket/protocol.ts
+clients/specs/Tests/core/protocol.test.ts
 ```
 
 Group 1 is complete only when all nine outbound and eight inbound message
@@ -446,16 +446,16 @@ No camera. Fixtures are enough. `state.nav.state` is `idle` |
 a `localization_result`.
 
 ```text
-clients/core/websocket/hostPorts.ts
-clients/core/websocket/arModuleSession.ts
-clients/core/localization/clientTrackingOrigin.ts
-clients/core/localization/clientTrackingTransforms.ts
-clients/core/tests/session.test.ts
-clients/core/tests/localization.test.ts
+clients/specs/Assets/Scripts/DimosARClient/core/websocket/hostPorts.ts
+clients/specs/Assets/Scripts/DimosARClient/core/websocket/arModuleSession.ts
+clients/specs/Assets/Scripts/DimosARClient/core/localization/clientTrackingOrigin.ts
+clients/specs/Assets/Scripts/DimosARClient/core/localization/clientTrackingTransforms.ts
+clients/specs/Tests/core/session.test.ts
+clients/specs/Tests/core/localization.test.ts
 ```
 
 Hello timeout and reconnect delay are required session configuration. The
-session does not pick Spectacles numbers.
+session does not pick Specs numbers.
 
 Group 2 is complete only when the session recognizes every outbound v2
 message, `hello.time_sync.ts_client` must echo the `hello_request` that opened
@@ -497,7 +497,7 @@ gate for real.
 The tracking port supplies the current camera optical frame for the
 line-of-sight gate. The capture port supplies one JPEG, its exposure
 timestamp, the camera optical frame at that exposure, and intrinsics. This
-group does not import Spectacles `DeviceCamera` or tracking globals. Spacing
+group does not import Lens `DeviceCamera` or tracking globals. Spacing
 between frames is required capture-geometry configuration like the gate
 values, not a wire field; the old practical cadence (~1.5 s) is the starting
 number.
@@ -529,14 +529,14 @@ No standing capture session, no ACK/`seq`, no motion-triggered recapture, no
 separate `camera_info` message.
 
 ```text
-clients/core/websocket/hostPorts.ts
-clients/core/localization/geometricGate.ts
-clients/core/localization/localizationCaptureEpisode.ts
-clients/core/tests/localization.test.ts
+clients/specs/Assets/Scripts/DimosARClient/core/websocket/hostPorts.ts
+clients/specs/Assets/Scripts/DimosARClient/core/localization/geometricGate.ts
+clients/specs/Assets/Scripts/DimosARClient/core/localization/localizationCaptureEpisode.ts
+clients/specs/Tests/core/localization.test.ts
 ```
 
 Capture geometry and episode timeouts are required construction inputs. The
-episode does not pick hidden defaults. Spectacles starting numbers (v19 Lens
+episode does not pick hidden defaults. Specs starting numbers (v19 Lens
 cadence plus `PROTOCOL.md`):
 
 | Field | Value | Role |
@@ -584,12 +584,12 @@ collide with `ARModuleSession`'s cached `nav_goal` / `lidar`. Arguments are alre
 takes `Vec3` + `Quat`, not yaw. `requestState` has no capability key.
 
 ```text
-clients/core/websocket/arModuleSession.ts
-clients/core/navigation/navGoalRequest.ts
-clients/core/sensors/lidarSettingsRequest.ts
-clients/core/tests/navigation.test.ts
-clients/core/tests/sensors.test.ts
-clients/core/tests/session.test.ts
+clients/specs/Assets/Scripts/DimosARClient/core/websocket/arModuleSession.ts
+clients/specs/Assets/Scripts/DimosARClient/core/navigation/navGoalRequest.ts
+clients/specs/Assets/Scripts/DimosARClient/core/sensors/lidarSettingsRequest.ts
+clients/specs/Tests/core/navigation.test.ts
+clients/specs/Tests/core/sensors.test.ts
+clients/specs/Tests/core/session.test.ts
 ```
 
 Group 4 is complete only when all seven inbound types have a send path
@@ -598,7 +598,7 @@ and ready checks throw; lidar band and pose go through the existing encode
 validators; no host axis table and no `compose` import; no mirrored
 nav/lidar UX state. Tests cover happy send (exact JSON text), not-ready,
 unavailable capability, and one invalid-number case each.
-`SpectaclesCoordinates.ts` is absent until Group 6.
+`SpecsCoordinates.ts` is absent until Group 6.
 
 ### 5. Integration boundary and scaffold
 
@@ -606,25 +606,23 @@ The Specs host starts here. Not coordinates, not a socket, not camera, not
 the room.
 
 Portable `CameraCaptureSource.capture()` currently returns a synchronous
-object. Working Spectacles capture is asynchronous:
+object. Working Specs capture is asynchronous:
 `DeviceCameraStream.requestNextFrame()` then `Base64.encodeTextureAsync`.
 Change the port to an explicit lifecycle (`start`, async `capture`, `stop`)
 so Group 8 can keep that sequence. Update `LocalizationCaptureEpisode` to
 await one in-flight capture, ignore stale completions after replacement or
 disconnect, and stop hardware on send, failure, reset, and disposal. Extend
-`clients/core/tests/localization.test.ts` with deferred Promise, rejection,
+`clients/specs/Tests/core/localization.test.ts` with deferred Promise, rejection,
 replacement, disconnect, and teardown cases.
 
-Add [`clients/specs/scripts/sync-client-core.mjs`](specs/scripts/sync-client-core.mjs),
-generate the four production package mirrors under
-`clients/specs/Assets/Scripts/core/`, and add `--check` to
-[`launcher/scripts/run-ci.sh`](../launcher/scripts/run-ci.sh) and
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml). Never edit the
-mirror by hand.
+Keep ClientCore as the only copy under
+[`clients/specs/Assets/Scripts/DimosARClient/core/`](specs/Assets/Scripts/DimosARClient/core/).
+`clients/core/` stays empty until the later `.lspkg` split. Do not add a
+sync script or a second tree.
 
-Create [`clients/specs/Assets/Scripts/SpectaclesHost.ts`](specs/Assets/Scripts/SpectaclesHost.ts)
+Create [`clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts`](specs/Assets/Scripts/DimosARClient/DimosARClient.ts)
 as a shell `BaseScriptComponent` with no presenter slots, socket, store, or
-tick. Use Lens MCP to create the `SpectaclesHost` scene object and attach the
+tick. Use Lens MCP to create the `DimosARClient` scene object and attach the
 script. Do not edit `.scene` files by hand.
 
 Use Lens MCP to disable the v19 `ARBridgeCoordinator` scene object and the
@@ -636,19 +634,15 @@ connection and camera lifecycle.
 does not rewrite them.
 
 ```text
-clients/core/websocket/hostPorts.ts
-clients/core/localization/localizationCaptureEpisode.ts
-clients/core/tests/localization.test.ts
-clients/specs/scripts/sync-client-core.mjs
-clients/specs/Assets/Scripts/core/
-clients/specs/Assets/Scripts/SpectaclesHost.ts
-launcher/scripts/run-ci.sh
-.github/workflows/ci.yml
+clients/specs/Assets/Scripts/DimosARClient/core/websocket/hostPorts.ts
+clients/specs/Assets/Scripts/DimosARClient/core/localization/localizationCaptureEpisode.ts
+clients/specs/Tests/core/localization.test.ts
+clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts
 ```
 
 Group 5 is complete only when the capture port is async with start/stop,
-episode tests cover in-flight Promise cases, the mirror `--check` is in CI,
-`SpectaclesHost` exists as a shell, and v19 connection/camera owners are
+episode tests cover in-flight Promise cases, ClientCore lives only under
+`Assets/Scripts/DimosARClient/core/`, `DimosARClient` exists as a shell, and v19 connection/camera owners are
 disabled. This group creates no coordinate helper, room placeholders, socket,
 or camera adapter.
 
@@ -656,28 +650,28 @@ or camera adapter.
 
 This headset's axis table. Not the session and not the scene.
 
-Add [`clients/specs/Assets/Scripts/coordinates/SpectaclesCoordinates.ts`](specs/Assets/Scripts/coordinates/SpectaclesCoordinates.ts)
-with one `SPECTACLES_BASIS` and named conversions for points, quaternions,
+Add [`clients/specs/Assets/Scripts/DimosARClient/SpecsCoordinates.ts`](specs/Assets/Scripts/DimosARClient/SpecsCoordinates.ts)
+with one `SPECS_BASIS` and named conversions for points, quaternions,
 poses, and yaw-poses between the right-handed metric caller tracking frame
-and left-handed centimetre Spectacles space.
+and left-handed centimetre Specs space.
 
-Inbound `odom` uses `clientTrackingTransforms` then `SpectaclesCoordinates`.
-Outbound ground placement uses the inverse Spectacles basis then
+Inbound `odom` uses `clientTrackingTransforms` then `SpecsCoordinates`.
+Outbound ground placement uses the inverse Specs basis then
 `clientTrackingToOdomPose`. Callers never negate a yaw or swap axes at the
 call site.
 
-This file is the Spectacles implementation of the generic left-handed Y-up
+This file is the Specs implementation of the generic left-handed Y-up
 example in [`dimos-ar/PROTOCOL.md`](../dimos-ar/PROTOCOL.md). Do not write
 the helper's name, this host, or any other client into that document. Do not
 change the wire contract.
 
 Test both directions and round trips in
-[`clients/specs/Tests/unit/spectaclesCoordinates.test.ts`](specs/Tests/unit/spectaclesCoordinates.test.ts),
+[`clients/specs/Tests/unit/specsCoordinates.test.ts`](specs/Tests/unit/specsCoordinates.test.ts),
 including nontrivial rotations and yaw.
 
 ```text
-clients/specs/Assets/Scripts/coordinates/SpectaclesCoordinates.ts
-clients/specs/Tests/unit/spectaclesCoordinates.test.ts
+clients/specs/Assets/Scripts/DimosARClient/SpecsCoordinates.ts
+clients/specs/Tests/unit/specsCoordinates.test.ts
 ```
 
 Group 6 is complete only when both directions and round trips are tested,
@@ -686,15 +680,15 @@ objects. A WebXR host brings its own table against the same `ClientCore`.
 
 ### 7. Connection runtime
 
-How Spectacles talks to `ARModule`. No camera and no room drawing.
+How the Specs Lens talks to `ARModule`. No camera and no room drawing.
 
-Add explicit Spectacles values in `SpectaclesConfig.ts` for `helloTimeoutS`,
+Add explicit Specs values in `SpecsConfig.ts` for `helloTimeoutS`,
 `reconnectDelayS`, and endpoint port **8787**. Capture geometry and episode
 timeouts land with Group 8; they are the Group 3 numbers, not a second table.
-`SpectaclesHost` owns the required server host input. `ARModuleSession` owns
+`DimosARClient` owns the required server host input. `ARModuleSession` owns
 reconnect policy. The host does not pick a hidden default host or port.
 
-Take confirmed socket mechanics from v19 into `SpectaclesWebSocketTransport`:
+Take confirmed socket mechanics from v19 into `SpecsWebSocketTransport`:
 whole-frame send/receive, Blob-to-`Uint8Array`, connect watchdog, and safe
 retirement of a connecting native socket. Leave behind v19 text framing,
 ping/pong clock sync, retry policy, IP persistence, and bridge names.
@@ -708,10 +702,10 @@ Bind Lens lifecycle: start the session once, call `session.tick()` on
 `UpdateEvent`, stop it on teardown, and release every subscription.
 
 ```text
-clients/specs/Assets/Scripts/SpectaclesConfig.ts
-clients/specs/Assets/Scripts/websocket/SpectaclesClock.ts
-clients/specs/Assets/Scripts/websocket/SpectaclesWebSocketTransport.ts
-clients/specs/Assets/Scripts/SpectaclesHost.ts
+clients/specs/Assets/Scripts/DimosARClient/SpecsConfig.ts
+clients/specs/Assets/Scripts/DimosARClient/websocket/SpecsClock.ts
+clients/specs/Assets/Scripts/DimosARClient/websocket/SpecsWebSocketTransport.ts
+clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts
 ```
 
 **Take:** v19 `InternetModule` WebSocket connect, Blob binary receive, connect
@@ -730,7 +724,7 @@ Keep the working v19 sequence: `DeviceCameraStream.requestNextFrame()` → pose
 lookup at `timestampSeconds` → camera optical extrinsics/intrinsics →
 `Base64.encodeTextureAsync` JPEG.
 
-Put that sequence behind one `SpectaclesCameraSource` that implements both
+Put that sequence behind one `SpecsCameraSource` that implements both
 the tracking and capture ports. It owns pose history and delegates stream
 lifecycle to taken `DeviceCameraStream`. No second camera controller or
 capture state store.
@@ -739,17 +733,17 @@ Construct `LocalizationCaptureEpisode` with the same
 `ClientTrackingOriginStore` used by the session. Tick camera pose sampling
 before `episode.tick()`, poll `episode.view()` for later UX, and call
 `episode.dispose()` during host teardown. Capture geometry and episode
-timeouts come from `SpectaclesConfig.ts` (the Group 3 numbers).
+timeouts come from `SpecsConfig.ts` (the Group 3 numbers).
 
 An observation contains exposure `ts_capture`, optical pose in the
 right-handed metric tracking frame, scaled intrinsics, and JPEG bytes. Axis
 conversion happens in this adapter before the values enter `ClientCore`.
 
 ```text
-clients/specs/Assets/Scripts/localization/DeviceCameraStream.ts
-clients/specs/Assets/Scripts/localization/SpectaclesCameraSource.ts
-clients/specs/Assets/Scripts/SpectaclesHost.ts
-clients/specs/Tests/unit/spectaclesCameraSource.test.ts
+clients/specs/Assets/Scripts/DimosARClient/localization/DeviceCameraStream.ts
+clients/specs/Assets/Scripts/DimosARClient/localization/SpecsCameraSource.ts
+clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts
+clients/specs/Tests/unit/specsCameraSource.test.ts
 ```
 
 **Take:** `DeviceCameraStream`, JPEG encode path. **Leave:** ACK/`seq`,
@@ -774,7 +768,7 @@ path/spawn parent; `NavGoalMarker.prefab` is instantiated at runtime.
 `GroundMarker` is a child of `Robot`. `Lidar` is never parented or anchored
 to `Robot`.
 
-`SpectaclesHost` routes typed session facts to presenters and uses session
+`DimosARClient` routes typed session facts to presenters and uses session
 view changes for hide/teardown. Presenters never cache portable pose,
 capability, navigation, or tracking-origin state. Hide all room content
 whenever `hasTrackingOrigin` is false.
@@ -794,20 +788,20 @@ Split v19 navigation mechanics into `GroundPlacement` for world-mesh input,
 `NavGoalPresenter` for received `nav_goal` / `path_poses`. There is no host
 navigation execution store.
 
-Route a ground hit through Spectacles → caller tracking → `odom` before
+Route a ground hit through Specs → caller tracking → `odom` before
 `requestNavGoal`. Route received robot, lidar, goal, and path data through
-`odom` → caller tracking → Spectacles.
+`odom` → caller tracking → Specs.
 
 ```text
-clients/specs/Assets/Scripts/robot/RobotPresenter.ts
-clients/specs/Assets/Scripts/sensors/LidarPresenter.ts
-clients/specs/Assets/Scripts/sensors/PointCloudRenderer.ts
-clients/specs/Assets/Scripts/navigation/GroundPlacement.ts
-clients/specs/Assets/Scripts/navigation/LineRenderer.ts
-clients/specs/Assets/Scripts/navigation/NavGoalMarker.ts
-clients/specs/Assets/Scripts/navigation/NavGoalPresenter.ts
-clients/specs/Assets/Scripts/navigation/NavigationController.ts
-clients/specs/Assets/Scripts/SpectaclesHost.ts
+clients/specs/Assets/Scripts/DimosARClient/robot/RobotPresenter.ts
+clients/specs/Assets/Scripts/DimosARClient/sensors/LidarPresenter.ts
+clients/specs/Assets/Scripts/DimosARClient/sensors/PointCloudRenderer.ts
+clients/specs/Assets/Scripts/DimosARClient/navigation/GroundPlacement.ts
+clients/specs/Assets/Scripts/DimosARClient/navigation/LineRenderer.ts
+clients/specs/Assets/Scripts/DimosARClient/navigation/NavGoalMarker.ts
+clients/specs/Assets/Scripts/DimosARClient/navigation/NavGoalPresenter.ts
+clients/specs/Assets/Scripts/DimosARClient/navigation/NavigationController.ts
+clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts
 ```
 
 **Take:** MeshBuilder / material from `PointCloudRenderer`, world-mesh hit
@@ -843,7 +837,7 @@ the connection drops `T_odom_client`, so runtime content hides until the next
 `localization_result` lands. The same capture presentation can appear again
 during runtime when a new episode is requested.
 
-HUD and debug pose copy consume the Group 6 `SpectaclesCoordinates` helper;
+HUD and debug pose copy consume the Group 6 `SpecsCoordinates` helper;
 do not invent a second basis.
 
 Then delete the inactive v19 `ARBridge/` and `App/` scripts, obsolete scene
@@ -856,14 +850,14 @@ STT / TTS and `agent_skill` presentation wait for the later DimOS agent
 relay.
 
 ```text
-clients/specs/Assets/Scripts/ux/ConnectWizard.ts
-clients/specs/Assets/Scripts/ux/ConnectWizardView.ts
-clients/specs/Assets/Scripts/ux/PalmGestureGate.ts
-clients/specs/Assets/Scripts/ux/RuntimeHudView.ts
-clients/specs/Assets/Scripts/ux/UIKit.ts
-clients/specs/Assets/Scripts/ux/UILogger.ts
-clients/specs/Assets/Scripts/ux/WristMenuController.ts
-clients/specs/Assets/Scripts/utilities/AnimationUtilities.ts
+clients/specs/Assets/Scripts/DimosARClient/ux/ConnectWizard.ts
+clients/specs/Assets/Scripts/DimosARClient/ux/ConnectWizardView.ts
+clients/specs/Assets/Scripts/DimosARClient/ux/PalmGestureGate.ts
+clients/specs/Assets/Scripts/DimosARClient/ux/RuntimeHudView.ts
+clients/specs/Assets/Scripts/DimosARClient/ux/UIKit.ts
+clients/specs/Assets/Scripts/DimosARClient/ux/UILogger.ts
+clients/specs/Assets/Scripts/DimosARClient/ux/WristMenuController.ts
+clients/specs/Assets/Scripts/DimosARClient/utilities/AnimationUtilities.ts
 ```
 
 Create `AnimationUtilities.ts` only if retained UX uses it.
@@ -893,7 +887,7 @@ them:
 - ACK-gated `camera_frame` streaming and a standing `capture_policy` message
 - Joystick / teleop
 
-Existing v19 files are reference for Spectacles camera, connect, placement,
+Existing v19 files are reference for Specs camera, connect, placement,
 and drawing — not a directory map to copy.
 
 ## Later: DimOS agent relay
@@ -916,7 +910,7 @@ User-facing loop is plain text. No audio on the wire.
 
 When this work starts, the 14-type contract becomes 17. Update in the same
 change: `dimos-ar/dimos/ar/websocket/protocol.py`, `dimos-ar/PROTOCOL.md`,
-`clients/core/websocket/protocol.ts`.
+`clients/specs/Assets/Scripts/DimosARClient/core/websocket/protocol.ts`.
 
 | Frame | Direction | Body |
 |-------|-----------|------|
@@ -932,9 +926,9 @@ schemas are docs for hosts.
 ### ClientCore
 
 ```text
-clients/core/agent/humanInput.ts
-clients/core/agent/drawGeometry.ts
-clients/core/tests/agent.test.ts
+clients/specs/Assets/Scripts/DimosARClient/core/agent/humanInput.ts
+clients/specs/Assets/Scripts/DimosARClient/core/agent/drawGeometry.ts
+clients/specs/Tests/core/agent.test.ts
 ```
 
 `humanInput.ts` is a sibling of nav/sensors: `requestHumanInput` through the
@@ -945,7 +939,7 @@ Clear on disconnect.
 Host decoder: ignore unknown `name`; fail closed on a known name with
 invalid args.
 
-### Spectacles host (after Group 10)
+### Specs host (after Group 10)
 
 Do not wire this into the v19 Lens. When the v2 host exists:
 
@@ -957,12 +951,13 @@ Do not wire this into the v19 Lens. When the v2 host exists:
   activity store, no client-side tool execution.
 - STT and TTS never leave the host.
 
-v19 `AgentSpeechController` / `AsrModule` is the Spectacles STT reference,
+v19 `AgentSpeechController` / `AsrModule` is the Specs STT reference,
 not a protocol to keep.
 
 ## Tests and CI
 
-`clients/core` is its own Vitest project (`npm test` there).
+ClientCore tests live in `clients/specs/Tests/core/` and run with
+`cd clients/specs/Tests && npm test`.
 Groups 1–4 are fully unit-tested without Lens Studio. Cover malformed
 input and invalid lifecycle transitions as well as successful fixtures. Use
 fake ports to test handshake, reconnect, tracking-origin replacement,
@@ -970,13 +965,12 @@ tracking origin cleared on disconnect, repeated capture episodes, the
 result-deadline retry loop, and emitted wire effects.
 
 Groups 5–10 keep Vitest for portable helpers and pure host helpers
-(`SpectaclesCoordinates`, camera source). Scene behaviour is checked in the
-editor / on device. Group 5 adds generated-mirror `--check` to
-`./launcher/scripts/run-ci.sh` and `.github/workflows/ci.yml`.
+(`SpecsCoordinates`, camera source). Scene behaviour is checked in the
+editor / on device.
 `clients/specs/Tests` holds remaining v19 tests until Group 10 removes them.
 
 `./launcher/scripts/run-ci.sh` from the repo root remains the pre-commit
-gate (DimOS tests + `ClientCore` Vitest + Lens Vitest). Run it outside
+gate (DimOS tests + Specs Vitest, including ClientCore). Run it outside
 the Cursor sandbox.
 
 `dimos-ar/PROTOCOL.md` is the existing contract; implementing it does not
@@ -985,23 +979,23 @@ same change:
 
 - `dimos-ar/dimos/ar/websocket/protocol.py`
 - `dimos-ar/PROTOCOL.md`
-- `clients/core/websocket/protocol.ts`
+- `clients/specs/Assets/Scripts/DimosARClient/core/websocket/protocol.ts`
 
 Keep `PROTOCOL.md` on the `ARModule` package paths. It stays client-agnostic:
 the axis-conversion matrix is a generic left-handed Y-up example, not a pointer
-at `SpectaclesCoordinates`. Group 6 implements that example on this host. Keep
+at `SpecsCoordinates`. Group 6 implements that example on this host. Keep
 examples on the actual wire fields (`localization_result.position` and
 `.orientation`, not a nonexistent `.pose`) and describe `"LOCA"` offsets from
 one origin consistently.
 
 `.cursorrules` and `CONTRIBUTING.md` point protocol-sync at
-`clients/core/websocket/protocol.ts`. Delete the
+`clients/specs/Assets/Scripts/DimosARClient/core/websocket/protocol.ts`. Delete the
 v19 `ARBridge/Network/Protocol.ts` module only when its imports have migrated
 (Group 10).
 
 ## Outcome
 
-After Group 10 the Spectacles Lens speaks v2, owns `T_odom_client`, captures
+After Group 10 the Specs Lens speaks v2, owns `T_odom_client`, captures
 only when asked, draws odom content in the room, and presents derived UX.
 `ClientCore` is the reference core for a later WebXR client. Production
 TypeScript should land smaller than today's ~17k LOC because the session

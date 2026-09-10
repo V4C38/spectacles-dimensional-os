@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { ClientTrackingOriginStore } from "../localization/clientTrackingOrigin";
-import { requestNavGoal } from "../navigation/navGoalRequest";
-import type { ClientClock, WebSocketTransport } from "../websocket/hostPorts";
-import { ARModuleSession } from "../websocket/arModuleSession";
-import type { Capabilities, Hello, State } from "../websocket/protocolTypes";
+import { ClientTrackingOriginStore } from "../../Assets/Scripts/DimosARClient/core/localization/clientTrackingOrigin";
+import { requestLidarSettings } from "../../Assets/Scripts/DimosARClient/core/sensors/lidarSettingsRequest";
+import type { ClientClock, WebSocketTransport } from "../../Assets/Scripts/DimosARClient/core/websocket/hostPorts";
+import { ARModuleSession } from "../../Assets/Scripts/DimosARClient/core/websocket/arModuleSession";
+import type {
+  Capabilities,
+  Hello,
+  LidarSettings,
+  State,
+} from "../../Assets/Scripts/DimosARClient/core/websocket/protocolTypes";
 
 class FakeClock implements ClientClock {
   nowS = 0;
@@ -75,45 +80,51 @@ function handshake(
   );
 }
 
-const GOAL = {
-  position: [1, 2, 0] as [number, number, number],
-  orientation: [0, 0, 0, 1] as [number, number, number, number],
+const SETTINGS: LidarSettings = {
+  enabled: true,
+  min_height_m: 0.1,
+  max_height_m: 1.5,
+  max_range_m: 5,
 };
 
-describe("requestNavGoal", () => {
-  it("sends nav_goal_request JSON including the trailing newline", () => {
+describe("requestLidarSettings", () => {
+  it("sends lidar_settings_request JSON including the trailing newline", () => {
     const { session, transport, clock } = makeSession();
     handshake(session, clock);
-    requestNavGoal(session, GOAL);
+    requestLidarSettings(session, SETTINGS);
     expect(transport.texts[transport.texts.length - 1]).toBe(
-      '{"type":"nav_goal_request","position":[1,2,0],"orientation":[0,0,0,1]}\n',
+      '{"type":"lidar_settings_request","enabled":true,"min_height_m":0.1,"max_height_m":1.5,"max_range_m":5}\n',
     );
   });
 
   it("throws not-ready before capability", () => {
     const { session } = makeSession();
-    expect(() => requestNavGoal(session, GOAL)).toThrow("send requires a ready session");
+    expect(() => requestLidarSettings(session, SETTINGS)).toThrow(
+      "send requires a ready session",
+    );
   });
 
-  it("throws when hello.capabilities.navigation is unavailable", () => {
+  it("throws when hello.capabilities.lidar is unavailable", () => {
     const { session, transport, clock } = makeSession();
     handshake(session, clock, {
-      navigation: { available: false, reason: "navigation not supported" },
+      lidar: { available: false, reason: "lidar not supported" },
     });
-    expect(() => requestNavGoal(session, GOAL)).toThrow(
-      "hello.capabilities.navigation is not available",
+    expect(() => requestLidarSettings(session, SETTINGS)).toThrow(
+      "hello.capabilities.lidar is not available",
     );
     expect(transport.texts).toHaveLength(1);
   });
 
-  it("rejects a non-finite pose through encode", () => {
+  it("rejects an inverted band through encode", () => {
     const { session, clock } = makeSession();
     handshake(session, clock);
     expect(() =>
-      requestNavGoal(session, {
-        position: [1, Number.NaN, 0],
-        orientation: [0, 0, 0, 1],
+      requestLidarSettings(session, {
+        enabled: true,
+        min_height_m: 2,
+        max_height_m: 1,
+        max_range_m: 5,
       }),
-    ).toThrow(/position\[1]/);
+    ).toThrow(/min_height_m/);
   });
 });

@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { ClientTrackingOriginStore } from "../localization/clientTrackingOrigin";
-import { LIDAR_FOURCC } from "../websocket/protocol";
-import type { ClientClock, WebSocketTransport } from "../websocket/hostPorts";
-import { ARModuleSession } from "../websocket/arModuleSession";
+import { ClientTrackingOriginStore } from "../../Assets/Scripts/DimosARClient/core/localization/clientTrackingOrigin";
+import { LIDAR_FOURCC } from "../../Assets/Scripts/DimosARClient/core/websocket/protocol";
+import type { ClientClock, WebSocketTransport } from "../../Assets/Scripts/DimosARClient/core/websocket/hostPorts";
+import { ARModuleSession } from "../../Assets/Scripts/DimosARClient/core/websocket/arModuleSession";
 import type {
   Capabilities,
   Hello,
   LocalizationObservationsRequest,
   State,
-} from "../websocket/protocolTypes";
+} from "../../Assets/Scripts/DimosARClient/core/websocket/protocolTypes";
 
 class FakeClock implements ClientClock {
   nowS = 0;

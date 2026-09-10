@@ -6,6 +6,7 @@
     - !<own> 5aa0f98b-e799-448c-a2dc-cae5d04fa2a4
     - !<own> 87343065-62b9-445a-874d-76d42ea6c7e2
     - !<own> 9d5912d5-686e-4878-a8ba-331574261592
+    - !<own> 46db0d44-51b3-4fb8-ae1c-6f354b73dd76
   layers: !<Layers/267ee9a7-aff2-4f9d-9a49-f71214747d03>
     userLayers:
       - |
@@ -2538,6 +2539,22 @@
   BlendNormals: false
   BlendShapes:
     {}
+- !<ScriptComponent/43254cd1-512e-4063-b9b0-e802899fa942>
+  PrefabRemaps:
+    []
+  Name: DimosARClient
+  Enabled: true
+  ScriptAsset: !<reference> ca057afe-aece-4900-84a7-7e1013a29d2b
+  ScriptInputsDefault:
+    {}
+  ScriptTypesDefault:
+    {}
+  ScriptInputs:
+    "":
+      {}
+  ScriptTypes:
+    "":
+      {}
 - !<SceneObject/432f2f38-6b7f-4d76-b7ca-14650570ae8e>
   PrefabRemaps:
     []
@@ -2826,6 +2843,21 @@
     CapitalizationOverride: None
   DepthTest: false
   TwoSided: false
+- !<SceneObject/46db0d44-51b3-4fb8-ae1c-6f354b73dd76>
+  PrefabRemaps:
+    []
+  Name: DimosARClient
+  Enabled: true
+  Layers: 1
+  LocalTransform: !<TransformEntity>
+    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
+    HasSegmentScaleCompensation: false
+  Children:
+    []
+  Components:
+    - !<own> 43254cd1-512e-4063-b9b0-e802899fa942
 - !<SceneObject/4a8fba8e-5e79-4c17-9b90-eecc02c7b7dc>
   PrefabRemaps:
     []
@@ -5452,7 +5484,7 @@
   PrefabRemaps:
     []
   Name: ARBridgeCoordinator
-  Enabled: true
+  Enabled: false
   Layers: 1
   LocalTransform: !<TransformEntity>
     Position: {x: 0.000000, y: 0.000000, z: 0.000000}
@@ -5629,7 +5661,7 @@
   PrefabRemaps:
     []
   Name: FrameCaptureController
-  Enabled: true
+  Enabled: false
   ScriptAsset: !<reference> 51d925e5-2ee4-4b1c-a392-f28609fd4fc0
   ScriptInputsDefault:
     {}

@@ -212,20 +212,20 @@ flowchart LR
   Module --> Rest
 ```
 
-**Spectacles host**
+**Specs client**
 
-Portable [`ClientCore`](clients/core/) speaks [`PROTOCOL.md`](dimos-ar/PROTOCOL.md). The Lens composition root is **`SpectaclesHost`**: it constructs that core, drives time, and routes typed facts to room presenters and derived UX. Axis conversion stays in the host (`SpectaclesCoordinates`). The Lens on disk is still the v19 project until Groups 5–10 of [`clients/v2_plan.md`](clients/v2_plan.md) land.
+Portable [`ClientCore`](clients/specs/Assets/Scripts/DimosARClient/core/) speaks [`PROTOCOL.md`](dimos-ar/PROTOCOL.md). The composition root is **`DimosARClient`**: it constructs that core, drives time, and routes typed facts to room presenters and derived UX. Axis conversion stays in the Specs client (`SpecsCoordinates`). The Lens on disk is still the v19 project until Groups 5–10 of [`clients/v2_plan.md`](clients/v2_plan.md) land. `clients/core/` is empty until ClientCore ships as an `.lspkg`.
 
 ```mermaid
 flowchart LR
   Core["ClientCore<br>session · T_odom_client · capture"]
-  Host["SpectaclesHost"]
+  Client["DimosARClient"]
   Room["Robot · Lidar · NavGoal"]
   UX["Connect wizard · HUD"]
 
-  Host --> Core
-  Host --> Room
-  Host --> UX
+  Client --> Core
+  Client --> Room
+  Client --> UX
 ```
 
 </details>
@@ -234,7 +234,7 @@ flowchart LR
 
 ## Augmented Reality Interface
 
-The shipping Lens is still v19. The v2 host rebuild is [`clients/v2_plan.md`](clients/v2_plan.md) Groups 5–10.
+The shipping Lens is still v19. The v2 Specs client rebuild is [`clients/v2_plan.md`](clients/v2_plan.md) Groups 5–10.
 
 <p align="center">
   <img src="assets/specs_dimos_arwalk.gif" alt="Spectacles AR interface with Unitree Go2 outdoors: wrist menu and LiDAR visualization" width="800" />
@@ -312,14 +312,7 @@ cd dimos-ar
 /path/to/dimos/.venv/bin/python3 -m pytest
 ```
 
-Portable client tests on their own:
-
-```bash
-cd clients/core
-npm test
-```
-
-Lens v19 tests on their own. These are plain TypeScript and do not need Lens Studio:
+ClientCore and Lens tests on their own. These are plain TypeScript and do not need Lens Studio:
 
 ```bash
 cd clients/specs/Tests

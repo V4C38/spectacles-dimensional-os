@@ -64,6 +64,9 @@ export class LocalizationCaptureEpisode {
   private resultDeadline: number | null = null;
   private retryAt: number | null = null;
   private lastError: string | null = null;
+  private captureGeneration = 0;
+  private inflight: Promise<void> | null = null;
+  private hardwareStarted = false;
   private readonly unsubscribers: Array<() => void> = [];
 
   constructor(deps: LocalizationCaptureDependencies) {
@@ -116,9 +119,7 @@ export class LocalizationCaptureEpisode {
     if (this.phase === "waiting_for_geometric_gate") {
       try {
         if (this.geometricGatePasses() || this.preferredTimedOut(now)) {
-          this.phase = "capturing";
-          this.nextCaptureAt = now;
-          this.geometricGateWaitStartedAt = null;
+          this.enterCapturing();
         }
       } catch (error) {
         this.enterFailed(errorMessage(error));
@@ -146,15 +147,15 @@ export class LocalizationCaptureEpisode {
     this.retryAt = null;
     this.lastError = null;
     this.request = request;
+    this.captureGeneration += 1;
     try {
       if (this.shouldWaitForGeometricGate()) {
         this.phase = "waiting_for_geometric_gate";
         this.geometricGateWaitStartedAt = this.clock.now();
         this.nextCaptureAt = null;
+        this.stopHardware();
       } else {
-        this.phase = "capturing";
-        this.geometricGateWaitStartedAt = null;
-        this.nextCaptureAt = this.clock.now();
+        this.enterCapturing();
       }
     } catch (error) {
       this.enterFailed(errorMessage(error));
@@ -201,24 +202,66 @@ export class LocalizationCaptureEpisode {
     );
   }
 
+  private enterCapturing(): void {
+    const alreadyCapturing = this.phase === "capturing";
+    this.phase = "capturing";
+    this.geometricGateWaitStartedAt = null;
+    this.nextCaptureAt = this.clock.now();
+    if (!alreadyCapturing) {
+      this.startHardware();
+    }
+  }
+
   private tickCapture(now: number): void {
     if (this.request === null) {
+      return;
+    }
+    if (this.inflight !== null) {
       return;
     }
     if (this.nextCaptureAt !== null && now < this.nextCaptureAt) {
       return;
     }
+    const generation = this.captureGeneration;
+    let pending: Promise<LocalizationObservation>;
     try {
-      this.observations.push(this.capture.capture());
+      pending = this.capture.capture();
     } catch (error) {
       this.enterFailed(errorMessage(error));
       return;
     }
-    if (this.observations.length < this.request.observation_count) {
-      this.nextCaptureAt = now + this.geometry.frameSpacingS;
+    this.inflight = pending.then(
+      (observation) => {
+        this.onCaptureSettled(generation, observation, null);
+      },
+      (error: unknown) => {
+        this.onCaptureSettled(generation, null, error);
+      },
+    );
+  }
+
+  private onCaptureSettled(
+    generation: number,
+    observation: LocalizationObservation | null,
+    error: unknown,
+  ): void {
+    this.inflight = null;
+    if (generation !== this.captureGeneration || this.phase !== "capturing") {
       return;
     }
-    this.sendBatch(now);
+    if (error !== null || observation === null) {
+      this.enterFailed(errorMessage(error));
+      return;
+    }
+    if (this.request === null) {
+      return;
+    }
+    this.observations.push(observation);
+    if (this.observations.length < this.request.observation_count) {
+      this.nextCaptureAt = this.clock.now() + this.geometry.frameSpacingS;
+      return;
+    }
+    this.sendBatch(this.clock.now());
   }
 
   private sendBatch(now: number): void {
@@ -229,6 +272,7 @@ export class LocalizationCaptureEpisode {
       this.enterFailed(errorMessage(error));
       return;
     }
+    this.stopHardware();
     this.phase = "awaiting_result";
     this.resultDeadline = now + this.resultTimeoutS;
     this.nextCaptureAt = null;
@@ -250,6 +294,7 @@ export class LocalizationCaptureEpisode {
 
   private enterFailed(reason: string): void {
     this.phase = "failed";
+    this.stopHardware();
     this.lastError = reason;
     this.observations = [];
     this.geometricGateWaitStartedAt = null;
@@ -259,6 +304,8 @@ export class LocalizationCaptureEpisode {
   }
 
   private resetIdle(): void {
+    this.captureGeneration += 1;
+    this.stopHardware();
     this.phase = "idle";
     this.request = null;
     this.observations = [];
@@ -267,6 +314,22 @@ export class LocalizationCaptureEpisode {
     this.resultDeadline = null;
     this.retryAt = null;
     this.lastError = null;
+  }
+
+  private startHardware(): void {
+    if (this.hardwareStarted) {
+      return;
+    }
+    this.capture.start();
+    this.hardwareStarted = true;
+  }
+
+  private stopHardware(): void {
+    if (!this.hardwareStarted) {
+      return;
+    }
+    this.capture.stop();
+    this.hardwareStarted = false;
   }
 }
 

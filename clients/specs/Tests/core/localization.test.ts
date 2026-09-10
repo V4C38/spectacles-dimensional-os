@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ClientTrackingOriginStore } from "../localization/clientTrackingOrigin";
+import { ClientTrackingOriginStore } from "../../Assets/Scripts/DimosARClient/core/localization/clientTrackingOrigin";
 import {
   odomToClientTrackingPoint,
   odomToClientTrackingPose,
@@ -7,15 +7,21 @@ import {
   clientTrackingToOdomPoint,
   clientTrackingToOdomPose,
   clientTrackingToOdomYawPose,
-} from "../localization/clientTrackingTransforms";
+} from "../../Assets/Scripts/DimosARClient/core/localization/clientTrackingTransforms";
 import {
   LocalizationCaptureEpisode,
   type LocalizationCaptureConfig,
-} from "../localization/localizationCaptureEpisode";
-import { passesGeometricGate } from "../localization/geometricGate";
-import type { CameraCaptureSource, CameraTrackingSource, CaptureGeometry, ClientClock } from "../websocket/hostPorts";
-import { decodeLocalizationObservations } from "../websocket/protocol";
-import { ARModuleSession } from "../websocket/arModuleSession";
+} from "../../Assets/Scripts/DimosARClient/core/localization/localizationCaptureEpisode";
+import { passesGeometricGate } from "../../Assets/Scripts/DimosARClient/core/localization/geometricGate";
+import type {
+  CameraCaptureSource,
+  CameraTrackingSource,
+  CaptureGeometry,
+  ClientClock,
+  WebSocketTransport,
+} from "../../Assets/Scripts/DimosARClient/core/websocket/hostPorts";
+import { decodeLocalizationObservations } from "../../Assets/Scripts/DimosARClient/core/websocket/protocol";
+import { ARModuleSession } from "../../Assets/Scripts/DimosARClient/core/websocket/arModuleSession";
 import type {
   Hello,
   Intrinsics,
@@ -25,7 +31,7 @@ import type {
   State,
   Vec3,
   YawPose,
-} from "../websocket/protocolTypes";
+} from "../../Assets/Scripts/DimosARClient/core/websocket/protocolTypes";
 
 const IDENTITY_Q: Quat = [0, 0, 0, 1];
 
@@ -205,17 +211,58 @@ class FakeTracking implements CameraTrackingSource {
   }
 }
 
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+};
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function settleCapture(): Promise<void> {
+  await Promise.resolve();
+}
+
 class FakeCapture implements CameraCaptureSource {
   calls = 0;
+  startCount = 0;
+  stopCount = 0;
+  started = false;
   failWith: Error | null = null;
   camera_position: Vec3 = [0, 0, 0];
   camera_orientation: Quat = IDENTITY_Q;
+  private nextDeferred: Deferred<LocalizationObservation> | null = null;
 
-  capture(): LocalizationObservation {
-    if (this.failWith !== null) {
-      throw this.failWith;
+  start(): void {
+    if (this.started) {
+      return;
     }
-    this.calls += 1;
+    this.started = true;
+    this.startCount += 1;
+  }
+
+  stop(): void {
+    if (!this.started) {
+      return;
+    }
+    this.started = false;
+    this.stopCount += 1;
+  }
+
+  defer(): Deferred<LocalizationObservation> {
+    this.nextDeferred = deferred<LocalizationObservation>();
+    return this.nextDeferred;
+  }
+
+  observation(): LocalizationObservation {
     return {
       ts_capture: this.calls,
       jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
@@ -223,6 +270,22 @@ class FakeCapture implements CameraCaptureSource {
       camera_position: this.camera_position,
       camera_orientation: this.camera_orientation,
     };
+  }
+
+  capture(): Promise<LocalizationObservation> {
+    if (!this.started) {
+      throw new Error("capture() while stopped");
+    }
+    this.calls += 1;
+    if (this.failWith !== null) {
+      throw this.failWith;
+    }
+    if (this.nextDeferred !== null) {
+      const pending = this.nextDeferred;
+      this.nextDeferred = null;
+      return pending.promise;
+    }
+    return Promise.resolve(this.observation());
   }
 }
 
@@ -372,16 +435,17 @@ describe("localization capture", () => {
       capture_policy: "any_angle",
       observation_count: 1,
     },
-  ] as const)("captures immediately with no tracking origin under $capture_policy", (request) => {
+  ] as const)("captures immediately with no tracking origin under $capture_policy", async (request) => {
     const { controller, session, capture } = makeController();
     deliverRequest(session, request);
     expect(controller.view().phase).toBe("capturing");
     controller.tick();
+    await settleCapture();
     expect(capture.calls).toBe(1);
     expect(controller.view().phase).toBe("awaiting_result");
   });
 
-  it("waits for distance and look-at when it has T_odom_client under robot_los_required", () => {
+  it("waits for distance and look-at when it has T_odom_client under robot_los_required", async () => {
     const { controller, session, capture } = makeController();
     setOriginLookingAtRobot(session);
     deliverPose(session, [4, 0, 0]);
@@ -391,31 +455,34 @@ describe("localization capture", () => {
     expect(capture.calls).toBe(0);
     deliverPose(session, [0, 0, 1]);
     controller.tick();
+    await settleCapture();
     expect(capture.calls).toBe(1);
     expect(controller.view().phase).toBe("awaiting_result");
   });
 
-  it("gates in the tracking frame when T_odom_client is not the identity", () => {
+  it("gates in the tracking frame when T_odom_client is not the identity", async () => {
     const { controller, session, capture } = makeController();
     deliverResult(session, [10, 0, 0]);
     deliverPose(session, [10, 0, 1]);
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 1 });
     expect(controller.view().phase).toBe("capturing");
     controller.tick();
+    await settleCapture();
     expect(capture.calls).toBe(1);
   });
 
-  it("does not wait when it has T_odom_client under any_angle", () => {
+  it("does not wait when it has T_odom_client under any_angle", async () => {
     const { controller, session, capture } = makeController();
     setOriginLookingAtRobot(session);
     deliverPose(session, [4, 0, 0]);
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
     expect(controller.view().phase).toBe("capturing");
     controller.tick();
+    await settleCapture();
     expect(capture.calls).toBe(1);
   });
 
-  it("captures after wait_timeout_s under robot_los_preferred if the gate never passes", () => {
+  it("captures after wait_timeout_s under robot_los_preferred if the gate never passes", async () => {
     const { controller, session, capture, clock } = makeController();
     setOriginLookingAtRobot(session);
     deliverPose(session, [4, 0, 0]);
@@ -431,14 +498,16 @@ describe("localization capture", () => {
     expect(capture.calls).toBe(0);
     clock.nowS = 2;
     controller.tick();
+    await settleCapture();
     expect(capture.calls).toBe(1);
     expect(controller.view().phase).toBe("awaiting_result");
   });
 
-  it("captures N frames at frameSpacingS and sends one LOCA batch", () => {
+  it("captures N frames at frameSpacingS and sends one LOCA batch", async () => {
     const { controller, session, capture, clock, transport } = makeController();
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 3 });
     controller.tick();
+    await settleCapture();
     expect(capture.calls).toBe(1);
     expect(transport.binaries).toHaveLength(0);
     clock.nowS = 1.4;
@@ -446,30 +515,34 @@ describe("localization capture", () => {
     expect(capture.calls).toBe(1);
     clock.nowS = 1.5;
     controller.tick();
+    await settleCapture();
     expect(capture.calls).toBe(2);
     clock.nowS = 3;
     controller.tick();
+    await settleCapture();
     expect(capture.calls).toBe(3);
     expect(transport.binaries).toHaveLength(1);
     expect(decodeLocalizationObservations(transport.binaries[0]).observations).toHaveLength(3);
     expect(controller.view().phase).toBe("awaiting_result");
   });
 
-  it("encodes Capture camera pose unchanged", () => {
+  it("encodes Capture camera pose unchanged", async () => {
     const { controller, session, capture, transport } = makeController();
     capture.camera_position = [1, 2, 3];
     capture.camera_orientation = [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)];
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
     controller.tick();
+    await settleCapture();
     const encoded = decodeLocalizationObservations(transport.binaries[0]).observations[0];
     expectVec3(encoded.camera_position, [1, 2, 3]);
     expectQuat(encoded.camera_orientation, capture.camera_orientation);
   });
 
-  it("goes idle and hasTrackingOrigin when localization_result arrives", () => {
+  it("goes idle and hasTrackingOrigin when localization_result arrives", async () => {
     const { controller, session, originStore } = makeController();
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
     controller.tick();
+    await settleCapture();
     expect(controller.view().phase).toBe("awaiting_result");
     deliverResult(session, [1, 0, 0]);
     expect(controller.view()).toMatchObject({ phase: "idle", lastError: null });
@@ -477,10 +550,11 @@ describe("localization capture", () => {
     expect(session.view().hasTrackingOrigin).toBe(true);
   });
 
-  it("fails after resultTimeoutS with no localization_result, then retries while missing T_odom_client", () => {
+  it("fails after resultTimeoutS with no localization_result, then retries while missing T_odom_client", async () => {
     const { controller, session, capture, clock, transport } = makeController();
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 1 });
     controller.tick();
+    await settleCapture();
     expect(controller.view().phase).toBe("awaiting_result");
     clock.nowS = 14.9;
     controller.tick();
@@ -499,6 +573,7 @@ describe("localization capture", () => {
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 1 });
     expect(controller.view().phase).toBe("capturing");
     controller.tick();
+    await settleCapture();
     expect(capture.calls).toBe(2);
     expect(controller.view().phase).toBe("awaiting_result");
     deliverResult(session);
@@ -508,11 +583,12 @@ describe("localization capture", () => {
     expect(startRequestCount(transport)).toBe(1);
   });
 
-  it("does not self-retry after a failure once it has T_odom_client", () => {
+  it("does not self-retry after a failure once it has T_odom_client", async () => {
     const { controller, session, clock, transport } = makeController();
     setOriginLookingAtRobot(session);
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
     controller.tick();
+    await settleCapture();
     clock.nowS = 15;
     controller.tick();
     expect(controller.view().phase).toBe("failed");
@@ -532,11 +608,12 @@ describe("localization capture", () => {
     expect(startRequestCount(transport)).toBe(1);
   });
 
-  it("requestStart can ask again after a failure once it has T_odom_client", () => {
+  it("requestStart can ask again after a failure once it has T_odom_client", async () => {
     const { controller, session, clock, transport } = makeController();
     setOriginLookingAtRobot(session);
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
     controller.tick();
+    await settleCapture();
     clock.nowS = 15;
     controller.tick();
     expect(controller.view().phase).toBe("failed");
@@ -545,10 +622,11 @@ describe("localization capture", () => {
     expect(controller.view().phase).toBe("failed");
   });
 
-  it("a localization_result after failed still ends the episode", () => {
+  it("a localization_result after failed still ends the episode", async () => {
     const { controller, session, clock } = makeController();
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
     controller.tick();
+    await settleCapture();
     clock.nowS = 15;
     controller.tick();
     expect(controller.view().phase).toBe("failed");
@@ -577,7 +655,7 @@ describe("localization capture", () => {
     expect(controller.view()).toMatchObject({ phase: "idle", lastError: null });
   });
 
-  it("dispose unsubscribes so a later episode is the only handler", () => {
+  it("dispose unsubscribes so a later episode is the only handler", async () => {
     const { controller, session, capture, clock, originStore, tracking } = makeController();
     controller.dispose();
     const again = new LocalizationCaptureEpisode({
@@ -593,18 +671,21 @@ describe("localization capture", () => {
     expect(controller.view().phase).toBe("idle");
     expect(again.view().phase).toBe("capturing");
     again.tick();
+    await settleCapture();
     expect(capture.calls).toBe(1);
     expect(again.view().phase).toBe("awaiting_result");
   });
 
-  it("replaces an in-flight request and sends only the new batch", () => {
+  it("replaces an in-flight request and sends only the new batch", async () => {
     const { controller, session, capture, transport } = makeController();
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 3 });
     controller.tick();
+    await settleCapture();
     expect(capture.calls).toBe(1);
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
     expect(controller.view().phase).toBe("capturing");
     controller.tick();
+    await settleCapture();
     expect(capture.calls).toBe(2);
     expect(transport.binaries).toHaveLength(1);
     expect(decodeLocalizationObservations(transport.binaries[0]).observations).toHaveLength(1);
@@ -645,6 +726,85 @@ describe("localization capture", () => {
     controller.tick();
     expect(capture.calls).toBe(0);
     expect(controller.view().phase).toBe("waiting_for_geometric_gate");
+  });
+
+  it("does not start another capture while a Promise is in flight", () => {
+    const { controller, session, capture } = makeController();
+    capture.defer();
+    deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 2 });
+    controller.tick();
+    expect(capture.calls).toBe(1);
+    controller.tick();
+    expect(capture.calls).toBe(1);
+    expect(controller.view().phase).toBe("capturing");
+  });
+
+  it("fails the episode when capture rejects", async () => {
+    const { controller, session, capture } = makeController();
+    const pending = capture.defer();
+    deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
+    controller.tick();
+    pending.reject(new Error("jpeg failed"));
+    await settleCapture();
+    expect(controller.view()).toMatchObject({ phase: "failed", lastError: "jpeg failed" });
+    expect(capture.stopCount).toBe(1);
+  });
+
+  it("ignores a stale capture after replacement while in flight", async () => {
+    const { controller, session, capture, transport } = makeController();
+    const first = capture.defer();
+    deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
+    controller.tick();
+    expect(capture.calls).toBe(1);
+    deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
+    expect(controller.view().phase).toBe("capturing");
+    expect(capture.startCount).toBe(1);
+    first.resolve(capture.observation());
+    await settleCapture();
+    expect(transport.binaries).toHaveLength(0);
+    expect(controller.view().phase).toBe("capturing");
+    controller.tick();
+    await settleCapture();
+    expect(capture.calls).toBe(2);
+    expect(transport.binaries).toHaveLength(1);
+    expect(decodeLocalizationObservations(transport.binaries[0]).observations).toHaveLength(1);
+  });
+
+  it("ignores a stale capture after disconnect while in flight and stops hardware", async () => {
+    const { controller, session, capture, transport } = makeController();
+    const pending = capture.defer();
+    deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
+    controller.tick();
+    expect(capture.calls).toBe(1);
+    session.onTransportClose();
+    expect(controller.view()).toMatchObject({ phase: "idle", lastError: null });
+    expect(capture.stopCount).toBe(1);
+    pending.resolve(capture.observation());
+    await settleCapture();
+    expect(controller.view().phase).toBe("idle");
+    expect(transport.binaries).toHaveLength(0);
+  });
+
+  it("dispose stops capture hardware", () => {
+    const { controller, session, capture } = makeController();
+    deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 2 });
+    controller.tick();
+    expect(capture.startCount).toBe(1);
+    controller.dispose();
+    expect(capture.stopCount).toBe(1);
+    expect(controller.view().phase).toBe("idle");
+  });
+
+  it("capture() while stopped throws", () => {
+    const capture = new FakeCapture();
+    expect(() => {
+      void capture.capture();
+    }).toThrow(/while stopped/);
+    capture.start();
+    capture.stop();
+    expect(() => {
+      void capture.capture();
+    }).toThrow(/while stopped/);
   });
 });
 

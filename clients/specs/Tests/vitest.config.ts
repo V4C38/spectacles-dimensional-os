@@ -58,7 +58,7 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
-    include: ["unit/**/*.test.ts"],
+    include: ["unit/**/*.test.ts", "core/**/*.test.ts"],
     setupFiles: ["./setup/lens-globals.ts"],
     coverage: {
       provider: "v8",
@@ -69,6 +69,7 @@ export default defineConfig({
         "../Assets/Scripts/App/Utilities/Utilities.ts",
         "../Assets/Scripts/App/Robot/RobotRuntimeModel.ts",
         "../Assets/Scripts/ARBridge/Navigation/NavigationModel.ts",
+        "../Assets/Scripts/DimosARClient/core/**/*.ts",
       ],
     },
   },

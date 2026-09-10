@@ -13,8 +13,8 @@ import {
   encodeLocalizationStartRequest,
   encodeStateRequest,
   encodeText,
-} from "../websocket/protocol";
-import type { LocalizationObservation } from "../websocket/protocolTypes";
+} from "../../Assets/Scripts/DimosARClient/core/websocket/protocol";
+import type { LocalizationObservation } from "../../Assets/Scripts/DimosARClient/core/websocket/protocolTypes";
 
 const HELLO_FIXTURE = {
   type: "hello",
