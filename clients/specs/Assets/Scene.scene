@@ -2546,12 +2546,13 @@
   Enabled: true
   ScriptAsset: !<reference> ca057afe-aece-4900-84a7-7e1013a29d2b
   ScriptInputsDefault:
-    {}
+    arModuleHost: true
   ScriptTypesDefault:
     {}
   ScriptInputs:
     "":
-      {}
+      internetModule: !<reference.InternetModule> 79c60deb-0ecf-4df5-9713-7c5bd5dbef32
+      arModuleHost: ""
   ScriptTypes:
     "":
       {}

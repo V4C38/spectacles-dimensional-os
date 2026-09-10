@@ -67,7 +67,7 @@ re-enable them or wire new code through them.
 | Module | Role |
 |--------|------|
 | `SpecsCoordinates.ts` | One `SPECS_BASIS`; DimOS `odom` ↔ Specs |
-| `websocket/` | `SpecsClock`, `SpecsWebSocketTransport` |
+| `websocket/` | `SpecsWebSocketTransport` |
 | `localization/` | `DeviceCameraStream`, `SpecsCameraSource` (tracking + async capture ports) |
 | `robot/RobotPresenter.ts` | Body and ground marker from `hello.robot` + composed `pose` |
 | `sensors/` | `LidarPresenter`, `PointCloudRenderer` — each `lidar` point from `odom` independently |

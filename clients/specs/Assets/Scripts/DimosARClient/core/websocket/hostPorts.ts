@@ -1,5 +1,14 @@
 import type { LocalizationObservation, Quat, Vec3 } from "./protocolTypes";
 
+export const AR_MODULE_CLIENT_CONFIG = {
+  port: 8787,
+  connectTimeoutS: 8,
+  session: {
+    helloTimeoutS: 5,
+    reconnectDelayS: 1,
+  },
+};
+
 export interface WebSocketTransport {
   connect(): void;
   close(): void;

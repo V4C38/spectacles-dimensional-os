@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ClientTrackingOriginStore } from "../../Assets/Scripts/DimosARClient/core/localization/clientTrackingOrigin";
 import { LIDAR_FOURCC } from "../../Assets/Scripts/DimosARClient/core/websocket/protocol";
-import type { ClientClock, WebSocketTransport } from "../../Assets/Scripts/DimosARClient/core/websocket/hostPorts";
+import {
+  AR_MODULE_CLIENT_CONFIG,
+  type ClientClock,
+  type WebSocketTransport,
+} from "../../Assets/Scripts/DimosARClient/core/websocket/hostPorts";
 import { ARModuleSession } from "../../Assets/Scripts/DimosARClient/core/websocket/arModuleSession";
 import type {
   Capabilities,
@@ -397,6 +401,25 @@ describe("session control", () => {
 });
 
 describe("session config", () => {
+  it("uses AR_MODULE_CLIENT_CONFIG.session when config is omitted", () => {
+    const transport = new FakeTransport();
+    const clock = new FakeClock();
+    const session = new ARModuleSession({
+      transport,
+      clock,
+      clientTrackingOriginStore: new ClientTrackingOriginStore(),
+    });
+    session.start();
+    session.onTransportOpen();
+    clock.nowS = AR_MODULE_CLIENT_CONFIG.session.helloTimeoutS - 0.1;
+    session.tick();
+    expect(session.view().connection).toBe("awaiting_hello");
+    clock.nowS = AR_MODULE_CLIENT_CONFIG.session.helloTimeoutS;
+    session.tick();
+    expect(session.view().connection).toBe("failed");
+    expect(session.view().lastError).toBe("hello timeout");
+  });
+
   it("rejects missing timeout configuration", () => {
     expect(
       () =>

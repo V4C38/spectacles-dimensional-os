@@ -297,7 +297,6 @@ clients/specs/
     └── DimosARClient/
         ├── DimosARClient.ts                   # composition root
         ├── SpecsCoordinates.ts
-        ├── SpecsConfig.ts
         ├── core/                              # ClientCore until .lspkg split
         │   ├── websocket/
         │   │   ├── arModuleSession.ts
@@ -314,7 +313,6 @@ clients/specs/
         │   └── sensors/
         │       └── lidarSettingsRequest.ts
         ├── websocket/
-        │   ├── SpecsClock.ts
         │   └── SpecsWebSocketTransport.ts
         ├── localization/
         │   ├── DeviceCameraStream.ts
@@ -682,11 +680,12 @@ objects. A WebXR host brings its own table against the same `ClientCore`.
 
 How the Specs Lens talks to `ARModule`. No camera and no room drawing.
 
-Add explicit Specs values in `SpecsConfig.ts` for `helloTimeoutS`,
-`reconnectDelayS`, and endpoint port **8787**. Capture geometry and episode
-timeouts land with Group 8; they are the Group 3 numbers, not a second table.
-`DimosARClient` owns the required server host input. `ARModuleSession` owns
-reconnect policy. The host does not pick a hidden default host or port.
+Client defaults live in `AR_MODULE_CLIENT_CONFIG` (`hostPorts.ts`): port
+**8787**, `helloTimeoutS`, `reconnectDelayS`, and `connectTimeoutS`. Capture
+geometry and episode timeouts land with Group 8 on the same object; they are
+the Group 3 numbers, not a second table. `DimosARClient` owns the required
+`arModuleHost` input. `ARModuleSession` owns reconnect policy. The host does
+not pick a hidden default host or port.
 
 Take confirmed socket mechanics from v19 into `SpecsWebSocketTransport`:
 whole-frame send/receive, Blob-to-`Uint8Array`, connect watchdog, and safe
@@ -702,8 +701,7 @@ Bind Lens lifecycle: start the session once, call `session.tick()` on
 `UpdateEvent`, stop it on teardown, and release every subscription.
 
 ```text
-clients/specs/Assets/Scripts/DimosARClient/SpecsConfig.ts
-clients/specs/Assets/Scripts/DimosARClient/websocket/SpecsClock.ts
+clients/specs/Assets/Scripts/DimosARClient/core/websocket/hostPorts.ts
 clients/specs/Assets/Scripts/DimosARClient/websocket/SpecsWebSocketTransport.ts
 clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts
 ```
@@ -733,7 +731,7 @@ Construct `LocalizationCaptureEpisode` with the same
 `ClientTrackingOriginStore` used by the session. Tick camera pose sampling
 before `episode.tick()`, poll `episode.view()` for later UX, and call
 `episode.dispose()` during host teardown. Capture geometry and episode
-timeouts come from `SpecsConfig.ts` (the Group 3 numbers).
+timeouts come from `AR_MODULE_CLIENT_CONFIG` (the Group 3 numbers).
 
 An observation contains exposure `ts_capture`, optical pose in the
 right-handed metric tracking frame, scaled intrinsics, and JPEG bytes. Axis

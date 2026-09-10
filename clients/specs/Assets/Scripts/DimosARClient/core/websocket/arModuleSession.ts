@@ -7,7 +7,7 @@ import {
   encodeHelloRequest,
   encodeStateRequest,
 } from "./protocol";
-import type { ClientClock, WebSocketTransport } from "./hostPorts";
+import { AR_MODULE_CLIENT_CONFIG, type ClientClock, type WebSocketTransport } from "./hostPorts";
 import type {
   Capabilities,
   CapabilityName,
@@ -51,7 +51,7 @@ export interface ARModuleSessionDependencies {
   transport: WebSocketTransport;
   clock: ClientClock;
   clientTrackingOriginStore: ClientTrackingOriginStore;
-  config: ARModuleSessionConfig;
+  config?: ARModuleSessionConfig;
 }
 
 type ViewListener = (view: ARModuleSessionState) => void;
@@ -86,8 +86,9 @@ export class ARModuleSession {
     this.transport = deps.transport;
     this.clock = deps.clock;
     this.clientTrackingOriginStore = deps.clientTrackingOriginStore;
-    this.helloTimeoutS = requirePositive(deps.config.helloTimeoutS, "helloTimeoutS");
-    this.reconnectDelayS = requireNonNegative(deps.config.reconnectDelayS, "reconnectDelayS");
+    const config = deps.config ?? AR_MODULE_CLIENT_CONFIG.session;
+    this.helloTimeoutS = requirePositive(config.helloTimeoutS, "helloTimeoutS");
+    this.reconnectDelayS = requireNonNegative(config.reconnectDelayS, "reconnectDelayS");
   }
 
   start(): void {
