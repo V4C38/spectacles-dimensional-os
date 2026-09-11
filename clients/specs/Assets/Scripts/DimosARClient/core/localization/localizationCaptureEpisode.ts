@@ -1,8 +1,9 @@
-import type {
-  CameraCaptureSource,
-  CameraTrackingSource,
-  CaptureGeometry,
-  ClientClock,
+import {
+  AR_MODULE_CLIENT_CONFIG,
+  type CameraCaptureSource,
+  type CameraTrackingSource,
+  type CaptureGeometry,
+  type ClientClock,
 } from "../websocket/hostPorts";
 import {
   encodeLocalizationObservations,
@@ -42,8 +43,8 @@ export interface LocalizationCaptureDependencies {
   clock: ClientClock;
   tracking: CameraTrackingSource;
   capture: CameraCaptureSource;
-  geometry: CaptureGeometry;
-  config: LocalizationCaptureConfig;
+  geometry?: CaptureGeometry;
+  config?: LocalizationCaptureConfig;
 }
 
 export class LocalizationCaptureEpisode {
@@ -75,9 +76,10 @@ export class LocalizationCaptureEpisode {
     this.clock = deps.clock;
     this.tracking = deps.tracking;
     this.capture = deps.capture;
-    this.geometry = requireGeometry(deps.geometry);
-    this.resultTimeoutS = requirePositive(deps.config.resultTimeoutS, "resultTimeoutS");
-    this.retryBackoffS = requireNonNegative(deps.config.retryBackoffS, "retryBackoffS");
+    this.geometry = requireGeometry(deps.geometry ?? AR_MODULE_CLIENT_CONFIG.capture.geometry);
+    const config = deps.config ?? AR_MODULE_CLIENT_CONFIG.capture.episode;
+    this.resultTimeoutS = requirePositive(config.resultTimeoutS, "resultTimeoutS");
+    this.retryBackoffS = requireNonNegative(config.retryBackoffS, "retryBackoffS");
     this.unsubscribers.push(
       this.session.subscribeLocalizationObservationsRequest((request) => this.onRequest(request)),
       this.session.subscribeOutbound((message) => this.onOutbound(message)),

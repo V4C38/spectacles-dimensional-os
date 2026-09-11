@@ -1,4 +1,3 @@
-import { CameraCaptureState } from "../../ARBridge/Camera/CameraCaptureSession";
 import {
   findText,
   COLOR_ERROR,
@@ -97,7 +96,6 @@ export class UILogger {
   private _agentPromptEntry: UILogConsoleEntry | null = null;
   private _agentResponseEntry: UILogConsoleEntry | null = null;
   private _cameraStatusEntry: UILogConsoleEntry | null = null;
-  private _lastCameraCaptureState: CameraCaptureState | null = null;
 
   public get snapshot(): UILogEntry | null {
     return cloneEntry(this._entry);
@@ -217,26 +215,6 @@ export class UILogger {
       loggedAt: new Date(),
     };
     this._renderAgentResponseLine();
-  }
-
-  public setCameraCaptureState(state: CameraCaptureState): void {
-    if (state === this._lastCameraCaptureState) {
-      return;
-    }
-    this._lastCameraCaptureState = state;
-    const text = `Camera capture: ${state}`;
-    const color =
-      state === "off"
-        ? COLOR_WHITE
-        : state === "waiting"
-          ? COLOR_WARN
-          : COLOR_SUCCESS;
-    this._cameraStatusEntry = {
-      text,
-      color: cloneColor(color),
-      loggedAt: new Date(),
-    };
-    this._renderCameraStatusLine();
   }
 
   public clear(): void {

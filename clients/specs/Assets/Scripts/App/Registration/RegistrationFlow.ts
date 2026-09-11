@@ -181,10 +181,6 @@ export class RegistrationFlow {
     return this._coordinator?.robot ?? null;
   }
 
-  private get _frameCapture() {
-    return this._coordinator?.frameCaptureController ?? null;
-  }
-
   public get session(): RegistrationSessionView {
     return this._session;
   }
@@ -407,11 +403,6 @@ export class RegistrationFlow {
     this._registrationClient?.stop({ notifyBridge: true });
     this._registrationClient?.clearPose();
     this._robotRuntime?.applyInteractionFromState();
-    this._frameCapture?.setCaptureErrorHandler(() => {
-      this._callbacks.log("auto registration: camera capture error");
-      this._session = { ...this._session, statusDetail: "" };
-      this._notify();
-    });
     this._registrationPreview?.begin();
     this._registrationClient?.start("april_tag");
     this._notify(true);

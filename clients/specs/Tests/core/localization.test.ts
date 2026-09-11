@@ -13,12 +13,13 @@ import {
   type LocalizationCaptureConfig,
 } from "../../Assets/Scripts/DimosARClient/core/localization/localizationCaptureEpisode";
 import { passesGeometricGate } from "../../Assets/Scripts/DimosARClient/core/localization/geometricGate";
-import type {
-  CameraCaptureSource,
-  CameraTrackingSource,
-  CaptureGeometry,
-  ClientClock,
-  WebSocketTransport,
+import {
+  AR_MODULE_CLIENT_CONFIG,
+  type CameraCaptureSource,
+  type CameraTrackingSource,
+  type CaptureGeometry,
+  type ClientClock,
+  type WebSocketTransport,
 } from "../../Assets/Scripts/DimosARClient/core/websocket/hostPorts";
 import { decodeLocalizationObservations } from "../../Assets/Scripts/DimosARClient/core/websocket/protocol";
 import { ARModuleSession } from "../../Assets/Scripts/DimosARClient/core/websocket/arModuleSession";
@@ -716,6 +717,31 @@ describe("localization capture", () => {
     expect(() => new LocalizationCaptureEpisode({ ...deps, config: { resultTimeoutS: 0, retryBackoffS: 2 } })).toThrow(
       /resultTimeoutS/,
     );
+  });
+
+  it("uses AR_MODULE_CLIENT_CONFIG.capture when geometry and config are omitted", async () => {
+    const { session, originStore, clock, tracking, capture } = makeController();
+    const controller = new LocalizationCaptureEpisode({
+      session,
+      clientTrackingOriginStore: originStore,
+      clock,
+      tracking,
+      capture,
+    });
+    deliverRequest(session, {
+      type: "localization_observations_request",
+      capture_policy: "any_angle",
+      observation_count: 1,
+    });
+    controller.tick();
+    await settleCapture();
+    expect(controller.view().phase).toBe("awaiting_result");
+    clock.nowS = AR_MODULE_CLIENT_CONFIG.capture.episode.resultTimeoutS - 0.1;
+    controller.tick();
+    expect(controller.view().phase).toBe("awaiting_result");
+    clock.nowS = AR_MODULE_CLIENT_CONFIG.capture.episode.resultTimeoutS;
+    controller.tick();
+    expect(controller.view()).toMatchObject({ phase: "failed", lastError: "result timeout" });
   });
 
   it("robot_los_required with T_odom_client but no pose stays waiting_for_geometric_gate", () => {

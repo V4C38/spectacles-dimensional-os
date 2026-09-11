@@ -1,5 +1,4 @@
 import { ARBridgeSession } from "../ARBridge/Network/ARBridgeSession";
-import { FrameCaptureController } from "../ARBridge/Camera/FrameCaptureController";
 import {
   RegistrationClient,
   RegistrationClientDeps,
@@ -24,9 +23,6 @@ import { WorldAnnotationPresenter } from "./Agent/WorldAnnotationPresenter";
 export class ARBridgeServices extends BaseScriptComponent {
   @input
   bridgeSession: ARBridgeSession;
-
-  @input
-  frameCaptureController: FrameCaptureController;
 
   @input
   robotMarker: RobotMarker;
@@ -128,21 +124,6 @@ export class ARBridgeServices extends BaseScriptComponent {
     });
     this._registration!.initialize(registrationDeps);
     this._router!.bind();
-    this.frameCaptureController?.bind({
-      registrationClient: this._registration!,
-      telemetryClient: this._telemetry!,
-      inboundRouter: this._router!,
-      statusClient: this._status!,
-      uiLogger: this._state!.uiLogger,
-      getBridgeConnected: () => this._router!.isBridgeSessionReady(),
-      getWorldFrameCommitted: () => {
-        const snapshot = this._state!.snapshot;
-        return (
-          snapshot.phase === "runtime" &&
-          snapshot.bridgeSnapshot.worldFrameCommitted
-        );
-      },
-    });
     this._agentSpeechController!.bind();
 
     this.createEvent("UpdateEvent").bind(() => {
@@ -168,17 +149,7 @@ export class ARBridgeServices extends BaseScriptComponent {
       markerPrefab: this.annotationMarkerPrefab ?? null,
     });
     const skillHandlers = new ArSkillHandlers({
-      getHmdWorldTransform: () => {
-        const camera = this.frameCaptureController?.cameraObject ?? null;
-        if (!camera) {
-          return null;
-        }
-        const transform = camera.getTransform();
-        return {
-          position: transform.getWorldPosition(),
-          rotation: transform.getWorldRotation(),
-        };
-      },
+      getHmdWorldTransform: () => null,
       annotations: this._worldAnnotations,
     });
     this._agentClient = new AgentClient(this, transport, inbound, skillHandlers);

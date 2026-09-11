@@ -64,7 +64,6 @@ function createFlow(options: {
     router: { isBridgeSessionReady: () => options.isBridgeSessionReady ?? true },
     registrationPreview: preview,
     robot: { applyInteractionFromState: vi.fn() },
-    frameCaptureController: { setCaptureErrorHandler: vi.fn() },
   };
   const flow = new RegistrationFlow(coordinator as any, {
     beginManualRegistrationPlacementFromWizard: () => true,
@@ -332,7 +331,6 @@ describe("RegistrationFlow", () => {
       router: { isBridgeSessionReady: () => true },
       registrationPreview: { render: vi.fn(), begin: vi.fn(), end: vi.fn() },
       robot: { applyInteractionFromState: vi.fn() },
-      frameCaptureController: { setCaptureErrorHandler: vi.fn() },
     };
     const flow = new RegistrationFlow(coordinator as any, {
       beginManualRegistrationPlacementFromWizard: () => true,

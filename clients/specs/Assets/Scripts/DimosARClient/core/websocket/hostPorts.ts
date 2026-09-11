@@ -7,6 +7,18 @@ export const AR_MODULE_CLIENT_CONFIG = {
     helloTimeoutS: 5,
     reconnectDelayS: 1,
   },
+  capture: {
+    geometry: {
+      minDistanceM: 0.35,
+      maxDistanceM: 3.0,
+      lookAtMaxAngleDeg: 45,
+      frameSpacingS: 1.5,
+    },
+    episode: {
+      resultTimeoutS: 15,
+      retryBackoffS: 2,
+    },
+  },
 };
 
 export interface WebSocketTransport {

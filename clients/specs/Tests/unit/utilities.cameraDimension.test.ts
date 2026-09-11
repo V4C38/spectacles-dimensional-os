@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clampCameraSmallerDimension } from "../../Assets/Scripts/App/Utilities/Utilities";
+import { clampCameraSmallerDimension } from "../../Assets/Scripts/DimosARClient/localization/SpecsCameraStream";
 
 describe("clampCameraSmallerDimension", () => {
   it("passes through when requested is within supported max", () => {

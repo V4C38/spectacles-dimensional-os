@@ -131,7 +131,6 @@ describe("UILogger console output", () => {
 
   it("clears scroll lines but preserves reserved lines", () => {
     logger.show("remove me", new vec4(1, 1, 1, 1));
-    logger.setCameraCaptureState("capturing");
     logger.setAgentPrompt({ text: "robot go", valid: true });
     logger.setAgentResponse({ text: "On my way", state: "idle", severity: "ok" });
     logger.clear();
@@ -141,7 +140,6 @@ describe("UILogger console output", () => {
     }
     expect(agentPromptLineText(lines)).toContain("User ASR: robot go");
     expect(agentResponseLineText(lines)).toContain("Agent response: On my way");
-    expect(statusLineText(lines)).toBe("[12:00:00] Camera capture: capturing");
     expect(logger.snapshot).toBeNull();
   });
 
@@ -268,52 +266,5 @@ describe("UILogger agent response line", () => {
     logger.setAgentResponse(null);
 
     expect(agentResponseLineText(lines)).toBe("[12:00:00] Agent response: ...");
-  });
-});
-
-describe("UILogger camera status line", () => {
-  let logger: UILogger;
-  let lines: MockText[];
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(2026, 6, 3, 12, 0, 0));
-    logger = new UILogger();
-    lines = createMockLines();
-    logger.bindConsoleOutputLines(lines as unknown as Text[]);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("renders capturing in green on the dedicated status line", () => {
-    logger.setCameraCaptureState("capturing");
-
-    expect(statusLineText(lines)).toBe("[12:00:00] Camera capture: capturing");
-    expect(lines[8]?.textFill.color).toEqual({ x: 0, y: 1, z: 0, w: 1 });
-  });
-
-  it("renders waiting in yellow on the dedicated status line", () => {
-    logger.setCameraCaptureState("waiting");
-
-    expect(statusLineText(lines)).toBe("[12:00:00] Camera capture: waiting");
-    expect(lines[8]?.textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
-  });
-
-  it("renders off in white on the dedicated status line", () => {
-    logger.setCameraCaptureState("off");
-
-    expect(statusLineText(lines)).toBe("[12:00:00] Camera capture: off");
-    expect(lines[8]?.textFill.color).toEqual({ x: 1, y: 1, z: 1, w: 1 });
-  });
-
-  it("does not refresh the timestamp when status is unchanged", () => {
-    logger.setCameraCaptureState("capturing");
-    vi.setSystemTime(new Date(2026, 6, 3, 12, 5, 0));
-
-    logger.setCameraCaptureState("capturing");
-
-    expect(statusLineText(lines)).toBe("[12:00:00] Camera capture: capturing");
   });
 });

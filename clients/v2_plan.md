@@ -240,7 +240,7 @@ repo root. Do not edit `.scene` files by hand; use the Lens Studio MCP tools.
 The transport performs platform socket operations and carries whole frames;
 newline framing is portable, not a host concern. The portable session owns
 handshake and reconnect policy. The capture port matches the working v19
-sequence (`DeviceCameraStream.requestNextFrame()` then
+sequence (`SpecsCameraStream.requestNextFrame()` then
 `Base64.encodeTextureAsync`): `capture` returns a Promise; `start` / `stop`
 own hardware. It returns facts measured at exposure; it does not decide when
 an episode starts. Axis conversion is a host job (Group 6 Specs / later
@@ -315,7 +315,7 @@ clients/specs/
         ├── websocket/
         │   └── SpecsWebSocketTransport.ts
         ├── localization/
-        │   ├── DeviceCameraStream.ts
+        │   ├── SpecsCameraStream.ts
         │   └── SpecsCameraSource.ts
         ├── robot/
         │   └── RobotPresenter.ts
@@ -605,7 +605,7 @@ the room.
 
 Portable `CameraCaptureSource.capture()` currently returns a synchronous
 object. Working Specs capture is asynchronous:
-`DeviceCameraStream.requestNextFrame()` then `Base64.encodeTextureAsync`.
+`SpecsCameraStream.requestNextFrame()` then `Base64.encodeTextureAsync`.
 Change the port to an explicit lifecycle (`start`, async `capture`, `stop`)
 so Group 8 can keep that sequence. Update `LocalizationCaptureEpisode` to
 await one in-flight capture, ignore stale completions after replacement or
@@ -718,13 +718,13 @@ room drawing. No capture episode and no presenters.
 The only remaining host-owned localization job. Put working v19 camera
 mechanics behind the ClientCore ports.
 
-Keep the working v19 sequence: `DeviceCameraStream.requestNextFrame()` → pose
+Keep the working v19 sequence: `SpecsCameraStream.requestNextFrame()` → pose
 lookup at `timestampSeconds` → camera optical extrinsics/intrinsics →
 `Base64.encodeTextureAsync` JPEG.
 
 Put that sequence behind one `SpecsCameraSource` that implements both
 the tracking and capture ports. It owns pose history and delegates stream
-lifecycle to taken `DeviceCameraStream`. No second camera controller or
+lifecycle to taken `SpecsCameraStream`. No second camera controller or
 capture state store.
 
 Construct `LocalizationCaptureEpisode` with the same
@@ -738,13 +738,13 @@ right-handed metric tracking frame, scaled intrinsics, and JPEG bytes. Axis
 conversion happens in this adapter before the values enter `ClientCore`.
 
 ```text
-clients/specs/Assets/Scripts/DimosARClient/localization/DeviceCameraStream.ts
+clients/specs/Assets/Scripts/DimosARClient/localization/SpecsCameraStream.ts
 clients/specs/Assets/Scripts/DimosARClient/localization/SpecsCameraSource.ts
 clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts
 clients/specs/Tests/unit/specsCameraSource.test.ts
 ```
 
-**Take:** `DeviceCameraStream`, JPEG encode path. **Leave:** ACK/`seq`,
+**Take:** `SpecsCameraStream`, JPEG encode path. **Leave:** ACK/`seq`,
 standing `capture_policy`, `camera_info`, `FrameCaptureController`,
 registration-gated streaming.
 

@@ -68,7 +68,7 @@ re-enable them or wire new code through them.
 |--------|------|
 | `SpecsCoordinates.ts` | One `SPECS_BASIS`; DimOS `odom` ↔ Specs |
 | `websocket/` | `SpecsWebSocketTransport` |
-| `localization/` | `DeviceCameraStream`, `SpecsCameraSource` (tracking + async capture ports) |
+| `localization/` | `SpecsCameraStream`, `SpecsCameraSource` (tracking + async capture ports) |
 | `robot/RobotPresenter.ts` | Body and ground marker from `hello.robot` + composed `pose` |
 | `sensors/` | `LidarPresenter`, `PointCloudRenderer` — each `lidar` point from `odom` independently |
 | `navigation/` | `GroundPlacement`, `NavigationController`, `NavGoalPresenter` |
@@ -99,9 +99,9 @@ the v19 agent channel.
 
 One owner: `SpecsCameraSource` implements both ClientCore tracking and
 capture ports. It owns pose history and delegates stream lifecycle to
-`DeviceCameraStream`.
+`SpecsCameraStream`.
 
-Working sequence (keep it): `DeviceCameraStream.requestNextFrame()` → pose at
+Working sequence (keep it): `SpecsCameraStream.requestNextFrame()` → pose at
 `timestampSeconds` → optical extrinsics/intrinsics → `Base64.encodeTextureAsync`.
 The portable port is `start` / async `capture` / `stop`.
 `LocalizationCaptureEpisode` awaits one in-flight capture and stops hardware on

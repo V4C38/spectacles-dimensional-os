@@ -29,7 +29,6 @@
     annotationMarkerPrefab: false
     bridgeSession: false
     deviceTracking: false
-    frameCaptureController: false
     navigationMarkerPrefab: false
     pointCloudRenderer: false
     robotGroundDeadzoneRadiusCm: false
@@ -46,9 +45,8 @@
     []
   DefaultScriptInputs:
     - bridgeSession: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
-      frameCaptureController: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
-      robotMarker: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
-      pointCloudRenderer: !<MappingBased.AssignableType_3> 00000000-0000-0000-0000-000000000000
+      robotMarker: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
+      pointCloudRenderer: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
       navigationMarkerPrefab: !<reference.ObjectPrefab> 00000000-0000-0000-0000-000000000000
       annotationMarkerPrefab: !<reference.ObjectPrefab> 00000000-0000-0000-0000-000000000000
       deviceTracking: !<reference.DeviceTracking> 00000000-0000-0000-0000-000000000000
@@ -60,9 +58,8 @@
       {}
   InputLines:
     - // @input AssignableType bridgeSession
-    - // @input AssignableType_1 frameCaptureController
-    - // @input AssignableType_2 robotMarker
-    - // @input AssignableType_3 pointCloudRenderer
+    - // @input AssignableType_1 robotMarker
+    - // @input AssignableType_2 pointCloudRenderer
     - // @input Asset.ObjectPrefab navigationMarkerPrefab
     - // @input Asset.ObjectPrefab annotationMarkerPrefab
     - // @input Component.DeviceTracking deviceTracking

@@ -35,7 +35,6 @@
   Components:
     - !<own> 00000000-0000-0065-0000-000000000065
     - !<own> e5553c8a-0b7e-4ef4-92d9-3e1318fb82c1
-    - !<own> a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b
 - !<Camera/00000000-0000-0065-0000-000000000065>
   PrefabRemaps:
     []
@@ -2553,6 +2552,7 @@
     "":
       internetModule: !<reference.InternetModule> 79c60deb-0ecf-4df5-9713-7c5bd5dbef32
       arModuleHost: ""
+      cameraObject: !<reference.SceneObject> 00000000-0000-0065-0000-000000000064
   ScriptTypes:
     "":
       {}
@@ -5658,23 +5658,6 @@
     []
   Components:
     - !<own> 329940fb-34dd-413d-8f14-ed6fa1f135b5
-- !<ScriptComponent/a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b>
-  PrefabRemaps:
-    []
-  Name: FrameCaptureController
-  Enabled: false
-  ScriptAsset: !<reference> 51d925e5-2ee4-4b1c-a392-f28609fd4fc0
-  ScriptInputsDefault:
-    {}
-  ScriptTypesDefault:
-    {}
-  ScriptInputs:
-    "":
-      bridgeSession: !<MappingBased.AssignableType> 689f73b6-5fc9-48f2-98b7-0229a5f1e6c3
-      cameraObject: !<reference.SceneObject> 00000000-0000-0065-0000-000000000064
-  ScriptTypes:
-    "":
-      {}
 - !<SceneObject/a94605a8-3636-4c8e-a443-2df500864a2d>
   PrefabRemaps:
     []
@@ -7455,9 +7438,8 @@
   ScriptInputs:
     "":
       bridgeSession: !<MappingBased.AssignableType> 689f73b6-5fc9-48f2-98b7-0229a5f1e6c3
-      frameCaptureController: !<MappingBased.AssignableType_1> a8f3c2e1-4b5d-6e7f-8a9b-0c1d2e3f4a5b
-      robotMarker: !<MappingBased.AssignableType_2> b749cbc7-9706-4499-8d79-19f5a03dd792
-      pointCloudRenderer: !<MappingBased.AssignableType_3> edc2d9a2-52ca-414f-acba-c9661ee12fea
+      robotMarker: !<MappingBased.AssignableType_1> b749cbc7-9706-4499-8d79-19f5a03dd792
+      pointCloudRenderer: !<MappingBased.AssignableType_2> edc2d9a2-52ca-414f-acba-c9661ee12fea
       navigationMarkerPrefab: !<reference.ObjectPrefab> 8dad663a-f2bb-438d-882b-121c3208aba4
       annotationMarkerPrefab: !<reference.ObjectPrefab> bb47d936-adfb-479d-966f-fc30cdacfa21
       deviceTracking: !<reference.DeviceTracking> e5553c8a-0b7e-4ef4-92d9-3e1318fb82c1
