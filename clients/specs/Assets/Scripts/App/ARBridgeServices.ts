@@ -5,10 +5,8 @@ import {
 } from "../ARBridge/Registration/RegistrationClient";
 import { InboundRouter } from "../ARBridge/Session/InboundRouter";
 import { AppStateStore } from "./AppState";
-import { NavigationController } from "./Navigation/NavigationController";
-import { RobotPresenter, RobotPresenterMenuCallbacks } from "./Robot/RobotPresenter";
+import { ManualRegistrationPlacement } from "../ARBridge/Registration/ManualRegistrationPlacement";
 import { RegistrationPreviewPresenter } from "./Registration/RegistrationWizardView";
-import { PointCloudRenderer } from "./Lidar/PointCloudRenderer";
 import { RobotMarker } from "./Robot/RobotMarker";
 import { StatusClient } from "../ARBridge/Status/StatusClient";
 import { TelemetryClient } from "../ARBridge/Telemetry/TelemetryClient";
@@ -28,29 +26,9 @@ export class ARBridgeServices extends BaseScriptComponent {
   robotMarker: RobotMarker;
 
   @input
-  pointCloudRenderer: PointCloudRenderer;
-
-  @input
-  navigationMarkerPrefab: ObjectPrefab;
-
-  @input
   annotationMarkerPrefab: ObjectPrefab;
 
-  @input
-  deviceTracking: DeviceTracking;
-
-  @input
-  worldMeshObject: SceneObject;
-
-  @input
-  worldMeshVisual: RenderMeshVisual;
-
-  @input
-  robotGroundDeadzoneRadiusCm = 75;
-
   private _state: AppStateStore | null = null;
-  private _robot: RobotPresenter | null = null;
-  private _navigation: NavigationController | null = null;
   private _router: InboundRouter | null = null;
   private _registration: RegistrationClient | null = null;
   private _status: StatusClient | null = null;
@@ -65,16 +43,6 @@ export class ARBridgeServices extends BaseScriptComponent {
   public get state(): AppStateStore {
     this._ensureInstances();
     return this._state!;
-  }
-
-  public get robot(): RobotPresenter {
-    this._ensureInstances();
-    return this._robot!;
-  }
-
-  public get navigation(): NavigationController {
-    this._ensureInstances();
-    return this._navigation!;
   }
 
   public get router(): InboundRouter {
@@ -108,8 +76,7 @@ export class ARBridgeServices extends BaseScriptComponent {
   }
 
   public bind(
-    robotMenuCallbacks: RobotPresenterMenuCallbacks,
-    registrationDeps: RegistrationClientDeps,
+    registrationDeps: Omit<RegistrationClientDeps, "manualRegistrationPlacement">,
   ): void {
     if (this._bound) {
       return;
@@ -117,12 +84,10 @@ export class ARBridgeServices extends BaseScriptComponent {
     this._bound = true;
     this._ensureInstances();
 
-    this._robot!.bind(robotMenuCallbacks);
-    this._navigation!.bindHost({
-      appStateStore: this._state!,
-      robotPresenter: this._robot!,
+    this._registration!.initialize({
+      ...registrationDeps,
+      manualRegistrationPlacement: new ManualRegistrationPlacement(),
     });
-    this._registration!.initialize(registrationDeps);
     this._router!.bind();
     this._agentSpeechController!.bind();
 
@@ -153,38 +118,13 @@ export class ARBridgeServices extends BaseScriptComponent {
       annotations: this._worldAnnotations,
     });
     this._agentClient = new AgentClient(this, transport, inbound, skillHandlers);
-    this._robot = new RobotPresenter(
-      this._state,
-      this.robotMarker ?? null,
-      this.pointCloudRenderer ?? null,
-      session,
-      this._telemetry,
-    );
     this._registration = new RegistrationClient(
       session,
       transport,
       inbound,
       this.robotMarker ?? null,
     );
-    this._registrationPreview = new RegistrationPreviewPresenter(
-      this._state,
-      this._robot,
-    );
-    this._navigation = NavigationController.create({
-      eventHost: this,
-      pathParentFallback: this.getSceneObject(),
-      appStateStore: this._state,
-      navClient: this._navClient,
-      session,
-      statusClient: this._status,
-      robotPresenter: this._robot,
-      robotMarker: this.robotMarker ?? null,
-      navigationMarkerPrefab: this.navigationMarkerPrefab,
-      robotGroundDeadzoneRadiusCm: this.robotGroundDeadzoneRadiusCm,
-      deviceTracking: this.deviceTracking,
-      worldMeshObject: this.worldMeshObject,
-      worldMeshVisual: this.worldMeshVisual,
-    });
+    this._registrationPreview = new RegistrationPreviewPresenter(this._state);
     this._router = new InboundRouter(
       session,
       this._state,
@@ -192,15 +132,12 @@ export class ARBridgeServices extends BaseScriptComponent {
       this._telemetry,
       this._navClient,
       this._agentClient,
-      this._navigation,
-      this._robot,
       this._registration,
     );
     this._agentSpeechController = new AgentSpeechController({
       eventHost: this,
       asrModule: require("LensStudio:AsrModule") as AsrModule,
       agentClient: this._agentClient,
-      navigation: this._navigation,
       appStateStore: this._state,
       uiLogger: this._state.uiLogger,
       getBridgeSessionReady: () => this._router!.isBridgeSessionReady(),

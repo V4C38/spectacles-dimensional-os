@@ -9,7 +9,6 @@ import {
 } from "../../ARBridge/Network/Protocol";
 import { AppStateStore } from "../AppState";
 import { isCapabilityAvailable } from "../Robot/RobotRuntimeModel";
-import { NavigationController } from "../Navigation/NavigationController";
 import { COLOR_ERROR, COLOR_WARN } from "../UI/UIKit";
 import { UILogger } from "../UI/UILogger";
 import { classifyAgentResponseText } from "./AgentResponseClassification";
@@ -36,7 +35,6 @@ export interface AgentSpeechControllerDeps {
   eventHost: BaseScriptComponent;
   asrModule: AsrModule;
   agentClient: AgentClient;
-  navigation: NavigationController;
   appStateStore: AppStateStore;
   uiLogger: UILogger;
   getBridgeSessionReady: () => boolean;
@@ -192,7 +190,6 @@ export class AgentSpeechController {
   private _handleStopCommand(): void {
     const runtime = this._deps.appStateStore.snapshot.robotRuntime;
     const estopAvailable = isCapabilityAvailable(runtime, "emergency_stop");
-    this._deps.navigation.requestEmergencyStop();
     if (!estopAvailable || !this._deps.getBridgeSessionReady()) {
       this._deps.uiLogger.setAgentResponse({
         text: ESTOP_NOT_SENT_RESPONSE,

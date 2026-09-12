@@ -35,10 +35,13 @@ The composition root is **`DimosARClient`**. Group 5 attaches it as a shell
 with no presenter slots, socket, store, or tick. Later groups add the required
 server host input, session, camera, presenters, and UX. Platform scene objects
 stay `Camera Object`, `Lighting`, `SpectaclesInteractionKit`, and `World Mesh`.
-Group 9 creates `Robot`, `GroundMarker`, `Lidar`, and `NavGoal`. `NavGoal` is a
-path/spawn parent; `NavGoalMarker.prefab` is instantiated at runtime.
-`GroundMarker` is a child of `Robot`. `Lidar` is never parented or anchored to
-`Robot`.
+Group 9 authors `RobotPresenter` under `DimosARClient` (scene object +
+`RobotPresenter` script). That object is the one Specs-world robot location:
+the script writes its transform, and navigation reads it. The floor marker is
+the scene object `NavigationTargetMarker` with `NavGoalMarker` (same role as
+v19's always-visible nav target). Convert that object to
+`NavigationTargetMarker.prefab` and wire `DimosARClient.navGoalMarkerPrefab`.
+`LidarPresenter` is never parented or anchored to `RobotPresenter`.
 
 Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-object investigation and manipulation.
 
@@ -69,8 +72,8 @@ re-enable them or wire new code through them.
 | `SpecsCoordinates.ts` | One `SPECS_BASIS`; DimOS `odom` ↔ Specs |
 | `websocket/` | `SpecsWebSocketTransport` |
 | `localization/` | `SpecsCameraStream`, `SpecsCameraSource` (tracking + async capture ports) |
-| `robot/RobotPresenter.ts` | Body and ground marker from `hello.robot` + composed `pose` |
-| `sensors/` | `LidarPresenter`, `PointCloudRenderer` — each `lidar` point from `odom` independently |
+| `robot/RobotPresenter.ts` | Composed `pose` on the authored `RobotPresenter` scene object |
+| `sensors/` | `PointCloudRenderer` — each `lidar` point from `odom` independently |
 | `navigation/` | `GroundPlacement`, `NavigationController`, `NavGoalPresenter` |
 
 **Specs UX** (what the wearer reads or presses)

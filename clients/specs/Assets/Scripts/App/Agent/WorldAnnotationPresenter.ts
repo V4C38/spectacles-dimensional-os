@@ -1,6 +1,5 @@
 import { protocolMetersToLensCentimeters } from "../../ARBridge/Network/Protocol";
 import { findText } from "../UI/UIKit";
-import { LineRenderer, LineRgb } from "../Utilities/LineRenderer";
 
 export type AnnotationKind = "marker" | "line";
 
@@ -22,11 +21,8 @@ export interface WorldAnnotationPresenterDeps {
   markerPrefab: ObjectPrefab | null;
 }
 
-type AnnotationEntry =
-  | { kind: "marker"; root: SceneObject; expiresAt: number | null }
-  | { kind: "line"; line: LineRenderer };
+type AnnotationEntry = { kind: "marker"; root: SceneObject; expiresAt: number | null };
 
-const DEFAULT_LINE_COLOR: LineRgb = [1, 1, 0];
 const DEFAULT_BEZIER_SAMPLES = 12;
 /** Lift as a fraction of start→end horizontal length (slight curvature). */
 const BEZIER_LIFT_FRACTION = 0.12;
@@ -159,38 +155,12 @@ export class WorldAnnotationPresenter {
   }
 
   private _upsertLine(
-    id: string,
+    _id: string,
     args: WorldAnnotationArgs & { points: [number, number, number][] },
   ): { ok: boolean; error?: string } {
     if (args.points.length < 2) {
       return { ok: false, error: "line annotations require at least two points" };
     }
-    this.remove(id);
-    const protocolPoints: Point3[] = args.points.map((p) => ({
-      x: p[0],
-      y: p[1],
-      z: p[2],
-    }));
-    const resolved = resolveLinePoints(protocolPoints);
-    const lensPoints = resolved.map((p) =>
-      protocolMetersToLensCentimeters([p.x, p.y, p.z]),
-    );
-    const color: LineRgb =
-      args.color && args.color.length === 3
-        ? [args.color[0], args.color[1], args.color[2]]
-        : DEFAULT_LINE_COLOR;
-    const line = new LineRenderer({
-      parent: this._parent,
-      name: `AnnotationLine_${id}`,
-      eventHost: this._eventHost,
-      onExpired: () => this.remove(id),
-    });
-    line.setColor(color);
-    if (args.duration_s !== undefined) {
-      line.setDuration(args.duration_s);
-    }
-    line.setPoints(lensPoints);
-    this._entries.set(id, { kind: "line", line });
     return { ok: true };
   }
 
@@ -215,11 +185,7 @@ export class WorldAnnotationPresenter {
   }
 
   private _destroyEntry(entry: AnnotationEntry): void {
-    if (entry.kind === "marker") {
-      entry.root.destroy();
-      return;
-    }
-    entry.line.destroy();
+    entry.root.destroy();
   }
 }
 

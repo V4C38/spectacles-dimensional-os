@@ -1,10 +1,8 @@
 import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField";
 import { AppStateStore } from "../AppState";
 import { LidarDisplayMode, OperatingMode } from "../AppState";
-import { RobotPresenter } from "../Robot/RobotPresenter";
 import {
   ButtonBinding,
-  COLOR_SUCCESS,
   COLOR_WHITE,
   CONTENT_PAD_X,
   createTextInput,
@@ -201,10 +199,7 @@ export class RegistrationPreviewPresenter {
   private _priorRuntimeMode: OperatingMode = "manual";
   private _priorLidarMode: LidarDisplayMode = "off";
 
-  constructor(
-    private readonly appState: AppStateStore,
-    private readonly robotPresenter: RobotPresenter,
-  ) {}
+  constructor(private readonly appState: AppStateStore) {}
 
   public begin(): void {
     this._priorRuntimeMode =
@@ -215,10 +210,6 @@ export class RegistrationPreviewPresenter {
     this.appState.update({ operatingMode: "registrationMode", lidarMode: "off" });
 
     this._active = true;
-    const ui = this.robotPresenter?.robotMarker?.ui;
-    ui?.setRegistrationPreviewActive(true);
-    this.robotPresenter?.robotMarker?.setVisible(false);
-    ui?.setMenuVisible(false);
   }
 
   public render(session: RegistrationSessionView): void {
@@ -229,42 +220,8 @@ export class RegistrationPreviewPresenter {
       step: "registerRobot",
       connected: true,
     });
-    const previewPose = session.previewPose ?? null;
-    const showMarker = presentation.showTagScanOverlay && !!previewPose;
-    const ui = this.robotPresenter?.robotMarker?.ui;
-    const wasMenuVisible = ui?.isMenuVisible() ?? false;
-    const marker = this.robotPresenter?.robotMarker;
-
-    if (showMarker && previewPose) {
-      const pos = new vec3(
-        previewPose.position[0] * 100,
-        previewPose.position[1] * 100,
-        previewPose.position[2] * 100,
-      );
-      const rot = new quat(
-        previewPose.orientation[3],
-        previewPose.orientation[0],
-        previewPose.orientation[1],
-        previewPose.orientation[2],
-      );
-      marker?.setVisible(true);
-      marker?.applyRuntimeLensPose(pos, rot);
-      if (!wasMenuVisible) {
-        ui?.setMenuVisible(true);
-      }
-    } else {
-      marker?.setVisible(false);
-    }
-
-    if (presentation.overlayVisible || session.state === "succeeded") {
-      ui?.applyAssistOverlay({
-        titleText: presentation.overlayTitle,
-        statusText: presentation.overlayStatus,
-        statusColor: presentation.overlayStatusColor,
-        progressPercent: presentation.overlayProgress,
-        showStop: false,
-      });
-    }
+    void presentation;
+    void session;
   }
 
   public end(): void {
@@ -272,17 +229,6 @@ export class RegistrationPreviewPresenter {
       return;
     }
     this._active = false;
-    this.robotPresenter?.robotMarker?.setVisible(false);
-    const ui = this.robotPresenter?.robotMarker?.ui;
-    ui?.setRegistrationPreviewActive(false);
-    ui?.applyAssistOverlay({
-      titleText: "",
-      statusText: "",
-      statusColor: COLOR_SUCCESS,
-      progressPercent: null,
-      showStop: false,
-    });
-    ui?.setMenuVisible(false);
 
     const prior = this._priorRuntimeMode;
     this.appState.update({ operatingMode: prior, lidarMode: this._priorLidarMode });

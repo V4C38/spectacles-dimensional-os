@@ -5,7 +5,7 @@ import {
   isInsideRobotDeadzone,
   solveMeshPlacement,
   type RobotGroundDeadzone,
-} from "../../Assets/Scripts/App/Navigation/GroundPlacement";
+} from "../../Assets/Scripts/DimosARClient/navigation/GroundPlacement";
 
 function vec(x: number, y: number, z: number): vec3 {
   return new vec3(x, y, z);

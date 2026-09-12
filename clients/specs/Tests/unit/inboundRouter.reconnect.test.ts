@@ -27,26 +27,6 @@ function makeRouter(phase: "registration" | "runtime") {
 
   const onBridgeDisconnected = vi.fn();
 
-  const robotPresenter = {
-    onDisconnect: vi.fn(),
-    applyPendingPose: vi.fn(),
-    tickFrame: vi.fn(),
-    manualRegistrationPlacement: {
-      onBridgeStatus: vi.fn(() => false),
-      reset: vi.fn(),
-    },
-  };
-
-  const navigationPlacement = {
-    applyPath: vi.fn(),
-    applyNavStatus: vi.fn(),
-    onDisconnect: vi.fn(),
-    onHelloReset: vi.fn(),
-    handleProtocolError: vi.fn(),
-    resetForUserDisconnect: vi.fn(),
-    onNavigationResolved: new Signal<"succeeded" | "failed">(),
-  };
-
   const statusClient = new StatusClient(null, null, null);
   const telemetryClient = new TelemetryClient(appState, null, null, null);
   const navigationClient = new NavigationClient(null, null);
@@ -59,8 +39,6 @@ function makeRouter(phase: "registration" | "runtime") {
     telemetryClient,
     navigationClient,
     agentClient,
-    navigationPlacement as never,
-    robotPresenter as never,
     null,
   );
   router.setOnBridgeDisconnected(onBridgeDisconnected);

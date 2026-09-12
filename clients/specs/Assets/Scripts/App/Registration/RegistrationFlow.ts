@@ -177,10 +177,6 @@ export class RegistrationFlow {
     return this._coordinator?.router ?? null;
   }
 
-  private get _robotRuntime() {
-    return this._coordinator?.robot ?? null;
-  }
-
   public get session(): RegistrationSessionView {
     return this._session;
   }
@@ -210,7 +206,6 @@ export class RegistrationFlow {
     this._registrationClient?.stop({ notifyBridge: true });
     this._registrationClient?.cancelPlacement();
     this._registrationClient?.clearPose();
-    this._robotRuntime?.applyInteractionFromState();
   }
 
   public toggleRegistrationMode(): void {
@@ -279,9 +274,6 @@ export class RegistrationFlow {
       this._callbacks.log(
         `registration failed on bridge: ${msg.message || "unknown reason"}`,
       );
-      if (this._session.mode === "manual_pose") {
-        this._robotRuntime?.applyInteractionFromState();
-      }
       this._registrationPreview?.end();
     } else if (this._session.mode === "april_tag") {
       this._registrationPreview?.render(this._session);
@@ -402,7 +394,6 @@ export class RegistrationFlow {
     this._registrationClient?.cancelPlacement();
     this._registrationClient?.stop({ notifyBridge: true });
     this._registrationClient?.clearPose();
-    this._robotRuntime?.applyInteractionFromState();
     this._registrationPreview?.begin();
     this._registrationClient?.start("april_tag");
     this._notify(true);

@@ -2,7 +2,6 @@ import { RegistrationClient } from "../ARBridge/Registration/RegistrationClient"
 import { ARBridgeSession } from "../ARBridge/Network/ARBridgeSession";
 import { InboundRouter } from "../ARBridge/Session/InboundRouter";
 import { ARBridgeServices } from "./ARBridgeServices";
-import { RobotPresenter } from "./Robot/RobotPresenter";
 import { RegistrationPreviewPresenter } from "./Registration/RegistrationWizardView";
 import {
   AppStateListener,
@@ -71,10 +70,6 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     return this.arBridgeServices.router;
   }
 
-  public get robot(): RobotPresenter {
-    return this.arBridgeServices.robot;
-  }
-
   public get bridgeSession(): ARBridgeSession | null {
     return this.arBridgeServices.bridgeSession ?? null;
   }
@@ -83,30 +78,13 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     if (!this.arBridgeServices) {
       return;
     }
-    const robot = this.arBridgeServices.robot;
-    const navigation = this.arBridgeServices.navigation;
-
-    this.arBridgeServices.bind(
-      {
-        onToggleRequested: () => {
-          robot.robotMarker?.ui?.toggleVisible();
-        },
-        onStopRequested: () => navigation.requestEmergencyStop(),
-        getOperatingMode: () => this.operatingMode,
-      },
-      {
-        manualRegistrationPlacement: robot.manualRegistrationPlacement,
-        isBridgeSessionReady: () => this.isBridgeSessionReady(),
-        getInteractionMode: () => this.appState.robotInteractionMode,
-        setInteractionMode: (mode) => this._setRobotInteractionMode(mode),
-        getIsRuntimePhase: () => this.isRuntimePhase(),
-        disableNavigationPlacementForRegistration: () => {
-          if (navigation.placementEnabled) {
-            navigation.disarm();
-          }
-        },
-      },
-    );
+    this.arBridgeServices.bind({
+      isBridgeSessionReady: () => this.isBridgeSessionReady(),
+      getInteractionMode: () => this.appState.robotInteractionMode,
+      setInteractionMode: (mode) => this._setRobotInteractionMode(mode),
+      getIsRuntimePhase: () => this.isRuntimePhase(),
+      disableNavigationPlacementForRegistration: () => undefined,
+    });
 
     this.arBridgeServices.router.setOnBridgeDisconnected(() =>
       this.onBridgeDisconnected(),
@@ -119,8 +97,6 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
 
   public onBridgeDisconnected(): void {
     this.arBridgeServices.telemetry.onDisconnect();
-    this.arBridgeServices.robot.onDisconnect();
-    this.arBridgeServices.navigation.onDisconnect();
     this.arBridgeServices.worldAnnotations.clearAll();
     this.arBridgeServices.state.update({
       navigationError: defaultNavigationError(),
@@ -139,35 +115,15 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
       this.arBridgeServices.worldAnnotations.clearAll();
     }
     this._lastSyncedOperatingMode = mode;
-    this.arBridgeServices.robot.robotMarker?.ui?.setOperatingMode(mode);
-
-    const navigation = this.arBridgeServices.navigation;
-    if (mode === "registrationMode") {
-      navigation.syncNavigationForOperatingMode(mode, state);
-      return;
-    }
-
-    if (mode === "manual" || mode === "agent") {
-      navigation.syncManualNavigationState({ forceEnable: true });
-    }
-    navigation.syncNavigationForOperatingMode(mode, state);
   }
 
   private _applyPhaseSideEffects(phase: AppPhase): void {
-    const robot = this.arBridgeServices.robot;
-    const navigation = this.arBridgeServices.navigation;
     if (phase !== "runtime") {
-      robot.clearInactiveState();
-      navigation.clearInactiveState();
       this.arBridgeServices.worldAnnotations.clearAll();
     }
-    robot.applyInteractionFromState();
     if (phase === "runtime") {
       this.arBridgeServices.router.reapplyBridgeStatusIfConnected();
-      robot.robotMarker?.syncPose();
     }
-    navigation.applyRuntimeStateFromSnapshot();
-    robot.syncLidarPresentation();
   }
 
   public enterRegistration(options?: { preserveBridge?: boolean }): void {
@@ -195,15 +151,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     const runtimePatch: Partial<AppStateData> = { phase: "runtime" };
     this.arBridgeServices.state.update(runtimePatch);
     this._applyPhaseSideEffects("runtime");
-    const bridgeSnapshot = this.appState.bridgeSnapshot;
-    this.arBridgeServices.robot.prepareForRuntime(bridgeSnapshot.worldFrameApproximate);
     this._setRobotInteractionMode("runtimeRobot");
-    this.arBridgeServices.robot.robotMarker?.syncPose();
-    if (this.operatingMode === "manual" || this.operatingMode === "agent") {
-      this.arBridgeServices.navigation.syncManualNavigationState({ forceEnable: true });
-    } else {
-      this.arBridgeServices.navigation.deferPlacementSync();
-    }
   }
 
   /** Reachy-shaped: ensure socket open to current baseUrl, then hello. */
@@ -271,9 +219,7 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
     this.registrationClient?.beginManualPlacement(position, rotation);
   }
 
-  public requestEmergencyStop(): void {
-    this.arBridgeServices.navigation.requestEmergencyStop();
-  }
+  public requestEmergencyStop(): void {}
 
   public cycleLidarMode(): void {
     this.setLidarMode(nextLidarMode(this.lidarMode));
@@ -335,12 +281,6 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
       return;
     }
     this._log(`setNavigationPlacementEnabled: ${enabled}`);
-    const navigation = this.arBridgeServices.navigation;
-    if (enabled) {
-      navigation.arm();
-    } else {
-      navigation.onManualNavigationToggleChanged(false);
-    }
   }
 
   public get navigationPlacementEnabled(): boolean {
@@ -353,12 +293,10 @@ export class ARBridgeCoordinator extends BaseScriptComponent {
 
   private _setRobotInteractionMode(mode: RobotInteractionMode): void {
     if (this.appState.robotInteractionMode === mode) {
-      this.arBridgeServices.robot.applyInteractionFromState();
       return;
     }
     this._log(`robotInteractionMode: ${mode}`);
     this.arBridgeServices.state.update({ robotInteractionMode: mode });
-    this.arBridgeServices.robot.applyInteractionFromState();
   }
 
   private _log(message: string): void {

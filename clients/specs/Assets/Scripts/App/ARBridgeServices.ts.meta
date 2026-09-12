@@ -28,13 +28,7 @@
   ScriptInputsHidden:
     annotationMarkerPrefab: false
     bridgeSession: false
-    deviceTracking: false
-    navigationMarkerPrefab: false
-    pointCloudRenderer: false
-    robotGroundDeadzoneRadiusCm: false
     robotMarker: false
-    worldMeshObject: false
-    worldMeshVisual: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -46,23 +40,11 @@
   DefaultScriptInputs:
     - bridgeSession: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
       robotMarker: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
-      pointCloudRenderer: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
-      navigationMarkerPrefab: !<reference.ObjectPrefab> 00000000-0000-0000-0000-000000000000
       annotationMarkerPrefab: !<reference.ObjectPrefab> 00000000-0000-0000-0000-000000000000
-      deviceTracking: !<reference.DeviceTracking> 00000000-0000-0000-0000-000000000000
-      worldMeshObject: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
-      worldMeshVisual: !<reference.RenderMeshVisual> 00000000-0000-0000-0000-000000000000
-      robotGroundDeadzoneRadiusCm: !<float> 75.000000
   ScriptTypes:
     -
       {}
   InputLines:
     - // @input AssignableType bridgeSession
     - // @input AssignableType_1 robotMarker
-    - // @input AssignableType_2 pointCloudRenderer
-    - // @input Asset.ObjectPrefab navigationMarkerPrefab
     - // @input Asset.ObjectPrefab annotationMarkerPrefab
-    - // @input Component.DeviceTracking deviceTracking
-    - // @input SceneObject worldMeshObject
-    - // @input Component.RenderMeshVisual worldMeshVisual
-    - // @input float robotGroundDeadzoneRadiusCm = 75

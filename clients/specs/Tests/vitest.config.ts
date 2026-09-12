@@ -6,6 +6,8 @@ const animateMock = fileURLToPath(new URL("./mocks/animate.ts", import.meta.url)
 const interactorLineRendererMock = fileURLToPath(
   new URL("./mocks/InteractorLineRenderer.ts", import.meta.url),
 );
+const interactableMock = fileURLToPath(new URL("./mocks/Interactable.ts", import.meta.url));
+const roundButtonMock = fileURLToPath(new URL("./mocks/RoundButton.ts", import.meta.url));
 
 function isUIKitImport(source: string): boolean {
   const normalized = source.replace(/\\/g, "/");
@@ -24,6 +26,18 @@ function isInteractorLineRendererImport(source: string): boolean {
   );
 }
 
+function isInteractableImport(source: string): boolean {
+  const normalized = source.replace(/\\/g, "/");
+  return /SpectaclesInteractionKit\.lspkg\/Components\/Interaction\/Interactable\/Interactable$/.test(
+    normalized,
+  );
+}
+
+function isRoundButtonImport(source: string): boolean {
+  const normalized = source.replace(/\\/g, "/");
+  return /SpectaclesUIKit\.lspkg\/Scripts\/Components\/Button\/RoundButton$/.test(normalized);
+}
+
 export default defineConfig({
   plugins: [
     {
@@ -37,6 +51,12 @@ export default defineConfig({
         }
         if (isInteractorLineRendererImport(source)) {
           return interactorLineRendererMock;
+        }
+        if (isInteractableImport(source)) {
+          return interactableMock;
+        }
+        if (isRoundButtonImport(source)) {
+          return roundButtonMock;
         }
         return null;
       },
@@ -53,6 +73,9 @@ export default defineConfig({
       "SpectaclesInteractionKit.lspkg/Utils/animate": animateMock,
       "SpectaclesInteractionKit.lspkg/Components/Interaction/InteractorLineVisual/InteractorLineRenderer":
         interactorLineRendererMock,
+      "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable":
+        interactableMock,
+      "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton": roundButtonMock,
     },
   },
   test: {

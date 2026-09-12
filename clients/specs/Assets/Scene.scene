@@ -1867,22 +1867,6 @@
     []
   Components:
     - !<own> 1b1949eb-4bd7-4b5a-b4c1-6afd04668c76
-- !<SceneObject/2ec96410-2815-4f3f-b3af-5f1799c074f4>
-  PrefabRemaps:
-    []
-  Name: LidarPoints
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
-    HasSegmentScaleCompensation: false
-  Children:
-    - !<own> f7a51602-5d1c-4564-bcf4-282473fbfb6c
-    - !<own> ad499e07-e38e-4c80-8a5e-5b43f1c7a85a
-  Components:
-    []
 - !<SceneObject/2fa6895d-6663-4624-9e74-6b038b982135>
   PrefabRemaps:
     []
@@ -2545,14 +2529,17 @@
   Enabled: true
   ScriptAsset: !<reference> ca057afe-aece-4900-84a7-7e1013a29d2b
   ScriptInputsDefault:
-    arModuleHost: true
+    {}
   ScriptTypesDefault:
     {}
   ScriptInputs:
     "":
-      internetModule: !<reference.InternetModule> 79c60deb-0ecf-4df5-9713-7c5bd5dbef32
-      arModuleHost: ""
+      robotPresenter: !<MappingBased.AssignableType> 4c7768e0-bde5-4965-bcb3-57ae58d19ea6
+      lidarPresenter: !<MappingBased.AssignableType_1> ba763b75-5290-4861-bb17-a7a2c9ba546f
       cameraObject: !<reference.SceneObject> 00000000-0000-0065-0000-000000000064
+      internetModule: !<reference.InternetModule> 79c60deb-0ecf-4df5-9713-7c5bd5dbef32
+      defaultWebsocketIp: 192.168.1.108
+      navGoalMarkerPrefab: !<reference.ObjectPrefab> 8ed1cf3c-ff97-43da-9103-8e3b9eb7b328
   ScriptTypes:
     "":
       {}
@@ -2856,7 +2843,8 @@
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
   Children:
-    []
+    - !<own> a6a5e202-0cc7-4911-9342-914d467d06e8
+    - !<own> 987602b0-ef22-4a53-85a8-ca0d7eaaa7b4
   Components:
     - !<own> 43254cd1-512e-4063-b9b0-e802899fa942
 - !<SceneObject/4a8fba8e-5e79-4c17-9b90-eecc02c7b7dc>
@@ -2892,6 +2880,22 @@
   ForceCompound: false
   Intangible: false
   ShowCollider: false
+- !<ScriptComponent/4c7768e0-bde5-4965-bcb3-57ae58d19ea6>
+  PrefabRemaps:
+    []
+  Name: RobotPresenter
+  Enabled: true
+  ScriptAsset: !<reference> 8dbb589a-5254-49b6-8f7a-57b7a8caff0b
+  ScriptInputsDefault:
+    {}
+  ScriptTypesDefault:
+    {}
+  ScriptInputs:
+    "":
+      {}
+  ScriptTypes:
+    "":
+      {}
 - !<ScriptComponent/4c80641d-b1f0-4b44-a3b9-07420a910dc3>
   PrefabRemaps:
     []
@@ -4207,26 +4211,6 @@
     - !<own> b376ea46-bee6-4eac-82cc-1f09a4389f34
   Components:
     []
-- !<RenderMeshVisual/6f958547-abe3-441c-aade-b4b2726c08c3>
-  PrefabRemaps:
-    []
-  Name: Render Mesh Visual
-  Enabled: true
-  RenderOrder: 0
-  StretchMode: Stretch
-  VerticalAlignment: Center
-  HorizontalAlignment: Center
-  MeshShadowMode: None
-  ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
-  ShadowDensity: 1.000000
-  Materials:
-    - !<reference> 468d0377-075a-4dff-9858-57c01dff1aba
-  Mesh: !<reference> 00000000-0000-0000-0000-000000000000
-  Skin: !<reference> 00000000-0000-0000-0000-000000000000
-  BlendShapesEnabled: true
-  BlendNormals: false
-  BlendShapes:
-    {}
 - !<ScriptComponent/713150aa-e531-4c73-b44f-de109783cdec>
   PrefabRemaps:
     []
@@ -4875,26 +4859,6 @@
     - !<own> fe66bb72-6c90-42c5-bc72-2915d91b4804
   Components:
     []
-- !<RenderMeshVisual/8c6264e4-2571-4f5a-b905-12c8e348776d>
-  PrefabRemaps:
-    []
-  Name: Render Mesh Visual
-  Enabled: true
-  RenderOrder: 0
-  StretchMode: Stretch
-  VerticalAlignment: Center
-  HorizontalAlignment: Center
-  MeshShadowMode: None
-  ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
-  ShadowDensity: 1.000000
-  Materials:
-    - !<reference> dc7e46e5-e15a-41f8-b477-c125549d763e
-  Mesh: !<reference> 00000000-0000-0000-0000-000000000000
-  Skin: !<reference> 00000000-0000-0000-0000-000000000000
-  BlendShapesEnabled: true
-  BlendNormals: false
-  BlendShapes:
-    {}
 - !<SceneObject/8cdd4c87-6054-4626-9717-2c37ae231599>
   PrefabRemaps:
     []
@@ -5379,7 +5343,7 @@
 - !<SceneObject/987602b0-ef22-4a53-85a8-ca0d7eaaa7b4>
   PrefabRemaps:
     []
-  Name: PointCloudRenderer
+  Name: LidarPresenter
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -5388,9 +5352,10 @@
     Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
     HasSegmentScaleCompensation: false
   Children:
-    - !<own> 2ec96410-2815-4f3f-b3af-5f1799c074f4
+    []
   Components:
-    - !<own> edc2d9a2-52ca-414f-acba-c9661ee12fea
+    - !<own> ba763b75-5290-4861-bb17-a7a2c9ba546f
+    - !<own> dc9f2499-e4c1-4677-bfb5-ce414959ee7c
 - !<SceneObject/9a14c486-688a-4af4-a99a-084652f3efa1>
   PrefabRemaps:
     []
@@ -5496,7 +5461,6 @@
     - !<own> 169fa578-9316-4c6c-a901-56793fa6cf03
     - !<own> 20937b64-ad12-476c-a010-dbda8811f91f
     - !<own> 02b4e96e-3fd3-487e-ae91-31828aea1503
-    - !<own> 987602b0-ef22-4a53-85a8-ca0d7eaaa7b4
   Components:
     - !<own> e482a2f7-0992-4dba-adb2-26102d636bae
     - !<own> 689f73b6-5fc9-48f2-98b7-0229a5f1e6c3
@@ -5643,6 +5607,21 @@
     - !<own> 30de2b4f-3b6c-4fc7-8f33-5ea9d1efe7fa
   Components:
     - !<own> 13d0a40b-ddf7-4069-b583-19597e57a64d
+- !<SceneObject/a6a5e202-0cc7-4911-9342-914d467d06e8>
+  PrefabRemaps:
+    []
+  Name: RobotPresenter
+  Enabled: true
+  Layers: 1
+  LocalTransform: !<TransformEntity>
+    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
+    HasSegmentScaleCompensation: false
+  Children:
+    []
+  Components:
+    - !<own> 4c7768e0-bde5-4965-bcb3-57ae58d19ea6
 - !<SceneObject/a702aad2-e621-42d4-afd6-3946f6425bb8>
   PrefabRemaps:
     []
@@ -5789,21 +5768,6 @@
     - !<own> 10568179-3897-4527-83b6-b6018cff9f28
   Components:
     []
-- !<SceneObject/ad499e07-e38e-4c80-8a5e-5b43f1c7a85a>
-  PrefabRemaps:
-    []
-  Name: LidarObstacleVisual
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
-    HasSegmentScaleCompensation: false
-  Children:
-    []
-  Components:
-    - !<own> 8c6264e4-2571-4f5a-b905-12c8e348776d
 - !<SceneObject/adc75353-1cbe-476e-a85f-d1f14ed9eeed>
   PrefabRemaps:
     []
@@ -6095,6 +6059,22 @@
     - !<own> ed7074f4-802d-4336-9588-237c5c48f33e
   Components:
     []
+- !<ScriptComponent/ba763b75-5290-4861-bb17-a7a2c9ba546f>
+  PrefabRemaps:
+    []
+  Name: PointCloudRenderer
+  Enabled: true
+  ScriptAsset: !<reference> fea35346-70e6-40af-a117-78032240e360
+  ScriptInputsDefault:
+    maxPoints: true
+  ScriptTypesDefault:
+    {}
+  ScriptInputs:
+    "":
+      maxPoints: 1500
+  ScriptTypes:
+    "":
+      {}
 - !<SceneObject/bb71d04b-cb45-4043-912f-e08d91859e25>
   PrefabRemaps:
     []
@@ -7204,6 +7184,26 @@
     - !<own> 7db11996-f25b-413e-b374-c4db27bbfc7e
   Components:
     []
+- !<RenderMeshVisual/dc9f2499-e4c1-4677-bfb5-ce414959ee7c>
+  PrefabRemaps:
+    []
+  Name: Render Mesh Visual
+  Enabled: true
+  RenderOrder: 0
+  StretchMode: Stretch
+  VerticalAlignment: Center
+  HorizontalAlignment: Center
+  MeshShadowMode: None
+  ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
+  ShadowDensity: 1.000000
+  Materials:
+    - !<reference> 468d0377-075a-4dff-9858-57c01dff1aba
+  Mesh: !<reference> 00000000-0000-0000-0000-000000000000
+  Skin: !<reference> 00000000-0000-0000-0000-000000000000
+  BlendShapesEnabled: true
+  BlendNormals: false
+  BlendShapes:
+    {}
 - !<ScriptComponent/dd4b44b7-1029-4423-af9c-abcde6f4fc35>
   PrefabRemaps:
     []
@@ -7432,20 +7432,14 @@
   Enabled: true
   ScriptAsset: !<reference> d7f5d355-bf38-40fb-ada4-748417a15334
   ScriptInputsDefault:
-    robotGroundDeadzoneRadiusCm: true
+    {}
   ScriptTypesDefault:
     {}
   ScriptInputs:
     "":
       bridgeSession: !<MappingBased.AssignableType> 689f73b6-5fc9-48f2-98b7-0229a5f1e6c3
       robotMarker: !<MappingBased.AssignableType_1> b749cbc7-9706-4499-8d79-19f5a03dd792
-      pointCloudRenderer: !<MappingBased.AssignableType_2> edc2d9a2-52ca-414f-acba-c9661ee12fea
-      navigationMarkerPrefab: !<reference.ObjectPrefab> 8dad663a-f2bb-438d-882b-121c3208aba4
       annotationMarkerPrefab: !<reference.ObjectPrefab> bb47d936-adfb-479d-966f-fc30cdacfa21
-      deviceTracking: !<reference.DeviceTracking> e5553c8a-0b7e-4ef4-92d9-3e1318fb82c1
-      worldMeshObject: !<reference.SceneObject> 87343065-62b9-445a-874d-76d42ea6c7e2
-      worldMeshVisual: !<reference.RenderMeshVisual> 0516edf2-e618-4b7c-a66e-544199834756
-      robotGroundDeadzoneRadiusCm: !<float> 75.000000
   ScriptTypes:
     "":
       {}
@@ -7580,23 +7574,6 @@
     - !<own> 7b9d067f-414a-4620-a6b1-b0824953478c
   Components:
     []
-- !<ScriptComponent/edc2d9a2-52ca-414f-acba-c9661ee12fea>
-  PrefabRemaps:
-    []
-  Name: PointCloudRenderer
-  Enabled: true
-  ScriptAsset: !<reference> e3dd8fb0-5293-4da1-af29-b1bdd911e349
-  ScriptInputsDefault:
-    {}
-  ScriptTypesDefault:
-    {}
-  ScriptInputs:
-    "":
-      pointParent: !<reference.SceneObject> 2ec96410-2815-4f3f-b3af-5f1799c074f4
-      obstacleVisual: !<reference.RenderMeshVisual> 8c6264e4-2571-4f5a-b905-12c8e348776d
-  ScriptTypes:
-    "":
-      {}
 - !<SceneObject/edc3f854-bedb-4fbf-924b-9f93e6264c2f>
   PrefabRemaps:
     []
@@ -7914,21 +7891,6 @@
     CapitalizationOverride: None
   DepthTest: false
   TwoSided: false
-- !<SceneObject/f7a51602-5d1c-4564-bcf4-282473fbfb6c>
-  PrefabRemaps:
-    []
-  Name: LidarHeightVisual
-  Enabled: true
-  Layers: 1
-  LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
-    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
-    HasSegmentScaleCompensation: false
-  Children:
-    []
-  Components:
-    - !<own> 6f958547-abe3-441c-aade-b4b2726c08c3
 - !<SceneObject/f7f95fff-c512-4bf3-b03e-47c3440bf5df>
   PrefabRemaps:
     []

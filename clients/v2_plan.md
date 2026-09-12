@@ -133,8 +133,9 @@ objects use PascalCase, and wire fields retain protocol spelling such as
 | **Specs UX** | Wizard, HUD, wrist / palm, copy, buttons. | |
 | **`localization_result` / `T_odom_client`** | Client's tracking origin in `odom`. | headset origin, world frame |
 | **fiducial marker** | Printed tag on the robot (`fiducial_marker` provider). | AprilTag (except as the Go2 family), robot marker |
-| **robot** | Scene body from `hello.robot` (`body_bounds_m`, `base_height_m`). | robot marker |
-| **ground marker** | Nav UI under `pose`, placed with `base_height_m`. | |
+| **robot** | Composed `pose` applied to authored `RobotPresenter`. | |
+| **`RobotPresenter`** | Specs scene object + script that holds the one Specs-world robot location. | v19 `App/Robot/RobotMarker` class |
+| **ground marker** | `NavGoalMarker` floor target, placed with `base_height_m`. | a second posed disc |
 | **`nav_goal` / `path_poses`** | Planned route. | path, by itself |
 | **`lidar`** | Point cloud. | |
 | **camera optical frame** | Wire camera pose (`camera_optical`: X right, Y down, Z view). | optical-camera |
@@ -326,7 +327,6 @@ clients/specs/
         │   ├── NavGoalPresenter.ts
         │   └── NavigationController.ts
         ├── sensors/
-        │   ├── LidarPresenter.ts
         │   └── PointCloudRenderer.ts
         ├── ux/
         │   ├── ConnectWizard.ts
@@ -341,10 +341,11 @@ clients/specs/
 ```
 
 Platform scene objects remain `Camera Object`, `Lighting`,
-`SpectaclesInteractionKit`, and `World Mesh`. Group 9 creates `Robot`,
-`GroundMarker`, `Lidar`, and `NavGoal`; `NavGoal` is a path/spawn parent,
-while `NavGoalMarker.prefab` is instantiated at runtime. `Lidar` is never
-parented or anchored to `Robot`. `GroundMarker` is a child of `Robot`.
+`SpectaclesInteractionKit`, and `World Mesh`. Group 9 authors `RobotPresenter`
+and `LidarPresenter` under `DimosARClient`. The floor marker is the scene
+object `NavigationTargetMarker` with `NavGoalMarker`; convert it to
+`NavigationTargetMarker.prefab` and wire `navGoalMarkerPrefab`.
+`LidarPresenter` is never parented or anchored to `RobotPresenter`.
 
 ## Ten groups
 
@@ -412,8 +413,8 @@ Complete. How a client talks to `ARModule` and where it thinks it is.
 On connect the client sends `hello_request { ts_client }` as the first text
 frame, and it must be the only JSON object in that frame. `hello` returns
 `client_id`, `time_sync`, `hello.robot` (`body_bounds_m`, `footprint_m`,
-`base_height_m` — Group 9 places a ground marker under `pose` with the last of
-these), and `hello.capabilities` (`lidar`, `navigation`, `localization`,
+`base_height_m` — Group 9 applies composed `pose` to `RobotPresenter` and places
+the `NavGoalMarker` on the floor with the last of these), and `hello.capabilities` (`lidar`, `navigation`, `localization`,
 `estop`). `time_sync` is the clock pair (`ts_client`, `ts_server`). There is
 no ping/pong burst; WebSocket Ping/Pong is liveness only. `ARModule` sends
 `state` immediately after the handshake, so `ready` and the first `state`
@@ -684,7 +685,7 @@ Client defaults live in `AR_MODULE_CLIENT_CONFIG` (`hostPorts.ts`): port
 **8787**, `helloTimeoutS`, `reconnectDelayS`, and `connectTimeoutS`. Capture
 geometry and episode timeouts land with Group 8 on the same object; they are
 the Group 3 numbers, not a second table. `DimosARClient` owns the required
-`arModuleHost` input. `ARModuleSession` owns reconnect policy. The host does
+`defaultWebsocketIp` input. `ARModuleSession` owns reconnect policy. The host does
 not pick a hidden default host or port.
 
 Take confirmed socket mechanics from v19 into `SpecsWebSocketTransport`:
@@ -759,27 +760,27 @@ disposal.
 
 What exists in the tracked room. No wizard, HUD, or wrist menu.
 
-Use Lens MCP to create and wire `Robot`, `GroundMarker`, `Lidar`, and
-`NavGoal`, and to adapt `NavigationTargetMarker.prefab` into
-`NavGoalMarker.prefab`. Do not edit scene files directly. `NavGoal` is a
-path/spawn parent; `NavGoalMarker.prefab` is instantiated at runtime.
-`GroundMarker` is a child of `Robot`. `Lidar` is never parented or anchored
-to `Robot`.
+Use Lens MCP to wire `LidarPresenter` and put `NavigationTargetMarker` in the
+scene with `NavGoalMarker` (convert that object to
+`NavigationTargetMarker.prefab` and wire `navGoalMarkerPrefab`). Do not edit
+scene files directly. Author `RobotPresenter` and `LidarPresenter` under
+`DimosARClient`. `LidarPresenter` is never parented or anchored to
+`RobotPresenter`.
 
 `DimosARClient` routes typed session facts to presenters and uses session
 view changes for hide/teardown. Presenters never cache portable pose,
 capability, navigation, or tracking-origin state. Hide all room content
 whenever `hasTrackingOrigin` is false.
 
-`RobotPresenter` derives the body and ground-marker geometry from
-`hello.robot.body_bounds_m`, `footprint_m`, and `base_height_m`, then applies
-composed `pose`. `pose` carries the odometry scale correction and `lidar`
-does not, so the two drift apart with distance from the `odom` origin: draw
-each from `odom` independently.
+`RobotPresenter` applies composed `pose` to its scene object. That transform is
+the one Specs-world robot location; navigation reads it for deadzone and the
+initial `NavGoalMarker` floor pose (`base_height_m`). `pose` carries the
+odometry scale correction and `lidar` does not, so the two drift apart with
+distance from the `odom` origin: draw each from `odom` independently.
 
-Build a thin `LidarPresenter`; reuse MeshBuilder and material mechanics from
-v19 `PointCloudRenderer`. Transform every point from `odom` independently.
-No robot anchoring, mock clouds, `AppState` modes, or old protocol constants.
+`PointCloudRenderer.apply` composes each `lidar` point from `odom` and rebuilds
+the MeshBuilder visual. No wrapper `LidarPresenter` class, robot anchoring,
+mock clouds, `AppState` modes, or old protocol constants.
 
 Split v19 navigation mechanics into `GroundPlacement` for world-mesh input,
 `NavigationController` for placement lifecycle and command effects, and
@@ -792,7 +793,6 @@ Route a ground hit through Specs → caller tracking → `odom` before
 
 ```text
 clients/specs/Assets/Scripts/DimosARClient/robot/RobotPresenter.ts
-clients/specs/Assets/Scripts/DimosARClient/sensors/LidarPresenter.ts
 clients/specs/Assets/Scripts/DimosARClient/sensors/PointCloudRenderer.ts
 clients/specs/Assets/Scripts/DimosARClient/navigation/GroundPlacement.ts
 clients/specs/Assets/Scripts/DimosARClient/navigation/LineRenderer.ts
@@ -804,7 +804,7 @@ clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts
 
 **Take:** MeshBuilder / material from `PointCloudRenderer`, world-mesh hit
 from `GroundPlacement`, line drawing, nav-goal prefab mechanics. **Leave:**
-`AppState`, `RobotMarker`, mock clouds, v19 protocol constants, host
+`AppState`, v19 `App/Robot/RobotMarker`, mock clouds, v19 protocol constants, host
 navigation execution state, robot-anchored lidar.
 
 Group 9 is complete only when robot, lidar, and `nav_goal` draw from composed
@@ -842,7 +842,8 @@ Then delete the inactive v19 `ARBridge/` and `App/` scripts, obsolete scene
 components and objects, agent and registration prefabs, and v19-only tests
 after all retained assets have v2 owners. Verify there are no production
 imports or scene components named `ARBridge`, `AppState`, `Registration`,
-`operatingMode`, `RobotMarker`, or v19 `*Client` classes.
+`operatingMode`, v19 `App/Robot/RobotMarker`, or v19 `*Client` classes. The
+authored Group 9 `RobotPresenter` scene object stays.
 
 STT / TTS and `agent_skill` presentation wait for the later DimOS agent
 relay.
