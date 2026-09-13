@@ -26,12 +26,15 @@
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
+    ARMarkerPrefab: false
     cameraObject: false
     defaultWebsocketIp: false
     internetModule: false
     lidarPresenter: false
     navGoalMarkerPrefab: false
     robotPresenter: false
+    textToSpeechAudio: false
+    textToSpeechModule: false
     uiPresenter: false
   ScriptTypesHidden:
     {}
@@ -49,6 +52,9 @@
       internetModule: !<reference.InternetModule> 00000000-0000-0000-0000-000000000000
       defaultWebsocketIp: 192.168.1.108
       navGoalMarkerPrefab: !<reference.ObjectPrefab> 00000000-0000-0000-0000-000000000000
+      textToSpeechModule: !<reference.TextToSpeechModule> 00000000-0000-0000-0000-000000000000
+      textToSpeechAudio: !<reference.AudioComponent> 00000000-0000-0000-0000-000000000000
+      ARMarkerPrefab: !<reference.ObjectPrefab> 00000000-0000-0000-0000-000000000000
   ScriptTypes:
     -
       {}
@@ -60,3 +66,6 @@
     - // @input Asset.InternetModule internetModule
     - '// @input string defaultWebsocketIp = "192.168.1.108"'
     - // @input Asset.ObjectPrefab navGoalMarkerPrefab
+    - // @input Asset.TextToSpeechModule textToSpeechModule
+    - // @input Component.AudioComponent textToSpeechAudio
+    - // @input Asset.ObjectPrefab ARMarkerPrefab

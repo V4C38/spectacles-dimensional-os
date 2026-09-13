@@ -6,9 +6,12 @@ import time
 from typing import ClassVar, Literal
 
 from dimos_lcm.std_msgs import Bool
+from langchain_core.messages import AIMessage
+from langchain_core.messages.base import BaseMessage
 from pydantic import BaseModel, Field
 import websockets.asyncio.server as ws_server
 
+from dimos.agents.annotation import skill
 from dimos.ar.localization.coordinator import LocalizationCoordinator, LocalizationOutcome
 from dimos.ar.localization.fiducial_marker.localizer import FiducialMarkerLocalizer
 from dimos.ar.localization.odom_map_transform import OdomMapTransform
@@ -27,8 +30,11 @@ from dimos.ar.robot.safety import Safety
 from dimos.ar.robot.state_publisher import RobotStatePublisher
 from dimos.ar.sensors.lidar_settings import DEFAULT_LIDAR_SETTINGS, LidarSettings
 from dimos.ar.websocket.protocol import (
+    AgentState,
+    ClientPose,
     EstopRequest,
     HelloBody,
+    HumanInput,
     LidarSettingsRequest,
     LocalizationObservation,
     LocalizationObservationsRequest,
@@ -36,6 +42,8 @@ from dimos.ar.websocket.protocol import (
     StateRequest,
     StateSnapshot,
     TimeSync,
+    encode_agent,
+    encode_agent_skill,
     encode_localization_observations_request,
     encode_localization_result,
     encode_nav_goal,
@@ -57,6 +65,30 @@ from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
+CLIENT_POSE_STALE_S = 2.0
+MARKER_ID_MAX_LEN = 64
+
+
+def _textual_ai_message(msg: BaseMessage) -> str | None:
+    if not isinstance(msg, AIMessage):
+        return None
+    content = msg.content
+    if isinstance(content, str):
+        text = content.strip()
+        return text or None
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str) and block.strip():
+                parts.append(block.strip())
+            elif isinstance(block, dict) and block.get("type") == "text":
+                text = str(block.get("text", "")).strip()
+                if text:
+                    parts.append(text)
+        joined = "\n".join(parts).strip()
+        return joined or None
+    return None
+
 
 class LocalizationProviderConfig(BaseModel):
     type: Literal["fiducial_marker", "vps"]
@@ -71,6 +103,7 @@ class ARModuleConfig(ModuleConfig):  # type: ignore[misc]
     robot: RobotName = RobotName.UNITREE_GO2
     port: int = 8787
     localization: LocalizationConfig = Field(default_factory=LocalizationConfig)
+    agent: bool = False
 
 
 class ARModule(Module):  # type: ignore[misc]
@@ -82,9 +115,12 @@ class ARModule(Module):  # type: ignore[misc]
     goal_reached: In[Bool]
     color_image: In[Image]
     camera_info: In[CameraInfo]
+    agent: In[BaseMessage]
+    agent_idle: In[bool]
 
     goal_request: Out[PoseStamped]
     stop_movement: Out[Bool]
+    human_input: Out[str]
 
     config: ARModuleConfig
 
@@ -100,6 +136,10 @@ class ARModule(Module):  # type: ignore[misc]
     _safety: Safety
     _lidar_settings: LidarSettings
     _speed_mps: float
+    _agent_idle: bool
+    _client_pose: ClientPose | None
+    _client_pose_received_at: float | None
+    _ar_marker_ids: set[str]
 
     @rpc
     def build(self) -> None:
@@ -122,6 +162,8 @@ class ARModule(Module):  # type: ignore[misc]
             on_state_request=self._on_state_request,
             on_localization_start_request=self._on_localization_start_request,
             on_localization_observations=self._on_localization_observations,
+            on_human_input=self._on_human_input,
+            on_client_pose=self._on_client_pose,
             on_disconnect=self._on_client_disconnect,
         )
         self._nav_goal_coordinator = NavGoalCoordinator(
@@ -140,9 +182,14 @@ class ARModule(Module):  # type: ignore[misc]
             T_base_camera_optical=self._profile.T_base_camera_optical,
         )
         marker, vps, map_code = self._build_localizers()
+        self._agent_idle = True
+        self._client_pose = None
+        self._client_pose_received_at = None
+        self._ar_marker_ids = set()
         self._capabilities = CapabilitySet.from_supported(
             self._profile.supported_capabilities,
             localization_available=bool(self._policy.providers),
+            agent_available=self.config.agent,
         )
         self._safety = Safety(
             estop_available=self._capabilities.supports(CapabilityName.ESTOP),
@@ -212,10 +259,14 @@ class ARModule(Module):  # type: ignore[misc]
         )
 
     def _state_snapshot(self) -> StateSnapshot:
+        idle = True
+        if self._capabilities.supports(CapabilityName.AGENT):
+            idle = self._agent_idle
         return StateSnapshot(
             connected_clients=self._ws_server.connection_count,
             lidar=self._lidar_settings,
             nav=self._nav_goal_coordinator.nav_state(),
+            agent=AgentState(idle=idle),
         )
 
     def _broadcast_state(self) -> None:
@@ -263,6 +314,9 @@ class ARModule(Module):  # type: ignore[misc]
         self._policy.on_disconnect(client_id)
         if self._ws_server.connection_count == 0:
             self._safety.on_last_disconnect()
+            self._client_pose = None
+            self._client_pose_received_at = None
+            self._ar_marker_ids.clear()
         self._broadcast_state()
 
     def _on_nav_goal_request(
@@ -306,6 +360,36 @@ class ARModule(Module):  # type: ignore[misc]
         _websocket: ws_server.ServerConnection,
     ) -> None:
         self._broadcast_state()
+
+    def _on_human_input(
+        self,
+        msg: HumanInput,
+        _websocket: ws_server.ServerConnection,
+        client_id: str,
+    ) -> None:
+        if not self._capabilities.supports(CapabilityName.AGENT):
+            return
+        if self.human_input.transport is None:
+            logger.warning("human_input ignored — human_input transport is not wired")
+            return
+        self.human_input.publish(msg.text)
+        logger.info("human_input published", client_id=client_id, chars=len(msg.text))
+
+    def _on_client_pose(
+        self,
+        msg: ClientPose,
+        _websocket: ws_server.ServerConnection,
+        _client_id: str,
+    ) -> None:
+        self._client_pose = msg
+        self._client_pose_received_at = time.time()
+
+    def _fresh_client_pose(self) -> ClientPose | None:
+        if self._client_pose is None or self._client_pose_received_at is None:
+            return None
+        if time.time() - self._client_pose_received_at > CLIENT_POSE_STALE_S:
+            return None
+        return self._client_pose
 
     def _on_localization_start_request(
         self, _msg: LocalizationStartRequest, client_id: str
@@ -386,9 +470,9 @@ class ARModule(Module):  # type: ignore[misc]
         if now - self._last_relocalization_transform_poll_at < 2.0:
             return
         self._last_relocalization_transform_poll_at = now
-        if "map" not in self.tf.get_frames():
+        if "map" not in self.tfbuffer.get_frames():
             return
-        transform = self.tf.get("world", "map")
+        transform = self.tfbuffer.get("world", "map")
         if transform is None:
             return
         self._coordinator.on_relocalization_transform(
@@ -434,3 +518,142 @@ class ARModule(Module):  # type: ignore[misc]
             client_ids = self._policy.on_goal_reached(succeeded=True)
             for client_id in client_ids:
                 self._send_observations_request(client_id)
+
+    async def handle_agent(self, msg: BaseMessage) -> None:
+        if not self._capabilities.supports(CapabilityName.AGENT):
+            return
+        text = _textual_ai_message(msg)
+        if text is None:
+            return
+        self._ws_server.schedule_broadcast_text(encode_agent(text))
+
+    async def handle_agent_idle(self, msg: bool) -> None:
+        if not self._capabilities.supports(CapabilityName.AGENT):
+            return
+        idle = bool(msg)
+        if idle == self._agent_idle:
+            return
+        self._agent_idle = idle
+        self._broadcast_state()
+
+    @skill
+    def ar_place_marker(self, id: str, x: float, y: float, z: float, title: str = "") -> str:
+        """Place or replace a marker in the AR client's world at an odom-frame point.
+
+        The point is in the robot odom frame, the same frame as robot pose and
+        navigation goals. `id` is the handle, not the label. An omitted or empty
+        title leaves the marker unlabeled. The same id upserts.
+
+        Args:
+            id: Marker handle. Non-blank, max 64 characters.
+            x: Odom-frame X in meters.
+            y: Odom-frame Y in meters.
+            z: Odom-frame Z in meters.
+            title: Optional label on the marker.
+        """
+        marker_id, error = _validate_marker_id(id)
+        if error is not None:
+            return error
+        error = _validate_ar_place_marker(x, y, z, title)
+        if error is not None:
+            return error
+        if self._ws_server.connection_count == 0:
+            return "No AR client connected"
+        if self._fresh_client_pose() is None:
+            return "No client pose"
+        args: dict[str, object] = {
+            "id": marker_id,
+            "x": float(x),
+            "y": float(y),
+            "z": float(z),
+        }
+        if title:
+            args["title"] = title
+        self._ws_server.schedule_broadcast_text(
+            encode_agent_skill(name="ar_place_marker", args=args)
+        )
+        self._ar_marker_ids.add(marker_id)
+        return "ok"
+
+    @skill
+    def ar_remove_marker(self, id: str) -> str:
+        """Remove a previously placed AR marker by id.
+
+        Args:
+            id: Marker handle from ar_place_marker.
+        """
+        marker_id, error = _validate_marker_id(id)
+        if error is not None:
+            return error
+        if marker_id not in self._ar_marker_ids:
+            return "unknown marker id"
+        if self._ws_server.connection_count == 0:
+            return "No AR client connected"
+        self._ws_server.schedule_broadcast_text(
+            encode_agent_skill(name="ar_remove_marker", args={"id": marker_id})
+        )
+        self._ar_marker_ids.discard(marker_id)
+        return "ok"
+
+    @skill
+    def ar_get_client_pose(self) -> str:
+        """Return the latest wearer pose in odom, including look direction.
+
+        Uses the inbound client_pose buffer. Missing or older than 2 s from
+        server receive time returns No client pose. Broadcasts nothing.
+        """
+        pose = self._fresh_client_pose()
+        if pose is None:
+            return "No client pose"
+        look_dir = _look_dir_optical_z(pose.orientation)
+        return (
+            f"position={list(pose.position)} "
+            f"orientation={list(pose.orientation)} "
+            f"look_dir={list(look_dir)}"
+        )
+
+
+def _finite_number(value: object, name: str) -> str | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)):
+        return f"{name} must be a finite number"
+    return None
+
+
+def _validate_marker_id(marker_id: object) -> tuple[str, str | None]:
+    if not isinstance(marker_id, str):
+        return "", "id is blank"
+    trimmed = marker_id.strip()
+    if not trimmed:
+        return "", "id is blank"
+    if len(trimmed) > MARKER_ID_MAX_LEN:
+        return "", "id is too long"
+    return trimmed, None
+
+
+def _validate_ar_place_marker(x: object, y: object, z: object, title: object) -> str | None:
+    for name, value in (("x", x), ("y", y), ("z", z)):
+        error = _finite_number(value, name)
+        if error is not None:
+            return error
+    if not isinstance(title, str):
+        return "title must be a string"
+    return None
+
+
+def _look_dir_optical_z(
+    orientation: tuple[float, float, float, float],
+) -> tuple[float, float, float]:
+    x, y, z, w = orientation
+    vx, vy, vz = 0.0, 0.0, 1.0
+    tx = 2.0 * (y * vz - z * vy)
+    ty = 2.0 * (z * vx - x * vz)
+    tz = 2.0 * (x * vy - y * vx)
+    look = (
+        vx + w * tx + (y * tz - z * ty),
+        vy + w * ty + (z * tx - x * tz),
+        vz + w * tz + (x * ty - y * tx),
+    )
+    length = math.hypot(*look)
+    if length < 1e-6:
+        return (0.0, 0.0, 1.0)
+    return (look[0] / length, look[1] / length, look[2] / length)

@@ -1,6 +1,6 @@
 import type { ARModuleSessionState } from "./arModuleSession";
 
-export const NO_ROBOT_CONNECTED_LABEL = "No robot connected";
+export const NO_ROBOT_CONNECTED_LABEL = "- Disconnected -";
 
 export type SessionLinkPhase = "disconnected" | "connecting" | "robotOffline" | "connected";
 
@@ -42,22 +42,22 @@ export function sessionLinkStatus(
   switch (deriveSessionLinkPhase(view)) {
     case "disconnected":
       return {
-        text: "\n\n\nBridge not connected",
+        text: `\n\n\n${NO_ROBOT_CONNECTED_LABEL}`,
         color: COLOR_ERROR,
       };
     case "connecting":
       return {
-        text: "\n\n\nConnecting to bridge…",
+        text: "\n\n\nConnecting…",
         color: COLOR_ERROR,
       };
     case "robotOffline":
       return {
-        text: "\n\n\nBridge connected - Robot not connected",
+        text: "\n\n\nConnected - Robot not connected",
         color: COLOR_WARN,
       };
     case "connected":
       return {
-        text: `\n\n\nBridge connected - ${displayName}`,
+        text: `\n\n\nConnected - ${displayName}`,
         color: COLOR_SUCCESS,
       };
   }
@@ -72,9 +72,9 @@ export function sessionLinkTransitionLog(
   }
   if (next === "disconnected") {
     return {
-      hudText: "Bridge disconnected",
+      hudText: "Disconnected",
       hudColor: COLOR_ERROR,
-      consoleText: "Bridge disconnected",
+      consoleText: "Disconnected",
       consoleColor: COLOR_ERROR,
       hudDurationS: 3.0,
     };

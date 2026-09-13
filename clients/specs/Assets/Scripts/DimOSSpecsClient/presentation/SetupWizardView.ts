@@ -18,7 +18,7 @@ import {
 export enum SetupWizardStep {
   StartRobot = 0,
   Connect = 1,
-  Registration = 2,
+  Localization = 2,
 }
 
 export interface SetupWizardFooterState {
@@ -51,7 +51,7 @@ export class SetupWizardView {
   private readonly _descriptionBaseLocalX: number;
   private readonly _descriptionBaseLocalZ: number;
 
-  private static readonly STATUS_Y_REGISTRATION = 0;
+  private static readonly STATUS_Y_LOCALIZATION = 0;
   private static readonly STATUS_Y_DEFAULT = -2;
   private static readonly DESCRIPTION_Y_START = 1;
   private static readonly DESCRIPTION_Y_DEFAULT = 3;
@@ -151,8 +151,8 @@ export class SetupWizardView {
 
   public applyStepLayout(step: SetupWizardStep): void {
     const statusY =
-      step === SetupWizardStep.Registration
-        ? SetupWizardView.STATUS_Y_REGISTRATION
+      step === SetupWizardStep.Localization
+        ? SetupWizardView.STATUS_Y_LOCALIZATION
         : SetupWizardView.STATUS_Y_DEFAULT;
     this._statusObj.getTransform().setLocalPosition(
       new vec3(this._statusBaseLocalX, statusY, this._statusBaseLocalZ),

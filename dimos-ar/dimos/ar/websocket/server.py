@@ -17,9 +17,11 @@ import websockets.asyncio.server as ws_server
 from dimos.ar.navigation.types import NavGoalRequest
 from dimos.ar.websocket.protocol import (
     LOCALIZATION_OBSERVATIONS_FOURCC,
+    ClientPose,
     EstopRequest,
     Hello,
     HelloBody,
+    HumanInput,
     Inbound,
     LidarSettingsRequest,
     LocalizationObservation,
@@ -51,6 +53,8 @@ LocalizationObservationsHandler = Callable[
     [tuple[LocalizationObservation, ...], str, TimeSync],
     Awaitable[None] | None,
 ]
+HumanInputHandler = Callable[[HumanInput, ws_server.ServerConnection, str], None]
+ClientPoseHandler = Callable[[ClientPose, ws_server.ServerConnection, str], None]
 DisconnectHandler = Callable[[ws_server.ServerConnection, str], None]
 
 PING_INTERVAL_S = 30.0
@@ -88,6 +92,8 @@ class WebSocketServer:
         on_state_request: StateRequestHandler | None = None,
         on_localization_start_request: LocalizationStartRequestHandler | None = None,
         on_localization_observations: LocalizationObservationsHandler | None = None,
+        on_human_input: HumanInputHandler | None = None,
+        on_client_pose: ClientPoseHandler | None = None,
         on_disconnect: DisconnectHandler | None = None,
     ) -> None:
         self._port = port
@@ -101,6 +107,8 @@ class WebSocketServer:
         self._on_state_request = on_state_request
         self._on_localization_start_request = on_localization_start_request
         self._on_localization_observations = on_localization_observations
+        self._on_human_input = on_human_input
+        self._on_client_pose = on_client_pose
         self._on_disconnect = on_disconnect
 
         self._stop_event: asyncio.Event | None = None
@@ -298,6 +306,14 @@ class WebSocketServer:
         if isinstance(inbound, LocalizationStartRequest):
             if self._on_localization_start_request is not None:
                 self._on_localization_start_request(inbound, client_id)
+            return
+        if isinstance(inbound, HumanInput):
+            if self._on_human_input is not None:
+                self._on_human_input(inbound, websocket, client_id)
+            return
+        if isinstance(inbound, ClientPose):
+            if self._on_client_pose is not None:
+                self._on_client_pose(inbound, websocket, client_id)
             return
 
     def schedule_broadcast_text(self, text: str) -> None:

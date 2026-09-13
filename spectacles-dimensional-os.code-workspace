@@ -3,6 +3,9 @@
 		{
 			"name": "spectacles-dimensional-os",
 			"path": "."
+		},
+		{
+			"path": "../dimos"
 		}
 	],
 	"settings": {

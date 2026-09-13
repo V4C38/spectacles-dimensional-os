@@ -6,7 +6,17 @@ import {
 } from "../../DimOSARClient/websocket/sessionLinkStatus";
 import type { OperatingMode } from "./MainMenuView";
 
-export type RobotActivityState = "Idle" | "Following Path";
+export type RobotActivityState =
+  | "Idle"
+  | "Following Path"
+  | "Thinking"
+  | "Responding"
+  | "Listening";
+
+export interface RobotActivityVoice {
+  asrRunning: boolean;
+  ttsPlaying: boolean;
+}
 
 export class AppState {
   debugModeEnabled = false;
@@ -31,6 +41,7 @@ export class AppState {
   resetWizard(): void {
     this.wizardFinished = false;
     this.wizardLocalized = false;
+    this.operatingMode = "manual";
   }
 
   setLidarMode(mode: LidarDisplayMode): void {
@@ -38,10 +49,40 @@ export class AppState {
   }
 }
 
-export function getRobotActivityState(view: ARModuleSessionState): RobotActivityState {
-  const nav = view.nav;
-  if (nav !== null && nav.state === "following_path") {
+export function agentModeAccessible(
+  agentAvailable: boolean,
+  debugModeEnabled: boolean,
+): boolean {
+  return agentAvailable || debugModeEnabled;
+}
+
+export function agentSpeechShouldRun(
+  operatingMode: OperatingMode,
+  debugModeEnabled: boolean,
+  sessionReady: boolean,
+  agentAvailable: boolean,
+): boolean {
+  return (
+    operatingMode === "agent" &&
+    (debugModeEnabled || (sessionReady && agentAvailable))
+  );
+}
+
+export function getRobotActivityState(
+  view: ARModuleSessionState,
+  voice: RobotActivityVoice,
+): RobotActivityState {
+  if (view.nav !== null && view.nav.state === "following_path") {
     return "Following Path";
+  }
+  if (view.state?.agent.idle === false) {
+    return "Thinking";
+  }
+  if (voice.ttsPlaying) {
+    return "Responding";
+  }
+  if (voice.asrRunning) {
+    return "Listening";
   }
   return "Idle";
 }

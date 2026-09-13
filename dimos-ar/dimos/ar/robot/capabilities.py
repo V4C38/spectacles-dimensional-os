@@ -9,6 +9,7 @@ class CapabilityName(StrEnum):
     NAVIGATION = "navigation"
     LOCALIZATION = "localization"
     ESTOP = "estop"
+    AGENT = "agent"
 
 
 _ROBOT_CAPABILITIES = (
@@ -22,6 +23,7 @@ _UNAVAILABLE_REASONS = {
     CapabilityName.NAVIGATION: "navigation not available on this robot",
     CapabilityName.ESTOP: "estop not available on this robot",
     CapabilityName.LOCALIZATION: "no localization provider configured",
+    CapabilityName.AGENT: "current blueprint has no DimOS agent",
 }
 
 
@@ -47,6 +49,7 @@ class CapabilitySet:
         supported: frozenset[CapabilityName],
         *,
         localization_available: bool,
+        agent_available: bool,
     ) -> CapabilitySet:
         items: dict[CapabilityName, Capability] = {}
         for name in _ROBOT_CAPABILITIES:
@@ -60,6 +63,10 @@ class CapabilitySet:
             reason=None
             if localization_available
             else _UNAVAILABLE_REASONS[CapabilityName.LOCALIZATION],
+        )
+        items[CapabilityName.AGENT] = Capability(
+            available=agent_available,
+            reason=None if agent_available else _UNAVAILABLE_REASONS[CapabilityName.AGENT],
         )
         return cls(_items=items)
 

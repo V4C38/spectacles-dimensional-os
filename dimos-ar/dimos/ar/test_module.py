@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import replace
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 
 from dimos_lcm.std_msgs import Bool
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 import pytest
 
 from dimos.ar.localization.policy import LocalizationPolicy
@@ -14,6 +16,7 @@ from dimos.ar.module import (
     ARModuleConfig,
     LocalizationConfig,
     LocalizationProviderConfig,
+    _textual_ai_message,
 )
 from dimos.ar.navigation.types import NavGoalRequest, NavState
 from dimos.ar.robot.capabilities import CapabilityName, CapabilitySet
@@ -56,14 +59,22 @@ def _anvil_openyam_profile() -> RobotProfile:
     )
 
 
-def _module_with_policy(providers: list[str], *, profile: RobotProfile = UNITREE_GO2_PROFILE) -> ARModule:
+def _module_with_policy(
+    providers: list[str],
+    *,
+    profile: RobotProfile = UNITREE_GO2_PROFILE,
+    agent_available: bool = False,
+) -> ARModule:
     module = object.__new__(ARModule)
     module._policy = LocalizationPolicy(providers)
     module._ws_server = _FakeWs()  # type: ignore[assignment]
     module._profile = profile
+    module._agent_idle = True
+    module.human_input = SimpleNamespace(transport=None, publish=lambda _text: None)
     module._capabilities = CapabilitySet.from_supported(
         profile.supported_capabilities,
         localization_available=bool(providers),
+        agent_available=agent_available,
     )
     module._lidar_settings = LidarSettings(
         enabled=False, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0
@@ -77,6 +88,9 @@ def _module_with_policy(providers: list[str], *, profile: RobotProfile = UNITREE
         estop_available=module._capabilities.supports(CapabilityName.ESTOP),
         effects=(module._clear_navigation, module._publish_stop),
     )
+    module._client_pose = None
+    module._client_pose_received_at = None
+    module._ar_marker_ids = set()
     return module
 
 
@@ -90,6 +104,9 @@ def test_ar_module_declares_stable_port_superset() -> None:
     assert ports["camera_info"] == "In[CameraInfo]"
     assert ports["goal_request"] == "Out[PoseStamped]"
     assert ports["stop_movement"] == "Out[Bool]"
+    assert ports["human_input"] == "Out[str]"
+    assert ports["agent"] == "In[BaseMessage]"
+    assert ports["agent_idle"] == "In[bool]"
 
 
 def test_importing_ar_module_does_not_load_unitree_go2() -> None:
@@ -132,6 +149,10 @@ def test_hello_includes_estop_capability() -> None:
     assert hello.capabilities[CapabilityName.ESTOP].reason is None
     assert hello.capabilities[CapabilityName.LOCALIZATION].available is True
     assert hello.capabilities[CapabilityName.LOCALIZATION].reason is None
+    assert hello.capabilities[CapabilityName.AGENT].available is False
+    assert hello.capabilities[CapabilityName.AGENT].reason == (
+        "current blueprint has no DimOS agent"
+    )
     assert hello.robot.display_name == UNITREE_GO2_PROFILE.display_name
 
 
@@ -491,3 +512,142 @@ async def test_handle_odom_runs_without_optional_capabilities() -> None:
     await module.handle_odom(pose)
     assert pushed == [pose]
     assert published == [pose]
+
+
+def test_hello_agent_capability_follows_config() -> None:
+    module = _module_with_policy([], agent_available=True)
+    hello = module._hello_body("c1")
+    assert hello.capabilities[CapabilityName.AGENT].available is True
+    assert hello.capabilities[CapabilityName.AGENT].reason is None
+
+
+def test_state_snapshot_includes_agent_idle() -> None:
+    module = _module_with_policy([])
+    text = encode_state(module._state_snapshot())
+    assert '"agent"' in text
+    assert '"idle":true' in text.replace(" ", "")
+
+
+@pytest.mark.asyncio
+async def test_handle_agent_forwards_textual_aimessage_only() -> None:
+    module = _module_with_policy([], agent_available=True)
+    await module.handle_agent(HumanMessage(content="ignore me"))
+    await module.handle_agent(ToolMessage(content="tool", tool_call_id="1"))
+    await module.handle_agent(AIMessage(content=""))
+    await module.handle_agent(AIMessage(content="  Heading out.  "))
+    broadcasts = module._ws_server.broadcasts  # type: ignore[union-attr]
+    assert len(broadcasts) == 1
+    assert '"type":"agent"' in broadcasts[0]
+    assert "Heading out." in broadcasts[0]
+
+
+@pytest.mark.asyncio
+async def test_handle_agent_idle_broadcasts_state_change() -> None:
+    module = _module_with_policy([], agent_available=True)
+    await module.handle_agent_idle(False)
+    await module.handle_agent_idle(False)
+    await module.handle_agent_idle(True)
+    broadcasts = module._ws_server.broadcasts  # type: ignore[union-attr]
+    assert len(broadcasts) == 2
+    assert '"idle":false' in broadcasts[0].replace(" ", "")
+    assert '"idle":true' in broadcasts[1].replace(" ", "")
+
+
+def test_human_input_requires_capability_and_transport() -> None:
+    from dimos.ar.websocket.protocol import HumanInput
+
+    published: list[str] = []
+    module = _module_with_policy([])
+    module.human_input = SimpleNamespace(transport=object(), publish=published.append)
+    module._on_human_input(HumanInput(text="go"), None, "c1")  # type: ignore[arg-type]
+    assert published == []
+
+    module = _module_with_policy([], agent_available=True)
+    module.human_input = SimpleNamespace(transport=None, publish=published.append)
+    module._on_human_input(HumanInput(text="go"), None, "c1")  # type: ignore[arg-type]
+    assert published == []
+
+    module.human_input = SimpleNamespace(transport=object(), publish=published.append)
+    module._on_human_input(HumanInput(text="go"), None, "c1")  # type: ignore[arg-type]
+    assert published == ["go"]
+
+
+def test_ar_place_marker_validates_and_requires_fresh_pose() -> None:
+    from dimos.ar.websocket.protocol import ClientPose
+
+    module = _module_with_policy([], agent_available=True)
+    module._ws_server.connection_count = 0  # type: ignore[union-attr]
+    assert module.ar_place_marker("kitchen", 1.0, 0.0, 0.0) == "No AR client connected"
+    assert module.ar_place_marker("  ", 1.0, 0.0, 0.0) == "id is blank"
+    assert module.ar_place_marker("x" * 65, 1.0, 0.0, 0.0) == "id is too long"
+    assert "x" in module.ar_place_marker("kitchen", float("nan"), 0.0, 0.0)  # type: ignore[arg-type]
+    assert "title" in module.ar_place_marker("kitchen", 1.0, 0.0, 0.0, title=1)  # type: ignore[arg-type]
+    module._ws_server.connection_count = 1  # type: ignore[union-attr]
+    assert module.ar_place_marker("kitchen", 1.0, 0.0, 0.0) == "No client pose"
+    module._on_client_pose(
+        ClientPose(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0), ts=1.0),
+        None,  # type: ignore[arg-type]
+        "c1",
+    )
+    assert module.ar_place_marker("kitchen", 1.0, 0.0, 0.0, "Kitchen") == "ok"
+    payload = module._ws_server.broadcasts[-1]  # type: ignore[union-attr]
+    assert "ar_place_marker" in payload
+    assert '"id":"kitchen"' in payload
+    assert '"title":"Kitchen"' in payload
+    assert module.ar_place_marker("kitchen", 2.0, 0.0, 0.0) == "ok"
+    assert "title" not in module._ws_server.broadcasts[-1]  # type: ignore[union-attr]
+    assert module._ar_marker_ids == {"kitchen"}
+
+
+def test_ar_remove_marker_and_clear_on_last_disconnect() -> None:
+    from dimos.ar.websocket.protocol import ClientPose
+
+    module = _module_with_policy([], agent_available=True)
+    module._ws_server.connection_count = 1  # type: ignore[union-attr]
+    module._on_client_pose(
+        ClientPose(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0), ts=1.0),
+        None,  # type: ignore[arg-type]
+        "c1",
+    )
+    assert module.ar_place_marker("door", 1.0, 0.0, 0.0) == "ok"
+    assert module.ar_remove_marker("missing") == "unknown marker id"
+    assert module.ar_remove_marker("door") == "ok"
+    payload = module._ws_server.broadcasts[-1]  # type: ignore[union-attr]
+    assert "ar_remove_marker" in payload
+    assert '"id":"door"' in payload
+    assert module.ar_remove_marker("door") == "unknown marker id"
+    assert module.ar_place_marker("door", 1.0, 0.0, 0.0) == "ok"
+    module._ws_server.connection_count = 0  # type: ignore[union-attr]
+    module._on_client_disconnect(None, "c1")  # type: ignore[arg-type]
+    assert module._ar_marker_ids == set()
+    assert module.ar_get_client_pose() == "No client pose"
+
+
+def test_ar_get_client_pose_empty_stale_fresh() -> None:
+    from dimos.ar.websocket.protocol import ClientPose
+
+    module = _module_with_policy([], agent_available=True)
+    assert module.ar_get_client_pose() == "No client pose"
+    module._on_client_pose(
+        ClientPose(position=(1.0, 2.0, 3.0), orientation=(0.0, 0.0, 0.0, 1.0), ts=12.5),
+        None,  # type: ignore[arg-type]
+        "c1",
+    )
+    text = module.ar_get_client_pose()
+    assert "position" in text
+    assert "orientation" in text
+    assert "look_dir" in text
+    assert "[1.0, 2.0, 3.0]" in text
+    assert "[0.0, 0.0, 1.0]" in text
+    module._client_pose_received_at = time.time() - 1.1
+    assert "position" in module.ar_get_client_pose()
+    module._client_pose_received_at = time.time() - 2.1
+    assert module.ar_get_client_pose() == "No client pose"
+
+
+def test_textual_ai_message_extracts_text_blocks() -> None:
+    assert _textual_ai_message(HumanMessage(content="no")) is None
+    assert _textual_ai_message(AIMessage(content="hello")) == "hello"
+    assert (
+        _textual_ai_message(AIMessage(content=[{"type": "text", "text": "block"}])) == "block"
+    )

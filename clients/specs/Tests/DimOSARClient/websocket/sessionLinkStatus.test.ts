@@ -17,6 +17,7 @@ function baseView(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessio
     lidar: null,
     capabilities: null,
     nav: null,
+    agentText: null,
     lastError: null,
     ...overrides,
   };
@@ -36,8 +37,8 @@ describe("deriveSessionLinkPhase", () => {
 });
 
 describe("sessionLinkStatus", () => {
-  it("matches v19 bridge strings", () => {
-    expect(sessionLinkStatus(baseView()).text).toContain("Bridge not connected");
+  it("matches connection status strings", () => {
+    expect(sessionLinkStatus(baseView()).text).toContain("- Disconnected -");
     expect(sessionLinkStatus(baseView({ connection: "ready", hello: {} as any })).text).toContain(
       "Robot not connected",
     );
@@ -46,7 +47,7 @@ describe("sessionLinkStatus", () => {
         baseView({ connection: "ready", hello: { robot: { display_name: "Go2" } } as any, pose: {} as any }),
         "Go2",
       ).text,
-    ).toContain("Bridge connected - Go2");
+    ).toContain("Connected - Go2");
   });
 });
 

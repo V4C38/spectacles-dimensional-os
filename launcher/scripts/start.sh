@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Start the dimos-ar bridge from this monorepo package.
+# Start ARModule from this monorepo package.
 #
 # Usage:
 #   ./launcher/scripts/start.sh
-#   ./launcher/scripts/start.sh --stack go2|g1
+#   ./launcher/scripts/start.sh --stack go2|agentic
 #   ./launcher/scripts/start.sh --stack go2 --robot-ip <ip|simulated>
 #
 # The robot is auto-discovered on the LAN (Unitree multicast) unless --robot-ip
@@ -76,7 +76,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --stack)
       if [[ $# -lt 2 || -z "${2:-}" ]]; then
-        echo "--stack requires go2 or g1" >&2
+        echo "--stack requires go2 or agentic" >&2
         exit 1
       fi
       STACK_FLAG="$2"
@@ -158,12 +158,12 @@ LAN_IP="$(detect_lan_ip)"
 export DIMOS_AR_LAN_IP="${LAN_IP}"
 
 STACK_IDS=(
-  "ar_go2"
-  "ar_g1"
+  "unitree_go2_ar"
+  "unitree_go2_ar_agentic"
 )
 MENU_LABELS=(
   "Unitree Go2"
-  "Unitree G1"
+  "Unitree Go2 Agentic"
 )
 
 # Interactive arrow-key menu: up/down to move, Enter to select.
@@ -285,14 +285,14 @@ for device in devices:
 
 if [[ -n "${STACK_FLAG}" ]]; then
   case "${STACK_FLAG}" in
-    go2|ar_go2)
+    go2|unitree_go2_ar)
       SELECTED_INDEX=0
       ;;
-    g1|ar_g1)
+    agentic|unitree_go2_ar_agentic)
       SELECTED_INDEX=1
       ;;
     *)
-      echo "Unknown stack: ${STACK_FLAG} (expected go2 or g1)" >&2
+      echo "Unknown stack: ${STACK_FLAG} (expected go2 or agentic)" >&2
       exit 1
       ;;
   esac
@@ -302,7 +302,7 @@ fi
 
 SELECTED_BLUEPRINT="${STACK_IDS[$SELECTED_INDEX]}"
 STACK_LABEL="${MENU_LABELS[$SELECTED_INDEX]}"
-EQUIVALENT="dimos run ${SELECTED_BLUEPRINT//_/-}"
+EQUIVALENT="dimos run dimos-ar.${SELECTED_BLUEPRINT//_/-}"
 
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
   echo "Warning: OPENAI_API_KEY is unset — agent mode will not work until it is set." >&2

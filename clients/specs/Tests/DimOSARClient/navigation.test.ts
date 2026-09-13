@@ -39,6 +39,7 @@ function helloAt(tsClient: number, capabilities?: Partial<Capabilities>): Hello 
       navigation: { available: true, reason: null },
       localization: { available: true, reason: null },
       estop: { available: true, reason: null },
+      agent: { available: false, reason: "current blueprint has no DimOS agent" },
       ...capabilities,
     },
   };
@@ -49,6 +50,7 @@ const STATE: State = {
   server: { connected_clients: 1 },
   lidar: { enabled: true, min_height_m: 0.1, max_height_m: 1.5, max_range_m: 5 },
   nav: { state: "idle", outcome: null },
+  agent: { idle: true },
 };
 
 function makeSession(): { session: ARModuleSession; transport: FakeTransport; clock: FakeClock } {

@@ -9,14 +9,17 @@ def test_capability_set_from_supported() -> None:
     capabilities = CapabilitySet.from_supported(
         frozenset({CapabilityName.ESTOP}),
         localization_available=True,
+        agent_available=False,
     )
     assert capabilities.supports(CapabilityName.ESTOP) is True
     assert capabilities.supports(CapabilityName.LIDAR) is False
     assert capabilities.supports(CapabilityName.NAVIGATION) is False
     assert capabilities.supports(CapabilityName.LOCALIZATION) is True
+    assert capabilities.supports(CapabilityName.AGENT) is False
     mapping = capabilities.as_mapping()
     assert mapping[CapabilityName.LIDAR].reason == "lidar not available on this robot"
     assert mapping[CapabilityName.LOCALIZATION].reason is None
+    assert mapping[CapabilityName.AGENT].reason == "current blueprint has no DimOS agent"
 
 
 def test_unavailable_capability_requires_reason() -> None:

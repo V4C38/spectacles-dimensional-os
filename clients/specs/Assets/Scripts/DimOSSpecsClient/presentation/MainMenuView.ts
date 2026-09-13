@@ -5,20 +5,20 @@ import {
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import { Frame } from "SpectaclesUIKit.lspkg/Scripts/Components/Frame/Frame";
 import {
-  applyCapabilityButtonPresentation,
   bindHoverScale,
   bindToggleButton,
   ButtonBinding,
+  COLOR_WHITE,
   configureButtonToggle,
   findButtonBinding,
   findChildRecursive,
+  findFirstText,
   findText,
   FONT_BUTTON,
   FONT_CAPTION,
   getFrameComponent,
   setButtonEnabled,
   setButtonToggleState,
-  SnapOS2Styles,
 } from "./UIKit";
 
 export type OperatingMode = "manual" | "agent";
@@ -71,11 +71,11 @@ export class MainMenuView {
       "ModeManualSecondary",
       "TextModeManual",
     );
-    const agentPrimary = findButtonBinding(panel, "ModeAgentPrimary", "TextModeAgent");
+    const agentPrimary = findButtonBinding(panel, "ModeAgentPrimary", "ButtonText");
     const agentSecondary = findButtonBinding(
       panel,
       "ModeAgentSecondary",
-      "TextModeAgent",
+      "ButtonText",
     );
     const showLiDAR = findButtonBinding(panel, "ShowLiDAR", "ShowLiDARLabel");
     const debugMode = findButtonBinding(panel, "DebugMode", "DebugModeLabel");
@@ -237,21 +237,28 @@ export class MainMenuView {
     return enabled ? "⌕ Debug: on" : "⌕ Debug: off";
   }
 
+  public setAgentModeAvailability(available: boolean): void {
+    const agentPair = this._modePairs.find((pair) => pair.mode === "agent");
+    if (!agentPair) {
+      return;
+    }
+    for (const binding of [agentPair.primary, agentPair.secondary]) {
+      setButtonEnabled(binding.button, available);
+    }
+    for (const binding of [agentPair.primary, agentPair.secondary]) {
+      const label = findFirstText(binding.sceneObject) ?? binding.labelText;
+      if (label) {
+        label.text = "Agent";
+        label.textFill.color = available ? COLOR_WHITE : new vec4(0.7, 0.7, 0.7, 1);
+      }
+    }
+  }
+
   public setEmergencyStopAvailability(
     available: boolean,
     _reason: string | null = null,
   ): void {
-    applyCapabilityButtonPresentation(
-      this._emergencyStop.button,
-      this._emergencyStop.labelText,
-      {
-        available,
-        availableLabel: "Emergency Stop",
-        unavailableLabel: "Emergency Stop\nUnavailable",
-        availableStyle: SnapOS2Styles.Special,
-        unavailableStyle: SnapOS2Styles.Special,
-      },
-    );
+    this._emergencyStop.sceneObject.enabled = available;
     if (available) {
       setButtonToggleState(this._emergencyStop.button, true);
     }

@@ -12,7 +12,7 @@ export function localizationCaptureStatus(
   episodeView: LocalizationCaptureState,
 ): CaptureStatusText {
   if (sessionView.connection !== "ready") {
-    return { text: "Inactive — bridge not ready", color: COLOR_MUTED() };
+    return { text: "Inactive — not ready", color: COLOR_MUTED() };
   }
   if (!sessionView.capabilities?.localization.available) {
     const reason = sessionView.capabilities.localization.reason ?? "Localization unavailable";

@@ -7,11 +7,15 @@ name = "dimos-ar"
 version = "0.2.0"
 requires-python = ">=3.12"
 license = "MIT"
-dependencies = ["dimos", "websockets>=12.0", "requests>=2.31"]
+dependencies = ["dimos", "websockets>=12.0", "requests>=2.31", "langchain-core>=1.2.22,<2"]
 
 [project.optional-dependencies]
 unitree = ["dimos[base,unitree]"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.8", "mypy>=1.13"]
+
+[project.entry-points."dimos.blueprints"]
+unitree-go2-ar = "dimos.ar.blueprints:unitree_go2_ar"
+unitree-go2-ar-agentic = "dimos.ar.blueprints:unitree_go2_ar_agentic"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -67,6 +71,7 @@ exclude = ".*/test_."
 module = [
     "dimos.*",
     "dimos_lcm.*",
+    "langchain_core.*",
     "cv2.*",
     "scipy.*",
     "unitree_webrtc_connect.*",

@@ -62,6 +62,7 @@ function baseView(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessio
     lidar: null,
     capabilities: null,
     nav: null,
+    agentText: null,
     lastError: null,
     ...overrides,
   };
@@ -78,6 +79,7 @@ function helloView(): Hello {
       navigation: { available: true, reason: null },
       localization: { available: true, reason: null },
       estop: { available: true, reason: null },
+      agent: { available: false, reason: "current blueprint has no DimOS agent" },
     },
   };
 }

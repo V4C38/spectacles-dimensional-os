@@ -6,7 +6,7 @@ import {
   COLOR_WHITE,
 } from "./UIKit";
 export type AgentActivityState = "idle" | "busy";
-export type AgentResponseSeverity = "info" | "warn" | "error";
+export type AgentResponseSeverity = "ok" | "warn" | "error";
 
 export interface UILogEntry {
   text: string;

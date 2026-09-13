@@ -7,7 +7,9 @@ import {
   decodeLocalizationObservations,
   decodeOutbound,
   encodeEstopRequest,
+  encodeClientPose,
   encodeHelloRequest,
+  encodeHumanInput,
   encodeLidarSettingsRequest,
   encodeLocalizationObservations,
   encodeLocalizationStartRequest,
@@ -31,6 +33,7 @@ const HELLO_FIXTURE = {
     navigation: { available: true, reason: null },
     localization: { available: true, reason: null },
     estop: { available: true, reason: null },
+    agent: { available: false, reason: "current blueprint has no DimOS agent" },
   },
 };
 
@@ -44,6 +47,7 @@ const STATE_FIXTURE = {
     max_range_m: 5.0,
   },
   nav: { state: "idle", outcome: null },
+  agent: { idle: true },
 };
 
 function hexToBytes(hex: string): Uint8Array {
@@ -235,6 +239,69 @@ describe("decodeOutbound fixtures", () => {
       observation_count: 3,
       wait_timeout_s: 2.0,
     });
+  });
+
+  it("decodes agent text and agent_skill frames", () => {
+    expect(decodeOutbound(JSON.stringify({ type: "agent", text: "  Heading out.  " }))).toEqual({
+      type: "agent",
+      text: "Heading out.",
+    });
+    expect(
+      decodeOutbound(
+        JSON.stringify({
+          type: "agent_skill",
+          name: "ar_place_marker",
+          args: { id: "kitchen", x: 1, y: 0, z: 0 },
+        }),
+      ),
+    ).toEqual({
+      type: "agent_skill",
+      name: "ar_place_marker",
+      args: { id: "kitchen", x: 1, y: 0, z: 0 },
+    });
+    expect(() => decodeOutbound(JSON.stringify({ type: "agent", text: "   " }))).toThrow(
+      /non-blank/,
+    );
+  });
+
+  it("encodes client_pose and rejects non-finite pose or a zero quaternion", () => {
+    expect(
+      JSON.parse(
+        encodeClientPose({
+          position: [1, 2, 3],
+          orientation: [0, 0, 0, 1],
+          ts: 12.5,
+        }).trim(),
+      ),
+    ).toEqual({
+      type: "client_pose",
+      position: [1, 2, 3],
+      orientation: [0, 0, 0, 1],
+      ts: 12.5,
+    });
+    expect(() =>
+      encodeClientPose({
+        position: [Number.NaN, 0, 0],
+        orientation: [0, 0, 0, 1],
+        ts: 1,
+      }),
+    ).toThrow(/finite/);
+    expect(() =>
+      encodeClientPose({
+        position: [0, 0, 0],
+        orientation: [0, 0, 0, 0],
+        ts: 1,
+      }),
+    ).toThrow(/non-zero/);
+  });
+
+  it("encodes human_input and rejects blank or oversized text", () => {
+    expect(JSON.parse(encodeHumanInput("  go  ").trim())).toEqual({
+      type: "human_input",
+      text: "go",
+    });
+    expect(() => encodeHumanInput("   ")).toThrow(/non-blank/);
+    expect(() => encodeHumanInput("x".repeat(4001))).toThrow(/4000/);
   });
 
   it("decodes localization_result and pose fixtures", () => {

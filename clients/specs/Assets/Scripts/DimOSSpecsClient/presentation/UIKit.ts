@@ -222,7 +222,7 @@ export function findButtonBinding(
   return {
     sceneObject: obj,
     button,
-    labelText: findText(obj, labelName) ?? findText(root, labelName),
+    labelText: findText(obj, labelName) ?? findFirstText(obj) ?? findText(root, labelName),
   };
 }
 
@@ -234,17 +234,24 @@ function assignButtonStyle(btn: any, style: string): void {
   (btn as StyleableButton)._style = style;
 }
 
-export function setButtonStyle(btn: RectangleButton | RoundButton | null, style: string): void {
-  if (!btn || btn.style === style) return;
-  assignButtonStyle(btn as unknown as StyleableButton, style);
-  const internal = btn as unknown as StyleableButton;
-  if (!internal._initialized) return;
+export function reinitializeButton(btn: RectangleButton | RoundButton | null): void {
+  if (!btn) return;
+  const internal = btn as StyleableButton;
+  if (!internal._initialized || typeof btn.initialize !== "function") {
+    return;
+  }
   if (internal._visual) {
     internal._visual.destroy();
     internal._visual = null;
   }
   internal._initialized = false;
   btn.initialize();
+}
+
+export function setButtonStyle(btn: RectangleButton | RoundButton | null, style: string): void {
+  if (!btn || btn.style === style) return;
+  assignButtonStyle(btn as unknown as StyleableButton, style);
+  reinitializeButton(btn);
 }
 
 export function configureButtonToggle(btn: RectangleButton, defaultOn: boolean = false): void {
@@ -287,8 +294,17 @@ export function bindToggleOnValueChange(
 
 export function setButtonEnabled(btn: RectangleButton | RoundButton | null, enabled: boolean): void {
   if (!btn) return;
-  (btn as any).enabled = enabled;
-  if ("inactive" in (btn as any)) (btn as any).inactive = !enabled;
+  const internal = btn as StyleableButton;
+  const componentWasEnabled = internal.enabled !== false;
+  const nextInactive = !enabled;
+  const inactiveChanged = !("inactive" in internal) || internal.inactive !== nextInactive;
+  internal.enabled = true;
+  if ("inactive" in internal) {
+    internal.inactive = nextInactive;
+  }
+  if (!componentWasEnabled || inactiveChanged) {
+    reinitializeButton(btn);
+  }
 }
 
 export interface CapabilityButtonPresentation {

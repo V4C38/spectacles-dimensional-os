@@ -26,9 +26,9 @@ import { COLOR_ERROR, COLOR_WHITE } from "./UIKit";
 import { SetupWizardStep, SetupWizardView } from "./SetupWizardView";
 
 const WIZARD_STEP_TITLES = [
-  "Start Robot & Bridge",
+  "Start Robot & ARModule",
   "Connect",
-  "Registration",
+  "Localization",
 ] as const;
 
 const WIZARD_STEP_DESCRIPTIONS = [
@@ -37,7 +37,7 @@ const WIZARD_STEP_DESCRIPTIONS = [
   "Look at the robot while the headset captures views for localization.",
 ] as const;
 
-function registrationStepDescription(displayName: string): string {
+function localizationStepDescription(displayName: string): string {
   return `Point your Spectacles at ${displayName}.\nHold steady while views are captured.`;
 }
 
@@ -49,7 +49,7 @@ function connectStepStatus(input: {
   displayName?: string;
 }): StatusText {
   if (input.isConnecting && !input.socketOpen) {
-    return { text: "Connecting to bridge…", color: COLOR_ERROR };
+    return { text: "Connecting…", color: COLOR_ERROR };
   }
   if (input.isConnecting && input.socketOpen && input.view.connection === "awaiting_hello") {
     return { text: "Waiting for handshake…", color: COLOR_ERROR };
@@ -144,10 +144,10 @@ export class SetupWizardController {
   }
 
   public tick(): void {
-    if (!this._visible || this._currentStep !== SetupWizardStep.Registration) {
+    if (!this._visible || this._currentStep !== SetupWizardStep.Localization) {
       return;
     }
-    this.renderRegistrationStatus();
+    this.renderLocalizationStatus();
   }
 
   public onSessionViewChanged(): void {
@@ -160,8 +160,8 @@ export class SetupWizardController {
         this.invalidatePending();
       }
     }
-    if (this._currentStep === SetupWizardStep.Registration) {
-      this.renderRegistrationStatus();
+    if (this._currentStep === SetupWizardStep.Localization) {
+      this.renderLocalizationStatus();
       this.refreshFooterButtons();
     }
   }
@@ -208,21 +208,21 @@ export class SetupWizardController {
           this.startAutoconnect();
         }
         break;
-      case SetupWizardStep.Registration:
+      case SetupWizardStep.Localization:
         this.view.setInputEnabled(false);
-        this.beginRegistrationCapture();
-        this.renderRegistrationStatus();
+        this.beginLocalizationCapture();
+        this.renderLocalizationStatus();
         this.refreshFooterButtons();
         break;
     }
   }
 
   private stepDescription(step: SetupWizardStep): string {
-    if (step !== SetupWizardStep.Registration) {
+    if (step !== SetupWizardStep.Localization) {
       return WIZARD_STEP_DESCRIPTIONS[step];
     }
     const displayName = this.deps.session.view().hello?.robot.display_name ?? "the robot";
-    return registrationStepDescription(displayName);
+    return localizationStepDescription(displayName);
   }
 
   private initializeConnectInput(): void {
@@ -258,10 +258,10 @@ export class SetupWizardController {
         }
         return;
       }
-      this.setStep(SetupWizardStep.Registration);
+      this.setStep(SetupWizardStep.Localization);
       return;
     }
-    if (this._currentStep === SetupWizardStep.Registration) {
+    if (this._currentStep === SetupWizardStep.Localization) {
       if (!this.deps.session.view().hasTrackingOrigin) {
         return;
       }
@@ -288,7 +288,7 @@ export class SetupWizardController {
     this.deps.onFinished({ localized });
   }
 
-  private beginRegistrationCapture(): void {
+  private beginLocalizationCapture(): void {
     if (!this.isConnected()) {
       return;
     }
@@ -428,7 +428,7 @@ export class SetupWizardController {
     this.view.setStatus(this._hostValidationError ?? status.text, status.color);
   }
 
-  private renderRegistrationStatus(): void {
+  private renderLocalizationStatus(): void {
     const sessionView = this.deps.session.view();
     const episodeView = this.deps.episode.view();
     const capture = localizationCaptureStatus(sessionView, episodeView);
@@ -446,7 +446,7 @@ export class SetupWizardController {
       footerShowPrev = this._openedFromRuntime;
     } else if (this._currentStep === SetupWizardStep.Connect && connected) {
       footerNextLabel = "Complete";
-    } else if (this._currentStep === SetupWizardStep.Registration) {
+    } else if (this._currentStep === SetupWizardStep.Localization) {
       footerNextLabel = "Complete";
       footerNextEnabled = this.deps.session.view().hasTrackingOrigin;
     }

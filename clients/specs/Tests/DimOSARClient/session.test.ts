@@ -60,6 +60,7 @@ function helloAt(tsClient: number, capabilities?: Partial<Capabilities>): Hello 
       navigation: { available: true, reason: null },
       localization: { available: true, reason: null },
       estop: { available: true, reason: null },
+      agent: { available: false, reason: "current blueprint has no DimOS agent" },
       ...capabilities,
     },
   };
@@ -70,6 +71,7 @@ const STATE: State = {
   server: { connected_clients: 1 },
   lidar: { enabled: true, min_height_m: 0.1, max_height_m: 1.5, max_range_m: 5 },
   nav: { state: "idle", outcome: null },
+  agent: { idle: true },
 };
 
 function makeSession(): {
@@ -397,6 +399,35 @@ describe("session control", () => {
     expect(transport.texts).toHaveLength(1);
     session.requestState();
     expect(transport.texts[transport.texts.length - 1]).toBe('{"type":"state_request"}\n');
+  });
+
+  it("caches latest agent text and exposes idle from the state frame", () => {
+    const { session, transport, clock } = makeSession();
+    handshake(session, transport, clock, {
+      agent: { available: true, reason: null },
+    });
+    const outbound: string[] = [];
+    session.subscribeOutbound((message) => outbound.push(message.type));
+    session.onTransportText(JSON.stringify({ type: "agent", text: "Heading out." }) + "\n");
+    expect(session.view().agentText).toBe("Heading out.");
+    session.onTransportText(
+      JSON.stringify({
+        ...STATE,
+        agent: { idle: false },
+      }) + "\n",
+    );
+    expect(session.view().state?.agent.idle).toBe(false);
+    session.onTransportText(
+      JSON.stringify({
+        type: "agent_skill",
+        name: "ar_place_marker",
+        args: { id: "kitchen", x: 1, y: 0, z: 0 },
+      }) + "\n",
+    );
+    expect(outbound).toContain("agent");
+    expect(outbound).toContain("agent_skill");
+    session.stop();
+    expect(session.view().agentText).toBeNull();
   });
 });
 

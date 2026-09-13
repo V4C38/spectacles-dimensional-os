@@ -12,10 +12,14 @@ from dimos.ar.robot.profiles import RobotDescription
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.ar.websocket.protocol import (
+    HUMAN_INPUT_MAX_CHARS,
     LIDAR_FOURCC,
     LOCALIZATION_OBSERVATIONS_FOURCC,
+    AgentState,
+    ClientPose,
     EstopRequest,
     Hello,
+    HumanInput,
     LidarSettingsRequest,
     LocalizationObservation,
     LocalizationObservationsRequest,
@@ -26,6 +30,9 @@ from dimos.ar.websocket.protocol import (
     decode_hello_request,
     decode_inbound,
     decode_localization_observations,
+    encode_agent,
+    encode_agent_skill,
+    encode_client_pose,
     encode_hello,
     encode_lidar_binary,
     encode_localization_observations_request,
@@ -53,6 +60,9 @@ def _sample_hello(client_id: str = "abc123") -> Hello:
             CapabilityName.NAVIGATION: Capability(available=True, reason=None),
             CapabilityName.LOCALIZATION: Capability(available=True, reason=None),
             CapabilityName.ESTOP: Capability(available=True, reason=None),
+            CapabilityName.AGENT: Capability(
+                available=False, reason="current blueprint has no DimOS agent"
+            ),
         },
     )
 
@@ -134,12 +144,14 @@ def test_encode_state_has_no_alignment_block() -> None:
         connected_clients=2,
         lidar=LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0),
         nav=NavState(state="following_path", outcome=None),
+        agent=AgentState(idle=True),
     )
     msg = _parse_json_line(encode_state(snapshot))
     assert msg["type"] == "state"
     assert msg["server"]["connected_clients"] == 2
     assert msg["lidar"]["max_range_m"] == 5.0
     assert msg["nav"]["state"] == "following_path"
+    assert msg["agent"]["idle"] is True
     assert "alignment" not in msg
 
 
@@ -295,6 +307,97 @@ def test_decode_state_request() -> None:
 def test_decode_unknown_type_rejected() -> None:
     with pytest.raises(ValueError, match="Unknown inbound"):
         decode_inbound(json.dumps({"type": "nope"}))
+
+
+def test_decode_human_input() -> None:
+    msg = decode_inbound(json.dumps({"type": "human_input", "text": "  go forward  "}))
+    assert isinstance(msg, HumanInput)
+    assert msg.text == "go forward"
+
+
+def test_decode_human_input_rejects_blank_and_oversize() -> None:
+    with pytest.raises(ValueError, match="non-blank"):
+        decode_inbound(json.dumps({"type": "human_input", "text": "   "}))
+    with pytest.raises(ValueError, match="4000"):
+        decode_inbound(
+            json.dumps({"type": "human_input", "text": "x" * (HUMAN_INPUT_MAX_CHARS + 1)})
+        )
+
+
+def test_decode_client_pose() -> None:
+    msg = decode_inbound(
+        json.dumps(
+            {
+                "type": "client_pose",
+                "position": [1.0, 2.0, 3.0],
+                "orientation": [0.0, 0.0, 0.0, 1.0],
+                "ts": 12.5,
+            }
+        )
+    )
+    assert isinstance(msg, ClientPose)
+    assert msg.position == (1.0, 2.0, 3.0)
+    assert msg.orientation == (0.0, 0.0, 0.0, 1.0)
+    assert msg.ts == 12.5
+
+
+def test_decode_client_pose_rejects_non_finite_and_zero_quat() -> None:
+    base = {
+        "type": "client_pose",
+        "position": [1.0, 2.0, 3.0],
+        "orientation": [0.0, 0.0, 0.0, 1.0],
+        "ts": 12.5,
+    }
+    with pytest.raises(ValueError, match="finite"):
+        decode_inbound(json.dumps({**base, "position": [1.0, float("nan"), 3.0]}))
+    with pytest.raises(ValueError, match="finite"):
+        decode_inbound(json.dumps({**base, "ts": float("inf")}))
+    with pytest.raises(ValueError, match="non-zero"):
+        decode_inbound(json.dumps({**base, "orientation": [0.0, 0.0, 0.0, 0.0]}))
+
+
+def test_encode_client_pose() -> None:
+    payload = _parse_json_line(
+        encode_client_pose(
+            position=(1.0, 2.0, 3.0),
+            orientation=(0.0, 0.0, 0.0, 1.0),
+            ts=12.5,
+        )
+    )
+    assert payload == {
+        "type": "client_pose",
+        "position": [1.0, 2.0, 3.0],
+        "orientation": [0.0, 0.0, 0.0, 1.0],
+        "ts": 12.5,
+    }
+    with pytest.raises(ValueError, match="non-zero"):
+        encode_client_pose(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 0.0), ts=1.0)
+
+
+def test_encode_agent_and_agent_skill() -> None:
+    agent = _parse_json_line(encode_agent("  Heading out.  "))
+    assert agent == {"type": "agent", "text": "Heading out."}
+    skill = _parse_json_line(
+        encode_agent_skill(
+            name="ar_place_marker",
+            args={"id": "kitchen", "x": 1.0, "y": 0.0, "z": 0.0},
+        )
+    )
+    assert skill == {
+        "type": "agent_skill",
+        "name": "ar_place_marker",
+        "args": {"id": "kitchen", "x": 1.0, "y": 0.0, "z": 0.0},
+    }
+    remove = _parse_json_line(encode_agent_skill(name="ar_remove_marker", args={"id": "kitchen"}))
+    assert remove == {
+        "type": "agent_skill",
+        "name": "ar_remove_marker",
+        "args": {"id": "kitchen"},
+    }
+    with pytest.raises(ValueError, match="non-blank"):
+        encode_agent("   ")
+    with pytest.raises(ValueError, match="non-blank"):
+        encode_agent_skill(name="  ", args={})
 
 
 def test_encode_lidar_binary_layout() -> None:

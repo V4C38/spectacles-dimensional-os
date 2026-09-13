@@ -23,6 +23,8 @@ import {
   type Vec3,
   type YawPose,
   type Hello,
+  type Agent,
+  type AgentSkill,
 } from "./protocolTypes";
 
 export const LOCALIZATION_OBSERVATIONS_FOURCC = 0x4c4f4341;
@@ -91,6 +93,35 @@ export function encodeLidarSettingsRequest(request: LidarSettings): string {
   });
 }
 
+export const HUMAN_INPUT_MAX_CHARS = 4000;
+
+export function encodeClientPose(pose: {
+  position: Vec3;
+  orientation: Quat;
+  ts: number;
+}): string {
+  return encodeText({
+    type: "client_pose",
+    position: requireVec3Value(pose.position, "position"),
+    orientation: requireNonZeroQuatValue(pose.orientation, "orientation"),
+    ts: finiteNumber(pose.ts, "ts"),
+  });
+}
+
+export function encodeHumanInput(text: string): string {
+  if (typeof text !== "string") {
+    throw new Error("Field 'text' must be string");
+  }
+  const stripped = text.trim();
+  if (stripped.length === 0) {
+    throw new Error("human_input.text must be non-blank");
+  }
+  if (text.length > HUMAN_INPUT_MAX_CHARS) {
+    throw new Error(`human_input.text exceeds ${HUMAN_INPUT_MAX_CHARS} characters`);
+  }
+  return encodeText({ type: "human_input", text: stripped });
+}
+
 export function encodeLocalizationObservations(
   observations: readonly LocalizationObservation[],
 ): Uint8Array {
@@ -142,6 +173,10 @@ export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
       return decodePose(data);
     case "nav_goal":
       return decodeNavGoal(data);
+    case "agent":
+      return decodeAgent(data);
+    case "agent_skill":
+      return decodeAgentSkill(data);
     default:
       throw new Error(`Unknown outbound frame type: '${msgType}'`);
   }
@@ -425,7 +460,32 @@ function decodeState(data: Record<string, unknown>): State {
       decodeLidarSettings(asObject(requireKey(data, "lidar"), "lidar")),
     ),
     nav: decodeNavState(asObject(requireKey(data, "nav"), "nav")),
+    agent: decodeAgentState(asObject(requireKey(data, "agent"), "agent")),
   };
+}
+
+function decodeAgentState(data: Record<string, unknown>): { idle: boolean } {
+  return { idle: requireBoolean(data, "idle") };
+}
+
+function decodeAgent(data: Record<string, unknown>): Agent {
+  const text = requireString(data, "text").trim();
+  if (text.length === 0) {
+    throw new Error("agent.text must be non-blank");
+  }
+  return { type: "agent", text };
+}
+
+function decodeAgentSkill(data: Record<string, unknown>): AgentSkill {
+  const name = requireString(data, "name").trim();
+  if (name.length === 0) {
+    throw new Error("agent_skill.name must be non-blank");
+  }
+  const args = requireKey(data, "args");
+  if (args === null || typeof args !== "object" || Array.isArray(args)) {
+    throw new Error("agent_skill.args must be a JSON object");
+  }
+  return { type: "agent_skill", name, args: args as Record<string, unknown> };
 }
 
 function decodeLidarSettings(data: Record<string, unknown>): LidarSettings {
@@ -652,6 +712,15 @@ function requireQuatValue(value: Quat, key: string): Quat {
     finiteNumber(value[2], `${key}[2]`),
     finiteNumber(value[3], `${key}[3]`),
   ];
+}
+
+function requireNonZeroQuatValue(value: Quat, key: string): Quat {
+  const orientation = requireQuatValue(value, key);
+  const length = Math.hypot(orientation[0], orientation[1], orientation[2], orientation[3]);
+  if (length < 1e-6) {
+    throw new Error(`Field '${key}' must be a non-zero quaternion`);
+  }
+  return orientation;
 }
 
 function requireYawPoseValue(value: unknown, key: string): YawPose {

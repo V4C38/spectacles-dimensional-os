@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AppState,
+  agentModeAccessible,
+  agentSpeechShouldRun,
   getRobotActivityState,
   robotTitleText,
 } from "../../Assets/Scripts/DimOSSpecsClient/presentation/AppState";
@@ -31,6 +33,7 @@ function baseView(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessio
     lidar: null,
     capabilities: null,
     nav: null,
+    agentText: null,
     lastError: null,
     ...overrides,
   };
@@ -47,6 +50,7 @@ function helloView(): Hello {
       navigation: { available: true, reason: null },
       localization: { available: true, reason: null },
       estop: { available: true, reason: null },
+      agent: { available: false, reason: "current blueprint has no DimOS agent" },
     },
   };
 }
@@ -58,34 +62,114 @@ describe("AppState", () => {
     state.setDebugMode(true);
     expect(state.debugModeEnabled).toBe(true);
   });
+
+  it("clears operating mode when the wizard is reset", () => {
+    const state = new AppState();
+    state.setOperatingMode("agent");
+    state.finishWizard(true);
+    state.resetWizard();
+    expect(state.operatingMode).toBe("manual");
+    expect(state.wizardFinished).toBe(false);
+  });
 });
 
 describe("robotTitleText", () => {
-  it("shows no robot connected when bridge is not attached", () => {
+  it("shows no robot connected when the session is not attached", () => {
     expect(robotTitleText(baseView({ connection: "disconnected" }))).toBe(
       NO_ROBOT_CONNECTED_LABEL,
     );
     expect(robotTitleText(baseView({ connection: "connecting" }))).toBe(NO_ROBOT_CONNECTED_LABEL);
   });
 
-  it("shows robot display name once bridge is attached", () => {
+  it("shows robot display name once the session is attached", () => {
     expect(
       robotTitleText(baseView({ connection: "ready", hello: helloView(), pose: POSE })),
     ).toBe("Unitree Go2");
   });
 });
 
+const VOICE_OFF = { asrRunning: false, ttsPlaying: false };
+
+describe("agentModeAccessible", () => {
+  it("unlocks agent when the capability is available or debug is on", () => {
+    expect(agentModeAccessible(true, false)).toBe(true);
+    expect(agentModeAccessible(false, true)).toBe(true);
+    expect(agentModeAccessible(false, false)).toBe(false);
+  });
+});
+
+describe("agentSpeechShouldRun", () => {
+  it("runs live agent speech only when ready and capable", () => {
+    expect(agentSpeechShouldRun("agent", false, true, true)).toBe(true);
+    expect(agentSpeechShouldRun("agent", false, false, true)).toBe(false);
+    expect(agentSpeechShouldRun("agent", false, true, false)).toBe(false);
+    expect(agentSpeechShouldRun("manual", false, true, true)).toBe(false);
+  });
+
+  it("runs speech in debug agent mode without a session or capability", () => {
+    expect(agentSpeechShouldRun("agent", true, false, false)).toBe(true);
+    expect(agentSpeechShouldRun("manual", true, false, false)).toBe(false);
+  });
+});
+
 describe("getRobotActivityState", () => {
   it("returns Idle when nav is null, idle, or resolved", () => {
-    expect(getRobotActivityState(baseView({ nav: null }))).toBe("Idle");
-    expect(getRobotActivityState(baseView({ nav: { state: "idle", outcome: null } }))).toBe(
-      "Idle",
+    expect(getRobotActivityState(baseView({ nav: null }), VOICE_OFF)).toBe("Idle");
+    expect(
+      getRobotActivityState(baseView({ nav: { state: "idle", outcome: null } }), VOICE_OFF),
+    ).toBe("Idle");
+  });
+
+  it("returns Following Path when nav is following_path, even while listening or thinking", () => {
+    expect(
+      getRobotActivityState(baseView({ nav: { state: "following_path", outcome: null } }), {
+        asrRunning: true,
+        ttsPlaying: true,
+      }),
+    ).toBe("Following Path");
+    expect(
+      getRobotActivityState(
+        baseView({
+          nav: { state: "following_path", outcome: null },
+          state: {
+            type: "state",
+            server: { connected_clients: 1 },
+            lidar: { enabled: false, min_height_m: 0, max_height_m: 1, max_range_m: 1 },
+            nav: { state: "following_path", outcome: null },
+            agent: { idle: false },
+          },
+        }),
+        { asrRunning: true, ttsPlaying: true },
+      ),
+    ).toBe("Following Path");
+  });
+
+  it("returns Thinking when the agent is not idle", () => {
+    expect(
+      getRobotActivityState(
+        baseView({
+          state: {
+            type: "state",
+            server: { connected_clients: 1 },
+            lidar: { enabled: false, min_height_m: 0, max_height_m: 1, max_range_m: 1 },
+            nav: { state: "idle", outcome: null },
+            agent: { idle: false },
+          },
+        }),
+        { asrRunning: true, ttsPlaying: true },
+      ),
+    ).toBe("Thinking");
+  });
+
+  it("returns Responding while TTS is playing", () => {
+    expect(getRobotActivityState(baseView(), { asrRunning: true, ttsPlaying: true })).toBe(
+      "Responding",
     );
   });
 
-  it("returns Following Path when nav is following_path", () => {
-    expect(
-      getRobotActivityState(baseView({ nav: { state: "following_path", outcome: null } })),
-    ).toBe("Following Path");
+  it("returns Listening while ASR is running", () => {
+    expect(getRobotActivityState(baseView(), { asrRunning: true, ttsPlaying: false })).toBe(
+      "Listening",
+    );
   });
 });

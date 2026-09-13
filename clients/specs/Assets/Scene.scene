@@ -304,6 +304,21 @@
     - !<own> 8b1597e7-0f83-4295-a17b-d12cd299f954
   Components:
     []
+- !<SceneObject/027a396b-f3f7-46f2-a4d1-4d075b9be4a7>
+  PrefabRemaps:
+    []
+  Name: AgentSpeechAudio
+  Enabled: true
+  Layers: 1
+  LocalTransform: !<TransformEntity>
+    Position: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
+    Scale: {x: 1.000000, y: 1.000000, z: 1.000000}
+    HasSegmentScaleCompensation: false
+  Children:
+    []
+  Components:
+    - !<own> 892e1e90-5f03-4f6d-b678-f5bb6cbfff52
 - !<SceneObject/0291f3e1-baca-481b-91ac-8cb9fffd3bcd>
   PrefabRemaps:
     []
@@ -1914,7 +1929,7 @@
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
   SizeToFit: false
-  FontSize: 65
+  FontSize: 80
   Font: !<reference> 00000000-0000-0000-0000-000000000000
   LayoutRect:
     left: -7.500000
@@ -2265,6 +2280,9 @@
       internetModule: !<reference.InternetModule> 79c60deb-0ecf-4df5-9713-7c5bd5dbef32
       defaultWebsocketIp: 192.168.1.108
       navGoalMarkerPrefab: !<reference.ObjectPrefab> 8ed1cf3c-ff97-43da-9103-8e3b9eb7b328
+      textToSpeechModule: !<reference.TextToSpeechModule> 579cdbaf-4ecd-46a4-93fa-3d788cc635ef
+      textToSpeechAudio: !<reference.AudioComponent> 892e1e90-5f03-4f6d-b678-f5bb6cbfff52
+      ARMarkerPrefab: !<reference.ObjectPrefab> bb47d936-adfb-479d-966f-fc30cdacfa21
   ScriptTypes:
     "":
       {}
@@ -2587,6 +2605,7 @@
     - !<own> a6a5e202-0cc7-4911-9342-914d467d06e8
     - !<own> 987602b0-ef22-4a53-85a8-ca0d7eaaa7b4
     - !<own> 75508855-70c3-433c-98df-606a5120f2a9
+    - !<own> 027a396b-f3f7-46f2-a4d1-4d075b9be4a7
   Components:
     - !<own> 43254cd1-512e-4063-b9b0-e802899fa942
 - !<SceneObject/4a8fba8e-5e79-4c17-9b90-eecc02c7b7dc>
@@ -3644,7 +3663,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: 0.000000, y: 3.400000, z: -1.080469}
+    Position: {x: 0.000000, y: 3.700000, z: -1.000000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 0.444444, y: 0.444444, z: 0.444444}
     HasSegmentScaleCompensation: false
@@ -4316,6 +4335,23 @@
     - !<own> 142d82e8-0b31-4ba5-bd6f-e1d5a4ffd060
   Components:
     []
+- !<AudioComponent/892e1e90-5f03-4f6d-b678-f5bb6cbfff52>
+  PrefabRemaps:
+    []
+  Name: Audio
+  Enabled: true
+  AudioTrack: !<reference> 00000000-0000-0000-0000-000000000000
+  EnableAutoplayLoop: false
+  Volume: 1.000000
+  EnableMixToSnap: false
+  RecordVolume: 1.000000
+  EnableSpatialAudio: false
+  EnableDistanceEffect: false
+  CurveType: Logarithm
+  MinDistance: 0.000000
+  MaxDistance: 100.000000
+  EnableDirectivityEffect: false
+  EnablePositionEffect: false
 - !<SceneObject/8afc8ec5-6e6b-4d35-aaa3-0c80fa3f4e77>
   PrefabRemaps:
     []
@@ -5291,7 +5327,7 @@
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
-    Position: {x: -0.000020, y: 2.500000, z: -0.694587}
+    Position: {x: -0.000020, y: 2.600000, z: -0.500000}
     Rotation: {x: 0.000000, y: 0.000000, z: 0.000000}
     Scale: {x: 0.444444, y: 0.444444, z: 0.444444}
     HasSegmentScaleCompensation: false
@@ -6767,7 +6803,7 @@
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
   SizeToFit: false
-  FontSize: 40
+  FontSize: 50
   Font: !<reference> 00000000-0000-0000-0000-000000000000
   LayoutRect:
     left: -7.500000

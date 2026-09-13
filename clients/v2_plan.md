@@ -128,7 +128,7 @@ objects use PascalCase, and wire fields retain protocol spelling such as
 | **`ARModule`** | DimOS module (`unitree_go2_ar`). | bridge, WebSocket server, robot process |
 | **`websocket/server.py`** | Accept loop collaborator. | `ARModule` itself |
 | **`ClientCore`** | Headset-agnostic TypeScript: wire protocol, session, client tracking origin, localization capture, control. No Lens APIs. | |
-| **`DimosARClient`** | Composition root in each AR client (Specs, later WebXR). Constructs dependencies, drives time, routes typed facts, tears down. | bridge, `ARModule`, `ARModuleHost`, `ARBridgeCoordinator`, `SpectaclesHost` |
+| **`DimOSSpecsClient`** | Composition root in the Specs AR client (later WebXR uses the same ClientCore). Constructs dependencies, drives time, routes typed facts, tears down. | bridge, `ARModule`, `ARModuleHost`, `ARBridgeCoordinator`, `SpectaclesHost` |
 | **Specs logic** | Adapters and 3D runtime: transport, device camera, apply poses to scene objects, ground placement as input. | |
 | **Specs UX** | Wizard, HUD, wrist / palm, copy, buttons. | |
 | **`localization_result` / `T_odom_client`** | Client's tracking origin in `odom`. | headset origin, world frame |
@@ -161,7 +161,7 @@ scene state.
 `ClientCore` lives at
 
 ```text
-clients/specs/Assets/Scripts/DimosARClient/core/
+clients/specs/Assets/Scripts/DimOSARClient/
 ```
 
 That is the only copy until ClientCore ships as an `.lspkg`. `clients/core/`
@@ -200,7 +200,7 @@ Portable tests live with the Specs Vitest project, not under
 Lens):
 
 ```text
-clients/specs/Tests/core/
+clients/specs/Tests/DimOSARClient/
 ├── protocol.test.ts
 ├── session.test.ts
 ├── localization.test.ts
@@ -370,9 +370,9 @@ axis table, not by negating a number at the call site.
 No sockets. No scene. Tests against fixtures and `PROTOCOL.md`.
 
 ```text
-clients/specs/Assets/Scripts/DimosARClient/core/websocket/protocolTypes.ts
-clients/specs/Assets/Scripts/DimosARClient/core/websocket/protocol.ts
-clients/specs/Tests/core/protocol.test.ts
+clients/specs/Assets/Scripts/DimOSARClient/websocket/protocolTypes.ts
+clients/specs/Assets/Scripts/DimOSARClient/websocket/protocol.ts
+clients/specs/Tests/DimOSARClient/protocol.test.ts
 ```
 
 Group 1 is complete only when all nine outbound and eight inbound message
@@ -443,12 +443,12 @@ No camera. Fixtures are enough. `state.nav.state` is `idle` |
 a `localization_result`.
 
 ```text
-clients/specs/Assets/Scripts/DimosARClient/core/websocket/hostPorts.ts
-clients/specs/Assets/Scripts/DimosARClient/core/websocket/arModuleSession.ts
-clients/specs/Assets/Scripts/DimosARClient/core/localization/clientTrackingOrigin.ts
-clients/specs/Assets/Scripts/DimosARClient/core/localization/clientTrackingTransforms.ts
-clients/specs/Tests/core/session.test.ts
-clients/specs/Tests/core/localization.test.ts
+clients/specs/Assets/Scripts/DimOSARClient/websocket/hostPorts.ts
+clients/specs/Assets/Scripts/DimOSARClient/websocket/arModuleSession.ts
+clients/specs/Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin.ts
+clients/specs/Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms.ts
+clients/specs/Tests/DimOSARClient/session.test.ts
+clients/specs/Tests/DimOSARClient/localization.test.ts
 ```
 
 Hello timeout and reconnect delay are required session configuration. The
@@ -526,10 +526,10 @@ No standing capture session, no ACK/`seq`, no motion-triggered recapture, no
 separate `camera_info` message.
 
 ```text
-clients/specs/Assets/Scripts/DimosARClient/core/websocket/hostPorts.ts
-clients/specs/Assets/Scripts/DimosARClient/core/localization/geometricGate.ts
-clients/specs/Assets/Scripts/DimosARClient/core/localization/localizationCaptureEpisode.ts
-clients/specs/Tests/core/localization.test.ts
+clients/specs/Assets/Scripts/DimOSARClient/websocket/hostPorts.ts
+clients/specs/Assets/Scripts/DimOSARClient/localization/geometricGate.ts
+clients/specs/Assets/Scripts/DimOSARClient/localization/localizationCaptureEpisode.ts
+clients/specs/Tests/DimOSARClient/localization.test.ts
 ```
 
 Capture geometry and episode timeouts are required construction inputs. The
@@ -581,12 +581,12 @@ collide with `ARModuleSession`'s cached `nav_goal` / `lidar`. Arguments are alre
 takes `Vec3` + `Quat`, not yaw. `requestState` has no capability key.
 
 ```text
-clients/specs/Assets/Scripts/DimosARClient/core/websocket/arModuleSession.ts
-clients/specs/Assets/Scripts/DimosARClient/core/navigation/navGoalRequest.ts
-clients/specs/Assets/Scripts/DimosARClient/core/sensors/lidarSettingsRequest.ts
-clients/specs/Tests/core/navigation.test.ts
-clients/specs/Tests/core/sensors.test.ts
-clients/specs/Tests/core/session.test.ts
+clients/specs/Assets/Scripts/DimOSARClient/websocket/arModuleSession.ts
+clients/specs/Assets/Scripts/DimOSARClient/navigation/navGoalRequest.ts
+clients/specs/Assets/Scripts/DimOSARClient/sensors/lidarSettingsRequest.ts
+clients/specs/Tests/DimOSARClient/navigation.test.ts
+clients/specs/Tests/DimOSARClient/sensors.test.ts
+clients/specs/Tests/DimOSARClient/session.test.ts
 ```
 
 Group 4 is complete only when all seven inbound types have a send path
@@ -609,15 +609,15 @@ Change the port to an explicit lifecycle (`start`, async `capture`, `stop`)
 so Group 8 can keep that sequence. Update `LocalizationCaptureEpisode` to
 await one in-flight capture, ignore stale completions after replacement or
 disconnect, and stop hardware on send, failure, reset, and disposal. Extend
-`clients/specs/Tests/core/localization.test.ts` with deferred Promise, rejection,
+`clients/specs/Tests/DimOSARClient/localization.test.ts` with deferred Promise, rejection,
 replacement, disconnect, and teardown cases.
 
 Keep ClientCore as the only copy under
-[`clients/specs/Assets/Scripts/DimosARClient/core/`](specs/Assets/Scripts/DimosARClient/core/).
+[`clients/specs/Assets/Scripts/DimOSARClient/`](specs/Assets/Scripts/DimOSARClient/).
 `clients/core/` stays empty until the later `.lspkg` split. Do not add a
 sync script or a second tree.
 
-Create [`clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts`](specs/Assets/Scripts/DimosARClient/DimosARClient.ts)
+Create [`clients/specs/Assets/Scripts/DimOSSpecsClient/DimOSSpecsClient.ts`](specs/Assets/Scripts/DimosARClient/DimosARClient.ts)
 as a shell `BaseScriptComponent` with no presenter slots, socket, store, or
 tick. Use Lens MCP to create the `DimosARClient` scene object and attach the
 script. Do not edit `.scene` files by hand.
@@ -631,15 +631,15 @@ connection and camera lifecycle.
 does not rewrite them.
 
 ```text
-clients/specs/Assets/Scripts/DimosARClient/core/websocket/hostPorts.ts
-clients/specs/Assets/Scripts/DimosARClient/core/localization/localizationCaptureEpisode.ts
-clients/specs/Tests/core/localization.test.ts
-clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts
+clients/specs/Assets/Scripts/DimOSARClient/websocket/hostPorts.ts
+clients/specs/Assets/Scripts/DimOSARClient/localization/localizationCaptureEpisode.ts
+clients/specs/Tests/DimOSARClient/localization.test.ts
+clients/specs/Assets/Scripts/DimOSSpecsClient/DimOSSpecsClient.ts
 ```
 
 Group 5 is complete only when the capture port is async with start/stop,
 episode tests cover in-flight Promise cases, ClientCore lives only under
-`Assets/Scripts/DimosARClient/core/`, `DimosARClient` exists as a shell, and v19 connection/camera owners are
+`Assets/Scripts/DimOSARClient/`, `DimOSSpecsClient` exists as a shell, and v19 connection/camera owners are
 disabled. This group creates no coordinate helper, room placeholders, socket,
 or camera adapter.
 
@@ -700,9 +700,9 @@ Bind Lens lifecycle: start the session once, call `session.tick()` on
 `UpdateEvent`, stop it on teardown, and release every subscription.
 
 ```text
-clients/specs/Assets/Scripts/DimosARClient/core/websocket/hostPorts.ts
+clients/specs/Assets/Scripts/DimOSARClient/websocket/hostPorts.ts
 clients/specs/Assets/Scripts/DimosARClient/websocket/SpecsWebSocketTransport.ts
-clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts
+clients/specs/Assets/Scripts/DimOSSpecsClient/DimOSSpecsClient.ts
 ```
 
 **Take:** v19 `InternetModule` WebSocket connect, Blob binary receive, connect
@@ -739,7 +739,7 @@ conversion happens in this adapter before the values enter `ClientCore`.
 ```text
 clients/specs/Assets/Scripts/DimosARClient/localization/SpecsCameraStream.ts
 clients/specs/Assets/Scripts/DimosARClient/localization/SpecsCameraSource.ts
-clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts
+clients/specs/Assets/Scripts/DimOSSpecsClient/DimOSSpecsClient.ts
 clients/specs/Tests/unit/specsCameraSource.test.ts
 ```
 
@@ -797,7 +797,7 @@ clients/specs/Assets/Scripts/DimosARClient/navigation/LineRenderer.ts
 clients/specs/Assets/Scripts/DimosARClient/navigation/NavGoalMarker.ts
 clients/specs/Assets/Scripts/DimosARClient/navigation/NavGoalPresenter.ts
 clients/specs/Assets/Scripts/DimosARClient/navigation/NavigationController.ts
-clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts
+clients/specs/Assets/Scripts/DimOSSpecsClient/DimOSSpecsClient.ts
 ```
 
 **Take:** MeshBuilder / material from `PointCloudRenderer`, world-mesh hit
@@ -857,8 +857,8 @@ clients/specs/Assets/Scripts/DimosARClient/presentation/UILogger.ts
 clients/specs/Assets/Scripts/DimosARClient/presentation/WristMenuController.ts
 clients/specs/Assets/Scripts/DimosARClient/utilities/AnimationUtilities.ts
 clients/specs/Assets/Scripts/DimosARClient/utilities/RuntimePoseSmoothing.ts
-clients/specs/Assets/Scripts/DimosARClient/core/websocket/sessionLinkPresentation.ts
-clients/specs/Assets/Scripts/DimosARClient/core/websocket/hostNormalization.ts
+clients/specs/Assets/Scripts/DimOSARClient/websocket/sessionLinkPresentation.ts
+clients/specs/Assets/Scripts/DimOSARClient/websocket/hostNormalization.ts
 ```
 
 **Take:** UIKit, wrist/palm, logging, animation helpers that still have a
@@ -889,73 +889,70 @@ them:
 Existing v19 files are reference for Specs camera, connect, placement,
 and drawing — not a directory map to copy.
 
-## Later: DimOS agent relay
+## DimOS agent (Group 9)
 
-Not started. Do not implement during Groups 1–10. Server work is
-`dimos-ar/plan.md` Group 9. Client work below starts only after that
-protocol lands.
-
-User-facing loop is plain text. No audio on the wire.
+Implemented. Server work is `dimos-ar/plan.md` Group 9. User-facing loop is
+plain text. No audio on the wire.
 
 1. Host STT → inbound `human_input` `{ text }`.
 2. `ARModule` publishes DimOS `human_input: Out[str]`. `McpClient` is the agent.
 3. Agent skills that already exist in DimOS (navigation, …) stay on those
    streams. Overlay remains `nav_goal` / `state.nav`. No second nav channel.
-4. `ARModule` `@skill` methods (first: `draw_geometry`) each broadcast one
-   outbound `agent_skill` `{ name, args }`.
-5. Assistant text comes back as outbound `agent` `{ text }`. Host TTS.
+4. `ARModule` `@skill` methods (`ar_place_marker`, `ar_remove_marker`,
+   `ar_get_client_pose`) each broadcast one outbound `agent_skill`
+   `{ name, args }` when a visual should change. `ar_get_client_pose` reads
+   inbound `client_pose` and broadcasts nothing.
+5. Assistant text comes back as outbound `agent` `{ text }`. Host TTS speaks
+   every textual `AIMessage`. Robot `speak` still exists on the upstream
+   agentic blueprint.
 
-### Protocol (lockstep with `dimos-ar`)
-
-When this work starts, the 14-type contract becomes 17. Update in the same
-change: `dimos-ar/dimos/ar/websocket/protocol.py`, `dimos-ar/PROTOCOL.md`,
-`clients/specs/Assets/Scripts/DimosARClient/core/websocket/protocol.ts`.
+`hello.capabilities.agent` comes from `ARModuleConfig.agent` via
+`CapabilitySet.from_supported(..., agent_available=)`. The 18-type contract
+lives in `dimos-ar/dimos/ar/websocket/protocol.py`, `dimos-ar/PROTOCOL.md`,
+and `clients/specs/Assets/Scripts/DimOSARClient/websocket/protocol.ts`.
 
 | Frame | Direction | Body |
 |-------|-----------|------|
 | `human_input` | inbound | `{ text }` non-blank, max 4000 chars. No audio. |
-| `agent` | outbound | `{ text }` assistant-only, non-blank. Do **not** apply the 4000-char inbound cap (long replies would fail the session). |
+| `client_pose` | inbound | `{ position, orientation, ts }` odom telemetry. Latest-wins; age on receive time. |
+| `agent` | outbound | `{ text }` assistant-only, non-blank. Do **not** apply the 4000-char inbound cap. |
 | `agent_skill` | outbound | `{ name, args }` — `args` is an opaque JSON object. |
 
 Also: `hello.capabilities.agent`, and `state.agent.idle` (not a separate
-`agent_idle` frame). Conversation is process-global (broadcast). No client
-IDs or private routing. Codec for `agent_skill` stays generic; per-skill
-schemas are docs for hosts.
+`agent_idle` frame). Conversation is process-global (broadcast).
 
 ### ClientCore
 
 ```text
-clients/specs/Assets/Scripts/DimosARClient/core/agent/humanInput.ts
-clients/specs/Assets/Scripts/DimosARClient/core/agent/drawGeometry.ts
-clients/specs/Tests/core/agent.test.ts
+clients/specs/Assets/Scripts/DimOSARClient/agent/humanInput.ts
+clients/specs/Assets/Scripts/DimOSARClient/agent/agentSkills.ts
+clients/specs/Tests/DimOSARClient/humanInput.test.ts
+clients/specs/Tests/DimOSARClient/agentSkills.test.ts
 ```
 
-`humanInput.ts` is a sibling of nav/sensors: `requestHumanInput` through the
-session, capability + ready checks. Session facts: latest `agent` text,
-`state.agent.idle`, latest `agent_skill` keyed by `name` plus `args.id`.
-Clear on disconnect.
+`sendHumanInput` uses ready + `requireCapability("agent")`. Session caches
+latest `agent` text for `view()` and clears it in `clearConnectionFacts`.
+`view()` reads `state.agent.idle` from the cached `state` frame. Dispatch each
+outbound `agent_skill` via `subscribeOutbound`. Host decoder: ignore unknown
+`name`; fail closed on a known name with invalid args. Client sends
+`client_pose` at 10 Hz when ready, agent-capable, and localized; it does not
+cache wearer pose on `ARModuleSession.view()`.
 
-Host decoder: ignore unknown `name`; fail closed on a known name with
-invalid args.
+### Specs host
 
-### Specs host (after Group 10)
-
-Do not wire this into the v19 Lens. When the v2 host exists:
-
-- `AsrModule` final transcript → `requestHumanInput`.
-- Inbound `agent.text` → TTS + HUD line.
-- `state.agent.idle` is the only busy fact.
-- `draw_geometry` compose `args.transform` through `T_odom_client`.
-- Dispatch `agent_skill` on `name`. No operating-mode enum, no agent
-  activity store, no client-side tool execution.
-- STT and TTS never leave the host.
-
-v19 `AgentSpeechController` / `AsrModule` is the Specs STT reference,
-not a protocol to keep.
+- `AsrModule` final transcript → `sendHumanInput`.
+- Inbound `agent.text` → `SpecsTextToSpeech` + UILogger line 8.
+- ASR partial/final → UILogger line 7.
+- `ar_place_marker` / `ar_remove_marker` parse in `agentSkills.ts`; compose
+  `args.{x,y,z}` through `T_odom_client`.
+- `ARMarkerPresenter` upserts/removes by skill `id` and recomposes on
+  a new origin. Unknown skill names are ignored.
+- STT and TTS never leave the host. `AppState.operatingMode` is the Agent/Manual gate.
+- Speech/classification live under `DimOSSpecsClient/agent/`.
 
 ## Tests and CI
 
-ClientCore tests live in `clients/specs/Tests/core/` and run with
+ClientCore tests live in `clients/specs/Tests/DimOSARClient/` and run with
 `cd clients/specs/Tests && npm test`.
 Groups 1–4 are fully unit-tested without Lens Studio. Cover malformed
 input and invalid lifecycle transitions as well as successful fixtures. Use
@@ -978,7 +975,7 @@ same change:
 
 - `dimos-ar/dimos/ar/websocket/protocol.py`
 - `dimos-ar/PROTOCOL.md`
-- `clients/specs/Assets/Scripts/DimosARClient/core/websocket/protocol.ts`
+- `clients/specs/Assets/Scripts/DimOSARClient/websocket/protocol.ts`
 
 Keep `PROTOCOL.md` on the `ARModule` package paths. It stays client-agnostic:
 the axis-conversion matrix is a generic left-handed Y-up example, not a pointer
@@ -988,7 +985,7 @@ examples on the actual wire fields (`localization_result.position` and
 one origin consistently.
 
 `.cursorrules` and `CONTRIBUTING.md` point protocol-sync at
-`clients/specs/Assets/Scripts/DimosARClient/core/websocket/protocol.ts`. Delete the
+`clients/specs/Assets/Scripts/DimOSARClient/websocket/protocol.ts`. Delete the
 v19 `ARBridge/Network/Protocol.ts` module only when its imports have migrated
 (Group 10).
 

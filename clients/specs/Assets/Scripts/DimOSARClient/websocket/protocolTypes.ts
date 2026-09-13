@@ -14,6 +14,7 @@ export const CAPABILITY_NAMES = [
   "navigation",
   "localization",
   "estop",
+  "agent",
 ] as const;
 export type CapabilityName = (typeof CAPABILITY_NAMES)[number];
 
@@ -57,11 +58,27 @@ export type NavState =
   | { state: "idle" | "following_path"; outcome: null }
   | { state: "resolved"; outcome: NavOutcome };
 
+export interface AgentState {
+  idle: boolean;
+}
+
 export interface State {
   type: "state";
   server: { connected_clients: number };
   lidar: LidarSettings;
   nav: NavState;
+  agent: AgentState;
+}
+
+export interface Agent {
+  type: "agent";
+  text: string;
+}
+
+export interface AgentSkill {
+  type: "agent_skill";
+  name: string;
+  args: Record<string, unknown>;
 }
 
 export type LocalizationObservationsRequest =
@@ -112,7 +129,9 @@ export type Outbound =
   | LocalizationResult
   | Pose
   | NavGoal
-  | Lidar;
+  | Lidar
+  | Agent
+  | AgentSkill;
 
 export interface HelloRequest {
   type: "hello_request";
@@ -139,6 +158,18 @@ export interface EstopRequest {
 
 export interface LidarSettingsRequest extends LidarSettings {
   type: "lidar_settings_request";
+}
+
+export interface HumanInput {
+  type: "human_input";
+  text: string;
+}
+
+export interface ClientPose {
+  type: "client_pose";
+  position: Vec3;
+  orientation: Quat;
+  ts: number;
 }
 
 export interface Intrinsics {
@@ -172,4 +203,6 @@ export type Inbound =
   | LocalizationObservations
   | NavGoalRequest
   | EstopRequest
-  | LidarSettingsRequest;
+  | LidarSettingsRequest
+  | HumanInput
+  | ClientPose;

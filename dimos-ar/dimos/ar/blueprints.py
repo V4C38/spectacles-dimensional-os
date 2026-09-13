@@ -10,6 +10,13 @@ try:
 except ModuleNotFoundError:
     unitree_go2 = None
 
+try:
+    from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_agentic import (
+        unitree_go2_agentic,
+    )
+except ModuleNotFoundError:
+    unitree_go2_agentic = None
+
 # One worker per active module so ARModule is not GIL-starved by the sensor pipeline.
 # Overrides upstream unitree_go2 n_workers=10.
 _unitree_go2_ar_base = (
@@ -26,5 +33,22 @@ unitree_go2_ar = (
         n_workers=len(_unitree_go2_ar_base.active_blueprints),
     ).configurators(ClockSyncConfigurator())
     if _unitree_go2_ar_base is not None
+    else None
+)
+
+_unitree_go2_ar_agentic_base = (
+    autoconnect(
+        unitree_go2_agentic,
+        ARModule.blueprint(robot=RobotName.UNITREE_GO2, agent=True),
+    )
+    if unitree_go2_agentic is not None
+    else None
+)
+
+unitree_go2_ar_agentic = (
+    _unitree_go2_ar_agentic_base.global_config(
+        n_workers=len(_unitree_go2_ar_agentic_base.active_blueprints),
+    ).configurators(ClockSyncConfigurator())
+    if _unitree_go2_ar_agentic_base is not None
     else None
 )

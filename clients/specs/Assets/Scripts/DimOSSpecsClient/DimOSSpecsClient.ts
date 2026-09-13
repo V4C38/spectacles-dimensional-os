@@ -1,4 +1,7 @@
-import { ClientTrackingOriginStore } from "../DimOSARClient/localization/clientTrackingOrigin";
+import {
+  ClientTrackingOriginStore,
+  type ClientTrackingOrigin,
+} from "../DimOSARClient/localization/clientTrackingOrigin";
 import { LocalizationCaptureEpisode } from "../DimOSARClient/localization/localizationCaptureEpisode";
 import { ARModuleSession } from "../DimOSARClient/websocket/arModuleSession";
 import { AR_MODULE_CLIENT_CONFIG } from "../DimOSARClient/websocket/hostPorts";
@@ -11,6 +14,15 @@ import { UIPresenter } from "./presentation/UIPresenter";
 import { RobotPresenter } from "./presentation/RobotPresenter";
 import { PointCloudRenderer } from "./sensors/PointCloudRenderer";
 import { SpecsWebSocketTransport } from "./websocket/SpecsWebSocketTransport";
+import { AgentSpeechController } from "./agent/AgentSpeechController";
+import { SpecsTextToSpeech } from "./presentation/SpecsTextToSpeech";
+import { ARMarkerPresenter } from "./presentation/ARMarkerPresenter";
+import {
+  parsePlaceArMarkerArgs,
+  parseRemoveArMarkerArgs,
+} from "../DimOSARClient/agent/agentSkills";
+import { clientTrackingToOdomPose } from "../DimOSARClient/localization/clientTrackingTransforms";
+import { encodeClientPose } from "../DimOSARClient/websocket/protocol";
 
 @component
 export class DimOSSpecsClient extends BaseScriptComponent {
@@ -35,6 +47,15 @@ export class DimOSSpecsClient extends BaseScriptComponent {
   @input
   navGoalMarkerPrefab: ObjectPrefab;
 
+  @input
+  textToSpeechModule: TextToSpeechModule;
+
+  @input
+  textToSpeechAudio: AudioComponent;
+
+  @input
+  ARMarkerPrefab: ObjectPrefab;
+
   private cameraSource: SpecsCameraSource | null = null;
   private transport: SpecsWebSocketTransport | null = null;
   private clientTrackingOriginStore: ClientTrackingOriginStore | null = null;
@@ -45,6 +66,12 @@ export class DimOSSpecsClient extends BaseScriptComponent {
   private unsubscribeView: (() => void) | null = null;
   private updateEvent: SceneEvent | null = null;
   private lastSessionView: ReturnType<ARModuleSession["view"]> | null = null;
+  private speechController: AgentSpeechController | null = null;
+  private tts: SpecsTextToSpeech | null = null;
+  private annotations: ARMarkerPresenter | null = null;
+  private unsubscribeOutbound: (() => void) | null = null;
+  private lastClientPoseSentAt = Number.NEGATIVE_INFINITY;
+  private lastAnnotationOrigin: ClientTrackingOrigin | null = null;
 
   onAwake(): void {
     if (!this.internetModule) {
@@ -64,6 +91,15 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     }
     if (!this.uiPresenter) {
       throw new Error("uiPresenter is required");
+    }
+    if (!this.textToSpeechModule) {
+      throw new Error("textToSpeechModule is required");
+    }
+    if (!this.textToSpeechAudio) {
+      throw new Error("textToSpeechAudio is required");
+    }
+    if (!this.ARMarkerPrefab) {
+      throw new Error("ARMarkerPrefab is required");
     }
     const deviceTracking = this.cameraObject.getComponent(
       "Component.DeviceTracking",
@@ -128,6 +164,14 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     this.createEvent("OnDestroyEvent").bind(() => {
       this.unsubscribeView?.();
       this.unsubscribeView = null;
+      this.unsubscribeOutbound?.();
+      this.unsubscribeOutbound = null;
+      this.speechController?.dispose();
+      this.speechController = null;
+      this.tts?.stop();
+      this.tts = null;
+      this.annotations?.clearAll();
+      this.annotations = null;
       this.navigationController!.dispose();
       this.robotPresenter!.reset();
       this.lidarPresenter.hide();
@@ -178,11 +222,67 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     });
     this.uiPresenter.start();
 
+    const tts = new SpecsTextToSpeech({
+      module: this.textToSpeechModule,
+      audio: this.textToSpeechAudio,
+    });
+    this.tts = tts;
+    const asrModule = require("LensStudio:AsrModule") as AsrModule;
+    const speechController = new AgentSpeechController({
+      eventHost: this,
+      asrModule,
+      session,
+      uiLogger: this.uiPresenter.getUILogger(),
+      tts,
+      getOperatingMode: () => this.uiPresenter.getOperatingMode(),
+      getDebugMode: () => this.uiPresenter.getDebugMode(),
+    });
+    this.speechController = speechController;
+    this.uiPresenter.attachVoice(speechController, tts);
+    speechController.bind();
+
+    const annotationParent = this.getSceneObject();
+    this.annotations = new ARMarkerPresenter({
+      parent: annotationParent,
+      markerPrefab: this.ARMarkerPrefab,
+    });
+    this.unsubscribeOutbound = session.subscribeOutbound((message) => {
+      if (message.type !== "agent_skill") {
+        return;
+      }
+      try {
+        if (message.name === "ar_place_marker") {
+          const origin = clientTrackingOriginStore.T_odom_client;
+          if (!origin) {
+            return;
+          }
+          this.annotations!.apply(parsePlaceArMarkerArgs(message.args), origin);
+          return;
+        }
+        if (message.name === "ar_remove_marker") {
+          this.annotations!.remove(parseRemoveArMarkerArgs(message.args).id);
+        }
+      } catch (error) {
+        print(`ARMarkerPresenter: ${error}`);
+      }
+    });
+
     this.unsubscribeView = session.subscribeView((view) => {
       const prevView = this.lastSessionView;
       this.lastSessionView = view;
       this.uiPresenter.onSessionView(view, prevView);
       this.uiPresenter.applyRoomPresentation(view);
+
+      if (view.connection === "disconnected") {
+        this.annotations!.clearAll();
+        this.lastAnnotationOrigin = null;
+      }
+
+      const origin = clientTrackingOriginStore.T_odom_client;
+      if (origin && origin !== this.lastAnnotationOrigin) {
+        this.lastAnnotationOrigin = origin;
+        this.annotations!.recompose(origin);
+      }
 
       if (!this.uiPresenter.isWizardFinished()) {
         this.lidarPresenter.hide();
@@ -191,7 +291,6 @@ export class DimOSSpecsClient extends BaseScriptComponent {
         return;
       }
 
-      const origin = clientTrackingOriginStore.T_odom_client;
       if (!view.hasTrackingOrigin || !origin) {
         this.lidarPresenter.hide();
         navGoalPresenter.hide();
@@ -208,8 +307,45 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       cameraSource.samplePose();
       session.tick();
       episode.tick();
+      this.maybeSendClientPose();
       this.uiPresenter.tick(getDeltaTime());
     });
     this.updateEvent = updateEvent;
+  }
+
+  private maybeSendClientPose(): void {
+    const session = this.session;
+    const cameraSource = this.cameraSource;
+    const originStore = this.clientTrackingOriginStore;
+    if (!session || !cameraSource || !originStore) {
+      return;
+    }
+    const now = getTime();
+    if (now - this.lastClientPoseSentAt < 0.1) {
+      return;
+    }
+    const view = session.view();
+    if (view.connection !== "ready" || view.capabilities?.agent.available !== true) {
+      return;
+    }
+    const origin = originStore.T_odom_client;
+    if (!origin) {
+      return;
+    }
+    let optical: ReturnType<SpecsCameraSource["cameraOptical"]>;
+    try {
+      optical = cameraSource.cameraOptical();
+    } catch {
+      return;
+    }
+    const odom = clientTrackingToOdomPose(optical, origin);
+    session.sendText(
+      encodeClientPose({
+        position: odom.position,
+        orientation: odom.orientation,
+        ts: now,
+      }),
+    );
+    this.lastClientPoseSentAt = now;
   }
 }

@@ -60,7 +60,7 @@
   const STACK_INFO = {
     go2: [
       ["Nav", "Go2 smart stack"],
-      ["Blueprint", "ar_go2"],
+      ["Blueprint", "unitree_go2_ar"],
       ["Streams", "lidar · odom · path · costmap"],
     ],
     g1: [

@@ -250,13 +250,13 @@ describe("UILogger agent response line", () => {
 
   it("renders error idle responses in red", () => {
     logger.setAgentResponse({
-      text: "command not sent (bridge not ready)",
+      text: "command not sent (not ready)",
       state: "idle",
       severity: "error",
     });
 
     expect(agentResponseLineText(lines)).toBe(
-      "[12:00:00] Agent response: command not sent (bridge not ready)",
+      "[12:00:00] Agent response: command not sent (not ready)",
     );
     expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 0, z: 0, w: 1 });
   });

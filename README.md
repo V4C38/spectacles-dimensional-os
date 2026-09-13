@@ -214,12 +214,12 @@ flowchart LR
 
 **Specs client**
 
-Portable [`ClientCore`](clients/specs/Assets/Scripts/DimosARClient/core/) speaks [`PROTOCOL.md`](dimos-ar/PROTOCOL.md). The composition root is **`DimosARClient`**: it constructs that core, drives time, and routes typed facts to room presenters and derived UX via [`UIPresenter`](clients/specs/Assets/Scripts/DimosARClient/presentation/UIPresenter.ts). Axis conversion stays in the Specs client (`SpecsCoordinates`). `clients/core/` is empty until ClientCore ships as an `.lspkg`.
+Portable [`ClientCore`](clients/specs/Assets/Scripts/DimOSARClient/) speaks [`PROTOCOL.md`](dimos-ar/PROTOCOL.md). The composition root is **`DimOSSpecsClient`**: it constructs that core, drives time, and routes typed facts to room presenters and derived UX via [`UIPresenter`](clients/specs/Assets/Scripts/DimOSSpecsClient/presentation/UIPresenter.ts). Axis conversion stays in the Specs client (`SpecsCoordinates`). `clients/core/` is empty until ClientCore ships as an `.lspkg`.
 
 ```mermaid
 flowchart LR
   Core["ClientCore<br>session · T_odom_client · capture"]
-  Client["DimosARClient"]
+  Client["DimOSSpecsClient"]
   Room["Robot · Lidar · NavGoal"]
   UX["Connect wizard · HUD"]
 
@@ -260,22 +260,31 @@ The yellow path line shown is the real navigation path the planner sends back, r
 
 ### Agent Mode
 
-Wake word <b>"Robot"</b> activates receival of voice commands. This state is indicated on the Robot Marker by <b>Idle</b> vs <b>Asleep</b> (before wake word detected). <br>
-Speech to text runs on the Spectacles and the transcript goes to a <b>GPT-4o</b> agent on the Mac, which picks from the tools below. The session closes after <b>30 seconds</b> of silence. Say <b>"stop"</b> and the robot stops immediately (same Emergency Stop path as in the wrist UI).
+Wake word <b>"Agent"</b> starts a voice session. Activity on the robot marker is <b>Following Path &gt; Thinking &gt; Responding &gt; Listening &gt; Idle</b> (Listening is Agent mode ASR running, including wake-wait). Speech to text runs on the Spectacles; the transcript goes to the DimOS agent on the Mac. The session closes after <b>30 seconds</b> of silence. Say <b>"stop"</b> and the robot stops immediately (same Emergency Stop path as in the wrist UI). With <b>Debug</b> on, the Agent button stays available even when disconnected or the blueprint has no agent, so you can test on-device STT; transcripts are not sent until the agent capability is live.
 
 Anything the agent starts looks and behaves exactly like a manually placed navigation goal. You can grab the marker and take over at any point which will override the goal set by the agent immediately.
 
-The agent does respond in a few words on the robot and in the debug console. It would be possible to implement TTS into the Lens if needed. It will assume reasonable defaults when user commands are unspecific.
+Headset TTS speaks every textual agent reply on the glasses. Robot speakers still play when the LLM calls `speak`. The agent assumes reasonable defaults when commands are unspecific.
 
 | Tool | What it does |
 |------|--------------|
-| `relative_move` | Walk or turn by an amount relative to where the robot is now |
-| `navigate_to_user` | Come to you, using the position of your headset |
-| `get_user_pose` | Find out where you are standing and which way you face |
-| `cancel_navigation` | Emergency-stop the robot and clear the current goal |
-| `place_marker` | Leave a marker floating in the room |
-| `draw_line` | Draw a line between two points in the room |
-| `clear_annotation` | Remove a marker or line it drew earlier |
+| `move_to` | Walk to a named or described place |
+| `navigate_with_text` | Navigate from a natural-language destination |
+| `tag_location` | Remember a place by name |
+| `stop_navigation` | Cancel the current navigation goal |
+| `observe` | Look at the surroundings and report what is seen |
+| `follow_person` | Start following a person |
+| `stop_following` | Stop following |
+| `speak` | Say something on the robot speakers |
+| `wait` | Pause for a duration |
+| `execute_sport_command` | Run a Unitree sport / pose command |
+| `look_out_for` | Watch for a described thing |
+| `stop_looking_out` | Stop watching |
+| `ar_place_marker` | Leave a named marker in the room (`id` required, optional title) |
+| `ar_remove_marker` | Remove a marker by `id` |
+| `ar_get_client_pose` | Read the headset pose and look direction in odom |
+
+This is a subset of the agentic blueprint's skills, not a complete inventory.
 
 > [!NOTE]
 > Agent Mode needs `OPENAI_API_KEY` set in the launcher and an internet connection on the Mac.

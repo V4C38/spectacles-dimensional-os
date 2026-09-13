@@ -17,6 +17,7 @@ from dimos.msgs.geometry_msgs.Pose import Pose
 
 LIDAR_FOURCC = 0x4C444152
 LOCALIZATION_OBSERVATIONS_FOURCC = 0x4C4F4341
+HUMAN_INPUT_MAX_CHARS = 4000
 
 
 def _dumps(payload: dict[str, Any]) -> str:
@@ -63,6 +64,22 @@ def _quat(data: dict[str, Any], key: str) -> tuple[float, float, float, float]:
     return float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3])
 
 
+def _finite_vec3(data: dict[str, Any], key: str) -> tuple[float, float, float]:
+    values = _vec3(data, key)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError(f"Field {key!r} must be finite")
+    return values
+
+
+def _finite_quat(data: dict[str, Any], key: str) -> tuple[float, float, float, float]:
+    values = _quat(data, key)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError(f"Field {key!r} must be finite")
+    if math.hypot(*values) < 1e-6:
+        raise ValueError(f"Field {key!r} must be a non-zero quaternion")
+    return values
+
+
 @dataclass(frozen=True)
 class HelloRequest:
     ts_client: float
@@ -88,8 +105,26 @@ class StateRequest:
     pass
 
 
+@dataclass(frozen=True)
+class HumanInput:
+    text: str
+
+
+@dataclass(frozen=True)
+class ClientPose:
+    position: tuple[float, float, float]
+    orientation: tuple[float, float, float, float]
+    ts: float
+
+
 Inbound = (
-    NavGoalRequest | EstopRequest | LidarSettingsRequest | StateRequest | LocalizationStartRequest
+    NavGoalRequest
+    | EstopRequest
+    | LidarSettingsRequest
+    | StateRequest
+    | LocalizationStartRequest
+    | HumanInput
+    | ClientPose
 )
 
 
@@ -142,6 +177,24 @@ def decode_inbound(text: str) -> Inbound:
 
     if msg_type == "localization_start_request":
         return LocalizationStartRequest()
+
+    if msg_type == "human_input":
+        text = _require_type(data, "text", str)
+        stripped = text.strip()
+        if not stripped:
+            raise ValueError("human_input.text must be non-blank")
+        if len(text) > HUMAN_INPUT_MAX_CHARS:
+            raise ValueError(
+                f"human_input.text exceeds {HUMAN_INPUT_MAX_CHARS} characters"
+            )
+        return HumanInput(text=stripped)
+
+    if msg_type == "client_pose":
+        return ClientPose(
+            position=_finite_vec3(data, "position"),
+            orientation=_finite_quat(data, "orientation"),
+            ts=_finite_float(data, "ts"),
+        )
 
     raise ValueError(f"Unknown inbound frame type: {msg_type!r}")
 
@@ -346,10 +399,16 @@ def encode_localization_observations_request(request: LocalizationObservationsRe
 
 
 @dataclass(frozen=True)
+class AgentState:
+    idle: bool
+
+
+@dataclass(frozen=True)
 class StateSnapshot:
     connected_clients: int
     lidar: LidarSettings
     nav: NavState
+    agent: AgentState
 
 
 def encode_state(snapshot: StateSnapshot) -> str:
@@ -367,8 +426,24 @@ def encode_state(snapshot: StateSnapshot) -> str:
                 "state": snapshot.nav.state,
                 "outcome": snapshot.nav.outcome,
             },
+            "agent": {"idle": snapshot.agent.idle},
         }
     )
+
+
+def encode_agent(text: str) -> str:
+    stripped = text.strip()
+    if not stripped:
+        raise ValueError("agent.text must be non-blank")
+    return encode_text({"type": "agent", "text": stripped})
+
+
+def encode_agent_skill(*, name: str, args: dict[str, Any]) -> str:
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("agent_skill.name must be non-blank")
+    if not isinstance(args, dict):
+        raise TypeError("agent_skill.args must be a JSON object")
+    return encode_text({"type": "agent_skill", "name": name, "args": args})
 
 
 def encode_localization_result(result: LocalizationResult) -> str:
@@ -392,6 +467,26 @@ def encode_pose(
     return encode_text(
         {
             "type": "pose",
+            "position": list(position),
+            "orientation": list(orientation),
+            "ts": ts,
+        }
+    )
+
+
+def encode_client_pose(
+    *,
+    position: tuple[float, float, float],
+    orientation: tuple[float, float, float, float],
+    ts: float,
+) -> str:
+    if not all(math.isfinite(value) for value in (*position, *orientation, ts)):
+        raise ValueError("client_pose position, orientation, and ts must be finite")
+    if math.hypot(*orientation) < 1e-6:
+        raise ValueError("client_pose orientation must be a non-zero quaternion")
+    return encode_text(
+        {
+            "type": "client_pose",
             "position": list(position),
             "orientation": list(orientation),
             "ts": ts,

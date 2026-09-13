@@ -2,12 +2,21 @@ import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clie
 import { odomToClientTrackingPose, rotateVecByQuat } from "../../DimOSARClient/localization/clientTrackingTransforms";
 import type { ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
 import type { Pose, Quat, RobotDescription, Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
-import { COLOR_WHITE } from "../../DimOSARClient/websocket/sessionLinkStatus";
+import {
+  COLOR_ERROR,
+  COLOR_WHITE,
+  NO_ROBOT_CONNECTED_LABEL,
+} from "../../DimOSARClient/websocket/sessionLinkStatus";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import { clientTrackingToSpecsPoint, clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
 import { RuntimePoseSmoothing } from "../utilities/RuntimePoseSmoothing";
 import { yawRotationFromWorldRotation } from "../utilities/SpecsUtilities";
-import { AppState, getRobotActivityState, robotTitleText } from "./AppState";
+import {
+  AppState,
+  getRobotActivityState,
+  robotTitleText,
+  type RobotActivityVoice,
+} from "./AppState";
 import { findChildRecursive, findText, setButtonStyle, SnapOS2Styles } from "./UIKit";
 export type RobotMarkerApplyInput =
   | { mode: "hidden" }
@@ -147,12 +156,18 @@ export class RobotPresenter extends BaseScriptComponent {
     this.applyButtonVfx(false);
   }
 
-  refreshLabels(appState: AppState, view: ARModuleSessionState): void {
+  refreshLabels(
+    appState: AppState,
+    view: ARModuleSessionState,
+    voice: RobotActivityVoice = { asrRunning: false, ttsPlaying: false },
+  ): void {
     if (!this.titleText || !this.stateInfoText) {
       return;
     }
-    this.titleText.text = robotTitleText(view);
-    const state = getRobotActivityState(view);
+    const title = robotTitleText(view);
+    this.titleText.text = title;
+    this.titleText.textFill.color = title === NO_ROBOT_CONNECTED_LABEL ? COLOR_ERROR : COLOR_WHITE;
+    const state = getRobotActivityState(view, voice);
     this.stateInfoText.text = state;
     this.stateInfoText.textFill.color = COLOR_WHITE;
     this.applyButtonVfx(state !== "Idle");

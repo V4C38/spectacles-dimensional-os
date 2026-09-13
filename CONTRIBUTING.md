@@ -5,8 +5,8 @@ This monorepo has three main parts:
 | Part | Path | Role |
 |------|------|------|
 | **dimos-ar** | [`dimos-ar/`](dimos-ar/) | `ARModule` (`dimos.ar`) |
-| **ClientCore** | [`clients/specs/Assets/Scripts/DimosARClient/core/`](clients/specs/Assets/Scripts/DimosARClient/core/) | Headset-agnostic TypeScript, currently in the Specs project. `clients/core/` is empty until ClientCore ships as an `.lspkg`. |
-| **Specs client** | [`clients/specs/`](clients/specs/) | Lens Studio project. Entry is `DimosARClient`. Rebuilt in [`clients/v2_plan.md`](clients/v2_plan.md) Groups 5–10. v19 `ARBridge/` and `App/` remain on disk as inactive reference until Group 10 deletes them. |
+| **ClientCore** | [`clients/specs/Assets/Scripts/DimOSARClient/`](clients/specs/Assets/Scripts/DimOSARClient/) | Headset-agnostic TypeScript, currently in the Specs project. `clients/core/` is empty until ClientCore ships as an `.lspkg`. |
+| **Specs client** | [`clients/specs/`](clients/specs/) | Lens Studio project. Entry is `DimOSSpecsClient`. Rebuilt in [`clients/v2_plan.md`](clients/v2_plan.md) Groups 5–10. |
 
 Host folders stay lowercase: `clients/specs/` (Lens Studio project) and `clients/webxr/` (empty).
 
@@ -16,7 +16,7 @@ Open the Lens project from [`clients/specs/spectacles-dimensional-os.esproj`](cl
 
 Open Cursor from [`spectacles-dimensional-os.code-workspace`](spectacles-dimensional-os.code-workspace) only — one folder, this repo. Do not add `../dimos` as a second workspace root; import the installed `dimos` package. In Lens Studio, Asset Browser settings: **Automatically Synchronize Assets Directory** must be on, or edits from Cursor never reach the running Lens. If scripts look stale, close Lens, delete `clients/specs/Cache/` and the leftover `clients/specs/Assets/Assets/` tree, reopen the `.esproj`.
 
-ClientCore production source is [`clients/specs/Assets/Scripts/DimosARClient/core/`](clients/specs/Assets/Scripts/DimosARClient/core/). Tests live in [`clients/specs/Tests/core/`](clients/specs/Tests/core/) so Lens Studio does not compile Vitest. `clients/core/` is empty (`.gitkeep`) until that code ships as an `.lspkg` and is imported back into the Lens. Do not duplicate it.
+ClientCore production source is [`clients/specs/Assets/Scripts/DimOSARClient/`](clients/specs/Assets/Scripts/DimOSARClient/). Tests live in [`clients/specs/Tests/DimOSARClient/`](clients/specs/Tests/DimOSARClient/) so Lens Studio does not compile Vitest. `clients/core/` is empty (`.gitkeep`) until that code ships as an `.lspkg` and is imported back into the Lens. Do not duplicate it.
 
 ## Before you open a PR
 
@@ -33,16 +33,11 @@ ask the agent to run with unrestricted (`all`) permissions.
 
 ## Scene wiring
 
-The composition root is **`DimosARClient`**. Group 5 attaches it as a shell
-with no presenter slots, socket, store, or tick. Later groups add the required
-server host input, session, camera, presenters, and UX. Platform scene objects
-stay `Camera Object`, `Lighting`, `SpectaclesInteractionKit`, and `World Mesh`.
-Group 9 authors `RobotPresenter` under `DimosARClient` (scene object +
-`RobotPresenter` script). That object is the one Specs-world robot location:
-the script writes its transform, and navigation reads it. The floor marker is
-the scene object `NavigationTargetMarker` with `NavGoalMarker` (same role as
-v19's always-visible nav target). Convert that object to
-`NavigationTargetMarker.prefab` and wire `DimosARClient.navGoalMarkerPrefab`.
+The composition root is **`DimOSSpecsClient`**. Platform scene objects stay
+`Camera Object`, `Lighting`, `SpectaclesInteractionKit`, and `World Mesh`.
+`RobotPresenter` is the one Specs-world robot location: the script writes its
+transform, and navigation reads it. The floor marker is
+`NavigationTargetMarker.prefab`, wired as `DimOSSpecsClient.navGoalMarkerPrefab`.
 `LidarPresenter` is never parented or anchored to `RobotPresenter`.
 
 Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-object investigation and manipulation.
@@ -57,9 +52,9 @@ re-enable them or wire new code through them.
 
 | Script | Role |
 |--------|------|
-| [`DimosARClient.ts`](clients/specs/Assets/Scripts/DimosARClient/DimosARClient.ts) | Composition root. Constructs `ClientCore` dependencies, drives `UpdateEvent` ticks, routes typed facts, tears down. Does not mirror portable state. |
+| [`DimOSSpecsClient.ts`](clients/specs/Assets/Scripts/DimOSSpecsClient/DimOSSpecsClient.ts) | Composition root. Constructs `ClientCore` dependencies, drives `UpdateEvent` ticks, routes typed facts, tears down. Does not mirror portable state. |
 
-**Portable owners** (under `Assets/Scripts/DimosARClient/core/`)
+**Portable owners** (under `Assets/Scripts/DimOSARClient/`)
 
 | Owner | Stores |
 |-------|--------|
@@ -80,14 +75,12 @@ re-enable them or wire new code through them.
 
 **Specs UX** (what the wearer reads or presses)
 
-`ConnectWizard` / `RuntimeHudView` derive copy, visibility, and buttons from
-`session.view()` and `episode.view()` only. They call existing core commands
-(`requestNavGoal`, `requestLidarSettings`, `session.requestEstop`,
-`session.requestState`, `episode.requestStart`). No `AppState`, no
-`operatingMode`, no parallel command layer.
-
-STT / TTS and `agent_skill` wait for the later DimOS agent relay. Do not port
-the v19 agent channel.
+`SetupWizard` / `UIPresenter` derive copy, visibility, and buttons from
+`session.view()` and `episode.view()`. They call existing ClientCore commands
+(`requestNavGoal`, `requestLidarSettings`, `sendHumanInput`,
+`session.requestEstop`, `session.requestState`, `episode.requestStart`).
+`AppState.operatingMode` is the Specs-host Agent/Manual gate. STT and TTS stay
+on the host; the wire carries text and typed agent facts only.
 
 ## Runtime HUD
 
@@ -115,7 +108,7 @@ send, failure, reset, and disposal.
 Do not add ACK/`seq`, a standing `capture_policy` message, `camera_info`,
 `FrameCaptureController`, or a second capture state store.
 
-## Host-layer naming (`clients/specs/Assets/Scripts/DimosARClient/`)
+## Host-layer naming (`clients/specs/Assets/Scripts/DimOSSpecsClient/`)
 
 Same suffix = same role.
 
@@ -137,14 +130,14 @@ When the WebSocket contract changes, update in the same change:
 
 - `dimos-ar/dimos/ar/websocket/protocol.py`
 - `dimos-ar/PROTOCOL.md`
-- `clients/specs/Assets/Scripts/DimosARClient/core/websocket/protocol.ts`
+- `clients/specs/Assets/Scripts/DimOSARClient/websocket/protocol.ts`
 
-Never edit DimOS source — import from the installed `dimos` package. Keep `dimos-ar/dimos/ar/` platform-agnostic. ClientCore lives in `clients/specs/Assets/Scripts/DimosARClient/core/` until the `.lspkg` split; do not put Specs or Lens APIs in that tree. Specs-specific code stays under `DimosARClient/` outside `core/`.
+Never edit DimOS source — import from the installed `dimos` package. Keep `dimos-ar/dimos/ar/` platform-agnostic. ClientCore lives in `clients/specs/Assets/Scripts/DimOSARClient/` until the `.lspkg` split; do not put Specs or Lens APIs in that tree. Specs-specific code stays under `DimOSSpecsClient/`.
 
 ## Tests
 
 ```bash
-# ClientCore + Specs helpers (and remaining v19 tests until Group 10)
+# ClientCore + Specs helpers
 cd clients/specs/Tests && npm test
 
 # ARModule (DimOS .venv)
@@ -152,7 +145,6 @@ cd dimos-ar
 /path/to/dimos/.venv/bin/python3 -m pytest
 ```
 
-Vitest for ClientCore lives in `clients/specs/Tests/core/`. Specs helper tests land
-under `clients/specs/Tests/unit/` as their source lands (`specsCoordinates`,
-`specsCameraSource`). v19 tests remain there until Group 10 removes them.
+Vitest for ClientCore lives in `clients/specs/Tests/DimOSARClient/`. Specs helper
+tests live under `clients/specs/Tests/DimOSSpecsClient/`.
 Do not put `*.test.ts` under `clients/specs/Assets/`.

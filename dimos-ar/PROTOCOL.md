@@ -7,9 +7,39 @@ clients update their protocol module in the same change.
 
 ## Changelog
 
+### v2 — client pose and named AR markers
+
+- **18 message types** — 9 outbound, 9 inbound.
+- **`client_pose`** — client → ARModule `{ position, orientation, ts }`. Same
+  odom fields as outbound robot `pose`. Inbound `ts` is Lens `getTime()`
+  (seconds since start) and is metadata only. Freshness is server receive
+  time (`now - received_at` > 2 s is stale). Latest-wins; do not queue.
+- **`ar_place_marker` / `ar_remove_marker`** — `agent_skill` names. Place
+  requires `{ id, x, y, z }` and optional `title`. Remove requires `{ id }`.
+  `id` is the handle (required, non-blank, max 64). Same `id` upserts.
+
+### v2 — agent messages
+
+- **17 message types** — 9 outbound, 8 inbound. Superseded by the client-pose
+  count above.
+- **`human_input`** — client → ARModule `{ text }`. DimOS stream name (no
+  `_request` suffix), same documented exception style as
+  `localization_observations`. Non-blank, max 4000 characters. No audio.
+- **`agent`** — ARModule → clients `{ text }` assistant-only, non-blank. Do not
+  apply the inbound 4000-character cap.
+- **`agent_skill`** — ARModule → clients `{ name, args }`. `args` is an opaque
+  JSON object. Unknown `name` values are ignored on the host.
+- **`hello.capabilities.agent`** — `available=true` when the running blueprint
+  configured `ARModule` with a DimOS agent. Otherwise `available=false` with
+  reason `current blueprint has no DimOS agent`.
+- **`state.agent.idle`** — always present. `true` when the capability is
+  unavailable, before the first `agent_idle` publication, or when `McpClient`
+  reports idle. Conversation is process-global (broadcast).
+
 ### v2 — ARModule-owned localization
 
-- **14 message types** — 7 outbound, 7 inbound.
+- **14 message types** — 7 outbound, 7 inbound. Superseded by the agent-message
+  count above.
 - **Server-to-client `*_request` is allowed** when ARModule needs the client to act.
   `localization_observations_request` is that exception. Other client commands
   still use `*_request`; other server replies still use the bare noun.
@@ -26,10 +56,10 @@ clients update their protocol module in the same change.
   successful capture episode. Never unsolicited.
 - **`state.alignment` removed.** `localization_observations_request` is the only
   prompt to capture.
-- **`hello.capabilities`** — keys `lidar`, `navigation`, `localization`, `estop`.
-  Any key may be `available=false` with `reason`. `localization` is false when
-  no provider is configured; `lidar` / `navigation` / `estop` follow the
-  selected robot profile.
+- **`hello.capabilities`** — keys `lidar`, `navigation`, `localization`, `estop`,
+  `agent`. Any key may be `available=false` with `reason`. `localization` is
+  false when no provider is configured; `lidar` / `navigation` / `estop` follow
+  the selected robot profile; `agent` follows the running blueprint.
 - **`ts_capture`** — exposure time on `localization_observations` (was `capture_ts`).
   Same clock family as `ts_client` / `ts_server` / `ts_odom`.
 
@@ -216,7 +246,8 @@ connection, and replies with `hello`.
     "lidar": { "available": true, "reason": null },
     "navigation": { "available": true, "reason": null },
     "localization": { "available": true, "reason": null },
-    "estop": { "available": true, "reason": null }
+    "estop": { "available": true, "reason": null },
+    "agent": { "available": false, "reason": "current blueprint has no DimOS agent" }
   }
 }
 ```
@@ -230,7 +261,7 @@ connection, and replies with `hello`.
 | `robot.body_bounds_m` | `[L, W, H]` | Axis-aligned envelope in `odom` axes: length X, width Y, height Z. |
 | `robot.footprint_m` | `[L, W]` | Ground footprint for nav UI. |
 | `robot.base_height_m` | float | Height of the odometry pose origin above the ground, so a client can place a ground marker under a `pose`. |
-| `capabilities.*.available` | bool | Feature gate for client UI. Keys are `lidar`, `navigation`, `localization`, and `estop`. |
+| `capabilities.*.available` | bool | Feature gate for client UI. Keys are `lidar`, `navigation`, `localization`, `estop`, and `agent`. |
 | `capabilities.*.reason` | string \| null | Human-readable, non-null exactly when `available` is `false`. |
 
 ARModule keeps `ts_server - ts_client` as the per-connection offset. The client
@@ -241,7 +272,8 @@ Which localization provider is configured is a deployment fact and is not on
 the wire. `hello.capabilities.localization.available` is `false` (with `reason`)
 when no provider is configured. `lidar`, `navigation`, and `estop` may also be
 `available=false` with `reason` when the selected robot profile does not offer
-them. Capture geometry is a `capture_policy` on each
+them. `agent` is `available=false` with `reason` when the current blueprint
+did not configure a DimOS agent. Capture geometry is a `capture_policy` on each
 `localization_observations_request`, not a hello field.
 
 ## Outbound messages (server → client)
@@ -270,6 +302,9 @@ whenever any field changes.
   "nav": {
     "state": "idle",
     "outcome": null
+  },
+  "agent": {
+    "idle": true
   }
 }
 ```
@@ -294,6 +329,59 @@ Where the robot is going, use **`nav_goal`** (route + terminal pose) and **`pose
 - **`idle`** otherwise
 
 ARModule does not record who started navigation.
+
+**`agent.idle`:** `true` when no DimOS agent is configured, before the first
+agent turn, or when `McpClient` reports idle. `false` while the agent is
+processing. Always present, same shape as `state.nav`.
+
+### `agent`
+
+Assistant text. Broadcast. Sent only for textual `AIMessage` content.
+
+```json
+{
+  "type": "agent",
+  "text": "Heading to the kitchen."
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `text` | string | Non-blank assistant text. No inbound 4000-character cap. |
+
+Human, tool, tool-only, and empty messages are not forwarded.
+
+### `agent_skill`
+
+A server `@skill` asked the connected AR clients to apply a visual. Broadcast.
+Do not wait for ACK. Unknown `name` values are ignored on the host.
+
+```json
+{
+  "type": "agent_skill",
+  "name": "ar_place_marker",
+  "args": {
+    "id": "kitchen",
+    "x": 1.0,
+    "y": 0.0,
+    "z": 0.0,
+    "title": "Kitchen"
+  }
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `name` | string | Skill name. Known names: `ar_place_marker`, `ar_remove_marker`. |
+| `args` | object | Opaque JSON object. Known names with invalid args fail closed. |
+
+`ar_place_marker` args are a required `id` (non-blank, max 64, trimmed), an
+odom-frame point (`x`, `y`, `z` in meters), and an optional `title`. Omit
+`title` or send `""` for an unlabeled marker. Same `id` upserts. The host
+composes the point through `T_odom_client` and instantiates the marker prefab.
+
+`ar_remove_marker` args are `{ "id": "kitchen" }`. Unknown `id` is an error on
+`ARModule`; the host destroys that prefab.
 
 ### `localization_observations_request`
 
@@ -594,6 +682,49 @@ changing the filter changes it for everyone.
 
 Response: `state`.
 
+### `human_input`
+
+```json
+{
+  "type": "human_input",
+  "text": "go to the kitchen"
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `text` | string | Required. Non-blank after trim. Max 4000 characters. No audio. |
+
+DimOS stream name — no `_request` suffix, same documented exception as
+`localization_observations`. ARModule publishes the string on
+`human_input: Out[str]` when `hello.capabilities.agent` is available and the
+stream is wired. Last-command-wins; conversation is process-global.
+
+### `client_pose`
+
+Wearer camera-optical pose in `odom`. Telemetry, not a request. Latest-wins
+on `ARModule`. Freshness is server receive time (1 s), not inbound `ts`.
+
+```json
+{
+  "type": "client_pose",
+  "position": [1.2, -0.4, 1.6],
+  "orientation": [0.0, 0.0, 0.38, 0.92],
+  "ts": 12.5
+}
+```
+
+| Field | Notes |
+|-------|-------|
+| `position` | Odom metres, DimOS Z-up. Same fields as outbound robot `pose`. |
+| `orientation` | Scalar-last quaternion. Zero quaternion is rejected. |
+| `ts` | Lens `getTime()` at capture (seconds since start). Metadata only. |
+
+Send only when the session is ready, `hello.capabilities.agent` is available,
+and `T_odom_client` exists. Typical rate is 10 Hz. Last client disconnect
+clears the server buffer. `ar_get_client_pose` reads this buffer; missing or
+stale returns `No client pose`.
+
 ## Message inventory
 
 | Client → server | Server → client |
@@ -605,12 +736,16 @@ Response: `state`.
 | `nav_goal_request` | `nav_goal` |
 | `estop_request` | `pose` |
 | `lidar_settings_request` | `lidar` (binary) |
+| `human_input` | `agent` |
+| `client_pose` | `agent_skill` |
 
 Paired requests: `hello_request` → `hello`, `state_request` → `state`,
 `localization_observations_request` → `localization_observations` →
 `localization_result` (on success), `nav_goal_request` → `nav_goal` (via
 DimOS planner). `estop_request` and `lidar_settings_request` take effect through
-a broadcast `state` update. `pose` and `lidar` are unsolicited telemetry.
+a broadcast `state` update. `human_input` takes effect through outbound `agent`
+and `state.agent.idle`. `client_pose` is unsolicited inbound telemetry for
+`ar_get_client_pose`. `pose` and `lidar` are unsolicited outbound telemetry.
 
 ## Dropped from v19
 
@@ -626,6 +761,7 @@ Not carried into v1:
 - Separate `runtime_snapshot`, `bridge_status` and `nav_status`, merged into
   `state`.
 - Agent messages — `user_command`, `agent_response`, `ar_skill` and the rest.
+  Replaced by `human_input`, `agent`, and `agent_skill`.
 - Joystick and teleop.
 - Inbound `robot_id` echo.
 - JSON `lidar`. Binary only.
