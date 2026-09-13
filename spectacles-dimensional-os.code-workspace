@@ -1,11 +1,27 @@
 {
 	"folders": [
 		{
+			"name": "spectacles-dimensional-os",
 			"path": "."
-		},
-		{
-			"path": "../dimos"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"files.watcherExclude": {
+			"**/clients/specs/Assets/Assets/**": true,
+			"**/clients/specs/Cache/**": true,
+			"**/clients/specs/Workspaces/**": true,
+			"**/clients/specs/Support/**": true,
+			"**/clients/specs/BackUp/**": true,
+			"**/clients/specs/PluginsUserPreferences/**": true,
+			"**/clients/specs/*.lock": true
+		},
+		"search.exclude": {
+			"**/clients/specs/Assets/Assets/**": true,
+			"**/clients/specs/Cache/**": true,
+			"**/clients/specs/Workspaces/**": true,
+			"**/clients/specs/Support/**": true,
+			"**/clients/specs/BackUp/**": true,
+			"**/clients/specs/PluginsUserPreferences/**": true
+		}
+	}
 }

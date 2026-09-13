@@ -293,8 +293,6 @@ clients/specs/
 │       ├── specsCoordinates.test.ts
 │       └── specsCameraSource.test.ts
 └── Assets/Scripts/
-    ├── ARBridge/                              # v19 reference until Group 10 deletes it
-    ├── App/                                   # v19 reference until Group 10 deletes it
     └── DimosARClient/
         ├── DimosARClient.ts                   # composition root
         ├── SpecsCoordinates.ts
@@ -816,9 +814,10 @@ host redoes this group against the same `ClientCore`.
 What the wearer reads or presses, then delete the leftover v19 runtime.
 
 Adapt useful v19 UIKit, wrist/palm, logging, and animation mechanics into
-`ux/`. `ConnectWizard` and `RuntimeHudView` derive copy, visibility, and
-button availability from `session.view()` and `episode.view()` only. They do
-not own duplicate lifecycle enums or booleans.
+`presentation/` and `utilities/`. `SetupWizard` and `RuntimeHudView` derive
+copy, visibility, and button availability from `session.view()` and
+`episode.view()` only. They do not own duplicate lifecycle enums or booleans.
+`UIPresenter` owns scene refs and wearable lifecycle.
 
 Call existing core commands directly: `requestNavGoal`,
 `requestLidarSettings`, `session.requestEstop`, `session.requestState`, and
@@ -849,21 +848,22 @@ STT / TTS and `agent_skill` presentation wait for the later DimOS agent
 relay.
 
 ```text
-clients/specs/Assets/Scripts/DimosARClient/ux/ConnectWizard.ts
-clients/specs/Assets/Scripts/DimosARClient/ux/ConnectWizardView.ts
-clients/specs/Assets/Scripts/DimosARClient/ux/PalmGestureGate.ts
-clients/specs/Assets/Scripts/DimosARClient/ux/RuntimeHudView.ts
-clients/specs/Assets/Scripts/DimosARClient/ux/UIKit.ts
-clients/specs/Assets/Scripts/DimosARClient/ux/UILogger.ts
-clients/specs/Assets/Scripts/DimosARClient/ux/WristMenuController.ts
+clients/specs/Assets/Scripts/DimosARClient/presentation/UIPresenter.ts
+clients/specs/Assets/Scripts/DimosARClient/presentation/SetupWizard.ts
+clients/specs/Assets/Scripts/DimosARClient/presentation/SetupWizardView.ts
+clients/specs/Assets/Scripts/DimosARClient/presentation/RuntimeHudView.ts
+clients/specs/Assets/Scripts/DimosARClient/presentation/UIKit.ts
+clients/specs/Assets/Scripts/DimosARClient/presentation/UILogger.ts
+clients/specs/Assets/Scripts/DimosARClient/presentation/WristMenuController.ts
 clients/specs/Assets/Scripts/DimosARClient/utilities/AnimationUtilities.ts
+clients/specs/Assets/Scripts/DimosARClient/utilities/RuntimePoseSmoothing.ts
+clients/specs/Assets/Scripts/DimosARClient/core/websocket/sessionLinkPresentation.ts
+clients/specs/Assets/Scripts/DimosARClient/core/websocket/hostNormalization.ts
 ```
 
-Create `AnimationUtilities.ts` only if retained UX uses it.
-
 **Take:** UIKit, wrist/palm, logging, animation helpers that still have a
-job. **Leave:** `AppState`, `operatingMode`, `RegistrationWizard`,
-`ARBridgeCoordinator`, v19 agent channel, registration session.
+job. **Leave:** v19 `AppState`, v19 agent channel, v19 registration session.
+`OperatingMode` stays on `RuntimeHudView` for a later agent relay.
 
 Group 10 is complete only when wizard/HUD are derived-view only, v19 runtime
 is gone, host tests and normal Lens compile checks pass, and

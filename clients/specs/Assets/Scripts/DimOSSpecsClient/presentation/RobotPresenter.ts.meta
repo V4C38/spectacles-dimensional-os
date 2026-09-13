@@ -1,0 +1,44 @@
+- !<AssetImportMetadata/68131515-c720-4997-b745-482e033e1454>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> 6250b148-dbef-445f-b7f1-e603ee828696
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> 6250b148-dbef-445f-b7f1-e603ee828696
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 9e8c8160-cff2-464c-abe8-29662a2e05b5
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/9e8c8160-cff2-464c-abe8-29662a2e05b5>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: aece0aa9-bedb-4ee4-b7fd-df5ba2166f20
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    odometryRoot: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - odometryRoot: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - // @input SceneObject odometryRoot

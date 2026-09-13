@@ -12,7 +12,7 @@ Thumbs.db
 # Add GIFs/PNGs here when ready; optional LFS via .gitattributes
 Logs.md
 
-# Accidental Lens Studio open at repo root (always use lens-studio/spectacles-dimensional-os.esproj)
+# Accidental Lens Studio open at repo root (always use clients/specs/spectacles-dimensional-os.esproj)
 /*.esproj
 /*.esproj.*.lock
 /Cache/
@@ -32,7 +32,7 @@ Logs.md
 /assets/*.imgmarker
 /assets/*.imgmarker.meta
 /assets/Scripts/
-lens-studio/Assets/Assets/
+clients/specs/Assets/Assets/
 
 # Python — repo-wide (see github/gitignore Python template)
 **/__pycache__/
@@ -59,19 +59,19 @@ build/
 *.egg-info/
 .eggs/
 
-# Lens Studio generated / local — primary rules in lens-studio/.gitignore
+# Lens Studio generated / local — primary rules in clients/specs/.gitignore
 # (Snap docs: Cache/, BackUp/, Support/, PluginsUserPreferences/, Workspaces/)
-lens-studio/Cache/
-lens-studio/PluginsUserPreferences/
-lens-studio/Support/
-lens-studio/BackUp/
-lens-studio/Workspaces/
-lens-studio/*.lock
-lens-studio/.vscode/
-lens-studio/jsconfig.json
-lens-studio/tsconfig.json
+clients/specs/Cache/
+clients/specs/PluginsUserPreferences/
+clients/specs/Support/
+clients/specs/BackUp/
+clients/specs/Workspaces/
+clients/specs/*.lock
+clients/specs/.vscode/
+clients/specs/jsconfig.json
+clients/specs/tsconfig.json
 
-# JS/TS test toolchain (lens-studio/Tests)
+# JS/TS test toolchain
 node_modules/
-lens-studio/Tests/coverage/
+clients/specs/Tests/coverage/
 .vitest/

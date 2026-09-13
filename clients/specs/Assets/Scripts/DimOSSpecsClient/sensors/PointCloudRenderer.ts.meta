@@ -1,0 +1,44 @@
+- !<AssetImportMetadata/1b2da7e1-6093-44fc-94fd-482e5c6a444f>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> e225bc2c-2b74-4d1f-9248-320457310a92
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> e225bc2c-2b74-4d1f-9248-320457310a92
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> f28ea64c-27fa-4b5d-a271-39f659e355a3
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/f28ea64c-27fa-4b5d-a271-39f659e355a3>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: cb78041e-de0e-4aa2-a96d-5521c7d052f2
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    maxPoints: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - maxPoints: 1500
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - '// @input int maxPoints = "1500"'

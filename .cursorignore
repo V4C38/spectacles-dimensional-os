@@ -1,0 +1,16 @@
+# Lens Studio generated — do not index or watch
+clients/specs/Cache/
+clients/specs/Workspaces/
+clients/specs/Support/
+clients/specs/BackUp/
+clients/specs/PluginsUserPreferences/
+clients/specs/*.lock
+clients/specs/Assets/Assets/
+
+# Accidental Lens open at repo root
+/Cache/
+/Packages/
+/Workspaces/
+/PluginsUserPreferences/
+/*.esproj
+/*.esproj.*.lock

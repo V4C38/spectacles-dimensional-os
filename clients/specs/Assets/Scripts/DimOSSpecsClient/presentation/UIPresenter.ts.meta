@@ -1,0 +1,50 @@
+- !<AssetImportMetadata/8d1d30a1-960e-4062-8c2b-b871bc55a701>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> bf077f05-4e01-4104-a369-8c8258fb78b2
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> bf077f05-4e01-4104-a369-8c8258fb78b2
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 1d05fa87-f911-47de-8434-5c3f24cfe235
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/1d05fa87-f911-47de-8434-5c3f24cfe235>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: 31f4f5dd-8400-45bc-a3a9-6ade2bc93d8b
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    mainUIFrame: false
+    setupWizardPanel: false
+    wristMenuRoot: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - setupWizardPanel: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      mainUIFrame: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      wristMenuRoot: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - // @input SceneObject setupWizardPanel
+    - // @input SceneObject mainUIFrame
+    - // @input SceneObject wristMenuRoot

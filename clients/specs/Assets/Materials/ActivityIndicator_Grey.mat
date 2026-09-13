@@ -296,7 +296,7 @@
       value: 0
     Saturation:
       typeIdx: 1
-      value: 0.000000
+      value: 0.130000
     Tweak_N23:
       typeIdx: 1
       value: 3.610000
@@ -311,5 +311,5 @@
       value: 0.327000
     in_out:
       typeIdx: 1
-      value: 0.540000
+      value: 0.860000
   Pass: !<reference> 11ee2b9e-22c2-4138-a11d-abce6d544287

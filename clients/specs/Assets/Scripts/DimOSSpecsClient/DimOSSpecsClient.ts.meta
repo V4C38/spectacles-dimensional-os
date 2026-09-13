@@ -1,0 +1,62 @@
+- !<AssetImportMetadata/880ad4de-820e-4b6a-a822-830b116dd1e2>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> ec7dd571-d2d6-485a-b873-f47d69c5068a
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> ec7dd571-d2d6-485a-b873-f47d69c5068a
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 98f97e30-15b9-4b06-a1c8-9c872e7913ef
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/98f97e30-15b9-4b06-a1c8-9c872e7913ef>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: 08499c75-cae1-44c4-8f79-c8d91e02e5d0
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    cameraObject: false
+    defaultWebsocketIp: false
+    internetModule: false
+    lidarPresenter: false
+    navGoalMarkerPrefab: false
+    robotPresenter: false
+    uiPresenter: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - robotPresenter: !<MappingBased.AssignableType> 00000000-0000-0000-0000-000000000000
+      lidarPresenter: !<MappingBased.AssignableType_1> 00000000-0000-0000-0000-000000000000
+      uiPresenter: !<MappingBased.AssignableType_2> 00000000-0000-0000-0000-000000000000
+      cameraObject: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      internetModule: !<reference.InternetModule> 00000000-0000-0000-0000-000000000000
+      defaultWebsocketIp: 192.168.1.108
+      navGoalMarkerPrefab: !<reference.ObjectPrefab> 00000000-0000-0000-0000-000000000000
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - // @input AssignableType robotPresenter
+    - // @input AssignableType_1 lidarPresenter
+    - // @input AssignableType_2 uiPresenter
+    - // @input SceneObject cameraObject
+    - // @input Asset.InternetModule internetModule
+    - '// @input string defaultWebsocketIp = "192.168.1.108"'
+    - // @input Asset.ObjectPrefab navGoalMarkerPrefab

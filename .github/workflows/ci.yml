@@ -56,11 +56,11 @@ jobs:
       - name: Pytest
         run: pytest
 
-  lens-studio-tests:
+  client-specs-tests:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: lens-studio/Tests
+        working-directory: clients/specs/Tests
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4

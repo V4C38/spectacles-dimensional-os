@@ -214,7 +214,7 @@ flowchart LR
 
 **Specs client**
 
-Portable [`ClientCore`](clients/specs/Assets/Scripts/DimosARClient/core/) speaks [`PROTOCOL.md`](dimos-ar/PROTOCOL.md). The composition root is **`DimosARClient`**: it constructs that core, drives time, and routes typed facts to room presenters and derived UX. Axis conversion stays in the Specs client (`SpecsCoordinates`). The Lens on disk is still the v19 project until Groups 5–10 of [`clients/v2_plan.md`](clients/v2_plan.md) land. `clients/core/` is empty until ClientCore ships as an `.lspkg`.
+Portable [`ClientCore`](clients/specs/Assets/Scripts/DimosARClient/core/) speaks [`PROTOCOL.md`](dimos-ar/PROTOCOL.md). The composition root is **`DimosARClient`**: it constructs that core, drives time, and routes typed facts to room presenters and derived UX via [`UIPresenter`](clients/specs/Assets/Scripts/DimosARClient/presentation/UIPresenter.ts). Axis conversion stays in the Specs client (`SpecsCoordinates`). `clients/core/` is empty until ClientCore ships as an `.lspkg`.
 
 ```mermaid
 flowchart LR
@@ -234,7 +234,7 @@ flowchart LR
 
 ## Augmented Reality Interface
 
-The shipping Lens is still v19. The v2 Specs client rebuild is [`clients/v2_plan.md`](clients/v2_plan.md) Groups 5–10.
+The shipping Specs Lens is the v2 client described in [`clients/v2_plan.md`](clients/v2_plan.md).
 
 <p align="center">
   <img src="assets/specs_dimos_arwalk.gif" alt="Spectacles AR interface with Unitree Go2 outdoors: wrist menu and LiDAR visualization" width="800" />

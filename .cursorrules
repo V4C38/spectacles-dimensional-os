@@ -1,7 +1,7 @@
 # Cursor rules — spectacles-dimensional-os (monorepo)
 
 This repository composes **`ARModule`** into DimOS blueprints and ships a
-Spectacles Lens client. It is **not a fork of DimOS** — import the installed
+Specs Lens client. It is **not a fork of DimOS** — import the installed
 `dimos` package and wire via `autoconnect`.
 
 ## Names (DimOS-shaped)
@@ -18,7 +18,8 @@ Same pattern as `RelocalizationModule` / `dimos.mapping.relocalization` /
 
 Do **not** call it a bridge, an AR package, or `ar_go2`. Prose uses **`ARModule`**.
 The WebSocket accept loop is a collaborator (`websocket/server.py`), not the class.
-Lens `ARBridge/` stays until the Lens adaptation phase.
+The Lens composition root is **`DimosARClient`** (same class name in WebXR).
+Wearable UX lives under `DimosARClient/presentation/` and `utilities/`.
 
 
 ## Chat — correct imprecise terms
@@ -40,23 +41,30 @@ spectacles-dimensional-os/
 │   ├── dimos/ar/blueprints.py   # unitree_go2_ar
 │   ├── PROTOCOL.md              # JSON WebSocket contract (cross-repo)
 │   └── tests colocated under dimos/ar/
-├── launcher/                    # CLI scripts + web UI for setup/start
-│   ├── Start Launcher.command   # Finder double-click entry (http://127.0.0.1:8790)
-│   ├── scripts/                 # setup.sh, start.sh, start-launcher.sh, run-ci.sh, …
-│   └── app/                     # FastAPI launcher
-└── lens-studio/                 # Spectacles Lens Studio project
-    ├── spectacles-dimensional-os.esproj   # open THIS file (never from repo root)
-    └── Assets/Scripts/          # Lens TypeScript (ARBridgeServices, …)
+├── clients/
+│   ├── core/                    # empty until ClientCore ships as .lspkg
+│   ├── specs/                   # Specs client (Lens Studio project)
+│   │   ├── spectacles-dimensional-os.esproj   # open THIS file (never from repo root)
+│   │   └── Assets/Scripts/DimosARClient/   # composition root + ClientCore
+│   └── webxr/                   # WebXR host (empty)
+└── launcher/                    # CLI scripts + web UI for setup/start
+    ├── Start Launcher.command   # Finder double-click entry (http://127.0.0.1:8790)
+    ├── scripts/                 # setup.sh, start.sh, start-launcher.sh, run-ci.sh, …
+    └── app/                     # FastAPI launcher
 ```
 
 | Component | Location | Notes |
 |-----------|----------|-------|
-| ARModule | `dimos-ar/dimos/ar/` | Platform-agnostic — no Spectacles logic |
+| ARModule | `dimos-ar/dimos/ar/` | Platform-agnostic — no Specs logic |
 | Blueprint | `dimos-ar/dimos/ar/blueprints.py` | `unitree_go2_ar` |
 | Contract | `dimos-ar/PROTOCOL.md` | JSON WebSocket API |
-| Spectacles Lens | `lens-studio/` | See [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| ClientCore | `clients/specs/Assets/Scripts/DimosARClient/core/` | Headset-agnostic TypeScript in the Specs project until it ships as `.lspkg`. `clients/core/` is empty (`.gitkeep`). |
+| Specs client | `clients/specs/` | Lens Studio project. Entry is `DimosARClient`. |
+| WebXR host | `clients/webxr/` | Empty |
 
-The package publishes `dimos.ar*`. Active work is `dimos-ar/`.
+The package publishes `dimos.ar*`. ClientCore production source is
+`clients/specs/Assets/Scripts/DimosARClient/core/` until the later `.lspkg` split.
+`clients/core/` stays empty. Do not duplicate it.
 
 ## How we build dimos-ar
 
@@ -97,6 +105,7 @@ comprehension, not for throughput.
 |------|------|
 | Whole project | `README.md` |
 | WebSocket message schema | `dimos-ar/PROTOCOL.md` |
+| Client rewrite (core + hosts) | `clients/v2_plan.md` |
 | Spectacles / Lens Studio | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Contributing | `CONTRIBUTING.md` |
 
@@ -109,6 +118,12 @@ implementation steps only. Do not create "investigation plans."
 Plans are standalone documents: write only the final design and actionable
 steps. Do not include Q&A history, rejected alternatives, migration tables from
 earlier drafts, or "we decided against X" notes from prior plan iterations.
+
+A plan is a singular piece, not a conversation or changelog of how it was
+created. When revising or updating a plan file, rewrite it as the current plan
+— do not refer to the previous version ("the plan had five blocking design
+problems…", "previously we…", "this revision fixes…"). Readers should not need
+the old draft to understand the new one.
 
 ## ARModule — systems design
 
@@ -139,15 +154,20 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic:
 
 - **Never edit DimOS source.** Import from the installed `dimos` package. Upstream
   changes are filed as separate PRs.
-- `dimos-ar/dimos/ar/` stays platform-agnostic. Spectacles-specific code lives
-  only under `lens-studio/`.
-- **Open Lens Studio from `lens-studio/spectacles-dimensional-os.esproj`**, not the repo
+- `dimos-ar/dimos/ar/` stays platform-agnostic. Portable TypeScript lives in
+  `clients/specs/Assets/Scripts/DimosARClient/core/` until it ships as an `.lspkg` (no Specs
+  or Lens APIs in that tree). Specs-specific code lives in `clients/specs/`
+  outside `DimosARClient/core/`. The composition root is `DimosARClient` (same name in WebXR).
+  Do not call it `SpectaclesHost`. `clients/core/` is empty until the `.lspkg` split.
+- **Never edit** a second copy of ClientCore. There is no generated mirror and
+  no `clients/specs/scripts/sync-client-core.mjs`.
+- **Open Lens Studio from `clients/specs/spectacles-dimensional-os.esproj`**, not the repo
   root — opening at root creates stray `Cache/`, `Packages/`, etc.
 - The cross-repo contract is `dimos-ar/PROTOCOL.md`. When the protocol
-  changes, update the Python protocol and the Lens protocol modules in the same change:
+  changes, update the Python protocol and the client protocol module in the same change:
   - `dimos-ar/dimos/ar/websocket/protocol.py`
   - `dimos-ar/PROTOCOL.md`
-  - `lens-studio/Assets/Scripts/ARBridge/Network/Protocol.ts`
+  - `clients/specs/Assets/Scripts/DimosARClient/core/websocket/protocol.ts`
 - The ARModule worker must never block; WebSocket runs on a daemon thread.
 - Blueprint is `unitree_go2_ar` (`dimos-ar/dimos/ar/blueprints.py`).
 - Port **8787** is ARModule's WebSocket. Do not reuse the old Foxglove `8765` port.
@@ -155,7 +175,7 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic:
 - For Lens Studio verification, do **not** run `CompileWithLogs` by default.
   Use normal compile checks first, and only run compile-with-logs when there is
   an actual compile/runtime error that needs investigation.
-- Do **not** write or edit `lens-studio/Assets/Scene.scene` (or other `.scene`
+- Do **not** write or edit `clients/specs/Assets/Scene.scene` (or other `.scene`
   files) directly. Use the **`user-lens-studio` MCP tools** for scene-object
   investigation and manipulation. If the MCP cannot express a change, ask the
   user — do not patch scene files by hand.
@@ -185,5 +205,5 @@ or a normal terminal). Sandboxed runs fail when DimOS tries to write logs under
 # Tests (with blueprint running for integration)
 cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest
 cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/websocket/test_ws_integration.py -m integration
-cd lens-studio/Tests && npm test   # Lens pure TS (Vitest); CI job lens-studio-tests
+cd clients/specs/Tests && npm test   # ClientCore + Specs presentation tests; CI job client-specs-tests
 ```

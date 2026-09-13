@@ -14,6 +14,8 @@ The cross-platform contract is [`dimos-ar/PROTOCOL.md`](dimos-ar/PROTOCOL.md). T
 
 Open the Lens project from [`clients/specs/spectacles-dimensional-os.esproj`](clients/specs/spectacles-dimensional-os.esproj), **not** the repo root.
 
+Open Cursor from [`spectacles-dimensional-os.code-workspace`](spectacles-dimensional-os.code-workspace) only — one folder, this repo. Do not add `../dimos` as a second workspace root; import the installed `dimos` package. In Lens Studio, Asset Browser settings: **Automatically Synchronize Assets Directory** must be on, or edits from Cursor never reach the running Lens. If scripts look stale, close Lens, delete `clients/specs/Cache/` and the leftover `clients/specs/Assets/Assets/` tree, reopen the `.esproj`.
+
 ClientCore production source is [`clients/specs/Assets/Scripts/DimosARClient/core/`](clients/specs/Assets/Scripts/DimosARClient/core/). Tests live in [`clients/specs/Tests/core/`](clients/specs/Tests/core/) so Lens Studio does not compile Vitest. `clients/core/` is empty (`.gitkeep`) until that code ships as an `.lspkg` and is imported back into the Lens. Do not duplicate it.
 
 ## Before you open a PR
@@ -72,7 +74,7 @@ re-enable them or wire new code through them.
 | `SpecsCoordinates.ts` | One `SPECS_BASIS`; DimOS `odom` ↔ Specs |
 | `websocket/` | `SpecsWebSocketTransport` |
 | `localization/` | `SpecsCameraStream`, `SpecsCameraSource` (tracking + async capture ports) |
-| `robot/RobotPresenter.ts` | Composed `pose` on the authored `RobotPresenter` scene object |
+| `presentation/RobotPresenter.ts` | Composed `pose` on the authored `RobotPresenter` scene object |
 | `sensors/` | `PointCloudRenderer` — each `lidar` point from `odom` independently |
 | `navigation/` | `GroundPlacement`, `NavigationController`, `NavGoalPresenter` |
 
