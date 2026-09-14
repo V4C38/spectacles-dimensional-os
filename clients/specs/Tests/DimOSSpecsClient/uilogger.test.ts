@@ -50,11 +50,11 @@ describe("formatConsoleTimestamp", () => {
 describe("formatConsoleLine", () => {
   it("prefixes message with timestamp", () => {
     const entry: UILogConsoleEntry = {
-      text: "Bridge connected",
+      text: "Websocket connected",
       color: new vec4(1, 1, 1, 1),
       loggedAt: new Date(2026, 6, 3, 9, 30, 0),
     };
-    expect(formatConsoleLine(entry)).toBe("[09:30:00] Bridge connected");
+    expect(formatConsoleLine(entry)).toBe("[09:30:00] Websocket connected");
   });
 });
 

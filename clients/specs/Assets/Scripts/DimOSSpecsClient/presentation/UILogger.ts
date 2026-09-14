@@ -5,8 +5,9 @@ import {
   COLOR_WARN,
   COLOR_WHITE,
 } from "./UIKit";
+import type { AgentResponseSeverity } from "../agent/AgentResponseClassification";
 export type AgentActivityState = "idle" | "busy";
-export type AgentResponseSeverity = "ok" | "warn" | "error";
+export type { AgentResponseSeverity };
 
 export interface UILogEntry {
   text: string;
@@ -197,14 +198,14 @@ export class UILogger {
     this._renderAgentPromptLine();
   }
 
-  public setCameraStatus(text: string, color: vec4): void {
+  public setLocalizationCaptureStatus(text: string, color: vec4): void {
     if (!text.trim()) {
       this._cameraStatusEntry = null;
       this._renderCameraStatusLine();
       return;
     }
     this._cameraStatusEntry = {
-      text: `Camera: ${text}`,
+      text: `Localization: ${text}`,
       color: cloneColor(color),
       loggedAt: new Date(),
     };

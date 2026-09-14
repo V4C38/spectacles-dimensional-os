@@ -19,7 +19,7 @@ export function localizationCaptureStatus(
     return { text: reason, color: COLOR_WARN };
   }
   if (sessionView.hasTrackingOrigin) {
-    return { text: "Aligned", color: COLOR_SUCCESS };
+    return { text: "Localized", color: COLOR_SUCCESS };
   }
 
   switch (episodeView.phase) {

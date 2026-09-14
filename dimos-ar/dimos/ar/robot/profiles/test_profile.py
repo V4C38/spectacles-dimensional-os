@@ -7,7 +7,7 @@ from typing import cast
 import numpy as np
 import pytest
 
-from dimos.ar.robot.capabilities import CapabilityName
+from dimos.ar.robot.capabilities import NAV_JOYSTICK, CapabilityName
 from dimos.ar.robot.profiles import FiducialMarkerMount, RobotName, RobotProfile, get_profile
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 
@@ -104,6 +104,26 @@ def test_robot_profile_rejects_invalid_geometry() -> None:
 def test_robot_profile_rejects_navigation_without_estop() -> None:
     with pytest.raises(ValueError, match="navigation requires estop"):
         _profile(supported_capabilities=frozenset({CapabilityName.NAVIGATION}))
+
+
+def test_robot_profile_rejects_navigation_without_inputs() -> None:
+    with pytest.raises(ValueError, match="supported_navigation_inputs"):
+        _profile(
+            supported_capabilities=frozenset({CapabilityName.NAVIGATION, CapabilityName.ESTOP})
+        )
+
+
+def test_robot_profile_rejects_inputs_without_navigation() -> None:
+    with pytest.raises(ValueError, match="supported_navigation_inputs requires navigation"):
+        _profile(supported_navigation_inputs=frozenset({NAV_JOYSTICK}))
+
+
+def test_robot_profile_rejects_joystick_without_limits() -> None:
+    with pytest.raises(ValueError, match="max_linear_mps"):
+        _profile(
+            supported_capabilities=frozenset({CapabilityName.NAVIGATION, CapabilityName.ESTOP}),
+            supported_navigation_inputs=frozenset({NAV_JOYSTICK}),
+        )
 
 
 def test_robot_profile_rejects_localization_in_supported() -> None:

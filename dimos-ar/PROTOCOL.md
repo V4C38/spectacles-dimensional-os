@@ -7,9 +7,43 @@ clients update their protocol module in the same change.
 
 ## Changelog
 
+### v2 — user_message_request / agent_message
+
+- **`user_message_request`** — client → ARModule `{ text }`. Client command
+  (`*_request`). Replaces inbound `human_input_request`. Non-blank, max 4000
+  characters. No audio. Gated on `hello.capabilities.agent`. ARModule publishes
+  DimOS `human_input: Out[str]`.
+- **`agent_message`** — ARModule → clients `{ text }` assistant-only, non-blank.
+  Replaces outbound `agent`. Do not apply the inbound 4000-character cap.
+- **`agent_skill`** — unchanged. Skill invocation, not a chat turn.
+
+### v2 — nav_goal_request / nav_joystick_request and nested navigation capabilities
+
+- **19 message types** — 9 outbound, 10 inbound.
+- **`nav_goal_request`** — client → ARModule `{ position, orientation }`. Client
+  command (`*_request`). Overlay telemetry stays the bare noun `nav_goal`.
+  ARModule publishes DimOS `goal_request`.
+- **`nav_joystick_request`** — client → ARModule `{ linear, angular, duration? }`.
+  Client command (`*_request`), same naming as `nav_goal_request`. `linear` and
+  `angular` are metres per second and radians per second. Go2 direct drive uses
+  `linear.x`, `linear.y`, and `angular.z`; nonzero `linear.z`, `angular.x`, or
+  `angular.y` is rejected. Optional `duration` is a one-shot hold in seconds
+  (`0 < duration <= 2.0`); omit or send `0` to publish once. Boolean and
+  non-finite values are rejected. Not odom-scale-corrected. ARModule publishes
+  DimOS `tele_cmd_vel`; `MovementManager` muxes with `nav_cmd_vel`.
+- **`human_input_request`** — client → ARModule `{ text }`. Superseded by
+  `user_message_request` above. ARModule publishes DimOS `human_input: Out[str]`.
+- **`hello.capabilities.navigation`** — parent `{ available, reason }` is true
+  when **any** nested input is available. Nested keys `nav_goal` and
+  `nav_joystick` are always present with the same `{ available, reason }`
+  shape. Point-and-click and `nav_goal_request` gate on `nav_goal`;
+  `nav_joystick_request` gates on `nav_joystick`. Parent `available` is not a
+  substitute for `nav_goal`.
+
 ### v2 — client pose and named AR markers
 
-- **18 message types** — 9 outbound, 9 inbound.
+- **18 message types** — 9 outbound, 9 inbound. Superseded by the
+  nav_joystick_request count above.
 - **`client_pose`** — client → ARModule `{ position, orientation, ts }`. Same
   odom fields as outbound robot `pose`. Inbound `ts` is Lens `getTime()`
   (seconds since start) and is metadata only. Freshness is server receive
@@ -25,8 +59,8 @@ clients update their protocol module in the same change.
 - **`human_input`** — client → ARModule `{ text }`. DimOS stream name (no
   `_request` suffix), same documented exception style as
   `localization_observations`. Non-blank, max 4000 characters. No audio.
-- **`agent`** — ARModule → clients `{ text }` assistant-only, non-blank. Do not
-  apply the inbound 4000-character cap.
+- **`agent`** — ARModule → clients `{ text }` assistant-only, non-blank.
+  Superseded by `agent_message` above.
 - **`agent_skill`** — ARModule → clients `{ name, args }`. `args` is an opaque
   JSON object. Unknown `name` values are ignored on the host.
 - **`hello.capabilities.agent`** — `available=true` when the running blueprint
@@ -174,6 +208,7 @@ What carries the correction, and what does not:
 | Height (Z) on any message | no |
 | Orientation on any message | no |
 | `speed_mps` and any other rate or direction | no |
+| `nav_joystick_request` linear and angular | no |
 | `lidar` points | no |
 
 Height is excluded because slip costs horizontal travel, not altitude.
@@ -198,7 +233,10 @@ Any number of clients may connect at once.
   `localization_result` are addressed to one connection, since each client has
   its own tracking origin.
 - **Control is last-command-wins.** ARModule does not arbitrate. The most
-  recent `nav_goal_request` or `estop_request` takes effect regardless of which client sent it.
+  recent `nav_goal_request`, `nav_joystick_request`, or `estop_request` takes
+  effect regardless of which client sent it. ARModule publishes joystick
+  commands on DimOS `tele_cmd_vel`; `MovementManager` muxes that stream against
+  planner `nav_cmd_vel`.
 
 `hello` assigns each connection a `client_id` for logging and future features.
 Navigation overlay uses `nav_goal` and `pose`. `state.nav` tracks planner
@@ -244,7 +282,12 @@ connection, and replies with `hello`.
   },
   "capabilities": {
     "lidar": { "available": true, "reason": null },
-    "navigation": { "available": true, "reason": null },
+    "navigation": {
+      "available": true,
+      "reason": null,
+      "nav_goal": { "available": true, "reason": null },
+      "nav_joystick": { "available": true, "reason": null }
+    },
     "localization": { "available": true, "reason": null },
     "estop": { "available": true, "reason": null },
     "agent": { "available": false, "reason": "current blueprint has no DimOS agent" }
@@ -263,6 +306,12 @@ connection, and replies with `hello`.
 | `robot.base_height_m` | float | Height of the odometry pose origin above the ground, so a client can place a ground marker under a `pose`. |
 | `capabilities.*.available` | bool | Feature gate for client UI. Keys are `lidar`, `navigation`, `localization`, `estop`, and `agent`. |
 | `capabilities.*.reason` | string \| null | Human-readable, non-null exactly when `available` is `false`. |
+| `capabilities.navigation.nav_goal` | `{ available, reason }` | Can send `nav_goal_request`. Always present. |
+| `capabilities.navigation.nav_joystick` | `{ available, reason }` | Can send `nav_joystick_request`. Always present. |
+
+`navigation.available` is true when any nested input is available. Clients that
+need a specific input check that nested key; Specs point-and-click checks
+`nav_goal`.
 
 ARModule keeps `ts_server - ts_client` as the per-connection offset. The client
 may use the same pair for its own UI timing; localization does not require the
@@ -334,13 +383,13 @@ ARModule does not record who started navigation.
 agent turn, or when `McpClient` reports idle. `false` while the agent is
 processing. Always present, same shape as `state.nav`.
 
-### `agent`
+### `agent_message`
 
 Assistant text. Broadcast. Sent only for textual `AIMessage` content.
 
 ```json
 {
-  "type": "agent",
+  "type": "agent_message",
   "text": "Heading to the kitchen."
 }
 ```
@@ -623,6 +672,45 @@ Goal in `odom`. **`position` and `orientation` are both required** — same fiel
 as `pose`. Send them in the same coordinates you receive `pose` in; ARModule
 inverts the scale correction on ingress and publishes to DimOS `goal_request`.
 
+Gated on `hello.capabilities.navigation.nav_goal`.
+
+### `nav_joystick_request`
+
+```json
+{
+  "type": "nav_joystick_request",
+  "linear": [0.4, 0.0, 0.0],
+  "angular": [0.0, 0.0, 0.3]
+}
+```
+
+Direct drive in m/s and rad/s, not a raw `[-1, 1]` stick deflection. Client
+command (`*_request`), same naming as `nav_goal_request`. ARModule publishes on
+DimOS `tele_cmd_vel: Out[Twist]`; `MovementManager` muxes with planner
+`nav_cmd_vel`. Not odom-scale-corrected.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `linear` | `[x, y, z]` | Required. Finite m/s. `z` must be `0`. Boolean values are rejected. |
+| `angular` | `[x, y, z]` | Required. Finite rad/s. `x` and `y` must be `0`. Boolean values are rejected. |
+| `duration` | float | Optional. Seconds to republish this twist. Omit or `0` publishes once. `0 < duration <= 2.0` holds at 10 Hz on ARModule, then a release-edge zero. Negative, boolean, non-finite, or above `2.0` is rejected, not clamped. |
+
+A new `nav_joystick_request` replaces any in-flight duration. Zero twist is the
+release edge. `estop_request` and last-client disconnect cancel a hold. Callers
+that omit `duration` must keep sending if drive should continue
+(`cmd_vel_timeout` is 0.2 s). Gated on `hello.capabilities.navigation.nav_joystick`.
+
+With a hold:
+
+```json
+{
+  "type": "nav_joystick_request",
+  "linear": [0.4, 0.0, 0.0],
+  "angular": [0.0, 0.0, 0.3],
+  "duration": 0.5
+}
+```
+
 ### `estop_request`
 
 ```json
@@ -682,11 +770,11 @@ changing the filter changes it for everyone.
 
 Response: `state`.
 
-### `human_input`
+### `user_message_request`
 
 ```json
 {
-  "type": "human_input",
+  "type": "user_message_request",
   "text": "go to the kitchen"
 }
 ```
@@ -695,15 +783,14 @@ Response: `state`.
 |-------|------|-------|
 | `text` | string | Required. Non-blank after trim. Max 4000 characters. No audio. |
 
-DimOS stream name — no `_request` suffix, same documented exception as
-`localization_observations`. ARModule publishes the string on
+Client command (`*_request`). ARModule publishes the string on DimOS
 `human_input: Out[str]` when `hello.capabilities.agent` is available and the
 stream is wired. Last-command-wins; conversation is process-global.
 
 ### `client_pose`
 
 Wearer camera-optical pose in `odom`. Telemetry, not a request. Latest-wins
-on `ARModule`. Freshness is server receive time (1 s), not inbound `ts`.
+on `ARModule`. Freshness is server receive time (2 s), not inbound `ts`.
 
 ```json
 {
@@ -734,16 +821,30 @@ stale returns `No client pose`.
 | `localization_start_request` | `localization_observations_request` |
 | `localization_observations` (binary) | `localization_result` |
 | `nav_goal_request` | `nav_goal` |
-| `estop_request` | `pose` |
-| `lidar_settings_request` | `lidar` (binary) |
-| `human_input` | `agent` |
-| `client_pose` | `agent_skill` |
+| `nav_joystick_request` | `pose` |
+| `estop_request` | `lidar` (binary) |
+| `lidar_settings_request` | `agent_message` |
+| `user_message_request` | `agent_skill` |
+| `client_pose` | |
+
+**Inbound naming.** Commands use `*_request` (`nav_goal_request`,
+`estop_request`, `user_message_request`). Unsolicited telemetry uses a bare
+noun (`client_pose`). Binary payloads use a bare noun
+(`localization_observations`). Handshake-only: `hello_request`. Server-initiated
+exception: `localization_observations_request`.
+
+**Agent conversation.** `user_message_request` is wearer text to the DimOS
+agent (gated on `hello.capabilities.agent`). `agent_message` is assistant text
+only. `agent_skill` is a tool invocation, not a chat turn. On the DimOS side
+the inbound string is published as `human_input: Out[str]`.
 
 Paired requests: `hello_request` → `hello`, `state_request` → `state`,
 `localization_observations_request` → `localization_observations` →
 `localization_result` (on success), `nav_goal_request` → `nav_goal` (via
-DimOS planner). `estop_request` and `lidar_settings_request` take effect through
-a broadcast `state` update. `human_input` takes effect through outbound `agent`
+DimOS planner). `nav_joystick_request` takes effect through DimOS
+`MovementManager` (`tele_cmd_vel`).
+`estop_request` and `lidar_settings_request` take effect through
+a broadcast `state` update. `user_message_request` takes effect through outbound `agent_message`
 and `state.agent.idle`. `client_pose` is unsolicited inbound telemetry for
 `ar_get_client_pose`. `pose` and `lidar` are unsolicited outbound telemetry.
 
@@ -761,8 +862,7 @@ Not carried into v1:
 - Separate `runtime_snapshot`, `bridge_status` and `nav_status`, merged into
   `state`.
 - Agent messages — `user_command`, `agent_response`, `ar_skill` and the rest.
-  Replaced by `human_input`, `agent`, and `agent_skill`.
-- Joystick and teleop.
+  Replaced by `user_message_request`, `agent_message`, and `agent_skill`.
 - Inbound `robot_id` echo.
 - JSON `lidar`. Binary only.
 - `cancel_nav_goal`. Use `estop_request`.

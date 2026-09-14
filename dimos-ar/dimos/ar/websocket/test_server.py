@@ -10,7 +10,7 @@ import pytest
 import websockets
 
 from dimos.ar.navigation.types import NavGoalRequest
-from dimos.ar.robot.capabilities import Capability, CapabilityName
+from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, Capability, CapabilityName
 from dimos.ar.robot.profiles import RobotDescription
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 from dimos.ar.websocket.protocol import HelloBody, LocalizationStartRequest
@@ -39,6 +39,10 @@ def _sample_hello(_client_id: str) -> HelloBody:
             CapabilityName.AGENT: Capability(
                 available=False, reason="current blueprint has no DimOS agent"
             ),
+        },
+        navigation_inputs={
+            NAV_GOAL: Capability(available=True, reason=None),
+            NAV_JOYSTICK: Capability(available=True, reason=None),
         },
     )
 

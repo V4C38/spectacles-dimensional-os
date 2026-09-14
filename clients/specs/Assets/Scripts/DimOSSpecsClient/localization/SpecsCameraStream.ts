@@ -1,29 +1,11 @@
+import { clampCameraSmallerDimension } from "../utilities/SpecsUtilities";
+
 const CAMERA_STREAM_SMALLER_DIM = 756;
 const PC_PREVIEW_MAX_SMALLER_DIM = 682;
 
 export interface SpecsCameraStreamFrame {
   texture: Texture;
   timestampSeconds: number;
-}
-
-export function clampCameraSmallerDimension(
-  requested: number,
-  supportedResolutions: { x: number; y: number }[],
-): number {
-  if (requested <= 0) {
-    return requested;
-  }
-  let maxSmaller = 0;
-  for (const res of supportedResolutions) {
-    const smaller = Math.min(res.x, res.y);
-    if (smaller > maxSmaller) {
-      maxSmaller = smaller;
-    }
-  }
-  if (maxSmaller <= 0) {
-    return requested;
-  }
-  return Math.min(requested, maxSmaller);
 }
 
 export class SpecsCameraStream {

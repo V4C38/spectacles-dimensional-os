@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ClientTrackingOriginStore } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
 import { requestNavGoal } from "../../Assets/Scripts/DimOSARClient/navigation/navGoalRequest";
+import { requestNavJoystick } from "../../Assets/Scripts/DimOSARClient/navigation/navJoystickRequest";
 import type { ClientClock, WebSocketTransport } from "../../Assets/Scripts/DimOSARClient/websocket/hostPorts";
 import { ARModuleSession } from "../../Assets/Scripts/DimOSARClient/websocket/arModuleSession";
 import type { Capabilities, Hello, State } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
@@ -36,7 +37,12 @@ function helloAt(tsClient: number, capabilities?: Partial<Capabilities>): Hello 
     },
     capabilities: {
       lidar: { available: true, reason: null },
-      navigation: { available: true, reason: null },
+      navigation: {
+        available: true,
+        reason: null,
+        nav_goal: { available: true, reason: null },
+        nav_joystick: { available: true, reason: null },
+      },
       localization: { available: true, reason: null },
       estop: { available: true, reason: null },
       agent: { available: false, reason: "current blueprint has no DimOS agent" },
@@ -100,10 +106,31 @@ describe("requestNavGoal", () => {
   it("throws when hello.capabilities.navigation is unavailable", () => {
     const { session, transport, clock } = makeSession();
     handshake(session, clock, {
-      navigation: { available: false, reason: "navigation not supported" },
+      navigation: {
+        available: false,
+        reason: "navigation not supported",
+        nav_goal: { available: false, reason: "nav_goal not available on this robot" },
+        nav_joystick: { available: false, reason: "nav_joystick not available on this robot" },
+      },
     });
     expect(() => requestNavGoal(session, GOAL)).toThrow(
       "hello.capabilities.navigation is not available",
+    );
+    expect(transport.texts).toHaveLength(1);
+  });
+
+  it("throws when nav_goal is off even if nav_joystick is on", () => {
+    const { session, transport, clock } = makeSession();
+    handshake(session, clock, {
+      navigation: {
+        available: true,
+        reason: null,
+        nav_goal: { available: false, reason: "nav_goal not available on this robot" },
+        nav_joystick: { available: true, reason: null },
+      },
+    });
+    expect(() => requestNavGoal(session, GOAL)).toThrow(
+      "hello.capabilities.navigation.nav_goal is not available",
     );
     expect(transport.texts).toHaveLength(1);
   });
@@ -117,5 +144,41 @@ describe("requestNavGoal", () => {
         orientation: [0, 0, 0, 1],
       }),
     ).toThrow(/position\[1]/);
+  });
+});
+
+describe("requestNavJoystick", () => {
+  it("sends nav_joystick_request JSON including the trailing newline", () => {
+    const { session, transport, clock } = makeSession();
+    handshake(session, clock);
+    requestNavJoystick(session, { linear: [0.4, 0, 0], angular: [0, 0, 0.3] });
+    expect(transport.texts[transport.texts.length - 1]).toBe(
+      '{"type":"nav_joystick_request","linear":[0.4,0,0],"angular":[0,0,0.3]}\n',
+    );
+  });
+
+  it("includes duration when provided", () => {
+    const { session, transport, clock } = makeSession();
+    handshake(session, clock);
+    requestNavJoystick(session, { linear: [0.4, 0, 0], angular: [0, 0, 0], duration: 0.5 });
+    expect(transport.texts[transport.texts.length - 1]).toBe(
+      '{"type":"nav_joystick_request","linear":[0.4,0,0],"angular":[0,0,0],"duration":0.5}\n',
+    );
+  });
+
+  it("throws when nav_joystick is unavailable", () => {
+    const { session, transport, clock } = makeSession();
+    handshake(session, clock, {
+      navigation: {
+        available: true,
+        reason: null,
+        nav_goal: { available: true, reason: null },
+        nav_joystick: { available: false, reason: "nav_joystick not available on this robot" },
+      },
+    });
+    expect(() =>
+      requestNavJoystick(session, { linear: [0.4, 0, 0], angular: [0, 0, 0] }),
+    ).toThrow("hello.capabilities.navigation.nav_joystick is not available");
+    expect(transport.texts).toHaveLength(1);
   });
 });

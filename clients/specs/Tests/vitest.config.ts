@@ -94,7 +94,7 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
-    include: ["DimOSARClient/**/*.test.ts", "DimOSSpecsClient/**/*.test.ts"],
+    include: ["DimOSARClient/**/*.test.ts", "DimOSSpecsClient/**/*.test.ts", "naming.test.ts"],
     setupFiles: ["./setup/lens-globals.ts"],
     coverage: {
       provider: "v8",

@@ -304,7 +304,12 @@ function helloAt(tsClient: number): Hello {
     },
     capabilities: {
       lidar: { available: true, reason: null },
-      navigation: { available: true, reason: null },
+      navigation: {
+        available: true,
+        reason: null,
+        nav_goal: { available: true, reason: null },
+        nav_joystick: { available: true, reason: null },
+      },
       localization: { available: true, reason: null },
       estop: { available: true, reason: null },
       agent: { available: false, reason: "current blueprint has no DimOS agent" },

@@ -812,7 +812,7 @@
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
-  Text: "[Bridge disconnected]"
+  Text: "[Websocket disconnected]"
   Editable: false
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
@@ -2409,7 +2409,7 @@
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
-  Text: "[Bridge disconnected]"
+  Text: "[Websocket disconnected]"
   Editable: false
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
@@ -3041,7 +3041,7 @@
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
-  Text: "[Bridge disconnected]"
+  Text: "[Websocket disconnected]"
   Editable: false
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
@@ -3302,7 +3302,7 @@
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
-  Text: "[Bridge disconnected]"
+  Text: "[Websocket disconnected]"
   Editable: false
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
@@ -3599,7 +3599,7 @@
 - !<SceneObject/676667d2-dbed-42d1-96ef-9486c9a1d3e7>
   PrefabRemaps:
     []
-  Name: RestartRegistration
+  Name: RestartSetup
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>
@@ -3794,7 +3794,7 @@
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
-  Text: "[Bridge disconnected]"
+  Text: "[Websocket disconnected]"
   Editable: false
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
@@ -3975,7 +3975,7 @@
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
-  Text: "[Bridge disconnected]"
+  Text: "[Websocket disconnected]"
   Editable: false
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
@@ -4179,7 +4179,7 @@
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
-  Text: "[Bridge disconnected]"
+  Text: "[Websocket disconnected]"
   Editable: false
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
@@ -4654,7 +4654,7 @@
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
-  Text: Bridge disconnected
+  Text: Websocket disconnected
   Editable: false
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
@@ -5347,7 +5347,7 @@
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
-  Text: "[Bridge disconnected]"
+  Text: "[Websocket disconnected]"
   Editable: false
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
@@ -5638,7 +5638,7 @@
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
-  Text: Lens & ARBridge v0.15 - for DimOS v0.0.13
+  Text: Lens & ARModule v0.15 - for DimOS v0.0.13
   Editable: false
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
@@ -5943,7 +5943,7 @@
   MeshShadowMode: None
   ShadowColor: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
   ShadowDensity: 1.000000
-  Text: "[Bridge disconnected]"
+  Text: "[Websocket disconnected]"
   Editable: false
   ShowEditingPreview: true
   TouchHandler: !<reference> 00000000-0000-0000-0000-000000000000
@@ -6382,7 +6382,7 @@
 - !<SceneObject/e6b2e17d-ad12-47b3-8070-655b957b1210>
   PrefabRemaps:
     []
-  Name: RestartRegistrationLabel
+  Name: RestartSetupLabel
   Enabled: true
   Layers: 1
   LocalTransform: !<TransformEntity>

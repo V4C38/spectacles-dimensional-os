@@ -1,10 +1,13 @@
+import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
 import type { LidarDisplayMode } from "../../DimOSARClient/sensors/lidarSettings";
 import type { ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
 import {
   deriveSessionLinkPhase,
   NO_ROBOT_CONNECTED_LABEL,
 } from "../../DimOSARClient/websocket/sessionLinkStatus";
-import type { OperatingMode } from "./MainMenuView";
+import type { Pose, RobotDescription } from "../../DimOSARClient/websocket/protocolTypes";
+
+export type OperatingMode = "manual" | "agent";
 
 export type RobotActivityState =
   | "Idle"
@@ -18,11 +21,24 @@ export interface RobotActivityVoice {
   ttsPlaying: boolean;
 }
 
+export type RobotMarkerApplyInput =
+  | { mode: "hidden" }
+  | {
+      mode: "unlocalizedFallbackPosition";
+      robot: RobotDescription | null;
+      view: ARModuleSessionState;
+    }
+  | {
+      mode: "localizedOdom";
+      robot: RobotDescription;
+      pose: Pose;
+      origin: ClientTrackingOrigin;
+      view: ARModuleSessionState;
+    };
+
 export class AppState {
   debugModeEnabled = false;
   operatingMode: OperatingMode = "manual";
-  wizardFinished = false;
-  wizardLocalized = false;
   lidarMode: LidarDisplayMode = "obstacles";
 
   setDebugMode(enabled: boolean): void {
@@ -33,20 +49,39 @@ export class AppState {
     this.operatingMode = mode;
   }
 
-  finishWizard(localized: boolean): void {
-    this.wizardFinished = true;
-    this.wizardLocalized = localized;
-  }
-
-  resetWizard(): void {
-    this.wizardFinished = false;
-    this.wizardLocalized = false;
-    this.operatingMode = "manual";
-  }
-
   setLidarMode(mode: LidarDisplayMode): void {
     this.lidarMode = mode;
   }
+}
+
+export function deriveRobotMarkerApplyInput(input: {
+  setupCompleted: boolean;
+  view: ARModuleSessionState;
+  origin: ClientTrackingOrigin | null;
+}): RobotMarkerApplyInput {
+  if (!input.setupCompleted) {
+    return { mode: "hidden" };
+  }
+  const robot = input.view.hello?.robot;
+  if (
+    input.origin &&
+    input.view.hasTrackingOrigin &&
+    input.view.pose &&
+    robot
+  ) {
+    return {
+      mode: "localizedOdom",
+      robot,
+      pose: input.view.pose,
+      origin: input.origin,
+      view: input.view,
+    };
+  }
+  return {
+    mode: "unlocalizedFallbackPosition",
+    robot: robot ?? null,
+    view: input.view,
+  };
 }
 
 export function agentModeAccessible(

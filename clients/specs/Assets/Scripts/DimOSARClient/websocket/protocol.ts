@@ -2,7 +2,6 @@ import {
   CAPABILITY_NAMES,
   type Capabilities,
   type Capability,
-  type CapabilityName,
   type CapturePolicy,
   type DistortionModel,
   type Intrinsics,
@@ -23,8 +22,9 @@ import {
   type Vec3,
   type YawPose,
   type Hello,
-  type Agent,
+  type AgentMessage,
   type AgentSkill,
+  type NavigationCapability,
 } from "./protocolTypes";
 
 export const LOCALIZATION_OBSERVATIONS_FOURCC = 0x4c4f4341;
@@ -86,6 +86,38 @@ export function encodeNavGoalRequest(request: {
   });
 }
 
+export function encodeNavJoystickRequest(command: {
+  linear: Vec3;
+  angular: Vec3;
+  duration?: number;
+}): string {
+  const linear = requireVec3Value(command.linear, "linear");
+  const angular = requireVec3Value(command.angular, "angular");
+  if (linear[2] !== 0) {
+    throw new Error("linear.z must be 0");
+  }
+  if (angular[0] !== 0 || angular[1] !== 0) {
+    throw new Error("angular.x and angular.y must be 0");
+  }
+  const body: Record<string, unknown> = {
+    type: "nav_joystick_request",
+    linear,
+    angular,
+  };
+  if (command.duration !== undefined) {
+    const duration = finiteNumber(command.duration, "duration");
+    if (duration < 0 || duration > NAV_JOYSTICK_MAX_DURATION_S) {
+      throw new Error(
+        `duration must be in [0, ${NAV_JOYSTICK_MAX_DURATION_S}], got ${duration}`,
+      );
+    }
+    if (duration !== 0) {
+      body.duration = duration;
+    }
+  }
+  return encodeText(body);
+}
+
 export function encodeLidarSettingsRequest(request: LidarSettings): string {
   return encodeText({
     type: "lidar_settings_request",
@@ -94,6 +126,7 @@ export function encodeLidarSettingsRequest(request: LidarSettings): string {
 }
 
 export const HUMAN_INPUT_MAX_CHARS = 4000;
+export const NAV_JOYSTICK_MAX_DURATION_S = 2.0;
 
 export function encodeClientPose(pose: {
   position: Vec3;
@@ -108,18 +141,18 @@ export function encodeClientPose(pose: {
   });
 }
 
-export function encodeHumanInput(text: string): string {
+export function encodeUserMessageRequest(text: string): string {
   if (typeof text !== "string") {
     throw new Error("Field 'text' must be string");
   }
   const stripped = text.trim();
   if (stripped.length === 0) {
-    throw new Error("human_input.text must be non-blank");
+    throw new Error("user_message_request.text must be non-blank");
   }
   if (text.length > HUMAN_INPUT_MAX_CHARS) {
-    throw new Error(`human_input.text exceeds ${HUMAN_INPUT_MAX_CHARS} characters`);
+    throw new Error(`user_message_request.text exceeds ${HUMAN_INPUT_MAX_CHARS} characters`);
   }
-  return encodeText({ type: "human_input", text: stripped });
+  return encodeText({ type: "user_message_request", text: stripped });
 }
 
 export function encodeLocalizationObservations(
@@ -173,8 +206,8 @@ export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
       return decodePose(data);
     case "nav_goal":
       return decodeNavGoal(data);
-    case "agent":
-      return decodeAgent(data);
+    case "agent_message":
+      return decodeAgentMessage(data);
     case "agent_skill":
       return decodeAgentSkill(data);
     default:
@@ -422,12 +455,26 @@ function decodeCapabilities(data: Record<string, unknown>): Capabilities {
     if (!(name in data)) {
       throw new Error(`Missing required field: capabilities.${name}`);
     }
-    capabilities[name] = decodeCapability(data[name], name);
+    if (name === "navigation") {
+      capabilities.navigation = decodeNavigationCapability(data[name]);
+    } else {
+      capabilities[name] = decodeCapability(data[name], name);
+    }
   }
   return capabilities;
 }
 
-function decodeCapability(raw: unknown, name: CapabilityName): Capability {
+function decodeNavigationCapability(raw: unknown): NavigationCapability {
+  const data = asObject(raw, "capabilities.navigation");
+  const base = decodeCapability(raw, "navigation");
+  return {
+    ...base,
+    nav_goal: decodeCapability(data.nav_goal, "navigation.nav_goal"),
+    nav_joystick: decodeCapability(data.nav_joystick, "navigation.nav_joystick"),
+  };
+}
+
+function decodeCapability(raw: unknown, name: string): Capability {
   const data = asObject(raw, `capabilities.${name}`);
   if (typeof data.available !== "boolean") {
     throw new Error(`Field 'capabilities.${name}.available' must be boolean`);
@@ -468,12 +515,12 @@ function decodeAgentState(data: Record<string, unknown>): { idle: boolean } {
   return { idle: requireBoolean(data, "idle") };
 }
 
-function decodeAgent(data: Record<string, unknown>): Agent {
+function decodeAgentMessage(data: Record<string, unknown>): AgentMessage {
   const text = requireString(data, "text").trim();
   if (text.length === 0) {
-    throw new Error("agent.text must be non-blank");
+    throw new Error("agent_message.text must be non-blank");
   }
-  return { type: "agent", text };
+  return { type: "agent_message", text };
 }
 
 function decodeAgentSkill(data: Record<string, unknown>): AgentSkill {

@@ -1,7 +1,6 @@
-import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
 import { odomToClientTrackingPose, rotateVecByQuat } from "../../DimOSARClient/localization/clientTrackingTransforms";
 import type { ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
-import type { Pose, Quat, RobotDescription, Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
+import type { Quat, RobotDescription, Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
 import {
   COLOR_ERROR,
   COLOR_WHITE,
@@ -16,18 +15,9 @@ import {
   getRobotActivityState,
   robotTitleText,
   type RobotActivityVoice,
+  type RobotMarkerApplyInput,
 } from "./AppState";
 import { findChildRecursive, findText, setButtonStyle, SnapOS2Styles } from "./UIKit";
-export type RobotMarkerApplyInput =
-  | { mode: "hidden" }
-  | { mode: "unlocalizedBelowUi"; robot: RobotDescription | null; view: ARModuleSessionState }
-  | {
-      mode: "localizedOdom";
-      robot: RobotDescription;
-      pose: Pose;
-      origin: ClientTrackingOrigin;
-      view: ARModuleSessionState;
-    };
 
 export interface RobotMarkerApplyContext {
   mainUi: SceneObject;
@@ -46,39 +36,6 @@ export function robotDeadzoneRadiusCm(robot: RobotDescription): number {
 
 export function robotBelowMainUiLocalOffset(): vec3 {
   return new vec3(0, -40, 0.5);
-}
-
-export function deriveRobotMarkerApplyInput(input: {
-  appState: AppState;
-  view: ARModuleSessionState;
-  origin: ClientTrackingOrigin | null;
-}): RobotMarkerApplyInput {
-  if (!input.appState.wizardFinished) {
-    return { mode: "hidden" };
-  }
-  if (!input.appState.wizardLocalized) {
-    return {
-      mode: "unlocalizedBelowUi",
-      robot: input.view.hello?.robot ?? null,
-      view: input.view,
-    };
-  }
-  const robot = input.view.hello?.robot;
-  if (
-    input.origin &&
-    input.view.hasTrackingOrigin &&
-    input.view.pose &&
-    robot
-  ) {
-    return {
-      mode: "localizedOdom",
-      robot,
-      pose: input.view.pose,
-      origin: input.origin,
-      view: input.view,
-    };
-  }
-  return { mode: "hidden" };
 }
 
 export function robotBelowMainUiWorldPosition(
@@ -134,7 +91,7 @@ export class RobotPresenter extends BaseScriptComponent {
       case "hidden":
         this.applyHidden();
         return;
-      case "unlocalizedBelowUi":
+      case "unlocalizedFallbackPosition":
         this.applyUnlocalizedBelow(input, ctx);
         return;
       case "localizedOdom":
@@ -246,7 +203,7 @@ export class RobotPresenter extends BaseScriptComponent {
   }
 
   private applyUnlocalizedBelow(
-    input: Extract<RobotMarkerApplyInput, { mode: "unlocalizedBelowUi" }>,
+    input: Extract<RobotMarkerApplyInput, { mode: "unlocalizedFallbackPosition" }>,
     ctx: RobotMarkerApplyContext,
   ): void {
     if (!this.motionRoot) {

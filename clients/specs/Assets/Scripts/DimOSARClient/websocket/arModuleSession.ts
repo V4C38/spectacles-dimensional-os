@@ -17,6 +17,7 @@ import type {
   LocalizationResult,
   NavGoal,
   NavState,
+  NavigationInputName,
   Outbound,
   Pose,
   State,
@@ -44,7 +45,7 @@ export interface ARModuleSessionState {
   lidar: Lidar | null;
   capabilities: Capabilities | null;
   nav: NavState | null;
-  agentText: string | null;
+  agentMessage: string | null;
   lastError: string | null;
 }
 
@@ -77,7 +78,7 @@ export class ARModuleSession {
   private pose: Pose | null = null;
   private nav_goal: NavGoal | null = null;
   private lidar: Lidar | null = null;
-  private agentText: string | null = null;
+  private agentMessage: string | null = null;
   private lastError: string | null = null;
   private helloDeadline: number | null = null;
   private reconnectAt: number | null = null;
@@ -222,7 +223,7 @@ export class ARModuleSession {
       lidar: this.lidar,
       capabilities: this.hello?.capabilities ?? null,
       nav: this.state?.nav ?? null,
-      agentText: this.agentText,
+      agentMessage: this.agentMessage,
       lastError: this.lastError,
     };
   }
@@ -297,8 +298,8 @@ export class ARModuleSession {
         this.emitOutbound(message);
         this.emitView();
         return;
-      case "agent":
-        this.agentText = message.text;
+      case "agent_message":
+        this.agentMessage = message.text;
         break;
       case "agent_skill":
         this.emitOutbound(message);
@@ -343,7 +344,7 @@ export class ARModuleSession {
     this.pose = null;
     this.nav_goal = null;
     this.lidar = null;
-    this.agentText = null;
+    this.agentMessage = null;
     this.clientTrackingOriginStore.clear();
     this.framer = new TextFramer();
   }
@@ -383,6 +384,13 @@ export function requireCapability(session: ARModuleSession, name: CapabilityName
   }
   if (session.view().capabilities?.[name]?.available !== true) {
     throw new Error(`hello.capabilities.${name} is not available`);
+  }
+}
+
+export function requireNavigation(session: ARModuleSession, name: NavigationInputName): void {
+  requireCapability(session, "navigation");
+  if (session.view().capabilities?.navigation?.[name]?.available !== true) {
+    throw new Error(`hello.capabilities.navigation.${name} is not available`);
   }
 }
 

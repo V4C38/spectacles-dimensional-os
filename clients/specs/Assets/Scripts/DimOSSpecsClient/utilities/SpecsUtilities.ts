@@ -70,7 +70,7 @@ export function yawRotationFromPlanarDirection(x: number, z: number): quat {
   return new quat(Math.cos(halfYaw), 0, Math.sin(halfYaw), 0);
 }
 
-/** Extract ground yaw from semantic +X forward, matching drag and bridge conventions. */
+/** Extract ground yaw from semantic +X forward, matching drag and ARModule conventions. */
 export function yawRotationFromWorldRotation(rotation: quat): quat {
   const forward = rotation.multiplyVec3(new vec3(1, 0, 0));
   const planarLength = Math.sqrt(forward.x * forward.x + forward.z * forward.z);

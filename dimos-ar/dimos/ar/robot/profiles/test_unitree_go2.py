@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dimos.ar.robot.capabilities import CapabilityName
+from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName
 from dimos.ar.robot.profiles.unitree_go2 import ODOM_SCALE_CORRECTION_FACTOR, UNITREE_GO2_PROFILE
 
 
@@ -27,6 +27,9 @@ def test_unitree_go2_capabilities_enabled() -> None:
             CapabilityName.ESTOP,
         }
     )
+    assert UNITREE_GO2_PROFILE.supported_navigation_inputs == frozenset({NAV_GOAL, NAV_JOYSTICK})
+    assert UNITREE_GO2_PROFILE.max_linear_mps == 1.5
+    assert UNITREE_GO2_PROFILE.max_angular_rps == 2.0
 
 
 def test_unitree_go2_camera_optical_extrinsic_is_rigid() -> None:

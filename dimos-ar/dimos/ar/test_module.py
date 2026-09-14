@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 import subprocess
 import sys
@@ -18,13 +19,14 @@ from dimos.ar.module import (
     LocalizationProviderConfig,
     _textual_ai_message,
 )
-from dimos.ar.navigation.types import NavGoalRequest, NavState
-from dimos.ar.robot.capabilities import CapabilityName, CapabilitySet
+from dimos.ar.navigation.tele_cmd_vel import TeleCmdVelPublisher
+from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest, NavState
+from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName, CapabilitySet
 from dimos.ar.robot.profiles import RobotName, RobotProfile
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 from dimos.ar.robot.safety import Safety
 from dimos.ar.sensors.lidar_settings import LidarSettings
-from dimos.ar.websocket.protocol import encode_state
+from dimos.ar.websocket.protocol import UserMessageRequest, encode_state
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Quaternion import Quaternion
 from dimos.msgs.geometry_msgs.Transform import Transform
@@ -75,7 +77,9 @@ def _module_with_policy(
         profile.supported_capabilities,
         localization_available=bool(providers),
         agent_available=agent_available,
+        supported_navigation_inputs=profile.supported_navigation_inputs,
     )
+    module._tele_cmd_vel_publisher = None
     module._lidar_settings = LidarSettings(
         enabled=False, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0
     )
@@ -105,6 +109,7 @@ def test_ar_module_declares_stable_port_superset() -> None:
     assert ports["goal_request"] == "Out[PoseStamped]"
     assert ports["stop_movement"] == "Out[Bool]"
     assert ports["human_input"] == "Out[str]"
+    assert ports["tele_cmd_vel"] == "Out[Twist]"
     assert ports["agent"] == "In[BaseMessage]"
     assert ports["agent_idle"] == "In[bool]"
 
@@ -154,10 +159,16 @@ def test_hello_includes_estop_capability() -> None:
         "current blueprint has no DimOS agent"
     )
     assert hello.robot.display_name == UNITREE_GO2_PROFILE.display_name
+    assert hello.navigation_inputs[NAV_GOAL].available is True
+    assert hello.navigation_inputs[NAV_JOYSTICK].available is True
 
 
 def test_hello_lidar_nav_estop_follow_profile() -> None:
-    profile = replace(UNITREE_GO2_PROFILE, supported_capabilities=frozenset())
+    profile = replace(
+        UNITREE_GO2_PROFILE,
+        supported_capabilities=frozenset(),
+        supported_navigation_inputs=frozenset(),
+    )
     module = _module_with_policy(["fiducial_marker"], profile=profile)
     hello = module._hello_body("c1")
     assert hello.capabilities[CapabilityName.LIDAR].available is False
@@ -210,9 +221,7 @@ def test_ingest_relocalization_transform_when_map_frame_present() -> None:
     def on_relocalization_transform(transform: Transform, *, ts_server: float) -> None:
         captured.append((transform, ts_server))
 
-    module._coordinator = SimpleNamespace(
-        on_relocalization_transform=on_relocalization_transform
-    )
+    module._coordinator = SimpleNamespace(on_relocalization_transform=on_relocalization_transform)
     module._last_relocalization_transform_poll_at = 0.0
     transform = Transform(
         translation=Vector3(5.0, 0.0, 0.0),
@@ -229,7 +238,7 @@ def test_ingest_relocalization_transform_when_map_frame_present() -> None:
             return transform
         return None
 
-    module._tf = SimpleNamespace(get_frames=lambda: {"world", "map"}, get=get)
+    module.tfbuffer = SimpleNamespace(get_frames=lambda: {"world", "map"}, get=get)
     module._maybe_ingest_relocalization_transform(100.0)
     assert len(captured) == 1
     forwarded, ts_server = captured[0]
@@ -249,12 +258,10 @@ def test_ingest_relocalization_transform_skips_without_map_frame() -> None:
     def on_relocalization_transform(transform: Transform, *, ts_server: float) -> None:
         captured.append((transform, ts_server))
 
-    module._coordinator = SimpleNamespace(
-        on_relocalization_transform=on_relocalization_transform
-    )
+    module._coordinator = SimpleNamespace(on_relocalization_transform=on_relocalization_transform)
     module._last_relocalization_transform_poll_at = 0.0
     gets: list[tuple[str, str]] = []
-    module._tf = SimpleNamespace(
+    module.tfbuffer = SimpleNamespace(
         get_frames=lambda: set(),
         get=lambda parent, child: gets.append((parent, child)) or None,
     )
@@ -291,6 +298,7 @@ def test_nav_goal_request_noops_without_navigation() -> None:
     profile = replace(
         UNITREE_GO2_PROFILE,
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
+        supported_navigation_inputs=frozenset(),
     )
     module = _module_with_policy([], profile=profile)
     published: list[object] = []
@@ -309,7 +317,11 @@ def test_nav_goal_request_noops_without_navigation() -> None:
 
 
 def test_estop_request_noops_without_estop() -> None:
-    profile = replace(UNITREE_GO2_PROFILE, supported_capabilities=frozenset())
+    profile = replace(
+        UNITREE_GO2_PROFILE,
+        supported_capabilities=frozenset(),
+        supported_navigation_inputs=frozenset(),
+    )
     module = _module_with_policy([], profile=profile)
     called = False
 
@@ -396,6 +408,7 @@ def test_lidar_settings_request_noops_without_lidar() -> None:
     profile = replace(
         UNITREE_GO2_PROFILE,
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
+        supported_navigation_inputs=frozenset(),
     )
     module = _module_with_policy([], profile=profile)
     module._on_lidar_settings_request(
@@ -411,6 +424,7 @@ async def test_handle_goal_reached_skips_policy_without_navigation() -> None:
     profile = replace(
         UNITREE_GO2_PROFILE,
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
+        supported_navigation_inputs=frozenset(),
     )
     module = _module_with_policy(["fiducial_marker"], profile=profile)
     prompts: list[bool] = []
@@ -432,6 +446,7 @@ async def test_handle_path_noops_without_navigation() -> None:
     profile = replace(
         UNITREE_GO2_PROFILE,
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
+        supported_navigation_inputs=frozenset(),
     )
     module = _module_with_policy([], profile=profile)
     called = False
@@ -455,6 +470,7 @@ async def test_handle_lidar_noops_without_lidar() -> None:
     profile = replace(
         UNITREE_GO2_PROFILE,
         supported_capabilities=frozenset({CapabilityName.ESTOP}),
+        supported_navigation_inputs=frozenset(),
     )
     module = _module_with_policy([], profile=profile)
     published: list[object] = []
@@ -537,7 +553,7 @@ async def test_handle_agent_forwards_textual_aimessage_only() -> None:
     await module.handle_agent(AIMessage(content="  Heading out.  "))
     broadcasts = module._ws_server.broadcasts  # type: ignore[union-attr]
     assert len(broadcasts) == 1
-    assert '"type":"agent"' in broadcasts[0]
+    assert '"type":"agent_message"' in broadcasts[0]
     assert "Heading out." in broadcasts[0]
 
 
@@ -553,22 +569,20 @@ async def test_handle_agent_idle_broadcasts_state_change() -> None:
     assert '"idle":true' in broadcasts[1].replace(" ", "")
 
 
-def test_human_input_requires_capability_and_transport() -> None:
-    from dimos.ar.websocket.protocol import HumanInput
-
+def test_user_message_request_requires_capability_and_transport() -> None:
     published: list[str] = []
     module = _module_with_policy([])
     module.human_input = SimpleNamespace(transport=object(), publish=published.append)
-    module._on_human_input(HumanInput(text="go"), None, "c1")  # type: ignore[arg-type]
+    module._on_user_message_request(UserMessageRequest(text="go"), None, "c1")  # type: ignore[arg-type]
     assert published == []
 
     module = _module_with_policy([], agent_available=True)
     module.human_input = SimpleNamespace(transport=None, publish=published.append)
-    module._on_human_input(HumanInput(text="go"), None, "c1")  # type: ignore[arg-type]
+    module._on_user_message_request(UserMessageRequest(text="go"), None, "c1")  # type: ignore[arg-type]
     assert published == []
 
     module.human_input = SimpleNamespace(transport=object(), publish=published.append)
-    module._on_human_input(HumanInput(text="go"), None, "c1")  # type: ignore[arg-type]
+    module._on_user_message_request(UserMessageRequest(text="go"), None, "c1")  # type: ignore[arg-type]
     assert published == ["go"]
 
 
@@ -648,6 +662,54 @@ def test_ar_get_client_pose_empty_stale_fresh() -> None:
 def test_textual_ai_message_extracts_text_blocks() -> None:
     assert _textual_ai_message(HumanMessage(content="no")) is None
     assert _textual_ai_message(AIMessage(content="hello")) == "hello"
-    assert (
-        _textual_ai_message(AIMessage(content=[{"type": "text", "text": "block"}])) == "block"
+    assert _textual_ai_message(AIMessage(content=[{"type": "text", "text": "block"}])) == "block"
+
+
+def test_nav_joystick_request_noops_without_nav_joystick() -> None:
+    profile = replace(
+        UNITREE_GO2_PROFILE,
+        supported_navigation_inputs=frozenset({NAV_GOAL}),
     )
+    module = _module_with_policy([], profile=profile)
+    published: list[object] = []
+    module.tele_cmd_vel = SimpleNamespace(transport=object(), publish=published.append)
+    module._on_nav_joystick_request(
+        NavJoystickRequest(linear=(0.4, 0.0, 0.0), angular=(0.0, 0.0, 0.0)),
+        None,  # type: ignore[arg-type]
+        "c1",
+    )
+    assert published == []
+
+
+def test_nav_joystick_request_publishes_tele_cmd_vel() -> None:
+    module = _module_with_policy([])
+    published: list[object] = []
+    module.tele_cmd_vel = SimpleNamespace(transport=object(), publish=published.append)
+    module._tele_cmd_vel_publisher = TeleCmdVelPublisher(
+        publish=published.append,
+        max_linear_mps=1.5,
+        max_angular_rps=2.0,
+        loop=asyncio.new_event_loop(),
+    )
+    module._on_nav_joystick_request(
+        NavJoystickRequest(linear=(0.4, 0.0, 0.0), angular=(0.0, 0.0, 0.3)),
+        None,  # type: ignore[arg-type]
+        "c1",
+    )
+    assert len(published) == 1
+    twist = published[0]
+    assert twist.linear.x == pytest.approx(0.4)
+    assert twist.angular.z == pytest.approx(0.3)
+
+
+def test_estop_and_last_disconnect_cancel_tele_cmd_vel() -> None:
+    module = _module_with_policy([])
+    cancelled: list[bool] = []
+    module._tele_cmd_vel_publisher = SimpleNamespace(cancel=lambda: cancelled.append(True))
+    module.stop_movement = SimpleNamespace(transport=object(), publish=lambda _msg: None)
+    module._on_estop_request(SimpleNamespace(), None)  # type: ignore[arg-type]
+    assert cancelled == [True]
+    cancelled.clear()
+    module._ws_server.connection_count = 0  # type: ignore[union-attr]
+    module._on_client_disconnect(None, "c1")  # type: ignore[arg-type]
+    assert cancelled == [True]

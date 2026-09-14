@@ -18,6 +18,9 @@ export const CAPABILITY_NAMES = [
 ] as const;
 export type CapabilityName = (typeof CAPABILITY_NAMES)[number];
 
+export const NAVIGATION_INPUT_NAMES = ["nav_goal", "nav_joystick"] as const;
+export type NavigationInputName = (typeof NAVIGATION_INPUT_NAMES)[number];
+
 export type NavPhase = "idle" | "following_path" | "resolved";
 export type NavOutcome = "succeeded" | "failed";
 
@@ -25,7 +28,14 @@ export type Capability =
   | { available: true; reason: null }
   | { available: false; reason: string };
 
-export type Capabilities = { [K in CapabilityName]: Capability };
+export type NavigationCapability = Capability & {
+  nav_goal: Capability;
+  nav_joystick: Capability;
+};
+
+export type Capabilities = {
+  [K in Exclude<CapabilityName, "navigation">]: Capability;
+} & { navigation: NavigationCapability };
 
 export interface TimeSync {
   ts_client: number;
@@ -70,8 +80,8 @@ export interface State {
   agent: AgentState;
 }
 
-export interface Agent {
-  type: "agent";
+export interface AgentMessage {
+  type: "agent_message";
   text: string;
 }
 
@@ -130,7 +140,7 @@ export type Outbound =
   | Pose
   | NavGoal
   | Lidar
-  | Agent
+  | AgentMessage
   | AgentSkill;
 
 export interface HelloRequest {
@@ -160,8 +170,8 @@ export interface LidarSettingsRequest extends LidarSettings {
   type: "lidar_settings_request";
 }
 
-export interface HumanInput {
-  type: "human_input";
+export interface UserMessageRequest {
+  type: "user_message_request";
   text: string;
 }
 
@@ -170,6 +180,13 @@ export interface ClientPose {
   position: Vec3;
   orientation: Quat;
   ts: number;
+}
+
+export interface NavJoystickRequest {
+  type: "nav_joystick_request";
+  linear: Vec3;
+  angular: Vec3;
+  duration?: number;
 }
 
 export interface Intrinsics {
@@ -202,7 +219,8 @@ export type Inbound =
   | LocalizationStartRequest
   | LocalizationObservations
   | NavGoalRequest
+  | NavJoystickRequest
   | EstopRequest
   | LidarSettingsRequest
-  | HumanInput
+  | UserMessageRequest
   | ClientPose;

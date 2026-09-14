@@ -14,6 +14,13 @@ class NavGoalRequest:
 
 
 @dataclass(frozen=True)
+class NavJoystickRequest:
+    linear: tuple[float, float, float]
+    angular: tuple[float, float, float]
+    duration: float | None = None
+
+
+@dataclass(frozen=True)
 class NavGoalFrame:
     pose: tuple[float, float, float, float] | None
     path_poses: list[tuple[float, float, float, float]]

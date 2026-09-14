@@ -22,8 +22,9 @@ from dimos.ar.localization.vps.localizer import VpsLocalizer
 from dimos.ar.localization.vps.multiset_client import MultisetVpsClient, MultisetVpsClientConfig
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
 from dimos.ar.navigation.coordinator import NavGoalCoordinator
-from dimos.ar.navigation.types import NavGoalRequest
-from dimos.ar.robot.capabilities import CapabilityName, CapabilitySet
+from dimos.ar.navigation.tele_cmd_vel import TeleCmdVelPublisher
+from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest
+from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName, CapabilitySet
 from dimos.ar.robot.odometry_correction import correct_odom_xy
 from dimos.ar.robot.profiles import RobotName, RobotProfile, get_profile
 from dimos.ar.robot.safety import Safety
@@ -34,7 +35,6 @@ from dimos.ar.websocket.protocol import (
     ClientPose,
     EstopRequest,
     HelloBody,
-    HumanInput,
     LidarSettingsRequest,
     LocalizationObservation,
     LocalizationObservationsRequest,
@@ -42,7 +42,8 @@ from dimos.ar.websocket.protocol import (
     StateRequest,
     StateSnapshot,
     TimeSync,
-    encode_agent,
+    UserMessageRequest,
+    encode_agent_message,
     encode_agent_skill,
     encode_localization_observations_request,
     encode_localization_result,
@@ -57,6 +58,7 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Transform import Transform
+from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
@@ -121,6 +123,7 @@ class ARModule(Module):  # type: ignore[misc]
     goal_request: Out[PoseStamped]
     stop_movement: Out[Bool]
     human_input: Out[str]
+    tele_cmd_vel: Out[Twist]
 
     config: ARModuleConfig
 
@@ -134,6 +137,7 @@ class ARModule(Module):  # type: ignore[misc]
     _profile: RobotProfile
     _capabilities: CapabilitySet
     _safety: Safety
+    _tele_cmd_vel_publisher: TeleCmdVelPublisher | None
     _lidar_settings: LidarSettings
     _speed_mps: float
     _agent_idle: bool
@@ -162,8 +166,9 @@ class ARModule(Module):  # type: ignore[misc]
             on_state_request=self._on_state_request,
             on_localization_start_request=self._on_localization_start_request,
             on_localization_observations=self._on_localization_observations,
-            on_human_input=self._on_human_input,
+            on_user_message_request=self._on_user_message_request,
             on_client_pose=self._on_client_pose,
+            on_nav_joystick_request=self._on_nav_joystick_request,
             on_disconnect=self._on_client_disconnect,
         )
         self._nav_goal_coordinator = NavGoalCoordinator(
@@ -190,7 +195,18 @@ class ARModule(Module):  # type: ignore[misc]
             self._profile.supported_capabilities,
             localization_available=bool(self._policy.providers),
             agent_available=self.config.agent,
+            supported_navigation_inputs=self._profile.supported_navigation_inputs,
         )
+        self._tele_cmd_vel_publisher = None
+        if self._capabilities.supports_navigation(NAV_JOYSTICK):
+            if self._profile.max_linear_mps is None or self._profile.max_angular_rps is None:
+                raise ValueError("nav_joystick requires max_linear_mps and max_angular_rps")
+            self._tele_cmd_vel_publisher = TeleCmdVelPublisher(
+                publish=self._publish_tele_cmd_vel,
+                max_linear_mps=self._profile.max_linear_mps,
+                max_angular_rps=self._profile.max_angular_rps,
+                loop=self._loop,
+            )
         self._safety = Safety(
             estop_available=self._capabilities.supports(CapabilityName.ESTOP),
             effects=(self._clear_navigation, self._publish_stop),
@@ -247,6 +263,7 @@ class ARModule(Module):  # type: ignore[misc]
     @rpc
     def stop(self) -> None:
         logger.info("ARModule stopping")
+        self._cancel_tele_cmd_vel()
         ws_server_obj = getattr(self, "_ws_server", None)
         if ws_server_obj is not None:
             ws_server_obj.stop()
@@ -256,6 +273,7 @@ class ARModule(Module):  # type: ignore[misc]
         return HelloBody(
             robot=self._profile.description,
             capabilities=self._capabilities.as_mapping(),
+            navigation_inputs=self._capabilities.navigation_as_mapping(),
         )
 
     def _state_snapshot(self) -> StateSnapshot:
@@ -313,6 +331,7 @@ class ARModule(Module):  # type: ignore[misc]
     def _on_client_disconnect(self, _websocket: ws_server.ServerConnection, client_id: str) -> None:
         self._policy.on_disconnect(client_id)
         if self._ws_server.connection_count == 0:
+            self._cancel_tele_cmd_vel()
             self._safety.on_last_disconnect()
             self._client_pose = None
             self._client_pose_received_at = None
@@ -325,7 +344,7 @@ class ARModule(Module):  # type: ignore[misc]
         _websocket: ws_server.ServerConnection,
         client_id: str,
     ) -> None:
-        if not self._capabilities.supports(CapabilityName.NAVIGATION):
+        if not self._capabilities.supports_navigation(NAV_GOAL):
             return
         goal = self._nav_goal_coordinator.submit_goal(msg)
         if self.goal_request.transport is None:
@@ -336,6 +355,7 @@ class ARModule(Module):  # type: ignore[misc]
         self._broadcast_state()
 
     def _on_estop_request(self, _msg: EstopRequest, _websocket: ws_server.ServerConnection) -> None:
+        self._cancel_tele_cmd_vel()
         if self._safety.on_estop_request():
             self._broadcast_state()
 
@@ -361,16 +381,16 @@ class ARModule(Module):  # type: ignore[misc]
     ) -> None:
         self._broadcast_state()
 
-    def _on_human_input(
+    def _on_user_message_request(
         self,
-        msg: HumanInput,
+        msg: UserMessageRequest,
         _websocket: ws_server.ServerConnection,
         client_id: str,
     ) -> None:
         if not self._capabilities.supports(CapabilityName.AGENT):
             return
         if self.human_input.transport is None:
-            logger.warning("human_input ignored — human_input transport is not wired")
+            logger.warning("user_message_request ignored — human_input transport is not wired")
             return
         self.human_input.publish(msg.text)
         logger.info("human_input published", client_id=client_id, chars=len(msg.text))
@@ -383,6 +403,30 @@ class ARModule(Module):  # type: ignore[misc]
     ) -> None:
         self._client_pose = msg
         self._client_pose_received_at = time.time()
+
+    def _on_nav_joystick_request(
+        self,
+        msg: NavJoystickRequest,
+        _websocket: ws_server.ServerConnection,
+        _client_id: str,
+    ) -> None:
+        if not self._capabilities.supports_navigation(NAV_JOYSTICK):
+            return
+        if self.tele_cmd_vel.transport is None:
+            logger.warning("nav_joystick_request ignored — tele_cmd_vel transport is not wired")
+            return
+        publisher = self._tele_cmd_vel_publisher
+        if publisher is None:
+            raise RuntimeError("nav_joystick requires TeleCmdVelPublisher")
+        publisher.handle(msg)
+
+    def _publish_tele_cmd_vel(self, twist: Twist) -> None:
+        self.tele_cmd_vel.publish(twist)
+
+    def _cancel_tele_cmd_vel(self) -> None:
+        publisher = getattr(self, "_tele_cmd_vel_publisher", None)
+        if publisher is not None:
+            publisher.cancel()
 
     def _fresh_client_pose(self) -> ClientPose | None:
         if self._client_pose is None or self._client_pose_received_at is None:
@@ -525,7 +569,7 @@ class ARModule(Module):  # type: ignore[misc]
         text = _textual_ai_message(msg)
         if text is None:
             return
-        self._ws_server.schedule_broadcast_text(encode_agent(text))
+        self._ws_server.schedule_broadcast_text(encode_agent_message(text))
 
     async def handle_agent_idle(self, msg: bool) -> None:
         if not self._capabilities.supports(CapabilityName.AGENT):
@@ -614,7 +658,11 @@ class ARModule(Module):  # type: ignore[misc]
 
 
 def _finite_number(value: object, name: str) -> str | None:
-    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)):
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(float(value))
+    ):
         return f"{name} must be a finite number"
     return None
 

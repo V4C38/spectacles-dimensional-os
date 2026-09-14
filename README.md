@@ -15,7 +15,7 @@
 
 <p>
   This project explores the use of <b>Augmented Reality as an interface for robotics and physical AI</b> in the context of navigation tasks and sensor data visualization. <br>
-  AR glasses: <b>Snap Spectacles</b> 2024 developer kit. Robot: <b>Unitree Go2 quadruped or G1 humanoid</b>. Controlled via <a href="https://github.com/dimensionalOS/dimos">Dimensional OS</a> which handles the entire physical stack, incl. navigation and LiDAR data streaming.
+  AR glasses: <b>Snap Spectacles</b> 2024 developer kit. Robot: <b>Unitree Go2 quadruped</b> (ARModule). Dimensional OS also has a G1 stack; the Spectacles AR experience is Go2-only until a G1 robot profile lands. Controlled via <a href="https://github.com/dimensionalOS/dimos">Dimensional OS</a> which handles the entire physical stack, incl. navigation and LiDAR data streaming.
 </p>
 
 <p align="center">
@@ -42,7 +42,7 @@
   </tr>
   <tr>
     <td>🟩 Unitree Go2 pro/air<br><sub>Fully supported &amp; tested</sub></td>
-    <td>🟧 Unitree G1<br><sub>Supported, not tested - looking for collaborators</sub></td>
+    <td>🟧 Unitree G1<br><sub>Not yet supported in ARModule. Launcher can still install the G1 DimOS stack.</sub></td>
   </tr>
 </table>
 
@@ -73,9 +73,9 @@ cd /path/to/spectacles-dimensional-os
 
 Your browser opens at `http://127.0.0.1:8790`. Leave the terminal window it started from open, closing it stops the launcher.
 
-The **Dependencies** tab allows installing and configuring dependencies based on your selected stack (Go2 / G1), choose whether to reuse a Dimensional OS install you already have or download a fresh one, then press **Install**. This can take a while.
+The **Dependencies** tab allows installing and configuring dependencies based on your selected stack (Go2 / G1), choose whether to reuse a Dimensional OS install you already have or download a fresh one, then press **Install**. This can take a while. The Spectacles AR experience targets <b>Go2</b>; G1 is a DimOS stack option until an ARModule G1 robot profile lands.
 
-**Every run:** pick **Unitree Go2** or **Unitree G1**, press **Start**, and wait for status to turn to **ARModule Ready**. The value shown as **ARModule IP** is the address you type into the Lens during the setup wizard. If no robot answers on the network, ARModule starts with a simulated robot instead.
+**Every run:** pick **Unitree Go2** (or **Unitree G1** for DimOS-only), press **Start**, and wait for status to turn to **ARModule Ready**. The value shown as **ARModule IP** is the address you type into the Lens during the setup wizard. If no robot answers on the network, ARModule starts with a simulated robot instead.
 
 macOS asks for your admin password the first time you start after a reboot. Dimensional OS needs a local network route and larger socket buffers for its internal messaging.
 
@@ -144,24 +144,21 @@ Enable the fiducial provider in DimOS config (`armodule.localization.providers`)
 
 </details>
 
-#### Register inside Spectacles Lens
+#### Set up inside Spectacles Lens
 
-Open [`clients/specs/spectacles-dimensional-os.esproj`](clients/specs/spectacles-dimensional-os.esproj) in Lens Studio and send the Lens to your Spectacles (Lens with experimental API enabled cannot be published so you need to upload via LS). The <b>Registration Wizard</b> walks you through connecting and locating the robot. Enter the <b>ARModule IP</b> from the launcher when asked.
+Open [`clients/specs/spectacles-dimensional-os.esproj`](clients/specs/spectacles-dimensional-os.esproj) in Lens Studio and send the Lens to your Spectacles (Lens with experimental API enabled cannot be published so you need to upload via LS). The <b>setup wizard</b> walks you through connecting and locating the robot. Enter the <b>ARModule IP</b> from the launcher when asked.
 
 <p align="center">
-  <img src="assets/specs_dimos_registrationwizard.gif" alt="Registration wizard on Spectacles: connect, scan tag, finish setup" width="480" />
+  <img src="assets/specs_dimos_registrationwizard.gif" alt="Setup wizard on Spectacles: connect, capture observations, finish setup" width="480" />
 </p>
 
-Leave the robot standing still and walk around it while looking at the tag. Registration finishes on its own once it has gathered sufficient tag sightings. Keep viewing distance about <b>0.5 - 1.5 meters</b>.
-Alternatively, switch to <b>Manual Placement</b>, where you drag a marker onto the robot by hand - this doesn`t require printing and mounting the tag but yields much lower accuracy and will not support <b>runtime drift correction</b>.
-
-The tracking origin is rough at first and gets better as the robot moves and more tag sightings are integrated.
+Leave the robot standing still and walk around it while looking at the tag. ARModule sends `localization_observations_request`; the Lens captures frames and replies with `localization_observations`; a successful `localization_result` sets the tracking origin. Keep viewing distance about <b>0.5 - 1.5 meters</b>.
 
 <a id="system-design"></a>
 
 ## System Design
 
-<b>Dimensional OS</b> runs the robot. It owns the connection to the Go2 or G1, builds a map out of the LiDAR, plans routes through that map and handles the navigation. In <b>Agent Mode</b> it also runs the language model behind your voice commands. 
+<b>Dimensional OS</b> runs the robot. It owns the connection to the Go2 (and, in DimOS, G1), builds a map out of the LiDAR, plans routes through that map and handles the navigation. In <b>Agent Mode</b> it also runs the language model behind your voice commands. ARModule blueprints in this repo are Go2-only (`unitree_go2_ar`). 
 
 <b>ARModule</b> (`dimos.ar`) is the main addition of this repo. It streams the robot's position, route and LiDAR over a <b>WebSocket</b> and takes navigation goals and localization observations back. Fiducial or VPS localization relates the client's tracking frame to robot `odom`.
 
@@ -234,16 +231,16 @@ flowchart LR
 
 ## Augmented Reality Interface
 
-The shipping Specs Lens is the v2 client described in [`clients/v2_plan.md`](clients/v2_plan.md).
+The shipping Specs Lens is **`DimOSSpecsClient`** with portable **`DimOSARClient`**. The wire contract is [`PROTOCOL.md`](dimos-ar/PROTOCOL.md).
 
 <p align="center">
   <img src="assets/specs_dimos_arwalk.gif" alt="Spectacles AR interface with Unitree Go2 outdoors: wrist menu and LiDAR visualization" width="800" />
 </p>
 
-Hold your left palm up to open the <b>wrist menu</b>. Switch between <b>Manual</b> and <b>Agent Mode</b>, restart registration (i.e. recapture the tracking origin), show the <b>debug console</b>, and request <b>emergency stop</b> (will immediately cancel all navigation).
+Hold your left palm up to open the <b>wrist menu</b>. Switch between <b>Manual</b> and <b>Agent Mode</b>, restart setup (runs the wizard again), show the <b>debug console</b>, and request <b>emergency stop</b> (will immediately cancel all navigation).
 
 <p align="center">
-  <img src="assets/specs_dimos_wristui.gif" alt="Wrist menu on Spectacles: Manual/Agent mode, LiDAR, registration, debug console, and emergency stop" width="480" />
+  <img src="assets/specs_dimos_wristui.gif" alt="Wrist menu on Spectacles: Manual/Agent mode, LiDAR, restart setup, debug console, and emergency stop" width="480" />
 </p>
 
 The <b>LiDAR</b> button in the wrist menu cycles three states: <b>off</b>, <b>obstacles only</b> (filters the point cloud by proximity to the robot on ARModule — performance friendly), and the <b>full point cloud</b> around the robot (performance heavy, can cause glasses to overheat over a long period).
@@ -301,10 +298,10 @@ During fast movements (as shown in the GIF above) the <b>RobotMarker</b> can lag
 
 The cause is <b>inconsistent odometry data</b> from the robot itself. In simple terms, the robot estimates its current world pose by adding up how far it has moved, and on Unitree hardware those numbers are not consistent, so small errors accumulate over time and distance.
 
-ARModule corrects for this whenever it gets a valid camera frame at the <b>AprilTag</b>. It compares where the tag really is against where the robot reports to be and updates the tracking origin to match the observation. Between those corrections the error grows again.
+ARModule corrects for this with discrete capture episodes. After hello, and again after about <b>1 m</b> of successful navigation, it may request observations; a new `localization_result` updates the tracking origin. The overlay can step when that result lands. Between episodes the error grows again.
 
 > [!NOTE]
-> Expect drift to accumulate over long distance walks - it is automatically corrected when the April Tag is sighted by the glasses camera.
+> Expect drift to accumulate over long distance walks — start a capture episode (or restart setup from the wrist menu) when the overlay has drifted.
 <details>
 <summary><h3>Development &amp; Troubleshooting</h3></summary>
 
@@ -334,11 +331,11 @@ npm test
 |---------|----------------|
 | Lens cannot connect | Check that Spectacles and the Mac are on the same WiFi and that you typed the ARModule IP from the launcher, not `127.0.0.1`. |
 | AprilTag not detected | Get closer, improve the lighting, keep walking around the robot, and check that the tag printed at full size. |
-| Drift after registration | Expected, see [Pose Drift](#pose-drift). Look at the tag while the robot stands still so ARModule can correct itself. |
-| Navigation unavailable | The ARModule log reports which capabilities the robot advertised. G1 navigation needs the Unitree DDS packages in the DimOS environment. |
+| Drift after setup | Expected, see [Pose Drift](#pose-drift). Start a capture episode or restart setup from the wrist menu. |
+| Navigation unavailable | The ARModule log reports which capabilities the robot advertised. G1 is not an ARModule blueprint; G1 navigation is a DimOS stack concern. |
 | Agent does not respond | Check that `OPENAI_API_KEY` is set in the launcher and that the Mac has internet. |
 | Wake word ignored | Turn on the debug console and watch line 7 to see what was transcribed, and check that you are in Agent Mode. |
-| Robot does not move | Registration has to be finished and the robot connected. The agent reply on line 8 turns red or yellow when something failed. |
+| Robot does not move | Setup has to be finished and the robot connected. The agent reply on line 8 turns red or yellow when something failed. |
 
 </details>
 

@@ -9,11 +9,12 @@ import {
   encodeEstopRequest,
   encodeClientPose,
   encodeHelloRequest,
-  encodeHumanInput,
+  encodeUserMessageRequest,
   encodeLidarSettingsRequest,
   encodeLocalizationObservations,
   encodeLocalizationStartRequest,
   encodeStateRequest,
+  encodeNavJoystickRequest,
   encodeText,
 } from "../../Assets/Scripts/DimOSARClient/websocket/protocol";
 import type { LocalizationObservation } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
@@ -30,7 +31,12 @@ const HELLO_FIXTURE = {
   },
   capabilities: {
     lidar: { available: true, reason: null },
-    navigation: { available: true, reason: null },
+    navigation: {
+      available: true,
+      reason: null,
+      nav_goal: { available: true, reason: null },
+      nav_joystick: { available: true, reason: null },
+    },
     localization: { available: true, reason: null },
     estop: { available: true, reason: null },
     agent: { available: false, reason: "current blueprint has no DimOS agent" },
@@ -241,9 +247,9 @@ describe("decodeOutbound fixtures", () => {
     });
   });
 
-  it("decodes agent text and agent_skill frames", () => {
-    expect(decodeOutbound(JSON.stringify({ type: "agent", text: "  Heading out.  " }))).toEqual({
-      type: "agent",
+  it("decodes agent_message text and agent_skill frames", () => {
+    expect(decodeOutbound(JSON.stringify({ type: "agent_message", text: "  Heading out.  " }))).toEqual({
+      type: "agent_message",
       text: "Heading out.",
     });
     expect(
@@ -259,7 +265,7 @@ describe("decodeOutbound fixtures", () => {
       name: "ar_place_marker",
       args: { id: "kitchen", x: 1, y: 0, z: 0 },
     });
-    expect(() => decodeOutbound(JSON.stringify({ type: "agent", text: "   " }))).toThrow(
+    expect(() => decodeOutbound(JSON.stringify({ type: "agent_message", text: "   " }))).toThrow(
       /non-blank/,
     );
   });
@@ -295,13 +301,54 @@ describe("decodeOutbound fixtures", () => {
     ).toThrow(/non-zero/);
   });
 
-  it("encodes human_input and rejects blank or oversized text", () => {
-    expect(JSON.parse(encodeHumanInput("  go  ").trim())).toEqual({
-      type: "human_input",
+  it("encodes user_message_request and rejects blank or oversized text", () => {
+    expect(JSON.parse(encodeUserMessageRequest("  go  ").trim())).toEqual({
+      type: "user_message_request",
       text: "go",
     });
-    expect(() => encodeHumanInput("   ")).toThrow(/non-blank/);
-    expect(() => encodeHumanInput("x".repeat(4001))).toThrow(/4000/);
+    expect(() => encodeUserMessageRequest("   ")).toThrow(/non-blank/);
+    expect(() => encodeUserMessageRequest("x".repeat(4001))).toThrow(/4000/);
+  });
+
+  it("encodes nav_joystick_request and rejects invalid duration or unsupported axes", () => {
+    expect(
+      JSON.parse(encodeNavJoystickRequest({ linear: [0.4, 0, 0], angular: [0, 0, 0.3] }).trim()),
+    ).toEqual({
+      type: "nav_joystick_request",
+      linear: [0.4, 0, 0],
+      angular: [0, 0, 0.3],
+    });
+    expect(
+      JSON.parse(
+        encodeNavJoystickRequest({ linear: [0.4, 0, 0], angular: [0, 0, 0], duration: 0.5 }).trim(),
+      ),
+    ).toEqual({
+      type: "nav_joystick_request",
+      linear: [0.4, 0, 0],
+      angular: [0, 0, 0],
+      duration: 0.5,
+    });
+    expect(
+      JSON.parse(
+        encodeNavJoystickRequest({ linear: [0.4, 0, 0], angular: [0, 0, 0], duration: 0 }).trim(),
+      ),
+    ).toEqual({
+      type: "nav_joystick_request",
+      linear: [0.4, 0, 0],
+      angular: [0, 0, 0],
+    });
+    expect(() =>
+      encodeNavJoystickRequest({ linear: [0.4, 0, 1], angular: [0, 0, 0] }),
+    ).toThrow(/linear.z/);
+    expect(() =>
+      encodeNavJoystickRequest({ linear: [0.4, 0, 0], angular: [0.1, 0, 0] }),
+    ).toThrow(/angular.x/);
+    expect(() =>
+      encodeNavJoystickRequest({ linear: [0.4, 0, 0], angular: [0, 0, 0], duration: 2.1 }),
+    ).toThrow(/duration/);
+    expect(() =>
+      encodeNavJoystickRequest({ linear: [0.4, 0, 0], angular: [0, 0, 0], duration: Number.NaN }),
+    ).toThrow(/finite/);
   });
 
   it("decodes localization_result and pose fixtures", () => {
@@ -413,6 +460,17 @@ describe("decodeOutbound errors", () => {
         }),
       ),
     ).toThrow(/reason=null/);
+    expect(() =>
+      decodeOutbound(
+        JSON.stringify({
+          ...HELLO_FIXTURE,
+          capabilities: {
+            ...HELLO_FIXTURE.capabilities,
+            navigation: { available: true, reason: null },
+          },
+        }),
+      ),
+    ).toThrow(/capabilities.navigation.nav_goal/);
   });
 
   it("throws on confidence outside [0, 1], observation_count < 1, and non-finite pose", () => {
@@ -553,5 +611,60 @@ describe("localization_observations binary", () => {
     badJson[jsonStart] = 0x7b;
     badJson[jsonStart + 1] = 0x00;
     expect(() => decodeLocalizationObservations(badJson)).toThrow(/intrinsics/);
+  });
+});
+
+const INBOUND_TYPES = [
+  "hello_request",
+  "state_request",
+  "localization_start_request",
+  "localization_observations",
+  "nav_goal_request",
+  "nav_joystick_request",
+  "estop_request",
+  "lidar_settings_request",
+  "user_message_request",
+  "client_pose",
+] as const;
+
+const OUTBOUND_TYPES = [
+  "hello",
+  "state",
+  "localization_observations_request",
+  "localization_result",
+  "nav_goal",
+  "pose",
+  "lidar",
+  "agent_message",
+  "agent_skill",
+] as const;
+
+describe("message inventory", () => {
+  it("lists 10 inbound and 9 outbound types", () => {
+    expect(INBOUND_TYPES).toHaveLength(10);
+    expect(OUTBOUND_TYPES).toHaveLength(9);
+    expect([...INBOUND_TYPES]).toEqual([
+      "hello_request",
+      "state_request",
+      "localization_start_request",
+      "localization_observations",
+      "nav_goal_request",
+      "nav_joystick_request",
+      "estop_request",
+      "lidar_settings_request",
+      "user_message_request",
+      "client_pose",
+    ]);
+    expect([...OUTBOUND_TYPES]).toEqual([
+      "hello",
+      "state",
+      "localization_observations_request",
+      "localization_result",
+      "nav_goal",
+      "pose",
+      "lidar",
+      "agent_message",
+      "agent_skill",
+    ]);
   });
 });

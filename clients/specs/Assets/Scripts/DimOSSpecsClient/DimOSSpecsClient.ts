@@ -196,7 +196,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     navigationController.hide();
 
     const applyNavPath = (): void => {
-      if (!this.uiPresenter.isWizardFinished()) {
+      if (!this.uiPresenter.isSetupCompleted()) {
         return;
       }
       const origin = clientTrackingOriginStore.T_odom_client;
@@ -284,7 +284,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
         this.annotations!.recompose(origin);
       }
 
-      if (!this.uiPresenter.isWizardFinished()) {
+      if (!this.uiPresenter.isSetupCompleted()) {
         this.lidarPresenter.hide();
         navGoalPresenter.hide();
         navigationController.hide();

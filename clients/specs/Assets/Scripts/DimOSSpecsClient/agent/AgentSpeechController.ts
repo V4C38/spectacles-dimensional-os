@@ -1,4 +1,4 @@
-import { sendHumanInput } from "../../DimOSARClient/agent/humanInput";
+import { requestUserMessage } from "../../DimOSARClient/agent/userMessageRequest";
 import type { ARModuleSession, ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
 import { COLOR_ERROR, COLOR_WARN } from "../presentation/UIKit";
 import { UILogger } from "../presentation/UILogger";
@@ -14,7 +14,7 @@ import {
   type AgentSpeechSessionState,
 } from "./AgentSpeechSession";
 import type { SpecsTextToSpeech } from "../presentation/SpecsTextToSpeech";
-import type { OperatingMode } from "../presentation/MainMenuView";
+import type { OperatingMode } from "../presentation/AppState";
 import { agentSpeechShouldRun } from "../presentation/AppState";
 
 const WAKE_SILENCE_MS = 3000;
@@ -187,18 +187,18 @@ export class AgentSpeechController {
     }
 
     if (action.kind === "send") {
-      if (this._canSendHumanInput()) {
+      if (this._canSendUserMessage()) {
         try {
-          sendHumanInput(this._deps.session, action.text);
+          requestUserMessage(this._deps.session, action.text);
         } catch {
-          print("AgentSpeechController: human_input not sent");
+          print("AgentSpeechController: user_message_request not sent");
         }
       }
       this._restartAsrForSilenceWindow();
     }
   }
 
-  private _canSendHumanInput(): boolean {
+  private _canSendUserMessage(): boolean {
     const view = this._deps.session.view();
     return view.connection === "ready" && view.capabilities?.agent.available === true;
   }
@@ -284,7 +284,7 @@ export class AgentSpeechController {
       return;
     }
     const idle = view.state?.agent.idle ?? true;
-    const text = view.agentText;
+    const text = view.agentMessage;
     if (text && text !== this._latestAgentResponseText) {
       this._latestAgentResponseText = text;
       this._applyAgentResponse(text, idle);

@@ -17,7 +17,7 @@ function baseView(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessio
     lidar: null,
     capabilities: null,
     nav: null,
-    agentText: null,
+    agentMessage: null,
     lastError: null,
     ...overrides,
   };

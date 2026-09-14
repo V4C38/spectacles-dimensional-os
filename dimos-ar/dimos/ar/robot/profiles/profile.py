@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from dimos.ar.robot.capabilities import CapabilityName
+from dimos.ar.robot.capabilities import (
+    NAV_JOYSTICK,
+    NAVIGATION_INPUT_NAME_SET,
+    CapabilityName,
+)
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.utils.transform_utils import pose_to_matrix
 
@@ -67,6 +71,9 @@ class RobotProfile:
     fiducial_marker_mounts: tuple[FiducialMarkerMount, ...]
     T_base_camera_optical: NDArray[np.float64] | None
     supported_capabilities: frozenset[CapabilityName]
+    supported_navigation_inputs: frozenset[str] = frozenset()
+    max_linear_mps: float | None = None
+    max_angular_rps: float | None = None
 
     def __post_init__(self) -> None:
         if not self.display_name.strip():
@@ -96,11 +103,26 @@ class RobotProfile:
             raise ValueError(
                 "localization is derived from configured providers, not the robot profile"
             )
+        unknown_inputs = self.supported_navigation_inputs - NAVIGATION_INPUT_NAME_SET
+        if unknown_inputs:
+            raise ValueError(f"unknown navigation inputs: {sorted(unknown_inputs)}")
         if (
             CapabilityName.NAVIGATION in self.supported_capabilities
             and CapabilityName.ESTOP not in self.supported_capabilities
         ):
             raise ValueError("navigation requires estop")
+        if (
+            CapabilityName.NAVIGATION in self.supported_capabilities
+            and not self.supported_navigation_inputs
+        ):
+            raise ValueError("navigation requires supported_navigation_inputs")
+        if self.supported_navigation_inputs and (
+            CapabilityName.NAVIGATION not in self.supported_capabilities
+        ):
+            raise ValueError("supported_navigation_inputs requires navigation")
+        if NAV_JOYSTICK in self.supported_navigation_inputs:
+            _require_positive_limit("max_linear_mps", self.max_linear_mps)
+            _require_positive_limit("max_angular_rps", self.max_angular_rps)
         if self.T_base_camera_optical is not None:
             object.__setattr__(
                 self,
@@ -129,6 +151,11 @@ def get_profile(name: RobotName) -> RobotProfile:
 def _require_positive_tuple(name: str, values: tuple[float, ...]) -> None:
     if not all(math.isfinite(value) and value > 0.0 for value in values):
         raise ValueError(f"{name} must contain finite positive values, got {values}")
+
+
+def _require_positive_limit(name: str, value: float | None) -> None:
+    if value is None or not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"{name} must be finite and positive, got {value}")
 
 
 def _immutable_rigid_transform(matrix: NDArray[np.float64]) -> NDArray[np.float64]:

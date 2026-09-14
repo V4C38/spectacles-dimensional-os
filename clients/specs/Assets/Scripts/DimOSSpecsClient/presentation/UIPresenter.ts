@@ -21,10 +21,15 @@ import { scaleIn, scaleOut } from "../utilities/AnimationUtilities";
 import { findChildRecursive, getFrameComponent, isFrameInitialized } from "./UIKit";
 import { UILogger } from "./UILogger";
 import { WristMenuController } from "./WristMenuController";
-import { MainMenuView, type OperatingMode } from "./MainMenuView";
-import { SetupWizardController, type SetupWizardFinishResult } from "./SetupWizardController";
-import { AppState, agentModeAccessible } from "./AppState";
-import { deriveRobotMarkerApplyInput, type RobotPresenter } from "./RobotPresenter";
+import { MainMenuView } from "./MainMenuView";
+import { SetupWizardController } from "./SetupWizardController";
+import {
+  AppState,
+  agentModeAccessible,
+  deriveRobotMarkerApplyInput,
+  type OperatingMode,
+} from "./AppState";
+import type { RobotPresenter } from "./RobotPresenter";
 import { AgentSpeechController } from "../agent/AgentSpeechController";
 import type { SpecsTextToSpeech } from "./SpecsTextToSpeech";
 
@@ -76,6 +81,7 @@ export class UIPresenter extends BaseScriptComponent {
   private wizardLidarOffSent = false;
   private postWizardLidarSent = false;
   private unlocalizedUiPrepared = false;
+  private setupCompleted = false;
 
   public getUILogger(): UILogger {
     return this.uiLogger;
@@ -116,8 +122,8 @@ export class UIPresenter extends BaseScriptComponent {
       clientTrackingOriginStore: deps.clientTrackingOriginStore,
       defaultWebsocketIp: deps.defaultWebsocketIp,
       hostStore: global.persistentStorageSystem.store,
-      onFinished: (result) => this.finishWizard(result),
-      onDismissToRuntime: () => this.finishWizard({ localized: this.appState.wizardLocalized }),
+      onFinished: () => this.finishWizard(),
+      onDismissToRuntime: () => this.finishWizard(),
     });
     this.bindRuntimeHud();
     this.setupWizardController.start(false);
@@ -129,13 +135,13 @@ export class UIPresenter extends BaseScriptComponent {
     this.uiLogger.tick();
     this.deps?.speechController?.tick();
     this.wristMenuController?.tick(dt);
-    if (!this.appState.wizardFinished) {
+    if (!this.setupCompleted) {
       this.ensureWizardLidarOff();
       return;
     }
     this.refreshHud();
     this.refreshRobotLabels();
-    this.refreshCameraStatus();
+    this.refreshLocalizationCaptureStatus();
   }
 
   public onSessionView(view: ARModuleSessionState, prevView: ARModuleSessionState | null): void {
@@ -145,7 +151,7 @@ export class UIPresenter extends BaseScriptComponent {
     this.setupWizardController?.onSessionViewChanged();
 
     const transition = sessionLinkTransitionLog(prevPhase, nextPhase);
-    if (transition && this.appState.wizardFinished) {
+    if (transition && this.setupCompleted) {
       this.uiLogger.show(
         transition.hudText,
         transition.hudColor,
@@ -160,23 +166,19 @@ export class UIPresenter extends BaseScriptComponent {
     }
   }
 
-  public isWizardFinished(): boolean {
-    return this.appState.wizardFinished;
-  }
-
-  public isWizardLocalized(): boolean {
-    return this.appState.wizardLocalized;
+  public isSetupCompleted(): boolean {
+    return this.setupCompleted;
   }
 
   public applyRoomPresentation(view: ARModuleSessionState): void {
     const deps = this.requireDeps();
     const origin = deps.clientTrackingOriginStore.T_odom_client;
     const input = deriveRobotMarkerApplyInput({
-      appState: this.appState,
+      setupCompleted: this.setupCompleted,
       view,
       origin,
     });
-    if (input.mode === "unlocalizedBelowUi") {
+    if (input.mode === "unlocalizedFallbackPosition") {
       if (!this.unlocalizedUiPrepared) {
         this.prepareMainUiPlacementAnchor();
         this.unlocalizedUiPrepared = true;
@@ -211,13 +213,14 @@ export class UIPresenter extends BaseScriptComponent {
     panel.getTransform().setLocalScale(visibleScale);
   }
 
-  private finishWizard(result: SetupWizardFinishResult): void {
-    this.appState.finishWizard(result.localized);
+  private finishWizard(): void {
+    this.setupCompleted = true;
     this.postWizardLidarSent = false;
-    if (!result.localized && this.isEditorMode) {
+    const view = this.requireDeps().session.view();
+    if (!view.hasTrackingOrigin && this.isEditorMode) {
       this.setUIState(1, { immediate: true });
     }
-    this.applyRoomPresentation(this.requireDeps().session.view());
+    this.applyRoomPresentation(view);
     if (this.isEditorMode) {
       this.setUIState(1);
     }
@@ -283,7 +286,8 @@ export class UIPresenter extends BaseScriptComponent {
   }
 
   private restartSetup(): void {
-    this.appState.resetWizard();
+    this.setupCompleted = false;
+    this.appState.setOperatingMode("manual");
     this.wizardLidarOffSent = false;
     this.postWizardLidarSent = false;
     this.unlocalizedUiPrepared = false;
@@ -397,10 +401,10 @@ export class UIPresenter extends BaseScriptComponent {
     });
   }
 
-  private refreshCameraStatus(): void {
+  private refreshLocalizationCaptureStatus(): void {
     const deps = this.requireDeps();
     const capture = localizationCaptureStatus(deps.session.view(), deps.episode.view());
-    this.uiLogger.setCameraStatus(capture.text, capture.color);
+    this.uiLogger.setLocalizationCaptureStatus(capture.text, capture.color);
   }
 
   private configureMenuMotion(panel: SceneObject): void {

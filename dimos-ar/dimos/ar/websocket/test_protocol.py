@@ -6,8 +6,8 @@ import struct
 import pytest
 
 from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult
-from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavState
-from dimos.ar.robot.capabilities import Capability, CapabilityName
+from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
+from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, Capability, CapabilityName
 from dimos.ar.robot.profiles import RobotDescription
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 from dimos.ar.sensors.lidar_settings import LidarSettings
@@ -19,7 +19,6 @@ from dimos.ar.websocket.protocol import (
     ClientPose,
     EstopRequest,
     Hello,
-    HumanInput,
     LidarSettingsRequest,
     LocalizationObservation,
     LocalizationObservationsRequest,
@@ -27,10 +26,11 @@ from dimos.ar.websocket.protocol import (
     StateRequest,
     StateSnapshot,
     TimeSync,
+    UserMessageRequest,
     decode_hello_request,
     decode_inbound,
     decode_localization_observations,
-    encode_agent,
+    encode_agent_message,
     encode_agent_skill,
     encode_client_pose,
     encode_hello,
@@ -45,6 +45,15 @@ from dimos.ar.websocket.protocol import (
 )
 
 
+def _available() -> Capability:
+    return Capability(available=True, reason=None)
+
+
+def _sample_navigation_inputs() -> dict[str, Capability]:
+    on = _available()
+    return {NAV_GOAL: on, NAV_JOYSTICK: on}
+
+
 def _sample_hello(client_id: str = "abc123") -> Hello:
     return Hello(
         client_id=client_id,
@@ -56,14 +65,15 @@ def _sample_hello(client_id: str = "abc123") -> Hello:
             base_height_m=UNITREE_GO2_PROFILE.base_height_m,
         ),
         capabilities={
-            CapabilityName.LIDAR: Capability(available=True, reason=None),
-            CapabilityName.NAVIGATION: Capability(available=True, reason=None),
-            CapabilityName.LOCALIZATION: Capability(available=True, reason=None),
-            CapabilityName.ESTOP: Capability(available=True, reason=None),
+            CapabilityName.LIDAR: _available(),
+            CapabilityName.NAVIGATION: _available(),
+            CapabilityName.LOCALIZATION: _available(),
+            CapabilityName.ESTOP: _available(),
             CapabilityName.AGENT: Capability(
                 available=False, reason="current blueprint has no DimOS agent"
             ),
         },
+        navigation_inputs=_sample_navigation_inputs(),
     )
 
 
@@ -84,6 +94,8 @@ def test_encode_hello_has_no_protocol_version() -> None:
     assert "protocol_version" not in msg
     assert "alignment" not in msg
     assert msg["capabilities"]["estop"]["available"] is True
+    assert msg["capabilities"]["navigation"]["nav_goal"]["available"] is True
+    assert msg["capabilities"]["navigation"]["nav_joystick"]["available"] is True
     assert msg["robot"]["display_name"] == "Unitree Go2"
 
 
@@ -309,18 +321,18 @@ def test_decode_unknown_type_rejected() -> None:
         decode_inbound(json.dumps({"type": "nope"}))
 
 
-def test_decode_human_input() -> None:
-    msg = decode_inbound(json.dumps({"type": "human_input", "text": "  go forward  "}))
-    assert isinstance(msg, HumanInput)
+def test_decode_user_message_request() -> None:
+    msg = decode_inbound(json.dumps({"type": "user_message_request", "text": "  go forward  "}))
+    assert isinstance(msg, UserMessageRequest)
     assert msg.text == "go forward"
 
 
-def test_decode_human_input_rejects_blank_and_oversize() -> None:
+def test_decode_user_message_request_rejects_blank_and_oversize() -> None:
     with pytest.raises(ValueError, match="non-blank"):
-        decode_inbound(json.dumps({"type": "human_input", "text": "   "}))
+        decode_inbound(json.dumps({"type": "user_message_request", "text": "   "}))
     with pytest.raises(ValueError, match="4000"):
         decode_inbound(
-            json.dumps({"type": "human_input", "text": "x" * (HUMAN_INPUT_MAX_CHARS + 1)})
+            json.dumps({"type": "user_message_request", "text": "x" * (HUMAN_INPUT_MAX_CHARS + 1)})
         )
 
 
@@ -374,9 +386,97 @@ def test_encode_client_pose() -> None:
         encode_client_pose(position=(0.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 0.0), ts=1.0)
 
 
-def test_encode_agent_and_agent_skill() -> None:
-    agent = _parse_json_line(encode_agent("  Heading out.  "))
-    assert agent == {"type": "agent", "text": "Heading out."}
+def test_decode_nav_joystick_request() -> None:
+    msg = decode_inbound(
+        json.dumps(
+            {
+                "type": "nav_joystick_request",
+                "linear": [0.4, 0.0, 0.0],
+                "angular": [0.0, 0.0, 0.3],
+            }
+        )
+    )
+    assert isinstance(msg, NavJoystickRequest)
+    assert msg.linear == (0.4, 0.0, 0.0)
+    assert msg.angular == (0.0, 0.0, 0.3)
+    assert msg.duration is None
+
+    held = decode_inbound(
+        json.dumps(
+            {
+                "type": "nav_joystick_request",
+                "linear": [0.4, 0.0, 0.0],
+                "angular": [0.0, 0.0, 0.0],
+                "duration": 0.5,
+            }
+        )
+    )
+    assert isinstance(held, NavJoystickRequest)
+    assert held.duration == 0.5
+
+    zero_hold = decode_inbound(
+        json.dumps(
+            {
+                "type": "nav_joystick_request",
+                "linear": [0.4, 0.0, 0.0],
+                "angular": [0.0, 0.0, 0.0],
+                "duration": 0,
+            }
+        )
+    )
+    assert isinstance(zero_hold, NavJoystickRequest)
+    assert zero_hold.duration is None
+
+
+def test_decode_nav_joystick_request_rejects_invalid() -> None:
+    base = {
+        "type": "nav_joystick_request",
+        "linear": [0.4, 0.0, 0.0],
+        "angular": [0.0, 0.0, 0.3],
+    }
+    with pytest.raises(ValueError, match="linear.z"):
+        decode_inbound(json.dumps({**base, "linear": [0.4, 0.0, 1.0]}))
+    with pytest.raises(ValueError, match="angular"):
+        decode_inbound(json.dumps({**base, "angular": [0.1, 0.0, 0.3]}))
+    with pytest.raises(ValueError, match="duration"):
+        decode_inbound(json.dumps({**base, "duration": 2.1}))
+    with pytest.raises(ValueError, match="duration"):
+        decode_inbound(json.dumps({**base, "duration": -0.1}))
+    with pytest.raises(ValueError, match="finite"):
+        decode_inbound(json.dumps({**base, "duration": float("nan")}))
+    with pytest.raises(TypeError, match="number"):
+        decode_inbound(json.dumps({**base, "duration": True}))
+    with pytest.raises(TypeError, match="number"):
+        decode_inbound(json.dumps({**base, "linear": [True, 0.0, 0.0]}))
+    with pytest.raises(ValueError, match="finite"):
+        decode_inbound(json.dumps({**base, "linear": [0.4, float("inf"), 0.0]}))
+
+
+def test_encode_hello_joystick_only_parent_available() -> None:
+    hello = _sample_hello()
+    hello = Hello(
+        client_id=hello.client_id,
+        time_sync=hello.time_sync,
+        robot=hello.robot,
+        capabilities={
+            **hello.capabilities,
+            CapabilityName.NAVIGATION: _available(),
+        },
+        navigation_inputs={
+            NAV_GOAL: Capability(available=False, reason="nav_goal not available on this robot"),
+            NAV_JOYSTICK: _available(),
+        },
+    )
+    msg = _parse_json_line(encode_hello(hello))
+    navigation = msg["capabilities"]["navigation"]
+    assert navigation["available"] is True
+    assert navigation["nav_goal"]["available"] is False
+    assert navigation["nav_joystick"]["available"] is True
+
+
+def test_encode_agent_message_and_agent_skill() -> None:
+    agent = _parse_json_line(encode_agent_message("  Heading out.  "))
+    assert agent == {"type": "agent_message", "text": "Heading out."}
     skill = _parse_json_line(
         encode_agent_skill(
             name="ar_place_marker",
@@ -395,7 +495,7 @@ def test_encode_agent_and_agent_skill() -> None:
         "args": {"id": "kitchen"},
     }
     with pytest.raises(ValueError, match="non-blank"):
-        encode_agent("   ")
+        encode_agent_message("   ")
     with pytest.raises(ValueError, match="non-blank"):
         encode_agent_skill(name="  ", args={})
 
@@ -471,3 +571,57 @@ def test_decode_localization_observations_single_observation() -> None:
     assert obs.jpeg == jpeg
     assert obs.intrinsics.fx == 100.0
     assert obs.ts_capture == pytest.approx(1.0)
+
+
+INBOUND_TYPES = (
+    "hello_request",
+    "state_request",
+    "localization_start_request",
+    "localization_observations",
+    "nav_goal_request",
+    "nav_joystick_request",
+    "estop_request",
+    "lidar_settings_request",
+    "user_message_request",
+    "client_pose",
+)
+
+OUTBOUND_TYPES = (
+    "hello",
+    "state",
+    "localization_observations_request",
+    "localization_result",
+    "nav_goal",
+    "pose",
+    "lidar",
+    "agent_message",
+    "agent_skill",
+)
+
+
+def test_message_inventory() -> None:
+    assert INBOUND_TYPES == (
+        "hello_request",
+        "state_request",
+        "localization_start_request",
+        "localization_observations",
+        "nav_goal_request",
+        "nav_joystick_request",
+        "estop_request",
+        "lidar_settings_request",
+        "user_message_request",
+        "client_pose",
+    )
+    assert OUTBOUND_TYPES == (
+        "hello",
+        "state",
+        "localization_observations_request",
+        "localization_result",
+        "nav_goal",
+        "pose",
+        "lidar",
+        "agent_message",
+        "agent_skill",
+    )
+    assert len(INBOUND_TYPES) == 10
+    assert len(OUTBOUND_TYPES) == 9

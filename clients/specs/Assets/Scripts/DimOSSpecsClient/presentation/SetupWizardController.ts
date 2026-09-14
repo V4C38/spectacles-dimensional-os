@@ -69,10 +69,6 @@ const CONNECT_RETRY_LOG_INTERVAL_S = 10.0;
 const CONNECT_POLL_INTERVAL_S = 0.1;
 const CONNECT_ATTEMPT_TIMEOUT_S = AR_MODULE_CLIENT_CONFIG.session.helloTimeoutS + 2;
 
-export interface SetupWizardFinishResult {
-  localized: boolean;
-}
-
 export interface SetupWizardControllerDeps {
   panel: SceneObject;
   script: ScriptComponent;
@@ -82,7 +78,7 @@ export interface SetupWizardControllerDeps {
   clientTrackingOriginStore: ClientTrackingOriginStore;
   defaultWebsocketIp: string;
   hostStore: ModuleHostStore;
-  onFinished: (result: SetupWizardFinishResult) => void;
+  onFinished: () => void;
   onDismissToRuntime: () => void;
 }
 
@@ -202,7 +198,7 @@ export class SetupWizardController {
           this.showConnectStatus();
         } else {
           this.view.setStatus(
-            this._hostValidationError ?? "Bridge disconnected",
+            this._hostValidationError ?? "Websocket disconnected",
             COLOR_ERROR,
           );
           this.startAutoconnect();
@@ -250,8 +246,8 @@ export class SetupWizardController {
     if (this._currentStep === SetupWizardStep.Connect) {
       if (!this.isConnected()) {
         this.cancelAutoconnect("connect step skipped", false);
-        print("SetupWizardController: finish connect=skipped registration=skipped");
-        this.finishWizard(false);
+        print("SetupWizardController: finish connect=skipped localization=skipped");
+        this.finishWizard();
         if (this._sessionStarted) {
           this.deps.session.stop();
           this._sessionStarted = false;
@@ -265,7 +261,7 @@ export class SetupWizardController {
       if (!this.deps.session.view().hasTrackingOrigin) {
         return;
       }
-      this.finishWizard(true);
+      this.finishWizard();
     }
   }
 
@@ -282,10 +278,10 @@ export class SetupWizardController {
     this.setStep((this._currentStep - 1) as SetupWizardStep);
   }
 
-  private finishWizard(localized: boolean): void {
+  private finishWizard(): void {
     this._openedFromRuntime = false;
     this.hide();
-    this.deps.onFinished({ localized });
+    this.deps.onFinished();
   }
 
   private beginLocalizationCapture(): void {

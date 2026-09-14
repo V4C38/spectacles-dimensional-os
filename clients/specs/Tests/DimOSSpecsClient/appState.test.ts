@@ -3,11 +3,13 @@ import {
   AppState,
   agentModeAccessible,
   agentSpeechShouldRun,
+  deriveRobotMarkerApplyInput,
   getRobotActivityState,
   robotTitleText,
 } from "../../Assets/Scripts/DimOSSpecsClient/presentation/AppState";
 import { NO_ROBOT_CONNECTED_LABEL } from "../../Assets/Scripts/DimOSARClient/websocket/sessionLinkStatus";
 import type { ARModuleSessionState } from "../../Assets/Scripts/DimOSARClient/websocket/arModuleSession";
+import type { ClientTrackingOrigin } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
 import type { Hello, Pose, RobotDescription } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
 
 const GO2: RobotDescription = {
@@ -22,6 +24,13 @@ const POSE: Pose = {
   orientation: [0, 0, 0, 1],
 };
 
+const ORIGIN: ClientTrackingOrigin = {
+  position: [0, 0, 0],
+  orientation: [0, 0, 0, 1],
+  confidence: 1,
+  ts: 0,
+};
+
 function baseView(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionState {
   return {
     connection: "ready",
@@ -33,7 +42,7 @@ function baseView(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessio
     lidar: null,
     capabilities: null,
     nav: null,
-    agentText: null,
+    agentMessage: null,
     lastError: null,
     ...overrides,
   };
@@ -47,7 +56,12 @@ function helloView(): Hello {
     robot: GO2,
     capabilities: {
       lidar: { available: true, reason: null },
-      navigation: { available: true, reason: null },
+      navigation: {
+        available: true,
+        reason: null,
+        nav_goal: { available: true, reason: null },
+        nav_joystick: { available: true, reason: null },
+      },
       localization: { available: true, reason: null },
       estop: { available: true, reason: null },
       agent: { available: false, reason: "current blueprint has no DimOS agent" },
@@ -63,13 +77,90 @@ describe("AppState", () => {
     expect(state.debugModeEnabled).toBe(true);
   });
 
-  it("clears operating mode when the wizard is reset", () => {
+  it("stores operating mode", () => {
     const state = new AppState();
     state.setOperatingMode("agent");
-    state.finishWizard(true);
-    state.resetWizard();
+    expect(state.operatingMode).toBe("agent");
+    state.setOperatingMode("manual");
     expect(state.operatingMode).toBe("manual");
-    expect(state.wizardFinished).toBe(false);
+  });
+});
+
+describe("deriveRobotMarkerApplyInput", () => {
+  it("returns hidden before setup is completed", () => {
+    expect(
+      deriveRobotMarkerApplyInput({
+        setupCompleted: false,
+        view: baseView(),
+        origin: null,
+      }),
+    ).toEqual({ mode: "hidden" });
+  });
+
+  it("returns unlocalizedFallbackPosition after skip-connect with no hello", () => {
+    const view = baseView({ hello: null });
+    expect(
+      deriveRobotMarkerApplyInput({
+        setupCompleted: true,
+        view,
+        origin: null,
+      }),
+    ).toEqual({
+      mode: "unlocalizedFallbackPosition",
+      robot: null,
+      view,
+    });
+  });
+
+  it("returns unlocalizedFallbackPosition with hello robot when not localized", () => {
+    const view = baseView({ hello: helloView() });
+    expect(
+      deriveRobotMarkerApplyInput({
+        setupCompleted: true,
+        view,
+        origin: null,
+      }),
+    ).toEqual({
+      mode: "unlocalizedFallbackPosition",
+      robot: GO2,
+      view,
+    });
+  });
+
+  it("promotes to localizedOdom when a later capture sets the tracking origin", () => {
+    const view = baseView({
+      hasTrackingOrigin: true,
+      hello: helloView(),
+      pose: POSE,
+    });
+    expect(
+      deriveRobotMarkerApplyInput({
+        setupCompleted: true,
+        view,
+        origin: ORIGIN,
+      }),
+    ).toEqual({
+      mode: "localizedOdom",
+      robot: GO2,
+      pose: POSE,
+      origin: ORIGIN,
+      view,
+    });
+  });
+
+  it("falls back when hello remains after origin is cleared", () => {
+    const view = baseView({ hello: helloView(), hasTrackingOrigin: false, pose: null });
+    expect(
+      deriveRobotMarkerApplyInput({
+        setupCompleted: true,
+        view,
+        origin: null,
+      }),
+    ).toEqual({
+      mode: "unlocalizedFallbackPosition",
+      robot: GO2,
+      view,
+    });
   });
 });
 

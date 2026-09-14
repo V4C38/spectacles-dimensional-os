@@ -57,7 +57,12 @@ function helloAt(tsClient: number, capabilities?: Partial<Capabilities>): Hello 
     },
     capabilities: {
       lidar: { available: true, reason: null },
-      navigation: { available: true, reason: null },
+      navigation: {
+        available: true,
+        reason: null,
+        nav_goal: { available: true, reason: null },
+        nav_joystick: { available: true, reason: null },
+      },
       localization: { available: true, reason: null },
       estop: { available: true, reason: null },
       agent: { available: false, reason: "current blueprint has no DimOS agent" },
@@ -408,8 +413,8 @@ describe("session control", () => {
     });
     const outbound: string[] = [];
     session.subscribeOutbound((message) => outbound.push(message.type));
-    session.onTransportText(JSON.stringify({ type: "agent", text: "Heading out." }) + "\n");
-    expect(session.view().agentText).toBe("Heading out.");
+    session.onTransportText(JSON.stringify({ type: "agent_message", text: "Heading out." }) + "\n");
+    expect(session.view().agentMessage).toBe("Heading out.");
     session.onTransportText(
       JSON.stringify({
         ...STATE,
@@ -424,10 +429,10 @@ describe("session control", () => {
         args: { id: "kitchen", x: 1, y: 0, z: 0 },
       }) + "\n",
     );
-    expect(outbound).toContain("agent");
+    expect(outbound).toContain("agent_message");
     expect(outbound).toContain("agent_skill");
     session.stop();
-    expect(session.view().agentText).toBeNull();
+    expect(session.view().agentMessage).toBeNull();
   });
 });
 

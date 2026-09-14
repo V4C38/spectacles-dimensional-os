@@ -20,8 +20,7 @@ import {
   setButtonEnabled,
   setButtonToggleState,
 } from "./UIKit";
-
-export type OperatingMode = "manual" | "agent";
+import type { OperatingMode } from "./AppState";
 
 interface ModeButtonPair {
   mode: OperatingMode;
@@ -59,7 +58,7 @@ export class MainMenuView {
     callbacks: MainMenuCallbacks,
   ) {
     const statusText = findText(panel, "MainStatus");
-    const restart = findButtonBinding(panel, "RestartRegistration", "RestartRegistrationLabel");
+    const restart = findButtonBinding(panel, "RestartSetup", "RestartSetupLabel");
     const emergencyStop = findButtonBinding(
       panel,
       "EmergencyStop",

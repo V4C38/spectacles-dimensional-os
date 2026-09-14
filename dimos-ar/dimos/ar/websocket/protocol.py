@@ -9,8 +9,12 @@ import struct
 from typing import Any
 
 from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult, Observation
-from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavState
-from dimos.ar.robot.capabilities import Capability, CapabilityName
+from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
+from dimos.ar.robot.capabilities import (
+    NAVIGATION_INPUT_NAMES,
+    Capability,
+    CapabilityName,
+)
 from dimos.ar.robot.profiles import RobotDescription
 from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.msgs.geometry_msgs.Pose import Pose
@@ -18,6 +22,7 @@ from dimos.msgs.geometry_msgs.Pose import Pose
 LIDAR_FOURCC = 0x4C444152
 LOCALIZATION_OBSERVATIONS_FOURCC = 0x4C4F4341
 HUMAN_INPUT_MAX_CHARS = 4000
+NAV_JOYSTICK_MAX_DURATION_S = 2.0
 
 
 def _dumps(payload: dict[str, Any]) -> str:
@@ -71,6 +76,32 @@ def _finite_vec3(data: dict[str, Any], key: str) -> tuple[float, float, float]:
     return values
 
 
+def _strict_finite_number(value: object, key: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"Field {key!r} must be a number")
+    out = float(value)
+    if not math.isfinite(out):
+        raise ValueError(f"Field {key!r} must be finite")
+    return out
+
+
+def _strict_finite_float(data: dict[str, Any], key: str) -> float:
+    if key not in data:
+        raise ValueError(f"Missing required field: {key}")
+    return _strict_finite_number(data[key], key)
+
+
+def _strict_finite_vec3(data: dict[str, Any], key: str) -> tuple[float, float, float]:
+    raw = _require_type(data, key, list)
+    if len(raw) != 3:
+        raise ValueError(f"Field {key!r} must be a 3-element array")
+    return (
+        _strict_finite_number(raw[0], f"{key}[0]"),
+        _strict_finite_number(raw[1], f"{key}[1]"),
+        _strict_finite_number(raw[2], f"{key}[2]"),
+    )
+
+
 def _finite_quat(data: dict[str, Any], key: str) -> tuple[float, float, float, float]:
     values = _quat(data, key)
     if not all(math.isfinite(value) for value in values):
@@ -106,7 +137,7 @@ class StateRequest:
 
 
 @dataclass(frozen=True)
-class HumanInput:
+class UserMessageRequest:
     text: str
 
 
@@ -119,11 +150,12 @@ class ClientPose:
 
 Inbound = (
     NavGoalRequest
+    | NavJoystickRequest
     | EstopRequest
     | LidarSettingsRequest
     | StateRequest
     | LocalizationStartRequest
-    | HumanInput
+    | UserMessageRequest
     | ClientPose
 )
 
@@ -178,16 +210,14 @@ def decode_inbound(text: str) -> Inbound:
     if msg_type == "localization_start_request":
         return LocalizationStartRequest()
 
-    if msg_type == "human_input":
+    if msg_type == "user_message_request":
         text = _require_type(data, "text", str)
         stripped = text.strip()
         if not stripped:
-            raise ValueError("human_input.text must be non-blank")
+            raise ValueError("user_message_request.text must be non-blank")
         if len(text) > HUMAN_INPUT_MAX_CHARS:
-            raise ValueError(
-                f"human_input.text exceeds {HUMAN_INPUT_MAX_CHARS} characters"
-            )
-        return HumanInput(text=stripped)
+            raise ValueError(f"user_message_request.text exceeds {HUMAN_INPUT_MAX_CHARS} characters")
+        return UserMessageRequest(text=stripped)
 
     if msg_type == "client_pose":
         return ClientPose(
@@ -196,7 +226,29 @@ def decode_inbound(text: str) -> Inbound:
             ts=_finite_float(data, "ts"),
         )
 
+    if msg_type == "nav_joystick_request":
+        return _decode_nav_joystick_request(data)
+
     raise ValueError(f"Unknown inbound frame type: {msg_type!r}")
+
+
+def _decode_nav_joystick_request(data: dict[str, Any]) -> NavJoystickRequest:
+    linear = _strict_finite_vec3(data, "linear")
+    angular = _strict_finite_vec3(data, "angular")
+    if linear[2] != 0.0:
+        raise ValueError("linear.z must be 0")
+    if angular[0] != 0.0 or angular[1] != 0.0:
+        raise ValueError("angular.x and angular.y must be 0")
+    duration: float | None = None
+    if "duration" in data:
+        duration = _strict_finite_float(data, "duration")
+        if duration < 0.0 or duration > NAV_JOYSTICK_MAX_DURATION_S:
+            raise ValueError(
+                f"duration must be in [0, {NAV_JOYSTICK_MAX_DURATION_S}], got {duration}"
+            )
+        if duration == 0.0:
+            duration = None
+    return NavJoystickRequest(linear=linear, angular=angular, duration=duration)
 
 
 @dataclass(frozen=True)
@@ -332,6 +384,7 @@ def observation_from_localization(
 class HelloBody:
     robot: RobotDescription
     capabilities: dict[CapabilityName, Capability]
+    navigation_inputs: dict[str, Capability]
 
 
 @dataclass(frozen=True)
@@ -340,9 +393,24 @@ class Hello:
     time_sync: TimeSync
     robot: RobotDescription
     capabilities: dict[CapabilityName, Capability]
+    navigation_inputs: dict[str, Capability]
+
+
+def _capability_wire(cap: Capability) -> dict[str, Any]:
+    return {"available": cap.available, "reason": cap.reason}
 
 
 def encode_hello(hello: Hello) -> str:
+    capabilities: dict[str, Any] = {}
+    for name, cap in hello.capabilities.items():
+        entry = _capability_wire(cap)
+        if name is CapabilityName.NAVIGATION:
+            for key in NAVIGATION_INPUT_NAMES:
+                nested = hello.navigation_inputs.get(key)
+                if nested is None:
+                    raise ValueError(f"hello.navigation_inputs missing {key}")
+                entry[key] = _capability_wire(nested)
+        capabilities[str(name)] = entry
     return encode_text(
         {
             "type": "hello",
@@ -357,10 +425,7 @@ def encode_hello(hello: Hello) -> str:
                 "footprint_m": list(hello.robot.footprint_m),
                 "base_height_m": hello.robot.base_height_m,
             },
-            "capabilities": {
-                name: {"available": cap.available, "reason": cap.reason}
-                for name, cap in hello.capabilities.items()
-            },
+            "capabilities": capabilities,
         }
     )
 
@@ -431,11 +496,11 @@ def encode_state(snapshot: StateSnapshot) -> str:
     )
 
 
-def encode_agent(text: str) -> str:
+def encode_agent_message(text: str) -> str:
     stripped = text.strip()
     if not stripped:
-        raise ValueError("agent.text must be non-blank")
-    return encode_text({"type": "agent", "text": stripped})
+        raise ValueError("agent_message.text must be non-blank")
+    return encode_text({"type": "agent_message", "text": stripped})
 
 
 def encode_agent_skill(*, name: str, args: dict[str, Any]) -> str:

@@ -18,8 +18,9 @@ Same pattern as `RelocalizationModule` / `dimos.mapping.relocalization` /
 
 Do **not** call it a bridge, an AR package, or `ar_go2`. Prose uses **`ARModule`**.
 The WebSocket accept loop is a collaborator (`websocket/server.py`), not the class.
-The Lens composition root is **`DimosARClient`** (same class name in WebXR).
-Wearable UX lives under `DimosARClient/presentation/` and `utilities/`.
+The Lens composition root is **`DimOSSpecsClient`**. Wearable UX lives under
+`DimOSSpecsClient/presentation/` and `utilities/`. Portable ClientCore lives
+under `DimOSARClient/` (no `core/` folder).
 
 
 ## Chat — correct imprecise terms
@@ -45,7 +46,9 @@ spectacles-dimensional-os/
 │   ├── core/                    # empty until ClientCore ships as .lspkg
 │   ├── specs/                   # Specs client (Lens Studio project)
 │   │   ├── spectacles-dimensional-os.esproj   # open THIS file (never from repo root)
-│   │   └── Assets/Scripts/DimosARClient/   # composition root + ClientCore
+│   │   └── Assets/Scripts/
+│   │       ├── DimOSARClient/           # portable ClientCore (no core/)
+│   │       └── DimOSSpecsClient/        # composition root + Specs host
 │   └── webxr/                   # WebXR host (empty)
 └── launcher/                    # CLI scripts + web UI for setup/start
     ├── Start Launcher.command   # Finder double-click entry (http://127.0.0.1:8790)
@@ -58,12 +61,12 @@ spectacles-dimensional-os/
 | ARModule | `dimos-ar/dimos/ar/` | Platform-agnostic — no Specs logic |
 | Blueprint | `dimos-ar/dimos/ar/blueprints.py` | `unitree_go2_ar` |
 | Contract | `dimos-ar/PROTOCOL.md` | JSON WebSocket API |
-| ClientCore | `clients/specs/Assets/Scripts/DimosARClient/core/` | Headset-agnostic TypeScript in the Specs project until it ships as `.lspkg`. `clients/core/` is empty (`.gitkeep`). |
-| Specs client | `clients/specs/` | Lens Studio project. Entry is `DimosARClient`. |
+| ClientCore | `clients/specs/Assets/Scripts/DimOSARClient/` | Headset-agnostic TypeScript in the Specs project until it ships as `.lspkg`. `clients/core/` is empty (`.gitkeep`). |
+| Specs client | `clients/specs/` | Lens Studio project. Entry is `DimOSSpecsClient`. |
 | WebXR host | `clients/webxr/` | Empty |
 
 The package publishes `dimos.ar*`. ClientCore production source is
-`clients/specs/Assets/Scripts/DimosARClient/core/` until the later `.lspkg` split.
+`clients/specs/Assets/Scripts/DimOSARClient/` until the later `.lspkg` split.
 `clients/core/` stays empty. Do not duplicate it.
 
 ## How we build dimos-ar
@@ -105,7 +108,7 @@ comprehension, not for throughput.
 |------|------|
 | Whole project | `README.md` |
 | WebSocket message schema | `dimos-ar/PROTOCOL.md` |
-| Client rewrite (core + hosts) | `clients/v2_plan.md` |
+| Client rewrite (core + hosts) | `README.md` System Design + `CONTRIBUTING.md` |
 | Spectacles / Lens Studio | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Contributing | `CONTRIBUTING.md` |
 
@@ -155,9 +158,9 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic:
 - **Never edit DimOS source.** Import from the installed `dimos` package. Upstream
   changes are filed as separate PRs.
 - `dimos-ar/dimos/ar/` stays platform-agnostic. Portable TypeScript lives in
-  `clients/specs/Assets/Scripts/DimosARClient/core/` until it ships as an `.lspkg` (no Specs
+  `clients/specs/Assets/Scripts/DimOSARClient/` until it ships as an `.lspkg` (no Specs
   or Lens APIs in that tree). Specs-specific code lives in `clients/specs/`
-  outside `DimosARClient/core/`. The composition root is `DimosARClient` (same name in WebXR).
+  under `DimOSSpecsClient/`. The composition root is `DimOSSpecsClient`.
   Do not call it `SpectaclesHost`. `clients/core/` is empty until the `.lspkg` split.
 - **Never edit** a second copy of ClientCore. There is no generated mirror and
   no `clients/specs/scripts/sync-client-core.mjs`.
@@ -167,9 +170,9 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic:
   changes, update the Python protocol and the client protocol module in the same change:
   - `dimos-ar/dimos/ar/websocket/protocol.py`
   - `dimos-ar/PROTOCOL.md`
-  - `clients/specs/Assets/Scripts/DimosARClient/core/websocket/protocol.ts`
+  - `clients/specs/Assets/Scripts/DimOSARClient/websocket/protocol.ts`
 - The ARModule worker must never block; WebSocket runs on a daemon thread.
-- Blueprint is `unitree_go2_ar` (`dimos-ar/dimos/ar/blueprints.py`).
+- Blueprints are `unitree_go2_ar` and `unitree_go2_ar_agentic` (`dimos-ar/dimos/ar/blueprints.py`).
 - Port **8787** is ARModule's WebSocket. Do not reuse the old Foxglove `8765` port.
 - Tests for `dimos.ar` must run from the DimOS `.venv`.
 - For Lens Studio verification, do **not** run `CompileWithLogs` by default.

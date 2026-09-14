@@ -12,6 +12,11 @@ class CapabilityName(StrEnum):
     AGENT = "agent"
 
 
+NAV_GOAL = "nav_goal"
+NAV_JOYSTICK = "nav_joystick"
+NAVIGATION_INPUT_NAMES: tuple[str, ...] = (NAV_GOAL, NAV_JOYSTICK)
+NAVIGATION_INPUT_NAME_SET = frozenset(NAVIGATION_INPUT_NAMES)
+
 _ROBOT_CAPABILITIES = (
     CapabilityName.LIDAR,
     CapabilityName.NAVIGATION,
@@ -24,6 +29,11 @@ _UNAVAILABLE_REASONS = {
     CapabilityName.ESTOP: "estop not available on this robot",
     CapabilityName.LOCALIZATION: "no localization provider configured",
     CapabilityName.AGENT: "current blueprint has no DimOS agent",
+}
+
+_NAVIGATION_INPUT_REASONS = {
+    NAV_GOAL: "nav_goal not available on this robot",
+    NAV_JOYSTICK: "nav_joystick not available on this robot",
 }
 
 
@@ -39,9 +49,14 @@ class Capability:
             raise ValueError("unavailable capability requires a reason")
 
 
+def _capability(available: bool, reason: str) -> Capability:
+    return Capability(available=available, reason=None if available else reason)
+
+
 @dataclass(frozen=True)
 class CapabilitySet:
     _items: dict[CapabilityName, Capability]
+    _navigation: dict[str, Capability]
 
     @classmethod
     def from_supported(
@@ -50,28 +65,42 @@ class CapabilitySet:
         *,
         localization_available: bool,
         agent_available: bool,
+        supported_navigation_inputs: frozenset[str] = frozenset(),
     ) -> CapabilitySet:
+        unknown = supported_navigation_inputs - NAVIGATION_INPUT_NAME_SET
+        if unknown:
+            raise ValueError(f"unknown navigation inputs: {sorted(unknown)}")
         items: dict[CapabilityName, Capability] = {}
         for name in _ROBOT_CAPABILITIES:
-            available = name in supported
-            items[name] = Capability(
-                available=available,
-                reason=None if available else _UNAVAILABLE_REASONS[name],
-            )
-        items[CapabilityName.LOCALIZATION] = Capability(
-            available=localization_available,
-            reason=None
-            if localization_available
-            else _UNAVAILABLE_REASONS[CapabilityName.LOCALIZATION],
+            if name is CapabilityName.NAVIGATION:
+                available = bool(supported_navigation_inputs)
+            else:
+                available = name in supported
+            items[name] = _capability(available, _UNAVAILABLE_REASONS[name])
+        items[CapabilityName.LOCALIZATION] = _capability(
+            localization_available,
+            _UNAVAILABLE_REASONS[CapabilityName.LOCALIZATION],
         )
-        items[CapabilityName.AGENT] = Capability(
-            available=agent_available,
-            reason=None if agent_available else _UNAVAILABLE_REASONS[CapabilityName.AGENT],
+        items[CapabilityName.AGENT] = _capability(
+            agent_available,
+            _UNAVAILABLE_REASONS[CapabilityName.AGENT],
         )
-        return cls(_items=items)
+        navigation = {
+            name: _capability(name in supported_navigation_inputs, _NAVIGATION_INPUT_REASONS[name])
+            for name in NAVIGATION_INPUT_NAMES
+        }
+        return cls(_items=items, _navigation=navigation)
 
     def supports(self, name: CapabilityName) -> bool:
         return self._items[name].available
 
+    def supports_navigation(self, name: str) -> bool:
+        if name not in NAVIGATION_INPUT_NAME_SET:
+            raise ValueError(f"unknown navigation input {name!r}")
+        return self._navigation[name].available
+
     def as_mapping(self) -> dict[CapabilityName, Capability]:
         return dict(self._items)
+
+    def navigation_as_mapping(self) -> dict[str, Capability]:
+        return dict(self._navigation)

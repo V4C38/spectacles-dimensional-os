@@ -6,7 +6,7 @@ This monorepo has three main parts:
 |------|------|------|
 | **dimos-ar** | [`dimos-ar/`](dimos-ar/) | `ARModule` (`dimos.ar`) |
 | **ClientCore** | [`clients/specs/Assets/Scripts/DimOSARClient/`](clients/specs/Assets/Scripts/DimOSARClient/) | Headset-agnostic TypeScript, currently in the Specs project. `clients/core/` is empty until ClientCore ships as an `.lspkg`. |
-| **Specs client** | [`clients/specs/`](clients/specs/) | Lens Studio project. Entry is `DimOSSpecsClient`. Rebuilt in [`clients/v2_plan.md`](clients/v2_plan.md) Groups 5–10. |
+| **Specs client** | [`clients/specs/`](clients/specs/) | Lens Studio project. Composition root `DimOSSpecsClient`; portable core `DimOSARClient`. |
 
 Host folders stay lowercase: `clients/specs/` (Lens Studio project) and `clients/webxr/` (empty).
 
@@ -77,7 +77,7 @@ re-enable them or wire new code through them.
 
 `SetupWizard` / `UIPresenter` derive copy, visibility, and buttons from
 `session.view()` and `episode.view()`. They call existing ClientCore commands
-(`requestNavGoal`, `requestLidarSettings`, `sendHumanInput`,
+(`requestNavGoal`, `requestLidarSettings`, `requestUserMessage`,
 `session.requestEstop`, `session.requestState`, `episode.requestStart`).
 `AppState.operatingMode` is the Specs-host Agent/Manual gate. STT and TTS stay
 on the host; the wire carries text and typed agent facts only.
@@ -90,8 +90,8 @@ on the host; the wire carries text and typed agent facts only.
   `PalmGestureGate` debounces show/hide.
 - **Debug:** pose copy and capture status come from session and episode views
   through `SpecsCoordinates`. No second basis and no `AppState.debugMode`.
-- **Recapture:** the HUD offers `localization_start_request`. There is no
-  registration session to restart.
+- **Restart setup:** the HUD offers a full wizard restart (`restartSetup()`).
+  There is no registration session to restart.
 
 ## Runtime camera capture
 

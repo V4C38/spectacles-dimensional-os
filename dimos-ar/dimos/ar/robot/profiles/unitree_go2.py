@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from dimos.ar.robot.capabilities import CapabilityName
+from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName
 from dimos.ar.robot.profiles.profile import FiducialMarkerMount, RobotProfile
 from dimos.robot.unitree.go2.dds.extrinsics import BASE_TO_CAMERA
 
@@ -45,4 +45,7 @@ UNITREE_GO2_PROFILE = RobotProfile(
             CapabilityName.ESTOP,
         }
     ),
+    supported_navigation_inputs=frozenset({NAV_GOAL, NAV_JOYSTICK}),
+    max_linear_mps=1.5,
+    max_angular_rps=2.0,
 )

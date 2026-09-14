@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sendHumanInput } from "../../Assets/Scripts/DimOSARClient/agent/humanInput";
+import { requestUserMessage } from "../../Assets/Scripts/DimOSARClient/agent/userMessageRequest";
 import { ClientTrackingOriginStore } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
 import type { ClientClock, WebSocketTransport } from "../../Assets/Scripts/DimOSARClient/websocket/hostPorts";
 import { ARModuleSession } from "../../Assets/Scripts/DimOSARClient/websocket/arModuleSession";
@@ -35,7 +35,12 @@ function helloAt(tsClient: number, capabilities?: Partial<Capabilities>): Hello 
     },
     capabilities: {
       lidar: { available: true, reason: null },
-      navigation: { available: true, reason: null },
+      navigation: {
+        available: true,
+        reason: null,
+        nav_goal: { available: true, reason: null },
+        nav_joystick: { available: true, reason: null },
+      },
       localization: { available: true, reason: null },
       estop: { available: true, reason: null },
       agent: { available: false, reason: "current blueprint has no DimOS agent" },
@@ -72,14 +77,14 @@ function readySession(capabilities?: Partial<Capabilities>): {
   return { session, transport };
 }
 
-describe("sendHumanInput", () => {
-  it("sends human_input when agent is available", () => {
+describe("requestUserMessage", () => {
+  it("sends user_message_request when agent is available", () => {
     const { session, transport } = readySession({
       agent: { available: true, reason: null },
     });
-    sendHumanInput(session, "  go forward  ");
+    requestUserMessage(session, "  go forward  ");
     expect(JSON.parse(transport.texts[transport.texts.length - 1])).toEqual({
-      type: "human_input",
+      type: "user_message_request",
       text: "go forward",
     });
   });
@@ -91,11 +96,11 @@ describe("sendHumanInput", () => {
       clientTrackingOriginStore: new ClientTrackingOriginStore(),
       config: { helloTimeoutS: 1, reconnectDelayS: 0.5 },
     });
-    expect(() => sendHumanInput(session, "go")).toThrow(/ready session/);
+    expect(() => requestUserMessage(session, "go")).toThrow(/ready session/);
   });
 
   it("throws when agent is unavailable", () => {
     const { session } = readySession();
-    expect(() => sendHumanInput(session, "go")).toThrow(/capabilities.agent/);
+    expect(() => requestUserMessage(session, "go")).toThrow(/capabilities.agent/);
   });
 });

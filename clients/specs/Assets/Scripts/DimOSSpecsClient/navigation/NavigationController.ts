@@ -123,7 +123,8 @@ export class NavigationController {
   }
 
   applyView(view: ARModuleSessionState, origin: ClientTrackingOrigin | null): void {
-    const available = view.hasTrackingOrigin && view.capabilities?.navigation?.available === true;
+    const available =
+      view.hasTrackingOrigin && view.capabilities?.navigation?.nav_goal?.available === true;
     if (!available || !origin) {
       this.origin = null;
       this.lastReceivedPose = null;

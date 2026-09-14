@@ -50,8 +50,6 @@ export const FONT_WIZARD_TITLE = 105;
 export const FONT_BODY = 54;
 export const FONT_WIZARD_STATUS = 64;
 export const FONT_WIZARD_INPUT = 58;
-export const FONT_CALIBRATE_TAG = FONT_WIZARD_STATUS;
-export const FONT_CALIBRATE_PROGRESS = 58;
 export const FONT_CAPTION = 42;
 export const FONT_BUTTON = 44;
 

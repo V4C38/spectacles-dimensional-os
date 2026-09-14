@@ -1,15 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { AppState } from "../../Assets/Scripts/DimOSSpecsClient/presentation/AppState";
 import {
-  deriveRobotMarkerApplyInput,
   robotBelowMainUiLocalOffset,
   robotDeadzoneRadiusCm,
   robotFloorOffsetCm,
 } from "../../Assets/Scripts/DimOSSpecsClient/presentation/RobotPresenter";
 import { clientTrackingToSpecsPoint } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
-import type { ARModuleSessionState } from "../../Assets/Scripts/DimOSARClient/websocket/arModuleSession";
-import type { ClientTrackingOrigin } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
-import type { Hello, Pose, RobotDescription, Vec3 } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
+import type { RobotDescription, Vec3 } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
 
 const GO2: RobotDescription = {
   display_name: "Unitree Go2",
@@ -36,104 +32,6 @@ describe("robotBelowMainUiLocalOffset", () => {
     const offset = robotBelowMainUiLocalOffset();
     expect(offset.y).toBe(-40);
     expect(offset.z).toBeGreaterThan(0);
-  });
-});
-
-const POSE: Pose = {
-  position: [1, 2, 3],
-  orientation: [0, 0, 0, 1],
-};
-
-const ORIGIN: ClientTrackingOrigin = {
-  position: [0, 0, 0],
-  orientation: [0, 0, 0, 1],
-  confidence: 1,
-  ts: 0,
-};
-
-function baseView(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionState {
-  return {
-    connection: "ready",
-    hasTrackingOrigin: false,
-    hello: null,
-    state: null,
-    pose: null,
-    nav_goal: null,
-    lidar: null,
-    capabilities: null,
-    nav: null,
-    agentText: null,
-    lastError: null,
-    ...overrides,
-  };
-}
-
-function helloView(): Hello {
-  return {
-    type: "hello",
-    client_id: "test-client",
-    time_sync: { ts_client: 0, ts_server: 0 },
-    robot: GO2,
-    capabilities: {
-      lidar: { available: true, reason: null },
-      navigation: { available: true, reason: null },
-      localization: { available: true, reason: null },
-      estop: { available: true, reason: null },
-      agent: { available: false, reason: "current blueprint has no DimOS agent" },
-    },
-  };
-}
-
-describe("deriveRobotMarkerApplyInput", () => {
-  it("returns hidden before wizard finishes", () => {
-    const appState = new AppState();
-    expect(
-      deriveRobotMarkerApplyInput({
-        appState,
-        view: baseView(),
-        origin: null,
-      }),
-    ).toEqual({ mode: "hidden" });
-  });
-
-  it("returns unlocalizedBelowUi after skip-connect finish", () => {
-    const appState = new AppState();
-    appState.finishWizard(false);
-    const view = baseView({ hello: helloView() });
-    expect(
-      deriveRobotMarkerApplyInput({
-        appState,
-        view,
-        origin: null,
-      }),
-    ).toEqual({
-      mode: "unlocalizedBelowUi",
-      robot: GO2,
-      view,
-    });
-  });
-
-  it("returns localizedOdom when localized with origin, pose, and hello robot", () => {
-    const appState = new AppState();
-    appState.finishWizard(true);
-    const view = baseView({
-      hasTrackingOrigin: true,
-      hello: helloView(),
-      pose: POSE,
-    });
-    expect(
-      deriveRobotMarkerApplyInput({
-        appState,
-        view,
-        origin: ORIGIN,
-      }),
-    ).toEqual({
-      mode: "localizedOdom",
-      robot: GO2,
-      pose: POSE,
-      origin: ORIGIN,
-      view,
-    });
   });
 });
 
