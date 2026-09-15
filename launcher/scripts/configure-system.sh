@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Apply the macOS system settings DimOS needs for LCM before the AR bridge boots.
+# Apply the macOS system settings DimOS needs for LCM before ARModule boots.
 #
 # This mirrors DimOS's own macOS LCM configurators
-# (dimos/protocol/service/system_configurator/lcm.py) so the bridge can start
+# (dimos/protocol/service/system_configurator/lcm.py) so ARModule can start
 # unattended: the launcher applies these once (with one admin prompt) and DimOS
 # then finds them already in place and does not prompt again.
 #
@@ -53,7 +53,7 @@ if [[ -z "${MODE}" ]]; then
 fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
-  # Non-macOS: nothing for this helper to do (bridge is macOS-oriented).
+  # Non-macOS: nothing for this helper to do (ARModule is macOS-oriented).
   [[ "${MODE}" == "check" ]] && exit 0
   exit 0
 fi

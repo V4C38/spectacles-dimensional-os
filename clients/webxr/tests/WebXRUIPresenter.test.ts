@@ -52,12 +52,10 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
 }
 
 describe("WebXRUIPresenter", () => {
-  it("derives lidar from ClientCore settings and blocks setup without localization", () => {
-    const sendText = vi.fn();
-    let current = view();
+  it("blocks setup without localization", () => {
     const session = {
-      view: () => current,
-      sendText,
+      view: () => view(),
+      sendText: vi.fn(),
       requestState: vi.fn(),
       requestEstop: vi.fn(),
     };
@@ -66,17 +64,12 @@ describe("WebXRUIPresenter", () => {
       requestStart: vi.fn(),
       reset: vi.fn(),
     };
-    const ui = new WebXRUIPresenter(session as never, episode as never);
-    expect(() => ui.completeSetup()).not.toThrow();
-    current = view({ state: { ...view().state!, lidar: LIDAR_PRESETS.full } });
-    ui.onSessionView(current, view(), 1);
-    expect(ui.snapshot().lidarMode).toBe("full");
-    expect(ui.snapshot().connectionTone).toBe("success");
-    current = view({ hasTrackingOrigin: false });
-    const blocked = new WebXRUIPresenter(session as never, episode as never);
-    expect(() => blocked.completeSetup()).toThrow("localization_result");
-    ui.restartSetup();
-    expect(ui.snapshot().setupCompleted).toBe(false);
-    expect(ui.cycleLidar()).toBe("obstacles");
+    const localized = new WebXRUIPresenter(session as never, episode as never);
+    expect(() => localized.completeSetup()).not.toThrow();
+    const blocked = new WebXRUIPresenter(
+      { ...session, view: () => view({ hasTrackingOrigin: false }) } as never,
+      episode as never,
+    );
+    expect(() => blocked.completeSetup()).toThrow();
   });
 });

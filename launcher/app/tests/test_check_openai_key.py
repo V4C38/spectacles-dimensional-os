@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from bridge import ProcessManager
+from armodule import ProcessManager
 
 
 @pytest.mark.asyncio

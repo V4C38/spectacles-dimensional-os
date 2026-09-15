@@ -9,7 +9,6 @@ import pytest
 
 from dimos.ar.robot.capabilities import NAV_JOYSTICK, CapabilityName
 from dimos.ar.robot.profiles import FiducialMarkerMount, RobotName, RobotProfile, get_profile
-from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 
 
 def test_fiducial_marker_mount_builds_base_transform() -> None:
@@ -163,10 +162,6 @@ def test_robot_profile_rejects_malformed_camera_transform() -> None:
     skewed[0, 0] = 2.0
     with pytest.raises(ValueError, match="orthonormal"):
         _profile(T_base_camera_optical=skewed)
-
-
-def test_get_profile_unitree_go2() -> None:
-    assert get_profile(RobotName.UNITREE_GO2) is UNITREE_GO2_PROFILE
 
 
 def test_get_profile_unknown_name_raises() -> None:

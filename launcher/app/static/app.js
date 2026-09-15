@@ -3,8 +3,8 @@
 
   const stateValue = $("stateValue");
   const stateDetail = $("stateDetail");
-  const bridgeIp = $("bridgeIp");
-  const bridgeIpSummary = $("bridgeIpSummary");
+  const arModuleIp = $("arModuleIp");
+  const arModuleIpSummary = $("arModuleIpSummary");
   const robotValue = $("robotValue");
   const warningText = $("warningText");
   const errorText = $("errorText");
@@ -44,7 +44,7 @@
   const pendingLines = [];
   let frameHandle = null;
 
-  /** Populated from GET /api/tag-config (backend owns robot_profile defaults). */
+  /** Populated from GET /api/tag-config (backend owns robot profile defaults). */
   let defaultTagIds = { go2: new Set(), g1: new Set() };
   let defaultTagConfig = { go2: [], g1: [] };
   let tagConfig = { go2: [], g1: [] };
@@ -361,7 +361,7 @@
       case "needs_setup":
       case "ready":
         return {
-          label: selectedReady ? "Bridge Ready" : "Install required",
+          label: selectedReady ? "ARModule Ready" : "Install required",
           detail: depsDetail,
         };
       case "installing":
@@ -377,14 +377,14 @@
       case "running":
         return {
           label: "Running",
-          detail: `${stackLabel} bridge listening`,
+          detail: `${stackLabel} ARModule listening`,
         };
       case "stopping":
-        return { label: "Stopping", detail: "Shutting down bridge…" };
+        return { label: "Stopping", detail: "Shutting down ARModule…" };
       case "error":
         return {
           label: "Error",
-          detail: status.error || "Bridge failed — check the log",
+          detail: status.error || "ARModule failed — check the log",
         };
       case "idle":
       default:
@@ -585,8 +585,8 @@
     stateDetail.textContent = info.detail;
     stateDetail.dataset.phase = displayPhase;
     stateDetail.classList.toggle("hidden", !info.detail);
-    setText(bridgeIp, status.spectacles_ip);
-    setText(bridgeIpSummary, status.spectacles_ip);
+    setText(arModuleIp, status.spectacles_ip);
+    setText(arModuleIpSummary, status.spectacles_ip);
     setText(robotValue, displayRobotIp(status.robot_ip));
 
     if (status.warning) {
@@ -844,7 +844,7 @@
       robot_ip: robotIpAuto.checked ? null : robotIp.value.trim() || null,
     };
     try {
-      const res = await fetch("/api/bridge/start", {
+      const res = await fetch("/api/armodule/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -863,7 +863,7 @@
 
   stopBtn.addEventListener("click", async () => {
     try {
-      const res = await fetch("/api/bridge/stop", { method: "POST" });
+      const res = await fetch("/api/armodule/stop", { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (data.phase) applyStatus(data);
     } catch (err) {

@@ -6,50 +6,9 @@ import {
 import {
   GOAL_FORCE_NOOP_DISTANCE_CM,
   GOAL_SEND_INTERVAL_S,
-  isLiveNavGoal,
-  isNavGoalCancelVisible,
   shouldBeginFailedFlash,
   shouldSendStreamGoal,
 } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationController";
-
-const live = {
-  activated: false,
-  hasSentGoal: false,
-  hasReceivedPose: false,
-  followingPath: false,
-};
-
-describe("isLiveNavGoal", () => {
-  it("is true for an activated, sent, received, or following goal", () => {
-    expect(isLiveNavGoal(live)).toBe(false);
-    expect(isLiveNavGoal({ ...live, activated: true })).toBe(true);
-    expect(isLiveNavGoal({ ...live, hasSentGoal: true })).toBe(true);
-    expect(isLiveNavGoal({ ...live, hasReceivedPose: true })).toBe(true);
-    expect(isLiveNavGoal({ ...live, followingPath: true })).toBe(true);
-  });
-});
-
-describe("isNavGoalCancelVisible", () => {
-  it("shows only for a live goal that is not being dragged or flashing", () => {
-    expect(isNavGoalCancelVisible({ ...live, flashing: false, dragging: false })).toBe(false);
-    expect(isNavGoalCancelVisible({ ...live, flashing: false, dragging: false, hasSentGoal: true })).toBe(
-      true,
-    );
-    expect(isNavGoalCancelVisible({ ...live, flashing: false, dragging: false, hasReceivedPose: true })).toBe(
-      true,
-    );
-    expect(isNavGoalCancelVisible({ ...live, flashing: false, dragging: false, followingPath: true })).toBe(
-      true,
-    );
-    expect(isNavGoalCancelVisible({ ...live, flashing: false, dragging: false, activated: true })).toBe(true);
-    expect(
-      isNavGoalCancelVisible({ ...live, flashing: false, dragging: true, hasSentGoal: true }),
-    ).toBe(false);
-    expect(
-      isNavGoalCancelVisible({ ...live, flashing: true, dragging: false, hasSentGoal: true }),
-    ).toBe(false);
-  });
-});
 
 describe("shouldBeginFailedFlash", () => {
   const failed = { state: "resolved" as const, outcome: "failed" as const };

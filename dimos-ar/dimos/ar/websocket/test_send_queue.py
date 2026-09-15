@@ -6,7 +6,6 @@ import json
 import pytest
 
 from dimos.ar.websocket.send_queue import (
-    COALESCE_FRAME_TYPES,
     OUTBOUND_FIFO_MAXSIZE,
     ClientSendQueue,
     peek_frame_type,
@@ -47,10 +46,6 @@ def _messages_from_sent(sent: list[str]) -> list[dict]:
 )
 def test_peek_frame_type(payload: str, expected: str | None) -> None:
     assert peek_frame_type(payload) == expected
-
-
-def test_coalesce_frame_types_match_state_streams() -> None:
-    assert COALESCE_FRAME_TYPES == frozenset({"pose", "nav_goal", "state", "localization_result"})
 
 
 @pytest.mark.asyncio

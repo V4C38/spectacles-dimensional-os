@@ -9,7 +9,6 @@ from dimos.ar.sensors.lidar_filter import (
     prepare_lidar_points,
     subsample_near_robot,
 )
-from dimos.ar.sensors.lidar_settings import LidarSettings
 
 
 def _settings(**overrides: float) -> LidarFilterSettings:
@@ -147,16 +146,6 @@ def test_subsample_uses_raw_robot_position_not_corrected() -> None:
 
     assert np.allclose(raw[0], [8.2, 0.0, 0.5])
     assert np.allclose(wrong[0], [10.2, 0.0, 0.5])
-
-
-def test_from_lidar_settings_reads_lidar_settings() -> None:
-    settings_input = LidarSettings(
-        enabled=True, min_height_m=0.2, max_height_m=1.2, max_range_m=4.0
-    )
-    settings = LidarFilterSettings.from_lidar_settings(settings_input, target_points=500)
-    assert settings.min_height_m == 0.2
-    assert settings.max_range_m == 4.0
-    assert settings.target_points == 500
 
 
 def test_invalid_shape_raises() -> None:

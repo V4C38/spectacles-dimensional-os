@@ -58,7 +58,7 @@ Mac which runs DimOS, Spectacles AR glasses and the robot need to be on the <b>s
 <summary><strong>Via launcher (recommended)</strong></summary>
 
 
-<img src="assets/specs_dimos_bridgelauncher.png" alt="DimOS ARModule launcher: robot stack, ARModule IP, OPENAI_API_KEY, AprilTags, and log" width="640" />
+<img src="assets/specs_dimos_launcher.png" alt="DimOS ARModule launcher: robot stack, ARModule IP, OPENAI_API_KEY, AprilTags, and log" width="640" />
 
 
 The launcher is a small web app that runs on your Mac and manages <b>Dimensional OS</b> and <b>ARModule</b> in a clean UI. <br> It installs and configures both if needed, handles robot network discovery, generates and configures the <b>AprilTag</b> settings, and starts or stops ARModule. The <b>Log</b> also shows detailed output which is useful for debugging.
@@ -149,7 +149,7 @@ Enable the fiducial provider in DimOS config (`armodule.localization.providers`)
 Open [`clients/specs/spectacles-dimensional-os.esproj`](clients/specs/spectacles-dimensional-os.esproj) in Lens Studio and send the Lens to your Spectacles (Lens with experimental API enabled cannot be published so you need to upload via LS). The <b>setup wizard</b> walks you through connecting and locating the robot. Enter the <b>ARModule IP</b> from the launcher when asked.
 
 <p align="center">
-  <img src="assets/specs_dimos_registrationwizard.gif" alt="Setup wizard on Spectacles: connect, capture observations, finish setup" width="480" />
+  <img src="assets/specs_dimos_setupwizard.gif" alt="Setup wizard on Spectacles: connect, capture observations, finish setup" width="480" />
 </p>
 
 Leave the robot standing still and walk around it while looking at the tag. ARModule sends `localization_observations_request`; the Lens captures frames and replies with `localization_observations`; a successful `localization_result` sets the tracking origin. Keep viewing distance about <b>0.5 - 1.5 meters</b>.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the Dimensional OS AR Bridge web UI (localhost).
+# Launch the Dimensional OS ARModule web UI (localhost).
 #
 # Usage:
 #   ./launcher/scripts/start-launcher.sh   # from repo root
@@ -38,7 +38,7 @@ fi
 "${VENV_PYTHON}" -m pip install --upgrade pip >/dev/null
 "${VENV_PYTHON}" -m pip install -r "${LAUNCHER_DIR}/requirements.txt"
 
-echo "Starting AR Bridge launcher at ${URL}"
+echo "Starting ARModule launcher at ${URL}"
 echo "Leave this window open. Press Ctrl+C to stop."
 cd "${LAUNCHER_DIR}"
 

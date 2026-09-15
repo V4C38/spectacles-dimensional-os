@@ -31,7 +31,7 @@ jobs:
         run: mypy dimos/ar
 
       - name: Pytest (unit tests without robot hardware)
-        run: pytest -m "not integration"
+        run: pytest
 
   launcher:
     runs-on: ubuntu-latest

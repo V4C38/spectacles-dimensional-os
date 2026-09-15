@@ -3,8 +3,6 @@ import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSe
 import type { Capabilities, Hello } from "@dimos-ar-client/websocket/protocolTypes";
 import {
   FLASH_DURATION_S,
-  isLiveNavGoal,
-  isNavGoalCancelVisible,
   shouldBeginFailedFlash,
   WebXRNavigationController,
 } from "../src/navigation/WebXRNavigationController";
@@ -53,25 +51,6 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
 }
 
 describe("WebXRNavigationController", () => {
-  it("derives live-goal and cancel visibility", () => {
-    expect(isLiveNavGoal({ activated: false, hasSentGoal: false, hasReceivedPose: false, followingPath: false })).toBe(
-      false,
-    );
-    expect(isLiveNavGoal({ activated: true, hasSentGoal: false, hasReceivedPose: false, followingPath: false })).toBe(
-      true,
-    );
-    expect(
-      isNavGoalCancelVisible({
-        flashing: true,
-        dragging: false,
-        activated: true,
-        hasSentGoal: true,
-        hasReceivedPose: false,
-        followingPath: false,
-      }),
-    ).toBe(false);
-  });
-
   it("starts a failed flash from nav facts and hides the route", () => {
     expect(
       shouldBeginFailedFlash({ state: "following_path", outcome: null }, { state: "resolved", outcome: "failed" }, true),

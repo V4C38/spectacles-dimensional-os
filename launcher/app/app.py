@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from apriltag_assets import ensure_pdf, ensure_png
-from bridge import ProcessManager
+from armodule import ProcessManager
 from config import env_path, merge_env, read_env, repo_root
 from tag_config import restore_tag_config, save_tag_config, tag_config_api_payload
 
@@ -45,12 +45,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             except asyncio.CancelledError:
                 pass
         try:
-            await manager.stop_bridge()
+            await manager.stop_armodule()
         except Exception:
-            logger.exception("Bridge stop during launcher shutdown failed")
+            logger.exception("ARModule stop during launcher shutdown failed")
 
 
-app = FastAPI(title="DimOS AR Bridge", lifespan=lifespan)
+app = FastAPI(title="DimOS ARModule", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -144,11 +144,11 @@ async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
     return manager.snapshot()
 
 
-@app.post("/api/bridge/start", dependencies=[Depends(require_local_launcher)])
-async def api_bridge_start(body: StartBody) -> dict[str, Any]:
+@app.post("/api/armodule/start", dependencies=[Depends(require_local_launcher)])
+async def api_armodule_start(body: StartBody) -> dict[str, Any]:
     robot_ip = body.robot_ip.strip() if body.robot_ip and body.robot_ip.strip() else None
     try:
-        await manager.start_bridge(
+        await manager.start_armodule(
             stack=body.stack,
             robot_ip=robot_ip,
         )
@@ -159,9 +159,9 @@ async def api_bridge_start(body: StartBody) -> dict[str, Any]:
     return manager.snapshot()
 
 
-@app.post("/api/bridge/stop", dependencies=[Depends(require_local_launcher)])
-async def api_bridge_stop() -> dict[str, Any]:
-    await manager.stop_bridge()
+@app.post("/api/armodule/stop", dependencies=[Depends(require_local_launcher)])
+async def api_armodule_stop() -> dict[str, Any]:
+    await manager.stop_armodule()
     return manager.snapshot()
 
 
@@ -174,7 +174,7 @@ async def api_tag_config_get() -> dict[str, Any]:
 async def api_tag_config_put(body: TagConfigBody) -> dict[str, Any]:
     phase = manager.status.phase.value
     if phase in ("starting", "running", "stopping"):
-        raise HTTPException(status_code=409, detail="stop the bridge before editing AprilTag config")
+        raise HTTPException(status_code=409, detail="stop ARModule before editing AprilTag config")
     try:
         return save_tag_config(
             {
@@ -190,7 +190,7 @@ async def api_tag_config_put(body: TagConfigBody) -> dict[str, Any]:
 async def api_tag_config_restore(body: RestoreTagConfigBody | None = None) -> dict[str, Any]:
     phase = manager.status.phase.value
     if phase in ("starting", "running", "stopping"):
-        raise HTTPException(status_code=409, detail="stop the bridge before editing AprilTag config")
+        raise HTTPException(status_code=409, detail="stop ARModule before editing AprilTag config")
     try:
         stack = body.stack if body is not None else None
         return restore_tag_config(stack=stack)

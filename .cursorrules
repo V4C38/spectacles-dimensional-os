@@ -73,8 +73,8 @@ The package publishes `dimos.ar*`. ClientCore production source is
 
 ## How we build dimos-ar
 
-`dimos-ar/` is a learning-first rebuild. Optimise for the human's
-comprehension, not for throughput.
+`dimos-ar/` is learning-first. Optimise for the human's comprehension, not for
+throughput.
 
 - **Subsystem groups.** Work proceeds in coherent groups (packaging, DimOS module,
   WebSocket layer, …). Within a group, finish one file at a time unless explicitly
@@ -110,7 +110,7 @@ comprehension, not for throughput.
 |------|------|
 | Whole project | `README.md` |
 | WebSocket message schema | `dimos-ar/PROTOCOL.md` |
-| Client rewrite (core + hosts) | `README.md` System Design + `CONTRIBUTING.md` |
+| Clients | `README.md` System Design + `CONTRIBUTING.md` |
 | Spectacles / Lens Studio | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Contributing | `CONTRIBUTING.md` |
 
@@ -132,8 +132,7 @@ the old draft to understand the new one.
 
 ## ARModule — systems design
 
-When working in `dimos-ar/`, follow these constraints (inherited from v1
-and still applicable):
+When working in `dimos-ar/`, follow these constraints:
 
 1. **One owner per concern** — each runtime concern has a single owning class; other
    code delegates rather than duplicating lifecycle or mutation logic.
@@ -177,7 +176,7 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic:
   - `clients/specs/Assets/Scripts/DimOSARClient/websocket/protocol.ts`
 - The ARModule worker must never block; WebSocket runs on a daemon thread.
 - Blueprints are `unitree_go2_ar` and `unitree_go2_ar_agentic` (`dimos-ar/dimos/ar/blueprints.py`).
-- Port **8787** is ARModule's WebSocket. Do not reuse the old Foxglove `8765` port.
+- Port **8787** is ARModule's WebSocket.
 - Tests for `dimos.ar` must run from the DimOS `.venv`.
 - For Lens Studio verification, do **not** run `CompileWithLogs` by default.
   Use normal compile checks first, and only run compile-with-logs when there is
@@ -209,9 +208,8 @@ or a normal terminal). Sandboxed runs fail when DimOS tries to write logs under
 ./launcher/scripts/start.sh              # ws://0.0.0.0:8787
 ./launcher/scripts/start-launcher.sh     # web UI wrapper (http://127.0.0.1:8790)
 
-# Tests (with blueprint running for integration)
+# Tests
 cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest
-cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/websocket/test_ws_integration.py -m integration
 cd clients/specs/Tests && npm test   # ClientCore + Specs presentation tests; CI job client-specs-tests
 cd clients/webxr && npm test         # WebXR host tests; CI job client-webxr-tests
 ```

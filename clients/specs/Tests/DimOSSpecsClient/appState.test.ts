@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  AppState,
-  agentModeAccessible,
   agentSpeechShouldRun,
   deriveRobotMarkerApplyInput,
   getRobotActivityState,
@@ -68,23 +66,6 @@ function helloView(): Hello {
     },
   };
 }
-
-describe("AppState", () => {
-  it("stores debug mode", () => {
-    const state = new AppState();
-    expect(state.debugModeEnabled).toBe(false);
-    state.setDebugMode(true);
-    expect(state.debugModeEnabled).toBe(true);
-  });
-
-  it("stores operating mode", () => {
-    const state = new AppState();
-    state.setOperatingMode("agent");
-    expect(state.operatingMode).toBe("agent");
-    state.setOperatingMode("manual");
-    expect(state.operatingMode).toBe("manual");
-  });
-});
 
 describe("deriveRobotMarkerApplyInput", () => {
   it("returns hidden before setup is completed", () => {
@@ -180,14 +161,6 @@ describe("robotTitleText", () => {
 });
 
 const VOICE_OFF = { asrRunning: false, ttsPlaying: false };
-
-describe("agentModeAccessible", () => {
-  it("unlocks agent when the capability is available or debug is on", () => {
-    expect(agentModeAccessible(true, false)).toBe(true);
-    expect(agentModeAccessible(false, true)).toBe(true);
-    expect(agentModeAccessible(false, false)).toBe(false);
-  });
-});
 
 describe("agentSpeechShouldRun", () => {
   it("runs live agent speech only when ready and capable", () => {

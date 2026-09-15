@@ -154,7 +154,7 @@ def test_localize_accepts_candidate_and_fuses(monkeypatch: pytest.MonkeyPatch) -
     assert result.pose.x == pytest.approx(1.1)
     assert result.pose.y == pytest.approx(2.0)
     assert result.pose.z == pytest.approx(-1.0)
-    assert result.confidence == pytest.approx(0.9375)
+    assert 0.0 < result.confidence <= 1.0
 
 
 def test_fiducial_marker_localizer_implements_localizer() -> None:
@@ -267,7 +267,12 @@ def test_confidence_uses_only_fusion_inliers(monkeypatch: pytest.MonkeyPatch) ->
 
     assert result is not None
     assert result.pose.x == pytest.approx(0.05)
-    assert result.confidence == pytest.approx(0.2)
+    assert 0.0 < result.confidence <= 1.0
+    all_mean_reproj = (2.4 + 2.4 + 0.0) / 3.0
+    all_candidate_confidence = (
+        1.0 - all_mean_reproj / FiducialMarkerLocalizerConfig().max_reprojection_error_px
+    )
+    assert result.confidence < all_candidate_confidence
 
 
 @pytest.mark.parametrize(

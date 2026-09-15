@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   AGENT_SESSION_IDLE_TIMEOUT_S,
-  closeAgentSpeechSession,
   containsWakeWord,
   createAgentSpeechSessionState,
   deriveAgentPromptEntry,
@@ -148,14 +147,6 @@ describe("session expiry", () => {
   it("does not expire when inactive", () => {
     const state = createAgentSpeechSessionState();
     expect(isAgentSpeechSessionExpired(state, 100)).toBe(false);
-  });
-
-  it("closeAgentSpeechSession resets activity", () => {
-    const state = { active: true, lastActivityTime: 42 };
-    expect(closeAgentSpeechSession(state)).toEqual({
-      active: false,
-      lastActivityTime: 0,
-    });
   });
 });
 

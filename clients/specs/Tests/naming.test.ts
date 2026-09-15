@@ -13,7 +13,6 @@ const FORBIDDEN: { name: string; pattern: RegExp }[] = [
   { name: "bridge", pattern: /bridge/i },
   { name: "SpectaclesHost", pattern: /SpectaclesHost/ },
   { name: "ar_go2", pattern: /ar_go2/ },
-  { name: "registration session", pattern: /registration session/i },
 ];
 
 function walkFiles(dir: string, acc: string[]): string[] {
@@ -41,8 +40,8 @@ function scan(path: string, contents: string): string[] {
   return hits;
 }
 
-describe("forbidden v19 terms", () => {
-  it("keeps scripts and Scene.scene free of bridge/SpectaclesHost/ar_go2/registration session", () => {
+describe("forbidden terms", () => {
+  it("keeps scripts and Scene.scene free of bridge/SpectaclesHost/ar_go2", () => {
     const files = [SCENE_PATH, ...walkFiles(SCRIPTS_DIR, [])];
     const violations: string[] = [];
     for (const file of files) {

@@ -2,8 +2,6 @@
 /**
  * UIKit — merged constants, primitives, scene-lookup helpers, and
  * SnapOS2 button/text factory helpers.
- *
- * Replaces UICore.ts + UIBuilders.ts (P4 merge).
  */
 // ================================================================
 
@@ -240,7 +238,7 @@ export function findButtonBinding(
   };
 }
 
-// ── Button helpers (from UIBuilders) ──────────────────────────
+// ── Button helpers ────────────────────────────────────────────
 
 type StyleableButton = any;
 

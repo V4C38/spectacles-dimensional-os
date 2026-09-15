@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  deriveRobotMarkerApplyInput,
-  getRobotActivityState,
-  robotTitleText,
-} from "../src/presentation/robotPresentation";
+import { deriveRobotMarkerApplyInput } from "../src/presentation/robotPresentation";
 import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
 import type { Capabilities } from "@dimos-ar-client/websocket/protocolTypes";
 import { WebXRRobotPresenter } from "../src/presentation/WebXRPresenters";
@@ -57,10 +53,6 @@ describe("robot presentation", () => {
     expect(deriveRobotMarkerApplyInput({ setupCompleted: true, view: view(), origin: null }).mode).toBe(
       "unlocalizedFallbackPosition",
     );
-    expect(getRobotActivityState(view({ nav: { state: "following_path", outcome: null } }))).toBe(
-      "Following Path",
-    );
-    expect(robotTitleText(view({ connection: "disconnected" }))).toContain("Disconnected");
     const robot = new WebXRRobotPresenter();
     const origin = {
       position: [0, 0, 0] as [number, number, number],

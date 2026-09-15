@@ -13,7 +13,6 @@ from dimos.ar.localization.vps.localizer import (
     VpsLocalizer,
     VpsLocalizerConfig,
     VpsQueryResult,
-    compose_map_client,
 )
 from dimos.msgs.geometry_msgs.Pose import Pose
 
@@ -65,17 +64,6 @@ class _FakeVpsClient:
         if not self.results:
             return None
         return self.results.pop(0)
-
-
-def test_compose_map_client_inverts_client_camera_chain() -> None:
-    T_map_camopt = np.eye(4)
-    T_map_camopt[0, 3] = 3.0
-    T_client_camopt = np.eye(4)
-    T_client_camopt[2, 3] = 1.0
-
-    composed = compose_map_client(T_map_camopt, T_client_camopt)
-
-    assert composed == pytest.approx(T_map_camopt @ np.linalg.inv(T_client_camopt))
 
 
 def test_localize_empty_observations_returns_none() -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from bridge import ProcessManager
+from armodule import ProcessManager
 
 
 def test_start_argv_discovers_when_no_robot_ip(tmp_path: Path) -> None:

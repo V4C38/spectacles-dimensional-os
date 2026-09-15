@@ -1,14 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  AGENT_PROMPT_PLACEHOLDER,
+  AGENT_RESPONSE_PLACEHOLDER,
   DEBUG_CONSOLE_SCROLL_LINE_COUNT,
   DEBUG_CONSOLE_TOTAL_LINE_COUNT,
   UILogger,
 } from "../../Assets/Scripts/DimOSSpecsClient/presentation/UILogger";
-import {
-  createAgentSpeechSessionState,
-  deriveAgentPromptEntry,
-} from "../../Assets/Scripts/DimOSSpecsClient/agent/AgentSpeechSession";
-import { classifyAgentResponseText } from "../../Assets/Scripts/DimOSSpecsClient/agent/AgentResponseClassification";
 
 interface MockText {
   text: string;
@@ -20,6 +17,20 @@ function createMockLines(): MockText[] {
     text: "",
     textFill: { color: { x: 0, y: 0, z: 0, w: 1 } },
   }));
+}
+
+function agentPromptLine(lines: MockText[]): MockText {
+  return lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT] ?? {
+    text: "",
+    textFill: { color: { x: 0, y: 0, z: 0, w: 1 } },
+  };
+}
+
+function agentResponseLine(lines: MockText[]): MockText {
+  return lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1] ?? {
+    text: "",
+    textFill: { color: { x: 0, y: 0, z: 0, w: 1 } },
+  };
 }
 
 describe("UILogger agent prompt/response feed", () => {
@@ -38,28 +49,19 @@ describe("UILogger agent prompt/response feed", () => {
     vi.useRealTimers();
   });
 
-  it("feeds line 7 from ASR via deriveAgentPromptEntry", () => {
-    const session = createAgentSpeechSessionState();
-    const prompt = deriveAgentPromptEntry(session, "hello there");
-    expect(prompt).toEqual({ text: "hello there", valid: false });
-    logger.setAgentPrompt(prompt);
-    expect(lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT]?.text).toBe(
-      "[12:00:00] User ASR: hello there",
-    );
-    expect(lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT]?.textFill.color).toEqual({
+  it("renders an invalid ASR prompt in yellow and a valid one in green", () => {
+    logger.setAgentPrompt({ text: "hello there", valid: false });
+    expect(agentPromptLine(lines).text).toContain("hello there");
+    expect(agentPromptLine(lines).textFill.color).toEqual({
       x: 1,
       y: 0.85,
       z: 0,
       w: 1,
     });
 
-    const wake = deriveAgentPromptEntry(session, "agent go forward");
-    expect(wake).toEqual({ text: "agent go forward", valid: true });
-    logger.setAgentPrompt(wake);
-    expect(lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT]?.text).toBe(
-      "[12:00:00] User ASR: agent go forward",
-    );
-    expect(lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT]?.textFill.color).toEqual({
+    logger.setAgentPrompt({ text: "agent go forward", valid: true });
+    expect(agentPromptLine(lines).text).toContain("agent go forward");
+    expect(agentPromptLine(lines).textFill.color).toEqual({
       x: 0,
       y: 1,
       z: 0,
@@ -67,17 +69,15 @@ describe("UILogger agent prompt/response feed", () => {
     });
   });
 
-  it("feeds line 8 from agent text, idle, and classification", () => {
+  it("renders busy agent text in yellow and idle text in white", () => {
     const text = "On my way";
     logger.setAgentResponse({
       text,
       state: "busy",
-      severity: classifyAgentResponseText(text),
+      severity: "ok",
     });
-    expect(lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1]?.text).toBe(
-      "[12:00:00] Agent response: On my way",
-    );
-    expect(lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1]?.textFill.color).toEqual({
+    expect(agentResponseLine(lines).text).toContain(text);
+    expect(agentResponseLine(lines).textFill.color).toEqual({
       x: 1,
       y: 0.85,
       z: 0,
@@ -87,9 +87,9 @@ describe("UILogger agent prompt/response feed", () => {
     logger.setAgentResponse({
       text,
       state: "idle",
-      severity: classifyAgentResponseText(text),
+      severity: "ok",
     });
-    expect(lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1]?.textFill.color).toEqual({
+    expect(agentResponseLine(lines).textFill.color).toEqual({
       x: 1,
       y: 1,
       z: 1,
@@ -97,7 +97,7 @@ describe("UILogger agent prompt/response feed", () => {
     });
   });
 
-  it("clears both reserved lines on leave-agent-mode", () => {
+  it("restores placeholders when agent mode is left", () => {
     logger.setAgentPrompt({ text: "robot", valid: true });
     logger.setAgentResponse({
       text: "On my way",
@@ -106,22 +106,18 @@ describe("UILogger agent prompt/response feed", () => {
     });
     logger.setAgentPrompt(null);
     logger.setAgentResponse(null);
-    expect(lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT]?.text).toBe("[12:00:00] User ASR: ...");
-    expect(lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1]?.text).toBe(
-      "[12:00:00] Agent response: ...",
-    );
+    expect(agentPromptLine(lines).text).toContain(AGENT_PROMPT_PLACEHOLDER);
+    expect(agentResponseLine(lines).text).toContain(AGENT_RESPONSE_PLACEHOLDER);
   });
 
-  it("feeds ASR send failures as error responses", () => {
+  it("renders send failures as error responses", () => {
     logger.setAgentResponse({
       text: "command not sent (not ready)",
       state: "idle",
       severity: "error",
     });
-    expect(lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1]?.text).toBe(
-      "[12:00:00] Agent response: command not sent (not ready)",
-    );
-    expect(lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1]?.textFill.color).toEqual({
+    expect(agentResponseLine(lines).text).toContain("command not sent (not ready)");
+    expect(agentResponseLine(lines).textFill.color).toEqual({
       x: 1,
       y: 0,
       z: 0,

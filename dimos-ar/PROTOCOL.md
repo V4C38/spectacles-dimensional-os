@@ -5,122 +5,29 @@ Cross-platform contract between `ARModule` and any AR client.
 Keep this document and `dimos/ar/websocket/protocol.py` in sync. Implementing
 clients update their protocol module in the same change.
 
-## Changelog
+## Conventions
 
-### v2 — user_message_request / agent_message
-
-- **`user_message_request`** — client → ARModule `{ text }`. Client command
-  (`*_request`). Replaces inbound `human_input_request`. Non-blank, max 4000
-  characters. No audio. Gated on `hello.capabilities.agent`. ARModule publishes
-  DimOS `human_input: Out[str]`.
-- **`agent_message`** — ARModule → clients `{ text }` assistant-only, non-blank.
-  Replaces outbound `agent`. Do not apply the inbound 4000-character cap.
-- **`agent_skill`** — unchanged. Skill invocation, not a chat turn.
-
-### v2 — nav_goal_request / nav_joystick_request and nested navigation capabilities
-
-- **19 message types** — 9 outbound, 10 inbound.
-- **`nav_goal_request`** — client → ARModule `{ position, orientation }`. Client
-  command (`*_request`). Overlay telemetry stays the bare noun `nav_goal`.
-  ARModule publishes DimOS `goal_request`.
-- **`nav_joystick_request`** — client → ARModule `{ linear, angular, duration? }`.
-  Client command (`*_request`), same naming as `nav_goal_request`. `linear` and
-  `angular` are metres per second and radians per second. Go2 direct drive uses
-  `linear.x`, `linear.y`, and `angular.z`; nonzero `linear.z`, `angular.x`, or
-  `angular.y` is rejected. Optional `duration` is a one-shot hold in seconds
-  (`0 < duration <= 2.0`); omit or send `0` to publish once. Boolean and
-  non-finite values are rejected. Not odom-scale-corrected. ARModule publishes
-  DimOS `tele_cmd_vel`; `MovementManager` muxes with `nav_cmd_vel`.
-- **`human_input_request`** — client → ARModule `{ text }`. Superseded by
-  `user_message_request` above. ARModule publishes DimOS `human_input: Out[str]`.
-- **`hello.capabilities.navigation`** — parent `{ available, reason }` is true
-  when **any** nested input is available. Nested keys `nav_goal` and
-  `nav_joystick` are always present with the same `{ available, reason }`
-  shape. Point-and-click and `nav_goal_request` gate on `nav_goal`;
-  `nav_joystick_request` gates on `nav_joystick`. Parent `available` is not a
-  substitute for `nav_goal`.
-
-### v2 — client pose and named AR markers
-
-- **18 message types** — 9 outbound, 9 inbound. Superseded by the
-  nav_joystick_request count above.
-- **`client_pose`** — client → ARModule `{ position, orientation, ts }`. Same
-  odom fields as outbound robot `pose`. Inbound `ts` is Lens `getTime()`
-  (seconds since start) and is metadata only. Freshness is server receive
-  time (`now - received_at` > 2 s is stale). Latest-wins; do not queue.
-- **`ar_place_marker` / `ar_remove_marker`** — `agent_skill` names. Place
-  requires `{ id, x, y, z }` and optional `title`. Remove requires `{ id }`.
-  `id` is the handle (required, non-blank, max 64). Same `id` upserts.
-
-### v2 — agent messages
-
-- **17 message types** — 9 outbound, 8 inbound. Superseded by the client-pose
-  count above.
-- **`human_input`** — client → ARModule `{ text }`. DimOS stream name (no
-  `_request` suffix), same documented exception style as
-  `localization_observations`. Non-blank, max 4000 characters. No audio.
-- **`agent`** — ARModule → clients `{ text }` assistant-only, non-blank.
-  Superseded by `agent_message` above.
-- **`agent_skill`** — ARModule → clients `{ name, args }`. `args` is an opaque
-  JSON object. Unknown `name` values are ignored on the host.
-- **`hello.capabilities.agent`** — `available=true` when the running blueprint
-  configured `ARModule` with a DimOS agent. Otherwise `available=false` with
-  reason `current blueprint has no DimOS agent`.
-- **`state.agent.idle`** — always present. `true` when the capability is
-  unavailable, before the first `agent_idle` publication, or when `McpClient`
-  reports idle. Conversation is process-global (broadcast).
-
-### v2 — ARModule-owned localization
-
-- **14 message types** — 7 outbound, 7 inbound. Superseded by the agent-message
-  count above.
-- **Server-to-client `*_request` is allowed** when ARModule needs the client to act.
-  `localization_observations_request` is that exception. Other client commands
-  still use `*_request`; other server replies still use the bare noun.
-- **`localization_observations_request`** — ARModule → one client. Fields:
-  `capture_policy` (`robot_los_required` | `robot_los_preferred` | `any_angle`),
-  `observation_count`, and `wait_timeout_s` when the policy is `robot_los_preferred`.
-  No provider names on the wire.
-- **`localization_start_request`** — client → ARModule JSON with no camera payload.
-  A client asks for an episode with it; no frame is sent when localization fails,
-  so this is also how a client retries.
-- **`localization_observations`** — renamed from `localization_request`. Same
-  binary layout; FourCC remains `"LOCA"`.
-- **`localization_result`** — renamed from `localization`. Sent only after a
-  successful capture episode. Never unsolicited.
-- **`state.alignment` removed.** `localization_observations_request` is the only
-  prompt to capture.
-- **`hello.capabilities`** — keys `lidar`, `navigation`, `localization`, `estop`,
-  `agent`. Any key may be `available=false` with `reason`. `localization` is
-  false when no provider is configured; `lidar` / `navigation` / `estop` follow
-  the selected robot profile; `agent` follows the running blueprint.
-- **`ts_capture`** — exposure time on `localization_observations` (was `capture_ts`).
-  Same clock family as `ts_client` / `ts_server` / `ts_odom`.
-
-### v1 — minimal alignment protocol
-
-Fresh protocol for the v2 rebuild. Not compatible with v19, and not compatible
-with any earlier draft of this document.
-
-- **Wire frame:** **`odom`** — the robot's drifting leg-odometry frame, in
+- **19 message types** — 9 outbound, 10 inbound. Inventory is below.
+- **Wire frame is `odom`** — the robot's drifting leg-odometry frame, in
   DimOS's right-handed Z-up axes. ARModule performs **no axis conversion**. Each
   client converts on receipt; clients do not share one scene convention.
-- **12 message types** — 6 outbound, 6 inbound. Superseded by v2 above.
-- **No `robot_id` echo** on inbound messages. One ARModule process serves one
-  robot, declared once in `hello`.
-- **No registration session.** Alignment is a capture episode, not a continuous
-  solver.
-- **Merged status.** `state` replaces `runtime_snapshot`, `bridge_status` and
-  `nav_status`.
+- **One robot per process.** Declared once in `hello`. Inbound messages do not
+  echo a robot id.
+- **Capture episodes.** ARModule sends `localization_observations_request`; a
+  successful episode yields `localization_result`. Never unsolicited.
 - **Clock sync in `hello`.** Client sends `hello_request` with `ts_client`;
-  server replies with `hello` including echoed `ts_client` and paired `ts_server`
-  (when the request arrived). ARModule stores the offset per connection and
-  converts inbound `ts_capture` from client time to server time. WebSocket
-  Ping/Pong (RFC 6455) remains for liveness only.
-- **Request/result naming.** Client commands use `*_request`; server replies and
-  telemetry use the bare noun (`state`, `nav_goal`, `localization_result`, …).
-  `hello` is the handshake reply. See v2 for the `localization_observations_request`
-  exception.
+  server replies with echoed `ts_client` and paired `ts_server` (when the
+  request arrived). ARModule stores the offset per connection and converts
+  inbound `ts_capture` from client time to server time. WebSocket Ping/Pong
+  (RFC 6455) is for liveness only.
+- **Naming.** Client commands use `*_request`; server replies and telemetry use
+  the bare noun (`state`, `nav_goal`, `localization_result`, …). `hello` is the
+  handshake reply. Server-to-client `*_request` is allowed when ARModule needs
+  the client to act: `localization_observations_request` is that exception.
+  Binary payloads use a bare noun (`localization_observations`, `lidar`).
+- **`hello.capabilities`** — keys `lidar`, `navigation`, `localization`,
+  `estop`, `agent`. Any key may be `available=false` with `reason`. Nested
+  `navigation.nav_goal` and `navigation.nav_joystick` are always present.
 
 ## Transport
 
@@ -748,10 +655,8 @@ losing the headset cannot leave the robot walking.
 | `max_height_m` | float | Required. Upper bound of the height band. |
 | `max_range_m` | float | Required. Horizontal radius around the robot to keep. |
 
-There is no mode enum. v19 offered `"off"`, `"full"` and `"obstacles"`, but
-`"obstacles"` was not a mode — it was a preset of the same filter parameters the
-other modes also accept. One boolean plus the parameters expresses all three
-states without an enum whose values overlap.
+There is no mode enum on the wire. Off / obstacles / full are client presets of
+the same four fields.
 
 All four fields are required on every `lidar_settings_request`. A non-finite or inverted band
 (`min_height_m` above `max_height_m`) is an error and is rejected, not silently
@@ -847,34 +752,3 @@ DimOS planner). `nav_joystick_request` takes effect through DimOS
 a broadcast `state` update. `user_message_request` takes effect through outbound `agent_message`
 and `state.agent.idle`. `client_pose` is unsolicited inbound telemetry for
 `ar_get_client_pose`. `pose` and `lidar` are unsolicited outbound telemetry.
-
-## Dropped from v19
-
-Not carried into v1:
-
-- Registration session messages — `registration_command`, `registration_status`,
-  `registration_pose`, `capture_policy`, `camera_frame_ack`. Capture uses
-  `localization_observations_request` / `localization_observations` instead.
-  Wire field `capture_policy` on that request is the v2 `CapturePolicy` enum,
-  not v19's `capture_policy` message.
-- `world_frame_correction`. A `localization_result` after a new capture says
-  the same thing; ARModule does not push unsolicited updates.
-- Separate `runtime_snapshot`, `bridge_status` and `nav_status`, merged into
-  `state`.
-- Agent messages — `user_command`, `agent_response`, `ar_skill` and the rest.
-  Replaced by `user_message_request`, `agent_message`, and `agent_skill`.
-- Inbound `robot_id` echo.
-- JSON `lidar`. Binary only.
-- `cancel_nav_goal`. Use `estop_request`.
-- The `active` flag on `emergency_stop`, and the `"off"` / `"full"` /
-  `"obstacles"` mode enum on `set_lidar_mode`.
-- v19 `ping` and `pong`. Clock offset now rides in the `hello_request` /
-  `hello` handshake; WebSocket Ping/Pong remains for liveness.
-- Every scale field — `scale_confidence`, `scale_locked`, `scale_observable`.
-  Scale is a fixed robot constant applied on ARModule and is not a client
-  concern.
-- Robot fiducial marker profile. Marker IDs and print sizes matter when generating a marker sheet, which
-  is a launcher concern, not something a running client needs.
-
-A client speaking a prior protocol is not compatible and needs its protocol
-module rewritten.

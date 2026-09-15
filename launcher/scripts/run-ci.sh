@@ -59,7 +59,7 @@ run_dimos_ar_job() {
 
   ruff check .
   mypy dimos/ar
-  pytest -m "not integration"
+  pytest
 }
 
 run_launcher_job() {

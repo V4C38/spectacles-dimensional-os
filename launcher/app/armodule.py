@@ -26,13 +26,13 @@ from config import (
 )
 from tag_config import mounts_env_json
 
-BRIDGE_PORT = 8787
+ARMODULE_PORT = 8787
 LOG_BUFFER_SIZE = 500
 SUBSCRIBER_QUEUE_SIZE = 2000
 STOP_GRACE_SECONDS = 8.0
 
 _RE_ANSI = re.compile(r"\x1b\[[0-9;]*m")
-_RE_BRIDGE_READY = re.compile(r"Bridge ready\s+[—\-]\s+(ws://\S+)", re.IGNORECASE)
+_RE_ARMODULE_READY = re.compile(r"ARModule ready\s+[—\-]\s+(ws://\S+)", re.IGNORECASE)
 _RE_WEBSOCKET_BANNER = re.compile(r"WebSocket:\s+(ws://\S+)", re.IGNORECASE)
 _RE_WEBSOCKET_STARTED = re.compile(r"websocket=(ws://\S+)", re.IGNORECASE)
 _RE_SPECTACLES = re.compile(r"Spectacles:\s+enter\s+(\S+)", re.IGNORECASE)
@@ -60,7 +60,7 @@ class Phase(str, Enum):
 
 
 @dataclass
-class BridgeStatus:
+class LauncherStatus:
     phase: Phase = Phase.IDLE
     check_ok: bool | None = None
     ready_go2: bool | None = None
@@ -86,7 +86,7 @@ class ProcessManager:
         self.root = root or repo_root()
         migrate_legacy_env(self.root)
         self.scripts = scripts_dir(self.root)
-        self.status = BridgeStatus()
+        self.status = LauncherStatus()
         self._log: deque[str] = deque(maxlen=LOG_BUFFER_SIZE)
         self._subs: list[_Subscriber] = []
         self._proc: asyncio.subprocess.Process | None = None
@@ -161,7 +161,7 @@ class ProcessManager:
             setattr(self.status, key, value)
         self._emit({"type": "status", **self.snapshot()})
 
-    def _parse_bridge_line(self, line: str) -> None:
+    def _parse_armodule_line(self, line: str) -> None:
         # Banner patterns only match during startup; skip once resolved.
         if (
             self.status.phase == Phase.RUNNING
@@ -171,7 +171,7 @@ class ProcessManager:
         ):
             return
         plain = _strip_ansi(line)
-        if m := _RE_BRIDGE_READY.search(plain):
+        if m := _RE_ARMODULE_READY.search(plain):
             self._set_status(websocket_url=m.group(1), phase=Phase.RUNNING, error=None)
             return
         if m := _RE_WEBSOCKET_BANNER.search(plain):
@@ -188,12 +188,12 @@ class ProcessManager:
             self._set_status(robot_ip=m.group(1))
             return
 
-    def port_in_use(self, port: int = BRIDGE_PORT) -> bool:
+    def port_in_use(self, port: int = ARMODULE_PORT) -> bool:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.settimeout(0.3)
             return sock.connect_ex(("127.0.0.1", port)) == 0
 
-    async def _pids_listening(self, port: int = BRIDGE_PORT) -> list[int]:
+    async def _pids_listening(self, port: int = ARMODULE_PORT) -> list[int]:
         """Return PIDs with a TCP LISTEN socket on ``port`` (via lsof)."""
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -229,13 +229,13 @@ class ProcessManager:
             except (ProcessLookupError, PermissionError, OSError):
                 pass
 
-    async def _kill_port_listeners(self, port: int = BRIDGE_PORT) -> bool:
+    async def _kill_port_listeners(self, port: int = ARMODULE_PORT) -> bool:
         """Kill any process listening on ``port``. Returns True if something was targeted."""
         pids = await self._pids_listening(port)
         if not pids:
             return False
         self._append_log(
-            f"Stopping other bridge process(es) on port {port}: "
+            f"Stopping other ARModule process(es) on port {port}: "
             + ", ".join(str(p) for p in pids)
         )
         for pid in pids:
@@ -465,10 +465,10 @@ class ProcessManager:
         if await proc.wait() != 0:
             raise RuntimeError(
                 "System configuration was cancelled or failed. "
-                "Approve the administrator prompt to start the bridge."
+                "Approve the administrator prompt to start ARModule."
             )
 
-    async def start_bridge(
+    async def start_armodule(
         self,
         *,
         stack: str,
@@ -476,10 +476,10 @@ class ProcessManager:
     ) -> None:
         async with self._lock:
             if self._proc is not None:
-                raise RuntimeError("bridge is already running")
+                raise RuntimeError("ARModule is already running")
             if self.port_in_use():
                 raise RuntimeError(
-                    f"port {BRIDGE_PORT} is already in use — stop the other bridge first"
+                    f"port {ARMODULE_PORT} is already in use — stop the other ARModule first"
                 )
             if stack == "g1" and self.status.ready_g1 is False:
                 raise RuntimeError(
@@ -527,15 +527,15 @@ class ProcessManager:
                 error=None,
             )
             self._append_log(f"$ {' '.join(argv)}")
-            await self._spawn(argv, env=env, parse_bridge=True)
+            await self._spawn(argv, env=env, parse_armodule=True)
 
-    async def stop_bridge(self) -> None:
+    async def stop_armodule(self) -> None:
         async with self._lock:
             proc = self._proc
             stopped_managed = False
             if proc is not None and proc.returncode is None:
                 self._set_status(phase=Phase.STOPPING)
-                self._append_log("Stopping bridge (SIGINT)…")
+                self._append_log("Stopping ARModule (SIGINT)…")
                 try:
                     os.killpg(proc.pid, signal.SIGINT)
                 except ProcessLookupError:
@@ -544,7 +544,7 @@ class ProcessManager:
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=STOP_GRACE_SECONDS)
                 except asyncio.TimeoutError:
-                    self._append_log("Bridge did not stop in time — sending SIGKILL")
+                    self._append_log("ARModule did not stop in time — sending SIGKILL")
                     try:
                         os.killpg(proc.pid, signal.SIGKILL)
                     except ProcessLookupError:
@@ -561,12 +561,12 @@ class ProcessManager:
                     pass
             self._reader_task = None
 
-            # Also free port 8787 when idle Stop is used against an external bridge.
-            freed_port = await self._kill_port_listeners(BRIDGE_PORT)
+            # Also free port 8787 when idle Stop is used against an external ARModule.
+            freed_port = await self._kill_port_listeners(ARMODULE_PORT)
             if stopped_managed:
-                self._append_log("Bridge stopped.")
+                self._append_log("ARModule stopped.")
             elif not freed_port:
-                self._append_log(f"No bridge process on port {BRIDGE_PORT}.")
+                self._append_log(f"No ARModule process on port {ARMODULE_PORT}.")
 
             if (
                 stopped_managed
@@ -583,7 +583,7 @@ class ProcessManager:
         argv: list[str],
         *,
         env: dict[str, str],
-        parse_bridge: bool,
+        parse_armodule: bool,
     ) -> None:
         self._proc = await asyncio.create_subprocess_exec(
             *argv,
@@ -594,7 +594,7 @@ class ProcessManager:
             start_new_session=True,
         )
         self._reader_task = asyncio.create_task(
-            self._read_stream(self._proc, parse_bridge=parse_bridge)
+            self._read_stream(self._proc, parse_armodule=parse_armodule)
         )
 
     async def _run_tracked(
@@ -631,7 +631,7 @@ class ProcessManager:
         self,
         proc: asyncio.subprocess.Process,
         *,
-        parse_bridge: bool,
+        parse_armodule: bool,
     ) -> None:
         assert proc.stdout is not None
         try:
@@ -641,8 +641,8 @@ class ProcessManager:
                     break
                 line = raw.decode("utf-8", errors="replace").rstrip("\n")
                 self._append_log(line)
-                if parse_bridge:
-                    self._parse_bridge_line(line)
+                if parse_armodule:
+                    self._parse_armodule_line(line)
         finally:
             code = await proc.wait()
             if self._proc is proc:

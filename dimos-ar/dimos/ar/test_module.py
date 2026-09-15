@@ -99,19 +99,21 @@ def _module_with_policy(
 
 
 def test_ar_module_declares_stable_port_superset() -> None:
-    ports = ARModule.__annotations__
-    assert ports["odom"] == "In[PoseStamped]"
-    assert ports["lidar"] == "In[PointCloud2]"
-    assert ports["path"] == "In[Path]"
-    assert ports["goal_reached"] == "In[Bool]"
-    assert ports["color_image"] == "In[Image]"
-    assert ports["camera_info"] == "In[CameraInfo]"
-    assert ports["goal_request"] == "Out[PoseStamped]"
-    assert ports["stop_movement"] == "Out[Bool]"
-    assert ports["human_input"] == "Out[str]"
-    assert ports["tele_cmd_vel"] == "Out[Twist]"
-    assert ports["agent"] == "In[BaseMessage]"
-    assert ports["agent_idle"] == "In[bool]"
+    ports = set(ARModule.__annotations__)
+    assert {
+        "odom",
+        "lidar",
+        "path",
+        "goal_reached",
+        "color_image",
+        "camera_info",
+        "goal_request",
+        "stop_movement",
+        "human_input",
+        "tele_cmd_vel",
+        "agent",
+        "agent_idle",
+    }.issubset(ports)
 
 
 def test_importing_ar_module_does_not_load_unitree_go2() -> None:

@@ -133,7 +133,7 @@ ensure_system_config() {
   if sudo "${helper}" --apply --state-dir "${state_dir}"; then
     export DIMOS_AR_SKIP_SYSCONFIG=1
   else
-    print_red_stderr "System configuration failed — the bridge may not start."
+    print_red_stderr "System configuration failed — ARModule may not start."
     print_red_stderr "You can retry, or apply manually: sudo ${helper} --apply"
     exit 1
   fi
@@ -153,7 +153,7 @@ export PATH="$(dirname "${PYTHON}"):${PATH}"
 # Suppress harmless macOS dylib duplicate-class warnings from cv2/av fork clash.
 export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
 
-# Detect LAN IP for the user (also passed to the bridge "Bridge ready" banner).
+# Detect LAN IP for the user (printed for the Spectacles setup wizard).
 LAN_IP="$(detect_lan_ip)"
 export DIMOS_AR_LAN_IP="${LAN_IP}"
 
@@ -311,7 +311,7 @@ elif [[ -z "${DIMOS_AR_SKIP_OPENAI_CHECK:-}" ]]; then
     print_green_stderr "OpenAI API: reachable"
   else
     print_red_stderr "OpenAI API: unreachable — voice commands will hang at \"Working: thinking...\""
-    echo "Check network/DNS (router parental controls, hotspot, VPN). Bridge will still start." >&2
+    echo "Check network/DNS (router parental controls, hotspot, VPN). ARModule will still start." >&2
   fi
 fi
 
@@ -322,7 +322,7 @@ if [[ -z "${ROBOT_IP:-}" ]]; then
   resolve_robot_ip
 fi
 
-# Map launcher "simulated" (and legacy "fake") to DimOS offline replay token.
+# Map launcher "simulated" (and alias "fake") to DimOS offline replay token.
 DISPLAY_ROBOT_IP="${ROBOT_IP}"
 case "${ROBOT_IP}" in
   simulated|fake)
@@ -347,7 +347,7 @@ echo ""
 
 # Lens may retry WebSocket connections before the AR server finishes booting.
 # A one-off Go2 :8081 /offer refusal usually means the robot-side runtime was
-# still coming up, not that the Lens-side ws://<host>:8787 bridge is misconfigured.
+# still coming up, not that the Lens-side ws://<host>:8787 session is misconfigured.
 
 exec "${PYTHON}" -c "
 import os

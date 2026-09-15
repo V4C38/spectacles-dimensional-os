@@ -1,4 +1,4 @@
-"""Bridge start includes DIMOS_AR_TAG_MOUNTS from persisted tag config."""
+"""ARModule start includes DIMOS_AR_TAG_MOUNTS from persisted tag config."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from bridge import ProcessManager
+from armodule import ProcessManager
 from tag_config import save_tag_config
 
 
 @pytest.mark.asyncio
-async def test_start_bridge_sets_tag_mounts_env(tmp_path: Path) -> None:
+async def test_start_armodule_sets_tag_mounts_env(tmp_path: Path) -> None:
     (tmp_path / "launcher" / "scripts").mkdir(parents=True)
     (tmp_path / "launcher" / "scripts" / "start.sh").write_text("#!/bin/sh\n", encoding="utf-8")
     (tmp_path / "launcher" / "scripts" / "configure-system.sh").write_text(
@@ -39,7 +39,7 @@ async def test_start_bridge_sets_tag_mounts_env(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
     captured: dict[str, str] = {}
 
-    async def fake_spawn(argv, *, env, parse_bridge):  # type: ignore[no-untyped-def]
+    async def fake_spawn(argv, *, env, parse_armodule):  # type: ignore[no-untyped-def]
         captured.update(env)
 
     with (
@@ -47,7 +47,7 @@ async def test_start_bridge_sets_tag_mounts_env(tmp_path: Path) -> None:
         patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
         patch.object(mgr, "_spawn", new=fake_spawn),
     ):
-        await mgr.start_bridge(stack="go2")
+        await mgr.start_armodule(stack="go2")
 
     assert "DIMOS_AR_TAG_MOUNTS" in captured
     mounts = json.loads(captured["DIMOS_AR_TAG_MOUNTS"])

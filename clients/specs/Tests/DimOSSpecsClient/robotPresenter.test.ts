@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  robotBelowMainUiLocalOffset,
   robotDeadzoneRadiusCm,
   robotFloorOffsetCm,
 } from "../../Assets/Scripts/DimOSSpecsClient/presentation/RobotPresenter";
@@ -24,14 +23,6 @@ describe("robotFloorOffsetCm", () => {
   it("offsets from pose to floor using base_height_m", () => {
     expectVec3(robotFloorOffsetCm(GO2), clientTrackingToSpecsPoint([0, 0, -0.33]));
     expectVec3(robotFloorOffsetCm(GO2), [0, -33, 0]);
-  });
-});
-
-describe("robotBelowMainUiLocalOffset", () => {
-  it("places the odom root below the authored frame", () => {
-    const offset = robotBelowMainUiLocalOffset();
-    expect(offset.y).toBe(-40);
-    expect(offset.z).toBeGreaterThan(0);
   });
 });
 

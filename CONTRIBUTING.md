@@ -43,10 +43,6 @@ transform, and navigation reads it. The floor marker is
 
 Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-object investigation and manipulation.
 
-v19 `ARBridgeCoordinator` / `ARBridgeServices` / `FrameCaptureController` stay
-disabled as reference until the group that takes each asset deletes it. Do not
-re-enable them or wire new code through them.
-
 ## Lens architecture
 
 **Scene entry**
@@ -110,9 +106,9 @@ The landing page **Select HMD** list is `HMD_OPTIONS`. Current options: Quest 3 
   `WristMenuController` interpolates toward the wrist root while
   `PalmGestureGate` debounces show/hide.
 - **Debug:** pose copy and capture status come from session and episode views
-  through `SpecsCoordinates`. No second basis and no `AppState.debugMode`.
+  through `SpecsCoordinates` (one `SPECS_BASIS`). `AppState.debugModeEnabled`
+  gates the debug overlay and agent-mode access when the agent capability is off.
 - **Restart setup:** the HUD offers a full wizard restart (`restartSetup()`).
-  There is no registration session to restart.
 
 ## Runtime camera capture
 
@@ -126,8 +122,9 @@ The portable port is `start` / async `capture` / `stop`.
 `LocalizationCaptureEpisode` awaits one in-flight capture and stops hardware on
 send, failure, reset, and disposal.
 
-Do not add ACK/`seq`, a standing `capture_policy` message, `camera_info`,
-`FrameCaptureController`, or a second capture state store.
+Do not add ACK/`seq`, a standing camera-policy message, a `camera_info` wire
+message, or a second capture state store. Capture policy is a field on
+`localization_observations_request`.
 
 WebXR's one camera owner is `HmdCameraSource`: same ClientCore ports, `getUserMedia`, and an accepted `HmdCalibrationProfile`.
 

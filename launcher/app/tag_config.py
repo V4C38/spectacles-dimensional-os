@@ -19,7 +19,7 @@ def black_size_m_from_print_mm(print_size_mm: float) -> float:
     return (float(print_size_mm) / 1000.0) * _BLACK_FRACTION
 
 
-# Keep defaults aligned with dimos-ar/dimos/ar/robot_profile/{go2,g1}.py
+# Keep Go2 defaults aligned with dimos-ar/dimos/ar/robot/profiles/unitree_go2.py
 DEFAULT_TAGS: dict[str, list[dict[str, Any]]] = {
     "go2": [
         {
@@ -104,7 +104,7 @@ def default_tag_ids(stack: str) -> frozenset[int]:
 
 
 def _ensure_profile_defaults(tags: list[dict[str, Any]], *, stack: str) -> list[dict[str, Any]]:
-    """Keep robot_profile default tag IDs present (cannot be deleted)."""
+    """Keep default tag IDs present (cannot be deleted)."""
     present = {int(t["tag_id"]) for t in tags}
     missing = [dict(t) for t in DEFAULT_TAGS[stack] if int(t["tag_id"]) not in present]
     if not missing:
@@ -195,7 +195,7 @@ def restore_tag_config(
     *,
     stack: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Reset to robot_profile defaults (one stack or both)."""
+    """Reset to default mounts (one stack or both)."""
     defaults = default_tag_config()
     if stack is None:
         return save_tag_config(defaults, root)

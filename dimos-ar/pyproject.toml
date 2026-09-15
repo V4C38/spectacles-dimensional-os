@@ -25,10 +25,7 @@ include = ["dimos.ar*"]
 testpaths = ["dimos/ar"]
 pythonpath = ["."]
 asyncio_mode = "auto"
-markers = [
-    "integration: live WebSocket check against a running ARModule",
-]
-addopts = "--import-mode=importlib -m 'not integration'"
+addopts = "--import-mode=importlib"
 
 [tool.ruff]
 line-length = 100

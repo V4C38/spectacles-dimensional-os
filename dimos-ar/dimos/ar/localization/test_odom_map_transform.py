@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from dimos.ar.localization.odom_map_transform import (
     OdomMapTransform,
     OdomMapTransformConfig,
-    compose_odom_from_map,
 )
 from dimos.ar.localization.types import LocalizedPose
 from dimos.msgs.geometry_msgs.Pose import Pose
@@ -23,17 +21,6 @@ def _relocalization_transform(*, frame_id: str = "odom") -> Transform:
         child_frame_id="map",
         ts=42.0,
     )
-
-
-def test_compose_odom_from_map_multiplies_transform_and_client() -> None:
-    T_odom_map = np.eye(4)
-    T_odom_map[0, 3] = 10.0
-    T_map_client = np.eye(4)
-    T_map_client[1, 3] = 2.0
-
-    composed = compose_odom_from_map(T_odom_map, T_map_client)
-
-    assert composed == pytest.approx(T_odom_map @ T_map_client)
 
 
 def test_update_from_vps_stores_inverse_of_map_odom_pose() -> None:

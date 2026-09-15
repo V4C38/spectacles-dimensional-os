@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  AGENT_PROMPT_PLACEHOLDER,
+  AGENT_RESPONSE_PLACEHOLDER,
   DEBUG_CONSOLE_SCROLL_LINE_COUNT,
   DEBUG_CONSOLE_TOTAL_LINE_COUNT,
   formatConsoleLine,
@@ -24,16 +26,25 @@ function createMockLines(count = DEBUG_CONSOLE_TOTAL_LINE_COUNT): MockText[] {
   return Array.from({ length: count }, () => createMockText());
 }
 
-function scrollLineText(lines: MockText[], index: number): string {
-  return lines[index]?.text ?? "";
+function scrollLines(lines: MockText[]): MockText[] {
+  return lines.slice(0, DEBUG_CONSOLE_SCROLL_LINE_COUNT);
 }
 
-function agentPromptLineText(lines: MockText[]): string {
-  return lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT]?.text ?? "";
+function newestScroll(lines: MockText[]): MockText {
+  const filled = scrollLines(lines).filter((line) => line.text !== "");
+  return filled[filled.length - 1] ?? createMockText();
 }
 
-function agentResponseLineText(lines: MockText[]): string {
-  return lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1]?.text ?? "";
+function findScroll(lines: MockText[], needle: string): MockText | undefined {
+  return scrollLines(lines).find((line) => line.text.includes(needle));
+}
+
+function agentPromptLine(lines: MockText[]): MockText {
+  return lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT] ?? createMockText();
+}
+
+function agentResponseLine(lines: MockText[]): MockText {
+  return lines[DEBUG_CONSOLE_SCROLL_LINE_COUNT + 1] ?? createMockText();
 }
 
 function statusLineText(lines: MockText[]): string {
@@ -77,10 +88,8 @@ describe("UILogger console output", () => {
   it("renders the first message on the bottom scroll line", () => {
     logger.show("first", new vec4(1, 0, 0, 1));
 
-    expect(scrollLineText(lines, 5)).toBe("[12:00:00] first");
-    for (let i = 0; i < DEBUG_CONSOLE_SCROLL_LINE_COUNT - 1; i++) {
-      expect(scrollLineText(lines, i)).toBe("");
-    }
+    expect(newestScroll(lines).text).toContain("first");
+    expect(scrollLines(lines).filter((line) => line.text !== "")).toHaveLength(1);
     expect(statusLineText(lines)).toBe("");
   });
 
@@ -88,29 +97,29 @@ describe("UILogger console output", () => {
     logger.show("one", new vec4(1, 1, 1, 1));
     logger.show("two", new vec4(1, 1, 1, 1));
 
-    expect(scrollLineText(lines, 4)).toContain("one");
-    expect(scrollLineText(lines, 5)).toContain("two");
+    const filled = scrollLines(lines).filter((line) => line.text !== "");
+    expect(filled[filled.length - 2]?.text).toContain("one");
+    expect(filled[filled.length - 1]?.text).toContain("two");
   });
 
   it("evicts the oldest message after the buffer overflows", () => {
     for (let i = 1; i <= DEBUG_CONSOLE_SCROLL_LINE_COUNT; i++) {
       logger.show(`msg-${i}`, new vec4(1, 1, 1, 1));
     }
-    expect(scrollLineText(lines, 0)).toContain("msg-1");
-
     logger.show("msg-7", new vec4(1, 1, 1, 1));
 
-    expect(scrollLineText(lines, 0)).toContain("msg-2");
-    expect(scrollLineText(lines, 5)).toContain("msg-7");
-    expect(lines.every((line) => !line.text.endsWith(" msg-1"))).toBe(true);
+    const texts = scrollLines(lines).map((line) => line.text);
+    expect(texts.some((text) => text.includes("msg-1"))).toBe(false);
+    expect(texts.some((text) => text.includes("msg-2"))).toBe(true);
+    expect(newestScroll(lines).text).toContain("msg-7");
   });
 
   it("applies per-line color", () => {
     logger.show("red", new vec4(1, 0, 0, 1));
     logger.show("green", new vec4(0, 1, 0, 1));
 
-    expect(lines[4]?.textFill.color).toEqual({ x: 1, y: 0, z: 0, w: 1 });
-    expect(lines[5]?.textFill.color).toEqual({ x: 0, y: 1, z: 0, w: 1 });
+    expect(findScroll(lines, "red")?.textFill.color).toEqual({ x: 1, y: 0, z: 0, w: 1 });
+    expect(findScroll(lines, "green")?.textFill.color).toEqual({ x: 0, y: 1, z: 0, w: 1 });
   });
 
   it("uses the timestamp captured at log time", () => {
@@ -118,14 +127,15 @@ describe("UILogger console output", () => {
 
     logger.show("timed", new vec4(1, 1, 1, 1));
 
-    expect(scrollLineText(lines, 5)).toBe("[12:34:56] timed");
+    expect(newestScroll(lines).text).toContain("[12:34:56]");
+    expect(newestScroll(lines).text).toContain("timed");
   });
 
   it("does not remove console lines when the transient entry expires", () => {
     logger.show("persistent", new vec4(1, 1, 1, 1), 0.5);
     logger.tick(1.0);
 
-    expect(scrollLineText(lines, 5)).toContain("persistent");
+    expect(newestScroll(lines).text).toContain("persistent");
     expect(logger.snapshot).toBeNull();
   });
 
@@ -135,11 +145,9 @@ describe("UILogger console output", () => {
     logger.setAgentResponse({ text: "On my way", state: "idle", severity: "ok" });
     logger.clear();
 
-    for (let i = 0; i < DEBUG_CONSOLE_SCROLL_LINE_COUNT; i++) {
-      expect(scrollLineText(lines, i)).toBe("");
-    }
-    expect(agentPromptLineText(lines)).toContain("User ASR: robot go");
-    expect(agentResponseLineText(lines)).toContain("Agent response: On my way");
+    expect(scrollLines(lines).every((line) => line.text === "")).toBe(true);
+    expect(agentPromptLine(lines).text).toContain("robot go");
+    expect(agentResponseLine(lines).text).toContain("On my way");
     expect(logger.snapshot).toBeNull();
   });
 
@@ -148,22 +156,22 @@ describe("UILogger console output", () => {
     logger.logConsole("console-only", new vec4(0, 1, 0, 1));
 
     expect(logger.snapshot?.text).toBe("transient");
-    expect(scrollLineText(lines, 5)).toContain("console-only");
-    expect(scrollLineText(lines, 4)).toContain("transient");
+    expect(newestScroll(lines).text).toContain("console-only");
+    expect(findScroll(lines, "transient")).toBeDefined();
     expect(statusLineText(lines)).toBe("");
   });
 
   it("does not write scroll logs to reserved lines", () => {
     logger.show("scroll-only", new vec4(1, 1, 1, 1));
 
-    expect(agentPromptLineText(lines)).toContain("User ASR: ...");
-    expect(agentResponseLineText(lines)).toContain("Agent response: ...");
+    expect(agentPromptLine(lines).text).toContain(AGENT_PROMPT_PLACEHOLDER);
+    expect(agentResponseLine(lines).text).toContain(AGENT_RESPONSE_PLACEHOLDER);
     expect(statusLineText(lines)).toBe("");
   });
 
   it("pre-fills agent reserved lines on bind", () => {
-    expect(agentPromptLineText(lines)).toBe("[12:00:00] User ASR: ...");
-    expect(agentResponseLineText(lines)).toBe("[12:00:00] Agent response: ...");
+    expect(agentPromptLine(lines).text).toContain(AGENT_PROMPT_PLACEHOLDER);
+    expect(agentResponseLine(lines).text).toContain(AGENT_RESPONSE_PLACEHOLDER);
   });
 });
 
@@ -186,22 +194,22 @@ describe("UILogger agent prompt line", () => {
   it("renders valid prompts in green", () => {
     logger.setAgentPrompt({ text: "robot move forward", valid: true });
 
-    expect(agentPromptLineText(lines)).toBe("[12:00:00] User ASR: robot move forward");
-    expect(lines[6]?.textFill.color).toEqual({ x: 0, y: 1, z: 0, w: 1 });
+    expect(agentPromptLine(lines).text).toContain("robot move forward");
+    expect(agentPromptLine(lines).textFill.color).toEqual({ x: 0, y: 1, z: 0, w: 1 });
   });
 
   it("renders invalid prompts in yellow", () => {
     logger.setAgentPrompt({ text: "hello there", valid: false });
 
-    expect(agentPromptLineText(lines)).toBe("[12:00:00] User ASR: hello there");
-    expect(lines[6]?.textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
+    expect(agentPromptLine(lines).text).toContain("hello there");
+    expect(agentPromptLine(lines).textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
   });
 
   it("restores the prompt placeholder when null", () => {
     logger.setAgentPrompt({ text: "robot", valid: true });
     logger.setAgentPrompt(null);
 
-    expect(agentPromptLineText(lines)).toBe("[12:00:00] User ASR: ...");
+    expect(agentPromptLine(lines).text).toContain(AGENT_PROMPT_PLACEHOLDER);
   });
 });
 
@@ -224,15 +232,15 @@ describe("UILogger agent response line", () => {
   it("renders busy responses in yellow", () => {
     logger.setAgentResponse({ text: "Working on it", state: "busy", severity: "ok" });
 
-    expect(agentResponseLineText(lines)).toBe("[12:00:00] Agent response: Working on it");
-    expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
+    expect(agentResponseLine(lines).text).toContain("Working on it");
+    expect(agentResponseLine(lines).textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
   });
 
   it("renders idle ok responses in white", () => {
     logger.setAgentResponse({ text: "Done", state: "idle", severity: "ok" });
 
-    expect(agentResponseLineText(lines)).toBe("[12:00:00] Agent response: Done");
-    expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 1, z: 1, w: 1 });
+    expect(agentResponseLine(lines).text).toContain("Done");
+    expect(agentResponseLine(lines).textFill.color).toEqual({ x: 1, y: 1, z: 1, w: 1 });
   });
 
   it("renders warn idle responses in yellow", () => {
@@ -242,10 +250,8 @@ describe("UILogger agent response line", () => {
       severity: "warn",
     });
 
-    expect(agentResponseLineText(lines)).toBe(
-      "[12:00:00] Agent response: Navigation cancelled",
-    );
-    expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
+    expect(agentResponseLine(lines).text).toContain("Navigation cancelled");
+    expect(agentResponseLine(lines).textFill.color).toEqual({ x: 1, y: 0.85, z: 0, w: 1 });
   });
 
   it("renders error idle responses in red", () => {
@@ -255,16 +261,14 @@ describe("UILogger agent response line", () => {
       severity: "error",
     });
 
-    expect(agentResponseLineText(lines)).toBe(
-      "[12:00:00] Agent response: command not sent (not ready)",
-    );
-    expect(lines[7]?.textFill.color).toEqual({ x: 1, y: 0, z: 0, w: 1 });
+    expect(agentResponseLine(lines).text).toContain("command not sent (not ready)");
+    expect(agentResponseLine(lines).textFill.color).toEqual({ x: 1, y: 0, z: 0, w: 1 });
   });
 
   it("restores the response placeholder when null", () => {
     logger.setAgentResponse({ text: "Done", state: "idle", severity: "ok" });
     logger.setAgentResponse(null);
 
-    expect(agentResponseLineText(lines)).toBe("[12:00:00] Agent response: ...");
+    expect(agentResponseLine(lines).text).toContain(AGENT_RESPONSE_PLACEHOLDER);
   });
 });

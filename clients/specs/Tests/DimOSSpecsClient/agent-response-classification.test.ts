@@ -15,10 +15,10 @@ describe("classifyAgentResponseText", () => {
     expect(classifyAgentResponseText("id is too long")).toBe("error");
   });
 
-  it("does not treat leftover v1 needles as errors", () => {
-    expect(classifyAgentResponseText("draw_world_annotation failed")).toBe("ok");
-    expect(classifyAgentResponseText("World frame is not committed")).toBe("ok");
-    expect(classifyAgentResponseText("place_marker")).toBe("ok");
+  it("does not treat unrelated phrases as errors", () => {
+    expect(classifyAgentResponseText("hello from the agent")).toBe("ok");
+    expect(classifyAgentResponseText("Walking to the kitchen")).toBe("ok");
+    expect(classifyAgentResponseText("ok")).toBe("ok");
   });
 
   it("classifies navigation cancelled as warn", () => {

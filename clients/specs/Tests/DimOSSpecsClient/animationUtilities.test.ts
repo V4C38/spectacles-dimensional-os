@@ -2,22 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   exponentialSmoothAlpha,
   interpolatePose,
-  isLatestAnimationVersion,
   lerpVec3,
   maybeAdvanceDragHeadingTarget,
-  nextAnimationVersion,
   slerpRotationToward,
   smoothScalar,
 } from "../../Assets/Scripts/DimOSSpecsClient/utilities/AnimationUtilities";
 
 describe("lerpVec3", () => {
-  it("interpolates at t=0 and t=1", () => {
-    const a = new vec3(0, 0, 0);
-    const b = new vec3(10, 20, 30);
-    expect(lerpVec3(a, b, 0)).toEqual(a);
-    expect(lerpVec3(a, b, 1)).toEqual(b);
-  });
-
   it("interpolates at midpoint", () => {
     const a = new vec3(0, 0, 0);
     const b = new vec3(10, 20, 30);
@@ -101,19 +92,5 @@ describe("interpolatePose", () => {
     const result = interpolatePose(pos, targetPos, rot, targetRot, 0, 10);
     expect(result.position).toEqual(targetPos);
     expect(result.rotation.w).toBeCloseTo(targetRot.w, 5);
-  });
-});
-
-describe("animation version tokens", () => {
-  it("increments and validates latest version", () => {
-    const store: { [key: string]: number } = {};
-    const key = "testVersion";
-    const v1 = nextAnimationVersion(store, key);
-    expect(v1).toBe(1);
-    expect(isLatestAnimationVersion(store, key, v1)).toBe(true);
-    const v2 = nextAnimationVersion(store, key);
-    expect(v2).toBe(2);
-    expect(isLatestAnimationVersion(store, key, v1)).toBe(false);
-    expect(isLatestAnimationVersion(store, key, v2)).toBe(true);
   });
 });

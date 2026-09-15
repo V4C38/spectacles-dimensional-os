@@ -827,17 +827,5 @@ describe("localization capture", () => {
     expect(capture.stopCount).toBe(1);
     expect(controller.view().phase).toBe("idle");
   });
-
-  it("capture() while stopped throws", () => {
-    const capture = new FakeCapture();
-    expect(() => {
-      void capture.capture();
-    }).toThrow(/while stopped/);
-    capture.start();
-    capture.stop();
-    expect(() => {
-      void capture.capture();
-    }).toThrow(/while stopped/);
-  });
 });
 
