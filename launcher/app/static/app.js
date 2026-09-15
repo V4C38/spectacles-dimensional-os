@@ -3,8 +3,12 @@
 
   const stateValue = $("stateValue");
   const stateDetail = $("stateDetail");
-  const arModuleIp = $("arModuleIp");
-  const arModuleIpSummary = $("arModuleIpSummary");
+  const hostIp = $("hostIp");
+  const hostIpSummary = $("hostIpSummary");
+  const webxrLocal = $("webxrLocal");
+  const webxrNetwork = $("webxrNetwork");
+  const webxrLocalRow = $("webxrLocalRow");
+  const webxrNetworkRow = $("webxrNetworkRow");
   const robotValue = $("robotValue");
   const warningText = $("warningText");
   const errorText = $("errorText");
@@ -12,16 +16,19 @@
   const actionsBar = $("actionsBar");
   const installBanner = $("installBanner");
   const installHint = $("installHint");
+  const dimosVersionHint = $("dimosVersionHint");
+  const depsSummary = $("depsSummary");
   const cloneDir = $("cloneDir");
   const dimosPython = $("dimosPython");
   const cloneDirField = $("cloneDirField");
   const dimosPythonField = $("dimosPythonField");
+  const dimosRefField = $("dimosRefField");
+  const dimosRef = $("dimosRef");
   const installBtn = $("installBtn");
   const startBtn = $("startBtn");
   const stopBtn = $("stopBtn");
   const robotIp = $("robotIp");
   const robotIpAuto = $("robotIpAuto");
-  const robotIpOverrideField = $("robotIpOverrideField");
   const apiKey = $("apiKey");
   const revealKey = $("revealKey");
   const logEl = $("log");
@@ -29,58 +36,58 @@
   const clearLogBtn = $("clearLogBtn");
   const sidePanel = $("sidePanel");
   const splitter = $("splitter");
-  const stackInfoList = $("stackInfoList");
   const tagList = $("tagList");
   const addTagBtn = $("addTagBtn");
   const restoreTagsBtn = $("restoreTagsBtn");
+  const fiducialEnabled = $("fiducialEnabled");
+  const vpsEnabled = $("vpsEnabled");
+  const mixedPolicyBox = $("mixedPolicyBox");
+  const blueprintSelect = $("blueprintSelect");
+  const blueprintInfo = $("blueprintInfo");
+  const agentConfig = $("agentConfig");
+  const locCard = $("locCard");
+  const locSummary = $("locSummary");
+  const agentSummary = $("agentSummary");
+  const logCard = $("logCard");
+  const logSummary = $("logSummary");
+  const logLevel = $("logLevel");
+  const fiducialPanel = $("fiducialPanel");
+  const vpsPanel = $("vpsPanel");
+  const vpsVendor = $("vpsVendor");
+  const mapCode = $("mapCode");
+  const multisetClientId = $("multisetClientId");
+  const multisetClientSecret = $("multisetClientSecret");
+  const revealMultiset = $("revealMultiset");
 
-  let stack = "go2";
+  let client = "specs";
+  let blueprint = "unitree_go2_ar";
   let phase = "idle";
-  let readyByStack = { go2: null, g1: null };
+  let checkOk = null;
   let lastStatus = {};
   let keyVisible = false;
+  let multisetVisible = false;
   const MAX_LOG_LINES = 5000;
   const logLines = [];
   const pendingLines = [];
   let frameHandle = null;
 
-  /** Populated from GET /api/tag-config (backend owns robot profile defaults). */
-  let defaultTagIds = { go2: new Set(), g1: new Set() };
-  let defaultTagConfig = { go2: [], g1: [] };
-  let tagConfig = { go2: [], g1: [] };
-  let tagConfigReady = false;
+  const DEFAULT_MOUNT = {
+    marker_id: 0,
+    print_size_mm: 70,
+    forward_m: 0.18,
+    lateral_m: 0.0,
+    up_m: 0.06,
+    yaw_deg: -90,
+    pitch_deg: -15,
+  };
+
+  let presetMarkerIds = [0, 1, 2];
+  let mounts = [{ ...DEFAULT_MOUNT }];
+  let settingsReady = false;
   let persistTimer = null;
   let configLocked = false;
 
-  const STACK_LABELS = {
-    go2: "Unitree Go2",
-    g1: "Unitree G1",
-  };
-
-  const STACK_INFO = {
-    go2: [
-      ["Nav", "Go2 smart stack"],
-      ["Blueprint", "unitree_go2_ar"],
-      ["Streams", "lidar · odom · path · costmap"],
-    ],
-    g1: [
-      ["Nav", "G1 nav-simple stack"],
-      ["Blueprint", "ar_g1"],
-      ["Streams", "lidar · odometry · path · costmap"],
-    ],
-  };
-
-  const INSTALL_HINTS = {
-    go2: "DimOS or dimos-ar is not installed for Go2. Install dependencies to continue.",
-    g1: "G1 needs DimOS native source (FastLio2 + RayTracingVoxelMap). Install G1 dependencies to continue.",
-  };
-
-  function stackReady(selected) {
-    return readyByStack[selected] === true;
-  }
-
   const FIELD_META = [
-    { field: "tag_id", label: "ID", step: 1, min: 0, max: 586 },
     { field: "print_size_mm", label: "Print size (mm)", step: 1, min: 20, max: 200 },
     { field: "forward_m", label: "Forward (m)", step: 0.01 },
     { field: "lateral_m", label: "Lateral (m)", step: 0.01 },
@@ -89,110 +96,185 @@
     { field: "pitch_deg", label: "Pitch (°)", step: 1 },
   ];
 
-  function renderInfoList(el, rows) {
-    el.replaceChildren(
-      ...rows.map(([label, value]) => {
-        const row = document.createElement("div");
-        row.className = "info-row";
-        const dt = document.createElement("dt");
-        dt.textContent = label;
-        const dd = document.createElement("dd");
-        dd.textContent = value;
-        row.append(dt, dd);
-        return row;
-      })
+  const BLUEPRINTS = {
+    unitree_go2_ar: {
+      info: "Unitree Go2 with ARModule\nManual Mode: place navigation goals from the headset.",
+    },
+    unitree_go2_ar_agentic: {
+      info: "Unitree Go2 with ARModule\nManual Mode: place navigation goals from the headset.\nAgent Mode: voice commands via LLM and MCP (API key required)",
+      agent: true,
+    },
+  };
+
+  const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"];
+
+  function applyBlueprintInfo() {
+    blueprint = blueprintSelect.value;
+    const spec = BLUEPRINTS[blueprint] || {};
+    blueprintInfo.textContent = spec.info || "";
+    agentConfig.classList.toggle("hidden", !spec.agent);
+    syncConfigCards();
+  }
+
+  function fiducialConfigured() {
+    return mounts.length > 0;
+  }
+
+  function vpsConfigured() {
+    return Boolean(
+      mapCode.value.trim() &&
+        multisetClientId.value.trim() &&
+        multisetClientSecret.value.trim()
     );
   }
 
-  function applyStackInfo(selected) {
-    renderInfoList(stackInfoList, STACK_INFO[selected] || STACK_INFO.go2);
+  function locNotSetup() {
+    const markerOn = fiducialEnabled.checked;
+    const vpsOn = vpsEnabled.checked;
+    if (!markerOn && !vpsOn) return true;
+    if (markerOn && !fiducialConfigured()) return true;
+    if (vpsOn && !vpsConfigured()) return true;
+    return false;
   }
 
-  function cloneTag(tag) {
+  function agentNotSetup() {
+    return Boolean(BLUEPRINTS[blueprint]?.agent) && !apiKey.value.trim();
+  }
+
+  function syncConfigCards() {
+    const locMissing = locNotSetup();
+    locCard.classList.toggle("needs-setup", locMissing);
+    locSummary.textContent = locMissing ? "incomplete" : "";
+    locSummary.dataset.phase = locMissing ? "needs_setup" : "";
+
+    const agentMissing = agentNotSetup();
+    agentConfig.classList.toggle("needs-setup", agentMissing);
+    agentSummary.textContent = agentMissing ? "incomplete" : "";
+    agentSummary.dataset.phase = agentMissing ? "needs_setup" : "";
+
+    logSummary.textContent = logLevel.value || "INFO";
+    logSummary.dataset.phase = "";
+    applyHeader(lastStatus);
+  }
+
+  function cloneMount(raw) {
+    const src = raw || DEFAULT_MOUNT;
     return {
-      tag_id: Number(tag.tag_id) || 0,
-      print_size_mm: Number(tag.print_size_mm) > 0 ? Number(tag.print_size_mm) : 70,
-      forward_m: Number(tag.forward_m) || 0,
-      lateral_m: Number(tag.lateral_m) || 0,
-      up_m: Number(tag.up_m) || 0,
-      yaw_deg: Number(tag.yaw_deg) || 0,
-      pitch_deg: Number(tag.pitch_deg) || 0,
+      marker_id: Number(src.marker_id) || 0,
+      print_size_mm: Number(src.print_size_mm) > 0 ? Number(src.print_size_mm) : 70,
+      forward_m: Number(src.forward_m) || 0,
+      lateral_m: Number(src.lateral_m) || 0,
+      up_m: Number(src.up_m) || 0,
+      yaw_deg: Number(src.yaw_deg) || 0,
+      pitch_deg: Number(src.pitch_deg) || 0,
     };
   }
 
   function schedulePersist() {
     if (configLocked) return;
     clearTimeout(persistTimer);
-    persistTimer = setTimeout(persistTagConfig, 400);
+    persistTimer = setTimeout(() => {
+      void saveSettings();
+    }, 400);
   }
 
-  async function persistTagConfig() {
+  function settingsBody() {
+    return {
+      openai_api_key: apiKey.value.trim() || null,
+      multiset_client_id: multisetClientId.value.trim() || null,
+      multiset_client_secret: multisetClientSecret.value.trim() || null,
+      fiducial_marker: fiducialEnabled.checked,
+      vps: vpsEnabled.checked,
+      vps_vendor: vpsVendor.value || "multiset",
+      map_code: mapCode.value.trim() || null,
+      mounts,
+      dimos_log_level: logLevel.value || "INFO",
+    };
+  }
+
+  async function saveSettings() {
     try {
-      const res = await fetch("/api/tag-config", {
+      const res = await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(tagConfig),
+        body: JSON.stringify(settingsBody()),
       });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        appendLog(`Tag config save failed: ${data.detail || res.statusText}`);
+        appendLog(`Settings save failed: ${data.detail || res.statusText}`);
+        return data;
       }
+      if (data.phase) applyStatus(data);
+      return data;
     } catch (err) {
-      appendLog(`Tag config save failed: ${err}`);
+      appendLog(`Settings save failed: ${err}`);
+      return {};
     }
   }
 
-  function isProtectedDefaultTag(tag) {
-    return defaultTagIds[stack]?.has(Number(tag.tag_id));
-  }
-
-  function applyTagConfigPayload(data) {
-    if (data.defaults) {
-      defaultTagConfig = {
-        go2: (data.defaults.go2 || []).map(cloneTag),
-        g1: (data.defaults.g1 || []).map(cloneTag),
-      };
+  function applySettingsPayload(data) {
+    if (data.defaults?.mounts?.[0]) {
+      Object.assign(DEFAULT_MOUNT, cloneMount(data.defaults.mounts[0]));
     }
-    if (data.default_tag_ids) {
-      defaultTagIds = {
-        go2: new Set(data.default_tag_ids.go2 || []),
-        g1: new Set(data.default_tag_ids.g1 || []),
-      };
-    } else {
-      defaultTagIds = {
-        go2: new Set(defaultTagConfig.go2.map((t) => t.tag_id)),
-        g1: new Set(defaultTagConfig.g1.map((t) => t.tag_id)),
-      };
+    if (Array.isArray(data.defaults?.preset_marker_ids) && data.defaults.preset_marker_ids.length) {
+      presetMarkerIds = data.defaults.preset_marker_ids.map(Number);
     }
-    tagConfig = {
-      go2: (data.go2 || []).map(cloneTag),
-      g1: (data.g1 || []).map(cloneTag),
-    };
-    tagConfigReady = true;
-    renderTagEditor();
+    const loaded = Array.isArray(data.mounts) && data.mounts.length ? data.mounts : [DEFAULT_MOUNT];
+    mounts = loaded.map((item) => cloneMount(item));
+    fiducialEnabled.checked = Boolean(data.fiducial_marker);
+    vpsEnabled.checked = Boolean(data.vps);
+    vpsVendor.value = data.vps_vendor || "multiset";
+    if (document.activeElement !== mapCode) {
+      mapCode.value = data.map_code || "";
+    }
+    if (document.activeElement !== apiKey && "openai_api_key" in data) {
+      apiKey.value = data.openai_api_key || "";
+    }
+    if (document.activeElement !== logLevel && "dimos_log_level" in data) {
+      const level = String(data.dimos_log_level || "INFO").toUpperCase();
+      logLevel.value = LOG_LEVELS.includes(level) ? level : "INFO";
+    }
+    if (document.activeElement !== multisetClientId && "multiset_client_id" in data) {
+      multisetClientId.value = data.multiset_client_id || "";
+    }
+    if (document.activeElement !== multisetClientSecret && "multiset_client_secret" in data) {
+      multisetClientSecret.value = data.multiset_client_secret || "";
+    }
+    settingsReady = true;
+    syncLocalizationPanels();
+    renderMountEditor();
+    applyBlueprintInfo();
   }
 
   function setConfigLocked(locked) {
     configLocked = locked;
     controlsCard.classList.toggle("locked", locked);
-    document.querySelectorAll(".tab").forEach((btn) => {
+    document.querySelectorAll("[data-client]").forEach((btn) => {
       btn.disabled = locked;
     });
+    blueprintSelect.disabled = locked;
     apiKey.disabled = locked;
     revealKey.disabled = locked;
     robotIp.disabled = locked;
     robotIpAuto.disabled = locked;
+    fiducialEnabled.disabled = locked;
+    vpsEnabled.disabled = locked;
+    vpsVendor.disabled = locked;
+    mapCode.disabled = locked;
+    multisetClientId.disabled = locked;
+    multisetClientSecret.disabled = locked;
+    revealMultiset.disabled = locked;
+    logLevel.disabled = locked;
     addTagBtn.disabled = locked;
     restoreTagsBtn.disabled = locked;
-    tagList.querySelectorAll("input, button").forEach((el) => {
+    tagList.querySelectorAll("input, button, label").forEach((el) => {
       el.disabled = locked;
     });
   }
 
-  function makeNumInput(meta, value, onChange, lockedField = false) {
+  function makeNumInput(meta, value, onChange) {
     const wrap = document.createElement("div");
     wrap.className = "num-input";
-    const fieldLocked = configLocked || lockedField;
 
     const dec = document.createElement("button");
     dec.type = "button";
@@ -207,7 +289,7 @@
     if (meta.max != null) input.max = String(meta.max);
     input.value = String(value);
     input.dataset.field = meta.field;
-    input.disabled = fieldLocked;
+    input.disabled = configLocked;
 
     const inc = document.createElement("button");
     inc.type = "button";
@@ -218,7 +300,6 @@
     const commit = (next) => {
       let n = Number(next);
       if (!Number.isFinite(n)) n = 0;
-      if (meta.field === "tag_id") n = Math.round(n);
       if (meta.min != null) n = Math.max(meta.min, n);
       if (meta.max != null) n = Math.min(meta.max, n);
       if (meta.field === "print_size_mm" && n <= 0) n = 70;
@@ -227,31 +308,89 @@
     };
 
     dec.addEventListener("click", () => {
-      if (fieldLocked) return;
+      if (configLocked) return;
       commit(Number(input.value) - meta.step);
     });
     inc.addEventListener("click", () => {
-      if (fieldLocked) return;
+      if (configLocked) return;
       commit(Number(input.value) + meta.step);
     });
     input.addEventListener("change", () => commit(input.value));
 
-    dec.disabled = fieldLocked;
-    inc.disabled = fieldLocked;
+    dec.disabled = configLocked;
+    inc.disabled = configLocked;
     wrap.append(dec, input, inc);
     return wrap;
   }
 
-  function renderTagEditor() {
-    if (!tagConfigReady) {
+  function usedMarkerIds(exceptIndex) {
+    return new Set(
+      mounts
+        .map((item, index) => (index === exceptIndex ? null : item.marker_id))
+        .filter((id) => id != null)
+    );
+  }
+
+  function nextUnusedPresetId() {
+    const used = usedMarkerIds();
+    return presetMarkerIds.find((id) => !used.has(id));
+  }
+
+  function isPresetId(id) {
+    return presetMarkerIds.includes(Number(id));
+  }
+
+  async function decodeUploadedPng(file) {
+    const body = new FormData();
+    body.append("file", file);
+    const res = await fetch("/api/apriltag/decode", { method: "POST", body });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = data.detail || res.statusText;
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+    return Number(data.marker_id);
+  }
+
+  function assignMarkerId(index, markerId) {
+    const used = usedMarkerIds(index);
+    if (used.has(markerId)) {
+      appendLog(`Fiducial marker ID ${markerId} is already in the list`);
+      return false;
+    }
+    mounts[index] = { ...mounts[index], marker_id: markerId };
+    return true;
+  }
+
+  function makeFileInput(onFile) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/png";
+    input.hidden = true;
+    input.disabled = configLocked;
+    input.addEventListener("change", async () => {
+      const file = input.files && input.files[0];
+      input.value = "";
+      if (!file || configLocked) return;
+      try {
+        await onFile(file);
+      } catch (err) {
+        appendLog(`PNG upload failed: ${err.message || err}`);
+      }
+    });
+    return input;
+  }
+
+  function renderMountEditor() {
+    if (!settingsReady) {
       tagList.replaceChildren();
       return;
     }
-    const tags = tagConfig[stack] || [];
     tagList.replaceChildren();
-    tags.forEach((tag, index) => {
+    mounts.forEach((mount, index) => {
       const card = document.createElement("details");
       card.className = "tag-card";
+      if (index === mounts.length - 1) card.open = true;
 
       const summary = document.createElement("summary");
       summary.className = "tag-summary";
@@ -263,7 +402,6 @@
       thumb.addEventListener("click", (ev) => ev.stopPropagation());
       const img = document.createElement("img");
       img.className = "tag-thumb";
-      img.alt = `AprilTag ${tag.tag_id}`;
       thumb.append(img);
 
       const metaWrap = document.createElement("div");
@@ -275,14 +413,15 @@
       metaWrap.append(title, subtitle);
 
       const syncThumb = () => {
-        const id = tagConfig[stack][index].tag_id;
-        const size = tagConfig[stack][index].print_size_mm;
+        const current = mounts[index];
+        const id = current.marker_id;
+        const size = current.print_size_mm;
         img.src = `/api/apriltag/${id}.png`;
         thumb.href = `/api/apriltag/${id}.pdf?size_mm=${encodeURIComponent(size)}`;
-        img.alt = `AprilTag ${id}`;
-        title.textContent = isProtectedDefaultTag({ tag_id: id })
-          ? `AprilTag ${id} (default)`
-          : `AprilTag ${id}`;
+        img.alt = `Fiducial marker ${id}`;
+        title.textContent = isPresetId(id)
+          ? `Fiducial marker ${id}`
+          : `Fiducial marker ${id} (uploaded)`;
         subtitle.textContent = `${size} mm total · ${(size * 0.8).toFixed(0)} mm black`;
       };
 
@@ -291,7 +430,45 @@
       const body = document.createElement("div");
       body.className = "tag-body";
 
-      const protectedDefault = isProtectedDefaultTag(tag);
+      const picker = document.createElement("div");
+      picker.className = "tag-picker";
+      const used = usedMarkerIds(index);
+      presetMarkerIds.forEach((presetId) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "tag-preset";
+        btn.dataset.markerId = String(presetId);
+        btn.setAttribute("aria-pressed", String(mount.marker_id === presetId));
+        btn.disabled = configLocked || (used.has(presetId) && mount.marker_id !== presetId);
+        const presetImg = document.createElement("img");
+        presetImg.src = `/api/apriltag/${presetId}.png`;
+        presetImg.alt = `ID ${presetId}`;
+        const presetLabel = document.createElement("span");
+        presetLabel.textContent = `ID ${presetId}`;
+        btn.append(presetImg, presetLabel);
+        btn.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          if (configLocked) return;
+          if (!assignMarkerId(index, presetId)) return;
+          renderMountEditor();
+          schedulePersist();
+        });
+        picker.append(btn);
+      });
+
+      const uploadLabel = document.createElement("label");
+      uploadLabel.className = "tag-preset tag-upload";
+      const uploadText = document.createElement("span");
+      uploadText.textContent = "Upload PNG";
+      const uploadInput = makeFileInput(async (file) => {
+        const markerId = await decodeUploadedPng(file);
+        if (!assignMarkerId(index, markerId)) return;
+        renderMountEditor();
+        schedulePersist();
+      });
+      uploadLabel.append(uploadInput, uploadText);
+      picker.append(uploadLabel);
+
       const grid = document.createElement("div");
       grid.className = "tag-grid";
       FIELD_META.forEach((meta) => {
@@ -300,21 +477,12 @@
         if (meta.field === "print_size_mm") field.classList.add("span-2");
         const label = document.createElement("span");
         label.textContent = meta.label;
-        const lockId = protectedDefault && meta.field === "tag_id";
-        const control = makeNumInput(
-          meta,
-          tag[meta.field],
-          (next) => {
-            if (configLocked) return;
-            if (lockId) return;
-            const updated = cloneTag(tagConfig[stack][index]);
-            updated[meta.field] = next;
-            tagConfig[stack][index] = updated;
-            syncThumb();
-            schedulePersist();
-          },
-          lockId
-        );
+        const control = makeNumInput(meta, mount[meta.field], (next) => {
+          if (configLocked) return;
+          mounts[index] = { ...mounts[index], [meta.field]: next };
+          syncThumb();
+          schedulePersist();
+        });
         field.append(label, control);
         grid.append(field);
       });
@@ -324,72 +492,89 @@
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
       removeBtn.className = "btn ghost tag-remove";
-      removeBtn.textContent = protectedDefault ? "Default" : "Remove";
-      removeBtn.disabled = protectedDefault || configLocked;
-      removeBtn.title = protectedDefault
-        ? "Profile default tag — cannot remove (use Restore defaults)"
-        : "Remove this tag";
+      removeBtn.textContent = "Remove";
+      removeBtn.disabled = configLocked || mounts.length === 1;
+      removeBtn.title =
+        mounts.length === 1 ? "Keep at least one fiducial marker" : "Remove this marker";
       removeBtn.addEventListener("click", () => {
-        if (configLocked || isProtectedDefaultTag(tagConfig[stack][index])) return;
-        tagConfig[stack] = tagConfig[stack].filter((_, i) => i !== index);
-        if (!tagConfig[stack].length) {
-          tagConfig[stack] = (defaultTagConfig[stack] || []).map((t) => cloneTag(t));
-        }
-        renderTagEditor();
+        if (configLocked || mounts.length === 1) return;
+        mounts = mounts.filter((_, i) => i !== index);
+        renderMountEditor();
         schedulePersist();
       });
       footer.append(removeBtn);
 
-      body.append(grid, footer);
+      body.append(picker, grid, footer);
       card.append(summary, body);
       tagList.append(card);
       syncThumb();
     });
   }
 
+  function syncLocalizationPanels() {
+    fiducialPanel.classList.toggle("hidden", !fiducialEnabled.checked);
+    vpsPanel.classList.toggle("hidden", !vpsEnabled.checked);
+    mixedPolicyBox.classList.toggle(
+      "hidden",
+      !(fiducialEnabled.checked && vpsEnabled.checked)
+    );
+  }
+
   function describeState(status) {
     const p = status.phase || "idle";
-    const selectedLabel = STACK_LABELS[stack] || "Stack";
-    const stackLabel = STACK_LABELS[status.stack] || selectedLabel;
-    const selectedReady = stackReady(stack);
-    const depsDetail = selectedReady
-      ? `${selectedLabel} dependencies installed`
-      : `${selectedLabel} dependencies missing`;
     switch (p) {
       case "checking":
-        return { label: "Checking setup", detail: "" };
-      case "needs_setup":
-      case "ready":
-        return {
-          label: selectedReady ? "ARModule Ready" : "Install required",
-          detail: depsDetail,
-        };
+        return { label: "Checking setup", detail: "", phase: "checking" };
       case "installing":
-        return {
-          label: "Installing",
-          detail: `Installing ${stackLabel} dependencies…`,
-        };
+        return { label: "Installing", detail: "", phase: "installing" };
       case "starting":
-        return {
-          label: "Starting",
-          detail: `Booting ${stackLabel}…`,
-        };
+        return { label: "Starting", detail: `Booting ${blueprint}…`, phase: "starting" };
       case "running":
-        return {
-          label: "Running",
-          detail: `${stackLabel} ARModule listening`,
-        };
+        return { label: "Running", detail: `${blueprint} ARModule listening`, phase: "running" };
       case "stopping":
-        return { label: "Stopping", detail: "Shutting down ARModule…" };
+        return { label: "Stopping", detail: "Shutting down ARModule…", phase: "stopping" };
       case "error":
         return {
           label: "Error",
           detail: status.error || "ARModule failed — check the log",
+          phase: "error",
         };
-      case "idle":
-      default:
-        return { label: "Idle", detail: "" };
+      default: {
+        if (status.check_ok !== true || locNotSetup() || agentNotSetup()) {
+          return { label: "Setup incomplete", detail: "", phase: "needs_setup" };
+        }
+        if (status.warning) {
+          return { label: "Warning", detail: "", phase: "needs_setup" };
+        }
+        if (p === "idle") {
+          return { label: "Idle", detail: "", phase: "idle" };
+        }
+        return { label: "ARModule Ready", detail: "", phase: "ready" };
+      }
     }
+  }
+
+  function applyHeader(status) {
+    const info = describeState(status || {});
+    stateValue.textContent = info.label;
+    stateValue.dataset.phase = info.phase;
+    stateDetail.textContent = info.detail;
+    stateDetail.dataset.phase = info.phase;
+    stateDetail.classList.toggle("hidden", !info.detail);
+  }
+
+  function describeDeps(status) {
+    const p = status.phase || "idle";
+    if (p === "installing") {
+      return { text: "installing…", phase: "installing" };
+    }
+    if (p === "checking") {
+      return { text: "checking…", phase: "checking" };
+    }
+    if (status.check_ok === true) {
+      return { text: "", phase: "" };
+    }
+    return { text: "incomplete", phase: "needs_setup" };
   }
 
   function setupMode() {
@@ -397,7 +582,7 @@
   }
 
   function syncInstallBanner() {
-    const ready = stackReady(stack);
+    const ready = checkOk === true;
     const busy =
       phase === "checking" ||
       phase === "installing" ||
@@ -405,21 +590,23 @@
       phase === "stopping";
     const needsInstall = !ready;
     const cloning = setupMode() === "clone";
-    // Show install when the selected stack is missing deps, or when the user
-    // explicitly chose a fresh download (allows additional installs).
     const showInstall = needsInstall || cloning;
-    const label = STACK_LABELS[stack] || stack;
 
     installHint.textContent = needsInstall
-      ? INSTALL_HINTS[stack] || INSTALL_HINTS.go2
+      ? "A DimOS environment is required to continue."
       : "Download DimOS into the folder below. You can keep multiple installs.";
     installHint.classList.toggle("hidden", !showInstall);
-    installBtn.textContent = cloning
-      ? "Download & install DimOS"
-      : `Install ${label} dependencies`;
+    dimosRefField.classList.toggle("hidden", !cloning);
+    installBtn.textContent = cloning ? "Download & install" : "Install";
     installBtn.classList.toggle("hidden", !showInstall);
     installBtn.disabled = busy || phase === "installing" || phase === "checking";
-    installBanner.classList.toggle("needs-install", needsInstall);
+    installBanner.classList.toggle("needs-setup", needsInstall);
+
+    const versionBits = [];
+    if (lastStatus.dimos_version) versionBits.push(`DimOS ${lastStatus.dimos_version}`);
+    if (lastStatus.dimos_ref) versionBits.push(lastStatus.dimos_ref);
+    dimosVersionHint.textContent = versionBits.join(" · ");
+    dimosVersionHint.classList.toggle("hidden", versionBits.length === 0);
   }
 
   const ANSI_RE = /\u001b\[([0-9;]*)m/g;
@@ -496,8 +683,7 @@
   function flushLog() {
     frameHandle = null;
     if (!pendingLines.length) return;
-    const nearBottom =
-      logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 48;
+    const nearBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 48;
     const fragment = document.createDocumentFragment();
     for (const line of pendingLines) {
       fragment.appendChild(makeLogLineEl(line));
@@ -567,27 +753,21 @@
   function applyStatus(status) {
     lastStatus = status || {};
     phase = status.phase || "idle";
-    if ("ready_go2" in status) readyByStack.go2 = status.ready_go2;
-    if ("ready_g1" in status) readyByStack.g1 = status.ready_g1;
-    // Legacy fallback when older check output only had check_ok.
-    if (!("ready_go2" in status) && typeof status.check_ok === "boolean") {
-      readyByStack.go2 = status.check_ok;
-    }
+    if ("check_ok" in status) checkOk = status.check_ok;
 
-    const info = describeState(status);
-    const selectedReady = stackReady(stack);
-    let displayPhase = phase;
-    if (phase === "ready" || phase === "needs_setup") {
-      displayPhase = selectedReady ? "ready" : "needs_setup";
-    }
-    stateValue.textContent = info.label;
-    stateValue.dataset.phase = displayPhase;
-    stateDetail.textContent = info.detail;
-    stateDetail.dataset.phase = displayPhase;
-    stateDetail.classList.toggle("hidden", !info.detail);
-    setText(arModuleIp, status.spectacles_ip);
-    setText(arModuleIpSummary, status.spectacles_ip);
+    applyHeader(status);
+    const deps = describeDeps(status);
+    depsSummary.textContent = deps.text;
+    depsSummary.dataset.phase = deps.phase;
+    setText(hostIp, status.host_ip);
+    setText(hostIpSummary, status.host_ip);
     setText(robotValue, displayRobotIp(status.robot_ip));
+
+    const showWebxr = Boolean(status.webxr_local_url || status.webxr_url);
+    webxrLocalRow.classList.toggle("hidden", !showWebxr);
+    webxrNetworkRow.classList.toggle("hidden", !showWebxr);
+    setText(webxrLocal, status.webxr_local_url);
+    setText(webxrNetwork, status.webxr_url);
 
     if (status.warning) {
       warningText.textContent = status.warning;
@@ -606,6 +786,16 @@
     if ("openai_api_key" in status && document.activeElement !== apiKey) {
       apiKey.value = status.openai_api_key || "";
     }
+    if ("multiset_client_id" in status && document.activeElement !== multisetClientId) {
+      multisetClientId.value = status.multiset_client_id || "";
+    }
+    if (
+      "multiset_client_secret" in status &&
+      document.activeElement !== multisetClientSecret
+    ) {
+      multisetClientSecret.value = status.multiset_client_secret || "";
+    }
+    syncConfigCards();
 
     const busy =
       phase === "checking" ||
@@ -614,9 +804,7 @@
       phase === "stopping";
     const running = phase === "running" || phase === "starting";
     const locked = phase === "starting" || phase === "running" || phase === "stopping";
-    const ready = stackReady(stack);
 
-    // Tabs + controls stay visible; install banner gates missing deps.
     controlsCard.classList.remove("hidden");
     actionsBar.classList.remove("hidden");
     syncInstallBanner();
@@ -701,68 +889,88 @@
     });
   }
 
-  document.querySelectorAll(".tab").forEach((btn) => {
+  document.querySelectorAll("[data-client]").forEach((btn) => {
     btn.addEventListener("click", () => {
       if (configLocked) return;
-      document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll("[data-client]").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
-      stack = btn.dataset.stack;
-      applyStackInfo(stack);
-      renderTagEditor();
-      // Re-evaluate Start + install banner from cached per-stack readiness.
-      applyStatus(lastStatus);
+      client = btn.dataset.client;
     });
   });
 
-  addTagBtn.addEventListener("click", () => {
-    if (configLocked || !tagConfigReady) return;
-    const existing = tagConfig[stack] || [];
-    const nextId = existing.reduce((max, t) => Math.max(max, Number(t.tag_id) || 0), -1) + 1;
-    const template = existing[0]
-      ? cloneTag(existing[0])
-      : cloneTag(defaultTagConfig[stack][0] || { tag_id: 0, print_size_mm: 70 });
-    template.tag_id = nextId;
-    // Extra tags must not collide with protected profile defaults.
-    while (defaultTagIds[stack].has(template.tag_id)) {
-      template.tag_id += 1;
-    }
-    tagConfig[stack] = [...existing, template];
-    renderTagEditor();
+  blueprintSelect.addEventListener("change", () => {
+    if (configLocked) return;
+    blueprint = blueprintSelect.value;
+    applyBlueprintInfo();
+  });
+
+  fiducialEnabled.addEventListener("change", () => {
+    syncLocalizationPanels();
+    syncConfigCards();
+    schedulePersist();
+  });
+  vpsEnabled.addEventListener("change", () => {
+    syncLocalizationPanels();
+    syncConfigCards();
+    schedulePersist();
+  });
+  [vpsVendor, mapCode, multisetClientId, multisetClientSecret, logLevel].forEach((el) => {
+    el.addEventListener("change", schedulePersist);
+    el.addEventListener("blur", schedulePersist);
+  });
+  [mapCode, multisetClientId, multisetClientSecret].forEach((el) => {
+    el.addEventListener("input", syncConfigCards);
+  });
+  logLevel.addEventListener("change", syncConfigCards);
+  apiKey.addEventListener("input", syncConfigCards);
+
+  restoreTagsBtn.addEventListener("click", () => {
+    if (configLocked) return;
+    mounts = [cloneMount(DEFAULT_MOUNT)];
+    renderMountEditor();
     schedulePersist();
   });
 
-  restoreTagsBtn.addEventListener("click", async () => {
-    if (configLocked) return;
-    restoreTagsBtn.disabled = true;
-    try {
-      const res = await fetch("/api/tag-config/restore", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stack }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        appendLog(`Restore defaults failed: ${data.detail || res.statusText}`);
-        return;
-      }
-      applyTagConfigPayload({
-        go2: data.go2,
-        g1: data.g1,
-        defaults: defaultTagConfig,
-        default_tag_ids: {
-          go2: [...defaultTagIds.go2],
-          g1: [...defaultTagIds.g1],
-        },
-      });
-    } catch (err) {
-      appendLog(`Restore defaults failed: ${err}`);
-    } finally {
-      restoreTagsBtn.disabled = configLocked;
+  const addUploadInput = makeFileInput(async (file) => {
+    const markerId = await decodeUploadedPng(file);
+    if (usedMarkerIds().has(markerId)) {
+      appendLog(`Fiducial marker ID ${markerId} is already in the list`);
+      return;
     }
+    const template = cloneMount(mounts[0] || DEFAULT_MOUNT);
+    template.marker_id = markerId;
+    mounts = [...mounts, template];
+    renderMountEditor();
+    schedulePersist();
+  });
+  document.body.append(addUploadInput);
+
+  addTagBtn.addEventListener("click", () => {
+    if (configLocked) return;
+    const nextId = nextUnusedPresetId();
+    if (nextId == null) {
+      appendLog("All pre-built markers are in use. Upload a PNG to add another.");
+      addUploadInput.click();
+      return;
+    }
+    const template = cloneMount(mounts[0] || DEFAULT_MOUNT);
+    template.marker_id = nextId;
+    mounts = [...mounts, template];
+    renderMountEditor();
+    schedulePersist();
   });
 
   function syncRobotIpOverride() {
-    robotIpOverrideField.classList.toggle("hidden", robotIpAuto.checked);
+    const auto = robotIpAuto.checked;
+    robotValue.classList.toggle("hidden", !auto);
+    robotIp.classList.toggle("hidden", auto);
+    if (!auto) {
+      const shown = robotValue.textContent.trim();
+      if (!robotIp.value.trim() && shown && shown !== "—" && shown !== "simulated") {
+        robotIp.value = shown;
+      }
+      robotIp.focus();
+    }
   }
   robotIpAuto.addEventListener("change", syncRobotIpOverride);
   syncRobotIpOverride();
@@ -772,13 +980,19 @@
   });
   syncSetupMode();
   initSplitter();
-  applyStackInfo(stack);
-  renderTagEditor();
+  applyBlueprintInfo();
+  renderMountEditor();
+  window.addEventListener("pageshow", applyBlueprintInfo);
 
   revealKey.addEventListener("click", () => {
     keyVisible = !keyVisible;
     apiKey.type = keyVisible ? "text" : "password";
     revealKey.textContent = keyVisible ? "Hide" : "Show";
+  });
+  revealMultiset.addEventListener("click", () => {
+    multisetVisible = !multisetVisible;
+    multisetClientSecret.type = multisetVisible ? "text" : "password";
+    revealMultiset.textContent = multisetVisible ? "Hide" : "Show";
   });
 
   copyLogBtn.addEventListener("click", copyLog);
@@ -790,13 +1004,12 @@
       mode === "existing"
         ? {
             mode: "existing",
-            stack,
             dimos_python: dimosPython.value.trim(),
           }
         : {
             mode: "clone",
-            stack,
             clone_dir: cloneDir.value.trim(),
+            dimos_ref: dimosRef.value.trim() || "main",
           };
     installBtn.disabled = true;
     try {
@@ -810,37 +1023,24 @@
         appendLog(`Setup error: ${data.detail || res.statusText}`);
         installBtn.disabled = false;
       }
-      if (data.phase || "ready_go2" in data) applyStatus(data);
+      if (data.phase || "check_ok" in data) applyStatus(data);
     } catch (err) {
       appendLog(`Setup error: ${err}`);
       installBtn.disabled = false;
     }
   });
 
-  async function saveSettings() {
-    try {
-      const res = await fetch("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ openai_api_key: apiKey.value.trim() || null }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data.phase) applyStatus(data);
-    } catch (_) {
-      /* ignore */
-    }
-  }
-
   apiKey.addEventListener("blur", () => {
+    syncConfigCards();
     void saveSettings();
   });
 
   startBtn.addEventListener("click", async () => {
     startBtn.disabled = true;
-    await persistTagConfig();
     await saveSettings();
     const body = {
-      stack,
+      blueprint,
+      client,
       robot_ip: robotIpAuto.checked ? null : robotIp.value.trim() || null,
     };
     try {
@@ -873,8 +1073,29 @@
 
   async function loadConfig() {
     try {
-      const res = await fetch("/api/tag-config");
-      if (res.ok) applyTagConfigPayload(await res.json());
+      const res = await fetch("/api/settings");
+      if (res.ok) applySettingsPayload(await res.json());
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  async function loadDimosRefs() {
+    try {
+      const res = await fetch("/api/dimos-refs");
+      if (!res.ok) return;
+      const data = await res.json();
+      const refs = data.refs || ["main"];
+      const selected = dimosRef.value || data.default || "main";
+      dimosRef.replaceChildren(
+        ...refs.map((ref) => {
+          const option = document.createElement("option");
+          option.value = ref;
+          option.textContent = ref;
+          return option;
+        })
+      );
+      dimosRef.value = refs.includes(selected) ? selected : refs[0];
     } catch (_) {
       /* ignore */
     }
@@ -901,6 +1122,7 @@
   }
 
   loadConfig();
+  loadDimosRefs();
   connectEvents();
   fetch("/api/status")
     .then((r) => r.json())

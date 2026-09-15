@@ -6,11 +6,13 @@ from pathlib import Path
 
 from armodule import (
     _RE_CHECK_OK,
-    _RE_CHECK_OK_G1,
-    _RE_CHECK_OK_GO2,
     _RE_DIMOS_PYTHON,
+    _RE_DIMOS_REF,
+    _RE_DIMOS_VERSION,
+    WEBXR_PORT,
     Phase,
     ProcessManager,
+    detect_lan_ip,
 )
 
 
@@ -20,8 +22,8 @@ def test_parse_armodule_ready_and_ips(tmp_path: Path) -> None:
     assert mgr.status.websocket_url == "ws://0.0.0.0:8787"
     assert mgr.status.phase == Phase.RUNNING
 
-    mgr._parse_armodule_line("Spectacles:   enter 192.168.1.42 in the lens")
-    assert mgr.status.spectacles_ip == "192.168.1.42"
+    mgr._parse_armodule_line("Host IP:      192.168.1.42")
+    assert mgr.status.host_ip == "192.168.1.42"
 
     mgr._parse_armodule_line("Robot IP:     192.168.12.1")
     assert mgr.status.robot_ip == "192.168.12.1"
@@ -59,31 +61,40 @@ def test_start_sh_openai_log_does_not_set_status_warning(tmp_path: Path) -> None
 
 def test_parse_strips_ansi_and_simulated_robot_ip(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr._parse_armodule_line("\033[32mSpectacles:   enter 10.23.159.29 in the lens\033[0m")
-    assert mgr.status.spectacles_ip == "10.23.159.29"
+    mgr._parse_armodule_line("\033[32mHost IP:      10.23.159.29\033[0m")
+    assert mgr.status.host_ip == "10.23.159.29"
 
     mgr._parse_armodule_line("Robot IP:     simulated")
     assert mgr.status.robot_ip == "simulated"
 
 
-def test_snapshot_includes_per_stack_readiness(tmp_path: Path) -> None:
+def test_snapshot_includes_host_ip_not_spectacles(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr.status.ready_go2 = True
-    mgr.status.ready_g1 = False
     mgr.status.check_ok = True
+    mgr.status.host_ip = "192.168.1.9"
+    mgr.status.blueprint = "unitree_go2_ar"
+    mgr.status.client = "webxr"
+    mgr.status.webxr_local_url = f"https://localhost:{WEBXR_PORT}"
+    mgr.status.webxr_url = f"https://192.168.1.9:{WEBXR_PORT}"
     snap = mgr.snapshot()
-    assert snap["ready_go2"] is True
-    assert snap["ready_g1"] is False
     assert snap["check_ok"] is True
+    assert snap["host_ip"] == "192.168.1.9"
+    assert "spectacles_ip" not in snap
+    assert snap["webxr_local_url"] == "https://localhost:5173"
+    assert snap["webxr_url"] == "https://192.168.1.9:5173"
     assert "default_clone_dir" in snap
 
 
 def test_check_ok_regexes_match_setup_output() -> None:
-    assert _RE_CHECK_OK_GO2.match("CHECK_OK_GO2=1")
-    assert _RE_CHECK_OK_GO2.match("CHECK_OK_GO2=0")
-    assert _RE_CHECK_OK_G1.match("CHECK_OK_G1=1")
-    assert _RE_CHECK_OK_G1.match("CHECK_OK_G1=0")
     assert _RE_CHECK_OK.match("CHECK_OK=1")
+    assert _RE_CHECK_OK.match("CHECK_OK=0")
     assert _RE_DIMOS_PYTHON.match("DIMOS_PYTHON=/tmp/dimos/.venv/bin/python3")
-    assert _RE_CHECK_OK_GO2.match("CHECK_OK_GO2=1 ") is not None
-    assert _RE_CHECK_OK_G1.match("CHECK_OK=1") is None
+    assert _RE_DIMOS_VERSION.match("DIMOS_VERSION=0.4.0")
+    assert _RE_DIMOS_REF.match("DIMOS_REF=main abc123")
+    assert _RE_CHECK_OK.match("CHECK_OK_GO2=1") is None
+
+
+def test_detect_lan_ip_returns_string() -> None:
+    ip = detect_lan_ip()
+    assert isinstance(ip, str)
+    assert ip

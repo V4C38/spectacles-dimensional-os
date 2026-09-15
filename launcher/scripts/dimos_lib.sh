@@ -27,29 +27,6 @@ resolve_abs_path() {
   printf '%s\n' "${p}"
 }
 
-# True when DimOS is an editable/source install that ships native module trees
-# (FastLio2 cpp/ + RayTracingVoxelMap rust/). PyPI wheels omit these dirs, so
-# G1's nav stack cannot build native binaries from a wheel-only install.
-dimos_has_native_source() {
-  local py="${1:-}"
-  [[ -n "${py}" && -x "${py}" ]] || return 1
-  "${py}" - <<'PY' >/dev/null 2>&1
-import inspect
-import pathlib
-
-try:
-    from dimos.hardware.sensors.lidar.fastlio2 import module as f
-    from dimos.mapping.ray_tracing import module as r
-except Exception:
-    raise SystemExit(1)
-
-fd = pathlib.Path(inspect.getfile(f)).resolve().parent
-rd = pathlib.Path(inspect.getfile(r)).resolve().parent
-ok = (fd / "cpp").is_dir() and (rd / "rust").is_dir()
-raise SystemExit(0 if ok else 1)
-PY
-}
-
 find_dimos_python() {
   local root="${1:-${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}}"
   local candidates=()

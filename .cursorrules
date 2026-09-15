@@ -13,7 +13,7 @@ Same pattern as `RelocalizationModule` / `dimos.mapping.relocalization` /
 |------|------|
 | Class | `ARModule` in `dimos/ar/module.py` |
 | Import | `dimos.ar` |
-| Blueprint | `unitree_go2_ar` (`dimos run unitree-go2-ar`) |
+| Blueprint | `unitree_go2_ar` (`dimos run dimos-ar.unitree-go2-ar`) |
 | Wire peer | `server` — `time_sync.ts_client` / `time_sync.ts_server`, `state.server` |
 
 Do **not** call it a bridge, an AR package, or `ar_go2`. Prose uses **`ARModule`**.
@@ -175,7 +175,7 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic:
   - `dimos-ar/PROTOCOL.md`
   - `clients/specs/Assets/Scripts/DimOSARClient/websocket/protocol.ts`
 - The ARModule worker must never block; WebSocket runs on a daemon thread.
-- Blueprints are `unitree_go2_ar` and `unitree_go2_ar_agentic` (`dimos-ar/dimos/ar/blueprints.py`).
+- Blueprints are `unitree_go2_ar` and `unitree_go2_ar_agentic` (`dimos-ar/dimos/ar/blueprints.py`). External DimOS CLI names: `dimos run dimos-ar.unitree-go2-ar` / `dimos-ar.unitree-go2-ar-agentic`.
 - Port **8787** is ARModule's WebSocket.
 - Tests for `dimos.ar` must run from the DimOS `.venv`.
 - For Lens Studio verification, do **not** run `CompileWithLogs` by default.
@@ -205,7 +205,8 @@ or a normal terminal). Sandboxed runs fail when DimOS tries to write logs under
 
 # Install + start ARModule (from repo root)
 ./launcher/scripts/setup.sh
-./launcher/scripts/start.sh              # ws://0.0.0.0:8787
+./launcher/scripts/start.sh --blueprint unitree_go2_ar   # ws://0.0.0.0:8787
+# equivalent: dimos run dimos-ar.unitree-go2-ar
 ./launcher/scripts/start-launcher.sh     # web UI wrapper (http://127.0.0.1:8790)
 
 # Tests

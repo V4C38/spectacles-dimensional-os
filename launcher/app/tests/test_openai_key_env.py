@@ -30,6 +30,6 @@ async def test_start_armodule_reads_openai_key_from_env(tmp_path: Path) -> None:
         patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
         patch.object(mgr, "_spawn", new=fake_spawn),
     ):
-        await mgr.start_armodule(stack="go2")
+        await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
 
     assert captured["OPENAI_API_KEY"] == "sk-persisted"

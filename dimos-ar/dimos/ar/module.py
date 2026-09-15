@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import math
 import time
 from typing import ClassVar, Literal
@@ -8,7 +9,7 @@ from typing import ClassVar, Literal
 from dimos_lcm.std_msgs import Bool
 from langchain_core.messages import AIMessage
 from langchain_core.messages.base import BaseMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import websockets.asyncio.server as ws_server
 
 from dimos.agents.annotation import skill
@@ -26,7 +27,7 @@ from dimos.ar.navigation.tele_cmd_vel import TeleCmdVelPublisher
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest
 from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName, CapabilitySet
 from dimos.ar.robot.odometry_correction import correct_odom_xy
-from dimos.ar.robot.profiles import RobotName, RobotProfile, get_profile
+from dimos.ar.robot.profiles import FiducialMarkerMount, RobotName, RobotProfile, get_profile
 from dimos.ar.robot.safety import Safety
 from dimos.ar.robot.state_publisher import RobotStatePublisher
 from dimos.ar.sensors.lidar_settings import DEFAULT_LIDAR_SETTINGS, LidarSettings
@@ -106,6 +107,53 @@ class ARModuleConfig(ModuleConfig):  # type: ignore[misc]
     port: int = 8787
     localization: LocalizationConfig = Field(default_factory=LocalizationConfig)
     agent: bool = False
+    fiducial_marker_mounts: list[FiducialMarkerMount] | None = None
+
+    @field_validator("fiducial_marker_mounts", mode="before")
+    @classmethod
+    def _coerce_fiducial_marker_mounts(cls, value: object) -> object:
+        if value is None or (isinstance(value, list) and not value):
+            return value
+        if not isinstance(value, list):
+            raise TypeError("fiducial_marker_mounts must be a list or null")
+        mounts: list[FiducialMarkerMount] = []
+        for item in value:
+            if isinstance(item, FiducialMarkerMount):
+                mounts.append(item)
+                continue
+            if not isinstance(item, dict):
+                raise TypeError("fiducial_marker_mounts items must be objects")
+            try:
+                position = item["position"]
+                orientation = item["orientation"]
+                mounts.append(
+                    FiducialMarkerMount(
+                        marker_id=int(item["marker_id"]),
+                        size_m=float(item["size_m"]),
+                        position=(float(position[0]), float(position[1]), float(position[2])),
+                        orientation=(
+                            float(orientation[0]),
+                            float(orientation[1]),
+                            float(orientation[2]),
+                            float(orientation[3]),
+                        ),
+                    )
+                )
+            except (KeyError, TypeError, ValueError, IndexError) as exc:
+                raise ValueError(
+                    "fiducial_marker_mounts items must match FiducialMarkerMount"
+                ) from exc
+        return mounts
+
+
+def profile_for_config(config: ARModuleConfig) -> RobotProfile:
+    profile = get_profile(config.robot)
+    mounts = config.fiducial_marker_mounts
+    if mounts is None:
+        return profile
+    if not mounts:
+        raise ValueError("fiducial_marker_mounts must not be empty")
+    return replace(profile, fiducial_marker_mounts=tuple(mounts))
 
 
 class ARModule(Module):  # type: ignore[misc]
@@ -149,7 +197,7 @@ class ARModule(Module):  # type: ignore[misc]
     def build(self) -> None:
         super().build()
         assert self._loop is not None
-        self._profile = get_profile(self.config.robot)
+        self._profile = profile_for_config(self.config)
         self._lidar_settings = DEFAULT_LIDAR_SETTINGS
         self._speed_mps = 0.0
         self._last_corrected_xy: tuple[float, float, float] | None = None

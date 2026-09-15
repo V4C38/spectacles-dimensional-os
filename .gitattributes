@@ -2,5 +2,6 @@
 
 # README / demo media
 assets/** filter=lfs diff=lfs merge=lfs -text
+assets/**/*.py !filter !diff !merge text
 
 # Lens Studio LFS and merge rules live in clients/specs/.gitattributes

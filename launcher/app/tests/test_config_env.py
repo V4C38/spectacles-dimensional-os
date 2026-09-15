@@ -6,7 +6,7 @@ import os
 import stat
 from pathlib import Path
 
-from config import merge_env, read_env
+from config import merge_env, normalize_log_level, read_env
 
 
 def test_merge_preserves_other_keys(tmp_path: Path) -> None:
@@ -35,3 +35,10 @@ def test_read_strips_quotes(tmp_path: Path) -> None:
     path = tmp_path / ".env"
     path.write_text('OPENAI_API_KEY="abc123"\n', encoding="utf-8")
     assert read_env(path)["OPENAI_API_KEY"] == "abc123"
+
+
+def test_normalize_log_level_defaults_and_uppercases() -> None:
+    assert normalize_log_level(None) == "INFO"
+    assert normalize_log_level("") == "INFO"
+    assert normalize_log_level("debug") == "DEBUG"
+    assert normalize_log_level("TRACE") == "INFO"

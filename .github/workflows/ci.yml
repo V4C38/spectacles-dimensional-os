@@ -41,6 +41,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Fetch AprilTag print assets
+        working-directory: .
+        run: git lfs pull --include="assets/markers/**" --exclude=""
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"

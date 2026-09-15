@@ -15,7 +15,7 @@
 
 <p>
   This project explores the use of <b>Augmented Reality as an interface for robotics and physical AI</b> in the context of navigation tasks and sensor data visualization. <br>
-  AR glasses: <b>Snap Spectacles</b> 2024 developer kit. Robot: <b>Unitree Go2 quadruped</b> (ARModule). Dimensional OS also has a G1 stack; the Spectacles AR experience is Go2-only until a G1 robot profile lands. Controlled via <a href="https://github.com/dimensionalOS/dimos">Dimensional OS</a> which handles the entire physical stack, incl. navigation and LiDAR data streaming.
+  AR glasses: <b>Snap Spectacles</b> 2024 developer kit. Robot: <b>Unitree Go2 quadruped</b> (ARModule). Controlled via <a href="https://github.com/dimensionalOS/dimos">Dimensional OS</a> which handles the entire physical stack, incl. navigation and LiDAR data streaming.
 </p>
 
 <p align="center">
@@ -38,11 +38,9 @@
 <table align="center">
   <tr>
     <th>Quadruped</th>
-    <th>Humanoid</th>
   </tr>
   <tr>
     <td>🟩 Unitree Go2 pro/air<br><sub>Fully supported &amp; tested</sub></td>
-    <td>🟧 Unitree G1<br><sub>Not yet supported in ARModule. Launcher can still install the G1 DimOS stack.</sub></td>
   </tr>
 </table>
 
@@ -54,14 +52,14 @@
 Mac which runs DimOS, Spectacles AR glasses and the robot need to be on the <b>same WiFi</b> with a stable internet connection. 
 
 <a id="vialauncher"></a>
-<details open>
-<summary><strong>Via launcher (recommended)</strong></summary>
+<details>
+<summary><strong>Via launcher (optional)</strong></summary>
 
 
-<img src="assets/specs_dimos_launcher.png" alt="DimOS ARModule launcher: robot stack, ARModule IP, OPENAI_API_KEY, AprilTags, and log" width="640" />
+<img src="assets/specs_dimos_launcher.png" alt="DimOS ARModule launcher: device, client, blueprint, Host IP, localization, and log" width="640" />
 
 
-The launcher is a small web app that runs on your Mac and manages <b>Dimensional OS</b> and <b>ARModule</b> in a clean UI. <br> It installs and configures both if needed, handles robot network discovery, generates and configures the <b>AprilTag</b> settings, and starts or stops ARModule. The <b>Log</b> also shows detailed output which is useful for debugging.
+The launcher is a small localhost web app that writes the same DimOS config and environment a CLI user would, then starts the selected blueprint. It is optional. A DimOS CLI user can install `dimos-ar`, edit `~/.config/dimos/config`, export credentials, and run `dimos run dimos-ar.unitree-go2-ar` with no launcher.
 
 
 Double-click [`launcher/Start Launcher.command`](launcher/Start%20Launcher.command) in Finder, or run:
@@ -73,49 +71,68 @@ cd /path/to/spectacles-dimensional-os
 
 Your browser opens at `http://127.0.0.1:8790`. Leave the terminal window it started from open, closing it stops the launcher.
 
-The **Dependencies** tab allows installing and configuring dependencies based on your selected stack (Go2 / G1), choose whether to reuse a Dimensional OS install you already have or download a fresh one, then press **Install**. This can take a while. The Spectacles AR experience targets <b>Go2</b>; G1 is a DimOS stack option until an ARModule G1 robot profile lands.
+**Dependencies:** reuse a Dimensional OS install or clone one at a chosen git ref, then press **Install**. This can take a while.
 
-**Every run:** pick **Unitree Go2** (or **Unitree G1** for DimOS-only), press **Start**, and wait for status to turn to **ARModule Ready**. The value shown as **ARModule IP** is the address you type into the Lens during the setup wizard. If no robot answers on the network, ARModule starts with a simulated robot instead.
+**Every run:** pick **Specs** or **WebXR**, pick `unitree_go2_ar` or `unitree_go2_ar_agentic`, choose localization providers, press **Start**. The value shown as **Host IP** is the Mac’s LAN address — type it into the Lens during the setup wizard. WebXR also shows Vite’s **Local** (`https://localhost:5173`) and **Network** (`https://<host-ip>:5173`) URLs. If no robot answers on the network, ARModule starts with a simulated robot instead.
 
 macOS asks for your admin password the first time you start after a reboot. Dimensional OS needs a local network route and larger socket buffers for its internal messaging.
 
 </details>
 
 <a id="manual-install"></a>
-<details>
-<summary><strong>Via manual install</strong></summary>
+<details open>
+<summary><strong>Via CLI</strong></summary>
 
-The launcher runs two scripts, and you can run them yourself.
-
-[`launcher/scripts/setup.sh`](launcher/scripts/setup.sh) locates a Dimensional OS install or clones one into `../dimos`, then installs this repo's `dimos-ar` package into that same Python environment and runs its tests. Add `--stack g1` if you need the G1 navigation stack, which requires Dimensional OS from source.
+Install [Dimensional OS](https://github.com/dimensionalOS/dimos) at a chosen git ref, add `dimos-ar` to the same environment, write DimOS config, export credentials, and run the installed blueprint:
 
 ```bash
-./launcher/scripts/setup.sh
-```
+cd /path/to/dimos
+git checkout <branch|tag|sha>
+uv sync --extra all   # or: python3 -m pip install -e ".[base,unitree]"
 
-[`launcher/scripts/start.sh`](launcher/scripts/start.sh) applies the macOS network settings, asks which robot stack to run, looks for the robot on the network, and starts ARModule on port **8787**. The log prints the address to enter on Spectacles. Set `OPENAI_API_KEY` beforehand if you want Agent Mode, and `ROBOT_IP` to skip discovery.
-
-```bash
-./launcher/scripts/start.sh
-```
-
-To skip the scripts entirely, install [Dimensional OS](https://github.com/dimensionalOS/dimos) yourself, add `dimos-ar` to the same environment, and start the blueprint:
-
-```bash
 cd /path/to/spectacles-dimensional-os/dimos-ar
 /path/to/dimos/.venv/bin/python3 -m pip install -e ".[dev]"
 
 sudo ../launcher/scripts/configure-system.sh --apply
 
-export ROBOT_IP=<robot-lan-ip>   # or "fake" for a simulated robot
-/path/to/dimos/.venv/bin/python3 -c "
-from dimos.core.coordination.module_coordinator import ModuleCoordinator
-from dimos.ar.blueprints import unitree_go2_ar
-ModuleCoordinator.build(unitree_go2_ar).loop()
-"
+# ~/.config/dimos/config  (JSON; merge, do not wipe `g`)
+# {
+#   "armodule": {
+#     "localization": {
+#       "providers": [
+#         {"type": "fiducial_marker"},
+#         {"type": "vps", "map_code": "<code>"}
+#       ]
+#     },
+#     "fiducial_marker_mounts": [
+#       {
+#         "marker_id": 0,
+#         "size_m": 0.056,
+#         "position": [0.18, 0.0, 0.06],
+#         "orientation": [0.0, 0.0, 0.0, 1.0]
+#       }
+#     ]
+#   }
+# }
+
+export MULTISET_CLIENT_ID=…
+export MULTISET_CLIENT_SECRET=…
+export OPENAI_API_KEY=…          # agentic blueprint
+export ROBOT_IP=<robot-lan-ip>   # or omit and use --replay
+
+/path/to/dimos/.venv/bin/dimos run dimos-ar.unitree-go2-ar
+# /path/to/dimos/.venv/bin/dimos --replay run dimos-ar.unitree-go2-ar
+# /path/to/dimos/.venv/bin/dimos run dimos-ar.unitree-go2-ar-agentic --robot-ip <ip>
 ```
 
-Equivalent once the blueprint is registered in DimOS: `dimos run unitree-go2-ar`.
+`dimos run dimos-ar.unitree-go2-ar --help` lists `--armodule.*` flags. The same values can be set with `ARMODULE__LOCALIZATION__PROVIDERS` and `ARMODULE__FIDUCIAL_MARKER_MOUNTS`.
+
+[`launcher/scripts/setup.sh`](launcher/scripts/setup.sh) locates a Dimensional OS install or clones one (`--clone-dir` + `--dimos-ref`), then installs this repo's `dimos-ar` package into that same Python environment and runs its tests. [`launcher/scripts/start.sh`](launcher/scripts/start.sh) applies the macOS network settings, discovers the robot, prints the **Host IP**, and `exec`s `dimos run dimos-ar.unitree-go2-ar`.
+
+```bash
+./launcher/scripts/setup.sh --yes --clone-dir ../dimos --dimos-ref main
+./launcher/scripts/start.sh --blueprint unitree_go2_ar
+```
 
 </details>
 
@@ -124,21 +141,21 @@ Equivalent once the blueprint is registered in DimOS: `dimos run unitree-go2-ar`
 
 Fiducial localization uses a robot-mounted <b>AprilTag 36h11</b> at a pose known to ARModule. Print assets and the generator live in [`assets/markers/`](assets/markers/), not inside `dimos-ar/`.
 
-**Print:** use [`apriltag_robot_0_a4.pdf`](assets/markers/apriltag_robot_0_a4.pdf) or [`apriltag_robot_0_letter.pdf`](assets/markers/apriltag_robot_0_letter.pdf). Print at <b>100% scale</b> (no “fit to page”) and check that the sticker is <b>70 mm</b> total (56 mm black square). Mount it flat on a rigid backing.
+**Print:** pre-built IDs **0, 1, and 2** live in [`assets/markers/`](assets/markers/) as PNG plus A4/Letter PDFs (`apriltag_robot_{id}_a4.pdf` / `_letter.pdf`). Print at <b>100% scale</b> (no “fit to page”) and check that the sticker is <b>70 mm</b> total (56 mm black square). Mount it flat on a rigid backing.
 
 **Regenerate or add IDs:**
 
 ```bash
-python3 assets/markers/generate_marker.py --ids 0
+python3 assets/markers/generate_marker.py --ids 0 1 2
 ```
 
-**Go2 mount** (from [`UNITREE_GO2_PROFILE`](dimos-ar/dimos/ar/robot/profiles/unitree_go2.py)): one tag, ID 0, on top of the body, 18 cm ahead of the robot center and 6 cm up, pitched slightly back.
+**Go2 mount** (from [`UNITREE_GO2_PROFILE`](dimos-ar/dimos/ar/robot/profiles/unitree_go2.py)): default is one tag, ID 0, on top of the body, 18 cm ahead of the robot center and 6 cm up, pitched slightly back. ARModule accepts multiple mounts (`fiducial_marker_mounts`); each `marker_id` must be unique. The launcher lists them as an array: pick a pre-built ID or upload a 36h11 PNG (the ID is decoded from the image).
 
 <p align="center">
   <img src="assets/specs_dimos_go2tagmount.jpg" alt="Default AprilTag mount location on Unitree Go2" width="480" />
 </p>
 
-Mount geometry is part of the robot profile, not launcher config. A G1 profile is not in this package yet; ID 1 print files in `assets/markers/` are leftover sheets only.
+Mount geometry is the Go2 profile default. Override it in `~/.config/dimos/config` as `armodule.fiducial_marker_mounts` (or `ARMODULE__FIDUCIAL_MARKER_MOUNTS`) when the mount is not the stock pose. Print from [`assets/markers/`](assets/markers/) (IDs 0, 1, 2) or upload a custom 36h11 PNG in the launcher.
 
 Enable the fiducial provider in DimOS config (`armodule.localization.providers`) when you want ARModule to request marker observations.
 
@@ -146,7 +163,7 @@ Enable the fiducial provider in DimOS config (`armodule.localization.providers`)
 
 #### Set up inside Spectacles Lens
 
-Open [`clients/specs/spectacles-dimensional-os.esproj`](clients/specs/spectacles-dimensional-os.esproj) in Lens Studio and send the Lens to your Spectacles (Lens with experimental API enabled cannot be published so you need to upload via LS). The <b>setup wizard</b> walks you through connecting and locating the robot. Enter the <b>ARModule IP</b> from the launcher when asked.
+Open [`clients/specs/spectacles-dimensional-os.esproj`](clients/specs/spectacles-dimensional-os.esproj) in Lens Studio and send the Lens to your Spectacles (Lens with experimental API enabled cannot be published so you need to upload via LS). The <b>setup wizard</b> walks you through connecting and locating the robot. Enter the <b>Host IP</b> from the launcher (or `detect_lan_ip` / the `start.sh` banner) when asked.
 
 <p align="center">
   <img src="assets/specs_dimos_setupwizard.gif" alt="Setup wizard on Spectacles: connect, capture observations, finish setup" width="480" />
@@ -158,7 +175,7 @@ Leave the robot standing still and walk around it while looking at the tag. ARMo
 
 ## System Design
 
-<b>Dimensional OS</b> runs the robot. It owns the connection to the Go2 (and, in DimOS, G1), builds a map out of the LiDAR, plans routes through that map and handles the navigation. In <b>Agent Mode</b> it also runs the language model behind your voice commands. ARModule blueprints in this repo are Go2-only (`unitree_go2_ar`). 
+<b>Dimensional OS</b> runs the robot. It owns the connection to the Go2, builds a map out of the LiDAR, plans routes through that map and handles the navigation. In <b>Agent Mode</b> it also runs the language model behind your voice commands. ARModule blueprints in this repo are Go2-only (`unitree_go2_ar` / `unitree_go2_ar_agentic`). 
 
 <b>ARModule</b> (`dimos.ar`) is the main addition of this repo. It streams the robot's position, route and LiDAR over a <b>WebSocket</b> and takes navigation goals and localization observations back. Fiducial or VPS localization relates the client's tracking frame to robot `odom`.
 
@@ -168,7 +185,7 @@ The <b>Spectacles Lens</b> is the reference client. It renders the robot and its
 
 ```mermaid
 flowchart LR
-  Robot["Unitree<br>Go2 / G1"]
+  Robot["Unitree<br>Go2"]
 
   subgraph DimOS["Dimensional OS (Mac)"]
     direction TB
@@ -326,7 +343,7 @@ flowchart LR
 
 The landing page has a **Select HMD** control. Current options: Quest 3 (`quest3`) and Quest 3S (`quest3s`).
 
-Vite on the Mac serves the HTTPS page and proxies same-origin `wss://<page-host>/ar` to ARModule at `ws://127.0.0.1:8787`. The Quest browser never types an ARModule IP. Non-HTTPS pages and unaccepted calibration profiles fail before XR entry.
+Vite on the Mac serves the HTTPS page and proxies same-origin `wss://<page-host>/ar` to ARModule at `ws://127.0.0.1:8787`. The Quest browser uses the Network URL (`https://<host-ip>:5173`); it never types a Host IP into a connection field. Non-HTTPS pages and unaccepted calibration profiles fail before XR entry.
 
 ```bash
 cd clients/webxr
@@ -385,10 +402,10 @@ npm test
 
 | Symptom | Things to try |
 |---------|----------------|
-| Lens cannot connect | Check that Spectacles and the Mac are on the same WiFi and that you typed the ARModule IP from the launcher, not `127.0.0.1`. |
+| Lens cannot connect | Check that Spectacles and the Mac are on the same WiFi and that you typed the Host IP from the launcher, not `127.0.0.1`. |
 | AprilTag not detected | Get closer, improve the lighting, keep walking around the robot, and check that the tag printed at full size. |
 | Drift after setup | Expected, see [Pose Drift](#pose-drift). Start a capture episode or restart setup from the wrist menu. |
-| Navigation unavailable | The ARModule log reports which capabilities the robot advertised. G1 is not an ARModule blueprint; G1 navigation is a DimOS stack concern. |
+| Navigation unavailable | The ARModule log reports which capabilities the robot advertised. |
 | Agent does not respond | Check that `OPENAI_API_KEY` is set in the launcher and that the Mac has internet. |
 | Wake word ignored | Turn on the debug console and watch line 7 to see what was transcribed, and check that you are in Agent Mode. |
 | Robot does not move | Setup has to be finished and the robot connected. The agent reply on line 8 turns red or yellow when something failed. |

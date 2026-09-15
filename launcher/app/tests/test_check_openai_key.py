@@ -19,12 +19,12 @@ async def test_run_check_does_not_set_openai_warning(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
 
     async def fake_run(argv, *, env, on_line):  # type: ignore[no-untyped-def]
-        await on_line("CHECK_OK_GO2=1")
+        await on_line("CHECK_OK=1")
         await on_line("OPENAI_API_KEY = false")
         return 0
 
     with patch.object(mgr, "_run_tracked", new=fake_run):
         snap = await mgr.run_check()
 
-    assert snap["ready_go2"] is True
+    assert snap["check_ok"] is True
     assert snap["warning"] is None

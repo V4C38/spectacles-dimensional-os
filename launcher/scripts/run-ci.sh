@@ -73,6 +73,8 @@ run_launcher_job() {
     "${py}" -m venv "${LAUNCHER_VENV}"
   fi
 
+  git -C "${ROOT}" lfs pull --include="assets/markers/**" --exclude=""
+
   # shellcheck disable=SC1091
   source "${LAUNCHER_VENV}/bin/activate"
   cd "${LAUNCHER_APP}"

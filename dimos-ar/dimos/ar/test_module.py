@@ -18,11 +18,12 @@ from dimos.ar.module import (
     LocalizationConfig,
     LocalizationProviderConfig,
     _textual_ai_message,
+    profile_for_config,
 )
 from dimos.ar.navigation.tele_cmd_vel import TeleCmdVelPublisher
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest, NavState
 from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName, CapabilitySet
-from dimos.ar.robot.profiles import RobotName, RobotProfile
+from dimos.ar.robot.profiles import FiducialMarkerMount, RobotName, RobotProfile
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 from dimos.ar.robot.safety import Safety
 from dimos.ar.sensors.lidar_settings import LidarSettings
@@ -136,7 +137,53 @@ def test_localization_config_defaults_empty() -> None:
     config = ARModuleConfig()
     assert config.robot is RobotName.UNITREE_GO2
     assert config.localization.providers == []
+    assert config.fiducial_marker_mounts is None
     assert LocalizationConfig().providers == []
+
+
+def test_profile_for_config_none_keeps_go2_mounts() -> None:
+    profile = profile_for_config(ARModuleConfig())
+    assert profile.fiducial_marker_mounts == UNITREE_GO2_PROFILE.fiducial_marker_mounts
+
+
+def test_profile_for_config_replaces_mounts() -> None:
+    orientation = UNITREE_GO2_PROFILE.fiducial_marker_mounts[0].orientation
+    mount = FiducialMarkerMount(
+        marker_id=0,
+        size_m=0.08,
+        position=(0.2, 0.0, 0.07),
+        orientation=orientation,
+    )
+    profile = profile_for_config(ARModuleConfig(fiducial_marker_mounts=[mount]))
+    assert profile.fiducial_marker_mounts == (mount,)
+
+
+def test_profile_for_config_empty_mounts_raises() -> None:
+    with pytest.raises(ValueError, match="fiducial_marker_mounts"):
+        profile_for_config(ARModuleConfig(fiducial_marker_mounts=[]))
+
+
+def test_armodule_config_parses_mounts_from_dict() -> None:
+    orientation = UNITREE_GO2_PROFILE.fiducial_marker_mounts[0].orientation
+    config = ARModuleConfig.model_validate(
+        {
+            "fiducial_marker_mounts": [
+                {
+                    "marker_id": 0,
+                    "size_m": 0.08,
+                    "position": [0.2, 0.0, 0.07],
+                    "orientation": list(orientation),
+                }
+            ]
+        }
+    )
+    assert config.fiducial_marker_mounts is not None
+    assert len(config.fiducial_marker_mounts) == 1
+    mount = config.fiducial_marker_mounts[0]
+    assert mount.marker_id == 0
+    assert mount.size_m == pytest.approx(0.08)
+    assert mount.position == (0.2, 0.0, 0.07)
+    assert profile_for_config(config).fiducial_marker_mounts == (mount,)
 
 
 def test_localization_only_config_defaults_to_go2() -> None:

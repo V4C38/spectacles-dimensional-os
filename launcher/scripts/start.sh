@@ -3,8 +3,8 @@
 #
 # Usage:
 #   ./launcher/scripts/start.sh
-#   ./launcher/scripts/start.sh --stack go2|agentic
-#   ./launcher/scripts/start.sh --stack go2 --robot-ip <ip|simulated>
+#   ./launcher/scripts/start.sh --blueprint unitree_go2_ar|unitree_go2_ar_agentic
+#   ./launcher/scripts/start.sh --blueprint unitree_go2_ar --robot-ip <ip|simulated>
 #
 # The robot is auto-discovered on the LAN (Unitree multicast) unless --robot-ip
 # (or ROBOT_IP) pins an address. When several are found interactively you get a
@@ -19,19 +19,15 @@
 #   DIMOS_CONFIGURE_SYSTEM=1  Enable interactive sysctl/ulimit prompts (off by default)
 #   DIMOS_AR_SKIP_OPENAI_CHECK=1  Skip the OpenAI API reachability probe at startup
 #   Localization (dimos-ar / unitree_go2_ar, DimOS config — not this script's argv):
-#     ~/.config/dimos/config.json  armodule.localization.providers
-#     armodule__localization__providers  env override (JSON list)
+#     ~/.config/dimos/config  armodule.localization.providers
+#     ARMODULE__LOCALIZATION__PROVIDERS  env override (JSON list)
 #     MULTISET_CLIENT_ID / MULTISET_CLIENT_SECRET  VPS credentials (not in config file)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-DIMOS_AR_ROOT="${ROOT}/dimos-ar"
 source "${SCRIPT_DIR}/dimos_lib.sh"
-
-# DimOS offline replay accepts fake|mock|replay; launcher UI/docs use "simulated".
-DIMOS_SIMULATED_IP="fake"
 
 _color_enabled() {
   local fd="$1"
@@ -68,18 +64,18 @@ print_red_stderr() {
   fi
 }
 
-STACK_FLAG=""
+BLUEPRINT_FLAG=""
 ROBOT_IP_FLAG=""
 NON_INTERACTIVE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --stack)
+    --blueprint)
       if [[ $# -lt 2 || -z "${2:-}" ]]; then
-        echo "--stack requires go2 or agentic" >&2
+        echo "--blueprint requires unitree_go2_ar or unitree_go2_ar_agentic" >&2
         exit 1
       fi
-      STACK_FLAG="$2"
+      BLUEPRINT_FLAG="$2"
       NON_INTERACTIVE=1
       shift 2
       ;;
@@ -283,26 +279,26 @@ for device in devices:
   ROBOT_IP="simulated"
 }
 
-if [[ -n "${STACK_FLAG}" ]]; then
-  case "${STACK_FLAG}" in
-    go2|unitree_go2_ar)
+if [[ -n "${BLUEPRINT_FLAG}" ]]; then
+  case "${BLUEPRINT_FLAG}" in
+    unitree_go2_ar)
       SELECTED_INDEX=0
       ;;
-    agentic|unitree_go2_ar_agentic)
+    unitree_go2_ar_agentic)
       SELECTED_INDEX=1
       ;;
     *)
-      echo "Unknown stack: ${STACK_FLAG} (expected go2 or agentic)" >&2
+      echo "Unknown blueprint: ${BLUEPRINT_FLAG} (expected unitree_go2_ar or unitree_go2_ar_agentic)" >&2
       exit 1
       ;;
   esac
 else
-  arrow_menu "Choose the robot stack to run (↑/↓ then Enter):" "${MENU_LABELS[@]}"
+  arrow_menu "Choose the blueprint to run (↑/↓ then Enter):" "${MENU_LABELS[@]}"
 fi
 
 SELECTED_BLUEPRINT="${STACK_IDS[$SELECTED_INDEX]}"
 STACK_LABEL="${MENU_LABELS[$SELECTED_INDEX]}"
-EQUIVALENT="dimos run dimos-ar.${SELECTED_BLUEPRINT//_/-}"
+CLI_BLUEPRINT="dimos-ar.${SELECTED_BLUEPRINT//_/-}"
 
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
   echo "Warning: OPENAI_API_KEY is unset — agent mode will not work until it is set." >&2
@@ -322,25 +318,48 @@ if [[ -z "${ROBOT_IP:-}" ]]; then
   resolve_robot_ip
 fi
 
-# Map launcher "simulated" (and alias "fake") to DimOS offline replay token.
+# Map launcher "simulated" (and alias "fake") to DimOS offline replay.
 DISPLAY_ROBOT_IP="${ROBOT_IP}"
+REPLAY=0
+PINNED_IP=""
 case "${ROBOT_IP}" in
   simulated|fake)
     DISPLAY_ROBOT_IP="simulated"
-    ROBOT_IP="${DIMOS_SIMULATED_IP}"
+    REPLAY=1
+    unset ROBOT_IP
+    ;;
+  *)
+    PINNED_IP="${ROBOT_IP}"
+    export ROBOT_IP
     ;;
 esac
-export ROBOT_IP
+
+DIMOS_CLI="$(dirname "${PYTHON}")/dimos"
+if [[ ! -x "${DIMOS_CLI}" ]]; then
+  echo "dimos CLI not found next to ${PYTHON}" >&2
+  echo "Expected: ${DIMOS_CLI}" >&2
+  exit 1
+fi
+
+RUN_CMD=("${DIMOS_CLI}")
+if [[ "${REPLAY}" -eq 1 ]]; then
+  RUN_CMD+=(--replay)
+fi
+RUN_CMD+=(run "${CLI_BLUEPRINT}")
+if [[ -n "${PINNED_IP}" ]]; then
+  RUN_CMD+=(--robot-ip "${PINNED_IP}")
+fi
 
 echo "Using Python: ${PYTHON}"
 echo "Blueprint:    ${SELECTED_BLUEPRINT}"
-echo "Stack:        ${STACK_LABEL}"
-echo "Equivalent:   ${EQUIVALENT}"
+echo "Label:        ${STACK_LABEL}"
+echo "Equivalent:   ${RUN_CMD[*]}"
 echo "Robot IP:     ${DISPLAY_ROBOT_IP}"
 echo "WebSocket:    ws://${LISTEN_HOST}:8787 (not listening yet — booting DimOS stack…)"
 echo "Log level:    ${DIMOS_LOG_LEVEL} (verbose: DIMOS_LOG_LEVEL=DEBUG ./launcher/scripts/start.sh)"
 echo "Logs:         stdout + ~/.local/state/dimos/logs/.../main.jsonl (dimos log -f)"
-print_green_stdout "Spectacles:   enter ${LAN_IP} in the lens"
+print_green_stdout "Host IP:      ${LAN_IP}"
+echo "Spectacles:   enter the Host IP in the lens"
 echo ""
 echo "Ctrl+C to stop."
 echo ""
@@ -349,16 +368,4 @@ echo ""
 # A one-off Go2 :8081 /offer refusal usually means the robot-side runtime was
 # still coming up, not that the Lens-side ws://<host>:8787 session is misconfigured.
 
-exec "${PYTHON}" -c "
-import os
-import sys
-sys.path.insert(0, '${DIMOS_AR_ROOT}')
-if os.environ.get('DIMOS_AR_FORCE_COLOR', '') not in ('', '0', 'false'):
-    import dimos.utils.logging_config as _lc
-    _lc._CONSOLE_USE_COLORS = True
-from dimos.ar.utils.console import install_ar_console_styles
-install_ar_console_styles()
-from dimos.core.coordination.module_coordinator import ModuleCoordinator
-from dimos.ar.blueprints import ${SELECTED_BLUEPRINT}
-ModuleCoordinator.build(${SELECTED_BLUEPRINT}).loop()
-" < /dev/null 2> >(grep -v '^objc\[' >&2)
+exec "${RUN_CMD[@]}" < /dev/null 2> >(grep -v '^objc\[' >&2)
