@@ -1,8 +1,8 @@
 # Cursor rules — spectacles-dimensional-os (monorepo)
 
 This repository composes **`ARModule`** into DimOS blueprints and ships a
-Specs Lens client. It is **not a fork of DimOS** — import the installed
-`dimos` package and wire via `autoconnect`.
+Specs Lens client and a WebXR host. It is **not a fork of DimOS** — import
+the installed `dimos` package and wire via `autoconnect`.
 
 ## Names (DimOS-shaped)
 
@@ -19,8 +19,9 @@ Same pattern as `RelocalizationModule` / `dimos.mapping.relocalization` /
 Do **not** call it a bridge, an AR package, or `ar_go2`. Prose uses **`ARModule`**.
 The WebSocket accept loop is a collaborator (`websocket/server.py`), not the class.
 The Lens composition root is **`DimOSSpecsClient`**. Wearable UX lives under
-`DimOSSpecsClient/presentation/` and `utilities/`. Portable ClientCore lives
-under `DimOSARClient/` (no `core/` folder).
+`DimOSSpecsClient/presentation/` and `utilities/`. The WebXR composition root
+is **`DimOSWebXRClient`**. Portable ClientCore lives under `DimOSARClient/`
+(no `core/` folder).
 
 
 ## Chat — correct imprecise terms
@@ -49,7 +50,8 @@ spectacles-dimensional-os/
 │   │   └── Assets/Scripts/
 │   │       ├── DimOSARClient/           # portable ClientCore (no core/)
 │   │       └── DimOSSpecsClient/        # composition root + Specs host
-│   └── webxr/                   # WebXR host (empty)
+│   └── webxr/                   # WebXR host
+│       └── src/DimOSWebXRClient.ts  # composition root
 └── launcher/                    # CLI scripts + web UI for setup/start
     ├── Start Launcher.command   # Finder double-click entry (http://127.0.0.1:8790)
     ├── scripts/                 # setup.sh, start.sh, start-launcher.sh, run-ci.sh, …
@@ -63,7 +65,7 @@ spectacles-dimensional-os/
 | Contract | `dimos-ar/PROTOCOL.md` | JSON WebSocket API |
 | ClientCore | `clients/specs/Assets/Scripts/DimOSARClient/` | Headset-agnostic TypeScript in the Specs project until it ships as `.lspkg`. `clients/core/` is empty (`.gitkeep`). |
 | Specs client | `clients/specs/` | Lens Studio project. Entry is `DimOSSpecsClient`. |
-| WebXR host | `clients/webxr/` | Empty |
+| WebXR host | `clients/webxr/` | Vite / XR Blocks. Entry is `DimOSWebXRClient`. |
 
 The package publishes `dimos.ar*`. ClientCore production source is
 `clients/specs/Assets/Scripts/DimOSARClient/` until the later `.lspkg` split.
@@ -160,8 +162,10 @@ When adding lifecycle, wire handlers, coordinators, or presentation logic:
 - `dimos-ar/dimos/ar/` stays platform-agnostic. Portable TypeScript lives in
   `clients/specs/Assets/Scripts/DimOSARClient/` until it ships as an `.lspkg` (no Specs
   or Lens APIs in that tree). Specs-specific code lives in `clients/specs/`
-  under `DimOSSpecsClient/`. The composition root is `DimOSSpecsClient`.
-  Do not call it `SpectaclesHost`. `clients/core/` is empty until the `.lspkg` split.
+  under `DimOSSpecsClient/`. The Specs composition root is `DimOSSpecsClient`.
+  The WebXR composition root is `DimOSWebXRClient`. Do not call either
+  `SpectaclesHost`. `clients/core/` is empty until the `.lspkg` split. WebXR
+  imports ClientCore; it does not copy it.
 - **Never edit** a second copy of ClientCore. There is no generated mirror and
   no `clients/specs/scripts/sync-client-core.mjs`.
 - **Open Lens Studio from `clients/specs/spectacles-dimensional-os.esproj`**, not the repo
@@ -209,4 +213,5 @@ or a normal terminal). Sandboxed runs fail when DimOS tries to write logs under
 cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest
 cd dimos-ar && /path/to/dimos/.venv/bin/python3 -m pytest dimos/ar/websocket/test_ws_integration.py -m integration
 cd clients/specs/Tests && npm test   # ClientCore + Specs presentation tests; CI job client-specs-tests
+cd clients/webxr && npm test         # WebXR host tests; CI job client-webxr-tests
 ```

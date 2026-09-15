@@ -1,11 +1,7 @@
 import { odomToClientTrackingPose, rotateVecByQuat } from "../../DimOSARClient/localization/clientTrackingTransforms";
 import type { ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
 import type { Quat, RobotDescription, Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
-import {
-  COLOR_ERROR,
-  COLOR_WHITE,
-  NO_ROBOT_CONNECTED_LABEL,
-} from "../../DimOSARClient/websocket/sessionLinkStatus";
+import { NO_ROBOT_CONNECTED_LABEL } from "../../DimOSARClient/websocket/sessionLinkStatus";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import { clientTrackingToSpecsPoint, clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
 import { RuntimePoseSmoothing } from "../utilities/RuntimePoseSmoothing";
@@ -17,7 +13,7 @@ import {
   type RobotActivityVoice,
   type RobotMarkerApplyInput,
 } from "./AppState";
-import { findChildRecursive, findText, setButtonStyle, SnapOS2Styles } from "./UIKit";
+import { COLOR_ERROR, COLOR_WHITE, findChildRecursive, findText, setButtonStyle, SnapOS2Styles } from "./UIKit";
 
 export interface RobotMarkerApplyContext {
   mainUi: SceneObject;

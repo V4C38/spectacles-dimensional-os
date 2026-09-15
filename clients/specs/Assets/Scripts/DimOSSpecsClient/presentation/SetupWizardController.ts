@@ -22,7 +22,7 @@ import {
   type StatusText,
 } from "../../DimOSARClient/websocket/sessionLinkStatus";
 import { scaleIn } from "../utilities/AnimationUtilities";
-import { COLOR_ERROR, COLOR_WHITE } from "./UIKit";
+import { COLOR_ERROR, COLOR_WHITE, statusToneColor } from "./UIKit";
 import { SetupWizardStep, SetupWizardView } from "./SetupWizardView";
 
 const WIZARD_STEP_TITLES = [
@@ -49,13 +49,13 @@ function connectStepStatus(input: {
   displayName?: string;
 }): StatusText {
   if (input.isConnecting && !input.socketOpen) {
-    return { text: "Connecting…", color: COLOR_ERROR };
+    return { text: "Connecting…", color: "error" };
   }
   if (input.isConnecting && input.socketOpen && input.view.connection === "awaiting_hello") {
-    return { text: "Waiting for handshake…", color: COLOR_ERROR };
+    return { text: "Waiting for handshake…", color: "error" };
   }
   if (input.isConnecting && input.linkPhase === "disconnected") {
-    return { text: "Connecting...", color: COLOR_ERROR };
+    return { text: "Connecting...", color: "error" };
   }
   return sessionLinkStatus(
     input.view,
@@ -421,14 +421,14 @@ export class SetupWizardController {
       socketOpen: view.connection === "awaiting_hello" || view.connection === "ready",
       displayName: view.hello?.robot.display_name,
     });
-    this.view.setStatus(this._hostValidationError ?? status.text, status.color);
+    this.view.setStatus(this._hostValidationError ?? status.text, statusToneColor(status.color));
   }
 
   private renderLocalizationStatus(): void {
     const sessionView = this.deps.session.view();
     const episodeView = this.deps.episode.view();
     const capture = localizationCaptureStatus(sessionView, episodeView);
-    this.view.setStatus(capture.text, capture.color);
+    this.view.setStatus(capture.text, statusToneColor(capture.color));
   }
 
   private refreshFooterButtons(): void {

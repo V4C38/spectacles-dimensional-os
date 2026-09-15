@@ -4,23 +4,20 @@ export const NO_ROBOT_CONNECTED_LABEL = "- Disconnected -";
 
 export type SessionLinkPhase = "disconnected" | "connecting" | "robotOffline" | "connected";
 
+export type StatusTone = "error" | "warn" | "success" | "neutral" | "muted";
+
 export interface StatusText {
   text: string;
-  color: vec4;
+  color: StatusTone;
 }
 
 export interface SessionLinkTransitionLog {
   hudText: string;
-  hudColor: vec4;
+  hudColor: StatusTone;
   consoleText: string;
-  consoleColor: vec4;
+  consoleColor: StatusTone;
   hudDurationS?: number;
 }
-
-export const COLOR_WHITE = new vec4(1, 1, 1, 1);
-export const COLOR_SUCCESS = new vec4(0, 1, 0, 1);
-export const COLOR_ERROR = new vec4(1, 0, 0, 1);
-export const COLOR_WARN = new vec4(1, 0.85, 0, 1);
 
 export function deriveSessionLinkPhase(view: ARModuleSessionState): SessionLinkPhase {
   if (view.connection === "disconnected" || view.connection === "failed") {
@@ -43,22 +40,22 @@ export function sessionLinkStatus(
     case "disconnected":
       return {
         text: `\n\n\n${NO_ROBOT_CONNECTED_LABEL}`,
-        color: COLOR_ERROR,
+        color: "error",
       };
     case "connecting":
       return {
         text: "\n\n\nConnecting…",
-        color: COLOR_ERROR,
+        color: "error",
       };
     case "robotOffline":
       return {
         text: "\n\n\nConnected - Robot not connected",
-        color: COLOR_WARN,
+        color: "warn",
       };
     case "connected":
       return {
         text: `\n\n\nConnected - ${displayName}`,
-        color: COLOR_SUCCESS,
+        color: "success",
       };
   }
 }
@@ -73,27 +70,27 @@ export function sessionLinkTransitionLog(
   if (next === "disconnected") {
     return {
       hudText: "Disconnected",
-      hudColor: COLOR_ERROR,
+      hudColor: "error",
       consoleText: "Disconnected",
-      consoleColor: COLOR_ERROR,
+      consoleColor: "error",
       hudDurationS: 3.0,
     };
   }
   if (prev === "connected" && next === "robotOffline") {
     return {
       hudText: "Robot disconnected",
-      hudColor: COLOR_ERROR,
+      hudColor: "error",
       consoleText: "Robot disconnected",
-      consoleColor: COLOR_ERROR,
+      consoleColor: "error",
       hudDurationS: 3.0,
     };
   }
   if (prev === "robotOffline" && next === "connected") {
     return {
       hudText: "Robot connected",
-      hudColor: COLOR_SUCCESS,
+      hudColor: "success",
       consoleText: "Robot connected",
-      consoleColor: COLOR_SUCCESS,
+      consoleColor: "success",
       hudDurationS: 2.0,
     };
   }

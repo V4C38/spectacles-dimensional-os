@@ -18,7 +18,7 @@ import type { SpecsWebSocketTransport } from "../websocket/SpecsWebSocketTranspo
 import { odomToClientTrackingPose } from "../../DimOSARClient/localization/clientTrackingTransforms";
 import { clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
 import { scaleIn, scaleOut } from "../utilities/AnimationUtilities";
-import { findChildRecursive, getFrameComponent, isFrameInitialized } from "./UIKit";
+import { findChildRecursive, getFrameComponent, isFrameInitialized, statusToneColor } from "./UIKit";
 import { UILogger } from "./UILogger";
 import { WristMenuController } from "./WristMenuController";
 import { MainMenuView } from "./MainMenuView";
@@ -154,10 +154,10 @@ export class UIPresenter extends BaseScriptComponent {
     if (transition && this.setupCompleted) {
       this.uiLogger.show(
         transition.hudText,
-        transition.hudColor,
+        statusToneColor(transition.hudColor),
         transition.hudDurationS ?? null,
       );
-      this.uiLogger.logConsole(transition.consoleText, transition.consoleColor);
+      this.uiLogger.logConsole(transition.consoleText, statusToneColor(transition.consoleColor));
     }
 
     if (view.state?.lidar) {
@@ -359,7 +359,7 @@ export class UIPresenter extends BaseScriptComponent {
     const deps = this.requireDeps();
     const view = deps.session.view();
     const status = sessionLinkStatus(view, view.hello?.robot.display_name);
-    this.mainMenuView?.setStatus(status.text, status.color);
+    this.mainMenuView?.setStatus(status.text, statusToneColor(status.color));
     const agentAvailable = view.capabilities?.agent.available === true;
     this.mainMenuView?.setLidarModeAvailability(
       view.capabilities?.lidar.available === true,
@@ -404,7 +404,7 @@ export class UIPresenter extends BaseScriptComponent {
   private refreshLocalizationCaptureStatus(): void {
     const deps = this.requireDeps();
     const capture = localizationCaptureStatus(deps.session.view(), deps.episode.view());
-    this.uiLogger.setLocalizationCaptureStatus(capture.text, capture.color);
+    this.uiLogger.setLocalizationCaptureStatus(capture.text, statusToneColor(capture.color));
   }
 
   private configureMenuMotion(panel: SceneObject): void {

@@ -29,6 +29,23 @@ export const COLOR_WARN = new (globalThis as Record<string, new (...args: number
   1,
 );
 
+export function statusToneColor(
+  tone: "error" | "warn" | "success" | "neutral" | "muted",
+): { x: number; y: number; z: number; w: number } {
+  switch (tone) {
+    case "error":
+      return COLOR_ERROR;
+    case "warn":
+      return COLOR_WARN;
+    case "success":
+      return COLOR_SUCCESS;
+    case "neutral":
+      return COLOR_WHITE;
+    case "muted":
+      return COLOR_MUTED;
+  }
+}
+
 export const SnapOS2Styles = {
   Primary: "primary",
   PrimaryNeutral: "primary-neutral",

@@ -14,6 +14,7 @@ import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInp
 import { Frame } from "SpectaclesUIKit.lspkg/Scripts/Components/Frame/Frame";
 import { SnapOS2Styles } from "SpectaclesUIKit.lspkg/Scripts/Themes/SnapOS-2.0/SnapOS2";
 import { animateScaleTo } from "../utilities/AnimationUtilities";
+import type { StatusTone } from "../../DimOSARClient/websocket/sessionLinkStatus";
 
 export { SnapOS2Styles };
 
@@ -58,6 +59,21 @@ export const COLOR_MUTED = new vec4(1, 1, 1, 0.55);
 export const COLOR_SUCCESS = new vec4(0, 1, 0, 1);
 export const COLOR_ERROR = new vec4(1, 0, 0, 1);
 export const COLOR_WARN = new vec4(1, 0.85, 0, 1);
+
+export function statusToneColor(tone: StatusTone): vec4 {
+  switch (tone) {
+    case "error":
+      return COLOR_ERROR;
+    case "warn":
+      return COLOR_WARN;
+    case "success":
+      return COLOR_SUCCESS;
+    case "neutral":
+      return COLOR_WHITE;
+    case "muted":
+      return COLOR_MUTED;
+  }
+}
 
 // ── Frame metrics ──────────────────────────────────────────────
 

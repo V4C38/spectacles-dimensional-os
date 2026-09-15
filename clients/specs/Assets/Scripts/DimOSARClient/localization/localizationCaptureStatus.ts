@@ -1,10 +1,10 @@
 import type { LocalizationCaptureState } from "./localizationCaptureEpisode";
 import type { ARModuleSessionState } from "../websocket/arModuleSession";
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WARN, COLOR_WHITE } from "../websocket/sessionLinkStatus";
+import type { StatusTone } from "../websocket/sessionLinkStatus";
 
 export interface CaptureStatusText {
   text: string;
-  color: vec4;
+  color: StatusTone;
 }
 
 export function localizationCaptureStatus(
@@ -12,35 +12,31 @@ export function localizationCaptureStatus(
   episodeView: LocalizationCaptureState,
 ): CaptureStatusText {
   if (sessionView.connection !== "ready") {
-    return { text: "Inactive — not ready", color: COLOR_MUTED() };
+    return { text: "Inactive — not ready", color: "muted" };
   }
   if (!sessionView.capabilities?.localization.available) {
-    const reason = sessionView.capabilities.localization.reason ?? "Localization unavailable";
-    return { text: reason, color: COLOR_WARN };
+    const reason = sessionView.capabilities?.localization.reason ?? "Localization unavailable";
+    return { text: reason, color: "warn" };
   }
   if (sessionView.hasTrackingOrigin) {
-    return { text: "Localized", color: COLOR_SUCCESS };
+    return { text: "Localized", color: "success" };
   }
 
   switch (episodeView.phase) {
     case "idle":
-      return { text: "Waiting for capture request", color: COLOR_WHITE };
+      return { text: "Waiting for capture request", color: "neutral" };
     case "waiting_for_geometric_gate":
-      return { text: "Waiting for geometric gate — look at robot", color: COLOR_WARN };
+      return { text: "Waiting for geometric gate — look at robot", color: "warn" };
     case "capturing":
-      return { text: "Capturing observations", color: COLOR_SUCCESS };
+      return { text: "Capturing observations", color: "success" };
     case "sending":
-      return { text: "Sending observations", color: COLOR_WHITE };
+      return { text: "Sending observations", color: "neutral" };
     case "awaiting_result":
-      return { text: "Awaiting localization result", color: COLOR_WHITE };
+      return { text: "Awaiting localization result", color: "neutral" };
     case "failed":
       return {
         text: episodeView.lastError ? `Capture failed — ${episodeView.lastError}` : "Capture failed",
-        color: COLOR_ERROR,
+        color: "error",
       };
   }
-}
-
-function COLOR_MUTED(): vec4 {
-  return new vec4(1, 1, 1, 0.55);
 }

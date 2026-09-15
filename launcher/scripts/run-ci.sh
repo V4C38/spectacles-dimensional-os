@@ -18,6 +18,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIMOS_AR="${ROOT}/dimos-ar"
 LAUNCHER_APP="${ROOT}/launcher/app"
 LENS_TESTS="${ROOT}/clients/specs/Tests"
+WEBXR_CLIENT="${ROOT}/clients/webxr"
 CI_VENV="${CI_VENV:-/tmp/spectacles-dimensional-os-ci-venv}"
 LAUNCHER_VENV="${LAUNCHER_VENV:-/tmp/spectacles-dimensional-os-launcher-ci-venv}"
 
@@ -90,9 +91,18 @@ run_client_specs_job() {
   npm test
 }
 
+run_client_webxr_job() {
+  echo "==> client-webxr-tests job (matches .github/workflows/ci.yml)"
+  cd "${WEBXR_CLIENT}"
+  npm ci
+  npm test
+  npm run build
+}
+
 run_dimos_ar_job
 run_launcher_job
 run_client_specs_job
+run_client_webxr_job
 
 echo ""
 echo "All CI jobs passed."

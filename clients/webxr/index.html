@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>DimOS ARModule WebXR Client</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #111;
+        color: #f2f2f2;
+        font-family: system-ui, sans-serif;
+      }
+      #overlay {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        padding: 24px;
+        text-align: center;
+        z-index: 2;
+      }
+      h1 {
+        margin: 0;
+        line-height: 1.15;
+      }
+      h1 .client-label {
+        display: block;
+        margin-top: 0.35em;
+        font-size: 0.5em;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.7);
+      }
+      #status {
+        max-width: 36rem;
+        white-space: pre-wrap;
+        color: rgba(255, 255, 255, 0.7);
+      }
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        font-size: 1rem;
+      }
+      select,
+      button {
+        font-size: 1.1rem;
+        padding: 0.7rem 1.2rem;
+      }
+      button:disabled {
+        opacity: 0.5;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="overlay">
+      <h1>DimOS ARModule<span class="client-label">WebXR Client</span></h1>
+      <p id="status">Starting…</p>
+      <label for="hmd">
+        Select HMD
+        <select id="hmd" disabled></select>
+      </label>
+      <button id="enter" type="button" disabled>Enter AR</button>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

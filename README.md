@@ -21,7 +21,7 @@
 <p align="center">
   <a href="#setup">Setup</a> •
   <a href="#system-design">System Design</a> •
-  <a href="#augmented-reality-interface">Augmented Reality Interface</a> •
+  <a href="#clients">Clients</a> •
   <a href="#pose-drift">Pose Drift</a>
 </p>
 
@@ -209,9 +209,30 @@ flowchart LR
   Module --> Rest
 ```
 
-**Specs client**
+</details>
 
-Portable [`ClientCore`](clients/specs/Assets/Scripts/DimOSARClient/) speaks [`PROTOCOL.md`](dimos-ar/PROTOCOL.md). The composition root is **`DimOSSpecsClient`**: it constructs that core, drives time, and routes typed facts to room presenters and derived UX via [`UIPresenter`](clients/specs/Assets/Scripts/DimOSSpecsClient/presentation/UIPresenter.ts). Axis conversion stays in the Specs client (`SpecsCoordinates`). `clients/core/` is empty until ClientCore ships as an `.lspkg`.
+<a id="clients"></a>
+
+## Clients
+
+### ClientCore
+
+Portable [`ClientCore`](clients/specs/Assets/Scripts/DimOSARClient/) speaks [`PROTOCOL.md`](dimos-ar/PROTOCOL.md). Each headset host constructs that core and owns axis conversion. `clients/core/` is empty until ClientCore ships as an `.lspkg`.
+
+```mermaid
+flowchart LR
+  Core["ClientCore<br>session · T_odom_client · capture"]
+  Specs["DimOSSpecsClient"]
+  WebXR["DimOSWebXRClient"]
+
+  Specs --> Core
+  WebXR --> Core
+```
+
+<details>
+<summary><strong>SPECS</strong></summary>
+
+The composition root is **`DimOSSpecsClient`**: it constructs that core, drives time, and routes typed facts to room presenters and derived UX via [`UIPresenter`](clients/specs/Assets/Scripts/DimOSSpecsClient/presentation/UIPresenter.ts). Axis conversion stays in the Specs client (`SpecsCoordinates`).
 
 ```mermaid
 flowchart LR
@@ -225,11 +246,9 @@ flowchart LR
   Client --> UX
 ```
 
-</details>
-
 <a id="augmented-reality-interface"></a>
 
-## Augmented Reality Interface
+### Augmented Reality Interface
 
 The shipping Specs Lens is **`DimOSSpecsClient`** with portable **`DimOSARClient`**. The wire contract is [`PROTOCOL.md`](dimos-ar/PROTOCOL.md).
 
@@ -247,7 +266,7 @@ The <b>LiDAR</b> button in the wrist menu cycles three states: <b>off</b>, <b>ob
 
 <a id="manual-mode"></a>
 
-### Manual Mode
+#### Manual Mode
 
 The <b>NavigationMarker</b> is initially attached to the robot and allows the user to drag it at any time. The direction you drag sets the heading it should face when it arrives, as indicated by the arrow. The robot will continuously move towards the marker.
 The yellow path line shown is the real navigation path the planner sends back, rendered in world space. 
@@ -255,7 +274,7 @@ The yellow path line shown is the real navigation path the planner sends back, r
 
 <a id="agent-mode"></a>
 
-### Agent Mode
+#### Agent Mode
 
 Wake word <b>"Agent"</b> starts a voice session. Activity on the robot marker is <b>Following Path &gt; Thinking &gt; Responding &gt; Listening &gt; Idle</b> (Listening is Agent mode ASR running, including wake-wait). Speech to text runs on the Spectacles; the transcript goes to the DimOS agent on the Mac. The session closes after <b>30 seconds</b> of silence. Say <b>"stop"</b> and the robot stops immediately (same Emergency Stop path as in the wrist UI). With <b>Debug</b> on, the Agent button stays available even when disconnected or the blueprint has no agent, so you can test on-device STT; transcripts are not sent until the agent capability is live.
 
@@ -285,6 +304,40 @@ This is a subset of the agentic blueprint's skills, not a complete inventory.
 
 > [!NOTE]
 > Agent Mode needs `OPENAI_API_KEY` set in the launcher and an internet connection on the Mac.
+
+</details>
+
+<details>
+<summary><strong>WebXR</strong></summary>
+
+The composition root is **`DimOSWebXRClient`**: it constructs that core, drives time, and routes typed facts to room presenters and derived UX via `WebXRUIPresenter`. Axis conversion stays in the WebXR client (`WebXRCoordinates`).
+
+```mermaid
+flowchart LR
+  Core["ClientCore<br>session · T_odom_client · capture"]
+  Client["DimOSWebXRClient"]
+  Room["Robot · Lidar · NavGoal"]
+  UX["HMD select · HUD"]
+
+  Client --> Core
+  Client --> Room
+  Client --> UX
+```
+
+The landing page has a **Select HMD** control. Current options: Quest 3 (`quest3`) and Quest 3S (`quest3s`).
+
+Vite on the Mac serves the HTTPS page and proxies same-origin `wss://<page-host>/ar` to ARModule at `ws://127.0.0.1:8787`. The Quest browser never types an ARModule IP. Non-HTTPS pages and unaccepted calibration profiles fail before XR entry.
+
+```bash
+cd clients/webxr
+npm ci
+npm test
+npm run dev
+```
+
+`npm run dev` serves the Vite app over HTTPS. Open the printed LAN URL in the headset browser. Run ARModule on the same machine first.
+
+</details>
 
 <a id="pose-drift"></a>
 
@@ -318,10 +371,13 @@ cd dimos-ar
 /path/to/dimos/.venv/bin/python3 -m pytest
 ```
 
-ClientCore and Lens tests on their own. These are plain TypeScript and do not need Lens Studio:
+ClientCore, Lens, and WebXR tests on their own. These are plain TypeScript and do not need Lens Studio:
 
 ```bash
 cd clients/specs/Tests
+npm test
+
+cd clients/webxr
 npm test
 ```
 
