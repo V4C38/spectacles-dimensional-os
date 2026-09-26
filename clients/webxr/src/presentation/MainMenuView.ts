@@ -32,7 +32,6 @@ export class MainMenuView {
       height: 0.58,
       backgroundColor: "#1b1f2488",
     });
-    panel.position.set(0, 1.3, -0.7);
     const grid = panel.addGrid();
     this.status = grid.addRow({ weight: 0.16 }).addText({ text: "DimOS", fontSize: 0.036 });
     this.capture = grid.addRow({ weight: 0.12 }).addText({ text: "", fontSize: 0.028 });

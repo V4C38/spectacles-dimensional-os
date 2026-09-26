@@ -11,9 +11,9 @@ The landing page has a **Select HMD** control. Current options: Quest 3 (`quest3
 - An HMD from the selector
 - HTTPS page origin (Vite serves HTTPS for LAN headset access)
 - ARModule already listening on `ws://127.0.0.1:8787` on the same machine as Vite
-- Accepted calibration profile for the selected HMD (`src/camera/hmdProfiles.ts`)
+- The selected HMD profile (`src/camera/hmdProfiles.ts`)
 
-The Quest browser opens the WebXR page and connects to same-origin `wss://<page-host>/ar`. Vite forwards `/ar` to local ARModule. The headset never types an ARModule IP or port. Unaccepted profiles or a non-HTTPS page fail before XR entry.
+The Quest browser opens the WebXR page and connects to same-origin `wss://<page-host>/ar`. Vite forwards `/ar` to local ARModule. The headset never types an ARModule IP or port. A non-HTTPS page fails before XR entry. The selected HMD profile is the camera calibration.
 
 If ARModule restarts, ClientCore reconnects `/ar` every second. Vite forwards each new attempt. Localization origin is cleared on disconnect, so the wearer localizes again. If Vite itself stops, reload the page.
 

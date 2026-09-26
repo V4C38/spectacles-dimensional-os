@@ -128,12 +128,6 @@ find_python_for_venv() {
   return 1
 }
 
-python_has_dimos_ar() {
-  local py="${1:-}"
-  [[ -n "${py}" && -x "${py}" ]] || return 1
-  "${py}" -c "import dimos.ar" >/dev/null 2>&1
-}
-
 _color_enabled() {
   local fd="$1"
   if [[ -t "${fd}" ]]; then
@@ -206,12 +200,19 @@ except subprocess.CalledProcessError:
     print("unknown", end="")
 PY
 )"
-    if python_has_dimos_ar "${dimos_py}"; then
-      ar_status="installed"
-      check_ok=1
-    else
-      ar_status="not installed"
-    fi
+    ar_code="$(python_dimos_ar_status "${dimos_py}" || true)"
+    case "${ar_code}" in
+      installed)
+        ar_status="installed"
+        check_ok=1
+        ;;
+      stale)
+        ar_status="stale install (blueprints not registered)"
+        ;;
+      *)
+        ar_status="not installed"
+        ;;
+    esac
   fi
 
   echo "DimOS: ${dimos_status}"
@@ -422,8 +423,8 @@ echo "Installing dimos-ar into that environment..."
 )
 
 if ! python_has_dimos_ar "${DIMOS_ENV_PYTHON}"; then
-  echo "DimOS at ${DIMOS_ENV_PYTHON} cannot import dimos.ar after install." >&2
-  echo "The selected DimOS ref may be incompatible with this dimos-ar package." >&2
+  echo "DimOS at ${DIMOS_ENV_PYTHON} cannot run dimos-ar blueprints after install." >&2
+  echo "Need import dimos.ar and dimos.blueprints entry points unitree-go2-ar / unitree-go2-ar-agentic." >&2
   exit 1
 fi
 

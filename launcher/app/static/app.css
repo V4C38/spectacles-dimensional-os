@@ -170,6 +170,10 @@ body.resizing {
   text-align: right;
 }
 
+.value.mono a {
+  color: var(--accent);
+}
+
 .state-row {
   align-items: center;
   border-bottom: none;

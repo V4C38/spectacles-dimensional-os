@@ -6,7 +6,6 @@ import { frameTimeToClientClock } from "../time/BrowserClientClock";
 import {
   jpegDimensionsMatch,
   matchStream,
-  requireAcceptedProfile,
   type HmdCalibrationProfile,
   type LiveVideoSettings,
 } from "./HmdCalibration";
@@ -90,7 +89,7 @@ export function lookupPoseSample(
 
 export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSource {
   private readonly clock: ClientClock;
-  private readonly profile: HmdCalibrationProfile;
+  private readonly profileOf: () => HmdCalibrationProfile;
   private readonly media: CameraMediaPort;
   private readonly frames: FrameCapturePort;
   private readonly jpeg: JpegEncoder;
@@ -108,7 +107,7 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
 
   constructor(deps: {
     clock: ClientClock;
-    profile: HmdCalibrationProfile;
+    profile: HmdCalibrationProfile | (() => HmdCalibrationProfile);
     media: CameraMediaPort;
     frames: FrameCapturePort;
     jpeg: JpegEncoder;
@@ -116,12 +115,17 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
     videoFactory?: () => HTMLVideoElement;
   }) {
     this.clock = deps.clock;
-    this.profile = deps.profile;
+    const profile = deps.profile;
+    this.profileOf = typeof profile === "function" ? profile : () => profile;
     this.media = deps.media;
     this.frames = deps.frames;
     this.jpeg = deps.jpeg;
     this.performanceNow = deps.performanceNow ?? (() => performance.now());
     this.videoFactory = deps.videoFactory ?? createVideoElement;
+  }
+
+  private get profile(): HmdCalibrationProfile {
+    return this.profileOf();
   }
 
   samplePose(position: Vec3, orientation: Quat): void {
@@ -155,7 +159,6 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
   }
 
   async prepare(): Promise<void> {
-    requireAcceptedProfile(this.profile);
     const stream = await this.openValidatedStream();
     stream.getTracks().forEach((track) => track.stop());
   }
@@ -188,7 +191,6 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
   }
 
   async capture(): Promise<LocalizationObservation> {
-    requireAcceptedProfile(this.profile);
     await this.waitUntilOpen();
     if (!this.stream || !this.video) {
       throw new Error("headset camera is not started");
@@ -255,7 +257,6 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
   }
 
   private async openValidatedStream(): Promise<MediaStream> {
-    requireAcceptedProfile(this.profile);
     const devices = await this.media.enumerateDevices();
     if (devices.filter((device) => device.kind === "videoinput").length === 0) {
       throw new Error("no video input devices");

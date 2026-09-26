@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { jpegDimensionsMatch, matchStream, parseHmdId, requireAcceptedProfile } from "../src/camera/HmdCalibration";
+import { jpegDimensionsMatch, matchStream, parseHmdId } from "../src/camera/HmdCalibration";
 import { HMD_PROFILES } from "../src/camera/hmdProfiles";
 
 describe("HmdCalibration", () => {
@@ -8,7 +8,7 @@ describe("HmdCalibration", () => {
     expect(() => parseHmdId("quest2")).toThrow();
   });
 
-  it("rejects unmatched streams and unaccepted profiles", () => {
+  it("rejects unmatched streams and jpeg sizes", () => {
     const profile = HMD_PROFILES.quest3;
     expect(() =>
       matchStream(profile, { width: 640, height: 480, frameRate: 30, facingMode: "environment" }),
@@ -22,7 +22,6 @@ describe("HmdCalibration", () => {
       frameRate: 30,
       facingMode: "environment",
     });
-    expect(() => requireAcceptedProfile(profile)).toThrow();
     expect(() => jpegDimensionsMatch(profile, 100, 100)).toThrow();
     jpegDimensionsMatch(profile, 1280, 960);
   });

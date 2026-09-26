@@ -103,6 +103,7 @@ def test_ar_module_declares_stable_port_superset() -> None:
     ports = set(ARModule.__annotations__)
     assert {
         "odom",
+        "tf",
         "lidar",
         "path",
         "goal_reached",
@@ -287,7 +288,7 @@ def test_ingest_relocalization_transform_when_map_frame_present() -> None:
             return transform
         return None
 
-    module.tfbuffer = SimpleNamespace(get_frames=lambda: {"world", "map"}, get=get)
+    module._tf = SimpleNamespace(get_frames=lambda: {"world", "map"}, get=get)
     module._maybe_ingest_relocalization_transform(100.0)
     assert len(captured) == 1
     forwarded, ts_server = captured[0]
@@ -310,7 +311,7 @@ def test_ingest_relocalization_transform_skips_without_map_frame() -> None:
     module._coordinator = SimpleNamespace(on_relocalization_transform=on_relocalization_transform)
     module._last_relocalization_transform_poll_at = 0.0
     gets: list[tuple[str, str]] = []
-    module.tfbuffer = SimpleNamespace(
+    module._tf = SimpleNamespace(
         get_frames=lambda: set(),
         get=lambda parent, child: gets.append((parent, child)) or None,
     )

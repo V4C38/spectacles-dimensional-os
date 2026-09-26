@@ -259,7 +259,8 @@ export class SetupWizardController {
     }
     if (this._currentStep === SetupWizardStep.Localization) {
       if (!this.deps.session.view().hasTrackingOrigin) {
-        return;
+        this.deps.episode.reset();
+        print("SetupWizardController: finish localization=skipped");
       }
       this.finishWizard();
     }
@@ -442,9 +443,11 @@ export class SetupWizardController {
       footerShowPrev = this._openedFromRuntime;
     } else if (this._currentStep === SetupWizardStep.Connect && connected) {
       footerNextLabel = "Complete";
-    } else if (this._currentStep === SetupWizardStep.Localization) {
+    } else if (
+      this._currentStep === SetupWizardStep.Localization
+      && this.deps.session.view().hasTrackingOrigin
+    ) {
       footerNextLabel = "Complete";
-      footerNextEnabled = this.deps.session.view().hasTrackingOrigin;
     }
 
     this.view.applyFooterState(this._currentStep, {

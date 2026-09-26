@@ -343,7 +343,7 @@ flowchart LR
 
 The landing page has a **Select HMD** control. Current options: Quest 3 (`quest3`) and Quest 3S (`quest3s`).
 
-Vite on the Mac serves the HTTPS page and proxies same-origin `wss://<page-host>/ar` to ARModule at `ws://127.0.0.1:8787`. The Quest browser uses the Network URL (`https://<host-ip>:5173`); it never types a Host IP into a connection field. Non-HTTPS pages and unaccepted calibration profiles fail before XR entry.
+Vite on the Mac serves the HTTPS page and proxies same-origin `wss://<page-host>/ar` to ARModule at `ws://127.0.0.1:8787`. The Quest browser uses the Network URL (`https://<host-ip>:5173`); it never types a Host IP into a connection field. A non-HTTPS page fails before XR entry. The selected HMD profile is the camera calibration.
 
 ```bash
 cd clients/webxr

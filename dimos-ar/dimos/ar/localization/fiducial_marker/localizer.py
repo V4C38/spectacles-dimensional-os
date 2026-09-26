@@ -18,7 +18,12 @@ from dimos.perception.fiducial.marker_pose import (
     estimate_marker_pose,
     marker_reprojection_error,
 )
+from dimos.utils.logging_config import setup_logger
 from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
+
+logger = setup_logger()
+
+_MAX_ROBOT_POSE_AGE_S = 1.0
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -87,12 +92,18 @@ class FiducialMarkerLocalizer(Localizer):
 
     def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None:
         candidates: list[_FiducialCandidate] = []
+        misses: list[str] = []
         for observation in observations:
-            candidate = self._candidate_from_observation(observation)
+            candidate = self._candidate_from_observation(observation, misses)
             if candidate is not None:
                 candidates.append(candidate)
 
         if not candidates:
+            logger.warning(
+                "fiducial marker localization failed",
+                observations=len(observations),
+                reason=", ".join(misses) if misses else "none",
+            )
             return None
 
         fusion = fuse_pose_estimates(
@@ -102,6 +113,12 @@ class FiducialMarkerLocalizer(Localizer):
             max_yaw_residual_rad=self._config.max_yaw_residual_rad,
         )
         if fusion is None:
+            logger.warning(
+                "fiducial marker localization failed",
+                observations=len(observations),
+                candidates=len(candidates),
+                reason="fusion",
+            )
             return None
 
         inliers = [candidates[index] for index in fusion.inlier_indices]
@@ -118,12 +135,17 @@ class FiducialMarkerLocalizer(Localizer):
             confidence=confidence,
         )
 
-    def _candidate_from_observation(self, observation: Observation) -> _FiducialCandidate | None:
+    def _candidate_from_observation(
+        self,
+        observation: Observation,
+        misses: list[str],
+    ) -> _FiducialCandidate | None:
         gray = cv2.imdecode(
             np.frombuffer(observation.jpeg, dtype=np.uint8),
             cv2.IMREAD_GRAYSCALE,
         )
         if gray is None:
+            misses.append("jpeg")
             return None
         image_height, image_width = gray.shape
         if (image_width, image_height) != (
@@ -135,24 +157,29 @@ class FiducialMarkerLocalizer(Localizer):
                 f"{observation.intrinsics.width}x{observation.intrinsics.height}"
             )
 
-        robot = self._pose_buffer.at_server_ts(observation.ts_server)
-        if robot is None:
-            return None
+        robot = self._pose_buffer.at_server_ts(
+            observation.ts_server,
+            max_gap_s=_MAX_ROBOT_POSE_AGE_S,
+        )
 
         camera_matrix, dist_coeffs = _intrinsics_to_cv(observation.intrinsics)
         corners_list, ids, _ = self._detector.detectMarkers(gray)
         if ids is None or len(ids) == 0:
+            misses.append("no_marker")
             return None
 
-        T_odom_base = _sample_to_matrix(robot)
+        T_odom_base = np.eye(4, dtype=np.float64) if robot is None else _sample_to_matrix(robot)
         T_client_camopt = np.asarray(pose_to_matrix(observation.camera_pose), dtype=np.float64)
 
         best: _FiducialCandidate | None = None
+        saw_mount = False
         for corners, marker_id_arr in zip(corners_list, ids, strict=True):
             marker_id = int(marker_id_arr[0])
             mount = self._mounts.get(marker_id)
             if mount is None:
+                misses.append(f"unknown_id={marker_id}")
                 continue
+            saw_mount = True
 
             candidate = self._candidate_from_detection(
                 corners=corners,
@@ -168,6 +195,8 @@ class FiducialMarkerLocalizer(Localizer):
             if best is None or candidate.reprojection_error_px < best.reprojection_error_px:
                 best = candidate
 
+        if best is None and saw_mount:
+            misses.append("rejected")
         return best
 
     def _candidate_from_detection(

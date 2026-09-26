@@ -108,6 +108,15 @@ if ! PYTHON="$(find_dimos_python "${ROOT}")"; then
   exit 1
 fi
 
+if ! python_has_dimos_ar "${PYTHON}"; then
+  print_red_stderr "dimos-ar blueprints are not registered in ${PYTHON}."
+  echo "DimOS discovers them from the dimos.blueprints entry points, not from import dimos.ar." >&2
+  echo "A stale editable install can import the package and still fail here." >&2
+  echo "Fix: run Install in the launcher, or:" >&2
+  echo "  cd \"${ROOT}/dimos-ar\" && \"${PYTHON}\" -m pip install -e \".[dev]\"" >&2
+  exit 1
+fi
+
 # DimOS needs a few macOS network settings for LCM (multicast route, socket
 # buffers) that require admin rights. Apply them here with a normal sudo prompt
 # before booting, so the DimOS process itself never has to prompt (it runs with

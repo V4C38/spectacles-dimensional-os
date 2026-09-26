@@ -48,14 +48,6 @@ export function parseHmdId(raw: string): HmdId {
   return match.id;
 }
 
-export function hmdLabel(id: HmdId): string {
-  const match = HMD_OPTIONS.find((option) => option.id === id);
-  if (!match) {
-    throw new Error("select an HMD");
-  }
-  return match.label;
-}
-
 export function matchStream(profile: HmdCalibrationProfile, settings: LiveVideoSettings): void {
   if (settings.width !== profile.stream.width || settings.height !== profile.stream.height) {
     throw new Error(
@@ -69,15 +61,6 @@ export function matchStream(profile: HmdCalibrationProfile, settings: LiveVideoS
   }
   if (settings.facingMode !== undefined && settings.facingMode !== profile.stream.facingMode) {
     throw new Error(`camera facingMode must be ${profile.stream.facingMode}`);
-  }
-}
-
-export function requireAcceptedProfile(profile: HmdCalibrationProfile): void {
-  if (!profile.accepted || !profile.measuredAt) {
-    const label = hmdLabel(profile.id);
-    throw new Error(
-      `${label} camera calibration has not been measured yet. AprilTag localization needs an accepted profile before AR can start.`,
-    );
   }
 }
 

@@ -9,6 +9,7 @@
   const webxrNetwork = $("webxrNetwork");
   const webxrLocalRow = $("webxrLocalRow");
   const webxrNetworkRow = $("webxrNetworkRow");
+  const webxrHint = $("webxrHint");
   const robotValue = $("robotValue");
   const warningText = $("warningText");
   const errorText = $("errorText");
@@ -741,6 +742,20 @@
     el.textContent = value && String(value).trim() ? value : fallback;
   }
 
+  function setHref(el, url, fallback = "—") {
+    const text = url && String(url).trim() ? String(url).trim() : "";
+    if (!text) {
+      el.textContent = fallback;
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = text;
+    a.textContent = text;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    el.replaceChildren(a);
+  }
+
   function displayRobotIp(value) {
     if (!value || !String(value).trim()) return "";
     const raw = String(value).trim();
@@ -766,8 +781,9 @@
     const showWebxr = Boolean(status.webxr_local_url || status.webxr_url);
     webxrLocalRow.classList.toggle("hidden", !showWebxr);
     webxrNetworkRow.classList.toggle("hidden", !showWebxr);
-    setText(webxrLocal, status.webxr_local_url);
-    setText(webxrNetwork, status.webxr_url);
+    webxrHint.classList.toggle("hidden", !showWebxr);
+    setHref(webxrLocal, status.webxr_local_url);
+    setHref(webxrNetwork, status.webxr_url);
 
     if (status.warning) {
       warningText.textContent = status.warning;
@@ -816,7 +832,7 @@
       dimosPython.value = status.dimos_python;
     }
 
-    startBtn.disabled = busy || running || !ready;
+    startBtn.disabled = busy || running || checkOk !== true;
     stopBtn.disabled = false;
     stopBtn.classList.toggle(
       "danger",

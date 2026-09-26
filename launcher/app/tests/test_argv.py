@@ -78,6 +78,19 @@ def test_parse_dimos_refs_prefers_main_and_skips_peeled_tags() -> None:
     assert all(not item.endswith("^{}") for item in refs)
 
 
+def test_setup_and_start_require_blueprint_entry_points() -> None:
+    scripts = Path(__file__).resolve().parents[2] / "scripts"
+    lib = (scripts / "dimos_lib.sh").read_text(encoding="utf-8")
+    setup = (scripts / "setup.sh").read_text(encoding="utf-8")
+    start = (scripts / "start.sh").read_text(encoding="utf-8")
+    assert 'entry_points(group="dimos.blueprints")' in lib
+    assert "unitree-go2-ar-agentic" in lib
+    assert "python_has_dimos_ar" in setup
+    assert "stale install" in setup
+    assert "python_has_dimos_ar" in start
+    assert "dimos.blueprints" in start
+
+
 def test_start_sh_maps_blueprint_to_cli() -> None:
     source = (Path(__file__).resolve().parents[2] / "scripts" / "start.sh").read_text(
         encoding="utf-8"

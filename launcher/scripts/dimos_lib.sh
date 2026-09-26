@@ -7,6 +7,37 @@ python_has_dimos() {
   "${py}" -c "import dimos" >/dev/null 2>&1
 }
 
+# Prints missing | stale | installed. Exit 0 only when DimOS can discover
+# dimos-ar blueprints via the dimos.blueprints entry points (import alone
+# is not enough — a stale editable install can import dimos.ar with empty
+# metadata).
+python_dimos_ar_status() {
+  local py="${1:-}"
+  [[ -n "${py}" && -x "${py}" ]] || {
+    printf '%s\n' "missing"
+    return 1
+  }
+  "${py}" - <<'PY'
+try:
+    import dimos.ar  # noqa: F401
+except ImportError:
+    print("missing")
+    raise SystemExit(1)
+from importlib.metadata import entry_points
+
+names = {ep.name for ep in entry_points(group="dimos.blueprints")}
+if {"unitree-go2-ar", "unitree-go2-ar-agentic"} <= names:
+    print("installed")
+    raise SystemExit(0)
+print("stale")
+raise SystemExit(1)
+PY
+}
+
+python_has_dimos_ar() {
+  python_dimos_ar_status "${1:-}" >/dev/null
+}
+
 # Resolve a path to an absolute form without ".." segments (for UI / logs).
 resolve_abs_path() {
   local p="${1:-}"

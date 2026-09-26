@@ -12,6 +12,7 @@ from armodule import (
     WEBXR_PORT,
     Phase,
     ProcessManager,
+    abs_dimos_python,
     detect_lan_ip,
 )
 
@@ -83,6 +84,21 @@ def test_snapshot_includes_host_ip_not_spectacles(tmp_path: Path) -> None:
     assert snap["webxr_local_url"] == "https://localhost:5173"
     assert snap["webxr_url"] == "https://192.168.1.9:5173"
     assert "default_clone_dir" in snap
+
+
+def test_abs_dimos_python_keeps_venv_symlink(tmp_path: Path) -> None:
+    venv_bin = tmp_path / "dimos" / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    base = tmp_path / "uv-python"
+    base.write_text("#!/bin/sh\n", encoding="utf-8")
+    base.chmod(0o755)
+    (venv_bin / "python").symlink_to(base)
+    venv_python = venv_bin / "python3"
+    venv_python.symlink_to("python")
+    assert Path(venv_python).resolve() == base.resolve()
+    kept = abs_dimos_python(str(venv_python))
+    assert Path(kept) == venv_bin.resolve() / "python3"
+    assert kept != str(base.resolve())
 
 
 def test_check_ok_regexes_match_setup_output() -> None:

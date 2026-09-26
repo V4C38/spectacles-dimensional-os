@@ -71,6 +71,41 @@ def _seed_pose_buffer(buffer: PoseBuffer, *, ts_server: float = 100.0) -> None:
     )
 
 
+def _stub_marker_detection(
+    localizer: FiducialMarkerLocalizer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        localizer,
+        "_detector",
+        SimpleNamespace(
+            detectMarkers=lambda _gray: (
+                [
+                    np.array(
+                        [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
+                        dtype=np.float32,
+                    )
+                ],
+                np.array([[0]], dtype=np.int32),
+                None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        fiducial_module,
+        "estimate_marker_pose",
+        lambda *_args, **_kwargs: (
+            np.zeros((3, 1), dtype=np.float64),
+            np.array([[0.0], [0.0], [1.0]], dtype=np.float64),
+        ),
+    )
+    monkeypatch.setattr(
+        fiducial_module,
+        "marker_reprojection_error",
+        lambda *_args, **_kwargs: 0.5,
+    )
+
+
 def test_compose_odom_client_inverts_client_marker_chain() -> None:
     T_odom_base = np.eye(4)
     T_base_marker = np.eye(4)
@@ -96,7 +131,7 @@ def test_localize_empty_observations_returns_none() -> None:
     assert localizer.localize([]) is None
 
 
-def test_localize_without_robot_pose_returns_none() -> None:
+def test_localize_without_detected_marker_returns_none() -> None:
     localizer = FiducialMarkerLocalizer(
         pose_buffer=PoseBuffer(),
         marker_mounts=UNITREE_GO2_PROFILE.fiducial_marker_mounts,
@@ -108,7 +143,7 @@ def test_localize_without_robot_pose_returns_none() -> None:
 
 def test_localize_accepts_candidate_and_fuses(monkeypatch: pytest.MonkeyPatch) -> None:
     buffer = PoseBuffer()
-    _seed_pose_buffer(buffer, ts_server=100.0)
+    _seed_pose_buffer(buffer, ts_server=99.0)
     localizer = FiducialMarkerLocalizer(
         pose_buffer=buffer,
         marker_mounts=[
@@ -125,27 +160,7 @@ def test_localize_accepts_candidate_and_fuses(monkeypatch: pytest.MonkeyPatch) -
             max_tilt_rad=math.pi,
         ),
     )
-    localizer._detector = SimpleNamespace(  # type: ignore[attr-defined]
-        detectMarkers=lambda _gray: (
-            [np.array([[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]], dtype=np.float32)],
-            np.array([[0]], dtype=np.int32),
-            None,
-        )
-    )
-
-    monkeypatch.setattr(
-        fiducial_module,
-        "estimate_marker_pose",
-        lambda *_args, **_kwargs: (
-            np.zeros((3, 1), dtype=np.float64),
-            np.array([[0.0], [0.0], [1.0]], dtype=np.float64),
-        ),
-    )
-    monkeypatch.setattr(
-        fiducial_module,
-        "marker_reprojection_error",
-        lambda *_args, **_kwargs: 0.5,
-    )
+    _stub_marker_detection(localizer, monkeypatch)
 
     result = localizer.localize([_observation(ts_server=100.0)])
 
@@ -155,6 +170,41 @@ def test_localize_accepts_candidate_and_fuses(monkeypatch: pytest.MonkeyPatch) -
     assert result.pose.y == pytest.approx(2.0)
     assert result.pose.z == pytest.approx(-1.0)
     assert 0.0 < result.confidence <= 1.0
+
+
+@pytest.mark.parametrize("robot_pose_ts", [None, 98.999])
+def test_localize_without_current_robot_pose_uses_base_as_odom_origin(
+    monkeypatch: pytest.MonkeyPatch,
+    robot_pose_ts: float | None,
+) -> None:
+    buffer = PoseBuffer()
+    if robot_pose_ts is not None:
+        _seed_pose_buffer(buffer, ts_server=robot_pose_ts)
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=buffer,
+        marker_mounts=[
+            FiducialMarkerMount(
+                marker_id=0,
+                size_m=0.056,
+                position=(0.1, 0.0, 0.0),
+                orientation=(0.0, 0.0, 0.0, 1.0),
+            )
+        ],
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
+        config=FiducialMarkerLocalizerConfig(
+            max_reprojection_error_px=8.0,
+            max_tilt_rad=math.pi,
+        ),
+    )
+    _stub_marker_detection(localizer, monkeypatch)
+
+    result = localizer.localize([_observation(ts_server=100.0)])
+
+    assert result is not None
+    assert result.frame_id == "odom"
+    assert result.pose.x == pytest.approx(0.1)
+    assert result.pose.y == pytest.approx(0.0)
+    assert result.pose.z == pytest.approx(-1.0)
 
 
 def test_fiducial_marker_localizer_implements_localizer() -> None:
@@ -260,7 +310,7 @@ def test_confidence_uses_only_fusion_inliers(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(
         localizer,
         "_candidate_from_observation",
-        lambda _observation: candidates.pop(0),
+        lambda _observation, _misses: candidates.pop(0),
     )
 
     result = localizer.localize([_observation(), _observation(), _observation()])

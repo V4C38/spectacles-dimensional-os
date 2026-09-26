@@ -64,6 +64,7 @@ from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.tf2_msgs.TFMessage import TFMessage
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -161,6 +162,7 @@ class ARModule(Module):  # type: ignore[misc]
 
     lidar: In[PointCloud2]
     odom: In[PoseStamped]
+    tf: In[TFMessage]
     path: In[Path]
     goal_reached: In[Bool]
     color_image: In[Image]
@@ -496,6 +498,11 @@ class ARModule(Module):  # type: ignore[misc]
         client_id: str,
         time_sync: TimeSync,
     ) -> None:
+        logger.info(
+            "localization_observations received",
+            client_id=client_id,
+            count=len(observations),
+        )
         domain = [
             observation_from_localization(observation, time_sync=time_sync)
             for observation in observations
@@ -517,6 +524,11 @@ class ARModule(Module):  # type: ignore[misc]
             self._policy.hold_for_client_vps(work.client_id, work.observations)
             return
         if outcome.result is None:
+            logger.warning(
+                "localization episode produced no result",
+                client_id=work.client_id,
+                observations=len(work.observations),
+            )
             self._policy.on_failure(work.client_id)
             return
         self._policy.on_success(work.client_id)

@@ -52,6 +52,13 @@ def test_at_server_ts_returns_none_when_gap_too_large() -> None:
     assert buffer.at_server_ts(21.0) is None
 
 
+def test_at_server_ts_accepts_caller_gap_override() -> None:
+    buffer = PoseBuffer(max_gap_s=0.25)
+    buffer.push(_pose(ts=10.0), ts_server=20.0)
+
+    assert buffer.at_server_ts(21.0, max_gap_s=1.0) is not None
+
+
 def test_at_server_ts_returns_none_when_empty() -> None:
     buffer = PoseBuffer()
 

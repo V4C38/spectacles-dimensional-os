@@ -56,9 +56,18 @@ class PoseBuffer:
         with self._lock:
             return self._latest
 
-    def at_server_ts(self, ts_server: float) -> PoseSample | None:
+    def at_server_ts(
+        self,
+        ts_server: float,
+        *,
+        max_gap_s: float | None = None,
+    ) -> PoseSample | None:
         with self._lock:
-            return _interpolate(self._samples, ts_server, max_gap_s=self._max_gap_s)
+            return _interpolate(
+                self._samples,
+                ts_server,
+                max_gap_s=self._max_gap_s if max_gap_s is None else max_gap_s,
+            )
 
 
 def _sample_from_pose(msg: PoseStamped, *, ts_server: float) -> PoseSample:
@@ -117,7 +126,10 @@ def _interpolate(
         last = samples[-1]
         return last if abs(last.ts_server - ts_server) <= max_gap_s else None
 
-    if abs(ts_server - before.ts_server) > max_gap_s and abs(after.ts_server - ts_server) > max_gap_s:
+    if (
+        abs(ts_server - before.ts_server) > max_gap_s
+        and abs(after.ts_server - ts_server) > max_gap_s
+    ):
         return None
 
     span = after.ts_server - before.ts_server

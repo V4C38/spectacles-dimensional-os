@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import * as xb from "xrblocks";
-import { HMD_OPTIONS, parseHmdId, requireAcceptedProfile } from "./camera/HmdCalibration";
+import { HMD_OPTIONS, parseHmdId } from "./camera/HmdCalibration";
 import { profileForHmd } from "./camera/hmdProfiles";
 import {
   browserMediaPort,
@@ -88,7 +88,11 @@ class DimOSWebXRApp extends xb.Script {
       readJoystick(),
     );
     this.syncWristButton();
-    this.mainMenu?.apply(client.ui.snapshot());
+    const snap = client.ui.snapshot();
+    if (!snap.setupCompleted || snap.menuOpen) {
+      this.placeMenuInFront();
+    }
+    this.mainMenu?.apply(snap);
     const menu = menuPressed();
     if (menu && !this.menuWasPressed) {
       client.ui.toggleMenu();
@@ -161,6 +165,18 @@ class DimOSWebXRApp extends xb.Script {
     );
     mesh.name = "leftWristMenuButton";
     return mesh;
+  }
+
+  private placeMenuInFront(): void {
+    const panel = this.mainMenu?.panel;
+    const camera = xb.core.camera;
+    if (!panel) {
+      return;
+    }
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    const down = new THREE.Vector3(0, -1, 0).applyQuaternion(camera.quaternion);
+    panel.position.copy(camera.position).addScaledVector(forward, 0.9).addScaledVector(down, 0.12);
+    panel.quaternion.copy(camera.quaternion);
   }
 
   private syncWristButton(): void {
@@ -303,6 +319,44 @@ async function requireImmersiveAr(): Promise<void> {
   }
 }
 
+type XRSystemWithOffer = XRSystem & {
+  offerSession?: (mode: XRSessionMode, options?: XRSessionInit) => Promise<XRSession>;
+};
+
+function selectedProfile(select: HTMLSelectElement): ReturnType<typeof profileForHmd> {
+  return profileForHmd(parseHmdId(select.value));
+}
+
+function startImmersiveSession(onError: (error: unknown) => void): void {
+  const xr = navigator.xr;
+  const manager = xb.core.webXRSessionManager;
+  if (!xr || !manager) {
+    throw new Error("WebXR is not ready");
+  }
+  const requestSession = xr.requestSession.bind(xr);
+  let restored = false;
+  const restore = () => {
+    if (restored) {
+      return;
+    }
+    xr.requestSession = requestSession;
+    restored = true;
+  };
+  xr.requestSession = ((mode, options) => {
+    restore();
+    return requestSession(mode, options).catch((error: unknown) => {
+      onError(error);
+      throw error;
+    });
+  }) as typeof xr.requestSession;
+  try {
+    manager.startSession();
+  } catch (error) {
+    restore();
+    throw error;
+  }
+}
+
 async function boot(): Promise<void> {
   const enter = document.getElementById("enter") as HTMLButtonElement | null;
   const select = document.getElementById("hmd") as HTMLSelectElement | null;
@@ -312,47 +366,61 @@ async function boot(): Promise<void> {
   }
   try {
     const url = arModuleSameOriginUrl(window.location);
+    await requireImmersiveAr();
+    if (!enter || !select) {
+      throw new Error("Enter AR controls are missing");
+    }
+    const camera = new HmdCameraSource({
+      clock: new BrowserClientClock(),
+      profile: () => selectedProfile(select),
+      media: browserMediaPort(),
+      frames: videoFrameCallbackPort(),
+      jpeg: canvasJpegEncoder(),
+    });
+    const client = new DimOSWebXRClient({
+      transport: new BrowserWebSocketTransport({ url }),
+      clock: new BrowserClientClock(),
+      camera,
+    });
+    const options = new xb.Options();
+    options.xrButton.enabled = false;
+    options.enableHands();
+    options.enableUI();
+    options.enablePlaneDetection();
+    options.controllers.enabled = true;
+    xb.add(new DimOSWebXRApp(client));
+    const xr = navigator.xr as XRSystemWithOffer | undefined;
+    const offerSession = xr?.offerSession;
+    if (xr) {
+      xr.offerSession = undefined;
+    }
+    try {
+      await xb.init(options);
+    } finally {
+      if (xr && offerSession) {
+        xr.offerSession = offerSession;
+      }
+    }
+    xb.core.webXRSessionManager?.addEventListener("sessionstart", () => {
+      select.disabled = true;
+      overlay?.remove();
+    });
     setStatus("Enter AR on the headset.", "muted");
-    if (select) {
-      select.disabled = false;
-    }
-    if (enter && select) {
-      enter.disabled = false;
-      enter.onclick = () => {
-        void (async () => {
-          try {
-            enter.disabled = true;
-            const profile = profileForHmd(parseHmdId(select.value));
-            await requireImmersiveAr();
-            requireAcceptedProfile(profile);
-            const camera = new HmdCameraSource({
-              clock: new BrowserClientClock(),
-              profile,
-              media: browserMediaPort(),
-              frames: videoFrameCallbackPort(),
-              jpeg: canvasJpegEncoder(),
-            });
-            await camera.prepare();
-            const client = new DimOSWebXRClient({
-              transport: new BrowserWebSocketTransport({ url }),
-              clock: new BrowserClientClock(),
-              camera,
-            });
-            overlay?.remove();
-            const options = new xb.Options();
-            options.enableHands();
-            options.enableUI();
-            options.enablePlaneDetection();
-            options.controllers.enabled = true;
-            xb.add(new DimOSWebXRApp(client));
-            xb.init(options);
-          } catch (error) {
-            setStatusFromUnknown(error);
-            enter.disabled = false;
-          }
-        })();
-      };
-    }
+    select.disabled = false;
+    enter.disabled = false;
+    enter.onclick = () => {
+      enter.disabled = true;
+      setStatus("Starting AR…", "muted");
+      try {
+        startImmersiveSession((error) => {
+          setStatusFromUnknown(error);
+          enter.disabled = false;
+        });
+      } catch (error) {
+        setStatusFromUnknown(error);
+        enter.disabled = false;
+      }
+    };
   } catch (error) {
     setStatusFromUnknown(error);
     if (enter) {

@@ -9,6 +9,7 @@ import {
   findChildRecursive,
   findText,
   FONT_WIZARD_INPUT,
+  setButtonEnabled,
   setButtonStyle,
   SnapOS2Styles,
   SLOT_INPUT,
@@ -174,7 +175,7 @@ export class SetupWizardView {
         ? SnapOS2Styles.Primary
         : SnapOS2Styles.PrimaryNeutral,
     );
-    this._next.button.inactive = !presentation.footerNextEnabled;
+    setButtonEnabled(this._next.button, presentation.footerNextEnabled);
     if (this._next.labelText) {
       this._next.labelText.text = presentation.footerNextLabel;
     }

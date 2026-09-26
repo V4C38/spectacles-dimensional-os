@@ -15,6 +15,7 @@ declare module "xrblocks" {
     enablePlaneDetection(): void;
     enableCamera(mode?: string): void;
     controllers: { enabled: boolean };
+    xrButton: { enabled: boolean };
   }
 
   export class SpatialPanel extends Group {
@@ -39,6 +40,10 @@ declare module "xrblocks" {
 
   export const core: {
     camera: Object3D;
+    webXRSessionManager?: {
+      startSession(): void;
+      addEventListener(type: string, listener: () => void): void;
+    };
     input?: {
       inputSources?: Array<{
         handedness?: string;

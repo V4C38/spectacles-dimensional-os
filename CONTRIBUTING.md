@@ -97,7 +97,7 @@ on the host; the wire carries text and typed agent facts only.
 | `presentation/` | Robot, Lidar renderer, Route renderer, AR markers, UI, `MainMenuView` |
 | `navigation/` | `WebXRGroundPlacement`, `WebXRNavigationController`, `WebXRNavGoalView`, `WebXRJoystick` |
 
-The landing page **Select HMD** list is `HMD_OPTIONS`. Current options: Quest 3 and Quest 3S. Unaccepted calibration profiles fail before XR entry. Vite proxies same-origin `/ar` to `ws://127.0.0.1:8787`. WebXR imports ClientCore from `DimOSARClient/`; it does not copy it.
+The landing page **Select HMD** list is `HMD_OPTIONS`. Current options: Quest 3 and Quest 3S. The selected profile is the camera calibration. Vite proxies same-origin `/ar` to `ws://127.0.0.1:8787`. WebXR imports ClientCore from `DimOSARClient/`; it does not copy it.
 
 ## Runtime HUD
 

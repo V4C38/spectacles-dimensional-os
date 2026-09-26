@@ -31,6 +31,9 @@ from tag_config import ui_from_armodule_config
 
 ARMODULE_PORT = 8787
 WEBXR_PORT = 5173
+RERUN_WS_PORT = 3030
+RERUN_GRPC_PORT = 9877
+STACK_PORTS = (ARMODULE_PORT, RERUN_WS_PORT, RERUN_GRPC_PORT)
 LOG_BUFFER_SIZE = 500
 SUBSCRIBER_QUEUE_SIZE = 2000
 STOP_GRACE_SECONDS = 8.0
@@ -55,6 +58,20 @@ _RE_DIMOS_REF = re.compile(r"^DIMOS_REF=(.+)$")
 
 def _strip_ansi(text: str) -> str:
     return _RE_ANSI.sub("", text)
+
+
+def abs_dimos_python(path: str) -> str:
+    """Absolutize a venv interpreter without following the python symlink.
+
+    Path.resolve() follows .venv/bin/python3 to the base CPython (uv, pyenv,
+    Homebrew). That interpreter has no site-packages, so import dimos fails.
+    Match resolve_abs_path in dimos_lib.sh: resolve the parent, keep the name.
+    """
+    raw = Path(path).expanduser()
+    try:
+        return str(raw.parent.resolve() / raw.name)
+    except OSError:
+        return str(raw)
 
 
 def detect_lan_ip() -> str:
@@ -267,8 +284,7 @@ class ProcessManager:
         if not pids:
             return False
         self._append_log(
-            f"Stopping other ARModule process(es) on port {port}: "
-            + ", ".join(str(p) for p in pids)
+            f"Stopping process(es) on port {port}: " + ", ".join(str(p) for p in pids)
         )
         for pid in pids:
             self._signal_pid(pid, signal.SIGINT)
@@ -292,6 +308,69 @@ class ProcessManager:
         else:
             self._append_log(f"Port {port} is free.")
         return True
+
+    async def _running_dimos_pids(self) -> list[int]:
+        """PIDs of `dimos` CLIs. Workers share that process group."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ps",
+                "-axo",
+                "pid=,command=",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            return []
+        out, _ = await proc.communicate()
+        me = os.getpid()
+        pids: list[int] = []
+        for line in out.decode("utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            pid_text, _, command = stripped.partition(" ")
+            try:
+                pid = int(pid_text)
+            except ValueError:
+                continue
+            if pid <= 0 or pid == me or "/bin/dimos" not in command:
+                continue
+            if pid not in pids:
+                pids.append(pid)
+        return pids
+
+    async def _stop_pids(self, pids: list[int], label: str) -> None:
+        if not pids:
+            return
+        self._append_log(f"Stopping {label}: " + ", ".join(str(pid) for pid in pids))
+        for pid in pids:
+            self._signal_pid(pid, signal.SIGINT)
+        deadline = asyncio.get_running_loop().time() + STOP_GRACE_SECONDS
+        remaining = list(pids)
+        while remaining and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.25)
+            alive = set(await self._running_dimos_pids())
+            remaining = [pid for pid in remaining if pid in alive]
+        if remaining:
+            self._append_log(
+                "DimOS still running — sending SIGKILL to "
+                + ", ".join(str(pid) for pid in remaining)
+            )
+            for pid in remaining:
+                self._signal_pid(pid, signal.SIGKILL)
+            await asyncio.sleep(0.2)
+
+    async def _clear_before_start(self, *, client: str) -> None:
+        await self._stop_pids(await self._running_dimos_pids(), "existing DimOS process(es)")
+        ports = list(STACK_PORTS)
+        if client == "webxr":
+            ports.append(WEBXR_PORT)
+        for port in ports:
+            await self._kill_port_listeners(port)
+        stuck = [port for port in ports if self.port_in_use(port)]
+        if stuck:
+            listed = ", ".join(str(port) for port in stuck)
+            raise RuntimeError(f"port(s) still in use after cleanup: {listed}")
 
     def build_start_argv(
         self,
@@ -353,11 +432,7 @@ class ProcessManager:
                 if m := _RE_CHECK_OK.match(plain):
                     check_ok = m.group(1) == "1"
                 elif m := _RE_DIMOS_PYTHON.match(plain):
-                    raw = m.group(1).strip()
-                    try:
-                        dimos_python = str(Path(raw).resolve())
-                    except OSError:
-                        dimos_python = raw
+                    dimos_python = abs_dimos_python(m.group(1).strip())
                 elif m := _RE_DIMOS_VERSION.match(plain):
                     dimos_version = m.group(1).strip()
                 elif m := _RE_DIMOS_REF.match(plain):
@@ -365,6 +440,7 @@ class ProcessManager:
 
             env = os.environ.copy()
             env["DIMOS_AR_FORCE_COLOR"] = "1"
+            env.pop("DIMOS_PYTHON", None)
             await self._run_tracked(argv, env=env, on_line=on_line)
             self._set_status(
                 phase=Phase.READY if check_ok else Phase.NEEDS_SETUP,
@@ -395,6 +471,7 @@ class ProcessManager:
             self._set_status(phase=Phase.INSTALLING, error=None)
             env = os.environ.copy()
             env["DIMOS_AR_FORCE_COLOR"] = "1"
+            env.pop("DIMOS_PYTHON", None)
             code = await self._run_tracked(argv, env=env)
             if code != 0:
                 self._set_status(
@@ -544,20 +621,13 @@ class ProcessManager:
         async with self._lock:
             if self._proc is not None or self._webxr_proc is not None:
                 raise RuntimeError("ARModule is already running")
-            if self.port_in_use(ARMODULE_PORT):
-                raise RuntimeError(
-                    f"port {ARMODULE_PORT} is already in use — stop the other ARModule first"
-                )
-            if client == "webxr" and self.port_in_use(WEBXR_PORT):
-                raise RuntimeError(
-                    f"port {WEBXR_PORT} is already in use — stop the other WebXR server first"
-                )
             if self.status.check_ok is False:
                 raise RuntimeError(
                     "Dependencies are not installed — use Install dependencies first"
                 )
 
             self._require_vps_credentials()
+            await self._clear_before_start(client=client)
             await self._configure_system_if_needed()
             if client == "webxr":
                 await self._ensure_webxr_deps()
@@ -570,7 +640,10 @@ class ProcessManager:
             env = os.environ.copy()
             env["DIMOS_AR_SKIP_SYSCONFIG"] = "1"
             env.pop("ROBOT_IP", None)
+            env.pop("DIMOS_PYTHON", None)
             env["DIMOS_AR_FORCE_COLOR"] = "1"
+            if self.status.dimos_python:
+                env["DIMOS_PYTHON"] = self.status.dimos_python
             stored = read_env(env_path(self.root))
             for key in ("OPENAI_API_KEY", "MULTISET_CLIENT_ID", "MULTISET_CLIENT_SECRET"):
                 if stored.get(key):

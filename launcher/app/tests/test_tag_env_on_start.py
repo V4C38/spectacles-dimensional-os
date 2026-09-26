@@ -52,7 +52,53 @@ async def test_start_armodule_injects_secret_env(tmp_path: Path) -> None:
     assert captured["MULTISET_CLIENT_SECRET"] == "secret-1"
     assert captured["DIMOS_LOG_LEVEL"] == "DEBUG"
     assert "DIMOS_AR_TAG_MOUNTS" not in captured
+    assert "DIMOS_PYTHON" not in captured
     assert "--blueprint" in mgr.build_start_argv(blueprint="unitree_go2_ar")
+
+
+@pytest.mark.asyncio
+async def test_start_armodule_pins_checked_dimos_python(tmp_path: Path) -> None:
+    _scripts(tmp_path)
+    mgr = ProcessManager(root=tmp_path)
+    mgr.status.dimos_python = "/tmp/dimos/.venv/bin/python3"
+    captured: dict[str, str] = {}
+
+    async def fake_spawn(argv, *, env, parse_armodule):  # type: ignore[no-untyped-def]
+        captured.update(env)
+
+    with (
+        patch.object(mgr, "port_in_use", return_value=False),
+        patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
+        patch.object(mgr, "_spawn", new=fake_spawn),
+    ):
+        await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
+
+    assert captured["DIMOS_PYTHON"] == "/tmp/dimos/.venv/bin/python3"
+
+
+@pytest.mark.asyncio
+async def test_start_armodule_drops_inherited_dimos_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _scripts(tmp_path)
+    monkeypatch.setenv(
+        "DIMOS_PYTHON",
+        "/Users/me/.local/share/uv/python/cpython-3.12.12/bin/python3.12",
+    )
+    mgr = ProcessManager(root=tmp_path)
+    captured: dict[str, str] = {}
+
+    async def fake_spawn(argv, *, env, parse_armodule):  # type: ignore[no-untyped-def]
+        captured.update(env)
+
+    with (
+        patch.object(mgr, "port_in_use", return_value=False),
+        patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
+        patch.object(mgr, "_spawn", new=fake_spawn),
+    ):
+        await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
+
+    assert "DIMOS_PYTHON" not in captured
 
 
 @pytest.mark.asyncio
@@ -138,15 +184,47 @@ async def test_webxr_exit_stops_armodule(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_webxr_rejects_occupied_port(tmp_path: Path) -> None:
+async def test_start_clears_dimos_and_ports_before_spawn(tmp_path: Path) -> None:
     _scripts(tmp_path)
     mgr = ProcessManager(root=tmp_path)
+    order: list[str] = []
 
-    def ports(port: int = 8787) -> bool:
-        return port == 5173
+    async def clear(*, client: str) -> None:
+        order.append(f"clear:{client}")
+
+    async def fake_spawn(argv, *, env, parse_armodule):  # type: ignore[no-untyped-def]
+        order.append("spawn")
 
     with (
-        patch.object(mgr, "port_in_use", side_effect=ports),
-        pytest.raises(RuntimeError, match="5173"),
+        patch.object(mgr, "_clear_before_start", new=clear),
+        patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
+        patch.object(mgr, "_spawn", new=fake_spawn),
     ):
-        await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
+        await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
+
+    assert order == ["clear:specs", "spawn"]
+
+
+@pytest.mark.real_clear
+@pytest.mark.asyncio
+async def test_clear_before_start_kills_dimos_then_ports(tmp_path: Path) -> None:
+    mgr = ProcessManager(root=tmp_path)
+    killed: list[int] = []
+
+    async def dimos_pids() -> list[int]:
+        return [111]
+
+    async def kill_port(port: int) -> bool:
+        killed.append(port)
+        return True
+
+    with (
+        patch.object(mgr, "_running_dimos_pids", new=dimos_pids),
+        patch.object(mgr, "_stop_pids", new=AsyncMock()) as stop_pids,
+        patch.object(mgr, "_kill_port_listeners", new=kill_port),
+        patch.object(mgr, "port_in_use", return_value=False),
+    ):
+        await ProcessManager._clear_before_start(mgr, client="webxr")
+
+    stop_pids.assert_awaited_once_with([111], "existing DimOS process(es)")
+    assert killed == [8787, 3030, 9877, 5173]
