@@ -69,6 +69,17 @@ def test_parse_strips_ansi_and_simulated_robot_ip(tmp_path: Path) -> None:
     assert mgr.status.robot_ip == "simulated"
 
 
+def test_parse_pin_after_ready(tmp_path: Path) -> None:
+    mgr = ProcessManager(root=tmp_path)
+    mgr._parse_armodule_line("ARModule ready — ws://0.0.0.0:8787")
+    mgr._parse_armodule_line("Host IP:      192.168.1.42")
+    mgr._parse_armodule_line("Robot IP:     192.168.12.1")
+    mgr._parse_armodule_line("\033[32mPIN: 123456\033[0m")
+    assert mgr.status.phase == Phase.RUNNING
+    assert mgr.status.pin == "123456"
+    assert mgr.snapshot()["pin"] == "123456"
+
+
 def test_snapshot_includes_host_ip_not_spectacles(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
     mgr.status.check_ok = True

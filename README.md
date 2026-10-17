@@ -73,7 +73,7 @@ Your browser opens at `http://127.0.0.1:8790`. Leave the terminal window it star
 
 **Dependencies:** reuse a Dimensional OS install or clone one at a chosen git ref, then press **Install**. This can take a while.
 
-**Every run:** pick **Specs** or **WebXR**, pick `unitree_go2_ar` or `unitree_go2_ar_agentic`, choose localization providers, press **Start**. The value shown as **Host IP** is the Mac’s LAN address — type it into the Lens during the setup wizard. WebXR also shows Vite’s **Local** (`https://localhost:5173`) and **Network** (`https://<host-ip>:5173`) URLs. If no robot answers on the network, ARModule starts with a simulated robot instead.
+**Every run:** pick **Specs** or **WebXR**, pick `unitree_go2_ar` or `unitree_go2_ar_agentic`, choose localization providers, press **Start**. ARModule publishes its LAN address to the IP relay and shows a six-digit PIN for the Specs client. The Lens enters that PIN, or switches to entering the Host IP. WebXR keeps the same-origin HTTPS proxy and does not use the PIN. The relay URL is `IP_RELAY_URL` (`https://spectacles-ip-relay.johannestscharn.workers.dev`) at the top of `dimos-ar/dimos/ar/websocket/ip_relay.py`. WebXR also shows Vite’s **Local** (`https://localhost:5173`) and **Network** (`https://<host-ip>:5173`) URLs. If no robot answers on the network, ARModule starts with a simulated robot instead.
 
 macOS asks for your admin password the first time you start after a reboot. Dimensional OS needs a local network route and larger socket buffers for its internal messaging.
 
@@ -163,7 +163,7 @@ Enable the fiducial provider in DimOS config (`armodule.localization.providers`)
 
 #### Set up inside Spectacles Lens
 
-Open [`clients/specs/spectacles-dimensional-os.esproj`](clients/specs/spectacles-dimensional-os.esproj) in Lens Studio and send the Lens to your Spectacles (Lens with experimental API enabled cannot be published so you need to upload via LS). The <b>setup wizard</b> walks you through connecting and locating the robot. Enter the <b>Host IP</b> from the launcher (or `detect_lan_ip` / the `start.sh` banner) when asked.
+Open [`clients/specs/spectacles-dimensional-os.esproj`](clients/specs/spectacles-dimensional-os.esproj) in Lens Studio and send the Lens to your Spectacles (Lens with experimental API enabled cannot be published so you need to upload via LS). The <b>setup wizard</b> walks you through connecting and locating the robot. Enter the <b>PIN</b> shown by the launcher, or switch the wizard to the Host IP.
 
 <p align="center">
   <img src="assets/specs_dimos_setupwizard.gif" alt="Setup wizard on Spectacles: connect, capture observations, finish setup" width="480" />
@@ -402,7 +402,7 @@ npm test
 
 | Symptom | Things to try |
 |---------|----------------|
-| Lens cannot connect | Check that Spectacles and the Mac are on the same WiFi and that you typed the Host IP from the launcher, not `127.0.0.1`. |
+| Lens cannot connect | Check that Spectacles and the Mac are on the same WiFi and that you entered the PIN from the launcher, or the Host IP, not `127.0.0.1`. |
 | AprilTag not detected | Get closer, improve the lighting, keep walking around the robot, and check that the tag printed at full size. |
 | Drift after setup | Expected, see [Pose Drift](#pose-drift). Start a capture episode or restart setup from the wrist menu. |
 | Navigation unavailable | The ARModule log reports which capabilities the robot advertised. |

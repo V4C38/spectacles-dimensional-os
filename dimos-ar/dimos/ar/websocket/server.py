@@ -15,6 +15,7 @@ import websockets
 import websockets.asyncio.server as ws_server
 
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest
+from dimos.ar.websocket.ip_relay import IP_RELAY_URL, IpRelayPublisher, lan_ip
 from dimos.ar.websocket.protocol import (
     LOCALIZATION_OBSERVATIONS_FOURCC,
     ClientPose,
@@ -121,6 +122,7 @@ class WebSocketServer:
         self._outbound: dict[ws_server.ServerConnection, ClientSendQueue] = {}
         self._time_sync: dict[ws_server.ServerConnection, TimeSync] = {}
         self._serve_future: Future[None] | None = None
+        self._ip_relay: IpRelayPublisher | None = None
 
     @property
     def port(self) -> int:
@@ -134,8 +136,15 @@ class WebSocketServer:
         self._serve_future = asyncio.run_coroutine_threadsafe(self._serve(), self._loop)
         if not self._server_ready.wait(timeout=5.0):
             raise TimeoutError("WebSocket server did not become ready")
+        ip = lan_ip()
+        if ip is None:
+            logger.warning("PIN unavailable, enter IP")
+            return
+        self._ip_relay = IpRelayPublisher(IP_RELAY_URL, ip, self._port)
+        self._ip_relay.start()
 
     def stop(self) -> None:
+        self._stop_ip_relay()
         if not self._server_ready.is_set():
             return
         if self._stop_event is not None:
@@ -150,6 +159,12 @@ class WebSocketServer:
                 logger.exception("WebSocket server stop did not finish cleanly")
         self._server_ready.clear()
         self._serve_future = None
+
+    def _stop_ip_relay(self) -> None:
+        publisher = self._ip_relay
+        self._ip_relay = None
+        if publisher is not None:
+            publisher.stop()
 
     async def _serve(self) -> None:
         self._stop_event = asyncio.Event()

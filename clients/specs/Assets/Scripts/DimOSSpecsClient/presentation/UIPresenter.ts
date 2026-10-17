@@ -22,6 +22,7 @@ import { findChildRecursive, getFrameComponent, isFrameInitialized, statusToneCo
 import { UILogger } from "./UILogger";
 import { WristMenuController } from "./WristMenuController";
 import { MainMenuView } from "./MainMenuView";
+import type { IpRelayClient } from "../IpRelayClient";
 import { SetupWizardController } from "./SetupWizardController";
 import {
   AppState,
@@ -50,6 +51,7 @@ export interface UIPresenterDeps {
   clientTrackingOriginStore: ClientTrackingOriginStore;
   robotPresenter: RobotPresenter;
   defaultWebsocketIp: string;
+  ipRelayClient: IpRelayClient;
   setupWizardPanel: SceneObject;
   mainUIFrame: SceneObject;
   wristMenuRoot: SceneObject;
@@ -122,6 +124,7 @@ export class UIPresenter extends BaseScriptComponent {
       clientTrackingOriginStore: deps.clientTrackingOriginStore,
       defaultWebsocketIp: deps.defaultWebsocketIp,
       hostStore: global.persistentStorageSystem.store,
+      ipRelayClient: deps.ipRelayClient,
       onFinished: () => this.finishWizard(),
       onDismissToRuntime: () => this.finishWizard(),
     });

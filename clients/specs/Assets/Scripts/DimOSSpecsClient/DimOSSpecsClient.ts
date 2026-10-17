@@ -10,6 +10,7 @@ import { SpecsCameraSource } from "./localization/SpecsCameraSource";
 import { SpecsCameraStream } from "./localization/SpecsCameraStream";
 import { NavigationController } from "./navigation/NavigationController";
 import { NavGoalPresenter } from "./navigation/NavGoalPresenter";
+import { IpRelayClient } from "./IpRelayClient";
 import { UIPresenter } from "./presentation/UIPresenter";
 import { RobotPresenter } from "./presentation/RobotPresenter";
 import { PointCloudRenderer } from "./sensors/PointCloudRenderer";
@@ -218,6 +219,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       clientTrackingOriginStore,
       robotPresenter,
       defaultWebsocketIp: this.defaultWebsocketIp,
+      ipRelayClient: new IpRelayClient(this.internetModule),
       script: this,
     });
     this.uiPresenter.start();

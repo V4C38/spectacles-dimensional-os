@@ -21,6 +21,12 @@ import {
   type SessionLinkPhase,
   type StatusText,
 } from "../../DimOSARClient/websocket/sessionLinkStatus";
+import {
+  routeConnectionField,
+  toggleConnectionMethod,
+  type ConnectionMethod,
+  type IpRelayClient,
+} from "../IpRelayClient";
 import { scaleIn } from "../utilities/AnimationUtilities";
 import { COLOR_ERROR, COLOR_WHITE, statusToneColor } from "./UIKit";
 import { SetupWizardStep, SetupWizardView } from "./SetupWizardView";
@@ -33,12 +39,16 @@ const WIZARD_STEP_TITLES = [
 
 const WIZARD_STEP_DESCRIPTIONS = [
   "Power on your robot.\nRun ./launcher/scripts/start.sh on your Mac.",
-  "Enter your Mac's IP.\nUse same Wi‑Fi for robot, Mac, and Spectacles.",
+  "Enter the PIN from the launcher, or switch to IP.\nUse the same Wi‑Fi for robot, Mac, and Spectacles.",
   "Look at the robot while the headset captures views for localization.",
 ] as const;
 
 function localizationStepDescription(displayName: string): string {
   return `Point your Spectacles at ${displayName}.\nHold steady while views are captured.`;
+}
+
+function connectionModeLabel(method: ConnectionMethod): string {
+  return method === "pin" ? "Mode: PIN" : "Mode: IP";
 }
 
 function connectStepStatus(input: {
@@ -78,6 +88,7 @@ export interface SetupWizardControllerDeps {
   clientTrackingOriginStore: ClientTrackingOriginStore;
   defaultWebsocketIp: string;
   hostStore: ModuleHostStore;
+  ipRelayClient: IpRelayClient;
   onFinished: () => void;
   onDismissToRuntime: () => void;
 }
@@ -98,6 +109,7 @@ export class SetupWizardController {
   private _authoredLocalScale = new vec3(1, 1, 1);
   private _openedFromRuntime = false;
   private _hostValidationError: string | null = null;
+  private _connectionMethod: ConnectionMethod = "pin";
   private _sessionStarted = false;
   private _visible = false;
 
@@ -118,6 +130,7 @@ export class SetupWizardController {
       () => this.onNext(),
       () => this.onPrevious(),
       () => this.startAutoconnect(),
+      () => this.onConnectionToggle(),
     );
   }
 
@@ -187,25 +200,19 @@ export class SetupWizardController {
     switch (step) {
       case SetupWizardStep.StartRobot:
         this.view.setInputEnabled(false);
+        this.view.setConnectionToggleVisible(false);
         this.view.setStatus("", COLOR_WHITE);
         this.refreshFooterButtons();
         break;
       case SetupWizardStep.Connect:
         this.view.setInputEnabled(true);
-        this.initializeConnectInput();
+        this.view.setConnectionToggleVisible(true);
+        this.prepareConnectStep();
         this.refreshFooterButtons();
-        if (this.isConnected()) {
-          this.showConnectStatus();
-        } else {
-          this.view.setStatus(
-            this._hostValidationError ?? "Websocket disconnected",
-            COLOR_ERROR,
-          );
-          this.startAutoconnect();
-        }
         break;
       case SetupWizardStep.Localization:
         this.view.setInputEnabled(false);
+        this.view.setConnectionToggleVisible(false);
         this.beginLocalizationCapture();
         this.renderLocalizationStatus();
         this.refreshFooterButtons();
@@ -221,15 +228,41 @@ export class SetupWizardController {
     return localizationStepDescription(displayName);
   }
 
-  private initializeConnectInput(): void {
-    const stored = loadStoredModuleHost(this.deps.hostStore);
-    if (stored !== null && !isValidHost(stored)) {
-      this._hostValidationError = "Stored IP is invalid — enter a new IP";
-      this.view.initializeInput(stored);
+  private prepareConnectStep(): void {
+    this._connectionMethod = "pin";
+    this._hostValidationError = null;
+    this.view.setConnectionToggleLabel(connectionModeLabel(this._connectionMethod));
+    this.fillConnectField("");
+    if (this.isConnected()) {
+      this.showConnectStatus();
       return;
     }
-    const initial = stored ?? this.deps.defaultWebsocketIp.trim();
-    this.view.initializeInput(initial);
+    this.view.setStatus("Enter a 6-digit PIN", COLOR_WHITE);
+  }
+
+  private fillConnectField(text: string): void {
+    const placeholder = this._connectionMethod === "pin" ? "6 Digit PIN code" : "IP Address";
+    this.view.initializeInput(text, placeholder);
+  }
+
+  private onConnectionToggle(): void {
+    if (this._currentStep !== SetupWizardStep.Connect) {
+      return;
+    }
+    this.cancelAutoconnect("connection method changed", true);
+    this._isConnecting = false;
+    this._hostValidationError = null;
+    this._connectionMethod = toggleConnectionMethod(this._connectionMethod);
+    this.view.setConnectionToggleLabel(connectionModeLabel(this._connectionMethod));
+    if (this._connectionMethod === "pin") {
+      this.fillConnectField("");
+      this.view.setStatus("Enter a 6-digit PIN", COLOR_WHITE);
+      return;
+    }
+    const stored = loadStoredModuleHost(this.deps.hostStore);
+    const initial = stored !== null && isValidHost(stored) ? stored : this.deps.defaultWebsocketIp.trim();
+    this.fillConnectField(initial);
+    this.startAutoconnect();
   }
 
   private onNext(): void {
@@ -318,8 +351,24 @@ export class SetupWizardController {
       return;
     }
 
-    const ip = this.view.getInputText();
-    if (!isValidHost(ip)) {
+    const routed = routeConnectionField(this._connectionMethod, this.view.getInputText());
+    if (routed === null) {
+      this._hostValidationError = this._connectionMethod === "pin"
+        ? "Enter a 6-digit PIN"
+        : "Enter a valid IP address";
+      this.view.setStatus(this._hostValidationError, COLOR_ERROR);
+      this._isConnecting = false;
+      this.refreshFooterButtons();
+      return;
+    }
+    if (routed.kind === "pin") {
+      this._hostValidationError = null;
+      this._isConnecting = true;
+      this.view.setStatus("Resolving PIN…", COLOR_ERROR);
+      void this.resolvePin(routed.pin, opId);
+      return;
+    }
+    if (!isValidHost(routed.host)) {
       this._hostValidationError = "Enter a valid IP address";
       this.view.setStatus(this._hostValidationError, COLOR_ERROR);
       this._isConnecting = false;
@@ -327,15 +376,37 @@ export class SetupWizardController {
       return;
     }
     this._hostValidationError = null;
-    saveModuleHost(this.deps.hostStore, ip);
+    saveModuleHost(this.deps.hostStore, routed.host);
     this._isConnecting = true;
     this.showConnectStatus();
-    this.logConnectAttempt(ip);
-    void this.tryConnect(ip, opId);
+    this.logConnectAttempt(routed.host);
+    void this.tryConnect(routed.host, opId);
   }
 
-  private async tryConnect(ip: string, opId: number): Promise<void> {
-    const url = buildModuleWebSocketUrl(ip, AR_MODULE_CLIENT_CONFIG.port);
+  private async resolvePin(pin: string, opId: number): Promise<void> {
+    const found = await this.deps.ipRelayClient.resolve(pin);
+    if (opId !== this._autoconnectOpId) {
+      return;
+    }
+    if (found === null) {
+      this._isConnecting = false;
+      this._hostValidationError = "PIN did not resolve";
+      this.view.setStatus(this._hostValidationError, COLOR_ERROR);
+      this.scheduleAutoconnectRetry(opId);
+      return;
+    }
+    this._hostValidationError = null;
+    saveModuleHost(this.deps.hostStore, found.ip);
+    this.logConnectAttempt(found.ip);
+    void this.tryConnect(found.ip, opId, found.port);
+  }
+
+  private async tryConnect(
+    ip: string,
+    opId: number,
+    port: number = AR_MODULE_CLIENT_CONFIG.port,
+  ): Promise<void> {
+    const url = buildModuleWebSocketUrl(ip, port);
     try {
       if (this._sessionStarted) {
         this.deps.session.stop();

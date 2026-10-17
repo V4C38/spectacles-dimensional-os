@@ -5,6 +5,8 @@
   const stateDetail = $("stateDetail");
   const hostIp = $("hostIp");
   const hostIpSummary = $("hostIpSummary");
+  const pinValue = $("pin");
+  const pinSummary = $("pinSummary");
   const webxrLocal = $("webxrLocal");
   const webxrNetwork = $("webxrNetwork");
   const webxrLocalRow = $("webxrLocalRow");
@@ -776,6 +778,8 @@
     depsSummary.dataset.phase = deps.phase;
     setText(hostIp, status.host_ip);
     setText(hostIpSummary, status.host_ip);
+    setText(pinValue, status.pin);
+    setText(pinSummary, status.pin);
     setText(robotValue, displayRobotIp(status.robot_ip));
 
     const showWebxr = Boolean(status.webxr_local_url || status.webxr_url);

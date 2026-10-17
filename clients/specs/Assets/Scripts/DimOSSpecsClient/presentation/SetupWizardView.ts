@@ -2,17 +2,19 @@ import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInp
 import {
   ButtonBinding,
   COLOR_WHITE,
-  CONTENT_PAD_X,
+  createIconButton,
   createTextInput,
-  FALLBACK_FRAME_INNER_WIDTH,
   findButtonBinding,
   findChildRecursive,
   findText,
+  type IconButtonResult,
   FONT_WIZARD_INPUT,
   setButtonEnabled,
   setButtonStyle,
   SnapOS2Styles,
   SLOT_INPUT,
+  SPACE_XS,
+  UIFrameMetrics,
   Z_CONTENT,
 } from "./UIKit";
 
@@ -32,6 +34,7 @@ interface SetupWizardPanelHandlers {
   onNext: () => void;
   onPrevious: () => void;
   onInputSubmit: () => void;
+  onConnectionToggle: () => void;
 }
 
 const setupWizardPanelHandlers = new WeakMap<SceneObject, SetupWizardPanelHandlers>();
@@ -45,6 +48,7 @@ export class SetupWizardView {
   private readonly _prev: ButtonBinding;
   private readonly _inputField: TextInputField;
   private readonly _inputObj: SceneObject;
+  private readonly _connectionToggle: IconButtonResult;
   private readonly _statusObj: SceneObject;
   private readonly _statusBaseLocalX: number;
   private readonly _statusBaseLocalZ: number;
@@ -83,7 +87,13 @@ export class SetupWizardView {
     this._prev = prev;
 
     const inputParent = findChildRecursive(_panel, "IpInputFieldAnchor") ?? _panel;
-    const inputWidth = FALLBACK_FRAME_INNER_WIDTH - CONTENT_PAD_X * 2 - 2;
+    const rowGap = SPACE_XS;
+    const inputHeight = SLOT_INPUT;
+    const toggleWidth = 8;
+    const rowWidth = UIFrameMetrics.fromSceneObject(_panel).innerWidth - SPACE_XS * 2;
+    const inputWidth = rowWidth - toggleWidth - rowGap;
+    const inputX = -(toggleWidth + rowGap) / 2;
+    const toggleX = (inputWidth + rowGap) / 2;
     const existingInput = findChildRecursive(inputParent, "IpInputField");
     if (existingInput) {
       const field = existingInput.getComponent(TextInputField.getTypeName()) as TextInputField;
@@ -96,23 +106,47 @@ export class SetupWizardView {
         inputParent,
         "IpInputField",
         inputWidth,
-        SLOT_INPUT,
-        new vec3(0, 0, Z_CONTENT),
+        inputHeight,
+        new vec3(inputX, 0, Z_CONTENT),
         FONT_WIZARD_INPUT,
         HorizontalAlignment.Center,
       );
     }
     this._inputObj = this._inputField.getSceneObject();
+    this._inputField.size = new vec3(inputWidth, inputHeight, 0.5);
+    this._inputObj.getTransform().setLocalPosition(new vec3(inputX, 0, Z_CONTENT));
+    this._connectionToggle = createIconButton(
+      inputParent,
+      "ConnectionMethod",
+      "Mode: PIN",
+      toggleWidth,
+      inputHeight,
+      new vec3(toggleX, 0, Z_CONTENT),
+    );
+    this._connectionToggle.sceneObject.enabled = false;
   }
 
-  public bindHandlers(onNext: () => void, onPrevious: () => void, onInputSubmit: () => void): void {
-    setupWizardPanelHandlers.set(this._panel, { onNext, onPrevious, onInputSubmit });
+  public bindHandlers(
+    onNext: () => void,
+    onPrevious: () => void,
+    onInputSubmit: () => void,
+    onConnectionToggle: () => void,
+  ): void {
+    setupWizardPanelHandlers.set(this._panel, {
+      onNext,
+      onPrevious,
+      onInputSubmit,
+      onConnectionToggle,
+    });
     if (setupWizardBoundPanels.has(this._panel)) {
       return;
     }
     setupWizardBoundPanels.add(this._panel);
     this._next.button.onTriggerUp.add(() => setupWizardPanelHandlers.get(this._panel)?.onNext());
     this._prev.button.onTriggerUp.add(() => setupWizardPanelHandlers.get(this._panel)?.onPrevious());
+    this._connectionToggle.button.onTriggerUp.add(() =>
+      setupWizardPanelHandlers.get(this._panel)?.onConnectionToggle(),
+    );
     this._inputField.onReturnKeyPressed.add(() => setupWizardPanelHandlers.get(this._panel)?.onInputSubmit());
     this._inputField.onKeyboardStateChanged.add((isOpen: boolean) => {
       if (!isOpen) {
@@ -136,8 +170,17 @@ export class SetupWizardView {
     this._inputField.enabled = enabled;
   }
 
-  public initializeInput(text: string): void {
+  public setConnectionToggleVisible(visible: boolean): void {
+    this._connectionToggle.sceneObject.enabled = visible;
+  }
+
+  public setConnectionToggleLabel(label: string): void {
+    this._connectionToggle.labelText.text = label;
+  }
+
+  public initializeInput(text: string, placeholder: string): void {
     this._inputField.initialize();
+    this._inputField.placeholderText = placeholder;
     this._inputField.text = text;
   }
 

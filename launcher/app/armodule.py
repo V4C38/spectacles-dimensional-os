@@ -49,6 +49,7 @@ _RE_ARMODULE_READY = re.compile(r"ARModule ready\s+[—\-]\s+(ws://\S+)", re.IGN
 _RE_WEBSOCKET_BANNER = re.compile(r"WebSocket:\s+(ws://\S+)", re.IGNORECASE)
 _RE_WEBSOCKET_STARTED = re.compile(r"websocket=(ws://\S+)", re.IGNORECASE)
 _RE_HOST_IP = re.compile(r"Host IP:\s+(\S+)", re.IGNORECASE)
+_RE_PIN = re.compile(r"PIN:\s+(\d{6})", re.IGNORECASE)
 _RE_ROBOT_IP = re.compile(r"Robot IP:\s+(\S+)", re.IGNORECASE)
 _RE_CHECK_OK = re.compile(r"^CHECK_OK=([01])\s*$")
 _RE_DIMOS_PYTHON = re.compile(r"^DIMOS_PYTHON=(.+)$")
@@ -109,6 +110,7 @@ class LauncherStatus:
     dimos_ref: str | None = None
     websocket_url: str | None = None
     host_ip: str | None = None
+    pin: str | None = None
     robot_ip: str | None = None
     warning: str | None = None
     blueprint: str | None = None
@@ -150,6 +152,7 @@ class ProcessManager:
             "dimos_ref": self.status.dimos_ref,
             "websocket_url": self.status.websocket_url,
             "host_ip": self.status.host_ip,
+            "pin": self.status.pin,
             "robot_ip": self.status.robot_ip,
             "warning": self.status.warning,
             "blueprint": self.status.blueprint,
@@ -213,6 +216,10 @@ class ProcessManager:
         self._emit({"type": "status", **self.snapshot()})
 
     def _parse_armodule_line(self, line: str) -> None:
+        plain = _strip_ansi(line)
+        if m := _RE_PIN.search(plain):
+            self._set_status(pin=m.group(1))
+            return
         if (
             self.status.phase == Phase.RUNNING
             and self.status.websocket_url
@@ -220,7 +227,6 @@ class ProcessManager:
             and self.status.robot_ip is not None
         ):
             return
-        plain = _strip_ansi(line)
         if m := _RE_ARMODULE_READY.search(plain):
             self._set_status(websocket_url=m.group(1), phase=Phase.RUNNING, error=None)
             return
@@ -664,6 +670,7 @@ class ProcessManager:
                 client=client,
                 websocket_url=None,
                 host_ip=host_ip,
+                pin=None,
                 robot_ip=pinned_ip,
                 webxr_url=webxr_url,
                 webxr_local_url=webxr_local_url,
@@ -699,7 +706,7 @@ class ProcessManager:
             pass
         try:
             await asyncio.wait_for(proc.wait(), timeout=STOP_GRACE_SECONDS)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._append_log(f"{label} did not stop in time — sending SIGKILL")
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
@@ -746,6 +753,7 @@ class ProcessManager:
                 self._set_status(
                     phase=Phase.READY if self.status.check_ok else Phase.IDLE,
                     websocket_url=None,
+                    pin=None,
                     webxr_url=None,
                     webxr_local_url=None,
                 )
