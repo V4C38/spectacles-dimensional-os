@@ -12,7 +12,7 @@ export const AR_MODULE_CLIENT_CONFIG = {
       minDistanceM: 0.35,
       maxDistanceM: 3.0,
       lookAtMaxAngleDeg: 45,
-      frameSpacingS: 1.5,
+      frameSpacingS: 0.5,
     },
     episode: {
       resultTimeoutS: 15,

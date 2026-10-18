@@ -123,6 +123,7 @@ export class SetupWizardView {
       inputHeight,
       new vec3(toggleX, 0, Z_CONTENT),
     );
+    this.fitConnectionToggleLabel(toggleWidth, inputHeight);
     this._connectionToggle.sceneObject.enabled = false;
   }
 
@@ -176,6 +177,22 @@ export class SetupWizardView {
 
   public setConnectionToggleLabel(label: string): void {
     this._connectionToggle.labelText.text = label;
+  }
+
+  private fitConnectionToggleLabel(width: number, height: number): void {
+    const label = this._connectionToggle.labelText;
+    const innerWidth = width - 0.8;
+    label.horizontalAlignment = HorizontalAlignment.Center;
+    label.verticalAlignment = VerticalAlignment.Center;
+    label.horizontalOverflow = HorizontalOverflow.Overflow;
+    label.verticalOverflow = VerticalOverflow.Truncate;
+    label.worldSpaceRect = Rect.create(-innerWidth / 2, innerWidth / 2, -height / 2, height / 2);
+    label.getSceneObject().getTransform().setLocalPosition(new vec3(0, 0, 0.5));
+    label.size = 20;
+    const measuredWidth = label.getBoundingBox().getSize().x;
+    if (measuredWidth > innerWidth) {
+      label.size *= innerWidth / measuredWidth;
+    }
   }
 
   public initializeInput(text: string, placeholder: string): void {

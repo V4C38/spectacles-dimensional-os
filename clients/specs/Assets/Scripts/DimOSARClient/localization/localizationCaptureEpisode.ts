@@ -35,6 +35,8 @@ export interface LocalizationCaptureConfig {
 export interface LocalizationCaptureState {
   phase: LocalizationCapturePhase;
   lastError: string | null;
+  capturedCount?: number;
+  observationCount?: number;
 }
 
 export interface LocalizationCaptureDependencies {
@@ -45,6 +47,7 @@ export interface LocalizationCaptureDependencies {
   capture: CameraCaptureSource;
   geometry?: CaptureGeometry;
   config?: LocalizationCaptureConfig;
+  initiallyPaused?: boolean;
 }
 
 export class LocalizationCaptureEpisode {
@@ -68,6 +71,7 @@ export class LocalizationCaptureEpisode {
   private captureGeneration = 0;
   private inflight: Promise<void> | null = null;
   private hardwareStarted = false;
+  private captureEnabled: boolean;
   private readonly unsubscribers: Array<() => void> = [];
 
   constructor(deps: LocalizationCaptureDependencies) {
@@ -76,6 +80,7 @@ export class LocalizationCaptureEpisode {
     this.clock = deps.clock;
     this.tracking = deps.tracking;
     this.capture = deps.capture;
+    this.captureEnabled = !deps.initiallyPaused;
     this.geometry = requireGeometry(deps.geometry ?? AR_MODULE_CLIENT_CONFIG.capture.geometry);
     const config = deps.config ?? AR_MODULE_CLIENT_CONFIG.capture.episode;
     this.resultTimeoutS = requirePositive(config.resultTimeoutS, "resultTimeoutS");
@@ -92,7 +97,12 @@ export class LocalizationCaptureEpisode {
   }
 
   view(): LocalizationCaptureState {
-    return { phase: this.phase, lastError: this.lastError };
+    return {
+      phase: this.phase,
+      lastError: this.lastError,
+      capturedCount: this.observations.length,
+      observationCount: this.request?.observation_count ?? 0,
+    };
   }
 
   dispose(): void {
@@ -104,7 +114,17 @@ export class LocalizationCaptureEpisode {
   }
 
   reset(): void {
+    this.captureEnabled = false;
     this.resetIdle();
+  }
+
+  pause(): void {
+    // Keep the server's pending request so returning to the scan step can
+    // resume without asking it to open an episode that is already pending.
+    const request = this.request;
+    this.captureEnabled = false;
+    this.resetIdle();
+    this.request = request;
   }
 
   requestStart(): void {
@@ -116,6 +136,11 @@ export class LocalizationCaptureEpisode {
     }
     if (this.phase !== "idle" && this.phase !== "failed") {
       throw new Error("localization capture already active");
+    }
+    this.captureEnabled = true;
+    if (this.phase === "idle" && this.request !== null) {
+      this.onRequest(this.request);
+      return;
     }
     this.session.sendText(encodeLocalizationStartRequest());
     if (this.phase === "failed") {
@@ -136,6 +161,16 @@ export class LocalizationCaptureEpisode {
       }
     }
     if (this.phase === "capturing") {
+      try {
+        if (this.request?.capture_policy === "robot_los_required" && this.shouldWaitForGeometricGate()) {
+          // Looking away discards a partial runtime batch and waits for LOS.
+          this.onRequest(this.request);
+          return;
+        }
+      } catch (error) {
+        this.enterFailed(errorMessage(error));
+        return;
+      }
       this.tickCapture(now);
       return;
     }
@@ -151,6 +186,10 @@ export class LocalizationCaptureEpisode {
   }
 
   private onRequest(request: LocalizationObservationsRequest): void {
+    if (!this.captureEnabled) {
+      this.request = request;
+      return;
+    }
     this.observations = [];
     this.resultDeadline = null;
     this.retryAt = null;
@@ -175,7 +214,7 @@ export class LocalizationCaptureEpisode {
     if (message.type !== "localization_result") {
       return;
     }
-    if (this.phase === "awaiting_result" || this.phase === "failed") {
+    if (this.phase !== "idle") {
       this.resetIdle();
     }
   }
@@ -281,20 +320,24 @@ export class LocalizationCaptureEpisode {
       this.enterFailed(errorMessage(error));
       return;
     }
-    this.stopHardware();
+    // Keep the video stream warm while the server checks this bounded batch.
+    // A miss requests the next batch immediately; success/reset stops capture.
     this.phase = "awaiting_result";
     this.resultDeadline = now + this.resultTimeoutS;
     this.nextCaptureAt = null;
   }
 
   private tickRetry(now: number): void {
-    if (this.clientTrackingOriginStore.hasTrackingOrigin) {
-      return;
-    }
     if (this.retryAt === null || now < this.retryAt) {
       return;
     }
     if (this.session.view().connection !== "ready") {
+      return;
+    }
+    if (this.request !== null && this.lastError !== "result timeout") {
+      // A local camera failure has not consumed the server's pending request.
+      // Resume it after backoff, including during runtime relocalization.
+      this.onRequest(this.request);
       return;
     }
     this.session.sendText(encodeLocalizationStartRequest());

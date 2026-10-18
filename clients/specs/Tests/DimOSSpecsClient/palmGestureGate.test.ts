@@ -2,12 +2,14 @@ import { describe, it, expect } from "vitest";
 import {
   DEFAULT_PALM_GESTURE_GATE_CONFIG,
   PalmGestureGate,
+  palmFacingDotWorldUp,
 } from "../../Assets/Scripts/DimOSSpecsClient/presentation/WristMenuController";
 
 const baseInput = {
   isTracked: true,
   palmPitchDeg: 0,
   isFacingCamera: true,
+  palmFacingDotUp: null as number | null,
 };
 
 const testConfig = {
@@ -201,6 +203,59 @@ describe("PalmGestureGate", () => {
     expect(gate.isOpen).toBe(false);
   });
 
+  it("opens for a palm-up tray pose that does not face the camera", () => {
+    const gate = new PalmGestureGate(testConfig);
+
+    expect(
+      gate.update(
+        { ...baseInput, palmPitchDeg: 0, isFacingCamera: false, palmFacingDotUp: 0.9 },
+        0,
+      ),
+    ).toBe(false);
+    expect(
+      gate.update(
+        { ...baseInput, palmPitchDeg: 0, isFacingCamera: false, palmFacingDotUp: 0.9 },
+        0.01,
+      ),
+    ).toBe(true);
+    expect(gate.isOpen).toBe(true);
+  });
+
+  it("stays open while the palm remains up and closes once it turns over", () => {
+    const gate = new PalmGestureGate(testConfig);
+    gate.update(
+      { ...baseInput, palmPitchDeg: 0, isFacingCamera: false, palmFacingDotUp: 0.9 },
+      0,
+    );
+    gate.update(
+      { ...baseInput, palmPitchDeg: 0, isFacingCamera: false, palmFacingDotUp: 0.9 },
+      0.01,
+    );
+    expect(gate.isOpen).toBe(true);
+
+    expect(
+      gate.update(
+        { ...baseInput, palmPitchDeg: 0, isFacingCamera: false, palmFacingDotUp: 0.4 },
+        0.02,
+      ),
+    ).toBe(false);
+    expect(gate.isOpen).toBe(true);
+
+    expect(
+      gate.update(
+        { ...baseInput, palmPitchDeg: 0, isFacingCamera: false, palmFacingDotUp: 0.1 },
+        0.03,
+      ),
+    ).toBe(false);
+    expect(
+      gate.update(
+        { ...baseInput, palmPitchDeg: 0, isFacingCamera: false, palmFacingDotUp: 0.1 },
+        0.04,
+      ),
+    ).toBe(true);
+    expect(gate.isOpen).toBe(false);
+  });
+
   it("reset clears open state and pending debounce", () => {
     const gate = new PalmGestureGate({
       ...DEFAULT_PALM_GESTURE_GATE_CONFIG,
@@ -213,5 +268,29 @@ describe("PalmGestureGate", () => {
     expect(gate.isOpen).toBe(false);
     expect(gate.update({ ...baseInput, palmPitchDeg: 45 }, 0.05)).toBe(false);
     expect(gate.update({ ...baseInput, palmPitchDeg: 45 }, 0.34)).toBe(true);
+  });
+});
+
+describe("palmFacingDotWorldUp", () => {
+  it("is positive when the left palm faces world up", () => {
+    const dot = palmFacingDotWorldUp(
+      "left",
+      { x: 0, y: 0, z: 0 },
+      { x: 0, y: 0, z: 1 },
+      { x: 1, y: 0, z: 1 },
+    );
+    expect(dot).not.toBeNull();
+    expect(dot!).toBeCloseTo(1);
+  });
+
+  it("is negative when the left palm faces world down", () => {
+    const dot = palmFacingDotWorldUp(
+      "left",
+      { x: 0, y: 0, z: 0 },
+      { x: 0, y: 0, z: 1 },
+      { x: -1, y: 0, z: 1 },
+    );
+    expect(dot).not.toBeNull();
+    expect(dot!).toBeCloseTo(-1);
   });
 });

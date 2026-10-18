@@ -94,9 +94,17 @@ y_client =  z_odom
 z_client =  x_odom
 ```
 
-Orientation must be converted with the same basis change, which for a
-handedness flip is easy to get subtly wrong. This matrix is the contract;
-each client owns its implementation.
+Orientation must be converted with the same basis change. Each client owns
+the conversion appropriate to its host; the example above is not the Lens basis.
+Lens is right-handed Y-up with camera forward along -Z, so Specs uses
+`x_specs = -y_tracking`, `y_specs = z_tracking`, `z_specs = -x_tracking` (plus
+metres to centimetres). Camera poses additionally preserve optical local axes:
+`R_tracking_optical = P^-1 R_specs_camera diag(1, -1, -1)`, where `P` maps
+tracking vectors to Specs. Conjugating a camera quaternion alone is insufficient.
+Specs navigation marker yaw is separate from a generic world-pose basis change:
+the marker arrow uses local +X forward. Tracking yaw zero therefore renders as
+Lens marker yaw +90 degrees, pointing along Lens -Z. Outgoing goals invert this
+mapping so their terminal robot heading matches the displayed arrow.
 
 ### Odometry scale correction
 
@@ -110,6 +118,7 @@ What carries the correction, and what does not:
 | Data | Corrected |
 |------|-----------|
 | `pose` position, X and Y | yes |
+| Robot odometry used to anchor `localization_result`, X and Y | yes |
 | `nav_goal` pose and `path_poses` X and Y | yes |
 | `nav_goal_request` position X and Y (inverted on ingress) | yes |
 | Height (Z) on any message | no |
@@ -119,6 +128,9 @@ What carries the correction, and what does not:
 | `lidar` points | no |
 
 Height is excluded because slip costs horizontal travel, not altitude.
+Localization corrects the robot odometry before composing measured marker mounts
+and camera poses. The completed `T_odom_client` is a rigid metric transform;
+its translation must not be multiplied by the odometry correction factor.
 Orientation is excluded because heading error is not a linear factor and there
 is nothing sound to scale. LiDAR is excluded because its points are metric range
 measurements rather than dead-reckoned positions, and stretching them would
@@ -345,6 +357,10 @@ ARModule → one client. Prompt to capture a camera batch and send
 `localization_observations`. This is a server-to-client `*_request`: ARModule
 needs the client to act.
 
+After an unsuccessful scan, ARModule requests a replacement batch with this
+same message (subject to provider cooldowns). Clients resume capture immediately;
+the result timeout is only a fallback for a missing response.
+
 ```json
 {
   "type": "localization_observations_request",
@@ -358,6 +374,11 @@ needs the client to act.
 | `capture_policy` | string | `robot_los_required` \| `robot_los_preferred` \| `any_angle`. Geometric gate only — not a provider name. |
 | `observation_count` | uint | Exact batch size. The client always sends this many frames. |
 | `wait_timeout_s` | float | Required when `capture_policy` is `robot_los_preferred`. Omitted otherwise. |
+
+The default client frame spacing is 0.5 seconds. A fiducial episode requests
+three observations and requires at least two agreeing marker detections after
+quality and gravity-consistency filtering. The Specs wizard defers its initial
+prompt until the wearer enters the localization step.
 
 `robot_los_required`: wait until robot line-of-sight gates pass, then capture.
 `robot_los_preferred`: wait for those gates until `wait_timeout_s`, then capture
@@ -398,6 +419,12 @@ Sent only after a successful capture episode that started with
 `localization_observations_request` (whether ARModule prompted on its own or a
 client asked with `localization_start_request`). Never
 unsolicited — a `T_odom_map` refresh does not push a new result.
+
+After 0.75 m of accumulated corrected robot travel since the last successful
+fix, ARModule requests another episode without waiting for a navigation goal to
+finish. A marker-only client waits for the robot to enter its geometric capture
+gate, and pauses a partial batch if it leaves that gate. Successful setup keeps
+this runtime handler armed; it does not keep the camera running between episodes.
 
 Always in `odom`, regardless of which frame the underlying provider works in.
 When a provider answers in a scanned-map frame ARModule composes it into
@@ -490,10 +517,9 @@ Client-initiated capture. No payload. ARModule responds with
 server-initiated prompt. The client then sends `localization_observations` as
 usual.
 
-Because no frame is sent when localization fails, this is the retry path: a
-client that gets no `localization_result` before its own deadline asks for
-another episode. ARModule may withhold the prompt until a provider cooldown
-expires and send `localization_observations_request` later, so clients back off
+If neither a result nor a replacement batch request arrives before the client's
+deadline, it asks for another episode. ARModule may withhold the prompt until a
+provider cooldown expires and send `localization_observations_request` later, so clients back off
 between attempts rather than assuming a prompt per request.
 
 ### `localization_observations` (binary)
@@ -562,8 +588,8 @@ not the time the message was assembled. ARModule converts it to `ts_server`
 using the per-connection offset from `hello` before pose lookup. A localization
 round trip can take seconds; pairing uses shutter time, not send time.
 
-Response: `localization_result` after a successful episode. No frame is sent on
-failure.
+Response: `localization_result` after a successful episode, or another
+`localization_observations_request` after a failed scan (subject to cooldowns).
 
 ### `nav_goal_request`
 

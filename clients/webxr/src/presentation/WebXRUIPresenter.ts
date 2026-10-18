@@ -49,6 +49,7 @@ export class WebXRUIPresenter {
   private hudUntil = 0;
   private wizardLidarOffSent = false;
   private postWizardLidarSent = false;
+  private nowS = 0;
 
   constructor(
     private readonly session: ARModuleSession,
@@ -71,6 +72,7 @@ export class WebXRUIPresenter {
   }
 
   tick(now: number): void {
+    this.nowS = now;
     if (this.hudText && now >= this.hudUntil) {
       this.hudText = null;
       this.hudTone = null;
@@ -88,7 +90,7 @@ export class WebXRUIPresenter {
   snapshot(): WebXRUISnapshot {
     const view = this.session.view();
     const link = sessionLinkStatus(view, view.hello?.robot.display_name);
-    const capture = localizationCaptureStatus(view, this.episode.view());
+    const capture = localizationCaptureStatus(view, this.episode.view(), this.nowS);
     return {
       setupCompleted: this.setupCompleted,
       connectionText: link.text.trim(),

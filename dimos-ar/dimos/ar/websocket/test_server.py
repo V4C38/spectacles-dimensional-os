@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import inspect
 import json
+import os
 import socket
 import threading
 
@@ -113,6 +115,47 @@ def harness() -> ServerHarness:
 
 def test_split_inbound_text_lines() -> None:
     assert split_inbound_text_lines('{"type":"estop_request"}\n\n') == ['{"type":"estop_request"}']
+
+
+def _open_silent_websocket(port: int) -> socket.socket:
+    """Complete the upgrade, then never read. Models a Specs socket left CONNECTING."""
+    sock = socket.create_connection(("127.0.0.1", port), timeout=3)
+    key = base64.b64encode(os.urandom(16)).decode()
+    sock.sendall(
+        (
+            "GET /ws HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{port}\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "\r\n"
+        ).encode()
+    )
+    buffer = b""
+    while b"\r\n\r\n" not in buffer:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError("websocket upgrade closed")
+        buffer += chunk
+    status = buffer.split(b"\r\n", 1)[0]
+    if b" 101 " not in status:
+        raise RuntimeError(status.decode())
+    sock.settimeout(None)
+    return sock
+
+
+@pytest.mark.asyncio
+async def test_reconnect_handshakes_while_prior_socket_ignores_close(
+    harness: ServerHarness,
+) -> None:
+    stale = _open_silent_websocket(harness.port)
+    try:
+        async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as ws:
+            msg = await _send_hello_request(ws)
+            assert msg["type"] == "hello"
+    finally:
+        stale.close()
 
 
 @pytest.mark.asyncio

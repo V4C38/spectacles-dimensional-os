@@ -3,8 +3,37 @@ import { quat, vec3 } from "../shims/lens-runtime";
 import {
   lookupPoseSample,
   scaleCameraIntrinsics,
+  specsWorldPoseToTracking,
+  specsCameraOpticalPoseToTracking,
   type PoseSample,
 } from "../../Assets/Scripts/DimOSSpecsClient/localization/SpecsCameraSource";
+import { rotateVecByQuat } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms";
+
+describe("camera optical pose", () => {
+  it("maps optical right/down/forward to tracking right/down/forward for a level Lens camera", () => {
+    const pose = specsCameraOpticalPoseToTracking(new vec3(100, 200, -300), new quat(1, 0, 0, 0));
+    expect(pose.position).toEqual([3, -1, 2]);
+    expect(rotateVecByQuat(pose.orientation, [1, 0, 0])).toEqual([0, -1, 0]);
+    expect(rotateVecByQuat(pose.orientation, [0, 1, 0])).toEqual([0, 0, -1]);
+    expect(rotateVecByQuat(pose.orientation, [0, 0, 1])).toEqual([1, 0, 0]);
+  });
+
+  it("keeps optical axes correct while looking straight down at a table marker", () => {
+    const half = Math.PI / 4;
+    const pose = specsCameraOpticalPoseToTracking(new vec3(0, 100, 0), new quat(Math.cos(half), -Math.sin(half), 0, 0));
+    const forward = rotateVecByQuat(pose.orientation, [0, 0, 1]);
+    expect(forward[0]).toBeCloseTo(0);
+    expect(forward[1]).toBeCloseTo(0);
+    expect(forward[2]).toBeCloseTo(-1);
+  });
+});
+
+it("keeps navigation ground poses separate from camera optical axes", () => {
+  const pose = specsWorldPoseToTracking(new vec3(100, 200, -300), new quat(1, 0, 0, 0));
+  expect(pose.position).toEqual([3, -1, 2]);
+  expect(pose.orientation).toEqual([0, 0, 0, 1]);
+  expect(rotateVecByQuat(pose.orientation, [0, 0, 1])).toEqual([0, 0, 1]);
+});
 
 function sample(t: number, x: number, y: number, z: number): PoseSample {
   return {

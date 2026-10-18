@@ -3,8 +3,10 @@ from __future__ import annotations
 import math
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation
 
 import dimos.ar.localization.fiducial_marker.localizer as fiducial_module
 from dimos.ar.localization.fiducial_marker.localizer import (
@@ -20,6 +22,63 @@ from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 assert UNITREE_GO2_PROFILE.fiducial_dictionary is not None
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
+
+
+def test_localizes_rendered_table_marker_from_three_optical_camera_poses() -> None:
+    """Exercise JPEG detection, PnP, optical composition, and default tilt fusion."""
+    intrinsics = _intrinsics()
+    k = np.array([[600, 0, 400], [0, 600, 400], [0, 0, 1]], dtype=np.float64)
+    marker_size = 0.056
+    half = marker_size / 2
+    object_points = np.array(
+        [[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]],
+        dtype=np.float64,
+    )
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
+    marker = cv2.aruco.generateImageMarker(dictionary, 0, 200)
+    observations = []
+    for offset in [-0.01, 0.0, 0.01]:
+        # A horizontal marker, viewed from above with a slightly tilted camera.
+        tilt, _ = cv2.Rodrigues(np.array([0.2, 0.0, 0.0]))
+        client_camera = np.eye(4)
+        client_camera[:3, :3] = tilt @ np.diag([1.0, -1.0, -1.0])
+        client_camera[:3, 3] = [offset, 0.0, 0.35]
+        camera_marker = np.linalg.inv(client_camera)
+        rvec, _ = cv2.Rodrigues(camera_marker[:3, :3])
+        corners, _ = cv2.projectPoints(object_points, rvec, camera_marker[:3, 3], k, None)
+        warp = cv2.getPerspectiveTransform(
+            np.array([[0, 0], [199, 0], [199, 199], [0, 199]], dtype=np.float32),
+            corners.reshape(4, 2).astype(np.float32),
+        )
+        image = cv2.warpPerspective(marker, warp, (800, 800), borderValue=255)
+        ok, jpeg = cv2.imencode(".jpg", image)
+        assert ok
+        observations.append(
+            Observation(
+                jpeg=jpeg.tobytes(),
+                intrinsics=intrinsics,
+                camera_pose=matrix_to_pose(client_camera),
+                ts_server=100.0,
+            )
+        )
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=PoseBuffer(),
+        marker_mounts=[
+            FiducialMarkerMount(
+                marker_id=0,
+                size_m=marker_size,
+                position=(0.0, 0.0, 0.0),
+                orientation=(0.0, 0.0, 0.0, 1.0),
+            )
+        ],
+        dictionary_name="DICT_APRILTAG_36h11",
+    )
+
+    result = localizer.localize(observations)
+
+    assert result is not None
+    assert [result.pose.x, result.pose.y, result.pose.z] == pytest.approx([0, 0, 0], abs=0.02)
 
 
 def _intrinsics(*, width: int = 800, height: int = 800) -> Intrinsics:
@@ -325,6 +384,57 @@ def test_confidence_uses_only_fusion_inliers(monkeypatch: pytest.MonkeyPatch) ->
     assert result.confidence < all_candidate_confidence
 
 
+@pytest.mark.parametrize("matching_sightings", [1, 2])
+def test_batch_requires_two_agreeing_marker_sightings(
+    monkeypatch: pytest.MonkeyPatch,
+    matching_sightings: int,
+) -> None:
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=PoseBuffer(),
+        marker_mounts=UNITREE_GO2_PROFILE.fiducial_marker_mounts,
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
+    )
+    candidates = [
+        fiducial_module._FiducialCandidate(transform=np.eye(4), reprojection_error_px=0.5)
+        if index < matching_sightings
+        else None
+        for index in range(3)
+    ]
+    monkeypatch.setattr(
+        localizer,
+        "_candidate_from_observation",
+        lambda _observation, _misses: candidates.pop(0),
+    )
+
+    result = localizer.localize([_observation() for _ in range(3)])
+
+    assert (result is not None) == (matching_sightings == 2)
+
+
+def test_batch_rejects_detections_that_disagree_in_position(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=PoseBuffer(),
+        marker_mounts=UNITREE_GO2_PROFILE.fiducial_marker_mounts,
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
+    )
+    transforms = [np.eye(4) for _ in range(3)]
+    for index, transform in enumerate(transforms):
+        transform[0, 3] = index * 2.0
+    candidates = [
+        fiducial_module._FiducialCandidate(transform=transform, reprojection_error_px=0.5)
+        for transform in transforms
+    ]
+    monkeypatch.setattr(
+        localizer,
+        "_candidate_from_observation",
+        lambda _observation, _misses: candidates.pop(0),
+    )
+
+    assert localizer.localize([_observation() for _ in range(3)]) is None
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -386,3 +496,110 @@ def test_detector_output_length_mismatch_is_explicit(
 
     with pytest.raises(ValueError, match="zip\\(\\) argument 2 is longer"):
         localizer.localize([_observation()])
+
+
+@pytest.mark.parametrize("origin_shift", [(0.0, 0.0, 0.0), (4.0, -3.0, 1.5)])
+@pytest.mark.parametrize("tilt_deg", [0.0, 8.0, -8.0])
+def test_gravity_alignment_preserves_marker_center_independent_of_tracking_origin(
+    monkeypatch: pytest.MonkeyPatch,
+    origin_shift: tuple[float, float, float],
+    tilt_deg: float,
+) -> None:
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=PoseBuffer(),
+        marker_mounts=UNITREE_GO2_PROFILE.fiducial_marker_mounts,
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
+    )
+    mount = UNITREE_GO2_PROFILE.fiducial_marker_mounts[0]
+    odom_base = np.eye(4)
+    odom_base[:3, :3] = Rotation.from_euler("z", 37, degrees=True).as_matrix()
+    odom_base[:3, 3] = [2.5, -3.75, 0.33]
+    client_camera = np.eye(4)
+    client_camera[:3, 3] = origin_shift
+    camera_marker = np.eye(4)
+    camera_marker[:3, :3] = (
+        Rotation.from_euler("x", tilt_deg, degrees=True).as_matrix()
+        @ (odom_base @ mount.T_base_marker)[:3, :3]
+    )
+    # PnP rotation may tilt while its measured center remains accurate.
+    camera_marker[:3, 3] = [0.5, 0.2, 0.7]
+    rvec, _ = cv2.Rodrigues(camera_marker[:3, :3])
+    monkeypatch.setattr(
+        fiducial_module,
+        "estimate_marker_pose",
+        lambda *_a, **_kw: (
+            rvec,
+            camera_marker[:3, 3].reshape(3, 1),
+        ),
+    )
+    monkeypatch.setattr(fiducial_module, "marker_reprojection_error", lambda *_a, **_kw: 0.1)
+
+    candidate = localizer._candidate_from_detection(
+        corners=np.zeros((1, 4, 2), dtype=np.float32),
+        mount=mount,
+        camera_matrix=np.eye(3),
+        dist_coeffs=np.zeros(5),
+        intrinsics=_intrinsics(),
+        T_odom_base=odom_base,
+        T_client_camopt=client_camera,
+    )
+
+    assert candidate is not None
+    client_marker = client_camera @ camera_marker
+    predicted_marker = candidate.transform @ client_marker
+    assert predicted_marker[:3, 3] == pytest.approx(
+        (odom_base @ mount.T_base_marker)[:3, 3],
+        abs=1e-9,
+    )
+    assert candidate.transform[:3, 2] == pytest.approx([0, 0, 1], abs=1e-9)
+
+
+@pytest.mark.parametrize("tracking_shift", [(0.0, 0.0, 0.0), (3.0, -2.0, 1.0)])
+def test_real_pnp_recovers_go2_mount_from_nonzero_robot_pose_and_tracking_origin(
+    monkeypatch: pytest.MonkeyPatch,
+    tracking_shift: tuple[float, float, float],
+) -> None:
+    buffer = PoseBuffer()
+    robot = PoseStamped(
+        ts=100.0,
+        position=[2.5, -3.75, 0.33],
+        orientation=Rotation.from_euler("z", 37, degrees=True).as_quat().tolist(),
+    )
+    buffer.push(robot, ts_server=100.0)
+    localizer = FiducialMarkerLocalizer(
+        pose_buffer=buffer,
+        marker_mounts=UNITREE_GO2_PROFILE.fiducial_marker_mounts,
+        dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
+    )
+    mount = UNITREE_GO2_PROFILE.fiducial_marker_mounts[0]
+    odom_marker = pose_to_matrix(robot) @ mount.T_base_marker
+    expected_origin = np.eye(4)
+    expected_origin[:3, :3] = Rotation.from_euler("z", -23, degrees=True).as_matrix()
+    expected_origin[:3, 3] = tracking_shift
+    camera_marker = np.eye(4)
+    camera_marker[:3, :3] = Rotation.from_euler("xyz", [165, 12, -8], degrees=True).as_matrix()
+    camera_marker[:3, 3] = [0.03, -0.02, 0.5]
+    client_camera = np.linalg.inv(expected_origin) @ odom_marker @ np.linalg.inv(camera_marker)
+    half = mount.size_m / 2
+    obj = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]])
+    k, d = fiducial_module._intrinsics_to_cv(_intrinsics())
+    rvec, _ = cv2.Rodrigues(camera_marker[:3, :3])
+    corners, _ = cv2.projectPoints(obj, rvec, camera_marker[:3, 3], k, d)
+    localizer._detector = SimpleNamespace(  # type: ignore[assignment]
+        detectMarkers=lambda _gray: (
+            [corners.reshape(1, 4, 2).astype(np.float32)],
+            np.array([[0]]),
+            None,
+        )
+    )
+    obs = Observation(
+        jpeg=_jpeg(),
+        intrinsics=_intrinsics(),
+        camera_pose=matrix_to_pose(client_camera),
+        ts_server=100.0,
+    )
+
+    result = localizer.localize([obs, obs, obs])
+
+    assert result is not None
+    assert pose_to_matrix(result.pose) == pytest.approx(expected_origin, abs=1e-4)

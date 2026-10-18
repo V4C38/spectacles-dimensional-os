@@ -145,6 +145,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       clock,
       tracking: cameraSource,
       capture: cameraSource,
+      initiallyPaused: true,
     });
     this.episode = episode;
 
@@ -269,10 +270,18 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       }
     });
 
+    let roomPresentationDirty = true;
     this.unsubscribeView = session.subscribeView((view) => {
       const prevView = this.lastSessionView;
       this.lastSessionView = view;
       this.uiPresenter.onSessionView(view, prevView);
+      roomPresentationDirty = true;
+    });
+
+    // Prefab instantiation and mesh uploads belong to the scene update, not
+    // the native WebSocket callback. Coalesce incoming facts into one render.
+    const applyRoomPresentation = (): void => {
+      const view = session.view();
       this.uiPresenter.applyRoomPresentation(view);
 
       if (view.connection === "disconnected") {
@@ -302,7 +311,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       this.lidarPresenter.apply({ points: view.lidar?.points ?? null, origin });
       navigationController.applyView(view, origin);
       applyNavPath();
-    });
+    };
 
     const updateEvent = this.createEvent("UpdateEvent");
     updateEvent.bind(() => {
@@ -310,7 +319,12 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       session.tick();
       episode.tick();
       this.maybeSendClientPose();
+      const setupWasCompleted = this.uiPresenter.isSetupCompleted();
       this.uiPresenter.tick(getDeltaTime());
+      if (roomPresentationDirty || setupWasCompleted !== this.uiPresenter.isSetupCompleted()) {
+        roomPresentationDirty = false;
+        applyRoomPresentation();
+      }
     });
     this.updateEvent = updateEvent;
   }

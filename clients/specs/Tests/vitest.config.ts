@@ -44,6 +44,17 @@ function isRoundButtonImport(source: string): boolean {
 export default defineConfig({
   plugins: [
     {
+      name: "lens-text-input-module",
+      transform(code, id) {
+        if (id.endsWith("/SetupWizardController.ts")) {
+          // Lens permission registration has no Node equivalent; the wizard
+          // view and its text input are mocked in controller tests.
+          return code.replace('require("LensStudio:TextInputModule");', "");
+        }
+        return null;
+      },
+    },
+    {
       name: "uikit-mock",
       resolveId(source) {
         if (isUIKitImport(source)) {

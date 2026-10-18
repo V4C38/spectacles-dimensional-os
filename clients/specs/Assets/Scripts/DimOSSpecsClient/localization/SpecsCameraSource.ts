@@ -43,7 +43,7 @@ export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSou
     }
     const latest = this.poseBuffer[this.poseBuffer.length - 1];
     const optical = composeDeviceOptical(latest, this.ensureDeviceCamera()?.pose ?? null);
-    return specsWorldPoseToTracking(optical.position, optical.rotation);
+    return specsCameraOpticalPoseToTracking(optical.position, optical.rotation);
   }
 
   start(): void {
@@ -72,7 +72,7 @@ export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSou
       throw new Error("DeviceCamera is required");
     }
     const optical = composeDeviceOptical(pose, deviceCamera.pose);
-    const tracking = specsWorldPoseToTracking(optical.position, optical.rotation);
+    const tracking = specsCameraOpticalPoseToTracking(optical.position, optical.rotation);
     const jpeg = await encodeJpeg(frame.texture);
     return {
       ts_capture: frame.timestampSeconds,
@@ -154,6 +154,22 @@ export function specsWorldPoseToTracking(
     position: [position.x, position.y, position.z],
     orientation: [rotation.x, rotation.y, rotation.z, rotation.w],
   });
+}
+
+export function specsCameraOpticalPoseToTracking(
+  position: vec3,
+  rotation: quat,
+): { position: Vec3; orientation: Quat } {
+  const tracking = specsWorldPoseToTracking(position, rotation);
+  // A world-pose basis change conjugates R. A camera pose instead keeps the
+  // optical local axes: R_tracking_optical = P^-1 R_lens_camera diag(1,-1,-1).
+  // Undo the local basis change and convert GL camera axes to optical axes.
+  const [x, y, z, w] = tracking.orientation;
+  const optical = new quat(w, x, y, z).multiply(new quat(0.5, -0.5, 0.5, -0.5));
+  return {
+    position: tracking.position,
+    orientation: [optical.x, optical.y, optical.z, optical.w],
+  };
 }
 
 export function encodeJpeg(texture: Texture): Promise<Uint8Array> {

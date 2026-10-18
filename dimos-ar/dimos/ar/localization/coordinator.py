@@ -13,7 +13,6 @@ from dimos.ar.localization.types import (
     Observation,
 )
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
-from dimos.ar.robot.odometry_correction import correct_odom_xy
 from dimos.msgs.geometry_msgs.Transform import Transform
 
 
@@ -33,7 +32,6 @@ class LocalizationCoordinator:
         robot_observations: RobotObservationBuffer,
         marker: Localizer | None,
         vps: Localizer | None,
-        odom_scale_correction_factor: float,
         map_code: str | None = None,
     ) -> None:
         self._policy = policy
@@ -41,7 +39,6 @@ class LocalizationCoordinator:
         self._robot_observations = robot_observations
         self._marker = marker
         self._vps = vps
-        self._odom_scale_correction_factor = odom_scale_correction_factor
         self._map_code = map_code
 
     def on_relocalization_transform(self, transform: Transform, *, ts_server: float) -> bool:
@@ -114,13 +111,8 @@ class LocalizationCoordinator:
             raise ValueError(
                 f"localization_result expects frame_id='odom', got {localized.frame_id!r}"
             )
-        x, y = correct_odom_xy(
-            localized.pose.x,
-            localized.pose.y,
-            factor=self._odom_scale_correction_factor,
-        )
         return LocalizationResult(
-            position=(x, y, localized.pose.z),
+            position=(localized.pose.x, localized.pose.y, localized.pose.z),
             orientation=(
                 localized.pose.orientation.x,
                 localized.pose.orientation.y,

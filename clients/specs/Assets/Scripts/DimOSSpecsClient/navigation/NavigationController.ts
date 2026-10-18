@@ -3,15 +3,26 @@ import { clientTrackingToOdomPose, odomToClientTrackingYawPose } from "../../Dim
 import { requestNavGoal } from "../../DimOSARClient/navigation/navGoalRequest";
 import type { ARModuleSession, ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
 import type { NavState, YawPose } from "../../DimOSARClient/websocket/protocolTypes";
-import { specsWorldPoseToTracking } from "../localization/SpecsCameraSource";
 import type { RobotPresenter } from "../presentation/RobotPresenter";
-import { clientTrackingToSpecsYawPose } from "../utilities/SpecsCoordinates";
+import { clientTrackingToSpecsYawPose, specsToClientTrackingYawPose } from "../utilities/SpecsCoordinates";
 import { GroundPlacement } from "./GroundPlacement";
 import { NavGoalMarker } from "./NavGoalMarker";
 
 export const GOAL_SEND_INTERVAL_S = 0.35;
 export const GOAL_SEND_MIN_DISTANCE_CM = 20.0;
 export const GOAL_FORCE_NOOP_DISTANCE_CM = 2.0;
+
+export function specsNavigationGoalInOdom(position: vec3, rotation: quat, origin: ClientTrackingOrigin) {
+  const forward = rotation.multiplyVec3(new vec3(1, 0, 0));
+  const tracking = specsToClientTrackingYawPose([
+    position.x, position.y, position.z, Math.atan2(-forward.z, forward.x),
+  ]);
+  const half = tracking[3] * 0.5;
+  return clientTrackingToOdomPose({
+    position: [tracking[0], tracking[1], tracking[2]],
+    orientation: [0, 0, Math.sin(half), Math.cos(half)],
+  }, origin);
+}
 
 export type NavFlash = "cancelled" | "failed";
 
@@ -247,8 +258,7 @@ export class NavigationController {
     if (!shouldSendStreamGoal(getTime(), this.lastGoalSendTime, position, this.lastSentGoal, force)) {
       return;
     }
-    const tracking = specsWorldPoseToTracking(position, rotation);
-    const odom = clientTrackingToOdomPose(tracking, this.origin);
+    const odom = specsNavigationGoalInOdom(position, rotation, this.origin);
     try {
       requestNavGoal(this.session, odom);
     } catch {
@@ -355,13 +365,16 @@ export class NavigationController {
     if (this.marker) {
       return this.marker;
     }
+    print("NavigationController: creating runtime marker");
     const root = this.navGoalMarkerPrefab.instantiate(this.parent);
+    print("NavigationController: runtime prefab instantiated");
     const marker = root.getComponent(NavGoalMarker.getTypeName()) as NavGoalMarker | null;
     if (!marker) {
       root.destroy();
       throw new Error("navGoalMarkerPrefab is missing NavGoalMarker");
     }
     marker.ensureReady();
+    print("NavigationController: runtime marker initialized");
     this.marker = marker;
     return marker;
   }

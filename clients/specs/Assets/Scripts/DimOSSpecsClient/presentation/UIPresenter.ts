@@ -130,7 +130,14 @@ export class UIPresenter extends BaseScriptComponent {
     });
     this.bindRuntimeHud();
     this.setupWizardController.start(false);
-    this.mainUIFrame.enabled = false;
+    if (this.isEditorMode) {
+      this.mainUIFrame.enabled = false;
+      return;
+    }
+    // Stay enabled at scale 0 so Frame.OnStart runs during the wizard. Disabling
+    // here skips that start, and the first palm-up then initializes the frame
+    // while reading followButton, which crashes the lens.
+    this.mainUIFrame.getTransform().setLocalScale(new vec3(0, 0, 0));
   }
 
   public tick(dt: number): void {
@@ -212,11 +219,12 @@ export class UIPresenter extends BaseScriptComponent {
     if (this.wristMenuRoot) {
       panel.getTransform().setWorldPosition(this.wristMenuRoot.getTransform().getWorldPosition());
     }
-    panel.enabled = true;
-    panel.getTransform().setLocalScale(visibleScale);
   }
 
   private finishWizard(): void {
+    if (this.setupCompleted) {
+      return;
+    }
     this.setupCompleted = true;
     this.postWizardLidarSent = false;
     const view = this.requireDeps().session.view();
@@ -224,6 +232,7 @@ export class UIPresenter extends BaseScriptComponent {
       this.setUIState(1, { immediate: true });
     }
     this.applyRoomPresentation(view);
+    print("UIPresenter: setup complete, robot presentation applied");
     if (this.isEditorMode) {
       this.setUIState(1);
     }
@@ -294,7 +303,11 @@ export class UIPresenter extends BaseScriptComponent {
     this.wizardLidarOffSent = false;
     this.postWizardLidarSent = false;
     this.unlocalizedUiPrepared = false;
-    this.setUIState(0, { immediate: true });
+    if (this.wristMenuController) {
+      this.wristMenuController.closeImmediate();
+    } else {
+      this.setUIState(0, { immediate: true });
+    }
     const deps = this.requireDeps();
     deps.session.stop();
     this.mainMenuView?.setOperatingMode(this.appState.operatingMode);
@@ -406,7 +419,7 @@ export class UIPresenter extends BaseScriptComponent {
 
   private refreshLocalizationCaptureStatus(): void {
     const deps = this.requireDeps();
-    const capture = localizationCaptureStatus(deps.session.view(), deps.episode.view());
+    const capture = localizationCaptureStatus(deps.session.view(), deps.episode.view(), getTime());
     this.uiLogger.setLocalizationCaptureStatus(capture.text, statusToneColor(capture.color));
   }
 

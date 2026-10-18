@@ -7,13 +7,14 @@ type Mat3 = readonly [
   readonly [number, number, number],
 ];
 
-// PROTOCOL.md left-handed Y-up example (x=-y, y=z, z=x) plus metres → centimetres.
+// Lens is right-handed Y-up, with the camera looking along -Z.
+// Tracking +X forward, +Y left, +Z up → Lens -Z, -X, +Y (metres → centimetres).
 export const SPECS_BASIS = {
   metresToCentimetres: 100,
   P: [
     [0, -1, 0],
     [0, 0, 1],
-    [1, 0, 0],
+    [-1, 0, 0],
   ] as Mat3,
 };
 
@@ -56,57 +57,23 @@ export function specsToClientTrackingPose(pose: PositionOrientation): PositionOr
 }
 
 export function clientTrackingToSpecsYawPose(pose: YawPose): YawPose {
-  const converted = clientTrackingToSpecsPose(poseFromTrackingYaw(pose));
+  const value = requireYawPose(pose);
+  const position = clientTrackingToSpecsPoint([value[0], value[1], value[2]]);
+  const forward = apply(SPECS_BASIS.P, [Math.cos(value[3]), Math.sin(value[3]), 0]);
+  // A marker's arrow points along local +X. Tracking yaw zero points along
+  // Lens -Z, so marker yaw zero and tracking yaw zero differ by 90 degrees.
   return [
-    converted.position[0],
-    converted.position[1],
-    converted.position[2],
-    specsYaw(converted.orientation),
+    position[0], position[1], position[2], Math.atan2(-forward[2], forward[0]),
   ];
 }
 
 export function specsToClientTrackingYawPose(pose: YawPose): YawPose {
-  const converted = specsToClientTrackingPose(poseFromSpecsYaw(pose));
+  const value = requireYawPose(pose);
+  const position = specsToClientTrackingPoint([value[0], value[1], value[2]]);
+  const forward = apply(transpose(SPECS_BASIS.P), [Math.cos(value[3]), 0, -Math.sin(value[3])]);
   return [
-    converted.position[0],
-    converted.position[1],
-    converted.position[2],
-    trackingYaw(converted.orientation),
+    position[0], position[1], position[2], Math.atan2(forward[1], forward[0]),
   ];
-}
-
-function poseFromTrackingYaw(pose: YawPose): PositionOrientation {
-  const yawPose = requireYawPose(pose);
-  return {
-    position: [yawPose[0], yawPose[1], yawPose[2]],
-    orientation: [0, 0, Math.sin(yawPose[3] * 0.5), Math.cos(yawPose[3] * 0.5)],
-  };
-}
-
-function poseFromSpecsYaw(pose: YawPose): PositionOrientation {
-  const yawPose = requireYawPose(pose);
-  return {
-    position: [yawPose[0], yawPose[1], yawPose[2]],
-    orientation: [0, Math.sin(yawPose[3] * 0.5), 0, Math.cos(yawPose[3] * 0.5)],
-  };
-}
-
-function trackingYaw(orientation: Quat): number {
-  const forward = rotateVecByQuat(normalizeQuat(orientation), [1, 0, 0]);
-  const length = Math.hypot(forward[0], forward[1]);
-  if (length < 1e-6) {
-    throw new Error("degenerate yaw geometry");
-  }
-  return Math.atan2(forward[1], forward[0]);
-}
-
-function specsYaw(orientation: Quat): number {
-  const forward = rotateVecByQuat(normalizeQuat(orientation), [0, 0, 1]);
-  const length = Math.hypot(forward[0], forward[2]);
-  if (length < 1e-6) {
-    throw new Error("degenerate yaw geometry");
-  }
-  return Math.atan2(forward[0], forward[2]);
 }
 
 function conjugate(orientation: Quat, forward: Mat3, inverse: Mat3): Quat {

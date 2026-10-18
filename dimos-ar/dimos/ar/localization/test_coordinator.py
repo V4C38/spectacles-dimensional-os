@@ -69,12 +69,11 @@ def _coordinator(
         robot_observations=robot_observations,
         marker=marker,
         vps=vps,
-        odom_scale_correction_factor=1.25,
         map_code="office",
     )
 
 
-def test_marker_success_applies_xy_scale() -> None:
+def test_marker_success_preserves_metric_alignment() -> None:
     marker = _FixedLocalizer(
         LocalizedPose(
             pose=Pose(1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0),
@@ -87,7 +86,7 @@ def test_marker_success_applies_xy_scale() -> None:
 
     assert outcome.result is not None
     assert outcome.used_vps is False
-    assert outcome.result.position == (1.25, 2.5, 3.0)
+    assert outcome.result.position == (1.0, 2.0, 3.0)
     assert outcome.result.ts_server == 100.0
 
 

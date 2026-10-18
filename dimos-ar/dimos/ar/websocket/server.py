@@ -118,6 +118,7 @@ class WebSocketServer:
         self._stop_event: asyncio.Event | None = None
         self._server_ready = threading.Event()
         self._connections: dict[str, ws_server.ServerConnection] = {}
+        self._close_tasks: set[asyncio.Task[None]] = set()
         self._client_ids: dict[ws_server.ServerConnection, str] = {}
         self._outbound: dict[ws_server.ServerConnection, ClientSendQueue] = {}
         self._time_sync: dict[ws_server.ServerConnection, TimeSync] = {}
@@ -206,7 +207,12 @@ class WebSocketServer:
                         "AR client reconnect from same remote; closing prior connection",
                         remote=str(remote),
                     )
-                    await existing.close(1000, "superseded by new connection")
+                    # Specs does not close() a CONNECTING socket, so this peer may never
+                    # finish the close handshake. Awaiting it here holds the new hello
+                    # until websockets' close timeout.
+                    task = asyncio.create_task(self._close_superseded(existing))
+                    self._close_tasks.add(task)
+                    task.add_done_callback(self._close_tasks.discard)
         client_id = _new_client_id()
         self._connections[client_id] = websocket
         self._client_ids[websocket] = client_id
@@ -252,6 +258,12 @@ class WebSocketServer:
                 await queued.stop()
             if self._on_disconnect is not None:
                 self._on_disconnect(websocket, client_id)
+
+    async def _close_superseded(self, websocket: ws_server.ServerConnection) -> None:
+        try:
+            await websocket.close(1000, "superseded by new connection")
+        except websockets.ConnectionClosed:
+            return
 
     async def _complete_handshake(
         self,

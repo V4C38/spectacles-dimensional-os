@@ -1,1 +1,5 @@
-export class Interactable {}
+export class Interactable {
+  static getTypeName(): string {
+    return "Interactable";
+  }
+}

@@ -432,6 +432,8 @@ def encode_hello(hello: Hello) -> str:
 
 @dataclass(frozen=True)
 class LocalizationObservationsRequest:
+    """Capture a batch, including a replacement batch after an unsuccessful scan."""
+
     capture_policy: CapturePolicy
     observation_count: int
     wait_timeout_s: float | None = None
@@ -512,6 +514,7 @@ def encode_agent_skill(*, name: str, args: dict[str, Any]) -> str:
 
 
 def encode_localization_result(result: LocalizationResult) -> str:
+    """Encode a rigid metric origin; robot odometry was corrected before localization."""
     return encode_text(
         {
             "type": "localization_result",

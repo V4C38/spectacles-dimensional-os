@@ -9,12 +9,16 @@ export type PalmGestureGateConfig = {
   openDebounceSec: number;
   closeDebounceSec: number;
   requireFacingCameraToStayOpen: boolean;
+  palmFacingUpOpenDeg: number;
+  palmFacingUpStayDeg: number;
 };
 
 export type PalmGestureInput = {
   isTracked: boolean;
   palmPitchDeg: number | null;
   isFacingCamera: boolean;
+  /** Palm-normal dot world up. Null when the hand joints are unavailable. */
+  palmFacingDotUp?: number | null;
 };
 
 export const DEFAULT_PALM_GESTURE_GATE_CONFIG: PalmGestureGateConfig = {
@@ -24,7 +28,29 @@ export const DEFAULT_PALM_GESTURE_GATE_CONFIG: PalmGestureGateConfig = {
   openDebounceSec: 0.28,
   closeDebounceSec: 0.08,
   requireFacingCameraToStayOpen: true,
+  palmFacingUpOpenDeg: 50,
+  palmFacingUpStayDeg: 70,
 };
+
+type Point = { x: number; y: number; z: number };
+
+/** SIK's left-hand palm normal is the opposite of index × finger-forward. */
+export function palmFacingDotWorldUp(
+  handType: "left" | "right",
+  wrist: Point,
+  middleMid: Point,
+  indexMid: Point,
+): number | null {
+  const right = normalize(sub(indexMid, middleMid));
+  const forward = normalize(sub(middleMid, wrist));
+  if (!right || !forward) {
+    return null;
+  }
+  const up = cross(right, forward);
+  const facing = handType === "left" ? scale(up, -1) : up;
+  const unit = normalize(facing);
+  return unit ? unit.y : null;
+}
 
 export class PalmGestureGate {
   private readonly _config: PalmGestureGateConfig;
@@ -85,6 +111,10 @@ export class PalmGestureGate {
   private _evaluateWantsOpen(input: PalmGestureInput): boolean {
     const pitch = input.palmPitchDeg!;
 
+    if (this._palmFacesUp(input.palmFacingDotUp, this._isOpen)) {
+      return true;
+    }
+
     if (this._config.requireFacingCameraToStayOpen && !input.isFacingCamera) {
       return false;
     }
@@ -97,6 +127,16 @@ export class PalmGestureGate {
     const facingCameraOpen =
       input.isFacingCamera && pitch >= this._config.showPitchWhenFacingCameraDeg;
     return facingCameraOpen || palmUp;
+  }
+
+  private _palmFacesUp(dotUp: number | null | undefined, stayingOpen: boolean): boolean {
+    if (dotUp === null || dotUp === undefined) {
+      return false;
+    }
+    const maxDeg = stayingOpen
+      ? this._config.palmFacingUpStayDeg
+      : this._config.palmFacingUpOpenDeg;
+    return dotUp >= Math.cos((maxDeg * Math.PI) / 180);
   }
 }
 
@@ -145,6 +185,12 @@ export class WristMenuController {
     this._onMenuHide(true);
   }
 
+  /** Hide now and arm the palm pose so it can open the menu again. */
+  public closeImmediate(): void {
+    this._gestureGate.reset();
+    this._hideMenu(true);
+  }
+
   public tick(dt: number): void {
     const now = getTime();
     const isTracked = this._hand.isTracked();
@@ -152,6 +198,7 @@ export class WristMenuController {
       isTracked,
       palmPitchDeg: isTracked ? this._hand.getPalmPitchAngle() : null,
       isFacingCamera: isTracked ? this._hand.isFacingCamera() : false,
+      palmFacingDotUp: isTracked ? this._palmFacingDotUp() : null,
     };
 
     const gestureChanged = this._gestureGate.update(input, now);
@@ -234,4 +281,41 @@ export class WristMenuController {
     this._tracking = false;
     this._needsSnap = true;
   }
+
+  private _palmFacingDotUp(): number | null {
+    try {
+      return palmFacingDotWorldUp(
+        this._hand.handType,
+        this._hand.wrist.position,
+        this._hand.middleMidJoint.position,
+        this._hand.indexMidJoint.position,
+      );
+    } catch {
+      return null;
+    }
+  }
+}
+
+function sub(a: Point, b: Point): Point {
+  return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+}
+
+function scale(a: Point, s: number): Point {
+  return { x: a.x * s, y: a.y * s, z: a.z * s };
+}
+
+function cross(a: Point, b: Point): Point {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  };
+}
+
+function normalize(a: Point): Point | null {
+  const length = Math.hypot(a.x, a.y, a.z);
+  if (length < 1e-6) {
+    return null;
+  }
+  return scale(a, 1 / length);
 }

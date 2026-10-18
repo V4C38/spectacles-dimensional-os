@@ -37,11 +37,11 @@ function yawAboutZ(radians: number): Quat {
 }
 
 describe("SpecsCoordinates points", () => {
-  it("maps PROTOCOL.md unit vectors with scale in both directions", () => {
-    expectVec3(clientTrackingToSpecsPoint([1, 0, 0]), [0, 0, 100]);
+  it("maps right-handed Lens unit vectors with scale in both directions", () => {
+    expectVec3(clientTrackingToSpecsPoint([1, 0, 0]), [0, 0, -100]);
     expectVec3(clientTrackingToSpecsPoint([0, 1, 0]), [-100, 0, 0]);
     expectVec3(clientTrackingToSpecsPoint([0, 0, 1]), [0, 100, 0]);
-    expectVec3(specsToClientTrackingPoint([0, 0, 100]), [1, 0, 0]);
+    expectVec3(specsToClientTrackingPoint([0, 0, -100]), [1, 0, 0]);
     expectVec3(specsToClientTrackingPoint([-100, 0, 0]), [0, 1, 0]);
     expectVec3(specsToClientTrackingPoint([0, 100, 0]), [0, 0, 1]);
   });
@@ -81,7 +81,7 @@ describe("SpecsCoordinates poses", () => {
   it("converts both directions and round-trips translation plus rotation", () => {
     const pose = { position: [1, 2, 3] as Vec3, orientation: yawAboutZ(Math.PI / 2) };
     const specs = clientTrackingToSpecsPose(pose);
-    expectVec3(specs.position, [-200, 300, 100]);
+    expectVec3(specs.position, [-200, 300, -100]);
     const back = specsToClientTrackingPose(specs);
     expectVec3(back.position, pose.position);
     expectQuat(back.orientation, pose.orientation);
@@ -92,16 +92,16 @@ describe("SpecsCoordinates poses", () => {
 describe("SpecsCoordinates yaw poses", () => {
   it("maps identity heading and +π/2 through the table", () => {
     const identity = clientTrackingToSpecsYawPose([1, 0, 0, 0]);
-    expectVec3([identity[0], identity[1], identity[2]], [0, 0, 100]);
-    expect(identity[3]).toBeCloseTo(0, 6);
+    expectVec3([identity[0], identity[1], identity[2]], [0, 0, -100]);
+    expect(identity[3]).toBeCloseTo(Math.PI / 2, 6);
 
     const turned = clientTrackingToSpecsYawPose([1, 0, 0, Math.PI / 2]);
-    expectVec3([turned[0], turned[1], turned[2]], [0, 0, 100]);
-    expect(turned[3]).toBeCloseTo(-Math.PI / 2, 6);
+    expectVec3([turned[0], turned[1], turned[2]], [0, 0, -100]);
+    expect(turned[3]).toBeCloseTo(Math.PI, 6);
     const forward = rotateVecByQuat(normalizeQuat(clientTrackingToSpecsQuat(yawAboutZ(Math.PI / 2))), [
       0, 0, 1,
     ]);
-    expectVec3(forward, [-1, 0, 0]);
+    expectVec3(forward, [1, 0, 0]);
   });
 
   it("round-trips yaw poses in both directions", () => {

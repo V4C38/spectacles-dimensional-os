@@ -10,6 +10,7 @@ export interface CaptureStatusText {
 export function localizationCaptureStatus(
   sessionView: ARModuleSessionState,
   episodeView: LocalizationCaptureState,
+  nowS: number = 0,
 ): CaptureStatusText {
   if (sessionView.connection !== "ready") {
     return { text: "Inactive — not ready", color: "muted" };
@@ -18,21 +19,19 @@ export function localizationCaptureStatus(
     const reason = sessionView.capabilities?.localization.reason ?? "Localization unavailable";
     return { text: reason, color: "warn" };
   }
-  if (sessionView.hasTrackingOrigin) {
+  if (sessionView.hasTrackingOrigin && episodeView.phase === "idle") {
     return { text: "Localized", color: "success" };
   }
 
   switch (episodeView.phase) {
     case "idle":
-      return { text: "Waiting for capture request", color: "neutral" };
+      return { text: "Ready to scan", color: "neutral" };
     case "waiting_for_geometric_gate":
-      return { text: "Waiting for geometric gate — look at robot", color: "warn" };
+      return { text: "Look toward the robot to scan", color: "warn" };
     case "capturing":
-      return { text: "Capturing observations", color: "success" };
     case "sending":
-      return { text: "Sending observations", color: "neutral" };
     case "awaiting_result":
-      return { text: "Awaiting localization result", color: "neutral" };
+      return { text: `Scanning ${".".repeat(1 + Math.floor(nowS / 0.4) % 3)}\nLook at the marker`, color: "neutral" };
     case "failed":
       return {
         text: episodeView.lastError ? `Capture failed — ${episodeView.lastError}` : "Capture failed",

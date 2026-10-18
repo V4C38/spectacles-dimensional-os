@@ -26,7 +26,8 @@ class PoseSample:
 class PoseBuffer:
     """Interpolate the robot pose in ``odom`` at a past ``ts_server``.
 
-    Odom samples are indexed by the server time each message arrived
+    ARModule inserts scale-corrected robot poses so localization and outbound
+    telemetry share a metric frame. Samples are indexed by arrival server time
     (``handle_odom``). The WebSocket layer converts wire ``ts_capture`` to
     ``ts_server`` before building domain ``Observation``s, then localizers call
     ``at_server_ts`` for the pose at shutter time.

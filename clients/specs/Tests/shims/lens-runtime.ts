@@ -1,4 +1,12 @@
 export class vec3 {
+  static one(): vec3 {
+    return new vec3(1, 1, 1);
+  }
+
+  static zero(): vec3 {
+    return new vec3(0, 0, 0);
+  }
+
   constructor(
     public x = 0,
     public y = 0,

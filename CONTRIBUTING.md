@@ -119,8 +119,18 @@ capture ports. It owns pose history and delegates stream lifecycle to
 Working sequence (keep it): `SpecsCameraStream.requestNextFrame()` → pose at
 `timestampSeconds` → optical extrinsics/intrinsics → `Base64.encodeTextureAsync`.
 The portable port is `start` / async `capture` / `stop`.
-`LocalizationCaptureEpisode` awaits one in-flight capture and stops hardware on
-send, failure, reset, and disposal.
+`LocalizationCaptureEpisode` awaits one in-flight capture and keeps the video
+stream running between failed batches. It stops hardware on success, pause,
+failure, reset, and disposal.
+The Specs wizard constructs it initially paused, starts it on the localization
+step, and pauses when leaving that step. A pending server prompt is retained
+while paused, so reentering the step resumes without a duplicate start request.
+After a successful setup scan the handler remains enabled for relocalization;
+only skipping or leaving setup without an origin pauses it. After 0.75 m of
+robot travel the server prompts again, and the client waits for the geometric
+gate before capturing. Marker-only capture rechecks the gate throughout a batch.
+Capture uses frames from the existing video stream at 0.5-second spacing; do
+not replace it with high-resolution still capture or downsample it further.
 
 Do not add ACK/`seq`, a standing camera-policy message, a `camera_info` wire
 message, or a second capture state store. Capture policy is a field on

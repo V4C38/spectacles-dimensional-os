@@ -565,6 +565,7 @@ function decodeNavState(data: Record<string, unknown>): NavState {
 function decodeLocalizationObservationsRequest(
   data: Record<string, unknown>,
 ): LocalizationObservationsRequest {
+  // The server can request a replacement batch when the previous scan missed.
   const capturePolicy = requireString(data, "capture_policy");
   if (!isCapturePolicy(capturePolicy)) {
     throw new Error("capture_policy must be robot_los_required, robot_los_preferred, or any_angle");
@@ -600,6 +601,8 @@ function decodeLocalizationObservationsRequest(
 }
 
 function decodeLocalizationResult(data: Record<string, unknown>): LocalizationResult {
+  // Rigid metric T_odom_client. The server corrects robot odometry before
+  // localization; measured client positions and marker mounts are never scaled.
   const confidence = finiteField(data, "confidence");
   if (confidence < 0 || confidence > 1) {
     throw new Error("Field 'confidence' must be in [0, 1]");

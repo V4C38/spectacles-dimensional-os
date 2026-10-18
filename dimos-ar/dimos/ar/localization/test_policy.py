@@ -75,16 +75,43 @@ def test_no_providers_does_not_prompt() -> None:
     assert policy.on_hello("c1") is None
 
 
-def test_goal_reached_requires_travel_since_last_success() -> None:
+def test_travel_prompts_at_075m_without_waiting_for_goal_reached() -> None:
     policy = LocalizationPolicy(["fiducial_marker"])
     policy.on_hello("c1")
     policy.on_success("c1")
     policy.on_odom(0.0, 0.0)
     policy.on_odom(0.4, 0.0)
     assert policy.on_goal_reached(succeeded=True) == []
-    policy.on_odom(1.1, 0.0)
-    client_ids = policy.on_goal_reached(succeeded=True)
-    assert client_ids == ["c1"]
+    assert policy.on_odom(0.749, 0.0) == ([], [])
+    assert policy.on_odom(0.75, 0.0) == (["c1"], [])
+    assert policy.on_goal_reached(succeeded=True) == []
+    assert policy.on_odom(1.5, 0.0) == ([], [])  # Already pending.
+    policy.on_success("c1")
+    assert policy.on_odom(2.249, 0.0) == ([], [])
+    assert policy.on_odom(2.25, 0.0) == (["c1"], [])
+
+
+def test_travel_is_cumulative_and_disconnected_clients_are_not_prompted() -> None:
+    policy = LocalizationPolicy(["fiducial_marker"])
+    policy.on_hello("c1")
+    policy.on_hello("gone")
+    policy.on_success("c1")
+    policy.on_success("gone")
+    policy.on_disconnect("gone")
+    policy.on_odom(0.0, 0.0)
+    assert policy.on_odom(0.5, 0.0) == ([], [])
+    assert policy.on_odom(0.5, 0.25) == (["c1"], [])
+
+
+def test_start_retry_reissues_pending_prompt_but_respects_vps_cooldown() -> None:
+    policy = LocalizationPolicy(["fiducial_marker"])
+    assert policy.on_hello("c1") == "c1"
+    assert policy.on_start_request("c1") == "c1"
+    clock = _Clock()
+    vps = LocalizationPolicy(["vps"], clock=clock)
+    vps.begin_client_vps()
+    assert vps.on_hello("c1") is None
+    assert vps.on_start_request("c1") is None
 
 
 def test_failed_goal_reached_does_not_prompt() -> None:

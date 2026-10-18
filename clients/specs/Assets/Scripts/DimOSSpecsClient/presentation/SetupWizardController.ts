@@ -44,7 +44,7 @@ const WIZARD_STEP_DESCRIPTIONS = [
 ] as const;
 
 function localizationStepDescription(displayName: string): string {
-  return `Point your Spectacles at ${displayName}.\nHold steady while views are captured.`;
+  return `Look at ${displayName}'s marker or mapped surroundings.\nHold steady. Setup finishes automatically when aligned.`;
 }
 
 function connectionModeLabel(method: ConnectionMethod): string {
@@ -62,7 +62,7 @@ function connectStepStatus(input: {
     return { text: "Connecting…", color: "error" };
   }
   if (input.isConnecting && input.socketOpen && input.view.connection === "awaiting_hello") {
-    return { text: "Waiting for handshake…", color: "error" };
+    return { text: "Waiting for handshake…", color: "warn" };
   }
   if (input.isConnecting && input.linkPhase === "disconnected") {
     return { text: "Connecting...", color: "error" };
@@ -156,10 +156,19 @@ export class SetupWizardController {
     if (!this._visible || this._currentStep !== SetupWizardStep.Localization) {
       return;
     }
+    const view = this.deps.session.view();
+    if (view.connection === "ready" && view.hasTrackingOrigin) {
+      // Transition on UpdateEvent, outside WebSocket and button callbacks.
+      this.finishWizard();
+      return;
+    }
     this.renderLocalizationStatus();
   }
 
   public onSessionViewChanged(): void {
+    if (!this._visible) {
+      return;
+    }
     if (this._currentStep === SetupWizardStep.Connect) {
       this.showConnectStatus();
       this.refreshFooterButtons();
@@ -192,6 +201,9 @@ export class SetupWizardController {
   }
 
   private setStep(step: SetupWizardStep): void {
+    if (this._currentStep === SetupWizardStep.Localization && step !== this._currentStep) {
+      this.deps.episode.pause();
+    }
     this.invalidatePending();
     this._currentStep = step;
     this.view.setStepContent(WIZARD_STEP_TITLES[step], this.stepDescription(step));
@@ -266,7 +278,7 @@ export class SetupWizardController {
   }
 
   private onNext(): void {
-    if (!this.canNavigate()) {
+    if (!this._visible || !this.canNavigate()) {
       return;
     }
     if (this._currentStep === SetupWizardStep.StartRobot) {
@@ -292,7 +304,6 @@ export class SetupWizardController {
     }
     if (this._currentStep === SetupWizardStep.Localization) {
       if (!this.deps.session.view().hasTrackingOrigin) {
-        this.deps.episode.reset();
         print("SetupWizardController: finish localization=skipped");
       }
       this.finishWizard();
@@ -313,13 +324,21 @@ export class SetupWizardController {
   }
 
   private finishWizard(): void {
+    if (!this._visible) {
+      return;
+    }
+    this.invalidatePending();
+    // Success stops the camera but keeps future gated capture requests enabled.
+    if (!this.deps.session.view().hasTrackingOrigin) {
+      this.deps.episode.pause();
+    }
     this._openedFromRuntime = false;
     this.hide();
     this.deps.onFinished();
   }
 
   private beginLocalizationCapture(): void {
-    if (!this.isConnected()) {
+    if (!this.isConnected() || this.deps.session.view().hasTrackingOrigin) {
       return;
     }
     try {
@@ -440,9 +459,10 @@ export class SetupWizardController {
       return;
     }
     if (view.connection === "failed") {
-      this._isConnecting = false;
+      // ARModuleSession reconnects from tick(). stop()+start() here stacks another
+      // socket and drops the handshake already in progress.
       this.showConnectStatus();
-      this.scheduleAutoconnectRetry(this._pollOpId);
+      this.pollEvent.reset(CONNECT_POLL_INTERVAL_S);
       return;
     }
     this.pollEvent.reset(CONNECT_POLL_INTERVAL_S);
@@ -499,7 +519,7 @@ export class SetupWizardController {
   private renderLocalizationStatus(): void {
     const sessionView = this.deps.session.view();
     const episodeView = this.deps.episode.view();
-    const capture = localizationCaptureStatus(sessionView, episodeView);
+    const capture = localizationCaptureStatus(sessionView, episodeView, getTime());
     this.view.setStatus(capture.text, statusToneColor(capture.color));
   }
 
@@ -513,11 +533,6 @@ export class SetupWizardController {
       footerNextLabel = "Complete";
       footerShowPrev = this._openedFromRuntime;
     } else if (this._currentStep === SetupWizardStep.Connect && connected) {
-      footerNextLabel = "Complete";
-    } else if (
-      this._currentStep === SetupWizardStep.Localization
-      && this.deps.session.view().hasTrackingOrigin
-    ) {
       footerNextLabel = "Complete";
     }
 

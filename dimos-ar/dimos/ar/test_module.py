@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+import json
 import subprocess
 import sys
 import time
@@ -11,7 +12,8 @@ from dimos_lcm.std_msgs import Bool
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 import pytest
 
-from dimos.ar.localization.policy import LocalizationPolicy
+from dimos.ar.localization.coordinator import LocalizationOutcome
+from dimos.ar.localization.policy import EpisodeWork, LocalizationPolicy
 from dimos.ar.module import (
     ARModule,
     ARModuleConfig,
@@ -255,6 +257,30 @@ def test_hello_prompts_observations_request() -> None:
     assert client_id == "c1"
     assert "localization_observations_request" in text
     assert "robot_los_required" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disconnected", [False, True])
+async def test_failed_localization_requests_next_batch_without_result_timeout(
+    disconnected: bool,
+) -> None:
+    module = _module_with_policy(["fiducial_marker"])
+    module._policy.on_hello("c1")
+    if disconnected:
+        module._policy.on_disconnect("c1")
+    module._coordinator = SimpleNamespace(run=lambda _obs: LocalizationOutcome())
+
+    await module._run_episode(EpisodeWork(client_id="c1", observations=()))
+
+    sent = module._ws_server.sent  # type: ignore[union-attr]
+    if disconnected:
+        assert sent == []
+        assert module._policy.on_observations("c1", []) is None
+    else:
+        assert len(sent) == 1
+        client_id, text = sent[0]
+        assert client_id == "c1"
+        assert json.loads(text)["type"] == "localization_observations_request"
 
 
 def test_state_snapshot_has_no_alignment() -> None:
@@ -550,8 +576,11 @@ async def test_handle_camera_streams_noop_without_extrinsic() -> None:
 
 
 @pytest.mark.asyncio
-async def test_handle_odom_runs_without_optional_capabilities() -> None:
-    module = _module_with_policy([], profile=_anvil_openyam_profile())
+@pytest.mark.parametrize("profile", [_anvil_openyam_profile(), UNITREE_GO2_PROFILE])
+async def test_handle_odom_uses_corrected_robot_position_for_localization(
+    profile: RobotProfile,
+) -> None:
+    module = _module_with_policy([], profile=profile)
     pushed: list[object] = []
     published: list[object] = []
     module._pose_buffer = SimpleNamespace(  # type: ignore[assignment]
@@ -572,11 +601,16 @@ async def test_handle_odom_runs_without_optional_capabilities() -> None:
     pose = PoseStamped(
         ts=1.0,
         frame_id="world",
-        position=[0.0, 0.0, 0.0],
+        position=[2.0, -3.0, 0.33],
         orientation=[0.0, 0.0, 0.0, 1.0],
     )
     await module.handle_odom(pose)
-    assert pushed == [pose]
+    assert len(pushed) == 1
+    buffered = pushed[0]
+    assert isinstance(buffered, PoseStamped)
+    assert (buffered.x, buffered.y, buffered.z) == pytest.approx(
+        (2.0 * profile.odom_scale_correction_factor, -3.0 * profile.odom_scale_correction_factor, 0.33)
+    )
     assert published == [pose]
 
 

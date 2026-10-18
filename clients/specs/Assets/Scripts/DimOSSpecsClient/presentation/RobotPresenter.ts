@@ -5,7 +5,7 @@ import { NO_ROBOT_CONNECTED_LABEL } from "../../DimOSARClient/websocket/sessionL
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import { clientTrackingToSpecsPoint, clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
 import { RuntimePoseSmoothing } from "../utilities/RuntimePoseSmoothing";
-import { yawRotationFromWorldRotation } from "../utilities/SpecsUtilities";
+import { yawRotationFromPlanarDirection, yawRotationFromWorldRotation } from "../utilities/SpecsUtilities";
 import {
   AppState,
   getRobotActivityState,
@@ -174,9 +174,12 @@ export class RobotPresenter extends BaseScriptComponent {
       return null;
     }
     const offset = rotateVecByQuat(fromQuat(rotation), robotFloorOffsetCm(this.robot));
+    // Generic Specs poses retain Lens -Z as robot forward. Ground markers use
+    // a local +X arrow, so give placement the corresponding marker heading.
+    const forward = rotation.multiplyVec3(new vec3(0, 0, -1));
     return {
       position: new vec3(position.x + offset[0], position.y + offset[1], position.z + offset[2]),
-      rotation,
+      rotation: yawRotationFromPlanarDirection(forward.x, forward.z),
     };
   }
 

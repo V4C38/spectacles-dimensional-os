@@ -476,7 +476,7 @@
     []
   Name: NavGoalMarker
   Enabled: true
-  ScriptAsset: !<reference> 4f1a8c2e-9b6d-4e3a-8f70-1c2d3e4a5b6c
+  ScriptAsset: !<reference> 196bee61-af85-4da1-a353-6fdfed08a087
   ScriptInputsDefault:
     {}
   ScriptTypesDefault:

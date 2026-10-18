@@ -17,6 +17,7 @@ import {
   FONT_BUTTON,
   FONT_CAPTION,
   getFrameComponent,
+  isFrameInitialized,
   setButtonEnabled,
   setButtonToggleState,
 } from "./UIKit";
@@ -176,6 +177,10 @@ export class MainMenuView {
   }
 
   private _syncFollowButton(frame: Frame, enabled: boolean): void {
+    // followButton reads ButtonHandler, which Frame.initialize creates on OnStart.
+    if (!isFrameInitialized(frame)) {
+      return;
+    }
     const followButton = frame.followButton as RoundButton | null;
     if (!followButton || typeof followButton.toggle !== "function") {
       return;

@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from dimos.ar.localization.pose_buffer import PoseBuffer, PoseSample
-from dimos.ar.localization.transforms import fuse_pose_estimates
+from dimos.ar.localization.transforms import fuse_pose_estimates, normalize_pose_estimate
 from dimos.ar.localization.types import Intrinsics, LocalizedPose, Localizer, Observation
 from dimos.ar.robot.profiles import FiducialMarkerMount
 from dimos.msgs.geometry_msgs.Pose import Pose
@@ -32,7 +32,9 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class FiducialMarkerLocalizerConfig:
     max_reprojection_error_px: float = 3.0
-    max_tilt_rad: float = math.radians(5.0)
+    # Small printed markers have noisy planar PnP tilt even at low reprojection
+    # error. Match the previous tracker's 20-degree gravity-consistency gate.
+    max_tilt_rad: float = math.radians(20.0)
     max_position_residual_m: float = 0.35
     max_yaw_residual_rad: float = math.radians(12.0)
 
@@ -89,6 +91,10 @@ class FiducialMarkerLocalizer(Localizer):
             raise ValueError("marker_mounts must contain at least one mount")
         self._config = config or FiducialMarkerLocalizerConfig()
         self._detector = create_aruco_detector(dictionary_name)
+        # Refine detected corners below pixel precision before estimating pose.
+        parameters = self._detector.getDetectorParameters()
+        parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        self._detector.setDetectorParameters(parameters)
 
     def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None:
         candidates: list[_FiducialCandidate] = []
@@ -112,12 +118,24 @@ class FiducialMarkerLocalizer(Localizer):
             max_position_residual_m=self._config.max_position_residual_m,
             max_yaw_residual_rad=self._config.max_yaw_residual_rad,
         )
-        if fusion is None:
+        # A three-frame episode must have at least two agreeing sightings.
+        # Keep single-observation callers usable, but never accept one lucky
+        # detection from an otherwise unsuccessful batch.
+        required_inliers = min(2, len(observations))
+        if fusion is None or len(fusion.inlier_indices) < required_inliers:
             logger.warning(
                 "fiducial marker localization failed",
                 observations=len(observations),
                 candidates=len(candidates),
-                reason="fusion",
+                reason="fusion" if fusion is None else "insufficient_inliers",
+                candidate_tilt_deg=[
+                    round(
+                        math.degrees(math.acos(float(np.clip(candidate.transform[2, 2], -1, 1)))),
+                        1,
+                    )
+                    for candidate in candidates
+                ],
+                max_tilt_deg=round(math.degrees(self._config.max_tilt_rad), 1),
             )
             return None
 
@@ -129,6 +147,15 @@ class FiducialMarkerLocalizer(Localizer):
             fusion.max_yaw_residual_rad / self._config.max_yaw_residual_rad,
         )
         confidence = max(0.0, min(1.0, 1.0 - worst_normalized_error))
+        logger.info(
+            "fiducial marker localization succeeded",
+            observations=len(observations),
+            inliers=len(inliers),
+            confidence=round(confidence, 3),
+            reprojection_error_px=round(mean_reproj, 3),
+            position_spread_m=round(fusion.max_position_residual_m, 4),
+            yaw_spread_deg=round(math.degrees(fusion.max_yaw_residual_rad), 2),
+        )
         return LocalizedPose(
             pose=matrix_to_pose(fusion.transform),
             frame_id="odom",
@@ -243,7 +270,16 @@ class FiducialMarkerLocalizer(Localizer):
         )
         if not np.isfinite(transform).all():
             return None
-        return _FiducialCandidate(transform=transform, reprojection_error_px=reproj)
+        leveled = normalize_pose_estimate(transform, max_tilt_rad=self._config.max_tilt_rad)
+        if leveled is None:
+            return None
+        # Gravity removes PnP roll/pitch noise. Preserve the measured marker
+        # center when doing so: retaining the old translation rotates around the
+        # arbitrary tracking origin and can move the marker by tens of cm.
+        odom_marker = T_odom_base @ mount.T_base_marker
+        client_marker = T_client_camopt @ T_camopt_marker
+        leveled[:3, 3] = odom_marker[:3, 3] - leveled[:3, :3] @ client_marker[:3, 3]
+        return _FiducialCandidate(transform=leveled, reprojection_error_px=reproj)
 
 
 def compose_odom_client(

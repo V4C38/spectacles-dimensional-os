@@ -7,7 +7,7 @@ import time
 
 from dimos.ar.localization.types import CapturePolicy, LocalizationProviderType, Observation
 
-TRAVEL_THRESHOLD_M = 1.0
+TRAVEL_THRESHOLD_M = 0.75
 CLIENT_VPS_COOLDOWN_S = 30.0
 ROBOT_VPS_COOLDOWN_S = 30.0
 MARKER_OBSERVATION_COUNT = 3
@@ -124,6 +124,16 @@ class LocalizationPolicy:
         return self._open_episode(client_id)
 
     def on_start_request(self, client_id: str) -> str | None:
+        state = self._clients.get(client_id)
+        if (
+            state is not None
+            and state.pending
+            and state.prompt_due_at is None
+            and state.held_observations is None
+        ):
+            # A client retry may follow a camera error or a result timeout.
+            # Reissue the pending prompt rather than leaving both sides waiting.
+            return client_id
         return self._open_episode(client_id)
 
     def on_goal_reached(self, *, succeeded: bool) -> list[str]:
@@ -151,7 +161,19 @@ class LocalizationPolicy:
             dy = corrected_y - self._last_xy[1]
             self._travel_m += math.hypot(dx, dy)
         self._last_xy = (corrected_x, corrected_y)
-        return self.poll()
+        prompts, episodes = self.poll()
+        # Travel, rather than a planner completion event, makes correction due.
+        # The client waits for the robot to enter its geometric capture gate.
+        for client_id, state in self._clients.items():
+            if (
+                not state.pending
+                and state.last_success_travel_m is not None
+                and self._travel_m - state.last_success_travel_m >= self._travel_threshold_m
+            ):
+                prompted = self._open_episode(client_id)
+                if prompted is not None:
+                    prompts.append(prompted)
+        return prompts, episodes
 
     def poll(self) -> tuple[list[str], list[EpisodeWork]]:
         now = self._clock()
@@ -206,6 +228,13 @@ class LocalizationPolicy:
 
     def on_disconnect(self, client_id: str) -> None:
         self._clients.pop(client_id, None)
+
+    def retry_failed_episode(self, client_id: str) -> str | None:
+        # A detection can finish after disconnect; do not resurrect that client.
+        if client_id not in self._clients:
+            return None
+        self.on_failure(client_id)
+        return self._open_episode(client_id)
 
     def client_vps_ready(self) -> bool:
         return self._clock() >= self._client_vps_until

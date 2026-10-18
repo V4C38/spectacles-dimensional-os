@@ -26,7 +26,7 @@ from dimos.ar.navigation.coordinator import NavGoalCoordinator
 from dimos.ar.navigation.tele_cmd_vel import TeleCmdVelPublisher
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest
 from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName, CapabilitySet
-from dimos.ar.robot.odometry_correction import correct_odom_xy
+from dimos.ar.robot.odometry_correction import correct_odom_pose, correct_odom_xy
 from dimos.ar.robot.profiles import FiducialMarkerMount, RobotName, RobotProfile, get_profile
 from dimos.ar.robot.safety import Safety
 from dimos.ar.robot.state_publisher import RobotStatePublisher
@@ -267,7 +267,6 @@ class ARModule(Module):  # type: ignore[misc]
             robot_observations=self._robot_observations,
             marker=marker,
             vps=vps,
-            odom_scale_correction_factor=self._profile.odom_scale_correction_factor,
             map_code=map_code,
         )
         logger.info("ARModule build complete")
@@ -344,6 +343,12 @@ class ARModule(Module):  # type: ignore[misc]
         spec = self._policy.capture_spec
         if spec is None:
             return
+        logger.info(
+            "localization capture requested",
+            client_id=client_id,
+            capture_policy=spec.capture_policy.value,
+            travel_m=round(self._policy.travel_m, 3),
+        )
         self._ws_server.schedule_send_to_client(
             client_id,
             encode_localization_observations_request(
@@ -529,7 +534,12 @@ class ARModule(Module):  # type: ignore[misc]
                 client_id=work.client_id,
                 observations=len(work.observations),
             )
-            self._policy.on_failure(work.client_id)
+            # Keep scanning after a miss instead of leaving the client waiting
+            # for its result timeout. Reuse the existing capture request; VPS
+            # cooldowns still decide when another batch may be requested.
+            requested_client_id = self._policy.retry_failed_episode(work.client_id)
+            if requested_client_id is not None:
+                self._send_observations_request(requested_client_id)
             return
         self._policy.on_success(work.client_id)
         self._ws_server.schedule_send_to_client(
@@ -552,7 +562,13 @@ class ARModule(Module):  # type: ignore[misc]
 
     async def handle_odom(self, msg: PoseStamped) -> None:
         ts_server = time.time()
-        self._pose_buffer.push(msg, ts_server=ts_server)
+        # Localizers must use the same metric robot position as outbound pose.
+        # Correct dead reckoning before composing physical marker/camera offsets;
+        # scaling the completed alignment would also stretch those measurements.
+        self._pose_buffer.push(
+            correct_odom_pose(msg, factor=self._profile.odom_scale_correction_factor),
+            ts_server=ts_server,
+        )
         self._state_publisher.publish_odom(msg)
         corrected_x, corrected_y = correct_odom_xy(
             msg.x, msg.y, factor=self._profile.odom_scale_correction_factor

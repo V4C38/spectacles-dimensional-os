@@ -43,11 +43,9 @@ export class NavGoalMarker extends BaseScriptComponent {
   private events: NavGoalMarkerEvents = {};
   private interactionsBound = false;
 
-  onAwake(): void {
-    this.ensureReady();
-    this.hide();
-  }
-
+  // NavigationController initializes this after ObjectPrefab.instantiate()
+  // returns. Hiding the hierarchy in onAwake interrupts construction of its
+  // UIKit/Interactable children on device.
   ensureReady(): void {
     if (this.root) {
       return;
@@ -66,9 +64,9 @@ export class NavGoalMarker extends BaseScriptComponent {
       throw new Error("DragInteractable is required");
     }
     this.hintAnchor = findChild(dragObject, "HintAnchor");
-    const cancelObject = findChild(this.root, "CancelButton");
+    const cancelObject = findChild(this.root, "button_cancel");
     if (!cancelObject) {
-      throw new Error("CancelButton is required");
+      throw new Error("NavigationTargetMarker.button_cancel is required");
     }
     this.cancelObject = cancelObject;
     this.cancelButton = cancelObject.getComponent(RoundButton.getTypeName()) as RoundButton;
