@@ -33,6 +33,9 @@ jobs:
       - name: Pytest (unit tests without robot hardware)
         run: pytest
 
+      - name: WebXR offline camera calibration regression
+        run: python -m pytest ../clients/webxr/tools/test_calibrate.py
+
   launcher:
     runs-on: ubuntu-latest
     defaults:
@@ -86,3 +89,5 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser

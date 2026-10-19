@@ -36,6 +36,18 @@ describe("robotFloorOffsetCm", () => {
     expect(floor.position.y).toBeCloseTo(17, 6);
   });
 
+  it("uses a Go2 floor height when no robot description is available", () => {
+    const presenter = {
+      robot: null,
+      worldPosition: () => new vec3(10, 50, -20),
+      worldRotation: () => quat.quatIdentity(),
+    } as unknown as RobotPresenter;
+    const floor = RobotPresenter.prototype.floorPose.call(presenter)!;
+    expect(floor.position.x).toBeCloseTo(10, 6);
+    expect(floor.position.y).toBeCloseTo(17, 6);
+    expect(floor.position.z).toBeCloseTo(-20, 6);
+  });
+
   it("offsets from pose to floor using base_height_m", () => {
     expectVec3(robotFloorOffsetCm(GO2), clientTrackingToSpecsPoint([0, 0, -0.33]));
     expectVec3(robotFloorOffsetCm(GO2), [0, -33, 0]);

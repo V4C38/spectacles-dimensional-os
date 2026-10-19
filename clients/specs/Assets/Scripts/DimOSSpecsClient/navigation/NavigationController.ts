@@ -37,6 +37,34 @@ export function isLiveNavGoal(input: LiveNavGoalInput): boolean {
   return input.activated || input.hasSentGoal || input.hasReceivedPose || input.followingPath;
 }
 
+export function isDisconnectedWithoutRobot(view: ARModuleSessionState): boolean {
+  const disconnected = view.connection === "disconnected" || view.connection === "failed";
+  return disconnected && view.hello?.robot == null;
+}
+
+export function navMarkerMode(input: {
+  hasTrackingOrigin: boolean;
+  hasOrigin: boolean;
+  navGoalAvailable: boolean;
+  disconnectedWithoutRobot: boolean;
+}): "live" | "preview" | "hidden" {
+  if (input.disconnectedWithoutRobot) {
+    return "preview";
+  }
+  if (input.hasTrackingOrigin && input.hasOrigin && input.navGoalAvailable) {
+    return "live";
+  }
+  return "hidden";
+}
+
+export function shouldAnimateNavArrow(input: {
+  shown: boolean;
+  dragging: boolean;
+  followingRobot: boolean;
+}): boolean {
+  return input.shown && !input.dragging && !input.followingRobot;
+}
+
 export function isNavGoalCancelVisible(
   input: LiveNavGoalInput & { flashing: boolean; dragging: boolean },
 ): boolean {
@@ -128,20 +156,38 @@ export class NavigationController {
     this.navGoalMarkerPrefab = deps.navGoalMarkerPrefab;
     this.placement = new GroundPlacement(deps.eventHost, deps.deviceTracking);
     this.placement.onPose = (position, rotation, force) => this.streamGoal(position, rotation, force);
-    this.placement.onDragChange = () => this.syncCancelVisible();
+    this.placement.onDragChange = () => {
+      if (isDisconnectedWithoutRobot(this.session.view())) {
+        this.syncPreviewFollowFloor();
+      }
+      this.syncCancelVisible();
+      this.syncArrowAnimation();
+    };
     this.placement.onCancel = () => this.cancelGoal();
     this.hide();
   }
 
+  isArmed(): boolean {
+    return this.armed;
+  }
+
   applyView(view: ARModuleSessionState, origin: ClientTrackingOrigin | null): void {
-    const available =
-      view.hasTrackingOrigin && view.capabilities?.navigation?.nav_goal?.available === true;
-    if (!available || !origin) {
-      this.origin = null;
-      this.lastReceivedPose = null;
-      this.lastAppliedNav = null;
-      this.navFlash = null;
-      this.stop();
+    const mode = navMarkerMode({
+      hasTrackingOrigin: view.hasTrackingOrigin,
+      hasOrigin: origin !== null,
+      navGoalAvailable: view.capabilities?.navigation?.nav_goal?.available === true,
+      disconnectedWithoutRobot: isDisconnectedWithoutRobot(view),
+    });
+    if (mode !== "live" || origin === null) {
+      if (mode === "hidden") {
+        this.origin = null;
+        this.lastReceivedPose = null;
+        this.lastAppliedNav = null;
+        this.navFlash = null;
+        this.stop();
+        return;
+      }
+      this.previewOnRobot();
       return;
     }
     this.origin = origin;
@@ -181,6 +227,7 @@ export class NavigationController {
     if (this.navFlash === null) {
       this.marker?.setGoalActive(this.goalActive(view));
     }
+    this.syncArrowAnimation();
     this.syncCancelVisible(view);
   }
 
@@ -202,6 +249,48 @@ export class NavigationController {
   dispose(): void {
     this.stop();
     this.destroyMarker();
+  }
+
+  private previewOnRobot(): void {
+    this.origin = null;
+    const floor = this.robotPresenter.floorPose();
+    if (!floor) {
+      if (this.armed) {
+        this.stop();
+      }
+      return;
+    }
+    if (!this.armed) {
+      this.arm(floor);
+    }
+    this.syncPreviewFollowFloor();
+    if (this.placement.isFollowFloor()) {
+      this.marker?.setGoalActive(false);
+    }
+    this.syncArrowAnimation();
+    this.syncCancelVisible();
+  }
+
+  private syncPreviewFollowFloor(): void {
+    const followFloor = !this.goalActive(this.session.view()) && this.navFlash === null;
+    this.placement.setFollowFloor(followFloor);
+    if (!followFloor) {
+      return;
+    }
+    const floor = this.robotPresenter.floorPose();
+    if (floor) {
+      this.placement.syncFollowFloorPose(floor.position, floor.rotation);
+    }
+  }
+
+  private resetDisconnectedPreview(): void {
+    this.clearGoalFacts();
+    this.placement.resetActivated();
+    this.returnToRobotFloor();
+    this.syncPreviewFollowFloor();
+    this.marker?.setGoalActive(false);
+    this.syncArrowAnimation();
+    this.syncCancelVisible();
   }
 
   private applyReceivedTarget(pose: YawPose | null, origin: ClientTrackingOrigin): void {
@@ -249,6 +338,7 @@ export class NavigationController {
     this.lastAppliedNav = null;
     this.syncDragEnabled();
     this.marker?.setCancelVisible(false);
+    this.syncArrowAnimation();
   }
 
   private streamGoal(position: vec3, rotation: quat, force: boolean): void {
@@ -272,7 +362,14 @@ export class NavigationController {
 
   private cancelGoal(): void {
     const view = this.session.view();
-    if (!this.goalActive(view) || view.capabilities?.estop?.available !== true) {
+    if (!this.goalActive(view)) {
+      return;
+    }
+    if (isDisconnectedWithoutRobot(view)) {
+      this.resetDisconnectedPreview();
+      return;
+    }
+    if (view.capabilities?.estop?.available !== true) {
       return;
     }
     try {
@@ -304,6 +401,7 @@ export class NavigationController {
     }
     this.syncDragEnabled();
     this.marker?.setGoalActive(false);
+    this.syncArrowAnimation();
     this.onFlashChange?.();
   }
 
@@ -328,12 +426,20 @@ export class NavigationController {
     }
     this.marker?.setCancelVisible(
       this.isCancelVisible(view),
-      view.capabilities?.estop?.available === true,
+      isDisconnectedWithoutRobot(view) || view.capabilities?.estop?.available === true,
     );
   }
 
   private syncDragEnabled(): void {
     this.marker?.setDragEnabled(this.armed && this.navFlash === null);
+  }
+
+  private syncArrowAnimation(view: ARModuleSessionState = this.session.view()): void {
+    this.marker?.setArrowAnimating(shouldAnimateNavArrow({
+      shown: this.armed && this.navFlash === null,
+      dragging: this.placement.isActivelyDragging(),
+      followingRobot: this.placement.isFollowFloor() && !this.goalActive(view),
+    }));
   }
 
   private goalActive(view: ARModuleSessionState): boolean {

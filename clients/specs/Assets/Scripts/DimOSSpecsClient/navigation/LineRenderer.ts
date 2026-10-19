@@ -6,9 +6,9 @@ const LINE_WIDTH_CM = 1.5;
 const POINTS_EPSILON_CM = 0.5;
 const DEFAULT_VISUAL_STYLE = 4 as VisualStyle;
 
-const DEFAULT_LINE_MATERIAL = requireAsset(
-  "SpectaclesInteractionKit.lspkg/Components/Interaction/InteractorLineVisual/InteractorLineMaterial.mat",
-) as Material;
+// Style 4 fades both ends to the N077 gradient constants. They are baked into
+// NavPath.ss_graph (white, alpha 0); material and script overrides do not reach the shader.
+const DEFAULT_LINE_MATERIAL = requireAsset("../../../Materials/NavPath.mat") as Material;
 
 export type LineRgb = [number, number, number];
 
@@ -19,15 +19,14 @@ export interface LineRendererOptions {
 
 export class LineRenderer {
   private readonly container: SceneObject;
-  private readonly material: Material;
   private readonly lineRenderer: InteractorLineRenderer;
   private lastRenderedPoints: vec3[] = [];
-  private color: LineRgb = [1, 1, 0];
+  private color: LineRgb = [1, 1, 1];
   private destroyed = false;
 
   constructor(options: LineRendererOptions) {
     if (!DEFAULT_LINE_MATERIAL) {
-      throw new Error("InteractorLineMaterial is required");
+      throw new Error("NavPath material is required");
     }
     this.container = global.scene.createSceneObject(options.name ?? "LineRenderer");
     this.container.setParent(options.parent);
@@ -36,29 +35,21 @@ export class LineRenderer {
     transform.setWorldRotation(quat.quatIdentity());
     transform.setWorldScale(vec3.one());
 
-    this.material = DEFAULT_LINE_MATERIAL.clone();
     const color = rgbToVec4(this.color);
-    configureLinePass(this.material.mainPass, color, DEFAULT_VISUAL_STYLE);
     this.lineRenderer = new InteractorLineRenderer({
-      material: this.material,
+      material: DEFAULT_LINE_MATERIAL,
       startWidth: LINE_WIDTH_CM,
       endWidth: LINE_WIDTH_CM,
       startColor: color,
       endColor: color,
       points: [],
     });
-    this.lineRenderer.visualStyle = DEFAULT_VISUAL_STYLE;
-    this.lineRenderer.setSolidColor(color);
     this.lineRenderer.getSceneObject().setParent(this.container);
+    this.applyColor(this.color);
   }
 
   setColor(rgb: LineRgb): void {
-    this.color = [rgb[0], rgb[1], rgb[2]];
-    const color = rgbToVec4(this.color);
-    configureLinePass(this.material.mainPass, color, DEFAULT_VISUAL_STYLE);
-    this.lineRenderer.startColor = color;
-    this.lineRenderer.endColor = color;
-    this.lineRenderer.setSolidColor(color);
+    this.applyColor(rgb);
   }
 
   setPoints(points: vec3[]): void {
@@ -93,6 +84,19 @@ export class LineRenderer {
     this.container.destroy();
   }
 
+  private applyColor(rgb: LineRgb): void {
+    this.color = [rgb[0], rgb[1], rgb[2]];
+    const color = rgbToVec4(this.color);
+    const visual = this.lineRenderer
+      .getSceneObject()
+      .getComponent("Component.RenderMeshVisual") as RenderMeshVisual;
+    if (!visual?.mainMaterial) {
+      throw new Error("line material is required");
+    }
+    configureLinePass(visual.mainMaterial.mainPass, color, DEFAULT_VISUAL_STYLE);
+    this.lineRenderer.setSolidColor(color);
+  }
+
   private matchesLastRendered(points: vec3[]): boolean {
     if (this.lastRenderedPoints.length !== points.length) {
       return false;
@@ -119,8 +123,6 @@ function configureLinePass(pass: Pass, color: vec4, visualStyle: VisualStyle): v
     startWidth: number;
     endWidth: number;
     maxAlpha: number;
-    Port_Value0_N077: vec4;
-    Port_Value2_N077: vec4;
     Port_Position1_N077: number;
   };
   linePass.visualStyle = visualStyle;
@@ -130,7 +132,5 @@ function configureLinePass(pass: Pass, color: vec4, visualStyle: VisualStyle): v
   linePass.startWidth = LINE_WIDTH_CM;
   linePass.endWidth = LINE_WIDTH_CM;
   linePass.maxAlpha = 1;
-  linePass.Port_Value0_N077 = new vec4(color.x, color.y, color.z, 0);
-  linePass.Port_Value2_N077 = new vec4(color.x, color.y, color.z, 0);
   linePass.Port_Position1_N077 = 0.2;
 }

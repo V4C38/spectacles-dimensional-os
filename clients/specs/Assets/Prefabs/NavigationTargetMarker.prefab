@@ -45,7 +45,7 @@
       _renderOrder: 0
       _inactive: false
       _playAudio: false
-      _style: Primary
+      _style: Secondary
       _hasShadow: false
       _shadowPositionOffset: !<Vec3> {x: 0.050000, y: -0.050000, z: -0.010000}
       _toggleable: false

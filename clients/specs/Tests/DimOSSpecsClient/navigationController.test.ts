@@ -8,10 +8,55 @@ import {
 import {
   GOAL_FORCE_NOOP_DISTANCE_CM,
   GOAL_SEND_INTERVAL_S,
+  navMarkerMode,
+  shouldAnimateNavArrow,
   shouldBeginFailedFlash,
   shouldSendStreamGoal,
   specsNavigationGoalInOdom,
 } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationController";
+
+describe("navMarkerMode", () => {
+  it("previews only while disconnected with no robot", () => {
+    expect(navMarkerMode({
+      hasTrackingOrigin: false,
+      hasOrigin: false,
+      navGoalAvailable: false,
+      disconnectedWithoutRobot: true,
+    })).toBe("preview");
+    expect(navMarkerMode({
+      hasTrackingOrigin: false,
+      hasOrigin: false,
+      navGoalAvailable: false,
+      disconnectedWithoutRobot: false,
+    })).toBe("hidden");
+  });
+
+  it("stays live only when tracking and nav goals are available", () => {
+    expect(navMarkerMode({
+      hasTrackingOrigin: true,
+      hasOrigin: true,
+      navGoalAvailable: true,
+      disconnectedWithoutRobot: false,
+    })).toBe("live");
+    expect(navMarkerMode({
+      hasTrackingOrigin: true,
+      hasOrigin: true,
+      navGoalAvailable: false,
+      disconnectedWithoutRobot: false,
+    })).toBe("hidden");
+  });
+});
+
+describe("shouldAnimateNavArrow", () => {
+  const placed = { shown: true, dragging: false, followingRobot: false };
+
+  it("animates only while the marker is placed, not dragged, and not following the robot", () => {
+    expect(shouldAnimateNavArrow(placed)).toBe(true);
+    expect(shouldAnimateNavArrow({ ...placed, dragging: true })).toBe(false);
+    expect(shouldAnimateNavArrow({ ...placed, followingRobot: true })).toBe(false);
+    expect(shouldAnimateNavArrow({ ...placed, shown: false })).toBe(false);
+  });
+});
 
 describe("shouldBeginFailedFlash", () => {
   const failed = { state: "resolved" as const, outcome: "failed" as const };

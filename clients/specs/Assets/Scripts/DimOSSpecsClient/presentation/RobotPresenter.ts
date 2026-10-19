@@ -21,6 +21,8 @@ export interface RobotMarkerApplyContext {
   appState: AppState;
 }
 
+const GO2_BASE_HEIGHT_M = 0.33;
+
 export function robotFloorOffsetCm(robot: RobotDescription): Vec3 {
   return clientTrackingToSpecsPoint([0, 0, -robot.base_height_m]);
 }
@@ -170,10 +172,14 @@ export class RobotPresenter extends BaseScriptComponent {
   floorPose(): { position: vec3; rotation: quat } | null {
     const position = this.worldPosition();
     const rotation = this.worldRotation();
-    if (!position || !rotation || !this.robot) {
+    if (!position || !rotation) {
       return null;
     }
-    const offset = rotateVecByQuat(fromQuat(rotation), robotFloorOffsetCm(this.robot));
+    const baseHeightM = this.robot?.base_height_m ?? GO2_BASE_HEIGHT_M;
+    const offset = rotateVecByQuat(
+      fromQuat(rotation),
+      clientTrackingToSpecsPoint([0, 0, -baseHeightM]),
+    );
     // Generic Specs poses retain Lens -Z as robot forward. Ground markers use
     // a local +X arrow, so give placement the corresponding marker heading.
     const forward = rotation.multiplyVec3(new vec3(0, 0, -1));

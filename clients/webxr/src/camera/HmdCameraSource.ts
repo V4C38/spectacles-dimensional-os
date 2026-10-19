@@ -1,11 +1,14 @@
 import type { CameraCaptureSource, CameraTrackingSource, ClientClock } from "@dimos-ar-client/websocket/hostPorts";
 import type { LocalizationObservation, Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
 import { rotateVecByQuat } from "@dimos-ar-client/localization/clientTrackingTransforms";
-import { webxrCameraToOpticalPose } from "../coordinates/WebXRCoordinates";
+import { webxrOpticalToClientTrackingPose } from "../coordinates/WebXRCoordinates";
+import { reportDiagnostic } from "../diagnostics/BrowserDiagnostics";
 import { frameTimeToClientClock } from "../time/BrowserClientClock";
 import {
   jpegDimensionsMatch,
-  matchStream,
+  requireUsableProfile,
+  matchesProfileCamera,
+  profileForStream,
   type HmdCalibrationProfile,
   type LiveVideoSettings,
 } from "./HmdCalibration";
@@ -73,6 +76,7 @@ export function lookupPoseSample(
     }
   }
   if (before && after && after.t > before.t) {
+    if (ts - before.t > STALE_POSE_S || after.t - ts > STALE_POSE_S) return null;
     const alpha = (ts - before.t) / (after.t - before.t);
     return {
       t: ts,
@@ -87,6 +91,8 @@ export function lookupPoseSample(
   return nearest;
 }
 
+type FrozenFrame = { ts: number; pose: WebxrPoseSample; encoded: ReturnType<JpegEncoder["encode"]> };
+
 export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSource {
   private readonly clock: ClientClock;
   private readonly profileOf: () => HmdCalibrationProfile;
@@ -98,12 +104,10 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
   private readonly poseBuffer: WebxrPoseSample[] = [];
   private stream: MediaStream | null = null;
   private video: HTMLVideoElement | null = null;
-  private opening = false;
+  private operation = new AbortController();
   private openPromise: Promise<void> | null = null;
-  private lastOpenError: string | null = null;
-  private latestFrame: { video: HTMLVideoElement; metadata: VideoFrameMetadata } | null = null;
-  private waiting: Array<(frame: { video: HTMLVideoElement; metadata: VideoFrameMetadata }) => void> =
-    [];
+  private activeProfile: HmdCalibrationProfile | null = null;
+  private waiting: { resolve: (frame: FrozenFrame) => void; reject: (error: unknown) => void } | null = null;
 
   constructor(deps: {
     clock: ClientClock;
@@ -124,195 +128,176 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
     this.videoFactory = deps.videoFactory ?? createVideoElement;
   }
 
-  private get profile(): HmdCalibrationProfile {
-    return this.profileOf();
+  availabilityError(): string | null {
+    try { requireUsableProfile(this.profileOf()); return null; }
+    catch (error) { return String(error instanceof Error ? error.message : error); }
   }
 
-  samplePose(position: Vec3, orientation: Quat): void {
-    this.poseBuffer.push({
-      t: this.clock.now(),
-      position,
-      orientation,
-    });
-    if (this.poseBuffer.length > POSE_BUFFER_CAPACITY) {
-      this.poseBuffer.shift();
-    }
+  samplePose(position: Vec3, orientation: Quat, timestamp = this.clock.now()): void {
+    this.poseBuffer.push({ t: timestamp, position: [...position], orientation: [...orientation] });
+    if (this.poseBuffer.length > POSE_BUFFER_CAPACITY) this.poseBuffer.shift();
   }
+
+  clearTracking(): void { this.stop(); this.poseBuffer.length = 0; }
 
   cameraOptical(): { position: Vec3; orientation: Quat } {
-    if (this.poseBuffer.length === 0) {
-      throw new Error("no camera pose sample");
-    }
     const latest = this.poseBuffer[this.poseBuffer.length - 1];
-    return composeOptical(latest, this.profile);
+    if (!latest || this.clock.now() - latest.t > STALE_POSE_S) throw new Error("no current viewer pose");
+    requireUsableProfile(this.profileOf());
+    return composeOptical(latest, this.profileOf());
   }
 
-  start(): void {
-    if (this.opening) {
-      return;
-    }
-    this.opening = true;
-    void this.openStream().catch((error) => {
-      this.opening = false;
-      this.lastOpenError = error instanceof Error ? error.message : String(error);
-    });
-  }
+  start(): void { void this.waitUntilOpen().catch(() => {}); }
 
-  async prepare(): Promise<void> {
-    const stream = await this.openValidatedStream();
-    stream.getTracks().forEach((track) => track.stop());
+  async requestPermission(): Promise<void> {
+    try { await this.waitUntilOpen(); } finally { this.stop(); }
   }
 
   async waitUntilOpen(): Promise<void> {
-    if (this.stream) {
-      return;
-    }
-    if (this.lastOpenError) {
-      throw new Error(this.lastOpenError);
-    }
-    await this.openStream();
+    if (this.openPromise) return this.openPromise;
+    if (this.stream && this.activeProfile) return;
+    if (this.operation.signal.aborted) this.operation = new AbortController();
+    const signal = this.operation.signal;
+    const profile = structuredClone(this.profileOf());
+    requireUsableProfile(profile);
+    const pending = this.openValidatedStream(profile, signal).then(async ({ stream, profile: boundProfile }) => {
+      if (signal.aborted) { releaseStream(stream); throw new Error("camera capture cancelled"); }
+      this.stream = stream;
+      const video = this.videoFactory();
+      this.video = video;
+      video.srcObject = stream;
+      await bounded(video.play(), signal, 10000);
+      if (signal.aborted) throw new Error("camera capture cancelled");
+      this.activeProfile = boundProfile;
+      this.frames.start(video, (nextVideo, metadata) => {
+        const waiter = this.waiting;
+        if (!waiter || signal.aborted) return;
+        this.waiting = null;
+        try {
+          const ts = frameTimeToClientClock(selectFrameTimestamp(metadata), this.clock, this.performanceNow());
+          const pose = lookupPoseSample(this.poseBuffer, ts);
+          if (!pose) throw new Error("no viewer pose for capture timestamp");
+          // encode() draws synchronously here, before the video advances. The asynchronous
+          // JPEG completion cannot change the pixels, timestamp, profile or sampled pose.
+          const encoded = this.jpeg.encode(nextVideo);
+          waiter.resolve({ ts, pose, encoded });
+        } catch (error) {
+          waiter.reject(error);
+        }
+      });
+    });
+    this.openPromise = pending;
+    try { await pending; }
+    catch (error) { if (!signal.aborted) this.stop(); throw cameraFailure(error); }
+    finally { if (this.openPromise === pending) this.openPromise = null; }
   }
 
   stop(): void {
+    this.operation.abort();
     this.frames.stop();
-    this.waiting = [];
-    this.latestFrame = null;
-    this.opening = false;
+    this.waiting = null;
     this.openPromise = null;
-    this.lastOpenError = null;
+    this.activeProfile = null;
     if (this.video) {
+      this.video.pause?.();
       this.video.srcObject = null;
       this.video = null;
     }
-    if (this.stream) {
-      this.stream.getTracks().forEach((track) => track.stop());
-      this.stream = null;
-    }
+    if (this.stream) releaseStream(this.stream);
+    this.stream = null;
   }
 
   async capture(): Promise<LocalizationObservation> {
+    // Take the operation token before opening: stop() must cancel this capture,
+    // including while permission or video.play() is pending.
+    if (this.operation.signal.aborted) this.operation = new AbortController();
+    const signal = this.operation.signal;
     await this.waitUntilOpen();
-    if (!this.stream || !this.video) {
-      throw new Error("headset camera is not started");
-    }
-    const frame = await this.nextFrame();
-    const frameTimeMs = selectFrameTimestamp(frame.metadata);
-    let tsCapture: number;
-    try {
-      tsCapture = frameTimeToClientClock(frameTimeMs, this.clock, this.performanceNow());
-    } catch {
-      throw new Error("frame timestamp clock conversion failed");
-    }
-    const pose = lookupPoseSample(this.poseBuffer, tsCapture);
-    if (!pose) {
-      throw new Error("no camera pose for capture timestamp");
-    }
-    const encoded = await this.jpeg.encode(frame.video);
-    jpegDimensionsMatch(this.profile, encoded.width, encoded.height);
-    const optical = composeOptical(pose, this.profile);
+    const profile = this.activeProfile;
+    if (!profile || signal.aborted) throw new Error("headset camera is not started");
+    if (this.waiting) throw new Error("camera capture already pending");
+    const frame = await bounded(new Promise<FrozenFrame>((resolve, reject) => { this.waiting = { resolve, reject }; }), signal, 3000)
+      .finally(() => { if (this.operation.signal === signal) this.waiting = null; });
+    const encoded = await bounded(frame.encoded, signal, 5000);
+    jpegDimensionsMatch(profile, encoded.width, encoded.height);
+    const optical = composeOptical(frame.pose, profile);
     return {
-      ts_capture: tsCapture,
+      ts_capture: frame.ts,
       jpeg: encoded.jpeg,
-      intrinsics: { ...this.profile.intrinsics },
+      intrinsics: structuredClone(profile.intrinsics),
       camera_position: optical.position,
       camera_orientation: optical.orientation,
     };
   }
 
-  dispose(): void {
-    this.stop();
-    this.poseBuffer.length = 0;
-  }
+  dispose(): void { this.clearTracking(); }
 
-  private async openStream(): Promise<void> {
-    if (this.stream) {
-      return;
-    }
-    if (this.openPromise) {
-      await this.openPromise;
-      return;
-    }
-    this.lastOpenError = null;
-    this.openPromise = this.openValidatedStream()
-      .then(async (stream) => {
-        const video = this.videoFactory();
-        video.srcObject = stream;
-        await video.play();
-        this.stream = stream;
-        this.video = video;
-        this.frames.start(video, (nextVideo, metadata) => {
-          this.latestFrame = { video: nextVideo, metadata };
-          const waiters = this.waiting;
-          this.waiting = [];
-          for (const resolve of waiters) {
-            resolve({ video: nextVideo, metadata });
-          }
-        });
-      })
-      .finally(() => {
-        this.opening = false;
-        this.openPromise = null;
-      });
-    await this.openPromise;
-  }
-
-  private async openValidatedStream(): Promise<MediaStream> {
-    const devices = await this.media.enumerateDevices();
-    if (devices.filter((device) => device.kind === "videoinput").length === 0) {
-      throw new Error("no video input devices");
-    }
-    const stream = await this.media.getUserMedia({
-      video: {
-        width: { exact: this.profile.stream.width },
-        height: { exact: this.profile.stream.height },
-        frameRate: { exact: this.profile.stream.frameRate },
-        facingMode: this.profile.stream.facingMode,
-      },
-      audio: false,
-    });
-    const track = stream.getVideoTracks()[0];
-    if (!track) {
-      stream.getTracks().forEach((item) => item.stop());
-      throw new Error("no video track");
-    }
+  private async openValidatedStream(profile: HmdCalibrationProfile, signal: AbortSignal): Promise<{ stream: MediaStream; profile: HmdCalibrationProfile }> {
+    // Required constraints can reject before prompting. Bootstrap permission first;
+    // only the explicitly selected physical camera below may supply capture frames.
+    const permission = this.media.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+    let permissionFinished = false;
+    void permission.then(stream => { if (permissionFinished) releaseStream(stream); }, () => {});
+    let permissionStream: MediaStream | undefined;
+    let devices: MediaDeviceInfo[];
     try {
-      matchStream(this.profile, track.getSettings() as LiveVideoSettings);
-    } catch (error) {
-      stream.getTracks().forEach((item) => item.stop());
-      throw error;
+      permissionStream = await bounded(permission, signal, 30000);
+      // Keep a track live until enumeration: device labels may be hidden again
+      // after the last track stops when permission was granted only once.
+      devices = await bounded(this.media.enumerateDevices(), signal, 5000);
+    } finally {
+      permissionFinished = true;
+      if (permissionStream) releaseStream(permissionStream);
     }
-    return stream;
-  }
-
-  private nextFrame(): Promise<{ video: HTMLVideoElement; metadata: VideoFrameMetadata }> {
-    if (this.latestFrame) {
-      const frame = this.latestFrame;
-      this.latestFrame = null;
-      return Promise.resolve(frame);
-    }
-    return new Promise((resolve) => {
-      this.waiting.push(resolve);
+    reportDiagnostic("camera-devices", { model: profile.id, labels: devices.filter(device => device.kind === "videoinput").map(device => device.label) });
+    const matching = devices.filter(device => device.kind === "videoinput" &&
+      matchesProfileCamera(profile, device.label));
+    if (matching.length > 1) throw new Error("Multiple cameras match the left-camera calibration. Camera selection is ambiguous.");
+    const selected = matching[0];
+    if (!selected?.deviceId) throw new Error(`No camera matches the ${profile.id} left-camera calibration. Cameras found: ${devices.filter(device => device.kind === "videoinput").map(device => device.label || "unnamed").join("; ") || "none"}.`);
+    const pending = this.media.getUserMedia({
+      video: {
+        deviceId: { exact: selected.deviceId },
+        width: { exact: profile.stream.width }, height: { ideal: profile.stream.height },
+        frameRate: { exact: profile.stream.frameRate }, facingMode: { exact: "environment" },
+      }, audio: false,
     });
+    void pending.then(stream => { if (signal.aborted) releaseStream(stream); }, () => {});
+    const stream = await bounded(pending, signal, 15000);
+    try {
+      const track = stream.getVideoTracks()[0];
+      if (!track || track.label !== selected.label || !matchesProfileCamera(profile, track.label) || /avatar|virtual/i.test(track.label))
+        throw new Error("camera identity does not match calibration");
+      const settings = track.getSettings();
+      if (settings.deviceId !== selected.deviceId) throw new Error("camera device does not match selection");
+      const boundProfile = profileForStream(profile, settings as LiveVideoSettings);
+      reportDiagnostic("camera-opened", { model: profile.id, camera: track.label, width: settings.width, height: settings.height, frameRate: settings.frameRate });
+      return { stream, profile: boundProfile };
+    } catch (error) { releaseStream(stream); throw error; }
   }
 }
 
-export function composeOptical(
-  pose: WebxrPoseSample,
-  profile: HmdCalibrationProfile,
-): { position: Vec3; orientation: Quat } {
-  const camera = webxrCameraToOpticalPose({
-    position: pose.position,
-    orientation: pose.orientation,
+function releaseStream(stream: MediaStream): void { stream.getTracks().forEach(track => track.stop()); }
+
+function bounded<T>(pending: Promise<T>, signal: AbortSignal, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const cancel = () => { cleanup(); reject(new Error("camera capture cancelled")); };
+    const timer = setTimeout(() => { cleanup(); reject(new Error("camera operation timed out")); }, timeoutMs);
+    const cleanup = () => { clearTimeout(timer); signal.removeEventListener("abort", cancel); };
+    // Attach settlement handlers even when already cancelled, to drain late rejections.
+    pending.then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+    if (signal.aborted) { cancel(); return; }
+    signal.addEventListener("abort", cancel, { once: true });
   });
-  const extra = profile.T_tracking_optical;
-  return {
-    position: [
-      camera.position[0] + rotateVecByQuat(camera.orientation, extra.position)[0],
-      camera.position[1] + rotateVecByQuat(camera.orientation, extra.position)[1],
-      camera.position[2] + rotateVecByQuat(camera.orientation, extra.position)[2],
-    ],
-    orientation: quatMultiply(camera.orientation, extra.orientation),
-  };
+}
+
+export function composeOptical(pose: WebxrPoseSample, profile: HmdCalibrationProfile): { position: Vec3; orientation: Quat } {
+  const extra = profile.T_viewer_optical;
+  const offset = rotateVecByQuat(pose.orientation, extra.position);
+  return webxrOpticalToClientTrackingPose({
+    position: [pose.position[0] + offset[0], pose.position[1] + offset[1], pose.position[2] + offset[2]],
+    orientation: quatMultiply(pose.orientation, extra.orientation),
+  });
 }
 
 function createVideoElement(): HTMLVideoElement {
@@ -370,7 +355,12 @@ function quatMultiply(a: Quat, b: Quat): Quat {
 
 export function browserMediaPort(): CameraMediaPort {
   return {
-    getUserMedia: (constraints) => navigator.mediaDevices.getUserMedia(constraints),
+    getUserMedia: (constraints) => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        return Promise.reject(new Error("Camera access requires HTTPS and a browser with headset camera support."));
+      }
+      return navigator.mediaDevices.getUserMedia(constraints);
+    },
     enumerateDevices: () => navigator.mediaDevices.enumerateDevices(),
   };
 }
@@ -380,6 +370,9 @@ export function videoFrameCallbackPort(): FrameCapturePort {
   let videoEl: HTMLVideoElement | null = null;
   return {
     start(video, onFrame) {
+      if (typeof video.requestVideoFrameCallback !== "function") {
+        throw new Error("This browser cannot synchronize camera frames. Update the Quest browser or Skip localization.");
+      }
       videoEl = video;
       const tick: VideoFrameRequestCallback = (_now, metadata) => {
         onFrame(video, {
@@ -436,4 +429,15 @@ export function canvasJpegEncoder(quality = 0.85): JpegEncoder {
       };
     },
   };
+}
+
+function cameraFailure(error: unknown): unknown {
+  if (!(error instanceof Error)) return error;
+  if (error.name === "NotAllowedError" || error.name === "SecurityError") {
+    return new Error("Camera access was denied. Allow camera access for this site and enable Browser's headset camera permission in Quest settings, then retry.");
+  }
+  if (["NotFoundError", "OverconstrainedError", "NotReadableError"].includes(error.name)) {
+    return new Error(`The headset camera could not open (${error.name}). Check Browser's headset camera permission in Quest settings and update Quest Browser, then retry.`);
+  }
+  return error;
 }

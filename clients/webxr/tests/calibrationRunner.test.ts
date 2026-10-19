@@ -6,6 +6,7 @@ describe("evaluateCalibration", () => {
   it("accepts observations inside the recorded thresholds", () => {
     const profile = {
       ...HMD_PROFILES.quest3,
+      cameraLabel: "Left physical camera",
       intrinsics: { ...HMD_PROFILES.quest3.intrinsics, fx: 600, fy: 600, cx: 640, cy: 480 },
     };
     const corners3d: Array<[number, number, number]> = [
@@ -24,7 +25,11 @@ describe("evaluateCalibration", () => {
       expectedOrigin: { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number] },
       solvedOrigin: { position: [0.01, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number] },
     };
-    const report = evaluateCalibration(profile, [observation, observation, observation, observation]);
+    const observations = [0, 0.1, 0.2, 0.3].map(x => ({
+      ...observation, cameraPosition: [x, 0, 0] as [number, number, number],
+      corners2d: corners3d.map(([px, py, z]) => [600 * ((px - x) / z) + 640, 600 * (py / z) + 480] as [number, number]),
+    }));
+    const report = evaluateCalibration(profile, observations);
     expect(report.accepted).toBe(true);
     const accepted = acceptProfile(profile, report, "2026-09-14T00:00:00Z");
     expect(accepted.accepted).toBe(true);
@@ -47,4 +52,22 @@ describe("evaluateCalibration", () => {
     expect(missingOrigin.accepted).toBe(false);
     expect(missingOrigin.reasons.some((reason) => reason.includes("T_odom_client"))).toBe(true);
   });
+});
+
+it("rejects duplicated viewpoints, non-finite observations, and heading error above 5 degrees", () => {
+  const profile = { ...HMD_PROFILES.quest3, cameraLabel: "Left physical camera", intrinsics: { ...HMD_PROFILES.quest3.intrinsics, fx: 600, fy: 600 } };
+  const corners3d = [[-0.1, -0.1, 1], [0.1, -0.1, 1], [0.1, 0.1, 1], [-0.1, 0.1, 1]] as [number, number, number][];
+  const observations = [0, 0.1, 0.2, 0.3].map(x => ({
+    corners3d, corners2d: corners3d.map(([px, py]) => [600 * (px - x) + 640, 600 * py + 480] as [number, number]),
+    cameraPosition: [x, 0, 0] as [number, number, number], cameraOrientation: [0, 0, 0, 1] as [number, number, number, number],
+    expectedOrigin: { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number] },
+    solvedOrigin: { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, Math.sin(3 * Math.PI / 180), Math.cos(3 * Math.PI / 180)] as [number, number, number, number] },
+  }));
+  const heading = evaluateCalibration(profile, observations);
+  expect(heading.accepted).toBe(false);
+  expect(heading.maxHeadingErrorDeg).toBeCloseTo(6);
+  expect(heading.reasons.some(reason => reason.includes("heading"))).toBe(true);
+  observations[0].corners2d[0][0] = Number.NaN;
+  expect(evaluateCalibration(profile, observations).accepted).toBe(false);
+  expect(evaluateCalibration(profile, [observations[1], observations[1], observations[1], observations[1]]).accepted).toBe(false);
 });

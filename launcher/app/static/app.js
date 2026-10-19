@@ -7,9 +7,7 @@
   const hostIpSummary = $("hostIpSummary");
   const pinValue = $("pin");
   const pinSummary = $("pinSummary");
-  const webxrLocal = $("webxrLocal");
   const webxrNetwork = $("webxrNetwork");
-  const webxrLocalRow = $("webxrLocalRow");
   const webxrNetworkRow = $("webxrNetworkRow");
   const webxrHint = $("webxrHint");
   const robotValue = $("robotValue");
@@ -767,6 +765,26 @@
     return raw;
   }
 
+  function applyConnectionStatus(status) {
+    setText(hostIp, status.host_ip);
+    setText(hostIpSummary, status.host_ip);
+    const isWebxr = client === "webxr";
+    $("hostIpRow").classList.toggle("hidden", isWebxr);
+    $("hostIpSummaryLabel").classList.toggle("hidden", isWebxr);
+    hostIpSummary.classList.toggle("hidden", isWebxr);
+    $("pinRow").classList.toggle("hidden", isWebxr);
+    setText(pinValue, isWebxr ? null : status.pin);
+    $("connectionSummaryLabel").textContent = isWebxr ? "URL" : "PIN";
+    if (isWebxr) setHref(pinSummary, status.webxr_url, "Address available after Start");
+    else setText(pinSummary, status.pin);
+    setText(robotValue, displayRobotIp(status.robot_ip));
+
+    const showWebxr = isWebxr;
+    webxrNetworkRow.classList.toggle("hidden", !showWebxr);
+    webxrHint.classList.toggle("hidden", !showWebxr);
+    setHref(webxrNetwork, status.webxr_url);
+  }
+
   function applyStatus(status) {
     lastStatus = status || {};
     phase = status.phase || "idle";
@@ -776,18 +794,11 @@
     const deps = describeDeps(status);
     depsSummary.textContent = deps.text;
     depsSummary.dataset.phase = deps.phase;
-    setText(hostIp, status.host_ip);
-    setText(hostIpSummary, status.host_ip);
-    setText(pinValue, status.pin);
-    setText(pinSummary, status.pin);
-    setText(robotValue, displayRobotIp(status.robot_ip));
-
-    const showWebxr = Boolean(status.webxr_local_url || status.webxr_url);
-    webxrLocalRow.classList.toggle("hidden", !showWebxr);
-    webxrNetworkRow.classList.toggle("hidden", !showWebxr);
-    webxrHint.classList.toggle("hidden", !showWebxr);
-    setHref(webxrLocal, status.webxr_local_url);
-    setHref(webxrNetwork, status.webxr_url);
+    if (["starting", "running", "stopping"].includes(phase) && status.client) {
+      client = status.client;
+      document.querySelectorAll("[data-client]").forEach(btn => btn.classList.toggle("active", btn.dataset.client === client));
+    }
+    applyConnectionStatus(status);
 
     if (status.warning) {
       warningText.textContent = status.warning;
@@ -915,6 +926,7 @@
       document.querySelectorAll("[data-client]").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       client = btn.dataset.client;
+      applyConnectionStatus(lastStatus);
     });
   });
 

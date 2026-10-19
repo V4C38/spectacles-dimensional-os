@@ -20,7 +20,21 @@ import { toneHex } from "./tones";
 
 export type OperatingMode = "manual" | "agent";
 
+export type WizardStep = "connect" | "localization";
+
 export interface WebXRUISnapshot {
+  wizardStep: WizardStep;
+  wizardTitle: string;
+  wizardDescription: string;
+  wizardCardTitle: string;
+  wizardCardBody: string;
+  localizationIssue: string | null;
+  robotName: string;
+  hasTrackingOrigin: boolean;
+  nextLabel: string;
+  backVisible: boolean;
+  debugText: string;
+  activity: string;
   setupCompleted: boolean;
   connectionText: string;
   connectionTone: StatusTone;
@@ -39,6 +53,10 @@ export interface WebXRUISnapshot {
 }
 
 export class WebXRUIPresenter {
+  wizardStep: WizardStep = "connect";
+  debugEnabled = false;
+  private openedFromRuntime = false;
+  private localizationError: string | null = null;
   operatingMode: OperatingMode = "manual";
   lidarMode: LidarDisplayMode = "off";
   setupCompleted = false;
@@ -54,9 +72,14 @@ export class WebXRUIPresenter {
   constructor(
     private readonly session: ARModuleSession,
     private readonly episode: LocalizationCaptureEpisode,
+    private readonly cameraError: () => string | null = () => null,
   ) {}
 
   onSessionView(view: ARModuleSessionState, prev: ARModuleSessionState | null, now: number): void {
+    if (view.connection !== "ready") {
+      this.wizardLidarOffSent = false;
+      this.postWizardLidarSent = false;
+    }
     const prevPhase = prev ? deriveSessionLinkPhase(prev) : this.linkPhase;
     const nextPhase = deriveSessionLinkPhase(view);
     this.linkPhase = nextPhase;
@@ -65,6 +88,11 @@ export class WebXRUIPresenter {
       this.hudText = transition.hudText;
       this.hudTone = transition.hudColor;
       this.hudUntil = now + (transition.hudDurationS ?? Number.POSITIVE_INFINITY);
+    }
+    if (view.connection === "ready" && prev?.connection !== "ready" &&
+        !this.setupCompleted && this.wizardStep === "localization") this.restartLocalization();
+    if (!this.setupCompleted && this.wizardStep === "localization" && view.hasTrackingOrigin && view.connection === "ready") {
+      this.completeSetup();
     }
     if (view.state?.lidar) {
       this.lidarMode = lidarModeFromSettings(view.state.lidar);
@@ -79,6 +107,8 @@ export class WebXRUIPresenter {
     }
     if (!this.setupCompleted) {
       this.ensureWizardLidarOff();
+      if (this.wizardStep === "localization" && this.session.view().connection === "ready" &&
+          this.session.view().hasTrackingOrigin) this.completeSetup();
       return;
     }
     this.sendPostWizardLidarDefault();
@@ -91,12 +121,34 @@ export class WebXRUIPresenter {
     const view = this.session.view();
     const link = sessionLinkStatus(view, view.hello?.robot.display_name);
     const capture = localizationCaptureStatus(view, this.episode.view(), this.nowS);
+    const descriptions = {
+      connect: "Connect securely to your PC. No PIN required.",
+      localization: "Align your headset with the robot using its mounted marker.",
+    };
+    const issue = this.localizationError ?? this.cameraError();
+    const card = this.wizardStep === "connect"
+        ? { title: view.connection === "ready" ? "Robot connected" : "Connecting to your robot", body: view.connection === "ready" ? "Ready to align your headset with the robot." : "Waiting for ARModule. Check that the launcher is running, or reconnect to try again." }
+        : issue
+          ? { title: "Camera alignment unavailable", body: `${issue} You can skip and use the remaining controls.` }
+          : { title: capture.text.split("\n")[0] || "Scanning .", body: "Look at the marker. Hold steady until alignment completes." };
     return {
+      wizardCardTitle: card.title,
+      wizardCardBody: card.body,
+      localizationIssue: issue,
+      robotName: view.hello?.robot.display_name ?? "Robot control",
+      hasTrackingOrigin: view.hasTrackingOrigin,
+      wizardStep: this.wizardStep,
+      wizardTitle: { connect: "Connect", localization: "Localization" }[this.wizardStep],
+      wizardDescription: descriptions[this.wizardStep],
+      nextLabel: this.wizardStep === "connect" && view.connection === "ready" ? "Next" : "Skip",
+      backVisible: this.wizardStep === "localization" || this.openedFromRuntime,
+      debugText: this.debugEnabled ? `Connection: ${view.connection}\nAligned: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture.text}\n${issue ?? ""}` : "",
+      activity: view.nav?.state === "following_path" ? "Following Path" : view.state?.agent.idle === false ? "Thinking" : "Idle",
       setupCompleted: this.setupCompleted,
-      connectionText: link.text.trim(),
+      connectionText: view.connection === "awaiting_hello" ? "Waiting for handshake…" : view.connection === "failed" ? "Connection lost. Retrying…" : link.text.trim(),
       connectionTone: link.color,
-      captureText: capture.text,
-      captureTone: capture.color,
+      captureText: this.localizationError ?? capture.text,
+      captureTone: issue ? "warn" : capture.color,
       operatingMode: this.operatingMode,
       lidarMode: this.lidarMode,
       lidarAvailable: view.capabilities?.lidar.available === true,
@@ -118,13 +170,49 @@ export class WebXRUIPresenter {
     if (!this.session.view().hasTrackingOrigin) {
       throw new Error("setup requires localization_result");
     }
+    this.finishSetup();
+  }
+
+  private finishSetup(): void {
+    if (!this.session.view().hasTrackingOrigin) this.episode.pause();
     this.setupCompleted = true;
+    this.openedFromRuntime = false;
+    this.menuOpen = false;
     this.postWizardLidarSent = false;
     this.requestStateIfReady();
     this.sendPostWizardLidarDefault();
   }
 
+  nextSetup(): void {
+    if (this.setupCompleted) return;
+    if (this.wizardStep === "connect" && this.session.view().connection === "ready") {
+      this.wizardStep = "localization";
+      if (!this.session.view().hasTrackingOrigin) this.restartLocalization();
+    } else {
+      if (this.wizardStep === "connect") this.session.stop();
+      this.finishSetup();
+    }
+  }
+
+  previousSetup(): void {
+    if (this.setupCompleted) return;
+    if (this.wizardStep === "localization") {
+      this.episode.pause();
+      this.wizardStep = "connect";
+    }
+    else if (this.openedFromRuntime) this.finishSetup();
+  }
+
+  retryConnection(): void {
+    this.session.stop();
+    this.session.start();
+  }
+
   restartSetup(): void {
+    this.openedFromRuntime = this.setupCompleted;
+    this.wizardStep = "connect";
+    this.localizationError = null;
+    this.episode.pause();
     this.setupCompleted = false;
     this.operatingMode = "manual";
     this.lidarMode = "off";
@@ -156,7 +244,10 @@ export class WebXRUIPresenter {
   }
 
   restartLocalization(): void {
-    this.episode.requestStart();
+    this.localizationError = this.cameraError();
+    if (this.localizationError) return;
+    try { this.episode.requestStart(); }
+    catch (error) { this.localizationError = error instanceof Error ? error.message : String(error); }
   }
 
   estop(): void {
@@ -167,6 +258,7 @@ export class WebXRUIPresenter {
   }
 
   sendAgentText(text: string): void {
+    if (!this.setupCompleted || this.operatingMode !== "agent") throw new Error("Select Agent mode to send a message");
     requestUserMessage(this.session, text);
   }
 

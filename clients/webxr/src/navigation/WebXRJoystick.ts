@@ -57,7 +57,7 @@ export class WebXRJoystick {
       return;
     }
     requestNavJoystick(this.session, {
-      linear: [filtered.y * JOYSTICK_LINEAR_MPS, 0, 0],
+      linear: [-filtered.y * JOYSTICK_LINEAR_MPS, 0, 0],
       angular: [0, 0, -filtered.x * JOYSTICK_YAW_RADPS],
     });
     this.lastSentAt = now;

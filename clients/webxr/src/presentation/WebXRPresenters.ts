@@ -1,10 +1,12 @@
 import * as THREE from "three";
+import { Line2 } from "three/addons/lines/Line2.js";
+import { LineGeometry } from "three/addons/lines/LineGeometry.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
 import {
   odomToClientTrackingPoint,
   odomToClientTrackingPose,
   odomToClientTrackingYawPose,
-  rotateVecByQuat,
 } from "@dimos-ar-client/localization/clientTrackingTransforms";
 import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
 import type { Quat, Vec3, YawPose } from "@dimos-ar-client/websocket/protocolTypes";
@@ -22,40 +24,115 @@ import {
 
 export class WebXRRobotPresenter {
   readonly object: THREE.Group;
-  private readonly mesh: THREE.Mesh;
-  private lastKey = "";
+  private readonly gizmo = new THREE.Group();
+  private readonly labelGroup: THREE.Group;
+  private readonly labelPlane: THREE.Mesh;
   private robotHeightM = 0;
+  private baseHeightM = 0;
+  private readonly targetPosition = new THREE.Vector3();
+  private readonly targetRotation = new THREE.Quaternion();
+  private lastOrigin: ClientTrackingOrigin | null = null;
   private floorOffset: Vec3 = [0, 0, 0];
   private unlocalizedCommitted = false;
+  private labelCanvas: HTMLCanvasElement | null = null;
+  private labelKey = "";
 
   constructor() {
     this.object = new THREE.Group();
     this.object.name = "WebXRRobotPresenter";
-    this.mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshStandardMaterial({ color: 0x4c8bf5 }),
+    this.gizmo.name = "RobotPoseGizmo";
+    this.gizmo.scale.setScalar(0.8);
+    for (const [axis, color] of [
+      // DimOS +X forward (red), +Y left (green), +Z up (blue).
+      [new THREE.Vector3(0, 0, -1), 0xff0000],
+      [new THREE.Vector3(-1, 0, 0), 0x00ff00],
+      [new THREE.Vector3(0, 1, 0), 0x0000ff],
+    ] as const) {
+      const material = new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false, toneMapped: false });
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.19, 12), material);
+      shaft.position.copy(axis).multiplyScalar(0.095);
+      shaft.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.055, 16), material);
+      tip.position.copy(axis).multiplyScalar(0.215);
+      tip.quaternion.copy(shaft.quaternion);
+      for (const part of [shaft, tip]) { part.renderOrder = 5; part.raycast = () => {}; this.gizmo.add(part); }
+    }
+    this.object.add(this.gizmo);
+
+    this.labelGroup = new THREE.Group();
+    this.labelGroup.name = "RobotMarkerLabel";
+    this.labelGroup.scale.setScalar(0.25);
+    this.labelPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.78, 0.195),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: true, depthWrite: false, side: THREE.DoubleSide }),
     );
-    this.object.add(this.mesh);
+    this.labelPlane.raycast = () => {};
+    if (typeof document !== "undefined") {
+      this.labelCanvas = document.createElement("canvas");
+      this.labelCanvas.width = 1024;
+      this.labelCanvas.height = 256;
+      const texture = new THREE.CanvasTexture(this.labelCanvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      (this.labelPlane.material as THREE.MeshBasicMaterial).map = texture;
+    }
+    this.labelGroup.add(this.labelPlane);
+    this.object.add(this.labelGroup);
     this.object.visible = false;
   }
 
-  apply(
-    view: ARModuleSessionState,
-    origin: ClientTrackingOrigin | null,
-    setupCompleted: boolean,
-    fallbackPosition: Vec3 | null,
-  ): void {
+  apply(view: ARModuleSessionState, origin: ClientTrackingOrigin | null, setupCompleted: boolean, fallbackPosition: Vec3 | null): void {
     const input = deriveRobotMarkerApplyInput({ setupCompleted, view, origin });
-    if (input.mode === "hidden") {
-      this.reset();
-      return;
-    }
-    if (input.mode === "unlocalizedFallbackPosition") {
-      this.applyUnlocalized(input, fallbackPosition);
-      return;
-    }
+    if (input.mode === "hidden") { this.reset(); return; }
+    if (input.mode === "unlocalizedFallbackPosition") { this.applyUnlocalized(input, fallbackPosition); return; }
     this.unlocalizedCommitted = false;
     this.applyLocalized(input);
+  }
+
+  tick(deltaS: number): void {
+    if (!this.object.visible || !this.lastOrigin || deltaS <= 0) return;
+    this.object.position.lerp(this.targetPosition, 1 - Math.exp(-8 * deltaS));
+    this.object.quaternion.slerp(this.targetRotation, 1 - Math.exp(-4.5 * deltaS));
+    this.updateFloorOffset();
+    this.updateLabelPosition();
+  }
+
+  feedback(text: string): void {
+    const labelKey = `${String(this.object.userData.title || "Robot")}\n${text}`;
+    if (!this.labelCanvas || labelKey === this.labelKey) return;
+    const ctx = this.labelCanvas.getContext("2d");
+    if (!ctx) return;
+    this.labelKey = labelKey;
+    ctx.clearRect(0, 0, 1024, 256);
+    ctx.fillStyle = "#090909";
+    ctx.fillRect(0, 0, 1024, 256);
+    ctx.strokeStyle = "#383838";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(2, 2, 1020, 252);
+    ctx.fillStyle = "#ff8a24";
+    ctx.fillRect(3, 3, 7, 250);
+    ctx.beginPath();
+    ctx.arc(39, 51, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#f5f5f5";
+    ctx.font = "600 34px sans-serif";
+    ctx.fillText(String(this.object.userData.title || "Robot"), 62, 62, 900);
+    ctx.fillStyle = "#a3a3a3";
+    ctx.font = "28px sans-serif";
+    ctx.fillText(text.replace(/\s+/g, " "), 62, 112, 920);
+    (this.labelPlane.material as THREE.MeshBasicMaterial).map!.needsUpdate = true;
+  }
+
+  orientFeedback(cameraPosition: THREE.Vector3): void {
+    if (!this.object.visible) return;
+    this.object.updateWorldMatrix(true, false);
+    const labelPosition = this.labelGroup.getWorldPosition(new THREE.Vector3());
+    const towardCamera = cameraPosition.clone().sub(labelPosition);
+    if (towardCamera.lengthSq() < 1e-8) return;
+    towardCamera.normalize();
+    const yaw = Math.atan2(towardCamera.x, towardCamera.z);
+    const pitch = -Math.atan2(towardCamera.y, Math.hypot(towardCamera.x, towardCamera.z));
+    const worldRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, 0, "YXZ"));
+    this.labelGroup.quaternion.copy(this.object.quaternion).invert().multiply(worldRotation);
   }
 
   floorWorldY(): number | null {
@@ -64,104 +141,86 @@ export class WebXRRobotPresenter {
   }
 
   floorPose(): { position: Vec3; orientation: Quat } | null {
-    if (!this.object.visible) {
-      return null;
-    }
+    if (!this.object.visible) return null;
     return {
-      position: [
-        this.object.position.x + this.floorOffset[0],
-        this.object.position.y + this.floorOffset[1],
-        this.object.position.z + this.floorOffset[2],
-      ],
-      orientation: [
-        this.object.quaternion.x,
-        this.object.quaternion.y,
-        this.object.quaternion.z,
-        this.object.quaternion.w,
-      ],
+      position: [this.object.position.x + this.floorOffset[0], this.object.position.y + this.floorOffset[1], this.object.position.z + this.floorOffset[2]],
+      orientation: planarHeading(this.object.quaternion),
     };
   }
 
   worldPosition(): Vec3 | null {
-    if (!this.object.visible) {
-      return null;
-    }
-    return [this.object.position.x, this.object.position.y, this.object.position.z];
+    return this.object.visible ? [this.object.position.x, this.object.position.y, this.object.position.z] : null;
   }
 
   reset(): void {
     this.object.visible = false;
     this.unlocalizedCommitted = false;
+    this.lastOrigin = null;
     this.object.userData.title = "";
     this.object.userData.activity = "";
   }
 
   dispose(): void {
     this.object.removeFromParent();
-    this.mesh.geometry.dispose();
-    (this.mesh.material as THREE.Material).dispose();
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    this.object.traverse(child => {
+      if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments) geometries.add(child.geometry);
+      const material = (child as THREE.Mesh).material;
+      if (Array.isArray(material)) material.forEach(item => materials.add(item));
+      else if (material instanceof THREE.Material) materials.add(material);
+    });
+    geometries.forEach(geometry => geometry.dispose());
+    materials.forEach(material => material.dispose());
   }
 
   private applyLocalized(input: Extract<RobotMarkerApplyInput, { mode: "localizedOdom" }>): void {
     const tracking = odomToClientTrackingPose(input.pose, input.origin);
     const webxr = clientTrackingToWebxrPose(tracking);
-    this.object.position.set(webxr.position[0], webxr.position[1], webxr.position[2]);
-    this.object.quaternion.set(
-      webxr.orientation[0],
-      webxr.orientation[1],
-      webxr.orientation[2],
-      webxr.orientation[3],
-    );
-    this.applyBounds(input.robot.body_bounds_m);
-    const trackingDown = rotateVecByQuat(tracking.orientation, [0, 0, -input.robot.base_height_m]);
-    const floorTracking: Vec3 = [
-      tracking.position[0] + trackingDown[0],
-      tracking.position[1] + trackingDown[1],
-      tracking.position[2] + trackingDown[2],
-    ];
-    const floorWebxr = clientTrackingToWebxrPoint(floorTracking);
-    this.floorOffset = [
-      floorWebxr[0] - webxr.position[0],
-      floorWebxr[1] - webxr.position[1],
-      floorWebxr[2] - webxr.position[2],
-    ];
+    this.targetPosition.fromArray(webxr.position);
+    this.targetRotation.fromArray(webxr.orientation);
+    if (!this.object.visible || this.lastOrigin !== input.origin) {
+      this.object.position.copy(this.targetPosition);
+      this.object.quaternion.copy(this.targetRotation);
+    }
+    this.lastOrigin = input.origin;
+    this.robotHeightM = input.robot.body_bounds_m[2];
+    this.baseHeightM = input.robot.base_height_m;
+    this.updateFloorOffset();
+    this.updateLabelPosition();
     this.object.userData.title = robotTitleText(input.view);
     this.object.userData.activity = getRobotActivityState(input.view);
     this.object.visible = true;
   }
 
-  private applyUnlocalized(
-    input: Extract<RobotMarkerApplyInput, { mode: "unlocalizedFallbackPosition" }>,
-    fallbackPosition: Vec3 | null,
-  ): void {
+  private applyUnlocalized(input: Extract<RobotMarkerApplyInput, { mode: "unlocalizedFallbackPosition" }>, fallbackPosition: Vec3 | null): void {
+    this.lastOrigin = null;
     if (!this.unlocalizedCommitted) {
-      if (!fallbackPosition) {
-        this.object.visible = false;
-        return;
-      }
+      if (!fallbackPosition) { this.object.visible = false; return; }
       this.object.position.set(fallbackPosition[0], fallbackPosition[1], fallbackPosition[2]);
       this.object.quaternion.set(0, 0, 0, 1);
       this.unlocalizedCommitted = true;
     }
     if (input.robot) {
-      this.applyBounds(input.robot.body_bounds_m);
+      this.robotHeightM = input.robot.body_bounds_m[2];
       this.floorOffset = clientTrackingToWebxrPoint([0, 0, -input.robot.base_height_m]);
     } else {
       this.floorOffset = [0, -this.robotHeightM * 0.5, 0];
     }
+    this.updateLabelPosition();
     this.object.userData.title = robotTitleText(input.view);
     this.object.userData.activity = getRobotActivityState(input.view);
     this.object.visible = true;
   }
 
-  private applyBounds(bounds: Vec3): void {
-    const key = bounds.join(",");
-    if (key === this.lastKey) {
-      return;
-    }
-    this.mesh.scale.set(bounds[1], bounds[2], bounds[0]);
-    this.robotHeightM = bounds[2];
-    this.lastKey = key;
+  private updateFloorOffset(): void {
+    const offset = new THREE.Vector3(0, -this.baseHeightM, 0).applyQuaternion(this.object.quaternion);
+    this.floorOffset = offset.toArray() as Vec3;
+  }
+
+  private updateLabelPosition(): void {
+    const inverse = this.object.quaternion.clone().invert();
+    this.labelGroup.position.fromArray(this.floorOffset).add(new THREE.Vector3(0, 0.78, 0)).applyQuaternion(inverse);
   }
 }
 
@@ -172,9 +231,12 @@ export class WebXRLidarRenderer {
 
   constructor() {
     this.geometry = new THREE.BufferGeometry();
-    this.material = new THREE.PointsMaterial({ size: 0.02, vertexColors: true });
+    this.material = new THREE.PointsMaterial({ size: 0.02, vertexColors: true, depthWrite: false });
     this.object = new THREE.Points(this.geometry, this.material);
     this.object.name = "WebXRLidarRenderer";
+    this.object.renderOrder = -100;
+    // XR Blocks traverses hidden objects too. Empty clouds must never enter Points.raycast.
+    this.object.raycast = () => {};
     this.object.visible = false;
   }
 
@@ -202,9 +264,9 @@ export class WebXRLidarRenderer {
       positions[i * 3 + 1] = webxr[1];
       positions[i * 3 + 2] = webxr[2];
       const t = (webxr[1] - minY) / span;
-      colors[i * 3] = 0.2 + 0.2 * t;
-      colors[i * 3 + 1] = 1 - 0.4 * t;
-      colors[i * 3 + 2] = 0.4 + 0.4 * t;
+      colors[i * 3] = 0.5 + 0.284 * t;
+      colors[i * 3 + 1] = 0.5 + 0.5 * t;
+      colors[i * 3 + 2] = 0.5 - 0.237 * t;
     }
     this.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     this.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
@@ -224,15 +286,16 @@ export class WebXRLidarRenderer {
 }
 
 export class WebXRRouteRenderer {
-  readonly object: THREE.Line;
-  private readonly geometry: THREE.BufferGeometry;
-  private readonly material: THREE.LineBasicMaterial;
+  readonly object: Line2;
+  private geometry: LineGeometry;
+  private readonly material: LineMaterial;
 
   constructor() {
-    this.geometry = new THREE.BufferGeometry();
-    this.material = new THREE.LineBasicMaterial({ color: 0xffcc33 });
-    this.object = new THREE.Line(this.geometry, this.material);
+    this.geometry = new LineGeometry();
+    this.material = new LineMaterial({ color: 0xffffff, linewidth: 0.015, worldUnits: true, toneMapped: false });
+    this.object = new Line2(this.geometry, this.material);
     this.object.name = "WebXRRouteRenderer";
+    this.object.raycast = () => {};
     this.object.visible = false;
   }
 
@@ -252,13 +315,24 @@ export class WebXRRouteRenderer {
       return clientTrackingToWebxrPoint([tracking[0], tracking[1], tracking[2]]);
     });
     const processed = rangePathY(filletPathCorners(converted), floorY, goalY);
-    const positions = new Float32Array(processed.length * 3);
-    for (let i = 0; i < processed.length; i++) {
-      positions[i * 3] = processed[i][0];
-      positions[i * 3 + 1] = processed[i][1];
-      positions[i * 3 + 2] = processed[i][2];
+    const count = processed.length - 1;
+    if (this.geometry.getAttribute("instanceStart")?.count !== count) {
+      // WebGL caches the first instance count. A changed segment count needs
+      // fresh geometry so a growing route is not capped at its first batch.
+      this.geometry.dispose();
+      this.geometry = new LineGeometry().setPositions(processed.flat());
+      this.object.geometry = this.geometry;
+    } else {
+      const start = this.geometry.getAttribute("instanceStart") as THREE.InterleavedBufferAttribute;
+      const end = this.geometry.getAttribute("instanceEnd") as THREE.InterleavedBufferAttribute;
+      processed.slice(0, -1).forEach((point, index) => {
+        start.setXYZ(index, ...point);
+        end.setXYZ(index, ...processed[index + 1]);
+      });
+      start.data.needsUpdate = true;
+      this.geometry.computeBoundingBox();
+      this.geometry.computeBoundingSphere();
     }
-    this.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     this.object.visible = true;
   }
 
@@ -271,4 +345,10 @@ export class WebXRRouteRenderer {
     this.geometry.dispose();
     this.material.dispose();
   }
+}
+
+function planarHeading(q: THREE.Quaternion): Quat {
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+  const yaw = Math.atan2(-forward.x, -forward.z);
+  return [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
 }

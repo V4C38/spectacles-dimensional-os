@@ -4,6 +4,7 @@ vi.hoisted(() => {
   vi.stubGlobal("requireAsset", () => ({ mainPass: {} }));
 });
 
+import { flushAnimations } from "SpectaclesInteractionKit.lspkg/Utils/animate";
 import { NavGoalMarker } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavGoalMarker";
 
 function node(name: string, components: Record<string, unknown> = {}, children: SceneObject[] = []): SceneObject {
@@ -60,5 +61,35 @@ describe("NavigationTargetMarker initialization", () => {
     expect(button.onTriggerUp.add).toHaveBeenCalledTimes(1);
     button.onTriggerUp.add.mock.calls[0][0]();
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("finishes a cancel flash by invoking the restore callback", () => {
+    const button = { onTriggerUp: { add: vi.fn() }, enabled: true };
+    const cancel = node("button_cancel", { RoundButton: button }, [
+      node("ButtonVFX_Active"), node("ButtonVFX_Inactive"), node("Text_Title", { "Component.Text": { text: "" } }),
+    ]);
+    const visual = () => ({ mainMaterial: { mainPass: {} } });
+    const root = node("NavigationTargetMarker", {}, [
+      node("DragInteractable", { Interactable: {
+        onTriggerStart: { add: vi.fn() },
+        onTriggerEnd: { add: vi.fn() },
+        onTriggerCanceled: { add: vi.fn() },
+      } }, [node("HintAnchor")]),
+      cancel,
+      node("NavigationHeadingRoot"),
+      node("State_Text", { "Component.Text": { text: "" } }),
+      node("Visual", { "Component.RenderMeshVisual": visual() }),
+      node("MoveDirectionArrow", { "Component.RenderMeshVisual": visual() }),
+      node("Dots", { "Component.RenderMeshVisual": visual() }),
+    ]);
+    const marker = Object.assign(new NavGoalMarker(), { getSceneObject: () => root });
+    marker.ensureReady();
+    const onDone = vi.fn();
+    marker.showFlash("cancelled", onDone);
+    expect(button.enabled).toBe(false);
+    expect(cancel.enabled).toBe(true);
+    expect(onDone).not.toHaveBeenCalled();
+    flushAnimations();
+    expect(onDone).toHaveBeenCalledTimes(1);
   });
 });

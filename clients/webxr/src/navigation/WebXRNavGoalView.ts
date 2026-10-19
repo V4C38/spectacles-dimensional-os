@@ -1,41 +1,53 @@
 import * as THREE from "three";
 import type { Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
-import { RAY_LENGTH_M } from "./WebXRGroundPlacement";
+import { registerRayTarget } from "../input/XRBlocksRayInteraction";
 
 export type NavFlash = "cancelled" | "failed";
 
 const IDLE_COLOR = 0xffffff;
-const ACTIVE_COLOR = 0xffcc33;
-const FLASH_COLORS: Record<NavFlash, number> = {
-  cancelled: 0xffd900,
-  failed: 0xff0000,
-};
+const ACTIVE_COLOR = 0xffffff;
+const FLASH_COLORS: Record<NavFlash, number> = { cancelled: ACTIVE_COLOR, failed: ACTIVE_COLOR };
 
 export class WebXRNavGoalView {
   readonly object: THREE.Group;
   readonly cancelObject: THREE.Mesh;
   private readonly disc: THREE.Mesh;
   private readonly arrow: THREE.Mesh;
-  private readonly discMaterial: THREE.MeshStandardMaterial;
-  private readonly arrowMaterial: THREE.MeshStandardMaterial;
+  private readonly ring: THREE.Mesh;
+  private readonly discMaterial: THREE.MeshBasicMaterial;
+  private readonly arrowMaterial: THREE.MeshBasicMaterial;
+  private readonly ringMaterial: THREE.MeshBasicMaterial;
   private readonly cancelMaterial: THREE.MeshStandardMaterial;
 
   constructor() {
     this.object = new THREE.Group();
     this.object.name = "WebXRNavGoalView";
-    this.discMaterial = new THREE.MeshStandardMaterial({ color: IDLE_COLOR });
-    this.disc = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.02, 32), this.discMaterial);
-    this.arrowMaterial = new THREE.MeshStandardMaterial({ color: IDLE_COLOR });
-    this.arrow = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.22, 12), this.arrowMaterial);
-    this.arrow.rotation.x = Math.PI / 2;
-    this.arrow.position.set(0, 0.04, -0.22);
-    this.cancelMaterial = new THREE.MeshStandardMaterial({ color: 0xff3333 });
-    this.cancelObject = new THREE.Mesh(new THREE.SphereGeometry(0.045, 16, 16), this.cancelMaterial);
+    this.discMaterial = new THREE.MeshBasicMaterial({ visible: false });
+    this.disc = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.018, 48), this.discMaterial);
+    this.disc.name = "Navigation hit surface";
+    this.arrowMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, toneMapped: false });
+    const arrow = new THREE.Shape();
+    arrow.moveTo(0, 0.1); arrow.lineTo(-0.065, 0.02); arrow.lineTo(-0.023, 0.02);
+    arrow.lineTo(-0.023, -0.085); arrow.lineTo(0.023, -0.085);
+    arrow.lineTo(0.023, 0.02); arrow.lineTo(0.065, 0.02); arrow.closePath();
+    this.arrow = new THREE.Mesh(new THREE.ShapeGeometry(arrow), this.arrowMaterial);
+    this.arrow.name = "NavigationHeading";
+    this.arrow.rotation.x = -Math.PI / 2;
+    this.arrow.position.set(0, 0.023, 0);
+    this.ringMaterial = new THREE.MeshBasicMaterial({ color: IDLE_COLOR, side: THREE.DoubleSide, toneMapped: false });
+    this.ring = new THREE.Mesh(new THREE.RingGeometry(0.15, 0.166, 96), this.ringMaterial);
+    this.ring.name = "NavigationCircle";
+    this.ring.rotation.x = -Math.PI / 2;
+    this.ring.position.y = 0.015;
+    this.cancelMaterial = new THREE.MeshStandardMaterial({ color: ACTIVE_COLOR, emissive: ACTIVE_COLOR, emissiveIntensity: 0.12 });
+    this.cancelObject = new THREE.Mesh(new THREE.OctahedronGeometry(0.04, 0), this.cancelMaterial);
     this.cancelObject.name = "WebXRNavGoalCancel";
     this.cancelObject.position.set(0, 0.22, 0);
     this.cancelObject.visible = false;
     this.object.add(this.disc, this.arrow, this.cancelObject);
+    this.object.add(this.ring);
     this.object.visible = false;
+    for (const mesh of [this.disc, this.arrow, this.ring, this.cancelObject]) registerRayTarget(mesh);
   }
 
   setPose(position: Vec3, orientation: Quat): void {
@@ -66,8 +78,8 @@ export class WebXRNavGoalView {
 
   setGoalActive(active: boolean): void {
     const color = active ? ACTIVE_COLOR : IDLE_COLOR;
-    this.discMaterial.color.setHex(color);
     this.arrowMaterial.color.setHex(color);
+    this.ringMaterial.color.setHex(color);
   }
 
   setCancelVisible(visible: boolean): void {
@@ -80,39 +92,18 @@ export class WebXRNavGoalView {
       return;
     }
     const color = FLASH_COLORS[flash];
-    this.discMaterial.color.setHex(color);
-    this.arrowMaterial.color.setHex(color);
-  }
-
-  hitCancel(rayFrom: Vec3, rayDir: Vec3): boolean {
-    if (!this.cancelObject.visible) {
-      return false;
-    }
-    return rayHitsObject(rayFrom, rayDir, this.cancelObject);
+    this.cancelMaterial.color.setHex(color);
   }
 
   dispose(): void {
     this.object.removeFromParent();
     this.disc.geometry.dispose();
     this.arrow.geometry.dispose();
+    this.ring.geometry.dispose();
     this.cancelObject.geometry.dispose();
     this.discMaterial.dispose();
     this.arrowMaterial.dispose();
+    this.ringMaterial.dispose();
     this.cancelMaterial.dispose();
   }
-}
-
-export function rayHitsObject(rayFrom: Vec3, rayDir: Vec3, object: THREE.Object3D): boolean {
-  const direction = new THREE.Vector3(rayDir[0], rayDir[1], rayDir[2]);
-  if (direction.lengthSq() <= 1e-8) {
-    return false;
-  }
-  direction.normalize();
-  const raycaster = new THREE.Raycaster(
-    new THREE.Vector3(rayFrom[0], rayFrom[1], rayFrom[2]),
-    direction,
-    0,
-    RAY_LENGTH_M,
-  );
-  return raycaster.intersectObject(object, true).length > 0;
 }

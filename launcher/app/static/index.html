@@ -27,34 +27,28 @@
           <details class="card ip-card" id="ipCard">
             <summary class="ip-summary">
               <span class="ip-summary-collapsed">
-                <span class="label">Host IP</span>
+                <span class="label" id="hostIpSummaryLabel">Host IP</span>
                 <span class="value mono" id="hostIpSummary">—</span>
-                <span class="label">PIN</span>
+                <span class="label" id="connectionSummaryLabel">PIN</span>
                 <span class="value mono" id="pinSummary">—</span>
               </span>
               <span class="ip-summary-expanded label">Connection</span>
             </summary>
             <div class="ip-body">
-              <div class="status-row">
+              <div class="status-row" id="hostIpRow">
                 <span class="label">Host IP</span>
                 <span class="value mono" id="hostIp">—</span>
               </div>
-              <div class="status-row">
+              <div class="status-row" id="pinRow">
                 <span class="label">PIN</span>
                 <span class="value mono" id="pin">—</span>
               </div>
-              <div class="status-row webxr-row hidden" id="webxrLocalRow">
-                <span class="label">Local</span>
-                <span class="value mono" id="webxrLocal">—</span>
-              </div>
               <div class="status-row webxr-row hidden" id="webxrNetworkRow">
-                <span class="label">Network</span>
+                <span class="label">URL</span>
                 <span class="value mono" id="webxrNetwork">—</span>
               </div>
               <p class="hint webxr-row hidden" id="webxrHint">
-                Quest: open the Network URL exactly, including <code>https://</code>.
-                <code>192.168.x.x:5173</code> without https will not load. Accept the
-                certificate warning.
+                Open this URL in Quest Browser and accept the HTTPS certificate warning.
               </p>
               <div class="status-row robot-ip-row">
                 <span class="label">Robot IP</span>

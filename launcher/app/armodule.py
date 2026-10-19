@@ -152,7 +152,7 @@ class ProcessManager:
             "dimos_ref": self.status.dimos_ref,
             "websocket_url": self.status.websocket_url,
             "host_ip": self.status.host_ip,
-            "pin": self.status.pin,
+            "pin": self.status.pin if self.status.client != "webxr" else None,
             "robot_ip": self.status.robot_ip,
             "warning": self.status.warning,
             "blueprint": self.status.blueprint,

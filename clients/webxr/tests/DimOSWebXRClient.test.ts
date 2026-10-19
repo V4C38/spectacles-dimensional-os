@@ -46,6 +46,8 @@ describe("DimOSWebXRClient", () => {
       camera,
     });
     client.start();
+    expect(client.session.view().connection).toBe("disconnected");
+    client.resumeTracking();
     socket.open();
     expect(client.session.view().connection).toBe("awaiting_hello");
     expect(() => client.ui.completeSetup()).toThrow("setup requires localization_result");

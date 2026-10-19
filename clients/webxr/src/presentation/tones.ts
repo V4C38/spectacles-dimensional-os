@@ -1,9 +1,9 @@
 import type { StatusTone } from "@dimos-ar-client/websocket/sessionLinkStatus";
 
 export const TONE_HEX: Record<StatusTone, number> = {
-  error: 0xff0000,
-  warn: 0xffd900,
-  success: 0x00ff00,
+  error: 0xff8a24,
+  warn: 0xff8a24,
+  success: 0xff8a24,
   neutral: 0xffffff,
   muted: 0x8c8c8c,
 };

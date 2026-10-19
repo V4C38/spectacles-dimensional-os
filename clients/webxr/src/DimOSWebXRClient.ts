@@ -1,3 +1,6 @@
+import { reportDiagnostic } from "./diagnostics/BrowserDiagnostics";
+import { BrowserAgentSpeech } from "./agent/BrowserAgentSpeech";
+import type { RecognitionPort, SynthesisPort } from "./agent/BrowserAgentSpeech";
 import type { ClientClock } from "@dimos-ar-client/websocket/hostPorts";
 import {
   ClientTrackingOriginStore,
@@ -36,9 +39,12 @@ export interface DimOSWebXRClientDeps {
   transport: BrowserWebSocketTransport;
   clock: ClientClock;
   camera: HmdCameraSource;
+  recognition?: RecognitionPort | null;
+  synthesis?: SynthesisPort | null;
 }
 
 export class DimOSWebXRClient {
+  readonly speech: BrowserAgentSpeech;
   readonly session: ARModuleSession;
   readonly episode: LocalizationCaptureEpisode;
   readonly originStore: ClientTrackingOriginStore;
@@ -58,6 +64,7 @@ export class DimOSWebXRClient {
   private lastView: ReturnType<ARModuleSession["view"]> | null = null;
   private lastClientPoseSentAt = Number.NEGATIVE_INFINITY;
   private lastMarkerOrigin: ClientTrackingOrigin | null = null;
+  private lastTickAt: number | null = null;
   private lastCamera: { position: Vec3; orientation: Quat } | null = null;
   private disposed = false;
 
@@ -83,8 +90,13 @@ export class DimOSWebXRClient {
       clock: deps.clock,
       tracking: deps.camera,
       capture: deps.camera,
+      initiallyPaused: true,
     });
-    this.ui = new WebXRUIPresenter(this.session, this.episode);
+    this.ui = new WebXRUIPresenter(this.session, this.episode, () => this.camera.availabilityError());
+    this.speech = new BrowserAgentSpeech({
+      recognition: deps.recognition ?? null, synthesis: deps.synthesis ?? null,
+      send: text => this.ui.sendAgentText(text), estop: () => this.ui.estop(),
+    });
     this.robot = new WebXRRobotPresenter();
     this.lidar = new WebXRLidarRenderer();
     this.route = new WebXRRouteRenderer();
@@ -94,17 +106,26 @@ export class DimOSWebXRClient {
   }
 
   start(): void {
+    if (this.unsubscribeView || this.disposed) return;
     this.unsubscribeView = this.session.subscribeView((view) => {
       const prev = this.lastView;
       this.lastView = view;
+      if (view.connection !== prev?.connection || view.lastError !== prev?.lastError) {
+        reportDiagnostic("connection", { phase: view.connection, error: view.lastError });
+      }
       this.ui.onSessionView(view, prev, this.clock.now());
-      if (view.connection === "disconnected") {
+      if (view.connection !== "ready") {
+        this.loseInput();
+        this.speech.stop();
         this.markers.clearAll();
         this.lastMarkerOrigin = null;
       }
       this.applyView();
     });
     this.unsubscribeOutbound = this.session.subscribeOutbound((message) => {
+      if (message.type === "localization_result") {
+        reportDiagnostic("localization-result", { confidence: message.confidence, origin: this.originStore.hasTrackingOrigin });
+      }
       if (message.type !== "agent_skill") {
         return;
       }
@@ -124,7 +145,6 @@ export class DimOSWebXRClient {
         console.error(error);
       }
     });
-    this.session.start();
   }
 
   tick(cameraPose: { position: Vec3; orientation: Quat }, joystick: JoystickAxes | null): void {
@@ -137,13 +157,23 @@ export class DimOSWebXRClient {
     this.episode.tick();
     const now = this.clock.now();
     this.ui.tick(now);
+    const view = this.session.view();
+    this.speech.tick(now, this.ui.setupCompleted && this.ui.operatingMode === "agent" &&
+      view.connection === "ready" && view.capabilities?.agent.available === true,
+      view.agentMessage, view.state?.agent.idle ?? true);
     this.navigation.tick(now);
-    this.joystick.tick(now, joystick);
+    this.joystick.tick(now, this.controlsEnabled() ? joystick : null);
+    if (!this.controlsEnabled()) this.navigation.cancelDrag();
+    const deltaS = this.lastTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastTickAt));
+    this.lastTickAt = now;
+    this.applyView(deltaS);
+    const feedback = this.speech.snapshot();
+    this.robot.feedback([this.ui.snapshot().connectionText, feedback.status === "Off" ? this.ui.snapshot().activity : feedback.status, feedback.prompt, feedback.response || view.agentMessage].filter(Boolean).join(" · "));
     this.maybeSendClientPose();
   }
 
   holdNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[]): void {
-    if (!this.ui.setupCompleted) {
+    if (!this.controlsEnabled() || !this.originStore.hasTrackingOrigin) {
       return;
     }
     const origin = this.originStore.T_odom_client;
@@ -162,7 +192,7 @@ export class DimOSWebXRClient {
   }
 
   releaseNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[]): void {
-    if (!this.ui.setupCompleted) {
+    if (!this.controlsEnabled() || !this.originStore.hasTrackingOrigin) {
       return;
     }
     const hit = intersectRayPlanes(rayFrom, rayDir, planes);
@@ -180,7 +210,49 @@ export class DimOSWebXRClient {
     this.navigation.cancel(this.clock.now());
   }
 
+  controlsEnabled(): boolean {
+    return this.ui.setupCompleted && this.ui.operatingMode === "manual" &&
+      !this.ui.menuOpen && this.session.view().connection === "ready";
+  }
+
+  loseInput(): void {
+    this.navigation.cancelDrag();
+    this.joystick.loseInput();
+  }
+
+  suspend(): void {
+    this.lastTickAt = null;
+    this.speech.stop();
+    this.loseInput();
+    // Stop camera hardware without cancelling a server result already in flight.
+    // The episode keeps its request/retry state; tracking resumes in the same reference space.
+    this.camera.clearTracking();
+  }
+
+  resumeTracking(): void {
+    if (this.session.view().connection === "disconnected") this.session.start();
+  }
+
+  invalidateTracking(): void {
+    const step = this.ui.setupCompleted ? "localization" : this.ui.wizardStep;
+    this.suspend();
+    // Retire the socket so a result from the old reference space cannot restore alignment.
+    this.session.stop();
+    this.lastCamera = null;
+    this.originStore.clear();
+    this.episode.reset();
+    this.navigation.reset();
+    this.markers.object.visible = false;
+    this.lidar.hide();
+    this.route.hide();
+    this.robot.reset();
+    this.ui.restartSetup();
+    this.ui.wizardStep = step;
+  }
+
   restartSetup(): void {
+    this.speech.stop();
+    this.loseInput();
     this.ui.restartSetup();
     this.originStore.clear();
     this.episode.reset();
@@ -209,6 +281,7 @@ export class DimOSWebXRClient {
       return;
     }
     this.disposed = true;
+    this.speech.stop();
     this.unsubscribeView?.();
     this.unsubscribeView = null;
     this.unsubscribeOutbound?.();
@@ -225,11 +298,12 @@ export class DimOSWebXRClient {
     this.transport.close();
   }
 
-  private applyView(): void {
+  private applyView(deltaS = 0): void {
     const view = this.session.view();
     const origin = this.originStore.T_odom_client;
     const now = this.clock.now();
     this.robot.apply(view, origin, this.ui.setupCompleted, this.unlocalizedFallback());
+    this.robot.tick(deltaS);
     if (!this.ui.setupCompleted || !view.hasTrackingOrigin || !origin) {
       this.lidar.hide();
       this.route.hide();
@@ -247,6 +321,7 @@ export class DimOSWebXRClient {
       goalY,
     );
     if (origin !== this.lastMarkerOrigin) {
+      this.markers.object.visible = true;
       this.lastMarkerOrigin = origin;
       this.markers.recompose(origin);
     }

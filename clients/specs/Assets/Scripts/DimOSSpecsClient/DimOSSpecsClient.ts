@@ -8,7 +8,7 @@ import { AR_MODULE_CLIENT_CONFIG } from "../DimOSARClient/websocket/hostPorts";
 import { buildModuleWebSocketUrl, normalizeHost } from "../DimOSARClient/websocket/hostNormalization";
 import { SpecsCameraSource } from "./localization/SpecsCameraSource";
 import { SpecsCameraStream } from "./localization/SpecsCameraStream";
-import { NavigationController } from "./navigation/NavigationController";
+import { isDisconnectedWithoutRobot, NavigationController } from "./navigation/NavigationController";
 import { NavGoalPresenter } from "./navigation/NavGoalPresenter";
 import { IpRelayClient } from "./IpRelayClient";
 import { UIPresenter } from "./presentation/UIPresenter";
@@ -305,7 +305,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       if (!view.hasTrackingOrigin || !origin) {
         this.lidarPresenter.hide();
         navGoalPresenter.hide();
-        navigationController.hide();
+        navigationController.applyView(view, origin);
         return;
       }
       this.lidarPresenter.apply({ points: view.lidar?.points ?? null, origin });
@@ -321,6 +321,16 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       this.maybeSendClientPose();
       const setupWasCompleted = this.uiPresenter.isSetupCompleted();
       this.uiPresenter.tick(getDeltaTime());
+      const view = session.view();
+      const origin = clientTrackingOriginStore.T_odom_client;
+      if (
+        this.uiPresenter.isSetupCompleted() &&
+        isDisconnectedWithoutRobot(view) &&
+        !navigationController.isArmed() &&
+        robotPresenter.floorPose()
+      ) {
+        roomPresentationDirty = true;
+      }
       if (roomPresentationDirty || setupWasCompleted !== this.uiPresenter.isSetupCompleted()) {
         roomPresentationDirty = false;
         applyRoomPresentation();

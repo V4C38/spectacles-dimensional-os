@@ -125,3 +125,12 @@ def test_detect_lan_ip_returns_string() -> None:
     ip = detect_lan_ip()
     assert isinstance(ip, str)
     assert ip
+
+
+def test_webxr_snapshot_hides_specs_pin(tmp_path: Path) -> None:
+    mgr = ProcessManager(root=tmp_path)
+    mgr.status.client = "webxr"
+    mgr.status.webxr_url = "https://192.168.1.9:5173"
+    mgr._parse_armodule_line("PIN: 123456")
+    assert mgr.snapshot()["pin"] is None
+    assert mgr.snapshot()["webxr_url"] == "https://192.168.1.9:5173"

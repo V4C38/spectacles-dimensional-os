@@ -2,8 +2,14 @@ import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interact
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
 import animate from "SpectaclesInteractionKit.lspkg/Utils/animate";
 
-const CIRCLE_WHITE_MATERIAL = requireAsset("../../../Materials/Circle_White.mat") as Material;
-const CIRCLE_YELLOW_MATERIAL = requireAsset("../../../Materials/Circle_Yellow.mat") as Material;
+const CIRCLE_INACTIVE_MATERIAL = requireAsset("../../../Materials/Circle_Inactive.mat") as Material;
+const CIRCLE_ACTIVE_MATERIAL = requireAsset("../../../Materials/Circle_Active.mat") as Material;
+
+type ArrowPass = Pass & {
+  Opacity_Override?: number;
+  AnimatedArrow?: boolean;
+  ArrowSpeed?: number;
+};
 
 const MARKER_VISIBILITY_DURATION_SECONDS = 0.18;
 const FLASH_CIRCLE_COLLAPSE_DURATION_SECONDS = MARKER_VISIBILITY_DURATION_SECONDS / 0.5;
@@ -136,23 +142,29 @@ export class NavGoalMarker extends BaseScriptComponent {
   setGoalActive(active: boolean): void {
     this.ensureReady();
     if (this.circleVisual) {
-      const next = active ? CIRCLE_YELLOW_MATERIAL : CIRCLE_WHITE_MATERIAL;
+      const next = active ? CIRCLE_ACTIVE_MATERIAL : CIRCLE_INACTIVE_MATERIAL;
       if (this.circleVisual.mainMaterial !== next) {
         this.circleVisual.mainMaterial = next;
       }
     }
-    const arrowPass = this.arrowMaterial?.mainPass as (Pass & {
-      Opacity_Override?: number;
-      ArrowSpeed?: number;
-    }) | undefined;
+    const arrowPass = this.arrowPass();
     if (arrowPass) {
       arrowPass.Opacity_Override = active ? 0.6 : 0.2;
-      arrowPass.ArrowSpeed = active ? 1.0 : 0;
     }
     const dotsPass = this.dotsMaterial?.mainPass as (Pass & { Opacity_Override?: number }) | undefined;
     if (dotsPass) {
       dotsPass.Opacity_Override = active ? 0.75 : 0.4;
     }
+  }
+
+  setArrowAnimating(animating: boolean): void {
+    this.ensureReady();
+    const arrowPass = this.arrowPass();
+    if (!arrowPass) {
+      return;
+    }
+    arrowPass.AnimatedArrow = animating;
+    arrowPass.ArrowSpeed = animating ? 1.0 : 0;
   }
 
   setCancelVisible(visible: boolean, estopAvailable: boolean = true): void {
@@ -259,7 +271,7 @@ export class NavGoalMarker extends BaseScriptComponent {
   }
 
   private bindLookObjects(): void {
-    if (!CIRCLE_WHITE_MATERIAL || !CIRCLE_YELLOW_MATERIAL) {
+    if (!CIRCLE_INACTIVE_MATERIAL || !CIRCLE_ACTIVE_MATERIAL) {
       throw new Error("Circle materials are required");
     }
     const visual = findChild(this.root!, "Visual");
@@ -325,11 +337,9 @@ export class NavGoalMarker extends BaseScriptComponent {
     if (this.flashVersion !== version) {
       return;
     }
-    this.restoreFlashScales();
-    this.clearFlash();
-    this.flashPlaying = false;
+    // clearFlash drops flashDone. Capture it first or cancel never restores the marker.
     const done = this.flashDone;
-    this.flashDone = null;
+    this.clearFlash();
     done?.();
   }
 
@@ -368,6 +378,10 @@ export class NavGoalMarker extends BaseScriptComponent {
     if (this.stateTextObject) {
       this.stateTextObject.enabled = visible;
     }
+  }
+
+  private arrowPass(): ArrowPass | null {
+    return (this.arrowMaterial?.mainPass as ArrowPass | undefined) ?? null;
   }
 
   private setRotation(rotation: quat): void {

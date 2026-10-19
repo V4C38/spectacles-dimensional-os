@@ -92,7 +92,7 @@
   Properties:
     AnimatedArrow:
       typeIdx: 2
-      value: true
+      value: false
     ArrowSpeed:
       typeIdx: 1
       value: 0.000000

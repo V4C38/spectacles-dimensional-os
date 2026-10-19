@@ -83,7 +83,7 @@
   Properties:
     Color:
       typeIdx: 5
-      value: {x: 0.999420, y: 0.985550, z: 0.000000, w: 1.000000}
+      value: {x: 1.000000, y: 1.000000, z: 1.000000, w: 1.000000}
     Opacity_Override:
       typeIdx: 1
       value: 0.700000

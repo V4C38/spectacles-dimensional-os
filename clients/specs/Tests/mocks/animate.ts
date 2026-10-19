@@ -1,8 +1,19 @@
-export default function animate(_options: {
+type AnimateOptions = {
   duration: number;
   easing?: string;
   update?: (t: number) => void;
   ended?: () => void;
-}): void {
-  // Test no-op: scale animation helpers are not exercised in unit tests.
+};
+
+const pending: AnimateOptions[] = [];
+
+export default function animate(options: AnimateOptions): void {
+  pending.push(options);
+}
+
+export function flushAnimations(): void {
+  const batch = pending.splice(0, pending.length);
+  for (const options of batch) {
+    options.ended?.();
+  }
 }

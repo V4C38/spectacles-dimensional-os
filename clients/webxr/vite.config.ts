@@ -14,8 +14,6 @@ const OPTIONAL_XR_BLOCKS = [
   "@sparkjsdev/spark",
   "openai",
   "rapier3d",
-  "three-mesh-bvh",
-  "troika-three-text",
 ];
 
 const OPTIONAL_STUB = "export default {}; export const UI = {};";
@@ -47,8 +45,20 @@ const arModuleProxy = {
   },
 };
 
+function browserDiagnostics(): Plugin {
+  return {
+    name: "dimos-browser-diagnostics",
+    configureServer(server) {
+      server.ws.on("dimos:webxr-diagnostic", (entry) => {
+        const line = JSON.stringify(entry);
+        if (line && line.length <= 6000) server.config.logger.info(`[WebXR browser] ${line}`);
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [stubOptionalModules(), basicSsl()],
+  plugins: [stubOptionalModules(), basicSsl(), browserDiagnostics()],
   resolve: {
     alias: {
       "@dimos-ar-client": clientCore,

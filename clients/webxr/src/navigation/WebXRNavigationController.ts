@@ -6,7 +6,7 @@ import {
 import { requestNavGoal } from "@dimos-ar-client/navigation/navGoalRequest";
 import type { ARModuleSession, ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
 import type { NavState, Quat, Vec3, YawPose } from "@dimos-ar-client/websocket/protocolTypes";
-import { clientTrackingToWebxrYawPose, webxrToClientTrackingPose } from "../coordinates/WebXRCoordinates";
+import { clientTrackingToWebxrYawPose, webxrHeadingToClientTrackingPose } from "../coordinates/WebXRCoordinates";
 import { WebXRNavGoalView, type NavFlash } from "./WebXRNavGoalView";
 import {
   RAY_LENGTH_M,
@@ -57,9 +57,6 @@ export function shouldSendStreamGoal(
   force: boolean,
 ): boolean {
   if (force) {
-    if (lastSent && distance(lastSent, position) < 0.02) {
-      return false;
-    }
     return true;
   }
   if (now - lastSendTime < GOAL_SEND_INTERVAL_S) {
@@ -72,7 +69,7 @@ export function shouldSendStreamGoal(
 }
 
 export function yawFromPlanarDirection(x: number, z: number): Quat {
-  const yaw = Math.atan2(-z, x);
+  const yaw = Math.atan2(-x, -z);
   const half = yaw * 0.5;
   return [0, Math.sin(half), 0, Math.cos(half)];
 }
@@ -120,6 +117,7 @@ export class WebXRNavigationController {
       this.stop();
       return;
     }
+    if (this.origin && this.origin !== origin) this.cancelDrag();
     this.origin = origin;
     if (!this.armed) {
       this.arm(robotFloor ?? this.marker.pose());
@@ -235,6 +233,12 @@ export class WebXRNavigationController {
     this.beginFlash("cancelled", now);
   }
 
+  cancelDrag(): void {
+    this.dragging = false;
+    this.touchStart = null;
+    this.headingGate = null;
+  }
+
   reset(): void {
     this.stop();
     this.origin = null;
@@ -283,7 +287,7 @@ export class WebXRNavigationController {
     if (!shouldSendStreamGoal(now, this.lastSendTime, position, this.lastSent, force)) {
       return false;
     }
-    const tracking = webxrToClientTrackingPose({
+    const tracking = webxrHeadingToClientTrackingPose({
       position,
       orientation: this.heading,
     });

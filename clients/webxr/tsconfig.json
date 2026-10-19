@@ -14,6 +14,7 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["vite/client", "vitest/globals"],
     "paths": {
+      "xrblocks": ["./node_modules/xrblocks/build/xrblocks.d.ts"],
       "@dimos-ar-client/*": ["../specs/Assets/Scripts/DimOSARClient/*"]
     }
   },

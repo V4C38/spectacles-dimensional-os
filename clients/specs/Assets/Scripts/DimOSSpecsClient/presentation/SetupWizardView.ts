@@ -8,6 +8,7 @@ import {
   findChildRecursive,
   findText,
   type IconButtonResult,
+  FONT_BUTTON,
   FONT_WIZARD_INPUT,
   setButtonEnabled,
   setButtonStyle,
@@ -89,11 +90,7 @@ export class SetupWizardView {
     const inputParent = findChildRecursive(_panel, "IpInputFieldAnchor") ?? _panel;
     const rowGap = SPACE_XS;
     const inputHeight = SLOT_INPUT;
-    const toggleWidth = 8;
     const rowWidth = UIFrameMetrics.fromSceneObject(_panel).innerWidth - SPACE_XS * 2;
-    const inputWidth = rowWidth - toggleWidth - rowGap;
-    const inputX = -(toggleWidth + rowGap) / 2;
-    const toggleX = (inputWidth + rowGap) / 2;
     const existingInput = findChildRecursive(inputParent, "IpInputField");
     if (existingInput) {
       const field = existingInput.getComponent(TextInputField.getTypeName()) as TextInputField;
@@ -105,25 +102,23 @@ export class SetupWizardView {
       this._inputField = createTextInput(
         inputParent,
         "IpInputField",
-        inputWidth,
+        rowWidth,
         inputHeight,
-        new vec3(inputX, 0, Z_CONTENT),
+        new vec3(0, 0, Z_CONTENT),
         FONT_WIZARD_INPUT,
         HorizontalAlignment.Center,
       );
     }
     this._inputObj = this._inputField.getSceneObject();
-    this._inputField.size = new vec3(inputWidth, inputHeight, 0.5);
-    this._inputObj.getTransform().setLocalPosition(new vec3(inputX, 0, Z_CONTENT));
     this._connectionToggle = createIconButton(
       inputParent,
       "ConnectionMethod",
       "Mode: PIN",
-      toggleWidth,
       inputHeight,
-      new vec3(toggleX, 0, Z_CONTENT),
+      inputHeight,
+      new vec3(0, 0, Z_CONTENT),
     );
-    this.fitConnectionToggleLabel(toggleWidth, inputHeight);
+    this.layoutConnectionRow(rowWidth, rowGap, inputHeight);
     this._connectionToggle.sceneObject.enabled = false;
   }
 
@@ -179,20 +174,32 @@ export class SetupWizardView {
     this._connectionToggle.labelText.text = label;
   }
 
-  private fitConnectionToggleLabel(width: number, height: number): void {
+  private layoutConnectionRow(rowWidth: number, rowGap: number, height: number): void {
     const label = this._connectionToggle.labelText;
-    const innerWidth = width - 0.8;
+    const buttonLabel = this._next.labelText;
+    label.size = buttonLabel?.size || FONT_BUTTON;
     label.horizontalAlignment = HorizontalAlignment.Center;
     label.verticalAlignment = VerticalAlignment.Center;
     label.horizontalOverflow = HorizontalOverflow.Overflow;
-    label.verticalOverflow = VerticalOverflow.Truncate;
-    label.worldSpaceRect = Rect.create(-innerWidth / 2, innerWidth / 2, -height / 2, height / 2);
-    label.getSceneObject().getTransform().setLocalPosition(new vec3(0, 0, 0.5));
-    label.size = 20;
-    const measuredWidth = label.getBoundingBox().getSize().x;
-    if (measuredWidth > innerWidth) {
-      label.size *= innerWidth / measuredWidth;
+    label.verticalOverflow = VerticalOverflow.Overflow;
+    if (buttonLabel) {
+      const rect = buttonLabel.worldSpaceRect;
+      label.worldSpaceRect = Rect.create(rect.left, rect.right, rect.bottom, rect.top);
     }
+    const measuredWidth = label.getBoundingBox().getSize().x;
+    const horizontalPad = 1.6;
+    const minInputWidth = 12;
+    const maxToggleWidth = Math.max(height, rowWidth - rowGap - minInputWidth);
+    const naturalWidth = measuredWidth > 0 ? measuredWidth + horizontalPad : 12;
+    const toggleWidth = Math.min(maxToggleWidth, Math.max(naturalWidth, 8));
+    const inputWidth = rowWidth - toggleWidth - rowGap;
+    const inputX = -(toggleWidth + rowGap) / 2;
+    const toggleX = (inputWidth + rowGap) / 2;
+    this._connectionToggle.button.size = new vec3(toggleWidth, height, 0.5);
+    this._connectionToggle.sceneObject.getTransform().setLocalPosition(new vec3(toggleX, 0, Z_CONTENT));
+    label.getSceneObject().getTransform().setLocalPosition(new vec3(0, 0, 0.5));
+    this._inputField.size = new vec3(inputWidth, height, 0.5);
+    this._inputObj.getTransform().setLocalPosition(new vec3(inputX, 0, Z_CONTENT));
   }
 
   public initializeInput(text: string, placeholder: string): void {

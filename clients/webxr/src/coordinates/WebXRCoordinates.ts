@@ -34,11 +34,11 @@ export function clientTrackingToWebxrPoint(point: Vec3): Vec3 {
 }
 
 export function webxrToClientTrackingQuat(orientation: Quat): Quat {
-  return remapPoseQuat(normalizeQuat(orientation), WEBXR_BASIS.P);
+  return changeBasisQuat(normalizeQuat(orientation), WEBXR_BASIS.P);
 }
 
 export function clientTrackingToWebxrQuat(orientation: Quat): Quat {
-  return remapPoseQuat(normalizeQuat(orientation), transpose(WEBXR_BASIS.P));
+  return changeBasisQuat(normalizeQuat(orientation), transpose(WEBXR_BASIS.P));
 }
 
 export function webxrToClientTrackingPose(pose: PositionOrientation): PositionOrientation {
@@ -56,64 +56,47 @@ export function clientTrackingToWebxrPose(pose: PositionOrientation): PositionOr
 }
 
 export function webxrCameraToOpticalPose(pose: PositionOrientation): PositionOrientation {
-  return webxrToClientTrackingPose({
+  return webxrOpticalToClientTrackingPose({
     position: pose.position,
     orientation: quatMultiply(normalizeQuat(pose.orientation), OPTICAL_FROM_THREE),
   });
 }
 
+// Optical local axes are fixed (+X right, +Y down, +Z forward).
+// Only the world basis changes: P R, never P R P^-1.
+export function webxrOpticalToClientTrackingPose(pose: PositionOrientation): PositionOrientation {
+  return {
+    position: webxrToClientTrackingPoint(pose.position),
+    orientation: remapPoseQuat(normalizeQuat(pose.orientation), WEBXR_BASIS.P),
+  };
+}
+
 export function clientTrackingToWebxrYawPose(pose: YawPose): YawPose {
-  const converted = clientTrackingToWebxrPose(poseFromTrackingYaw(pose));
-  return [
-    converted.position[0],
-    converted.position[1],
-    converted.position[2],
-    webxrYaw(converted.orientation),
-  ];
+  const p = requireYawPose(pose);
+  const position = clientTrackingToWebxrPoint([p[0], p[1], p[2]]);
+  // Arrow local forward is -Z; positive protocol yaw turns toward WebXR -X.
+  return [...position, p[3]];
 }
 
 export function webxrToClientTrackingYawPose(pose: YawPose): YawPose {
-  const converted = webxrToClientTrackingPose(poseFromWebxrYaw(pose));
-  return [
-    converted.position[0],
-    converted.position[1],
-    converted.position[2],
-    trackingYaw(converted.orientation),
-  ];
+  const p = requireYawPose(pose);
+  return [...webxrToClientTrackingPoint([p[0], p[1], p[2]]), p[3]];
 }
 
-function poseFromTrackingYaw(pose: YawPose): PositionOrientation {
-  const yawPose = requireYawPose(pose);
+export function webxrHeadingToClientTrackingPose(pose: PositionOrientation): PositionOrientation {
+  const direction = webxrToClientTrackingPoint(rotateVecByQuat(pose.orientation, [0, 0, -1]));
+  const yaw = Math.atan2(direction[1], direction[0]);
   return {
-    position: [yawPose[0], yawPose[1], yawPose[2]],
-    orientation: [0, 0, Math.sin(yawPose[3] * 0.5), Math.cos(yawPose[3] * 0.5)],
+    position: webxrToClientTrackingPoint(pose.position),
+    orientation: [0, 0, Math.sin(yaw / 2), Math.cos(yaw / 2)],
   };
 }
 
-function poseFromWebxrYaw(pose: YawPose): PositionOrientation {
-  const yawPose = requireYawPose(pose);
-  return {
-    position: [yawPose[0], yawPose[1], yawPose[2]],
-    orientation: [0, Math.sin(yawPose[3] * 0.5), 0, Math.cos(yawPose[3] * 0.5)],
-  };
-}
-
-function trackingYaw(orientation: Quat): number {
-  const forward = rotateVecByQuat(normalizeQuat(orientation), [1, 0, 0]);
-  const length = Math.hypot(forward[0], forward[1]);
-  if (length < 1e-6) {
-    throw new Error("degenerate yaw geometry");
-  }
-  return Math.atan2(forward[1], forward[0]);
-}
-
-function webxrYaw(orientation: Quat): number {
-  const forward = rotateVecByQuat(normalizeQuat(orientation), [0, 0, -1]);
-  const length = Math.hypot(forward[0], forward[2]);
-  if (length < 1e-6) {
-    throw new Error("degenerate yaw geometry");
-  }
-  return Math.atan2(forward[0], -forward[2]);
+function changeBasisQuat(orientation: Quat, basis: Mat3): Quat {
+  const inverse = transpose(basis);
+  const columns = ([ [1, 0, 0], [0, 1, 0], [0, 0, 1] ] as Vec3[])
+    .map(axis => apply(basis, rotateVecByQuat(orientation, apply(inverse, axis))));
+  return quatFromBasis(columns[0], columns[1], columns[2]);
 }
 
 function remapPoseQuat(orientation: Quat, forward: Mat3): Quat {

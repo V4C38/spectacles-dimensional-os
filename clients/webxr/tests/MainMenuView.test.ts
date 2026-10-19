@@ -1,0 +1,164 @@
+// @vitest-environment jsdom
+import { expect, it, vi } from "vitest";
+vi.hoisted(() => {
+  class AudioContextStub {
+    destination = {};
+    createGain() { return { connect() {}, gain: { value: 1 } }; }
+  }
+  Object.defineProperty(window, "AudioContext", { value: AudioContextStub, configurable: true });
+});
+import * as xb from "xrblocks";
+import { MainMenuView } from "../src/presentation/MainMenuView";
+
+it("constructs real XR Blocks buttons and activates the supported trigger hook", () => {
+  const handlers = { onSetup: vi.fn(), onBack: vi.fn(), onRetry: vi.fn(), onRestart: vi.fn(), onMenu: vi.fn(), onMode: vi.fn(), onDebug: vi.fn(), onLidar: vi.fn(), onLocalize: vi.fn(), onEstop: vi.fn(), onAgentText: vi.fn(() => true) };
+  const view = new MainMenuView(handlers);
+  expect(view.panel.scale.x).toBeCloseTo(0.68 * 0.6);
+  const buttons: xb.TextButton[] = [];
+  view.panel.traverse(object => { if (object instanceof xb.TextButton) buttons.push(object); });
+  const next = buttons.find(button => button.text === "Next")!;
+  expect(next).toBeInstanceOf(xb.TextButton);
+  next.onTriggered(0);
+  expect(handlers.onSetup).toHaveBeenCalledOnce();
+  const initialPanelScale = view.panel.scale.x;
+  view.panel.position.set(0, 0, -1);
+  view.panel.updateWorldMatrix(true, true);
+  const edge = view.panel.localToWorld(new THREE.Vector3(0.65, 0, 0));
+  expect(view.beginManipulation([edge.x, 0, 0], [0, 0, -1])).toBe(true);
+  view.updateManipulation([edge.x + 0.1, 0, 0], [0, 0, -1]);
+  expect(view.panel.scale.x).toBeGreaterThan(initialPanelScale);
+  view.endManipulation();
+  view.panel.traverse(object => { object.visible = true; });
+  buttons.find(button => button.text === "EMERGENCY STOP")!.onTriggered(0);
+  expect(handlers.onEstop).toHaveBeenCalledOnce();
+  next.setText("Skip"); expect(next.text).toBe("Skip");
+  // Simulate opening the keyboard before activating its keys.
+  view.panel.traverse(object => { object.visible = true; });
+  buttons.find(button => button.text === "g")!.onTriggered(0);
+  buttons.find(button => button.text === "o")!.onTriggered(0);
+  buttons.find(button => button.text === "Send")!.onTriggered(0);
+  expect(handlers.onAgentText).toHaveBeenCalledWith("go");
+  view.panel.visible = false;
+  next.onTriggered(0);
+  expect(handlers.onSetup).toHaveBeenCalledOnce();
+});
+
+it("grips the panel body, rotates around the grab point with smoothing, and retains the released pose", () => {
+  const noop = () => {};
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onEstop: noop, onAgentText: () => true });
+  view.panel.position.set(0, 0, -1);
+  expect(view.beginManipulation([0, 0, 0], [0, 0, -1], new THREE.Quaternion(), true)).toBe(true);
+  const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 4);
+  const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(rotation).toArray() as [number, number, number];
+  view.updateManipulation([0.2, 0, 0], direction, rotation, 0.016);
+  const angle = view.panel.quaternion.angleTo(new THREE.Quaternion());
+  expect(angle).toBeGreaterThan(0);
+  expect(angle).toBeLessThan(Math.PI / 4);
+  for (let i = 0; i < 90; i++) view.updateManipulation([0.2, 0, 0], direction, rotation, 0.016);
+  expect(view.panel.quaternion.angleTo(rotation)).toBeLessThan(0.001);
+  expect(view.panel.position.x).toBeCloseTo(0.2 + direction[0], 3);
+  const released = view.panel.matrix.clone();
+  view.endManipulation(); view.updateManipulation([5, 0, 0], [0, 0, -1]);
+  expect(view.panel.matrix).toEqual(released);
+});
+
+import * as THREE from "three";
+import { WebXRApp } from "../src/WebXRApp";
+import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
+import { BrowserWebSocketTransport } from "../src/websocket/BrowserWebSocketTransport";
+import { registerRayTarget } from "../src/input/XRBlocksRayInteraction";
+import { cameraFixture } from "./fixtures/camera";
+
+it("consumes UI selection, cancels drags on input loss, invalidates resets, and supports XR reentry", () => {
+  const camera = cameraFixture();
+  const client = new DimOSWebXRClient({ camera: camera.source, clock: { now: () => 10 }, transport: new BrowserWebSocketTransport({ url: "wss://test/ar" }) });
+  const tick = vi.spyOn(client, "tick").mockImplementation(() => {});
+  vi.spyOn(client, "controlsEnabled").mockReturnValue(true);
+  const hold = vi.spyOn(client, "holdNavigation").mockImplementation(() => {});
+  const release = vi.spyOn(client, "releaseNavigation").mockImplementation(() => {});
+  const invalidated = vi.spyOn(client, "invalidateTracking");
+  const lost = vi.spyOn(client, "loseInput");
+  let reference = new EventTarget();
+  const setReferenceSpace = vi.fn((space: EventTarget) => { reference = space; });
+  const getRenderer = vi.spyOn(xb.core, "renderer", "get").mockReturnValue({ xr: { getReferenceSpace: () => reference, setReferenceSpace } } as unknown as THREE.WebGLRenderer);
+  const app = new WebXRApp(client);
+  const input = new xb.Input();
+  const scene = new THREE.Scene();
+  const controllers = [new THREE.Group(), new THREE.Group()];
+  input.init({ scene, systemsGroup: new THREE.Group(), options: new xb.Options(), renderer: {
+    xr: { getController: (i: number) => controllers[i] },
+  } as unknown as THREE.WebGLRenderer });
+  scene.add(app);
+  app.init({ input });
+  const session = Object.assign(new EventTarget(), { visibilityState: "visible", inputSources: [] });
+  app.onXRSessionStarted(session as unknown as XRSession);
+  const frame = { getViewerPose: () => ({ transform: { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } } }) } as unknown as XRFrame;
+  app.update(10, frame);
+  const panel = app.children.find(object => object instanceof xb.SpatialPanel)!;
+  panel.position.set(0, 0, -1);
+  panel.quaternion.identity();
+  const surface = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial());
+  panel.add(surface); panel.visible = true;
+  registerRayTarget(surface);
+  const controller = new THREE.Object3D();
+  scene.updateMatrixWorld(true);
+  input.updateController(controller);
+  app.onSelectStart({ target: controller }); app.onSelectEnd({ target: controller });
+  expect(hold).not.toHaveBeenCalled(); expect(release).not.toHaveBeenCalled();
+  app.onSqueezeStart({ target: controller });
+  expect((app as unknown as { panelGrip: boolean }).panelGrip).toBe(true);
+  app.onSelectEnd({ target: controller });
+  expect((app as unknown as { panelGrip: boolean }).panelGrip).toBe(true);
+  app.onSqueezeEnd({ target: controller });
+  expect((app as unknown as { panelGrip: boolean }).panelGrip).toBe(false);
+  panel.visible = false;
+  const worldSurface = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial());
+  worldSurface.position.z = -2;
+  registerRayTarget(worldSurface);
+  app.add(worldSurface);
+  scene.updateMatrixWorld(true);
+  input.updateController(controller);
+  app.onSelectStart({ target: controller }); expect(hold).toHaveBeenCalledOnce();
+  session.dispatchEvent(new Event("inputsourceschange"));
+  app.onSelectEnd({ target: controller }); expect(release).not.toHaveBeenCalled();
+  expect(lost).toHaveBeenCalled();
+  const aligned = client.originStore.setFromLocalizationResult({ type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 10 });
+  client.ui.setupCompleted = true;
+  const beforeFocus = invalidated.mock.calls.length;
+  session.visibilityState = "hidden"; session.dispatchEvent(new Event("visibilitychange"));
+  app.update(10.1, frame);
+  expect(client.originStore.T_odom_client).toBe(aligned);
+  session.visibilityState = "visible"; session.dispatchEvent(new Event("visibilitychange"));
+  app.update(10.2, frame);
+  expect(client.ui.setupCompleted).toBe(true);
+  expect(invalidated).toHaveBeenCalledTimes(beforeFocus);
+  const retained = reference;
+  reference = new EventTarget();
+  app.update(10.25, frame);
+  expect(setReferenceSpace).toHaveBeenLastCalledWith(retained);
+  expect(invalidated).toHaveBeenCalledTimes(beforeFocus);
+  const compensated = new EventTarget();
+  const inverse = { position: { x: -1, y: 0, z: 0 } };
+  const getOffset = vi.fn(() => compensated);
+  Object.assign(reference, { getOffsetReferenceSpace: getOffset });
+  reference.dispatchEvent(Object.assign(new Event("reset"), { transform: { inverse } }));
+  expect(getOffset).toHaveBeenCalledWith(inverse);
+  expect(setReferenceSpace).toHaveBeenCalledWith(compensated);
+  app.update(10.3, frame);
+  expect(client.originStore.T_odom_client).toBe(aligned);
+  expect(client.ui.setupCompleted).toBe(true);
+  expect(invalidated).toHaveBeenCalledTimes(beforeFocus);
+  const resets = invalidated.mock.calls.length;
+  reference.dispatchEvent(new Event("reset")); expect(invalidated).toHaveBeenCalledTimes(resets + 1);
+  app.onXRSessionEnded();
+  const afterEnd = invalidated.mock.calls.length;
+  reference.dispatchEvent(new Event("reset")); session.dispatchEvent(new Event("visibilitychange"));
+  expect(invalidated).toHaveBeenCalledTimes(afterEnd);
+  app.onXRSessionStarted(session as unknown as XRSession); app.update(11, frame);
+  expect(tick).toHaveBeenCalledTimes(5);
+  session.visibilityState = "hidden"; session.dispatchEvent(new Event("visibilitychange"));
+  app.update(12, frame); expect(tick).toHaveBeenCalledTimes(5);
+  app.dispose();
+  getRenderer.mockRestore();
+  surface.geometry.dispose(); (surface.material as THREE.Material).dispose();
+});

@@ -60,6 +60,7 @@ run_dimos_ar_job() {
   ruff check .
   mypy dimos/ar
   pytest
+  pytest "${WEBXR_CLIENT}/tools/test_calibrate.py"
 }
 
 run_launcher_job() {
@@ -99,6 +100,8 @@ run_client_webxr_job() {
   npm ci
   npm test
   npm run build
+  npx playwright install chromium
+  npm run test:browser
 }
 
 run_dimos_ar_job

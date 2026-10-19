@@ -75,3 +75,7 @@ clients/specs/tsconfig.json
 node_modules/
 clients/specs/Tests/coverage/
 .vitest/
+
+# WebXR browser regression artifacts
+clients/webxr/test-results/
+clients/webxr/playwright-report/

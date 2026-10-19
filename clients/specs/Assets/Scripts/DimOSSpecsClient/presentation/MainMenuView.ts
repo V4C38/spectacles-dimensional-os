@@ -252,8 +252,8 @@ export class MainMenuView {
     for (const binding of [agentPair.primary, agentPair.secondary]) {
       const label = findFirstText(binding.sceneObject) ?? binding.labelText;
       if (label) {
-        label.text = "Agent";
-        label.textFill.color = available ? COLOR_WHITE : new vec4(0.7, 0.7, 0.7, 1);
+        label.text = available ? "Agent" : "Agent\nUnavailable";
+        label.textFill.color = COLOR_WHITE;
       }
     }
   }
