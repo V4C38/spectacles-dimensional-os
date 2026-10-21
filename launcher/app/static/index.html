@@ -284,6 +284,16 @@
         <header class="log-header">
           <h2>Log</h2>
           <div class="log-actions">
+            <select id="logFilterLevel" aria-label="Filter log by level">
+              <option value="debug">All levels</option>
+              <option value="info">Info+</option>
+              <option value="warning">Warnings+</option>
+              <option value="error">Errors only</option>
+            </select>
+            <select id="logFilterSource" aria-label="Filter log by source">
+              <option value="all">All sources</option>
+              <option value="ar">ARModule only</option>
+            </select>
             <button type="button" class="btn ghost" id="copyLogBtn">Copy</button>
             <button type="button" class="btn ghost" id="clearLogBtn">Clear</button>
           </div>

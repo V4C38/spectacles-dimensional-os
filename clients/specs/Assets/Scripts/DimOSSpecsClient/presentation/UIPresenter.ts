@@ -15,8 +15,6 @@ import {
   type SessionLinkPhase,
 } from "../../DimOSARClient/websocket/sessionLinkStatus";
 import type { SpecsWebSocketTransport } from "../websocket/SpecsWebSocketTransport";
-import { odomToClientTrackingPose } from "../../DimOSARClient/localization/clientTrackingTransforms";
-import { clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
 import { scaleIn, scaleOut } from "../utilities/AnimationUtilities";
 import { findChildRecursive, getFrameComponent, isFrameInitialized, statusToneColor } from "./UIKit";
 import { UILogger } from "./UILogger";
@@ -397,16 +395,6 @@ export class UIPresenter extends BaseScriptComponent {
     }
     this.deps?.speechController?.syncEnabled();
     this.sendPostWizardLidarDefault();
-    if (this.appState.debugModeEnabled && view.pose && view.hasTrackingOrigin) {
-      const origin = deps.clientTrackingOriginStore.T_odom_client;
-      if (origin) {
-        const specs = clientTrackingToSpecsPose(odomToClientTrackingPose(view.pose, origin));
-        this.uiLogger.logConsole(
-          `Pose ${specs.position.map((v) => v.toFixed(2)).join(", ")}`,
-          new vec4(1, 1, 1, 1),
-        );
-      }
-    }
   }
 
   private refreshRobotLabels(): void {

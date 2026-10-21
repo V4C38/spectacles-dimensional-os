@@ -71,7 +71,6 @@ export class RobotPresenter extends BaseScriptComponent {
   private unlocalizedAnchorCommitted = false;
   private unlocalizedAnchorPending = false;
   private pendingUnlocalizedCtx: RobotMarkerApplyContext | null = null;
-  private pendingUnlocalizedView: ARModuleSessionState | null = null;
   private unlocalizedPlaceEvent: DelayedCallbackEvent | null = null;
 
   onAwake(): void {
@@ -114,7 +113,7 @@ export class RobotPresenter extends BaseScriptComponent {
   refreshLabels(
     appState: AppState,
     view: ARModuleSessionState,
-    voice: RobotActivityVoice = { asrRunning: false, ttsPlaying: false },
+    voice: RobotActivityVoice,
   ): void {
     if (!this.titleText || !this.stateInfoText) {
       return;
@@ -216,7 +215,6 @@ export class RobotPresenter extends BaseScriptComponent {
     }
     this.robot = input.robot;
     this.pendingUnlocalizedCtx = ctx;
-    this.pendingUnlocalizedView = input.view;
     if (this.unlocalizedAnchorCommitted) {
       this.showUnlocalizedAnchor();
       return;
@@ -255,18 +253,12 @@ export class RobotPresenter extends BaseScriptComponent {
     this.getSceneObject().enabled = true;
     this.motionRoot.enabled = true;
     this.applyDebugViewVisibility(this.pendingUnlocalizedCtx.appState);
-    const view = this.pendingUnlocalizedView;
-    if (!view) {
-      return;
-    }
-    this.refreshLabels(this.pendingUnlocalizedCtx.appState, view);
   }
 
   private cancelUnlocalizedAnchor(): void {
     this.unlocalizedAnchorCommitted = false;
     this.unlocalizedAnchorPending = false;
     this.pendingUnlocalizedCtx = null;
-    this.pendingUnlocalizedView = null;
     this.unlocalizedPlaceEvent?.reset(0);
   }
 
@@ -296,8 +288,6 @@ export class RobotPresenter extends BaseScriptComponent {
     this.getSceneObject().enabled = true;
     this.motionRoot.enabled = true;
     this.applyDebugViewVisibility(ctx.appState);
-    this.applyButtonVfx(false);
-    this.refreshLabels(ctx.appState, input.view);
   }
 
   private clearUnlocalizedAnchor(): void {

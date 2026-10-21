@@ -35,6 +35,8 @@
   const logEl = $("log");
   const copyLogBtn = $("copyLogBtn");
   const clearLogBtn = $("clearLogBtn");
+  const logFilterLevel = $("logFilterLevel");
+  const logFilterSource = $("logFilterSource");
   const sidePanel = $("sidePanel");
   const splitter = $("splitter");
   const tagList = $("tagList");
@@ -674,11 +676,51 @@
     return text.replace(ANSI_RE, "");
   }
 
-  function makeLogLineEl(line) {
+  const LEVEL_RANK = { debug: 0, info: 1, warning: 2, error: 3 };
+  const LEVEL_RE = /(?:\[\s*|\b)(debug|dbg|info|inf|warning|warn|wrn|error|err|critical|exception)\b(?:\s*\])?/i;
+  const AR_RE = /armodule|dimos[./]ar\b|ARModule/i;
+  let lastLevel = "info";
+  let lastAr = false;
+
+  function classifyLine(line) {
+    const plain = stripAnsi(line);
+    const m = LEVEL_RE.exec(plain.slice(0, 80));
+    if (m) {
+      const key = m[1].toLowerCase();
+      lastLevel = key.startsWith("d")
+        ? "debug"
+        : key.startsWith("i")
+          ? "info"
+          : key.startsWith("w")
+            ? "warning"
+            : "error";
+      lastAr = AR_RE.test(plain);
+    } else if (AR_RE.test(plain)) {
+      lastAr = true;
+    }
+    return { level: lastLevel, ar: lastAr };
+  }
+
+  function lineVisible(entry) {
+    const min = LEVEL_RANK[logFilterLevel.value] ?? 0;
+    if (LEVEL_RANK[entry.level] < min) return false;
+    return !(logFilterSource.value === "ar" && !entry.ar);
+  }
+
+  function makeLogLineEl(entry) {
     const el = document.createElement("div");
     el.className = "log-line";
-    el.innerHTML = ansiToHtml(line);
+    el.innerHTML = ansiToHtml(entry.line);
+    el.hidden = !lineVisible(entry);
+    entry.el = el;
     return el;
+  }
+
+  function applyLogFilter() {
+    for (const entry of logLines) {
+      if (entry.el) entry.el.hidden = !lineVisible(entry);
+    }
+    logEl.scrollTop = logEl.scrollHeight;
   }
 
   function flushLog() {
@@ -687,8 +729,9 @@
     const nearBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 48;
     const fragment = document.createDocumentFragment();
     for (const line of pendingLines) {
-      fragment.appendChild(makeLogLineEl(line));
-      logLines.push(line);
+      const entry = { line, ...classifyLine(line), el: null };
+      fragment.appendChild(makeLogLineEl(entry));
+      logLines.push(entry);
     }
     pendingLines.length = 0;
     logEl.appendChild(fragment);
@@ -725,7 +768,10 @@
   }
 
   async function copyLog() {
-    const text = logLines.map(stripAnsi).join("\n");
+    const text = logLines
+      .filter(lineVisible)
+      .map((entry) => stripAnsi(entry.line))
+      .join("\n");
     try {
       await navigator.clipboard.writeText(text);
       const prev = copyLogBtn.textContent;
@@ -1029,6 +1075,8 @@
 
   copyLogBtn.addEventListener("click", copyLog);
   clearLogBtn.addEventListener("click", clearLog);
+  logFilterLevel.addEventListener("change", applyLogFilter);
+  logFilterSource.addEventListener("change", applyLogFilter);
 
   installBtn.addEventListener("click", async () => {
     const mode = setupMode();

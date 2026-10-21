@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   RobotPresenter,
   robotDeadzoneRadiusCm,
@@ -6,6 +6,9 @@ import {
 } from "../../Assets/Scripts/DimOSSpecsClient/presentation/RobotPresenter";
 import { clientTrackingToSpecsPoint } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import type { RobotDescription, Vec3 } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
+
+import { AppState } from "../../Assets/Scripts/DimOSSpecsClient/presentation/AppState";
+import type { ARModuleSessionState } from "../../Assets/Scripts/DimOSARClient/websocket/arModuleSession";
 
 const GO2: RobotDescription = {
   display_name: "Unitree Go2",
@@ -69,5 +72,57 @@ describe("robotDeadzoneRadiusCm", () => {
         footprint_m: [0, 0],
       }),
     ).toBe(20);
+  });
+});
+
+
+describe("activity survives pose presentation", () => {
+  it.each([
+    ["Listening", true, false, true],
+    ["Responding", true, true, true],
+    ["Thinking", true, false, false],
+    ["Idle", false, false, true],
+  ] as const)("preserves %s through localized and deferred fallback updates", (label, asrRunning, ttsPlaying, idle) => {
+    const presenter = new RobotPresenter();
+    const text = { text: "", textFill: { color: null } };
+    const busy = { enabled: false };
+    const idleVfx = { enabled: true };
+    const root = { enabled: true };
+    const transform = {
+      setWorldPosition: vi.fn(), setWorldRotation: vi.fn(),
+      getWorldPosition: () => new vec3(0, 0, 0),
+      getWorldRotation: () => quat.quatIdentity(),
+      getWorldScale: () => new vec3(1, 1, 1),
+    };
+    const motionRoot = { enabled: true, getTransform: () => transform };
+    Object.assign(presenter, {
+      getSceneObject: () => root,
+      motionRoot, presented: true,
+      titleText: { text: "", textFill: { color: null } }, stateInfoText: text,
+      buttonVfxBusy: busy, buttonVfxIdle: idleVfx,
+      unlocalizedPlaceEvent: { reset: vi.fn() },
+    });
+    const view = {
+      connection: "ready", hello: { robot: GO2 },
+      nav: null, state: { agent: { idle } },
+    } as unknown as ARModuleSessionState;
+    const appState = new AppState();
+    const ctx = { mainUi: motionRoot as unknown as SceneObject, appState };
+    presenter.refreshLabels(appState, view, { asrRunning, ttsPlaying });
+    for (let i = 0; i < 3; i++) {
+      presenter.apply({
+        mode: "localizedOdom", robot: GO2, view,
+        pose: { position: [i, 0, 0], orientation: [0, 0, 0, 1] },
+        origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 },
+      }, ctx);
+      expect(text.text).toBe(label);
+      expect(busy.enabled).toBe(label !== "Idle");
+      expect(idleVfx.enabled).toBe(label === "Idle");
+    }
+    presenter.apply({ mode: "unlocalizedFallbackPosition", robot: GO2, view }, ctx);
+    // Run the delayed placement callback after the voice-aware label update.
+    (presenter as unknown as { commitUnlocalizedAnchor(): void }).commitUnlocalizedAnchor();
+    expect(text.text).toBe(label);
+    expect(busy.enabled).toBe(label !== "Idle");
   });
 });

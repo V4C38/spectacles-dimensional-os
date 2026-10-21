@@ -1,5 +1,6 @@
 /** Documented Latin examples; matching uses WAKE_WORD_PATTERN (also Cyrillic / stretched). */
 export const WAKE_WORD_VARIANTS = [
+  "robot",
   "agent",
   "agents",
   "a gent",
@@ -10,9 +11,9 @@ export const WAKE_WORD_VARIANTS = [
   "агент",
 ] as const;
 
-/** Latin variants, stretched vowels (aaaagent), and Cyrillic агент / агееент. */
+/** Robot, Latin agent variants, stretched vowels, and Cyrillic агент / агееент. */
 const WAKE_WORD_PATTERN =
-  /(?:^|[^a-zа-яё])(?:a+\s*g+e+n+t+s?|ajents?|agints?|agants?|aygents?|а+г+е+н+т+)/i;
+  /(?:^|[^a-zа-яё])(?:robot|a+\s*g+e+n+t+s?|ajents?|agints?|agants?|aygents?|а+г+е+н+т+)(?=$|[^a-zа-яё])/i;
 
 export const AGENT_SESSION_IDLE_TIMEOUT_S = 30.0;
 

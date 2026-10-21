@@ -114,7 +114,7 @@ describe("WebXR complete ARModule session", () => {
     expect(f.client.route.object.geometry.getAttribute("instanceStart").getZ(0)).toBeCloseTo(-1.8);
     socket.receive({ type: "nav_goal", ts: 10, path_poses: [] });
     socket.receive({ ...state, nav: { state: "resolved", outcome: "succeeded" } });
-    f.tick(); expect(f.client.navigation.marker.cancelObject.visible).toBe(false);
+    f.tick(); expect(f.client.navigation.marker.cancelVisible()).toBe(false);
     // The server owns the 0.75m policy. The same ClientCore episode accepts its runtime prompt.
     socket.receive({ ...request, capture_policy: "robot_los_required" });
     expect(f.client.episode.view().phase).toBe("capturing");

@@ -293,7 +293,7 @@ The yellow path line shown is the real navigation path the planner sends back, r
 
 #### Agent Mode
 
-Wake word <b>"Agent"</b> starts a voice session. Activity on the robot marker is <b>Following Path &gt; Thinking &gt; Responding &gt; Listening &gt; Idle</b> (Listening is Agent mode ASR running, including wake-wait). Speech to text runs on the Spectacles; the transcript goes to the DimOS agent on the Mac. The session closes after <b>30 seconds</b> of silence. Say <b>"stop"</b> and the robot stops immediately (same Emergency Stop path as in the wrist UI). With <b>Debug</b> on, the Agent button stays available even when disconnected or the blueprint has no agent, so you can test on-device STT; transcripts are not sent until the agent capability is live.
+Wake word <b>"Robot"</b> starts a voice session (<b>"Agent"</b> also works). Activity on the robot marker is <b>Following Path &gt; Thinking &gt; Responding &gt; Listening &gt; Idle</b> (Listening is Agent mode ASR running, including wake-wait). Speech to text runs on the Spectacles; the transcript goes to the DimOS agent on the Mac. The session closes after <b>30 seconds</b> of silence. Say <b>"stop"</b> and the robot stops immediately (same Emergency Stop path as in the wrist UI). With <b>Debug</b> on, the Agent button stays available even when disconnected or the blueprint has no agent, so you can test on-device STT; transcripts are not sent until the agent capability is live.
 
 Anything the agent starts looks and behaves exactly like a manually placed navigation goal. You can grab the marker and take over at any point which will override the goal set by the agent immediately.
 
@@ -409,6 +409,26 @@ npm test
 | Agent does not respond | Check that `OPENAI_API_KEY` is set in the launcher and that the Mac has internet. |
 | Wake word ignored | Turn on the debug console and watch line 7 to see what was transcribed, and check that you are in Agent Mode. |
 | Robot does not move | Setup has to be finished and the robot connected. The agent reply on line 8 turns red or yellow when something failed. |
+
+The launcher gives DimOS 60 seconds to shut down before forcing termination, because
+its workers clean up sequentially. Set `DIMOS_STOP_GRACE_SECONDS` in the environment
+before starting the launcher to override this timeout. WebXR retains an eight-second grace.
+
+For sensor `Decode error` failures, inspect the LCM fingerprint before changing packages.
+Use the installed DimOS Python to run
+`launcher/scripts/diagnose-sensor-codecs.py --payload /path/to/captured.lcm --message-type Image`
+(or `PointCloud2`) for an offline reproducer. It reports fingerprints and whether that installed codec decodes the payload.
+For an explicitly requested live observation, use
+`--endpoint tcp/127.0.0.1:<zenoh-port> --seconds 5` instead; find the worker's Zenoh listening port with `lsof`, not the AR
+WebSocket port. The observer subscribes only to the two sensor types, caps processing
+at 100 samples, and outputs metadata without saving sensor contents. Exit code 2
+means no samples arrived and establishes no compatibility finding.
+
+A fingerprint mismatch means the producer payload is incompatible with the receiving
+schema. Compare the producing component's message package/build with the installed
+`dimos_lcm` schema; retain validation and fix the incompatible producer or pin verified
+compatible versions. The current traceback alone does not identify that producer.
+No dependency change or server restart is required to inspect an offline payload.
 
 </details>
 

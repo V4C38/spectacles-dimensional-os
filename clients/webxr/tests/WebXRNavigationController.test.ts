@@ -139,4 +139,41 @@ describe("WebXRNavigationController", () => {
     expect(sendText).toHaveBeenCalled();
     navigation.dispose();
   });
+
+  it("defers the goal for a drag that starts off the marker until release", () => {
+    const sendText = vi.fn();
+    const navigation = new WebXRNavigationController({ view: () => view(), sendText, requestEstop: vi.fn() } as never);
+    const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
+    navigation.applyView(view(), origin, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, 1);
+    const hit = (z: number) => [{ position: [0, 0, z] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
+    for (let i = 0; i < 30; i++) navigation.hold(1 + i * 0.1, [0, 1.5, 0], [0, -1, -1], hit(-1 - i * 0.1), null, 0, false);
+    expect(navigation.isDragging()).toBe(true);
+    expect(navigation.marker.pose().position[2]).toBeLessThan(-3);
+    expect(sendText).not.toHaveBeenCalled();
+    navigation.release(4, [0, 1.5, 0], [0, -1, -1], hit(-4), null, 0);
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(sendText.mock.calls[0][0]).toContain("nav_goal_request");
+    navigation.dispose();
+  });
+
+  it("smooths the dragged heading so it turns over several centimetres of travel", () => {
+    const sendText = vi.fn();
+    const navigation = new WebXRNavigationController({ view: () => view(), sendText, requestEstop: vi.fn() } as never);
+    const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
+    navigation.applyView(view(), origin, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, 1);
+    const floorHit = (x: number) => [{ position: [x, 0, -0.5] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
+    const yaw = () => {
+      const [, y, , w] = navigation.marker.pose().orientation;
+      return 2 * Math.atan2(y, w);
+    };
+    navigation.hold(1, [0, 1.5, 0], [0, -1, -1], floorHit(0), null, 0);
+    expect(navigation.isDragging()).toBe(true);
+    expect(yaw()).toBeCloseTo(0);
+    navigation.hold(1 + 1 / 60, [0, 1.5, 0], [0, -1, -1], floorHit(0.05), null, 0);
+    expect(yaw()).toBeLessThan(0);
+    expect(yaw()).toBeGreaterThan(-Math.PI / 4);
+    for (let i = 2; i < 60; i++) navigation.hold(1 + i / 60, [0, 1.5, 0], [0, -1, -1], floorHit(0.05 * i), null, 0);
+    expect(yaw()).toBeCloseTo(-Math.PI / 2, 2);
+    navigation.dispose();
+  });
 });

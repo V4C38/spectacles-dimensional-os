@@ -14,7 +14,13 @@ import {
   clientTrackingToWebxrPoint,
   clientTrackingToWebxrPose,
 } from "../coordinates/WebXRCoordinates";
+import { Text } from "troika-three-text";
+import type { StatusTone } from "@dimos-ar-client/websocket/sessionLinkStatus";
+import { syncText, UI_FONT_REGULAR, UI_FONT_SEMIBOLD } from "./fonts";
+import { GlassSurface } from "./glassMaterial";
+import { indicatorMaterial } from "./indicatorMaterial";
 import { filletPathCorners, MAX_LIDAR_POINTS, rangePathY } from "./routePath";
+import { toneHex } from "./tones";
 import {
   deriveRobotMarkerApplyInput,
   getRobotActivityState,
@@ -22,11 +28,27 @@ import {
   type RobotMarkerApplyInput,
 } from "./robotPresentation";
 
+export type RobotFeedback = {
+  tone: StatusTone;
+  aligned: boolean;
+  activity: string;
+  message: string | null;
+};
+
+const TAG_WIDTH = 0.24;
+const TAG_PADDING = 0.014;
+const TAG_MESSAGE_CHARS = 64;
+
 export class WebXRRobotPresenter {
   readonly object: THREE.Group;
   private readonly gizmo = new THREE.Group();
+  private readonly indicator: THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial>;
   private readonly labelGroup: THREE.Group;
-  private readonly labelPlane: THREE.Mesh;
+  private readonly tagBackground: GlassSurface;
+  private readonly tagDot: THREE.Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial>;
+  private readonly tagTitle = new Text();
+  private readonly tagStatus = new Text();
+  private readonly tagMessage = new Text();
   private robotHeightM = 0;
   private baseHeightM = 0;
   private readonly targetPosition = new THREE.Vector3();
@@ -34,7 +56,6 @@ export class WebXRRobotPresenter {
   private lastOrigin: ClientTrackingOrigin | null = null;
   private floorOffset: Vec3 = [0, 0, 0];
   private unlocalizedCommitted = false;
-  private labelCanvas: HTMLCanvasElement | null = null;
   private labelKey = "";
 
   constructor() {
@@ -57,25 +78,40 @@ export class WebXRRobotPresenter {
       tip.quaternion.copy(shaft.quaternion);
       for (const part of [shaft, tip]) { part.renderOrder = 5; part.raycast = () => {}; this.gizmo.add(part); }
     }
-    this.object.add(this.gizmo);
+    this.gizmo.visible = false;
+    this.indicator = new THREE.Mesh(new THREE.SphereGeometry(0.045, 32, 16), indicatorMaterial());
+    this.indicator.name = "RobotIndicator";
+    this.indicator.raycast = () => {};
+    this.object.add(this.gizmo, this.indicator);
 
+    // Tag grows upward from its origin, so its bottom edge stays put.
     this.labelGroup = new THREE.Group();
     this.labelGroup.name = "RobotMarkerLabel";
-    this.labelGroup.scale.setScalar(0.25);
-    this.labelPlane = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.78, 0.195),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: true, depthWrite: false, side: THREE.DoubleSide }),
-    );
-    this.labelPlane.raycast = () => {};
-    if (typeof document !== "undefined") {
-      this.labelCanvas = document.createElement("canvas");
-      this.labelCanvas.width = 1024;
-      this.labelCanvas.height = 256;
-      const texture = new THREE.CanvasTexture(this.labelCanvas);
-      texture.colorSpace = THREE.SRGBColorSpace;
-      (this.labelPlane.material as THREE.MeshBasicMaterial).map = texture;
+    this.tagBackground = new GlassSurface({ width: TAG_WIDTH, height: 0.07, radius: 0.02, rim: 0.24, rimWidth: 0.0012 });
+    this.tagBackground.raycast = () => {};
+    this.tagDot = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape().absarc(0, 0, 0.0045, 0, Math.PI * 2, false), 20), new THREE.MeshBasicMaterial({ color: 0x8e8e93, transparent: true, depthWrite: false }));
+    const left = -TAG_WIDTH / 2 + TAG_PADDING;
+    for (const [text, font, size, color] of [
+      [this.tagTitle, UI_FONT_SEMIBOLD, 0.02, 0xffffff],
+      [this.tagStatus, UI_FONT_REGULAR, 0.0135, 0xaeaeb2],
+      [this.tagMessage, UI_FONT_REGULAR, 0.013, 0xe5e5ea],
+    ] as const) {
+      text.font = font;
+      text.fontSize = size;
+      text.color = color;
+      text.anchorX = "left";
+      text.anchorY = "top";
+      text.maxWidth = TAG_WIDTH - TAG_PADDING * 2;
+      text.position.x = left;
+      text.raycast = () => {};
     }
-    this.labelGroup.add(this.labelPlane);
+    this.tagTitle.position.x = left + 0.016;
+    this.tagTitle.maxWidth = TAG_WIDTH - TAG_PADDING * 2 - 0.016;
+    for (const [index, child] of [this.tagBackground, this.tagDot, this.tagTitle, this.tagStatus, this.tagMessage].entries()) {
+      child.position.z = index === 0 ? 0 : 0.001;
+      child.renderOrder = 20 + Math.min(index, 2);
+      this.labelGroup.add(child);
+    }
     this.object.add(this.labelGroup);
     this.object.visible = false;
   }
@@ -88,7 +124,12 @@ export class WebXRRobotPresenter {
     this.applyLocalized(input);
   }
 
+  setDebug(enabled: boolean): void {
+    this.gizmo.visible = enabled;
+  }
+
   tick(deltaS: number): void {
+    this.indicator.material.uniforms.uTime.value += Math.max(0, deltaS);
     if (!this.object.visible || !this.lastOrigin || deltaS <= 0) return;
     this.object.position.lerp(this.targetPosition, 1 - Math.exp(-8 * deltaS));
     this.object.quaternion.slerp(this.targetRotation, 1 - Math.exp(-4.5 * deltaS));
@@ -96,30 +137,28 @@ export class WebXRRobotPresenter {
     this.updateLabelPosition();
   }
 
-  feedback(text: string): void {
-    const labelKey = `${String(this.object.userData.title || "Robot")}\n${text}`;
-    if (!this.labelCanvas || labelKey === this.labelKey) return;
-    const ctx = this.labelCanvas.getContext("2d");
-    if (!ctx) return;
+  feedback(info: RobotFeedback): void {
+    const title = String(this.object.userData.title || "Robot");
+    const status = [info.aligned ? "Aligned" : "Not aligned", info.activity].join("  ·  ");
+    const message = info.message ? clipText(info.message.replace(/\s+/g, " "), TAG_MESSAGE_CHARS) : "";
+    const labelKey = [title, status, message, info.tone].join("\n");
+    if (labelKey === this.labelKey) return;
     this.labelKey = labelKey;
-    ctx.clearRect(0, 0, 1024, 256);
-    ctx.fillStyle = "#090909";
-    ctx.fillRect(0, 0, 1024, 256);
-    ctx.strokeStyle = "#383838";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(2, 2, 1020, 252);
-    ctx.fillStyle = "#ff8a24";
-    ctx.fillRect(3, 3, 7, 250);
-    ctx.beginPath();
-    ctx.arc(39, 51, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#f5f5f5";
-    ctx.font = "600 34px sans-serif";
-    ctx.fillText(String(this.object.userData.title || "Robot"), 62, 62, 900);
-    ctx.fillStyle = "#a3a3a3";
-    ctx.font = "28px sans-serif";
-    ctx.fillText(text.replace(/\s+/g, " "), 62, 112, 920);
-    (this.labelPlane.material as THREE.MeshBasicMaterial).map!.needsUpdate = true;
+    this.tagTitle.text = title;
+    this.tagStatus.text = status;
+    this.tagMessage.text = message;
+    this.tagMessage.visible = message.length > 0;
+    this.tagDot.material.color.setHex(toneHex(info.tone));
+    const messageLines = message ? Math.min(2, Math.ceil(message.length / 34)) : 0;
+    const height = TAG_PADDING * 2 + 0.022 + 0.006 + 0.016 + (messageLines ? 0.008 + messageLines * 0.017 : 0);
+    this.tagBackground.resize(TAG_WIDTH, height);
+    this.tagBackground.position.y = height / 2;
+    const top = height - TAG_PADDING;
+    this.tagTitle.position.y = top;
+    this.tagDot.position.set(-TAG_WIDTH / 2 + TAG_PADDING + 0.0045, top - 0.011, 0.001);
+    this.tagStatus.position.y = top - 0.028;
+    this.tagMessage.position.y = top - 0.052;
+    syncText(this.tagTitle, this.tagStatus, this.tagMessage);
   }
 
   orientFeedback(cameraPosition: THREE.Vector3): void {
@@ -172,6 +211,7 @@ export class WebXRRobotPresenter {
     });
     geometries.forEach(geometry => geometry.dispose());
     materials.forEach(material => material.dispose());
+    for (const text of [this.tagTitle, this.tagStatus, this.tagMessage]) text.dispose();
   }
 
   private applyLocalized(input: Extract<RobotMarkerApplyInput, { mode: "localizedOdom" }>): void {
@@ -220,7 +260,8 @@ export class WebXRRobotPresenter {
 
   private updateLabelPosition(): void {
     const inverse = this.object.quaternion.clone().invert();
-    this.labelGroup.position.fromArray(this.floorOffset).add(new THREE.Vector3(0, 0.78, 0)).applyQuaternion(inverse);
+    // Just above the robot body, so the tag reads as attached to it.
+    this.labelGroup.position.fromArray(this.floorOffset).add(new THREE.Vector3(0, Math.max(this.robotHeightM, 0.3) + 0.08, 0)).applyQuaternion(inverse);
   }
 }
 
@@ -351,4 +392,8 @@ function planarHeading(q: THREE.Quaternion): Quat {
   const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
   const yaw = Math.atan2(-forward.x, -forward.z);
   return [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
+}
+
+function clipText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }

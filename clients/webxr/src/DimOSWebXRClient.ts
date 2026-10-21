@@ -168,11 +168,19 @@ export class DimOSWebXRClient {
     this.lastTickAt = now;
     this.applyView(deltaS);
     const feedback = this.speech.snapshot();
-    this.robot.feedback([this.ui.snapshot().connectionText, feedback.status === "Off" ? this.ui.snapshot().activity : feedback.status, feedback.prompt, feedback.response || view.agentMessage].filter(Boolean).join(" · "));
+    const ui = this.ui.snapshot();
+    this.robot.setDebug(this.ui.debugEnabled);
+    this.robot.feedback({
+      tone: ui.connectionTone,
+      aligned: view.hasTrackingOrigin,
+      activity: feedback.status === "Off" ? ui.activity : feedback.status,
+      message: feedback.response || view.agentMessage || feedback.prompt || null,
+    });
     this.maybeSendClientPose();
   }
 
-  holdNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[]): void {
+  /** A drag that starts on the marker streams goals; one that starts elsewhere sends on release. */
+  holdNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[], fromMarker = true): void {
     if (!this.controlsEnabled() || !this.originStore.hasTrackingOrigin) {
       return;
     }
@@ -188,6 +196,7 @@ export class DimOSWebXRClient {
       hit ? [hit] : [],
       this.deadzone(),
       this.placementFloorY(hit),
+      fromMarker,
     );
   }
 
@@ -262,6 +271,13 @@ export class DimOSWebXRClient {
     this.lidar.hide();
     this.route.hide();
     this.robot.reset();
+  }
+
+  /** Drops the current alignment and reruns the wizard's localization step. */
+  realign(): void {
+    this.restartSetup();
+    this.ui.wizardStep = "localization";
+    this.ui.restartLocalization();
   }
 
   deadzone(): RobotGroundDeadzone | null {

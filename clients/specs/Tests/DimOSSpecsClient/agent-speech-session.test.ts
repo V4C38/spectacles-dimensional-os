@@ -34,8 +34,15 @@ describe("matchWakeWord", () => {
     });
   });
 
-  it("does not match robot or agent substrings", () => {
-    expect(matchWakeWord("Robot")).toEqual({ matched: false, remainder: "" });
+  it.each(["robotics", "robotic", "myrobot", "agentic", "agentsmith"])("rejects substrings: %s", (text) => {
+    expect(matchWakeWord(text)).toEqual({ matched: false, remainder: "" });
+  });
+
+  it.each(["Robot", "robot!", "Hey ROBOT."])("recognizes robot: %s", (text) => {
+    expect(matchWakeWord(text)).toEqual({ matched: true, remainder: "" });
+  });
+
+  it("does not match agent substrings", () => {
     expect(matchWakeWord("again")).toEqual({ matched: false, remainder: "" });
     expect(matchWakeWord("reagent")).toEqual({ matched: false, remainder: "" });
   });
@@ -70,6 +77,19 @@ describe("matchWakeWord", () => {
 });
 
 describe("reduceFinalTranscript", () => {
+  it("activates on robot and sends a following command", () => {
+    const wake = reduceFinalTranscript(createAgentSpeechSessionState(), "Robot!", 10);
+    expect(wake.action).toEqual({ kind: "wake_only" });
+    expect(wake.state.active).toBe(true);
+    expect(reduceFinalTranscript(wake.state, "turn left", 11).action).toEqual({
+      kind: "send", text: "turn left",
+    });
+    expect(reduceFinalTranscript(createAgentSpeechSessionState(), "Hey robot, go forward", 10).action)
+      .toEqual({ kind: "send", text: "go forward" });
+    expect(deriveAgentPromptEntry(createAgentSpeechSessionState(), "Robot")).toEqual({
+      text: "Robot", valid: true,
+    });
+  });
   it("opens session on wake word alone", () => {
     const state = createAgentSpeechSessionState();
     const result = reduceFinalTranscript(state, "Agent", 10);

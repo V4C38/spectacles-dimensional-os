@@ -5,14 +5,16 @@ import { DimOSWebXRClient } from "./DimOSWebXRClient";
 import { isMenuButtonPressed, type JoystickAxes } from "./navigation/WebXRJoystick";
 import { type FloorPlane } from "./navigation/WebXRGroundPlacement";
 import { MainMenuView } from "./presentation/MainMenuView";
-import { XRBlocksRayInteraction, registerRayTarget } from "./input/XRBlocksRayInteraction";
+import { XRBlocksRayInteraction, markRayAmbient, registerRayTarget } from "./input/XRBlocksRayInteraction";
 import { PalmMenuGate } from "./input/PalmMenuGate";
+import { HandStyle } from "./input/handStyle";
 
 export class WebXRApp extends xb.Script {
   static dependencies = { input: xb.Input };
   isReady = false;
   private mainMenu: MainMenuView | null = null;
   private worldHold: xb.SelectEvent["target"] | null = null;
+  private holdFromMarker = false;
   private uiGrab = false;
   private panelGrip = false;
   private panelHold: xb.SelectEvent["target"] | null = null;
@@ -22,11 +24,13 @@ export class WebXRApp extends xb.Script {
   private tracking = false;
   private menuWasVisible = false;
   private readonly palm = new PalmMenuGate();
+  private readonly handStyle = new HandStyle();
   private readonly navigationFloor = new THREE.Mesh(
     new THREE.PlaneGeometry(40, 40),
     new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide }),
   );
   private interaction!: XRBlocksRayInteraction;
+  private input!: xb.Input;
   private lastFrameTime: number | null = null;
   private palmOpened = false;
   private readonly onReset = (event: Event) => {
@@ -49,6 +53,7 @@ export class WebXRApp extends xb.Script {
   constructor(private readonly client: DimOSWebXRClient) { super(); }
 
   override init({ input }: { input: xb.Input }): void {
+    this.input = input;
     this.interaction = new XRBlocksRayInteraction(input);
     const client = this.client;
     this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2));
@@ -61,6 +66,7 @@ export class WebXRApp extends xb.Script {
       if (this.navigationFloor.visible) THREE.Mesh.prototype.raycast.call(this.navigationFloor, raycaster, hits);
     };
     registerRayTarget(this.navigationFloor);
+    markRayAmbient(this.navigationFloor);
     this.add(this.navigationFloor);
     this.mainMenu = new MainMenuView({
       onSetup: () => client.ui.nextSetup(),
@@ -76,6 +82,7 @@ export class WebXRApp extends xb.Script {
       onDebug: () => { client.ui.debugEnabled = !client.ui.debugEnabled; },
       onLidar: () => { client.ui.cycleLidar(); },
       onLocalize: () => client.ui.restartLocalization(),
+      onRealign: () => client.realign(),
       onEstop: () => { client.loseInput(); client.ui.estop(); },
       onAgentText: text => client.speech.submitTyped(text),
     });
@@ -158,14 +165,18 @@ export class WebXRApp extends xb.Script {
       this.worldHold = null;
       this.client.loseInput();
     }
-    this.interaction.update();
+    this.handStyle.apply(this.input.hands);
+    this.interaction.update(deltaS, { position: new THREE.Vector3(p.x, p.y, p.z), quaternion: new THREE.Quaternion(q.x, q.y, q.z, q.w) });
+    const hits = this.input.controllers.map(controller => this.interaction.hit(controller)?.object);
+    this.client.navigation.marker.update(new THREE.Vector3(p.x, p.y, p.z), hits.includes(this.client.navigation.marker.cancelObject));
+    this.mainMenu?.updateHover(hits, deltaS);
     if (this.panelHold) {
       const ray = this.interaction.ray(this.panelHold);
       this.mainMenu?.updateManipulation(ray.origin, ray.direction, this.panelHold.getWorldQuaternion(new THREE.Quaternion()), deltaS);
     }
     if (this.worldHold && !this.uiGrab) {
-      const ray = this.interaction.ray(this.worldHold);
-      this.client.holdNavigation(ray.origin, ray.direction, this.navigationFloorPlanes());
+      const ray = this.interaction.smoothedRay(this.worldHold);
+      this.client.holdNavigation(ray.origin, ray.direction, this.navigationFloorPlanes(), this.holdFromMarker);
     }
   }
 
@@ -190,7 +201,9 @@ export class WebXRApp extends xb.Script {
     }
     if (!this.client.controlsEnabled() || !hit) return;
     this.worldHold = event.target;
-    this.client.holdNavigation(ray.origin, ray.direction, this.navigationFloorPlanes());
+    this.holdFromMarker = isDescendant(hit.object, this.client.navigation.marker.object);
+    const smoothed = this.interaction.smoothedRay(event.target);
+    this.client.holdNavigation(smoothed.origin, smoothed.direction, this.navigationFloorPlanes(), this.holdFromMarker);
   }
 
   override onSqueezeStart(event: xb.SelectEvent): void {
@@ -213,7 +226,7 @@ export class WebXRApp extends xb.Script {
     if (this.panelGrip || (this.panelHold && this.panelHold !== event.target) ||
         (this.worldHold && this.worldHold !== event.target)) return;
     if (this.worldHold === event.target && !this.uiGrab && this.client.controlsEnabled()) {
-      const ray = this.interaction.ray(event.target);
+      const ray = this.interaction.smoothedRay(event.target);
       this.client.releaseNavigation(ray.origin, ray.direction, this.navigationFloorPlanes());
     }
     this.clearInput();
@@ -222,6 +235,7 @@ export class WebXRApp extends xb.Script {
   override dispose(): void {
     this.detachSession();
     this.interaction.dispose();
+    this.handStyle.dispose();
     this.client.dispose();
     this.navigationFloor.geometry.dispose();
     this.navigationFloor.material.dispose();
@@ -329,3 +343,9 @@ export class WebXRApp extends xb.Script {
   }
 }
 
+function isDescendant(object: THREE.Object3D, ancestor: THREE.Object3D): boolean {
+  for (let node: THREE.Object3D | null = object; node; node = node.parent) {
+    if (node === ancestor) return true;
+  }
+  return false;
+}

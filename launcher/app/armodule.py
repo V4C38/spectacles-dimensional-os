@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import re
 import shlex
@@ -37,6 +38,7 @@ STACK_PORTS = (ARMODULE_PORT, RERUN_WS_PORT, RERUN_GRPC_PORT)
 LOG_BUFFER_SIZE = 500
 SUBSCRIBER_QUEUE_SIZE = 2000
 STOP_GRACE_SECONDS = 8.0
+DIMOS_STOP_GRACE_SECONDS = 60.0
 BLUEPRINTS = ("unitree_go2_ar", "unitree_go2_ar_agentic")
 CLIENTS = ("specs", "webxr")
 BLUEPRINT_CLI = {
@@ -129,6 +131,11 @@ class _Subscriber:
 
 class ProcessManager:
     def __init__(self, root: Path | None = None) -> None:
+        self.dimos_stop_grace_seconds = float(
+            os.environ.get("DIMOS_STOP_GRACE_SECONDS", str(DIMOS_STOP_GRACE_SECONDS))
+        )
+        if not math.isfinite(self.dimos_stop_grace_seconds) or self.dimos_stop_grace_seconds <= 0:
+            raise ValueError("DIMOS_STOP_GRACE_SECONDS must be a finite positive number")
         self.root = root or repo_root()
         migrate_legacy_env(self.root)
         self.scripts = scripts_dir(self.root)
@@ -705,7 +712,8 @@ class ProcessManager:
         except ProcessLookupError:
             pass
         try:
-            await asyncio.wait_for(proc.wait(), timeout=STOP_GRACE_SECONDS)
+            grace = self.dimos_stop_grace_seconds if label == "ARModule" else STOP_GRACE_SECONDS
+            await asyncio.wait_for(proc.wait(), timeout=grace)
         except TimeoutError:
             self._append_log(f"{label} did not stop in time — sending SIGKILL")
             try:

@@ -11,9 +11,9 @@ import * as xb from "xrblocks";
 import { MainMenuView } from "../src/presentation/MainMenuView";
 
 it("constructs real XR Blocks buttons and activates the supported trigger hook", () => {
-  const handlers = { onSetup: vi.fn(), onBack: vi.fn(), onRetry: vi.fn(), onRestart: vi.fn(), onMenu: vi.fn(), onMode: vi.fn(), onDebug: vi.fn(), onLidar: vi.fn(), onLocalize: vi.fn(), onEstop: vi.fn(), onAgentText: vi.fn(() => true) };
+  const handlers = { onSetup: vi.fn(), onBack: vi.fn(), onRetry: vi.fn(), onRestart: vi.fn(), onMenu: vi.fn(), onMode: vi.fn(), onDebug: vi.fn(), onLidar: vi.fn(), onLocalize: vi.fn(), onRealign: vi.fn(), onEstop: vi.fn(), onAgentText: vi.fn(() => true) };
   const view = new MainMenuView(handlers);
-  expect(view.panel.scale.x).toBeCloseTo(0.68 * 0.6);
+  expect(view.panel.scale.x).toBeCloseTo(0.68 * 0.72);
   const buttons: xb.TextButton[] = [];
   view.panel.traverse(object => { if (object instanceof xb.TextButton) buttons.push(object); });
   const next = buttons.find(button => button.text === "Next")!;
@@ -24,8 +24,10 @@ it("constructs real XR Blocks buttons and activates the supported trigger hook",
   view.panel.position.set(0, 0, -1);
   view.panel.updateWorldMatrix(true, true);
   const edge = view.panel.localToWorld(new THREE.Vector3(0.65, 0, 0));
-  expect(view.beginManipulation([edge.x, 0, 0], [0, 0, -1])).toBe(true);
-  view.updateManipulation([edge.x + 0.1, 0, 0], [0, 0, -1]);
+  expect(view.beginManipulation([edge.x, edge.y, 0], [0, 0, -1])).toBe(false);
+  const corner = view.panel.localToWorld(new THREE.Vector3(0.65, -0.48, 0));
+  expect(view.beginManipulation([corner.x, corner.y, 0], [0, 0, -1])).toBe(true);
+  view.updateManipulation([corner.x + 0.1, corner.y - 0.1, 0], [0, 0, -1]);
   expect(view.panel.scale.x).toBeGreaterThan(initialPanelScale);
   view.endManipulation();
   view.panel.traverse(object => { object.visible = true; });
@@ -45,7 +47,7 @@ it("constructs real XR Blocks buttons and activates the supported trigger hook",
 
 it("grips the panel body, rotates around the grab point with smoothing, and retains the released pose", () => {
   const noop = () => {};
-  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onEstop: noop, onAgentText: () => true });
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onAgentText: () => true });
   view.panel.position.set(0, 0, -1);
   expect(view.beginManipulation([0, 0, 0], [0, 0, -1], new THREE.Quaternion(), true)).toBe(true);
   const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 4);
@@ -161,4 +163,20 @@ it("consumes UI selection, cancels drags on input loss, invalidates resets, and 
   app.dispose();
   getRenderer.mockRestore();
   surface.geometry.dispose(); (surface.material as THREE.Material).dispose();
+});
+
+it("keeps the panel upright while grabbing with a rolled and pitched controller", () => {
+  const noop = () => {};
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onAgentText: () => true });
+  view.panel.position.set(0, 0, -1);
+  view.panel.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.4);
+  const bar = view.panel.localToWorld(new THREE.Vector3(0, -0.54, 0));
+  expect(view.beginManipulation([bar.x, bar.y, 0], [0, 0, -1])).toBe(true);
+  const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(-1.3, Math.PI / 6, Math.PI / 4, "YXZ"));
+  for (let i = 0; i < 120; i++) view.updateManipulation([bar.x, bar.y, 0], [0, 0, -1], rotation, 0.016);
+  const euler = new THREE.Euler().setFromQuaternion(view.panel.quaternion, "YXZ");
+  expect(euler.z).toBeCloseTo(0, 3);
+  expect(euler.y).toBeCloseTo(Math.PI / 6, 2);
+  expect(Math.abs(euler.x)).toBeCloseTo(THREE.MathUtils.degToRad(60), 2);
+  view.endManipulation();
 });

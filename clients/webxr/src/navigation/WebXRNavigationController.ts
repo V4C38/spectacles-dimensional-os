@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
 import {
   clientTrackingToOdomPose,
@@ -19,6 +20,7 @@ export const GOAL_SEND_INTERVAL_S = 0.35;
 export const GOAL_SEND_MIN_DISTANCE_M = 0.2;
 export const DRAG_THRESHOLD_M = 0.11;
 export const DRAG_HEADING_MIN_DELTA_M = 0.03;
+export const DRAG_HEADING_SMOOTHING_RATE = 8;
 export const FLASH_DURATION_S = 1.5;
 
 export type LiveNavGoalInput = {
@@ -87,6 +89,9 @@ export class WebXRNavigationController {
   private lastAppliedNav: NavState | null = null;
   private headingGate: { x: number; z: number } | null = null;
   private heading: Quat = [0, 0, 0, 1];
+  private headingTarget: Quat = [0, 0, 0, 1];
+  private lastHoldTime: number | null = null;
+  private streaming = true;
   private dragging = false;
   private activated = false;
   private armed = false;
@@ -169,26 +174,31 @@ export class WebXRNavigationController {
     hits: MeshHit[],
     deadzone: RobotGroundDeadzone | null,
     fallbackY: number,
+    streamWhileDragging = true,
   ): boolean {
     if (!this.armed || this.navFlash !== null || !this.origin) {
       return false;
     }
     if (!this.dragging) {
+      this.streaming = streamWhileDragging;
       const start = this.marker.pose().position;
       this.touchStart = start;
       this.headingGate = { x: start[0], z: start[2] };
+      this.headingTarget = this.heading;
       this.wasInsideDeadzone = false;
     }
+    const deltaS = this.lastHoldTime === null ? 0 : Math.max(0, now - this.lastHoldTime);
+    this.lastHoldTime = now;
     const placed = this.placeFromRay(rayFrom, rayDir, hits, deadzone, fallbackY);
     if (!placed || placed.blocked || !placed.position) {
       return false;
     }
     if (this.touchStart && distanceXZ(this.touchStart, placed.position) > DRAG_THRESHOLD_M) {
       this.dragging = true;
-      this.activated = true;
+      if (this.streaming) this.activated = true;
     }
     if (this.dragging) {
-      this.updateHeading(placed.position);
+      this.updateHeading(placed.position, deltaS);
       this.applyPose(placed.position, this.heading);
       this.streamGoal(now, placed.position, this.origin, false);
     }
@@ -207,16 +217,18 @@ export class WebXRNavigationController {
     if (!this.armed || this.navFlash !== null || !this.origin) {
       this.dragging = false;
       this.touchStart = null;
+      this.lastHoldTime = null;
       return;
     }
     const placed = this.placeFromRay(rayFrom, rayDir, hits, deadzone, fallbackY);
     if (placed && !placed.blocked && placed.position && this.dragging) {
-      this.updateHeading(placed.position);
+      this.updateHeading(placed.position, this.lastHoldTime === null ? 0 : Math.max(0, now - this.lastHoldTime));
       this.applyPose(placed.position, this.heading);
-      this.streamGoal(now, placed.position, this.origin, true);
+      if (this.streamGoal(now, placed.position, this.origin, true)) this.activated = true;
     }
     this.dragging = false;
     this.touchStart = null;
+    this.lastHoldTime = null;
     this.syncCancelVisible();
   }
 
@@ -237,6 +249,7 @@ export class WebXRNavigationController {
     this.dragging = false;
     this.touchStart = null;
     this.headingGate = null;
+    this.lastHoldTime = null;
   }
 
   reset(): void {
@@ -281,7 +294,7 @@ export class WebXRNavigationController {
     if (this.navFlash !== null) {
       return false;
     }
-    if (!this.dragging && !force) {
+    if (!force && (!this.dragging || !this.streaming)) {
       return false;
     }
     if (!shouldSendStreamGoal(now, this.lastSendTime, position, this.lastSent, force)) {
@@ -339,6 +352,7 @@ export class WebXRNavigationController {
     this.navFlash = null;
     this.lastAppliedNav = null;
     this.touchStart = null;
+    this.lastHoldTime = null;
     this.marker.setCancelVisible(false);
   }
 
@@ -400,19 +414,21 @@ export class WebXRNavigationController {
     };
   }
 
-  private updateHeading(position: Vec3): void {
+  private updateHeading(position: Vec3, deltaS: number): void {
     if (!this.headingGate) {
       this.headingGate = { x: position[0], z: position[2] };
-      return;
+    } else {
+      const dx = position[0] - this.headingGate.x;
+      const dz = position[2] - this.headingGate.z;
+      const travel = Math.hypot(dx, dz);
+      if (travel >= DRAG_HEADING_MIN_DELTA_M) {
+        this.headingGate = { x: position[0], z: position[2] };
+        this.headingTarget = yawFromPlanarDirection(dx / travel, dz / travel);
+      }
     }
-    const dx = position[0] - this.headingGate.x;
-    const dz = position[2] - this.headingGate.z;
-    const travel = Math.hypot(dx, dz);
-    if (travel < DRAG_HEADING_MIN_DELTA_M) {
-      return;
-    }
-    this.headingGate = { x: position[0], z: position[2] };
-    this.heading = yawFromPlanarDirection(dx / travel, dz / travel);
+    const current = new THREE.Quaternion(...this.heading);
+    current.slerp(new THREE.Quaternion(...this.headingTarget), 1 - Math.exp(-DRAG_HEADING_SMOOTHING_RATE * deltaS));
+    this.heading = [current.x, current.y, current.z, current.w];
   }
 }
 

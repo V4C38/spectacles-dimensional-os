@@ -1039,6 +1039,19 @@ body.resizing {
   gap: 0.4rem;
 }
 
+.log-actions select {
+  padding: 0.4rem 0.5rem;
+  font-size: 0.85rem;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.log-line[hidden] {
+  display: none;
+}
+
 .log-actions .btn {
   padding: 0.4rem 0.7rem;
   font-size: 0.85rem;

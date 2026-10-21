@@ -5,7 +5,7 @@ async function visiblePointerCount(page: Page): Promise<number> {
   return page.evaluate(() => {
     const w = window as any;
     const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
-    return [...app.interaction.beams.entries()].filter(([controller, beam]: any) => controller.visible && beam.visible).length;
+    return [...app.interaction.beams.entries()].filter(([controller, beam]: any) => controller.visible && beam.mesh.visible).length;
   });
 }
 
@@ -185,7 +185,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       const scale = button.getWorldScale(button.scale.clone());
       return { titleFontHeight: app.mainMenu.title.textObj.fontSize * app.mainMenu.title.textObj.getWorldScale(app.mainMenu.title.scale.clone()).y, panelScale: app.mainMenu.panel.scale.x, panel: app.mainMenu.panel.visible, fontHeight: button.textObj.fontSize * scale.y, opacity: button.opacity };
     });
-    expect(visible.panelScale).toBeCloseTo(0.68 * 0.6);
+    expect(visible.panelScale).toBeCloseTo(0.68 * 0.72);
     expect(visible.titleFontHeight).toBeGreaterThan(0.02);
     expect(visible.titleFontHeight).toBeLessThan(0.04);
     expect(visible.panel).toBe(true);
@@ -194,7 +194,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
       const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
-      return [...app.interaction.beams.entries()].filter(([controller, beam]: any) => controller.visible && beam.visible).length;
+      return [...app.interaction.beams.entries()].filter(([controller, beam]: any) => controller.visible && beam.mesh.visible).length;
     })).toBe(2);
     await page.screenshot({ path: testInfo.outputPath(`wizard-${mode}.png`) });
     // Exercise real button callbacks close up and at range, with a 2cm rig occluder present.
@@ -211,25 +211,25 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       await activateButton(page, "retry", distance);
       await expect.poll(() => handshakes).toBe(before + 1);
       await expect.poll(async () => (await ui())?.wizardCardTitle).toBe("Robot connected");
-      const length = await page.evaluate(() => {
+      await expect.poll(() => page.evaluate(() => {
         const w = window as any;
         const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
         const controller = w.xb.core.input.rightController;
-        return app.interaction.beams.get(controller).scale.z;
-      });
-      expect(length).toBeCloseTo(distance, 2);
+        const beam = app.interaction.beams.get(controller);
+        return beam.tip.distanceTo(controller.getWorldPosition(beam.tip.clone()));
+      })).toBeCloseTo(distance, 2);
     }
     await page.evaluate(position => {
       const w = window as any;
       w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.panel.position.fromArray(position);
     }, panelPosition);
 
-    // Resize by grabbing an edge through real XR selection while setup is open.
+    // Resize by grabbing a corner through real XR selection while setup is open.
     await page.evaluate(() => {
       const w = window as any;
       const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
       const panel = app.mainMenu.panel;
-      const edge = panel.localToWorld(panel.position.clone().set(0.65, 0, 0));
+      const edge = panel.localToWorld(panel.position.clone().set(0.65, -0.48, 0));
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
       input.position.set(edge.x, edge.y, edge.z + 0.4);
       input.quaternion.set(0, 0, 0, 1);
@@ -283,13 +283,20 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await page.evaluate(() => {
       const w = window as any;
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
-      input.quaternion.set(0, 0, Math.sin(0.2), Math.cos(0.2));
+      // Panels yaw and tilt with the grab but never roll.
+      input.quaternion.set(0, Math.sin(0.2), Math.sin(0.1), Math.cos(0.2));
+      input.quaternion.normalize();
     });
     await expect.poll(() => page.evaluate(before => {
       const w = window as any;
       const panel = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.panel;
       return panel.quaternion.angleTo(panel.quaternion.clone().fromArray(before));
     }, beforeGrab)).toBeGreaterThan(0.3);
+    expect(await page.evaluate(() => {
+      const w = window as any;
+      const panel = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.panel;
+      return Math.abs(new panel.rotation.constructor().setFromQuaternion(panel.quaternion, "YXZ").z);
+    })).toBeLessThan(0.01);
     await page.evaluate(() => {
       const w = window as any;
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
@@ -315,7 +322,8 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await page.evaluate(() => {
       const w = window as any;
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
-      input.position.set(0.3, 1.2, -0.2);
+      // Held out in front of the head, so the idle laser is revealed.
+      input.position.set(0.3, 1.2, -0.45);
       input.quaternion.set(0, -Math.sin(Math.PI / 18), 0, Math.cos(Math.PI / 18));
     });
     await expect.poll(() => page.evaluate(() => {
@@ -323,7 +331,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
       const controller = w.xb.core.input.rightController;
       const beam = app.interaction.beams.get(controller);
-      return controller.visible && beam?.visible && beam.scale.z === 3;
+      return controller.visible && beam?.mesh.visible && Math.abs(beam.tip.distanceTo(controller.getWorldPosition(beam.tip.clone())) - 3) < 0.01 && beam.opacity < 0.51;
     })).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("laser-empty-space.png") });
 
@@ -388,12 +396,13 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
         }
         return false;
       })).toBe(true);
-      const length = await page.evaluate(() => {
+      await expect.poll(() => page.evaluate(() => {
         const w = window as any;
         const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
-        return app.interaction.beams.get(w.xb.core.input.rightController).scale.z;
-      });
-      expect(length).toBeCloseTo(distance, 2);
+        const controller = w.xb.core.input.rightController;
+        const beam = app.interaction.beams.get(controller);
+        return beam.tip.distanceTo(controller.getWorldPosition(beam.tip.clone()));
+      })).toBeCloseTo(distance, 2);
       await setSelection(page, 1);
       await expect.poll(() => page.evaluate(() => {
         const w = window as any;
@@ -426,7 +435,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
       const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
-      return [...app.interaction.beams.values()].some((beam: any) => beam.visible && beam.material.color.getHex() === 0xff8a24);
+      return [...app.interaction.beams.values()].some((beam: any) => beam.mesh.visible && beam.mesh.material.uniforms.uColor.value.getHex() === 0x0a84ff);
     })).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("laser-navigation.png") });
     await setSelection(page, 0);

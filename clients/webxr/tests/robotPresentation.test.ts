@@ -77,7 +77,18 @@ describe("robot presentation", () => {
     const gizmo = robot.object.getObjectByName("RobotPoseGizmo")!;
     expect(gizmo.children).toHaveLength(6);
     expect(gizmo.scale.x).toBe(0.8);
-    expect(robot.object.getObjectByName("RobotMarkerLabel")!.scale.x).toBe(0.25);
+    expect(gizmo.visible).toBe(false);
+    expect(robot.object.getObjectByName("RobotIndicator")!.visible).toBe(true);
+    robot.setDebug(true);
+    expect(gizmo.visible).toBe(true);
+    const label = robot.object.getObjectByName("RobotMarkerLabel")!;
+    expect(label.scale.x).toBe(1);
+    robot.feedback({ tone: "success", aligned: true, activity: "Idle", message: null });
+    const tag = label.children[0] as THREE.Mesh<THREE.PlaneGeometry>;
+    const shortHeight = tag.geometry.parameters.height;
+    robot.feedback({ tone: "success", aligned: true, activity: "Thinking", message: "Heading to the kitchen to check the door" });
+    expect((label.children[0] as THREE.Mesh<THREE.PlaneGeometry>).geometry.parameters.height).toBeGreaterThan(shortHeight);
+    expect(tag.position.y).toBeGreaterThan(0);
     const axes = [
       { direction: [0, 0, -1], color: 0xff0000 },
       { direction: [-1, 0, 0], color: 0x00ff00 },
@@ -104,7 +115,6 @@ describe("robot presentation", () => {
     expect(Math.abs(dy)).toBeGreaterThan(Math.abs(dx));
     expect(Math.abs(dy)).toBeGreaterThan(Math.abs(dz));
     robot.orientFeedback(new THREE.Vector3(1, 1.8, -1));
-    const label = robot.object.getObjectByName("RobotMarkerLabel")!;
     robot.object.updateWorldMatrix(true, true);
     const labelRotation = new THREE.Euler().setFromQuaternion(label.getWorldQuaternion(new THREE.Quaternion()), "YXZ");
     expect(labelRotation.z).toBeCloseTo(0);
