@@ -1,15 +1,24 @@
 import * as THREE from "three";
 import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
 import { composePlaceArMarker, type PlaceArMarkerArgs } from "@dimos-ar-client/agent/agentSkills";
-import { clientTrackingToWebxrPoint } from "../coordinates/WebXRCoordinates";
+import { Text } from "troika-three-text";
+import type { Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
+import { disposeTextResources } from "./TextResources";
+import { cornerRadius } from "./DimOSARDesign";
+import { GlassSurface } from "./GlassSurface";
+import { indicatorMaterial } from "./PoseIndicatorMaterial";
+import { syncText, UI_FONT_REGULAR, UI_FONT_SEMIBOLD } from "./UIFonts";
+import { clientTrackingToWebxrPoint } from "../utilities/WebXRCoordinates";
 
 type MarkerEntry = {
   args: PlaceArMarkerArgs;
   object: THREE.Group;
+  progress: number;
 };
 
 export class WebXRARMarkerPresenter {
   readonly object: THREE.Group;
+  private readonly baseOpacity = new WeakMap<THREE.Material, number>();
   private readonly markers = new Map<string, MarkerEntry>();
 
   constructor() {
@@ -27,7 +36,7 @@ export class WebXRARMarkerPresenter {
     const object = createMarker(args.title);
     this.place(object, args, origin);
     this.object.add(object);
-    this.markers.set(args.id, { args, object });
+    this.markers.set(args.id, { args, object, progress: 0 });
   }
 
   remove(id: string): void {
@@ -43,6 +52,26 @@ export class WebXRARMarkerPresenter {
   recompose(origin: ClientTrackingOrigin): void {
     for (const entry of this.markers.values()) {
       this.place(entry.object, entry.args, origin);
+    }
+  }
+
+  update(cameraPosition: Vec3, deltaS: number): void {
+    const eye = new THREE.Vector3(...cameraPosition);
+    for (const entry of this.markers.values()) {
+      entry.object.getObjectByName("World marker label")?.lookAt(eye);
+      entry.progress = Math.min(1, entry.progress + Math.max(0, deltaS) / 0.18);
+      const eased = entry.progress * entry.progress * (3 - 2 * entry.progress);
+      entry.object.scale.setScalar(0.94 + 0.06 * eased);
+      entry.object.traverse(node => {
+        const material = (node as THREE.Mesh).material;
+        if (!material || Array.isArray(material)) return;
+        const uniforms = (material as THREE.ShaderMaterial).uniforms;
+        const alpha = uniforms?.uOpacity ?? uniforms?.uAlpha;
+        const base = this.baseOpacity.get(material) ?? alpha?.value ?? material.opacity;
+        this.baseOpacity.set(material, base);
+        if (alpha) alpha.value = base * eased;
+        else material.opacity = base * eased;
+      });
     }
   }
 
@@ -63,59 +92,32 @@ export class WebXRARMarkerPresenter {
     const composed = composePlaceArMarker(args, origin);
     const webxr = clientTrackingToWebxrPoint(composed.position);
     object.position.set(webxr[0], webxr[1], webxr[2]);
+    const title = object.getObjectByName("World marker title") as Text;
+    const text = args.title || "World marker";
+    if (title.text !== text) { title.text = text; syncText(title); }
+    object.userData.title = args.title;
   }
 }
 
 function createMarker(title: string): THREE.Group {
   const group = new THREE.Group();
   group.name = `AR marker · ${title}`;
-  const dark = new THREE.MeshStandardMaterial({ color: 0x090909, roughness: 0.5, metalness: 0.1 });
-  const accent = new THREE.MeshBasicMaterial({ color: 0xff8a24, side: THREE.DoubleSide });
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.09, 0.018, 32), dark);
-  base.position.y = 0.012;
-  const groundRing = new THREE.Mesh(new THREE.RingGeometry(0.12, 0.135, 48), accent);
-  groundRing.rotation.x = -Math.PI / 2;
-  groundRing.position.y = 0.005;
-  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.012, 0.42, 10), accent);
-  stem.position.y = 0.23;
-  const halo = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.004, 8, 32), accent);
-  halo.rotation.x = Math.PI / 2;
-  halo.position.y = 0.48;
-  const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.045, 0), accent);
-  core.position.y = 0.52;
-  core.rotation.y = Math.PI / 4;
-  for (const mesh of [base, groundRing, stem, halo, core]) {
-    mesh.raycast = () => {};
-    group.add(mesh);
-  }
-  if (typeof document !== "undefined") {
-    const canvas = document.createElement("canvas");
-    canvas.width = 768;
-    canvas.height = 192;
-    const context = canvas.getContext("2d");
-    if (context) {
-      context.fillStyle = "#090909";
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      context.strokeStyle = "#383838";
-      context.lineWidth = 3;
-      context.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
-      context.fillStyle = "#ff8a24";
-      context.fillRect(3, 3, 7, canvas.height - 6);
-      context.fillStyle = "#a3a3a3";
-      context.font = "600 22px sans-serif";
-      context.fillText("AR MARKER", 30, 52);
-      context.fillStyle = "#f5f5f5";
-      context.font = "600 40px sans-serif";
-      context.fillText(title, 30, 132, 710);
-      const texture = new THREE.CanvasTexture(canvas);
-      texture.colorSpace = THREE.SRGBColorSpace;
-      const plaque = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, depthWrite: false }));
-      plaque.position.y = 0.68;
-      plaque.scale.set(0.68, 0.17, 1);
-      plaque.raycast = () => {};
-      group.add(plaque);
-    }
-  }
+  const orbMaterial = indicatorMaterial(); orbMaterial.transparent = true; orbMaterial.depthWrite = false;
+  const orb = new THREE.Mesh(new THREE.SphereGeometry(0.025, 24, 16), orbMaterial);
+  orb.name = "World marker indicator"; orb.position.y = 0;
+  const label = new THREE.Group(); label.name = "World marker label"; label.position.y = 0.10;
+  const glass = new GlassSurface({ width: 0.38, height: 0.075, radius: cornerRadius(0.38, 0.075), alpha: 0.78, rim: 0.18, rimWidth: 0.0012 });
+  glass.renderOrder = 20; label.add(glass);
+  const text = new Text(); text.name = "World marker title";
+  text.text = title || "World marker"; text.font = UI_FONT_SEMIBOLD; text.fontSize = 0.022;
+  text.color = 0xffffff; text.anchorX = "center"; text.anchorY = "middle"; text.maxWidth = 0.34;
+  text.position.set(0, 0.012, 0.002); text.renderOrder = 21;
+  const caption = new Text(); caption.text = "World marker"; caption.font = UI_FONT_REGULAR; caption.fontSize = 0.012;
+  caption.color = 0xaeaeb2; caption.anchorX = "center"; caption.anchorY = "middle";
+  caption.position.set(0, -0.017, 0.002); caption.renderOrder = 21;
+  label.add(text, caption); syncText(text, caption);
+  group.add(orb, label);
+  group.traverse(node => { node.raycast = () => {}; });
   group.userData.title = title;
   return group;
 }
@@ -124,7 +126,8 @@ function disposeGroup(object: THREE.Group): void {
   const geometries = new Set<THREE.BufferGeometry>();
   const materials = new Set<THREE.Material>();
   object.traverse((child) => {
-    if (child instanceof THREE.Mesh) geometries.add(child.geometry);
+    if (child instanceof Text) { disposeTextResources(child); return; }
+    else if (child instanceof THREE.Mesh || child instanceof THREE.Line) geometries.add(child.geometry);
     if (child instanceof THREE.Sprite) child.material.map?.dispose();
     const material = (child as THREE.Mesh).material;
     if (Array.isArray(material)) material.forEach(item => materials.add(item));

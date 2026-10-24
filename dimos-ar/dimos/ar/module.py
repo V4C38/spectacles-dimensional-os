@@ -23,10 +23,11 @@ from dimos.ar.localization.vps.localizer import VpsLocalizer
 from dimos.ar.localization.vps.multiset_client import MultisetVpsClient, MultisetVpsClientConfig
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
 from dimos.ar.navigation.coordinator import NavGoalCoordinator
+from dimos.ar.navigation.preview_planner import PreviewPlanner
 from dimos.ar.navigation.tele_cmd_vel import TeleCmdVelPublisher
-from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest
+from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest
 from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName, CapabilitySet
-from dimos.ar.robot.odometry_correction import correct_odom_pose, correct_odom_xy
+from dimos.ar.robot.odometry_correction import correct_odom_pose, correct_odom_xy, uncorrect_odom_xy
 from dimos.ar.robot.profiles import FiducialMarkerMount, RobotName, RobotProfile, get_profile
 from dimos.ar.robot.safety import Safety
 from dimos.ar.robot.state_publisher import RobotStatePublisher
@@ -53,6 +54,7 @@ from dimos.ar.websocket.protocol import (
     observation_from_localization,
 )
 from dimos.ar.websocket.server import WebSocketServer
+from dimos.ar.websocket.server_info import server_info
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
@@ -60,6 +62,7 @@ from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Transform import Transform
 from dimos.msgs.geometry_msgs.Twist import Twist
+from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 from dimos.msgs.nav_msgs.Path import Path
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
@@ -162,6 +165,7 @@ class ARModule(Module):  # type: ignore[misc]
 
     lidar: In[PointCloud2]
     odom: In[PoseStamped]
+    global_costmap: In[OccupancyGrid]
     tf: In[TFMessage]
     path: In[Path]
     goal_reached: In[Bool]
@@ -202,6 +206,10 @@ class ARModule(Module):  # type: ignore[misc]
         self._profile = profile_for_config(self.config)
         self._lidar_settings = DEFAULT_LIDAR_SETTINGS
         self._speed_mps = 0.0
+        self._preview_planner = PreviewPlanner(global_config)
+        self._preview_odom: PoseStamped | None = None
+        self._preview_costmap_ts: float | None = None
+        self._preview_tasks: dict[str, asyncio.Task[None]] = {}
         self._last_corrected_xy: tuple[float, float, float] | None = None
         self._last_relocalization_transform_poll_at = 0.0
         self._episode_tasks: set[asyncio.Task[None]] = set()
@@ -313,6 +321,9 @@ class ARModule(Module):  # type: ignore[misc]
     def stop(self) -> None:
         logger.info("ARModule stopping")
         self._cancel_tele_cmd_vel()
+        for task in tuple(getattr(self, "_preview_tasks", {}).values()):
+            if self._loop is not None:
+                self._loop.call_soon_threadsafe(task.cancel)
         ws_server_obj = getattr(self, "_ws_server", None)
         if ws_server_obj is not None:
             ws_server_obj.stop()
@@ -323,6 +334,8 @@ class ARModule(Module):  # type: ignore[misc]
             robot=self._profile.description,
             capabilities=self._capabilities.as_mapping(),
             navigation_inputs=self._capabilities.navigation_as_mapping(),
+            nav_goal_preview=self._capabilities.supports_navigation(NAV_GOAL),
+            server_info=server_info(),
         )
 
     def _state_snapshot(self) -> StateSnapshot:
@@ -334,6 +347,7 @@ class ARModule(Module):  # type: ignore[misc]
             lidar=self._lidar_settings,
             nav=self._nav_goal_coordinator.nav_state(),
             agent=AgentState(idle=idle),
+            nav_preview_costmap_ts=getattr(self, "_preview_costmap_ts", None),
         )
 
     def _broadcast_state(self) -> None:
@@ -384,6 +398,9 @@ class ARModule(Module):  # type: ignore[misc]
             self._send_observations_request(requested_client_id)
 
     def _on_client_disconnect(self, _websocket: ws_server.ServerConnection, client_id: str) -> None:
+        task = getattr(self, "_preview_tasks", {}).pop(client_id, None)
+        if task is not None:
+            task.cancel()
         self._policy.on_disconnect(client_id)
         if self._ws_server.connection_count == 0:
             self._cancel_tele_cmd_vel()
@@ -401,12 +418,66 @@ class ARModule(Module):  # type: ignore[misc]
     ) -> None:
         if not self._capabilities.supports_navigation(NAV_GOAL):
             return
+        if msg.preview:
+            if client_id not in self._preview_tasks:
+                task = asyncio.create_task(self._send_preview(msg, client_id))
+                self._preview_tasks[client_id] = task
+            else:
+                frame = NavGoalFrame(
+                    pose=None,
+                    path_poses=[],
+                    ts=time.time(),
+                    preview=True,
+                    preview_id=msg.preview_id,
+                )
+                self._ws_server.schedule_send_to_client(client_id, encode_nav_goal(frame))
+            return
         goal = self._nav_goal_coordinator.submit_goal(msg)
         if self.goal_request.transport is None:
             logger.warning("nav_goal_request ignored — goal_request transport is not wired")
             return
         self.goal_request.publish(goal)
         logger.info("nav_goal_request published", client_id=client_id, position=msg.position)
+        self._broadcast_state()
+
+    async def _send_preview(self, msg: NavGoalRequest, client_id: str) -> None:
+        try:
+            frame = await asyncio.to_thread(self._compute_preview, msg)
+            self._ws_server.schedule_send_to_client(client_id, encode_nav_goal(frame))
+        finally:
+            self._preview_tasks.pop(client_id, None)
+
+    def _compute_preview(self, msg: NavGoalRequest) -> NavGoalFrame:
+        empty = NavGoalFrame(
+            pose=None, path_poses=[], ts=time.time(), preview=True, preview_id=msg.preview_id
+        )
+        try:
+            odom = self._preview_odom
+            if odom is None:
+                return empty
+            factor = self._profile.odom_scale_correction_factor
+            goal_xy = uncorrect_odom_xy(*msg.position[:2], factor=factor)
+            path = self._preview_planner.plan((odom.x, odom.y), goal_xy)
+            if not path:
+                return empty
+            yaw = PoseStamped(position=list(msg.position), orientation=list(msg.orientation)).yaw
+            poses = [
+                (*correct_odom_xy(x, y, factor=factor), msg.position[2], yaw) for x, y, _z in path
+            ]
+            return NavGoalFrame(
+                pose=poses[-1],
+                path_poses=poses,
+                ts=time.time(),
+                preview=True,
+                preview_id=msg.preview_id,
+            )
+        except Exception:
+            logger.exception("preview planning failed")
+            return empty
+
+    async def handle_global_costmap(self, msg: OccupancyGrid) -> None:
+        await asyncio.to_thread(self._preview_planner.update_costmap, msg)
+        self._preview_costmap_ts = msg.ts
         self._broadcast_state()
 
     def _on_estop_request(self, _msg: EstopRequest, _websocket: ws_server.ServerConnection) -> None:
@@ -561,6 +632,7 @@ class ARModule(Module):  # type: ignore[misc]
         self._state_publisher.publish_lidar(msg, lidar=self._lidar_settings)
 
     async def handle_odom(self, msg: PoseStamped) -> None:
+        self._preview_odom = msg
         ts_server = time.time()
         # Localizers must use the same metric robot position as outbound pose.
         # Correct dead reckoning before composing physical marker/camera offsets;

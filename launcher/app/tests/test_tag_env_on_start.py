@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -145,7 +145,7 @@ async def test_start_webxr_composes_local_and_network_urls(
     mgr = ProcessManager(root=tmp_path)
 
     async def fake_spawn(argv, *, env, parse_armodule):  # type: ignore[no-untyped-def]
-        return None
+        mgr._proc = Mock(returncode=None)
 
     with (
         patch.object(mgr, "port_in_use", return_value=False),
@@ -155,6 +155,12 @@ async def test_start_webxr_composes_local_and_network_urls(
         patch.object(mgr, "_spawn", new=fake_spawn),
     ):
         await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
+        assert mgr.status.webxr_url is None
+        assert mgr.status.webxr_local_url is None
+        mgr._parse_armodule_line("ARModule started websocket=ws://0.0.0.0:8787")
+        mgr._armodule_ready.set()
+        assert mgr._webxr_start_task is not None
+        await mgr._webxr_start_task
 
     assert mgr.status.webxr_local_url == "https://localhost:5173"
     assert mgr.status.webxr_url == "https://10.0.0.8:5173"

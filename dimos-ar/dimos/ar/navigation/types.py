@@ -11,6 +11,8 @@ NavOutcome = Literal["succeeded", "failed"]
 class NavGoalRequest:
     position: tuple[float, float, float]
     orientation: tuple[float, float, float, float]
+    preview: bool = False
+    preview_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,8 @@ class NavGoalFrame:
     pose: tuple[float, float, float, float] | None
     path_poses: list[tuple[float, float, float, float]]
     ts: float
+    preview: bool = False
+    preview_id: str | None = None
 
 
 @dataclass(frozen=True)

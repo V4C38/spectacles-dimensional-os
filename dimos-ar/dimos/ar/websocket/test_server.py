@@ -27,6 +27,7 @@ def _pick_free_port() -> int:
 
 def _sample_hello(_client_id: str) -> HelloBody:
     return HelloBody(
+        server_info={"robot_ip": "10.0.0.42", "armodule_version": "0.2.0"},
         robot=RobotDescription(
             display_name=UNITREE_GO2_PROFILE.display_name,
             body_bounds_m=UNITREE_GO2_PROFILE.body_bounds_m,
@@ -162,6 +163,7 @@ async def test_reconnect_handshakes_while_prior_socket_ignores_close(
 async def test_connect_receives_hello_after_hello_request(harness: ServerHarness) -> None:
     async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as ws:
         msg = await _send_hello_request(ws, ts_client=42.0)
+        assert msg["server_info"] == {"robot_ip": "10.0.0.42", "armodule_version": "0.2.0"}
         assert msg["type"] == "hello"
         assert "client_id" in msg
         assert msg["time_sync"]["ts_client"] == 42.0

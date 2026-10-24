@@ -11,6 +11,7 @@ import {
 } from "../websocket/protocol";
 import type { ARModuleSession } from "../websocket/arModuleSession";
 import type {
+  CapturePolicy,
   LocalizationObservation,
   LocalizationObservationsRequest,
   Outbound,
@@ -35,6 +36,7 @@ export interface LocalizationCaptureConfig {
 export interface LocalizationCaptureState {
   phase: LocalizationCapturePhase;
   lastError: string | null;
+  capturePolicy?: CapturePolicy | null;
   capturedCount?: number;
   observationCount?: number;
 }
@@ -99,6 +101,7 @@ export class LocalizationCaptureEpisode {
   view(): LocalizationCaptureState {
     return {
       phase: this.phase,
+      capturePolicy: this.request?.capture_policy ?? null,
       lastError: this.lastError,
       capturedCount: this.observations.length,
       observationCount: this.request?.observation_count ?? 0,

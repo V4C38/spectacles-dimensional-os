@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { frameTimeToClientClock } from "../src/time/BrowserClientClock";
+import { frameTimeToClientClock } from "../src/utilities/BrowserClientClock";
 
 describe("frameTimeToClientClock", () => {
   it("converts a DOMHighResTimeStamp onto ClientClock seconds", () => {

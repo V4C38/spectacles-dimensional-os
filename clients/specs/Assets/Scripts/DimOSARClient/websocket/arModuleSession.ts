@@ -42,6 +42,7 @@ export interface ARModuleSessionState {
   state: State | null;
   pose: Pose | null;
   nav_goal: NavGoal | null;
+  nav_preview?: NavGoal | null;
   lidar: Lidar | null;
   capabilities: Capabilities | null;
   nav: NavState | null;
@@ -77,6 +78,7 @@ export class ARModuleSession {
   private state: State | null = null;
   private pose: Pose | null = null;
   private nav_goal: NavGoal | null = null;
+  private nav_preview: NavGoal | null = null;
   private lidar: Lidar | null = null;
   private agentMessage: string | null = null;
   private lastError: string | null = null;
@@ -220,6 +222,7 @@ export class ARModuleSession {
       state: this.state,
       pose: this.pose,
       nav_goal: this.nav_goal,
+      nav_preview: this.nav_preview,
       lidar: this.lidar,
       capabilities: this.hello?.capabilities ?? null,
       nav: this.state?.nav ?? null,
@@ -283,7 +286,8 @@ export class ARModuleSession {
         this.pose = message;
         break;
       case "nav_goal":
-        this.nav_goal = message;
+        if (message.preview) this.nav_preview = message;
+        else this.nav_goal = message;
         break;
       case "localization_result":
         try {
@@ -343,6 +347,7 @@ export class ARModuleSession {
     this.state = null;
     this.pose = null;
     this.nav_goal = null;
+    this.nav_preview = null;
     this.lidar = null;
     this.agentMessage = null;
     this.clientTrackingOriginStore.clear();
@@ -378,7 +383,7 @@ export class ARModuleSession {
   }
 }
 
-export function requireCapability(session: ARModuleSession, name: CapabilityName): void {
+export function requireCapability(session: Pick<ARModuleSession, "view">, name: CapabilityName): void {
   if (session.view().connection !== "ready") {
     throw new Error("send requires a ready session");
   }
@@ -387,7 +392,7 @@ export function requireCapability(session: ARModuleSession, name: CapabilityName
   }
 }
 
-export function requireNavigation(session: ARModuleSession, name: NavigationInputName): void {
+export function requireNavigation(session: Pick<ARModuleSession, "view">, name: NavigationInputName): void {
   requireCapability(session, "navigation");
   if (session.view().capabilities?.navigation?.[name]?.available !== true) {
     throw new Error(`hello.capabilities.navigation.${name} is not available`);

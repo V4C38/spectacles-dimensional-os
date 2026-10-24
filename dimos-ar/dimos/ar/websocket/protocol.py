@@ -182,9 +182,16 @@ def decode_inbound(text: str) -> Inbound:
         raise ValueError("hello_request is handled during handshake, not in the message loop")
 
     if msg_type == "nav_goal_request":
+        preview_id = _require_type(data, "preview_id", str) if "preview_id" in data else None
+        if preview_id is not None and not (1 <= len(preview_id) <= 128):
+            raise ValueError("preview_id must contain 1 to 128 characters")
+        if preview_id is not None and data.get("preview") is not True:
+            raise ValueError("preview_id requires preview: true")
         return NavGoalRequest(
-            position=_vec3(data, "position"),
-            orientation=_quat(data, "orientation"),
+            position=_finite_vec3(data, "position"),
+            orientation=_finite_quat(data, "orientation"),
+            preview=_require_type(data, "preview", bool) if "preview" in data else False,
+            preview_id=preview_id,
         )
 
     if msg_type == "estop_request":
@@ -216,7 +223,9 @@ def decode_inbound(text: str) -> Inbound:
         if not stripped:
             raise ValueError("user_message_request.text must be non-blank")
         if len(text) > HUMAN_INPUT_MAX_CHARS:
-            raise ValueError(f"user_message_request.text exceeds {HUMAN_INPUT_MAX_CHARS} characters")
+            raise ValueError(
+                f"user_message_request.text exceeds {HUMAN_INPUT_MAX_CHARS} characters"
+            )
         return UserMessageRequest(text=stripped)
 
     if msg_type == "client_pose":
@@ -385,6 +394,8 @@ class HelloBody:
     robot: RobotDescription
     capabilities: dict[CapabilityName, Capability]
     navigation_inputs: dict[str, Capability]
+    nav_goal_preview: bool = False
+    server_info: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -394,6 +405,8 @@ class Hello:
     robot: RobotDescription
     capabilities: dict[CapabilityName, Capability]
     navigation_inputs: dict[str, Capability]
+    nav_goal_preview: bool = False
+    server_info: dict[str, str] | None = None
 
 
 def _capability_wire(cap: Capability) -> dict[str, Any]:
@@ -410,6 +423,8 @@ def encode_hello(hello: Hello) -> str:
                 if nested is None:
                     raise ValueError(f"hello.navigation_inputs missing {key}")
                 entry[key] = _capability_wire(nested)
+                if key == "nav_goal" and hello.nav_goal_preview:
+                    entry[key]["preview"] = True
         capabilities[str(name)] = entry
     return encode_text(
         {
@@ -426,6 +441,7 @@ def encode_hello(hello: Hello) -> str:
                 "base_height_m": hello.robot.base_height_m,
             },
             "capabilities": capabilities,
+            **({"server_info": hello.server_info} if hello.server_info is not None else {}),
         }
     )
 
@@ -476,12 +492,18 @@ class StateSnapshot:
     lidar: LidarSettings
     nav: NavState
     agent: AgentState
+    nav_preview_costmap_ts: float | None = None
 
 
 def encode_state(snapshot: StateSnapshot) -> str:
     return encode_text(
         {
             "type": "state",
+            **(
+                {"nav_preview_costmap_ts": snapshot.nav_preview_costmap_ts}
+                if snapshot.nav_preview_costmap_ts is not None
+                else {}
+            ),
             "server": {"connected_clients": snapshot.connected_clients},
             "lidar": {
                 "enabled": snapshot.lidar.enabled,
@@ -573,6 +595,10 @@ def encode_nav_goal(nav_goal: NavGoalFrame) -> str:
         "path_poses": [_wire_waypoint(*point) for point in nav_goal.path_poses],
         "ts": nav_goal.ts,
     }
+    if nav_goal.preview:
+        body["preview"] = True
+        if nav_goal.preview_id is not None:
+            body["preview_id"] = nav_goal.preview_id
     if nav_goal.pose is not None:
         body["pose"] = _wire_waypoint(*nav_goal.pose)
     return encode_text(body)

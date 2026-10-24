@@ -3,6 +3,7 @@ declare module "troika-three-text" {
 
   export class Text extends Mesh {
     text: string;
+    readonly textRenderInfo?: { blockBounds: number[] };
     font: string | null;
     fontSize: number;
     color: number | string;

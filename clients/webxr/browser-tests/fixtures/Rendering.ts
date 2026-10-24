@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { WebXRLidarRenderer, WebXRRouteRenderer } from "../../src/presentation/WebXRPresenters";
+import { WebXRLidarRenderer } from "../../src/sensors/WebXRLidarRenderer";
+import { WebXRRouteRenderer } from "../../src/navigation/WebXRRouteRenderer";
 import type { YawPose } from "@dimos-ar-client/websocket/protocolTypes";
 
 export function verifyRendering() {
@@ -17,11 +18,15 @@ export function verifyRendering() {
   const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
   const route = new WebXRRouteRenderer();
   scene.add(route.object);
-  function pixelAt(point: THREE.Vector3): number[] {
+  function pixelAt(point: THREE.Vector3, radius = 0): number[] {
     const clip = point.project(camera);
-    const pixel = new Uint8Array(4);
-    renderer.readRenderTargetPixels(target, Math.round((clip.x + 1) * 256), Math.round((clip.y + 1) * 256), 1, 1, pixel);
-    return [...pixel];
+    let brightest = [0, 0, 0, 255];
+    for (let y = -radius; y <= radius; y++) for (let x = -radius; x <= radius; x++) {
+      const pixel = new Uint8Array(4);
+      renderer.readRenderTargetPixels(target, Math.round((clip.x + 1) * 256) + x, Math.round((clip.y + 1) * 256) + y, 1, 1, pixel);
+      if (pixel[0] + pixel[1] + pixel[2] >= brightest[0] + brightest[1] + brightest[2]) brightest = [...pixel];
+    }
+    return brightest;
   }
   const short: YawPose[] = [[0, -1, 0, 0], [0.1, -1, 0, 0]];
   const long: YawPose[] = [...short, [0.5, -1, 0, 0], [1, -1, 0, 0]];
@@ -29,18 +34,18 @@ export function verifyRendering() {
   renderer.render(scene, camera); // Populate the real GPU's instance-count cache.
   route.apply(long, origin, true, 0, 0);
   renderer.render(scene, camera);
-  const longEnd = pixelAt(new THREE.Vector3(1, 0, -0.9));
+  const longEnd = pixelAt(new THREE.Vector3(1, 0, -0.9), 2);
   route.apply(short, origin, true, 0, 0);
   renderer.render(scene, camera);
-  const shortEnd = pixelAt(new THREE.Vector3(1, 0, -0.9));
+  const shortEnd = pixelAt(new THREE.Vector3(1, 0, -0.9), 2);
   route.apply(long, origin, true, 0, 0);
   renderer.render(scene, camera);
-  const regrownEnd = pixelAt(new THREE.Vector3(1, 0, -0.9));
+  const regrownEnd = pixelAt(new THREE.Vector3(1, 0, -0.9), 2);
   route.hide();
 
   const lidar = new WebXRLidarRenderer();
   lidar.object.material.size = 32;
-  lidar.apply([[0, 0, 1]], origin); // Point is closer to the camera than the panel.
+  lidar.apply([[0, 0, 1]], origin, "full"); // Point is closer to the camera than the panel.
   scene.add(lidar.object);
   const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.5), new THREE.MeshBasicMaterial({ color: 0xffffff, depthWrite: false }));
   panel.rotation.x = -Math.PI / 2;

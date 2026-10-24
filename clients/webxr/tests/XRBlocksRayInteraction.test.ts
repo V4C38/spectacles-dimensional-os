@@ -9,7 +9,7 @@ vi.hoisted(() => {
 });
 import * as THREE from "three";
 import * as xb from "xrblocks";
-import { XRBlocksRayInteraction, registerRayTarget } from "../src/input/XRBlocksRayInteraction";
+import { XRBlocksRayInteraction, registerRayTarget, resolveRayHit, preferredPointer } from "../src/input/XRBlocksRayInteraction";
 
 function fixture() {
   const scene = new THREE.Scene();
@@ -111,7 +111,7 @@ it(`uses the same SDK path for a 3D mesh at ${distance}m, hidden UI, empty rays 
   f.controller.userData.connected = true;
   f.input.updateController(f.controller);
   interaction.update();
-  expect(interaction.beams.get(f.controller)?.mesh.visible).toBe(true);
+  expect(interaction.beams.get(f.controller)?.mesh.visible).toBe(false);
   interaction.dispose();
 });
 }
@@ -148,33 +148,82 @@ it("bends the laser toward a smoothed tip and dims it until it hovers a target",
   interaction.dispose();
 });
 
-it("hides an idle laser unless the hand is held out, zooming it in and out", () => {
-  const f = fixture();
-  const interaction = new XRBlocksRayInteraction(f.input);
-  f.controller.inputSource = { targetRayMode: "tracked-pointer" };
-  f.controller.userData.connected = true;
-  interaction.setEnabled(true);
-  f.scene.updateMatrixWorld(true);
-  f.input.updateController(f.controller);
-  const resting = { position: new THREE.Vector3(0, 0.3, -0.1), quaternion: new THREE.Quaternion() };
-  interaction.update(1 / 60, resting);
+it("keeps empty-space lasers hidden regardless of reach or empty presses, while exact targets still reveal", () => {
+  const f = fixture(); const interaction = new XRBlocksRayInteraction(f.input);
+  f.controller.inputSource = { targetRayMode: "tracked-pointer" }; f.controller.userData.connected = true;
+  interaction.setEnabled(true); f.scene.updateMatrixWorld(true); f.input.updateController(f.controller);
+  for (let i = 0; i < 30; i++) interaction.update(1 / 60);
   const beam = interaction.beams.get(f.controller)!;
   expect(beam.mesh.visible).toBe(false);
-  const head = { position: new THREE.Vector3(0, 0.3, 0.4), quaternion: new THREE.Quaternion() };
-  interaction.update(1 / 60, head);
-  expect(beam.mesh.visible).toBe(true);
-  const growing = beam.mesh.material.uniforms.uP2.value.z;
-  expect(growing).toBeGreaterThan(-3);
-  for (let i = 0; i < 20; i++) interaction.update(1 / 60, head);
-  expect(beam.mesh.material.uniforms.uP2.value.z).toBeCloseTo(-3);
-  expect(beam.reveal).toBe(1);
-  interaction.update(1 / 60, resting);
-  expect(beam.reveal).toBeLessThan(1);
-  for (let i = 0; i < 20; i++) interaction.update(1 / 60, resting);
-  expect(beam.mesh.visible).toBe(false);
-  registerRayTarget(f.button.mesh!);
-  f.input.updateController(f.controller);
-  for (let i = 0; i < 20; i++) interaction.update(1 / 60, resting);
-  expect(beam.mesh.visible).toBe(true);
+  f.controller.userData.selected = true;
+  interaction.update(1); expect(beam.mesh.visible).toBe(false);
+  registerRayTarget(f.button.mesh!); f.input.updateController(f.controller);
+  interaction.update(1); expect(beam.mesh.visible).toBe(true);
+  f.button.visible = false; f.input.updateController(f.controller);
+  interaction.update(1); expect(beam.mesh.visible).toBe(false);
   interaction.dispose();
+});
+
+
+it("uses menu, navigation, robot, floor precedence for SDK hover, laser and press targets", () => {
+  const f = fixture(); const interaction = new XRBlocksRayInteraction(f.input);
+  registerRayTarget(f.button.mesh!);
+  const meshes = [10, 20, 30].map((priority, i) => {
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial());
+    mesh.position.z = -0.1 - i * 0.1;
+    mesh.userData.rayPriority = priority;
+    registerRayTarget(mesh); f.scene.add(mesh); return mesh;
+  });
+  f.scene.updateMatrixWorld(true); f.input.updateController(f.controller);
+  expect(interaction.hit(f.controller)?.object).toBe(f.button.mesh);
+  expect(f.input.intersectionsForController.get(f.controller)![0].object).toBe(f.button.mesh);
+  f.button.visible = false; f.scene.updateMatrixWorld(true); f.input.updateController(f.controller);
+  expect(interaction.hit(f.controller)?.object).toBe(meshes[0]);
+  const hits = f.input.intersectionsForController.get(f.controller)!;
+  expect(resolveRayHit([...hits].reverse())?.object).toBe(meshes[0]);
+  f.controller.inputSource = { targetRayMode: "tracked-pointer", handedness: "left" };
+  f.controller.userData.connected = true;
+  const right = f.input.controllers[1];
+  right.inputSource = { targetRayMode: "tracked-pointer", handedness: "right" };
+  right.userData.connected = true;
+  expect(preferredPointer([f.controller, right])).toBe(right);
+  right.visible = false;
+  expect(preferredPointer([right, f.controller])).toBe(f.controller);
+  interaction.dispose();
+});
+
+it("reveals near misses without SDK hover or reticle, and respects disabled, occluded and captured targets", () => {
+  const f = fixture(), interaction = new XRBlocksRayInteraction(f.input);
+  registerRayTarget(f.button.mesh!); f.controller.inputSource = { targetRayMode: "tracked-pointer" }; f.controller.userData.connected = true;
+  interaction.setEnabled(true);
+  // The real button ends at x=.1; this ray misses by 3cm.
+  f.scene.updateMatrixWorld(true);
+  f.controller.position.x = new THREE.Box3().setFromObject(f.button.mesh!).max.x + 0.03; f.scene.updateMatrixWorld(true); f.input.updateController(f.controller);
+  interaction.update(1);
+  const beam = interaction.beams.get(f.controller)!;
+  expect(beam.mesh.visible).toBe(true); expect(f.button.ux.isHovered()).toBe(false); expect(f.controller.reticle!.visible).toBe(false);
+  interaction.setPolicy({ eligible: () => false, captured: () => false, unobstructed: () => true });
+  interaction.update(1); expect(beam.mesh.visible).toBe(false);
+  interaction.setPolicy({ eligible: () => true, captured: () => false, unobstructed: () => false });
+  interaction.update(1); expect(beam.mesh.visible).toBe(false);
+  f.button.visible = false; f.input.updateController(f.controller);
+  interaction.setPolicy({ eligible: () => false, captured: () => true, unobstructed: () => true });
+  interaction.update(1); expect(beam.mesh.visible).toBe(true);
+  interaction.setEnabled(false); expect(beam.mesh.visible).toBe(false);
+  interaction.dispose();
+});
+
+it("activates a nearby button once through SDK pinch/trigger events while the laser points away", () => {
+  const f = fixture(), interaction = new XRBlocksRayInteraction(f.input);
+  registerRayTarget(f.button.mesh!); interaction.setEnabled(true);
+  f.controller.inputSource = { targetRayMode: "tracked-pointer" }; f.controller.userData.connected = true;
+  f.controller.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+  const point = f.button.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0, 0.01));
+  interaction.direct.setPoint(f.controller, point); f.input.updateController(f.controller);
+  expect(interaction.hit(f.controller)?.object).toBe(f.button.mesh); expect(f.button.ux.isHovered()).toBe(true);
+  const activate = vi.fn(); f.button.onTriggered = activate;
+  f.input.defaultOnSelectStart({ type: "selectstart", target: f.controller }); f.user.onSelectStart({ target: f.controller });
+  interaction.direct.capture(f.controller, f.button.mesh!); f.input.updateController(f.controller);
+  f.input.defaultOnSelectEnd({ type: "selectend", target: f.controller }); f.user.onSelectEnd({ target: f.controller });
+  expect(activate).toHaveBeenCalledOnce(); interaction.dispose();
 });

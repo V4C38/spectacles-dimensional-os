@@ -1,8 +1,9 @@
 import type { Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
 
-export const GROUND_NORMAL_MIN_Y = Math.cos((65 * Math.PI) / 180);
+export const GROUND_NORMAL_MIN_Y = Math.cos((20 * Math.PI) / 180);
 export const DEADZONE_EXIT_MARGIN_M = 0.12;
 export const RAY_LENGTH_M = 20;
+export const FLOOR_AIM_RANGE_M = 5;
 
 export type RobotGroundDeadzone = {
   radiusM: number;
@@ -12,7 +13,7 @@ export type RobotGroundDeadzone = {
 
 export type MeshBlockReason = "none" | "wall" | "unscanned";
 
-export type MeshHit = { position: Vec3; normal: Vec3 };
+export type MeshHit = { position: Vec3; normal: Vec3; label?: string };
 
 export type MeshPlacementResult = {
   status: "ok" | "blocked";
@@ -57,80 +58,64 @@ export function isInsideRobotDeadzone(
 }
 
 export function solveMeshPlacement(args: SolveMeshPlacementArgs): MeshPlacementResult {
-  const planarPoint = pinchPlanarPoint(args.rayFrom, args.rayTo, args.fallbackY);
-  const fallback = buildRayFallbackPoint(args.rayFrom, args.rayTo, args.fallbackY);
-  const insideDeadzone = isInsideRobotDeadzone(planarPoint, args.deadzone, args.wasInsideDeadzone);
-  const meshHit = args.hits.length > 0 ? args.hits[0] : null;
-  const meshGroundGoal =
-    meshHit && isGroundNormal(meshHit.normal)
-      ? ([meshHit.position[0], meshHit.position[1], meshHit.position[2]] as Vec3)
-      : null;
-
-  if (insideDeadzone && args.deadzone) {
-    const robotGoalY = args.deadzone.getRobotFloorWorldY() ?? args.fallbackY;
-    const goalY =
-      meshGroundGoal !== null
-        ? blendDeadzoneMeshGoalY(
-            planarPoint,
-            args.deadzone,
-            args.wasInsideDeadzone,
-            robotGoalY,
-            meshGroundGoal[1],
-          )
-        : robotGoalY;
-    const position: Vec3 = [planarPoint[0], goalY, planarPoint[2]];
-    return {
-      status: "ok",
-      blockReason: "none",
-      probePosition: position,
-      goalPosition: position,
-      wasInsideDeadzone: true,
-    };
-  }
-
-  if (args.hits.length === 0) {
-    return {
-      status: "blocked",
-      blockReason: "unscanned",
-      probePosition: fallback,
-      goalPosition: null,
-      wasInsideDeadzone: false,
-    };
-  }
-
-  const firstHit = args.hits[0];
-  if (isGroundNormal(firstHit.normal)) {
-    let goalY = firstHit.position[1];
-    if (args.deadzone?.getRobotWorldPosition()) {
-      const robotGoalY = args.deadzone.getRobotFloorWorldY() ?? args.fallbackY;
-      goalY = blendDeadzoneMeshGoalY(
-        planarPoint,
-        args.deadzone,
-        args.wasInsideDeadzone,
-        robotGoalY,
-        goalY,
-      );
-    }
-    const goal: Vec3 = [firstHit.position[0], goalY, firstHit.position[2]];
-    return {
-      status: "ok",
-      blockReason: "none",
-      probePosition: goal,
-      goalPosition: goal,
-      wasInsideDeadzone: false,
-    };
-  }
-
+  const point = pinchPlanarPoint(args.rayFrom, args.rayTo, args.fallbackY);
+  const hit = args.hits[0];
+  const floorY = args.deadzone?.getRobotFloorWorldY() ?? args.fallbackY;
+  const valid = hit
+    ? pointIsOnRay(hit.position, args.rayFrom, args.rayTo) && isGroundNormal(hit.normal) && (hit.label === "floor" ||
+        (!hit.label && Math.abs(hit.position[1] - floorY) <= FLOOR_HEIGHT_TOLERANCE_M))
+    : args.rayTo[1] < args.rayFrom[1] && pointIsOnRay(point, args.rayFrom, args.rayTo);
+  const position = hit?.position ?? point;
   return {
-    status: "blocked",
-    blockReason: "wall",
-    probePosition: [firstHit.position[0], firstHit.position[1], firstHit.position[2]],
-    goalPosition: null,
-    wasInsideDeadzone: false,
+    status: valid ? "ok" : "blocked",
+    blockReason: valid ? "none" : hit?.label === "unscanned" ? "unscanned" : "wall",
+    probePosition: position,
+    goalPosition: valid ? position : null,
+    wasInsideDeadzone: isInsideRobotDeadzone(position, args.deadzone, args.wasInsideDeadzone),
   };
 }
 
-export type FloorPlane = { position: Vec3; normal: Vec3 };
+export const FLOOR_HEIGHT_TOLERANCE_M = 0.18;
+
+function pointIsOnRay(point: Vec3, from: Vec3, to: Vec3): boolean {
+  const length = Math.hypot(to[0] - from[0], to[1] - from[1], to[2] - from[2]);
+  return Math.hypot(point[0] - from[0], point[1] - from[1], point[2] - from[2]) <= length;
+}
+
+export type FloorPlane = { position: Vec3; normal: Vec3; polygon?: Vec3[]; label?: string };
+
+export function isFloorSurface(plane: FloorPlane, floorY: number): boolean {
+  return isGroundNormal(plane.normal) && (plane.label === "floor" ||
+    (!plane.label && Math.abs(plane.position[1] - floorY) <= FLOOR_HEIGHT_TOLERANCE_M));
+}
+
+/** Polygons are finite. Every detected non-floor surface still blocks a ray. */
+export function navigationSurfaceHits(from: Vec3, dir: Vec3, planes: readonly FloorPlane[], floorY: number): MeshHit[] {
+  const hasFloor = planes.some(plane => isFloorSurface(plane, floorY));
+  const hit = intersectRayPlanes(from, dir, planes);
+  const fallback = intersectRayPlanes(from, dir, [{ position: [0, floorY, 0], normal: [0, 1, 0] }]);
+  if (hit && (!fallback || hasFloor || distanceSquared(from, hit.position) <= distanceSquared(from, fallback.position))) return [hit];
+  if (!hasFloor) return fallback ? [fallback] : [];
+  return [{ position: fallback?.position ?? from, normal: [0, 0, 0], label: "unscanned" }];
+}
+
+function distanceSquared(a: Vec3, b: Vec3): number {
+  return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+}
+
+function insidePolygon(point: Vec3, polygon: Vec3[], normal: Vec3): boolean {
+  // Project onto the dominant plane, so vertical walls work as well as floors.
+  const drop = normal.map(Math.abs).indexOf(Math.max(...normal.map(Math.abs)));
+  const axes = [0, 1, 2].filter(axis => axis !== drop);
+  const [u, v] = axes;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i], b = polygon[j];
+    if ((a[v] > point[v]) !== (b[v] > point[v]) &&
+        point[u] < (b[u] - a[u]) * (point[v] - a[v]) / (b[v] - a[v]) + a[u]) inside = !inside;
+  }
+  return inside;
+}
 
 export function intersectRayPlanes(
   rayFrom: Vec3,
@@ -160,10 +145,13 @@ export function intersectRayPlanes(
     if (t < 0 || t > RAY_LENGTH_M || t >= bestT) {
       continue;
     }
+    const position: Vec3 = [rayFrom[0] + dir[0] * t, rayFrom[1] + dir[1] * t, rayFrom[2] + dir[2] * t];
+    if (plane.polygon && !insidePolygon(position, plane.polygon, normal)) continue;
     bestT = t;
     best = {
       position: [rayFrom[0] + dir[0] * t, rayFrom[1] + dir[1] * t, rayFrom[2] + dir[2] * t],
       normal,
+      ...(plane.label ? { label: plane.label } : {}),
     };
   }
   return best;
@@ -190,14 +178,6 @@ function normalizeVec3(value: Vec3): Vec3 | null {
   return [value[0] / length, value[1] / length, value[2] / length];
 }
 
-function buildRayFallbackPoint(rayFrom: Vec3, rayTo: Vec3, fallbackY: number): Vec3 {
-  const direction = normalizeVec3([rayTo[0] - rayFrom[0], rayTo[1] - rayFrom[1], rayTo[2] - rayFrom[2]]);
-  if (!direction) {
-    return [rayFrom[0], fallbackY, rayFrom[2]];
-  }
-  return [rayFrom[0] + direction[0] * RAY_LENGTH_M, fallbackY, rayFrom[2] + direction[2] * RAY_LENGTH_M];
-}
-
 function pinchPlanarPoint(rayFrom: Vec3, rayTo: Vec3, planeY: number): Vec3 {
   const delta: Vec3 = [rayTo[0] - rayFrom[0], rayTo[1] - rayFrom[1], rayTo[2] - rayFrom[2]];
   const direction = normalizeVec3(delta);
@@ -214,40 +194,11 @@ function pinchPlanarPoint(rayFrom: Vec3, rayTo: Vec3, planeY: number): Vec3 {
   }
   const distanceAlongRay = (planeY - rayFrom[1]) / direction[1];
   if (distanceAlongRay < 0) {
-    return buildRayFallbackPoint(rayFrom, rayTo, planeY);
+    return [rayTo[0], planeY, rayTo[2]];
   }
   return [
     rayFrom[0] + direction[0] * distanceAlongRay,
     planeY,
     rayFrom[2] + direction[2] * distanceAlongRay,
   ];
-}
-
-function blendDeadzoneMeshGoalY(
-  planarPoint: Vec3,
-  deadzone: RobotGroundDeadzone,
-  wasInsideDeadzone: boolean,
-  robotGoalY: number,
-  meshGoalY: number,
-): number {
-  const robotPosition = deadzone.getRobotWorldPosition();
-  if (!robotPosition || !(deadzone.radiusM > 0)) {
-    return meshGoalY;
-  }
-  const dist = horizontalDistanceXZ(planarPoint, robotPosition);
-  const blendStart = deadzone.radiusM * 0.65;
-  const blendEnd = wasInsideDeadzone ? deadzone.radiusM + DEADZONE_EXIT_MARGIN_M : deadzone.radiusM;
-  if (dist <= blendStart) {
-    return robotGoalY;
-  }
-  if (dist >= blendEnd) {
-    return meshGoalY;
-  }
-  const t = smoothstep01((dist - blendStart) / (blendEnd - blendStart));
-  return robotGoalY + (meshGoalY - robotGoalY) * t;
-}
-
-function smoothstep01(t: number): number {
-  const clamped = Math.max(0, Math.min(1, t));
-  return clamped * clamped * (3 - 2 * clamped);
 }

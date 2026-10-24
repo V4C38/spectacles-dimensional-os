@@ -7,6 +7,7 @@ import {
   decodeLocalizationObservations,
   decodeOutbound,
   encodeEstopRequest,
+  encodeNavGoalRequest,
   encodeClientPose,
   encodeHelloRequest,
   encodeUserMessageRequest,
@@ -153,7 +154,7 @@ describe("encode inbound JSON", () => {
 describe("decodeOutbound fixtures", () => {
   it("decodes hello from PROTOCOL.md", () => {
     const hello = decodeOutbound(JSON.stringify(HELLO_FIXTURE));
-    expect(hello).toEqual(HELLO_FIXTURE);
+    expect(hello).toEqual({ ...HELLO_FIXTURE, capabilities: { ...HELLO_FIXTURE.capabilities, navigation: { ...HELLO_FIXTURE.capabilities.navigation, nav_goal: { ...HELLO_FIXTURE.capabilities.navigation.nav_goal, preview: false } } } });
   });
 
   it("decodes state from PROTOCOL.md", () => {
@@ -612,4 +613,35 @@ describe("localization_observations binary", () => {
     badJson[jsonStart + 1] = 0x00;
     expect(() => decodeLocalizationObservations(badJson)).toThrow(/intrinsics/);
   });
+});
+
+
+it("decodes optional preview support and paths without changing legacy goal defaults", () => {
+  const hello = structuredClone(HELLO_FIXTURE);
+  Object.assign(hello.capabilities.navigation.nav_goal, { preview: true });
+  const decoded = decodeOutbound(JSON.stringify(hello));
+  expect(decoded.type === "hello" && decoded.capabilities.navigation.nav_goal.preview).toBe(true);
+  expect(JSON.parse(encodeNavGoalRequest({ position: [1, 2, 0], orientation: [0, 0, 0, 1], preview: true })).preview).toBe(true);
+  expect(JSON.parse(encodeNavGoalRequest({ position: [1, 2, 0], orientation: [0, 0, 0, 1] })).preview).toBeUndefined();
+  expect(decodeOutbound(JSON.stringify({ type: "nav_goal", preview: true, path_poses: [], ts: 1 }))).toEqual({ type: "nav_goal", preview: true, pose: null, path_poses: [], ts: 1 });
+  expect(() => decodeOutbound(JSON.stringify({ type: "nav_goal", preview: "true", path_poses: [], ts: 1 }))).toThrow(/boolean/);
+});
+
+it("preserves preview correlation and rejects malformed identities without changing normal goals", () => {
+  const pose = { position: [1, 2, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number] };
+  const request = JSON.parse(encodeNavGoalRequest({ ...pose, preview: true, preview_id: "aim-1" }));
+  expect(request.preview_id).toBe("aim-1");
+  expect(decodeOutbound(JSON.stringify({ type: "nav_goal", preview: true, preview_id: "aim-1", path_poses: [], ts: 1 }))).toMatchObject({ preview_id: "aim-1", preview: true });
+  expect(() => encodeNavGoalRequest({ ...pose, preview_id: "aim-1" })).toThrow(/requires preview/);
+  expect(() => encodeNavGoalRequest({ ...pose, preview: true, preview_id: "" })).toThrow(/preview_id/);
+  expect(() => decodeOutbound(JSON.stringify({ type: "nav_goal", preview: true, preview_id: 7, path_poses: [], ts: 1 }))).toThrow(/preview_id/);
+});
+
+it("decodes optional server display metadata while retaining old hello defaults", () => {
+  const old = decodeOutbound(JSON.stringify(HELLO_FIXTURE));
+  expect(old.type === "hello" && old.server_info).toBeUndefined();
+  const info = { robot_ip: "192.168.1.42", dimos_version: "0.4.0", armodule_version: "0.2.0" };
+  const next = decodeOutbound(JSON.stringify({ ...HELLO_FIXTURE, server_info: info }));
+  expect(next.type === "hello" && next.server_info).toEqual(info);
+  expect(() => decodeOutbound(JSON.stringify({ ...HELLO_FIXTURE, server_info: { robot_ip: 42 } }))).toThrow();
 });

@@ -3,6 +3,7 @@
 Standalone WebXR host for ARModule. It reuses portable ClientCore from [`../specs/Assets/Scripts/DimOSARClient`](../specs/Assets/Scripts/DimOSARClient) and talks to ARModule only over the [`PROTOCOL.md`](../../dimos-ar/PROTOCOL.md) WebSocket.
 
 Composition root: `DimOSWebXRClient`. Stack: Google XR Blocks + Three.js + Vite.
+Domain folders mirror ClientCore and Specs; see [CONTRIBUTING.md](../../CONTRIBUTING.md#webxr-architecture) for ownership and the ARModule → ClientCore → host mapping.
 
 The landing page has a **Your headset** control. Current options: Quest 3 (`quest3`) and Quest 3S (`quest3s`).
 
@@ -11,11 +12,18 @@ The landing page has a **Your headset** control. Current options: Quest 3 (`ques
 - An HMD from the selector
 - HTTPS page origin (Vite serves HTTPS for LAN headset access)
 - ARModule already listening on `ws://127.0.0.1:8787` on the same machine as Vite
-- The selected HMD profile (`src/camera/hmdProfiles.ts`)
+- The selected HMD profile (`src/localization/HmdProfiles.ts`)
 
 The Quest browser opens the WebXR page and connects to same-origin `wss://<page-host>/ar`. Vite forwards `/ar` to local ARModule. The headset never types an ARModule IP or port. A non-HTTPS page fails before XR entry. The selected HMD profile is the camera calibration.
 
 If ARModule restarts, ClientCore reconnects `/ar` every second. Vite forwards each new attempt. Localization origin is cleared on disconnect, so the wearer localizes again. If Vite itself stops, reload the page.
+
+The launcher starts Vite only after ARModule reports that its WebSocket server is
+ready. During robot startup, the WebXR page is temporarily unavailable and its
+links remain hidden in the launcher. An already-open page can reconnect once
+Vite starts; reload it if the browser does not recover automatically. This keeps
+WebXR proxy requests out of robot initialization. When running Vite independently,
+start ARModule first.
 
 ## Develop
 
@@ -73,7 +81,9 @@ Show your left palm or press controller button 4 to open the menu in front of yo
 approximately 1.8-second time constant; grabbing the panel pauses following. Choose Manual for drag navigation
 and the left joystick; choose Agent for conversation. Voice listens for “agent”, keeps a
 30-second conversation window, and handles “stop” with the existing emergency-stop command.
-Select Message agent for an in-world keyboard when [browser recognition](https://developer.mozilla.org/en-US/docs/Web/API/SpeechRecognition) is unavailable or denied.
+Hold the message field to record, release to review, and press Send to agent.
+Further recordings append to the draft; Clear empties it. Scrollbars and controller
+thumbsticks reveal long text. Recording requires browser speech recognition.
 Robot name, connection, activity, prompt and response appear above the robot.
 
 The tracking reference space lasts for the immersive session. Focus loss pauses input and
@@ -123,8 +133,10 @@ Install Chromium once with `npx playwright install chromium`. These tests exerci
 runtime bundling, which the Node-only unit tests cannot cover. They simulate the robot and camera boundary; they do not measure hardware accuracy.
 Screenshots are written under `test-results/`.
 
-During development, browser startup, XR session, panel placement and exception diagnostics
-are forwarded through Vite to the launcher's existing log as `[WebXR browser]` entries.
-The browser console also retains them. Add `?debug=1` to inspect XR Blocks' `window.xb` scene.
+Browser diagnostics default to warnings and errors, deduplicated for 30 seconds.
+Routine startup, connection, tracking, panel, and interaction traces are silent.
+Use `?diagnostics=1` to enable rate-limited traces in the browser console and the
+launcher's `[WebXR browser]` development log. `?debug=1` exposes XR Blocks' `window.xb`
+scene without enabling traces; combine both parameters when needed.
 The actual `three-mesh-bvh` dependency must be installed: an empty stub can overwrite
 `Mesh.raycast` and crash the render loop before setup is drawn.

@@ -3,34 +3,40 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#ffffff" />
-    <title>DimOS ARModule</title>
-    <style>
-      * { box-sizing: border-box; }
-      html, body { margin: 0; min-height: 100%; background: #fff; color: #111; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      #overlay { position: absolute; inset: 0; z-index: 2; min-height: 100svh; background: #fff; }
-      header { padding: 22px 30px; border-bottom: 1px solid #e5e5e5; font-size: 17px; font-weight: 600; }
-      main { width: min(360px, calc(100% - 40px)); margin: 15vh auto 0; }
-      label { display: block; margin-bottom: 8px; font-size: 14px; }
-      select, button { width: 100%; min-height: 48px; padding: 11px 14px; border: 1px solid #222; border-radius: 4px; background: #fff; color: #111; font: inherit; font-size: 15px; }
-      select { margin-bottom: 12px; }
-      select:focus-visible, button:focus-visible { outline: 3px solid #c8ff43; outline-offset: 2px; }
-      button { border-color: #111; background: #111; color: #fff; cursor: pointer; font-weight: 600; }
-      button:disabled { opacity: .45; cursor: default; }
-      #status { min-height: 22px; margin: 12px 0 0; color: #444; font-size: 13px; line-height: 1.5; }
-      #status:empty { display: none; }
-      @media (max-width: 520px) { header { padding: 18px 20px; } main { margin-top: 12vh; } }
-    </style>
+    <meta name="theme-color" content="#182028" />
+    <title>dimOS AR</title>
+    <link rel="stylesheet" href="/src/presentation/LandingPage.css" />
   </head>
   <body>
     <div id="overlay">
-      <header>DimOS ARModule</header>
+      <div class="landing-layout">
+      <section class="landing-panel" aria-label="dimOS AR setup">
+      <header>dimOS AR</header>
       <main>
-        <label for="hmd">HMD model</label>
+        <label for="hmd">Headset</label>
         <select id="hmd" disabled></select>
         <button id="enter" type="button" disabled>Connect</button>
         <p id="status" role="status" aria-live="polite">Starting…</p>
       </main>
+      </section>
+      <aside class="landing-panel connection-panel" aria-label="Robot and available features">
+        <h2 data-info="robot">Robot</h2>
+        <p class="robot-status" role="status"><span class="robot-status-dot" aria-hidden="true"></span><span data-info="status">Connecting…</span></p>
+        <p class="feature-heading">Available features</p>
+        <ul class="feature-list" aria-label="Available features">
+          <li data-feature="navigation" hidden><span class="feature-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 21l8-5 8 5-8-18Z" /></svg></span><span>Navigation</span></li>
+          <li data-feature="agent" hidden><span class="feature-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10a3 3 0 0 1 3 3v6H4v-6a3 3 0 0 1 3-3Zm5 0V4m-4 8h.01M16 12h.01M8 21v-4m8 4v-4" /></svg></span><span>Agent</span></li>
+          <li data-feature="lidar" hidden><span class="feature-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V4m-6 2a9 9 0 0 0 0 12m12-12a9 9 0 0 1 0 12M9 9a4 4 0 0 0 0 6m6-6a4 4 0 0 1 0 6" /></svg></span><span>LiDAR</span></li>
+          <li data-feature="localization" hidden><span class="feature-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6M8 12h8m-4-4v8" /></svg></span><span>Localization</span></li>
+          <li data-feature="estop" hidden><span class="feature-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h8l5 5v8l-5 5H8l-5-5V8l5-5Zm1 6h6v6H9V9Z" /></svg></span><span>Emergency Stop</span></li>
+        </ul>
+        <p class="feature-empty" data-info="features">Waiting for robot…</p>
+      </aside>
+      <footer class="connection-footnote" aria-label="Version and connection details">
+        <p><span>Server <span data-info="server">Unavailable</span></span><span data-detail="robot-ip" hidden>Robot <span data-info="robot-ip">Unavailable</span></span></p>
+        <p><span data-detail="build">WebXR <span data-info="build">Unavailable</span></span><span data-detail="dimos" hidden>dimOS <span data-info="dimos">Unavailable</span></span><span data-detail="armodule" hidden>ARModule <span data-info="armodule">Unavailable</span></span></p>
+      </footer>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -29,7 +29,7 @@ export type Capability =
   | { available: false; reason: string };
 
 export type NavigationCapability = Capability & {
-  nav_goal: Capability;
+  nav_goal: Capability & { preview?: boolean };
   nav_joystick: Capability;
 };
 
@@ -49,7 +49,14 @@ export interface RobotDescription {
   base_height_m: number;
 }
 
+export interface ServerInfo {
+  robot_ip?: string;
+  dimos_version?: string;
+  armodule_version?: string;
+}
+
 export interface Hello {
+  server_info?: ServerInfo;
   type: "hello";
   client_id: string;
   time_sync: TimeSync;
@@ -73,6 +80,7 @@ export interface AgentState {
 }
 
 export interface State {
+  nav_preview_costmap_ts?: number;
   type: "state";
   server: { connected_clients: number };
   lidar: LidarSettings;
@@ -120,6 +128,8 @@ export interface Pose {
 }
 
 export interface NavGoal {
+  preview?: boolean;
+  preview_id?: string;
   type: "nav_goal";
   pose: YawPose | null;
   path_poses: YawPose[];
@@ -157,6 +167,8 @@ export interface LocalizationStartRequest {
 }
 
 export interface NavGoalRequest {
+  preview?: boolean;
+  preview_id?: string;
   type: "nav_goal_request";
   position: Vec3;
   orientation: Quat;

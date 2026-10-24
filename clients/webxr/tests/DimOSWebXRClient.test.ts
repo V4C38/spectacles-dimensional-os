@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
 import { BrowserWebSocketTransport } from "../src/websocket/BrowserWebSocketTransport";
-import { HMD_PROFILES } from "../src/camera/hmdProfiles";
-import { HmdCameraSource } from "../src/camera/HmdCameraSource";
+import { HMD_PROFILES } from "../src/localization/HmdProfiles";
+import { HmdCameraSource } from "../src/localization/HmdCameraSource";
 
 class FakeSocket {
   binaryType = "";

@@ -2,7 +2,7 @@
 
 Quest 3 and Quest 3S use their device camera profiles directly. Selecting a headset chooses
 its intrinsics and optical transform. No experimental runtime mode or calibration approval
-step exists. Model-specific JSON files in `src/camera/profiles/` override these defaults.
+step exists. Model-specific JSON files in `src/localization/profiles/` override these defaults.
 
 ## Device profiles
 
@@ -86,7 +86,7 @@ checks **maximum 2 px reprojection, 5 cm origin, and 5° heading errors**. It re
 reused, non-finite and unconstrained data. Numerical initialization is not calibration data.
 A rejected output has `accepted: false` and the command exits unsuccessfully.
 
-After review, copy an accepted artifact to `src/camera/profiles/quest3.json` or `quest3s.json`
+After review, copy an accepted artifact to `src/localization/profiles/quest3.json` or `quest3s.json`
 and rebuild. The app loads these artifacts, checks their model and calibration values, then
 requires a matching physical camera label, device ID and stream resolution/rate before
 capture. Keep the observations and physical acceptance results with the calibration record.

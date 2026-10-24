@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 
@@ -60,7 +61,10 @@ class ClientSendQueue:
         if self._closed:
             return
         frame_type = peek_frame_type(text)
-        if frame_type in COALESCE_FRAME_TYPES:
+        # Previews are request/reply traffic. Coalescing them with authoritative
+        # nav_goal frames loses either the active route or a correlated reply.
+        preview = frame_type == "nav_goal" and json.loads(text).get("preview") is True
+        if frame_type in COALESCE_FRAME_TYPES and not preview:
             self._coalesce_latest[frame_type] = text
         else:
             self._sequence += 1
@@ -150,7 +154,12 @@ class ClientSendQueue:
         fifo_depth = self._queue.qsize()
         coalesce_depth = len(self._coalesce_latest)
         has_binary = self._coalesce_latest_binary is not None
-        if fifo_depth == 0 and coalesce_depth == 0 and not has_binary and self._dropped_fifo_count == 0:
+        if (
+            fifo_depth == 0
+            and coalesce_depth == 0
+            and not has_binary
+            and self._dropped_fifo_count == 0
+        ):
             return
         self._last_backlog_log_mono = now
         logger.info(

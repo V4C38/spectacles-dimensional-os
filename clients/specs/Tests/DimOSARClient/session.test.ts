@@ -477,3 +477,16 @@ describe("session config", () => {
     ).toThrow(/reconnectDelayS/);
   });
 });
+
+
+it("stores preview replies separately from active navigation and clears both on disconnect", () => {
+  const { session, transport } = makeSession(); handshake(session, transport);
+  const active = { type: "nav_goal", pose: [1, 2, 0, 0], path_poses: [[1, 2, 0, 0]], ts: 1 };
+  const preview = { type: "nav_goal", preview: true, pose: [3, 4, 0, 0], path_poses: [[3, 4, 0, 0]], ts: 2 };
+  session.onTransportText(JSON.stringify(active) + "\n" + JSON.stringify(preview) + "\n");
+  expect(session.view().nav_goal).toEqual(active);
+  expect(session.view().nav_preview).toEqual(preview);
+  expect(session.view().nav).toEqual({ state: "idle", outcome: null });
+  session.onTransportClose();
+  expect(session.view().nav_goal).toBeNull(); expect(session.view().nav_preview).toBeNull();
+});

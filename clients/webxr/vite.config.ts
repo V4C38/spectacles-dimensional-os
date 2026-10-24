@@ -1,5 +1,7 @@
+import { validDiagnosticEntry } from "./src/diagnostics/DiagnosticReporter";
 import { defineConfig, type Plugin } from "vitest/config";
 import basicSsl from "@vitejs/plugin-basic-ssl";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { AR_MODULE_CLIENT_CONFIG } from "../specs/Assets/Scripts/DimOSARClient/websocket/hostPorts";
 
@@ -50,14 +52,25 @@ function browserDiagnostics(): Plugin {
     name: "dimos-browser-diagnostics",
     configureServer(server) {
       server.ws.on("dimos:webxr-diagnostic", (entry) => {
+        if (!validDiagnosticEntry(entry)) return;
         const line = JSON.stringify(entry);
-        if (line && line.length <= 6000) server.config.logger.info(`[WebXR browser] ${line}`);
+        if (line && line.length <= 6000) server.config.logger[entry.level === "debug" ? "info" : entry.level](`[WebXR browser] ${line}`);
       });
     },
   };
 }
 
+function buildRevision(): string {
+  try {
+    const cwd = fileURLToPath(new URL("../..", import.meta.url));
+    const revision = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd, encoding: "utf8" }).trim();
+    const dirty = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8" }).trim();
+    return revision + (dirty ? " · dev" : "");
+  } catch { return "Unavailable"; }
+}
+
 export default defineConfig({
+  define: { __DIMOS_BUILD__: JSON.stringify(buildRevision()) },
   plugins: [stubOptionalModules(), basicSsl(), browserDiagnostics()],
   resolve: {
     alias: {

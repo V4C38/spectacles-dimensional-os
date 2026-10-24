@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { lookupPoseSample, selectFrameTimestamp } from "../src/camera/HmdCameraSource";
-import { HMD_PROFILES } from "../src/camera/hmdProfiles";
+import { lookupPoseSample, selectFrameTimestamp } from "../src/localization/HmdCameraSource";
+import { HMD_PROFILES } from "../src/localization/HmdProfiles";
 import { cameraFixture } from "./fixtures/camera";
 
 async function readyCapture(f: ReturnType<typeof cameraFixture>) {
@@ -206,4 +206,16 @@ it("binds a browser 720p frame to cropped intrinsics", async () => {
   expect(observation.intrinsics.height).toBe(720);
   expect(observation.intrinsics.cy).toBeCloseTo(361.2428589);
   f.source.dispose();
+});
+
+it("offers a read-only preview from the validated capture stream and retires it on stop", async () => {
+  const f = cameraFixture();
+  expect(f.source.previewFrame()).toBeNull();
+  await f.source.waitUntilOpen();
+  expect(f.source.previewFrame()).toEqual({ video: f.video, width: 1280, height: 960 });
+  const opens = f.media.getUserMedia.mock.calls.length;
+  f.source.previewFrame(); f.source.previewFrame();
+  expect(f.media.getUserMedia).toHaveBeenCalledTimes(opens);
+  expect(f.jpeg.encode).not.toHaveBeenCalled();
+  f.source.stop(); expect(f.source.previewFrame()).toBeNull();
 });

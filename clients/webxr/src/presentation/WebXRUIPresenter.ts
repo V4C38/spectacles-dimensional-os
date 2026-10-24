@@ -16,7 +16,7 @@ import {
   type StatusTone,
 } from "@dimos-ar-client/websocket/sessionLinkStatus";
 import { requestUserMessage } from "@dimos-ar-client/agent/userMessageRequest";
-import { toneHex } from "./tones";
+import { toneHex } from "./StatusTones";
 
 export type OperatingMode = "manual" | "agent";
 
@@ -24,12 +24,20 @@ export type WizardStep = "connect" | "localization";
 
 export interface WebXRUISnapshot {
   wizardStep: WizardStep;
+  connectComplete?: boolean;
+  localizationKind?: "marker" | "vps" | "mixed" | "unknown" | "unavailable";
+  setupCelebrating?: boolean;
+  setupSuccessProgress?: number;
   wizardTitle: string;
   wizardDescription: string;
   wizardCardTitle: string;
   wizardCardBody: string;
   localizationIssue: string | null;
   robotName: string;
+  robotSelected: boolean;
+  robotConnectionText: string;
+  robotSelectable: boolean;
+  debugEnabled: boolean;
   hasTrackingOrigin: boolean;
   nextLabel: string;
   backVisible: boolean;
@@ -68,18 +76,25 @@ export class WebXRUIPresenter {
   private wizardLidarOffSent = false;
   private postWizardLidarSent = false;
   private nowS = 0;
+  private lastRobotName = "Robot";
+  private successElapsedS: number | null = null;
+  private lastVisibleTickAt: number | null = null;
 
   constructor(
     private readonly session: ARModuleSession,
     private readonly episode: LocalizationCaptureEpisode,
     private readonly cameraError: () => string | null = () => null,
+    private readonly isRobotSelected: () => boolean = () => false,
   ) {}
 
   onSessionView(view: ARModuleSessionState, prev: ARModuleSessionState | null, now: number): void {
+    this.nowS = now;
     if (view.connection !== "ready") {
+      this.successElapsedS = null;
       this.wizardLidarOffSent = false;
       this.postWizardLidarSent = false;
     }
+    if (view.hello) this.lastRobotName = view.hello.robot.display_name;
     const prevPhase = prev ? deriveSessionLinkPhase(prev) : this.linkPhase;
     const nextPhase = deriveSessionLinkPhase(view);
     this.linkPhase = nextPhase;
@@ -100,6 +115,9 @@ export class WebXRUIPresenter {
   }
 
   tick(now: number): void {
+    const visibleDeltaS = this.lastVisibleTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastVisibleTickAt));
+    this.lastVisibleTickAt = now;
+    if (this.successElapsedS !== null) this.successElapsedS += visibleDeltaS;
     this.nowS = now;
     if (this.hudText && now >= this.hudUntil) {
       this.hudText = null;
@@ -121,31 +139,49 @@ export class WebXRUIPresenter {
     const view = this.session.view();
     const link = sessionLinkStatus(view, view.hello?.robot.display_name);
     const capture = localizationCaptureStatus(view, this.episode.view(), this.nowS);
+    const policy = this.episode.view().capturePolicy;
+    const kind = view.capabilities?.localization.available !== true ? "unavailable" :
+      policy === "robot_los_required" ? "marker" : policy === "any_angle" ? "vps" :
+        policy === "robot_los_preferred" ? "mixed" : "unknown";
     const descriptions = {
-      connect: "Connect securely to your PC. No PIN required.",
-      localization: "Align your headset with the robot using its mounted marker.",
+      connect: "",
+      localization: kind === "vps" ? "VPS" :
+        kind === "mixed" ? "AprilTag + VPS" :
+          kind === "marker" ? "AprilTag" :
+            kind === "unavailable" ? "No localization provider" : "Waiting for localization…",
     };
-    const issue = this.localizationError ?? this.cameraError();
+    const issue = kind === "unavailable" ? null : this.localizationError ?? this.cameraError();
+    const guidance = kind === "vps" ? "Look around the mapped space." :
+      kind === "mixed" ? "Frame the tag, or look around the mapped space." :
+        kind === "marker" ? "Frame the tag at the guide’s approximate size." :
+          kind === "unavailable" ? "Skip to continue without localization." : "Waiting for camera…";
     const card = this.wizardStep === "connect"
-        ? { title: view.connection === "ready" ? "Robot connected" : "Connecting to your robot", body: view.connection === "ready" ? "Ready to align your headset with the robot." : "Waiting for ARModule. Check that the launcher is running, or reconnect to try again." }
-        : issue
-          ? { title: "Camera alignment unavailable", body: `${issue} You can skip and use the remaining controls.` }
-          : { title: capture.text.split("\n")[0] || "Scanning .", body: "Look at the marker. Hold steady until alignment completes." };
+      ? { title: view.connection === "ready" ? "Connected to dimOS ARModule" : "Connecting", body: view.connection === "ready" ? `WebSocket connected\nRobot: ${view.hello?.robot.display_name ?? "Unavailable"}\n${availableFeatures(view.capabilities)}` : "Waiting for the launcher." }
+      : issue ? { title: "Camera unavailable", body: issue }
+        : { title: kind === "unavailable" ? "Localization unavailable" : capture.text.split("\n")[0] || "Preparing camera…", body: guidance };
     return {
+      connectComplete: view.connection === "ready",
+      localizationKind: kind,
+      setupCelebrating: this.successElapsedS !== null && this.successElapsedS < 1.5,
+      setupSuccessProgress: this.successElapsedS === null ? 0 : Math.min(1, this.successElapsedS / 0.65),
       wizardCardTitle: card.title,
       wizardCardBody: card.body,
       localizationIssue: issue,
-      robotName: view.hello?.robot.display_name ?? "Robot control",
+      robotName: view.hello?.robot.display_name ?? this.lastRobotName,
+      robotSelected: this.isRobotSelected(),
+      robotConnectionText: { disconnected: "Disconnected", connecting: "Connecting…", robotOffline: "Robot offline", connected: "Connected" }[deriveSessionLinkPhase(view)],
+      robotSelectable: this.setupCompleted && view.connection === "ready",
+      debugEnabled: this.debugEnabled,
       hasTrackingOrigin: view.hasTrackingOrigin,
       wizardStep: this.wizardStep,
       wizardTitle: { connect: "Connect", localization: "Localization" }[this.wizardStep],
       wizardDescription: descriptions[this.wizardStep],
-      nextLabel: this.wizardStep === "connect" && view.connection === "ready" ? "Next" : "Skip",
+      nextLabel: this.wizardStep === "connect" && view.connection === "ready" ? "Continue" : "Skip",
       backVisible: this.wizardStep === "localization" || this.openedFromRuntime,
-      debugText: this.debugEnabled ? `Connection: ${view.connection}\nAligned: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture.text}\n${issue ?? ""}` : "",
+      debugText: `Connection: ${view.connection}\nAligned: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture.text}\n${issue ?? ""}`,
       activity: view.nav?.state === "following_path" ? "Following Path" : view.state?.agent.idle === false ? "Thinking" : "Idle",
       setupCompleted: this.setupCompleted,
-      connectionText: view.connection === "awaiting_hello" ? "Waiting for handshake…" : view.connection === "failed" ? "Connection lost. Retrying…" : link.text.trim(),
+      connectionText: view.connection === "awaiting_hello" ? "Connecting…" : view.connection === "failed" ? "Reconnecting…" : link.text.trim(),
       connectionTone: link.color,
       captureText: this.localizationError ?? capture.text,
       captureTone: issue ? "warn" : capture.color,
@@ -170,12 +206,13 @@ export class WebXRUIPresenter {
     if (!this.session.view().hasTrackingOrigin) {
       throw new Error("setup requires localization_result");
     }
-    this.finishSetup();
+    this.finishSetup(true);
   }
 
-  private finishSetup(): void {
+  private finishSetup(success = false): void {
     if (!this.session.view().hasTrackingOrigin) this.episode.pause();
     this.setupCompleted = true;
+    this.successElapsedS = success ? 0 : null;
     this.openedFromRuntime = false;
     this.menuOpen = false;
     this.postWizardLidarSent = false;
@@ -209,6 +246,7 @@ export class WebXRUIPresenter {
   }
 
   restartSetup(): void {
+    this.successElapsedS = null;
     this.openedFromRuntime = this.setupCompleted;
     this.wizardStep = "connect";
     this.localizationError = null;
@@ -244,6 +282,7 @@ export class WebXRUIPresenter {
   }
 
   restartLocalization(): void {
+    if (this.session.view().capabilities?.localization.available !== true) return;
     this.localizationError = this.cameraError();
     if (this.localizationError) return;
     try { this.episode.requestStart(); }
@@ -259,6 +298,7 @@ export class WebXRUIPresenter {
 
   sendAgentText(text: string): void {
     if (!this.setupCompleted || this.operatingMode !== "agent") throw new Error("Select Agent mode to send a message");
+    if (!this.isRobotSelected()) throw new Error("Select the robot to send a message");
     requestUserMessage(this.session, text);
   }
 
@@ -296,4 +336,11 @@ export class WebXRUIPresenter {
       return;
     }
   }
+}
+
+/** One concise capability vocabulary for setup and the landing information panel. */
+export function availableFeatures(capabilities: ARModuleSessionState["capabilities"]): string {
+  const labels = { navigation: "Navigation", agent: "Agent", lidar: "LiDAR", localization: "Localization", estop: "Emergency Stop" } as const;
+  const features = (Object.keys(labels) as (keyof typeof labels)[]).filter(key => capabilities?.[key]?.available).map(key => labels[key]);
+  return features.length ? `Available: ${features.join(", ")}` : "No features available";
 }

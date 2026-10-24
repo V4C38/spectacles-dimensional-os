@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { RecognitionPort } from "@dimos-ar-client/agent/AgentDraftSession";
 import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
 import { BrowserWebSocketTransport } from "../src/websocket/BrowserWebSocketTransport";
 import { cameraFixture } from "./fixtures/camera";
@@ -38,12 +39,12 @@ const alignment = { type: "localization_result", position: [0, 0, 0], orientatio
 const request = { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 };
 const cleanup: (() => void)[] = [];
 afterEach(() => { cleanup.splice(0).forEach(dispose => dispose()); });
-function fixture() {
+function fixture(recognition: RecognitionPort | null = null) {
   let now = 10;
   const sockets: Socket[] = [];
   const camera = cameraFixture(undefined, { now: () => now });
   const client = new DimOSWebXRClient({
-    camera: camera.source, clock: { now: () => now },
+    recognition, camera: camera.source, clock: { now: () => now },
     transport: new BrowserWebSocketTransport({ url: "wss://pc.test/ar", socketFactory: () => {
       const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket;
     } }),
@@ -55,7 +56,7 @@ function fixture() {
     client.resumeTracking();
     const socket = sockets[sockets.length - 1];
     socket.open();
-    expect(client.ui.snapshot().connectionText).toContain("handshake");
+    expect(client.ui.snapshot().connectionText).toBe("Connecting…");
     socket.receive(hello); socket.receive(state);
     socket.receive({ type: "pose", position: [2, 0, 0.33], orientation: [0, 0, 0, 1], ts: 10 });
     return socket;
@@ -89,13 +90,14 @@ describe("WebXR complete ARModule session", () => {
     f.tick();
     expect(socket.commands("lidar_settings_request").at(-1)?.enabled).toBe(true);
     expect(f.camera.stopped).toHaveBeenCalled();
+    for (let i = 0; i < 17; i++) { f.advance(0.1); f.tick(); }
     f.client.holdNavigation([0, 1.5, 0], [0, -1, -2], [{ position: [0, 0, 0], normal: [0, 1, 0] }]);
     f.client.releaseNavigation([0, 1.5, 0], [0, -1, -2], [{ position: [0, 0, 0], normal: [0, 1, 0] }]);
     const goal = socket.commands("nav_goal_request").at(-1);
     expect(goal).toBeDefined();
     expect(goal.orientation[2]).toBeCloseTo(0); // WebXR -Z = odom +X
     socket.receive({ type: "nav_goal", ts: 10, pose: [3, 0, 0, 0], path_poses: [[2, 0, 0, 0], [3, 0, 0, 0]] });
-    socket.receive({ ...state, nav: { state: "following_path", outcome: null } });
+    socket.receive({ ...state, lidar: { enabled: true, min_height_m: 0.1, max_height_m: 0.8, max_range_m: 0.5 }, nav: { state: "following_path", outcome: null } });
     f.tick(); expect(f.client.route.object.visible).toBe(true);
     socket.receive({ type: "agent_skill", name: "ar_place_marker", args: { id: "door", x: 3, y: 0, z: 1, title: "Door" } });
     const cloud = new ArrayBuffer(28);
@@ -111,7 +113,7 @@ describe("WebXR complete ARModule session", () => {
     expect(f.client.navigation.marker.pose().position[2]).toBeCloseTo(-2.8);
     expect(f.client.markers.object.children[0].position.z).toBeCloseTo(-2.8);
     expect(f.client.lidar.object.geometry.getAttribute("position").getZ(0)).toBeCloseTo(-2.8);
-    expect(f.client.route.object.geometry.getAttribute("instanceStart").getZ(0)).toBeCloseTo(-1.8);
+    expect(f.client.route.object.geometry.getAttribute("instanceStart").getZ(0)).toBeCloseTo(-1.865);
     socket.receive({ type: "nav_goal", ts: 10, path_poses: [] });
     socket.receive({ ...state, nav: { state: "resolved", outcome: "succeeded" } });
     f.tick(); expect(f.client.navigation.marker.cancelVisible()).toBe(false);
@@ -158,19 +160,21 @@ describe("WebXR complete ARModule session", () => {
     f.client.ui.nextSetup(); f.tick();
     const marker = f.client.navigation.marker;
     expect(marker.object.visible).toBe(true);
-    expect(marker.pose()).toEqual(f.client.robot.floorPose());
+    expect(JSON.parse(JSON.stringify(marker.pose()))).toEqual(JSON.parse(JSON.stringify(f.client.robot.floorPose())));
     socket.receive({ type: "pose", position: [3, 1, 0.33], orientation: [0, 0, 0, 1], ts: 11 });
-    expect(marker.pose()).toEqual(f.client.robot.floorPose());
+    expect(JSON.parse(JSON.stringify(marker.pose()))).toEqual(JSON.parse(JSON.stringify(f.client.robot.floorPose())));
     socket.receive({ type: "nav_goal", ts: 11, pose: [5, 0, 0, 0], path_poses: [[3, 1, 0, 0], [5, 0, 0, 0]] });
     socket.receive({ ...state, nav: { state: "following_path", outcome: null } });
     expect(marker.pose().position[2]).toBeCloseTo(-5);
     const routeMaterial = f.client.route.object.material;
     expect(routeMaterial.color.getHex()).toBe(0xffffff);
     expect(routeMaterial.worldUnits).toBe(true);
-    expect(routeMaterial.linewidth).toBe(0.015);
+    expect(routeMaterial.linewidth).toBe(0.01);
+    expect(routeMaterial.dashed).toBe(false);
+    expect(routeMaterial.opacity).toBe(0.75);
     socket.receive({ type: "nav_goal", ts: 12, path_poses: [] });
     socket.receive({ ...state, nav: { state: "resolved", outcome: "succeeded" } });
-    expect(marker.pose()).toEqual(f.client.robot.floorPose());
+    expect(JSON.parse(JSON.stringify(marker.pose()))).toEqual(JSON.parse(JSON.stringify(f.client.robot.floorPose())));
   });
 
   it("pauses on Back, resumes retained prompts, and allows Skip without spatial navigation", () => {
@@ -193,6 +197,7 @@ describe("WebXR complete ARModule session", () => {
   it("releases joystick on mode changes, UI opening, input loss, and tracking resets", () => {
     const f = fixture(); const socket = f.connect(); socket.receive(alignment);
     f.client.ui.nextSetup(); f.tick();
+    for (let i = 0; i < 17; i++) { f.advance(0.1); f.tick(); }
     f.tick({ x: 0, y: -1 });
     expect(socket.commands("nav_joystick_request").at(-1)?.linear[0]).toBeGreaterThan(0);
     f.client.ui.setOperatingMode("agent"); f.tick({ x: 0, y: -1 });
@@ -233,11 +238,33 @@ describe("WebXR complete ARModule session", () => {
     const f = fixture(); const socket = f.connect(); socket.receive(alignment);
     f.client.ui.nextSetup(); f.tick();
     socket.onclose?.(new Event("close"));
-    expect(f.client.ui.snapshot().connectionText).toContain("Retrying");
+    expect(f.client.ui.snapshot().connectionText).toBe("Reconnecting…");
     f.advance(2); f.tick();
     const next = f.sockets[1]; expect(next).toBeDefined();
     next.open(); next.receive({ ...hello, time_sync: { ts_client: 12, ts_server: 12 } }); next.receive(state); f.tick();
     expect(f.client.session.view().connection).toBe("ready");
     expect(next.commands("lidar_settings_request").at(-1)?.enabled).toBe(true);
   });
+});
+
+
+it("records only a held draft after skipped alignment and sends only on confirmation", () => {
+  let onText = (_text: string, _final: boolean) => {};
+  const f = fixture({ start: (callback, _error, _end, started) => { onText = callback; started(); }, stop() {} });
+  const socket = f.connect(); f.client.ui.nextSetup(); f.client.ui.nextSetup();
+  f.client.ui.setOperatingMode("agent"); f.client.ui.menuOpen = true; f.tick();
+  expect(f.client.originStore.hasTrackingOrigin).toBe(false);
+  expect(f.client.speech.beginRecording()).toBe(true);
+  expect(f.client.isRobotSelected()).toBe(true);
+  onText("go forward", false); f.client.speech.endRecording();
+  expect(socket.commands("user_message_request")).toHaveLength(0);
+  expect(f.client.speech.submitTyped(f.client.speech.snapshot().prompt)).toBe(true);
+  expect(socket.commands("user_message_request").at(-1)?.text).toBe("go forward");
+  f.client.speech.beginRecording(); onText("turn left", false);
+  f.client.loseInput(); onText("stale result", true);
+  expect(f.client.speech.snapshot().prompt).toBe("turn left");
+  f.client.ui.menuOpen = false; f.tick(); expect(f.client.speech.isRecording()).toBe(false);
+  f.client.ui.setOperatingMode("manual"); f.tick(); expect(f.client.speech.beginRecording()).toBe(false);
+  f.client.suspend(); expect(f.client.isRobotSelected()).toBe(false);
+  f.client.restartSetup(); expect(f.client.speech.snapshot().status).toBe("Off");
 });

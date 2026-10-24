@@ -4,7 +4,7 @@ import {
   webxrCameraToOpticalPose,
   webxrToClientTrackingPoint,
   webxrToClientTrackingPose,
-} from "../src/coordinates/WebXRCoordinates";
+} from "../src/utilities/WebXRCoordinates";
 
 describe("WebXRCoordinates", () => {
   it("maps Three.js / WebXR Y-up onto protocol Z-up", () => {
@@ -35,9 +35,9 @@ describe("WebXRCoordinates", () => {
   });
 });
 
-import { composeOptical } from "../src/camera/HmdCameraSource";
-import { HMD_PROFILES } from "../src/camera/hmdProfiles";
-import { webxrHeadingToClientTrackingPose, clientTrackingToWebxrPose } from "../src/coordinates/WebXRCoordinates";
+import { composeOptical } from "../src/localization/HmdCameraSource";
+import { HMD_PROFILES } from "../src/localization/HmdProfiles";
+import { webxrHeadingToClientTrackingPose, clientTrackingToWebxrPose } from "../src/utilities/WebXRCoordinates";
 import { yawFromPlanarDirection } from "../src/navigation/WebXRNavigationController";
 import { clientTrackingToOdomPose } from "@dimos-ar-client/localization/clientTrackingTransforms";
 

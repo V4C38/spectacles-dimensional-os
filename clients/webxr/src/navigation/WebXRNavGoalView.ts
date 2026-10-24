@@ -2,13 +2,15 @@ import * as THREE from "three";
 import { Text } from "troika-three-text";
 import type { Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
 import { registerRayTarget } from "../input/XRBlocksRayInteraction";
-import { GlassSurface } from "../presentation/glassMaterial";
-import { syncText, UI_FONT_SEMIBOLD } from "../presentation/fonts";
+import { disposeTextResources } from "../presentation/TextResources";
+import { GlassSurface } from "../presentation/GlassSurface";
+import { syncText, UI_FONT_SEMIBOLD } from "../presentation/UIFonts";
 
-export type NavFlash = "cancelled" | "failed";
+import type { NavFlash } from "@dimos-ar-client/navigation/NavigationInteraction";
+export type { NavFlash } from "@dimos-ar-client/navigation/NavigationInteraction";
 
 const MARKER_COLOR = 0xffffff;
-const IDLE_OPACITY = 0.5;
+const IDLE_OPACITY = 0.25;
 const FLASH_COLORS: Record<NavFlash, number> = { cancelled: 0xff453a, failed: 0xff9f0a };
 const CANCEL_DIAMETER_M = 0.12;
 
@@ -26,6 +28,19 @@ export class WebXRNavGoalView {
   private readonly ringMaterial: THREE.MeshBasicMaterial;
   private readonly glyphMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false, transparent: true, depthWrite: false });
 
+  private readonly visuals = new THREE.Group();
+  private readonly connector = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0.02, 0), new THREE.Vector3(0, 0.275, 0)]), new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 0.002, gapSize: 0.006, transparent: true, opacity: 0.5, depthWrite: false }));
+  private selected = false;
+  private hovered = false;
+  private dragging = false;
+  private following = false;
+  private opacity = IDLE_OPACITY;
+  private visualScale = 1;
+  private pulseTime = 0;
+  private motion = 0;
+  private aiming = false;
+  private flash: NavFlash | null = null;
+
   constructor() {
     this.object = new THREE.Group();
     this.object.name = "WebXRNavGoalView";
@@ -34,9 +49,9 @@ export class WebXRNavGoalView {
     this.disc.name = "Navigation hit surface";
     this.arrowMaterial = markerMaterial();
     const arrow = new THREE.Shape();
-    arrow.moveTo(0, 0.1); arrow.lineTo(-0.065, 0.02); arrow.lineTo(-0.023, 0.02);
-    arrow.lineTo(-0.023, -0.085); arrow.lineTo(0.023, -0.085);
-    arrow.lineTo(0.023, 0.02); arrow.lineTo(0.065, 0.02); arrow.closePath();
+    arrow.moveTo(0, 0.1); arrow.lineTo(-0.05, 0.02); arrow.lineTo(-0.014, 0.02);
+    arrow.lineTo(-0.014, -0.085); arrow.lineTo(0.014, -0.085);
+    arrow.lineTo(0.014, 0.02); arrow.lineTo(0.05, 0.02); arrow.closePath();
     this.arrow = new THREE.Mesh(new THREE.ShapeGeometry(arrow), this.arrowMaterial);
     this.arrow.name = "NavigationHeading";
     this.arrow.rotation.x = -Math.PI / 2;
@@ -72,15 +87,28 @@ export class WebXRNavGoalView {
     this.cancelRoot.add(this.cancelObject, ...this.glyph, this.cancelLabel);
     this.cancelRoot.visible = false;
 
-    this.object.add(this.disc, this.arrow, this.ring, this.cancelRoot);
+    this.connector.name = "Navigation cancel connector";
+    this.connector.computeLineDistances(); this.connector.raycast = () => {};
+    this.visuals.add(this.arrow, this.ring);
+    this.object.add(this.disc, this.visuals, this.cancelRoot, this.connector);
     this.object.visible = false;
-    for (const mesh of [this.disc, this.arrow, this.ring, this.cancelObject]) registerRayTarget(mesh);
-    this.setGoalActive(false);
+    // Proximity uses the circular hit surface, not the decorative arrow/ring bounding boxes.
+    this.arrow.userData.proximityTarget = this.ring.userData.proximityTarget = false;
+    for (const mesh of [this.disc, this.arrow, this.ring, this.cancelObject]) {
+      mesh.userData.rayPriority = 10;
+      registerRayTarget(mesh);
+    }
+    this.applyStyle(0);
   }
 
   setPose(position: Vec3, orientation: Quat): void {
     this.object.position.set(position[0], position[1], position[2]);
     this.object.quaternion.set(orientation[0], orientation[1], orientation[2], orientation[3]);
+  }
+
+  circleBounds(): { center: Vec3; radius: number } {
+    const center = this.ring.getWorldPosition(new THREE.Vector3()).toArray() as Vec3;
+    return { center, radius: 0.268 * this.ring.getWorldScale(new THREE.Vector3()).x };
   }
 
   pose(): { position: Vec3; orientation: Quat } {
@@ -101,15 +129,40 @@ export class WebXRNavGoalView {
 
   hide(): void {
     this.object.visible = false;
-    this.cancelRoot.visible = false;
+    this.cancelRoot.visible = this.connector.visible = false;
   }
 
-  setGoalActive(active: boolean): void {
-    this.setMarkerStyle(MARKER_COLOR, active ? 1 : IDLE_OPACITY);
+  setGoalActive(_active: boolean): void { /* Goal existence is independent of following state. */ }
+  setInteraction(dragging: boolean, following: boolean): void { this.dragging = dragging; this.following = following; }
+  setHovered(hovered: boolean): void { this.hovered = hovered; }
+  setSelected(selected: boolean): void { this.selected = selected; }
+  setAiming(aiming: boolean): void {
+    this.aiming = aiming;
+    for (const mesh of [this.disc, this.arrow, this.ring]) mesh.userData.rayDisabled = aiming;
+  }
+
+  tick(deltaS: number): void { this.applyStyle(Math.max(0, deltaS)); }
+
+  private applyStyle(deltaS: number): void {
+    const alpha = 1 - Math.exp(-32 * deltaS);
+    const moving = this.following && !this.dragging && !this.aiming && !this.flash;
+    this.motion += ((moving ? 1 : 0) - this.motion) * alpha;
+    this.pulseTime = (this.pulseTime + deltaS) % 1.2;
+    const pulse = (1 - Math.cos(this.pulseTime / 1.2 * Math.PI * 2)) / 2;
+    const opacity = this.flash ? 1 : this.dragging ? 0.75 : this.aiming ? 0.25 :
+      this.following ? 1 : this.selected || this.hovered ? 0.5 : IDLE_OPACITY;
+    this.opacity += (opacity - this.opacity) * alpha;
+    const scale = this.aiming ? 0.85 : (this.selected ? 1.15 : 1) * (this.hovered ? 1.04 : 1);
+    this.visualScale += (scale - this.visualScale) * alpha;
+    this.visuals.scale.setScalar(this.visualScale);
+    this.disc.scale.setScalar(this.selected ? 1.15 : 1);
+    this.ring.scale.setScalar(1 + 0.04 * pulse * this.motion);
+    this.arrow.position.z = -0.012 * pulse * this.motion;
+    this.setMarkerStyle(this.flash ? FLASH_COLORS[this.flash] : MARKER_COLOR, this.opacity);
   }
 
   setCancelVisible(visible: boolean): void {
-    this.cancelRoot.visible = visible && this.object.visible;
+    this.cancelRoot.visible = this.connector.visible = visible && this.object.visible && !this.aiming;
   }
 
   cancelVisible(): boolean {
@@ -129,21 +182,19 @@ export class WebXRNavGoalView {
   }
 
   setFlash(flash: NavFlash | null): void {
-    if (!flash) {
-      this.setGoalActive(false);
-      return;
-    }
-    this.setMarkerStyle(FLASH_COLORS[flash], 1);
+    this.flash = flash;
+    this.applyStyle(0);
   }
 
   dispose(): void {
     this.object.removeFromParent();
+    this.connector.geometry.dispose(); this.connector.material.dispose();
     this.disc.geometry.dispose();
     this.arrow.geometry.dispose();
     this.ring.geometry.dispose();
     this.cancelObject.dispose();
     for (const bar of this.glyph) bar.geometry.dispose();
-    this.cancelLabel.dispose();
+    disposeTextResources(this.cancelLabel);
     this.discMaterial.dispose();
     this.arrowMaterial.dispose();
     this.ringMaterial.dispose();

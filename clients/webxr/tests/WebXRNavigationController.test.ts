@@ -145,10 +145,11 @@ describe("WebXRNavigationController", () => {
     const navigation = new WebXRNavigationController({ view: () => view(), sendText, requestEstop: vi.fn() } as never);
     const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
     navigation.applyView(view(), origin, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, 1);
+    navigation.setSelected(true);
     const hit = (z: number) => [{ position: [0, 0, z] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
     for (let i = 0; i < 30; i++) navigation.hold(1 + i * 0.1, [0, 1.5, 0], [0, -1, -1], hit(-1 - i * 0.1), null, 0, false);
-    expect(navigation.isDragging()).toBe(true);
-    expect(navigation.marker.pose().position[2]).toBeLessThan(-3);
+    expect(navigation.isAiming()).toBe(true);
+    expect(navigation.marker.pose().position[2]).toBe(-1);
     expect(sendText).not.toHaveBeenCalled();
     navigation.release(4, [0, 1.5, 0], [0, -1, -1], hit(-4), null, 0);
     expect(sendText).toHaveBeenCalledOnce();
@@ -176,4 +177,143 @@ describe("WebXRNavigationController", () => {
     expect(yaw()).toBeCloseTo(-Math.PI / 2, 2);
     navigation.dispose();
   });
+});
+
+function fixture(preview = false) {
+  const current = view({ capabilities: { ...capabilities, navigation: { ...capabilities.navigation, nav_goal: { available: true, reason: null, preview } } } });
+  const sendText = vi.fn();
+  const navigation = new WebXRNavigationController({ view: () => current, sendText, requestEstop: vi.fn() } as never);
+  const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], confidence: 1, ts: 0 };
+  const floor = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number] };
+  navigation.applyView(current, origin, floor, 0);
+  const hit = (x = 1, z = -2) => [{ position: [x, 0, z] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
+  const aim = (now: number, x = 1, z = -2) => navigation.aim(now, [0, 1.5, 0], [0, -1, -1], hit(x, z), null, 0);
+  const hold = (now: number, x = 1, z = -2) => navigation.hold(now, [0, 1.5, 0], [0, -1, -1], hit(x, z), null, 0, false);
+  const release = (now: number, x = 1, z = -2) => navigation.release(now, [0, 1.5, 0], [0, -1, -1], hit(x, z), null, 0);
+  return { current, sendText, navigation, origin, floor, aim, hold, release };
+}
+
+it("rejects unselected floor clicks and confirms a stationary selected click with its previous heading", () => {
+  const f = fixture();
+  f.hold(0); f.release(0.1);
+  expect(f.sendText).not.toHaveBeenCalled();
+  f.navigation.setSelected(true);
+  f.aim(0.2);
+  const heading = f.navigation.marker.pose().orientation;
+  f.hold(0.3); f.release(0.4);
+  expect(f.sendText).toHaveBeenCalledOnce();
+  expect(f.navigation.marker.pose()).toEqual({ position: [1, 0, -2], orientation: heading });
+  expect(JSON.parse(f.sendText.mock.calls[0][0]).preview).toBeUndefined();
+  f.navigation.dispose();
+});
+
+it("turns during idle aim and freezes the displayed heading on press", () => {
+  const f = fixture(); f.navigation.setSelected(true);
+  f.aim(0); f.aim(0.5, 2); f.aim(1, 3);
+  const heading = f.navigation.marker.pose().orientation;
+  f.hold(1.1, 3); f.hold(1.2, 2);
+  expect(f.navigation.marker.pose().position).toEqual([3, 0, -2]);
+  expect(f.navigation.marker.pose().orientation).toEqual(heading);
+  expect(f.navigation.marker.pose().orientation[1]).toBeLessThan(-0.5);
+  expect(f.sendText).not.toHaveBeenCalled();
+  f.release(1.1, 3);
+  expect(f.sendText).toHaveBeenCalledOnce();
+  f.navigation.dispose();
+});
+
+it("restores the newest authoritative pose on aim loss and cancels unfinished gestures on deselection", () => {
+  const f = fixture(); f.navigation.setSelected(true);
+  f.aim(0);
+  expect(f.navigation.marker.pose().position).toEqual([1, 0, -2]);
+  f.current.nav_goal = { type: "nav_goal", pose: [5, 3, 0, 0.7], path_poses: [[5, 3, 0, 0.7]], ts: 1 };
+  f.navigation.applyView(f.current, f.origin, f.floor, 0.1);
+  expect(f.navigation.marker.pose().position).toEqual([1, 0, -2]);
+  f.navigation.clearAim();
+  expect(f.navigation.marker.pose().position).toEqual([-3, 0, -5]);
+  f.hold(0.2); f.navigation.setSelected(false); f.release(0.3);
+  expect(f.sendText).not.toHaveBeenCalled();
+  f.navigation.dispose();
+});
+
+it("keeps idle-marker opacity tied to selection, fades the aim and restores the robot floor", () => {
+  const f = fixture();
+  const ring = f.navigation.marker.object.getObjectByName("NavigationCircle") as import("three").Mesh<import("three").BufferGeometry, import("three").MeshBasicMaterial>;
+  expect(ring.material.opacity).toBe(0.25);
+  f.navigation.setSelected(true); f.navigation.tick(0); f.aim(0.1); f.navigation.tick(0.15);
+  expect(ring.material.opacity).toBe(0.25);
+  expect(ring.parent!.scale.x).toBeCloseTo(0.85);
+  f.navigation.clearAim(); f.navigation.tick(0.3);
+  expect(f.navigation.marker.pose().position).toEqual([0, 0, 0]);
+  expect(ring.material.opacity).toBeCloseTo(0.5);
+  f.navigation.dispose();
+});
+
+it("gates previews on advertised support and permits confirmation without a path", () => {
+  const f = fixture(); f.navigation.setSelected(true); f.aim(1); f.navigation.tick(2);
+  expect(f.sendText).not.toHaveBeenCalled();
+  f.hold(3); f.release(4);
+  expect(f.sendText).toHaveBeenCalledOnce(); f.navigation.dispose();
+});
+
+it("serializes preview requests, retains the latest aim and rejects obsolete replies", () => {
+  const f = fixture(true); f.navigation.setSelected(true);
+  f.aim(0); f.aim(0.1, 2); f.aim(0.2, 3); f.navigation.tick(1);
+  expect(f.sendText).toHaveBeenCalledOnce();
+  expect(JSON.parse(f.sendText.mock.calls[0][0]).preview).toBe(true);
+  f.current.nav_preview = { type: "nav_goal", preview: true, preview_id: JSON.parse(f.sendText.mock.calls.at(-1)![0]).preview_id, pose: [1, 2, 0, 0], path_poses: [[0, 0, 0, 0], [1, 2, 0, 0]], ts: 1 };
+  f.navigation.applyView(f.current, f.origin, f.floor, 1);
+  expect(f.navigation.previewPath()).toBeNull();
+  f.navigation.tick(1.1);
+  expect(f.sendText).toHaveBeenCalledTimes(2);
+  f.current.nav_preview = { ...f.current.nav_preview, preview_id: JSON.parse(f.sendText.mock.calls.at(-1)![0]).preview_id, ts: 2 };
+  f.navigation.applyView(f.current, f.origin, f.floor, 1.2);
+  expect(f.navigation.previewPath()).toHaveLength(2);
+  f.navigation.clearAim();
+  expect(f.navigation.previewPath()).toBeNull();
+  f.navigation.dispose();
+});
+
+it("invalidates previews across aim episodes and refreshes on a new costmap", () => {
+  const f = fixture(true); f.navigation.setSelected(true); f.aim(0);
+  f.navigation.clearAim(); f.aim(0.5);
+  f.current.nav_preview = { type: "nav_goal", preview: true, preview_id: JSON.parse(f.sendText.mock.calls.at(-1)![0]).preview_id, pose: null, path_poses: [], ts: 1 };
+  f.navigation.applyView(f.current, f.origin, f.floor, 0.6);
+  expect(f.navigation.previewPath()).toBeNull();
+  f.navigation.tick(0.7);
+  expect(f.sendText).toHaveBeenCalledTimes(2);
+  f.current.nav_preview = { ...f.current.nav_preview, preview_id: JSON.parse(f.sendText.mock.calls.at(-1)![0]).preview_id, ts: 2 };
+  f.navigation.applyView(f.current, f.origin, f.floor, 0.8);
+  expect(f.navigation.previewPath()).toEqual([]);
+  f.current.state = { type: "state", nav_preview_costmap_ts: 10, server: { connected_clients: 1 }, lidar: { enabled: false, min_height_m: 0, max_height_m: 1, max_range_m: 5 }, nav: { state: "idle", outcome: null }, agent: { idle: true } };
+  f.navigation.applyView(f.current, f.origin, f.floor, 1);
+  f.navigation.tick(1.1);
+  expect(f.sendText).toHaveBeenCalledTimes(3);
+  f.navigation.dispose();
+});
+
+
+it("throttles small aim drift and refreshes after a material heading change", () => {
+  const f = fixture(true); f.navigation.setSelected(true); f.aim(0);
+  f.current.nav_preview = { type: "nav_goal", preview: true, preview_id: JSON.parse(f.sendText.mock.calls.at(-1)![0]).preview_id, pose: null, path_poses: [], ts: 1 };
+  f.navigation.applyView(f.current, f.origin, f.floor, 0.1);
+  f.aim(0.2, 1.01); f.navigation.tick(0.4);
+  expect(f.sendText).toHaveBeenCalledOnce();
+  f.aim(0.5, 1.1); f.aim(1, 1.15);
+  f.navigation.tick(1.1);
+  expect(f.sendText).toHaveBeenCalledTimes(2);
+  f.navigation.dispose();
+});
+
+it("limits selected floor aiming and confirmation to five ray meters without limiting direct marker drags", () => {
+  const f = fixture(); f.navigation.setSelected(true);
+  const from: [number, number, number] = [0, 1, 0];
+  const dir: [number, number, number] = [0, -1, -1];
+  const hits = (distance: number) => [{ position: [0, 0, -Math.sqrt(distance * distance - 1)] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
+  f.navigation.aim(0, from, dir, hits(4.99), null, 0); expect(f.navigation.isAiming()).toBe(true);
+  f.navigation.aim(1, from, dir, hits(5.01), null, 0); expect(f.navigation.isAiming()).toBe(false);
+  expect(f.navigation.hold(2, from, dir, hits(5.01), null, 0, false)).toBe(false);
+  f.navigation.release(2.1, from, dir, hits(5.01), null, 0); expect(f.sendText).not.toHaveBeenCalled();
+  f.navigation.hold(3, from, dir, hits(6), null, 0, true);
+  f.navigation.hold(4, from, dir, hits(7), null, 0, true);
+  expect(f.sendText).toHaveBeenCalled(); f.navigation.dispose();
 });

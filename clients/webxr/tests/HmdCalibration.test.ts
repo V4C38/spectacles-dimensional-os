@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { jpegDimensionsMatch, matchStream, parseHmdId } from "../src/camera/HmdCalibration";
-import { HMD_PROFILES } from "../src/camera/hmdProfiles";
+import { jpegDimensionsMatch, matchStream, parseHmdId } from "../src/localization/HmdCalibration";
+import { HMD_PROFILES } from "../src/localization/HmdProfiles";
 
 describe("HmdCalibration", () => {
   it("rejects unknown HMD ids", () => {
@@ -27,7 +27,7 @@ describe("HmdCalibration", () => {
   });
 });
 
-import { matchesProfileCamera, profileForStream, requireUsableProfile } from "../src/camera/HmdCalibration";
+import { matchesProfileCamera, profileForStream, requireUsableProfile } from "../src/localization/HmdCalibration";
 import { rotateVecByQuat } from "@dimos-ar-client/localization/clientTrackingTransforms";
 
 for (const id of ["quest3", "quest3s"] as const) {

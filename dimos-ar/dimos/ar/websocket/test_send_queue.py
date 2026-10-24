@@ -57,9 +57,7 @@ async def test_outbound_coalesces_pose_nav_goal_state() -> None:
     outbound.enqueue('{"type":"state","nav":{"state":"idle"}}\n')
     outbound.enqueue('{"type":"pose","position":[1,2,3]}\n')
     outbound.enqueue('{"type":"pose","position":[4,5,6]}\n')
-    outbound.enqueue(
-        '{"type":"nav_goal","pose":[0,0,0,0],"path_poses":[[0,0,0,0]]}\n'
-    )
+    outbound.enqueue('{"type":"nav_goal","pose":[0,0,0,0],"path_poses":[[0,0,0,0]]}\n')
 
     await asyncio.sleep(0.05)
     await outbound.stop()
@@ -123,3 +121,22 @@ async def test_outbound_drops_oldest_fifo_when_full() -> None:
     assert outbound._dropped_fifo_count >= 5
     first_seq = json.loads(ws.sent_text[0])["seq"]
     assert first_seq >= 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preview_first", [True, False])
+async def test_preview_reply_never_coalesces_with_active_goal(preview_first: bool) -> None:
+    websocket = _FakeWebSocket()
+    queue = ClientSendQueue(websocket)
+    active = {"type": "nav_goal", "path_poses": [[1, 2, 0, 0]], "pose": [1, 2, 0, 0], "ts": 1}
+    preview = {"type": "nav_goal", "preview": True, "preview_id": "aim", "path_poses": [], "ts": 2}
+    frames = [preview, active] if preview_first else [active, preview]
+    for frame in frames:
+        queue.enqueue(json.dumps(frame) + "\n")
+    queue.start()
+    await asyncio.sleep(0)
+    await queue.stop()
+    assert sorted(_messages_from_sent(websocket.sent_text), key=lambda msg: msg["ts"]) == [
+        active,
+        preview,
+    ]

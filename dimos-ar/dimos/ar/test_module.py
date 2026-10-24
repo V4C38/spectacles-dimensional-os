@@ -5,8 +5,10 @@ from dataclasses import replace
 import json
 import subprocess
 import sys
+import threading
 import time
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from dimos_lcm.std_msgs import Bool
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -609,7 +611,11 @@ async def test_handle_odom_uses_corrected_robot_position_for_localization(
     buffered = pushed[0]
     assert isinstance(buffered, PoseStamped)
     assert (buffered.x, buffered.y, buffered.z) == pytest.approx(
-        (2.0 * profile.odom_scale_correction_factor, -3.0 * profile.odom_scale_correction_factor, 0.33)
+        (
+            2.0 * profile.odom_scale_correction_factor,
+            -3.0 * profile.odom_scale_correction_factor,
+            0.33,
+        )
     )
     assert published == [pose]
 
@@ -797,3 +803,95 @@ def test_estop_and_last_disconnect_cancel_tele_cmd_vel() -> None:
     module._ws_server.connection_count = 0  # type: ignore[union-attr]
     module._on_client_disconnect(None, "c1")  # type: ignore[arg-type]
     assert cancelled == [True]
+
+
+@pytest.mark.parametrize("failure", ["missing_odom", "missing_map", "exception"])
+def test_preview_returns_empty_without_changing_motion_or_state(failure: str) -> None:
+    module = _module_with_policy([])
+    module._preview_odom = None if failure == "missing_odom" else PoseStamped(position=[1, 2, 0])
+    module._preview_planner = Mock()
+    module._preview_planner.plan.return_value = None
+    if failure == "exception":
+        module._preview_planner.plan.side_effect = RuntimeError("planner failed")
+    module.goal_request = SimpleNamespace(transport=object(), publish=Mock())
+    before = module._state_snapshot()
+    frame = module._compute_preview(NavGoalRequest((4, 6, 0), (0, 0, 0, 1), preview=True))
+    assert frame.preview is True
+    assert frame.pose is None
+    assert frame.path_poses == []
+    assert module._state_snapshot() == before
+    module.goal_request.publish.assert_not_called()
+    assert module._ws_server.broadcasts == []
+
+
+async def test_preview_is_requester_only_off_loop_and_does_not_submit_motion() -> None:
+    module = _module_with_policy([])
+    module._profile = replace(module._profile, odom_scale_correction_factor=2.0)
+    module._preview_odom = PoseStamped(position=[1, 2, 0])
+    module._preview_tasks = {}
+    module.goal_request = SimpleNamespace(transport=object(), publish=Mock())
+    loop_thread = threading.get_ident()
+    worker_threads = []
+
+    def plan(start, goal):
+        worker_threads.append(threading.get_ident())
+        assert start == (1, 2)
+        assert goal == (2, 3)
+        return [(1, 2, 0), (2, 3, 0)]
+
+    module._preview_planner = SimpleNamespace(plan=plan)
+    before = module._state_snapshot()
+    request = NavGoalRequest((4, 6, 0.5), (0, 0, 0, 1), preview=True, preview_id="aim")
+    module._on_nav_goal_request(request, None, "requester")
+    task = module._preview_tasks["requester"]
+    module._on_nav_goal_request(request, None, "requester")
+    assert module._preview_tasks["requester"] is task
+    await task
+    assert worker_threads and worker_threads[0] != loop_thread
+    assert list(module._preview_tasks) == []
+    assert len(module._ws_server.sent) == 2
+    busy = json.loads(module._ws_server.sent[0][1])
+    assert busy["path_poses"] == [] and busy["preview_id"] == "aim"
+    client_id, text = module._ws_server.sent[1]
+    assert client_id == "requester"
+    response = json.loads(text)
+    assert response["preview"] is True
+    assert response["preview_id"] == "aim"
+    assert response["path_poses"] == [[2, 4, 0.5, 0], [4, 6, 0.5, 0]]
+    assert response["pose"] == [4, 6, 0.5, 0]
+    assert module._ws_server.broadcasts == []
+    module.goal_request.publish.assert_not_called()
+    assert module._state_snapshot() == before
+
+
+def test_hello_advertises_preview_support() -> None:
+    module = _module_with_policy([])
+    assert module._hello_body("client").nav_goal_preview is True
+
+
+@pytest.mark.asyncio
+async def test_disconnect_cancels_preview_delivery_while_worker_finishes() -> None:
+    module = _module_with_policy([])
+    module._preview_tasks = {}
+    module._preview_odom = PoseStamped(position=[0, 0, 0])
+    started = threading.Event()
+    release = threading.Event()
+
+    def plan(_start, _goal):
+        started.set()
+        release.wait(timeout=5)
+        return [(0, 0, 0), (1, 1, 0)]
+
+    module._preview_planner = SimpleNamespace(plan=plan)
+    request = NavGoalRequest((1, 1, 0), (0, 0, 0, 1), preview=True, preview_id="retired")
+    module._on_nav_goal_request(request, None, "retired-client")
+    task = module._preview_tasks["retired-client"]
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+        module._on_client_disconnect(None, "retired-client")
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert module._preview_tasks == {}
+        assert module._ws_server.sent == []
+    finally:
+        release.set()

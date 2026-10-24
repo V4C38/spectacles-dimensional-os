@@ -145,7 +145,7 @@ re-anchor the cloud. Each `localization_result` re-anchoring resets the divergen
 
 Any number of clients may connect at once.
 
-- **Telemetry is broadcast.** Every client receives identical `pose`, `nav_goal`,
+- **Telemetry is broadcast.** Every client receives identical `pose`, active `nav_goal`,
   `lidar` and `state`. Payloads are byte-identical, so there is no per-client
   view to reconcile.
 - **Localization is per connection.** `localization_observations_request` and
@@ -225,7 +225,7 @@ connection, and replies with `hello`.
 | `robot.base_height_m` | float | Height of the odometry pose origin above the ground, so a client can place a ground marker under a `pose`. |
 | `capabilities.*.available` | bool | Feature gate for client UI. Keys are `lidar`, `navigation`, `localization`, `estop`, and `agent`. |
 | `capabilities.*.reason` | string \| null | Human-readable, non-null exactly when `available` is `false`. |
-| `capabilities.navigation.nav_goal` | `{ available, reason }` | Can send `nav_goal_request`. Always present. |
+| `capabilities.navigation.nav_goal` | `{ available, reason, preview? }` | Can send `nav_goal_request`. Always present. Optional boolean `preview` defaults to false. |
 | `capabilities.navigation.nav_joystick` | `{ available, reason }` | Can send `nav_joystick_request`. Always present. |
 
 `navigation.available` is true when any nested input is available. Clients that
@@ -452,6 +452,12 @@ fields may be added later (`speed_mps`, `yaw_rate_rad_s`); clients ignore unknow
 
 ### `nav_goal`
 
+Optional boolean `preview: true` identifies an advisory path returned only to the
+requesting client. Omitted/false denotes active navigation. Store previews separately;
+they never replace active goal facts or change `state.nav`. Empty previews omit `pose`
+and use `path_poses: []` when the map/odometry is unavailable or planning fails.
+Preview coordinates use the same odometry correction as active paths.
+
 Active navigation in `odom`: the planned route plus the terminal pose where
 the robot intends to finish. Sent whenever DimOS publishes a path update.
 
@@ -606,6 +612,21 @@ as `pose`. Send them in the same coordinates you receive `pose` in; ARModule
 inverts the scale correction on ingress and publishes to DimOS `goal_request`.
 
 Gated on `hello.capabilities.navigation.nav_goal`.
+
+Optional boolean `preview: true` requests planning only. Clients MUST send it only
+when `hello.capabilities.navigation.nav_goal.preview === true`; older servers may
+otherwise interpret the request as a motion goal. Omitted/false keeps normal behavior.
+Preview computation runs off the WebSocket loop using raw odometry and the global
+costmap, and never publishes motion, cancels navigation, or mutates `state.nav`.
+Only the requester receives a `nav_goal` response with `preview: true`.
+
+Clients keep at most one preview request outstanding, retain only the latest desired
+aim, and discard replies whose captured aim or interaction generation is obsolete.
+The optional finite `state.nav_preview_costmap_ts` is the latest global costmap timestamp;
+a change invalidates an outstanding preview and schedules a refresh. It is independent
+of `state.nav`. Preview requests use a 0.35 s minimum interval, 0.20 m movement gate,
+and also refresh after material heading changes or a new costmap. Confirmation sends
+a normal goal even if no preview path is available.
 
 ### `nav_joystick_request`
 
@@ -778,3 +799,24 @@ DimOS planner). `nav_joystick_request` takes effect through DimOS
 a broadcast `state` update. `user_message_request` takes effect through outbound `agent_message`
 and `state.agent.idle`. `client_pose` is unsolicited inbound telemetry for
 `ar_get_client_pose`. `pose` and `lidar` are unsolicited outbound telemetry.
+
+
+### Preview request correlation
+
+A preview request may include `preview_id`, a non-empty string of at most 128
+characters, only alongside `preview: true`. The server echoes it on every preview
+response, including empty paths and responses while that client’s planner is busy.
+New clients supply an identifier and accept only the current matching reply.
+Preview replies use the bounded FIFO, independently of active `nav_goal` coalescing.
+A client retires a request after five seconds, discards late replies, and queues its
+latest aim under the normal throttle. A preview reply without an identifier disables
+preview for that connection. Neither condition prevents normal goal confirmation.
+
+### Optional server display metadata
+
+`hello.server_info` is an optional object with optional string fields `robot_ip`,
+`dimos_version`, and `armodule_version`. Versions describe installed packages in
+ARModule's running process. The robot address comes from effective DimOS configuration;
+replay/simulation is displayed as `Simulated`. Missing metadata means unavailable,
+not disconnected. Older servers may omit the object; clients ignore unknown fields.
+The page's server address remains distinct from the robot address.

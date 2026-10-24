@@ -76,11 +76,16 @@ export function encodeEstopRequest(): string {
 }
 
 export function encodeNavGoalRequest(request: {
+  preview?: boolean;
+  preview_id?: string;
   position: Vec3;
   orientation: Quat;
 }): string {
+  if (request.preview !== undefined && typeof request.preview !== "boolean") throw new Error("Field 'preview' must be boolean");
+  if (request.preview_id !== undefined && request.preview !== true) throw new Error("preview_id requires preview: true");
   return encodeText({
     type: "nav_goal_request",
+    ...(request.preview === true ? { preview: true, ...previewIdentity(request.preview_id) } : {}),
     position: requireVec3Value(request.position, "position"),
     orientation: requireQuatValue(request.orientation, "orientation"),
   });
@@ -433,10 +438,19 @@ function decodeHello(data: Record<string, unknown>): Hello {
   return {
     type: "hello",
     client_id: requireString(data, "client_id"),
+    ...(data.server_info === undefined ? {} : { server_info: decodeServerInfo(asObject(data.server_info, "server_info")) }),
     time_sync,
     robot: decodeRobot(asObject(requireKey(data, "robot"), "robot")),
     capabilities: decodeCapabilities(asObject(requireKey(data, "capabilities"), "capabilities")),
   };
+}
+
+function decodeServerInfo(data: Record<string, unknown>): { robot_ip?: string; dimos_version?: string; armodule_version?: string } {
+  const info: { robot_ip?: string; dimos_version?: string; armodule_version?: string } = {};
+  for (const key of ["robot_ip", "dimos_version", "armodule_version"] as const) {
+    if (data[key] !== undefined) info[key] = requireString(data, key);
+  }
+  return info;
 }
 
 function decodeRobot(data: Record<string, unknown>): RobotDescription {
@@ -469,7 +483,7 @@ function decodeNavigationCapability(raw: unknown): NavigationCapability {
   const base = decodeCapability(raw, "navigation");
   return {
     ...base,
-    nav_goal: decodeCapability(data.nav_goal, "navigation.nav_goal"),
+    nav_goal: { ...decodeCapability(data.nav_goal, "navigation.nav_goal"), preview: optionalBoolean(asObject(data.nav_goal, "navigation.nav_goal"), "preview") },
     nav_joystick: decodeCapability(data.nav_joystick, "navigation.nav_joystick"),
   };
 }
@@ -503,6 +517,7 @@ function decodeState(data: Record<string, unknown>): State {
   return {
     type: "state",
     server: { connected_clients: connectedClients },
+    ...(data.nav_preview_costmap_ts === undefined ? {} : { nav_preview_costmap_ts: finiteField(data, "nav_preview_costmap_ts") }),
     lidar: requireLidarSettings(
       decodeLidarSettings(asObject(requireKey(data, "lidar"), "lidar")),
     ),
@@ -625,7 +640,22 @@ function decodePose(data: Record<string, unknown>): Pose {
   };
 }
 
+function optionalBoolean(data: Record<string, unknown>, key: string): boolean {
+  if (data[key] === undefined) return false;
+  if (typeof data[key] !== "boolean") throw new Error(`Field '${key}' must be boolean`);
+  return data[key];
+}
+
+function previewIdentity(value: unknown): { preview_id?: string } {
+  if (value === undefined) return {};
+  if (typeof value !== "string" || value.length < 1 || value.length > 128) throw new Error("preview_id must contain 1 to 128 characters");
+  return { preview_id: value };
+}
+
 function decodeNavGoal(data: Record<string, unknown>): NavGoal {
+  const preview = optionalBoolean(data, "preview");
+  const identity = previewIdentity(data.preview_id);
+  if (data.preview_id !== undefined && !preview) throw new Error("preview_id requires preview: true");
   const pathRaw = requireKey(data, "path_poses");
   if (!Array.isArray(pathRaw)) {
     throw new Error("Field 'path_poses' must be array");
@@ -636,13 +666,14 @@ function decodeNavGoal(data: Record<string, unknown>): NavGoal {
     if (hasPose) {
       throw new Error("nav_goal.pose must be omitted when path_poses is empty");
     }
-    return { type: "nav_goal", pose: null, path_poses, ts: finiteField(data, "ts") };
+    return { type: "nav_goal", pose: null, path_poses, ts: finiteField(data, "ts"), ...(preview ? { preview, ...identity } : {}) };
   }
   if (!hasPose) {
     throw new Error("nav_goal.pose is required when path_poses is non-empty");
   }
   return {
     type: "nav_goal",
+    ...(preview ? { preview, ...identity } : {}),
     pose: requireYawPoseValue(data.pose, "pose"),
     path_poses,
     ts: finiteField(data, "ts"),

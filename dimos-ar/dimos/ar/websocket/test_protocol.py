@@ -571,3 +571,75 @@ def test_decode_localization_observations_single_observation() -> None:
     assert obs.jpeg == jpeg
     assert obs.intrinsics.fx == 100.0
     assert obs.ts_capture == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("preview", [None, False, True])
+def test_nav_preview_request_defaults_and_roundtrip(preview: bool | None) -> None:
+    body = {"type": "nav_goal_request", "position": [1, 2, 0], "orientation": [0, 0, 0, 1]}
+    if preview is not None:
+        body["preview"] = preview
+    request = decode_inbound(json.dumps(body))
+    assert isinstance(request, NavGoalRequest)
+    assert request.preview is (preview is True)
+    frame = NavGoalFrame(pose=None, path_poses=[], ts=1, preview=request.preview)
+    response = json.loads(encode_nav_goal(frame))
+    assert response.get("preview", False) is request.preview
+    assert "pose" not in response
+
+
+@pytest.mark.parametrize("preview", ["true", 1, None])
+def test_nav_preview_requires_boolean(preview: object) -> None:
+    with pytest.raises(TypeError):
+        decode_inbound(
+            json.dumps(
+                {
+                    "type": "nav_goal_request",
+                    "position": [1, 2, 0],
+                    "orientation": [0, 0, 0, 1],
+                    "preview": preview,
+                }
+            )
+        )
+
+
+@pytest.mark.parametrize("identity", ["", "x" * 129, 12])
+def test_invalid_preview_identity(identity: object) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        decode_inbound(
+            json.dumps(
+                {
+                    "type": "nav_goal_request",
+                    "preview": True,
+                    "preview_id": identity,
+                    "position": [1, 2, 0],
+                    "orientation": [0, 0, 0, 1],
+                }
+            )
+        )
+
+
+def test_preview_identity_roundtrip() -> None:
+    request = decode_inbound(
+        json.dumps(
+            {
+                "type": "nav_goal_request",
+                "preview": True,
+                "preview_id": "aim",
+                "position": [1, 2, 0],
+                "orientation": [0, 0, 0, 1],
+            }
+        )
+    )
+    assert isinstance(request, NavGoalRequest)
+    assert request.preview_id == "aim"
+    frame = NavGoalFrame(pose=None, path_poses=[], ts=1, preview=True, preview_id="aim")
+    assert json.loads(encode_nav_goal(frame))["preview_id"] == "aim"
+
+
+def test_optional_server_display_metadata() -> None:
+    from dataclasses import replace
+
+    old = _sample_hello()
+    assert "server_info" not in json.loads(encode_hello(old))
+    info = {"robot_ip": "192.168.1.42", "dimos_version": "0.4.0", "armodule_version": "0.2.0"}
+    assert json.loads(encode_hello(replace(old, server_info=info)))["server_info"] == info

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { MenuAnchorController } from "../src/input/MenuAnchorController";
 import { expect, it, vi } from "vitest";
 vi.hoisted(() => {
   class AudioContextStub {
@@ -8,15 +9,16 @@ vi.hoisted(() => {
   Object.defineProperty(window, "AudioContext", { value: AudioContextStub, configurable: true });
 });
 import * as xb from "xrblocks";
+import { DIMOS_AR_DESIGN } from "../src/presentation/DimOSARDesign";
 import { MainMenuView } from "../src/presentation/MainMenuView";
 
 it("constructs real XR Blocks buttons and activates the supported trigger hook", () => {
-  const handlers = { onSetup: vi.fn(), onBack: vi.fn(), onRetry: vi.fn(), onRestart: vi.fn(), onMenu: vi.fn(), onMode: vi.fn(), onDebug: vi.fn(), onLidar: vi.fn(), onLocalize: vi.fn(), onRealign: vi.fn(), onEstop: vi.fn(), onAgentText: vi.fn(() => true) };
+  const handlers = { onSetup: vi.fn(), onBack: vi.fn(), onRetry: vi.fn(), onRestart: vi.fn(), onMenu: vi.fn(), onMode: vi.fn(), onRobot: vi.fn(), onDebug: vi.fn(), onLidar: vi.fn(), onLocalize: vi.fn(), onRealign: vi.fn(), onEstop: vi.fn(), onDraft: vi.fn(), onAgentText: vi.fn(() => true) };
   const view = new MainMenuView(handlers);
-  expect(view.panel.scale.x).toBeCloseTo(0.68 * 0.72);
+  expect(view.panel.scale.x).toBeCloseTo(DIMOS_AR_DESIGN.panel.height * 0.432);
   const buttons: xb.TextButton[] = [];
   view.panel.traverse(object => { if (object instanceof xb.TextButton) buttons.push(object); });
-  const next = buttons.find(button => button.text === "Next")!;
+  const next = buttons.find(button => button.text === "Continue")!;
   expect(next).toBeInstanceOf(xb.TextButton);
   next.onTriggered(0);
   expect(handlers.onSetup).toHaveBeenCalledOnce();
@@ -25,7 +27,7 @@ it("constructs real XR Blocks buttons and activates the supported trigger hook",
   view.panel.updateWorldMatrix(true, true);
   const edge = view.panel.localToWorld(new THREE.Vector3(0.65, 0, 0));
   expect(view.beginManipulation([edge.x, edge.y, 0], [0, 0, -1])).toBe(false);
-  const corner = view.panel.localToWorld(new THREE.Vector3(0.65, -0.48, 0));
+  const corner = view.panel.localToWorld(new THREE.Vector3(0.58, -0.48, 0));
   expect(view.beginManipulation([corner.x, corner.y, 0], [0, 0, -1])).toBe(true);
   view.updateManipulation([corner.x + 0.1, corner.y - 0.1, 0], [0, 0, -1]);
   expect(view.panel.scale.x).toBeGreaterThan(initialPanelScale);
@@ -34,12 +36,9 @@ it("constructs real XR Blocks buttons and activates the supported trigger hook",
   buttons.find(button => button.text === "EMERGENCY STOP")!.onTriggered(0);
   expect(handlers.onEstop).toHaveBeenCalledOnce();
   next.setText("Skip"); expect(next.text).toBe("Skip");
-  // Simulate opening the keyboard before activating its keys.
-  view.panel.traverse(object => { object.visible = true; });
-  buttons.find(button => button.text === "g")!.onTriggered(0);
-  buttons.find(button => button.text === "o")!.onTriggered(0);
-  buttons.find(button => button.text === "Send")!.onTriggered(0);
-  expect(handlers.onAgentText).toHaveBeenCalledWith("go");
+  buttons.find(button => button.text === "Clear")!.onTriggered(0);
+  expect(handlers.onDraft).toHaveBeenCalledWith("");
+  expect(buttons.some(button => button.text === "Type / Edit")).toBe(false);
   view.panel.visible = false;
   next.onTriggered(0);
   expect(handlers.onSetup).toHaveBeenCalledOnce();
@@ -47,7 +46,7 @@ it("constructs real XR Blocks buttons and activates the supported trigger hook",
 
 it("grips the panel body, rotates around the grab point with smoothing, and retains the released pose", () => {
   const noop = () => {};
-  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onAgentText: () => true });
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
   view.panel.position.set(0, 0, -1);
   expect(view.beginManipulation([0, 0, 0], [0, 0, -1], new THREE.Quaternion(), true)).toBe(true);
   const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 4);
@@ -73,7 +72,7 @@ import { cameraFixture } from "./fixtures/camera";
 
 it("consumes UI selection, cancels drags on input loss, invalidates resets, and supports XR reentry", () => {
   const camera = cameraFixture();
-  const client = new DimOSWebXRClient({ camera: camera.source, clock: { now: () => 10 }, transport: new BrowserWebSocketTransport({ url: "wss://test/ar" }) });
+  const client = new DimOSWebXRClient({ camera: camera.source, clock: { now: () => 10 }, transport: new BrowserWebSocketTransport({ url: "wss://test/ar", socketFactory: () => { throw new Error("offline test"); } }) });
   const tick = vi.spyOn(client, "tick").mockImplementation(() => {});
   vi.spyOn(client, "controlsEnabled").mockReturnValue(true);
   const hold = vi.spyOn(client, "holdNavigation").mockImplementation(() => {});
@@ -114,16 +113,25 @@ it("consumes UI selection, cancels drags on input loss, invalidates resets, and 
   app.onSqueezeEnd({ target: controller });
   expect((app as unknown as { panelGrip: boolean }).panelGrip).toBe(false);
   panel.visible = false;
+  client.originStore.setFromLocalizationResult({ type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 10 });
   const worldSurface = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial());
   worldSurface.position.z = -2;
   registerRayTarget(worldSurface);
-  app.add(worldSurface);
+  client.navigation.marker.object.add(worldSurface);
+  client.navigation.marker.object.visible = true;
   scene.updateMatrixWorld(true);
   input.updateController(controller);
   app.onSelectStart({ target: controller }); expect(hold).toHaveBeenCalledOnce();
   session.dispatchEvent(new Event("inputsourceschange"));
   app.onSelectEnd({ target: controller }); expect(release).not.toHaveBeenCalled();
   expect(lost).toHaveBeenCalled();
+  // Idle floor feedback prefers the right pointer, but a left press can still take ownership.
+  vi.spyOn(client, "isRobotSelected").mockReturnValue(true);
+  const left = new THREE.Object3D();
+  const floor = (app as unknown as { navigationFloor: THREE.Mesh }).navigationFloor;
+  input.intersectionsForController.set(left, [{ object: floor, point: new THREE.Vector3(0, 0, -1), distance: 1 }]);
+  app.onSelectStart({ target: left }); expect(hold).toHaveBeenCalledTimes(2);
+  app.onSelectEnd({ target: left }); expect(release).toHaveBeenCalledOnce();
   const aligned = client.originStore.setFromLocalizationResult({ type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 10 });
   client.ui.setupCompleted = true;
   const beforeFocus = invalidated.mock.calls.length;
@@ -167,7 +175,7 @@ it("consumes UI selection, cancels drags on input loss, invalidates resets, and 
 
 it("keeps the panel upright while grabbing with a rolled and pitched controller", () => {
   const noop = () => {};
-  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onAgentText: () => true });
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
   view.panel.position.set(0, 0, -1);
   view.panel.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.4);
   const bar = view.panel.localToWorld(new THREE.Vector3(0, -0.54, 0));
@@ -179,4 +187,175 @@ it("keeps the panel upright while grabbing with a rolled and pitched controller"
   expect(euler.y).toBeCloseTo(Math.PI / 6, 2);
   expect(Math.abs(euler.x)).toBeCloseTo(THREE.MathUtils.degToRad(60), 2);
   view.endManipulation();
+});
+
+
+it("shows separate response and draft fields, moves robot controls into settings and gates Send", () => {
+  const noop = () => {};
+  const onMode = vi.fn(), onRobot = vi.fn(), onDebug = vi.fn();
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode, onRobot, onDebug, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const buttons: xb.TextButton[] = [];
+  view.panel.traverse(object => { if (object instanceof xb.TextButton) buttons.push(object); });
+  const snap = {
+    setupCompleted: true, menuOpen: true, wizardStep: "connect", robotName: "Unitree Go2", robotSelected: false, robotSelectable: true,
+    robotConnectionText: "Connected", connectionText: "Connected", connectionTone: "success", operatingMode: "manual", debugEnabled: false,
+    agentAvailable: true, lidarAvailable: true, estopAvailable: true, estopReason: null, activity: "Idle", hasTrackingOrigin: false, lidarMode: "off", debugText: "Connection: ready",
+    wizardTitle: "", wizardDescription: "", wizardCardTitle: "", wizardCardBody: "", nextLabel: "", localizationIssue: null, captureText: "", captureTone: "muted", backVisible: false, agentMessage: null, hudText: null, hudTone: null,
+  } satisfies import("../src/presentation/WebXRUIPresenter").WebXRUISnapshot;
+  view.apply(snap);
+  expect(view.panel.scale.x).toBeCloseTo(DIMOS_AR_DESIGN.panel.height * 0.432 * 0.8);
+  const robot = buttons.find(button => button.name === "Robot selection button")!;
+  expect(robot.text).toContain("Unitree Go2"); expect(robot.text).toContain("Idle"); expect(robot.fontColor).toBe("#ffffff");
+  expect(robot.position.y).toBeGreaterThan(0.5);
+  expect(view.ownsTarget(robot.mesh!)).toBe(true); expect(view.isControl(robot.mesh!)).toBe(true);
+  robot.onTriggered(0); expect(onRobot).toHaveBeenCalledOnce();
+  buttons.find(button => button.text === "Agent")!.onTriggered(0);
+  expect(onMode).toHaveBeenCalledWith("agent");
+  const speech = { status: "Ready", prompt: "go home", response: "Agent reply", severity: "ok", error: null, recognitionAvailable: true } satisfies import("@dimos-ar-client/agent/AgentDraftSession").AgentDraftSnapshot;
+  view.apply({ ...snap, operatingMode: "agent" }, speech);
+  const send = buttons.find(button => button.text === "Send to agent")!;
+  expect((send as unknown as { enabled: boolean }).enabled).toBe(false);
+  const dictation = buttons.find(button => button.name === "Agent dictation field")!;
+  expect(view.isSpeechTarget(dictation.mesh!)).toBe(true);
+  view.apply({ ...snap, operatingMode: "agent", robotSelected: true }, speech);
+  expect((send as unknown as { enabled: boolean }).enabled).toBe(true);
+  expect(robot.text).toContain("Selected");
+  const settings = buttons.find(button => button.name === "Global settings")!;
+  settings.onTriggered(0); view.apply({ ...snap, operatingMode: "agent", robotSelected: true });
+  const diagnostics = buttons.find(button => button.text === "Diagnostics")!;
+  diagnostics.onTriggered(0); expect(onDebug).not.toHaveBeenCalled();
+  view.apply(snap);
+  const debug = buttons.find(button => button.text === "Debug · Off")!;
+  // Settings are hidden while diagnostics is open; hidden buttons cannot activate.
+  debug.onTriggered(0); expect(onDebug).not.toHaveBeenCalled();
+  const detailsDone = buttons.filter(button => button.name === "Done").find(button => button.parent?.visible && button.parent.userData.rayDisabled !== true)!;
+  detailsDone.onTriggered(0); view.apply(snap);
+  debug.onTriggered(0); expect(onDebug).toHaveBeenCalledOnce();
+  // Page transitions ease over 180 ms, and outgoing surfaces stop accepting input immediately.
+  view.updateHover([], 0.18);
+  const appearance = view.panel.getObjectByName("Menu appearance")!;
+  view.apply({ ...snap, menuOpen: false });
+  expect(view.panel.userData.rayDisabled).toBe(true);
+  view.updateHover([], 0.09);
+  expect(appearance.scale.x).toBeGreaterThan(0.94); expect(appearance.scale.x).toBeLessThan(1);
+  expect(appearance.position.z).toBeLessThan(0);
+  expect(view.panel.visible).toBe(true);
+  view.updateHover([], 0.09);
+  expect(view.panel.visible).toBe(false);
+  view.apply(snap); view.updateHover([], 0.09);
+  expect(view.panel.visible).toBe(true);
+  expect(view.panel.userData.rayDisabled).toBe(false);
+  view.updateHover([], 0.09);
+  const before = robot.position.clone(); view.panel.scale.multiplyScalar(1.2);
+  expect(robot.position).toEqual(before);
+});
+
+
+it("keeps every panel action inside its inset and leaves Emergency Stop a clear bottom margin", () => {
+  const noop = () => {};
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const buttons: xb.TextButton[] = [];
+  view.panel.traverse(object => { if (object instanceof xb.TextButton && object.name !== "Robot selection button") buttons.push(object); });
+  for (const button of buttons) {
+    expect(Math.abs(button.position.x) + button.rangeX * button.scale.x / 2).toBeLessThanOrEqual((0.45 - 0.05) / DIMOS_AR_DESIGN.panel.height + 1e-8);
+    expect(Math.abs(button.position.y) + button.rangeY * button.scale.y / 2).toBeLessThanOrEqual((DIMOS_AR_DESIGN.panel.height / 2 - 0.05) / DIMOS_AR_DESIGN.panel.height + 1e-8);
+  }
+  const stop = buttons.find(button => button.text === "EMERGENCY STOP")!;
+  expect(stop.position.y - stop.rangeY * stop.scale.y / 2).toBeGreaterThan((-DIMOS_AR_DESIGN.panel.height / 2 + 0.04) / DIMOS_AR_DESIGN.panel.height);
+  const send = buttons.find(button => button.text === "Send to agent")!;
+  expect(send.position.y - send.rangeY * send.scale.y / 2 - (stop.position.y + stop.rangeY * stop.scale.y / 2)).toBeGreaterThan(0.035 / DIMOS_AR_DESIGN.panel.height);
+  view.dispose();
+});
+
+it("disposes allocated UI resources once, including shared icon materials and scroll fields", () => {
+  const noop = () => {};
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const geometries = new Set<THREE.BufferGeometry>(), materials = new Set<THREE.Material>();
+  view.panel.traverse(node => {
+    if (node === view.panel.mesh) return;
+    if (node instanceof THREE.Mesh || node instanceof THREE.Line) {
+      geometries.add(node.geometry);
+      for (const material of Array.isArray(node.material) ? node.material : [node.material]) materials.add(material);
+    }
+  });
+  const checks = [...geometries, ...materials].map(resource => vi.spyOn(resource, "dispose"));
+  view.dispose(); view.dispose();
+  for (const check of checks) expect(check).toHaveBeenCalledOnce();
+});
+
+it("uses identical conversation fields, shared tabs and one robot badge in setup", () => {
+  const noop = () => {};
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const internals = view as unknown as { agent: xb.TextView; inputLabel: xb.TextView; inputField: xb.TextButton; robotBadge: THREE.Group; stepTabs: xb.TextButton[] };
+  expect(internals.agent.width).toBe(internals.inputLabel.width);
+  expect(internals.agent.height).toBe(internals.inputLabel.height);
+  const fields: xb.TextButton[] = [];
+  view.panel.traverse(node => { if (node instanceof xb.TextButton && node.height === DIMOS_AR_DESIGN.message.height / DIMOS_AR_DESIGN.panel.height) fields.push(node); });
+  expect(fields).toHaveLength(2);
+  const materials = fields.map(field => field.mesh!.material as THREE.ShaderMaterial);
+  expect(materials[0].uniforms.uRadius.value).toBeCloseTo(materials[1].uniforms.uRadius.value);
+  expect(internals.stepTabs).toHaveLength(2);
+  // Setup retains the shared identity badge, without another status label in the header.
+  view.apply({ setupCompleted: false, menuOpen: false, wizardStep: "connect", operatingMode: "manual", robotName: "Unitree Go2", robotSelected: false, robotSelectable: false, activity: "Idle", robotConnectionText: "Connected", connectionTone: "success", wizardDescription: "", wizardCardTitle: "", wizardCardBody: "", nextLabel: "Continue", debugText: "", agentAvailable: false, lidarMode: "off" } as never);
+  expect(internals.robotBadge.visible).toBe(true);
+  expect(internals.robotBadge.children.some(node => node instanceof xb.TextButton && node.text.includes("Unitree Go2"))).toBe(true);
+  view.dispose();
+});
+
+it("separates tab layers and text depth without competing internal depth-buffer writes", () => {
+  const noop = () => {};
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const tabs: xb.TextButton[] = [];
+  view.panel.traverse(node => { if (node instanceof xb.TextButton && ["Manual", "Agent", "01 Connect", "02 Localization"].includes(node.text)) tabs.push(node); });
+  expect(tabs).toHaveLength(4);
+  for (const tab of tabs) {
+    expect((tab.mesh!.material as THREE.Material).depthWrite).toBe(false);
+    const track = tab.parent!.getObjectByName("Segmented control track")!;
+    expect(track).toBeDefined(); expect(tab.position.z).toBeGreaterThan(track.position.z);
+    expect(tab.mesh!.renderOrder).toBeGreaterThan((track as THREE.Mesh).renderOrder);
+  }
+  const plate = view.panel.getObjectByName("Menu background") as THREE.Mesh;
+  expect((plate.material as THREE.Material).depthWrite).toBe(true);
+  const successRing = (view as unknown as { successRing: THREE.Mesh }).successRing;
+  expect(successRing.renderOrder).toBeGreaterThan(plate.renderOrder);
+  view.dispose();
+});
+
+it("locks palm summoning to one hand, supports the right hand and does not dismiss a pinned menu", () => {
+  const makeSource = (handedness: "left" | "right") => ({ handedness, hand: { get: (name: string) => `${handedness}:${name}` } }) as unknown as XRInputSource;
+  const left = makeSource("left"), right = makeSource("right");
+  const up = { left: true, right: false };
+  const anchor = new MenuAnchorController(), panel = new THREE.Group();
+  const ui = { setupCompleted: true, menuOpen: false };
+  const state = {
+    session: { inputSources: [left, right] }, palmGates: new Map(), menuAnchor: anchor,
+    client: { ui }, palmOpened: false, capture: { owner: null },
+    anchorMenu(source: XRInputSource) { anchor.attach(source, new THREE.Vector3(), new THREE.Vector3(0, 1, 1), new THREE.Quaternion(), panel); },
+  };
+  const frame = { getJointPose(space: string) {
+    const [hand, name] = space.split(":") as ["left" | "right", string];
+    const sign = (hand === "right" ? 1 : -1) * (up[hand] ? 1 : -1);
+    let p = new THREE.Vector3();
+    if (name === "index-finger-metacarpal") p.set(0.02 * sign, 0, -0.04);
+    else if (name === "pinky-finger-metacarpal") p.set(-0.02 * sign, 0, -0.04);
+    else if (name === "middle-finger-metacarpal") p.z = -0.04;
+    else if (name.endsWith("phalanx-proximal")) p.z = -0.06;
+    else if (name.endsWith("phalanx-intermediate")) p.z = -0.08;
+    else if (name.endsWith("tip")) p.z = -0.1;
+    return { transform: { position: p } };
+  } };
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now * 1000);
+  const sync = (time: number) => {
+    now = time;
+    (WebXRApp.prototype as unknown as { syncPalm: (...args: unknown[]) => void }).syncPalm.call(state, frame, {}, {}, {});
+  };
+  sync(0); sync(0.36); expect(ui.menuOpen).toBe(true); expect(anchor.source).toBe(left);
+  up.right = true; sync(1); sync(1.36); expect(anchor.source).toBe(left);
+  up.right = false; sync(2); sync(2.2); expect(ui.menuOpen).toBe(true);
+  state.capture.owner = {} as never; up.left = false; sync(3); sync(3.2); expect(ui.menuOpen).toBe(true);
+  state.capture.owner = null; sync(3.3); expect(ui.menuOpen).toBe(false);
+  up.right = true; sync(4); sync(4.36); expect(anchor.source).toBe(right); expect(ui.menuOpen).toBe(true);
+  anchor.detach(); up.right = false; sync(5); sync(5.2); expect(ui.menuOpen).toBe(true);
+  clock.mockRestore();
 });

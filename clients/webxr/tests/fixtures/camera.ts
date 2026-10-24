@@ -1,8 +1,8 @@
 import { vi } from "vitest";
-import { HmdCameraSource, type VideoFrameMetadata } from "../../src/camera/HmdCameraSource";
-import { acceptProfile } from "../../src/camera/calibrationRunner";
-import { HMD_PROFILES } from "../../src/camera/hmdProfiles";
-import type { HmdCalibrationProfile } from "../../src/camera/HmdCalibration";
+import { HmdCameraSource, type VideoFrameMetadata } from "../../src/localization/HmdCameraSource";
+import { acceptProfile } from "../../src/localization/HmdCalibrationRunner";
+import { HMD_PROFILES } from "../../src/localization/HmdProfiles";
+import type { HmdCalibrationProfile } from "../../src/localization/HmdCalibration";
 
 export function acceptedProfile(): HmdCalibrationProfile {
   return acceptProfile({

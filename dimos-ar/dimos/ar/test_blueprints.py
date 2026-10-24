@@ -31,3 +31,20 @@ def test_unitree_go2_ar_agentic_wires_agent_ports() -> None:
     names = {atom.module.__name__ for atom in unitree_go2_ar_agentic.active_blueprints}
     assert "McpClient" in names
     assert "McpServer" in names
+
+
+@pytest.mark.parametrize("blueprint", [unitree_go2_ar, unitree_go2_ar_agentic])
+def test_go2_blueprints_connect_preview_costmap(blueprint) -> None:
+    if blueprint is None:
+        pytest.skip("Go2 blueprint is not installed")
+    ar = next(atom for atom in blueprint.active_blueprints if atom.module is ARModule)
+    inputs = [stream for stream in ar.streams if stream.name == "global_costmap"]
+    assert len(inputs) == 1 and inputs[0].direction == "in"
+    outputs = [
+        stream
+        for atom in blueprint.active_blueprints
+        for stream in atom.streams
+        if stream.name == "global_costmap" and stream.direction == "out"
+    ]
+    assert outputs, "autoconnect requires a global_costmap producer in both Go2 blueprints"
+    assert outputs[0].type == inputs[0].type

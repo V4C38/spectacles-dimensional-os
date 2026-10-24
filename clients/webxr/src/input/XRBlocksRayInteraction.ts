@@ -1,26 +1,25 @@
+import { WebXRDirectInteraction } from "./WebXRDirectInteraction";
 import * as THREE from "three";
+import { proximityToAffordance, rayTargetVisible } from "./AffordanceProximity";
 import type * as xb from "xrblocks";
 import { RAY_LENGTH_M } from "../navigation/WebXRGroundPlacement";
 import type { Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
 
-type Controller = xb.SelectEvent["target"];
+export type Controller = xb.SelectEvent["target"];
 
 export const INTERACTION_LAYER = 1;
 export const EMPTY_RAY_LENGTH_M = 3;
 export const IDLE_LASER_OPACITY = 0.5;
-// Hand reach in front of the head, along the flattened view direction.
-export const AIM_SHOW_REACH_M = 0.34;
-export const AIM_HIDE_REACH_M = 0.27;
-const REVEAL_DURATION_S = 0.14;
 
 /** Only explicit application surfaces participate in the SDK's one hit list. */
 export function registerRayTarget(mesh: THREE.Mesh): void {
   mesh.layers.enable(INTERACTION_LAYER);
+  mesh.userData.rayTarget = true;
   const raycast = mesh.raycast;
   mesh.raycast = function (raycaster, hits) {
     let node: THREE.Object3D | null = this;
     while (node) {
-      if (!node.visible) return;
+      if (!node.visible || node.userData.rayDisabled === true) return;
       node = node.parent;
     }
     raycast.call(this, raycaster, hits);
@@ -36,8 +35,6 @@ export function markRayPassive(mesh: THREE.Object3D): void {
 export function markRayAmbient(mesh: THREE.Object3D): void {
   mesh.userData.rayAmbient = true;
 }
-
-export type HeadPose = { position: THREE.Vector3; quaternion: THREE.Quaternion };
 
 const vertexShader = /* glsl */ `
   uniform vec3 uP0;
@@ -78,25 +75,43 @@ export type LaserBeam = {
   tip: THREE.Vector3;
   opacity: number;
   reveal: number;
-  aimed: boolean;
+  affordance: THREE.Object3D | null;
   fresh: boolean;
 };
 
 export class XRBlocksRayInteraction {
+  readonly direct = new WebXRDirectInteraction();
   readonly beams = new Map<Controller, LaserBeam>();
   // Open-ended tube; position.y spans the curve parameter and xz the ring.
   private readonly geometry = new THREE.CylinderGeometry(1, 1, 1, 6, 32, true);
   private readonly styledReticles = new Set<xb.Reticle>();
   private enabled = false;
+  private policy: {
+    eligible: (controller: Controller, object: THREE.Object3D, point: THREE.Vector3) => boolean;
+    captured: (controller: Controller) => boolean;
+    unobstructed: (object: THREE.Object3D, origin: THREE.Vector3, point: THREE.Vector3) => boolean;
+  } = { eligible: (_controller, object) => object.userData.rayPassive !== true && object.userData.rayAmbient !== true && object.userData.interactionEnabled !== false,
+    captured: () => false, unobstructed: () => true };
+
+  setPolicy(policy: typeof this.policy): void { this.policy = policy; }
+  private readonly originalRaycast: xb.Input["performRaycastOnScene"];
 
   constructor(private readonly input: xb.Input) {
+    this.originalRaycast = input.performRaycastOnScene;
+    input.performRaycastOnScene = controller => {
+      this.originalRaycast.call(input, controller);
+      const hits = input.intersectionsForController.get(controller);
+      const near = this.enabled ? this.direct.resolve(controller, input.scene, (object, point) => this.policy.eligible(controller, object, point)) : undefined;
+      if (hits && (near || this.direct.isDirect(controller))) { hits.length = 0; if (near) hits.push(near); }
+      hits?.sort(compareRayHits);
+    };
     input.raycaster.layers.set(INTERACTION_LAYER);
     input.raycaster.near = 0;
     input.raycaster.far = RAY_LENGTH_M;
   }
 
   hit(controller: Controller): THREE.Intersection | undefined {
-    return this.input.intersectionsForController.get(controller)?.[0];
+    return resolveRayHit(this.input.intersectionsForController.get(controller) ?? []);
   }
 
   ray(controller: Controller): { origin: Vec3; direction: Vec3 } {
@@ -120,17 +135,22 @@ export class XRBlocksRayInteraction {
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     if (!enabled) {
+      this.direct.reset();
       for (const [controller, beam] of this.beams) {
         this.hide(controller, beam);
       }
     }
   }
 
-  /** Without a head pose every ray counts as aimed. */
-  update(deltaS = 1 / 60, head?: HeadPose): void {
+  update(deltaS = 1 / 60): void {
+    const targets: THREE.Mesh[] = [];
+    this.input.scene?.updateMatrixWorld(true);
+    this.input.scene?.traverse(object => {
+      if (object instanceof THREE.Mesh && object.userData.rayTarget && object.userData.proximityTarget !== false && object.userData.rayAmbient !== true && rayTargetVisible(object)) targets.push(object);
+    });
     for (const controller of this.input.controllers) {
       if (!controller.inputSource) continue;
-      const active = this.enabled && controller.inputSource.targetRayMode === "tracked-pointer" &&
+      const active = !this.direct.isDirect(controller) && this.enabled && controller.inputSource.targetRayMode === "tracked-pointer" &&
         controller.userData.connected === true && controller.visible;
       let beam = this.beams.get(controller);
       if (!active) {
@@ -148,14 +168,24 @@ export class XRBlocksRayInteraction {
       const ray = this.ray(controller);
       const origin = new THREE.Vector3(...ray.origin);
       const direction = new THREE.Vector3(...ray.direction);
-      // Invisible surfaces like the floor only end the beam while dragging on them.
-      const ends = !!hit && (hit.object.userData.rayAmbient !== true || controller.userData.selected === true);
-      const target = ends ? hit.point.clone() : origin.clone().addScaledVector(direction, EMPTY_RAY_LENGTH_M);
-      const hovering = !!hit && hit.object.userData.rayPassive !== true;
-      const opacity = hovering ? 1 : IDLE_LASER_OPACITY;
-      beam.aimed = isAimed(origin, direction, head, beam.aimed);
-      const shown = (!!hit && hit.object.userData.rayAmbient !== true) || beam.aimed ||
-        controller.userData.selected === true;
+      const actionable = !!hit && this.policy.eligible(controller, hit.object, hit.point);
+      let nearby: ReturnType<typeof proximityToAffordance> = null;
+      if (!actionable) {
+        const probe = new THREE.Ray(origin, direction);
+        for (const target of targets) {
+          if (target.userData.interactionEnabled === false) continue;
+          const candidate = proximityToAffordance(probe, target, beam.affordance === target, RAY_LENGTH_M);
+          if (!candidate || !this.policy.eligible(controller, target, candidate.point) || !this.policy.unobstructed(target, origin, candidate.point)) continue;
+          if (!nearby || Number(target.userData.rayPriority ?? 0) < Number(nearby.object.userData.rayPriority ?? 0) ||
+            (target.userData.rayPriority === nearby.object.userData.rayPriority && candidate.miss < nearby.miss)) nearby = candidate;
+        }
+      }
+      const captured = this.policy.captured(controller);
+      const shown = actionable || nearby !== null || captured;
+      beam.affordance = actionable ? hit!.object : nearby?.object ?? null;
+      const distance = actionable ? hit!.distance : nearby?.distance ?? EMPTY_RAY_LENGTH_M;
+      const target = actionable ? hit!.point.clone() : origin.clone().addScaledVector(direction, distance);
+      const opacity = actionable || captured ? 1 : IDLE_LASER_OPACITY;
       if (beam.fresh) {
         beam.tip.copy(target);
         beam.opacity = opacity;
@@ -166,7 +196,7 @@ export class XRBlocksRayInteraction {
         beam.tip.lerp(target, 1 - Math.exp(-rate * deltaS));
         beam.opacity += (opacity - beam.opacity) * (1 - Math.exp(-18 * deltaS));
       }
-      beam.reveal = THREE.MathUtils.clamp(beam.reveal + (shown ? 1 : -1) * deltaS / REVEAL_DURATION_S, 0, 1);
+      beam.reveal = THREE.MathUtils.clamp(beam.reveal + (shown ? 1 : -1) * deltaS / (shown ? 0.12 : 0.18), 0, 1);
       // The beam grows out of the hand and retracts into it.
       const extent = 1 - (1 - beam.reveal) ** 3;
       const end = origin.clone().lerp(beam.tip, extent);
@@ -192,12 +222,13 @@ export class XRBlocksRayInteraction {
         reticle.setColor(new THREE.Color(color));
         reticle.position.copy(beam.tip);
         if (!hit) reticle.quaternion.copy(controller.getWorldQuaternion(new THREE.Quaternion()));
-        reticle.visible = beam.reveal >= 1;
+        reticle.visible = actionable && beam.reveal >= 0.99;
       }
     }
   }
 
   dispose(): void {
+    this.input.performRaycastOnScene = this.originalRaycast;
     for (const beam of this.beams.values()) {
       for (const mesh of [beam.mesh, beam.outline]) {
         mesh.removeFromParent();
@@ -212,7 +243,7 @@ export class XRBlocksRayInteraction {
     beam.mesh.visible = beam.outline.visible = false;
     beam.fresh = true;
     beam.reveal = 0;
-    beam.aimed = false;
+    beam.affordance = null;
     if (controller.reticle) controller.reticle.visible = false;
   }
 
@@ -223,7 +254,7 @@ export class XRBlocksRayInteraction {
     const outline = this.beamMesh(0x111111, 0.0028, 0.0019);
     outline.name = "XR Blocks laser outline";
     outline.renderOrder = 1000;
-    return { mesh, outline, tip: new THREE.Vector3(), opacity: IDLE_LASER_OPACITY, reveal: 0, aimed: false, fresh: true };
+    return { mesh, outline, tip: new THREE.Vector3(), opacity: IDLE_LASER_OPACITY, reveal: 0, affordance: null, fresh: true };
   }
 
   private beamMesh(color: number, radius: number, tipRadius: number): BeamMesh {
@@ -250,16 +281,18 @@ export class XRBlocksRayInteraction {
   }
 }
 
-/** A hand held out in front of the head and pointing roughly forward, with hysteresis. */
-function isAimed(origin: THREE.Vector3, direction: THREE.Vector3, head: HeadPose | undefined, wasAimed: boolean): boolean {
-  if (!head) return true;
-  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(head.quaternion);
-  const flat = forward.clone().setY(0);
-  if (flat.lengthSq() < 1e-6) return wasAimed;
-  flat.normalize();
-  const reach = origin.clone().sub(head.position).dot(flat);
-  const pointing = direction.dot(flat);
-  return wasAimed
-    ? reach > AIM_HIDE_REACH_M && pointing > 0.3
-    : reach > AIM_SHOW_REACH_M && pointing > 0.55;
+/** One precedence rule for hover, laser endpoints and press dispatch. */
+export function resolveRayHit(hits: readonly THREE.Intersection[]): THREE.Intersection | undefined {
+  return [...hits].sort(compareRayHits)[0];
+}
+
+export function preferredPointer(controllers: readonly Controller[]): Controller | undefined {
+  const tracked = controllers.filter(controller => controller.visible && controller.userData.connected === true &&
+    controller.inputSource?.targetRayMode === "tracked-pointer");
+  return tracked.find(controller => controller.inputSource?.handedness === "right") ??
+    tracked.find(controller => controller.inputSource?.handedness === "left") ?? tracked[0];
+}
+
+function compareRayHits(a: THREE.Intersection, b: THREE.Intersection): number {
+  return Number(a.object.userData.rayPriority ?? 0) - Number(b.object.userData.rayPriority ?? 0) || a.distance - b.distance;
 }

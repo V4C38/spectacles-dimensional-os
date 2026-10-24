@@ -287,6 +287,8 @@ class WebSocketServer:
             robot=body.robot,
             capabilities=body.capabilities,
             navigation_inputs=body.navigation_inputs,
+            nav_goal_preview=body.nav_goal_preview,
+            server_info=body.server_info,
         )
         await websocket.send(encode_hello(hello))
 

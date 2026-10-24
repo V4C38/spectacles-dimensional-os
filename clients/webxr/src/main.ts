@@ -1,20 +1,22 @@
+import { LandingInfoPresenter } from "./presentation/LandingInfoPresenter";
+import { applyDOMDesign } from "./presentation/DimOSARDesign";
 import * as xb from "xrblocks";
 import { EMPTY_RAY_LENGTH_M } from "./input/XRBlocksRayInteraction";
 import { reportBrowserError, reportDiagnostic } from "./diagnostics/BrowserDiagnostics";
-import { HMD_OPTIONS, parseHmdId } from "./camera/HmdCalibration";
-import { profileForHmd } from "./camera/hmdProfiles";
+import { HMD_OPTIONS, parseHmdId } from "./localization/HmdCalibration";
+import { profileForHmd } from "./localization/HmdProfiles";
 import {
   browserMediaPort,
   canvasJpegEncoder,
   HmdCameraSource,
   videoFrameCallbackPort,
-} from "./camera/HmdCameraSource";
-import { browserRecognition, browserSynthesis } from "./agent/BrowserAgentSpeech";
+} from "./localization/HmdCameraSource";
+import { browserRecognition, browserSynthesis } from "./agent/BrowserSpeechAdapters";
 import { DimOSWebXRClient } from "./DimOSWebXRClient";
-import { toneCss } from "./presentation/tones";
+import { toneCss } from "./presentation/StatusTones";
 import { WebXRApp } from "./WebXRApp";
-import { arModuleSameOriginUrl } from "./runtimeConfig";
-import { BrowserClientClock } from "./time/BrowserClientClock";
+import { arModuleSameOriginUrl } from "./WebXRRuntimeConfig";
+import { BrowserClientClock } from "./utilities/BrowserClientClock";
 import { BrowserWebSocketTransport } from "./websocket/BrowserWebSocketTransport";
 import type { StatusTone } from "@dimos-ar-client/websocket/sessionLinkStatus";
 
@@ -111,6 +113,8 @@ async function boot(): Promise<void> {
   const enter = document.getElementById("enter") as HTMLButtonElement | null;
   const select = document.getElementById("hmd") as HTMLSelectElement | null;
   const overlay = document.getElementById("overlay");
+  const infoRoot = document.querySelector<HTMLElement>(".landing-layout");
+  const info = infoRoot ? new LandingInfoPresenter(infoRoot, window.location.host) : null;
   if (select) {
     populateHmdSelect(select);
   }
@@ -135,8 +139,11 @@ async function boot(): Promise<void> {
       recognition: browserRecognition(),
       synthesis: browserSynthesis(),
     });
+    info?.bind(client.session);
     const options = new xb.Options();
     options.xrButton.enabled = false;
+    // AgentDraftSession owns speech; do not instantiate SDK recognition or its default tones.
+    options.sound.speechRecognizer.enabled = false;
     options.referenceSpaceType = "local-floor";
     options.enableHands();
     options.enableUI();
@@ -165,6 +172,12 @@ async function boot(): Promise<void> {
         xr.offerSession = offerSession;
       }
     }
+    client.session.start();
+    const landingTick = window.setInterval(() => {
+      if (document.visibilityState !== "visible" || xb.core.renderer.xr.isPresenting) return;
+      if (client.session.view().connection === "disconnected") client.session.start();
+      client.session.tick();
+    }, 100);
     let cameraReady = false;
     const onStarted = () => {
       select.disabled = true;
@@ -184,6 +197,7 @@ async function boot(): Promise<void> {
       if (event.persisted) { app.onXRSessionEnded(); onEnded(); return; }
       xb.core.renderer.xr.removeEventListener("sessionstart", onStarted);
       xb.core.renderer.xr.removeEventListener("sessionend", onEnded);
+      window.clearInterval(landingTick); info?.dispose();
       enter.onclick = null;
       app.dispose();
     });
@@ -197,6 +211,7 @@ async function boot(): Promise<void> {
     select.disabled = false;
     enter.disabled = false;
     enter.onclick = () => {
+      void app.sound.unlock();
       enter.disabled = true;
       if (!cameraReady) {
         select.disabled = true;
@@ -234,4 +249,5 @@ async function boot(): Promise<void> {
   }
 }
 
+applyDOMDesign(document.documentElement);
 void boot();
