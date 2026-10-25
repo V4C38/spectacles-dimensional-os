@@ -128,3 +128,38 @@ export function anchorPathStart(points: Vec3[], center: Vec3): Vec3[] {
   if (bestDistance > 1e-10) result.push(nearest);
   return [...result, ...points.slice(bestIndex + 1)];
 }
+
+/** A shared-vertex ribbon: adjacent route segments cannot accumulate alpha at their joins. */
+export function routeRibbon(points: Vec3[], width: number): { positions: number[]; indices: number[] } {
+  const path = points.filter((p, i) => i === 0 || Math.hypot(p[0] - points[i - 1][0], p[2] - points[i - 1][2]) > 1e-6);
+  if (path.length < 2) return { positions: [], indices: [] };
+  const positions: number[] = [], indices: number[] = [];
+  const normal = (a: Vec3, b: Vec3): [number, number] => {
+    const length = Math.hypot(b[0] - a[0], b[2] - a[2]);
+    return [-(b[2] - a[2]) / length, (b[0] - a[0]) / length];
+  };
+  for (let i = 0; i < path.length; i++) {
+    const a = normal(path[Math.max(0, i - 1)], path[Math.max(1, i)]);
+    const b = normal(path[Math.min(i, path.length - 2)], path[Math.min(i + 1, path.length - 1)]);
+    let nx = a[0] + b[0], nz = a[1] + b[1];
+    const length = Math.hypot(nx, nz);
+    if (length < 1e-6) { nx = b[0]; nz = b[1]; } else { nx /= length; nz /= length; }
+    const miter = width / 2 / Math.max(0.5, nx * b[0] + nz * b[1]);
+    const p = path[i];
+    positions.push(p[0] + nx * miter, p[1], p[2] + nz * miter, p[0] - nx * miter, p[1], p[2] - nz * miter);
+    if (i > 0) { const v = i * 2; indices.push(v - 2, v - 1, v, v - 1, v + 1, v); }
+  }
+  // End-cap fans occupy only the outer half-disc, sharing the ribbon's boundary.
+  for (const end of [false, true]) {
+    const index = end ? path.length - 1 : 0;
+    const p = path[index], n = normal(path[end ? index - 1 : 0], path[end ? index : 1]);
+    const angle = Math.atan2(n[1], n[0]);
+    const center = positions.length / 3; positions.push(...p);
+    for (let i = 0; i <= 12; i++) {
+      const theta = angle + (end ? -1 : 1) * Math.PI * i / 12;
+      positions.push(p[0] + Math.cos(theta) * width / 2, p[1], p[2] + Math.sin(theta) * width / 2);
+      if (i > 0) indices.push(center, center + i, center + i + 1);
+    }
+  }
+  return { positions, indices };
+}

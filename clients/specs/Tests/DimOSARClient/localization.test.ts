@@ -931,3 +931,23 @@ describe("localization capture", () => {
   });
 });
 
+
+it("measures a three-frame batch separately from server wait and applies the first valid result immediately", async () => {
+  const f = makeController(); f.controller.dispose(); f.clock.nowS = 0;
+  const traces: string[] = [];
+  const controller = new LocalizationCaptureEpisode({ session: f.session, clientTrackingOriginStore: f.originStore, clock: f.clock,
+    tracking: f.tracking, capture: f.capture, geometry: { ...GEOMETRY, frameSpacingS: 0.5 }, config: CAPTURE_CONFIG,
+    initiallyPaused: true, trace: event => traces.push(event.stage) });
+  controller.requestStart();
+  deliverRequest(f.session, { type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 3 });
+  for (const time of [0, 0.5, 1]) { f.clock.nowS = time; controller.tick(); await settleCapture(); }
+  expect(controller.view().phase).toBe("awaiting_result");
+  expect(controller.timing().batchS).toBe(1); expect(controller.timing().batchesSent).toBe(1);
+  expect(f.capture.started).toBe(true);
+  f.clock.nowS = 1.2; deliverResult(f.session);
+  expect(f.originStore.hasTrackingOrigin).toBe(true); expect(controller.view().phase).toBe("idle");
+  expect(controller.timing().resultWaitS).toBeCloseTo(0.2);
+  f.clock.nowS = 30; expect(controller.timing().resultWaitS).toBeCloseTo(0.2);
+  expect(traces.filter(stage => stage === "frame-captured")).toHaveLength(3);
+  expect(traces).toContain("batch-sent"); expect(traces).toContain("result-received"); controller.dispose();
+});

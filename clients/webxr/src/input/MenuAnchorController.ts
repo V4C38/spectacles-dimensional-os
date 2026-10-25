@@ -11,7 +11,7 @@ export class MenuAnchorController {
     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(headRotation);
     forward.y = 0;
     if (forward.lengthSq() < 1e-8) forward.set(0, 0, -1);
-    this.offset.copy(forward.normalize()).multiplyScalar(0.18).add(new THREE.Vector3(0, 0.12, 0));
+    this.offset.copy(forward.normalize()).multiplyScalar(0.18).add(new THREE.Vector3(0, source.hand ? 0.20 : 0.12, 0));
     // Follow the new source from the existing pose instead of snapping on attach.
     this.update(position, eye, panel, 1 / 60);
   }

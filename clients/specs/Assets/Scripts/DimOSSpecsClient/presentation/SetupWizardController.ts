@@ -1,3 +1,4 @@
+import { SetupFlow } from "../../DimOSARClient/presentation/SetupFlow";
 require("LensStudio:TextInputModule");
 
 import type { LocalizationCaptureEpisode } from "../../DimOSARClient/localization/localizationCaptureEpisode";
@@ -95,6 +96,7 @@ export interface SetupWizardControllerDeps {
 
 export class SetupWizardController {
   private readonly deps: SetupWizardControllerDeps;
+  private readonly flow: SetupFlow;
   private readonly view: SetupWizardView;
   private readonly retryEvent: DelayedCallbackEvent;
   private readonly pollEvent: DelayedCallbackEvent;
@@ -115,6 +117,7 @@ export class SetupWizardController {
 
   constructor(deps: SetupWizardControllerDeps) {
     this.deps = deps;
+    this.flow = new SetupFlow(deps.session, deps.episode);
     this.view = new SetupWizardView(deps.panel);
     this._authoredLocalScale = deps.panel.getTransform().getLocalScale();
 
@@ -135,6 +138,7 @@ export class SetupWizardController {
   }
 
   public start(fromRuntime: boolean): void {
+    this.flow.openedFromRuntime = fromRuntime; this.flow.completed = false; this.flow.step = "connect";
     this._openedFromRuntime = fromRuntime;
     this._connectStepCompleted = false;
     this._isConnecting = false;
@@ -202,7 +206,7 @@ export class SetupWizardController {
 
   private setStep(step: SetupWizardStep): void {
     if (this._currentStep === SetupWizardStep.Localization && step !== this._currentStep) {
-      this.deps.episode.pause();
+      this.flow.previous();
     }
     this.invalidatePending();
     this._currentStep = step;
@@ -329,9 +333,7 @@ export class SetupWizardController {
     }
     this.invalidatePending();
     // Success stops the camera but keeps future gated capture requests enabled.
-    if (!this.deps.session.view().hasTrackingOrigin) {
-      this.deps.episode.pause();
-    }
+    this.flow.finish();
     this._openedFromRuntime = false;
     this.hide();
     this.deps.onFinished();
@@ -342,7 +344,7 @@ export class SetupWizardController {
       return;
     }
     try {
-      this.deps.episode.requestStart();
+      this.flow.startLocalization();
     } catch (error) {
       print(`SetupWizardController: requestStart failed — ${error}`);
     }

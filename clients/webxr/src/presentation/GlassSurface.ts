@@ -110,6 +110,10 @@ export class GlassSurface extends THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMa
     }
   }
 
+  setWorldThickness(metres: number): void {
+    if (this.backing && this.thickness) this.backing.scale.z = metres / Math.max(1e-6, this.thickness * this.getWorldScale(new THREE.Vector3()).z);
+  }
+
   setOpacity(opacity: number): void { this.material.uniforms.uOpacity.value = opacity; if (this.backing) this.backing.material.opacity = 0.9 * opacity; }
 
   setTint(color: string, alpha?: number): void {

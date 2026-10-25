@@ -1,3 +1,4 @@
+import { LidarDisplayController } from "../../DimOSARClient/sensors/LidarDisplayController";
 import type { LocalizationCaptureEpisode } from "../../DimOSARClient/localization/localizationCaptureEpisode";
 import type { ClientTrackingOriginStore } from "../../DimOSARClient/localization/clientTrackingOrigin";
 import { localizationCaptureStatus } from "../../DimOSARClient/localization/localizationCaptureStatus";
@@ -70,6 +71,7 @@ export class UIPresenter extends BaseScriptComponent {
   wristMenuRoot: SceneObject;
 
   private deps: UIPresenterDeps | null = null;
+  private lidarDisplay: LidarDisplayController | null = null;
   private readonly appState = new AppState();
   private setupWizardController: SetupWizardController | null = null;
   private mainMenuView: MainMenuView | null = null;
@@ -102,6 +104,7 @@ export class UIPresenter extends BaseScriptComponent {
   }
 
   public bind(deps: Omit<UIPresenterDeps, "setupWizardPanel" | "mainUIFrame" | "wristMenuRoot">): void {
+    this.lidarDisplay = new LidarDisplayController(deps.session, undefined, false);
     this.deps = {
       ...deps,
       setupWizardPanel: this.setupWizardPanel,
@@ -169,7 +172,8 @@ export class UIPresenter extends BaseScriptComponent {
     }
 
     if (view.state?.lidar) {
-      this.appState.setLidarMode(lidarModeFromSettings(view.state.lidar));
+      this.lidarDisplay?.observe(view);
+      this.appState.setLidarMode(this.lidarDisplay?.mode ?? lidarModeFromSettings(view.state.lidar));
       this.mainMenuView?.setLidarModeDisplay(this.appState.lidarMode);
     }
   }
@@ -326,13 +330,10 @@ export class UIPresenter extends BaseScriptComponent {
     if (!available) {
       return;
     }
-    this.appState.setLidarMode(nextLidarMode(this.appState.lidarMode));
-    this.mainMenuView?.setLidarModeDisplay(this.appState.lidarMode);
     try {
-      requestLidarSettings(deps.session, LIDAR_PRESETS[this.appState.lidarMode]);
-    } catch (error) {
-      print(`UIPresenter: lidar preset failed — ${error}`);
-    }
+      this.appState.setLidarMode(this.lidarDisplay?.cycle() ?? nextLidarMode(this.appState.lidarMode));
+      this.mainMenuView?.setLidarModeDisplay(this.appState.lidarMode);
+    } catch (error) { print(`UIPresenter: lidar preset failed — ${error}`); }
   }
 
   private ensureWizardLidarOff(): void {
@@ -362,7 +363,7 @@ export class UIPresenter extends BaseScriptComponent {
     this.appState.setLidarMode("obstacles");
     this.mainMenuView?.setLidarModeDisplay(this.appState.lidarMode);
     try {
-      requestLidarSettings(session, LIDAR_PRESETS[this.appState.lidarMode]);
+      this.lidarDisplay?.setMode(this.appState.lidarMode);
       this.postWizardLidarSent = true;
     } catch {
       // retry on next refresh

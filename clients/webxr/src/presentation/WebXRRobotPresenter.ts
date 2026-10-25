@@ -1,4 +1,6 @@
 import * as THREE from "three";
+import { AdaptiveDashedLineRenderer } from "./AdaptiveDashedLineRenderer";
+import { FLOOR_MARKER_STYLE, ROBOT_LINE_STYLE } from "./DimOSARDesign";
 import { Text } from "troika-three-text";
 import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
 import { odomToClientTrackingPose } from "@dimos-ar-client/localization/clientTrackingTransforms";
@@ -32,10 +34,11 @@ export class WebXRRobotPresenter {
   readonly collider: THREE.Mesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>;
   private readonly outline: THREE.LineSegments<THREE.EdgesGeometry, THREE.LineDashedMaterial>;
   private readonly floorCircle: THREE.Mesh;
-  private readonly connector: THREE.InstancedMesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+  private readonly connectorRenderer = new AdaptiveDashedLineRenderer();
+  private readonly outlineRenderer = new AdaptiveDashedLineRenderer();
+  private readonly connector = this.connectorRenderer.object;
+  private circleOpacity = FLOOR_MARKER_STYLE.idleOpacity as number;
   private connectorFloorY: number | null = null;
-  private readonly dashMaterials = [0, 1].map(() => new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false }));
-  private readonly dashes: THREE.InstancedMesh[] = [];
   private selectedProgress = 0;
   private floorVisible = false;
   private floorProgress = 0;
@@ -84,17 +87,17 @@ export class WebXRRobotPresenter {
     this.collider.name = "Robot selection collider";
     this.collider.userData.rayPriority = 20;
     registerRayTarget(this.collider);
-    this.outline = new THREE.LineSegments(new THREE.EdgesGeometry(this.collider.geometry), new THREE.LineDashedMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, dashSize: 0.003, gapSize: 0.007 }));
+    this.outline = new THREE.LineSegments(new THREE.EdgesGeometry(this.collider.geometry), new THREE.LineDashedMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, dashSize: 0.003, gapSize: 0.01 }));
     this.outline.material.visible = false;
+    this.outline.add(this.outlineRenderer.object);
     this.outline.computeLineDistances();
     this.outline.name = "Robot selection outline";
     this.outline.raycast = () => {};
     this.outline.scale.setScalar(0);
-    this.floorCircle = new THREE.Mesh(new THREE.RingGeometry(0.0585, 0.06, 96), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, toneMapped: false, transparent: true, opacity: 0, depthWrite: false }));
+    this.floorCircle = new THREE.Mesh(new THREE.RingGeometry(0.06 - FLOOR_MARKER_STYLE.strokeM, 0.06, 96), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, toneMapped: false, transparent: true, opacity: 0, depthWrite: false }));
     this.floorCircle.name = "Robot floor circle";
     this.floorCircle.rotation.x = -Math.PI / 2;
     this.floorCircle.raycast = () => {};
-    this.connector = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, depthWrite: false }), 256);
     this.connector.name = "Robot floor connector";
     this.connector.raycast = () => {};
     this.object.add(this.gizmo, this.indicator, this.collider, this.outline, this.floorCircle, this.connector);
@@ -106,7 +109,7 @@ export class WebXRRobotPresenter {
 
     for (const [text, font, size, color] of [
       [this.tagTitle, UI_FONT_SEMIBOLD, 0.02, 0xffffff],
-      [this.tagStatus, UI_FONT_REGULAR, 0.024, 0xffffff],
+      [this.tagStatus, UI_FONT_REGULAR, 0.028, 0xffffff],
       [this.tagMessage, UI_FONT_REGULAR, 0.013, 0xaeaeb2],
     ] as const) {
       text.font = font;
@@ -139,6 +142,8 @@ export class WebXRRobotPresenter {
 
   setConnectorFloorY(y: number | null): void { this.connectorFloorY = y; }
 
+  setCircleOpacity(opacity: number): void { this.circleOpacity = opacity; }
+
   setFloorVisible(visible: boolean): void { this.floorVisible = visible; }
 
   setHovered(hovered: boolean): void { this.hovered = hovered; }
@@ -152,19 +157,18 @@ export class WebXRRobotPresenter {
   }
 
   tick(deltaS: number): void {
-    this.outlineProgress = THREE.MathUtils.clamp(this.outlineProgress + (this.selected || this.hovered ? 1 : -1) * Math.max(0, deltaS) / (this.selected || this.hovered ? 0.24 : 0.32), 0, 1);
+    this.outlineProgress = THREE.MathUtils.clamp(this.outlineProgress + (this.selected || this.hovered ? 1 : -1) * Math.max(0, deltaS) / 0.24, 0, 1);
     const ease = (t: number) => { const value = THREE.MathUtils.clamp(t, 0, 1); return value * value * (3 - 2 * value); };
     const horizontal = ease(this.outlineProgress / 0.4);
     const vertical = ease((this.outlineProgress - 0.4) / 0.6);
     this.outline.scale.set(horizontal, vertical, horizontal);
     this.outline.position.y = -this.baseHeightM + this.collider.scale.y * vertical / 2;
-    this.outline.material.opacity = 0.55 * ease(this.outlineProgress / 0.4);
     const alpha = 1 - Math.exp(-32 * Math.max(0, deltaS));
     this.selectedProgress += ((this.selected ? 1 : 0) - this.selectedProgress) * alpha;
-    this.dashMaterials[0].opacity = this.outline.material.opacity * (1 - this.selectedProgress);
-    this.dashMaterials[1].opacity = this.outline.material.opacity * this.selectedProgress;
+    this.outline.material.opacity = (ROBOT_LINE_STYLE.hoverOpacity + (ROBOT_LINE_STYLE.selectedOpacity - ROBOT_LINE_STYLE.hoverOpacity) * this.selectedProgress) * ease(this.outlineProgress / 0.4);
+    this.outlineRenderer.setStyle(ROBOT_LINE_STYLE.hoverWidthM + (ROBOT_LINE_STYLE.selectedWidthM - ROBOT_LINE_STYLE.hoverWidthM) * this.selectedProgress, this.outline.material.opacity);
     this.floorProgress += ((this.floorVisible ? 1 : 0) - this.floorProgress) * alpha;
-    (this.floorCircle.material as THREE.MeshBasicMaterial).opacity = this.floorProgress * 0.75;
+    (this.floorCircle.material as THREE.MeshBasicMaterial).opacity = this.circleOpacity;
     this.floorCircle.visible = this.floorProgress > 0.001;
     this.updateLabelPosition();
     if (!this.object.visible || !this.lastOrigin || deltaS <= 0) return;
@@ -188,7 +192,7 @@ export class WebXRRobotPresenter {
     this.tagDot.material.color.setHex(toneHex(info.tone));
     this.tagTitle.position.y = 0.09;
     this.tagDot.position.set(-0.06, 0.079, 0.001);
-    this.tagStatus.position.y = 0.062;
+    this.tagStatus.position.y = 0.064;
     this.tagMessage.position.y = 0.026;
     syncText(this.tagTitle, this.tagStatus, this.tagMessage);
     if (typeof Worker !== "undefined") this.tagTitle.sync(() => {
@@ -251,6 +255,7 @@ export class WebXRRobotPresenter {
 
   dispose(): void {
     this.object.removeFromParent();
+    this.connectorRenderer.dispose(); this.outlineRenderer.dispose();
     const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();
     this.object.traverse(child => {
@@ -262,7 +267,6 @@ export class WebXRRobotPresenter {
       else if (material instanceof THREE.Material) materials.add(material);
     });
     geometries.forEach(geometry => geometry.dispose());
-    this.dashMaterials.forEach(material => materials.add(material));
     materials.forEach(material => material.dispose());
     for (const text of [this.tagTitle, this.tagStatus, this.tagMessage]) disposeTextResources(text);
   }
@@ -322,24 +326,8 @@ export class WebXRRobotPresenter {
     box.dispose();
     this.outline.computeLineDistances();
     this.outline.position.copy(this.collider.position);
-    for (const mesh of this.dashes) { mesh.dispose(); mesh.geometry.dispose(); mesh.removeFromParent(); }
-    this.dashes.length = 0;
     const edges = this.outline.geometry.getAttribute("position");
-    for (const [index, dash] of [0.003, 0.012].entries()) {
-      const parts: THREE.Matrix4[] = [];
-      for (let i = 0; i < edges.count; i += 2) {
-        const a = new THREE.Vector3().fromBufferAttribute(edges, i), b = new THREE.Vector3().fromBufferAttribute(edges, i + 1);
-        const direction = b.clone().sub(a), length = direction.length(); direction.normalize();
-        const rotation = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
-        for (let distance = 0; distance < length; distance += dash + 0.007) {
-          const size = Math.min(dash, length - distance);
-          parts.push(new THREE.Matrix4().compose(a.clone().addScaledVector(direction, distance + size / 2), rotation, new THREE.Vector3(index ? 0.00125 : 0.0004, size, index ? 0.00125 : 0.0004)));
-        }
-      }
-      const mesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 5), this.dashMaterials[index], parts.length);
-      parts.forEach((matrix, i) => mesh.setMatrixAt(i, matrix));
-      mesh.raycast = () => {}; this.outline.add(mesh); this.dashes.push(mesh);
-    }
+    this.outlineRenderer.setSegments(Array.from({ length: edges.count }, (_, i) => [edges.getX(i), edges.getY(i), edges.getZ(i)] as Vec3));
     this.floorCircle.position.set(0, -baseHeight + 0.001, 0);
 
   }
@@ -357,16 +345,11 @@ export class WebXRRobotPresenter {
     this.floorCircle.quaternion.copy(inverse).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2));
     const floorY = Math.max(this.object.position.y + this.floorOffset[1] + 0.001, this.connectorFloorY ?? -Infinity);
     const length = Math.max(0, this.object.position.y - floorY - 0.02);
-    const radius = 0.0004 + 0.00085 * this.selectedProgress;
-    this.connector.count = Math.min(256, Math.floor(length / 0.008));
-    const matrix = new THREE.Matrix4();
-    for (let i = 0; i < this.connector.count; i++) {
-      const position = new THREE.Vector3(0, -(i + 0.5) * 0.008, 0).applyQuaternion(inverse);
-      matrix.compose(position, new THREE.Quaternion(), new THREE.Vector3(radius, radius, radius));
-      this.connector.setMatrixAt(i, matrix);
-    }
-    this.connector.instanceMatrix.needsUpdate = true;
-    this.connector.computeBoundingSphere();
+    const top = new THREE.Vector3(0, -0.03, 0).applyQuaternion(inverse);
+    const bottom = new THREE.Vector3(0, -Math.max(0.03, length), 0).applyQuaternion(inverse);
+    this.connectorRenderer.setSegments([top.toArray() as Vec3, bottom.toArray() as Vec3]);
+    this.connectorRenderer.setStyle(ROBOT_LINE_STYLE.selectedWidthM, ROBOT_LINE_STYLE.selectedOpacity);
+    this.connector.visible = length > 0.03;
     // Just above the robot body, so the tag reads as attached to it.
     this.labelGroup.position.copy(new THREE.Vector3(0, 0.075, 0).applyQuaternion(inverse));
   }

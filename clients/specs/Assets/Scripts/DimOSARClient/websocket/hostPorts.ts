@@ -28,6 +28,16 @@ export interface WebSocketTransport {
   sendBinary(data: Uint8Array): void;
 }
 
+export interface WebSocketTransportHandlers {
+  onTransportOpen: () => void;
+  onTransportClose: () => void;
+  onTransportText: (chunk: string) => void;
+  onTransportBinary: (data: Uint8Array) => void;
+}
+export interface BindableWebSocketTransport extends WebSocketTransport {
+  bind(handlers: WebSocketTransportHandlers): void;
+}
+
 export interface ClientClock {
   now(): number;
 }

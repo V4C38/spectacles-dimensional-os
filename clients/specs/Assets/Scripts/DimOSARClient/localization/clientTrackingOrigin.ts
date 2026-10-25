@@ -31,6 +31,11 @@ export class ClientTrackingOriginStore {
     return this.current;
   }
 
+  /** Restore a retained estimate without declaring it a newly observed localization result. */
+  restore(origin: ClientTrackingOrigin): void {
+    this.current = { ...origin, position: requireVec3(origin.position, "position"), orientation: requireQuat(origin.orientation) };
+  }
+
   clear(): void {
     this.current = null;
   }

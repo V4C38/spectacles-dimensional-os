@@ -9,7 +9,7 @@ export type Controller = xb.SelectEvent["target"];
 
 export const INTERACTION_LAYER = 1;
 export const EMPTY_RAY_LENGTH_M = 3;
-export const IDLE_LASER_OPACITY = 0.5;
+export const IDLE_LASER_OPACITY = 0.6;
 
 /** Only explicit application surfaces participate in the SDK's one hit list. */
 export function registerRayTarget(mesh: THREE.Mesh): void {
@@ -42,7 +42,7 @@ const vertexShader = /* glsl */ `
   uniform vec3 uP2;
   uniform float uRadius;
   uniform float uTipRadius;
-  varying float vT;
+  varying float vStartDistance;
   void main() {
     float t = position.y + 0.5;
     float u = 1.0 - t;
@@ -51,8 +51,10 @@ const vertexShader = /* glsl */ `
     vec3 reference = abs(tangent.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     vec3 side = normalize(cross(tangent, reference));
     vec3 up = cross(tangent, side);
-    vec3 world = center + (side * position.x + up * position.z) * mix(uRadius, uTipRadius, t);
-    vT = t;
+    float startDistance = distance(center, uP0);
+    float taper = smoothstep(0.0, 0.05, startDistance);
+    vec3 world = center + (side * position.x + up * position.z) * mix(uRadius, uTipRadius, t) * taper;
+    vStartDistance = startDistance;
     gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);
   }
 `;
@@ -60,9 +62,9 @@ const vertexShader = /* glsl */ `
 const fragmentShader = /* glsl */ `
   uniform vec3 uColor;
   uniform float uOpacity;
-  varying float vT;
+  varying float vStartDistance;
   void main() {
-    gl_FragColor = vec4(uColor, uOpacity * mix(0.3, 1.0, smoothstep(0.0, 0.15, vT)));
+    gl_FragColor = vec4(uColor, uOpacity * smoothstep(0.0, 0.05, vStartDistance));
     #include <colorspace_fragment>
   }
 `;
@@ -88,6 +90,7 @@ export class XRBlocksRayInteraction {
   private enabled = false;
   private policy: {
     eligible: (controller: Controller, object: THREE.Object3D, point: THREE.Vector3) => boolean;
+    ignored?: (controller: Controller, object: THREE.Object3D) => boolean;
     captured: (controller: Controller) => boolean;
     unobstructed: (object: THREE.Object3D, origin: THREE.Vector3, point: THREE.Vector3) => boolean;
   } = { eligible: (_controller, object) => object.userData.rayPassive !== true && object.userData.rayAmbient !== true && object.userData.interactionEnabled !== false,
@@ -101,6 +104,7 @@ export class XRBlocksRayInteraction {
     input.performRaycastOnScene = controller => {
       this.originalRaycast.call(input, controller);
       const hits = input.intersectionsForController.get(controller);
+      if (hits && this.policy.ignored) for (let i = hits.length - 1; i >= 0; i--) if (this.policy.ignored(controller, hits[i].object)) hits.splice(i, 1);
       const near = this.enabled ? this.direct.resolve(controller, input.scene, (object, point) => this.policy.eligible(controller, object, point)) : undefined;
       if (hits && (near || this.direct.isDirect(controller))) { hits.length = 0; if (near) hits.push(near); }
       hits?.sort(compareRayHits);
@@ -196,22 +200,23 @@ export class XRBlocksRayInteraction {
         beam.tip.lerp(target, 1 - Math.exp(-rate * deltaS));
         beam.opacity += (opacity - beam.opacity) * (1 - Math.exp(-18 * deltaS));
       }
-      beam.reveal = THREE.MathUtils.clamp(beam.reveal + (shown ? 1 : -1) * deltaS / (shown ? 0.12 : 0.18), 0, 1);
+      beam.reveal = THREE.MathUtils.clamp(beam.reveal + (shown ? 1 : -1) * deltaS / (shown ? 0.18 : 0.24), 0, 1);
       // The beam grows out of the hand and retracts into it.
       const extent = 1 - (1 - beam.reveal) ** 3;
       const end = origin.clone().lerp(beam.tip, extent);
-      const bend = origin.clone().addScaledVector(direction, origin.distanceTo(end) * 0.5);
-      const color = controller.userData.selected ? 0x0a84ff : 0xffffff;
+      const visualStart = origin.clone().addScaledVector(direction, Math.min(0.03, Math.max(0, origin.distanceTo(end) - 0.005)));
+      const bend = visualStart.clone().addScaledVector(direction, visualStart.distanceTo(end) * 0.5);
+      const color = 0xffffff;
       for (const mesh of [beam.mesh, beam.outline]) {
         const uniforms = mesh.material.uniforms;
-        uniforms.uP0.value.copy(origin);
+        uniforms.uP0.value.copy(visualStart);
         uniforms.uP1.value.copy(bend);
         uniforms.uP2.value.copy(end);
         mesh.visible = beam.reveal > 0;
       }
       beam.mesh.material.uniforms.uColor.value.setHex(color);
       beam.mesh.material.uniforms.uOpacity.value = beam.opacity * extent;
-      beam.outline.material.uniforms.uOpacity.value = beam.opacity * extent * 0.5;
+      beam.outline.material.uniforms.uOpacity.value = beam.opacity * extent * 0.6;
       const reticle = controller.reticle;
       if (reticle) {
         if (!this.styledReticles.has(reticle)) {

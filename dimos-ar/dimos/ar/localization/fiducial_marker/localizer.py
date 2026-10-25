@@ -209,6 +209,7 @@ class FiducialMarkerLocalizer(Localizer):
             saw_mount = True
 
             candidate = self._candidate_from_detection(
+                misses=misses,
                 corners=corners,
                 mount=mount,
                 camera_matrix=camera_matrix,
@@ -230,6 +231,7 @@ class FiducialMarkerLocalizer(Localizer):
         self,
         *,
         corners: NDArray[np.float32],
+        misses: list[str] | None = None,
         mount: FiducialMarkerMount,
         camera_matrix: NDArray[np.float64],
         dist_coeffs: NDArray[np.float64],
@@ -245,6 +247,8 @@ class FiducialMarkerLocalizer(Localizer):
             distortion_model=intrinsics.distortion_model,
         )
         if pose is None:
+            if misses is not None:
+                misses.append("pnp")
             return None
 
         rvec, tvec = pose
@@ -259,6 +263,8 @@ class FiducialMarkerLocalizer(Localizer):
             distortion_model=intrinsics.distortion_model,
         )
         if not math.isfinite(reproj) or reproj > self._config.max_reprojection_error_px:
+            if misses is not None:
+                misses.append(f"reprojection_px={reproj:.2f}")
             return None
 
         T_camopt_marker = _matrix_from_rvec_tvec(rvec, tvec)
@@ -272,6 +278,8 @@ class FiducialMarkerLocalizer(Localizer):
             return None
         leveled = normalize_pose_estimate(transform, max_tilt_rad=self._config.max_tilt_rad)
         if leveled is None:
+            if misses is not None:
+                misses.append("gravity_tilt")
             return None
         # Gravity removes PnP roll/pitch noise. Preserve the measured marker
         # center when doing so: retaining the old translation rotates around the

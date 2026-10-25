@@ -3,12 +3,8 @@ import { AR_MODULE_CLIENT_CONFIG, type WebSocketTransport } from "@dimos-ar-clie
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
 
-export interface BrowserWebSocketTransportHandlers {
-  onTransportOpen: () => void;
-  onTransportClose: () => void;
-  onTransportText: (chunk: string) => void;
-  onTransportBinary: (data: Uint8Array) => void;
-}
+export type { WebSocketTransportHandlers as BrowserWebSocketTransportHandlers } from "@dimos-ar-client/websocket/hostPorts";
+import type { WebSocketTransportHandlers as BrowserWebSocketTransportHandlers } from "@dimos-ar-client/websocket/hostPorts";
 
 export class BrowserWebSocketTransport implements WebSocketTransport {
   private url: string;

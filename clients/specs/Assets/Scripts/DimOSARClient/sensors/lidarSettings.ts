@@ -41,7 +41,7 @@ export function nextLidarMode(mode: LidarDisplayMode): LidarDisplayMode {
   return "off";
 }
 
-export function lidarModeFromSettings(settings: LidarSettings | null | undefined): LidarDisplayMode {
+export function lidarModeFromSettings(settings: LidarSettings | null | undefined, obstacles = LIDAR_PRESETS.obstacles): LidarDisplayMode {
   if (!settings?.enabled) {
     return "off";
   }
@@ -49,22 +49,19 @@ export function lidarModeFromSettings(settings: LidarSettings | null | undefined
   if (
     settings.min_height_m === full.min_height_m
     && settings.max_height_m === full.max_height_m
-    && settings.max_range_m === full.max_range_m
   ) {
     return "full";
   }
-  const obstacles = LIDAR_PRESETS.obstacles;
   if (
     settings.min_height_m === obstacles.min_height_m
     && settings.max_height_m === obstacles.max_height_m
-    && settings.max_range_m === obstacles.max_range_m
   ) {
     return "obstacles";
   }
-  return "off";
+  return obstacles === LIDAR_PRESETS.obstacles ? "off" : lidarModeFromSettings(settings);
 }
 
-export function requestLidarSettings(session: ARModuleSession, settings: LidarSettings): void {
+export function requestLidarSettings(session: Pick<ARModuleSession, "view" | "sendText">, settings: LidarSettings): void {
   requireCapability(session, "lidar");
   session.sendText(encodeLidarSettingsRequest(settings));
 }

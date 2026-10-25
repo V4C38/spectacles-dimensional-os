@@ -1,3 +1,4 @@
+import { ClientPosePublisher } from "../DimOSARClient/agent/ClientPosePublisher";
 import {
   ClientTrackingOriginStore,
   type ClientTrackingOrigin,
@@ -22,8 +23,6 @@ import {
   parsePlaceArMarkerArgs,
   parseRemoveArMarkerArgs,
 } from "../DimOSARClient/agent/agentSkills";
-import { clientTrackingToOdomPose } from "../DimOSARClient/localization/clientTrackingTransforms";
-import { encodeClientPose } from "../DimOSARClient/websocket/protocol";
 
 @component
 export class DimOSSpecsClient extends BaseScriptComponent {
@@ -71,7 +70,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
   private tts: SpecsTextToSpeech | null = null;
   private annotations: ARMarkerPresenter | null = null;
   private unsubscribeOutbound: (() => void) | null = null;
-  private lastClientPoseSentAt = Number.NEGATIVE_INFINITY;
+  private posePublisher: ClientPosePublisher | null = null;
   private lastAnnotationOrigin: ClientTrackingOrigin | null = null;
 
   onAwake(): void {
@@ -138,6 +137,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       cameraObject: this.cameraObject,
     });
     this.cameraSource = cameraSource;
+    this.posePublisher = new ClientPosePublisher(session, clientTrackingOriginStore, cameraSource, clock);
     cameraSource.samplePose();
     const episode = new LocalizationCaptureEpisode({
       session,
@@ -146,6 +146,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       tracking: cameraSource,
       capture: cameraSource,
       initiallyPaused: true,
+      trace: event => { if (event.stage === "batch-sent" || event.stage === "result-received" || event.stage === "failed") print(`Localization: ${JSON.stringify(event)}`); },
     });
     this.episode = episode;
 
@@ -318,6 +319,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       cameraSource.samplePose();
       session.tick();
       episode.tick();
+      navigationController.tick(getDeltaTime());
       this.maybeSendClientPose();
       const setupWasCompleted = this.uiPresenter.isSetupCompleted();
       this.uiPresenter.tick(getDeltaTime());
@@ -339,39 +341,5 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     this.updateEvent = updateEvent;
   }
 
-  private maybeSendClientPose(): void {
-    const session = this.session;
-    const cameraSource = this.cameraSource;
-    const originStore = this.clientTrackingOriginStore;
-    if (!session || !cameraSource || !originStore) {
-      return;
-    }
-    const now = getTime();
-    if (now - this.lastClientPoseSentAt < 0.1) {
-      return;
-    }
-    const view = session.view();
-    if (view.connection !== "ready" || view.capabilities?.agent.available !== true) {
-      return;
-    }
-    const origin = originStore.T_odom_client;
-    if (!origin) {
-      return;
-    }
-    let optical: ReturnType<SpecsCameraSource["cameraOptical"]>;
-    try {
-      optical = cameraSource.cameraOptical();
-    } catch {
-      return;
-    }
-    const odom = clientTrackingToOdomPose(optical, origin);
-    session.sendText(
-      encodeClientPose({
-        position: odom.position,
-        orientation: odom.orientation,
-        ts: now,
-      }),
-    );
-    this.lastClientPoseSentAt = now;
-  }
+  private maybeSendClientPose(): void { this.posePublisher?.tick(); }
 }

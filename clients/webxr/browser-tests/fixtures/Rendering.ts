@@ -41,6 +41,11 @@ export function verifyRendering() {
   route.apply(long, origin, true, 0, 0);
   renderer.render(scene, camera);
   const regrownEnd = pixelAt(new THREE.Vector3(1, 0, -0.9), 2);
+  const dense: YawPose[] = Array.from({ length: 21 }, (_, i) => [0, i / 20, 0, 0]);
+  route.apply(dense, origin, true, 0, 0, { executing: true });
+  renderer.render(scene, camera);
+  const routeMiddle = pixelAt(new THREE.Vector3(-0.475, 0, 0), 1);
+  const routeJoin = pixelAt(new THREE.Vector3(-0.5, 0, 0), 1);
   route.hide();
 
   const lidar = new WebXRLidarRenderer();
@@ -58,7 +63,12 @@ export function verifyRendering() {
   panel.visible = false;
   renderer.render(scene, camera);
   const lidarOnly = pixelAt(new THREE.Vector3(0, 0, 0));
+  lidar.apply([[0.4, 0, 0.4], [0.65, 0, 0.4], [0.95, 0, 0.4]], origin, "obstacles", [0, 0, 0.33]);
+  renderer.render(scene, camera);
+  const obstacleNear = pixelAt(new THREE.Vector3(0, 0.4, -0.4), 1);
+  const obstacleMid = pixelAt(new THREE.Vector3(0, 0.4, -0.65), 1);
+  const obstacleEdge = pixelAt(new THREE.Vector3(0, 0.4, -0.95), 1);
   panel.geometry.dispose(); panel.material.dispose();
   route.dispose(); lidar.dispose(); target.dispose(); renderer.dispose();
-  return { longEnd, shortEnd, regrownEnd, opaqueUi, transparentUi, lidarOnly };
+  return { longEnd, shortEnd, regrownEnd, opaqueUi, transparentUi, lidarOnly, routeMiddle, routeJoin, obstacleNear, obstacleMid, obstacleEdge };
 }

@@ -1,17 +1,18 @@
 :root {
-  --bg: #0f1419;
-  --panel: #161b22;
-  --card: #1c2330;
-  --border: #2a3341;
-  --text: #e6edf3;
-  --muted: #8b949e;
-  --accent: #3d9cfd;
-  --accent-dim: #1f6feb;
+  --bg: #202022;
+  --panel: #29292b;
+  --card: #303032;
+  --border: #48484a;
+  --text: #f5f5f7;
+  --muted: #aeaeb2;
+  --accent: #ffffff;
+  --accent-dim: #dedee0;
+  --primary-text: #171719;
   --danger: #f85149;
   --ok: #3fb950;
   --warn: #d29922;
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --panel-width: 420px;
   --ansi-black: #484f58;
   --ansi-red: #ff7b72;
@@ -40,7 +41,7 @@ body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: radial-gradient(1200px 600px at 10% -10%, #1a2740 0%, var(--bg) 55%);
+  background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
 }
@@ -123,7 +124,7 @@ body.resizing {
 .card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 8px;
   padding: 1rem;
 }
 
@@ -512,7 +513,7 @@ body.resizing {
 
 .tag-card {
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: 10px;
+  border-radius: 6px;
   background: color-mix(in srgb, var(--panel) 70%, transparent);
   overflow: hidden;
 }
@@ -905,7 +906,7 @@ body.resizing {
 }
 
 .check input:checked + .check-box::after {
-  border-color: var(--text);
+  border-color: var(--primary-text);
 }
 
 .check input:focus-visible + .check-box {
@@ -973,8 +974,8 @@ body.resizing {
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
-  border-radius: 8px;
-  padding: 0.65rem 0.9rem;
+  border-radius: 6px;
+  padding: 0.45rem 0.75rem;
   font: inherit;
   cursor: pointer;
 }
@@ -984,7 +985,8 @@ body.resizing {
 }
 
 .btn.primary {
-  background: var(--accent-dim);
+  color: var(--primary-text);
+  background: var(--accent);
   border-color: var(--accent);
 }
 
@@ -1133,4 +1135,37 @@ body.resizing {
     min-height: 45vh;
     height: 45vh;
   }
+}
+
+/* Desktop window chrome, grouped preferences, and an independent console. */
+.app { display: grid; grid-template-columns: auto 5px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+.app-toolbar { grid-column: 1 / -1; display: flex; align-items: center; min-height: 58px; padding: 9px 20px; gap: 24px; background: #303032; border-bottom: 1px solid #151517; box-shadow: 0 1px 0 #ffffff0b inset; }
+.app-toolbar .panel-top { flex: 1; padding: 0; border: 0; background: none; }
+.app-toolbar .status-card { padding: 0; border: 0; background: none; }
+.app-toolbar .state-row { justify-content: flex-start; align-items: center; gap: 22px; padding: 0; }
+.app-toolbar .brand-title { font-size: 14px; font-weight: 650; }
+.app-toolbar .state-value { font-size: 12px; }
+.app-toolbar .panel-bottom { padding: 0; background: none; border: 0; }
+.app-toolbar .actions { gap: 8px; }
+.app-toolbar .btn { min-width: 76px; padding: 6px 15px; font-size: 13px; border-radius: 6px; }
+.app-toolbar .warning, .app-toolbar .error { margin: 4px 0 0; font-size: 12px; }
+.panel { background: #262628; }
+.panel-scroll { padding: 16px; gap: 18px; }
+.panel-scroll > .card { padding: 0 0 18px; border: 0; border-bottom: 1px solid #ffffff12; border-radius: 0; background: none; }
+.card h2 { font-size: 13px; font-weight: 650; color: #f5f5f7; }
+.panel .field > span, .panel .label, .panel .check { font-size: 12px; }
+.panel input[type="text"], .panel input[type="number"], .panel select { background: #353537; border-color: #ffffff16; border-radius: 5px; padding: 6px 8px; font-size: 12px; }
+.panel .btn { border-radius: 6px; font-size: 12px; padding: 6px 10px; }
+.splitter { background: #171719; }
+.log-panel { background: #1c1c1e; min-width: 0; }
+.log-header { min-height: 44px; padding: 8px 16px; background: #242426; border-bottom: 1px solid #ffffff0c; }
+.log-header h2 { font-size: 12px; font-weight: 600; color: var(--muted); }
+.log-header select, .log-header .btn { font-size: 11px; border-radius: 5px; padding: 4px 8px; }
+.log { background: transparent; padding: 14px 18px; font-size: 12px; }
+@media (max-width: 900px) {
+  .app { display: flex; flex-direction: column; overflow: visible; }
+  .app-toolbar { flex-wrap: wrap; gap: 12px; padding: 12px 16px; }
+  .app-toolbar .state-row { flex-wrap: wrap; gap: 8px; }
+  .panel { width: 100% !important; }
+  .log-panel { flex: none; }
 }

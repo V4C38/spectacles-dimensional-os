@@ -895,3 +895,22 @@ async def test_disconnect_cancels_preview_delivery_while_worker_finishes() -> No
         assert module._ws_server.sent == []
     finally:
         release.set()
+
+
+def test_new_goal_broadcasts_cleared_state_before_planner_can_complete() -> None:
+    module = _module_with_policy([])
+    order: list[str] = []
+    module._nav_goal_coordinator = SimpleNamespace(
+        nav_state=lambda: NavState("idle", None),
+        submit_goal=lambda _msg: object(),
+    )
+    module._broadcast_state = lambda: order.append("state")  # type: ignore[method-assign]
+    module.goal_request = SimpleNamespace(
+        transport=object(), publish=lambda _goal: order.append("planner")
+    )
+    module._on_nav_goal_request(
+        NavGoalRequest(position=(1.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+        None,  # type: ignore[arg-type]
+        "c1",
+    )
+    assert order == ["state", "planner"]

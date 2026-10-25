@@ -41,8 +41,12 @@ export interface LocalizationCaptureState {
   observationCount?: number;
 }
 
+export type LocalizationTrace = { stage: string; atS: number; phase: LocalizationCapturePhase; captured: number; detail?: string };
+
+export type LocalizationSessionPort = Pick<ARModuleSession, "view" | "sendText" | "sendBinary" | "subscribeLocalizationObservationsRequest" | "subscribeOutbound" | "subscribeView">;
+
 export interface LocalizationCaptureDependencies {
-  session: ARModuleSession;
+  session: LocalizationSessionPort;
   clientTrackingOriginStore: ClientTrackingOriginStore;
   clock: ClientClock;
   tracking: CameraTrackingSource;
@@ -50,10 +54,11 @@ export interface LocalizationCaptureDependencies {
   geometry?: CaptureGeometry;
   config?: LocalizationCaptureConfig;
   initiallyPaused?: boolean;
+  trace?: (event: LocalizationTrace) => void;
 }
 
 export class LocalizationCaptureEpisode {
-  private readonly session: ARModuleSession;
+  private readonly session: LocalizationSessionPort;
   private readonly clientTrackingOriginStore: ClientTrackingOriginStore;
   private readonly clock: ClientClock;
   private readonly tracking: CameraTrackingSource;
@@ -74,9 +79,16 @@ export class LocalizationCaptureEpisode {
   private inflight: Promise<void> | null = null;
   private hardwareStarted = false;
   private captureEnabled: boolean;
+  private readonly traceSink?: (event: LocalizationTrace) => void;
+  private episodeStartedAt: number | null = null;
+  private episodeEndedAt: number | null = null;
+  private batchStartedAt: number | null = null;
+  private sentAt: number | null = null;
+  private batchesSent = 0;
   private readonly unsubscribers: Array<() => void> = [];
 
   constructor(deps: LocalizationCaptureDependencies) {
+    this.traceSink = deps.trace;
     this.session = deps.session;
     this.clientTrackingOriginStore = deps.clientTrackingOriginStore;
     this.clock = deps.clock;
@@ -96,6 +108,13 @@ export class LocalizationCaptureEpisode {
         }
       }),
     );
+  }
+
+  timing() {
+    const now = this.episodeEndedAt ?? this.clock.now();
+    return { episodeS: this.episodeStartedAt === null ? 0 : now - this.episodeStartedAt,
+      batchS: this.batchStartedAt === null ? 0 : (this.sentAt ?? now) - this.batchStartedAt,
+      resultWaitS: this.sentAt === null ? 0 : now - this.sentAt, batchesSent: this.batchesSent };
   }
 
   view(): LocalizationCaptureState {
@@ -131,6 +150,7 @@ export class LocalizationCaptureEpisode {
   }
 
   requestStart(): void {
+    this.episodeStartedAt = this.clock.now(); this.episodeEndedAt = null; this.batchesSent = 0; this.trace("start-requested");
     if (this.session.view().connection !== "ready") {
       throw new Error("localization capture requires a ready session");
     }
@@ -189,6 +209,8 @@ export class LocalizationCaptureEpisode {
   }
 
   private onRequest(request: LocalizationObservationsRequest): void {
+    if (this.phase === "idle" && this.captureEnabled) { this.episodeStartedAt = this.clock.now(); this.episodeEndedAt = null; this.batchesSent = 0; }
+    this.trace("capture-request-received", request.capture_policy);
     if (!this.captureEnabled) {
       this.request = request;
       return;
@@ -198,6 +220,7 @@ export class LocalizationCaptureEpisode {
     this.retryAt = null;
     this.lastError = null;
     this.request = request;
+    this.batchStartedAt = this.clock.now(); this.sentAt = null;
     this.captureGeneration += 1;
     try {
       if (this.shouldWaitForGeometricGate()) {
@@ -217,6 +240,7 @@ export class LocalizationCaptureEpisode {
     if (message.type !== "localization_result") {
       return;
     }
+    this.episodeEndedAt = this.clock.now(); this.trace("result-received");
     if (this.phase !== "idle") {
       this.resetIdle();
     }
@@ -276,6 +300,7 @@ export class LocalizationCaptureEpisode {
     const generation = this.captureGeneration;
     let pending: Promise<LocalizationObservation>;
     try {
+      this.trace("capture-start");
       pending = this.capture.capture();
     } catch (error) {
       this.enterFailed(errorMessage(error));
@@ -307,7 +332,7 @@ export class LocalizationCaptureEpisode {
     if (this.request === null) {
       return;
     }
-    this.observations.push(observation);
+    this.observations.push(observation); this.trace("frame-captured");
     if (this.observations.length < this.request.observation_count) {
       this.nextCaptureAt = this.clock.now() + this.geometry.frameSpacingS;
       return;
@@ -326,6 +351,7 @@ export class LocalizationCaptureEpisode {
     // Keep the video stream warm while the server checks this bounded batch.
     // A miss requests the next batch immediately; success/reset stops capture.
     this.phase = "awaiting_result";
+    this.sentAt = now; this.batchesSent++; this.trace("batch-sent", `bytes=${this.observations.reduce((sum, observation) => sum + observation.jpeg.length, 0)}`);
     this.resultDeadline = now + this.resultTimeoutS;
     this.nextCaptureAt = null;
   }
@@ -350,7 +376,7 @@ export class LocalizationCaptureEpisode {
   private enterFailed(reason: string): void {
     this.phase = "failed";
     this.stopHardware();
-    this.lastError = reason;
+    this.lastError = reason; this.trace("failed", reason);
     this.observations = [];
     this.geometricGateWaitStartedAt = null;
     this.nextCaptureAt = null;
@@ -369,6 +395,10 @@ export class LocalizationCaptureEpisode {
     this.resultDeadline = null;
     this.retryAt = null;
     this.lastError = null;
+  }
+
+  private trace(stage: string, detail?: string): void {
+    this.traceSink?.({ stage, atS: this.clock.now(), phase: this.phase, captured: this.observations.length, detail });
   }
 
   private startHardware(): void {

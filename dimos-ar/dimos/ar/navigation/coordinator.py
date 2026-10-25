@@ -17,6 +17,7 @@ class NavGoalCoordinator:
         self._lock = threading.Lock()
         self._following_path = False
         self._outcome: NavOutcome | None = None
+        self._retired_at = 0.0
 
     def nav_state(self) -> NavState:
         with self._lock:
@@ -36,11 +37,14 @@ class NavGoalCoordinator:
         goal = uncorrect_odom_pose(client_pose, factor=self._odom_scale_correction_factor)
         with self._lock:
             self._outcome = None
+            self._retired_at = time.time()
         return goal
 
-    def on_path(self, msg: Path) -> tuple[NavGoalFrame, bool]:
+    def on_path(self, msg: Path) -> tuple[NavGoalFrame | None, bool]:
         corrected = correct_odom_path(msg, factor=self._odom_scale_correction_factor)
         with self._lock:
+            if self._retired_at and (not corrected.ts or corrected.ts <= self._retired_at):
+                return None, False
             if not corrected.poses:
                 return NavGoalFrame(
                     pose=None,
@@ -64,10 +68,12 @@ class NavGoalCoordinator:
         with self._lock:
             self._outcome = "succeeded" if msg.data else "failed"
             self._following_path = False
+            self._retired_at = time.time()
 
     def on_estop(self) -> bool:
         with self._lock:
             changed = self._following_path or self._outcome is not None
             self._following_path = False
             self._outcome = None
+            self._retired_at = time.time()
             return changed

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from itertools import count
+import time
+
 from dimos_lcm.std_msgs import Bool
 import pytest
 
@@ -7,6 +10,14 @@ from dimos.ar.navigation.coordinator import NavGoalCoordinator
 from dimos.ar.navigation.types import NavGoalRequest
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
+
+
+@pytest.fixture(autouse=True)
+def advancing_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A goal and its first path can otherwise share the same clock microsecond.
+    # These tests model a freshly produced planner frame after the submission.
+    ticks = count(1_000_000, 0.001)
+    monkeypatch.setattr(time, "time", lambda: next(ticks))
 
 
 def _nav_goal_request(
@@ -22,7 +33,7 @@ def _path(
     *poses: tuple[tuple[float, float, float], tuple[float, float, float, float]],
 ) -> Path:
     return Path(
-        ts=3.0,
+        ts=time.time(),
         frame_id="world",
         poses=[
             PoseStamped(frame_id="world", position=list(position), orientation=list(orientation))
@@ -137,3 +148,29 @@ def test_new_goal_clears_previous_outcome() -> None:
     nav = coordinator.nav_state()
     assert nav.state == "following_path"
     assert nav.outcome is None
+
+
+@pytest.mark.parametrize("success", [True, False])
+def test_late_path_cannot_resurrect_terminal_navigation(success: bool) -> None:
+    coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
+    path = _path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)))
+    coordinator.on_path(path)
+    coordinator.on_goal_reached(Bool(success))
+    frame, changed = coordinator.on_path(path)
+    assert frame is None
+    assert changed is False
+    assert coordinator.nav_state().state == "resolved"
+    coordinator.submit_goal(_nav_goal_request(x=1.0, y=0.0))
+    assert coordinator.on_path(path) == (None, False)
+    fresh = _path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)))
+    assert coordinator.on_path(fresh)[0] is not None
+    assert coordinator.nav_state().state == "following_path"
+
+
+def test_late_path_after_estop_is_ignored() -> None:
+    coordinator = NavGoalCoordinator(odom_scale_correction_factor=1.0)
+    path = _path(((1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)))
+    coordinator.on_path(path)
+    coordinator.on_estop()
+    assert coordinator.on_path(path) == (None, False)
+    assert coordinator.nav_state().state == "idle"

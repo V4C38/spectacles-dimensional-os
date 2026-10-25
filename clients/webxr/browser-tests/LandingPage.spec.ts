@@ -29,6 +29,8 @@ test("prioritizes robot features with compact technical footnotes on desktop and
   await expect(page.locator(".connection-panel")).not.toContainText("0.4.0");
   await expect(page.locator(".connection-panel")).not.toContainText("192.168");
   await expect(page.locator(".robot-status-dot")).toHaveCSS("background-color", "rgb(48, 209, 88)");
+  await expect(page.locator("#enter")).toHaveCSS("color", "rgb(23, 23, 25)");
+  await expect(page.locator("#enter")).toHaveCSS("background-color", "rgb(255, 255, 255)");
   await page.screenshot({ path: info.outputPath("landing-desktop.png") });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

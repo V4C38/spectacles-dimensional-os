@@ -104,7 +104,7 @@ it(`uses the same SDK path for a 3D mesh at ${distance}m, hidden UI, empty rays 
   expect(interaction.hit(f.controller)).toBeUndefined();
   for (let i = 0; i < 240; i++) interaction.update(1 / 60);
   expect(interaction.beams.get(f.controller)?.tip.z).toBeCloseTo(-3, 3);
-  expect(interaction.beams.get(f.controller)?.opacity).toBeCloseTo(0.5, 3);
+  expect(interaction.beams.get(f.controller)?.opacity).toBeCloseTo(0.6, 3);
   f.controller.userData.connected = false;
   interaction.update();
   expect(interaction.beams.get(f.controller)?.mesh.visible).toBe(false);
@@ -135,7 +135,7 @@ it("bends the laser toward a smoothed tip and dims it until it hovers a target",
   expect(beam.tip.z).toBeLessThan(-1);
   expect(beam.tip.z).toBeGreaterThan(-3);
   expect(beam.opacity).toBeLessThan(1);
-  expect(beam.mesh.material.uniforms.uP1.value.z).toBeCloseTo(beam.mesh.material.uniforms.uP2.value.z / 2);
+  expect(beam.mesh.material.uniforms.uP1.value.z).toBeCloseTo((beam.mesh.material.uniforms.uP0.value.z + beam.mesh.material.uniforms.uP2.value.z) / 2);
   let previous = beam.tip.z;
   for (let i = 0; i < 120; i++) {
     interaction.update(1 / 60);

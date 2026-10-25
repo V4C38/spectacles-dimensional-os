@@ -1,10 +1,7 @@
 import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
 import type { LidarDisplayMode } from "../../DimOSARClient/sensors/lidarSettings";
 import type { ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
-import {
-  deriveSessionLinkPhase,
-  NO_ROBOT_CONNECTED_LABEL,
-} from "../../DimOSARClient/websocket/sessionLinkStatus";
+import { deriveRobotMarkerApplyInput as sharedMarker, getRobotActivityState as sharedActivity, robotTitleText as sharedTitle } from "../../DimOSARClient/robot/RobotMarkerState";
 import type { Pose, RobotDescription } from "../../DimOSARClient/websocket/protocolTypes";
 
 export type OperatingMode = "manual" | "agent";
@@ -59,29 +56,7 @@ export function deriveRobotMarkerApplyInput(input: {
   view: ARModuleSessionState;
   origin: ClientTrackingOrigin | null;
 }): RobotMarkerApplyInput {
-  if (!input.setupCompleted) {
-    return { mode: "hidden" };
-  }
-  const robot = input.view.hello?.robot;
-  if (
-    input.origin &&
-    input.view.hasTrackingOrigin &&
-    input.view.pose &&
-    robot
-  ) {
-    return {
-      mode: "localizedOdom",
-      robot,
-      pose: input.view.pose,
-      origin: input.origin,
-      view: input.view,
-    };
-  }
-  return {
-    mode: "unlocalizedFallbackPosition",
-    robot: robot ?? null,
-    view: input.view,
-  };
+  return sharedMarker(input);
 }
 
 export function agentModeAccessible(
@@ -103,29 +78,5 @@ export function agentSpeechShouldRun(
   );
 }
 
-export function getRobotActivityState(
-  view: ARModuleSessionState,
-  voice: RobotActivityVoice,
-): RobotActivityState {
-  if (view.nav !== null && view.nav.state === "following_path") {
-    return "Following Path";
-  }
-  if (view.state?.agent.idle === false) {
-    return "Thinking";
-  }
-  if (voice.ttsPlaying) {
-    return "Responding";
-  }
-  if (voice.asrRunning) {
-    return "Listening";
-  }
-  return "Idle";
-}
-
-export function robotTitleText(view: ARModuleSessionState): string {
-  const linkPhase = deriveSessionLinkPhase(view);
-  if (linkPhase === "disconnected" || linkPhase === "connecting") {
-    return NO_ROBOT_CONNECTED_LABEL;
-  }
-  return view.hello?.robot.display_name ?? NO_ROBOT_CONNECTED_LABEL;
-}
+export function getRobotActivityState(view: ARModuleSessionState, voice: RobotActivityVoice): RobotActivityState { return sharedActivity(view, voice); }
+export function robotTitleText(view: ARModuleSessionState): string { return sharedTitle(view); }

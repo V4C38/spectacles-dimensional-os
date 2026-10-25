@@ -169,11 +169,15 @@ describe("WebXR complete ARModule session", () => {
     const routeMaterial = f.client.route.object.material;
     expect(routeMaterial.color.getHex()).toBe(0xffffff);
     expect(routeMaterial.worldUnits).toBe(true);
-    expect(routeMaterial.linewidth).toBe(0.01);
+    expect(routeMaterial.linewidth).toBe(0.008);
     expect(routeMaterial.dashed).toBe(false);
-    expect(routeMaterial.opacity).toBe(0.75);
+    expect(routeMaterial.opacity).toBe(0.85);
     socket.receive({ type: "nav_goal", ts: 12, path_poses: [] });
     socket.receive({ ...state, nav: { state: "resolved", outcome: "succeeded" } });
+    expect(f.client.navigation.flash()).toBe("succeeded");
+    expect(marker.pose().position[2]).toBeCloseTo(-5);
+    for (let i = 0; i < 8; i++) { f.advance(0.1); f.tick(); }
+    expect(f.client.navigation.flash()).toBeNull();
     expect(JSON.parse(JSON.stringify(marker.pose()))).toEqual(JSON.parse(JSON.stringify(f.client.robot.floorPose())));
   });
 
@@ -194,7 +198,7 @@ describe("WebXR complete ARModule session", () => {
     f.client.ui.previousSetup(); expect(f.client.ui.setupCompleted).toBe(true);
   });
 
-  it("releases joystick on mode changes, UI opening, input loss, and tracking resets", () => {
+  it("keeps joystick active with the menu open and releases on mode changes, input loss, and tracking resets", () => {
     const f = fixture(); const socket = f.connect(); socket.receive(alignment);
     f.client.ui.nextSetup(); f.tick();
     for (let i = 0; i < 17; i++) { f.advance(0.1); f.tick(); }
@@ -207,7 +211,7 @@ describe("WebXR complete ARModule session", () => {
     expect(socket.commands("nav_goal_request")).toHaveLength(0);
     f.client.ui.setOperatingMode("manual"); f.advance(1); f.tick({ x: 0, y: -1 });
     f.client.ui.menuOpen = true; f.tick({ x: 0, y: -1 });
-    expect(socket.commands("nav_joystick_request")).toHaveLength(count + 2);
+    expect(socket.commands("nav_joystick_request")).toHaveLength(count + 1);
     f.client.ui.menuOpen = false; f.advance(1); f.tick({ x: 0, y: -1 }); f.client.loseInput();
     expect(socket.commands("nav_joystick_request").at(-1)?.linear).toEqual([0, 0, 0]);
     f.client.invalidateTracking();
@@ -267,4 +271,42 @@ it("records only a held draft after skipped alignment and sends only on confirma
   f.client.ui.setOperatingMode("manual"); f.tick(); expect(f.client.speech.beginRecording()).toBe(false);
   f.client.suspend(); expect(f.client.isRobotSelected()).toBe(false);
   f.client.restartSetup(); expect(f.client.speech.snapshot().status).toBe("Off");
+});
+
+it("sends each emergency stop once immediately and keeps feedback pressed for 350ms", () => {
+  const f = fixture(); const socket = f.connect(); f.tick();
+  f.client.emergencyStop();
+  expect(socket.commands("estop_request")).toHaveLength(1);
+  f.advance(0.1); f.tick(); expect(f.client.ui.estopPressed).toBe(true);
+  f.advance(0.1); f.tick(); f.advance(0.1); f.tick(); expect(f.client.ui.estopPressed).toBe(true);
+  f.advance(0.1); f.tick(); expect(f.client.ui.estopPressed).toBe(false);
+  f.client.emergencyStop(); expect(socket.commands("estop_request")).toHaveLength(2);
+});
+
+it("retires stale localization responses while retaining a dismissable alignment", () => {
+  const f = fixture(); const socket = f.connect(); socket.receive(alignment);
+  const saved = f.client.originStore.T_odom_client;
+  f.client.recoverUnknownTrackingReset();
+  expect(f.client.originStore.T_odom_client).toEqual(saved);
+  socket.receive({ ...alignment, position: [9, 0, 0], ts: 99 });
+  expect(f.client.originStore.T_odom_client).toEqual(saved);
+  f.client.ui.requestAlignmentReview("reference-reset");
+  expect(f.client.ui.snapshot().alignmentReview?.pending).toBe(true);
+  f.client.ui.dismissAlignmentReview();
+  expect(f.client.ui.snapshot().alignmentReview?.pending).toBe(false);
+  expect(f.client.originStore.T_odom_client).toEqual(saved);
+});
+
+it("keeps per-mode sensor ranges and applies point limits locally", () => {
+  const f = fixture(); const socket = f.connect();
+  f.client.ui.setLidarMode("full"); f.client.ui.adjustLidarRange(-1);
+  expect(socket.commands("lidar_settings_request").at(-1)?.max_range_m).toBe(4.5);
+  const sent = socket.commands("lidar_settings_request").length;
+  f.client.ui.adjustLidarPoints(-1);
+  expect(f.client.ui.lidarPreferences.pointLimit).toBe(3750);
+  expect(socket.commands("lidar_settings_request")).toHaveLength(sent);
+  f.client.ui.setLidarMode("obstacles"); f.client.ui.adjustLidarRange(1);
+  expect(f.client.ui.lidarPreferences.obstacleRangeM).toBe(0.7);
+  f.client.ui.setLidarMode("full");
+  expect(socket.commands("lidar_settings_request").at(-1)?.max_range_m).toBe(4.5);
 });

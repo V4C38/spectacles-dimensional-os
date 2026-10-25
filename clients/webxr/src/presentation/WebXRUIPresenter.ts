@@ -1,9 +1,10 @@
+import { SetupFlow } from "@dimos-ar-client/presentation/SetupFlow";
+import { LidarDisplayController } from "@dimos-ar-client/sensors/LidarDisplayController";
+import { readLidarPreferences, saveLidarPreferences, type LidarDisplayPreferences } from "../sensors/WebXRLidarSettings";
 import { localizationCaptureStatus } from "@dimos-ar-client/localization/localizationCaptureStatus";
 import type { LocalizationCaptureEpisode } from "@dimos-ar-client/localization/localizationCaptureEpisode";
 import {
   LIDAR_PRESETS,
-  lidarModeFromSettings,
-  nextLidarMode,
   requestLidarSettings,
   type LidarDisplayMode,
 } from "@dimos-ar-client/sensors/lidarSettings";
@@ -51,6 +52,13 @@ export interface WebXRUISnapshot {
   operatingMode: OperatingMode;
   lidarMode: LidarDisplayMode;
   lidarAvailable: boolean;
+  lidarPreferences?: LidarDisplayPreferences;
+  lidarReceived?: number;
+  cameraStatus?: string;
+  trackingStatus?: string;
+  surfaceCount?: number;
+  estopPressed?: boolean;
+  alignmentReview?: { reason: string; pending: boolean } | null;
   agentAvailable: boolean;
   estopAvailable: boolean;
   estopReason: string | null;
@@ -61,13 +69,34 @@ export interface WebXRUISnapshot {
 }
 
 export class WebXRUIPresenter {
-  wizardStep: WizardStep = "connect";
+  readonly flow: SetupFlow;
+  readonly sensors: LidarDisplayController;
+  get wizardStep(): WizardStep { return this.flow.step; }
+  set wizardStep(step: WizardStep) { this.flow.step = step; }
   debugEnabled = false;
-  private openedFromRuntime = false;
+  private get openedFromRuntime(): boolean { return this.flow.openedFromRuntime; }
+  private set openedFromRuntime(value: boolean) { this.flow.openedFromRuntime = value; }
   private localizationError: string | null = null;
   operatingMode: OperatingMode = "manual";
-  lidarMode: LidarDisplayMode = "off";
-  setupCompleted = false;
+  get lidarMode(): LidarDisplayMode { return this.sensors.mode; }
+  set lidarMode(mode: LidarDisplayMode) { this.sensors.mode = mode; }
+  get lidarPreferences(): LidarDisplayPreferences { return this.sensors.preferences; }
+  cameraStatus = "Not capturing";
+  trackingStatus = "Not tracking";
+  surfaceCount = 0;
+  estopPressed = false;
+  get alignmentReview() { return this.flow.alignmentReview; }
+  set alignmentReview(value: { reason: string; pending: boolean } | null) { this.flow.alignmentReview = value; }
+
+  requestAlignmentReview(reason: string): void {
+    this.flow.requestAlignmentReview(reason);
+    this.menuOpen = true;
+  }
+  dismissAlignmentReview(): void {
+    this.flow.dismissAlignmentReview();
+  }
+  get setupCompleted(): boolean { return this.flow.completed; }
+  set setupCompleted(value: boolean) { this.flow.completed = value; }
   menuOpen = false;
   private linkPhase: SessionLinkPhase = "disconnected";
   private hudText: string | null = null;
@@ -85,7 +114,10 @@ export class WebXRUIPresenter {
     private readonly episode: LocalizationCaptureEpisode,
     private readonly cameraError: () => string | null = () => null,
     private readonly isRobotSelected: () => boolean = () => false,
-  ) {}
+  ) {
+    this.flow = new SetupFlow(session, episode);
+    this.sensors = new LidarDisplayController(session, { read: readLidarPreferences, write: saveLidarPreferences });
+  }
 
   onSessionView(view: ARModuleSessionState, prev: ARModuleSessionState | null, now: number): void {
     this.nowS = now;
@@ -109,9 +141,7 @@ export class WebXRUIPresenter {
     if (!this.setupCompleted && this.wizardStep === "localization" && view.hasTrackingOrigin && view.connection === "ready") {
       this.completeSetup();
     }
-    if (view.state?.lidar) {
-      this.lidarMode = lidarModeFromSettings(view.state.lidar);
-    }
+    this.sensors.observe(view);
   }
 
   tick(now: number): void {
@@ -178,7 +208,7 @@ export class WebXRUIPresenter {
       wizardDescription: descriptions[this.wizardStep],
       nextLabel: this.wizardStep === "connect" && view.connection === "ready" ? "Continue" : "Skip",
       backVisible: this.wizardStep === "localization" || this.openedFromRuntime,
-      debugText: `Connection: ${view.connection}\nAligned: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture.text}\n${issue ?? ""}`,
+      debugText: `Localization timings: ${JSON.stringify(this.episode.timing?.() ?? {})}\nConnection: ${view.connection}\nAligned: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture.text}\n${issue ?? ""}`,
       activity: view.nav?.state === "following_path" ? "Following Path" : view.state?.agent.idle === false ? "Thinking" : "Idle",
       setupCompleted: this.setupCompleted,
       connectionText: view.connection === "awaiting_hello" ? "Connecting…" : view.connection === "failed" ? "Reconnecting…" : link.text.trim(),
@@ -187,6 +217,10 @@ export class WebXRUIPresenter {
       captureTone: issue ? "warn" : capture.color,
       operatingMode: this.operatingMode,
       lidarMode: this.lidarMode,
+      lidarPreferences: { ...this.lidarPreferences },
+      lidarReceived: this.lidarMode === "off" ? 0 : view.lidar?.points.length ?? 0,
+      cameraStatus: this.cameraStatus, trackingStatus: this.trackingStatus, surfaceCount: this.surfaceCount,
+      estopPressed: this.estopPressed, alignmentReview: this.alignmentReview,
       lidarAvailable: view.capabilities?.lidar.available === true,
       agentAvailable: view.capabilities?.agent.available === true,
       estopAvailable: view.capabilities?.estop.available === true,
@@ -210,8 +244,7 @@ export class WebXRUIPresenter {
   }
 
   private finishSetup(success = false): void {
-    if (!this.session.view().hasTrackingOrigin) this.episode.pause();
-    this.setupCompleted = true;
+    this.flow.finish();
     this.successElapsedS = success ? 0 : null;
     this.openedFromRuntime = false;
     this.menuOpen = false;
@@ -234,8 +267,7 @@ export class WebXRUIPresenter {
   previousSetup(): void {
     if (this.setupCompleted) return;
     if (this.wizardStep === "localization") {
-      this.episode.pause();
-      this.wizardStep = "connect";
+      this.flow.previous();
     }
     else if (this.openedFromRuntime) this.finishSetup();
   }
@@ -246,12 +278,12 @@ export class WebXRUIPresenter {
   }
 
   restartSetup(): void {
+    this.alignmentReview = null;
     this.successElapsedS = null;
     this.openedFromRuntime = this.setupCompleted;
     this.wizardStep = "connect";
     this.localizationError = null;
-    this.episode.pause();
-    this.setupCompleted = false;
+    this.flow.restart(this.openedFromRuntime);
     this.operatingMode = "manual";
     this.lidarMode = "off";
     this.wizardLidarOffSent = false;
@@ -272,20 +304,16 @@ export class WebXRUIPresenter {
     this.operatingMode = mode;
   }
 
-  cycleLidar(): LidarDisplayMode {
-    if (this.session.view().capabilities?.lidar.available !== true) {
-      return this.lidarMode;
-    }
-    this.lidarMode = nextLidarMode(this.lidarMode);
-    requestLidarSettings(this.session, LIDAR_PRESETS[this.lidarMode]);
-    return this.lidarMode;
-  }
+  cycleLidar(): LidarDisplayMode { return this.sensors.cycle(); }
+  setLidarMode(mode: LidarDisplayMode): void { this.sensors.setMode(mode); }
+  adjustLidarRange(direction: number): void { this.sensors.adjustRange(direction); }
+  adjustLidarPoints(direction: number): void { this.sensors.adjustPoints(direction); }
 
   restartLocalization(): void {
     if (this.session.view().capabilities?.localization.available !== true) return;
     this.localizationError = this.cameraError();
     if (this.localizationError) return;
-    try { this.episode.requestStart(); }
+    try { this.flow.startLocalization(); }
     catch (error) { this.localizationError = error instanceof Error ? error.message : String(error); }
   }
 
@@ -328,9 +356,8 @@ export class WebXRUIPresenter {
     if (this.session.view().capabilities?.lidar.available !== true) {
       return;
     }
-    this.lidarMode = "obstacles";
     try {
-      requestLidarSettings(this.session, LIDAR_PRESETS.obstacles);
+      this.sensors.setMode("obstacles");
       this.postWizardLidarSent = true;
     } catch {
       return;

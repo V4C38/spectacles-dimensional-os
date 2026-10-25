@@ -436,9 +436,11 @@ class ARModule(Module):  # type: ignore[misc]
         if self.goal_request.transport is None:
             logger.warning("nav_goal_request ignored — goal_request transport is not wired")
             return
+        # Publish the new execution's cleared state before planner callbacks can
+        # produce a terminal result (including an immediately reached goal).
+        self._broadcast_state()
         self.goal_request.publish(goal)
         logger.info("nav_goal_request published", client_id=client_id, position=msg.position)
-        self._broadcast_state()
 
     async def _send_preview(self, msg: NavGoalRequest, client_id: str) -> None:
         try:
@@ -593,8 +595,23 @@ class ARModule(Module):  # type: ignore[misc]
         await self._run_episode(work)
 
     async def _run_episode(self, work: EpisodeWork) -> None:
-        outcome: LocalizationOutcome = await asyncio.to_thread(
-            self._coordinator.run, work.observations
+        queued_at = time.perf_counter()
+
+        def compute() -> tuple[LocalizationOutcome, float, float]:
+            started_at = time.perf_counter()
+            result = self._coordinator.run(work.observations)
+            return result, started_at - queued_at, time.perf_counter() - started_at
+
+        outcome, queue_s, processing_s = await asyncio.to_thread(compute)
+        logger.info(
+            "localization processing timing",
+            client_id=work.client_id,
+            observations=len(work.observations),
+            queue_ms=round(queue_s * 1000, 1),
+            processing_ms=round(processing_s * 1000, 1),
+            newest_capture_ts=max((item.ts_server for item in work.observations), default=None),
+            result=outcome.result is not None,
+            deferred=outcome.defer_vps,
         )
         if outcome.defer_vps:
             self._policy.hold_for_client_vps(work.client_id, work.observations)
@@ -697,7 +714,8 @@ class ARModule(Module):  # type: ignore[misc]
         if not self._capabilities.supports(CapabilityName.NAVIGATION):
             return
         nav_goal_frame, state_changed = self._nav_goal_coordinator.on_path(msg)
-        self._ws_server.schedule_broadcast_text(encode_nav_goal(nav_goal_frame))
+        if nav_goal_frame is not None:
+            self._ws_server.schedule_broadcast_text(encode_nav_goal(nav_goal_frame))
         if state_changed:
             self._broadcast_state()
 

@@ -234,7 +234,7 @@ Floor circles and dotted connectors belong only to robot/navigation feedback.
 The dimOS AR design tokens and `SurfaceButton`, `SurfaceText`, and
 `ScrollableTextView` primitives live under WebXR `presentation/`. Pill buttons,
 rounded fields, panel corners, colors, and motion are shared across setup and the
-runtime menu; the landing page consumes the same tokens as CSS variables. Both
+runtime menu; the landing page consumes the same semantic colour tokens as CSS variables. Primary and selected controls use white fills with dark text; secondary and disabled controls retain neutral fills. Desktop landing and launcher pages use compact dark macOS-style chrome, while immersive controls retain their spatial forms. Both
 mode switching and setup progress use the segmented-tab primitive. Setup and
 runtime show the same robot status badge above their panel.
 
@@ -253,7 +253,7 @@ WebXR internal UI fills and controls use explicit render order without depth-buf
 writes. The outer panel and robot pill retain depth occlusion. Button text uses a
 physical half-millimeter offset rather than the SDK's local-unit gap. Robot outlines
 unfold from the body box's floor: horizontal expansion precedes height, and hiding
-runs the same progress backward over 320 ms, retaining opacity until the final horizontal collapse, without altering the selection collider.
+runs the same progress backward over 240 ms, retaining opacity until the final horizontal collapse, without altering the selection collider.
 
 The landing page binds the same `ARModuleSession` used in AR and ticks only its
 connection lifecycle before immersive entry. Camera capture, localization, and
@@ -261,21 +261,28 @@ navigation retain their tracking/setup gates. The robot and available capabiliti
 are the primary landing content; server/robot addresses and build/package versions
 from optional `hello.server_info` are a compact footnote.
 
-LiDAR Full mode uses a fixed floor-relative height spectrum; obstacle mode remains
-the default after setup and uses red-to-white distance colors. Portable color policy
-lives in ClientCore `sensors/lidarColors.ts`. WebXR draws capped round point sprites
-in one draw call with reusable buffers and skips unchanged clouds. Setup success
-counts visible XR ticks, so system overlays cannot consume its checkmark animation.
+LiDAR Full mode uses a fixed floor-relative height spectrum; obstacle mode remains the default
+after setup. WebXR requests a conservative centre-based stream range and renders a 60 cm halo
+from the yaw-oriented body bounds, with red dots fading to transparent. Specs retains its
+existing colour policy. Portable color policy lives in ClientCore `sensors/lidarColors.ts`.
+WebXR draws capped round point sprites in one draw call with reusable buffers and skips
+unchanged clouds. Setup success counts visible XR ticks, so system overlays cannot consume its
+checkmark animation.
 
-Routes use round world-space dots at 50% preview / 75% confirmed opacity; executing routes are solid at 75%. The renderer
-anchors the visible remainder at the robot and clips both ends to the actual
-rendered circle bounds, including the scaled aiming circle. ClientCore retains the last successful preview during updates and the executing route
-during transient empty frames. This changes only presentation; planner paths and confirmed goal poses remain authoritative.
+Routes use round world-space dots at 60% preview / 85% confirmed opacity; executing routes use
+an 8 mm shared-vertex ribbon at 85%, avoiding alpha accumulation at segment joins. The renderer
+anchors the visible remainder at the robot and clips both ends to the actual rendered circle
+bounds, including the scaled aiming circle. ClientCore retains the last successful preview
+during updates and the executing route during transient empty frames. This changes only
+presentation; planner paths and confirmed goal poses remain authoritative.
 
-Immersive panels start at 60% of their previous size while preserving resize limits.
-Selected floor aiming tracks movement heading before press; press captures that pose
-and release confirms once. Floor aiming and its laser are limited to five ray meters;
-direct marker dragging retains the normal interaction range and live goal updates.
+Immersive panels start at 60% of their previous size while preserving resize limits. Selected
+floor aiming starts with a small circle and half-height dotted stem while the authoritative
+marker and executing route stay visible. One complete press/release opens the full preview,
+which follows floor aim and movement heading. A second gesture captures and submits the
+displayed pose once; aim loss cancels only the candidate. Floor aiming and its laser are limited
+to five ray meters; direct marker dragging retains the normal interaction range and live goal
+updates.
 
 WebXR near pinch/trigger targets share the SDK hit list and activation lifecycle with
 rays; near targeting takes precedence and the gesture mode stays captured until release.
@@ -283,11 +290,100 @@ Direct input is sampled from thumb/index joints or controller grip space. Palm m
 use handedness-correct metacarpals and open fingers, and only their summoning source
 can follow/dismiss them. Grabbing or source loss pins the panel.
 
-Setup continuously faces the viewer in yaw/pitch with no roll. Runtime UI starts 20%
-smaller than setup and follows 18 cm forward / 12 cm above its source. Whole-panel
-appearance transforms are separate from user placement and resizing. Browser reviews
-frame actual panel bounds closely without changing production sizes.
+Setup and alignment-review panels open centered 0.9 m ahead, then follow head position and
+yaw/pitch smoothly with no roll. A manual grab pins the panel until its next opening. Runtime UI starts 20% smaller
+than setup and follows 18 cm forward and 12 cm above a controller, or 20 cm above a summoning
+hand. Whole-panel appearance scales from 85% to full size independently of placement and
+resizing. Primary controls and headings sit 8 mm forward, secondary controls 4 mm; hover adds 3
+mm and pressing depresses them. Button labels retain a physical 0.5 mm gap across user resizing.
+Browser reviews frame actual panel bounds closely without changing production sizes.
 
 Browser diagnostics are warnings/errors by default. `?diagnostics=1` enables throttled
 development traces; scene inspection (`?debug=1`) does not enable logging. All sinks
 share bounded deduplication and retain the first warning/error immediately.
+
+Navigation completion requires the authoritative goal-reached event. ClientCore retires local
+goal intent and retained routes on terminal facts, then keeps the marker at the destination for
+a 600 ms visible-frame animation: 250 ms circle trace, 150 ms checkmark/X buildup, and a 200 ms
+hold. Success is green, cancellation red, and failure amber. A newer non-preview goal interrupts
+feedback, including a new goal at the same destination. Only after feedback does the marker
+reattach to the robot. ARModule rejects planner frames timestamped before the current request or
+a completed/stopped episode; transient empty paths still do not imply success.
+
+WebXR Sensors is a runtime submenu with Off / Obstacles / Full LiDAR tabs. Point limits
+(250–4000) are local rendering preferences; per-mode ranges use the existing server settings.
+Obstacle range is clearance beyond the body bounds, while Full range is measured from the
+robot center. Preferences persist locally. Dashed world strokes use a per-eye two-pixel width
+floor and smoothly blend to solid as their period shrinks from ten to six pixels. Navigation
+circles share the same animated opacity across the robot, probe, and goal variants.
+
+Headset resume and extended tracking loss show a dismissable alignment review in the setup
+manager. Reference-space transforms compensate known resets; unknown resets retire the old
+transport/capture episode while retaining the last alignment pending user review. Dismissal
+does not verify alignment. Realign enters the existing setup flow.
+
+Emergency stop sends immediately and shows reusable viewer-relative feedback for 2.5 visible
+seconds, with a 350 ms pressed-button latch. The notification is a compact pill with an animated circle/slash icon and the single line
+“Emergency stop requested”; the wire protocol has no stop acknowledgement. Notifications
+follow the lower third of the view smoothly and never capture interaction rays. Lasers begin three centimeters ahead of
+the input pose and fade in over five centimeters; reveal/hide take 180/240 ms. Main panels
+have four millimeters of backing thickness. Real camera-background blur remains deferred
+pending physical Quest support and performance verification.
+
+
+## ClientCore ownership audit
+
+The portable core is the dependency root: it imports relative core modules only and contains
+no browser, Three.js, XR Blocks, Lens, or UIKit APIs. Both hosts use the following owners:
+
+| Responsibility | Portable owner | Host responsibility |
+|---|---|---|
+| Navigation execution, routes, feedback and freshness | `NavigationGoalLifecycle` | Transform coordinates and render snapshots |
+| Independent source probes and one confirmed draft | `NavigationPlacementSession`, coordinated by `NavigationInteraction` | Resolve surfaces and map opaque input-source IDs |
+| Advisory preview request serialization | `NavigationPreviewCoordinator` | Draw a separate preview route |
+| Joystick filtering, command rate and release zero | `JoystickNavigationController` | Gamepad button/axis mapping |
+| Capture entry/skip/back and alignment review | `SetupFlow`, `LocalizationCaptureEpisode` | Connection UX, camera adapter, panel layout/following |
+| Sensor modes, per-mode ranges and local point budget | `LidarDisplayController` | Persist preferences and draw points; Specs retains its existing range preset |
+| Robot visibility, title and activity derivation | `robot/RobotMarkerState` | Meshes, native labels and viewer-facing animation |
+| Agent optical-pose publication | `ClientPosePublisher` | Supply timestamped optical tracking |
+| Notification priority and visible lifetime | `NotificationCenter` | Text, glyph animation, pill geometry and viewer placement |
+
+WebXR's composition root accepts structural camera and bindable-transport ports. Specs no
+longer keeps a second navigation execution state machine. Its native world-mesh drag and
+centimeter/quaternion conversions remain host adapters. MainMenuView's page selection,
+layout, depth, resizing and grab geometry are presentation state. Browser frame timestamps,
+camera calibration, plane polygons, GPU shaders, DOM landing views and native connection
+methods remain host-specific. Pure route tessellation remains with its renderer because it
+implements that host's floor coordinates and visual stroke/circle clipping.
+
+Selected placement keeps the active goal/route visible while editing a small draft. Both
+sources have independent pre-confirm probes. The first source to confirm owns the draft;
+the other source cannot replace it. Selected dragging also previews before confirmation.
+Unselected direct dragging retains live commands. Robot collider picking is ignored only
+for the draft owner; detected walls, invalid floors, UI occlusion and range gates remain.
+
+### Localization delay investigation
+
+A default AprilTag batch has three frames at 0.5-second spacing: its deliberate collection
+interval is one second, followed by camera/encoding, transport, detection and fusion time.
+The inspected saved configuration uses the fiducial provider only; VPS's 30-second cooldown
+cannot explain that configuration's latency. The client result timeout is 15 seconds with a
+2-second retry backoff, so repeated missing results can produce a much longer perceived wait.
+A browser camera frame is paired with its exposure/presentation timestamp and matching pose;
+these correctness checks and the server's two-inlier/quality gates remain intact.
+
+Use `?diagnostics=1` for `localization-stage`, `localization-camera-wait` and
+`localization-camera-encoded` events. The Diagnostics page also reports episode, batch and
+result-wait seconds and batch count. Specs emits matching batch/result/failure stages. Server
+`localization processing timing` records client ID, newest capture timestamp, worker queue
+and processing milliseconds, success and deferral. Fiducial misses distinguish absent/unknown
+markers, PnP failure, reprojection error, gravity-tilt rejection and fusion/inlier rejection.
+No image or credential data is added to diagnostics.
+
+For a physical comparison, use the same configured printed tag, distance and viewing angle
+on each headset. Compare first request → batch sent → server queue/detection → result applied
+and count rejected/retried batches. Record calibration/profile and camera timestamp failures.
+The automated batch test measures one second of frame spacing and immediate result
+application; it does not establish a physical Quest localization latency. The reported
+30-second session was not available in the saved logs, so its specific bottleneck still
+requires one captured physical trace rather than an inferred timeout adjustment.

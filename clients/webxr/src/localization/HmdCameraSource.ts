@@ -222,9 +222,13 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
     const profile = this.activeProfile;
     if (!profile || signal.aborted) throw new Error("headset camera is not started");
     if (this.waiting) throw new Error("camera capture already pending");
+    const startedAt = this.performanceNow();
+    reportDiagnostic("localization-camera-wait", {});
     const frame = await bounded(new Promise<FrozenFrame>((resolve, reject) => { this.waiting = { resolve, reject }; }), signal, 3000)
       .finally(() => { if (this.operation.signal === signal) this.waiting = null; });
+    const frameAt = this.performanceNow();
     const encoded = await bounded(frame.encoded, signal, 5000);
+    reportDiagnostic("localization-camera-encoded", { frameWaitMs: frameAt - startedAt, encodeWaitMs: this.performanceNow() - frameAt, jpegBytes: encoded.jpeg.length, tsCapture: frame.ts });
     jpegDimensionsMatch(profile, encoded.width, encoded.height);
     const optical = composeOptical(frame.pose, profile);
     return {

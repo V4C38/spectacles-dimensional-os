@@ -183,7 +183,7 @@ export class NavGoalMarker extends BaseScriptComponent {
     this.setCancelVfx(visible && estopAvailable, visible && !estopAvailable);
   }
 
-  showFlash(flash: "cancelled" | "failed", onDone: () => void): void {
+  showFlash(flash: "succeeded" | "cancelled" | "failed", onDone: () => void): void {
     this.ensureReady();
     if (this.flashPlaying) {
       return;
@@ -199,7 +199,7 @@ export class NavGoalMarker extends BaseScriptComponent {
       button.enabled = false;
     }
     this.setCancelVfx(false, true);
-    this.setStateText(flash === "cancelled" ? "Navigation\nCancelled" : "Navigation\nFailed", true);
+    this.setStateText(flash === "succeeded" ? "Navigation\nComplete" : flash === "cancelled" ? "Navigation\nCancelled" : "Navigation\nFailed", true);
     const version = this.nextFlashVersion();
     if (this.dragObject) {
       this.animateLocalScale(this.dragObject, vec3.zero(), FLASH_CIRCLE_COLLAPSE_DURATION_SECONDS, version);

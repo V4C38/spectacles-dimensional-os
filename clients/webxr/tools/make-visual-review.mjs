@@ -20,8 +20,12 @@ for (const entry of await readdir(root, { withFileTypes: true })) {
   }
   if (!review?.scenes.length) continue;
   // Include the transition leading into each screenshot and a brief settled view. No speed-up.
-  const filters = review.scenes.slice(0, 10).map((scene, i) => `[0:v]trim=start=${Math.max(0, scene.at - 3).toFixed(3)}:duration=4.4,setpts=PTS-STARTPTS[v${i}]`);
-  const labels = review.scenes.slice(0, 10).map((_, i) => `[v${i}]`).join("");
+  const scenes = review.scenes;
+  const filters = scenes.map((scene, i) => {
+    const outcome = scene.name.startsWith("navigation-");
+    return `[0:v]trim=start=${Math.max(0, scene.at - (outcome ? 0.2 : 1.5)).toFixed(3)}:duration=${outcome ? 1.4 : 2.8},setpts=PTS-STARTPTS[v${i}]`;
+  });
+  const labels = scenes.map((_, i) => `[v${i}]`).join("");
   const output = join(directory, "interaction-review.mp4");
   execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", join(directory, video), "-filter_complex", `${filters.join(";")};${labels}concat=n=${filters.length}:v=1:a=0[out]`, "-map", "[out]", "-an", "-c:v", "libx264", "-preset", "fast", "-crf", "21", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output], { stdio: "inherit" });
   process.stdout.write(`${output}\n`);

@@ -31,3 +31,15 @@ it("faces a moving viewer in yaw and pitch without roll or moving a pinned setup
   expect(Math.abs(angles.x)).toBeGreaterThan(0); expect(Math.abs(angles.y)).toBeGreaterThan(0); expect(angles.z).toBeCloseTo(0);
   expect(panel.position).toEqual(position);
 });
+
+it("raises palm menus another 8 cm without changing controller placement", () => {
+  const eye = new THREE.Vector3(0, 1.6, 0), position = new THREE.Vector3(0, 1, -0.3);
+  for (const hand of [false, true]) {
+    const anchor = new MenuAnchorController(), panel = new THREE.Group();
+    const source = { hand: hand ? {} : undefined } as XRInputSource;
+    anchor.attach(source, position, eye, new THREE.Quaternion(), panel);
+    anchor.update(position, eye, panel, 1);
+    expect(panel.position.y - position.y).toBeCloseTo(hand ? 0.20 : 0.12);
+    expect(panel.position.z - position.z).toBeCloseTo(-0.18);
+  }
+});

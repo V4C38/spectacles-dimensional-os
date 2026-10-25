@@ -18,12 +18,12 @@ export function createLidarReview() {
     return i < 1360 ? [2, horizontal, height] : i < 2720 ? [horizontal, 2, height] : [horizontal, -2, height];
   });
   const obstacles: Vec3[] = Array.from({ length: 1200 }, (_, i) => {
-    const angle = (i % 60) / 60 * Math.PI * 2, radius = 0.06 + Math.floor(i / 60) / 19 * 0.44;
+    const angle = (i % 60) / 60 * Math.PI * 2, radius = 0.2 + Math.floor(i / 60) / 19 * 1.0;
     return [Math.cos(angle) * radius, Math.sin(angle) * radius, 0.33 + Math.sin(angle * 3) * 0.06];
   });
   function show(mode: LidarDisplayMode) {
     lidar.apply(mode === "obstacles" ? obstacles : room, origin, mode, robot, 0.33);
-    camera.position.set(...(mode === "obstacles" ? [0.85, 0.95, 0.95] : [4.4, 3.1, 5.2]) as [number, number, number]);
+    camera.position.set(...(mode === "obstacles" ? [1.5, 1.5, 1.7] : [4.4, 3.1, 5.2]) as [number, number, number]);
     camera.lookAt(0, mode === "obstacles" ? 0.2 : 0.8, 0);
     renderer.render(scene, camera);
   }

@@ -23,13 +23,13 @@ export class SurfaceButton extends xb.TextButton {
     const text = this.textObj as (typeof this.textObj & { depthOffset?: number });
     if (!text) return;
     // SDK gaps are local units; normalize to a physical half millimeter at every control size.
-    text.position.z = DIMOS_AR_DESIGN.depth.labelOffset / (this.scale.z * HEIGHT);
+    text.position.z = DIMOS_AR_DESIGN.depth.labelOffset / Math.max(1e-6, this.getWorldScale(new THREE.Vector3()).z);
     text.depthOffset = -1;
     text.renderOrder = this.renderOrder + 1;
     for (const material of Array.isArray(text.material) ? text.material : [text.material]) material.depthWrite = false;
   }
+  feedbackPressed = false;
   enabled = true;
-  alwaysWhite = false;
   private variant: ButtonVariant = "default";
   private active = false;
   private hover = 0;
@@ -64,14 +64,19 @@ export class SurfaceButton extends xb.TextButton {
   override update(): void {
     const uniforms = (this.mesh?.material as THREE.ShaderMaterial | undefined)?.uniforms;
     if (!uniforms?.uHover) return;
-    const target = !this.enabled || !this.ux.isHovered() ? 0 : this.ux.isSelected() ? 1.6 : 1;
+    const target = this.feedbackPressed ? 1.6 : !this.enabled || !this.ux.isHovered() ? 0 : this.ux.isSelected() ? 1.6 : 1;
     const now = performance.now() / 1000;
     const deltaS = this.lastUpdate ? Math.min(0.1, now - this.lastUpdate) : 1 / 60;
     this.lastUpdate = now;
     this.hover += (target - this.hover) * (1 - Math.exp(-18 * deltaS));
     uniforms.uTint.value.lerp(this.targetTint, 1 - Math.exp(-20 * deltaS));
     uniforms.uHover.value = this.hover;
-    this.position.z = this.baseZ;
+    const primary = this.variant === "primary" || this.active && this.variant !== "field";
+    const depth = primary ? DIMOS_AR_DESIGN.depth.primary : DIMOS_AR_DESIGN.depth.secondary;
+    const lift = Math.min(1, this.hover) * DIMOS_AR_DESIGN.depth.hover - Math.max(0, this.hover - 1) * 0.003;
+    const parentScale = this.parent?.getWorldScale(new THREE.Vector3()).z ?? 1;
+    this.position.z = this.variant === "field" ? this.baseZ : (depth + lift) / Math.max(1e-6, parentScale);
+    this.positionText();
     this.setTextColor(this.fontColor);
   }
 
@@ -94,14 +99,15 @@ export class SurfaceButton extends xb.TextButton {
 
   private restyle(): void {
     const uniforms = (this.mesh?.material as THREE.ShaderMaterial | undefined)?.uniforms;
+    const primary = this.variant === "primary" || this.active && this.variant !== "field";
     const surface = !this.enabled ? C.fill : this.variant === "danger" ? C.danger :
-      this.variant === "tab" ? C.control : this.variant === "primary" || this.active ? C.accent : this.variant === "field" ? C.field : C.control;
+      this.variant === "field" ? C.field : primary ? C.primary : C.secondary;
     if (uniforms?.uTint) {
       this.targetTint.set(surface);
       uniforms.uAlpha.value = this.variant === "tab" && !this.active ? 0 : 1;
       if (!this.mesh!.userData.styled) uniforms.uTint.value.copy(this.targetTint);
       this.mesh!.userData.styled = true;
     }
-    this.fontColor = this.alwaysWhite ? C.ink : !this.enabled ? C.disabled : this.variant === "tab" && !this.active ? C.muted : C.ink;
+    this.fontColor = !this.enabled ? C.disabled : this.variant === "danger" ? C.ink : primary ? C.primaryText : this.variant === "tab" ? C.muted : C.ink;
   }
 }

@@ -1,3 +1,4 @@
+import { ViewerPanelPlacement } from "./presentation/ViewerPanelPlacement";
 import * as THREE from "three";
 import * as xb from "xrblocks";
 import { reportDiagnostic } from "./diagnostics/BrowserDiagnostics";
@@ -31,6 +32,11 @@ export class WebXRApp extends xb.Script {
   private session: XRSession | null = null;
   private reference: XRReferenceSpace | null = null;
   private tracking = false;
+  private trackingLostAt: number | null = null;
+  private pendingAlignmentReason: string | null = null;
+  private reviewWasVisible = false;
+  private setupWasVisible = false;
+  private readonly setupPlacement = new ViewerPanelPlacement();
   private menuWasVisible = false;
   private readonly palmGates = new Map<XRHandedness, PalmMenuGate>();
   private readonly menuAnchor = new MenuAnchorController();
@@ -46,7 +52,13 @@ export class WebXRApp extends xb.Script {
   private readonly onReset = (event: Event) => {
     const transform = (event as XRReferenceSpaceEvent).transform;
     reportDiagnostic("reference-space-reset", { compensated: Boolean(transform) });
-    if (!transform || !this.reference) { this.resetTracking(); return; }
+    const localized = this.client.ui.setupCompleted && this.client.originStore.hasTrackingOrigin;
+    if (localized) this.pendingAlignmentReason = "reference-reset";
+    if (!transform || !this.reference) {
+      if (localized) { this.suspendTracking(); this.client.recoverUnknownTrackingReset(); }
+      else this.resetTracking();
+      return;
+    }
     // Keep the application in its original coordinates after a runtime recenter.
     const reference = this.reference.getOffsetReferenceSpace(transform.inverse);
     xb.core.renderer.xr.setReferenceSpace(reference);
@@ -56,6 +68,7 @@ export class WebXRApp extends xb.Script {
     this.suspendTracking();
   };
   private readonly onVisibility = () => {
+    if (this.session?.visibilityState === "hidden" && this.client.ui.setupCompleted && this.client.originStore.hasTrackingOrigin) this.pendingAlignmentReason = "headset-resume";
     if (this.session?.visibilityState !== "visible") this.suspendTracking();
   };
   private readonly onInputChange = () => {
@@ -77,7 +90,7 @@ export class WebXRApp extends xb.Script {
     const client = this.client;
     this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2));
     this.add(client.robot.object, client.lidar.object, client.route.object,
-      client.markers.object, client.navigation.marker.object);
+      client.markers.object, client.navigation.marker.object, client.navigation.probeRoot, client.navigation.draftMarker.object, client.previewRoute.object, client.notifications.object);
     this.navigationFloor.name = "Navigation floor";
     this.navigationFloor.rotation.x = -Math.PI / 2;
     this.navigationFloor.visible = false;
@@ -116,9 +129,13 @@ export class WebXRApp extends xb.Script {
       onRobot: () => client.toggleRobotSelection(),
       onDebug: () => { client.ui.debugEnabled = !client.ui.debugEnabled; },
       onLidar: () => { client.ui.cycleLidar(); },
+      onLidarMode: mode => client.ui.setLidarMode(mode),
+      onLidarRange: direction => client.ui.adjustLidarRange(direction),
+      onLidarPoints: direction => client.ui.adjustLidarPoints(direction),
+      onDismissAlignment: () => client.ui.dismissAlignmentReview(),
       onLocalize: () => client.ui.restartLocalization(),
       onRealign: () => client.realign(),
-      onEstop: () => { client.loseInput(); client.ui.estop(); },
+      onEstop: () => client.emergencyStop(),
       onAgentText: text => client.speech.submitTyped(text),
       onDraft: text => client.speech.setDraft(text),
       onSound: () => this.sound.toggle(), soundEnabled: () => this.sound.enabled,
@@ -126,8 +143,8 @@ export class WebXRApp extends xb.Script {
     });
     this.add(this.mainMenu.panel);
     this.interaction.setPolicy({
-      eligible: (controller, object, point) => this.canInteract(controller, object, point) &&
-        (object !== this.navigationFloor || this.capture.owner === controller || preferredPointer(this.input.controllers) === controller),
+      eligible: (controller, object, point) => this.canInteract(controller, object, point),
+      ignored: (controller, object) => object === this.client.robot.collider && this.client.navigation.interaction.ownsDraft(this.navigationSourceId(controller)),
       captured: controller => this.capture.owner === controller && (this.uiGrab || this.worldHold === controller || this.panelHold === controller),
       unobstructed: (object, origin, point) => {
         if (this.mainMenu?.ownsTarget(object)) return true;
@@ -173,10 +190,15 @@ export class WebXRApp extends xb.Script {
     if (xr.getReferenceSpace() !== reference) xr.setReferenceSpace(reference);
     const viewer = frame.getViewerPose(reference);
     if (!viewer || viewer.emulatedPosition) {
+      this.trackingLostAt ??= time;
       if (this.tracking) this.suspendTracking();
       return;
     }
+    if (this.trackingLostAt !== null && time - this.trackingLostAt >= 1000 && this.client.ui.setupCompleted && this.client.originStore.hasTrackingOrigin) this.pendingAlignmentReason ??= "tracking-loss";
+    this.trackingLostAt = null;
     if (!this.tracking) {
+      if (this.pendingAlignmentReason && this.client.ui.setupCompleted) this.client.ui.requestAlignmentReview(this.pendingAlignmentReason);
+      this.pendingAlignmentReason = null;
       this.tracking = true;
       this.interaction.setEnabled(true);
       this.client.resumeTracking();
@@ -188,6 +210,8 @@ export class WebXRApp extends xb.Script {
     const { position: p, orientation: q } = viewer.transform;
     this.client.tick({ position: [p.x, p.y, p.z], orientation: [q.x, q.y, q.z, q.w] }, this.readJoystick());
     this.client.robot.orientFeedback(new THREE.Vector3(p.x, p.y, p.z));
+    this.client.notifications.tick([p.x, p.y, p.z], [q.x, q.y, q.z, q.w], viewer.views?.[0]?.projectionMatrix[5] ?? 1, deltaS);
+    this.client.ui.trackingStatus = "Tracking";
     const summoner = Array.from(this.session.inputSources).find(source => source.gamepad && isMenuButtonPressed(source.gamepad.buttons));
     const menu = Boolean(summoner);
     if (menu && !this.menuWasPressed) {
@@ -199,15 +223,23 @@ export class WebXRApp extends xb.Script {
     this.menuWasPressed = menu;
     this.syncPalm(frame, reference, p, q);
     const snap = this.client.ui.snapshot();
-    const visible = snap.menuOpen || !snap.setupCompleted || snap.setupCelebrating === true;
-    if (visible && !this.menuWasVisible && !this.menuAnchor.source) this.placeMenuInFront(p, q);
-    if (visible && !snap.setupCompleted && !this.panelHold && this.mainMenu) {
-      this.menuAnchor.faceViewer(new THREE.Vector3(p.x, p.y, p.z), this.mainMenu.panel, 1 - Math.exp(-20 * deltaS));
+    const reviewVisible = snap.alignmentReview?.pending === true;
+    const setupVisible = !snap.setupCompleted || snap.setupCelebrating === true || reviewVisible;
+    const setupOpening = setupVisible && (!this.setupWasVisible || reviewVisible !== this.reviewWasVisible);
+    this.reviewWasVisible = reviewVisible;
+    const visible = snap.menuOpen || setupVisible;
+    if (setupVisible && this.mainMenu) {
+      this.menuAnchor.detach();
+      if (setupOpening) this.setupPlacement.begin();
+      if (!this.panelHold) this.setupPlacement.update(this.mainMenu.panel, new THREE.Vector3(p.x, p.y, p.z), new THREE.Quaternion(q.x, q.y, q.z, q.w), deltaS, setupOpening);
+    } else {
+      if (visible && !this.menuWasVisible && !this.menuAnchor.source) this.placeMenuInFront(p, q);
+      if (visible && this.menuAnchor.source && !this.panelHold) {
+        const position = this.anchorPosition(this.menuAnchor.source, frame, reference);
+        if (position && this.mainMenu) this.menuAnchor.update(position, new THREE.Vector3(p.x, p.y, p.z), this.mainMenu.panel, deltaS);
+      }
     }
-    if (visible && this.menuAnchor.source && !this.panelHold) {
-      const position = this.anchorPosition(this.menuAnchor.source, frame, reference);
-      if (position && this.mainMenu) this.menuAnchor.update(position, new THREE.Vector3(p.x, p.y, p.z), this.mainMenu.panel, deltaS);
-    }
+    this.setupWasVisible = setupVisible;
     if (!visible) this.menuAnchor.detach();
     if (visible && !this.menuWasVisible) {
       reportDiagnostic("panel-visible", {
@@ -227,6 +259,7 @@ export class WebXRApp extends xb.Script {
       this.client.joystick.loseInput();
     }
     this.detectedSurfaces = this.readDetectedSurfaces(frame, reference);
+    this.client.ui.surfaceCount = this.detectedSurfaces.length;
     if (this.capture.owner && (!this.capture.owner.visible || this.capture.owner.userData.connected !== true)) this.clearInput();
     this.handStyle.apply(this.input.hands);
     this.interaction.direct.sample(frame, reference, this.input.controllers);
@@ -245,21 +278,29 @@ export class WebXRApp extends xb.Script {
     });
     const robotHovered = actionableHits.includes(this.client.robot.collider) ||
       [...this.interaction.beams.values()].some(beam => beam.affordance === this.client.robot.collider);
-    this.client.robot.setHovered(robotHovered);
+    const markerHovered = actionableHits.some(hit => !!hit && hit !== this.client.navigation.marker.cancelObject && isDescendant(hit, this.client.navigation.marker.object));
+    this.client.robot.setHovered(robotHovered || markerHovered);
     this.sound.setActive(true);
     this.sound.setSuppressed(["Starting microphone…", "Listening", "Transcribing…", "Responding"].includes(this.client.speech.snapshot().status));
     const hovered = robotHovered ? this.client.robot.object : actionableHits.some(hit => !!hit && hit !== this.client.navigation.marker.cancelObject && isDescendant(hit, this.client.navigation.marker.object)) ? this.client.navigation.marker.object : null;
     this.sound.update(hovered ?? null, this.client.isRobotSelected(), this.client.navigation.isDragging() || !!this.worldHold,
       this.client.navigation.marker.object.position, time / 1000);
     this.client.navigation.marker.setHovered(robotHovered || actionableHits.some(hit => !!hit && isDescendant(hit, this.client.navigation.marker.object) && hit !== this.client.navigation.marker.cancelObject));
-    if (!this.worldHold && !this.uiGrab) {
-      const pointer = preferredPointer(this.input.controllers);
-      const target = pointer ? this.interaction.hit(pointer)?.object : undefined;
-      if (pointer && target === this.navigationFloor) {
+    const connectedSources = new Set<string>();
+    for (const pointer of this.input.controllers) {
+      const sourceId = this.navigationSourceId(pointer);
+      if (!pointer.visible || pointer.userData.connected !== true) { this.client.navigation.clearAim(sourceId); continue; }
+      connectedSources.add(sourceId);
+      if (this.worldHold === pointer || this.uiGrab && this.capture.owner === pointer) continue;
+      const target = this.interaction.hit(pointer)?.object;
+      if (target === this.navigationFloor) {
         const ray = this.interaction.smoothedRay(pointer);
-        this.client.aimNavigation(ray.origin, ray.direction, this.navigationFloorPlanes());
-      } else this.client.navigation.clearAim();
+        this.client.aimNavigation(ray.origin, ray.direction, this.navigationFloorPlanes(), sourceId);
+      } else this.client.navigation.clearAim(sourceId);
     }
+    const placement = this.client.navigation.interaction.snapshot();
+    for (const probe of placement.probes) if (!connectedSources.has(probe.sourceId)) this.client.navigation.clearAim(probe.sourceId);
+    if (placement.draft && !connectedSources.has(placement.draft.ownerId)) this.client.navigation.clearAim(placement.draft.ownerId);
     if (this.scrollHold && this.capture.owner) {
       const ray = this.gestureRay(this.capture.owner);
       const y = this.scrollPointerY(this.scrollHold.view, ray.origin, ray.direction);
@@ -275,18 +316,27 @@ export class WebXRApp extends xb.Script {
       if (view && Math.abs(axis) > 0.2) view.scrollBy(axis * deltaS * view.rangeY * 3);
     }
     if (this.panelHold) {
-      const ray = this.gestureRay(this.panelHold);
-      this.mainMenu?.updateManipulation(ray.origin, ray.direction, this.panelHold.getWorldQuaternion(new THREE.Quaternion()), deltaS);
+      const ray = this.panelRay(this.panelHold);
+      this.mainMenu?.updateManipulation(ray.origin, ray.direction, this.panelHold.getWorldQuaternion(new THREE.Quaternion()), deltaS, new THREE.Vector3(p.x, p.y, p.z));
     }
     if (this.worldHold && !this.uiGrab) {
       const ray = this.gestureRay(this.worldHold);
-      this.client.holdNavigation(ray.origin, ray.direction, this.navigationFloorPlanes(), this.holdFromMarker);
+      this.client.holdNavigation(ray.origin, ray.direction, this.navigationFloorPlanes(), this.holdFromMarker, this.navigationSourceId(this.worldHold));
     }
+  }
+
+  private readonly navigationSourceIds = new WeakMap<object, string>();
+  private nextNavigationSource = 0;
+  private navigationSourceId(controller: xb.SelectEvent["target"]): string {
+    const source = controller.inputSource ?? controller;
+    let id = this.navigationSourceIds.get(source);
+    if (!id) { id = `${controller.inputSource?.handedness ?? "input"}-${++this.nextNavigationSource}`; this.navigationSourceIds.set(source, id); }
+    return id;
   }
 
   private canInteract(controller: xb.SelectEvent["target"], object: THREE.Object3D, point: THREE.Vector3): boolean {
     if (!this.tracking) return false;
-    if (this.capture.owner && this.capture.owner !== controller && !this.mainMenu?.isEmergencyTarget(object)) return false;
+    if (this.capture.owner && this.capture.owner !== controller && !this.mainMenu?.isEmergencyTarget(object) && !(object === this.navigationFloor && this.client.isRobotSelected())) return false;
     if (this.mainMenu?.ownsTarget(object)) return this.mainMenu.canInteract(object, point);
     if (object !== this.navigationFloor) {
       const origin = controller.getWorldPosition(new THREE.Vector3());
@@ -294,6 +344,7 @@ export class WebXRApp extends xb.Script {
       const surface = navigationSurfaceHits(origin.toArray() as [number, number, number], direction.toArray() as [number, number, number], this.detectedSurfaces, this.client.robot.floorWorldY() ?? 0)[0];
       if (surface && new THREE.Vector3(...surface.position).distanceTo(origin) + 0.02 < point.distanceTo(origin)) return false;
     }
+    if (object === this.client.robot.collider && this.client.navigation.interaction.ownsDraft(this.navigationSourceId(controller))) return false;
     if (object === this.client.robot.collider) return this.client.ui.setupCompleted && this.client.session.view().connection === "ready";
     if (!this.client.controlsEnabled() || !this.client.originStore.hasTrackingOrigin) return false;
     if (object === this.navigationFloor) return this.client.isRobotSelected() && point.distanceTo(controller.getWorldPosition(new THREE.Vector3())) <= FLOOR_AIM_RANGE_M;
@@ -305,7 +356,7 @@ export class WebXRApp extends xb.Script {
     const hit = this.interaction.hit(event.target);
     if (this.mainMenu?.isEmergencyTarget(hit?.object)) {
       this.clearInput();
-      this.client.ui.estop();
+      this.client.emergencyStop();
       return;
     }
     if (!hit || !this.canInteract(event.target, hit.object, hit.point)) return;
@@ -313,11 +364,11 @@ export class WebXRApp extends xb.Script {
     this.interaction.direct.capture(event.target, hit.object,
       isDescendant(hit.object, this.client.navigation.marker.object) ? new THREE.Vector3(0, 1, 0) : undefined);
     if (this.panelHold || this.worldHold || this.uiGrab) return;
-    const ray = this.gestureRay(event.target);
+    const ray = this.mainMenu?.ownsTarget(hit.object) ? this.panelRay(event.target) : this.gestureRay(event.target);
     reportDiagnostic("ray-select", { hand: event.target.inputSource?.handedness, surface: hit?.object.name, distanceM: hit?.distance });
     if (this.mainMenu?.ownsTarget(hit?.object)) {
       this.uiGrab = true;
-      this.client.navigation.cancelDrag();
+      this.client.navigation.clearAim(this.navigationSourceId(event.target));
       this.client.joystick.loseInput();
       const scroll = this.mainMenu.scrollView(hit?.object);
       if (scroll && (hit?.object.userData.scrollbar || hit?.object.userData.bodyScrollable)) {
@@ -327,6 +378,7 @@ export class WebXRApp extends xb.Script {
       }
       if (this.mainMenu.isSpeechTarget(hit?.object)) this.client.speech.beginRecording();
       if (!this.mainMenu.isControl(hit?.object) && this.mainMenu.beginManipulation(ray.origin, ray.direction, event.target.getWorldQuaternion(new THREE.Quaternion()))) {
+        this.setupPlacement.pin();
         this.panelHold = event.target;
         this.menuAnchor.detach();
         this.palmOpened = false;
@@ -349,17 +401,18 @@ export class WebXRApp extends xb.Script {
     this.worldHold = event.target;
     this.holdFromMarker = fromMarker;
     const smoothed = this.gestureRay(event.target);
-    this.client.holdNavigation(smoothed.origin, smoothed.direction, this.navigationFloorPlanes(), this.holdFromMarker);
+    this.client.holdNavigation(smoothed.origin, smoothed.direction, this.navigationFloorPlanes(), this.holdFromMarker, this.navigationSourceId(event.target));
   }
 
   override onSqueezeStart(event: xb.SelectEvent): void {
     if (!this.tracking || this.panelHold || this.worldHold || this.uiGrab || this.session?.visibilityState !== "visible") return;
     if (!this.mainMenu?.ownsTarget(this.interaction.hit(event.target)?.object)) return;
-    const ray = this.gestureRay(event.target);
+    const ray = this.panelRay(event.target);
     this.clearInput();
     if (!this.mainMenu.beginManipulation(ray.origin, ray.direction, event.target.getWorldQuaternion(new THREE.Quaternion()), true)) return;
     this.capture.press(event.target, this.interaction.hit(event.target)?.object);
     this.interaction.direct.capture(event.target, this.interaction.hit(event.target)!.object);
+    this.setupPlacement.pin();
     this.panelHold = event.target;
     this.panelGrip = true;
     this.menuAnchor.detach();
@@ -377,7 +430,7 @@ export class WebXRApp extends xb.Script {
         (this.worldHold && this.worldHold !== event.target)) return;
     if (this.worldHold === event.target && !this.uiGrab && this.client.controlsEnabled()) {
       const ray = this.gestureRay(event.target);
-      this.client.releaseNavigation(ray.origin, ray.direction, this.navigationFloorPlanes());
+      this.client.releaseNavigation(ray.origin, ray.direction, this.navigationFloorPlanes(), this.navigationSourceId(event.target));
       this.sound.play("confirm");
     }
     this.clearInput(true);
@@ -394,6 +447,10 @@ export class WebXRApp extends xb.Script {
     this.mainMenu?.dispose();
     this.mainMenu?.panel.removeFromParent();
     super.dispose();
+  }
+
+  private panelRay(controller: xb.SelectEvent["target"]): { origin: [number, number, number]; direction: [number, number, number] } {
+    return this.interaction.direct.ray(controller) ?? this.interaction.ray(controller);
   }
 
   private gestureRay(controller: xb.SelectEvent["target"]): { origin: [number, number, number]; direction: [number, number, number] } {
@@ -419,12 +476,15 @@ export class WebXRApp extends xb.Script {
     this.navigationFloor.visible = false;
     this.lastFrameTime = null;
     this.interaction.setEnabled(false);
+    this.client.ui.trackingStatus = "Tracking paused";
     this.client.suspend();
     this.tracking = false;
     reportDiagnostic("tracking-suspended", { visibility: this.session?.visibilityState });
   }
 
   private resetTracking(): void {
+    this.pendingAlignmentReason = null; this.trackingLostAt = null; this.reviewWasVisible = false;
+    this.setupWasVisible = false;
     this.sound.setActive(false);
     this.clearInput();
     this.navigationFloor.visible = false;
@@ -482,7 +542,9 @@ export class WebXRApp extends xb.Script {
   private readJoystick(): JoystickAxes | null {
     const source = Array.from(this.session?.inputSources ?? []).find(source => source.handedness === "left" && source.gamepad);
     const axes = source?.gamepad?.axes;
-    if (!axes || axes.length < 2 || this.uiGrab) return null;
+    if (!axes || axes.length < 2 || this.uiGrab || this.panelHold || this.worldHold) return null;
+    const pointer = this.input.controllers.find(controller => controller.inputSource === source);
+    if (pointer && this.mainMenu?.scrollView(this.interaction.hit(pointer)?.object)) return null;
     return { x: axes.length >= 4 ? axes[2] : axes[0], y: axes.length >= 4 ? axes[3] : axes[1] };
   }
 
@@ -525,7 +587,7 @@ export class WebXRApp extends xb.Script {
         if (pose) joints.set(name, new THREE.Vector3(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z));
       }
       const changed = gate.update(palmUpDot(source.handedness, joints), performance.now() / 1000);
-      if (!this.client.ui.setupCompleted) continue;
+      if (!this.client.ui.setupCompleted || this.client.ui.alignmentReview?.pending) continue;
       if (changed && gate.isOpen && !this.client.ui.menuOpen) {
         this.client.ui.menuOpen = true;
         this.anchorMenu(source, frame, reference, eye, rotation);

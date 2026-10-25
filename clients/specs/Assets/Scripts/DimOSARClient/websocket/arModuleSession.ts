@@ -116,6 +116,14 @@ export class ARModuleSession {
     this.emitView();
   }
 
+  /** Retire in-flight results from an unknown reference-space reset while retaining the last estimate. */
+  restartPreservingTrackingOrigin(): void {
+    const retained = this.clientTrackingOriginStore.T_odom_client;
+    this.stop(); this.start();
+    if (retained) this.clientTrackingOriginStore.restore(retained);
+    this.emitView();
+  }
+
   tick(): void {
     const now = this.clock.now();
     if (this.phase === "awaiting_hello" && this.helloDeadline !== null && now >= this.helloDeadline) {

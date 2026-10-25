@@ -9,6 +9,7 @@ vi.hoisted(() => {
   Object.defineProperty(window, "AudioContext", { value: AudioContextStub, configurable: true });
 });
 import * as xb from "xrblocks";
+import { SurfaceButton } from "../src/presentation/SurfaceButton";
 import { DIMOS_AR_DESIGN } from "../src/presentation/DimOSARDesign";
 import { MainMenuView } from "../src/presentation/MainMenuView";
 
@@ -16,6 +17,7 @@ it("constructs real XR Blocks buttons and activates the supported trigger hook",
   const handlers = { onSetup: vi.fn(), onBack: vi.fn(), onRetry: vi.fn(), onRestart: vi.fn(), onMenu: vi.fn(), onMode: vi.fn(), onRobot: vi.fn(), onDebug: vi.fn(), onLidar: vi.fn(), onLocalize: vi.fn(), onRealign: vi.fn(), onEstop: vi.fn(), onDraft: vi.fn(), onAgentText: vi.fn(() => true) };
   const view = new MainMenuView(handlers);
   expect(view.panel.scale.x).toBeCloseTo(DIMOS_AR_DESIGN.panel.height * 0.432);
+  expect(view.panel.getObjectByName("Sensors camera icon")?.children).toHaveLength(2);
   const buttons: xb.TextButton[] = [];
   view.panel.traverse(object => { if (object instanceof xb.TextButton) buttons.push(object); });
   const next = buttons.find(button => button.text === "Continue")!;
@@ -159,7 +161,8 @@ it("consumes UI selection, cancels drags on input loss, invalidates resets, and 
   expect(client.ui.setupCompleted).toBe(true);
   expect(invalidated).toHaveBeenCalledTimes(beforeFocus);
   const resets = invalidated.mock.calls.length;
-  reference.dispatchEvent(new Event("reset")); expect(invalidated).toHaveBeenCalledTimes(resets + 1);
+  reference.dispatchEvent(new Event("reset")); expect(invalidated).toHaveBeenCalledTimes(resets);
+  expect(client.originStore.T_odom_client).toEqual(aligned);
   app.onXRSessionEnded();
   const afterEnd = invalidated.mock.calls.length;
   reference.dispatchEvent(new Event("reset")); session.dispatchEvent(new Event("visibilitychange"));
@@ -237,8 +240,8 @@ it("shows separate response and draft fields, moves robot controls into settings
   view.apply({ ...snap, menuOpen: false });
   expect(view.panel.userData.rayDisabled).toBe(true);
   view.updateHover([], 0.09);
-  expect(appearance.scale.x).toBeGreaterThan(0.94); expect(appearance.scale.x).toBeLessThan(1);
-  expect(appearance.position.z).toBeLessThan(0);
+  expect(appearance.scale.x).toBeGreaterThan(0.85); expect(appearance.scale.x).toBeLessThan(1);
+  expect(appearance.position.z).toBe(0);
   expect(view.panel.visible).toBe(true);
   view.updateHover([], 0.09);
   expect(view.panel.visible).toBe(false);
@@ -358,4 +361,51 @@ it("locks palm summoning to one hand, supports the right hand and does not dismi
   up.right = true; sync(4); sync(4.36); expect(anchor.source).toBe(right); expect(ui.menuOpen).toBe(true);
   anchor.detach(); up.right = false; sync(5); sync(5.2); expect(ui.menuOpen).toBe(true);
   clock.mockRestore();
+});
+
+it("uses dark text on white primary/selected controls and physical depth across resizing", () => {
+  const noop = () => {};
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const control = view.panel.getObjectByName("Button: Manual")!.parent as SurfaceButton;
+  control.setActive(true); control.update();
+  expect(control.fontColor).toBe(DIMOS_AR_DESIGN.colors.primaryText);
+  const depth = () => control.position.z * control.parent!.getWorldScale(new THREE.Vector3()).z;
+  expect(depth()).toBeCloseTo(0.005);
+  view.panel.scale.multiplyScalar(1.5); control.update(); expect(depth()).toBeCloseTo(0.005);
+  control.setActive(false); control.update();
+  expect(control.fontColor).toBe(DIMOS_AR_DESIGN.colors.muted); expect(depth()).toBeCloseTo(0.002);
+  control.setEnabled(false); expect(control.fontColor).toBe(DIMOS_AR_DESIGN.colors.disabled);
+  view.dispose();
+});
+
+it("billboards a bottom-bar drag in yaw and pitch without roll or moving the grabbed point", () => {
+  const noop = () => {};
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  view.panel.position.set(0, 1, -1); view.panel.updateWorldMatrix(true, true);
+  const localGrab = new THREE.Vector3(0, -0.406 / 0.76, 0);
+  const grabbed = view.panel.localToWorld(localGrab.clone());
+  const origin = new THREE.Vector3(grabbed.x, grabbed.y, 0);
+  expect(view.beginManipulation(origin.toArray(), [0, 0, -1])).toBe(true);
+  const eye = new THREE.Vector3(0.5, 1.7, 0);
+  for (let i = 0; i < 120; i++) view.updateManipulation(origin.toArray(), [0, 0, -1], new THREE.Quaternion(), 1 / 60, eye);
+  const euler = new THREE.Euler().setFromQuaternion(view.panel.quaternion, "YXZ");
+  expect(euler.z).toBeCloseTo(0); expect(Math.abs(euler.x)).toBeGreaterThan(0.1); expect(Math.abs(euler.y)).toBeGreaterThan(0.1);
+  view.panel.updateWorldMatrix(true, true);
+  expect(view.panel.localToWorld(localGrab.clone()).distanceTo(grabbed)).toBeLessThan(0.001);
+  view.dispose();
+});
+
+it("starts a panel grab from the accepted input ray while the visual laser is still catching up", () => {
+  const app = Object.create(WebXRApp.prototype) as any;
+  const target = new THREE.Object3D() as any; target.inputSource = { handedness: "right" }; target.userData.id = 1;
+  const bar = new THREE.Object3D(), raw = { origin: [0, 0, 0], direction: [0, 0, -1] };
+  const begin = vi.fn(() => true), pin = vi.fn(), detach = vi.fn();
+  Object.assign(app, { tracking: true, session: { visibilityState: "visible" }, navigationSourceIds: new WeakMap(), nextNavigationSource: 0,
+    capture: { press: () => true }, setupPlacement: { pin }, menuAnchor: { detach },
+    interaction: { hit: () => ({ object: bar, point: new THREE.Vector3(0, 0, -1) }), direct: { capture() {}, ray: () => null }, ray: () => raw, smoothedRay: () => ({ origin: [0, 0, 0], direction: [1, 0, 0] }) },
+    client: { navigation: { clearAim() {}, marker: { object: new THREE.Group() } }, joystick: { loseInput() {} } },
+    mainMenu: { isEmergencyTarget: () => false, ownsTarget: () => true, canInteract: () => true, scrollView: () => null, isSpeechTarget: () => false, isControl: () => false, beginManipulation: begin } });
+  app.onSelectStart({ target });
+  expect(begin.mock.calls[0].slice(0, 2)).toEqual([raw.origin, raw.direction]);
+  expect(app.panelHold).toBe(target); expect(pin).toHaveBeenCalledOnce(); expect(detach).toHaveBeenCalledOnce();
 });

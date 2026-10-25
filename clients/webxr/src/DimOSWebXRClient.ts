@@ -1,3 +1,5 @@
+import { ClientPosePublisher } from "@dimos-ar-client/agent/ClientPosePublisher";
+import { ViewerNotificationPresenter } from "./presentation/ViewerNotificationPresenter";
 import { reportDiagnostic } from "./diagnostics/BrowserDiagnostics";
 import { AgentDraftSession } from "@dimos-ar-client/agent/AgentDraftSession";
 import { RobotSelection } from "@dimos-ar-client/robot/RobotSelection";
@@ -9,14 +11,12 @@ import {
 } from "@dimos-ar-client/localization/clientTrackingOrigin";
 import { LocalizationCaptureEpisode } from "@dimos-ar-client/localization/localizationCaptureEpisode";
 import {
-  clientTrackingToOdomPose,
   rotateVecByQuat,
 } from "@dimos-ar-client/localization/clientTrackingTransforms";
 import { parsePlaceArMarkerArgs, parseRemoveArMarkerArgs } from "@dimos-ar-client/agent/agentSkills";
 import { ARModuleSession } from "@dimos-ar-client/websocket/arModuleSession";
-import { encodeClientPose } from "@dimos-ar-client/websocket/protocol";
 import type { Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
-import { HmdCameraSource } from "./localization/HmdCameraSource";
+import type { HmdCameraSource } from "./localization/HmdCameraSource";
 import { WebXRJoystickController, type JoystickAxes } from "./navigation/WebXRJoystickController";
 import {
   robotDeadzoneRadiusM,
@@ -32,17 +32,20 @@ import { WebXRLidarRenderer } from "./sensors/WebXRLidarRenderer";
 import { WebXRRobotPresenter } from "./presentation/WebXRRobotPresenter";
 import { WebXRRouteRenderer } from "./navigation/WebXRRouteRenderer";
 import { WebXRUIPresenter } from "./presentation/WebXRUIPresenter";
-import { BrowserWebSocketTransport } from "./websocket/BrowserWebSocketTransport";
+import type { BindableWebSocketTransport } from "@dimos-ar-client/websocket/hostPorts";
+type WebXRCameraPort = Pick<HmdCameraSource, "samplePose" | "cameraOptical" | "start" | "stop" | "capture" | "clearTracking" | "availabilityError" | "previewFrame" | "dispose">;
 
 export interface DimOSWebXRClientDeps {
-  transport: BrowserWebSocketTransport;
+  transport: BindableWebSocketTransport;
   clock: ClientClock;
-  camera: HmdCameraSource;
+  camera: WebXRCameraPort;
   recognition?: RecognitionPort | null;
   synthesis?: SynthesisPort | null;
 }
 
 export class DimOSWebXRClient {
+  readonly notifications = new ViewerNotificationPresenter();
+  private stopFeedbackRemaining = 0;
   readonly speech: AgentDraftSession;
   readonly session: ARModuleSession;
   readonly episode: LocalizationCaptureEpisode;
@@ -51,17 +54,18 @@ export class DimOSWebXRClient {
   readonly robot: WebXRRobotPresenter;
   readonly lidar: WebXRLidarRenderer;
   readonly route: WebXRRouteRenderer;
+  readonly previewRoute: WebXRRouteRenderer;
   readonly markers: WebXRARMarkerPresenter;
   readonly navigation: WebXRNavigationController;
   readonly joystick: WebXRJoystickController;
 
-  private readonly transport: BrowserWebSocketTransport;
+  private readonly transport: BindableWebSocketTransport;
   private readonly clock: ClientClock;
-  private readonly camera: HmdCameraSource;
+  private readonly camera: WebXRCameraPort;
   private unsubscribeView: (() => void) | null = null;
   private unsubscribeOutbound: (() => void) | null = null;
   private lastView: ReturnType<ARModuleSession["view"]> | null = null;
-  private lastClientPoseSentAt = Number.NEGATIVE_INFINITY;
+  private readonly posePublisher: ClientPosePublisher;
   private lastMarkerOrigin: ClientTrackingOrigin | null = null;
   private lastTickAt: number | null = null;
   private lastCamera: { position: Vec3; orientation: Quat } | null = null;
@@ -92,16 +96,19 @@ export class DimOSWebXRClient {
       tracking: deps.camera,
       capture: deps.camera,
       initiallyPaused: true,
+      trace: event => reportDiagnostic("localization-stage", { ...event, timing: this.episode?.timing() }),
     });
+    this.posePublisher = new ClientPosePublisher(this.session, this.originStore, deps.camera, deps.clock);
     this.ui = new WebXRUIPresenter(this.session, this.episode, () => this.camera.availabilityError(), () => this.isRobotSelected());
     this.speech = new AgentDraftSession({
       recognition: deps.recognition ?? null, synthesis: deps.synthesis ?? null,
-      send: text => this.ui.sendAgentText(text), estop: () => this.ui.estop(),
+      send: text => this.ui.sendAgentText(text), estop: () => this.emergencyStop(),
       isSelected: () => this.isRobotSelected(), select: () => this.setRobotSelected(true),
     });
     this.robot = new WebXRRobotPresenter();
     this.lidar = new WebXRLidarRenderer();
     this.route = new WebXRRouteRenderer();
+    this.previewRoute = new WebXRRouteRenderer();
     this.markers = new WebXRARMarkerPresenter();
     this.navigation = new WebXRNavigationController(this.session);
     this.joystick = new WebXRJoystickController(this.session);
@@ -170,7 +177,10 @@ export class DimOSWebXRClient {
     this.speech.tick(now, this.ui.setupCompleted && this.ui.operatingMode === "agent" &&
       view.connection === "ready" && view.capabilities?.agent.available === true,
       view.agentMessage, view.state?.agent.idle ?? true);
-    this.navigation.tick(now);
+    const visibleDeltaS = this.lastTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastTickAt));
+    this.stopFeedbackRemaining = Math.max(0, this.stopFeedbackRemaining - visibleDeltaS);
+    this.ui.estopPressed = this.stopFeedbackRemaining > 0;
+    this.navigation.tick(now, visibleDeltaS);
     this.joystick.tick(now, this.controlsEnabled() ? joystick : null);
     if (!this.controlsEnabled()) this.navigation.cancelDrag();
     const deltaS = this.lastTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastTickAt));
@@ -178,6 +188,7 @@ export class DimOSWebXRClient {
     this.applyView(deltaS);
     this.markers.update(cameraPose.position, deltaS);
     const feedback = this.speech.snapshot();
+    this.ui.cameraStatus = this.camera.previewFrame() ? "Capturing · " + this.camera.previewFrame()!.width + " × " + this.camera.previewFrame()!.height : "Not capturing";
     const ui = this.ui.snapshot();
     this.robot.setDebug(this.ui.debugEnabled);
     this.robot.feedback({
@@ -189,8 +200,8 @@ export class DimOSWebXRClient {
     this.maybeSendClientPose();
   }
 
-  /** A drag that starts on the marker streams goals; one that starts elsewhere sends on release. */
-  holdNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[], fromMarker = true): void {
+  /** Direct marker drags stream goals; floor gestures preview first, then confirm. */
+  holdNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[], fromMarker = true, sourceId = "default"): void {
     if (!this.controlsEnabled() || !this.originStore.hasTrackingOrigin) {
       return;
     }
@@ -207,10 +218,11 @@ export class DimOSWebXRClient {
       this.deadzone(),
       this.robot.floorWorldY() ?? 0,
       fromMarker,
+      sourceId,
     );
   }
 
-  releaseNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[]): void {
+  releaseNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[], sourceId = "default"): void {
     if (!this.controlsEnabled() || !this.originStore.hasTrackingOrigin) {
       return;
     }
@@ -222,6 +234,7 @@ export class DimOSWebXRClient {
       hits,
       this.deadzone(),
       this.robot.floorWorldY() ?? 0,
+      sourceId,
     );
   }
 
@@ -237,11 +250,24 @@ export class DimOSWebXRClient {
 
   toggleRobotSelection(): void { this.setRobotSelected(!this.selection.isSelected()); }
 
-  aimNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[]): void {
+  aimNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[], sourceId = "default"): void {
     if (!this.controlsEnabled() || !this.originStore.hasTrackingOrigin) { this.navigation.clearAim(); return; }
     const floorY = this.robot.floorWorldY() ?? 0;
     this.navigation.aim(this.clock.now(), rayFrom, rayDir,
-      navigationSurfaceHits(rayFrom, rayDir, planes, floorY), this.deadzone(), floorY);
+      navigationSurfaceHits(rayFrom, rayDir, planes, floorY), this.deadzone(), floorY, sourceId);
+  }
+
+  emergencyStop(): void {
+    if (this.session.view().capabilities?.estop.available !== true) return;
+    try {
+      if (this.navigation.interaction.snapshot().goalActive) {
+        if (!this.navigation.interaction.cancel(this.clock.now())) throw new Error("Stop request could not be sent");
+      } else this.session.requestEstop();
+      this.stopFeedbackRemaining = 0.35; this.ui.estopPressed = true;
+      this.notifications.show({ text: "Emergency stop requested", tone: "danger", glyph: "stop", priority: 100 });
+    } catch {
+      this.notifications.show({ text: "Stop request failed", tone: "danger", glyph: "stop", priority: 100 });
+    }
   }
 
   cancelNavigation(): void {
@@ -250,12 +276,12 @@ export class DimOSWebXRClient {
 
   controlsEnabled(): boolean {
     return this.ui.setupCompleted && !this.ui.snapshot().setupCelebrating && this.ui.operatingMode === "manual" &&
-      !this.ui.menuOpen && this.session.view().connection === "ready";
+      this.session.view().connection === "ready";
   }
 
   loseInput(completeDictation = false): void {
     this.speech.endRecording(!completeDictation);
-    this.navigation.cancelDrag();
+    if (!completeDictation) this.navigation.cancelDrag();
     this.joystick.loseInput();
   }
 
@@ -272,6 +298,12 @@ export class DimOSWebXRClient {
 
   resumeTracking(): void {
     if (this.session.view().connection === "disconnected") this.session.start();
+  }
+
+  recoverUnknownTrackingReset(): void {
+    this.suspend();
+    this.episode.reset();
+    this.session.restartPreservingTrackingOrigin();
   }
 
   invalidateTracking(): void {
@@ -338,8 +370,9 @@ export class DimOSWebXRClient {
     this.unsubscribeOutbound = null;
     this.joystick.loseInput();
     this.navigation.dispose();
+    this.notifications.dispose();
     this.markers.dispose();
-    this.route.dispose();
+    this.route.dispose(); this.previewRoute.dispose();
     this.lidar.dispose();
     this.robot.dispose();
     this.episode.dispose();
@@ -357,25 +390,28 @@ export class DimOSWebXRClient {
     this.robot.setSelected(this.selection.isSelected());
     this.robot.setFloorVisible(this.navigation.marker.object.visible && this.navigation.interaction.snapshot().attachedToRobot === false);
     this.robot.setConnectorFloorY(this.navigation.interaction.snapshot().attachedToRobot ? this.navigation.marker.circleBounds().center[1] : null);
+    this.robot.setCircleOpacity(this.navigation.marker.circleOpacity());
     this.robot.tick(deltaS);
     if (!this.ui.setupCompleted || !view.hasTrackingOrigin || !origin) {
       this.lidar.hide();
-      this.route.hide();
+      this.route.hide(); this.previewRoute.hide();
       this.navigation.applyView(view, null, null, now);
       return;
     }
-    this.lidar.apply(view.lidar?.points ?? null, origin, this.ui.lidarMode, view.pose?.position ?? null, view.hello?.robot.base_height_m ?? 0);
+    this.lidar.apply(view.lidar?.points ?? null, origin, this.ui.lidarMode, view.pose?.position ?? null, view.hello?.robot.base_height_m ?? 0, view.pose?.orientation, view.hello?.robot.body_bounds_m, this.ui.lidarPreferences.pointLimit, this.ui.lidarPreferences.obstacleRangeM);
     this.navigation.setSelected(this.selection.isSelected());
     this.navigation.applyView(view, origin, this.robot.floorPose(), now);
     const goalY = this.navigation.marker.object.visible ? this.navigation.marker.pose().position[1] : null;
     this.route.apply(
-      this.navigation.isAiming() ? this.navigation.previewPath() : this.navigation.activePath(),
+      this.navigation.activePath(),
       origin,
       this.navigation.isRouteVisible(),
       this.robot.floorWorldY(),
       goalY,
-      { preview: this.navigation.isAiming(), executing: view.nav?.state === "following_path", startCircle: this.robot.floorCircleBounds(), endCircle: this.navigation.marker.circleBounds() },
+      { executing: view.nav?.state === "following_path", startCircle: this.robot.floorCircleBounds(), endCircle: this.navigation.marker.circleBounds() },
     );
+    this.previewRoute.apply(this.navigation.previewPath(), origin, this.navigation.isAiming(), this.robot.floorWorldY(), this.navigation.draftMarker.pose().position[1],
+      { preview: true, startCircle: this.robot.floorCircleBounds(), endCircle: this.navigation.draftMarker.circleBounds() });
     if (origin !== this.lastMarkerOrigin) {
       this.markers.object.visible = true;
       this.lastMarkerOrigin = origin;
@@ -395,33 +431,5 @@ export class DimOSWebXRClient {
     ];
   }
 
-  private maybeSendClientPose(): void {
-    const now = this.clock.now();
-    if (now - this.lastClientPoseSentAt < 0.1) {
-      return;
-    }
-    const view = this.session.view();
-    if (view.connection !== "ready" || view.capabilities?.agent.available !== true) {
-      return;
-    }
-    const origin = this.originStore.T_odom_client;
-    if (!origin) {
-      return;
-    }
-    let optical: ReturnType<HmdCameraSource["cameraOptical"]>;
-    try {
-      optical = this.camera.cameraOptical();
-    } catch {
-      return;
-    }
-    const odom = clientTrackingToOdomPose(optical, origin);
-    this.session.sendText(
-      encodeClientPose({
-        position: odom.position,
-        orientation: odom.orientation,
-        ts: now,
-      }),
-    );
-    this.lastClientPoseSentAt = now;
-  }
+  private maybeSendClientPose(): void { this.posePublisher.tick(); }
 }

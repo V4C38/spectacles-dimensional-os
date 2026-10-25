@@ -8,7 +8,7 @@
   </head>
   <body>
     <div class="app">
-      <aside class="panel" id="sidePanel">
+      <header class="app-toolbar">
         <div class="panel-top">
           <section class="card status-card" id="statusCard">
             <div class="status-row state-row">
@@ -22,6 +22,15 @@
             <p class="error hidden" id="errorText"></p>
           </section>
         </div>
+
+        <div class="panel-bottom" id="actionsBar">
+          <div class="actions">
+            <button type="button" class="btn primary" id="startBtn">Start</button>
+            <button type="button" class="btn" id="stopBtn">Stop</button>
+          </div>
+        </div>
+      </header>
+      <aside class="panel" id="sidePanel">
 
         <div class="panel-scroll">
           <details class="card ip-card" id="ipCard">
@@ -263,12 +272,7 @@
           </section>
         </div>
 
-        <div class="panel-bottom" id="actionsBar">
-          <div class="actions">
-            <button type="button" class="btn primary" id="startBtn">Start</button>
-            <button type="button" class="btn" id="stopBtn">Stop</button>
-          </div>
-        </div>
+
       </aside>
 
       <div

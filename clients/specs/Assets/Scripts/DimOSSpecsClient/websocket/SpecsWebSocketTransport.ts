@@ -4,12 +4,8 @@ const WS_CONNECTING = 0;
 const WS_OPEN = 1;
 const WATCHDOG_INTERVAL_S = 0.2;
 
-export interface SpecsWebSocketTransportHandlers {
-  onTransportOpen: () => void;
-  onTransportClose: () => void;
-  onTransportText: (chunk: string) => void;
-  onTransportBinary: (data: Uint8Array) => void;
-}
+export type { WebSocketTransportHandlers as SpecsWebSocketTransportHandlers } from "../../DimOSARClient/websocket/hostPorts";
+import type { WebSocketTransportHandlers as SpecsWebSocketTransportHandlers } from "../../DimOSARClient/websocket/hostPorts";
 
 type BlobLike = { bytes(): Promise<Uint8Array> };
 

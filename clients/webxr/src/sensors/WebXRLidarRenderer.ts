@@ -1,9 +1,10 @@
 import * as THREE from "three";
 import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
 import { odomToClientTrackingPoint } from "@dimos-ar-client/localization/clientTrackingTransforms";
-import type { Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
-import { lidarHeightColor, lidarObstacleIntensity } from "@dimos-ar-client/sensors/lidarColors";
+import type { Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
+import { lidarHeightColor, lidarBodyClearance } from "@dimos-ar-client/sensors/lidarColors";
 import { LIDAR_PRESETS, type LidarDisplayMode } from "@dimos-ar-client/sensors/lidarSettings";
+import { OBSTACLE_HALO_M } from "./WebXRLidarSettings";
 import { clientTrackingToWebxrPoint } from "../utilities/WebXRCoordinates";
 
 export const MAX_LIDAR_POINTS = 4000;
@@ -25,15 +26,16 @@ export class WebXRLidarRenderer {
   readonly object: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private readonly geometry = new THREE.BufferGeometry();
   private readonly texture = dotTexture();
-  private readonly material = new THREE.PointsMaterial({ size: 0.016, map: this.texture, alphaTest: 0.2, transparent: false, vertexColors: true, depthWrite: false, toneMapped: false });
+  private readonly material = new THREE.PointsMaterial({ size: 0.016, map: this.texture, alphaTest: 0.001, transparent: false, blending: THREE.CustomBlending, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor, blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor, vertexColors: true, depthWrite: false, toneMapped: false });
   private readonly positions = new THREE.BufferAttribute(new Float32Array(MAX_LIDAR_POINTS * 3), 3).setUsage(THREE.DynamicDrawUsage);
-  private readonly colors = new THREE.BufferAttribute(new Float32Array(MAX_LIDAR_POINTS * 3), 3).setUsage(THREE.DynamicDrawUsage);
+  private readonly colors = new THREE.BufferAttribute(new Float32Array(MAX_LIDAR_POINTS * 4), 4).setUsage(THREE.DynamicDrawUsage);
   private lastPoints: Vec3[] | null = null;
   private lastOrigin: ClientTrackingOrigin | null = null;
   private colorKey = "";
-  private readonly obstacleColor = new THREE.Color();
+  private lastLimit = 0;
 
   constructor() {
+    // Custom alpha blending keeps the cloud in the early opaque queue, ahead of all UI.
     // Keep distant dots legible, with a bounded close-up footprint and no sphere geometry.
     this.material.onBeforeCompile = shader => {
       shader.vertexShader = shader.vertexShader.replace("#include <logdepthbuf_vertex>", "gl_PointSize = clamp(gl_PointSize, 2.5, 8.0);\n#include <logdepthbuf_vertex>");
@@ -50,10 +52,10 @@ export class WebXRLidarRenderer {
     this.object.visible = false;
   }
 
-  apply(points: Vec3[] | null, origin: ClientTrackingOrigin | null, mode: LidarDisplayMode, robot: Vec3 | null = null, baseHeightM = 0): void {
+  apply(points: Vec3[] | null, origin: ClientTrackingOrigin | null, mode: LidarDisplayMode, robot: Vec3 | null = null, baseHeightM = 0, orientation: Quat = [0, 0, 0, 1], bounds: Vec3 = [0.7, 0.5, 0.55], pointLimit = MAX_LIDAR_POINTS, obstacleRangeM = OBSTACLE_HALO_M): void {
     if (!points?.length || !origin || mode === "off") { this.hide(); return; }
-    const count = Math.min(points.length, MAX_LIDAR_POINTS);
-    const changed = this.lastPoints !== points || this.lastOrigin !== origin;
+    const count = Math.min(points.length, MAX_LIDAR_POINTS, Math.max(0, Math.floor(pointLimit)));
+    const changed = this.lastPoints !== points || this.lastOrigin !== origin || this.lastLimit !== pointLimit;
     if (changed) {
       for (let i = 0; i < count; i++) {
         const source = points[Math.floor(i * points.length / count)];
@@ -63,24 +65,23 @@ export class WebXRLidarRenderer {
       this.geometry.setDrawRange(0, count);
     }
     const floor = robot ? robot[2] - baseHeightM : 0;
-    const key = mode === "full" ? `${mode}:${floor}` : `${mode}:${robot?.[0]},${robot?.[1]}`;
+    const key = mode === "full" ? `${mode}:${floor}` : `${mode}:${obstacleRangeM}:${robot?.join(",")}:${orientation.join(",")}:${bounds.join(",")}`;
     if (changed || key !== this.colorKey) {
       for (let i = 0; i < count; i++) {
         const source = points[Math.floor(i * points.length / count)];
         if (mode === "obstacles") {
-          const t = robot ? lidarObstacleIntensity(source, robot, LIDAR_PRESETS.obstacles.max_range_m) : 1;
-          const linear = this.obstacleColor.setRGB(1, t, t, THREE.SRGBColorSpace);
-          this.colors.setXYZ(i, linear.r, linear.g, linear.b);
+          const t = robot ? Math.min(1, lidarBodyClearance(source, robot, orientation, bounds) / Math.max(0.001, obstacleRangeM)) : 1;
+          this.colors.setXYZW(i, 1, 0, 0, 1 - t * t * (3 - 2 * t));
         } else {
           const settings = LIDAR_PRESETS.full;
           const t = THREE.MathUtils.clamp((source[2] - floor - settings.min_height_m) / (settings.max_height_m - settings.min_height_m), 0, 1);
           const color = HEIGHT_COLORS[Math.round(t * 255)];
-          this.colors.setXYZ(i, color.r, color.g, color.b);
+          this.colors.setXYZW(i, color.r, color.g, color.b, 1);
         }
       }
       this.colors.needsUpdate = true;
     }
-    this.lastPoints = points; this.lastOrigin = origin; this.colorKey = key;
+    this.lastPoints = points; this.lastLimit = pointLimit; this.lastOrigin = origin; this.colorKey = key;
     this.object.visible = true;
   }
   hide(): void { this.object.visible = false; }
