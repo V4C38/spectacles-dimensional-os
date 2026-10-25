@@ -194,6 +194,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     }, mode);
     let socket: WebSocketRoute | undefined;
     let observations = 0;
+    let latestCaptureTs = 0;
     let goals = 0;
     let handshakes = 0;
     let estops = 0;
@@ -204,6 +205,13 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       ws.onMessage(raw => {
         if (typeof raw !== "string") {
           observations++;
+          // Mirror ARModule's existing result timestamp: newest submitted capture.
+          const packet = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+          let offset = 6;
+          for (let index = 0; index < packet.getUint16(4, true); index++) {
+            latestCaptureTs = Math.max(latestCaptureTs, packet.getFloat64(offset + 4, true));
+            offset += 4 + packet.getUint32(offset, true);
+          }
           // Simulate two marker detection misses before a successful batch.
           if (observations < 3) send({ type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 3 });
           return;
@@ -520,7 +528,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       Object.defineProperty(session, "visibilityState", { value: "visible-blurred", writable: true, configurable: true });
       session.dispatchEvent(new Event("visibilitychange"));
     });
-    socket!.send(JSON.stringify({ type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 10 }) + "\n");
+    socket!.send(JSON.stringify({ type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: latestCaptureTs }) + "\n");
     await expect.poll(async () => (await ui())?.setupCompleted).toBe(true);
     const setupsuccessView = await frameMenu(page);
     await page.evaluate(() => {

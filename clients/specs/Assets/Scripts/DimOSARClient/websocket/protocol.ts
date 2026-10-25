@@ -455,11 +455,17 @@ function decodeServerInfo(data: Record<string, unknown>): { robot_ip?: string; d
 
 function decodeRobot(data: Record<string, unknown>): RobotDescription {
   const footprint = requireNumberArray(data, "footprint_m", 2);
+  const scale = data.odom_scale_correction_factor === undefined
+    ? undefined : finiteField(data, "odom_scale_correction_factor");
+  if (scale !== undefined && scale <= 0) {
+    throw new Error("robot.odom_scale_correction_factor must be finite and positive");
+  }
   return {
     display_name: requireString(data, "display_name"),
     body_bounds_m: requireVec3(data, "body_bounds_m"),
     footprint_m: [footprint[0], footprint[1]],
     base_height_m: finiteField(data, "base_height_m"),
+    ...(scale === undefined ? {} : { odom_scale_correction_factor: scale }),
   };
 }
 
@@ -589,6 +595,11 @@ function decodeLocalizationObservationsRequest(
   if (observationCount < 1) {
     throw new Error(`observation_count must be at least 1, got ${observationCount}`);
   }
+  const resultTimeoutS = data.result_timeout_s === undefined ? undefined : finiteField(data, "result_timeout_s");
+  if (resultTimeoutS !== undefined && resultTimeoutS <= 0) {
+    throw new Error("result_timeout_s must be finite and positive");
+  }
+  const resultTimeout = resultTimeoutS === undefined ? {} : { result_timeout_s: resultTimeoutS };
   const hasTimeout = Object.prototype.hasOwnProperty.call(data, "wait_timeout_s");
   if (capturePolicy === "robot_los_preferred") {
     if (!hasTimeout) {
@@ -602,6 +613,7 @@ function decodeLocalizationObservationsRequest(
       type: "localization_observations_request",
       capture_policy: capturePolicy,
       observation_count: observationCount,
+      ...resultTimeout,
       wait_timeout_s: waitTimeoutS,
     };
   }
@@ -612,6 +624,7 @@ function decodeLocalizationObservationsRequest(
     type: "localization_observations_request",
     capture_policy: capturePolicy,
     observation_count: observationCount,
+    ...resultTimeout,
   };
 }
 

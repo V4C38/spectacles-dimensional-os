@@ -57,9 +57,7 @@ def test_update_from_relocalization_accepts_odom_parent() -> None:
     odom_map_transform = OdomMapTransform()
 
     assert (
-        odom_map_transform.update_from_relocalization(
-            _relocalization_transform(), ts_server=100.0
-        )
+        odom_map_transform.update_from_relocalization(_relocalization_transform(), ts_server=100.0)
         is True
     )
     sample = odom_map_transform.relocalization_sample()
@@ -165,7 +163,12 @@ def test_vps_anchor_reusable_within_travel() -> None:
     assert sample is not None
     assert sample.travel_m == pytest.approx(2.0)
     assert sample.map_code == "office"
-    assert odom_map_transform.is_vps_reusable(current_travel_m=3.0) is True
+    assert (
+        odom_map_transform.is_vps_reusable(
+            now_server=100.0, map_code="office", current_travel_m=3.0
+        )
+        is True
+    )
 
 
 def test_vps_anchor_stale_after_travel() -> None:
@@ -179,7 +182,7 @@ def test_vps_anchor_stale_after_travel() -> None:
         ts_server=100.0,
         travel_m=1.0,
     )
-    assert odom_map_transform.is_vps_reusable(current_travel_m=2.01) is False
+    assert odom_map_transform.is_vps_reusable(now_server=100.0, current_travel_m=2.01) is False
 
 
 def test_localization_in_odom_ignores_relocalization_sample() -> None:
@@ -195,7 +198,7 @@ def test_localization_in_odom_ignores_relocalization_sample() -> None:
     )
 
     assert result is None
-    assert odom_map_transform.is_vps_reusable(current_travel_m=0.0) is False
+    assert odom_map_transform.is_vps_reusable(now_server=100.0, current_travel_m=0.0) is False
 
 
 def test_vps_sample_survives_relocalization_update() -> None:
@@ -219,7 +222,7 @@ def test_vps_sample_survives_relocalization_update() -> None:
 
     vps_after = odom_map_transform.vps_sample()
     assert vps_after is vps_before
-    assert odom_map_transform.is_vps_reusable(current_travel_m=0.5) is True
+    assert odom_map_transform.is_vps_reusable(now_server=100.0, current_travel_m=0.5) is True
     result = odom_map_transform.localization_in_odom(
         LocalizedPose(
             pose=Pose(1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0),

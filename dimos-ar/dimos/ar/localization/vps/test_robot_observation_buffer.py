@@ -48,6 +48,7 @@ def _buffer() -> tuple[RobotObservationBuffer, PoseBuffer]:
     robot_buffer = RobotObservationBuffer(
         pose_buffer=pose_buffer,
         T_base_camera_optical=np.eye(4),
+        timing_uncertainty_s=0.0,
     )
     robot_buffer.set_camera_info(_camera_info())
     return robot_buffer, pose_buffer
@@ -63,7 +64,7 @@ def test_push_image_without_camera_extrinsic_is_noop() -> None:
     _push_pose(pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
     robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.0, travel_m=0.0)  # type: ignore[arg-type]
 
-    assert robot_buffer.newest() is None
+    assert robot_buffer.newest(now_server=100.0) is None
 
 
 def test_push_image_while_stationary() -> None:
@@ -71,7 +72,7 @@ def test_push_image_while_stationary() -> None:
     _push_pose(pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
     robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.0, travel_m=0.0)  # type: ignore[arg-type]
 
-    sample = robot_buffer.newest()
+    sample = robot_buffer.newest(now_server=100.0)
     assert sample is not None
     assert sample.observation.jpeg == b"jpeg-bytes"
     assert sample.travel_m == pytest.approx(0.0)
@@ -82,7 +83,7 @@ def test_skips_frames_while_moving() -> None:
     _push_pose(pose_buffer, ts_server=100.0, position=(1.0, 0.0, 0.0))
     robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.2, travel_m=0.0)  # type: ignore[arg-type]
 
-    assert robot_buffer.newest() is None
+    assert robot_buffer.newest(now_server=100.0) is None
 
 
 def test_retains_frames_after_movement_starts() -> None:
@@ -91,7 +92,7 @@ def test_retains_frames_after_movement_starts() -> None:
     robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.0, travel_m=0.0)  # type: ignore[arg-type]
     robot_buffer.expire(travel_m=0.2)
 
-    sample = robot_buffer.newest()
+    sample = robot_buffer.newest(now_server=100.0)
     assert sample is not None
     assert sample.travel_m == pytest.approx(0.0)
 
@@ -102,7 +103,7 @@ def test_drops_frames_after_travel_threshold() -> None:
     robot_buffer.push_image(_image(), ts_server=100.0, speed_mps=0.0, travel_m=0.0)  # type: ignore[arg-type]
     robot_buffer.expire(travel_m=1.01)
 
-    assert robot_buffer.newest() is None
+    assert robot_buffer.newest(now_server=100.0) is None
 
 
 def test_keeps_three_recent_samples() -> None:
@@ -117,7 +118,7 @@ def test_keeps_three_recent_samples() -> None:
             travel_m=float(index) * 0.01,
         )
 
-    newest = robot_buffer.newest()
+    newest = robot_buffer.newest(now_server=104.0)
     assert newest is not None
     assert newest.observation.ts_server == pytest.approx(104.0)
     assert len(robot_buffer._samples) == 3

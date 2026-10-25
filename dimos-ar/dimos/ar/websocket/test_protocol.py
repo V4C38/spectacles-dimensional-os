@@ -643,3 +643,35 @@ def test_optional_server_display_metadata() -> None:
     assert "server_info" not in json.loads(encode_hello(old))
     info = {"robot_ip": "192.168.1.42", "dimos_version": "0.4.0", "armodule_version": "0.2.0"}
     assert json.loads(encode_hello(replace(old, server_info=info)))["server_info"] == info
+
+
+def test_localization_result_timeout_is_optional_and_positive() -> None:
+    request = LocalizationObservationsRequest(
+        capture_policy=CapturePolicy.ANY_ANGLE, observation_count=1, result_timeout_s=15
+    )
+    assert json.loads(encode_localization_observations_request(request))["result_timeout_s"] == 15
+    for timeout in [0, -1, float("nan"), float("inf")]:
+        with pytest.raises(ValueError):
+            LocalizationObservationsRequest(
+                capture_policy=CapturePolicy.ANY_ANGLE,
+                observation_count=1,
+                result_timeout_s=timeout,
+            )
+
+
+def test_localization_rejects_nonfinite_capture_timestamp() -> None:
+    import struct
+
+    frame = bytearray(TYPESCRIPT_LOCA_ONE)
+    struct.pack_into("<d", frame, 10, float("nan"))
+    with pytest.raises(ValueError, match="ts_capture must be finite"):
+        decode_localization_observations(bytes(frame))
+
+
+def test_hello_advertises_nonidentity_odometry_heuristic_only_when_needed() -> None:
+    from dataclasses import replace
+
+    hello = _sample_hello()
+    assert "odom_scale_correction_factor" not in json.loads(encode_hello(hello))["robot"]
+    corrected = replace(hello, robot=replace(hello.robot, odom_scale_correction_factor=1.25))
+    assert json.loads(encode_hello(corrected))["robot"]["odom_scale_correction_factor"] == 1.25

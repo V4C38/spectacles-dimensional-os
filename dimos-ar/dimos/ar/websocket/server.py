@@ -223,7 +223,7 @@ class WebSocketServer:
         try:
             await self._complete_handshake(websocket, client_id)
             if self._on_connect is not None:
-                await asyncio.to_thread(self._on_connect, websocket, client_id)
+                self._on_connect(websocket, client_id)
             async for message in websocket:
                 try:
                     if isinstance(message, bytes):
@@ -355,6 +355,18 @@ class WebSocketServer:
 
     def schedule_broadcast_text(self, text: str) -> None:
         asyncio.run_coroutine_threadsafe(self._enqueue_all_text(text), self._loop)
+
+    def schedule_disconnect_all(self, reason: str) -> None:
+        async def close_connections() -> None:
+            await asyncio.gather(
+                *(
+                    connection.close(1012, reason)
+                    for connection in tuple(self._connections.values())
+                ),
+                return_exceptions=True,
+            )
+
+        asyncio.run_coroutine_threadsafe(close_connections(), self._loop)
 
     def schedule_broadcast_binary(self, data: bytes) -> None:
         asyncio.run_coroutine_threadsafe(self._enqueue_all_binary(data), self._loop)

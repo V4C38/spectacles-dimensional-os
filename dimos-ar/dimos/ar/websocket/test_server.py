@@ -231,3 +231,72 @@ def test_server_does_not_import_localization_policy() -> None:
     source = inspect.getsource(server_mod)
     assert "LocalizationPolicy" not in source
     assert "OdomMapTransform" not in source
+
+
+@pytest.mark.asyncio
+async def test_estop_is_processed_on_same_socket_while_localization_waits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from dimos.ar.localization.coordinator import LocalizationOutcome
+    from dimos.ar.localization.policy import LocalizationPolicy
+    from dimos.ar.localization.pose_buffer import PoseBuffer
+    from dimos.ar.localization.runner import LocalizationRunner
+    from dimos.ar.module import ARModule
+    import dimos.ar.websocket.server as server_module
+    from dimos.ar.websocket.test_protocol import TYPESCRIPT_LOCA_ONE
+
+    monkeypatch.setattr(server_module, "lan_ip", lambda: None)
+    entered = threading.Event()
+    release = threading.Event()
+    stopped = threading.Event()
+    callback_threads = []
+    module = object.__new__(ARModule)
+    module._policy = LocalizationPolicy(["vps"])
+    module._pose_buffer = PoseBuffer()
+
+    async def localize(_observations, **_kwargs):
+        entered.set()
+        await asyncio.to_thread(release.wait, 3)
+        return LocalizationOutcome()
+
+    async def close():
+        pass
+
+    def connected(_socket, client_id):
+        callback_threads.append(threading.get_ident())
+        module._policy.on_hello(client_id)
+        module._localization_runner = LocalizationRunner(
+            coordinator=SimpleNamespace(run=localize, close=close),
+            policy=module._policy,
+            on_outcome=lambda *_args: None,
+            on_prompt=lambda _client: None,
+        )
+
+    def disconnected(_socket, client_id):
+        module._localization_runner.cancel(client_id)
+        module._policy.on_disconnect(client_id)
+
+    h = ServerHarness(
+        on_connect=connected,
+        on_estop_request=lambda *_args: stopped.set(),
+        on_localization_observations=module._on_localization_observations,
+    )
+    try:
+        h.start()
+        h._server._on_disconnect = disconnected
+        async with websockets.connect(f"ws://127.0.0.1:{h.port}/ws") as ws:
+            await _send_hello_request(ws)
+            await ws.send(TYPESCRIPT_LOCA_ONE)
+            assert await asyncio.to_thread(entered.wait, 1)
+            await ws.send(json.dumps({"type": "estop_request"}))
+            assert await asyncio.to_thread(stopped.wait, 0.5)
+            assert not release.is_set()
+            assert callback_threads == [h._thread.ident]
+    finally:
+        release.set()
+        if hasattr(module, "_localization_runner"):
+            future = asyncio.run_coroutine_threadsafe(module._localization_runner.close(), h.loop)
+            await asyncio.wrap_future(future)
+        h.stop()

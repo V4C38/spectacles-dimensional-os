@@ -6,7 +6,6 @@ import {
   type ClientClock,
 } from "../websocket/hostPorts";
 import {
-  encodeLocalizationObservations,
   encodeLocalizationStartRequest,
 } from "../websocket/protocol";
 import type { ARModuleSession } from "../websocket/arModuleSession";
@@ -43,7 +42,7 @@ export interface LocalizationCaptureState {
 
 export type LocalizationTrace = { stage: string; atS: number; phase: LocalizationCapturePhase; captured: number; detail?: string };
 
-export type LocalizationSessionPort = Pick<ARModuleSession, "view" | "sendText" | "sendBinary" | "subscribeLocalizationObservationsRequest" | "subscribeOutbound" | "subscribeView">;
+export type LocalizationSessionPort = Pick<ARModuleSession, "view" | "sendText" | "submitLocalizationObservations" | "cancelLocalizationSubmission" | "subscribeLocalizationObservationsRequest" | "subscribeOutbound" | "subscribeView">;
 
 export interface LocalizationCaptureDependencies {
   session: LocalizationSessionPort;
@@ -209,6 +208,7 @@ export class LocalizationCaptureEpisode {
   }
 
   private onRequest(request: LocalizationObservationsRequest): void {
+    this.session.cancelLocalizationSubmission();
     if (this.phase === "idle" && this.captureEnabled) { this.episodeStartedAt = this.clock.now(); this.episodeEndedAt = null; this.batchesSent = 0; }
     this.trace("capture-request-received", request.capture_policy);
     if (!this.captureEnabled) {
@@ -341,19 +341,19 @@ export class LocalizationCaptureEpisode {
   }
 
   private sendBatch(now: number): void {
-    this.phase = "sending";
+    const timeoutS = this.request?.result_timeout_s ?? this.resultTimeoutS;
+    this.phase = "awaiting_result";
+    this.resultDeadline = now + timeoutS;
+    this.nextCaptureAt = null;
     try {
-      this.session.sendBinary(encodeLocalizationObservations(this.observations));
+      this.session.submitLocalizationObservations(this.observations, timeoutS);
     } catch (error) {
       this.enterFailed(errorMessage(error));
       return;
     }
     // Keep the video stream warm while the server checks this bounded batch.
     // A miss requests the next batch immediately; success/reset stops capture.
-    this.phase = "awaiting_result";
     this.sentAt = now; this.batchesSent++; this.trace("batch-sent", `bytes=${this.observations.reduce((sum, observation) => sum + observation.jpeg.length, 0)}`);
-    this.resultDeadline = now + this.resultTimeoutS;
-    this.nextCaptureAt = null;
   }
 
   private tickRetry(now: number): void {
@@ -374,6 +374,7 @@ export class LocalizationCaptureEpisode {
   }
 
   private enterFailed(reason: string): void {
+    this.session.cancelLocalizationSubmission();
     this.phase = "failed";
     this.stopHardware();
     this.lastError = reason; this.trace("failed", reason);
@@ -385,6 +386,7 @@ export class LocalizationCaptureEpisode {
   }
 
   private resetIdle(): void {
+    this.session.cancelLocalizationSubmission();
     this.captureGeneration += 1;
     this.stopHardware();
     this.phase = "idle";

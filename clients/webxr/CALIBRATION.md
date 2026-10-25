@@ -118,3 +118,23 @@ input through published-profile capture and automatic setup completion, and the 
 The calibration recovery data is synthetic and does not qualify either device for release.
 The local toolchain was Node v22.22.1 and Python 3.12.13. Device/browser versions remain
 pending in the physical acceptance table. The detailed local run log is `/tmp/webxr-resumed-ci.log`.
+
+
+## VPS timing and registration acceptance
+
+The async backend and capture/result lifecycle checks do not establish physical
+accuracy. For each Quest model, retain JPEG dimensions, camera label, profile,
+browser/OS version, exposure/presentation timestamp provenance, and surveyed origin
+errors with the acceptance record. Measure decode/transport delay before treating the
+backend's provisional ±0.5-second robot stillness window as a measured bound.
+Test robot translation and rotation, camera stalls, delayed responses, reference resets,
+and emergency stop during a deliberately delayed VPS query.
+
+Repeat stationary obstacle observations across robot movement before changing the
+odometry correction. `dimos-ar/tools/check_go2_registration.py` rejects the proposed
+robot-relative per-packet translation on the existing Go2 voxel-map recording.
+The integrated 1.25 heuristic is a fixed XY mapping shared by robot pose, paths
+and LiDAR, with native range calculations preserved separately. A physically
+qualified correction still needs scan provenance or validated vendor-map registration;
+the heuristic and published headset profiles are not that proof.
+No runtime calibration approval screen is introduced by these backend checks.

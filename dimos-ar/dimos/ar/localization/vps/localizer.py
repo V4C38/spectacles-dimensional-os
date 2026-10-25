@@ -9,8 +9,9 @@ import cv2
 import numpy as np
 
 from dimos.ar.localization.transforms import fuse_pose_estimates
-from dimos.ar.localization.types import Intrinsics, LocalizedPose, Localizer, Observation
+from dimos.ar.localization.types import Intrinsics, LocalizedPose, Observation
 from dimos.ar.localization.undistort import undistort_to_pinhole
+from dimos.ar.localization.worker import LocalizationWorker
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
 
@@ -25,7 +26,9 @@ class VpsQueryResult:
 
 
 class VpsClient(Protocol):
-    def query(self, *, jpeg: bytes, intrinsics: Intrinsics) -> VpsQueryResult | None: ...
+    async def query(self, *, jpeg: bytes, intrinsics: Intrinsics) -> VpsQueryResult | None: ...
+
+    async def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -74,20 +77,23 @@ class _VpsCandidate:
     query_confidence: float
 
 
-class VpsLocalizer(Localizer):
+class VpsLocalizer:
     def __init__(
         self,
         *,
         client: VpsClient,
         config: VpsLocalizerConfig | None = None,
+        worker: LocalizationWorker | None = None,
     ) -> None:
+        self._owns_worker = worker is None
+        self._worker = worker or LocalizationWorker()
         self._client = client
         self._config = config or VpsLocalizerConfig()
 
-    def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None:
+    async def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None:
         candidates: list[_VpsCandidate] = []
         for observation in observations:
-            candidate = self._candidate_from_observation(observation)
+            candidate = await self._candidate_from_observation(observation)
             if candidate is not None:
                 candidates.append(candidate)
 
@@ -119,7 +125,15 @@ class VpsLocalizer(Localizer):
             confidence=confidence,
         )
 
-    def _candidate_from_observation(self, observation: Observation) -> _VpsCandidate | None:
+    async def _candidate_from_observation(self, observation: Observation) -> _VpsCandidate | None:
+        prepared = await self._worker.run(lambda: self._prepare_observation(observation))
+        if prepared is None:
+            return None
+        jpeg, intrinsics = prepared
+        result = await self._client.query(jpeg=jpeg, intrinsics=intrinsics)
+        return self._candidate(observation, result)
+
+    def _prepare_observation(self, observation: Observation) -> tuple[bytes, Intrinsics] | None:
         image = cv2.imdecode(
             np.frombuffer(observation.jpeg, dtype=np.uint8),
             cv2.IMREAD_COLOR,
@@ -138,13 +152,15 @@ class VpsLocalizer(Localizer):
             )
 
         frame = undistort_to_pinhole(color, observation.intrinsics)
-        jpeg, intrinsics = _encode_for_query(
+        return _encode_for_query(
             frame.image,
             frame.intrinsics,
             max_longest_side=self._config.max_image_longest_side,
         )
 
-        result = self._client.query(jpeg=jpeg, intrinsics=intrinsics)
+    def _candidate(
+        self, observation: Observation, result: VpsQueryResult | None
+    ) -> _VpsCandidate | None:
         if result is None:
             return None
         if not math.isfinite(result.confidence):
@@ -159,6 +175,13 @@ class VpsLocalizer(Localizer):
             return None
 
         return _VpsCandidate(transform=transform, query_confidence=result.confidence)
+
+    async def close(self) -> None:
+        try:
+            await self._client.close()
+        finally:
+            if self._owns_worker:
+                self._worker.close()
 
 
 def compose_map_client(

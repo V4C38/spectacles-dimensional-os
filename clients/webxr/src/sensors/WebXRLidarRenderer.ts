@@ -52,7 +52,7 @@ export class WebXRLidarRenderer {
     this.object.visible = false;
   }
 
-  apply(points: Vec3[] | null, origin: ClientTrackingOrigin | null, mode: LidarDisplayMode, robot: Vec3 | null = null, baseHeightM = 0, orientation: Quat = [0, 0, 0, 1], bounds: Vec3 = [0.7, 0.5, 0.55], pointLimit = MAX_LIDAR_POINTS, obstacleRangeM = OBSTACLE_HALO_M): void {
+  apply(points: Vec3[] | null, origin: ClientTrackingOrigin | null, mode: LidarDisplayMode, robot: Vec3 | null = null, baseHeightM = 0, orientation: Quat = [0, 0, 0, 1], bounds: Vec3 = [0.7, 0.5, 0.55], pointLimit = MAX_LIDAR_POINTS, obstacleRangeM = OBSTACLE_HALO_M, odomScaleCorrectionFactor = 1): void {
     if (!points?.length || !origin || mode === "off") { this.hide(); return; }
     const count = Math.min(points.length, MAX_LIDAR_POINTS, Math.max(0, Math.floor(pointLimit)));
     const changed = this.lastPoints !== points || this.lastOrigin !== origin || this.lastLimit !== pointLimit;
@@ -65,12 +65,12 @@ export class WebXRLidarRenderer {
       this.geometry.setDrawRange(0, count);
     }
     const floor = robot ? robot[2] - baseHeightM : 0;
-    const key = mode === "full" ? `${mode}:${floor}` : `${mode}:${obstacleRangeM}:${robot?.join(",")}:${orientation.join(",")}:${bounds.join(",")}`;
+    const key = mode === "full" ? `${mode}:${floor}` : `${mode}:${obstacleRangeM}:${odomScaleCorrectionFactor}:${robot?.join(",")}:${orientation.join(",")}:${bounds.join(",")}`;
     if (changed || key !== this.colorKey) {
       for (let i = 0; i < count; i++) {
         const source = points[Math.floor(i * points.length / count)];
         if (mode === "obstacles") {
-          const t = robot ? Math.min(1, lidarBodyClearance(source, robot, orientation, bounds) / Math.max(0.001, obstacleRangeM)) : 1;
+          const t = robot ? Math.min(1, lidarBodyClearance(source, robot, orientation, bounds, odomScaleCorrectionFactor) / Math.max(0.001, obstacleRangeM)) : 1;
           this.colors.setXYZW(i, 1, 0, 0, 1 - t * t * (3 - 2 * t));
         } else {
           const settings = LIDAR_PRESETS.full;

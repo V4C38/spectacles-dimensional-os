@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import math
 import os
-import threading
 from urllib.parse import urljoin
 
+import aiohttp
 import numpy as np
-import requests
 
 from dimos.ar.localization.types import Intrinsics
 from dimos.ar.localization.vps.localizer import VpsQueryResult
@@ -53,7 +53,7 @@ class MultisetVpsClientConfig:
     api_base: str = _DEFAULT_API_BASE
     auth_path: str = _DEFAULT_AUTH_PATH
     query_path: str = _DEFAULT_QUERY_PATH
-    timeout_s: float = 90.0
+    timeout_s: float = 12.0
     token_refresh_margin_s: float = _TOKEN_REFRESH_MARGIN_S
 
     def __post_init__(self) -> None:
@@ -89,8 +89,8 @@ class MultisetVpsClient:
         self._config = config
         self._client_id = client_id
         self._client_secret = client_secret
-        self._session = requests.Session()
-        self._lock = threading.Lock()
+        self._session: aiohttp.ClientSession | None = None
+        self._lock = asyncio.Lock()
         self._token: str | None = None
         self._token_expires = 0.0
 
@@ -112,18 +112,19 @@ class MultisetVpsClient:
             )
         return cls(config=config, client_id=client_id, client_secret=client_secret)
 
-    def query(self, *, jpeg: bytes, intrinsics: Intrinsics) -> VpsQueryResult | None:
+    async def query(self, *, jpeg: bytes, intrinsics: Intrinsics) -> VpsQueryResult | None:
         _validate_query(jpeg, intrinsics)
-        with self._lock:
-            payload = self._query_with_retry(jpeg=jpeg, intrinsics=intrinsics)
+        async with asyncio.timeout(self._config.timeout_s):
+            async with self._lock:
+                payload = await self._query_with_retry(jpeg=jpeg, intrinsics=intrinsics)
         return _result_from_payload(payload)
 
-    def _query_with_retry(self, *, jpeg: bytes, intrinsics: Intrinsics) -> dict[str, object]:
-        token = self._bearer()
-        status, payload, text = self._post_query(token, jpeg=jpeg, intrinsics=intrinsics)
+    async def _query_with_retry(self, *, jpeg: bytes, intrinsics: Intrinsics) -> dict[str, object]:
+        token = await self._bearer()
+        status, payload, text = await self._post_query(token, jpeg=jpeg, intrinsics=intrinsics)
         if status == 401:
-            token = self._bearer(force_refresh=True)
-            status, payload, text = self._post_query(token, jpeg=jpeg, intrinsics=intrinsics)
+            token = await self._bearer(force_refresh=True)
+            status, payload, text = await self._post_query(token, jpeg=jpeg, intrinsics=intrinsics)
             if status == 401:
                 raise MultisetVpsAuthError("MultiSet VPS query returned 401 after token refresh")
         if status != 200:
@@ -137,7 +138,7 @@ class MultisetVpsClient:
             )
         return payload
 
-    def _bearer(self, *, force_refresh: bool = False) -> str:
+    async def _bearer(self, *, force_refresh: bool = False) -> str:
         now = _utc_now()
         if (
             not force_refresh
@@ -145,14 +146,14 @@ class MultisetVpsClient:
             and now < self._token_expires - self._config.token_refresh_margin_s
         ):
             return self._token
-        token, expires = self._fetch_token()
+        token, expires = await self._fetch_token()
         self._token = token
         self._token_expires = expires
         return token
 
-    def _fetch_token(self) -> tuple[str, float]:
+    async def _fetch_token(self) -> tuple[str, float]:
         headers = {"Authorization": f"Basic {_basic_token(self._client_id, self._client_secret)}"}
-        status, payload, text = self._post(self._auth_url(), headers=headers)
+        status, payload, text = await self._post(self._auth_url(), headers=headers)
         if status != 200:
             detail = text[:300] if text else ""
             raise MultisetVpsAuthError(
@@ -173,7 +174,7 @@ class MultisetVpsClient:
             raise MultisetVpsAuthError("MultiSet token response is missing expiresOn")
         return token, parse_expires_on(expires_on)
 
-    def _post_query(
+    async def _post_query(
         self,
         token: str,
         *,
@@ -193,9 +194,9 @@ class MultisetVpsClient:
             "queryMode": _QUERY_MODE,
         }
         files = {"queryImage": ("query.jpg", jpeg, "image/jpeg")}
-        return self._post(self._query_url(), headers=headers, data=data, files=files)
+        return await self._post(self._query_url(), headers=headers, data=data, files=files)
 
-    def _post(
+    async def _post(
         self,
         url: str,
         *,
@@ -203,27 +204,37 @@ class MultisetVpsClient:
         data: dict[str, str] | None = None,
         files: dict[str, tuple[str, bytes, str]] | None = None,
     ) -> tuple[int, object, str]:
-        try:
-            response = self._session.post(
-                url,
-                headers=headers,
-                data=data,
-                files=files,
-                timeout=self._config.timeout_s,
+        if self._session is None:
+            # Construct and close on the module event loop, not in build's RPC thread.
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self._config.timeout_s, sock_connect=3.0),
             )
-        except requests.RequestException as exc:
-            raise MultisetVpsError(f"MultiSet HTTP request failed: {exc}") from exc
-
-        text = response.text if isinstance(response.text, str) else ""
-        if response.status_code == 401:
-            return 401, None, text
+        form = None
+        if data is not None or files is not None:
+            form = aiohttp.FormData()
+            for name, value in (data or {}).items():
+                form.add_field(name, value)
+            for name, (filename, payload, content_type) in (files or {}).items():
+                form.add_field(name, payload, filename=filename, content_type=content_type)
         try:
-            payload = response.json()
-        except ValueError as exc:
-            if response.status_code != 200:
-                return response.status_code, None, text
-            raise MultisetVpsError(f"MultiSet HTTP response was not JSON: {text[:200]!r}") from exc
-        return response.status_code, payload, text
+            async with self._session.post(url, headers=headers, data=form) as response:
+                text = await response.text()
+                if response.status == 401:
+                    return 401, None, text
+                try:
+                    body = await response.json(content_type=None)
+                except ValueError as exc:
+                    if response.status != 200:
+                        return response.status, None, text
+                    raise MultisetVpsError("MultiSet HTTP response was not JSON") from exc
+                return response.status, body, text
+        except aiohttp.ClientError as exc:
+            raise MultisetVpsError(f"MultiSet HTTP request failed: {type(exc).__name__}") from exc
+
+    async def close(self) -> None:
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
 
     def _auth_url(self) -> str:
         return _join_url(self._config.api_base, self._config.auth_path)

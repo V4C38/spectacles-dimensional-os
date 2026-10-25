@@ -47,6 +47,8 @@ export interface RobotDescription {
   body_bounds_m: Vec3;
   footprint_m: [number, number];
   base_height_m: number;
+  /** Fixed native-odom to AR XY heuristic; absent on older servers means 1. */
+  odom_scale_correction_factor?: number;
 }
 
 export interface ServerInfo {
@@ -104,11 +106,13 @@ export type LocalizationObservationsRequest =
       type: "localization_observations_request";
       capture_policy: "robot_los_required" | "any_angle";
       observation_count: number;
+      result_timeout_s?: number;
     }
   | {
       type: "localization_observations_request";
       capture_policy: "robot_los_preferred";
       observation_count: number;
+      result_timeout_s?: number;
       wait_timeout_s: number;
     };
 

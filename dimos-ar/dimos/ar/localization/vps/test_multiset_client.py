@@ -29,9 +29,22 @@ _SQRT_HALF = math.sqrt(0.5)
 class _FakeResponse:
     status_code: int
     payload: object = None
-    text: str = ""
+    body_text: str = ""
 
-    def json(self) -> object:
+    @property
+    def status(self) -> int:
+        return self.status_code
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def text(self) -> str:
+        return self.body_text
+
+    async def json(self, **_kwargs) -> object:
         if self.payload is None:
             raise ValueError("no json")
         return self.payload
@@ -59,27 +72,23 @@ class _FakeSession:
         self._responses = list(responses)
         self.calls: list[_RecordedPost] = []
 
-    def post(
-        self,
-        url: str,
-        *,
-        headers: dict[str, str] | None = None,
-        data: dict[str, str] | None = None,
-        files: dict[str, tuple[str, bytes, str]] | None = None,
-        timeout: float,
-    ) -> _FakeResponse:
-        self.calls.append(
-            _RecordedPost(
-                url=url,
-                headers=headers,
-                data=data,
-                files=files,
-                timeout=timeout,
-            )
-        )
+    def post(self, url: str, *, headers=None, data=None):
+        fields = None
+        files = None
+        if data is not None:
+            fields, files = {}, {}
+            for options, metadata, value in data._fields:
+                if "filename" in options:
+                    files[options["name"]] = (options["filename"], value, metadata["Content-Type"])
+                else:
+                    fields[options["name"]] = value
+        self.calls.append(_RecordedPost(url, headers, fields, files, 12.0))
         if not self._responses:
             raise AssertionError(f"unexpected HTTP POST to {url}")
         return self._responses.pop(0)
+
+    async def close(self):
+        pass
 
 
 def _intrinsics(*, width: int = 960, height: int = 720) -> Intrinsics:
@@ -231,7 +240,7 @@ def test_parse_expires_on_accepts_z_and_naive() -> None:
     assert naive == pytest.approx(offset)
 
 
-def test_query_with_pose_found_false_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_query_with_pose_found_false_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeSession(
         [
             _token_response(),
@@ -239,15 +248,17 @@ def test_query_with_pose_found_false_returns_none(monkeypatch: pytest.MonkeyPatc
         ]
     )
 
-    assert _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics()) is None
+    assert await _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics()) is None
 
 
-def test_query_sends_form_fields_and_converts_found_pose(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_query_sends_form_fields_and_converts_found_pose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     session = _FakeSession([_token_response(), _found_response()])
     client = _client(session, monkeypatch)
     vendor = Pose(4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0)
 
-    result = client.query(jpeg=_jpeg(), intrinsics=_intrinsics())
+    result = await client.query(jpeg=_jpeg(), intrinsics=_intrinsics())
 
     assert result is not None
     assert result.confidence == pytest.approx(0.87)
@@ -276,10 +287,12 @@ def test_query_sends_form_fields_and_converts_found_pose(monkeypatch: pytest.Mon
     assert query.files is not None
     assert query.files["queryImage"][0] == "query.jpg"
     assert query.files["queryImage"][2] == "image/jpeg"
-    assert query.timeout == pytest.approx(90.0)
+    assert query.timeout == pytest.approx(12.0)
 
 
-def test_vps_localizer_accepts_multiset_client_result(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_vps_localizer_accepts_multiset_client_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     session = _FakeSession([_token_response(), _found_response()])
     client = _client(session, monkeypatch)
     localizer = VpsLocalizer(
@@ -287,7 +300,7 @@ def test_vps_localizer_accepts_multiset_client_result(monkeypatch: pytest.Monkey
         config=VpsLocalizerConfig(max_tilt_rad=math.pi),
     )
 
-    result = localizer.localize([_observation()])
+    result = await localizer.localize([_observation()])
 
     assert result is not None
     assert result.frame_id == "map"
@@ -295,7 +308,7 @@ def test_vps_localizer_accepts_multiset_client_result(monkeypatch: pytest.Monkey
     assert len(session.calls) == 2
 
 
-def test_token_is_cached_until_refresh_margin(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_token_is_cached_until_refresh_margin(monkeypatch: pytest.MonkeyPatch) -> None:
     clock = _FakeClock(1_000.0)
     session = _FakeSession(
         [
@@ -306,9 +319,9 @@ def test_token_is_cached_until_refresh_margin(monkeypatch: pytest.MonkeyPatch) -
     )
     client = _client(session, monkeypatch, clock=clock)
 
-    assert client.query(jpeg=_jpeg(), intrinsics=_intrinsics()) is not None
+    assert await client.query(jpeg=_jpeg(), intrinsics=_intrinsics()) is not None
     clock.now = 2_700.0
-    assert client.query(jpeg=_jpeg(), intrinsics=_intrinsics()) is not None
+    assert await client.query(jpeg=_jpeg(), intrinsics=_intrinsics()) is not None
 
     assert [call.url.rsplit("/", 2)[-1] for call in session.calls] == [
         "token",
@@ -317,7 +330,7 @@ def test_token_is_cached_until_refresh_margin(monkeypatch: pytest.MonkeyPatch) -
     ]
 
 
-def test_token_refreshes_before_expires_on(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_token_refreshes_before_expires_on(monkeypatch: pytest.MonkeyPatch) -> None:
     clock = _FakeClock(1_000.0)
     session = _FakeSession(
         [
@@ -329,9 +342,9 @@ def test_token_refreshes_before_expires_on(monkeypatch: pytest.MonkeyPatch) -> N
     )
     client = _client(session, monkeypatch, clock=clock)
 
-    assert client.query(jpeg=_jpeg(), intrinsics=_intrinsics()) is not None
+    assert await client.query(jpeg=_jpeg(), intrinsics=_intrinsics()) is not None
     clock.now = 1_040.0
-    assert client.query(jpeg=_jpeg(), intrinsics=_intrinsics()) is not None
+    assert await client.query(jpeg=_jpeg(), intrinsics=_intrinsics()) is not None
 
     query_auths = [
         call.headers["Authorization"] for call in session.calls if call.url.endswith("/query-form")
@@ -339,17 +352,17 @@ def test_token_refreshes_before_expires_on(monkeypatch: pytest.MonkeyPatch) -> N
     assert query_auths == ["Bearer jwt-1", "Bearer jwt-2"]
 
 
-def test_query_retries_once_after_401(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_query_retries_once_after_401(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeSession(
         [
             _token_response(token="jwt-1"),
-            _FakeResponse(status_code=401, text="expired"),
+            _FakeResponse(status_code=401, body_text="expired"),
             _token_response(token="jwt-2"),
             _found_response(),
         ]
     )
 
-    result = _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
+    result = await _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
 
     assert result is not None
     assert [call.url.rsplit("/", 1)[-1] for call in session.calls] == [
@@ -362,47 +375,47 @@ def test_query_retries_once_after_401(monkeypatch: pytest.MonkeyPatch) -> None:
     assert session.calls[3].headers == {"Authorization": "Bearer jwt-2"}
 
 
-def test_second_401_raises_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_second_401_raises_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeSession(
         [
             _token_response(token="jwt-1"),
-            _FakeResponse(status_code=401, text="expired"),
+            _FakeResponse(status_code=401, body_text="expired"),
             _token_response(token="jwt-2"),
-            _FakeResponse(status_code=401, text="still expired"),
+            _FakeResponse(status_code=401, body_text="still expired"),
         ]
     )
 
     with pytest.raises(MultisetVpsAuthError, match="401 after token refresh"):
-        _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
+        await _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
 
 
-def test_http_error_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_http_error_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeSession(
         [
             _token_response(),
-            _FakeResponse(status_code=400, text='{"error":"bad image"}'),
+            _FakeResponse(status_code=400, body_text='{"error":"bad image"}'),
         ]
     )
 
     with pytest.raises(MultisetVpsError, match="HTTP 400"):
-        _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
+        await _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
 
 
-def test_auth_error_body_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_auth_error_body_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeSession([_FakeResponse(status_code=200, payload={"error": "invalid client"})])
 
     with pytest.raises(MultisetVpsAuthError, match="invalid client"):
-        _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
+        await _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
 
 
-def test_missing_expires_on_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_missing_expires_on_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeSession([_FakeResponse(status_code=200, payload={"token": "jwt-1"})])
 
     with pytest.raises(MultisetVpsAuthError, match="expiresOn"):
-        _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
+        await _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
 
 
-def test_malformed_found_pose_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_malformed_found_pose_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeSession(
         [
             _token_response(),
@@ -411,21 +424,23 @@ def test_malformed_found_pose_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     with pytest.raises(MultisetVpsError, match="position"):
-        _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
+        await _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
 
 
-def test_confidence_outside_unit_interval_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_confidence_outside_unit_interval_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeSession([_token_response(), _found_response(confidence=1.1)])
 
     with pytest.raises(MultisetVpsError, match="confidence"):
-        _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
+        await _client(session, monkeypatch).query(jpeg=_jpeg(), intrinsics=_intrinsics())
 
 
-def test_from_env_reads_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_from_env_reads_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeSession([_token_response(), _found_response()])
 
     assert (
-        _client(session, monkeypatch, from_env=True).query(jpeg=_jpeg(), intrinsics=_intrinsics())
+        await _client(session, monkeypatch, from_env=True).query(
+            jpeg=_jpeg(), intrinsics=_intrinsics()
+        )
         is not None
     )
     basic = session.calls[0].headers["Authorization"]
@@ -439,12 +454,12 @@ def test_from_env_requires_both_credentials(monkeypatch: pytest.MonkeyPatch) -> 
         MultisetVpsClient.from_env(_config())
 
 
-def test_empty_jpeg_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_empty_jpeg_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError, match="jpeg"):
-        _client(_FakeSession([]), monkeypatch).query(jpeg=b"", intrinsics=_intrinsics())
+        await _client(_FakeSession([]), monkeypatch).query(jpeg=b"", intrinsics=_intrinsics())
 
 
-def test_distorted_intrinsics_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_distorted_intrinsics_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     distorted = Intrinsics(
         fx=800.0,
         fy=800.0,
@@ -456,7 +471,7 @@ def test_distorted_intrinsics_are_rejected(monkeypatch: pytest.MonkeyPatch) -> N
         distortion=(-0.07, -0.02, -0.01, 0.01),
     )
     with pytest.raises(ValueError, match="pinhole"):
-        _client(_FakeSession([]), monkeypatch).query(jpeg=_jpeg(), intrinsics=distorted)
+        await _client(_FakeSession([]), monkeypatch).query(jpeg=_jpeg(), intrinsics=distorted)
 
 
 @pytest.mark.parametrize(

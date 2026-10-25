@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import math
@@ -26,14 +27,18 @@ class CaptureSpec:
 class EpisodeWork:
     client_id: str
     observations: tuple[Observation, ...]
+    generation: int = 0
+    capture_travel_m: float = 0.0
 
 
 @dataclass
 class _ClientEpisode:
     pending: bool = False
     last_success_travel_m: float | None = None
-    held_observations: tuple[Observation, ...] | None = None
+    in_flight: bool = False
+    generation: int = 0
     prompt_due_at: float | None = None
+    vps_waiting: bool = False
 
 
 def _canonical_providers(
@@ -93,8 +98,7 @@ class LocalizationPolicy:
             )
         if not math.isfinite(robot_vps_cooldown_s) or robot_vps_cooldown_s < 0.0:
             raise ValueError(
-                "robot_vps_cooldown_s must be finite and non-negative, "
-                f"got {robot_vps_cooldown_s}"
+                f"robot_vps_cooldown_s must be finite and non-negative, got {robot_vps_cooldown_s}"
             )
         self._providers = _canonical_providers(providers)
         self._capture_spec = _capture_spec(self._providers)
@@ -107,6 +111,8 @@ class LocalizationPolicy:
         self._clients: dict[str, _ClientEpisode] = {}
         self._client_vps_until = 0.0
         self._robot_vps_until = 0.0
+        self._vps_waiters: deque[str] = deque()
+        self._vps_turn_until = 0.0
 
     @property
     def providers(self) -> tuple[LocalizationProviderType, ...]:
@@ -125,15 +131,15 @@ class LocalizationPolicy:
 
     def on_start_request(self, client_id: str) -> str | None:
         state = self._clients.get(client_id)
-        if (
-            state is not None
-            and state.pending
-            and state.prompt_due_at is None
-            and state.held_observations is None
-        ):
-            # A client retry may follow a camera error or a result timeout.
-            # Reissue the pending prompt rather than leaving both sides waiting.
-            return client_id
+        if state is not None and state.pending:
+            state.generation += 1
+            state.in_flight = False
+            if state.vps_waiting and not self.client_vps_ready(client_id):
+                state.prompt_due_at = max(self._clock() + 0.25, self._client_vps_until)
+                return None
+            if state.prompt_due_at is None:
+                return client_id
+            return None
         return self._open_episode(client_id)
 
     def on_goal_reached(self, *, succeeded: bool) -> list[str]:
@@ -177,73 +183,145 @@ class LocalizationPolicy:
 
     def poll(self) -> tuple[list[str], list[EpisodeWork]]:
         now = self._clock()
+        self._rotate_expired_vps_turn()
         client_ids: list[str] = []
         episodes: list[EpisodeWork] = []
         for client_id, state in self._clients.items():
             if state.prompt_due_at is not None and now >= state.prompt_due_at:
+                if state.vps_waiting and not self.client_vps_ready(client_id):
+                    state.prompt_due_at = max(now + 0.25, self._client_vps_until)
+                    continue
                 state.prompt_due_at = None
                 if self._capture_spec is not None:
                     client_ids.append(client_id)
-            if state.held_observations is not None and self.client_vps_ready():
-                episodes.append(
-                    EpisodeWork(client_id=client_id, observations=state.held_observations)
-                )
-                state.held_observations = None
         return client_ids, episodes
 
     def on_observations(
-        self, client_id: str, observations: Sequence[Observation]
+        self,
+        client_id: str,
+        observations: Sequence[Observation],
+        *,
+        capture_travel_m: float | None = None,
     ) -> EpisodeWork | None:
         state = self._clients.get(client_id)
-        if state is None or not state.pending:
+        if state is None or not state.pending or state.in_flight or state.prompt_due_at is not None:
             return None
         if not observations:
             return None
-        return EpisodeWork(client_id=client_id, observations=tuple(observations))
+        state.in_flight = True
+        return EpisodeWork(
+            client_id=client_id,
+            observations=tuple(observations),
+            generation=state.generation,
+            capture_travel_m=self._travel_m if capture_travel_m is None else capture_travel_m,
+        )
 
-    def hold_for_client_vps(
-        self, client_id: str, observations: Sequence[Observation]
-    ) -> None:
+    def is_current(self, work: EpisodeWork) -> bool:
+        state = self._clients.get(work.client_id)
+        return (
+            state is not None
+            and state.pending
+            and state.in_flight
+            and state.generation == work.generation
+        )
+
+    def defer_vps(self, client_id: str) -> None:
         state = self._clients.get(client_id)
         if state is None or not state.pending:
             return
-        state.held_observations = tuple(observations)
+        # Keep only the waiting client. A cooldown must never retain old pixels.
+        state.vps_waiting = True
+        self._enqueue_vps(client_id)
+        state.in_flight = False
+        state.generation += 1
+        state.prompt_due_at = max(
+            self._clock() + 2.0, self._client_vps_until, self._robot_vps_until
+        )
 
-    def on_success(self, client_id: str) -> None:
+    def on_success(self, client_id: str, *, capture_travel_m: float | None = None) -> None:
         state = self._clients.get(client_id)
         if state is None:
             return
         state.pending = False
-        state.held_observations = None
+        self._remove_vps_waiter(client_id)
+        state.vps_waiting = False
+        state.in_flight = False
         state.prompt_due_at = None
-        state.last_success_travel_m = self._travel_m
+        state.last_success_travel_m = (
+            self._travel_m if capture_travel_m is None else capture_travel_m
+        )
 
     def on_failure(self, client_id: str) -> None:
         state = self._clients.get(client_id)
         if state is None:
             return
         state.pending = False
-        state.held_observations = None
+        self._remove_vps_waiter(client_id)
+        state.vps_waiting = False
+        state.in_flight = False
         state.prompt_due_at = None
 
     def on_disconnect(self, client_id: str) -> None:
+        self._remove_vps_waiter(client_id)
         self._clients.pop(client_id, None)
 
-    def retry_failed_episode(self, client_id: str) -> str | None:
+    def reset_source(self) -> None:
+        self._clients.clear()
+        self._vps_waiters.clear()
+        self._last_xy = None
+        self._travel_m = 0.0
+
+    def retry_failed_episode(self, client_id: str, *, backoff_s: float = 0.0) -> str | None:
         # A detection can finish after disconnect; do not resurrect that client.
         if client_id not in self._clients:
             return None
         self.on_failure(client_id)
-        return self._open_episode(client_id)
+        prompted = self._open_episode(client_id)
+        if prompted is not None and backoff_s > 0:
+            self._clients[client_id].prompt_due_at = self._clock() + backoff_s
+            return None
+        return prompted
 
-    def client_vps_ready(self) -> bool:
-        return self._clock() >= self._client_vps_until
+    def client_vps_ready(self, client_id: str | None = None) -> bool:
+        if client_id is not None:
+            self._enqueue_vps(client_id)
+        return self._clock() >= self._client_vps_until and (
+            client_id is None or not self._vps_waiters or self._vps_waiters[0] == client_id
+        )
+
+    def _enqueue_vps(self, client_id: str) -> None:
+        if client_id not in self._vps_waiters:
+            self._vps_waiters.append(client_id)
+            if len(self._vps_waiters) == 1:
+                self._vps_turn_until = max(self._clock(), self._client_vps_until) + 5.0
+
+    def _remove_vps_waiter(self, client_id: str) -> None:
+        if client_id in self._vps_waiters:
+            was_head = self._vps_waiters[0] == client_id
+            self._vps_waiters.remove(client_id)
+            if was_head:
+                self._vps_turn_until = max(self._clock(), self._client_vps_until) + 5.0
+
+    def _rotate_expired_vps_turn(self) -> None:
+        # A paused setup or denied camera cannot reserve the VPS slot forever.
+        if not self._vps_waiters or self._clock() < self._vps_turn_until:
+            return
+        client_id = self._vps_waiters[0]
+        state = self._clients.get(client_id)
+        if state is not None and state.in_flight:
+            return
+        self._vps_waiters.rotate(-1)
+        self._vps_turn_until = max(self._clock(), self._client_vps_until) + 5.0
+        if state is not None and state.pending:
+            state.prompt_due_at = self._clock() + 0.25
 
     def robot_vps_ready(self) -> bool:
         return self._clock() >= self._robot_vps_until
 
-    def begin_client_vps(self) -> None:
+    def begin_client_vps(self, client_id: str | None = None) -> None:
         self._client_vps_until = self._clock() + self._client_vps_cooldown_s
+        if client_id is not None:
+            self._remove_vps_waiter(client_id)
 
     def begin_robot_vps(self) -> None:
         self._robot_vps_until = self._clock() + self._robot_vps_cooldown_s
@@ -258,8 +336,11 @@ class LocalizationPolicy:
         if state.pending:
             return None
         state.pending = True
-        state.held_observations = None
-        if self._vps_only() and not self.client_vps_ready():
-            state.prompt_due_at = self._client_vps_until
-            return None
+        state.in_flight = False
+        state.generation += 1
+        if self._vps_only():
+            state.vps_waiting = True
+            if not self.client_vps_ready(client_id):
+                state.prompt_due_at = max(self._clock() + 0.25, self._client_vps_until)
+                return None
         return client_id

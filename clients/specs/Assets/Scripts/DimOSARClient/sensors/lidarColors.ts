@@ -10,16 +10,23 @@ export function lidarHeightColor(t: number): Vec3 {
 }
 
 /** Near obstacles are red, fading to white at the configured ground-plane distance from the robot pose. */
-export function lidarObstacleIntensity(point: Vec3, robot: Vec3, rangeM: number): number {
-  return Math.max(0, Math.min(1, Math.hypot(point[0] - robot[0], point[1] - robot[1]) / Math.max(0.001, rangeM)));
+export function lidarObstacleIntensity(point: Vec3, robot: Vec3, rangeM: number, odomScaleCorrectionFactor = 1): number {
+  const scale = requireScale(odomScaleCorrectionFactor);
+  return Math.max(0, Math.min(1, Math.hypot(point[0] - robot[0], point[1] - robot[1]) / scale / Math.max(0.001, rangeM)));
 }
 
-/** Horizontal clearance from a yaw-oriented body box, in the odometry plane. */
-export function lidarBodyClearance(point: Vec3, robot: Vec3, orientation: Quat, bounds: Vec3): number {
+/** Native sensor metres from a physical body box, undoing only the wire XY heuristic. */
+export function lidarBodyClearance(point: Vec3, robot: Vec3, orientation: Quat, bounds: Vec3, odomScaleCorrectionFactor = 1): number {
+  const scale = requireScale(odomScaleCorrectionFactor);
   const [qx, qy, qz, qw] = orientation;
   const yaw = Math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz));
-  const dx = point[0] - robot[0], dy = point[1] - robot[1];
+  const dx = (point[0] - robot[0]) / scale, dy = (point[1] - robot[1]) / scale;
   const x = dx * Math.cos(yaw) + dy * Math.sin(yaw);
   const y = -dx * Math.sin(yaw) + dy * Math.cos(yaw);
   return Math.hypot(Math.max(0, Math.abs(x) - bounds[0] / 2), Math.max(0, Math.abs(y) - bounds[1] / 2));
+}
+
+function requireScale(scale: number): number {
+  if (!Number.isFinite(scale) || scale <= 0) throw new Error("odometry scale must be finite and positive");
+  return scale;
 }

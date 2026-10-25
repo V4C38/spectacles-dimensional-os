@@ -645,3 +645,21 @@ it("decodes optional server display metadata while retaining old hello defaults"
   expect(next.type === "hello" && next.server_info).toEqual(info);
   expect(() => decodeOutbound(JSON.stringify({ ...HELLO_FIXTURE, server_info: { robot_ip: 42 } }))).toThrow();
 });
+
+it("decodes optional localization result deadlines and rejects invalid values", () => {
+  const request = { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 };
+  expect(decodeOutbound(JSON.stringify(request))).toEqual(request);
+  expect(decodeOutbound(JSON.stringify({ ...request, result_timeout_s: 15 }))).toEqual({ ...request, result_timeout_s: 15 });
+  for (const invalid of [0, -1, null, true, "15"]) {
+    expect(() => decodeOutbound(JSON.stringify({ ...request, result_timeout_s: invalid }))).toThrow();
+  }
+});
+
+it("accepts the optional robot XY heuristic while keeping older hello defaults", () => {
+  expect((decodeOutbound(JSON.stringify(HELLO_FIXTURE)) as import("../../Assets/Scripts/DimOSARClient/websocket/protocolTypes").Hello).robot).toEqual(HELLO_FIXTURE.robot);
+  const hello = { ...HELLO_FIXTURE, robot: { ...HELLO_FIXTURE.robot, odom_scale_correction_factor: 1.25 } };
+  expect((decodeOutbound(JSON.stringify(hello)) as import("../../Assets/Scripts/DimOSARClient/websocket/protocolTypes").Hello).robot).toEqual(hello.robot);
+  for (const scale of [0, -1, null, true, "1.25"]) {
+    expect(() => decodeOutbound(JSON.stringify({ ...hello, robot: { ...hello.robot, odom_scale_correction_factor: scale } }))).toThrow();
+  }
+});

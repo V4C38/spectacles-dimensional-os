@@ -101,3 +101,34 @@ def test_non_positive_factor_raises(factor: float) -> None:
 
     with pytest.raises(ValueError, match="positive"):
         uncorrect_odom_xy(1.0, 2.0, factor=factor)
+
+
+@pytest.mark.parametrize("factor", [1.0, 1.25, 2.0])
+def test_world_cloud_uses_same_fixed_xy_mapping_as_pose_and_path(factor: float) -> None:
+    import numpy as np
+
+    from dimos.ar.robot.odometry_correction import correct_odom_points
+
+    raw = np.array([[4.2, -2, 0.5], [6.0, -1, 1.0]], dtype=np.float32)
+    before = raw.copy()
+    corrected = correct_odom_points(raw, factor=factor)
+    path = correct_odom_path(Path(poses=[_sample_pose(*point) for point in raw]), factor=factor)
+    assert corrected == pytest.approx(np.asarray([[pose.x, pose.y, pose.z] for pose in path.poses]))
+    assert np.array_equal(raw, before)
+    assert not np.shares_memory(raw, corrected)
+    assert np.array_equal(corrected[:, 2], raw[:, 2])
+    # Repeating the same world geometry never depends on the current robot pose.
+    assert np.array_equal(correct_odom_points(before, factor=factor), corrected)
+
+
+@pytest.mark.parametrize("factor", [float("nan"), float("inf"), 0.0, -1.0])
+def test_all_coordinate_boundaries_reject_invalid_factor(factor: float) -> None:
+    import numpy as np
+
+    from dimos.ar.robot.odometry_correction import correct_odom_points
+
+    for convert in (correct_odom_xy, uncorrect_odom_xy):
+        with pytest.raises(ValueError):
+            convert(1, 2, factor=factor)
+    with pytest.raises(ValueError):
+        correct_odom_points(np.zeros((1, 3)), factor=factor)

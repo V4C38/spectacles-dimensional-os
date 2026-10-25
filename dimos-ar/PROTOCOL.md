@@ -108,38 +108,52 @@ mapping so their terminal robot heading matches the displayed arrow.
 
 ### Odometry scale correction
 
-The Go2 under-reports how far it has travelled, because its odometry is derived
-from leg kinematics and feet slip during stance. ARModule corrects this with a
-fixed per-robot constant before anything reaches the wire, so clients do not
-need to know it exists.
+Go2 uses an empirical XY multiplier of **1.25** to compensate for observed
+under-reporting of motion. It is a dead-reckoning heuristic, not a calibrated
+sensor model or a complete correction for time-varying drift. Set
+`armodule.odom_scale_correction_factor` at startup to override the robot profile
+(e.g. 1.0 for a source that does not need it). The installed WebRTC adapter reads
+`rt/utlidar/robot_pose`; it does not read `sportmodestate` for this odometry port.
+No claim about the firmware estimator's internals follows from that topic name.
 
-What carries the correction, and what does not:
+ARModule uses one fixed mapping at the boundary:
 
-| Data | Corrected |
-|------|-----------|
-| `pose` position, X and Y | yes |
-| Robot odometry used to anchor `localization_result`, X and Y | yes |
-| `nav_goal` pose and `path_poses` X and Y | yes |
-| `nav_goal_request` position X and Y (inverted on ingress) | yes |
-| Height (Z) on any message | no |
-| Orientation on any message | no |
-| `speed_mps` and any other rate or direction | no |
-| `nav_joystick_request` linear and angular | no |
-| `lidar` points | no |
+```text
+AR XY = factor * native DimOS XY
+native DimOS XY = AR XY / factor
+Z is unchanged
+```
 
-Height is excluded because slip costs horizontal travel, not altitude.
-Localization corrects the robot odometry before composing measured marker mounts
-and camera poses. The completed `T_odom_client` is a rigid metric transform;
-its translation must not be multiplied by the odometry correction factor.
-Orientation is excluded because heading error is not a linear factor and there
-is nothing sound to scale. LiDAR is excluded because its points are metric range
-measurements rather than dead-reckoned positions, and stretching them would
-misreport the size of the room.
+| Data | Correction |
+|------|------------|
+| Robot `pose`, active/preview paths and LiDAR world points | Fixed XY multiplier on egress |
+| Robot odometry used by marker/VPS localization | Same XY multiplier before physical mounts are composed |
+| `nav_goal_request` | Inverse XY multiplier before native planning |
+| `ar_place_marker` agent tool | Native DimOS input → corrected wire point |
+| `ar_get_client_pose` agent tool | Corrected client pose → native DimOS position/viewing ray |
+| Heights, robot body dimensions and physical camera/marker mounts | Unchanged |
+| Quaternions, joystick velocities and physical speed limits | Unchanged |
+| LiDAR filtering/downsampling ranges and obstacle halo distances | Native sensor metres |
 
-The practical consequence for a client: **`lidar` and `pose` are both correct but
-are not perfectly mutually consistent**, and they diverge with distance from the
-odometry origin. Do not derive one from the other, and do not use `pose` to
-re-anchor the cloud. Each `localization_result` re-anchoring resets the divergence.
+The completed `T_odom_client` is composed from the corrected robot position and
+physical camera/marker measurements; it must not be multiplied again. Clients
+render each wire point directly through that origin. **Do not multiply LiDAR
+coordinates again on the client.** Specs and WebXR receive the same corrected data.
+
+LiDAR XY is scaled about the fixed native odometry origin, independent of the
+robot's current position. Repeated voxel-map geometry therefore stays registered.
+A robot-relative per-packet translation is not equivalent and is not used.
+Native maps, costmaps, obstacle clearances, and the confirmed DimOS planner stay
+unchanged. Navigation inputs are converted back into that native frame.
+
+The displayed horizontal size of a LiDAR feature also increases by the factor;
+1.25 is explicitly an approximate AR world correction, not a claim that laser
+ranges are 25% longer. The optional `hello.robot.odom_scale_correction_factor`
+(default 1 when absent) lets portable sensor policies undo the mapping for native
+range/clearance calculations. Physical calibration still requires a survey, and
+repeated marker/VPS localization handles alignment drift that one constant cannot.
+Changing the factor requires restarting ARModule and reconnecting clients so
+origins, paths, previews and points cannot mix old/new coordinate models.
 
 ## Multiple clients
 
@@ -223,6 +237,7 @@ connection, and replies with `hello`.
 | `robot.body_bounds_m` | `[L, W, H]` | Axis-aligned envelope in `odom` axes: length X, width Y, height Z. |
 | `robot.footprint_m` | `[L, W]` | Ground footprint for nav UI. |
 | `robot.base_height_m` | float | Height of the odometry pose origin above the ground, so a client can place a ground marker under a `pose`. |
+| `robot.odom_scale_correction_factor` | float | Optional finite positive native-to-AR XY heuristic, default 1 when absent. Points/poses are already corrected; use it only to recover native distances. |
 | `capabilities.*.available` | bool | Feature gate for client UI. Keys are `lidar`, `navigation`, `localization`, `estop`, and `agent`. |
 | `capabilities.*.reason` | string \| null | Human-readable, non-null exactly when `available` is `false`. |
 | `capabilities.navigation.nav_goal` | `{ available, reason, preview? }` | Can send `nav_goal_request`. Always present. Optional boolean `preview` defaults to false. |
@@ -344,7 +359,7 @@ Do not wait for ACK. Unknown `name` values are ignored on the host.
 | `args` | object | Opaque JSON object. Known names with invalid args fail closed. |
 
 `ar_place_marker` args are a required `id` (non-blank, max 64, trimmed), an
-odom-frame point (`x`, `y`, `z` in meters), and an optional `title`. Omit
+corrected wire-odom point (`x`, `y`, `z`), and an optional `title`. Omit
 `title` or send `""` for an unlabeled marker. Same `id` upserts. The host
 composes the point through `T_odom_client` and instantiates the marker prefab.
 
@@ -374,6 +389,7 @@ the result timeout is only a fallback for a missing response.
 | `capture_policy` | string | `robot_los_required` \| `robot_los_preferred` \| `any_angle`. Geometric gate only — not a provider name. |
 | `observation_count` | uint | Exact batch size. The client always sends this many frames. |
 | `wait_timeout_s` | float | Required when `capture_policy` is `robot_los_preferred`. Omitted otherwise. |
+| `result_timeout_s` | float | Optional finite positive result deadline in seconds from batch submission. Default 15 when absent. |
 
 The default client frame spacing is 0.5 seconds. A fiducial episode requests
 three observations and requires at least two agreeing marker detections after
@@ -398,7 +414,9 @@ Example with timeout:
 ### `localization_result`
 
 The client's own pose in `odom` — its tracking origin expressed in odom
-coordinates. Apply the newest one received.
+coordinates. Apply only a result matching the currently outstanding capture batch
+in this connection and localization generation. A paused, reset, timed-out, or
+superseded capture must not change the origin or complete a later episode.
 
 ```json
 {
@@ -413,14 +431,29 @@ coordinates. Apply the newest one received.
 | Field | Notes |
 |-------|-------|
 | `confidence` | 0.0–1.0. |
-| `ts` | `ts_server` when the fix was produced. Wire key stays `ts`. |
+| `ts` | Latest submitted capture timestamp converted to the server clock: `max(ts_capture) + hello.time_sync.ts_server - hello.time_sync.ts_client`. This identifies the submitted batch; it is not HTTP completion time. |
 
 Sent only after a successful capture episode that started with
 `localization_observations_request` (whether ARModule prompted on its own or a
 client asked with `localization_start_request`). Never
 unsolicited — a `T_odom_map` refresh does not push a new result.
 
-After 0.75 m of accumulated corrected robot travel since the last successful
+ClientCore registers a batch before sending it and requires its capture-derived
+`ts` (within 1 microsecond of float64 rounding), before the advertised result
+deadline. Camera timestamps must increase between submissions in one connection;
+retries need fresh frames. Unmatched results are ignored before origin updates
+or subscriber delivery. The LOCA binary layout is unchanged; there is no ACK/seq.
+Older servers omitting `result_timeout_s` use the 15-second client fallback.
+
+ARModule admits at most one episode per client and one global VPS workflow.
+Localization never occupies a client's WebSocket read loop. The default server
+budget is 12 seconds from admission, including CPU/HTTP queueing, authentication,
+token refresh, and robot/headset queries; the advertised client timeout is the
+configured budget plus 3 seconds. Cancellation retires delivery and aborts HTTP.
+A miss or exception schedules a new capture after backoff/provider cooldowns;
+images are never held through a cooldown. Polling does not depend on odometry.
+
+After 0.75 m of accumulated corrected robot travel since the capture used by the last successful
 fix, ARModule requests another episode without waiting for a navigation goal to
 finish. A marker-only client waits for the robot to enter its geometric capture
 gate, and pauses a partial batch if it leaves that gate. Successful setup keeps
@@ -445,7 +478,7 @@ Robot pose in `odom`, at high rate.
 
 | Field | Notes |
 |-------|-------|
-| `ts` | Odometry timestamp (`ts_odom`): DimOS `PoseStamped.ts` from the Go2, seconds, floating point. Not server time. |
+| `ts` | Producer odometry timestamp (`PoseStamped.ts`), seconds. Current Go2 WebRTC stamps producer receipt time in the synchronized host clock; this is not a hardware capture timestamp. |
 
 X and Y carry the odometry scale correction; Z and orientation do not. Optional
 fields may be added later (`speed_mps`, `yaw_rate_rad_s`); clients ignore unknown keys.
@@ -503,8 +536,10 @@ or no plan exists. `pose` is omitted on clear:
 | 16 | `point_count * 12` | Points: `[x, y, z]` float32 triplets in `odom` |
 
 Points are pre-filtered on ARModule: height band, range, and subsampling
-toward the robot. They carry **no scale correction** — see the coordinate section
-above for why, and for why they must not be reconciled against `pose`.
+toward the robot, all in native sensor metres. Their world X/Y coordinates then
+receive the same fixed correction as `pose` and `nav_goal`. Z is unchanged.
+Use hello's optional scale factor to recover native horizontal distances for
+obstacle coloring; no client-side coordinate scaling is required.
 
 ## Inbound messages (client → server)
 
@@ -820,3 +855,67 @@ ARModule's running process. The robot address comes from effective DimOS configu
 replay/simulation is displayed as `Simulated`. Missing metadata means unavailable,
 not disconnected. Older servers may omit the object; clients ignore unknown fields.
 The page's server address remains distinct from the robot address.
+
+## Localization qualification and coordinate correction
+
+The VPS REST frame conversion and robot/headset composition use the normalized
+right-handed Z-up VPS map frame. DimOS's optional premap frame is independent;
+a transform named `world -> map` is not automatically a VPS registration. ARModule
+no longer polls and relabels that transform as an odom/VPS anchor.
+
+Robot odometry is indexed by producer time in the server clock domain. Go2 WebRTC
+currently stamps odometry, decoded video, and voxel-map packets at receipt, so these
+are **not hardware exposure timestamps**. Known Go2 replay streams instead use one
+shared recorded-to-server epoch, bound once from the first odometry arrival; later
+arrival delay never changes that offset. Live boot-time/unknown clocks are not
+silently rebased. Robot VPS capture requires continuous
+pose history spanning a provisional ±0.5-second uncertainty window, translation
+speed ≤0.05 m/s, and angular speed ≤0.05 rad/s. Encoding runs off-loop after the
+future bracket arrives. A robot image must be ≤2 seconds old at query admission;
+normal HTTP latency does not reapply this image-age limit after the query.
+AprilTag localization requires a robot pose within 0.25 seconds and does not
+substitute the origin when odometry is missing.
+
+VPS anchors retain capture-time robot travel and immutable transform snapshots.
+Their initial limits are 1 metre of subsequent travel and 60 seconds of capture
+age; both source generation and map identity must match. These checks run before
+and after awaited queries. Composed confidence is the minimum of robot/headset
+confidence, a conservative quality score rather than a calibrated probability.
+`armodule.localization.episode_timeout_s` (default 12), `anchor_max_age_s` (60),
+and `robot_timing_uncertainty_s` (0.5) are configurable, provisional engineering
+limits. They do not certify physical calibration or bound undocumented camera
+transport latency. A detected robot clock/frame reset retires pending work and
+connections; AR navigation requires restarting DimOS mapping with a fresh map.
+
+The 1.25 heuristic now consistently covers all outbound odometry-space points,
+including LiDAR, with inverse conversion for native navigation and agent inputs.
+This is a fixed AR coordinate mapping, not an upstream sensor/map migration. The
+installed Go2 WebRTC source is `rt/utlidar/voxel_map_compressed`; individual scan
+provenance is unavailable on this port. A proposed robot-relative packet shift
+`point + (corrected_robot - raw_robot)` was rejected because its offset changes
+with robot motion. The implemented mapping is instead `XY *= factor` about a
+fixed origin for every packet, which preserves registration between packets.
+
+A read-only check is available using the installed DimOS environment:
+
+```sh
+python tools/check_go2_registration.py /path/to/go2_short.db --factor 1.25 --output report.json
+```
+
+It returns exit code 2 when repeated geometry rejects the robot-relative packet
+translation. Fixed XY scaling is measured separately in the report; neither
+comparison qualifies absolute physical scale. On the existing
+`go2_short.db` recording (461 frames), frames 31 and 38 are 0.918 m apart: 91.7% of
+non-floor points overlap within 2 cm before translation and 0% afterward. This
+rejects the time-varying translation, not the fixed scale heuristic. Applying
+1.25 to both clouds about the fixed origin retains the same 91.7% overlap and
+zero median registration residual for this pair. The tool opens the recording read-only and does
+not publish goals, alter maps, or modify upstream DimOS.
+
+Replacing the heuristic with a calibrated metric sensor migration requires either individually timestamped
+scans plus their generating poses, or a validated registration strategy for the
+vendor map. Use surveyed distances and repeated stationary obstacles across
+translation/rotation. Rebuild accumulated maps and retire active goals, previews,
+and client alignment together when changing the coordinate model; never mix old
+and new map generations. Physical Quest camera calibration and VPS alignment
+acceptance remain separate device tests documented in `clients/webxr/CALIBRATION.md`.

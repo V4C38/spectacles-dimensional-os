@@ -3,7 +3,7 @@ import type { RecognitionPort } from "@dimos-ar-client/agent/AgentDraftSession";
 import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
 import { BrowserWebSocketTransport } from "../src/websocket/BrowserWebSocketTransport";
 import { cameraFixture } from "./fixtures/camera";
-import { LIDAR_FOURCC } from "@dimos-ar-client/websocket/protocol";
+import { LIDAR_FOURCC, decodeLocalizationObservations } from "@dimos-ar-client/websocket/protocol";
 import type { Hello, State } from "@dimos-ar-client/websocket/protocolTypes";
 
 class Socket {
@@ -15,6 +15,11 @@ class Socket {
   onmessage: ((event: MessageEvent) => void) | null = null;
   sent: (string | Uint8Array)[] = [];
   send(value: string | Uint8Array) { this.sent.push(value); }
+  result(position = [0, 0, 0]) {
+    const packet = this.sent.filter((value): value is Uint8Array => value instanceof Uint8Array).at(-1)!;
+    const ts = Math.max(...decodeLocalizationObservations(packet).observations.map(observation => observation.ts_capture));
+    this.receive({ ...alignment, position, ts });
+  }
   close() { this.readyState = 3; }
   open() { this.readyState = 1; this.onopen?.(new Event("open")); }
   receive(message: object) { this.onmessage?.({ data: JSON.stringify(message) + "\n" } as MessageEvent); }
@@ -39,7 +44,7 @@ const alignment = { type: "localization_result", position: [0, 0, 0], orientatio
 const request = { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 };
 const cleanup: (() => void)[] = [];
 afterEach(() => { cleanup.splice(0).forEach(dispose => dispose()); });
-function fixture(recognition: RecognitionPort | null = null) {
+function fixture(recognition: RecognitionPort | null = null, odomScale = 1) {
   let now = 10;
   const sockets: Socket[] = [];
   const camera = cameraFixture(undefined, { now: () => now });
@@ -57,11 +62,18 @@ function fixture(recognition: RecognitionPort | null = null) {
     const socket = sockets[sockets.length - 1];
     socket.open();
     expect(client.ui.snapshot().connectionText).toBe("Connecting…");
-    socket.receive(hello); socket.receive(state);
+    socket.receive({ ...hello, robot: { ...hello.robot, odom_scale_correction_factor: odomScale } }); socket.receive(state);
     socket.receive({ type: "pose", position: [2, 0, 0.33], orientation: [0, 0, 0, 1], ts: 10 });
     return socket;
   }
   return { client, camera, sockets, tick, connect, advance: (delta: number) => { now += delta; } };
+}
+function submitAlignment(client: DimOSWebXRClient, timestamp: number) {
+  client.session.submitLocalizationObservations([{
+    ts_capture: timestamp, jpeg: new Uint8Array([1]),
+    intrinsics: { fx: 1, fy: 1, cx: 0, cy: 0, width: 1, height: 1, distortion_model: "none", distortion: [] },
+    camera_position: [0, 0, 0], camera_orientation: [0, 0, 0, 1],
+  }]);
 }
 async function settle() { for (let i = 0; i < 30; i++) await Promise.resolve(); }
 
@@ -85,7 +97,7 @@ describe("WebXR complete ARModule session", () => {
     expect(f.client.episode.view().phase).toBe("awaiting_result");
     expect(f.client.session.view().connection).toBe("ready");
     // Results complete setup without requiring another XR frame (e.g. focus is blurred).
-    socket.receive(alignment);
+    socket.result();
     expect(f.client.ui.setupCompleted).toBe(true);
     f.tick();
     expect(socket.commands("lidar_settings_request").at(-1)?.enabled).toBe(true);
@@ -108,7 +120,8 @@ describe("WebXR complete ARModule session", () => {
     expect(f.client.lidar.object.visible).toBe(true);
     expect(f.client.markers.object.children[0].position.z).toBeCloseTo(-3);
     const before = f.client.robot.object.position.clone();
-    socket.receive({ ...alignment, position: [0.2, 0, 0], ts: 11 }); f.tick();
+    submitAlignment(f.client, 11);
+    socket.result([0.2, 0, 0]); f.tick();
     expect(f.client.robot.object.position.z).toBeCloseTo(before.z + 0.2);
     expect(f.client.navigation.marker.pose().position[2]).toBeCloseTo(-2.8);
     expect(f.client.markers.object.children[0].position.z).toBeCloseTo(-2.8);
@@ -122,7 +135,7 @@ describe("WebXR complete ARModule session", () => {
     expect(f.client.episode.view().phase).toBe("capturing");
     await f.camera.source.waitUntilOpen(); f.tick(); await settle(); f.camera.emit(); await settle();
     expect(f.client.episode.view().phase).toBe("awaiting_result");
-    socket.receive(alignment); expect(f.client.episode.view().phase).toBe("idle");
+    socket.result(); expect(f.client.episode.view().phase).toBe("idle");
   });
 
   it("keeps scanning after missed marker batches and completes when the user looks later", async () => {
@@ -150,13 +163,13 @@ describe("WebXR complete ARModule session", () => {
       }
     }
     expect(f.camera.frames.start).toHaveBeenCalledTimes(1);
-    socket.receive(alignment);
+    socket.result();
     expect(f.client.ui.setupCompleted).toBe(true);
     expect(f.client.episode.view().phase).toBe("idle");
   });
 
   it("uses one white navigation target that follows the robot when idle and returns after arrival", () => {
-    const f = fixture(); const socket = f.connect(); socket.receive(alignment);
+    const f = fixture(); const socket = f.connect(); submitAlignment(f.client, 9); socket.result();
     f.client.ui.nextSetup(); f.tick();
     const marker = f.client.navigation.marker;
     expect(marker.object.visible).toBe(true);
@@ -199,7 +212,7 @@ describe("WebXR complete ARModule session", () => {
   });
 
   it("keeps joystick active with the menu open and releases on mode changes, input loss, and tracking resets", () => {
-    const f = fixture(); const socket = f.connect(); socket.receive(alignment);
+    const f = fixture(); const socket = f.connect(); submitAlignment(f.client, 9); socket.result();
     f.client.ui.nextSetup(); f.tick();
     for (let i = 0; i < 17; i++) { f.advance(0.1); f.tick(); }
     f.tick({ x: 0, y: -1 });
@@ -218,7 +231,7 @@ describe("WebXR complete ARModule session", () => {
     expect(f.client.originStore.hasTrackingOrigin).toBe(false);
     expect(f.client.ui.setupCompleted).toBe(false);
     expect(f.client.ui.wizardStep).toBe("localization");
-    socket.receive(alignment); // Retired socket cannot restore old reference-space alignment.
+    socket.result(); // Retired socket cannot restore old reference-space alignment.
     expect(f.client.originStore.hasTrackingOrigin).toBe(false);
     f.client.resumeTracking();
     expect(f.client.session.view().connection).toBe("connecting");
@@ -239,7 +252,7 @@ describe("WebXR complete ARModule session", () => {
   });
 
   it("retries handshake through the existing session and restores post-setup settings", () => {
-    const f = fixture(); const socket = f.connect(); socket.receive(alignment);
+    const f = fixture(); const socket = f.connect(); submitAlignment(f.client, 9); socket.result();
     f.client.ui.nextSetup(); f.tick();
     socket.onclose?.(new Event("close"));
     expect(f.client.ui.snapshot().connectionText).toBe("Reconnecting…");
@@ -284,7 +297,7 @@ it("sends each emergency stop once immediately and keeps feedback pressed for 35
 });
 
 it("retires stale localization responses while retaining a dismissable alignment", () => {
-  const f = fixture(); const socket = f.connect(); socket.receive(alignment);
+  const f = fixture(); const socket = f.connect(); submitAlignment(f.client, 9); socket.result();
   const saved = f.client.originStore.T_odom_client;
   f.client.recoverUnknownTrackingReset();
   expect(f.client.originStore.T_odom_client).toEqual(saved);
@@ -309,4 +322,20 @@ it("keeps per-mode sensor ranges and applies point limits locally", () => {
   expect(f.client.ui.lidarPreferences.obstacleRangeM).toBe(0.7);
   f.client.ui.setLidarMode("full");
   expect(socket.commands("lidar_settings_request").at(-1)?.max_range_m).toBe(4.5);
+});
+
+
+it("uses the advertised XY heuristic only for native sensor clearance", () => {
+  const f = fixture(null, 1.25); const socket = f.connect();
+  submitAlignment(f.client, 9); socket.result();
+  f.client.ui.nextSetup();
+  socket.receive({ type: "pose", position: [5, -2.5, 0.33], orientation: [0, 0, 0, 1], ts: 10 });
+  f.client.ui.lidarPreferences.obstacleRangeM = 0.6;
+  f.client.ui.setLidarMode("obstacles");
+  const data = new ArrayBuffer(28), wire = new DataView(data);
+  wire.setUint32(0, LIDAR_FOURCC, true); wire.setFloat64(4, 10, true); wire.setUint32(12, 1, true);
+  wire.setFloat32(16, 6, true); wire.setFloat32(20, -2.5, true); wire.setFloat32(24, 0.4, true);
+  socket.onmessage?.({ data } as MessageEvent); f.tick();
+  expect(f.client.lidar.object.geometry.getAttribute("color").getW(0)).toBeCloseTo(0.15625);
+  expect(f.client.lidar.object.geometry.getAttribute("position").getZ(0)).toBeCloseTo(-6);
 });

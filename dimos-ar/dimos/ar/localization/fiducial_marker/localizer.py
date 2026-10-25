@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import copy
 from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING
@@ -23,7 +24,7 @@ from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
 
 logger = setup_logger()
 
-_MAX_ROBOT_POSE_AGE_S = 1.0
+_MAX_ROBOT_POSE_AGE_S = 0.25
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -95,6 +96,15 @@ class FiducialMarkerLocalizer(Localizer):
         parameters = self._detector.getDetectorParameters()
         parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
         self._detector.setDetectorParameters(parameters)
+
+    def snapshot(self) -> FiducialMarkerLocalizer:
+        """Freeze pose history on the owning loop before dispatching CPU work.
+
+        Detector access is serialized by the shared LocalizationWorker.
+        """
+        result = copy.copy(self)
+        result._pose_buffer = self._pose_buffer.snapshot()
+        return result
 
     def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None:
         candidates: list[_FiducialCandidate] = []
@@ -189,13 +199,17 @@ class FiducialMarkerLocalizer(Localizer):
             max_gap_s=_MAX_ROBOT_POSE_AGE_S,
         )
 
+        if robot is None:
+            misses.append("missing_robot_pose")
+            return None
+
         camera_matrix, dist_coeffs = _intrinsics_to_cv(observation.intrinsics)
         corners_list, ids, _ = self._detector.detectMarkers(gray)
         if ids is None or len(ids) == 0:
             misses.append("no_marker")
             return None
 
-        T_odom_base = np.eye(4, dtype=np.float64) if robot is None else _sample_to_matrix(robot)
+        T_odom_base = _sample_to_matrix(robot)
         T_client_camopt = np.asarray(pose_to_matrix(observation.camera_pose), dtype=np.float64)
 
         best: _FiducialCandidate | None = None

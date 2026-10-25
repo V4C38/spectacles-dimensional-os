@@ -58,6 +58,7 @@ Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-
 | `ARModuleSession` | Connection and newest wire facts (`hello`, `state`, `pose`, `nav_goal`, `nav_preview`, `lidar`) |
 | `ClientTrackingOriginStore` | The one `T_odom_client` |
 | `LocalizationCaptureEpisode` | Current localization request and observations |
+| `LocalizationSubmission` | Outstanding capture timestamp and result acceptance deadline |
 | `RobotSelection` | Single-robot selection and eligibility |
 | `AgentDraftSession` | Draft and dictation lifecycle |
 | `NavigationInteraction` | Navigation interaction intent |
@@ -375,8 +376,8 @@ these correctness checks and the server's two-inlier/quality gates remain intact
 Use `?diagnostics=1` for `localization-stage`, `localization-camera-wait` and
 `localization-camera-encoded` events. The Diagnostics page also reports episode, batch and
 result-wait seconds and batch count. Specs emits matching batch/result/failure stages. Server
-`localization processing timing` records client ID, newest capture timestamp, worker queue
-and processing milliseconds, success and deferral. Fiducial misses distinguish absent/unknown
+`localization processing timing` records client ID, newest capture timestamp, total episode
+processing milliseconds (including CPU/HTTP admission), success and deferral. Fiducial misses distinguish absent/unknown
 markers, PnP failure, reprojection error, gravity-tilt rejection and fusion/inlier rejection.
 No image or credential data is added to diagnostics.
 
@@ -387,3 +388,17 @@ The automated batch test measures one second of frame spacing and immediate resu
 application; it does not establish a physical Quest localization latency. The reported
 30-second session was not available in the saved logs, so its specific bottleneck still
 requires one captured physical trace rather than an inferred timeout adjustment.
+
+
+ARModule localization policy, cooldowns, anchor commits and result delivery run on its
+module event loop, including connect callbacks. `LocalizationRunner` bounds one job per
+client and retires generations on replacement/disconnect. `LocalizationWorker` holds
+CPU admission until the native operation really finishes after cancellation; marker
+jobs receive frozen pose history. VPS uses a loop-owned async HTTP session and one
+serialized robot/headset workflow. No localization handler awaits an episode from the
+WebSocket read loop. ClientCore checks capture-derived result timestamps before origin
+updates; hosts do not duplicate that acceptance state. See `dimos-ar/PROTOCOL.md` for
+provisional timing limits and the recorded-data rejection of the proposed voxel-map
+packet translation. The fixed 1.25 XY heuristic now covers poses, paths and LiDAR
+at the AR boundary; native sensor filtering/planning stays unchanged, and Core
+undoes the advertised factor only when calculating native sensor distances.

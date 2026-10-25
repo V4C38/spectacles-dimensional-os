@@ -325,6 +325,8 @@ function handshake(session: ARModuleSession, transport: FakeTransport, clock: Fa
   expect(transport.texts).toHaveLength(1);
 }
 
+const sessionTransports = new WeakMap<ARModuleSession, FakeTransport>();
+
 function makeController(initiallyPaused = false): {
   controller: LocalizationCaptureEpisode;
   session: ARModuleSession;
@@ -356,6 +358,7 @@ function makeController(initiallyPaused = false): {
     config: CAPTURE_CONFIG,
     initiallyPaused,
   });
+  sessionTransports.set(session, transport);
   return { controller, session, transport, clock, originStore, tracking, capture };
 }
 
@@ -374,16 +377,22 @@ function deliverPose(session: ARModuleSession, position: Vec3): void {
   );
 }
 
+function seedOrigin(session: ARModuleSession, position: Vec3 = [0, 0, 0]): void {
+  session.submitLocalizationObservations([{
+    ts_capture: 0, jpeg: new Uint8Array([1]),
+    intrinsics: { fx: 1, fy: 1, cx: 0, cy: 0, width: 1, height: 1, distortion_model: "none", distortion: [] },
+    camera_position: [0, 0, 0], camera_orientation: IDENTITY_Q,
+  }]);
+  deliverResult(session, position);
+}
+
 function deliverResult(session: ARModuleSession, position: Vec3 = [0, 0, 0]): void {
-  session.onTransportText(
-    JSON.stringify({
-      type: "localization_result",
-      position,
-      orientation: IDENTITY_Q,
-      confidence: 1,
-      ts: 1,
-    }) + "\n",
-  );
+  const binary = sessionTransports.get(session)!.binaries.at(-1)!;
+  const observations = decodeLocalizationObservations(binary).observations;
+  const sync = session.view().hello!.time_sync;
+  const ts = Math.max(...observations.map(observation => observation.ts_capture)) + sync.ts_server - sync.ts_client;
+  session.onTransportText(JSON.stringify({ type: "localization_result", position,
+    orientation: IDENTITY_Q, confidence: 1, ts }) + "\n");
 }
 
 function startRequestCount(transport: FakeTransport): number {
@@ -391,7 +400,7 @@ function startRequestCount(transport: FakeTransport): number {
 }
 
 function setOriginLookingAtRobot(session: ARModuleSession): void {
-  deliverResult(session);
+  seedOrigin(session);
   deliverPose(session, [0, 0, 1]);
 }
 
@@ -528,7 +537,7 @@ describe("localization capture", () => {
 
   it("gates in the tracking frame when T_odom_client is not the identity", async () => {
     const { controller, session, capture } = makeController();
-    deliverResult(session, [10, 0, 0]);
+    seedOrigin(session, [10, 0, 0]);
     deliverPose(session, [10, 0, 1]);
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 1 });
     expect(controller.view().phase).toBe("capturing");
@@ -732,7 +741,7 @@ describe("localization capture", () => {
     expect(controller.view().phase).toBe("failed");
   });
 
-  it("a localization_result after failed still ends the episode", async () => {
+  it("discards localization_result after its result timeout", async () => {
     const { controller, session, clock } = makeController();
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
     controller.tick();
@@ -741,7 +750,8 @@ describe("localization capture", () => {
     controller.tick();
     expect(controller.view().phase).toBe("failed");
     deliverResult(session);
-    expect(controller.view().phase).toBe("idle");
+    expect(controller.view().phase).toBe("failed");
+    expect(session.view().hasTrackingOrigin).toBe(false);
   });
 
   it("fails when tracking throws while waiting for the gate", () => {
@@ -855,7 +865,7 @@ describe("localization capture", () => {
 
   it("robot_los_required with T_odom_client but no pose stays waiting_for_geometric_gate", () => {
     const { controller, session, capture } = makeController();
-    deliverResult(session);
+    seedOrigin(session);
     deliverRequest(session, { type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 1 });
     expect(controller.view().phase).toBe("waiting_for_geometric_gate");
     controller.tick();
@@ -950,4 +960,40 @@ it("measures a three-frame batch separately from server wait and applies the fir
   f.clock.nowS = 30; expect(controller.timing().resultWaitS).toBeCloseTo(0.2);
   expect(traces.filter(stage => stage === "frame-captured")).toHaveLength(3);
   expect(traces).toContain("batch-sent"); expect(traces).toContain("result-received"); controller.dispose();
+});
+
+it("uses the optional server result timeout and retains the legacy default when absent", async () => {
+  const f = makeController();
+  deliverRequest(f.session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1, result_timeout_s: 20 });
+  f.controller.tick(); await settleCapture();
+  f.clock.nowS = 16; f.controller.tick();
+  expect(f.controller.view().phase).toBe("awaiting_result");
+  deliverResult(f.session);
+  expect(f.controller.view().phase).toBe("idle");
+});
+
+it("does not let a previous batch replace the origin or finish its replacement", async () => {
+  const f = makeController();
+  const request = { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 } as const;
+  deliverRequest(f.session, request); f.controller.tick(); await settleCapture();
+  const first = decodeLocalizationObservations(f.transport.binaries.at(-1)!).observations[0];
+  deliverRequest(f.session, request); f.controller.tick(); await settleCapture();
+  const sync = f.session.view().hello!.time_sync;
+  f.session.onTransportText(JSON.stringify({ type: "localization_result", position: [9, 9, 0], orientation: IDENTITY_Q,
+    confidence: 1, ts: first.ts_capture + sync.ts_server - sync.ts_client }) + "\n");
+  expect(f.originStore.hasTrackingOrigin).toBe(false);
+  expect(f.controller.view().phase).toBe("awaiting_result");
+  deliverResult(f.session, [1, 0, 0]);
+  expect(f.originStore.T_odom_client?.position).toEqual([1, 0, 0]);
+  expect(f.controller.view().phase).toBe("idle");
+});
+
+it("invalidates pending result acceptance when setup pauses", async () => {
+  const f = makeController();
+  deliverRequest(f.session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
+  f.controller.tick(); await settleCapture();
+  f.controller.pause();
+  deliverResult(f.session);
+  expect(f.originStore.hasTrackingOrigin).toBe(false);
+  expect(f.controller.view().phase).toBe("idle");
 });

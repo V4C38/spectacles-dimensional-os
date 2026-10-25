@@ -4,7 +4,7 @@ import math
 import time
 from typing import TYPE_CHECKING, Protocol
 
-from dimos.ar.robot.odometry_correction import correct_odom_pose
+from dimos.ar.robot.odometry_correction import correct_odom_points, correct_odom_pose
 from dimos.ar.sensors.lidar_filter import (
     DEFAULT_TARGET_POINTS,
     LidarFilterSettings,
@@ -93,7 +93,10 @@ class RobotStatePublisher:
             settings=settings,
             robot_position=robot_position,
         )
-        points = [tuple(point) for point in prepared]
+        # Filter/downsample using native sensor metres, then use the exact same
+        # constant XY mapping as pose/path. Accumulated voxels stay stationary.
+        corrected = correct_odom_points(prepared, factor=self._odom_scale_correction_factor)
+        points = [tuple(point) for point in corrected]
         self._lidar_last_emit_mono = time.monotonic()
         self._ws.schedule_broadcast_binary(
             encode_lidar_binary(ts=msg.ts, points=points),

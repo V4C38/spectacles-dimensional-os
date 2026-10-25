@@ -62,8 +62,10 @@ def test_localizes_rendered_table_marker_from_three_optical_camera_poses() -> No
                 ts_server=100.0,
             )
         )
+    pose_buffer = PoseBuffer()
+    pose_buffer.push(PoseStamped(ts=100, position=[0, 0, 0]), ts_server=100)
     localizer = FiducialMarkerLocalizer(
-        pose_buffer=PoseBuffer(),
+        pose_buffer=pose_buffer,
         marker_mounts=[
             FiducialMarkerMount(
                 marker_id=0,
@@ -202,7 +204,7 @@ def test_localize_without_detected_marker_returns_none() -> None:
 
 def test_localize_accepts_candidate_and_fuses(monkeypatch: pytest.MonkeyPatch) -> None:
     buffer = PoseBuffer()
-    _seed_pose_buffer(buffer, ts_server=99.0)
+    _seed_pose_buffer(buffer, ts_server=99.9)
     localizer = FiducialMarkerLocalizer(
         pose_buffer=buffer,
         marker_mounts=[
@@ -231,8 +233,8 @@ def test_localize_accepts_candidate_and_fuses(monkeypatch: pytest.MonkeyPatch) -
     assert 0.0 < result.confidence <= 1.0
 
 
-@pytest.mark.parametrize("robot_pose_ts", [None, 98.999])
-def test_localize_without_current_robot_pose_uses_base_as_odom_origin(
+@pytest.mark.parametrize("robot_pose_ts", [None, 99.749])
+def test_localize_without_current_robot_pose_rejects_unregistered_origin(
     monkeypatch: pytest.MonkeyPatch,
     robot_pose_ts: float | None,
 ) -> None:
@@ -259,11 +261,7 @@ def test_localize_without_current_robot_pose_uses_base_as_odom_origin(
 
     result = localizer.localize([_observation(ts_server=100.0)])
 
-    assert result is not None
-    assert result.frame_id == "odom"
-    assert result.pose.x == pytest.approx(0.1)
-    assert result.pose.y == pytest.approx(0.0)
-    assert result.pose.z == pytest.approx(-1.0)
+    assert result is None
 
 
 def test_fiducial_marker_localizer_implements_localizer() -> None:

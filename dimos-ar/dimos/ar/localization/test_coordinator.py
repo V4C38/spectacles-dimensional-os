@@ -43,7 +43,7 @@ class _FixedLocalizer:
         self.result = result
         self.calls: list[list[Observation]] = []
 
-    def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None:
+    async def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None:
         self.calls.append(list(observations))
         return self.result
 
@@ -63,17 +63,24 @@ def _coordinator(
     )
     if robot_sample is not None:
         robot_observations._samples.append(robot_sample)
+
+    class Marker:
+        def localize(self, observations):
+            marker.calls.append(list(observations))
+            return marker.result
+
     return LocalizationCoordinator(
         policy=policy,
         odom_map_transform=odom_map_transform,
         robot_observations=robot_observations,
-        marker=marker,
+        marker=Marker() if marker is not None else None,
         vps=vps,
         map_code="office",
+        clock=lambda: 3.0,
     )
 
 
-def test_marker_success_preserves_metric_alignment() -> None:
+async def test_marker_success_preserves_metric_alignment() -> None:
     marker = _FixedLocalizer(
         LocalizedPose(
             pose=Pose(1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0),
@@ -82,7 +89,8 @@ def test_marker_success_preserves_metric_alignment() -> None:
         )
     )
     coordinator = _coordinator(providers=["fiducial_marker"], marker=marker)
-    outcome = coordinator.run([_observation(ts_server=100.0)])
+    coordinator._clock = lambda: 100.0
+    outcome = await coordinator.run([_observation(ts_server=100.0)])
 
     assert outcome.result is not None
     assert outcome.used_vps is False
@@ -90,7 +98,7 @@ def test_marker_success_preserves_metric_alignment() -> None:
     assert outcome.result.ts_server == 100.0
 
 
-def test_mixed_falls_through_to_vps_on_newest_observation() -> None:
+async def test_mixed_falls_through_to_vps_on_newest_observation() -> None:
     marker = _FixedLocalizer(None)
     vps = _FixedLocalizer(
         LocalizedPose(
@@ -109,7 +117,7 @@ def test_mixed_falls_through_to_vps_on_newest_observation() -> None:
         robot_sample=robot,
     )
 
-    outcome = coordinator.run([first, newest])
+    outcome = await coordinator.run([first, newest])
 
     assert marker.calls and len(marker.calls[0]) == 2
     assert vps.calls[0][0] is robot.observation
@@ -118,7 +126,7 @@ def test_mixed_falls_through_to_vps_on_newest_observation() -> None:
     assert outcome.result is not None
 
 
-def test_vps_defers_during_client_cooldown() -> None:
+async def test_vps_defers_during_client_cooldown() -> None:
     vps = _FixedLocalizer(
         LocalizedPose(
             pose=Pose(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
@@ -129,14 +137,14 @@ def test_vps_defers_during_client_cooldown() -> None:
     coordinator = _coordinator(providers=["vps"], vps=vps)
     coordinator._policy.begin_client_vps()
 
-    outcome = coordinator.run([_observation()])
+    outcome = await coordinator.run([_observation(ts_server=3.0)])
 
     assert outcome.defer_vps is True
     assert outcome.result is None
     assert vps.calls == []
 
 
-def test_vps_fails_without_robot_observation() -> None:
+async def test_vps_fails_without_robot_observation() -> None:
     vps = _FixedLocalizer(
         LocalizedPose(
             pose=Pose(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
@@ -146,7 +154,7 @@ def test_vps_fails_without_robot_observation() -> None:
     )
     coordinator = _coordinator(providers=["vps"], vps=vps)
 
-    outcome = coordinator.run([_observation()])
+    outcome = await coordinator.run([_observation(ts_server=3.0)])
 
     assert outcome.result is None
     assert outcome.defer_vps is False

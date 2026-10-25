@@ -4,6 +4,7 @@ from collections import deque
 from dataclasses import dataclass
 import math
 import threading
+import time
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -21,12 +22,16 @@ if TYPE_CHECKING:
 DEFAULT_MAXLEN = 3
 DEFAULT_STATIC_SPEED_MPS = 0.05
 DEFAULT_MAX_TRAVEL_M = 1.0
+DEFAULT_MAX_AGE_S = 2.0
+DEFAULT_TIMING_UNCERTAINTY_S = 0.5
+DEFAULT_STATIC_ANGULAR_RPS = 0.05
 
 
 @dataclass(frozen=True)
 class RobotObservationSample:
     observation: Observation
     travel_m: float
+    source_generation: int = 0
 
 
 class RobotObservationBuffer:
@@ -38,6 +43,8 @@ class RobotObservationBuffer:
         maxlen: int = DEFAULT_MAXLEN,
         static_speed_mps: float = DEFAULT_STATIC_SPEED_MPS,
         max_travel_m: float = DEFAULT_MAX_TRAVEL_M,
+        max_age_s: float = DEFAULT_MAX_AGE_S,
+        timing_uncertainty_s: float = DEFAULT_TIMING_UNCERTAINTY_S,
     ) -> None:
         if maxlen < 1:
             raise ValueError(f"maxlen must be at least 1, got {maxlen}")
@@ -48,6 +55,12 @@ class RobotObservationBuffer:
         if not math.isfinite(max_travel_m) or max_travel_m <= 0.0:
             raise ValueError(f"max_travel_m must be finite and positive, got {max_travel_m}")
         self._pose_buffer = pose_buffer
+        if not math.isfinite(max_age_s) or max_age_s <= 0:
+            raise ValueError("max_age_s must be finite and positive")
+        if not math.isfinite(timing_uncertainty_s) or timing_uncertainty_s < 0:
+            raise ValueError("timing_uncertainty_s must be finite and nonnegative")
+        self._max_age_s = max_age_s
+        self.timing_uncertainty_s = timing_uncertainty_s
         self._T_base_camera_optical = T_base_camera_optical
         self._maxlen = maxlen
         self._static_speed_mps = static_speed_mps
@@ -59,6 +72,50 @@ class RobotObservationBuffer:
     def set_camera_info(self, camera_info: CameraInfo) -> None:
         with self._lock:
             self._camera_info = camera_info
+
+    def clear(self) -> None:
+        with self._lock:
+            self._samples.clear()
+
+    def add_sample(self, sample: RobotObservationSample) -> None:
+        """Commit prepared pixels/pose on the owning event loop after generation checks."""
+        with self._lock:
+            self._samples.append(sample)
+
+    def prepare_image(
+        self,
+        image: Image,
+        *,
+        ts_server: float,
+        travel_m: float,
+        pose_buffer: PoseBuffer | None = None,
+        source_generation: int = 0,
+    ) -> RobotObservationSample | None:
+        """CPU-only work on frozen history; never change buffer/policy state."""
+        poses = pose_buffer or self._pose_buffer.snapshot()
+        if self._T_base_camera_optical is None:
+            return None
+        if self.timing_uncertainty_s > 0 and not poses.is_static_window(
+            ts_server - self.timing_uncertainty_s,
+            ts_server + self.timing_uncertainty_s,
+            max_speed_mps=self._static_speed_mps,
+            max_angular_rps=DEFAULT_STATIC_ANGULAR_RPS,
+        ):
+            return None
+        with self._lock:
+            camera_info = self._camera_info
+        if camera_info is None:
+            return None
+        observation = observation_from_robot_frame(
+            image=image,
+            camera_info=camera_info,
+            pose_buffer=poses,
+            T_base_camera_optical=self._T_base_camera_optical,
+            ts_server=ts_server,
+        )
+        if observation is None:
+            return None
+        return RobotObservationSample(observation, travel_m, source_generation)
 
     def expire(self, travel_m: float) -> None:
         with self._lock:
@@ -85,25 +142,22 @@ class RobotObservationBuffer:
         if camera_info is None:
             return
 
-        observation = observation_from_robot_frame(
-            image=image,
-            camera_info=camera_info,
-            pose_buffer=self._pose_buffer,
-            T_base_camera_optical=self._T_base_camera_optical,
-            ts_server=ts_server,
-        )
-        if observation is None:
+        sample = self.prepare_image(image, ts_server=ts_server, travel_m=travel_m)
+        if sample is None:
             return
 
         with self._lock:
             self._drop_stale(travel_m)
-            self._samples.append(RobotObservationSample(observation=observation, travel_m=travel_m))
+            self._samples.append(sample)
 
-    def newest(self) -> RobotObservationSample | None:
+    def newest(self, *, now_server: float | None = None) -> RobotObservationSample | None:
+        now = time.time() if now_server is None else now_server
         with self._lock:
             if not self._samples:
                 return None
-            return self._samples[-1]
+            sample = self._samples[-1]
+            age = now - sample.observation.ts_server
+            return sample if math.isfinite(age) and -0.25 <= age <= self._max_age_s else None
 
     def _drop_stale(self, travel_m: float) -> None:
         while self._samples and travel_m - self._samples[0].travel_m > self._max_travel_m:

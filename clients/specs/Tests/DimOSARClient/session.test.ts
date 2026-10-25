@@ -97,6 +97,15 @@ function makeSession(): {
   return { session, transport, clock, originStore };
 }
 
+function submitForResult(session: ARModuleSession, resultTs: number): void {
+  const sync = session.view().hello!.time_sync;
+  session.submitLocalizationObservations([{
+    ts_capture: resultTs - (sync.ts_server - sync.ts_client), jpeg: new Uint8Array([1]),
+    intrinsics: { fx: 1, fy: 1, cx: 0, cy: 0, width: 1, height: 1, distortion_model: "none", distortion: [] },
+    camera_position: [0, 0, 0], camera_orientation: [0, 0, 0, 1],
+  }]);
+}
+
 function handshake(
   session: ARModuleSession,
   transport: FakeTransport,
@@ -209,6 +218,7 @@ describe("session facts and tracking origin", () => {
       }) + "\n",
     );
     session.onTransportBinary(pythonLidar(4, []));
+    submitForResult(session, 5);
     session.onTransportText(
       JSON.stringify({
         type: "localization_result",
@@ -274,6 +284,7 @@ describe("session facts and tracking origin", () => {
       config: { helloTimeoutS: 1, reconnectDelayS: 0.5 },
     });
     handshake(session, transport, clock);
+    submitForResult(session, 1);
     session.onTransportText(
       JSON.stringify({
         type: "localization_result",
@@ -292,6 +303,7 @@ describe("session facts and tracking origin", () => {
   it("replaces ClientTrackingOrigin with the newest localization_result", () => {
     const { session, transport, clock, originStore } = makeSession();
     handshake(session, transport, clock);
+    submitForResult(session, 1);
     session.onTransportText(
       JSON.stringify({
         type: "localization_result",
@@ -301,6 +313,7 @@ describe("session facts and tracking origin", () => {
         ts: 1,
       }) + "\n",
     );
+    submitForResult(session, 2);
     session.onTransportText(
       JSON.stringify({
         type: "localization_result",
@@ -334,6 +347,7 @@ describe("disconnect and reconnect", () => {
   it("clears facts and ClientTrackingOrigin on disconnect, then reconnects", () => {
     const { session, transport, clock, originStore } = makeSession();
     handshake(session, transport, clock);
+    submitForResult(session, 1);
     session.onTransportText(
       JSON.stringify({
         type: "localization_result",

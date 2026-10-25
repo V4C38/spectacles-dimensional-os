@@ -29,6 +29,14 @@ class RobotDescription:
     body_bounds_m: tuple[float, float, float]
     footprint_m: tuple[float, float]
     base_height_m: float
+    odom_scale_correction_factor: float = 1.0
+
+    def __post_init__(self) -> None:
+        if (
+            not math.isfinite(self.odom_scale_correction_factor)
+            or self.odom_scale_correction_factor <= 0
+        ):
+            raise ValueError("odom_scale_correction_factor must be finite and positive")
 
 
 @dataclass(frozen=True)
@@ -137,6 +145,7 @@ class RobotProfile:
             body_bounds_m=self.body_bounds_m,
             footprint_m=self.footprint_m,
             base_height_m=self.base_height_m,
+            odom_scale_correction_factor=self.odom_scale_correction_factor,
         )
 
 

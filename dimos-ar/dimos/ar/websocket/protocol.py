@@ -304,6 +304,8 @@ def _decode_localization_observation(
         raise ValueError("localization observation header truncated")
 
     ts_capture, jpeg_len, intrinsics_len = struct.unpack_from("<dII", data, record_start)
+    if not math.isfinite(ts_capture):
+        raise ValueError("ts_capture must be finite")
     camera_position = struct.unpack_from("<3f", data, record_start + 20)
     camera_orientation = struct.unpack_from("<4f", data, record_start + 32)
 
@@ -439,6 +441,11 @@ def encode_hello(hello: Hello) -> str:
                 "body_bounds_m": list(hello.robot.body_bounds_m),
                 "footprint_m": list(hello.robot.footprint_m),
                 "base_height_m": hello.robot.base_height_m,
+                **(
+                    {"odom_scale_correction_factor": hello.robot.odom_scale_correction_factor}
+                    if hello.robot.odom_scale_correction_factor != 1.0
+                    else {}
+                ),
             },
             "capabilities": capabilities,
             **({"server_info": hello.server_info} if hello.server_info is not None else {}),
@@ -453,8 +460,13 @@ class LocalizationObservationsRequest:
     capture_policy: CapturePolicy
     observation_count: int
     wait_timeout_s: float | None = None
+    result_timeout_s: float | None = None
 
     def __post_init__(self) -> None:
+        if self.result_timeout_s is not None and (
+            not math.isfinite(self.result_timeout_s) or self.result_timeout_s <= 0
+        ):
+            raise ValueError("result_timeout_s must be finite and positive")
         if self.observation_count < 1:
             raise ValueError(f"observation_count must be at least 1, got {self.observation_count}")
         if self.capture_policy is CapturePolicy.ROBOT_LOS_PREFERRED:
@@ -478,6 +490,8 @@ def encode_localization_observations_request(request: LocalizationObservationsRe
     }
     if request.wait_timeout_s is not None:
         body["wait_timeout_s"] = request.wait_timeout_s
+    if request.result_timeout_s is not None:
+        body["result_timeout_s"] = request.result_timeout_s
     return encode_text(body)
 
 

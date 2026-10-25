@@ -1,10 +1,12 @@
 import type { ClientTrackingOriginStore } from "../localization/clientTrackingOrigin";
+import { LocalizationSubmission } from "../localization/localizationSubmission";
 import {
   TextFramer,
   decodeLidar,
   decodeOutbound,
   encodeEstopRequest,
   encodeHelloRequest,
+  encodeLocalizationObservations,
   encodeStateRequest,
 } from "./protocol";
 import { AR_MODULE_CLIENT_CONFIG, type ClientClock, type WebSocketTransport } from "./hostPorts";
@@ -14,6 +16,7 @@ import type {
   Hello,
   Lidar,
   LocalizationObservationsRequest,
+  LocalizationObservation,
   LocalizationResult,
   NavGoal,
   NavState,
@@ -86,6 +89,7 @@ export class ARModuleSession {
   private reconnectAt: number | null = null;
   private pendingHelloTs: number | null = null;
   private closing = false;
+  private readonly localizationSubmission = new LocalizationSubmission();
 
   constructor(deps: ARModuleSessionDependencies) {
     this.transport = deps.transport;
@@ -213,6 +217,29 @@ export class ARModuleSession {
     this.transport.sendBinary(data);
   }
 
+  submitLocalizationObservations(
+    observations: LocalizationObservation[],
+    timeoutS = AR_MODULE_CLIENT_CONFIG.capture.episode.resultTimeoutS,
+  ): void {
+    if (this.phase !== "ready" || this.hello === null) {
+      throw new Error("localization submission requires a ready session");
+    }
+    const encoded = encodeLocalizationObservations(observations);
+    const timestamp = Math.max(...observations.map((observation) => observation.ts_capture));
+    const sync = this.hello.time_sync;
+    this.localizationSubmission.begin(timestamp, sync.ts_server - sync.ts_client, this.clock.now(), timeoutS);
+    try {
+      this.sendBinary(encoded);
+    } catch (error) {
+      this.localizationSubmission.cancel();
+      throw error;
+    }
+  }
+
+  cancelLocalizationSubmission(): void {
+    this.localizationSubmission.cancel();
+  }
+
   requestEstop(): void {
     requireCapability(this, "estop");
     this.sendText(encodeEstopRequest());
@@ -298,6 +325,7 @@ export class ARModuleSession {
         else this.nav_goal = message;
         break;
       case "localization_result":
+        if (!this.localizationSubmission.accept(message.ts, this.clock.now())) return;
         try {
           this.clientTrackingOriginStore.setFromLocalizationResult(message);
         } catch (error) {
@@ -306,6 +334,7 @@ export class ARModuleSession {
         }
         break;
       case "localization_observations_request":
+        this.cancelLocalizationSubmission();
         this.emitCaptureRequest(message);
         this.emitOutbound(message);
         this.emitView();
@@ -351,6 +380,7 @@ export class ARModuleSession {
   }
 
   private clearConnectionFacts(): void {
+    this.localizationSubmission.reset();
     this.hello = null;
     this.state = null;
     this.pose = null;

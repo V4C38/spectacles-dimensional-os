@@ -145,14 +145,14 @@ def test_mixed_defers_vps_until_global_cooldown() -> None:
     policy.begin_client_vps()
     work = policy.on_observations("c1", [_observation()])
     assert work is not None
-    policy.hold_for_client_vps("c1", work.observations)
+    policy.defer_vps("c1")
     clock.t = 10.0
     _prompts, episodes = policy.poll()
     assert episodes == []
     clock.t = 30.0
-    _prompts, episodes = policy.poll()
-    assert len(episodes) == 1
-    assert episodes[0].client_id == "c1"
+    prompts, episodes = policy.poll()
+    assert prompts == ["c1"]
+    assert episodes == []  # Fresh capture, never queued JPEGs.
 
 
 def test_client_and_robot_vps_cooldowns_are_separate() -> None:
@@ -180,3 +180,43 @@ def test_start_request_opens_same_capture_path() -> None:
     assert policy.on_start_request("c1") == "c1"
     assert policy.capture_spec is not None
     assert policy.capture_spec.capture_policy is CapturePolicy.ANY_ANGLE
+
+
+def test_vps_turns_are_fifo_across_cooldown_and_repeated_requests() -> None:
+    clock = _Clock()
+    policy = LocalizationPolicy(["vps"], clock=clock)
+    assert policy.on_hello("first") == "first"
+    assert policy.on_hello("second") is None
+    assert policy.client_vps_ready("first")
+    assert not policy.client_vps_ready("second")
+    policy.begin_client_vps("first")
+    policy.on_success("first")
+    # First client reconnecting/retrying cannot jump ahead of the waiting client.
+    assert policy.on_start_request("first") is None
+    clock.t = 30
+    assert policy.poll() == (["second"], [])
+    assert policy.client_vps_ready("second")
+    assert not policy.client_vps_ready("first")
+
+
+def test_vps_camera_reservation_expires_without_blocking_other_clients() -> None:
+    clock = _Clock()
+    policy = LocalizationPolicy(["vps"], clock=clock)
+    policy.on_hello("paused")
+    policy.on_hello("ready")
+    clock.t = 5.1
+    assert policy.poll() == (["ready"], [])
+    assert policy.client_vps_ready("ready")
+    policy.on_disconnect("paused")
+    assert list(policy._vps_waiters) == ["ready"]
+
+
+def test_active_vps_work_is_not_preempted_by_camera_reservation_expiry() -> None:
+    clock = _Clock()
+    policy = LocalizationPolicy(["vps"], clock=clock)
+    policy.on_hello("active")
+    assert policy.on_observations("active", [_observation()]) is not None
+    policy.on_hello("waiting")
+    clock.t = 6
+    assert policy.poll() == ([], [])
+    assert policy.client_vps_ready("active")

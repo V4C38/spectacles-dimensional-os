@@ -12,6 +12,7 @@ from unittest.mock import Mock
 
 from dimos_lcm.std_msgs import Bool
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+import numpy as np
 import pytest
 
 from dimos.ar.localization.coordinator import LocalizationOutcome
@@ -33,9 +34,6 @@ from dimos.ar.robot.safety import Safety
 from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.ar.websocket.protocol import UserMessageRequest, encode_state
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
-from dimos.msgs.geometry_msgs.Quaternion import Quaternion
-from dimos.msgs.geometry_msgs.Transform import Transform
-from dimos.msgs.geometry_msgs.Vector3 import Vector3
 from dimos.msgs.nav_msgs.Path import Path
 
 
@@ -270,19 +268,13 @@ async def test_failed_localization_requests_next_batch_without_result_timeout(
     module._policy.on_hello("c1")
     if disconnected:
         module._policy.on_disconnect("c1")
-    module._coordinator = SimpleNamespace(run=lambda _obs: LocalizationOutcome())
-
-    await module._run_episode(EpisodeWork(client_id="c1", observations=()))
-
-    sent = module._ws_server.sent  # type: ignore[union-attr]
-    if disconnected:
-        assert sent == []
-        assert module._policy.on_observations("c1", []) is None
-    else:
-        assert len(sent) == 1
-        client_id, text = sent[0]
-        assert client_id == "c1"
-        assert json.loads(text)["type"] == "localization_observations_request"
+    module._complete_localization(
+        EpisodeWork(client_id="c1", observations=()), LocalizationOutcome()
+    )
+    assert module._ws_server.sent == []
+    if not disconnected:
+        prompts, episodes = module._policy.poll()
+        assert prompts == [] and episodes == []  # Retry waits for backoff.
 
 
 def test_state_snapshot_has_no_alignment() -> None:
@@ -290,62 +282,6 @@ def test_state_snapshot_has_no_alignment() -> None:
     text = encode_state(module._state_snapshot())
     assert "alignment" not in text
     assert '"nav"' in text
-
-
-def test_ingest_relocalization_transform_when_map_frame_present() -> None:
-    module = object.__new__(ARModule)
-    captured: list[tuple[Transform, float]] = []
-
-    def on_relocalization_transform(transform: Transform, *, ts_server: float) -> None:
-        captured.append((transform, ts_server))
-
-    module._coordinator = SimpleNamespace(on_relocalization_transform=on_relocalization_transform)
-    module._last_relocalization_transform_poll_at = 0.0
-    transform = Transform(
-        translation=Vector3(5.0, 0.0, 0.0),
-        rotation=Quaternion(0.0, 0.0, 0.0, 1.0),
-        frame_id="world",
-        child_frame_id="map",
-        ts=42.0,
-    )
-    gets: list[tuple[str, str]] = []
-
-    def get(parent: str, child: str) -> Transform | None:
-        gets.append((parent, child))
-        if parent == "world" and child == "map":
-            return transform
-        return None
-
-    module._tf = SimpleNamespace(get_frames=lambda: {"world", "map"}, get=get)
-    module._maybe_ingest_relocalization_transform(100.0)
-    assert len(captured) == 1
-    forwarded, ts_server = captured[0]
-    assert forwarded.frame_id == "odom"
-    assert forwarded.child_frame_id == "map"
-    assert forwarded.ts == pytest.approx(42.0)
-    assert forwarded.translation == transform.translation
-    assert forwarded.rotation == transform.rotation
-    assert ts_server == pytest.approx(100.0)
-    assert gets == [("world", "map")]
-
-
-def test_ingest_relocalization_transform_skips_without_map_frame() -> None:
-    module = object.__new__(ARModule)
-    captured: list[tuple[Transform, float]] = []
-
-    def on_relocalization_transform(transform: Transform, *, ts_server: float) -> None:
-        captured.append((transform, ts_server))
-
-    module._coordinator = SimpleNamespace(on_relocalization_transform=on_relocalization_transform)
-    module._last_relocalization_transform_poll_at = 0.0
-    gets: list[tuple[str, str]] = []
-    module._tf = SimpleNamespace(
-        get_frames=lambda: set(),
-        get=lambda parent, child: gets.append((parent, child)) or None,
-    )
-    module._maybe_ingest_relocalization_transform(100.0)
-    assert captured == []
-    assert gets == []
 
 
 def test_vps_provider_requires_map_code() -> None:
@@ -586,7 +522,7 @@ async def test_handle_odom_uses_corrected_robot_position_for_localization(
     pushed: list[object] = []
     published: list[object] = []
     module._pose_buffer = SimpleNamespace(  # type: ignore[assignment]
-        push=lambda msg, ts_server: pushed.append(msg)
+        latest=lambda: None, push=lambda msg, ts_server: pushed.append(msg)
     )
     module._state_publisher = SimpleNamespace(  # type: ignore[assignment]
         publish_odom=published.append
@@ -599,9 +535,8 @@ async def test_handle_odom_uses_corrected_robot_position_for_localization(
     )
     module._robot_observations = SimpleNamespace(expire=lambda _travel: None)  # type: ignore[assignment]
     module._flush_localization = lambda *_args: None  # type: ignore[method-assign]
-    module._maybe_ingest_relocalization_transform = lambda _ts_server: None  # type: ignore[method-assign]
     pose = PoseStamped(
-        ts=1.0,
+        ts=time.time(),
         frame_id="world",
         position=[2.0, -3.0, 0.33],
         orientation=[0.0, 0.0, 0.0, 1.0],
@@ -741,7 +676,7 @@ def test_ar_get_client_pose_empty_stale_fresh() -> None:
     assert "position" in text
     assert "orientation" in text
     assert "look_dir" in text
-    assert "[1.0, 2.0, 3.0]" in text
+    assert "[0.8, 1.6, 3.0]" in text
     assert "[0.0, 0.0, 1.0]" in text
     module._client_pose_received_at = time.time() - 1.1
     assert "position" in module.ar_get_client_pose()
@@ -914,3 +849,98 @@ def test_new_goal_broadcasts_cleared_state_before_planner_can_complete() -> None
         "c1",
     )
     assert order == ["state", "planner"]
+
+
+async def test_changed_robot_frame_retires_origins_and_requires_mapping_restart() -> None:
+    from dimos.ar.localization.pose_buffer import PoseBuffer
+
+    module = _module_with_policy(["vps"])
+    module._pose_buffer = PoseBuffer()
+    module._pose_buffer.push(PoseStamped(ts=time.time(), position=[0, 0, 0.33]))
+    module._source_generation = 0
+    module._source_frame_id = "world"
+    module._localization_runner = SimpleNamespace(cancel_all=Mock())
+    module._coordinator = SimpleNamespace(invalidate_source=Mock())
+    module._ws_server.schedule_disconnect_all = Mock()
+    module._tele_cmd_vel_publisher = SimpleNamespace(cancel=Mock())
+    stopped = []
+    module.stop_movement = SimpleNamespace(transport=object(), publish=stopped.append)
+    await module.handle_odom(
+        PoseStamped(ts=time.time(), frame_id="new-world", position=[0, 0, 0.33])
+    )
+    assert module._source_generation == 1
+    assert module._pose_buffer.latest() is None
+    assert stopped
+    module._localization_runner.cancel_all.assert_called_once()
+    module._coordinator.invalidate_source.assert_called_once()
+    module._ws_server.schedule_disconnect_all.assert_called_once()
+    hello = module._hello_body("client")
+    assert not hello.capabilities[CapabilityName.NAVIGATION].available
+    assert not hello.navigation_inputs[NAV_GOAL].available
+    module.goal_request = SimpleNamespace(transport=object(), publish=Mock())
+    module._on_nav_goal_request(NavGoalRequest((1, 0, 0), (0, 0, 0, 1)), None, "client")
+    module.goal_request.publish.assert_not_called()
+
+
+async def test_robot_image_pairing_preserves_producer_time_and_encodes_off_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dimos.ar.localization.pose_buffer import PoseBuffer
+    from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
+    from dimos.ar.localization.vps.test_robot_observation_buffer import _camera_info
+    from dimos.ar.localization.worker import LocalizationWorker
+    import dimos.ar.module as ar_module
+
+    module = _module_with_policy(["vps"])
+    module._source_generation = 0
+    module._pose_buffer = PoseBuffer()
+    for t in [99.9, 100.0, 100.1]:
+        module._pose_buffer.push(PoseStamped(ts=t, position=[1, 0, 0.33]), ts_server=t)
+    module._robot_observations = RobotObservationBuffer(
+        pose_buffer=module._pose_buffer,
+        T_base_camera_optical=np.eye(4),
+        timing_uncertainty_s=0.1,
+    )
+    module._robot_observations.set_camera_info(_camera_info())
+    module._localization_worker = LocalizationWorker()
+    monkeypatch.setattr(ar_module.time, "time", lambda: 100.8)
+    loop_thread = threading.get_ident()
+    encode_threads = []
+
+    def encode():
+        encode_threads.append(threading.get_ident())
+        return b"jpeg"
+
+    try:
+        await module.handle_color_image(SimpleNamespace(ts=100.0, to_jpeg_bytes=encode))
+        sample = module._robot_observations.newest(now_server=100.8)
+        assert sample.observation.ts_server == 100.0
+        assert sample.observation.camera_pose.x == 1
+        assert encode_threads[0] != loop_thread
+    finally:
+        module._localization_worker.close()
+
+
+def test_robot_odometry_heuristic_is_configurable_at_startup_and_advertised() -> None:
+    from pydantic import ValidationError
+
+    assert profile_for_config(ARModuleConfig()).odom_scale_correction_factor == 1.25
+    configured = profile_for_config(ARModuleConfig(odom_scale_correction_factor=1.1))
+    assert configured.description.odom_scale_correction_factor == 1.1
+    assert configured.fiducial_marker_mounts == UNITREE_GO2_PROFILE.fiducial_marker_mounts
+    for invalid in [0, -1, float("nan"), float("inf")]:
+        with pytest.raises(ValidationError):
+            ARModuleConfig(odom_scale_correction_factor=invalid)
+
+
+def test_agent_native_points_and_corrected_client_pose_round_trip() -> None:
+    from dimos.ar.websocket.protocol import ClientPose
+
+    module = _module_with_policy([], agent_available=True)
+    module._on_client_pose(
+        ClientPose(position=(5, -2.5, 1.5), orientation=(0, 0, 0, 1), ts=1), None, "client"
+    )
+    assert "position=[4.0, -2.0, 1.5]" in module.ar_get_client_pose()
+    assert module.ar_place_marker("person", 4, -2, 1.5) == "ok"
+    args = json.loads(module._ws_server.broadcasts[-1])["args"]
+    assert [args["x"], args["y"], args["z"]] == [5, -2.5, 1.5]

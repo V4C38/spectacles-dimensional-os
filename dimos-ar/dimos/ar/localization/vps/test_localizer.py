@@ -59,20 +59,20 @@ class _FakeVpsClient:
     results: list[VpsQueryResult | None]
     calls: list[tuple[bytes, Intrinsics]]
 
-    def query(self, *, jpeg: bytes, intrinsics: Intrinsics) -> VpsQueryResult | None:
+    async def query(self, *, jpeg: bytes, intrinsics: Intrinsics) -> VpsQueryResult | None:
         self.calls.append((jpeg, intrinsics))
         if not self.results:
             return None
         return self.results.pop(0)
 
 
-def test_localize_empty_observations_returns_none() -> None:
+async def test_localize_empty_observations_returns_none() -> None:
     localizer = VpsLocalizer(client=_FakeVpsClient(results=[], calls=[]))
 
-    assert localizer.localize([]) is None
+    assert await localizer.localize([]) is None
 
 
-def test_localize_accepts_query_and_fuses() -> None:
+async def test_localize_accepts_query_and_fuses() -> None:
     client = _FakeVpsClient(
         results=[
             VpsQueryResult(
@@ -87,7 +87,7 @@ def test_localize_accepts_query_and_fuses() -> None:
         config=VpsLocalizerConfig(max_tilt_rad=math.pi),
     )
 
-    result = localizer.localize([_observation()])
+    result = await localizer.localize([_observation()])
 
     assert result is not None
     assert result.frame_id == "map"
@@ -98,7 +98,7 @@ def test_localize_accepts_query_and_fuses() -> None:
     assert len(client.calls) == 1
 
 
-def test_localize_rejects_low_query_confidence() -> None:
+async def test_localize_rejects_low_query_confidence() -> None:
     client = _FakeVpsClient(
         results=[
             VpsQueryResult(
@@ -110,10 +110,10 @@ def test_localize_rejects_low_query_confidence() -> None:
     )
     localizer = VpsLocalizer(client=client)
 
-    assert localizer.localize([_observation()]) is None
+    assert await localizer.localize([_observation()]) is None
 
 
-def test_confidence_uses_only_fusion_inliers() -> None:
+async def test_confidence_uses_only_fusion_inliers() -> None:
     client = _FakeVpsClient(
         results=[
             VpsQueryResult(camera_pose=Pose(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0), confidence=0.6),
@@ -127,7 +127,7 @@ def test_confidence_uses_only_fusion_inliers() -> None:
         config=VpsLocalizerConfig(max_tilt_rad=math.pi),
     )
 
-    result = localizer.localize([_observation(), _observation(), _observation()])
+    result = await localizer.localize([_observation(), _observation(), _observation()])
 
     assert result is not None
     assert result.pose.x == pytest.approx(0.05)
@@ -136,7 +136,7 @@ def test_confidence_uses_only_fusion_inliers() -> None:
     assert result.confidence != pytest.approx(1.0 - excluded_mean_confidence)
 
 
-def test_image_dimensions_must_match_intrinsics() -> None:
+async def test_image_dimensions_must_match_intrinsics() -> None:
     localizer = VpsLocalizer(client=_FakeVpsClient(results=[], calls=[]))
     observation = _observation(
         image_width=640,
@@ -145,10 +145,10 @@ def test_image_dimensions_must_match_intrinsics() -> None:
     )
 
     with pytest.raises(ValueError, match="do not match intrinsics"):
-        localizer.localize([observation])
+        await localizer.localize([observation])
 
 
-def test_downscales_oversized_images_before_query() -> None:
+async def test_downscales_oversized_images_before_query() -> None:
     client = _FakeVpsClient(
         results=[
             VpsQueryResult(
@@ -163,7 +163,7 @@ def test_downscales_oversized_images_before_query() -> None:
         config=VpsLocalizerConfig(max_image_longest_side=640),
     )
 
-    assert localizer.localize([_observation(image_width=1280, image_height=720)]) is not None
+    assert await localizer.localize([_observation(image_width=1280, image_height=720)]) is not None
     assert len(client.calls) == 1
     _, intrinsics = client.calls[0]
     assert intrinsics.width <= 640
@@ -171,7 +171,7 @@ def test_downscales_oversized_images_before_query() -> None:
     assert intrinsics.distortion_model == "none"
 
 
-def test_undistorts_before_query(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_undistorts_before_query(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
     def _capture_undistort(image: np.ndarray, intrinsics: Intrinsics) -> UndistortedFrame:
@@ -201,7 +201,7 @@ def test_undistorts_before_query(monkeypatch: pytest.MonkeyPatch) -> None:
         distortion=(-0.07, -0.02, -0.01, 0.01),
     )
 
-    localizer.localize([_observation(intrinsics=distorted)])
+    await localizer.localize([_observation(intrinsics=distorted)])
 
     assert captured["shape"] == (720, 1280, 3)
     assert captured["model"] == "equidistant"

@@ -398,7 +398,7 @@ export class DimOSWebXRClient {
       this.navigation.applyView(view, null, null, now);
       return;
     }
-    this.lidar.apply(view.lidar?.points ?? null, origin, this.ui.lidarMode, view.pose?.position ?? null, view.hello?.robot.base_height_m ?? 0, view.pose?.orientation, view.hello?.robot.body_bounds_m, this.ui.lidarPreferences.pointLimit, this.ui.lidarPreferences.obstacleRangeM);
+    this.lidar.apply(view.lidar?.points ?? null, origin, this.ui.lidarMode, view.pose?.position ?? null, view.hello?.robot.base_height_m ?? 0, view.pose?.orientation, view.hello?.robot.body_bounds_m, this.ui.lidarPreferences.pointLimit, this.ui.lidarPreferences.obstacleRangeM, view.hello?.robot.odom_scale_correction_factor ?? 1);
     this.navigation.setSelected(this.selection.isSelected());
     this.navigation.applyView(view, origin, this.robot.floorPose(), now);
     const goalY = this.navigation.marker.object.visible ? this.navigation.marker.pose().position[1] : null;

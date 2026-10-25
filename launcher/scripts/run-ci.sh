@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && /bin/pwd -P)"
 DIMOS_AR="${ROOT}/dimos-ar"
 LAUNCHER_APP="${ROOT}/launcher/app"
 LENS_TESTS="${ROOT}/clients/specs/Tests"
@@ -54,7 +54,7 @@ run_dimos_ar_job() {
   cd "${DIMOS_AR}"
 
   python -m pip install --upgrade pip
-  pip install websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless Pillow scipy dimos requests langchain-core
+  pip install websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless Pillow scipy dimos "aiohttp>=3.9,<4" langchain-core
   pip install -e . --no-deps
 
   ruff check .

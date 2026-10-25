@@ -50,3 +50,18 @@ it("fades to zero at 60 cm from rotated body bounds and restores opaque Full col
   expect(colors.getW(1)).toBeCloseTo(0.5); expect(colors.getW(2)).toBeCloseTo(0); expect(colors.getW(3)).toBe(0);
   lidar.apply(points, origin, "full"); expect(colors.getW(3)).toBe(1); lidar.dispose();
 });
+
+it("draws corrected coordinates once and keeps obstacle fade in native metres", () => {
+  const lidar = new WebXRLidarRenderer();
+  const robot: [number, number, number] = [5, -2.5, 0.33];
+  const points: [number, number, number][] = [[6, -2.5, 0.4]];
+  lidar.apply(points, origin, "obstacles", robot, 0.33, [0, 0, 0, 1], [1, 0.4, 0.5], 4000, 0.6, 1.25);
+  const positions = lidar.object.geometry.getAttribute("position");
+  const colors = lidar.object.geometry.getAttribute("color");
+  // 0.8 native metres from center, 0.3 from a 1m body, halfway through a 0.6m halo.
+  expect(colors.getW(0)).toBeCloseTo(0.5);
+  expect(positions.getZ(0)).toBeCloseTo(-6);
+  lidar.apply(points, origin, "obstacles", robot, 0.33, [0, 0, 0, 1], [1, 0.4, 0.5], 4000, 0.6, 1);
+  expect(colors.getW(0)).toBeLessThan(0.5);
+  lidar.dispose();
+});
