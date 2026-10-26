@@ -2,6 +2,26 @@ import { expect, it, vi } from "vitest";
 import { NotificationCenter } from "../../Assets/Scripts/DimOSARClient/presentation/NotificationCenter";
 import { SetupFlow } from "../../Assets/Scripts/DimOSARClient/presentation/SetupFlow";
 import { LidarDisplayController } from "../../Assets/Scripts/DimOSARClient/sensors/LidarDisplayController";
+import { worldMarkerHover, circleStrokeSegments } from "../../Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+
+it("links marker and robot hover only while attached, without changing either actual target", () => {
+  expect(worldMarkerHover(true, true, false)).toEqual({ robot: true, marker: true });
+  expect(worldMarkerHover(true, false, true)).toEqual({ robot: true, marker: true });
+  expect(worldMarkerHover(false, true, false)).toEqual({ robot: true, marker: false });
+  expect(worldMarkerHover(false, false, true)).toEqual({ robot: false, marker: true });
+  expect(worldMarkerHover(true, false, false)).toEqual({ robot: false, marker: false });
+});
+
+it("joins physical circle stroke segments continuously without radius-dependent dash scaling", () => {
+  const points = circleStrokeSegments(0.2144);
+  expect(points).toHaveLength(256);
+  for (let i = 0; i < points.length; i++) {
+    expect(Math.hypot(points[i][0], points[i][2])).toBeCloseTo(0.2144);
+    if (i % 2 && i + 1 < points.length) expect(points[i]).toEqual(points[i + 1]);
+  }
+  expect(points.at(-1)![0]).toBeCloseTo(points[0][0]);
+  expect(points.at(-1)![2]).toBeCloseTo(points[0][2]);
+});
 
 it("preempts notifications by priority and refreshes a repeated urgent message", () => {
   const center = new NotificationCenter();

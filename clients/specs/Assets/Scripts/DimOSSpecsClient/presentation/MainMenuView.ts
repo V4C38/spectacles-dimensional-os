@@ -1,8 +1,8 @@
 import { PanelHeightController } from "./PanelHeightController";
-import { RUNTIME_LAYOUTS, panelFooterY } from "./PanelLayout";
+import { RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, panelFooterY } from "./PanelLayout";
 import type { CapsuleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/CapsuleButton";
 import type { LidarDisplayMode } from "../../DimOSARClient/sensors/lidarSettings";
-import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_LAYOUT, CONTROL_PANEL_SCALE, controlPanelTab, robotBadgeText, sensorStatusText } from "../../DimOSARClient/presentation/ControlPanelPresentation";
+import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_LAYOUT, controlPanelTab, robotBadgeText, sensorStatusText } from "../../DimOSARClient/presentation/ControlPanelPresentation";
 import type { OperatingMode } from "./AppState";
 import type { SpecsUISnapshot } from "./SpecsUISnapshot";
 import { NativeTextField } from "./NativeTextField";
@@ -83,7 +83,7 @@ export class MainMenuView {
       frame.setUseFollow(false); frame.setFollowing(false);
       this.root.setParent(frame.content); frame.onTranslationStart.add(callbacks.onPin);
     }
-    this.heightController = new PanelHeightController(frame, this.root, CONTROL_PANEL_SCALE.runtime);
+    this.heightController = new PanelHeightController(frame, this.root, RUNTIME_PANEL_SCALE);
     this.robot = this.button(this.root, "Robot selection button", "Robot", 0, 0.465 * UNIT, 0.58 * UNIT, 0.105 * UNIT, callbacks.onRobot);
     panelButtonLayer(this.robot, true);
     for (const name of ["main", "settings", "sensors", "diagnostics", "alignment"] as Page[]) {
@@ -199,7 +199,7 @@ export class MainMenuView {
   setLidarModeAvailability(available: boolean, mode: LidarDisplayMode): void { this.setLidarModeDisplay(mode); this.lidarButtons.forEach(b => { b.inactive = !available; }); }
   setEmergencyStopAvailability(available: boolean, _reason?: string | null): void { this.stop.inactive = !available; }
   setAgentModeAvailability(available: boolean): void { this.modeButtons[1].inactive = !available; }
-  setFrameFollowEnabled(enabled: boolean): void { setPanelFollowing(this.panel, enabled, CONTROL_PANEL_SCALE.runtime); }
+  setFrameFollowEnabled(enabled: boolean): void { setPanelFollowing(this.panel, enabled, RUNTIME_PANEL_SCALE); }
   setFrameAllowTranslation(enabled: boolean): void { const frame = getFrameComponent(this.panel); if (frame) frame.allowTranslation = enabled; }
   applySpectaclesFrameMotion(): void { this.setFrameAllowTranslation(true); this.setFrameFollowEnabled(false); }
   applyEditorFrameMotion(): void { this.setFrameAllowTranslation(true); this.setFrameFollowEnabled(true); }

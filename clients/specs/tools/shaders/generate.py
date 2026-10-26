@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 from pathlib import Path
+import re
 import struct
 from typing import Any
 
@@ -18,7 +19,7 @@ import legacy_graph as graph
 
 SPECS_ROOT = Path(__file__).resolve().parents[2]
 SHADERS = SPECS_ROOT / "Assets/Materials/Shaders"
-NAMES = ("VertexColor", "PoseIndicator", "LidarDot", "AdaptiveStroke")
+NAMES = ("VertexColor", "PoseIndicator", "LidarDot", "AdaptiveStroke", "BendyLaser")
 CUSTOM_METADATA = {
     "Code", "CustomCodeNodeAsset", "Description", "Examples", "ID", "LastChached3",
     "LastCodeFormatted3", "Locked", "Stage", "Title", "UseExternalFile", "ngs_Height",
@@ -49,8 +50,12 @@ def add_node(children: dict[str, Any], key: str, node: dict[str, Any]) -> None:
     children[key + "VirtualID"] = graph.string("")
 
 
+def float_inputs(code: str) -> list[str]:
+    return list(dict.fromkeys(re.findall(r"\binput_float\s+(\w+)\s*;", code)))
+
+
 def code_node(template: dict[str, Any], level: int, title: str, code: str,
-              vertex: bool = False) -> dict[str, Any]:
+              inputs: dict[str, int], vertex: bool = False) -> dict[str, Any]:
     node = deepcopy(template)
     node["LevelID"] = graph.unsigned(level)
     node["Title1"] = graph.string(title)
@@ -69,20 +74,21 @@ def code_node(template: dict[str, Any], level: int, title: str, code: str,
     ports["Position" if vertex else "Result"] = graph.port(
         "Position" if vertex else "Result", 3 if vertex else 4, output=True,
     )
-    if "input_float ViewportHeightPx;" in code:
-        ports["ViewportHeightPx"] = graph.port("ViewportHeightPx", 1)
-        graph.connect(ports["ViewportHeightPx"], 7, "Output")
+    for name in float_inputs(code):
+        ports[name] = graph.port(name, 1)
+        graph.connect(ports[name], inputs[name], "Output")
     return node
 
 
-def viewport_parameter(template: dict[str, Any]) -> dict[str, Any]:
+def float_parameter(template: dict[str, Any], name: str, level: int) -> dict[str, Any]:
     node = deepcopy(template)
-    node["LevelID"] = graph.unsigned(7)
-    node["Title1"] = graph.string("Viewport Height Px")
+    node["LevelID"] = graph.unsigned(level)
+    node["Title1"] = graph.string(name)
     ports = node["Ports"]
-    for key, text in (("Title", "Viewport Height Px"), ("ScriptName", "viewportHeightPx")):
+    for key, text in (("Title", name), ("ScriptName", name[0].lower() + name[1:])):
         ports[key]["Property"]["Variables"]["String"] = graph.text_variable(text)
-    ports["Default"]["Property"]["Variables"] = {"VariableX": graph.float_variable(1024)}
+    default = 1024 if name == "ViewportHeightPx" else 0
+    ports["Default"]["Property"]["Variables"] = {"VariableX": graph.float_variable(default)}
     ports["Output"]["Property"]["Variables"] = {"VariableX": graph.float_variable(0)}
     for key in ("EnableMin", "EnableMax"):
         ports[key]["Property"]["Variables"]["VariableX"] = graph.variable(b"\0", 1)
@@ -94,15 +100,20 @@ def generate(base: dict[str, Any], custom: dict[str, Any], parameter: dict[str, 
     tree = deepcopy(base)
     children = tree["Nodes"]["ChildNodes"]
     main = children["Node0"]
-    add_node(children, "Node1", code_node(custom, 5, name, pixel))
+    inputs = {
+        key: 7 + index for index, key in enumerate(float_inputs(pixel + "\n" + (vertex or "")))
+    }
+    add_node(children, "Node1", code_node(custom, 5, name, pixel, inputs))
     graph.connect(main["Ports"]["FinalColor"], 5, "Result")
     if vertex:
-        add_node(children, "Node2", code_node(custom, 6, name + " Vertex", vertex, True))
+        add_node(children, "Node2", code_node(custom, 6, name + " Vertex", vertex, inputs, True))
         graph.connect(main["Ports"]["WorldPosition"], 6, "Position")
-    viewport = "input_float ViewportHeightPx;" in pixel + (vertex or "")
-    if viewport:
-        add_node(children, "Node3", viewport_parameter(parameter))
-    ordered = (["Node3"] if viewport else []) + ["Node1"]
+    parameter_keys = []
+    for index, (key, level) in enumerate(inputs.items()):
+        node_key = f"Node{3 + index}"
+        add_node(children, node_key, float_parameter(parameter, key, level))
+        parameter_keys.append(node_key)
+    ordered = parameter_keys + ["Node1"]
     if vertex:
         ordered.append("Node2")
     ordered.append("Node0")

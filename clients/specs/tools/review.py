@@ -141,6 +141,16 @@ def parse_events(text: str) -> list[dict[str, Any]]:
     return events
 
 
+def runtime_error_lines(text: str) -> list[str]:
+    """SIK's dispatcher catches script errors and prints them at Info level."""
+    return list(dict.fromkeys(
+        line for line in text.splitlines()
+        if (line.startswith(("E ", "F ")) and re.search(
+            r"(?:InternalError|TypeError|ReferenceError|RangeError|SyntaxError|Error):", line,
+        )) or "UpdateDispatcher: Error in event" in line
+    ))
+
+
 def checkpoint(event: dict[str, Any], recording_started_ms: float,
                previous: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     name, unix_ms = event.get("name"), event.get("unixMs")
@@ -480,6 +490,14 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
             await compile_project(mcp, output, workspace)
             print("Attaching review scenario through the editor API", flush=True)
             await attach_scenario(mcp, workspace, args.start_delay, profile)
+            logfile = native_log_file()
+            offset = logfile.stat().st_size
+            # Refresh can briefly remove Preview's AX viewport controls. Reset it
+            # before starting continuous capture, rather than invalidating a live recorder.
+            await mcp.editor(
+                "const panel:any=pluginSystem.findInterface(Editor.Dock.IDockManager).panels.find(p=>p.id.toString().includes(\"Snap.Plugin.Gui.PreviewPanel\"));"
+                "if(!panel)throw new Error(\"Native Preview panel missing\");panel.resume();panel.refresh();return {refreshed:true};"
+            )
             # The recorded start timestamp is emitted by ScreenCaptureKit only
             # after the first recording frame, never guessed from process spawn.
             with (recording_dir / "recorder.log").open("wb") as recorder_log:
@@ -494,12 +512,6 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
                     manifest["captureCrop"] = ready["captureCrop"]
                 elif profile == "golden":
                     raise ReviewError("Cannot locate the native Preview viewport for golden capture")
-                logfile = native_log_file()
-                offset = logfile.stat().st_size
-                await mcp.editor(
-                    "const panel:any=pluginSystem.findInterface(Editor.Dock.IDockManager).panels.find(p=>p.id.toString().includes(\"Snap.Plugin.Gui.PreviewPanel\"));"
-                    "if(!panel)throw new Error(\"Native Preview panel missing\");panel.resume();panel.refresh();return {refreshed:true};"
-                )
                 deadline = time.monotonic() + args.duration
                 partial = ""
                 while time.monotonic() < deadline:
@@ -516,7 +528,7 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
                             with (output / "native.log").open("ab") as log_copy:
                                 log_copy.write(chunk)
                             native_text = chunk.decode("utf-8", errors="replace")
-                            if re.search(r"^E .*?(?:InternalError:|TypeError:|ReferenceError:|RangeError:|SyntaxError:)", partial + native_text, re.MULTILINE):
+                            if runtime_error_lines(partial + native_text):
                                 raise ReviewError("Native Preview stopped with a runtime error; see native.log")
                             partial += native_text
                             lines = partial.split("\n")
@@ -610,11 +622,7 @@ async def run_pass(args: argparse.Namespace, output: Path, workspace: Path) -> d
                 scene["screenshot"] = destination.name
                 scene["screenshotSource"] = "two native Preview renders after actual editor resizing"
     native_lines = (output / "native.log").read_text(encoding="utf-8", errors="replace").splitlines()
-    runtime_errors = list(dict.fromkeys(
-        line for line in native_lines
-        if line.startswith(("E ", "F "))
-        and re.search(r"(?:TypeError|ReferenceError|RangeError|SyntaxError|Error:)", line)
-    ))
+    runtime_errors = runtime_error_lines("\n".join(native_lines))
     passed = bool(completion and completion.get("passed") is True and checks)
     passed = passed and all(event.get("passed") is True for event in checks) and not runtime_errors
     default_harness = args.harness is not None and args.harness.resolve() == (SPECS_ROOT / "Tests/integration-tests/ReviewScenario.ts").resolve()

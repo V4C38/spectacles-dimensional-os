@@ -7,7 +7,7 @@ export const DIMOS_AR_DESIGN = {
     accent: "#ffffff", primary: "#ffffff", primaryText: "#171719", secondary: "#3a3a3c", selected: "#ffffff", success: "#30d158", warning: "#ff9f0a", danger: "#ff453a", chrome: "#d1d1d6", background: "#202022",
   },
   panel: CONTROL_PANEL_LAYOUT,
-  depth: { surface: 0.005, text: 0.0055, labelOffset: 0.0005, secondary: 0.004, primary: 0.008, hover: 0.003, thickness: 0.004 },
+  depth: { surface: 0.005, text: 0.0055, labelOffset: 0.0005, secondary: 0.005, primary: 0.009, hover: 0.003, controlOverlap: 0.0001, controlThicknessScale: 0.75, thickness: 0.004 },
   controls: CONTROL_PANEL_CONTROLS,
   corners: { field: 0.024, controlRatio: 0.5 },
   dom: { panelRadius: "12px", controlRadius: "6px", fieldRadius: "6px" },

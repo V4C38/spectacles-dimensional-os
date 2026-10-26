@@ -2,6 +2,13 @@ import { saveCaseProof } from "./fixtures/CaseProof";
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
 import { startVisualReview, markVisualReview, saveVisualReview } from "./fixtures/VisualReview";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+
+// ClientCore lives outside WebXR's ESM package. Load it through Playwright's
+// CommonJS transform so test discovery also works on CI's Node 20 runtime.
+const { ROBOT_LINE_STYLE } = createRequire(import.meta.url)(
+  "../../../specs/Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle",
+) as typeof import("../../../specs/Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle");
 
 test.beforeEach(async ({ page }) => startVisualReview(page));
 test.afterEach(async ({ page }, info) => {
@@ -224,7 +231,11 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     // Exercise real button callbacks close up and at range, with a 2cm rig occluder present.
     const panelPosition = await page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.panel.position.toArray();
+      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      // This test places the panel at explicit near/far distances. Pin setup
+      // follow first so the panel does not move away during the actual press.
+      app.setupPlacement.pin();
+      return app.mainMenu.panel.position.toArray();
     });
     for (const distance of [0.15, 3]) {
       await page.evaluate(distance => {
@@ -253,7 +264,8 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       const w = window as any;
       const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
       const panel = app.mainMenu.panel;
-      const edge = panel.localToWorld(panel.position.clone().set(0.58, -0.48, 0));
+      const corner = app.mainMenu.cornerZones.right;
+      const edge = corner.getWorldPosition(panel.position.clone());
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
       input.position.set(edge.x, edge.y, edge.z + 0.4);
       input.quaternion.set(0, 0, 0, 1);
@@ -461,12 +473,22 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
         document.querySelector("canvas")!.style.background = "#182028";
         return saved;
       }, aiming);
-      await expect.poll(() => page.evaluate(aiming => {
+      await expect.poll(() => page.evaluate(({ aiming, dashStyle }) => {
         const w = window as any;
         const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
-        return aiming ? app.client.navigation.draftMarker.object.visible && app.client.navigation.draftMarker.circleBounds().radius < 0.061 :
-          app.client.robot.object.getObjectByName("Robot selection outline").material.opacity >= 0.79;
-      }, aiming)).toBe(true);
+        if (!aiming) return app.client.robot.object.getObjectByName("Robot selection outline").material.opacity >= 0.79;
+        const navigation = app.client.navigation;
+        const draft = navigation.draftMarker;
+        const dashed = draft.object.getObjectByName("Navigation draft circle");
+        return draft.object.visible &&
+          Math.abs(draft.circleBounds().radius - navigation.marker.circleBounds().radius) < 0.0001 &&
+          draft.circleBounds().radius > 0.24 && dashed.visible &&
+          !draft.object.getObjectByName("NavigationCircle").visible &&
+          draft.object.getObjectByName("NavigationHeading").visible &&
+          Math.abs(dashed.material.uniforms.uDash.value - dashStyle.dashM) < 0.00001 &&
+          Math.abs(dashed.material.uniforms.uGap.value - dashStyle.gapM) < 0.00001 &&
+          Math.abs(dashed.material.uniforms.uWidth.value - dashStyle.selectedWidthM) < 0.00001;
+      }, { aiming, dashStyle: ROBOT_LINE_STYLE })).toBe(true);
       markVisualReview(page, name);
       await page.screenshot({ path: testInfo.outputPath(name) });
       await page.evaluate(saved => {
@@ -495,7 +517,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
         return app.interaction.hit(w.xb.core.input.rightController)?.object === app.client.robot.collider;
       })).toBe(true);
     };
-    // A near miss reveals the unselected outline without selecting the robot.
+    // A near miss must not leave the unselected robot highlighted.
     await page.evaluate(() => {
       const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
       const collider = app.client.robot.collider;
@@ -505,9 +527,8 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
-      return !app.client.robot.isSelected() && app.interaction.hit(w.xb.core.input.rightController)?.object !== app.client.robot.collider &&
-        app.client.robot.object.getObjectByName("Robot selection outline").material.opacity >= 0.44;
-    })).toBe(true);
+      return { selected: app.client.robot.isSelected(), hovered: app.interaction.hoverTargets().includes(app.client.robot.collider), hits: app.interaction.hoverTargets().map((o: any) => o.name), opacity: app.client.robot.object.getObjectByName("Robot selection outline").material.opacity };
+    })).toMatchObject({ selected: false, hovered: false, opacity: 0 });
     await pointAtRobot();
     await setSelection(page, 1);
     await expect.poll(() => page.evaluate(() => {
@@ -529,7 +550,13 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
       const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
-      return app.client.navigation.probeRoot.children.some((probe: any) => probe.visible) && !app.client.navigation.isAiming() && !app.client.route.object.visible;
+      const probes = app.client.navigation.probeRoot.children.filter((probe: any) => probe.visible);
+      return probes.length > 0 && probes.every((probe: any) => {
+        const circle = probe.getObjectByName("Navigation probe circle");
+        const start = circle.geometry.getAttribute("instanceStart");
+        return circle.geometry.instanceCount === 128 && circle.position.y === 0 &&
+          Math.abs(Math.hypot(start.getX(0), start.getZ(0)) + circle.material.uniforms.uWidth.value / 2 - 0.06) < 0.00001;
+      }) && !app.client.navigation.isAiming() && !app.client.route.object.visible;
     })).toBe(true);
     await page.evaluate(() => {
       const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
@@ -571,7 +598,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     })).toBe(false);
     await setSelection(page, 0);
 
-    // World-object targeting also works near and far, and circle hover reveals the robot box.
+    // Detached marker targeting works near and far without highlighting the robot box.
     for (const distance of [0.15, 3]) {
       await page.evaluate(distance => {
         const w = window as any;
@@ -610,7 +637,9 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await expect.poll(() => page.evaluate(() => {
       const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
       const outline = app.client.robot.object.getObjectByName("Robot selection outline");
-      return outline.children[0].visible && outline.material.opacity >= 0.44 && outline.scale.y > 0.99;
+      return !app.client.robot.isSelected() && !app.client.robot.hovered &&
+        !app.client.navigation.interaction.snapshot().attachedToRobot &&
+        outline.material.opacity < 0.005;
     })).toBe(true);
     // Aim at and drag the navigation marker without detected room planes.
     await page.evaluate(() => {
@@ -644,13 +673,16 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
 
     socket!.send(JSON.stringify({ type: "nav_goal", ts: 10, pose: [1.1, 0.45, 0, 0],
       path_poses: [[2, 0, 0, 0], [1.5, 0, 0, 0], [1.1, 0.45, 0, 0]] }) + "\n");
-    await expect.poll(() => page.evaluate(() => {
+    await expect.poll(() => page.evaluate(dashStyle => {
       const w = window as any;
       const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
       const route = app.client.route.object;
+      const dashed = route.children.find((child: any) => child.material?.uniforms?.uDash);
       return route.visible && route.material.color.getHex() === 0xffffff &&
-        route.material.worldUnits && route.material.linewidth === 0.01 && route.material.dashed && route.material.opacity === 0.85;
-    })).toBe(true);
+        route.material.worldUnits && Math.abs(route.material.linewidth - dashStyle.selectedWidthM) < 0.00001 && route.material.dashed && route.material.opacity === 0.85 &&
+        dashed.visible && Math.abs(dashed.material.uniforms.uDash.value - dashStyle.dashM) < 0.00001 &&
+        Math.abs(dashed.material.uniforms.uGap.value - dashStyle.gapM) < 0.00001;
+    }, ROBOT_LINE_STYLE)).toBe(true);
 
     const followingState = await page.evaluate(() => {
       const w = window as any;
@@ -676,7 +708,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await page.screenshot({ path: testInfo.outputPath("following-path.png") });
 
 
-    // Selected dragging edits a small draft and preserves the large executing goal.
+    // Selected marker dragging streams goals and finishes without creating a draft.
     const beforeDraftGoals = goals;
     const savedActiveGoal = await page.evaluate(() => {
       const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
@@ -693,29 +725,33 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       input.position.x += 0.35;
     });
     await page.waitForTimeout(180); await setSelection(page, 0);
-    expect(goals).toBe(beforeDraftGoals);
+    expect(goals).toBeGreaterThan(beforeDraftGoals);
     await expect.poll(() => page.evaluate(saved => {
       const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
-      return app.client.navigation.draftMarker.object.visible && app.client.navigation.marker.object.visible &&
-        app.client.navigation.marker.cancelVisible() && app.client.navigation.marker.pose().position.every((v: number, i: number) => Math.abs(v - saved[i]) < 0.001);
+      const navigation = app.client.navigation;
+      return !navigation.draftMarker.object.visible && navigation.marker.object.visible &&
+        !navigation.interaction.isDragging() && !navigation.interaction.snapshot().draft &&
+        Math.abs(navigation.marker.pose().position[0] - saved[0]) > 0.3;
     }, savedActiveGoal)).toBe(true);
-    await captureWorld("active-and-preview.png", true);
+    const beforeFloorDraftGoals = goals;
     await page.evaluate(() => {
       const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp"), robot = app.client.robot.worldPosition();
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
-      input.position.set(robot[0], app.client.robot.floorWorldY() + 1, robot[2]);
+      input.position.set(robot[0] + 1, app.client.robot.floorWorldY() + 1, robot[2] + 1);
       input.quaternion.set(-Math.sin(Math.PI / 4), 0, 0, Math.cos(Math.PI / 4));
     });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
-      const draft = app.client.navigation.draftMarker.pose().position, robot = app.client.robot.worldPosition();
-      return app.interaction.hit(w.xb.core.input.rightController)?.object === app.navigationFloor && Math.hypot(draft[0] - robot[0], draft[2] - robot[2]) < 0.05;
+      return app.interaction.hit(w.xb.core.input.rightController)?.object === app.navigationFloor &&
+        app.client.navigation.interaction.snapshot().probes.length > 0;
     })).toBe(true);
+    await setSelection(page, 1); await setSelection(page, 0);
+    await captureWorld("active-and-preview.png", true);
     await page.evaluate(() => {
       const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
       app.client.navigation.clearAim(); app.client.setRobotSelected(false);
     });
-    expect(goals).toBe(beforeDraftGoals);
+    expect(goals).toBe(beforeFloorDraftGoals);
 
     // Actual terminal events trace at the goal before reattaching; screenshots and video use normal XR ticks.
     const feedback = () => page.evaluate(() => {

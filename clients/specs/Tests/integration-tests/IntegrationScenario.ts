@@ -1,12 +1,13 @@
 // Hardware inputs are deterministic fixtures. Production state owners, SIK/SUK controls and renderers run unchanged.
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
 import { getFrameComponent } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
-import { RUNTIME_LAYOUTS, SETUP_LAYOUTS } from "../Scripts/DimOSSpecsClient/presentation/PanelLayout";
+import { RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, SETUP_LAYOUTS } from "../Scripts/DimOSSpecsClient/presentation/PanelLayout";
 import { specsToClientTrackingPoint, clientTrackingToSpecsPoint } from "../Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import { decodeOutbound, decodeLocalizationObservations, LIDAR_FOURCC } from "../Scripts/DimOSARClient/websocket/protocol";
 import { WristMenuController } from "../Scripts/DimOSSpecsClient/presentation/WristMenuController";
 import { SpecsNavigationInput } from "../Scripts/DimOSSpecsClient/navigation/SpecsNavigationInput";
 import { WorldMeshRenderer, circleMesh } from "../Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer";
+import { FLOOR_MARKER_STYLE, WORLD_DASH_STYLE } from "../Scripts/DimOSARClient/presentation/WorldVisualStyle";
 import { composeLidarPoint } from "../Scripts/DimOSSpecsClient/sensors/PointCloudRenderer";
 import { IntegrationInput } from "./IntegrationInput";
 import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";
@@ -66,7 +67,8 @@ export class ReviewScenario extends BaseScriptComponent {
   }
   /** Measure uploaded vertices after every authored transform, rather than trusting nominal radii. */
   private measuredCircleRadius(renderer: any): number {
-    const circle = renderer.circle as WorldMeshRenderer;
+    const dashed = renderer.draftCircle?.object.enabled === true;
+    const circle = (dashed ? renderer.draftCircle : renderer.circle) as WorldMeshRenderer;
     const vertices = circle.visual.mesh!.extractVerticesForAttribute("position");
     const transform = circle.object.getTransform();
     const center = transform.getWorldPosition(), matrix = transform.getWorldTransform();
@@ -75,7 +77,9 @@ export class ReviewScenario extends BaseScriptComponent {
       const point = matrix.multiplyPoint(new vec3(vertices[i], vertices[i + 1], vertices[i + 2]));
       radius = Math.max(radius, Math.hypot(point.x - center.x, point.z - center.z));
     }
-    return radius;
+    // Adaptive stroke positions store the centerline; the shader adds half its physical width.
+    const scale = transform.getWorldScale();
+    return radius + (dashed ? WORLD_DASH_STYLE.widthM * 50 * Math.max(Math.abs(scale.x), Math.abs(scale.z)) : 0);
   }
   private after(delay: number, run: () => void): void { this.deferred.push({ at: this.clock + delay, run }); }
   private later(delay: number, test: () => boolean, caseId = this.activeCase): void { this.after(delay, () => this.check(caseId, test(), caseId)); }
@@ -352,7 +356,7 @@ export class ReviewScenario extends BaseScriptComponent {
         const forward = viewer.getTransform().getWorldRotation().multiplyVec3(new vec3(0, 0, -1));
         const length = Math.hypot(forward.x, forward.z) || 1;
         const offset = new vec3(forward.x / length * 18, 0, forward.z / length * 18);
-        const centerOffset = (76 - frame.totalSize.y) * 0.3456 / 2;
+        const centerOffset = (76 - frame.totalSize.y) * RUNTIME_PANEL_SCALE / 2;
         const wrist = initial.sub(new vec3(0, 20 + centerOffset, 0)).sub(offset);
         let facing = true, closed = false, headStayed = false;
         const hand = { isTracked: () => true, getPalmPitchAngle: () => facing ? 45 : -80,
@@ -361,7 +365,7 @@ export class ReviewScenario extends BaseScriptComponent {
         menu.applySpectaclesFrameMotion();
         this.wristFixture = new WristMenuController({ panel: ui.mainUIFrame, anchorRoot: ui.mainUIFrame,
           cameraObject: viewer, hands: { left: hand, right: { ...hand, isTracked: () => false } } as any,
-          centerOffsetCm: () => (76 - frame.totalSize.y) * 0.3456 / 2,
+          centerOffsetCm: () => (76 - frame.totalSize.y) * RUNTIME_PANEL_SCALE / 2,
           onBeforeShow: () => menu.applySpectaclesFrameMotion(),
           onMenuShow: () => { menu.placed(); ui.setUIState(1, { immediate: true }); },
           onMenuHide: () => { if (initialized) { closed = true; ui.setUIState(0, { immediate: true }); } },
@@ -424,8 +428,12 @@ export class ReviewScenario extends BaseScriptComponent {
         this.aim();
         this.after(0.2, () => this.input!.start(null));
         this.later(0.8, () => root.navigationController.isAiming() && root.navigationController.previewPath()?.length >= 2 &&
-          this.count("nav_goal_request", row => !row.preview) === before && Math.abs(root.navigationController.draftCircleBounds().radius - 6) < .001 &&
-          Math.abs(this.measuredCircleRadius(root.navigationController.draftMarker.worldVisuals) - 6) < .01);
+          this.count("nav_goal_request", row => !row.preview) === before &&
+          Math.abs(root.navigationController.draftCircleBounds().radius - FLOOR_MARKER_STYLE.radiusM * 100 * 1.15) < .01 &&
+          Math.abs(this.measuredCircleRadius(root.navigationController.draftMarker.worldVisuals) - FLOOR_MARKER_STYLE.radiusM * 100 * 1.15) < .02 &&
+          root.navigationController.draftMarker.worldVisuals.draftCircle.object.enabled &&
+          root.navigationController.draftMarker.worldVisuals.arrow.object.enabled &&
+          !root.navigationController.draftMarker.worldVisuals.circle.object.enabled);
         break;
       }
       case "navigation_drag": {

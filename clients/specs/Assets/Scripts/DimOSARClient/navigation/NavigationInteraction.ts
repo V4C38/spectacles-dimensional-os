@@ -4,7 +4,7 @@ import type { Quat, Vec3, YawPose } from "../websocket/protocolTypes";
 import { NavigationPreviewCoordinator } from "./NavigationPreviewCoordinator";
 import { NavigationGoalLifecycle, type NavigationPose, type NavigationCommands, type NavFlash } from "./NavigationGoalLifecycle";
 import { NavigationPlacementSession, DRAG_THRESHOLD_M, type Placement, type NavigationInputId, type PlacementStage } from "./NavigationPlacementSession";
-export { FLASH_DURATION_S, NAV_FEEDBACK_TIMING, GOAL_SEND_INTERVAL_S, GOAL_SEND_MIN_DISTANCE_M } from "./NavigationGoalLifecycle";
+export { FLASH_DURATION_S, NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING, GOAL_SEND_INTERVAL_S, GOAL_SEND_MIN_DISTANCE_M } from "./NavigationGoalLifecycle";
 export { DRAG_THRESHOLD_M, DRAG_HEADING_MIN_DELTA_M, DRAG_HEADING_SMOOTHING_RATE } from "./NavigationPlacementSession";
 export * from "./NavigationPolicy";
 import { NavigationHeading } from "./NavigationPolicy";
@@ -31,6 +31,7 @@ export class NavigationInteraction {
   private floor: NavigationPose | null = null;
   private directPose: NavigationPose | null = null;
   private directStart: Vec3 | null = null;
+  private directSource: NavigationInputId | null = null;
   private dragging = false;
   private directHeading: Quat = [0, 0, 0, 1];
   private readonly heading = new NavigationHeading();
@@ -70,24 +71,30 @@ export class NavigationInteraction {
   previewPath(): YawPose[] | null { return this.previews.previewPath(); }
   flash(): NavFlash | null { return this.goals.snapshot().flash; }
   aim(now: number, placed: Placement, sourceId = DEFAULT_SOURCE): void {
-    if (!this.selected || !this.armed || this.dragging) { this.clearAim(sourceId); return; }
+    if (this.directSource !== null) return;
+    if (!this.selected || !this.armed) { this.clearAim(sourceId); return; }
     this.placement.update(sourceId, now, placed, this.goals.snapshot().pose?.orientation ?? [0, 0, 0, 1]);
     const draft = this.placement.snapshot().draft;
     if (draft) { this.previews.aim(draft.position, draft.orientation); this.previews.tick(now); } else this.previews.clear();
   }
   clearAim(sourceId?: NavigationInputId): void {
+    if (this.directSource !== null && (sourceId === undefined || sourceId === this.directSource)) { this.cancelDrag(); return; }
     if (sourceId === undefined) this.placement.clear(); else this.placement.remove(sourceId);
     if (!this.isAiming()) this.previews.clear();
   }
   ownsDraft(sourceId: NavigationInputId): boolean { return this.placement.snapshot().draft?.ownerId === sourceId; }
   hold(now: number, placed: Placement, streamWhileDragging = true, sourceId = DEFAULT_SOURCE): boolean {
     if (!this.armed || !this.origin) return false;
-    if (this.selected || !streamWhileDragging) {
+    if (this.directSource !== null && this.directSource !== sourceId) return false;
+    if (!streamWhileDragging) {
       if (!this.selected) return false;
       return this.placement.press(sourceId, now, placed, this.goals.snapshot().pose?.orientation ?? [0, 0, 0, 1]);
     }
+    if (this.placement.snapshot().draft) return false;
     if (!placed || placed.blocked) return false;
     if (!this.directStart) {
+      this.directSource = sourceId;
+      this.placement.clear(); this.previews.clear();
       this.directStart = [...(this.goals.snapshot().pose?.position ?? placed.position)];
       this.directHeading = this.goals.snapshot().pose?.orientation ?? [0, 0, 0, 1];
       this.heading.reset(this.directStart, this.directHeading, now);
@@ -102,19 +109,20 @@ export class NavigationInteraction {
     return this.dragging;
   }
   release(now: number, placed: Placement, sourceId = DEFAULT_SOURCE): void {
-    if (this.selected) {
+    if (this.directSource !== null && this.directSource !== sourceId) return;
+    if (this.selected && this.directSource === null) {
       const pose = this.placement.release(sourceId, now, placed);
       if (pose) { this.goals.send(now, pose); this.previews.clear(); }
       else { const draft = this.placement.snapshot().draft; if (draft) { this.previews.aim(draft.position, draft.orientation); this.previews.tick(now); } }
     } else if (this.dragging && placed && !placed.blocked) {
       this.goals.send(now, { position: placed.position, orientation: this.directHeading });
     }
-    this.directPose = null; this.directStart = null; this.dragging = false;
+    this.directPose = null; this.directStart = null; this.directSource = null; this.dragging = false;
   }
   /** Adapter for hosts whose native drag system already computes a complete pose. */
   sendDirect(now: number, pose: NavigationPose, force: boolean): boolean { return this.goals.send(now, pose, force); }
   cancel(_now: number): boolean { this.cancelDrag(); return this.goals.cancel(); }
-  cancelDrag(): void { this.placement.clear(); this.previews.clear(); this.directPose = null; this.directStart = null; this.dragging = false; }
+  cancelDrag(): void { this.placement.clear(); this.previews.clear(); this.directPose = null; this.directStart = null; this.directSource = null; this.dragging = false; }
   reset(): void { this.cancelDrag(); this.goals.reset(); this.origin = null; this.floor = null; this.armed = this.selected = false; }
   dispose(): void { this.reset(); this.previews.reset(); }
 }

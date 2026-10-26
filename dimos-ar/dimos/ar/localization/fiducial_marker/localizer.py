@@ -81,8 +81,10 @@ class FiducialMarkerLocalizer(Localizer):
         marker_mounts: Sequence[FiducialMarkerMount],
         dictionary_name: str,
         config: FiducialMarkerLocalizerConfig | None = None,
+        allow_latest_robot_pose: bool = False,
     ) -> None:
         self._pose_buffer = pose_buffer
+        self._allow_latest_robot_pose = allow_latest_robot_pose
         self._mounts: dict[int, FiducialMarkerMount] = {}
         for mount in marker_mounts:
             if mount.marker_id in self._mounts:
@@ -197,6 +199,7 @@ class FiducialMarkerLocalizer(Localizer):
         robot = self._pose_buffer.at_server_ts(
             observation.ts_server,
             max_gap_s=_MAX_ROBOT_POSE_AGE_S,
+            fallback_to_latest=self._allow_latest_robot_pose,
         )
 
         if robot is None:

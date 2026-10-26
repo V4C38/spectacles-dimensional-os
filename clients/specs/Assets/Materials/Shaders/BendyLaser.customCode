@@ -1,0 +1,16 @@
+input_float ControlX;
+input_float ControlY;
+input_float ControlZ;
+input_float EndX;
+input_float EndY;
+input_float EndZ;
+input_float Brightness;
+input_float Opacity;
+output_vec4 Result;
+void main() {
+    float t = system.getSurfaceUVCoord0().y, u = 1.0 - t;
+    vec3 center = 2.0 * u * t * vec3(ControlX, ControlY, ControlZ) + t * t * vec3(EndX, EndY, EndZ);
+    float alpha = Opacity * smoothstep(0.0, 5.0, length(center));
+    if (alpha < 0.001) discard;
+    Result = vec4(vec3(Brightness), alpha);
+}

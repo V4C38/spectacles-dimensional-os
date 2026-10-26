@@ -16,6 +16,7 @@ function node(name: string, components: Record<string, unknown> = {}, children: 
     getTransform: () => ({
       getLocalScale: () => vec3.one(),
       setLocalScale: vi.fn(),
+      setLocalPosition: vi.fn(),
       setWorldPosition: vi.fn(),
       setLocalRotation: vi.fn(),
     }),
@@ -77,4 +78,52 @@ it("keeps the marker cancel button out of floor-drag capture", () => {
   expect(marker.ownsDragTarget(dragChild)).toBe(true);
   expect(marker.ownsDragTarget(cancel)).toBe(false);
   expect(marker.ownsDragTarget(root)).toBe(false);
+});
+
+it("limits marker hit priority to its enabled hierarchy while including Cancel", () => {
+  const root = { isEnabledInHierarchy: true, getParent: () => null } as unknown as SceneObject;
+  const child = { getParent: () => root } as unknown as SceneObject;
+  const other = { getParent: () => null } as unknown as SceneObject;
+  const marker = Object.assign(new NavGoalMarker(), { root });
+  expect(marker.ownsInteractionTarget(child)).toBe(true);
+  expect(marker.ownsInteractionTarget(other)).toBe(false);
+  (root as any).isEnabledInHierarchy = false;
+  expect(marker.ownsInteractionTarget(child)).toBe(false);
+});
+
+it("resizes the native hit cylinder to the visible circle without changing its height", () => {
+  const setWorldScale = vi.fn();
+  const marker = Object.assign(new NavGoalMarker(), { root: {},
+    worldVisuals: { setRadius: vi.fn(), apply: vi.fn(), circleBounds: () => ({ radius: 26 }) },
+    dragCollider: { shape: { radius: 40 } },
+    dragObject: { getTransform: () => ({ getWorldScale: () => new vec3(0.4, 0.4, 0.4), setWorldScale }) },
+  });
+  marker.applyWorldStyle({ selected: true, dragging: false, following: false, aiming: false,
+    flash: null, feedbackProgress: 0 }, 1 / 60, 1024);
+  expect(setWorldScale).toHaveBeenCalledWith(new vec3(0.65, 0.4, 0.65));
+});
+
+it("rises and grows the authored cancel button with its connector without restarting on repeated snapshots", () => {
+  let position = vec3.zero(), scale = vec3.zero();
+  const worldVisuals = { setRadius: vi.fn(), apply: vi.fn(), circleBounds: () => ({ radius: 21.44 }), circleHeightCm: () => 1.5 };
+  const marker = Object.assign(new NavGoalMarker(), { root: {}, worldVisuals, cancelBaseScale: new vec3(2.49, 2.49, 2.49),
+    cancelObject: { enabled: false, getTransform: () => ({ setLocalPosition: (p: vec3) => { position = p; }, setLocalScale: (s: vec3) => { scale = s; } }) },
+    cancelButton: { enabled: false, inactive: false }, interactionsBound: true });
+  const style = { selected: false, dragging: false, following: true, aiming: false, cancelVisible: true, flash: null, feedbackProgress: 0 };
+  marker.setCancelVisible(true);
+  expect(position.y).toBeCloseTo(1.5); expect(scale.x).toBe(0);
+  marker.applyWorldStyle(style, 0.14, 1024);
+  expect(position.y).toBeCloseTo((1.5 + 38) / 2); expect(scale.x).toBeCloseTo(2.49 / 2);
+  expect(worldVisuals.apply.mock.lastCall?.[0].cancelProgress).toBeCloseTo(0.5);
+  marker.setCancelVisible(true); marker.applyWorldStyle(style, 0.14, 1024);
+  expect(position.y).toBeCloseTo(38); expect(scale.x).toBeCloseTo(2.49);
+  marker.setCancelVisible(true, true, 1);
+  expect(position.y).toBeCloseTo(1.5); expect(scale.x).toBe(0);
+  marker.applyWorldStyle(style, 0.14, 1024);
+  marker.setCancelVisible(true, true, 1);
+  expect(position.y).toBeCloseTo((1.5 + 38) / 2);
+  marker.applyWorldStyle(style, 0.14, 1024);
+  expect(position.y).toBeCloseTo(38);
+  marker.setCancelVisible(false); marker.setCancelVisible(true);
+  expect(position.y).toBeCloseTo(1.5); expect(scale.x).toBe(0);
 });

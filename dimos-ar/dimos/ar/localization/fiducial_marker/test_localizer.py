@@ -25,7 +25,13 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
 
 
-def test_localizes_rendered_table_marker_from_three_optical_camera_poses() -> None:
+@pytest.mark.parametrize(
+    ("pose_ts", "replay", "succeeds"),
+    [(100.0, False, True), (10.0, True, True), (10.0, False, False)],
+)
+def test_localizes_rendered_table_marker_from_three_optical_camera_poses(
+    pose_ts: float, replay: bool, succeeds: bool,
+) -> None:
     """Exercise JPEG detection, PnP, optical composition, and default tilt fusion."""
     intrinsics = _intrinsics()
     k = np.array([[600, 0, 400], [0, 600, 400], [0, 0, 1]], dtype=np.float64)
@@ -63,7 +69,7 @@ def test_localizes_rendered_table_marker_from_three_optical_camera_poses() -> No
             )
         )
     pose_buffer = PoseBuffer()
-    pose_buffer.push(PoseStamped(ts=100, position=[0, 0, 0]), ts_server=100)
+    pose_buffer.push(PoseStamped(ts=pose_ts, position=[0, 0, 0]), ts_server=pose_ts)
     localizer = FiducialMarkerLocalizer(
         pose_buffer=pose_buffer,
         marker_mounts=[
@@ -75,10 +81,14 @@ def test_localizes_rendered_table_marker_from_three_optical_camera_poses() -> No
             )
         ],
         dictionary_name="DICT_APRILTAG_36h11",
+        allow_latest_robot_pose=replay,
     )
 
-    result = localizer.localize(observations)
+    result = localizer.snapshot().localize(observations)
 
+    if not succeeds:
+        assert result is None
+        return
     assert result is not None
     assert [result.pose.x, result.pose.y, result.pose.z] == pytest.approx([0, 0, 0], abs=0.02)
 

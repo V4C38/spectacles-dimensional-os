@@ -97,13 +97,14 @@ export class GlassSurface extends THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMa
     if (this.backing) this.add(this.backing);
   }
 
-  resize(width: number, height: number): void {
+  resize(width: number, height: number, radius = cornerRadius(width, height)): void {
     const size = this.material.uniforms.uSize.value as THREE.Vector2;
-    if (size.x === width && size.y === height) return;
+    radius = Math.min(radius, width / 2, height / 2);
+    if (size.x === width && size.y === height && this.material.uniforms.uRadius.value === radius) return;
     this.geometry.dispose();
     this.geometry = new THREE.PlaneGeometry(width, height);
     this.material.uniforms.uSize.value.set(width, height);
-    this.material.uniforms.uRadius.value = cornerRadius(width, height);
+    this.material.uniforms.uRadius.value = radius;
     if (this.backing) {
       this.backing.geometry.dispose();
       this.backing.geometry = roundedSurfaceGeometry(width, height, this.material.uniforms.uRadius.value, this.thickness);

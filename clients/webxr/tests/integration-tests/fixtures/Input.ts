@@ -40,17 +40,25 @@ export async function activateButton(
           menu = w.xb.core.scene.children.find(
             (o: any) => o.constructor.name === "WebXRApp",
           ).mainMenu;
-        return menu.panelProgress >= 0.999;
+        return menu.panelProgress >= 0.999 && menu.heightController.height === menu.heightController.target;
       }),
     )
     .toBe(true);
-  await page.evaluate(
+  const activationCount = await page.evaluate(
     ({ field, distance }) => {
       const w = window as any;
       const app = w.xb.core.scene.children.find(
         (object: any) => object.constructor.name === "WebXRApp",
       );
       const button = app.mainMenu[field];
+      if (button.userData.integrationActivationCount === undefined) {
+        button.userData.integrationActivationCount = 0;
+        const triggered = button.onTriggered;
+        button.onTriggered = function (id: unknown) {
+          triggered.call(this, id);
+          button.userData.integrationActivationCount++;
+        };
+      }
       const position = button.getWorldPosition(button.position.clone());
       const input =
         w.questDevice.primaryInputMode === "controller"
@@ -61,6 +69,7 @@ export async function activateButton(
       position.addScaledVector(normal, distance);
       input.position.set(position.x, position.y, position.z);
       input.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+      return button.userData.integrationActivationCount as number;
     },
     { field, distance },
   );
@@ -76,12 +85,10 @@ export async function activateButton(
       }, field),
     )
     .toBe(true);
-  await page.evaluate(() => {
-    const w = window as any;
-    if (w.questDevice.primaryInputMode === "controller")
-      w.questDevice.controllers.right.updateButtonValue("trigger", 1);
-    else w.questDevice.hands.right.updatePinchValue(1);
-  });
+  // XR Blocks fires onTriggered on release. Wait for sampled XR frames on both
+  // edges, then assert the callback rather than transient pressed styling.
+  await setSelection(page, 1);
+  await setSelection(page, 0);
   await expect
     .poll(() =>
       page.evaluate((field) => {
@@ -89,11 +96,10 @@ export async function activateButton(
         const app = w.xb.core.scene.children.find(
           (object: any) => object.constructor.name === "WebXRApp",
         );
-        return app.mainMenu[field].ux.isSelected();
+        return app.mainMenu[field].userData.integrationActivationCount;
       }, field),
     )
-    .toBe(true);
-  await setSelection(page, 0);
+    .toBe(activationCount + 1);
   await expect
     .poll(() =>
       page.evaluate((field) => {
@@ -120,6 +126,7 @@ export async function pointRuntimeButton(
         ).mainMenu;
         return (
           menu.panelProgress >= 0.999 &&
+          menu.heightController.height === menu.heightController.target &&
           [...menu.pageTransitions.values()].every(
             (state: any) => state.progress === (state.target ? 1 : 0),
           )
@@ -247,15 +254,22 @@ export async function restoreView(
 }
 
 export async function placeDirect(page: Page, field: string): Promise<void> {
-  await page.evaluate((field) => {
+  await page.evaluate(async () => {
     const w = window as any;
     const input =
       w.questDevice.primaryInputMode === "controller"
         ? w.questDevice.controllers.right
         : w.questDevice.hands.right;
     input.quaternion.set(0, -Math.SQRT1_2, 0, Math.SQRT1_2);
-  }, field);
-  await page.waitForTimeout(80);
+    // Sample the rotated joints before calculating the placement offset. A wall
+    // clock delay can expire before an XR frame under CI software rendering.
+    const session = w.xb.core.renderer.xr.getSession();
+    await new Promise<void>((resolve) =>
+      session.requestAnimationFrame(() =>
+        session.requestAnimationFrame(() => resolve()),
+      ),
+    );
+  });
   await page.evaluate((field) => {
     const w = window as any,
       app = w.xb.core.scene.children.find(
@@ -266,7 +280,8 @@ export async function placeDirect(page: Page, field: string): Promise<void> {
       w.questDevice.primaryInputMode === "controller"
         ? w.questDevice.controllers.right
         : w.questDevice.hands.right;
-    const point = app.interaction.direct.point(controller);
+    const point = app.interaction.direct.indexTip(controller)
+      ?? app.interaction.direct.point(controller);
     const target = app.mainMenu[field].getWorldPosition(
       app.mainMenu.panel.position.clone(),
     );
@@ -477,4 +492,27 @@ export async function scrollResponse(page: Page): Promise<void> {
       }),
     )
     .toBeGreaterThan(0);
+}
+
+export async function pointIndexAtButton(page: Page, label: string, distance: number): Promise<void> {
+  await page.evaluate(async ({ label, distance }) => {
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const button = app.mainMenu.panel.getObjectByName(`Button: ${label}`);
+    await new Promise<void>(resolve => app.session.requestAnimationFrame((_time: number, frame: XRFrame) => {
+      const source = Array.from(app.session.inputSources as XRInputSource[]).find(s => s.hand && s.handedness === "right")!;
+      const tip = frame.getJointPose!(source.hand!.get("index-finger-tip")!, app.reference)!.transform.position;
+      const normal = app.mainMenu.panel.position.clone().set(0, 0, 1).applyQuaternion(button.getWorldQuaternion(app.mainMenu.panel.quaternion.clone()));
+      const goal = button.getWorldPosition(app.mainMenu.panel.position.clone()).addScaledVector(normal, distance);
+      const hand = w.questDevice.hands.right;
+      hand.updatePinchValue(0);
+      hand.position.set(hand.position.x + goal.x - tip.x, hand.position.y + goal.y - tip.y, hand.position.z + goal.z - tip.z);
+      resolve();
+    }));
+  }, { label, distance });
+  await page.waitForTimeout(180);
+}
+
+
+export async function touchButton(page: Page, label: string): Promise<void> {
+  for (const distance of [0.05, 0.02, 0.005, 0.04]) await pointIndexAtButton(page, label, distance);
 }

@@ -75,12 +75,19 @@ Focused repo-backed probes use the same runner and restoration contract:
 ```sh
 /Volumes/M2_EXT_1/CLAD/tools-venv/bin/python clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/HeightProfiles.ts
 /Volumes/M2_EXT_1/CLAD/tools-venv/bin/python clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/NativeInteractionProbe.ts
+/Volumes/M2_EXT_1/CLAD/tools-venv/bin/python clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/BendyLaserProbe.ts
+/Volumes/M2_EXT_1/CLAD/tools-venv/bin/python clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/NavMarkerOverlapProbe.ts
 ```
 
 `HeightProfiles` measures setup heights and fixed world top edge.
 `NativeInteractionProbe` exercises PIN/IP, follow and restart with real disabled
 or idle audio. `HeaderProbe` measures native title baselines. These diagnostic
 runs cannot substitute for complete catalog coverage.
+`BendyLaserProbe` verifies that the straight beam mirrors the rendered SIK cursor,
+including during motion and held input, and checks width, opacity, start offset,
+tracking loss, direct input and native ray-only targets. `NavMarkerOverlapProbe`
+uses real physics hits and SIK's target chooser to drag an unselected marker through
+the robot's selection box, then verifies that robot picking and UI occlusion remain.
 
 Harness log lines begin `SPECS_REVIEW ` followed by JSON. Each result includes
 `caseId`, `name`, boolean `passed`, and `unixMs`. The canonical case assertion

@@ -1,5 +1,6 @@
 import type { RoundedRectangle } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangle";
 import { NotificationCenter, type ClientNotification } from "../../DimOSARClient/presentation/NotificationCenter";
+import { VIEWER_NOTIFICATION_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
 import { WorldMeshRenderer, circleMesh } from "./WorldMeshRenderer";
 import { createRoundedSurface, createText, uiMaterialLayer, COLOR_WHITE } from "./UIKit";
 
@@ -41,7 +42,8 @@ export class ViewerNotificationPresenter {
     const alpha = 1 - Math.exp(-12 * Math.max(0, deltaS));
     const current = this.root.getTransform();
     current.setWorldPosition(vec3.lerp(current.getWorldPosition(), target, alpha));
-    current.setWorldRotation(quat.slerp(current.getWorldRotation(), rotation, alpha));
+    const tilted = rotation.multiply(quat.angleAxis(-VIEWER_NOTIFICATION_STYLE.upwardTiltRad, vec3.right()));
+    current.setWorldRotation(quat.slerp(current.getWorldRotation(), tilted, alpha));
   }
   dispose(): void { this.root.destroy(); }
 }

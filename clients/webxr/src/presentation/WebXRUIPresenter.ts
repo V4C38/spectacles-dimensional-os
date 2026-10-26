@@ -96,6 +96,7 @@ export class WebXRUIPresenter {
   }
   dismissAlignmentReview(): void {
     this.flow.dismissAlignmentReview();
+    this.menuOpen = false;
   }
   get setupCompleted(): boolean { return this.flow.completed; }
   set setupCompleted(value: boolean) { this.flow.completed = value; }

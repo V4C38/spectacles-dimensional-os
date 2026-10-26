@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { Text } from "troika-three-text";
+import { VIEWER_NOTIFICATION_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 import { NotificationCenter, type ClientNotification } from "@dimos-ar-client/presentation/NotificationCenter";
 import { GlassSurface } from "./GlassSurface";
 import { syncText, UI_FONT_REGULAR } from "./UIFonts";
@@ -17,6 +18,7 @@ export class ViewerNotificationPresenter {
   private revision = -1;
   private readonly target = new THREE.Vector3();
   private readonly rotation = new THREE.Quaternion();
+  private readonly angles = new THREE.Euler(0, 0, 0, "YXZ");
   constructor() {
     this.object.name = "Viewer notification";
     this.object.add(this.plate, this.text, this.ring, ...this.strokes);
@@ -37,13 +39,23 @@ export class ViewerNotificationPresenter {
     this.object.visible = current !== null;
     if (!current) return;
     this.rotation.fromArray(orientation);
+    this.angles.setFromQuaternion(this.rotation, "YXZ");
+    this.angles.z = 0;
+    this.rotation.setFromEuler(this.angles);
     this.target.set(0, -0.9 * 0.45 / Math.max(0.1, projectionY), -0.9).applyQuaternion(this.rotation).add(new THREE.Vector3().fromArray(position));
+    // Tilt the surface toward the viewer without moving its lower-view anchor.
+    this.angles.x -= VIEWER_NOTIFICATION_STYLE.upwardTiltRad;
+    this.rotation.setFromEuler(this.angles);
     if (state.revision !== this.revision) {
       this.revision = state.revision; this.text.text = current.text; syncText(this.text);
       this.object.position.copy(this.target); this.object.quaternion.copy(this.rotation);
     }
     const alpha = 1 - Math.exp(-12 * deltaS), elapsed = state.elapsedS;
     this.object.position.lerp(this.target, alpha); this.object.quaternion.slerp(this.rotation, alpha);
+    // Interpolating different yaw/pitch poses can introduce roll between level endpoints.
+    this.angles.setFromQuaternion(this.object.quaternion, "YXZ");
+    this.angles.z = 0;
+    this.object.quaternion.setFromEuler(this.angles);
     const opacity = Math.min(1, elapsed / 0.12, ((current.durationS ?? 2.5) - elapsed) / 0.18);
     this.plate.setOpacity(opacity);
     for (const material of Array.isArray(this.text.material) ? this.text.material : [this.text.material]) material.opacity = opacity;
@@ -52,7 +64,7 @@ export class ViewerNotificationPresenter {
     this.ring.visible = current.glyph === "stop";
     this.ring.geometry.setDrawRange(0, Math.floor(Math.min(1, elapsed / 0.18) * 64) * 6);
     this.ring.material.color.setHex(color); this.ring.material.opacity = opacity;
-    const segments = current.glyph === "stop" ? [[-0.011, 0.011, 0.011, -0.011]] : current.glyph === "check" ? [[-0.012, 0, -0.003, -0.009], [-0.003, -0.009, 0.014, 0.012]] : [[-0.011, -0.011, 0.011, 0.011], [-0.011, 0.011, 0.011, -0.011]];
+    const segments = current.glyph === "stop" ? [[-0.010, 0.010, 0.010, -0.010]] : current.glyph === "check" ? [[-0.012, 0, -0.003, -0.009], [-0.003, -0.009, 0.014, 0.012]] : [[-0.011, -0.011, 0.011, 0.011], [-0.011, 0.011, 0.011, -0.011]];
     this.strokes.forEach((stroke, i) => {
       stroke.visible = !!current.glyph && i < segments.length;
       if (!stroke.visible) return;

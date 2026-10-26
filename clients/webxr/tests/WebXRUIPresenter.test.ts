@@ -125,3 +125,11 @@ it("celebrates real alignment briefly and never shows a success check for skippe
   expect(skipped.ui.setupCompleted).toBe(true);
   expect(skipped.ui.snapshot().setupCelebrating).toBe(false);
 });
+
+it("closes the UI when dismissing the localization review without clearing alignment", () => {
+  const f = setupFixture(); f.setView(view()); f.ui.setupCompleted = true;
+  f.ui.requestAlignmentReview("Tracking resumed"); expect(f.ui.menuOpen).toBe(true);
+  f.ui.dismissAlignmentReview();
+  expect(f.ui.menuOpen).toBe(false); expect(f.ui.alignmentReview?.pending).toBe(false);
+  expect(f.ui.snapshot().hasTrackingOrigin).toBe(true); expect(f.ui.setupCompleted).toBe(true);
+});

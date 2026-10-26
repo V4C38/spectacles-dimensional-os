@@ -1,4 +1,4 @@
-import { RUNTIME_LAYOUTS, SETUP_LAYOUTS, panelContentOffset } from "../Scripts/DimOSSpecsClient/presentation/PanelLayout";
+import { RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, SETUP_LAYOUTS, panelContentOffset } from "../Scripts/DimOSSpecsClient/presentation/PanelLayout";
 // Copied into disposable Assets/Review by tools/review.py; never shipped to hardware.
 import { DimOSSpecsClient } from "../Scripts/DimOSSpecsClient/DimOSSpecsClient";
 import { getFrameComponent } from "../Scripts/DimOSSpecsClient/presentation/UIKit";
@@ -184,7 +184,7 @@ export class ReviewScenario extends BaseScriptComponent {
       } },
       { name: "runtime-manual", run: () => {
         this.placePanel(ui.mainUIFrame); this.check("setup-completed", ui.isSetupCompleted());
-        this.checkFrameLayout("runtime", ui.mainUIFrame, 0.3456);
+        this.checkFrameLayout("runtime", ui.mainUIFrame, RUNTIME_PANEL_SCALE);
         this.check("native-manual-filled-selection", menu.modeButtons[0].style === "Primary" &&
           menu.modeButtons[1].style === "Secondary" && !menu.modeButtons[0]._toggleable && !menu.modeButtons[1]._toggleable);
       } },
@@ -262,7 +262,9 @@ export class ReviewScenario extends BaseScriptComponent {
       { name: "alignment-review", run: () => { this.placePanel(ui.mainUIFrame); ui.requestAlignmentReview("Review fixture: tracking resumed"); } },
       { name: "disconnected", run: () => { root.session.onTransportClose(); this.check("selection-cleared", !root.selection.isSelected()); } },
       { name: "setup-restart", run: () => {
-        callbacks.onDismissAlignment(); this.placePanel(ui.mainUIFrame); menu.showPage("settings");
+        callbacks.onDismissAlignment();
+        this.check("review-dismiss-closes-ui", ui.uiState === 0);
+        ui.setUIState(1, { immediate: true }); this.placePanel(ui.mainUIFrame); menu.showPage("settings");
         const controller = ui.setupWizardController;
         let restartCalled = false, startCalled = false;
         const restart = ui.restartSetup.bind(ui), start = controller.start.bind(controller);

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING } from "@dimos-ar-client/navigation/NavigationGoalLifecycle";
 import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
 import type { Capabilities, Hello } from "@dimos-ar-client/websocket/protocolTypes";
 import {
@@ -155,6 +156,9 @@ describe("WebXRNavigationController", () => {
     navigation.release(4, [0, 1.5, 0], [0, -1, -1], hit(-4), null, 0);
     expect(sendText).not.toHaveBeenCalled();
     expect(navigation.isAiming()).toBe(true);
+    navigation.tick(4.01, 1);
+    expect(navigation.draftMarker.circleBounds().radius).toBeCloseTo(navigation.marker.circleBounds().radius);
+    expect(navigation.draftMarker.object.getObjectByName("Navigation draft circle")!.visible).toBe(true);
     navigation.hold(4.1, [0, 1.5, 0], [0, -1, -1], hit(-4), null, 0, false);
     navigation.release(4.2, [0, 1.5, 0], [0, -1, -1], hit(-4), null, 0);
     expect(sendText).toHaveBeenCalledOnce();
@@ -373,4 +377,78 @@ it("renders two independent probes and separate active and draft markers at iden
   expect(f.navigation.draftMarker.circleOpacity()).toBe(f.navigation.marker.circleOpacity());
   expect(f.navigation.probes.get("right")?.circleOpacity()).toBe(f.navigation.marker.circleOpacity());
   expect(f.sendText).not.toHaveBeenCalled(); f.navigation.dispose();
+});
+
+it("drags a committed selected marker live beyond the floor aim range", () => {
+  const f = fixture(); f.navigation.setSelected(true);
+  f.preview(0); f.hold(0.2); f.release(0.3);
+  f.sendText.mockClear();
+  const from: [number, number, number] = [0, 1, 0];
+  const dir: [number, number, number] = [0, -1, -1];
+  const hits = (x: number) => [{ position: [x, 0, -6] as [number, number, number], normal: [0, 1, 0] as [number, number, number] }];
+  f.navigation.hold(1, from, dir, hits(1), null, 0, true);
+  f.navigation.hold(2, from, dir, hits(2), null, 0, true);
+  expect(f.navigation.isDragging()).toBe(true);
+  expect(f.navigation.marker.pose().position).toEqual([2, 0, -6]);
+  expect(f.navigation.draftMarker.object.visible).toBe(false);
+  expect(f.sendText).toHaveBeenCalled();
+  f.navigation.release(3, from, dir, hits(3), null, 0);
+  expect(f.navigation.isDragging()).toBe(false);
+  expect(f.navigation.marker.pose().position).toEqual([3, 0, -6]);
+  expect(JSON.parse(f.sendText.mock.lastCall![0]).preview).toBeUndefined();
+  f.navigation.dispose();
+});
+
+it.each(["succeeded", "cancelled"] as const)("holds the fully drawn %s marker before restoring the idle arrow", outcome => {
+  const f = fixture();
+  f.current.nav = { state: "following_path", outcome: null };
+  f.current.nav_goal = { type: "nav_goal", ts: 1, pose: [2, 0, 0, 0], path_poses: [[0, 0, 0, 0], [2, 0, 0, 0]] };
+  f.navigation.applyView(f.current, f.origin, f.floor, 1);
+  if (outcome === "cancelled") f.navigation.cancel(2);
+  else {
+    f.current.nav = { state: "resolved", outcome };
+    f.navigation.applyView(f.current, f.origin, f.floor, 2);
+  }
+  const ring = f.navigation.marker.object.getObjectByName("Navigation outcome ring") as import("three").Mesh;
+  const arrow = f.navigation.marker.object.getObjectByName("NavigationHeading")!;
+  const strokes = [0, 1].map(i => f.navigation.marker.object.getObjectByName(`Navigation outcome stroke ${i}`)!);
+  f.navigation.tick(3, NAV_FEEDBACK_ANIMATION_S);
+  const completedLengths = strokes.map(stroke => stroke.scale.x);
+  expect(completedLengths.every(length => length > 0)).toBe(true);
+  expect(ring.geometry.drawRange.count).toBe(128 * 6);
+  f.navigation.tick(4, NAV_FEEDBACK_TIMING.holdS - 0.01);
+  expect(f.navigation.flash()).toBe(outcome);
+  expect(f.navigation.marker.pose().position).toEqual([0, 0, -2]);
+  expect(ring.visible).toBe(true);
+  expect(ring.geometry.drawRange.count).toBe(128 * 6);
+  expect(strokes.map(stroke => stroke.scale.x)).toEqual(completedLengths);
+  expect(arrow.visible).toBe(false);
+  f.navigation.tick(5, 0.011);
+  expect(f.navigation.flash()).toBeNull();
+  expect(ring.visible).toBe(false); expect(arrow.visible).toBe(true);
+  expect(f.navigation.marker.pose().position).toEqual([0, 0, 0]);
+  f.navigation.dispose();
+});
+
+it("replays Cancel reveal when a selected floor draft replaces an existing goal, without restarting on path echoes", () => {
+  const f = fixture();
+  f.current.nav_goal = { type: "nav_goal", ts: 1, pose: [2, 0, 0, 0], path_poses: [[0, 0, 0, 0], [2, 0, 0, 0]] };
+  f.current.nav = { state: "following_path", outcome: null };
+  f.navigation.applyView(f.current, f.origin, f.floor, 1);
+  f.navigation.setSelected(true); f.navigation.tick(1.3, 0.3);
+  const buttonRoot = f.navigation.marker.object.getObjectByName("Navigation cancel button")!;
+  expect(buttonRoot.scale.x).toBeCloseTo(1);
+  f.preview(2, 3);
+  expect(buttonRoot.scale.x).toBeCloseTo(1); // Preview preserves the current goal's Cancel.
+  f.hold(3, 3); f.release(3.1, 3);
+  expect(f.sendText).toHaveBeenCalledOnce();
+  expect(buttonRoot.scale.x).toBe(0);
+  f.navigation.tick(3.24, 0.14);
+  expect(buttonRoot.scale.x).toBeCloseTo(0.5);
+  f.current.nav_goal = { type: "nav_goal", ts: 2, pose: [2, -3, 0, 0], path_poses: [[0, 0, 0, 0], [2, -3, 0, 0]] };
+  f.navigation.applyView(f.current, f.origin, f.floor, 3.25);
+  expect(buttonRoot.scale.x).toBeCloseTo(0.5);
+  f.navigation.tick(3.4, 0.14);
+  expect(buttonRoot.scale.x).toBeCloseTo(1);
+  f.navigation.dispose();
 });

@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { NavigationInteraction } from "../../Assets/Scripts/DimOSARClient/navigation/NavigationInteraction";
+import { NavigationInteraction, NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING } from "../../Assets/Scripts/DimOSARClient/navigation/NavigationInteraction";
 import { NavigationPreviewCoordinator } from "../../Assets/Scripts/DimOSARClient/navigation/NavigationPreviewCoordinator";
 import type { ARModuleSessionState } from "../../Assets/Scripts/DimOSARClient/websocket/arModuleSession";
 
@@ -192,4 +192,75 @@ it("does not revive a retained goal pose from an already-resolved reconnect snap
   f.view.nav_goal = { type: "nav_goal", ts: 1, pose: [4, 0, 0, 0], path_poses: [[0, 0, 0, 0], [4, 0, 0, 0]] };
   f.core.applyView(f.view, f.origin, { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, 1);
   expect(f.core.snapshot().activeGoal.active).toBe(false); expect(f.core.snapshot().attachedToRobot).toBe(true);
+});
+
+it("streams a selected committed marker drag and finishes on release without a draft", () => {
+  const f = liveFixture(); f.core.setSelected(true);
+  f.core.aim(2, f.point(2), "left");
+  f.core.hold(2, f.point(2), true, "left");
+  expect(f.commands.sendGoal).not.toHaveBeenCalled();
+  f.core.hold(3, f.point(3), true, "left");
+  expect(f.core.isDragging()).toBe(true);
+  expect(f.core.snapshot().draft).toBeNull();
+  expect(f.commands.sendGoal).toHaveBeenCalledOnce();
+  expect(f.core.hold(3.1, f.point(5), true, "right")).toBe(false);
+  f.core.release(3.2, f.point(5), "right");
+  expect(f.core.isDragging()).toBe(true);
+  f.core.release(4, f.point(4), "left");
+  expect(f.commands.sendGoal).toHaveBeenCalledTimes(2);
+  expect(f.commands.sendGoal.mock.lastCall?.[0].position).toEqual([4, 0, 0]);
+  expect(f.core.isDragging()).toBe(false);
+  expect(f.core.snapshot().draft).toBeNull();
+});
+
+it.each(["succeeded", "cancelled", "failed"] as const)("holds the completed %s feedback at the destination before reattaching", outcome => {
+  const f = liveFixture();
+  if (outcome === "cancelled") f.core.cancel(2);
+  else { f.view.nav = { state: "resolved", outcome }; f.apply(); }
+  const id = f.core.snapshot().feedbackId;
+  f.core.tick(3, NAV_FEEDBACK_ANIMATION_S - 0.01);
+  expect(f.core.snapshot().feedbackProgress).toBeLessThan(1);
+  f.core.tick(4, 0.01);
+  expect(f.core.snapshot().feedbackProgress).toBe(1);
+  f.core.tick(5, NAV_FEEDBACK_TIMING.holdS - 0.01); f.apply();
+  expect(f.core.snapshot().feedbackProgress).toBe(1);
+  expect(f.core.snapshot().feedbackId).toBe(id);
+  expect(f.core.flash()).toBe(outcome);
+  expect(f.core.snapshot().position).toEqual([2, 0, 0]);
+  expect(f.core.snapshot().attachedToRobot).toBe(false);
+  f.core.tick(6, 0.011); f.apply();
+  expect(f.core.flash()).toBeNull();
+  expect(f.core.snapshot().attachedToRobot).toBe(true);
+  expect(f.core.snapshot().position).toEqual([0, 0, 0]);
+});
+
+it("smooths drag-direction turns without responding to small position jitter", async () => {
+  const { NavigationHeading } = await import("../../Assets/Scripts/DimOSARClient/navigation/NavigationPolicy");
+  const heading = new NavigationHeading(); heading.reset([0, 0, 0], [0, 0, 0, 1], 0);
+  expect(heading.update([0.01, 0.01, 0], 1 / 60)).toEqual([0, 0, 0, 1]);
+  const turn = heading.update([0, 0.04, 0], 2 / 60);
+  const yaw = 2 * Math.atan2(turn[2], turn[3]);
+  expect(yaw).toBeGreaterThan(0.1); expect(yaw).toBeLessThan(0.17);
+  for (let i = 3; i <= 90; i++) heading.update([0, 0.04, 0], i / 60);
+  const settled = heading.update([0, 0.04, 0], 1.5);
+  expect(2 * Math.atan2(settled[2], settled[3])).toBeCloseTo(Math.PI / 2, 3);
+});
+
+it("advances Cancel confirmation identity on successful confirmations but not stream goals or path updates", () => {
+  const f = liveFixture();
+  const initial = f.core.snapshot().activeGoal.confirmationId;
+  f.core.hold(2, f.point(2), true, "left");
+  f.core.hold(3, f.point(3), true, "left");
+  expect(f.core.snapshot().activeGoal.confirmationId).toBe(initial);
+  f.core.release(4, f.point(3), "left");
+  expect(f.core.snapshot().activeGoal.confirmationId).toBe(initial + 1);
+  f.core.setSelected(true);
+  f.core.aim(5, f.point(5), "left");
+  f.core.hold(5, f.point(5), false, "left"); f.core.release(5.1, f.point(5), "left");
+  expect(f.core.snapshot().activeGoal.confirmationId).toBe(initial + 1);
+  f.core.hold(6, f.point(5), false, "left"); f.core.release(6.1, f.point(5), "left");
+  expect(f.core.snapshot().activeGoal.confirmationId).toBe(initial + 2);
+  f.view.nav_goal = { type: "nav_goal", ts: 10, pose: [5, 0, 0, 0], path_poses: [[0, 0, 0, 0], [5, 0, 0, 0]] };
+  f.apply();
+  expect(f.core.snapshot().activeGoal.confirmationId).toBe(initial + 2);
 });

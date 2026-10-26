@@ -1,4 +1,4 @@
-import { strokeJoints2D, STROKE_JOIN_SEGMENTS } from "../../DimOSARClient/presentation/WorldVisualStyle";
+import { strokeJoints2D, STROKE_JOIN_SEGMENTS, WORLD_DASH_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
 import type { Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
 
 export const WORLD_COLOR_MATERIAL = requireAsset("../../../Materials/WorldVertexColor.mat") as Material;
@@ -100,7 +100,8 @@ function sameNumbers(a: readonly number[], b: readonly number[]): boolean {
 /** Adaptive stroke quads encode the same segment metric used by the WebXR shader. */
 export class AdaptiveStrokeRenderer extends WorldMeshRenderer {
   constructor(parent: SceneObject, name: string) { super(parent, name, WORLD_STROKE_MATERIAL, true); }
-  segments(points: readonly Vec3[], widthCm: number, opacity: number, dashCm = 1.2, gapCm = 1,
+  segments(points: readonly Vec3[], widthCm: number, opacity: number,
+    dashCm: number = WORLD_DASH_STYLE.dashM * 100, gapCm: number = WORLD_DASH_STYLE.gapM * 100,
     continuous = false): void {
     const vertices: number[] = [], indices: number[] = [];
     let distance = 0;

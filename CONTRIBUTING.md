@@ -81,14 +81,18 @@ Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-
 `session.view()` and `episode.view()`. They call existing ClientCore commands
 (`requestNavGoal`, `requestLidarSettings`, `requestUserMessage`,
 `session.requestEstop`, `session.requestState`, `episode.requestStart`).
-Specs setup retains PIN/IP connection entry followed by camera localization.
+Specs setup retains PIN/IP connection entry followed by camera localization. A valid saved
+PIN is tried automatically when Connect opens without an established session, and when
+switching back to PIN mode. Editing the connection field cancels pending resolution/retries.
 Restart is queued until the next update, after native button dispatch, and invalidates
 panel scale animations before reopening Connect. Pending connection timers use
 `DelayedCallbackEvent.cancel()`; `reset(0)` schedules a callback instead of cancelling it.
-The setup and runtime panels use WebXR’s calibrated widths and control sizes:
-setup width 38.88 cm and runtime width 31.104 cm. Specs-only `PanelLayout`
-profiles compact each page vertically, up to heights 32.832 cm and 26.2656 cm
-respectively. `PanelHeightController` eases height changes over 280 ms around a
+Specs setup uses a 29.16 cm width, 25% smaller than its shared baseline.
+The runtime main menu uses a
+Specs-only uniform scale of 0.2592, 25% smaller than the shared runtime baseline:
+its frame and all descendant controls, labels, badges and hit targets scale together.
+Its width is 23.328 cm. Specs-only `PanelLayout` profiles compact each page vertically,
+up to heights 32.832 cm for setup and 19.6992 cm for runtime. `PanelHeightController` eases height changes over 280 ms around a
 fixed top edge; native Frame still owns grabbing and following. Its content offset
 keeps headers and mode/step bars fixed, and its follow width stays in world centimetres.
 Setup uses Frame’s own follow control, scaled with its icon and collider to the
@@ -126,13 +130,48 @@ There is no custom follow loop, grab implementation, or window bar.
 World robot labels use the same Inter regular/semibold fonts and shared
 20/28/13 mm em sizes, top anchors, status dot and spacing as WebXR. The native
 Inter em/line-cell ratio is calibrated separately from the system UI font.
-Hovering the eligible robot or navigation marker highlights both affordances;
+Hovering the robot or its attached navigation marker highlights both affordances.
+After a drag detaches the marker, their hover visuals are independent;
 Cancel is excluded and draft ownership is respected. Selection and navigation
 Cancel dispatch on press. Setup and navigation outcomes share WebXR’s traced
 ring/check/cross geometry. Authored setup/runtime controls and obsolete marker
 VFX/text are removed through Lens Studio MCP; Frame/odometry/debug hosts remain.
 
+Specs adds a straight, tapered beam alongside the existing SIK V2 cursor. It mirrors
+the rendered cursor's position, visibility and alpha without independent hover logic,
+smoothing or growth/retraction. The beam starts 10 cm from the hand (clamped for close
+cursors), has a 0.08–0.055 cm white radius and uses 45% of the cursor's rendered opacity.
+The existing fixed-tube `BendyLaser` shader is reused with collinear control points.
+Native ray-only targets retain SIK's own ray; direct/poke input, tracking loss and pause
+hide the addon. `BendyLaserProbe.ts` checks the real cursor, controls and shader.
+
+`SpecsNavigationTargetPriority` scopes a workaround to the installed SIK 0.17.2 target
+chooser: when the robot box wins, try SIK's own chooser without that box and accept the
+result only if it belongs to the navigation marker (including Cancel). Other targets
+keep their normal behavior. This lets an unselected marker inside the robot bounds
+receive the actual SIK cursor, hover and drag without disabling the box for other rays
+or editing the package. Teardown restores the chooser. `NavMarkerOverlapProbe.ts`
+checks native physics hits, unselected drag commands, robot picking and UI occlusion.
+Physical tracking and stereo still need a device check.
+Direct Specs marker drags intersect a gesture-local plane initialized at the marker's height. Room-mesh height differences up to 10 cm are ignored; larger steps
+follow the walkable mesh immediately while the always-horizontal plane eases toward its height
+(0.6-second time constant). Missing scans keep planar dragging available.
+Release, cancellation and localization changes retire the gesture plane.
+Selected floor placement retains its separate floor-validity checks.
+
 ## WebXR architecture
+
+WebXR uses the same compact page/state layout rhythm, with its launcher connection
+flow replacing the Specs PIN/IP entry. Both setup and runtime height changes ease
+for 280 ms around a fixed top edge; headers and tabs stay fixed while the footer,
+grab bar, resize corners, and their hit zones follow the animated bottom edge.
+Incoming bodies wait until they fit, and automatic resizing pauses during a grab.
+Every WebXR runtime page reserves a 4 cm design-space gap above Emergency Stop,
+including throughout height transitions.
+Message and diagnostics viewports remain bounded and scrollable. WebXR's
+`PanelLayout` and `PanelHeightController` own this presentation geometry without
+changing its calibrated setup/runtime widths or user-selected window scale.
+
 
 **Entry**
 
@@ -228,6 +267,13 @@ message, or a second capture state store. Capture policy is a field on
 
 WebXR's one camera owner is `HmdCameraSource`: same ClientCore ports, `getUserMedia`, and an accepted `HmdCalibrationProfile`.
 
+In offline replay, marker registration can continue after playback ends. A capture
+newer than the retained odometry history uses the last replay robot pose when no
+timestamp-matched pose exists; the physical marker represents the robot at that
+pose. New replay clients receive that retained pose with its original timestamp
+and corrected AR coordinates. Empty history, historical gaps, live-robot pose
+freshness, VPS timing, and marker quality checks retain their normal rules.
+
 ## Host-layer naming (`clients/specs/Assets/Scripts/DimOSSpecsClient/` and `clients/webxr/src/`)
 
 Same suffix = same role.
@@ -277,7 +323,7 @@ WebXR setup marks the connection complete after `hello`. Localization guidance f
 the capture policy (AprilTag, VPS, or mixed), and its 5 fps preview shares the
 calibrated capture stream without opening another camera or resizing capture frames.
 World annotations show a sphere at the exact composed location and a glass label.
-Floor circles and dotted connectors belong only to robot/navigation feedback.
+Floor circles and dashed connectors belong only to robot/navigation feedback.
 
 
 The dimOS AR design tokens and `SurfaceButton`, `SurfaceText`, and
@@ -298,9 +344,20 @@ video. Playwright retains browser video and review scene timestamps; run
 30–40 second `interaction-review.mp4` in each immersive test artifact directory.
 These recordings use headset emulation and do not replace physical Quest checks.
 
-WebXR internal UI fills and controls use explicit render order without depth-buffer
-writes. The outer panel and robot pill retain depth occlusion. Button text uses a
-physical half-millimeter offset rather than the SDK's local-unit gap. Robot outlines
+WebXR internal UI fills and button faces use explicit render order without depth-buffer
+writes. Opaque control bodies, the outer panel and robot pill retain depth occlusion. Button text uses a
+physical half-millimeter offset rather than the SDK's local-unit gap. All control
+surfaces, including fields and inactive tabs, have rounded side/back geometry with
+no duplicate front cap. Bodies use a darker shade of the animated face color at full
+opacity, including the navigation marker’s Cancel button. Panel controls use 75% of
+(the inactive resting offset + 0.1 mm) as physical thickness, fixed during
+hover/selection and panel resizing. Each panel button casts a soft shadow on its
+supporting surface only while raised; there is no resting socket or footprint. The
+resting back sits 0.2 mm above the surface, with the shadow plane at 0.1 mm. As the
+button lifts, its shadow spreads down and slightly right with a soft edge, while
+staying on that same supporting plane.
+The head-following setup panel targets 10 cm below the viewer’s forward line and
+eases position and orientation with a 200 ms time constant. Robot outlines
 unfold from the body box's floor: horizontal expansion precedes height, and hiding
 runs the same progress backward over 240 ms, retaining opacity until the final horizontal collapse, without altering the selection collider.
 
@@ -326,7 +383,7 @@ during updates and the executing route during transient empty frames. This chang
 presentation; planner paths and confirmed goal poses remain authoritative.
 
 Immersive panels start at 60% of their previous size while preserving resize limits. Selected
-floor aiming starts with a small circle and half-height dotted stem while the authoritative
+floor aiming starts with a small circle and half-height dashed stem while the authoritative
 marker and executing route stay visible. One complete press/release opens the full preview,
 which follows floor aim and movement heading. A second gesture captures and submits the
 displayed pose once; aim loss cancels only the candidate. Floor aiming and its laser are limited
@@ -353,10 +410,13 @@ share bounded deduplication and retain the first warning/error immediately.
 
 Navigation completion requires the authoritative goal-reached event. ClientCore retires local
 goal intent and retained routes on terminal facts, then keeps the marker at the destination for
-a 600 ms visible-frame animation: 250 ms circle trace, 150 ms checkmark/X buildup, and a 200 ms
-hold. Success is green, cancellation red, and failure amber. A newer non-preview goal interrupts
+a 750 ms visible-frame animation: 250 ms circle trace, 150 ms checkmark/X buildup, and a 350 ms
+hold of the fully completed circle and glyph. Success is green, cancellation red, and failure amber. A newer non-preview goal interrupts
 feedback, including a new goal at the same destination. Only after feedback does the marker
-reattach to the robot. ARModule rejects planner frames timestamped before the current request or
+reattach to the robot. Cancel appears by rising from the circle center and scaling from zero
+to its authored size over 280 ms; the dotted connector grows with it. Small pre-commit probes
+use the shared dash pattern and sit exactly at the placement/laser endpoint without a height
+offset. ARModule rejects planner frames timestamped before the current request or
 a completed/stopped episode; transient empty paths still do not imply success.
 
 WebXR Sensors is a runtime submenu with Off / Obstacles / Full LiDAR tabs. Point limits
@@ -369,12 +429,13 @@ circles share the same animated opacity across the robot, probe, and goal varian
 Headset resume and extended tracking loss show a dismissable alignment review in the setup
 manager. Reference-space transforms compensate known resets; unknown resets retire the old
 transport/capture episode while retaining the last alignment pending user review. Dismissal
-does not verify alignment. Realign enters the existing setup flow.
+does not verify alignment. Dismiss closes the UI in both clients; Realign enters the existing setup flow.
 
 Emergency stop sends immediately and shows reusable viewer-relative feedback for 2.5 visible
 seconds, with a 350 ms pressed-button latch. The notification is a compact pill with an animated circle/slash icon and the single line
 “Emergency stop requested”; the wire protocol has no stop acknowledgement. Notifications
-follow the lower third of the view smoothly and never capture interaction rays. Lasers begin three centimeters ahead of
+follow the lower third of the view smoothly, tilt upward by 12 degrees toward the wearer,
+and never capture interaction rays. Lasers begin three centimeters ahead of
 the input pose and fade in over five centimeters; reveal/hide take 180/240 ms. Main panels
 have four millimeters of backing thickness. Real camera-background blur remains deferred
 pending physical Quest support and performance verification.
@@ -405,11 +466,18 @@ camera calibration, plane polygons, GPU shaders, DOM landing views and native co
 methods remain host-specific. Pure route tessellation remains with its renderer because it
 implements that host's floor coordinates and visual stroke/circle clipping.
 
-Selected placement keeps the active goal/route visible while editing a small draft. Both
+Selected placement keeps the active goal/route visible while editing a full-size dashed draft. Both
 sources have independent pre-confirm probes. The first source to confirm owns the draft;
-the other source cannot replace it. Selected dragging also previews before confirmation.
-Unselected direct dragging retains live commands. Robot collider picking is ignored only
+the other source cannot replace it. Selected floor dragging also previews before confirmation.
+Direct marker dragging retains live commands in both selection modes, including after a goal is committed. Robot collider picking is ignored only
 for the draft owner; detected walls, invalid floors, UI occlusion and range gates remain.
+
+Robot bounds, dashed routes, connectors and preview circles share
+`WORLD_DASH_STYLE`: 12 mm dashes, 10 mm gaps and a 2.75 mm base stroke. Confirmed
+previews retain the normal marker radius and selected scale. Their arrow retains its length
+while using 80% of the normal width and opacity;
+pre-confirm floor probes remain small and use the same dotted outline at the laser endpoint.
+Drag-direction heading changes use shared time-based smoothing, with a 3 cm jitter gate.
 
 ### Localization delay investigation
 
@@ -497,3 +565,7 @@ harness's ignored `test-results/<run-id>/` folder. Every applicable case needs
 a real assertion and a numbered image. The golden-path video runs at normal
 speed and includes complete animations; failures belong in regression images.
 Older results may be removed only after a fresh complete run passes.
+
+When a headset is using the production WebXR page during local CI, set
+`CI_WEBXR_BUILD_DIR=/tmp/webxr-ci-build ./launcher/scripts/run-ci.sh` to keep
+the currently served build intact. Tests still use their isolated HTTPS server.

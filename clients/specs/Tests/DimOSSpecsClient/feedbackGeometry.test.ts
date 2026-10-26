@@ -1,22 +1,53 @@
 import { expect, it, vi } from "vitest";
 import { NavigationMarkerRenderer } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationMarkerRenderer";
 import { circleMesh, strokeMesh2D } from "../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer";
-import { FLASH_DURATION_S, NAV_FEEDBACK_TIMING } from "../../Assets/Scripts/DimOSARClient/navigation/NavigationGoalLifecycle";
-import { NAVIGATION_COLORS } from "../../Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import { NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING } from "../../Assets/Scripts/DimOSARClient/navigation/NavigationGoalLifecycle";
+import { NAVIGATION_COLORS, ROBOT_LINE_STYLE } from "../../Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle";
 
 function sink() { return { triangles: vi.fn(), hide: vi.fn(), object: { getTransform: () => ({ setLocalPosition: vi.fn() }) } }; }
 function renderer(scale = 1) {
   const circle = sink(), outcomeRing = sink(), glyph = sink(), arrow = sink();
+  const draftCircle = { ...sink(), segments: vi.fn(), setViewportHeight: vi.fn() };
   const value = Object.assign(Object.create(NavigationMarkerRenderer.prototype), {
     radiusCm: 21.44, scale, opacity: 0.35, time: 0, motion: 0,
-    circle, outcomeRing, glyph, arrow, stem: { hide: vi.fn(), setViewportHeight: vi.fn() },
+    circle, draftCircle, outcomeRing, glyph, arrow, stem: { hide: vi.fn(), setViewportHeight: vi.fn(), segments: vi.fn() },
   }) as NavigationMarkerRenderer;
-  return { value, circle, outcomeRing, glyph, arrow };
+  return { value, circle, draftCircle, outcomeRing, glyph, arrow };
 }
+
+it("keeps the confirmed draft as large as the normal selected marker with box-style dashes", () => {
+  const normal = renderer(), draft = renderer();
+  const style = { selected: true, dragging: false, following: false, aiming: false, flash: null, feedbackProgress: 0 };
+  normal.value.apply(style, 1, 1000);
+  draft.value.apply({ ...style, aiming: true }, 1, 1000);
+  const solidPoints = normal.circle.triangles.mock.calls[0][0] as number[];
+  const solidRadius = Math.max(...solidPoints.filter((_v, index) => index % 3 === 0));
+  const [segments, width, opacity, dash, gap, continuous] = draft.draftCircle.segments.mock.calls[0];
+  expect(Math.max(...segments.map((p: number[]) => Math.hypot(p[0], p[2]))) + width / 2).toBeCloseTo(solidRadius);
+  expect(solidRadius).toBeCloseTo(21.44 * 1.15);
+  expect(width).toBeCloseTo(ROBOT_LINE_STYLE.selectedWidthM * 100);
+  expect(dash).toBeCloseTo(ROBOT_LINE_STYLE.dashM * 100);
+  expect(gap).toBeCloseTo(ROBOT_LINE_STYLE.gapM * 100);
+  expect(continuous).toBe(true); expect(opacity).toBeGreaterThan(0);
+  expect(draft.circle.hide).toHaveBeenCalled();
+  expect(draft.arrow.triangles).toHaveBeenCalled();
+});
+
+it("keeps the pre-confirm probe small, dashed and centered at the laser endpoint", () => {
+  const probe = renderer(); Object.assign(probe.value, { radiusCm: 6, probe: true });
+  probe.value.apply({ selected: true, dragging: false, following: false, aiming: true, flash: null, feedbackProgress: 0 }, 1, 1000);
+  const [segments, width, , dash, gap, continuous] = probe.draftCircle.segments.mock.calls[0];
+  expect(Math.max(...segments.map((p: number[]) => Math.hypot(p[0], p[2]))) + width / 2).toBeCloseTo(6);
+  expect(dash).toBeCloseTo(ROBOT_LINE_STYLE.dashM * 100);
+  expect(gap).toBeCloseTo(ROBOT_LINE_STYLE.gapM * 100);
+  expect(continuous).toBe(true); expect(probe.circle.hide).toHaveBeenCalled();
+  expect(probe.value.circleHeightCm()).toBe(0);
+  expect(probe.arrow.hide).toHaveBeenCalled();
+});
 it("traces the navigation outcome from three o'clock over the retained white floor circle", () => {
   const r = renderer();
   r.value.apply({ selected: false, dragging: false, following: false, aiming: false,
-    flash: "cancelled", feedbackProgress: NAV_FEEDBACK_TIMING.traceS * 0.25 / FLASH_DURATION_S }, 0, 1000);
+    flash: "cancelled", feedbackProgress: NAV_FEEDBACK_TIMING.traceS * 0.25 / NAV_FEEDBACK_ANIMATION_S }, 0, 1000);
   expect(r.circle.triangles.mock.calls[0][1]).toHaveLength(128 * 6);
   expect(r.circle.triangles.mock.calls[0][2].slice(0, 3)).toEqual([1, 1, 1]);
   const [points, indices] = r.outcomeRing.triangles.mock.calls[0];
@@ -74,4 +105,30 @@ it.each([
   expect(coversPoint(pending.positions, pending.indices, x, elbow)).toBe(false);
   const complete = strokeMesh2D(segments, [1, 1], width);
   expect(coversPoint(complete.positions, complete.indices, x, elbow)).toBe(true);
+});
+
+it("grows the native cancel connector with the rising button", () => {
+  const r = renderer();
+  const stem = (r.value as any).stem;
+  const style = { selected: false, dragging: false, following: true, aiming: false, cancelVisible: true, flash: null, feedbackProgress: 0 };
+  r.value.apply({ ...style, cancelProgress: 0 }, 0, 1024);
+  expect(stem.hide).toHaveBeenCalled();
+  r.value.apply({ ...style, cancelProgress: 0.5 }, 0, 1024);
+  const middle = stem.segments.mock.lastCall[0];
+  expect(middle[0][1]).toBeCloseTo(1.5); expect(middle[1][1]).toBeCloseTo(14.5);
+  r.value.apply({ ...style, cancelProgress: 1 }, 0, 1024);
+  expect(stem.segments.mock.lastCall[0][1][1]).toBeCloseTo(27.5);
+});
+
+it("thins and dims the native preview arrow without shortening it or dimming its circle", () => {
+  const normal = renderer(), preview = renderer();
+  const style = { selected: true, dragging: false, following: false, aiming: false, flash: null, feedbackProgress: 0, opacity: 0.6 };
+  normal.value.apply(style, 1, 1000); preview.value.apply({ ...style, aiming: true }, 1, 1000);
+  const [normalPoints, , normalColor] = normal.arrow.triangles.mock.lastCall!;
+  const [previewPoints, , previewColor] = preview.arrow.triangles.mock.lastCall!;
+  const extent = (points: number[], axis: number) => Math.max(...points.filter((_v, i) => i % 3 === axis).map(Math.abs));
+  expect(extent(previewPoints, 0)).toBeCloseTo(extent(normalPoints, 0));
+  expect(extent(previewPoints, 2)).toBeCloseTo(extent(normalPoints, 2) * 0.8);
+  expect(previewColor[3]).toBeCloseTo(normalColor[3] * 0.8);
+  expect(preview.draftCircle.segments.mock.lastCall?.[2]).toBe(0.6);
 });

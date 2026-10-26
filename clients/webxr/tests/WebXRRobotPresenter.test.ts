@@ -5,6 +5,7 @@ import { deriveRobotMarkerApplyInput } from "../src/presentation/RobotMarkerStat
 import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
 import type { Capabilities } from "@dimos-ar-client/websocket/protocolTypes";
 import { WebXRRobotPresenter } from "../src/presentation/WebXRRobotPresenter";
+import { ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 
 const capabilities: Capabilities = {
   lidar: { available: true, reason: null },
@@ -156,7 +157,8 @@ it("orients the invisible body collider with the robot and reverses the outline 
   const outline = robot.object.getObjectByName("Robot selection outline") as THREE.LineSegments<THREE.EdgesGeometry, THREE.LineDashedMaterial>;
   expect(outline.geometry.getAttribute("position").count).toBe(24);
   expect(outline.material).toBeInstanceOf(THREE.LineDashedMaterial);
-  expect(outline.material.dashSize).toBeLessThan(outline.material.gapSize);
+  expect(outline.material.dashSize).toBe(ROBOT_LINE_STYLE.dashM);
+  expect(outline.material.gapSize).toBe(ROBOT_LINE_STYLE.gapM);
   expect(outline.geometry.getAttribute("lineDistance").count).toBe(24);
   expect(outline.material.opacity).toBe(0);
   const center = robot.collider.getWorldPosition(new THREE.Vector3());

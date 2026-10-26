@@ -151,16 +151,15 @@ export class XRBlocksRayInteraction {
     input.raycaster.far = RAY_LENGTH_M;
   }
 
-  hoverTargets(): THREE.Object3D[] {
+  hoverTargets(preserveCapturedHoverFor?: THREE.Object3D): THREE.Object3D[] {
     const targets: THREE.Object3D[] = [];
     for (const controller of this.input.controllers) {
-      if (!controller.visible || controller.userData.connected !== true || this.policy.captured(controller)) continue;
+      if (!controller.visible || controller.userData.connected !== true) continue;
       const hit = this.hit(controller);
+      // A selection press can retain its real hover; manipulation still suppresses it.
+      if (this.policy.captured(controller) && (!preserveCapturedHoverFor ||
+        hit?.object !== preserveCapturedHoverFor || this.anchors.get(controller)?.object !== preserveCapturedHoverFor)) continue;
       if (hit && rayTargetVisible(hit.object) && this.policy.eligible(controller, hit.object, hit.point)) targets.push(hit.object);
-      else {
-        const beam = this.beams.get(controller);
-        if (beam?.mesh.visible && beam.affordance && rayTargetVisible(beam.affordance) && this.policy.eligible(controller, beam.affordance, beam.tip)) targets.push(beam.affordance);
-      }
     }
     return targets;
   }

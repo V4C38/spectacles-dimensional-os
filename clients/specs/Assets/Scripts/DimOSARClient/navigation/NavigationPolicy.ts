@@ -61,7 +61,10 @@ export function robotDeadzoneRadiusM(footprint: [number, number]): number {
 function distance(a: Vec3, b: Vec3): number { return Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]); }
 function isResolvedFailed(nav: NavState | null | undefined): boolean { return nav?.state === "resolved" && nav.outcome === "failed"; }
 
-/** A gate prevents tiny tracking jitter from changing the heading. */
+export const DRAG_HEADING_MIN_DELTA_M = 0.03;
+export const DRAG_HEADING_SMOOTHING_RATE = 6;
+
+/** A gate rejects tracking jitter; time-based easing smooths drag-direction turns. */
 export class NavigationHeading {
   private gate: Vec3 | null = null;
   private current: Quat = [0, 0, 0, 1];
@@ -69,12 +72,12 @@ export class NavigationHeading {
   private lastAt = 0;
   reset(position: Vec3, heading: Quat, now: number): void { this.gate = [...position]; this.current = [...heading]; this.target = [...heading]; this.lastAt = now; }
   update(position: Vec3, now: number): Quat {
-    if (this.gate && Math.hypot(position[0] - this.gate[0], position[1] - this.gate[1]) >= 0.03) {
+    if (this.gate && Math.hypot(position[0] - this.gate[0], position[1] - this.gate[1]) >= DRAG_HEADING_MIN_DELTA_M) {
       this.target = yawFromPlanarDirection(position[0] - this.gate[0], position[1] - this.gate[1]); this.gate = [...position];
     }
     const yaw = 2 * Math.atan2(this.current[2], this.current[3]), target = 2 * Math.atan2(this.target[2], this.target[3]);
     const delta = Math.atan2(Math.sin(target - yaw), Math.cos(target - yaw));
-    const next = yaw + delta * (1 - Math.exp(-8 * Math.max(0, now - this.lastAt)));
+    const next = yaw + delta * (1 - Math.exp(-DRAG_HEADING_SMOOTHING_RATE * Math.max(0, now - this.lastAt)));
     this.lastAt = now; this.current = [0, 0, Math.sin(next / 2), Math.cos(next / 2)]; return [...this.current];
   }
 }

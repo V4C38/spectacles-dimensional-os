@@ -18,6 +18,13 @@ export class FingertipButtons<T extends object> {
 
   owns(source: T): boolean { return this.presses.has(source) || this.disarmed.has(source); }
 
+  release(source: T): void {
+    const press = this.presses.get(source);
+    if (!press) return;
+    this.presses.delete(source); this.disarmed.set(source, press.point.clone());
+    this.events.end(source, press, !rayTargetVisible(press.object) || press.object.userData.interactionEnabled === false);
+  }
+
   update(source: T, tip: THREE.Vector3 | null, targets: readonly THREE.Mesh[], eligible: (object: THREE.Object3D, point: THREE.Vector3) => boolean): void {
     const press = this.presses.get(source);
     const locked = this.disarmed.get(source);

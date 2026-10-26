@@ -14,6 +14,7 @@ import { InteractionCapture } from "./input/InteractionCapture";
 import { MenuAnchorController } from "./input/MenuAnchorController";
 import { PalmMenuGate, palmUpDot } from "./input/PalmMenuGate";
 import { WebXRHandStyle } from "./input/WebXRHandStyle";
+import { worldMarkerHover } from "@dimos-ar-client/presentation/WorldVisualStyle";
 
 export class WebXRApp extends xb.Script {
   static dependencies = { input: xb.Input };
@@ -282,16 +283,17 @@ export class WebXRApp extends xb.Script {
       const hit = this.interaction.hit(controller);
       return hit && this.canInteract(controller, hit.object, hit.point) ? hit.object : undefined;
     });
-    const hoverTargets = this.interaction.hoverTargets();
+    const hoverTargets = this.interaction.hoverTargets(this.client.robot.collider);
     const robotHovered = hoverTargets.includes(this.client.robot.collider);
     const markerHovered = hoverTargets.some(hit => hit !== this.client.navigation.marker.cancelObject && isDescendant(hit, this.client.navigation.marker.object));
-    this.client.robot.setHovered(robotHovered);
+    const worldHover = worldMarkerHover(this.client.navigation.interaction.snapshot().attachedToRobot, robotHovered, markerHovered);
+    this.client.robot.setHovered(worldHover.robot);
     this.sound.setActive(true);
     this.sound.setSuppressed(["Starting microphone…", "Listening", "Transcribing…", "Responding"].includes(this.client.speech.snapshot().status));
     const hovered = robotHovered ? this.client.robot.object : actionableHits.some(hit => !!hit && hit !== this.client.navigation.marker.cancelObject && isDescendant(hit, this.client.navigation.marker.object)) ? this.client.navigation.marker.object : null;
     this.sound.update(hovered ?? null, this.client.isRobotSelected(), this.client.navigation.isDragging() || !!this.worldHold,
       this.client.navigation.marker.object.position, time / 1000);
-    this.client.navigation.marker.setHovered(markerHovered);
+    this.client.navigation.marker.setHovered(worldHover.marker);
     const connectedSources = new Set<string>();
     for (const pointer of this.input.controllers) {
       const sourceId = this.navigationSourceId(pointer);
@@ -334,6 +336,7 @@ export class WebXRApp extends xb.Script {
     this.mainMenu?.panel.traverse(object => { if (object instanceof THREE.Mesh && object.userData.touchButton) touchTargets.push(object); });
     for (const source of this.input.controllers) {
       const tip = source.visible && source.userData.connected === true ? this.interaction.direct.indexTip(source) : null;
+      if (!this.touches.owns(source) && source.userData.selected === true) continue;
       this.touches.update(source, tip, touchTargets, (object, point) => this.canInteract(source, object, point));
     }
   }
@@ -442,7 +445,7 @@ export class WebXRApp extends xb.Script {
   }
 
   override onSelectEnd(event: xb.SelectEvent): void {
-    if (!this.touchDispatch && this.touches.owns(event.target)) return;
+    if (!this.touchDispatch && this.touches.owns(event.target)) { this.touches.release(event.target); return; }
     if (this.capture.owner && this.capture.owner !== event.target) return;
     if (this.panelGrip || (this.panelHold && this.panelHold !== event.target) ||
         (this.worldHold && this.worldHold !== event.target)) return;
@@ -474,9 +477,14 @@ export class WebXRApp extends xb.Script {
       const event: { type: "selectstart" | "selectend"; target: xb.SelectEvent["target"] } = { type: start ? "selectstart" : "selectend", target: source };
       if (start) this.input.defaultOnSelectStart(event);
       else this.input.defaultOnSelectEnd(event);
-      this.input.intersectionsForController.set(source, cancelled ? [] : [contact]);
+      if (cancelled) this.capture.cancel();
+      this.input.intersectionsForController.set(source, [contact]);
       if (start) { xb.core.user.onSelectStart(event); this.onSelectStart(event); }
       else {
+        // A physical pinch release may already have retired the SDK's selection.
+        // Re-register the captured button, preserving the original activation guard.
+        const pressEvent = { ...event, type: "selectstart" as const };
+        xb.core.user.onSelectStart(pressEvent);
         xb.core.user.onSelectEnd(event);
         if (cancelled) this.clearInput(); else this.onSelectEnd(event);
       }

@@ -632,3 +632,41 @@ function yawRotationFromPlanarDirection(x: number, z: number): quat {
   const halfYaw = yaw * 0.5;
   return new quat(Math.cos(halfYaw), 0, Math.sin(halfYaw), 0);
 }
+
+/** A gesture-local drag plane. Scan noise never drives ordinary planar motion. */
+export class DragPlacementPlane {
+  private height: number;
+  private targetHeight: number;
+  private adapting = false;
+
+  constructor(position: vec3) {
+    this.height = this.targetHeight = position.y;
+  }
+
+  solve(from: vec3, direction: vec3, hits: MeshHit[], deltaS: number): vec3 | null {
+    const intersect = (): vec3 | null => {
+      const denominator = direction.y;
+      if (Math.abs(denominator) < 0.0001) return null;
+      const t = (this.height - from.y) / denominator;
+      return t >= 0 ? from.add(direction.uniformScale(t)) : null;
+    };
+    const planar = intersect();
+    if (!planar) return null;
+    // Only the first surface counts; never look through a wall for a floor.
+    const hit = hits[0];
+    const usable = hit && isGroundNormal(hit.normal) && hit.position.sub(from).dot(direction) > 0;
+    if (usable && (this.adapting || Math.abs(hit.position.y - planar.y) > 10)) {
+      this.targetHeight = hit.position.y;
+      this.adapting = true;
+    }
+    if (!this.adapting) return planar;
+    // Follow a significant step/ramp immediately, while the underlying plane
+    // catches up over about a second and remains usable through scan gaps.
+    const alpha = 1 - Math.exp(-Math.max(0, Math.min(deltaS, 0.1)) / 0.6);
+    this.height += (this.targetHeight - this.height) * alpha;
+    if (Math.abs(this.height - this.targetHeight) < 0.25) {
+      this.height = this.targetHeight; this.adapting = false;
+    }
+    return usable ? new vec3(hit.position.x, hit.position.y, hit.position.z) : intersect();
+  }
+}

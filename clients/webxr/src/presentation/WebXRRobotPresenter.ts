@@ -88,7 +88,7 @@ export class WebXRRobotPresenter {
     this.collider.name = "Robot selection collider";
     this.collider.userData.rayPriority = 20;
     registerRayTarget(this.collider);
-    this.outline = new THREE.LineSegments(new THREE.EdgesGeometry(this.collider.geometry), new THREE.LineDashedMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, dashSize: 0.003, gapSize: 0.01 }));
+    this.outline = new THREE.LineSegments(new THREE.EdgesGeometry(this.collider.geometry), new THREE.LineDashedMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, dashSize: ROBOT_LINE_STYLE.dashM, gapSize: ROBOT_LINE_STYLE.gapM }));
     this.outline.material.visible = false;
     this.outline.add(this.outlineRenderer.object);
     this.outline.computeLineDistances();

@@ -1,9 +1,11 @@
 import { InteractionManager } from "SpectaclesInteractionKit.lspkg/Core/InteractionManager/InteractionManager";
 import { InteractorInputType, type Interactor } from "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor";
+import { worldMarkerHover } from "../../DimOSARClient/presentation/WorldVisualStyle";
 
 /** Hand targeting only needs navigation commands, not the controller's render/session internals. */
 export interface NavigationInputPort {
   ownsMarkerTarget(object: SceneObject): boolean;
+  isMarkerAttachedToRobot(): boolean;
   ownsDraft(sourceId: string): boolean;
   setHovered(hovered: boolean): void;
   clearAim(sourceId: string): void;
@@ -18,7 +20,7 @@ type NavigationHand = Pick<Interactor, "inputType" | "startPoint" | "direction" 
 
 /** SIK owns targeting. This adapter captures each accepted navigation gesture until release. */
 export class SpecsNavigationInput {
-  private readonly gestures = new Map<string, { held: boolean; accepted: boolean; fromMarker: boolean }>();
+  private readonly gestures = new Map<string, { held: boolean; accepted: boolean; fromMarker: boolean; fromRobot: boolean }>();
   private readonly cancelledUntilRelease = new Set<string>();
   constructor(private readonly navigation: NavigationInputPort, private readonly robot?: {
     ownsTarget(object: SceneObject): boolean; setHovered(value: boolean): void;
@@ -32,7 +34,7 @@ export class SpecsNavigationInput {
     let markerHovered = false;
     for (const hand of this.readInteractors?.() ?? manager.getInteractorsByType(mask)) {
       const id = String(hand.inputType); seen.add(id);
-      const previous = this.gestures.get(id) ?? { held: false, accepted: false, fromMarker: false };
+      const previous = this.gestures.get(id) ?? { held: false, accepted: false, fromMarker: false, fromRobot: false };
       const from = hand.startPoint, direction = hand.direction;
       if (!hand.isActive() || !from || !direction) {
         this.navigation.clearAim(id);
@@ -42,20 +44,23 @@ export class SpecsNavigationInput {
       }
       const target = hand.currentInteractable?.getSceneObject();
       const fromMarker = target ? navigationEnabled && this.navigation.ownsMarkerTarget(target) : false;
+      const fromRobot = Boolean(target && robotEnabled && this.robot?.ownsTarget(target));
       const held = hand.isTriggering;
       if (!held) this.cancelledUntilRelease.delete(id);
       const hoverEligible = !this.cancelledUntilRelease.has(id);
       markerHovered ||= hoverEligible && fromMarker;
-      robotHovered ||= Boolean(hoverEligible && target && robotEnabled && !this.navigation.ownsDraft(id) && this.robot?.ownsTarget(target));
+      // A robot press belongs to selection, not navigation. Preserve its hover
+      // through the press so deselection does not collapse and reopen the box.
+      robotHovered ||= (hoverEligible || previous.fromRobot) && fromRobot && !this.navigation.ownsDraft(id);
       if (!navigationEnabled) {
         this.navigation.clearAim(id);
         if (previous.accepted) this.navigation.cancelSource(id);
         if (held) this.cancelledUntilRelease.add(id);
         this.gestures.delete(id); continue;
       }
-      // The owner's moving draft may cross the selected robot's collider.
+      // A captured marker drag or the owner's draft may cross the robot collider.
       // Other targets (including UI and walls) still consume the gesture.
-      const ownedRobot = target && this.navigation.ownsDraft(id) && this.robot?.ownsTarget(target);
+      const ownedRobot = fromRobot && (this.navigation.ownsDraft(id) || previous.accepted && previous.fromMarker);
       const unobstructed = !target || fromMarker || ownedRobot === true;
       let accepted = held && !previous.held ? unobstructed : previous.accepted;
       if (!unobstructed || this.cancelledUntilRelease.has(id)) {
@@ -64,13 +69,18 @@ export class SpecsNavigationInput {
         if (held) this.cancelledUntilRelease.add(id);
         accepted = false;
       }
-      if (unobstructed && !held && !this.cancelledUntilRelease.has(id)) this.navigation.aim(id, from, direction);
+      // Release the captured gesture before returning to idle aim. Unselected
+      // idle aim clears navigation state, including an unfinished direct drag.
+      if (unobstructed && !held && !previous.accepted && !this.cancelledUntilRelease.has(id)) this.navigation.aim(id, from, direction);
       else if (!held && !previous.accepted) this.navigation.clearAim(id);
       if (held && accepted) this.navigation.hold(id, from, direction, previous.held ? previous.fromMarker : fromMarker);
       if (!held && previous.held && previous.accepted) this.navigation.release(id, from, direction);
-      this.gestures.set(id, { held, accepted: held && accepted, fromMarker: previous.held ? previous.fromMarker : fromMarker });
+      this.gestures.set(id, { held, accepted: held && accepted, fromMarker: previous.held ? previous.fromMarker : fromMarker,
+        fromRobot: previous.held ? previous.fromRobot : held && fromRobot && hoverEligible });
     }
-    this.robot?.setHovered(robotHovered); this.navigation.setHovered(markerHovered);
+    const linked = navigationEnabled && robotEnabled && this.navigation.isMarkerAttachedToRobot();
+    const hover = worldMarkerHover(linked, robotHovered, markerHovered);
+    this.robot?.setHovered(hover.robot); this.navigation.setHovered(hover.marker);
     for (const [id, gesture] of this.gestures) if (!seen.has(id)) {
       this.navigation.clearAim(id);
       if (gesture.accepted) this.navigation.cancelSource(id);

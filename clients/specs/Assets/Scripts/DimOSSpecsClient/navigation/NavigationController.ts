@@ -1,7 +1,7 @@
 import { NavigationInteraction, type Placement } from "../../DimOSARClient/navigation/NavigationInteraction";
 import { NavigationPreviewCoordinator } from "../../DimOSARClient/navigation/NavigationPreviewCoordinator";
 import { NavigationMarkerRenderer } from "./NavigationMarkerRenderer";
-import { solveMeshPlacement } from "./GroundPlacement";
+import { DragPlacementPlane, solveMeshPlacement } from "./GroundPlacement";
 import { specsToClientTrackingPoint, clientTrackingToSpecsPoint, clientTrackingToSpecsYawPose, specsToClientTrackingYawPose } from "../utilities/SpecsCoordinates";
 import type { NavFlash } from "../../DimOSARClient/navigation/NavigationGoalLifecycle";
 import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
@@ -18,6 +18,8 @@ export class NavigationController {
   private draftMarker: NavGoalMarker | null = null;
   private readonly probes = new Map<string, NavigationMarkerRenderer>();
   private readonly inside = new Map<string, boolean>();
+  private readonly dragPlanes = new Map<string, { plane: DragPlacementPlane; time: number }>();
+  private dragPlaneOrigin: ClientTrackingOrigin | null = null;
   private previousFlash: NavFlash | null = null;
   private inputEnabled = true;
   private directSource: string | null = null;
@@ -52,16 +54,17 @@ export class NavigationController {
   setSelected(selected: boolean): void {
     if (this.interaction.snapshot().selected === selected) return;
     this.interaction.setSelected(selected);
-    if (!selected) this.setMeshTracking(false);
+    if (!selected) { this.dragPlanes.clear(); this.setMeshTracking(false); }
   }
   setHovered(hovered: boolean): void { this.hovered = hovered; }
+  isMarkerAttachedToRobot(): boolean { return this.interaction.snapshot().attachedToRobot; }
   ownsDraft(sourceId: string): boolean { return this.interaction.ownsDraft(sourceId); }
   setInputEnabled(enabled: boolean): void {
     if (!enabled && this.inputEnabled) { this.cancelDrag(); this.setMeshTracking(false); }
     this.inputEnabled = enabled;
   }
   cancel(): void { this.interaction.cancel(getTime()); this.render(0); }
-  cancelDrag(): void { this.directSource = null; this.interaction.cancelDrag(); this.render(0); }
+  cancelDrag(): void { this.directSource = null; this.dragPlanes.clear(); this.interaction.cancelDrag(); this.render(0); }
   cancelSource(sourceId: string): void {
     if (this.directSource === sourceId) this.cancelDrag();
     this.clearAim(sourceId);
@@ -72,11 +75,14 @@ export class NavigationController {
     this.render(deltaS);
   }
   applyView(view: ARModuleSessionState, origin: ClientTrackingOrigin | null): void {
+    if (origin !== this.dragPlaneOrigin || view.connection !== "ready" || !view.hasTrackingOrigin) this.dragPlanes.clear();
+    this.dragPlaneOrigin = origin;
     const floor = this.deps.robotPresenter.floorPose();
     this.interaction.applyView(view, origin, floor ? specsNavigationPoseInTracking(floor.position, floor.rotation) : null, getTime());
   }
-  hide(): void { this.directSource = null; this.interaction.reset(); this.setMeshTracking(false); this.render(0); }
+  hide(): void { this.directSource = null; this.dragPlanes.clear(); this.interaction.reset(); this.setMeshTracking(false); this.render(0); }
   dispose(): void {
+    this.dragPlanes.clear();
     this.setMeshTracking(false);
     this.interaction.dispose(); this.marker?.destroy(); this.draftMarker?.destroy();
     for (const probe of this.probes.values()) probe.destroy(); this.probes.clear();
@@ -85,28 +91,33 @@ export class NavigationController {
     return this.marker?.ownsDragTarget(object) === true || this.draftMarker?.ownsDragTarget(object) === true;
   }
 
+  ownsPriorityTarget(object: SceneObject): boolean {
+    return this.marker?.ownsInteractionTarget(object) === true || this.draftMarker?.ownsInteractionTarget(object) === true;
+  }
+
   aim(sourceId: string, from: vec3, direction: vec3): void {
     const state = this.interaction.snapshot();
     if (!this.inputEnabled || !state.selected || !state.visible) { this.clearAim(sourceId); return; }
     this.interaction.aim(getTime(), this.place(sourceId, from, direction, true), sourceId);
   }
-  clearAim(sourceId: string): void { this.interaction.clearAim(sourceId); this.inside.delete(sourceId); }
+  clearAim(sourceId: string): void { this.interaction.clearAim(sourceId); this.inside.delete(sourceId); this.dragPlanes.delete(sourceId); }
   hold(sourceId: string, from: vec3, direction: vec3, fromMarker: boolean): void {
     if (!this.inputEnabled || !this.isArmed()) return;
     const selected = this.interaction.snapshot().selected;
-    if (!selected) {
+    if (fromMarker || !selected) {
       if (!fromMarker || this.directSource !== null && this.directSource !== sourceId) return;
       this.directSource = sourceId;
     }
-    const placement = this.place(sourceId, from, direction, selected || !fromMarker);
+    const placement = this.place(sourceId, from, direction, !fromMarker);
     this.interaction.hold(getTime(), placement, fromMarker, sourceId);
   }
   release(sourceId: string, from: vec3, direction: vec3): void {
     if (!this.inputEnabled || this.directSource !== null && this.directSource !== sourceId) return;
     const selected = this.interaction.snapshot().selected;
     if (!selected && this.directSource !== sourceId) return;
+    this.interaction.release(getTime(), this.place(sourceId, from, direction, this.directSource === null && selected), sourceId);
+    this.dragPlanes.delete(sourceId);
     this.directSource = null;
-    this.interaction.release(getTime(), this.place(sourceId, from, direction, selected), sourceId);
   }
 
   private place(sourceId: string, from: vec3, direction: vec3, floorAim: boolean): Placement {
@@ -115,20 +126,32 @@ export class NavigationController {
     const to = from.add(direction.uniformScale((floorAim ? 500 : 2000) / length));
     this.lastMeshUseAt = getTime(); this.setMeshTracking(true);
     const raw = this.deps.deviceTracking.raycastWorldMesh(from, to);
+    if (!floorAim) {
+      const time = getTime();
+      let drag = this.dragPlanes.get(sourceId);
+      if (!drag) {
+        const pose = this.currentPose();
+        if (!pose) return null;
+        drag = { plane: new DragPlacementPlane(pose.position), time };
+        this.dragPlanes.set(sourceId, drag);
+      }
+      const p = drag.plane.solve(from, direction, raw, time - drag.time);
+      drag.time = time;
+      return p ? { position: specsToClientTrackingPoint([p.x, p.y, p.z]), blocked: false } : null;
+    }
     const radiusCm = this.deps.robotPresenter.deadzoneRadiusCm();
     const floorY = this.deps.robotPresenter.floorWorldY() ?? 0;
     // SIK mesh hits have no semantic floor label. Match WebXR's unlabelled
     // floor gate: 20 degrees and within 18 cm of the known robot floor.
     const first = raw[0];
-    if (first
-      ? first.normal.length < 0.0001 || first.normal.y / first.normal.length < Math.cos(Math.PI / 9) ||
-        Math.abs(first.position.y - floorY) > 18 || first.position.sub(from).dot(direction) <= 0
-      : direction.y >= -0.0001) return null;
+    if (direction.y >= -0.0001 || first && first.position.sub(from).dot(direction) <= 0) return null;
     const result = solveMeshPlacement({ rayFrom: from, rayTo: to, hits: raw.map(hit => ({ position: hit.position, normal: hit.normal })),
       deadzone: radiusCm === null ? null : { radiusCm,
         getRobotWorldPosition: () => this.deps.robotPresenter.worldPosition(),
         getRobotFloorWorldY: () => this.deps.robotPresenter.floorWorldY() },
       wasInsideDeadzone: this.inside.get(sourceId) ?? false, fallbackY: floorY });
+    if (first && (first.normal.length < 0.0001 ||
+      first.normal.y / first.normal.length < Math.cos(Math.PI / 9) || Math.abs(first.position.y - floorY) > 18)) return null;
     this.inside.set(sourceId, result.wasInsideDeadzone);
     const p = result.goalPosition;
     if (result.status !== "ok" || !p || floorAim && p.distance(from) > 500) return null;
@@ -156,13 +179,16 @@ export class NavigationController {
       for (const probe of this.probes.values()) probe.hide(); return;
     }
     if (!this.marker) this.marker = this.createMarker("NavigationTargetMarker");
-    const pose = trackingToSpecs(!state.selected && state.dragging ? state : state.activeGoal.pose ?? state);
+    // Execution feedback may arrive between streamed drag goals. Keep the
+    // captured SIK target enabled and render the local pose until release.
+    const flash = state.dragging ? null : state.flash;
+    const pose = trackingToSpecs(state.dragging ? state : state.activeGoal.pose ?? state);
     this.marker.setPose(pose.position, pose.rotation);
     if (!state.draft || state.activeGoal.active || state.flash) this.marker.show(); else this.marker.hide();
-    this.marker.setDragEnabled(this.inputEnabled && !state.flash);
-    this.marker.setCancelVisible(state.cancelVisible);
+    this.marker.setDragEnabled(this.inputEnabled && !flash);
+    this.marker.setCancelVisible(state.cancelVisible, true, state.activeGoal.confirmationId);
     this.marker.applyWorldStyle({ selected: state.selected, hovered: this.hovered, dragging: state.dragging,
-      following: state.followingPath, aiming: false, cancelVisible: state.cancelVisible, flash: state.flash, feedbackProgress: state.feedbackProgress }, deltaS, this.viewportHeight);
+      following: state.followingPath, aiming: false, cancelVisible: state.cancelVisible, flash, feedbackProgress: state.feedbackProgress }, deltaS, this.viewportHeight);
     this.marker.orientViewer(this.deps.cameraObject.getTransform().getWorldPosition());
     const opacity = this.marker.circleOpacity();
     if (state.draft) {
@@ -171,7 +197,7 @@ export class NavigationController {
       this.draftMarker.setPose(draft.position, draft.rotation); this.draftMarker.show();
       this.draftMarker.setDragEnabled(false); this.draftMarker.setCancelVisible(false);
       this.draftMarker.applyWorldStyle({ selected: true, dragging: state.draft.held, following: false,
-        aiming: true, flash: null, feedbackProgress: 0, opacity }, deltaS, this.viewportHeight, 6);
+        aiming: true, flash: null, feedbackProgress: 0, opacity }, deltaS, this.viewportHeight);
     } else this.draftMarker?.hide();
     const ids = new Set(state.probes.map(p => p.sourceId));
     for (const [id, probe] of this.probes) if (!ids.has(id)) { probe.destroy(); this.probes.delete(id); }

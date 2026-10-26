@@ -1,12 +1,13 @@
 import * as THREE from "three";
 import type { Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
+import { WORLD_DASH_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 
 /** Camera-facing strokes with a pixel floor and an antialiased dash-to-solid distance transition. */
 export class AdaptiveDashedLineRenderer {
   readonly object: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>;
   private readonly viewport = new THREE.Vector4();
 
-  constructor(widthM = 0.00275, dashM = 0.012, gapM = 0.01) {
+  constructor(widthM: number = WORLD_DASH_STYLE.widthM, dashM: number = WORLD_DASH_STYLE.dashM, gapM: number = WORLD_DASH_STYLE.gapM) {
     const geometry = new THREE.InstancedBufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute([-1, 0, 0, 1, 0, 0, -1, 1, 0, 1, 1, 0], 3));
     geometry.setIndex([0, 1, 2, 2, 1, 3]);

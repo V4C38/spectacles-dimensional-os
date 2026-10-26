@@ -1,7 +1,6 @@
 import type { RoundedRectangleVisual } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangleVisual";
-import { CONTROL_PANEL_SCALE } from "../../DimOSARClient/presentation/ControlPanelPresentation";
 import { PanelHeightController } from "./PanelHeightController";
-import { SETUP_LAYOUTS, panelFooterY, type PanelProfile } from "./PanelLayout";
+import { SETUP_PANEL_SCALE, SETUP_LAYOUTS, panelFooterY, type PanelProfile } from "./PanelLayout";
 import type { RoundedRectangle } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangle";
 import { SETUP_SUCCESS_STYLE, NAVIGATION_COLORS } from "../../DimOSARClient/presentation/WorldVisualStyle";
 import { WorldMeshRenderer, circleMesh, strokeMesh2D } from "./WorldMeshRenderer";
@@ -13,7 +12,7 @@ import { createRoundedSurface, createPanelSurface, createText, createIconButton,
 export interface ConnectionPresentation { text: string; color: vec4; phase: "entry" | "error" | "connected"; details?: string; }
 export enum SetupWizardStep { Connect = 1, Localization = 2 }
 export interface SetupWizardFooterState { footerNextLabel: string; footerNextEnabled: boolean; footerShowPrev: boolean; }
-interface Handlers { onNext: () => void; onPrevious: () => void; onInputSubmit: () => void; onConnectionToggle: () => void; onRetry?: () => void; }
+interface Handlers { onNext: () => void; onPrevious: () => void; onInputSubmit: () => void; onConnectionToggle: () => void; onRetry?: () => void; onInputEdit?: () => void; }
 const UNIT = 100;
 const CONTENT = (CONTROL_PANEL_LAYOUT.width - CONTROL_PANEL_LAYOUT.margin * 2) * UNIT;
 
@@ -65,7 +64,7 @@ export class SetupWizardView {
       frame.setUseFollow(false); frame.setFollowing(false);
     }
     const root = global.scene.createSceneObject("NativeSetupUI"); root.setParent(parent);
-    this.heightController = new PanelHeightController(frame, root, CONTROL_PANEL_SCALE.setup);
+    this.heightController = new PanelHeightController(frame, root, SETUP_PANEL_SCALE);
     this.robotBadge = createIconButton(root, "Robot selection button", "Robot\nDisconnected", 58, 10.5, new vec3(0, 46.5, 1.5));
     this.robotBadge.button.inactive = true; panelButtonLayer(this.robotBadge, true);
     this.body = global.scene.createSceneObject("SetupBody"); this.body.setParent(root);
@@ -114,12 +113,13 @@ export class SetupWizardView {
     this.input.renderOrder = 12;
     uiMaterialLayer(this.guide.visual, 14);
     this.input.onReturnKeyPressed.add(() => this.handlers?.onInputSubmit());
+    this.input.onEditMode.add((editing: boolean) => { if (editing) this.handlers?.onInputEdit?.(); });
     this.input.onKeyboardStateChanged.add((open: boolean) => { if (!open) this.handlers?.onInputSubmit(); });
     this.applyStepLayout(SetupWizardStep.Connect);
   }
 
-  bindHandlers(onNext: () => void, onPrevious: () => void, onInputSubmit: () => void, onConnectionToggle: () => void, onRetry?: () => void): void {
-    this.handlers = { onNext, onPrevious, onInputSubmit, onConnectionToggle, onRetry };
+  bindHandlers(onNext: () => void, onPrevious: () => void, onInputSubmit: () => void, onConnectionToggle: () => void, onRetry?: () => void, onInputEdit?: () => void): void {
+    this.handlers = { onNext, onPrevious, onInputSubmit, onConnectionToggle, onRetry, onInputEdit };
   }
   get panel(): SceneObject { return this._panel; }
   setStepContent(_title: string, description: string, color?: vec4): void {
@@ -131,6 +131,7 @@ export class SetupWizardView {
   setConnectionToggleLabel(label: string): void { this.connectionToggle.labelText.text = label; }
   initializeInput(text: string, placeholder: string): void { this.input.initialize(); this.input.placeholderText = placeholder; this.input.text = text; }
   getInputText(): string { return this.input.text.trim(); }
+  clearInput(): void { this.input.text = ""; }
   setConnectionState(state: ConnectionPresentation): void {
     if (this.step !== SetupWizardStep.Connect) return;
     this.cardTitle.text = state.text;

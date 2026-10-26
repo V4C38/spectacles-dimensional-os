@@ -9,8 +9,9 @@ import { UI_FONT_REGULAR, UI_FONT_SEMIBOLD } from "./UIFonts";
 import { SurfaceText } from "./SurfaceText";
 import { SurfaceButton, type ButtonVariant } from "./SurfaceButton";
 import { DIMOS_AR_DESIGN, cornerRadius } from "./DimOSARDesign";
-import { surfaceBacking } from "./RoundedSurfaceGeometry";
 import { GlassSurface } from "./GlassSurface";
+import { PANEL_TOP, RUNTIME_LAYOUTS, SETUP_LAYOUTS, panelFooterY, type PanelProfile } from "./PanelLayout";
+import { PanelHeightController } from "./PanelHeightController";
 import type { AgentDraftSnapshot } from "@dimos-ar-client/agent/AgentDraftSession";
 import { disposeTextResources } from "./TextResources";
 import { ScrollableTextView } from "./ScrollableTextView";
@@ -68,11 +69,15 @@ type Zone = "bar" | "left" | "right" | "body";
 export class MainMenuView {
   readonly panel: xb.SpatialPanel;
   private readonly wizard = new THREE.Group();
+  private readonly wizardBody = new THREE.Group();
+  private readonly wizardFooter = new THREE.Group();
+  private readonly heightController = new PanelHeightController();
+  private heightInitialized = false;
+  private layoutProfile: PanelProfile | null = null;
+  private readonly fittedContent = new Map<THREE.Object3D, number>();
   private readonly success = new THREE.Group();
   private readonly preview = new SetupCameraPreviewView();
   private readonly previewLabel: SurfaceText;
-  private readonly cardSurface: GlassSurface;
-  private readonly cardBadge: GlassSurface;
   private readonly successDetail: SurfaceText;
   private readonly successRing: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private readonly checkJoin: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
@@ -98,13 +103,11 @@ export class MainMenuView {
   private readonly description: SurfaceText;
   private readonly cardTitle: SurfaceText;
   private readonly cardBody: SurfaceText;
-  private readonly cardIcon: SurfaceText;
   private readonly stepTabs: SurfaceButton[] = [];
   private readonly setup: SurfaceButton;
   private readonly back: SurfaceButton;
   private readonly retry: SurfaceButton;
   private readonly robotName: SurfaceText;
-  private readonly activity: SurfaceText;
   private readonly hud: SurfaceText;
   private readonly agent: ScrollableTextView;
   private readonly inputField: SurfaceButton;
@@ -152,6 +155,7 @@ export class MainMenuView {
     // The glass plate replaces the package's opaque panel background.
     this.panel.mesh.visible = false;
     this.panel.add(this.wizard, this.success, this.console, this.details, this.header, this.robotBadge, this.settingsPage, this.sensorsPage, this.recoveryPage, this.runtimeFooter);
+    this.wizard.add(this.wizardBody, this.wizardFooter);
     const plate = this.plate = new GlassSurface({ width: WIDTH, height: HEIGHT, radius: RADIUS, thickness: DIMOS_AR_DESIGN.depth.thickness, tint: "#202022", rim: 0.28, rimWidth: 0.0025 });
     place(this.panel, plate, 0, 0, 0.001);
     plate.renderOrder = 1;
@@ -166,48 +170,46 @@ export class MainMenuView {
       () => { if (this.lastStep === "localization") handlers.onBack(); },
       () => { if (this.lastStep === "connect") handlers.onSetup(); },
     ]));
-    this.title = label(this.wizard, "", 0, 0.135, CONTENT, 0.06, 38, C.ink, "left", "semibold");
+    this.title = label(this.wizardBody, "", 0, 0.135, CONTENT, 0.06, 38, C.ink, "left", "semibold");
     this.title.visible = false;
-    this.description = label(this.wizard, "", 0, 0.135, CONTENT, 0.05, 20, C.muted);
-    this.cardSurface = surface(this.wizard, 0, -0.045, CONTENT, 0.24, DIMOS_AR_DESIGN.corners.field, C.fill);
-    this.cardBadge = surface(this.wizard, LEFT + 0.06, -0.045, 0.064, 0.064, 0.032, C.control);
-    this.cardIcon = label(this.wizard, "01", LEFT + 0.06, -0.045, 0.056, 0.045, 24, C.accent, "center", "semibold");
-    const cardText = CONTENT - 0.12 - 0.028;
-    this.cardTitle = label(this.wizard, "Ready when you are", LEFT + 0.12 + cardText / 2, -0.012, cardText, 0.032, 24, C.ink, "left", "semibold");
-    this.cardBody = label(this.wizard, "", LEFT + 0.12 + cardText / 2, -0.07, cardText, 0.064, 19, C.muted);
-    this.back = button(this.wizard, COPY.back, -THIRD_WIDTH - GAP, -0.298, THIRD_WIDTH, ACTION_HEIGHT, handlers.onBack);
-    this.retry = button(this.wizard, "Retry", 0, -0.298, THIRD_WIDTH, ACTION_HEIGHT, () => this.lastStep === "localization" ? handlers.onLocalize() : handlers.onRetry());
-    this.setup = button(this.wizard, COPY.continue, THIRD_WIDTH + GAP, -0.298, THIRD_WIDTH, ACTION_HEIGHT, handlers.onSetup, "primary");
-    place(this.wizard, this.preview, -0.225, -0.055, 0.02);
-    this.previewLabel = label(this.wizard, "Starting camera…", -0.225, -0.178, 0.34, 0.022, 14, C.muted, "center");
+    this.description = label(this.wizardBody, "", 0, 0.135, CONTENT, 0.03, 20, C.muted, "center");
+    this.cardTitle = label(this.wizardBody, "Ready when you are", 0, 0, CONTENT, 0.04, 23, C.ink, "center", "semibold");
+    this.cardBody = label(this.wizardBody, "", 0, 0, CONTENT, 0.115, 18, C.muted, "center");
+    this.back = button(this.wizardFooter, COPY.back, -THIRD_WIDTH - GAP, -0.298, THIRD_WIDTH, ACTION_HEIGHT, handlers.onBack);
+    this.retry = button(this.wizardFooter, "Retry", 0, -0.298, THIRD_WIDTH, ACTION_HEIGHT, () => this.lastStep === "localization" ? handlers.onLocalize() : handlers.onRetry());
+    this.setup = button(this.wizardFooter, COPY.continue, THIRD_WIDTH + GAP, -0.298, THIRD_WIDTH, ACTION_HEIGHT, handlers.onSetup, "primary");
+    place(this.wizardBody, this.preview, -0.225, -0.055, 0.02);
+    this.previewLabel = label(this.wizardBody, "Starting camera…", -0.225, -0.178, 0.34, 0.022, 14, C.muted, "center");
     this.preview.visible = this.previewLabel.visible = false;
     label(this.success, COPY.appName, LEFT + 0.17, CONTROL_PANEL_LAYOUT.titleY, 0.32, 0.04, 28, C.ink, "left", "semibold");
     label(this.success, COPY.setupTitle, 0, CONTROL_PANEL_LAYOUT.titleY, 0.36, 0.04, 28, C.ink, "center", "semibold");
+    const successRows = SETUP_LAYOUTS.success.rows;
+    const glyphOffset = successRows.glyph - SETUP_SUCCESS_STYLE.centerYM;
     const ring = this.successRing = new THREE.Mesh(new THREE.RingGeometry(SETUP_SUCCESS_STYLE.radiusM - SETUP_SUCCESS_STYLE.strokeM, SETUP_SUCCESS_STYLE.radiusM, SETUP_SUCCESS_STYLE.segments, 1, Math.PI / 2, -Math.PI * 2), new THREE.MeshBasicMaterial({ color: 0x30d158, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
-    place(this.success, ring, 0, SETUP_SUCCESS_STYLE.centerYM, DIMOS_AR_DESIGN.depth.surface); ring.renderOrder = 13; ring.raycast = () => {};
+    place(this.success, ring, 0, successRows.glyph, DIMOS_AR_DESIGN.depth.surface); ring.renderOrder = 13; ring.raycast = () => {};
     const points = SETUP_SUCCESS_STYLE.check;
     for (let i = 0; i < 2; i++) {
       const [x, y] = points[i], [x2, y2] = points[i + 1];
       const length = Math.hypot(x2 - x, y2 - y);
       const geometry = new THREE.PlaneGeometry(length, SETUP_SUCCESS_STYLE.glyphWidthM).translate(length / 2, 0, 0);
       const stroke = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0x30d158, transparent: true, depthWrite: false }));
-      place(this.success, stroke, x, y, DIMOS_AR_DESIGN.depth.text); stroke.renderOrder = 13; stroke.rotation.z = Math.atan2(y2 - y, x2 - x);
+      place(this.success, stroke, x, y + glyphOffset, DIMOS_AR_DESIGN.depth.text); stroke.renderOrder = 13; stroke.rotation.z = Math.atan2(y2 - y, x2 - x);
       stroke.raycast = () => {}; this.checkStrokes.push(stroke);
     }
     this.checkJoin = new THREE.Mesh(new THREE.CircleGeometry(SETUP_SUCCESS_STYLE.glyphWidthM / 2, STROKE_JOIN_SEGMENTS), new THREE.MeshBasicMaterial({ color: 0x30d158, depthWrite: false }));
-    place(this.success, this.checkJoin, points[1][0], points[1][1], DIMOS_AR_DESIGN.depth.text);
+    place(this.success, this.checkJoin, points[1][0], points[1][1] + glyphOffset, DIMOS_AR_DESIGN.depth.text);
     this.checkJoin.renderOrder = 13; this.checkJoin.raycast = () => {};
-    label(this.success, COPY.localizationComplete, 0, -0.08, CONTENT, 0.05, 32, C.ink, "center", "semibold");
-    this.successDetail = label(this.success, "", 0, -0.145, CONTENT, 0.04, 20, C.muted, "center");
+    label(this.success, COPY.localizationComplete, 0, successRows.title, CONTENT, 0.05, 32, C.ink, "center", "semibold");
+    this.successDetail = label(this.success, "", 0, successRows.detail, CONTENT, 0.04, 20, C.muted, "center");
     this.success.visible = false;
 
     this.robotButton = button(this.robotBadge, "Robot · Not connected", 0, 0.465, 0.58, 0.105, handlers.onRobot);
     (this.robotButton.mesh!.material as THREE.Material).depthWrite = true;
-    this.robotButton.mesh!.add(surfaceBacking(this.robotButton.rangeX, this.robotButton.rangeY, this.robotButton.rangeY / 2, DIMOS_AR_DESIGN.depth.thickness / HEIGHT));
     this.robotButton.name = "Robot selection button";
     this.robotBadge.renderOrder = 12;
     this.robotDot = rect(this.robotBadge, -0.253, 0.465, 0.012, 0.012, C.faint, 0.006, DIMOS_AR_DESIGN.depth.text);
     this.robotDot.renderOrder = 13;
+    this.robotDot.userData.followSurface = this.robotButton;
     this.console.add(this.chat, this.manualHelp);
     this.robotName = label(this.console, COPY.appName, LEFT + 0.22, CONTROL_PANEL_LAYOUT.titleY, 0.42, 0.04, 28, C.ink, "left", "semibold");
     const gear = button(this.console, "", SETTINGS_X, HEADER_Y, ICON_SIZE, ICON_SIZE, () => { this.settingsOpen = true; });
@@ -218,7 +220,6 @@ export class MainMenuView {
     cameraIcon(this.console, SENSORS_X, HEADER_Y, sensorButton);
     iconClose(this.console, "Close", handlers.onMenu);
     [this.mode, this.agentMode] = tabs(this.console, [COPY.manual, COPY.agent] as const, 0.198, [() => handlers.onMode("manual"), () => handlers.onMode("agent")]);
-    this.activity = label(this.console, "Idle", 0, 0.139, CONTENT, 0.03, 19, C.muted);
     const agentField = messageField(this.chat, COPY.agent, 0.052, true);
     this.agent = agentField.content;
     const humanField = messageField(this.chat, COPY.yourMessage, -0.088, false);
@@ -259,9 +260,9 @@ export class MainMenuView {
     for (const [y, action] of [[0.08, handlers.onLidarRange], [-0.01, handlers.onLidarPoints]] as const) {
       for (const direction of [-1, 1]) this.sensorControls.push(button(this.sensorsPage, direction < 0 ? "−" : "+", direction < 0 ? -0.015 : 0.31, y, 0.064, 0.064, () => action?.(direction)));
     }
-    this.sensorStatus = label(this.sensorsPage, "", 0, -0.15, CONTENT, 0.17, 17, C.muted);
-    label(this.recoveryPage, COPY.alignmentTitle, 0, 0.19, CONTENT, 0.06, 30, C.ink, "center", "semibold");
-    label(this.recoveryPage, COPY.alignmentGuidance, 0, 0.055, CONTENT - 0.06, 0.14, 22, C.muted, "center");
+    this.sensorStatus = label(this.sensorsPage, "", 0, -0.15, CONTENT, 0.1, 17, C.muted);
+    label(this.recoveryPage, COPY.alignmentTitle, 0, HEADER_Y, CONTENT, 0.04, 28, C.ink, "center", "semibold");
+    label(this.recoveryPage, COPY.alignmentGuidance, 0, 0.055, CONTENT - 0.06, 0.07, 22, C.muted, "center");
     button(this.recoveryPage, COPY.relocalize, -(HALF_WIDTH + GAP) / 2, -0.1, HALF_WIDTH, ACTION_HEIGHT, handlers.onRealign, "primary");
     button(this.recoveryPage, COPY.dismiss, (HALF_WIDTH + GAP) / 2, -0.1, HALF_WIDTH, ACTION_HEIGHT, () => handlers.onDismissAlignment?.());
 
@@ -296,10 +297,14 @@ export class MainMenuView {
       const activate = object.onTriggered;
       object.onTriggered = id => { if (handlers.canActivate?.(id, object.mesh!)) { activate(id); if (object.enabled) handlers.onActivate?.(); } };
     });
+    this.layoutRuntime();
     this.panel.scale.multiplyScalar(CONTROL_PANEL_SCALE.setup);
     this.appearanceRoot.name = "Menu appearance";
     for (const child of [...this.panel.children]) if (child !== this.panel.mesh) this.appearanceRoot.add(child);
     this.panel.add(this.appearanceRoot);
+    this.panel.traverse(node => {
+      if (node instanceof SurfaceButton) node.setSupportSurface(node.userData.supportSurface ?? plate);
+    });
   }
 
   private readonly appearanceRoot = new THREE.Group();
@@ -309,8 +314,13 @@ export class MainMenuView {
 
   apply(snap: WebXRUISnapshot, speech?: AgentDraftSnapshot): void {
     const runtime = snap.setupCompleted && !snap.setupCelebrating;
-    if (runtime !== this.runtimeScaleApplied && (this.panelProgress === 0 || (runtime && snap.menuOpen) || !snap.setupCompleted)) {
+    if (!this.manipulation && runtime !== this.runtimeScaleApplied && (this.panelProgress === 0 || (runtime && snap.menuOpen) || !snap.setupCompleted)) {
+      const top = this.appearanceRoot.localToWorld(new THREE.Vector3(0, 0.5, this.plate.position.z));
+      this.panel.parent?.worldToLocal(top);
       this.panel.scale.multiplyScalar(runtime ? CONTROL_PANEL_SCALE.runtime / CONTROL_PANEL_SCALE.setup : CONTROL_PANEL_SCALE.setup / CONTROL_PANEL_SCALE.runtime);
+      const scaledTop = this.appearanceRoot.localToWorld(new THREE.Vector3(0, 0.5, this.plate.position.z));
+      this.panel.parent?.worldToLocal(scaledTop);
+      this.panel.position.add(top.sub(scaledTop));
       this.runtimeScaleApplied = runtime;
     }
     this.lastStep = snap.wizardStep;
@@ -353,11 +363,9 @@ export class MainMenuView {
     setText(this.stepTabs[0], snap.connectComplete ? COPY.connected : COPY.connect);
     this.stepTabs.forEach((tab, i) => tab.setActive(i === index));
     this.stepTabs[1].setEnabled(snap.connectComplete === true);
-    setText(this.cardIcon, snap.connectComplete && index === 0 ? "✓" : snap.localizationIssue && index === 1 ? "!" : `0${index + 1}`);
-    this.cardIcon.color(snap.connectComplete && index === 0 ? "#30d158" : C.accent);
     setText(this.cardTitle, snap.wizardCardTitle);
     setText(this.cardBody, snap.wizardCardBody);
-    this.cardTitle.color(C.ink);
+    this.cardTitle.color(snap.wizardStep === "connect" && snap.connectComplete ? toneCss("success") : C.ink);
     setText(this.setup, snap.nextLabel);
     this.setup.setVariant(snap.nextLabel === COPY.continue ? "primary" : "default");
     this.back.visible = snap.backVisible;
@@ -365,7 +373,6 @@ export class MainMenuView {
     setText(this.retry, index === 1 ? COPY.tryAgain : COPY.reconnect);
     setText(this.robotName, COPY.appName);
     const speechStatus = speech?.status === "Type a message" ? COPY.microphoneUnavailable : speech?.status;
-    setText(this.activity, snap.operatingMode === "agent" && speechStatus !== "Off" ? speechStatus ?? "Ready" : snap.activity);
     this.mode.setEnabled(true);
     this.agentMode.setEnabled(snap.agentAvailable);
     this.agentMode.setActive(snap.operatingMode === "agent");
@@ -390,21 +397,12 @@ export class MainMenuView {
     this.estop.feedbackPressed = snap.estopPressed === true;
     setText(this.localize, snap.hasTrackingOrigin ? COPY.relocalize : COPY.localizeRobot);
     this.estop.setEnabled(snap.estopAvailable);
-    setText(this.hud, clip(speech?.error || snap.hudText || "", 100));
+    setText(this.hud, clip(speech?.error || snap.hudText || (snap.operatingMode === "agent" && speechStatus !== "Off" ? speechStatus ?? "" : "") || "", 100));
     this.hud.color(toneCss(speech?.error ? "warn" : snap.hudTone ?? "muted"));
     this.debug.setContent(snap.debugText);
     const localization = snap.wizardStep === "localization" && !snap.localizationIssue && snap.localizationKind !== "unavailable";
-    if (localization !== this.localizationLayout) {
-      this.localizationLayout = localization;
-      this.cardSurface.resize(localization ? 0.42 : CONTENT, localization ? 0.22 : 0.24);
-      this.cardSurface.position.set(localization ? 0.19 / HEIGHT : 0, (localization ? -0.055 : -0.045) / HEIGHT, DIMOS_AR_DESIGN.depth.surface / HEIGHT);
-      layoutText(this.cardTitle, localization ? 0.19 : LEFT + 0.12 + (CONTENT - 0.148) / 2, localization ? 0.022 : 0.035, localization ? 0.39 : CONTENT - 0.148, 0.04, 23);
-      layoutText(this.cardBody, localization ? 0.19 : LEFT + 0.12 + (CONTENT - 0.148) / 2, localization ? -0.065 : -0.055, localization ? 0.36 : CONTENT - 0.148, localization ? 0.115 : 0.15, 18);
-    }
-    this.cardBadge.userData.depthM = 0.008;
-    this.cardIcon.userData.depthM = 0.009;
-    this.cardBadge.visible = this.cardIcon.visible = !localization;
-    this.preview.visible = this.previewLabel.visible = localization;
+    this.localizationLayout = localization;
+    this.updateLayout(snap, localization);
     this.markerGuide = snap.localizationKind === "marker" || snap.localizationKind === "mixed";
 
     for (const page of [this.wizard, this.success, this.header, this.robotBadge, this.console, this.chat, this.manualHelp, this.settingsPage, this.sensorsPage, this.recoveryPage, this.runtimeFooter, this.details]) {
@@ -412,12 +410,105 @@ export class MainMenuView {
       const state = this.pageTransitions.get(page) ?? { progress: 0, target };
       state.target = target;
       this.pageTransitions.set(page, state);
-      page.userData.rayDisabled = !target;
-      page.visible = target || state.progress > 0;
+      const fits = (page.userData.panelHeight ?? 0) <= this.heightController.height + 1e-8;
+      page.userData.rayDisabled = !target || !fits;
+      page.visible = (target || state.progress > 0) && fits;
     }
   }
 
+  private layoutRuntime(): void {
+    const moveRows = (page: THREE.Group, rows: readonly (readonly [number, number])[]) => {
+      for (const node of page.children) {
+        const match = rows.find(([oldY]) => Math.abs(node.position.y * HEIGHT - oldY) < 1e-6);
+        if (match) node.position.y = match[1] / HEIGHT;
+      }
+    };
+    const layouts = RUNTIME_LAYOUTS;
+    this.manualHelp.position.y = layouts.manual.rows.guidance / HEIGHT;
+    moveRows(this.chat, [[0.052, layouts.agent.rows.reply], [-0.088, layouts.agent.rows.draft], [-0.196, layouts.agent.rows.actions]]);
+    moveRows(this.settingsPage, [[0.16, layouts.settings.rows.robot], [0.09, layouts.settings.rows.robotActions],
+      [-0.014, layouts.settings.rows.headset], [-0.084, layouts.settings.rows.debug], [-0.152, layouts.settings.rows.diagnostics], [-0.228, layouts.settings.rows.sound]]);
+    moveRows(this.sensorsPage, [[0.08, layouts.sensors.rows.range], [-0.01, layouts.sensors.rows.points], [-0.15, layouts.sensors.rows.statistics]]);
+    moveRows(this.details, [[-0.03, layouts.diagnostics.rows.logs]]);
+    moveRows(this.recoveryPage, [[0.055, layouts.alignment.rows.guidance], [-0.1, layouts.alignment.rows.actions]]);
+    this.fittedContent.set(this.chat, layouts.agent.height);
+    this.fittedContent.set(this.manualHelp, layouts.manual.height);
+    this.fittedContent.set(this.wizardBody, HEIGHT);
+    this.fittedContent.set(this.hud, layouts.manual.height);
+    // Headers keep their fixed top positions while each page body waits for space.
+    for (const [page, profile] of [[this.settingsPage, layouts.settings], [this.sensorsPage, layouts.sensors],
+      [this.details, layouts.diagnostics], [this.recoveryPage, layouts.alignment]] as const) {
+      const body = new THREE.Group();
+      body.name = "Panel page body";
+      for (const node of [...page.children]) if (node.position.y * HEIGHT < 0.25) body.add(node);
+      page.add(body); this.fittedContent.set(body, profile.height);
+    }
+    this.success.userData.panelHeight = SETUP_LAYOUTS.success.height;
+  }
+
+  private updateLayout(snap: WebXRUISnapshot, capture: boolean): void {
+    const runtime = snap.setupCompleted && !snap.setupCelebrating;
+    let profile: PanelProfile;
+    if (snap.setupCelebrating) profile = SETUP_LAYOUTS.success;
+    else if (!runtime) {
+      if (snap.wizardStep === "localization") profile = capture ? SETUP_LAYOUTS.capture : SETUP_LAYOUTS.message;
+      else if (snap.connectComplete) profile = SETUP_LAYOUTS.connected;
+      else profile = snap.connectionTone === "error" || snap.connectionTone === "warn" ? SETUP_LAYOUTS.error : SETUP_LAYOUTS.entry;
+    } else if (snap.alignmentReview?.pending) profile = RUNTIME_LAYOUTS.alignment;
+    else if (this.detailsOpen) profile = RUNTIME_LAYOUTS.diagnostics;
+    else if (this.sensorsOpen) profile = RUNTIME_LAYOUTS.sensors;
+    else if (this.settingsOpen) profile = RUNTIME_LAYOUTS.settings;
+    else profile = RUNTIME_LAYOUTS[snap.operatingMode];
+    if (this.layoutProfile !== profile) {
+      this.layoutProfile = profile;
+      if (!runtime && !snap.setupCelebrating) this.layoutWizard(profile, capture);
+    }
+    const main = RUNTIME_LAYOUTS[snap.operatingMode];
+    this.hud.position.y = main.rows.status / HEIGHT;
+    this.fittedContent.set(this.hud, main.height);
+    this.heightController.request(profile.height, !this.heightInitialized || !this.panelShown);
+    this.heightInitialized = true;
+    this.applyHeight();
+  }
+
+  private layoutWizard(profile: PanelProfile, capture: boolean): void {
+    const rows = profile.rows;
+    layoutText(this.description, 0, rows.intro ?? rows.provider, CONTENT, 0.03, 20);
+    layoutText(this.cardTitle, capture ? 0.19 : 0, capture ? rows.camera + 0.06 : rows.status,
+      capture ? 0.39 : CONTENT, profile === SETUP_LAYOUTS.error ? 0.065 : 0.04, 23);
+    layoutText(this.cardBody, capture ? 0.19 : 0, capture ? rows.camera - 0.025 : rows.details,
+      capture ? 0.36 : CONTENT, capture || profile === SETUP_LAYOUTS.connected ? 0.115 : profile === SETUP_LAYOUTS.entry ? 0.04 : 0.1, 18);
+    this.preview.position.y = (rows.camera ?? 0) / HEIGHT;
+    this.previewLabel.position.y = (rows.previewLabel ?? 0) / HEIGHT;
+    this.preview.visible = this.previewLabel.visible = capture;
+    this.fittedContent.set(this.wizardBody, profile.height);
+  }
+
+  private applyHeight(): void {
+    const height = this.heightController.height;
+    const bottom = PANEL_TOP - height;
+    this.plate.resize(WIDTH, height, RADIUS);
+    this.plate.position.y = (HEIGHT - height) / (2 * HEIGHT);
+    for (const node of [this.bar, this.barZone]) node.position.y = (bottom - 0.026) / HEIGHT;
+    for (const side of ["left", "right"] as const) {
+      this.cornerArcs[side].position.y = (bottom + RADIUS) / HEIGHT;
+      this.cornerZones[side].position.y = bottom / HEIGHT;
+    }
+    const footerY = panelFooterY(height) / HEIGHT;
+    for (const button of [this.setup, this.back, this.retry, this.estop]) button.position.y = footerY;
+    for (const [node, required] of this.fittedContent) {
+      const fits = height + 1e-8 >= required;
+      node.userData.rayDisabled = !fits;
+      // Mode visibility is owned by its page transition, not by the fit gate.
+      if (node !== this.chat && node !== this.manualHelp) node.visible = fits;
+    }
+    this.chat.userData.panelHeight = RUNTIME_LAYOUTS.agent.height;
+    this.manualHelp.userData.panelHeight = RUNTIME_LAYOUTS.manual.height;
+  }
+
   updateHover(hits: (THREE.Object3D | undefined)[], deltaS: number): void {
+    this.heightController.tick(deltaS, this.manipulation !== null);
+    this.applyHeight();
     this.animatePages(deltaS);
     const zone = this.manipulation?.zone;
     const looking = !!zone || hits.some(hit => this.ownsTarget(hit));
@@ -483,12 +574,15 @@ export class MainMenuView {
     const rootOpacity = ease(this.panelProgress);
     this.panel.visible = this.panelShown || this.panelProgress > 0;
     this.appearanceRoot.scale.setScalar(0.85 + 0.15 * rootOpacity);
-    this.appearanceRoot.position.z = 0;
+    // Appearance scaling shares the fixed top pivot with height animation.
+    this.appearanceRoot.position.y = (1 - this.appearanceRoot.scale.y) / 2;
+    this.appearanceRoot.position.z = (1 - this.appearanceRoot.scale.z) * this.plate.position.z;
     this.appearanceRoot.traverse(node => {
+      if (node instanceof SurfaceButton) node.syncSurfaceDepth();
       if (node.userData.followSurface) {
         const target = node.userData.followSurface as SurfaceButton;
         const scale = node.parent!.getWorldScale(new THREE.Vector3()).z;
-        node.position.z = target.position.z + 0.0005 / Math.max(1e-6, scale);
+        node.position.z = target.position.z + DIMOS_AR_DESIGN.depth.labelOffset / Math.max(1e-6, scale);
       } else if (node.userData.depthM) {
         const parentScale = node.parent!.getWorldScale(new THREE.Vector3()).z;
         node.position.z = node.userData.depthM / Math.max(1e-6, parentScale);
@@ -501,9 +595,10 @@ export class MainMenuView {
     }
     for (const [page, state] of this.pageTransitions) {
       state.progress = THREE.MathUtils.clamp(state.progress + (state.target ? step : -step), 0, 1);
-      page.visible = state.target || state.progress > 0;
-      page.scale.setScalar(0.985 + 0.015 * ease(state.progress));
-      page.position.y = -0.008 / HEIGHT * (1 - ease(state.progress));
+      const fits = (page.userData.panelHeight ?? 0) <= this.heightController.height + 1e-8;
+      page.userData.rayDisabled = !state.target || !fits;
+      page.visible = (state.target || state.progress > 0) && fits;
+      page.scale.setScalar(1);
     }
     for (const [page, state] of this.pageTransitions) {
       let opacity = rootOpacity * ease(state.progress);
@@ -555,7 +650,7 @@ export class MainMenuView {
     const scroll = this.scrollView(object);
     if (scroll) return scroll.maxScroll > 0;
     if (object === this.barZone || object === this.cornerZones.left || object === this.cornerZones.right) return true;
-    if (object === this.plate) return this.panel.worldToLocal(point.clone()).y > 0.25 / HEIGHT;
+    if (object === this.plate) return this.appearanceRoot.worldToLocal(point.clone()).y > 0.25 / HEIGHT;
     return false;
   }
 
@@ -581,17 +676,17 @@ export class MainMenuView {
     const ray = new THREE.Ray(new THREE.Vector3(...origin), new THREE.Vector3(...direction).normalize());
     const start = ray.intersectPlane(plane, new THREE.Vector3());
     if (!start) return false;
-    const local = this.panel.worldToLocal(start.clone());
+    const local = this.appearanceRoot.worldToLocal(start.clone());
     const u = (meters: number) => meters / HEIGHT;
-    const halfWidth = WIDTH / HEIGHT / 2, halfHeight = 0.5;
-    const inside = Math.abs(local.x) <= halfWidth && Math.abs(local.y) <= halfHeight;
+    const halfWidth = WIDTH / HEIGHT / 2, top = 0.5, bottom = (PANEL_TOP - this.heightController.height) / HEIGHT;
+    const inside = Math.abs(local.x) <= halfWidth && local.y <= top && local.y >= bottom;
     const corner = Math.abs(local.x) > halfWidth - u(0.05) && Math.abs(local.x) < halfWidth + u(0.045) &&
-      local.y < -halfHeight + u(0.05) && local.y > -halfHeight - u(0.045);
-    const bar = Math.abs(local.x) < u(0.11) && local.y < -halfHeight && local.y > -halfHeight - u(0.05);
+      local.y < bottom + u(0.05) && local.y > bottom - u(0.045);
+    const bar = Math.abs(local.x) < u(0.11) && local.y < bottom && local.y > bottom - u(0.05);
     const resize = corner && !grip;
     const move = !resize && (bar || (inside && (grip || local.y > u(0.25))));
     if (!resize && !move) return false;
-    const anchor = this.panel.localToWorld(new THREE.Vector3(resize ? -Math.sign(local.x) * halfWidth : 0, resize ? halfHeight : 0, 0));
+    const anchor = this.appearanceRoot.localToWorld(new THREE.Vector3(resize ? -Math.sign(local.x) * halfWidth : 0, resize ? top : 0, 0));
     this.manipulation = {
       plane, start, position: this.panel.position.clone(), anchor,
       span: start.clone().sub(anchor), scale: this.panel.scale.x,
@@ -779,12 +874,16 @@ function scrollLabel(parent: THREE.Object3D, text: string, x: number, y: number,
 
 /** Both conversation fields use this exact primitive; only the input behavior differs. */
 function messageField(parent: THREE.Object3D, caption: string, y: number, bodyScrollable: boolean): { surface: SurfaceButton; content: ScrollableTextView } {
+  const block = new THREE.Group();
+  block.position.y = y / HEIGHT; parent.add(block);
   const height = DIMOS_AR_DESIGN.message.height;
-  const field = button(parent, "", 0, y, CONTENT, height, () => {}, "field");
+  const field = button(block, "", 0, 0, CONTENT, height, () => {}, "field");
   if (bodyScrollable) field.mesh!.userData.interactionEnabled = false;
-  const heading = label(parent, caption, LEFT + DIMOS_AR_DESIGN.message.padding + 0.2, y + DIMOS_AR_DESIGN.message.captionY, 0.4, DIMOS_AR_DESIGN.message.captionHeight, 15, C.muted, "left", "semibold");
+  const heading = label(block, caption, LEFT + DIMOS_AR_DESIGN.message.padding + 0.2, DIMOS_AR_DESIGN.message.captionY, 0.4, DIMOS_AR_DESIGN.message.captionHeight, 15, C.muted, "left", "semibold");
+  heading.userData.followSurface = field;
   heading.position.z = DIMOS_AR_DESIGN.depth.text / HEIGHT; heading.renderOrder = 14;
-  const content = scrollLabel(parent, "", 0, y + DIMOS_AR_DESIGN.message.textY, CONTENT - DIMOS_AR_DESIGN.message.padding * 2, DIMOS_AR_DESIGN.message.textHeight, 20, C.ink, bodyScrollable);
+  const content = scrollLabel(block, "", 0, DIMOS_AR_DESIGN.message.textY, CONTENT - DIMOS_AR_DESIGN.message.padding * 2, DIMOS_AR_DESIGN.message.textHeight, 20, C.ink, bodyScrollable);
+  content.userData.followSurface = field;
   content.position.z = DIMOS_AR_DESIGN.depth.text / HEIGHT; content.renderOrder = 14;
   return { surface: field, content };
 }
@@ -795,6 +894,8 @@ function tabs<T extends readonly string[]>(parent: THREE.Object3D, labels: T, y:
   rail.position.z = 0.002 / HEIGHT;
   return labels.map((text, i) => {
     const { x, width } = controlPanelTab(labels.length, i);
-    return button(parent, text, x, y, width, ACTION_HEIGHT, actions[i], "tab");
+    const target = button(parent, text, x, y, width, ACTION_HEIGHT, actions[i], "tab");
+    target.userData.supportSurface = rail;
+    return target;
   }) as { [K in keyof T]: SurfaceButton };
 }

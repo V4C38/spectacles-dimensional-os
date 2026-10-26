@@ -1,4 +1,4 @@
-import { CONTROL_PANEL_SCALE } from "../../DimOSARClient/presentation/ControlPanelPresentation";
+import { RUNTIME_PANEL_SCALE } from "./PanelLayout";
 import { SpecsCameraStream } from "../localization/SpecsCameraStream";
 import { SetupFlow } from "../../DimOSARClient/presentation/SetupFlow";
 import type { SpecsUISnapshot } from "./SpecsUISnapshot";
@@ -35,8 +35,8 @@ import type { RobotPresenter } from "./RobotPresenter";
 import { AgentSpeechController } from "../agent/AgentSpeechController";
 import type { SpecsTextToSpeech } from "./SpecsTextToSpeech";
 
-const EDITOR_MENU_SCALE = CONTROL_PANEL_SCALE.runtime;
-const SPECTACLES_MENU_SCALE = CONTROL_PANEL_SCALE.runtime;
+const EDITOR_MENU_SCALE = RUNTIME_PANEL_SCALE;
+const SPECTACLES_MENU_SCALE = RUNTIME_PANEL_SCALE;
 const EDITOR_MENU_ANIM_DURATION = 0.35;
 const SPECTACLES_MENU_SCALE_IN_DURATION = 0.25;
 const SPECTACLES_MENU_SCALE_OUT_DURATION = 0.2;
@@ -279,6 +279,11 @@ export class UIPresenter extends BaseScriptComponent {
     this.wristMenuController?.pin();
     this.setUIState(1);
   }
+  dismissAlignmentReview(): void {
+    this.setupFlow?.dismissAlignmentReview();
+    this.mainMenuView?.setFrameFollowEnabled(false);
+    this.closeMenu();
+  }
   realign(): void {
     const deps = this.requireDeps();
     deps.speechController?.reset();
@@ -367,7 +372,7 @@ export class UIPresenter extends BaseScriptComponent {
       onLidarRange: direction => this.lidarDisplay?.adjustRange(direction),
       onLidarPoints: direction => this.lidarDisplay?.adjustPoints(direction),
       onRealign: () => this.realign(),
-      onDismissAlignment: () => { this.setupFlow?.dismissAlignmentReview(); this.mainMenuView?.setFrameFollowEnabled(false); },
+      onDismissAlignment: () => this.dismissAlignmentReview(),
       onRecord: () => { this.deps?.speechController?.beginRecording(); },
       onRecordEnd: cancel => this.deps?.speechController?.endRecording(cancel),
       onSend: () => { this.deps?.speechController?.submit(); },

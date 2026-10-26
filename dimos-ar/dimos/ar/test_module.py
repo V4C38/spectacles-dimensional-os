@@ -17,6 +17,8 @@ import pytest
 
 from dimos.ar.localization.coordinator import LocalizationOutcome
 from dimos.ar.localization.policy import EpisodeWork, LocalizationPolicy
+from dimos.ar.localization.pose_buffer import PoseBuffer
+from dimos.ar.localization.types import Intrinsics
 from dimos.ar.module import (
     ARModule,
     ARModuleConfig,
@@ -32,7 +34,12 @@ from dimos.ar.robot.profiles import FiducialMarkerMount, RobotName, RobotProfile
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 from dimos.ar.robot.safety import Safety
 from dimos.ar.sensors.lidar_settings import LidarSettings
-from dimos.ar.websocket.protocol import UserMessageRequest, encode_state
+from dimos.ar.websocket.protocol import (
+    LocalizationObservation,
+    TimeSync,
+    UserMessageRequest,
+    encode_state,
+)
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
 
@@ -72,6 +79,7 @@ def _module_with_policy(
 ) -> ARModule:
     module = object.__new__(ARModule)
     module._policy = LocalizationPolicy(providers)
+    module._replay_mode = False
     module._ws_server = _FakeWs()  # type: ignore[assignment]
     module._profile = profile
     module._agent_idle = True
@@ -257,6 +265,63 @@ def test_hello_prompts_observations_request() -> None:
     assert client_id == "c1"
     assert "localization_observations_request" in text
     assert "robot_los_required" in text
+
+
+@pytest.mark.parametrize("replay", [False, True])
+@pytest.mark.parametrize("has_pose", [False, True])
+def test_replay_hello_sends_retained_corrected_pose(replay: bool, has_pose: bool) -> None:
+    module = _module_with_policy(["fiducial_marker"])
+    module._replay_mode = replay
+    module._pose_buffer = PoseBuffer()
+    if has_pose:
+        module._pose_buffer.push(
+            PoseStamped(ts=10.0, position=[2.5, -3.75, 0.33]), ts_server=10.0,
+        )
+
+    module._on_client_connect(None, "late-client")  # type: ignore[arg-type]
+
+    sent = [(client, json.loads(text)) for client, text in module._ws_server.sent]  # type: ignore[union-attr]
+    poses = [(client, body) for client, body in sent if body["type"] == "pose"]
+    if not (replay and has_pose):
+        assert poses == []
+        return
+    assert poses == [("late-client", {
+        "type": "pose",
+        "position": [2.5, -3.75, 0.33],
+        "orientation": [0.0, 0.0, 0.0, 1.0],
+        "ts": 10.0,
+    })]
+
+
+@pytest.mark.parametrize(
+    ("replay", "provider", "expected_travel"),
+    [(True, "fiducial_marker", 2.0), (False, "fiducial_marker", None), (True, "vps", None)],
+)
+def test_marker_capture_travel_uses_replay_pose_policy(
+    replay: bool, provider: str, expected_travel: float | None,
+) -> None:
+    module = _module_with_policy([provider])
+    module._replay_mode = replay
+    module._pose_buffer = PoseBuffer()
+    module._pose_buffer.push(PoseStamped(ts=10.0, position=[0, 0, 0]), ts_server=10.0)
+    module._pose_buffer.push(PoseStamped(ts=10.1, position=[2, 0, 0]), ts_server=10.1)
+    module._policy.on_hello("c1")
+    on_observations = Mock(wraps=module._policy.on_observations)
+    module._policy.on_observations = on_observations  # type: ignore[method-assign]
+    submitted: list[EpisodeWork] = []
+    module._localization_runner = SimpleNamespace(submit=submitted.append)  # type: ignore[assignment]
+    observation = LocalizationObservation(
+        ts_capture=time.time(),
+        jpeg=b"jpeg",
+        intrinsics=Intrinsics(600, 600, 400, 400, 800, 800, "none", ()),
+        camera_position=(0, 0, 0),
+        camera_orientation=(0, 0, 0, 1),
+    )
+
+    module._on_localization_observations((observation,), "c1", TimeSync(0, 0))
+
+    assert len(submitted) == 1
+    assert on_observations.call_args.kwargs["capture_travel_m"] == expected_travel
 
 
 @pytest.mark.asyncio

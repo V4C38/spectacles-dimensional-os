@@ -1,3 +1,4 @@
+import { NAVIGATION_CANCEL_STYLE, navigationCancelReveal } from "../../DimOSARClient/presentation/WorldVisualStyle";
 import { NavigationMarkerRenderer, type NavigationMarkerStyle } from "./NavigationMarkerRenderer";
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
@@ -25,12 +26,17 @@ export class NavGoalMarker extends BaseScriptComponent {
   private hintAnchor: SceneObject | null = null;
   private dragObject: SceneObject | null = null;
   private dragInteractable: Interactable | null = null;
+  private dragCollider: ColliderComponent | null = null;
   private circleVisual: RenderMeshVisual | null = null;
   private arrowMaterial: Material | null = null;
   private dotsMaterial: Material | null = null;
   private cancelButton: RoundButton | null = null;
   private cancelObject: SceneObject | null = null;
   private cancelLabel: Text | null = null;
+  private cancelBaseScale: vec3 | null = null;
+  private cancelVisible = false;
+  private cancelProgress = 0;
+  private cancelConfirmationId = 0;
   private rotation = quat.quatIdentity();
   private events: NavGoalMarkerEvents = {};
   private interactionsBound = false;
@@ -51,6 +57,7 @@ export class NavGoalMarker extends BaseScriptComponent {
       throw new Error("DragInteractable is required");
     }
     this.dragObject = dragObject;
+    this.dragCollider = dragObject.getComponent("Physics.ColliderComponent") as ColliderComponent;
     this.dragInteractable = dragObject.getComponent(Interactable.getTypeName()) as Interactable;
     if (!this.dragInteractable) {
       throw new Error("DragInteractable is required");
@@ -61,6 +68,7 @@ export class NavGoalMarker extends BaseScriptComponent {
       throw new Error("NavigationTargetMarker.button_cancel is required");
     }
     this.cancelObject = cancelObject;
+    this.cancelBaseScale = cancelObject.getTransform().getLocalScale();
     this.cancelButton = cancelObject.getComponent(RoundButton.getTypeName()) as RoundButton;
     if (!this.cancelButton) {
       throw new Error("CancelButton is required");
@@ -82,10 +90,19 @@ export class NavGoalMarker extends BaseScriptComponent {
         const visual = findChild(this.root!, name)?.getComponent("Component.RenderMeshVisual") as RenderMeshVisual | null;
         if (visual) visual.enabled = false;
       }
-      this.cancelObject!.getTransform().setLocalPosition(new vec3(0, 38, 0));
     }
     this.worldVisuals.setRadius(radiusCm);
-    this.worldVisuals.apply({ ...style, hovered: style.hovered ?? this.hovered }, dt, viewportHeight);
+    if (this.cancelVisible) this.cancelProgress = Math.min(1, this.cancelProgress + Math.max(0, dt) / NAVIGATION_CANCEL_STYLE.revealS);
+    this.worldVisuals.apply({ ...style, cancelProgress: this.cancelProgress, hovered: style.hovered ?? this.hovered }, dt, viewportHeight);
+    this.applyCancelReveal();
+    // Keep the native hit cylinder aligned with the rendered ring, including selected scaling.
+    const radius = (this.dragCollider?.shape as CylinderShape | undefined)?.radius;
+    if (radius && this.dragObject) {
+      const transform = this.dragObject.getTransform(), scale = transform.getWorldScale();
+      const horizontal = this.worldVisuals.circleBounds().radius / radius;
+      if (Math.abs(scale.x - horizontal) > 0.0001 || Math.abs(scale.z - horizontal) > 0.0001)
+        transform.setWorldScale(new vec3(horizontal, scale.y, horizontal));
+    }
   }
 
   setHovered(value: boolean): void { this.hovered = value; }
@@ -102,6 +119,14 @@ export class NavGoalMarker extends BaseScriptComponent {
     for (let node: SceneObject | null = object; node; node = node.getParent()) {
       if (node === this.dragObject) return true;
       if (node === this.root) return false;
+    }
+    return false;
+  }
+
+  ownsInteractionTarget(object: SceneObject): boolean {
+    if (!this.root?.isEnabledInHierarchy) return false;
+    for (let node: SceneObject | null = object; node; node = node.getParent()) {
+      if (node === this.root) return true;
     }
     return false;
   }
@@ -178,9 +203,13 @@ export class NavGoalMarker extends BaseScriptComponent {
     arrowPass.ArrowSpeed = animating ? 1.0 : 0;
   }
 
-  setCancelVisible(visible: boolean, estopAvailable: boolean = true): void {
+  setCancelVisible(visible: boolean, estopAvailable: boolean = true, confirmationId = 0): void {
     this.ensureReady();
     this.bindInteractions();
+    if (visible !== this.cancelVisible || confirmationId !== this.cancelConfirmationId) this.cancelProgress = 0;
+    this.cancelConfirmationId = confirmationId;
+    this.cancelVisible = visible;
+    this.applyCancelReveal();
     if (this.cancelObject) {
       this.cancelObject.enabled = visible;
     }
@@ -192,6 +221,15 @@ export class NavGoalMarker extends BaseScriptComponent {
     if (this.cancelLabel) {
       this.cancelLabel.text = estopAvailable ? "Cancel" : "Cancel\nUnavailable";
     }
+  }
+
+  private applyCancelReveal(): void {
+    if (!this.cancelObject || !this.cancelBaseScale) return;
+    const circleHeight = this.worldVisuals?.circleHeightCm() ?? 1.5;
+    const reveal = navigationCancelReveal(this.cancelProgress, circleHeight / 100);
+    const transform = this.cancelObject.getTransform();
+    transform.setLocalPosition(new vec3(0, reveal.heightM * 100, 0));
+    transform.setLocalScale(this.cancelBaseScale.uniformScale(reveal.scale));
   }
 
   show(): void {

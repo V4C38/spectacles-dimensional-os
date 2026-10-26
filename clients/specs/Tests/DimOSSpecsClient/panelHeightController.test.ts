@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { RUNTIME_PANEL_SCALE } from "../../Assets/Scripts/DimOSSpecsClient/presentation/PanelLayout";
 import { PanelHeightController } from "../../Assets/Scripts/DimOSSpecsClient/presentation/PanelHeightController";
 class Vector {
   constructor(public x = 0, public y = 0, public z = 0) {}
@@ -9,7 +10,7 @@ class Vector {
 }
 beforeEach(() => { vi.stubGlobal("vec3", Vector); vi.stubGlobal("vec2", Vector); });
 afterEach(() => vi.unstubAllGlobals());
-function harness() {
+function harness(scale = 0.4) {
   let position = new Vector(), content = new Vector();
   let grab = () => {}, release = () => {};
   const frame = {
@@ -19,7 +20,7 @@ function harness() {
     smoothFollow: { resize: vi.fn() }, border: 1, padding: new Vector(2, 2), innerSize: new Vector(86, 72),
   };
   const root = { getTransform: () => ({ setLocalPosition: (p: Vector) => { content = p; } }) };
-  const controller = new PanelHeightController(frame as never, root as never, 0.4);
+  const controller = new PanelHeightController(frame as never, root as never, scale);
   return { frame, controller, position: () => position, content: () => content, grab: () => grab(), release: () => release() };
 }
 it("animates around a fixed top, retains width, and restores native following", () => {
@@ -63,4 +64,13 @@ it("keeps the native follow control usable through every height update", () => {
   h.controller.setVisible(true); h.controller.request(68); h.controller.tick(0.14);
   expect(button.width * scale.x).toBeCloseTo(7.2);
   expect(position.y + 3.6).toBeCloseTo(h.controller.height / 2 - 2);
+});
+
+it("keeps the smaller runtime frame top anchored and supplies the scaled physical follow width", () => {
+  const h = harness(RUNTIME_PANEL_SCALE); h.controller.setVisible(true); h.controller.request(50);
+  h.controller.tick(0.14);
+  expect(h.position().y + h.controller.height * RUNTIME_PANEL_SCALE / 2).toBeCloseTo(76 * RUNTIME_PANEL_SCALE / 2);
+  expect(h.frame.smoothFollow.resize).toHaveBeenLastCalledWith(23.328);
+  h.controller.tick(0.14);
+  expect(h.position().y + h.controller.height * RUNTIME_PANEL_SCALE / 2).toBeCloseTo(76 * RUNTIME_PANEL_SCALE / 2);
 });

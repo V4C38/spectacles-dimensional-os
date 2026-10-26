@@ -1,3 +1,9 @@
+import { CONTROL_PANEL_SCALE } from "../../DimOSARClient/presentation/ControlPanelPresentation";
+
+/** Scale each native frame and its descendants together. */
+export const SETUP_PANEL_SCALE = CONTROL_PANEL_SCALE.setup * 0.75;
+export const RUNTIME_PANEL_SCALE = CONTROL_PANEL_SCALE.runtime * 0.75;
+
 /** Specs-only design centimetres. Native content keeps its calibrated scale. */
 export const PANEL_GEOMETRY = { width: 90, maximumHeight: 76, top: 38, gap: 2, sectionGap: 3, bottom: 5, action: 6.4 } as const;
 export interface PanelProfile { height: number; rows: Record<string, number>; }

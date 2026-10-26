@@ -1,18 +1,40 @@
 /** Physical world-annotation styles. Host UI uses its own platform's design system. */
+import type { Vec3 } from "../websocket/protocolTypes";
+
+/** One physical dash pattern for robot bounds, advisory routes and world connectors. */
+export const WORLD_DASH_STYLE = { widthM: 0.00275, dashM: 0.012, gapM: 0.01 } as const;
+
 export const FLOOR_MARKER_STYLE = {
   strokeM: 0.008, radiusM: 0.2144, idleOpacity: 0.35,
   selectedOpacity: 0.6, dragOpacity: 0.85,
 } as const;
 
 export const ROBOT_LINE_STYLE = {
-  hoverWidthM: 0.0008, selectedWidthM: 0.00275,
-  hoverOpacity: 0.45, selectedOpacity: 0.8, dashM: 0.012, gapM: 0.01,
+  hoverWidthM: 0.0008, selectedWidthM: WORLD_DASH_STYLE.widthM,
+  hoverOpacity: 0.45, selectedOpacity: 0.8, dashM: WORLD_DASH_STYLE.dashM, gapM: WORLD_DASH_STYLE.gapM,
 } as const;
 
 export const ROUTE_STYLE = {
-  dotWidthM: 0.01, dashM: 0.01, gapM: 0.018, ribbonWidthM: 0.008,
+  strokeM: WORLD_DASH_STYLE.widthM, dashM: WORLD_DASH_STYLE.dashM, gapM: WORLD_DASH_STYLE.gapM, ribbonWidthM: 0.008,
   previewOpacity: 0.6, confirmedOpacity: 0.85,
 } as const;
+
+/** Connected circle segments keep dash distances physical as the marker radius changes. */
+export function circleStrokeSegments(radius: number, segments = 128): Vec3[] {
+  const points: Vec3[] = [];
+  for (let i = 0; i < segments; i++) {
+    const a = i / segments * Math.PI * 2, b = (i + 1) / segments * Math.PI * 2;
+    points.push([Math.cos(a) * radius, 0, Math.sin(a) * radius],
+      [Math.cos(b) * radius, 0, Math.sin(b) * radius]);
+  }
+  return points;
+}
+
+/** The attached floor marker and robot box share hover; detached goals remain independent. */
+export function worldMarkerHover(attachedToRobot: boolean, robotHovered: boolean, markerHovered: boolean) {
+  return { robot: robotHovered || attachedToRobot && markerHovered,
+    marker: markerHovered || attachedToRobot && robotHovered };
+}
 
 export const NAVIGATION_COLORS = {
   succeeded: [0x30 / 255, 0xd1 / 255, 0x58 / 255],
@@ -60,3 +82,18 @@ export function strokeJoints2D(segments: readonly (readonly number[])[], progres
   }
   return joints;
 }
+
+/** Lower-view popups face slightly upward toward the wearer. */
+export const VIEWER_NOTIFICATION_STYLE = { upwardTiltRad: Math.PI / 15 } as const;
+
+export const NAVIGATION_CANCEL_STYLE = { revealS: 0.28, heightM: 0.38, connectorClearanceM: 0.105 } as const;
+
+/** Cancel rises and grows together; its connector ends below the scaled label. */
+export function navigationCancelReveal(progress: number, circleHeightM: number) {
+  const t = Math.max(0, Math.min(1, progress));
+  const scale = t * t * (3 - 2 * t);
+  const heightM = circleHeightM + (NAVIGATION_CANCEL_STYLE.heightM - circleHeightM) * scale;
+  return { scale, heightM, connectorTopM: Math.max(circleHeightM, heightM - NAVIGATION_CANCEL_STYLE.connectorClearanceM * scale) };
+}
+
+export const NAVIGATION_PREVIEW_ARROW_STYLE = { widthScale: 0.8, opacityScale: 0.8 } as const;

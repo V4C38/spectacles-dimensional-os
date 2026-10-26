@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { AdaptiveDashedLineRenderer } from "../presentation/AdaptiveDashedLineRenderer";
+import { ROUTE_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 import type { InterleavedBufferAttribute } from "three";
 import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
@@ -14,23 +15,16 @@ export type RouteStyle = { preview?: boolean; executing?: boolean; startCircle?:
 
 export class WebXRRouteRenderer {
   readonly object: Line2;
-  private readonly dashed = new AdaptiveDashedLineRenderer(0.01, 0.01, 0.018);
+  private readonly dashed = new AdaptiveDashedLineRenderer(ROUTE_STYLE.strokeM, ROUTE_STYLE.dashM, ROUTE_STYLE.gapM);
   private readonly solid = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: 0xffffff, opacity: 0.85, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
   private geometry: LineGeometry;
   private readonly material: LineMaterial;
 
   constructor() {
     this.geometry = new LineGeometry();
-    this.material = new LineMaterial({ color: 0xffffff, linewidth: 0.01, worldUnits: true, dashed: true, dashSize: 0.01, gapSize: 0.018, opacity: 0.85, transparent: true, depthWrite: false, toneMapped: false });
-    // Round each short dash using world-space distance, retaining Line2's single draw call.
-    this.material.onBeforeCompile = shader => {
-      shader.fragmentShader = shader.fragmentShader.replace("float norm = len / linewidth;", `float norm = len / linewidth;
-        #ifdef USE_DASH
-          float along = mod(vLineDistance + dashOffset, dashSize + gapSize) - dashSize * 0.5;
-          if (len * len + along * along > linewidth * linewidth * 0.25) discard;
-        #endif`);
-    };
-    this.material.customProgramCacheKey = () => "dimos-dotted-route-v1";
+    this.material = new LineMaterial({ color: 0xffffff, linewidth: ROUTE_STYLE.strokeM, worldUnits: true,
+      dashed: true, dashSize: ROUTE_STYLE.dashM, gapSize: ROUTE_STYLE.gapM, opacity: ROUTE_STYLE.confirmedOpacity,
+      transparent: true, depthWrite: false, toneMapped: false });
     this.object = new Line2(this.geometry, this.material);
     this.object.name = "WebXRRouteRenderer";
     this.solid.name = "Executing route ribbon";
@@ -57,13 +51,13 @@ export class WebXRRouteRenderer {
       return clientTrackingToWebxrPoint([tracking[0], tracking[1], tracking[2]]);
     });
     const solid = style.executing === true && !style.preview;
-    this.material.linewidth = solid ? 0.008 : 0.01;
+    this.material.linewidth = solid ? ROUTE_STYLE.ribbonWidthM : ROUTE_STYLE.strokeM;
     this.material.dashed = !solid;
     this.material.visible = false;
     this.dashed.object.visible = !solid;
     this.solid.visible = solid;
-    this.material.opacity = style.preview ? 0.6 : 0.85;
-    this.dashed.setStyle(0.01, this.material.opacity);
+    this.material.opacity = style.preview ? ROUTE_STYLE.previewOpacity : ROUTE_STYLE.confirmedOpacity;
+    this.dashed.setStyle(ROUTE_STYLE.strokeM, this.material.opacity);
     if (style.startCircle) converted = anchorPathStart(converted, style.startCircle.center);
     if (style.endCircle) converted[converted.length - 1] = [...style.endCircle.center];
     const clearance = (circle?: RouteCircle): RouteCircle | undefined => circle && ({ ...circle, radius: circle.radius + (solid ? this.material.linewidth / 2 : 0) });
@@ -104,9 +98,6 @@ export class WebXRRouteRenderer {
     const distances = this.geometry.getAttribute("instanceDistanceEnd");
     const total = distances.getX(distances.count - 1);
     if (total <= 1e-6) { this.hide(); return; }
-    // Finish a complete dot at both circle boundaries rather than ending in a gap.
-    const period = this.material.dashSize + this.material.gapSize;
-    this.material.dashScale = (Math.max(0, Math.round((total - this.material.dashSize) / period)) * period + this.material.dashSize) / total;
     this.object.visible = true;
   }
 

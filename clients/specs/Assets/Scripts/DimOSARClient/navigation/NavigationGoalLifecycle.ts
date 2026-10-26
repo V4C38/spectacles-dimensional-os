@@ -5,8 +5,10 @@ import type { Quat, Vec3, YawPose } from "../websocket/protocolTypes";
 
 export type NavigationPose = { position: Vec3; orientation: Quat };
 export type NavFlash = "succeeded" | "cancelled" | "failed";
-export const NAV_FEEDBACK_TIMING = { traceS: 0.25, glyphS: 0.15, holdS: 0.2 } as const;
-export const FLASH_DURATION_S = NAV_FEEDBACK_TIMING.traceS + NAV_FEEDBACK_TIMING.glyphS + NAV_FEEDBACK_TIMING.holdS;
+export const NAV_FEEDBACK_TIMING = { traceS: 0.25, glyphS: 0.15, holdS: 0.35 } as const;
+/** Drawing reaches progress 1 before the completed-state hold begins. */
+export const NAV_FEEDBACK_ANIMATION_S = NAV_FEEDBACK_TIMING.traceS + NAV_FEEDBACK_TIMING.glyphS;
+export const FLASH_DURATION_S = NAV_FEEDBACK_ANIMATION_S + NAV_FEEDBACK_TIMING.holdS;
 export const GOAL_SEND_INTERVAL_S = 0.35;
 export const GOAL_SEND_MIN_DISTANCE_M = 0.2;
 export type NavigationCommands = { sendGoal: (pose: NavigationPose) => void; cancel: () => void };
@@ -33,6 +35,7 @@ export class NavigationGoalLifecycle {
   private flash: NavFlash | null = null;
   private elapsed = 0;
   private feedbackId = 0;
+  private confirmationId = 0;
   constructor(private readonly commands: NavigationCommands, private readonly forceNoopDistanceM = 0) {}
 
   apply(view: ARModuleSessionState, origin: ClientTrackingOrigin | null, floor: NavigationPose | null): void {
@@ -79,6 +82,7 @@ export class NavigationGoalLifecycle {
     if (!this.origin || force && this.lastSent && distance(this.lastSent, pose.position) < this.forceNoopDistanceM) return false;
     if (!force && (now - this.lastSentAt < GOAL_SEND_INTERVAL_S || this.lastSent && distance(this.lastSent, pose.position) < GOAL_SEND_MIN_DISTANCE_M)) return false;
     try { this.commands.sendGoal(clientTrackingToOdomPose(pose, this.origin)); } catch { return false; }
+    if (force) this.confirmationId++;
     this.submissionBaseline = this.view?.nav ?? null;
     this.awaitingFreshFacts = true;
     this.suppressed = this.view?.nav_goal ?? null;
@@ -102,8 +106,9 @@ export class NavigationGoalLifecycle {
 
   snapshot() {
     return { pose: this.pose && clone(this.pose), active: this.active, followingPath: this.active && !this.awaitingFreshFacts && this.view?.nav?.state === "following_path",
+      confirmationId: this.confirmationId,
       cancelVisible: this.active && this.view?.capabilities?.estop.available === true,
-      flash: this.flash, feedbackId: this.feedbackId, feedbackProgress: this.elapsed / FLASH_DURATION_S,
+      flash: this.flash, feedbackId: this.feedbackId, feedbackProgress: Math.min(1, this.elapsed / NAV_FEEDBACK_ANIMATION_S),
       attachedToRobot: !this.active && !this.flash, path: this.route };
   }
 

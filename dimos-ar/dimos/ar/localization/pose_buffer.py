@@ -118,13 +118,25 @@ class PoseBuffer:
         ts_server: float,
         *,
         max_gap_s: float | None = None,
+        fallback_to_latest: bool = False,
     ) -> PoseSample | None:
         with self._lock:
-            return _interpolate(
+            sample = _interpolate(
                 self._samples,
                 ts_server,
                 max_gap_s=self._max_gap_s if max_gap_s is None else max_gap_s,
             )
+            # Replay can end while the AR client keeps scanning. Hold its final
+            # pose only beyond the history; never fill gaps or rewrite its time.
+            if (
+                sample is None
+                and fallback_to_latest
+                and math.isfinite(ts_server)
+                and self._latest is not None
+                and ts_server > self._latest.ts_server
+            ):
+                return self._latest
+            return sample
 
 
 def _sample_from_pose(msg: PoseStamped, *, ts_server: float) -> PoseSample:

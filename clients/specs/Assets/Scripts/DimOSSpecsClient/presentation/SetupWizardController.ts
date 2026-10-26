@@ -1,4 +1,5 @@
-import { CONTROL_PANEL_SCALE, availableFeatures, localizationGuidance, localizationProviderLabel } from "../../DimOSARClient/presentation/ControlPanelPresentation";
+import { SETUP_PANEL_SCALE } from "./PanelLayout";
+import { availableFeatures, localizationGuidance, localizationProviderLabel } from "../../DimOSARClient/presentation/ControlPanelPresentation";
 import { SetupFlow } from "../../DimOSARClient/presentation/SetupFlow";
 require("LensStudio:TextInputModule");
 
@@ -75,6 +76,7 @@ const NAV_DEBOUNCE_S = 0.35;
 const CONNECT_RETRY_S = 2.0;
 const CONNECT_RETRY_LOG_INTERVAL_S = 10.0;
 const CONNECT_POLL_INTERVAL_S = 0.1;
+const MODULE_PIN_STORAGE_KEY = "dimos_ar_module_pin";
 
 export interface SetupWizardControllerDeps {
   panel: SceneObject;
@@ -139,10 +141,10 @@ export class SetupWizardController {
     this.deps = deps;
     this.flow = deps.flow ?? new SetupFlow(deps.session, deps.episode);
     this.view = new SetupWizardView(deps.panel);
-    this._calibratedScale = new vec3(CONTROL_PANEL_SCALE.setup, CONTROL_PANEL_SCALE.setup, CONTROL_PANEL_SCALE.setup);
+    this._calibratedScale = new vec3(SETUP_PANEL_SCALE, SETUP_PANEL_SCALE, SETUP_PANEL_SCALE);
     deps.panel.getTransform().setLocalScale(this._calibratedScale);
     if (deps.cameraObject) {
-      getFrameComponent(deps.panel)?.onTranslationStart.add(() => setPanelFollowing(deps.panel, false, CONTROL_PANEL_SCALE.setup));
+      getFrameComponent(deps.panel)?.onTranslationStart.add(() => setPanelFollowing(deps.panel, false, SETUP_PANEL_SCALE));
     }
 
     const retryEv = deps.script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
@@ -156,6 +158,13 @@ export class SetupWizardController {
     this.view.bindHandlers(
       () => this.onNext(), () => this.onPrevious(), () => this.startAutoconnect(), () => this.onConnectionToggle(),
       () => { this.deps.episode.reset(); this.beginLocalizationCapture(); },
+      () => {
+        this.cancelAutoconnect("connection input edited", false);
+        this._isConnecting = false;
+        this._hostValidationError = null;
+        if (this._connectionMethod === "pin") this.view.clearInput();
+        this.showConnectStatus();
+      },
     );
   }
 
@@ -242,7 +251,7 @@ export class SetupWizardController {
     this.view.placed?.();
     this.view.setVisible?.(true);
     getFrameComponent(this.deps.panel)?.showVisual();
-    setPanelFollowing(this.deps.panel, true, CONTROL_PANEL_SCALE.setup);
+    setPanelFollowing(this.deps.panel, true, SETUP_PANEL_SCALE);
     const panel = this.deps.panel;
     panel.enabled = false;
     scaleIn(panel, 0.5, this._calibratedScale);
@@ -252,7 +261,7 @@ export class SetupWizardController {
     this._visible = false;
     this.view.setVisible?.(false);
     nextAnimationVersion(this.deps.panel, DEFAULT_SCALE_ANIMATION_VERSION_KEY);
-    setPanelFollowing(this.deps.panel, false, CONTROL_PANEL_SCALE.setup);
+    setPanelFollowing(this.deps.panel, false, SETUP_PANEL_SCALE);
     this.deps.panel.enabled = false;
   }
 
@@ -294,18 +303,27 @@ export class SetupWizardController {
     this._connectionMethod = "pin";
     this._hostValidationError = null;
     this.view.setConnectionToggleLabel(connectionModeLabel(this._connectionMethod));
-    this.fillConnectField("");
+    const savedPin = this.loadStoredPin();
+    this.fillConnectField(savedPin);
     if (this.isConnected()) {
       this._connectStepCompleted = true;
       this.showConnectStatus();
       return;
     }
-    this.showConnectStatus();
+    if (savedPin) this.startAutoconnect();
+    else this.showConnectStatus();
   }
 
   private fillConnectField(text: string): void {
     const placeholder = this._connectionMethod === "pin" ? "6 Digit PIN code" : "IP Address";
     this.view.initializeInput(text, placeholder);
+  }
+
+  private loadStoredPin(): string {
+    const store = this.deps.hostStore;
+    if (!store.has(MODULE_PIN_STORAGE_KEY)) return "";
+    const routed = routeConnectionField("pin", store.getString(MODULE_PIN_STORAGE_KEY));
+    return routed?.kind === "pin" ? routed.pin : "";
   }
 
   private onConnectionToggle(): void {
@@ -318,8 +336,10 @@ export class SetupWizardController {
     this._connectionMethod = toggleConnectionMethod(this._connectionMethod);
     this.view.setConnectionToggleLabel(connectionModeLabel(this._connectionMethod));
     if (this._connectionMethod === "pin") {
-      this.fillConnectField("");
-      this.showConnectStatus();
+      const savedPin = this.loadStoredPin();
+      this.fillConnectField(savedPin);
+      if (savedPin) this.startAutoconnect();
+      else this.showConnectStatus();
       return;
     }
     const stored = loadStoredModuleHost(this.deps.hostStore);
@@ -423,6 +443,7 @@ export class SetupWizardController {
       return;
     }
     if (routed.kind === "pin") {
+      this.deps.hostStore.putString(MODULE_PIN_STORAGE_KEY, routed.pin);
       this._hostValidationError = null;
       this._isConnecting = true;
       this.resolvingPin = true;

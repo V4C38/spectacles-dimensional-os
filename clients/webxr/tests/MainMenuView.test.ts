@@ -224,7 +224,7 @@ it("shows separate response and draft fields, moves robot controls into settings
   expect((send as unknown as { enabled: boolean }).enabled).toBe(true);
   expect(robot.text).toContain("Selected");
   const settings = buttons.find(button => button.name === "Global settings")!;
-  settings.onTriggered(0); view.apply({ ...snap, operatingMode: "agent", robotSelected: true });
+  settings.onTriggered(0); view.apply({ ...snap, operatingMode: "agent", robotSelected: true }); view.updateHover([], 0.28);
   const diagnostics = buttons.find(button => button.text === "Diagnostics")!;
   diagnostics.onTriggered(0); expect(onDebug).not.toHaveBeenCalled();
   view.apply(snap);
@@ -232,7 +232,7 @@ it("shows separate response and draft fields, moves robot controls into settings
   // Settings are hidden while diagnostics is open; hidden buttons cannot activate.
   debug.onTriggered(0); expect(onDebug).not.toHaveBeenCalled();
   const detailsDone = buttons.filter(button => button.name === "Done").find(button => button.parent?.visible && button.parent.userData.rayDisabled !== true)!;
-  detailsDone.onTriggered(0); view.apply(snap);
+  detailsDone.onTriggered(0); view.apply(snap); view.updateHover([], 0.28);
   debug.onTriggered(0); expect(onDebug).toHaveBeenCalledOnce();
   // Page transitions ease over 180 ms, and outgoing surfaces stop accepting input immediately.
   view.updateHover([], 0.18);
@@ -241,7 +241,7 @@ it("shows separate response and draft fields, moves robot controls into settings
   expect(view.panel.userData.rayDisabled).toBe(true);
   view.updateHover([], 0.09);
   expect(appearance.scale.x).toBeGreaterThan(0.85); expect(appearance.scale.x).toBeLessThan(1);
-  expect(appearance.position.z).toBe(0);
+  expect(appearance.position.z).toBeCloseTo((1 - appearance.scale.z) * 0.001 / DIMOS_AR_DESIGN.panel.height);
   expect(view.panel.visible).toBe(true);
   view.updateHover([], 0.09);
   expect(view.panel.visible).toBe(false);
@@ -369,11 +369,12 @@ it("uses dark text on white primary/selected controls and physical depth across 
   const control = view.panel.getObjectByName("Button: Manual")!.parent as SurfaceButton;
   control.setActive(true); control.update();
   expect(control.fontColor).toBe(DIMOS_AR_DESIGN.colors.primaryText);
-  const depth = () => control.position.z * control.parent!.getWorldScale(new THREE.Vector3()).z;
-  expect(depth()).toBeCloseTo(0.005);
-  view.panel.scale.multiplyScalar(1.5); control.update(); expect(depth()).toBeCloseTo(0.005);
+  const depth = () => -control.getObjectByName("Button footprint")!.position.z * control.getWorldScale(new THREE.Vector3()).z;
+  const activeDepth = 0.003825 + DIMOS_AR_DESIGN.depth.controlOverlap + DIMOS_AR_DESIGN.depth.primary - DIMOS_AR_DESIGN.depth.secondary;
+  expect(depth()).toBeCloseTo(activeDepth, 7);
+  view.panel.scale.multiplyScalar(1.5); control.update(); expect(depth()).toBeCloseTo(activeDepth, 7);
   control.setActive(false); control.update();
-  expect(control.fontColor).toBe(DIMOS_AR_DESIGN.colors.muted); expect(depth()).toBeCloseTo(0.002);
+  expect(control.fontColor).toBe(DIMOS_AR_DESIGN.colors.muted); expect(depth()).toBeCloseTo(0.003925, 7);
   control.setEnabled(false); expect(control.fontColor).toBe(DIMOS_AR_DESIGN.colors.disabled);
   view.dispose();
 });
@@ -408,4 +409,89 @@ it("starts a panel grab from the accepted input ray while the visual laser is st
   app.onSelectStart({ target });
   expect(begin.mock.calls[0].slice(0, 2)).toEqual([raw.origin, raw.direction]);
   expect(app.panelHold).toBe(target); expect(pin).toHaveBeenCalledOnce(); expect(detach).toHaveBeenCalledOnce();
+});
+
+it("gives every control one physical body without a competing front cap", () => {
+  const noop = () => {};
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  const controls: SurfaceButton[] = [];
+  view.panel.traverse(node => { if (node instanceof SurfaceButton) controls.push(node); });
+  expect(controls.length).toBeGreaterThan(10);
+  const clock = vi.spyOn(performance, "now");
+  let time = 1000;
+  const tick = (control: SurfaceButton) => { time += 100; clock.mockReturnValue(time); control.update(); };
+  try {
+    for (const control of controls) {
+      control.setActive(false);
+      tick(control);
+      const bodies = control.mesh!.children.filter(node => node.name === "Surface thickness");
+      expect(bodies).toHaveLength(1);
+      const body = bodies[0] as THREE.Mesh<THREE.ExtrudeGeometry, THREE.MeshBasicMaterial>;
+      const thickness = () => body.scale.z * control.mesh!.getWorldScale(new THREE.Vector3()).z;
+      expect([0.003825, 0.006825].some(expected => Math.abs(thickness() - expected) < 1e-7)).toBe(true);
+      const footprint = control.getObjectByName("Button footprint") as THREE.Mesh;
+      expect(footprint).toBeDefined();
+      const footprintWorld = () => footprint.getWorldPosition(new THREE.Vector3());
+      const restingFootprint = footprintWorld();
+      const support = control.userData.supportSurface ?? view.panel.getObjectByName("Menu background")!;
+      const supportZ = control.worldToLocal(support.getWorldPosition(new THREE.Vector3())).z;
+      expect((footprint.position.z - supportZ) * control.getWorldScale(new THREE.Vector3()).z).toBeCloseTo(DIMOS_AR_DESIGN.depth.controlOverlap, 7);
+      expect(-footprint.position.z * control.getWorldScale(new THREE.Vector3()).z - thickness()).toBeCloseTo(DIMOS_AR_DESIGN.depth.controlOverlap, 7);
+      const footprintHits: THREE.Intersection[] = [];
+      footprint.raycast(new THREE.Raycaster(), footprintHits);
+      expect(footprintHits).toEqual([]);
+      const checkTint = () => {
+        const uniforms = (control.mesh!.material as THREE.ShaderMaterial).uniforms;
+        const expected = (uniforms.uTint.value as THREE.Color).clone().addScalar(uniforms.uHover.value * 0.12).multiplyScalar(0.75);
+        expect(body.material.color.r).toBeCloseTo(expected.r, 7);
+        expect(body.material.color.g).toBeCloseTo(expected.g, 7);
+        expect(body.material.color.b).toBeCloseTo(expected.b, 7);
+      };
+      checkTint();
+      const initialThickness = thickness();
+      const normals = body.geometry.getAttribute("normal"), index = body.geometry.getIndex()!;
+      for (let i = 0; i < index.count; i += 3) {
+        expect([0, 1, 2].every(offset => normals.getZ(index.getX(i + offset)) > 0.99)).toBe(false);
+      }
+      expect(body.material.depthWrite).toBe(true);
+      expect(body.material.opacity).toBe(1);
+      expect(body.renderOrder).toBeLessThan(control.mesh!.renderOrder);
+      const hits: THREE.Intersection[] = [];
+      body.raycast(new THREE.Raycaster(), hits);
+      expect(hits).toEqual([]);
+      expect((control.mesh!.material as THREE.ShaderMaterial).uniforms.uAlpha.value).toBe(1);
+      control.setActive(true); tick(control); checkTint();
+      expect(footprintWorld().z).toBeCloseTo(restingFootprint.z, 7);
+      expect(thickness()).toBeCloseTo(initialThickness, 7);
+      control.feedbackPressed = true;
+      for (let i = 0; i < 12; i++) tick(control);
+      checkTint();
+      expect(footprintWorld().z).toBeCloseTo(restingFootprint.z, 7);
+      expect(thickness()).toBeCloseTo(initialThickness, 7);
+      control.setEnabled(false); tick(control); checkTint();
+      expect(thickness()).toBeCloseTo(initialThickness, 7);
+      view.panel.scale.multiplyScalar(1.1); tick(control);
+      expect(thickness()).toBeCloseTo(initialThickness, 7);
+      view.panel.scale.divideScalar(1.1);
+      control.feedbackPressed = false;
+    }
+    const field = view.panel.getObjectByName("Agent dictation field") as SurfaceButton;
+    tick(field);
+    view.updateHover([], 1);
+    const parentScale = field.parent!.getWorldScale(new THREE.Vector3()).z;
+    const footprint = field.getObjectByName("Button footprint")!;
+    expect(-footprint.position.z * field.getWorldScale(new THREE.Vector3()).z).toBeCloseTo(0.003925, 7);
+    for (const sibling of field.parent!.children.filter(node => node.userData.followSurface === field)) {
+      expect((sibling.position.z - field.position.z) * parentScale).toBeCloseTo(DIMOS_AR_DESIGN.depth.labelOffset, 7);
+    }
+    const body = controls[0].mesh!.getObjectByName("Surface thickness") as THREE.Mesh;
+    const geometryDispose = vi.spyOn(body.geometry, "dispose");
+    const materialDispose = vi.spyOn(body.material as THREE.Material, "dispose");
+    view.dispose(); view.dispose();
+    expect(geometryDispose).toHaveBeenCalledOnce();
+    expect(materialDispose).toHaveBeenCalledOnce();
+  } finally {
+    clock.mockRestore();
+    view.dispose();
+  }
 });

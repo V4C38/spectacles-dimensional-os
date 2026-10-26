@@ -20,6 +20,15 @@ import generate as shader_generator
 
 
 class ReviewEvidenceTests(unittest.TestCase):
+    def test_native_errors_and_sik_caught_errors_cannot_pass_a_review(self) -> None:
+        lines = [
+            'I Preview UpdateDispatcher: Error in event "SpecsLaserUpdate": InternalError: pass',
+            'E Preview Error: fixture rejected',
+            'W Expected warning: Error: unavailable transport',
+            'I Preview ordinary diagnostic',
+        ]
+        self.assertEqual(review.runtime_error_lines("\n".join(lines)), lines[:2])
+
     def test_default_artifacts_match_webxr_client_structure(self) -> None:
         with mock.patch.object(sys, "argv", ["review.py"]):
             self.assertEqual(review.arguments().output_root, review.SPECS_ROOT / "Tests/integration-tests/test-results")
@@ -265,6 +274,23 @@ class LegacyGraphTests(unittest.TestCase):
         self.assertEqual(children["Node3"]["Ports"]["ScriptName"]["Property"]["Variables"]["String"]["Data"].data, b"viewportHeightPx")
         dependencies = [children[name]["DependencyIndex"].value() for name in ("Node0", "Node1", "Node2", "Node3")]
         self.assertEqual(len(set(dependencies)), 4)
+
+
+    def test_laser_uniforms_share_nodes_across_vertex_and_fragment_stages(self) -> None:
+        laser = graph.load(TOOLS.parent / "Assets/Materials/Shaders/BendyLaser.ss_graph")
+        children = laser["Nodes"]["ChildNodes"]
+        parameters = [value for value in children.values() if isinstance(value, dict)
+                      and value.get("TemplateID")
+                      and value["TemplateID"].value() == "nodes_inputs_parameters_float"]
+        names = [node["Ports"]["ScriptName"]["Property"]["Variables"]["String"]["Data"].data
+                 for node in parameters]
+        self.assertEqual(len(names), 13)
+        self.assertEqual(len(set(names)), 13)
+        self.assertIn(b"startX", names)
+        self.assertIn(b"controlX", names)
+        self.assertIn(b"opacity", names)
+        self.assertEqual(children["Node1"]["Ports"]["ControlX"]["Connection0"],
+                         children["Node2"]["Ports"]["ControlX"]["Connection0"])
 
 
 class McpSdkContractTests(unittest.IsolatedAsyncioTestCase):

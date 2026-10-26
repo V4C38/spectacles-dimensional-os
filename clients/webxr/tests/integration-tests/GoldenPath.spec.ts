@@ -11,6 +11,7 @@ import {
   summonMenu,
   moveInput,
   scrollResponse,
+  touchButton,
 } from "./fixtures/Input";
 
 const appValue = async (page: Page, expression: string) =>
@@ -278,7 +279,7 @@ test("comparable hand golden path", async ({ page }, info) => {
         await setSelection(page, 0);
         await expect
           .poll(() =>
-            appValue(page, "app.client.navigation.marker.cancelVisible()"),
+            appValue(page, "app.client.navigation.marker.cancelVisible() && !app.client.navigation.marker.cancelObject.userData.rayDisabled"),
           )
           .toBe(true);
         await page.evaluate(() => {
@@ -287,11 +288,17 @@ test("comparable hand golden path", async ({ page }, info) => {
               (o: any) => o.constructor.name === "WebXRApp",
             ),
             button = app.client.navigation.marker.cancelObject,
-            p = button.getWorldPosition(button.position.clone());
-          w.questDevice.hands.right.position.set(p.x, p.y, p.z + 0.5);
-          w.questDevice.hands.right.quaternion.set(0, 0, 0, 1);
+            p = button.getWorldPosition(button.position.clone()),
+            q = button.getWorldQuaternion(button.quaternion.clone()),
+            offset = p.clone().set(0, 0, 0.5).applyQuaternion(q);
+          w.questDevice.hands.right.position.copy(p.add(offset));
+          w.questDevice.hands.right.quaternion.copy(q);
         });
-        await page.waitForTimeout(150);
+        // Visible is true throughout the reveal. Wait for the finished,
+        // viewer-facing button and an actual input hit before pinching it.
+        await expect.poll(() => appValue(page,
+          "app.interaction.hit(w.xb.core.input.rightController)?.object === app.client.navigation.marker.cancelObject",
+        )).toBe(true);
         await setSelection(page, 1);
         await setSelection(page, 0);
       },
@@ -304,7 +311,7 @@ test("comparable hand golden path", async ({ page }, info) => {
     await flow.step(
       "agent_recording",
       async () => {
-        await activateRuntimeButton(page, "Agent");
+        await touchButton(page, "Agent");
         await pointRuntimeButton(page, "Agent dictation field");
         await setSelection(page, 1);
         await page.evaluate(

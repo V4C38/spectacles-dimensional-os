@@ -5,8 +5,7 @@ export type NavigationInputId = string;
 export type Placement = { position: Vec3; blocked: boolean } | null;
 export type PlacementStage = "none" | "probe" | "preview";
 export const DRAG_THRESHOLD_M = 0.11;
-export const DRAG_HEADING_MIN_DELTA_M = 0.03;
-export const DRAG_HEADING_SMOOTHING_RATE = 8;
+export { DRAG_HEADING_MIN_DELTA_M, DRAG_HEADING_SMOOTHING_RATE } from "./NavigationPolicy";
 
 /** Per-source probes and one owned draft. Contains no robot execution state or host objects. */
 export class NavigationPlacementSession {

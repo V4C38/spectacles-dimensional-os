@@ -65,6 +65,7 @@ from dimos.ar.websocket.protocol import (
     encode_localization_observations_request,
     encode_localization_result,
     encode_nav_goal,
+    encode_pose,
     encode_state,
     observation_from_localization,
 )
@@ -232,12 +233,11 @@ class ARModule(Module):  # type: ignore[misc]
         self._source_generation = 0
         self._odom_reference_id = uuid4().hex
         self._source_frame_id: str | None = None
-        self._source_clock = RobotSourceClock(
-            recording=(
-                global_config.unitree_connection_type == "replay"
-                or global_config.robot_ip in ("fake", "mock", "replay")
-            )
+        self._replay_mode = (
+            global_config.unitree_connection_type == "replay"
+            or global_config.robot_ip in ("fake", "mock", "replay")
         )
+        self._source_clock = RobotSourceClock(recording=self._replay_mode)
         self._requires_mapping_restart = False
         self._ws_server = WebSocketServer(
             port=self.config.port,
@@ -336,6 +336,7 @@ class ARModule(Module):  # type: ignore[misc]
                     pose_buffer=self._pose_buffer,
                     marker_mounts=self._profile.fiducial_marker_mounts,
                     dictionary_name=self._profile.fiducial_dictionary,
+                    allow_latest_robot_pose=self._replay_mode,
                 )
             elif provider.type == "vps" and vps is None:
                 if not provider.map_code:
@@ -460,6 +461,19 @@ class ARModule(Module):  # type: ignore[misc]
     ) -> None:
         logger.info("AR client session ready", client_id=client_id)
         self._broadcast_state()
+        if self._replay_mode:
+            pose = self._pose_buffer.latest()
+            if pose is not None:
+                # History already uses corrected AR coordinates. Preserve its
+                # timestamp instead of presenting the replay pose as fresh odom.
+                self._ws_server.schedule_send_to_client(
+                    client_id,
+                    encode_pose(
+                        position=pose.position,
+                        orientation=pose.orientation,
+                        ts=pose.ts_server,
+                    ),
+                )
         requested_client_id = self._policy.on_hello(client_id)
         if requested_client_id is not None:
             self._send_observations_request(requested_client_id)
@@ -666,7 +680,13 @@ class ARModule(Module):  # type: ignore[misc]
             newest_capture_age_s=round(time.time() - newest.ts_server, 3),
             jpeg_bytes=sum(len(observation.jpeg) for observation in observations),
         )
-        pose = self._pose_buffer.at_server_ts(newest.ts_server)
+        pose = self._pose_buffer.at_server_ts(
+            newest.ts_server,
+            fallback_to_latest=(
+                LocalizationProviderType.FIDUCIAL_MARKER in self._policy.providers
+                and self._replay_mode
+            ),
+        )
         work = self._policy.on_observations(
             client_id,
             domain,

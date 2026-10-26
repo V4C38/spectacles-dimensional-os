@@ -20,3 +20,12 @@ it("keeps Lens import identities unique and assigns metadata to every script", (
   };
   walk(root);
 });
+
+it("binds the laser material to the actual imported shader identity", () => {
+  const materials = fileURLToPath(new URL("../../Assets/Materials/", import.meta.url));
+  const material = readFileSync(join(materials, "BendyLaser.mat"), "utf8");
+  const shader = readFileSync(join(materials, "Shaders/BendyLaser.ss_graph.meta"), "utf8");
+  const passId = material.match(/Pass: !<reference> ([\da-f-]+)/)?.[1];
+  const shaderId = shader.match(/PrimaryAsset: !<reference> ([\da-f-]+)/)?.[1];
+  expect(passId).toBeTruthy(); expect(passId).toBe(shaderId);
+});

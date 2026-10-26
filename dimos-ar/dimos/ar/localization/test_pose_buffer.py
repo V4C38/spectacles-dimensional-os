@@ -63,3 +63,29 @@ def test_at_server_ts_returns_none_when_empty() -> None:
     buffer = PoseBuffer()
 
     assert buffer.at_server_ts(100.0) is None
+
+
+def test_replay_fallback_holds_final_pose_without_changing_its_timestamp() -> None:
+    buffer = PoseBuffer()
+    final = buffer.push(_pose(10.0, 2.0), ts_server=20.0)
+
+    assert buffer.at_server_ts(100.0) is None
+    assert buffer.at_server_ts(100.0, fallback_to_latest=True) is final
+    assert final.ts_server == 20.0
+    buffer.clear()
+    assert buffer.at_server_ts(100.0, fallback_to_latest=True) is None
+
+
+def test_replay_fallback_preserves_interpolation_and_missing_history() -> None:
+    buffer = PoseBuffer()
+    buffer.push(_pose(10.0, 0.0), ts_server=20.0)
+    buffer.push(_pose(10.1, 2.0), ts_server=20.1)
+    buffer.push(_pose(11.0, 4.0), ts_server=21.0)
+
+    sample = buffer.at_server_ts(20.05, fallback_to_latest=True)
+    assert sample is not None
+    assert sample.position[0] == pytest.approx(1.0)
+    assert buffer.at_server_ts(19.0, fallback_to_latest=True) is None
+    assert buffer.at_server_ts(20.5, fallback_to_latest=True) is None
+    for timestamp in [float("nan"), float("inf"), -float("inf")]:
+        assert buffer.at_server_ts(timestamp, fallback_to_latest=True) is None

@@ -1,6 +1,12 @@
 import { RobotSelection } from "../DimOSARClient/robot/RobotSelection";
 import { SpecsNavigationInput } from "./navigation/SpecsNavigationInput";
+import { SpecsNavigationTargetPriority } from "./navigation/SpecsNavigationTargetPriority";
+import TargetProvider, { type InteractableHitInfo } from "SpectaclesInteractionKit.lspkg/Providers/TargetProvider/TargetProvider";
 import { ViewerNotificationPresenter } from "./presentation/ViewerNotificationPresenter";
+import { SpecsLaserPresenter } from "./presentation/SpecsLaserPresenter";
+import { readSikLaserPointers } from "./presentation/SpecsLaserInput";
+import { LensConfig } from "SpectaclesInteractionKit.lspkg/Utils/LensConfig";
+import type { DispatchedUpdateEvent, DispatchedDelayedEvent } from "SpectaclesInteractionKit.lspkg/Utils/UpdateDispatcher";
 import { ClientPosePublisher } from "../DimOSARClient/agent/ClientPosePublisher";
 import {
   ClientTrackingOriginStore,
@@ -61,8 +67,12 @@ export class DimOSSpecsClient extends BaseScriptComponent {
 
   readonly selection = new RobotSelection();
   private navigationInput: SpecsNavigationInput | null = null;
+  private navigationTargetPriority: SpecsNavigationTargetPriority<InteractableHitInfo> | null = null;
   private previewRoute: NavGoalPresenter | null = null;
   private notifications: ViewerNotificationPresenter | null = null;
+  private lasers: SpecsLaserPresenter | null = null;
+  private laserUpdate: DispatchedUpdateEvent | null = null;
+  private laserStart: DispatchedDelayedEvent | null = null;
   private suspended = false;
   private cameraSource: SpecsCameraSource | null = null;
   private transport: SpecsWebSocketTransport | null = null;
@@ -159,6 +169,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     this.episode = episode;
 
     const parent = this.getSceneObject();
+    this.lasers = new SpecsLaserPresenter(parent, readSikLaserPointers);
     const navGoalPresenter = new NavGoalPresenter(parent);
     const navigationController = new NavigationController({
       session,
@@ -171,10 +182,13 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     this.navGoalPresenter = navGoalPresenter;
     this.previewRoute = new NavGoalPresenter(parent);
     this.navigationInput = new SpecsNavigationInput(navigationController, this.robotPresenter);
+    this.navigationTargetPriority = new SpecsNavigationTargetPriority(TargetProvider,
+      object => this.robotPresenter.ownsTarget(object), object => navigationController.ownsPriorityTarget(object));
     this.notifications = new ViewerNotificationPresenter(this.cameraObject);
     this.createEvent("OnPauseEvent").bind(() => {
       this.uiPresenter.invalidateSetupBaseline();
       this.suspended = true; this.selection.clear(); this.navigationInput?.reset();
+      this.lasers?.reset();
       this.speechController?.endRecording(true); this.cameraSource?.stop();
     });
     this.createEvent("OnResumeEvent").bind(() => {
@@ -182,6 +196,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       if (this.uiPresenter.isSetupCompleted()) this.uiPresenter.requestAlignmentReview("Headset resumed");
     });
     this.createEvent("WorldTrackingResetEvent").bind(() => {
+      this.lasers?.reset();
       this.uiPresenter.invalidateSetupBaseline();
       if (!this.uiPresenter.isSetupCompleted()) return;
       this.selection.clear(); this.navigationInput?.reset(); this.speechController?.reset();
@@ -192,6 +207,11 @@ export class DimOSSpecsClient extends BaseScriptComponent {
 
     this.createEvent("OnStartEvent").bind(() => this.onStart());
     this.createEvent("OnDestroyEvent").bind(() => {
+      this.navigationTargetPriority?.dispose();
+      const dispatcher = LensConfig.getInstance().updateDispatcher;
+      if (this.laserStart) dispatcher.removeEvent(this.laserStart);
+      if (this.laserUpdate) dispatcher.removeEvent(this.laserUpdate);
+      this.lasers?.dispose();
       this.unsubscribeView?.();
       this.unsubscribeView = null;
       this.unsubscribeOutbound?.();
@@ -214,6 +234,16 @@ export class DimOSSpecsClient extends BaseScriptComponent {
   }
 
   private onStart(): void {
+    // SIK creates cursor view-model late updates during OnStart. Register afterward
+    // at the same priority so the beam samples this frame's rendered cursor position.
+    const dispatcher = LensConfig.getInstance().updateDispatcher;
+    this.laserStart = dispatcher.nextFrame("SpecsLaserStart", () => {
+      this.laserStart = null;
+      this.laserUpdate = dispatcher.createLateUpdateEvent("SpecsLaserUpdate", () => {
+        if (!this.suspended && this.enabled && this.getSceneObject().isEnabledInHierarchy) this.lasers?.tick();
+        else this.lasers?.reset();
+      });
+    });
     const session = this.session!;
     const episode = this.episode!;
     const cameraSource = this.cameraSource!;

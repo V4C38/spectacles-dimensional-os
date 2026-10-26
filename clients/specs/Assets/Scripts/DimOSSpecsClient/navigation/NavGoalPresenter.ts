@@ -72,7 +72,7 @@ export class NavGoalPresenter {
       this.ribbon.hide();
       const cm = points.map(p => p.map(v => v * 100) as [number, number, number]);
       this.dots.setViewportHeight(input.viewportHeight ?? 1024);
-      this.dots.segments(cm.slice(0, -1).flatMap((p, i) => [p, cm[i + 1]]), ROUTE_STYLE.dotWidthM * 100,
+      this.dots.segments(cm.slice(0, -1).flatMap((p, i) => [p, cm[i + 1]]), ROUTE_STYLE.strokeM * 100,
         input.preview ? ROUTE_STYLE.previewOpacity : ROUTE_STYLE.confirmedOpacity,
         ROUTE_STYLE.dashM * 100, ROUTE_STYLE.gapM * 100, true);
     }

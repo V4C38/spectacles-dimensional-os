@@ -132,3 +132,29 @@ it.each([false, true])("returns to the main page when setup finishes with alignm
   expect(presenter.isSetupCompleted()).toBe(true);
   expect(showPage).toHaveBeenCalledWith("main");
 });
+
+it("closes the native UI when dismissing a localization review", () => {
+  const presenter = new UIPresenter();
+  const dismissAlignmentReview = vi.fn(), setFrameFollowEnabled = vi.fn(), closeMenu = vi.fn();
+  Object.assign(presenter, { setupFlow: { dismissAlignmentReview }, mainMenuView: { setFrameFollowEnabled }, closeMenu });
+  presenter.dismissAlignmentReview();
+  expect(dismissAlignmentReview).toHaveBeenCalledOnce();
+  expect(setFrameFollowEnabled).toHaveBeenCalledWith(false); expect(closeMenu).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])("scales the whole Specs menu uniformly to 75% for editor mode %s, including reopen animations", isEditorMode => {
+  flushAnimations();
+  let scale = vec3.one();
+  const panel = { enabled: false, getTransform: () => ({ getLocalScale: () => scale,
+    setLocalScale: (next: vec3) => { scale = next; } }) } as unknown as SceneObject;
+  const presenter = new UIPresenter();
+  Object.assign(presenter, { mainUIFrame: panel, isEditorMode, mainMenuView: { setVisible: vi.fn() }, requestStateIfReady: vi.fn() });
+  (presenter as any).setUIState(1, { immediate: true });
+  expect(scale).toEqual(new vec3(0.2592, 0.2592, 0.2592));
+  expect((presenter as any).mainUiFallbackScale()).toBeCloseTo(0.2592);
+  (presenter as any).setUIState(0, { immediate: true });
+  expect(panel.enabled).toBe(false);
+  (presenter as any).setUIState(1); flushAnimations();
+  expect(panel.enabled).toBe(true);
+  expect(scale).toEqual(new vec3(0.2592, 0.2592, 0.2592));
+});

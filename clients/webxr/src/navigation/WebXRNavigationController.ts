@@ -14,7 +14,7 @@ export { FLASH_DURATION_S, shouldBeginFailedFlash, robotDeadzoneRadiusM, shouldS
 export class WebXRNavigationController {
   readonly probeRoot = new THREE.Group();
   readonly marker = new WebXRNavGoalView();
-  readonly draftMarker = new WebXRNavGoalView(0.06);
+  readonly draftMarker = new WebXRNavGoalView();
   readonly probes = new Map<string, WebXRNavGoalView>();
   readonly interaction: NavigationInteraction;
   private wasInsideDeadzone = false;
@@ -31,6 +31,7 @@ export class WebXRNavigationController {
     this.interaction.tick(now, visibleDeltaS);
     this.sync();
     this.marker.tick(visibleDeltaS);
+    if (this.draftMarker.object.visible) this.draftMarker.tick(visibleDeltaS);
     this.sync();
   }
   setSelected(selected: boolean): void { this.interaction.setSelected(selected); this.sync(); }
@@ -50,7 +51,7 @@ export class WebXRNavigationController {
     this.interaction.aim(now, this.place(from, dir, hits, deadzone, fallbackY, true), sourceId); this.sync();
   }
   hold(now: number, from: Vec3, dir: Vec3, hits: MeshHit[], deadzone: RobotGroundDeadzone | null, fallbackY: number, streaming = true, sourceId = "default"): boolean {
-    const held = this.interaction.hold(now, this.place(from, dir, hits, deadzone, fallbackY, this.interaction.snapshot().selected || !streaming), streaming, sourceId); this.sync(); return held;
+    const held = this.interaction.hold(now, this.place(from, dir, hits, deadzone, fallbackY, !streaming), streaming, sourceId); this.sync(); return held;
   }
   release(now: number, from: Vec3, dir: Vec3, hits: MeshHit[], deadzone: RobotGroundDeadzone | null, fallbackY: number, sourceId = "default"): void {
     this.interaction.release(now, this.place(from, dir, hits, deadzone, fallbackY, this.interaction.snapshot().placementHeld === true), sourceId); this.sync();
@@ -65,7 +66,7 @@ export class WebXRNavigationController {
   }
   private sync(): void {
     const state = this.interaction.snapshot();
-    const mainPose = !state.selected && state.dragging ? state : state.activeGoal.pose ?? state;
+    const mainPose = state.dragging ? state : state.activeGoal.pose ?? state;
     const pose = clientTrackingToWebxrPose(mainPose);
     this.marker.setPose(pose.position, pose.orientation);
     if (state.visible && (!state.draft || state.activeGoal.active || state.flash)) this.marker.show(); else this.marker.hide();
@@ -75,7 +76,7 @@ export class WebXRNavigationController {
     this.marker.setInteraction(state.dragging, state.followingPath);
     this.marker.setFlash(state.flash, state.feedbackProgress);
     this.marker.setProbe(null);
-    this.marker.setCancelVisible(state.cancelVisible);
+    this.marker.setCancelVisible(state.cancelVisible, state.activeGoal.confirmationId);
     const opacity = this.marker.circleOpacity();
     if (state.draft && state.visible) {
       const draft = clientTrackingToWebxrPose(state.draft);

@@ -11,6 +11,7 @@
 # Environment (optional):
 #   CI_PYTHON   Python 3.12+ interpreter for the dimos-ar job (default: python3.12, python3)
 #   CI_VENV     Path to reuse/create for dimos-ar deps (default: /tmp/spectacles-dimensional-os-ci-venv)
+#   CI_WEBXR_BUILD_DIR  Optional build output directory, to preserve a running headset build
 
 set -euo pipefail
 
@@ -101,7 +102,7 @@ run_client_webxr_job() {
   cd "${WEBXR_CLIENT}"
   npm ci
   npm test
-  npm run build
+  npm run build -- --outDir "${CI_WEBXR_BUILD_DIR:-dist}"
   npx playwright install chromium
   node --test "${ROOT}/tools/integration-tests/integration.test.mjs" "${ROOT}/tools/visual-review.test.mjs"
   npm run test:integration
