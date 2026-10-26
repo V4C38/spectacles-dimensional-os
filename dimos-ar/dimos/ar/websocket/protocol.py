@@ -398,6 +398,7 @@ class HelloBody:
     navigation_inputs: dict[str, Capability]
     nav_goal_preview: bool = False
     server_info: dict[str, str] | None = None
+    odom_reference_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -409,6 +410,7 @@ class Hello:
     navigation_inputs: dict[str, Capability]
     nav_goal_preview: bool = False
     server_info: dict[str, str] | None = None
+    odom_reference_id: str | None = None
 
 
 def _capability_wire(cap: Capability) -> dict[str, Any]:
@@ -432,6 +434,7 @@ def encode_hello(hello: Hello) -> str:
         {
             "type": "hello",
             "client_id": hello.client_id,
+            **({"odom_reference_id": hello.odom_reference_id} if hello.odom_reference_id else {}),
             "time_sync": {
                 "ts_client": hello.time_sync.ts_client,
                 "ts_server": hello.time_sync.ts_server,

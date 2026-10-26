@@ -83,6 +83,8 @@ export default defineConfig({
     },
   },
   server: {
+    // Native Lens imports can rewrite shared tsconfig files; test recordings must not reload.
+    hmr: process.env.INTEGRATION_RESULTS_DIR ? false : undefined,
     host: true,
     proxy: arModuleProxy,
   },

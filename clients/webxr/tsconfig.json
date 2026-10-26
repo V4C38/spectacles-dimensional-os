@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
@@ -12,11 +16,24 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "types": ["vite/client", "vitest/globals"],
+    "types": [
+      "vite/client",
+      "vitest/globals"
+    ],
     "paths": {
-      "xrblocks": ["./node_modules/xrblocks/build/xrblocks.d.ts"],
-      "@dimos-ar-client/*": ["../specs/Assets/Scripts/DimOSARClient/*"]
+      "xrblocks": [
+        "./node_modules/xrblocks/build/xrblocks.d.ts"
+      ],
+      "@dimos-ar-client/*": [
+        "../specs/Assets/Scripts/DimOSARClient/*"
+      ]
     }
   },
-  "include": ["src", "tests"]
+  "include": [
+    "src",
+    "tests"
+  ],
+  "exclude": [
+    "tests/integration-tests"
+  ]
 }

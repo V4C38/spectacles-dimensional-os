@@ -6,6 +6,7 @@ from dataclasses import replace
 import math
 import time
 from typing import ClassVar, Literal
+from uuid import uuid4
 
 from dimos_lcm.std_msgs import Bool
 from langchain_core.messages import AIMessage
@@ -229,6 +230,7 @@ class ARModule(Module):  # type: ignore[misc]
         self._preview_tasks: dict[str, asyncio.Task[None]] = {}
         self._localization_worker = LocalizationWorker()
         self._source_generation = 0
+        self._odom_reference_id = uuid4().hex
         self._source_frame_id: str | None = None
         self._source_clock = RobotSourceClock(
             recording=(
@@ -397,6 +399,7 @@ class ARModule(Module):  # type: ignore[misc]
                 and not getattr(self, "_requires_mapping_restart", False)
             ),
             server_info=server_info(),
+            odom_reference_id=getattr(self, "_odom_reference_id", None),
         )
 
     def _state_snapshot(self) -> StateSnapshot:
@@ -658,6 +661,11 @@ class ARModule(Module):  # type: ignore[misc]
             for observation in observations
         ]
         newest = max(domain, key=lambda observation: observation.ts_server)
+        logger.info(
+            "localization capture admitted for validation", client_id=client_id,
+            newest_capture_age_s=round(time.time() - newest.ts_server, 3),
+            jpeg_bytes=sum(len(observation.jpeg) for observation in observations),
+        )
         pose = self._pose_buffer.at_server_ts(newest.ts_server)
         work = self._policy.on_observations(
             client_id,
@@ -759,6 +767,7 @@ class ARModule(Module):  # type: ignore[misc]
 
     def _retire_robot_source(self) -> None:
         self._source_generation += 1
+        self._odom_reference_id = uuid4().hex
         self._source_frame_id = None
         self._preview_odom = None
         for task in tuple(getattr(self, "_preview_tasks", {}).values()):

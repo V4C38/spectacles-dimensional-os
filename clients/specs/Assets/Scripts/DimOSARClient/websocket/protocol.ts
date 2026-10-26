@@ -438,6 +438,7 @@ function decodeHello(data: Record<string, unknown>): Hello {
   return {
     type: "hello",
     client_id: requireString(data, "client_id"),
+    ...(data.odom_reference_id === undefined ? {} : { odom_reference_id: requireString(data, "odom_reference_id") }),
     ...(data.server_info === undefined ? {} : { server_info: decodeServerInfo(asObject(data.server_info, "server_info")) }),
     time_sync,
     robot: decodeRobot(asObject(requireKey(data, "robot"), "robot")),

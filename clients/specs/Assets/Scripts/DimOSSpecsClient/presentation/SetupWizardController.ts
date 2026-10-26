@@ -1,8 +1,9 @@
+import { CONTROL_PANEL_SCALE, availableFeatures, localizationGuidance, localizationProviderLabel } from "../../DimOSARClient/presentation/ControlPanelPresentation";
 import { SetupFlow } from "../../DimOSARClient/presentation/SetupFlow";
 require("LensStudio:TextInputModule");
 
 import type { LocalizationCaptureEpisode } from "../../DimOSARClient/localization/localizationCaptureEpisode";
-import type { ClientTrackingOriginStore } from "../../DimOSARClient/localization/clientTrackingOrigin";
+import type { ClientTrackingOrigin, ClientTrackingOriginStore } from "../../DimOSARClient/localization/clientTrackingOrigin";
 import { AR_MODULE_CLIENT_CONFIG } from "../../DimOSARClient/websocket/hostPorts";
 import {
   buildModuleWebSocketUrl,
@@ -28,24 +29,22 @@ import {
   type ConnectionMethod,
   type IpRelayClient,
 } from "../IpRelayClient";
-import { scaleIn } from "../utilities/AnimationUtilities";
-import { COLOR_ERROR, COLOR_WHITE, statusToneColor } from "./UIKit";
+import { scaleIn, nextAnimationVersion, DEFAULT_SCALE_ANIMATION_VERSION_KEY } from "../utilities/AnimationUtilities";
+import { placePanelInFront, setPanelFollowing, getFrameComponent, COLOR_ERROR, COLOR_WARN, statusToneColor } from "./UIKit";
 import { SetupWizardStep, SetupWizardView } from "./SetupWizardView";
 
-const WIZARD_STEP_TITLES = [
-  "Start Robot & ARModule",
-  "Connect",
-  "Localization",
-] as const;
+const WIZARD_STEP_TITLES = {
+  [SetupWizardStep.Connect]: "Connect",
+  [SetupWizardStep.Localization]: "Localization",
+} as const;
 
-const WIZARD_STEP_DESCRIPTIONS = [
-  "Power on your robot.\nRun ./launcher/scripts/start.sh on your Mac.",
-  "Enter the PIN from the launcher, or switch to IP.\nUse the same Wi‑Fi for robot, Mac, and Spectacles.",
-  "Look at the robot while the headset captures views for localization.",
-] as const;
+const WIZARD_STEP_DESCRIPTIONS = {
+  [SetupWizardStep.Connect]: "Start the launcher on your Mac.",
+  [SetupWizardStep.Localization]: "Look at the robot while the headset captures views for localization.",
+} as const;
 
 function localizationStepDescription(displayName: string): string {
-  return `Look at ${displayName}'s marker or mapped surroundings.\nHold steady. Setup finishes automatically when aligned.`;
+  return `Look at ${displayName}'s marker or mapped surroundings.\nHold steady. Setup finishes automatically when localized.`;
 }
 
 function connectionModeLabel(method: ConnectionMethod): string {
@@ -60,28 +59,26 @@ function connectStepStatus(input: {
   displayName?: string;
 }): StatusText {
   if (input.isConnecting && !input.socketOpen) {
-    return { text: "Connecting…", color: "error" };
+    return { text: "Waiting for the launcher…", color: "warn" };
   }
   if (input.isConnecting && input.socketOpen && input.view.connection === "awaiting_hello") {
     return { text: "Waiting for handshake…", color: "warn" };
   }
   if (input.isConnecting && input.linkPhase === "disconnected") {
-    return { text: "Connecting...", color: "error" };
+    return { text: "Waiting for the launcher…", color: "warn" };
   }
-  return sessionLinkStatus(
-    input.view,
-    input.displayName ?? input.view.hello?.robot.display_name ?? NO_ROBOT_CONNECTED_LABEL,
-  );
+  if (input.view.connection === "ready") return { text: "Connected to dimOS ARModule", color: "success" };
+  return sessionLinkStatus(input.view, input.displayName ?? input.view.hello?.robot.display_name ?? NO_ROBOT_CONNECTED_LABEL);
 }
 
 const NAV_DEBOUNCE_S = 0.35;
 const CONNECT_RETRY_S = 2.0;
 const CONNECT_RETRY_LOG_INTERVAL_S = 10.0;
 const CONNECT_POLL_INTERVAL_S = 0.1;
-const CONNECT_ATTEMPT_TIMEOUT_S = AR_MODULE_CLIENT_CONFIG.session.helloTimeoutS + 2;
 
 export interface SetupWizardControllerDeps {
   panel: SceneObject;
+  cameraObject?: SceneObject;
   script: ScriptComponent;
   session: ARModuleSession;
   episode: LocalizationCaptureEpisode;
@@ -90,36 +87,63 @@ export interface SetupWizardControllerDeps {
   defaultWebsocketIp: string;
   hostStore: ModuleHostStore;
   ipRelayClient: IpRelayClient;
+  flow?: SetupFlow;
+  previewTexture?: () => Texture | null;
   onFinished: () => void;
   onDismissToRuntime: () => void;
 }
 
 export class SetupWizardController {
   private readonly deps: SetupWizardControllerDeps;
-  private readonly flow: SetupFlow;
+  readonly flow: SetupFlow;
   private readonly view: SetupWizardView;
   private readonly retryEvent: DelayedCallbackEvent;
   private readonly pollEvent: DelayedCallbackEvent;
-  private _currentStep = SetupWizardStep.StartRobot;
+  private get _currentStep(): SetupWizardStep { return this.flow.step === "localization" ? SetupWizardStep.Localization : SetupWizardStep.Connect; }
   private _connectStepCompleted = false;
   private _isConnecting = false;
+  private resolvingPin = false;
   private _lastNavigationTime = -1;
   private _autoconnectOpId = 0;
   private _retryOpId = 0;
   private _pollOpId = 0;
   private _lastConnectRetryLogTime = -1;
-  private _authoredLocalScale = new vec3(1, 1, 1);
-  private _openedFromRuntime = false;
+  private _calibratedScale = new vec3(1, 1, 1);
   private _hostValidationError: string | null = null;
   private _connectionMethod: ConnectionMethod = "pin";
   private _sessionStarted = false;
   private _visible = false;
+  private successAt: number | null = null;
+  private baseline: { origin: ClientTrackingOrigin; hello: ARModuleSessionState["hello"] } | null = null;
+
+  public invalidateBaseline(): void { this.baseline = null; }
+
+  private retainBaseline(): void {
+    const origin = this.deps.clientTrackingOriginStore.T_odom_client;
+    this.baseline = origin && !this.flow.alignmentReview?.pending
+      ? { origin, hello: this.deps.session.view().hello } : null;
+  }
+
+  private restoreBaseline(): void {
+    const baseline = this.baseline;
+    this.baseline = null;
+    if (!baseline) return;
+    const view = this.deps.session.view();
+    const oldRef = baseline.hello?.odom_reference_id, currentRef = view.hello?.odom_reference_id;
+    if (view.connection === "ready" && (oldRef ? oldRef === currentRef : view.hello === baseline.hello)) {
+      this.deps.clientTrackingOriginStore.restore(baseline.origin);
+    }
+  }
 
   constructor(deps: SetupWizardControllerDeps) {
     this.deps = deps;
-    this.flow = new SetupFlow(deps.session, deps.episode);
+    this.flow = deps.flow ?? new SetupFlow(deps.session, deps.episode);
     this.view = new SetupWizardView(deps.panel);
-    this._authoredLocalScale = deps.panel.getTransform().getLocalScale();
+    this._calibratedScale = new vec3(CONTROL_PANEL_SCALE.setup, CONTROL_PANEL_SCALE.setup, CONTROL_PANEL_SCALE.setup);
+    deps.panel.getTransform().setLocalScale(this._calibratedScale);
+    if (deps.cameraObject) {
+      getFrameComponent(deps.panel)?.onTranslationStart.add(() => setPanelFollowing(deps.panel, false, CONTROL_PANEL_SCALE.setup));
+    }
 
     const retryEv = deps.script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
     retryEv.bind(() => this.onRetryFired());
@@ -130,16 +154,15 @@ export class SetupWizardController {
     this.pollEvent = pollEv;
 
     this.view.bindHandlers(
-      () => this.onNext(),
-      () => this.onPrevious(),
-      () => this.startAutoconnect(),
-      () => this.onConnectionToggle(),
+      () => this.onNext(), () => this.onPrevious(), () => this.startAutoconnect(), () => this.onConnectionToggle(),
+      () => { this.deps.episode.reset(); this.beginLocalizationCapture(); },
     );
   }
 
   public start(fromRuntime: boolean): void {
-    this.flow.openedFromRuntime = fromRuntime; this.flow.completed = false; this.flow.step = "connect";
-    this._openedFromRuntime = fromRuntime;
+    if (fromRuntime) this.retainBaseline(); else this.invalidateBaseline();
+    this.successAt = null;
+    this.flow.restart(fromRuntime);
     this._connectStepCompleted = false;
     this._isConnecting = false;
     this._lastNavigationTime = -1;
@@ -152,24 +175,45 @@ export class SetupWizardController {
     } else {
       this.deps.clientTrackingOriginStore.clear();
     }
+    this.view.setVisible?.(false);
+    this.setStep(SetupWizardStep.Connect);
     this.show();
-    this.setStep(SetupWizardStep.StartRobot);
   }
 
-  public tick(): void {
+  public realign(): void {
+    this.retainBaseline();
+    this.deps.clientTrackingOriginStore.clear();
+    this.successAt = null;
+    this.flow.restart(true);
+    this.invalidatePending();
+    this.view.setVisible?.(false);
+    this.setStep(SetupWizardStep.Localization);
+    this.show();
+  }
+
+  public tick(deltaS = 0): void {
+    this.view.tick?.(deltaS);
     if (!this._visible || this._currentStep !== SetupWizardStep.Localization) {
       return;
     }
     const view = this.deps.session.view();
     if (view.connection === "ready" && view.hasTrackingOrigin) {
       // Transition on UpdateEvent, outside WebSocket and button callbacks.
-      this.finishWizard();
+      if (this.successAt === null) this.successAt = getTime();
+      const elapsed = getTime() - this.successAt;
+      this.view.celebrate?.(Math.min(1, elapsed / 0.65), view.hello?.robot.display_name ?? "Robot");
+      if (elapsed >= 1.5) this.finishWizard();
       return;
     }
+    this.successAt = null;
+    this.view.setCameraPreview?.(this.deps.previewTexture?.() ?? null);
     this.renderLocalizationStatus();
   }
 
   public onSessionViewChanged(): void {
+    const hello = this.deps.session.view().hello;
+    if (hello && this.baseline && hello !== this.baseline.hello &&
+      (!this.baseline.hello?.odom_reference_id || hello.odom_reference_id !== this.baseline.hello.odom_reference_id)) this.invalidateBaseline();
     if (!this._visible) {
       return;
     }
@@ -194,13 +238,21 @@ export class SetupWizardController {
 
   private show(): void {
     this._visible = true;
+    if (this.deps.cameraObject) placePanelInFront(this.deps.panel, this.deps.cameraObject, 5);
+    this.view.placed?.();
+    this.view.setVisible?.(true);
+    getFrameComponent(this.deps.panel)?.showVisual();
+    setPanelFollowing(this.deps.panel, true, CONTROL_PANEL_SCALE.setup);
     const panel = this.deps.panel;
     panel.enabled = false;
-    scaleIn(panel, 0.5, this._authoredLocalScale);
+    scaleIn(panel, 0.5, this._calibratedScale);
   }
 
   private hide(): void {
     this._visible = false;
+    this.view.setVisible?.(false);
+    nextAnimationVersion(this.deps.panel, DEFAULT_SCALE_ANIMATION_VERSION_KEY);
+    setPanelFollowing(this.deps.panel, false, CONTROL_PANEL_SCALE.setup);
     this.deps.panel.enabled = false;
   }
 
@@ -209,17 +261,11 @@ export class SetupWizardController {
       this.flow.previous();
     }
     this.invalidatePending();
-    this._currentStep = step;
+    this.flow.step = step === SetupWizardStep.Localization ? "localization" : "connect";
     this.view.setStepContent(WIZARD_STEP_TITLES[step], this.stepDescription(step));
     this.view.applyStepLayout(step);
 
     switch (step) {
-      case SetupWizardStep.StartRobot:
-        this.view.setInputEnabled(false);
-        this.view.setConnectionToggleVisible(false);
-        this.view.setStatus("", COLOR_WHITE);
-        this.refreshFooterButtons();
-        break;
       case SetupWizardStep.Connect:
         this.view.setInputEnabled(true);
         this.view.setConnectionToggleVisible(true);
@@ -250,10 +296,11 @@ export class SetupWizardController {
     this.view.setConnectionToggleLabel(connectionModeLabel(this._connectionMethod));
     this.fillConnectField("");
     if (this.isConnected()) {
+      this._connectStepCompleted = true;
       this.showConnectStatus();
       return;
     }
-    this.view.setStatus("Enter a 6-digit PIN", COLOR_WHITE);
+    this.showConnectStatus();
   }
 
   private fillConnectField(text: string): void {
@@ -272,7 +319,7 @@ export class SetupWizardController {
     this.view.setConnectionToggleLabel(connectionModeLabel(this._connectionMethod));
     if (this._connectionMethod === "pin") {
       this.fillConnectField("");
-      this.view.setStatus("Enter a 6-digit PIN", COLOR_WHITE);
+      this.showConnectStatus();
       return;
     }
     const stored = loadStoredModuleHost(this.deps.hostStore);
@@ -283,13 +330,6 @@ export class SetupWizardController {
 
   private onNext(): void {
     if (!this._visible || !this.canNavigate()) {
-      return;
-    }
-    if (this._currentStep === SetupWizardStep.StartRobot) {
-      if (this._openedFromRuntime) {
-        this.deps.clientTrackingOriginStore.clear();
-      }
-      this.setStep(SetupWizardStep.Connect);
       return;
     }
     if (this._currentStep === SetupWizardStep.Connect) {
@@ -315,16 +355,17 @@ export class SetupWizardController {
   }
 
   private onPrevious(): void {
-    if (!this.canNavigate()) {
+    if (!this._visible || (!this.flow.openedFromRuntime && !this._connectStepCompleted && !this.isConnected()) || !this.canNavigate()) {
       return;
     }
-    if (this._currentStep === SetupWizardStep.StartRobot) {
-      if (this._openedFromRuntime) {
-        this.dismissToRuntime();
+    if (this._currentStep === SetupWizardStep.Connect) {
+      if (this.flow.openedFromRuntime) {
+        this.invalidatePending(); this.deps.episode.pause(); this.restoreBaseline();
+        this.flow.finish(); this.dismissToRuntime();
       }
       return;
     }
-    this.setStep((this._currentStep - 1) as SetupWizardStep);
+    this.setStep(SetupWizardStep.Connect);
   }
 
   private finishWizard(): void {
@@ -332,9 +373,9 @@ export class SetupWizardController {
       return;
     }
     this.invalidatePending();
+    this.invalidateBaseline();
     // Success stops the camera but keeps future gated capture requests enabled.
     this.flow.finish();
-    this._openedFromRuntime = false;
     this.hide();
     this.deps.onFinished();
   }
@@ -351,7 +392,6 @@ export class SetupWizardController {
   }
 
   private dismissToRuntime(): void {
-    this._openedFromRuntime = false;
     this.hide();
     this.deps.onDismissToRuntime();
   }
@@ -377,7 +417,7 @@ export class SetupWizardController {
       this._hostValidationError = this._connectionMethod === "pin"
         ? "Enter a 6-digit PIN"
         : "Enter a valid IP address";
-      this.view.setStatus(this._hostValidationError, COLOR_ERROR);
+      this.showConnectStatus();
       this._isConnecting = false;
       this.refreshFooterButtons();
       return;
@@ -385,13 +425,14 @@ export class SetupWizardController {
     if (routed.kind === "pin") {
       this._hostValidationError = null;
       this._isConnecting = true;
-      this.view.setStatus("Resolving PIN…", COLOR_ERROR);
+      this.resolvingPin = true;
+      this.showConnectStatus();
       void this.resolvePin(routed.pin, opId);
       return;
     }
     if (!isValidHost(routed.host)) {
       this._hostValidationError = "Enter a valid IP address";
-      this.view.setStatus(this._hostValidationError, COLOR_ERROR);
+      this.showConnectStatus();
       this._isConnecting = false;
       this.refreshFooterButtons();
       return;
@@ -409,10 +450,11 @@ export class SetupWizardController {
     if (opId !== this._autoconnectOpId) {
       return;
     }
+    this.resolvingPin = false;
     if (found === null) {
       this._isConnecting = false;
       this._hostValidationError = "PIN did not resolve";
-      this.view.setStatus(this._hostValidationError, COLOR_ERROR);
+      this.showConnectStatus();
       this.scheduleAutoconnectRetry(opId);
       return;
     }
@@ -487,10 +529,12 @@ export class SetupWizardController {
   }
 
   private invalidatePending(): void {
+    this.resolvingPin = false;
     this._autoconnectOpId += 1;
-    this._pollOpId = this._autoconnectOpId;
-    this.retryEvent.reset(0);
-    this.pollEvent.reset(0);
+    this._pollOpId = -1;
+    this._retryOpId = -1;
+    this.retryEvent.cancel();
+    this.pollEvent.cancel();
   }
 
   private cancelAutoconnect(reason: string, disconnect: boolean): void {
@@ -507,6 +551,8 @@ export class SetupWizardController {
   }
 
   private showConnectStatus(): void {
+    if (this._currentStep !== SetupWizardStep.Connect) return;
+    this.refreshRobotBadge();
     const view = this.deps.session.view();
     const status = connectStepStatus({
       view,
@@ -515,32 +561,55 @@ export class SetupWizardController {
       socketOpen: view.connection === "awaiting_hello" || view.connection === "ready",
       displayName: view.hello?.robot.display_name,
     });
-    this.view.setStatus(this._hostValidationError ?? status.text, statusToneColor(status.color));
+    const error = this._hostValidationError ?? (view.connection === "failed" ? status.text : null);
+    const connected = view.connection === "ready";
+    this.view.setConnectionState?.({
+      text: error ?? (connected ? status.text : this.resolvingPin ? "Resolving PIN…" : this._isConnecting ? status.text : this._connectionMethod === "pin" ? "Enter a 6-digit PIN" : "Enter an IP address"),
+      color: error ? COLOR_ERROR : connected ? statusToneColor("success") : COLOR_WARN,
+      phase: error ? "error" : connected ? "connected" : "entry",
+      details: connected ? `Robot: ${view.hello?.robot.display_name ?? "Unavailable"}\n${availableFeatures(view.capabilities)}` : undefined,
+    });
+  }
+
+  private refreshRobotBadge(): void {
+    const view = this.deps.session.view();
+    const phase = deriveSessionLinkPhase(view);
+    this.view.setRobotBadge?.(view.hello?.robot.display_name ?? "Robot",
+      { disconnected: "Disconnected", connecting: "Connecting…", robotOffline: "Robot offline", connected: "Connected" }[phase],
+      view.nav?.state === "following_path" ? "Following Path" : view.state?.agent.idle === false ? "Thinking" : "Idle");
   }
 
   private renderLocalizationStatus(): void {
+    // Session packets must not repack the capture page during its success animation.
+    if (this.successAt !== null) return;
+    this.refreshRobotBadge();
     const sessionView = this.deps.session.view();
     const episodeView = this.deps.episode.view();
+    const policy = episodeView.capturePolicy;
+    const kind = sessionView.capabilities?.localization.available !== true ? "unavailable" :
+      policy === "any_angle" ? "vps" : policy === "robot_los_required" ? "marker" : policy === "robot_los_preferred" ? "mixed" : "unknown";
+    this.view.setCaptureLayout?.(kind !== "unavailable" && !episodeView.lastError);
+    this.view.setLocalizationProvider?.(localizationProviderLabel(kind));
+    this.view.setMarkerGuide?.(kind === "marker" || kind === "mixed");
+    this.view.setLocalizationGuidance?.(localizationGuidance(kind));
+    this.view.setRetryVisible?.(episodeView.lastError !== null);
     const capture = localizationCaptureStatus(sessionView, episodeView, getTime());
     this.view.setStatus(capture.text, statusToneColor(capture.color));
   }
 
   private refreshFooterButtons(): void {
     const connected = this.isConnected();
+    const connectionCompleted = this._connectStepCompleted || connected;
     let footerNextLabel = "Skip";
-    let footerNextEnabled = true;
-    let footerShowPrev = this._currentStep !== SetupWizardStep.StartRobot;
+    const footerShowPrev = this.flow.openedFromRuntime || connectionCompleted && this._currentStep === SetupWizardStep.Localization;
 
-    if (this._currentStep === SetupWizardStep.StartRobot) {
-      footerNextLabel = "Complete";
-      footerShowPrev = this._openedFromRuntime;
-    } else if (this._currentStep === SetupWizardStep.Connect && connected) {
-      footerNextLabel = "Complete";
+    if (this._currentStep === SetupWizardStep.Connect && connected) {
+      footerNextLabel = "Continue";
     }
 
     this.view.applyFooterState(this._currentStep, {
       footerNextLabel,
-      footerNextEnabled,
+      footerNextEnabled: true,
       footerShowPrev,
     });
   }

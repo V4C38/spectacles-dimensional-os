@@ -70,11 +70,17 @@ jobs:
         working-directory: clients/specs/Tests
     steps:
       - uses: actions/checkout@v6
+      - name: Fetch native shader graphs for codec tests
+        working-directory: .
+        run: git lfs pull --include="clients/specs/Assets/Materials/Shaders/*.ss_graph" --exclude=""
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
       - run: npm ci
       - run: npm test
+      - name: Native review tooling unit tests
+        working-directory: .
+        run: python3 -m unittest discover -s clients/specs/Tests/integration-tests -p 'test_*.py'
 
   client-webxr-tests:
     runs-on: ubuntu-latest
@@ -90,4 +96,16 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
+      - name: Install review video encoder
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Verify integration contract and continuous encoding
+        run: node --test ../../tools/integration-tests/integration.test.mjs ../../tools/visual-review.test.mjs
+      - run: npm run test:integration
+      - name: Upload browser visual reviews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webxr-visual-review
+          path: clients/webxr/tests/integration-tests/test-results/
+          retention-days: 14
+          if-no-files-found: warn

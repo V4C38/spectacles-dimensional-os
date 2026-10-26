@@ -5,7 +5,8 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "test:integration": "python3 ../tools/review.py"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^2.1.0",

@@ -1,0 +1,808 @@
+{
+  "schemaVersion": 1,
+  "video": {
+    "width": 1280,
+    "height": 900,
+    "fps": 30,
+    "minDurationS": 90,
+    "maxDurationS": 120,
+    "controllerMinDurationS": 20,
+    "controllerMaxDurationS": 30
+  },
+  "fixtures": {
+    "robot": {
+      "display_name": "Unitree Go2",
+      "body_bounds_m": [
+        0.7,
+        0.5,
+        0.55
+      ],
+      "footprint_m": [
+        0.7,
+        0.5
+      ],
+      "base_height_m": 0.33
+    },
+    "transcript": "Go forward to the requested location.",
+    "response": "I will go forward to the requested location.",
+    "pose": [
+      2,
+      0,
+      0.33
+    ],
+    "goal": [
+      3,
+      0.5,
+      0
+    ],
+    "path": [
+      [
+        2,
+        0,
+        0,
+        0
+      ],
+      [
+        2.5,
+        0.25,
+        0,
+        0
+      ],
+      [
+        3,
+        0.5,
+        0,
+        0
+      ]
+    ],
+    "pointLimit": 4000,
+    "seed": 20261026
+  },
+  "cases": [
+    {
+      "id": "setup_entry",
+      "label": "Setup starts at connection",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 2,
+      "assertions": [
+        "setup_entry"
+      ]
+    },
+    {
+      "id": "connection_ready",
+      "label": "Connected session and robot identity",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 2,
+      "assertions": [
+        "connection_ready"
+      ]
+    },
+    {
+      "id": "localization_capture",
+      "label": "Live localization capture",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 4,
+      "assertions": [
+        "localization_capture"
+      ]
+    },
+    {
+      "id": "localization_success",
+      "label": "Complete localization animation",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "localization_success"
+      ]
+    },
+    {
+      "id": "runtime_manual",
+      "label": "Manual controls after setup",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "runtime_manual"
+      ]
+    },
+    {
+      "id": "panel_follow",
+      "label": "Panel follows its summoning source",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 4,
+      "assertions": [
+        "panel_follow"
+      ]
+    },
+    {
+      "id": "panel_grab",
+      "label": "Grab, move and pin panel",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 4,
+      "assertions": [
+        "panel_grab"
+      ]
+    },
+    {
+      "id": "robot_hover",
+      "label": "Hover reveals outline without selection",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "robot_hover"
+      ]
+    },
+    {
+      "id": "robot_selected",
+      "label": "Robot selection",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "robot_selected"
+      ]
+    },
+    {
+      "id": "navigation_preview",
+      "label": "Preview without committing",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "navigation_preview"
+      ]
+    },
+    {
+      "id": "navigation_drag",
+      "label": "Move the navigation marker",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "navigation_drag"
+      ]
+    },
+    {
+      "id": "navigation_route",
+      "label": "Confirm exactly one goal and render its route",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 4,
+      "assertions": [
+        "navigation_route"
+      ]
+    },
+    {
+      "id": "robot_movement",
+      "label": "Robot advances along the route",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 4,
+      "assertions": [
+        "robot_movement"
+      ]
+    },
+    {
+      "id": "navigation_success",
+      "label": "Circle and completion checkmark animation",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "navigation_success"
+      ]
+    },
+    {
+      "id": "navigation_cancelled",
+      "label": "User cancellation animation",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "navigation_cancelled"
+      ]
+    },
+    {
+      "id": "agent_recording",
+      "label": "Hold to record",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "agent_recording"
+      ]
+    },
+    {
+      "id": "agent_draft",
+      "label": "Release retains draft without sending",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "agent_draft"
+      ]
+    },
+    {
+      "id": "agent_response",
+      "label": "Explicit send and response",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 4,
+      "assertions": [
+        "agent_response"
+      ]
+    },
+    {
+      "id": "sensors_full",
+      "label": "Full LiDAR view",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "sensors_full"
+      ]
+    },
+    {
+      "id": "sensors_obstacles",
+      "label": "Obstacle LiDAR and adjustments",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "sensors_obstacles"
+      ]
+    },
+    {
+      "id": "settings",
+      "label": "Settings toggles",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "settings"
+      ]
+    },
+    {
+      "id": "diagnostics",
+      "label": "Diagnostics and scrolling",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "diagnostics"
+      ]
+    },
+    {
+      "id": "world_marker",
+      "label": "World marker",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "world_marker"
+      ]
+    },
+    {
+      "id": "relocalize",
+      "label": "Re-localize through setup",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 4,
+      "assertions": [
+        "relocalize"
+      ]
+    },
+    {
+      "id": "setup_restart",
+      "label": "Settings Setup restarts and Skip returns main",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 4,
+      "assertions": [
+        "setup_restart"
+      ]
+    },
+    {
+      "id": "setup_navigation",
+      "label": "Skip and Back gating",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "regression",
+      "video": false,
+      "assertions": [
+        "setup_navigation"
+      ]
+    },
+    {
+      "id": "connection_recovery",
+      "label": "Lost connection clears selection and reconnects",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "regression",
+      "video": false,
+      "assertions": [
+        "connection_recovery"
+      ]
+    },
+    {
+      "id": "capabilities_unavailable",
+      "label": "Unavailable controls do not dispatch commands",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "regression",
+      "video": false,
+      "assertions": [
+        "capabilities_unavailable"
+      ]
+    },
+    {
+      "id": "localization_providers",
+      "label": "Localization provider presentation and unavailable capture",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "regression",
+      "video": false,
+      "assertions": [
+        "localization_providers"
+      ]
+    },
+    {
+      "id": "localization_rejection",
+      "label": "Failed and stale localization cannot complete setup",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "regression",
+      "video": false,
+      "assertions": [
+        "localization_rejection"
+      ]
+    },
+    {
+      "id": "tracking_recovery",
+      "label": "Tracking loss suppresses interaction and resumes safely",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "regression",
+      "video": false,
+      "assertions": [
+        "tracking_recovery"
+      ]
+    },
+    {
+      "id": "interaction_safety",
+      "label": "UI consumes world gestures and cancellation clears held state",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "regression",
+      "video": false,
+      "assertions": [
+        "interaction_safety"
+      ]
+    },
+    {
+      "id": "navigation_failure",
+      "label": "Failed navigation presentation",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "regression",
+      "video": false,
+      "assertions": [
+        "navigation_failure"
+      ]
+    },
+    {
+      "id": "emergency_stop",
+      "label": "Emergency stop emits one command per activation",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "regression",
+      "video": false,
+      "assertions": [
+        "emergency_stop"
+      ]
+    },
+    {
+      "id": "speech_lifecycle",
+      "label": "Cancellation, retained draft and long message scrolling",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "regression",
+      "video": false,
+      "assertions": [
+        "speech_lifecycle"
+      ]
+    },
+    {
+      "id": "speech_errors",
+      "label": "Recognition and agent errors are visible and recoverable",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "regression",
+      "video": false,
+      "assertions": [
+        "speech_errors"
+      ]
+    },
+    {
+      "id": "audio_reset",
+      "label": "Reset is safe without active synthesis or playback",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "regression",
+      "video": false,
+      "assertions": [
+        "audio_reset"
+      ]
+    },
+    {
+      "id": "sensor_limits",
+      "label": "Mode, range and point-limit defaults and bounds",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "regression",
+      "video": false,
+      "assertions": [
+        "sensor_limits"
+      ]
+    },
+    {
+      "id": "viewport_aspect",
+      "label": "Lens Studio Preview aspect changes preserve geometry, framing and usable controls",
+      "platforms": [
+        "specs"
+      ],
+      "group": "platform",
+      "video": false,
+      "assertions": [
+        "viewport_aspect"
+      ]
+    },
+    {
+      "id": "pin_ip_switch",
+      "label": "PIN and IP entry and switching",
+      "platforms": [
+        "specs"
+      ],
+      "group": "platform",
+      "video": false,
+      "assertions": [
+        "pin_ip_switch"
+      ]
+    },
+    {
+      "id": "pin_error",
+      "label": "Invalid and unresolved PIN",
+      "platforms": [
+        "specs"
+      ],
+      "group": "platform",
+      "video": false,
+      "assertions": [
+        "pin_error"
+      ]
+    },
+    {
+      "id": "compact_frames",
+      "label": "Compact profiles retain width and top edge",
+      "platforms": [
+        "specs"
+      ],
+      "group": "platform",
+      "video": false,
+      "assertions": [
+        "compact_frames"
+      ]
+    },
+    {
+      "id": "native_audio_reset",
+      "label": "Disabled component, hierarchy and idle native audio",
+      "platforms": [
+        "specs"
+      ],
+      "group": "platform",
+      "video": false,
+      "assertions": [
+        "native_audio_reset"
+      ]
+    },
+    {
+      "id": "controller_input",
+      "label": "Controller targeting and activation",
+      "platforms": [
+        "webxr"
+      ],
+      "group": "platform",
+      "video": false,
+      "assertions": [
+        "controller_input"
+      ]
+    },
+    {
+      "id": "controller_joystick",
+      "label": "Controller joystick navigation",
+      "platforms": [
+        "webxr"
+      ],
+      "group": "platform",
+      "video": false,
+      "assertions": [
+        "controller_joystick"
+      ]
+    },
+    {
+      "id": "panel_resize",
+      "label": "Supported user resizing",
+      "platforms": [
+        "webxr"
+      ],
+      "group": "platform",
+      "video": false,
+      "assertions": [
+        "panel_resize"
+      ]
+    },
+    {
+      "id": "browser_permissions",
+      "label": "Browser permission rejection and retry",
+      "platforms": [
+        "webxr"
+      ],
+      "group": "platform",
+      "video": false,
+      "assertions": [
+        "browser_permissions"
+      ]
+    },
+    {
+      "id": "launcher_responsive",
+      "label": "Desktop and mobile launcher",
+      "platforms": [
+        "webxr"
+      ],
+      "group": "platform",
+      "video": false,
+      "assertions": [
+        "launcher_responsive"
+      ]
+    }
+  ],
+  "golden": {
+    "minDurationS": 90,
+    "maxDurationS": 120,
+    "chapters": [
+      {
+        "id": "setup_entry",
+        "durationS": 3.8
+      },
+      {
+        "id": "connection_ready",
+        "durationS": 3.8
+      },
+      {
+        "id": "localization_capture",
+        "durationS": 4.8
+      },
+      {
+        "id": "localization_success",
+        "durationS": 3.8
+      },
+      {
+        "id": "runtime_manual",
+        "durationS": 3.8
+      },
+      {
+        "id": "panel_follow",
+        "durationS": 4.8
+      },
+      {
+        "id": "panel_grab",
+        "durationS": 4.8
+      },
+      {
+        "id": "robot_hover",
+        "durationS": 3.8
+      },
+      {
+        "id": "robot_selected",
+        "durationS": 3.8
+      },
+      {
+        "id": "navigation_preview",
+        "durationS": 3.8
+      },
+      {
+        "id": "navigation_drag",
+        "durationS": 3.8
+      },
+      {
+        "id": "navigation_route",
+        "durationS": 4.8
+      },
+      {
+        "id": "robot_movement",
+        "durationS": 4.8
+      },
+      {
+        "id": "navigation_success",
+        "durationS": 3.8
+      },
+      {
+        "id": "navigation_cancelled",
+        "durationS": 3.8
+      },
+      {
+        "id": "agent_recording",
+        "durationS": 3.8
+      },
+      {
+        "id": "agent_draft",
+        "durationS": 3.8
+      },
+      {
+        "id": "agent_response",
+        "durationS": 4.8
+      },
+      {
+        "id": "sensors_full",
+        "durationS": 3.8
+      },
+      {
+        "id": "sensors_obstacles",
+        "durationS": 3.8
+      },
+      {
+        "id": "settings",
+        "durationS": 3.8
+      },
+      {
+        "id": "diagnostics",
+        "durationS": 3.8
+      },
+      {
+        "id": "world_marker",
+        "durationS": 3.8
+      },
+      {
+        "id": "relocalize",
+        "durationS": 4.8
+      },
+      {
+        "id": "setup_restart",
+        "durationS": 4.8
+      }
+    ]
+  }
+}

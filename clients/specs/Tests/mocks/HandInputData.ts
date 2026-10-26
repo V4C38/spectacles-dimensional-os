@@ -17,17 +17,21 @@ const idleHand: MockHand = {
 };
 
 let mockHand: MockHand = idleHand;
+let hands: Partial<Record<HandType, MockHand>> = {};
 
 export function setMockHand(hand: MockHand | null): void {
   mockHand = hand ?? idleHand;
+  hands = {};
 }
+
+export function setMockHands(value: Partial<Record<HandType, MockHand>>): void { hands = value; mockHand = idleHand; }
 
 export class HandInputData {
   static getInstance(): HandInputData {
     return new HandInputData();
   }
 
-  getHand(_handType: string): MockHand {
-    return mockHand;
+  getHand(handType: string): MockHand {
+    return hands[handType as HandType] ?? mockHand;
   }
 }

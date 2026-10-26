@@ -62,7 +62,7 @@ export class NavigationInteraction {
     if (draft) this.previews.aim(draft.position, draft.orientation);
     this.previews.tick(now);
   }
-  setSelected(selected: boolean): void { this.selected = selected; if (!selected) this.cancelDrag(); }
+  setSelected(selected: boolean): void { if (this.selected === selected) return; this.selected = selected; if (!selected) this.cancelDrag(); }
   isAiming(): boolean { return this.placement.snapshot().draft !== null; }
   isDragging(): boolean { return this.dragging; }
   isRouteVisible(): boolean { return this.armed && this.flash() === null; }

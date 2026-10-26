@@ -1,6 +1,5 @@
 import { HandInputData } from "SpectaclesInteractionKit.lspkg/Providers/HandInputData/HandInputData";
 import { HandType } from "SpectaclesInteractionKit.lspkg/Providers/HandInputData/HandType";
-import { exponentialSmoothAlpha } from "../utilities/AnimationUtilities";
 
 export type PalmGestureGateConfig = {
   showPitchDeg: number;
@@ -140,158 +139,87 @@ export class PalmGestureGate {
   }
 }
 
+type WristHand = Pick<ReturnType<HandInputData["getHand"]>, "isTracked" | "getPalmPitchAngle" | "isFacingCamera" | "wrist" | "middleMidJoint" | "indexMidJoint">;
+
 export type WristMenuControllerDeps = {
+  hands?: { left: WristHand; right: WristHand };
   panel: SceneObject;
   anchorRoot: SceneObject;
+  cameraObject?: SceneObject;
   handType?: HandType;
   onBeforeShow?: () => void;
+  centerOffsetCm?: () => number;
+  onPin?: () => void;
   onMenuShow: () => void;
   onMenuHide: (immediate: boolean) => void;
 };
 
+/** Either palm can summon; native Frame translation detaches the panel from that source. */
 export class WristMenuController {
-  private static readonly POSITION_RATE = 28.0;
+  private readonly hands: { left: WristHand; right: WristHand };
+  private readonly gates = { left: new PalmGestureGate(), right: new PalmGestureGate() };
+  private source: "left" | "right" | null = null;
+  private visible = false;
+  private summonOffset = vec3.zero();
 
-  private readonly _panel: SceneObject;
-  private readonly _anchorRoot: SceneObject;
-  private readonly _hand;
-  private readonly _onBeforeShow?: () => void;
-  private readonly _onMenuShow: () => void;
-  private readonly _onMenuHide: (immediate: boolean) => void;
-  private readonly _gestureGate = new PalmGestureGate(DEFAULT_PALM_GESTURE_GATE_CONFIG);
-
-  private _menuVisible = false;
-  private _tracking = false;
-  private _needsSnap = true;
-
-  constructor(deps: WristMenuControllerDeps) {
-    if (!deps.panel) {
-      throw new Error("WristMenuController: panel is required");
-    }
-    if (!deps.anchorRoot) {
-      throw new Error("WristMenuController: anchorRoot is required");
-    }
-    if (!deps.onMenuShow || !deps.onMenuHide) {
-      throw new Error("WristMenuController: onMenuShow and onMenuHide are required");
-    }
-
-    this._panel = deps.panel;
-    this._anchorRoot = deps.anchorRoot;
-    this._hand = HandInputData.getInstance().getHand(deps.handType ?? "left");
-    this._onBeforeShow = deps.onBeforeShow;
-    this._onMenuShow = deps.onMenuShow;
-    this._onMenuHide = deps.onMenuHide;
-
-    this._onMenuHide(true);
-  }
-
-  /** Hide now and arm the palm pose so it can open the menu again. */
-  public closeImmediate(): void {
-    this._gestureGate.reset();
-    this._hideMenu(true);
-  }
-
-  public tick(dt: number): void {
-    const now = getTime();
-    const isTracked = this._hand.isTracked();
-    const input = {
-      isTracked,
-      palmPitchDeg: isTracked ? this._hand.getPalmPitchAngle() : null,
-      isFacingCamera: isTracked ? this._hand.isFacingCamera() : false,
-      palmFacingDotUp: isTracked ? this._palmFacingDotUp() : null,
+  constructor(private readonly deps: WristMenuControllerDeps) {
+    this.hands = deps.hands ?? {
+      left: HandInputData.getInstance().getHand("left"),
+      right: HandInputData.getInstance().getHand("right"),
     };
+    deps.onMenuHide(true);
+  }
 
-    const gestureChanged = this._gestureGate.update(input, now);
-    if (gestureChanged) {
-      if (this._gestureGate.isOpen) {
-        this._showMenu();
-      } else {
-        this._hideMenu(false);
+  pin(): void { this.source = null; this.deps.onPin?.(); }
+  isPinned(): boolean { return this.visible && this.source === null; }
+  sourceHand(): "left" | "right" | null { return this.source; }
+  closeImmediate(): void {
+    this.source = null; this.visible = false;
+    this.gates.left.reset(); this.gates.right.reset();
+    this.deps.onMenuHide(true);
+  }
+
+  tick(dt: number): void {
+    for (const side of ["left", "right"] as const) {
+      const hand = this.hands[side], tracked = hand.isTracked();
+      let palmFacingDotUp: number | null = null;
+      if (tracked) {
+        try { palmFacingDotUp = palmFacingDotWorldUp(side, hand.wrist.position, hand.middleMidJoint.position, hand.indexMidJoint.position); }
+        catch { /* Tracking can temporarily omit joints. */ }
+      }
+      const changed = this.gates[side].update({ isTracked: tracked,
+        palmPitchDeg: tracked ? hand.getPalmPitchAngle() : null,
+        isFacingCamera: tracked && hand.isFacingCamera(), palmFacingDotUp }, getTime());
+      if (this.source === side && !tracked) { this.pin(); continue; }
+      if (changed && this.gates[side].isOpen && !this.visible) {
+        this.visible = true; this.source = side;
+        const forward = this.deps.cameraObject?.getTransform().getWorldRotation().multiplyVec3(new vec3(0, 0, -1));
+        const length = forward ? Math.hypot(forward.x, forward.z) : 0;
+        this.summonOffset = forward && length > 0.001 ? new vec3(forward.x / length * 18, 0, forward.z / length * 18) : vec3.zero();
+        this.placeAtPalm(); this.deps.onBeforeShow?.(); this.deps.onMenuShow();
+      } else if (changed && !this.gates[side].isOpen && this.source === side) {
+        this.source = null; this.visible = false; this.deps.onMenuHide(false);
       }
     }
-
-    if (isTracked) {
-      this._tickInterpolation(dt);
-      return;
-    }
-
-    if (this._menuVisible) {
-      this._gestureGate.reset();
-      this._hideMenu(true);
-    }
+    if (this.visible && this.source) this.placeAtPalm(dt);
   }
 
-  private _showMenu(): void {
-    if (this._menuVisible) {
-      return;
-    }
-    this._menuVisible = true;
-    this._snapToAnchor();
-    this._onBeforeShow?.();
-    this._onMenuShow();
-    this._tracking = true;
-  }
-
-  private _hideMenu(immediate: boolean): void {
-    if (!this._menuVisible && !this._panel.enabled) {
-      this._resetTracking();
-      return;
-    }
-
-    this._menuVisible = false;
-    this._onMenuHide(immediate);
-    this._resetTracking();
-  }
-
-  private _snapToAnchor(): void {
-    const anchorTransform = this._anchorRoot.getTransform();
-    const panelTransform = this._panel.getTransform();
-    panelTransform.setWorldPosition(anchorTransform.getWorldPosition());
-    this._needsSnap = false;
-    this._tracking = true;
-  }
-
-  private _tickInterpolation(dt: number): void {
-    if (dt <= 0) {
-      return;
-    }
-
-    const anchorTransform = this._anchorRoot.getTransform();
-    const targetPos = anchorTransform.getWorldPosition();
-    const panelTransform = this._panel.getTransform();
-
-    if (this._needsSnap) {
-      panelTransform.setWorldPosition(targetPos);
-      this._needsSnap = false;
-      this._tracking = true;
-      return;
-    }
-
-    if (!this._tracking) {
-      return;
-    }
-
-    const alpha = exponentialSmoothAlpha(dt, WristMenuController.POSITION_RATE);
-    panelTransform.setWorldPosition(
-      vec3.lerp(panelTransform.getWorldPosition(), targetPos, alpha),
-    );
-  }
-
-  private _resetTracking(): void {
-    this._tracking = false;
-    this._needsSnap = true;
-  }
-
-  private _palmFacingDotUp(): number | null {
-    try {
-      return palmFacingDotWorldUp(
-        this._hand.handType,
-        this._hand.wrist.position,
-        this._hand.middleMidJoint.position,
-        this._hand.indexMidJoint.position,
-      );
-    } catch {
-      return null;
+  private placeAtPalm(dt?: number): void {
+    if (!this.source) return;
+    const hand = this.hands[this.source];
+    const transform = this.deps.panel.getTransform();
+    const camera = this.deps.cameraObject?.getTransform();
+    const wrist = hand.wrist?.position;
+    const offset = dt === undefined ? 0 : this.deps.centerOffsetCm?.() ?? 0;
+    const target = wrist ? new vec3(wrist.x, wrist.y + 20 + offset, wrist.z).add(this.summonOffset) : this.deps.anchorRoot.getTransform().getWorldPosition();
+    const alpha = dt === undefined ? 1 : 1 - Math.exp(-12 * Math.max(0, dt));
+    transform.setWorldPosition(vec3.lerp(transform.getWorldPosition(), target, alpha));
+    if (camera) {
+      const toward = camera.getWorldPosition().sub(transform.getWorldPosition());
+      if (toward.length > 0.001) {
+        const rotation = quat.lookAt(toward.normalize(), vec3.up());
+        transform.setWorldRotation(dt === undefined ? rotation : quat.slerp(transform.getWorldRotation(), rotation, alpha));
+      }
     }
   }
 }

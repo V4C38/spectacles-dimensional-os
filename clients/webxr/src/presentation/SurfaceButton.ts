@@ -48,6 +48,7 @@ export class SurfaceButton extends xb.TextButton {
     mesh.renderOrder = this.renderOrder;
     mesh.name = `Button: ${this.text}`;
     registerRayTarget(mesh);
+    mesh.userData.touchButton = true;
     this.baseZ = this.position.z;
     mesh.userData.styled = false;
     this.setEnabled(true);

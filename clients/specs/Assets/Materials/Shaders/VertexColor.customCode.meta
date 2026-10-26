@@ -1,0 +1,16 @@
+- !<AssetImportMetadata/a09e7909-2af4-48ce-b545-0d58bf4d3965>
+  ImportedAssetIds:
+    CustomCodeNodeAsset: !<reference> 26b24161-ec02-4586-85ce-b4f0876203ff
+  ImporterName: CustomCodeNodeAssetImporter
+  PrimaryAsset: !<reference> 26b24161-ec02-4586-85ce-b4f0876203ff
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    {}
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000

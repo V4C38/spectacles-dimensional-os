@@ -1,3 +1,5 @@
+import { availableFeatures, localizationGuidance, localizationProviderLabel } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+export { availableFeatures } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import { SetupFlow } from "@dimos-ar-client/presentation/SetupFlow";
 import { LidarDisplayController } from "@dimos-ar-client/sensors/LidarDisplayController";
 import { readLidarPreferences, saveLidarPreferences, type LidarDisplayPreferences } from "../sensors/WebXRLidarSettings";
@@ -175,16 +177,10 @@ export class WebXRUIPresenter {
         policy === "robot_los_preferred" ? "mixed" : "unknown";
     const descriptions = {
       connect: "",
-      localization: kind === "vps" ? "VPS" :
-        kind === "mixed" ? "AprilTag + VPS" :
-          kind === "marker" ? "AprilTag" :
-            kind === "unavailable" ? "No localization provider" : "Waiting for localization…",
+      localization: localizationProviderLabel(kind),
     };
     const issue = kind === "unavailable" ? null : this.localizationError ?? this.cameraError();
-    const guidance = kind === "vps" ? "Look around the mapped space." :
-      kind === "mixed" ? "Frame the tag, or look around the mapped space." :
-        kind === "marker" ? "Frame the tag at the guide’s approximate size." :
-          kind === "unavailable" ? "Skip to continue without localization." : "Waiting for camera…";
+    const guidance = localizationGuidance(kind);
     const card = this.wizardStep === "connect"
       ? { title: view.connection === "ready" ? "Connected to dimOS ARModule" : "Connecting", body: view.connection === "ready" ? `WebSocket connected\nRobot: ${view.hello?.robot.display_name ?? "Unavailable"}\n${availableFeatures(view.capabilities)}` : "Waiting for the launcher." }
       : issue ? { title: "Camera unavailable", body: issue }
@@ -363,11 +359,4 @@ export class WebXRUIPresenter {
       return;
     }
   }
-}
-
-/** One concise capability vocabulary for setup and the landing information panel. */
-export function availableFeatures(capabilities: ARModuleSessionState["capabilities"]): string {
-  const labels = { navigation: "Navigation", agent: "Agent", lidar: "LiDAR", localization: "Localization", estop: "Emergency Stop" } as const;
-  const features = (Object.keys(labels) as (keyof typeof labels)[]).filter(key => capabilities?.[key]?.available).map(key => labels[key]);
-  return features.length ? `Available: ${features.join(", ")}` : "No features available";
 }

@@ -170,8 +170,8 @@ describe("agentSpeechShouldRun", () => {
     expect(agentSpeechShouldRun("manual", false, true, true)).toBe(false);
   });
 
-  it("runs speech in debug agent mode without a session or capability", () => {
-    expect(agentSpeechShouldRun("agent", true, false, false)).toBe(true);
+  it("keeps speech gated by readiness and capability in debug mode", () => {
+    expect(agentSpeechShouldRun("agent", true, false, false)).toBe(false);
     expect(agentSpeechShouldRun("manual", true, false, false)).toBe(false);
   });
 });

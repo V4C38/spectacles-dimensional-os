@@ -71,6 +71,8 @@ export class SpecsCameraStream {
     print("SpecsCameraStream: stopped");
   }
 
+  previewTexture(): Texture | null { return this.latestFrame?.texture ?? null; }
+
   isRunning(): boolean {
     return this.running;
   }

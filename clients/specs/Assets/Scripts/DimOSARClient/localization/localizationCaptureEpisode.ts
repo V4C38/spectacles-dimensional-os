@@ -303,7 +303,7 @@ export class LocalizationCaptureEpisode {
       this.trace("capture-start");
       pending = this.capture.capture();
     } catch (error) {
-      this.enterFailed(errorMessage(error));
+      this.captureFailed(error);
       return;
     }
     this.inflight = pending.then(
@@ -326,7 +326,7 @@ export class LocalizationCaptureEpisode {
       return;
     }
     if (error !== null || observation === null) {
-      this.enterFailed(errorMessage(error));
+      this.captureFailed(error);
       return;
     }
     if (this.request === null) {
@@ -371,6 +371,12 @@ export class LocalizationCaptureEpisode {
     }
     this.session.sendText(encodeLocalizationStartRequest());
     this.retryAt = null;
+  }
+
+  private captureFailed(error: unknown): void {
+    this.enterFailed(errorMessage(error));
+    // Only hosts that explicitly exhaust their hardware retry budget opt out.
+    if (error !== null && typeof error === "object" && "retryable" in error && error.retryable === false) this.retryAt = null;
   }
 
   private enterFailed(reason: string): void {

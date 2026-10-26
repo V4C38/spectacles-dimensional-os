@@ -1,8 +1,6 @@
 import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
-import type { LidarDisplayMode } from "../../DimOSARClient/sensors/lidarSettings";
 import type { ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
 import { deriveRobotMarkerApplyInput as sharedMarker, getRobotActivityState as sharedActivity, robotTitleText as sharedTitle } from "../../DimOSARClient/robot/RobotMarkerState";
-import type { Pose, RobotDescription } from "../../DimOSARClient/websocket/protocolTypes";
 
 export type OperatingMode = "manual" | "agent";
 
@@ -18,25 +16,12 @@ export interface RobotActivityVoice {
   ttsPlaying: boolean;
 }
 
-export type RobotMarkerApplyInput =
-  | { mode: "hidden" }
-  | {
-      mode: "unlocalizedFallbackPosition";
-      robot: RobotDescription | null;
-      view: ARModuleSessionState;
-    }
-  | {
-      mode: "localizedOdom";
-      robot: RobotDescription;
-      pose: Pose;
-      origin: ClientTrackingOrigin;
-      view: ARModuleSessionState;
-    };
+export type { RobotMarkerApplyInput } from "../../DimOSARClient/robot/RobotMarkerState";
+import type { RobotMarkerApplyInput } from "../../DimOSARClient/robot/RobotMarkerState";
 
 export class AppState {
   debugModeEnabled = false;
   operatingMode: OperatingMode = "manual";
-  lidarMode: LidarDisplayMode = "obstacles";
 
   setDebugMode(enabled: boolean): void {
     this.debugModeEnabled = enabled;
@@ -46,9 +31,6 @@ export class AppState {
     this.operatingMode = mode;
   }
 
-  setLidarMode(mode: LidarDisplayMode): void {
-    this.lidarMode = mode;
-  }
 }
 
 export function deriveRobotMarkerApplyInput(input: {
@@ -61,20 +43,20 @@ export function deriveRobotMarkerApplyInput(input: {
 
 export function agentModeAccessible(
   agentAvailable: boolean,
-  debugModeEnabled: boolean,
+  _debugModeEnabled: boolean,
 ): boolean {
-  return agentAvailable || debugModeEnabled;
+  return agentAvailable;
 }
 
 export function agentSpeechShouldRun(
   operatingMode: OperatingMode,
-  debugModeEnabled: boolean,
+  _debugModeEnabled: boolean,
   sessionReady: boolean,
   agentAvailable: boolean,
 ): boolean {
   return (
     operatingMode === "agent" &&
-    (debugModeEnabled || (sessionReady && agentAvailable))
+    sessionReady && agentAvailable
   );
 }
 

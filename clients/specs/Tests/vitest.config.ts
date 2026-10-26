@@ -92,6 +92,8 @@ export default defineConfig({
         new URL("../Assets/Scripts/DimOSSpecsClient/utilities/AnimationUtilities.ts", import.meta.url),
       ),
       "SpectaclesInteractionKit.lspkg/Utils/animate": animateMock,
+      "SpectaclesInteractionKit.lspkg/Core/InteractionManager/InteractionManager": fileURLToPath(new URL("./mocks/InteractionManager.ts", import.meta.url)),
+      "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor": fileURLToPath(new URL("./mocks/Interactor.ts", import.meta.url)),
       "SpectaclesInteractionKit.lspkg/Components/Interaction/InteractorLineVisual/InteractorLineRenderer":
         interactorLineRendererMock,
       "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable":

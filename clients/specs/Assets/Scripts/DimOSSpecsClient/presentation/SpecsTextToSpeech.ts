@@ -12,6 +12,8 @@ export class SpecsTextToSpeech {
   private _queue: string[] = [];
   private _synthesizing = false;
   private _errorHandler: SpecsTextToSpeechErrorHandler | null = null;
+  private generation = 0;
+  private onEnd: (() => void) | null = null;
 
   constructor(deps: SpecsTextToSpeechDeps) {
     this._module = deps.module;
@@ -27,31 +29,41 @@ export class SpecsTextToSpeech {
       return true;
     }
     const audio = this._audio as AudioComponent & { isPlaying?: () => boolean };
+    if (audio.enabled === false || audio.isEnabledInHierarchy === false) return false;
     if (typeof audio.isPlaying === "function") {
       return audio.isPlaying();
     }
     return false;
   }
 
-  public speak(text: string): void {
+  public speak(text: string, onEnd?: () => void): void {
     const trimmed = text.trim();
     if (trimmed.length === 0) {
+      onEnd?.();
       return;
     }
+    this.onEnd = onEnd ?? null;
     this._queue.push(trimmed);
     this._pump();
   }
 
   public stop(): void {
+    this.generation++;
+    this.onEnd = null;
     this._queue = [];
     this._synthesizing = false;
     const audio = this._audio as AudioComponent & { stop?: (fade: boolean) => void };
-    if (typeof audio.stop === "function") {
+    // Lens also throws for an enabled but idle component with no native player.
+    // Stopping is only necessary while audio is actually playing.
+    if (audio.enabled !== false && audio.isEnabledInHierarchy !== false && this.isPlaying && typeof audio.stop === "function") {
       audio.stop(false);
     }
   }
 
   public tick(): void {
+    if (!this.isPlaying && this._queue.length === 0 && this.onEnd) {
+      const end = this.onEnd; this.onEnd = null; end();
+    }
     if (this._synthesizing || this._queue.length === 0) {
       return;
     }
@@ -76,17 +88,20 @@ export class SpecsTextToSpeech {
   }
 
   private _synthesize(text: string): void {
+    const generation = this.generation;
     this._synthesizing = true;
     const options = TextToSpeech.Options.create();
     this._module.synthesize(
       text,
       options,
       (audioTrack: AudioTrackAsset) => {
+        if (generation !== this.generation) return;
         this._synthesizing = false;
         this._audio.audioTrack = audioTrack;
         this._audio.play(1);
       },
       (_errorCode: number, description: string) => {
+        if (generation !== this.generation) return;
         this._synthesizing = false;
         const message = description || "TTS synthesis failed";
         this._errorHandler?.(message);

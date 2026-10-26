@@ -58,6 +58,8 @@ export interface ServerInfo {
 }
 
 export interface Hello {
+  /** Stable for the server odometry reference, including across socket reconnects. */
+  odom_reference_id?: string;
   server_info?: ServerInfo;
   type: "hello";
   client_id: string;

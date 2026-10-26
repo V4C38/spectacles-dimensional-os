@@ -18,6 +18,9 @@ from dimos.ar.localization.types import (
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
 from dimos.ar.localization.worker import LocalizationWorker
 from dimos.msgs.geometry_msgs.Transform import Transform
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 
 class AsyncLocalizer(Protocol):
@@ -85,7 +88,12 @@ class LocalizationCoordinator:
             return LocalizationOutcome()
         newest = max(observations, key=lambda observation: observation.ts_server)
         # Admission age, not a post-HTTP image-age limit.
-        if not -0.25 <= self._clock() - newest.ts_server <= 2.0:
+        age = self._clock() - newest.ts_server
+        if not -0.25 <= age <= 2.0:
+            logger.warning(
+                "localization capture rejected", client_id=client_id,
+                reason="capture_age", capture_age_s=round(age, 3), max_age_s=2.0,
+            )
             return LocalizationOutcome()
         generation = self._source_generation()
         if (

@@ -99,3 +99,19 @@ it.each(["succeeded", "cancelled"] as const)("keeps the %s glyph flat and facing
   expect(arrow.getWorldQuaternion(new THREE.Quaternion()).angleTo(arrowRotation)).toBeCloseTo(0);
   view.dispose();
 });
+
+it("keeps the animated checkmark elbow closed without adding a dot to the cross", () => {
+  const view = new WebXRNavGoalView();
+  const joint = view.object.getObjectByName("Navigation outcome stroke join") as THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
+  view.setFlash("succeeded", 0.1);
+  expect(joint.visible).toBe(false);
+  view.setFlash("succeeded", 1);
+  expect(joint.visible).toBe(true);
+  expect(joint.geometry.parameters.radius).toBeCloseTo(0.006);
+  expect(joint.position.x).toBeCloseTo(-0.015);
+  expect(joint.position.z).toBeCloseTo(0.055);
+  expect(joint.material.color.getHex()).toBe(0x30d158);
+  view.setFlash("cancelled", 1);
+  expect(joint.visible).toBe(false);
+  view.dispose();
+});

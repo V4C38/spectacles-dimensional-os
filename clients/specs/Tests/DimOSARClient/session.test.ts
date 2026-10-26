@@ -504,3 +504,20 @@ it("stores preview replies separately from active navigation and clears both on 
   session.onTransportClose();
   expect(session.view().nav_goal).toBeNull(); expect(session.view().nav_preview).toBeNull();
 });
+
+for (const reference of ["room-a", "room-b", undefined]) {
+  it(`only restores localization on reconnect to the same odometry reference (${reference})`, () => {
+    const { session, clock, originStore } = makeSession();
+    session.start(); session.onTransportOpen();
+    session.onTransportText(JSON.stringify({ ...helloAt(0), odom_reference_id: "room-a" }) + "\n");
+    originStore.setFromLocalizationResult({ type: "localization_result", position: [2, 3, 1], orientation: [0, 0, 0, 1], confidence: 1, ts: 100 });
+    session.onTransportClose();
+    expect(session.view().hasTrackingOrigin).toBe(false);
+    expect(session.view().hasRetainedTrackingOrigin).toBe(true);
+    clock.nowS = 0.5; session.tick(); session.onTransportOpen();
+    session.onTransportText(JSON.stringify({ ...helloAt(0.5), odom_reference_id: reference }) + "\n");
+    expect(originStore.hasTrackingOrigin).toBe(reference === "room-a");
+    expect(session.view().alignmentRequired === true).toBe(reference !== "room-a");
+    session.stop(); expect(originStore.hasTrackingOrigin).toBe(false);
+  });
+}

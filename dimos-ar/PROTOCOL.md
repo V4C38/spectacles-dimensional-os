@@ -919,3 +919,7 @@ translation/rotation. Rebuild accumulated maps and retire active goals, previews
 and client alignment together when changing the coordinate model; never mix old
 and new map generations. Physical Quest camera calibration and VPS alignment
 acceptance remain separate device tests documented in `clients/webxr/CALIBRATION.md`.
+
+### Odometry reference continuity
+
+`hello.odom_reference_id` is an optional opaque identifier for the current server odometry reference. It remains unchanged across client socket reconnects and changes when the server or robot odometry source restarts. Clients may restore a retained localization only when the new identifier matches the one used to localize, and the headset tracking space has not reset. Missing or changed identifiers require re-localization; navigation commands remain disabled during reconnect.

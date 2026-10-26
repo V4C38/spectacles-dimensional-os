@@ -1,6 +1,6 @@
+import { NavigationMarkerRenderer, type NavigationMarkerStyle } from "./NavigationMarkerRenderer";
 import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
-import animate from "SpectaclesInteractionKit.lspkg/Utils/animate";
 
 const CIRCLE_INACTIVE_MATERIAL = requireAsset("../../../Materials/Circle_Inactive.mat") as Material;
 const CIRCLE_ACTIVE_MATERIAL = requireAsset("../../../Materials/Circle_Active.mat") as Material;
@@ -10,10 +10,6 @@ type ArrowPass = Pass & {
   AnimatedArrow?: boolean;
   ArrowSpeed?: number;
 };
-
-const MARKER_VISIBILITY_DURATION_SECONDS = 0.18;
-const FLASH_CIRCLE_COLLAPSE_DURATION_SECONDS = MARKER_VISIBILITY_DURATION_SECONDS / 0.5;
-const FLASH_TEXT_COLLAPSE_DELAY_SECONDS = 1.5;
 
 export type NavGoalMarkerEvents = {
   onDragTriggerStart?: (interactor: { startPoint?: vec3; endPoint?: vec3 } | null) => void;
@@ -32,22 +28,14 @@ export class NavGoalMarker extends BaseScriptComponent {
   private circleVisual: RenderMeshVisual | null = null;
   private arrowMaterial: Material | null = null;
   private dotsMaterial: Material | null = null;
-  private dragBaseScale = vec3.one();
-  private headingBaseScale: vec3 | null = null;
-  private stateTextBaseScale: vec3 | null = null;
   private cancelButton: RoundButton | null = null;
   private cancelObject: SceneObject | null = null;
   private cancelLabel: Text | null = null;
-  private vfxActive: SceneObject | null = null;
-  private vfxInactive: SceneObject | null = null;
-  private stateText: Text | null = null;
-  private stateTextObject: SceneObject | null = null;
-  private flashPlaying = false;
-  private flashVersion = 0;
-  private flashDone: (() => void) | null = null;
   private rotation = quat.quatIdentity();
   private events: NavGoalMarkerEvents = {};
   private interactionsBound = false;
+  private hovered = false;
+  private worldVisuals: NavigationMarkerRenderer | null = null;
 
   // NavigationController initializes this after ObjectPrefab.instantiate()
   // returns. Hiding the hierarchy in onAwake interrupts construction of its
@@ -63,8 +51,6 @@ export class NavGoalMarker extends BaseScriptComponent {
       throw new Error("DragInteractable is required");
     }
     this.dragObject = dragObject;
-    this.dragBaseScale = dragObject.getTransform().getLocalScale();
-    this.headingBaseScale = this.headingRoot?.getTransform().getLocalScale() ?? null;
     this.dragInteractable = dragObject.getComponent(Interactable.getTypeName()) as Interactable;
     if (!this.dragInteractable) {
       throw new Error("DragInteractable is required");
@@ -79,29 +65,54 @@ export class NavGoalMarker extends BaseScriptComponent {
     if (!this.cancelButton) {
       throw new Error("CancelButton is required");
     }
-    this.vfxActive = findChild(cancelObject, "ButtonVFX_Active");
-    this.vfxInactive = findChild(cancelObject, "ButtonVFX_Inactive");
-    if (!this.vfxActive) {
-      throw new Error("ButtonVFX_Active is required");
-    }
-    if (!this.vfxInactive) {
-      throw new Error("ButtonVFX_Inactive is required");
-    }
     const cancelLabelObject = findChild(cancelObject, "Text_Title");
     this.cancelLabel = cancelLabelObject
       ? (cancelLabelObject.getComponent("Component.Text") as Text)
       : null;
-    const stateTextObject = findChild(this.root, "State_Text");
-    this.stateTextObject = stateTextObject;
-    this.stateText = stateTextObject
-      ? (stateTextObject.getComponent("Component.Text") as Text)
-      : null;
-    this.stateTextBaseScale = stateTextObject?.getTransform().getLocalScale() ?? null;
     this.bindLookObjects();
-    this.setStateText("", false);
     this.setCancelVisible(false);
     this.bindInteractions();
   }
+
+  applyWorldStyle(style: NavigationMarkerStyle, dt: number, viewportHeight: number, radiusCm = 21.44): void {
+    this.ensureReady();
+    if (!this.worldVisuals) {
+      this.worldVisuals = new NavigationMarkerRenderer(this.headingRoot ?? this.root!, radiusCm);
+      for (const name of ["Visual", "MoveDirectionArrow", "Dots"]) {
+        const visual = findChild(this.root!, name)?.getComponent("Component.RenderMeshVisual") as RenderMeshVisual | null;
+        if (visual) visual.enabled = false;
+      }
+      this.cancelObject!.getTransform().setLocalPosition(new vec3(0, 38, 0));
+    }
+    this.worldVisuals.setRadius(radiusCm);
+    this.worldVisuals.apply({ ...style, hovered: style.hovered ?? this.hovered }, dt, viewportHeight);
+  }
+
+  setHovered(value: boolean): void { this.hovered = value; }
+
+  orientViewer(eye: vec3): void {
+    this.worldVisuals?.orientGlyph(eye);
+    if (this.cancelObject) {
+      const p = this.cancelObject.getTransform().getWorldPosition();
+      this.cancelObject.getTransform().setWorldRotation(quat.angleAxis(Math.atan2(eye.x - p.x, eye.z - p.z), vec3.up()));
+    }
+  }
+
+  ownsDragTarget(object: SceneObject): boolean {
+    for (let node: SceneObject | null = object; node; node = node.getParent()) {
+      if (node === this.dragObject) return true;
+      if (node === this.root) return false;
+    }
+    return false;
+  }
+
+  circleBounds(): { center: [number, number, number]; radius: number } {
+    if (this.worldVisuals) return this.worldVisuals.circleBounds();
+    const p = this.worldPosition;
+    return { center: [p.x, p.y + 1.5, p.z], radius: 21.44 };
+  }
+
+  circleOpacity(): number { return this.worldVisuals?.circleOpacity() ?? 0.35; }
 
   get worldPosition(): vec3 {
     this.ensureReady();
@@ -176,81 +187,20 @@ export class NavGoalMarker extends BaseScriptComponent {
     const button = this.cancelButton as (RoundButton & { enabled: boolean }) | null;
     if (button) {
       button.enabled = visible;
+      button.inactive = !estopAvailable;
     }
     if (this.cancelLabel) {
       this.cancelLabel.text = estopAvailable ? "Cancel" : "Cancel\nUnavailable";
     }
-    this.setCancelVfx(visible && estopAvailable, visible && !estopAvailable);
-  }
-
-  showFlash(flash: "succeeded" | "cancelled" | "failed", onDone: () => void): void {
-    this.ensureReady();
-    if (this.flashPlaying) {
-      return;
-    }
-    this.flashPlaying = true;
-    this.flashDone = onDone;
-    this.setCancelVisible(false);
-    if (this.cancelObject) {
-      this.cancelObject.enabled = true;
-    }
-    const button = this.cancelButton as (RoundButton & { enabled: boolean }) | null;
-    if (button) {
-      button.enabled = false;
-    }
-    this.setCancelVfx(false, true);
-    this.setStateText(flash === "succeeded" ? "Navigation\nComplete" : flash === "cancelled" ? "Navigation\nCancelled" : "Navigation\nFailed", true);
-    const version = this.nextFlashVersion();
-    if (this.dragObject) {
-      this.animateLocalScale(this.dragObject, vec3.zero(), FLASH_CIRCLE_COLLAPSE_DURATION_SECONDS, version);
-    }
-    if (this.headingRoot) {
-      this.animateLocalScale(this.headingRoot, vec3.zero(), FLASH_CIRCLE_COLLAPSE_DURATION_SECONDS, version);
-    }
-    if (!this.stateText || !this.stateTextObject) {
-      this.finishFlash(version);
-      return;
-    }
-    const stateTextTransform = this.stateTextObject.getTransform();
-    const stateTextStart = stateTextTransform.getLocalScale();
-    const totalDuration = FLASH_TEXT_COLLAPSE_DELAY_SECONDS + MARKER_VISIBILITY_DURATION_SECONDS;
-    animate({
-      duration: totalDuration,
-      easing: "linear",
-      update: (t: number) => {
-        if (this.flashVersion !== version) {
-          return;
-        }
-        const elapsed = t * totalDuration;
-        if (elapsed < FLASH_TEXT_COLLAPSE_DELAY_SECONDS) {
-          stateTextTransform.setLocalScale(stateTextStart);
-          return;
-        }
-        const collapseT = Math.min(
-          1,
-          (elapsed - FLASH_TEXT_COLLAPSE_DELAY_SECONDS) / MARKER_VISIBILITY_DURATION_SECONDS,
-        );
-        stateTextTransform.setLocalScale(vec3.lerp(stateTextStart, vec3.zero(), collapseT));
-      },
-      ended: () => {
-        if (this.flashVersion !== version) {
-          return;
-        }
-        stateTextTransform.setLocalScale(vec3.zero());
-        this.finishFlash(version);
-      },
-    });
   }
 
   show(): void {
     this.ensureReady();
-    this.clearFlash();
     this.root!.enabled = true;
   }
 
   hide(): void {
     this.ensureReady();
-    this.clearFlash();
     this.setCancelVisible(false);
     this.root!.enabled = false;
   }
@@ -302,84 +252,6 @@ export class NavGoalMarker extends BaseScriptComponent {
     this.dotsMaterial = dotsVisual.mainMaterial;
   }
 
-  private nextFlashVersion(): number {
-    this.flashVersion += 1;
-    return this.flashVersion;
-  }
-
-  private animateLocalScale(
-    object: SceneObject,
-    target: vec3,
-    duration: number,
-    version: number,
-  ): void {
-    const transform = object.getTransform();
-    const start = transform.getLocalScale();
-    animate({
-      duration,
-      easing: "ease-in-out-quad",
-      update: (t: number) => {
-        if (this.flashVersion !== version) {
-          return;
-        }
-        transform.setLocalScale(vec3.lerp(start, target, t));
-      },
-      ended: () => {
-        if (this.flashVersion !== version) {
-          return;
-        }
-        transform.setLocalScale(target);
-      },
-    });
-  }
-
-  private finishFlash(version: number): void {
-    if (this.flashVersion !== version) {
-      return;
-    }
-    // clearFlash drops flashDone. Capture it first or cancel never restores the marker.
-    const done = this.flashDone;
-    this.clearFlash();
-    done?.();
-  }
-
-  private restoreFlashScales(): void {
-    this.dragObject?.getTransform().setLocalScale(this.dragBaseScale);
-    if (this.headingRoot && this.headingBaseScale) {
-      this.headingRoot.getTransform().setLocalScale(this.headingBaseScale);
-    }
-    if (this.stateTextObject && this.stateTextBaseScale) {
-      this.stateTextObject.getTransform().setLocalScale(this.stateTextBaseScale);
-    }
-  }
-
-  private clearFlash(): void {
-    this.nextFlashVersion();
-    this.flashPlaying = false;
-    this.flashDone = null;
-    this.restoreFlashScales();
-    this.setStateText("", false);
-    this.setCancelVfx(false, false);
-  }
-
-  private setCancelVfx(active: boolean, inactive: boolean): void {
-    if (this.vfxActive) {
-      this.vfxActive.enabled = active;
-    }
-    if (this.vfxInactive) {
-      this.vfxInactive.enabled = inactive;
-    }
-  }
-
-  private setStateText(text: string, visible: boolean): void {
-    if (this.stateText) {
-      this.stateText.text = text;
-    }
-    if (this.stateTextObject) {
-      this.stateTextObject.enabled = visible;
-    }
-  }
-
   private arrowPass(): ArrowPass | null {
     return (this.arrowMaterial?.mainPass as ArrowPass | undefined) ?? null;
   }
@@ -402,6 +274,8 @@ export class NavGoalMarker extends BaseScriptComponent {
       return;
     }
     this.interactionsBound = true;
+    this.dragInteractable.onHoverEnter?.add(() => { this.hovered = true; });
+    this.dragInteractable.onHoverExit?.add(() => { this.hovered = false; });
     drag.onTriggerStart.add((args) => {
       this.events.onDragTriggerStart?.(args?.interactor ?? null);
     });
@@ -412,9 +286,9 @@ export class NavGoalMarker extends BaseScriptComponent {
       this.events.onDragTriggerCanceled?.();
     });
     const cancel = this.cancelButton as RoundButton & {
-      onTriggerUp?: { add: (fn: () => void) => void };
+      onTriggerDown?: { add: (fn: () => void) => void };
     };
-    cancel.onTriggerUp?.add(() => {
+    cancel.onTriggerDown?.add(() => {
       this.events.onCancel?.();
     });
   }

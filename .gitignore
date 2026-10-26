@@ -77,5 +77,8 @@ clients/specs/Tests/coverage/
 .vitest/
 
 # WebXR browser regression artifacts
-clients/webxr/test-results/
+clients/webxr/tests/integration-tests/test-results/
 clients/webxr/playwright-report/
+
+# Native Specs integration review artifacts (same layout as WebXR)
+clients/specs/Tests/integration-tests/test-results/

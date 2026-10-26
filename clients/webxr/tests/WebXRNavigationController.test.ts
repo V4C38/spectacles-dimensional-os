@@ -178,7 +178,12 @@ describe("WebXRNavigationController", () => {
     navigation.hold(1 + 1 / 60, [0, 1.5, 0], [0, -1, -1], floorHit(0.05), null, 0);
     expect(yaw()).toBeLessThan(0);
     expect(yaw()).toBeGreaterThan(-Math.PI / 4);
-    for (let i = 2; i < 60; i++) navigation.hold(1 + i / 60, [0, 1.5, 0], [0, -1, -1], floorHit(0.05 * i), null, 0);
+    for (let i = 2; i < 60; i++) {
+      // The host reapplies this unchanged selection state every XR frame.
+      navigation.setSelected(false);
+      navigation.hold(1 + i / 60, [0, 1.5, 0], [0, -1, -1], floorHit(0.05 * i), null, 0);
+      expect(navigation.isDragging()).toBe(true);
+    }
     expect(yaw()).toBeCloseTo(-Math.PI / 2, 2);
     navigation.dispose();
   });

@@ -1,3 +1,4 @@
+import { BrowserJpegEncoder } from "./localization/BrowserJpegEncoder";
 import { LandingInfoPresenter } from "./presentation/LandingInfoPresenter";
 import { applyDOMDesign } from "./presentation/DimOSARDesign";
 import * as xb from "xrblocks";
@@ -7,7 +8,6 @@ import { HMD_OPTIONS, parseHmdId } from "./localization/HmdCalibration";
 import { profileForHmd } from "./localization/HmdProfiles";
 import {
   browserMediaPort,
-  canvasJpegEncoder,
   HmdCameraSource,
   videoFrameCallbackPort,
 } from "./localization/HmdCameraSource";
@@ -130,7 +130,7 @@ async function boot(): Promise<void> {
       profile: () => selectedProfile(select),
       media: browserMediaPort(),
       frames: videoFrameCallbackPort(),
-      jpeg: canvasJpegEncoder(),
+      jpeg: new BrowserJpegEncoder(),
     });
     const client = new DimOSWebXRClient({
       transport: new BrowserWebSocketTransport({ url }),

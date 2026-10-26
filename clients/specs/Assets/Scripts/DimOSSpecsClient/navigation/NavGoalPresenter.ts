@@ -2,159 +2,82 @@ import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clie
 import { odomToClientTrackingYawPose } from "../../DimOSARClient/localization/clientTrackingTransforms";
 import type { NavGoal } from "../../DimOSARClient/websocket/protocolTypes";
 import { clientTrackingToSpecsYawPose } from "../utilities/SpecsCoordinates";
-import { LineRenderer } from "./LineRenderer";
+import { AdaptiveStrokeRenderer, WorldMeshRenderer } from "../presentation/WorldMeshRenderer";
+import { ROUTE_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
+import { anchorPathStart, clipPathToCircles, routeRibbon, rangePathY as sharedRangePathY, filletPathCorners as sharedFilletPathCorners } from "./RoutePathGeometry";
 
-export const CORNER_FILLET_MAX_CM = 10.0;
-export const CORNER_FILLET_ANGLE_DEG = 40.0;
-export const CORNER_FILLET_SEGMENTS = 2;
-
-export function filletPathCorners(points: vec3[]): vec3[] {
-  if (points.length < 3) {
-    return points;
-  }
-
-  const filleted: vec3[] = [new vec3(points[0].x, points[0].y, points[0].z)];
-  for (let index = 1; index < points.length - 1; index++) {
-    const prev = points[index - 1];
-    const corner = points[index];
-    const next = points[index + 1];
-    const turnAngle = cornerTurnAngleDeg(prev, corner, next);
-    if (turnAngle < CORNER_FILLET_ANGLE_DEG) {
-      filleted.push(new vec3(corner.x, corner.y, corner.z));
-      continue;
-    }
-
-    const incomingLength = Math.sqrt(
-      (corner.x - prev.x) * (corner.x - prev.x) +
-        (corner.z - prev.z) * (corner.z - prev.z),
-    );
-    const outgoingLength = Math.sqrt(
-      (next.x - corner.x) * (next.x - corner.x) +
-        (next.z - corner.z) * (next.z - corner.z),
-    );
-    const filletDistance = Math.min(
-      CORNER_FILLET_MAX_CM,
-      incomingLength * 0.45,
-      outgoingLength * 0.45,
-    );
-    if (filletDistance <= 0.5) {
-      filleted.push(new vec3(corner.x, corner.y, corner.z));
-      continue;
-    }
-
-    const incomingT = filletDistance / incomingLength;
-    const outgoingT = filletDistance / outgoingLength;
-    const incomingFillet = lerpPoint(corner, prev, incomingT);
-    const outgoingFillet = lerpPoint(corner, next, outgoingT);
-    filleted.push(incomingFillet);
-    for (let segment = 1; segment <= CORNER_FILLET_SEGMENTS; segment++) {
-      const t = segment / (CORNER_FILLET_SEGMENTS + 1);
-      filleted.push(lerpPoint(incomingFillet, outgoingFillet, t));
-    }
-    filleted.push(outgoingFillet);
-  }
-
-  filleted.push(
-    new vec3(
-      points[points.length - 1].x,
-      points[points.length - 1].y,
-      points[points.length - 1].z,
-    ),
-  );
-  return filleted;
-}
-
-export function rangePathY(
-  points: vec3[],
-  floorY: number | null,
-  goalY: number | null,
-): vec3[] {
-  if (floorY === null || goalY === null || points.length === 0) {
-    return points;
-  }
-  if (points.length === 1) {
-    return [new vec3(points[0].x, floorY, points[0].z)];
-  }
-  const distances = [0];
-  for (let index = 1; index < points.length; index++) {
-    const prev = points[index - 1];
-    const current = points[index];
-    const dx = current.x - prev.x;
-    const dy = current.y - prev.y;
-    const dz = current.z - prev.z;
-    distances.push(distances[index - 1] + Math.sqrt(dx * dx + dy * dy + dz * dz));
-  }
-  const total = distances[distances.length - 1];
-  if (total <= 0.0001) {
-    return points.map((point) => new vec3(point.x, floorY, point.z));
-  }
-  return points.map((point, index) => {
-    const progress = distances[index] / total;
-    return new vec3(point.x, floorY + (goalY - floorY) * progress, point.z);
-  });
-}
+export type RouteCircle = { center: [number, number, number]; radius: number };
 
 export class NavGoalPresenter {
-  private readonly line: LineRenderer;
+  private readonly dots: AdaptiveStrokeRenderer;
+  private readonly ribbon: WorldMeshRenderer;
+  private lastPath: import("../../DimOSARClient/websocket/protocolTypes").YawPose[] | null = null;
+  private lastOrigin: ClientTrackingOrigin | null = null;
+  private lastParameters: number[] = [];
+  private lastSolid = false;
 
   constructor(parent: SceneObject) {
-    if (!parent) {
-      throw new Error("parent is required");
+    this.dots = new AdaptiveStrokeRenderer(parent, "NavigationRouteDots");
+    this.ribbon = new WorldMeshRenderer(parent, "NavigationRouteRibbon");
+    for (const renderer of [this.dots, this.ribbon]) {
+      renderer.object.getTransform().setWorldPosition(vec3.zero());
+      renderer.object.getTransform().setWorldRotation(quat.quatIdentity());
+      renderer.object.getTransform().setWorldScale(vec3.one());
     }
-    this.line = new LineRenderer({ parent, name: "NavGoalPath" });
-    this.hide();
   }
 
   apply(input: {
-    nav_goal: NavGoal | null;
+    nav_goal?: NavGoal | null;
+    path?: import("../../DimOSARClient/websocket/protocolTypes").YawPose[] | null;
     origin: ClientTrackingOrigin | null;
     pathVisible?: boolean;
     floorY?: number | null;
     goalY?: number | null;
+    preview?: boolean;
+    executing?: boolean;
+    startCircle?: RouteCircle;
+    endCircle?: RouteCircle;
+    viewportHeight?: number;
   }): void {
-    if (
-      input.pathVisible === false ||
-      !input.origin ||
-      !input.nav_goal ||
-      input.nav_goal.path_poses.length < 2
-    ) {
-      this.hide();
+    const path = input.path ?? input.nav_goal?.path_poses;
+    if (input.pathVisible === false || !input.origin || !path || path.length < 2) { this.hide(); return; }
+    const solid = input.executing === true && !input.preview;
+    const parameters = [Number(solid), Number(input.preview), input.floorY ?? NaN, input.goalY ?? NaN,
+      ...(input.startCircle?.center ?? []), input.startCircle?.radius ?? NaN,
+      ...(input.endCircle?.center ?? []), input.endCircle?.radius ?? NaN];
+    this.dots.setViewportHeight(input.viewportHeight ?? 1024);
+    if (path === this.lastPath && input.origin === this.lastOrigin && parameters.length === this.lastParameters.length &&
+      parameters.every((value, i) => Object.is(value, this.lastParameters[i]))) {
+      this.ribbon.object.enabled = this.lastSolid; this.dots.object.enabled = !this.lastSolid;
       return;
     }
-    const points = input.nav_goal.path_poses.map((pose) => {
-      const specs = clientTrackingToSpecsYawPose(odomToClientTrackingYawPose(pose, input.origin!));
-      return new vec3(specs[0], specs[1], specs[2]);
+    this.lastPath = path; this.lastOrigin = input.origin; this.lastParameters = parameters; this.lastSolid = solid;
+    let points = path.map(p => {
+      const s = clientTrackingToSpecsYawPose(odomToClientTrackingYawPose(p, input.origin!));
+      return [s[0] / 100, s[1] / 100, s[2] / 100] as [number, number, number];
     });
-    this.line.setPoints(rangePathY(filletPathCorners(points), input.floorY ?? null, input.goalY ?? null));
+    const circle = (c?: RouteCircle) => c && ({ center: c.center.map(v => v / 100) as [number, number, number], radius: c.radius / 100 + (solid ? ROUTE_STYLE.ribbonWidthM / 2 : 0) });
+    const start = circle(input.startCircle), end = circle(input.endCircle);
+    if (start) points = anchorPathStart(points, start.center);
+    if (end) points[points.length - 1] = [...end.center];
+    points = sharedRangePathY(clipPathToCircles(sharedFilletPathCorners(points), start, end),
+      start?.center[1] ?? (input.floorY == null ? null : input.floorY / 100),
+      end?.center[1] ?? (input.goalY == null ? null : input.goalY / 100));
+    if (points.length < 2) { this.lastPath = null; this.hide(); return; }
+    if (solid) {
+      const geometry = routeRibbon(points, ROUTE_STYLE.ribbonWidthM);
+      this.ribbon.triangles(geometry.positions.map(v => v * 100), geometry.indices, [1, 1, 1, ROUTE_STYLE.confirmedOpacity]);
+      this.dots.hide();
+    } else {
+      this.ribbon.hide();
+      const cm = points.map(p => p.map(v => v * 100) as [number, number, number]);
+      this.dots.setViewportHeight(input.viewportHeight ?? 1024);
+      this.dots.segments(cm.slice(0, -1).flatMap((p, i) => [p, cm[i + 1]]), ROUTE_STYLE.dotWidthM * 100,
+        input.preview ? ROUTE_STYLE.previewOpacity : ROUTE_STYLE.confirmedOpacity,
+        ROUTE_STYLE.dashM * 100, ROUTE_STYLE.gapM * 100, true);
+    }
   }
 
-  hide(): void {
-    this.line.clear();
-  }
-
-  destroy(): void {
-    this.line.destroy();
-  }
-}
-
-function normalizePlanar(vec: vec3): vec3 | null {
-  const length = Math.sqrt(vec.x * vec.x + vec.z * vec.z);
-  if (length <= 0.0001) {
-    return null;
-  }
-  return new vec3(vec.x / length, 0, vec.z / length);
-}
-
-function cornerTurnAngleDeg(prev: vec3, corner: vec3, next: vec3): number {
-  const incoming = normalizePlanar(new vec3(corner.x - prev.x, 0, corner.z - prev.z));
-  const outgoing = normalizePlanar(new vec3(next.x - corner.x, 0, next.z - corner.z));
-  if (!incoming || !outgoing) {
-    return 0;
-  }
-  const dot = Math.max(-1, Math.min(1, incoming.x * outgoing.x + incoming.z * outgoing.z));
-  return Math.acos(dot) * (180.0 / Math.PI);
-}
-
-function lerpPoint(a: vec3, b: vec3, t: number): vec3 {
-  return new vec3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+  hide(): void { this.dots.hide(); this.ribbon.hide(); }
+  destroy(): void { this.dots.destroy(); this.ribbon.destroy(); }
 }

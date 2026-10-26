@@ -4,7 +4,6 @@ vi.hoisted(() => {
   vi.stubGlobal("requireAsset", () => ({ mainPass: {} }));
 });
 
-import { flushAnimations } from "SpectaclesInteractionKit.lspkg/Utils/animate";
 import { NavGoalMarker } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavGoalMarker";
 
 function node(name: string, components: Record<string, unknown> = {}, children: SceneObject[] = []): SceneObject {
@@ -24,10 +23,10 @@ function node(name: string, components: Record<string, unknown> = {}, children: 
 }
 
 describe("NavigationTargetMarker initialization", () => {
-  it("initializes the authored button_cancel and binds cancellation when runtime starts", () => {
-    const button = { onTriggerUp: { add: vi.fn() }, enabled: true };
+  it("initializes native cancellation without legacy VFX children", () => {
+    const button = { onTriggerDown: { add: vi.fn() }, onTriggerUp: { add: vi.fn() }, enabled: true, inactive: false };
     const cancel = node("button_cancel", { RoundButton: button }, [
-      node("ButtonVFX_Active"), node("ButtonVFX_Inactive"), node("Text_Title", { "Component.Text": {} }),
+      node("Text_Title", { "Component.Text": {} }),
     ]);
     const visual = () => ({ mainMaterial: { mainPass: {} } });
     const root = node("NavigationTargetMarker", {}, [
@@ -38,7 +37,6 @@ describe("NavigationTargetMarker initialization", () => {
       } }, [node("HintAnchor")]),
       cancel,
       node("NavigationHeadingRoot"),
-      node("State_Text", { "Component.Text": {} }),
       node("Visual", { "Component.RenderMeshVisual": visual() }),
       node("MoveDirectionArrow", { "Component.RenderMeshVisual": visual() }),
       node("Dots", { "Component.RenderMeshVisual": visual() }),
@@ -49,7 +47,7 @@ describe("NavigationTargetMarker initialization", () => {
     lifecycle.onAwake?.();
     expect(root.enabled).toBe(true);
     expect(cancel.enabled).toBe(true);
-    expect(button.onTriggerUp.add).not.toHaveBeenCalled();
+    expect(button.onTriggerDown.add).not.toHaveBeenCalled();
     expect(() => marker.ensureReady()).not.toThrow();
     marker.setPose(new vec3(10, 0, 20), quat.quatIdentity());
     marker.show();
@@ -58,38 +56,25 @@ describe("NavigationTargetMarker initialization", () => {
     marker.setCancelVisible(true);
     expect(root.enabled).toBe(true);
     expect(cancel.enabled).toBe(true);
-    expect(button.onTriggerUp.add).toHaveBeenCalledTimes(1);
-    button.onTriggerUp.add.mock.calls[0][0]();
+    expect(button.onTriggerDown.add).toHaveBeenCalledTimes(1);
+    expect(button.onTriggerUp.add).not.toHaveBeenCalled();
+    button.onTriggerDown.add.mock.calls[0][0]();
     expect(onCancel).toHaveBeenCalledTimes(1);
+    marker.setCancelVisible(true, false);
+    expect(button.inactive).toBe(true);
+    marker.setCancelVisible(true, true);
+    expect(button.inactive).toBe(false);
   });
+});
 
-  it("finishes a cancel flash by invoking the restore callback", () => {
-    const button = { onTriggerUp: { add: vi.fn() }, enabled: true };
-    const cancel = node("button_cancel", { RoundButton: button }, [
-      node("ButtonVFX_Active"), node("ButtonVFX_Inactive"), node("Text_Title", { "Component.Text": { text: "" } }),
-    ]);
-    const visual = () => ({ mainMaterial: { mainPass: {} } });
-    const root = node("NavigationTargetMarker", {}, [
-      node("DragInteractable", { Interactable: {
-        onTriggerStart: { add: vi.fn() },
-        onTriggerEnd: { add: vi.fn() },
-        onTriggerCanceled: { add: vi.fn() },
-      } }, [node("HintAnchor")]),
-      cancel,
-      node("NavigationHeadingRoot"),
-      node("State_Text", { "Component.Text": { text: "" } }),
-      node("Visual", { "Component.RenderMeshVisual": visual() }),
-      node("MoveDirectionArrow", { "Component.RenderMeshVisual": visual() }),
-      node("Dots", { "Component.RenderMeshVisual": visual() }),
-    ]);
-    const marker = Object.assign(new NavGoalMarker(), { getSceneObject: () => root });
-    marker.ensureReady();
-    const onDone = vi.fn();
-    marker.showFlash("cancelled", onDone);
-    expect(button.enabled).toBe(false);
-    expect(cancel.enabled).toBe(true);
-    expect(onDone).not.toHaveBeenCalled();
-    flushAnimations();
-    expect(onDone).toHaveBeenCalledTimes(1);
-  });
+it("keeps the marker cancel button out of floor-drag capture", () => {
+  const root = { getParent: () => null } as unknown as SceneObject;
+  const drag = { getParent: () => root } as unknown as SceneObject;
+  const cancel = { getParent: () => root } as unknown as SceneObject;
+  const dragChild = { getParent: () => drag } as unknown as SceneObject;
+  const marker = Object.assign(new NavGoalMarker(), { root, dragObject: drag });
+  expect(marker.ownsDragTarget(drag)).toBe(true);
+  expect(marker.ownsDragTarget(dragChild)).toBe(true);
+  expect(marker.ownsDragTarget(cancel)).toBe(false);
+  expect(marker.ownsDragTarget(root)).toBe(false);
 });

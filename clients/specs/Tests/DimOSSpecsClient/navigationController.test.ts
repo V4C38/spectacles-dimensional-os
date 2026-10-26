@@ -1,62 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { rotateVecByQuat, odomToClientTrackingYawPose } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms";
+import { clientTrackingToOdomPose, rotateVecByQuat, odomToClientTrackingYawPose } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms";
 import { clientTrackingToSpecsYawPose } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
 import {
   FOLLOW_FLOOR_POSITION_EPSILON_CM,
   shouldSyncFollowFloorPose,
 } from "../../Assets/Scripts/DimOSSpecsClient/navigation/GroundPlacement";
-import {
-  GOAL_FORCE_NOOP_DISTANCE_CM,
-  GOAL_SEND_INTERVAL_S,
-  navMarkerMode,
-  shouldAnimateNavArrow,
-  shouldBeginFailedFlash,
-  shouldSendStreamGoal,
-  specsNavigationGoalInOdom,
-} from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationController";
-
-describe("navMarkerMode", () => {
-  it("previews only while disconnected with no robot", () => {
-    expect(navMarkerMode({
-      hasTrackingOrigin: false,
-      hasOrigin: false,
-      navGoalAvailable: false,
-      disconnectedWithoutRobot: true,
-    })).toBe("preview");
-    expect(navMarkerMode({
-      hasTrackingOrigin: false,
-      hasOrigin: false,
-      navGoalAvailable: false,
-      disconnectedWithoutRobot: false,
-    })).toBe("hidden");
-  });
-
-  it("stays live only when tracking and nav goals are available", () => {
-    expect(navMarkerMode({
-      hasTrackingOrigin: true,
-      hasOrigin: true,
-      navGoalAvailable: true,
-      disconnectedWithoutRobot: false,
-    })).toBe("live");
-    expect(navMarkerMode({
-      hasTrackingOrigin: true,
-      hasOrigin: true,
-      navGoalAvailable: false,
-      disconnectedWithoutRobot: false,
-    })).toBe("hidden");
-  });
-});
-
-describe("shouldAnimateNavArrow", () => {
-  const placed = { shown: true, dragging: false, followingRobot: false };
-
-  it("animates only while the marker is placed, not dragged, and not following the robot", () => {
-    expect(shouldAnimateNavArrow(placed)).toBe(true);
-    expect(shouldAnimateNavArrow({ ...placed, dragging: true })).toBe(false);
-    expect(shouldAnimateNavArrow({ ...placed, followingRobot: true })).toBe(false);
-    expect(shouldAnimateNavArrow({ ...placed, shown: false })).toBe(false);
-  });
-});
+import { specsNavigationPoseInTracking } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationController";
+import { shouldBeginFailedFlash } from "../../Assets/Scripts/DimOSARClient/navigation/NavigationInteraction";
 
 describe("shouldBeginFailedFlash", () => {
   const failed = { state: "resolved" as const, outcome: "failed" as const };
@@ -93,27 +43,6 @@ describe("shouldSyncFollowFloorPose", () => {
   });
 });
 
-describe("shouldSendStreamGoal", () => {
-  it("throttles by interval and distance, and no-ops tiny force moves", () => {
-    const position = new vec3(0, 0, 0);
-    const lastSent = { position: new vec3(0, 0, 0) };
-    expect(shouldSendStreamGoal(10, 10, position, lastSent, false)).toBe(false);
-    expect(
-      shouldSendStreamGoal(10 + GOAL_SEND_INTERVAL_S + 0.1, 10, new vec3(30, 0, 0), lastSent, false),
-    ).toBe(true);
-    expect(
-      shouldSendStreamGoal(
-        10 + GOAL_SEND_INTERVAL_S,
-        10,
-        new vec3(GOAL_FORCE_NOOP_DISTANCE_CM - 1, 0, 0),
-        lastSent,
-        true,
-      ),
-    ).toBe(false);
-  });
-});
-
-
 describe("navigation marker terminal heading", () => {
   it.each([0, Math.PI / 2, Math.PI, -Math.PI / 2])(
     "sends the displayed arrow direction at marker yaw %s, with a rotated localization origin",
@@ -124,7 +53,7 @@ describe("navigation marker terminal heading", () => {
         confidence: 1, ts: 1,
       };
       const rotation = new quat(Math.cos(yaw / 2), 0, Math.sin(yaw / 2), 0);
-      const goal = specsNavigationGoalInOdom(new vec3(25, 10, -100), rotation, origin);
+      const goal = clientTrackingToOdomPose(specsNavigationPoseInTracking(new vec3(25, 10, -100), rotation), origin);
       // Lens arrow (cos(yaw), 0, -sin(yaw)) maps to tracking
       // (sin(yaw), -cos(yaw), 0), then rotates by the odom origin.
       const actual = rotateVecByQuat(goal.orientation, [1, 0, 0]);
@@ -141,4 +70,74 @@ describe("navigation marker terminal heading", () => {
       ]));
     },
   );
+});
+
+import { NavigationController } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationController";
+import { vi } from "vitest";
+
+it("removes invalid floor probes independently and cancels only their draft owner", () => {
+  let hits = [{ position: new vec3(0, 0, -100), normal: new vec3(0, 1, 0) }];
+  const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
+    capabilities: { navigation: { available: true, nav_goal: { available: true } } }, state: null };
+  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
+  const controller = new NavigationController({ session: { view: () => view, sendText: vi.fn() } as any,
+    deviceTracking: { worldOptions: {}, raycastWorldMesh: () => hits } as any,
+    robotPresenter: { floorPose: () => null, deadzoneRadiusCm: () => null, floorWorldY: () => 0 } as any,
+    parent: {} as SceneObject, cameraObject: {} as SceneObject, navGoalMarkerPrefab: {} as ObjectPrefab });
+  controller.applyView(view, origin); controller.setSelected(true);
+  const from = new vec3(0, 100, 0), direction = new vec3(0, -1, -1);
+  controller.aim("left", from, direction); controller.aim("right", from, direction);
+  expect(controller.interaction.snapshot().probes).toHaveLength(2);
+  controller.hold("left", from, direction, false);
+  controller.cancelSource("left");
+  expect(controller.interaction.snapshot().draft).toBeNull();
+  expect(controller.interaction.snapshot().probes.map(p => p.sourceId)).toEqual(["right"]);
+  hits = []; controller.aim("right", from, direction);
+  expect(controller.interaction.snapshot().probes).toEqual([]);
+  hits = [{ position: new vec3(0, 0, -100), normal: new vec3(0, 1, 0) }];
+  controller.aim("right", from, direction);
+  controller.aim("right", from, vec3.zero());
+  expect(controller.interaction.snapshot().probes).toEqual([]);
+  for (const invalid of [
+    { position: new vec3(0, 0, -100), normal: new vec3(0, 0, 1) },
+    { position: new vec3(0, 40, -100), normal: new vec3(0, 1, 0) },
+    { position: new vec3(0, 0, 100), normal: new vec3(0, 1, 0) },
+    { position: new vec3(0, 0, -1000), normal: new vec3(0, 1, 0) },
+  ]) {
+    hits = [{ position: new vec3(0, 0, -100), normal: new vec3(0, 1, 0) }];
+    controller.aim("right", from, direction);
+    expect(controller.interaction.snapshot().probes).toHaveLength(1);
+    hits = [invalid]; controller.aim("right", from, direction);
+    expect(controller.interaction.snapshot().probes).toEqual([]);
+  }
+});
+
+it("streams unselected marker drags across frames and never raycasts unselected idle aim", () => {
+  let point = new vec3(0, 0, -100);
+  const cast = vi.fn(() => [{ position: point, normal: new vec3(0, 1, 0) }]);
+  const options: any = {};
+  const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
+    capabilities: { navigation: { available: true, nav_goal: { available: true } } }, state: null };
+  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
+  const sendText = vi.fn();
+  const controller = new NavigationController({ session: { view: () => view, sendText } as any,
+    deviceTracking: { worldOptions: options, raycastWorldMesh: cast } as any,
+    robotPresenter: { floorPose: () => ({ position: new vec3(0, 0, -100), rotation: quat.quatIdentity() }),
+      deadzoneRadiusCm: () => null, floorWorldY: () => 0 } as any,
+    parent: {} as SceneObject, cameraObject: {} as SceneObject, navGoalMarkerPrefab: {} as ObjectPrefab });
+  controller.applyView(view, origin);
+  const from = new vec3(0, 100, 0), ray = new vec3(0, -1, -1);
+  controller.aim("left", from, ray); controller.aim("right", from, ray);
+  controller.release("left", from, ray);
+  expect(cast).not.toHaveBeenCalled(); expect(options.enableWorldMeshesTracking).toBe(false);
+  controller.hold("left", from, ray, true);
+  point = new vec3(30, 0, -100); controller.setSelected(false);
+  controller.hold("left", from, ray, true);
+  expect(controller.interaction.isDragging()).toBe(true);
+  expect(sendText).toHaveBeenCalled();
+  expect(options.enableWorldMeshesTracking).toBe(true);
+  // Rendering is covered separately; this fixture exercises input and mesh tracking.
+  (controller as any).render = () => {};
+  controller.setInputEnabled(false);
+  expect(options.enableWorldMeshesTracking).toBe(false);
 });

@@ -85,8 +85,7 @@ describe("activity survives pose presentation", () => {
   ] as const)("preserves %s through localized and deferred fallback updates", (label, asrRunning, ttsPlaying, idle) => {
     const presenter = new RobotPresenter();
     const text = { text: "", textFill: { color: null } };
-    const busy = { enabled: false };
-    const idleVfx = { enabled: true };
+    const worldVisuals = { labels: vi.fn((_title: string, status: string) => { text.text = status; }), setRobot: vi.fn(), reset: vi.fn() };
     const root = { enabled: true };
     const transform = {
       setWorldPosition: vi.fn(), setWorldRotation: vi.fn(),
@@ -98,8 +97,7 @@ describe("activity survives pose presentation", () => {
     Object.assign(presenter, {
       getSceneObject: () => root,
       motionRoot, presented: true,
-      titleText: { text: "", textFill: { color: null } }, stateInfoText: text,
-      buttonVfxBusy: busy, buttonVfxIdle: idleVfx,
+      worldVisuals,
       unlocalizedPlaceEvent: { reset: vi.fn() },
     });
     const view = {
@@ -116,13 +114,12 @@ describe("activity survives pose presentation", () => {
         origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 },
       }, ctx);
       expect(text.text).toBe(label);
-      expect(busy.enabled).toBe(label !== "Idle");
-      expect(idleVfx.enabled).toBe(label === "Idle");
+      expect(worldVisuals.labels.mock.calls.at(-1)?.[1]).toBe(label);
     }
     presenter.apply({ mode: "unlocalizedFallbackPosition", robot: GO2, view }, ctx);
     // Run the delayed placement callback after the voice-aware label update.
     (presenter as unknown as { commitUnlocalizedAnchor(): void }).commitUnlocalizedAnchor();
     expect(text.text).toBe(label);
-    expect(busy.enabled).toBe(label !== "Idle");
+    expect(worldVisuals.labels.mock.calls.at(-1)?.[1]).toBe(label);
   });
 });

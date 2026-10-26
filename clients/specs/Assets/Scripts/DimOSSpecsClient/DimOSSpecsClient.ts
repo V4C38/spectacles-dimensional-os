@@ -1,3 +1,6 @@
+import { RobotSelection } from "../DimOSARClient/robot/RobotSelection";
+import { SpecsNavigationInput } from "./navigation/SpecsNavigationInput";
+import { ViewerNotificationPresenter } from "./presentation/ViewerNotificationPresenter";
 import { ClientPosePublisher } from "../DimOSARClient/agent/ClientPosePublisher";
 import {
   ClientTrackingOriginStore,
@@ -9,7 +12,7 @@ import { AR_MODULE_CLIENT_CONFIG } from "../DimOSARClient/websocket/hostPorts";
 import { buildModuleWebSocketUrl, normalizeHost } from "../DimOSARClient/websocket/hostNormalization";
 import { SpecsCameraSource } from "./localization/SpecsCameraSource";
 import { SpecsCameraStream } from "./localization/SpecsCameraStream";
-import { isDisconnectedWithoutRobot, NavigationController } from "./navigation/NavigationController";
+import { NavigationController } from "./navigation/NavigationController";
 import { NavGoalPresenter } from "./navigation/NavGoalPresenter";
 import { IpRelayClient } from "./IpRelayClient";
 import { UIPresenter } from "./presentation/UIPresenter";
@@ -56,6 +59,11 @@ export class DimOSSpecsClient extends BaseScriptComponent {
   @input
   ARMarkerPrefab: ObjectPrefab;
 
+  readonly selection = new RobotSelection();
+  private navigationInput: SpecsNavigationInput | null = null;
+  private previewRoute: NavGoalPresenter | null = null;
+  private notifications: ViewerNotificationPresenter | null = null;
+  private suspended = false;
   private cameraSource: SpecsCameraSource | null = null;
   private transport: SpecsWebSocketTransport | null = null;
   private clientTrackingOriginStore: ClientTrackingOriginStore | null = null;
@@ -154,13 +162,32 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     const navGoalPresenter = new NavGoalPresenter(parent);
     const navigationController = new NavigationController({
       session,
-      eventHost: this,
       deviceTracking,
       robotPresenter: this.robotPresenter,
+      cameraObject: this.cameraObject,
       parent,
       navGoalMarkerPrefab: this.navGoalMarkerPrefab,
     });
     this.navGoalPresenter = navGoalPresenter;
+    this.previewRoute = new NavGoalPresenter(parent);
+    this.navigationInput = new SpecsNavigationInput(navigationController, this.robotPresenter);
+    this.notifications = new ViewerNotificationPresenter(this.cameraObject);
+    this.createEvent("OnPauseEvent").bind(() => {
+      this.uiPresenter.invalidateSetupBaseline();
+      this.suspended = true; this.selection.clear(); this.navigationInput?.reset();
+      this.speechController?.endRecording(true); this.cameraSource?.stop();
+    });
+    this.createEvent("OnResumeEvent").bind(() => {
+      this.suspended = false;
+      if (this.uiPresenter.isSetupCompleted()) this.uiPresenter.requestAlignmentReview("Headset resumed");
+    });
+    this.createEvent("WorldTrackingResetEvent").bind(() => {
+      this.uiPresenter.invalidateSetupBaseline();
+      if (!this.uiPresenter.isSetupCompleted()) return;
+      this.selection.clear(); this.navigationInput?.reset(); this.speechController?.reset();
+      this.episode?.reset(); this.session?.restartPreservingTrackingOrigin();
+      this.uiPresenter.requestAlignmentReview("Tracking origin reset");
+    });
     this.navigationController = navigationController;
 
     this.createEvent("OnStartEvent").bind(() => this.onStart());
@@ -179,6 +206,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       this.robotPresenter!.reset();
       this.lidarPresenter.hide();
       this.navGoalPresenter!.destroy();
+      this.previewRoute?.destroy(); this.notifications?.dispose();
       this.episode!.dispose();
       this.updateEvent!.enabled = false;
       this.session!.stop();
@@ -194,25 +222,18 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     const navigationController = this.navigationController!;
     const robotPresenter = this.robotPresenter;
 
+    this.robotPresenter.bindSelection(() => this.selection.toggle(), this.cameraObject,
+      sourceId => !this.navigationController?.ownsDraft(sourceId));
+    this.selection.subscribe(selected => {
+      this.robotPresenter.setSelected(selected);
+      navigationController.setSelected(selected);
+      if (!selected) this.speechController?.endRecording(true);
+    });
+
     this.lidarPresenter.hide();
     navGoalPresenter.hide();
     navigationController.hide();
 
-    const applyNavPath = (): void => {
-      if (!this.uiPresenter.isSetupCompleted()) {
-        return;
-      }
-      const origin = clientTrackingOriginStore.T_odom_client;
-      const view = session.view();
-      navGoalPresenter.apply({
-        nav_goal: view.nav_goal,
-        origin,
-        pathVisible: navigationController.flash() === null,
-        floorY: robotPresenter.floorWorldY(),
-        goalY: navigationController.currentPose()?.position.y ?? null,
-      });
-    };
-    navigationController.onFlashChange = applyNavPath;
 
     this.uiPresenter.bind({
       session,
@@ -223,6 +244,11 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       defaultWebsocketIp: this.defaultWebsocketIp,
       ipRelayClient: new IpRelayClient(this.internetModule),
       script: this,
+      cameraObject: this.cameraObject,
+      isRobotSelected: () => this.selection.isSelected(),
+      toggleRobotSelection: () => this.selection.toggle(),
+      emergencyStop: () => this.emergencyStop(),
+      onModeChanged: () => { this.selection.clear(); this.navigationInput?.reset(); },
     });
     this.uiPresenter.start();
 
@@ -231,15 +257,18 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       audio: this.textToSpeechAudio,
     });
     this.tts = tts;
-    const asrModule = require("LensStudio:AsrModule") as AsrModule;
+    let asrModule: AsrModule | null = null;
+    try { asrModule = require("LensStudio:AsrModule") as AsrModule; }
+    catch { print("Speech recognition is unavailable in this runtime"); }
     const speechController = new AgentSpeechController({
-      eventHost: this,
       asrModule,
       session,
-      uiLogger: this.uiPresenter.getUILogger(),
       tts,
       getOperatingMode: () => this.uiPresenter.getOperatingMode(),
-      getDebugMode: () => this.uiPresenter.getDebugMode(),
+      isSelected: () => this.selection.isSelected(),
+      select: () => this.selection.setSelected(true),
+      isSetupCompleted: () => this.uiPresenter.isSetupCompleted() && !this.uiPresenter.isAlignmentReviewPending(),
+      emergencyStop: () => this.emergencyStop(),
     });
     this.speechController = speechController;
     this.uiPresenter.attachVoice(speechController, tts);
@@ -272,73 +301,73 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     });
 
     let roomPresentationDirty = true;
-    this.unsubscribeView = session.subscribeView((view) => {
-      const prevView = this.lastSessionView;
-      this.lastSessionView = view;
+    this.unsubscribeView = session.subscribeView(view => {
+      const prevView = this.lastSessionView; this.lastSessionView = view;
       this.uiPresenter.onSessionView(view, prevView);
+      if (view.connection !== "ready") { this.selection.clear(); this.speechController?.reset(); }
       roomPresentationDirty = true;
     });
-
-    // Prefab instantiation and mesh uploads belong to the scene update, not
-    // the native WebSocket callback. Coalesce incoming facts into one render.
-    const applyRoomPresentation = (): void => {
-      const view = session.view();
-      this.uiPresenter.applyRoomPresentation(view);
-
-      if (view.connection === "disconnected") {
-        this.annotations!.clearAll();
-        this.lastAnnotationOrigin = null;
-      }
-
-      const origin = clientTrackingOriginStore.T_odom_client;
-      if (origin && origin !== this.lastAnnotationOrigin) {
-        this.lastAnnotationOrigin = origin;
-        this.annotations!.recompose(origin);
-      }
-
-      if (!this.uiPresenter.isSetupCompleted()) {
-        this.lidarPresenter.hide();
-        navGoalPresenter.hide();
-        navigationController.hide();
-        return;
-      }
-
-      if (!view.hasTrackingOrigin || !origin) {
-        this.lidarPresenter.hide();
-        navGoalPresenter.hide();
-        navigationController.applyView(view, origin);
-        return;
-      }
-      this.lidarPresenter.apply({ points: view.lidar?.points ?? null, origin });
-      navigationController.applyView(view, origin);
-      applyNavPath();
-    };
-
+    let lastOrigin: ClientTrackingOrigin | null = null;
+    let previousSetup = false;
     const updateEvent = this.createEvent("UpdateEvent");
     updateEvent.bind(() => {
-      cameraSource.samplePose();
-      session.tick();
-      episode.tick();
-      navigationController.tick(getDeltaTime());
-      this.maybeSendClientPose();
-      const setupWasCompleted = this.uiPresenter.isSetupCompleted();
-      this.uiPresenter.tick(getDeltaTime());
-      const view = session.view();
-      const origin = clientTrackingOriginStore.T_odom_client;
-      if (
-        this.uiPresenter.isSetupCompleted() &&
-        isDisconnectedWithoutRobot(view) &&
-        !navigationController.isArmed() &&
-        robotPresenter.floorPose()
-      ) {
-        roomPresentationDirty = true;
+      if (this.suspended) return;
+      const dt = Math.min(0.1, getDeltaTime());
+      cameraSource.samplePose(); session.tick(); episode.tick(); this.maybeSendClientPose();
+      this.uiPresenter.tick(dt);
+      const view = session.view(), origin = clientTrackingOriginStore.T_odom_client;
+      const setup = this.uiPresenter.isSetupCompleted();
+      this.selection.setEligible(setup && !this.uiPresenter.isAlignmentReviewPending() && view.connection === "ready");
+      const viewportHeight = (this.cameraObject.getComponent("Component.Camera") as Camera)?.renderTarget?.getHeight() ?? 1024;
+      robotPresenter.setViewportHeight(viewportHeight); navigationController.setViewportHeight(viewportHeight);
+      if (roomPresentationDirty || previousSetup !== setup || lastOrigin !== origin) {
+        roomPresentationDirty = false; previousSetup = setup;
+        this.uiPresenter.applyRoomPresentation(view);
+        if (view.connection !== "ready") this.annotations?.clearAll();
+        if (origin && origin !== lastOrigin) this.annotations?.recompose(origin);
+        lastOrigin = origin;
       }
-      if (roomPresentationDirty || setupWasCompleted !== this.uiPresenter.isSetupCompleted()) {
-        roomPresentationDirty = false;
-        applyRoomPresentation();
-      }
+      robotPresenter.setSelected(this.selection.isSelected());
+      const controls = setup && !this.uiPresenter.isAlignmentReviewPending() && this.uiPresenter.getOperatingMode() === "manual" && view.connection === "ready";
+      navigationController.setInputEnabled(controls);
+      if (!setup) navigationController.hide();
+      else navigationController.applyView(view, origin);
+      navigationController.setSelected(this.selection.isSelected());
+      this.navigationInput?.tick(controls, setup && !this.uiPresenter.isAlignmentReviewPending() && view.connection === "ready");
+      navigationController.tick(dt);
+      const nav = navigationController.interaction.snapshot();
+      robotPresenter.setNavigationFloor(!nav.attachedToRobot, navigationController.circleOpacity());
+      if (setup && origin && view.hasTrackingOrigin) {
+        const prefs = this.uiPresenter.getLidarPreferences();
+        this.lidarPresenter.apply({ points: view.lidar?.points ?? null, origin, mode: this.uiPresenter.getLidarMode(),
+          robot: view.pose?.position, orientation: view.pose?.orientation,
+          baseHeightM: view.hello?.robot.base_height_m, bounds: view.hello?.robot.body_bounds_m,
+          pointLimit: prefs.pointLimit, obstacleRangeM: prefs.obstacleRangeM,
+          odomScaleCorrectionFactor: view.hello?.robot.odom_scale_correction_factor ?? 1, viewportHeight });
+        const circles = { startCircle: robotPresenter.floorCircleBounds(), viewportHeight };
+        navGoalPresenter.apply({ path: navigationController.activePath(), origin,
+          pathVisible: navigationController.isArmed() && !nav.flash,
+          floorY: robotPresenter.floorWorldY(), goalY: navigationController.currentPose()?.position.y,
+          executing: nav.followingPath, endCircle: navigationController.circleBounds(), ...circles });
+        this.previewRoute!.apply({ path: navigationController.previewPath(), origin,
+          pathVisible: navigationController.isAiming(), preview: true,
+          floorY: robotPresenter.floorWorldY(), goalY: navigationController.currentPose()?.position.y,
+          endCircle: navigationController.draftCircleBounds(), ...circles });
+      } else { this.lidarPresenter.hide(); navGoalPresenter.hide(); this.previewRoute?.hide(); }
+      this.annotations?.update(this.cameraObject.getTransform().getWorldPosition(), dt);
+      this.notifications?.tick(dt);
     });
     this.updateEvent = updateEvent;
+  }
+
+  emergencyStop(): void {
+    if (this.session?.view().capabilities?.estop.available !== true) return;
+    try {
+      this.navigationInput?.reset(); this.speechController?.endRecording(true);
+      if (this.navigationController?.interaction.snapshot().goalActive) this.navigationController.cancel();
+      else this.session.requestEstop();
+      this.notifications?.show({ text: "Emergency stop requested", tone: "danger", glyph: "stop", priority: 100 });
+    } catch { this.notifications?.show({ text: "Stop request failed", tone: "danger", glyph: "stop", priority: 100 }); }
   }
 
   private maybeSendClientPose(): void { this.posePublisher?.tick(); }

@@ -1,3 +1,4 @@
+import { ROBOT_LABEL_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 import * as THREE from "three";
 import { AdaptiveDashedLineRenderer } from "./AdaptiveDashedLineRenderer";
 import { FLOOR_MARKER_STYLE, ROBOT_LINE_STYLE } from "./DimOSARDesign";
@@ -22,8 +23,8 @@ export type RobotFeedback = {
   message: string | null;
 };
 
-const TAG_WIDTH = 0.24;
-const TAG_PADDING = 0.014;
+const TAG_WIDTH = ROBOT_LABEL_STYLE.widthM;
+const TAG_PADDING = ROBOT_LABEL_STYLE.paddingM;
 
 
 export class WebXRRobotPresenter {
@@ -105,12 +106,12 @@ export class WebXRRobotPresenter {
     // Tag grows upward from its origin, so its bottom edge stays put.
     this.labelGroup = new THREE.Group();
     this.labelGroup.name = "RobotMarkerLabel";
-    this.tagDot = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape().absarc(0, 0, 0.0045, 0, Math.PI * 2, false), 20), new THREE.MeshBasicMaterial({ color: 0x8e8e93, transparent: true, depthWrite: false }));
+    this.tagDot = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape().absarc(0, 0, ROBOT_LABEL_STYLE.dot.radiusM, 0, Math.PI * 2, false), 20), new THREE.MeshBasicMaterial({ color: 0x8e8e93, transparent: true, depthWrite: false }));
 
     for (const [text, font, size, color] of [
-      [this.tagTitle, UI_FONT_SEMIBOLD, 0.02, 0xffffff],
-      [this.tagStatus, UI_FONT_REGULAR, 0.028, 0xffffff],
-      [this.tagMessage, UI_FONT_REGULAR, 0.013, 0xaeaeb2],
+      [this.tagTitle, UI_FONT_SEMIBOLD, ROBOT_LABEL_STYLE.title.emM, 0xffffff],
+      [this.tagStatus, UI_FONT_REGULAR, ROBOT_LABEL_STYLE.activity.emM, 0xffffff],
+      [this.tagMessage, UI_FONT_REGULAR, ROBOT_LABEL_STYLE.detail.emM, 0xaeaeb2],
     ] as const) {
       text.font = font;
       text.fontSize = size;
@@ -121,8 +122,8 @@ export class WebXRRobotPresenter {
       text.position.x = 0;
       text.raycast = () => {};
     }
-    this.tagTitle.position.x = 0.008;
-    this.tagTitle.maxWidth = TAG_WIDTH - TAG_PADDING * 2 - 0.016;
+    this.tagTitle.position.x = ROBOT_LABEL_STYLE.title.xM;
+    this.tagTitle.maxWidth = ROBOT_LABEL_STYLE.title.widthM;
     for (const [index, child] of [this.tagDot, this.tagTitle, this.tagStatus, this.tagMessage].entries()) {
       child.position.z = index === 0 ? 0 : 0.001;
       child.renderOrder = 20 + Math.min(index, 2);
@@ -135,6 +136,8 @@ export class WebXRRobotPresenter {
   apply(view: ARModuleSessionState, origin: ClientTrackingOrigin | null, setupCompleted: boolean, fallbackPosition: Vec3 | null): void {
     const input = deriveRobotMarkerApplyInput({ setupCompleted, view, origin });
     if (input.mode === "hidden") { this.reset(); return; }
+    if (input.mode === "localizedPending") { this.collider.userData.interactionEnabled = false; return; }
+    this.collider.userData.interactionEnabled = true;
     if (input.mode === "unlocalizedFallbackPosition") { this.applyUnlocalized(input, fallbackPosition); return; }
     this.unlocalizedCommitted = false;
     this.applyLocalized(input);
@@ -190,17 +193,17 @@ export class WebXRRobotPresenter {
     this.tagMessage.text = message;
     this.tagMessage.visible = message.length > 0;
     this.tagDot.material.color.setHex(toneHex(info.tone));
-    this.tagTitle.position.y = 0.09;
-    this.tagDot.position.set(-0.06, 0.079, 0.001);
-    this.tagStatus.position.y = 0.064;
-    this.tagMessage.position.y = 0.026;
+    this.tagTitle.position.y = ROBOT_LABEL_STYLE.title.yM;
+    this.tagDot.position.set(-0.06, ROBOT_LABEL_STYLE.dot.yM, 0.001);
+    this.tagStatus.position.y = ROBOT_LABEL_STYLE.activity.yM;
+    this.tagMessage.position.y = ROBOT_LABEL_STYLE.detail.yM;
     syncText(this.tagTitle, this.tagStatus, this.tagMessage);
     if (typeof Worker !== "undefined") this.tagTitle.sync(() => {
       const bounds = this.tagTitle.textRenderInfo?.blockBounds;
       if (!bounds) return;
       const width = bounds[2] - bounds[0];
-      this.tagTitle.position.x = 0.008;
-      this.tagDot.position.x = -(width + 0.016) / 2 + 0.0045;
+      this.tagTitle.position.x = ROBOT_LABEL_STYLE.title.xM;
+      this.tagDot.position.x = -(width + ROBOT_LABEL_STYLE.dot.gapM) / 2 + ROBOT_LABEL_STYLE.dot.radiusM;
     });
   }
 
@@ -351,7 +354,7 @@ export class WebXRRobotPresenter {
     this.connectorRenderer.setStyle(ROBOT_LINE_STYLE.selectedWidthM, ROBOT_LINE_STYLE.selectedOpacity);
     this.connector.visible = length > 0.03;
     // Just above the robot body, so the tag reads as attached to it.
-    this.labelGroup.position.copy(new THREE.Vector3(0, 0.075, 0).applyQuaternion(inverse));
+    this.labelGroup.position.copy(new THREE.Vector3(0, ROBOT_LABEL_STYLE.offsetYM, 0).applyQuaternion(inverse));
   }
 }
 

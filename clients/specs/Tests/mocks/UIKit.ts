@@ -47,6 +47,7 @@ export function statusToneColor(
 }
 
 export const SnapOS2Styles = {
+  Secondary: "Secondary",
   Primary: "primary",
   PrimaryNeutral: "primary-neutral",
   Special: "special",
@@ -63,3 +64,7 @@ export function findChildRecursive(_root: unknown, _name: string): null {
 export function findFirstText(_root: unknown): null {
   return null;
 }
+
+export function getFrameComponent(_panel: unknown): null { return null; }
+export function setPanelFollowing(_panel: unknown, _enabled: boolean, _scale: number): void {}
+export function placePanelInFront(_panel: unknown, _camera: unknown, _offsetY = 0): void {}

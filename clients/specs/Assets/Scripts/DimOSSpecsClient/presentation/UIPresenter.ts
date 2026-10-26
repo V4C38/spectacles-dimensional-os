@@ -1,11 +1,13 @@
+import { CONTROL_PANEL_SCALE } from "../../DimOSARClient/presentation/ControlPanelPresentation";
+import { SpecsCameraStream } from "../localization/SpecsCameraStream";
+import { SetupFlow } from "../../DimOSARClient/presentation/SetupFlow";
+import type { SpecsUISnapshot } from "./SpecsUISnapshot";
 import { LidarDisplayController } from "../../DimOSARClient/sensors/LidarDisplayController";
 import type { LocalizationCaptureEpisode } from "../../DimOSARClient/localization/localizationCaptureEpisode";
 import type { ClientTrackingOriginStore } from "../../DimOSARClient/localization/clientTrackingOrigin";
 import { localizationCaptureStatus } from "../../DimOSARClient/localization/localizationCaptureStatus";
 import {
-  lidarModeFromSettings,
   LIDAR_PRESETS,
-  nextLidarMode,
   requestLidarSettings,
 } from "../../DimOSARClient/sensors/lidarSettings";
 import type { ARModuleSession, ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
@@ -16,8 +18,8 @@ import {
   type SessionLinkPhase,
 } from "../../DimOSARClient/websocket/sessionLinkStatus";
 import type { SpecsWebSocketTransport } from "../websocket/SpecsWebSocketTransport";
-import { scaleIn, scaleOut } from "../utilities/AnimationUtilities";
-import { findChildRecursive, getFrameComponent, isFrameInitialized, statusToneColor } from "./UIKit";
+import { DEFAULT_SCALE_ANIMATION_VERSION_KEY, nextAnimationVersion, scaleIn, scaleOut } from "../utilities/AnimationUtilities";
+import { placePanelInFront, findChildRecursive, getFrameComponent, isFrameInitialized, statusToneColor } from "./UIKit";
 import { UILogger } from "./UILogger";
 import { WristMenuController } from "./WristMenuController";
 import { MainMenuView } from "./MainMenuView";
@@ -33,8 +35,8 @@ import type { RobotPresenter } from "./RobotPresenter";
 import { AgentSpeechController } from "../agent/AgentSpeechController";
 import type { SpecsTextToSpeech } from "./SpecsTextToSpeech";
 
-const EDITOR_MENU_SCALE = 1.0;
-const SPECTACLES_MENU_SCALE = 0.6;
+const EDITOR_MENU_SCALE = CONTROL_PANEL_SCALE.runtime;
+const SPECTACLES_MENU_SCALE = CONTROL_PANEL_SCALE.runtime;
 const EDITOR_MENU_ANIM_DURATION = 0.35;
 const SPECTACLES_MENU_SCALE_IN_DURATION = 0.25;
 const SPECTACLES_MENU_SCALE_OUT_DURATION = 0.2;
@@ -49,12 +51,17 @@ export interface UIPresenterDeps {
   transport: SpecsWebSocketTransport;
   clientTrackingOriginStore: ClientTrackingOriginStore;
   robotPresenter: RobotPresenter;
+  cameraObject: SceneObject;
   defaultWebsocketIp: string;
   ipRelayClient: IpRelayClient;
   setupWizardPanel: SceneObject;
   mainUIFrame: SceneObject;
   wristMenuRoot: SceneObject;
   script: ScriptComponent;
+  isRobotSelected: () => boolean;
+  toggleRobotSelection: () => void;
+  emergencyStop: () => void;
+  onModeChanged: () => void;
   speechController?: AgentSpeechController | null;
   tts?: SpecsTextToSpeech | null;
 }
@@ -83,11 +90,11 @@ export class UIPresenter extends BaseScriptComponent {
   private wizardLidarOffSent = false;
   private postWizardLidarSent = false;
   private unlocalizedUiPrepared = false;
-  private setupCompleted = false;
-
-  public getUILogger(): UILogger {
-    return this.uiLogger;
-  }
+  private setupFlow: SetupFlow | null = null;
+  private get setupCompleted(): boolean { return this.setupFlow?.completed ?? false; }
+  private set setupCompleted(value: boolean) { if (this.setupFlow) this.setupFlow.completed = value; }
+  private stopPressedUntil = 0;
+  private setupRestartPending = false;
 
   public getOperatingMode(): OperatingMode {
     return this.appState.operatingMode;
@@ -104,7 +111,17 @@ export class UIPresenter extends BaseScriptComponent {
   }
 
   public bind(deps: Omit<UIPresenterDeps, "setupWizardPanel" | "mainUIFrame" | "wristMenuRoot">): void {
-    this.lidarDisplay = new LidarDisplayController(deps.session, undefined, false);
+    this.setupFlow = new SetupFlow(deps.session, deps.episode);
+    const store = global.persistentStorageSystem.store;
+    this.lidarDisplay = new LidarDisplayController(deps.session, {
+      read: () => {
+        try {
+          const saved = store.getString("dimos.sensors.v1");
+          return saved ? JSON.parse(saved) : { pointLimit: 1500, obstacleRangeM: 0.6, fullRangeM: 5 };
+        } catch { return { pointLimit: 1500, obstacleRangeM: 0.6, fullRangeM: 5 }; }
+      },
+      write: preferences => store.putString("dimos.sensors.v1", JSON.stringify(preferences)),
+    });
     this.deps = {
       ...deps,
       setupWizardPanel: this.setupWizardPanel,
@@ -118,6 +135,9 @@ export class UIPresenter extends BaseScriptComponent {
     this.isEditorMode = global.deviceInfoSystem.isEditor();
     this.setupWizardController = new SetupWizardController({
       panel: this.setupWizardPanel,
+      cameraObject: deps.cameraObject,
+      previewTexture: () => SpecsCameraStream.getInstance().previewTexture(),
+      flow: this.setupFlow!,
       script: this,
       session: deps.session,
       episode: deps.episode,
@@ -130,6 +150,7 @@ export class UIPresenter extends BaseScriptComponent {
       onDismissToRuntime: () => this.finishWizard(),
     });
     this.bindRuntimeHud();
+    this.mainMenuView?.setVisible(false);
     this.setupWizardController.start(false);
     if (this.isEditorMode) {
       this.mainUIFrame.enabled = false;
@@ -142,17 +163,23 @@ export class UIPresenter extends BaseScriptComponent {
   }
 
   public tick(dt: number): void {
-    this.setupWizardController?.tick();
+    if (this.setupRestartPending) {
+      this.setupRestartPending = false;
+      this.performSetupRestart();
+    }
+    this.setupWizardController?.tick(dt);
     this.uiLogger.tick();
     this.deps?.speechController?.tick();
-    this.wristMenuController?.tick(dt);
     if (!this.setupCompleted) {
       this.ensureWizardLidarOff();
       return;
     }
+    this.wristMenuController?.tick(dt);
     this.refreshHud();
     this.refreshRobotLabels();
     this.refreshLocalizationCaptureStatus();
+    this.mainMenuView?.apply(this.snapshot());
+    this.mainMenuView?.tick(dt);
   }
 
   public onSessionView(view: ARModuleSessionState, prevView: ARModuleSessionState | null): void {
@@ -160,6 +187,9 @@ export class UIPresenter extends BaseScriptComponent {
     const nextPhase = deriveSessionLinkPhase(view);
     this.linkPhase = nextPhase;
     this.setupWizardController?.onSessionViewChanged();
+    if (this.setupCompleted && view.connection === "ready" && view.alignmentRequired && !view.hasTrackingOrigin && !this.isAlignmentReviewPending()) {
+      this.requestAlignmentReview("Robot odometry reference changed");
+    }
 
     const transition = sessionLinkTransitionLog(prevPhase, nextPhase);
     if (transition && this.setupCompleted) {
@@ -173,10 +203,13 @@ export class UIPresenter extends BaseScriptComponent {
 
     if (view.state?.lidar) {
       this.lidarDisplay?.observe(view);
-      this.appState.setLidarMode(this.lidarDisplay?.mode ?? lidarModeFromSettings(view.state.lidar));
-      this.mainMenuView?.setLidarModeDisplay(this.appState.lidarMode);
+      this.mainMenuView?.setLidarModeDisplay(this.getLidarMode());
     }
   }
+
+  public invalidateSetupBaseline(): void { this.setupWizardController?.invalidateBaseline(); }
+
+  public isAlignmentReviewPending(): boolean { return this.setupFlow?.alignmentReview?.pending === true; }
 
   public isSetupCompleted(): boolean {
     return this.setupCompleted;
@@ -205,6 +238,60 @@ export class UIPresenter extends BaseScriptComponent {
     });
   }
 
+  getLidarMode() { return this.lidarDisplay?.mode ?? "off"; }
+  getLidarPreferences() { return this.lidarDisplay?.preferences ?? { pointLimit: 1500, obstacleRangeM: 0.6, fullRangeM: 5 }; }
+  snapshot(): SpecsUISnapshot {
+    const deps = this.requireDeps(), view = deps.session.view();
+    const capture = localizationCaptureStatus(view, deps.episode.view(), getTime());
+    const preview = SpecsCameraStream.getInstance().previewTexture();
+    const phase = deriveSessionLinkPhase(view);
+    return {
+      robotConnectionText: { disconnected: "Disconnected", connecting: "Connecting…", robotOffline: "Robot offline", connected: "Connected" }[phase],
+      activity: view.nav?.state === "following_path" ? "Following Path" : view.state?.agent.idle === false ? "Thinking" : "Idle",
+      hudText: this.uiLogger.snapshot?.text ?? "",
+      hasTrackingOrigin: view.hasTrackingOrigin,
+      cameraStatus: preview ? `Capturing · ${preview.getWidth()} × ${preview.getHeight()}` : "Not capturing",
+      trackingStatus: "Tracking", surfaceCount: "—",
+      robotName: view.hello?.robot.display_name ?? "Robot",
+      robotSelected: deps.isRobotSelected(),
+      robotSelectable: this.setupCompleted && view.connection === "ready",
+      operatingMode: this.getOperatingMode(), agentAvailable: view.capabilities?.agent.available === true,
+      speech: deps.speechController?.snapshot() ?? null,
+      lidarAvailable: view.capabilities?.lidar.available === true, lidarMode: this.getLidarMode(),
+      lidarPreferences: { ...this.getLidarPreferences() }, lidarReceived: view.lidar?.points.length ?? 0,
+      debugEnabled: this.getDebugMode(),
+      debugText: `Localization timings: ${JSON.stringify(deps.episode.timing())}\nConnection: ${view.connection}\nLocalized: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture.text}\n${deps.episode.view().lastError ?? ""}`,
+      estopAvailable: view.capabilities?.estop.available === true,
+      estopPressed: getTime() < this.stopPressedUntil,
+      alignmentReview: this.setupFlow?.alignmentReview?.pending === true,
+    };
+  }
+  requestEmergencyStop(): void {
+    this.requireDeps().emergencyStop();
+    this.stopPressedUntil = getTime() + 0.35;
+  }
+  closeMenu(): void { this.deps?.speechController?.endRecording(true); this.wristMenuController?.closeImmediate(); this.setUIState(0); }
+  requestAlignmentReview(reason: string): void {
+    this.setupFlow?.requestAlignmentReview(reason);
+    placePanelInFront(this.mainUIFrame, this.requireDeps().cameraObject);
+    this.mainMenuView?.placed();
+    this.mainMenuView?.setFrameFollowEnabled(true);
+    this.wristMenuController?.pin();
+    this.setUIState(1);
+  }
+  realign(): void {
+    const deps = this.requireDeps();
+    deps.speechController?.reset();
+    deps.onModeChanged();
+    deps.episode.reset();
+    deps.robotPresenter.reset();
+    this.setupCompleted = false;
+    this.wizardLidarOffSent = false;
+    this.postWizardLidarSent = false;
+    this.closeMenu();
+    this.setupWizardController?.realign();
+  }
+
   private mainUiFallbackScale(): number {
     return this.isEditorMode ? EDITOR_MENU_SCALE : SPECTACLES_MENU_SCALE;
   }
@@ -214,8 +301,10 @@ export class UIPresenter extends BaseScriptComponent {
     const scale = this.mainUiFallbackScale();
     const visibleScale = new vec3(scale, scale, scale);
     if (this.isEditorMode) {
+      placePanelInFront(panel, this.requireDeps().cameraObject, -18);
       panel.enabled = true;
       panel.getTransform().setLocalScale(visibleScale);
+      this.mainMenuView?.placed();
       return;
     }
     if (this.wristMenuRoot) {
@@ -224,10 +313,8 @@ export class UIPresenter extends BaseScriptComponent {
   }
 
   private finishWizard(): void {
-    if (this.setupCompleted) {
-      return;
-    }
     this.setupCompleted = true;
+    this.mainMenuView?.showPage("main");
     this.postWizardLidarSent = false;
     const view = this.requireDeps().session.view();
     if (!view.hasTrackingOrigin && this.isEditorMode) {
@@ -236,6 +323,7 @@ export class UIPresenter extends BaseScriptComponent {
     this.applyRoomPresentation(view);
     print("UIPresenter: setup complete, robot presentation applied");
     if (this.isEditorMode) {
+      this.prepareMainUiPlacementAnchor();
       this.setUIState(1);
     }
     this.sendPostWizardLidarDefault();
@@ -256,10 +344,10 @@ export class UIPresenter extends BaseScriptComponent {
   }
 
   private bindRuntimeHud(): void {
+    const deps = this.requireDeps();
     const panel = this.mainUIFrame;
     this.mainMenuView = new MainMenuView(panel, {
       onRestart: () => this.restartSetup(),
-      onLidarModeCycle: () => this.cycleLidarMode(),
       onModeButtonPressed: (mode) => {
         const accessible = agentModeAccessible(
           this.requireDeps().session.view().capabilities?.agent.available === true,
@@ -269,71 +357,60 @@ export class UIPresenter extends BaseScriptComponent {
         this.appState.setOperatingMode(next);
         this.mainMenuView?.setOperatingMode(next);
         this.deps?.speechController?.syncEnabled();
+        this.deps?.onModeChanged();
       },
-      onEmergencyStop: () => {
-        try {
-          this.requireDeps().session.requestEstop();
-        } catch (error) {
-          print(`UIPresenter: estop failed — ${error}`);
-        }
-      },
+      onEmergencyStop: () => this.requestEmergencyStop(),
+      onRobot: deps.toggleRobotSelection,
+      onClose: () => this.closeMenu(),
+      onPin: () => { this.wristMenuController?.pin(); this.mainMenuView?.setFrameFollowEnabled(false); },
+      onLidarMode: mode => this.lidarDisplay?.setMode(mode),
+      onLidarRange: direction => this.lidarDisplay?.adjustRange(direction),
+      onLidarPoints: direction => this.lidarDisplay?.adjustPoints(direction),
+      onRealign: () => this.realign(),
+      onDismissAlignment: () => { this.setupFlow?.dismissAlignmentReview(); this.mainMenuView?.setFrameFollowEnabled(false); },
+      onRecord: () => { this.deps?.speechController?.beginRecording(); },
+      onRecordEnd: cancel => this.deps?.speechController?.endRecording(cancel),
+      onSend: () => { this.deps?.speechController?.submit(); },
+      onClear: () => this.deps?.speechController?.setDraft(""),
       onDebugModeChanged: (enabled) => {
         this.appState.setDebugMode(enabled);
         this.mainMenuView?.setDebugModeToggle(enabled);
         this.refreshHud();
       },
-      getLidarMode: () => this.appState.lidarMode,
-      getOperatingMode: () => this.appState.operatingMode,
-      getDebugModeValue: () => this.appState.debugModeEnabled,
     });
 
-    const debugLogRoot = findChildRecursive(panel, "DebugLog");
-    if (debugLogRoot) {
-      this.uiLogger.bindConsoleOutput(debugLogRoot);
-    }
-
     this.configureMenuMotion(panel);
-    this.mainMenuView.setLidarModeDisplay(this.appState.lidarMode);
+    this.mainMenuView.setLidarModeDisplay(this.getLidarMode());
     this.mainMenuView.setOperatingMode(this.appState.operatingMode);
     this.mainMenuView.setDebugModeToggle(this.appState.debugModeEnabled);
     this.refreshHud();
   }
 
   private restartSetup(): void {
+    // Leave the native button's trigger dispatch before disabling its hierarchy.
+    this.setupRestartPending = true;
+  }
+
+  private performSetupRestart(): void {
+    const controller = this.setupWizardController;
+    if (!controller) {
+      throw new Error("UIPresenter: setup wizard controller missing");
+    }
+    nextAnimationVersion(this.setupWizardPanel, DEFAULT_SCALE_ANIMATION_VERSION_KEY);
     this.setupCompleted = false;
     this.appState.setOperatingMode("manual");
     this.wizardLidarOffSent = false;
     this.postWizardLidarSent = false;
     this.unlocalizedUiPrepared = false;
-    if (this.wristMenuController) {
-      this.wristMenuController.closeImmediate();
-    } else {
-      this.setUIState(0, { immediate: true });
-    }
+    this.wristMenuController?.closeImmediate();
+    this.setUIState(0, { immediate: true });
     const deps = this.requireDeps();
-    deps.session.stop();
+    deps.speechController?.reset();
+    deps.onModeChanged();
     this.mainMenuView?.setOperatingMode(this.appState.operatingMode);
     this.refreshHud();
-    deps.clientTrackingOriginStore.clear();
     deps.robotPresenter.reset();
-    deps.episode.reset();
-    const controller = this.setupWizardController;
-    if (!controller) {
-      throw new Error("UIPresenter: setup wizard controller missing");
-    }
     controller.start(true);
-  }
-
-  private cycleLidarMode(): void {
-    const deps = this.requireDeps();
-    const available = deps.session.view().capabilities?.lidar.available ?? false;
-    if (!available) {
-      return;
-    }
-    try {
-      this.appState.setLidarMode(this.lidarDisplay?.cycle() ?? nextLidarMode(this.appState.lidarMode));
-      this.mainMenuView?.setLidarModeDisplay(this.appState.lidarMode);
-    } catch (error) { print(`UIPresenter: lidar preset failed — ${error}`); }
   }
 
   private ensureWizardLidarOff(): void {
@@ -360,10 +437,10 @@ export class UIPresenter extends BaseScriptComponent {
     if (session.view().connection !== "ready") {
       return;
     }
-    this.appState.setLidarMode("obstacles");
-    this.mainMenuView?.setLidarModeDisplay(this.appState.lidarMode);
+
+    this.mainMenuView?.setLidarModeDisplay(this.getLidarMode());
     try {
-      this.lidarDisplay?.setMode(this.appState.lidarMode);
+      this.lidarDisplay?.setMode("obstacles");
       this.postWizardLidarSent = true;
     } catch {
       // retry on next refresh
@@ -378,7 +455,7 @@ export class UIPresenter extends BaseScriptComponent {
     const agentAvailable = view.capabilities?.agent.available === true;
     this.mainMenuView?.setLidarModeAvailability(
       view.capabilities?.lidar.available === true,
-      this.appState.lidarMode,
+      this.getLidarMode(),
     );
     this.mainMenuView?.setEmergencyStopAvailability(
       view.capabilities?.estop.available === true,
@@ -403,6 +480,7 @@ export class UIPresenter extends BaseScriptComponent {
     deps.robotPresenter.refreshLabels(this.appState, deps.session.view(), {
       asrRunning: deps.speechController?.asrRunning ?? false,
       ttsPlaying: deps.tts?.isPlaying ?? false,
+      status: deps.speechController?.snapshot().status,
     });
   }
 
@@ -439,12 +517,15 @@ export class UIPresenter extends BaseScriptComponent {
       panel,
       anchorRoot: this.wristMenuRoot,
       handType: "left",
+      cameraObject: this.requireDeps().cameraObject,
+      centerOffsetCm: () => (76 - (getFrameComponent(panel)?.totalSize.y ?? 76)) * SPECTACLES_MENU_SCALE / 2,
       onBeforeShow: () => {
         this.mainMenuView?.applySpectaclesFrameMotion();
         this.requestStateIfReady();
       },
-      onMenuShow: () => this.setUIState(1),
-      onMenuHide: (immediate) => this.setUIState(0, { immediate }),
+      onMenuShow: () => { this.mainMenuView?.placed(); this.setUIState(1); },
+      onMenuHide: (immediate) => { this.mainMenuView?.setFrameFollowEnabled(false); this.setUIState(0, { immediate }); },
+      onPin: () => this.mainMenuView?.setFrameFollowEnabled(false),
     });
   }
 
@@ -455,6 +536,8 @@ export class UIPresenter extends BaseScriptComponent {
     }
     this.uiState = state;
     const panel = this.mainUIFrame;
+    this.mainMenuView?.setVisible(state !== 0);
+    if (immediate) nextAnimationVersion(panel, DEFAULT_SCALE_ANIMATION_VERSION_KEY);
     const menuScale = this.isEditorMode ? EDITOR_MENU_SCALE : SPECTACLES_MENU_SCALE;
     const visibleScale = new vec3(menuScale, menuScale, menuScale);
     if (state === 0) {

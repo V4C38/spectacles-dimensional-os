@@ -10,6 +10,7 @@ export type RobotActivityState = "Idle" | "Following Path" | "Thinking" | "Respo
 
 export type RobotMarkerApplyInput =
   | { mode: "hidden" }
+  | { mode: "localizedPending" }
   | {
       mode: "unlocalizedFallbackPosition";
       robot: RobotDescription | null;
@@ -41,6 +42,7 @@ export function deriveRobotMarkerApplyInput(input: {
       view: input.view,
     };
   }
+  if (input.origin || input.view.hasRetainedTrackingOrigin || input.view.alignmentRequired) return { mode: "localizedPending" };
   return {
     mode: "unlocalizedFallbackPosition",
     robot: robot ?? null,

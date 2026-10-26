@@ -50,3 +50,12 @@ it("samples hand pinch centers and controller grip tips and detects missing join
   tracked = false; direct.sample(frame, {} as XRReferenceSpace, [hand, controller]);
   expect(direct.point(hand)).toBeUndefined();
 });
+
+it("keeps index fingertip contact available when the thumb is untracked", () => {
+  const direct = new WebXRDirectInteraction(), hand = new THREE.Group() as xb.SelectEvent["target"];
+  hand.inputSource = { hand: new Map([["index-finger-tip", "index"]]) as unknown as XRHand };
+  const frame = { getJointPose: () => ({ transform: { position: { x: 1, y: 2, z: 3 } } }) } as unknown as XRFrame;
+  direct.sample(frame, {} as XRReferenceSpace, [hand]);
+  expect(direct.indexTip(hand)?.toArray()).toEqual([1, 2, 3]);
+  expect(direct.point(hand)?.toArray()).toEqual([1, 2, 3]);
+});

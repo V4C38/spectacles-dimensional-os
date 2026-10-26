@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parsePlaceArMarkerArgs } from "../../Assets/Scripts/DimOSARClient/agent/agentSkills";
 import type { ClientTrackingOrigin } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
 import { ARMarkerPresenter } from "../../Assets/Scripts/DimOSSpecsClient/presentation/ARMarkerPresenter";
 import { clientTrackingToSpecsPoint } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
+
+vi.mock("SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangleVisual", () => ({ RoundedRectangleVisual: class {} }));
 
 type FakeRoot = SceneObject & {
   worldPosition: vec3;

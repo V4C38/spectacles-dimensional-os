@@ -1,44 +1,66 @@
-import { describe, expect, it } from "vitest";
-import { filletPathCorners, rangePathY } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavGoalPresenter";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClientTrackingOrigin } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
 
-function vec(x: number, y: number, z: number): vec3 {
-  return new vec3(x, y, z);
-}
-
-describe("filletPathCorners", () => {
-  it("leaves a 2-point path unchanged", () => {
-    const points = [vec(0, 0, 0), vec(10, 0, 0)];
-    const filleted = filletPathCorners(points);
-    expect(filleted).toHaveLength(2);
-    expect(filleted[0].x).toBe(0);
-    expect(filleted[0].z).toBe(0);
-    expect(filleted[1].x).toBe(10);
-    expect(filleted[1].z).toBe(0);
-  });
-
-  it("adds fillet points at a sharp 90 degree corner", () => {
-    const points = [vec(0, 0, 0), vec(10, 0, 0), vec(10, 0, 10)];
-    const filleted = filletPathCorners(points);
-    expect(filleted.length).toBeGreaterThan(points.length);
-    expect(filleted[0].x).toBe(0);
-    expect(filleted[0].z).toBe(0);
-    expect(filleted[filleted.length - 1].x).toBe(10);
-    expect(filleted[filleted.length - 1].z).toBe(10);
-  });
+const { renderers } = vi.hoisted(() => ({ renderers: new Map<string, any>() }));
+vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer", () => {
+  class Renderer {
+    object = { getTransform: () => ({ setWorldPosition() {}, setWorldRotation() {}, setWorldScale() {} }) };
+    triangles = vi.fn();
+    segments = vi.fn();
+    setViewportHeight = vi.fn();
+    hide = vi.fn();
+    destroy = vi.fn();
+    constructor(_parent: unknown, name: string) { renderers.set(name, this); }
+  }
+  return { WorldMeshRenderer: Renderer, AdaptiveStrokeRenderer: Renderer };
 });
+import { NavGoalPresenter } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavGoalPresenter";
 
-describe("rangePathY", () => {
-  it("keeps points unchanged when floorY or goalY is missing", () => {
-    const points = [vec(0, 5, 0), vec(10, 5, 0)];
-    expect(rangePathY(points, null, 20)).toBe(points);
-    expect(rangePathY(points, 0, null)).toBe(points);
+const origin: ClientTrackingOrigin = {
+  position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0,
+};
+function harness() {
+  const presenter = new NavGoalPresenter({} as SceneObject);
+  return { presenter, dots: renderers.get("NavigationRouteDots"), ribbon: renderers.get("NavigationRouteRibbon") };
+}
+beforeEach(() => renderers.clear());
+
+describe("native route presentation", () => {
+  it("draws executing paths as a solid ribbon in Specs centimetres", () => {
+    const { presenter, dots, ribbon } = harness();
+    presenter.apply({ origin, executing: true, path: [[0, 0, 0, 0], [1, 0, 0, 0]] });
+    expect(ribbon.triangles).toHaveBeenCalledOnce();
+    const positions: number[] = ribbon.triangles.mock.calls[0][0];
+    const z = positions.filter((_, index) => index % 3 === 2);
+    // Rounded end caps extend both ends equally; the one-metre path stays centered at -50 cm.
+    expect((Math.min(...z) + Math.max(...z)) / 2).toBeCloseTo(-50);
+    expect(dots.hide).toHaveBeenCalled();
   });
 
-  it("uses arc length so clustered points do not bunch Y", () => {
-    const points = [vec(0, 0, 0), vec(1, 0, 0), vec(2, 0, 0), vec(100, 0, 0)];
-    const ranged = rangePathY(points, 0, 100);
-    expect(ranged[0].y).toBeCloseTo(0);
-    expect(ranged[2].y).toBeCloseTo(2);
-    expect(ranged[3].y).toBeCloseTo(100);
+  it("keeps advisory previews dotted even while another path executes", () => {
+    const { presenter, dots, ribbon } = harness();
+    presenter.apply({ origin, executing: true, preview: true, viewportHeight: 720,
+      path: [[0, 0, 0, 0], [1, 0, 0, 0]] });
+    expect(dots.segments).toHaveBeenCalledOnce();
+    expect(dots.setViewportHeight).toHaveBeenCalledWith(720);
+    expect(ribbon.triangles).not.toHaveBeenCalled();
+    expect(ribbon.hide).toHaveBeenCalled();
+  });
+
+  it("clears both visuals when localization or a complete path is missing", () => {
+    const { presenter, dots, ribbon } = harness();
+    presenter.apply({ origin: null, path: [[0, 0, 0, 0], [1, 0, 0, 0]] });
+    presenter.apply({ origin, path: [[0, 0, 0, 0]] });
+    expect(dots.hide).toHaveBeenCalledTimes(2);
+    expect(ribbon.hide).toHaveBeenCalledTimes(2);
+    expect(dots.segments).not.toHaveBeenCalled();
+    expect(ribbon.triangles).not.toHaveBeenCalled();
+  });
+
+  it("releases both native renderers on teardown", () => {
+    const { presenter, dots, ribbon } = harness();
+    presenter.destroy();
+    expect(dots.destroy).toHaveBeenCalledOnce();
+    expect(ribbon.destroy).toHaveBeenCalledOnce();
   });
 });

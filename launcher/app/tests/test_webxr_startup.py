@@ -63,6 +63,7 @@ async def runtime(
     monkeypatch.setattr("armodule.detect_lan_ip", lambda: "10.0.0.8")
     monkeypatch.setattr(mgr, "_configure_system_if_needed", AsyncMock())
     monkeypatch.setattr(mgr, "_ensure_webxr_deps", AsyncMock())
+    monkeypatch.setattr(mgr, "_build_webxr", AsyncMock())
     monkeypatch.setattr(mgr, "_kill_port_listeners", AsyncMock(return_value=False))
     monkeypatch.setattr(mgr, "_stop_one", stop)
     try:
@@ -118,7 +119,7 @@ async def test_webxr_waits_for_readiness_and_starts_once(runtime, line: str) -> 
     await parsed(mgr, children[0], line)
     await asyncio.wait_for(task, timeout=1)
     assert spawn.await_count == 2
-    assert spawn.await_args.args[0] == "npm"
+    assert spawn.await_args.args[:3] == ("npm", "run", "preview")
     assert mgr.status.webxr_local_url == "https://localhost:5173"
     assert mgr.status.webxr_url == "https://10.0.0.8:5173"
     await parsed(mgr, children[0], line)
@@ -232,3 +233,16 @@ async def test_specs_start_does_not_wait_for_readiness(runtime) -> None:
     assert mgr.status.phase == Phase.RUNNING
     assert spawn.await_count == 1
     assert mgr.status.webxr_url is None
+
+@pytest.mark.asyncio
+async def test_production_build_failure_never_publishes_webxr(runtime, monkeypatch) -> None:
+    mgr, children, spawn = runtime
+    monkeypatch.setattr(mgr, "_build_webxr", AsyncMock(side_effect=RuntimeError("build failed")))
+    await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
+    task = mgr._webxr_start_task
+    await parsed(mgr, children[0], READY)
+    await asyncio.wait_for(task, timeout=1)
+    assert spawn.await_count == 1
+    assert mgr.status.phase == Phase.ERROR
+    assert mgr.status.webxr_url is None
+    assert mgr.status.error == "Failed to start WebXR: build failed"

@@ -1,3 +1,4 @@
+import { FingertipButtons } from "./input/FingertipButtons";
 import { ViewerPanelPlacement } from "./presentation/ViewerPanelPlacement";
 import * as THREE from "three";
 import * as xb from "xrblocks";
@@ -24,6 +25,11 @@ export class WebXRApp extends xb.Script {
   private detectedSurfaces: FloorPlane[] = [];
   private readonly placementBlocker = new THREE.Object3D();
   private uiGrab = false;
+  private touchDispatch = false;
+  private readonly touches = new FingertipButtons<xb.SelectEvent["target"]>({
+    start: (source, contact) => this.dispatchTouch(source, contact, true, false),
+    end: (source, contact, cancelled) => this.dispatchTouch(source, contact, false, cancelled),
+  });
   private readonly capture = new InteractionCapture<xb.SelectEvent["target"]>();
   private scrollHold: { view: ScrollableTextView; startY: number; offset: number; bar: boolean } | null = null;
   private panelGrip = false;
@@ -115,7 +121,7 @@ export class WebXRApp extends xb.Script {
     markRayAmbient(this.navigationFloor);
     this.add(this.navigationFloor);
     this.mainMenu = new MainMenuView({
-      canActivate: (id, target) => this.capture.activate(id, target),
+      canActivate: (id, target) => (this.touchDispatch || !this.input.controllers.some(source => source.userData.id === id && this.touches.owns(source))) && this.capture.activate(id, target),
       onSetup: () => client.ui.nextSetup(),
       onBack: () => client.ui.previousSetup(),
       onRetry: () => client.ui.retryConnection(),
@@ -276,16 +282,16 @@ export class WebXRApp extends xb.Script {
       const hit = this.interaction.hit(controller);
       return hit && this.canInteract(controller, hit.object, hit.point) ? hit.object : undefined;
     });
-    const robotHovered = actionableHits.includes(this.client.robot.collider) ||
-      [...this.interaction.beams.values()].some(beam => beam.affordance === this.client.robot.collider);
-    const markerHovered = actionableHits.some(hit => !!hit && hit !== this.client.navigation.marker.cancelObject && isDescendant(hit, this.client.navigation.marker.object));
-    this.client.robot.setHovered(robotHovered || markerHovered);
+    const hoverTargets = this.interaction.hoverTargets();
+    const robotHovered = hoverTargets.includes(this.client.robot.collider);
+    const markerHovered = hoverTargets.some(hit => hit !== this.client.navigation.marker.cancelObject && isDescendant(hit, this.client.navigation.marker.object));
+    this.client.robot.setHovered(robotHovered);
     this.sound.setActive(true);
     this.sound.setSuppressed(["Starting microphone…", "Listening", "Transcribing…", "Responding"].includes(this.client.speech.snapshot().status));
     const hovered = robotHovered ? this.client.robot.object : actionableHits.some(hit => !!hit && hit !== this.client.navigation.marker.cancelObject && isDescendant(hit, this.client.navigation.marker.object)) ? this.client.navigation.marker.object : null;
     this.sound.update(hovered ?? null, this.client.isRobotSelected(), this.client.navigation.isDragging() || !!this.worldHold,
       this.client.navigation.marker.object.position, time / 1000);
-    this.client.navigation.marker.setHovered(robotHovered || actionableHits.some(hit => !!hit && isDescendant(hit, this.client.navigation.marker.object) && hit !== this.client.navigation.marker.cancelObject));
+    this.client.navigation.marker.setHovered(markerHovered);
     const connectedSources = new Set<string>();
     for (const pointer of this.input.controllers) {
       const sourceId = this.navigationSourceId(pointer);
@@ -323,6 +329,13 @@ export class WebXRApp extends xb.Script {
       const ray = this.gestureRay(this.worldHold);
       this.client.holdNavigation(ray.origin, ray.direction, this.navigationFloorPlanes(), this.holdFromMarker, this.navigationSourceId(this.worldHold));
     }
+    this.interaction.updateCapturedEndpoints();
+    const touchTargets: THREE.Mesh[] = [];
+    this.mainMenu?.panel.traverse(object => { if (object instanceof THREE.Mesh && object.userData.touchButton) touchTargets.push(object); });
+    for (const source of this.input.controllers) {
+      const tip = source.visible && source.userData.connected === true ? this.interaction.direct.indexTip(source) : null;
+      this.touches.update(source, tip, touchTargets, (object, point) => this.canInteract(source, object, point));
+    }
   }
 
   private readonly navigationSourceIds = new WeakMap<object, string>();
@@ -352,6 +365,7 @@ export class WebXRApp extends xb.Script {
   }
 
   override onSelectStart(event: xb.SelectEvent): void {
+    if (!this.touchDispatch && this.touches.owns(event.target)) return;
     if (!this.tracking || this.session?.visibilityState !== "visible") return;
     const hit = this.interaction.hit(event.target);
     if (this.mainMenu?.isEmergencyTarget(hit?.object)) {
@@ -361,6 +375,7 @@ export class WebXRApp extends xb.Script {
     }
     if (!hit || !this.canInteract(event.target, hit.object, hit.point)) return;
     if (!this.capture.press(event.target, hit?.object)) return;
+    if (hit.object !== this.navigationFloor && hit.object !== this.placementBlocker) this.interaction.capture(event.target, hit.object, hit.point);
     this.interaction.direct.capture(event.target, hit.object,
       isDescendant(hit.object, this.client.navigation.marker.object) ? new THREE.Vector3(0, 1, 0) : undefined);
     if (this.panelHold || this.worldHold || this.uiGrab) return;
@@ -411,6 +426,8 @@ export class WebXRApp extends xb.Script {
     this.clearInput();
     if (!this.mainMenu.beginManipulation(ray.origin, ray.direction, event.target.getWorldQuaternion(new THREE.Quaternion()), true)) return;
     this.capture.press(event.target, this.interaction.hit(event.target)?.object);
+    const contact = this.interaction.hit(event.target);
+    if (contact) this.interaction.capture(event.target, contact.object, contact.point);
     this.interaction.direct.capture(event.target, this.interaction.hit(event.target)!.object);
     this.setupPlacement.pin();
     this.panelHold = event.target;
@@ -425,6 +442,7 @@ export class WebXRApp extends xb.Script {
   }
 
   override onSelectEnd(event: xb.SelectEvent): void {
+    if (!this.touchDispatch && this.touches.owns(event.target)) return;
     if (this.capture.owner && this.capture.owner !== event.target) return;
     if (this.panelGrip || (this.panelHold && this.panelHold !== event.target) ||
         (this.worldHold && this.worldHold !== event.target)) return;
@@ -437,6 +455,7 @@ export class WebXRApp extends xb.Script {
   }
 
   override dispose(): void {
+    this.touches.cancel();
     this.detachSession();
     this.sound.dispose();
     this.interaction.dispose();
@@ -449,6 +468,21 @@ export class WebXRApp extends xb.Script {
     super.dispose();
   }
 
+  private dispatchTouch(source: xb.SelectEvent["target"], contact: { object: THREE.Mesh; point: THREE.Vector3; distance: number }, start: boolean, cancelled: boolean): void {
+    this.touchDispatch = true;
+    try {
+      const event: { type: "selectstart" | "selectend"; target: xb.SelectEvent["target"] } = { type: start ? "selectstart" : "selectend", target: source };
+      if (start) this.input.defaultOnSelectStart(event);
+      else this.input.defaultOnSelectEnd(event);
+      this.input.intersectionsForController.set(source, cancelled ? [] : [contact]);
+      if (start) { xb.core.user.onSelectStart(event); this.onSelectStart(event); }
+      else {
+        xb.core.user.onSelectEnd(event);
+        if (cancelled) this.clearInput(); else this.onSelectEnd(event);
+      }
+    } finally { this.touchDispatch = false; }
+  }
+
   private panelRay(controller: xb.SelectEvent["target"]): { origin: [number, number, number]; direction: [number, number, number] } {
     return this.interaction.direct.ray(controller) ?? this.interaction.ray(controller);
   }
@@ -459,6 +493,7 @@ export class WebXRApp extends xb.Script {
 
   private clearInput(completeDictation = false): void {
     this.interaction.direct.cancel();
+    this.interaction.releaseCaptures();
     if (completeDictation && this.capture.owner) this.capture.release(this.capture.owner);
     else this.capture.cancel();
     this.worldHold = null;
@@ -471,6 +506,9 @@ export class WebXRApp extends xb.Script {
   }
 
   private suspendTracking(): void {
+    this.touches.cancel();
+    this.client.robot.setHovered(false);
+    this.client.navigation.marker.setHovered(false);
     this.sound.setActive(false);
     this.clearInput();
     this.navigationFloor.visible = false;

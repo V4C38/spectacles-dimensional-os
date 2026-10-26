@@ -128,6 +128,9 @@ export class DimOSWebXRClient {
         reportDiagnostic("connection", { phase: view.connection, error: view.lastError });
       }
       this.ui.onSessionView(view, prev, this.clock.now());
+      if (view.connection === "ready" && view.alignmentRequired && !view.hasTrackingOrigin && this.ui.setupCompleted) {
+        this.ui.requestAlignmentReview("Robot connection changed; re-localize to continue");
+      }
       if (view.connection !== "ready") {
         this.loseInput();
         this.setRobotSelected(false);

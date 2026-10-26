@@ -16,9 +16,9 @@ The landing page has a **Your headset** control. Current options: Quest 3 (`ques
 
 The Quest browser opens the WebXR page and connects to same-origin `wss://<page-host>/ar`. Vite forwards `/ar` to local ARModule. The headset never types an ARModule IP or port. A non-HTTPS page fails before XR entry. The selected HMD profile is the camera calibration.
 
-If ARModule restarts, ClientCore reconnects `/ar` every second. Vite forwards each new attempt. Localization origin is cleared on disconnect, so the wearer localizes again. If Vite itself stops, reload the page.
+If ARModule restarts, ClientCore reconnects `/ar` every second. Vite forwards each new attempt. Localization is retained across a transient disconnect only when the server advertises the same odometry reference and headset tracking remains valid. A changed or unavailable reference requires re-localization. If Vite itself stops, reload the page.
 
-The launcher starts Vite only after ARModule reports that its WebSocket server is
+The launcher builds the optimized WebXR bundle and starts its compressed HTTPS preview only after ARModule reports that its WebSocket server is
 ready. During robot startup, the WebXR page is temporarily unavailable and its
 links remain hidden in the launcher. An already-open page can reconnect once
 Vite starts; reload it if the browser does not recover automatically. This keeps
@@ -123,15 +123,25 @@ at the localized robot's floor height, so dragging does not require a room scan.
 Temporary tracking/focus loss pauses input and capture while keeping the socket and
 alignment. Reported recenter transforms preserve alignment; an unknown reset or session exit clears it.
 
-## Browser startup regression and logs
+## Integration tests and logs
 
-`npm run test:browser` starts a separate HTTPS test server on port 5175 and uses Meta's
+`npm run test:integration` starts a separate HTTPS test server on port 5175 and uses Meta's
 [IWER Quest runtime](https://meta-quest.github.io/immersive-web-emulation-runtime/getting-started.html)
 to verify rendered setup text, controller-trigger / hand-pinch activation, connection,
 camera capture, automatic localization completion and the runtime panel.
 Install Chromium once with `npx playwright install chromium`. These tests exercise Vite's
 runtime bundling, which the Node-only unit tests cannot cover. They simulate the robot and camera boundary; they do not measure hardware accuracy.
-Screenshots are written under `test-results/`.
+The harness lives in `tests/integration-tests/`. Each full run writes a new
+Git-ignored `tests/integration-tests/test-results/<run-id>/` folder with numbered
+images, `golden-path.mp4` (90–120 seconds), `controller-path.mp4` (20–30 seconds),
+assertions and diagnostics. The main video follows the successful hand-input flow;
+error and regression states are captured as images. Passing full runs replace old
+results; failures retain previous evidence. `npm run review:video` regenerates
+media for the latest run, or accepts an explicit run directory.
+
+Both clients follow the shared [integration contract](../../tools/integration-tests/README.md).
+The integration server disables hot reload so Lens Studio updates to shared
+TypeScript configuration cannot restart the browser during a recording.
 
 Browser diagnostics default to warnings and errors, deduplicated for 30 seconds.
 Routine startup, connection, tracking, panel, and interaction traces are silent.
@@ -140,3 +150,9 @@ launcher's `[WebXR browser]` development log. `?debug=1` exposes XR Blocks' `win
 scene without enabling traces; combine both parameters when needed.
 The actual `three-mesh-bvh` dependency must be installed: an empty stub can overwrite
 `Mesh.raycast` and crash the render loop before setup is drawn.
+
+## Quest capture latency
+
+Localization freezes each video frame together with its exposure timestamp and viewer pose. A persistent worker encodes full-resolution JPEGs at quality 0.85 using OffscreenCanvas; it avoids Chromium Android’s main-thread `toBlob()` idle-scheduling delay. Unsupported worker APIs use a reusable synchronous JPEG fallback. One encode may be pending, and camera stop cancels it. WebXR images older than 1.5 seconds are discarded before submission; three consecutive stale batches require an explicit retry. The server independently enforces its 2-second admission limit.
+
+Use `?diagnostics=1` for frame/encoding/batch timing. Native Quest measurements during this change were about 4.04 seconds per image on the old path and 31–34 ms with the worker after a 100 ms cold call, at unchanged 1280×960 resolution and quality. These are device observations, not desktop benchmark guarantees. The launcher serves a production build by default; `npm run dev` remains the development/HMR command.

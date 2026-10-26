@@ -1,0 +1,14 @@
+input_float ViewportHeightPx;
+output_vec3 Position;
+void main() {
+    vec2 corner = system.getSurfaceUVCoord0() * 2.0 - 1.0;
+    vec3 center = system.getSurfacePositionWorldSpace();
+    vec3 cameraPosition = (system.getMatrixView() * vec4(center, 1.0)).xyz;
+    mat4 projection = system.getMatrixProjection();
+    float height = max(1.0, ViewportHeightPx);
+    float depth = max(0.1, -cameraPosition.z);
+    float pixelCm = 2.0 * depth / max(0.0001, abs(projection[1][1]) * height);
+    float pointDiameterPx = 1.5 * clamp(1.6 * height * 0.5 / depth, 2.5, 8.0);
+    float halfDiameterCm = pointDiameterPx * pixelCm * 0.5;
+    Position = center + (system.getCameraRight() * corner.x + system.getCameraUp() * corner.y) * halfDiameterCm;
+}

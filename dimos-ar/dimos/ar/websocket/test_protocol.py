@@ -675,3 +675,11 @@ def test_hello_advertises_nonidentity_odometry_heuristic_only_when_needed() -> N
     assert "odom_scale_correction_factor" not in json.loads(encode_hello(hello))["robot"]
     corrected = replace(hello, robot=replace(hello.robot, odom_scale_correction_factor=1.25))
     assert json.loads(encode_hello(corrected))["robot"]["odom_scale_correction_factor"] == 1.25
+
+
+def test_hello_carries_optional_odometry_reference() -> None:
+    from dataclasses import replace
+
+    hello = _sample_hello()
+    payload = json.loads(encode_hello(replace(hello, odom_reference_id="room-a")))
+    assert payload["odom_reference_id"] == "room-a"

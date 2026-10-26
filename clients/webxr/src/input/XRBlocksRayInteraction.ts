@@ -88,6 +88,43 @@ export class XRBlocksRayInteraction {
   private readonly geometry = new THREE.CylinderGeometry(1, 1, 1, 6, 32, true);
   private readonly styledReticles = new Set<xb.Reticle>();
   private enabled = false;
+  private readonly anchors = new Map<Controller, { object: THREE.Object3D; local: THREE.Vector3 }>();
+  private readonly dragDirections = new Map<Controller, { direction: THREE.Vector3; at: number }>();
+
+  capture(controller: Controller, object: THREE.Object3D, point: THREE.Vector3): void {
+    object.updateWorldMatrix(true, false);
+    this.anchors.set(controller, { object, local: object.worldToLocal(point.clone()) });
+    this.dragDirections.delete(controller);
+  }
+
+  releaseCaptures(): void { this.anchors.clear(); this.dragDirections.clear(); }
+
+  /** Manipulation may move the object after the ordinary hover/beam update. */
+  updateCapturedEndpoints(): void {
+    for (const [controller] of this.anchors) {
+      const target = this.capturedPoint(controller), beam = this.beams.get(controller);
+      if (!target || !beam) continue;
+      const ray = this.ray(controller);
+      const origin = new THREE.Vector3(...ray.origin), direction = new THREE.Vector3(...ray.direction);
+      beam.tip.copy(target);
+      for (const mesh of [beam.mesh, beam.outline]) {
+        mesh.material.uniforms.uP0.value.copy(origin);
+        mesh.material.uniforms.uP1.value.copy(origin).addScaledVector(direction, origin.distanceTo(target) * 0.5);
+        mesh.material.uniforms.uP2.value.copy(target);
+      }
+      controller.reticle?.position.copy(target);
+    }
+  }
+
+  private capturedPoint(controller: Controller): THREE.Vector3 | null {
+    const anchor = this.anchors.get(controller);
+    if (!anchor) return null;
+    if (!anchor.object.parent || !rayTargetVisible(anchor.object)) {
+      this.anchors.delete(controller); this.dragDirections.delete(controller); return null;
+    }
+    anchor.object.updateWorldMatrix(true, false);
+    return anchor.object.localToWorld(anchor.local.clone());
+  }
   private policy: {
     eligible: (controller: Controller, object: THREE.Object3D, point: THREE.Vector3) => boolean;
     ignored?: (controller: Controller, object: THREE.Object3D) => boolean;
@@ -114,6 +151,20 @@ export class XRBlocksRayInteraction {
     input.raycaster.far = RAY_LENGTH_M;
   }
 
+  hoverTargets(): THREE.Object3D[] {
+    const targets: THREE.Object3D[] = [];
+    for (const controller of this.input.controllers) {
+      if (!controller.visible || controller.userData.connected !== true || this.policy.captured(controller)) continue;
+      const hit = this.hit(controller);
+      if (hit && rayTargetVisible(hit.object) && this.policy.eligible(controller, hit.object, hit.point)) targets.push(hit.object);
+      else {
+        const beam = this.beams.get(controller);
+        if (beam?.mesh.visible && beam.affordance && rayTargetVisible(beam.affordance) && this.policy.eligible(controller, beam.affordance, beam.tip)) targets.push(beam.affordance);
+      }
+    }
+    return targets;
+  }
+
   hit(controller: Controller): THREE.Intersection | undefined {
     return resolveRayHit(this.input.intersectionsForController.get(controller) ?? []);
   }
@@ -129,6 +180,14 @@ export class XRBlocksRayInteraction {
   /** The ray toward the smoothed laser tip, for drags that should not inherit hand jitter. */
   smoothedRay(controller: Controller): { origin: Vec3; direction: Vec3 } {
     const ray = this.ray(controller);
+    if (this.anchors.has(controller)) {
+      const now = performance.now();
+      const target = new THREE.Vector3(...ray.direction);
+      const previous = this.dragDirections.get(controller);
+      const direction = previous ? previous.direction.lerp(target, 1 - Math.exp(-20 * Math.max(0, now - previous.at) / 1000)).normalize() : target;
+      this.dragDirections.set(controller, { direction, at: now });
+      return { origin: ray.origin, direction: direction.toArray() as Vec3 };
+    }
     const beam = this.beams.get(controller);
     if (!beam || beam.fresh) return ray;
     const direction = beam.tip.clone().sub(new THREE.Vector3(...ray.origin));
@@ -139,6 +198,7 @@ export class XRBlocksRayInteraction {
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     if (!enabled) {
+      this.releaseCaptures();
       this.direct.reset();
       for (const [controller, beam] of this.beams) {
         this.hide(controller, beam);
@@ -158,6 +218,7 @@ export class XRBlocksRayInteraction {
         controller.userData.connected === true && controller.visible;
       let beam = this.beams.get(controller);
       if (!active) {
+        this.anchors.delete(controller); this.dragDirections.delete(controller);
         if (beam) this.hide(controller, beam);
         else if (controller.reticle) controller.reticle.visible = false;
         continue;
@@ -188,9 +249,10 @@ export class XRBlocksRayInteraction {
       const shown = actionable || nearby !== null || captured;
       beam.affordance = actionable ? hit!.object : nearby?.object ?? null;
       const distance = actionable ? hit!.distance : nearby?.distance ?? EMPTY_RAY_LENGTH_M;
-      const target = actionable ? hit!.point.clone() : origin.clone().addScaledVector(direction, distance);
+      const anchor = this.capturedPoint(controller);
+      const target = anchor ?? (actionable ? hit!.point.clone() : origin.clone().addScaledVector(direction, distance));
       const opacity = actionable || captured ? 1 : IDLE_LASER_OPACITY;
-      if (beam.fresh) {
+      if (beam.fresh || anchor) {
         beam.tip.copy(target);
         beam.opacity = opacity;
         beam.fresh = false;
@@ -202,7 +264,7 @@ export class XRBlocksRayInteraction {
       }
       beam.reveal = THREE.MathUtils.clamp(beam.reveal + (shown ? 1 : -1) * deltaS / (shown ? 0.18 : 0.24), 0, 1);
       // The beam grows out of the hand and retracts into it.
-      const extent = 1 - (1 - beam.reveal) ** 3;
+      const extent = anchor ? 1 : 1 - (1 - beam.reveal) ** 3;
       const end = origin.clone().lerp(beam.tip, extent);
       const visualStart = origin.clone().addScaledVector(direction, Math.min(0.03, Math.max(0, origin.distanceTo(end) - 0.005)));
       const bend = visualStart.clone().addScaledVector(direction, visualStart.distanceTo(end) * 0.5);
@@ -233,6 +295,7 @@ export class XRBlocksRayInteraction {
   }
 
   dispose(): void {
+    this.releaseCaptures();
     this.input.performRaycastOnScene = this.originalRaycast;
     for (const beam of this.beams.values()) {
       for (const mesh of [beam.mesh, beam.outline]) {

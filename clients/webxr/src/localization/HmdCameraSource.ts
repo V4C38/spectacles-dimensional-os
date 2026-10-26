@@ -45,6 +45,8 @@ export interface FrameCapturePort {
 
 export interface JpegEncoder {
   encode(video: HTMLVideoElement): Promise<{ jpeg: Uint8Array; width: number; height: number }>;
+  cancel?(): void;
+  dispose?(): void;
 }
 
 export function selectFrameTimestamp(metadata: VideoFrameMetadata): number {
@@ -99,6 +101,7 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
   private readonly media: CameraMediaPort;
   private readonly frames: FrameCapturePort;
   private readonly jpeg: JpegEncoder;
+  private staleCaptures = 0;
   private readonly performanceNow: () => number;
   private readonly videoFactory: () => HTMLVideoElement;
   private readonly poseBuffer: WebxrPoseSample[] = [];
@@ -144,7 +147,7 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
     if (this.poseBuffer.length > POSE_BUFFER_CAPACITY) this.poseBuffer.shift();
   }
 
-  clearTracking(): void { this.stop(); this.poseBuffer.length = 0; }
+  clearTracking(): void { this.stop(); this.poseBuffer.length = 0; this.staleCaptures = 0; }
 
   cameraOptical(): { position: Vec3; orientation: Quat } {
     const latest = this.poseBuffer[this.poseBuffer.length - 1];
@@ -200,6 +203,7 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
 
   stop(): void {
     this.operation.abort();
+    this.jpeg.cancel?.();
     this.frames.stop();
     this.waiting = null;
     this.openPromise = null;
@@ -229,6 +233,13 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
     const frameAt = this.performanceNow();
     const encoded = await bounded(frame.encoded, signal, 5000);
     reportDiagnostic("localization-camera-encoded", { frameWaitMs: frameAt - startedAt, encodeWaitMs: this.performanceNow() - frameAt, jpegBytes: encoded.jpeg.length, tsCapture: frame.ts });
+    const captureAgeS = this.clock.now() - frame.ts;
+    reportDiagnostic("localization-capture-age", { captureAgeS });
+    if (!Number.isFinite(captureAgeS) || captureAgeS < -0.25 || captureAgeS > 1.5) {
+      this.staleCaptures++;
+      throw Object.assign(new Error("Camera images are arriving too slowly. Keep the headset connected and try again."), { retryable: this.staleCaptures < 3 });
+    }
+    this.staleCaptures = 0;
     jpegDimensionsMatch(profile, encoded.width, encoded.height);
     const optical = composeOptical(frame.pose, profile);
     return {
@@ -240,7 +251,7 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
     };
   }
 
-  dispose(): void { this.clearTracking(); }
+  dispose(): void { this.clearTracking(); this.jpeg.dispose?.(); }
 
   private async openValidatedStream(profile: HmdCalibrationProfile, signal: AbortSignal): Promise<{ stream: MediaStream; profile: HmdCalibrationProfile }> {
     // Required constraints can reject before prompting. Bootstrap permission first;
@@ -408,38 +419,6 @@ export function videoFrameCallbackPort(): FrameCapturePort {
   };
 }
 
-export function canvasJpegEncoder(quality = 0.85): JpegEncoder {
-  return {
-    async encode(video) {
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        throw new Error("2D canvas is required for JPEG encode");
-      }
-      ctx.drawImage(video, 0, 0);
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob(
-          (value) => {
-            if (!value) {
-              reject(new Error("JPEG encode failed"));
-              return;
-            }
-            resolve(value);
-          },
-          "image/jpeg",
-          quality,
-        );
-      });
-      return {
-        jpeg: new Uint8Array(await blob.arrayBuffer()),
-        width: canvas.width,
-        height: canvas.height,
-      };
-    },
-  };
-}
 
 function cameraFailure(error: unknown): unknown {
   if (!(error instanceof Error)) return error;

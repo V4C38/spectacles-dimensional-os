@@ -1,0 +1,34 @@
+input_float ViewportHeightPx;
+void strokeMetrics(out vec3 a, out vec3 b, out vec3 p, out vec2 normal,
+                   out vec2 viewport, out float pixelCm, out float halfWidth) {
+    vec2 uv0 = system.getSurfaceUVCoord0();
+    vec2 uv1 = system.getSurfaceUVCoord1();
+    vec2 uv2 = system.getSurfaceUVCoord2();
+    vec2 uv3 = system.getSurfaceUVCoord3();
+    vec2 uv4 = system.getSurfaceUVCoord4();
+    vec2 uv5 = system.getSurfaceUVCoord5();
+    mat4 viewWorld = system.getMatrixViewWorld();
+    mat4 projection = system.getMatrixProjection();
+    a = (viewWorld * vec4(uv4.y, uv5.x, uv5.y, 1.0)).xyz;
+    b = (viewWorld * vec4(uv1.x, uv1.y, uv2.x, 1.0)).xyz;
+    viewport = vec2(max(1.0, ViewportHeightPx) * abs(projection[1][1] / projection[0][0]), max(1.0, ViewportHeightPx));
+    vec4 ca = projection * vec4(a, 1.0);
+    vec4 cb = projection * vec4(b, 1.0);
+    vec2 direction = (cb.xy / max(abs(cb.w), 0.01) - ca.xy / max(abs(ca.w), 0.01)) * viewport;
+    normal = vec2(-direction.y, direction.x) / max(length(direction), 0.0001);
+    p = mix(a, b, uv0.y);
+    float factor = 2.0 / max(0.0001, abs(projection[1][1]) * viewport.y);
+    float pixelA = factor * mix(1.0, max(0.1, -a.z), abs(projection[2][3]));
+    float pixelB = factor * mix(1.0, max(0.1, -b.z), abs(projection[2][3]));
+    pixelCm = mix(pixelA, pixelB, uv0.y);
+    halfWidth = mix(max(uv3.x, 2.0 * pixelA), max(uv3.x, 2.0 * pixelB), uv0.y) * 0.5;
+}
+output_vec3 Position;
+void main() {
+    vec3 a; vec3 b; vec3 p; vec2 normal; vec2 viewport; float pixelCm; float halfWidth;
+    strokeMetrics(a, b, p, normal, viewport, pixelCm, halfWidth);
+    vec4 clip = system.getMatrixProjection() * vec4(p, 1.0);
+    clip.xy += normal * system.getSurfaceUVCoord0().x * (halfWidth / pixelCm + 1.0) * 2.0 / viewport * clip.w;
+    vec4 world = system.getMatrixProjectionViewInverse() * clip;
+    Position = world.xyz / world.w;
+}

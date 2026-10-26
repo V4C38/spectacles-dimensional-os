@@ -289,6 +289,7 @@ class WebSocketServer:
             navigation_inputs=body.navigation_inputs,
             nav_goal_preview=body.nav_goal_preview,
             server_info=body.server_info,
+            odom_reference_id=body.odom_reference_id,
         )
         await websocket.send(encode_hello(hello))
 

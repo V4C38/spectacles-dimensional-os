@@ -600,11 +600,30 @@ class ProcessManager:
         if await proc.wait() != 0:
             raise RuntimeError("npm ci failed in clients/webxr")
 
+    async def _build_webxr(self, env: dict[str, str]) -> None:
+        self._append_log("Building optimized WebXR client…")
+        proc = await asyncio.create_subprocess_exec(
+            "npm", "run", "build",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(self._webxr_dir()), env=env, start_new_session=True,
+        )
+        try:
+            assert proc.stdout is not None
+            while raw := await proc.stdout.readline():
+                self._append_log(raw.decode("utf-8", errors="replace").rstrip("\n"))
+            if await proc.wait() != 0:
+                raise RuntimeError("WebXR production build failed; see launcher logs")
+        finally:
+            if proc.returncode is None:
+                await self._stop_one(proc, "WebXR build")
+
     async def _spawn_webxr(self, env: dict[str, str]) -> None:
+        await self._build_webxr(env)
         argv = [
             "npm",
             "run",
-            "dev",
+            "preview",
             "--",
             "--host",
             "--port",
@@ -709,7 +728,7 @@ class ProcessManager:
                 return
             try:
                 await self._spawn_webxr(env)
-            except OSError as exc:
+            except (OSError, RuntimeError) as exc:
                 error = f"Failed to start WebXR: {exc}"
                 self._append_log(error)
                 # Cleanup must not cancel the task performing it.

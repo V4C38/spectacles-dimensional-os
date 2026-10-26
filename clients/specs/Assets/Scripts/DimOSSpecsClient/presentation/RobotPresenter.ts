@@ -1,11 +1,11 @@
+import { RobotWorldRenderer } from "./RobotWorldRenderer";
 import { odomToClientTrackingPose, rotateVecByQuat } from "../../DimOSARClient/localization/clientTrackingTransforms";
 import type { ARModuleSessionState } from "../../DimOSARClient/websocket/arModuleSession";
 import type { Quat, RobotDescription, Vec3 } from "../../DimOSARClient/websocket/protocolTypes";
-import { NO_ROBOT_CONNECTED_LABEL } from "../../DimOSARClient/websocket/sessionLinkStatus";
-import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton";
+import { sessionLinkStatus } from "../../DimOSARClient/websocket/sessionLinkStatus";
 import { clientTrackingToSpecsPoint, clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
 import { RuntimePoseSmoothing } from "../utilities/RuntimePoseSmoothing";
-import { yawRotationFromPlanarDirection, yawRotationFromWorldRotation } from "../utilities/SpecsUtilities";
+import { yawRotationFromPlanarDirection } from "../utilities/SpecsUtilities";
 import {
   AppState,
   getRobotActivityState,
@@ -13,7 +13,7 @@ import {
   type RobotActivityVoice,
   type RobotMarkerApplyInput,
 } from "./AppState";
-import { COLOR_ERROR, COLOR_WHITE, findChildRecursive, findText, setButtonStyle, SnapOS2Styles } from "./UIKit";
+import { findChildRecursive } from "./UIKit";
 
 export interface RobotMarkerApplyContext {
   mainUi: SceneObject;
@@ -57,17 +57,29 @@ export class RobotPresenter extends BaseScriptComponent {
   @input
   odometryRoot: SceneObject;
 
+  private worldVisuals: RobotWorldRenderer | null = null;
+  private onToggle: (() => void) | null = null;
+  private eye: SceneObject | null = null;
+  private canToggle: ((sourceId: string) => boolean) | null = null;
+  private viewportHeight = 1024;
+  bindSelection(onToggle: () => void, camera: SceneObject, canToggle?: (sourceId: string) => boolean): void {
+    this.onToggle = onToggle; this.eye = camera; this.canToggle = canToggle ?? null;
+  }
+  setSelected(selected: boolean): void { this.worldVisuals?.setSelected(selected); }
+  setHovered(hovered: boolean): void { this.worldVisuals?.setHovered(hovered); }
+  ownsTarget(object: SceneObject): boolean { return this.worldVisuals?.ownsTarget(object) === true; }
+  setNavigationFloor(visible: boolean, opacity: number): void { this.worldVisuals?.setFloorVisible(visible, opacity); }
+  setViewportHeight(height: number): void { this.viewportHeight = height; }
+  floorCircleBounds() {
+    const p = this.floorPose()?.position, world = this.worldPosition();
+    return p && world ? { center: [world.x, p.y + 0.1, world.z] as [number, number, number], radius: 6 } : undefined;
+  }
+
   private readonly poseSmoothing = new RuntimePoseSmoothing();
   private robot: RobotDescription | null = null;
   private presented = false;
   private motionRoot: SceneObject | null = null;
-  private titleText: Text | null = null;
-  private stateInfoText: Text | null = null;
-  private debugInfoText: Text | null = null;
-  private buttonVfxBusy: SceneObject | null = null;
-  private buttonVfxIdle: SceneObject | null = null;
   private debugViewRoot: SceneObject | null = null;
-  private toggleCollider: ColliderComponent | null = null;
   private unlocalizedAnchorCommitted = false;
   private unlocalizedAnchorPending = false;
   private pendingUnlocalizedCtx: RobotMarkerApplyContext | null = null;
@@ -88,6 +100,10 @@ export class RobotPresenter extends BaseScriptComponent {
       case "hidden":
         this.applyHidden();
         return;
+      case "localizedPending":
+        this.poseSmoothing.reset();
+        this.worldVisuals?.setPickingEnabled(false);
+        return;
       case "unlocalizedFallbackPosition":
         this.applyUnlocalizedBelow(input, ctx);
         return;
@@ -107,33 +123,30 @@ export class RobotPresenter extends BaseScriptComponent {
       this.motionRoot.enabled = false;
     }
     this.applyDebugViewVisibility(null);
-    this.applyButtonVfx(false);
+    this.worldVisuals?.reset();
   }
 
   refreshLabels(
     appState: AppState,
     view: ARModuleSessionState,
-    voice: RobotActivityVoice,
+    voice: RobotActivityVoice & { status?: string },
   ): void {
-    if (!this.titleText || !this.stateInfoText) {
-      return;
-    }
     const title = robotTitleText(view);
-    this.titleText.text = title;
-    this.titleText.textFill.color = title === NO_ROBOT_CONNECTED_LABEL ? COLOR_ERROR : COLOR_WHITE;
-    const state = getRobotActivityState(view, voice);
-    this.stateInfoText.text = state;
-    this.stateInfoText.textFill.color = COLOR_WHITE;
-    this.applyButtonVfx(state !== "Idle");
+    const state = voice.status && voice.status !== "Off" ? voice.status : getRobotActivityState(view, voice);
+    this.worldVisuals?.labels(title, state, appState.debugModeEnabled ? view.pose?.position.map(v => v.toFixed(2)).join(", ") ?? "" : "", sessionLinkStatus(view).color);
     this.applyDebugViewVisibility(appState);
-    if (this.debugInfoText && view.pose) {
-      this.debugInfoText.text = view.pose.position
-        .map((value) => value.toFixed(2))
-        .join(", ");
-    }
   }
 
   tick(dt: number): void {
+    if (this.presented && this.motionRoot && !this.worldVisuals) {
+      this.worldVisuals = new RobotWorldRenderer(this.motionRoot, sourceId => {
+        if (this.canToggle?.(sourceId) !== false) this.onToggle?.();
+      });
+      this.worldVisuals.setRobot(this.robot);
+      const toggle = findChildRecursive(this.motionRoot, "RobotToggleButton");
+      if (toggle) toggle.enabled = false;
+    }
+    this.worldVisuals?.tick(dt, this.floorPose(), this.eye?.getTransform().getWorldPosition() ?? null, this.viewportHeight);
     if (this.unlocalizedAnchorCommitted || !this.presented || !this.motionRoot || !this.poseSmoothing.isTracking) {
       return;
     }
@@ -203,7 +216,7 @@ export class RobotPresenter extends BaseScriptComponent {
       this.motionRoot.enabled = false;
     }
     this.applyDebugViewVisibility(null);
-    this.applyButtonVfx(false);
+    this.worldVisuals?.reset();
   }
 
   private applyUnlocalizedBelow(
@@ -214,6 +227,7 @@ export class RobotPresenter extends BaseScriptComponent {
       return;
     }
     this.robot = input.robot;
+    this.worldVisuals?.setRobot(input.robot);
     this.pendingUnlocalizedCtx = ctx;
     if (this.unlocalizedAnchorCommitted) {
       this.showUnlocalizedAnchor();
@@ -276,7 +290,7 @@ export class RobotPresenter extends BaseScriptComponent {
       odomToClientTrackingPose(input.pose, input.origin),
     );
     const position = toVec3(specs.position);
-    const rotation = yawRotationFromWorldRotation(toQuat(specs.orientation));
+    const rotation = toQuat(specs.orientation);
     const snap = !this.presented;
     this.poseSmoothing.setTarget({ position, rotation }, snap);
     if (snap) {
@@ -284,6 +298,7 @@ export class RobotPresenter extends BaseScriptComponent {
       this.motionRoot.getTransform().setWorldRotation(rotation);
     }
     this.robot = input.robot;
+    this.worldVisuals?.setRobot(input.robot);
     this.presented = true;
     this.getSceneObject().enabled = true;
     this.motionRoot.enabled = true;
@@ -297,7 +312,7 @@ export class RobotPresenter extends BaseScriptComponent {
       this.motionRoot.enabled = false;
     }
     this.applyDebugViewVisibility(null);
-    this.applyButtonVfx(false);
+    this.worldVisuals?.reset();
   }
 
   private configureSceneRefs(): void {
@@ -307,55 +322,11 @@ export class RobotPresenter extends BaseScriptComponent {
       this.motionRoot = root;
     }
     const toggle = findChildRecursive(this.motionRoot, "RobotToggleButton");
-    const labelRoot = toggle ?? this.motionRoot;
-    this.titleText = findText(labelRoot, "RobotTitleText");
-    this.stateInfoText = findText(labelRoot, "StateInfoText");
-    this.debugInfoText = findText(labelRoot, "DebugInfoText");
-    if (toggle) {
-      this.buttonVfxBusy = findChildRecursive(toggle, "ButtonVFX_Busy");
-      this.buttonVfxIdle = findChildRecursive(toggle, "ButtonVFX_Idle");
-      if (!this.buttonVfxBusy) {
-        throw new Error("ButtonVFX_Busy is required");
-      }
-      if (!this.buttonVfxIdle) {
-        throw new Error("ButtonVFX_Idle is required");
-      }
-      this.configureRobotToggleButton(toggle);
-      this.toggleCollider = toggle.getComponent("Physics.ColliderComponent") as ColliderComponent;
-      if (this.toggleCollider) {
-        this.toggleCollider.enabled = false;
-      }
-    } else {
-      this.buttonVfxBusy = findChildRecursive(this.motionRoot, "ButtonVFX_Busy");
-      this.buttonVfxIdle = findChildRecursive(this.motionRoot, "ButtonVFX_Idle");
-      if (!this.buttonVfxBusy) {
-        throw new Error("ButtonVFX_Busy is required");
-      }
-      if (!this.buttonVfxIdle) {
-        throw new Error("ButtonVFX_Idle is required");
-      }
-    }
+    if (toggle) toggle.enabled = false;
     this.debugViewRoot = findChildRecursive(this.motionRoot, "RobotDebugView");
     if (this.debugViewRoot) {
       this.debugViewRoot.enabled = false;
     }
-    this.applyButtonVfx(false);
-  }
-
-  private configureRobotToggleButton(toggleRoot: SceneObject): void {
-    const button = toggleRoot.getComponent(RoundButton.getTypeName()) as RoundButton;
-    if (!button) {
-      return;
-    }
-    const toggleBtn = button as any;
-    toggleBtn._toggleable = false;
-    toggleBtn._defaultToOn = false;
-    if ("isOn" in toggleBtn) {
-      toggleBtn.isOn = false;
-    } else if ("_isOn" in toggleBtn) {
-      toggleBtn._isOn = false;
-    }
-    setButtonStyle(button, SnapOS2Styles.Primary);
   }
 
   private applyDebugViewVisibility(appState: AppState | null): void {
@@ -365,14 +336,7 @@ export class RobotPresenter extends BaseScriptComponent {
     this.debugViewRoot.enabled = this.presented && (appState?.debugModeEnabled ?? false);
   }
 
-  private applyButtonVfx(busy: boolean): void {
-    if (this.buttonVfxBusy) {
-      this.buttonVfxBusy.enabled = busy && this.presented;
-    }
-    if (this.buttonVfxIdle) {
-      this.buttonVfxIdle.enabled = !busy && this.presented;
-    }
-  }
+
 }
 
 function toVec3(value: Vec3): vec3 {

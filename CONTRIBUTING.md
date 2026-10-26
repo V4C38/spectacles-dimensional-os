@@ -81,8 +81,56 @@ Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-
 `session.view()` and `episode.view()`. They call existing ClientCore commands
 (`requestNavGoal`, `requestLidarSettings`, `requestUserMessage`,
 `session.requestEstop`, `session.requestState`, `episode.requestStart`).
-`AppState.operatingMode` is the Specs-host Agent/Manual gate. STT and TTS stay
-on the host; the wire carries text and typed agent facts only.
+Specs setup retains PIN/IP connection entry followed by camera localization.
+Restart is queued until the next update, after native button dispatch, and invalidates
+panel scale animations before reopening Connect. Pending connection timers use
+`DelayedCallbackEvent.cancel()`; `reset(0)` schedules a callback instead of cancelling it.
+The setup and runtime panels use WebXR’s calibrated widths and control sizes:
+setup width 38.88 cm and runtime width 31.104 cm. Specs-only `PanelLayout`
+profiles compact each page vertically, up to heights 32.832 cm and 26.2656 cm
+respectively. `PanelHeightController` eases height changes over 280 ms around a
+fixed top edge; native Frame still owns grabbing and following. Its content offset
+keeps headers and mode/step bars fixed, and its follow width stays in world centimetres.
+Setup uses Frame’s own follow control, scaled with its icon and collider to the
+normal icon-button size after every native frame resize. `ControlPanelPresentation` shares panel/control/message
+metrics, segmented spacing, copy, and setup/runtime scale. Specs converts design
+metres to Lens centimetres, subtracts SUK Frame’s border/padding from `innerSize`,
+and converts WebXR font em heights using SUK’s documented Lens 5.15 system-font
+metrics: line height is `size / 32` cm; em height is `0.69492703` times that.
+Native text has fitting disabled and uses the corresponding line-spacing
+conversion. Bounding-box line cells alone are not glyph-size measurements. Native review asserts the rendered outer bounds and
+physical scale. SUK CapsuleButton supplies the pill controls; native Frame,
+RoundedRectangle, ScrollWindow, Slider and TextInputField supply styling,
+scrolling, keyboard and hand interaction. Fields reuse SUK’s neutral gradients
+and borders. Selected controls use one non-toggleable CapsuleButton: model state
+selects Primary (filled yellow, white label) or Secondary through the public `button.visual`
+setter. Replacing only the visual preserves the collider, interactable and callbacks;
+resetting Element initialization would recreate interaction machinery. Native SUK
+still owns hover, press and inactive feedback. Setup retains PIN/IP entry before localization; this extra
+entry row is the intentional connection-page difference. Resizing is disabled.
+Either palm summons the runtime panel at the hand; SUK Frame owns ongoing follow,
+border grabbing, movement and billboarding. Grabbing it or losing tracking pins it.
+Holding the message field edits a speech draft; release preserves it and only
+Send submits it. STT/TTS remain host adapters. Setup opens 90 cm ahead, then
+uses Frame’s native SmoothFollow and pins on grab. Setup opens 5 cm above
+the viewer’s forward line. The setup status card is unboxed; guidance and
+standalone Specs labels are centered except the left-aligned dimOS AR title.
+Runtime palm menus are suppressed during
+the wizard so a held palm cannot cover a restarted setup. Back remains unavailable
+until Connect has completed, including when restarting from Settings. Skipping
+or completing setup returns to the main runtime page.
+The host supplies the calibrated world width to `smoothFollow.resize()` so its
+distance clamp uses the visible width rather than the unscaled design size.
+There is no custom follow loop, grab implementation, or window bar.
+
+World robot labels use the same Inter regular/semibold fonts and shared
+20/28/13 mm em sizes, top anchors, status dot and spacing as WebXR. The native
+Inter em/line-cell ratio is calibrated separately from the system UI font.
+Hovering the eligible robot or navigation marker highlights both affordances;
+Cancel is excluded and draft ownership is respected. Selection and navigation
+Cancel dispatch on press. Setup and navigation outcomes share WebXR’s traced
+ring/check/cross geometry. Authored setup/runtime controls and obsolete marker
+VFX/text are removed through Lens Studio MCP; Frame/odometry/debug hosts remain.
 
 ## WebXR architecture
 
@@ -129,7 +177,7 @@ ClientCore owns the single robot’s selection (`RobotSelection`), agent draft a
 dictation lifecycle (`AgentDraftSession`), navigation interaction intent
 (`NavigationInteraction`), and preview request lifecycle (`NavigationPreviewCoordinator`).
 `ARModuleSession` remains the owner of authoritative wire facts. There is no robot
-registry or multi-connection model. Specs migration to these owners is a separate task.
+registry or multi-connection model. Both hosts adapt input and native rendering to these owners.
 
 WebXR converts detected surfaces and poses at its coordinate boundary, then renders
 shared snapshots. Browser recognition/synthesis and the calibrated camera remain host
@@ -291,7 +339,7 @@ Direct input is sampled from thumb/index joints or controller grip space. Palm m
 use handedness-correct metacarpals and open fingers, and only their summoning source
 can follow/dismiss them. Grabbing or source loss pins the panel.
 
-Setup and alignment-review panels open centered 0.9 m ahead, then follow head position and
+Setup and localization-review panels open centered 0.9 m ahead, then follow head position and
 yaw/pitch smoothly with no roll. A manual grab pins the panel until its next opening. Runtime UI starts 20% smaller
 than setup and follows 18 cm forward and 12 cm above a controller, or 20 cm above a summoning
 hand. Whole-panel appearance scales from 85% to full size independently of placement and
@@ -402,3 +450,50 @@ provisional timing limits and the recorded-data rejection of the proposed voxel-
 packet translation. The fixed 1.25 XY heuristic now covers poses, paths and LiDAR
 at the AR boundary; native sensor filtering/planning stays unchanged, and Core
 undoes the advertised factor only when calculating native sensor distances.
+
+
+## Native Specs visual review
+
+Use [the CLAD review command](clients/specs/tools/README.md) on a Mac with the
+Spectacles ’24-compatible Lens Studio 5.15 CLAD backport. The review creates a
+disposable project, attaches its harness through MCP, compiles TypeScript and
+records actual Preview screenshots and continuous normal-speed video. It runs
+the production session/state owners, SUK controls, world geometry and shaders;
+fixtures replace hardware ports. Source `.scene` files are never edited by hand.
+
+The default local workflow needs no self-hosted CI runner. Hosted CI continues
+portable Specs tests and the WebXR browser suite; WebXR screenshots, raw video
+and assembled review clips are uploaded as `webxr-visual-review`. Both hosts use
+[`tools/visual-review.mjs`](tools/visual-review.mjs) for video assembly. Native
+Specs artifacts are collected locally and can be attached to a PR after review.
+The Python review tooling tests run in hosted CI without Lens Studio.
+
+World presentation metrics and route geometry live in ClientCore/presentation.
+Host adapters convert metres and coordinate bases before drawing. Specs uses
+native shader graphs generated from readable `.customCode` sources for the pose
+indicator, adaptive box/route strokes and round LiDAR sprites.
+The native custom shaders consume display RGB directly; shared palette colors
+must not be linearized before upload. Three.js handles its own color conversion.
+Its local default is 1500 LiDAR points; the Sensors page permits 250–4000. Server range and local
+point limit retain their separate meanings.
+
+Hardware sign-off covers real hand targeting/pinch/grab behavior, camera capture
+and calibration, native ASR/TTS, WebSocket reconnects, tracking resets/resume,
+robot navigation and stop handling, stereo appearance and headset performance.
+Desktop fixtures cannot establish those results.
+
+## Cross-client integration verification
+
+The shared [integration catalog and media contract](tools/integration-tests/README.md)
+defines comparable client paths, deterministic fixtures and explicit platform
+exceptions. WebXR's main review uses hands; controller-specific behavior has a
+separate short video. Specs uses native SIK interaction events and Lens Studio
+5.15 CLAD without converting the production project. Hardware boundaries are
+simulated; production state owners and renderers remain in use.
+
+Keep reusable harnesses in `clients/specs/Tests/integration-tests/` and
+`clients/webxr/tests/integration-tests/`. Generated results go under each
+harness's ignored `test-results/<run-id>/` folder. Every applicable case needs
+a real assertion and a numbered image. The golden-path video runs at normal
+speed and includes complete animations; failures belong in regression images.
+Older results may be removed only after a fresh complete run passes.

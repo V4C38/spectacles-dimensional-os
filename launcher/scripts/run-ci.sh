@@ -89,9 +89,11 @@ run_launcher_job() {
 
 run_client_specs_job() {
   echo "==> client-specs-tests job (matches .github/workflows/ci.yml)"
+  git -C "${ROOT}" lfs pull --include="clients/specs/Assets/Materials/Shaders/*.ss_graph" --exclude=""
   cd "${LENS_TESTS}"
   npm ci
   npm test
+  python3 -m unittest discover -s "${LENS_TESTS}/integration-tests" -p 'test_*.py'
 }
 
 run_client_webxr_job() {
@@ -101,7 +103,8 @@ run_client_webxr_job() {
   npm test
   npm run build
   npx playwright install chromium
-  npm run test:browser
+  node --test "${ROOT}/tools/integration-tests/integration.test.mjs" "${ROOT}/tools/visual-review.test.mjs"
+  npm run test:integration
 }
 
 run_dimos_ar_job

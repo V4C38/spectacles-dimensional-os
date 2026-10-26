@@ -1,0 +1,9 @@
+output_vec4 Result;
+void main() {
+    vec3 normal = normalize(system.getSurfaceNormalCameraSpace());
+    vec3 view = normalize(-system.getSurfacePositionCameraSpace());
+    float rim = pow(1.0 - abs(dot(normal, view)), 2.0);
+    vec4 tint = system.getSurfaceColor();
+    vec3 center = vec3(0.45078578) * tint.rgb;
+    Result = vec4(mix(center, vec3(1.0), rim), tint.a);
+}

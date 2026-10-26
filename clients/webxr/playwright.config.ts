@@ -1,9 +1,11 @@
 import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
-  testDir: "./browser-tests",
+  testDir: "./tests/integration-tests",
   workers: 1,
+  outputDir: process.env.INTEGRATION_RESULTS_DIR ? `${process.env.INTEGRATION_RESULTS_DIR}/diagnostics/playwright` : "tests/integration-tests/test-results/playwright",
   timeout: 30000,
+  expect: { timeout: 15000 },
   use: {
     baseURL: "https://localhost:5175",
     ignoreHTTPSErrors: true,

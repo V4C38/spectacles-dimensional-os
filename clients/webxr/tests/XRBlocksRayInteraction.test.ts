@@ -227,3 +227,49 @@ it("activates a nearby button once through SDK pinch/trigger events while the la
   f.input.defaultOnSelectEnd({ type: "selectend", target: f.controller }); f.user.onSelectEnd({ target: f.controller });
   expect(activate).toHaveBeenCalledOnce(); interaction.dispose();
 });
+
+it("keeps the captured laser endpoint on a moving local contact despite ray jitter", () => {
+  const f = fixture();
+  const interaction = new XRBlocksRayInteraction(f.input);
+  registerRayTarget(f.button.mesh!);
+  f.button.position.z = -1;
+  f.controller.inputSource = { targetRayMode: "tracked-pointer" };
+  f.controller.userData.connected = true;
+  interaction.setEnabled(true);
+  f.scene.updateMatrixWorld(true); f.input.updateController(f.controller); interaction.update();
+  const hit = interaction.hit(f.controller)!;
+  const local = hit.object.worldToLocal(hit.point.clone());
+  interaction.capture(f.controller, hit.object, hit.point);
+  f.button.position.set(0.4, 0.2, -1.3);
+  f.button.rotation.y = 0.3;
+  f.controller.rotation.y = -0.4;
+  f.scene.updateMatrixWorld(true); f.input.updateController(f.controller);
+  interaction.update(); interaction.updateCapturedEndpoints();
+  const expected = hit.object.localToWorld(local);
+  const beam = interaction.beams.get(f.controller)!;
+  expect(beam.tip.distanceTo(expected)).toBeLessThan(1e-6);
+  expect(beam.mesh.material.uniforms.uP2.value.distanceTo(expected)).toBeLessThan(1e-6);
+  // Input smoothing is independent of the attached visual tip.
+  expect(interaction.smoothedRay(f.controller).direction[0]).toBeGreaterThan(0.1);
+  interaction.releaseCaptures();
+  hit.object.visible = false;
+  f.input.updateController(f.controller); interaction.update();
+  expect(beam.tip.distanceTo(expected)).toBeGreaterThan(0.001);
+  interaction.dispose();
+});
+
+it("does not retain robot hover from an inactive or captured source", () => {
+  const f = fixture();
+  const interaction = new XRBlocksRayInteraction(f.input);
+  registerRayTarget(f.button.mesh!);
+  f.controller.inputSource = { targetRayMode: "tracked-pointer" };
+  f.controller.userData.connected = true; interaction.setEnabled(true);
+  f.input.updateController(f.controller); interaction.update();
+  expect(interaction.hoverTargets()).toContain(f.button.mesh);
+  let captured = true;
+  interaction.setPolicy({ eligible: () => true, captured: () => captured, unobstructed: () => true });
+  expect(interaction.hoverTargets()).toEqual([]);
+  captured = false; f.controller.visible = false;
+  expect(interaction.hoverTargets()).toEqual([]);
+  interaction.dispose();
+});

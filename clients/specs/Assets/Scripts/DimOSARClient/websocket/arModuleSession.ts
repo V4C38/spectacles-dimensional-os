@@ -1,4 +1,4 @@
-import type { ClientTrackingOriginStore } from "../localization/clientTrackingOrigin";
+import type { ClientTrackingOrigin, ClientTrackingOriginStore } from "../localization/clientTrackingOrigin";
 import { LocalizationSubmission } from "../localization/localizationSubmission";
 import {
   TextFramer,
@@ -41,6 +41,8 @@ export interface ARModuleSessionConfig {
 export interface ARModuleSessionState {
   connection: ConnectionPhase;
   hasTrackingOrigin: boolean;
+  hasRetainedTrackingOrigin?: boolean;
+  alignmentRequired?: boolean;
   hello: Hello | null;
   state: State | null;
   pose: Pose | null;
@@ -89,6 +91,8 @@ export class ARModuleSession {
   private reconnectAt: number | null = null;
   private pendingHelloTs: number | null = null;
   private closing = false;
+  private alignmentRequired = false;
+  private retainedOrigin: { reference: string; origin: ClientTrackingOrigin } | null = null;
   private readonly localizationSubmission = new LocalizationSubmission();
 
   constructor(deps: ARModuleSessionDependencies) {
@@ -110,6 +114,8 @@ export class ARModuleSession {
   }
 
   stop(): void {
+    this.retainedOrigin = null;
+    this.alignmentRequired = false;
     this.wantConnected = false;
     this.reconnectAt = null;
     this.helloDeadline = null;
@@ -253,6 +259,8 @@ export class ARModuleSession {
     return {
       connection: this.phase,
       hasTrackingOrigin: this.clientTrackingOriginStore.hasTrackingOrigin,
+      ...(this.retainedOrigin ? { hasRetainedTrackingOrigin: true } : {}),
+      ...(this.alignmentRequired ? { alignmentRequired: true } : {}),
       hello: this.hello,
       state: this.state,
       pose: this.pose,
@@ -296,6 +304,11 @@ export class ARModuleSession {
         this.fail("hello.time_sync.ts_client must echo hello_request.ts_client");
         return;
       }
+      if (this.retainedOrigin && message.odom_reference_id === this.retainedOrigin.reference) {
+        this.clientTrackingOriginStore.restore(this.retainedOrigin.origin);
+        this.alignmentRequired = false;
+      }
+      this.retainedOrigin = null;
       this.hello = message;
       this.pendingHelloTs = null;
       this.helloDeadline = null;
@@ -328,6 +341,7 @@ export class ARModuleSession {
         if (!this.localizationSubmission.accept(message.ts, this.clock.now())) return;
         try {
           this.clientTrackingOriginStore.setFromLocalizationResult(message);
+          this.alignmentRequired = false;
         } catch (error) {
           this.fail(errorMessage(error));
           return;
@@ -367,6 +381,9 @@ export class ARModuleSession {
     if (this.phase === "disconnected" || this.phase === "failed") {
       return;
     }
+    const origin = this.clientTrackingOriginStore.T_odom_client;
+    if (origin) this.alignmentRequired = true;
+    if (origin && this.hello?.odom_reference_id) this.retainedOrigin = { reference: this.hello.odom_reference_id, origin };
     this.lastError = reason;
     this.helloDeadline = null;
     this.pendingHelloTs = null;

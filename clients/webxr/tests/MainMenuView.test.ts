@@ -401,8 +401,8 @@ it("starts a panel grab from the accepted input ray while the visual laser is st
   const bar = new THREE.Object3D(), raw = { origin: [0, 0, 0], direction: [0, 0, -1] };
   const begin = vi.fn(() => true), pin = vi.fn(), detach = vi.fn();
   Object.assign(app, { tracking: true, session: { visibilityState: "visible" }, navigationSourceIds: new WeakMap(), nextNavigationSource: 0,
-    capture: { press: () => true }, setupPlacement: { pin }, menuAnchor: { detach },
-    interaction: { hit: () => ({ object: bar, point: new THREE.Vector3(0, 0, -1) }), direct: { capture() {}, ray: () => null }, ray: () => raw, smoothedRay: () => ({ origin: [0, 0, 0], direction: [1, 0, 0] }) },
+    touches: { owns: () => false }, capture: { press: () => true }, setupPlacement: { pin }, menuAnchor: { detach },
+    interaction: { capture: vi.fn(), hit: () => ({ object: bar, point: new THREE.Vector3(0, 0, -1) }), direct: { capture() {}, ray: () => null }, ray: () => raw, smoothedRay: () => ({ origin: [0, 0, 0], direction: [1, 0, 0] }) },
     client: { navigation: { clearAim() {}, marker: { object: new THREE.Group() } }, joystick: { loseInput() {} } },
     mainMenu: { isEmergencyTarget: () => false, ownsTarget: () => true, canInteract: () => true, scrollView: () => null, isSpeechTarget: () => false, isControl: () => false, beginManipulation: begin } });
   app.onSelectStart({ target });

@@ -1,0 +1,2 @@
+output_vec4 Result;
+void main() { Result = system.getSurfaceColor(); }

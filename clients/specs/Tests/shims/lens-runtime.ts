@@ -1,4 +1,7 @@
 export class vec3 {
+  static up(): vec3 { return new vec3(0, 1, 0); }
+  static right(): vec3 { return new vec3(1, 0, 0); }
+  static forward(): vec3 { return new vec3(0, 0, 1); }
   static one(): vec3 {
     return new vec3(1, 1, 1);
   }
@@ -28,6 +31,13 @@ export class vec3 {
       a.z + (b.z - a.z) * t,
     );
   }
+
+  get length(): number { return Math.hypot(this.x, this.y, this.z); }
+
+  dot(other: vec3): number { return this.x * other.x + this.y * other.y + this.z * other.z; }
+  sub(other: vec3): vec3 { return new vec3(this.x - other.x, this.y - other.y, this.z - other.z); }
+  uniformScale(value: number): vec3 { return new vec3(this.x * value, this.y * value, this.z * value); }
+  distance(other: vec3): number { return this.sub(other).length; }
 
   add(other: vec3): vec3 {
     return new vec3(this.x + other.x, this.y + other.y, this.z + other.z);

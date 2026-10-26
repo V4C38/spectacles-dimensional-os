@@ -8,7 +8,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:browser": "playwright test",
+    "test:integration": "node tools/run-integration.mjs",
     "review:video": "node tools/make-visual-review.mjs"
   },
   "dependencies": {

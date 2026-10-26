@@ -997,3 +997,15 @@ it("invalidates pending result acceptance when setup pauses", async () => {
   expect(f.originStore.hasTrackingOrigin).toBe(false);
   expect(f.controller.view().phase).toBe("idle");
 });
+
+
+it("honors a host's explicit exhausted retry budget without changing ordinary camera retries", async () => {
+  const f = makeController();
+  f.capture.failWith = Object.assign(new Error("Camera images arriving too slowly"), { retryable: false });
+  deliverRequest(f.session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
+  f.controller.tick(); await settleCapture();
+  expect(f.controller.view().phase).toBe("failed");
+  const calls = f.capture.calls;
+  f.clock.nowS += 60; f.controller.tick(); f.controller.tick();
+  expect(f.capture.calls).toBe(calls);
+});

@@ -1,3 +1,4 @@
+import { NAVIGATION_OUTCOME_STYLE, strokeJoints2D, STROKE_JOIN_SEGMENTS } from "@dimos-ar-client/presentation/WorldVisualStyle";
 import * as THREE from "three";
 import { AdaptiveDashedLineRenderer } from "../presentation/AdaptiveDashedLineRenderer";
 import { FLASH_DURATION_S, NAV_FEEDBACK_TIMING } from "@dimos-ar-client/navigation/NavigationInteraction";
@@ -23,6 +24,7 @@ export class WebXRNavGoalView {
   readonly probe = new THREE.Group();
   private readonly outcomeRing = new THREE.Mesh(new THREE.RingGeometry(GOAL_RADIUS_M - FLOOR_MARKER_STYLE.strokeM, GOAL_RADIUS_M, 128), markerMaterial());
   private readonly outcomeGlyph = new THREE.Group();
+  private readonly outcomeJoin = new THREE.Mesh(new THREE.CircleGeometry(NAVIGATION_OUTCOME_STYLE.glyphWidthM / 2, STROKE_JOIN_SEGMENTS), markerMaterial());
   private readonly outcomeStrokes: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>[] = [];
   private feedbackProgress = 0;
   readonly cancelObject: GlassSurface;
@@ -108,14 +110,17 @@ export class WebXRNavGoalView {
     this.outcomeRing.position.y = 0.016;
     this.outcomeRing.raycast = () => {};
     for (let i = 0; i < 2; i++) {
-      const stroke = new THREE.Mesh(new THREE.PlaneGeometry(1, 0.012), markerMaterial());
+      const stroke = new THREE.Mesh(new THREE.PlaneGeometry(1, NAVIGATION_OUTCOME_STYLE.glyphWidthM), markerMaterial());
       stroke.name = `Navigation outcome stroke ${i}`;
       stroke.rotation.x = -Math.PI / 2;
       stroke.raycast = () => {};
       this.outcomeStrokes.push(stroke);
     }
     this.outcomeGlyph.name = "Navigation outcome glyph";
-    this.outcomeGlyph.add(...this.outcomeStrokes);
+    this.outcomeJoin.name = "Navigation outcome stroke join";
+    this.outcomeJoin.rotation.x = -Math.PI / 2;
+    this.outcomeJoin.raycast = () => {};
+    this.outcomeGlyph.add(...this.outcomeStrokes, this.outcomeJoin);
     this.visuals.add(this.arrow, this.ring, this.outcomeRing, this.outcomeGlyph);
     this.probe.name = "Navigation floor probe";
     const probeCircle = this.probeCircle = new THREE.Mesh(new THREE.RingGeometry(0.052, 0.06, 64), markerMaterial());
@@ -257,18 +262,26 @@ export class WebXRNavGoalView {
     this.outcomeRing.visible = this.flash !== null;
     this.arrow.visible = this.flash === null;
     this.outcomeStrokes.forEach(stroke => { stroke.visible = this.flash !== null; });
+    this.outcomeJoin.visible = false;
     if (!this.flash) return;
     const color = FLASH_COLORS[this.flash];
     const elapsed = this.feedbackProgress * FLASH_DURATION_S;
     this.outcomeRing.material.color.setHex(color);
     this.outcomeRing.material.opacity = 1;
     this.outcomeRing.geometry.setDrawRange(0, Math.floor(Math.min(1, elapsed / NAV_FEEDBACK_TIMING.traceS) * 128) * 6);
-    const segments = this.flash === "succeeded"
-      ? [[-0.07, 0, -0.015, -0.055], [-0.015, -0.055, 0.09, 0.07]]
-      : [[-0.065, -0.065, 0.065, 0.065], [-0.065, 0.065, 0.065, -0.065]];
+    const points: readonly (readonly number[])[] = this.flash === "succeeded" ? NAVIGATION_OUTCOME_STYLE.check : NAVIGATION_OUTCOME_STYLE.cross;
+    const segments = this.flash === "succeeded" ? [[...points[0], ...points[1]], [...points[1], ...points[2]]] :
+      [[...points[0], ...points[1]], [...points[2], ...points[3]]];
+    const progresses = [0, 1].map(i => THREE.MathUtils.clamp((elapsed - NAV_FEEDBACK_TIMING.traceS) / (NAV_FEEDBACK_TIMING.glyphS / 2) - i, 0, 1));
+    const joint = strokeJoints2D(segments, progresses)[0];
+    this.outcomeJoin.visible = !!joint;
+    if (joint) {
+      this.outcomeJoin.position.set(joint[0], 0.024, -joint[1]);
+      this.outcomeJoin.material.color.setHex(color);
+    }
     this.outcomeStrokes.forEach((stroke, i) => {
       const [x1, y1, x2, y2] = segments[i];
-      const progress = THREE.MathUtils.clamp((elapsed - NAV_FEEDBACK_TIMING.traceS) / (NAV_FEEDBACK_TIMING.glyphS / 2) - i, 0, 1);
+      const progress = progresses[i];
       const eased = progress * progress * (3 - 2 * progress);
       stroke.scale.x = Math.hypot(x2 - x1, y2 - y1) * eased;
       stroke.rotation.z = Math.atan2(y2 - y1, x2 - x1);
@@ -286,7 +299,7 @@ export class WebXRNavGoalView {
       if (node instanceof THREE.Mesh) { node.geometry.dispose(); (node.material as THREE.Material).dispose(); }
       if (node instanceof THREE.InstancedMesh) node.dispose();
     });
-    for (const mesh of [this.outcomeRing, ...this.outcomeStrokes]) { mesh.geometry.dispose(); mesh.material.dispose(); }
+    for (const mesh of [this.outcomeRing, this.outcomeJoin, ...this.outcomeStrokes]) { mesh.geometry.dispose(); mesh.material.dispose(); }
     this.connectorRenderer.dispose();
     this.disc.geometry.dispose();
     this.arrow.geometry.dispose();

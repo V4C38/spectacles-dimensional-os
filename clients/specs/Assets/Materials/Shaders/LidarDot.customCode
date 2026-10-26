@@ -1,0 +1,9 @@
+output_vec4 Result;
+void main() {
+    vec2 uv = system.getSurfaceUVCoord0() * 2.0 - 1.0;
+    float radius = length(uv);
+    float alpha = clamp((1.0 - radius) / 0.1, 0.0, 1.0);
+    vec4 color = system.getSurfaceColor();
+    if (alpha * color.a < 0.001) discard;
+    Result = vec4(color.rgb, color.a * alpha);
+}
