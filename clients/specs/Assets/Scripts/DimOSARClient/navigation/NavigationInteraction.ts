@@ -34,8 +34,8 @@ export class NavigationInteraction {
   private directSource: NavigationInputId | null = null;
   private dragging = false;
   private directHeading: Quat = [0, 0, 0, 1];
-  private readonly heading = new NavigationHeading();
-  constructor(commands: NavigationCommands, private readonly previews: NavigationPreviewCoordinator) { this.goals = new NavigationGoalLifecycle(commands); }
+  private readonly heading: NavigationHeading;
+  constructor(commands: NavigationCommands, private readonly previews: NavigationPreviewCoordinator, headingSmoothingRate = 6) { this.goals = new NavigationGoalLifecycle(commands); this.heading = new NavigationHeading(headingSmoothingRate); }
   snapshot(): NavigationTargetSnapshot {
     const goal = this.goals.snapshot(), placement = this.placement.snapshot();
     const draft = placement.draft;

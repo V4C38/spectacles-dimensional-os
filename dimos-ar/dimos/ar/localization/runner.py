@@ -90,8 +90,8 @@ class LocalizationRunner:
                     outcome = await self._coordinator.run(
                         work.observations, client_id=work.client_id
                     )
-            except Exception as exc:  # noqa: BLE001 -- provider failures must not kill the socket.
-                logger.warning(
+            except Exception as exc:
+                logger.exception(
                     "localization episode failed",
                     client_id=work.client_id,
                     error=type(exc).__name__,

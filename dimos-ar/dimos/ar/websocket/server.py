@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from concurrent.futures import Future
 import logging
 import secrets
 import struct
-import threading
 import time
-from typing import TYPE_CHECKING
 
 import websockets
 import websockets.asyncio.server as ws_server
 
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest
-from dimos.ar.websocket.ip_relay import IP_RELAY_URL, IpRelayPublisher, lan_ip
+from dimos.ar.websocket.ip_relay import IpRelayPublisher, lan_ip
 from dimos.ar.websocket.protocol import (
     LOCALIZATION_OBSERVATIONS_FOURCC,
     ClientPose,
@@ -38,9 +37,6 @@ from dimos.ar.websocket.send_queue import ClientSendQueue
 from dimos.core.global_config import global_config
 from dimos.utils.logging_config import setup_logger
 
-if TYPE_CHECKING:
-    from concurrent.futures import Future
-
 logger = setup_logger()
 
 HelloSupplier = Callable[[str], HelloBody]
@@ -61,6 +57,7 @@ DisconnectHandler = Callable[[ws_server.ServerConnection, str], None]
 
 PING_INTERVAL_S = 30.0
 PING_TIMEOUT_S = 30.0
+HELLO_TIMEOUT_S = 5.0
 DEFAULT_MAX_FRAME_BYTES = 4_194_304
 
 
@@ -87,6 +84,7 @@ class WebSocketServer:
         loop: asyncio.AbstractEventLoop,
         hello_supplier: HelloSupplier,
         max_frame_bytes: int = DEFAULT_MAX_FRAME_BYTES,
+        relay_url: str | None = None,
         on_connect: ConnectHandler | None = None,
         on_nav_goal_request: NavGoalRequestHandler | None = None,
         on_estop_request: EstopRequestHandler | None = None,
@@ -99,6 +97,7 @@ class WebSocketServer:
         on_nav_joystick_request: NavJoystickRequestHandler | None = None,
         on_disconnect: DisconnectHandler | None = None,
     ) -> None:
+        self._relay_url = relay_url
         self._port = port
         self._loop = loop
         self._hello_supplier = hello_supplier
@@ -116,9 +115,7 @@ class WebSocketServer:
         self._on_disconnect = on_disconnect
 
         self._stop_event: asyncio.Event | None = None
-        self._server_ready = threading.Event()
         self._connections: dict[str, ws_server.ServerConnection] = {}
-        self._close_tasks: set[asyncio.Task[None]] = set()
         self._client_ids: dict[ws_server.ServerConnection, str] = {}
         self._outbound: dict[ws_server.ServerConnection, ClientSendQueue] = {}
         self._time_sync: dict[ws_server.ServerConnection, TimeSync] = {}
@@ -134,19 +131,29 @@ class WebSocketServer:
         return len(self._connections)
 
     def start(self) -> None:
-        self._serve_future = asyncio.run_coroutine_threadsafe(self._serve(), self._loop)
-        if not self._server_ready.wait(timeout=5.0):
-            raise TimeoutError("WebSocket server did not become ready")
+        if self._serve_future is not None:
+            raise RuntimeError("WebSocket server is already started")
+        ready: Future[None] = Future()
+        self._serve_future = asyncio.run_coroutine_threadsafe(self._serve(ready), self._loop)
+        try:
+            ready.result(timeout=5.0)
+        except BaseException:
+            ready.cancel()
+            self._serve_future.cancel()
+            self._serve_future = None
+            raise
+        if self._relay_url is None:
+            return
         ip = lan_ip()
         if ip is None:
             logger.warning("PIN unavailable, enter IP")
             return
-        self._ip_relay = IpRelayPublisher(IP_RELAY_URL, ip, self._port)
+        self._ip_relay = IpRelayPublisher(self._relay_url, ip, self._port)
         self._ip_relay.start()
 
     def stop(self) -> None:
         self._stop_ip_relay()
-        if not self._server_ready.is_set():
+        if self._serve_future is None:
             return
         if self._stop_event is not None:
             self._loop.call_soon_threadsafe(self._stop_event.set)
@@ -158,7 +165,6 @@ class WebSocketServer:
                 logger.warning("WebSocket server stop timed out")
             except Exception:
                 logger.exception("WebSocket server stop did not finish cleanly")
-        self._server_ready.clear()
         self._serve_future = None
 
     def _stop_ip_relay(self) -> None:
@@ -167,7 +173,7 @@ class WebSocketServer:
         if publisher is not None:
             publisher.stop()
 
-    async def _serve(self) -> None:
+    async def _serve(self, ready: Future[None]) -> None:
         self._stop_event = asyncio.Event()
         ws_logger = logging.getLogger("websockets.server")
         ws_logger.addFilter(_handshake_noise_filter)
@@ -183,13 +189,15 @@ class WebSocketServer:
                 logger=ws_logger,
             ):
                 logger.info("WebSocket server listening", host=host, port=self._port)
-                self._server_ready.set()
+                if not ready.done():
+                    ready.set_result(None)
                 await self._stop_event.wait()
-        except Exception:
-            logger.exception("WebSocket server crashed")
-            if not self._server_ready.is_set():
-                self._server_ready.set()
+        except BaseException as exc:
+            if not ready.done():
+                ready.set_exception(exc)
             raise
+        finally:
+            ws_logger.removeFilter(_handshake_noise_filter)
 
     async def _handler(self, websocket: ws_server.ServerConnection) -> None:
         req = getattr(websocket, "request", None)
@@ -198,30 +206,18 @@ class WebSocketServer:
             return
 
         remote = getattr(websocket, "remote_address", None)
-        remote_ip = remote[0] if remote else None
-        if remote_ip is not None:
-            for existing in list(self._connections.values()):
-                existing_remote = getattr(existing, "remote_address", None)
-                if existing_remote and existing_remote[0] == remote_ip:
-                    logger.info(
-                        "AR client reconnect from same remote; closing prior connection",
-                        remote=str(remote),
-                    )
-                    # Specs does not close() a CONNECTING socket, so this peer may never
-                    # finish the close handshake. Awaiting it here holds the new hello
-                    # until websockets' close timeout.
-                    task = asyncio.create_task(self._close_superseded(existing))
-                    self._close_tasks.add(task)
-                    task.add_done_callback(self._close_tasks.discard)
         client_id = _new_client_id()
-        self._connections[client_id] = websocket
-        self._client_ids[websocket] = client_id
-        outbound = ClientSendQueue(websocket)
-        self._outbound[websocket] = outbound
-        outbound.start()
-        logger.info("AR client connected", remote=str(remote), client_id=client_id)
+        registered = False
         try:
-            await self._complete_handshake(websocket, client_id)
+            async with asyncio.timeout(HELLO_TIMEOUT_S):
+                await self._complete_handshake(websocket, client_id)
+            self._connections[client_id] = websocket
+            self._client_ids[websocket] = client_id
+            outbound = ClientSendQueue(websocket)
+            self._outbound[websocket] = outbound
+            outbound.start()
+            registered = True
+            logger.info("AR client connected", remote=str(remote), client_id=client_id)
             if self._on_connect is not None:
                 self._on_connect(websocket, client_id)
             async for message in websocket:
@@ -245,6 +241,12 @@ class WebSocketServer:
                 client_id=client_id,
                 code=exc.rcvd.code if exc.rcvd is not None else None,
             )
+        except (TypeError, ValueError) as exc:
+            logger.warning("Invalid WebSocket handshake", error=str(exc))
+            await websocket.close(1008, "Invalid hello_request")
+        except TimeoutError:
+            logger.warning("WebSocket hello handshake timed out", client_id=client_id)
+            await websocket.close(1008, "hello_request timeout")
         finally:
             if self._connections.get(client_id) is websocket:
                 self._connections.pop(client_id, None)
@@ -256,14 +258,8 @@ class WebSocketServer:
                 pass
             else:
                 await queued.stop()
-            if self._on_disconnect is not None:
+            if registered and self._on_disconnect is not None:
                 self._on_disconnect(websocket, client_id)
-
-    async def _close_superseded(self, websocket: ws_server.ServerConnection) -> None:
-        try:
-            await websocket.close(1000, "superseded by new connection")
-        except websockets.ConnectionClosed:
-            return
 
     async def _complete_handshake(
         self,

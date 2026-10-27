@@ -8,7 +8,7 @@ import { requestNavGoal } from "@dimos-ar-client/navigation/navGoalRequest";
 import { clientTrackingToWebxrPose, clientTrackingToWebxrPoint, webxrHeadingToClientTrackingPose, webxrToClientTrackingPoint } from "../utilities/WebXRCoordinates";
 import { WebXRNavGoalView, type NavFlash } from "./WebXRNavGoalView";
 import { FLOOR_AIM_RANGE_M, RAY_LENGTH_M, solveMeshPlacement, type MeshHit, type RobotGroundDeadzone } from "./WebXRGroundPlacement";
-export { FLASH_DURATION_S, shouldBeginFailedFlash, robotDeadzoneRadiusM, shouldSendStreamGoal, isLiveNavGoal, isNavGoalCancelVisible } from "@dimos-ar-client/navigation/NavigationInteraction";
+export { FLASH_DURATION_S, robotDeadzoneRadiusM } from "@dimos-ar-client/navigation/NavigationInteraction";
 
 /** WebXR placement and scene binding. All navigation interaction policy lives in ClientCore. */
 export class WebXRNavigationController {

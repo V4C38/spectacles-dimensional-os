@@ -67,6 +67,7 @@ it("grips the panel body, rotates around the grab point with smoothing, and reta
 
 import * as THREE from "three";
 import { WebXRApp } from "../src/WebXRApp";
+import { WebXRInputController } from "../src/input/WebXRInputController";
 import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
 import { BrowserWebSocketTransport } from "../src/websocket/BrowserWebSocketTransport";
 import { registerRayTarget } from "../src/input/XRBlocksRayInteraction";
@@ -135,7 +136,7 @@ it("consumes UI selection, cancels drags on input loss, invalidates resets, and 
   app.onSelectStart({ target: left }); expect(hold).toHaveBeenCalledTimes(2);
   app.onSelectEnd({ target: left }); expect(release).toHaveBeenCalledOnce();
   const aligned = client.originStore.setFromLocalizationResult({ type: "localization_result", position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 10 });
-  client.ui.setupCompleted = true;
+  client.ui.flow.finish();
   const beforeFocus = invalidated.mock.calls.length;
   session.visibilityState = "hidden"; session.dispatchEvent(new Event("visibilitychange"));
   app.update(10.1, frame);
@@ -275,7 +276,6 @@ it("disposes allocated UI resources once, including shared icon materials and sc
   const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLidar: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
   const geometries = new Set<THREE.BufferGeometry>(), materials = new Set<THREE.Material>();
   view.panel.traverse(node => {
-    if (node === view.panel.mesh) return;
     if (node instanceof THREE.Mesh || node instanceof THREE.Line) {
       geometries.add(node.geometry);
       for (const material of Array.isArray(node.material) ? node.material : [node.material]) materials.add(material);
@@ -351,7 +351,7 @@ it("locks palm summoning to one hand, supports the right hand and does not dismi
   const clock = vi.spyOn(performance, "now").mockImplementation(() => now * 1000);
   const sync = (time: number) => {
     now = time;
-    (WebXRApp.prototype as unknown as { syncPalm: (...args: unknown[]) => void }).syncPalm.call(state, frame, {}, {}, {});
+    (WebXRInputController.prototype as unknown as { syncPalm: (...args: unknown[]) => void }).syncPalm.call(state, frame, {}, {}, {});
   };
   sync(0); sync(0.36); expect(ui.menuOpen).toBe(true); expect(anchor.source).toBe(left);
   up.right = true; sync(1); sync(1.36); expect(anchor.source).toBe(left);
@@ -397,11 +397,11 @@ it("billboards a bottom-bar drag in yaw and pitch without roll or moving the gra
 });
 
 it("starts a panel grab from the accepted input ray while the visual laser is still catching up", () => {
-  const app = Object.create(WebXRApp.prototype) as any;
+  const app = Object.create(WebXRInputController.prototype) as any;
   const target = new THREE.Object3D() as any; target.inputSource = { handedness: "right" }; target.userData.id = 1;
   const bar = new THREE.Object3D(), raw = { origin: [0, 0, 0], direction: [0, 0, -1] };
   const begin = vi.fn(() => true), pin = vi.fn(), detach = vi.fn();
-  Object.assign(app, { tracking: true, session: { visibilityState: "visible" }, navigationSourceIds: new WeakMap(), nextNavigationSource: 0,
+  Object.assign(app, { trackingState: { tracking: () => true, session: () => ({ visibilityState: "visible" }) }, navigationSourceIds: new WeakMap(), nextNavigationSource: 0,
     touches: { owns: () => false }, capture: { press: () => true }, setupPlacement: { pin }, menuAnchor: { detach },
     interaction: { capture: vi.fn(), hit: () => ({ object: bar, point: new THREE.Vector3(0, 0, -1) }), direct: { capture() {}, ray: () => null }, ray: () => raw, smoothedRay: () => ({ origin: [0, 0, 0], direction: [1, 0, 0] }) },
     client: { navigation: { clearAim() {}, marker: { object: new THREE.Group() } }, joystick: { loseInput() {} } },

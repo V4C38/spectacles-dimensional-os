@@ -1,3 +1,5 @@
+import { getRobotActivityState } from "../../DimOSARClient/robot/RobotMarkerState";
+import { SpecsConnectionController } from "./SpecsConnectionController";
 import { SETUP_PANEL_SCALE } from "./PanelLayout";
 import { availableFeatures, localizationGuidance, localizationProviderLabel } from "../../DimOSARClient/presentation/ControlPanelPresentation";
 import { SetupFlow } from "../../DimOSARClient/presentation/SetupFlow";
@@ -5,13 +7,10 @@ require("LensStudio:TextInputModule");
 
 import type { LocalizationCaptureEpisode } from "../../DimOSARClient/localization/localizationCaptureEpisode";
 import type { ClientTrackingOrigin, ClientTrackingOriginStore } from "../../DimOSARClient/localization/clientTrackingOrigin";
-import { AR_MODULE_CLIENT_CONFIG } from "../../DimOSARClient/websocket/hostPorts";
 import {
-  buildModuleWebSocketUrl,
   isValidHost,
   loadStoredModuleHost,
   type ModuleHostStore,
-  saveModuleHost,
 } from "../../DimOSARClient/websocket/hostNormalization";
 import type { ARModuleSession } from "../../DimOSARClient/websocket/arModuleSession";
 import type { SpecsWebSocketTransport } from "../websocket/SpecsWebSocketTransport";
@@ -25,7 +24,6 @@ import {
   type StatusText,
 } from "../../DimOSARClient/websocket/sessionLinkStatus";
 import {
-  routeConnectionField,
   toggleConnectionMethod,
   type ConnectionMethod,
   type IpRelayClient,
@@ -73,22 +71,18 @@ function connectStepStatus(input: {
 }
 
 const NAV_DEBOUNCE_S = 0.35;
-const CONNECT_RETRY_S = 2.0;
-const CONNECT_RETRY_LOG_INTERVAL_S = 10.0;
-const CONNECT_POLL_INTERVAL_S = 0.1;
-const MODULE_PIN_STORAGE_KEY = "dimos_ar_module_pin";
 
 export interface SetupWizardControllerDeps {
   panel: SceneObject;
   cameraObject?: SceneObject;
   script: ScriptComponent;
-  session: ARModuleSession;
+  session: Pick<ARModuleSession, "view" | "start" | "stop">;
   episode: LocalizationCaptureEpisode;
-  transport: SpecsWebSocketTransport;
+  transport: Pick<SpecsWebSocketTransport, "setUrl">;
   clientTrackingOriginStore: ClientTrackingOriginStore;
   defaultWebsocketIp: string;
   hostStore: ModuleHostStore;
-  ipRelayClient: IpRelayClient;
+  ipRelayClient: Pick<IpRelayClient, "resolve">;
   flow?: SetupFlow;
   previewTexture?: () => Texture | null;
   onFinished: () => void;
@@ -99,21 +93,17 @@ export class SetupWizardController {
   private readonly deps: SetupWizardControllerDeps;
   readonly flow: SetupFlow;
   private readonly view: SetupWizardView;
-  private readonly retryEvent: DelayedCallbackEvent;
-  private readonly pollEvent: DelayedCallbackEvent;
-  private get _currentStep(): SetupWizardStep { return this.flow.step === "localization" ? SetupWizardStep.Localization : SetupWizardStep.Connect; }
+  private readonly connection: SpecsConnectionController;
+  private disposed = false;
+  private readonly subscriptions: (() => void)[] = [];
+  private get _currentStep(): SetupWizardStep { return this.flow.step; }
   private _connectStepCompleted = false;
-  private _isConnecting = false;
-  private resolvingPin = false;
+  private get _isConnecting() { return this.connection.snapshot().connecting; }
+  private get resolvingPin() { return this.connection.snapshot().resolvingPin; }
   private _lastNavigationTime = -1;
-  private _autoconnectOpId = 0;
-  private _retryOpId = 0;
-  private _pollOpId = 0;
-  private _lastConnectRetryLogTime = -1;
   private _calibratedScale = new vec3(1, 1, 1);
-  private _hostValidationError: string | null = null;
+  private get _hostValidationError() { return this.connection.snapshot().error; }
   private _connectionMethod: ConnectionMethod = "pin";
-  private _sessionStarted = false;
   private _visible = false;
   private successAt: number | null = null;
   private baseline: { origin: ClientTrackingOrigin; hello: ARModuleSessionState["hello"] } | null = null;
@@ -144,24 +134,22 @@ export class SetupWizardController {
     this._calibratedScale = new vec3(SETUP_PANEL_SCALE, SETUP_PANEL_SCALE, SETUP_PANEL_SCALE);
     deps.panel.getTransform().setLocalScale(this._calibratedScale);
     if (deps.cameraObject) {
-      getFrameComponent(deps.panel)?.onTranslationStart.add(() => setPanelFollowing(deps.panel, false, SETUP_PANEL_SCALE));
+      const unsubscribe = getFrameComponent(deps.panel)?.onTranslationStart.add(() => setPanelFollowing(deps.panel, false, SETUP_PANEL_SCALE));
+      if (unsubscribe) this.subscriptions.push(unsubscribe);
     }
 
-    const retryEv = deps.script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
-    retryEv.bind(() => this.onRetryFired());
-    this.retryEvent = retryEv;
-
-    const pollEv = deps.script.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
-    pollEv.bind(() => this.onPollFired());
-    this.pollEvent = pollEv;
+    this.connection = new SpecsConnectionController({
+      script: deps.script, session: deps.session, transport: deps.transport,
+      hostStore: deps.hostStore, ipRelayClient: deps.ipRelayClient,
+      onChanged: () => { this.showConnectStatus(); this.refreshFooterButtons(); },
+    });
 
     this.view.bindHandlers(
       () => this.onNext(), () => this.onPrevious(), () => this.startAutoconnect(), () => this.onConnectionToggle(),
-      () => { this.deps.episode.reset(); this.beginLocalizationCapture(); },
+      () => { if (!this.disposed) { this.deps.episode.reset(); this.beginLocalizationCapture(); } },
       () => {
+        if (this.disposed) return;
         this.cancelAutoconnect("connection input edited", false);
-        this._isConnecting = false;
-        this._hostValidationError = null;
         if (this._connectionMethod === "pin") this.view.clearInput();
         this.showConnectStatus();
       },
@@ -169,14 +157,12 @@ export class SetupWizardController {
   }
 
   public start(fromRuntime: boolean): void {
+    if (this.disposed) return;
     if (fromRuntime) this.retainBaseline(); else this.invalidateBaseline();
     this.successAt = null;
     this.flow.restart(fromRuntime);
     this._connectStepCompleted = false;
-    this._isConnecting = false;
     this._lastNavigationTime = -1;
-    this._hostValidationError = null;
-    this._sessionStarted = false;
     this.invalidatePending();
     if (fromRuntime) {
       this.deps.episode.reset();
@@ -190,6 +176,7 @@ export class SetupWizardController {
   }
 
   public realign(): void {
+    if (this.disposed) return;
     this.retainBaseline();
     this.deps.clientTrackingOriginStore.clear();
     this.successAt = null;
@@ -201,6 +188,7 @@ export class SetupWizardController {
   }
 
   public tick(deltaS = 0): void {
+    if (this.disposed) return;
     this.view.tick?.(deltaS);
     if (!this._visible || this._currentStep !== SetupWizardStep.Localization) {
       return;
@@ -220,6 +208,7 @@ export class SetupWizardController {
   }
 
   public onSessionViewChanged(): void {
+    if (this.disposed) return;
     const hello = this.deps.session.view().hello;
     if (hello && this.baseline && hello !== this.baseline.hello &&
       (!this.baseline.hello?.odom_reference_id || hello.odom_reference_id !== this.baseline.hello.odom_reference_id)) this.invalidateBaseline();
@@ -231,8 +220,7 @@ export class SetupWizardController {
       this.refreshFooterButtons();
       if (this.isConnected()) {
         this._connectStepCompleted = true;
-        this._isConnecting = false;
-        this.invalidatePending();
+            this.invalidatePending();
       }
     }
     if (this._currentStep === SetupWizardStep.Localization) {
@@ -267,10 +255,11 @@ export class SetupWizardController {
 
   private setStep(step: SetupWizardStep): void {
     if (this._currentStep === SetupWizardStep.Localization && step !== this._currentStep) {
+      this.view.setCameraPreview?.(null);
       this.flow.previous();
     }
     this.invalidatePending();
-    this.flow.step = step === SetupWizardStep.Localization ? "localization" : "connect";
+    this.flow.showStep(step === SetupWizardStep.Localization ? "localization" : "connect");
     this.view.setStepContent(WIZARD_STEP_TITLES[step], this.stepDescription(step));
     this.view.applyStepLayout(step);
 
@@ -301,7 +290,6 @@ export class SetupWizardController {
 
   private prepareConnectStep(): void {
     this._connectionMethod = "pin";
-    this._hostValidationError = null;
     this.view.setConnectionToggleLabel(connectionModeLabel(this._connectionMethod));
     const savedPin = this.loadStoredPin();
     this.fillConnectField(savedPin);
@@ -319,20 +307,14 @@ export class SetupWizardController {
     this.view.initializeInput(text, placeholder);
   }
 
-  private loadStoredPin(): string {
-    const store = this.deps.hostStore;
-    if (!store.has(MODULE_PIN_STORAGE_KEY)) return "";
-    const routed = routeConnectionField("pin", store.getString(MODULE_PIN_STORAGE_KEY));
-    return routed?.kind === "pin" ? routed.pin : "";
-  }
+  private loadStoredPin(): string { return this.connection.storedPin(); }
 
   private onConnectionToggle(): void {
+    if (this.disposed) return;
     if (this._currentStep !== SetupWizardStep.Connect) {
       return;
     }
     this.cancelAutoconnect("connection method changed", true);
-    this._isConnecting = false;
-    this._hostValidationError = null;
     this._connectionMethod = toggleConnectionMethod(this._connectionMethod);
     this.view.setConnectionToggleLabel(connectionModeLabel(this._connectionMethod));
     if (this._connectionMethod === "pin") {
@@ -357,10 +339,7 @@ export class SetupWizardController {
         this.cancelAutoconnect("connect step skipped", false);
         print("SetupWizardController: finish connect=skipped localization=skipped");
         this.finishWizard();
-        if (this._sessionStarted) {
-          this.deps.session.stop();
-          this._sessionStarted = false;
-        }
+        this.connection.cancel(true);
         return;
       }
       this.setStep(SetupWizardStep.Localization);
@@ -426,145 +405,22 @@ export class SetupWizardController {
   }
 
   private startAutoconnect(): void {
-    this._autoconnectOpId += 1;
-    const opId = this._autoconnectOpId;
-    if (this._currentStep !== SetupWizardStep.Connect) {
-      return;
-    }
-
-    const routed = routeConnectionField(this._connectionMethod, this.view.getInputText());
-    if (routed === null) {
-      this._hostValidationError = this._connectionMethod === "pin"
-        ? "Enter a 6-digit PIN"
-        : "Enter a valid IP address";
-      this.showConnectStatus();
-      this._isConnecting = false;
-      this.refreshFooterButtons();
-      return;
-    }
-    if (routed.kind === "pin") {
-      this.deps.hostStore.putString(MODULE_PIN_STORAGE_KEY, routed.pin);
-      this._hostValidationError = null;
-      this._isConnecting = true;
-      this.resolvingPin = true;
-      this.showConnectStatus();
-      void this.resolvePin(routed.pin, opId);
-      return;
-    }
-    if (!isValidHost(routed.host)) {
-      this._hostValidationError = "Enter a valid IP address";
-      this.showConnectStatus();
-      this._isConnecting = false;
-      this.refreshFooterButtons();
-      return;
-    }
-    this._hostValidationError = null;
-    saveModuleHost(this.deps.hostStore, routed.host);
-    this._isConnecting = true;
-    this.showConnectStatus();
-    this.logConnectAttempt(routed.host);
-    void this.tryConnect(routed.host, opId);
+    if (!this.disposed && this._currentStep === SetupWizardStep.Connect)
+      this.connection.start(this._connectionMethod, this.view.getInputText());
   }
 
-  private async resolvePin(pin: string, opId: number): Promise<void> {
-    const found = await this.deps.ipRelayClient.resolve(pin);
-    if (opId !== this._autoconnectOpId) {
-      return;
-    }
-    this.resolvingPin = false;
-    if (found === null) {
-      this._isConnecting = false;
-      this._hostValidationError = "PIN did not resolve";
-      this.showConnectStatus();
-      this.scheduleAutoconnectRetry(opId);
-      return;
-    }
-    this._hostValidationError = null;
-    saveModuleHost(this.deps.hostStore, found.ip);
-    this.logConnectAttempt(found.ip);
-    void this.tryConnect(found.ip, opId, found.port);
+  private invalidatePending(): void { this.connection.cancel(); }
+
+  private cancelAutoconnect(_reason: string, disconnect: boolean): void {
+    this.connection.cancel(disconnect);
   }
 
-  private async tryConnect(
-    ip: string,
-    opId: number,
-    port: number = AR_MODULE_CLIENT_CONFIG.port,
-  ): Promise<void> {
-    const url = buildModuleWebSocketUrl(ip, port);
-    try {
-      if (this._sessionStarted) {
-        this.deps.session.stop();
-      }
-      this.deps.transport.setUrl(url);
-      this.deps.session.start();
-      this._sessionStarted = true;
-    } catch (error) {
-      if (opId !== this._autoconnectOpId) {
-        return;
-      }
-      this._isConnecting = false;
-      this.showConnectStatus();
-      this.scheduleAutoconnectRetry(opId);
-      return;
-    }
-
-    this._pollOpId = opId;
-    this.pollEvent.reset(CONNECT_POLL_INTERVAL_S);
-  }
-
-  private onPollFired(): void {
-    if (this._pollOpId !== this._autoconnectOpId) {
-      return;
-    }
-    const view = this.deps.session.view();
-    if (view.connection === "ready") {
-      this._isConnecting = false;
-      this.showConnectStatus();
-      this.refreshFooterButtons();
-      return;
-    }
-    if (view.connection === "failed") {
-      // ARModuleSession reconnects from tick(). stop()+start() here stacks another
-      // socket and drops the handshake already in progress.
-      this.showConnectStatus();
-      this.pollEvent.reset(CONNECT_POLL_INTERVAL_S);
-      return;
-    }
-    this.pollEvent.reset(CONNECT_POLL_INTERVAL_S);
-  }
-
-  private scheduleAutoconnectRetry(opId: number): void {
-    this.logConnectRetry();
-    this._retryOpId = opId;
-    this.retryEvent.reset(CONNECT_RETRY_S);
-  }
-
-  private onRetryFired(): void {
-    if (
-      this._retryOpId !== this._autoconnectOpId
-      || this._currentStep !== SetupWizardStep.Connect
-    ) {
-      return;
-    }
-    this.startAutoconnect();
-  }
-
-  private invalidatePending(): void {
-    this.resolvingPin = false;
-    this._autoconnectOpId += 1;
-    this._pollOpId = -1;
-    this._retryOpId = -1;
-    this.retryEvent.cancel();
-    this.pollEvent.cancel();
-  }
-
-  private cancelAutoconnect(reason: string, disconnect: boolean): void {
-    this.invalidatePending();
-    if (disconnect) {
-      this.deps.session.stop();
-      this._sessionStarted = false;
-    }
-    print(`SetupWizardController: ${reason}`);
+  public dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.connection.dispose(); this.invalidateBaseline();
+    for (const unsubscribe of this.subscriptions.splice(0)) unsubscribe();
+    this.hide(); this.view.dispose();
   }
 
   private isConnected(): boolean {
@@ -572,6 +428,7 @@ export class SetupWizardController {
   }
 
   private showConnectStatus(): void {
+    if (this.disposed) return;
     if (this._currentStep !== SetupWizardStep.Connect) return;
     this.refreshRobotBadge();
     const view = this.deps.session.view();
@@ -597,7 +454,7 @@ export class SetupWizardController {
     const phase = deriveSessionLinkPhase(view);
     this.view.setRobotBadge?.(view.hello?.robot.display_name ?? "Robot",
       { disconnected: "Disconnected", connecting: "Connecting…", robotOffline: "Robot offline", connected: "Connected" }[phase],
-      view.nav?.state === "following_path" ? "Following Path" : view.state?.agent.idle === false ? "Thinking" : "Idle");
+      getRobotActivityState(view));
   }
 
   private renderLocalizationStatus(): void {
@@ -619,6 +476,7 @@ export class SetupWizardController {
   }
 
   private refreshFooterButtons(): void {
+    if (this.disposed) return;
     const connected = this.isConnected();
     const connectionCompleted = this._connectStepCompleted || connected;
     let footerNextLabel = "Skip";
@@ -635,25 +493,4 @@ export class SetupWizardController {
     });
   }
 
-  private logConnectAttempt(ip: string): void {
-    const now = getTime();
-    if (
-      this._lastConnectRetryLogTime < 0
-      || now - this._lastConnectRetryLogTime >= CONNECT_RETRY_LOG_INTERVAL_S
-    ) {
-      this._lastConnectRetryLogTime = now;
-      print(`SetupWizardController: connect attempt ${ip}`);
-    }
-  }
-
-  private logConnectRetry(): void {
-    const now = getTime();
-    if (
-      this._lastConnectRetryLogTime < 0
-      || now - this._lastConnectRetryLogTime >= CONNECT_RETRY_LOG_INTERVAL_S
-    ) {
-      this._lastConnectRetryLogTime = now;
-      print("SetupWizardController: connect failed, retrying");
-    }
-  }
 }

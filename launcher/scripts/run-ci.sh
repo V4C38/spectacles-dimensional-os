@@ -55,7 +55,7 @@ run_dimos_ar_job() {
   cd "${DIMOS_AR}"
 
   python -m pip install --upgrade pip
-  pip install websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless Pillow scipy dimos "aiohttp>=3.9,<4" langchain-core
+  pip install websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless Pillow scipy dimos "aiohttp>=3.9,<4" "requests>=2.32,<3" langchain-core
   pip install -e . --no-deps
 
   ruff check .

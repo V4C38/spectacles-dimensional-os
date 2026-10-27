@@ -41,7 +41,7 @@ it("keeps the pre-confirm probe small, dashed and centered at the laser endpoint
   expect(dash).toBeCloseTo(ROBOT_LINE_STYLE.dashM * 100);
   expect(gap).toBeCloseTo(ROBOT_LINE_STYLE.gapM * 100);
   expect(continuous).toBe(true); expect(probe.circle.hide).toHaveBeenCalled();
-  expect(probe.value.circleHeightCm()).toBe(0);
+  expect(probe.value.circleHeightCm()).toBe(1.5);
   expect(probe.arrow.hide).toHaveBeenCalled();
 });
 it("traces the navigation outcome from three o'clock over the retained white floor circle", () => {

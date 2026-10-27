@@ -1,3 +1,4 @@
+import { clientTrackingToOdomPoint } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms";
 import { beforeEach, expect, it, vi } from "vitest";
 import { PointCloudRenderer, composeLidarPoint } from "../../Assets/Scripts/DimOSSpecsClient/sensors/PointCloudRenderer";
 
@@ -45,4 +46,38 @@ it("keeps full-cloud geometry and colors stable when only robot XY or heading ch
   expect((h.renderer as any).positions).toBe(composed);
   h.renderer.apply({ ...input, mode: "obstacles", obstacleRangeM: .4 });
   expect((h.renderer as any).positions).toBe(composed);
+});
+
+it("preserves measured 1/2/3 metre distances through translated and rotated localization origins", () => {
+  for (const yaw of [0, 0.7, Math.PI / 2]) {
+    const origin = { position: [4, -2, .33] as [number, number, number],
+      orientation: [0, 0, Math.sin(yaw / 2), Math.cos(yaw / 2)] as [number, number, number, number], confidence: 1, ts: 0 };
+    for (const depth of [1, 2, 3]) {
+      const point = clientTrackingToOdomPoint([depth, .2, .4], origin);
+      const world = composeLidarPoint(point, origin);
+      expect(world[0]).toBeCloseTo(-20, 8); expect(world[1]).toBeCloseTo(40, 8); expect(world[2]).toBeCloseTo(-depth * 100, 8);
+    }
+  }
+});
+it("reports the actual native parent transform and projected sample without changing the cloud", () => {
+  const h = harness(); h.renderer.apply({ points: [[1, 0, 0], [2, 0, 0], [3, 0, 0]],
+    origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } });
+  Object.assign(h.transform, { getWorldTransform: () => ({ multiplyPoint: (point: vec3) => point.add(new vec3(30, 0, 0)) }) });
+  const camera = { worldSpaceToScreenSpace: (point: vec3) => ({ x: point.x / 100, y: point.z / 100 }) } as Camera;
+  const before = h.vertices.length;
+  const diagnostic = h.renderer.spatialDiagnostics(camera) as any;
+  expect(diagnostic.samples[0]).toMatchObject({ odom: [1, 0, 0], worldCm: [0, 0, -100], renderedWorldCm: [30, 0, -100], screen: [.3, -1] });
+  expect(diagnostic.samples).toHaveLength(3); expect(h.vertices).toHaveLength(before);
+});
+
+it("distinguishes existing server XY scale from native range without silently rescaling vertices", () => {
+  const h = harness();
+  h.renderer.apply({ points: [[1.5, 0, 0]], robot: [0, 0, 0], odomScaleCorrectionFactor: 1.25,
+    origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } });
+  Object.assign(h.transform, { getWorldTransform: () => ({ multiplyPoint: (point: vec3) => point }) });
+  const camera = { worldSpaceToScreenSpace: () => ({ x: .5, y: .5 }) } as unknown as Camera;
+  const diagnostic = h.renderer.spatialDiagnostics(camera) as any;
+  expect(diagnostic.samples[0]).toMatchObject({ correctedPlanarDistanceM: 1.5, nativePlanarDistanceM: 1.2 });
+  expect(diagnostic.odomScaleCorrectionFactor).toBe(1.25);
+  expect(h.vertices[0].slice(0, 3)).toEqual([0, 0, -150]);
 });

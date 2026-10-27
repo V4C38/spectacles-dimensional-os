@@ -22,6 +22,7 @@ import { passesGeometricGate } from "./geometricGate";
 export type LocalizationCapturePhase =
   | "idle"
   | "waiting_for_geometric_gate"
+  | "waiting_for_retry"
   | "capturing"
   | "sending"
   | "awaiting_result"
@@ -53,6 +54,7 @@ export interface LocalizationCaptureDependencies {
   geometry?: CaptureGeometry;
   config?: LocalizationCaptureConfig;
   initiallyPaused?: boolean;
+  runtimeCapture?: { retryDelaysS: readonly number[]; stopWhileAwaitingResult: boolean };
   trace?: (event: LocalizationTrace) => void;
 }
 
@@ -66,6 +68,9 @@ export class LocalizationCaptureEpisode {
   private readonly resultTimeoutS: number;
   private readonly retryBackoffS: number;
 
+  private readonly runtimeCapture?: LocalizationCaptureDependencies["runtimeCapture"];
+  private runtimeMisses = 0;
+  private runtimeRetryAt: number | null = null;
   private phase: LocalizationCapturePhase = "idle";
   private request: LocalizationObservationsRequest | null = null;
   private observations: LocalizationObservation[] = [];
@@ -76,8 +81,10 @@ export class LocalizationCaptureEpisode {
   private lastError: string | null = null;
   private captureGeneration = 0;
   private inflight: Promise<void> | null = null;
+  private inflightGeneration: number | null = null;
   private hardwareStarted = false;
   private captureEnabled: boolean;
+  private suspended = false;
   private readonly traceSink?: (event: LocalizationTrace) => void;
   private episodeStartedAt: number | null = null;
   private episodeEndedAt: number | null = null;
@@ -88,6 +95,9 @@ export class LocalizationCaptureEpisode {
 
   constructor(deps: LocalizationCaptureDependencies) {
     this.traceSink = deps.trace;
+    this.runtimeCapture = deps.runtimeCapture;
+    if (this.runtimeCapture && (!this.runtimeCapture.retryDelaysS.length ||
+      this.runtimeCapture.retryDelaysS.some(value => !Number.isFinite(value) || value < 0))) throw new Error("Invalid runtime retry delays");
     this.session = deps.session;
     this.clientTrackingOriginStore = deps.clientTrackingOriginStore;
     this.clock = deps.clock;
@@ -148,6 +158,28 @@ export class LocalizationCaptureEpisode {
     this.request = request;
   }
 
+  /** Visibility loss retires camera work without cancelling an already submitted batch. */
+  suspend(): void {
+    if (this.suspended) return;
+    this.suspended = true;
+    this.captureGeneration++;
+    this.inflight = null;
+    this.inflightGeneration = null;
+    this.stopHardware();
+    if (this.phase === "awaiting_result" || this.phase === "failed") return;
+    this.phase = "idle";
+    this.observations = [];
+    this.geometricGateWaitStartedAt = null;
+    this.nextCaptureAt = null;
+  }
+
+  resume(): void {
+    if (!this.suspended) return;
+    this.suspended = false;
+    if (!this.captureEnabled || this.phase === "awaiting_result" || this.phase === "failed") return;
+    if (this.request !== null) this.onRequest(this.request);
+  }
+
   requestStart(): void {
     this.episodeStartedAt = this.clock.now(); this.episodeEndedAt = null; this.batchesSent = 0; this.trace("start-requested");
     if (this.session.view().connection !== "ready") {
@@ -156,11 +188,12 @@ export class LocalizationCaptureEpisode {
     if (!this.session.view().capabilities?.localization.available) {
       throw new Error("localization capability unavailable");
     }
-    if (this.phase !== "idle" && this.phase !== "failed") {
+    if (this.phase !== "idle" && this.phase !== "failed" && this.phase !== "waiting_for_retry") {
       throw new Error("localization capture already active");
     }
+    this.runtimeMisses = 0; this.runtimeRetryAt = null;
     this.captureEnabled = true;
-    if (this.phase === "idle" && this.request !== null) {
+    if ((this.phase === "idle" || this.phase === "waiting_for_retry") && this.request !== null) {
       this.onRequest(this.request);
       return;
     }
@@ -172,6 +205,14 @@ export class LocalizationCaptureEpisode {
 
   tick(): void {
     const now = this.clock.now();
+    if (this.suspended) {
+      if (this.phase === "awaiting_result" && this.resultDeadline !== null && now >= this.resultDeadline) this.enterFailed("result timeout");
+      return;
+    }
+    if (this.phase === "waiting_for_retry") {
+      if (this.runtimeRetryAt !== null && now >= this.runtimeRetryAt && this.request) this.onRequest(this.request);
+      return;
+    }
     if (this.phase === "waiting_for_geometric_gate") {
       try {
         if (this.geometricGatePasses() || this.preferredTimedOut(now)) {
@@ -207,12 +248,27 @@ export class LocalizationCaptureEpisode {
     }
   }
 
+  private scheduleRuntimeRetry(): void {
+    if (!this.runtimeCapture || !this.clientTrackingOriginStore.hasTrackingOrigin || this.sentAt === null) return;
+    const delays = this.runtimeCapture.retryDelaysS;
+    const delay = delays[Math.min(this.runtimeMisses++, delays.length - 1)];
+    this.runtimeRetryAt = this.sentAt + delay;
+    this.trace("runtime-retry-scheduled", `misses=${this.runtimeMisses}; earliest=${this.runtimeRetryAt}`);
+  }
+
+  captureBudget() { return { runtimeMisses: this.runtimeMisses, retryInS: Math.max(0, (this.runtimeRetryAt ?? this.clock.now()) - this.clock.now()),
+    hardwareStarted: this.hardwareStarted, captureInFlight: this.inflight !== null }; }
+
   private onRequest(request: LocalizationObservationsRequest): void {
+    if (this.phase === "awaiting_result") this.scheduleRuntimeRetry();
     this.session.cancelLocalizationSubmission();
     if (this.phase === "idle" && this.captureEnabled) { this.episodeStartedAt = this.clock.now(); this.episodeEndedAt = null; this.batchesSent = 0; }
     this.trace("capture-request-received", request.capture_policy);
-    if (!this.captureEnabled) {
+    if (!this.captureEnabled || this.suspended) {
       this.request = request;
+      this.phase = "idle";
+      this.observations = [];
+      this.resultDeadline = null;
       return;
     }
     this.observations = [];
@@ -222,6 +278,9 @@ export class LocalizationCaptureEpisode {
     this.request = request;
     this.batchStartedAt = this.clock.now(); this.sentAt = null;
     this.captureGeneration += 1;
+    if (this.runtimeRetryAt !== null && this.clock.now() < this.runtimeRetryAt) {
+      this.phase = "waiting_for_retry"; this.nextCaptureAt = null; this.stopHardware(); return;
+    }
     try {
       if (this.shouldWaitForGeometricGate()) {
         this.phase = "waiting_for_geometric_gate";
@@ -301,11 +360,15 @@ export class LocalizationCaptureEpisode {
     let pending: Promise<LocalizationObservation>;
     try {
       this.trace("capture-start");
-      pending = this.capture.capture();
+      pending = this.capture.capture(() => {
+        if (generation !== this.captureGeneration || this.phase !== "capturing" || this.suspended || !this.captureEnabled) return false;
+        try { return this.request?.capture_policy !== "robot_los_required" || !this.shouldWaitForGeometricGate(); } catch { return false; }
+      });
     } catch (error) {
       this.captureFailed(error);
       return;
     }
+    this.inflightGeneration = generation;
     this.inflight = pending.then(
       (observation) => {
         this.onCaptureSettled(generation, observation, null);
@@ -321,11 +384,19 @@ export class LocalizationCaptureEpisode {
     observation: LocalizationObservation | null,
     error: unknown,
   ): void {
-    this.inflight = null;
+    if (generation === this.inflightGeneration) {
+      this.inflight = null;
+      this.inflightGeneration = null;
+    }
     if (generation !== this.captureGeneration || this.phase !== "capturing") {
       return;
     }
     if (error !== null || observation === null) {
+      try {
+        if (this.request?.capture_policy === "robot_los_required" && this.shouldWaitForGeometricGate()) {
+          this.onRequest(this.request); return;
+        }
+      } catch (gateError) { this.captureFailed(gateError); return; }
       this.captureFailed(error);
       return;
     }
@@ -351,8 +422,8 @@ export class LocalizationCaptureEpisode {
       this.enterFailed(errorMessage(error));
       return;
     }
-    // Keep the video stream warm while the server checks this bounded batch.
-    // A miss requests the next batch immediately; success/reset stops capture.
+    if (this.runtimeCapture?.stopWhileAwaitingResult && this.clientTrackingOriginStore.hasTrackingOrigin) this.stopHardware();
+    // Setup may keep its deliberate preview warm; runtime can release the stream.
     this.sentAt = now; this.batchesSent++; this.trace("batch-sent", `bytes=${this.observations.reduce((sum, observation) => sum + observation.jpeg.length, 0)}`);
   }
 
@@ -380,6 +451,7 @@ export class LocalizationCaptureEpisode {
   }
 
   private enterFailed(reason: string): void {
+    if (reason === "result timeout") this.scheduleRuntimeRetry();
     this.session.cancelLocalizationSubmission();
     this.phase = "failed";
     this.stopHardware();
@@ -388,12 +460,15 @@ export class LocalizationCaptureEpisode {
     this.geometricGateWaitStartedAt = null;
     this.nextCaptureAt = null;
     this.resultDeadline = null;
-    this.retryAt = this.clock.now() + this.retryBackoffS;
+    this.retryAt = Math.max(this.clock.now() + this.retryBackoffS, this.runtimeRetryAt ?? -Infinity);
   }
 
   private resetIdle(): void {
+    this.runtimeMisses = 0; this.runtimeRetryAt = null;
     this.session.cancelLocalizationSubmission();
     this.captureGeneration += 1;
+    this.inflight = null;
+    this.inflightGeneration = null;
     this.stopHardware();
     this.phase = "idle";
     this.request = null;

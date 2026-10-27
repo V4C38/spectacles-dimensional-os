@@ -15,7 +15,7 @@ from dimos.ar.robot.capabilities import (
     Capability,
     CapabilityName,
 )
-from dimos.ar.robot.profiles import RobotDescription
+from dimos.ar.robot.profiles.profile import RobotDescription
 from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.msgs.geometry_msgs.Pose import Pose
 
@@ -46,27 +46,21 @@ def _require_type(data: dict[str, Any], key: str, expected: type) -> Any:
 def _finite_float(data: dict[str, Any], key: str) -> float:
     if key not in data:
         raise ValueError(f"Missing required field: {key}")
-    value = data[key]
-    if not isinstance(value, (int, float)):
-        raise TypeError(f"Field {key!r} must be a number")
-    out = float(value)
-    if not math.isfinite(out):
-        raise ValueError(f"Field {key!r} must be finite")
-    return out
+    return _strict_finite_number(data[key], key)
 
 
 def _vec3(data: dict[str, Any], key: str) -> tuple[float, float, float]:
     raw = _require_type(data, key, list)
     if len(raw) != 3:
         raise ValueError(f"Field {key!r} must be a 3-element array")
-    return float(raw[0]), float(raw[1]), float(raw[2])
+    return tuple(_strict_finite_number(value, f"{key}[{i}]") for i, value in enumerate(raw))  # type: ignore[return-value]
 
 
 def _quat(data: dict[str, Any], key: str) -> tuple[float, float, float, float]:
     raw = _require_type(data, key, list)
     if len(raw) != 4:
         raise ValueError(f"Field {key!r} must be a 4-element quaternion [qx, qy, qz, qw]")
-    return float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3])
+    return tuple(_strict_finite_number(value, f"{key}[{i}]") for i, value in enumerate(raw))  # type: ignore[return-value]
 
 
 def _finite_vec3(data: dict[str, Any], key: str) -> tuple[float, float, float]:
@@ -86,20 +80,11 @@ def _strict_finite_number(value: object, key: str) -> float:
 
 
 def _strict_finite_float(data: dict[str, Any], key: str) -> float:
-    if key not in data:
-        raise ValueError(f"Missing required field: {key}")
-    return _strict_finite_number(data[key], key)
+    return _finite_float(data, key)
 
 
 def _strict_finite_vec3(data: dict[str, Any], key: str) -> tuple[float, float, float]:
-    raw = _require_type(data, key, list)
-    if len(raw) != 3:
-        raise ValueError(f"Field {key!r} must be a 3-element array")
-    return (
-        _strict_finite_number(raw[0], f"{key}[0]"),
-        _strict_finite_number(raw[1], f"{key}[1]"),
-        _strict_finite_number(raw[2], f"{key}[2]"),
-    )
+    return _finite_vec3(data, key)
 
 
 def _finite_quat(data: dict[str, Any], key: str) -> tuple[float, float, float, float]:
@@ -284,6 +269,8 @@ def decode_localization_observations(data: bytes) -> tuple[LocalizationObservati
     for _ in range(observation_count):
         observation, offset = _decode_localization_observation(data, offset)
         observations.append(observation)
+    if offset != len(data):
+        raise ValueError("localization_observations has unexplained trailing bytes")
     return tuple(observations)
 
 
@@ -306,14 +293,24 @@ def _decode_localization_observation(
     ts_capture, jpeg_len, intrinsics_len = struct.unpack_from("<dII", data, record_start)
     if not math.isfinite(ts_capture):
         raise ValueError("ts_capture must be finite")
-    camera_position = struct.unpack_from("<3f", data, record_start + 20)
-    camera_orientation = struct.unpack_from("<4f", data, record_start + 32)
+    if struct.unpack_from("<I", data, record_start + 16)[0] != 0:
+        raise ValueError("localization observation reserved word must be zero")
+    camera_position = _finite_vec3(
+        {"camera_position": list(struct.unpack_from("<3f", data, record_start + 20))},
+        "camera_position",
+    )
+    camera_orientation = _finite_quat(
+        {"camera_orientation": list(struct.unpack_from("<4f", data, record_start + 32))},
+        "camera_orientation",
+    )
 
     payload_offset = record_start + 48
     jpeg_end = payload_offset + jpeg_len
     intrinsics_end = jpeg_end + intrinsics_len
     if intrinsics_end > record_end:
         raise ValueError("localization observation payload exceeds record")
+    if intrinsics_end != record_end:
+        raise ValueError("localization observation has unexplained record bytes")
 
     jpeg = data[payload_offset:jpeg_end]
     intrinsics_raw = json.loads(data[jpeg_end:intrinsics_end].decode("utf-8"))
@@ -344,18 +341,19 @@ def _decode_localization_observation(
 
 def _decode_intrinsics(data: dict[str, Any]) -> Intrinsics:
     for key in ("fx", "fy", "cx", "cy"):
-        if key not in data or not isinstance(data[key], (int, float)):
-            raise ValueError(f"Missing or invalid intrinsics field: {key}")
+        _finite_float(data, key)
+    if data["fx"] <= 0 or data["fy"] <= 0:
+        raise ValueError("intrinsics focal lengths must be positive")
     for key in ("width", "height"):
-        if key not in data or not isinstance(data[key], int):
-            raise ValueError(f"Missing or invalid intrinsics field: {key}")
+        if type(data.get(key)) is not int or data[key] <= 0:
+            raise ValueError(f"intrinsics.{key} must be a positive integer")
     distortion_model = _require_type(data, "distortion_model", str)
     if distortion_model not in ("none", "plumb_bob", "equidistant"):
         raise ValueError("intrinsics.distortion_model must be none, plumb_bob, or equidistant")
-    distortion_raw = data.get("distortion", [])
-    if not isinstance(distortion_raw, list):
-        raise TypeError("intrinsics.distortion must be a list")
-    distortion = tuple(float(v) for v in distortion_raw)
+    distortion_raw = _require_type(data, "distortion", list)
+    distortion = tuple(_strict_finite_number(v, "distortion") for v in distortion_raw)
+    if distortion_model == "none" and distortion:
+        raise ValueError("intrinsics.distortion must be empty when distortion_model is none")
     return Intrinsics(
         fx=float(data["fx"]),
         fy=float(data["fy"]),

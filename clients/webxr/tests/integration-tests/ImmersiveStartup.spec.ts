@@ -3,6 +3,7 @@ import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
 import { startVisualReview, markVisualReview, saveVisualReview } from "./fixtures/VisualReview";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import type { State } from "../../../specs/Assets/Scripts/DimOSARClient/websocket/protocolTypes";
 
 // ClientCore lives outside WebXR's ESM package. Load it through Playwright's
 // CommonJS transform so test discovery also works on CI's Node 20 runtime.
@@ -61,6 +62,13 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       w.questDevice.installRuntime({ forceInstall: true });
     }, mode);
     let socket: WebSocketRoute | undefined;
+    let serverState: State = { type: "state", server: { connected_clients: 1 },
+      lidar: { enabled: false, min_height_m: 0, max_height_m: 2, max_range_m: 5 },
+      nav: { state: "idle", outcome: null }, agent: { idle: true } };
+    const sendState = (update: Partial<State> = {}, peer = socket) => {
+      serverState = { ...serverState, ...update };
+      peer!.send(JSON.stringify(serverState) + "\n");
+    };
     let observations = 0;
     let latestCaptureTs = 0;
     let goals = 0;
@@ -85,6 +93,11 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
           return;
         }
         const command = JSON.parse(raw);
+        if (command.type === "state_request") sendState({}, ws);
+        if (command.type === "lidar_settings_request") {
+          sendState({ lidar: { enabled: command.enabled, min_height_m: command.min_height_m,
+            max_height_m: command.max_height_m, max_range_m: command.max_range_m } }, ws);
+        }
         if (command.type === "estop_request") estops++;
         if (command.type === "user_message_request") {
           agentMessages.push(command.text);
@@ -104,7 +117,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
             robot: { display_name: "Unitree Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.3], base_height_m: 0.33 },
             capabilities: { lidar: available, localization: available, estop: available, agent: available,
               navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: available } } });
-          send({ type: "state", server: { connected_clients: 1 }, lidar: { enabled: false, min_height_m: 0, max_height_m: 2, max_range_m: 5 }, nav: { state: "idle", outcome: null }, agent: { idle: true } });
+          sendState({}, ws);
           send({ type: "pose", position: [2, 0, 0.33], orientation: [0, 0, 0, 1], ts: command.ts_client });
         }
         if (command.type === "localization_start_request") send({ type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 3 });
@@ -684,11 +697,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
         Math.abs(dashed.material.uniforms.uGap.value - dashStyle.gapM) < 0.00001;
     }, ROBOT_LINE_STYLE)).toBe(true);
 
-    const followingState = await page.evaluate(() => {
-      const w = window as any;
-      return w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp").client.session.view().state;
-    });
-    socket!.send(JSON.stringify({ ...followingState, nav: { state: "following_path", outcome: null } }) + "\n");
+    sendState({ nav: { state: "following_path", outcome: null } });
     const beforeFollowingView = await page.evaluate(() => {
       const w = window as any;
       const app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
@@ -761,9 +770,9 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     });
     for (const outcome of ["succeeded", "cancelled"] as const) {
       if (outcome === "cancelled") {
-        socket!.send(JSON.stringify({ ...followingState, nav: { state: "idle", outcome: null } }) + "\n");
+        sendState({ nav: { state: "idle", outcome: null } });
         socket!.send(JSON.stringify({ type: "nav_goal", ts: 20, pose: [1.1, 0.45, 0, 0], path_poses: [[2, 0, 0, 0], [1.1, 0.45, 0, 0]] }) + "\n");
-        socket!.send(JSON.stringify({ ...followingState, nav: { state: "following_path", outcome: null } }) + "\n");
+        sendState({ nav: { state: "following_path", outcome: null } });
         await expect.poll(async () => (await feedback()).attached).toBe(false);
       }
       // Trace at normal speed, then hold the built glyph while the screenshot is captured.
@@ -775,7 +784,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
         w.resumeOutcome = () => { interaction.tick = tick; };
       });
       markVisualReview(page, `navigation-${outcome}.png`);
-      socket!.send(JSON.stringify({ ...followingState, nav: outcome === "succeeded" ? { state: "resolved", outcome } : { state: "idle", outcome: null } }) + "\n");
+      sendState({ nav: outcome === "succeeded" ? { state: "resolved", outcome } : { state: "idle", outcome: null } });
       await expect.poll(async () => { const f = await feedback(); return f.flash === outcome && f.progress >= 0.89; }, { intervals: [10] }).toBe(true);
       expect((await feedback()).attached).toBe(false);
       await page.screenshot({ path: testInfo.outputPath(`navigation-${outcome}.png`) });

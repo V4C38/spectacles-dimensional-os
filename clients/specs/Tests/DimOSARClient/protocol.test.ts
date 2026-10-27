@@ -663,3 +663,29 @@ it("accepts the optional robot XY heuristic while keeping older hello defaults",
     expect(() => decodeOutbound(JSON.stringify({ ...hello, robot: { ...hello.robot, odom_scale_correction_factor: scale } }))).toThrow();
   }
 });
+
+it("rejects zero quaternions consistently in navigation, telemetry and camera observations", () => {
+  expect(() => encodeNavGoalRequest({ position: [0, 0, 0], orientation: [0, 0, 0, 0] })).toThrow(/non-zero/);
+  expect(() => decodeOutbound(JSON.stringify({ ...POSE_FIXTURE, orientation: [0, 0, 0, 0] }))).toThrow(/non-zero/);
+  expect(() => decodeOutbound(JSON.stringify({ ...LOCALIZATION_RESULT_FIXTURE, orientation: [0, 0, 0, 0] }))).toThrow(/non-zero/);
+  expect(() => encodeLocalizationObservations([sampleObservation({ camera_orientation: [0, 0, 0, 0] })])).toThrow(/non-zero/);
+  expect(() => encodeLocalizationObservations([sampleObservation({ camera_position: [Number.MAX_VALUE, 0, 0] })])).toThrow(/float32/);
+});
+
+it.each([
+  { width: 0 }, { width: -1 }, { height: 1.5 }, { width: true },
+  { fx: 0 }, { fy: -1 }, { fx: "100" }, { fy: null },
+])("rejects invalid camera calibration values %j", invalid => {
+  expect(() => encodeLocalizationObservations([sampleObservation({ intrinsics: { ...INTRINSICS_NONE, ...invalid } as never })])).toThrow();
+});
+
+it("validates decoded calibration through the same positive-dimension and focal-length checks", () => {
+  for (const [field, replacement] of [["width", '"width":0  '], ["fx", '"fx":0  ']] as const) {
+    const data = encodeLocalizationObservations([sampleObservation()]);
+    const marker = new TextEncoder().encode(`"${field}":100`);
+    const at = data.findIndex((_, i) => marker.every((byte, j) => data[i + j] === byte));
+    expect(at).toBeGreaterThan(0);
+    data.set(new TextEncoder().encode(replacement), at);
+    expect(() => decodeLocalizationObservations(data)).toThrow(/positive/);
+  }
+});

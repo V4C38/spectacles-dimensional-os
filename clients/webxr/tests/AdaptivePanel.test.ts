@@ -165,7 +165,7 @@ it("keeps space above Emergency Stop through every runtime page resize", () => {
 
 it("keeps robot activity only in the robot badge while preserving menu errors", () => {
   const f = harness();
-  for (const activity of ["Idle", "Following Path", "Thinking"]) {
+  for (const activity of ["Idle", "Following Path", "Thinking"] as const) {
     f.apply({ activity });
     const robot = f.view.panel.getObjectByName("Robot selection button") as xb.TextButton;
     expect(robot.text).toContain(activity === "Following Path" ? "Following path" : activity);

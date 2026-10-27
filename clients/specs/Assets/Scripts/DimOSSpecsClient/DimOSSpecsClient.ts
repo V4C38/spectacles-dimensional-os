@@ -81,6 +81,8 @@ export class DimOSSpecsClient extends BaseScriptComponent {
   private episode: LocalizationCaptureEpisode | null = null;
   private navGoalPresenter: NavGoalPresenter | null = null;
   private navigationController: NavigationController | null = null;
+  private unsubscribeSelection: (() => void) | null = null;
+  private destroyed = false;
   private unsubscribeView: (() => void) | null = null;
   private updateEvent: SceneEvent | null = null;
   private lastSessionView: ReturnType<ARModuleSession["view"]> | null = null;
@@ -164,6 +166,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       tracking: cameraSource,
       capture: cameraSource,
       initiallyPaused: true,
+      runtimeCapture: { retryDelaysS: [2, 5, 10, 30], stopWhileAwaitingResult: true },
       trace: event => { if (event.stage === "batch-sent" || event.stage === "result-received" || event.stage === "failed") print(`Localization: ${JSON.stringify(event)}`); },
     });
     this.episode = episode;
@@ -189,10 +192,11 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       this.uiPresenter.invalidateSetupBaseline();
       this.suspended = true; this.selection.clear(); this.navigationInput?.reset();
       this.lasers?.reset();
-      this.speechController?.endRecording(true); this.cameraSource?.stop();
+      this.speechController?.endRecording(true); this.episode?.suspend();
     });
     this.createEvent("OnResumeEvent").bind(() => {
       this.suspended = false;
+      this.episode?.resume();
       if (this.uiPresenter.isSetupCompleted()) this.uiPresenter.requestAlignmentReview("Headset resumed");
     });
     this.createEvent("WorldTrackingResetEvent").bind(() => {
@@ -207,6 +211,10 @@ export class DimOSSpecsClient extends BaseScriptComponent {
 
     this.createEvent("OnStartEvent").bind(() => this.onStart());
     this.createEvent("OnDestroyEvent").bind(() => {
+      if (this.destroyed) return;
+      this.destroyed = true;
+      this.uiPresenter.dispose();
+      this.unsubscribeSelection?.(); this.unsubscribeSelection = null;
       this.navigationTargetPriority?.dispose();
       const dispatcher = LensConfig.getInstance().updateDispatcher;
       if (this.laserStart) dispatcher.removeEvent(this.laserStart);
@@ -222,14 +230,14 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       this.tts = null;
       this.annotations?.clearAll();
       this.annotations = null;
-      this.navigationController!.dispose();
-      this.robotPresenter!.reset();
+      this.navigationController?.dispose();
+      this.robotPresenter!.dispose();
       this.lidarPresenter.hide();
-      this.navGoalPresenter!.destroy();
+      this.navGoalPresenter?.destroy();
       this.previewRoute?.destroy(); this.notifications?.dispose();
-      this.episode!.dispose();
-      this.updateEvent!.enabled = false;
-      this.session!.stop();
+      this.episode?.dispose();
+      if (this.updateEvent) this.updateEvent.enabled = false;
+      this.session?.stop();
     });
   }
 
@@ -254,7 +262,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
 
     this.robotPresenter.bindSelection(() => this.selection.toggle(), this.cameraObject,
       sourceId => !this.navigationController?.ownsDraft(sourceId));
-    this.selection.subscribe(selected => {
+    this.unsubscribeSelection = this.selection.subscribe(selected => {
       this.robotPresenter.setSelected(selected);
       navigationController.setSelected(selected);
       if (!selected) this.speechController?.endRecording(true);
@@ -275,8 +283,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       ipRelayClient: new IpRelayClient(this.internetModule),
       script: this,
       cameraObject: this.cameraObject,
-      isRobotSelected: () => this.selection.isSelected(),
-      toggleRobotSelection: () => this.selection.toggle(),
+      selection: this.selection,
       emergencyStop: () => this.emergencyStop(),
       onModeChanged: () => { this.selection.clear(); this.navigationInput?.reset(); },
     });
@@ -339,15 +346,26 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     });
     let lastOrigin: ClientTrackingOrigin | null = null;
     let previousSetup = false;
+    let nextCaptureDiagnosticsAt = 0;
+    let diagnosticFrames = 0, diagnosticFrameS = 0, diagnosticWorstS = 0;
     const updateEvent = this.createEvent("UpdateEvent");
     updateEvent.bind(() => {
       if (this.suspended) return;
-      const dt = Math.min(0.1, getDeltaTime());
+      const rawDt = Math.max(0, getDeltaTime());
+      const dt = Math.min(0.1, rawDt);
+      diagnosticFrames++; diagnosticFrameS += rawDt; diagnosticWorstS = Math.max(diagnosticWorstS, rawDt);
       cameraSource.samplePose(); session.tick(); episode.tick(); this.maybeSendClientPose();
+      if (getTime() >= nextCaptureDiagnosticsAt) {
+        nextCaptureDiagnosticsAt = getTime() + 30;
+        print(`Capture diagnostics: ${JSON.stringify({ phase: episode.view().phase, budget: episode.captureBudget(), fps: diagnosticFrames / Math.max(0.001, diagnosticFrameS), worstFrameMs: diagnosticWorstS * 1000, camera: cameraSource.diagnostics(), stream: SpecsCameraStream.getInstance().diagnostics() })}`);
+        if (this.uiPresenter.getDebugMode()) print(`LiDAR alignment: ${JSON.stringify(this.lidarPresenter.spatialDiagnostics(this.cameraObject.getComponent("Component.Camera") as Camera))}`);
+        diagnosticFrames = 0; diagnosticFrameS = 0; diagnosticWorstS = 0;
+      }
+      this.syncSelectionEligibility();
       this.uiPresenter.tick(dt);
       const view = session.view(), origin = clientTrackingOriginStore.T_odom_client;
       const setup = this.uiPresenter.isSetupCompleted();
-      this.selection.setEligible(setup && !this.uiPresenter.isAlignmentReviewPending() && view.connection === "ready");
+      this.syncSelectionEligibility();
       const viewportHeight = (this.cameraObject.getComponent("Component.Camera") as Camera)?.renderTarget?.getHeight() ?? 1024;
       robotPresenter.setViewportHeight(viewportHeight); navigationController.setViewportHeight(viewportHeight);
       if (roomPresentationDirty || previousSetup !== setup || lastOrigin !== origin) {
@@ -364,6 +382,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       else navigationController.applyView(view, origin);
       navigationController.setSelected(this.selection.isSelected());
       this.navigationInput?.tick(controls, setup && !this.uiPresenter.isAlignmentReviewPending() && view.connection === "ready");
+      navigationController.surveyFloor();
       navigationController.tick(dt);
       const nav = navigationController.interaction.snapshot();
       robotPresenter.setNavigationFloor(!nav.attachedToRobot, navigationController.circleOpacity());
@@ -398,6 +417,11 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       else this.session.requestEstop();
       this.notifications?.show({ text: "Emergency stop requested", tone: "danger", glyph: "stop", priority: 100 });
     } catch { this.notifications?.show({ text: "Stop request failed", tone: "danger", glyph: "stop", priority: 100 }); }
+  }
+
+  private syncSelectionEligibility(): void {
+    this.selection.setEligible(this.uiPresenter.isSetupCompleted() &&
+      !this.uiPresenter.isAlignmentReviewPending() && this.session?.view().connection === "ready");
   }
 
   private maybeSendClientPose(): void { this.posePublisher?.tick(); }

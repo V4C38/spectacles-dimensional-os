@@ -3,6 +3,11 @@ import { easePanel, panelContentOffset, PANEL_GEOMETRY } from "./PanelLayout";
 
 /** Application-driven height changes; SUK continues to own grabbing and following. */
 export class PanelHeightController {
+  private disposed = false;
+  private readonly subscriptions: (() => void)[] = [];
+  private retain(subscription: unknown): void {
+    if (typeof subscription === "function") this.subscriptions.push(subscription as () => void);
+  }
   height = PANEL_GEOMETRY.maximumHeight as number;
   target = this.height;
   private start = this.height;
@@ -13,11 +18,16 @@ export class PanelHeightController {
   private anchor: vec3 | null = null;
 
   constructor(private readonly frame: Frame | null, private readonly root: SceneObject, private readonly scale: number) {
-    frame?.onTranslationStart.add(() => { this.dragging = true; this.restoreFollowing = false; });
-    frame?.onTranslationEnd.add(() => {
+    this.retain(frame?.onTranslationStart.add(() => { this.dragging = true; this.restoreFollowing = false; }));
+    this.retain(frame?.onTranslationEnd.add(() => {
       this.dragging = false;
       if (this.height !== this.target) this.begin();
-    });
+    }));
+  }
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true; this.visible = false; this.anchor = null;
+    for (const unsubscribe of this.subscriptions.splice(0)) unsubscribe();
   }
   setVisible(visible: boolean): void {
     this.visible = visible;
@@ -39,7 +49,7 @@ export class PanelHeightController {
     this.frame.smoothFollow?.resize(90 * this.scale);
   }
   tick(deltaS: number): void {
-    if (!this.visible || this.dragging || this.height === this.target) return;
+    if (this.disposed || !this.visible || this.dragging || this.height === this.target) return;
     this.elapsed = Math.min(0.28, this.elapsed + Math.max(0, deltaS));
     this.apply(this.start + (this.target - this.start) * easePanel(this.elapsed / 0.28));
     if (this.elapsed === 0.28) {

@@ -13,11 +13,16 @@ export type PoseSample = {
 };
 
 export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSource {
-  private readonly stream: SpecsCameraStream;
+  private readonly stream: Pick<SpecsCameraStream, "start" | "stop" | "requestNextFrame" | "deviceCamera">;
   private readonly cameraObject: SceneObject;
   private readonly poseBuffer: PoseSample[] = [];
+  private generation = 0;
+  private encoding: Promise<Uint8Array> | null = null;
+  private readonly metrics = { captures: 0, encodes: 0, discarded: 0, jpegBytes: 0, encodeMs: 0, inFlight: 0, maxInFlight: 0 };
+  diagnostics() { return { ...this.metrics }; }
+  private readonly pending = new Set<(error: Error) => void>();
 
-  constructor(deps: { stream: SpecsCameraStream; cameraObject: SceneObject }) {
+  constructor(deps: { stream: Pick<SpecsCameraStream, "start" | "stop" | "requestNextFrame" | "deviceCamera">; cameraObject: SceneObject }) {
     if (!deps.cameraObject) {
       throw new Error("cameraObject is required");
     }
@@ -51,6 +56,9 @@ export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSou
   }
 
   stop(): void {
+    this.generation++;
+    for (const reject of this.pending) reject(new Error("Camera capture stopped"));
+    this.pending.clear();
     this.stream.stop();
   }
 
@@ -61,8 +69,29 @@ export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSou
     return global.deviceInfoSystem.getTrackingCameraForId(CameraModule.CameraId.Default_Color);
   }
 
-  async capture(): Promise<LocalizationObservation> {
+  capture(canEncode: () => boolean = () => true): Promise<LocalizationObservation> {
+    this.metrics.captures++;
+    const generation = this.generation;
+    return new Promise((resolve, reject) => {
+      this.pending.add(reject);
+      void this.captureFrame(generation, canEncode).then(
+        observation => { this.pending.delete(reject); resolve(observation); },
+        error => { this.pending.delete(reject); reject(error); },
+      );
+    });
+  }
+
+  private async captureFrame(generation: number, canEncode: () => boolean): Promise<LocalizationObservation> {
+    // A cancelled native JPEG operation cannot be aborted. Serialize the next
+    // generation behind it, then request NEW pixels rather than retaining a frame.
+    if (this.encoding) await this.encoding.catch(() => undefined);
+    const eligible = () => generation === this.generation && canEncode();
+    if (!eligible()) { this.metrics.discarded++; throw new Error("Camera capture no longer eligible"); }
     const frame = await this.stream.requestNextFrame();
+    if (generation !== this.generation) throw new Error("Camera capture stopped");
+    if (!Number.isFinite(frame.timestampSeconds) || frame.timestampSeconds <= 0) {
+      throw new Error("Camera frame is missing a valid exposure timestamp");
+    }
     const pose = lookupPoseSample(this.poseBuffer, frame.timestampSeconds);
     if (!pose) {
       throw new Error("no camera pose for capture timestamp");
@@ -73,11 +102,29 @@ export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSou
     }
     const optical = composeDeviceOptical(pose, deviceCamera.pose);
     const tracking = specsCameraOpticalPoseToTracking(optical.position, optical.rotation);
-    const jpeg = await encodeJpeg(frame.texture);
+    const intrinsics = scaleCameraIntrinsics(deviceCamera, frame.texture);
+    if (!eligible()) { this.metrics.discarded++; throw new Error("Camera capture no longer eligible"); }
+    if (this.encoding) {
+      await this.encoding.catch(() => undefined);
+      return this.captureFrame(generation, canEncode);
+    }
+    const started = getTime();
+    this.metrics.encodes++; this.metrics.inFlight++;
+    this.metrics.maxInFlight = Math.max(this.metrics.maxInFlight, this.metrics.inFlight);
+    const encoding = encodeJpeg(frame.texture); this.encoding = encoding;
+    let jpeg: Uint8Array;
+    try { jpeg = await encoding; }
+    finally {
+      this.metrics.inFlight--; this.metrics.encodeMs += Math.max(0, getTime() - started) * 1000;
+      if (this.encoding === encoding) this.encoding = null;
+    }
+    this.metrics.jpegBytes += jpeg.length;
+    if (!eligible()) { this.metrics.discarded++; throw new Error("Camera capture no longer eligible"); }
+    if (generation !== this.generation) throw new Error("Camera capture stopped");
     return {
       ts_capture: frame.timestampSeconds,
       jpeg,
-      intrinsics: scaleCameraIntrinsics(deviceCamera, frame.texture),
+      intrinsics,
       camera_position: tracking.position,
       camera_orientation: tracking.orientation,
     };

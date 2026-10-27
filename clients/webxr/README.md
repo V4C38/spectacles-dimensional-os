@@ -74,13 +74,15 @@ The in-world wizard follows **Connect → Localization**. Connection
 uses the serving PC through `/ar`, with automatic retries and a visible handshake state.
 Back pauses capture; returning resumes a retained server prompt. Localization success finishes
 setup automatically. Skip opens runtime controls without enabling spatial navigation.
-LiDAR stays off in setup and defaults to obstacles afterward.
+LiDAR stays off in setup and defaults to obstacles afterward. Mode selection changes
+when ARModule confirms settings; point limits remain local rendering preferences.
 
-Show your left palm or press controller button 4 to open the menu in front of you,
-18 cm below eye level and about 90 cm away. It follows head movement slowly, with an
-approximately 1.8-second time constant; grabbing the panel pauses following. Choose Manual for drag navigation
-and the left joystick; choose Agent for conversation. Voice listens for “agent”, keeps a
-30-second conversation window, and handles “stop” with the existing emergency-stop command.
+Show either palm or press controller button 4 to summon the runtime menu. It
+follows the summoning hand/controller and faces the viewer; grabbing it or losing
+that source pins it. The setup panel uses its own viewer-following placement.
+Choose Manual for direct marker dragging, floor placement and the left joystick;
+choose Agent to edit and send a message. Voice edits the draft while the field is
+held; it does not open a wake-phrase conversation window.
 Hold the message field to record, release to review, and press Send to agent.
 Further recordings append to the draft; Clear empties it. Scrollbars and controller
 thumbsticks reveal long text. Recording requires browser speech recognition.
@@ -88,8 +90,9 @@ Robot name, connection, activity, prompt and response appear above the robot.
 
 The tracking reference space lasts for the immersive session. Focus loss pauses input and
 capture while retaining setup and alignment. Reference-space resets with a reported transform
-are compensated using an offset reference space. A reset without a transform invalidates
-alignment because the runtime cannot relate the old coordinates to the new ones. Exiting AR
+are compensated using an offset reference space. A reset without a transform retires the old capture/transport episode and
+retains alignment pending a user review. Dismissing the review closes the menu
+without certifying the retained alignment; Realign reruns localization. Exiting AR
 ends the tracking session; reenter from the landing page without reloading.
 
 Camera localization uses the Quest 3 and Quest 3S device profiles directly. Model-specific
@@ -105,12 +108,14 @@ layer 1. Camera rendering remains on layer 0. Controller/hand models, pointer vi
 decorations stay visible but cannot intercept rays. Hidden UI is excluded at its mesh
 raycast boundary, before hover, selection, or reticle resolution.
 
-The framework's controller target-ray transform, ordered hit list, `User` capture/selection,
-button callbacks and native reticle drive both UI and world interaction. The beam attaches
+The framework supplies controller target rays, intersections, `User` capture/selection,
+button callbacks and its native reticle. `WebXRInputController` owns gesture and
+capture dispatch; `XRBlocksRayInteraction` filters and orders application hits,
+including marker/robot priority and UI occlusion. The beam attaches
 to the framework's controller and ends at the same first hit. A miss shows a 3 m beam;
 registered surfaces remain targetable up to 20 m, with no minimum distance that prevents
-close interaction. There is no separate pose reader, application hit sorter, UI raycaster,
-or cursor implementation. See [XR Blocks 0.18 input](https://github.com/google/xrblocks/blob/v0.18.0/src/input/Input.ts)
+close interaction. Direct fingertip presses use the same guarded button callbacks.
+See [XR Blocks 0.18 input](https://github.com/google/xrblocks/blob/v0.18.0/src/input/Input.ts)
 and [Three.js raycaster layers](https://threejs.org/docs/pages/Raycaster.html#layers).
 
 The navigation marker has a white circle and arrow with a transparent center, and follows

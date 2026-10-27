@@ -29,6 +29,11 @@ export class SpecsCameraStream {
     reject: (error: Error) => void;
   }[] = [];
   private running = false;
+  private startedAt = 0;
+  private readonly metrics = { starts: 0, stops: 0, frames: 0, streamingS: 0 };
+  diagnostics() { return { ...this.metrics, streamingS: this.metrics.streamingS + (this.running ? Math.max(0, getTime() - this.startedAt) : 0),
+    running: this.running, listeners: this.frameRegistration !== null ? 1 : 0, waitingFrames: this.pendingResolvers.length }; }
+  private generation = 0;
   private loggedFirstFrameSize = false;
 
   private constructor() {}
@@ -46,16 +51,19 @@ export class SpecsCameraStream {
     const requestedDim = options?.imageSmallerDimension ?? CAMERA_STREAM_SMALLER_DIM;
     const dim = this.requestCameraWithFallback(requestedDim);
     this.provider = this.texture!.control as CameraTextureProvider;
-    this.frameRegistration = this.provider.onNewFrame.add((frame: CameraFrame) => this.onNewFrame(frame));
-    this.running = true;
+    const generation = ++this.generation;
+    this.frameRegistration = this.provider.onNewFrame.add((frame: CameraFrame) => {
+      if (generation === this.generation) this.onNewFrame(frame);
+    });
+    this.running = true; this.startedAt = getTime(); this.metrics.starts++;
     this.loggedFirstFrameSize = false;
     print(`SpecsCameraStream: started (imageSmallerDimension=${dim})`);
   }
 
   stop(): void {
-    if (!this.running) {
-      return;
-    }
+    if (!this.running) return;
+    this.metrics.streamingS += Math.max(0, getTime() - this.startedAt); this.metrics.stops++;
+    this.generation++;
     if (this.frameRegistration !== null && this.provider !== null) {
       this.provider.onNewFrame.remove(this.frameRegistration);
       this.frameRegistration = null;
@@ -78,6 +86,7 @@ export class SpecsCameraStream {
   }
 
   requestNextFrame(): Promise<SpecsCameraStreamFrame> {
+    if (!this.running) return Promise.reject(new Error("SpecsCameraStream is not running"));
     return new Promise<SpecsCameraStreamFrame>((resolve, reject) => {
       this.pendingResolvers.push({ resolve, reject });
     });
@@ -142,9 +151,16 @@ export class SpecsCameraStream {
   }
 
   private onNewFrame(frame: CameraFrame): void {
-    const rawTs = frame.timestampSeconds;
-    const ts =
-      typeof rawTs === "number" && Number.isFinite(rawTs) && rawTs > 0 ? rawTs : getTime();
+    if (!this.running) return;
+    this.metrics.frames++;
+    const ts = frame.timestampSeconds;
+    if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) {
+      this.latestFrame = null;
+      for (const waiter of this.pendingResolvers.splice(0)) {
+        waiter.reject(new Error("Camera frame is missing a valid exposure timestamp"));
+      }
+      return;
+    }
     const streamFrame: SpecsCameraStreamFrame = {
       texture: this.texture!,
       timestampSeconds: ts,

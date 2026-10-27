@@ -117,12 +117,39 @@ async def test_cancellation_aborts_inflight_http_and_closes_session(vendor) -> N
     assert client._session is None
 
 
-async def test_aggregate_http_deadline_includes_authentication(vendor) -> None:
-    vendor.options.delay = 0.06
-    client = _client(vendor, timeout=0.1)
+async def test_aggregate_http_deadline_includes_authentication(vendor, monkeypatch) -> None:
+    vendor.options.block = True
+    client = _client(vendor, timeout=10.0)
+    authenticated = asyncio.Event()
+    release_authentication = asyncio.Event()
+    timeout_created = asyncio.Event()
+    original_bearer = client._bearer
+    original_timeout = asyncio.timeout
+    deadlines = []
+
+    async def bearer(*, force_refresh=False):
+        token = await original_bearer(force_refresh=force_refresh)
+        authenticated.set()
+        await release_authentication.wait()
+        return token
+
+    def timeout(delay):
+        deadline = original_timeout(delay)
+        deadlines.append(deadline)
+        timeout_created.set()
+        return deadline
+
+    monkeypatch.setattr(client, "_bearer", bearer)
+    monkeypatch.setattr(asyncio, "timeout", timeout)
+    task = asyncio.create_task(client.query(jpeg=b"jpeg-bytes", intrinsics=_intrinsics()))
     try:
+        await asyncio.wait_for(timeout_created.wait(), 1)
+        await asyncio.wait_for(authenticated.wait(), 1)
+        assert [path for path, _, _ in vendor.requests] == ["/v1/m2m/token"]
+        deadlines[0].reschedule(asyncio.get_running_loop().time())
         with pytest.raises(TimeoutError):
-            await client.query(jpeg=b"jpeg-bytes", intrinsics=_intrinsics())
-        assert len(vendor.requests) == 2
+            await task
+        assert [path for path, _, _ in vendor.requests] == ["/v1/m2m/token"]
     finally:
+        release_authentication.set()
         await client.close()

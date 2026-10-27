@@ -1,7 +1,7 @@
 import { NavigationInteraction, type Placement } from "../../DimOSARClient/navigation/NavigationInteraction";
 import { NavigationPreviewCoordinator } from "../../DimOSARClient/navigation/NavigationPreviewCoordinator";
 import { NavigationMarkerRenderer } from "./NavigationMarkerRenderer";
-import { DragPlacementPlane, solveMeshPlacement } from "./GroundPlacement";
+import { DragPlacementPlane, SpecsFloorReference, SpecsDragPosition } from "./GroundPlacement";
 import { specsToClientTrackingPoint, clientTrackingToSpecsPoint, clientTrackingToSpecsYawPose, specsToClientTrackingYawPose } from "../utilities/SpecsCoordinates";
 import type { NavFlash } from "../../DimOSARClient/navigation/NavigationGoalLifecycle";
 import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
@@ -18,7 +18,12 @@ export class NavigationController {
   private draftMarker: NavGoalMarker | null = null;
   private readonly probes = new Map<string, NavigationMarkerRenderer>();
   private readonly inside = new Map<string, boolean>();
-  private readonly dragPlanes = new Map<string, { plane: DragPlacementPlane; time: number }>();
+  private readonly dragPlanes = new Map<string, { plane: DragPlacementPlane; filter: SpecsDragPosition; offset: vec3 | null; time: number }>();
+  private readonly floor = new SpecsFloorReference();
+  private surveyRemaining = 0;
+  private surveyNextAt = 0;
+  private surveyDeadline = 0;
+  private surveyIndex = 0;
   private dragPlaneOrigin: ClientTrackingOrigin | null = null;
   private previousFlash: NavFlash | null = null;
   private inputEnabled = true;
@@ -34,15 +39,18 @@ export class NavigationController {
   }) {
     deps.deviceTracking.worldOptions.enableWorldMeshesTracking = false;
     this.interaction = new NavigationInteraction({ sendGoal: pose => requestNavGoal(deps.session, pose),
-      cancel: () => deps.session.requestEstop() }, new NavigationPreviewCoordinator(deps.session));
+      cancel: () => deps.session.requestEstop() }, new NavigationPreviewCoordinator(deps.session), 1 / 0.08);
   }
 
-  isArmed(): boolean { return this.interaction.snapshot().visible; }
+  isArmed(): boolean {
+    const state = this.interaction.snapshot();
+    return state.visible && (this.floor.heightCm !== null || state.activeGoal.pose !== null);
+  }
   flash(): NavFlash | null { return this.interaction.flash(); }
   currentPose(): { position: vec3; rotation: quat } | null {
     if (!this.isArmed()) return null;
     const s = this.interaction.snapshot();
-    return trackingToSpecs(s.draft ?? s.activeGoal.pose ?? s);
+    return trackingToSpecs(s.dragging ? s : s.draft ?? s.activeGoal.pose ?? s);
   }
   activePath() { return this.interaction.activePath(); }
   previewPath() { return this.interaction.previewPath(); }
@@ -70,14 +78,26 @@ export class NavigationController {
     this.clearAim(sourceId);
   }
   tick(deltaS: number): void {
+    this.floor.advance(deltaS); this.deps.robotPresenter.setFloorHeight?.(this.floor.heightCm);
     this.interaction.tick(getTime(), Math.max(0, Math.min(deltaS, 0.1)));
     if (this.meshTracking && getTime() - this.lastMeshUseAt >= 1) this.setMeshTracking(false);
     this.render(deltaS);
   }
   applyView(view: ARModuleSessionState, origin: ClientTrackingOrigin | null): void {
-    if (origin !== this.dragPlaneOrigin || view.connection !== "ready" || !view.hasTrackingOrigin) this.dragPlanes.clear();
+    const floor = this.deps.robotPresenter.rawFloorPose?.() ?? this.deps.robotPresenter.floorPose();
+    const height = floor?.position.y ?? this.deps.robotPresenter.floorWorldY?.() ?? null;
+    if (origin !== this.dragPlaneOrigin || view.connection !== "ready" || !view.hasTrackingOrigin) {
+      this.dragPlanes.clear();
+      this.floor.reset(height);
+      this.surveyRemaining = origin && view.connection === "ready" ? 5 : 0;
+      this.surveyNextAt = getTime(); this.surveyDeadline = getTime() + 3; this.surveyIndex = 0;
+    }
+    if (this.floor.heightCm === null && height !== null) {
+      this.floor.reset(height); this.surveyRemaining = 5; this.surveyNextAt = getTime(); this.surveyDeadline = getTime() + 3;
+    }
     this.dragPlaneOrigin = origin;
-    const floor = this.deps.robotPresenter.floorPose();
+    this.deps.robotPresenter.setFloorHeight?.(this.floor.heightCm);
+    if (floor && this.floor.heightCm !== null) floor.position.y = this.floor.heightCm;
     this.interaction.applyView(view, origin, floor ? specsNavigationPoseInTracking(floor.position, floor.rotation) : null, getTime());
   }
   hide(): void { this.directSource = null; this.dragPlanes.clear(); this.interaction.reset(); this.setMeshTracking(false); this.render(0); }
@@ -115,47 +135,67 @@ export class NavigationController {
     if (!this.inputEnabled || this.directSource !== null && this.directSource !== sourceId) return;
     const selected = this.interaction.snapshot().selected;
     if (!selected && this.directSource !== sourceId) return;
-    this.interaction.release(getTime(), this.place(sourceId, from, direction, this.directSource === null && selected), sourceId);
+    const displayed = this.directSource === sourceId ? this.dragPlanes.get(sourceId)?.filter.position() : null;
+    const placement = displayed ? { position: specsToClientTrackingPoint([displayed.x, displayed.y, displayed.z]), blocked: false } :
+      this.place(sourceId, from, direction, this.directSource === null && selected);
+    this.interaction.release(getTime(), placement, sourceId);
     this.dragPlanes.delete(sourceId);
     this.directSource = null;
   }
 
   private place(sourceId: string, from: vec3, direction: vec3, floorAim: boolean): Placement {
     const length = direction.length;
-    if (length < 0.001) return null;
+    if (![from.x, from.y, from.z, direction.x, direction.y, direction.z, length].every(Number.isFinite) || length < 0.001) return null;
     const to = from.add(direction.uniformScale((floorAim ? 500 : 2000) / length));
     this.lastMeshUseAt = getTime(); this.setMeshTracking(true);
-    const raw = this.deps.deviceTracking.raycastWorldMesh(from, to);
+    const raw = this.deps.deviceTracking.raycastWorldMesh(from, to).filter(hit => !this.deps.robotPresenter.containsBodyPoint?.(hit.position));
     if (!floorAim) {
       const time = getTime();
       let drag = this.dragPlanes.get(sourceId);
       if (!drag) {
         const pose = this.currentPose();
         if (!pose) return null;
-        drag = { plane: new DragPlacementPlane(pose.position), time };
+        drag = { plane: new DragPlacementPlane(pose.position), filter: new SpecsDragPosition(pose.position), offset: null, time };
         this.dragPlanes.set(sourceId, drag);
       }
-      const p = drag.plane.solve(from, direction, raw, time - drag.time);
+      const placed = drag.plane.solve(from, direction, raw, time - drag.time);
+      if (placed && placed.distance(from) <= 2000 && drag.offset === null) {
+        const initial = drag.filter.position();
+        drag.offset = new vec3(initial.x - placed.x, 0, initial.z - placed.z);
+      }
+      const target = placed && drag.offset ? placed.add(drag.offset) : null;
+      const p = target && target.distance(from) <= 2000 ? drag.filter.update(target, time - drag.time) : null;
       drag.time = time;
-      return p ? { position: specsToClientTrackingPoint([p.x, p.y, p.z]), blocked: false } : null;
+      return p && [p.x, p.y, p.z].every(Number.isFinite) && p.distance(from) <= 2000 ? { position: specsToClientTrackingPoint([p.x, p.y, p.z]), blocked: false } : null;
     }
-    const radiusCm = this.deps.robotPresenter.deadzoneRadiusCm();
-    const floorY = this.deps.robotPresenter.floorWorldY() ?? 0;
-    // SIK mesh hits have no semantic floor label. Match WebXR's unlabelled
-    // floor gate: 20 degrees and within 18 cm of the known robot floor.
+    const floorY = this.floor.heightCm ?? this.deps.robotPresenter.floorWorldY();
+    if (floorY === null) return null;
     const first = raw[0];
-    if (direction.y >= -0.0001 || first && first.position.sub(from).dot(direction) <= 0) return null;
-    const result = solveMeshPlacement({ rayFrom: from, rayTo: to, hits: raw.map(hit => ({ position: hit.position, normal: hit.normal })),
-      deadzone: radiusCm === null ? null : { radiusCm,
-        getRobotWorldPosition: () => this.deps.robotPresenter.worldPosition(),
-        getRobotFloorWorldY: () => this.deps.robotPresenter.floorWorldY() },
-      wasInsideDeadzone: this.inside.get(sourceId) ?? false, fallbackY: floorY });
-    if (first && (first.normal.length < 0.0001 ||
-      first.normal.y / first.normal.length < Math.cos(Math.PI / 9) || Math.abs(first.position.y - floorY) > 18)) return null;
-    this.inside.set(sourceId, result.wasInsideDeadzone);
-    const p = result.goalPosition;
-    if (result.status !== "ok" || !p || floorAim && p.distance(from) > 500) return null;
+    if (direction.y >= -0.0001 || first && (first.position.distance(from) > 500 || first.position.sub(from).dot(direction) <= 0 ||
+      first.normal.length < 0.0001 || first.normal.y / first.normal.length < Math.cos(Math.PI / 9) ||
+      Math.abs(first.position.y - floorY) > 18)) return null;
+    const t = (floorY - from.y) / direction.y;
+    const p = from.add(direction.uniformScale(t));
+    if (t < 0 || p.distance(from) > 500) return null;
     return { position: specsToClientTrackingPoint([p.x, p.y, p.z]), blocked: false };
+  }
+
+  /** Five bounded floor samples after localization; no always-on room scanning. */
+  surveyFloor(): void {
+    const now = getTime();
+    if (now > this.surveyDeadline) { this.surveyRemaining = 0; return; }
+    if (!this.isArmed() || this.surveyRemaining <= 0 || now < this.surveyNextAt || this.floor.heightCm === null) return;
+    if (!this.meshTracking) { this.lastMeshUseAt = now; this.setMeshTracking(true); this.surveyNextAt = now + 0.3; return; }
+    const robot = this.deps.robotPresenter.worldPosition();
+    if (!robot) return;
+    const radius = (this.deps.robotPresenter.deadzoneRadiusCm() ?? 50) + 15;
+    const angle = (this.surveyIndex++ % 5) * Math.PI * 2 / 5;
+    const from = new vec3(robot.x + Math.cos(angle) * radius, this.floor.heightCm + 30, robot.z + Math.sin(angle) * radius);
+    this.lastMeshUseAt = now; this.setMeshTracking(true);
+    const hit = this.deps.deviceTracking.raycastWorldMesh(from, from.add(new vec3(0, -60, 0)))[0];
+    if ((!hit || !this.deps.robotPresenter.containsBodyPoint?.(hit.position)) && this.floor.observe(hit, now)) this.surveyRemaining--;
+    this.deps.robotPresenter.setFloorHeight?.(this.floor.heightCm);
+    this.surveyNextAt = now + 0.1;
   }
 
   private setMeshTracking(enabled: boolean): void {
@@ -174,7 +214,7 @@ export class NavigationController {
   private render(deltaS: number): void {
     const state = this.interaction.snapshot();
     if (state.flash !== this.previousFlash) { this.previousFlash = state.flash; this.onFlashChange?.(); }
-    if (!state.visible) {
+    if (!state.visible || state.attachedToRobot && this.floor.heightCm === null) {
       this.marker?.hide(); this.draftMarker?.hide();
       for (const probe of this.probes.values()) probe.hide(); return;
     }

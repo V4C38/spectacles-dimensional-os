@@ -48,7 +48,7 @@ export interface CameraTrackingSource {
 
 export interface CameraCaptureSource {
   start(): void;
-  capture(): Promise<LocalizationObservation>;
+  capture(canEncode?: () => boolean): Promise<LocalizationObservation>;
   stop(): void;
 }
 

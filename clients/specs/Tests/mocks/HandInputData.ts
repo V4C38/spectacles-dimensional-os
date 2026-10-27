@@ -5,6 +5,8 @@ export type MockHand = {
   getPalmPitchAngle: () => number;
   isFacingCamera: () => boolean;
   handType?: HandType;
+  indexTip?: { position: vec3 };
+  thumbTip?: { position: vec3 };
   wrist?: { position: { x: number; y: number; z: number } };
   middleMidJoint?: { position: { x: number; y: number; z: number } };
   indexMidJoint?: { position: { x: number; y: number; z: number } };

@@ -255,8 +255,8 @@ export class SpecsWebSocketTransport implements WebSocketTransport {
   }
 
   private clearTimers(): void {
-    this.connectTimeoutEvent.reset(0);
-    this.connectWatchdogEvent.reset(0);
+    this.connectTimeoutEvent.cancel();
+    this.connectWatchdogEvent.cancel();
   }
 
   private isSocketOpen(): boolean {

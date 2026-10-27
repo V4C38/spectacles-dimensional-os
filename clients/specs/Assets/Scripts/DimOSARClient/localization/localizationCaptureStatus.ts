@@ -28,6 +28,8 @@ export function localizationCaptureStatus(
       return { text: "Ready to scan", color: "neutral" };
     case "waiting_for_geometric_gate":
       return { text: "Look toward the robot to scan", color: "warn" };
+    case "waiting_for_retry":
+      return { text: "Localized — correction retry pending", color: "muted" };
     case "capturing":
     case "sending":
     case "awaiting_result":

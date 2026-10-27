@@ -95,13 +95,21 @@ export class NavGoalMarker extends BaseScriptComponent {
     if (this.cancelVisible) this.cancelProgress = Math.min(1, this.cancelProgress + Math.max(0, dt) / NAVIGATION_CANCEL_STYLE.revealS);
     this.worldVisuals.apply({ ...style, cancelProgress: this.cancelProgress, hovered: style.hovered ?? this.hovered }, dt, viewportHeight);
     this.applyCancelReveal();
-    // Keep the native hit cylinder aligned with the rendered ring, including selected scaling.
-    const radius = (this.dragCollider?.shape as CylinderShape | undefined)?.radius;
-    if (radius && this.dragObject) {
-      const transform = this.dragObject.getTransform(), scale = transform.getWorldScale();
-      const horizontal = this.worldVisuals.circleBounds().radius / radius;
+    // Pick the filled disc, not a thin surface below the visible ring. All
+    // dimensions are world centimetres, independent of prefab/ancestor scale.
+    const shape = this.dragCollider?.shape as CylinderShape | undefined;
+    if (shape?.radius && this.dragObject) {
+      const bounds = this.worldVisuals.circleBounds();
+      const transform = this.dragObject.getTransform();
+      const scale = transform.getWorldScale();
+      const horizontal = (bounds.radius + 2) / shape.radius;
       if (Math.abs(scale.x - horizontal) > 0.0001 || Math.abs(scale.z - horizontal) > 0.0001)
         transform.setWorldScale(new vec3(horizontal, scale.y, horizontal));
+      const length = 4 / Math.max(0.0001, Math.abs(scale.y));
+      if (Math.abs(shape.length - length) > 0.0001) shape.length = length;
+      const center = new vec3(...bounds.center);
+      if (transform.getWorldPosition().distance(center) > 0.0001) transform.setWorldPosition(center);
+      if (transform.getWorldRotation().multiplyVec3(vec3.up()).y < 0.99999) transform.setWorldRotation(quat.quatIdentity());
     }
   }
 

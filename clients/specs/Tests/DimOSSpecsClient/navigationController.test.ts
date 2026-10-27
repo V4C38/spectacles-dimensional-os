@@ -1,3 +1,4 @@
+import { setMockTime } from "../setup/lens-globals";
 import { describe, expect, it } from "vitest";
 import { clientTrackingToOdomPose, rotateVecByQuat, odomToClientTrackingYawPose } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingTransforms";
 import { clientTrackingToSpecsYawPose } from "../../Assets/Scripts/DimOSSpecsClient/utilities/SpecsCoordinates";
@@ -7,24 +8,6 @@ import {
 } from "../../Assets/Scripts/DimOSSpecsClient/navigation/GroundPlacement";
 import { specsNavigationPoseInTracking } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationController";
 import { SpecsNavigationInput } from "../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsNavigationInput";
-import { shouldBeginFailedFlash } from "../../Assets/Scripts/DimOSARClient/navigation/NavigationInteraction";
-
-describe("shouldBeginFailedFlash", () => {
-  const failed = { state: "resolved" as const, outcome: "failed" as const };
-  const following = { state: "following_path" as const, outcome: null };
-
-  it("fires on the rising edge of resolved failed while a live goal exists", () => {
-    expect(shouldBeginFailedFlash(following, failed, true)).toBe(true);
-    expect(shouldBeginFailedFlash(null, failed, true)).toBe(true);
-  });
-
-  it("does not re-arm while still resolved failed, or without a live goal", () => {
-    expect(shouldBeginFailedFlash(failed, failed, true)).toBe(false);
-    expect(shouldBeginFailedFlash(following, failed, false)).toBe(false);
-    expect(shouldBeginFailedFlash(following, following, true)).toBe(false);
-  });
-});
-
 describe("shouldSyncFollowFloorPose", () => {
   const identity = quat.quatIdentity();
 
@@ -94,7 +77,7 @@ it("removes invalid floor probes independently and cancels only their draft owne
   expect(controller.interaction.snapshot().draft).toBeNull();
   expect(controller.interaction.snapshot().probes.map(p => p.sourceId)).toEqual(["right"]);
   hits = []; controller.aim("right", from, direction);
-  expect(controller.interaction.snapshot().probes).toEqual([]);
+  expect(controller.interaction.snapshot().probes).toHaveLength(1); // Stable floor survives scan gaps.
   hits = [{ position: new vec3(0, 0, -100), normal: new vec3(0, 1, 0) }];
   controller.aim("right", from, direction);
   controller.aim("right", from, vec3.zero());
@@ -141,11 +124,13 @@ it.each([false, true])("streams marker drags across frames with selection %s acr
   vi.spyOn(controller, "ownsMarkerTarget").mockImplementation(target => target === marker);
   const input = new SpecsNavigationInput(controller, { ownsTarget: target => target === body, setHovered: vi.fn() }, () => [hand]);
   vi.stubGlobal("deviceInfoSystem", { isEditor: () => false });
-  input.tick();
+  setMockTime(0); input.tick();
   point = new vec3(30, 0, -600);
   hand.direction = new vec3(0.3, -1, -6);
   hand.currentInteractable.getSceneObject = () => body;
-  input.tick();
+  setMockTime(1 / 60); input.tick();
+  const displayed = controller.currentPose()!.position;
+  expect(displayed.distance(point)).toBeGreaterThan(1);
   expect(controller.interaction.isDragging()).toBe(true);
   expect(sendText).toHaveBeenCalled();
   expect(options.enableWorldMeshesTracking).toBe(true);
@@ -160,7 +145,7 @@ it.each([false, true])("streams marker drags across frames with selection %s acr
     view.nav = { state: "following_path", outcome: null };
     controller.applyView(view, origin); controller.tick(0.016);
     expect(controller.interaction.isDragging()).toBe(true);
-    expect(markerView.setPose.mock.lastCall?.[0]).toEqual(point);
+    expect(markerView.setPose.mock.lastCall?.[0]).toEqual(displayed);
     expect(markerView.setDragEnabled).toHaveBeenLastCalledWith(true);
   }
   // A terminal fact from an executing goal can arrive between drag stream sends.
@@ -190,19 +175,68 @@ it("keeps direct dragging continuous across scanned robot surfaces without allow
     parent: {} as SceneObject, cameraObject: {} as SceneObject, navGoalMarkerPrefab: {} as ObjectPrefab });
   controller.applyView(view, origin);
   const from = new vec3(0, 100, 0);
+  let time = 0; setMockTime(time);
   controller.hold("left", from, new vec3(0, -1, -1), true);
   for (const x of [15, 20, 30, 40]) {
     // The robot's top/side replaces the floor hit while the pinch continues.
     hit = { position: new vec3(x / 2, 50, -50), normal: new vec3(0, 0, 1) };
-    controller.hold("left", from, new vec3(x / 100, -1, -1), true);
+    for (let i = 0; i < 30; i++) {
+      setMockTime(time += 1 / 60);
+      controller.hold("left", from, new vec3(x / 100, -1, -1), true);
+    }
     expect(controller.interaction.isDragging()).toBe(true);
     const expected = specsNavigationPoseInTracking(new vec3(x, 0, -100), quat.quatIdentity()).position;
-    controller.interaction.snapshot().position.forEach((value, index) => expect(value).toBeCloseTo(expected[index], 8));
+    controller.interaction.snapshot().position.forEach((value, index) => expect(value).toBeCloseTo(expected[index], 2));
   }
-  controller.interaction.cancelDrag(); controller.setSelected(true);
+  (controller as any).render = () => {};
+  controller.cancelDrag(); controller.setSelected(true);
   controller.aim("right", from, new vec3(0, -1, -1));
   expect(controller.interaction.snapshot().probes).toEqual([]);
   // Direct dragging stays on its plane even where the room scan is not floor.
   controller.hold("left", from, new vec3(2, -1, -1), true);
+  for (let i = 0; i < 30; i++) { setMockTime(time += 1 / 60); controller.hold("left", from, new vec3(2.3, -1, -1), true); }
   expect(controller.interaction.isDragging()).toBe(true);
+});
+
+it("rejects direct drag intersections outside the queried 20 metre ray segment", () => {
+  const controller = new NavigationController({ session: { requestEstop() {} } as any,
+    deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [] } as any,
+    robotPresenter: {} as any, cameraObject: {} as any, parent: {} as any, navGoalMarkerPrefab: {} as any });
+  (controller as any).currentPose = () => ({ position: vec3.zero(), rotation: quat.quatIdentity() });
+  const place = (from: vec3, direction: vec3) => (controller as any).place("left", from, direction, false);
+  expect(place(new vec3(0, 100, 0), new vec3(0, -0.001, -1))).toBeNull();
+  expect(place(new vec3(0, 100, 0), new vec3(0, -1, -1))).not.toBeNull();
+  expect(place(new vec3(NaN, 100, 0), new vec3(0, -1, -1))).toBeNull();
+});
+
+it("keeps an edge grab anchored instead of dragging the circle center to the pinch ray", () => {
+  const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
+    capabilities: { estop: { available: true }, navigation: { nav_goal: { available: true } } } };
+  const controller = new NavigationController({ session: { view: () => view, sendText: vi.fn() } as any,
+    deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [] } as any,
+    robotPresenter: { floorPose: () => ({ position: new vec3(0, 0, -100), rotation: quat.quatIdentity() }) } as any,
+    parent: {} as any, cameraObject: {} as any, navGoalMarkerPrefab: {} as any });
+  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
+  controller.applyView(view, origin); const from = new vec3(0, 100, 0);
+  for (let i = 0; i < 60; i++) { setMockTime(i / 60); controller.hold("left", from, new vec3(.15, -1, -1), true); }
+  expect(controller.interaction.isDragging()).toBe(false);
+  expect(controller.currentPose()!.position).toEqual(new vec3(0, 0, -100));
+  for (let i = 60; i < 120; i++) { setMockTime(i / 60); controller.hold("left", from, new vec3(.45, -1, -1), true); }
+  expect(controller.interaction.isDragging()).toBe(true);
+  expect(controller.currentPose()!.position.x).toBeCloseTo(30, 1);
+});
+
+it("does not place an attached marker at world zero while the robot floor is still unknown", () => {
+  let floor: { position: vec3; rotation: quat } | null = null;
+  const view: any = { connection: "ready", hasTrackingOrigin: true, nav: null, nav_goal: null,
+    capabilities: { navigation: { nav_goal: { available: true } } } };
+  const controller = new NavigationController({ session: { view: () => view } as any,
+    deviceTracking: { worldOptions: {}, raycastWorldMesh: () => [] } as any,
+    robotPresenter: { floorPose: () => floor, floorWorldY: () => floor?.position.y ?? null } as any,
+    parent: {} as any, cameraObject: {} as any, navGoalMarkerPrefab: {} as any });
+  const origin: any = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 };
+  controller.applyView(view, origin); expect(controller.isArmed()).toBe(false);
+  floor = { position: new vec3(0, 8, -100), rotation: quat.quatIdentity() };
+  controller.applyView(view, origin); expect(controller.isArmed()).toBe(true);
+  expect(controller.currentPose()!.position.y).toBe(8);
 });

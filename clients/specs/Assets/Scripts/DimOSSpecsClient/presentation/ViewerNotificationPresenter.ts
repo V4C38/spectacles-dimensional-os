@@ -6,6 +6,7 @@ import { createRoundedSurface, createText, uiMaterialLayer, COLOR_WHITE } from "
 
 /** Non-interactive viewer-relative feedback, driven only by visible-frame time. */
 export class ViewerNotificationPresenter {
+  private disposed = false;
   private readonly center = new NotificationCenter();
   private readonly root: SceneObject;
   private readonly text: Text;
@@ -25,18 +26,20 @@ export class ViewerNotificationPresenter {
     uiMaterialLayer(this.icon.visual, 101);
     this.root.enabled = false;
   }
-  show(notification: ClientNotification): void { this.center.show(notification); }
+  show(notification: ClientNotification): void { if (!this.disposed) this.center.show(notification); }
   tick(deltaS: number): void {
+    if (this.disposed) return;
     this.center.tick(Math.min(0.1, Math.max(0, deltaS)));
     const snap = this.center.snapshot(), notification = snap.notification;
     this.root.enabled = notification !== null;
     if (!notification) return;
     this.text.text = notification.text;
     const ring = circleMesh(1.6, 0.22, Math.min(1, snap.elapsedS / 0.25), 48);
-    const offset = ring.positions.length / 3;
-    ring.positions.push(-1, 0.05, -1.2, -1.2, 0.05, -1, 1.2, 0.05, 1, 1, 0.05, 1.2);
-    ring.indices.push(offset, offset + 1, offset + 2, offset + 2, offset + 1, offset + 3);
-    this.icon.triangles(ring.positions, ring.indices, [1, 0.27, 0.23, 1]);
+    const positions = [...ring.positions], indices = [...ring.indices];
+    const offset = positions.length / 3;
+    positions.push(-1, 0.05, -1.2, -1.2, 0.05, -1, 1.2, 0.05, 1, 1, 0.05, 1.2);
+    indices.push(offset, offset + 1, offset + 2, offset + 2, offset + 1, offset + 3);
+    this.icon.triangles(positions, indices, [1, 0.27, 0.23, 1]);
     const transform = this.camera.getTransform(), rotation = transform.getWorldRotation();
     const target = transform.getWorldPosition().add(rotation.multiplyVec3(new vec3(0, -15, -65)));
     const alpha = 1 - Math.exp(-12 * Math.max(0, deltaS));
@@ -45,5 +48,5 @@ export class ViewerNotificationPresenter {
     const tilted = rotation.multiply(quat.angleAxis(-VIEWER_NOTIFICATION_STYLE.upwardTiltRad, vec3.right()));
     current.setWorldRotation(quat.slerp(current.getWorldRotation(), tilted, alpha));
   }
-  dispose(): void { this.root.destroy(); }
+  dispose(): void { if (!this.disposed) { this.disposed = true; this.root.destroy(); } }
 }

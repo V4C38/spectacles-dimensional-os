@@ -91,16 +91,19 @@ it("limits marker hit priority to its enabled hierarchy while including Cancel",
   expect(marker.ownsInteractionTarget(child)).toBe(false);
 });
 
-it("resizes the native hit cylinder to the visible circle without changing its height", () => {
-  const setWorldScale = vi.fn();
+it("centers a four-centimetre hit cylinder on the filled circle with an edge margin", () => {
+  const setWorldScale = vi.fn(), setWorldPosition = vi.fn(), setWorldRotation = vi.fn();
   const marker = Object.assign(new NavGoalMarker(), { root: {},
-    worldVisuals: { setRadius: vi.fn(), apply: vi.fn(), circleBounds: () => ({ radius: 26 }) },
-    dragCollider: { shape: { radius: 40 } },
-    dragObject: { getTransform: () => ({ getWorldScale: () => new vec3(0.4, 0.4, 0.4), setWorldScale }) },
+    worldVisuals: { setRadius: vi.fn(), apply: vi.fn(), circleBounds: () => ({ radius: 26, center: [10, 1.5, -20] }) },
+    dragCollider: { shape: { radius: 40, length: 5 } },
+    dragObject: { getTransform: () => ({ getWorldScale: () => new vec3(0.4, 0.4, 0.4), getWorldPosition: () => vec3.zero(), getWorldRotation: () => quat.quatIdentity(), setWorldScale, setWorldPosition, setWorldRotation }) },
   });
   marker.applyWorldStyle({ selected: true, dragging: false, following: false, aiming: false,
     flash: null, feedbackProgress: 0 }, 1 / 60, 1024);
-  expect(setWorldScale).toHaveBeenCalledWith(new vec3(0.65, 0.4, 0.65));
+  expect(setWorldScale).toHaveBeenCalledWith(new vec3(0.7, 0.4, 0.7));
+  expect(setWorldPosition).toHaveBeenCalledWith(new vec3(10, 1.5, -20));
+  expect(setWorldRotation).not.toHaveBeenCalled(); // Already horizontal; no physics transform churn.
+  expect((marker as any).dragCollider.shape.length * 0.4).toBe(4);
 });
 
 it("rises and grows the authored cancel button with its connector without restarting on repeated snapshots", () => {

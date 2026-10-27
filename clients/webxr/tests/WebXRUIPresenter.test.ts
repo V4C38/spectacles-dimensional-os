@@ -3,6 +3,7 @@ import { LIDAR_PRESETS } from "@dimos-ar-client/sensors/lidarSettings";
 import { WebXRUIPresenter } from "../src/presentation/WebXRUIPresenter";
 import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSession";
 import type { Capabilities } from "@dimos-ar-client/websocket/protocolTypes";
+import { RobotSelection } from "@dimos-ar-client/robot/RobotSelection";
 
 const capabilities: Capabilities = {
   lidar: { available: true, reason: null },
@@ -46,6 +47,7 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
     capabilities,
     nav: null,
     agentMessage: null,
+    agentMessageRevision: 0,
     lastError: null,
     ...overrides,
   };
@@ -127,9 +129,33 @@ it("celebrates real alignment briefly and never shows a success check for skippe
 });
 
 it("closes the UI when dismissing the localization review without clearing alignment", () => {
-  const f = setupFixture(); f.setView(view()); f.ui.setupCompleted = true;
+  const f = setupFixture(); f.setView(view()); f.ui.flow.finish();
   f.ui.requestAlignmentReview("Tracking resumed"); expect(f.ui.menuOpen).toBe(true);
   f.ui.dismissAlignmentReview();
   expect(f.ui.menuOpen).toBe(false); expect(f.ui.alignmentReview?.pending).toBe(false);
   expect(f.ui.snapshot().hasTrackingOrigin).toBe(true); expect(f.ui.setupCompleted).toBe(true);
+});
+
+it("reads selection eligibility from its owner and derives voice activity with wire precedence", () => {
+  let current = view();
+  const selection = new RobotSelection();
+  const voice = { asrRunning: false, ttsPlaying: false };
+  const session = { view: () => current };
+  const episode = { view: () => ({ phase: "idle", lastError: null }), pause() {} };
+  const ui = new WebXRUIPresenter(session as never, episode as never, () => null,
+    () => selection.snapshot(), () => voice);
+  ui.flow.finish();
+  expect(ui.snapshot().robotSelectable).toBe(false);
+  selection.setEligible(true); selection.setSelected(true);
+  expect(ui.snapshot()).toMatchObject({ robotSelected: true, robotSelectable: true, activity: "Idle" });
+  voice.asrRunning = true;
+  expect(ui.snapshot().activity).toBe("Listening");
+  voice.ttsPlaying = true;
+  expect(ui.snapshot().activity).toBe("Responding");
+  current = view({ state: { ...current.state!, agent: { idle: false } } });
+  expect(ui.snapshot().activity).toBe("Thinking");
+  current = view({ nav: { state: "following_path", outcome: null } });
+  expect(ui.snapshot().activity).toBe("Following Path");
+  selection.setEligible(false);
+  expect(ui.snapshot()).toMatchObject({ robotSelected: false, robotSelectable: false });
 });

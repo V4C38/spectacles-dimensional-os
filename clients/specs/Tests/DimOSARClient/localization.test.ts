@@ -327,7 +327,7 @@ function handshake(session: ARModuleSession, transport: FakeTransport, clock: Fa
 
 const sessionTransports = new WeakMap<ARModuleSession, FakeTransport>();
 
-function makeController(initiallyPaused = false): {
+function makeController(initiallyPaused = false, runtimeCapture?: { retryDelaysS: readonly number[]; stopWhileAwaitingResult: boolean }): {
   controller: LocalizationCaptureEpisode;
   session: ARModuleSession;
   transport: FakeTransport;
@@ -357,6 +357,7 @@ function makeController(initiallyPaused = false): {
     geometry: GEOMETRY,
     config: CAPTURE_CONFIG,
     initiallyPaused,
+    runtimeCapture,
   });
   sessionTransports.set(session, transport);
   return { controller, session, transport, clock, originStore, tracking, capture };
@@ -1008,4 +1009,94 @@ it("honors a host's explicit exhausted retry budget without changing ordinary ca
   const calls = f.capture.calls;
   f.clock.nowS += 60; f.controller.tick(); f.controller.tick();
   expect(f.capture.calls).toBe(calls);
+});
+
+it("suspends camera hardware while preserving an already submitted localization result", async () => {
+  const f = makeController();
+  deliverRequest(f.session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
+  f.controller.tick(); await settleCapture();
+  expect(f.controller.view().phase).toBe("awaiting_result");
+  f.controller.suspend(); f.controller.suspend();
+  expect(f.capture.stopCount).toBe(1);
+  f.clock.nowS = 1; deliverResult(f.session, [3, 2, 1]);
+  expect(f.originStore.T_odom_client?.position).toEqual([3, 2, 1]);
+  f.controller.resume(); f.controller.resume(); f.controller.tick();
+  expect(f.capture.calls).toBe(1); expect(f.controller.view().phase).toBe("idle");
+});
+
+it("retires partial captures on suspension and keeps a stale completion from unlocking a newer capture", async () => {
+  const f = makeController(), old = f.capture.defer();
+  deliverRequest(f.session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
+  f.controller.tick(); f.controller.suspend(); f.controller.resume();
+  const current = f.capture.defer(); f.controller.tick();
+  expect(f.capture.calls).toBe(2);
+  old.resolve(f.capture.observation()); await settleCapture();
+  f.controller.tick(); expect(f.capture.calls).toBe(2); expect(f.transport.binaries).toHaveLength(0);
+  current.resolve(f.capture.observation()); await settleCapture();
+  expect(f.transport.binaries).toHaveLength(1);
+});
+
+it("retains replacement requests while suspended and preserves explicit pause cancellation", async () => {
+  const f = makeController();
+  deliverRequest(f.session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 });
+  f.controller.tick(); await settleCapture(); f.controller.suspend();
+  deliverRequest(f.session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 2 });
+  deliverResult(f.session); expect(f.originStore.hasTrackingOrigin).toBe(false);
+  f.controller.tick(); expect(f.capture.calls).toBe(1);
+  f.controller.resume(); f.controller.tick(); await settleCapture();
+  expect(f.controller.view().capturedCount).toBe(1);
+  f.controller.pause(); f.controller.suspend(); f.controller.resume(); f.controller.tick();
+  expect(f.capture.calls).toBe(2); expect(f.controller.view().phase).toBe("idle");
+});
+
+it("keeps the original result deadline during suspension and retries only after resume", async () => {
+  const f = makeController();
+  deliverRequest(f.session, { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1, result_timeout_s: 2 });
+  f.controller.tick(); await settleCapture(); f.controller.suspend();
+  f.clock.nowS = 3; f.controller.tick();
+  expect(f.controller.view().lastError).toBe("result timeout");
+  deliverResult(f.session); expect(f.originStore.hasTrackingOrigin).toBe(false);
+  f.clock.nowS = 6; f.controller.tick(); expect(startRequestCount(f.transport)).toBe(0);
+  f.controller.resume(); f.controller.tick(); expect(startRequestCount(f.transport)).toBe(1);
+});
+
+
+it("releases the runtime camera between bounded batches and backs off repeated misses", async () => {
+  const f = makeController(false, { retryDelaysS: [2, 5, 10, 30], stopWhileAwaitingResult: true });
+  f.originStore.restore(T([0, 0, 0])); deliverPose(f.session, [0, 0, 1]);
+  const request: LocalizationObservationsRequest = { type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 1 };
+  deliverRequest(f.session, request); f.controller.tick(); await settleCapture();
+  expect(f.controller.view().phase).toBe("awaiting_result"); expect(f.capture.started).toBe(false);
+  for (const delay of [2, 5, 10, 30, 30]) {
+    const sentAt = f.clock.nowS, calls = f.capture.calls;
+    deliverRequest(f.session, request);
+    expect(f.controller.view().phase).toBe("waiting_for_retry");
+    f.clock.nowS = sentAt + delay - 0.01; f.controller.tick();
+    expect(f.capture.calls).toBe(calls); expect(f.capture.started).toBe(false);
+    f.clock.nowS = sentAt + delay; f.controller.tick(); f.controller.tick(); await settleCapture();
+    expect(f.capture.calls).toBe(calls + 1); expect(f.capture.started).toBe(false);
+  }
+  expect(f.capture.startCount).toBe(f.capture.stopCount);
+});
+
+it("rechecks runtime geometry after cooldown without warming the camera outside the gate", async () => {
+  const f = makeController(false, { retryDelaysS: [2], stopWhileAwaitingResult: true });
+  f.originStore.restore(T([0, 0, 0])); deliverPose(f.session, [0, 0, 1]);
+  const request: LocalizationObservationsRequest = { type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 1 };
+  deliverRequest(f.session, request); f.controller.tick(); await settleCapture();
+  deliverRequest(f.session, request); deliverPose(f.session, [10, 0, 0]);
+  f.clock.nowS += 30; f.controller.tick(); f.controller.tick();
+  expect(f.controller.view().phase).toBe("waiting_for_geometric_gate");
+  expect(f.capture.calls).toBe(1); expect(f.capture.started).toBe(false);
+  deliverPose(f.session, [0, 0, 1]); f.controller.tick(); await settleCapture();
+  expect(f.capture.calls).toBe(2);
+});
+
+it("does no capture work throughout a twenty-minute closed-gate runtime interval", () => {
+  const f = makeController(false, { retryDelaysS: [2, 5, 10, 30], stopWhileAwaitingResult: true });
+  f.originStore.restore(T([0, 0, 0])); deliverPose(f.session, [10, 0, 0]);
+  deliverRequest(f.session, { type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 3 });
+  for (let seconds = 0; seconds < 1200; seconds++) { f.clock.nowS += 1; f.controller.tick(); }
+  expect(f.capture.calls).toBe(0); expect(f.capture.startCount).toBe(0);
+  expect(f.transport.binaries).toHaveLength(0); expect(f.controller.view().phase).toBe("waiting_for_geometric_gate");
 });

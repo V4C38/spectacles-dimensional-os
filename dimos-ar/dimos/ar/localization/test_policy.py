@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from weakref import WeakKeyDictionary
+
 from dimos.ar.localization.policy import LocalizationPolicy
+from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.types import (
     CapturePolicy,
     Intrinsics,
@@ -8,6 +11,21 @@ from dimos.ar.localization.types import (
     Observation,
 )
 from dimos.msgs.geometry_msgs.Pose import Pose
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+
+_histories: WeakKeyDictionary[LocalizationPolicy, PoseBuffer] = WeakKeyDictionary()
+
+
+def _advance(policy: LocalizationPolicy, x: float, y: float):
+    if policy not in _histories:
+        history = PoseBuffer()
+        _histories[policy] = history
+        policy._travel = lambda: history.latest().travel_m if history.latest() else 0.0
+    history = _histories[policy]
+    latest = history.latest()
+    timestamp = latest.ts_server + 0.1 if latest else 0.0
+    history.push(PoseStamped(ts=timestamp, position=[x, y, 0]))
+    return policy.on_odom()
 
 
 class _Clock:
@@ -79,16 +97,16 @@ def test_travel_prompts_at_075m_without_waiting_for_goal_reached() -> None:
     policy = LocalizationPolicy(["fiducial_marker"])
     policy.on_hello("c1")
     policy.on_success("c1")
-    policy.on_odom(0.0, 0.0)
-    policy.on_odom(0.4, 0.0)
+    _advance(policy, 0.0, 0.0)
+    _advance(policy, 0.4, 0.0)
     assert policy.on_goal_reached(succeeded=True) == []
-    assert policy.on_odom(0.749, 0.0) == ([], [])
-    assert policy.on_odom(0.75, 0.0) == (["c1"], [])
+    assert _advance(policy, 0.749, 0.0) == ([], [])
+    assert _advance(policy, 0.75, 0.0) == (["c1"], [])
     assert policy.on_goal_reached(succeeded=True) == []
-    assert policy.on_odom(1.5, 0.0) == ([], [])  # Already pending.
+    assert _advance(policy, 1.5, 0.0) == ([], [])  # Already pending.
     policy.on_success("c1")
-    assert policy.on_odom(2.249, 0.0) == ([], [])
-    assert policy.on_odom(2.25, 0.0) == (["c1"], [])
+    assert _advance(policy, 2.249, 0.0) == ([], [])
+    assert _advance(policy, 2.25, 0.0) == (["c1"], [])
 
 
 def test_travel_is_cumulative_and_disconnected_clients_are_not_prompted() -> None:
@@ -98,9 +116,9 @@ def test_travel_is_cumulative_and_disconnected_clients_are_not_prompted() -> Non
     policy.on_success("c1")
     policy.on_success("gone")
     policy.on_disconnect("gone")
-    policy.on_odom(0.0, 0.0)
-    assert policy.on_odom(0.5, 0.0) == ([], [])
-    assert policy.on_odom(0.5, 0.25) == (["c1"], [])
+    _advance(policy, 0.0, 0.0)
+    assert _advance(policy, 0.5, 0.0) == ([], [])
+    assert _advance(policy, 0.5, 0.25) == (["c1"], [])
 
 
 def test_start_retry_reissues_pending_prompt_but_respects_vps_cooldown() -> None:
@@ -118,8 +136,8 @@ def test_failed_goal_reached_does_not_prompt() -> None:
     policy = LocalizationPolicy(["fiducial_marker"])
     policy.on_hello("c1")
     policy.on_success("c1")
-    policy.on_odom(0.0, 0.0)
-    policy.on_odom(2.0, 0.0)
+    _advance(policy, 0.0, 0.0)
+    _advance(policy, 2.0, 0.0)
     assert policy.on_goal_reached(succeeded=False) == []
 
 

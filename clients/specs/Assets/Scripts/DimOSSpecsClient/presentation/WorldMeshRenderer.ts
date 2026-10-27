@@ -14,7 +14,7 @@ export class WorldMeshRenderer {
   private readonly builder: MeshBuilder;
   private lastVertices: readonly number[] = [];
   private lastIndices: readonly number[] = [];
-  private triangleInput: { positions: readonly number[]; indices: number[]; color: WorldColor; uvs?: readonly number[]; normals?: readonly number[] } | null = null;
+  private triangleInput: { positions: readonly number[]; indices: readonly number[]; color: WorldColor; uvs?: readonly number[]; normals?: readonly number[] } | null = null;
 
   constructor(parent: SceneObject, name: string, material: Material = WORLD_COLOR_MATERIAL,
     readonly stroke = false) {
@@ -37,7 +37,7 @@ export class WorldMeshRenderer {
     this.hide();
   }
 
-  upload(vertices: number[], indices: number[]): void {
+  upload(vertices: number[], indices: readonly number[]): void {
     if (!indices.length) { this.hide(); return; }
     if (sameNumbers(vertices, this.lastVertices) && sameNumbers(indices, this.lastIndices)) {
       this.object.enabled = true; return;
@@ -45,12 +45,12 @@ export class WorldMeshRenderer {
     this.lastVertices = vertices.slice(); this.lastIndices = indices.slice();
     if (this.builder.getVerticesCount()) this.builder.eraseVertices(0, this.builder.getVerticesCount());
     if (this.builder.getIndicesCount()) this.builder.eraseIndices(0, this.builder.getIndicesCount());
-    this.builder.appendVerticesInterleaved(vertices); this.builder.appendIndices(indices);
+    this.builder.appendVerticesInterleaved(vertices); this.builder.appendIndices([...indices]);
     if (!this.builder.isValid()) throw new Error(`${this.object.name}: invalid world mesh`);
     this.builder.updateMesh(); this.visual.mesh = this.builder.getMesh(); this.object.enabled = true;
   }
 
-  triangles(positions: readonly number[], indices: number[], color: WorldColor,
+  triangles(positions: readonly number[], indices: readonly number[], color: WorldColor,
     uvs?: readonly number[], normals?: readonly number[]): void {
     const previous = this.triangleInput;
     if (previous && cachedCirclePositions.has(positions) && previous.positions === positions && previous.indices === indices && previous.uvs === uvs &&
@@ -73,9 +73,10 @@ export class WorldMeshRenderer {
 }
 
 const cachedCirclePositions = new WeakSet<readonly number[]>();
-const circleCache = new Map<string, { positions: number[]; indices: number[] }>();
+export type CircleGeometry = Readonly<{ positions: readonly number[]; indices: readonly number[] }>;
+const circleCache = new Map<string, CircleGeometry>();
 
-export function circleMesh(radiusCm: number, strokeCm: number, progress = 1, segments = 128, startAngle = Math.PI / 2) {
+export function circleMesh(radiusCm: number, strokeCm: number, progress = 1, segments = 128, startAngle = Math.PI / 2): CircleGeometry {
   const count = Math.max(0, Math.min(segments, Math.floor(segments * progress)));
   const key = `${radiusCm}:${strokeCm}:${count}:${segments}:${startAngle}`;
   const cached = circleCache.get(key);
@@ -86,7 +87,7 @@ export function circleMesh(radiusCm: number, strokeCm: number, progress = 1, seg
     for (const r of [radiusCm - strokeCm, radiusCm]) positions.push(Math.cos(angle) * r, 0, Math.sin(angle) * r);
     if (i) { const v = i * 2; indices.push(v - 2, v - 1, v, v - 1, v + 1, v); }
   }
-  const geometry = { positions, indices };
+  const geometry = Object.freeze({ positions: Object.freeze(positions), indices: Object.freeze(indices) });
   if (circleCache.size >= 64) circleCache.delete(circleCache.keys().next().value!);
   circleCache.set(key, geometry);
   cachedCirclePositions.add(positions);

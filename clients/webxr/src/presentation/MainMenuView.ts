@@ -554,7 +554,6 @@ export class MainMenuView {
     const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();
     this.panel.traverse(node => {
-      if (node === this.panel.mesh) return;
       if (node instanceof THREE.Mesh || node instanceof THREE.Line) {
         geometries.add(node.geometry);
         for (const material of Array.isArray(node.material) ? node.material : [node.material]) materials.add(material);

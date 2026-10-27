@@ -35,6 +35,13 @@ const fragmentShader = /* glsl */ `
 const STYLED = "dimosHandStyled";
 
 export class WebXRHandStyle {
+  private readonly styled = new Map<THREE.SkinnedMesh, {
+    material: THREE.Material | THREE.Material[];
+    frustumCulled: boolean;
+    renderOrder: number;
+    depth: THREE.SkinnedMesh;
+  }>();
+  private disposed = false;
   private readonly material = new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
@@ -47,11 +54,14 @@ export class WebXRHandStyle {
 
   /** Hand meshes load asynchronously, so this is safe to call every frame. */
   apply(hands: readonly THREE.Object3D[]): void {
+    if (this.disposed) return;
     for (const hand of hands) {
       hand.traverse(object => {
         if (!(object instanceof THREE.SkinnedMesh) || object.userData[STYLED]) return;
         object.userData[STYLED] = true;
         const depth = new THREE.SkinnedMesh(object.geometry, this.depthMaterial);
+        this.styled.set(object, { material: object.material, frustumCulled: object.frustumCulled,
+          renderOrder: object.renderOrder, depth });
         depth.userData[STYLED] = true;
         depth.bind(object.skeleton, object.bindMatrix);
         depth.position.copy(object.position);
@@ -67,6 +77,16 @@ export class WebXRHandStyle {
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const [mesh, original] of this.styled) {
+      original.depth.removeFromParent();
+      mesh.material = original.material;
+      mesh.frustumCulled = original.frustumCulled;
+      mesh.renderOrder = original.renderOrder;
+      delete mesh.userData[STYLED];
+    }
+    this.styled.clear();
     this.material.dispose();
     this.depthMaterial.dispose();
   }

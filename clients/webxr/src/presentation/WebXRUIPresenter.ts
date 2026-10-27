@@ -1,6 +1,8 @@
+import { getRobotActivityState, type RobotActivityState } from "@dimos-ar-client/robot/RobotMarkerState";
+import type { RobotSelection } from "@dimos-ar-client/robot/RobotSelection";
 import { availableFeatures, localizationGuidance, localizationProviderLabel } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 export { availableFeatures } from "@dimos-ar-client/presentation/ControlPanelPresentation";
-import { SetupFlow } from "@dimos-ar-client/presentation/SetupFlow";
+import { SetupFlow, type SetupStep } from "@dimos-ar-client/presentation/SetupFlow";
 import { LidarDisplayController } from "@dimos-ar-client/sensors/LidarDisplayController";
 import { readLidarPreferences, saveLidarPreferences, type LidarDisplayPreferences } from "../sensors/WebXRLidarSettings";
 import { localizationCaptureStatus } from "@dimos-ar-client/localization/localizationCaptureStatus";
@@ -23,7 +25,7 @@ import { toneHex } from "./StatusTones";
 
 export type OperatingMode = "manual" | "agent";
 
-export type WizardStep = "connect" | "localization";
+export type WizardStep = SetupStep;
 
 export interface WebXRUISnapshot {
   wizardStep: WizardStep;
@@ -45,7 +47,7 @@ export interface WebXRUISnapshot {
   nextLabel: string;
   backVisible: boolean;
   debugText: string;
-  activity: string;
+  activity: RobotActivityState;
   setupCompleted: boolean;
   connectionText: string;
   connectionTone: StatusTone;
@@ -74,21 +76,17 @@ export class WebXRUIPresenter {
   readonly flow: SetupFlow;
   readonly sensors: LidarDisplayController;
   get wizardStep(): WizardStep { return this.flow.step; }
-  set wizardStep(step: WizardStep) { this.flow.step = step; }
   debugEnabled = false;
   private get openedFromRuntime(): boolean { return this.flow.openedFromRuntime; }
-  private set openedFromRuntime(value: boolean) { this.flow.openedFromRuntime = value; }
   private localizationError: string | null = null;
   operatingMode: OperatingMode = "manual";
   get lidarMode(): LidarDisplayMode { return this.sensors.mode; }
-  set lidarMode(mode: LidarDisplayMode) { this.sensors.mode = mode; }
-  get lidarPreferences(): LidarDisplayPreferences { return this.sensors.preferences; }
+  get lidarPreferences(): Readonly<LidarDisplayPreferences> { return this.sensors.preferences; }
   cameraStatus = "Not capturing";
   trackingStatus = "Not tracking";
   surfaceCount = 0;
   estopPressed = false;
   get alignmentReview() { return this.flow.alignmentReview; }
-  set alignmentReview(value: { reason: string; pending: boolean } | null) { this.flow.alignmentReview = value; }
 
   requestAlignmentReview(reason: string): void {
     this.flow.requestAlignmentReview(reason);
@@ -99,7 +97,6 @@ export class WebXRUIPresenter {
     this.menuOpen = false;
   }
   get setupCompleted(): boolean { return this.flow.completed; }
-  set setupCompleted(value: boolean) { this.flow.completed = value; }
   menuOpen = false;
   private linkPhase: SessionLinkPhase = "disconnected";
   private hudText: string | null = null;
@@ -116,7 +113,8 @@ export class WebXRUIPresenter {
     private readonly session: ARModuleSession,
     private readonly episode: LocalizationCaptureEpisode,
     private readonly cameraError: () => string | null = () => null,
-    private readonly isRobotSelected: () => boolean = () => false,
+    private readonly robotSelection: () => ReturnType<RobotSelection["snapshot"]> = () => ({ selected: false, eligible: false }),
+    private readonly activityVoice: () => { ttsPlaying: boolean; asrRunning: boolean } = () => ({ ttsPlaying: false, asrRunning: false }),
   ) {
     this.flow = new SetupFlow(session, episode);
     this.sensors = new LidarDisplayController(session, { read: readLidarPreferences, write: saveLidarPreferences });
@@ -170,6 +168,7 @@ export class WebXRUIPresenter {
 
   snapshot(): WebXRUISnapshot {
     const view = this.session.view();
+    const selection = this.robotSelection();
     const link = sessionLinkStatus(view, view.hello?.robot.display_name);
     const capture = localizationCaptureStatus(view, this.episode.view(), this.nowS);
     const policy = this.episode.view().capturePolicy;
@@ -195,9 +194,9 @@ export class WebXRUIPresenter {
       wizardCardBody: card.body,
       localizationIssue: issue,
       robotName: view.hello?.robot.display_name ?? this.lastRobotName,
-      robotSelected: this.isRobotSelected(),
+      robotSelected: selection.selected,
       robotConnectionText: { disconnected: "Disconnected", connecting: "Connecting…", robotOffline: "Robot offline", connected: "Connected" }[deriveSessionLinkPhase(view)],
-      robotSelectable: this.setupCompleted && view.connection === "ready",
+      robotSelectable: selection.eligible,
       debugEnabled: this.debugEnabled,
       hasTrackingOrigin: view.hasTrackingOrigin,
       wizardStep: this.wizardStep,
@@ -206,7 +205,7 @@ export class WebXRUIPresenter {
       nextLabel: this.wizardStep === "connect" && view.connection === "ready" ? "Continue" : "Skip",
       backVisible: this.wizardStep === "localization" || this.openedFromRuntime,
       debugText: `Localization timings: ${JSON.stringify(this.episode.timing?.() ?? {})}\nConnection: ${view.connection}\nAligned: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture.text}\n${issue ?? ""}`,
-      activity: view.nav?.state === "following_path" ? "Following Path" : view.state?.agent.idle === false ? "Thinking" : "Idle",
+      activity: getRobotActivityState(view, this.activityVoice()),
       setupCompleted: this.setupCompleted,
       connectionText: view.connection === "awaiting_hello" ? "Connecting…" : view.connection === "failed" ? "Reconnecting…" : link.text.trim(),
       connectionTone: link.color,
@@ -243,7 +242,6 @@ export class WebXRUIPresenter {
   private finishSetup(success = false): void {
     this.flow.finish();
     this.successElapsedS = success ? 0 : null;
-    this.openedFromRuntime = false;
     this.menuOpen = false;
     this.postWizardLidarSent = false;
     this.requestStateIfReady();
@@ -253,7 +251,7 @@ export class WebXRUIPresenter {
   nextSetup(): void {
     if (this.setupCompleted) return;
     if (this.wizardStep === "connect" && this.session.view().connection === "ready") {
-      this.wizardStep = "localization";
+      this.flow.showStep("localization");
       if (!this.session.view().hasTrackingOrigin) this.restartLocalization();
     } else {
       if (this.wizardStep === "connect") this.session.stop();
@@ -275,14 +273,11 @@ export class WebXRUIPresenter {
   }
 
   restartSetup(): void {
-    this.alignmentReview = null;
+    this.flow.clearAlignmentReview();
     this.successElapsedS = null;
-    this.openedFromRuntime = this.setupCompleted;
-    this.wizardStep = "connect";
+    this.flow.restart(this.setupCompleted);
     this.localizationError = null;
-    this.flow.restart(this.openedFromRuntime);
     this.operatingMode = "manual";
-    this.lidarMode = "off";
     this.wizardLidarOffSent = false;
     this.postWizardLidarSent = false;
     this.menuOpen = true;
@@ -323,7 +318,7 @@ export class WebXRUIPresenter {
 
   sendAgentText(text: string): void {
     if (!this.setupCompleted || this.operatingMode !== "agent") throw new Error("Select Agent mode to send a message");
-    if (!this.isRobotSelected()) throw new Error("Select the robot to send a message");
+    if (!this.robotSelection().selected) throw new Error("Select the robot to send a message");
     requestUserMessage(this.session, text);
   }
 

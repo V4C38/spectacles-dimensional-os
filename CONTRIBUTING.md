@@ -73,7 +73,7 @@ Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-
 | `localization/` | `SpecsCameraStream`, `SpecsCameraSource` (tracking + async capture ports) |
 | `presentation/RobotPresenter.ts` | Composed `pose` on the authored `RobotPresenter` scene object |
 | `sensors/` | `PointCloudRenderer` — each `lidar` point from `odom` independently |
-| `navigation/` | `GroundPlacement`, `NavigationController`, `NavGoalPresenter` |
+| `navigation/` | `DragPlacementPlane`, `NavigationController`, `NavGoalPresenter` |
 
 **Specs UX** (what the wearer reads or presses)
 
@@ -120,8 +120,9 @@ uses Frame’s native SmoothFollow and pins on grab. Setup opens 5 cm above
 the viewer’s forward line. The setup status card is unboxed; guidance and
 standalone Specs labels are centered except the left-aligned dimOS AR title.
 Runtime palm menus are suppressed during
-the wizard so a held palm cannot cover a restarted setup. Back remains unavailable
-until Connect has completed, including when restarting from Settings. Skipping
+the wizard so a held palm cannot cover a restarted setup. Initial setup keeps Back
+unavailable until Connect completes. Reopening setup from runtime permits Back
+to dismiss it and restore the retained baseline. Skipping
 or completing setup returns to the main runtime page.
 The host supplies the calibrated world width to `smoothFollow.resize()` so its
 distance clamp uses the visible width rather than the unscaled design size.
@@ -139,7 +140,7 @@ VFX/text are removed through Lens Studio MCP; Frame/odometry/debug hosts remain.
 
 Specs adds a straight, tapered beam alongside the existing SIK V2 cursor. It mirrors
 the rendered cursor's position, visibility and alpha without independent hover logic,
-smoothing or growth/retraction. The beam starts 10 cm from the hand (clamped for close
+smoothing or growth/retraction. The beam starts 10 cm ahead of the tracked thumb/index fingertip midpoint (clamped for close
 cursors), has a 0.08–0.055 cm white radius and uses 45% of the cursor's rendered opacity.
 The existing fixed-tube `BendyLaser` shader is reused with collinear control points.
 Native ray-only targets retain SIK's own ray; direct/poke input, tracking loss and pause
@@ -153,10 +154,19 @@ receive the actual SIK cursor, hover and drag without disabling the box for othe
 or editing the package. Teardown restores the chooser. `NavMarkerOverlapProbe.ts`
 checks native physics hits, unselected drag commands, robot picking and UI occlusion.
 Physical tracking and stereo still need a device check.
-Direct Specs marker drags intersect a gesture-local plane initialized at the marker's height. Room-mesh height differences up to 10 cm are ignored; larger steps
-follow the walkable mesh immediately while the always-horizontal plane eases toward its height
-(0.6-second time constant). Missing scans keep planar dragging available.
-Release, cancellation and localization changes retire the gesture plane.
+Specs floor placement uses a stable horizontal reference seeded from the robot floor.
+A bounded, three-second survey accepts five near-horizontal samples over at least
+300 ms and uses their median after rejecting height outliers and the scanned robot
+body. Missing scans retain the reference. Probes and floor circles render 1.5 cm
+above their support plane; this clearance never enters navigation coordinates.
+Direct marker drags use a horizontal gesture plane. Mesh differences up to 10 cm
+are ignored; larger steps change only its target height. Height and position ease
+with 100 ms time constants; the raw mesh hit is never returned. Specs heading uses
+the existing 3 cm jitter gate and an 80 ms filter without changing WebXR defaults.
+Release submits the displayed filtered pose. The native filled-disc hit cylinder
+is centered on the visible circle, with a 2 cm edge margin and 4 cm height.
+Release, cancellation and localization changes retire the gesture plane. Its result
+must be finite and within the 20 m direct-placement ray segment.
 Selected floor placement retains its separate floor-validity checks.
 
 ## WebXR architecture
@@ -248,9 +258,17 @@ capture ports. It owns pose history and delegates stream lifecycle to
 Working sequence (keep it): `SpecsCameraStream.requestNextFrame()` → pose at
 `timestampSeconds` → optical extrinsics/intrinsics → `Base64.encodeTextureAsync`.
 The portable port is `start` / async `capture` / `stop`.
-`LocalizationCaptureEpisode` awaits one in-flight capture and keeps the video
-stream running between failed batches. It stops hardware on success, pause,
-failure, reset, and disposal.
+`LocalizationCaptureEpisode` awaits one in-flight capture. Specs opts into stopping
+the application stream while runtime batches await results or retry eligibility.
+Repeated runtime misses back off to 2, 5, 10, then 30 seconds between submissions;
+success or an explicit retry resets that budget. The geometry gate is checked
+before capture and again before JPEG encoding. Native encodes are serialized even
+across cancellation, and stale outputs are discarded before sending. Initial setup
+retains its deliberate preview behavior; hiding/leaving the scan releases the
+preview texture. Shared defaults preserve WebXR behavior.
+Thirty-second diagnostic summaries report stream/listener counts, encode time and
+bytes, FPS and worst frame time. These are application metrics, not a claim that
+system tracking cameras are physically powered off.
 The Specs wizard constructs it initially paused, starts it on the localization
 step, and pauses when leaving that step. A pending server prompt is retained
 while paused, so reentering the step resumes without a duplicate start request.
@@ -281,9 +299,9 @@ Same suffix = same role.
 | Suffix | Role |
 |--------|------|
 | **`*Presenter`** | Typed session facts → scene visuals. No portable pose cache. |
-| **`*Placement`** / feature **`*Controller`** | World-mesh input and command effects (`GroundPlacement`, `NavigationController`, `WebXRGroundPlacement`, `WebXRNavigationController`). No host navigation execution store. |
+| **`*Placement`** / feature **`*Controller`** | World-mesh input and command effects (`DragPlacementPlane`, `NavigationController`, `WebXRGroundPlacement`, `WebXRNavigationController`). No host navigation execution store. |
 | **`*View`** | HUD or prefab visual binding; no domain logic (`MainMenuView`, `WebXRNavGoalView`) |
-| **`*Renderer`** | World drawing (lines, point clouds) (`PointCloudRenderer`, `LineRenderer`, `WebXRLidarRenderer`, `WebXRRouteRenderer`) |
+| **`*Renderer`** | World drawing (lines, point clouds) (`PointCloudRenderer`, `WorldMeshRenderer`, `WebXRLidarRenderer`, `WebXRRouteRenderer`) |
 | **`utilities/`** | Cross-cutting helpers, only if retained UX uses them |
 
 TypeScript files and classes use PascalCase, properties use camelCase, scene
@@ -569,3 +587,36 @@ Older results may be removed only after a fresh complete run passes.
 When a headset is using the production WebXR page during local CI, set
 `CI_WEBXR_BUILD_DIR=/tmp/webxr-ci-build ./launcher/scripts/run-ci.sh` to keep
 the currently served build intact. Tests still use their isolated HTTPS server.
+
+
+## Runtime ownership and teardown
+
+ARModule delegates accepted native/corrected poses, source clock/reference epochs,
+history and travel to `robot/odometry.py`. Localization policy reads that travel
+through a callback. Telemetry reads the accepted native position; it keeps no
+second robot-pose cache. `NavigationPreviewService` owns preview tasks and costmap
+freshness. `ARAgentService` owns marker handles, assistant message adaptation and
+client-pose freshness; DimOS skill entry points remain on ARModule.
+WebSocket startup propagates binding failures and each connection has its own
+identity even when multiple peers share an IP. `ARModuleConfig.ip_relay_url`
+defaults to the existing relay service; set it to `None` to disable PIN publication.
+Localization provider snapshots are explicit `SnapshotLocalizer` ports.
+
+ClientCore owns capture suspension and resumption. Losing visibility retires partial
+camera batches but preserves a submitted batch's result acceptance and original
+deadline. Capture adapters reject pending work when stopped; stale callbacks cannot
+release the current generation's inflight gate. Invalid exposure timestamps fail
+capture rather than becoming receipt times. Agent message revisions are local
+session facts, not new wire sequence numbers. LiDAR mode derives from confirmed
+server settings; point budgets and saved range preferences stay local.
+
+`SetupFlow` exposes read-only facts and command transitions using the canonical
+`SetupStep`. Both hosts consume Core activity derivation and `RobotSelection`
+eligibility. Coupled controls are applied from one snapshot per view.
+`SpecsConnectionController` owns PIN resolution, retry/poll events and invalidation;
+UI disposal retires those operations before the session stops. Native views remove
+their subscriptions and destroy their generated UI, retaining authored scene hosts.
+`WebXRSessionController` owns immersive events, stable reference spaces and tracking
+recovery; `WebXRInputController` owns input capture/dispatch and menu placement.
+Cached world geometry is immutable. Resource owners dispose generated meshes and
+materials, restore borrowed SDK hand state and leave authored/native assets intact.

@@ -14,6 +14,7 @@ const POSE_MATERIAL = requireAsset("../../../Materials/PoseIndicator.mat") as Ma
 
 /** Body picking stays fixed while the visible outline unfolds from the floor. */
 export class RobotWorldRenderer {
+  private readonly root: SceneObject;
   readonly colliderRoot: SceneObject;
   readonly interactable: Interactable;
   private readonly collider: ColliderComponent;
@@ -35,18 +36,19 @@ export class RobotWorldRenderer {
   private opacity = FLOOR_MARKER_STYLE.idleOpacity as number;
 
   constructor(private readonly parent: SceneObject, toggle: (sourceId: string) => void) {
-    const sphere = new WorldMeshRenderer(parent, "RobotIndicator", POSE_MATERIAL);
+    this.root = global.scene.createSceneObject("RobotWorldVisuals"); this.root.setParent(parent);
+    const sphere = new WorldMeshRenderer(this.root, "RobotIndicator", POSE_MATERIAL);
     const mesh = sphereMesh(3, 24, 16);
     sphere.triangles(mesh.positions, mesh.indices, [1, 1, 1, 1], undefined, mesh.normals);
-    this.colliderRoot = global.scene.createSceneObject("RobotSelectionCollider"); this.colliderRoot.setParent(parent);
+    this.colliderRoot = global.scene.createSceneObject("RobotSelectionCollider"); this.colliderRoot.setParent(this.root);
     this.collider = this.colliderRoot.createComponent("Physics.ColliderComponent") as ColliderComponent;
     this.collider.shape = Shape.createBoxShape();
     this.interactable = this.colliderRoot.createComponent(Interactable.getTypeName()) as Interactable;
     this.interactable.onTriggerStart.add(event => toggle(String(event.interactor.inputType)));
-    this.outline = new AdaptiveStrokeRenderer(parent, "RobotSelectionOutline");
-    this.connector = new AdaptiveStrokeRenderer(parent, "RobotFloorConnector");
-    this.circle = new WorldMeshRenderer(parent, "RobotFloorCircle");
-    this.label = global.scene.createSceneObject("RobotWorldLabel"); this.label.setParent(parent);
+    this.outline = new AdaptiveStrokeRenderer(this.root, "RobotSelectionOutline");
+    this.connector = new AdaptiveStrokeRenderer(this.root, "RobotFloorConnector");
+    this.circle = new WorldMeshRenderer(this.root, "RobotFloorCircle");
+    this.label = global.scene.createSceneObject("RobotWorldLabel"); this.label.setParent(this.root);
     const style = ROBOT_LABEL_STYLE;
     const label = (name: string, emM: number, xM: number, yM: number, widthM: number, font: Font, color: vec4, order: number): Text => {
       const text = createText({ parent: this.label, name, text: "", fontSize: emM * 100 * 32 / INTER_EM_PER_LINE,
@@ -64,6 +66,7 @@ export class RobotWorldRenderer {
 
   }
 
+  dispose(): void { this.root.destroy(); }
   setRobot(robot: RobotDescription | null): void {
     this.robot = robot;
     this.colliderRoot.enabled = robot !== null;
@@ -119,7 +122,7 @@ export class RobotWorldRenderer {
       const ring = circleMesh(6, FLOOR_MARKER_STYLE.strokeM * 100);
       if (this.floorShown) {
         this.circle.triangles(ring.positions, ring.indices, [1, 1, 1, this.opacity]);
-        this.circle.object.getTransform().setWorldPosition(new vec3(position.x, floor.position.y + 0.1, position.z));
+        this.circle.object.getTransform().setWorldPosition(new vec3(position.x, floor.position.y + 1.5, position.z));
         this.circle.object.getTransform().setWorldRotation(quat.quatIdentity());
       } else this.circle.hide();
       this.connector.object.getTransform().setWorldPosition(position);

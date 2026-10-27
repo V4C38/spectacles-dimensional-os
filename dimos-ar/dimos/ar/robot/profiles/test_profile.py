@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 
 from dimos.ar.robot.capabilities import NAV_JOYSTICK, CapabilityName
-from dimos.ar.robot.profiles import FiducialMarkerMount, RobotName, RobotProfile, get_profile
+from dimos.ar.robot.profiles.profile import (
+    FiducialMarkerMount,
+    RobotName,
+    RobotProfile,
+    get_profile,
+)
 
 
 def test_fiducial_marker_mount_builds_base_transform() -> None:

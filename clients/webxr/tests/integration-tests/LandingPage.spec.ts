@@ -1,6 +1,7 @@
 import { saveCaseProof } from "./fixtures/CaseProof";
 import { expect, test } from "@playwright/test";
 import { fileURLToPath } from "node:url";
+import type { State } from "../../../specs/Assets/Scripts/DimOSARClient/websocket/protocolTypes";
 
 test("prioritizes robot features with compact technical footnotes on desktop and mobile", async ({ page }, info) => {
   test.setTimeout(90000);
@@ -11,15 +12,26 @@ test("prioritizes robot features with compact technical footnotes on desktop and
     w.questDevice.installRuntime({ forceInstall: true });
   });
   const on = { available: true, reason: null };
+  let state: State = { type: "state", server: { connected_clients: 1 },
+    lidar: { enabled: false, min_height_m: 0.1, max_height_m: 1.5, max_range_m: 5 },
+    nav: { state: "idle", outcome: null }, agent: { idle: true } };
   await page.routeWebSocket("**/ar", socket => {
+    const sendState = () => socket.send(JSON.stringify(state) + "\n");
     socket.onMessage(raw => {
       if (typeof raw !== "string") return;
       const request = JSON.parse(raw);
+      if (request.type === "state_request") sendState();
+      if (request.type === "lidar_settings_request") {
+        state = { ...state, lidar: { enabled: request.enabled, min_height_m: request.min_height_m,
+          max_height_m: request.max_height_m, max_range_m: request.max_range_m } };
+        sendState();
+      }
       if (request.type !== "hello_request") return;
       socket.send(JSON.stringify({ type: "hello", client_id: "landing-review", time_sync: { ts_client: request.ts_client, ts_server: 1 },
         robot: { display_name: "Unitree Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.5], base_height_m: 0.33 },
         server_info: { robot_ip: "192.168.1.42", dimos_version: "0.4.0", armodule_version: "0.2.0" },
         capabilities: { navigation: { ...on, nav_goal: on, nav_joystick: on }, agent: on, lidar: on, localization: on, estop: on } }) + "\n");
+      sendState();
     });
   });
   await page.goto("/");

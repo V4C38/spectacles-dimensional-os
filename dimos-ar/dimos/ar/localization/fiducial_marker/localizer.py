@@ -11,8 +11,8 @@ import numpy as np
 
 from dimos.ar.localization.pose_buffer import PoseBuffer, PoseSample
 from dimos.ar.localization.transforms import fuse_pose_estimates, normalize_pose_estimate
-from dimos.ar.localization.types import Intrinsics, LocalizedPose, Localizer, Observation
-from dimos.ar.robot.profiles import FiducialMarkerMount
+from dimos.ar.localization.types import Intrinsics, LocalizedPose, Observation, SnapshotLocalizer
+from dimos.ar.robot.profiles.profile import FiducialMarkerMount
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.perception.fiducial.marker_pose import (
     create_aruco_detector,
@@ -73,7 +73,7 @@ class _FiducialCandidate:
     reprojection_error_px: float
 
 
-class FiducialMarkerLocalizer(Localizer):
+class FiducialMarkerLocalizer(SnapshotLocalizer):
     def __init__(
         self,
         *,

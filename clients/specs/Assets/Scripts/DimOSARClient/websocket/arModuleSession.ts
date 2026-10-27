@@ -52,6 +52,7 @@ export interface ARModuleSessionState {
   capabilities: Capabilities | null;
   nav: NavState | null;
   agentMessage: string | null;
+  agentMessageRevision: number;
   lastError: string | null;
 }
 
@@ -86,6 +87,7 @@ export class ARModuleSession {
   private nav_preview: NavGoal | null = null;
   private lidar: Lidar | null = null;
   private agentMessage: string | null = null;
+  private agentMessageRevision = 0;
   private lastError: string | null = null;
   private helloDeadline: number | null = null;
   private reconnectAt: number | null = null;
@@ -270,6 +272,7 @@ export class ARModuleSession {
       capabilities: this.hello?.capabilities ?? null,
       nav: this.state?.nav ?? null,
       agentMessage: this.agentMessage,
+      agentMessageRevision: this.agentMessageRevision,
       lastError: this.lastError,
     };
   }
@@ -355,6 +358,7 @@ export class ARModuleSession {
         return;
       case "agent_message":
         this.agentMessage = message.text;
+        this.agentMessageRevision++;
         break;
       case "agent_skill":
         this.emitOutbound(message);
