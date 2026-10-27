@@ -6,9 +6,10 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/SetupWizardView", () => ({
-  SetupWizardStep: { Connect: 1, Localization: 2 },
+  SetupWizardStep: { Connect: "connect", Localization: "localization" },
   SetupWizardView: class {
     bindHandlers(next: () => void, previous: () => void, submit: () => void, toggle: () => void, _retry: () => void, edit: () => void) { mocks.next = next; mocks.previous = previous; mocks.submit = submit; mocks.toggle = toggle; mocks.edit = edit; }
+    dispose() {}
     getInputText() { return mocks.input; }
     clearInput() { mocks.input = ""; }
     setStepContent() {}
@@ -40,7 +41,7 @@ function harness(storage = new Map<string, string>(), options: {
   const events: { bind: ReturnType<typeof vi.fn>; reset: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn>; fire: () => void }[] = [];
   const controller = new SetupWizardController({
     panel: { enabled: true, getComponent: () => null, getTransform: () => ({ getLocalScale: () => vec3.one(), setLocalScale: vi.fn() }) },
-    script: { createEvent: () => {
+    script: { removeEvent: vi.fn(), createEvent: () => {
       let callback = () => {};
       const event = { bind: vi.fn((fn: () => void) => { callback = fn; }), reset: vi.fn(), cancel: vi.fn(), fire: () => callback() };
       events.push(event); return event;
@@ -244,9 +245,9 @@ it("uses the same status line for validation errors and PIN resolution", () => {
 });
 
 it("does not let a cancelled connection poll replace localization content", () => {
-  const { controller } = harness();
+  const { controller, events } = harness();
   mocks.connection.mockClear();
-  (controller as any).onPollFired();
+  events[1].fire();
   (controller as any).showConnectStatus();
   expect(mocks.connection).not.toHaveBeenCalled();
   expect(controller.flow.step).toBe("localization");
@@ -354,4 +355,14 @@ it("does not connect a late saved-PIN result after skipping setup", async () => 
   mocks.next(); complete({ ip: "192.168.1.42", port: 8787 }); await Promise.resolve();
   expect(f.controller.isVisible()).toBe(false); expect(f.finished).toHaveBeenCalledOnce();
   expect(f.transport.setUrl).not.toHaveBeenCalled(); expect(f.session.start).not.toHaveBeenCalled();
+});
+
+it("retires PIN lookup and all button callbacks when disposed", async () => {
+  let complete = (_result: { ip: string; port: number } | null) => {};
+  const h = harness(new Map([["dimos_ar_module_pin", "012345"]]), { connection: "disconnected", advance: false,
+    resolve: () => new Promise(resolve => { complete = resolve; }) });
+  h.controller.dispose(); h.controller.dispose();
+  complete({ ip: "192.168.1.42", port: 8787 }); await Promise.resolve();
+  h.events.forEach(event => event.fire()); mocks.next(); mocks.submit();
+  expect(h.session.start).not.toHaveBeenCalled(); expect(h.finished).not.toHaveBeenCalled();
 });

@@ -122,3 +122,36 @@ node IDs/counts and port metadata require `UInt32`, while dependency indices and
 connection target IDs use `Int32`. Mixing these caused native import to fail
 with a misleading missing-generated-GLSL error during preflight. Existing shader
 roundtrip coverage protects this container contract.
+
+
+### Static native compilation without CLAD
+
+If the CLAD drive is unavailable, validate current scripts against the installed
+5.15 compiler and existing package cache without touching the production scene:
+
+```sh
+python3 clients/specs/tools/compile_scripts.py --include clients/specs/Tests/integration-tests/LidarAlignmentProbe.ts
+```
+
+The command copies current scripts and cached package declarations into a disposable
+directory, writes `compile.log` and `result.json`, and never upgrades the project.
+A pass proves native TypeScript/component compilation only, not GPU rendering,
+scene wiring, stereo alignment or on-device performance.
+
+`LidarAlignmentProbe.ts` renders the production LiDAR shader alongside hollow native
+reference brackets at 1/2/3 metres, then moves the camera laterally. Its
+`LIDAR_ALIGNMENT` logs contain raw odometry, composed world centres and native screen
+projections for comparison with captured frames. The fixture initialization result
+is not an automatic GPU/stereo alignment assertion. In the real lens, Debug enables
+bounded `LiDAR alignment` samples every 30 seconds, including the advertised XY
+scale factor and corrected/native planar distances. At factor 1.25, 1.2 native
+metres becomes 1.5 displayed metres; this is a shared server heuristic, not
+evidence of a Specs-only rendering defect. Do not add fixed offsets or undo
+the shared odometry scale factor without a measured failing transform boundary.
+
+For a 20-minute device soak, record `Capture diagnostics` with the camera gate open
+and closed, LiDAR on/off, and after repeated localization misses. During closed-gate
+and cooldown periods, encode/send counts must not advance; native encodes must never
+overlap, and camera listener counts must return to zero between runtime batches.
+Compare FPS/worst-frame time and a Spectacles Monitor trace; desktop virtual-time
+budget tests cannot establish headset thermal, memory or stereo behavior.

@@ -72,12 +72,14 @@ export class RobotPresenter extends BaseScriptComponent {
   setViewportHeight(height: number): void { this.viewportHeight = height; }
   floorCircleBounds() {
     const p = this.floorPose()?.position, world = this.worldPosition();
-    return p && world ? { center: [world.x, p.y + 0.1, world.z] as [number, number, number], radius: 6 } : undefined;
+    return p && world ? { center: [world.x, p.y + 1.5, world.z] as [number, number, number], radius: 6 } : undefined;
   }
 
   private readonly poseSmoothing = new RuntimePoseSmoothing();
   private robot: RobotDescription | null = null;
   private presented = false;
+  private referenceFloorHeight: number | null = null;
+  setFloorHeight(height: number | null): void { this.referenceFloorHeight = height; }
   private motionRoot: SceneObject | null = null;
   private debugViewRoot: SceneObject | null = null;
   private unlocalizedAnchorCommitted = false;
@@ -113,7 +115,13 @@ export class RobotPresenter extends BaseScriptComponent {
     }
   }
 
+  dispose(): void {
+    this.reset(); this.worldVisuals?.dispose(); this.worldVisuals = null;
+    this.onToggle = null; this.eye = null; this.canToggle = null;
+  }
+
   reset(): void {
+    this.referenceFloorHeight = null;
     this.presented = false;
     this.cancelUnlocalizedAnchor();
     this.robot = null;
@@ -132,7 +140,7 @@ export class RobotPresenter extends BaseScriptComponent {
     voice: RobotActivityVoice & { status?: string },
   ): void {
     const title = robotTitleText(view);
-    const state = voice.status && voice.status !== "Off" ? voice.status : getRobotActivityState(view, voice);
+    const state = getRobotActivityState(view, voice);
     this.worldVisuals?.labels(title, state, appState.debugModeEnabled ? view.pose?.position.map(v => v.toFixed(2)).join(", ") ?? "" : "", sessionLinkStatus(view).color);
     this.applyDebugViewVisibility(appState);
   }
@@ -182,6 +190,21 @@ export class RobotPresenter extends BaseScriptComponent {
   }
 
   floorPose(): { position: vec3; rotation: quat } | null {
+    const pose = this.rawFloorPose();
+    if (pose && this.referenceFloorHeight !== null) pose.position.y = this.referenceFloorHeight;
+    return pose;
+  }
+
+  containsBodyPoint(point: vec3): boolean {
+    const position = this.worldPosition(), rotation = this.worldRotation();
+    if (!position || !rotation || !this.robot) return false;
+    const local = new quat(rotation.w, -rotation.x, -rotation.y, -rotation.z).multiplyVec3(point.sub(position));
+    const [length, width, height] = this.robot.body_bounds_m.map(value => value * 100);
+    const floor = -this.robot.base_height_m * 100;
+    return Math.abs(local.x) <= width / 2 && Math.abs(local.z) <= length / 2 && local.y > floor + 3 && local.y <= floor + height;
+  }
+
+  rawFloorPose(): { position: vec3; rotation: quat } | null {
     const position = this.worldPosition();
     const rotation = this.worldRotation();
     if (!position || !rotation) {
@@ -273,7 +296,7 @@ export class RobotPresenter extends BaseScriptComponent {
     this.unlocalizedAnchorCommitted = false;
     this.unlocalizedAnchorPending = false;
     this.pendingUnlocalizedCtx = null;
-    this.unlocalizedPlaceEvent?.reset(0);
+    this.unlocalizedPlaceEvent?.cancel();
   }
 
   private applyLocalizedOdom(

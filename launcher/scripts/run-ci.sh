@@ -9,7 +9,7 @@
 # tries to write under ~/.local/state/dimos/logs/.
 #
 # Environment (optional):
-#   CI_PYTHON   Python 3.12+ interpreter for the dimos-ar job (default: python3.12, python3)
+#   CI_PYTHON   Python 3.12 interpreter (default: python3.12, python3)
 #   CI_VENV     Path to reuse/create for dimos-ar deps (default: /tmp/spectacles-dimensional-os-ci-venv)
 #   CI_WEBXR_BUILD_DIR  Optional build output directory, to preserve a running headset build
 
@@ -39,6 +39,19 @@ find_ci_python() {
   exit 1
 }
 
+check_runtime_tools() {
+  local py
+  py="$(find_ci_python)"
+  "${py}" -c 'import sys; assert sys.version_info[:2] == (3, 12), "CI requires Python 3.12, matching GitHub Actions"'
+  node -e 'if (Number(process.versions.node.split(".")[0]) !== 20) throw new Error("CI requires Node 20, matching GitHub Actions")'
+  for tool in ffmpeg ffprobe; do
+    if ! command -v "${tool}" >/dev/null 2>&1; then
+      echo "Missing ${tool}; install ffmpeg before running CI." >&2
+      exit 1
+    fi
+  done
+}
+
 run_dimos_ar_job() {
   local py
   py="$(find_ci_python)"
@@ -55,7 +68,9 @@ run_dimos_ar_job() {
   cd "${DIMOS_AR}"
 
   python -m pip install --upgrade pip
-  pip install websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless Pillow scipy dimos "aiohttp>=3.9,<4" langchain-core
+  # GitHub starts with a fresh environment. Upgrade reused local environments so
+  # an older installed DimOS cannot conceal an upstream API change.
+  pip install --upgrade websockets pytest pytest-asyncio ruff mypy numpy opencv-python-headless Pillow scipy dimos "aiohttp>=3.9,<4" "requests>=2.32,<3" langchain-core
   pip install -e . --no-deps
 
   ruff check .
@@ -82,7 +97,7 @@ run_launcher_job() {
   cd "${LAUNCHER_APP}"
 
   python -m pip install --upgrade pip
-  pip install -r requirements-dev.txt
+  pip install --upgrade -r requirements-dev.txt
 
   ruff check .
   pytest
@@ -103,11 +118,16 @@ run_client_webxr_job() {
   npm ci
   npm test
   npm run build -- --outDir "${CI_WEBXR_BUILD_DIR:-dist}"
-  npx playwright install chromium
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    npx playwright install --with-deps chromium
+  else
+    npx playwright install chromium
+  fi
   node --test "${ROOT}/tools/integration-tests/integration.test.mjs" "${ROOT}/tools/visual-review.test.mjs"
   npm run test:integration
 }
 
+check_runtime_tools
 run_dimos_ar_job
 run_launcher_job
 run_client_specs_job

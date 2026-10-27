@@ -14,6 +14,11 @@ export class ReviewScenario extends BaseScriptComponent {
   private root: any;
   private input: IntegrationInput | null = null;
   private probe = Physics.createGlobalProbe();
+  private gridIndex = -1;
+  private gridResults: boolean[] = [];
+  private readonly grid: [number, number, boolean][] = [[0, 0, true], [.7, 0, true], [-.7, 0, true],
+    [0, .7, true], [0, -.7, true], [.6, .6, true], [-.6, .6, true], [.6, -.6, true], [-.6, -.6, true],
+    [0, 1.04, true], [0, -1.04, true], [0, 1.2, false]];
   private selected: InteractableHitInfo | null = null;
   private boxIsNearer = false;
   private elapsed = 0;
@@ -87,6 +92,7 @@ export class ReviewScenario extends BaseScriptComponent {
   }
   private cast(): void {
     const input = this.input!, direction = this.wish.sub(this.from).normalize();
+    const gridIndex = this.phase === 1 ? this.gridIndex : -1;
     this.probe.rayCastAll(this.from, this.from.add(direction.uniformScale(500)), hits => {
       const manager = InteractionManager.getInstance();
       const native = hits.map(hit => ({ hit, target: manager.getInteractableByCollider(hit.collider) }))
@@ -97,6 +103,7 @@ export class ReviewScenario extends BaseScriptComponent {
       this.selected = TargetProvider.getInteractableHitFromRayCast(hits, TargetingMode.Indirect,
         manager.getInteractableByCollider.bind(manager));
       const target = this.selected?.interactable ?? null;
+      if (gridIndex >= 0) this.gridResults[gridIndex] = this.markerSelected() === this.grid[gridIndex][2];
       if (target !== input.target) input.unhover();
       input.ray(this.from, this.selected?.hit.position ?? this.wish, target);
       if (target && !input.held) input.hover(target);
@@ -122,6 +129,13 @@ export class ReviewScenario extends BaseScriptComponent {
         lidar: { enabled: false, min_height_m: -10, max_height_m: 10, max_range_m: 5 },
         nav: { state: "following_path", outcome: null }, agent: { idle: true } });
     }
+    if (this.phase === 1) {
+      this.gridIndex = Math.floor(this.elapsed / 0.2);
+      const point = this.grid[this.gridIndex];
+      const radius = root.navigationController.circleBounds().radius;
+      this.wish = point ? this.initial.add(new vec3(point[0] * radius, 0, point[1] * radius)) : this.initial;
+      if (!point) this.gridIndex = -1;
+    }
     if (this.phase === 2) this.wish = this.initial.add(this.right.uniformScale(Math.min(15, this.elapsed * 6)));
     if (this.phase >= 1) this.cast();
     input.update();
@@ -134,6 +148,7 @@ export class ReviewScenario extends BaseScriptComponent {
     } else if (this.phase === 1) {
       input.active = true; this.scene("hover-through-robot-box");
     } else if (this.phase === 2) {
+      this.check("filled-disc-and-margin-grid", this.gridResults.length === this.grid.length && this.gridResults.every(Boolean));
       this.check("real-box-hit-is-nearer-than-marker", this.boxIsNearer);
       this.check("native-sik-target-is-marker-through-box", this.markerSelected());
       this.check("marker-hovered-while-unselected", root.navigationController.hovered && !root.selection.isSelected());

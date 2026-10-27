@@ -4,12 +4,8 @@ import { deriveRobotMarkerApplyInput as sharedMarker, getRobotActivityState as s
 
 export type OperatingMode = "manual" | "agent";
 
-export type RobotActivityState =
-  | "Idle"
-  | "Following Path"
-  | "Thinking"
-  | "Responding"
-  | "Listening";
+export type { RobotActivityState } from "../../DimOSARClient/robot/RobotMarkerState";
+import type { RobotActivityState } from "../../DimOSARClient/robot/RobotMarkerState";
 
 export interface RobotActivityVoice {
   asrRunning: boolean;

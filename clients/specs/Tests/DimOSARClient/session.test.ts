@@ -521,3 +521,18 @@ for (const reference of ["room-a", "room-b", undefined]) {
     session.stop(); expect(originStore.hasTrackingOrigin).toBe(false);
   });
 }
+
+
+it("assigns distinct monotonic revisions to identical agent messages across connection teardown", () => {
+  const { session, transport, clock } = makeSession(); handshake(session, transport, clock);
+  expect(session.view().agentMessageRevision).toBe(0);
+  session.onTransportText(JSON.stringify({ type: "agent_message", text: "Done" }) + "\n");
+  expect(session.view().agentMessageRevision).toBe(1);
+  session.onTransportText(JSON.stringify({ type: "agent_message", text: "Done" }) + "\n");
+  expect(session.view().agentMessageRevision).toBe(2);
+  session.stop(); expect(session.view().agentMessage).toBeNull();
+  expect(session.view().agentMessageRevision).toBe(2);
+  session.start(); session.onTransportOpen(); session.onTransportText(JSON.stringify(helloAt(clock.nowS)) + "\n");
+  session.onTransportText(JSON.stringify({ type: "agent_message", text: "Done" }) + "\n");
+  expect(session.view().agentMessageRevision).toBe(3);
+});

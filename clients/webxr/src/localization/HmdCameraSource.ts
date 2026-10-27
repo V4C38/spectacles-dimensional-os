@@ -147,7 +147,8 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
     if (this.poseBuffer.length > POSE_BUFFER_CAPACITY) this.poseBuffer.shift();
   }
 
-  clearTracking(): void { this.stop(); this.poseBuffer.length = 0; this.staleCaptures = 0; }
+  // Stream start/stop belongs to the capture episode; tracking invalidation only retires poses.
+  clearTracking(): void { this.poseBuffer.length = 0; this.staleCaptures = 0; }
 
   cameraOptical(): { position: Vec3; orientation: Quat } {
     const latest = this.poseBuffer[this.poseBuffer.length - 1];
@@ -251,7 +252,7 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
     };
   }
 
-  dispose(): void { this.clearTracking(); this.jpeg.dispose?.(); }
+  dispose(): void { this.stop(); this.clearTracking(); this.jpeg.dispose?.(); }
 
   private async openValidatedStream(profile: HmdCalibrationProfile, signal: AbortSignal): Promise<{ stream: MediaStream; profile: HmdCalibrationProfile }> {
     // Required constraints can reject before prompting. Bootstrap permission first;

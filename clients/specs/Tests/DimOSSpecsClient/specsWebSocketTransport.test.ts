@@ -18,6 +18,7 @@ type MockSocket = {
 type MockDelayedEvent = {
   bind: ReturnType<typeof vi.fn>;
   reset: ReturnType<typeof vi.fn>;
+  cancel: ReturnType<typeof vi.fn>;
   callback?: () => void;
 };
 
@@ -30,6 +31,7 @@ function makeTransport() {
           event.callback = cb;
         }),
         reset: vi.fn(),
+        cancel: vi.fn(),
       };
       delayedEvents.push(event);
       return event;
@@ -173,4 +175,13 @@ describe("SpecsWebSocketTransport", () => {
 
     expect(handlers.onTransportBinary).not.toHaveBeenCalled();
   });
+});
+
+it("cancels native timeout and watchdog events after open and close", () => {
+  const h = makeTransport(); h.transport.connect();
+  h.sockets[0].readyState = WS_OPEN; h.sockets[0].onopen?.();
+  expect(h.connectTimeout.cancel).toHaveBeenCalled(); expect(h.connectWatchdog.cancel).toHaveBeenCalled();
+  expect(h.connectTimeout.reset).not.toHaveBeenCalledWith(0); expect(h.connectWatchdog.reset).not.toHaveBeenCalledWith(0);
+  h.connectTimeout.cancel.mockClear(); h.connectWatchdog.cancel.mockClear(); h.transport.close();
+  expect(h.connectTimeout.cancel).toHaveBeenCalledOnce(); expect(h.connectWatchdog.cancel).toHaveBeenCalledOnce();
 });

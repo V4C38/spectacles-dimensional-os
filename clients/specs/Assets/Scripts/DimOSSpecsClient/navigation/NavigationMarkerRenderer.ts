@@ -46,7 +46,7 @@ export class NavigationMarkerRenderer {
   }
   setRadius(radiusCm: number): void { this.radiusCm = radiusCm; }
   circleOpacity(): number { return this.opacity; }
-  circleHeightCm(): number { return this.probe ? 0 : 1.5 * this.scale; }
+  circleHeightCm(): number { return 1.5 * this.scale; }
   circleBounds() {
     const p = this.circle.object.getTransform().getWorldPosition();
     const scale = this.root.getTransform().getWorldScale();

@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import socket
 import threading
 from typing import Any, cast
-import urllib.error
-import urllib.request
+
+import requests
 
 from dimos.utils.logging_config import setup_logger
 
-# Worker URL. Replaced with the deployed *.workers.dev host after wrangler deploy.
-IP_RELAY_URL = "https://spectacles-ip-relay.johannestscharn.workers.dev"
+DEFAULT_IP_RELAY_URL = "https://spectacles-ip-relay.johannestscharn.workers.dev"
 
 _REFRESH_SECONDS = 30
 
@@ -34,7 +32,7 @@ def lan_ip() -> str | None:
 
 
 class IpRelayPublisher:
-    """Register, refresh, and delete one PIN record. relay_url is IP_RELAY_URL."""
+    """Register, refresh, and delete one PIN record."""
 
     def __init__(self, relay_url: str, ip: str, port: int) -> None:
         self.relay_url = relay_url.rstrip("/")
@@ -103,23 +101,20 @@ class IpRelayPublisher:
         payload: dict[str, Any] | None = None,
         key: str | None = None,
     ) -> dict[str, Any] | None:
-        data = None if payload is None else json.dumps(payload).encode()
-        req = urllib.request.Request(self.relay_url + path, data=data, method=method)
-        # Cloudflare's bot check answers the default "Python-urllib" User-Agent with 403.
-        req.add_header("User-Agent", "dimos-ar")
-        if payload is not None:
-            req.add_header("Content-Type", "application/json")
+        headers = {"User-Agent": "dimos-ar"}
         if key is not None:
-            req.add_header("Authorization", "Bearer " + key)
+            headers["Authorization"] = "Bearer " + key
         try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                raw = resp.read()
-                if not raw:
+            with requests.request(
+                method, self.relay_url + path, json=payload, headers=headers, timeout=5
+            ) as response:
+                response.raise_for_status()
+                if not response.content:
                     return {}
-                parsed = json.loads(raw.decode())
+                parsed = response.json()
                 if not isinstance(parsed, dict):
                     return None
                 return cast("dict[str, Any]", parsed)
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
-            logger.warning(f"IP relay {method} {path} failed: {exc}")
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("IP relay request failed", method=method, path=path, error=str(exc))
             return None

@@ -4,10 +4,16 @@ import { createText, configurePanelText, COLOR_WHITE, FONT_CAPTION } from "./UIK
 
 /** Native masked text and scrollbar, shared by conversation and diagnostics pages. */
 export class NativeTextField {
+  private disposed = false;
+  private readonly subscriptions: (() => void)[] = [];
+  private retain(subscription: unknown): void {
+    if (typeof subscription === "function") this.subscriptions.push(subscription as () => void);
+  }
   readonly root: SceneObject;
   readonly window: ScrollWindow;
   readonly text: Text;
   private value = "";
+  private readonly barRoot: SceneObject;
 
   constructor(parent: SceneObject, name: string, width: number, height: number, y: number, fontSize = FONT_CAPTION) {
     this.root = global.scene.createSceneObject(name);
@@ -30,7 +36,7 @@ export class NativeTextField {
     this.window.addObject(content);
     content.getTransform().setLocalPosition(vec3.zero());
     this.text.getSceneObject().getTransform().setLocalPosition(vec3.zero());
-    const barRoot = global.scene.createSceneObject(`${name}ScrollBar`);
+    const barRoot = global.scene.createSceneObject(`${name}ScrollBar`); this.barRoot = barRoot;
     barRoot.setParent(parent);
     barRoot.getTransform().setLocalPosition(new vec3(width / 2 - 1.75, y, 2));
     // SUK ScrollBar requires an authored input during construction. The public
@@ -41,9 +47,9 @@ export class NativeTextField {
     bar.renderOrder = 12;
     bar.knobSize = new vec2(2.5, 1.2);
     let syncing = false;
-    bar.onValueChange.add(value => {
+    this.retain(bar.onValueChange.add(value => {
       if (!syncing) this.window.scrollPositionNormalized = new vec2(0, value * 2 - 1);
-    });
+    }));
     const sync = () => {
       syncing = true;
       const normalized = this.window.scrollPositionNormalized.y;
@@ -51,13 +57,20 @@ export class NativeTextField {
       barRoot.enabled = this.window.scrollDimensions.y > this.window.windowSize.y;
       syncing = false;
     };
-    this.window.onScrollPositionUpdated.add(sync);
-    this.window.onScrollDimensionsUpdated.add(sync);
+    this.retain(this.window.onScrollPositionUpdated.add(sync));
+    this.retain(this.window.onScrollDimensionsUpdated.add(sync));
     sync();
   }
 
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const unsubscribe of this.subscriptions.splice(0)) unsubscribe();
+    this.root.destroy(); this.barRoot.destroy();
+  }
+
   setText(value: string, followEnd = false): void {
-    if (value === this.value) return;
+    if (this.disposed || value === this.value) return;
     this.value = value;
     this.text.text = value;
     const size = this.window.windowSize;

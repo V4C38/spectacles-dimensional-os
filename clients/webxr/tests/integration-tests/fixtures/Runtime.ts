@@ -21,19 +21,20 @@ export async function bootstrap(
   let socket: WebSocketRoute | undefined;
   let captureTs = 0;
   let acceptedCaptureTs = 0;
-  const state = (nav = "idle", outcome: string | null = null) =>
+  let lidarSettings = {
+    enabled: false, min_height_m: 0.1, max_height_m: 1.5, max_range_m: 5,
+  };
+  let navigation = { state: "idle", outcome: null as string | null };
+  const state = (nav?: string, outcome: string | null = null) => {
+    if (nav !== undefined) navigation = { state: nav, outcome };
     send({
       type: "state",
       server: { connected_clients: 1 },
-      lidar: {
-        enabled: true,
-        min_height_m: 0.1,
-        max_height_m: 1.5,
-        max_range_m: 5,
-      },
-      nav: { state: nav, outcome },
+      lidar: { ...lidarSettings },
+      nav: { ...navigation },
       agent: { idle: true },
     });
+  };
   const send = (value: object) => {
     if (!socket) throw new Error("Fixture WebSocket is not connected");
     socket.send(JSON.stringify(value) + "\n");
@@ -102,6 +103,16 @@ export async function bootstrap(
           orientation: [0, 0, 0, 1],
           ts: command.ts_client,
         });
+      }
+      if (command.type === "state_request") state();
+      if (command.type === "lidar_settings_request" && !options.unavailable) {
+        lidarSettings = {
+          enabled: command.enabled,
+          min_height_m: command.min_height_m,
+          max_height_m: command.max_height_m,
+          max_range_m: command.max_range_m,
+        };
+        state();
       }
       if (command.type === "localization_start_request")
         send({

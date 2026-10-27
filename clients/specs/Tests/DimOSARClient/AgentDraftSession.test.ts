@@ -129,3 +129,16 @@ it("appends a new recording to the existing draft without sending it", () => {
   expect(f.speech.snapshot().prompt).toBe("Go forward. Then turn left. And stop.");
   expect(f.send).not.toHaveBeenCalled();
 });
+
+
+it("speaks identical replies as distinct events while repeated ticks consume each revision once", () => {
+  const f = fixture(false); f.setSelected(true);
+  expect(f.speech.submitTyped("first")).toBe(true);
+  f.speech.tick(2, true, "Done", true, 1); f.endSpeech();
+  f.speech.tick(3, true, "Done", true, 1); expect(f.synthesis.speak).toHaveBeenCalledOnce();
+  expect(f.speech.submitTyped("second")).toBe(true);
+  f.speech.tick(4, true, "Done", true, 2); expect(f.synthesis.speak).toHaveBeenCalledTimes(2);
+  f.speech.tick(5, true, "Done", true, 2); expect(f.synthesis.speak).toHaveBeenCalledTimes(2);
+  f.speech.reset(); f.speech.tick(6, true, "Done", true, 3);
+  expect(f.synthesis.speak).toHaveBeenCalledTimes(3);
+});

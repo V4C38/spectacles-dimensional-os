@@ -29,6 +29,8 @@ export class PointCloudRenderer extends BaseScriptComponent {
   private positionPoints: Vec3[] | null = null;
   private positionOrigin: ClientTrackingOrigin | null = null;
   private positionLimit = 0;
+  private diagnosticScale = 1;
+  private diagnosticRobot: Vec3 | null = null;
 
   onAwake(): void {
     this.visual = this.getSceneObject().getComponent("Component.RenderMeshVisual") as RenderMeshVisual;
@@ -55,6 +57,7 @@ export class PointCloudRenderer extends BaseScriptComponent {
     const limit = Math.max(250, Math.min(MAX_POINTS, Math.floor(input.pointLimit ?? this.maxPoints)));
     const floor = input.robot ? input.robot[2] - (input.baseHeightM ?? 0) : 0;
     const factor = input.odomScaleCorrectionFactor ?? 1;
+    this.diagnosticScale = factor; this.diagnosticRobot = input.robot ?? null;
     const style = mode === "full" ? [limit, floor] : [limit, floor, input.obstacleRangeM ?? 0.6, factor,
       ...(input.robot ?? []), ...(input.orientation ?? []), ...(input.bounds ?? [])];
     // Like WebXR's scene-root point cloud, these vertices are already in world
@@ -91,6 +94,23 @@ export class PointCloudRenderer extends BaseScriptComponent {
     if (!this.builder.isValid()) throw new Error("LiDAR billboard mesh is invalid");
     this.builder.updateMesh(); this.visual.mesh = this.builder.getMesh();
     this.lastPoints = points; this.lastOrigin = origin; this.lastStyle = style; this.lastMode = mode;
+  }
+  /** Bounded debug evidence: compare the raw sample, CPU transform and native projection. */
+  spatialDiagnostics(camera: Camera): Record<string, unknown> {
+    const transform = this.getSceneObject().getTransform();
+    const matrix = transform.getWorldTransform();
+    return { points: this.lastPoints?.length ?? 0, renderedPoints: this.positions.length,
+      odomScaleCorrectionFactor: this.diagnosticScale, origin: this.positionOrigin,
+      samples: this.positions.slice(0, 3).map((world, index) => {
+        const renderedWorld = matrix.multiplyPoint(new vec3(...world));
+        const screen = camera.worldSpaceToScreenSpace(renderedWorld);
+        const rawIndex = Math.floor(index * (this.positionPoints?.length ?? 0) / Math.max(1, this.positions.length));
+        const raw = this.positionPoints?.[rawIndex];
+        const correctedDistanceM = raw && this.diagnosticRobot ? Math.hypot(raw[0] - this.diagnosticRobot[0], raw[1] - this.diagnosticRobot[1]) : null;
+        return { odom: raw, worldCm: world, correctedPlanarDistanceM: correctedDistanceM,
+          nativePlanarDistanceM: correctedDistanceM === null ? null : correctedDistanceM / this.diagnosticScale,
+          renderedWorldCm: [renderedWorld.x, renderedWorld.y, renderedWorld.z], screen: [screen.x, screen.y] };
+      }) };
   }
   hide(): void { if (this.visual) this.visual.enabled = false; }
   clear(): void { this.hide(); this.lastPoints = null; this.lastOrigin = null; }

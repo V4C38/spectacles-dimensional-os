@@ -99,7 +99,11 @@ export class DimOSWebXRClient {
       trace: event => reportDiagnostic("localization-stage", { ...event, timing: this.episode?.timing() }),
     });
     this.posePublisher = new ClientPosePublisher(this.session, this.originStore, deps.camera, deps.clock);
-    this.ui = new WebXRUIPresenter(this.session, this.episode, () => this.camera.availabilityError(), () => this.isRobotSelected());
+    this.ui = new WebXRUIPresenter(this.session, this.episode, () => this.camera.availabilityError(),
+      () => this.selection.snapshot(), () => {
+        const status = this.speech?.snapshot().status;
+        return { ttsPlaying: status === "Responding", asrRunning: status === "Listening" };
+      });
     this.speech = new AgentDraftSession({
       recognition: deps.recognition ?? null, synthesis: deps.synthesis ?? null,
       send: text => this.ui.sendAgentText(text), estop: () => this.emergencyStop(),
@@ -179,7 +183,7 @@ export class DimOSWebXRClient {
     if (!this.ui.menuOpen || !this.isRobotSelected()) this.speech.endRecording(true);
     this.speech.tick(now, this.ui.setupCompleted && this.ui.operatingMode === "agent" &&
       view.connection === "ready" && view.capabilities?.agent.available === true,
-      view.agentMessage, view.state?.agent.idle ?? true);
+      view.agentMessage, view.state?.agent.idle ?? true, view.agentMessageRevision);
     const visibleDeltaS = this.lastTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastTickAt));
     this.stopFeedbackRemaining = Math.max(0, this.stopFeedbackRemaining - visibleDeltaS);
     this.ui.estopPressed = this.stopFeedbackRemaining > 0;
@@ -197,7 +201,7 @@ export class DimOSWebXRClient {
     this.robot.feedback({
       tone: ui.connectionTone,
       aligned: view.hasTrackingOrigin,
-      activity: feedback.status === "Off" ? ui.activity : feedback.status,
+      activity: ui.activity,
       message: feedback.response || view.agentMessage || feedback.prompt || null,
     });
     this.maybeSendClientPose();
@@ -246,7 +250,7 @@ export class DimOSWebXRClient {
   isRobotSelected(): boolean { return this.selection.isSelected(); }
 
   setRobotSelected(selected: boolean): void {
-    this.selection.setEligible(this.ui.setupCompleted && this.session.view().connection === "ready");
+    this.syncSelectionEligibility();
     this.selection.setSelected(selected);
 
   }
@@ -278,7 +282,7 @@ export class DimOSWebXRClient {
   }
 
   controlsEnabled(): boolean {
-    return this.ui.setupCompleted && !this.ui.snapshot().setupCelebrating && this.ui.operatingMode === "manual" &&
+    return this.ui.setupCompleted && !this.ui.alignmentReview?.pending && !this.ui.snapshot().setupCelebrating && this.ui.operatingMode === "manual" &&
       this.session.view().connection === "ready";
   }
 
@@ -292,14 +296,14 @@ export class DimOSWebXRClient {
     this.lastTickAt = null;
     this.speech.stop();
     this.loseInput();
-    // Stop camera hardware without cancelling a server result already in flight.
-    // The episode keeps its request/retry state; tracking resumes in the same reference space.
+    this.episode.suspend();
     this.camera.clearTracking();
     this.setRobotSelected(false);
     this.robot.setHovered(false);
   }
 
   resumeTracking(): void {
+    this.episode.resume();
     if (this.session.view().connection === "disconnected") this.session.start();
   }
 
@@ -323,7 +327,7 @@ export class DimOSWebXRClient {
     this.route.hide();
     this.robot.reset();
     this.ui.restartSetup();
-    this.ui.wizardStep = step;
+    this.ui.flow.showStep(step);
   }
 
   restartSetup(): void {
@@ -344,7 +348,7 @@ export class DimOSWebXRClient {
   /** Drops the current alignment and reruns the wizard's localization step. */
   realign(): void {
     this.restartSetup();
-    this.ui.wizardStep = "localization";
+    this.ui.flow.showStep("localization");
     this.ui.restartLocalization();
   }
 
@@ -389,7 +393,7 @@ export class DimOSWebXRClient {
     const origin = this.originStore.T_odom_client;
     const now = this.clock.now();
     this.robot.apply(view, origin, this.ui.setupCompleted, this.unlocalizedFallback());
-    this.selection.setEligible(this.ui.setupCompleted && view.connection === "ready");
+    this.syncSelectionEligibility();
     this.robot.setSelected(this.selection.isSelected());
     this.robot.setFloorVisible(this.navigation.marker.object.visible && this.navigation.interaction.snapshot().attachedToRobot === false);
     this.robot.setConnectorFloorY(this.navigation.interaction.snapshot().attachedToRobot ? this.navigation.marker.circleBounds().center[1] : null);
@@ -435,4 +439,9 @@ export class DimOSWebXRClient {
   }
 
   private maybeSendClientPose(): void { this.posePublisher.tick(); }
+
+  private syncSelectionEligibility(): void {
+    this.selection.setEligible(this.ui.setupCompleted && !this.ui.alignmentReview?.pending &&
+      this.session.view().connection === "ready");
+  }
 }

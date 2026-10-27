@@ -31,7 +31,7 @@ describe("robotFloorOffsetCm", () => {
       worldPosition: () => new vec3(10, 50, -20),
       worldRotation: () => rotation,
     } as unknown as RobotPresenter;
-    const floor = RobotPresenter.prototype.floorPose.call(presenter)!;
+    const floor = RobotPresenter.prototype.rawFloorPose.call(presenter)!;
     const arrow = floor.rotation.multiplyVec3(new vec3(1, 0, 0));
     const forward = rotation.multiplyVec3(new vec3(0, 0, -1));
     expect(arrow.x).toBeCloseTo(forward.x, 6);
@@ -45,7 +45,7 @@ describe("robotFloorOffsetCm", () => {
       worldPosition: () => new vec3(10, 50, -20),
       worldRotation: () => quat.quatIdentity(),
     } as unknown as RobotPresenter;
-    const floor = RobotPresenter.prototype.floorPose.call(presenter)!;
+    const floor = RobotPresenter.prototype.rawFloorPose.call(presenter)!;
     expect(floor.position.x).toBeCloseTo(10, 6);
     expect(floor.position.y).toBeCloseTo(17, 6);
     expect(floor.position.z).toBeCloseTo(-20, 6);

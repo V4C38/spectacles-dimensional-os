@@ -39,7 +39,12 @@ clients update their protocol module in the same change.
 - **Text framing:** outbound JSON text frames end with a single newline (`\n`).
   Clients accumulate incoming text and split on `\n` to recover complete
   messages. Binary frames are not newline-delimited.
-- All binary layouts are **little-endian**.
+- All binary layouts are **little-endian**. Localization frame and record lengths must
+  match their complete payloads; reserved words are zero.
+- Numeric fields require finite JSON numbers, never booleans or numeric strings.
+  Pose quaternions must be nonzero, including binary camera poses. Camera focal
+  lengths and integer image dimensions are positive; distortion coefficients are
+  finite, and the `none` distortion model has an empty coefficient array.
 
 ## Coordinate conventions
 
@@ -180,6 +185,11 @@ navigation regardless of who issued the goal.
 On connect the client sends `hello_request`, then the server sends `hello` and
 `state`.
 
+The handshake must complete within five seconds. Invalid or timed-out handshakes
+close with code `1008`. A connection becomes active only after `hello` is sent;
+it receives no telemetry before that point and does not count toward connected
+clients or last-client disconnect handling.
+
 ### `hello_request` (client → server, first text frame)
 
 ```json
@@ -292,7 +302,8 @@ whenever any field changes.
 }
 ```
 
-**`server.connected_clients`:** live WebSocket connections to this process.
+**`server.connected_clients`:** live WebSocket connections with a completed hello
+handshake to this process.
 
 **`nav.state`:** `"idle"` | `"following_path"` | `"resolved"`
 
@@ -873,8 +884,13 @@ pose history spanning a provisional ±0.5-second uncertainty window, translation
 speed ≤0.05 m/s, and angular speed ≤0.05 rad/s. Encoding runs off-loop after the
 future bracket arrives. A robot image must be ≤2 seconds old at query admission;
 normal HTTP latency does not reapply this image-age limit after the query.
-AprilTag localization requires a robot pose within 0.25 seconds and does not
-substitute the origin when odometry is missing.
+Live AprilTag localization requires a robot pose within 0.25 seconds and does not
+substitute the origin when odometry is missing. Offline replay explicitly permits
+its final retained robot pose for captures newer than the complete history, so
+marker registration can continue after playback ends. This exception preserves
+the retained pose's original timestamp and corrected coordinates; empty history,
+prehistory and internal gaps remain invalid. VPS and live-robot freshness rules
+are unchanged.
 
 VPS anchors retain capture-time robot travel and immutable transform snapshots.
 Their initial limits are 1 metre of subsequent travel and 60 seconds of capture

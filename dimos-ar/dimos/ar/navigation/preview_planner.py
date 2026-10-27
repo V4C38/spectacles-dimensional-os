@@ -13,10 +13,14 @@ try:
     from dimos.navigation.go2.replanning_a_star.goal_validator import find_safe_goal
     from dimos.navigation.go2.replanning_a_star.min_cost_astar import min_cost_astar
     from dimos.navigation.go2.replanning_a_star.navigation_map import NavigationMap
+
+    _MAP_USES_ROBOT_WIDTH = True
 except ModuleNotFoundError:
     from dimos.navigation.replanning_a_star.goal_validator import find_safe_goal
     from dimos.navigation.replanning_a_star.min_cost_astar import min_cost_astar
     from dimos.navigation.replanning_a_star.navigation_map import NavigationMap
+
+    _MAP_USES_ROBOT_WIDTH = False
 
 if TYPE_CHECKING:
     from dimos.core.global_config import GlobalConfig
@@ -27,7 +31,9 @@ class PreviewPlanner:
 
     def __init__(self, global_config: GlobalConfig) -> None:
         self._global_config = global_config
-        self._navigation_map = NavigationMap(global_config, "gradient")
+        # DimOS 0.0.15 moved the map into go2 and replaced GlobalConfig with a width.
+        map_config = global_config.robot_width if _MAP_USES_ROBOT_WIDTH else global_config
+        self._navigation_map = NavigationMap(map_config, "gradient")  # type: ignore[arg-type]
         self._lock = threading.Lock()
         self._binary_costmap: OccupancyGrid | None = None
         self._gradient_costmap: OccupancyGrid | None = None

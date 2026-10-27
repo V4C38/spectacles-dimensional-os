@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import math
 import time
 from typing import TYPE_CHECKING, Protocol
@@ -36,6 +37,7 @@ class RobotStatePublisher:
         ws_server: WebSocketServer | _BroadcastSink,
         *,
         odom_scale_correction_factor: float,
+        robot_position: Callable[[], tuple[float, float, float] | None],
         pose_max_hz: float = DEFAULT_POSE_MAX_HZ,
         lidar_max_hz: float = DEFAULT_LIDAR_MAX_HZ,
         lidar_voxel_size_m: float = 0.05,
@@ -47,12 +49,11 @@ class RobotStatePublisher:
         self._lidar_max_hz = lidar_max_hz
         self._lidar_voxel_size_m = lidar_voxel_size_m
         self._lidar_target_points = lidar_target_points
-        self._last_raw_odom: PoseStamped | None = None
+        self._robot_position = robot_position
         self._pose_last_emit_mono = 0.0
         self._lidar_last_emit_mono = 0.0
 
     def publish_odom(self, msg: PoseStamped) -> None:
-        self._last_raw_odom = msg
         if not self._allow_emit(self._pose_last_emit_mono, self._pose_max_hz):
             return
         corrected = correct_odom_pose(msg, factor=self._odom_scale_correction_factor)
@@ -79,7 +80,7 @@ class RobotStatePublisher:
             return
         if not self._allow_emit(self._lidar_last_emit_mono, self._lidar_max_hz):
             return
-        robot_position = self._raw_robot_position()
+        robot_position = self._robot_position()
         if robot_position is None:
             return
         downsampled = msg.voxel_downsample(voxel_size=self._lidar_voxel_size_m)
@@ -101,11 +102,6 @@ class RobotStatePublisher:
         self._ws.schedule_broadcast_binary(
             encode_lidar_binary(ts=msg.ts, points=points),
         )
-
-    def _raw_robot_position(self) -> tuple[float, float, float] | None:
-        if self._last_raw_odom is None:
-            return None
-        return (self._last_raw_odom.x, self._last_raw_odom.y, self._last_raw_odom.z)
 
     def _allow_emit(self, last_emit_mono: float, max_hz: float) -> bool:
         if max_hz <= 0.0:

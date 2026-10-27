@@ -12,8 +12,8 @@ from dimos.ar.localization.types import (
     LocalizationProviderType,
     LocalizationResult,
     LocalizedPose,
-    Localizer,
     Observation,
+    SnapshotLocalizer,
 )
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
 from dimos.ar.localization.worker import LocalizationWorker
@@ -49,7 +49,7 @@ class LocalizationCoordinator:
         policy: LocalizationPolicy,
         odom_map_transform: OdomMapTransform,
         robot_observations: RobotObservationBuffer,
-        marker: Localizer | None,
+        marker: SnapshotLocalizer | None,
         vps: AsyncLocalizer | None,
         map_code: str | None = None,
         worker: LocalizationWorker | None = None,
@@ -100,8 +100,7 @@ class LocalizationCoordinator:
             self._marker is not None
             and LocalizationProviderType.FIDUCIAL_MARKER in self._policy.providers
         ):
-            snapshot = getattr(self._marker, "snapshot", None)
-            marker = snapshot() if snapshot is not None else self._marker
+            marker = self._marker.snapshot()
             localized = await self._worker.run(lambda: marker.localize(tuple(observations)))
             if generation != self._source_generation():
                 return LocalizationOutcome()

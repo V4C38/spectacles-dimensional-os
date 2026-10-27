@@ -43,6 +43,7 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
     capabilities,
     nav: null,
     agentMessage: null,
+    agentMessageRevision: 0,
     lastError: null,
     ...overrides,
   };

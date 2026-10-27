@@ -86,6 +86,7 @@ class LocalizationPolicy:
         client_vps_cooldown_s: float = CLIENT_VPS_COOLDOWN_S,
         robot_vps_cooldown_s: float = ROBOT_VPS_COOLDOWN_S,
         clock: Callable[[], float] = time.monotonic,
+        travel: Callable[[], float] = lambda: 0.0,
     ) -> None:
         if not math.isfinite(travel_threshold_m) or travel_threshold_m <= 0.0:
             raise ValueError(
@@ -106,8 +107,7 @@ class LocalizationPolicy:
         self._client_vps_cooldown_s = client_vps_cooldown_s
         self._robot_vps_cooldown_s = robot_vps_cooldown_s
         self._clock = clock
-        self._travel_m = 0.0
-        self._last_xy: tuple[float, float] | None = None
+        self._travel = travel
         self._clients: dict[str, _ClientEpisode] = {}
         self._client_vps_until = 0.0
         self._robot_vps_until = 0.0
@@ -124,7 +124,7 @@ class LocalizationPolicy:
 
     @property
     def travel_m(self) -> float:
-        return self._travel_m
+        return self._travel()
 
     def on_hello(self, client_id: str) -> str | None:
         return self._open_episode(client_id)
@@ -151,7 +151,7 @@ class LocalizationPolicy:
                 continue
             if (
                 state.last_success_travel_m is not None
-                and self._travel_m - state.last_success_travel_m < self._travel_threshold_m
+                and self.travel_m - state.last_success_travel_m < self._travel_threshold_m
             ):
                 continue
             prompted = self._open_episode(client_id)
@@ -159,14 +159,7 @@ class LocalizationPolicy:
                 client_ids.append(prompted)
         return client_ids
 
-    def on_odom(
-        self, corrected_x: float, corrected_y: float
-    ) -> tuple[list[str], list[EpisodeWork]]:
-        if self._last_xy is not None:
-            dx = corrected_x - self._last_xy[0]
-            dy = corrected_y - self._last_xy[1]
-            self._travel_m += math.hypot(dx, dy)
-        self._last_xy = (corrected_x, corrected_y)
+    def on_odom(self) -> tuple[list[str], list[EpisodeWork]]:
         prompts, episodes = self.poll()
         # Travel, rather than a planner completion event, makes correction due.
         # The client waits for the robot to enter its geometric capture gate.
@@ -174,7 +167,7 @@ class LocalizationPolicy:
             if (
                 not state.pending
                 and state.last_success_travel_m is not None
-                and self._travel_m - state.last_success_travel_m >= self._travel_threshold_m
+                and self.travel_m - state.last_success_travel_m >= self._travel_threshold_m
             ):
                 prompted = self._open_episode(client_id)
                 if prompted is not None:
@@ -213,7 +206,7 @@ class LocalizationPolicy:
             client_id=client_id,
             observations=tuple(observations),
             generation=state.generation,
-            capture_travel_m=self._travel_m if capture_travel_m is None else capture_travel_m,
+            capture_travel_m=self.travel_m if capture_travel_m is None else capture_travel_m,
         )
 
     def is_current(self, work: EpisodeWork) -> bool:
@@ -248,7 +241,7 @@ class LocalizationPolicy:
         state.in_flight = False
         state.prompt_due_at = None
         state.last_success_travel_m = (
-            self._travel_m if capture_travel_m is None else capture_travel_m
+            self.travel_m if capture_travel_m is None else capture_travel_m
         )
 
     def on_failure(self, client_id: str) -> None:
@@ -268,8 +261,6 @@ class LocalizationPolicy:
     def reset_source(self) -> None:
         self._clients.clear()
         self._vps_waiters.clear()
-        self._last_xy = None
-        self._travel_m = 0.0
 
     def retry_failed_episode(self, client_id: str, *, backoff_s: float = 0.0) -> str | None:
         # A detection can finish after disconnect; do not resurrect that client.

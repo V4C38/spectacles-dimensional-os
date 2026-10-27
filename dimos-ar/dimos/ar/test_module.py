@@ -24,13 +24,15 @@ from dimos.ar.module import (
     ARModuleConfig,
     LocalizationConfig,
     LocalizationProviderConfig,
-    _textual_ai_message,
     profile_for_config,
 )
+from dimos.ar.navigation.preview_service import NavigationPreviewService
 from dimos.ar.navigation.tele_cmd_vel import TeleCmdVelPublisher
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest, NavState
+from dimos.ar.robot.agent_service import ARAgentService, _textual_ai_message
 from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName, CapabilitySet
-from dimos.ar.robot.profiles import FiducialMarkerMount, RobotName, RobotProfile
+from dimos.ar.robot.odometry import RobotOdometry
+from dimos.ar.robot.profiles.profile import FiducialMarkerMount, RobotName, RobotProfile
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 from dimos.ar.robot.safety import Safety
 from dimos.ar.sensors.lidar_settings import LidarSettings
@@ -78,11 +80,11 @@ def _module_with_policy(
     agent_available: bool = False,
 ) -> ARModule:
     module = object.__new__(ARModule)
-    module._policy = LocalizationPolicy(providers)
+    module._odometry = RobotOdometry(factor=profile.odom_scale_correction_factor)
+    module._policy = LocalizationPolicy(providers, travel=module._odometry.travel)
     module._replay_mode = False
     module._ws_server = _FakeWs()  # type: ignore[assignment]
     module._profile = profile
-    module._agent_idle = True
     module.human_input = SimpleNamespace(transport=None, publish=lambda _text: None)
     module._capabilities = CapabilitySet.from_supported(
         profile.supported_capabilities,
@@ -103,9 +105,17 @@ def _module_with_policy(
         estop_available=module._capabilities.supports(CapabilityName.ESTOP),
         effects=(module._clear_navigation, module._publish_stop),
     )
-    module._client_pose = None
-    module._client_pose_received_at = None
-    module._ar_marker_ids = set()
+    module._agent_service = ARAgentService(
+        factor=profile.odom_scale_correction_factor,
+        connection_count=lambda: module._ws_server.connection_count,
+        broadcast=module._ws_server.schedule_broadcast_text,
+    )
+    module._previews = NavigationPreviewService(
+        SimpleNamespace(plan=lambda *_args: None),
+        factor=profile.odom_scale_correction_factor,
+        odometry=module._odometry.latest,
+        send=module._ws_server.schedule_send_to_client,
+    )
     return module
 
 
@@ -272,10 +282,11 @@ def test_hello_prompts_observations_request() -> None:
 def test_replay_hello_sends_retained_corrected_pose(replay: bool, has_pose: bool) -> None:
     module = _module_with_policy(["fiducial_marker"])
     module._replay_mode = replay
-    module._pose_buffer = PoseBuffer()
+    module._odometry.history = PoseBuffer()
     if has_pose:
-        module._pose_buffer.push(
-            PoseStamped(ts=10.0, position=[2.5, -3.75, 0.33]), ts_server=10.0,
+        module._odometry.history.push(
+            PoseStamped(ts=10.0, position=[2.5, -3.75, 0.33]),
+            ts_server=10.0,
         )
 
     module._on_client_connect(None, "late-client")  # type: ignore[arg-type]
@@ -285,12 +296,17 @@ def test_replay_hello_sends_retained_corrected_pose(replay: bool, has_pose: bool
     if not (replay and has_pose):
         assert poses == []
         return
-    assert poses == [("late-client", {
-        "type": "pose",
-        "position": [2.5, -3.75, 0.33],
-        "orientation": [0.0, 0.0, 0.0, 1.0],
-        "ts": 10.0,
-    })]
+    assert poses == [
+        (
+            "late-client",
+            {
+                "type": "pose",
+                "position": [2.5, -3.75, 0.33],
+                "orientation": [0.0, 0.0, 0.0, 1.0],
+                "ts": 10.0,
+            },
+        )
+    ]
 
 
 @pytest.mark.parametrize(
@@ -298,13 +314,15 @@ def test_replay_hello_sends_retained_corrected_pose(replay: bool, has_pose: bool
     [(True, "fiducial_marker", 2.0), (False, "fiducial_marker", None), (True, "vps", None)],
 )
 def test_marker_capture_travel_uses_replay_pose_policy(
-    replay: bool, provider: str, expected_travel: float | None,
+    replay: bool,
+    provider: str,
+    expected_travel: float | None,
 ) -> None:
     module = _module_with_policy([provider])
     module._replay_mode = replay
-    module._pose_buffer = PoseBuffer()
-    module._pose_buffer.push(PoseStamped(ts=10.0, position=[0, 0, 0]), ts_server=10.0)
-    module._pose_buffer.push(PoseStamped(ts=10.1, position=[2, 0, 0]), ts_server=10.1)
+    module._odometry.history = PoseBuffer()
+    module._odometry.history.push(PoseStamped(ts=10.0, position=[0, 0, 0]), ts_server=10.0)
+    module._odometry.history.push(PoseStamped(ts=10.1, position=[2, 0, 0]), ts_server=10.1)
     module._policy.on_hello("c1")
     on_observations = Mock(wraps=module._policy.on_observations)
     module._policy.on_observations = on_observations  # type: ignore[method-assign]
@@ -355,7 +373,7 @@ def test_vps_provider_requires_map_code() -> None:
         localization=LocalizationConfig(providers=[LocalizationProviderConfig(type="vps")]),
     )
     module._profile = UNITREE_GO2_PROFILE
-    module._pose_buffer = SimpleNamespace()  # type: ignore[assignment]
+    module._odometry = RobotOdometry(factor=module._profile.odom_scale_correction_factor)
     with pytest.raises(ValueError, match="map_code"):
         module._build_localizers()
 
@@ -368,7 +386,7 @@ def test_vps_provider_requires_camera_extrinsic() -> None:
         ),
     )
     module._profile = replace(UNITREE_GO2_PROFILE, T_base_camera_optical=None)
-    module._pose_buffer = SimpleNamespace()  # type: ignore[assignment]
+    module._odometry = RobotOdometry(factor=module._profile.odom_scale_correction_factor)
     with pytest.raises(ValueError, match="T_base_camera_optical"):
         module._build_localizers()
 
@@ -584,22 +602,10 @@ async def test_handle_odom_uses_corrected_robot_position_for_localization(
     profile: RobotProfile,
 ) -> None:
     module = _module_with_policy([], profile=profile)
-    pushed: list[object] = []
     published: list[object] = []
-    module._pose_buffer = SimpleNamespace(  # type: ignore[assignment]
-        latest=lambda: None, push=lambda msg, ts_server: pushed.append(msg)
-    )
-    module._state_publisher = SimpleNamespace(  # type: ignore[assignment]
-        publish_odom=published.append
-    )
-    module._last_corrected_xy = None
-    module._speed_mps = 0.0
-    module._policy = SimpleNamespace(  # type: ignore[assignment]
-        on_odom=lambda _x, _y: ([], []),
-        travel_m=0.0,
-    )
-    module._robot_observations = SimpleNamespace(expire=lambda _travel: None)  # type: ignore[assignment]
-    module._flush_localization = lambda *_args: None  # type: ignore[method-assign]
+    module._state_publisher = SimpleNamespace(publish_odom=published.append)
+    module._robot_observations = SimpleNamespace(expire=lambda _travel: None)
+    module._flush_localization = lambda *_args: None
     pose = PoseStamped(
         ts=time.time(),
         frame_id="world",
@@ -607,17 +613,17 @@ async def test_handle_odom_uses_corrected_robot_position_for_localization(
         orientation=[0.0, 0.0, 0.0, 1.0],
     )
     await module.handle_odom(pose)
-    assert len(pushed) == 1
-    buffered = pushed[0]
-    assert isinstance(buffered, PoseStamped)
-    assert (buffered.x, buffered.y, buffered.z) == pytest.approx(
+    buffered = module._odometry.history.latest()
+    assert buffered.position == pytest.approx(
         (
             2.0 * profile.odom_scale_correction_factor,
             -3.0 * profile.odom_scale_correction_factor,
             0.33,
         )
     )
-    assert published == [pose]
+    assert len(published) == 1
+    assert (published[0].x, published[0].y, published[0].z) == (pose.x, pose.y, pose.z)
+    assert published[0].ts == pose.ts
 
 
 def test_hello_agent_capability_follows_config() -> None:
@@ -700,7 +706,7 @@ def test_ar_place_marker_validates_and_requires_fresh_pose() -> None:
     assert '"title":"Kitchen"' in payload
     assert module.ar_place_marker("kitchen", 2.0, 0.0, 0.0) == "ok"
     assert "title" not in module._ws_server.broadcasts[-1]  # type: ignore[union-attr]
-    assert module._ar_marker_ids == {"kitchen"}
+    assert module._agent_service.marker_ids == {"kitchen"}
 
 
 def test_ar_remove_marker_and_clear_on_last_disconnect() -> None:
@@ -723,7 +729,7 @@ def test_ar_remove_marker_and_clear_on_last_disconnect() -> None:
     assert module.ar_place_marker("door", 1.0, 0.0, 0.0) == "ok"
     module._ws_server.connection_count = 0  # type: ignore[union-attr]
     module._on_client_disconnect(None, "c1")  # type: ignore[arg-type]
-    assert module._ar_marker_ids == set()
+    assert module._agent_service.marker_ids == set()
     assert module.ar_get_client_pose() == "No client pose"
 
 
@@ -743,9 +749,9 @@ def test_ar_get_client_pose_empty_stale_fresh() -> None:
     assert "look_dir" in text
     assert "[0.8, 1.6, 3.0]" in text
     assert "[0.0, 0.0, 1.0]" in text
-    module._client_pose_received_at = time.time() - 1.1
+    module._agent_service._received_at = time.time() - 1.1
     assert "position" in module.ar_get_client_pose()
-    module._client_pose_received_at = time.time() - 2.1
+    module._agent_service._received_at = time.time() - 2.1
     assert module.ar_get_client_pose() == "No client pose"
 
 
@@ -808,14 +814,17 @@ def test_estop_and_last_disconnect_cancel_tele_cmd_vel() -> None:
 @pytest.mark.parametrize("failure", ["missing_odom", "missing_map", "exception"])
 def test_preview_returns_empty_without_changing_motion_or_state(failure: str) -> None:
     module = _module_with_policy([])
-    module._preview_odom = None if failure == "missing_odom" else PoseStamped(position=[1, 2, 0])
-    module._preview_planner = Mock()
-    module._preview_planner.plan.return_value = None
+    if failure != "missing_odom":
+        module._odometry.accept(PoseStamped(ts=time.time(), position=[1, 2, 0]))
+    module._previews._planner = Mock()
+    module._previews._planner.plan.return_value = None
     if failure == "exception":
-        module._preview_planner.plan.side_effect = RuntimeError("planner failed")
+        module._previews._planner.plan.side_effect = RuntimeError("planner failed")
     module.goal_request = SimpleNamespace(transport=object(), publish=Mock())
     before = module._state_snapshot()
-    frame = module._compute_preview(NavGoalRequest((4, 6, 0), (0, 0, 0, 1), preview=True))
+    frame = module._previews.compute(
+        NavGoalRequest((4, 6, 0), (0, 0, 0, 1), preview=True), module._odometry.latest()
+    )
     assert frame.preview is True
     assert frame.pose is None
     assert frame.path_poses == []
@@ -825,10 +834,11 @@ def test_preview_returns_empty_without_changing_motion_or_state(failure: str) ->
 
 
 async def test_preview_is_requester_only_off_loop_and_does_not_submit_motion() -> None:
-    module = _module_with_policy([])
-    module._profile = replace(module._profile, odom_scale_correction_factor=2.0)
-    module._preview_odom = PoseStamped(position=[1, 2, 0])
-    module._preview_tasks = {}
+    module = _module_with_policy(
+        [], profile=replace(UNITREE_GO2_PROFILE, odom_scale_correction_factor=2.0)
+    )
+    module._odometry.accept(PoseStamped(ts=time.time(), position=[1, 2, 0]))
+    module._previews._tasks = {}
     module.goal_request = SimpleNamespace(transport=object(), publish=Mock())
     loop_thread = threading.get_ident()
     worker_threads = []
@@ -839,16 +849,16 @@ async def test_preview_is_requester_only_off_loop_and_does_not_submit_motion() -
         assert goal == (2, 3)
         return [(1, 2, 0), (2, 3, 0)]
 
-    module._preview_planner = SimpleNamespace(plan=plan)
+    module._previews._planner = SimpleNamespace(plan=plan)
     before = module._state_snapshot()
     request = NavGoalRequest((4, 6, 0.5), (0, 0, 0, 1), preview=True, preview_id="aim")
     module._on_nav_goal_request(request, None, "requester")
-    task = module._preview_tasks["requester"]
+    task = module._previews._tasks["requester"]
     module._on_nav_goal_request(request, None, "requester")
-    assert module._preview_tasks["requester"] is task
+    assert module._previews._tasks["requester"] is task
     await task
     assert worker_threads and worker_threads[0] != loop_thread
-    assert list(module._preview_tasks) == []
+    assert list(module._previews._tasks) == []
     assert len(module._ws_server.sent) == 2
     busy = json.loads(module._ws_server.sent[0][1])
     assert busy["path_poses"] == [] and busy["preview_id"] == "aim"
@@ -872,8 +882,8 @@ def test_hello_advertises_preview_support() -> None:
 @pytest.mark.asyncio
 async def test_disconnect_cancels_preview_delivery_while_worker_finishes() -> None:
     module = _module_with_policy([])
-    module._preview_tasks = {}
-    module._preview_odom = PoseStamped(position=[0, 0, 0])
+    module._previews._tasks = {}
+    module._odometry.accept(PoseStamped(ts=time.time(), position=[0, 0, 0]))
     started = threading.Event()
     release = threading.Event()
 
@@ -882,16 +892,16 @@ async def test_disconnect_cancels_preview_delivery_while_worker_finishes() -> No
         release.wait(timeout=5)
         return [(0, 0, 0), (1, 1, 0)]
 
-    module._preview_planner = SimpleNamespace(plan=plan)
+    module._previews._planner = SimpleNamespace(plan=plan)
     request = NavGoalRequest((1, 1, 0), (0, 0, 0, 1), preview=True, preview_id="retired")
     module._on_nav_goal_request(request, None, "retired-client")
-    task = module._preview_tasks["retired-client"]
+    task = module._previews._tasks["retired-client"]
     try:
         assert await asyncio.to_thread(started.wait, 5)
         module._on_client_disconnect(None, "retired-client")
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert module._preview_tasks == {}
+        assert module._previews._tasks == {}
         assert module._ws_server.sent == []
     finally:
         release.set()
@@ -920,10 +930,10 @@ async def test_changed_robot_frame_retires_origins_and_requires_mapping_restart(
     from dimos.ar.localization.pose_buffer import PoseBuffer
 
     module = _module_with_policy(["vps"])
-    module._pose_buffer = PoseBuffer()
-    module._pose_buffer.push(PoseStamped(ts=time.time(), position=[0, 0, 0.33]))
-    module._source_generation = 0
-    module._source_frame_id = "world"
+    module._odometry.history = PoseBuffer()
+    module._odometry.history.push(PoseStamped(ts=time.time(), position=[0, 0, 0.33]))
+    module._odometry.generation = 0
+    module._odometry._source_frame = "world"
     module._localization_runner = SimpleNamespace(cancel_all=Mock())
     module._coordinator = SimpleNamespace(invalidate_source=Mock())
     module._ws_server.schedule_disconnect_all = Mock()
@@ -933,8 +943,8 @@ async def test_changed_robot_frame_retires_origins_and_requires_mapping_restart(
     await module.handle_odom(
         PoseStamped(ts=time.time(), frame_id="new-world", position=[0, 0, 0.33])
     )
-    assert module._source_generation == 1
-    assert module._pose_buffer.latest() is None
+    assert module._odometry.generation == 1
+    assert module._odometry.history.latest() is None
     assert stopped
     module._localization_runner.cancel_all.assert_called_once()
     module._coordinator.invalidate_source.assert_called_once()
@@ -957,12 +967,12 @@ async def test_robot_image_pairing_preserves_producer_time_and_encodes_off_loop(
     import dimos.ar.module as ar_module
 
     module = _module_with_policy(["vps"])
-    module._source_generation = 0
-    module._pose_buffer = PoseBuffer()
+    module._odometry.generation = 0
+    module._odometry.history = PoseBuffer()
     for t in [99.9, 100.0, 100.1]:
-        module._pose_buffer.push(PoseStamped(ts=t, position=[1, 0, 0.33]), ts_server=t)
+        module._odometry.history.push(PoseStamped(ts=t, position=[1, 0, 0.33]), ts_server=t)
     module._robot_observations = RobotObservationBuffer(
-        pose_buffer=module._pose_buffer,
+        pose_buffer=module._odometry.history,
         T_base_camera_optical=np.eye(4),
         timing_uncertainty_s=0.1,
     )
@@ -1009,3 +1019,28 @@ def test_agent_native_points_and_corrected_client_pose_round_trip() -> None:
     assert module.ar_place_marker("person", 4, -2, 1.5) == "ok"
     args = json.loads(module._ws_server.broadcasts[-1])["args"]
     assert [args["x"], args["y"], args["z"]] == [5, -2.5, 1.5]
+
+
+async def test_duplicate_odometry_has_no_telemetry_or_localization_effects() -> None:
+    module = _module_with_policy([])
+    published = []
+    module._state_publisher = SimpleNamespace(publish_odom=published.append)
+    module._robot_observations = SimpleNamespace(expire=Mock())
+    module._flush_localization = Mock()
+    timestamp = time.time()
+    for x in (0, 1, 2):
+        await module.handle_odom(PoseStamped(ts=timestamp, frame_id="world", position=[x, 0, 0.33]))
+    assert len(published) == 1
+    assert module._odometry.latest().position == (0, 0, 0.33)
+    assert module._policy.travel_m == 0
+    module._robot_observations.expire.assert_called_once_with(0)
+    module._flush_localization.assert_called_once()
+
+
+def test_unwired_goal_does_not_mutate_navigation() -> None:
+    module = _module_with_policy([])
+    module.goal_request = SimpleNamespace(transport=None, publish=Mock())
+    module._nav_goal_coordinator.submit_goal = Mock()
+    module._on_nav_goal_request(NavGoalRequest((1, 0, 0), (0, 0, 0, 1)), None, "client")
+    module._nav_goal_coordinator.submit_goal.assert_not_called()
+    assert module._ws_server.broadcasts == []

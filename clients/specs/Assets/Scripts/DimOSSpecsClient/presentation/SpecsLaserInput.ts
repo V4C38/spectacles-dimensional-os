@@ -12,13 +12,19 @@ export function readSikLaserPointers(): LaserPointer[] {
   const pointers: LaserPointer[] = [];
   for (const interactor of InteractionManager.getInstance().getInteractorsByType(mask)) {
     const cursor = cursors.getCursorByInteractor(interactor);
-    const origin = interactor.startPoint;
+    let origin = interactor.startPoint;
     if (!cursor || !origin) continue;
     const parameters = cursor.cursorParameters;
     const visual = cursor.visual.getComponent("Component.RenderMeshVisual") as RenderMeshVisual;
     const handType = interactor.inputType === InteractorInputType.LeftHand ? "left" : "right";
-    const tracked = interactor.inputType === InteractorInputType.Mouse ||
-      HandInputData.getInstance().getHand(handType).isTracked();
+    const hand = interactor.inputType === InteractorInputType.Mouse ? null : HandInputData.getInstance().getHand(handType);
+    const tracked = hand === null || hand.isTracked();
+    if (hand && tracked) {
+      const index = hand.indexTip?.position, thumb = hand.thumbTip?.position;
+      if (index && thumb && [index.x, index.y, index.z, thumb.x, thumb.y, thumb.z].every(Number.isFinite)) {
+        origin = index.add(thumb).uniformScale(0.5);
+      }
+    }
     pointers.push({ id: interactor.inputType,
       active: tracked && interactor.isActive() && interactor.isTargeting() && cursor.enabled &&
         cursor.getSceneObject().isEnabledInHierarchy && interactor.activeTargetingMode === TargetingMode.Indirect,

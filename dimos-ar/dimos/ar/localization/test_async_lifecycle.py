@@ -15,6 +15,7 @@ from dimos.ar.localization.policy import LocalizationPolicy
 from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.runner import LocalizationRunner
 from dimos.ar.localization.test_coordinator import _coordinator, _observation
+from dimos.ar.localization.test_policy import _advance
 from dimos.ar.localization.types import LocalizedPose
 from dimos.ar.localization.vps.robot_observation_buffer import (
     RobotObservationBuffer,
@@ -193,8 +194,8 @@ async def test_robot_anchor_expiring_during_query_cannot_produce_alignment(chang
     async def localize(observations):
         calls.append(observations)
         if change == "travel":
-            coordinator._policy.on_odom(0, 0)
-            coordinator._policy.on_odom(3, 0)
+            _advance(coordinator._policy, 0, 0)
+            _advance(coordinator._policy, 3, 0)
         elif change == "age":
             now[0] = 65
         else:
@@ -263,10 +264,10 @@ def test_anchor_age_map_generation_and_finite_confidence_are_required() -> None:
 def test_success_uses_capture_travel_not_http_completion_travel() -> None:
     policy = LocalizationPolicy(["fiducial_marker"])
     policy.on_hello("client")
-    policy.on_odom(0, 0)
-    policy.on_odom(0.8, 0)
+    _advance(policy, 0, 0)
+    _advance(policy, 0.8, 0)
     policy.on_success("client", capture_travel_m=0)
-    assert policy.on_odom(0.8, 0) == (["client"], [])
+    assert _advance(policy, 0.8, 0) == (["client"], [])
 
 
 def test_exact_pose_remains_usable_beside_a_history_gap() -> None:
@@ -382,8 +383,8 @@ async def test_anchor_expiring_during_headset_query_discards_final_result(change
         calls.append(observations)
         if len(calls) == 2:
             if change == "travel":
-                coordinator._policy.on_odom(0, 0)
-                coordinator._policy.on_odom(3, 0)
+                _advance(coordinator._policy, 0, 0)
+                _advance(coordinator._policy, 3, 0)
             elif change == "age":
                 now[0] = 65
             else:

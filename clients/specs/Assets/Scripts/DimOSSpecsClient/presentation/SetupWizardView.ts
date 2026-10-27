@@ -1,3 +1,4 @@
+import type { SetupStep } from "../../DimOSARClient/presentation/SetupFlow";
 import type { RoundedRectangleVisual } from "SpectaclesUIKit.lspkg/Scripts/Visuals/RoundedRectangle/RoundedRectangleVisual";
 import { PanelHeightController } from "./PanelHeightController";
 import { SETUP_PANEL_SCALE, SETUP_LAYOUTS, panelFooterY, type PanelProfile } from "./PanelLayout";
@@ -10,7 +11,8 @@ import { createRoundedSurface, createPanelSurface, createText, createIconButton,
   configureControlPanelFrame, configurePanelText, SnapOS2Styles, setButtonStyle, panelButtonLayer, panelFontSize, uiMaterialLayer, setButtonEnabled, setButtonSelected, type IconButtonResult } from "./UIKit";
 
 export interface ConnectionPresentation { text: string; color: vec4; phase: "entry" | "error" | "connected"; details?: string; }
-export enum SetupWizardStep { Connect = 1, Localization = 2 }
+export const SetupWizardStep = { Connect: "connect", Localization: "localization" } as const;
+export type SetupWizardStep = SetupStep;
 export interface SetupWizardFooterState { footerNextLabel: string; footerNextEnabled: boolean; footerShowPrev: boolean; }
 interface Handlers { onNext: () => void; onPrevious: () => void; onInputSubmit: () => void; onConnectionToggle: () => void; onRetry?: () => void; onInputEdit?: () => void; }
 const UNIT = 100;
@@ -18,6 +20,12 @@ const CONTENT = (CONTROL_PANEL_LAYOUT.width - CONTROL_PANEL_LAYOUT.margin * 2) *
 
 /** Native setup panel: PIN/IP connection, then camera localization. */
 export class SetupWizardView {
+  private disposed = false;
+  private readonly subscriptions: (() => void)[] = [];
+  private retain(subscription: unknown): void {
+    if (typeof subscription === "function") this.subscriptions.push(subscription as () => void);
+  }
+  private readonly root: SceneObject;
   private readonly heightController: PanelHeightController;
   private profile: PanelProfile = SETUP_LAYOUTS.entry;
   private captureLayout = true;
@@ -45,7 +53,7 @@ export class SetupWizardView {
   private readonly previewLabel: Text;
   private readonly guide: WorldMeshRenderer;
   private handlers: Handlers | null = null;
-  private step = SetupWizardStep.Connect;
+  private step: SetupWizardStep = SetupWizardStep.Connect;
   private provider = "Waiting for localization…";
 
   constructor(private readonly _panel: SceneObject) {
@@ -60,10 +68,10 @@ export class SetupWizardView {
       const existingFollowButton = frame.followButton;
       frame.showFollowButton = true;
       // Frame binds its follow callback only during initialization, when present.
-      if (!existingFollowButton) frame.followButton.onTriggerUp.add(() => frame.setFollowing(!frame.following));
+      if (!existingFollowButton) this.retain(frame.followButton.onTriggerUp.add(() => frame.setFollowing(!frame.following)));
       frame.setUseFollow(false); frame.setFollowing(false);
     }
-    const root = global.scene.createSceneObject("NativeSetupUI"); root.setParent(parent);
+    const root = global.scene.createSceneObject("NativeSetupUI"); root.setParent(parent); this.root = root;
     this.heightController = new PanelHeightController(frame, root, SETUP_PANEL_SCALE);
     this.robotBadge = createIconButton(root, "Robot selection button", "Robot\nDisconnected", 58, 10.5, new vec3(0, 46.5, 1.5));
     this.robotBadge.button.inactive = true; panelButtonLayer(this.robotBadge, true);
@@ -112,10 +120,17 @@ export class SetupWizardView {
     this.successDetail = this.text(this.success, "", 0, -14.5, CONTENT, 4, 20, HorizontalAlignment.Center);
     this.input.renderOrder = 12;
     uiMaterialLayer(this.guide.visual, 14);
-    this.input.onReturnKeyPressed.add(() => this.handlers?.onInputSubmit());
-    this.input.onEditMode.add((editing: boolean) => { if (editing) this.handlers?.onInputEdit?.(); });
-    this.input.onKeyboardStateChanged.add((open: boolean) => { if (!open) this.handlers?.onInputSubmit(); });
+    this.retain(this.input.onReturnKeyPressed.add(() => this.handlers?.onInputSubmit()));
+    this.retain(this.input.onEditMode.add((editing: boolean) => { if (editing) this.handlers?.onInputEdit?.(); }));
+    this.retain(this.input.onKeyboardStateChanged.add((open: boolean) => { if (!open) this.handlers?.onInputSubmit(); }));
     this.applyStepLayout(SetupWizardStep.Connect);
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true; this.handlers = null;
+    for (const unsubscribe of this.subscriptions.splice(0)) unsubscribe();
+    this.heightController.dispose(); this.root.destroy();
   }
 
   bindHandlers(onNext: () => void, onPrevious: () => void, onInputSubmit: () => void, onConnectionToggle: () => void, onRetry?: () => void, onInputEdit?: () => void): void {
@@ -150,9 +165,10 @@ export class SetupWizardView {
       this.layout();
     }
   }
-  setVisible(visible: boolean): void { this.heightController.setVisible(visible); }
+  setVisible(visible: boolean): void { if (!visible) this.setCameraPreview(null); this.heightController.setVisible(visible); }
   placed(): void { this.heightController.placed(); }
   tick(deltaS: number): void {
+    if (this.disposed) return;
     this.heightController.tick(deltaS);
     // Newly packed content becomes visible once the growing border can contain it.
     const fits = this.heightController.height + 0.01 >= this.heightController.target;
@@ -234,9 +250,10 @@ export class SetupWizardView {
     });
   }
   setCameraPreview(texture: Texture | null): void {
+    if (this.hasPreview === (texture !== null) && this.preview.texture === texture) return;
     this.hasPreview = texture !== null;
     this.tick(0);
-    if (!texture) { this.previewLabel.text = "Starting camera…"; return; }
+    if (!texture) { this.preview.useTexture = false; this.preview.texture = null; this.previewLabel.text = "Starting camera…"; return; }
     this.preview.texture = texture; this.preview.useTexture = true;
     const aspect = texture.getWidth() / Math.max(1, texture.getHeight());
     this.preview.size = new vec2(Math.min(34, 22 * aspect), Math.min(22, 34 / aspect));
@@ -281,6 +298,6 @@ export class SetupWizardView {
   }
   private button(parent: SceneObject, label: string, x: number, y: number, width: number, action: () => void): IconButtonResult {
     const result = createIconButton(parent, label, label, width, 6.4, new vec3(x, y, 1.5));
-    panelButtonLayer(result); result.button.onTriggerUp.add(action); return result;
+    panelButtonLayer(result); this.retain(result.button.onTriggerUp.add(action)); return result;
   }
 }

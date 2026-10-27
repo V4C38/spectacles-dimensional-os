@@ -16,7 +16,7 @@ from dimos.ar.localization.fiducial_marker.localizer import (
 )
 from dimos.ar.localization.pose_buffer import PoseBuffer
 from dimos.ar.localization.types import Intrinsics, Observation
-from dimos.ar.robot.profiles import FiducialMarkerMount
+from dimos.ar.robot.profiles.profile import FiducialMarkerMount
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 
 assert UNITREE_GO2_PROFILE.fiducial_dictionary is not None

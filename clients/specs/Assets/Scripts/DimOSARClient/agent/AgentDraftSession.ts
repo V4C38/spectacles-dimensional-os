@@ -34,6 +34,7 @@ export class AgentDraftSession {
   private restartAt = 0;
   private confirmedDraft = "";
   private lastResponse: string | null = null;
+  private lastResponseRevision: number | null = null;
   private snapshotValue: AgentDraftSnapshot;
 
   constructor(private readonly deps: {
@@ -80,13 +81,16 @@ export class AgentDraftSession {
     this.snapshotValue.status = this.enabled ? "Ready" : "Off";
   }
 
-  tick(now: number, enabled: boolean, response: string | null, idle: boolean): void {
+  tick(now: number, enabled: boolean, response: string | null, idle: boolean, responseRevision?: number): void {
     this.now = now;
     if (!enabled) { if (this.enabled) this.stop(); return; }
     this.enabled = true;
     if (this.flushing && now >= this.finishUntil) this.endRecording(true);
-    if (response && response !== this.lastResponse) {
+    const newResponse = responseRevision === undefined
+      ? response !== this.lastResponse : responseRevision !== this.lastResponseRevision;
+    if (response && newResponse) {
       this.lastResponse = response;
+      this.lastResponseRevision = responseRevision ?? null;
       this.snapshotValue.response = response;
       this.snapshotValue.severity = classifyAgentResponseText(response);
       if (this.deps.synthesis && !this.holding && !this.flushing) {
@@ -123,6 +127,7 @@ export class AgentDraftSession {
     this.stop();
     this.snapshotValue.prompt = this.snapshotValue.response = "";
     this.lastResponse = null;
+    this.lastResponseRevision = null;
     this.snapshotValue.error = null;
   }
 

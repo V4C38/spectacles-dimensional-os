@@ -119,19 +119,28 @@ export async function pointRuntimeButton(
 ): Promise<void> {
   await expect
     .poll(() =>
-      page.evaluate(() => {
+      page.evaluate((name) => {
         const w = window as any;
         const menu = w.xb.core.scene.children.find(
           (object: any) => object.constructor.name === "WebXRApp",
         ).mainMenu;
+        let targetVisible = false;
+        menu.panel.traverse((object: any) => {
+          if (!object.ux || (object.name !== name && object.text !== name)) return;
+          let visible = true;
+          for (let node = object; node; node = node.parent)
+            visible = visible && node.visible && node.userData.rayDisabled !== true;
+          targetVisible ||= visible;
+        });
         return (
+          targetVisible &&
           menu.panelProgress >= 0.999 &&
           menu.heightController.height === menu.heightController.target &&
           [...menu.pageTransitions.values()].every(
             (state: any) => state.progress === (state.target ? 1 : 0),
           )
         );
-      }),
+      }, name),
     )
     .toBe(true);
   await page.evaluate((name) => {

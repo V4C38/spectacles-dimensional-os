@@ -1,3 +1,4 @@
+import type { StateName } from "SpectaclesUIKit.lspkg/Scripts/Components/Element";
 import { PanelHeightController } from "./PanelHeightController";
 import { RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, panelFooterY } from "./PanelLayout";
 import type { CapsuleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/CapsuleButton";
@@ -39,6 +40,11 @@ const CLOSE_X = CONTENT / 2 - 0.072 * UNIT / 2;
 
 /** WebXR's page arrangement and copy, rendered with fixed-size native SUK primitives. */
 export class MainMenuView {
+  private disposed = false;
+  private readonly subscriptions: (() => void)[] = [];
+  private retain(subscription: unknown): void {
+    if (typeof subscription === "function") this.subscriptions.push(subscription as () => void);
+  }
   private readonly root: SceneObject;
   private readonly pages = new Map<Page, SceneObject>();
   private readonly bodies = new Map<Page, SceneObject>();
@@ -66,6 +72,8 @@ export class MainMenuView {
   private readonly debug: IconButtonResult;
   private readonly realign: IconButtonResult;
   private readonly stop: CapsuleButton;
+  private stopNativeState = "default" as StateName;
+  private stopLatched = false;
   private page: Page = "main";
   private debugEnabled = false;
   private soundEnabled = true;
@@ -81,7 +89,7 @@ export class MainMenuView {
       frame.allowTranslation = true; frame.onlyInteractOnBorder = true; frame.autoShowHide = false;
       frame.showCloseButton = false; frame.showFollowButton = false;
       frame.setUseFollow(false); frame.setFollowing(false);
-      this.root.setParent(frame.content); frame.onTranslationStart.add(callbacks.onPin);
+      this.root.setParent(frame.content); this.retain(frame.onTranslationStart.add(callbacks.onPin));
     }
     this.heightController = new PanelHeightController(frame, this.root, RUNTIME_PANEL_SCALE);
     this.robot = this.button(this.root, "Robot selection button", "Robot", 0, 0.465 * UNIT, 0.58 * UNIT, 0.105 * UNIT, callbacks.onRobot);
@@ -104,14 +112,15 @@ export class MainMenuView {
     this.reply = this.messageField(this.chat, COPY.agent, 0.052 * UNIT, true);
     this.draft = this.messageField(this.chat, COPY.yourMessage, -0.088 * UNIT, false);
     this.draft.window.scrollingPaused = true;
-    this.draft.window.interactable.onTriggerStart.add(callbacks.onRecord);
-    this.draft.window.interactable.onTriggerEnd.add(() => callbacks.onRecordEnd(false));
-    this.draft.window.interactable.onTriggerCanceled.add(() => callbacks.onRecordEnd(true));
+    this.retain(this.draft.window.interactable.onTriggerStart.add(callbacks.onRecord));
+    this.retain(this.draft.window.interactable.onTriggerEnd.add(() => callbacks.onRecordEnd(false)));
+    this.retain(this.draft.window.interactable.onTriggerCanceled.add(() => callbacks.onRecordEnd(true)));
     this.send = this.button(this.chat, COPY.send, COPY.send, -(HALF + 2) / 2, -0.196 * UNIT, HALF, ACTION, callbacks.onSend, SnapOS2Styles.Primary).button;
     this.clear = this.button(this.chat, COPY.clear, COPY.clear, (HALF + 2) / 2, -0.196 * UNIT, HALF, ACTION, callbacks.onClear).button;
     this.status = this.text(this.bodies.get("main")!, "", 0, -0.251 * UNIT, CONTENT, 0.018 * UNIT, 13);
     this.stop = this.button(this.root, "EmergencyStop", COPY.stop, 0, -0.298 * UNIT, CONTENT, ACTION, () => {}, SnapOS2Styles.Special).button;
-    this.stop.onTriggerDown.add(callbacks.onEmergencyStop);
+    this.retain(this.stop.onTriggerDown.add(callbacks.onEmergencyStop));
+    this.retain(this.stop.onStateChanged.add(state => { this.stopNativeState = state; }));
 
     const settings = this.bodies.get("settings")!; this.pageTitle(this.pages.get("settings")!, COPY.settings, COPY.done, "main");
     this.text(settings, COPY.robot, 0, 0.16 * UNIT, CONTENT, 3, 19);
@@ -153,7 +162,16 @@ export class MainMenuView {
     this.showPage("main");
   }
 
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const unsubscribe of this.subscriptions.splice(0)) unsubscribe();
+    this.reply.dispose(); this.draft.dispose(); this.diagnostics.dispose();
+    this.heightController.dispose(); this.root.destroy();
+  }
+
   apply(snap: SpecsUISnapshot): void {
+    if (this.disposed) return;
     if (snap.alignmentReview) this.showPage("alignment"); else if (this.page === "alignment") this.showPage("main");
     this.robot.labelText.text = robotBadgeText(snap.robotName, snap.robotConnectionText, snap.robotSelected, snap.activity);
     this.robot.button.inactive = !snap.robotSelectable; setButtonSelected(this.robot.button, snap.robotSelected);
@@ -178,9 +196,14 @@ export class MainMenuView {
     this.realign.labelText.text = snap.hasTrackingOrigin ? COPY.relocalize : COPY.localizeRobot;
     this.setDebugModeToggle(snap.debugEnabled); this.diagnostics.setText(snap.debugText);
     this.stop.inactive = !snap.estopAvailable;
+    if (snap.estopPressed || this.stopLatched) {
+      this.stop.visual.setState(snap.estopPressed ? "triggered" as StateName : this.stopNativeState);
+    }
+    this.stopLatched = snap.estopPressed;
   }
 
   tick(deltaS: number): void {
+    if (this.disposed) return;
     this.heightController.tick(deltaS);
     this.stop.getSceneObject().getTransform().setLocalPosition(new vec3(0, panelFooterY(this.heightController.height), 1.5));
     this.bodies.get(this.page)!.enabled = this.heightController.height + 0.01 >= this.heightController.target;
@@ -246,7 +269,7 @@ export class MainMenuView {
     const result = createIconButton(parent, name, label, width, height, new vec3(x, y, 1.5), style);
     this.rowNodes.push({ parent, node: result.sceneObject, y });
     panelButtonLayer(result); result.button.playAudio = this.soundEnabled;
-    result.button.onTriggerUp.add(action); this.buttons.push(result.button); return result;
+    this.retain(result.button.onTriggerUp.add(action)); this.buttons.push(result.button); return result;
   }
   private text(parent: SceneObject, value: string, x: number, y: number, width: number, height: number, size = 19, align = HorizontalAlignment.Center): Text {
     if (align === HorizontalAlignment.Left && width >= CONTENT - 1) width -= 2;

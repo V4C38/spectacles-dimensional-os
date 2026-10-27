@@ -4,7 +4,6 @@ import type { ARModuleSessionState } from "@dimos-ar-client/websocket/arModuleSe
 import type { Capabilities, Hello } from "@dimos-ar-client/websocket/protocolTypes";
 import {
   FLASH_DURATION_S,
-  shouldBeginFailedFlash,
   WebXRNavigationController,
 } from "../src/navigation/WebXRNavigationController";
 
@@ -46,6 +45,7 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
     capabilities,
     nav: null,
     agentMessage: null,
+    agentMessageRevision: 0,
     lastError: null,
     ...overrides,
   };
@@ -53,9 +53,6 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
 
 describe("WebXRNavigationController", () => {
   it("starts a failed flash from nav facts and hides the route", () => {
-    expect(
-      shouldBeginFailedFlash({ state: "following_path", outcome: null }, { state: "resolved", outcome: "failed" }, true),
-    ).toBe(true);
     const sendText = vi.fn();
     const session = {
       view: () => view(),

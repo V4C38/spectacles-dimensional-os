@@ -382,9 +382,11 @@ function decodeObservationRecord(
 }
 
 function requireIntrinsics(intrinsics: Intrinsics): Intrinsics {
-  if (!Number.isInteger(intrinsics.width) || !Number.isInteger(intrinsics.height)) {
-    throw new Error("intrinsics.width and height must be integers");
+  if (!Number.isInteger(intrinsics.width) || !Number.isInteger(intrinsics.height) || intrinsics.width <= 0 || intrinsics.height <= 0) {
+    throw new Error("intrinsics.width and height must be positive integers");
   }
+  const fx = finiteNumber(intrinsics.fx, "fx"), fy = finiteNumber(intrinsics.fy, "fy");
+  if (fx <= 0 || fy <= 0) throw new Error("intrinsics.fx and fy must be positive");
   if (!DISTORTION_MODELS.includes(intrinsics.distortion_model)) {
     throw new Error("intrinsics.distortion_model must be none, plumb_bob, or equidistant");
   }
@@ -395,8 +397,8 @@ function requireIntrinsics(intrinsics: Intrinsics): Intrinsics {
     throw new Error("intrinsics.distortion must be empty when distortion_model is none");
   }
   return {
-    fx: finiteNumber(intrinsics.fx, "fx"),
-    fy: finiteNumber(intrinsics.fy, "fy"),
+    fx,
+    fy,
     cx: finiteNumber(intrinsics.cx, "cx"),
     cy: finiteNumber(intrinsics.cy, "cy"),
     width: intrinsics.width,
@@ -783,7 +785,7 @@ function requireVec3(data: Record<string, unknown>, key: string): Vec3 {
 
 function requireQuat(data: Record<string, unknown>, key: string): Quat {
   const values = requireNumberArray(data, key, 4);
-  return [values[0], values[1], values[2], values[3]];
+  return requireQuatValue([values[0], values[1], values[2], values[3]], key);
 }
 
 function requireVec3Value(value: Vec3, key: string): Vec3 {
@@ -801,21 +803,18 @@ function requireQuatValue(value: Quat, key: string): Quat {
   if (!Array.isArray(value) || value.length !== 4) {
     throw new Error(`Field '${key}' must be a 4-element quaternion [qx, qy, qz, qw]`);
   }
-  return [
+  const orientation: Quat = [
     finiteNumber(value[0], `${key}[0]`),
     finiteNumber(value[1], `${key}[1]`),
     finiteNumber(value[2], `${key}[2]`),
     finiteNumber(value[3], `${key}[3]`),
   ];
+  if (Math.hypot(...orientation) < 1e-6) throw new Error(`Field '${key}' must be a non-zero quaternion`);
+  return orientation;
 }
 
 function requireNonZeroQuatValue(value: Quat, key: string): Quat {
-  const orientation = requireQuatValue(value, key);
-  const length = Math.hypot(orientation[0], orientation[1], orientation[2], orientation[3]);
-  if (length < 1e-6) {
-    throw new Error(`Field '${key}' must be a non-zero quaternion`);
-  }
-  return orientation;
+  return requireQuatValue(value, key);
 }
 
 function requireYawPoseValue(value: unknown, key: string): YawPose {
@@ -836,6 +835,7 @@ function isCapturePolicy(value: string): value is CapturePolicy {
 
 function writeFloat32Vec(view: DataView, offset: number, values: number[]): void {
   for (let i = 0; i < values.length; i++) {
+    if (!Number.isFinite(Math.fround(values[i]))) throw new Error("camera pose must fit finite float32 components");
     view.setFloat32(offset + i * 4, values[i], true);
   }
 }

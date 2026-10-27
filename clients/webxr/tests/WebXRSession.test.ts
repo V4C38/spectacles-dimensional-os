@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
-import type { RecognitionPort } from "@dimos-ar-client/agent/AgentDraftSession";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RecognitionPort, SynthesisPort } from "@dimos-ar-client/agent/AgentDraftSession";
 import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
 import { BrowserWebSocketTransport } from "../src/websocket/BrowserWebSocketTransport";
 import { cameraFixture } from "./fixtures/camera";
@@ -23,6 +23,10 @@ class Socket {
   close() { this.readyState = 3; }
   open() { this.readyState = 1; this.onopen?.(new Event("open")); }
   receive(message: object) { this.onmessage?.({ data: JSON.stringify(message) + "\n" } as MessageEvent); }
+  acknowledgeLidar() {
+    const { type: _type, ...lidar } = this.commands("lidar_settings_request").at(-1);
+    this.receive({ ...state, lidar });
+  }
   commands(type: string) { return this.sent.filter((value): value is string => typeof value === "string").map(value => JSON.parse(value)).filter(value => value.type === type); }
 }
 const hello: Hello = {
@@ -44,12 +48,12 @@ const alignment = { type: "localization_result", position: [0, 0, 0], orientatio
 const request = { type: "localization_observations_request", capture_policy: "any_angle", observation_count: 1 };
 const cleanup: (() => void)[] = [];
 afterEach(() => { cleanup.splice(0).forEach(dispose => dispose()); });
-function fixture(recognition: RecognitionPort | null = null, odomScale = 1) {
+function fixture(recognition: RecognitionPort | null = null, odomScale = 1, synthesis: SynthesisPort | null = null) {
   let now = 10;
   const sockets: Socket[] = [];
   const camera = cameraFixture(undefined, { now: () => now });
   const client = new DimOSWebXRClient({
-    recognition, camera: camera.source, clock: { now: () => now },
+    recognition, synthesis, camera: camera.source, clock: { now: () => now },
     transport: new BrowserWebSocketTransport({ url: "wss://pc.test/ar", socketFactory: () => {
       const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket;
     } }),
@@ -99,6 +103,7 @@ describe("WebXR complete ARModule session", () => {
     // Results complete setup without requiring another XR frame (e.g. focus is blurred).
     socket.result();
     expect(f.client.ui.setupCompleted).toBe(true);
+    f.client.resumeTracking();
     f.tick();
     expect(socket.commands("lidar_settings_request").at(-1)?.enabled).toBe(true);
     expect(f.camera.stopped).toHaveBeenCalled();
@@ -312,13 +317,15 @@ it("retires stale localization responses while retaining a dismissable alignment
 
 it("keeps per-mode sensor ranges and applies point limits locally", () => {
   const f = fixture(); const socket = f.connect();
-  f.client.ui.setLidarMode("full"); f.client.ui.adjustLidarRange(-1);
+  f.client.ui.setLidarMode("full"); socket.acknowledgeLidar();
+  f.client.ui.adjustLidarRange(-1); socket.acknowledgeLidar();
   expect(socket.commands("lidar_settings_request").at(-1)?.max_range_m).toBe(4.5);
   const sent = socket.commands("lidar_settings_request").length;
   f.client.ui.adjustLidarPoints(-1);
   expect(f.client.ui.lidarPreferences.pointLimit).toBe(3750);
   expect(socket.commands("lidar_settings_request")).toHaveLength(sent);
-  f.client.ui.setLidarMode("obstacles"); f.client.ui.adjustLidarRange(1);
+  f.client.ui.setLidarMode("obstacles"); socket.acknowledgeLidar();
+  f.client.ui.adjustLidarRange(1); socket.acknowledgeLidar();
   expect(f.client.ui.lidarPreferences.obstacleRangeM).toBe(0.7);
   f.client.ui.setLidarMode("full");
   expect(socket.commands("lidar_settings_request").at(-1)?.max_range_m).toBe(4.5);
@@ -330,12 +337,69 @@ it("uses the advertised XY heuristic only for native sensor clearance", () => {
   submitAlignment(f.client, 9); socket.result();
   f.client.ui.nextSetup();
   socket.receive({ type: "pose", position: [5, -2.5, 0.33], orientation: [0, 0, 0, 1], ts: 10 });
-  f.client.ui.lidarPreferences.obstacleRangeM = 0.6;
-  f.client.ui.setLidarMode("obstacles");
+  f.client.ui.setLidarMode("obstacles"); socket.acknowledgeLidar();
   const data = new ArrayBuffer(28), wire = new DataView(data);
   wire.setUint32(0, LIDAR_FOURCC, true); wire.setFloat64(4, 10, true); wire.setUint32(12, 1, true);
   wire.setFloat32(16, 6, true); wire.setFloat32(20, -2.5, true); wire.setFloat32(24, 0.4, true);
   socket.onmessage?.({ data } as MessageEvent); f.tick();
   expect(f.client.lidar.object.geometry.getAttribute("color").getW(0)).toBeCloseTo(0.15625);
   expect(f.client.lidar.object.geometry.getAttribute("position").getZ(0)).toBeCloseTo(-6);
+});
+
+it("restarts a partial capture through its episode owner after tracking resumes", async () => {
+  const f = fixture(); const socket = f.connect();
+  socket.receive({ ...request, observation_count: 3 }); f.client.ui.nextSetup();
+  await f.camera.source.waitUntilOpen(); f.tick(); await settle(); f.camera.emit(); await settle();
+  expect(f.client.episode.view().capturedCount).toBe(1);
+  f.client.suspend();
+  expect(f.client.episode.view().phase).toBe("idle");
+  const openings = f.camera.media.getUserMedia.mock.calls.length;
+  f.client.resumeTracking();
+  expect(f.client.episode.view().phase).toBe("capturing");
+  await f.camera.source.waitUntilOpen(); f.tick(); await settle(); f.camera.emit(); await settle();
+  expect(f.camera.media.getUserMedia.mock.calls.length).toBeGreaterThan(openings);
+  expect(f.client.episode.view().capturedCount).toBe(1);
+});
+
+it("speaks distinct identical agent-message events once each", () => {
+  const spoken: string[] = [];
+  const f = fixture(null, 1, { speak(text, done) { spoken.push(text); done(); }, stop() {} });
+  const socket = f.connect();
+  f.client.ui.flow.finish(); f.client.ui.setOperatingMode("agent"); f.client.setRobotSelected(true); f.tick();
+  socket.receive({ type: "agent_message", text: "Done" }); f.tick(); f.tick();
+  expect(spoken).toEqual(["Done"]);
+  socket.receive({ type: "agent_message", text: "Done" }); f.tick(); f.tick();
+  expect(spoken).toEqual(["Done", "Done"]);
+});
+
+it("uses one activity derivation for the UI badge and robot through idle, recognition and synthesis", () => {
+  const recognition: RecognitionPort = { start(_text, _error, _end, started) { started(); }, stop() {} };
+  const f = fixture(recognition, 1, { speak() {}, stop() {} }); const socket = f.connect();
+  const feedback = vi.spyOn(f.client.robot, "feedback");
+  f.client.ui.flow.finish(); f.client.ui.setOperatingMode("agent"); f.client.ui.menuOpen = true;
+  f.client.setRobotSelected(true); f.tick();
+  expect(f.client.speech.snapshot().status).toBe("Ready");
+  expect(f.client.ui.snapshot().activity).toBe("Idle");
+  expect(feedback.mock.calls.at(-1)?.[0].activity).toBe("Idle");
+  expect(f.client.speech.beginRecording()).toBe(true); f.tick();
+  expect(f.client.ui.snapshot().activity).toBe("Listening");
+  expect(feedback.mock.calls.at(-1)?.[0].activity).toBe("Listening");
+  f.client.speech.endRecording(true);
+  socket.receive({ type: "agent_message", text: "Ready to help" }); f.tick();
+  expect(f.client.ui.snapshot().activity).toBe("Responding");
+  expect(feedback.mock.calls.at(-1)?.[0].activity).toBe("Responding");
+});
+
+it("gates selection and manual commands during alignment review and restores eligibility on dismissal", () => {
+  const f = fixture(); const socket = f.connect(); f.client.ui.flow.finish();
+  f.client.setRobotSelected(true); f.tick();
+  expect(f.client.ui.snapshot()).toMatchObject({ robotSelected: true, robotSelectable: true });
+  f.client.ui.requestAlignmentReview("reference-reset");
+  expect(f.client.controlsEnabled()).toBe(false);
+  f.tick({ x: 0, y: -1 }); f.client.setRobotSelected(true);
+  expect(f.client.ui.snapshot()).toMatchObject({ robotSelected: false, robotSelectable: false });
+  expect(socket.commands("nav_joystick_request")).toHaveLength(0);
+  f.client.ui.dismissAlignmentReview(); f.tick();
+  expect(f.client.controlsEnabled()).toBe(true);
+  expect(f.client.ui.snapshot()).toMatchObject({ robotSelected: false, robotSelectable: true });
 });

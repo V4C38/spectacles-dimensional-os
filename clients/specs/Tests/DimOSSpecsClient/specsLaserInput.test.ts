@@ -69,3 +69,12 @@ it("supports the editor mouse without requiring tracked hands", () => {
   const h = fixture(InteractorInputType.Mouse); h.loseTracking();
   expect(readSikLaserPointers()[0].active).toBe(true);
 });
+
+it("uses the tracked fingertip midpoint for the optical beam without changing native targeting", () => {
+  const h = fixture();
+  setMockHands({ left: { isTracked: () => true, isFacingCamera: () => false, getPalmPitchAngle: () => 0,
+    indexTip: { position: new vec3(12, 8, -20) }, thumbTip: { position: new vec3(8, 4, -24) } } });
+  expect(readSikLaserPointers()[0].origin).toEqual([10, 6, -22]);
+  expect(h.interactor.startPoint).toEqual(new vec3(1, 2, 3));
+  expect(readSikLaserPointers()[0].cursor).toEqual([4, 5, -100]);
+});

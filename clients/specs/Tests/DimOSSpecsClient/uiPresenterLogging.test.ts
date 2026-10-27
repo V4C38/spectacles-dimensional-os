@@ -76,7 +76,9 @@ it("restarts on the next tick without stale scale animations reopening or hiding
   };
   const main = panel(), setup = panel(), presenter = new UIPresenter();
   const order: string[] = [], stop = vi.fn(() => order.push("stop"));
+  const flow = { completed: true };
   const start = vi.fn(() => {
+    flow.completed = false;
     expect(main.enabled).toBe(false);
     setup.enabled = true;
     setup.getTransform().setLocalScale(new vec3(0.432, 0.432, 0.432));
@@ -84,7 +86,7 @@ it("restarts on the next tick without stale scale animations reopening or hiding
   });
   const setupTick = vi.fn(), palmTick = vi.fn(), menuTick = vi.fn(), setVisible = vi.fn();
   Object.assign(presenter, {
-    mainUIFrame: main, setupWizardPanel: setup, setupFlow: { completed: true },
+    mainUIFrame: main, setupWizardPanel: setup, setupFlow: flow,
     setupWizardController: { start, tick: setupTick },
     wristMenuController: { closeImmediate: vi.fn(), tick: palmTick },
     mainMenuView: { setVisible, setOperatingMode: vi.fn(), tick: menuTick },
@@ -122,7 +124,7 @@ it.each([false, true])("returns to the main page when setup finishes with alignm
   const presenter = new UIPresenter();
   const showPage = vi.fn();
   Object.assign(presenter, {
-    setupFlow: { completed: false }, isEditorMode: false,
+    setupFlow: { completed: true }, isEditorMode: false,
     mainMenuView: { showPage },
     deps: { session: { view: () => ({ hasTrackingOrigin }) } },
     applyRoomPresentation: vi.fn(), sendPostWizardLidarDefault: vi.fn(),
@@ -157,4 +159,38 @@ it.each([false, true])("scales the whole Specs menu uniformly to 75% for editor 
   (presenter as any).setUIState(1); flushAnimations();
   expect(panel.enabled).toBe(true);
   expect(scale).toEqual(new vec3(0.2592, 0.2592, 0.2592));
+});
+
+import { SpecsCameraStream } from "../../Assets/Scripts/DimOSSpecsClient/localization/SpecsCameraStream";
+import { RobotSelection } from "../../Assets/Scripts/DimOSARClient/robot/RobotSelection";
+import { setMockTime } from "../setup/lens-globals";
+
+it("reads selection eligibility and listening/responding activity from portable owners", () => {
+  vi.spyOn(SpecsCameraStream, "getInstance").mockReturnValue({ previewTexture: () => null } as any);
+  const presenter = new UIPresenter(), selection = new RobotSelection();
+  const view = { connection: "ready", hello: { robot: { display_name: "Go2" } }, nav: null,
+    state: { agent: { idle: true } }, capabilities: null, hasTrackingOrigin: true };
+  const voice = { asrRunning: true, snapshot: () => ({ status: "Listening" }) };
+  Object.assign(presenter, { setupFlow: { completed: true }, deps: { selection,
+    session: { view: () => view }, episode: { view: () => ({ phase: "idle" }), timing: () => ({}) },
+    speechController: voice, tts: { isPlaying: false } } });
+  expect(presenter.snapshot()).toMatchObject({ robotSelectable: false, robotSelected: false, activity: "Listening" });
+  selection.setEligible(true); selection.setSelected(true);
+  voice.asrRunning = false; (presenter as any).deps.tts.isPlaying = true;
+  expect(presenter.snapshot()).toMatchObject({ robotSelectable: true, robotSelected: true, activity: "Responding" });
+  selection.setEligible(false);
+  expect(presenter.snapshot()).toMatchObject({ robotSelectable: false, robotSelected: false });
+  vi.restoreAllMocks();
+});
+
+it("publishes a 350 ms emergency-stop latch while dispatching the request once", () => {
+  vi.spyOn(SpecsCameraStream, "getInstance").mockReturnValue({ previewTexture: () => null } as any);
+  const presenter = new UIPresenter(), emergencyStop = vi.fn();
+  Object.assign(presenter, { deps: { emergencyStop, selection: new RobotSelection(),
+    session: { view: () => ({ connection: "ready", state: null, nav: null }) },
+    episode: { view: () => ({ phase: "idle" }), timing: () => ({}) } } });
+  setMockTime(10); presenter.requestEmergencyStop();
+  setMockTime(10.34); expect(presenter.snapshot().estopPressed).toBe(true);
+  setMockTime(10.36); expect(presenter.snapshot().estopPressed).toBe(false);
+  expect(emergencyStop).toHaveBeenCalledOnce(); vi.restoreAllMocks();
 });

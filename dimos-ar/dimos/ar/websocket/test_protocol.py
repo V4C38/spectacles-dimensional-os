@@ -8,7 +8,7 @@ import pytest
 from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
 from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, Capability, CapabilityName
-from dimos.ar.robot.profiles import RobotDescription
+from dimos.ar.robot.profiles.profile import RobotDescription
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.ar.websocket.protocol import (
@@ -683,3 +683,45 @@ def test_hello_carries_optional_odometry_reference() -> None:
     hello = _sample_hello()
     payload = json.loads(encode_hello(replace(hello, odom_reference_id="room-a")))
     assert payload["odom_reference_id"] == "room-a"
+
+
+@pytest.mark.parametrize("value", [True, False, "1", None, float("nan"), float("inf")])
+@pytest.mark.parametrize("field", ["position", "orientation"])
+def test_nav_goal_rejects_non_numeric_and_non_finite_components(value, field) -> None:
+    payload = {"type": "nav_goal_request", "position": [0, 0, 0], "orientation": [0, 0, 0, 1]}
+    payload[field][0] = value
+    with pytest.raises((TypeError, ValueError)):
+        decode_inbound(json.dumps(payload))
+
+
+@pytest.mark.parametrize("offset, format_, value", [
+    (30, "<f", float("nan")), (34, "<f", float("inf")),
+    (42, "<4f", (0, 0, 0, 0)), (26, "<I", 1),
+])
+def test_binary_localization_rejects_invalid_camera_and_reserved_word(offset, format_, value):
+    frame = bytearray(TYPESCRIPT_LOCA_ONE)
+    struct.pack_into(format_, frame, offset, *(value if isinstance(value, tuple) else (value,)))
+    with pytest.raises(ValueError):
+        decode_localization_observations(bytes(frame))
+
+
+def test_binary_localization_rejects_unexplained_trailing_and_record_bytes() -> None:
+    with pytest.raises(ValueError, match="trailing"):
+        decode_localization_observations(TYPESCRIPT_LOCA_ONE + b"x")
+    frame = bytearray(TYPESCRIPT_LOCA_ONE + b"x")
+    record_length = struct.unpack_from("<I", frame, 6)[0]
+    struct.pack_into("<I", frame, 6, record_length + 1)
+    with pytest.raises(ValueError, match="record bytes"):
+        decode_localization_observations(bytes(frame))
+
+
+@pytest.mark.parametrize("changes", [
+    {"fx": 0}, {"fy": -1}, {"fx": True}, {"fx": "1"},
+    {"width": 0}, {"height": -1}, {"width": True}, {"height": 1.5},
+    {"distortion": [True]}, {"distortion": ["1"]},
+])
+def test_binary_localization_rejects_invalid_calibration(changes):
+    intrinsics = {"fx": 100, "fy": 100, "cx": 50, "cy": 50, "width": 100, "height": 100,
+                  "distortion_model": "none", "distortion": [], **changes}
+    with pytest.raises((TypeError, ValueError)):
+        decode_localization_observations(_encode_localization_observations_frame(b"jpeg", json.dumps(intrinsics).encode()))

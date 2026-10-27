@@ -48,6 +48,7 @@ def _pose(x: float = 4.0, y: float = 8.0, z: float = 0.33) -> PoseStamped:
 
 def _publisher(sink: _RecordingBroadcast, **kwargs: object) -> RobotStatePublisher:
     kwargs.setdefault("odom_scale_correction_factor", 1.25)
+    kwargs.setdefault("robot_position", lambda: (4.0, 8.0, 0.33))
     return RobotStatePublisher(sink, **kwargs)  # type: ignore[arg-type]
 
 
@@ -96,6 +97,7 @@ def test_publish_lidar_filters_native_range_then_corrects_wire_coordinates() -> 
         sink,
         lidar_max_hz=0.0,
         lidar_target_points=1,
+        robot_position=lambda: (8.0, 0.0, 0.33),
         odom_scale_correction_factor=1.25,
     )
     lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=15.0)
@@ -116,7 +118,7 @@ def test_publish_lidar_filters_native_range_then_corrects_wire_coordinates() -> 
 
 def test_publish_lidar_skips_until_odom_is_known() -> None:
     sink = _RecordingBroadcast()
-    publisher = _publisher(sink, lidar_max_hz=0.0)
+    publisher = _publisher(sink, lidar_max_hz=0.0, robot_position=lambda: None)
     lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
     points = np.array([[0.5, 0.0, 0.5]], dtype=np.float32)
 
@@ -131,6 +133,7 @@ def test_publish_lidar_range_is_around_robot_not_origin() -> None:
         sink,
         lidar_max_hz=0.0,
         lidar_target_points=10,
+        robot_position=lambda: (10.0, 0.0, 0.33),
     )
     lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5.0)
     points = np.array([[0.5, 0.0, 0.5], [10.5, 0.0, 0.5]], dtype=np.float32)
@@ -163,10 +166,19 @@ def test_publish_lidar_uses_passed_settings_per_call() -> None:
 
 def test_repeated_voxel_geometry_is_independent_of_robot_movement() -> None:
     sink = _RecordingBroadcast()
-    publisher = _publisher(sink, pose_max_hz=0, lidar_max_hz=0, lidar_target_points=10)
+    publisher = _publisher(
+        sink,
+        pose_max_hz=0,
+        lidar_max_hz=0,
+        lidar_target_points=10,
+        robot_position=lambda: (4.0, 0.0, 0.33),
+    )
     lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=5)
     points = np.array([[5.0, 0, 0.5]], dtype=np.float32)
+    position = [4.0, 0.0, 0.33]
+    publisher._robot_position = lambda: tuple(position)
     for robot_x in [4.0, 4.918]:
+        position[0] = robot_x
         publisher.publish_odom(_pose(x=robot_x, y=0))
         publisher.publish_lidar(_FakePointCloud2(points, ts=2), lidar=lidar)
     assert sink.binary_payloads[0] == sink.binary_payloads[1]
@@ -176,7 +188,13 @@ def test_repeated_voxel_geometry_is_independent_of_robot_movement() -> None:
 
 def test_range_filter_stays_in_native_metres_when_display_is_scaled() -> None:
     sink = _RecordingBroadcast()
-    publisher = _publisher(sink, pose_max_hz=0, lidar_max_hz=0, lidar_target_points=10)
+    publisher = _publisher(
+        sink,
+        pose_max_hz=0,
+        lidar_max_hz=0,
+        lidar_target_points=10,
+        robot_position=lambda: (4.0, 0.0, 0.33),
+    )
     lidar = LidarSettings(enabled=True, min_height_m=0.1, max_height_m=1.5, max_range_m=0.5)
     publisher.publish_odom(_pose(x=4, y=0))
     publisher.publish_lidar(
@@ -194,7 +212,13 @@ def test_native_navigation_and_lidar_share_one_corrected_wire_frame() -> None:
     from dimos.msgs.nav_msgs.Path import Path
 
     sink = _RecordingBroadcast()
-    publisher = _publisher(sink, pose_max_hz=0, lidar_max_hz=0, lidar_target_points=10)
+    publisher = _publisher(
+        sink,
+        pose_max_hz=0,
+        lidar_max_hz=0,
+        lidar_target_points=10,
+        robot_position=lambda: (4.0, 0.0, 0.33),
+    )
     navigation = NavGoalCoordinator(odom_scale_correction_factor=1.25)
     wire_goal = NavGoalRequest((5.25, -2.625, 0), (0, 0, 0, 1))
     native_goal = navigation.submit_goal(wire_goal)
