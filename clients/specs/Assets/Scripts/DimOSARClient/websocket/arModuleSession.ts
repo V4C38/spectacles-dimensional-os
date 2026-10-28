@@ -1,3 +1,4 @@
+import type { ManipulationState } from "../manipulation/ManipulationTypes";
 import type { ClientTrackingOrigin, ClientTrackingOriginStore } from "../localization/clientTrackingOrigin";
 import { LocalizationSubmission } from "../localization/localizationSubmission";
 import {
@@ -48,6 +49,7 @@ export interface ARModuleSessionState {
   pose: Pose | null;
   nav_goal: NavGoal | null;
   nav_preview?: NavGoal | null;
+  manipulation?: ManipulationState | null;
   lidar: Lidar | null;
   capabilities: Capabilities | null;
   nav: NavState | null;
@@ -86,6 +88,7 @@ export class ARModuleSession {
   private nav_goal: NavGoal | null = null;
   private nav_preview: NavGoal | null = null;
   private lidar: Lidar | null = null;
+  private manipulation: ManipulationState | null = null;
   private agentMessage: string | null = null;
   private agentMessageRevision = 0;
   private lastError: string | null = null;
@@ -268,6 +271,7 @@ export class ARModuleSession {
       pose: this.pose,
       nav_goal: this.nav_goal,
       nav_preview: this.nav_preview,
+      manipulation: this.manipulation,
       lidar: this.lidar,
       capabilities: this.hello?.capabilities ?? null,
       nav: this.state?.nav ?? null,
@@ -330,6 +334,12 @@ export class ARModuleSession {
 
   private applyReadyMessage(message: Exclude<Outbound, Lidar | Hello>): void {
     switch (message.type) {
+      case "manipulation_state":
+        this.manipulation = message;
+        break;
+      case "manipulation_result":
+        this.emitOutbound(message);
+        return;
       case "state":
         this.state = message;
         break;
@@ -408,6 +418,7 @@ export class ARModuleSession {
     this.nav_goal = null;
     this.nav_preview = null;
     this.lidar = null;
+    this.manipulation = null;
     this.agentMessage = null;
     this.clientTrackingOriginStore.clear();
     this.framer = new TextFramer();

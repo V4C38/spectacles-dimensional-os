@@ -135,8 +135,18 @@
               <select id="blueprintSelect" aria-label="Blueprint">
                 <option value="unitree_go2_ar" selected>unitree_go2_ar</option>
                 <option value="unitree_go2_ar_agentic">unitree_go2_ar_agentic</option>
+                <option value="openyam_ar_planner">openyam_ar_planner</option>
               </select>
               <p class="blueprint-info" id="blueprintInfo"></p>
+              <label for="robotProfileSelect">Robot profile</label>
+              <select id="robotProfileSelect" aria-label="Robot profile"></select>
+              <input id="robotProfileName" aria-label="Profile name" maxlength="80" />
+              <div class="actions">
+                <button type="button" class="btn" id="newRobotProfile">New</button>
+                <button type="button" class="btn" id="duplicateRobotProfile">Duplicate</button>
+                <button type="button" class="btn" id="deleteRobotProfile">Delete</button>
+              </div>
+              <label><input type="checkbox" id="simulationEnabled" /> Mock hardware (OpenYAM)</label>
             </div>
             <div class="selector-group">
               <span class="selector-label">Client</span>

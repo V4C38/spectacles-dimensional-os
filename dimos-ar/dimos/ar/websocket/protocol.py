@@ -9,6 +9,7 @@ import struct
 from typing import Any
 
 from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult, Observation
+from dimos.ar.manipulation.protocol import ManipulationRequest, decode_request
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
 from dimos.ar.robot.capabilities import (
     NAVIGATION_INPUT_NAMES,
@@ -134,7 +135,8 @@ class ClientPose:
 
 
 Inbound = (
-    NavGoalRequest
+    ManipulationRequest
+    | NavGoalRequest
     | NavJoystickRequest
     | EstopRequest
     | LidarSettingsRequest
@@ -165,6 +167,9 @@ def decode_inbound(text: str) -> Inbound:
 
     if msg_type == "hello_request":
         raise ValueError("hello_request is handled during handshake, not in the message loop")
+
+    if msg_type == "manipulation_request":
+        return decode_request(data)
 
     if msg_type == "nav_goal_request":
         preview_id = _require_type(data, "preview_id", str) if "preview_id" in data else None

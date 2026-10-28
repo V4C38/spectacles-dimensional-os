@@ -12,7 +12,7 @@ import * as xb from "xrblocks";
 import { WebXRInputController } from "../src/input/WebXRInputController";
 
 function fixture() {
-  const client = { loseInput: vi.fn(), emergencyStop: vi.fn() };
+  const client = { manipulation: { end: vi.fn() }, loseInput: vi.fn(), emergencyStop: vi.fn() };
   const controller = new WebXRInputController(client as never, new THREE.Group(), {
     tracking: () => true, session: () => ({ visibilityState: "visible" }) as XRSession,
   });

@@ -620,3 +620,19 @@ their subscriptions and destroy their generated UI, retaining authored scene hos
 recovery; `WebXRInputController` owns input capture/dispatch and menu placement.
 Cached world geometry is immutable. Resource owners dispose generated meshes and
 materials, restore borrowed SDK hand state and leave authored/native assets intact.
+
+## WebXR manipulation
+
+Manipulation is organized under `manipulation/` in Python, ClientCore, and WebXR.
+ARModule delegates to an optional integration Spec; ClientCore owns intent and
+correlation; WebXR owns input, assets, visuals, and resource disposal. Measured arm
+facts remain in `ARModuleSession`, independently of base pose. The optional
+OpenYAM composition uses official DimOS planning/control and does not require the
+custom grasp package. See `dimos-ar/dimos/ar/manipulation/README.md` for runtime,
+frames, launcher profiles, interaction semantics, and validation.
+
+Environment-depth occlusion is shared WebXR presentation infrastructure and only
+applies to explicitly marked bounds/path visuals. Navigation markers and end
+effector handles retain their existing on-top behavior. Robot-type defaults remain
+separate from saved robot-instance calibration profiles. No Spectacles host
+manipulation code or scene wiring is included.

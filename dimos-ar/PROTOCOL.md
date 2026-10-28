@@ -939,3 +939,65 @@ acceptance remain separate device tests documented in `clients/webxr/CALIBRATION
 ### Odometry reference continuity
 
 `hello.odom_reference_id` is an optional opaque identifier for the current server odometry reference. It remains unchanged across client socket reconnects and changes when the server or robot odometry source restarts. Clients may restore a retained localization only when the new identifier matches the one used to localize, and the headset tracking space has not reset. Missing or changed identifiers require re-localization; navigation commands remain disabled during reconnect.
+
+## Manipulation (optional)
+
+`hello.capabilities.manipulation` is optional. Absence means unavailable; navigation,
+localization, LiDAR, and agent capabilities remain independent. No manipulation
+binary stream is added. All messages use the existing newline-delimited JSON framing.
+
+### Requests and correlation
+
+`manipulation_request` contains `request_id` (1–128 characters), `action`, and an
+explicit `group_id`. Supported actions:
+
+| Action | Additional fields | Meaning |
+|---|---|---|
+| `evaluate` | `position`, `orientation` | Nonmoving endpoint IK/collision evaluation; does not replace a plan |
+| `plan` | `position`, `orientation`, optional `speed_scale` (default 0.2) | Generate and retain a checked, timed plan |
+| `execute` | `plan_id` | Execute exactly the reviewed pending plan |
+| `cancel` | none | Retire owned planning/control and cancel execution |
+| `acquire` | none | Acquire following without commanding a new target |
+| `update` | `token`, `sequence`, `ts`, `position`, `orientation` | Latest absolute target for the acquired session |
+| `release` | `token` | Retire following and clear its task target |
+| `resume` | none | Explicitly clear a confirmed manipulation stop; restores no prior command |
+| `gripper` | `value` in [0,1] | Deliberate normalized opening, where supported |
+
+Poses use wire `odom`, Z-up meters, scalar-last unit quaternions. The optional
+integration converts to/from its configured planning world. Following `ts` is in
+client-clock seconds and uses the hello clock offset; sequences strictly increase
+within one token. Samples older than 500 ms or over 100 ms in the future reject.
+The controller task also has a local target watchdog. Following provides bounded
+Cartesian IK, not the planner's checked-path collision guarantee.
+
+`manipulation_result` echoes `request_id`, `action`, and `group_id`, with `status`
+and optional `message`. Acquire returns `token`; evaluation returns solved named
+`joints` and attained `pose` when available. Planning returns `plan_id`,
+`joint_names`, `trajectory` (`time`, `positions` per sample), and `duration`.
+Execution acceptance includes an `operation_id`; acceptance is not completion.
+Execution timeouts must reconcile state rather than retry motion.
+
+### Observed state
+
+`manipulation_state` is latest-wins and independent of base `pose`. `available:false`
+includes a diagnostic `message`. Available snapshots include:
+
+- `ts`, `execution`, `message`, `owner`, `following`, `stopped`, `operation_id`.
+- `groups`: IDs, canonical joint names, base/tip frames, gripper/following availability.
+- `observations`: per-group measured named joints, `measured_at`, measured tool `pose`,
+  and optional normalized `gripper`. Publication never refreshes measurement time.
+- `model`: revision, root link, link-local bounds, joint kinds/origins/axes/mimic
+  relationships, optional ghost `asset_url`, and `visual_signature`.
+- `root_pose`: model-root placement in wire `odom`; `plan`: retained reviewed plan,
+  or null. These are observed references, not permission to execute another owner's plan.
+
+Identifiers, finite numbers, unit quaternions, named-vector dimensions, and trajectory
+ordering are validated. Trajectory previews are limited to 8192 points and visual
+models to 256 links/joints. Visual FK is presentation-only. Bundled ghost assets must
+match the configured visual-model signature.
+
+Ownership is connection-bound. Owner loss retires control even while observers
+remain connected. Reconnect restores current state and previews; it never resumes
+following or repeats execution. Emergency Stop also retires manipulation plans and
+streaming targets, preserves the gripper setting, and requires explicit resume.
+Environment-depth data is host-local and is never part of this protocol.

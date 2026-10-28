@@ -19,6 +19,7 @@ from apriltag_assets import decode_marker_id, ensure_pdf, ensure_png
 from armodule import ProcessManager
 from config import env_path, merge_env, normalize_log_level, read_env, repo_root
 from dimos_config import merge_armodule_config, read_armodule_config
+from robot_profiles import RobotProfiles
 from tag_config import (
     DEFAULT_MOUNT,
     PRESET_MARKER_IDS,
@@ -31,6 +32,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 DIMOS_REMOTE = "https://github.com/dimensionalOS/dimos"
 logger = logging.getLogger(__name__)
 manager = ProcessManager()
+robot_profiles = RobotProfiles()
 
 
 def require_local_launcher(request: Request) -> None:
@@ -63,6 +65,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 class SetupBody(BaseModel):
+    manipulation: bool = False
     mode: Literal["existing", "clone"] = "clone"
     dimos_python: str | None = None
     clone_dir: str | None = None
@@ -70,7 +73,9 @@ class SetupBody(BaseModel):
 
 
 class StartBody(BaseModel):
-    blueprint: Literal["unitree_go2_ar", "unitree_go2_ar_agentic"]
+    profile_id: str | None = None
+    simulation: bool = False
+    blueprint: Literal["unitree_go2_ar", "unitree_go2_ar_agentic", "openyam_ar_planner"]
     client: Literal["specs", "webxr"]
     robot_ip: str | None = None
 
@@ -83,9 +88,11 @@ class MountBody(BaseModel):
     up_m: float = 0.06
     yaw_deg: float = -90.0
     pitch_deg: float = -15.0
+    roll_deg: float = 0.0
 
 
 class SettingsBody(BaseModel):
+    profile_id: str | None = None
     openai_api_key: str | None = None
     multiset_client_id: str | None = None
     multiset_client_secret: str | None = None
@@ -175,7 +182,9 @@ async def api_dimos_refs() -> dict[str, Any]:
             stderr=asyncio.subprocess.PIPE,
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=500, detail="git is required to list DimOS refs") from exc
+        raise HTTPException(
+            status_code=500, detail="git is required to list DimOS refs"
+        ) from exc
     out, err = await proc.communicate()
     if proc.returncode != 0:
         detail = err.decode("utf-8", errors="replace").strip() or "git ls-remote failed"
@@ -190,13 +199,20 @@ async def api_setup(body: SetupBody) -> dict[str, Any]:
         if body.mode == "existing":
             if not body.dimos_python or not body.dimos_python.strip():
                 raise HTTPException(status_code=400, detail="dimos_python is required")
-            await manager.run_setup(dimos_python=body.dimos_python.strip())
+            await manager.run_setup(
+                dimos_python=body.dimos_python.strip(),
+                **({"manipulation": True} if body.manipulation else {}),
+            )
         else:
             clone_dir = (body.clone_dir or "").strip() or str(
                 (repo_root().parent / "dimos").resolve()
             )
             dimos_ref = (body.dimos_ref or "").strip() or "main"
-            await manager.run_setup(clone_dir=clone_dir, dimos_ref=dimos_ref)
+            await manager.run_setup(
+                clone_dir=clone_dir,
+                dimos_ref=dimos_ref,
+                **({"manipulation": True} if body.manipulation else {}),
+            )
     except HTTPException:
         raise
     except RuntimeError as exc:
@@ -223,19 +239,26 @@ async def api_settings_get() -> dict[str, Any]:
 async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
     phase = manager.status.phase.value
     if phase in ("starting", "running", "stopping"):
-        raise HTTPException(status_code=409, detail="stop ARModule before editing settings")
+        raise HTTPException(
+            status_code=409, detail="stop ARModule before editing settings"
+        )
     try:
         mounts = normalize_ui_mounts(
-            [item.model_dump() for item in body.mounts] if body.mounts is not None else None
+            [item.model_dump() for item in body.mounts]
+            if body.mounts is not None
+            else None
         )
-        merge_armodule_config(
-            armodule_config_from_ui(
-                fiducial_marker=body.fiducial_marker,
-                vps=body.vps,
-                map_code=body.map_code,
-                mounts=mounts,
+        if body.profile_id:
+            robot_profiles.update(body.profile_id, settings=body.model_dump())
+        else:
+            merge_armodule_config(
+                armodule_config_from_ui(
+                    fiducial_marker=body.fiducial_marker,
+                    vps=body.vps,
+                    map_code=body.map_code,
+                    mounts=mounts,
+                )
             )
-        )
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     env_updates = {
@@ -278,7 +301,9 @@ async def api_apriltag_pdf(tag_id: int, size_mm: float = 70.0) -> FileResponse:
 async def api_apriltag_decode(file: Annotated[UploadFile, File()]) -> dict[str, Any]:
     filename = (file.filename or "").lower()
     if not filename.endswith(".png"):
-        raise HTTPException(status_code=400, detail="upload a PNG of an AprilTag 36h11 marker")
+        raise HTTPException(
+            status_code=400, detail="upload a PNG of an AprilTag 36h11 marker"
+        )
     data = await file.read()
     try:
         marker_id = decode_marker_id(data)
@@ -289,12 +314,31 @@ async def api_apriltag_decode(file: Annotated[UploadFile, File()]) -> dict[str, 
 
 @app.post("/api/armodule/start", dependencies=[Depends(require_local_launcher)])
 async def api_armodule_start(body: StartBody) -> dict[str, Any]:
-    robot_ip = body.robot_ip.strip() if body.robot_ip and body.robot_ip.strip() else None
+    if body.blueprint == "openyam_ar_planner" and (
+        body.client != "webxr" or not body.profile_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="OpenYAM requires WebXR and an explicit robot profile",
+        )
+    robot_ip = (
+        body.robot_ip.strip() if body.robot_ip and body.robot_ip.strip() else None
+    )
     try:
         await manager.start_armodule(
             blueprint=body.blueprint,
             client=body.client,
             robot_ip=robot_ip,
+            **(
+                {
+                    "armodule_config": robot_profiles.snapshot(
+                        body.profile_id, body.blueprint
+                    )
+                }
+                if body.profile_id
+                else {}
+            ),
+            **({"simulation": True} if body.simulation else {}),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -324,3 +368,58 @@ async def api_events() -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class RobotProfileBody(BaseModel):
+    name: str
+    robot: Literal["unitree_go2", "openyam"] = "unitree_go2"
+    source_id: str | None = None
+
+
+@app.get("/api/robot-profiles")
+async def api_robot_profiles() -> dict[str, Any]:
+    return {
+        "profiles": [
+            {
+                **profile,
+                "settings": ui_from_armodule_config(
+                    profile["armodule"],
+                    default_mount={"marker_id": 0, "print_size_mm": 70}
+                    if profile["robot"] == "openyam"
+                    else None,
+                ),
+            }
+            for profile in robot_profiles.all()
+        ]
+    }
+
+
+@app.post("/api/robot-profiles", dependencies=[Depends(require_local_launcher)])
+async def api_create_robot_profile(body: RobotProfileBody) -> dict[str, Any]:
+    try:
+        return robot_profiles.create(body.robot, body.name, body.source_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put(
+    "/api/robot-profiles/{profile_id}", dependencies=[Depends(require_local_launcher)]
+)
+async def api_rename_robot_profile(
+    profile_id: str, body: RobotProfileBody
+) -> dict[str, Any]:
+    try:
+        return robot_profiles.update(profile_id, name=body.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete(
+    "/api/robot-profiles/{profile_id}", dependencies=[Depends(require_local_launcher)]
+)
+async def api_delete_robot_profile(profile_id: str) -> dict[str, bool]:
+    try:
+        robot_profiles.delete(profile_id)
+        return {"deleted": True}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

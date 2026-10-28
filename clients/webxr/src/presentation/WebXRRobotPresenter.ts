@@ -91,6 +91,7 @@ export class WebXRRobotPresenter {
     this.outline = new THREE.LineSegments(new THREE.EdgesGeometry(this.collider.geometry), new THREE.LineDashedMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, dashSize: ROBOT_LINE_STYLE.dashM, gapSize: ROBOT_LINE_STYLE.gapM }));
     this.outline.material.visible = false;
     this.outline.add(this.outlineRenderer.object);
+    this.outline.traverse(part => { part.userData.environmentDepth = true; });
     this.outline.computeLineDistances();
     this.outline.name = "Robot selection outline";
     this.outline.raycast = () => {};

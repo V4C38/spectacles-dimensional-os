@@ -64,6 +64,9 @@
 
   let client = "specs";
   let blueprint = "unitree_go2_ar";
+  let robotProfileId = null;
+  let robotProfiles = [];
+  let profileLoadGeneration = 0;
   let phase = "idle";
   let checkOk = null;
   let lastStatus = {};
@@ -97,9 +100,11 @@
     { field: "up_m", label: "Up (m)", step: 0.01 },
     { field: "yaw_deg", label: "Yaw (°)", step: 1 },
     { field: "pitch_deg", label: "Pitch (°)", step: 1 },
+    { field: "roll_deg", label: "Roll (°)", step: 1 },
   ];
 
   const BLUEPRINTS = {
+    openyam_ar_planner: { info: "OpenYAM · WebXR manipulation: plan/review/execute or grab the end effector to follow." },
     unitree_go2_ar: {
       info: "Unitree Go2 with ARModule\nManual Mode: place navigation goals from the headset.",
     },
@@ -109,12 +114,21 @@
     },
   };
 
+  const savedBlueprint = localStorage.getItem("dimos.blueprint");
+  if (savedBlueprint && BLUEPRINTS[savedBlueprint]) blueprintSelect.value = savedBlueprint;
+
   const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"];
 
   function applyBlueprintInfo() {
     blueprint = blueprintSelect.value;
     const spec = BLUEPRINTS[blueprint] || {};
     blueprintInfo.textContent = spec.info || "";
+    const manipulation = blueprint === "openyam_ar_planner";
+    robotIp.closest(".robot-ip-row").classList.toggle("hidden", manipulation);
+    $("simulationEnabled").closest("label").classList.toggle("hidden", !manipulation);
+    if (manipulation) { client = "webxr"; document.querySelectorAll("[data-client]").forEach(button => button.classList.toggle("active", button.dataset.client === client)); }
+    document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = manipulation; });
+    if (settingsReady) void refreshRobotProfiles();
     agentConfig.classList.toggle("hidden", !spec.agent);
     syncConfigCards();
   }
@@ -170,6 +184,7 @@
       up_m: Number(src.up_m) || 0,
       yaw_deg: Number(src.yaw_deg) || 0,
       pitch_deg: Number(src.pitch_deg) || 0,
+      roll_deg: Number(src.roll_deg) || 0,
     };
   }
 
@@ -183,6 +198,7 @@
 
   function settingsBody() {
     return {
+      profile_id: robotProfileId,
       openai_api_key: apiKey.value.trim() || null,
       multiset_client_id: multisetClientId.value.trim() || null,
       multiset_client_secret: multisetClientSecret.value.trim() || null,
@@ -205,13 +221,13 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         appendLog(`Settings save failed: ${data.detail || res.statusText}`);
-        return data;
+        return null;
       }
       if (data.phase) applyStatus(data);
       return data;
     } catch (err) {
       appendLog(`Settings save failed: ${err}`);
-      return {};
+      return null;
     }
   }
 
@@ -256,6 +272,8 @@
       btn.disabled = locked;
     });
     blueprintSelect.disabled = locked;
+    for (const id of ["robotProfileSelect", "robotProfileName", "newRobotProfile", "duplicateRobotProfile", "deleteRobotProfile", "simulationEnabled"]) $(id).disabled = locked;
+    document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = locked || blueprint === "openyam_ar_planner"; });
     apiKey.disabled = locked;
     revealKey.disabled = locked;
     robotIp.disabled = locked;
@@ -976,9 +994,11 @@
     });
   });
 
-  blueprintSelect.addEventListener("change", () => {
+  blueprintSelect.addEventListener("change", async () => {
     if (configLocked) return;
+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; await saveSettings(); }
     blueprint = blueprintSelect.value;
+    localStorage.setItem("dimos.blueprint", blueprint);
     applyBlueprintInfo();
   });
 
@@ -1091,6 +1111,7 @@
             clone_dir: cloneDir.value.trim(),
             dimos_ref: dimosRef.value.trim() || "main",
           };
+    body.manipulation = blueprint === "openyam_ar_planner";
     installBtn.disabled = true;
     try {
       const res = await fetch("/api/setup", {
@@ -1117,10 +1138,12 @@
 
   startBtn.addEventListener("click", async () => {
     startBtn.disabled = true;
-    await saveSettings();
+    if (!(await saveSettings())) { startBtn.disabled = false; return; }
     const body = {
       blueprint,
       client,
+      profile_id: robotProfileId,
+      simulation: $("simulationEnabled").checked,
       robot_ip: robotIpAuto.checked ? null : robotIp.value.trim() || null,
     };
     try {
@@ -1208,4 +1231,67 @@
     .then((r) => r.json())
     .then(applyStatus)
     .catch(() => {});
+
+  async function refreshRobotProfiles(preferredId = robotProfileId) {
+    const generation = ++profileLoadGeneration;
+    const response = await fetch("/api/robot-profiles");
+    if (!response.ok) { appendLog("Could not load robot profiles"); return; }
+    const data = await response.json();
+    if (generation !== profileLoadGeneration) return;
+    const robot = blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2";
+    robotProfiles = data.profiles.filter(profile => profile.robot === robot);
+    if (!robotProfiles.length) {
+      await fetch("/api/robot-profiles", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ robot, name: robot === "openyam" ? "OpenYAM" : "UnitreeGo2" }) });
+      return refreshRobotProfiles(null);
+    }
+    const select = $("robotProfileSelect"); select.replaceChildren();
+    for (const profile of robotProfiles) {
+      const option = document.createElement("option"); option.value = profile.id; option.textContent = profile.name; select.append(option);
+    }
+    const remembered = localStorage.getItem(`dimos.profile.${robot}`);
+    robotProfileId = robotProfiles.some(p => p.id === preferredId) ? preferredId : robotProfiles.some(p => p.id === remembered) ? remembered : robotProfiles[0].id;
+    localStorage.setItem(`dimos.profile.${robot}`, robotProfileId);
+    select.value = robotProfileId;
+    applyRobotProfile();
+  }
+  function applyRobotProfile() {
+    const profile = robotProfiles.find(p => p.id === robotProfileId);
+    if (!profile) return;
+    $("robotProfileName").value = profile.name;
+    const settings = profile.settings;
+    fiducialEnabled.checked = settings.fiducial_marker;
+    vpsEnabled.checked = settings.vps;
+    mapCode.value = settings.map_code || "";
+    mounts = settings.mounts.map(cloneMount);
+    syncLocalizationPanels(); renderMountEditor(); syncConfigCards();
+  }
+  $("robotProfileSelect").addEventListener("change", async () => {
+    if (configLocked) return;
+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; await saveSettings(); }
+    robotProfileId = $("robotProfileSelect").value;
+    localStorage.setItem(`dimos.profile.${blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2"}`, robotProfileId);
+    applyRobotProfile();
+  });
+  $("robotProfileName").addEventListener("change", async () => {
+    if (configLocked || !robotProfileId) return;
+    const response = await fetch(`/api/robot-profiles/${robotProfileId}`, { method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: $("robotProfileName").value}) });
+    if (!response.ok) { appendLog("Profile rename failed"); return; }
+    await refreshRobotProfiles();
+  });
+  async function createRobotProfile(duplicate) {
+    if (configLocked) return;
+    await saveSettings();
+    const current = robotProfiles.find(p => p.id === robotProfileId);
+    const response = await fetch("/api/robot-profiles", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({robot: blueprint === "openyam_ar_planner" ? "openyam" : "unitree_go2", name: (current?.name || "Robot") + "_2", source_id: duplicate ? robotProfileId : null}) });
+    const created = await response.json();
+    if (!response.ok) { appendLog("Profile creation failed"); return; }
+    await refreshRobotProfiles(created.id);
+  }
+  $("newRobotProfile").addEventListener("click", () => createRobotProfile(false));
+  $("duplicateRobotProfile").addEventListener("click", () => createRobotProfile(true));
+  $("deleteRobotProfile").addEventListener("click", async () => {
+    if (configLocked || !robotProfileId) return;
+    const response = await fetch(`/api/robot-profiles/${robotProfileId}`, {method: "DELETE"});
+    if (response.ok) await refreshRobotProfiles(null); else appendLog("Profile deletion failed");
+  });
 })();

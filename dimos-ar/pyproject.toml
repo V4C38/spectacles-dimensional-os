@@ -7,13 +7,15 @@ name = "dimos-ar"
 version = "0.2.0"
 requires-python = ">=3.12"
 license = "MIT"
-dependencies = ["dimos", "websockets>=12.0", "aiohttp>=3.9,<4", "requests>=2.32,<3", "langchain-core>=1.2.22,<2"]
+dependencies = ["dimos>=0.0.15", "websockets>=12.0", "aiohttp>=3.9,<4", "requests>=2.32,<3", "langchain-core>=1.2.22,<2"]
 
 [project.optional-dependencies]
+manipulation = ["dimos[planning]>=0.0.15", "trimesh>=4"]
 unitree = ["dimos[base,unitree]"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.8", "mypy>=1.13"]
 
 [project.entry-points."dimos.blueprints"]
+openyam-ar-planner = "dimos.ar.manipulation.blueprints:openyam_ar_planner"
 unitree-go2-ar = "dimos.ar.blueprints:unitree_go2_ar"
 unitree-go2-ar-agentic = "dimos.ar.blueprints:unitree_go2_ar_agentic"
 
@@ -81,5 +83,6 @@ ignore_missing_imports = true
 module = [
     "dimos.ar.robot.profiles.unitree_go2",
     "dimos.ar.module",
+    "dimos.ar.manipulation.module",
 ]
 disallow_untyped_decorators = false

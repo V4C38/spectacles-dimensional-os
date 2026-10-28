@@ -16,6 +16,7 @@ DEFAULT_MOUNT: dict[str, Any] = {
     "up_m": 0.06,
     "yaw_deg": -90.0,
     "pitch_deg": -15.0,
+    "roll_deg": 0.0,
 }
 
 PRESET_MARKER_IDS: tuple[int, ...] = (0, 1, 2)
@@ -29,13 +30,17 @@ def print_mm_from_black_size_m(size_m: float) -> float:
     return (float(size_m) / _BLACK_FRACTION) * 1000.0
 
 
-def yaw_pitch_to_quat(yaw_deg: float, pitch_deg: float) -> tuple[float, float, float, float]:
-    """Match Go2 profile convention: R = RotY(pitch) * RotZ(yaw), scipy (x,y,z,w)."""
+def yaw_pitch_to_quat(
+    yaw_deg: float, pitch_deg: float, roll_deg: float = 0.0
+) -> tuple[float, float, float, float]:
+    """Preserve Go2 convention: R = RotY(pitch) * RotX(roll) * RotZ(yaw), scipy (x,y,z,w)."""
     yaw = math.radians(yaw_deg)
     pitch = math.radians(pitch_deg)
     cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
     cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
-    qy = (0.0, sp, 0.0, cp)
+    roll = math.radians(roll_deg)
+    cr, sr = math.cos(roll / 2), math.sin(roll / 2)
+    qy = (cp * sr, sp * cr, -sp * sr, cp * cr)
     qz = (0.0, 0.0, sy, cy)
     x = qy[3] * qz[0] + qy[0] * qz[3] + qy[1] * qz[2] - qy[2] * qz[1]
     y = qy[3] * qz[1] - qy[0] * qz[2] + qy[1] * qz[3] + qy[2] * qz[0]
@@ -44,7 +49,9 @@ def yaw_pitch_to_quat(yaw_deg: float, pitch_deg: float) -> tuple[float, float, f
     return (x, y, z, w)
 
 
-def quat_to_yaw_pitch(orientation: list[float] | tuple[float, ...]) -> tuple[float, float]:
+def quat_to_yaw_pitch(
+    orientation: list[float] | tuple[float, ...],
+) -> tuple[float, float]:
     x, y, z, w = (float(v) for v in orientation)
     r10 = 2.0 * (x * y + z * w)
     r11 = 1.0 - 2.0 * (x * x + z * z)
@@ -57,13 +64,18 @@ def quat_to_yaw_pitch(orientation: list[float] | tuple[float, ...]) -> tuple[flo
 
 def normalize_ui_mount(raw: dict[str, Any] | None) -> dict[str, Any]:
     source = raw or DEFAULT_MOUNT
-    marker_id = source.get("marker_id", source.get("tag_id", DEFAULT_MOUNT["marker_id"]))
+    marker_id = source.get(
+        "marker_id", source.get("tag_id", DEFAULT_MOUNT["marker_id"])
+    )
     print_size_mm = float(source.get("print_size_mm", DEFAULT_PRINT_SIZE_MM))
-    if print_size_mm <= 0:
+    if not math.isfinite(print_size_mm) or print_size_mm <= 0:
         raise ValueError("print_size_mm must be positive")
     marker_id_int = int(marker_id)
     if marker_id_int < 0:
         raise ValueError("marker_id must be non-negative")
+    for field in ("forward_m", "lateral_m", "up_m", "yaw_deg", "pitch_deg", "roll_deg"):
+        if not math.isfinite(float(source.get(field, 0))):
+            raise ValueError(f"{field} must be finite")
     return {
         "marker_id": marker_id_int,
         "print_size_mm": print_size_mm,
@@ -72,6 +84,7 @@ def normalize_ui_mount(raw: dict[str, Any] | None) -> dict[str, Any]:
         "up_m": float(source.get("up_m", 0.0)),
         "yaw_deg": float(source.get("yaw_deg", 0.0)),
         "pitch_deg": float(source.get("pitch_deg", 0.0)),
+        "roll_deg": float(source.get("roll_deg", 0.0)),
     }
 
 
@@ -87,7 +100,7 @@ def normalize_ui_mounts(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]
 
 def ui_mount_to_wire(raw: dict[str, Any] | None) -> dict[str, Any]:
     mount = normalize_ui_mount(raw)
-    quat = yaw_pitch_to_quat(mount["yaw_deg"], mount["pitch_deg"])
+    quat = yaw_pitch_to_quat(mount["yaw_deg"], mount["pitch_deg"], mount["roll_deg"])
     return {
         "marker_id": mount["marker_id"],
         "size_m": black_size_m_from_print_mm(mount["print_size_mm"]),
@@ -125,6 +138,23 @@ def wire_to_ui_mount(raw: dict[str, Any] | None) -> dict[str, Any]:
             "up_m": float(position[2]),
             "yaw_deg": yaw_deg,
             "pitch_deg": pitch_deg,
+            "roll_deg": math.degrees(
+                math.asin(
+                    max(
+                        -1.0,
+                        min(
+                            1.0,
+                            2
+                            * (
+                                float(orientation[3]) * float(orientation[0])
+                                - float(orientation[1]) * float(orientation[2])
+                            ),
+                        ),
+                    )
+                )
+            )
+            if orientation
+            else float(raw.get("roll_deg", 0)),
         }
     )
 
@@ -170,7 +200,9 @@ def armodule_config_from_ui(
     return config
 
 
-def ui_from_armodule_config(armodule: dict[str, Any] | None) -> dict[str, Any]:
+def ui_from_armodule_config(
+    armodule: dict[str, Any] | None, *, default_mount: dict[str, Any] | None = None
+) -> dict[str, Any]:
     section = armodule or {}
     providers = (section.get("localization") or {}).get("providers") or []
     fiducial_marker = False
@@ -194,7 +226,7 @@ def ui_from_armodule_config(armodule: dict[str, Any] | None) -> dict[str, Any]:
                 raise TypeError("fiducial_marker_mounts items must be objects")
             mounts.append(wire_to_ui_mount(item))
     if not mounts:
-        mounts = [normalize_ui_mount(DEFAULT_MOUNT)]
+        mounts = [normalize_ui_mount(default_mount or DEFAULT_MOUNT)]
     return {
         "fiducial_marker": fiducial_marker,
         "vps": vps,

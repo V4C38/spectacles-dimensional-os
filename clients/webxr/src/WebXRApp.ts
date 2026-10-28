@@ -1,3 +1,4 @@
+import { EnvironmentDepthRenderer } from "./presentation/EnvironmentDepthRenderer";
 import * as THREE from "three";
 import * as xb from "xrblocks";
 import { DimOSWebXRClient } from "./DimOSWebXRClient";
@@ -12,6 +13,7 @@ export class WebXRApp extends xb.Script {
   private disposed = false;
   readonly inputController: WebXRInputController;
   readonly sessions: WebXRSessionController;
+  private environmentDepth: EnvironmentDepthRenderer | null = null;
 
   constructor(private readonly client: DimOSWebXRClient) {
     super();
@@ -59,9 +61,10 @@ export class WebXRApp extends xb.Script {
   override init({ input }: { input: xb.Input }): void {
     const client = this.client;
     this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2));
-    this.add(client.robot.object, client.lidar.object, client.route.object,
+    this.add(client.manipulation.object, client.robot.object, client.lidar.object, client.route.object,
       client.markers.object, client.navigation.marker.object, client.navigation.probeRoot,
       client.navigation.draftMarker.object, client.previewRoute.object, client.notifications.object);
+    this.environmentDepth = new EnvironmentDepthRenderer(xb.core.renderer);
     this.inputController.init({ input });
     client.start();
     this.isReady = true;
@@ -69,14 +72,16 @@ export class WebXRApp extends xb.Script {
   }
 
   override onXRSessionStarted(session?: XRSession): void { this.sessions.start(session); }
-  override onXRSessionEnded(): void { this.sessions.end(); }
+  override onXRSessionEnded(): void { this.environmentDepth?.reset(); this.sessions.end(); }
   override update(time = performance.now(), frame?: XRFrame): void {
     const current = this.sessions.sample(time, frame);
     if (!current || !frame) return;
     const { viewer, reference, deltaS } = current;
+    this.environmentDepth?.update(frame, viewer, [this.client.robot.object, this.client.route.object, this.client.previewRoute.object, this.client.manipulation.object]);
     const { position: p, orientation: q } = viewer.transform;
     this.client.tick({ position: [p.x, p.y, p.z], orientation: [q.x, q.y, q.z, q.w] }, this.inputController.readJoystick());
     this.client.robot.orientFeedback(new THREE.Vector3(p.x, p.y, p.z));
+    this.client.manipulation.renderer.faceViewer(new THREE.Vector3(p.x, p.y, p.z));
     this.client.notifications.tick([p.x, p.y, p.z], [q.x, q.y, q.z, q.w], viewer.views?.[0]?.projectionMatrix[5] ?? 1, deltaS);
     this.client.ui.trackingStatus = "Tracking";
     this.inputController.update(time, frame, viewer, reference, deltaS);
@@ -89,6 +94,7 @@ export class WebXRApp extends xb.Script {
   override dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.environmentDepth?.dispose();
     this.sessions.detach();
     this.inputController.dispose();
     this.client.dispose();

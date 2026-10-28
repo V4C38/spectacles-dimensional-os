@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 import re
@@ -39,9 +40,10 @@ LOG_BUFFER_SIZE = 500
 SUBSCRIBER_QUEUE_SIZE = 2000
 STOP_GRACE_SECONDS = 8.0
 DIMOS_STOP_GRACE_SECONDS = 60.0
-BLUEPRINTS = ("unitree_go2_ar", "unitree_go2_ar_agentic")
+BLUEPRINTS = ("unitree_go2_ar", "unitree_go2_ar_agentic", "openyam_ar_planner")
 CLIENTS = ("specs", "webxr")
 BLUEPRINT_CLI = {
+    "openyam_ar_planner": "dimos-ar.openyam-ar-planner",
     "unitree_go2_ar": "dimos-ar.unitree-go2-ar",
     "unitree_go2_ar_agentic": "dimos-ar.unitree-go2-ar-agentic",
 }
@@ -136,8 +138,13 @@ class ProcessManager:
         self.dimos_stop_grace_seconds = float(
             os.environ.get("DIMOS_STOP_GRACE_SECONDS", str(DIMOS_STOP_GRACE_SECONDS))
         )
-        if not math.isfinite(self.dimos_stop_grace_seconds) or self.dimos_stop_grace_seconds <= 0:
-            raise ValueError("DIMOS_STOP_GRACE_SECONDS must be a finite positive number")
+        if (
+            not math.isfinite(self.dimos_stop_grace_seconds)
+            or self.dimos_stop_grace_seconds <= 0
+        ):
+            raise ValueError(
+                "DIMOS_STOP_GRACE_SECONDS must be a finite positive number"
+            )
         self.root = root or repo_root()
         migrate_legacy_env(self.root)
         self.scripts = scripts_dir(self.root)
@@ -378,7 +385,9 @@ class ProcessManager:
             await asyncio.sleep(0.2)
 
     async def _clear_before_start(self, *, client: str) -> None:
-        await self._stop_pids(await self._running_dimos_pids(), "existing DimOS process(es)")
+        await self._stop_pids(
+            await self._running_dimos_pids(), "existing DimOS process(es)"
+        )
         ports = list(STACK_PORTS)
         if client == "webxr":
             ports.append(WEBXR_PORT)
@@ -408,8 +417,11 @@ class ProcessManager:
         dimos_python: str | None = None,
         clone_dir: str | None = None,
         dimos_ref: str | None = None,
+        manipulation: bool = False,
     ) -> list[str]:
         argv = [str(self.scripts / "setup.sh"), "--yes"]
+        if manipulation:
+            argv.append("--manipulation")
         if dimos_python and clone_dir:
             raise ValueError("provide either dimos_python or clone_dir, not both")
         if dimos_python:
@@ -475,6 +487,7 @@ class ProcessManager:
         dimos_python: str | None = None,
         clone_dir: str | None = None,
         dimos_ref: str | None = None,
+        manipulation: bool = False,
     ) -> None:
         async with self._lock:
             if self._proc is not None or self._webxr_proc is not None:
@@ -483,6 +496,7 @@ class ProcessManager:
                 dimos_python=dimos_python,
                 clone_dir=clone_dir,
                 dimos_ref=dimos_ref,
+                manipulation=manipulation,
             )
             self._append_log("Installing dependencies…")
             self._set_status(phase=Phase.INSTALLING, error=None)
@@ -531,9 +545,7 @@ class ProcessManager:
             "Requesting administrator access to configure macOS networking "
             "(one-time per boot)…"
         )
-        inner = (
-            f"{shlex.quote(str(helper))} --apply --state-dir {shlex.quote(state_dir)} 2>&1"
-        )
+        inner = f"{shlex.quote(str(helper))} --apply --state-dir {shlex.quote(state_dir)} 2>&1"
         applescript_cmd = inner.replace("\\", "\\\\").replace('"', '\\"')
         script = f'do shell script "{applescript_cmd}" with administrator privileges'
 
@@ -557,8 +569,12 @@ class ProcessManager:
                 "Approve the administrator prompt to start ARModule."
             )
 
-    def _require_vps_credentials(self) -> None:
-        ui = ui_from_armodule_config(read_armodule_config())
+    def _require_vps_credentials(
+        self, armodule_config: dict[str, Any] | None = None
+    ) -> None:
+        ui = ui_from_armodule_config(
+            armodule_config if armodule_config is not None else read_armodule_config()
+        )
         if not ui["vps"]:
             return
         stored = read_env(env_path(self.root))
@@ -603,10 +619,14 @@ class ProcessManager:
     async def _build_webxr(self, env: dict[str, str]) -> None:
         self._append_log("Building optimized WebXR client…")
         proc = await asyncio.create_subprocess_exec(
-            "npm", "run", "build",
+            "npm",
+            "run",
+            "build",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=str(self._webxr_dir()), env=env, start_new_session=True,
+            cwd=str(self._webxr_dir()),
+            env=env,
+            start_new_session=True,
         )
         try:
             assert proc.stdout is not None
@@ -649,6 +669,8 @@ class ProcessManager:
         blueprint: str,
         client: str,
         robot_ip: str | None = None,
+        armodule_config: dict[str, Any] | None = None,
+        simulation: bool = False,
     ) -> None:
         if blueprint not in BLUEPRINTS:
             raise ValueError(f"blueprint must be one of {', '.join(BLUEPRINTS)}")
@@ -662,7 +684,7 @@ class ProcessManager:
                     "Dependencies are not installed — use Install dependencies first"
                 )
 
-            self._require_vps_credentials()
+            self._require_vps_credentials(armodule_config)
             await self._clear_before_start(client=client)
             await self._configure_system_if_needed()
             if client == "webxr":
@@ -671,7 +693,8 @@ class ProcessManager:
             pinned_ip = robot_ip.strip() if robot_ip else None
             if pinned_ip in ("simulated", "fake"):
                 pinned_ip = "simulated"
-            merge_env({"ROBOT_IP": pinned_ip}, env_path(self.root))
+            if blueprint != "openyam_ar_planner":
+                merge_env({"ROBOT_IP": pinned_ip}, env_path(self.root))
 
             env = os.environ.copy()
             env["DIMOS_AR_SKIP_SYSCONFIG"] = "1"
@@ -681,12 +704,23 @@ class ProcessManager:
             if self.status.dimos_python:
                 env["DIMOS_PYTHON"] = self.status.dimos_python
             stored = read_env(env_path(self.root))
-            for key in ("OPENAI_API_KEY", "MULTISET_CLIENT_ID", "MULTISET_CLIENT_SECRET"):
+            for key in (
+                "OPENAI_API_KEY",
+                "MULTISET_CLIENT_ID",
+                "MULTISET_CLIENT_SECRET",
+            ):
                 if stored.get(key):
                     env[key] = stored[key]
             env["DIMOS_LOG_LEVEL"] = normalize_log_level(stored.get("DIMOS_LOG_LEVEL"))
 
             host_ip = detect_lan_ip()
+            if armodule_config is not None:
+                for key, value in armodule_config.items():
+                    env[f"ARMODULE__{key.upper()}"] = (
+                        value if isinstance(value, str) else json.dumps(value)
+                    )
+            if simulation:
+                env["DIMOS_AR_SIMULATION"] = "1"
             argv = self.build_start_argv(blueprint=blueprint, robot_ip=pinned_ip)
             self._set_status(
                 phase=Phase.STARTING,
@@ -765,7 +799,11 @@ class ProcessManager:
         except ProcessLookupError:
             pass
         try:
-            grace = self.dimos_stop_grace_seconds if label == "ARModule" else STOP_GRACE_SECONDS
+            grace = (
+                self.dimos_stop_grace_seconds
+                if label == "ARModule"
+                else STOP_GRACE_SECONDS
+            )
             await asyncio.wait_for(proc.wait(), timeout=grace)
         except TimeoutError:
             self._append_log(f"{label} did not stop in time — sending SIGKILL")
@@ -936,7 +974,9 @@ class ProcessManager:
                 return
             await self._stop_children_unlocked()
             self._set_status(
-                phase=Phase.ERROR if error else (Phase.READY if self.status.check_ok else Phase.IDLE),
+                phase=Phase.ERROR
+                if error
+                else (Phase.READY if self.status.check_ok else Phase.IDLE),
                 error=error,
                 websocket_url=None,
                 webxr_url=None,

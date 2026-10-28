@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 class RobotName(StrEnum):
     UNITREE_GO2 = "unitree_go2"
+    OPENYAM = "openyam"
 
 
 @dataclass(frozen=True)
@@ -150,6 +151,18 @@ class RobotProfile:
 
 
 def get_profile(name: RobotName) -> RobotProfile:
+    if name is RobotName.OPENYAM:
+        return RobotProfile(
+            display_name="OpenYAM",
+            body_bounds_m=(0.15, 0.15, 0.12),
+            footprint_m=(0.15, 0.15),
+            base_height_m=0,
+            odom_scale_correction_factor=1,
+            fiducial_dictionary=None,
+            fiducial_marker_mounts=(),
+            T_base_camera_optical=None,
+            supported_capabilities=frozenset({CapabilityName.ESTOP}),
+        )
     if name is RobotName.UNITREE_GO2:
         from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 

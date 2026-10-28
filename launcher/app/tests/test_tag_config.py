@@ -126,3 +126,19 @@ def test_ui_from_armodule_config_reads_all_mounts() -> None:
         }
     )
     assert [mount["marker_id"] for mount in ui["mounts"]] == [0, 1]
+def test_full_tag_orientation_round_trip():
+    from tag_config import ui_mount_to_wire, wire_to_ui_mount
+
+    mount = {
+        "marker_id": 4,
+        "print_size_mm": 70,
+        "forward_m": 0.2,
+        "lateral_m": -0.1,
+        "up_m": 0.04,
+        "yaw_deg": 25,
+        "pitch_deg": -15,
+        "roll_deg": 20,
+    }
+    restored = wire_to_ui_mount(ui_mount_to_wire(mount))
+    for key, value in mount.items():
+        assert restored[key] == pytest.approx(value)

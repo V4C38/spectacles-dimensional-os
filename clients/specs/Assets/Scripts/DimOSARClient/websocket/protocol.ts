@@ -1,3 +1,4 @@
+import { decodeManipulation } from "../manipulation/ManipulationProtocol";
 import {
   CAPABILITY_NAMES,
   type Capabilities,
@@ -199,6 +200,9 @@ export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
   const msgType = requireString(data, "type");
 
   switch (msgType) {
+    case "manipulation_state":
+    case "manipulation_result":
+      return decodeManipulation(data);
     case "hello":
       return decodeHello(data);
     case "state":
@@ -475,6 +479,7 @@ function decodeRobot(data: Record<string, unknown>): RobotDescription {
 function decodeCapabilities(data: Record<string, unknown>): Capabilities {
   const capabilities = {} as Capabilities;
   for (const name of CAPABILITY_NAMES) {
+    if (name === "manipulation" && !(name in data)) continue;
     if (!(name in data)) {
       throw new Error(`Missing required field: capabilities.${name}`);
     }

@@ -15,9 +15,21 @@ export const shared = JSON.parse(
 export async function bootstrap(
   page: Page,
   mode: "hand" | "controller" = "hand",
-  options: { unavailable?: boolean } = {},
+  options: { unavailable?: boolean; manipulation?: boolean } = {},
 ) {
   const commands: any[] = [];
+  const arm = options.manipulation ? JSON.parse(readFileSync(new URL("./OpenYAM.json", import.meta.url), "utf8")) : null;
+  let armTimer: ReturnType<typeof setInterval> | undefined;
+  let armClockBase = 0, armClockStarted = 0;
+  const armNow = () => armClockBase + (performance.now() - armClockStarted) / 1000;
+  let following = false, plan: any = null, owner: string | null = null;
+  const armState = () => {
+    if (!arm) return;
+    send({ type: "manipulation_state", available: true, ts: armNow(), root_pose: { position: [1,0,0.8], orientation: [0,0,0,1] }, model: arm.model,
+      groups: [{ id: "manipulator", joint_names: Object.keys(arm.joints), base_frame: "base", tip_frame: "gripper_tip", has_gripper: true, following: true }],
+      observations: { manipulator: { joints: arm.joints, measured_at: armNow(), pose: arm.pose, gripper: 0 } },
+      execution: "idle", message: null, owner, following, stopped: false, plan, operation_id: null });
+  };
   let socket: WebSocketRoute | undefined;
   let captureTs = 0;
   let acceptedCaptureTs = 0;
@@ -51,6 +63,7 @@ export async function bootstrap(
     w.questDevice.installRuntime({ forceInstall: true });
   }, mode);
   await page.routeWebSocket("**/ar", (ws) => {
+    if (armTimer) clearInterval(armTimer);
     socket = ws;
     ws.onMessage((raw) => {
       if (typeof raw !== "string") {
@@ -71,6 +84,7 @@ export async function bootstrap(
           : null,
       };
       if (command.type === "hello_request") {
+        armClockBase = command.ts_client; armClockStarted = performance.now();
         send({
           type: "hello",
           client_id: "integration",
@@ -85,6 +99,7 @@ export async function bootstrap(
           },
           robot: shared.fixtures.robot,
           capabilities: {
+            ...(options.manipulation ? { manipulation: {available: true, reason: null} } : {}),
             lidar: available,
             localization: available,
             estop: available,
@@ -97,6 +112,7 @@ export async function bootstrap(
           },
         });
         state();
+        if (options.manipulation) { armState(); armTimer = setInterval(armState, 100); armTimer.unref(); }
         send({
           type: "pose",
           position: shared.fixtures.pose,
@@ -138,7 +154,21 @@ export async function bootstrap(
         });
         if (!command.preview) state("following_path");
       }
-      if (command.type === "estop_request") state("idle");
+      if (command.type === "estop_request") { following = false; owner = null; plan = null; state("idle"); }
+      if (command.type === "manipulation_request" && arm) {
+        let result: any = {status: "completed"};
+        if (command.action === "evaluate") result = {status: "feasible", joints: {...arm.joints, yam_joint2: arm.joints.yam_joint2 + 0.2}, pose: command};
+        if (command.action === "plan") {
+          plan = {plan_id: "fixture-plan", joint_names: Object.keys(arm.joints), duration: 2,
+            trajectory: [{time: 0, positions: Object.values(arm.joints)}, {time: 2, positions: Object.values(arm.joints).map((v: any, i) => i === 1 ? v + 0.2 : v)}]};
+          owner = "integration"; result = {status: "planned", ...plan};
+        }
+        if (command.action === "execute") { result = {status: command.plan_id === plan?.plan_id ? "accepted" : "rejected", operation_id: "fixture-operation"}; plan = null; }
+        if (command.action === "acquire") { following = true; owner = "integration"; result = {status: "acquired", token: "fixture-follow"}; }
+        if (command.action === "release" || command.action === "cancel") { following = false; owner = null; plan = null; }
+        if (command.action !== "update") send({type: "manipulation_result", request_id: command.request_id, action: command.action, group_id: command.group_id, ...result});
+        armState();
+      }
     });
   });
   await page.goto("/?debug=1");
@@ -275,7 +305,7 @@ export async function bootstrap(
     localized,
     completeLocalization,
     lidar,
-    close: () => socket?.close(),
+    close: () => { if (armTimer) clearInterval(armTimer); socket?.close(); },
   };
 }
 export async function snapshot(page: Page): Promise<any> {

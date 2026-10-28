@@ -27,6 +27,10 @@ from dimos.ar.localization.vps.localizer import VpsLocalizer
 from dimos.ar.localization.vps.multiset_client import MultisetVpsClient, MultisetVpsClientConfig
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
 from dimos.ar.localization.worker import LocalizationWorker
+from dimos.ar.manipulation.frames import ReferencePose
+from dimos.ar.manipulation.protocol import ManipulationRequest
+from dimos.ar.manipulation.service import ManipulationService
+from dimos.ar.manipulation.spec import ARManipulationSpec
 from dimos.ar.navigation.coordinator import NavGoalCoordinator
 from dimos.ar.navigation.preview_planner import PreviewPlanner
 from dimos.ar.navigation.preview_service import NavigationPreviewService
@@ -103,6 +107,8 @@ class LocalizationConfig(BaseModel):
 
 
 class ARModuleConfig(ModuleConfig):  # type: ignore[misc]
+    robot_display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    stationary_base: ReferencePose | None = None
     robot: RobotName = RobotName.UNITREE_GO2
     port: int = 8787
     ip_relay_url: str | None = Field(default=DEFAULT_IP_RELAY_URL, pattern=r"^https?://[^/]+")
@@ -150,6 +156,8 @@ class ARModuleConfig(ModuleConfig):  # type: ignore[misc]
 
 def profile_for_config(config: ARModuleConfig) -> RobotProfile:
     profile = get_profile(config.robot)
+    if config.robot_display_name is not None:
+        profile = replace(profile, display_name=config.robot_display_name)
     if config.odom_scale_correction_factor is not None:
         profile = replace(profile, odom_scale_correction_factor=config.odom_scale_correction_factor)
     mounts = config.fiducial_marker_mounts
@@ -157,7 +165,11 @@ def profile_for_config(config: ARModuleConfig) -> RobotProfile:
         return profile
     if not mounts:
         raise ValueError("fiducial_marker_mounts must not be empty")
-    return replace(profile, fiducial_marker_mounts=tuple(mounts))
+    return replace(
+        profile,
+        fiducial_marker_mounts=tuple(mounts),
+        fiducial_dictionary=profile.fiducial_dictionary or "DICT_APRILTAG_36h11",
+    )
 
 
 class ARModule(Module):  # type: ignore[misc]
@@ -180,6 +192,11 @@ class ARModule(Module):  # type: ignore[misc]
     tele_cmd_vel: Out[Twist]
 
     config: ARModuleConfig
+    _manipulation: ARManipulationSpec | None = None
+    _manipulation_service: ManipulationService | None = None
+    _stationary_task: asyncio.Task[None] | None = None
+    _stop_task: asyncio.Task[None] | None = None
+    _stationary_reference = False
 
     _ws_server: WebSocketServer
     _state_publisher: RobotStatePublisher
@@ -204,12 +221,14 @@ class ARModule(Module):  # type: ignore[misc]
         self._lidar_settings = DEFAULT_LIDAR_SETTINGS
         self._localization_worker = LocalizationWorker()
         self._replay_mode = (
-            global_config.unitree_connection_type == "replay"
+            bool(getattr(global_config, "replay", False))
+            or getattr(global_config, "unitree_connection_type", None) == "replay"
             or global_config.robot_ip in ("fake", "mock", "replay")
         )
         self._odometry = RobotOdometry(
             factor=self._profile.odom_scale_correction_factor, recording=self._replay_mode
         )
+        self._stationary_reference = self.config.stationary_base is not None
         self._requires_mapping_restart = False
         self._ws_server = WebSocketServer(
             port=self.config.port,
@@ -227,7 +246,14 @@ class ARModule(Module):  # type: ignore[misc]
             on_client_pose=self._on_client_pose,
             on_nav_joystick_request=self._on_nav_joystick_request,
             on_disconnect=self._on_client_disconnect,
+            on_manipulation_request=self._on_manipulation_request,
         )
+        if self._manipulation is not None:
+            self._manipulation_service = ManipulationService(
+                self._manipulation,
+                self._ws_server.schedule_send_to_client,
+                self._ws_server.schedule_broadcast_text,
+            )
         self._nav_goal_coordinator = NavGoalCoordinator(
             odom_scale_correction_factor=self._profile.odom_scale_correction_factor,
         )
@@ -261,6 +287,7 @@ class ARModule(Module):  # type: ignore[misc]
             self._profile.supported_capabilities,
             localization_available=bool(self._policy.providers),
             agent_available=self.config.agent,
+            manipulation_available=self._manipulation is not None,
             supported_navigation_inputs=self._profile.supported_navigation_inputs,
         )
         self._tele_cmd_vel_publisher = None
@@ -319,7 +346,8 @@ class ARModule(Module):  # type: ignore[misc]
                     pose_buffer=self._odometry.history,
                     marker_mounts=self._profile.fiducial_marker_mounts,
                     dictionary_name=self._profile.fiducial_dictionary,
-                    allow_latest_robot_pose=self._replay_mode,
+                    allow_latest_robot_pose=self._replay_mode
+                    or self.config.stationary_base is not None,
                 )
             elif provider.type == "vps" and vps is None:
                 if not provider.map_code:
@@ -342,6 +370,10 @@ class ARModule(Module):  # type: ignore[misc]
     def start(self) -> None:
         super().start()
         self._loop.call_soon_threadsafe(self._localization_runner.start)
+        if self._manipulation_service is not None:
+            self._loop.call_soon_threadsafe(self._manipulation_service.start)
+        if self.config.stationary_base is not None:
+            self._loop.call_soon_threadsafe(self._start_stationary_reference)
         try:
             self._ws_server.start()
         except Exception:
@@ -357,7 +389,10 @@ class ARModule(Module):  # type: ignore[misc]
     def stop(self) -> None:
         logger.info("ARModule stopping")
         self._cancel_tele_cmd_vel()
+        if self._stationary_task is not None:
+            self._loop.call_soon_threadsafe(self._stationary_task.cancel)
         for name, service in (
+            ("manipulation", getattr(self, "_manipulation_service", None)),
             ("preview", getattr(self, "_previews", None)),
             ("localization", getattr(self, "_localization_runner", None)),
         ):
@@ -369,7 +404,9 @@ class ARModule(Module):  # type: ignore[misc]
             except TimeoutError:
                 logger.warning("AR service shutdown timed out", service=name)
             except Exception as exc:
-                logger.exception("AR service shutdown failed", service=name, error=type(exc).__name__)
+                logger.exception(
+                    "AR service shutdown failed", service=name, error=type(exc).__name__
+                )
         ws_server_obj = getattr(self, "_ws_server", None)
         if ws_server_obj is not None:
             ws_server_obj.stop()
@@ -452,7 +489,9 @@ class ARModule(Module):  # type: ignore[misc]
     ) -> None:
         logger.info("AR client session ready", client_id=client_id)
         self._broadcast_state()
-        if self._replay_mode:
+        if self._manipulation_service is not None:
+            self._manipulation_service.connect(client_id)
+        if self._replay_mode or self._stationary_reference:
             pose = self._odometry.history.latest()
             if pose is not None:
                 # History already uses corrected AR coordinates. Preserve its
@@ -470,6 +509,8 @@ class ARModule(Module):  # type: ignore[misc]
             self._send_observations_request(requested_client_id)
 
     def _on_client_disconnect(self, _websocket: ws_server.ServerConnection, client_id: str) -> None:
+        if self._manipulation_service is not None:
+            self._manipulation_service.disconnect(client_id)
         self._previews.cancel(client_id)
         runner = getattr(self, "_localization_runner", None)
         if runner is not None:
@@ -480,6 +521,30 @@ class ARModule(Module):  # type: ignore[misc]
             self._safety.on_last_disconnect()
             self._agent_service.reset()
         self._broadcast_state()
+
+    def _on_manipulation_request(
+        self, request: ManipulationRequest, client_id: str, clock_offset: float
+    ) -> None:
+        if self._manipulation_service is not None:
+            self._manipulation_service.submit(request, client_id, clock_offset)
+
+    def _start_stationary_reference(self) -> None:
+        self._stationary_task = asyncio.create_task(self._publish_stationary_base())
+
+    async def _publish_stationary_base(self) -> None:
+        mount = self.config.stationary_base
+        if mount is None:
+            return
+        while True:
+            await self.handle_odom(
+                PoseStamped(
+                    ts=time.time(),
+                    frame_id="odom",
+                    position=list(mount.position),
+                    orientation=list(mount.orientation),
+                )
+            )
+            await asyncio.sleep(0.1)
 
     def _on_nav_goal_request(
         self,
@@ -510,6 +575,10 @@ class ARModule(Module):  # type: ignore[misc]
 
     def _on_estop_request(self, _msg: EstopRequest, _websocket: ws_server.ServerConnection) -> None:
         self._cancel_tele_cmd_vel()
+        if self._manipulation is not None:
+            self._stop_task = asyncio.create_task(
+                asyncio.to_thread(self._manipulation.ar_manipulation_stop)
+            )
         if self._safety.on_estop_request():
             self._broadcast_state()
 

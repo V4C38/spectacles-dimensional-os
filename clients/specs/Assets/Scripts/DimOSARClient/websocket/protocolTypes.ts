@@ -1,3 +1,4 @@
+import type { ManipulationOutbound } from "../manipulation/ManipulationTypes";
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
 export type YawPose = [number, number, number, number];
@@ -15,6 +16,7 @@ export const CAPABILITY_NAMES = [
   "localization",
   "estop",
   "agent",
+  "manipulation",
 ] as const;
 export type CapabilityName = (typeof CAPABILITY_NAMES)[number];
 
@@ -34,8 +36,8 @@ export type NavigationCapability = Capability & {
 };
 
 export type Capabilities = {
-  [K in Exclude<CapabilityName, "navigation">]: Capability;
-} & { navigation: NavigationCapability };
+  [K in Exclude<CapabilityName, "navigation" | "manipulation">]: Capability;
+} & { navigation: NavigationCapability; manipulation?: Capability };
 
 export interface TimeSync {
   ts_client: number;
@@ -149,6 +151,7 @@ export interface Lidar {
 }
 
 export type Outbound =
+  | ManipulationOutbound
   | Hello
   | State
   | LocalizationObservationsRequest

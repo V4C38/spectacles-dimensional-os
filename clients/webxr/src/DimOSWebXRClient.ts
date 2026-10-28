@@ -1,3 +1,4 @@
+import { WebXRManipulationController } from "./manipulation/WebXRManipulationController";
 import { ClientPosePublisher } from "@dimos-ar-client/agent/ClientPosePublisher";
 import { ViewerNotificationPresenter } from "./presentation/ViewerNotificationPresenter";
 import { reportDiagnostic } from "./diagnostics/BrowserDiagnostics";
@@ -56,6 +57,7 @@ export class DimOSWebXRClient {
   readonly route: WebXRRouteRenderer;
   readonly previewRoute: WebXRRouteRenderer;
   readonly markers: WebXRARMarkerPresenter;
+  readonly manipulation: WebXRManipulationController;
   readonly navigation: WebXRNavigationController;
   readonly joystick: WebXRJoystickController;
 
@@ -114,9 +116,11 @@ export class DimOSWebXRClient {
     this.route = new WebXRRouteRenderer();
     this.previewRoute = new WebXRRouteRenderer();
     this.markers = new WebXRARMarkerPresenter();
+    this.manipulation = new WebXRManipulationController(this.session, () => this.originStore.T_odom_client, () => this.clock.now());
     this.navigation = new WebXRNavigationController(this.session);
     this.joystick = new WebXRJoystickController(this.session);
     this.unsubscribeSelection = this.selection.subscribe(selected => {
+      this.manipulation.setSelected(selected);
       this.robot.setSelected(selected);
       this.navigation.setSelected(selected);
       if (!selected) { this.navigation.cancelDrag(); this.speech.endRecording(true); }
@@ -187,6 +191,7 @@ export class DimOSWebXRClient {
     const visibleDeltaS = this.lastTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastTickAt));
     this.stopFeedbackRemaining = Math.max(0, this.stopFeedbackRemaining - visibleDeltaS);
     this.ui.estopPressed = this.stopFeedbackRemaining > 0;
+    this.manipulation.tick(this.controlsEnabled() && view.hasTrackingOrigin);
     this.navigation.tick(now, visibleDeltaS);
     this.joystick.tick(now, this.controlsEnabled() ? joystick : null);
     if (!this.controlsEnabled()) this.navigation.cancelDrag();
@@ -265,6 +270,7 @@ export class DimOSWebXRClient {
   }
 
   emergencyStop(): void {
+    this.manipulation.end();
     if (this.session.view().capabilities?.estop.available !== true) return;
     try {
       if (this.navigation.interaction.snapshot().goalActive) {
@@ -287,6 +293,7 @@ export class DimOSWebXRClient {
   }
 
   loseInput(completeDictation = false): void {
+    this.manipulation.end();
     this.speech.endRecording(!completeDictation);
     if (!completeDictation) this.navigation.cancelDrag();
     this.joystick.loseInput();
@@ -376,6 +383,7 @@ export class DimOSWebXRClient {
     this.unsubscribeOutbound?.();
     this.unsubscribeOutbound = null;
     this.joystick.loseInput();
+    this.manipulation.dispose();
     this.navigation.dispose();
     this.notifications.dispose();
     this.markers.dispose();
@@ -399,6 +407,7 @@ export class DimOSWebXRClient {
     this.robot.setConnectorFloorY(this.navigation.interaction.snapshot().attachedToRobot ? this.navigation.marker.circleBounds().center[1] : null);
     this.robot.setCircleOpacity(this.navigation.marker.circleOpacity());
     this.robot.tick(deltaS);
+    if (view.capabilities?.manipulation?.available && !view.capabilities.navigation.available) this.robot.object.visible = false;
     if (!this.ui.setupCompleted || !view.hasTrackingOrigin || !origin) {
       this.lidar.hide();
       this.route.hide(); this.previewRoute.hide();

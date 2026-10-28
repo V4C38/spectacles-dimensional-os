@@ -165,10 +165,12 @@ export DIMOS_AR_LAN_IP="${LAN_IP}"
 STACK_IDS=(
   "unitree_go2_ar"
   "unitree_go2_ar_agentic"
+  "openyam_ar_planner"
 )
 MENU_LABELS=(
   "Unitree Go2"
   "Unitree Go2 Agentic"
+  "OpenYAM AR Planner"
 )
 
 # Interactive arrow-key menu: up/down to move, Enter to select.
@@ -296,8 +298,11 @@ if [[ -n "${BLUEPRINT_FLAG}" ]]; then
     unitree_go2_ar_agentic)
       SELECTED_INDEX=1
       ;;
+    openyam_ar_planner)
+      SELECTED_INDEX=2
+      ;;
     *)
-      echo "Unknown blueprint: ${BLUEPRINT_FLAG} (expected unitree_go2_ar or unitree_go2_ar_agentic)" >&2
+      echo "Unknown blueprint: ${BLUEPRINT_FLAG} (expected unitree_go2_ar, unitree_go2_ar_agentic, or openyam_ar_planner)" >&2
       exit 1
       ;;
   esac
@@ -309,7 +314,9 @@ SELECTED_BLUEPRINT="${STACK_IDS[$SELECTED_INDEX]}"
 STACK_LABEL="${MENU_LABELS[$SELECTED_INDEX]}"
 CLI_BLUEPRINT="dimos-ar.${SELECTED_BLUEPRINT//_/-}"
 
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" ]]; then
+  unset ROBOT_IP
+elif [[ -z "${OPENAI_API_KEY:-}" ]]; then
   echo "Warning: OPENAI_API_KEY is unset — agent mode will not work until it is set." >&2
 elif [[ -z "${DIMOS_AR_SKIP_OPENAI_CHECK:-}" ]]; then
   if openai_api_reachable; then
@@ -323,22 +330,22 @@ fi
 # DimOS GlobalConfig reads ROBOT_IP (or a .env file) to open the robot
 # connection; without it the connection module aborts with "IP address must be
 # provided". Auto-discover unless the caller pinned ROBOT_IP via --robot-ip or env.
-if [[ -z "${ROBOT_IP:-}" ]]; then
+if [[ "${SELECTED_BLUEPRINT}" != "openyam_ar_planner" && -z "${ROBOT_IP:-}" ]]; then
   resolve_robot_ip
 fi
 
 # Map launcher "simulated" (and alias "fake") to DimOS offline replay.
-DISPLAY_ROBOT_IP="${ROBOT_IP}"
+DISPLAY_ROBOT_IP="${ROBOT_IP:-local}"
 REPLAY=0
 PINNED_IP=""
-case "${ROBOT_IP}" in
+case "${ROBOT_IP:-}" in
   simulated|fake)
     DISPLAY_ROBOT_IP="simulated"
     REPLAY=1
     unset ROBOT_IP
     ;;
   *)
-    PINNED_IP="${ROBOT_IP}"
+    PINNED_IP="${ROBOT_IP:-}"
     export ROBOT_IP
     ;;
 esac
@@ -351,6 +358,9 @@ if [[ ! -x "${DIMOS_CLI}" ]]; then
 fi
 
 RUN_CMD=("${DIMOS_CLI}")
+if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" && "${DIMOS_AR_SIMULATION:-0}" == "1" ]]; then
+  RUN_CMD+=(--simulation=mock)
+fi
 if [[ "${REPLAY}" -eq 1 ]]; then
   RUN_CMD+=(--replay)
 fi

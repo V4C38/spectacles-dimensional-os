@@ -13,6 +13,7 @@ import time
 import websockets
 import websockets.asyncio.server as ws_server
 
+from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest
 from dimos.ar.websocket.ip_relay import IpRelayPublisher, lan_ip
 from dimos.ar.websocket.protocol import (
@@ -96,6 +97,7 @@ class WebSocketServer:
         on_client_pose: ClientPoseHandler | None = None,
         on_nav_joystick_request: NavJoystickRequestHandler | None = None,
         on_disconnect: DisconnectHandler | None = None,
+        on_manipulation_request: Callable[[ManipulationRequest, str, float], None] | None = None,
     ) -> None:
         self._relay_url = relay_url
         self._port = port
@@ -113,6 +115,7 @@ class WebSocketServer:
         self._on_client_pose = on_client_pose
         self._on_nav_joystick_request = on_nav_joystick_request
         self._on_disconnect = on_disconnect
+        self._on_manipulation_request = on_manipulation_request
 
         self._stop_event: asyncio.Event | None = None
         self._connections: dict[str, ws_server.ServerConnection] = {}
@@ -317,6 +320,11 @@ class WebSocketServer:
         websocket: ws_server.ServerConnection,
         client_id: str,
     ) -> None:
+        if isinstance(inbound, ManipulationRequest):
+            if self._on_manipulation_request is not None:
+                sync = self._time_sync[websocket]
+                self._on_manipulation_request(inbound, client_id, sync.ts_server - sync.ts_client)
+            return
         if isinstance(inbound, NavGoalRequest):
             if self._on_nav_goal_request is not None:
                 self._on_nav_goal_request(inbound, websocket, client_id)

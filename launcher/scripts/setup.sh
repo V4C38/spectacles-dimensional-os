@@ -23,6 +23,7 @@ DO_CHECK=0
 FLAG_DIMOS_PYTHON=""
 FLAG_CLONE_DIR=""
 FLAG_DIMOS_REF=""
+FLAG_MANIPULATION=0
 
 if [[ "${CI:-}" == "1" ]]; then
   NON_INTERACTIVE=1
@@ -30,6 +31,10 @@ fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --manipulation)
+      FLAG_MANIPULATION=1
+      shift
+      ;;
     --yes|-y)
       NON_INTERACTIVE=1
       shift
@@ -419,7 +424,9 @@ echo "Using DimOS Python: ${DIMOS_ENV_PYTHON}"
 echo "Installing dimos-ar into that environment..."
 (
   cd "${DIMOS_AR_ROOT}"
-  "${DIMOS_ENV_PYTHON}" -m pip install -e ".[dev]"
+  extras="dev"
+  if [[ "${FLAG_MANIPULATION}" -eq 1 ]]; then extras="dev,manipulation"; fi
+  "${DIMOS_ENV_PYTHON}" -m pip install -e ".[${extras}]"
 )
 
 if ! python_has_dimos_ar "${DIMOS_ENV_PYTHON}"; then
