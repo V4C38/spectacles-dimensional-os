@@ -163,7 +163,8 @@ it("consumes UI selection, cancels drags on input loss, invalidates resets, and 
   expect(invalidated).toHaveBeenCalledTimes(beforeFocus);
   const resets = invalidated.mock.calls.length;
   reference.dispatchEvent(new Event("reset")); expect(invalidated).toHaveBeenCalledTimes(resets);
-  expect(client.originStore.T_odom_client).toEqual(aligned);
+  // An uncompensated reset starts a new tracking reference and retires the old fix.
+  expect(client.originStore.T_odom_client).toBeNull();
   app.onXRSessionEnded();
   const afterEnd = invalidated.mock.calls.length;
   reference.dispatchEvent(new Event("reset")); session.dispatchEvent(new Event("visibilitychange"));

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>DimOS ARModule</title>
-    <link rel="stylesheet" href="/static/app.css" />
+    <link rel="stylesheet" href="/static/app.css?v=localization-layout-3" />
   </head>
   <body>
     <div class="app">
@@ -146,14 +146,31 @@
               </div>
             </div>
 
-            <details class="card config-card" id="locCard">
-              <summary class="config-summary">
+            <section class="card config-card" id="locCard" aria-label="Localization">
+              <div class="config-heading">
                 <span class="deps-summary-collapsed">
                   <span class="label">Localization</span>
                   <span class="value" id="locSummary"></span>
                 </span>
-              </summary>
+              </div>
               <div class="config-body">
+                <section class="localization-policy" aria-label="Localization policy">
+                  <p class="policy-box" id="policyExplanation">
+                    Robot correction prefers a visible fiducial marker, then uses the robot
+                    camera through VPS. Headset VPS alignment refreshes independently after
+                    its travel threshold. All cameras share three VPS queries per 30 seconds.
+                  </p>
+                  <div class="policy-fields">
+                    <label class="field"><span>Robot · Min relocalization distance (m)</span>
+                      <input id="travel_threshold_m" type="number" required min="0.001" step="any" value="0.75" /></label>
+                    <label class="field"><span>Robot · Min relocalization angle (°)</span>
+                      <input id="heading_threshold_deg" type="number" required min="0.001" max="180" step="any" value="30" /></label>
+                    <label class="field" id="markerPreferenceField"><span>Robot · Prefer fiducial marker for (s)</span>
+                      <input id="marker_preference_s" type="number" required min="0" step="any" value="1.5" /></label>
+                    <label class="field"><span>Headset · Min relocalization distance (m)</span>
+                      <input id="headset_travel_threshold_m" type="number" required min="0.001" step="any" value="10" /></label>
+                  </div>
+                </section>
                 <div class="provider">
                   <label class="check">
                     <input type="checkbox" id="fiducialEnabled" />
@@ -213,12 +230,8 @@
                     </label>
                   </div>
                 </div>
-                <p class="policy-box hidden" id="mixedPolicyBox">
-                  Fiducial marker is tried first. If it fails, VPS runs as fallback. Capture
-                  prefers a line of sight to the robot and waits up to 2 seconds.
-                </p>
               </div>
-            </details>
+            </section>
 
             <details class="card config-card hidden" id="agentConfig">
               <summary class="config-summary">
@@ -305,6 +318,6 @@
         <pre class="log" id="log" aria-live="polite"></pre>
       </main>
     </div>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=localization-layout-3"></script>
   </body>
 </html>

@@ -7,7 +7,7 @@ clients update their protocol module in the same change.
 
 ## Conventions
 
-- **19 message types** — 9 outbound, 10 inbound. Inventory is below.
+- **24 message types** — 12 outbound, 12 inbound. Inventory is below.
 - **Wire frame is `odom`** — the robot's drifting leg-odometry frame, in
   DimOS's right-handed Z-up axes. ARModule performs **no axis conversion**. Each
   client converts on receipt; clients do not share one scene convention.
@@ -48,7 +48,8 @@ clients update their protocol module in the same change.
 
 ## Coordinate conventions
 
-Every position and orientation on the wire is in the **`odom`** frame, in
+Robot poses, navigation, LiDAR, and top-level localization results use **`odom`**.
+Explicit map-alignment metadata uses the named MultiSet map frame. Both use
 DimOS's axes:
 
 | Axis | Direction |
@@ -78,7 +79,7 @@ Two consequences for clients on a drifting stack:
   holds forever.
 
 Fiducial marker localization and robot-side VPS anchoring look up that pose at
-shutter time. Robot-side VPS also needs an onboard camera extrinsic
+the image timestamp; Go2 receipt timestamps are an exposure-time approximation. Robot-side VPS also needs an onboard camera extrinsic
 (`T_base_camera_optical`). Declared DimOS ports for LiDAR and navigation stay
 on `ARModule`; they no-op when `hello.capabilities` reports them unavailable.
 
@@ -384,7 +385,7 @@ ARModule → one client. Prompt to capture a camera batch and send
 needs the client to act.
 
 After an unsuccessful scan, ARModule requests a replacement batch with this
-same message (subject to provider cooldowns). Clients resume capture immediately;
+same message (subject to retry backoff and the shared VPS query budget). Clients resume capture immediately;
 the result timeout is only a fallback for a missing response.
 
 ```json
@@ -461,18 +462,104 @@ Localization never occupies a client's WebSocket read loop. The default server
 budget is 12 seconds from admission, including CPU/HTTP queueing, authentication,
 token refresh, and robot/headset queries; the advertised client timeout is the
 configured budget plus 3 seconds. Cancellation retires delivery and aborts HTTP.
-A miss or exception schedules a new capture after backoff/provider cooldowns;
-images are never held through a cooldown. Polling does not depend on odometry.
+A miss or exception schedules a new capture after backoff/query admission;
+images are never held through an admission wait. Polling does not depend on odometry.
 
-After 0.75 m of accumulated corrected robot travel since the capture used by the last successful
-fix, ARModule requests another episode without waiting for a navigation goal to
-finish. A marker-only client waits for the robot to enter its geometric capture
-gate, and pauses a partial batch if it leaves that gate. Successful setup keeps
-this runtime handler armed; it does not keep the camera running between episodes.
+With VPS enabled, robot correction and headset alignment are independent. Robot
+correction becomes due after 0.75 m accumulated corrected robot travel or 30° net
+heading change. Headset map alignment refreshes after 10 m accumulated horizontal
+headset travel, without a rotation trigger. Defaults are configurable in the launcher.
+Capture-time baselines preserve movement during processing. Failed attempts do not
+reset those baselines. Fiducial-only mode retains relative odometry alignment and
+its geometric capture gate.
 
-Always in `odom`, regardless of which frame the underlying provider works in.
-When a provider answers in a scanned-map frame ARModule composes it into
-`odom` before sending, because only ARModule knows that relationship.
+### Independent map localization
+
+VPS deployments send `localization_context` after hello:
+
+```json
+{"type":"localization_context","map_code":"<map>","odom_reference_id":"<reference>"}
+```
+
+This binds retained headset alignment to the current map and robot reference.
+An optional `reset: true` invalidates a retained alignment that the server cannot
+resume. Clients report tracking only after receiving this context; agent capability
+is not required. There is no standing camera policy or additional camera-info message.
+
+`localization_tracking` (client → server) contains `tracking_reference_id` (nonempty,
+at most 128 characters), finite nonnegative cumulative `travel_m`, boolean `active`,
+and optional `alignment_id` identifying a previously accepted headset map fix.
+Send once per second while active and immediately on activation, reference changes,
+and accepted fixes. Travel is measured at 10 Hz in native headset tracking coordinates,
+with a 5 cm displacement deadband. Visibility loss or a sampling gap over 0.5 seconds
+starts a new travel segment without bridging the gap. A tracking-reference reset
+starts a new identity and counter. Plain socket reconnect preserves them.
+The server resumes only an issued fix matching map, robot reference, tracking
+reference, and a nondecreasing travel counter. Issued-fix storage retains active
+alignments and a bounded pool for reconnects.
+
+Map-mode capture requests add `episode_id` (opaque identity) and `purpose`:
+`headset` requests one `any_angle` frame; `robot` requests a three-frame
+`robot_los_preferred` tag batch with `wait_timeout_s` (default 1.5 seconds).
+For robot correction, expiry of this gate wait ends headset capture and falls
+back to the robot camera; it does not send headset pixels to VPS. An immediately
+visible tag is still attempted with zero preference duration. Once capture has
+started, its normal bounded collection/processing deadline replaces the gate wait.
+Losing the gate discards a partial tag batch and returns to the bounded wait.
+
+`localization_capture_progress` (client → server) contains `episode_id`, `phase`
+(`waiting`, `capturing`, `submitted`, or `unavailable`), and nonnegative `travel_m`.
+`submitted` also requires `capture_ts`: the newest batch timestamp in client time.
+Send this JSON context immediately before the existing LOCA binary batch. The
+server correlates its converted timestamp to the batch within one microsecond;
+stale or superseded episode progress is ignored. The binary layout is unchanged.
+
+A successful headset `localization_result` keeps its existing top-level odometry
+pose and timestamp, and includes both `map_alignment` and `map_transform`.
+`map_alignment` contains `id`, `map_code`, `odom_reference_id`,
+`tracking_reference_id`, capture-time `travel_m`, `position`, `orientation`,
+`confidence`, and server-clock `ts`. Its pose is `T_map_client`.
+`map_transform` is a complete `localization_map_transform` snapshot:
+`map_code`, `odom_reference_id`, nonnegative integer `revision`, `position`,
+`orientation`, `confidence`, and server-clock capture `ts`. Its pose is `T_odom_map`.
+
+ClientCore adopts `T_map_client` only after the existing outstanding-submission
+and result-deadline checks accept the result. It composes:
+
+```text
+T_odom_client = T_odom_map × T_map_client
+```
+
+New robot corrections broadcast `localization_map_transform` independently of
+headset capture. Ignore mismatched contexts and older/equal revisions. Use the
+newest valid robot transform when accepting a headset fix. A transform update
+cannot activate an unaccepted, cancelled, or timed-out headset fix. Recomposition
+updates the existing origin owner and all odometry-space renderers/conversions;
+it does not alter the native planner or resubmit confirmed navigation goals.
+
+A tag correction uses an active, map-aligned headset below its own refresh
+threshold: `T_odom_map = T_odom_client_from_tag × inverse(T_map_client)`.
+Existing fiducial detection/fusion quality gates apply. The same observation never
+updates both independent alignments.
+
+`localization_status` contains `map_code`, `odom_reference_id`, `scope` (`robot` or
+`headset`), `status` (`succeeded`, `failed`, `deferred`), and `reason`.
+Capture-related status includes `episode_id` and, after submission, its server-clock
+capture `ts`; optional nonnegative `retry_after_s` describes an admission wait.
+Clients ignore stale capture status and retire matching submission deadlines.
+Robot-only status can arrive without a capture identity. Failure displays the
+2.5-second yellow triangle/`!` notification “Tracking Inaccurate”; corresponding
+success clears it. Gate waiting and query deferral do not warn. Emergency-stop
+feedback takes priority.
+
+Every robot/headset camera-query HTTP POST shares a limit of three dispatches per
+rolling 30 seconds. Authentication is excluded; a repeated query after token refresh
+counts again. Reserve at dispatch after local frame validation; dispatched failures
+and cancellation consume admission. One cloud task runs at a time, with fair turns
+between shared robot work and headset captures. A collecting headset owns its next
+cloud turn. Failed attempts retry after two seconds, subject to admission, without
+a retry-count ceiling. Images are recaptured after waits; tags remain available
+while cloud queries are rate-limited.
 
 ### `pose`
 
@@ -571,7 +658,7 @@ usual.
 
 If neither a result nor a replacement batch request arrives before the client's
 deadline, it asks for another episode. ARModule may withhold the prompt until a
-provider cooldown expires and send `localization_observations_request` later, so clients back off
+query budget permits and send `localization_observations_request` later, so clients back off
 between attempts rather than assuming a prompt per request.
 
 ### `localization_observations` (binary)
@@ -641,7 +728,7 @@ using the per-connection offset from `hello` before pose lookup. A localization
 round trip can take seconds; pairing uses shutter time, not send time.
 
 Response: `localization_result` after a successful episode, or another
-`localization_observations_request` after a failed scan (subject to cooldowns).
+`localization_observations_request` after a failed scan (subject to query admission).
 
 ### `nav_goal_request`
 
@@ -823,7 +910,9 @@ stale returns `No client pose`.
 | `estop_request` | `lidar` (binary) |
 | `lidar_settings_request` | `agent_message` |
 | `user_message_request` | `agent_skill` |
-| `client_pose` | |
+| `client_pose` | `localization_context` |
+| `localization_tracking` | `localization_map_transform` |
+| `localization_capture_progress` | `localization_status` |
 
 **Inbound naming.** Commands use `*_request` (`nav_goal_request`,
 `estop_request`, `user_message_request`). Unsolicited telemetry uses a bare
@@ -879,11 +968,15 @@ currently stamps odometry, decoded video, and voxel-map packets at receipt, so t
 are **not hardware exposure timestamps**. Known Go2 replay streams instead use one
 shared recorded-to-server epoch, bound once from the first odometry arrival; later
 arrival delay never changes that offset. Live boot-time/unknown clocks are not
-silently rebased. Robot VPS capture requires continuous
-pose history spanning a provisional ±0.5-second uncertainty window, translation
-speed ≤0.05 m/s, and angular speed ≤0.05 rad/s. Encoding runs off-loop after the
-future bracket arrives. A robot image must be ≤2 seconds old at query admission;
-normal HTTP latency does not reapply this image-age limit after the query.
+silently rebased. Moving robot capture requires an exact odometry timestamp match
+or surrounding pose samples no more than 200 ms apart. Wait at most 200 ms for the
+following sample, then reject missing brackets rather than extrapolating or using
+the latest pose. Translation is interpolated linearly and orientation with
+shortest-path SLERP. There is no stillness, linear-speed, or angular-speed gate.
+Encoding runs off-loop. A robot image must be ≤2 seconds old at actual HTTP query
+admission, including after authentication; normal HTTP latency does not reapply
+this image-age limit after the query. Higher odometry cadence reduces interpolation
+error but cannot remove unknown camera/odometry receipt-time skew.
 Live AprilTag localization requires a robot pose within 0.25 seconds and does not
 substitute the origin when odometry is missing. Offline replay explicitly permits
 its final retained robot pose for captures newer than the complete history, so
@@ -892,16 +985,23 @@ the retained pose's original timestamp and corrected coordinates; empty history,
 prehistory and internal gaps remain invalid. VPS and live-robot freshness rules
 are unchanged.
 
-VPS anchors retain capture-time robot travel and immutable transform snapshots.
-Their initial limits are 1 metre of subsequent travel and 60 seconds of capture
-age; both source generation and map identity must match. These checks run before
-and after awaited queries. Composed confidence is the minimum of robot/headset
-confidence, a conservative quality score rather than a calibrated probability.
-`armodule.localization.episode_timeout_s` (default 12), `anchor_max_age_s` (60),
-and `robot_timing_uncertainty_s` (0.5) are configurable, provisional engineering
-limits. They do not certify physical calibration or bound undocumented camera
-transport latency. A detected robot clock/frame reset retires pending work and
-connections; AR navigation requires restarting DimOS mapping with a fresh map.
+Accepted map alignment retains capture-time robot travel, heading, source generation,
+and immutable transform snapshots. Its lifetime is separate from image admission
+freshness: crossing a motion threshold makes another correction due, without
+invalidating the last accepted alignment or discarding a valid response solely
+because the robot moved during HTTP processing. Older corrections cannot supersede
+newer ones. Composed confidence is the minimum of robot/headset confidence, a
+conservative quality score rather than a calibrated probability.
+
+`armodule.localization` exposes `travel_threshold_m` (0.75),
+`heading_threshold_deg` (30), `marker_preference_s` (1.5), and
+`headset_travel_threshold_m` (10). Distances must be finite and positive, angle is
+in (0, 180], and preference is finite and nonnegative. Changes apply at restart.
+`episode_timeout_s` defaults to 12. Historical `anchor_max_age_s` and
+`robot_timing_uncertainty_s` settings remain readable for configuration compatibility;
+they do not expire accepted independent map alignments or impose stillness.
+A robot clock/frame reset retires pending work and connections; AR navigation
+requires restarting DimOS mapping with a fresh map.
 
 The 1.25 heuristic now consistently covers all outbound odometry-space points,
 including LiDAR, with inverse conversion for native navigation and agent inputs.

@@ -103,7 +103,45 @@ export interface AgentSkill {
   args: Record<string, unknown>;
 }
 
-export type LocalizationObservationsRequest =
+export interface MapContext {
+  map_code: string;
+  odom_reference_id: string;
+}
+export interface MapAlignment extends MapContext {
+  id: string;
+  tracking_reference_id: string;
+  travel_m: number;
+  position: Vec3;
+  orientation: Quat;
+  confidence: number;
+  ts: number;
+}
+export interface LocalizationMapTransform extends MapContext {
+  type: "localization_map_transform";
+  revision: number;
+  position: Vec3;
+  orientation: Quat;
+  confidence: number;
+  ts: number;
+}
+export interface LocalizationContext extends MapContext {
+  type: "localization_context";
+  reset?: boolean;
+}
+export interface LocalizationStatus extends MapContext {
+  type: "localization_status";
+  scope: "robot" | "headset";
+  status: "succeeded" | "failed" | "deferred";
+  reason: string;
+  retry_after_s?: number;
+  episode_id?: string;
+  ts?: number;
+}
+export interface CaptureEpisodeIdentity {
+  episode_id?: string;
+  purpose?: "robot" | "headset";
+}
+export type LocalizationObservationsRequest = CaptureEpisodeIdentity & (
   | {
       type: "localization_observations_request";
       capture_policy: "robot_los_required" | "any_angle";
@@ -116,9 +154,11 @@ export type LocalizationObservationsRequest =
       observation_count: number;
       result_timeout_s?: number;
       wait_timeout_s: number;
-    };
+    });
 
 export interface LocalizationResult {
+  map_alignment?: MapAlignment;
+  map_transform?: LocalizationMapTransform;
   type: "localization_result";
   position: Vec3;
   orientation: Quat;
@@ -153,6 +193,9 @@ export type Outbound =
   | State
   | LocalizationObservationsRequest
   | LocalizationResult
+  | LocalizationContext
+  | LocalizationMapTransform
+  | LocalizationStatus
   | Pose
   | NavGoal
   | Lidar
@@ -166,6 +209,21 @@ export interface HelloRequest {
 
 export interface StateRequest {
   type: "state_request";
+}
+
+export interface LocalizationTracking {
+  type: "localization_tracking";
+  tracking_reference_id: string;
+  travel_m: number;
+  active: boolean;
+  alignment_id?: string;
+}
+export interface LocalizationCaptureProgress {
+  type: "localization_capture_progress";
+  episode_id: string;
+  phase: "waiting" | "capturing" | "submitted" | "unavailable";
+  travel_m: number;
+  capture_ts?: number;
 }
 
 export interface LocalizationStartRequest {
@@ -235,6 +293,8 @@ export type Inbound =
   | HelloRequest
   | StateRequest
   | LocalizationStartRequest
+  | LocalizationTracking
+  | LocalizationCaptureProgress
   | LocalizationObservations
   | NavGoalRequest
   | NavJoystickRequest

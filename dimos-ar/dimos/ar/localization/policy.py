@@ -29,12 +29,14 @@ class EpisodeWork:
     observations: tuple[Observation, ...]
     generation: int = 0
     capture_travel_m: float = 0.0
+    capture_heading_rad: float | None = None
 
 
 @dataclass
 class _ClientEpisode:
     pending: bool = False
     last_success_travel_m: float | None = None
+    last_success_heading: float | None = None
     in_flight: bool = False
     generation: int = 0
     prompt_due_at: float | None = None
@@ -83,6 +85,8 @@ class LocalizationPolicy:
         providers: Sequence[LocalizationProviderType | str] = (),
         *,
         travel_threshold_m: float = TRAVEL_THRESHOLD_M,
+        heading_threshold_deg: float = 30.0,
+        heading: Callable[[], float] = lambda: 0.0,
         client_vps_cooldown_s: float = CLIENT_VPS_COOLDOWN_S,
         robot_vps_cooldown_s: float = ROBOT_VPS_COOLDOWN_S,
         clock: Callable[[], float] = time.monotonic,
@@ -101,6 +105,8 @@ class LocalizationPolicy:
             raise ValueError(
                 f"robot_vps_cooldown_s must be finite and non-negative, got {robot_vps_cooldown_s}"
             )
+        self._heading_threshold = math.radians(heading_threshold_deg)
+        self._heading = heading
         self._providers = _canonical_providers(providers)
         self._capture_spec = _capture_spec(self._providers)
         self._travel_threshold_m = travel_threshold_m
@@ -167,7 +173,18 @@ class LocalizationPolicy:
             if (
                 not state.pending
                 and state.last_success_travel_m is not None
-                and self.travel_m - state.last_success_travel_m >= self._travel_threshold_m
+                and (
+                    self.travel_m - state.last_success_travel_m >= self._travel_threshold_m
+                    or (
+                        state.last_success_heading is not None
+                        and abs(
+                            math.remainder(
+                                self._heading() - state.last_success_heading, 2 * math.pi
+                            )
+                        )
+                        >= self._heading_threshold
+                    )
+                )
             ):
                 prompted = self._open_episode(client_id)
                 if prompted is not None:
@@ -195,6 +212,7 @@ class LocalizationPolicy:
         observations: Sequence[Observation],
         *,
         capture_travel_m: float | None = None,
+        capture_heading_rad: float | None = None,
     ) -> EpisodeWork | None:
         state = self._clients.get(client_id)
         if state is None or not state.pending or state.in_flight or state.prompt_due_at is not None:
@@ -207,6 +225,7 @@ class LocalizationPolicy:
             observations=tuple(observations),
             generation=state.generation,
             capture_travel_m=self.travel_m if capture_travel_m is None else capture_travel_m,
+            capture_heading_rad=capture_heading_rad,
         )
 
     def is_current(self, work: EpisodeWork) -> bool:
@@ -231,7 +250,13 @@ class LocalizationPolicy:
             self._clock() + 2.0, self._client_vps_until, self._robot_vps_until
         )
 
-    def on_success(self, client_id: str, *, capture_travel_m: float | None = None) -> None:
+    def on_success(
+        self,
+        client_id: str,
+        *,
+        capture_travel_m: float | None = None,
+        capture_heading_rad: float | None = None,
+    ) -> None:
         state = self._clients.get(client_id)
         if state is None:
             return
@@ -240,6 +265,9 @@ class LocalizationPolicy:
         state.vps_waiting = False
         state.in_flight = False
         state.prompt_due_at = None
+        state.last_success_heading = (
+            self._heading() if capture_heading_rad is None else capture_heading_rad
+        )
         state.last_success_travel_m = (
             self.travel_m if capture_travel_m is None else capture_travel_m
         )

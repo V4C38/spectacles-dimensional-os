@@ -13,7 +13,7 @@ from typing import Annotated, Any, Literal
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from apriltag_assets import decode_marker_id, ensure_pdf, ensure_png
 from armodule import ProcessManager
@@ -21,6 +21,7 @@ from config import env_path, merge_env, normalize_log_level, read_env, repo_root
 from dimos_config import merge_armodule_config, read_armodule_config
 from tag_config import (
     DEFAULT_MOUNT,
+    LOCALIZATION_POLICY_DEFAULTS,
     PRESET_MARKER_IDS,
     armodule_config_from_ui,
     normalize_ui_mounts,
@@ -86,6 +87,12 @@ class MountBody(BaseModel):
 
 
 class SettingsBody(BaseModel):
+    travel_threshold_m: float = Field(default=0.75, gt=0, allow_inf_nan=False)
+    heading_threshold_deg: float = Field(
+        default=30.0, gt=0, le=180, allow_inf_nan=False
+    )
+    marker_preference_s: float = Field(default=1.5, ge=0, allow_inf_nan=False)
+    headset_travel_threshold_m: float = Field(default=10.0, gt=0, allow_inf_nan=False)
     openai_api_key: str | None = None
     multiset_client_id: str | None = None
     multiset_client_secret: str | None = None
@@ -117,6 +124,7 @@ def settings_payload() -> dict[str, Any]:
         "vps_vendor": ui["vps_vendor"],
         "map_code": ui["map_code"],
         "mounts": ui["mounts"],
+        **{key: ui[key] for key in LOCALIZATION_POLICY_DEFAULTS},
         "defaults": {
             "mounts": [dict(DEFAULT_MOUNT)],
             "preset_marker_ids": list(PRESET_MARKER_IDS),
@@ -175,7 +183,9 @@ async def api_dimos_refs() -> dict[str, Any]:
             stderr=asyncio.subprocess.PIPE,
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=500, detail="git is required to list DimOS refs") from exc
+        raise HTTPException(
+            status_code=500, detail="git is required to list DimOS refs"
+        ) from exc
     out, err = await proc.communicate()
     if proc.returncode != 0:
         detail = err.decode("utf-8", errors="replace").strip() or "git ls-remote failed"
@@ -223,19 +233,30 @@ async def api_settings_get() -> dict[str, Any]:
 async def api_settings_put(body: SettingsBody) -> dict[str, Any]:
     phase = manager.status.phase.value
     if phase in ("starting", "running", "stopping"):
-        raise HTTPException(status_code=409, detail="stop ARModule before editing settings")
+        raise HTTPException(
+            status_code=409, detail="stop ARModule before editing settings"
+        )
     try:
         mounts = normalize_ui_mounts(
-            [item.model_dump() for item in body.mounts] if body.mounts is not None else None
+            [item.model_dump() for item in body.mounts]
+            if body.mounts is not None
+            else None
         )
-        merge_armodule_config(
-            armodule_config_from_ui(
-                fiducial_marker=body.fiducial_marker,
-                vps=body.vps,
-                map_code=body.map_code,
-                mounts=mounts,
-            )
+        patch = armodule_config_from_ui(
+            fiducial_marker=body.fiducial_marker,
+            vps=body.vps,
+            map_code=body.map_code,
+            mounts=mounts,
         )
+        existing = read_armodule_config()
+        localization = dict(existing.get("localization") or {})
+        localization.update(patch.pop("localization"))
+        for key in LOCALIZATION_POLICY_DEFAULTS:
+            if key in body.model_fields_set:
+                localization[key] = getattr(body, key)
+        existing.update(patch)
+        existing["localization"] = localization
+        merge_armodule_config(existing)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     env_updates = {
@@ -278,7 +299,9 @@ async def api_apriltag_pdf(tag_id: int, size_mm: float = 70.0) -> FileResponse:
 async def api_apriltag_decode(file: Annotated[UploadFile, File()]) -> dict[str, Any]:
     filename = (file.filename or "").lower()
     if not filename.endswith(".png"):
-        raise HTTPException(status_code=400, detail="upload a PNG of an AprilTag 36h11 marker")
+        raise HTTPException(
+            status_code=400, detail="upload a PNG of an AprilTag 36h11 marker"
+        )
     data = await file.read()
     try:
         marker_id = decode_marker_id(data)
@@ -289,7 +312,9 @@ async def api_apriltag_decode(file: Annotated[UploadFile, File()]) -> dict[str, 
 
 @app.post("/api/armodule/start", dependencies=[Depends(require_local_launcher)])
 async def api_armodule_start(body: StartBody) -> dict[str, Any]:
-    robot_ip = body.robot_ip.strip() if body.robot_ip and body.robot_ip.strip() else None
+    robot_ip = (
+        body.robot_ip.strip() if body.robot_ip and body.robot_ip.strip() else None
+    )
     try:
         await manager.start_armodule(
             blueprint=body.blueprint,

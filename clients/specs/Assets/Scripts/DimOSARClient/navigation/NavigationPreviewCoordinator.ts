@@ -36,12 +36,15 @@ export class NavigationPreviewCoordinator {
     if (view.connection !== "ready") { this.reset(); return; }
     if (view.capabilities?.navigation.nav_goal.preview !== true) { this.clear(); return; }
     const costmap = view.state?.nav_preview_costmap_ts ?? null;
-    if (origin !== this.origin || costmap !== this.costmap) {
+    if (origin !== this.origin) {
       this.generation++;
-      if (origin !== this.origin) this.path = null;
+      this.path = null;
       this.queued = true;
       if (this.desired) this.desired = { ...this.desired, generation: this.generation };
     }
+    // Costmaps keep changing while driving. Refresh the advisory route without
+    // starving replies for the same aim/origin behind an endless generation gap.
+    if (costmap !== this.costmap) this.queued = true;
     this.origin = origin;
     this.costmap = costmap;
     const response = view.nav_preview;

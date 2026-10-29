@@ -112,6 +112,22 @@ class LocalizationStartRequest:
 
 
 @dataclass(frozen=True)
+class LocalizationTracking:
+    tracking_reference_id: str
+    travel_m: float
+    active: bool
+    alignment_id: str | None = None
+
+
+@dataclass(frozen=True)
+class LocalizationCaptureProgress:
+    episode_id: str
+    phase: str
+    travel_m: float
+    capture_ts: float | None = None
+
+
+@dataclass(frozen=True)
 class LidarSettingsRequest(LidarSettings):
     pass
 
@@ -140,6 +156,8 @@ Inbound = (
     | LidarSettingsRequest
     | StateRequest
     | LocalizationStartRequest
+    | LocalizationTracking
+    | LocalizationCaptureProgress
     | UserMessageRequest
     | ClientPose
 )
@@ -201,6 +219,40 @@ def decode_inbound(text: str) -> Inbound:
 
     if msg_type == "localization_start_request":
         return LocalizationStartRequest()
+
+    if msg_type == "localization_tracking":
+        reference = _require_type(data, "tracking_reference_id", str)
+        alignment = data.get("alignment_id")
+        if not 1 <= len(reference) <= 128:
+            raise ValueError("invalid tracking_reference_id")
+        if alignment is not None and (
+            not isinstance(alignment, str) or not 1 <= len(alignment) <= 128
+        ):
+            raise ValueError("invalid alignment_id")
+        travel = _finite_float(data, "travel_m")
+        if travel < 0:
+            raise ValueError("travel_m must be nonnegative")
+        return LocalizationTracking(
+            reference, travel, _require_type(data, "active", bool), alignment
+        )
+
+    if msg_type == "localization_capture_progress":
+        episode = _require_type(data, "episode_id", str)
+        phase = _require_type(data, "phase", str)
+        if not 1 <= len(episode) <= 128 or phase not in (
+            "waiting",
+            "capturing",
+            "submitted",
+            "unavailable",
+        ):
+            raise ValueError("invalid localization capture progress")
+        travel = _finite_float(data, "travel_m")
+        if travel < 0:
+            raise ValueError("travel_m must be nonnegative")
+        timestamp = _finite_float(data, "capture_ts") if "capture_ts" in data else None
+        if phase == "submitted" and timestamp is None:
+            raise ValueError("submitted progress requires capture_ts")
+        return LocalizationCaptureProgress(episode, phase, travel, timestamp)
 
     if msg_type == "user_message_request":
         text = _require_type(data, "text", str)

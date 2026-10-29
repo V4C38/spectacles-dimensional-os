@@ -42,6 +42,14 @@ export class SpecsCameraSource implements CameraTrackingSource, CameraCaptureSou
     }
   }
 
+  clearTracking(): void { this.poseBuffer.length = 0; }
+
+  trackingPosition(): Vec3 {
+    const latest = this.poseBuffer[this.poseBuffer.length - 1];
+    if (!latest || getTime() - latest.t > STALE_POSE_S) throw new Error("no current headset pose");
+    return specsWorldPoseToTracking(latest.position, latest.rotation).position;
+  }
+
   cameraOptical(): { position: Vec3; orientation: Quat } {
     if (this.poseBuffer.length === 0) {
       throw new Error("no camera pose sample");

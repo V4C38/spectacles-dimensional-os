@@ -96,6 +96,7 @@ export class ARModuleSession {
   private alignmentRequired = false;
   private retainedOrigin: { reference: string; origin: ClientTrackingOrigin } | null = null;
   private readonly localizationSubmission = new LocalizationSubmission();
+  private captureEpisodeId: string | null = null;
 
   constructor(deps: ARModuleSessionDependencies) {
     this.transport = deps.transport;
@@ -340,6 +341,24 @@ export class ARModuleSession {
         if (message.preview) this.nav_preview = message;
         else this.nav_goal = message;
         break;
+      case "localization_context":
+        if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
+        this.clientTrackingOriginStore.setMapContext(message, message.reset);
+        if (!this.clientTrackingOriginStore.hasTrackingOrigin) this.alignmentRequired = true;
+        break;
+      case "localization_map_transform":
+        if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
+        this.clientTrackingOriginStore.applyMapTransform(message);
+        break;
+      case "localization_status":
+        if (!this.clientTrackingOriginStore.acceptsContext(message)) return;
+        if (message.episode_id !== undefined) {
+          if (message.episode_id !== this.captureEpisodeId) return;
+          if (message.ts !== undefined && !this.localizationSubmission.accept(message.ts, this.clock.now())) return;
+          this.cancelLocalizationSubmission();
+          this.captureEpisodeId = null;
+        }
+        break;
       case "localization_result":
         if (!this.localizationSubmission.accept(message.ts, this.clock.now())) return;
         try {
@@ -351,6 +370,7 @@ export class ARModuleSession {
         }
         break;
       case "localization_observations_request":
+        this.captureEpisodeId = message.episode_id ?? null;
         this.cancelLocalizationSubmission();
         this.emitCaptureRequest(message);
         this.emitOutbound(message);
@@ -401,6 +421,7 @@ export class ARModuleSession {
   }
 
   private clearConnectionFacts(): void {
+    this.captureEpisodeId = null;
     this.localizationSubmission.reset();
     this.hello = null;
     this.state = null;

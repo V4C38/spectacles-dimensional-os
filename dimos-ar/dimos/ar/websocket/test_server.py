@@ -256,6 +256,7 @@ async def test_estop_is_processed_on_same_socket_while_localization_waits(
     stopped = threading.Event()
     callback_threads = []
     module = object.__new__(ARModule)
+    module._map_localization = None
     module._policy = LocalizationPolicy(["vps"])
     module._odometry = RobotOdometry(factor=1.0)
     module._replay_mode = False

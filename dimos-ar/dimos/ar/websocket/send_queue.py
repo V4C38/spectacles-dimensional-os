@@ -10,12 +10,12 @@ import time
 import websockets
 import websockets.asyncio.server as ws_server
 
+from dimos.ar.timing_diagnostics import TimingSummary
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
 
 OUTBOUND_FIFO_MAXSIZE = 64
-OUTBOUND_BACKLOG_LOG_INTERVAL_S = 5.0
 COALESCE_FRAME_TYPES = frozenset({"pose", "nav_goal", "state", "localization_result"})
 _FRAME_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
 
@@ -37,7 +37,10 @@ class ClientSendQueue:
         self._coalesce_latest_binary: bytes | None = None
         self._sequence = 0
         self._dropped_fifo_count = 0
-        self._last_backlog_log_mono = 0.0
+        self._reported_drops = 0
+        self._timing = TimingSummary(
+            "WebSocket outbound timing", connection_id=f"{id(websocket):x}"
+        )
         self._work_available = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._closed = False
@@ -126,9 +129,10 @@ class ClientSendQueue:
             await self._send_binary(data)
 
     async def _send_text(self, text: str) -> None:
+        started = time.monotonic()
         try:
             await self._websocket.send(text)
-            self._maybe_log_backlog()
+            self._record_send(started, binary=False)
         except websockets.ConnectionClosed:
             self._closed = True
         except (OSError, websockets.WebSocketException) as exc:
@@ -139,33 +143,32 @@ class ClientSendQueue:
             )
 
     async def _send_binary(self, data: bytes) -> None:
+        started = time.monotonic()
         try:
             await self._websocket.send(data)
-            self._maybe_log_backlog()
+            self._record_send(started, binary=True)
         except websockets.ConnectionClosed:
             self._closed = True
         except (OSError, websockets.WebSocketException) as exc:
             logger.warning("WebSocket outbound binary send failed", error=str(exc))
 
-    def _maybe_log_backlog(self) -> None:
-        now = time.monotonic()
-        if now - self._last_backlog_log_mono < OUTBOUND_BACKLOG_LOG_INTERVAL_S:
-            return
-        fifo_depth = self._queue.qsize()
-        coalesce_depth = len(self._coalesce_latest)
-        has_binary = self._coalesce_latest_binary is not None
-        if (
-            fifo_depth == 0
-            and coalesce_depth == 0
-            and not has_binary
-            and self._dropped_fifo_count == 0
-        ):
-            return
-        self._last_backlog_log_mono = now
-        logger.info(
-            "WebSocket outbound backlog",
-            fifo_depth=fifo_depth,
-            coalesce_pending=coalesce_depth,
-            binary_pending=has_binary,
-            dropped_fifo=self._dropped_fifo_count,
+    def _record_send(self, started: float, *, binary: bool) -> None:
+        # send() duration includes transport backpressure and event-loop stalls;
+        # it does not measure delivery to, or consumption by, the headset.
+        duration_ms = (time.monotonic() - started) * 1000
+        dropped = self._dropped_fifo_count - self._reported_drops
+        self._reported_drops = self._dropped_fifo_count
+        self._timing.record(
+            counts={
+                "text_sends": int(not binary),
+                "binary_sends": int(binary),
+                "slow_sends": int(duration_ms >= 100),
+                "dropped_fifo": dropped,
+            },
+            maxima={
+                "send_max_ms": duration_ms,
+                "fifo_depth_max": float(self._queue.qsize()),
+                "coalesce_pending_max": float(len(self._coalesce_latest)),
+                "binary_pending_max": float(self._coalesce_latest_binary is not None),
+            },
         )

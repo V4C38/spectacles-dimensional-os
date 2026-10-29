@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import struct
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
 
+from dimos.ar import timing_diagnostics
 from dimos.ar.robot.state_publisher import RobotStatePublisher
 from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.ar.websocket.protocol import LIDAR_FOURCC
@@ -35,6 +37,34 @@ class _FakePointCloud2:
 
     def points_f32(self) -> np.ndarray:
         return self._points
+
+
+def test_lidar_timing_measures_processing_without_extra_cloud_conversion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    monkeypatch.setattr(timing_diagnostics.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(timing_diagnostics.time, "time", lambda: 200.0)
+    logger = Mock()
+    monkeypatch.setattr(timing_diagnostics, "logger", logger)
+    publisher = _publisher(_RecordingBroadcast(), lidar_max_hz=0)
+    cloud = _FakePointCloud2(np.array([[4.5, 8, 0.5]], dtype=np.float32), ts=199)
+    convert = Mock(wraps=cloud.points_f32)
+    monkeypatch.setattr(cloud, "points_f32", convert)
+
+    def downsample(*, voxel_size: float) -> _FakePointCloud2:
+        now[0] += 0.2
+        return cloud
+
+    monkeypatch.setattr(cloud, "voxel_downsample", downsample)
+    now[0] += 30
+    publisher.publish_lidar(cloud, lidar=LidarSettings(True, 0.1, 1.5, 5))
+    fields = logger.info.call_args.kwargs
+    assert fields["processing_max_ms"] == 200
+    assert fields["downsample_max_ms"] == 200
+    assert fields["source_age_max_ms"] == 1000
+    assert fields["output_points_max"] == 1
+    convert.assert_called_once()
 
 
 def _pose(x: float = 4.0, y: float = 8.0, z: float = 0.33) -> PoseStamped:

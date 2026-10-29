@@ -43,6 +43,8 @@ export interface ClientClock {
 }
 
 export interface CameraTrackingSource {
+  trackingPosition?(): Vec3;
+  clearTracking?(): void;
   cameraOptical(): { position: Vec3; orientation: Quat };
 }
 

@@ -289,6 +289,13 @@ export class UIPresenter extends BaseScriptComponent {
   }
   realign(): void {
     const deps = this.requireDeps();
+    if (this.setupCompleted && !this.isAlignmentReviewPending() &&
+        deps.session.view().connection === "ready" && deps.session.view().hasTrackingOrigin &&
+        deps.clientTrackingOriginStore.mapAlignment) {
+      deps.episode.requestCorrection();
+      this.closeMenu();
+      return;
+    }
     deps.speechController?.reset();
     deps.onModeChanged();
     deps.episode.reset();

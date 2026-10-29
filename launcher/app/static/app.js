@@ -44,7 +44,6 @@
   const restoreTagsBtn = $("restoreTagsBtn");
   const fiducialEnabled = $("fiducialEnabled");
   const vpsEnabled = $("vpsEnabled");
-  const mixedPolicyBox = $("mixedPolicyBox");
   const blueprintSelect = $("blueprintSelect");
   const blueprintInfo = $("blueprintInfo");
   const agentConfig = $("agentConfig");
@@ -181,8 +180,17 @@
     }, 400);
   }
 
+  const policyDefaults = { travel_threshold_m: 0.75, heading_threshold_deg: 30,
+    marker_preference_s: 1.5, headset_travel_threshold_m: 10 };
+  const policyInputs = Object.fromEntries(Object.keys(policyDefaults).map(key => [key, $(key)]));
+  Object.values(policyInputs).forEach(input => {
+    input.addEventListener("change", () => { if (input.reportValidity()) schedulePersist(); });
+    input.addEventListener("blur", () => { if (input.reportValidity()) schedulePersist(); });
+  });
+
   function settingsBody() {
     return {
+      ...Object.fromEntries(Object.entries(policyInputs).map(([key, input]) => [key, Number(input.value)])),
       openai_api_key: apiKey.value.trim() || null,
       multiset_client_id: multisetClientId.value.trim() || null,
       multiset_client_secret: multisetClientSecret.value.trim() || null,
@@ -196,6 +204,7 @@
   }
 
   async function saveSettings() {
+    if (Object.values(policyInputs).some(input => !input.reportValidity())) return;
     try {
       const res = await fetch("/api/settings", {
         method: "PUT",
@@ -216,6 +225,9 @@
   }
 
   function applySettingsPayload(data) {
+    Object.entries(policyInputs).forEach(([key, input]) => {
+      if (document.activeElement !== input && key in data) input.value = data[key] ?? policyDefaults[key];
+    });
     if (data.defaults?.mounts?.[0]) {
       Object.assign(DEFAULT_MOUNT, cloneMount(data.defaults.mounts[0]));
     }
@@ -251,6 +263,7 @@
 
   function setConfigLocked(locked) {
     configLocked = locked;
+    Object.values(policyInputs).forEach(input => { input.disabled = locked; });
     controlsCard.classList.toggle("locked", locked);
     document.querySelectorAll("[data-client]").forEach((btn) => {
       btn.disabled = locked;
@@ -270,7 +283,7 @@
     logLevel.disabled = locked;
     addTagBtn.disabled = locked;
     restoreTagsBtn.disabled = locked;
-    tagList.querySelectorAll("input, button, label").forEach((el) => {
+    tagList.querySelectorAll("input, button, select, label").forEach((el) => {
       el.disabled = locked;
     });
   }
@@ -391,12 +404,11 @@
     }
     tagList.replaceChildren();
     mounts.forEach((mount, index) => {
-      const card = document.createElement("details");
+      const card = document.createElement("div");
       card.className = "tag-card";
-      if (index === mounts.length - 1) card.open = true;
 
-      const summary = document.createElement("summary");
-      summary.className = "tag-summary";
+      const summary = document.createElement("div");
+      summary.className = "tag-header";
 
       const thumb = document.createElement("a");
       thumb.target = "_blank";
@@ -433,44 +445,58 @@
       const body = document.createElement("div");
       body.className = "tag-body";
 
-      const picker = document.createElement("div");
-      picker.className = "tag-picker";
+      const picker = document.createElement("select");
+      picker.className = "tag-selector";
+      picker.setAttribute("aria-label", `Select fiducial marker ${index + 1}`);
+      picker.disabled = configLocked;
       const used = usedMarkerIds(index);
       presetMarkerIds.forEach((presetId) => {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "tag-preset";
-        btn.dataset.markerId = String(presetId);
-        btn.setAttribute("aria-pressed", String(mount.marker_id === presetId));
-        btn.disabled = configLocked || (used.has(presetId) && mount.marker_id !== presetId);
-        const presetImg = document.createElement("img");
-        presetImg.src = `/api/apriltag/${presetId}.png`;
-        presetImg.alt = `ID ${presetId}`;
-        const presetLabel = document.createElement("span");
-        presetLabel.textContent = `ID ${presetId}`;
-        btn.append(presetImg, presetLabel);
-        btn.addEventListener("click", (ev) => {
-          ev.preventDefault();
-          if (configLocked) return;
-          if (!assignMarkerId(index, presetId)) return;
-          renderMountEditor();
-          schedulePersist();
-        });
-        picker.append(btn);
+        const option = document.createElement("option");
+        option.value = String(presetId);
+        option.textContent = `Fiducial marker ${presetId}`;
+        option.disabled = used.has(presetId) && mount.marker_id !== presetId;
+        picker.append(option);
       });
-
-      const uploadLabel = document.createElement("label");
-      uploadLabel.className = "tag-preset tag-upload";
-      const uploadText = document.createElement("span");
-      uploadText.textContent = "Upload PNG";
+      if (!isPresetId(mount.marker_id)) {
+        const uploaded = document.createElement("option");
+        uploaded.value = String(mount.marker_id);
+        uploaded.textContent = `Fiducial marker ${mount.marker_id} (uploaded)`;
+        picker.append(uploaded);
+      }
+      const uploadOption = document.createElement("option");
+      uploadOption.value = "upload";
+      uploadOption.textContent = "Upload PNG…";
+      picker.append(uploadOption);
+      picker.value = String(mount.marker_id);
       const uploadInput = makeFileInput(async (file) => {
+        const originalId = mounts[index]?.marker_id;
         const markerId = await decodeUploadedPng(file);
-        if (!assignMarkerId(index, markerId)) return;
+        const currentIndex = mounts.findIndex(item => item.marker_id === originalId);
+        if (configLocked || currentIndex < 0 || !assignMarkerId(currentIndex, markerId)) return;
         renderMountEditor();
         schedulePersist();
       });
-      uploadLabel.append(uploadInput, uploadText);
-      picker.append(uploadLabel);
+      picker.addEventListener("change", () => {
+        if (configLocked) { picker.value = String(mounts[index].marker_id); return; }
+        if (picker.value === "upload") {
+          picker.value = String(mounts[index].marker_id);
+          uploadInput.click();
+          return;
+        }
+        if (!assignMarkerId(index, Number(picker.value))) {
+          picker.value = String(mounts[index].marker_id);
+          return;
+        }
+        renderMountEditor();
+        schedulePersist();
+      });
+      metaWrap.append(picker, uploadInput);
+
+      const configuration = document.createElement("details");
+      configuration.className = "tag-config";
+      const configurationSummary = document.createElement("summary");
+      configurationSummary.className = "tag-config-summary";
+      configurationSummary.textContent = "Print size & placement";
 
       const grid = document.createElement("div");
       grid.className = "tag-grid";
@@ -507,20 +533,18 @@
       });
       footer.append(removeBtn);
 
-      body.append(picker, grid, footer);
-      card.append(summary, body);
+      body.append(grid, footer);
+      configuration.append(configurationSummary, body);
+      card.append(summary, configuration);
       tagList.append(card);
       syncThumb();
     });
   }
 
   function syncLocalizationPanels() {
+    $("markerPreferenceField").classList.toggle("hidden", !fiducialEnabled.checked);
     fiducialPanel.classList.toggle("hidden", !fiducialEnabled.checked);
     vpsPanel.classList.toggle("hidden", !vpsEnabled.checked);
-    mixedPolicyBox.classList.toggle(
-      "hidden",
-      !(fiducialEnabled.checked && vpsEnabled.checked)
-    );
   }
 
   function describeState(status) {

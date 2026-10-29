@@ -63,24 +63,33 @@ def test_pose_snapshot_is_independent_and_interpolates_capture_travel() -> None:
 
 
 @pytest.mark.parametrize("rotating", [False, True])
-def test_robot_capture_requires_bracketed_stillness_including_rotation(rotating: bool) -> None:
+def test_robot_capture_pairs_moving_pose_without_extrapolation(rotating: bool) -> None:
     history = PoseBuffer()
     buffer = RobotObservationBuffer(pose_buffer=history, T_base_camera_optical=np.eye(4))
     buffer.set_camera_info(_camera_info())
-    for index in range(10):
-        t = 9.5 + index * 0.1
-        history.push(_pose(t, yaw=(t - 9.5) if rotating else 0), ts_server=t)
-    # Missing the future endpoint must not be treated as proof of stillness.
+    history.push(_pose(9.95, x=0, yaw=0), ts_server=9.95)
     assert buffer.prepare_image(_image(10), ts_server=10, travel_m=0) is None
-    history.push(_pose(10.5, yaw=1 if rotating else 0), ts_server=10.5)
-    sample = buffer.prepare_image(_image(10), ts_server=10, travel_m=0)
-    assert (sample is None) is rotating
-    if sample is not None:
-        buffer.add_sample(sample)
-        assert buffer.newest(now_server=11) is not None
-        assert buffer.newest(now_server=12.01) is None
-        buffer.clear()
-        assert buffer.newest(now_server=11) is None
+    history.push(_pose(10.05, x=0.2, yaw=0.2 if rotating else 0), ts_server=10.05)
+    sample = buffer.prepare_image(_image(10), ts_server=10, travel_m=0.1)
+    assert sample is not None
+    assert sample.observation.camera_pose.x == pytest.approx(0.1)
+    assert sample.observation.camera_pose.orientation.z == pytest.approx(
+        math.sin(0.05) if rotating else 0
+    )
+    buffer.add_sample(sample)
+    assert buffer.newest(now_server=11) is sample
+    assert buffer.newest(now_server=12.01) is None
+    buffer.clear()
+    assert buffer.newest(now_server=11) is None
+
+
+def test_robot_capture_rejects_pose_brackets_over_200ms() -> None:
+    history = PoseBuffer()
+    buffer = RobotObservationBuffer(pose_buffer=history, T_base_camera_optical=np.eye(4))
+    buffer.set_camera_info(_camera_info())
+    history.push(_pose(9.9), ts_server=9.9)
+    history.push(_pose(10.11, x=1), ts_server=10.11)
+    assert buffer.prepare_image(_image(10), ts_server=10, travel_m=0) is None
 
 
 async def test_cancelled_cpu_work_keeps_actual_worker_admission_bounded() -> None:

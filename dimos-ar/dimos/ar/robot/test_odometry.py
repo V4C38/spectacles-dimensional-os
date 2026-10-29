@@ -1,13 +1,33 @@
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import pytest
 
+from dimos.ar import timing_diagnostics
 from dimos.ar.robot.odometry import RobotOdometry, RobotSourceChangedError
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 
 def _pose(ts: float, x: float = 0, *, frame: str = "world") -> PoseStamped:
     return PoseStamped(ts=ts, frame_id=frame, position=[x, 0, 0.33], orientation=[0, 0, 0, 1])
+
+
+def test_timing_includes_rejected_stale_odom(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [100.0]
+    monkeypatch.setattr(timing_diagnostics.time, "monotonic", lambda: now[0])
+    logger = Mock()
+    monkeypatch.setattr(timing_diagnostics, "logger", logger)
+    odometry = RobotOdometry(factor=1)
+    assert odometry.accept(_pose(100), received_at=100) is not None
+    now[0] += 30
+    assert odometry.accept(_pose(127), received_at=130) is None
+    fields = logger.info.call_args.kwargs
+    assert fields["received"] == 2
+    assert fields["stale"] == 1
+    assert fields["source_age_max_ms"] == 3000
+    assert fields["arrival_gap_max_ms"] == 30000
+    assert odometry.latest().corrected.ts_server == 100
 
 
 def test_admission_rejects_duplicate_and_small_backward_updates_without_mutation() -> None:

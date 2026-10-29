@@ -11,6 +11,10 @@ import {
   type LocalizationObservations,
   type LocalizationObservationsRequest,
   type LocalizationResult,
+  type MapAlignment,
+  type MapContext,
+  type LocalizationMapTransform,
+  type LocalizationStatus,
   type NavGoal,
   type NavState,
   type Outbound,
@@ -207,6 +211,13 @@ export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
       return decodeLocalizationObservationsRequest(data);
     case "localization_result":
       return decodeLocalizationResult(data);
+    case "localization_context":
+      return { type: "localization_context", ...decodeMapContext(data),
+        ...(data.reset === undefined ? {} : { reset: requireBoolean(data, "reset") }) };
+    case "localization_map_transform":
+      return decodeMapTransform(data);
+    case "localization_status":
+      return decodeLocalizationStatus(data);
     case "pose":
       return decodePose(data);
     case "nav_goal":
@@ -602,7 +613,12 @@ function decodeLocalizationObservationsRequest(
   if (resultTimeoutS !== undefined && resultTimeoutS <= 0) {
     throw new Error("result_timeout_s must be finite and positive");
   }
-  const resultTimeout = resultTimeoutS === undefined ? {} : { result_timeout_s: resultTimeoutS };
+  const episode = data.episode_id === undefined ? {} : {
+    episode_id: boundedString(data, "episode_id"),
+    purpose: requireString(data, "purpose") as "robot" | "headset",
+  };
+  if ("purpose" in episode && episode.purpose !== "robot" && episode.purpose !== "headset") throw new Error("invalid capture purpose");
+  const resultTimeout = { ...episode, ...(resultTimeoutS === undefined ? {} : { result_timeout_s: resultTimeoutS }) };
   const hasTimeout = Object.prototype.hasOwnProperty.call(data, "wait_timeout_s");
   if (capturePolicy === "robot_los_preferred") {
     if (!hasTimeout) {
@@ -631,7 +647,45 @@ function decodeLocalizationObservationsRequest(
   };
 }
 
+function boundedString(data: Record<string, unknown>, key: string): string {
+  const value = requireString(data, key);
+  if (!value.length || value.length > 128) throw new Error(`invalid ${key}`);
+  return value;
+}
+function decodeMapContext(data: Record<string, unknown>): MapContext {
+  return { map_code: boundedString(data, "map_code"), odom_reference_id: boundedString(data, "odom_reference_id") };
+}
+function mapPose(data: Record<string, unknown>) {
+  const confidence = finiteField(data, "confidence");
+  if (confidence < 0 || confidence > 1) throw new Error("invalid map confidence");
+  return { position: requireVec3(data, "position"), orientation: requireQuat(data, "orientation"), confidence, ts: finiteField(data, "ts") };
+}
+function decodeMapTransform(data: Record<string, unknown>): LocalizationMapTransform {
+  const revision = requireInteger(data, "revision");
+  if (revision < 0) throw new Error("invalid map revision");
+  return { type: "localization_map_transform", ...decodeMapContext(data), ...mapPose(data), revision };
+}
+function decodeMapAlignment(data: Record<string, unknown>): MapAlignment {
+  const travel = finiteField(data, "travel_m");
+  if (travel < 0) throw new Error("invalid alignment travel");
+  return { ...decodeMapContext(data), ...mapPose(data), id: boundedString(data, "id"),
+    tracking_reference_id: boundedString(data, "tracking_reference_id"), travel_m: travel };
+}
+function decodeLocalizationStatus(data: Record<string, unknown>): LocalizationStatus {
+  const scope = requireString(data, "scope"), status = requireString(data, "status");
+  if (scope !== "robot" && scope !== "headset") throw new Error("invalid localization scope");
+  if (status !== "succeeded" && status !== "failed" && status !== "deferred") throw new Error("invalid localization status");
+  const retry = data.retry_after_s === undefined ? undefined : finiteField(data, "retry_after_s");
+  if (retry !== undefined && retry < 0) throw new Error("invalid retry delay");
+  return { type: "localization_status", ...decodeMapContext(data), scope, status,
+    ...(retry === undefined ? {} : { retry_after_s: retry }),
+    reason: requireString(data, "reason"),
+    ...(data.episode_id === undefined ? {} : { episode_id: boundedString(data, "episode_id") }),
+    ...(data.ts === undefined ? {} : { ts: finiteField(data, "ts") }) };
+}
+
 function decodeLocalizationResult(data: Record<string, unknown>): LocalizationResult {
+  if ((data.map_alignment === undefined) !== (data.map_transform === undefined)) throw new Error("Map alignment requires its transform snapshot");
   // Rigid metric T_odom_client. The server corrects robot odometry before
   // localization; measured client positions and marker mounts are never scaled.
   const confidence = finiteField(data, "confidence");
@@ -640,6 +694,10 @@ function decodeLocalizationResult(data: Record<string, unknown>): LocalizationRe
   }
   return {
     type: "localization_result",
+    ...(data.map_alignment === undefined ? {} : {
+      map_alignment: decodeMapAlignment(asObject(data.map_alignment, "map_alignment")),
+      map_transform: decodeMapTransform(asObject(data.map_transform, "map_transform")),
+    }),
     position: requireVec3(data, "position"),
     orientation: requireQuat(data, "orientation"),
     confidence,

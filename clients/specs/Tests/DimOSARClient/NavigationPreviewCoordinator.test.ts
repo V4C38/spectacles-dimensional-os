@@ -28,12 +28,12 @@ it("retires timeouts, rejects late replies and only accepts the newest correlate
   f.coordinator.clear(); expect(f.coordinator.previewPath()).toBeNull();
 });
 
-it("invalidates costmap and origin generations, suppresses stale aim episodes and resets on disconnect", () => {
+it("refreshes costmaps without rejecting replies, invalidates origin changes and resets on disconnect", () => {
   const f = fixture(); f.aim(); f.coordinator.tick(0); const old = f.id();
   f.coordinator.clear(); f.aim(5); f.reply(old); expect(f.coordinator.previewPath()).toBeNull();
   f.coordinator.tick(0.5); const pending = f.id();
   f.view.state = { nav_preview_costmap_ts: 2 } as ARModuleSessionState["state"];
-  f.coordinator.apply(f.origin); f.reply(pending); expect(f.coordinator.previewPath()).toBeNull();
+  f.coordinator.apply(f.origin); f.reply(pending); expect(f.coordinator.previewPath()).toEqual([[3, 2, 0, 0]]);
   f.coordinator.tick(1); const beforeOrigin = f.id();
   f.coordinator.apply({ ...f.origin, ts: 2 }); f.reply(beforeOrigin); expect(f.coordinator.previewPath()).toBeNull();
   f.view.connection = "disconnected"; f.coordinator.apply(null);
@@ -59,7 +59,7 @@ it("retains a successful route while newer aims and costmaps are pending, but cl
   f.coordinator.tick(0.8);
   f.view.state = { nav_preview_costmap_ts: 3 } as ARModuleSessionState["state"];
   f.coordinator.apply(f.origin); expect(f.coordinator.previewPath()).toBe(path);
-  f.reply(f.id()); expect(f.coordinator.previewPath()).toBe(path);
+  f.reply(f.id()); expect(f.coordinator.previewPath()).toBe(f.view.nav_preview!.path_poses);
   f.coordinator.tick(1.2); const current = f.id();
   f.view.nav_preview = { type: "nav_goal", preview: true, preview_id: current, pose: null, path_poses: [], ts: 3 };
   f.coordinator.apply(f.origin); expect(f.coordinator.previewPath()).toEqual([]);
@@ -74,4 +74,16 @@ it("clears retained previews immediately on origin change and capability loss", 
   f.coordinator.apply(f.origin); f.aim(); f.coordinator.tick(0.5); f.reply(f.id());
   f.view.capabilities!.navigation.nav_goal.preview = false;
   f.coordinator.apply(f.origin); expect(f.coordinator.previewPath()).toBeNull();
+});
+
+it("continues displaying replies while costmaps change on every update", () => {
+  const f = fixture(); f.aim();
+  for (let i = 0; i < 10; i++) {
+    f.coordinator.tick(i * 0.5);
+    expect(f.sendText).toHaveBeenCalledTimes(i + 1);
+    f.view.state = { nav_preview_costmap_ts: i + 1 } as ARModuleSessionState["state"];
+    f.coordinator.apply(f.origin);
+    f.reply(f.id());
+    expect(f.coordinator.previewPath()).toBe(f.view.nav_preview!.path_poses);
+  }
 });

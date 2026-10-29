@@ -12,6 +12,7 @@ from dimos.ar.sensors.lidar_filter import (
     prepare_lidar_points,
 )
 from dimos.ar.sensors.lidar_settings import LidarSettings
+from dimos.ar.timing_diagnostics import TimingSummary
 from dimos.ar.websocket.protocol import encode_lidar_binary, encode_pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
@@ -52,6 +53,7 @@ class RobotStatePublisher:
         self._robot_position = robot_position
         self._pose_last_emit_mono = 0.0
         self._lidar_last_emit_mono = 0.0
+        self._lidar_timing = TimingSummary("robot lidar processing timing")
 
     def publish_odom(self, msg: PoseStamped) -> None:
         if not self._allow_emit(self._pose_last_emit_mono, self._pose_max_hz):
@@ -83,8 +85,12 @@ class RobotStatePublisher:
         robot_position = self._robot_position()
         if robot_position is None:
             return
+        started = time.monotonic()
+        source_age_ms = (time.time() - msg.ts) * 1000
         downsampled = msg.voxel_downsample(voxel_size=self._lidar_voxel_size_m)
         points = downsampled.points_f32()
+        downsampled_count = len(points)
+        downsampled_at = time.monotonic()
         settings = LidarFilterSettings.from_lidar_settings(
             lidar,
             target_points=self._lidar_target_points,
@@ -101,6 +107,18 @@ class RobotStatePublisher:
         self._lidar_last_emit_mono = time.monotonic()
         self._ws.schedule_broadcast_binary(
             encode_lidar_binary(ts=msg.ts, points=points),
+        )
+        processing_ms = (time.monotonic() - started) * 1000
+        self._lidar_timing.record(
+            counts={"processed": 1, "slow_processing": int(processing_ms >= 100)},
+            maxima={
+                "processing_max_ms": processing_ms,
+                "downsample_max_ms": (downsampled_at - started) * 1000,
+                "source_age_max_ms": source_age_ms,
+                "input_points_max": float(getattr(msg, "width", 0) * getattr(msg, "height", 0)),
+                "downsampled_points_max": float(downsampled_count),
+                "output_points_max": float(len(points)),
+            },
         )
 
     def _allow_emit(self, last_emit_mono: float, max_hz: float) -> bool:

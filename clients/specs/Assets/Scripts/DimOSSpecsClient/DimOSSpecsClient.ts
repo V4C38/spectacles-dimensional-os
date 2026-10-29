@@ -1,3 +1,4 @@
+import { applyLocalizationNotification } from "./../DimOSARClient/presentation/NotificationCenter";
 import { RobotSelection } from "../DimOSARClient/robot/RobotSelection";
 import { SpecsNavigationInput } from "./navigation/SpecsNavigationInput";
 import { SpecsNavigationTargetPriority } from "./navigation/SpecsNavigationTargetPriority";
@@ -317,6 +318,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       markerPrefab: this.ARMarkerPrefab,
     });
     this.unsubscribeOutbound = session.subscribeOutbound((message) => {
+      if (this.notifications) applyLocalizationNotification(message, this.notifications);
       if (message.type !== "agent_skill") {
         return;
       }

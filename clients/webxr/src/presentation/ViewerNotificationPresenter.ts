@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { Text } from "troika-three-text";
 import { VIEWER_NOTIFICATION_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
-import { NotificationCenter, type ClientNotification } from "@dimos-ar-client/presentation/NotificationCenter";
+import { NotificationCenter, notificationGlyph, type ClientNotification } from "@dimos-ar-client/presentation/NotificationCenter";
 import { GlassSurface } from "./GlassSurface";
 import { syncText, UI_FONT_REGULAR } from "./UIFonts";
 import { disposeTextResources } from "./TextResources";
@@ -13,19 +13,23 @@ export class ViewerNotificationPresenter {
   readonly center = new NotificationCenter();
   private readonly plate = new GlassSurface({ width: 0.30, height: 0.065, radius: 0.0325, tint: "#202022", alpha: 0.94 });
   private readonly text = new Text();
-  private readonly ring = new THREE.Mesh(new THREE.RingGeometry(0.012, 0.015, 64), new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false }));
-  private readonly strokes = [0, 1].map(() => new THREE.Mesh(new THREE.PlaneGeometry(1, 0.003), new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false })));
+  private readonly glyphGeometry = new THREE.BufferGeometry();
+  private readonly glyphPositions = new Float32Array(64 * 6 * 3);
+  private readonly glyphMesh = new THREE.Mesh(this.glyphGeometry,
+    new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide }));
   private revision = -1;
   private readonly target = new THREE.Vector3();
   private readonly rotation = new THREE.Quaternion();
   private readonly angles = new THREE.Euler(0, 0, 0, "YXZ");
   constructor() {
     this.object.name = "Viewer notification";
-    this.object.add(this.plate, this.text, this.ring, ...this.strokes);
+    this.object.add(this.plate, this.text, this.glyphMesh);
+    this.glyphGeometry.setAttribute("position", new THREE.BufferAttribute(this.glyphPositions, 3));
+    this.glyphMesh.frustumCulled = false;
     this.text.font = UI_FONT_REGULAR; this.text.fontSize = 0.017;
     this.text.anchorX = "left"; this.text.anchorY = "middle"; this.text.color = 0xffffff;
     this.text.position.set(-0.087, 0, 0.006); this.text.maxWidth = 0.22;
-    this.ring.position.set(-0.116, 0, 0.009);
+    this.glyphMesh.position.set(-0.116, 0, 0.009);
     this.object.traverse(node => {
       node.raycast = () => {}; node.renderOrder = 1000;
       if (node instanceof THREE.Mesh) for (const material of Array.isArray(node.material) ? node.material : [node.material]) { material.depthTest = material.depthWrite = false; }
@@ -33,6 +37,7 @@ export class ViewerNotificationPresenter {
     this.object.visible = false;
   }
   show(notification: ViewerNotification): void { this.center.show(notification); this.object.visible = true; }
+  clear(key: string): void { this.center.clear(key); }
   tick(position: readonly number[], orientation: readonly number[], projectionY: number, deltaS: number): void {
     this.center.tick(deltaS);
     const state = this.center.snapshot(), current = state.notification;
@@ -60,24 +65,24 @@ export class ViewerNotificationPresenter {
     this.plate.setOpacity(opacity);
     for (const material of Array.isArray(this.text.material) ? this.text.material : [this.text.material]) material.opacity = opacity;
     this.object.scale.setScalar(0.9 + 0.1 * opacity);
-    const color = current.tone === "success" ? 0x30d158 : current.tone === "danger" ? 0xff453a : 0xffffff;
-    this.ring.visible = current.glyph === "stop";
-    this.ring.geometry.setDrawRange(0, Math.floor(Math.min(1, elapsed / 0.18) * 64) * 6);
-    this.ring.material.color.setHex(color); this.ring.material.opacity = opacity;
-    const segments = current.glyph === "stop" ? [[-0.010, 0.010, 0.010, -0.010]] : current.glyph === "check" ? [[-0.012, 0, -0.003, -0.009], [-0.003, -0.009, 0.014, 0.012]] : [[-0.011, -0.011, 0.011, 0.011], [-0.011, 0.011, 0.011, -0.011]];
-    this.strokes.forEach((stroke, i) => {
-      stroke.visible = !!current.glyph && i < segments.length;
-      if (!stroke.visible) return;
-      const [x, y, ex, ey] = segments[i];
-      const progress = THREE.MathUtils.clamp(current.glyph === "stop" ? (elapsed - 0.18) / 0.12 : elapsed / 0.125 - i, 0, 1);
-      stroke.scale.x = Math.hypot(ex - x, ey - y) * progress;
-      stroke.rotation.z = Math.atan2(ey - y, ex - x);
-      stroke.position.set(-0.116 + x + (ex - x) * progress / 2, y + (ey - y) * progress / 2, 0.009);
-      stroke.material.color.setHex(color); stroke.material.opacity = opacity;
-    });
+    const color = current.tone === "warning" ? 0xffd60a : current.tone === "success" ? 0x30d158 : current.tone === "danger" ? 0xff453a : 0xffffff;
+    let offset = 0;
+    for (const [x, y, ex, ey] of notificationGlyph(current.glyph, elapsed)) {
+      const length = Math.hypot(ex - x, ey - y);
+      if (length < 0.00001) continue;
+      const dx = -(ey - y) / length * 0.11, dy = (ex - x) / length * 0.11;
+      for (const [px, py] of [[x + dx, y + dy], [x - dx, y - dy], [ex + dx, ey + dy],
+        [ex + dx, ey + dy], [x - dx, y - dy], [ex - dx, ey - dy]]) {
+        this.glyphPositions[offset++] = px * 0.01; this.glyphPositions[offset++] = py * 0.01; this.glyphPositions[offset++] = 0;
+      }
+    }
+    this.glyphGeometry.attributes.position.needsUpdate = true;
+    this.glyphGeometry.setDrawRange(0, offset / 3);
+    this.glyphMesh.material.color.setHex(color); this.glyphMesh.material.opacity = opacity;
   }
+
   dispose(): void {
     this.object.removeFromParent(); this.plate.dispose(); disposeTextResources(this.text);
-    for (const mesh of [this.ring, ...this.strokes]) { mesh.geometry.dispose(); mesh.material.dispose(); }
+    this.glyphGeometry.dispose(); this.glyphMesh.material.dispose();
   }
 }

@@ -150,6 +150,12 @@ export class HmdCameraSource implements CameraTrackingSource, CameraCaptureSourc
   // Stream start/stop belongs to the capture episode; tracking invalidation only retires poses.
   clearTracking(): void { this.poseBuffer.length = 0; this.staleCaptures = 0; }
 
+  trackingPosition(): Vec3 {
+    const latest = this.poseBuffer[this.poseBuffer.length - 1];
+    if (!latest || this.clock.now() - latest.t > STALE_POSE_S) throw new Error("no current viewer pose");
+    return webxrOpticalToClientTrackingPose(latest).position;
+  }
+
   cameraOptical(): { position: Vec3; orientation: Quat } {
     const latest = this.poseBuffer[this.poseBuffer.length - 1];
     if (!latest || this.clock.now() - latest.t > STALE_POSE_S) throw new Error("no current viewer pose");

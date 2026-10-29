@@ -4,6 +4,7 @@ from collections import deque
 from dataclasses import dataclass, replace
 from itertools import pairwise
 import math
+import statistics
 import threading
 
 import numpy as np
@@ -84,6 +85,32 @@ class PoseBuffer:
             result._samples.extend(self._samples)
             result._latest = self._latest
         return result
+
+    def timing_diagnostics(self) -> dict[str, float]:
+        with self._lock:
+            times = [sample.ts_server for sample in self._samples]
+        gaps = sorted(b - a for a, b in pairwise(times) if b > a)
+        if not gaps:
+            return {}
+        return {
+            "odom_hz": round(1 / statistics.median(gaps), 2),
+            "odom_gap_p95_ms": round(gaps[int((len(gaps) - 1) * 0.95)] * 1000, 2),
+            "odom_gap_max_ms": round(gaps[-1] * 1000, 2),
+        }
+
+    def at_image_ts(self, timestamp: float) -> PoseSample | None:
+        """Pair moving-camera pixels with a strict, at-most-200ms pose bracket."""
+        with self._lock:
+            samples = tuple(self._samples)
+        for sample in samples:
+            if sample.ts_server == timestamp:
+                return sample
+        for before, after in pairwise(samples):
+            if before.ts_server < timestamp < after.ts_server:
+                if after.ts_server - before.ts_server > 0.2:
+                    return None
+                return _interpolate(deque((before, after)), timestamp, max_gap_s=0.2)
+        return None
 
     def is_static_window(
         self, start: float, end: float, *, max_speed_mps: float, max_angular_rps: float
@@ -228,7 +255,14 @@ def _interpolate(
     after_quat = np.asarray(after.orientation, dtype=np.float64)
     if float(np.dot(before_quat, after_quat)) < 0.0:
         after_quat = -after_quat
-    quat = before_quat + alpha * (after_quat - before_quat)
+    dot = float(np.clip(np.dot(before_quat, after_quat), -1.0, 1.0))
+    if dot > 0.9995:
+        quat = before_quat + alpha * (after_quat - before_quat)
+    else:
+        angle = math.acos(dot)
+        quat = (
+            math.sin((1.0 - alpha) * angle) * before_quat + math.sin(alpha * angle) * after_quat
+        ) / math.sin(angle)
     quat_norm = float(np.linalg.norm(quat))
     if quat_norm < 1e-12:
         quat_out = before.orientation

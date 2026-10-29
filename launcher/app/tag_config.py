@@ -5,6 +5,13 @@ from __future__ import annotations
 import math
 from typing import Any
 
+LOCALIZATION_POLICY_DEFAULTS = {
+    "travel_threshold_m": 0.75,
+    "heading_threshold_deg": 30.0,
+    "marker_preference_s": 1.5,
+    "headset_travel_threshold_m": 10.0,
+}
+
 DEFAULT_PRINT_SIZE_MM = 70.0
 _BLACK_FRACTION = 8.0 / 10.0
 
@@ -29,7 +36,9 @@ def print_mm_from_black_size_m(size_m: float) -> float:
     return (float(size_m) / _BLACK_FRACTION) * 1000.0
 
 
-def yaw_pitch_to_quat(yaw_deg: float, pitch_deg: float) -> tuple[float, float, float, float]:
+def yaw_pitch_to_quat(
+    yaw_deg: float, pitch_deg: float
+) -> tuple[float, float, float, float]:
     """Match Go2 profile convention: R = RotY(pitch) * RotZ(yaw), scipy (x,y,z,w)."""
     yaw = math.radians(yaw_deg)
     pitch = math.radians(pitch_deg)
@@ -44,7 +53,9 @@ def yaw_pitch_to_quat(yaw_deg: float, pitch_deg: float) -> tuple[float, float, f
     return (x, y, z, w)
 
 
-def quat_to_yaw_pitch(orientation: list[float] | tuple[float, ...]) -> tuple[float, float]:
+def quat_to_yaw_pitch(
+    orientation: list[float] | tuple[float, ...],
+) -> tuple[float, float]:
     x, y, z, w = (float(v) for v in orientation)
     r10 = 2.0 * (x * y + z * w)
     r11 = 1.0 - 2.0 * (x * x + z * z)
@@ -57,7 +68,9 @@ def quat_to_yaw_pitch(orientation: list[float] | tuple[float, ...]) -> tuple[flo
 
 def normalize_ui_mount(raw: dict[str, Any] | None) -> dict[str, Any]:
     source = raw or DEFAULT_MOUNT
-    marker_id = source.get("marker_id", source.get("tag_id", DEFAULT_MOUNT["marker_id"]))
+    marker_id = source.get(
+        "marker_id", source.get("tag_id", DEFAULT_MOUNT["marker_id"])
+    )
     print_size_mm = float(source.get("print_size_mm", DEFAULT_PRINT_SIZE_MM))
     if print_size_mm <= 0:
         raise ValueError("print_size_mm must be positive")
@@ -196,6 +209,10 @@ def ui_from_armodule_config(armodule: dict[str, Any] | None) -> dict[str, Any]:
     if not mounts:
         mounts = [normalize_ui_mount(DEFAULT_MOUNT)]
     return {
+        **{
+            key: (section.get("localization") or {}).get(key, default)
+            for key, default in LOCALIZATION_POLICY_DEFAULTS.items()
+        },
         "fiducial_marker": fiducial_marker,
         "vps": vps,
         "vps_vendor": "multiset",

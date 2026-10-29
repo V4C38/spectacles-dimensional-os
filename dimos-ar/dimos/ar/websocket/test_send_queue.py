@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from unittest.mock import Mock
 
 import pytest
 
+from dimos.ar import timing_diagnostics
 from dimos.ar.websocket.send_queue import (
     OUTBOUND_FIFO_MAXSIZE,
     ClientSendQueue,
@@ -25,6 +27,34 @@ class _FakeWebSocket:
             self.sent_binary.append(payload)
         else:
             self.sent_text.append(payload)
+
+
+@pytest.mark.asyncio
+async def test_send_timing_reports_backpressure_and_window_drops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    monkeypatch.setattr(timing_diagnostics.time, "monotonic", lambda: now[0])
+    logger = Mock()
+    monkeypatch.setattr(timing_diagnostics, "logger", logger)
+
+    class SlowWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            now[0] += 0.25
+            await super().send(payload)
+
+    outbound = ClientSendQueue(SlowWebSocket())
+    for _ in range(OUTBOUND_FIFO_MAXSIZE + 5):
+        outbound.enqueue('{"type":"hello"}\n')
+    now[0] += 30
+    await outbound._send_text("test")
+    fields = logger.info.call_args.kwargs
+    assert fields["send_max_ms"] == 250
+    assert fields["slow_sends"] == 1
+    assert fields["dropped_fifo"] == 5
+    now[0] += 30
+    await outbound._send_binary(b"test")
+    assert logger.info.call_args.kwargs["dropped_fifo"] == 0
 
 
 def _messages_from_sent(sent: list[str]) -> list[dict]:

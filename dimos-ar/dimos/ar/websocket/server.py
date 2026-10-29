@@ -23,8 +23,10 @@ from dimos.ar.websocket.protocol import (
     HelloBody,
     Inbound,
     LidarSettingsRequest,
+    LocalizationCaptureProgress,
     LocalizationObservation,
     LocalizationStartRequest,
+    LocalizationTracking,
     StateRequest,
     TimeSync,
     UserMessageRequest,
@@ -96,6 +98,10 @@ class WebSocketServer:
         on_client_pose: ClientPoseHandler | None = None,
         on_nav_joystick_request: NavJoystickRequestHandler | None = None,
         on_disconnect: DisconnectHandler | None = None,
+        on_localization_progress: Callable[
+            [LocalizationTracking | LocalizationCaptureProgress, str, TimeSync], None
+        ]
+        | None = None,
     ) -> None:
         self._relay_url = relay_url
         self._port = port
@@ -112,6 +118,7 @@ class WebSocketServer:
         self._on_user_message_request = on_user_message_request
         self._on_client_pose = on_client_pose
         self._on_nav_joystick_request = on_nav_joystick_request
+        self._on_localization_progress = on_localization_progress
         self._on_disconnect = on_disconnect
 
         self._stop_event: asyncio.Event | None = None
@@ -336,6 +343,10 @@ class WebSocketServer:
         if isinstance(inbound, LocalizationStartRequest):
             if self._on_localization_start_request is not None:
                 self._on_localization_start_request(inbound, client_id)
+            return
+        if isinstance(inbound, (LocalizationTracking, LocalizationCaptureProgress)):
+            if self._on_localization_progress is not None:
+                self._on_localization_progress(inbound, client_id, self._time_sync[websocket])
             return
         if isinstance(inbound, UserMessageRequest):
             if self._on_user_message_request is not None:

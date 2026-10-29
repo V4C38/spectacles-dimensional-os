@@ -19,10 +19,12 @@ from dimos.ar.localization.coordinator import (
     LocalizationOutcome,
 )
 from dimos.ar.localization.fiducial_marker.localizer import FiducialMarkerLocalizer
+from dimos.ar.localization.map_localization import MapLocalization
 from dimos.ar.localization.odom_map_transform import OdomMapTransform, OdomMapTransformConfig
 from dimos.ar.localization.policy import EpisodeWork, LocalizationPolicy
 from dimos.ar.localization.runner import EPISODE_TIMEOUT_S, RESULT_TIMEOUT_S, LocalizationRunner
 from dimos.ar.localization.types import LocalizationProviderType, SnapshotLocalizer
+from dimos.ar.localization.vps.admission import VpsAdmission
 from dimos.ar.localization.vps.localizer import VpsLocalizer
 from dimos.ar.localization.vps.multiset_client import MultisetVpsClient, MultisetVpsClientConfig
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
@@ -57,9 +59,11 @@ from dimos.ar.websocket.protocol import (
     EstopRequest,
     HelloBody,
     LidarSettingsRequest,
+    LocalizationCaptureProgress,
     LocalizationObservation,
     LocalizationObservationsRequest,
     LocalizationStartRequest,
+    LocalizationTracking,
     StateRequest,
     StateSnapshot,
     TimeSync,
@@ -97,6 +101,10 @@ class LocalizationProviderConfig(BaseModel):
 
 class LocalizationConfig(BaseModel):
     providers: list[LocalizationProviderConfig] = Field(default_factory=list)
+    travel_threshold_m: float = Field(default=0.75, gt=0, allow_inf_nan=False)
+    heading_threshold_deg: float = Field(default=30.0, gt=0, le=180, allow_inf_nan=False)
+    marker_preference_s: float = Field(default=1.5, ge=0, allow_inf_nan=False)
+    headset_travel_threshold_m: float = Field(default=10.0, gt=0, allow_inf_nan=False)
     episode_timeout_s: float = Field(default=EPISODE_TIMEOUT_S, gt=0, allow_inf_nan=False)
     anchor_max_age_s: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     robot_timing_uncertainty_s: float = Field(default=0.5, ge=0, allow_inf_nan=False)
@@ -203,6 +211,11 @@ class ARModule(Module):  # type: ignore[misc]
         self._profile = profile_for_config(self.config)
         self._lidar_settings = DEFAULT_LIDAR_SETTINGS
         self._localization_worker = LocalizationWorker()
+        self._vps_admission = VpsAdmission()
+        self._pairing_log_at = 0.0
+        self._pairing_rejected = 0
+        self._pairing_accepted = 0
+        self._map_localization: MapLocalization | None = None
         self._replay_mode = (
             global_config.unitree_connection_type == "replay"
             or global_config.robot_ip in ("fake", "mock", "replay")
@@ -225,6 +238,7 @@ class ARModule(Module):  # type: ignore[misc]
             on_localization_observations=self._on_localization_observations,
             on_user_message_request=self._on_user_message_request,
             on_client_pose=self._on_client_pose,
+            on_localization_progress=self._on_localization_progress,
             on_nav_joystick_request=self._on_nav_joystick_request,
             on_disconnect=self._on_client_disconnect,
         )
@@ -250,6 +264,9 @@ class ARModule(Module):  # type: ignore[misc]
         self._policy = LocalizationPolicy(
             [provider.type for provider in self.config.localization.providers],
             travel=self._odometry.travel,
+            travel_threshold_m=self.config.localization.travel_threshold_m,
+            heading_threshold_deg=self.config.localization.heading_threshold_deg,
+            heading=self._robot_heading,
         )
         self._robot_observations = RobotObservationBuffer(
             pose_buffer=self._odometry.history,
@@ -277,13 +294,12 @@ class ARModule(Module):  # type: ignore[misc]
             estop_available=self._capabilities.supports(CapabilityName.ESTOP),
             effects=(self._clear_navigation, self._publish_stop),
         )
+        transforms = OdomMapTransform(
+            config=OdomMapTransformConfig(max_age_s=self.config.localization.anchor_max_age_s)
+        )
         self._coordinator = LocalizationCoordinator(
             policy=self._policy,
-            odom_map_transform=OdomMapTransform(
-                config=OdomMapTransformConfig(
-                    max_age_s=self.config.localization.anchor_max_age_s,
-                )
-            ),
+            odom_map_transform=transforms,
             robot_observations=self._robot_observations,
             marker=marker,
             vps=vps,
@@ -291,9 +307,27 @@ class ARModule(Module):  # type: ignore[misc]
             worker=self._localization_worker,
             source_generation=lambda: self._odometry.generation,
         )
+        if vps is not None and map_code is not None:
+            self._map_localization = MapLocalization(
+                odometry=self._odometry,
+                transforms=transforms,
+                robot_images=self._robot_observations,
+                marker=marker,
+                vps=vps,
+                worker=self._localization_worker,
+                admission=self._vps_admission,
+                map_code=map_code,
+                send=self._ws_server.schedule_send_to_client,
+                travel_threshold_m=self.config.localization.travel_threshold_m,
+                heading_threshold_deg=self.config.localization.heading_threshold_deg,
+                marker_preference_s=self.config.localization.marker_preference_s,
+                headset_travel_threshold_m=self.config.localization.headset_travel_threshold_m,
+                timeout_s=self.config.localization.episode_timeout_s,
+            )
         self._localization_runner = LocalizationRunner(
             coordinator=self._coordinator,
             policy=self._policy,
+            map_localization=self._map_localization,
             on_outcome=self._complete_localization,
             on_prompt=self._send_observations_request,
             timeout_s=self.config.localization.episode_timeout_s,
@@ -332,7 +366,8 @@ class ARModule(Module):  # type: ignore[misc]
                         MultisetVpsClientConfig(
                             map_code=provider.map_code,
                             timeout_s=self.config.localization.episode_timeout_s,
-                        )
+                        ),
+                        admit=self._vps_admission.admit,
                     ),
                     worker=self._localization_worker,
                 )
@@ -369,7 +404,9 @@ class ARModule(Module):  # type: ignore[misc]
             except TimeoutError:
                 logger.warning("AR service shutdown timed out", service=name)
             except Exception as exc:
-                logger.exception("AR service shutdown failed", service=name, error=type(exc).__name__)
+                logger.exception(
+                    "AR service shutdown failed", service=name, error=type(exc).__name__
+                )
         ws_server_obj = getattr(self, "_ws_server", None)
         if ws_server_obj is not None:
             ws_server_obj.stop()
@@ -465,6 +502,9 @@ class ARModule(Module):  # type: ignore[misc]
                         ts=pose.ts_server,
                     ),
                 )
+        if self._map_localization is not None:
+            self._map_localization.connect(client_id)
+            return
         requested_client_id = self._policy.on_hello(client_id)
         if requested_client_id is not None:
             self._send_observations_request(requested_client_id)
@@ -474,6 +514,8 @@ class ARModule(Module):  # type: ignore[misc]
         runner = getattr(self, "_localization_runner", None)
         if runner is not None:
             runner.cancel(client_id)
+        if self._map_localization is not None:
+            self._map_localization.disconnect(client_id)
         self._policy.on_disconnect(client_id)
         if self._ws_server.connection_count == 0:
             self._cancel_tele_cmd_vel()
@@ -583,9 +625,28 @@ class ARModule(Module):  # type: ignore[misc]
         if publisher is not None:
             publisher.cancel()
 
+    def _robot_heading(self) -> float:
+        sample = self._odometry.history.latest()
+        if sample is None:
+            return 0.0
+        x, y, z, w = sample.orientation
+        return math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+
+    def _on_localization_progress(
+        self,
+        message: LocalizationTracking | LocalizationCaptureProgress,
+        client_id: str,
+        sync: TimeSync,
+    ) -> None:
+        if self._map_localization is not None:
+            self._map_localization.progress(message, client_id, sync)
+
     def _on_localization_start_request(
         self, _msg: LocalizationStartRequest, client_id: str
     ) -> None:
+        if self._map_localization is not None:
+            self._map_localization.manual(client_id)
+            return
         self._localization_runner.cancel(client_id)
         requested_client_id = self._policy.on_start_request(client_id)
         if requested_client_id is not None:
@@ -606,6 +667,9 @@ class ARModule(Module):  # type: ignore[misc]
             observation_from_localization(observation, time_sync=time_sync)
             for observation in observations
         ]
+        if self._map_localization is not None:
+            self._map_localization.observations(domain, client_id)
+            return
         newest = max(domain, key=lambda observation: observation.ts_server)
         logger.info(
             "localization capture admitted for validation",
@@ -624,6 +688,16 @@ class ARModule(Module):  # type: ignore[misc]
             client_id,
             domain,
             capture_travel_m=None if pose is None else pose.travel_m,
+            capture_heading_rad=None
+            if pose is None
+            else math.atan2(
+                2
+                * (
+                    pose.orientation[3] * pose.orientation[2]
+                    + pose.orientation[0] * pose.orientation[1]
+                ),
+                1 - 2 * (pose.orientation[1] ** 2 + pose.orientation[2] ** 2),
+            ),
         )
         if work is None:
             logger.warning(
@@ -650,7 +724,11 @@ class ARModule(Module):  # type: ignore[misc]
             if requested_client_id is not None:
                 self._send_observations_request(requested_client_id)
             return
-        self._policy.on_success(work.client_id, capture_travel_m=work.capture_travel_m)
+        self._policy.on_success(
+            work.client_id,
+            capture_travel_m=work.capture_travel_m,
+            capture_heading_rad=work.capture_heading_rad,
+        )
         self._ws_server.schedule_send_to_client(
             work.client_id, encode_localization_result(outcome.result)
         )
@@ -695,6 +773,8 @@ class ARModule(Module):  # type: ignore[misc]
         self._requires_mapping_restart = True
         self._localization_runner.cancel_all()
         self._coordinator.invalidate_source()
+        if self._map_localization is not None:
+            self._map_localization.reset()
         self._policy.reset_source()
         self._cancel_tele_cmd_vel()
         self._safety.on_estop_request()
@@ -721,19 +801,17 @@ class ARModule(Module):  # type: ignore[misc]
         ):
             return
         generation = self._odometry.generation
-        # WebRTC timestamps describe decode/receipt. Wait for the positive half
-        # of the conservative stillness window; other input handlers keep running.
-        target = timestamp + self._robot_observations.timing_uncertainty_s
-        deadline = time.monotonic() + self._robot_observations.timing_uncertainty_s + 0.25
-        while True:
+        # Receipt-time pairing remains approximate; require surrounding odometry
+        # rather than guessing from the latest pose or requiring a stationary robot.
+        deadline = time.monotonic() + 0.2
+        while self._odometry.history.at_image_ts(timestamp) is None:
             if generation != self._odometry.generation or time.monotonic() >= deadline:
+                self._pairing_rejected += 1
+                self._log_camera_pairing()
                 return
-            latest = self._odometry.history.latest()
-            if latest is not None and latest.ts_server >= target:
-                break
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.01)
         poses = self._odometry.history.snapshot()
-        pose = poses.at_server_ts(timestamp)
+        pose = poses.at_image_ts(timestamp)
         if pose is None:
             return
         sample = await self._localization_worker.run(
@@ -747,6 +825,23 @@ class ARModule(Module):  # type: ignore[misc]
         )
         if sample is not None and generation == self._odometry.generation:
             self._robot_observations.add_sample(sample)
+            self._pairing_accepted += 1
+            self._log_camera_pairing()
+
+    def _log_camera_pairing(self) -> None:
+        if time.monotonic() < self._pairing_log_at:
+            return
+        self._pairing_log_at = time.monotonic() + 30.0
+        logger.info(
+            "robot camera pose pairing",
+            accepted=self._pairing_accepted,
+            rejected=self._pairing_rejected,
+            max_bracket_ms=200,
+            timestamp_kind="receipt",
+            **self._odometry.history.timing_diagnostics(),
+        )
+        self._pairing_accepted = 0
+        self._pairing_rejected = 0
 
     async def handle_path(self, msg: Path) -> None:
         if not self._capabilities.supports(CapabilityName.NAVIGATION):

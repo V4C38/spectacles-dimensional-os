@@ -80,6 +80,10 @@ def _module_with_policy(
     agent_available: bool = False,
 ) -> ARModule:
     module = object.__new__(ARModule)
+    module._map_localization = None
+    module._pairing_log_at = 0.0
+    module._pairing_rejected = 0
+    module._pairing_accepted = 0
     module._odometry = RobotOdometry(factor=profile.odom_scale_correction_factor)
     module._policy = LocalizationPolicy(providers, travel=module._odometry.travel)
     module._replay_mode = False

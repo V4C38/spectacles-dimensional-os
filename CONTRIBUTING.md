@@ -260,8 +260,9 @@ Working sequence (keep it): `SpecsCameraStream.requestNextFrame()` → pose at
 The portable port is `start` / async `capture` / `stop`.
 `LocalizationCaptureEpisode` awaits one in-flight capture. Specs opts into stopping
 the application stream while runtime batches await results or retry eligibility.
-Repeated runtime misses back off to 2, 5, 10, then 30 seconds between submissions;
-success or an explicit retry resets that budget. The geometry gate is checked
+Fiducial-only runtime misses retain their local 2, 5, 10, then 30-second backoff.
+VPS deployments use server-owned scheduling and bypass that local submission backoff;
+all camera queries share three POSTs per rolling 30 seconds. The geometry gate is checked
 before capture and again before JPEG encoding. Native encodes are serialized even
 across cancellation, and stale outputs are discarded before sending. Initial setup
 retains its deliberate preview behavior; hiding/leaving the scan releases the
@@ -273,9 +274,11 @@ The Specs wizard constructs it initially paused, starts it on the localization
 step, and pauses when leaving that step. A pending server prompt is retained
 while paused, so reentering the step resumes without a duplicate start request.
 After a successful setup scan the handler remains enabled for relocalization;
-only skipping or leaving setup without an origin pauses it. After 0.75 m of
-robot travel the server prompts again, and the client waits for the geometric
-gate before capturing. Marker-only capture rechecks the gate throughout a batch.
+only skipping or leaving setup without an origin pauses it. In fiducial-only mode, robot distance/heading thresholds prompt another relative
+alignment and the client waits for the geometric gate before capturing. With VPS,
+robot correction (0.75 m / 30° by default) is independent of headset alignment
+(initial setup and every 10 m of headset travel). A mixed-mode robot tag request
+waits 1.5 seconds for geometry before robot-camera VPS fallback. Marker-only capture rechecks the gate throughout a batch.
 Capture uses frames from the existing video stream at 0.5-second spacing; do
 not replace it with high-resolution still capture or downsample it further.
 
@@ -501,8 +504,8 @@ Drag-direction heading changes use shared time-based smoothing, with a 3 cm jitt
 
 A default AprilTag batch has three frames at 0.5-second spacing: its deliberate collection
 interval is one second, followed by camera/encoding, transport, detection and fusion time.
-The inspected saved configuration uses the fiducial provider only; VPS's 30-second cooldown
-cannot explain that configuration's latency. The client result timeout is 15 seconds with a
+Fiducial-only capture does not consume the VPS query budget, so cloud admission
+cannot explain that mode's capture latency. The client result timeout is 15 seconds with a
 2-second retry backoff, so repeated missing results can produce a much longer perceived wait.
 A browser camera frame is paired with its exposure/presentation timestamp and matching pose;
 these correctness checks and the server's two-inlier/quality gates remain intact.
@@ -524,12 +527,15 @@ application; it does not establish a physical Quest localization latency. The re
 requires one captured physical trace rather than an inferred timeout adjustment.
 
 
-ARModule localization policy, cooldowns, anchor commits and result delivery run on its
+ARModule localization policy, query admission, anchor commits and result delivery run on its
 module event loop, including connect callbacks. `LocalizationRunner` bounds one job per
 client and retires generations on replacement/disconnect. `LocalizationWorker` holds
 CPU admission until the native operation really finishes after cancellation; marker
-jobs receive frozen pose history. VPS uses a loop-owned async HTTP session and one
-serialized robot/headset workflow. No localization handler awaits an episode from the
+jobs receive frozen pose history. VPS uses a loop-owned async HTTP session. `MapLocalization` owns independent robot
+correction and per-headset map alignment; it serializes cloud dispatch fairly and
+keeps tag recovery available during admission waits. `VpsAdmission` counts every
+actual query POST, including auth-refresh retries. Robot captures require strict
+200 ms odometry brackets and allow motion; Go2 receipt time remains approximate. No localization handler awaits an episode from the
 WebSocket read loop. ClientCore checks capture-derived result timestamps before origin
 updates; hosts do not duplicate that acceptance state. See `dimos-ar/PROTOCOL.md` for
 provisional timing limits and the recorded-data rejection of the proposed voxel-map
@@ -591,6 +597,24 @@ the currently served build intact. Tests still use their isolated HTTPS server.
 
 ## Runtime ownership and teardown
 
+Long-session latency diagnostics emit active-window summaries at most once every
+30 seconds: `robot odometry timing`, `robot lidar processing timing`, and
+`WebSocket outbound timing` (per connection ID). They retain only counters and
+maxima, never payloads or sample histories. Divide counts by `window_s` for rates.
+Odometry reports source age and handler-arrival gaps, including rejected stale
+messages; `delayed` counts ages over 250 ms, `stale` over 2 seconds, and `future`
+more than 250 ms ahead. Replay is labelled separately; Go2 source age starts at
+host receipt, not hardware exposure. LiDAR reports input/downsampled/output point
+counts, source age at processing entry, total processing and downsampling maxima,
+and operations taking at least 100 ms. WebSocket summaries replace the previous
+five-second backlog log and report send duration, pending queue maxima and FIFO
+drops within the window; `slow_sends` counts sends taking at least 100 ms.
+Send duration includes backpressure and event-loop stalls, not headset delivery
+or display latency. Summaries are driven by activity, so an idle stream or an
+unfinished operation does not emit; the first operation after a pause reports
+the longer elapsed window. For headset performance, correlate these with Specs'
+existing 30-second `Capture diagnostics` frame-rate and worst-frame measurements.
+
 ARModule delegates accepted native/corrected poses, source clock/reference epochs,
 history and travel to `robot/odometry.py`. Localization policy reads that travel
 through a callback. Telemetry reads the accepted native position; it keeps no
@@ -620,3 +644,42 @@ their subscriptions and destroy their generated UI, retaining authored scene hos
 recovery; `WebXRInputController` owns input capture/dispatch and menu placement.
 Cached world geometry is immutable. Resource owners dispose generated meshes and
 materials, restore borrowed SDK hand state and leave authored/native assets intact.
+
+
+## Independent localization ownership
+
+`MapLocalization` runs only when VPS is enabled. `LocalizationRunner` starts and
+closes it with the module; fiducial-only deployments retain the relative-localization
+coordinator. Robot odometry, its scale correction, native planning and wire geometry
+remain unchanged. `OdomMapTransform` owns accepted `T_odom_map` snapshots. ClientCore's
+existing `ClientTrackingOriginStore` owns accepted `T_map_client`, the latest map
+transform, and their derived `T_odom_client`; hosts do not maintain alternate origins.
+Robot correction never causes a headset VPS query. The runtime Re-localize action
+preserves an accepted headset map alignment and requests a robot correction through
+the same tag preference and shared query budget. It does not reset setup or force a
+new headset fix; initial alignment and reference recovery still use setup. Map updates invalidate placement
+drafts/previews and recompose odometry geometry through the existing origin consumers.
+Confirmed native navigation goals are preserved.
+
+`HeadsetTravel` measures horizontal movement from the existing pose source, before
+camera extrinsics and AR origin correction. Tracking reports are independent of the
+agent capability. A tracking-reference reset clears camera pose history and map
+alignment; plain reconnect can retain a compatible accepted fix and travel counter.
+Only accepted headset fixes are reported as tag references. Map transform updates
+cannot activate a rejected or timed-out fix. See `dimos-ar/PROTOCOL.md` for the capture
+progress, map-transform and outcome messages.
+
+The launcher's Policy subsection persists robot distance, robot heading, tag preference
+duration, and headset distance under `armodule.localization`, preserving unrelated
+settings. The preference field is conditional on fiducial enablement. Settings apply
+on restart. Credentials continue to live exclusively in the ignored launcher `.env`.
+Both hosts use the shared notification glyph drawing for the yellow animated triangle
+and “Tracking Inaccurate” feedback, below emergency-stop priority.
+
+
+Navigation preview replies are correlated to the current aim and tracking origin.
+Costmap updates queue a refreshed advisory request without invalidating an in-flight
+reply for that same aim/origin. This prevents continuous costmap updates while driving
+from starving the dotted preview route. Aim changes, origin changes, capability loss,
+and request deadlines retain their existing invalidation behavior; confirmed robot
+navigation is independent of preview requests.
