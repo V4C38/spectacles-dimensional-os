@@ -1009,7 +1009,8 @@ existing `request_id`, `group_id`, and optional `speed_scale` (default 0.2, in
 (0, 1]). They plan a collision-checked joint-zero arm move, preserving the gripper,
 and reply only after fresh joint feedback confirms zero within 0.02 radians for
 0.5 seconds, or report failure. They never clear emergency stop. Shutdown parking
-is capped at 20% and 60 seconds; the launcher then proceeds with shutdown even
+is capped at 20% and a 55-second operation budget inside the supervisor’s
+60-second response deadline; the launcher then proceeds with shutdown even
 if parking fails or times out. The supervisor keeps DimOS alive until the attempt
 finishes. Power loss and SIGKILL cannot provide orderly parking.
 
@@ -1024,5 +1025,36 @@ Manipulation `plan` may include `final_gripper` in [0,1]. It is bound to that
 plan ID and issued only after successful execution and fresh feedback within
 0.02 rad of its endpoint. Cancel, E-stop, replacement, failure, and ownership
 retirement discard deferred gripper intent. Selected target edits do not send
-immediate gripper commands. Optional visual joint `limits` describe lower/upper
+immediate gripper commands. Pressing Open/Close executes the current target with
+`final_gripper`; at the measured pose it sends a direct `gripper` request. Optional visual joint `limits` describe lower/upper
 positions for gripper-only articulation.
+
+
+### Capability summaries and live arm feedback
+
+`hello.capabilities.object_detection` is an optional capability with the existing
+`available`/`reason` shape. Missing means unadvertised for older servers. It describes
+an explicitly configured detector in the loaded blueprint; Agent mode and fiducial
+localization do not imply object detection. Navigation retains its nested input flags.
+
+Manipulation state optionally includes `operation: "resetting" | "parking" | null`,
+using the existing `operation_id` for correlation. `observations.*.measured_at` uses
+the accepted source joint-sample timestamp, not the time a snapshot is requested.
+
+Following update results may contain `sequence` (the original update sequence),
+`joints`, and a short machine-readable `code`. At approximately 150 ms intervals,
+validated targets return `status: "feasible"` and the IK joint configuration.
+`status: "infeasible"` with `code: "ik_failed"` or `"joint_limit"` holds motion while
+retaining the following lease. New reachable input can recover within the same grab.
+Lease/ownership loss remains `rejected`; stale samples never command motion.
+
+Selected advisory plans are serialized and coalesced at a minimum 350 ms interval.
+The client retains the last valid preview while computing its replacement; an older
+preview is never executable for a newer target, speed, or final-gripper intent.
+
+Reset and parking first confirm whether fresh samples are already within 0.02 rad
+of zero for 0.5 seconds. That case does not start another trajectory. Otherwise,
+settling ends three seconds after the nominal trajectory duration, within the overall
+55-second budget. Failure reports the worst joint error and confirms stopping before
+releasing ownership. Parking quiesces new motion until process shutdown; it never
+clears emergency stop. Motion-related callbacks are drained before RPC teardown.

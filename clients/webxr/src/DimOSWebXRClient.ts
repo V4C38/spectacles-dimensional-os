@@ -271,6 +271,8 @@ export class DimOSWebXRClient {
 
   emergencyStop(): void {
     this.manipulation.end();
+    this.manipulation.interaction.discard();
+    this.manipulation.renderer.previewRequested = false;
     if (this.session.view().capabilities?.estop.available !== true) return;
     try {
       if (this.navigation.interaction.snapshot().goalActive) {

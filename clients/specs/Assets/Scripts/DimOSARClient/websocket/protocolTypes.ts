@@ -17,6 +17,7 @@ export const CAPABILITY_NAMES = [
   "estop",
   "agent",
   "manipulation",
+  "object_detection",
 ] as const;
 export type CapabilityName = (typeof CAPABILITY_NAMES)[number];
 
@@ -36,8 +37,8 @@ export type NavigationCapability = Capability & {
 };
 
 export type Capabilities = {
-  [K in Exclude<CapabilityName, "navigation" | "manipulation">]: Capability;
-} & { navigation: NavigationCapability; manipulation?: Capability };
+  [K in Exclude<CapabilityName, "navigation" | "manipulation" | "object_detection">]: Capability;
+} & { navigation: NavigationCapability; manipulation?: Capability; object_detection?: Capability };
 
 export interface TimeSync {
   ts_client: number;

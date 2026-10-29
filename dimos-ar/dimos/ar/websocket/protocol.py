@@ -641,3 +641,7 @@ def encode_lidar_binary(
 
 # Manipulation reset_joints / prepare_shutdown and following speed_scale are validated
 # by the shared manipulation codec; see PROTOCOL.md.
+
+# Optional object_detection uses the CapabilityName mapping above. Manipulation state
+# operation and result sequence/code/joints are encoded by the manipulation service;
+# their cross-client contract is specified in PROTOCOL.md.

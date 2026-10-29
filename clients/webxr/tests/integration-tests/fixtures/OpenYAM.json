@@ -168,7 +168,11 @@
           0.0,
           0.0
         ],
-        "mimic": null
+        "mimic": null,
+        "limits": {
+          "lower": -2.61799,
+          "upper": 3.14159
+        }
       },
       {
         "name": "yam_joint2",
@@ -193,7 +197,11 @@
           1.0,
           -3.2007e-16
         ],
-        "mimic": null
+        "mimic": null,
+        "limits": {
+          "lower": -8.88178e-16,
+          "upper": 3.66519
+        }
       },
       {
         "name": "yam_joint3",
@@ -218,7 +226,11 @@
           1.0,
           1.04275e-14
         ],
-        "mimic": null
+        "mimic": null,
+        "limits": {
+          "lower": 0.0,
+          "upper": 3.14159
+        }
       },
       {
         "name": "yam_joint4",
@@ -243,7 +255,11 @@
           1.0,
           0.0
         ],
-        "mimic": null
+        "mimic": null,
+        "limits": {
+          "lower": -1.69297,
+          "upper": 1.5708
+        }
       },
       {
         "name": "yam_joint5",
@@ -268,7 +284,11 @@
           0.0,
           0.0
         ],
-        "mimic": null
+        "mimic": null,
+        "limits": {
+          "lower": -1.5708,
+          "upper": 1.5708
+        }
       },
       {
         "name": "yam_joint6",
@@ -293,7 +313,11 @@
           2.40808e-14,
           -1.0
         ],
-        "mimic": null
+        "mimic": null,
+        "limits": {
+          "lower": -2.0944,
+          "upper": 2.0944
+        }
       },
       {
         "name": "joint7",
@@ -318,7 +342,11 @@
           1.0,
           0.0
         ],
-        "mimic": null
+        "mimic": null,
+        "limits": {
+          "lower": -0.04695,
+          "upper": 4.60927e-15
+        }
       },
       {
         "name": "joint8",
@@ -343,7 +371,11 @@
           -1.0,
           0.0
         ],
-        "mimic": null
+        "mimic": null,
+        "limits": {
+          "lower": -0.04695,
+          "upper": 0.0
+        }
       },
       {
         "name": "gripper_tip_joint",
@@ -368,7 +400,8 @@
           0.0,
           0.0
         ],
-        "mimic": null
+        "mimic": null,
+        "limits": null
       }
     ],
     "asset_url": "/models/openyam.glb"

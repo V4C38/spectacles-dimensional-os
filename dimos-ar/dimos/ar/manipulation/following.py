@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import threading
 from typing import Any
 import xml.etree.ElementTree as ET
 
@@ -17,10 +18,23 @@ from dimos.control.tasks.pose_target_ik import PinkPoseTargetSolver
 from dimos.control.tasks.registry import control_task_registry
 from dimos.core.core import rpc
 from dimos.robot.manipulators.common.coordinators import ArmPoseCoordinator
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 
 class SpeedSolver(PinkPoseTargetSolver):  # type: ignore[misc]
     speed_scale = 0.2
+    failure: str | None = None
+
+    def step(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return super().step(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — native solver failures retire this target
+            if self.failure is None:
+                logger.warning("Following IK target failed", error=str(exc))
+            self.failure = str(exc)
+            return None
 
     def _step_frame_targets(self, *args: Any, **kwargs: Any) -> Any:
         scale = self.speed_scale
@@ -33,6 +47,32 @@ class SpeedSolver(PinkPoseTargetSolver):  # type: ignore[misc]
 
 
 class SpeedTask(CartesianIKTask):  # type: ignore[misc]
+    def compute(self, state: Any) -> Any:
+        result = super().compute(state)
+        if self._solver.failure is not None:
+            self.clear()
+        return result
+
+    def on_cartesian_command(self, pose: Any, t_now: float | None = None) -> Any:
+        key = (
+            pose.position.x,
+            pose.position.y,
+            pose.position.z,
+            pose.orientation.x,
+            pose.orientation.y,
+            pose.orientation.z,
+            pose.orientation.w,
+        )
+        if self._solver.failure is not None and getattr(self, "_ar_failed_target", None) == key:
+            return None
+        self._ar_failed_target = key
+        self._solver.failure = None
+        return super().on_cartesian_command(pose, t_now=t_now)
+
+    def get_failure(self) -> str | None:
+        failure = self._solver.failure
+        return str(failure) if failure is not None else None
+
     def set_speed_scale(self, value: float) -> None:
         if not math.isfinite(value) or not 0.05 <= value <= 1:
             raise ValueError("speed scale must be between 0.05 and 1")
@@ -70,6 +110,15 @@ def create_task(cfg: Any, hardware: Any) -> SpeedTask:
 
 
 class ARArmCoordinator(ArmPoseCoordinator):  # type: ignore[misc]
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._ar_stop_once = threading.Lock()
+
+    @rpc  # type: ignore[untyped-decorator]
+    def stop(self) -> None:
+        if self._ar_stop_once.acquire(blocking=False):
+            super().stop()
+
     @rpc  # type: ignore[untyped-decorator]
     def build(self) -> None:
         control_task_registry.register_path(
@@ -77,6 +126,6 @@ class ARArmCoordinator(ArmPoseCoordinator):  # type: ignore[misc]
         )
         control_task_registry.register_bindings(
             "ar_cartesian_ik",
-            exposes=["start", "clear", "set_speed_scale", "on_cartesian_command"],
+            exposes=["start", "clear", "set_speed_scale", "on_cartesian_command", "get_failure"],
         )
         super().build()

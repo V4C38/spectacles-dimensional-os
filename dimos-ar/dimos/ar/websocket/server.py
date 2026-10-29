@@ -290,6 +290,10 @@ class WebSocketServer:
             server_info=body.server_info,
             odom_reference_id=body.odom_reference_id,
         )
+        # A client may receive hello on another thread before send() returns.
+        # Publish identity first; telemetry queues still start only after this send.
+        self._connections[client_id] = websocket
+        self._client_ids[websocket] = client_id
         await websocket.send(encode_hello(hello))
 
     async def _handle_binary(

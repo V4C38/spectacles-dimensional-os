@@ -15,7 +15,7 @@ export const shared = JSON.parse(
 export async function bootstrap(
   page: Page,
   mode: "hand" | "controller" = "hand",
-  options: { unavailable?: boolean; manipulation?: boolean } = {},
+  options: { unavailable?: boolean; manipulation?: boolean; planDelayMs?: number } = {},
 ) {
   const commands: any[] = [];
   const arm = options.manipulation ? JSON.parse(readFileSync(new URL("./OpenYAM.json", import.meta.url), "utf8")) : null;
@@ -23,12 +23,15 @@ export async function bootstrap(
   let armClockBase = 0, armClockStarted = 0;
   const armNow = () => armClockBase + (performance.now() - armClockStarted) / 1000;
   let following = false, plan: any = null, owner: string | null = null;
+  let armStopped = false;
+  let planSequence = 0;
+  const delayedReplies: ReturnType<typeof setTimeout>[] = [];
   const armState = () => {
     if (!arm) return;
     send({ type: "manipulation_state", available: true, ts: armNow(), root_pose: { position: [1,0,0.8], orientation: [0,0,0,1] }, model: arm.model,
       groups: [{ id: "manipulator", joint_names: Object.keys(arm.joints), base_frame: "base", tip_frame: "gripper_tip", has_gripper: true, following: true }],
       observations: { manipulator: { joints: arm.joints, measured_at: armNow(), pose: arm.pose, gripper: 0 } },
-      execution: "idle", message: null, owner, following, stopped: false, plan, operation_id: null });
+      execution: "idle", message: null, owner, following, stopped: armStopped, stop_confirmed: true, plan, operation_id: null });
   };
   let socket: WebSocketRoute | undefined;
   let captureTs = 0;
@@ -83,6 +86,7 @@ export async function bootstrap(
           ? "Unavailable in integration fixture"
           : null,
       };
+      const mobile = arm ? { available: false, reason: "Stationary arm" } : available;
       if (command.type === "hello_request") {
         armClockBase = command.ts_client; armClockStarted = performance.now();
         send({
@@ -97,17 +101,17 @@ export async function bootstrap(
             dimos_version: "0.4.0",
             armodule_version: "0.2.0",
           },
-          robot: shared.fixtures.robot,
+          robot: arm ? {...shared.fixtures.robot,display_name:"OpenYAM"} : shared.fixtures.robot,
           capabilities: {
             ...(options.manipulation ? { manipulation: {available: true, reason: null} } : {}),
-            lidar: available,
+            lidar: mobile,
             localization: available,
             estop: available,
-            agent: available,
+            agent: mobile,
             navigation: {
-              ...available,
-              nav_goal: { ...available, preview: true },
-              nav_joystick: available,
+              ...mobile,
+              nav_goal: { ...mobile, preview: !arm },
+              nav_joystick: mobile,
             },
           },
         });
@@ -154,19 +158,23 @@ export async function bootstrap(
         });
         if (!command.preview) state("following_path");
       }
-      if (command.type === "estop_request") { following = false; owner = null; plan = null; state("idle"); }
+      if (command.type === "estop_request") { following = false; owner = null; plan = null; armStopped = true; state("idle"); armState(); }
       if (command.type === "manipulation_request" && arm) {
         let result: any = {status: "completed"};
         if (command.action === "evaluate") result = {status: "feasible", joints: {...arm.joints, yam_joint2: arm.joints.yam_joint2 + 0.2}, pose: command};
         if (command.action === "plan") {
-          plan = {plan_id: "fixture-plan", joint_names: Object.keys(arm.joints), duration: 2,
+          plan = {plan_id: `fixture-plan-${++planSequence}`, joint_names: Object.keys(arm.joints), duration: 2,
             trajectory: [{time: 0, positions: Object.values(arm.joints)}, {time: 2, positions: Object.values(arm.joints).map((v: any, i) => i === 1 ? v + 0.2 : v)}]};
           owner = "integration"; result = {status: "planned", ...plan};
         }
         if (command.action === "execute") { result = {status: command.plan_id === plan?.plan_id ? "accepted" : "rejected", operation_id: "fixture-operation"}; plan = null; }
+        if (command.action === "resume") { armStopped = false; result = {status: "resumed"}; }
         if (command.action === "acquire") { following = true; owner = "integration"; result = {status: "acquired", token: "fixture-follow"}; }
         if (command.action === "release" || command.action === "cancel") { following = false; owner = null; plan = null; }
-        if (command.action !== "update") send({type: "manipulation_result", request_id: command.request_id, action: command.action, group_id: command.group_id, ...result});
+        if (command.action === "update") result = {status:"feasible", sequence:command.sequence, joints:{...arm.joints,yam_joint6:arm.joints.yam_joint6+0.8}};
+        const reply = {type: "manipulation_result", request_id: command.request_id, action: command.action, group_id: command.group_id, ...result};
+        if (command.action === "plan" && options.planDelayMs) delayedReplies.push(setTimeout(()=>send(reply),options.planDelayMs));
+        else send(reply);
         armState();
       }
     });
@@ -305,7 +313,7 @@ export async function bootstrap(
     localized,
     completeLocalization,
     lidar,
-    close: () => { if (armTimer) clearInterval(armTimer); socket?.close(); },
+    close: () => { delayedReplies.forEach(clearTimeout); if (armTimer) clearInterval(armTimer); socket?.close(); },
   };
 }
 export async function snapshot(page: Page): Promise<any> {

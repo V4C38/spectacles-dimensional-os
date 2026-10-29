@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dimos.ar.module import ARModule
+from dimos.ar.robot.capabilities import blueprint_has_object_detection
 from dimos.ar.robot.profiles.profile import RobotName
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
@@ -22,7 +23,10 @@ except ModuleNotFoundError:
 _unitree_go2_ar_base = (
     autoconnect(
         unitree_go2,
-        ARModule.blueprint(robot=RobotName.UNITREE_GO2),
+        ARModule.blueprint(
+            robot=RobotName.UNITREE_GO2,
+            object_detection=blueprint_has_object_detection(unitree_go2),
+        ),
     )
     if unitree_go2 is not None
     else None
@@ -39,7 +43,11 @@ unitree_go2_ar = (
 _unitree_go2_ar_agentic_base = (
     autoconnect(
         unitree_go2_agentic,
-        ARModule.blueprint(robot=RobotName.UNITREE_GO2, agent=True),
+        ARModule.blueprint(
+            robot=RobotName.UNITREE_GO2,
+            agent=True,
+            object_detection=blueprint_has_object_detection(unitree_go2_agentic),
+        ),
     )
     if unitree_go2_agentic is not None
     else None

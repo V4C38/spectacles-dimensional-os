@@ -12,3 +12,13 @@ it("anchors route dash phase continuously and retires cached GPU capacity on res
   expect(line.object.material.uniforms.uOpacity.value).toBe(0.7);
   line.dispose();
 });
+
+it("keeps mobile pixel thickness while allowing thinner stationary strokes", () => {
+  const mobile=new AdaptiveDashedLineRenderer();
+  const arm=new AdaptiveDashedLineRenderer(0.0017875,undefined,undefined,1.3);
+  expect(mobile.object.material.uniforms.uMinimumPixels.value).toBe(2);
+  expect(arm.object.material.uniforms.uMinimumPixels.value).toBe(1.3);
+  expect(arm.object.material.uniforms.uDash.value).toBe(mobile.object.material.uniforms.uDash.value);
+  expect(arm.object.material.uniforms.uGap.value).toBe(mobile.object.material.uniforms.uGap.value);
+  mobile.dispose();arm.dispose();
+});

@@ -15,10 +15,35 @@ from dimos.ar.manipulation.model import describe_model
 from dimos.ar.manipulation.protocol import decode_request
 from dimos.core.core import rpc
 from dimos.core.global_config import global_config
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 from dimos.manipulation.manipulation_module import ManipulationModule, ManipulationModuleConfig
+from dimos.manipulation.manipulation_spec import ExecutionResult, ExecutionStatus
 from dimos.manipulation.visualization.operator import ManipulationOperator, PoseTargetRequest
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
+
+
+class _QuiescedExecution:
+    """Local teardown after parking already confirmed cancellation remotely.
+
+    DimOS stops module RPC services concurrently. Its default teardown would issue
+    another cancellation into a coordinator that may already have closed its RPC.
+    Only a completed shutdown handshake may use this local cancellation receipt.
+    """
+
+    def __init__(self, delegate: Any) -> None:
+        self._delegate = delegate
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def cancel(self, *args: Any, **kwargs: Any) -> Any:
+        return ExecutionResult(ExecutionStatus.NO_EXECUTION, "Shutdown motion already stopped")
+
+    def close(self) -> None:
+        self._delegate.close()
 
 
 class ARManipulationModuleConfig(ManipulationModuleConfig):  # type: ignore[misc]
@@ -30,6 +55,31 @@ class ARManipulationModuleConfig(ManipulationModuleConfig):  # type: ignore[misc
 
 class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
     config: ARManipulationModuleConfig
+    _execution_manager: Any
+
+    @rpc
+    def start(self) -> None:
+        self._ar_closing = False
+        self._ar_started = False
+        backend = getattr(self._control_coordinator, "rpc", None)
+        if backend is not None and isinstance(getattr(backend, "rpc_timeouts", None), dict):
+            backend.rpc_timeouts["task_invoke"] = 0.5
+            backend.rpc_timeouts["set_estop"] = 0.5
+        super().start()
+        self._ar_started = True
+
+    @rpc
+    def stop(self) -> None:
+        with self._ar_lock:
+            if getattr(self, "_ar_closing", False):
+                return
+            self._ar_closing = True
+            self._ar_started = False
+            self._ar_stopped = True
+            self._ar_retire()
+            if getattr(self, "_ar_quiesced", False):
+                self._execution_manager = _QuiescedExecution(self._execution_manager)
+        super().stop()
 
     @rpc
     def build(self) -> None:
@@ -43,6 +93,12 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self._ar_started = False
+        self._ar_closing = False
+        self._ar_shutdown = False
+        self._ar_quiesced = False
+        self._ar_operation_kind: str | None = None
+        self._ar_feedback: JointState | None = None
         self._ar_lock = threading.RLock()
         self._ar_planning = threading.Lock()
         self._ar_owner: str | None = None
@@ -73,10 +129,33 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
             or not 0 <= time.time() - observed.joints.ts <= self.config.feedback_max_age_s
         ):
             raise ValueError("joint feedback is stale or unavailable")
+        feedback = getattr(self, "_ar_feedback", None)
+        if feedback is not None:
+            if not 0 <= time.time() - feedback.ts <= self.config.feedback_max_age_s:
+                raise ValueError("joint feedback is stale or unavailable")
+            observed.joints.ts = feedback.ts
         return observed
 
+    def _on_joint_state(self, msg: JointState) -> None:
+        # Preserve the source sample clock; upstream snapshots recreate JointState timestamps.
+        aliases = self.config.joint_state_aliases
+        indices = {aliases.get(name, name): i for i, name in enumerate(msg.name)}
+        names = self.config.model.joint_names
+        if all(name in indices and indices[name] < len(msg.position) for name in names):
+            values = [msg.position[indices[name]] for name in names]
+            import math
+
+            if all(math.isfinite(q) for q in values):
+                super()._on_joint_state(msg)
+                self._ar_feedback = JointState(ts=msg.ts, name=list(names), position=values)
+
     def _ar_require_owner(self, client_id: str, group: str) -> None:
-        if client_id in self._ar_retired or self._ar_stopped or self._ar_cancelling:
+        if (
+            getattr(self, "_ar_shutdown", False)
+            or client_id in self._ar_retired
+            or self._ar_stopped
+            or self._ar_cancelling
+        ):
             raise ValueError("connection retired or manipulation stopped")
         if self._ar_owner not in (None, client_id) or self._ar_group not in (None, group):
             raise ValueError("manipulation is owned by another connection or group")
@@ -88,6 +167,7 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         self._ar_owner = None
         self._ar_group = None
         self._ar_operation = None
+        self._ar_operation_kind = None
         self._ar_final_gripper = None
         self._ar_gripper_completion_at = None
 
@@ -97,6 +177,20 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
 
     @rpc
     def ar_manipulation_command(self, client_id: str, request: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._ar_command(client_id, request)
+        except ValueError as exc:
+            message = str(exc)
+            code = (
+                "joint_limit"
+                if "limit" in message.lower()
+                else "ik_failed"
+                if "ik" in message.lower()
+                else "rejected"
+            )
+            return {"status": "rejected", "code": code, "message": message}
+
+    def _ar_command(self, client_id: str, request: dict[str, Any]) -> dict[str, Any]:
         # Validate again at the domain boundary, including direct RPC callers.
         message = decode_request({**request, "request_id": "domain"})
         action, group, body = message.action, message.group_id, message.payload
@@ -104,6 +198,8 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
             return self._ar_return_zero(
                 client_id, group, body["speed_scale"], action == "prepare_shutdown"
             )
+        if action == "update":
+            return self._ar_update(client_id, group, body)
         if action == "cancel":
             with self._ar_lock:
                 if self._ar_owner not in (None, client_id):
@@ -149,38 +245,6 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                 self._ar_clear_following()
                 self._ar_retire()
                 return {"status": "released"}
-            if action == "update":
-                if self._ar_token != body["token"] or self._ar_owner != client_id:
-                    raise ValueError("following token retired")
-                if (
-                    body["sequence"] <= self._ar_sequence
-                    or not -0.1 <= time.time() - body["ts"] <= 0.5
-                ):
-                    raise ValueError("following sample stale or out of order")
-                if (
-                    getattr(self, "_world_monitor", None) is not None
-                    and time.monotonic() - getattr(self, "_ar_follow_evaluated", 0) >= 0.15
-                ):
-                    self._ar_follow_evaluated = time.monotonic()
-                    evaluation = ManipulationOperator(
-                        self, self._world_monitor
-                    ).evaluate_pose_target(PoseTargetRequest({group: self._ar_pose(body)}))
-                    if not evaluation.success:
-                        self._ar_clear_following()
-                        self._ar_retire()
-                        raise ValueError(
-                            evaluation.message or "Following target is unreachable or colliding"
-                        )
-                task = self.config.following_tasks[group]
-                self._control_coordinator.task_invoke(
-                    task, "set_speed_scale", {"value": body["speed_scale"]}
-                )
-                self._control_coordinator.task_invoke(
-                    task, "on_cartesian_command", {"pose": self._ar_pose(body), "t_now": None}
-                )
-                self._ar_sequence = body["sequence"]
-                self._ar_updated = time.monotonic()
-                return {"status": "following"}
             if action == "gripper":
                 self._ar_epoch += 1
                 self._ar_plan = None
@@ -207,6 +271,7 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                 self._ar_owner, self._ar_group = client_id, group
                 self._ar_operation = None
                 self._ar_token = uuid4().hex
+                self._ar_follow_evaluated = float("-inf")
                 self._ar_sequence = -1
                 self._ar_epoch += 1
                 self._ar_updated = time.monotonic()
@@ -222,6 +287,7 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                 if result.status.name in {"ACCEPTED", "COMPLETED"}:
                     self._ar_gripper_error = None
                     self._ar_operation = uuid4().hex
+                    self._ar_operation_kind = "executing"
                     self._ar_final_gripper = None
                     self._ar_gripper_completion_at = None
                     if "final_gripper" in self._ar_plan:
@@ -236,6 +302,9 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                 return {
                     "status": result.status.name.lower(),
                     "message": result.message,
+                    "operation": getattr(self, "_ar_operation_kind", None)
+                    if getattr(self, "_ar_operation_kind", None) in {"resetting", "parking"}
+                    else None,
                     "operation_id": self._ar_operation,
                 }
             if action == "plan":
@@ -291,12 +360,76 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         finally:
             self._ar_planning.release()
 
+    def _ar_update(self, client_id: str, group: str, body: dict[str, Any]) -> dict[str, Any]:
+        with self._ar_lock:
+            self._ar_require_owner(client_id, group)
+            self._ar_fresh(group)
+            if self._ar_token != body["token"] or self._ar_owner != client_id:
+                return {
+                    "status": "rejected",
+                    "code": "retired",
+                    "message": "Following retired",
+                    "sequence": body["sequence"],
+                }
+            if body["sequence"] <= self._ar_sequence or not -0.1 <= time.time() - body["ts"] <= 0.5:
+                raise ValueError("following sample stale or out of order")
+            self._ar_sequence = body["sequence"]
+            self._ar_updated = time.monotonic()
+            epoch = self._ar_epoch
+            if self._ar_updated - getattr(self, "_ar_follow_evaluated", float("-inf")) < 0.15:
+                return {"status": "following"}
+            self._ar_follow_evaluated = self._ar_updated
+        evaluation = None
+        if getattr(self, "_world_monitor", None) is not None:
+            evaluation = ManipulationOperator(self, self._world_monitor).evaluate_pose_target(
+                PoseTargetRequest({group: self._ar_pose(body)})
+            )
+        with self._ar_lock:
+            if epoch != self._ar_epoch or self._ar_stopped:
+                return {"status": "rejected", "sequence": body["sequence"], "code": "retired"}
+            if evaluation is not None and not evaluation.success:
+                self._ar_clear_following()
+                return {
+                    "status": "infeasible",
+                    "sequence": body["sequence"],
+                    "code": "joint_limit"
+                    if "limit" in (evaluation.message or "").lower()
+                    else "ik_failed",
+                    "message": evaluation.message or "IK failed",
+                }
+            if time.time() - body["ts"] > 0.5:
+                return {"status": "following"}
+            task = self.config.following_tasks[group]
+            self._control_coordinator.task_invoke(
+                task, "set_speed_scale", {"value": body["speed_scale"]}
+            )
+            self._control_coordinator.task_invoke(
+                task, "on_cartesian_command", {"pose": self._ar_pose(body), "t_now": None}
+            )
+            failure = self._control_coordinator.task_invoke(task, "get_failure", {})
+            if isinstance(failure, str) and failure:
+                return {
+                    "status": "infeasible",
+                    "sequence": body["sequence"],
+                    "code": "ik_failed",
+                    "message": failure,
+                }
+            return {
+                "status": "feasible",
+                "sequence": body["sequence"],
+                "joints": self._ar_joints(evaluation.target_joints) if evaluation else None,
+            }
+
     def _ar_return_zero(
         self, client_id: str, group: str, speed: float, shutdown: bool
     ) -> dict[str, Any]:
         with self._ar_lock:
             if shutdown:
                 if self._ar_stopped or self._ar_cancelling:
+                    self._ar_shutdown = True
+                    if self._ar_stop_confirmed:
+                        self._ar_quiesced = True
+                        self._execution_manager.close()
                     return {
                         "status": "skipped",
                         "message": "Emergency stop active; automatic motion skipped",
@@ -304,53 +437,136 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
             else:
                 self._ar_require_owner(client_id, group)
             self._ar_fresh(group)
-            self._ar_clear_following()
+            # Acquire before changing ownership: a rejected reset cannot retire a planner.
+            if not self._ar_planning.acquire(blocking=False):
+                raise ValueError("Planning is pending; retry reset")
             self._ar_retire()
+            epoch = self._ar_epoch
             self._ar_owner, self._ar_group = client_id, group
-        if not self._ar_planning.acquire(blocking=False):
-            raise ValueError("Planning is pending; retry reset")
+            self._ar_operation = uuid4().hex
+            self._ar_operation_kind = "parking" if shutdown else "resetting"
+            if shutdown:
+                self._ar_shutdown = True
+
+        def require_current() -> None:
+            if self._ar_epoch != epoch or self._ar_stopped or self._ar_cancelling:
+                raise ValueError("Reset interrupted by stop or ownership change")
+
+        operation_deadline = time.monotonic() + 55
         try:
-            cancelled = self.cancel()
-            if cancelled.status.name in {"UNCERTAIN", "FAULT"}:
-                raise ValueError("Could not confirm motion stopped")
+            with self._ar_lock:
+                require_current()
+                self._ar_clear_following()
+                ready = self.reset()
+                if not ready.succeeded:
+                    self._ar_stopped = True
+                    self._ar_stop_confirmed = False
+                    raise ValueError(ready.message)
             definition = next(g for g in self.list_planning_groups() if g.id == group)
             joints = list(definition.joint_names)
             target = JointState(name=joints, position=[0.0] * len(joints))
-            planned = self.plan_to_joints(
-                {group: target}, speed_scale=min(speed, 0.2) if shutdown else speed
+            # An arm already at zero needs only new settled observations, no new trajectory.
+            observed = self._ar_fresh(group)
+            actual = dict(zip(observed.joints.name, observed.joints.position, strict=True))
+            already_zero = all(abs(actual.get(name, float("inf"))) <= 0.02 for name in joints)
+            planned = (
+                None
+                if already_zero
+                else self.plan_to_joints(
+                    {group: target}, speed_scale=min(speed, 0.2) if shutdown else speed
+                )
             )
-            if not planned.succeeded or planned.plan is None:
-                raise ValueError(planned.message)
-            result = self.execute(blocking=False, plan_id=planned.plan.plan_id)
-            if result.status.name not in {"ACCEPTED", "COMPLETED", "SUCCEEDED"}:
-                raise ValueError(result.message)
-            deadline, settled = time.monotonic() + 60, None
+            with self._ar_lock:
+                require_current()
+                if planned is not None and (not planned.succeeded or planned.plan is None):
+                    raise ValueError(planned.message)
+                if planned is not None:
+                    result = self.execute(blocking=False, plan_id=planned.plan.plan_id)
+                    if result.status.name not in {"ACCEPTED", "COMPLETED", "SUCCEEDED"}:
+                        raise ValueError(result.message)
+            started = time.monotonic()
+            nominal_end = started + (planned.plan.trajectory.duration if planned is not None else 0)
+            deadline = min(operation_deadline, nominal_end + 3.0)
+            settled: float | None = None
+            last_measurement = float("-inf")
+            last_log = float("-inf")
             while time.monotonic() < deadline:
                 with self._ar_lock:
-                    if self._ar_stopped:
-                        raise ValueError("Reset interrupted by emergency stop")
+                    require_current()
                 observed = self._ar_fresh(group)
                 actual = dict(zip(observed.joints.name, observed.joints.position, strict=True))
-                if all(abs(actual.get(name, float("inf"))) <= 0.02 for name in joints):
-                    settled = settled or time.monotonic()
-                    if time.monotonic() - settled >= 0.5:
-                        terminal = self.wait_for_execution(timeout=0.1)
-                        if terminal.status.name == "COMPLETED":
-                            ready = self.reset()
-                            if ready.status.name != "SUCCEEDED":
-                                raise ValueError(ready.message)
-                            return {"status": "completed", "message": "Zero pose confirmed"}
-                else:
-                    settled = None
+                now = time.monotonic()
+                if now - last_log >= 0.5:
+                    worst = max(joints, key=lambda name: abs(actual.get(name, float("inf"))))
+                    logger.info(
+                        "Arm settling",
+                        operation=self._ar_operation_kind,
+                        elapsed_s=round(now - started, 2),
+                        joint=worst,
+                        error_rad=round(abs(actual.get(worst, float("inf"))), 4),
+                        feedback_age_s=round(time.time() - observed.joints.ts, 3),
+                    )
+                    last_log = now
+                if not already_zero and self.get_state().execution_status.name in {
+                    "FAULT",
+                    "UNCERTAIN",
+                    "ABORTED",
+                    "REJECTED",
+                }:
+                    raise ValueError("Zero trajectory failed")
+                # Repeated publication of one cached sample must not establish settling.
+                if observed.joints.ts > last_measurement:
+                    last_measurement = observed.joints.ts
+                    if now >= nominal_end and all(
+                        abs(actual.get(name, float("inf"))) <= 0.02 for name in joints
+                    ):
+                        if settled is None:
+                            settled = now
+                        if now - settled >= 0.5:
+                            with self._ar_lock:
+                                require_current()
+                                # Approximate measured arrival is sufficient. The official
+                                # reset confirms stopping and returns to IDLE even if the
+                                # executor has not declared its exact endpoint complete.
+                                ready = self.reset()
+                                if not ready.succeeded:
+                                    self._ar_stopped = True
+                                    self._ar_stop_confirmed = False
+                                    raise ValueError(ready.message)
+                                if shutdown:
+                                    self._ar_quiesced = True
+                                    self._execution_manager.close()
+                                return {"status": "completed", "message": "Zero pose confirmed"}
+                    else:
+                        settled = None
                 time.sleep(0.05)
-            self.cancel()
-            raise ValueError("Zero pose was not confirmed within 60 seconds")
+            worst = max(joints, key=lambda name: abs(actual.get(name, float("inf"))))
+            raise ValueError(
+                f"Zero pose not confirmed: {worst} error "
+                f"{abs(actual.get(worst, float('inf'))):.4f} rad "
+                "(tolerance 0.0200 rad); settling deadline reached"
+            )
         except Exception:
-            self.cancel()
+            with self._ar_lock:
+                # An obsolete worker must never stop or reset a newer operation.
+                if self._ar_epoch == epoch and not self._ar_stopped:
+                    try:
+                        ready = self.reset()
+                    except Exception:
+                        self._ar_stopped = True
+                        self._ar_stop_confirmed = False
+                        raise
+                    if not ready.succeeded:
+                        self._ar_stopped = True
+                        self._ar_stop_confirmed = False
+                    elif shutdown:
+                        self._ar_quiesced = True
+                        self._execution_manager.close()
             raise
         finally:
             with self._ar_lock:
-                self._ar_retire()
+                if self._ar_epoch == epoch:
+                    self._ar_retire()
             self._ar_planning.release()
 
     def _ar_pose(self, body: dict[str, Any]) -> PoseStamped:
@@ -379,8 +595,17 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
 
     @rpc
     def ar_manipulation_snapshot(self) -> dict[str, Any]:
-        if not hasattr(self, "_execution_manager") or self._world_monitor is None:
+        if (
+            not getattr(self, "_ar_started", False)
+            or not hasattr(self, "_execution_manager")
+            or self._world_monitor is None
+        ):
             return {"available": False, "message": "Manipulation runtime is starting"}
+        feedback = getattr(self, "_ar_feedback", None)
+        if hasattr(self, "_ar_feedback") and (
+            feedback is None or time.time() - feedback.ts > self.config.feedback_max_age_s
+        ):
+            return {"available": False, "message": "Waiting for arm feedback"}
         state = self.get_state()
         if self._ar_descriptor is None:
             self._ar_descriptor = describe_model(
@@ -390,7 +615,11 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
             if self._ar_token is not None and time.monotonic() - self._ar_updated > 0.5:
                 self._ar_clear_following()
                 self._ar_retire()
-            if self._ar_operation and state.execution_status.name not in {"ACCEPTED", "EXECUTING"}:
+            if (
+                self._ar_operation
+                and getattr(self, "_ar_operation_kind", None) not in {"resetting", "parking"}
+                and state.execution_status.name not in {"ACCEPTED", "EXECUTING"}
+            ):
                 deferred = self._ar_final_gripper
                 waiting_for_endpoint = False
                 if deferred and state.execution_status.name == "COMPLETED" and not self._ar_stopped:
@@ -419,6 +648,8 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                                 self._ar_gripper_error = command.message
                             self._ar_final_gripper = None
                             waiting_for_endpoint = False
+                if deferred and not waiting_for_endpoint and self._ar_final_gripper is not None:
+                    self._ar_gripper_error = "Gripper action skipped: endpoint not confirmed"
                 if not waiting_for_endpoint:
                     self._ar_final_gripper = None
                     self._ar_gripper_completion_at = None
@@ -451,7 +682,9 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                 "observations": {
                     key: {
                         "joints": self._ar_joints(value.joints),
-                        "measured_at": value.joints.ts if value.joints else None,
+                        "measured_at": (feedback.ts if feedback else value.joints.ts)
+                        if value.joints
+                        else None,
                         "pose": self._ar_pose_wire(value.end_effector_pose),
                         "gripper": value.gripper_position,
                     }
@@ -464,6 +697,9 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                 "stopped": self._ar_stopped,
                 "stop_confirmed": self._ar_stop_confirmed,
                 "plan": self._ar_plan,
+                "operation": getattr(self, "_ar_operation_kind", None)
+                if getattr(self, "_ar_operation_kind", None) in {"resetting", "parking"}
+                else None,
                 "operation_id": self._ar_operation,
             }
 
@@ -486,3 +722,6 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         self._control_coordinator.set_estop(True)
         with self._ar_lock:
             self._ar_stop_confirmed = result.status.name not in {"UNCERTAIN", "FAULT"}
+            if getattr(self, "_ar_shutdown", False) and self._ar_stop_confirmed:
+                self._ar_quiesced = True
+                self._execution_manager.close()

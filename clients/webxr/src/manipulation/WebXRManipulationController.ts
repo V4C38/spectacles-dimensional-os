@@ -14,6 +14,7 @@ export class WebXRManipulationController {
   private offset: THREE.Matrix4 | null = null;
   private lastOrigin: ClientTrackingOrigin | null = null;
   private selected = false;
+  private enabledBefore = false;
   private panelOffset: THREE.Matrix4 | null = null;
   private smoothedPosition = new THREE.Vector3();
   private smoothedRotation = new THREE.Quaternion();
@@ -97,6 +98,18 @@ export class WebXRManipulationController {
     this.offset = null;
     this.interaction.end();
   }
+  interrupt(): void {
+    const intent = this.interaction.snapshot();
+    if (
+      this.interaction.target ||
+      intent.dragging ||
+      intent.planning ||
+      intent.resetting
+    )
+      this.interaction.cancel();
+    this.end();
+    this.renderer.previewRequested = false;
+  }
   action(action: string): void {
     switch (action) {
       case "reset":
@@ -104,19 +117,25 @@ export class WebXRManipulationController {
         this.interaction.resetJoints();
         break;
       case "estop":
+        this.interaction.discard();
+        this.renderer.previewRequested = false;
         this.session.sendText(JSON.stringify({ type: "estop_request" }) + "\n");
         break;
       case "plan":
+        if (!this.interaction.snapshot().canPreview) break;
         this.renderer.previewRequested = !this.renderer.previewRequested;
-        if (this.renderer.previewRequested && !this.interaction.plan) this.interaction.requestPlan();
+        if (this.renderer.previewRequested && !this.interaction.plan)
+          this.interaction.requestPlan();
         break;
       case "execute":
         this.renderer.previewRequested = false;
         this.interaction.execute();
         break;
       case "cancel":
+      case "stop":
         this.renderer.previewRequested = false;
         this.interaction.cancel();
+        this.offset = null;
         break;
       case "resume":
         this.interaction.resume();
@@ -144,14 +163,15 @@ export class WebXRManipulationController {
   }
   tick(enabled: boolean): void {
     const origin = this.origin();
-    if (!enabled || origin !== this.lastOrigin) this.end();
+    if (
+      (!enabled && this.enabledBefore) ||
+      (this.lastOrigin !== null && origin !== this.lastOrigin)
+    )
+      this.interrupt();
+    this.enabledBefore = enabled;
     this.lastOrigin = origin;
     this.interaction.tick();
-    this.renderer.working =
-      this.interaction.busy ||
-      ["accepted", "executing"].includes(
-        this.session.view().manipulation?.execution ?? "",
-      );
+    const intent = this.interaction.snapshot();
     this.renderer.rejection = this.interaction.rejection;
     this.renderer.desiredGripper = this.interaction.desiredGripper;
     this.renderer.speedScale = this.interaction.speedScale;
@@ -162,11 +182,12 @@ export class WebXRManipulationController {
       this.selected,
       this.interaction.target,
       this.interaction.solution,
-      this.interaction.plan,
+      this.interaction.plan ?? this.interaction.previewPlan,
       this.now(),
       this.interaction.status,
       this.interaction.feedbackFresh,
       this.session.view().hello?.robot.display_name,
+      intent,
     );
   }
   dispose(): void {

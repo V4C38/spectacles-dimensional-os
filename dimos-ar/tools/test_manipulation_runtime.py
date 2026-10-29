@@ -76,8 +76,13 @@ async def test_official_mock_manipulation_contract() -> None:
         )
         acquired = await command("acquire")
         assert acquired["status"] == "acquired", acquired
+        valid = await command(
+            "update", token=acquired["token"], sequence=1, ts=time.time(), **target
+        )
+        assert valid["status"] == "feasible", valid
+        assert valid.get("joints"), valid
         stale = await command(
-            "update", token=acquired["token"], sequence=1, ts=time.time() - 1, **target
+            "update", token=acquired["token"], sequence=2, ts=time.time() - 1, **target
         )
         assert stale["status"] == "rejected"
         released = await command("release", token=acquired["token"])
@@ -92,3 +97,56 @@ async def test_official_mock_manipulation_contract() -> None:
         )
         resumed = await command("resume")
         assert resumed["status"] == "resumed", resumed
+
+
+@pytest.mark.asyncio
+async def test_mock_reset_repeated_zero_and_orderly_parking() -> None:
+    """Exercise actual RPC workers and fresh feedback, never physical hardware."""
+    async with websockets.connect(str(_URL)) as socket:
+        await socket.send(json.dumps({"type": "hello_request", "ts_client": time.time()}))
+        await socket.recv()
+
+        async def receive(predicate):
+            async with asyncio.timeout(25):
+                while True:
+                    for line in (await socket.recv()).splitlines():
+                        frame = json.loads(line)
+                        if predicate(frame):
+                            return frame
+
+        state = await receive(
+            lambda f: f.get("type") == "manipulation_state" and f.get("available")
+        )
+        assert state.get("simulated") is True
+        group = state["groups"][0]["id"]
+        sequence = 0
+
+        async def command(action):
+            nonlocal sequence
+            sequence += 1
+            request_id = f"parking-contract-{sequence}"
+            await socket.send(
+                json.dumps(
+                    {
+                        "type": "manipulation_request",
+                        "request_id": request_id,
+                        "action": action,
+                        "group_id": group,
+                        "speed_scale": 0.2,
+                    }
+                )
+            )
+            return await receive(lambda f: f.get("request_id") == request_id)
+
+        if state.get("stopped"):
+            assert (await command("resume"))["status"] == "resumed"
+        result = await command("reset_joints")
+        assert result["status"] == "completed", result
+        start = time.monotonic()
+        result = await command("reset_joints")
+        assert result["status"] == "completed", result
+        assert time.monotonic() - start < 2
+        start = time.monotonic()
+        result = await command("prepare_shutdown")
+        assert result["status"] == "completed", result
+        assert time.monotonic() - start < 2

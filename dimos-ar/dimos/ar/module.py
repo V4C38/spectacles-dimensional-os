@@ -114,6 +114,7 @@ class ARModuleConfig(ModuleConfig):  # type: ignore[misc]
     ip_relay_url: str | None = Field(default=DEFAULT_IP_RELAY_URL, pattern=r"^https?://[^/]+")
     localization: LocalizationConfig = Field(default_factory=LocalizationConfig)
     agent: bool = False
+    object_detection: bool = False
     fiducial_marker_mounts: list[FiducialMarkerMount] | None = None
     odom_scale_correction_factor: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
@@ -253,6 +254,7 @@ class ARModule(Module):  # type: ignore[misc]
                 self._manipulation,
                 self._ws_server.schedule_send_to_client,
                 self._ws_server.schedule_broadcast_text,
+                on_ready=lambda: logger.info("Manipulation runtime ready"),
             )
         self._nav_goal_coordinator = NavGoalCoordinator(
             odom_scale_correction_factor=self._profile.odom_scale_correction_factor,
@@ -287,6 +289,7 @@ class ARModule(Module):  # type: ignore[misc]
             self._profile.supported_capabilities,
             localization_available=bool(self._policy.providers),
             agent_available=self.config.agent,
+            object_detection_available=self.config.object_detection,
             manipulation_available=self._manipulation is not None,
             supported_navigation_inputs=self._profile.supported_navigation_inputs,
         )
@@ -387,6 +390,9 @@ class ARModule(Module):  # type: ignore[misc]
 
     @rpc
     def stop(self) -> None:
+        if getattr(self, "_ar_stopping", False):
+            return
+        self._ar_stopping = True
         logger.info("ARModule stopping")
         self._cancel_tele_cmd_vel()
         if self._stationary_task is not None:

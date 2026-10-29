@@ -8,7 +8,7 @@ import {
 export class SpeedSlider extends THREE.Group {
   readonly hit: THREE.Mesh;
   private readonly fill: THREE.Mesh;
-  private readonly thumb: THREE.Mesh;
+  readonly thumb: THREE.Mesh;
   constructor(readonly width: number) {
     super();
     const height = width * 0.035;
@@ -63,6 +63,7 @@ export class SpeedSlider extends THREE.Group {
       new THREE.MeshBasicMaterial({ visible: false }),
     );
     this.hit.userData.manipulationSpeedSlider = true;
+    this.hit.userData.sliderThumb = this.thumb;
     this.hit.userData.sliderHalfWidth = width / 2;
     this.hit.userData.rayPriority = UI_CONTROL_RAY_PRIORITY;
     this.hit.userData.touchButton = true;

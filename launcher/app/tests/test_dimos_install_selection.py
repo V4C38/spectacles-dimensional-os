@@ -47,6 +47,7 @@ async def test_successful_setup_remembers_selected_environment(tmp_path, monkeyp
     from config import env_path, read_env
 
     manager = ProcessManager(root=tmp_path)
+    monkeypatch.setattr(manager, "_running_dimos_pids", AsyncMock(return_value=[]))
     monkeypatch.setattr(manager, "_run_tracked", AsyncMock(return_value=0))
     check = AsyncMock()
     monkeypatch.setattr(manager, "run_check", check)

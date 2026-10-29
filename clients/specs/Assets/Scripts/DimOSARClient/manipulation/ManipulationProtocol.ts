@@ -83,6 +83,8 @@ export function decodeManipulation(
     text(data.request_id);
     text(data.group_id);
     text(data.status);
+    if (data.code !== undefined) text(data.code);
+    if (data.sequence !== undefined && (!Number.isSafeInteger(data.sequence) || Number(data.sequence) < 0)) throw new Error("Invalid update sequence");
     if (!ACTIONS.includes(String(data.action)))
       throw new Error("Unknown manipulation action");
     if (data.token !== undefined) text(data.token);
@@ -92,6 +94,7 @@ export function decodeManipulation(
   } else {
     if (typeof data.available !== "boolean")
       throw new Error("Invalid manipulation availability");
+    if (data.operation != null && !["resetting", "parking"].includes(String(data.operation))) throw new Error("Invalid arm operation");
     if (data.available) {
       finite(data.ts);
       if (data.root_pose != null) pose(data.root_pose);

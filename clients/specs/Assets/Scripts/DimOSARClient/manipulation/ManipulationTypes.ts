@@ -64,6 +64,7 @@ export interface ManipulationState {
   groups?: ManipulationGroup[];
   observations?: Record<string, ManipulationObservation>;
   execution?: string;
+  operation?: "resetting" | "parking" | null;
   owner?: string | null;
   following?: boolean;
   stopped?: boolean;
@@ -77,6 +78,8 @@ export interface ManipulationResult {
   action: ManipulationAction;
   group_id: string;
   status: string;
+  sequence?: number;
+  code?: string;
   message?: string;
   token?: string;
   joints?: Record<string, number> | null;

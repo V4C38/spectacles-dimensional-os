@@ -259,7 +259,9 @@ def _resolve_dimos_python(path: str) -> str:
     if selected.is_dir():
         roots = [selected]
         if selected.name == ".venv" or selected.name == "venv":
-            candidates = [selected / "bin" / executable for executable in ("python3", "python")]
+            candidates = [
+                selected / "bin" / executable for executable in ("python3", "python")
+            ]
             roots = [selected.parent]
         else:
             candidates = []
@@ -342,6 +344,26 @@ async def api_check() -> dict[str, Any]:
 @app.get("/api/settings", dependencies=[Depends(require_local_launcher)])
 async def api_settings_get() -> dict[str, Any]:
     return settings_payload()
+
+
+@app.get("/api/can/status", dependencies=[Depends(require_local_launcher)])
+async def api_can_status() -> dict[str, Any]:
+    return await manager.can_status()
+
+
+@app.post("/api/can/setup", dependencies=[Depends(require_local_launcher)])
+async def api_can_setup() -> dict[str, Any]:
+    try:
+        return await manager.setup_can()
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/planner/status", dependencies=[Depends(require_local_launcher)])
+async def api_planner_status() -> dict[str, Any]:
+    return await manager.planner_status()
 
 
 @app.put("/api/settings", dependencies=[Depends(require_local_launcher)])

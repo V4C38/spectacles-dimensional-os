@@ -1,3 +1,5 @@
+import { URL as FileURL } from "node:url";
+import { readFileSync } from "node:fs";
 // @vitest-environment jsdom
 import { expect, it, vi } from "vitest";
 vi.hoisted(() => {
@@ -12,6 +14,7 @@ vi.hoisted(() => {
   });
 });
 import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { ManipulationRenderer } from "../src/manipulation/ManipulationRenderer";
 import type { ManipulationState } from "@dimos-ar-client/manipulation/ManipulationTypes";
 const pose = {
@@ -84,8 +87,9 @@ it("hides outlines without disabling colliders and keeps stop/reset available", 
   apply(true);
   expect(collider.parent!.children[0].visible).toBe(true);
   expect(
-    r.panel.children.filter((c) =>
-      c.visible && ["estop", "reset"].includes(c.userData.manipulationAction),
+    r.panel.children.filter(
+      (c) =>
+        c.visible && ["estop", "reset"].includes(c.userData.manipulationAction),
     ),
   ).toHaveLength(2);
   apply(false);
@@ -111,8 +115,8 @@ it("keeps the gripper menu across hover transitions and shows the target guide",
   r.eeHovered = true;
   apply(1);
   expect(r.gripperMenu.visible).toBe(true);
-  expect(r.gripperMenu.position.y).toBeGreaterThan(
-    r.handle.object.position.y + 0.05,
+  expect(r.gripperMenu.position.y).toBeLessThan(
+    r.handle.object.position.y - 0.05,
   );
   r.eeHovered = false;
   apply(1.1);
@@ -126,25 +130,68 @@ it("keeps the gripper menu across hover transitions and shows the target guide",
 });
 
 it("plays Preview once from zero while retaining separate measured and target handles", () => {
-  const r=new ManipulationRenderer();
-  const apply=(now:number, plan:any=null)=>r.apply(state,origin,"arm",true,{...pose,position:[.1,0,.2]},null,plan,now,"",true);
+  const r = new ManipulationRenderer();
+  const apply = (now: number, plan: any = null) =>
+    r.apply(
+      state,
+      origin,
+      "arm",
+      true,
+      { ...pose, position: [0.1, 0, 0.2] },
+      null,
+      plan,
+      now,
+      "",
+      true,
+    );
   apply(1);
-  const plan={plan_id:"one",joint_names:[],trajectory:[{time:0,positions:[]},{time:1,positions:[]}],duration:1};
-  r.previewRequested=true;apply(50,plan);expect(r.previewRequested).toBe(true);
-  expect(r.measuredHandle.object.visible).toBe(true);expect(r.handle.object.visible).toBe(true);
+  const plan = {
+    plan_id: "one",
+    joint_names: [],
+    trajectory: [
+      { time: 0, positions: [] },
+      { time: 1, positions: [] },
+    ],
+    duration: 1,
+  };
+  r.previewRequested = true;
+  apply(50, plan);
+  expect(r.previewRequested).toBe(true);
+  expect(r.measuredHandle.object.visible).toBe(true);
+  expect(r.handle.object.visible).toBe(true);
   expect(r.measuredHandle.collider.userData.interactionEnabled).toBe(false);
-  apply(50.5,plan);expect(r.previewRequested).toBe(true);
-  apply(51.1,plan);expect(r.previewRequested).toBe(false);r.dispose();
+  apply(50.5, plan);
+  expect(r.previewRequested).toBe(true);
+  apply(51.1, plan);
+  expect(r.previewRequested).toBe(false);
+  r.dispose();
 });
 
 it("keeps robot status on one line and includes the arm speed", () => {
   const r = new ManipulationRenderer();
   r.speedScale = 0.35;
-  r.apply(state, origin, "arm", false, null, null, null, 1,
-    "Returning to\nzero pose with a long status", true, "OpenYAM");
-  const label = r.baseMarker.children.find(c => c.constructor.name === "RobotMarkerLabel") as any;
+  r.apply(
+    state,
+    origin,
+    "arm",
+    false,
+    null,
+    null,
+    null,
+    1,
+    "Returning to\nzero pose with a long status",
+    true,
+    "OpenYAM",
+  );
+  const label = r.baseMarker.children.find(
+    (c) => c.constructor.name === "RobotMarkerLabel",
+  ) as any;
   expect(label.tagStatus.text).not.toContain("\n");
-  expect(label.tagStatus.text).toContain("35%");
+  expect(label.tagStatus.text).not.toContain("35%");
+  expect(label.tagMessage.text).toBe("35%");
+  expect(label.tagMessage.fillOpacity).toBe(0.5);
+  expect(label.tagMessage.fontSize).toBeLessThan(label.tagStatus.fontSize);
+  expect(label.tagMessage.position.y).toBeLessThan(label.tagStatus.position.y);
   expect(label.tagStatus.maxWidth).toBe(Infinity);
   r.dispose();
 });
@@ -153,23 +200,420 @@ it("combines both moving fingers into one gripper bound", () => {
   const r = new ManipulationRenderer();
   const s = structuredClone(state);
   s.model!.links.push(
-    {name: "left", bounds: {center: [0, 0, 0], size: [0.02, 0.02, 0.05]}},
-    {name: "right", bounds: {center: [0, 0, 0], size: [0.02, 0.02, 0.05]}},
+    { name: "left", bounds: { center: [0, 0, 0], size: [0.02, 0.02, 0.05] } },
+    { name: "right", bounds: { center: [0, 0, 0], size: [0.02, 0.02, 0.05] } },
   );
-  s.model!.links.find(l => l.name === "tool")!.bounds = {
-    center: [0, 0, 0], size: [0.04, 0.04, 0.04],
+  s.model!.links.find((l) => l.name === "tool")!.bounds = {
+    center: [0, 0, 0],
+    size: [0.04, 0.04, 0.04],
   };
   // An articulated tool is the common ancestor of the two finger links.
   s.model!.joints[0].kind = "revolute";
   s.model!.joints[0].axis = [0, 0, 1];
-  s.model!.joints.push(...["left", "right"].map((name, i) => ({
-    name, kind: "prismatic" as const, parent: "tool", child: name,
-    axis: [0, i ? -1 : 1, 0] as [number,number,number], origin: pose,
-    limits: {lower: 0, upper: 0.03}, mimic: null,
-  })));
+  s.model!.joints.push(
+    ...["left", "right"].map((name, i) => ({
+      name,
+      kind: "prismatic" as const,
+      parent: "tool",
+      child: name,
+      axis: [0, i ? -1 : 1, 0] as [number, number, number],
+      origin: pose,
+      limits: { lower: 0, upper: 0.03 },
+      mimic: null,
+    })),
+  );
   r.apply(s, origin, "arm", true, null, null, null, 1, "", true);
-  expect(r.object.getObjectByName("LinkBounds_left")!.parent!.visible).toBe(false);
-  expect(r.object.getObjectByName("LinkBounds_right")!.parent!.visible).toBe(false);
-  expect(r.object.getObjectByName("LinkBounds_tool")!.parent!.visible).toBe(true);
+  expect(r.object.getObjectByName("LinkBounds_left")!.parent!.visible).toBe(
+    false,
+  );
+  expect(r.object.getObjectByName("LinkBounds_right")!.parent!.visible).toBe(
+    false,
+  );
+  expect(r.object.getObjectByName("LinkBounds_tool")!.parent!.visible).toBe(
+    true,
+  );
   r.dispose();
+});
+
+const readyIntent = {
+  targetOffset: true,
+  hasDraft: true,
+  dragging: false,
+  planning: false,
+  executing: false,
+  resetting: false,
+  stopped: false,
+  fresh: true,
+  canPreview: true,
+  canExecute: true,
+  canReset: true,
+};
+
+it("shows measured and dragged spheres and a faint connector in unselected following", () => {
+  const r = new ManipulationRenderer();
+  const s = { ...state, following: true };
+  const target = {
+    ...pose,
+    position: [0.2, 0, 0.3] as [number, number, number],
+  };
+  r.apply(s, origin, "arm", false, target, null, null, 1, "", true, "Arm", {
+    ...readyIntent,
+    dragging: true,
+  });
+  expect(r.measuredHandle.object.visible).toBe(true);
+  expect(
+    r.handle.object.position.distanceTo(r.measuredHandle.object.position),
+  ).toBeGreaterThan(0.1);
+  expect(r.measuredHandle.collider.scale.x).toBeLessThan(
+    r.handle.collider.scale.x,
+  );
+  expect(
+    (r.measuredHandle.collider.material as THREE.ShaderMaterial).uniforms
+      .uOpacity.value,
+  ).toBe(0.25);
+  expect(r.path.visible).toBe(true);
+  expect(r.path.material.uniforms.uOpacity.value).toBe(0.25);
+  r.dispose();
+});
+
+it("uses path provenance for opacity even when the actual planned path is straight", () => {
+  const r = new ManipulationRenderer();
+  const target = { ...pose, position: [0.2, 0, 0] as [number, number, number] };
+  r.apply(state, origin, "arm", true, target, null, null, 1, "");
+  expect(r.path.material.uniforms.uOpacity.value).toBe(0.25);
+  r.apply(
+    state,
+    origin,
+    "arm",
+    true,
+    target,
+    null,
+    {
+      plan_id: "straight",
+      joint_names: [],
+      trajectory: [{ time: 0, positions: [] }],
+      duration: 0,
+    },
+    1.1,
+    "",
+  );
+  expect(r.path.material.uniforms.uOpacity.value).toBe(0.7);
+  r.dispose();
+});
+
+it("keeps Preview above an offset target and hides both marker buttons immediately during a grab", () => {
+  const r = new ManipulationRenderer();
+  const target = { ...pose, position: [0.2, 0, 0] as [number, number, number] };
+  const apply = (now: number, dragging = false, targetOffset = true) =>
+    r.apply(
+      state,
+      origin,
+      "arm",
+      true,
+      target,
+      null,
+      null,
+      now,
+      "",
+      true,
+      "Arm",
+      { ...readyIntent, dragging, targetOffset },
+    );
+  r.eeHovered = true;
+  apply(1);
+  expect(r.gripperMenu.visible).toBe(true);
+  expect(r.previewMenu.visible).toBe(true);
+  expect(r.previewMenu.position.y).toBeGreaterThan(r.handle.object.position.y);
+  expect(r.gripperMenu.position.y).toBeLessThan(r.handle.object.position.y);
+  apply(1.1, true);
+  expect(r.gripperMenu.visible).toBe(false);
+  expect(r.previewMenu.visible).toBe(false);
+  r.eeHovered = false;
+  apply(1.2);
+  expect(r.gripperMenu.visible).toBe(false);
+  expect(r.previewMenu.visible).toBe(true);
+  apply(1.3, false, false);
+  expect(r.previewMenu.visible).toBe(false);
+  r.dispose();
+});
+
+it("uses one contextual emergency control below a narrower Stop and includes the speed slider", () => {
+  const r = new ManipulationRenderer();
+  r.apply(state, origin, "arm", true, null, null, null, 1, "");
+  const stop = r.panel.children.find(
+    (c) => c.userData.manipulationAction === "stop",
+  ) as any;
+  const emergency = r.panel.children.find(
+    (c) => c.userData.manipulationAction === "estop",
+  ) as any;
+  expect(stop.position.y).toBeGreaterThan(emergency.position.y);
+  expect(stop.rangeX).toBeLessThan(emergency.rangeX);
+  expect(r.owns(r.speedSlider.hit)).toBe(true);
+  expect(r.speedSlider.position.y).toBeGreaterThan(stop.position.y);
+  r.apply(
+    { ...state, stopped: true, stop_confirmed: true },
+    origin,
+    "arm",
+    true,
+    null,
+    null,
+    null,
+    1.1,
+    "",
+  );
+  expect(emergency.userData.manipulationAction).toBe("resume");
+  expect(emergency.text).toBe("Resume operation");
+  expect(
+    r.panel.children.filter((c) =>
+      ["estop", "resume"].includes(c.userData.manipulationAction),
+    ),
+  ).toHaveLength(1);
+  expect(emergency.enabled).toBe(true);
+  r.apply(
+    { ...state, stopped: true, stop_confirmed: false },
+    origin,
+    "arm",
+    true,
+    null,
+    null,
+    null,
+    1.2,
+    "",
+  );
+  expect(emergency.enabled).toBe(false);
+  r.dispose();
+});
+
+it("hides full-arm geometry at idle and anchors the tool preview to either mode's target", () => {
+  const r = new ManipulationRenderer();
+  const s = structuredClone(state);
+  s.model!.joints[0].kind = "revolute";
+  r.apply(s, origin, "arm", true, null, null, null, 1, "");
+  const tool = new THREE.Mesh(
+    new THREE.BoxGeometry(0.03, 0.03, 0.03),
+    new THREE.MeshBasicMaterial(),
+  );
+  const base = new THREE.Mesh(
+    new THREE.BoxGeometry(0.03, 0.03, 0.03),
+    new THREE.MeshBasicMaterial(),
+  );
+  const internals = r as any;
+  internals.ghosts.set("tool", tool);
+  internals.ghosts.set("base", base);
+  r.object.add(tool, base);
+  r.apply(s, origin, "arm", true, null, null, null, 1.1, "");
+  expect(base.visible).toBe(false);
+  expect(internals.eeGeometry.visible).toBe(false);
+  const target = {
+    ...pose,
+    position: [0.2, 0, 0.3] as [number, number, number],
+  };
+  for (const selected of [true, false]) {
+    r.apply(
+      { ...s, following: !selected },
+      origin,
+      "arm",
+      selected,
+      target,
+      null,
+      null,
+      1.2,
+      "",
+    );
+    expect(internals.eeGeometry.visible).toBe(true);
+    expect(internals.eeGeometry.children[0].visible).toBe(true);
+    expect(internals.eeGeometry.position.toArray()).toEqual(
+      r.handle.object.position.toArray(),
+    );
+    expect(internals.eeGeometry.quaternion.toArray()).toEqual(
+      r.handle.object.quaternion.toArray(),
+    );
+    expect(base.visible).toBe(selected);
+  }
+  r.dispose();
+});
+
+it("trims the executing path from raw measured joints while bounds use smoothed joints", () => {
+  const r = new ManipulationRenderer();
+  const s = structuredClone(state);
+  s.model!.joints[0].kind = "prismatic";
+  s.model!.joints[0].axis = [1, 0, 0];
+  s.model!.links[1].bounds = { center: [0, 0, 0], size: [0.03, 0.03, 0.03] };
+  s.groups![0].joint_names = ["fixed"];
+  s.observations!.arm.joints = { fixed: 0 };
+  s.execution = "executing";
+  s.operation_id = "op";
+  s.plan = {
+    plan_id: "motion",
+    joint_names: ["fixed"],
+    duration: 2,
+    trajectory: [
+      { time: 0, positions: [0] },
+      { time: 2, positions: [1] },
+    ],
+  };
+  const target = { ...pose, position: [1, 0, 0] as [number, number, number] };
+  const apply = (now: number, fresh = true) =>
+    r.apply(s, origin, "arm", true, target, null, null, now, "", fresh);
+  const startDistance = () => {
+    const start = r.path.geometry.getAttribute("instanceStart");
+    return Math.hypot(start.getX(0), start.getY(0), start.getZ(0));
+  };
+  apply(1);
+  s.observations!.arm.joints.fixed = 0.5;
+  s.observations!.arm.pose = { ...pose, position: [0.5, 0, 0] };
+  apply(1.05);
+  expect(startDistance()).toBeCloseTo(0.5);
+  const bounds = r.object.getObjectByName("LinkBounds_tool")!.parent!;
+  expect(bounds.position.length()).toBeCloseTo(0.5 * (1 - Math.exp(-1)));
+  apply(1.1);
+  expect(startDistance()).toBeCloseTo(0.5);
+  s.observations!.arm.joints.fixed = 0.75;
+  apply(1.15);
+  expect(startDistance()).toBeCloseTo(0.75);
+  s.observations!.arm.joints.fixed = 0.7;
+  apply(1.2);
+  expect(startDistance()).toBeCloseTo(0.75);
+  apply(1.3, false);
+  expect(startDistance()).toBeCloseTo(0.75);
+  s.observations!.arm.joints.fixed = 0.9;
+  apply(1.4);
+  expect(bounds.position.length()).toBeCloseTo(0.9);
+  r.dispose();
+});
+
+it("rotates only OpenYAM's bottom bounding box by 90 degrees without changing its mesh or other boxes", () => {
+  const s = structuredClone(state);
+  s.model!.links[0].bounds = {
+    center: [0.02, -0.01, 0.04],
+    size: [0.07, 0.2, 0.08],
+  };
+  s.model!.links[1].bounds = { center: [0, 0, 0], size: [0.03, 0.06, 0.09] };
+  s.groups![0].has_gripper = false;
+  const load = vi
+    .spyOn(GLTFLoader.prototype, "load")
+    .mockImplementation((_url, complete) => {
+      const scene = new THREE.Group();
+      for (const link of s.model!.links) {
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(...link.bounds!.size),
+          new THREE.MeshBasicMaterial(),
+        );
+        mesh.name = link.name;
+        scene.add(mesh);
+      }
+      complete({ scene } as never);
+    });
+  const reference = new ManipulationRenderer(),
+    openyam = new ManipulationRenderer();
+  try {
+    const generic = structuredClone(s);
+    generic.model!.asset_url = "/models/another-arm.glb";
+    s.model!.asset_url = "/models/openyam.glb";
+    reference.apply(generic, origin, "arm", true, null, null, null, 1, "");
+    openyam.apply(s, origin, "arm", true, null, null, null, 1, "");
+    const box = (r: ManipulationRenderer, name: string) =>
+      r.object.getObjectByName(`LinkBounds_${name}`) as THREE.Mesh;
+    const expected = box(reference, "base")
+      .geometry.clone()
+      .rotateY(Math.PI / 2);
+    expect(
+      Array.from(box(openyam, "base").geometry.getAttribute("position").array),
+    ).toEqual(Array.from(expected.getAttribute("position").array));
+    expect(
+      Array.from(box(openyam, "tool").geometry.getAttribute("position").array),
+    ).toEqual(
+      Array.from(
+        box(reference, "tool").geometry.getAttribute("position").array,
+      ),
+    );
+    expect(box(openyam, "base").parent!.quaternion.toArray()).toEqual(
+      box(reference, "base").parent!.quaternion.toArray(),
+    );
+    for (const link of ["base", "tool"]) {
+      const visual = (r: ManipulationRenderer) =>
+        (r as any).ghosts.get(link) as THREE.Mesh;
+      expect(
+        Array.from(visual(openyam).geometry.getAttribute("position").array),
+      ).toEqual(
+        Array.from(visual(reference).geometry.getAttribute("position").array),
+      );
+    }
+    expected.dispose();
+  } finally {
+    load.mockRestore();
+    reference.dispose();
+    openyam.dispose();
+  }
+});
+
+it("keeps gripper outlines instanced when their aggregate bounds change", () => {
+  const r = new ManipulationRenderer();
+  r.apply(state, origin, "arm", true, null, null, null, 1, "", true);
+  const collider = r.object.getObjectByName("LinkBounds_base") as THREE.Mesh;
+  const stroke = (r as any).boundStrokes.get("base");
+  expect(stroke.object.geometry.isInstancedBufferGeometry).toBe(true);
+  expect(collider.geometry instanceof THREE.InstancedBufferGeometry).toBe(false);
+  expect(stroke.object.geometry.getAttribute("instanceStart").count).toBe(12);
+  expect(collider.parent!.visible).toBe(true);
+  r.dispose();
+});
+
+it("reveals full-length stationary bounds and scales only perpendicular axes", () => {
+  const r = new ManipulationRenderer();
+  r.hoveredLink = "base";
+  r.apply(state, origin, "arm", false, null, null, null, 1, "", true);
+  const stroke = (r as any).boundStrokes.get("base").object;
+  // Source Y maps to WebXR X; it is the longest axis of this fixture.
+  expect(stroke.scale.x).toBe(1);
+  expect(stroke.scale.z).toBeGreaterThan(0);
+  expect(stroke.scale.z).toBeLessThan(0.1);
+  expect(stroke.scale.y).toBe(stroke.scale.z);
+  expect((r as any).baseLabel.scale.x).toBe(0.75);
+  expect(r.speedSlider.width).toBe(0.14);
+  expect((r as any).speedLabel.text).toBe("Speed · 20%");
+  r.dispose();
+});
+
+it("keeps the dashed shader when rebuilding gripper bounds after finger movement", () => {
+  const r = new ManipulationRenderer();
+  const moving = structuredClone(state);
+  moving.model!.links.push({ name: "finger", bounds: {center:[0,0,0],size:[0.01,0.02,0.01]} });
+  moving.model!.joints.push({name:"finger-slide",kind:"prismatic",parent:"base",child:"finger",axis:[1,0,0],origin:pose,limits:{lower:0,upper:0.05},mimic:null});
+  r.apply(moving, origin, "arm", true, null, null, null, 1, "", true);
+  moving.observations!.arm.gripper = 1;
+  r.apply(moving, origin, "arm", true, null, null, null, 1.1, "", true);
+  const stroke = (r as any).boundStrokes.get("base");
+  expect(stroke.object.geometry.isInstancedBufferGeometry).toBe(true);
+  expect(stroke.object.material.uniforms.uDash.value).toBeGreaterThan(0);
+  expect(r.object.getObjectByName("LinkBounds_base")!.parent!.visible).toBe(true);
+  r.dispose();
+});
+
+it("shows movement-weighted IK segments and a compound OpenYAM forearm", () => {
+  const fixture=JSON.parse(readFileSync(new FileURL("./integration-tests/fixtures/OpenYAM.json",import.meta.url),"utf8"));
+  const load=vi.spyOn(GLTFLoader.prototype,"load").mockImplementation(()=>{});
+  const r=new ManipulationRenderer();
+  try {
+    const arm: ManipulationState={...state, model:fixture.model,
+      groups:[{id:"arm",joint_names:Object.keys(fixture.joints),base_frame:"base",tip_frame:"gripper_tip",has_gripper:true,following:true}],
+      observations:{arm:{joints:fixture.joints,measured_at:1,pose:fixture.pose,gripper:0}}};
+    const solution={...fixture.joints,yam_joint6:fixture.joints.yam_joint6+0.8};
+    const target={...pose,position:[0.2,0,0.3] as [number,number,number]};
+    const intent={dragging:true,targetOffset:true,executing:false} as any;
+    r.apply(arm,origin,"arm",false,target,solution,null,1,"",true,"OpenYAM",intent);
+    const segments=(r as any).ikSegments;
+    expect(segments.get("yam_joint6").object.visible).toBe(true);
+    expect(segments.get("yam_joint6").object.material.uniforms.uOpacity.value).toBeGreaterThan(0.5);
+    expect(segments.get("yam_joint2").object.material.uniforms.uOpacity.value).toBeLessThan(0.01);
+    const forearm=r.object.getObjectByName("LinkBounds_link3") as THREE.Mesh;
+    expect(forearm.geometry.getAttribute("position").count).toBe(48);
+    const gripper=(r as any).boundStrokes.get("gripper");
+    expect(gripper.object.geometry.isInstancedBufferGeometry).toBe(true);
+    r.rejection={revision:1,pose:target,message:"IK failed"};
+    r.apply(arm,origin,"arm",false,target,solution,null,1.1,"IK failed",true,"OpenYAM",intent);
+    expect(segments.get("yam_joint6").object.material.uniforms.uColor.value.getHex()).toBe(0xff453a);
+    r.apply(arm,origin,"arm",false,target,solution,null,3,"IK failed",true,"OpenYAM",intent);
+    expect(r.warning.object.visible).toBe(true);
+  } finally {r.dispose();load.mockRestore();}
 });

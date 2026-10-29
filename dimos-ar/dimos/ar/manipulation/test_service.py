@@ -52,5 +52,71 @@ async def test_shutdown_retires_connections_before_stopping_runtime():
     service.connect("owner")
     service.connect("observer")
     await service.close()
-    assert set(events[:-1]) == {("disconnect", "owner"), ("disconnect", "observer")}
-    assert events[-1] == ("stop", None)
+    assert events[0] == ("stop", None)
+    assert set(events[1:]) == {("disconnect", "owner"), ("disconnect", "observer")}
+
+
+@pytest.mark.asyncio
+async def test_readiness_is_emitted_once_and_polling_retires_before_stop():
+    snapshots = [{"available": False}, {"available": True}]
+    ready = asyncio.Event()
+    observations = []
+
+    class Runtime:
+        def ar_manipulation_snapshot(self):
+            observations.append("snapshot")
+            return snapshots.pop(0) if snapshots else {"available": True}
+
+        def ar_manipulation_stop(self):
+            assert service._poll is None
+            observations.append("stop")
+
+    calls = []
+
+    def on_ready():
+        calls.append("ready")
+        ready.set()
+
+    service = ManipulationService(Runtime(), lambda *args: None, lambda _: None, on_ready)
+    service.start()
+    await asyncio.wait_for(ready.wait(), timeout=2)
+    await asyncio.sleep(0.15)
+    await service.close()
+    assert calls == ["ready"]
+    assert observations[-1] == "stop"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_rpc_unsubscribes_callback_and_ignores_late_reply():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    callbacks = []
+    unsubscribe = Mock()
+
+    def call(name, args, callback):
+        callbacks.append(callback)
+        return unsubscribe
+
+    runtime = SimpleNamespace(rpc=SimpleNamespace(call=call), remote_name="ManipulationModule")
+    service = ManipulationService(runtime, lambda *args: None, lambda _: None)
+    task = asyncio.create_task(service._call("ar_manipulation_snapshot"))
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    unsubscribe.assert_called_once()
+    callbacks[0]({"available": True})
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_prepared_shutdown_retires_locally_without_late_runtime_calls():
+    from unittest.mock import Mock
+
+    runtime = Mock()
+    service = ManipulationService(runtime, lambda *args: None, lambda _: None)
+    service._shutdown_prepared = True
+    service.connect("supervisor")
+    await service.close()
+    runtime.ar_manipulation_stop.assert_not_called()
+    runtime.ar_manipulation_disconnect.assert_not_called()
