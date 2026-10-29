@@ -18,6 +18,7 @@ from dimos.core.global_config import global_config
 from dimos.manipulation.manipulation_module import ManipulationModule, ManipulationModuleConfig
 from dimos.manipulation.visualization.operator import ManipulationOperator, PoseTargetRequest
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+from dimos.msgs.sensor_msgs.JointState import JointState
 
 
 class ARManipulationModuleConfig(ManipulationModuleConfig):  # type: ignore[misc]
@@ -49,6 +50,7 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         self._ar_token: str | None = None
         self._ar_sequence = -1
         self._ar_updated = 0.0
+        self._ar_follow_evaluated = 0.0
         self._ar_epoch = 0
         self._ar_cancelling = False
         self._ar_stopped = False
@@ -57,6 +59,9 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         self._ar_plan: dict[str, Any] | None = None
         self._ar_descriptor: dict[str, Any] | None = None
         self._ar_operation: str | None = None
+        self._ar_final_gripper: tuple[str, float, dict[str, float]] | None = None
+        self._ar_gripper_completion_at: float | None = None
+        self._ar_gripper_error: str | None = None
 
     def _ar_fresh(self, group: str) -> Any:
         state = self.get_state()
@@ -83,6 +88,8 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         self._ar_owner = None
         self._ar_group = None
         self._ar_operation = None
+        self._ar_final_gripper = None
+        self._ar_gripper_completion_at = None
 
     def _ar_clear_following(self) -> None:
         for task in self.config.following_tasks.values():
@@ -93,6 +100,10 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         # Validate again at the domain boundary, including direct RPC callers.
         message = decode_request({**request, "request_id": "domain"})
         action, group, body = message.action, message.group_id, message.payload
+        if action in {"reset_joints", "prepare_shutdown"}:
+            return self._ar_return_zero(
+                client_id, group, body["speed_scale"], action == "prepare_shutdown"
+            )
         if action == "cancel":
             with self._ar_lock:
                 if self._ar_owner not in (None, client_id):
@@ -146,13 +157,39 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                     or not -0.1 <= time.time() - body["ts"] <= 0.5
                 ):
                     raise ValueError("following sample stale or out of order")
+                if (
+                    getattr(self, "_world_monitor", None) is not None
+                    and time.monotonic() - getattr(self, "_ar_follow_evaluated", 0) >= 0.15
+                ):
+                    self._ar_follow_evaluated = time.monotonic()
+                    evaluation = ManipulationOperator(
+                        self, self._world_monitor
+                    ).evaluate_pose_target(PoseTargetRequest({group: self._ar_pose(body)}))
+                    if not evaluation.success:
+                        self._ar_clear_following()
+                        self._ar_retire()
+                        raise ValueError(
+                            evaluation.message or "Following target is unreachable or colliding"
+                        )
                 task = self.config.following_tasks[group]
+                self._control_coordinator.task_invoke(
+                    task, "set_speed_scale", {"value": body["speed_scale"]}
+                )
                 self._control_coordinator.task_invoke(
                     task, "on_cartesian_command", {"pose": self._ar_pose(body), "t_now": None}
                 )
                 self._ar_sequence = body["sequence"]
                 self._ar_updated = time.monotonic()
                 return {"status": "following"}
+            if action == "gripper":
+                self._ar_epoch += 1
+                self._ar_plan = None
+                self.clear_planned_path()
+                result = self.set_gripper_position(body["value"], planning_group=group)
+                return {
+                    "status": "completed" if result.succeeded else "rejected",
+                    "message": result.message,
+                }
             if self._ar_token is not None:
                 raise ValueError("release following before another operation")
             execution = self.get_state().execution_status.name
@@ -174,15 +211,6 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                 self._ar_epoch += 1
                 self._ar_updated = time.monotonic()
                 return {"status": "acquired", "token": self._ar_token}
-            if action == "gripper":
-                self._ar_epoch += 1
-                self._ar_plan = None
-                self.clear_planned_path()
-                result = self.set_gripper_position(body["value"], planning_group=group)
-                return {
-                    "status": "completed" if result.succeeded else "rejected",
-                    "message": result.message,
-                }
             if action == "execute":
                 if (
                     self._ar_plan is None
@@ -191,8 +219,20 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                 ):
                     raise ValueError("reviewed plan was retired or replaced")
                 result = self.execute(blocking=False, plan_id=body["plan_id"])
-                if result.status.name == "ACCEPTED":
+                if result.status.name in {"ACCEPTED", "COMPLETED"}:
+                    self._ar_gripper_error = None
                     self._ar_operation = uuid4().hex
+                    self._ar_final_gripper = None
+                    self._ar_gripper_completion_at = None
+                    if "final_gripper" in self._ar_plan:
+                        endpoint = dict(
+                            zip(
+                                self._ar_plan["joint_names"],
+                                self._ar_plan["trajectory"][-1]["positions"],
+                                strict=True,
+                            )
+                        )
+                        self._ar_final_gripper = (group, self._ar_plan["final_gripper"], endpoint)
                 return {
                     "status": result.status.name.lower(),
                     "message": result.message,
@@ -244,9 +284,73 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                 if epoch != self._ar_epoch or client_id in self._ar_retired:
                     raise ValueError("request retired")
                 if action == "plan":
+                    if "final_gripper" in body:
+                        result_body["final_gripper"] = body["final_gripper"]
                     self._ar_plan = result_body
             return result_body
         finally:
+            self._ar_planning.release()
+
+    def _ar_return_zero(
+        self, client_id: str, group: str, speed: float, shutdown: bool
+    ) -> dict[str, Any]:
+        with self._ar_lock:
+            if shutdown:
+                if self._ar_stopped or self._ar_cancelling:
+                    return {
+                        "status": "skipped",
+                        "message": "Emergency stop active; automatic motion skipped",
+                    }
+            else:
+                self._ar_require_owner(client_id, group)
+            self._ar_fresh(group)
+            self._ar_clear_following()
+            self._ar_retire()
+            self._ar_owner, self._ar_group = client_id, group
+        if not self._ar_planning.acquire(blocking=False):
+            raise ValueError("Planning is pending; retry reset")
+        try:
+            cancelled = self.cancel()
+            if cancelled.status.name in {"UNCERTAIN", "FAULT"}:
+                raise ValueError("Could not confirm motion stopped")
+            definition = next(g for g in self.list_planning_groups() if g.id == group)
+            joints = list(definition.joint_names)
+            target = JointState(name=joints, position=[0.0] * len(joints))
+            planned = self.plan_to_joints(
+                {group: target}, speed_scale=min(speed, 0.2) if shutdown else speed
+            )
+            if not planned.succeeded or planned.plan is None:
+                raise ValueError(planned.message)
+            result = self.execute(blocking=False, plan_id=planned.plan.plan_id)
+            if result.status.name not in {"ACCEPTED", "COMPLETED", "SUCCEEDED"}:
+                raise ValueError(result.message)
+            deadline, settled = time.monotonic() + 60, None
+            while time.monotonic() < deadline:
+                with self._ar_lock:
+                    if self._ar_stopped:
+                        raise ValueError("Reset interrupted by emergency stop")
+                observed = self._ar_fresh(group)
+                actual = dict(zip(observed.joints.name, observed.joints.position, strict=True))
+                if all(abs(actual.get(name, float("inf"))) <= 0.02 for name in joints):
+                    settled = settled or time.monotonic()
+                    if time.monotonic() - settled >= 0.5:
+                        terminal = self.wait_for_execution(timeout=0.1)
+                        if terminal.status.name == "COMPLETED":
+                            ready = self.reset()
+                            if ready.status.name != "SUCCEEDED":
+                                raise ValueError(ready.message)
+                            return {"status": "completed", "message": "Zero pose confirmed"}
+                else:
+                    settled = None
+                time.sleep(0.05)
+            self.cancel()
+            raise ValueError("Zero pose was not confirmed within 60 seconds")
+        except Exception:
+            self.cancel()
+            raise
+        finally:
+            with self._ar_lock:
+                self._ar_retire()
             self._ar_planning.release()
 
     def _ar_pose(self, body: dict[str, Any]) -> PoseStamped:
@@ -287,15 +391,52 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                 self._ar_clear_following()
                 self._ar_retire()
             if self._ar_operation and state.execution_status.name not in {"ACCEPTED", "EXECUTING"}:
-                self._ar_owner = None
-                self._ar_group = None
-                self._ar_plan = None
+                deferred = self._ar_final_gripper
+                waiting_for_endpoint = False
+                if deferred and state.execution_status.name == "COMPLETED" and not self._ar_stopped:
+                    group, value, endpoint = deferred
+                    now = time.monotonic()
+                    completion_at = getattr(self, "_ar_gripper_completion_at", None)
+                    if completion_at is None:
+                        completion_at = now
+                        self._ar_gripper_completion_at = completion_at
+                    waiting_for_endpoint = now - completion_at < 2.0
+                    observed = state.groups.get(group)
+                    if (
+                        observed
+                        and observed.joints
+                        and 0 <= time.time() - observed.joints.ts <= self.config.feedback_max_age_s
+                    ):
+                        actual = dict(
+                            zip(observed.joints.name, observed.joints.position, strict=True)
+                        )
+                        if all(
+                            abs(actual.get(j, float("inf")) - q) <= 0.02
+                            for j, q in endpoint.items()
+                        ):
+                            command = self.set_gripper_position(value, planning_group=group)
+                            if command.status.name != "SUCCEEDED":
+                                self._ar_gripper_error = command.message
+                            self._ar_final_gripper = None
+                            waiting_for_endpoint = False
+                if not waiting_for_endpoint:
+                    self._ar_final_gripper = None
+                    self._ar_gripper_completion_at = None
+                    self._ar_operation = None
+                    self._ar_owner = None
+                    self._ar_group = None
+                    self._ar_plan = None
             return {
                 "available": True,
                 "simulated": bool(global_config.simulation),
                 "ts": time.time(),
                 "model": self._ar_descriptor,
-                "root_pose": self.config.wire_from_world.model_dump(),
+                "root_pose": (
+                    self._ar_pose_wire(self.config.model.base_pose)
+                    if getattr(self.config, "model", None) is not None
+                    and getattr(self.config.model, "base_pose", None) is not None
+                    else self.config.wire_from_world.model_dump()
+                ),
                 "groups": [
                     {
                         "id": g.id,
@@ -317,7 +458,7 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                     for key, value in state.groups.items()
                 },
                 "execution": state.execution_status.name.lower(),
-                "message": state.error,
+                "message": getattr(self, "_ar_gripper_error", None) or state.error,
                 "owner": self._ar_owner,
                 "following": self._ar_token is not None,
                 "stopped": self._ar_stopped,

@@ -387,4 +387,7 @@ echo ""
 # A one-off Go2 :8081 /offer refusal usually means the robot-side runtime was
 # still coming up, not that the Lens-side ws://<host>:8787 session is misconfigured.
 
+if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" ]]; then
+  exec "${PYTHON}" "${SCRIPT_DIR}/supervise-arm.py" -- "${RUN_CMD[@]}" < /dev/null
+fi
 exec "${RUN_CMD[@]}" < /dev/null 2> >(grep -v '^objc\[' >&2)

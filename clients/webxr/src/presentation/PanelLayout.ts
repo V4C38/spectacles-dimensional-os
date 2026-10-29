@@ -38,7 +38,7 @@ function runtimeProfile(startY: number, rows: readonly LayoutRow[]): PanelProfil
 export const RUNTIME_LAYOUTS = {
   manual: runtimeProfile(0.146, [["guidance", 0.18], ["status", 0.018]]),
   agent: runtimeProfile(0.146, [["reply", 0.12], ["draft", 0.12], ["actions", 0.064], ["status", 0.018, 0.01]]),
-  settings: runtimeProfile(0.23, [["robot", 0.03], ["robotActions", 0.064], ["headset", 0.03, 0.03], ["debug", 0.064], ["diagnostics", 0.064], ["sound", 0.064]]),
+  settings: runtimeProfile(0.23, [["robot", 0.03], ["robotActions", 0.064, 0.01], ["speed", 0.064, 0.01], ["headset", 0.03, 0.01], ["debug", 0.064, 0.01], ["diagnostics", 0.064, 0.01], ["sound", 0.064, 0.01]]),
   sensors: runtimeProfile(0.112, [["range", 0.064], ["points", 0.064], ["statistics", 0.1, 0.03]]),
   diagnostics: runtimeProfile(0.23, [["logs", 0.4]]),
   alignment: runtimeProfile(0.23, [["guidance", 0.07], ["actions", 0.064]]),

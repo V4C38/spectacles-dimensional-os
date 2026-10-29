@@ -157,3 +157,45 @@ it("rejects malformed timed trajectories", () => {
     }),
   ).toThrow();
 });
+
+it("Execute obtains a checked plan and executes exactly its ID without a Plan click", () => {
+  const f = fixture();
+  f.interaction.setSelected(true); f.interaction.begin(); f.interaction.aim(pose); f.interaction.end();
+  f.interaction.execute(); f.advance(0.1);
+  const request = f.sent.at(-1); expect(request.action).toBe("plan");
+  expect(request.speed_scale).toBe(0.2);
+  f.reply(request, {status: "planned", plan_id: "checked", joint_names: ["joint"], trajectory: [{time: 0, positions: [0]}], duration: 0});
+  expect(f.sent.at(-1).action).toBe("execute"); expect(f.sent.at(-1).plan_id).toBe("checked");
+});
+
+it("deselection and speed changes retire pending execution targets", () => {
+  const f = fixture(); f.interaction.setSelected(true); f.interaction.begin(); f.interaction.aim(pose); f.interaction.end();
+  f.interaction.execute(); f.advance(0.1); const request = f.sent.at(-1);
+  f.interaction.setSelected(false); f.interaction.setSelected(true);
+  f.reply(request, {status: "planned", plan_id: "late", joint_names: ["joint"], trajectory: [{time: 0, positions: [0]}], duration: 0});
+  expect(f.interaction.target).toBeNull(); expect(f.sent.some(c => c.action === "execute")).toBe(false);
+  f.interaction.setSpeedScale(0.4); expect(f.interaction.speedScale).toBe(0.4);
+});
+
+it("Reset is a distinct joint-zero request using the selected speed", () => {
+  const f = fixture(); f.interaction.setSpeedScale(0.1); f.interaction.resetJoints();
+  expect(f.sent.at(-1)).toMatchObject({action: "reset_joints", speed_scale: 0.1});
+  expect(f.interaction.busy).toBe(true);
+});
+
+it("selected gripper intent is attached to the plan without moving the gripper", () => {
+ const f=fixture();f.interaction.setSelected(true);f.interaction.begin();f.interaction.aim(pose);f.interaction.end();
+ f.interaction.setGripper(1);expect(f.sent.some(c=>c.action==="gripper")).toBe(false);
+ f.interaction.execute();f.advance(.1);expect(f.sent.at(-1)).toMatchObject({action:"plan",final_gripper:1});
+});
+
+it("plans on releasing a selected target without executing hardware", () => {
+  const f = fixture();
+  f.interaction.setSelected(true);
+  f.interaction.begin();
+  f.interaction.aim(pose);
+  f.interaction.end();
+  f.advance(0.01);
+  expect(f.sent.at(-1)).toMatchObject({action: "plan", position: pose.position});
+  expect(f.sent.some(c => c.action === "execute" || c.action === "acquire")).toBe(false);
+});

@@ -856,3 +856,6 @@ function asciiBytes(text: string): Uint8Array {
   }
   return out;
 }
+
+// Manipulation reset_joints / prepare_shutdown and following speed_scale use
+// the shared manipulation codec; see dimos-ar/PROTOCOL.md.

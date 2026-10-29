@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+import "./fixtures/xrEnvironment";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RecognitionPort, SynthesisPort } from "@dimos-ar-client/agent/AgentDraftSession";
 import { DimOSWebXRClient } from "../src/DimOSWebXRClient";

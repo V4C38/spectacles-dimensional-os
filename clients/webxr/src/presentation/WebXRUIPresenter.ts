@@ -38,6 +38,7 @@ export interface WebXRUISnapshot {
   wizardCardTitle: string;
   wizardCardBody: string;
   localizationIssue: string | null;
+  manipulationAvailable?: boolean;
   robotName: string;
   robotSelected: boolean;
   robotConnectionText: string;
@@ -217,6 +218,7 @@ export class WebXRUIPresenter {
       lidarReceived: this.lidarMode === "off" ? 0 : view.lidar?.points.length ?? 0,
       cameraStatus: this.cameraStatus, trackingStatus: this.trackingStatus, surfaceCount: this.surfaceCount,
       estopPressed: this.estopPressed, alignmentReview: this.alignmentReview,
+      manipulationAvailable: view.capabilities?.manipulation?.available === true,
       lidarAvailable: view.capabilities?.lidar.available === true,
       agentAvailable: view.capabilities?.agent.available === true,
       estopAvailable: view.capabilities?.estop.available === true,

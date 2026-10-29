@@ -1,3 +1,4 @@
+import { SpeedSlider } from "./SpeedSlider";
 import { SETUP_SUCCESS_STYLE, strokeJoints2D, STROKE_JOIN_SEGMENTS } from "@dimos-ar-client/presentation/WorldVisualStyle";
 import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_LAYOUT, CONTROL_PANEL_SCALE, controlPanelTab, robotBadgeText, sensorStatusText } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import * as THREE from "three";
@@ -28,6 +29,7 @@ export type MainMenuCallbacks = {
   onMenu: () => void;
   onMode: (mode: "manual" | "agent") => void;
   onRobot: () => void;
+  manipulationSpeed?: () => number;
   onDebug: () => void;
   onLidar: () => void;
   onLidarMode?: (mode: LidarDisplayMode) => void;
@@ -93,6 +95,10 @@ export class MainMenuView {
   private readonly runtimeFooter = new THREE.Group();
   private readonly lidarTabs: SurfaceButton[] = [];
   private readonly sensorControls: SurfaceButton[] = [];
+  private handlersSpeed: () => number = () => 0.2;
+  private readonly speedGroup = new THREE.Group();
+  private readonly speedLabel: SurfaceText;
+  private readonly speedSlider = new SpeedSlider(0.43 / HEIGHT);
   private readonly rangeValue: SurfaceText;
   private readonly rangeLabel: SurfaceText;
   private readonly pointsValue: SurfaceText;
@@ -238,10 +244,18 @@ export class MainMenuView {
 
     label(this.settingsPage, COPY.settings, LEFT + 0.29, HEADER_Y, 0.56, 0.04, 28, C.ink, "left", "semibold");
     iconClose(this.settingsPage, COPY.done, () => { this.settingsOpen = false; });
-    label(this.settingsPage, COPY.robot, 0, 0.16, CONTENT, 0.03, 19, C.muted);
+    label(this.settingsPage, COPY.robot, -0.25, 0.16, 0.14, 0.03, 19, C.muted);
 
     this.localize = button(this.settingsPage, COPY.relocalize, -(HALF_WIDTH + GAP) / 2, 0.09, HALF_WIDTH, ACTION_HEIGHT, handlers.onRealign);
     button(this.settingsPage, COPY.setup, (HALF_WIDTH + GAP) / 2, 0.09, HALF_WIDTH, ACTION_HEIGHT, handlers.onRestart);
+    this.handlersSpeed = handlers.manipulationSpeed ?? (() => 0.2);
+    this.speedGroup.position.set(0, 0.025 / HEIGHT, 0.012 / HEIGHT);
+    this.speedGroup.userData.followSurface = this.localize;
+    this.settingsPage.add(this.speedGroup);
+    this.speedSlider.position.set(0.10 / HEIGHT, 0, 0.006);
+    this.speedGroup.add(this.speedSlider);
+    const speedText = label(this.speedGroup, "Speed · 20%", -0.27, 0, 0.22, 0.04, 22, C.muted);
+    this.speedLabel = speedText;
     label(this.settingsPage, COPY.headset, 0, -0.014, CONTENT, 0.03, 19, C.muted);
     this.debugToggle = button(this.settingsPage, "Debug · Off", 0, -0.084, CONTENT, ACTION_HEIGHT, handlers.onDebug);
     button(this.settingsPage, COPY.diagnostics, 0, -0.152, CONTENT, ACTION_HEIGHT, () => { this.detailsOpen = true; });
@@ -323,6 +337,11 @@ export class MainMenuView {
       this.panel.position.add(top.sub(scaledTop));
       this.runtimeScaleApplied = runtime;
     }
+    this.speedGroup.visible = snap.manipulationAvailable === true;
+    const speed = this.handlersSpeed();
+    this.speedSlider.setValue(speed);
+    this.speedGroup.traverse(node => {if(node instanceof THREE.Mesh){node.renderOrder=80;for(const m of Array.isArray(node.material)?node.material:[node.material])m.depthTest=m.depthWrite=false;}});
+    setText(this.speedLabel, `Speed · ${Math.round(speed * 100)}%`);
     this.lastStep = snap.wizardStep;
     this.agentEnabled = snap.setupCompleted && snap.operatingMode === "agent" && snap.agentAvailable && snap.robotSelected;
     this.panelShown = snap.menuOpen || !snap.setupCompleted || snap.setupCelebrating === true || snap.alignmentReview?.pending === true;
@@ -426,7 +445,7 @@ export class MainMenuView {
     const layouts = RUNTIME_LAYOUTS;
     this.manualHelp.position.y = layouts.manual.rows.guidance / HEIGHT;
     moveRows(this.chat, [[0.052, layouts.agent.rows.reply], [-0.088, layouts.agent.rows.draft], [-0.196, layouts.agent.rows.actions]]);
-    moveRows(this.settingsPage, [[0.16, layouts.settings.rows.robot], [0.09, layouts.settings.rows.robotActions],
+    moveRows(this.settingsPage, [[0.025, layouts.settings.rows.speed], [0.16, layouts.settings.rows.robot], [0.09, layouts.settings.rows.robotActions],
       [-0.014, layouts.settings.rows.headset], [-0.084, layouts.settings.rows.debug], [-0.152, layouts.settings.rows.diagnostics], [-0.228, layouts.settings.rows.sound]]);
     moveRows(this.sensorsPage, [[0.08, layouts.sensors.rows.range], [-0.01, layouts.sensors.rows.points], [-0.15, layouts.sensors.rows.statistics]]);
     moveRows(this.details, [[-0.03, layouts.diagnostics.rows.logs]]);
@@ -643,6 +662,7 @@ export class MainMenuView {
 
   canInteract(object: THREE.Object3D, point: THREE.Vector3): boolean {
     if (object.userData.interactionEnabled === false) return false;
+    if (object.userData.manipulationSpeedSlider) return this.speedGroup.visible;
     for (let node: THREE.Object3D | null = object; node && node !== this.panel; node = node.parent) {
       if (node instanceof SurfaceButton) return node.enabled;
     }

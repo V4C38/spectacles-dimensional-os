@@ -89,10 +89,19 @@ def describe_model(xml: str, asset_url: str | None = None) -> dict[str, Any]:
         assert parent is not None and child is not None
         axis = joint.find("axis")
         mimic = joint.find("mimic")
+        limit = joint.find("limit")
         joints.append(
             {
                 "name": joint.attrib["name"],
                 "kind": joint.attrib["type"],
+                "limits": (
+                    {
+                        "lower": float(limit.get("lower", "0")),
+                        "upper": float(limit.get("upper", "0")),
+                    }
+                    if limit is not None
+                    else None
+                ),
                 "parent": parent.attrib["link"],
                 "child": child.attrib["link"],
                 "origin": _origin(joint.find("origin")),
@@ -111,7 +120,15 @@ def describe_model(xml: str, asset_url: str | None = None) -> dict[str, Any]:
     if len(roots) != 1:
         raise ValueError("visual model requires exactly one root")
     signature = hashlib.sha256(
-        json.dumps(_signature_values({"links": links, "joints": joints}), sort_keys=True).encode()
+        json.dumps(
+            _signature_values(
+                {
+                    "links": links,
+                    "joints": [{k: v for k, v in j.items() if k != "limits"} for j in joints],
+                }
+            ),
+            sort_keys=True,
+        ).encode()
     ).hexdigest()
     return {
         "visual_signature": signature,

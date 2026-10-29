@@ -16,6 +16,8 @@ const ACTIONS: readonly string[] = [
   "update",
   "release",
   "gripper",
+  "reset_joints",
+  "prepare_shutdown",
 ];
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -141,6 +143,11 @@ export function decodeManipulation(
           throw new Error("Unsupported visual joint");
         if (!links.has(String(joint.parent)) || !links.has(String(joint.child)))
           throw new Error("Unknown joint link");
+        if (joint.limits != null) {
+          const limit = object(joint.limits);
+          if (finite(limit.lower) > finite(limit.upper))
+            throw new Error("Invalid joint limits");
+        }
         vector(joint.axis, 3);
         pose(joint.origin);
         if (joint.mimic != null) {
@@ -194,11 +201,24 @@ export function encodeManipulation(
     sequence?: number;
     value?: number;
     speed_scale?: number;
+    final_gripper?: number;
   } = {},
 ): string {
   text(requestId);
   text(groupId);
   if (["evaluate", "plan", "update"].includes(action)) pose(payload);
+  if (
+    ["plan", "update", "reset_joints", "prepare_shutdown"].includes(action) &&
+    payload.speed_scale !== undefined
+  ) {
+    if (finite(payload.speed_scale) <= 0 || payload.speed_scale > 1)
+      throw new Error("Invalid speed scale");
+  }
+  if (
+    payload.final_gripper !== undefined &&
+    (finite(payload.final_gripper) < 0 || payload.final_gripper > 1)
+  )
+    throw new Error("Invalid final gripper value");
   if (action === "execute") text(payload.plan_id);
   if (action === "update" || action === "release") text(payload.token);
   if (action === "update") {

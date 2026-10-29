@@ -4,7 +4,7 @@ import { ButtonFootprint } from "./ButtonFootprint";
 import { glassMaterial } from "./GlassSurface";
 import { buttonSurfaceBacking, tintButtonBacking } from "./RoundedSurfaceGeometry";
 import { DIMOS_AR_DESIGN } from "./DimOSARDesign";
-import { registerRayTarget } from "../input/XRBlocksRayInteraction";
+import { registerRayTarget, UI_CONTROL_RAY_PRIORITY } from "../input/XRBlocksRayInteraction";
 const C = DIMOS_AR_DESIGN.colors;
 const HEIGHT = DIMOS_AR_DESIGN.panel.height;
 export type ButtonVariant = "default" | "primary" | "danger" | "field" | "tab";
@@ -52,6 +52,7 @@ export class SurfaceButton extends xb.TextButton {
     mesh.material.depthWrite = false;
     mesh.renderOrder = this.renderOrder;
     mesh.name = `Button: ${this.text}`;
+    mesh.userData.rayPriority = UI_CONTROL_RAY_PRIORITY;
     registerRayTarget(mesh);
     mesh.userData.touchButton = true;
     this.disposeBacking();

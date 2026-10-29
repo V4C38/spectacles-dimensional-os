@@ -5,6 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import shutil
+import subprocess
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -193,14 +197,119 @@ async def api_dimos_refs() -> dict[str, Any]:
     return {"refs": refs, "default": "main"}
 
 
+@app.post("/api/browse-dimos-install", dependencies=[Depends(require_local_launcher)])
+async def api_browse_dimos_install(request: Request) -> dict[str, str | None]:
+    """Open a native folder chooser for an existing DimOS installation."""
+    if not await asyncio.to_thread(_has_display):
+        raise HTTPException(
+            status_code=409, detail="A desktop file chooser is unavailable"
+        )
+
+    body = await request.json()
+    current = str(body.get("path", "")).strip()
+    start_dir = Path(current).expanduser() if current else Path.home()
+    if start_dir.is_file():
+        start_dir = start_dir.parent
+    if start_dir.name == ".venv":
+        start_dir = start_dir.parent
+    start_dir = start_dir if start_dir.is_dir() else Path.home()
+    try:
+        if sys.platform == "darwin":
+            proc = await asyncio.create_subprocess_exec(
+                "osascript",
+                "-e",
+                'POSIX path of (choose folder with prompt "Select DimOS installation")',
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        else:
+            chooser = shutil.which("zenity")
+            if not chooser:
+                raise HTTPException(
+                    status_code=501, detail="Install zenity to use the folder chooser"
+                )
+            proc = await asyncio.create_subprocess_exec(
+                chooser,
+                "--file-selection",
+                "--directory",
+                "--title=Select DimOS installation folder",
+                f"--filename={start_dir}/",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=501, detail="A native folder chooser is unavailable"
+        ) from exc
+    out, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return {"path": None}
+    return {"path": out.decode("utf-8", errors="replace").strip() or None}
+
+
+def _has_display() -> bool:
+    return sys.platform == "darwin" or bool(
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    )
+
+
+def _resolve_dimos_python(path: str) -> str:
+    """Accept either a DimOS checkout folder or its Python executable."""
+    selected = Path(path).expanduser()
+    if selected.is_dir():
+        roots = [selected]
+        if selected.name == ".venv" or selected.name == "venv":
+            candidates = [selected / "bin" / executable for executable in ("python3", "python")]
+            roots = [selected.parent]
+        else:
+            candidates = []
+        candidates.extend(
+            [
+                root / env_dir / "bin" / executable
+                for root in roots
+                for env_dir in (".venv", "venv")
+                for executable in ("python3", "python")
+            ]
+        )
+        candidates.extend(
+            root / "bin" / executable
+            for root in roots
+            for executable in ("python3", "python")
+        )
+    else:
+        candidates = [selected]
+    for candidate in candidates:
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            continue
+        try:
+            subprocess.run(
+                [str(candidate), "-c", "import dimos"],
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            continue
+        else:
+            # Keep the venv path itself; its Python executable is commonly a symlink
+            # to a shared interpreter, and the venv location carries the environment.
+            return str(candidate.absolute())
+    raise ValueError(
+        "Choose a DimOS install folder containing a .venv or venv, or its Python executable"
+    )
+
+
 @app.post("/api/setup", dependencies=[Depends(require_local_launcher)])
 async def api_setup(body: SetupBody) -> dict[str, Any]:
     try:
         if body.mode == "existing":
             if not body.dimos_python or not body.dimos_python.strip():
                 raise HTTPException(status_code=400, detail="dimos_python is required")
+            dimos_python = await asyncio.to_thread(
+                _resolve_dimos_python, body.dimos_python.strip()
+            )
             await manager.run_setup(
-                dimos_python=body.dimos_python.strip(),
+                dimos_python=dimos_python,
                 **({"manipulation": True} if body.manipulation else {}),
             )
         else:

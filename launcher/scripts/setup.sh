@@ -323,7 +323,7 @@ install_dimos_editable() {
   echo "Installing DimOS from source (editable) into: ${target_python}" >&2
   (
     cd "${dimos_dir}"
-    "${target_python}" -m pip install -e ".[base,unitree]" 1>&2
+    python_pip_install "${target_python}" -e ".[base,unitree]" 1>&2
   )
 }
 
@@ -426,7 +426,7 @@ echo "Installing dimos-ar into that environment..."
   cd "${DIMOS_AR_ROOT}"
   extras="dev"
   if [[ "${FLAG_MANIPULATION}" -eq 1 ]]; then extras="dev,manipulation"; fi
-  "${DIMOS_ENV_PYTHON}" -m pip install -e ".[${extras}]"
+  python_pip_install "${DIMOS_ENV_PYTHON}" -e ".[${extras}]"
 )
 
 if ! python_has_dimos_ar "${DIMOS_ENV_PYTHON}"; then

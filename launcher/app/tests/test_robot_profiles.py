@@ -34,8 +34,25 @@ def test_new_arm_never_inherits_go2_calibration(tmp_path, monkeypatch):
     monkeypatch.setattr(robot_profiles, "read_armodule_config", dict)
     profiles = RobotProfiles(tmp_path / "profiles.json")
     arm = profiles.create("openyam", "OpenYAM_2")
-    assert arm["armodule"]["fiducial_marker_mounts"] is None
-    assert arm["armodule"]["localization"]["providers"] == []
+    mount = arm["armodule"]["fiducial_marker_mounts"][0]
+    assert mount == {
+        "marker_id": 0,
+        "size_m": 0.056,
+        "position": [0.0, -0.12, 0.0],
+        "orientation": [0.0, 0.0, 0.0, 1.0],
+    }
+    assert arm["armodule"]["localization"]["providers"] == [{"type": "fiducial_marker"}]
+    from tag_config import armodule_config_from_ui, ui_from_armodule_config
+
+    ui = ui_from_armodule_config(arm["armodule"])
+    assert ui["mounts"][0]["print_size_mm"] == pytest.approx(70)
+    restored = armodule_config_from_ui(
+        fiducial_marker=ui["fiducial_marker"], vps=False,
+        map_code=None, mounts=ui["mounts"],
+    )["fiducial_marker_mounts"][0]
+    assert restored["position"] == mount["position"]
+    assert restored["orientation"] == mount["orientation"]
+    assert restored["size_m"] == pytest.approx(mount["size_m"])
 
 
 def test_optional_planning_install_is_explicit(tmp_path):

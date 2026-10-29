@@ -1001,3 +1001,28 @@ remain connected. Reconnect restores current state and previews; it never resume
 following or repeats execution. Emergency Stop also retires manipulation plans and
 streaming targets, preserves the gripper setting, and requires explicit resume.
 Environment-depth data is host-local and is never part of this protocol.
+
+### Manipulation target execution and parking
+
+`manipulation_request` adds `reset_joints` and `prepare_shutdown`, both using the
+existing `request_id`, `group_id`, and optional `speed_scale` (default 0.2, in
+(0, 1]). They plan a collision-checked joint-zero arm move, preserving the gripper,
+and reply only after fresh joint feedback confirms zero within 0.02 radians for
+0.5 seconds, or report failure. They never clear emergency stop. Shutdown parking
+is capped at 20% and 60 seconds; the launcher then proceeds with shutdown even
+if parking fails or times out. The supervisor keeps DimOS alive until the attempt
+finishes. Power loss and SIGKILL cannot provide orderly parking.
+
+Following `update` accepts `speed_scale` with the same range/default; the server
+applies it to the bounded Cartesian IK task's joint velocity envelope.
+`plan` retains its existing speed semantics and execute-by-plan-ID binding.
+Preview is a client label for `plan`; Execute can request and then execute a
+checked plan without a separate user Plan action. The immediate dotted target
+guide is advisory and does not represent a checked trajectory.
+
+Manipulation `plan` may include `final_gripper` in [0,1]. It is bound to that
+plan ID and issued only after successful execution and fresh feedback within
+0.02 rad of its endpoint. Cancel, E-stop, replacement, failure, and ownership
+retirement discard deferred gripper intent. Selected target edits do not send
+immediate gripper commands. Optional visual joint `limits` describe lower/upper
+positions for gripper-only articulation.

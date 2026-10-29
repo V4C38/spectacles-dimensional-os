@@ -13,7 +13,9 @@ export type ManipulationAction =
   | "acquire"
   | "update"
   | "release"
-  | "gripper";
+  | "gripper"
+  | "reset_joints"
+  | "prepare_shutdown";
 export interface ManipulationJoint {
   name: string;
   kind: "fixed" | "revolute" | "continuous" | "prismatic";
@@ -21,6 +23,7 @@ export interface ManipulationJoint {
   child: string;
   axis: Vec3;
   origin: ManipulationPose;
+  limits?: { lower: number; upper: number } | null;
   mimic: { joint: string; multiplier: number; offset: number } | null;
 }
 export interface ManipulationModel {

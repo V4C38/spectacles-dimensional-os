@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import math
 import os
@@ -18,6 +19,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from config import (
     env_path,
@@ -61,6 +63,7 @@ _RE_CHECK_OK = re.compile(r"^CHECK_OK=([01])\s*$")
 _RE_DIMOS_PYTHON = re.compile(r"^DIMOS_PYTHON=(.+)$")
 _RE_DIMOS_VERSION = re.compile(r"^DIMOS_VERSION=(.+)$")
 _RE_DIMOS_REF = re.compile(r"^DIMOS_REF=(.+)$")
+_RE_WEBXR_URL = re.compile(r"\b(Local|Network):\s+(https?://\S+)")
 
 
 def _strip_ansi(text: str) -> str:
@@ -162,10 +165,17 @@ class ProcessManager:
 
     def snapshot(self) -> dict[str, Any]:
         stored = read_env(env_path(self.root))
+        dimos_install_dir = self.status.dimos_python
+        if dimos_install_dir:
+            interpreter = Path(dimos_install_dir).absolute()
+            environment = interpreter.parent.parent
+            if interpreter.parent.name == "bin" and environment.name in (".venv", "venv"):
+                dimos_install_dir = str(environment.parent)
         return {
             "phase": self.status.phase.value,
             "check_ok": self.status.check_ok,
             "dimos_python": self.status.dimos_python,
+            "dimos_install_dir": dimos_install_dir,
             "dimos_version": self.status.dimos_version,
             "dimos_ref": self.status.dimos_ref,
             "websocket_url": self.status.websocket_url,
@@ -238,13 +248,6 @@ class ProcessManager:
         if m := _RE_PIN.search(plain):
             self._set_status(pin=m.group(1))
             return
-        if (
-            self.status.phase == Phase.RUNNING
-            and self.status.websocket_url
-            and self.status.host_ip
-            and self.status.robot_ip is not None
-        ):
-            return
         if m := _RE_ARMODULE_READY.search(plain):
             self._set_status(websocket_url=m.group(1), phase=Phase.RUNNING, error=None)
             return
@@ -255,11 +258,34 @@ class ProcessManager:
             self._set_status(websocket_url=m.group(1), phase=Phase.RUNNING, error=None)
             return
         if m := _RE_HOST_IP.search(plain):
-            self._set_status(host_ip=m.group(1))
+            # A platform-specific shell probe must not erase a known LAN IP.
+            if m.group(1).lower() != "unknown":
+                self._set_status(host_ip=m.group(1))
             return
         if m := _RE_ROBOT_IP.search(plain):
             self._set_status(robot_ip=m.group(1))
             return
+
+    def _parse_webxr_line(self, line: str) -> None:
+        match = _RE_WEBXR_URL.search(_strip_ansi(line))
+        if match is None:
+            return
+        kind, url = match.groups()
+        if kind == "Local":
+            self._set_status(webxr_local_url=url)
+            return
+        try:
+            host = urlsplit(url).hostname
+            address = ipaddress.ip_address(host or "")
+        except ValueError:
+            return
+        if address.is_loopback or address.is_unspecified:
+            return
+        # Prefer the default-route interface when Vite lists several adapters.
+        # With no detected IP, retain the first usable address Vite reports.
+        if self.status.webxr_url and host != self.status.host_ip:
+            return
+        self._set_status(webxr_url=url, host_ip=host)
 
     def port_in_use(self, port: int = ARMODULE_PORT) -> bool:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -470,6 +496,9 @@ class ProcessManager:
             env = os.environ.copy()
             env["DIMOS_AR_FORCE_COLOR"] = "1"
             env.pop("DIMOS_PYTHON", None)
+            selected_python = read_env(env_path(self.root)).get("DIMOS_PYTHON")
+            if selected_python:
+                env["DIMOS_PYTHON"] = selected_python
             await self._run_tracked(argv, env=env, on_line=on_line)
             self._set_status(
                 phase=Phase.READY if check_ok else Phase.NEEDS_SETUP,
@@ -511,6 +540,11 @@ class ProcessManager:
                     error=None,
                 )
                 raise RuntimeError(f"setup.sh exited with code {code}")
+            selected_python = dimos_python
+            if clone_dir:
+                selected_python = str(Path(clone_dir).expanduser() / ".venv" / "bin" / "python3")
+            if selected_python:
+                merge_env({"DIMOS_PYTHON": selected_python}, env_path(self.root))
 
         await self.run_check()
 
@@ -778,8 +812,8 @@ class ProcessManager:
                 return
             host_ip = self.status.host_ip
             self._set_status(
-                webxr_local_url=f"https://localhost:{WEBXR_PORT}",
-                webxr_url=(
+                webxr_local_url=self.status.webxr_local_url or f"https://localhost:{WEBXR_PORT}",
+                webxr_url=self.status.webxr_url or (
                     f"https://{host_ip}:{WEBXR_PORT}"
                     if host_ip and host_ip != "unknown"
                     else None
@@ -804,6 +838,8 @@ class ProcessManager:
                 if label == "ARModule"
                 else STOP_GRACE_SECONDS
             )
+            if label == "ARModule" and self.status.blueprint == "openyam_ar_planner":
+                grace += 65  # Allow the supervisor to park before stopping DimOS.
             await asyncio.wait_for(proc.wait(), timeout=grace)
         except TimeoutError:
             self._append_log(f"{label} did not stop in time — sending SIGKILL")
@@ -951,6 +987,8 @@ class ProcessManager:
                     break
                 line = raw.decode("utf-8", errors="replace").rstrip("\n")
                 self._append_log(line)
+                if self._webxr_proc is proc and self.status.phase != Phase.STOPPING:
+                    self._parse_webxr_line(line)
         finally:
             await proc.wait()
 

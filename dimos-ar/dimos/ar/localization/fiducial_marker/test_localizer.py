@@ -29,8 +29,9 @@ from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
     ("pose_ts", "replay", "succeeds"),
     [(100.0, False, True), (10.0, True, True), (10.0, False, False)],
 )
+@pytest.mark.parametrize("mount_lateral_m", [0.0, -0.12])
 def test_localizes_rendered_table_marker_from_three_optical_camera_poses(
-    pose_ts: float, replay: bool, succeeds: bool,
+    pose_ts: float, replay: bool, succeeds: bool, mount_lateral_m: float,
 ) -> None:
     """Exercise JPEG detection, PnP, optical composition, and default tilt fusion."""
     intrinsics = _intrinsics()
@@ -49,8 +50,10 @@ def test_localizes_rendered_table_marker_from_three_optical_camera_poses(
         tilt, _ = cv2.Rodrigues(np.array([0.2, 0.0, 0.0]))
         client_camera = np.eye(4)
         client_camera[:3, :3] = tilt @ np.diag([1.0, -1.0, -1.0])
-        client_camera[:3, 3] = [offset, 0.0, 0.35]
-        camera_marker = np.linalg.inv(client_camera)
+        client_camera[:3, 3] = [offset, mount_lateral_m, 0.35]
+        mount = np.eye(4)
+        mount[1, 3] = mount_lateral_m
+        camera_marker = np.linalg.inv(client_camera) @ mount
         rvec, _ = cv2.Rodrigues(camera_marker[:3, :3])
         corners, _ = cv2.projectPoints(object_points, rvec, camera_marker[:3, 3], k, None)
         warp = cv2.getPerspectiveTransform(
@@ -76,7 +79,7 @@ def test_localizes_rendered_table_marker_from_three_optical_camera_poses(
             FiducialMarkerMount(
                 marker_id=0,
                 size_m=marker_size,
-                position=(0.0, 0.0, 0.0),
+                position=(0.0, mount_lateral_m, 0.0),
                 orientation=(0.0, 0.0, 0.0, 1.0),
             )
         ],
@@ -611,3 +614,23 @@ def test_real_pnp_recovers_go2_mount_from_nonzero_robot_pose_and_tracking_origin
 
     assert result is not None
     assert pose_to_matrix(result.pose) == pytest.approx(expected_origin, abs=1e-4)
+
+
+def test_bench_tag_center_offset_is_applied_once_not_as_a_tag_edge():
+    from scipy.spatial.transform import Rotation
+
+    from dimos.ar.localization.fiducial_marker.localizer import compose_odom_client
+    base = np.eye(4)
+    base[:3, 3] = [0.4, 0.2, 0.1]
+    mount = np.eye(4)
+    mount[:3, 3] = [0, -0.12, 0]
+    client = np.eye(4)
+    client[:3, :3] = Rotation.from_euler('z', 0.3).as_matrix()
+    client[:3, 3] = [0.2, -0.5, 0.8]
+    camera = np.eye(4)
+    camera[:3, 3] = [-0.04, 0.02, 0.01]
+    camera_marker = np.linalg.inv(camera) @ np.linalg.inv(client) @ base @ mount
+    estimated = compose_odom_client(base, mount, camera, camera_marker)
+    np.testing.assert_allclose(estimated, client, atol=1e-12)
+    reconstructed_base = estimated @ camera @ camera_marker @ np.linalg.inv(mount)
+    np.testing.assert_allclose(reconstructed_base, base, atol=1e-12)

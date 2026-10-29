@@ -70,14 +70,8 @@ class RobotProfiles:
             if source_id and self.get(source_id)["robot"] != robot:
                 raise ValueError("cannot duplicate a different robot type")
             if robot == "openyam" and not source_id:
-                config = {
-                    "localization": {"providers": []},
-                    "fiducial_marker_mounts": None,
-                    "stationary_base": {
-                        "position": [0, 0, 0],
-                        "orientation": [0, 0, 0, 1],
-                    },
-                }
+                preset = Path(__file__).with_name("profiles") / "openyam.json"
+                config = json.loads(preset.read_text(encoding="utf-8"))["armodule"]
             profile = {
                 "id": uuid4().hex,
                 "robot": robot,

@@ -39,6 +39,13 @@ test("plans with a mesh ghost and follows only during an unselected grab", async
   test.setTimeout(120000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (
+      message.type() === "error" &&
+      /WebGLProgram|shader error|GL_INVALID/i.test(message.text())
+    )
+      errors.push(message.text());
+  });
   const fixture = await bootstrap(page, "controller", { manipulation: true });
   try {
     await fixture.localized();
@@ -52,6 +59,17 @@ test("plans with a mesh ghost and follows only during an unselected grab", async
         }),
       )
       .toBeGreaterThan(0);
+    expect(await page.evaluate(() => {
+      const app = (window as any).xb.core.scene.children.find(
+        (o: any) => o.constructor.name === "WebXRApp",
+      );
+      let meshes = 0, normals = 0;
+      for (const visual of app.client.manipulation.renderer.ghosts.values())
+        visual.traverse((part: any) => {
+          if (part.isMesh) { meshes++; if (part.geometry.getAttribute("normal")) normals++; }
+        });
+      return meshes > 0 && meshes === normals;
+    })).toBe(true);
     await page.evaluate(() => {
       const app = (window as any).xb.core.scene.children.find(
         (o: any) => o.constructor.name === "WebXRApp",
@@ -153,6 +171,89 @@ test("plans with a mesh ghost and follows only during an unselected grab", async
       .poll(() => fixture.commands.some((c) => c.action === "release"))
       .toBe(true);
     expect(errors).toEqual([]);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("manipulation speed slider captures a controller drag", async ({
+  page,
+}) => {
+  const fixture = await bootstrap(page, "controller", { manipulation: true });
+  try {
+    await fixture.localized();
+    await page.evaluate(() => {
+      const w = window as any;
+      const app = w.xb.core.scene.children.find(
+        (o: any) => o.constructor.name === "WebXRApp",
+      );
+      if (!app.client.ui.menuOpen) app.client.ui.toggleMenu();
+      app.mainMenu.settingsOpen = true;
+    });
+    await page.waitForTimeout(700);
+    await page.evaluate(() => {
+      const w = window as any;
+      const app = w.xb.core.scene.children.find(
+        (o: any) => o.constructor.name === "WebXRApp",
+      );
+      const hit = app.mainMenu.speedSlider.hit;
+      hit.updateWorldMatrix(true, false);
+      const p = hit.getWorldPosition(hit.position.clone());
+      const q = hit.getWorldQuaternion(hit.quaternion.clone());
+      const n = p.clone().set(0, 0, 1).applyQuaternion(q);
+      p.addScaledVector(n, 0.4);
+      const c = w.questDevice.controllers.right;
+      c.position.set(p.x, p.y, p.z);
+      c.quaternion.set(q.x, q.y, q.z, q.w);
+    });
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const w = window as any;
+          const app = w.xb.core.scene.children.find(
+            (o: any) => o.constructor.name === "WebXRApp",
+          );
+          return (
+            app.interaction.hit(w.xb.core.input.rightController)?.object
+              .userData.manipulationSpeedSlider === true
+          );
+        }),
+      )
+      .toBe(true);
+    await setSelection(page, 1);
+    const before = await page.evaluate(() => {
+      const w = window as any;
+      const app = w.xb.core.scene.children.find(
+        (o: any) => o.constructor.name === "WebXRApp",
+      );
+      return app.client.manipulation.interaction.speedScale;
+    });
+    await page.evaluate(() => {
+      const w = window as any;
+      const app = w.xb.core.scene.children.find(
+        (o: any) => o.constructor.name === "WebXRApp",
+      );
+      const hit = app.mainMenu.speedSlider.hit;
+      const q = hit.getWorldQuaternion(hit.quaternion.clone());
+      const axis = hit.position
+        .clone()
+        .set(1, 0, 0)
+        .applyQuaternion(q)
+        .multiplyScalar(0.06);
+      const p = w.questDevice.controllers.right.position;
+      p.set(p.x + axis.x, p.y + axis.y, p.z + axis.z);
+    });
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const w = window as any;
+          return w.xb.core.scene.children.find(
+            (o: any) => o.constructor.name === "WebXRApp",
+          ).client.manipulation.interaction.speedScale;
+        }),
+      )
+      .toBeGreaterThan(before + 0.15);
+    await setSelection(page, 0);
   } finally {
     fixture.close();
   }

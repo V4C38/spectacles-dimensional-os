@@ -907,8 +907,8 @@
     if (status.default_clone_dir && !cloneDir.value) {
       cloneDir.value = status.default_clone_dir;
     }
-    if (status.dimos_python && !dimosPython.value) {
-      dimosPython.value = status.dimos_python;
+    if ((status.dimos_install_dir || status.dimos_python) && !dimosPython.value) {
+      dimosPython.value = status.dimos_install_dir || status.dimos_python;
     }
 
     startBtn.disabled = busy || running || checkOk !== true;
@@ -1097,6 +1097,29 @@
   clearLogBtn.addEventListener("click", clearLog);
   logFilterLevel.addEventListener("change", applyLogFilter);
   logFilterSource.addEventListener("change", applyLogFilter);
+
+  let dimosPickerOpen = false;
+  dimosPython.addEventListener("click", async () => {
+    if (dimosPickerOpen) return;
+    dimosPickerOpen = true;
+    try {
+      const res = await fetch("/api/browse-dimos-install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: dimosPython.value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        appendLog(`File chooser error: ${data.detail || res.statusText}`);
+      } else if (data.path) {
+        dimosPython.value = data.path;
+      }
+    } catch (err) {
+      appendLog(`File chooser error: ${err}`);
+    } finally {
+      dimosPickerOpen = false;
+    }
+  });
 
   installBtn.addEventListener("click", async () => {
     const mode = setupMode();

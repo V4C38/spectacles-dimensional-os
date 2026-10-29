@@ -142,6 +142,24 @@ async def test_stop_before_readiness_cancels_webxr(runtime) -> None:
 
 
 @pytest.mark.asyncio
+async def test_webxr_output_publishes_network_url_when_probe_is_unknown(runtime) -> None:
+    mgr, children, _spawn = runtime
+    await mgr.start_armodule(blueprint="openyam_ar_planner", client="webxr")
+    mgr.status.host_ip = "unknown"
+    await parsed(mgr, children[0], READY)
+    await asyncio.wait_for(mgr._webxr_start_task, timeout=1)
+    children[1].output("  ➜  Network: https://192.168.1.181:5173/")
+
+    async def address_published() -> None:
+        async with aclosing(mgr.subscribe()) as events:
+            async for event in events:
+                if event.get("webxr_url") == "https://192.168.1.181:5173/":
+                    return
+
+    await asyncio.wait_for(address_published(), timeout=1)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("ready_first", [False, True])
 async def test_exit_during_startup_never_launches_webxr(runtime, ready_first: bool) -> None:
     mgr, children, spawn = runtime

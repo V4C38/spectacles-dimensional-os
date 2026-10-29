@@ -1,5 +1,8 @@
 """Official OpenYAM composition, loaded only by its optional entry point."""
 
+from dataclasses import replace
+
+from dimos.ar.manipulation.following import ARArmCoordinator
 from dimos.ar.manipulation.frames import ReferencePose
 from dimos.ar.manipulation.module import ARManipulationModule
 from dimos.ar.module import ARModule
@@ -8,7 +11,6 @@ from dimos.control.coordinator import TaskConfig
 from dimos.control.tasks.trajectory_task.trajectory_task import joint_trajectory_task
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.manipulators.common.blueprints import cartesian_ik_task, coordinator
-from dimos.robot.manipulators.common.coordinators import ArmPoseCoordinator
 from dimos.robot.manipulators.openyam.config import make_openyam_model_config, openyam_hardware
 
 _model = make_openyam_model_config()
@@ -29,7 +31,7 @@ openyam_ar_planner = autoconnect(
         model_asset_url="/models/openyam.glb",
     ),
     coordinator(
-        cls=ArmPoseCoordinator,
+        cls=ARArmCoordinator,
         instance_name="ControlCoordinator",
         hardware=[_hardware],
         tasks=[
@@ -41,12 +43,15 @@ openyam_ar_planner = autoconnect(
                 priority=20,
             ),
             *[
-                cartesian_ik_task(
-                    _hardware,
-                    robot_model=_model,
-                    target_frame=g.tip_link,
-                    name=_tasks[g.name],
-                    priority=20,
+                replace(
+                    cartesian_ik_task(
+                        _hardware,
+                        robot_model=_model,
+                        target_frame=g.tip_link,
+                        name=_tasks[g.name],
+                        priority=20,
+                    ),
+                    type="ar_cartesian_ik",
                 )
                 for g in _pose_groups
             ],

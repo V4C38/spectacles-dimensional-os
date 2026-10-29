@@ -1,6 +1,6 @@
 export type ClientNotification = {
-  text: string; tone?: "neutral" | "danger" | "success";
-  glyph?: "stop" | "cross" | "check"; durationS?: number; priority?: number;
+  text: string; tone?: "neutral" | "danger" | "success" | "warning";
+  glyph?: "stop" | "cross" | "check" | "warning"; durationS?: number; priority?: number;
 };
 /** Portable lifetime and preemption. Hosts advance this only while presenting visible frames. */
 export class NotificationCenter {

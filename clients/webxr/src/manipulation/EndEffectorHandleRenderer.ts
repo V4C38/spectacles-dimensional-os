@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { indicatorMaterial } from "../presentation/PoseIndicatorMaterial";
 import { registerRayTarget } from "../input/XRBlocksRayInteraction";
 import { clientTrackingToWebxrPoint } from "../utilities/WebXRCoordinates";
 
@@ -9,14 +10,8 @@ export class EndEffectorHandleRenderer {
   constructor() {
     this.object.name = "EndEffectorHandle";
     this.collider = new THREE.Mesh(
-      new THREE.SphereGeometry(0.035, 16, 12),
-      new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        wireframe: true,
-        depthTest: false,
-        transparent: true,
-        opacity: 0.85,
-      }),
+      new THREE.SphereGeometry(0.018, 20, 16),
+      indicatorMaterial(),
     );
     this.collider.name = "EndEffectorHandleCollider";
     this.collider.userData.rayPriority = 10;
@@ -38,6 +33,7 @@ export class EndEffectorHandleRenderer {
     axes.traverse((part) => {
       if (part instanceof THREE.LineSegments) part.material.depthTest = false;
     });
+    axes.visible = false;
     this.object.add(axes);
   }
   dispose(): void {

@@ -112,3 +112,68 @@ The test verifies the runtime's simulated flag before dispatching motion. On mac
 the Open3D wheel may additionally require Homebrew `libusb`. The experimental
 validation environment uses an isolated official-source installation and RoboPlan
 0.7; no upstream Python source was patched.
+
+### WebXR controls
+
+Select the robot to edit an end-effector target. The dotted target guide appears
+immediately; **Execute** computes a checked trajectory and executes that exact
+plan. **Preview** computes and animates the trajectory without moving hardware.
+Changing the target or speed invalidates the previous preview. Deselecting drops
+the target and returns the handle to the measured tool pose.
+
+With the robot unselected, hold and drag the tool sphere to follow live; release
+to stop following. Grab capture persists outside the robot bounds. The controller's
+secondary face button toggles the gripper during a drag. The tool's floating
+Open/Close button remains visible while hovering either the sphere or the button.
+
+Robot settings expose a 5–100% manipulation speed slider, default 20%. It scales
+planned motion and the live IK joint velocity envelope. Reset plans a checked
+joint-zero arm move and leaves the gripper unchanged. Emergency Stop remains next
+to the base marker independently of selection; it is distinct from Reset and
+fault recovery.
+
+Orderly OpenYAM shutdown through the launcher or `start.sh` first requests a
+checked return to zero at no more than 20% speed. Fresh joint feedback must remain
+within 0.02 radians of zero for 0.5 seconds to confirm parking. After a failed
+attempt or a 60-second timeout, shutdown proceeds and logs that parking was not
+confirmed. An active emergency stop skips automatic parking. A forced kill or
+power loss cannot perform this sequence. Hardware parking must be validated in
+an attended session; automated shutdown tests use simulated processes and joints.
+
+### Shared presentation and target intent
+
+WebXR robot types share the robot label, bounding-box animation, marker Fresnel
+material, styled buttons, slider capture policy, and notification pill. Hovering
+one arm bound reveals all linked bounds using the same timing and widths as Go2.
+The selected arm mesh uses measured joints; Preview is a separate, single-play
+animation starting at trajectory time zero. Its button turns off on completion.
+
+Selected mode has a noninteractive measured tip sphere and a lighter movable
+target. Gripper edits on that target are deferred intent, bound to the checked
+plan and applied only after success and endpoint confirmation. Unselected
+following retains immediate gripper control. Tool geometry includes only the
+model's gripper subtree and derives finger articulation from joint limits.
+
+Only rejected targets create the warning pill. One pill and one small rejected
+position marker are shown at a time, for 1.5 seconds while the handle returns to
+the last valid pose. Positive feasibility results do not generate warnings.
+
+### Target controls and calibration
+
+The arm menu stays below its marker and shares the runtime panel resize animation.
+Selected dragging edits a target and automatically requests a checked trajectory on
+release. Preview plays that trajectory once and leaves the model at its target.
+Execute moves the hardware; its selected gripper opening is sent through the
+coordinator only after successful arrival. Unselected dragging follows directly;
+the controller squeeze button toggles the gripper. Both modes scale the model's
+joint velocity limits with the same speed percentage.
+
+The checked-in bench profile measures 120 mm from the arm axis to the tag center,
+not the printed edge. The model root uses the configured planning base pose,
+converted into wire odometry once. No tag offset belongs in the renderer. After
+changing calibration, re-localize; an earlier tracking origin retains its earlier
+calibration. With `DIMOS_LOG_LEVEL=DEBUG`, `Fiducial transform chain` records the
+base, mount, camera, observed tag and solved tracking-origin translations to
+separate a mounting error from camera calibration or model placement. Physical
+alignment must be checked against the actual bench; browser fixtures cannot
+establish that measurement.
