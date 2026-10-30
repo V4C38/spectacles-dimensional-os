@@ -41,7 +41,8 @@ class Child:
 
 @pytest_asyncio.fixture
 async def runtime(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[tuple[ProcessManager, list[Child], AsyncMock]]:
     mgr = ProcessManager(root=tmp_path)
     children: list[Child] = []
@@ -64,6 +65,8 @@ async def runtime(
     monkeypatch.setattr(mgr, "_configure_system_if_needed", AsyncMock())
     monkeypatch.setattr(mgr, "_ensure_webxr_deps", AsyncMock())
     monkeypatch.setattr(mgr, "_build_webxr", AsyncMock())
+    monkeypatch.setattr(mgr, "planner_status", AsyncMock(return_value={"ready": True}))
+    monkeypatch.setattr(mgr, "can_status", AsyncMock(return_value={"ready": True}))
     monkeypatch.setattr(mgr, "_kill_port_listeners", AsyncMock(return_value=False))
     monkeypatch.setattr(mgr, "_stop_one", stop)
     try:
@@ -142,10 +145,13 @@ async def test_stop_before_readiness_cancels_webxr(runtime) -> None:
 
 
 @pytest.mark.asyncio
-async def test_webxr_output_publishes_network_url_when_probe_is_unknown(runtime) -> None:
+async def test_webxr_output_publishes_network_url_when_probe_is_unknown(
+    runtime,
+) -> None:
     mgr, children, _spawn = runtime
     await mgr.start_armodule(blueprint="openyam_ar_planner", client="webxr")
     mgr.status.host_ip = "unknown"
+    await parsed(mgr, children[0], "Manipulation runtime ready")
     await parsed(mgr, children[0], READY)
     await asyncio.wait_for(mgr._webxr_start_task, timeout=1)
     children[1].output("  ➜  Network: https://192.168.1.181:5173/")
@@ -161,7 +167,9 @@ async def test_webxr_output_publishes_network_url_when_probe_is_unknown(runtime)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ready_first", [False, True])
-async def test_exit_during_startup_never_launches_webxr(runtime, ready_first: bool) -> None:
+async def test_exit_during_startup_never_launches_webxr(
+    runtime, ready_first: bool
+) -> None:
     mgr, children, spawn = runtime
     await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
     async with mgr._lock:
@@ -252,10 +260,15 @@ async def test_specs_start_does_not_wait_for_readiness(runtime) -> None:
     assert spawn.await_count == 1
     assert mgr.status.webxr_url is None
 
+
 @pytest.mark.asyncio
-async def test_production_build_failure_never_publishes_webxr(runtime, monkeypatch) -> None:
+async def test_production_build_failure_never_publishes_webxr(
+    runtime, monkeypatch
+) -> None:
     mgr, children, spawn = runtime
-    monkeypatch.setattr(mgr, "_build_webxr", AsyncMock(side_effect=RuntimeError("build failed")))
+    monkeypatch.setattr(
+        mgr, "_build_webxr", AsyncMock(side_effect=RuntimeError("build failed"))
+    )
     await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
     task = mgr._webxr_start_task
     await parsed(mgr, children[0], READY)
@@ -263,4 +276,67 @@ async def test_production_build_failure_never_publishes_webxr(runtime, monkeypat
     assert spawn.await_count == 1
     assert mgr.status.phase == Phase.ERROR
     assert mgr.status.webxr_url is None
-    assert mgr.status.error == "Failed to start WebXR: build failed"
+    assert mgr.status.error == "Failed to build WebXR: build failed"
+
+
+@pytest.mark.asyncio
+async def test_openyam_waits_for_manipulation_not_just_websocket(runtime):
+    mgr, children, spawn = runtime
+    await mgr.start_armodule(blueprint="openyam_ar_planner", client="webxr")
+    await parsed(mgr, children[0], READY)
+    assert mgr.status.phase == Phase.STARTING
+    assert not mgr._armodule_ready.is_set()
+    assert spawn.await_count == 1
+    await parsed(mgr, children[0], "Manipulation runtime ready")
+    await asyncio.wait_for(mgr._webxr_start_task, timeout=1)
+    assert spawn.await_count == 2
+    assert mgr.status.phase == Phase.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_stop_during_build_is_not_blocked_by_process_lock(runtime, monkeypatch):
+    mgr, children, spawn = runtime
+    entered, hold = asyncio.Event(), asyncio.Event()
+
+    async def build(_env):
+        entered.set()
+        await hold.wait()
+
+    monkeypatch.setattr(mgr, "_build_webxr", build)
+    await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
+    await parsed(mgr, children[0], READY)
+    task = mgr._webxr_start_task
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    await asyncio.wait_for(mgr.stop_armodule(), timeout=1)
+    assert task.cancelled()
+    assert spawn.await_count == 1
+    assert mgr.status.webxr_url is None
+
+
+@pytest.mark.asyncio
+async def test_failure_during_build_cancels_it_and_preserves_primary_error(
+    runtime, monkeypatch
+):
+    mgr, children, spawn = runtime
+    entered, hold = asyncio.Event(), asyncio.Event()
+
+    async def build(_env):
+        entered.set()
+        await hold.wait()
+
+    monkeypatch.setattr(mgr, "_build_webxr", build)
+    await mgr.start_armodule(blueprint="unitree_go2_ar", client="webxr")
+    await parsed(mgr, children[0], READY)
+    task = mgr._webxr_start_task
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    await parsed(
+        mgr,
+        children[0],
+        "Exception in RPC handler for ManipulationModule/start: Scene constructor incompatible",
+    )
+    children[0].finish(1)
+    await asyncio.wait_for(error_status(mgr), timeout=1)
+    assert task.cancelled()
+    assert spawn.await_count == 1
+    assert mgr.status.error == "Scene constructor incompatible"
+    assert mgr.status.webxr_url is None

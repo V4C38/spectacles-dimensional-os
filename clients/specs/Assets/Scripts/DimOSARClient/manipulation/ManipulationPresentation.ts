@@ -20,19 +20,20 @@ export class ManipulationPresentation {
 }
 
 export function manipulationControls(state: ManipulationState | null | undefined,
-  interaction: Pick<ManipulationInteraction, "feedbackFresh" | "busy" | "target" | "groupId" | "desiredGripper" | "status">, selected: boolean) {
-  const fresh = interaction.feedbackFresh;
-  const working = interaction.busy || ["accepted", "executing"].includes(state?.execution ?? "");
+  interaction: Pick<ManipulationInteraction, "snapshot" | "groupId" | "desiredGripper">, selected: boolean) {
+  const intent = interaction.snapshot();
+  const fresh = intent.fresh;
+  const working = intent.planning || intent.executing || intent.resetting;
   const observed = state?.observations?.[interaction.groupId ?? ""];
   const opening = selected ? interaction.desiredGripper ?? observed?.gripper : observed?.gripper;
   return {
     working,
     executeAction: working ? "cancel" as const : "execute" as const,
     executeLabel: working ? "Cancel" : "Execute",
-    canExecute: working || fresh && interaction.target !== null,
-    canPreview: fresh && interaction.target !== null && !working && !state?.stopped,
+    canExecute: working ? intent.canStop : intent.canExecute,
+    canPreview: intent.canPreview,
     gripperLabel: opening == null ? "Gripper —" : opening < 0.5 ? "Open" : "Close",
-    canGripper: fresh && opening != null && !state?.stopped,
-    status: !fresh ? "Feedback unavailable" : state?.stopped ? "Stopped" : state?.following ? "Following" : interaction.status || state?.execution || "Idle",
+    canGripper: intent.canManipulate && opening != null,
+    status: !fresh ? "Feedback unavailable" : state?.stopped ? "Stopped" : state?.following ? "Following" : intent.activity,
   };
 }

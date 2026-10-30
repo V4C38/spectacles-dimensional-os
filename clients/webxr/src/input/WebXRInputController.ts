@@ -320,7 +320,7 @@ export class WebXRInputController {
   private canInteract(controller: xb.SelectEvent["target"], object: THREE.Object3D, point: THREE.Vector3): boolean {
     if (!this.tracking) return false;
     const secondaryGripper = this.manipulationHold && this.manipulationHold !== controller && !!controller.inputSource?.hand && object.userData.manipulationAction === "gripper";
-    if (this.capture.owner && this.capture.owner !== controller && !secondaryGripper && !this.mainMenu?.isEmergencyTarget(object) && !(object === this.navigationFloor && this.client.isRobotSelected())) return false;
+    if (this.capture.owner && this.capture.owner !== controller && !secondaryGripper && !["estop", "stop"].includes(object.userData.manipulationAction) && !this.mainMenu?.isEmergencyTarget(object) && !(object === this.navigationFloor && this.client.isRobotSelected())) return false;
     if (this.mainMenu?.ownsTarget(object)) return this.mainMenu.canInteract(object, point);
     if (object !== this.navigationFloor) {
       const origin = controller.getWorldPosition(new THREE.Vector3());
@@ -346,6 +346,11 @@ export class WebXRInputController {
       return;
     }
     if (!hit || !this.canInteract(event.target, hit.object, hit.point)) return;
+    if (hit.object.userData.manipulationAction === "stop") {
+      this.clearInput();
+      this.client.manipulation.action("stop");
+      return;
+    }
     if (hit.object.userData.manipulationAction === "gripper" && this.manipulationHold &&
         this.manipulationHold !== event.target && event.target.inputSource?.hand) {
       if (this.manipulationCapture.pressGripper(this.navigationSourceId(event.target))) {
@@ -359,6 +364,8 @@ export class WebXRInputController {
       isDescendant(hit.object, this.client.navigation.marker.object) ? new THREE.Vector3(0, 1, 0) : undefined);
     if (this.panelHold || this.worldHold || this.manipulationHold || this.uiGrab) return;
     if (hit.object.userData.manipulationSpeedSlider) {
+      const thumb = hit.object.userData.sliderThumb as THREE.Object3D | undefined;
+      if (thumb) this.interaction.capture(event.target, thumb, thumb.getWorldPosition(new THREE.Vector3()));
       this.speedHold=hit.object;this.uiGrab=true;const half=hit.object.userData.sliderHalfWidth as number;
       const start=.05+THREE.MathUtils.clamp((hit.object.worldToLocal(hit.point.clone()).x+half)/(2*half),0,1)*.95;
       this.client.manipulation.interaction.setSpeedScale(start);
@@ -508,7 +515,10 @@ export class WebXRInputController {
 
   private clearInput(completeDictation = false): void {
     this.gripperPresses.clear(); this.manipulationCapture.reset();
-    this.client.manipulation.end();
+    if (this.manipulationHold) {
+      if (completeDictation) this.client.manipulation.end();
+      else this.client.manipulation.interrupt();
+    }
     this.manipulationHold = null;
     this.speedHold = null;
     this.speedDrag = null;

@@ -70,6 +70,12 @@
   let phase = "idle";
   let checkOk = null;
   let lastStatus = {};
+  let canStatus = { ready: false, state: "checking", message: "Checking can0…" };
+  let plannerStatus = { ready: false, state: "checking", message: "Checking manipulation dependencies…" };
+  let canCheckPending = false;
+  let plannerCheckPending = false;
+  let canSetupPending = false;
+  let plannerPython = null;
   let keyVisible = false;
   let multisetVisible = false;
   const MAX_LOG_LINES = 5000;
@@ -131,7 +137,75 @@
     if (settingsReady) void refreshRobotProfiles();
     agentConfig.classList.toggle("hidden", !spec.agent);
     syncConfigCards();
+    syncHardwareSetup();
+    if (manipulation) { void refreshCan(); void refreshPlanner(); }
   }
+
+  function manipulationSelected() { return blueprint === "openyam_ar_planner"; }
+  function canRequired() {
+    return manipulationSelected() && !$("simulationEnabled").checked && canStatus.state !== "not_required";
+  }
+  function hardwareNotSetup() {
+    return manipulationSelected() && (!plannerStatus.ready || (canRequired() && !canStatus.ready));
+  }
+  function syncHardwareSetup() {
+    const selected = manipulationSelected();
+    const mock = $("simulationEnabled").checked;
+    const card = $("canCard");
+    card.classList.toggle("hidden", !selected);
+    const missing = canRequired() && !canStatus.ready;
+    card.classList.toggle("needs-setup", missing);
+    $("canSummary").textContent = mock ? "not required" : canStatus.ready ? "ready" : canStatus.state === "checking" ? "checking…" : "incomplete";
+    $("canSummary").dataset.phase = missing ? "needs_setup" : "";
+    $("canStatus").textContent = mock ? "Not required for mock hardware." : canStatus.message;
+    const settingUp = canSetupPending || lastStatus.can_setup_running || canStatus.setting_up;
+    $("canSetupBtn").textContent = settingUp ? "Setting up…" : "Set up CAN";
+    $("canSetupBtn").disabled = !selected || mock || configLocked || settingUp || canStatus.ready || checkOk !== true || ["checking", "installing"].includes(phase);
+    $("plannerStatus").classList.toggle("hidden", !selected);
+    $("plannerStatus").textContent = plannerStatus.message || "Checking manipulation dependencies…";
+    const deps = describeDeps(lastStatus);
+    depsSummary.textContent = deps.text;
+    depsSummary.dataset.phase = deps.phase;
+    syncInstallBanner();
+    applyHeader(lastStatus);
+    startBtn.disabled = configLocked || ["checking", "installing"].includes(phase) || checkOk !== true || settingUp || hardwareNotSetup();
+  }
+  async function refreshCan() {
+    if (!manipulationSelected() || canCheckPending || canSetupPending || document.hidden) return;
+    canCheckPending = true;
+    try {
+      const response = await fetch("/api/can/status");
+      if (!response.ok) throw new Error("CAN status check failed");
+      canStatus = await response.json();
+    } catch (error) { canStatus = {ready: false, state: "error", message: String(error)}; }
+    finally { canCheckPending = false; syncHardwareSetup(); }
+  }
+  async function refreshPlanner() {
+    if (!manipulationSelected() || plannerCheckPending || document.hidden) return;
+    plannerCheckPending = true;
+    try {
+      const response = await fetch("/api/planner/status");
+      if (!response.ok) throw new Error("Planner dependency check failed");
+      plannerStatus = await response.json();
+    } catch (error) { plannerStatus = {ready: false, state: "error", message: String(error)}; }
+    finally { plannerCheckPending = false; syncHardwareSetup(); }
+  }
+  $("simulationEnabled").addEventListener("change", syncHardwareSetup);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { void refreshCan(); void refreshPlanner(); } });
+  setInterval(() => { void refreshCan(); void refreshPlanner(); }, 5000);
+  $("canSetupBtn").addEventListener("click", async () => {
+    if (canSetupPending || configLocked) return;
+    canSetupPending = true; syncHardwareSetup();
+    try {
+      const response = await fetch("/api/can/setup", {method: "POST"});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "CAN setup failed");
+      canStatus = data;
+    } catch (error) {
+      appendLog(`CAN setup: ${error}`);
+      canStatus = {ready: false, state: "error", message: String(error)};
+    } finally { canSetupPending = false; syncHardwareSetup(); }
+  });
 
   function fiducialConfigured() {
     return mounts.length > 0;
@@ -561,7 +635,7 @@
           phase: "error",
         };
       default: {
-        if (status.check_ok !== true || locNotSetup() || agentNotSetup()) {
+        if (status.check_ok !== true || locNotSetup() || agentNotSetup() || hardwareNotSetup()) {
           return { label: "Setup incomplete", detail: "", phase: "needs_setup" };
         }
         if (status.warning) {
@@ -592,7 +666,7 @@
     if (p === "checking") {
       return { text: "checking…", phase: "checking" };
     }
-    if (status.check_ok === true) {
+    if (status.check_ok === true && (!manipulationSelected() || plannerStatus.ready)) {
       return { text: "", phase: "" };
     }
     return { text: "incomplete", phase: "needs_setup" };
@@ -603,7 +677,7 @@
   }
 
   function syncInstallBanner() {
-    const ready = checkOk === true;
+    const ready = checkOk === true && (!manipulationSelected() || plannerStatus.ready);
     const busy =
       phase === "checking" ||
       phase === "installing" ||
@@ -620,7 +694,7 @@
     dimosRefField.classList.toggle("hidden", !cloning);
     installBtn.textContent = cloning ? "Download & install" : "Install";
     installBtn.classList.toggle("hidden", !showInstall);
-    installBtn.disabled = busy || phase === "installing" || phase === "checking";
+    installBtn.disabled = busy || configLocked || canSetupPending || lastStatus.can_setup_running;
     installBanner.classList.toggle("needs-setup", needsInstall);
 
     const versionBits = [];
@@ -851,6 +925,10 @@
 
   function applyStatus(status) {
     lastStatus = status || {};
+    if (status.planner) plannerStatus = status.planner;
+    const nextPython = status.dimos_python || null;
+    const environmentChanged = nextPython !== plannerPython;
+    plannerPython = nextPython;
     phase = status.phase || "idle";
     if ("check_ok" in status) checkOk = status.check_ok;
 
@@ -918,6 +996,8 @@
       phase === "running" || phase === "starting" || phase === "stopping"
     );
     setConfigLocked(locked);
+    syncHardwareSetup();
+    if (environmentChanged || phase === "ready") { void refreshPlanner(); }
   }
 
   function syncSetupMode() {
@@ -1148,6 +1228,7 @@
         installBtn.disabled = false;
       }
       if (data.phase || "check_ok" in data) applyStatus(data);
+      void refreshCan(); void refreshPlanner();
     } catch (err) {
       appendLog(`Setup error: ${err}`);
       installBtn.disabled = false;

@@ -32,8 +32,8 @@ export class TargetWarning {
     this.message = message;
     this.rejected.position.copy(position);
   }
-  update(position: THREE.Vector3, now: number) {
-    const age = now - this.started;
+  update(position: THREE.Vector3, now: number, persistent = false) {
+    const age = persistent ? Math.min(0.5, now - this.started) : now - this.started;
     this.object.visible = this.rejected.visible = age >= 0 && age < 1.5;
     if (!this.object.visible) return;
     const opacity = Math.min(1, age / 0.12, (1.5 - age) / 0.18);

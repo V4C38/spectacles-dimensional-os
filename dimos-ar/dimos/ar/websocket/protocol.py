@@ -639,5 +639,5 @@ def encode_lidar_binary(
     body = b"".join(struct.pack("<3f", *point) for point in points)
     return header + body
 
-# Manipulation reset_joints / prepare_shutdown and following speed_scale are validated
-# by the shared manipulation codec; see PROTOCOL.md.
+# Manipulation commands use the shared codec. Shutdown quiescence receipts and
+# explicit model visual metadata are encoded by the service; see PROTOCOL.md.

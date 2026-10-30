@@ -43,7 +43,10 @@ it("never sends a release on a closed session", () => {
 });
 
 it("defers selected gripper intent and uses the injected stop owner", () => {
-  const f = fixture(); f.core.setSelected(true); f.core.action("gripper");
+  const f = fixture(); f.core.setSelected(true);
+  f.view.manipulation.observations.arm.pose = { position: [0, 0, 0], orientation: [0, 0, 0, 1] };
+  f.core.interaction.target = { position: [0, 0, 0.1], orientation: [0, 0, 0, 1] };
+  f.core.action("gripper");
   expect(f.core.interaction.desiredGripper).toBe(1);
   expect(f.sent.some(c => c.action === "gripper")).toBe(false);
   f.core.action("estop"); expect(f.stop).toHaveBeenCalledOnce();

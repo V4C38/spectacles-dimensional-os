@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from dimos.ar.manipulation.following import ARArmCoordinator
+from dimos.ar.manipulation.following import ARManipulationCoordinator
 from dimos.ar.manipulation.frames import ReferencePose
 from dimos.ar.manipulation.module import ARManipulationModule
 from dimos.ar.module import ARModule
@@ -29,9 +29,11 @@ openyam_ar_planner = autoconnect(
         instance_name="ManipulationModule",
         following_tasks=_tasks,
         model_asset_url="/models/openyam.glb",
+        model_visual_profile="openyam",
+        gripper_open_at_lower=["joint7", "joint8"],
     ),
     coordinator(
-        cls=ARArmCoordinator,
+        cls=ARManipulationCoordinator,
         instance_name="ControlCoordinator",
         hardware=[_hardware],
         tasks=[

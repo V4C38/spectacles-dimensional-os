@@ -123,6 +123,7 @@
                 </select>
               </label>
               <p class="hint hidden" id="dimosVersionHint"></p>
+              <p class="hint hidden" id="plannerStatus" role="status"></p>
               <button type="button" class="btn primary hidden" id="installBtn">
                 Install
               </button>
@@ -148,6 +149,18 @@
               </div>
               <label><input type="checkbox" id="simulationEnabled" /> Mock hardware (OpenYAM)</label>
             </div>
+            <details class="card config-card hidden" id="canCard">
+              <summary class="config-summary">
+                <span class="deps-summary-collapsed">
+                  <span class="label">CAN setup</span>
+                  <span class="value" id="canSummary">checking…</span>
+                </span>
+              </summary>
+              <div class="config-body">
+                <p class="hint" id="canStatus" role="status">Checking can0…</p>
+                <button type="button" class="btn" id="canSetupBtn">Set up CAN</button>
+              </div>
+            </details>
             <div class="selector-group">
               <span class="selector-label">Client</span>
               <div class="tabs" role="group" aria-label="Client">

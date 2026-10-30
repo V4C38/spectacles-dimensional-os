@@ -667,3 +667,11 @@ exported from the canonical mesh with the same area-weighted averaging used by
 Three.js. Every dotted stroke uses 75% of its former nearby width, including its
 pixel floor, and smoothly recovers the original width through the existing
 6–10-pixel dash-resolution transition. Far-distance antialiasing remains intact.
+
+Manipulation runtime updates advance independently of snapshot polling. The optional
+DimOS adapter owns upstream compatibility details; runtime owners use its typed
+backend port. ClientCore supplies one immutable interaction snapshot to WebXR.
+WebXR controls and model resources have separate owners under `manipulation/`,
+with robot visual corrections under `manipulation/profiles/`. Asset URLs identify
+resources; explicit model metadata selects articulation and visual profiles.
+Shutdown teardown may skip its stop call only after a `quiescent: true` receipt.

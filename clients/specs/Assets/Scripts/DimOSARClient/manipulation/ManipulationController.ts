@@ -2,7 +2,7 @@ import { ManipulationInteraction } from "./ManipulationInteraction";
 import { ManipulationPresentation } from "./ManipulationPresentation";
 import type { ARModuleSession } from "../websocket/arModuleSession";
 
-export type ManipulationControlAction = "reset" | "estop" | "plan" | "execute" | "cancel" | "resume" | "group" | "gripper";
+export type ManipulationControlAction = "reset" | "estop" | "plan" | "execute" | "cancel" | "stop" | "resume" | "group" | "gripper";
 
 /** Shared user commands; session observations remain the execution authority. */
 export class ManipulationController {
@@ -24,10 +24,11 @@ export class ManipulationController {
   action(action: ManipulationControlAction): void {
     const interaction = this.interaction;
     switch (action) {
-      case "estop": this.presentation.reset(); interaction.end(); this.stop(); break;
+      case "estop": this.presentation.reset(); interaction.discard(); this.stop(); break;
       case "reset": this.presentation.reset(); interaction.resetJoints(); break;
-      case "plan": this.presentation.togglePreview(); if (this.presentation.previewRequested && !interaction.plan) interaction.requestPlan(); break;
+      case "plan": if (!interaction.snapshot().canPreview) break; this.presentation.togglePreview(); if (this.presentation.previewRequested && !interaction.plan) interaction.requestPlan(); break;
       case "execute": this.presentation.reset(); interaction.execute(); break;
+      case "stop":
       case "cancel": this.presentation.reset(); interaction.cancel(); break;
       case "resume": interaction.resume(); break;
       case "group": {

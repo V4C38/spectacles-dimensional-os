@@ -1,3 +1,4 @@
+import { gripperJointValues } from "../../DimOSARClient/manipulation/ArmToolKinematics";
 import { ARM_MATERIAL, configureArmMaterial } from "./ArmMaterial";
 import type { ManipulationInputCapture } from "../../DimOSARClient/manipulation/ManipulationInputCapture";
 import { RobotBoundsAnimation } from "../../DimOSARClient/presentation/RobotBoundsAnimation";
@@ -8,7 +9,7 @@ import { createIconButton, createText, COLOR_WHITE, type IconButtonResult } from
 import { clientTrackingToSpecsPoint, clientTrackingToSpecsPose } from "../utilities/SpecsCoordinates";
 import { odomToClientTrackingPose } from "../../DimOSARClient/localization/clientTrackingTransforms";
 import type { ClientTrackingOrigin } from "../../DimOSARClient/localization/clientTrackingOrigin";
-import { composePose, linkPoses, samplePlan, visualJointValues, manipulationPlanPath, manipulationToolLinks, inversePose } from "../../DimOSARClient/manipulation/ModelKinematics";
+import { composePose, linkPoses, samplePlan, manipulationPlanPath, toolSubtree, inversePose } from "../../DimOSARClient/manipulation/ModelKinematics";
 import { manipulationControls } from "../../DimOSARClient/manipulation/ManipulationPresentation";
 import type { ManipulationController, ManipulationControlAction } from "../../DimOSARClient/manipulation/ManipulationController";
 import type { ManipulationPose, ManipulationState } from "../../DimOSARClient/manipulation/ManipulationTypes";
@@ -109,14 +110,15 @@ export class ManipulationRenderer {
     const displayedPose = (selected || state.following || interaction.following) && interaction.target ? interaction.target : observed?.pose;
     const root = state.root_pose ?? { position: [0, 0, 0] as Vec3, orientation: [0, 0, 0, 1] as [number, number, number, number] };
     const opening = selected ? interaction.desiredGripper ?? observed?.gripper : observed?.gripper;
-    const all = visualJointValues(model, Object.values(state.observations ?? {}), group?.joint_names ?? [], observed?.gripper);
-    const targetValues = visualJointValues(model, Object.values(state.observations ?? {}), group?.joint_names ?? [], opening);
+    const observedValues = Object.assign({}, ...Object.values(state.observations ?? {}).map(o => o.joints ?? {}));
+    const all = { ...observedValues, ...gripperJointValues(model, group, observed?.gripper) };
+    const targetValues = { ...observedValues, ...gripperJointValues(model, group, opening) };
     const plan = interaction.plan ?? (["accepted", "executing"].includes(state.execution ?? "") ? state.plan : null) ?? null;
     const playback = this.core.presentation.sample(plan, now);
     const configuration = selected ? plan ? samplePlan(plan, playback.time) : interaction.solution : null;
     const poses = linkPoses(model, { ...targetValues, ...configuration });
     const measuredPoses = linkPoses(model, all);
-    const tool = group?.tip_frame ? manipulationToolLinks(model, group.tip_frame) : null;
+    const tool = group?.tip_frame ? toolSubtree(model, group.tip_frame) : null;
     if (this.modelRevision !== model.revision) {
       for (const unsubscribe of this.modelSubscriptions) unsubscribe(); this.modelSubscriptions.length = 0;
       for (const mesh of this.toolMeshes.values()) mesh.destroy(); this.toolMeshes.clear();

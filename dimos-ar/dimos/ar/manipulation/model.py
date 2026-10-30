@@ -35,12 +35,18 @@ def _origin(element: ET.Element | None) -> dict[str, Any]:
     }
 
 
-def describe_model(xml: str, asset_url: str | None = None) -> dict[str, Any]:
+def describe_model(
+    xml: str,
+    asset_url: str | None = None,
+    *,
+    visual_profile: str | None = None,
+    gripper_open_at_lower: list[str] | None = None,
+) -> dict[str, Any]:
     import trimesh
 
     root = ET.fromstring(xml)
     links = []
-    joints = []
+    joints: list[dict[str, Any]] = []
     for link in root.findall("link"):
         points = []
         for visual in link.findall("visual"):
@@ -130,6 +136,21 @@ def describe_model(xml: str, asset_url: str | None = None) -> dict[str, Any]:
             sort_keys=True,
         ).encode()
     ).hexdigest()
+    reversed_joints = set(gripper_open_at_lower or [])
+    articulated = {
+        j["name"]: j
+        for j in joints
+        if j["kind"] == "prismatic" and j["limits"] is not None and j["mimic"] is None
+    }
+    if not reversed_joints.issubset(articulated):
+        raise ValueError("Gripper articulation requires independent bounded prismatic joints")
+    gripper_joints = {
+        name: {
+            "closed": joint["limits"]["upper" if name in reversed_joints else "lower"],
+            "open": joint["limits"]["lower" if name in reversed_joints else "upper"],
+        }
+        for name, joint in articulated.items()
+    }
     return {
         "visual_signature": signature,
         "revision": hashlib.sha256(xml.encode()).hexdigest(),
@@ -137,4 +158,6 @@ def describe_model(xml: str, asset_url: str | None = None) -> dict[str, Any]:
         "links": links,
         "joints": joints,
         "asset_url": asset_url,
+        **({"visual_profile": visual_profile} if visual_profile is not None else {}),
+        "gripper_joints": gripper_joints,
     }

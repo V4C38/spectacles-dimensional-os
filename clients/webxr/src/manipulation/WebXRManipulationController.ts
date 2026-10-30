@@ -79,6 +79,7 @@ export class WebXRManipulationController {
     this.interaction.end();
   }
   suspend(): void { this.end(); this.core.suspend(); }
+  interrupt(): void { this.end(); this.core.suspend(); }
   action(action: ManipulationControlAction): void {
     this.core.action(action);
     this.renderer.previewRequested = this.core.presentation.previewRequested;
@@ -88,28 +89,23 @@ export class WebXRManipulationController {
     if (!enabled || origin !== this.lastOrigin) { this.end(); this.core.suspend(); }
     this.lastOrigin = origin;
     this.core.tick(enabled && !!origin && this.interaction.available);
-    this.renderer.working =
-      this.interaction.busy ||
-      ["accepted", "executing"].includes(
-        this.session.view().manipulation?.execution ?? "",
-      );
-    this.renderer.rejection = this.interaction.rejection;
-    this.renderer.desiredGripper = this.interaction.desiredGripper;
-    this.renderer.speedScale = this.interaction.speedScale;
-    this.renderer.apply(
-      this.session.view().manipulation,
-      enabled ? origin : null,
-      this.interaction.groupId,
-      this.selected,
-      this.interaction.target,
-      this.interaction.solution,
-      this.interaction.plan,
-      this.now(),
-      this.interaction.status,
-      this.interaction.feedbackFresh,
-      this.session.view().hello?.robot.display_name,
-    );
+    this.renderer.apply({
+      state: this.session.view().manipulation,
+      origin: enabled ? origin : null,
+      groupId: this.interaction.groupId,
+      selected: this.selected,
+      target: this.interaction.target,
+      solution: this.interaction.solution,
+      plan: this.interaction.plan ?? this.interaction.previewPlan,
+      now: this.now(),
+      robotTitle: this.session.view().hello?.robot.display_name ?? "Arm",
+      intent: this.interaction.snapshot(),
+      rejection: this.interaction.rejection,
+      desiredGripper: this.interaction.desiredGripper,
+      speedScale: this.interaction.speedScale,
+    });
   }
+
   dispose(): void {
     this.end();
     this.core.dispose();

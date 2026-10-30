@@ -323,7 +323,9 @@ install_dimos_editable() {
   echo "Installing DimOS from source (editable) into: ${target_python}" >&2
   (
     cd "${dimos_dir}"
-    python_pip_install "${target_python}" -e ".[base,unitree]" 1>&2
+    local dimos_extras="base,unitree"
+    if [[ "${FLAG_MANIPULATION}" -eq 1 ]]; then dimos_extras="planning"; fi
+    python_pip_install "${target_python}" -e ".[${dimos_extras}]" 1>&2
   )
 }
 
@@ -426,7 +428,15 @@ echo "Installing dimos-ar into that environment..."
   cd "${DIMOS_AR_ROOT}"
   extras="dev"
   if [[ "${FLAG_MANIPULATION}" -eq 1 ]]; then extras="dev,manipulation"; fi
-  python_pip_install "${DIMOS_ENV_PYTHON}" -e ".[${extras}]"
+  if [[ "${FLAG_MANIPULATION}" -eq 1 ]] && selected_source="$("${DIMOS_ENV_PYTHON}" "${ROOT}/launcher/app/planner_install.py" --source)"; then
+    "${DIMOS_ENV_PYTHON}" "${ROOT}/launcher/app/planner_install.py" --clean-conflicts
+    python_pip_install "${DIMOS_ENV_PYTHON}" -e "${selected_source}[planning]" -e ".[${extras}]"
+  else
+    python_pip_install "${DIMOS_ENV_PYTHON}" -e ".[${extras}]"
+  fi
+  if [[ "${FLAG_MANIPULATION}" -eq 1 ]]; then
+    "${DIMOS_ENV_PYTHON}" "${ROOT}/launcher/app/planner_check.py"
+  fi
 )
 
 if ! python_has_dimos_ar "${DIMOS_ENV_PYTHON}"; then

@@ -83,6 +83,14 @@ export function decodeManipulation(
     text(data.request_id);
     text(data.group_id);
     text(data.status);
+    if (data.quiescent !== undefined && typeof data.quiescent !== "boolean")
+      throw new Error("Invalid shutdown acknowledgment");
+    if (data.code !== undefined) text(data.code);
+    if (
+      data.sequence !== undefined &&
+      (!Number.isSafeInteger(data.sequence) || Number(data.sequence) < 0)
+    )
+      throw new Error("Invalid update sequence");
     if (!ACTIONS.includes(String(data.action)))
       throw new Error("Unknown manipulation action");
     if (data.token !== undefined) text(data.token);
@@ -92,12 +100,28 @@ export function decodeManipulation(
   } else {
     if (typeof data.available !== "boolean")
       throw new Error("Invalid manipulation availability");
+    if (
+      data.operation != null &&
+      !["resetting", "parking"].includes(String(data.operation))
+    )
+      throw new Error("Invalid arm operation");
     if (data.available) {
       finite(data.ts);
       if (data.root_pose != null) pose(data.root_pose);
       const model = object(data.model);
       text(model.revision);
       text(model.root);
+      if (model.visual_profile !== undefined) text(model.visual_profile);
+      if (model.gripper_joints !== undefined) {
+        for (const [name, raw] of Object.entries(
+          object(model.gripper_joints),
+        )) {
+          text(name);
+          const mapping = object(raw);
+          finite(mapping.closed);
+          finite(mapping.open);
+        }
+      }
       if (model.asset_url !== null && typeof model.asset_url !== "string")
         throw new Error("Invalid asset URL");
       if (
@@ -155,6 +179,11 @@ export function decodeManipulation(
           text(m.joint);
           finite(m.multiplier);
           finite(m.offset);
+        }
+      }
+      if (model.gripper_joints !== undefined) {
+        for (const name of Object.keys(object(model.gripper_joints))) {
+          if (!jointNames.has(name)) throw new Error("Unknown gripper joint");
         }
       }
       linkPoses(

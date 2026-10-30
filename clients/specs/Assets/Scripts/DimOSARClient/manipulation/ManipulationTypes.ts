@@ -28,6 +28,8 @@ export interface ManipulationJoint {
 }
 export interface ManipulationModel {
   visual_signature?: string;
+  visual_profile?: string;
+  gripper_joints?: Record<string, { closed: number; open: number }>;
   revision: string;
   root: string;
   asset_url: string | null;
@@ -64,6 +66,7 @@ export interface ManipulationState {
   groups?: ManipulationGroup[];
   observations?: Record<string, ManipulationObservation>;
   execution?: string;
+  operation?: "resetting" | "parking" | null;
   owner?: string | null;
   following?: boolean;
   stopped?: boolean;
@@ -77,6 +80,9 @@ export interface ManipulationResult {
   action: ManipulationAction;
   group_id: string;
   status: string;
+  quiescent?: boolean;
+  sequence?: number;
+  code?: string;
   message?: string;
   token?: string;
   joints?: Record<string, number> | null;

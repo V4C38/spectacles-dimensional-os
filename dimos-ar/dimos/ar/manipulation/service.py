@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from dimos.ar.manipulation.protocol import ManipulationRequest
+from dimos.ar.manipulation.rpc import ManipulationRPC
 from dimos.ar.manipulation.spec import ARManipulationSpec
 from dimos.ar.websocket.protocol import encode_text
 
@@ -20,16 +21,21 @@ class ManipulationService:
         runtime: ARManipulationSpec,
         send: Callable[[str, str], None],
         broadcast: Callable[[str], None],
+        on_ready: Callable[[], None] | None = None,
     ) -> None:
-        self.runtime = runtime
+        self._rpc = ManipulationRPC(runtime)
         self._send = send
         self._broadcast = broadcast
+        self._on_ready = on_ready
         self._tasks: set[asyncio.Task[None]] = set()
         self._pending: set[tuple[str, str]] = set()
         self._closed = False
         self._poll: asyncio.Task[None] | None = None
         self._clients: set[str] = set()
         self._updates: dict[str, tuple[ManipulationRequest, float]] = {}
+        self._ready_reported = False
+        self._quiescing = False
+        self._quiescent = False
 
     def start(self) -> None:
         self._poll = asyncio.create_task(self._poll_state())
@@ -40,6 +46,16 @@ class ManipulationService:
     def submit(self, request: ManipulationRequest, client_id: str, clock_offset: float = 0) -> None:
         if self._closed or client_id not in self._clients:
             return
+        if self._quiescing and request.action not in {"cancel", "release"}:
+            self._reply(
+                client_id,
+                request,
+                {"status": "rejected", "code": "stopping", "message": "Stopping"},
+            )
+            return
+        if request.action == "prepare_shutdown":
+            self._quiescing = True
+            self._updates.clear()
         if request.action == "update":
             self._updates[client_id] = (request, clock_offset)
             key = (client_id, "update")
@@ -70,6 +86,12 @@ class ManipulationService:
         def done(finished: asyncio.Task[None]) -> None:
             self._tasks.discard(finished)
             self._pending.discard(key)
+            if not finished.cancelled() and (error := finished.exception()) is not None:
+                logger.error(
+                    "Manipulation RPC task failed: %s",
+                    key,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
 
         task.add_done_callback(done)
 
@@ -85,11 +107,27 @@ class ManipulationService:
         if request.action == "update":
             body["ts"] += clock_offset
         try:
-            result = await asyncio.to_thread(self.runtime.ar_manipulation_command, client_id, body)
+            result = await self._rpc.call(
+                "ar_manipulation_command",
+                client_id,
+                body,
+                timeout=57 if request.action in {"reset_joints", "prepare_shutdown"} else 20,
+            )
+            if request.action == "prepare_shutdown":
+                self._quiescent = result.get("quiescent") is True
+        except ValueError as exc:
+            result = {"status": "rejected", "code": "rejected", "message": str(exc)}
+            logger.info("Manipulation request rejected: %s: %s", request.action, str(exc))
         except Exception as exc:
             logger.exception("Manipulation command failed")
             result = {"status": "rejected", "message": str(exc)}
-        if request.action != "update" or result.get("status") == "rejected":
+        if request.action == "update":
+            result.setdefault("sequence", request.payload["sequence"])
+        if request.action != "update" or result.get("status") in {
+            "rejected",
+            "infeasible",
+            "feasible",
+        }:
             self._reply(client_id, request, result)
 
     def _reply(self, client_id: str, request: ManipulationRequest, result: dict[str, Any]) -> None:
@@ -110,7 +148,11 @@ class ManipulationService:
     async def _poll_state(self) -> None:
         while not self._closed:
             try:
-                snapshot = await asyncio.to_thread(self.runtime.ar_manipulation_snapshot)
+                snapshot = await self._rpc.call("ar_manipulation_snapshot")
+                if snapshot.get("available") and not self._ready_reported:
+                    if self._on_ready is not None:
+                        self._on_ready()
+                    self._ready_reported = True
                 self._broadcast(encode_text({**snapshot, "type": "manipulation_state"}))
             except Exception as exc:
                 logger.exception("Manipulation observation failed")
@@ -121,28 +163,47 @@ class ManipulationService:
                 )
             await asyncio.sleep(0.1)
 
+    def emergency_stop(self) -> None:
+        key = ("server", "estop")
+        if not self._closed and key not in self._pending:
+            self._updates.clear()
+            self._spawn(self._rpc.call("ar_manipulation_stop"), key)
+
     def disconnect(self, client_id: str) -> None:
         self._clients.discard(client_id)
         self._updates.pop(client_id, None)
+        if self._closed or self._quiescent:
+            return
         self._spawn(
-            asyncio.to_thread(self.runtime.ar_manipulation_disconnect, client_id),
+            self._rpc.call("ar_manipulation_disconnect", client_id),
             (client_id, "disconnect"),
         )
 
     async def close(self) -> None:
         self._closed = True
-        clients = tuple(self._clients)
-        self._clients.clear()
-        self._updates.clear()
-        await asyncio.gather(
-            *(
-                asyncio.to_thread(self.runtime.ar_manipulation_disconnect, client)
-                for client in clients
-            )
-        )
-        await asyncio.to_thread(self.runtime.ar_manipulation_stop)
+        # Retire observation calls before the runtime and its RPC session shut down.
         if self._poll:
             self._poll.cancel()
             await asyncio.gather(self._poll, return_exceptions=True)
-        if self._tasks:
-            await asyncio.gather(*tuple(self._tasks), return_exceptions=True)
+            self._poll = None
+        clients = tuple(self._clients)
+        self._clients.clear()
+        self._updates.clear()
+        if not self._quiescent:
+            # Stop once before retiring individual leases, with a bounded RPC deadline.
+            try:
+                await self._rpc.call("ar_manipulation_stop", timeout=0.8)
+                await asyncio.gather(
+                    *(
+                        self._rpc.call("ar_manipulation_disconnect", client, timeout=0.3)
+                        for client in clients
+                    ),
+                    return_exceptions=True,
+                )
+            except Exception:
+                logger.warning(
+                    "Manipulation stop acknowledgement unavailable during teardown", exc_info=True
+                )
+        for task in tuple(self._tasks):
+            task.cancel()
+        await asyncio.gather(*tuple(self._tasks), return_exceptions=True)

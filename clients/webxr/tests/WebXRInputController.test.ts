@@ -12,7 +12,7 @@ import * as xb from "xrblocks";
 import { WebXRInputController } from "../src/input/WebXRInputController";
 
 function fixture() {
-  const client = { manipulation: { end: vi.fn() }, loseInput: vi.fn(), emergencyStop: vi.fn() };
+  const client = { manipulation: { end: vi.fn(), interrupt: vi.fn(), action: vi.fn() }, loseInput: vi.fn(), emergencyStop: vi.fn() };
   const controller = new WebXRInputController(client as never, new THREE.Group(), {
     tracking: () => true, session: () => ({ visibilityState: "visible" }) as XRSession,
   });
@@ -60,6 +60,23 @@ it("preserves native touch release ordering and retires authorization before a c
     f.internal.dispatchTouch(source, contact, false, true);
     expect(f.client.loseInput).toHaveBeenCalled();
   } finally { start.mockRestore(); end.mockRestore(); f.controller.dispose(); }
+});
+
+
+it("lets Stop interrupt a different hand capture before dispatching the stop action", () => {
+  const f = fixture();
+  const left = new THREE.Group(), right = new THREE.Group();
+  f.internal.capture.press(left, {});
+  f.internal.mainMenu.isEmergencyTarget = () => false;
+  f.internal.canInteract = () => true;
+  const stop = new THREE.Mesh(); stop.userData.manipulationAction = "stop";
+  f.internal.interaction.hit.mockReturnValue({object: stop, point: new THREE.Vector3()});
+  f.controller.onSelectStart({target: right});
+  expect(f.internal.capture.owner).toBeNull();
+  expect(f.client.manipulation.interrupt).not.toHaveBeenCalled();
+  expect(f.client.manipulation.action).toHaveBeenCalledWith("stop");
+  expect(f.client.emergencyStop).not.toHaveBeenCalled();
+  f.controller.dispose();
 });
 
 it("lets the other hand toggle the gripper without ending the owner's drag", () => {

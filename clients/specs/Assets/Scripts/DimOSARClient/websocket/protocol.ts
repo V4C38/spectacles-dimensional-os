@@ -479,7 +479,7 @@ function decodeRobot(data: Record<string, unknown>): RobotDescription {
 function decodeCapabilities(data: Record<string, unknown>): Capabilities {
   const capabilities = {} as Capabilities;
   for (const name of CAPABILITY_NAMES) {
-    if (name === "manipulation" && !(name in data)) continue;
+    if ((name === "manipulation" || name === "object_detection") && !(name in data)) continue;
     if (!(name in data)) {
       throw new Error(`Missing required field: capabilities.${name}`);
     }
@@ -857,5 +857,5 @@ function asciiBytes(text: string): Uint8Array {
   return out;
 }
 
-// Manipulation reset_joints / prepare_shutdown and following speed_scale use
-// the shared manipulation codec; see dimos-ar/PROTOCOL.md.
+// ManipulationProtocol validates shutdown quiescence receipts and explicit model
+// visual metadata at this shared boundary; see dimos-ar/PROTOCOL.md.

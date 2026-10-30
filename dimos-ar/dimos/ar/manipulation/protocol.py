@@ -47,7 +47,7 @@ def decode_request(data: dict[str, Any]) -> ManipulationRequest:
     request_id = identifier(data.get("request_id"), "request_id")
     group_id = identifier(data.get("group_id"), "group_id")
     action = data.get("action")
-    if action not in ACTIONS:
+    if not isinstance(action, str) or action not in ACTIONS:
         raise ValueError("unknown manipulation action")
     payload: dict[str, Any] = {}
     if action in {"evaluate", "plan", "update"}:

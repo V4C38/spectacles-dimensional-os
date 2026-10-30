@@ -1,3 +1,4 @@
+import { CAPABILITY_LABELS } from "./CapabilityPresentation";
 import type { ARModuleSessionState } from "../websocket/arModuleSession";
 
 /** Copy and proportions shared by host-native control panels. */
@@ -36,7 +37,7 @@ export function localizationProviderLabel(kind: LocalizationKind): string {
     kind === "marker" ? "AprilTag" : kind === "unavailable" ? "No localization provider" : "Waiting for localization…";
 }
 export function availableFeatures(capabilities: ARModuleSessionState["capabilities"]): string {
-  const labels = { navigation: "Navigation", agent: "Agent", lidar: "LiDAR", localization: "Localization", estop: "Emergency Stop" } as const;
+  const labels = CAPABILITY_LABELS;
   const features = (Object.keys(labels) as (keyof typeof labels)[]).filter(key => capabilities?.[key]?.available).map(key => labels[key]);
   return features.length ? `Available: ${features.join(", ")}` : "No features available";
 }

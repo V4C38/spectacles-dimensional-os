@@ -31,6 +31,7 @@ it("keeps localization, sensor rendering and speech adapters independent of unre
     localization: ["presentation", "navigation", "sensors", "agent"],
     sensors: ["presentation", "localization", "navigation", "agent"],
     agent: ["presentation", "localization", "navigation", "sensors"],
+    manipulation: ["localization", "navigation", "sensors", "agent"],
   };
   const violations: string[] = [];
   for (const [domain, excluded] of Object.entries(forbidden)) {

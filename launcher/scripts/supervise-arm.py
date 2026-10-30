@@ -61,7 +61,9 @@ async def prepare_shutdown() -> None:
                             return
     except (OSError, TimeoutError, ValueError, ConnectionClosed) as exc:
         print(
-            f"Shutdown: zero pose not confirmed ({exc}); proceeding with requested shutdown.",
+            f"Shutdown: zero pose not confirmed ({type(exc).__name__}: "
+            f"{str(exc) or 'no parking response within 60 seconds'}); "
+            "proceeding with requested shutdown.",
             flush=True,
         )
 
@@ -76,8 +78,18 @@ async def main(command: list[str]) -> int:
     stopping = asyncio.create_task(requested.wait())
     await asyncio.wait({exited, stopping}, return_when=asyncio.FIRST_COMPLETED)
     if child.returncode is None:
-        await prepare_shutdown()
-        os.killpg(child.pid, signal.SIGINT)
+        parking = asyncio.create_task(prepare_shutdown())
+        await asyncio.wait({parking, exited}, return_when=asyncio.FIRST_COMPLETED)
+        if child.returncode is not None:
+            parking.cancel()
+            await asyncio.gather(parking, return_exceptions=True)
+            stopping.cancel()
+            return child.returncode or 0
+        await parking
+        try:
+            os.killpg(child.pid, signal.SIGINT)
+        except ProcessLookupError:
+            pass
         try:
             await asyncio.wait_for(asyncio.shield(exited), 60)
         except TimeoutError:
