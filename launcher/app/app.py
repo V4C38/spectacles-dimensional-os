@@ -424,11 +424,11 @@ async def api_apriltag_decode(file: Annotated[UploadFile, File()]) -> dict[str, 
 @app.post("/api/armodule/start", dependencies=[Depends(require_local_launcher)])
 async def api_armodule_start(body: StartBody) -> dict[str, Any]:
     if body.blueprint == "openyam_ar_planner" and (
-        body.client != "webxr" or not body.profile_id
+        not body.profile_id
     ):
         raise HTTPException(
             status_code=400,
-            detail="OpenYAM requires WebXR and an explicit robot profile",
+            detail="OpenYAM requires an explicit robot profile",
         )
     robot_ip = (
         body.robot_ip.strip() if body.robot_ip and body.robot_ip.strip() else None

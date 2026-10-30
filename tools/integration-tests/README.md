@@ -52,3 +52,24 @@ node --test tools/integration-tests/integration.test.mjs tools/visual-review.tes
 checks coverage, images and timing. Scoped runs explicitly mark other cases
 not-run. They cannot authorize cleanup of existing results. A fresh full native
 run also verifies restoration of the current production project without fixtures.
+
+
+## Manipulation parity review
+
+OpenYAM has an additional deterministic fixture shared by WebXR's
+`Manipulation.spec.ts` and Specs' `ManipulationProbe.ts`. The native fixture copy
+is checked against the browser fixture by the tooling tests. Review these paths
+in addition to the Go2 catalog:
+
+| Behavior | WebXR | Specs |
+| --- | --- | --- |
+| Measured full-pose marker, link bounds and model signature | Browser fixture | Native production renderer |
+| Selected target, checked plan, articulated preview, exact execution binding | Controller path | Native SIK interaction |
+| Unselected acquire/update/release | Controller and hands | Native SIK interaction |
+| Second-hand Open/Close during drag | Hand path | Native second interactor |
+| Speed, cancel/reset/resume, stop and tracking/session invalidation | Core/host regressions | Core/host regressions |
+| Environment-depth occlusion of bounds/path | Optional adapter | Deferred platform exception |
+
+Standalone manipulation runs retain their own screenshots, continuous video and
+assertion logs. They do not substitute for the complete shared Go2 catalog or
+physical device sign-off.

@@ -70,3 +70,29 @@ def test_selected_profile_is_the_localization_source(tmp_path, monkeypatch):
     monkeypatch.setattr(armodule, "read_armodule_config", lambda: {"localization": {"providers": [{"type": "vps", "map_code": "legacy"}]}})
     manager = ProcessManager(root=tmp_path)
     manager._require_vps_credentials({"localization": {"providers": []}})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client", ["specs", "webxr"])
+async def test_openyam_start_accepts_either_client_with_explicit_profile(monkeypatch, client):
+    from unittest.mock import AsyncMock
+
+    import app
+
+    start = AsyncMock()
+    monkeypatch.setattr(app.manager, "start_armodule", start)
+    monkeypatch.setattr(app.manager, "snapshot", dict)
+    monkeypatch.setattr(app.robot_profiles, "snapshot", lambda profile_id, blueprint: {"profile": profile_id})
+    await app.api_armodule_start(app.StartBody(blueprint="openyam_ar_planner", client=client, profile_id="arm"))
+    assert start.await_args.kwargs["client"] == client
+
+
+@pytest.mark.asyncio
+async def test_openyam_start_still_requires_profile():
+    from fastapi import HTTPException
+
+    import app
+
+    with pytest.raises(HTTPException) as error:
+        await app.api_armodule_start(app.StartBody(blueprint="openyam_ar_planner", client="specs"))
+    assert error.value.status_code == 400

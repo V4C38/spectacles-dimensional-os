@@ -296,7 +296,7 @@ export class ManipulationInteraction {
       this.status = "Planning";
     }
     if (this.token) {
-      this.send("release", { token: this.token });
+      if (this.session.view().connection === "ready") this.send("release", { token: this.token });
       this.token = null;
     }
     for (const [id, request] of this.pending) {
@@ -334,6 +334,14 @@ export class ManipulationInteraction {
     this.plan = null;
     this.solution = null;
     if (this.groupId && this.available) this.send("cancel");
+  }
+  invalidateTarget(): void {
+    this.cancel();
+    this.target = null;
+    this.desiredGripper = null;
+    this.rejection = null;
+    this.lastGoodTarget = null;
+    this.rejectedTarget = null;
   }
   resume(): void {
     this.send("resume");

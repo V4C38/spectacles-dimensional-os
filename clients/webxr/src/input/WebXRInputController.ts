@@ -1,3 +1,4 @@
+import { ManipulationInputCapture } from "@dimos-ar-client/manipulation/ManipulationInputCapture";
 import { FingertipButtons } from "./FingertipButtons";
 import { ViewerPanelPlacement } from "../presentation/ViewerPanelPlacement";
 import * as THREE from "three";
@@ -30,6 +31,8 @@ export class WebXRInputController {
   private worldHold: xb.SelectEvent["target"] | null = null;
   private holdFromMarker = false;
   private secondaryPressed = false;
+  private readonly manipulationCapture = new ManipulationInputCapture();
+  private readonly gripperPresses = new Set<xb.SelectEvent["target"]>();
   private speedHold: THREE.Object3D | null = null;
   private speedDrag: xb.FreestandingSlider | null = null;
   private manipulationHold: xb.SelectEvent["target"] | null = null;
@@ -228,6 +231,7 @@ export class WebXRInputController {
     const manipulationHovered = actionableHits.find(hit => hit && this.client.manipulation.owns(hit));
     this.client.manipulation.renderer.hoveredLink = manipulationHovered?.userData.manipulationLink ?? null;
     this.client.manipulation.renderer.hoveredAction = manipulationHovered?.userData.manipulationAction ?? null;
+    this.client.manipulation.renderer.handDragging = !!this.manipulationHold?.inputSource?.hand;
     this.client.manipulation.renderer.eeHovered = actionableHits.some(hit => !!hit && (hit === this.client.manipulation.renderer.handle.collider || hit.userData.manipulationAction === "gripper"));
     const robotHovered = hoverTargets.includes(this.client.robot.collider);
     const markerHovered = hoverTargets.some(hit => hit !== this.client.navigation.marker.cancelObject && isDescendant(hit, this.client.navigation.marker.object));
@@ -315,7 +319,8 @@ export class WebXRInputController {
 
   private canInteract(controller: xb.SelectEvent["target"], object: THREE.Object3D, point: THREE.Vector3): boolean {
     if (!this.tracking) return false;
-    if (this.capture.owner && this.capture.owner !== controller && !this.mainMenu?.isEmergencyTarget(object) && !(object === this.navigationFloor && this.client.isRobotSelected())) return false;
+    const secondaryGripper = this.manipulationHold && this.manipulationHold !== controller && !!controller.inputSource?.hand && object.userData.manipulationAction === "gripper";
+    if (this.capture.owner && this.capture.owner !== controller && !secondaryGripper && !this.mainMenu?.isEmergencyTarget(object) && !(object === this.navigationFloor && this.client.isRobotSelected())) return false;
     if (this.mainMenu?.ownsTarget(object)) return this.mainMenu.canInteract(object, point);
     if (object !== this.navigationFloor) {
       const origin = controller.getWorldPosition(new THREE.Vector3());
@@ -341,6 +346,13 @@ export class WebXRInputController {
       return;
     }
     if (!hit || !this.canInteract(event.target, hit.object, hit.point)) return;
+    if (hit.object.userData.manipulationAction === "gripper" && this.manipulationHold &&
+        this.manipulationHold !== event.target && event.target.inputSource?.hand) {
+      if (this.manipulationCapture.pressGripper(this.navigationSourceId(event.target))) {
+        this.gripperPresses.add(event.target); this.client.manipulation.action("gripper");
+      }
+      return;
+    }
     if (!this.capture.press(event.target, hit?.object)) return;
     if (hit.object !== this.navigationFloor && hit.object !== this.placementBlocker) this.interaction.capture(event.target, hit.object, hit.point);
     this.interaction.direct.capture(event.target, hit.object,
@@ -363,7 +375,7 @@ export class WebXRInputController {
       const action = hit.object.userData.manipulationAction;
       if (action) { this.client.manipulation.action(action); this.uiGrab = true; }
       else if (hit.object.userData.manipulationLink) { this.client.toggleRobotSelection(); this.uiGrab = true; }
-      else if (this.client.manipulation.begin(event.target.getWorldPosition(new THREE.Vector3()).toArray() as [number, number, number], event.target.getWorldQuaternion(new THREE.Quaternion()).toArray() as [number, number, number, number])) this.manipulationHold = event.target;
+      else if (this.client.manipulation.begin(event.target.getWorldPosition(new THREE.Vector3()).toArray() as [number, number, number], event.target.getWorldQuaternion(new THREE.Quaternion()).toArray() as [number, number, number, number])) { this.manipulationHold = event.target; this.manipulationCapture.begin(this.navigationSourceId(event.target)); }
       return;
     }
     const ray = this.mainMenu?.ownsTarget(hit.object) ? this.panelRay(event.target) : this.gestureRay(event.target);
@@ -429,6 +441,10 @@ export class WebXRInputController {
   }
 
   onSelectEnd(event: xb.SelectEvent): void {
+    if (this.gripperPresses.delete(event.target)) {
+      this.manipulationCapture.release(this.navigationSourceId(event.target));
+      return;
+    }
     if (!this.touchDispatch && this.touches.owns(event.target)) { this.touches.release(event.target); return; }
     if (this.capture.owner && this.capture.owner !== event.target) return;
     if (this.panelGrip || (this.panelHold && this.panelHold !== event.target) ||
@@ -455,6 +471,14 @@ export class WebXRInputController {
   }
 
   private dispatchTouch(source: xb.SelectEvent["target"], contact: { object: THREE.Mesh; point: THREE.Vector3; distance: number }, start: boolean, cancelled: boolean): void {
+    if (contact.object.userData.manipulationAction === "gripper" && source.inputSource?.hand &&
+        this.manipulationHold && this.manipulationHold !== source) {
+      const id = this.navigationSourceId(source);
+      if (start && !cancelled && this.client.controlsEnabled() && this.manipulationCapture.pressGripper(id)) {
+        this.gripperPresses.add(source); this.client.manipulation.action("gripper");
+      } else if (!start) { this.gripperPresses.delete(source); this.manipulationCapture.release(id); }
+      return;
+    }
     this.touchDispatch = true;
     try {
       const event: { type: "selectstart" | "selectend"; target: xb.SelectEvent["target"] } = { type: start ? "selectstart" : "selectend", target: source };
@@ -483,6 +507,7 @@ export class WebXRInputController {
   }
 
   private clearInput(completeDictation = false): void {
+    this.gripperPresses.clear(); this.manipulationCapture.reset();
     this.client.manipulation.end();
     this.manipulationHold = null;
     this.speedHold = null;

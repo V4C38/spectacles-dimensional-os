@@ -636,3 +636,34 @@ applies to explicitly marked bounds/path visuals. Navigation markers and end
 effector handles retain their existing on-top behavior. Robot-type defaults remain
 separate from saved robot-instance calibration profiles. No Spectacles host
 manipulation code or scene wiring is included.
+
+
+## Manipulation client ownership
+
+`ManipulationInteraction` owns intent and request correlation; `ARModuleSession`
+owns observed execution. `ManipulationController`, `ManipulationGesture`,
+`ManipulationPresentation`, and `ManipulationInputCapture` live in DimOSARClient.
+Both hosts consume its kinematics, tool topology, preview timeline and world-line
+animation. Keep SDK events, coordinate-basis conversions, meshes and controls in
+host adapters. Naming follows ARModule, then WebXR, then Specs; preserve wire names.
+
+Native OpenYAM geometry is reproducibly exported from the canonical WebXR GLB;
+never hand-edit the generated `OpenYAMMesh.ts`. New robot descriptors retain
+runtime-provided topology and bounds; mismatched visual signatures suppress the
+bundled mesh and report its unavailability. No renderer supplies calibration.
+
+The manipulation review harness is `ManipulationProbe.ts`, run through the
+existing native review command. It uses production manipulation owners and native
+SIK/SUK controls with deterministic arm feedback. Specs environment occlusion is
+an explicit deferred platform feature. Physical hardware validation remains separate.
+
+
+Arm meshes and tool ghosts use `ARM_FRESNEL_STYLE`: a 1.5% arm interior and 92%
+edge opacity, with a soft power-5 falloff (tool: 0.8% / 82%). Contours use the shared 12 mm /
+10 mm dash pattern, blending to solid through the same 6–10-pixel transition
+as world strokes. The interior remains continuous through the gaps. WebXR and native
+Specs materials read the same Core constants. Native per-vertex normals are
+exported from the canonical mesh with the same area-weighted averaging used by
+Three.js. Every dotted stroke uses 75% of its former nearby width, including its
+pixel floor, and smoothly recovers the original width through the existing
+6–10-pixel dash-resolution transition. Far-distance antialiasing remains intact.

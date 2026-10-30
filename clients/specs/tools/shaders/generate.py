@@ -19,7 +19,7 @@ import legacy_graph as graph
 
 SPECS_ROOT = Path(__file__).resolve().parents[2]
 SHADERS = SPECS_ROOT / "Assets/Materials/Shaders"
-NAMES = ("VertexColor", "PoseIndicator", "LidarDot", "AdaptiveStroke", "BendyLaser")
+NAMES = ("VertexColor", "PoseIndicator", "LidarDot", "AdaptiveStroke", "BendyLaser", "ArmFresnel")
 CUSTOM_METADATA = {
     "Code", "CustomCodeNodeAsset", "Description", "Examples", "ID", "LastChached3",
     "LastCodeFormatted3", "Locked", "Stage", "Title", "UseExternalFile", "ngs_Height",
@@ -87,7 +87,7 @@ def float_parameter(template: dict[str, Any], name: str, level: int) -> dict[str
     ports = node["Ports"]
     for key, text in (("Title", name), ("ScriptName", name[0].lower() + name[1:])):
         ports[key]["Property"]["Variables"]["String"] = graph.text_variable(text)
-    default = 1024 if name == "ViewportHeightPx" else 0
+    default = 1024 if name == "ViewportHeightPx" else 0.75 if name == "NearWidthScale" else 0
     ports["Default"]["Property"]["Variables"] = {"VariableX": graph.float_variable(default)}
     ports["Output"]["Property"]["Variables"] = {"VariableX": graph.float_variable(0)}
     for key in ("EnableMin", "EnableMax"):
@@ -110,7 +110,7 @@ def generate(base: dict[str, Any], custom: dict[str, Any], parameter: dict[str, 
         graph.connect(main["Ports"]["WorldPosition"], 6, "Position")
     parameter_keys = []
     for index, (key, level) in enumerate(inputs.items()):
-        node_key = f"Node{3 + index}"
+        node_key = f"Node{(3 if vertex else 2) + index}"
         add_node(children, node_key, float_parameter(parameter, key, level))
         parameter_keys.append(node_key)
     ordered = parameter_keys + ["Node1"]

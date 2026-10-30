@@ -61,3 +61,25 @@ it("preserves native touch release ordering and retires authorization before a c
     expect(f.client.loseInput).toHaveBeenCalled();
   } finally { start.mockRestore(); end.mockRestore(); f.controller.dispose(); }
 });
+
+it("lets the other hand toggle the gripper without ending the owner's drag", () => {
+  const f = fixture();
+  f.internal.mainMenu.isEmergencyTarget = () => false;
+  const owner = new THREE.Group(), other = new THREE.Group();
+  owner.userData.id = 1; other.userData.id = 2;
+  (other as any).inputSource = { hand: {}, handedness: "left" };
+  f.internal.capture.press(owner, {}); f.internal.manipulationHold = owner;
+  f.internal.canInteract = () => true;
+  const button = new THREE.Mesh(); button.userData.manipulationAction = "gripper";
+  f.internal.interaction.hit.mockReturnValue({ object: button, point: new THREE.Vector3() });
+  (f.client.manipulation as any).action = vi.fn();
+  f.controller.onSelectStart({ target: other });
+  f.controller.onSelectStart({ target: other });
+  expect((f.client.manipulation as any).action).toHaveBeenCalledOnce();
+  expect((f.client.manipulation as any).action).toHaveBeenCalledWith("gripper");
+  f.controller.onSelectEnd({ target: other });
+  expect(f.internal.capture.owner).toBe(owner);
+  expect(f.internal.manipulationHold).toBe(owner);
+  expect(f.client.manipulation.end).not.toHaveBeenCalled();
+  f.controller.dispose();
+});

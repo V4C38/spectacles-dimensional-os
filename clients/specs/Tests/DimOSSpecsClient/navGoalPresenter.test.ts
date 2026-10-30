@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClientTrackingOrigin } from "../../Assets/Scripts/DimOSARClient/localization/clientTrackingOrigin";
-import { ROBOT_LINE_STYLE } from "../../Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import { ROBOT_LINE_STYLE, WORLD_DASH_STYLE } from "../../Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle";
 
 const { renderers } = vi.hoisted(() => ({ renderers: new Map<string, any>() }));
 vi.mock("../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer", () => {
@@ -44,7 +44,7 @@ describe("native route presentation", () => {
       path: [[0, 0, 0, 0], [1, 0, 0, 0]] });
     expect(dots.segments).toHaveBeenCalledOnce();
     const [, width, , dash, gap, continuous] = dots.segments.mock.calls[0];
-    expect(width).toBeCloseTo(ROBOT_LINE_STYLE.selectedWidthM * 100);
+    expect(width).toBeCloseTo(WORLD_DASH_STYLE.widthM * 100);
     expect(dash).toBeCloseTo(ROBOT_LINE_STYLE.dashM * 100);
     expect(gap).toBeCloseTo(ROBOT_LINE_STYLE.gapM * 100);
     expect(continuous).toBe(true);

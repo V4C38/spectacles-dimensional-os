@@ -3,8 +3,8 @@
 The `openyam-ar-planner` installed blueprint composes one official OpenYAM
 hardware owner, one pose-capable control coordinator, the official manipulation
 module with narrow AR RPC adapters, and ARModule. Navigation and manipulation
-capabilities are independent. Spectacles host interactions, grasping, pick/place,
-agentic manipulation, and mobile manipulation are outside this feature.
+capabilities are independent. Both WebXR and Specs consume the shared ClientCore manipulation owners. Grasping,
+pick/place, agentic manipulation, and mobile manipulation are outside this feature.
 
 ## Runtime and development
 
@@ -16,7 +16,7 @@ Python 3.12 environment, install a compatible official DimOS with its `planning`
 extra, then install this checkout's `dimos-ar[manipulation,dev]`. Do not replace the
 main workspace's editable installation or patch upstream source.
 
-For the launcher, select **openyam_ar_planner**, **WebXR**, a named **OpenYAM**
+For the launcher, select **openyam_ar_planner**, **WebXR** or **Specs**, a named **OpenYAM**
 profile, and **Mock hardware** for software development. Profiles are stored in
 `~/.config/dimos/ar-profiles.json`; existing Go2 calibration is migrated into a
 named Go2 profile. Names are editable; stable profile IDs are retained on rename.
@@ -177,3 +177,31 @@ base, mount, camera, observed tag and solved tracking-origin translations to
 separate a mounting error from camera calibration or model placement. Physical
 alignment must be checked against the actual bench; browser fixtures cannot
 establish that measurement.
+
+### Specs and shared client behavior
+
+Specs uses the existing PIN/IP setup and measured robot-profile calibration.
+Select the arm through its bounds or menu. Selected dragging edits a full-pose
+target; release requests a checked plan. Preview plays the articulated trajectory
+once and retains its endpoint. Execute binds to that plan. Unselected dragging
+follows until release, input loss, or tracking/session invalidation. Both hosts
+use ClientCore for grab offsets, pose smoothing, action dispatch, preview timing,
+visual kinematics, trajectory sampling, and control-state derivation.
+
+In hand-tracking mode, the Open/Close control stays beside the end-effector marker
+during dragging. The other hand can press it without taking the dragging hand's
+capture or ending following. Selected gripper edits remain deferred plan intent;
+unselected edits use immediate gripper control. WebXR retains its controller
+shortcut. Specs exposes the same 5–100% speed range with a native SUK slider.
+
+Specs draws the bundled arm using native MeshBuilder geometry generated from the
+same canonical WebXR GLB and checks its visual signature before displaying meshes.
+Run `python3 clients/specs/tools/export_manipulation_mesh.py` from the repository
+root after updating that GLB. The generated geometry is visual only; measured
+transforms and planning still come from ARModule. Attribution and MIT license are
+in `clients/webxr/public/models/NOTICE.md` and `LICENSE.i2rt`.
+
+Specs environment-depth occlusion is deferred. Its arm bounds and trajectories
+remain unoccluded; WebXR retains its optional selective environment-depth adapter.
+Neither desktop fixtures nor native Preview establish physical robot registration,
+hand-tracking quality, stereo alignment, or on-device performance.

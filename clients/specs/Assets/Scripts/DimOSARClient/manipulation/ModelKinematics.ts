@@ -92,3 +92,37 @@ export function samplePlan(
     ]),
   );
 }
+
+/** Joint values used for visual articulation, including the model's gripper joints. */
+export function visualJointValues(model: ManipulationModel, observations: readonly { joints: Record<string, number> | null }[],
+  groupJointNames: readonly string[], opening: number | null | undefined): Record<string, number> {
+  const values: Record<string, number> = Object.assign({}, ...observations.map(o => o.joints ?? {}));
+  if (opening != null) for (const joint of model.joints) {
+    if (joint.kind === "prismatic" && joint.limits && !groupJointNames.includes(joint.name))
+      values[joint.name] = joint.limits.lower + (joint.limits.upper - joint.limits.lower) * opening;
+  }
+  return values;
+}
+
+export function manipulationPlanPath(model: ManipulationModel, plan: ManipulationPlan,
+  tip: string, values: Record<string, number>, root: ManipulationPose): Vec3[] {
+  const count = Math.min(240, Math.max(2, Math.ceil(plan.duration * 30)));
+  return Array.from({ length: count + 1 }, (_, i) => composePose(root,
+    linkPoses(model, { ...values, ...samplePlan(plan, plan.duration * i / count) })[tip]).position);
+}
+
+export function inversePose(pose: ManipulationPose): ManipulationPose {
+  const q = pose.orientation;
+  const inverse: Quat = [-q[0], -q[1], -q[2], q[3]];
+  return { position: rotateVecByQuat(inverse, pose.position.map(v => -v) as Vec3), orientation: inverse };
+}
+
+export function manipulationToolLinks(model: ManipulationModel, tip: string): { root: string; links: Set<string> } {
+  let root = tip;
+  let parent = model.joints.find(j => j.child === root);
+  while (parent?.kind === "fixed") { root = parent.parent; parent = model.joints.find(j => j.child === root); }
+  const links = new Set([root]);
+  for (let pass = 0; pass < model.links.length; pass++)
+    for (const joint of model.joints) if (links.has(joint.parent)) links.add(joint.child);
+  return { root, links };
+}

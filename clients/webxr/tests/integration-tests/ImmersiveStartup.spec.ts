@@ -7,7 +7,7 @@ import type { State } from "../../../specs/Assets/Scripts/DimOSARClient/websocke
 
 // ClientCore lives outside WebXR's ESM package. Load it through Playwright's
 // CommonJS transform so test discovery also works on CI's Node 20 runtime.
-const { ROBOT_LINE_STYLE } = createRequire(import.meta.url)(
+const { WORLD_DASH_STYLE } = createRequire(import.meta.url)(
   "../../../specs/Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle",
 ) as typeof import("../../../specs/Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle");
 
@@ -500,8 +500,8 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
           draft.object.getObjectByName("NavigationHeading").visible &&
           Math.abs(dashed.material.uniforms.uDash.value - dashStyle.dashM) < 0.00001 &&
           Math.abs(dashed.material.uniforms.uGap.value - dashStyle.gapM) < 0.00001 &&
-          Math.abs(dashed.material.uniforms.uWidth.value - dashStyle.selectedWidthM) < 0.00001;
-      }, { aiming, dashStyle: ROBOT_LINE_STYLE })).toBe(true);
+          Math.abs(dashed.material.uniforms.uWidth.value - dashStyle.widthM) < 0.00001;
+      }, { aiming, dashStyle: WORLD_DASH_STYLE })).toBe(true);
       markVisualReview(page, name);
       await page.screenshot({ path: testInfo.outputPath(name) });
       await page.evaluate(saved => {
@@ -692,10 +692,10 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       const route = app.client.route.object;
       const dashed = route.children.find((child: any) => child.material?.uniforms?.uDash);
       return route.visible && route.material.color.getHex() === 0xffffff &&
-        route.material.worldUnits && Math.abs(route.material.linewidth - dashStyle.selectedWidthM) < 0.00001 && route.material.dashed && route.material.opacity === 0.85 &&
+        route.material.worldUnits && Math.abs(route.material.linewidth - dashStyle.widthM) < 0.00001 && route.material.dashed && route.material.opacity === 0.85 &&
         dashed.visible && Math.abs(dashed.material.uniforms.uDash.value - dashStyle.dashM) < 0.00001 &&
         Math.abs(dashed.material.uniforms.uGap.value - dashStyle.gapM) < 0.00001;
-    }, ROBOT_LINE_STYLE)).toBe(true);
+    }, WORLD_DASH_STYLE)).toBe(true);
 
     sendState({ nav: { state: "following_path", outcome: null } });
     const beforeFollowingView = await page.evaluate(() => {

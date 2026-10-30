@@ -270,7 +270,7 @@ export class DimOSWebXRClient {
   }
 
   emergencyStop(): void {
-    this.manipulation.end();
+    this.manipulation.suspend();
     if (this.session.view().capabilities?.estop.available !== true) return;
     try {
       if (this.navigation.interaction.snapshot().goalActive) {
@@ -300,6 +300,7 @@ export class DimOSWebXRClient {
   }
 
   suspend(): void {
+    this.manipulation.suspend();
     this.lastTickAt = null;
     this.speech.stop();
     this.loseInput();

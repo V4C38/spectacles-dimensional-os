@@ -28,6 +28,7 @@ export class WorldMeshRenderer {
     this.visual.meshShadowMode = MeshShadowMode.None;
     const pass = this.material.mainPass as Pass & { blendMode: BlendMode; depthWrite: boolean; twoSided: boolean };
     pass.blendMode = BlendMode.Normal; pass.depthWrite = false; pass.twoSided = true;
+    if (stroke) (this.material.mainPass as Pass & { nearWidthScale: number }).nearWidthScale = WORLD_DASH_STYLE.nearWidthScale;
     const attributes = [{ name: "position", components: 3 }, { name: "normal", components: 3 },
       { name: "color", components: 4 }, { name: "texture0", components: 2 }];
     if (stroke) for (let i = 1; i <= 5; i++) attributes.push({ name: `texture${i}`, components: 2 });

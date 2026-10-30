@@ -258,3 +258,64 @@ test("manipulation speed slider captures a controller drag", async ({
     fixture.close();
   }
 });
+
+test("hand tracking keeps the gripper usable by the other hand during following", async ({ page }) => {
+  test.setTimeout(90000);
+  const fixture = await bootstrap(page, "hand", { manipulation: true });
+  try {
+    await fixture.localized();
+    await page.evaluate(() => {
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      if (app.client.ui.menuOpen) app.client.ui.toggleMenu();
+      const p = app.client.manipulation.renderer.handle.object.getWorldPosition(app.client.manipulation.renderer.handle.object.position.clone());
+      w.questDevice.hands.right.position.set(p.x, p.y, p.z + 0.7);
+      w.questDevice.hands.right.quaternion.set(0, 0, 0, 1);
+    });
+    await expect.poll(() => page.evaluate(() => {
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      return app.interaction.hit(w.xb.core.input.rightController)?.object.name;
+    })).toBe("EndEffectorHandleCollider");
+    await setSelection(page, 1);
+    await expect.poll(() => fixture.commands.some(c => c.action === "acquire")).toBe(true);
+    await page.evaluate(() => {
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      w.questDevice.hands.right.position.y += 0.05;
+    });
+    await expect.poll(() => page.evaluate(() => {
+      const app = (window as any).xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      return app.client.manipulation.renderer.gripperMenu.scale.x;
+    })).toBeGreaterThan(0.999);
+    await page.evaluate(() => {
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const button = app.client.manipulation.renderer.gripperMenu.children[0];
+      const p = button.getWorldPosition(button.position.clone()), q = button.getWorldQuaternion(button.quaternion.clone());
+      const normal = p.clone().set(0, 0, 1).applyQuaternion(q); p.addScaledVector(normal, 0.5);
+      w.questDevice.hands.left.position.set(p.x, p.y, p.z);
+      w.questDevice.hands.left.quaternion.set(q.x, q.y, q.z, q.w);
+    });
+    await expect.poll(() => page.evaluate(() => {
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      return app.interaction.hit(w.xb.core.input.leftController)?.object.userData.manipulationAction;
+    })).toBe("gripper");
+    await page.evaluate(async () => {
+      const w = window as any, session = w.xb.core.renderer.xr.getSession();
+      w.questDevice.hands.left.updatePinchValue(1);
+      await new Promise<void>(resolve => session.requestAnimationFrame(() => session.requestAnimationFrame(() => resolve())));
+      w.questDevice.hands.left.updatePinchValue(0);
+    });
+    await expect.poll(async () => JSON.stringify({
+      count: fixture.commands.filter(c => c.action === "gripper").length,
+      state: await page.evaluate(() => {
+        const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+        return { holding: !!app.inputController.manipulationHold, fresh: app.client.manipulation.interaction.feedbackFresh,
+          selected: app.client.isRobotSelected(), dragging: app.client.manipulation.interaction.dragging,
+          following: app.client.manipulation.interaction.following, status: app.client.manipulation.interaction.status,
+          hit: app.interaction.hit(w.xb.core.input.leftController)?.object.userData.manipulationAction };
+      }),
+    })).toContain('"count":1');
+    expect(fixture.commands.some(c => c.action === "release")).toBe(false);
+    await expect.poll(() => fixture.commands.some(c => c.action === "update")).toBe(true);
+    await setSelection(page, 0);
+    await expect.poll(() => fixture.commands.some(c => c.action === "release")).toBe(true);
+  } finally { await fixture.close(); }
+});

@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import * as THREE from "three";
 import { WebXRNavGoalView } from "../src/navigation/WebXRNavGoalView";
-import { NAVIGATION_CANCEL_STYLE, ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
+import { NAVIGATION_CANCEL_STYLE, ROBOT_LINE_STYLE, WORLD_DASH_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 
 it("renders a full-size confirmed draft using the robot-box dash pattern in physical metres", () => {
   const normal = new WebXRNavGoalView(), draft = new WebXRNavGoalView();
@@ -13,8 +13,8 @@ it("renders a full-size confirmed draft using the robot-box dash pattern in phys
   expect(dashed.visible).toBe(true); expect(dashed.geometry.instanceCount).toBe(128);
   expect(dashed.getWorldScale(new THREE.Vector3()).x).toBeCloseTo(1);
   const point = dashed.geometry.getAttribute("instanceStart");
-  expect(Math.hypot(point.getX(0), point.getZ(0)) + ROBOT_LINE_STYLE.selectedWidthM / 2).toBeCloseTo(draft.circleBounds().radius);
-  expect(dashed.material.uniforms.uWidth.value).toBe(ROBOT_LINE_STYLE.selectedWidthM);
+  expect(Math.hypot(point.getX(0), point.getZ(0)) + WORLD_DASH_STYLE.widthM / 2).toBeCloseTo(draft.circleBounds().radius);
+  expect(dashed.material.uniforms.uWidth.value).toBe(WORLD_DASH_STYLE.widthM);
   expect(dashed.material.uniforms.uDash.value).toBe(ROBOT_LINE_STYLE.dashM);
   expect(dashed.material.uniforms.uGap.value).toBe(ROBOT_LINE_STYLE.gapM);
   expect(draft.object.getObjectByName("NavigationCircle")!.visible).toBe(false);
@@ -169,7 +169,7 @@ it("draws the small pre-commit probe with physical dashes exactly at the laser e
   expect(circle.getWorldPosition(new THREE.Vector3()).toArray()).toEqual([1, 0.2, -2]);
   expect(circle.geometry.instanceCount).toBe(128);
   const start = circle.geometry.getAttribute("instanceStart");
-  expect(Math.hypot(start.getX(0), start.getZ(0)) + ROBOT_LINE_STYLE.selectedWidthM / 2).toBeCloseTo(0.06);
+  expect(Math.hypot(start.getX(0), start.getZ(0)) + WORLD_DASH_STYLE.widthM / 2).toBeCloseTo(0.06);
   expect(circle.material.uniforms.uDash.value).toBe(ROBOT_LINE_STYLE.dashM);
   expect(circle.material.uniforms.uGap.value).toBe(ROBOT_LINE_STYLE.gapM);
   view.setSharedOpacity(0.6); expect(circle.material.uniforms.uOpacity.value).toBe(0.6);

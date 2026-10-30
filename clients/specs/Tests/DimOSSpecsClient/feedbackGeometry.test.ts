@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { NavigationMarkerRenderer } from "../../Assets/Scripts/DimOSSpecsClient/navigation/NavigationMarkerRenderer";
 import { circleMesh, strokeMesh2D } from "../../Assets/Scripts/DimOSSpecsClient/presentation/WorldMeshRenderer";
 import { NAV_FEEDBACK_ANIMATION_S, NAV_FEEDBACK_TIMING } from "../../Assets/Scripts/DimOSARClient/navigation/NavigationGoalLifecycle";
-import { NAVIGATION_COLORS, ROBOT_LINE_STYLE } from "../../Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle";
+import { NAVIGATION_COLORS, ROBOT_LINE_STYLE, WORLD_DASH_STYLE } from "../../Assets/Scripts/DimOSARClient/presentation/WorldVisualStyle";
 
 function sink() { return { triangles: vi.fn(), hide: vi.fn(), object: { getTransform: () => ({ setLocalPosition: vi.fn() }) } }; }
 function renderer(scale = 1) {
@@ -25,7 +25,7 @@ it("keeps the confirmed draft as large as the normal selected marker with box-st
   const [segments, width, opacity, dash, gap, continuous] = draft.draftCircle.segments.mock.calls[0];
   expect(Math.max(...segments.map((p: number[]) => Math.hypot(p[0], p[2]))) + width / 2).toBeCloseTo(solidRadius);
   expect(solidRadius).toBeCloseTo(21.44 * 1.15);
-  expect(width).toBeCloseTo(ROBOT_LINE_STYLE.selectedWidthM * 100);
+  expect(width).toBeCloseTo(WORLD_DASH_STYLE.widthM * 100);
   expect(dash).toBeCloseTo(ROBOT_LINE_STYLE.dashM * 100);
   expect(gap).toBeCloseTo(ROBOT_LINE_STYLE.gapM * 100);
   expect(continuous).toBe(true); expect(opacity).toBeGreaterThan(0);

@@ -13,11 +13,12 @@ export class AdaptiveDashedLineRenderer {
     geometry.setIndex([0, 1, 2, 2, 1, 3]);
     geometry.instanceCount = 0;
     const material = new THREE.ShaderMaterial({
-      uniforms: { uViewport: { value: new THREE.Vector2(1, 1) }, uWidth: { value: widthM }, uDash: { value: dashM }, uGap: { value: gapM }, uOpacity: { value: 0.7 } },
+      uniforms: { uViewport: { value: new THREE.Vector2(1, 1) }, uWidth: { value: widthM }, uNearWidthScale: { value: WORLD_DASH_STYLE.nearWidthScale }, uDash: { value: dashM }, uGap: { value: gapM }, uOpacity: { value: 0.7 } },
       transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false,
       vertexShader: `
         attribute vec3 instanceStart; attribute vec3 instanceEnd; attribute float instanceDistance;
         uniform vec2 uViewport; uniform float uWidth;
+        uniform float uDash; uniform float uGap; uniform float uNearWidthScale;
         varying float vAcross; varying float vDistance; varying float vPixelM; varying float vHalfWidth;
         void main() {
           vec3 a = (modelViewMatrix * vec4(instanceStart, 1.0)).xyz;
@@ -27,7 +28,9 @@ export class AdaptiveDashedLineRenderer {
           vec2 normal = vec2(-direction.y, direction.x) / max(length(direction), 0.0001);
           vec3 p = mix(a, b, position.y);
           float pixelM = 2.0 * mix(1.0, max(0.001, -p.z), abs(projectionMatrix[2][3])) / max(0.0001, abs(projectionMatrix[1][1]) * uViewport.y);
-          float halfWidth = max(uWidth, 2.0 * pixelM) * 0.5;
+          float resolutionBlend = 1.0 - smoothstep(6.0, 10.0, (uDash + uGap) / max(pixelM, 0.00001));
+          float widthScale = mix(uNearWidthScale, 1.0, resolutionBlend);
+          float halfWidth = max(uWidth, 2.0 * pixelM) * widthScale * 0.5;
           vec4 clip = projectionMatrix * vec4(p, 1.0);
           clip.xy += normal * position.x * (halfWidth / pixelM + 1.0) * 2.0 / uViewport * clip.w;
           gl_Position = clip;

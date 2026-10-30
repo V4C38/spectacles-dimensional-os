@@ -104,7 +104,7 @@
   ];
 
   const BLUEPRINTS = {
-    openyam_ar_planner: { info: "OpenYAM · WebXR manipulation: plan/review/execute or grab the end effector to follow." },
+    openyam_ar_planner: { info: "OpenYAM · manipulation: plan/review/execute or grab the end effector to follow." },
     unitree_go2_ar: {
       info: "Unitree Go2 with ARModule\nManual Mode: place navigation goals from the headset.",
     },
@@ -126,8 +126,8 @@
     const manipulation = blueprint === "openyam_ar_planner";
     robotIp.closest(".robot-ip-row").classList.toggle("hidden", manipulation);
     $("simulationEnabled").closest("label").classList.toggle("hidden", !manipulation);
-    if (manipulation) { client = "webxr"; document.querySelectorAll("[data-client]").forEach(button => button.classList.toggle("active", button.dataset.client === client)); }
-    document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = manipulation; });
+
+    document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = false; });
     if (settingsReady) void refreshRobotProfiles();
     agentConfig.classList.toggle("hidden", !spec.agent);
     syncConfigCards();
@@ -273,7 +273,7 @@
     });
     blueprintSelect.disabled = locked;
     for (const id of ["robotProfileSelect", "robotProfileName", "newRobotProfile", "duplicateRobotProfile", "deleteRobotProfile", "simulationEnabled"]) $(id).disabled = locked;
-    document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = locked || blueprint === "openyam_ar_planner"; });
+    document.querySelectorAll("[data-client=specs]").forEach(button => { button.disabled = locked; });
     apiKey.disabled = locked;
     revealKey.disabled = locked;
     robotIp.disabled = locked;

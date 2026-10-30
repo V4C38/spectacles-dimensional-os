@@ -1,3 +1,4 @@
+import { ManipulationPresentation, manipulationControls } from "@dimos-ar-client/manipulation/ManipulationPresentation";
 import { PanelHeightController } from "../presentation/PanelHeightController";
 import { TargetWarning } from "./TargetWarning";
 import { SurfaceButton } from "../presentation/SurfaceButton";
@@ -14,6 +15,9 @@ import {
   composePose,
   linkPoses,
   samplePlan,
+  visualJointValues,
+  manipulationPlanPath,
+  manipulationToolLinks,
 } from "@dimos-ar-client/manipulation/ModelKinematics";
 import type {
   ManipulationModel,
@@ -44,11 +48,8 @@ export class ManipulationRenderer {
   private readonly pathStroke = new AdaptiveDashedLineRenderer();
   readonly path = this.pathStroke.object;
   private pathKey = "";
-  private previewWasRequested = false;
   private readonly menuHeight = new PanelHeightController();
   private menuPlate!: GlassSurface;
-  private previewId: string | null = null;
-  private previewStarted = 0;
   private readonly boundsAnimation = new RobotBoundsAnimation();
   private outlineTime = 0;
   readonly measuredHandle = new EndEffectorHandleRenderer();
@@ -62,7 +63,8 @@ export class ManipulationRenderer {
   readonly gripperMenu = new THREE.Group();
   private readonly baseLabel = new RobotMarkerLabel();
   private readonly buttons = new Map<string, SurfaceButton>();
-  previewRequested = false;
+  get previewRequested(): boolean { return this.presentation.previewRequested; }
+  set previewRequested(value: boolean) { if (value !== this.presentation.previewRequested) this.presentation.togglePreview(); }
   working = false;
   desiredGripper: number | null = null;
   private readonly basePosition = new THREE.Vector3();
@@ -81,6 +83,7 @@ export class ManipulationRenderer {
   private eeGeometry: THREE.Object3D | null = null;
   pinned = false;
   eeHovered = false;
+  handDragging = false;
   hoveredAction: string | null = null;
   private readonly status = new Text();
   private model: ManipulationModel | null = null;
@@ -88,7 +91,7 @@ export class ManipulationRenderer {
   private assetGeneration = 0;
   private assetMessage = "";
   hoveredLink: string | null = null;
-  constructor() {
+  constructor(private readonly presentation = new ManipulationPresentation()) {
     this.object.name = "Manipulation";
     this.menuHeight.request(0.096, true);
     this.path.userData.environmentDepth = true;
@@ -262,25 +265,11 @@ export class ManipulationRenderer {
       this.rebuild(state.model);
     const model = state.model,
       observed = groupId ? state.observations?.[groupId] : null;
-    const all = Object.assign(
-      {},
-      ...Object.values(state.observations ?? {}).map((o) => o.joints ?? {}),
-    );
     const rootPose =
       state.root_pose ??
       ({ position: [0, 0, 0], orientation: [0, 0, 0, 1] } as ManipulationPose);
     const activeGroup = state.groups?.find((g) => g.id === groupId);
-    if (observed?.gripper != null)
-      for (const joint of model.joints) {
-        if (
-          joint.kind === "prismatic" &&
-          joint.limits &&
-          !activeGroup?.joint_names.includes(joint.name)
-        )
-          all[joint.name] =
-            joint.limits.lower +
-            (joint.limits.upper - joint.limits.lower) * observed.gripper;
-      }
+    const all = visualJointValues(model, Object.values(state.observations ?? {}), activeGroup?.joint_names ?? [], observed?.gripper);
     const measured = linkPoses(model, all);
     const base = clientTrackingToWebxrPose(
       odomToClientTrackingPose(rootPose, origin),
@@ -295,15 +284,9 @@ export class ManipulationRenderer {
       this.previewRequested = false;
     }
     this.selectedBefore = selected;
-    const stateText = state.stopped
-      ? "Stopped"
-      : state.following
-        ? "Following"
-        : /Returning to zero|Planning|Executing/.test(message)
-          ? message
-          : state.execution === "idle"
-            ? "Idle"
-            : state.execution || "Idle";
+    const controls = manipulationControls(state, { feedbackFresh: fresh, busy: this.working, target,
+      groupId, desiredGripper: this.desiredGripper, status: message }, selected);
+    const stateText = controls.status;
     this.baseLabel.setFeedback(
       robotTitle,
       `${stateText} · ${Math.round(this.speedScale * 100)}%`,
@@ -346,23 +329,9 @@ export class ManipulationRenderer {
         ? state.plan
         : null) ??
       null;
-    if (activePlan?.plan_id !== this.previewId) {
-      this.previewId = activePlan?.plan_id ?? null;
-      this.previewStarted = now;
-    }
-    if (this.previewRequested && !this.previewWasRequested) this.previewStarted = now;
-    this.previewWasRequested = this.previewRequested;
-    const playbackTime = now - this.previewStarted;
-    const playing =
-      this.previewRequested &&
-      !!activePlan &&
-      playbackTime <= activePlan.duration;
-    if (
-      this.previewRequested &&
-      activePlan &&
-      playbackTime > activePlan.duration
-    )
-      this.previewRequested = false;
+    const playback = this.presentation.sample(activePlan, now);
+    const playing = playback.playing;
+    const playbackTime = playback.time;
     const configuration =
       playing && activePlan
         ? samplePlan(activePlan, Math.max(0, playbackTime))
@@ -389,16 +358,7 @@ export class ManipulationRenderer {
     }
     const group = state.groups?.find((g) => g.id === groupId);
     if (!this.eeGeometry && group?.tip_frame && this.ghosts.size) {
-      let toolRoot = group.tip_frame;
-      let parent = model.joints.find((j) => j.child === toolRoot);
-      while (parent?.kind === "fixed") {
-        toolRoot = parent.parent;
-        parent = model.joints.find((j) => j.child === toolRoot);
-      }
-      const links = new Set([toolRoot]);
-      for (let pass = 0; pass < model.links.length; pass++)
-        for (const j of model.joints)
-          if (links.has(j.parent)) links.add(j.child);
+      const { links } = manipulationToolLinks(model, group.tip_frame);
       const root = new THREE.Group();
       for (const name of links) {
         const visual = this.ghosts.get(name);
@@ -473,25 +433,8 @@ export class ManipulationRenderer {
         : "";
     if (activePlan && group?.tip_frame && pathKey !== this.pathKey) {
       this.pathKey = pathKey;
-      const points: THREE.Vector3[] = [];
-      const count = Math.min(
-        240,
-        Math.max(2, Math.ceil(activePlan.duration * 30)),
-      );
-      for (let i = 0; i <= count; i++) {
-        const pose = linkPoses(model, {
-          ...all,
-          ...samplePlan(activePlan, (activePlan.duration * i) / count),
-        })[group.tip_frame];
-        if (pose)
-          points.push(
-            new THREE.Vector3(
-              ...clientTrackingToWebxrPose(
-                odomToClientTrackingPose(composePose(rootPose, pose), origin),
-              ).position,
-            ),
-          );
-      }
+      const points = manipulationPlanPath(model, activePlan, group.tip_frame, all, rootPose).map(position =>
+        new THREE.Vector3(...clientTrackingToWebxrPose(odomToClientTrackingPose({ position, orientation: [0, 0, 0, 1] }, origin)).position));
       this.pathStroke.setSegments(
         points
           .slice(0, -1)
@@ -550,13 +493,14 @@ export class ManipulationRenderer {
     for (const [key, button] of this.buttons) {
       button.setEnabled(["estop", "panel-estop"].includes(key) || fresh);
       if (key === "execute")
-        button.setEnabled(this.working || (fresh && target !== null));
+        button.setEnabled(controls.canExecute);
       if (key === "resume") button.visible = state.stopped === true;
       if (key === "plan") {
         button.setActive(this.previewRequested);
-        button.setEnabled(fresh && target !== null && !this.working);
+        button.setEnabled(controls.canPreview);
       }
       if (key === "gripper") {
+        button.setEnabled(controls.canGripper);
         button.visible = group?.has_gripper === true;
         const value = selected
           ? (this.desiredGripper ?? observed?.gripper)
@@ -586,7 +530,7 @@ export class ManipulationRenderer {
       this.displayedTarget.quaternion.slerp(rotation, smoothing);
       this.handle.object.position.copy(this.displayedTarget.position);
       this.handle.object.quaternion.copy(this.displayedTarget.quaternion);
-      if (this.eeHovered) this.hoverUntil = now + 0.3;
+      if (this.eeHovered || this.handDragging) this.hoverUntil = now + 0.3;
       this.hoverProgress +=
         ((now < this.hoverUntil ? 1 : 0) - this.hoverProgress) * smoothing;
       this.gripperMenu.visible =
@@ -647,16 +591,7 @@ export class ManipulationRenderer {
   ): void {
     const group = state.groups?.find(g => g.id === groupId);
     if (!group?.tip_frame || !group.has_gripper) return;
-    let root = group.tip_frame;
-    let parent = model.joints.find(j => j.child === root);
-    while (parent?.kind === "fixed") {
-      root = parent.parent;
-      parent = model.joints.find(j => j.child === root);
-    }
-    const links = new Set([root]);
-    for (let pass = 0; pass < model.joints.length; pass++)
-      for (const joint of model.joints)
-        if (links.has(joint.parent)) links.add(joint.child);
+    const { root, links } = manipulationToolLinks(model, group.tip_frame);
     const matrix = (pose: ManipulationPose) => new THREE.Matrix4().compose(
       new THREE.Vector3(...pose.position), new THREE.Quaternion(...pose.orientation),
       new THREE.Vector3(1, 1, 1),
@@ -772,17 +707,6 @@ export class ManipulationRenderer {
                   : [part.material];
                 old.forEach((m) => m.dispose());
                 part.material = armMaterial();
-                const edge = new THREE.LineSegments(
-                  new THREE.EdgesGeometry(part.geometry, 35),
-                  new THREE.LineBasicMaterial({
-                    color: 0xe8f1f4,
-                    transparent: true,
-                    opacity: 0.12,
-                    depthWrite: false,
-                  }),
-                );
-                edge.raycast = () => {};
-                part.add(edge);
               }
             });
             const previewNode = node.clone(true);

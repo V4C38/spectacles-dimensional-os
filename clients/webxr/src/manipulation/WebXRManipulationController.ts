@@ -1,4 +1,6 @@
 import * as THREE from "three";
+import { ManipulationGesture } from "@dimos-ar-client/manipulation/ManipulationGesture";
+import { ManipulationController, type ManipulationControlAction } from "@dimos-ar-client/manipulation/ManipulationController";
 import { ManipulationInteraction } from "@dimos-ar-client/manipulation/ManipulationInteraction";
 import type { ARModuleSession } from "@dimos-ar-client/websocket/arModuleSession";
 import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
@@ -9,15 +11,13 @@ import { ManipulationRenderer } from "./ManipulationRenderer";
 
 export class WebXRManipulationController {
   readonly interaction: ManipulationInteraction;
-  readonly renderer = new ManipulationRenderer();
-  readonly object = this.renderer.object;
-  private offset: THREE.Matrix4 | null = null;
+  readonly core: ManipulationController;
+  readonly renderer: ManipulationRenderer;
+  readonly object: THREE.Group;
+  private readonly gesture = new ManipulationGesture();
   private lastOrigin: ClientTrackingOrigin | null = null;
   private selected = false;
   private panelOffset: THREE.Matrix4 | null = null;
-  private smoothedPosition = new THREE.Vector3();
-  private smoothedRotation = new THREE.Quaternion();
-  private lastHold = 0;
   beginPanel(position: Vec3, orientation: Quat): void {
     this.renderer.pinned = true;
     this.renderer.panel.updateWorldMatrix(true, false);
@@ -30,12 +30,15 @@ export class WebXRManipulationController {
     private readonly origin: () => ClientTrackingOrigin | null,
     private readonly now: () => number,
   ) {
-    this.interaction = new ManipulationInteraction(session, now);
+    this.core = new ManipulationController(session, now);
+    this.interaction = this.core.interaction;
+    this.renderer = new ManipulationRenderer(this.core.presentation);
+    this.object = this.renderer.object;
   }
   setSelected(selected: boolean): void {
     if (this.selected !== selected) this.end();
     this.selected = selected;
-    this.interaction.setSelected(selected);
+    this.core.setSelected(selected);
   }
   owns(target: THREE.Object3D): boolean {
     return this.renderer.owns(target);
@@ -43,15 +46,14 @@ export class WebXRManipulationController {
   begin(position: Vec3, orientation: Quat): boolean {
     if (!this.origin() || !this.interaction.begin()) return false;
     this.renderer.handle.object.updateWorldMatrix(true, false);
-    this.offset = this.matrix(position, orientation)
-      .invert()
-      .multiply(this.renderer.handle.object.matrixWorld);
-    this.renderer.handle.object.matrixWorld.decompose(
-      this.smoothedPosition,
-      this.smoothedRotation,
-      new THREE.Vector3(),
+    const handle = this.renderer.handle.object;
+    this.gesture.begin(
+      webxrToClientTrackingPose({ position, orientation }),
+      webxrToClientTrackingPose({
+        position: handle.getWorldPosition(new THREE.Vector3()).toArray() as Vec3,
+        orientation: handle.getWorldQuaternion(new THREE.Quaternion()).toArray() as Quat,
+      }), this.now(),
     );
-    this.lastHold = this.now();
     this.hold(position, orientation);
     return true;
   }
@@ -66,87 +68,26 @@ export class WebXRManipulationController {
       return;
     }
     const origin = this.origin();
-    if (!origin || !this.offset) {
-      this.end();
-      return;
-    }
-    const transform = this.matrix(position, orientation).multiply(this.offset);
-    const p = new THREE.Vector3(),
-      q = new THREE.Quaternion();
-    transform.decompose(p, q, new THREE.Vector3());
-    const time = this.now();
-    const alpha =
-      1 - Math.exp(-14 * Math.max(0, Math.min(0.1, time - this.lastHold)));
-    this.lastHold = time;
-    this.smoothedPosition.lerp(p, alpha);
-    this.smoothedRotation.slerp(q, alpha);
-    p.copy(this.smoothedPosition);
-    q.copy(this.smoothedRotation);
-    this.interaction.aim(
-      clientTrackingToOdomPose(
-        webxrToClientTrackingPose({
-          position: p.toArray() as Vec3,
-          orientation: q.toArray() as Quat,
-        }),
-        origin,
-      ),
-    );
+    if (!origin) { this.end(); return; }
+    const pose = this.gesture.hold(webxrToClientTrackingPose({ position, orientation }), this.now());
+    if (pose) this.interaction.aim(clientTrackingToOdomPose(pose, origin));
   }
+
   end(): void {
     this.panelOffset = null;
-    this.offset = null;
+    this.gesture.end();
     this.interaction.end();
   }
-  action(action: string): void {
-    switch (action) {
-      case "reset":
-        this.renderer.previewRequested = false;
-        this.interaction.resetJoints();
-        break;
-      case "estop":
-        this.session.sendText(JSON.stringify({ type: "estop_request" }) + "\n");
-        break;
-      case "plan":
-        this.renderer.previewRequested = !this.renderer.previewRequested;
-        if (this.renderer.previewRequested && !this.interaction.plan) this.interaction.requestPlan();
-        break;
-      case "execute":
-        this.renderer.previewRequested = false;
-        this.interaction.execute();
-        break;
-      case "cancel":
-        this.renderer.previewRequested = false;
-        this.interaction.cancel();
-        break;
-      case "resume":
-        this.interaction.resume();
-        break;
-      case "group": {
-        const groups = this.session.view().manipulation?.groups ?? [];
-        const index = groups.findIndex(
-          (g) => g.id === this.interaction.groupId,
-        );
-        if (groups.length)
-          this.interaction.selectGroup(groups[(index + 1) % groups.length].id);
-        break;
-      }
-      case "gripper": {
-        const value =
-          this.selected && this.interaction.desiredGripper != null
-            ? this.interaction.desiredGripper
-            : this.session.view().manipulation?.observations?.[
-                this.interaction.groupId ?? ""
-              ]?.gripper;
-        if (value != null) this.interaction.setGripper(value < 0.5 ? 1 : 0);
-        break;
-      }
-    }
+  suspend(): void { this.end(); this.core.suspend(); }
+  action(action: ManipulationControlAction): void {
+    this.core.action(action);
+    this.renderer.previewRequested = this.core.presentation.previewRequested;
   }
   tick(enabled: boolean): void {
     const origin = this.origin();
-    if (!enabled || origin !== this.lastOrigin) this.end();
+    if (!enabled || origin !== this.lastOrigin) { this.end(); this.core.suspend(); }
     this.lastOrigin = origin;
-    this.interaction.tick();
+    this.core.tick(enabled && !!origin && this.interaction.available);
     this.renderer.working =
       this.interaction.busy ||
       ["accepted", "executing"].includes(
@@ -171,7 +112,7 @@ export class WebXRManipulationController {
   }
   dispose(): void {
     this.end();
-    this.interaction.dispose();
+    this.core.dispose();
     this.renderer.dispose();
   }
   private matrix(position: Vec3, orientation: Quat): THREE.Matrix4 {

@@ -1,4 +1,5 @@
 input_float ViewportHeightPx;
+input_float NearWidthScale;
 void strokeMetrics(out vec3 a, out vec3 b, out vec3 p, out vec2 normal,
                    out vec2 viewport, out float pixelCm, out float halfWidth) {
     vec2 uv0 = system.getSurfaceUVCoord0();
@@ -21,7 +22,12 @@ void strokeMetrics(out vec3 a, out vec3 b, out vec3 p, out vec2 normal,
     float pixelA = factor * mix(1.0, max(0.1, -a.z), abs(projection[2][3]));
     float pixelB = factor * mix(1.0, max(0.1, -b.z), abs(projection[2][3]));
     pixelCm = mix(pixelA, pixelB, uv0.y);
-    halfWidth = mix(max(uv3.x, 2.0 * pixelA), max(uv3.x, 2.0 * pixelB), uv0.y) * 0.5;
+    float period = max(0.01, uv3.y + uv4.x);
+    float blendA = 1.0 - smoothstep(6.0, 10.0, period / max(pixelA, 0.001));
+    float blendB = 1.0 - smoothstep(6.0, 10.0, period / max(pixelB, 0.001));
+    float widthA = max(uv3.x, 2.0 * pixelA) * mix(NearWidthScale, 1.0, blendA);
+    float widthB = max(uv3.x, 2.0 * pixelB) * mix(NearWidthScale, 1.0, blendB);
+    halfWidth = mix(widthA, widthB, uv0.y) * 0.5;
 }
 output_vec4 Result;
 void main() {

@@ -2,7 +2,7 @@
 import type { Vec3 } from "../websocket/protocolTypes";
 
 /** One physical dash pattern for robot bounds, advisory routes and world connectors. */
-export const WORLD_DASH_STYLE = { widthM: 0.00275, dashM: 0.012, gapM: 0.01 } as const;
+export const WORLD_DASH_STYLE = { widthM: 0.00275, dashM: 0.012, gapM: 0.01, nearWidthScale: 0.75 } as const;
 
 export const FLOOR_MARKER_STYLE = {
   strokeM: 0.008, radiusM: 0.2144, idleOpacity: 0.35,
@@ -10,7 +10,7 @@ export const FLOOR_MARKER_STYLE = {
 } as const;
 
 export const ROBOT_LINE_STYLE = {
-  hoverWidthM: 0.0008, selectedWidthM: WORLD_DASH_STYLE.widthM,
+  hoverWidthM: 0.00092, selectedWidthM: WORLD_DASH_STYLE.widthM * 0.9,
   hoverOpacity: 0.45, selectedOpacity: 0.8, dashM: WORLD_DASH_STYLE.dashM, gapM: WORLD_DASH_STYLE.gapM,
 } as const;
 
@@ -97,3 +97,10 @@ export function navigationCancelReveal(progress: number, circleHeightM: number) 
 }
 
 export const NAVIGATION_PREVIEW_ARROW_STYLE = { widthScale: 0.8, opacityScale: 0.8 } as const;
+
+/** Shared high-contrast arm surface with a narrow, soft edge. */
+export const ARM_FRESNEL_STYLE = {
+  fill: 0.015, edgeOpacity: 0.92, power: 5.0,
+  toolFill: 0.008, toolEdgeOpacity: 0.82,
+  color: 0xcbd9df, rimColor: 0xd9f0ff,
+} as const;

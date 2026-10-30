@@ -1,3 +1,4 @@
+import { SpecsManipulationController } from "./manipulation/SpecsManipulationController";
 import { RobotSelection } from "../DimOSARClient/robot/RobotSelection";
 import { SpecsNavigationInput } from "./navigation/SpecsNavigationInput";
 import { SpecsNavigationTargetPriority } from "./navigation/SpecsNavigationTargetPriority";
@@ -66,6 +67,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
   ARMarkerPrefab: ObjectPrefab;
 
   readonly selection = new RobotSelection();
+  private manipulation: SpecsManipulationController | null = null;
   private navigationInput: SpecsNavigationInput | null = null;
   private navigationTargetPriority: SpecsNavigationTargetPriority<InteractableHitInfo> | null = null;
   private previewRoute: NavGoalPresenter | null = null;
@@ -172,6 +174,8 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     this.episode = episode;
 
     const parent = this.getSceneObject();
+    this.manipulation = new SpecsManipulationController(session, () => clientTrackingOriginStore.T_odom_client,
+      parent, this.cameraObject, () => this.selection.toggle(), () => this.emergencyStop());
     this.lasers = new SpecsLaserPresenter(parent, readSikLaserPointers);
     const navGoalPresenter = new NavGoalPresenter(parent);
     const navigationController = new NavigationController({
@@ -190,6 +194,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     this.notifications = new ViewerNotificationPresenter(this.cameraObject);
     this.createEvent("OnPauseEvent").bind(() => {
       this.uiPresenter.invalidateSetupBaseline();
+      this.manipulation?.suspend();
       this.suspended = true; this.selection.clear(); this.navigationInput?.reset();
       this.lasers?.reset();
       this.speechController?.endRecording(true); this.episode?.suspend();
@@ -200,6 +205,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       if (this.uiPresenter.isSetupCompleted()) this.uiPresenter.requestAlignmentReview("Headset resumed");
     });
     this.createEvent("WorldTrackingResetEvent").bind(() => {
+      this.manipulation?.suspend();
       this.lasers?.reset();
       this.uiPresenter.invalidateSetupBaseline();
       if (!this.uiPresenter.isSetupCompleted()) return;
@@ -216,6 +222,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       this.uiPresenter.dispose();
       this.unsubscribeSelection?.(); this.unsubscribeSelection = null;
       this.navigationTargetPriority?.dispose();
+      this.manipulation?.dispose(); this.manipulation = null;
       const dispatcher = LensConfig.getInstance().updateDispatcher;
       if (this.laserStart) dispatcher.removeEvent(this.laserStart);
       if (this.laserUpdate) dispatcher.removeEvent(this.laserUpdate);
@@ -263,6 +270,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     this.robotPresenter.bindSelection(() => this.selection.toggle(), this.cameraObject,
       sourceId => !this.navigationController?.ownsDraft(sourceId));
     this.unsubscribeSelection = this.selection.subscribe(selected => {
+      this.manipulation?.setSelected(selected);
       this.robotPresenter.setSelected(selected);
       navigationController.setSelected(selected);
       if (!selected) this.speechController?.endRecording(true);
@@ -377,11 +385,15 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       }
       robotPresenter.setSelected(this.selection.isSelected());
       const controls = setup && !this.uiPresenter.isAlignmentReviewPending() && this.uiPresenter.getOperatingMode() === "manual" && view.connection === "ready";
-      navigationController.setInputEnabled(controls);
-      if (!setup) navigationController.hide();
+      const navigationEnabled = controls && view.capabilities?.navigation.available === true;
+      const armOnly = view.capabilities?.manipulation?.available === true && !view.capabilities.navigation.available;
+      this.manipulation?.tick(controls && !!origin);
+      if (armOnly) robotPresenter.reset();
+      navigationController.setInputEnabled(navigationEnabled);
+      if (!setup || armOnly) navigationController.hide();
       else navigationController.applyView(view, origin);
       navigationController.setSelected(this.selection.isSelected());
-      this.navigationInput?.tick(controls, setup && !this.uiPresenter.isAlignmentReviewPending() && view.connection === "ready");
+      this.navigationInput?.tick(navigationEnabled, !armOnly && setup && !this.uiPresenter.isAlignmentReviewPending() && view.connection === "ready");
       navigationController.surveyFloor();
       navigationController.tick(dt);
       const nav = navigationController.interaction.snapshot();
@@ -410,6 +422,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
   }
 
   emergencyStop(): void {
+    this.manipulation?.suspend();
     if (this.session?.view().capabilities?.estop.available !== true) return;
     try {
       this.navigationInput?.reset(); this.speechController?.endRecording(true);

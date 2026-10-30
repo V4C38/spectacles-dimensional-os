@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { WebXRRouteRenderer } from "../src/navigation/WebXRRouteRenderer";
-import { ROBOT_LINE_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
+import { ROBOT_LINE_STYLE, WORLD_DASH_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
 
 it("updates the entire route as its segment count grows and shrinks", () => {
   const route = new WebXRRouteRenderer();
@@ -30,11 +30,11 @@ it("renders preview and pending routes with the robot box's dash pattern at circ
   const geometry = route.object.geometry, start = geometry.getAttribute("instanceStart"), end = geometry.getAttribute("instanceEnd");
   expect(start.getZ(0)).toBeCloseTo(-0.06); expect(start.getY(0)).toBeCloseTo(0.001);
   expect(end.getZ(end.count - 1)).toBeCloseTo(-1.732); expect(end.getY(end.count - 1)).toBeCloseTo(0.015);
-  expect(route.object.material.opacity).toBe(0.6); expect(route.object.material.dashed).toBe(true); expect(route.object.material.linewidth).toBe(ROBOT_LINE_STYLE.selectedWidthM);
+  expect(route.object.material.opacity).toBe(0.6); expect(route.object.material.dashed).toBe(true); expect(route.object.material.linewidth).toBe(WORLD_DASH_STYLE.widthM);
   const dashed = route.object.getObjectByName("Adaptive dashed line") as import("three").Mesh<import("three").InstancedBufferGeometry, import("three").ShaderMaterial>;
   expect(dashed.material.uniforms.uDash.value).toBe(ROBOT_LINE_STYLE.dashM);
   expect(dashed.material.uniforms.uGap.value).toBe(ROBOT_LINE_STYLE.gapM);
-  expect(dashed.material.uniforms.uWidth.value).toBe(ROBOT_LINE_STYLE.selectedWidthM);
+  expect(dashed.material.uniforms.uWidth.value).toBe(WORLD_DASH_STYLE.widthM);
   route.apply([[0, 0, 0, 0], [2, 0, 0, 0]], origin, true, 0, 0, { ...style, preview: false, endCircle: { ...style.endCircle, radius: 0.134 } });
   expect(route.object.material.opacity).toBe(0.85); expect(end.getZ(end.count - 1)).toBeCloseTo(-1.866);
   route.dispose();

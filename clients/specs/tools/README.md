@@ -155,3 +155,29 @@ and cooldown periods, encode/send counts must not advance; native encodes must n
 overlap, and camera listener counts must return to zero between runtime batches.
 Compare FPS/worst-frame time and a Spectacles Monitor trace; desktop virtual-time
 budget tests cannot establish headset thermal, memory or stereo behavior.
+
+
+## Native manipulation review
+
+```sh
+/Volumes/M2_EXT_1/CLAD/tools-venv/bin/python clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/ManipulationProbe.ts
+```
+
+The standalone harness renders the production OpenYAM bounds, mesh, target and
+preview, exercises selected planning/execution and unselected following, presses
+the real gripper control with a second interactor, and verifies release and stop.
+It records native video and checkpoint images using the existing disposable-project
+and source-restoration contract. The shared behavioral checklist is in
+`tools/integration-tests/README.md`. The normal full native suite still covers Go2.
+
+Regenerate bundled numeric mesh data from the canonical GLB with
+`python3 clients/specs/tools/export_manipulation_mesh.py`. This touches no scene
+files and needs no asset-server connection at runtime. Keep the generated signature
+and the original model license/attribution together in review.
+
+
+Fragment-only graphs with float parameters must number nodes contiguously:
+`Node0`, `Node1`, `Node2`, … . The native importer can crash on a skipped `Node2`;
+a successful binary roundtrip alone does not validate this structural invariant.
+The generator regression covers parameterized graphs with and without a custom
+vertex stage. Import new passes before binding their actual asset UUID to a material.
