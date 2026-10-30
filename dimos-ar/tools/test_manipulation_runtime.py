@@ -36,6 +36,8 @@ async def test_official_mock_manipulation_contract() -> None:
         )
         # Refuse to send motion to a non-simulated runtime, even if a URL was set.
         assert state.get("simulated") is True, "this test only dispatches to mock hardware"
+        assert state["model"]["visual_profile"] == "openyam"
+        assert set(state["model"]["gripper_joints"]) >= {"joint7", "joint8"}
         group = state["groups"][0]["id"]
         pose = state["observations"][group]["pose"]
         target = {**pose, "position": [pose["position"][0] + 0.01, *pose["position"][1:]]}
@@ -118,6 +120,8 @@ async def test_mock_reset_repeated_zero_and_orderly_parking() -> None:
             lambda f: f.get("type") == "manipulation_state" and f.get("available")
         )
         assert state.get("simulated") is True
+        assert state["model"]["visual_profile"] == "openyam"
+        assert set(state["model"]["gripper_joints"]) >= {"joint7", "joint8"}
         group = state["groups"][0]["id"]
         sequence = 0
 
@@ -149,4 +153,5 @@ async def test_mock_reset_repeated_zero_and_orderly_parking() -> None:
         start = time.monotonic()
         result = await command("prepare_shutdown")
         assert result["status"] == "completed", result
+        assert result["quiescent"] is True
         assert time.monotonic() - start < 2

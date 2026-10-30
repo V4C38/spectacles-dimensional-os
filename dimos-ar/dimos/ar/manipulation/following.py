@@ -23,7 +23,7 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger()
 
 
-class SpeedSolver(PinkPoseTargetSolver):  # type: ignore[misc]
+class SpeedScaledPoseTargetSolver(PinkPoseTargetSolver):  # type: ignore[misc]
     speed_scale = 0.2
     failure: str | None = None
 
@@ -46,7 +46,7 @@ class SpeedSolver(PinkPoseTargetSolver):  # type: ignore[misc]
         return super()._step_frame_targets(*args, **kwargs)
 
 
-class SpeedTask(CartesianIKTask):  # type: ignore[misc]
+class SpeedScaledCartesianIKTask(CartesianIKTask):  # type: ignore[misc]
     def compute(self, state: Any) -> Any:
         result = super().compute(state)
         if self._solver.failure is not None:
@@ -63,9 +63,9 @@ class SpeedTask(CartesianIKTask):  # type: ignore[misc]
             pose.orientation.z,
             pose.orientation.w,
         )
-        if self._solver.failure is not None and getattr(self, "_ar_failed_target", None) == key:
+        if self._solver.failure is not None and getattr(self, "_failed_target", None) == key:
             return None
-        self._ar_failed_target = key
+        self._failed_target = key
         self._solver.failure = None
         return super().on_cartesian_command(pose, t_now=t_now)
 
@@ -74,12 +74,12 @@ class SpeedTask(CartesianIKTask):  # type: ignore[misc]
         return str(failure) if failure is not None else None
 
     def set_speed_scale(self, value: float) -> None:
-        if not math.isfinite(value) or not 0.05 <= value <= 1:
-            raise ValueError("speed scale must be between 0.05 and 1")
+        if not math.isfinite(value) or not 0 < value <= 1:
+            raise ValueError("speed scale must be in (0, 1]")
         self._solver.speed_scale = value
 
 
-def create_task(cfg: Any, hardware: Any) -> SpeedTask:
+def create_task(cfg: Any, hardware: Any) -> SpeedScaledCartesianIKTask:
     params = CartesianIKTaskParams.model_validate(cfg.params)
     values = {
         field.name: getattr(params, field.name)
@@ -106,17 +106,17 @@ def create_task(cfg: Any, hardware: Any) -> SpeedTask:
     values["joint_velocity_limits_rad_s"] = limits
     values["max_joint_velocity_rad_s"] = max(limits.values())
     config = CartesianIKTaskConfig(**values)
-    return SpeedTask(cfg.name, config, solver=SpeedSolver(config))
+    return SpeedScaledCartesianIKTask(cfg.name, config, solver=SpeedScaledPoseTargetSolver(config))
 
 
-class ARArmCoordinator(ArmPoseCoordinator):  # type: ignore[misc]
+class ARManipulationCoordinator(ArmPoseCoordinator):  # type: ignore[misc]
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._ar_stop_once = threading.Lock()
+        self._stop_once = threading.Lock()
 
     @rpc  # type: ignore[untyped-decorator]
     def stop(self) -> None:
-        if self._ar_stop_once.acquire(blocking=False):
+        if self._stop_once.acquire(blocking=False):
             super().stop()
 
     @rpc  # type: ignore[untyped-decorator]

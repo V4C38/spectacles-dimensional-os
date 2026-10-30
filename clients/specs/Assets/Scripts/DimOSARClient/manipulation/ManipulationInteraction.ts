@@ -47,18 +47,81 @@ export function targetIsOffset(
 }
 
 export interface ManipulationSnapshot {
+  readonly targetOffset: boolean;
+  readonly hasDraft: boolean;
+  readonly dragging: boolean;
+  readonly planning: boolean;
+  readonly executing: boolean;
+  readonly resetting: boolean;
+  readonly stopped: boolean;
+  readonly fresh: boolean;
+  readonly activity: string;
+  readonly canPreview: boolean;
+  readonly canExecute: boolean;
+  readonly canReset: boolean;
+  readonly canManipulate: boolean;
+  readonly canStop: boolean;
+  readonly canResume: boolean;
+}
+
+export interface ManipulationFacts {
+  available: boolean;
+  fresh: boolean;
+  selected: boolean;
   targetOffset: boolean;
-  hasDraft: boolean;
+  gripperDraft: boolean;
   dragging: boolean;
   planning: boolean;
   executing: boolean;
   resetting: boolean;
   stopped: boolean;
-  fresh: boolean;
-  activity?: string;
-  canPreview: boolean;
-  canExecute: boolean;
-  canReset: boolean;
+  stopConfirmed: boolean;
+  pendingControl: boolean;
+  following: boolean;
+  rejection: boolean;
+  status: string;
+  runtimeMessage?: string | null;
+}
+
+export function deriveManipulationSnapshot(
+  facts: ManipulationFacts,
+): ManipulationSnapshot {
+  const canManipulate =
+    facts.available &&
+    facts.fresh &&
+    !facts.stopped &&
+    !facts.executing &&
+    !facts.resetting &&
+    !facts.pendingControl;
+  const ready = canManipulate && !facts.planning && !facts.dragging;
+  const hasDraft = facts.targetOffset || facts.gripperDraft;
+  let activity = "Idle";
+  if (!facts.fresh) activity = "No feedback";
+  else if (facts.stopped) activity = "Stopped";
+  else if (facts.resetting) activity = "Resetting";
+  else if (facts.executing) activity = "Moving";
+  else if (facts.rejection) activity = shortManipulationStatus(facts.status);
+  else if (facts.runtimeMessage)
+    activity = shortManipulationStatus(facts.runtimeMessage);
+  else if (facts.following) activity = "Moving";
+  else if (hasDraft) activity = "Planning";
+  return Object.freeze({
+    targetOffset: facts.targetOffset,
+    hasDraft,
+    dragging: facts.dragging,
+    planning: facts.planning,
+    executing: facts.executing,
+    resetting: facts.resetting,
+    stopped: facts.stopped,
+    fresh: facts.fresh,
+    activity,
+    canPreview: facts.selected && facts.targetOffset && ready,
+    canExecute: facts.selected && hasDraft && ready,
+    canReset: ready,
+    canManipulate,
+    canStop: !facts.stopped,
+    canResume: facts.stopped && facts.fresh && facts.stopConfirmed,
+  });
 }
 
 /** Portable intent and correlation. Observed execution remains in ARModuleSession. */
@@ -67,7 +130,8 @@ export class ManipulationInteraction {
   private generation = 0;
   private episode = 0;
   private planGeneration = -1;
-  private executionLatch: { at: number; operation: string | null } | null = null;
+  private executionLatch: { at: number; operation: string | null } | null =
+    null;
   private lastFollowResult = -1;
   private followRequestFloor = 0;
   private pending = new Map<
@@ -116,50 +180,52 @@ export class ManipulationInteraction {
   }
   snapshot(): ManipulationSnapshot {
     const state = this.session.view().manipulation;
-    this.offset = targetIsOffset(
+    const offset = targetIsOffset(
       this.target,
       state?.observations?.[this.groupId ?? ""]?.pose,
       this.offset,
     );
     const planning = this.planQueued || this.hasPending("evaluate", "plan");
     const executing =
-      this.executionLatch !== null || this.hasPending("execute") ||
+      this.executionLatch !== null ||
+      this.hasPending("execute") ||
       ["accepted", "executing"].includes(state?.execution ?? "");
-    const resetting = !!state?.operation || [...this.pending.values()].some(
-      (p) => p.action === "reset_joints" && p.generation === this.generation,
-    );
+    const resetting =
+      !!state?.operation ||
+      [...this.pending.values()].some(
+        (p) => p.action === "reset_joints" && p.generation === this.generation,
+      );
     const stopped = state?.stopped === true;
     const fresh = this.feedbackFresh;
-    const ready =
-      this.available &&
-      fresh &&
-      !stopped &&
-      !executing &&
-      !resetting &&
-      !this.hasPending("cancel", "resume");
     const observedGripper = state?.observations?.[this.groupId ?? ""]?.gripper;
     const gripperDraft =
       this.desiredGripper != null && this.desiredGripper !== observedGripper;
-    return {
-      targetOffset: this.offset,
-      hasDraft: this.offset || gripperDraft,
+    return deriveManipulationSnapshot({
+      available: this.available,
+      fresh,
+      selected: this.selected,
+      targetOffset: offset,
+      gripperDraft,
       dragging: this.dragging,
       planning,
       executing,
       resetting,
       stopped,
-      fresh,
-      activity: !fresh ? "No feedback" : stopped ? "Stopped" : resetting ? "Resetting" : executing ? "Moving" : this.rejection ? shortManipulationStatus(this.status) : state?.message ? shortManipulationStatus(state.message) : this.following ? "Moving" : this.offset || gripperDraft ? "Planning" : "Idle",
-      canPreview:
-        this.selected && this.offset && ready && !planning && !this.dragging,
-      canExecute:
-        this.selected &&
-        (this.offset || gripperDraft) &&
-        ready &&
-        !planning &&
-        !this.dragging,
-      canReset: ready && !planning && !this.dragging,
-    };
+      stopConfirmed: state?.stop_confirmed === true,
+      pendingControl: this.hasPending("cancel", "resume"),
+      following: this.following,
+      rejection: this.rejection !== null,
+      status: this.status,
+      runtimeMessage: state?.message,
+    });
+  }
+  private updateOffset(): void {
+    this.offset = targetIsOffset(
+      this.target,
+      this.session.view().manipulation?.observations?.[this.groupId ?? ""]
+        ?.pose,
+      this.offset,
+    );
   }
   setSpeedScale(value: number): void {
     if (
@@ -252,7 +318,7 @@ export class ManipulationInteraction {
       this.target = null;
       this.desiredGripper = null;
       this.rejection = null;
-        this.rejectedTarget = null;
+      this.rejectedTarget = null;
       this.offset = false;
       this.lastPlanAt = -Infinity;
       this.lastPlanTarget = null;
@@ -326,11 +392,19 @@ export class ManipulationInteraction {
       position: [...pose.position],
       orientation: [...pose.orientation],
     };
+    this.updateOffset();
     if (this.gesture === "planning") {
       this.generation++;
       this.plan = null;
       this.executeAfterPlan = false;
-      if (!targetIsOffset(this.target, this.session.view().manipulation?.observations?.[this.groupId ?? ""]?.pose, this.offset)) {
+      if (
+        !targetIsOffset(
+          this.target,
+          this.session.view().manipulation?.observations?.[this.groupId ?? ""]
+            ?.pose,
+          this.offset,
+        )
+      ) {
         this.rejection = null;
         this.status = "";
       }
@@ -348,9 +422,16 @@ export class ManipulationInteraction {
     if (!this.groupId && groups.length === 1) this.groupId = groups[0].id;
     if (this.groupId && !groups.some((g) => g.id === this.groupId))
       this.reset();
-    if (this.executionLatch && view.manipulation?.ts != null && view.manipulation.ts > this.executionLatch.at &&
-        (!this.executionLatch.operation || !view.manipulation.operation_id || view.manipulation.operation_id === this.executionLatch.operation) &&
-        !["accepted", "executing"].includes(view.manipulation.execution ?? "")) this.executionLatch = null;
+    if (
+      this.executionLatch &&
+      view.manipulation?.ts != null &&
+      view.manipulation.ts > this.executionLatch.at &&
+      (!this.executionLatch.operation ||
+        !view.manipulation.operation_id ||
+        view.manipulation.operation_id === this.executionLatch.operation) &&
+      !["accepted", "executing"].includes(view.manipulation.execution ?? "")
+    )
+      this.executionLatch = null;
     const stopped = view.manipulation?.stopped === true;
     if (stopped && !this.stoppedBefore) this.discard();
     this.stoppedBefore = stopped;
@@ -391,8 +472,14 @@ export class ManipulationInteraction {
       );
       this.lastUpdate = now;
     }
+    this.updateOffset();
     const intent = this.snapshot();
-    if (!intent.hasDraft && !this.dragging && !intent.executing && !intent.resetting) {
+    if (
+      !intent.hasDraft &&
+      !this.dragging &&
+      !intent.executing &&
+      !intent.resetting
+    ) {
       this.plan = this.previewPlan = null;
       this.planQueued = false;
       this.executeAfterPlan = false;
@@ -569,6 +656,7 @@ export class ManipulationInteraction {
       this.target ??=
         this.session.view().manipulation?.observations?.[this.groupId ?? ""]
           ?.pose ?? null;
+      this.updateOffset();
       this.desiredGripper = value;
       this.planQueued = false;
       this.executeAfterPlan = false;
@@ -653,18 +741,35 @@ export class ManipulationInteraction {
         );
       return;
     }
-    if (result.action === "update" && this.token && result.group_id === this.groupId) {
+    if (
+      result.action === "update" &&
+      this.token &&
+      result.group_id === this.groupId
+    ) {
       const requestNumber = Number(result.request_id.replace(/^follow-/, ""));
-      if (!result.request_id.startsWith("follow-") || !Number.isSafeInteger(requestNumber) || requestNumber <= this.followRequestFloor) return;
-      if (result.sequence == null || result.sequence <= this.lastFollowResult) return;
+      if (
+        !result.request_id.startsWith("follow-") ||
+        !Number.isSafeInteger(requestNumber) ||
+        requestNumber <= this.followRequestFloor
+      )
+        return;
+      if (result.sequence == null || result.sequence <= this.lastFollowResult)
+        return;
       this.lastFollowResult = result.sequence;
       if (result.status === "feasible") {
         this.solution = result.joints ?? this.solution;
-          this.rejection = null;
+        this.rejection = null;
         this.status = "Moving";
       } else if (result.status === "infeasible") {
-        this.status = shortManipulationStatus(result.code || result.message || "IK failed");
-        if (this.target) this.rejection = { revision: ++this.rejectionRevision, pose: this.target, message: this.status };
+        this.status = shortManipulationStatus(
+          result.code || result.message || "IK failed",
+        );
+        if (this.target)
+          this.rejection = {
+            revision: ++this.rejectionRevision,
+            pose: this.target,
+            message: this.status,
+          };
       } else if (result.status === "rejected") {
         this.status = shortManipulationStatus(result.message || "Check arm");
         this.end();
@@ -696,7 +801,10 @@ export class ManipulationInteraction {
         );
       return;
     }
-    if (request.generation === this.generation) this.status = shortManipulationStatus(result.code || result.message || result.status);
+    if (request.generation === this.generation)
+      this.status = shortManipulationStatus(
+        result.code || result.message || result.status,
+      );
     if (
       result.action === "acquire" &&
       result.token &&
@@ -708,14 +816,17 @@ export class ManipulationInteraction {
       this.followRequestFloor = this.sequence;
     }
     if (result.action === "evaluate") {
-      if (result.status === "feasible") this.solution = result.joints ?? this.solution;
+      if (result.status === "feasible")
+        this.solution = result.joints ?? this.solution;
       if (result.status !== "feasible") {
         this.rejectedTarget = this.target;
         if (this.target)
           this.rejection = {
             revision: ++this.rejectionRevision,
             pose: this.target,
-            message: shortManipulationStatus(result.code || result.message || "IK failed"),
+            message: shortManipulationStatus(
+              result.code || result.message || "IK failed",
+            ),
           };
         this.evaluatedGeneration = this.generation;
         this.executeAfterPlan = false;
@@ -734,29 +845,40 @@ export class ManipulationInteraction {
         trajectory: result.trajectory,
         duration: result.duration,
       };
-      this.plan = request.generation === this.generation ? this.previewPlan : null;
+      this.plan =
+        request.generation === this.generation ? this.previewPlan : null;
       this.planGeneration = request.generation;
       if (request.generation === this.generation) {
         this.planQueued = false;
         this.rejection = null;
-      } else if (!this.dragging && this.snapshot().hasDraft) this.planQueued = true;
+      } else if (!this.dragging && this.snapshot().hasDraft)
+        this.planQueued = true;
       if (this.executeAfterPlan && request.generation === this.generation) {
         this.executeAfterPlan = false;
         this.execute();
       }
     }
-    if (result.action === "plan" && !result.plan_id && request.generation === this.generation) {
+    if (
+      result.action === "plan" &&
+      !result.plan_id &&
+      request.generation === this.generation
+    ) {
       this.executeAfterPlan = false;
       if (this.target)
         this.rejection = {
           revision: ++this.rejectionRevision,
           pose: this.target,
-          message: shortManipulationStatus(result.code || result.message || "Plan failed"),
+          message: shortManipulationStatus(
+            result.code || result.message || "Plan failed",
+          ),
         };
     }
     if (result.action === "execute") {
       if (result.status === "accepted") {
-        if (this.executionLatch) { this.executionLatch.operation = result.operation_id ?? null; this.executionLatch.at = this.serverNow(); }
+        if (this.executionLatch) {
+          this.executionLatch.operation = result.operation_id ?? null;
+          this.executionLatch.at = this.serverNow();
+        }
         this.plan = null;
       } else this.executionLatch = null;
     }
@@ -768,7 +890,8 @@ export class ManipulationInteraction {
 export function shortManipulationStatus(message: string): string {
   const s = message.toLowerCase();
   if (/joint.?limit/.test(s)) return "Joint limit";
-  if (/ik|unreachable|infeasible|no.solution|converge/.test(s)) return "IK failed";
+  if (/ik|unreachable|infeasible|no.solution|converge/.test(s))
+    return "IK failed";
   if (/uncertain|fault/.test(s)) return "Check arm";
   if (/stale|feedback/.test(s)) return "No feedback";
   if (/timeout|timed out/.test(s)) return "Timed out";

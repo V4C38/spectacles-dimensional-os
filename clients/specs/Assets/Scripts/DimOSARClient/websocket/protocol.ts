@@ -857,8 +857,5 @@ function asciiBytes(text: string): Uint8Array {
   return out;
 }
 
-// Manipulation reset_joints / prepare_shutdown and following speed_scale use
-// the shared manipulation codec; see dimos-ar/PROTOCOL.md.
-
-// object_detection is an optional capability. Arm operation and correlated update
-// sequence/code/joints are decoded by ManipulationProtocol; see PROTOCOL.md.
+// ManipulationProtocol validates shutdown quiescence receipts and explicit model
+// visual metadata at this shared boundary; see dimos-ar/PROTOCOL.md.

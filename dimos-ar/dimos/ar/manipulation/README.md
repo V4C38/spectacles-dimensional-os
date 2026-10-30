@@ -86,7 +86,7 @@ The measured arm uses oriented per-link bounds in the shared world-line style.
 The planning ghost is a bundled 251 KB simplified model; see the WebXR model
 NOTICE for source and license. Geometry preparation happens once outside this repo.
 WebXR applies the existing OpenYAM base visual quarter-turn to only the root
-bounding box for `/models/openyam.glb`; mesh geometry and all other boxes retain
+bounding box for the explicit `openyam` visual profile; mesh geometry and all other boxes retain
 their established orientation. Joint topology and bounds come from the configured official model, and a
 numerically normalized visual signature prevents using the bundled ghost with a
 mismatched model. ClientCore FK is visual only and supports revolute, continuous,
@@ -267,3 +267,46 @@ in either menu, independently of the ray-plane calculation that changes its valu
 Orderly shutdown checks already-zero settling without another move, quiesces motion,
 and drains cancellable RPC callbacks before services stop. Native source feedback
 clocks establish freshness; snapshot publication does not count as a new measurement.
+
+### Runtime and presentation owners
+
+`ARManipulationModule` owns DimOS lifecycle and the lifecycle update thread.
+`DimOSManipulationAdapter` is the installed-DimOS boundary; private upstream
+collaborators and the quiesced teardown receipt stay there. `ManipulationRuntime`
+uses the typed `ManipulationBackend` port and coordinates commands.
+`ManipulationSession` owns connection/group leases and retirement generations;
+`ManipulationOperation` owns reviewed-plan correlation and deferred gripper
+completion; `JointZeroOperation` owns reset/parking settling. Official DimOS
+continues to own measured joints and execution status. The lifecycle thread
+expires leases and advances completion independently of snapshot polling and is
+joined before native teardown. `ManipulationService` owns asynchronous delivery,
+including emergency-stop dispatch; `ManipulationRPC` retires RPC callbacks.
+
+`ManipulationInteraction` owns portable intent and hysteresis transitions. Its
+immutable snapshot is read-only, and `deriveManipulationSnapshot` is the one
+activity/action derivation. WebXR supplies that snapshot through a named
+`ManipulationPresentation` input. `ManipulationRenderer` composes world visuals,
+`ManipulationControlsView` owns controls and hover/layout animation, and
+`ManipulationModelRenderer` owns model loading, bounds, ghosts and tool geometry.
+Shared cloned resources are disposed once; late loads are retired by generation.
+OpenYAM corrections live under WebXR `manipulation/profiles/`. Explicit model
+metadata supplies gripper articulation and profile identity independently of URLs.
+
+### Feature preservation checks
+
+| Behavior | Automated evidence |
+|---|---|
+| Ownership, exact plan IDs, stale replies, cancellation and uncertain stops | Python `test_runtime.py`, ClientCore `ManipulationInteraction.test.ts` |
+| Live coalesced planning, exact release target, retained valid previews | ClientCore interaction tests, browser `Manipulation.spec.ts` |
+| Following, IK recovery, lease expiry without polling, input interruption | Python runtime tests, ClientCore interaction tests, browser manipulation scenarios |
+| Immediate/deferred gripper actions and fresh endpoint confirmation | Python runtime tests, ClientCore interaction tests, WebXR kinematics tests |
+| Reset/parking timing, already-zero settling, E-stop preservation and shutdown receipts | Python runtime/service tests and supervisor tests |
+| Bounds, ghosts, measured/target handles, IK guides, preview playback and measured path trimming | WebXR renderer/motion tests and browser manipulation scenarios |
+| Menu controls, speed, capture, selection and Stop/Resume | WebXR input/renderer tests and browser manipulation scenarios |
+| Asset identity, relocation, signature validation and resource disposal | Python model tests, ClientCore codec tests, WebXR model/kinematics tests |
+| Coordinate frames, calibration, depth and optional integrations | Frame tests, launcher suites, depth tests, opt-in official-runtime mock test |
+
+Full repository CI includes browser integration and production build checks.
+Physical registration, stopping latency, CAN hardware, headset input and depth
+quality remain attended hardware checks; fixture and mock passes do not establish
+their physical performance.

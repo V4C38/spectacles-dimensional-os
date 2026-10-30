@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from dimos.ar.manipulation.protocol import ManipulationRequest
+from dimos.ar.manipulation.rpc import ManipulationRPC
 from dimos.ar.manipulation.spec import ARManipulationSpec
 from dimos.ar.websocket.protocol import encode_text
 
@@ -22,7 +23,7 @@ class ManipulationService:
         broadcast: Callable[[str], None],
         on_ready: Callable[[], None] | None = None,
     ) -> None:
-        self.runtime = runtime
+        self._rpc = ManipulationRPC(runtime)
         self._send = send
         self._broadcast = broadcast
         self._on_ready = on_ready
@@ -34,37 +35,7 @@ class ManipulationService:
         self._updates: dict[str, tuple[ManipulationRequest, float]] = {}
         self._ready_reported = False
         self._quiescing = False
-        self._shutdown_prepared = False
-
-    async def _call(self, method: str, *args: Any, timeout: float = 2.0) -> Any:
-        """Unsubscribe the real RPC callback when its asyncio owner is cancelled."""
-        backend = getattr(self.runtime, "rpc", None)
-        remote = getattr(self.runtime, "remote_name", None)
-        if backend is None or not isinstance(remote, str):
-            return await asyncio.wait_for(
-                asyncio.to_thread(getattr(self.runtime, method), *args), timeout
-            )
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[Any] = loop.create_future()
-
-        def finish(value: Any) -> None:
-            if future.done():
-                return
-            if isinstance(value, BaseException):
-                future.set_exception(value)
-            else:
-                future.set_result(value)
-
-        def receive(value: Any) -> None:
-            if not loop.is_closed():
-                loop.call_soon_threadsafe(finish, value)
-
-        unsubscribe = backend.call(f"{remote}/{method}", (list(args), {}), receive)
-        try:
-            return await asyncio.wait_for(future, timeout)
-        finally:
-            if unsubscribe is not None:
-                unsubscribe()
+        self._quiescent = False
 
     def start(self) -> None:
         self._poll = asyncio.create_task(self._poll_state())
@@ -115,6 +86,12 @@ class ManipulationService:
         def done(finished: asyncio.Task[None]) -> None:
             self._tasks.discard(finished)
             self._pending.discard(key)
+            if not finished.cancelled() and (error := finished.exception()) is not None:
+                logger.error(
+                    "Manipulation RPC task failed: %s",
+                    key,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
 
         task.add_done_callback(done)
 
@@ -130,14 +107,14 @@ class ManipulationService:
         if request.action == "update":
             body["ts"] += clock_offset
         try:
-            result = await self._call(
+            result = await self._rpc.call(
                 "ar_manipulation_command",
                 client_id,
                 body,
                 timeout=57 if request.action in {"reset_joints", "prepare_shutdown"} else 20,
             )
             if request.action == "prepare_shutdown":
-                self._shutdown_prepared = True
+                self._quiescent = result.get("quiescent") is True
         except ValueError as exc:
             result = {"status": "rejected", "code": "rejected", "message": str(exc)}
             logger.info("Manipulation request rejected: %s: %s", request.action, str(exc))
@@ -171,7 +148,7 @@ class ManipulationService:
     async def _poll_state(self) -> None:
         while not self._closed:
             try:
-                snapshot = await self._call("ar_manipulation_snapshot")
+                snapshot = await self._rpc.call("ar_manipulation_snapshot")
                 if snapshot.get("available") and not self._ready_reported:
                     if self._on_ready is not None:
                         self._on_ready()
@@ -186,13 +163,19 @@ class ManipulationService:
                 )
             await asyncio.sleep(0.1)
 
+    def emergency_stop(self) -> None:
+        key = ("server", "estop")
+        if not self._closed and key not in self._pending:
+            self._updates.clear()
+            self._spawn(self._rpc.call("ar_manipulation_stop"), key)
+
     def disconnect(self, client_id: str) -> None:
         self._clients.discard(client_id)
         self._updates.pop(client_id, None)
-        if self._closed or self._shutdown_prepared:
+        if self._closed or self._quiescent:
             return
         self._spawn(
-            self._call("ar_manipulation_disconnect", client_id),
+            self._rpc.call("ar_manipulation_disconnect", client_id),
             (client_id, "disconnect"),
         )
 
@@ -206,19 +189,21 @@ class ManipulationService:
         clients = tuple(self._clients)
         self._clients.clear()
         self._updates.clear()
-        if not self._shutdown_prepared:
+        if not self._quiescent:
             # Stop once before retiring individual leases, with a bounded RPC deadline.
             try:
-                await self._call("ar_manipulation_stop", timeout=0.8)
+                await self._rpc.call("ar_manipulation_stop", timeout=0.8)
                 await asyncio.gather(
                     *(
-                        self._call("ar_manipulation_disconnect", client, timeout=0.3)
+                        self._rpc.call("ar_manipulation_disconnect", client, timeout=0.3)
                         for client in clients
                     ),
                     return_exceptions=True,
                 )
-            except (TimeoutError, ValueError):
-                logger.warning("Manipulation stop acknowledgement unavailable during teardown")
+            except Exception:
+                logger.warning(
+                    "Manipulation stop acknowledgement unavailable during teardown", exc_info=True
+                )
         for task in tuple(self._tasks):
             task.cancel()
         await asyncio.gather(*tuple(self._tasks), return_exceptions=True)

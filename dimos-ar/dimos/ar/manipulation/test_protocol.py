@@ -32,6 +32,7 @@ def request(**changes):
         {"ts": float("inf")},
         {"token": ""},
         {"action": "pick"},
+        {"action": []},
         {"group_id": " "},
     ],
 )

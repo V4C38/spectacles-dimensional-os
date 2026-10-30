@@ -100,7 +100,7 @@ async def test_cancelled_rpc_unsubscribes_callback_and_ignores_late_reply():
 
     runtime = SimpleNamespace(rpc=SimpleNamespace(call=call), remote_name="ManipulationModule")
     service = ManipulationService(runtime, lambda *args: None, lambda _: None)
-    task = asyncio.create_task(service._call("ar_manipulation_snapshot"))
+    task = asyncio.create_task(service._rpc.call("ar_manipulation_snapshot"))
     await asyncio.sleep(0)
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
@@ -115,8 +115,54 @@ async def test_prepared_shutdown_retires_locally_without_late_runtime_calls():
 
     runtime = Mock()
     service = ManipulationService(runtime, lambda *args: None, lambda _: None)
-    service._shutdown_prepared = True
+    service._quiescent = True
     service.connect("supervisor")
     await service.close()
     runtime.ar_manipulation_stop.assert_not_called()
     runtime.ar_manipulation_disconnect.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result,quiescent",
+    [
+        ({"status": "rejected"}, False),
+        ({"status": "completed"}, False),
+        ({"status": "skipped", "quiescent": False}, False),
+        ({"status": "completed", "quiescent": True}, True),
+        ({"status": "rejected", "quiescent": True}, True),
+        ({"status": "completed", "quiescent": "true"}, False),
+        (TimeoutError("parking deadline"), False),
+    ],
+)
+async def test_only_explicit_quiescence_suppresses_teardown_stop(result, quiescent):
+    from unittest.mock import Mock
+
+    runtime = Mock(
+        spec=["ar_manipulation_command", "ar_manipulation_stop", "ar_manipulation_disconnect"]
+    )
+    if isinstance(result, Exception):
+        runtime.ar_manipulation_command.side_effect = result
+    else:
+        runtime.ar_manipulation_command.return_value = result
+    service = ManipulationService(runtime, lambda *args: None, lambda _: None)
+    service.connect("supervisor")
+    await service._dispatch(
+        ManipulationRequest("s", "prepare_shutdown", "arm", {}), "supervisor", 0
+    )
+    assert service._quiescent is quiescent
+    await service.close()
+    assert runtime.ar_manipulation_stop.call_count == (0 if quiescent else 1)
+
+
+@pytest.mark.asyncio
+async def test_emergency_stop_uses_the_service_task_owner():
+    from unittest.mock import Mock
+
+    runtime = Mock(spec=["ar_manipulation_stop", "ar_manipulation_disconnect"])
+    service = ManipulationService(runtime, lambda *args: None, lambda _: None)
+    service.emergency_stop()
+    service.emergency_stop()
+    await asyncio.gather(*service._tasks)
+    runtime.ar_manipulation_stop.assert_called_once()
+    await service.close()

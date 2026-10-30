@@ -404,7 +404,18 @@
         "limits": null
       }
     ],
-    "asset_url": "/models/openyam.glb"
+    "asset_url": "/models/openyam.glb",
+    "visual_profile": "openyam",
+    "gripper_joints": {
+      "joint7": {
+        "closed": 4.60927e-15,
+        "open": -0.04695
+      },
+      "joint8": {
+        "closed": 0.0,
+        "open": -0.04695
+      }
+    }
   },
   "joints": {
     "yam_joint1": 0.0,

@@ -92,3 +92,23 @@ export function samplePlan(
     ]),
   );
 }
+
+export function toolSubtree(
+  model: ManipulationModel,
+  tipFrame: string,
+): {
+  root: string;
+  links: ReadonlySet<string>;
+} {
+  let root = tipFrame;
+  let parent = model.joints.find((joint) => joint.child === root);
+  while (parent?.kind === "fixed") {
+    root = parent.parent;
+    parent = model.joints.find((joint) => joint.child === root);
+  }
+  const links = new Set([root]);
+  for (let pass = 0; pass < model.joints.length; pass++)
+    for (const joint of model.joints)
+      if (links.has(joint.parent)) links.add(joint.child);
+  return { root, links };
+}

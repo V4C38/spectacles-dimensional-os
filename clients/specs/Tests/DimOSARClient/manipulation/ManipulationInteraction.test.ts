@@ -375,8 +375,12 @@ it("actuates a selected gripper directly at the measured pose", () => {
   f.interaction.setGripper(1);
   expect(f.sent.at(-1)).toMatchObject({ action: "gripper", value: 1 });
   f.advance(0.01);
-  expect(f.sent.filter(c => c.action === "plan")).toHaveLength(0);
-  expect(f.interaction.snapshot()).toMatchObject({ targetOffset: false, canExecute: false, canPreview: false });
+  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(0);
+  expect(f.interaction.snapshot()).toMatchObject({
+    targetOffset: false,
+    canExecute: false,
+    canPreview: false,
+  });
 });
 
 it("does not retry timed-out execution and blocks plans with stale feedback", () => {
@@ -453,73 +457,220 @@ it("requires a new final plan after speed or gripper intent changes during plann
 
 it("retains a delayed valid preview through more edits without making it executable", () => {
   const f = fixture();
-  f.interaction.setSelected(true); f.interaction.begin(); f.interaction.aim(pose); f.advance(0.01);
+  f.interaction.setSelected(true);
+  f.interaction.begin();
+  f.interaction.aim(pose);
+  f.advance(0.01);
   const first = f.sent.at(-1);
-  for (let i=1; i<=10; i++) { f.interaction.aim({ ...pose, position: [i*0.01,0,0.3] }); f.advance(0.05); }
-  expect(f.sent.filter(c => c.action === "plan")).toHaveLength(1);
+  for (let i = 1; i <= 10; i++) {
+    f.interaction.aim({ ...pose, position: [i * 0.01, 0, 0.3] });
+    f.advance(0.05);
+  }
+  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(1);
   f.reply(first, planned("last-valid"));
   expect(f.interaction.previewPlan?.plan_id).toBe("last-valid");
   expect(f.interaction.plan).toBeNull();
   f.advance(0.01);
-  expect(f.sent.filter(c => c.action === "plan")).toHaveLength(2);
-  f.interaction.aim({ ...pose, position: [0.2,0,0.3] });
+  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(2);
+  f.interaction.aim({ ...pose, position: [0.2, 0, 0.3] });
   expect(f.interaction.previewPlan?.plan_id).toBe("last-valid");
   expect(f.interaction.snapshot().activity).toBe("Planning");
 });
 
 it("keeps an infeasible following target grabbed, recovers, and returns to measured pose on release", () => {
-  const f = fixture(); f.interaction.begin(); f.reply(f.sent.at(-1), {status:"acquired",token:"t"});
-  f.interaction.aim(pose); f.advance(0.04); const update=f.sent.at(-1);
-  f.reply(update,{status:"infeasible",code:"joint_limit",sequence:update.sequence});
+  const f = fixture();
+  f.interaction.begin();
+  f.reply(f.sent.at(-1), { status: "acquired", token: "t" });
+  f.interaction.aim(pose);
+  f.advance(0.04);
+  const update = f.sent.at(-1);
+  f.reply(update, {
+    status: "infeasible",
+    code: "joint_limit",
+    sequence: update.sequence,
+  });
   expect(f.interaction.dragging).toBe(true);
   expect(f.interaction.target).toEqual(pose);
   expect(f.interaction.snapshot().activity).toBe("Joint limit");
   expect(f.interaction.rejection).not.toBeNull();
-  f.interaction.aim({...pose,position:[0,0,0.2]}); f.advance(0.2);
-  const valid=f.sent.at(-1); f.reply(valid,{status:"feasible",sequence:valid.sequence,joints:{joint:0.2}});
-  expect(f.interaction.solution).toEqual({joint:0.2}); expect(f.interaction.rejection).toBeNull();
-  f.interaction.end(); expect(f.interaction.target).toBeNull(); expect(f.sent.at(-1).action).toBe("release");
+  f.interaction.aim({ ...pose, position: [0, 0, 0.2] });
+  f.advance(0.2);
+  const valid = f.sent.at(-1);
+  f.reply(valid, {
+    status: "feasible",
+    sequence: valid.sequence,
+    joints: { joint: 0.2 },
+  });
+  expect(f.interaction.solution).toEqual({ joint: 0.2 });
+  expect(f.interaction.rejection).toBeNull();
+  f.interaction.end();
+  expect(f.interaction.target).toBeNull();
+  expect(f.sent.at(-1).action).toBe("release");
 });
 
 it("Open/Close executes the matching target plan with deferred gripper intent", () => {
-  const f=fixture(); f.interaction.setSelected(true); f.interaction.begin();f.interaction.aim(pose);f.interaction.end();
-  f.interaction.setGripper(1);f.advance(0.01);
-  const plan=f.sent.at(-1);expect(plan).toMatchObject({action:"plan",final_gripper:1});
-  f.reply(plan,planned("grasp"));expect(f.sent.at(-1)).toMatchObject({action:"execute",plan_id:"grasp"});
-  f.reply(f.sent.at(-1),{status:"accepted",operation_id:"op"});
-  const count=f.sent.length;f.advance(0.2);expect(f.sent).toHaveLength(count);
+  const f = fixture();
+  f.interaction.setSelected(true);
+  f.interaction.begin();
+  f.interaction.aim(pose);
+  f.interaction.end();
+  f.interaction.setGripper(1);
+  f.advance(0.01);
+  const plan = f.sent.at(-1);
+  expect(plan).toMatchObject({ action: "plan", final_gripper: 1 });
+  f.reply(plan, planned("grasp"));
+  expect(f.sent.at(-1)).toMatchObject({ action: "execute", plan_id: "grasp" });
+  f.reply(f.sent.at(-1), { status: "accepted", operation_id: "op" });
+  const count = f.sent.length;
+  f.advance(0.2);
+  expect(f.sent).toHaveLength(count);
   expect(f.interaction.snapshot().executing).toBe(true);
-  f.view.manipulation.ts=101;f.view.manipulation.execution="completed";f.advance(0.01);
+  f.view.manipulation.ts = 101;
+  f.view.manipulation.execution = "completed";
+  f.advance(0.01);
   expect(f.interaction.snapshot().executing).toBe(false);
 });
 
 it("returns to Idle at the measured pose even while an older plan is pending", () => {
-  const f=fixture(); f.interaction.setSelected(true); f.interaction.begin(); f.interaction.aim(pose); f.advance(0.01);
-  const plan=f.sent.at(-1);
-  f.interaction.aim({...pose,position:[0,0,0]});
+  const f = fixture();
+  f.interaction.setSelected(true);
+  f.interaction.begin();
+  f.interaction.aim(pose);
+  f.advance(0.01);
+  const plan = f.sent.at(-1);
+  f.interaction.aim({ ...pose, position: [0, 0, 0] });
   expect(f.interaction.snapshot().activity).toBe("Idle");
-  f.interaction.end();f.reply(plan,planned("old-offset"));f.advance(0.01);
-  expect(f.interaction.plan).toBeNull();expect(f.interaction.previewPlan).toBeNull();
+  f.interaction.end();
+  f.reply(plan, planned("old-offset"));
+  f.advance(0.01);
+  expect(f.interaction.plan).toBeNull();
+  expect(f.interaction.previewPlan).toBeNull();
   expect(f.interaction.snapshot().activity).toBe("Idle");
-  expect(f.sent.filter(c=>c.action==="plan")).toHaveLength(1);
+  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(1);
 });
 
 it("ignores late following feedback from an earlier lease", () => {
-  const f=fixture();f.interaction.begin();f.reply(f.sent.at(-1),{status:"acquired",token:"old"});
-  f.interaction.aim(pose);f.advance(0.04);const old=f.sent.at(-1);
-  f.interaction.end();f.reply(f.sent.at(-1),{status:"released"});
-  f.interaction.begin();f.reply(f.sent.at(-1),{status:"acquired",token:"new"});
-  f.interaction.aim(pose);f.advance(0.04);
-  f.reply(old,{status:"infeasible",sequence:999,code:"ik_failed"});
-  expect(f.interaction.dragging).toBe(true);expect(f.interaction.rejection).toBeNull();
-  f.advance(0.04);expect(f.sent.at(-1).token).toBe("new");
+  const f = fixture();
+  f.interaction.begin();
+  f.reply(f.sent.at(-1), { status: "acquired", token: "old" });
+  f.interaction.aim(pose);
+  f.advance(0.04);
+  const old = f.sent.at(-1);
+  f.interaction.end();
+  f.reply(f.sent.at(-1), { status: "released" });
+  f.interaction.begin();
+  f.reply(f.sent.at(-1), { status: "acquired", token: "new" });
+  f.interaction.aim(pose);
+  f.advance(0.04);
+  f.reply(old, { status: "infeasible", sequence: 999, code: "ik_failed" });
+  expect(f.interaction.dragging).toBe(true);
+  expect(f.interaction.rejection).toBeNull();
+  f.advance(0.04);
+  expect(f.sent.at(-1).token).toBe("new");
 });
 
 it("keeps the selected draft when a follow-up feasibility check fails", () => {
-  const f=fixture();f.interaction.setSelected(true);f.interaction.begin();f.interaction.aim(pose);f.interaction.end();f.advance(0.01);
-  f.reply(f.sent.at(-1),{status:"rejected",code:"ik_failed",message:"IK failed"});
-  f.advance(0.16);expect(f.sent.at(-1).action).toBe("evaluate");
-  f.reply(f.sent.at(-1),{status:"infeasible",message:"IK failed"});
+  const f = fixture();
+  f.interaction.setSelected(true);
+  f.interaction.begin();
+  f.interaction.aim(pose);
+  f.interaction.end();
+  f.advance(0.01);
+  f.reply(f.sent.at(-1), {
+    status: "rejected",
+    code: "ik_failed",
+    message: "IK failed",
+  });
+  f.advance(0.16);
+  expect(f.sent.at(-1).action).toBe("evaluate");
+  f.reply(f.sent.at(-1), { status: "infeasible", message: "IK failed" });
   expect(f.interaction.target).toEqual(pose);
   expect(f.interaction.snapshot().activity).toBe("IK failed");
+});
+
+it("snapshot reads are immutable and do not advance target hysteresis", () => {
+  const f = fixture();
+  f.interaction.setSelected(true);
+  f.interaction.begin();
+  f.interaction.aim({ ...pose, position: [0.012, 0, 0] });
+  const before = f.sent.length;
+  const first = f.interaction.snapshot();
+  expect(Object.isFrozen(first)).toBe(true);
+  expect(f.interaction.snapshot()).toEqual(first);
+  expect(f.sent).toHaveLength(before);
+  f.interaction.aim({ ...pose, position: [0.007, 0, 0] });
+  expect(f.interaction.snapshot().targetOffset).toBe(true);
+});
+
+it("validates explicit shutdown receipts", () => {
+  const receipt = {
+    type: "manipulation_result",
+    request_id: "shutdown",
+    group_id: "arm",
+    action: "prepare_shutdown",
+    status: "rejected",
+    quiescent: true,
+  };
+  expect(decodeManipulation(receipt)).toMatchObject({ quiescent: true });
+  expect(() => decodeManipulation({ ...receipt, quiescent: "true" })).toThrow();
+});
+
+it("validates explicit visual profiles and gripper joint mappings at the wire boundary", () => {
+  const state = {
+    type: "manipulation_state",
+    available: true,
+    ts: 1,
+    model: {
+      revision: "model",
+      root: "base",
+      asset_url: "/relocated.glb",
+      visual_profile: "openyam",
+      links: [
+        { name: "base", bounds: null },
+        { name: "finger", bounds: null },
+      ],
+      joints: [
+        {
+          name: "finger_slide",
+          kind: "prismatic",
+          parent: "base",
+          child: "finger",
+          axis: [1, 0, 0],
+          origin: { position: [0, 0, 0], orientation: [0, 0, 0, 1] },
+          limits: { lower: -0.05, upper: 0 },
+          mimic: null,
+        },
+      ],
+      gripper_joints: { finger_slide: { closed: 0, open: -0.05 } },
+    },
+    groups: [],
+    observations: {},
+  };
+  expect(decodeManipulation(state)).toMatchObject({
+    model: { visual_profile: "openyam" },
+  });
+  expect(() =>
+    decodeManipulation({
+      ...state,
+      model: { ...state.model, visual_profile: "" },
+    }),
+  ).toThrow();
+  expect(() =>
+    decodeManipulation({
+      ...state,
+      model: {
+        ...state.model,
+        gripper_joints: { finger_slide: { closed: 0, open: NaN } },
+      },
+    }),
+  ).toThrow();
+  expect(() =>
+    decodeManipulation({
+      ...state,
+      model: {
+        ...state.model,
+        gripper_joints: { unknown: { closed: 0, open: 1 } },
+      },
+    }),
+  ).toThrow();
 });

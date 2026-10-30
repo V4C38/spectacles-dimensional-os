@@ -1,28 +1,28 @@
-import * as THREE from "three";
-import { ManipulationInteraction } from "@dimos-ar-client/manipulation/ManipulationInteraction";
-import type { ARModuleSession } from "@dimos-ar-client/websocket/arModuleSession";
 import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
 import { clientTrackingToOdomPose } from "@dimos-ar-client/localization/clientTrackingTransforms";
-import { webxrToClientTrackingPose } from "../utilities/WebXRCoordinates";
+import { ManipulationInteraction } from "@dimos-ar-client/manipulation/ManipulationInteraction";
+import type { ARModuleSession } from "@dimos-ar-client/websocket/arModuleSession";
 import type { Quat, Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
+import * as THREE from "three";
+import { webxrToClientTrackingPose } from "../utilities/WebXRCoordinates";
 import { ManipulationRenderer } from "./ManipulationRenderer";
 
 export class WebXRManipulationController {
   readonly interaction: ManipulationInteraction;
   readonly renderer = new ManipulationRenderer();
   readonly object = this.renderer.object;
-  private offset: THREE.Matrix4 | null = null;
+  private grabFromHandle: THREE.Matrix4 | null = null;
   private lastOrigin: ClientTrackingOrigin | null = null;
   private selected = false;
   private enabledBefore = false;
-  private panelOffset: THREE.Matrix4 | null = null;
+  private grabFromPanel: THREE.Matrix4 | null = null;
   private smoothedPosition = new THREE.Vector3();
   private smoothedRotation = new THREE.Quaternion();
   private lastHold = 0;
   beginPanel(position: Vec3, orientation: Quat): void {
     this.renderer.pinned = true;
     this.renderer.panel.updateWorldMatrix(true, false);
-    this.panelOffset = this.matrix(position, orientation)
+    this.grabFromPanel = this.matrix(position, orientation)
       .invert()
       .multiply(this.renderer.panel.matrixWorld);
   }
@@ -44,7 +44,7 @@ export class WebXRManipulationController {
   begin(position: Vec3, orientation: Quat): boolean {
     if (!this.origin() || !this.interaction.begin()) return false;
     this.renderer.handle.object.updateWorldMatrix(true, false);
-    this.offset = this.matrix(position, orientation)
+    this.grabFromHandle = this.matrix(position, orientation)
       .invert()
       .multiply(this.renderer.handle.object.matrixWorld);
     this.renderer.handle.object.matrixWorld.decompose(
@@ -57,8 +57,8 @@ export class WebXRManipulationController {
     return true;
   }
   hold(position: Vec3, orientation: Quat): void {
-    if (this.panelOffset) {
-      const m = this.matrix(position, orientation).multiply(this.panelOffset);
+    if (this.grabFromPanel) {
+      const m = this.matrix(position, orientation).multiply(this.grabFromPanel);
       m.decompose(
         this.renderer.panel.position,
         this.renderer.panel.quaternion,
@@ -67,11 +67,13 @@ export class WebXRManipulationController {
       return;
     }
     const origin = this.origin();
-    if (!origin || !this.offset) {
+    if (!origin || !this.grabFromHandle) {
       this.end();
       return;
     }
-    const transform = this.matrix(position, orientation).multiply(this.offset);
+    const transform = this.matrix(position, orientation).multiply(
+      this.grabFromHandle,
+    );
     const p = new THREE.Vector3(),
       q = new THREE.Quaternion();
     transform.decompose(p, q, new THREE.Vector3());
@@ -94,8 +96,8 @@ export class WebXRManipulationController {
     );
   }
   end(): void {
-    this.panelOffset = null;
-    this.offset = null;
+    this.grabFromPanel = null;
+    this.grabFromHandle = null;
     this.interaction.end();
   }
   interrupt(): void {
@@ -135,7 +137,7 @@ export class WebXRManipulationController {
       case "stop":
         this.renderer.previewRequested = false;
         this.interaction.cancel();
-        this.offset = null;
+        this.grabFromHandle = null;
         break;
       case "resume":
         this.interaction.resume();
@@ -172,23 +174,21 @@ export class WebXRManipulationController {
     this.lastOrigin = origin;
     this.interaction.tick();
     const intent = this.interaction.snapshot();
-    this.renderer.rejection = this.interaction.rejection;
-    this.renderer.desiredGripper = this.interaction.desiredGripper;
-    this.renderer.speedScale = this.interaction.speedScale;
-    this.renderer.apply(
-      this.session.view().manipulation,
-      enabled ? origin : null,
-      this.interaction.groupId,
-      this.selected,
-      this.interaction.target,
-      this.interaction.solution,
-      this.interaction.plan ?? this.interaction.previewPlan,
-      this.now(),
-      this.interaction.status,
-      this.interaction.feedbackFresh,
-      this.session.view().hello?.robot.display_name,
+    this.renderer.apply({
+      state: this.session.view().manipulation,
+      origin: enabled ? origin : null,
+      groupId: this.interaction.groupId,
+      selected: this.selected,
+      target: this.interaction.target,
+      solution: this.interaction.solution,
+      plan: this.interaction.plan ?? this.interaction.previewPlan,
+      now: this.now(),
+      robotTitle: this.session.view().hello?.robot.display_name ?? "Arm",
       intent,
-    );
+      rejection: this.interaction.rejection,
+      desiredGripper: this.interaction.desiredGripper,
+      speedScale: this.interaction.speedScale,
+    });
   }
   dispose(): void {
     this.end();

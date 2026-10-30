@@ -1,7 +1,7 @@
 import { URL as FileURL } from "node:url";
 import { readFileSync } from "node:fs";
 // @vitest-environment jsdom
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   Object.defineProperty(window, "AudioContext", {
     value: class {
@@ -63,7 +63,8 @@ it("hides outlines without disabling colliders and keeps stop/reset available", 
   const r = new ManipulationRenderer();
   let time = 1;
   const apply = (selected: boolean) =>
-    r.apply(
+    applyRenderer(
+      r,
       state,
       origin,
       "arm",
@@ -100,7 +101,8 @@ it("hides outlines without disabling colliders and keeps stop/reset available", 
 it("keeps the gripper menu across hover transitions and shows the target guide", () => {
   const r = new ManipulationRenderer();
   const apply = (now: number) =>
-    r.apply(
+    applyRenderer(
+      r,
       state,
       origin,
       "arm",
@@ -132,7 +134,8 @@ it("keeps the gripper menu across hover transitions and shows the target guide",
 it("plays Preview once from zero while retaining separate measured and target handles", () => {
   const r = new ManipulationRenderer();
   const apply = (now: number, plan: any = null) =>
-    r.apply(
+    applyRenderer(
+      r,
       state,
       origin,
       "arm",
@@ -169,8 +172,9 @@ it("plays Preview once from zero while retaining separate measured and target ha
 
 it("keeps robot status on one line and includes the arm speed", () => {
   const r = new ManipulationRenderer();
-  r.speedScale = 0.35;
-  r.apply(
+  speedScale = 0.35;
+  applyRenderer(
+    r,
     state,
     origin,
     "arm",
@@ -222,7 +226,7 @@ it("combines both moving fingers into one gripper bound", () => {
       mimic: null,
     })),
   );
-  r.apply(s, origin, "arm", true, null, null, null, 1, "", true);
+  applyRenderer(r, s, origin, "arm", true, null, null, null, 1, "", true);
   expect(r.object.getObjectByName("LinkBounds_left")!.parent!.visible).toBe(
     false,
   );
@@ -256,10 +260,24 @@ it("shows measured and dragged spheres and a faint connector in unselected follo
     ...pose,
     position: [0.2, 0, 0.3] as [number, number, number],
   };
-  r.apply(s, origin, "arm", false, target, null, null, 1, "", true, "Arm", {
-    ...readyIntent,
-    dragging: true,
-  });
+  applyRenderer(
+    r,
+    s,
+    origin,
+    "arm",
+    false,
+    target,
+    null,
+    null,
+    1,
+    "",
+    true,
+    "Arm",
+    {
+      ...readyIntent,
+      dragging: true,
+    },
+  );
   expect(r.measuredHandle.object.visible).toBe(true);
   expect(
     r.handle.object.position.distanceTo(r.measuredHandle.object.position),
@@ -279,9 +297,10 @@ it("shows measured and dragged spheres and a faint connector in unselected follo
 it("uses path provenance for opacity even when the actual planned path is straight", () => {
   const r = new ManipulationRenderer();
   const target = { ...pose, position: [0.2, 0, 0] as [number, number, number] };
-  r.apply(state, origin, "arm", true, target, null, null, 1, "");
+  applyRenderer(r, state, origin, "arm", true, target, null, null, 1, "");
   expect(r.path.material.uniforms.uOpacity.value).toBe(0.25);
-  r.apply(
+  applyRenderer(
+    r,
     state,
     origin,
     "arm",
@@ -305,7 +324,8 @@ it("keeps Preview above an offset target and hides both marker buttons immediate
   const r = new ManipulationRenderer();
   const target = { ...pose, position: [0.2, 0, 0] as [number, number, number] };
   const apply = (now: number, dragging = false, targetOffset = true) =>
-    r.apply(
+    applyRenderer(
+      r,
       state,
       origin,
       "arm",
@@ -339,7 +359,7 @@ it("keeps Preview above an offset target and hides both marker buttons immediate
 
 it("uses one contextual emergency control below a narrower Stop and includes the speed slider", () => {
   const r = new ManipulationRenderer();
-  r.apply(state, origin, "arm", true, null, null, null, 1, "");
+  applyRenderer(r, state, origin, "arm", true, null, null, null, 1, "");
   const stop = r.panel.children.find(
     (c) => c.userData.manipulationAction === "stop",
   ) as any;
@@ -350,7 +370,8 @@ it("uses one contextual emergency control below a narrower Stop and includes the
   expect(stop.rangeX).toBeLessThan(emergency.rangeX);
   expect(r.owns(r.speedSlider.hit)).toBe(true);
   expect(r.speedSlider.position.y).toBeGreaterThan(stop.position.y);
-  r.apply(
+  applyRenderer(
+    r,
     { ...state, stopped: true, stop_confirmed: true },
     origin,
     "arm",
@@ -369,7 +390,8 @@ it("uses one contextual emergency control below a narrower Stop and includes the
     ),
   ).toHaveLength(1);
   expect(emergency.enabled).toBe(true);
-  r.apply(
+  applyRenderer(
+    r,
     { ...state, stopped: true, stop_confirmed: false },
     origin,
     "arm",
@@ -388,7 +410,7 @@ it("hides full-arm geometry at idle and anchors the tool preview to either mode'
   const r = new ManipulationRenderer();
   const s = structuredClone(state);
   s.model!.joints[0].kind = "revolute";
-  r.apply(s, origin, "arm", true, null, null, null, 1, "");
+  applyRenderer(r, s, origin, "arm", true, null, null, null, 1, "");
   const tool = new THREE.Mesh(
     new THREE.BoxGeometry(0.03, 0.03, 0.03),
     new THREE.MeshBasicMaterial(),
@@ -398,18 +420,19 @@ it("hides full-arm geometry at idle and anchors the tool preview to either mode'
     new THREE.MeshBasicMaterial(),
   );
   const internals = r as any;
-  internals.ghosts.set("tool", tool);
-  internals.ghosts.set("base", base);
+  internals.modelRenderer.ghosts.set("tool", tool);
+  internals.modelRenderer.ghosts.set("base", base);
   r.object.add(tool, base);
-  r.apply(s, origin, "arm", true, null, null, null, 1.1, "");
+  applyRenderer(r, s, origin, "arm", true, null, null, null, 1.1, "");
   expect(base.visible).toBe(false);
-  expect(internals.eeGeometry.visible).toBe(false);
+  expect(internals.modelRenderer.endEffectorGeometry.visible).toBe(false);
   const target = {
     ...pose,
     position: [0.2, 0, 0.3] as [number, number, number],
   };
   for (const selected of [true, false]) {
-    r.apply(
+    applyRenderer(
+      r,
       { ...s, following: !selected },
       origin,
       "arm",
@@ -420,14 +443,16 @@ it("hides full-arm geometry at idle and anchors the tool preview to either mode'
       1.2,
       "",
     );
-    expect(internals.eeGeometry.visible).toBe(true);
-    expect(internals.eeGeometry.children[0].visible).toBe(true);
-    expect(internals.eeGeometry.position.toArray()).toEqual(
-      r.handle.object.position.toArray(),
-    );
-    expect(internals.eeGeometry.quaternion.toArray()).toEqual(
-      r.handle.object.quaternion.toArray(),
-    );
+    expect(internals.modelRenderer.endEffectorGeometry.visible).toBe(true);
+    expect(
+      internals.modelRenderer.endEffectorGeometry.children[0].visible,
+    ).toBe(true);
+    expect(
+      internals.modelRenderer.endEffectorGeometry.position.toArray(),
+    ).toEqual(r.handle.object.position.toArray());
+    expect(
+      internals.modelRenderer.endEffectorGeometry.quaternion.toArray(),
+    ).toEqual(r.handle.object.quaternion.toArray());
     expect(base.visible).toBe(selected);
   }
   r.dispose();
@@ -454,7 +479,19 @@ it("trims the executing path from raw measured joints while bounds use smoothed 
   };
   const target = { ...pose, position: [1, 0, 0] as [number, number, number] };
   const apply = (now: number, fresh = true) =>
-    r.apply(s, origin, "arm", true, target, null, null, now, "", fresh);
+    applyRenderer(
+      r,
+      s,
+      origin,
+      "arm",
+      true,
+      target,
+      null,
+      null,
+      now,
+      "",
+      fresh,
+    );
   const startDistance = () => {
     const start = r.path.geometry.getAttribute("instanceStart");
     return Math.hypot(start.getX(0), start.getY(0), start.getZ(0));
@@ -510,8 +547,20 @@ it("rotates only OpenYAM's bottom bounding box by 90 degrees without changing it
     const generic = structuredClone(s);
     generic.model!.asset_url = "/models/another-arm.glb";
     s.model!.asset_url = "/models/openyam.glb";
-    reference.apply(generic, origin, "arm", true, null, null, null, 1, "");
-    openyam.apply(s, origin, "arm", true, null, null, null, 1, "");
+    s.model!.visual_profile = "openyam";
+    applyRenderer(
+      reference,
+      generic,
+      origin,
+      "arm",
+      true,
+      null,
+      null,
+      null,
+      1,
+      "",
+    );
+    applyRenderer(openyam, s, origin, "arm", true, null, null, null, 1, "");
     const box = (r: ManipulationRenderer, name: string) =>
       r.object.getObjectByName(`LinkBounds_${name}`) as THREE.Mesh;
     const expected = box(reference, "base")
@@ -532,7 +581,7 @@ it("rotates only OpenYAM's bottom bounding box by 90 degrees without changing it
     );
     for (const link of ["base", "tool"]) {
       const visual = (r: ManipulationRenderer) =>
-        (r as any).ghosts.get(link) as THREE.Mesh;
+        (r as any).modelRenderer.ghosts.get(link) as THREE.Mesh;
       expect(
         Array.from(visual(openyam).geometry.getAttribute("position").array),
       ).toEqual(
@@ -549,11 +598,13 @@ it("rotates only OpenYAM's bottom bounding box by 90 degrees without changing it
 
 it("keeps gripper outlines instanced when their aggregate bounds change", () => {
   const r = new ManipulationRenderer();
-  r.apply(state, origin, "arm", true, null, null, null, 1, "", true);
+  applyRenderer(r, state, origin, "arm", true, null, null, null, 1, "", true);
   const collider = r.object.getObjectByName("LinkBounds_base") as THREE.Mesh;
-  const stroke = (r as any).boundStrokes.get("base");
+  const stroke = (r as any).modelRenderer.boundStrokes.get("base");
   expect(stroke.object.geometry.isInstancedBufferGeometry).toBe(true);
-  expect(collider.geometry instanceof THREE.InstancedBufferGeometry).toBe(false);
+  expect(collider.geometry instanceof THREE.InstancedBufferGeometry).toBe(
+    false,
+  );
   expect(stroke.object.geometry.getAttribute("instanceStart").count).toBe(12);
   expect(collider.parent!.visible).toBe(true);
   r.dispose();
@@ -562,58 +613,416 @@ it("keeps gripper outlines instanced when their aggregate bounds change", () => 
 it("reveals full-length stationary bounds and scales only perpendicular axes", () => {
   const r = new ManipulationRenderer();
   r.hoveredLink = "base";
-  r.apply(state, origin, "arm", false, null, null, null, 1, "", true);
-  const stroke = (r as any).boundStrokes.get("base").object;
+  applyRenderer(r, state, origin, "arm", false, null, null, null, 1, "", true);
+  const stroke = (r as any).modelRenderer.boundStrokes.get("base").object;
   // Source Y maps to WebXR X; it is the longest axis of this fixture.
   expect(stroke.scale.x).toBe(1);
   expect(stroke.scale.z).toBeGreaterThan(0);
   expect(stroke.scale.z).toBeLessThan(0.1);
   expect(stroke.scale.y).toBe(stroke.scale.z);
-  expect((r as any).baseLabel.scale.x).toBe(0.75);
+  expect(r.controlsView.baseLabel.scale.x).toBe(0.75);
   expect(r.speedSlider.width).toBe(0.14);
-  expect((r as any).speedLabel.text).toBe("Speed · 20%");
+  expect((r.controlsView as any).speedLabel.text).toBe("Speed · 20%");
   r.dispose();
 });
 
 it("keeps the dashed shader when rebuilding gripper bounds after finger movement", () => {
   const r = new ManipulationRenderer();
   const moving = structuredClone(state);
-  moving.model!.links.push({ name: "finger", bounds: {center:[0,0,0],size:[0.01,0.02,0.01]} });
-  moving.model!.joints.push({name:"finger-slide",kind:"prismatic",parent:"base",child:"finger",axis:[1,0,0],origin:pose,limits:{lower:0,upper:0.05},mimic:null});
-  r.apply(moving, origin, "arm", true, null, null, null, 1, "", true);
+  moving.model!.links.push({
+    name: "finger",
+    bounds: { center: [0, 0, 0], size: [0.01, 0.02, 0.01] },
+  });
+  moving.model!.joints.push({
+    name: "finger-slide",
+    kind: "prismatic",
+    parent: "base",
+    child: "finger",
+    axis: [1, 0, 0],
+    origin: pose,
+    limits: { lower: 0, upper: 0.05 },
+    mimic: null,
+  });
+  applyRenderer(r, moving, origin, "arm", true, null, null, null, 1, "", true);
   moving.observations!.arm.gripper = 1;
-  r.apply(moving, origin, "arm", true, null, null, null, 1.1, "", true);
-  const stroke = (r as any).boundStrokes.get("base");
+  applyRenderer(
+    r,
+    moving,
+    origin,
+    "arm",
+    true,
+    null,
+    null,
+    null,
+    1.1,
+    "",
+    true,
+  );
+  const stroke = (r as any).modelRenderer.boundStrokes.get("base");
   expect(stroke.object.geometry.isInstancedBufferGeometry).toBe(true);
   expect(stroke.object.material.uniforms.uDash.value).toBeGreaterThan(0);
-  expect(r.object.getObjectByName("LinkBounds_base")!.parent!.visible).toBe(true);
+  expect(r.object.getObjectByName("LinkBounds_base")!.parent!.visible).toBe(
+    true,
+  );
   r.dispose();
 });
 
 it("shows movement-weighted IK segments and a compound OpenYAM forearm", () => {
-  const fixture=JSON.parse(readFileSync(new FileURL("./integration-tests/fixtures/OpenYAM.json",import.meta.url),"utf8"));
-  const load=vi.spyOn(GLTFLoader.prototype,"load").mockImplementation(()=>{});
-  const r=new ManipulationRenderer();
+  const fixture = JSON.parse(
+    readFileSync(
+      new FileURL("./integration-tests/fixtures/OpenYAM.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const load = vi
+    .spyOn(GLTFLoader.prototype, "load")
+    .mockImplementation(() => {});
+  const r = new ManipulationRenderer();
   try {
-    const arm: ManipulationState={...state, model:fixture.model,
-      groups:[{id:"arm",joint_names:Object.keys(fixture.joints),base_frame:"base",tip_frame:"gripper_tip",has_gripper:true,following:true}],
-      observations:{arm:{joints:fixture.joints,measured_at:1,pose:fixture.pose,gripper:0}}};
-    const solution={...fixture.joints,yam_joint6:fixture.joints.yam_joint6+0.8};
-    const target={...pose,position:[0.2,0,0.3] as [number,number,number]};
-    const intent={dragging:true,targetOffset:true,executing:false} as any;
-    r.apply(arm,origin,"arm",false,target,solution,null,1,"",true,"OpenYAM",intent);
-    const segments=(r as any).ikSegments;
+    const arm: ManipulationState = {
+      ...state,
+      model: fixture.model,
+      groups: [
+        {
+          id: "arm",
+          joint_names: Object.keys(fixture.joints),
+          base_frame: "base",
+          tip_frame: "gripper_tip",
+          has_gripper: true,
+          following: true,
+        },
+      ],
+      observations: {
+        arm: {
+          joints: fixture.joints,
+          measured_at: 1,
+          pose: fixture.pose,
+          gripper: 0,
+        },
+      },
+    };
+    const solution = {
+      ...fixture.joints,
+      yam_joint6: fixture.joints.yam_joint6 + 0.8,
+    };
+    const target = {
+      ...pose,
+      position: [0.2, 0, 0.3] as [number, number, number],
+    };
+    const intent = {
+      dragging: true,
+      targetOffset: true,
+      executing: false,
+    } as any;
+    applyRenderer(
+      r,
+      arm,
+      origin,
+      "arm",
+      false,
+      target,
+      solution,
+      null,
+      1,
+      "",
+      true,
+      "OpenYAM",
+      intent,
+    );
+    const segments = (r as any).ikSegments;
     expect(segments.get("yam_joint6").object.visible).toBe(true);
-    expect(segments.get("yam_joint6").object.material.uniforms.uOpacity.value).toBeGreaterThan(0.5);
-    expect(segments.get("yam_joint2").object.material.uniforms.uOpacity.value).toBeLessThan(0.01);
-    const forearm=r.object.getObjectByName("LinkBounds_link3") as THREE.Mesh;
+    expect(
+      segments.get("yam_joint6").object.material.uniforms.uOpacity.value,
+    ).toBeGreaterThan(0.5);
+    expect(
+      segments.get("yam_joint2").object.material.uniforms.uOpacity.value,
+    ).toBeLessThan(0.01);
+    const forearm = r.object.getObjectByName("LinkBounds_link3") as THREE.Mesh;
     expect(forearm.geometry.getAttribute("position").count).toBe(48);
-    const gripper=(r as any).boundStrokes.get("gripper");
+    const gripper = (r as any).modelRenderer.boundStrokes.get("gripper");
     expect(gripper.object.geometry.isInstancedBufferGeometry).toBe(true);
-    r.rejection={revision:1,pose:target,message:"IK failed"};
-    r.apply(arm,origin,"arm",false,target,solution,null,1.1,"IK failed",true,"OpenYAM",intent);
-    expect(segments.get("yam_joint6").object.material.uniforms.uColor.value.getHex()).toBe(0xff453a);
-    r.apply(arm,origin,"arm",false,target,solution,null,3,"IK failed",true,"OpenYAM",intent);
+    rejection = { revision: 1, pose: target, message: "IK failed" };
+    applyRenderer(
+      r,
+      arm,
+      origin,
+      "arm",
+      false,
+      target,
+      solution,
+      null,
+      1.1,
+      "IK failed",
+      true,
+      "OpenYAM",
+      intent,
+    );
+    expect(
+      segments.get("yam_joint6").object.material.uniforms.uColor.value.getHex(),
+    ).toBe(0xff453a);
+    applyRenderer(
+      r,
+      arm,
+      origin,
+      "arm",
+      false,
+      target,
+      solution,
+      null,
+      3,
+      "IK failed",
+      true,
+      "OpenYAM",
+      intent,
+    );
     expect(r.warning.object.visible).toBe(true);
-  } finally {r.dispose();load.mockRestore();}
+  } finally {
+    r.dispose();
+    load.mockRestore();
+  }
+});
+
+import {
+  deriveManipulationSnapshot,
+  targetIsOffset,
+  type ManipulationSnapshot,
+} from "@dimos-ar-client/manipulation/ManipulationInteraction";
+import type {
+  ManipulationPlan,
+  ManipulationPose,
+} from "@dimos-ar-client/manipulation/ManipulationTypes";
+import type { ManipulationPresentation } from "../src/manipulation/ManipulationRenderer";
+let speedScale = 0.2;
+let rejection: ManipulationPresentation["rejection"] = null;
+function applyRenderer(
+  renderer: ManipulationRenderer,
+  state: ManipulationState,
+  origin: ManipulationPresentation["origin"],
+  groupId: string | null,
+  selected: boolean,
+  target: ManipulationPose | null,
+  solution: Record<string, number> | null,
+  plan: ManipulationPlan | null,
+  now: number,
+  status: string,
+  fresh = true,
+  robotTitle = "Arm",
+  overrides: Partial<ManipulationSnapshot> = {},
+): void {
+  const intent = deriveManipulationSnapshot({
+    available: state.available,
+    fresh,
+    selected,
+    targetOffset: targetIsOffset(
+      target,
+      state.observations?.[groupId ?? ""]?.pose,
+    ),
+    gripperDraft: false,
+    dragging: false,
+    planning: false,
+    executing: ["accepted", "executing"].includes(state.execution ?? ""),
+    resetting: !!state.operation,
+    stopped: state.stopped === true,
+    stopConfirmed: state.stop_confirmed === true,
+    pendingControl: false,
+    following: state.following === true,
+    rejection: rejection !== null,
+    status,
+    runtimeMessage: state.message,
+  });
+  renderer.apply({
+    state,
+    origin,
+    groupId,
+    selected,
+    target,
+    solution,
+    plan,
+    now,
+    robotTitle,
+    intent: { ...intent, ...overrides },
+    speedScale,
+    rejection,
+    desiredGripper: null,
+  });
+}
+
+beforeEach(() => {
+  speedScale = 0.2;
+  rejection = null;
+});
+
+it("retires late model loads after replacement and disposal", () => {
+  const callbacks: Array<(gltf: any) => void> = [];
+  const loader = vi
+    .spyOn(GLTFLoader.prototype, "load")
+    .mockImplementation((_url, loaded) => {
+      callbacks.push(loaded);
+    });
+  const renderer = new ManipulationRenderer();
+  const first = structuredClone(state);
+  first.model!.asset_url = "/first.glb";
+  const second = structuredClone(first);
+  second.model!.revision = "second";
+  second.model!.asset_url = "/second.glb";
+  const late = () => {
+    const scene = new THREE.Group();
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(),
+      new THREE.MeshBasicMaterial(),
+    );
+    mesh.name = "base";
+    scene.add(mesh);
+    return {
+      scene,
+      geometry: vi.spyOn(mesh.geometry, "dispose"),
+      material: vi.spyOn(mesh.material, "dispose"),
+    };
+  };
+  try {
+    applyRenderer(
+      renderer,
+      first,
+      origin,
+      "arm",
+      true,
+      null,
+      null,
+      null,
+      1,
+      "",
+    );
+    applyRenderer(
+      renderer,
+      second,
+      origin,
+      "arm",
+      true,
+      null,
+      null,
+      null,
+      2,
+      "",
+    );
+    const replaced = late();
+    callbacks[0]({ scene: replaced.scene });
+    expect(replaced.geometry).toHaveBeenCalledTimes(1);
+    expect(replaced.material).toHaveBeenCalledTimes(1);
+    renderer.dispose();
+    const disposed = late();
+    callbacks[1]({ scene: disposed.scene });
+    expect(disposed.geometry).toHaveBeenCalledTimes(1);
+    expect(disposed.material).toHaveBeenCalledTimes(1);
+  } finally {
+    loader.mockRestore();
+  }
+});
+
+it("disposes shared model geometry once across measured, preview and tool clones", () => {
+  const loader = vi
+    .spyOn(GLTFLoader.prototype, "load")
+    .mockImplementation((_url, loaded) => {
+      const scene = new THREE.Group();
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(),
+        new THREE.MeshBasicMaterial(),
+      );
+      mesh.name = "tool";
+      scene.add(mesh);
+      loaded({ scene } as never);
+    });
+  const renderer = new ManipulationRenderer();
+  try {
+    const modelState = structuredClone(state);
+    modelState.model!.asset_url = "/shared.glb";
+    const target = {
+      ...pose,
+      position: [0.2, 0, 0] as [number, number, number],
+    };
+    applyRenderer(
+      renderer,
+      modelState,
+      origin,
+      "arm",
+      true,
+      target,
+      null,
+      null,
+      1,
+      "",
+    );
+    const models = (renderer as any).modelRenderer;
+    const mesh = models.ghosts.get("tool") as THREE.Mesh;
+    expect(models.previewMeshes.get("tool").geometry).toBe(mesh.geometry);
+    expect(models.endEffectorGeometry).not.toBeNull();
+    const geometry = vi.spyOn(mesh.geometry, "dispose");
+    renderer.dispose();
+    expect(geometry).toHaveBeenCalledTimes(1);
+  } finally {
+    loader.mockRestore();
+  }
+});
+
+it("rebuilds the tool subtree on group selection without disposing borrowed model geometry", () => {
+  const loader = vi
+    .spyOn(GLTFLoader.prototype, "load")
+    .mockImplementation((_url, loaded) => {
+      const scene = new THREE.Group();
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(),
+        new THREE.MeshBasicMaterial(),
+      );
+      mesh.name = "tool";
+      scene.add(mesh);
+      loaded({ scene } as never);
+    });
+  const renderer = new ManipulationRenderer();
+  try {
+    const current = structuredClone(state);
+    current.model!.asset_url = "/groups.glb";
+    const target = {
+      ...pose,
+      position: [0.2, 0, 0] as [number, number, number],
+    };
+    applyRenderer(
+      renderer,
+      current,
+      origin,
+      "arm",
+      true,
+      target,
+      null,
+      null,
+      1,
+      "",
+    );
+    const models = (renderer as any).modelRenderer;
+    const previous = models.endEffectorGeometry;
+    const mesh = previous.children[0] as THREE.Mesh;
+    const material = vi.spyOn(mesh.material as THREE.Material, "dispose");
+    const geometry = vi.spyOn(mesh.geometry, "dispose");
+    const next = structuredClone(current);
+    next.groups![0].id = "other";
+    next.observations = { other: next.observations!.arm };
+    applyRenderer(
+      renderer,
+      next,
+      origin,
+      "other",
+      true,
+      target,
+      null,
+      null,
+      2,
+      "",
+    );
+    expect(models.endEffectorGeometry).not.toBe(previous);
+    expect(previous.parent).toBeNull();
+    expect(material).toHaveBeenCalledTimes(1);
+    expect(geometry).not.toHaveBeenCalled();
+    renderer.dispose();
+    expect(geometry).toHaveBeenCalledTimes(1);
+  } finally {
+    loader.mockRestore();
+  }
 });

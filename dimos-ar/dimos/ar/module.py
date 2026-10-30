@@ -581,10 +581,8 @@ class ARModule(Module):  # type: ignore[misc]
 
     def _on_estop_request(self, _msg: EstopRequest, _websocket: ws_server.ServerConnection) -> None:
         self._cancel_tele_cmd_vel()
-        if self._manipulation is not None:
-            self._stop_task = asyncio.create_task(
-                asyncio.to_thread(self._manipulation.ar_manipulation_stop)
-            )
+        if self._manipulation_service is not None:
+            self._manipulation_service.emergency_stop()
         if self._safety.on_estop_request():
             self._broadcast_state()
 

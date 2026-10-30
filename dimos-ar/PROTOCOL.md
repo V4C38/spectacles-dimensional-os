@@ -1058,3 +1058,25 @@ settling ends three seconds after the nominal trajectory duration, within the ov
 55-second budget. Failure reports the worst joint error and confirms stopping before
 releasing ownership. Parking quiesces new motion until process shutdown; it never
 clears emergency stop. Motion-related callbacks are drained before RPC teardown.
+
+### Manipulation lifecycle receipts and visual metadata
+
+`prepare_shutdown` results may include `quiescent: boolean`. Only an explicit
+`true` acknowledges that motion has been stopped and the runtime has completed
+its quiescence handshake. A completed parking attempt alone is not this receipt.
+A rejected parking attempt may still acknowledge quiescence after confirmed cleanup;
+missing/false receipts, exceptions, and timeouts retain the service teardown stop.
+The receipt never authorizes another motion or clears an emergency stop.
+
+Optional `model.visual_profile` identifies host visual corrections independently
+of `asset_url`. OpenYAM uses `openyam`. Optional `model.gripper_joints` maps joint
+names to finite `{closed, open}` positions for normalized visual articulation.
+The host applies only independent gripper joints within the selected tool subtree,
+never the group's controlled arm joints. Descriptors without this metadata retain
+the standard lower-to-upper articulation; URLs do not select articulation policy.
+Visual metadata does not change planning geometry or authorize motion.
+
+The following solver accepts the documented wire speed range `(0, 1]`; the WebXR
+slider retains its 5–100% range and 20% default. Parking remains capped at 20%.
+Runtime lease expiry and deferred gripper completion advance independently of
+WebSocket observation requests. Snapshot reads do not issue control commands.

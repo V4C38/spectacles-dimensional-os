@@ -636,3 +636,11 @@ applies to explicitly marked bounds/path visuals. Navigation markers and end
 effector handles retain their existing on-top behavior. Robot-type defaults remain
 separate from saved robot-instance calibration profiles. No Spectacles host
 manipulation code or scene wiring is included.
+
+Manipulation runtime updates advance independently of snapshot polling. The optional
+DimOS adapter owns upstream compatibility details; runtime owners use its typed
+backend port. ClientCore supplies one immutable interaction snapshot to WebXR.
+WebXR controls and model resources have separate owners under `manipulation/`,
+with robot visual corrections under `manipulation/profiles/`. Asset URLs identify
+resources; explicit model metadata selects articulation and visual profiles.
+Shutdown teardown may skip its stop call only after a `quiescent: true` receipt.

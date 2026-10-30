@@ -55,7 +55,7 @@ test("plans with a mesh ghost and follows only during an unselected grab", async
           const app = (window as any).xb.core.scene.children.find(
             (o: any) => o.constructor.name === "WebXRApp",
           );
-          return app.client.manipulation.renderer.ghosts.size;
+          return app.client.manipulation.renderer.modelRenderer.ghosts.size;
         }),
       )
       .toBeGreaterThan(0);
@@ -66,7 +66,7 @@ test("plans with a mesh ghost and follows only during an unselected grab", async
         );
         let meshes = 0,
           normals = 0;
-        for (const visual of app.client.manipulation.renderer.ghosts.values())
+        for (const visual of app.client.manipulation.renderer.modelRenderer.ghosts.values())
           visual.traverse((part: any) => {
             if (part.isMesh) {
               meshes++;
@@ -424,7 +424,7 @@ test("keeps the last valid preview visible while selected dragging outpaces the 
       const app=(window as any).xb.core.scene.children.find((o:any)=>o.constructor.name==="WebXRApp");
       const {interaction,renderer}=app.client.manipulation;
       return {dragging:interaction.dragging,path:renderer.path.visible,preview:!!interaction.previewPlan,
-        status:interaction.snapshot().activity,arm:[...renderer.previewMeshes.values()].some((o:any)=>o.visible)};
+        status:interaction.snapshot().activity,arm:[...renderer.modelRenderer.previewMeshes.values()].some((o:any)=>o.visible)};
     });
     expect(facts).toEqual({dragging:true,path:true,preview:true,status:"Planning",arm:true});
     expect(fixture.commands.some(c=>c.action==="execute")).toBe(false);
