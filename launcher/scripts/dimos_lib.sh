@@ -41,7 +41,8 @@ except ImportError:
 from importlib.metadata import entry_points
 
 names = {ep.name for ep in entry_points(group="dimos.blueprints")}
-if {"unitree-go2-ar", "unitree-go2-ar-agentic"} <= names:
+if {"unitree-go2-ar", "unitree-go2-ar-agentic", "openyam-ar-planner",
+    "unitree-go2-ar-replay", "openyam-ar-replay"} <= names:
     print("installed")
     raise SystemExit(0)
 print("stale")

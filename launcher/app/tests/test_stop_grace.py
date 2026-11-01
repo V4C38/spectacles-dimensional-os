@@ -1,5 +1,6 @@
 """Shutdown grace uses fake processes and never signals real servers."""
 
+import asyncio
 import signal
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
@@ -47,3 +48,44 @@ def test_invalid_grace(tmp_path: Path, monkeypatch, value: str) -> None:
     monkeypatch.setenv("DIMOS_STOP_GRACE_SECONDS", value)
     with pytest.raises(ValueError):
         ProcessManager(root=tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_force_stop_bypasses_pending_grace_lock(tmp_path: Path) -> None:
+    mgr = ProcessManager(root=tmp_path)
+    mgr._stopping_pids.add(42424242)
+    await mgr._lock.acquire()
+    try:
+        with patch("armodule.os.kill") as kill:
+            await asyncio.wait_for(mgr.stop_armodule(force=True), timeout=0.5)
+        kill.assert_called_once_with(42424242, signal.SIGKILL)
+    finally:
+        mgr._lock.release()
+
+
+@pytest.mark.asyncio
+async def test_force_stop_reaches_child_in_a_separate_session(tmp_path: Path) -> None:
+    import os
+    import sys
+    if not Path("/proc").is_dir():
+        pytest.skip("Linux process-tree inspection")
+    script = "import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)'],start_new_session=True); print(p.pid,flush=True); time.sleep(120)"
+    process = await asyncio.create_subprocess_exec(sys.executable, "-c", script, stdout=asyncio.subprocess.PIPE, start_new_session=True)
+    assert process.stdout is not None
+    child = int(await asyncio.wait_for(process.stdout.readline(), 2))
+    mgr = ProcessManager(root=tmp_path)
+    mgr._proc = process
+    await mgr._lock.acquire()
+    try:
+        await asyncio.wait_for(mgr.stop_armodule(force=True), 2.5)
+        await asyncio.wait_for(process.wait(), 1)
+        stat = Path(f"/proc/{child}/stat")
+        assert not stat.exists() or stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+    finally:
+        mgr._lock.release()
+        for pid in (child, process.pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        await process.wait()

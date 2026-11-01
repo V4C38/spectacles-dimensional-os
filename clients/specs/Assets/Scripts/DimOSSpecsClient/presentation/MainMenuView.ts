@@ -1,9 +1,10 @@
+import { Slider } from "SpectaclesUIKit.lspkg/Scripts/Components/Slider/Slider";
 import type { StateName } from "SpectaclesUIKit.lspkg/Scripts/Components/Element";
 import { PanelHeightController } from "./PanelHeightController";
-import { RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, panelFooterY } from "./PanelLayout";
+import { RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, panelFooterY, panelProfile, type PanelProfile } from "./PanelLayout";
 import type { CapsuleButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/CapsuleButton";
 import type { LidarDisplayMode } from "../../DimOSARClient/sensors/lidarSettings";
-import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_LAYOUT, controlPanelTab, robotBadgeText, sensorStatusText } from "../../DimOSARClient/presentation/ControlPanelPresentation";
+import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_SECTION, CONTROL_PANEL_LAYOUT, controlPanelTab, robotBadgeText, sensorStatusText } from "../../DimOSARClient/presentation/ControlPanelPresentation";
 import type { OperatingMode } from "./AppState";
 import type { SpecsUISnapshot } from "./SpecsUISnapshot";
 import { NativeTextField } from "./NativeTextField";
@@ -12,6 +13,7 @@ import { createPanelSurface, createIconButton, createText, getFrameComponent, is
   configureControlPanelFrame, configurePanelText, setPanelFollowing, setButtonSelected, panelButtonLayer, panelFontSize, uiMaterialLayer, COLOR_WHITE, SnapOS2Styles, type IconButtonResult } from "./UIKit";
 
 interface MainMenuCallbacks {
+  onSpeed?: (value: number) => void;
   onRestart: () => void;
   onModeButtonPressed: (mode: OperatingMode) => void;
   onEmergencyStop: () => void;
@@ -32,6 +34,8 @@ interface MainMenuCallbacks {
 
 type Page = "main" | "settings" | "sensors" | "diagnostics" | "alignment";
 const UNIT = 100;
+const SECONDARY_RGB = [1, 3, 5].map(i => parseInt(CONTROL_PANEL_SECTION.color.slice(i, i + 2), 16) / 255);
+const SECONDARY_TEXT = new vec4(SECONDARY_RGB[0], SECONDARY_RGB[1], SECONDARY_RGB[2], 1);
 const CONTENT = (CONTROL_PANEL_LAYOUT.width - CONTROL_PANEL_LAYOUT.margin * 2) * UNIT;
 const ACTION = 0.064 * UNIT;
 const HALF = (CONTENT - 0.02 * UNIT) / 2;
@@ -40,6 +44,15 @@ const CLOSE_X = CONTENT / 2 - 0.072 * UNIT / 2;
 
 /** WebXR's page arrangement and copy, rendered with fixed-size native SUK primitives. */
 export class MainMenuView {
+  private speedRoot: SceneObject;
+  private localizationRoot: SceneObject;
+  private lidarRoot: SceneObject;
+  private capabilityProfile: PanelProfile = RUNTIME_LAYOUTS.sensors;
+  private capabilityKey = "";
+  private speedSlider: Slider;
+  private speedText: Text;
+  private speedValue: Text;
+  private syncingSpeed = false;
   private disposed = false;
   private readonly subscriptions: (() => void)[] = [];
   private retain(subscription: unknown): void {
@@ -85,7 +98,7 @@ export class MainMenuView {
     if (frame) frame.autoShowHide = false;
     frame?.initialize();
     if (frame && isFrameInitialized(frame)) {
-      configureControlPanelFrame(frame);
+      configureControlPanelFrame(frame, undefined, true);
       frame.allowTranslation = true; frame.onlyInteractOnBorder = true; frame.autoShowHide = false;
       frame.showCloseButton = false; frame.showFollowButton = false;
       frame.setUseFollow(false); frame.setFollowing(false);
@@ -99,8 +112,8 @@ export class MainMenuView {
       const body = global.scene.createSceneObject(`${name}Body`); body.setParent(page); this.bodies.set(name, body);
     }
     const main = this.pages.get("main")!;
-    this.text(main, COPY.appName, -18, CONTROL_PANEL_LAYOUT.titleY * UNIT, 44, 4, 28, HorizontalAlignment.Left);
-    this.icon(main, "Sensors button", "camera", CLOSE_X - 2 * (0.072 + 0.02) * UNIT, () => this.showPage("sensors"));
+    this.text(main, COPY.appName, -18, CONTROL_PANEL_LAYOUT.titleY * UNIT, 44, 4, 28, HorizontalAlignment.Left, COLOR_WHITE);
+    this.icon(main, "Capabilities button", "robot", CLOSE_X - 2 * (0.072 + 0.02) * UNIT, () => this.showPage("sensors"));
     this.icon(main, "Global settings", "gear", CLOSE_X - (0.072 + 0.02) * UNIT, () => this.showPage("settings"));
     this.icon(main, "Close", "close", CLOSE_X, callbacks.onClose);
     this.modeButtons = this.tabs(main, [COPY.manual, COPY.agent], 0.198 * UNIT,
@@ -123,10 +136,21 @@ export class MainMenuView {
     this.retain(this.stop.onStateChanged.add(state => { this.stopNativeState = state; }));
 
     const settings = this.bodies.get("settings")!; this.pageTitle(this.pages.get("settings")!, COPY.settings, COPY.done, "main");
-    this.text(settings, COPY.robot, 0, 0.16 * UNIT, CONTENT, 3, 19);
-    this.realign = this.button(settings, COPY.relocalize, COPY.relocalize, -(HALF + 2) / 2, 0.09 * UNIT, HALF, ACTION, callbacks.onRealign);
-    this.button(settings, COPY.setup, COPY.setup, (HALF + 2) / 2, 0.09 * UNIT, HALF, ACTION, callbacks.onRestart);
-    this.text(settings, COPY.headset, 0, -0.014 * UNIT, CONTENT, 3, 19);
+    this.localizationRoot = global.scene.createSceneObject("LocalizationCapability"); this.localizationRoot.setParent(this.bodies.get("sensors")!);
+    this.lidarRoot = global.scene.createSceneObject("LidarCapability"); this.lidarRoot.setParent(this.bodies.get("sensors")!);
+    this.speedRoot = global.scene.createSceneObject("MovementSpeedSetting"); this.speedRoot.setParent(this.bodies.get("sensors")!);
+    this.speedText = this.sectionHeading(this.speedRoot, "Movement speed", 2);
+    this.speedValue = this.text(this.speedRoot, "50%", CONTENT / 2 - 9, 2, 18, 3, 21, HorizontalAlignment.Right, COLOR_WHITE);
+    const sliderRoot = global.scene.createSceneObject("MovementSpeedSlider"); sliderRoot.setParent(this.speedRoot);
+    sliderRoot.getTransform().setLocalPosition(new vec3(0, -2, 1));
+    this.speedSlider = sliderRoot.createComponent(Slider.getTypeName()) as Slider;
+    this.speedSlider.size = new vec3(CONTENT - 8, 2.25, 0.5);
+    this.speedSlider.knobSize = new vec2(2.4, 2.4);
+    this.retain(this.speedSlider.onValueChange.add(value => { if (!this.syncingSpeed) callbacks.onSpeed?.(0.05 + Math.max(0, Math.min(1, value)) * 0.95); }));
+
+    this.realign = this.button(this.localizationRoot, COPY.relocalize, COPY.relocalize, 0, 0, CONTENT, ACTION, callbacks.onRealign);
+    this.button(settings, COPY.setup, COPY.setup, 0, 0.09 * UNIT, CONTENT, ACTION, callbacks.onRestart);
+    this.sectionHeading(settings, COPY.headset, -0.014 * UNIT);
     this.debug = this.button(settings, "Debug", "Debug · Off", 0, -0.084 * UNIT, CONTENT, ACTION,
       () => callbacks.onDebugModeChanged(!this.debugEnabled));
     this.button(settings, COPY.diagnostics, COPY.diagnostics, 0, -0.152 * UNIT, CONTENT, ACTION, () => this.showPage("diagnostics"));
@@ -136,26 +160,26 @@ export class MainMenuView {
       for (const button of this.buttons) button.playAudio = this.soundEnabled;
     });
     setButtonSelected(sound.button, this.soundEnabled);
-    const sensors = this.bodies.get("sensors")!; this.pageTitle(this.pages.get("sensors")!, COPY.sensors, "Back from Sensors", "main");
-    this.text(this.pages.get("sensors")!, "LiDAR", 0, 0.225 * UNIT, CONTENT, 3, 20, HorizontalAlignment.Center);
+    const sensors = this.lidarRoot; this.pageTitle(this.pages.get("sensors")!, COPY.sensors, "Back from Sensors", "main");
+    this.sectionHeading(this.pages.get("sensors")!, "LiDAR", 0.225 * UNIT);
     this.lidarButtons = this.tabs(this.pages.get("sensors")!, ["Off", "Obstacles", "Full"], 0.17 * UNIT,
       ["off", "obstacles", "full"].map(mode => () => callbacks.onLidarMode(mode as LidarDisplayMode)));
     this.rangeLabel = this.text(sensors, "Clearance", -23, 0.08 * UNIT, 34, 3.5, 18, HorizontalAlignment.Center);
     this.text(sensors, "Point limit", -23, -0.01 * UNIT, 34, 3.5, 18, HorizontalAlignment.Center);
-    this.range = this.text(sensors, "", 0.14 * UNIT, 0.08 * UNIT, 19, 4, 21, HorizontalAlignment.Center);
-    this.points = this.text(sensors, "", 0.14 * UNIT, -0.01 * UNIT, 19, 4, 21, HorizontalAlignment.Center);
+    this.range = this.text(sensors, "", 0.14 * UNIT, 0.08 * UNIT, 19, 4, 21, HorizontalAlignment.Center, COLOR_WHITE);
+    this.points = this.text(sensors, "", 0.14 * UNIT, -0.01 * UNIT, 19, 4, 21, HorizontalAlignment.Center, COLOR_WHITE);
     for (const [y, action] of [[0.08 * UNIT, callbacks.onLidarRange], [-0.01 * UNIT, callbacks.onLidarPoints]] as const) {
       for (const direction of [-1, 1]) this.sensorControls.push(this.button(sensors,
         `Sensor${y}:${direction}`, direction < 0 ? "−" : "+", (direction < 0 ? -0.015 : 0.31) * UNIT, y, ACTION, ACTION, () => action(direction)).button);
     }
-    this.sensorStatus = this.text(sensors, "", 0, -0.15 * UNIT, CONTENT, 10, 17);
+    this.sensorStatus = this.text(this.bodies.get("diagnostics")!, "", 0, -0.15 * UNIT, CONTENT, 10, 17);
     const diagnostics = this.bodies.get("diagnostics")!; this.pageTitle(this.pages.get("diagnostics")!, COPY.diagnostics, COPY.done, "settings");
     const logs = global.scene.createSceneObject("DiagnosticsBlock"); logs.setParent(diagnostics);
     this.rowNodes.push({ parent: diagnostics, node: logs, y: -3 });
-    this.surface(logs, 0, 0, CONTENT, 40);
-    this.diagnostics = new NativeTextField(logs, COPY.diagnostics, CONTENT - 5.6, 36, 0, panelFontSize(18));
+    this.surface(logs, 0, 0, CONTENT, 26);
+    this.diagnostics = new NativeTextField(logs, COPY.diagnostics, CONTENT - 5.6, 22, 0, panelFontSize(18));
     const alignment = this.bodies.get("alignment")!;
-    this.text(this.pages.get("alignment")!, COPY.alignmentTitle, 0, HEADER, CONTENT, 6, 30, HorizontalAlignment.Center);
+    this.text(this.pages.get("alignment")!, COPY.alignmentTitle, 0, HEADER, CONTENT, 6, 30, HorizontalAlignment.Center, COLOR_WHITE);
     this.text(alignment, COPY.alignmentGuidance, 0, 0.055 * UNIT, CONTENT - 6, 7, 22, HorizontalAlignment.Center);
     this.button(alignment, COPY.relocalize, COPY.relocalize, -(HALF + 2) / 2, -0.1 * UNIT, HALF, ACTION, callbacks.onRealign, SnapOS2Styles.Primary);
     this.button(alignment, COPY.dismiss, COPY.dismiss, (HALF + 2) / 2, -0.1 * UNIT, HALF, ACTION, callbacks.onDismissAlignment);
@@ -172,6 +196,30 @@ export class MainMenuView {
 
   apply(snap: SpecsUISnapshot): void {
     if (this.disposed) return;
+    this.speedRoot.enabled = snap.manipulationAvailable === true;
+    this.localizationRoot.enabled = snap.localizationAvailable === true;
+    this.lidarRoot.enabled = snap.lidarAvailable;
+    const caps = [this.localizationRoot.enabled,this.speedRoot.enabled,this.lidarRoot.enabled].join();
+    if (caps !== this.capabilityKey) {
+      this.capabilityKey = caps;
+      const rows: [string,number,number?][] = [];
+      if(this.localizationRoot.enabled) rows.push(["localize",6.4]);
+      if(this.speedRoot.enabled) rows.push(["speed",8]);
+      if(this.lidarRoot.enabled) rows.push(["lidar",3,1],["tabs",6.4,1],["range",6.4],["points",6.4]);
+      if(!rows.length) rows.push(["empty",3]);
+      this.capabilityProfile = panelProfile(23,rows);
+      const positions = this.capabilityProfile.rows;
+      this.localizationRoot.getTransform().setLocalPosition(new vec3(0,positions.localize ?? 0,0));
+      this.speedRoot.getTransform().setLocalPosition(new vec3(0,positions.speed ?? 0,0));
+      for(const entry of this.rowNodes) if(entry.parent === this.lidarRoot) {
+        const y = Math.abs(entry.y-22.5)<.01 ? positions.lidar : Math.abs(entry.y-17)<.01 ? positions.tabs : Math.abs(entry.y-8)<.01 ? positions.range : positions.points;
+        const p = entry.node.getTransform().getLocalPosition(); entry.node.getTransform().setLocalPosition(new vec3(p.x,y ?? 0,p.z));
+      }
+      this.layoutKey = ""; this.updateLayout();
+    }
+    this.speedSlider.enabled = snap.manipulationEnabled === true;
+    this.syncingSpeed = true; this.speedSlider.currentValue = ((snap.manipulationSpeed ?? 0.5) - 0.05) / 0.95; this.syncingSpeed = false;
+    this.speedValue.text = `${Math.round((snap.manipulationSpeed ?? 0.5) * 100)}%`;
     if (snap.alignmentReview) this.showPage("alignment"); else if (this.page === "alignment") this.showPage("main");
     this.robot.labelText.text = robotBadgeText(snap.robotName, snap.robotConnectionText, snap.robotSelected, snap.activity);
     this.robot.button.inactive = !snap.robotSelectable; setButtonSelected(this.robot.button, snap.robotSelected);
@@ -231,7 +279,7 @@ export class MainMenuView {
     const key = this.page === "main" ? this.operatingMode : this.page;
     if (key === this.layoutKey) return;
     this.layoutKey = key;
-    const profile = RUNTIME_LAYOUTS[key], rows = profile.rows;
+    const profile = key === "sensors" ? this.capabilityProfile : RUNTIME_LAYOUTS[key], rows = profile.rows;
     const move = (node: SceneObject, y: number) => {
       const p = node.getTransform().getLocalPosition(); node.getTransform().setLocalPosition(new vec3(p.x, y, p.z));
     };
@@ -244,9 +292,10 @@ export class MainMenuView {
       for (const button of [this.send, this.clear]) move(button.getSceneObject(), rows.actions);
     }
     if (this.page === "main") row("main", -25.1, rows.status);
-    if (key === "settings") for (const [oldY, name] of [[16, "robot"], [9, "robotActions"], [-1.4, "headset"], [-8.4, "debug"], [-15.2, "diagnostics"], [-22.8, "sound"]] as const) row("settings", oldY, rows[name]);
-    if (key === "sensors") { row("sensors", 8, rows.range); row("sensors", -1, rows.points); row("sensors", -15, rows.statistics); }
-    if (key === "diagnostics") row("diagnostics", -3, rows.logs);
+
+    if (key === "settings") for (const [oldY, name] of [[9, "robotActions"], [-1.4, "headset"], [-8.4, "debug"], [-15.2, "diagnostics"], [-22.8, "sound"]] as const) row("settings", oldY, rows[name]);
+
+    if (key === "diagnostics") { row("diagnostics", -3, rows.logs); row("diagnostics", -15, rows.statistics); }
     if (key === "alignment") { row("alignment", 5.5, rows.guidance); row("alignment", -10, rows.actions); }
     this.heightController.request(profile.height);
     this.tick(0);
@@ -271,9 +320,15 @@ export class MainMenuView {
     panelButtonLayer(result); result.button.playAudio = this.soundEnabled;
     this.retain(result.button.onTriggerUp.add(action)); this.buttons.push(result.button); return result;
   }
-  private text(parent: SceneObject, value: string, x: number, y: number, width: number, height: number, size = 19, align = HorizontalAlignment.Center): Text {
+  private sectionHeading(parent: SceneObject, value: string, y: number): Text {
+    const style = CONTROL_PANEL_SECTION;
+    const heading = this.text(parent, value, style.left * UNIT + (style.width * UNIT - 2) / 2, y, style.width * UNIT, style.height * UNIT, style.fontDp, HorizontalAlignment.Left);
+    heading.textFill.color = SECONDARY_TEXT;
+    return heading;
+  }
+  private text(parent: SceneObject, value: string, x: number, y: number, width: number, height: number, size = 19, align = HorizontalAlignment.Center, color = SECONDARY_TEXT): Text {
     if (align === HorizontalAlignment.Left && width >= CONTENT - 1) width -= 2;
-    const text = createText({ parent, name: value || "Status", text: value, fontSize: panelFontSize(size), color: COLOR_WHITE,
+    const text = createText({ parent, name: value || "Status", text: value, fontSize: panelFontSize(size), color,
       position: new vec3(x, y, 2), horizontalAlignment: align,
       worldSpaceRect: Rect.create(-width / 2, width / 2, -height / 2, height / 2) });
     this.rowNodes.push({ parent, node: text.getSceneObject(), y });
@@ -289,10 +344,10 @@ export class MainMenuView {
     });
   }
   private pageTitle(parent: SceneObject, title: string, closeName: string, destination: Page): void {
-    this.text(parent, title, 0, HEADER, 56, 4, 28, HorizontalAlignment.Center);
+    this.text(parent, title, 0, HEADER, 56, 4, 28, HorizontalAlignment.Center, COLOR_WHITE);
     this.icon(parent, closeName, "close", CLOSE_X, () => this.showPage(destination));
   }
-  private icon(parent: SceneObject, name: string, kind: "gear" | "camera" | "close", x: number, action: () => void): void {
+  private icon(parent: SceneObject, name: string, kind: "gear" | "camera" | "robot" | "close", x: number, action: () => void): void {
     const button = this.button(parent, name, "", x, HEADER, 7.2, 7.2, action,
       parent === this.pages.get("main") ? SnapOS2Styles.Ghost : SnapOS2Styles.Secondary);
     button.labelText.getSceneObject().enabled = false;
@@ -312,6 +367,9 @@ export class MainMenuView {
       ring(1, 0.6);
       for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4;
         line(Math.sin(a) * 1.1, Math.cos(a) * 1.1, Math.sin(a) * 1.7, Math.cos(a) * 1.7, 0.5); }
+    } else if (kind === "robot") {
+      line(-1.8,-1.1,1.8,-1.1);line(-1.8,1.1,1.8,1.1);line(-1.8,-1.1,-1.8,1.1);line(1.8,-1.1,1.8,1.1);
+      line(0,1.1,0,2);line(-.9,0,-.5,0,.5);line(.5,0,.9,0,.5);
     } else {
       line(-1.9, -1, 1.9, -1, 0.4); line(-1.9, -1, -1.9, 1, 0.4);
       line(1.9, -1, 1.9, 1, 0.4); line(-1.9, 1, 1.9, 1, 0.4);

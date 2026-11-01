@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import tempfile
 import threading
 from pathlib import Path
@@ -39,7 +40,8 @@ class RobotProfiles:
                         {
                             "id": uuid4().hex,
                             "robot": "unitree_go2",
-                            "name": "UnitreeGo2",
+                            "name": "UnitreeGo2_1",
+                            "naming_version": 1,
                             "armodule": legacy,
                         }
                     ]
@@ -47,6 +49,15 @@ class RobotProfiles:
             data = json.loads(self.path.read_text())
             if not isinstance(data, list):
                 raise TypeError("robot profiles must contain a list")
+            changed = False
+            for profile in data:
+                if not profile.get("naming_version"):
+                    if profile["name"] in {"UnitreeGo2", "OpenYAM"}:
+                        profile["name"] = self._next_name(profile["name"], data)
+                    profile["naming_version"] = 1
+                    changed = True
+            if changed:
+                self._save(data)
             return copy.deepcopy(data)
 
     def get(self, profile_id: str) -> dict[str, Any]:
@@ -60,7 +71,7 @@ class RobotProfiles:
         raise ValueError("unknown robot profile")
 
     def create(
-        self, robot: str, name: str, source_id: str | None = None
+        self, robot: str, name: str | None = None, source_id: str | None = None
     ) -> dict[str, Any]:
         if robot not in set(BLUEPRINT_ROBOTS.values()):
             raise ValueError("unknown robot type")
@@ -72,7 +83,11 @@ class RobotProfiles:
             if robot == "openyam" and not source_id:
                 preset = Path(__file__).with_name("profiles") / "openyam.json"
                 config = json.loads(preset.read_text(encoding="utf-8"))["armodule"]
+            if name is None:
+                stem = self.get(source_id)["name"] if source_id else ("UnitreeGo2" if robot == "unitree_go2" else "OpenYAM")
+                name = self._next_name(stem, profiles)
             profile = {
+                "naming_version": 1,
                 "id": uuid4().hex,
                 "robot": robot,
                 "name": self._name(name),
@@ -124,6 +139,13 @@ class RobotProfiles:
             **copy.deepcopy(profile["armodule"]),
             "robot_display_name": profile["name"],
         }
+
+    @staticmethod
+    def _next_name(stem: str, profiles: list[dict[str, Any]]) -> str:
+        stem = re.sub(r"_\d+$", "", stem)
+        indices = [int(match.group(1)) for profile in profiles if (match := re.fullmatch(re.escape(stem) + r"_(\d+)", profile["name"]))]
+        suffix = f"_{max(indices, default=0) + 1}"
+        return stem[:80 - len(suffix)] + suffix
 
     @staticmethod
     def _name(name: str) -> str:

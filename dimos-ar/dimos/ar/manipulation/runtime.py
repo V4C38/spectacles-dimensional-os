@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any
 from uuid import uuid4
 
-from dimos.ar.manipulation.errors import ManipulationError
+logger = logging.getLogger(__name__)
+
+from dimos.ar.manipulation.errors import ManipulationError, spatial_error_code
 from dimos.ar.manipulation.model import describe_model
 from dimos.ar.manipulation.operation import ManipulationOperation
 from dimos.ar.manipulation.ports import ManipulationBackend
@@ -69,8 +72,23 @@ class ManipulationRuntime:
             return self.command(client_id, request)
         except ValueError as exc:
             message = str(exc)
-            code = exc.code if isinstance(exc, ManipulationError) else "rejected"
-            result: dict[str, Any] = {"status": "rejected", "code": code, "message": message}
+            code = exc.code if isinstance(exc, ManipulationError) else spatial_error_code(message)
+            recoverable = request.get("action") in {"update", "evaluate", "plan"} and code in {
+                "ik_failed",
+                "joint_limit",
+                "collision",
+            }
+            result: dict[str, Any] = {
+                "status": "infeasible" if recoverable else "rejected",
+                "code": code,
+                "message": message,
+            }
+            if isinstance(exc, ManipulationError) and exc.failed_joints:
+                result["failed_joints"] = exc.failed_joints
+            if recoverable and request.get("action") == "update":
+                with self.lock:
+                    if self.session.owner == client_id:
+                        self.clear_following()
             if request.get("action") == "prepare_shutdown":
                 result["quiescent"] = self.session.quiesced
             return result
@@ -133,6 +151,9 @@ class ManipulationRuntime:
                 self.retire()
                 return {"status": "released"}
             if action == "gripper":
+                if self.operation.id is not None:
+                    raise ManipulationError("busy", "wait for the active arm operation")
+                self.operation.outcome = None
                 self.session.generation += 1
                 self.operation.plan = None
                 self.adapter.clear_planned_path()
@@ -141,7 +162,7 @@ class ManipulationRuntime:
                     "status": "completed" if result.succeeded else "rejected",
                     "message": result.message,
                 }
-            if self.session.token is not None:
+            if self.session.token is not None and action != "evaluate":
                 raise ManipulationError("rejected", "release following before another operation")
             execution = self.adapter.get_state().execution_status.name
             if execution in {"ACCEPTED", "EXECUTING", "UNCERTAIN", "FAULT"}:
@@ -154,9 +175,8 @@ class ManipulationRuntime:
                     self.session.stopped = True
                     self.session.stop_confirmed = False
                     raise ManipulationError("rejected", "could not retire prior motion")
-                self.operation.plan = None
+                self.operation.clear()
                 self.session.owner, self.session.group_id = client_id, group
-                self.operation.id = None
                 self.session.token = uuid4().hex
                 self.session.evaluated_at = float("-inf")
                 self.session.sequence = -1
@@ -170,11 +190,26 @@ class ManipulationRuntime:
                     or self.operation.plan["plan_id"] != body["plan_id"]
                 ):
                     raise ManipulationError("retired", "reviewed plan was retired or replaced")
+                endpoint_values = dict(
+                    zip(
+                        self.operation.plan["joint_names"],
+                        self.operation.plan["trajectory"][-1]["positions"],
+                        strict=True,
+                    )
+                )
+                endpoint_pose = self.adapter.endpoint_pose(group, endpoint_values)
                 result = self.adapter.execute(blocking=False, plan_id=body["plan_id"])
                 if result.status.name in {"ACCEPTED", "COMPLETED"}:
-                    self.operation.gripper_error = None
+                    self.operation.outcome = None
+                    self.operation.phase = "motion"
                     self.operation.id = uuid4().hex
                     self.operation.kind = "executing"
+                    self.operation.stalled_at = None
+                    self.operation.progress_pose = None
+                    self.operation.started_at = time.monotonic()
+                    self.operation.settled_at = None
+                    self.operation.group = group
+                    self.operation.endpoint_pose = endpoint_pose
                     self.operation.final_gripper = None
                     self.operation.gripper_completion_at = None
                     if "final_gripper" in self.operation.plan:
@@ -198,14 +233,17 @@ class ManipulationRuntime:
                     else None,
                     "operation_id": self.operation.id,
                 }
+            # Reserve advisory work before changing ownership, plan, or generation.
+            # A rejected concurrent request must not retire the request already running.
+            if not self.planning.acquire(blocking=False):
+                raise ManipulationError("busy", "evaluation or planning already pending")
             if action == "plan":
+                self.operation.clear()
                 self.operation.id = None
                 self.session.owner, self.session.group_id = client_id, group
                 self.operation.plan = None
                 self.session.generation += 1
             epoch = self.session.generation
-        if not self.planning.acquire(blocking=False):
-            raise ManipulationError("busy", "evaluation or planning already pending")
         try:
             if action == "evaluate":
                 if not self.adapter.ready:
@@ -213,6 +251,11 @@ class ManipulationRuntime:
                 evaluation = self.adapter.evaluate(group, self.pose(body))
                 result_body = {
                     "status": "feasible" if evaluation.success else "infeasible",
+                    **(
+                        {"code": self.adapter.evaluation_code(evaluation)}
+                        if not evaluation.success
+                        else {}
+                    ),
                     "message": evaluation.message,
                     "joints": self.joints(evaluation.target_joints),
                     "pose": self.pose_wire(evaluation.group_poses.get(group)),
@@ -237,6 +280,18 @@ class ManipulationRuntime:
                         for p in trajectory.points
                     ],
                     "duration": trajectory.duration,
+                    "pose": self.pose_wire(
+                        self.adapter.endpoint_pose(
+                            group,
+                            dict(
+                                zip(
+                                    trajectory.joint_names,
+                                    trajectory.points[-1].positions,
+                                    strict=True,
+                                )
+                            ),
+                        )
+                    ),
                 }
             with self.lock:
                 if epoch != self.session.generation or client_id in self.session.retired:
@@ -252,7 +307,12 @@ class ManipulationRuntime:
     def update(self, client_id: str, group: str, body: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
             self.require_owner(client_id, group)
-            self.fresh(group)
+            feedback = self.adapter.feedback
+            if (
+                feedback is None
+                or not 0 <= time.time() - feedback.ts <= self.config.feedback_max_age_s
+            ):
+                raise ManipulationError("stale_feedback", "joint feedback is stale or unavailable")
             if self.session.token != body["token"] or self.session.owner != client_id:
                 return {
                     "status": "rejected",
@@ -264,35 +324,31 @@ class ManipulationRuntime:
                 body["sequence"] <= self.session.sequence
                 or not -0.1 <= time.time() - body["ts"] <= 0.5
             ):
-                raise ManipulationError("stale_feedback", "following sample stale or out of order")
+                return {"status": "following", "code": "stale_target", "sequence": body["sequence"]}
             self.session.sequence = body["sequence"]
             self.session.updated_at = time.monotonic()
             epoch = self.session.generation
-            if self.session.updated_at - self.session.evaluated_at < 0.15:
-                return {"status": "following"}
-            self.session.evaluated_at = self.session.updated_at
-        evaluation = None
-        if self.adapter.ready:
-            evaluation = self.adapter.evaluate(group, self.pose(body))
+            key = (*body["position"], *body["orientation"])
+            self.session.target_key = key
+            if key == self.session.rejected_key:
+                return {"status": "following", "sequence": body["sequence"]}
         with self.lock:
             if epoch != self.session.generation or self.session.stopped:
                 return {"status": "rejected", "sequence": body["sequence"], "code": "retired"}
-            if evaluation is not None and not evaluation.success:
-                self.clear_following()
-                return {
-                    "status": "infeasible",
-                    "sequence": body["sequence"],
-                    "code": self.adapter.evaluation_code(evaluation),
-                    "message": evaluation.message or "IK failed",
-                }
             if time.time() - body["ts"] > 0.5:
                 return {"status": "following"}
             task = self.config.following_tasks[group]
-            self.adapter.task_invoke(task, "set_speed_scale", {"value": body["speed_scale"]})
-            self.adapter.task_invoke(
-                task, "on_cartesian_command", {"pose": self.pose(body), "t_now": None}
+            failure = self.adapter.task_invoke(
+                task,
+                "set_target",
+                {
+                    "pose": self.pose(body),
+                    "value": body["speed_scale"],
+                    "t_now": None,
+                },
             )
-            failure = self.adapter.task_invoke(task, "get_failure", {})
+            if isinstance(failure, dict) and failure.get("message"):
+                return {"status": "infeasible", "sequence": body["sequence"], **failure}
             if isinstance(failure, str) and failure:
                 return {
                     "status": "infeasible",
@@ -300,11 +356,61 @@ class ManipulationRuntime:
                     "code": "ik_failed",
                     "message": failure,
                 }
-            return {
-                "status": "feasible",
-                "sequence": body["sequence"],
-                "joints": self.joints(evaluation.target_joints) if evaluation else None,
+            return {"status": "following", "sequence": body["sequence"]}
+
+    def evaluate_following(self, client_id: str, request: dict[str, Any]) -> dict[str, Any]:
+        body = decode_request({**request, "action": "update", "request_id": "advisory"}).payload
+        group = request["group_id"]
+        with self.lock:
+            self.require_owner(client_id, group)
+            if self.session.owner != client_id or self.session.token != body["token"]:
+                return {"status": "following", "code": "retired"}
+            epoch = self.session.generation
+        try:
+            evaluation = self.adapter.evaluate(group, self.pose(body))
+            result = {
+                "status": "feasible" if evaluation.success else "infeasible",
+                "message": evaluation.message,
+                "joints": self.joints(evaluation.target_joints),
+                "pose": self.pose_wire(evaluation.group_poses.get(group)),
             }
+            if not evaluation.success:
+                result["code"] = self.adapter.evaluation_code(evaluation)
+        except Exception as exc:  # noqa: BLE001 — RPC/native errors are protocol replies
+            result = {
+                "status": "infeasible",
+                "code": spatial_error_code(str(exc), "ik_failed"),
+                "message": str(exc),
+            }
+        with self.lock:
+            if epoch != self.session.generation or self.session.token != body["token"]:
+                return {"status": "following", "code": "retired"}
+            key = (*body["position"], *body["orientation"])
+            if (
+                result["status"] == "feasible"
+                and self.session.target_key == key
+                and result.get("joints")
+            ):
+                self.session.rejected_key = None
+                pose = self.pose(body)
+                native_key = [
+                    pose.x,
+                    pose.y,
+                    pose.z,
+                    pose.orientation.x,
+                    pose.orientation.y,
+                    pose.orientation.z,
+                    pose.orientation.w,
+                ]
+                self.adapter.task_invoke(
+                    self.config.following_tasks[group],
+                    "set_validated_target",
+                    {"key": native_key, "joints": result["joints"]},
+                )
+            if result["status"] == "infeasible" and self.session.target_key == key:
+                self.session.rejected_key = key
+                self.clear_following()
+        return result
 
     def pose(self, body: dict[str, Any]) -> PoseStamped:
         position, orientation = self.config.wire_from_world.transform(
@@ -335,7 +441,18 @@ class ManipulationRuntime:
             return {"available": False, "message": "Manipulation runtime is starting"}
         feedback = self.adapter.feedback
         if feedback is None or not 0 <= time.time() - feedback.ts <= self.config.feedback_max_age_s:
-            return {"available": False, "message": "Waiting for arm feedback"}
+            protection = getattr(self.adapter, "protection", None)
+            faulted = isinstance(protection, dict) and protection.get("state") in {
+                "paused",
+                "fault",
+            }
+            return {
+                "available": False,
+                "message": "Waiting for arm feedback",
+                "protection": protection,
+                "stopped": self.session.stopped or faulted,
+                "stop_confirmed": self.session.stop_confirmed,
+            }
         state = self.adapter.get_state()
         if self.descriptor is None:
             self.descriptor = describe_model(
@@ -345,9 +462,34 @@ class ManipulationRuntime:
                 gripper_open_at_lower=self.config.gripper_open_at_lower,
             )
         with self.lock:
+            goal = self.session.target_key
+            tracking = (getattr(self.adapter, "following_status", {}) or {}).get(
+                self.session.group_id
+            )
+            at_target = False
+            if (
+                goal
+                and isinstance(tracking, dict)
+                and tracking.get("arrived")
+                and time.monotonic() - getattr(self.adapter, "following_status_at", 0) < 0.3
+            ):
+                native = self.pose({"position": goal[:3], "orientation": goal[3:]})
+                key = [
+                    native.x,
+                    native.y,
+                    native.z,
+                    native.orientation.x,
+                    native.orientation.y,
+                    native.orientation.z,
+                    native.orientation.w,
+                ]
+                at_target = tracking.get("target_key") is not None and all(
+                    abs(a - b) < 1e-6 for a, b in zip(key, tracking["target_key"], strict=True)
+                )
             return {
                 "available": True,
                 "simulated": bool(global_config.simulation),
+                "protection": getattr(self.adapter, "protection", None),
                 "ts": time.time(),
                 "model": self.descriptor,
                 "root_pose": (
@@ -373,20 +515,45 @@ class ManipulationRuntime:
                         "measured_at": feedback.ts if value.joints else None,
                         "pose": self.pose_wire(value.end_effector_pose),
                         "gripper": value.gripper_position,
+                        "gripper_target": getattr(self.adapter, "gripper_target", None),
+                        "joint_velocities": dict(
+                            zip(value.joints.name, value.joints.velocity, strict=True)
+                        )
+                        if value.joints and getattr(value.joints, "velocity", None)
+                        else {},
                     }
                     for key, value in state.groups.items()
                 },
-                "execution": state.execution_status.name.lower(),
-                "message": self.operation.gripper_error or state.error,
+                "execution": "aborted"
+                if self.operation.failed_id
+                else "completed"
+                if self.operation.completed_id
+                else "executing"
+                if self.operation.id and self.operation.phase == "gripper"
+                else state.execution_status.name.lower()
+                if self.operation.id
+                else "idle",
+                "execution_phase": self.operation.phase
+                if self.operation.id or self.operation.completed_id or self.operation.failed_id
+                else None,
+                "message": self.operation.gripper_error
+                or (getattr(self.adapter, "protection", None) or {}).get("reason")
+                or state.error,
                 "owner": self.session.owner,
                 "following": self.session.token is not None,
+                "following_at_target": at_target,
+                "following_goal": {"position": list(goal[:3]), "orientation": list(goal[3:])}
+                if goal
+                else None,
                 "stopped": self.session.stopped,
                 "stop_confirmed": self.session.stop_confirmed,
                 "plan": self.operation.plan,
                 "operation": self.operation.kind
                 if self.operation.kind in {"resetting", "parking"}
                 else None,
-                "operation_id": self.operation.id,
+                "operation_id": self.operation.id
+                or self.operation.completed_id
+                or self.operation.failed_id,
             }
 
     def disconnect(self, client_id: str) -> None:
@@ -401,18 +568,39 @@ class ManipulationRuntime:
             self.session.stopped = True
             self.session.stop_confirmed = False
             self.retire()
+        try:
+            held = self.adapter.set_estop(True)
+        except Exception:
+            logger.exception("Measured arm hold was not confirmed")
+            held = False
+        with self.lock:
             self.clear_following()
         result = self.adapter.cancel()
-        self.adapter.set_estop(True)
         with self.lock:
-            self.session.stop_confirmed = result.status.name not in {"UNCERTAIN", "FAULT"}
+            self.session.stop_confirmed = held is not False and result.status.name not in {
+                "UNCERTAIN",
+                "FAULT",
+            }
             if self.session.shutdown and self.session.stop_confirmed:
                 self.adapter.quiesce()
                 self.session.quiesced = True
 
     def advance(self) -> None:
+        protection = getattr(self.adapter, "protection", None)
+        if (
+            isinstance(protection, dict)
+            and protection.get("state") in {"paused", "fault"}
+            and not self.session.stopped
+        ):
+            self.emergency_stop()
         with self.lock:
             if self.session.token is not None and time.monotonic() - self.session.updated_at > 0.5:
+                logger.warning(
+                    "Following lease expired: owner=%s sequence=%s age=%.3f",
+                    self.session.owner,
+                    self.session.sequence,
+                    time.monotonic() - self.session.updated_at,
+                )
                 self.clear_following()
                 self.retire()
             if not self.operation.id:

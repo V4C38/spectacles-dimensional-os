@@ -142,3 +142,10 @@ def test_full_tag_orientation_round_trip():
     restored = wire_to_ui_mount(ui_mount_to_wire(mount))
     for key, value in mount.items():
         assert restored[key] == pytest.approx(value)
+
+
+def test_print_size_conversion_removes_float_noise_without_losing_fractional_sizes():
+    from tag_config import black_size_m_from_print_mm, print_mm_from_black_size_m
+
+    assert print_mm_from_black_size_m(0.056) == 70.0
+    assert print_mm_from_black_size_m(black_size_m_from_print_mm(70.25)) == 70.25

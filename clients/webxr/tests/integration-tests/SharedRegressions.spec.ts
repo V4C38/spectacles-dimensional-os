@@ -16,7 +16,7 @@ const value = (page: Page, expression: string) =>
   page.evaluate((expression) => {
     const w = window as any,
       app = w.xb.core.scene.children.find(
-        (o: any) => o.constructor.name === "WebXRApp",
+        (o: any) => o.client?.manipulation,
       );
     return new Function("app", "w", `return (${expression})`)(app, w);
   }, expression);
@@ -63,7 +63,7 @@ for (const id of ids)
         const before = runtime.commands.length;
         await page.evaluate(() => {
           const app = (window as any).xb.core.scene.children.find(
-            (o: any) => o.constructor.name === "WebXRApp",
+            (o: any) => o.client?.manipulation,
           );
           app.client.emergencyStop();
           app.client.ui.sensors.setMode("full");
@@ -109,7 +109,7 @@ for (const id of ids)
         expect((await snapshot(page)).setupCompleted).toBe(false);
         await page.evaluate(() => {
           const app = (window as any).xb.core.scene.children.find(
-            (o: any) => o.constructor.name === "WebXRApp",
+            (o: any) => o.client?.manipulation,
           );
           app.client.camera.jpeg.encode = async () => {
             throw new Error("Fixture camera unavailable");
@@ -240,7 +240,7 @@ for (const id of ids)
           ).toHaveLength(0);
           await page.evaluate(() => {
             const app = (window as any).xb.core.scene.children.find(
-              (o: any) => o.constructor.name === "WebXRApp",
+              (o: any) => o.client?.manipulation,
             );
             app.client.speech.setDraft("A retained message. ".repeat(80));
           });
@@ -296,7 +296,7 @@ for (const id of ids)
             "",
           );
         } else if (id === "sensor_limits") {
-          await activateRuntimeButton(page, "Sensors button");
+          await activateRuntimeButton(page, "Capabilities button");
           await activateRuntimeButton(page, "Full");
           runtime.lidar();
           expect((await snapshot(page)).lidarPreferences.pointLimit).toBe(
@@ -304,7 +304,7 @@ for (const id of ids)
           );
           await page.evaluate(() => {
             const app = (window as any).xb.core.scene.children.find(
-              (o: any) => o.constructor.name === "WebXRApp",
+              (o: any) => o.client?.manipulation,
             );
             for (let i = 0; i < 30; i++) {
               app.client.ui.sensors.adjustRange(-1);
@@ -317,7 +317,7 @@ for (const id of ids)
           });
           await page.evaluate(() => {
             const app = (window as any).xb.core.scene.children.find(
-              (o: any) => o.constructor.name === "WebXRApp",
+              (o: any) => o.client?.manipulation,
             );
             for (let i = 0; i < 30; i++) {
               app.client.ui.sensors.adjustRange(1);

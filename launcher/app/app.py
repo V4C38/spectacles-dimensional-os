@@ -17,12 +17,13 @@ from typing import Annotated, Any, Literal
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from apriltag_assets import decode_marker_id, ensure_pdf, ensure_png
 from armodule import ProcessManager
 from config import env_path, merge_env, normalize_log_level, read_env, repo_root
 from dimos_config import merge_armodule_config, read_armodule_config
+from discovery import discover_devices, validate_replay
 from robot_profiles import RobotProfiles
 from tag_config import (
     DEFAULT_MOUNT,
@@ -76,7 +77,17 @@ class SetupBody(BaseModel):
     dimos_ref: str | None = None
 
 
+class SourceBody(BaseModel):
+    mode: Literal["auto", "device", "manual", "simulated"]
+    device_id: str | None = None
+    address: str | None = None
+    replay: str | None = None
+    playback: Literal["simulator", "recording"] = "simulator"
+    streams: dict[str, str] = Field(default_factory=dict)
+
+
 class StartBody(BaseModel):
+    source: SourceBody | None = None
     profile_id: str | None = None
     simulation: bool = False
     blueprint: Literal["unitree_go2_ar", "unitree_go2_ar_agentic", "openyam_ar_planner"]
@@ -347,14 +358,14 @@ async def api_settings_get() -> dict[str, Any]:
 
 
 @app.get("/api/can/status", dependencies=[Depends(require_local_launcher)])
-async def api_can_status() -> dict[str, Any]:
-    return await manager.can_status()
+async def api_can_status(interface: str = "can0") -> dict[str, Any]:
+    return await manager.can_status(interface) if interface != "can0" else await manager.can_status()
 
 
 @app.post("/api/can/setup", dependencies=[Depends(require_local_launcher)])
-async def api_can_setup() -> dict[str, Any]:
+async def api_can_setup(interface: str = "can0") -> dict[str, Any]:
     try:
-        return await manager.setup_can()
+        return await manager.setup_can(interface) if interface != "can0" else await manager.setup_can()
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -455,6 +466,56 @@ async def api_armodule_start(body: StartBody) -> dict[str, Any]:
     robot_ip = (
         body.robot_ip.strip() if body.robot_ip and body.robot_ip.strip() else None
     )
+    can_port = None
+    replay = None
+    simulation = body.simulation
+    if body.source:
+        if body.simulation and body.source.mode != "simulated":
+            raise HTTPException(status_code=400, detail="Conflicting simulation and hardware selections")
+        source = body.source
+        robot = "openyam" if body.blueprint == "openyam_ar_planner" else "unitree_go2"
+        if source.mode in {"auto", "device"}:
+            devices = await api_discovery(robot)
+            choices = devices["devices"]
+            if source.mode == "device":
+                choices = [d for d in choices if d["id"] == source.device_id]
+            if len(choices) != 1:
+                raise HTTPException(status_code=409, detail={"message": "Choose a robot" if choices else ("No devices found; confirm Simulated with another Start click" if source.mode == "auto" else "Selected device unavailable; refresh or choose another connection"), "suggest_simulated": not choices and source.mode == "auto", "devices": choices})
+            address = choices[0]["address"]
+            if robot == "openyam":
+                can_port = address
+            else:
+                robot_ip = address
+        elif source.mode == "manual":
+            if robot != "unitree_go2" or not source.address:
+                raise HTTPException(status_code=400, detail="Manual IP requires a Go2 address")
+            import ipaddress
+            try:
+                robot_ip = str(ipaddress.IPv4Address(source.address.strip()))
+            except ipaddress.AddressValueError as exc:
+                raise HTTPException(status_code=400, detail="Enter a valid Go2 IPv4 address") from exc
+        else:
+            simulation = robot == "openyam"
+            robot_ip = "simulated" if robot == "unitree_go2" else None
+            replay = source.replay
+            if robot == "openyam" and source.playback == "recording" and not replay:
+                raise HTTPException(status_code=400, detail="Choose an OpenYAM recording")
+            if robot == "openyam" and source.playback == "simulator":
+                replay = None
+            if replay:
+                path = Path(replay).expanduser()
+                if path.suffix != ".db" or not path.is_file():
+                    raise HTTPException(status_code=400, detail="Choose an existing .db replay")
+                replay = str(path.resolve())
+                if not manager.status.dimos_python:
+                    raise HTTPException(status_code=409, detail="Select a DimOS environment first")
+                try:
+                    info = await validate_replay(manager.status.dimos_python, replay, robot, source.streams)
+                    if info["needs_selection"]:
+                        raise ValueError("Select recording streams before starting")
+                    source.streams = info["streams"]
+                except (ValueError, OSError, TimeoutError) as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         await manager.start_armodule(
             blueprint=body.blueprint,
@@ -469,7 +530,9 @@ async def api_armodule_start(body: StartBody) -> dict[str, Any]:
                 if body.profile_id
                 else {}
             ),
-            **({"simulation": True} if body.simulation else {}),
+            **({"simulation": True} if simulation else {}),
+            **({"can_port": can_port} if can_port else {}),
+            **({"replay": replay, "replay_streams": body.source.streams if body.source else {}} if replay else {}),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -479,8 +542,11 @@ async def api_armodule_start(body: StartBody) -> dict[str, Any]:
 
 
 @app.post("/api/armodule/stop", dependencies=[Depends(require_local_launcher)])
-async def api_armodule_stop() -> dict[str, Any]:
-    await manager.stop_armodule()
+async def api_armodule_stop(force: bool = False) -> dict[str, Any]:
+    if force:
+        await manager.stop_armodule(force=True)
+    else:
+        await manager.stop_armodule()
     return manager.snapshot()
 
 
@@ -502,7 +568,7 @@ async def api_events() -> StreamingResponse:
 
 
 class RobotProfileBody(BaseModel):
-    name: str
+    name: str | None = None
     robot: Literal["unitree_go2", "openyam"] = "unitree_go2"
     source_id: str | None = None
 
@@ -527,6 +593,7 @@ async def api_robot_profiles() -> dict[str, Any]:
 
 @app.post("/api/robot-profiles", dependencies=[Depends(require_local_launcher)])
 async def api_create_robot_profile(body: RobotProfileBody) -> dict[str, Any]:
+    _require_profile_editable()
     try:
         return robot_profiles.create(body.robot, body.name, body.source_id)
     except ValueError as exc:
@@ -539,7 +606,10 @@ async def api_create_robot_profile(body: RobotProfileBody) -> dict[str, Any]:
 async def api_rename_robot_profile(
     profile_id: str, body: RobotProfileBody
 ) -> dict[str, Any]:
+    _require_profile_editable()
     try:
+        if body.name is None:
+            raise ValueError("A profile name is required")
         return robot_profiles.update(profile_id, name=body.name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -549,8 +619,83 @@ async def api_rename_robot_profile(
     "/api/robot-profiles/{profile_id}", dependencies=[Depends(require_local_launcher)]
 )
 async def api_delete_robot_profile(profile_id: str) -> dict[str, bool]:
+    _require_profile_editable()
     try:
         robot_profiles.delete(profile_id)
         return {"deleted": True}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/discovery", dependencies=[Depends(require_local_launcher)])
+async def api_discovery(robot: Literal["unitree_go2", "openyam"]) -> dict[str, Any]:
+    python = manager.status.dimos_python
+    if not python:
+        raise HTTPException(status_code=409, detail="Select a DimOS environment first")
+    try:
+        return {"devices": await discover_devices(python, robot)}
+    except (ValueError, OSError, TimeoutError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _require_profile_editable() -> None:
+    if manager.status.phase.value in {"starting", "running", "stopping"}:
+        raise HTTPException(status_code=409, detail="Stop ARModule before editing profiles")
+
+
+class ReplayBody(BaseModel):
+    path: str
+    robot: Literal["unitree_go2", "openyam"]
+    streams: dict[str, str] = Field(default_factory=dict)
+
+
+@app.post("/api/replay/inspect", dependencies=[Depends(require_local_launcher)])
+async def api_inspect_replay(body: ReplayBody) -> dict[str, Any]:
+    if not manager.status.dimos_python:
+        raise HTTPException(status_code=409, detail="Select a DimOS environment first")
+    try:
+        return await validate_replay(manager.status.dimos_python, body.path, body.robot, body.streams)
+    except (ValueError, OSError, TimeoutError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/browse-replay", dependencies=[Depends(require_local_launcher)])
+async def api_browse_replay() -> dict[str, str | None]:
+    if not await asyncio.to_thread(_has_display):
+        raise HTTPException(status_code=409, detail="Enter the local recording path; no desktop chooser is available")
+    if sys.platform == "darwin":
+        command = ["osascript", "-e", 'POSIX path of (choose file with prompt "Select replay database")']
+    else:
+        chooser = shutil.which("zenity")
+        if not chooser:
+            raise HTTPException(status_code=501, detail="Enter a local path or install zenity")
+        command = [chooser, "--file-selection", "--title=Select replay database", "--file-filter=Replay databases | *.db"]
+    proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, _ = await proc.communicate()
+    return {"path": out.decode(errors="replace").strip() if proc.returncode == 0 else None}
+
+
+class PreferencesBody(BaseModel):
+    go2_source: str = "auto"
+    openyam_source: str = "auto"
+    replay: str = ""
+    openyam_replay: str = ""
+    openyam_playback: str = "simulator"
+    replay_streams: dict[str, dict[str, str]] = Field(default_factory=dict)
+    manual_ip: str = ""
+
+
+@app.get("/api/launcher-preferences", dependencies=[Depends(require_local_launcher)])
+async def api_preferences_get() -> dict[str, Any]:
+    import preferences
+
+    return preferences.read()
+
+
+@app.put("/api/launcher-preferences", dependencies=[Depends(require_local_launcher)])
+async def api_preferences_put(body: PreferencesBody) -> dict[str, Any]:
+    import preferences
+
+    _require_profile_editable()
+    preferences.save(body.model_dump())
+    return body.model_dump()

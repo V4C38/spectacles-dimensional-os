@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { glassMaterial } from "./GlassSurface";
+import { DIMOS_AR_DESIGN } from "./DimOSARDesign";
+import { glassMaterial, GlassSurface } from "./GlassSurface";
 import {
   registerRayTarget,
   UI_CONTROL_RAY_PRIORITY,
@@ -11,19 +12,8 @@ export class SpeedSlider extends THREE.Group {
   readonly thumb: THREE.Mesh;
   constructor(readonly width: number) {
     super();
-    const height = width * 0.035;
-    const track = new THREE.Mesh(
-      new THREE.PlaneGeometry(width, height),
-      glassMaterial({
-        width,
-        height,
-        radius: height / 2,
-        tint: "#636366",
-        alpha: 1,
-        rim: 0,
-        rimWidth: 0.001,
-      }),
-    );
+    const height = width * 0.0525;
+    const track = new GlassSurface({width, height, radius: height / 2, thickness: width * 0.012, tint: "#636366", alpha: 1, rim: 0.15});
     this.fill = new THREE.Mesh(
       new THREE.PlaneGeometry(width, height),
       glassMaterial({
@@ -48,14 +38,15 @@ export class SpeedSlider extends THREE.Group {
       }),
     );
     this.thumb = new THREE.Mesh(
-      new THREE.CircleGeometry(width * 0.055, 40),
+      new THREE.CylinderGeometry(width * 0.063, width * 0.063, width * 0.025, 40).rotateX(Math.PI / 2),
       new THREE.MeshBasicMaterial({
         color: 0xffffff,
+        transparent: true,
         depthTest: false,
         depthWrite: false,
       }),
     );
-    this.thumb.position.z = 0.004;
+    this.thumb.position.z = width * 0.025 + 0.004;
     shadow.position.set(0.001, -0.002, -0.001);
     this.thumb.add(shadow);
     this.hit = new THREE.Mesh(
@@ -70,13 +61,19 @@ export class SpeedSlider extends THREE.Group {
     registerRayTarget(this.hit);
     this.add(track, this.fill, this.thumb, this.hit);
     this.traverse((n) => {
-      n.renderOrder = n === this.thumb ? 66 : 65;
+      n.renderOrder = n === this.thumb ? 68 : n === shadow ? 67 : n === this.fill ? 66 : 65;
       if (n !== this.hit) n.raycast = () => {};
       if (n instanceof THREE.Mesh)
         for (const m of Array.isArray(n.material) ? n.material : [n.material])
           m.depthTest = m.depthWrite = false;
     });
-    this.setValue(0.2);
+    this.setValue(0.5);
+  }
+  syncDepth(): void {
+    const scale = Math.max(1e-6, this.getWorldScale(new THREE.Vector3()).z);
+    const thickness = (DIMOS_AR_DESIGN.depth.secondary + DIMOS_AR_DESIGN.depth.controlOverlap) * DIMOS_AR_DESIGN.depth.controlThicknessScale;
+    this.thumb.scale.z = thickness / (this.width * 0.025 * scale);
+    this.thumb.position.z = thickness / (2 * scale);
   }
   setValue(value: number) {
     const t = THREE.MathUtils.clamp((value - 0.05) / 0.95, 0, 1);

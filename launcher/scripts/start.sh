@@ -244,17 +244,7 @@ resolve_robot_ip() {
   echo "Discovering robots on the network..." >&2
   while IFS= read -r line; do
     [[ -n "${line}" ]] && discovered+=("${line}")
-  done < <("${PYTHON}" -c "
-from dimos.robot.unitree.go2.cli.landiscovery import discover
-
-try:
-    devices = discover(timeout=2.0)
-except OSError:
-    devices = []
-
-for device in devices:
-    print(f'{device.serial}\t{device.ip}')
-" 2>/dev/null)
+  done < <("${PYTHON}" "${SCRIPT_DIR}/robot_discovery.py" unitree_go2 --format tsv 2>/dev/null)
 
   count=${#discovered[@]}
 
@@ -357,12 +347,20 @@ if [[ ! -x "${DIMOS_CLI}" ]]; then
   exit 1
 fi
 
+if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" && -n "${REPLAY_DB:-}" ]]; then
+  CLI_BLUEPRINT="dimos-ar.openyam-ar-replay"
+  REPLAY=0
+elif [[ "${REPLAY}" -eq 1 ]]; then
+  CLI_BLUEPRINT="dimos-ar.unitree-go2-ar-replay"
+  REPLAY=0
+fi
 RUN_CMD=("${DIMOS_CLI}")
-if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" && "${DIMOS_AR_SIMULATION:-0}" == "1" ]]; then
+if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" && "${DIMOS_AR_SIMULATION:-0}" == "1" && -z "${REPLAY_DB:-}" ]]; then
   RUN_CMD+=(--simulation=mock)
 fi
 if [[ "${REPLAY}" -eq 1 ]]; then
   RUN_CMD+=(--replay)
+  if [[ -n "${REPLAY_DB:-}" ]]; then RUN_CMD+=(--replay-db "${REPLAY_DB}"); fi
 fi
 RUN_CMD+=(run "${CLI_BLUEPRINT}")
 if [[ -n "${PINNED_IP}" ]]; then
@@ -387,7 +385,7 @@ echo ""
 # A one-off Go2 :8081 /offer refusal usually means the robot-side runtime was
 # still coming up, not that the Lens-side ws://<host>:8787 session is misconfigured.
 
-if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" ]]; then
+if [[ "${SELECTED_BLUEPRINT}" == "openyam_ar_planner" && -z "${REPLAY_DB:-}" ]]; then
   exec "${PYTHON}" "${SCRIPT_DIR}/supervise-arm.py" -- "${RUN_CMD[@]}" < /dev/null
 fi
 exec "${RUN_CMD[@]}" < /dev/null 2> >(grep -v '^objc\[' >&2)

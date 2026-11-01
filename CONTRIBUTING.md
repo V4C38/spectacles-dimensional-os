@@ -658,15 +658,23 @@ SIK/SUK controls with deterministic arm feedback. Specs environment occlusion is
 an explicit deferred platform feature. Physical hardware validation remains separate.
 
 
-Arm meshes and tool ghosts use `ARM_FRESNEL_STYLE`: a 1.5% arm interior and 92%
-edge opacity, with a soft power-5 falloff (tool: 0.8% / 82%). Contours use the shared 12 mm /
-10 mm dash pattern, blending to solid through the same 6–10-pixel transition
-as world strokes. The interior remains continuous through the gaps. WebXR and native
-Specs materials read the same Core constants. Native per-vertex normals are
-exported from the canonical mesh with the same area-weighted averaging used by
-Three.js. Every dotted stroke uses 75% of its former nearby width, including its
-pixel floor, and smoothly recovers the original width through the existing
-6–10-pixel dash-resolution transition. Far-distance antialiasing remains intact.
+Arm previews in both modes use a 5% flat surface and cached shape edges from
+`ManipulationVisuals`: 0.6 mm width, 6 mm dashes and 9 mm gaps. Internal triangle
+diagonals are excluded with a 30-degree crease threshold. Per-link opacity follows
+proposed displacement; recoverable IK errors retain the grab and highlight the
+preview yellow when no failing link is identified; known failing joints color their
+child-link segments red. Preview joints ease independently
+from measured feedback; neither filtered values nor visual FK authorize motion.
+Native adaptive strokes consume world endpoints and have a per-material pixel floor;
+arm edges use 0.75 pixels while other strokes retain their two-pixel default.
+The measured EE sphere alone keeps its faint Fresnel material. Both hosts pick
+the arm mesh with EE-handle priority; no arm selection boxes are drawn. Selected gripper actions
+are drafts until explicit Execute, then run after confirmed arm completion.
+
+Payload decoding failures in a ready session are rejected and reported as bounded
+`client_error` messages to ARModule logs, without reconnecting or clearing localization.
+The session owns manipulation decode health; the existing controller retires arm
+intent when that health fails. Packet IDs and binary layouts are unchanged.
 
 Manipulation runtime updates advance independently of snapshot polling. The optional
 DimOS adapter owns upstream compatibility details; runtime owners use its typed
@@ -675,3 +683,65 @@ WebXR controls and model resources have separate owners under `manipulation/`,
 with robot visual corrections under `manipulation/profiles/`. Asset URLs identify
 resources; explicit model metadata selects articulation and visual profiles.
 Shutdown teardown may skip its stop call only after a `quiescent: true` receipt.
+
+
+ClientCore owns retained validated target/joint snapshots, IK recovery, and motion
+completion after normal unselected release. Hosts own input capture and mesh picking.
+Selected meshes stay fully revealed independently of hover; idle unselected meshes reveal fully on hover.
+Root marker spheres also toggle selection for every robot type. Normal manipulation
+speed defaults to 50%, while shutdown parking remains capped at 20%.
+
+
+Arm mesh visibility uses the shared `ArmMeshFade` opacity animation, independently
+of mesh picking and selection. Selected arm outlines remain present at zero target
+displacement. The small translucent measured EE sphere remains visible whenever
+feedback supplies a pose. Motion paths use full opacity while following, finishing,
+or executing; draft planning paths retain reduced opacity. The near-EE control is
+Execute in selected mode and Open/Close in unselected mode. Arm selection and this
+control require a fresh press; holding a pinch while changing hover targets cannot
+activate either.
+
+### Launcher robot sources and arm arrival
+
+The launcher groups connection information, dependencies (including selected CAN
+setup), blueprint/profile/source, localization, agent credentials, logging and client
+selection in that order. WebXR is the initial client. Profile calibration remains
+independent of the launcher's device/replay choice. Refresh lists Go2 multicast
+identities or CAN connections without enabling motors. An ambiguous Auto selection
+requires a launcher choice; no devices suggests Simulated and requires another
+Start click. Explicit source selections are resolved before starting the child.
+Go2 Simulated uses the default recording or a selected compatible local SQLite
+recording; OpenYAM Simulated offers Simulator and Recording. Replay selection validates
+the actual recorded payloads and requires a stream choice when multiple candidates exist.
+
+Arm surfaces use 35% full-reveal opacity and outlines use 100%, with spatial
+opacity based on each surface point's measured/proposed displacement. EE visuals
+are smaller independently of their hit targets. The measured sphere is half the
+new draggable visual radius. Live following omits the position-step low-pass
+filter while retaining bounded commands and increment smoothing. Executed arm
+arrival can settle within 30 mm / 8 degrees for 0.5 seconds after nominal duration;
+residual execution must be confirmed cancelled before completion is published.
+
+### Manipulation latency checks
+
+The live arm lease and raw feedback must not wait for advisory IK or path planning.
+AR manipulation runs those operations in a separate, hardware-free planning process;
+feedback FK has its own warmed context. Keep the 500 ms input/feedback safety deadlines.
+Late results are bound to the originating lease generation, token, and target sample.
+The diagnostics page includes recent capture termination reasons.
+
+With an explicitly simulated OpenYAM runtime on port 8799, run
+`python dimos-ar/tools/probe_held_ik.py` to hold an unreachable target and correct it
+without releasing, and `python dimos-ar/tools/benchmark_mock_arm.py` to compare three
+runs of drag and Execute at 25%, 50%, and 100%. Both probes refuse physical hardware.
+The benchmark checks median arrival times within 10%; it does not alter Execute limits.
+
+Recorded playback uses the dedicated AR-only replay compositions. It never constructs
+robot hardware or a control coordinator. Arm recordings require complete measured model
+joints; an optional Float32 gripper stream is normalized from 0 (closed) to 1 (open).
+
+Runtime arm controls reuse the main window chrome and gesture policy. Their badge
+remains anchored to the robot independently of the movable controls. Runtime robot
+settings live in Capabilities and are omitted when unavailable. Arm presentation
+interpolates new joint samples with velocity continuity over their preceding arrival interval (capped at 50 ms); raw measured
+feedback remains authoritative for commands, safety, and execution completion.

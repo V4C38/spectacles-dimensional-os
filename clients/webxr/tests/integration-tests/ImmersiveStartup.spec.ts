@@ -22,7 +22,7 @@ import { visiblePointerCount, setSelection, activateButton, pointRuntimeButton, 
 async function captureMenu(page: Page, path: string): Promise<void> {
   await expect.poll(() => page.evaluate(() => {
     const w = window as any;
-    const menu = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu;
+    const menu = w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu;
     return menu.panelProgress >= 0.999 && [...menu.pageTransitions.values()].every((state: any) => state.progress === (state.target ? 1 : 0));
   })).toBe(true);
   await page.evaluate(() => {
@@ -132,7 +132,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await page.screenshot({ path: testInfo.outputPath("landing.png") });
     const cameraAccessRequests = await page.evaluate(denyFirstPermission => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const camera = app.client.camera;
       for (const controller of w.xb.core.input.controllers.slice(0, 2)) {
         const shell = app.mainMenu.setup.mesh.clone();
@@ -183,7 +183,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await page.locator("#enter").click();
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return w.cameraPermissionRequests;
     })).toBe(1);
     // A pending camera permission must never enter immersive mode.
@@ -212,18 +212,18 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await page.locator("#enter").click();
     const ui = () => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return app?.client.ui.snapshot();
     });
     await expect.poll(async () => (await ui())?.wizardTitle, { timeout: 15000 }).toBe("Connect");
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return app?.mainMenu?.setup?.textObj?.textRenderInfo?.glyphBounds.length ?? 0;
     })).toBeGreaterThan(0);
     const visible = await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const button = app.mainMenu.setup;
       const scale = button.getWorldScale(button.scale.clone());
       return { textGap: button.textObj.position.z * button.getWorldScale(button.scale.clone()).z, titleFontHeight: app.mainMenu.title.textObj.fontSize * app.mainMenu.title.textObj.getWorldScale(app.mainMenu.title.scale.clone()).y, panelScale: app.mainMenu.panel.scale.x, panel: app.mainMenu.panel.visible, fontHeight: button.textObj.fontSize * scale.y, opacity: button.opacity };
@@ -237,14 +237,14 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     expect(visible.opacity).toBe(1);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return [...app.interaction.beams.entries()].filter(([controller, beam]: any) => controller.visible && beam.mesh.visible).length;
     })).toBe(0);
     await page.screenshot({ path: testInfo.outputPath(`wizard-${mode}.png`) });
     // Exercise real button callbacks close up and at range, with a 2cm rig occluder present.
     const panelPosition = await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       // This test places the panel at explicit near/far distances. Pin setup
       // follow first so the panel does not move away during the actual press.
       app.setupPlacement.pin();
@@ -253,7 +253,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     for (const distance of [0.15, 3]) {
       await page.evaluate(distance => {
         const w = window as any;
-        w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.panel.position.z = -(distance + 0.25);
+        w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.panel.position.z = -(distance + 0.25);
       }, distance);
       const before = handshakes;
       await activateButton(page, "retry", distance);
@@ -261,7 +261,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       await expect.poll(async () => (await ui())?.wizardCardTitle).toBe("Connected to dimOS ARModule");
       await expect.poll(() => page.evaluate(() => {
         const w = window as any;
-        const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+        const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
         const controller = w.xb.core.input.rightController;
         const beam = app.interaction.beams.get(controller);
         return beam.tip.distanceTo(controller.getWorldPosition(beam.tip.clone())) - app.interaction.hit(controller).distance;
@@ -269,13 +269,13 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     }
     await page.evaluate(position => {
       const w = window as any;
-      w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.panel.position.fromArray(position);
+      w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.panel.position.fromArray(position);
     }, panelPosition);
 
     // Resize by grabbing a corner through real XR selection while setup is open.
     await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const panel = app.mainMenu.panel;
       const corner = app.mainMenu.cornerZones.right;
       const edge = corner.getWorldPosition(panel.position.clone());
@@ -287,11 +287,11 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await setSelection(page, 1);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return Boolean(w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").panelHold);
+      return Boolean(w.xb.core.scene.children.find((object: any) => object.client?.manipulation).panelHold);
     })).toBe(true);
     const resizing = await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
       input.position.x += 0.08;
       return { resize: app.mainMenu.manipulation.resize, scale: app.mainMenu.manipulation.scale };
@@ -299,14 +299,14 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     expect(resizing.resize).toBe(true);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.panel.scale.x;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.panel.scale.x;
     })).toBeGreaterThan(visible.panelScale);
     await page.screenshot({ path: testInfo.outputPath("panel_resize.png") });
     await setSelection(page, 0);
 
     let beforeGrab = await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const panel = app.mainMenu.panel;
       panel.updateWorldMatrix(true, true);
       const local = panel.position.clone().set(0, w.questDevice.primaryInputMode === "controller" ? 0 : 0.42, 0);
@@ -318,7 +318,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return app.mainMenu.ownsTarget(app.interaction.hit(w.xb.core.input.rightController)?.object);
     })).toBe(true);
     await page.evaluate(() => {
@@ -328,11 +328,11 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return Boolean(w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").panelHold);
+      return Boolean(w.xb.core.scene.children.find((object: any) => object.client?.manipulation).panelHold);
     })).toBe(true);
     beforeGrab = await page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp").mainMenu.manipulation.rotation.toArray();
+      return w.xb.core.scene.children.find((o: any) => o.client?.manipulation).mainMenu.manipulation.rotation.toArray();
     });
     await page.evaluate(() => {
       const w = window as any;
@@ -343,12 +343,12 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     });
     await expect.poll(() => page.evaluate(before => {
       const w = window as any;
-      const panel = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.panel;
+      const panel = w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.panel;
       return panel.quaternion.angleTo(panel.quaternion.clone().fromArray(before));
     }, beforeGrab)).toBeGreaterThan(0.3);
     expect(await page.evaluate(() => {
       const w = window as any;
-      const panel = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.panel;
+      const panel = w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.panel;
       return Math.abs(new panel.rotation.constructor().setFromQuaternion(panel.quaternion, "YXZ").z);
     })).toBeLessThan(0.01);
     await page.evaluate(() => {
@@ -358,7 +358,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     });
     await expect.poll(() => page.evaluate(before => {
       const w = window as any;
-      const panel = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.panel;
+      const panel = w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.panel;
       return panel.quaternion.angleTo(panel.quaternion.clone().fromArray(before));
     }, beforeGrab)).toBeLessThan(0.01);
     await page.evaluate(() => {
@@ -391,7 +391,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const controller = w.xb.core.input.rightController;
       const beam = app.interaction.beams.get(controller);
       return controller.visible && beam && !beam.mesh.visible;
@@ -402,7 +402,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     expect((await ui()).localizationIssue).toBeNull();
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const menu = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu;
+      const menu = w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu;
       return menu.preview.userData.frameVersion ?? 0;
     })).toBeGreaterThan(0);
     const localizationView = await frameMenu(page);
@@ -429,7 +429,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await expect.poll(async () => (await ui())?.setupCelebrating).toBe(true);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const menu = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp").mainMenu;
+      const menu = w.xb.core.scene.children.find((o: any) => o.client?.manipulation).mainMenu;
       return menu.success.visible && menu.successRing.geometry.drawRange.count > 0;
     })).toBe(true);
     await expect.poll(async () => (await ui())?.setupSuccessProgress, { intervals: [30, 50, 100] }).toBeGreaterThan(0.95);
@@ -438,7 +438,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await page.waitForTimeout(250);
     await restoreView(page, setupsuccessView);
     await expect.poll(async () => (await ui())?.setupCelebrating).toBe(false);
-    await expect.poll(() => page.evaluate(() => { const w = window as any; return w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp").tracking; })).toBe(true);
+    await expect.poll(() => page.evaluate(() => { const w = window as any; return w.xb.core.scene.children.find((o: any) => o.client?.manipulation).tracking; })).toBe(true);
     // Headset standby changes focus, while the same immersive session continues.
     await page.evaluate(() => {
       const w = window as any;
@@ -455,7 +455,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       session.visibilityState = "visible";
       session.dispatchEvent(new Event("visibilitychange"));
     });
-    await expect.poll(() => page.evaluate(() => { const w = window as any; return w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp").tracking; })).toBe(true);
+    await expect.poll(() => page.evaluate(() => { const w = window as any; return w.xb.core.scene.children.find((o: any) => o.client?.manipulation).tracking; })).toBe(true);
     expect((await ui())?.setupCompleted).toBe(true);
     expect((await ui())?.hasTrackingOrigin).toBe(true);
 
@@ -465,14 +465,14 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await activateRuntimeButton(page, "Dismiss");
     await expect.poll(async () => (await ui()).alignmentReview?.pending).toBe(false);
     await page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       app.client.ui.menuOpen = false;
     });
 
     const captureWorld = async (name: string, aiming: boolean) => {
       const saved = await page.evaluate(aiming => {
         const w = window as any;
-        const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+        const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
         const robot = app.client.robot;
         const position = robot.object.position.clone();
         if (aiming) position.lerp(app.client.navigation.draftMarker.object.position, 0.5);
@@ -488,7 +488,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       }, aiming);
       await expect.poll(() => page.evaluate(({ aiming, dashStyle }) => {
         const w = window as any;
-        const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+        const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
         if (!aiming) return app.client.robot.object.getObjectByName("Robot selection outline").material.opacity >= 0.79;
         const navigation = app.client.navigation;
         const draft = navigation.draftMarker;
@@ -517,7 +517,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     const pointAtRobot = async () => {
       await page.evaluate(() => {
         const w = window as any;
-        const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+        const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
         const collider = app.client.robot.collider;
         const center = collider.getWorldPosition(collider.position.clone());
         const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
@@ -526,34 +526,34 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       });
       await expect.poll(() => page.evaluate(() => {
         const w = window as any;
-        const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+        const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
         return app.interaction.hit(w.xb.core.input.rightController)?.object === app.client.robot.collider;
       })).toBe(true);
     };
     // A near miss must not leave the unselected robot highlighted.
     await page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       const collider = app.client.robot.collider;
       const center = collider.getWorldPosition(collider.position.clone());
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
       input.position.set(center.x + 0.28, center.y, center.z + 0.8); input.quaternion.set(0, 0, 0, 1);
     });
     await expect.poll(() => page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       return { selected: app.client.robot.isSelected(), hovered: app.interaction.hoverTargets().includes(app.client.robot.collider), hits: app.interaction.hoverTargets().map((o: any) => o.name), opacity: app.client.robot.object.getObjectByName("Robot selection outline").material.opacity };
     })).toMatchObject({ selected: false, hovered: false, opacity: 0 });
     await pointAtRobot();
     await setSelection(page, 1);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").client.robot.isSelected();
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.robot.isSelected();
     })).toBe(true);
     await setSelection(page, 0);
     await captureWorld("robot-selected.png", false);
     // Floor aim starts with a separate probe and preserves the robot marker until confirmed.
     await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const robot = app.client.robot.worldPosition();
       const floor = app.client.robot.floorWorldY();
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
@@ -562,7 +562,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const probes = app.client.navigation.probeRoot.children.filter((probe: any) => probe.visible);
       return probes.length > 0 && probes.every((probe: any) => {
         const circle = probe.getObjectByName("Navigation probe circle");
@@ -572,14 +572,14 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       }) && !app.client.navigation.isAiming() && !app.client.route.object.visible;
     })).toBe(true);
     await page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       const robot = app.client.robot.worldPosition(), floor = app.client.robot.floorWorldY();
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.left : w.questDevice.hands.left;
       input.position.set(robot[0] - 1, floor + 0.5, robot[2]);
       input.quaternion.set(-Math.sin(Math.PI / 8), 0, 0, Math.cos(Math.PI / 8));
     });
     await expect.poll(() => page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       return app.client.navigation.interaction.snapshot().probes.length;
     })).toBe(2);
     markVisualReview(page, "floor-probe.png");
@@ -589,7 +589,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     expect(goals).toBe(beforePreviewClick);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return app.client.navigation.isAiming() && app.client.previewRoute.object.visible && app.client.navigation.draftMarker.object.visible;
     })).toBe(true);
     await captureWorld("floor-aim-preview.png", true);
@@ -597,7 +597,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await setSelection(page, 1);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return Boolean(w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").worldHold);
+      return Boolean(w.xb.core.scene.children.find((object: any) => object.client?.manipulation).worldHold);
     })).toBe(true);
     expect(goals).toBe(beforeFloorClick);
     await setSelection(page, 0);
@@ -607,7 +607,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await setSelection(page, 1);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").client.robot.isSelected();
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.robot.isSelected();
     })).toBe(false);
     await setSelection(page, 0);
 
@@ -615,7 +615,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     for (const distance of [0.15, 3]) {
       await page.evaluate(distance => {
         const w = window as any;
-        const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+        const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
         const target = app.client.navigation.marker.pose().position;
         const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
         const offset = distance / Math.sqrt(2);
@@ -624,7 +624,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       }, distance);
       await expect.poll(() => page.evaluate(() => {
         const w = window as any;
-        const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+        const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
         let object = app.interaction.hit(w.xb.core.input.rightController)?.object;
         while (object) {
           if (object === app.client.navigation.marker.object) return true;
@@ -634,7 +634,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       })).toBe(true);
       await expect.poll(() => page.evaluate(() => {
         const w = window as any;
-        const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+        const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
         const controller = w.xb.core.input.rightController;
         const beam = app.interaction.beams.get(controller);
         return beam.tip.distanceTo(controller.getWorldPosition(beam.tip.clone())) - app.interaction.hit(controller).distance;
@@ -642,13 +642,13 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       await setSelection(page, 1);
       await expect.poll(() => page.evaluate(() => {
         const w = window as any;
-        return Boolean(w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").worldHold);
+        return Boolean(w.xb.core.scene.children.find((object: any) => object.client?.manipulation).worldHold);
       })).toBe(true);
       await setSelection(page, 0);
     }
 
     await expect.poll(() => page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       const outline = app.client.robot.object.getObjectByName("Robot selection outline");
       return !app.client.robot.isSelected() && !app.client.robot.hovered &&
         !app.client.navigation.interaction.snapshot().attachedToRobot &&
@@ -657,7 +657,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     // Aim at and drag the navigation marker without detected room planes.
     await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const target = app.client.navigation.marker.pose().position;
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
       input.position.set(target[0], target[1] + 0.5, target[2] + 0.5);
@@ -667,7 +667,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await setSelection(page, 1);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return Boolean(w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").worldHold);
+      return Boolean(w.xb.core.scene.children.find((object: any) => object.client?.manipulation).worldHold);
     })).toBe(true);
     await page.evaluate(() => {
       const w = window as any;
@@ -677,7 +677,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await expect.poll(() => goals).toBeGreaterThan(0);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return [...app.interaction.beams.values()].some((beam: any) => beam.mesh.visible && beam.mesh.material.uniforms.uColor.value.getHex() === 0xffffff);
     })).toBe(true);
     markVisualReview(page, "laser-navigation.png");
@@ -688,7 +688,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       path_poses: [[2, 0, 0, 0], [1.5, 0, 0, 0], [1.1, 0.45, 0, 0]] }) + "\n");
     await expect.poll(() => page.evaluate(dashStyle => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const route = app.client.route.object;
       const dashed = route.children.find((child: any) => child.material?.uniforms?.uDash);
       return route.visible && route.material.color.getHex() === 0xffffff &&
@@ -700,7 +700,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     sendState({ nav: { state: "following_path", outcome: null } });
     const beforeFollowingView = await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       const saved = [w.questDevice.quaternion.x, w.questDevice.quaternion.y, w.questDevice.quaternion.z, w.questDevice.quaternion.w];
       const target = app.client.navigation.marker.object.position.clone();
       const direction = target.sub(target.clone().set(w.questDevice.position.x, w.questDevice.position.y, w.questDevice.position.z)).normalize();
@@ -710,7 +710,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp").client.navigation.marker.object.getObjectByName("NavigationCircle").material.opacity;
+      return w.xb.core.scene.children.find((o: any) => o.client?.manipulation).client.navigation.marker.object.getObjectByName("NavigationCircle").material.opacity;
     })).toBeGreaterThan(0.99);
     await page.waitForTimeout(1200);
     markVisualReview(page, "following-path.png");
@@ -720,7 +720,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     // Selected marker dragging streams goals and finishes without creating a draft.
     const beforeDraftGoals = goals;
     const savedActiveGoal = await page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       app.client.setRobotSelected(true);
       const target = app.client.navigation.marker.pose().position;
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
@@ -736,7 +736,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await page.waitForTimeout(180); await setSelection(page, 0);
     expect(goals).toBeGreaterThan(beforeDraftGoals);
     await expect.poll(() => page.evaluate(saved => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       const navigation = app.client.navigation;
       return !navigation.draftMarker.object.visible && navigation.marker.object.visible &&
         !navigation.interaction.isDragging() && !navigation.interaction.snapshot().draft &&
@@ -744,27 +744,27 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     }, savedActiveGoal)).toBe(true);
     const beforeFloorDraftGoals = goals;
     await page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp"), robot = app.client.robot.worldPosition();
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation), robot = app.client.robot.worldPosition();
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
       input.position.set(robot[0] + 1, app.client.robot.floorWorldY() + 1, robot[2] + 1);
       input.quaternion.set(-Math.sin(Math.PI / 4), 0, 0, Math.cos(Math.PI / 4));
     });
     await expect.poll(() => page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       return app.interaction.hit(w.xb.core.input.rightController)?.object === app.navigationFloor &&
         app.client.navigation.interaction.snapshot().probes.length > 0;
     })).toBe(true);
     await setSelection(page, 1); await setSelection(page, 0);
     await captureWorld("active-and-preview.png", true);
     await page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       app.client.navigation.clearAim(); app.client.setRobotSelected(false);
     });
     expect(goals).toBe(beforeFloorDraftGoals);
 
     // Actual terminal events trace at the goal before reattaching; screenshots and video use normal XR ticks.
     const feedback = () => page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       const snap = app.client.navigation.interaction.snapshot();
       return { flash: snap.flash, progress: snap.feedbackProgress, attached: snap.attachedToRobot };
     });
@@ -777,7 +777,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       }
       // Trace at normal speed, then hold the built glyph while the screenshot is captured.
       await page.evaluate(() => {
-        const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+        const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
         const interaction = app.client.navigation.interaction;
         const tick = interaction.tick.bind(interaction);
         interaction.tick = (now: number, delta: number) => tick(now, Math.min(delta, Math.max(0, 0.54 - interaction.snapshot().feedbackProgress * 0.6)));
@@ -795,13 +795,13 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
 
     await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       app.client.ui.toggleMenu();
     });
     await expect.poll(async () => (await ui())?.menuOpen).toBe(true);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return app.mainMenu.robotName.text;
     })).toBe("dimOS AR");
     await page.screenshot({ path: testInfo.outputPath("runtime.png") });
@@ -809,13 +809,13 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await expect.poll(() => ui().then(snap => snap.robotSelected)).toBe(true);
     expect(await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return app.client.robot.isSelected() && !app.panelHold && app.mainMenu.robotButton.parent === app.mainMenu.robotBadge;
     })).toBe(true);
     await captureMenu(page, testInfo.outputPath("robot-control-menu.png"));
-    await activateRuntimeButton(page, "Sensors button");
+    await activateRuntimeButton(page, "Capabilities button");
     await expect.poll(() => page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       return app.mainMenu.sensorsPage.visible;
     })).toBe(true);
     await activateRuntimeButton(page, "Full");
@@ -826,13 +826,13 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await activateRuntimeButton(page, "Global settings");
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.settingsPage.visible;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.settingsPage.visible;
     })).toBe(true);
     await captureMenu(page, testInfo.outputPath("global-settings.png"));
     await activateRuntimeButton(page, "Diagnostics");
     expect(await page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").client.ui.debugEnabled;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.ui.debugEnabled;
     })).toBe(false);
     await activateRuntimeButton(page, "Done");
     await activateRuntimeButton(page, "Debug · Off");
@@ -841,7 +841,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await activateRuntimeButton(page, "Done");
     await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       app.client.speech.deps.recognition = {
         start: (onText: (text: string, final: boolean) => void, _onError: unknown, _onEnd: unknown, onStarted: () => void) => { w.testTranscript = onText; onStarted(); }, stop() {},
       };
@@ -851,14 +851,14 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await activateRuntimeButton(page, "Agent");
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").client.speech.snapshot().status;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.speech.snapshot().status;
     })).toBe("Ready");
     expect(agentMessages).toHaveLength(0);
     await pointRuntimeButton(page, "Agent dictation field");
     await setSelection(page, 1);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").client.speech.snapshot().status;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.speech.snapshot().status;
     })).toBe("Listening");
     await page.evaluate(() => (window as any).testTranscript("go forward", false));
     expect(agentMessages).toHaveLength(0);
@@ -866,29 +866,29 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await setSelection(page, 0);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").client.speech.snapshot().status;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.speech.snapshot().status;
     })).toBe("Ready");
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.inputLabel.text;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.inputLabel.text;
     })).toBe("go forward");
     await captureMenu(page, testInfo.outputPath("agent-draft.png"));
     await activateRuntimeButton(page, "Send to agent");
     await expect.poll(() => agentMessages.at(-1)).toBe("go forward");
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.agent.text;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.agent.text;
     })).toContain("requested location");
     await captureMenu(page, testInfo.outputPath("agent-control-menu.png"));
     const frontRotation = await page.evaluate(() => {
       const w = window as any;
-      const panel = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp").mainMenu.panel;
+      const panel = w.xb.core.scene.children.find((o: any) => o.client?.manipulation).mainMenu.panel;
       const saved = panel.quaternion.toArray(); panel.rotateY(Math.PI / 3); return saved;
     });
     await captureMenu(page, testInfo.outputPath("oblique-menu.png"));
     await page.evaluate(q => {
       const w = window as any;
-      w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp").mainMenu.panel.quaternion.fromArray(q);
+      w.xb.core.scene.children.find((o: any) => o.client?.manipulation).mainMenu.panel.quaternion.fromArray(q);
     }, frontRotation);
 
 
@@ -898,23 +898,23 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       await setSelection(page, 1);
       await expect.poll(() => page.evaluate(() => {
         const w = window as any;
-        return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").client.speech.snapshot().status;
+        return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.speech.snapshot().status;
       })).toBe("Listening");
       await page.evaluate(words => (window as any).testTranscript(words, true), words);
       await setSelection(page, 0);
       await expect.poll(() => page.evaluate(() => {
         const w = window as any;
-        return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").client.speech.snapshot().status;
+        return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.speech.snapshot().status;
       })).toBe("Ready");
     }
     expect(await page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").client.speech.snapshot().prompt;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.speech.snapshot().prompt;
     })).toBe("first second");
     await activateRuntimeButton(page, "Clear");
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").client.speech.snapshot().prompt;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.speech.snapshot().prompt;
     })).toBe("");
     expect(agentMessages).toHaveLength(1);
 
@@ -923,23 +923,23 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     const longReply = "The doorway is clear. I checked the route and found enough clearance to proceed. ".repeat(24);
     await page.evaluate(text => {
       const w = window as any;
-      w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").client.speech.setDraft(text);
+      w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.speech.setDraft(text);
     }, longDraft);
     socket!.send(JSON.stringify({ type: "agent_message", text: longReply }) + "\n");
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const menu = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu;
+      const menu = w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu;
       return menu.inputLabel.maxScroll > 0 && menu.agent.maxScroll > 0;
     })).toBe(true);
     expect(await page.evaluate(() => {
       const w = window as any;
-      const menu = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu;
+      const menu = w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu;
       return [menu.inputLabel.text.length, menu.agent.text.length];
     })).toEqual([longDraft.length, longReply.trim().length]);
     await captureMenu(page, testInfo.outputPath("long-messages.png"));
     await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const hit = app.mainMenu.inputLabel.scrollHit;
       const p = hit.getWorldPosition(hit.position.clone());
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
@@ -947,13 +947,13 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return app.interaction.hit(w.xb.core.input.rightController)?.object === app.mainMenu.inputLabel.scrollHit;
     })).toBe(true);
     await setSelection(page, 1);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return !!w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").scrollHold;
+      return !!w.xb.core.scene.children.find((object: any) => object.client?.manipulation).scrollHold;
     })).toBe(true);
     await page.evaluate(() => {
       const w = window as any;
@@ -962,13 +962,13 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return app.mainMenu.inputLabel.scrollOffset > 0 && app.client.speech.snapshot().status !== "Listening";
     })).toBe(true);
     await setSelection(page, 0);
     await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const hit = app.mainMenu.agent.bodyHit;
       const p = hit.getWorldPosition(hit.position.clone());
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
@@ -976,7 +976,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return app.interaction.hit(w.xb.core.input.rightController)?.object === app.mainMenu.agent.bodyHit;
     })).toBe(true);
     if (mode === "controller") {
@@ -985,13 +985,13 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       await setSelection(page, 1);
       await expect.poll(() => page.evaluate(() => {
         const w = window as any;
-        return !!w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").scrollHold;
+        return !!w.xb.core.scene.children.find((object: any) => object.client?.manipulation).scrollHold;
       })).toBe(true);
       await page.evaluate(() => { (window as any).questDevice.hands.right.position.y += 0.035; });
     }
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.agent.scrollOffset;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.agent.scrollOffset;
     })).toBeGreaterThan(0);
     if (mode === "controller") await page.evaluate(() => (window as any).questDevice.controllers.right.updateAxis("thumbstick", "y-axis", 0));
     else await setSelection(page, 0);
@@ -1004,12 +1004,12 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await setSelection(page, 1);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").client.speech.snapshot().status;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.speech.snapshot().status;
     })).toBe("Listening");
     const pointLeft = async (name: string) => {
       await page.evaluate(name => {
         const w = window as any;
-        const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+        const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
         let button: any;
         app.mainMenu.panel.traverse((node: any) => { if (node.text === name && node.ux) button = node; });
         const p = button.getWorldPosition(button.position.clone());
@@ -1019,7 +1019,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       }, name);
       await expect.poll(() => page.evaluate(() => {
         const w = window as any;
-        const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+        const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
         return app.interaction.hit(w.xb.core.input.leftController)?.object === w.leftTarget;
       })).toBe(true);
     };
@@ -1034,7 +1034,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await pointLeft("EMERGENCY STOP"); await pressLeft(1);
     await expect.poll(() => estops).toBe(beforeStop + 1);
     expect(await page.evaluate(() => {
-      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       return app.client.ui.estopPressed && app.client.notifications.object.visible;
     })).toBe(true);
     await page.waitForTimeout(180);
@@ -1042,7 +1042,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await page.screenshot({ path: testInfo.outputPath("emergency-stop.png") });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").client.speech.snapshot().status;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).client.speech.snapshot().status;
     })).not.toBe("Listening");
     await pressLeft(0); await setSelection(page, 0); await page.waitForTimeout(80);
     expect(estops).toBe(beforeStop + 1);
@@ -1051,7 +1051,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     expect((await ui()).robotSelected).toBe(true);
     const menuBelowEyes = await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return w.questDevice.position.y - app.mainMenu.panel.position.y;
     });
     expect(menuBelowEyes).toBeCloseTo(0.18, 2);
@@ -1066,13 +1066,13 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
       input.connected = true;
     });
-    await expect.poll(() => page.evaluate(() => { const w = window as any; return w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp").tracking; })).toBe(true);
+    await expect.poll(() => page.evaluate(() => { const w = window as any; return w.xb.core.scene.children.find((o: any) => o.client?.manipulation).tracking; })).toBe(true);
 
     // Summoning binds the menu to its source; grabbing explicitly pins it in the world.
     await activateRuntimeButton(page, "Close");
     const orientPalm = async (up: boolean) => page.evaluate(async up => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       await new Promise<void>((resolve, reject) => app.session.requestAnimationFrame((_time: number, frame: XRFrame) => {
         try {
           const source = Array.from(app.session.inputSources as XRInputSource[]).find(source => source.handedness === "left" && source.hand)!;
@@ -1098,45 +1098,45 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     }
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return app.client.ui.menuOpen ? app.menuAnchor.source?.handedness ?? "pinned" : "closed";
     })).toBe("left");
     if (mode === "controller") await page.evaluate(() => (window as any).questDevice.controllers.left.updateButtonValue("x-button", 0));
     await page.waitForTimeout(250);
     const anchorX = await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.left : w.questDevice.hands.left;
       input.position.x += 0.12;
       return app.mainMenu.panel.position.x;
     });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.panel.position.x;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.panel.position.x;
     })).toBeGreaterThan(anchorX + 0.10);
     await captureMenu(page, testInfo.outputPath("source-anchored-menu.png"));
     await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const p = app.mainMenu.barZone.getWorldPosition(app.mainMenu.panel.position.clone());
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.right : w.questDevice.hands.right;
       input.position.set(p.x, p.y, p.z + 0.4); input.quaternion.set(0, 0, 0, 1);
     });
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return app.interaction.hit(w.xb.core.input.rightController)?.object === app.mainMenu.barZone;
     })).toBe(true);
     await setSelection(page, 1);
     await expect.poll(() => page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       return !!app.panelHold && app.menuAnchor.source === null;
     })).toBe(true);
     await setSelection(page, 0);
     const pinned = await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const input = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers.left : w.questDevice.hands.left;
       input.position.x += 0.15;
       return app.mainMenu.panel.position.toArray();
@@ -1145,26 +1145,26 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await page.waitForTimeout(250);
     expect(await page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.panel.position.toArray();
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.panel.position.toArray();
     })).toEqual(pinned);
     expect((await ui()).menuOpen).toBe(true);
 
     const initialMenuX = await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       w.questDevice.quaternion.set(0, Math.sin(Math.PI / 8), 0, Math.cos(Math.PI / 8));
       return app.mainMenu.panel.position.x;
     });
     await page.waitForTimeout(200);
     expect(await page.evaluate(() => {
       const w = window as any;
-      return w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp").mainMenu.panel.position.x;
+      return w.xb.core.scene.children.find((object: any) => object.client?.manipulation).mainMenu.panel.position.x;
     })).toBeCloseTo(initialMenuX);
     await page.evaluate(() => (window as any).questDevice.quaternion.set(0, 0, 0, 1));
 
     const markerParts = await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       const origin = app.client.originStore.T_odom_client;
       app.client.markers.apply({ id: "preview", x: 1, y: 0, z: 0, title: "Docking point" }, origin);
       const marker = app.client.markers.object.children[0];
@@ -1177,7 +1177,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     expect(markerParts).toBe(true);
     await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
       w.xb.core.scene.background = app.client.robot.collider.material.color.clone().setHex(0x182028);
       document.body.style.background = "#182028";
       document.querySelector("canvas")!.style.background = "#182028";

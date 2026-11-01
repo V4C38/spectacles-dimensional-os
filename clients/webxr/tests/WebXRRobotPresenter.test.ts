@@ -253,3 +253,18 @@ it("plays the exact same box animation backward over the same duration", () => {
   robot.tick(0.06); expect(outline.scale.length()).toBeCloseTo(0);
   robot.dispose();
 });
+
+it("picks the root sphere independently of the robot body", () => {
+  const robot = new WebXRRobotPresenter();
+  try {
+    robot.object.visible = true;
+    robot.object.updateMatrixWorld(true);
+    expect(robot.ownsTarget(robot.markerCollider)).toBe(true);
+    expect(robot.ownsTarget(robot.collider)).toBe(true);
+    expect(robot.markerCollider.geometry.type).toBe("SphereGeometry");
+    const ray = new THREE.Raycaster(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1));
+    expect(ray.intersectObject(robot.markerCollider).length).toBeGreaterThan(0);
+    ray.ray.origin.x = 0.05;
+    expect(ray.intersectObject(robot.markerCollider)).toHaveLength(0);
+  } finally { robot.dispose(); }
+});

@@ -130,7 +130,7 @@ it.each(["settings", "sensors", "diagnostics", "alignment"] as const)("fits the 
   f.internals.sensorsOpen = name === "sensors";
   f.internals.detailsOpen = name === "diagnostics";
   f.apply(name === "alignment" ? { alignmentReview: { reason: "Tracking resumed", pending: true } } : {}); f.settle();
-  expect(f.internals.heightController.height).toBe(RUNTIME_LAYOUTS[name].height);
+  expect(f.internals.heightController.height).toBe(name === "sensors" ? (f.view as any).capabilityProfile.height : RUNTIME_LAYOUTS[name].height);
   const bottom = 0.38 - f.internals.heightController.height;
   f.view.panel.traverse(node => {
     for (let parent: THREE.Object3D | null = node; parent; parent = parent.parent) if (!parent.visible) return;
@@ -157,7 +157,7 @@ it("keeps space above Emergency Stop through every runtime page resize", () => {
         const center = f.internals.appearanceRoot.worldToLocal(node.getWorldPosition(new THREE.Vector3()));
         const scale = node.getWorldScale(new THREE.Vector3()).y / f.internals.appearanceRoot.getWorldScale(new THREE.Vector3()).y;
         const bottom = center.y - node.rangeY * scale / 2;
-        expect((bottom - footerTop) * 0.76).toBeGreaterThanOrEqual(RUNTIME_FOOTER_GAP - 1e-8);
+        expect((bottom - footerTop) * 0.76, `${page}: ${node.text}`).toBeGreaterThanOrEqual(RUNTIME_FOOTER_GAP - 1e-8);
       });
     }
   }

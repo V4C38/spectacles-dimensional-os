@@ -39,12 +39,14 @@ function vector(value: unknown, count: number): number[] {
     throw new Error("Invalid manipulation vector");
   return value.map(finite);
 }
-function pose(value: unknown): void {
+function pose(value: unknown, path = "pose"): void {
+  try {
   const p = object(value);
   vector(p.position, 3);
   const q = vector(p.orientation, 4);
   if (Math.abs(q.reduce((s, v) => s + v * v, 0) - 1) > 1e-4)
     throw new Error("Expected unit quaternion");
+  } catch (error) { throw new Error(`${path}: ${error instanceof Error ? error.message : String(error)}`); }
 }
 function joints(value: unknown): void {
   for (const v of Object.values(object(value))) finite(v);
@@ -86,6 +88,11 @@ export function decodeManipulation(
     if (data.quiescent !== undefined && typeof data.quiescent !== "boolean")
       throw new Error("Invalid shutdown acknowledgment");
     if (data.code !== undefined) text(data.code);
+    if (data.failed_joints !== undefined) {
+      if (!Array.isArray(data.failed_joints) || data.failed_joints.length > 256)
+        throw new Error("Invalid failed joints");
+      data.failed_joints.forEach(text);
+    }
     if (
       data.sequence !== undefined &&
       (!Number.isSafeInteger(data.sequence) || Number(data.sequence) < 0)
@@ -98,6 +105,17 @@ export function decodeManipulation(
     if (data.pose != null) pose(data.pose);
     if (data.plan_id !== undefined) plan(data);
   } else {
+    if (data.execution_phase != null && !["motion", "gripper"].includes(String(data.execution_phase))) throw new Error("Invalid execution phase");
+    if (data.following_at_target !== undefined && typeof data.following_at_target !== "boolean") throw new Error("Invalid following arrival flag");
+    if (data.following_goal != null) pose(data.following_goal);
+    if (data.protection != null) {
+      const p = object(data.protection);
+      if (!["normal", "derated", "paused", "fault"].includes(String(p.state))) throw new Error("Invalid protection state");
+      const scale = finite(p.effective_speed_scale);
+      if (scale < 0 || scale > 1) throw new Error("Invalid protection scale");
+    }
+    if (data.read_only !== undefined && typeof data.read_only !== "boolean")
+      throw new Error("Invalid manipulation read-only flag");
     if (typeof data.available !== "boolean")
       throw new Error("Invalid manipulation availability");
     if (
@@ -206,11 +224,13 @@ export function decodeManipulation(
         )
           throw new Error("Invalid group capabilities");
       }
-      for (const raw of Object.values(object(data.observations))) {
+      for (const [name, raw] of Object.entries(object(data.observations))) {
         const observation = object(raw);
         if (observation.joints != null) joints(observation.joints);
+        if (observation.gripper_target != null) { finite(observation.gripper_target); if (Number(observation.gripper_target)<0 || Number(observation.gripper_target)>1) throw new Error("Invalid gripper target"); }
+        if (observation.joint_velocities != null) for (const value of Object.values(object(observation.joint_velocities))) finite(value);
         if (observation.measured_at != null) finite(observation.measured_at);
-        if (observation.pose != null) pose(observation.pose);
+        if (observation.pose != null) pose(observation.pose, `observations.${name}.pose`);
         if (observation.gripper != null) finite(observation.gripper);
       }
       if (data.plan != null) plan(object(data.plan));

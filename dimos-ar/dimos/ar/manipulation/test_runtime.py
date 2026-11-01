@@ -1,3 +1,4 @@
+import math
 import threading
 import time
 from types import SimpleNamespace
@@ -22,7 +23,10 @@ def runtime():
     module.zero = JointZeroOperation(module)
     module.adapter = SimpleNamespace(ready=False, feedback=SimpleNamespace(ts=time.time()))
     module.config = SimpleNamespace(
-        feedback_max_age_s=0.5, following_tasks={"arm": "follow"}, wire_from_world=ReferencePose()
+        feedback_max_age_s=0.5,
+        following_tasks={"arm": "follow"},
+        wire_from_world=ReferencePose(),
+        model=SimpleNamespace(model=SimpleNamespace(load=lambda: SimpleNamespace(xml="<robot/>"))),
     )
     observed = SimpleNamespace(joints=SimpleNamespace(ts=time.time()))
     module.adapter.get_state = Mock(
@@ -30,6 +34,7 @@ def runtime():
             groups={"arm": observed}, execution_status=SimpleNamespace(name="IDLE")
         )
     )
+    module.adapter.endpoint_pose = Mock(return_value=None)
     module.adapter.task_invoke = Mock()
     module.adapter.set_estop = Mock()
     module.adapter.quiesce = Mock()
@@ -66,12 +71,12 @@ def test_follow_owner_ordering_release_and_retired_token():
         "orientation": [0, 0, 0, 1],
     }
     command(module, "update", **update)
-    with pytest.raises(ValueError, match="out of order"):
-        command(module, "update", **update)
+    received_at = module.session.updated_at
+    assert command(module, "update", **update)["code"] == "stale_target"
+    assert module.session.updated_at == received_at
     module.adapter.get_state().groups["arm"].joints.ts = 0
     command(module, "release", token=token)  # stale feedback must never block release
-    with pytest.raises(ValueError):
-        command(module, "update", **update)
+    assert command(module, "update", **update)["code"] == "retired"
     assert module.adapter.task_invoke.call_args.args[1] == "clear"
 
 
@@ -79,7 +84,12 @@ def test_exact_plan_binding_and_stop_resume():
     module = runtime()
     module.session.owner = "a"
     module.session.group_id = "arm"
-    module.operation.plan = {"plan_id": "reviewed"}
+    module.operation.plan = {
+        "plan_id": "reviewed",
+        "joint_names": ["joint"],
+        "trajectory": [{"positions": [0.2]}],
+        "duration": 1,
+    }
     with pytest.raises(ValueError, match="retired or replaced"):
         command(module, "execute", plan_id="replacement")
     module.adapter.execute.assert_not_called()
@@ -314,7 +324,7 @@ def test_follow_factory_uses_the_model_velocity_limits(monkeypatch):
 
     model = make_openyam_model_config()
     captured = {}
-    monkeypatch.setattr(following, "SpeedScaledPoseTargetSolver", lambda config: None)
+    monkeypatch.setattr(following, "SpeedScaledPoseTargetSolver", lambda config: SimpleNamespace())
     monkeypatch.setattr(
         following,
         "SpeedScaledCartesianIKTask",
@@ -332,6 +342,7 @@ def test_follow_factory_uses_the_model_velocity_limits(monkeypatch):
     config = captured["config"]
     assert config.joint_velocity_limits_rad_s == dict.fromkeys(model.joint_names, 1.0)
     assert config.max_joint_velocity_rad_s == 1.0
+    assert config.max_command_tracking_error_deg == 10.0
 
 
 def test_deferred_gripper_uses_the_official_coordinator_bridge():
@@ -551,7 +562,9 @@ def test_follow_ik_failure_keeps_lease_and_recovers(monkeypatch):
     module.adapter.ready = True
     module.adapter.evaluation_code = lambda evaluation: "joint_limit"
     token = command(module, "acquire")["token"]
-    outcome = SimpleNamespace(success=False, message="joint limits", target_joints=None)
+    outcome = SimpleNamespace(
+        success=False, message="joint limits", target_joints=None, group_poses={}
+    )
     module.adapter.evaluate = lambda *args: outcome
     body = {
         "token": token,
@@ -560,15 +573,20 @@ def test_follow_ik_failure_keeps_lease_and_recovers(monkeypatch):
         "position": [0, 0, 0.3],
         "orientation": [0, 0, 0, 1],
     }
-    failed = command(module, "update", **body)
+    assert command(module, "update", **body)["status"] == "following"
+    failed = module.evaluate_following("a", {"group_id": "arm", **body})
     assert failed["status"] == "infeasible"
     assert failed["code"] == "joint_limit"
     assert module.session.token == token
+    assert module.session.rejected_key is not None
     outcome.success = True
     outcome.target_joints = SimpleNamespace(name=["joint"], position=[0.2])
     module.session.evaluated_at = float("-inf")
-    recovered = command(module, "update", **{**body, "sequence": 2})
+    corrected = {**body, "sequence": 2, "position": [0.01, 0, 0.3]}
+    command(module, "update", **corrected)
+    recovered = module.evaluate_following("a", {"group_id": "arm", **corrected})
     assert recovered["joints"] == {"joint": 0.2}
+    assert module.session.rejected_key is None
     assert module.session.token == token
     command(module, "release", token=token)
     assert module.session.token is None
@@ -585,20 +603,22 @@ def test_follow_solver_does_not_hold_ownership_lock_against_stop(monkeypatch):
     def evaluate(request):
         entered.set()
         assert release.wait(3)
-        return SimpleNamespace(success=True, target_joints=None)
+        return SimpleNamespace(success=True, group_poses={}, target_joints=None)
 
     module.adapter.evaluate = lambda group, pose: evaluate(pose)
     replies = []
     worker = threading.Thread(
         target=lambda: replies.append(
-            command(
-                module,
-                "update",
-                token=token,
-                sequence=1,
-                ts=time.time(),
-                position=[0, 0, 0.3],
-                orientation=[0, 0, 0, 1],
+            module.evaluate_following(
+                "a",
+                {
+                    "group_id": "arm",
+                    "token": token,
+                    "sequence": 1,
+                    "ts": time.time(),
+                    "position": [0, 0, 0.3],
+                    "orientation": [0, 0, 0, 1],
+                },
             )
         )
     )
@@ -612,7 +632,7 @@ def test_follow_solver_does_not_hold_ownership_lock_against_stop(monkeypatch):
         worker.join(3)
     assert replies[0]["code"] == "retired"
     assert not any(
-        call.args[1] == "on_cartesian_command" for call in module.adapter.task_invoke.call_args_list
+        call.args[1] == "set_target" for call in module.adapter.task_invoke.call_args_list
     )
 
 
@@ -669,7 +689,7 @@ def test_failed_streaming_solver_holds_target_until_it_changes(monkeypatch):
     clear.assert_called_once()
     task.on_cartesian_command(point)
     assert submit.call_count == 1
-    assert task.get_failure() == "QP failed"
+    assert task.get_failure() == {"code": "ik_failed", "message": "QP failed", "failed_joints": []}
     point.position.z = 0.2
     task.on_cartesian_command(point)
     assert submit.call_count == 2
@@ -688,6 +708,7 @@ def test_quiesced_teardown_does_not_cancel_into_a_closed_coordinator(monkeypatch
     native._closing = False
     native._lifecycle_stop = threading.Event()
     native._lifecycle_thread = None
+    native._auxiliary_thread = None
     original = SimpleNamespace(cancel=Mock(), close=Mock())
     native._execution_manager = original
 
@@ -794,3 +815,249 @@ def test_snapshot_does_not_actuate_a_completed_deferred_gripper():
     module.adapter.set_gripper_position.assert_not_called()
     module.advance()
     module.adapter.set_gripper_position.assert_called_once_with(1.0, planning_group="arm")
+
+
+def test_recoverable_ik_exception_retains_lease_and_clears_only_motion_target(monkeypatch):
+    from dimos.ar.manipulation.errors import ManipulationError
+
+    module = runtime()
+    module.adapter.ready = True
+    token = command(module, "acquire")["token"]
+
+    def fail(*args):
+        raise ManipulationError("ik_failed", "IK did not converge")
+
+    module.adapter.evaluate = fail
+    failed = module.evaluate_following(
+        "a",
+        {
+            "action": "update",
+            "group_id": "arm",
+            "token": token,
+            "sequence": 1,
+            "ts": time.time(),
+            "position": [0, 0, 0.3],
+            "orientation": [0, 0, 0, 1],
+        },
+    )
+    assert failed["status"] == "infeasible"
+    assert module.session.token == token
+    assert module.session.owner == "a"
+
+
+@pytest.mark.parametrize(
+    "message", ["IK failed", "unreachable target", "no solution", "infeasible target"]
+)
+def test_backend_spatial_failure_messages_have_recoverable_codes(message):
+    from dimos.ar.manipulation.adapter import DimOSManipulationAdapter
+
+    assert DimOSManipulationAdapter.error_code(message) == "ik_failed"
+    assert DimOSManipulationAdapter.error_code("connection retired") == "rejected"
+
+
+def test_follow_commands_continue_between_feasibility_checks():
+    module = runtime()
+    module.adapter.ready = True
+    token = command(module, "acquire")["token"]
+    module.session.evaluated_at = time.monotonic()
+    module.adapter.evaluate = Mock(side_effect=AssertionError("Evaluation should be throttled"))
+    module.adapter.task_invoke.return_value = None
+    result = command(
+        module,
+        "update",
+        token=token,
+        sequence=1,
+        ts=time.time(),
+        position=[0, 0, 0.3],
+        orientation=[0, 0, 0, 1],
+        speed_scale=0.5,
+    )
+    assert result["status"] == "following"
+    assert any(call.args[1] == "set_target" for call in module.adapter.task_invoke.call_args_list)
+    assert module.session.token == token
+
+
+def test_delayed_follow_evaluation_cannot_clear_reacquired_gesture():
+    module = runtime()
+    module.adapter.ready = True
+    token = command(module, "acquire")["token"]
+    entered, release = threading.Event(), threading.Event()
+
+    def evaluate(*args):
+        entered.set()
+        assert release.wait(3)
+        return SimpleNamespace(
+            success=False, message="IK failed", target_joints=None, group_poses={}
+        )
+
+    module.adapter.evaluate = evaluate
+    results = []
+    body = {
+        "group_id": "arm",
+        "token": token,
+        "sequence": 1,
+        "ts": time.time(),
+        "position": [100, 0, 100],
+        "orientation": [0, 0, 0, 1],
+    }
+    worker = threading.Thread(target=lambda: results.append(module.evaluate_following("a", body)))
+    worker.start()
+    try:
+        assert entered.wait(2)
+        command(module, "release", token=token)
+        replacement = command(module, "acquire")["token"]
+        module.adapter.task_invoke.reset_mock()
+        release.set()
+        worker.join(3)
+        assert results[0]["code"] == "retired"
+        assert module.session.token == replacement
+        module.adapter.task_invoke.assert_not_called()
+    finally:
+        release.set()
+        worker.join(3)
+
+
+@pytest.mark.parametrize("speed", [0.25, 0.5, 1.0])
+def test_live_steps_preserve_model_velocity_acceleration_and_settle(speed):
+    import numpy as np
+
+    from dimos.ar.manipulation.following import create_task
+    from dimos.control.coordinator import TaskConfig
+    from dimos.msgs.sensor_msgs.JointState import JointState
+    from dimos.robot.manipulators.openyam.config import make_openyam_model_config
+
+    model = make_openyam_model_config()
+    task = create_task(
+        TaskConfig(
+            name="follow",
+            type="ar_cartesian_ik",
+            joint_names=model.joint_names,
+            params={"robot_model": model, "target_frame": "gripper_tip"},
+        ),
+        None,
+    )
+    solver = task._solver
+    solver.speed_scale = speed
+    initial = np.array(model.home_joints)
+    goal = initial.copy()
+    goal[0] += 0.2
+    solver.target_joints = dict(zip(model.joint_names, goal, strict=True))
+    target = solver.frame_poses(
+        JointState(name=list(model.joint_names), position=goal.tolist()), ["gripper_tip"]
+    )["gripper_tip"]
+    previous = initial
+    velocity = np.zeros_like(initial)
+    for _ in range(250):
+        command = solver.step(
+            {"gripper_tip": target},
+            JointState(name=list(model.joint_names), position=previous.tolist()),
+            0.01,
+        )
+        assert command is not None, solver.failure
+        current = np.array(command.position)
+        next_velocity = (current - previous) / 0.01
+        assert np.all(np.abs(next_velocity) <= speed + 1e-7)
+        assert np.all(np.abs(next_velocity - velocity) <= 2 * speed * 0.01 + 1e-7)
+        previous, velocity = current, next_velocity
+    actual = solver.frame_poses(
+        JointState(name=list(model.joint_names), position=previous.tolist()), ["gripper_tip"]
+    )["gripper_tip"]
+    assert (
+        np.linalg.norm(np.array(actual.position.to_tuple()) - np.array(target.position.to_tuple()))
+        < 0.005
+    )
+    dot = abs(
+        sum(
+            getattr(actual.orientation, a) * getattr(target.orientation, a)
+            for a in ("x", "y", "z", "w")
+        )
+    )
+    assert 2 * math.acos(min(1, dot)) < math.radians(3)
+
+
+def test_successful_recheck_unpauses_the_same_previously_rejected_target():
+    module = runtime()
+    module.adapter.ready = True
+    module.adapter.evaluation_code = lambda evaluation: "ik_failed"
+    token = command(module, "acquire")["token"]
+    body = {
+        "group_id": "arm",
+        "token": token,
+        "sequence": 1,
+        "ts": time.time(),
+        "position": [0, 0, 0.3],
+        "orientation": [0, 0, 0, 1],
+    }
+    module.dispatch("a", {**body, "action": "update"})
+    outcome = SimpleNamespace(
+        success=False, message="IK failed", target_joints=None, group_poses={}
+    )
+    module.adapter.evaluate = lambda *args: outcome
+    assert module.evaluate_following("a", body)["status"] == "infeasible"
+    assert module.session.rejected_key is not None
+    outcome.success = True
+    outcome.target_joints = SimpleNamespace(name=["joint"], position=[0.2])
+    assert module.evaluate_following("a", body)["status"] == "feasible"
+    assert module.session.rejected_key is None
+    module.adapter.task_invoke.reset_mock()
+    module.adapter.task_invoke.return_value = None
+    assert (
+        module.dispatch("a", {**body, "action": "update", "sequence": 2})["status"] == "following"
+    )
+    module.adapter.task_invoke.assert_called_once()
+    assert module.adapter.task_invoke.call_args.args[1] == "set_target"
+    assert module.session.token == token
+
+
+def test_tracking_derating_does_not_latch_emergency_stop():
+    module = runtime()
+    module.adapter.protection = {"state": "derated", "reason": "Tracking stall"}
+    module.advance()
+    assert not module.session.stopped
+    module.adapter.set_estop.assert_not_called()
+
+
+def test_emergency_hold_precedes_task_cancellation():
+    module = runtime()
+    calls = []
+    module.adapter.set_estop.side_effect = lambda _: calls.append("hold") or True
+    result = module.adapter.cancel.return_value
+    module.adapter.cancel.side_effect = lambda: calls.append("cancel") or result
+    module.emergency_stop()
+    assert calls == ["hold", "cancel"]
+    assert module.session.stopped
+    assert module.session.stop_confirmed
+
+
+def test_unconfirmed_measured_hold_cannot_be_reported_as_confirmed():
+    module = runtime()
+    module.adapter.set_estop.return_value = False
+    module.emergency_stop()
+    assert module.session.stopped
+    assert not module.session.stop_confirmed
+
+
+def test_failed_hold_rpc_still_latches_session_and_cancels_motion():
+    module = runtime()
+    module.adapter.set_estop.side_effect = TimeoutError("hardware RPC timed out")
+    module.emergency_stop()
+    assert module.session.stopped
+    assert not module.session.stop_confirmed
+    module.adapter.cancel.assert_called_once()
+
+
+def test_resume_refreshes_cached_protection_before_runtime_can_advance():
+    from dimos.ar.manipulation.adapter import DimOSManipulationAdapter
+
+    native = SimpleNamespace(config=SimpleNamespace(), _control_coordinator=Mock(), reset=Mock())
+    native._control_coordinator.protection_resume.return_value = True
+    recovered = {"state": "normal", "effective_speed_scale": 1.0}
+    native._control_coordinator.protection_status.return_value = recovered
+    adapter = DimOSManipulationAdapter(native)
+    adapter.protection = {"state": "paused", "reason": "Motor temperature"}
+    adapter.reset()
+    module = runtime()
+    module.adapter.protection = adapter.protection
+    module.advance()
+    module.adapter.set_estop.assert_not_called()
+    native.reset.assert_called_once()

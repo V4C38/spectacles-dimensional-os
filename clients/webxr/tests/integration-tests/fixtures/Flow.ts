@@ -62,7 +62,7 @@ export class Flow {
         .evaluate(() => {
           const w = window as any,
             app = w.xb?.core.scene.children.find(
-              (o: any) => o.constructor.name === "WebXRApp",
+              (o: any) => o.client?.manipulation,
             );
           return {
             ui: app?.client.ui.snapshot(),

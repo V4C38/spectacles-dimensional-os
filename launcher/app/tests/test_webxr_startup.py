@@ -20,6 +20,7 @@ BANNER = "WebSocket: ws://0.0.0.0:8787 (not listening yet — booting DimOS stac
 
 class Child:
     def __init__(self) -> None:
+        self.pid = 42424243
         self.stdout = asyncio.StreamReader()
         self.returncode: int | None = None
         self.exited = asyncio.Event()

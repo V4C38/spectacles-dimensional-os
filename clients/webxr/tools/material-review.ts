@@ -1,4 +1,5 @@
-import { ARM_FRESNEL_STYLE as STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
+import { ARM_VISUAL_STYLE as STYLE, armShapeEdges } from "@dimos-ar-client/manipulation/ManipulationVisuals";
+import { fresnelMaterial } from "../src/presentation/PoseIndicatorMaterial";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { armMaterial } from "../src/manipulation/ArmMaterial";
@@ -19,7 +20,7 @@ export async function renderMaterialReview(kind: "arm" | "strokes", baseline: bo
   document.body.style.cssText = "margin:0;background:#24292e;font-family:Arial,sans-serif;color:#edf4f9;overflow:hidden";
   const heading = document.createElement("div");
   heading.style.cssText = "position:fixed;left:40px;top:26px;font-size:28px;font-weight:600;line-height:1.5";
-  heading.innerHTML = `${baseline ? "CURRENT" : "PROPOSED"} · ${kind === "arm" ? "Dotted arm contours" : "Adaptive dotted strokes"}<div style="font-size:17px;font-weight:400;color:#b3c0ca">${kind === "arm" ? baseline ? "Fill 22% · maximum edge 72% · falloff power 1.8" : `Fill ${STYLE.fill * 100}% · maximum edge ${STYLE.edgeOpacity * 100}% · dotted soft contour (power ${STYLE.power})` : baseline ? "Current width and pixel floor at both distances" : "25% thinner nearby · original width restored through the existing distance transition"}</div>`;
+  heading.innerHTML = `${baseline ? "CURRENT" : "PROPOSED"} · ${kind === "arm" ? "Dotted arm contours" : "Adaptive dotted strokes"}<div style="font-size:17px;font-weight:400;color:#b3c0ca">${kind === "arm" ? baseline ? "Fill 22% · maximum edge 72% · falloff power 1.8" : `Fill ${STYLE.fill * 100}% · thin dotted feature edges` : baseline ? "Current width and pixel floor at both distances" : "25% thinner nearby · original width restored through the existing distance transition"}</div>`;
   document.body.append(heading);
   const strokes: AdaptiveDashedLineRenderer[] = [];
   if (kind === "arm") {
@@ -34,19 +35,22 @@ export async function renderMaterialReview(kind: "arm" | "strokes", baseline: bo
       const node = gltf.scene.getObjectByName(link.name);
       if (!node) continue;
       node.removeFromParent(); node.position.set(0, 0, 0); node.quaternion.identity(); node.scale.setScalar(1);
-      node.traverse(part => {
-        if (!(part instanceof THREE.Mesh)) return;
+      const surfaces: THREE.Mesh[] = [];
+      node.traverse(part => { if (part instanceof THREE.Mesh) surfaces.push(part); });
+      for (const part of surfaces) {
         part.geometry = part.geometry.clone();
         if (!part.geometry.getAttribute("normal")) part.geometry.computeVertexNormals();
         part.geometry.applyMatrix4(basis);
         if (link.name === model.root) part.geometry.rotateY(Math.PI / 2);
-        const material = armMaterial();
-        if (baseline) {
-          material.fragmentShader = material.fragmentShader.replace("contourCoverage(-vView, normalize(vNormal), normalize(vView))", "1.0");
-          material.uniforms.uFill.value = 0.22; material.uniforms.uRim.value = 0.5; material.uniforms.uPower.value = 1.8;
+        const material = baseline ? fresnelMaterial({ fill: 0.22, rim: 0.5, power: 1.8 }) : armMaterial();
+        if (!baseline) {
+          const p = part.geometry.getAttribute("position");
+          const edge = new AdaptiveDashedLineRenderer(STYLE.widthM, STYLE.dashM, STYLE.gapM, STYLE.minimumPixels);
+          edge.setSegments(armShapeEdges(Array.from(p.array), part.geometry.index ? Array.from(part.geometry.index.array) : Array.from({ length: p.count }, (_, i) => i)));
+          part.add(edge.object); strokes.push(edge);
         }
         part.material = material;
-      });
+      }
       const pose = clientTrackingToWebxrPose(poses[link.name]);
       node.position.fromArray(pose.position); node.quaternion.fromArray(pose.orientation); arm.add(node);
     }

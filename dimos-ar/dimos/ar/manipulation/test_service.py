@@ -166,3 +166,43 @@ async def test_emergency_stop_uses_the_service_task_owner():
     await asyncio.gather(*service._tasks)
     runtime.ar_manipulation_stop.assert_called_once()
     await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["update", "evaluate", "plan"])
+@pytest.mark.parametrize(
+    "message,code",
+    [
+        ("Pink IK did not converge within the iteration budget", "ik_failed"),
+        ("Pink IK candidate violates DimOS joint limits", "joint_limit"),
+        (
+            "Pink IK solver failed: QP solver did not find a solution to the differential IK problem",
+            "ik_failed",
+        ),
+    ],
+)
+async def test_recorded_ik_rpc_exceptions_reach_wire_as_recoverable_results(action, message, code):
+    import json
+    from unittest.mock import Mock
+
+    runtime = Mock(spec=["ar_manipulation_command"])
+    runtime.ar_manipulation_command.side_effect = ValueError(message)
+    packets = []
+    service = ManipulationService(
+        runtime, lambda client, packet: packets.append(json.loads(packet)), lambda _: None
+    )
+    service.connect("owner")
+    request = ManipulationRequest("target-7", action, "arm", {"sequence": 7, "ts": 0})
+    await service._dispatch(request, "owner", 0)
+    assert packets == [
+        {
+            "type": "manipulation_result",
+            "request_id": "target-7",
+            "group_id": "arm",
+            "action": action,
+            "status": "infeasible",
+            "code": code,
+            "message": message,
+            **({"sequence": 7} if action == "update" else {}),
+        }
+    ]

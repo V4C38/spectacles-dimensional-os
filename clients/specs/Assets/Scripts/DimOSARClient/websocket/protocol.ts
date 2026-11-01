@@ -189,6 +189,14 @@ export function encodeLocalizationObservations(
   return out;
 }
 
+export interface DecodeContext { message_type: string; message_ts?: number; request_id?: string }
+export class ProtocolDecodeError extends Error {
+  constructor(readonly context: DecodeContext, detail: string, readonly excerpt?: string) { super(detail); this.name = "ProtocolDecodeError"; }
+}
+export function encodeClientError(report: import("./protocolTypes").ClientError): string {
+  return encodeText(report);
+}
+
 export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
   let parsed: unknown;
   try {
@@ -199,6 +207,7 @@ export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
   const data = asObject(parsed, "Frame");
   const msgType = requireString(data, "type");
 
+  try {
   switch (msgType) {
     case "manipulation_state":
     case "manipulation_result":
@@ -221,6 +230,20 @@ export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
       return decodeAgentSkill(data);
     default:
       throw new Error(`Unknown outbound frame type: '${msgType}'`);
+  }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const field = detail.split(":")[0];
+    let section: string | undefined;
+    if (/^[a-zA-Z_][\w]*(?:\.[\w]+)+$/.test(field)) {
+      let value: unknown = data;
+      for (const part of field.split(".")) value = value && typeof value === "object" ? (value as Record<string, unknown>)[part] : undefined;
+      if (value !== undefined) section = JSON.stringify({ field, value });
+    }
+    throw new ProtocolDecodeError({ message_type: msgType,
+      ...(typeof data.ts === "number" && Number.isFinite(data.ts) ? { message_ts: data.ts } : {}),
+      ...(typeof data.request_id === "string" ? { request_id: data.request_id.slice(0, 128) } : {}) },
+      detail, section);
   }
 }
 
@@ -435,6 +458,17 @@ function decodeIntrinsics(data: Record<string, unknown>): Intrinsics {
   });
 }
 
+function decodeSource(data: Record<string, unknown>): NonNullable<Hello["source"]> {
+  if (data.kind !== "recording") throw new Error("Invalid source kind");
+  return { kind: "recording", read_only: requireBoolean(data, "read_only"), name: requireString(data, "name") };
+}
+function decodePlayback(data: Record<string, unknown>): NonNullable<State["playback"]> {
+  if (data.state !== "playing" && data.state !== "ended") throw new Error("Invalid playback state");
+  const elapsed_s = finiteField(data, "elapsed_s"), duration_s = finiteField(data, "duration_s");
+  if (elapsed_s < 0 || duration_s < elapsed_s) throw new Error("Invalid playback progress");
+  return { state: data.state, elapsed_s, duration_s };
+}
+
 function decodeHello(data: Record<string, unknown>): Hello {
   const timeSyncRaw = asObject(requireKey(data, "time_sync"), "time_sync");
   const time_sync: TimeSync = {
@@ -443,6 +477,7 @@ function decodeHello(data: Record<string, unknown>): Hello {
   };
   return {
     type: "hello",
+    ...(data.source === undefined ? {} : { source: decodeSource(asObject(data.source, "source")) }),
     client_id: requireString(data, "client_id"),
     ...(data.odom_reference_id === undefined ? {} : { odom_reference_id: requireString(data, "odom_reference_id") }),
     ...(data.server_info === undefined ? {} : { server_info: decodeServerInfo(asObject(data.server_info, "server_info")) }),
@@ -530,6 +565,7 @@ function decodeState(data: Record<string, unknown>): State {
   }
   return {
     type: "state",
+    ...(data.playback === undefined ? {} : { playback: decodePlayback(asObject(data.playback, "playback")) }),
     server: { connected_clients: connectedClients },
     ...(data.nav_preview_costmap_ts === undefined ? {} : { nav_preview_costmap_ts: finiteField(data, "nav_preview_costmap_ts") }),
     lidar: requireLidarSettings(
@@ -859,3 +895,9 @@ function asciiBytes(text: string): Uint8Array {
 
 // ManipulationProtocol validates shutdown quiescence receipts and explicit model
 // visual metadata at this shared boundary; see dimos-ar/PROTOCOL.md.
+
+// Manipulation results may carry optional failed_joints identifiers for segment feedback.
+
+// Manipulation observations optionally carry joint_velocities and gripper_target;
+// execution_phase (motion/gripper) resolves before the single terminal outcome.
+// See dimos-ar/PROTOCOL.md and ManipulationProtocol.ts for validation.

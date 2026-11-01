@@ -175,7 +175,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
 
     const parent = this.getSceneObject();
     this.manipulation = new SpecsManipulationController(session, () => clientTrackingOriginStore.T_odom_client,
-      parent, this.cameraObject, () => this.selection.toggle(), () => this.emergencyStop());
+      parent, this.cameraObject, () => this.selection.toggle(), () => this.emergencyStop(), () => this.uiPresenter?.realign());
     this.lasers = new SpecsLaserPresenter(parent, readSikLaserPointers);
     const navGoalPresenter = new NavGoalPresenter(parent);
     const navigationController = new NavigationController({
@@ -293,6 +293,10 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       cameraObject: this.cameraObject,
       selection: this.selection,
       emergencyStop: () => this.emergencyStop(),
+      manipulationDiagnostics: () => JSON.stringify(this.manipulation?.core.interaction.captureEvents ?? []),
+      manipulationSpeed: () => this.manipulation?.core.interaction.speedScale ?? 0.5,
+      setManipulationSpeed: value => this.manipulation?.core.interaction.setSpeedScale(value),
+      manipulationEnabled: () => this.manipulation?.core.interaction.snapshot().canManipulate ?? false,
       onModeChanged: () => { this.selection.clear(); this.navigationInput?.reset(); },
     });
     this.uiPresenter.start();
@@ -349,7 +353,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     this.unsubscribeView = session.subscribeView(view => {
       const prevView = this.lastSessionView; this.lastSessionView = view;
       this.uiPresenter.onSessionView(view, prevView);
-      if (view.connection !== "ready") { this.selection.clear(); this.speechController?.reset(); }
+      if (view.connection !== "ready" && !this.manipulation?.core.interaction.retainingFeedback) { this.selection.clear(); this.speechController?.reset(); }
       roomPresentationDirty = true;
     });
     let lastOrigin: ClientTrackingOrigin | null = null;
@@ -387,6 +391,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       const controls = setup && !this.uiPresenter.isAlignmentReviewPending() && this.uiPresenter.getOperatingMode() === "manual" && view.connection === "ready";
       const navigationEnabled = controls && view.capabilities?.navigation.available === true;
       const armOnly = view.capabilities?.manipulation?.available === true && !view.capabilities.navigation.available;
+      if (this.manipulation) this.manipulation.renderer.debugEnabled = this.uiPresenter.getDebugMode();
       this.manipulation?.tick(controls && !!origin);
       if (armOnly) robotPresenter.reset();
       navigationController.setInputEnabled(navigationEnabled);
@@ -434,7 +439,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
 
   private syncSelectionEligibility(): void {
     this.selection.setEligible(this.uiPresenter.isSetupCompleted() &&
-      !this.uiPresenter.isAlignmentReviewPending() && this.session?.view().connection === "ready");
+      !this.uiPresenter.isAlignmentReviewPending() && (this.session?.view().connection === "ready" || this.manipulation?.core.interaction.retainingFeedback));
   }
 
   private maybeSendClientPose(): void { this.posePublisher?.tick(); }

@@ -7,7 +7,8 @@ clients update their protocol module in the same change.
 
 ## Conventions
 
-- **19 message types** — 9 outbound, 10 inbound. Inventory is below.
+- **Message types** — control, telemetry, optional manipulation, and client diagnostics.
+  Inventory is below.
 - **Wire frame is `odom`** — the robot's drifting leg-odometry frame, in
   DimOS's right-handed Z-up axes. ARModule performs **no axis conversion**. Each
   client converts on receipt; clients do not share one scene convention.
@@ -824,6 +825,7 @@ stale returns `No client pose`.
 | `lidar_settings_request` | `agent_message` |
 | `user_message_request` | `agent_skill` |
 | `client_pose` | |
+| `client_error` | |
 
 **Inbound naming.** Commands use `*_request` (`nav_goal_request`,
 `estop_request`, `user_message_request`). Unsolicited telemetry uses a bare
@@ -954,7 +956,7 @@ explicit `group_id`. Supported actions:
 | Action | Additional fields | Meaning |
 |---|---|---|
 | `evaluate` | `position`, `orientation` | Nonmoving endpoint IK/collision evaluation; does not replace a plan |
-| `plan` | `position`, `orientation`, optional `speed_scale` (default 0.2) | Generate and retain a checked, timed plan |
+| `plan` | `position`, `orientation`, optional `speed_scale` (default 0.5) | Generate and retain a checked, timed plan |
 | `execute` | `plan_id` | Execute exactly the reviewed pending plan |
 | `cancel` | none | Retire owned planning/control and cancel execution |
 | `acquire` | none | Acquire following without commanding a new target |
@@ -1005,8 +1007,8 @@ Environment-depth data is host-local and is never part of this protocol.
 ### Manipulation target execution and parking
 
 `manipulation_request` adds `reset_joints` and `prepare_shutdown`, both using the
-existing `request_id`, `group_id`, and optional `speed_scale` (default 0.2, in
-(0, 1]). They plan a collision-checked joint-zero arm move, preserving the gripper,
+existing `request_id`, `group_id`, and optional `speed_scale` in (0, 1].
+Reset defaults to 0.5; shutdown parking defaults to 0.2. They plan a collision-checked joint-zero arm move, preserving the gripper,
 and reply only after fresh joint feedback confirms zero within 0.02 radians for
 0.5 seconds, or report failure. They never clear emergency stop. Shutdown parking
 is capped at 20% and a 55-second operation budget inside the supervisor’s
@@ -1025,8 +1027,9 @@ Manipulation `plan` may include `final_gripper` in [0,1]. It is bound to that
 plan ID and issued only after successful execution and fresh feedback within
 0.02 rad of its endpoint. Cancel, E-stop, replacement, failure, and ownership
 retirement discard deferred gripper intent. Selected target edits do not send
-immediate gripper commands. Pressing Open/Close executes the current target with
-`final_gripper`; at the measured pose it sends a direct `gripper` request. Optional visual joint `limits` describe lower/upper
+immediate gripper commands. In selected mode Open/Close only edits the draft;
+Execute explicitly starts the checked motion with `final_gripper`. A gripper-only
+draft also requires Execute. Unselected Open/Close remains immediate. Optional visual joint `limits` describe lower/upper
 positions for gripper-only articulation.
 
 
@@ -1042,13 +1045,14 @@ using the existing `operation_id` for correlation. `observations.*.measured_at` 
 the accepted source joint-sample timestamp, not the time a snapshot is requested.
 
 Following update results may contain `sequence` (the original update sequence),
-`joints`, and a short machine-readable `code`. At approximately 150 ms intervals,
+`joints`, and a short machine-readable `code`. At most 20 times per second,
 validated targets return `status: "feasible"` and the IK joint configuration.
 `status: "infeasible"` with `code: "ik_failed"` or `"joint_limit"` holds motion while
 retaining the following lease. New reachable input can recover within the same grab.
 Lease/ownership loss remains `rejected`; stale samples never command motion.
 
-Selected advisory plans are serialized and coalesced at a minimum 350 ms interval.
+Selected advisory IK evaluations are serialized and coalesced at a minimum 50 ms interval.
+Full path planning runs on release, Preview, or Execute.
 The client retains the last valid preview while computing its replacement; an older
 preview is never executable for a newer target, speed, or final-gripper intent.
 
@@ -1077,6 +1081,89 @@ the standard lower-to-upper articulation; URLs do not select articulation policy
 Visual metadata does not change planning geometry or authorize motion.
 
 The following solver accepts the documented wire speed range `(0, 1]`; the WebXR
-slider retains its 5–100% range and 20% default. Parking remains capped at 20%.
+slider retains its 5–100% range and 50% default. Parking remains capped at 20%.
 Runtime lease expiry and deferred gripper completion advance independently of
 WebSocket observation requests. Snapshot reads do not issue control commands.
+
+### Client decode error reports
+
+A ready client rejects invalid JSON application messages without closing its connection.
+It may send `client_error` containing string fields `message_type` (maximum 128
+characters), `detail` (1024), and `excerpt` (512). The server logs the report with
+client identity and its receipt timestamp, without replying or replaying messages.
+Reports include `ts` in the existing synchronized server clock, optional original
+`message_ts` and existing `request_id`. The first error is reported immediately;
+identical type/detail signatures are deduplicated for five seconds with an optional
+`suppressed_count` on the next report. History is bounded to 32 signatures. Binary
+decode errors use a short hexadecimal header excerpt. Message IDs are not introduced.
+Malformed manipulation content disables arm input until valid state and cancellation
+confirmation return; localization and unrelated session facts remain intact.
+
+
+### Mesh interaction and target recovery
+
+Arm selection uses the articulated mesh and root sphere, without displayed selection
+boxes. ClientCore owns the shared visibility and interaction policy for both hosts.
+`manipulation_result` optionally carries `failed_joints`, at most 256 nonempty joint
+identifiers. A missing list provides no joint attribution. Recoverable IK, joint-limit,
+and collision failures use `infeasible` for update, evaluation, and planning; they
+preserve capture and ownership rather than invalidate session health. An invalid
+mesh remains at its last validated configuration in yellow, with identified child-link
+segments red. Rendered/FK values never authorize motion.
+
+Normal unselected grab release retains the final target and keeps sending validated
+updates under the current lease. An invalid final target falls back to the last
+validated target. The arm finishes moving there independently of hand capture. Fresh
+feedback within 5 mm and 1.5 degrees for 0.5 seconds releases the lease; the marker
+retains its target. The client cancels after a 55-second completion deadline. Stop,
+tracking/session loss, selection changes, and reset interrupt completion; the existing
+500 ms lease expiry still applies if updates cease. Selected release never authorizes
+motion: Execute remains required. Both clients default normal motion to 50%.
+
+Recorded playback uses `hello.source = {kind: "recording", read_only: true,
+name: <filename>}`. `state.playback` reports `{state: "playing" | "ended",
+elapsed_s, duration_s}` in seconds at 1× speed, once. At EOF the final observation
+is held; restarting the launcher run restarts playback. Recording compositions
+have no hardware or control coordinator. Navigation and agent capabilities are
+unavailable. Arm recordings still publish the visual model and observations,
+with `manipulation_state.read_only: true`; every manipulation request is rejected
+with `code: "read_only"`. Both hosts disable arm interactions for that state.
+Recorded timestamps are rebased to server time for observation freshness.
+
+Arm manipulation state may include `protection`: `state` (normal, derated, paused, fault), `reason`, affected `joints`, `effective_speed_scale` (0–1), and `resumable`. This is additive; absence preserves legacy behavior. A hard motor fault never automatically re-enables motors.
+
+Launcher shutdown accepts `POST /api/armodule/stop?force=true` to bypass a pending graceful stop. Force stop omits parking and terminates the owned runtime tree. Server execution completion retains the matching `operation_id`; clients may retire the matching executed draft without a second arrival test.
+
+`manipulation_state.following_at_target` optionally reports a fresh measured arrival/hold from the live controller, correlated by `following_goal` (wire pose). It does not release the grab. Clients compare this goal to current intent before showing Idle or completing a normal release; older runtimes omit both fields.
+
+Execution arrival uses fresh measured feedback within 30 mm and 8 degrees for 0.5 seconds.
+The protected trajectory remains scheduled while holding its final endpoint; nominal
+trajectory completion alone is not measured arrival. After two seconds without
+meaningful progress during the final endpoint phase, confirmed cancellation emits
+`execution: "aborted"`, the corresponding `operation_id`, and `message: "Target not reached"`.
+Clients retain the planned target for retry. Deferred gripper changes run only after
+successful arrival, never after an aborted move. These use the existing wire fields.
+
+### Arm observation continuity and operation phases
+
+Optional observation fields `joint_velocities` (finite joint-name/value map in rad/s
+or m/s) and `gripper_target` (accepted normalized command, or null) accompany raw
+joint feedback. `gripper` remains measured opening: an object can prevent full
+closure without failing a successful command. Clients publish no hardware targets
+when feedback exceeds 500 ms. They retain the grab, draft, current model and paused
+Preview for up to two seconds of feedback or connection loss; the local target can
+continue following the hand. Recovery invalidates checked plans and following
+leases. Reconnection never clears motor Stop or resumes it automatically.
+
+`execution_phase` is optionally `motion`, `gripper`, or null. An executed plan has
+one operation ID and one terminal outcome, published after its deferred gripper
+command acknowledges. Motion can complete within 30 mm / 8 degrees after nominal
+trajectory duration, with 500 ms of fresh settled feedback and confirmed cancellation
+of residual motion. This tolerance never authorizes IK, planning, or joint limits.
+Deferred gripper actions run once; a rejected action fails the whole operation.
+
+Selected dragging requests nonmoving seeded IK at most 20 Hz, one in flight with
+newest intent coalesced. Release, Preview and Execute request a checked full path.
+Presentation uses update-timed Hermite interpolation with velocity continuity,
+a 50 ms interpolation cap and at most 30 ms of bounded visual prediction. Filtered
+positions never enter control or completion checks.

@@ -5,7 +5,7 @@ import { frameMenu } from "./fixtures/Input";
 async function state(page: Page, overrides: Record<string, unknown>, subpage = "main", advance = 0.28) {
   return page.evaluate(({ overrides, subpage, advance }) => {
     const w = window as any;
-    const app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     const menu = app.mainMenu;
     w.adaptiveSnapshot = { ...w.adaptiveBase,
       ...(overrides.setupCompleted ? { robotSelectable: true, robotSelected: true, agentAvailable: true, estopAvailable: true } : {}),
@@ -33,7 +33,7 @@ test("adaptive setup and runtime panels keep a fixed top through resizing", asyn
   await frameMenu(page);
   await page.evaluate(() => {
     const w = window as any;
-    const app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     app.setupPlacement.pin(); app.menuAnchor.detach();
     w.adaptiveBase = { ...app.client.ui.snapshot(), setupCompleted: false, setupCelebrating: false, menuOpen: true,
       connectComplete: false, connectionTone: "muted", operatingMode: "manual", wizardStep: "connect", localizationIssue: null,
@@ -96,7 +96,7 @@ test("adaptive setup and runtime panels keep a fixed top through resizing", asyn
     await capture("runtime-alignment");
     await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
       app.client.notifications.show({ text: "Emergency stop requested", tone: "danger", glyph: "stop", priority: 100, durationS: 30 });
     });
     await capture("notification-upward-tilt");

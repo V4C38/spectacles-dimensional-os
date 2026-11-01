@@ -47,6 +47,7 @@ export interface DimOSWebXRClientDeps {
 export class DimOSWebXRClient {
   readonly notifications = new ViewerNotificationPresenter();
   private stopFeedbackRemaining = 0;
+  private localizationBaseline: {origin: ClientTrackingOrigin; reference: string | undefined; hello: unknown} | null = null;
   readonly speech: AgentDraftSession;
   readonly session: ARModuleSession;
   readonly episode: LocalizationCaptureEpisode;
@@ -106,6 +107,7 @@ export class DimOSWebXRClient {
         const status = this.speech?.snapshot().status;
         return { ttsPlaying: status === "Responding", asrRunning: status === "Listening" };
       });
+    this.ui.manipulationDiagnostics = () => JSON.stringify(this.manipulation.interaction.captureEvents);
     this.speech = new AgentDraftSession({
       recognition: deps.recognition ?? null, synthesis: deps.synthesis ?? null,
       send: text => this.ui.sendAgentText(text), estop: () => this.emergencyStop(),
@@ -139,7 +141,7 @@ export class DimOSWebXRClient {
       if (view.connection === "ready" && view.alignmentRequired && !view.hasTrackingOrigin && this.ui.setupCompleted) {
         this.ui.requestAlignmentReview("Robot connection changed; re-localize to continue");
       }
-      if (view.connection !== "ready") {
+      if (view.connection !== "ready" && !this.manipulation.interaction.retainingFeedback) {
         this.loseInput();
         this.setRobotSelected(false);
         this.speech.reset();
@@ -191,6 +193,7 @@ export class DimOSWebXRClient {
     const visibleDeltaS = this.lastTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastTickAt));
     this.stopFeedbackRemaining = Math.max(0, this.stopFeedbackRemaining - visibleDeltaS);
     this.ui.estopPressed = this.stopFeedbackRemaining > 0;
+    this.manipulation.renderer.debugEnabled = this.ui.debugEnabled;
     this.manipulation.tick(this.controlsEnabled() && view.hasTrackingOrigin);
     this.navigation.tick(now, visibleDeltaS);
     this.joystick.tick(now, this.controlsEnabled() ? joystick : null);
@@ -293,7 +296,8 @@ export class DimOSWebXRClient {
   }
 
   loseInput(completeDictation = false): void {
-    this.manipulation.end();
+    if (completeDictation) this.manipulation.end();
+    else this.manipulation.interrupt();
     this.speech.endRecording(!completeDictation);
     if (!completeDictation) this.navigation.cancelDrag();
     this.joystick.loseInput();
@@ -339,6 +343,7 @@ export class DimOSWebXRClient {
   }
 
   restartSetup(): void {
+    this.localizationBaseline = null;
     this.setRobotSelected(false);
     this.speech.stop();
     this.loseInput();
@@ -355,7 +360,9 @@ export class DimOSWebXRClient {
 
   /** Drops the current alignment and reruns the wizard's localization step. */
   realign(): void {
+    const origin = this.originStore.T_odom_client, hello = this.session.view().hello;
     this.restartSetup();
+    this.localizationBaseline = origin ? {origin,reference:hello?.odom_reference_id,hello} : null;
     this.ui.flow.showStep("localization");
     this.ui.restartLocalization();
   }
@@ -399,6 +406,13 @@ export class DimOSWebXRClient {
 
   private applyView(deltaS = 0): void {
     const view = this.session.view();
+    const baseline = this.localizationBaseline;
+    if (baseline && this.ui.setupCompleted) {
+      const hello = view.hello;
+      if (!this.originStore.hasTrackingOrigin && view.connection === "ready" &&
+          (baseline.reference ? hello?.odom_reference_id === baseline.reference : hello === baseline.hello)) this.originStore.restore(baseline.origin);
+      this.localizationBaseline = null;
+    }
     const origin = this.originStore.T_odom_client;
     const now = this.clock.now();
     this.robot.apply(view, origin, this.ui.setupCompleted, this.unlocalizedFallback());
@@ -452,6 +466,6 @@ export class DimOSWebXRClient {
 
   private syncSelectionEligibility(): void {
     this.selection.setEligible(this.ui.setupCompleted && !this.ui.alignmentReview?.pending &&
-      this.session.view().connection === "ready");
+      (this.session.view().connection === "ready" || this.manipulation.interaction.retainingFeedback));
   }
 }

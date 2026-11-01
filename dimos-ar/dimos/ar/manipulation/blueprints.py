@@ -2,8 +2,10 @@
 
 from dataclasses import replace
 
+from dimos.ar.manipulation.collision_model import without_finger_collisions
 from dimos.ar.manipulation.following import ARManipulationCoordinator
 from dimos.ar.manipulation.frames import ReferencePose
+from dimos.ar.manipulation.limits import safe_openyam_model, soft_joint_limits
 from dimos.ar.manipulation.module import ARManipulationModule
 from dimos.ar.module import ARModule
 from dimos.ar.robot.profiles.profile import RobotName
@@ -13,8 +15,10 @@ from dimos.core.coordination.blueprints import autoconnect
 from dimos.robot.manipulators.common.blueprints import cartesian_ik_task, coordinator
 from dimos.robot.manipulators.openyam.config import make_openyam_model_config, openyam_hardware
 
-_model = make_openyam_model_config()
+_model = without_finger_collisions(safe_openyam_model(make_openyam_model_config()))
 _hardware = openyam_hardware()
+if _hardware.adapter_type == "openyam_damiao":
+    _hardware.adapter_kwargs["safety_limits"] = soft_joint_limits(_model)
 if _hardware.adapter_type == "mock_whole_body":
     _hardware.adapter_kwargs["initial_positions"] = [
         *(_model.home_joints or [0.0] * len(_model.joint_names)),

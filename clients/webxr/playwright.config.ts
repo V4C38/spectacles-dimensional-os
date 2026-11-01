@@ -15,7 +15,7 @@ export default defineConfig({
     video: { mode: "on", size: { width: 1280, height: 900 } },
   },
   webServer: {
-    command: "npm run dev -- --port 5175 --strictPort",
+    command: process.env.INTEGRATION_PRODUCTION === "1" ? "npm run preview -- --port 5175 --strictPort" : "npm run dev -- --port 5175 --strictPort",
     url: "https://localhost:5175",
     ignoreHTTPSErrors: true,
     reuseExistingServer: false,

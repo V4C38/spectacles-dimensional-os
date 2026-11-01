@@ -15,6 +15,8 @@ unitree = ["dimos[base,unitree]"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.8", "mypy>=1.13"]
 
 [project.entry-points."dimos.blueprints"]
+openyam-ar-replay = "dimos.ar.replay:openyam_ar_replay"
+unitree-go2-ar-replay = "dimos.ar.replay:unitree_go2_ar_replay"
 openyam-ar-planner = "dimos.ar.manipulation.blueprints:openyam_ar_planner"
 unitree-go2-ar = "dimos.ar.blueprints:unitree_go2_ar"
 unitree-go2-ar-agentic = "dimos.ar.blueprints:unitree_go2_ar_agentic"

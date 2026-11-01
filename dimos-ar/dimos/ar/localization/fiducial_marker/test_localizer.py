@@ -29,7 +29,7 @@ from dimos.utils.transform_utils import matrix_to_pose, pose_to_matrix
     ("pose_ts", "replay", "succeeds"),
     [(100.0, False, True), (10.0, True, True), (10.0, False, False)],
 )
-@pytest.mark.parametrize("mount_lateral_m", [0.0, -0.12])
+@pytest.mark.parametrize("mount_lateral_m", [0.0, -0.06, -0.12])
 def test_localizes_rendered_table_marker_from_three_optical_camera_poses(
     pose_ts: float, replay: bool, succeeds: bool, mount_lateral_m: float,
 ) -> None:

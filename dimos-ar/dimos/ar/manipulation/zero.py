@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import math
 import time
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
+import xml.etree.ElementTree as ET
 
 from dimos.ar.manipulation.errors import ManipulationError
 from dimos.msgs.sensor_msgs.JointState import JointState
@@ -68,11 +70,29 @@ class JointZeroOperation:
                     raise ValueError(ready.message)
             definition = next(g for g in runtime.adapter.list_planning_groups() if g.id == group)
             joints = list(definition.joint_names)
-            target = JointState(name=joints, position=[0.0] * len(joints))
+            bounds = {
+                j.attrib["name"]: dict(limit.attrib)
+                for j in ET.fromstring(runtime.config.model.model.load().xml).findall("joint")
+                if (limit := j.find("limit")) is not None
+            }
+            positions = [
+                max(
+                    float(bounds[n]["lower"]) + math.radians(3),
+                    min(0.0, float(bounds[n]["upper"]) - math.radians(3)),
+                )
+                if bounds.get(n) is not None
+                else 0.0
+                for n in joints
+            ]
+            target = JointState(name=joints, position=positions)
+            expected = dict(zip(joints, positions, strict=True))
+            logger.info("Safe zero target", joints=expected)
             # An arm already at zero needs only new settled observations, no new trajectory.
             observed = runtime.fresh(group)
             actual = dict(zip(observed.joints.name, observed.joints.position, strict=True))
-            already_zero = all(abs(actual.get(name, float("inf"))) <= 0.02 for name in joints)
+            already_zero = all(
+                abs(actual.get(name, float("inf")) - expected[name]) <= 0.02 for name in joints
+            )
             planned = (
                 None
                 if already_zero
@@ -122,7 +142,8 @@ class JointZeroOperation:
                 if observed.joints.ts > last_measurement:
                     last_measurement = observed.joints.ts
                     if now >= nominal_end and all(
-                        abs(actual.get(name, float("inf"))) <= 0.02 for name in joints
+                        abs(actual.get(name, float("inf")) - expected[name]) <= 0.02
+                        for name in joints
                     ):
                         if settled is None:
                             settled = now

@@ -3,6 +3,8 @@ import type { ARModuleSessionState } from "../websocket/arModuleSession";
 
 /** Copy and proportions shared by host-native control panels. */
 export const CONTROL_PANEL_LAYOUT = { width: 0.9, height: 0.76, margin: 0.05, cornerRadius: 0.05, titleY: 0.306 } as const;
+/** Every settings/sensors section uses this one heading style. */
+export const CONTROL_PANEL_SECTION = { left: -0.4, width: 0.8, height: 0.03, fontDp: 19, color: "#aeaeb2", depthM: 0.006 } as const;
 /** Metre-space design coordinates, before the calibrated host scale. */
 export const CONTROL_PANEL_CONTROLS = { height: 0.064, iconSize: 0.072, gap: 0.02 } as const;
 export const CONTROL_PANEL_MESSAGE = { height: 0.12, padding: 0.028, captionHeight: 0.02, captionY: 0.033, textY: -0.016, textHeight: 0.057 } as const;
@@ -16,7 +18,7 @@ export function controlPanelTab(count: number, index: number): { x: number; widt
 export const CONTROL_PANEL_COPY = {
   appName: "dimOS AR", setupTitle: "Setup Wizard", manual: "Manual", agent: "Agent", yourMessage: "Your message",
   send: "Send to agent", clear: "Clear", hold: "Hold to record", microphoneUnavailable: "Microphone unavailable",
-  stop: "EMERGENCY STOP", settings: "Settings", sensors: "Sensors", diagnostics: "Diagnostics",
+  stop: "EMERGENCY STOP", settings: "Settings", sensors: "Capabilities", diagnostics: "Diagnostics",
   robot: "Robot", headset: "Headset", relocalize: "Re-localize", localizeRobot: "Localize robot", setup: "Setup",
   done: "Done", back: "Back", connect: "01 Connect", connected: "✓ Connected", localization: "02 Localization",
   continue: "Continue", skip: "Skip", reconnect: "Reconnect", tryAgain: "Try again", dismiss: "Dismiss",

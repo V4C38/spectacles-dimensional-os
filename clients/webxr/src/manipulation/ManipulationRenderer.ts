@@ -1,9 +1,16 @@
-import { ManipulationPresentation as PreviewPresentation } from "@dimos-ar-client/manipulation/ManipulationPresentation";
+import { endEffectorAngles } from "@dimos-ar-client/manipulation/ManipulationVisuals";
+import { ARM_PANEL_STYLE } from "@dimos-ar-client/presentation/PanelFrameStyle";
+import { armMotionContext } from "@dimos-ar-client/manipulation/ArmJointFilter";
+import { Text } from "troika-three-text";
+import { UI_FONT_REGULAR } from "../presentation/UIFonts";
+import { ROBOT_LABEL_STYLE } from "@dimos-ar-client/presentation/WorldVisualStyle";
+import { webxrToClientTrackingPoint } from "../utilities/WebXRCoordinates";
+import { ARM_VISUAL_STYLE, armPointDisplacement, armLinkWeight, armLinkPresentation, ArmMeshFade } from "@dimos-ar-client/manipulation/ManipulationVisuals";
+import { manipulationPreviewPlan, manipulationPathOpacity, ManipulationPresentation as PreviewPresentation } from "@dimos-ar-client/manipulation/ManipulationPresentation";
 import type { ClientTrackingOrigin } from "@dimos-ar-client/localization/clientTrackingOrigin";
 import { odomToClientTrackingPose } from "@dimos-ar-client/localization/clientTrackingTransforms";
 import { type ManipulationSnapshot } from "@dimos-ar-client/manipulation/ManipulationInteraction";
 import type {
-  ManipulationModel,
   ManipulationPlan,
   ManipulationPose,
   ManipulationState,
@@ -18,10 +25,8 @@ import type { Vec3 } from "@dimos-ar-client/websocket/protocolTypes";
 import * as THREE from "three";
 import { AdaptiveDashedLineRenderer } from "../presentation/AdaptiveDashedLineRenderer";
 import { DIMOS_AR_DESIGN } from "../presentation/DimOSARDesign";
-import { RobotBoundsAnimation } from "../presentation/RobotBoundsAnimation";
 import { syncText } from "../presentation/UIFonts";
 import {
-  clientTrackingToWebxrPoint,
   clientTrackingToWebxrPose,
 } from "../utilities/WebXRCoordinates";
 import { ArmJointFilter } from "./ArmJointFilter";
@@ -32,11 +37,6 @@ import { ManipulationControlsView } from "./ManipulationControlsView";
 import { ManipulationModelRenderer } from "./ManipulationModelRenderer";
 import { TargetWarning } from "./TargetWarning";
 
-const BASIS = new THREE.Matrix4().makeBasis(
-  new THREE.Vector3(...clientTrackingToWebxrPoint([1, 0, 0])),
-  new THREE.Vector3(...clientTrackingToWebxrPoint([0, 1, 0])),
-  new THREE.Vector3(...clientTrackingToWebxrPoint([0, 0, 1])),
-);
 export interface ManipulationPresentation {
   state: ManipulationState | null | undefined;
   origin: ClientTrackingOrigin | null;
@@ -54,13 +54,15 @@ export interface ManipulationPresentation {
     revision: number;
     pose: ManipulationPose;
     message: string;
+    failedJoints?: string[];
   } | null;
 }
 
 export class ManipulationRenderer {
   readonly object = new THREE.Group();
+  debugEnabled = false;
+  private readonly debugNodes = new Map<string, {node: THREE.Group; label: Text}>();
   private readonly modelRenderer = new ManipulationModelRenderer();
-  private readonly boundsAnimation = new RobotBoundsAnimation();
   readonly controlsView = new ManipulationControlsView();
   readonly panel = this.controlsView.controls;
   readonly baseMarker = this.controlsView.baseMarker;
@@ -76,21 +78,35 @@ export class ManipulationRenderer {
   );
   readonly path = this.pathStroke.object;
   private pathKey = "";
-  private outlineTime = 0;
+  private lastFrameTime = 0;
+  private readonly meshFade = new ArmMeshFade();
+  private readonly pointFade = new ArmMeshFade();
+  private readonly cachedPoints = new WeakMap<object, Float32Array>();
+  private clientPoints(attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute): Float32Array {
+    let points = this.cachedPoints.get(attribute);
+    if (!points) {
+      points = new Float32Array(attribute.count * 3);
+      for (let i = 0; i < attribute.count; i++) points.set(webxrToClientTrackingPoint([attribute.getX(i),attribute.getY(i),attribute.getZ(i)]),i*3);
+      this.cachedPoints.set(attribute, points);
+    }
+    return points;
+  }
+  private readonly fillFade = new ArmMeshFade();
   readonly measuredHandle = new EndEffectorHandleRenderer();
   get previewRequested(): boolean { return this.preview.previewRequested; }
   set previewRequested(value: boolean) {
     if (value && !this.preview.previewRequested) this.preview.togglePreview();
     else this.preview.previewRequested = value;
   }
+  readonly viewerPosition = new THREE.Vector3();
   handDragging = false;
   private readonly basePosition = new THREE.Vector3();
-  private readonly ikSegments = new Map<string, AdaptiveDashedLineRenderer>();
   private readonly jointFilter = new ArmJointFilter();
+  private previousSolution: object | null = null;
+  private solutionSequence = 0;
+  private readonly previewFilter = new ArmJointFilter(0.15);
   private readonly trajectoryProgress = new ArmTrajectoryProgress();
-  private filterOrigin: ClientTrackingOrigin | null = null;
-  private filterGroup: string | null = null;
-  private feedbackWasFresh = false;
+  private filterContext = "";
   readonly warning = new TargetWarning();
   private selectedBefore = false;
   pinned = false;
@@ -102,15 +118,22 @@ export class ManipulationRenderer {
     this.path.userData.environmentDepth = true;
     this.path.raycast = () => {};
     this.object.add(this.warning.object, this.warning.rejected);
-    (this.handle.collider.material as THREE.Material).transparent = true;
-    (this.handle.collider.material as THREE.Material).depthWrite = false;
+    (this.handle.visual.material as THREE.Material).transparent = true;
+    (this.handle.visual.material as THREE.Material).depthWrite = false;
     this.handle.collider.scale.setScalar(1.04);
+    this.handle.visual.scale.setScalar(1.04);
     this.measuredHandle.collider.userData.interactionEnabled = false;
     this.measuredHandle.collider.raycast = () => {};
-    this.measuredHandle.collider.scale.setScalar(0.65);
+    this.measuredHandle.visual.scale.setScalar(0.52);
+    this.measuredHandle.visual.renderOrder = 51;
     (
-      this.measuredHandle.collider.material as THREE.ShaderMaterial
-    ).uniforms.uOpacity.value = 0.25;
+      this.measuredHandle.visual.material as THREE.ShaderMaterial
+    ).uniforms.uOpacity.value = 0.30;
+    const measuredMaterial = this.measuredHandle.visual.material as THREE.ShaderMaterial;
+    measuredMaterial.transparent = true; measuredMaterial.depthWrite = false; measuredMaterial.depthTest = false;
+    measuredMaterial.uniforms.uFill.value = 1;
+    measuredMaterial.uniforms.uRim.value = 0;
+    measuredMaterial.uniforms.uPower.value = 6;
     this.object.add(this.measuredHandle.object);
     this.object.add(
       this.modelRenderer.object,
@@ -122,9 +145,20 @@ export class ManipulationRenderer {
     );
   }
   faceViewer(position: THREE.Vector3): void {
+    this.viewerPosition.copy(position);
     this.controlsView.faceViewer(position);
     this.warning.faceViewer(position);
+    for (const { label } of this.debugNodes.values()) label.lookAt(position);
   }
+  resetPanel(): void {
+    this.baseMarker.attach(this.panel);
+    this.panel.position.set(0,-0.13,0);
+    this.panel.quaternion.identity();
+    this.panel.scale.setScalar(ARM_PANEL_STYLE.defaultScale);
+    this.pinned = false;
+  }
+  detachPanel(): void { this.object.attach(this.panel); this.pinned = true; }
+
   owns(object: THREE.Object3D): boolean {
     return (
       object === this.handle.collider ||
@@ -148,20 +182,35 @@ export class ManipulationRenderer {
       intent,
     } = input;
     const fresh = intent.fresh;
-    this.object.visible = !!state?.available && !!origin;
-    if (!this.object.visible || !state?.model || !origin) {
-      this.jointFilter.reset();
+    if (intent.retainingFeedback && origin) {
+      this.preview.hold(now);
+      this.jointFilter.hold(now); this.previewFilter.hold(now);
+      for (const [key, button] of this.controlsView.buttons) button.setEnabled(key === "estop" || key === "stop");
+      this.speedSlider.hit.userData.interactionEnabled = false;
+      if(target) this.place(this.handle.object,target,origin);
+      this.controlsView.baseLabel.setFeedback(robotTitle,"No feedback",`Movement speed ${Math.round(input.speedScale*100)}%`,0xff9f0a);
+      return;
+    }
+    this.object.visible = !!origin && (!!state?.available || this.modelRenderer.model !== null);
+    if (!state?.available || !state.model || !origin) {
       this.trajectoryProgress.reset();
       this.previewRequested = false;
+      this.meshFade.reset();
+      this.measuredHandle.object.visible = false;
+      this.handle.object.visible = false; this.handle.collider.userData.interactionEnabled = false;
+      this.gripperMenu.visible = this.previewMenu.visible = this.path.visible = false;
+      for (const node of this.modelRenderer.previewMeshes.values()) node.visible = false;
+      for (const node of this.modelRenderer.ghosts.values()) node.visible = false;
+      this.controlsView.baseLabel.setFeedback(robotTitle, "No feedback", `Movement speed ${Math.round(input.speedScale * 100)}%`, 0xff9f0a);
+      for (const [key, button] of this.controlsView.buttons) button.setEnabled(key === "estop" ? intent.canStop || intent.canResume : key === "stop" && intent.canStop);
+      this.speedSlider.hit.userData.interactionEnabled = false;
       return;
     }
     if (this.modelRenderer.model?.revision !== state.model.revision) {
       this.modelRenderer.rebuild(state.model);
       this.pathKey = "";
-      this.jointFilter.reset();
+      this.jointFilter.reset(); this.previewFilter.reset();
       this.trajectoryProgress.reset();
-      for (const stroke of this.ikSegments.values()) stroke.dispose();
-      this.ikSegments.clear();
     }
     const model = state.model,
       observed = groupId ? state.observations?.[groupId] : null;
@@ -177,24 +226,21 @@ export class ManipulationRenderer {
       all,
       gripperJointValues(model, activeGroup, observed?.gripper),
     );
-    if (origin !== this.filterOrigin || groupId !== this.filterGroup) {
-      this.jointFilter.reset();
-      this.trajectoryProgress.reset();
-      this.filterOrigin = origin;
-      this.filterGroup = groupId;
+    const motionContext = armMotionContext(model.revision, groupId, origin);
+    if (motionContext !== this.filterContext) {
+      this.jointFilter.reset(); this.previewFilter.reset(); this.trajectoryProgress.reset();
+      this.filterContext = motionContext;
     }
-    if (fresh !== this.feedbackWasFresh) this.jointFilter.reset();
-    this.feedbackWasFresh = fresh;
     const filtered = this.jointFilter.sample(
       model,
       all,
-      `${model.revision}:${groupId}`,
-      now,
+      motionContext,
+      now, .1, observed?.measured_at ?? undefined, observed?.joint_velocities,
     );
     const measured = linkPoses(model, filtered);
     const targetVisible =
       !!target &&
-      (selected || state.following === true || intent.dragging === true);
+      (selected || state.following === true || intent.dragging === true || intent.finishing === true);
     const offset = intent.targetOffset;
     const displaced = targetVisible && offset;
     const dragging = intent.dragging === true;
@@ -203,11 +249,8 @@ export class ManipulationRenderer {
       odomToClientTrackingPose(rootPose, origin),
     );
     this.basePosition.fromArray(base.position);
-    this.baseMarker.position
-      .copy(this.basePosition)
-      .add(new THREE.Vector3(0.1, 0.08, 0));
+    this.baseMarker.position.copy(this.basePosition);
     if (selected !== this.selectedBefore) {
-      this.pinned = false;
       this.previewRequested = false;
     }
     this.selectedBefore = selected;
@@ -215,53 +258,11 @@ export class ManipulationRenderer {
     this.controlsView.baseLabel.setFeedback(
       robotTitle,
       stateText,
-      `${Math.round(input.speedScale * 100)}%`,
+      `Movement speed ${Math.round(input.speedScale * 100)}%`,
       !fresh ? 0xff9f0a : state.stopped ? 0xff453a : 0x30d158,
     );
-    this.modelRenderer.updateGripperBounds(model, measured, groupId, state);
-    const dtOutline = this.outlineTime
-      ? Math.max(0, Math.min(0.1, now - this.outlineTime))
-      : 1 / 60;
-    this.outlineTime = now;
-    const highlighted = selected || this.hoveredLink !== null;
-    const animation = this.boundsAnimation.update(
-      selected,
-      highlighted,
-      dtOutline,
-    );
-    for (const link of model.links) {
-      const box = this.modelRenderer.bounds.get(link.name);
-      if (!box) continue;
-      this.place(box, composePose(rootPose, measured[link.name]), origin);
-      const stroke = this.modelRenderer.boundStrokes.get(link.name);
-      if (stroke) {
-        stroke.object.visible = this.boundsAnimation.progress > 0;
-        const center = new THREE.Vector3(
-          ...(box.userData.boundsCenter ?? link.bounds!.center),
-        ).applyMatrix4(BASIS);
-        const size = new THREE.Vector3(
-          ...(box.userData.boundsSize ?? link.bounds!.size),
-        ).applyMatrix4(BASIS);
-        if (box.userData.rootBoundsRotationY) {
-          const rotation = new THREE.Matrix4().makeRotationY(
-            box.userData.rootBoundsRotationY,
-          );
-          center.applyMatrix4(rotation);
-          size.applyMatrix4(rotation);
-        }
-        const longest = [Math.abs(size.x), Math.abs(size.y), Math.abs(size.z)];
-        const axis = longest.indexOf(Math.max(...longest));
-        const t = this.boundsAnimation.progress;
-        const cross = t * t * (3 - 2 * t);
-        const scale = new THREE.Vector3(cross, cross, cross);
-        scale.setComponent(axis, 1);
-        stroke.object.scale.copy(scale);
-        stroke.object.position
-          .copy(center)
-          .multiply(new THREE.Vector3(1, 1, 1).sub(scale));
-        stroke.setStyle(animation.width * 0.65, animation.opacity);
-      }
-    }
+    const dtOutline = Math.max(0, Math.min(0.1, now - this.lastFrameTime));
+    this.lastFrameTime = now;
     const activePlan = !state.stopped
       ? ((executing ? state.plan : plan) ?? null)
       : null;
@@ -273,53 +274,81 @@ export class ManipulationRenderer {
     const configuration =
       playing && activePlan
         ? samplePlan(activePlan, Math.max(0, playbackTime))
-        : selected
+        : manipulationPreviewPlan(activePlan, selected, dragging, !!input.rejection)
           ? activePlan
             ? samplePlan(activePlan, activePlan.duration)
             : solution
-          : null;
-    this.updateIKGuide(
-      model,
-      filtered,
-      solution,
-      rootPose,
-      origin,
-      groupId,
-      state,
-      !selected && dragging && displaced,
-      fresh,
-      input.rejection !== null,
-    );
-    const targetValues = { ...filtered, ...configuration };
-    Object.assign(
-      targetValues,
-      gripperJointValues(model, activeGroup, input.desiredGripper),
-    );
-    const preview = configuration ? linkPoses(model, targetValues) : null;
+          : solution;
+    const proposedValues = { ...all, ...configuration,
+      ...gripperJointValues(model, activeGroup, selected ? input.desiredGripper ?? observed?.gripper : observed?.gripper) };
+    if (solution !== this.previousSolution) { this.previousSolution = solution; this.solutionSequence++; }
+    const source = selected ? `${activePlan?.plan_id ?? this.solutionSequence}` : `${this.solutionSequence}`;
+    const targetValues = playing ? this.previewFilter.playback(model,proposedValues,motionContext,now,playbackTime) : this.previewFilter.sample(model, proposedValues, motionContext, now, .1, source);
+    const preview = linkPoses(model, targetValues);
     for (const [name, ghost] of this.modelRenderer.ghosts) {
-      ghost.visible = selected && displaced && preview === null;
-      this.place(ghost, composePose(rootPose, measured[name]), origin);
+      ghost.visible = fresh;
+      this.place(ghost, composePose(rootPose, preview[name]), origin);
     }
+    this.meshFade.beginFrame(now, `${model.revision}:${groupId}`);
+    this.pointFade.beginFrame(now, `${model.revision}:${groupId}`);
+    this.fillFade.beginFrame(now, `${model.revision}:${groupId}`);
     for (const [name, ghost] of this.modelRenderer.previewMeshes) {
-      ghost.visible = selected && (displaced || playing) && preview !== null;
+      const style = armLinkPresentation({ selected, hovered: this.hoveredLink !== null, dragging,
+        finishing: intent.finishing === true, displaced, playing, weight: displaced ? 1 : armLinkWeight(measured[name], preview[name]),
+        failed: input.rejection !== null, failedLink: model.joints.some(j => j.child === name && input.rejection?.failedJoints?.includes(j.name)) });
+      const alpha = this.meshFade.sample(name, style.visible ? style.alpha : 0);
+      const fillAlpha = this.fillFade.sample(name, style.showFill ? style.alpha : 0);
+      const pointWeight = armPointDisplacement(measured[name], preview[name]);
+      ghost.visible = alpha > 0.0001;
+      ghost.traverse(part => {
+        if (!(part instanceof THREE.Mesh)) return;
+        const material = part.material as THREE.ShaderMaterial;
+        if (part.userData.armOutline) {
+          const geometry = part.geometry;
+          const starts = geometry.getAttribute("instanceStart"), ends = geometry.getAttribute("instanceEnd"), weights = geometry.getAttribute("instanceOpacity");
+          if (starts && ends && weights) {
+            const a = this.clientPoints(starts), b = this.clientPoints(ends);
+            const initial = geometry.userData.armWeightsInitialized !== true;
+            let changed = initial;
+            for (let i = 0; i < starts.count; i++) {
+              const previousA = initial ? 0 : weights.getX(i), previousB = initial ? 0 : weights.getY(i);
+              const nextA = this.pointFade.sampleValue(previousA, style.pointVisible ? (style.floor + Math.max(0, pointWeight(a[i*3],a[i*3+1],a[i*3+2]) - style.floor) * style.displacementBoost) : 0);
+              const nextB = this.pointFade.sampleValue(previousB, style.pointVisible ? (style.floor + Math.max(0, pointWeight(b[i*3],b[i*3+1],b[i*3+2]) - style.floor) * style.displacementBoost) : 0);
+              if (nextA !== previousA || nextB !== previousB || initial) { weights.setXY(i,nextA,nextB); changed = true; }
+            }
+            geometry.userData.armWeightsInitialized = true;
+            if (changed) weights.needsUpdate = true;
+          }
+          material.uniforms.uOpacity.value = ARM_VISUAL_STYLE.opacity * alpha;
+          material.uniforms.uWidth.value = style.widthM;
+          material.uniforms.uColor.value.setHex(style.color);
+        } else {
+          const positions = part.geometry.getAttribute("position");
+          let weights = part.geometry.getAttribute("armAlpha");
+          if (!weights) { weights = new THREE.Float32BufferAttribute(new Float32Array(positions.count), 1); part.geometry.setAttribute("armAlpha", weights); }
+          const points = this.clientPoints(positions);
+          let changed = false;
+          for (let i = 0; i < positions.count; i++) {
+            const previous = weights.getX(i);
+            const next = this.pointFade.sampleValue(previous, style.pointVisible ? (style.floor + Math.max(0, pointWeight(points[i*3],points[i*3+1],points[i*3+2]) - style.floor) * style.displacementBoost) : 0);
+            if (next !== previous) { weights.setX(i,next); changed = true; }
+          }
+          if (changed) weights.needsUpdate = true;
+          material.uniforms.uOpacity.value = fillAlpha;
+          material.uniforms.uColor.value.setHex(style.color);
+        }
+      });
       if (preview)
         this.place(ghost, composePose(rootPose, preview[name]), origin);
     }
     const group = state.groups?.find((g) => g.id === groupId);
-    this.modelRenderer.updateTool(
-      model,
-      group,
-      filtered,
-      selected ? input.desiredGripper : null,
-      !!observed?.pose && displaced,
-    );
     this.handle.collider.userData.interactionEnabled = intent.canManipulate;
     this.path.visible =
       (displaced || (!!activePlan && (playing || executing))) &&
       !!group?.tip_frame;
     this.pathStroke.setStyle(
       WORLD_DASH_STYLE.widthM * 0.65,
-      activePlan ? 0.7 : 0.25,
+      manipulationPathOpacity(intent, !selected && state.following === true && !input.rejection, !!activePlan),
     );
     if (!activePlan && targetVisible && target && observed?.pose) {
       const start = clientTrackingToWebxrPose(
@@ -392,12 +421,15 @@ export class ManipulationRenderer {
         true,
       );
     }
-    this.measuredHandle.object.visible = displaced && !!observed?.pose;
+    const targetMaterial = this.handle.visual.material as THREE.ShaderMaterial;
+    targetMaterial.uniforms.uCenterColor.value.setHex(input.rejection ? ARM_VISUAL_STYLE.warningColor : 0xb3b3b3);
+    targetMaterial.uniforms.uRimColor.value.setHex(input.rejection ? ARM_VISUAL_STYLE.warningColor : 0xffffff);
+    this.measuredHandle.object.visible = !!observed?.pose;
     if (observed?.pose)
       this.place(this.measuredHandle.object, observed.pose, origin);
     (
-      this.handle.collider.material as THREE.ShaderMaterial
-    ).uniforms.uOpacity.value = selected ? 0.42 : 1;
+      this.handle.visual.material as THREE.ShaderMaterial
+    ).uniforms.uOpacity.value = 0.75;
     this.handle.object.visible = !!observed?.pose;
     if (observed?.pose)
       this.place(
@@ -408,6 +440,32 @@ export class ManipulationRenderer {
         origin,
       );
 
+    for (const {node} of this.debugNodes.values()) node.visible = false;
+    if (this.debugEnabled) {
+      const debug = (name: string, pose: ManipulationPose | null | undefined, angle?: number | string) => {
+        if (!pose) return;
+        let entry = this.debugNodes.get(name);
+        if (!entry) {
+          const node = new THREE.Group(), axes = new THREE.AxesHelper(0.04), label = new Text();
+          // Axes are authored in client coordinates and converted with the pose.
+          const positions = axes.geometry.getAttribute("position");
+          for (let i = 0; i < positions.count; i++) { const x = positions.getX(i), y = positions.getY(i), z = positions.getZ(i); positions.setXYZ(i, -y, z, -x); }
+          axes.raycast = () => {};
+          for (const material of Array.isArray(axes.material) ? axes.material : [axes.material]) {material.depthTest = material.depthWrite = false;}
+          label.font = UI_FONT_REGULAR; label.fontSize = ROBOT_LABEL_STYLE.detail.emM;
+          label.color = 0xaeaeb2; label.anchorX = "center"; label.position.y = 0.045;
+          label.raycast = () => {}; node.add(axes, label); this.object.add(node);
+          entry = {node, label}; this.debugNodes.set(name, entry);
+        }
+        entry.node.visible = true; this.place(entry.node, pose, origin);
+        const value = angle == null ? "" : typeof angle === "string" ? angle : `${name} ${(angle * 180 / Math.PI).toFixed(1)}°`;
+        if (entry.label.text !== value) {entry.label.text = value; syncText(entry.label);}
+      };
+      debug("base", rootPose); debug("current-ee", observed?.pose, observed?.pose ? endEffectorAngles(rootPose, observed.pose) : undefined); debug("target-ee", target ?? observed?.pose, (target ?? observed?.pose) ? endEffectorAngles(rootPose, (target ?? observed?.pose)!) : undefined);
+      const rawPoses = linkPoses(model, all);
+      for (const joint of model.joints) if (["revolute", "continuous"].includes(joint.kind) && all[joint.name] != null)
+        debug(joint.name, composePose(rootPose, rawPoses[joint.child]), all[joint.name]);
+    }
     this.controlsView.apply({
       intent,
       handDragging: this.handDragging,
@@ -424,14 +482,6 @@ export class ManipulationRenderer {
       now,
       delta: dtOutline,
     });
-    if (this.modelRenderer.endEffectorGeometry) {
-      this.modelRenderer.endEffectorGeometry.position.copy(
-        this.handle.object.position,
-      );
-      this.modelRenderer.endEffectorGeometry.quaternion.copy(
-        this.handle.object.quaternion,
-      );
-    }
     const failed = !fresh || this.warning.object.visible;
     if (input.rejection) {
       const pose = clientTrackingToWebxrPose(
@@ -460,87 +510,6 @@ export class ManipulationRenderer {
       syncText(this.controlsView.status);
     }
   }
-  private updateIKGuide(
-    model: ManipulationModel,
-    measured: Record<string, number>,
-    solution: Record<string, number> | null,
-    root: ManipulationPose,
-    origin: ClientTrackingOrigin,
-    groupId: string | null,
-    state: ManipulationState,
-    visible: boolean,
-    fresh: boolean,
-    failed: boolean,
-  ): void {
-    for (const stroke of this.ikSegments.values())
-      stroke.object.visible = false;
-    if (!visible || !fresh || !solution) return;
-    const group = state.groups?.find((g) => g.id === groupId);
-    if (!group?.tip_frame) return;
-    const current = linkPoses(model, measured),
-      proposed = linkPoses(model, { ...measured, ...solution });
-    let tip = group.tip_frame;
-    for (let count = 0; count < model.joints.length; count++) {
-      const joint = model.joints.find((j) => j.child === tip);
-      if (!joint) break;
-      const a = proposed[joint.parent],
-        b = proposed[joint.child];
-      const ca = current[joint.parent],
-        cb = current[joint.child];
-      const distance = Math.max(
-        Math.hypot(...a.position.map((v, i) => v - ca.position[i])),
-        Math.hypot(...b.position.map((v, i) => v - cb.position[i])),
-      );
-      const angle =
-        2 *
-        Math.acos(
-          Math.min(
-            1,
-            Math.abs(
-              b.orientation.reduce((n, v, i) => n + v * cb.orientation[i], 0),
-            ),
-          ),
-        );
-      const weight = THREE.MathUtils.smoothstep(
-        Math.max(distance / 0.08, angle / (Math.PI / 6)),
-        0.06,
-        1,
-      );
-      if (Math.hypot(...a.position.map((v, i) => v - b.position[i])) > 0.001) {
-        let stroke = this.ikSegments.get(joint.name);
-        if (!stroke) {
-          stroke = new AdaptiveDashedLineRenderer(
-            WORLD_DASH_STYLE.widthM * 0.65,
-            WORLD_DASH_STYLE.dashM,
-            WORLD_DASH_STYLE.gapM,
-            1.3,
-          );
-          this.ikSegments.set(joint.name, stroke);
-          this.object.add(stroke.object);
-          stroke.object.userData.environmentDepth = true;
-        }
-        const convert = (pose: ManipulationPose) =>
-          clientTrackingToWebxrPose(
-            odomToClientTrackingPose(composePose(root, pose), origin),
-          ).position;
-        stroke.setSegments([convert(a), convert(b)]);
-        stroke.setStyle(WORLD_DASH_STYLE.widthM * 0.65, weight * 0.7);
-        const q = solution[joint.name],
-          limits = joint.limits;
-        const nearLimit =
-          limits &&
-          q != null &&
-          Math.min(q - limits.lower, limits.upper - q) <=
-            (limits.upper - limits.lower) * 0.05;
-        stroke.object.material.uniforms.uColor.value.setHex(
-          failed ? 0xff453a : nearLimit ? 0xff9f0a : 0xffffff,
-        );
-        stroke.object.visible = weight > 0.001;
-      }
-      tip = joint.parent;
-      if (tip === group.base_frame) break;
-    }
-  }
   private place(
     object: THREE.Object3D,
     pose: ManipulationPose | undefined,
@@ -557,9 +526,9 @@ export class ManipulationRenderer {
     object.quaternion.fromArray(converted.orientation);
   }
   dispose(): void {
+    for (const {node, label} of this.debugNodes.values()) { label.dispose(); node.traverse(n => { if (n instanceof THREE.LineSegments) {n.geometry.dispose(); for (const m of Array.isArray(n.material) ? n.material : [n.material]) m.dispose();} }); node.removeFromParent(); }
+    this.debugNodes.clear();
     this.modelRenderer.dispose();
-    for (const stroke of this.ikSegments.values()) stroke.dispose();
-    this.ikSegments.clear();
     this.controlsView.dispose();
     this.pathStroke.dispose();
     this.handle.dispose();

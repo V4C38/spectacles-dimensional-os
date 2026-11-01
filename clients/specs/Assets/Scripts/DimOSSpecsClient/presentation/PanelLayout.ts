@@ -35,9 +35,9 @@ export function easePanel(t: number): number { const p = Math.max(0, Math.min(1,
 export const RUNTIME_LAYOUTS = {
   manual: panelProfile(14.6, [["guidance", 18], ["status", 1.8]]),
   agent: panelProfile(14.6, [["reply", 12], ["draft", 12], ["actions", 6.4], ["status", 1.8]]),
-  settings: panelProfile(23, [["robot", 3], ["robotActions", 6.4], ["headset", 3, 3], ["debug", 6.4], ["diagnostics", 6.4], ["sound", 6.4]]),
+  settings: panelProfile(23, [["robotActions",6.4],["headset",3],["debug",6.4,1],["diagnostics",6.4],["sound",6.4]]),
   sensors: panelProfile(11.2, [["range", 6.4], ["points", 6.4], ["statistics", 10, 3]]),
-  diagnostics: panelProfile(23, [["logs", 40]]),
+  diagnostics: panelProfile(23, [["logs", 26], ["statistics", 10]]),
   alignment: panelProfile(23, [["guidance", 7], ["actions", 6.4]]),
 } as const;
 export const SETUP_LAYOUTS = {

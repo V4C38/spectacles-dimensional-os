@@ -9,7 +9,7 @@ for (const pinch of [false, true]) test(`index fingertip activates a real menu b
   await runtime.localized(); await summonMenu(page); await frameMenu(page);
   expect((await snapshot(page)).operatingMode).toBe("manual");
   await page.evaluate(() => {
-    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     w.modeChanges = 0;
     const setMode = app.client.ui.setOperatingMode.bind(app.client.ui);
     app.client.ui.setOperatingMode = (mode: string) => { w.modeChanges++; return setMode(mode); };
@@ -32,14 +32,14 @@ test("detached unselected marker hovers and drags independently of the robot box
   test.setTimeout(90000);
   const runtime = await bootstrap(page); await runtime.localized();
   await page.evaluate(() => {
-    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     const p = app.client.robot.collider.getWorldPosition(app.mainMenu.panel.position.clone());
     w.questDevice.hands.right.position.set(p.x, p.y, p.z + 0.8);
     w.questDevice.hands.right.quaternion.set(0, 0, 0, 1);
     w.questDevice.hands.left.position.set(-5, 2, 0);
   });
   const read = () => page.evaluate(() => {
-    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     const outline = app.client.robot.object.getObjectByName("Robot selection outline");
     return { hover: app.client.robot.hovered, opacity: outline.material.opacity, selected: app.client.isRobotSelected(), held: !!app.worldHold,
       dragging: app.client.navigation.isDragging(), pose: app.client.navigation.marker.pose() };
@@ -48,13 +48,13 @@ test("detached unselected marker hovers and drags independently of the robot box
   runtime.send({ type: "nav_goal", pose: [3, 0.5, 0, 0], path_poses: [[2, 0, 0, 0], [3, 0.5, 0, 0]], ts: Date.now() / 1000 });
   await page.waitForTimeout(200);
   await page.evaluate(() => {
-    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     const p = app.client.navigation.marker.pose().position;
     w.questDevice.hands.right.position.set(p[0], p[1] + 0.5, p[2] + 0.5);
     w.questDevice.hands.right.quaternion.set(-Math.sin(Math.PI / 8), 0, 0, Math.cos(Math.PI / 8));
   });
   await expect.poll(() => page.evaluate(() => {
-    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     return app.interaction.hoverTargets().some((hit: any) => {
       if (hit === app.client.navigation.marker.cancelObject) return false;
       for (let object = hit; object; object = object.parent) if (object === app.client.navigation.marker.object) return true;
@@ -81,7 +81,7 @@ for (const mode of ["hand", "controller"] as const) test(`deselecting a hovered 
   test.setTimeout(90000);
   const runtime = await bootstrap(page, mode); await runtime.localized();
   await page.evaluate(() => {
-    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     const p = app.client.robot.collider.getWorldPosition(app.mainMenu.panel.position.clone());
     const inputs = w.questDevice.primaryInputMode === "controller" ? w.questDevice.controllers : w.questDevice.hands;
     inputs.right.position.set(p.x, p.y, p.z + 0.8);
@@ -90,14 +90,14 @@ for (const mode of ["hand", "controller"] as const) test(`deselecting a hovered 
     app.client.setRobotSelected(true);
   });
   const read = () => page.evaluate(() => {
-    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     const outline = app.client.robot.object.getObjectByName("Robot selection outline");
     return { hovered: app.client.robot.hovered, selected: app.client.isRobotSelected(),
       scale: outline.scale.toArray(), opacity: outline.material.opacity };
   });
   await expect.poll(read).toMatchObject({ hovered: true, selected: true, scale: [1, 1, 1] });
   await page.evaluate(() => {
-    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     w.boxSamples = [];
     const record = () => {
       const outline = app.client.robot.object.getObjectByName("Robot selection outline");
@@ -128,11 +128,11 @@ test("hovering navigation Cancel does not reveal the unselected robot box", asyn
   runtime.send({ type: "nav_goal", pose: [3, 0.5, 0, 0], path_poses: [[2, 0, 0, 0], [3, 0.5, 0, 0]], ts: Date.now() / 1000 });
   runtime.state("following_path");
   await expect.poll(() => page.evaluate(() => {
-    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     return app.client.navigation.marker.cancelVisible() && !app.client.navigation.marker.cancelObject.userData.rayDisabled;
   })).toBe(true);
   await page.evaluate(() => {
-    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     const cancel = app.client.navigation.marker.cancelObject;
     const p = cancel.getWorldPosition(app.mainMenu.panel.position.clone());
     const q = cancel.getWorldQuaternion(app.mainMenu.panel.quaternion.clone());
@@ -142,11 +142,11 @@ test("hovering navigation Cancel does not reveal the unselected robot box", asyn
     w.questDevice.hands.left.position.set(-5, 2, 0);
   });
   await expect.poll(() => page.evaluate(() => {
-    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     return app.interaction.hoverTargets().includes(app.client.navigation.marker.cancelObject);
   })).toBe(true);
   await expect.poll(() => page.evaluate(() => {
-    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     return { hover: app.client.robot.hovered, selected: app.client.isRobotSelected(),
       opacity: app.client.robot.object.getObjectByName("Robot selection outline").material.opacity };
   })).toEqual({ hover: false, selected: false, opacity: 0 });

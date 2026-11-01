@@ -250,23 +250,25 @@ describe("session facts and tracking origin", () => {
     const again = makeSession();
     handshake(again.session, again.transport, again.clock);
     again.session.onTransportText("not-json\n");
-    expect(again.session.view().connection).toBe("failed");
+    expect(again.session.view().connection).toBe("ready");
+    expect(JSON.parse(again.transport.texts.at(-1)!)).toMatchObject({ type: "client_error", excerpt: "not-json" });
     again.clock.nowS = 0.5;
     again.session.tick();
-    expect(again.transport.connectCount).toBe(2);
+    expect(again.transport.connectCount).toBe(1);
   });
 
-  it("turns a bad lidar frame after ready into a reconnectable protocol failure", () => {
+  it("reports a bad lidar frame without reconnecting", () => {
     const { session, transport, clock } = makeSession();
     handshake(session, transport, clock);
     session.onTransportBinary(new Uint8Array([1, 2, 3]));
     expect(session.view()).toMatchObject({
-      connection: "failed",
-      lastError: expect.stringMatching(/too short/),
+      connection: "ready",
+      lastError: null,
     });
     clock.nowS = 0.5;
     session.tick();
-    expect(transport.connectCount).toBe(2);
+    expect(transport.connectCount).toBe(1);
+    expect(JSON.parse(transport.texts.at(-1)!)).toMatchObject({ type: "client_error", message_type: "lidar" });
   });
 
   it("turns an origin-store failure into a reconnectable protocol failure", () => {
@@ -535,4 +537,47 @@ it("assigns distinct monotonic revisions to identical agent messages across conn
   session.start(); session.onTransportOpen(); session.onTransportText(JSON.stringify(helloAt(clock.nowS)) + "\n");
   session.onTransportText(JSON.stringify({ type: "agent_message", text: "Done" }) + "\n");
   expect(session.view().agentMessageRevision).toBe(3);
+});
+
+it("reports a bad manipulation packet and processes the next message without losing localization", () => {
+  const { session, transport, clock, originStore } = makeSession();
+  handshake(session, transport, clock);
+  originStore.restore({ position: [1, 2, 3], orientation: [0, 0, 0, 1], confidence: 1, ts: 1 });
+  const origin = originStore.T_odom_client;
+  const invalid = { type: "manipulation_state", available: true, ts: 12.5 };
+  session.onTransportText(JSON.stringify(invalid) + '\n' + JSON.stringify({ type: "pose", position: [3, 2, 1], orientation: [0, 0, 0, 1], ts: 13 }) + '\n');
+  expect(session.view().connection).toBe("ready");
+  expect(session.view().pose?.position).toEqual([3, 2, 1]);
+  expect(originStore.T_odom_client).toBe(origin);
+  expect(session.view().manipulationError).toBeTruthy();
+  const report = JSON.parse(transport.texts.at(-1)!);
+  expect(report).toMatchObject({ type: "client_error", message_type: "manipulation_state", message_ts: 12.5 });
+  expect(report.ts).toEqual(expect.any(Number));
+  expect(report).not.toHaveProperty("message_id");
+  session.onTransportText(JSON.stringify(invalid) + '\n');
+  expect(JSON.parse(transport.texts.at(-1)!)).toEqual(report);
+  session.onTransportText('{"type":"manipulation_state","available":false}\n');
+  expect(session.view().manipulationError).toBeNull();
+  expect(transport.connectCount).toBe(1);
+});
+
+
+it("retains original arm measurements and topology across an unavailable poll", () => {
+  const { session, transport, clock } = makeSession();
+  handshake(session, transport, clock);
+  const state = {
+    type: "manipulation_state", available: true, ts: 100,
+    model: { revision: "arm", asset_url: null, root: "base", links: [{ name: "base" }], joints: [] },
+    groups: [{ id: "arm", base_frame: "base", tip_frame: null, joint_names: [], following: true, has_gripper: false }],
+    observations: { arm: { joints: {}, measured_at: 99.9 } },
+  };
+  session.onTransportText(JSON.stringify(state) + "\n");
+  expect(session.view().manipulationError).toBeNull();
+  const before = session.view().manipulation!;
+  clock.nowS += 0.1;
+  session.onTransportText(JSON.stringify({ type: "manipulation_state", available: false, ts: 101, message: "Retrying" }) + "\n");
+  expect(session.view().manipulation).toMatchObject({ available: false, message: "Retrying", ts: 100 });
+  expect(session.view().manipulation?.observations).toBe(before.observations);
+  expect(session.view().manipulation?.model).toBe(before.model);
+  expect(session.view().manipulation?.groups).toBe(before.groups);
 });

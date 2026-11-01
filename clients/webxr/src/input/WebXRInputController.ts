@@ -1,4 +1,4 @@
-import { ManipulationInputCapture } from "@dimos-ar-client/manipulation/ManipulationInputCapture";
+import { ManipulationInputCapture, ManipulationPressEdges } from "@dimos-ar-client/manipulation/ManipulationInputCapture";
 import { FingertipButtons } from "./FingertipButtons";
 import { ViewerPanelPlacement } from "../presentation/ViewerPanelPlacement";
 import * as THREE from "three";
@@ -31,7 +31,9 @@ export class WebXRInputController {
   private worldHold: xb.SelectEvent["target"] | null = null;
   private holdFromMarker = false;
   private secondaryPressed = false;
+  private readonly pressEdges = new ManipulationPressEdges();
   private readonly manipulationCapture = new ManipulationInputCapture();
+  private robotPanelGrip = false;
   private readonly gripperPresses = new Set<xb.SelectEvent["target"]>();
   private speedHold: THREE.Object3D | null = null;
   private speedDrag: xb.FreestandingSlider | null = null;
@@ -40,6 +42,7 @@ export class WebXRInputController {
   private readonly placementBlocker = new THREE.Object3D();
   private uiGrab = false;
   private touchDispatch = false;
+  private readonly physicalPinches = new Set<xb.SelectEvent["target"]>();
   private readonly touches = new FingertipButtons<xb.SelectEvent["target"]>({
     start: (source, contact) => this.dispatchTouch(source, contact, true, false),
     end: (source, contact, cancelled) => this.dispatchTouch(source, contact, false, cancelled),
@@ -149,7 +152,7 @@ export class WebXRInputController {
     this.scene.add(this.mainMenu.panel);
     this.interaction.setPolicy({
       eligible: (controller, object, point) => this.canInteract(controller, object, point),
-      ignored: (controller, object) => object === this.client.robot.collider && this.client.navigation.interaction.ownsDraft(this.navigationSourceId(controller)),
+      ignored: (controller, object) => this.client.robot.ownsTarget(object) && this.client.navigation.interaction.ownsDraft(this.navigationSourceId(controller)),
       captured: controller => this.capture.owner === controller && (this.uiGrab || this.worldHold === controller || this.manipulationHold === controller || this.panelHold === controller),
       unobstructed: (object, origin, point) => {
         if (this.mainMenu?.ownsTarget(object)) return true;
@@ -211,6 +214,7 @@ export class WebXRInputController {
     }
     this.detectedSurfaces = this.readDetectedSurfaces(frame, reference);
     this.client.ui.surfaceCount = this.detectedSurfaces.length;
+    if (this.manipulationHold && !this.client.manipulation.interaction.dragging && !this.client.manipulation.renderer.pinned) this.clearInput();
     if (this.capture.owner && (!this.capture.owner.visible || this.capture.owner.userData.connected !== true)) this.clearInput();
     this.handStyle.apply(this.input.hands);
     this.interaction.direct.sample(frame, reference, this.input.controllers);
@@ -222,7 +226,9 @@ export class WebXRInputController {
     this.interaction.update(deltaS);
     const hits = this.input.controllers.map(controller => this.interaction.hit(controller)?.object);
     this.client.navigation.marker.update(new THREE.Vector3(p.x, p.y, p.z), hits.includes(this.client.navigation.marker.cancelObject));
+    this.client.manipulation.renderer.controlsView.onRecalibrate ??= () => this.client.realign();
     this.mainMenu?.updateHover(hits, deltaS);
+    this.client.manipulation.renderer.controlsView.frame.updateHover(hits, deltaS);
     const actionableHits = this.input.controllers.map(controller => {
       const hit = this.interaction.hit(controller);
       return hit && this.canInteract(controller, hit.object, hit.point) ? hit.object : undefined;
@@ -231,9 +237,10 @@ export class WebXRInputController {
     const manipulationHovered = actionableHits.find(hit => hit && this.client.manipulation.owns(hit));
     this.client.manipulation.renderer.hoveredLink = manipulationHovered?.userData.manipulationLink ?? null;
     this.client.manipulation.renderer.hoveredAction = manipulationHovered?.userData.manipulationAction ?? null;
-    this.client.manipulation.renderer.handDragging = !!this.manipulationHold?.inputSource?.hand;
-    this.client.manipulation.renderer.eeHovered = actionableHits.some(hit => !!hit && (hit === this.client.manipulation.renderer.handle.collider || hit.userData.manipulationAction === "gripper"));
-    const robotHovered = hoverTargets.includes(this.client.robot.collider);
+    this.client.manipulation.renderer.handDragging = !!this.manipulationHold?.inputSource?.hand && this.client.manipulation.interaction.dragging;
+    this.client.manipulation.renderer.eeHovered = actionableHits.some(hit => !!hit && (hit === this.client.manipulation.renderer.handle.collider || hit.userData.endEffectorAction === true));
+    const robotHovered = hoverTargets.some(hit => this.client.robot.ownsTarget(hit)) ||
+      this.interaction.hoverTargets(this.client.robot.markerCollider).includes(this.client.robot.markerCollider);
     const markerHovered = hoverTargets.some(hit => hit !== this.client.navigation.marker.cancelObject && isDescendant(hit, this.client.navigation.marker.object));
     const worldHover = worldMarkerHover(this.client.navigation.interaction.snapshot().attachedToRobot, robotHovered, markerHovered);
     this.client.robot.setHovered(worldHover.robot);
@@ -286,12 +293,12 @@ export class WebXRInputController {
     }
     if (this.manipulationHold) {
       const source = this.manipulationHold;
-      if (!source.visible || source.userData.connected !== true || !this.client.controlsEnabled()) this.clearInput();
+      if (!source.visible || source.userData.connected !== true || (!this.client.controlsEnabled() && !this.client.manipulation.interaction.retainingFeedback)) this.clearInput();
       else {
         const pressed = source.inputSource?.gamepad?.buttons[1]?.pressed === true;
-        if (pressed && !this.secondaryPressed) this.client.manipulation.action("gripper");
+        if (pressed && !this.secondaryPressed && this.client.manipulation.interaction.dragging && !this.robotPanelGrip) this.client.manipulation.action("gripper");
         this.secondaryPressed = pressed;
-        this.client.manipulation.hold(source.getWorldPosition(new THREE.Vector3()).toArray() as [number, number, number], source.getWorldQuaternion(new THREE.Quaternion()).toArray() as [number, number, number, number]);
+        this.client.manipulation.hold(source.getWorldPosition(new THREE.Vector3()).toArray() as [number, number, number], source.getWorldQuaternion(new THREE.Quaternion()).toArray() as [number, number, number, number], this.gestureRay(source));
       }
     }
     if (this.worldHold && !this.uiGrab) {
@@ -304,7 +311,7 @@ export class WebXRInputController {
     for (const source of this.input.controllers) {
       const tip = source.visible && source.userData.connected === true ? this.interaction.direct.indexTip(source) : null;
       if (!this.touches.owns(source) && source.userData.selected === true) continue;
-      this.touches.update(source, tip, touchTargets, (object, point) => this.canInteract(source, object, point));
+      this.touches.update(source, tip, touchTargets, (object, point) => this.canInteract(source, object, point), this.physicalPinches.has(source));
     }
   }
 
@@ -328,8 +335,8 @@ export class WebXRInputController {
       const surface = navigationSurfaceHits(origin.toArray() as [number, number, number], direction.toArray() as [number, number, number], this.detectedSurfaces, this.client.robot.floorWorldY() ?? 0)[0];
       if (surface && new THREE.Vector3(...surface.position).distanceTo(origin) + 0.02 < point.distanceTo(origin)) return false;
     }
-    if (object === this.client.robot.collider && this.client.navigation.interaction.ownsDraft(this.navigationSourceId(controller))) return false;
-    if (object === this.client.robot.collider) return this.client.ui.snapshot().robotSelectable;
+    if (this.client.robot.ownsTarget(object) && this.client.navigation.interaction.ownsDraft(this.navigationSourceId(controller))) return false;
+    if (this.client.robot.ownsTarget(object)) return this.client.ui.snapshot().robotSelectable;
     if (!this.client.controlsEnabled() || !this.client.originStore.hasTrackingOrigin) return false;
     if (object === this.navigationFloor) return this.client.isRobotSelected() && point.distanceTo(controller.getWorldPosition(new THREE.Vector3())) <= FLOOR_AIM_RANGE_M;
     if (this.client.manipulation.owns(object)) return object.userData.interactionEnabled !== false;
@@ -337,8 +344,10 @@ export class WebXRInputController {
   }
 
   onSelectStart(event: xb.SelectEvent): void {
+    if (!this.touchDispatch && event.target.inputSource?.hand) this.physicalPinches.add(event.target);
     if (!this.touchDispatch && this.touches.owns(event.target)) return;
     if (!this.tracking || this.session?.visibilityState !== "visible") return;
+    if (!this.pressEdges.observe(this.navigationSourceId(event.target), true)) return;
     const hit = this.interaction.hit(event.target);
     if (this.mainMenu?.isEmergencyTarget(hit?.object) || hit?.object.userData.manipulationAction === "estop") {
       this.clearInput();
@@ -375,7 +384,7 @@ export class WebXRInputController {
       return;
     }
     if (hit.object.userData.manipulationPanel) {
-      this.client.manipulation.beginPanel(event.target.getWorldPosition(new THREE.Vector3()).toArray() as [number, number, number], event.target.getWorldQuaternion(new THREE.Quaternion()).toArray() as [number, number, number, number]);
+      this.client.manipulation.beginPanel(event.target.getWorldPosition(new THREE.Vector3()).toArray() as [number, number, number], event.target.getWorldQuaternion(new THREE.Quaternion()).toArray() as [number, number, number, number], hit.object.userData.panelHandle ?? "bar", this.gestureRay(event.target));
       this.manipulationHold = event.target; return;
     }
     if (this.client.manipulation.owns(hit.object) && this.client.controlsEnabled()) {
@@ -411,7 +420,7 @@ export class WebXRInputController {
       this.uiGrab = true;
       return;
     }
-    if (hit?.object === this.client.robot.collider && this.client.ui.setupCompleted) {
+    if (hit && this.client.robot.ownsTarget(hit.object) && this.client.ui.setupCompleted) {
       this.client.toggleRobotSelection();
       this.uiGrab = true;
       return;
@@ -426,7 +435,14 @@ export class WebXRInputController {
   }
 
   onSqueezeStart(event: xb.SelectEvent): void {
-    if (!this.tracking || this.panelHold || this.worldHold || this.uiGrab || this.session?.visibilityState !== "visible") return;
+    if (!this.tracking || this.panelHold || this.manipulationHold || this.worldHold || this.uiGrab || this.session?.visibilityState !== "visible") return;
+    const armContact = this.interaction.hit(event.target);
+    if (armContact && isDescendant(armContact.object,this.client.manipulation.renderer.panel)) {
+      this.clearInput();
+      this.client.manipulation.beginPanel(event.target.getWorldPosition(new THREE.Vector3()).toArray() as [number,number,number],event.target.getWorldQuaternion(new THREE.Quaternion()).toArray() as [number,number,number,number],"body",this.gestureRay(event.target));
+      this.capture.press(event.target,armContact.object);
+      this.manipulationHold=event.target; this.robotPanelGrip=true; return;
+    }
     if (!this.mainMenu?.ownsTarget(this.interaction.hit(event.target)?.object)) return;
     const ray = this.panelRay(event.target);
     this.clearInput();
@@ -444,10 +460,12 @@ export class WebXRInputController {
   }
 
   onSqueezeEnd(event: xb.SelectEvent): void {
-    if (this.panelGrip && this.panelHold === event.target) this.clearInput();
+    if ((this.panelGrip && this.panelHold === event.target) || (this.robotPanelGrip && this.manipulationHold === event.target)) this.clearInput();
   }
 
   onSelectEnd(event: xb.SelectEvent): void {
+    if (!this.touchDispatch) this.physicalPinches.delete(event.target);
+    this.pressEdges.observe(this.navigationSourceId(event.target), false);
     if (this.gripperPresses.delete(event.target)) {
       this.manipulationCapture.release(this.navigationSourceId(event.target));
       return;
@@ -514,6 +532,8 @@ export class WebXRInputController {
   }
 
   private clearInput(completeDictation = false): void {
+    this.physicalPinches.clear();
+    this.robotPanelGrip=false;
     this.gripperPresses.clear(); this.manipulationCapture.reset();
     if (this.manipulationHold) {
       if (completeDictation) this.client.manipulation.end();

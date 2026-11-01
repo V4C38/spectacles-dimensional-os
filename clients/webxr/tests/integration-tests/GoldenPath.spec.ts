@@ -18,7 +18,7 @@ const appValue = async (page: Page, expression: string) =>
   page.evaluate((expression) => {
     const w = window as any,
       app = w.xb.core.scene.children.find(
-        (o: any) => o.constructor.name === "WebXRApp",
+        (o: any) => o.client?.manipulation,
       );
     return new Function("app", "w", `return (${expression})`)(app, w);
   }, expression);
@@ -26,7 +26,7 @@ async function worldView(page: Page) {
   await page.evaluate(() => {
     const w = window as any,
       app = w.xb.core.scene.children.find(
-        (o: any) => o.constructor.name === "WebXRApp",
+        (o: any) => o.client?.manipulation,
       );
     const center = app.client.robot.collider.getWorldPosition(app.client.robot.collider.position.clone());
     const target = center.clone().set(center.x + 0.25, app.client.robot.floorWorldY() + 0.22, center.z - 0.12);
@@ -45,7 +45,7 @@ async function pointRobot(page: Page) {
   await page.evaluate(() => {
     const w = window as any,
       app = w.xb.core.scene.children.find(
-        (o: any) => o.constructor.name === "WebXRApp",
+        (o: any) => o.client?.manipulation,
       ),
       p = app.client.robot.collider.getWorldPosition(
         app.client.robot.collider.position.clone(),
@@ -67,7 +67,7 @@ async function aimFloor(page: Page) {
   await page.evaluate(() => {
     const w = window as any,
       app = w.xb.core.scene.children.find(
-        (o: any) => o.constructor.name === "WebXRApp",
+        (o: any) => o.client?.manipulation,
       ),
       p = app.client.robot.worldPosition();
     const input = w.questDevice.hands.right;
@@ -153,7 +153,7 @@ test("comparable hand golden path", async ({ page }, info) => {
         await page.evaluate(() => {
           const w = window as any,
             app = w.xb.core.scene.children.find(
-              (o: any) => o.constructor.name === "WebXRApp",
+              (o: any) => o.client?.manipulation,
             ),
             p = app.mainMenu.barZone.getWorldPosition(
               app.mainMenu.panel.position.clone(),
@@ -285,7 +285,7 @@ test("comparable hand golden path", async ({ page }, info) => {
         await page.evaluate(() => {
           const w = window as any,
             app = w.xb.core.scene.children.find(
-              (o: any) => o.constructor.name === "WebXRApp",
+              (o: any) => o.client?.manipulation,
             ),
             button = app.client.navigation.marker.cancelObject,
             p = button.getWorldPosition(button.position.clone()),
@@ -363,7 +363,7 @@ test("comparable hand golden path", async ({ page }, info) => {
       "sensors_full",
       async () => {
         await activateRuntimeButton(page, "Manual");
-        await activateRuntimeButton(page, "Sensors button");
+        await activateRuntimeButton(page, "Capabilities button");
         await activateRuntimeButton(page, "Full");
         runtime.lidar();
       },
@@ -412,7 +412,7 @@ test("comparable hand golden path", async ({ page }, info) => {
     );
     await summonMenu(page);
     await frameMenu(page, true);
-    await activateRuntimeButton(page, "Global settings");
+    await activateRuntimeButton(page, "Capabilities button");
     await flow.step(
       "relocalize",
       async () => {

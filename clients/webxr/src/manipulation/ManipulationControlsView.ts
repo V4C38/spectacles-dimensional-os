@@ -1,3 +1,6 @@
+import { ARM_PANEL_STYLE } from "@dimos-ar-client/presentation/PanelFrameStyle";
+import { RobotPanelFrame } from "../presentation/RobotPanelFrame";
+import { manipulationMenuRows, manipulationButtonEnabled, endEffectorAction } from "@dimos-ar-client/manipulation/ManipulationPresentation";
 import type { ManipulationSnapshot } from "@dimos-ar-client/manipulation/ManipulationInteraction";
 import type {
   ManipulationGroup,
@@ -13,7 +16,7 @@ import { indicatorMaterial } from "../presentation/PoseIndicatorMaterial";
 import { RobotMarkerLabel } from "../presentation/RobotMarkerLabel";
 import { SpeedSlider } from "../presentation/SpeedSlider";
 import { SurfaceButton } from "../presentation/SurfaceButton";
-import { syncText, UI_FONT_REGULAR } from "../presentation/UIFonts";
+import { syncText, UI_FONT_REGULAR, UI_FONT_SEMIBOLD } from "../presentation/UIFonts";
 import { disposeObjectTrees } from "./ObjectResources";
 
 export class ManipulationControlsView {
@@ -23,7 +26,11 @@ export class ManipulationControlsView {
   readonly gripperMenu = new THREE.Group();
   readonly previewMenu = new THREE.Group();
   readonly speedSlider = new SpeedSlider(0.14);
+  readonly frame = new RobotPanelFrame(this.controls);
   readonly status = new Text();
+  readonly title = new Text();
+  localizationAvailable = false;
+  onRecalibrate: (() => void) | null = null;
   readonly buttons = new Map<string, SurfaceButton>();
   private readonly menuHeight = new PanelHeightController();
   private readonly speedLabel = new Text();
@@ -31,17 +38,17 @@ export class ManipulationControlsView {
   private hoverUntil = 0;
   private hoverProgress = 0;
   constructor() {
-    this.menuHeight.request(0.096, true);
+    this.menuHeight.request(4 * ARM_PANEL_STYLE.rowM + ARM_PANEL_STYLE.paddingM + ARM_PANEL_STYLE.headerM, true);
     this.baseLabel.scale.setScalar(0.75);
     this.baseLabel.tagMessage.fillOpacity = 0.5;
     this.baseLabel.tagMessage.color = 0xffffff;
     const plate = new GlassSurface({
       width: 0.26,
       height: 0.13,
-      radius: 0.018,
+      radius: ARM_PANEL_STYLE.cornerM,
       tint: DIMOS_AR_DESIGN.colors.background,
       alpha: 0.98,
-      rim: 0.08,
+      rim: .28,
       rimWidth: 0.002,
     });
     this.menuPlate = plate;
@@ -50,13 +57,17 @@ export class ManipulationControlsView {
     registerRayTarget(plate);
     plate.renderOrder = 10;
     this.controls.add(plate);
+    const headerHit = new THREE.Mesh(new THREE.PlaneGeometry(.13,.04),new THREE.MeshBasicMaterial({visible:false}));
+    headerHit.position.set(-.035,-.024,.006); headerHit.userData.manipulationPanel=true;
+    headerHit.userData.panelHandle="body"; registerRayTarget(headerHit); this.controls.add(headerHit);
     const orb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.018, 20, 16),
+      new THREE.SphereGeometry(0.009, 20, 16),
       indicatorMaterial(),
     );
     orb.userData.manipulationLink = "base-marker";
     orb.userData.rayPriority = 5;
     registerRayTarget(orb);
+
     this.baseMarker.add(orb);
     this.baseLabel.position.set(0, 0.05, 0);
     this.baseMarker.add(this.baseLabel);
@@ -72,10 +83,10 @@ export class ManipulationControlsView {
     ) => {
       const button = new SurfaceButton({
         text,
-        font: UI_FONT_REGULAR,
+        font: UI_FONT_SEMIBOLD,
         width,
-        height: 0.032,
-        fontSize: 0.012 / 0.032,
+        height: ARM_PANEL_STYLE.buttonHeightM,
+        fontSize: ARM_PANEL_STYLE.buttonFontM / ARM_PANEL_STYLE.buttonHeightM,
         opacity: 1,
         backgroundColor: DIMOS_AR_DESIGN.colors.control,
       });
@@ -84,28 +95,40 @@ export class ManipulationControlsView {
       parent.add(button);
       button.updateLayouts();
       button.position.set(x, y, 0.008);
+      if (key === "plan" || key === "execute") button.userData.fixedSurfaceDepth = DIMOS_AR_DESIGN.depth.secondary;
       button.setSurface(variant);
       button.traverse((node) => {
         node.userData.manipulationAction = action;
+        if (key === "plan" || key === "execute") node.userData.endEffectorAction = true;
         node.renderOrder = node === button ? 62 : 63;
       });
       this.buttons.set(key, button);
       return button;
     };
-    addButton("plan", this.previewMenu, "Preview", "plan", 0, 0, 0.095);
+    addButton("plan", this.previewMenu, "Preview", "plan", 0, 0.039, 0.095);
     addButton(
       "execute",
-      this.controls,
+      this.previewMenu,
       "Execute",
       "execute",
-      0.054,
-      0.031,
-      0.135,
+      0,
+      0,
+      0.095,
       "primary",
     );
     addButton("estop", this.controls, "E-stop", "estop", 0, 0, 0.2, "danger");
-    addButton("reset", this.controls, "Reset", "reset", 0, 0, 0.14);
-    addButton("stop", this.controls, "Stop", "stop", 0, 0, 0.14);
+    addButton("reset", this.controls, "Reset", "reset", 0, 0, 0.092);
+    addButton("stop", this.controls, "Stop", "stop", 0, 0, 0.092);
+    addButton("pin", this.controls, "", "pin", ARM_PANEL_STYLE.pinXM, ARM_PANEL_STYLE.pinYM, ARM_PANEL_STYLE.pinSizeM);
+    const scan = addButton("recalibrate", this.controls, "", "recalibrate", ARM_PANEL_STYLE.pinXM - .039, ARM_PANEL_STYLE.pinYM, ARM_PANEL_STYLE.pinSizeM);
+    scan.onTriggered = () => this.onRecalibrate?.();
+    this.controls.add(this.frame.pinLines, this.frame.scanLines, this.title);
+    this.title.font = UI_FONT_SEMIBOLD; this.title.fontSize = .013;
+    this.title.anchorX = "left"; this.title.anchorY = "middle";
+    this.title.position.set(-.096, ARM_PANEL_STYLE.pinYM, .014);
+    this.title.maxWidth = .12; this.title.color = 0xffffff; this.title.renderOrder = 66;
+    this.title.raycast = () => {};
+
     this.speedSlider.hit.userData.manipulationControl = true;
     this.controls.add(this.speedSlider);
     this.speedLabel.font = UI_FONT_REGULAR;
@@ -117,7 +140,8 @@ export class ManipulationControlsView {
     this.speedLabel.raycast = () => {};
     this.speedSlider.add(this.speedLabel);
     this.speedLabel.position.y = 0.012;
-    addButton("gripper", this.gripperMenu, "Open", "gripper", 0, 0, 0.095);
+    const eeAction = addButton("gripper", this.gripperMenu, "Open", "gripper", 0, 0, 0.095);
+    eeAction.traverse(node => { node.userData.endEffectorAction = true; });
     this.status.font = UI_FONT_REGULAR;
     this.status.fontSize = 0.014;
     this.status.maxWidth = 0.34;
@@ -130,7 +154,7 @@ export class ManipulationControlsView {
     (this.status.material as THREE.Material).depthTest = false;
     this.controls.add(this.status);
     this.baseMarker.add(this.controls);
-    this.controls.scale.setScalar(0.7);
+    this.controls.scale.setScalar(ARM_PANEL_STYLE.defaultScale);
     this.controls.position.set(0, -0.13, 0);
     plate.visible = true;
     plate.userData.interactionEnabled = false;
@@ -154,7 +178,6 @@ export class ManipulationControlsView {
     const {
       intent,
       selected,
-      displaced,
       group,
       observed,
       handle,
@@ -172,59 +195,57 @@ export class ManipulationControlsView {
       syncText(this.speedLabel);
     }
     this.speedSlider.hit.userData.interactionEnabled = intent.canManipulate;
-    const rows = [
-      ...(selected && !state.stopped ? ["execute"] : []),
-      "reset",
-      "speed",
-      "stop",
-      "estop",
-    ];
-    this.menuHeight.request(rows.length * 0.04 + 0.028);
+    const rows = manipulationMenuRows(selected, stopped);
+    this.menuHeight.request((rows.length - 1) * ARM_PANEL_STYLE.rowM + ARM_PANEL_STYLE.paddingM + ARM_PANEL_STYLE.headerM);
     this.menuHeight.tick(dtOutline);
-    this.menuPlate.resize(0.224, this.menuHeight.height, 0.016);
+    this.menuPlate.resize(0.224, this.menuHeight.height, ARM_PANEL_STYLE.cornerM);
     this.menuPlate.position.y = -this.menuHeight.height / 2;
-    for (const key of ["execute", "reset", "stop", "estop"])
+    this.frame.resize(this.menuHeight.height);
+    const pin = this.buttons.get("pin")!;
+    this.frame.pinLines.position.set(pin.position.x, pin.position.y,
+      pin.position.z + DIMOS_AR_DESIGN.depth.labelOffset / Math.max(1e-6, this.controls.getWorldScale(new THREE.Vector3()).z));
+    const scan = this.buttons.get("recalibrate")!;
+    scan.visible = this.frame.scanLines.visible = this.localizationAvailable && !!this.onRecalibrate;
+    scan.setEnabled(this.localizationAvailable && !!this.onRecalibrate && !intent.executing && !intent.dragging && !intent.resetting);
+    this.frame.scanLines.position.set(scan.position.x, scan.position.y, this.frame.pinLines.position.z);
+    const fullName = this.baseLabel.tagTitle.text;
+    const name = fullName.length > 15 ? `${fullName.slice(0,14)}…` : fullName;
+    if (this.title.text !== name) { this.title.text = name; syncText(this.title); }
+    for (const key of ["reset", "stop", "estop"])
       this.buttons.get(key)!.visible = rows.includes(key);
-    rows.forEach((key, index) => {
-      const control =
-        key === "speed" ? this.speedSlider : this.buttons.get(key)!;
-      control.position.set(
-        0,
-        -0.028 -
-          index * 0.04 -
-          (key === "speed" ? 0.01 : index > rows.indexOf("speed") ? 0.012 : 0),
-        0.008,
-      );
+    rows.forEach((key) => {
+      const index = key === "reset" || key === "stop" ? 0 : key === "speed" ? 1 : 2;
+      const control = key === "speed" ? this.speedSlider : this.buttons.get(key)!;
+      control.position.set(key === "reset" ? .053 : key === "stop" ? -.053 : 0,
+        -ARM_PANEL_STYLE.headerM - .028 - index * ARM_PANEL_STYLE.rowM - (key === "speed" ? .01 : index > 1 ? .012 : 0), .008);
     });
     const emergency = this.buttons.get("estop")!;
     const emergencyAction = state.stopped ? "resume" : "estop";
     if (emergency.userData.mode !== emergencyAction) {
       emergency.userData.mode = emergencyAction;
       emergency.setText(state.stopped ? "Resume operation" : "E-stop");
-      emergency.setVariant(state.stopped ? "primary" : "danger");
+      emergency.setVariant(state.stopped ? "resume" : "danger");
       emergency.traverse((node) => {
         node.userData.manipulationAction = emergencyAction;
       });
     }
+    const opening = selected ? input.desiredGripper ?? observed?.gripper_target ?? observed?.gripper : observed?.gripper_target ?? observed?.gripper;
+    const markerAction = endEffectorAction(selected, intent, opening, group?.has_gripper === true);
     for (const [key, button] of this.buttons) {
-      button.setEnabled(intent.canManipulate);
-      if (key === "estop")
-        button.setEnabled(intent.canStop || intent.canResume);
-      if (key === "stop") button.setEnabled(intent.canStop);
-      if (key === "reset") button.setEnabled(intent.canReset);
-      if (key === "execute") button.setEnabled(intent.canExecute);
+      button.setEnabled(key === "pin" || (key === "recalibrate" ? this.localizationAvailable && !!this.onRecalibrate && !intent.executing && !intent.dragging && !intent.resetting : manipulationButtonEnabled(key, intent)));
       if (key === "plan") {
         button.setActive(input.previewRequested);
         button.setEnabled(intent.canPreview);
       }
       if (key === "gripper") {
-        button.visible = group?.has_gripper === true;
-        const value = selected
-          ? (input.desiredGripper ?? observed?.gripper)
-          : observed?.gripper;
-        button.setText(
-          value == null ? "Gripper —" : value < 0.5 ? "Open" : "Close",
-        );
+        button.visible = markerAction.available;
+        button.setText(markerAction.label);
+        button.setEnabled(markerAction.enabled);
+        if (button.userData.mode !== markerAction.action) {
+          button.userData.mode = markerAction.action;
+          button.setVariant("default");
+          button.traverse(node => { node.userData.manipulationAction = markerAction.action; });
+        }
       }
       button.feedbackPressed =
         input.hoveredAction === button.userData.manipulationAction;
@@ -240,19 +261,20 @@ export class ManipulationControlsView {
         (1 - Math.exp(-14 * dtOutline));
     }
     this.gripperMenu.visible =
-      (!dragging || input.handDragging === true) &&
+      (!dragging || (input.handDragging === true && markerAction.allowDuringGrab)) &&
       !state.stopped &&
-      group?.has_gripper === true &&
+      markerAction.available &&
       this.hoverProgress > 0.01;
     this.gripperMenu.scale.setScalar(Math.max(0.01, this.hoverProgress));
     this.gripperMenu.position
       .copy(handle.position)
-      .add(new THREE.Vector3(0, -0.055 - this.hoverProgress * 0.025, 0));
+      .add(new THREE.Vector3(0, -0.05, 0));
     this.previewMenu.visible =
-      selected && displaced && !dragging && !state.stopped;
+      selected && !dragging && !state.stopped && this.hoverProgress > 0.01;
+    this.previewMenu.scale.setScalar(Math.max(0.01, this.hoverProgress));
     this.previewMenu.position
       .copy(handle.position)
-      .add(new THREE.Vector3(0, 0.08, 0));
+      .add(new THREE.Vector3(0, 0.05, 0));
   }
   faceViewer(position: THREE.Vector3): void {
     this.baseMarker.lookAt(position);
@@ -265,6 +287,7 @@ export class ManipulationControlsView {
       button.dispose();
     }
     this.buttons.clear();
+    this.frame.dispose();
     disposeObjectTrees([this.baseMarker, this.gripperMenu, this.previewMenu]);
   }
 }

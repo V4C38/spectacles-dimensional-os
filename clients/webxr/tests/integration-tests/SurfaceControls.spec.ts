@@ -26,7 +26,7 @@ test("solid controls retain their depth and front-face interaction from oblique 
     await frameMenu(page, true);
     await page.evaluate(() => {
       const w = window as any;
-      const app = w.xb.core.scene.children.find((node: any) => node.constructor.name === "WebXRApp");
+      const app = w.xb.core.scene.children.find((node: any) => node.client?.manipulation);
       app.menuAnchor.detach(); app.setupPlacement.pin();
       app.client.speech.setDraft("Inspect the kitchen");
       w.surfaceReview = { speech: app.client.speech, menu: app.mainMenu, rotation: app.mainMenu.panel.quaternion.clone(), scale: app.mainMenu.panel.scale.x };

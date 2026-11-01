@@ -62,6 +62,10 @@ export interface UIPresenterDeps {
   selection: Pick<RobotSelection, "snapshot" | "toggle">;
   emergencyStop: () => void;
   onModeChanged: () => void;
+  manipulationSpeed?: () => number;
+  setManipulationSpeed?: (value: number) => void;
+  manipulationEnabled?: () => boolean;
+  manipulationDiagnostics?: () => string;
   speechController?: AgentSpeechController | null;
   tts?: SpecsTextToSpeech | null;
 }
@@ -249,6 +253,10 @@ export class UIPresenter extends BaseScriptComponent {
     const phase = deriveSessionLinkPhase(view);
     const selection = deps.selection.snapshot();
     return {
+      localizationAvailable: deps.session.view().capabilities?.localization.available === true,
+      manipulationAvailable: view.capabilities?.manipulation?.available === true,
+      manipulationSpeed: deps.manipulationSpeed?.() ?? 0.5,
+      manipulationEnabled: deps.manipulationEnabled?.() ?? false,
       robotConnectionText: { disconnected: "Disconnected", connecting: "Connecting…", robotOffline: "Robot offline", connected: "Connected" }[phase],
       activity: getRobotActivityState(view, { asrRunning: deps.speechController?.asrRunning ?? false, ttsPlaying: deps.tts?.isPlaying ?? false }),
       hudText: this.uiLogger.snapshot?.text ?? "",
@@ -263,7 +271,7 @@ export class UIPresenter extends BaseScriptComponent {
       lidarAvailable: view.capabilities?.lidar.available === true, lidarMode: this.getLidarMode(),
       lidarPreferences: { ...this.getLidarPreferences() }, lidarReceived: view.lidar?.points.length ?? 0,
       debugEnabled: this.getDebugMode(),
-      debugText: `Localization timings: ${JSON.stringify(deps.episode.timing())}\nConnection: ${view.connection}\nLocalized: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture.text}\n${deps.episode.view().lastError ?? ""}`,
+      debugText: `Arm capture: ${deps.manipulationDiagnostics?.() ?? "—"}\nPlayback: ${JSON.stringify(view.state?.playback ?? null)}\nLocalization timings: ${JSON.stringify(deps.episode.timing())}\nConnection: ${view.connection}\nLocalized: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture.text}\n${deps.episode.view().lastError ?? ""}`,
       estopAvailable: view.capabilities?.estop.available === true,
       estopPressed: getTime() < this.stopPressedUntil,
       alignmentReview: this.setupFlow?.alignmentReview?.pending === true,
@@ -354,6 +362,7 @@ export class UIPresenter extends BaseScriptComponent {
     const panel = this.mainUIFrame;
     this.mainMenuView = new MainMenuView(panel, {
       onRestart: () => this.restartSetup(),
+      onSpeed: value => deps.setManipulationSpeed?.(value),
       onModeButtonPressed: (mode) => {
         const accessible = agentModeAccessible(
           this.requireDeps().session.view().capabilities?.agent.available === true,

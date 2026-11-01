@@ -176,8 +176,8 @@ async def test_webxr_exit_stops_armodule(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
     mgr.status.phase = Phase.RUNNING
     mgr.status.check_ok = True
-    mgr._proc = object()  # type: ignore[assignment]
-    mgr._webxr_proc = object()  # type: ignore[assignment]
+    mgr._proc = Mock(pid=42424241, returncode=None)  # type: ignore[assignment]
+    mgr._webxr_proc = Mock(pid=42424242, returncode=None)  # type: ignore[assignment]
 
     with (
         patch.object(mgr, "_stop_one", new=AsyncMock(return_value=True)),

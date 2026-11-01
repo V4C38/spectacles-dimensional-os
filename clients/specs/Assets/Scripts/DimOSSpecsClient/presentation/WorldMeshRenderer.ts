@@ -52,7 +52,7 @@ export class WorldMeshRenderer {
   }
 
   triangles(positions: readonly number[], indices: readonly number[], color: WorldColor,
-    uvs?: readonly number[], normals?: readonly number[]): void {
+    uvs?: readonly number[], normals?: readonly number[], alphas?: readonly number[]): void {
     const previous = this.triangleInput;
     if (previous && cachedCirclePositions.has(positions) && previous.positions === positions && previous.indices === indices && previous.uvs === uvs &&
       previous.normals === normals && sameNumbers(previous.color, color)) { this.object.enabled = indices.length > 0; return; }
@@ -61,9 +61,15 @@ export class WorldMeshRenderer {
     for (let i = 0; i < positions.length / 3; i++) {
       vertices.push(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2],
         normals?.[i * 3] ?? 0, normals?.[i * 3 + 1] ?? 1, normals?.[i * 3 + 2] ?? 0,
-        ...color, uvs?.[i * 2] ?? 0, uvs?.[i * 2 + 1] ?? 0);
+        color[0], color[1], color[2], color[3] * (alphas?.[i] ?? 1), uvs?.[i * 2] ?? 0, uvs?.[i * 2 + 1] ?? 0);
     }
     this.upload(vertices, indices);
+  }
+
+  setColor(color: WorldColor): void {
+    const input = this.triangleInput;
+    if (!input || sameNumbers(input.color, color)) return;
+    this.triangles(input.positions, input.indices, color, input.uvs, input.normals);
   }
 
   setViewportHeight(height: number): void {
@@ -102,15 +108,17 @@ function sameNumbers(a: readonly number[], b: readonly number[]): boolean {
 /** Adaptive stroke quads encode the same segment metric used by the WebXR shader. */
 export class AdaptiveStrokeRenderer extends WorldMeshRenderer {
   constructor(parent: SceneObject, name: string) { super(parent, name, WORLD_STROKE_MATERIAL, true); }
+  minimumPixels = 2;
   segments(points: readonly Vec3[], widthCm: number, opacity: number,
     dashCm: number = WORLD_DASH_STYLE.dashM * 100, gapCm: number = WORLD_DASH_STYLE.gapM * 100,
-    continuous = false): void {
+    continuous = false, color: readonly [number, number, number] = [1, 1, 1], opacities?: readonly number[]): void {
+    (this.material.mainPass as Pass & { minimumPixels: number }).minimumPixels = this.minimumPixels;
     const vertices: number[] = [], indices: number[] = [];
     let distance = 0;
     for (let i = 0; i + 1 < points.length; i += 2) {
       const a = points[i], b = points[i + 1], start = vertices.length / 22;
       for (const [side, t] of [[-1, 0], [1, 0], [-1, 1], [1, 1]]) {
-        vertices.push(...a, 0, 1, 0, 1, 1, 1, opacity, side, t,
+        vertices.push(...a, 0, 1, 0, ...color, opacity * (opacities?.[i + t] ?? 1), side, t,
           b[0], b[1], b[2], continuous ? distance : 0, widthCm, dashCm, gapCm, a[0], a[1], a[2]);
       }
       indices.push(start, start + 1, start + 2, start + 2, start + 1, start + 3);

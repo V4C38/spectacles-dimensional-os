@@ -50,10 +50,9 @@ modify an existing process. API keys remain in the existing credential settings.
 ## Ownership and interactions
 
 Selecting the arm makes its end effector handle a full-pose planning target.
-Dragging requests collision-checked timed trajectories at most every 350 ms after
-1 cm or 3 degrees of movement. One evaluation/planning request is allowed in flight;
-new targets replace the queued target. A released target receives a final exact
-plan regardless of the live movement threshold. Outdated replies cannot restore a
+Dragging requests seeded nonmoving IK at most every 50 ms. One evaluation/planning
+request is allowed in flight; new targets replace the queued target. Release,
+Preview and Execute request a collision-checked timed path for the exact target. Outdated replies cannot restore a
 curve or authorize execution. Preview plays the trajectory once. Execute names
 that exact reviewed plan; replacement or invalid start state rejects execution.
 
@@ -82,12 +81,10 @@ OpenYAM composition uses coincident world/base/odom frames. If those transforms 
 changed, configure their composition consistently with the actual model base.
 Tag mounts are relative to that base. Host basis conversion happens once.
 
-The measured arm uses oriented per-link bounds in the shared world-line style.
+The arm preview uses articulated mesh geometry in the shared world-line style.
 The planning ghost is a bundled 251 KB simplified model; see the WebXR model
 NOTICE for source and license. Geometry preparation happens once outside this repo.
-WebXR applies the existing OpenYAM base visual quarter-turn to only the root
-bounding box for the explicit `openyam` visual profile; mesh geometry and all other boxes retain
-their established orientation. Joint topology and bounds come from the configured official model, and a
+The explicit `openyam` visual profile retains its existing root-mesh orientation correction. Joint topology and bounds come from the configured official model, and a
 numerically normalized visual signature prevents using the bundled ghost with a
 mismatched model. ClientCore FK is visual only and supports revolute, continuous,
 prismatic, fixed, and mimic joints. It is never used to authorize motion.
@@ -134,15 +131,15 @@ plan. **Preview** computes and animates the trajectory without moving hardware.
 Changing the target or speed invalidates the previous preview. Deselecting drops
 the target and returns the handle to the measured tool pose.
 
-With the robot unselected, hold and drag the tool sphere to follow live; release
-to stop following. Grab capture persists outside the robot bounds. The controller's
+With the robot unselected, hold and drag the tool sphere to follow live; normal release
+lets the arm finish reaching the final valid target. Grab capture persists outside the robot bounds. The controller's
 secondary face button toggles the gripper during a drag. The tool's floating
 Open/Close button appears below the marker while hovering either the sphere or the
 button, with a short grace period for moving between them. It hides immediately
 during an end-effector grab. Preview appears above a selected displaced marker and
 also hides during the grab.
 
-Robot settings and the arm base panel share a 5–100% manipulation speed slider, default 20%. It scales
+Robot settings and the arm base panel share a 5–100% manipulation speed slider, default 50%. It scales
 planned motion and the live IK joint velocity envelope. Reset plans a checked
 joint-zero arm move and leaves the gripper unchanged. The base panel stacks Execute (selected mode), Reset, speed, Stop, and the wider
 E-stop control. Once stopped, the bottom control becomes the white Resume operation
@@ -205,10 +202,11 @@ establish that measurement.
 ### Specs and shared client behavior
 
 Specs uses the existing PIN/IP setup and measured robot-profile calibration.
-Select the arm through its bounds or menu. Selected dragging edits a full-pose
+Select the arm through its mesh, root sphere, or menu. Selected dragging edits a full-pose
 target; release requests a checked plan. Preview plays the articulated trajectory
 once and retains its endpoint. Execute binds to that plan. Unselected dragging
-follows until release, input loss, or tracking/session invalidation. Both hosts
+follows while held and finishes toward its retained target after normal release;
+input loss or tracking/session invalidation interrupts it. Both hosts
 use ClientCore for grab offsets, pose smoothing, action dispatch, preview timing,
 visual kinematics, trajectory sampling, and control-state derivation.
 
@@ -273,22 +271,19 @@ backend changes requires restarting the launcher, which remains user-controlled.
 
 ### Continuous previews and live IK guides
 
-Selected dragging retains the last valid path and arm configuration while one
-replacement plan runs, with a 350 ms minimum interval and newest-target coalescing.
+Selected dragging retains the last valid arm configuration while one seeded IK
+evaluation runs, with a 50 ms minimum interval and newest-target coalescing.
 Only the exact current intent can execute. Activity labels are compact and derive
 from shared interaction state; an offset selected target remains Planning between
 requests. Execution remains latched until authoritative terminal feedback arrives.
 
-Unselected dragging renders a movement-weighted dashed IK skeleton, while the tool
-retains its 3D model. Unreachable input preserves capture and the following lease,
-holds motion, and can recover within the same gesture. Release returns the marker
-to measured pose. Joint-limit warnings use the last 5% of bounded joint ranges.
+Unselected dragging renders a movement-weighted articulated 3D mesh. Unreachable input preserves capture and the following lease,
+holds motion, and can recover within the same gesture. Normal release retains the valid final target and completes motion toward it; an
+invalid target returns to the last validated pose, and motion completes there. Joint-limit warnings use the last 5% of bounded joint ranges.
 
 OpenYAM finger pads open as the independent prismatic joints move toward their
-lower URDF limits (the meshes cross their joint origins). The visual-only forearm
-profile uses two boxes; planner collision geometry and GLB signatures are unchanged.
-Gripper bounds update their picking mesh independently from their instanced outline.
-Stationary bounds reveal along their full longest axis, then expand crosswise.
+lower URDF limits (the meshes cross their joint origins). Selection uses mesh triangles, including the gripper; planner collision geometry
+and GLB signatures are unchanged. No arm selection boxes are drawn.
 
 The mini-menu uses the shared labeled speed slider. Ray capture follows its thumb
 in either menu, independently of the ray-plane calculation that changes its value.
@@ -338,3 +333,78 @@ Full repository CI includes browser integration and production build checks.
 Physical registration, stopping latency, CAN hardware, headset input and depth
 quality remain attended hardware checks; fixture and mock passes do not establish
 their physical performance.
+
+
+### Arm presentation and selection feedback
+
+The complete selected outlined mesh stays at normal strength independently of hover,
+even at the measured pose. Displacement weighting controls only the unselected mesh. Hover and
+selection visibility transitions fade smoothly using the shared presentation owner;
+mesh picking remains enabled independently of opacity. Shape edges use 6 mm dashes
+and 9 mm gaps. The small translucent sphere always marks the measured EE pose.
+Following and execution paths use full opacity, while planning paths remain faint.
+Below the hovered EE marker, selected mode offers Execute after release; unselected
+mode offers Open/Close, including the independent second-hand action. Hover never
+toggles selection: selecting a mesh/root sphere or pressing the near-EE action
+requires a new pinch/press after release.
+
+## Protection and continuity
+
+OpenYAM AR intersects planning limits with the physical adapter's kinematic limits,
+then reserves three degrees at each end for commanded goals. Measured feedback
+continues to use the physical limits: a valid starting pose inside the command
+buffer may recover inward without being declared invalid. Recovery trajectories
+are checked for monotonic entry into the buffer; later points may not leave it.
+Reset/parking resolve zeros to these safe
+limits and log the applied joint angles. The local protected adapter bounds every
+physical write and reads motor enabled/fault state and MOS/rotor temperatures.
+A stationary tracking error above five degrees derates after 200 ms; tracking
+error alone does not latch an emergency stop. A loaded PD controller can retain
+this offset without a motor fault. 60°C for 500 ms derates, 70°C or a five-second
+thermal warning pauses. Command lead uses the coordinator’s ten-degree tracking envelope in both direct
+follow and the hardware boundary. Derating clears after a full second below three
+degrees of tracking error. The physical joint limits and three-degree command
+buffer remain separate from this tracking envelope.
+Derating halves live speed and execution's virtual clock. Pausing holds fresh
+measured positions with gravity compensation, independently of task activity.
+Explicit Stop captures fresh feedback at the hardware boundary before cancelling
+tasks; its held position bypasses command-margin adjustment so stopping cannot
+introduce a new inward target. Resume explicitly releases this hardware hold.
+Resume requires two healthy seconds, tracking error below two degrees and
+temperatures below 55°C. Hard motor faults require reconnecting; they never clear
+automatically. These configurable software defaults require physical sign-off.
+
+Following retains one continuity-seeded validated joint endpoint across ordinary
+hand samples. Continuity seeds are scoped to the control episode, not shared
+between separate grabs. Arrival uses a 2 mm / 1° hold band with a 4 mm / 2° exit
+band, and preserves acceleration limits while braking into the hold.
+
+Selected and idle-hovered meshes share a 25% point-opacity floor. Selected hover
+retains the inner fill and adds 10% opacity; unselected hover shows only the
+outline with a 5% opacity boost. Hover leaves line thickness unchanged. Maximum displacement opacity occurs at 100 mm, with
+a 5 mm dead zone. Failure tint remains yellow until the current request validates.
+Both hosts use velocity-preserving critically damped joint presentation: 100 ms
+settling for measured motion and 150 ms for preview targets. Selection, plan
+updates, and rejection/recovery do not reset this motion. Debug frames
+use raw measured joint angles; preview interpolation is never control feedback.
+
+Parallel runtime probes must use a private discovery bus as well as a private
+WebSocket port. For example:
+
+```sh
+dimos --simulation=mock --zenoh-scout-addr=224.0.0.225:17446 run dimos-ar.openyam-ar-planner --armodule.port=8799 --armodule.ip-relay-url=null
+```
+
+The arm controls panel moves and scales independently of the robot name/state/
+speed badge. Its default scale is 0.7, with a 0.525 minimum and 1.4 maximum; Pin
+restores its anchored position, rotation and default scale. A dedicated header
+keeps Pin separate from the control rows.
+
+Short feedback loss retains capture and the displayed arm for two seconds while
+pausing Preview and all motion requests. The target still follows the hand. Recovery
+revalidates plans and reacquires following leases without automatically clearing Stop.
+The mini panel defaults to scale 0.875 (25% larger), bounded to 0.65625–1.75; its
+separately anchored robot badge does not scale with it. Presentation uses Hermite
+interpolation capped at 50 ms, finite measured velocities when available, and visual
+prediction bounded to 30 ms. Execution uses raw feedback, with 30 mm / 8° arrival
+settled for 500 ms; the deferred gripper must acknowledge before terminal completion.

@@ -26,7 +26,7 @@ test("uses compact monochrome desktop chrome in the launcher", async ({ page }, 
 async function launcherWithHardwareChecks(page: import("@playwright/test").Page, plannerReady = true) {
   const profiles = ["unitree_go2", "openyam"].map(robot => ({
     id: robot, robot, name: robot, settings: {fiducial_marker: true, vps: false, map_code: null,
-      mounts: [{marker_id: 0, print_size_mm: 70, forward_m: 0, lateral_m: 0, up_m: 0, yaw_deg: 0, pitch_deg: 0, roll_deg: 0}]},
+      mounts: [{marker_id: 0, print_size_mm: 69.99999999999999, forward_m: 0, lateral_m: 0, up_m: 0, yaw_deg: 0, pitch_deg: 0, roll_deg: 0}]},
   }));
   let canReady = false;
   const planner = {ready: plannerReady, state: plannerReady ? "ready" : "incomplete", message: plannerReady ? "Manipulation planner ready" : "RoboPlan does not match DimOS"};
@@ -51,6 +51,7 @@ async function launcherWithHardwareChecks(page: import("@playwright/test").Page,
   await page.addInitScript(() => { (window as any).EventSource = class { onmessage = null; }; });
   await page.goto("/launcher-review");
   await page.selectOption("#blueprintSelect", "openyam_ar_planner");
+  await page.locator("#installBanner").evaluate((node: HTMLDetailsElement) => { node.open = true; });
   await page.locator("#canCard summary").click();
 }
 
@@ -63,26 +64,152 @@ test("OpenYAM CAN card checks readiness, configures on click, and hides for Go2"
   await page.locator("#canSetupBtn").click();
   await expect(page.locator("#canStatus")).toContainText("can0 ready");
   await expect(page.locator("#startBtn")).toBeEnabled();
-  await expect(page.locator("#canSetupBtn")).toBeDisabled();
+  await expect(page.locator("#canSetupBtn")).toBeEnabled();
+  await expect(page.locator("#canSummary")).toHaveText("Ready · 1 Mbit/s");
+  await expect(page.locator("#canStatus")).toBeHidden();
+  await page.locator("#canSetupBtn").click();
+  await expect(page.locator("#canSetupResult")).toHaveText("Already set up on can0");
   await page.screenshot({path: info.outputPath("launcher-can-ready.png")});
   await page.selectOption("#blueprintSelect", "unitree_go2_ar");
   await expect(page.locator("#canCard")).toBeHidden();
 });
 
-test("mock hardware bypasses CAN but still requires compatible planner dependencies", async ({page}) => {
+test("simulated connection bypasses CAN but still requires compatible planner dependencies", async ({page}) => {
   await launcherWithHardwareChecks(page);
   await expect(page.locator("#startBtn")).toBeDisabled();
-  await page.locator("#simulationEnabled").check();
-  await expect(page.locator("#canStatus")).toHaveText("Not required for mock hardware.");
+  await page.selectOption("#robotSource", "simulated");
+  await expect(page.locator("#canStatus")).toHaveText("Not required for simulated connection.");
   await expect(page.locator("#startBtn")).toBeEnabled();
   await expect(page.locator("#canSetupBtn")).toBeDisabled();
 });
 
 test("incompatible planner keeps mock startup disabled and exposes dependency repair", async ({page}) => {
   await launcherWithHardwareChecks(page, false);
-  await page.locator("#simulationEnabled").check();
+  await page.selectOption("#robotSource", "simulated");
   await expect(page.locator("#startBtn")).toBeDisabled();
-  await page.locator("#installBanner summary").click();
+  await page.locator("#installBanner").evaluate((node: HTMLDetailsElement) => { node.open = true; });
   await expect(page.locator("#plannerStatus")).toContainText("RoboPlan does not match");
   await expect(page.locator("#installBtn")).toBeVisible();
+});
+
+test("connected robot and profile controls share a row and manual IP remains selectable", async ({page}, info) => {
+  await launcherWithHardwareChecks(page);
+  await page.selectOption("#blueprintSelect", "unitree_go2_ar");
+  await expect(page.locator("#robotSource option").first()).toHaveText("Auto (scan on startup)");
+  await expect(page.locator("#robotSource option").last()).toHaveText("Simulated");
+  await page.locator("#editConnection").click();
+  await page.locator("#robotIp").fill("192.168.1.42");
+  await page.locator("#robotIp").press("Enter");
+  await expect(page.locator("#robotSource")).toHaveValue("manual");
+  await expect(page.locator("#robotSource option:checked")).toContainText("192.168.1.42");
+  await expect(page.locator("#connectionEditor")).toBeHidden();
+  const controls = await page.locator("#robotSource, #editConnection, #refreshRobots, #robotProfileSelect, #profileEdit").evaluateAll(nodes => nodes.map(node => {
+    const box = node.getBoundingClientRect(); return {id: node.id, x: box.x, y: box.y, w: box.width, h: box.height};
+  }));
+  expect(controls.every(control => control.h === 44)).toBe(true);
+  const otherHeights = await page.locator(".tab, #startBtn, #stopBtn").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height));
+  expect(otherHeights.every(height => height === 44)).toBe(true);
+  expect(controls[0].y).toBe(controls[1].y);
+  expect(controls[0].y).toBe(controls[2].y);
+  expect(controls[3].y).toBeGreaterThan(controls[0].y);
+  for (const control of controls.filter(control => /editConnection|refreshRobots|profileEdit/.test(control.id))) expect(control.w).toBe(44);
+  await page.screenshot({path: info.outputPath("launcher-connected-profile.png")});
+});
+
+test("simulated OpenYAM exposes recorded playback and explicit stream selection", async ({page}) => {
+  await launcherWithHardwareChecks(page);
+  await page.route("**/api/replay/inspect", route => {
+    const selected = route.request().postDataJSON().streams?.joints;
+    return route.fulfill({json: {streams: selected ? {joints: selected} : {}, candidates: {joints: ["measured", "commanded"]}, needs_selection: !selected}});
+  });
+  await page.selectOption("#robotSource", "simulated");
+  await expect(page.locator("#playbackSource")).toHaveValue("simulator");
+  await expect(page.locator("#editReplay")).toBeDisabled();
+  await page.selectOption("#playbackSource", "recording");
+  await page.locator("#editReplay").click();
+  await page.locator("#replayPath").fill("/recordings/arm.db");
+  await page.locator("#replayPath").dispatchEvent("change");
+  await expect(page.locator("#replayStatus")).toContainText("Choose streams");
+  await page.getByRole("combobox", {name: "joints stream"}).selectOption("measured");
+  await expect(page.locator("#replayStatus")).toContainText("Recording ready");
+  const request = page.waitForRequest(request => new URL(request.url()).pathname === "/api/armodule/start");
+  await page.locator("#startBtn").click();
+  expect((await request).postDataJSON().source).toMatchObject({mode: "simulated", playback: "recording", replay: "/recordings/arm.db", streams: {joints: "measured"}});
+});
+
+test("launcher controls and disclosure sections use the same design tokens", async ({page}, info) => {
+  await launcherWithHardwareChecks(page);
+  const readMetrics = () => page.locator("button:visible, summary:visible, select:visible").evaluateAll(nodes => nodes.map(node => {
+    const style = getComputedStyle(node);
+    return {id: node.id || node.className, height: node.getBoundingClientRect().height, font: style.fontSize, weight: style.fontWeight, line: style.lineHeight, radius: style.borderRadius, select: node.tagName === "SELECT", indicator: style.backgroundImage};
+  }));
+  for (const control of await readMetrics()) {
+    expect(control.height, control.id).toBe(control.id.includes("tag-summary") ? 64 : 44);
+    expect(control.font, control.id).toBe("14px");
+    expect(control.weight, control.id).toBe("400");
+    expect(control.line, control.id).toBe("20px");
+    if (control.select) expect(control.indicator, control.id).not.toBe("none");
+  }
+  await page.locator("#installBanner").evaluate((node: HTMLDetailsElement) => { node.open = false; });
+  const cards = page.locator("#ipCard, #installBanner, #locCard, #logCard");
+  const surfaces = await cards.evaluateAll(nodes => nodes.map(node => {
+    const style = getComputedStyle(node); return {height: node.getBoundingClientRect().height, background: style.backgroundColor, radius: style.borderRadius, shadow: style.boxShadow};
+  }));
+  expect(surfaces.length).toBe(4);
+  expect(surfaces.every(surface => surface.height === 44)).toBe(true);
+  expect(new Set(surfaces.map(surface => surface.background)).size).toBe(1);
+  expect(new Set(surfaces.map(surface => surface.radius)).size).toBe(1);
+  await page.screenshot({path: info.outputPath("launcher-unified-collapsed.png")});
+  await page.locator("#ipCard > summary").click();
+  await page.locator("#installBanner > summary").click();
+  await page.locator("#locCard > summary").click();
+  for (const control of await readMetrics()) {
+    expect(control.height, control.id).toBe(control.id.includes("tag-summary") ? 64 : 44);
+    expect(control.font, control.id).toBe("14px");
+  }
+  await page.screenshot({path: info.outputPath("launcher-unified-expanded.png")});
+});
+
+for (const sidebarWidth of [280, 460]) {
+  test(`AprilTag editor fits a ${sidebarWidth}px sidebar`, async ({page}, info) => {
+    const marker = await readFile(new URL("../../../../assets/markers/apriltag_robot_1.png", import.meta.url));
+    await launcherWithHardwareChecks(page);
+    await page.route("**/api/apriltag/*.png*", route => route.fulfill({contentType: "image/png", body: marker}));
+    await page.locator(".tag-card img").evaluateAll(nodes => nodes.forEach((node: HTMLImageElement) => { node.src += "?review=1"; }));
+    await page.locator('#sidePanel').evaluate((node, width) => { node.style.width = `${width}px`; }, sidebarWidth);
+    await page.locator('#locCard').evaluate((node: HTMLDetailsElement) => { node.open = true; });
+    await expect(page.locator('.tag-card')).toBeVisible();
+    const overflow = await page.locator('.tag-card, .tag-body, .tag-picker, .tag-grid, .tag-field, .num-input, .tag-preset').evaluateAll(nodes => nodes.filter(node => node.scrollWidth > node.clientWidth + 1).map(node => ({className: node.className, width: node.clientWidth, content: node.scrollWidth})));
+    expect(overflow).toEqual([]);
+    await expect(page.locator('.tag-summary').first()).toHaveCSS('height', '64px');
+    await expect(page.getByRole('combobox', {name: 'Marker type'})).toBeVisible();
+    for (const group of ['Location (m)', 'Rotation (°)']) {
+      const fields = page.getByRole('group', {name: group, exact: true}).locator('input');
+      const positions = await fields.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().y));
+      expect(positions.length).toBe(3);
+      expect(new Set(positions).size).toBe(1);
+    }
+    await expect(page.locator('.tag-preview img').first()).toHaveCSS('height', '64px');
+    await page.locator(".tag-card").screenshot({path: info.outputPath(`apriltags-${sidebarWidth}.png`)});
+  });
+}
+
+test("marker dropdown preserves saved IDs, switches presets and accepts uploads", async ({page}) => {
+  await launcherWithHardwareChecks(page);
+  await page.locator('#locCard').evaluate((node: HTMLDetailsElement) => { node.open = true; });
+  const picker = page.getByRole('combobox', {name: 'Marker type'});
+  await expect(picker).toHaveValue('0');
+  await expect(picker.locator('option')).toHaveText(['ID 0', 'ID 1', 'ID 2', 'Upload PNG…']);
+  await picker.selectOption('2');
+  await expect(page.locator('.tag-title')).toHaveText('Fiducial marker 2');
+  await expect(page.locator('.tag-preview img')).toHaveAttribute('src', /\/api\/apriltag\/2\.png$/);
+  await expect(page.getByRole('spinbutton', {name: 'Print size (mm)', exact: true})).toHaveValue('70');
+  await page.route('**/api/apriltag/decode', route => route.fulfill({json: {marker_id: 42}}));
+  const chooser = page.waitForEvent('filechooser');
+  await picker.selectOption('upload');
+  const marker = await readFile(new URL('../../../../assets/markers/apriltag_robot_1.png', import.meta.url));
+  await (await chooser).setFiles({name: 'custom.png', mimeType: 'image/png', buffer: marker});
+  await expect(picker).toHaveValue('42');
+  await expect(picker.locator('option:checked')).toHaveText('ID 42 (saved)');
+  await expect(page.locator('.tag-preview img')).toHaveAttribute('src', /\/api\/apriltag\/42\.png$/);
 });

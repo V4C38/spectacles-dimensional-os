@@ -66,13 +66,11 @@ it("makes the forearm envelope substantially smaller with two simple boxes", () 
   );
   expect(compound).toBeLessThan(volume(bounds.size) * 0.55);
 });
-it("preserves the arm material's edge opacity while lowering its center", () => {
+it("uses the same faint flat surface for arm and gripper links", () => {
   for (const thin of [false, true]) {
-    const material = armMaterial(thin),
-      u = material.uniforms;
-    expect(u.uFill.value).toBe(thin ? 0.008 : 0.015);
-    expect(u.uFill.value + u.uRim.value).toBeCloseTo(thin ? 0.82 : 0.92);
-    expect(u.uPower.value).toBe(5);
+    const material = armMaterial(thin);
+    expect(material.fragmentShader).toContain("0.28 * uOpacity");
+    expect(material.uniforms.uRim).toBeUndefined();
     material.dispose();
   }
 });

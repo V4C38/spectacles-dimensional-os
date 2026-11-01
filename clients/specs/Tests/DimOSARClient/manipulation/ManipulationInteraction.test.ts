@@ -70,6 +70,7 @@ describe("manipulation intent", () => {
     f.interaction.setSelected(true);
     expect(f.interaction.begin()).toBe(true);
     f.interaction.aim(pose);
+    f.interaction.end();
     f.advance(0.2);
     const plan = f.sent.at(-1);
     expect(plan.action).toBe("plan");
@@ -172,7 +173,7 @@ it("Execute obtains a checked plan and executes exactly its ID without a Plan cl
   f.advance(0.1);
   const request = f.sent.at(-1);
   expect(request.action).toBe("plan");
-  expect(request.speed_scale).toBe(0.2);
+  expect(request.speed_scale).toBe(0.5);
   f.reply(request, {
     status: "planned",
     plan_id: "checked",
@@ -261,34 +262,24 @@ function planned(id = "checked") {
   };
 }
 
-it("coalesces live plans at 350 ms and keeps dragging while a planner is pending", () => {
-  const f = fixture();
-  f.interaction.setSelected(true);
-  f.interaction.begin();
-  f.interaction.aim(pose);
-  f.advance(0.01);
-  const first = f.sent.at(-1);
-  expect(first.action).toBe("plan");
-  f.interaction.aim({ ...pose, position: [0.02, 0, 0.3] });
-  f.advance(0.1);
-  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(1);
-  f.interaction.aim({ ...pose, position: [0.04, 0, 0.3] });
-  f.reply(first, planned("old"));
-  expect(f.interaction.plan).toBeNull();
-  f.advance(0.1);
-  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(1);
-  f.advance(0.16);
-  const latest = f.sent.at(-1);
-  expect(latest).toMatchObject({ action: "plan", position: [0.04, 0, 0.3] });
+it("coalesces held IK at 20 Hz and checks a full plan only after release", () => {
+  const f = fixture(); f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.advance(.01);
+  const first = f.sent.at(-1); expect(first.action).toBe("evaluate");
+  f.interaction.aim({...pose, position:[.02,0,.3]}); f.advance(.02);
+  f.interaction.aim({...pose, position:[.04,0,.3]}); f.advance(.02);
+  expect(f.sent).toHaveLength(1);
+  f.reply(first,{status:"feasible", joints:{joint:.3}});
+  f.advance(.011);
+  const next=f.sent.at(-1); expect(next).toMatchObject({action:"evaluate",position:[.04,0,.3]});
   expect(f.interaction.dragging).toBe(true);
-  f.reply(latest, planned());
-  f.interaction.end();
-  f.advance(0.01);
-  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(2);
-  expect(f.sent.some((c) => c.action === "execute")).toBe(false);
-  expect(f.interaction.begin()).toBe(true);
-  f.interaction.aim({ ...pose, position: [0.05, 0, 0.3] });
-  expect(f.interaction.plan).toBeNull();
+  expect(f.sent.some(c=>c.action==="plan")).toBe(false);
+  f.reply(next,{status:"feasible",joints:{joint:.34}});
+  f.interaction.end(); f.advance(.01);
+  expect(f.sent.at(-1)).toMatchObject({action:"plan",position:[.04,0,.3]});
+  f.reply(f.sent.at(-1),planned("released"));
+  expect(f.interaction.plan?.plan_id).toBe("released");
+  expect(f.sent.some(c=>c.action==="execute")).toBe(false);
 });
 
 it("plans the exact released pose even below the live movement threshold", () => {
@@ -301,8 +292,8 @@ it("plans the exact released pose even below the live movement threshold", () =>
   f.interaction.aim({ ...pose, position: [0.002, 0, 0.3] });
   f.interaction.end();
   f.advance(0.01);
-  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(1);
-  f.reply(first, planned("old"));
+  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(0);
+  f.reply(first, {status:"feasible", joints:{joint:.3}});
   f.advance(0.01);
   expect(f.sent.at(-1)).toMatchObject({
     action: "plan",
@@ -331,7 +322,7 @@ it("uses pose hysteresis including orientation and equivalent quaternion signs",
   });
   expect(f.interaction.snapshot().targetOffset).toBe(true);
   f.advance(0.01);
-  expect(f.sent.at(-1).action).toBe("plan");
+  expect(f.sent.at(-1).action).toBe("evaluate");
   f.interaction.aim({
     ...pose,
     position: [0, 0, 0],
@@ -355,7 +346,7 @@ it("Stop retires targets and late plans and does not restart after Resume", () =
   f.reply(stop, { status: "aborted" });
   f.reply(plan, planned("late"));
   f.advance(1);
-  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(1);
+  expect(f.sent.filter((c) => c.action === "evaluate")).toHaveLength(1);
   expect(f.interaction.plan).toBeNull();
   expect(f.interaction.begin()).toBe(true);
   f.interaction.end();
@@ -369,10 +360,12 @@ it("Stop retires targets and late plans and does not restart after Resume", () =
   expect(f.interaction.target).toBeNull();
 });
 
-it("actuates a selected gripper directly at the measured pose", () => {
+it("requires Execute for a selected gripper at the measured pose", () => {
   const f = fixture();
   f.interaction.setSelected(true);
   f.interaction.setGripper(1);
+  expect(f.sent.some(c => c.action === "gripper")).toBe(false);
+  f.interaction.execute();
   expect(f.sent.at(-1)).toMatchObject({ action: "gripper", value: 1 });
   f.advance(0.01);
   expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(0);
@@ -401,7 +394,7 @@ it("does not retry timed-out execution and blocks plans with stale feedback", ()
   f.reply(f.sent.at(-1), { status: "aborted" });
   f.interaction.begin();
   f.interaction.aim(pose);
-  f.advance(1, false);
+  f.advance(2.01, false);
   expect(f.interaction.dragging).toBe(false);
   expect(f.interaction.plan).toBeNull();
 });
@@ -455,29 +448,20 @@ it("requires a new final plan after speed or gripper intent changes during plann
   });
 });
 
-it("retains a delayed valid preview through more edits without making it executable", () => {
-  const f = fixture();
-  f.interaction.setSelected(true);
-  f.interaction.begin();
-  f.interaction.aim(pose);
-  f.advance(0.01);
-  const first = f.sent.at(-1);
-  for (let i = 1; i <= 10; i++) {
-    f.interaction.aim({ ...pose, position: [i * 0.01, 0, 0.3] });
-    f.advance(0.05);
-  }
-  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(1);
-  f.reply(first, planned("last-valid"));
-  expect(f.interaction.previewPlan?.plan_id).toBe("last-valid");
-  expect(f.interaction.plan).toBeNull();
-  f.advance(0.01);
-  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(2);
-  f.interaction.aim({ ...pose, position: [0.2, 0, 0.3] });
-  expect(f.interaction.previewPlan?.plan_id).toBe("last-valid");
-  expect(f.interaction.snapshot().activity).toBe("Planning");
+it("retains delayed valid IK through newer edits without making it executable", () => {
+  const f=fixture(); f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.advance(.01); const first=f.sent.at(-1);
+  for(let i=1;i<=10;i++) { f.interaction.aim({...pose,position:[i*.01,0,.3]}); f.advance(.05); }
+  expect(f.sent.filter(c=>c.action==="evaluate")).toHaveLength(1);
+  f.reply(first,{status:"feasible",joints:{joint:.3}});
+  expect(f.interaction.previewJoints).toEqual({joint:.3}); expect(f.interaction.plan).toBeNull();
+  f.advance(.01); expect(f.sent.filter(c=>c.action==="evaluate")).toHaveLength(2);
+  f.interaction.aim({...pose,position:[.2,0,.3]});
+  expect(f.interaction.previewJoints).toEqual({joint:.3});
+  expect(f.sent.some(c=>c.action==="plan"||c.action==="execute")).toBe(false);
 });
 
-it("keeps an infeasible following target grabbed, recovers, and returns to measured pose on release", () => {
+it("keeps an infeasible following target grabbed, recovers, and finishes moving after release", () => {
   const f = fixture();
   f.interaction.begin();
   f.reply(f.sent.at(-1), { status: "acquired", token: "t" });
@@ -504,11 +488,13 @@ it("keeps an infeasible following target grabbed, recovers, and returns to measu
   expect(f.interaction.solution).toEqual({ joint: 0.2 });
   expect(f.interaction.rejection).toBeNull();
   f.interaction.end();
-  expect(f.interaction.target).toBeNull();
+  expect(f.interaction.target?.position).toEqual([0, 0, 0.2]);
+  expect(f.interaction.snapshot().finishing).toBe(true);
+  f.interaction.interrupt();
   expect(f.sent.at(-1).action).toBe("release");
 });
 
-it("Open/Close executes the matching target plan with deferred gripper intent", () => {
+it("Open/Close drafts deferred gripper intent until Execute", () => {
   const f = fixture();
   f.interaction.setSelected(true);
   f.interaction.begin();
@@ -519,6 +505,8 @@ it("Open/Close executes the matching target plan with deferred gripper intent", 
   const plan = f.sent.at(-1);
   expect(plan).toMatchObject({ action: "plan", final_gripper: 1 });
   f.reply(plan, planned("grasp"));
+  expect(f.sent.some(c => c.action === "execute")).toBe(false);
+  f.interaction.execute();
   expect(f.sent.at(-1)).toMatchObject({ action: "execute", plan_id: "grasp" });
   f.reply(f.sent.at(-1), { status: "accepted", operation_id: "op" });
   const count = f.sent.length;
@@ -531,7 +519,7 @@ it("Open/Close executes the matching target plan with deferred gripper intent", 
   expect(f.interaction.snapshot().executing).toBe(false);
 });
 
-it("returns to Idle at the measured pose even while an older plan is pending", () => {
+it("returns to Idle at the measured pose even while an older evaluation is pending", () => {
   const f = fixture();
   f.interaction.setSelected(true);
   f.interaction.begin();
@@ -541,12 +529,12 @@ it("returns to Idle at the measured pose even while an older plan is pending", (
   f.interaction.aim({ ...pose, position: [0, 0, 0] });
   expect(f.interaction.snapshot().activity).toBe("Idle");
   f.interaction.end();
-  f.reply(plan, planned("old-offset"));
+  f.reply(plan, {status:"feasible", joints:{joint:.3}});
   f.advance(0.01);
   expect(f.interaction.plan).toBeNull();
   expect(f.interaction.previewPlan).toBeNull();
   expect(f.interaction.snapshot().activity).toBe("Idle");
-  expect(f.sent.filter((c) => c.action === "plan")).toHaveLength(1);
+  expect(f.sent.filter((c) => c.action === "evaluate")).toHaveLength(1);
 });
 
 it("ignores late following feedback from an earlier lease", () => {
@@ -556,7 +544,7 @@ it("ignores late following feedback from an earlier lease", () => {
   f.interaction.aim(pose);
   f.advance(0.04);
   const old = f.sent.at(-1);
-  f.interaction.end();
+  f.interaction.interrupt();
   f.reply(f.sent.at(-1), { status: "released" });
   f.interaction.begin();
   f.reply(f.sent.at(-1), { status: "acquired", token: "new" });
@@ -569,23 +557,25 @@ it("ignores late following feedback from an earlier lease", () => {
   expect(f.sent.at(-1).token).toBe("new");
 });
 
-it("keeps the selected draft when a follow-up feasibility check fails", () => {
+it("restores the measured starting pose when release validation rejects the first draft", () => {
   const f = fixture();
-  f.interaction.setSelected(true);
-  f.interaction.begin();
-  f.interaction.aim(pose);
-  f.interaction.end();
-  f.advance(0.01);
-  f.reply(f.sent.at(-1), {
-    status: "rejected",
-    code: "ik_failed",
-    message: "IK failed",
-  });
-  f.advance(0.16);
-  expect(f.sent.at(-1).action).toBe("evaluate");
-  f.reply(f.sent.at(-1), { status: "infeasible", message: "IK failed" });
-  expect(f.interaction.target).toEqual(pose);
-  expect(f.interaction.snapshot().activity).toBe("IK failed");
+  f.interaction.setSelected(true); f.interaction.begin(); f.interaction.aim(pose);
+  f.interaction.end(); f.advance(0.01);
+  f.reply(f.sent.at(-1), { status: "rejected", code: "ik_failed", message: "IK failed" });
+  expect(f.interaction.target).toEqual(f.view.manipulation.observations.arm.pose);
+  expect(f.interaction.snapshot().hasDraft).toBe(false);
+  expect(f.sent.some(c => c.action === "execute")).toBe(false);
+});
+
+it("keeps an invalid selected grab and restores its last confirmed valid target on release", () => {
+  const f = fixture(); f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.advance(0.01); f.reply(f.sent.at(-1), {status:"feasible", joints:{joint:.3}});
+  const invalid = { ...pose, position: [10, 0, 0] as [number, number, number] };
+  f.interaction.aim(invalid); f.advance(0.4);
+  f.reply(f.sent.at(-1), { status: "rejected", code: "ik_failed", message: "IK failed" });
+  expect(f.interaction.dragging).toBe(true); expect(f.interaction.target).toEqual(invalid);
+  f.interaction.end(); expect(f.interaction.target).toEqual(pose);
+  f.advance(0.01); expect(f.sent.at(-1)).toMatchObject({ action: "plan", position: pose.position });
 });
 
 it("snapshot reads are immutable and do not advance target hysteresis", () => {
@@ -673,4 +663,335 @@ it("validates explicit visual profiles and gripper joint mappings at the wire bo
       },
     }),
   ).toThrow();
+});
+
+it("retains the arm IK preview when only the selected gripper draft changes", () => {
+  const f = fixture(); f.interaction.setSelected(true);
+  f.interaction.solution = { joint: 0.2 };
+  f.interaction.setGripper(1);
+  expect(f.interaction.solution).toEqual({ joint: 0.2 });
+  expect(f.sent.some(c => c.action === "execute" || c.action === "gripper")).toBe(false);
+});
+
+
+it("retains validated preview without commanding an older goal on invalid release", () => {
+  const f = fixture(); f.interaction.begin(); f.reply(f.sent.at(-1), { status: "acquired", token: "t" });
+  f.interaction.aim(pose); f.advance(0.04); const valid = f.sent.at(-1);
+  f.reply(valid, { status: "feasible", sequence: valid.sequence, joints: { joint: 0.3 } });
+  f.interaction.aim({ ...pose, position: [10, 0, 0] }); f.advance(0.2); const invalid = f.sent.at(-1);
+  f.reply(invalid, { status: "infeasible", code: "joint_limit", sequence: invalid.sequence, failed_joints: ["joint"] });
+  expect(f.interaction.dragging).toBe(true);
+  expect(f.interaction.target?.position).toEqual([10, 0, 0]);
+  expect(f.interaction.previewJoints).toEqual({ joint: 0.3 });
+  expect(f.interaction.rejection?.failedJoints).toEqual(["joint"]);
+  f.interaction.end();
+  expect(f.interaction.dragging).toBe(false);
+  expect(f.interaction.target?.position).toEqual([10, 0, 0]);
+  expect(f.interaction.previewJoints).toEqual({ joint: 0.3 });
+  expect(f.sent.at(-1).action).toBe("release");
+  const count = f.sent.length;
+  f.advance(0.1);
+  expect(f.sent).toHaveLength(count);
+  expect(f.interaction.snapshot().finishing).toBe(false);
+});
+
+it("does not apply late follow errors to newer input and validates a pending released target", () => {
+  const f = fixture(); f.interaction.begin(); f.reply(f.sent.at(-1), { status: "acquired", token: "t" });
+  f.interaction.aim(pose); f.advance(0.04); const old = f.sent.at(-1);
+  const next = { ...pose, position: [0.1, 0, 0.3] as [number, number, number] };
+  f.interaction.aim(next); f.advance(0.2); const current = f.sent.at(-1);
+  f.reply(old, { status: "infeasible", sequence: old.sequence, code: "ik_failed" });
+  expect(f.interaction.rejection).toBeNull();
+  f.interaction.end();
+  f.reply(current, { status: "infeasible", sequence: current.sequence, code: "ik_failed" });
+  expect(f.interaction.target).toEqual(next);
+  expect(f.sent.at(-1).action).toBe("release");
+  expect(f.interaction.snapshot().finishing).toBe(false);
+});
+
+it("regrabs a finishing goal without reacquiring and interrupts on feedback loss or timeout", () => {
+  for (const failure of ["stale", "timeout"] as const) {
+    const f = fixture(); f.interaction.begin(); f.reply(f.sent.at(-1), { status: "acquired", token: "t" });
+    f.interaction.aim(pose); f.advance(0.04); const update = f.sent.at(-1);
+    f.reply(update, { status: "feasible", sequence: update.sequence, joints: { joint: 0.3 } });
+    f.interaction.end(); expect(f.interaction.begin()).toBe(true);
+    expect(f.sent.filter(c => c.action === "acquire")).toHaveLength(1);
+    f.interaction.end(); f.advance(failure === "stale" ? 2.01 : 55.1, failure !== "stale");
+    expect(f.interaction.following).toBe(false);
+    expect(f.sent.some(c => c.action === "cancel")).toBe(true);
+  }
+});
+
+it.each(["ik_failed", "joint_limit", "collision"])("decodes %s wire results without ending either gesture", code => {
+  for (const selected of [false, true]) {
+    const f = fixture(); f.interaction.setSelected(selected); f.interaction.begin();
+    if (!selected) f.reply(f.sent.at(-1), { status: "acquired", token: "wire" });
+    f.interaction.aim(pose); f.advance(0.4); const command = f.sent.at(-1);
+    const result = decodeManipulation(JSON.parse(JSON.stringify({
+      type: "manipulation_result", request_id: command.request_id, action: command.action,
+      group_id: command.group_id, status: "infeasible", code, failed_joints: ["joint"],
+      ...(selected ? {} : { sequence: command.sequence }),
+    }))) as any;
+    f.reply(command, result);
+    expect(f.interaction.dragging).toBe(true);
+    expect(f.interaction.target).toEqual(pose);
+    expect(f.interaction.rejection?.failedJoints).toEqual(["joint"]);
+    expect(f.sent.some(c => c.action === "release" || c.action === "cancel")).toBe(false);
+  }
+});
+
+
+it("keeps a selected grab through an advisory RPC timeout and ignores its late result", () => {
+  const f = fixture(); f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.advance(0.4); const plan = f.sent.at(-1);
+  f.advance(20.1);
+  expect(f.interaction.dragging).toBe(true); expect(f.interaction.target).toEqual(pose);
+  expect(f.interaction.rejection?.message).toBe("Request timed out");
+  f.reply(plan, planned("late")); expect(f.interaction.plan).toBeNull();
+  expect(f.sent.some(c => c.action === "cancel")).toBe(false);
+  f.interaction.aim({ ...pose, position: [0.1, 0, 0.3] }); f.advance(0.4);
+  expect(f.sent.at(-1).action).toBe("evaluate");
+});
+
+
+it("clears a failed plan warning when a smaller target correction succeeds through evaluation", () => {
+  const f = fixture(); f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.advance(0.4); f.reply(f.sent.at(-1), planned("valid"));
+  f.interaction.aim({ ...pose, position: [0, 0, 0.32] }); f.advance(0.4);
+  f.reply(f.sent.at(-1), { status: "infeasible", code: "ik_failed" });
+  expect(f.interaction.rejection).not.toBeNull();
+  f.interaction.aim({ ...pose, position: [0, 0, 0.315] }); f.advance(0.2);
+  const evaluation = f.sent.at(-1); expect(evaluation.action).toBe("evaluate");
+  f.reply(evaluation, { status: "feasible", joints: { joint: 0.315 } });
+  expect(f.interaction.rejection).toBeNull(); expect(f.interaction.dragging).toBe(true);
+  expect(f.interaction.previewJoints).toEqual({ joint: 0.315 });
+});
+
+it("validates a new released follow goal rather than restoring an older rejected goal", () => {
+  const f = fixture(); f.interaction.begin(); f.reply(f.sent.at(-1), { status: "acquired", token: "t" });
+  f.interaction.aim(pose); f.advance(0.04); const invalid = f.sent.at(-1);
+  f.reply(invalid, { status: "infeasible", code: "ik_failed", sequence: invalid.sequence });
+  const corrected = { ...pose, position: [0.1, 0, 0.3] as [number, number, number] };
+  f.interaction.aim(corrected); f.advance(0.2); const pending = f.sent.at(-1);
+  f.interaction.end(); expect(f.interaction.target).toEqual(corrected);
+  f.reply(pending, { status: "feasible", sequence: pending.sequence, joints: { joint: 0.4 } });
+  expect(f.interaction.rejection).toBeNull(); expect(f.interaction.target).toEqual(corrected);
+  expect(f.interaction.snapshot().finishing).toBe(true);
+  f.advance(0.1); expect(f.sent.at(-1)).toMatchObject({ action: "update", position: corrected.position });
+});
+
+it("retains a grab during unavailable feedback, reacquires safely, and expires after two seconds", () => {
+  const f=fixture(); f.interaction.begin();
+  f.reply(f.sent.at(-1),{status:"acquired",token:"old"}); f.interaction.aim(pose); f.advance(.04);
+  f.view.manipulation.available=false;
+  const count=f.sent.length; f.advance(.1,false);
+  f.interaction.aim({...pose,position:[.1,0,.3]}); f.advance(1.9,false);
+  expect(f.interaction.dragging).toBe(true); expect(f.sent).toHaveLength(count + 1);
+  expect(f.sent.at(-1).action).toBe("release");
+  f.reply(f.sent.at(-1), { status: "released" });
+  f.view.manipulation.available=true; f.advance(.01);
+  expect(f.sent.at(-1).action).toBe("acquire");
+  f.reply(f.sent.at(-1),{status:"acquired",token:"new"}); f.advance(.04);
+  expect(f.sent.at(-1)).toMatchObject({action:"update",token:"new",position:[.1,0,.3]});
+  f.view.manipulation.available=false; f.advance(.01,false); f.advance(2.001,false);
+  expect(f.interaction.dragging).toBe(false);
+  expect(f.sent.some(c=>c.action==="cancel")).toBe(true);
+});
+
+it("finishes at the validated solver endpoint despite repeated normal release calls", () => {
+  const f = fixture();
+  f.interaction.begin();
+  f.reply(f.sent.at(-1), { status: "acquired", token: "arrival" });
+  f.interaction.aim(pose); f.advance(0.04);
+  const update = f.sent.at(-1);
+  const solved = { ...pose, position: [0, 0, 0.288] };
+  f.reply(update, { status: "feasible", sequence: update.sequence, pose: solved, joints: { joint: 0.3 } });
+  f.interaction.end();
+  f.view.manipulation.observations.arm.pose = solved;
+  f.advance(0.1);
+  f.interaction.end(); f.advance(0.3);
+  f.interaction.end(); f.advance(0.21);
+  expect(f.interaction.snapshot().finishing).toBe(false);
+  expect(f.sent.at(-1).action).toBe("release");
+  expect(f.interaction.snapshot().activity).toBe("Idle");
+});
+
+it("retires an executed selected draft after authoritative completed state", () => {
+  const f = fixture();
+  f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.interaction.end(); f.advance(0.4);
+  f.reply(f.sent.at(-1), planned("arrival"));
+  f.interaction.end(); f.interaction.execute();
+  f.reply(f.sent.at(-1), { status: "accepted", operation_id: "execution" });
+  f.view.manipulation.ts = 101;
+  f.view.manipulation.execution = "completed";
+  f.view.manipulation.operation_id = "execution";
+  f.advance(0.1);
+  expect(f.interaction.target).toBeNull();
+  f.view.manipulation.observations.arm.joints.joint = 0.3;
+  f.advance(0.1);
+  expect(f.interaction.selected).toBe(true);
+  expect(f.interaction.target).toBeNull();
+  expect(f.interaction.snapshot().activity).toBe("Idle");
+});
+
+it("shows recorded observations while refusing all arm control actions", () => {
+  const f = fixture();
+  f.view.manipulation.read_only = true;
+  f.view.hello = { source: {kind: "recording", read_only: true, name: "arm.db"} };
+  expect(f.interaction.snapshot().canManipulate).toBe(false);
+  expect(f.interaction.snapshot().activity).toBe("Recording");
+  f.interaction.begin(); f.interaction.setSelected(true); f.interaction.execute(); f.interaction.cancel();
+  expect(f.sent).toEqual([]);
+});
+
+it("records why a held capture ended without treating spatial failure as an ending", () => {
+  const f = fixture(); f.interaction.begin();
+  f.reply(f.sent.at(-1), {status: "acquired", token: "lease"});
+  f.interaction.aim(pose); f.advance(0.04);
+  const sample = f.sent.at(-1);
+  f.reply(sample, {status: "infeasible", code: "ik_failed", sequence: sample.sequence});
+  expect(f.interaction.captureEvents).toEqual([]);
+  f.advance(2.01, false);
+  expect(f.interaction.captureEvents.at(-1)?.reason).toBe("feedback stale");
+});
+
+it("keeps Resume disabled for motor faults and until a protective pause recovers", () => {
+  const f = fixture();
+  f.advance(0.1);
+  Object.assign(f.view.manipulation, {stopped: true, stop_confirmed: true,
+    protection: {state: "fault", effective_speed_scale: 0, resumable: false}});
+  expect(f.interaction.snapshot().canResume).toBe(false);
+  Object.assign(f.view.manipulation, {protection: {state: "paused", effective_speed_scale: 0, resumable: false}});
+  expect(f.interaction.snapshot().canResume).toBe(false);
+  Object.assign(f.view.manipulation, {protection: {state: "paused", effective_speed_scale: 0, resumable: true}});
+  expect(f.interaction.snapshot().canResume).toBe(true);
+});
+
+
+it("uses fresh correlated following arrival without releasing a held grab", () => {
+  const f = fixture();
+  f.interaction.begin();
+  f.reply(f.sent.at(-1), { status: "acquired", token: "t" });
+  f.interaction.aim(pose);
+  f.advance(0.04);
+  f.view.manipulation.following = true;
+  f.view.manipulation.following_at_target = true;
+  f.view.manipulation.following_goal = pose;
+  expect(f.interaction.snapshot().activity).toBe("Idle");
+  expect(f.interaction.dragging).toBe(true);
+  expect(f.sent.some(c => c.action === "release")).toBe(false);
+  f.view.manipulation.following_goal = { ...pose, position: [1, 0, 0] };
+  expect(f.interaction.snapshot().activity).toBe("Moving");
+  f.view.manipulation.following_goal = pose;
+  f.advance(1, false);
+  expect(f.interaction.snapshot().activity).not.toBe("Idle");
+});
+
+it("retains a failed execution target and replans rather than reusing its cancelled plan", () => {
+  const f = fixture();
+  f.interaction.setSelected(true); f.interaction.begin();
+  f.interaction.aim(pose); f.interaction.end(); f.advance(.4);
+  f.reply(f.sent.at(-1), planned("retry"));
+  f.interaction.end(); f.interaction.execute();
+  f.reply(f.sent.at(-1), {status:"accepted",operation_id:"failed-execution"});
+  f.view.manipulation.ts = 101;
+  f.view.manipulation.execution = "aborted";
+  f.view.manipulation.operation_id = "failed-execution";
+  f.view.manipulation.message = "Target not reached";
+  f.advance(.1);
+  expect(f.interaction.target).toEqual(pose);
+  expect(f.interaction.plan).toBeNull();
+  expect(f.interaction.snapshot().executing).toBe(false);
+  const before = f.sent.length;
+  f.interaction.execute(); f.advance(.4);
+  expect(f.sent.slice(before).some(c=>c.action === "execute")).toBe(false);
+  expect(f.sent.slice(before).some(c=>c.action === "plan")).toBe(true);
+});
+
+it.each(["planning", "following"])("preserves %s capture and last valid model for exactly two seconds of socket loss", mode => {
+  const f=fixture(); f.interaction.setSelected(mode === "planning"); f.interaction.begin();
+  if(mode === "following") f.reply(f.sent.at(-1),{status:"acquired",token:"old"});
+  f.interaction.aim(pose); f.advance(.05); const old=f.sent.at(-1);
+  f.reply(old,{status:"feasible",joints:{joint:.3},...(mode === "following" ? {sequence:old.sequence}: {})});
+  const valid=f.interaction.previewJoints;
+  f.view.connection="disconnected"; f.advance(0,false);
+  const count=f.sent.length;
+  f.interaction.aim({...pose,position:[.2,0,.3]}); f.advance(1.999,false);
+  expect(f.interaction.dragging).toBe(true);
+  expect(f.interaction.previewJoints).toEqual(valid);
+  expect(f.interaction.target?.position).toEqual([.2,0,.3]);
+  expect(f.sent).toHaveLength(count);
+  f.advance(.001,false); expect(f.interaction.dragging).toBe(true);
+  f.advance(.001,false); expect(f.interaction.dragging).toBe(false);
+  expect(f.interaction.target).toBeNull(); expect(f.interaction.previewJoints).toBeNull();
+});
+
+it("keeps capture after reconnect while requiring explicit motor Resume",()=> {
+  const f=fixture(); f.interaction.begin();
+  f.reply(f.sent.at(-1),{status:"acquired",token:"old"}); f.interaction.aim(pose); f.advance(.04);
+  f.view.connection="disconnected"; f.advance(.1,false);
+  f.view.connection="ready"; f.view.manipulation.stopped=true; f.view.manipulation.stop_confirmed=true;
+  const count=f.sent.length; f.advance(.5);
+  expect(f.interaction.dragging).toBe(true); expect(f.sent).toHaveLength(count);
+  expect(f.interaction.snapshot().canResume).toBe(true);
+  f.interaction.resume(); expect(f.sent.at(-1).action).toBe("resume");
+  f.reply(f.sent.at(-1),{status:"resumed"}); f.view.manipulation.stopped=false; f.advance(.01);
+  expect(f.sent.at(-1).action).toBe("acquire");
+});
+
+it("rejects old advisory replies during loss and preserves immediate Stop",()=> {
+  const f=fixture(); f.interaction.setSelected(true); f.interaction.begin(); f.interaction.aim(pose);
+  f.advance(.05); const old=f.sent.at(-1);
+  f.view.manipulation.available=false; f.advance(.1,false);
+  f.reply(old,{status:"feasible",joints:{joint:99}});
+  expect(f.interaction.previewJoints).not.toEqual({joint:99});
+  f.interaction.cancel(); expect(f.interaction.dragging).toBe(false); expect(f.interaction.target).toBeNull();
+});
+
+it("does not leave stale execution or gripper drafts across 100 selected operations",()=> {
+  const f=fixture(); f.interaction.setSelected(true);
+  for(let i=0;i<100;i++) {
+    expect(f.interaction.begin()).toBe(true);
+    f.interaction.aim({...pose,position:[.01*i,0,.3]}); f.interaction.setGripper(i%2);
+    f.interaction.end(); f.advance(.05); const plan=f.sent.at(-1);
+    expect(plan).toMatchObject({action:"plan",final_gripper:i%2});
+    f.reply(plan,planned(`p${i}`)); f.interaction.execute(); const execution=f.sent.at(-1);
+    expect(execution).toMatchObject({action:"execute",plan_id:`p${i}`});
+    f.reply(execution,{status:"accepted",operation_id:`op${i}`});
+    Object.assign(f.view.manipulation,{ts:1000+i,execution:"completed",execution_phase:"gripper",operation_id:`op${i}`});
+    Object.assign(f.view.manipulation.observations.arm,{gripper_target:i%2,gripper:i%2===0?.35:1});
+    f.advance(.05);
+    expect(f.interaction.target).toBeNull(); expect(f.interaction.desiredGripper).toBeNull();
+    expect(f.interaction.snapshot().executing).toBe(false);
+  }
+  expect(f.sent.filter(c=>c.action==="execute")).toHaveLength(100);
+  expect(f.sent.filter(c=>c.action==="gripper")).toHaveLength(0);
+});
+
+it("validates optional accepted gripper targets, velocities, and execution phases",()=> {
+  const message:any={type:"manipulation_state",available:true,ts:1,
+    model:{revision:"v",root:"base",asset_url:null,links:[{name:"base",bounds:null}],joints:[]},
+    groups:[],observations:{arm:{joints:{},measured_at:1,gripper:.35,gripper_target:0,joint_velocities:{j:.2}}},
+    execution_phase:"gripper"};
+  expect(decodeManipulation(message)).toMatchObject({execution_phase:"gripper"});
+  for(const value of [-.1,1.1,NaN]) expect(()=>decodeManipulation({...message,observations:{arm:{gripper_target:value}}})).toThrow();
+  expect(()=>decodeManipulation({...message,observations:{arm:{joint_velocities:{j:Infinity}}}})).toThrow();
+  expect(()=>decodeManipulation({...message,execution_phase:"done"})).toThrow();
+});
+
+it("waits for release acknowledgement before recovering a short feedback gap", () => {
+  const f = fixture(); f.interaction.begin();
+  f.reply(f.sent.at(-1), { status: "acquired", token: "old" });
+  f.interaction.aim(pose); f.advance(.04);
+  f.view.manipulation.available = false; f.advance(.05, false);
+  const release = f.sent.at(-1);
+  expect(release).toMatchObject({ action: "release", token: "old" });
+  f.view.manipulation.available = true; f.advance(.05);
+  expect(f.sent.at(-1)).toBe(release);
+  const count = f.sent.length;
+  for (let i = 0; i < 100; i++) f.interaction.snapshot();
+  expect(f.sent).toHaveLength(count);
+  f.reply(release, { status: "released" }); f.advance(.05);
+  expect(f.sent.at(-1).action).toBe("acquire");
 });

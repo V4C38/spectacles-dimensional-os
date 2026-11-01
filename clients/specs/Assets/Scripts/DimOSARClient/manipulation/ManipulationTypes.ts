@@ -55,8 +55,12 @@ export interface ManipulationObservation {
   measured_at: number | null;
   pose: ManipulationPose | null;
   gripper: number | null;
+  gripper_target?: number | null;
+  joint_velocities?: Record<string, number>;
 }
 export interface ManipulationState {
+  protection?: {state: "normal" | "derated" | "paused" | "fault"; reason?: string; joints?: string[]; effective_speed_scale: number; resumable?: boolean} | null;
+  read_only?: boolean;
   type: "manipulation_state";
   available: boolean;
   message?: string | null;
@@ -66,9 +70,12 @@ export interface ManipulationState {
   groups?: ManipulationGroup[];
   observations?: Record<string, ManipulationObservation>;
   execution?: string;
+  execution_phase?: "motion" | "gripper" | null;
   operation?: "resetting" | "parking" | null;
   owner?: string | null;
   following?: boolean;
+  following_at_target?: boolean;
+  following_goal?: ManipulationPose | null;
   stopped?: boolean;
   stop_confirmed?: boolean;
   plan?: ManipulationPlan | null;
@@ -83,6 +90,7 @@ export interface ManipulationResult {
   quiescent?: boolean;
   sequence?: number;
   code?: string;
+  failed_joints?: string[];
   message?: string;
   token?: string;
   joints?: Record<string, number> | null;

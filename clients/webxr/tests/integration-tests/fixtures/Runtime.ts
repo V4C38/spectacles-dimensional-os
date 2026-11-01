@@ -15,7 +15,7 @@ export const shared = JSON.parse(
 export async function bootstrap(
   page: Page,
   mode: "hand" | "controller" = "hand",
-  options: { unavailable?: boolean; manipulation?: boolean; planDelayMs?: number } = {},
+  options: { unavailable?: boolean; manipulation?: boolean; planDelayMs?: number; evaluationDelayMs?: number; planJointDelta?: number; armIntervalMs?: number; armReference?: string } = {},
 ) {
   const commands: any[] = [];
   const arm = options.manipulation ? JSON.parse(readFileSync(new URL("./OpenYAM.json", import.meta.url), "utf8")) : null;
@@ -24,10 +24,13 @@ export async function bootstrap(
   const armNow = () => armClockBase + (performance.now() - armClockStarted) / 1000;
   let following = false, plan: any = null, owner: string | null = null;
   let armStopped = false;
+  let feedbackPaused = false;
+  let ikFailure: { code: string; failed_joints?: string[] } | null = null;
   let planSequence = 0;
   const delayedReplies: ReturnType<typeof setTimeout>[] = [];
   const armState = () => {
     if (!arm) return;
+    if (feedbackPaused) { send({type:"manipulation_state",available:false,message:"Waiting for arm feedback"}); return; }
     send({ type: "manipulation_state", available: true, ts: armNow(), root_pose: { position: [1,0,0.8], orientation: [0,0,0,1] }, model: arm.model,
       groups: [{ id: "manipulator", joint_names: Object.keys(arm.joints), base_frame: "base", tip_frame: "gripper_tip", has_gripper: true, following: true }],
       observations: { manipulator: { joints: arm.joints, measured_at: armNow(), pose: arm.pose, gripper: 0 } },
@@ -92,6 +95,7 @@ export async function bootstrap(
         send({
           type: "hello",
           client_id: "integration",
+          ...(options.armReference ? {odom_reference_id:options.armReference} : {}),
           time_sync: {
             ts_client: command.ts_client,
             ts_server: command.ts_client,
@@ -116,7 +120,7 @@ export async function bootstrap(
           },
         });
         state();
-        if (options.manipulation) { armState(); armTimer = setInterval(armState, 100); armTimer.unref(); }
+        if (options.manipulation) { armState(); armTimer = setInterval(armState, options.armIntervalMs ?? 100); armTimer.unref(); }
         send({
           type: "pose",
           position: shared.fixtures.pose,
@@ -164,27 +168,41 @@ export async function bootstrap(
         if (command.action === "evaluate") result = {status: "feasible", joints: {...arm.joints, yam_joint2: arm.joints.yam_joint2 + 0.2}, pose: command};
         if (command.action === "plan") {
           plan = {plan_id: `fixture-plan-${++planSequence}`, joint_names: Object.keys(arm.joints), duration: 2,
-            trajectory: [{time: 0, positions: Object.values(arm.joints)}, {time: 2, positions: Object.values(arm.joints).map((v: any, i) => i === 1 ? v + 0.2 : v)}]};
+            trajectory: [{time: 0, positions: Object.values(arm.joints)}, {time: 2, positions: Object.values(arm.joints).map((v: any, i) => i === 1 ? v + (options.planJointDelta ?? 0.2) : v)}]};
           owner = "integration"; result = {status: "planned", ...plan};
         }
         if (command.action === "execute") { result = {status: command.plan_id === plan?.plan_id ? "accepted" : "rejected", operation_id: "fixture-operation"}; plan = null; }
         if (command.action === "resume") { armStopped = false; result = {status: "resumed"}; }
         if (command.action === "acquire") { following = true; owner = "integration"; result = {status: "acquired", token: "fixture-follow"}; }
-        if (command.action === "release" || command.action === "cancel") { following = false; owner = null; plan = null; }
-        if (command.action === "update") result = {status:"feasible", sequence:command.sequence, joints:{...arm.joints,yam_joint6:arm.joints.yam_joint6+0.8}};
+        if (command.action === "release" || command.action === "cancel") { following = false; owner = null; plan = null; if (command.action === "release") result = {status: "released"}; }
+        if (command.action === "update") {
+          result = {status:"feasible", sequence:command.sequence, joints:{...arm.joints,yam_joint6:arm.joints.yam_joint6+0.8}};
+          if (!ikFailure) arm.pose = { position: command.position, orientation: command.orientation };
+        }
+        if (ikFailure && ["update", "evaluate", "plan"].includes(command.action)) {
+          result = { status: "infeasible", message: "Pink IK did not converge within the iteration budget", ...ikFailure,
+            ...(command.action === "update" ? { sequence: command.sequence } : {}) };
+        }
         const reply = {type: "manipulation_result", request_id: command.request_id, action: command.action, group_id: command.group_id, ...result};
-        if (command.action === "plan" && options.planDelayMs) delayedReplies.push(setTimeout(()=>send(reply),options.planDelayMs));
+        const delay=command.action === "plan" ? options.planDelayMs : command.action === "evaluate" ? options.evaluationDelayMs : 0;
+        if (delay) delayedReplies.push(setTimeout(()=>send(reply),delay));
         else send(reply);
         armState();
       }
     });
   });
+  if (process.env.INTEGRATION_PRODUCTION === "1") {
+    await page.route("**/node_modules/three/build/*.js", route => {
+      const name = new URL(route.request().url()).pathname.split("/").pop()!;
+      return route.fulfill({path: fileURLToPath(new URL(`../../../node_modules/three/build/${name}`, import.meta.url)), contentType: "application/javascript"});
+    });
+  }
   await page.goto("/?debug=1");
   await page.selectOption("#hmd", mode === "hand" ? "quest3s" : "quest3");
   await page.evaluate(() => {
     const w = window as any,
       app = w.xb.core.scene.children.find(
-        (o: any) => o.constructor.name === "WebXRApp",
+        (o: any) => o.client?.manipulation,
       );
     const camera = app.client.camera;
     const track = {
@@ -307,7 +325,15 @@ export async function bootstrap(
     socket!.send(data);
   };
   return {
+    setArmJoint: (name: string, value: number, publishImmediately = true) => { arm.joints[name] = value; if (publishImmediately) armState(); },
     send,
+    setIKFailure: (failure: typeof ikFailure) => { ikFailure = failure; },
+    pauseArmFeedback: (paused: boolean) => { feedbackPaused=paused; armState(); },
+    dropArmConnection: () => {
+      if(armTimer) clearInterval(armTimer);
+      armStopped=true; following=false; owner=null; plan=null;
+      socket?.close({code:1012,reason:"Fixture transport interruption"});
+    },
     state,
     commands,
     localized,
@@ -319,7 +345,7 @@ export async function bootstrap(
 export async function snapshot(page: Page): Promise<any> {
   return page.evaluate(() =>
     (window as any).xb.core.scene.children
-      .find((o: any) => o.constructor.name === "WebXRApp")
+      .find((o: any) => o.client?.manipulation)
       .client.ui.snapshot(),
   );
 }

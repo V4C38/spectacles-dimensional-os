@@ -3,7 +3,7 @@ export async function visiblePointerCount(page: Page): Promise<number> {
   return page.evaluate(() => {
     const w = window as any;
     const app = w.xb.core.scene.children.find(
-      (object: any) => object.constructor.name === "WebXRApp",
+      (object: any) => object.client?.manipulation,
     );
     return [...app.interaction.beams.entries()].filter(
       ([controller, beam]: any) => controller.visible && beam.mesh.visible,
@@ -38,7 +38,7 @@ export async function activateButton(
       page.evaluate(() => {
         const w = window as any,
           menu = w.xb.core.scene.children.find(
-            (o: any) => o.constructor.name === "WebXRApp",
+            (o: any) => o.client?.manipulation,
           ).mainMenu;
         return menu.panelProgress >= 0.999 && menu.heightController.height === menu.heightController.target;
       }),
@@ -48,7 +48,7 @@ export async function activateButton(
     ({ field, distance }) => {
       const w = window as any;
       const app = w.xb.core.scene.children.find(
-        (object: any) => object.constructor.name === "WebXRApp",
+        (object: any) => object.client?.manipulation,
       );
       const button = app.mainMenu[field];
       if (button.userData.integrationActivationCount === undefined) {
@@ -79,7 +79,7 @@ export async function activateButton(
       page.evaluate((field) => {
         const w = window as any;
         const app = w.xb.core.scene.children.find(
-          (object: any) => object.constructor.name === "WebXRApp",
+          (object: any) => object.client?.manipulation,
         );
         return app.mainMenu[field].ux.isHovered();
       }, field),
@@ -94,7 +94,7 @@ export async function activateButton(
       page.evaluate((field) => {
         const w = window as any;
         const app = w.xb.core.scene.children.find(
-          (object: any) => object.constructor.name === "WebXRApp",
+          (object: any) => object.client?.manipulation,
         );
         return app.mainMenu[field].userData.integrationActivationCount;
       }, field),
@@ -105,7 +105,7 @@ export async function activateButton(
       page.evaluate((field) => {
         const w = window as any,
           app = w.xb.core.scene.children.find(
-            (o: any) => o.constructor.name === "WebXRApp",
+            (o: any) => o.client?.manipulation,
           );
         return app.mainMenu[field].ux.isSelected();
       }, field),
@@ -122,7 +122,7 @@ export async function pointRuntimeButton(
       page.evaluate((name) => {
         const w = window as any;
         const menu = w.xb.core.scene.children.find(
-          (object: any) => object.constructor.name === "WebXRApp",
+          (object: any) => object.client?.manipulation,
         ).mainMenu;
         let targetVisible = false;
         menu.panel.traverse((object: any) => {
@@ -146,7 +146,7 @@ export async function pointRuntimeButton(
   await page.evaluate((name) => {
     const w = window as any;
     const app = w.xb.core.scene.children.find(
-      (object: any) => object.constructor.name === "WebXRApp",
+      (object: any) => object.client?.manipulation,
     );
     let button: any;
     app.mainMenu.panel.traverse((object: any) => {
@@ -217,7 +217,7 @@ export async function frameMenu(
   const saved = await page.evaluate((tight) => {
     const w = window as any;
     const menu = w.xb.core.scene.children.find(
-      (object: any) => object.constructor.name === "WebXRApp",
+      (object: any) => object.client?.manipulation,
     ).mainMenu;
     const head = w.questDevice;
     const saved = {
@@ -230,7 +230,7 @@ export async function frameMenu(
       ],
     };
     w.xb.core.scene.children
-      .find((object: any) => object.constructor.name === "WebXRApp")
+      .find((object: any) => object.client?.manipulation)
       .setupPlacement.pin();
     const center = menu.panel.getWorldPosition(menu.panel.position.clone());
     const scale = menu.panel.getWorldScale(menu.panel.scale.clone());
@@ -282,7 +282,7 @@ export async function placeDirect(page: Page, field: string): Promise<void> {
   await page.evaluate((field) => {
     const w = window as any,
       app = w.xb.core.scene.children.find(
-        (o: any) => o.constructor.name === "WebXRApp",
+        (o: any) => o.client?.manipulation,
       );
     const controller = w.xb.core.input.rightController;
     const input =
@@ -304,7 +304,7 @@ export async function placeDirect(page: Page, field: string): Promise<void> {
       page.evaluate((field) => {
         const w = window as any,
           app = w.xb.core.scene.children.find(
-            (o: any) => o.constructor.name === "WebXRApp",
+            (o: any) => o.client?.manipulation,
           );
         return (
           app.interaction.direct.isDirect(w.xb.core.input.rightController) &&
@@ -339,7 +339,7 @@ export async function summonMenu(page: Page): Promise<void> {
       page.evaluate(async (up) => {
         const w = window as any,
           app = w.xb.core.scene.children.find(
-            (o: any) => o.constructor.name === "WebXRApp",
+            (o: any) => o.client?.manipulation,
           );
         await new Promise<void>((resolve, reject) =>
           app.session.requestAnimationFrame((_time: number, frame: XRFrame) => {
@@ -396,7 +396,7 @@ export async function summonMenu(page: Page): Promise<void> {
       page.evaluate(
         () =>
           (window as any).xb.core.scene.children.find(
-            (o: any) => o.constructor.name === "WebXRApp",
+            (o: any) => o.client?.manipulation,
           ).client.ui.menuOpen,
       ),
     )
@@ -445,7 +445,7 @@ export async function scrollResponse(page: Page): Promise<void> {
     .poll(() =>
       page.evaluate(() => {
         const app = (window as any).xb.core.scene.children.find(
-          (o: any) => o.constructor.name === "WebXRApp",
+          (o: any) => o.client?.manipulation,
         );
         return app.mainMenu.agent.maxScroll;
       }),
@@ -454,7 +454,7 @@ export async function scrollResponse(page: Page): Promise<void> {
   await page.evaluate(() => {
     const w = window as any,
       app = w.xb.core.scene.children.find(
-        (o: any) => o.constructor.name === "WebXRApp",
+        (o: any) => o.client?.manipulation,
       ),
       view = app.mainMenu.agent;
     const target = view.bodyHit,
@@ -469,7 +469,7 @@ export async function scrollResponse(page: Page): Promise<void> {
       page.evaluate(() => {
         const w = window as any,
           app = w.xb.core.scene.children.find(
-            (o: any) => o.constructor.name === "WebXRApp",
+            (o: any) => o.client?.manipulation,
           );
         return (
           app.interaction.hit(w.xb.core.input.rightController)?.object ===
@@ -483,7 +483,7 @@ export async function scrollResponse(page: Page): Promise<void> {
     .poll(() =>
       page.evaluate(() => {
         const app = (window as any).xb.core.scene.children.find(
-          (o: any) => o.constructor.name === "WebXRApp",
+          (o: any) => o.client?.manipulation,
         );
         return !!app.scrollHold;
       }),
@@ -495,7 +495,7 @@ export async function scrollResponse(page: Page): Promise<void> {
     .poll(() =>
       page.evaluate(() => {
         const app = (window as any).xb.core.scene.children.find(
-          (o: any) => o.constructor.name === "WebXRApp",
+          (o: any) => o.client?.manipulation,
         );
         return app.mainMenu.agent.scrollOffset;
       }),
@@ -504,8 +504,12 @@ export async function scrollResponse(page: Page): Promise<void> {
 }
 
 export async function pointIndexAtButton(page: Page, label: string, distance: number): Promise<void> {
+  await expect.poll(() => page.evaluate(() => {
+    const app = (window as any).xb.core.scene.children.find((o: any) => o.client?.manipulation);
+    return app.mainMenu.panelProgress >= .999 && app.mainMenu.heightController.height === app.mainMenu.heightController.target;
+  })).toBe(true);
   await page.evaluate(async ({ label, distance }) => {
-    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
     const button = app.mainMenu.panel.getObjectByName(`Button: ${label}`);
     await new Promise<void>(resolve => app.session.requestAnimationFrame((_time: number, frame: XRFrame) => {
       const source = Array.from(app.session.inputSources as XRInputSource[]).find(s => s.hand && s.handedness === "right")!;
@@ -517,8 +521,11 @@ export async function pointIndexAtButton(page: Page, label: string, distance: nu
       hand.position.set(hand.position.x + goal.x - tip.x, hand.position.y + goal.y - tip.y, hand.position.z + goal.z - tip.z);
       resolve();
     }));
+    // Approach, contact and withdrawal must each be observed by rendered XR
+    // frames; a fixed delay can expire before even one frame on software GL.
+    for (let i = 0; i < 3; i++) await new Promise<void>(resolve => app.session.requestAnimationFrame(() => resolve()));
   }, { label, distance });
-  await page.waitForTimeout(180);
+
 }
 
 

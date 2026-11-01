@@ -30,3 +30,16 @@ class ShaderGenerationTests(unittest.TestCase):
                 keys = [key for key in children if key.startswith("Node") and key[4:].isdigit()]
                 self.assertEqual(set(keys), {f"Node{i}" for i in range(len(keys))})
                 self.assertEqual(graph.dumps(graph.loads(graph.dumps(result))), graph.dumps(result))
+
+    def test_checked_in_stroke_graph_matches_sources_and_has_all_nodes(self):
+        shaders = Path(__file__).resolve().parents[2] / "Assets/Materials/Shaders"
+        tree = graph.load(shaders / "AdaptiveStroke.ss_graph")
+        nodes = tree["Nodes"]["ChildNodes"]
+        count = tree["Nodes"]["NodeCount"].value()
+        keys = [key for key in nodes if key.startswith("Node") and key[4:].isdigit()]
+        self.assertEqual(set(keys), {f"Node{i}" for i in range(count)})
+        self.assertEqual({nodes[key]["DependencyIndex"].value() for key in keys}, set(range(count)))
+        for node, source in (("Node1", "AdaptiveStroke.customCode"), ("Node2", "AdaptiveStrokeVertex.customCode")):
+            code = nodes[node]["Ports"]["Code"]["Property"]["Variables"]["String"]["Data"].data.decode()
+            self.assertEqual(code, (shaders / source).read_text())
+            self.assertIn("MinimumPixels", nodes[node]["Ports"])

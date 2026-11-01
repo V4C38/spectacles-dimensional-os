@@ -50,3 +50,17 @@ it("does not activate when a panel moves under a stationary fingertip", () => {
   f.button.position.z = 0.035; f.move(0.04);
   expect(f.start).not.toHaveBeenCalled();
 });
+
+
+it("keeps one poke captured through pinch pose changes and releases once", () => {
+  const f = fixture(); f.move(.04); f.move(.005);
+  f.touch.update(f.source, new THREE.Vector3(.06,0,-.03), [f.button], () => true, true);
+  expect(f.end).not.toHaveBeenCalled();
+  f.touch.release(f.source); f.touch.release(f.source);
+  expect(f.end).toHaveBeenCalledOnce(); expect(f.end.mock.calls[0][2]).toBe(false);
+});
+it("still cancels a pinched poke on tracking loss", () => {
+  const f = fixture(); f.move(.04); f.move(.005);
+  f.touch.update(f.source, null, [f.button], () => true, true);
+  expect(f.end).toHaveBeenCalledOnce(); expect(f.end.mock.calls[0][2]).toBe(true);
+});

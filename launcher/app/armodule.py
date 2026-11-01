@@ -13,6 +13,7 @@ import shutil
 import signal
 import socket
 import sys
+import time
 from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -154,6 +155,9 @@ class ProcessManager:
         self.scripts = scripts_dir(self.root)
         self.status = LauncherStatus(host_ip=detect_lan_ip())
         self._log: deque[str] = deque(maxlen=LOG_BUFFER_SIZE)
+        self._last_log_key = ""
+        self._repeated_logs = 0
+        self._last_log_at = 0.0
         self._subs: list[_Subscriber] = []
         self._proc: asyncio.subprocess.Process | None = None
         self._webxr_proc: asyncio.subprocess.Process | None = None
@@ -162,6 +166,7 @@ class ProcessManager:
         self._webxr_start_task: asyncio.Task[None] | None = None
         self._armodule_ready = asyncio.Event()
         self._lock = asyncio.Lock()
+        self._stopping_pids: set[int] = set()
         self._check_started = False
         self._can_setup_running = False
         self._planner_lock = asyncio.Lock()
@@ -253,6 +258,16 @@ class ProcessManager:
                     pass
 
     def _append_log(self, line: str) -> None:
+        key = re.sub(r"\d{4}-\d{2}-\d{2}[T ][0-9:.]+Z?", "", _strip_ansi(line))
+        now = time.monotonic()
+        if key == self._last_log_key and now - self._last_log_at < 1:
+            self._repeated_logs += 1
+            return
+        if self._repeated_logs:
+            summary = f"… previous message repeated {self._repeated_logs} times"
+            self._log.append(summary)
+            self._emit({"type": "log", "line": summary})
+        self._last_log_key, self._last_log_at, self._repeated_logs = key, now, 0
         self._log.append(line)
         self._emit({"type": "log", "line": line})
 
@@ -366,11 +381,11 @@ class ProcessManager:
             self._emit({"type": "status", **self.snapshot()})
             return result
 
-    async def can_status(self) -> dict[str, Any]:
-        result = await check_can()
+    async def can_status(self, interface: str = "can0") -> dict[str, Any]:
+        result = await check_can(interface) if interface != "can0" else await check_can()
         return {**result, "setting_up": self._can_setup_running}
 
-    async def setup_can(self) -> dict[str, Any]:
+    async def setup_can(self, interface: str = "can0") -> dict[str, Any]:
         if self._can_setup_running:
             raise RuntimeError("CAN setup is already running")
         async with self._lock:
@@ -386,15 +401,15 @@ class ProcessManager:
             self._emit({"type": "status", **self.snapshot()})
             proc = None
             try:
-                status = await self.can_status()
+                status = await self.can_status(interface) if interface != "can0" else await self.can_status()
                 if status["ready"]:
                     return {**status, "setting_up": False}
                 python = self._selected_python()
                 if not python:
                     raise ValueError("Select an installed DimOS environment first")
-                argv = setup_command(python)
+                argv = setup_command(python, interface) if interface != "can0" else setup_command(python)
                 self._append_log(
-                    "Setting up can0. Approve the native administrator prompt if shown…"
+                    f"Setting up {interface}. Approve the native administrator prompt if shown…"
                 )
                 proc = await asyncio.create_subprocess_exec(
                     *argv,
@@ -409,7 +424,7 @@ class ProcessManager:
                     raise RuntimeError(
                         "CAN setup was cancelled or failed. See the launcher log."
                     )
-                verified = await check_can()
+                verified = await check_can(interface) if interface != "can0" else await check_can()
                 if not verified["ready"]:
                     raise RuntimeError(verified["message"])
                 return {**verified, "setting_up": False}
@@ -494,6 +509,14 @@ class ProcessManager:
     async def _kill_port_listeners(self, port: int = ARMODULE_PORT) -> bool:
         """Kill any process listening on ``port``. Returns True if something was targeted."""
         pids = await self._pids_listening(port)
+        self._stopping_pids.update(pids)
+        for pid in pids:
+            try:
+                group = os.getpgid(pid)
+                if group != os.getpgrp():
+                    self._stopping_pids.add(group)
+            except ProcessLookupError:
+                pass
         if not pids:
             return False
         self._append_log(
@@ -874,6 +897,9 @@ class ProcessManager:
         robot_ip: str | None = None,
         armodule_config: dict[str, Any] | None = None,
         simulation: bool = False,
+        can_port: str | None = None,
+        replay: str | None = None,
+        replay_streams: dict[str, str] | None = None,
     ) -> None:
         if blueprint not in BLUEPRINTS:
             raise ValueError(f"blueprint must be one of {', '.join(BLUEPRINTS)}")
@@ -894,7 +920,7 @@ class ProcessManager:
                 if not planner["ready"]:
                     raise ValueError(planner["message"])
                 if not simulation:
-                    can = await self.can_status()
+                    can = await check_can(can_port) if can_port else await self.can_status()
                     if not can["ready"]:
                         raise ValueError(can["message"])
             self._require_vps_credentials(armodule_config)
@@ -932,6 +958,13 @@ class ProcessManager:
                     env[f"ARMODULE__{key.upper()}"] = (
                         value if isinstance(value, str) else json.dumps(value)
                     )
+            for key in ("CAN_PORT", "REPLAY_DB", "SIMULATION", "REPLAY", "DIMOS_AR_SIMULATION", "ROBOT_IPS", "DIMOS_AR_REPLAY_STREAMS"):
+                env.pop(key, None)
+            if can_port:
+                env["CAN_PORT"] = can_port
+            if replay:
+                env["REPLAY_DB"] = replay
+                env["DIMOS_AR_REPLAY_STREAMS"] = json.dumps(replay_streams or {})
             if simulation:
                 env["DIMOS_AR_SIMULATION"] = "1"
             argv = self.build_start_argv(blueprint=blueprint, robot_ip=pinned_ip)
@@ -1061,6 +1094,7 @@ class ProcessManager:
     async def _stop_children_unlocked(self) -> bool:
         # Retire ownership before signalling: expected exits must not look like new failures.
         webxr_proc, armodule_proc = self._webxr_proc, self._proc
+        self._stopping_pids.update(p.pid for p in (webxr_proc, armodule_proc) if p is not None and p.returncode is None)
         self._webxr_proc = self._proc = None
         await self._cancel_task(self._webxr_start_task)
         self._webxr_start_task = None
@@ -1070,9 +1104,66 @@ class ProcessManager:
         stopped_ar = await self._stop_one(armodule_proc, "ARModule")
         await self._cancel_task(self._reader_task)
         self._reader_task = None
+        self._stopping_pids.clear()
         return stopped_webxr or stopped_ar
 
-    async def stop_armodule(self) -> None:
+    async def stop_armodule(self, *, force: bool = False) -> None:
+        if force:
+            roots = self._stopping_pids | {p.pid for p in (self._proc, self._webxr_proc) if p is not None and p.returncode is None}
+            children: dict[int, list[int]] = {}
+            for entry in Path("/proc").iterdir() if Path("/proc").is_dir() else []:
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+                    children.setdefault(int(fields[1]), []).append(int(entry.name))
+                except (OSError, ValueError, IndexError):
+                    continue
+            if not Path("/proc").is_dir():
+                process = await asyncio.create_subprocess_exec("ps", "-axo", "pid=,ppid=", stdout=asyncio.subprocess.PIPE)
+                output, _ = await process.communicate()
+                for line in output.decode().splitlines():
+                    fields = line.split()
+                    if len(fields) == 2:
+                        children.setdefault(int(fields[1]), []).append(int(fields[0]))
+            owned: list[int] = []
+            def collect(pid: int) -> None:
+                if pid in owned:
+                    return
+                owned.append(pid)
+                for child in children.get(pid, []):
+                    collect(child)
+            for pid in roots:
+                collect(pid)
+            self._append_log("Force stopping owned runtime processes…")
+            for pid in reversed(owned):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            deadline = time.monotonic() + 2
+            def alive(pid: int) -> bool:
+                try:
+                    return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+                except (OSError, IndexError):
+                    if Path("/proc").is_dir():
+                        return False
+                    try:
+                        os.kill(pid, 0)
+                        return True
+                    except ProcessLookupError:
+                        return False
+            while any(alive(pid) for pid in owned) and time.monotonic() < deadline:
+                await asyncio.sleep(0.02)
+            remaining = [pid for pid in owned if alive(pid)]
+            if remaining:
+                self._set_status(phase=Phase.STOPPING, error=f"Force stop incomplete: {remaining}")
+                return
+            if not self._lock.locked():
+                await self.stop_armodule()
+            return
+        if self.status.phase == Phase.STOPPING:
+            return
         async with self._lock:
             self._set_status(phase=Phase.STOPPING)
             stopped_managed = await self._stop_children_unlocked()
@@ -1087,6 +1178,7 @@ class ProcessManager:
                 or freed_port
                 or self.status.phase in (Phase.RUNNING, Phase.STARTING, Phase.STOPPING)
             ):
+                self._stopping_pids.clear()
                 self._set_status(
                     phase=Phase.READY if self.status.check_ok else Phase.IDLE,
                     websocket_url=None,

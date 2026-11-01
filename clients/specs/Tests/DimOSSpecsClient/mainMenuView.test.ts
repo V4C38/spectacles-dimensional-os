@@ -8,6 +8,8 @@ function fixture() {
   const setState = vi.fn(), text = () => ({ text: "", textFill: {} });
   const field = () => ({ setText: vi.fn(), text: text(), window: { interactable: {} }, dispose: vi.fn() });
   const view = Object.assign(Object.create(MainMenuView.prototype), {
+    localizationRoot: {}, lidarRoot: {}, capabilityKey: "false,false,true",
+    speedRoot: {}, speedSlider: {}, speedText: text(), speedValue: text(),
     disposed: false, page: "main", showPage: vi.fn(), robot: { labelText: text(), button: {} }, status: text(),
     modeButtons: [{}, {}], setOperatingMode: vi.fn(), manual: {}, chat: {}, reply: field(), draft: field(), send: {}, clear: {},
     lidarButtons: [{}, {}, {}], sensorControls: [], rangeLabel: text(), range: text(), points: text(), sensorStatus: text(),

@@ -689,3 +689,15 @@ it("validates decoded calibration through the same positive-dimension and focal-
     expect(() => decodeLocalizationObservations(data)).toThrow(/positive/);
   }
 });
+
+it("decodes recording source and rejects malformed read-only metadata", () => {
+  const source = {kind: "recording", read_only: true, name: "arm.db"};
+  expect((decodeOutbound(JSON.stringify({...HELLO_FIXTURE, source})) as any).source).toEqual(source);
+  expect(() => decodeOutbound(JSON.stringify({...HELLO_FIXTURE, source: {...source, read_only: "true"}}))).toThrow();
+});
+
+it("decodes bounded playback progress and rejects invalid progress", () => {
+  const playback = {state: "ended", elapsed_s: 2, duration_s: 2};
+  expect((decodeOutbound(JSON.stringify({...STATE_FIXTURE, playback})) as any).playback).toEqual(playback);
+  expect(() => decodeOutbound(JSON.stringify({...STATE_FIXTURE, playback: {...playback, elapsed_s: 3}}))).toThrow();
+});

@@ -18,6 +18,7 @@ from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest
 from dimos.ar.websocket.ip_relay import IpRelayPublisher, lan_ip
 from dimos.ar.websocket.protocol import (
     LOCALIZATION_OBSERVATIONS_FOURCC,
+    ClientError,
     ClientPose,
     EstopRequest,
     Hello,
@@ -288,6 +289,7 @@ class WebSocketServer:
             navigation_inputs=body.navigation_inputs,
             nav_goal_preview=body.nav_goal_preview,
             server_info=body.server_info,
+            source=body.source,
             odom_reference_id=body.odom_reference_id,
         )
         # A client may receive hello on another thread before send() returns.
@@ -324,6 +326,12 @@ class WebSocketServer:
         websocket: ws_server.ServerConnection,
         client_id: str,
     ) -> None:
+        if isinstance(inbound, ClientError):
+            logger.error("Client reported decode error", client_id=client_id,
+                         message_type=inbound.message_type, detail=inbound.detail,
+                         excerpt=inbound.excerpt, client_ts=inbound.ts, message_ts=inbound.message_ts,
+                         request_id=inbound.request_id, suppressed_count=inbound.suppressed_count)
+            return
         if isinstance(inbound, ManipulationRequest):
             if self._on_manipulation_request is not None:
                 sync = self._time_sync[websocket]

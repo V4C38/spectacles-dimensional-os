@@ -19,7 +19,7 @@ test("controller-only walkthrough", async ({ page }, info) => {
     page.evaluate(() => {
       const w = window as any;
       return w.xb.core.scene.children
-        .find((o: any) => o.constructor.name === "WebXRApp")
+        .find((o: any) => o.client?.manipulation)
         .client.ui.snapshot();
     });
   try {

@@ -7,6 +7,7 @@ from collections.abc import Callable
 import logging
 from typing import Any
 
+from dimos.ar.manipulation.errors import spatial_error_code
 from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.manipulation.rpc import ManipulationRPC
 from dimos.ar.manipulation.spec import ARManipulationSpec
@@ -33,6 +34,7 @@ class ManipulationService:
         self._poll: asyncio.Task[None] | None = None
         self._clients: set[str] = set()
         self._updates: dict[str, tuple[ManipulationRequest, float]] = {}
+        self._evaluation_at: dict[str, float] = {}
         self._ready_reported = False
         self._quiescing = False
         self._quiescent = False
@@ -99,6 +101,28 @@ class ManipulationService:
         while client_id in self._updates and client_id in self._clients:
             request, offset = self._updates.pop(client_id)
             await self._dispatch(request, client_id, offset)
+            key = (client_id, "follow_evaluation")
+            now = asyncio.get_running_loop().time()
+            if key not in self._pending and now - self._evaluation_at.get(client_id, -1e9) >= 0.05:
+                self._evaluation_at[client_id] = now
+                self._spawn(self._evaluate_follow(request, client_id), key)
+
+    async def _evaluate_follow(self, request: ManipulationRequest, client_id: str) -> None:
+        """Advisory work never blocks the receipt/forwarding of held samples."""
+        try:
+            result = await self._rpc.call(
+                "ar_manipulation_evaluate_following",
+                client_id,
+                {**request.payload, "group_id": request.group_id},
+                timeout=20,
+            )
+        except Exception as exc:  # noqa: BLE001 — RPC/native errors are protocol replies
+            code = spatial_error_code(str(exc), "ik_failed")
+            result = {"status": "infeasible", "code": code, "message": str(exc)}
+        if result.get("status") == "following":
+            return
+        result["sequence"] = request.payload["sequence"]
+        self._reply(client_id, request, result)
 
     async def _dispatch(
         self, request: ManipulationRequest, client_id: str, clock_offset: float
@@ -116,11 +140,31 @@ class ManipulationService:
             if request.action == "prepare_shutdown":
                 self._quiescent = result.get("quiescent") is True
         except ValueError as exc:
-            result = {"status": "rejected", "code": "rejected", "message": str(exc)}
+            code = spatial_error_code(str(exc))
+            recoverable = request.action in {"update", "evaluate", "plan"} and code in {
+                "ik_failed",
+                "joint_limit",
+                "collision",
+            }
+            result = {
+                "status": "infeasible" if recoverable else "rejected",
+                "code": code,
+                "message": str(exc),
+            }
             logger.info("Manipulation request rejected: %s: %s", request.action, str(exc))
         except Exception as exc:
             logger.exception("Manipulation command failed")
-            result = {"status": "rejected", "message": str(exc)}
+            code = spatial_error_code(str(exc))
+            recoverable = request.action in {"update", "evaluate", "plan"} and code in {
+                "ik_failed",
+                "joint_limit",
+                "collision",
+            }
+            result = {
+                "status": "infeasible" if recoverable else "rejected",
+                "code": code,
+                "message": str(exc),
+            }
         if request.action == "update":
             result.setdefault("sequence", request.payload["sequence"])
         if request.action != "update" or result.get("status") in {
@@ -161,7 +205,7 @@ class ManipulationService:
                         {"type": "manipulation_state", "available": False, "message": str(exc)}
                     )
                 )
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(1 / 30)
 
     def emergency_stop(self) -> None:
         key = ("server", "estop")

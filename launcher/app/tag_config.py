@@ -27,7 +27,7 @@ def black_size_m_from_print_mm(print_size_mm: float) -> float:
 
 
 def print_mm_from_black_size_m(size_m: float) -> float:
-    return (float(size_m) / _BLACK_FRACTION) * 1000.0
+    return round((float(size_m) / _BLACK_FRACTION) * 1000.0, 6)
 
 
 def yaw_pitch_to_quat(

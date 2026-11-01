@@ -25,7 +25,7 @@ export class FingertipButtons<T extends object> {
     this.events.end(source, press, !rayTargetVisible(press.object) || press.object.userData.interactionEnabled === false);
   }
 
-  update(source: T, tip: THREE.Vector3 | null, targets: readonly THREE.Mesh[], eligible: (object: THREE.Object3D, point: THREE.Vector3) => boolean): void {
+  update(source: T, tip: THREE.Vector3 | null, targets: readonly THREE.Mesh[], eligible: (object: THREE.Object3D, point: THREE.Vector3) => boolean, pinching = false): void {
     const press = this.presses.get(source);
     const locked = this.disarmed.get(source);
     if (locked) {
@@ -35,6 +35,9 @@ export class FingertipButtons<T extends object> {
     }
     if (press) {
       const valid = rayTargetVisible(press.object) && press.object.userData.interactionEnabled !== false;
+      // Pinch changes the finger skeleton. Preserve the existing button press
+      // until pinch release, while still cancelling loss of tracking/eligibility.
+      if (pinching && tip && valid && eligible(press.object, press.point)) return;
       const closest = tip ? closestPoint(press.object, tip) : press.point;
       const delta = tip?.clone().sub(closest);
       const front = delta?.dot(press.normal) ?? 0;

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import json
 import math
 import struct
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult, Observation
 from dimos.ar.manipulation.protocol import ManipulationRequest, decode_request
@@ -24,6 +24,15 @@ LIDAR_FOURCC = 0x4C444152
 LOCALIZATION_OBSERVATIONS_FOURCC = 0x4C4F4341
 HUMAN_INPUT_MAX_CHARS = 4000
 NAV_JOYSTICK_MAX_DURATION_S = 2.0
+
+
+class ManipulationProtectionState(TypedDict, total=False):
+    """Additive, read-only motor protection facts in manipulation_state."""
+    state: Literal["normal", "derated", "paused", "fault"]
+    reason: str
+    joints: list[str]
+    effective_speed_scale: float
+    resumable: bool
 
 
 def _dumps(payload: dict[str, Any]) -> str:
@@ -134,8 +143,20 @@ class ClientPose:
     ts: float
 
 
+@dataclass(frozen=True)
+class ClientError:
+    message_type: str
+    detail: str
+    excerpt: str
+    ts: float | None = None
+    message_ts: float | None = None
+    request_id: str | None = None
+    suppressed_count: int = 0
+
+
 Inbound = (
-    ManipulationRequest
+    ClientError
+    | ManipulationRequest
     | NavGoalRequest
     | NavJoystickRequest
     | EstopRequest
@@ -164,6 +185,29 @@ def decode_inbound(text: str) -> Inbound:
     if not isinstance(data, dict):
         raise TypeError("Frame must be a JSON object")
     msg_type = _require_type(data, "type", str)
+
+    if msg_type == "client_error":
+        values = {}
+        for key, limit in (("message_type", 128), ("detail", 1024), ("excerpt", 512)):
+            value = _require_type(data, key, str)
+            if len(value) > limit:
+                raise ValueError(f"{key} exceeds {limit} characters")
+            values[key] = value
+        ts = _finite_float(data, "ts") if "ts" in data else None
+        message_ts = _finite_float(data, "message_ts") if "message_ts" in data else None
+        request_id = data.get("request_id")
+        if request_id is not None and (
+            not isinstance(request_id, str) or not 1 <= len(request_id) <= 128
+        ):
+            raise ValueError("request_id must contain 1 to 128 characters")
+        suppressed = data.get("suppressed_count", 0)
+        if isinstance(suppressed, bool) or not isinstance(suppressed, int) or suppressed < 0:
+            raise ValueError("suppressed_count must be a nonnegative integer")
+        return ClientError(
+            message_type=values["message_type"], detail=values["detail"],
+            excerpt=values["excerpt"], ts=ts, message_ts=message_ts,
+            request_id=request_id, suppressed_count=suppressed,
+        )
 
     if msg_type == "hello_request":
         raise ValueError("hello_request is handled during handshake, not in the message loop")
@@ -402,6 +446,7 @@ class HelloBody:
     nav_goal_preview: bool = False
     server_info: dict[str, str] | None = None
     odom_reference_id: str | None = None
+    source: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -414,6 +459,7 @@ class Hello:
     nav_goal_preview: bool = False
     server_info: dict[str, str] | None = None
     odom_reference_id: str | None = None
+    source: dict[str, Any] | None = None
 
 
 def _capability_wire(cap: Capability) -> dict[str, Any]:
@@ -437,6 +483,7 @@ def encode_hello(hello: Hello) -> str:
         {
             "type": "hello",
             "client_id": hello.client_id,
+            **({"source": hello.source} if hello.source else {}),
             **({"odom_reference_id": hello.odom_reference_id} if hello.odom_reference_id else {}),
             "time_sync": {
                 "ts_client": hello.time_sync.ts_client,
@@ -513,12 +560,14 @@ class StateSnapshot:
     nav: NavState
     agent: AgentState
     nav_preview_costmap_ts: float | None = None
+    playback: dict[str, Any] | None = None
 
 
 def encode_state(snapshot: StateSnapshot) -> str:
     return encode_text(
         {
             "type": "state",
+            **({"playback": snapshot.playback} if snapshot.playback else {}),
             **(
                 {"nav_preview_costmap_ts": snapshot.nav_preview_costmap_ts}
                 if snapshot.nav_preview_costmap_ts is not None
@@ -641,3 +690,16 @@ def encode_lidar_binary(
 
 # Manipulation commands use the shared codec. Shutdown quiescence receipts and
 # explicit model visual metadata are encoded by the service; see PROTOCOL.md.
+
+# Manipulation results may carry optional failed_joints identifiers for segment feedback.
+
+# Optional manipulation_state.protection reports normal/derated/paused/fault,
+# reason, joints, effective_speed_scale (0..1), and resumable; see PROTOCOL.md.
+
+# Optional manipulation_state following_at_target (bool) and following_goal (pose)
+# correlate measured live holding with the client target; see PROTOCOL.md.
+
+# Optional manipulation observations include joint_velocities (finite rad/s or m/s
+# keyed by joint) and gripper_target (accepted normalized command, distinct from
+# measured opening). execution_phase is motion/gripper; terminal execution is
+# published only after the whole operation resolves. See PROTOCOL.md.

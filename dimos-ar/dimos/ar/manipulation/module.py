@@ -35,6 +35,7 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         self._runtime = ManipulationRuntime(self._adapter)
         self._lifecycle_stop = threading.Event()
         self._lifecycle_thread: threading.Thread | None = None
+        self._auxiliary_thread: threading.Thread | None = None
         self._closing = False
 
     @rpc
@@ -47,12 +48,17 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         self._closing = False
         self._adapter.configure_rpc()
         super().start()
+        self._adapter.prepare_feedback()
         self._runtime.started = True
         self._lifecycle_stop.clear()
         self._lifecycle_thread = threading.Thread(
             target=self._advance, name="ar-manipulation-lifecycle", daemon=True
         )
         self._lifecycle_thread.start()
+        self._auxiliary_thread = threading.Thread(
+            target=self._refresh_auxiliary, name="ar-manipulation-auxiliary", daemon=True
+        )
+        self._auxiliary_thread.start()
 
     def _advance(self) -> None:
         while not self._lifecycle_stop.wait(0.05):
@@ -60,6 +66,13 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
                 self._runtime.advance()
             except Exception:
                 logger.exception("Manipulation lifecycle update failed")
+
+    def _refresh_auxiliary(self) -> None:
+        while not self._lifecycle_stop.wait(0.1):
+            try:
+                self._adapter.refresh_auxiliary()
+            except Exception:
+                logger.exception("Manipulation auxiliary observation failed")
 
     @rpc
     def stop(self) -> None:
@@ -74,8 +87,14 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         if self._lifecycle_thread is not None:
             self._lifecycle_thread.join()
             self._lifecycle_thread = None
+        if self._auxiliary_thread is not None:
+            self._auxiliary_thread.join(timeout=1)
+            self._auxiliary_thread = None
         if self._runtime.session.quiesced:
             self._adapter.prepare_teardown()
+        if self._adapter.worker is not None:
+            self._adapter.worker.close()
+            self._adapter.worker = None
         super().stop()
 
     def _on_joint_state(self, msg: JointState) -> None:
@@ -85,12 +104,26 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         if all(name in indices and indices[name] < len(msg.position) for name in names):
             values = [msg.position[indices[name]] for name in names]
             if all(math.isfinite(q) for q in values) and math.isfinite(msg.ts):
+                self._adapter.feedback = JointState(
+                    ts=msg.ts,
+                    name=list(names),
+                    position=values,
+                    velocity=[msg.velocity[indices[n]] for n in names]
+                    if len(getattr(msg, "velocity", [])) == len(msg.name)
+                    and all(math.isfinite(v) for v in msg.velocity)
+                    else [],
+                )
                 super()._on_joint_state(msg)
-                self._adapter.feedback = JointState(ts=msg.ts, name=list(names), position=values)
 
     @rpc
     def ar_manipulation_command(self, client_id: str, request: dict[str, Any]) -> dict[str, Any]:
         return self._runtime.dispatch(client_id, request)
+
+    @rpc
+    def ar_manipulation_evaluate_following(
+        self, client_id: str, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        return self._runtime.evaluate_following(client_id, request)
 
     @rpc
     def ar_manipulation_snapshot(self) -> dict[str, Any]:

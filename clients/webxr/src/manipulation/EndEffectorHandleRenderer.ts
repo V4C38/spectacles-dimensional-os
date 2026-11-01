@@ -7,12 +7,18 @@ import { clientTrackingToWebxrPoint } from "../utilities/WebXRCoordinates";
 export class EndEffectorHandleRenderer {
   readonly object = new THREE.Group();
   readonly collider: THREE.Mesh;
+  readonly visual: THREE.Mesh;
   constructor() {
     this.object.name = "EndEffectorHandle";
     this.collider = new THREE.Mesh(
-      new THREE.SphereGeometry(0.018, 20, 16),
+      new THREE.SphereGeometry(0.036, 20, 16),
       indicatorMaterial(),
     );
+    this.visual = new THREE.Mesh(new THREE.SphereGeometry(0.012, 20, 16), this.collider.material);
+    this.visual.renderOrder = 50;
+    this.visual.raycast = () => {};
+    this.object.add(this.visual);
+    this.collider.material = new THREE.MeshBasicMaterial({ visible: false });
     this.collider.name = "EndEffectorHandleCollider";
     this.collider.userData.rayPriority = 10;
     registerRayTarget(this.collider);

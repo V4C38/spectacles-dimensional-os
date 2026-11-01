@@ -19,16 +19,16 @@ def unavailable(state: str, message: str) -> dict[str, Any]:
     return {"interface": INTERFACE, "ready": False, "state": state, "message": message}
 
 
-def inspect_link(links: list[dict[str, Any]]) -> dict[str, Any]:
-    link = next((item for item in links if item.get("ifname") == INTERFACE), None)
+def inspect_link(links: list[dict[str, Any]], interface: str = INTERFACE) -> dict[str, Any]:
+    link = next((item for item in links if item.get("ifname") == interface), None)
     if link is None:
-        return unavailable("missing", "Connect the CAN adapter; can0 was not found.")
+        return {**unavailable("missing", f"Connect the CAN adapter; {interface} was not found."), "interface": interface}
     info = link.get("linkinfo", {})
     data = info.get("info_data", {})
     bitrate = data.get("bittiming", {}).get("bitrate")
     queue = link.get("txqlen")
     result = {
-        "interface": INTERFACE,
+        "interface": interface,
         "bitrate": bitrate,
         "txqueuelen": queue,
         "bus_state": data.get("state"),
@@ -38,19 +38,19 @@ def inspect_link(links: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             **result,
             "state": "error",
-            "message": "can0 is not a SocketCAN interface.",
+            "message": f"{interface} is not a SocketCAN interface.",
         }
     if "UP" not in link.get("flags", []):
         return {
             **result,
             "state": "down",
-            "message": "can0 is down. Set up CAN to continue.",
+            "message": f"{interface} is down. Set up CAN to continue.",
         }
     if bitrate != BITRATE or queue != TX_QUEUE_LENGTH:
         return {
             **result,
             "state": "unconfigured",
-            "message": "can0 needs 1 Mbit/s and a transmit queue of 1000.",
+            "message": f"{interface} needs 1 Mbit/s and a transmit queue of 1000.",
         }
     if data.get("state") in {"BUS-OFF", "STOPPED", "SLEEPING"}:
         return {
@@ -62,11 +62,11 @@ def inspect_link(links: list[dict[str, Any]]) -> dict[str, Any]:
         **result,
         "ready": True,
         "state": "ready",
-        "message": "can0 ready · 1 Mbit/s",
+        "message": f"{interface} ready · 1 Mbit/s",
     }
 
 
-async def check_can() -> dict[str, Any]:
+async def check_can(interface: str = INTERFACE) -> dict[str, Any]:
     if sys.platform != "linux":
         return {
             **unavailable(
@@ -100,7 +100,7 @@ async def check_can() -> dict[str, Any]:
         links = json.loads(out)
         if not isinstance(links, list):
             raise TypeError("Expected an interface list")
-        return inspect_link(links)
+        return inspect_link(links, interface)
     except (OSError, TimeoutError, ValueError, TypeError, AttributeError) as exc:
         return unavailable("error", f"Cannot inspect CAN: {exc}")
     finally:
@@ -109,7 +109,7 @@ async def check_can() -> dict[str, Any]:
             await proc.wait()
 
 
-def setup_command(python: str) -> list[str]:
+def setup_command(python: str, interface: str = INTERFACE) -> list[str]:
     if sys.platform != "linux":
         raise ValueError("SocketCAN configuration is only available on Linux")
     if not Path(python).is_file():
@@ -121,7 +121,7 @@ def setup_command(python: str) -> list[str]:
         "hardware",
         "can",
         "setup",
-        INTERFACE,
+        interface,
     ]
     if os.geteuid() != 0:
         pkexec = shutil.which("pkexec")

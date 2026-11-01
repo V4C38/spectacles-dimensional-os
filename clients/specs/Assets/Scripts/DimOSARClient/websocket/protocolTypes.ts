@@ -61,6 +61,7 @@ export interface ServerInfo {
 }
 
 export interface Hello {
+  source?: { kind: "recording"; read_only: boolean; name: string };
   /** Stable for the server odometry reference, including across socket reconnects. */
   odom_reference_id?: string;
   server_info?: ServerInfo;
@@ -87,6 +88,7 @@ export interface AgentState {
 }
 
 export interface State {
+  playback?: { state: "playing" | "ended"; elapsed_s: number; duration_s: number };
   nav_preview_costmap_ts?: number;
   type: "state";
   server: { connected_clients: number };
@@ -163,6 +165,17 @@ export type Outbound =
   | AgentMessage
   | AgentSkill;
 
+export interface ClientError {
+  type: "client_error";
+  message_type: string;
+  detail: string;
+  excerpt: string;
+  ts: number;
+  message_ts?: number;
+  request_id?: string;
+  suppressed_count?: number;
+}
+
 export interface HelloRequest {
   type: "hello_request";
   ts_client: number;
@@ -236,6 +249,7 @@ export interface LocalizationObservations {
 }
 
 export type Inbound =
+  | ClientError
   | HelloRequest
   | StateRequest
   | LocalizationStartRequest

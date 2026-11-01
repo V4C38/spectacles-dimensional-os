@@ -10,39 +10,17 @@ const model = {
   joints: [{ name: "joint", kind: "continuous" }],
 } as ManipulationModel;
 
-it("smooths measured joints with a 50 ms time constant and resets on context changes", () => {
-  const filter = new ArmJointFilter();
-  expect(filter.sample(model, { joint: 0 }, "a", 1).joint).toBe(0);
-  const input = { joint: 1 };
-  expect(filter.sample(model, input, "a", 1.05).joint).toBeCloseTo(
-    1 - Math.exp(-1),
-  );
-  expect(input.joint).toBe(1);
-  expect(filter.sample(model, { joint: 2 }, "b", 1.06).joint).toBe(2);
-  filter.reset();
-  expect(filter.sample(model, { joint: 0 }, "b", 1.07).joint).toBe(0);
-  expect(filter.sample(model, { joint: 2 }, "b", 2).joint).toBe(2);
+it("interpolates measured updates using their interval", () => {
+ const f=new ArmJointFilter();f.sample(model,{joint:0},"a",0);
+ expect(f.sample(model,{joint:1},"a",.1).joint).toBe(0);
+ expect(f.sample(model,{joint:1},"a",.125).joint).toBeCloseTo(.5);
+ expect(f.sample(model,{joint:1},"a",.2).joint).toBeCloseTo(1);
+ expect(f.sample(model,{joint:2},"b",.3).joint).toBe(2);
 });
-
-it("takes the shortest rotation for continuous joints but respects limited joint travel", () => {
-  const filter = new ArmJointFilter();
-  filter.sample(model, { joint: Math.PI - 0.01 }, "a", 1);
-  const result = filter.sample(
-    model,
-    { joint: -Math.PI + 0.01 },
-    "a",
-    1.025,
-  ).joint;
-  expect(result).toBeGreaterThan(Math.PI - 0.01);
-  expect(result).toBeLessThan(Math.PI + 0.01);
-  const limited = {
-    joints: [{ name: "joint", kind: "revolute" }],
-  } as ManipulationModel;
-  filter.reset();
-  filter.sample(limited, { joint: 2 }, "a", 1);
-  expect(filter.sample(limited, { joint: -2 }, "a", 1.05).joint).toBeCloseTo(
-    2 - 4 * (1 - Math.exp(-1)),
-  );
+it("continuous joints cross the short arc",()=>{
+ const f=new ArmJointFilter();f.sample(model,{joint:Math.PI-.1},"a",0);
+ f.sample(model,{joint:-Math.PI+.1},"a",.1);
+ expect(f.sample(model,{joint:-Math.PI+.1},"a",.125).joint).toBeCloseTo(Math.PI);
 });
 
 const plan: ManipulationPlan = {
