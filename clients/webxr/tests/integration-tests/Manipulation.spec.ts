@@ -68,7 +68,7 @@ test("plans with a mesh ghost and follows only during an unselected grab", async
           normals = 0;
         for (const visual of app.client.manipulation.renderer.modelRenderer.ghosts.values())
           visual.traverse((part: any) => {
-            if (part.isMesh) {
+            if (part.isMesh && !part.userData.armOutline) {
               meshes++;
               if (part.geometry.getAttribute("normal")) normals++;
             }
@@ -497,4 +497,183 @@ test("hand tracking keeps the gripper usable by the other hand during following"
     await setSelection(page, 0);
     await expect.poll(() => fixture.commands.some(c => c.action === "release")).toBe(true);
   } finally { await fixture.close(); }
+});
+
+for (const selected of [false, true]) {
+  test(`IK wire failure retains the ${selected ? "planning" : "following"} grab and its valid mesh`, async ({ page }) => {
+    const fixture = await bootstrap(page, "controller", { manipulation: true });
+    try {
+      await fixture.localized();
+      await page.evaluate(selected => {
+        const app = (window as any).xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+        app.client.setRobotSelected(selected);
+      }, selected);
+      await aimHandle(page); await setSelection(page, 1);
+      await page.evaluate(() => { (window as any).questDevice.controllers.right.position.y += 0.06; });
+      const preview = () => page.evaluate(() => {
+        const app = (window as any).xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+        return { joints: app.client.manipulation.interaction.previewJoints,
+          dragging: app.client.manipulation.interaction.dragging, error: app.client.session.view().manipulationError,
+          rejected: !!app.client.manipulation.interaction.rejection };
+      });
+      await expect.poll(async () => (await preview()).joints).not.toBeNull();
+      await expect.poll(() => fixture.commands.some(c => c.action === (selected ? "plan" : "update"))).toBe(true);
+      await page.waitForTimeout(500);
+      const valid = (await preview()).joints;
+      fixture.setIKFailure({ code: "ik_failed" });
+      await page.evaluate(() => { (window as any).questDevice.controllers.right.position.y += 0.09; });
+      await expect.poll(async () => (await preview()).rejected).toBe(true);
+      expect(await preview()).toMatchObject({ dragging: true, joints: valid, error: null });
+      expect(fixture.commands.some(c => c.action === "release" || c.action === "cancel")).toBe(false);
+      await page.screenshot({ path: test.info().outputPath(`ik-${selected ? "planning" : "following"}-retained.png`) });
+      fixture.setIKFailure(null);
+      await page.evaluate(() => { (window as any).questDevice.controllers.right.position.y -= 0.04; });
+      await expect.poll(async () => (await preview()).rejected).toBe(false);
+      expect((await preview()).dragging).toBe(true);
+      await setSelection(page, 0);
+      if (selected) expect(fixture.commands.some(c => c.action === "execute")).toBe(false);
+      else await expect.poll(() => fixture.commands.some(c => c.action === "release")).toBe(true);
+    } finally { fixture.close(); }
+  });
+}
+
+test("slider thumb remains above its track at every speed from oblique views", async ({ page }, info) => {
+  const fixture = await bootstrap(page, "controller", { manipulation: true });
+  try {
+    await fixture.localized();
+    const samples = await page.evaluate(async () => {
+      const THREE = await import("/node_modules/three/build/three.module.js");
+      const app = (window as any).xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const slider = app.client.manipulation.renderer.speedSlider;
+      const parent = slider.parent, position = slider.position.clone(), rotation = slider.quaternion.clone(), scale = slider.scale.clone();
+      const scene = new THREE.Scene(), renderer = new THREE.WebGLRenderer({ antialias: false });
+      renderer.setSize(600, 300); renderer.setClearColor(0x000000);
+      const camera = new THREE.OrthographicCamera(-0.11, 0.11, 0.055, -0.055, 0.01, 5);
+      const result: number[][] = [];
+      scene.add(slider); slider.position.set(0, 0, 0); slider.quaternion.identity(); slider.scale.setScalar(1);
+      document.body.appendChild(renderer.domElement);
+      try {
+        for (const angle of [0, 0.8]) for (const value of [0.05, 0.5, 1]) {
+          slider.setValue(value);
+          camera.position.set(Math.sin(angle), 0, Math.cos(angle)); camera.lookAt(0, 0, 0); camera.updateMatrixWorld(true);
+          renderer.render(scene, camera);
+          const point = slider.thumb.localToWorld(new THREE.Vector3(slider.width * 0.025, 0, 0)).project(camera);
+          const pixel = new Uint8Array(4), gl = renderer.getContext();
+          gl.readPixels(Math.floor((point.x + 1) * 300), Math.floor((point.y + 1) * 150), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+          result.push(Array.from(pixel));
+        }
+        return result;
+      } finally {
+        parent.add(slider); slider.position.copy(position); slider.quaternion.copy(rotation); slider.scale.copy(scale);
+        renderer.dispose(); renderer.domElement.remove();
+      }
+    });
+    for (const pixel of samples) for (const channel of pixel.slice(0, 3)) expect(channel).toBeGreaterThan(240);
+    await page.screenshot({ path: info.outputPath("slider-layering.png") });
+  } finally { fixture.close(); }
+});
+
+for (const mode of ["hand", "controller"] as const) {
+  test(`arm hover preserves selection and smoothly reveals the idle mesh (${mode})`, async ({ page }, info) => {
+    test.setTimeout(90000);
+    const fixture = await bootstrap(page, mode, { manipulation: true });
+    const point = async (away: boolean) => page.evaluate(away => {
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      if (app.client.ui.menuOpen) app.client.ui.toggleMenu();
+      const inputs = w.questDevice.primaryInputMode === "hand" ? w.questDevice.hands : w.questDevice.controllers;
+      const p = app.client.manipulation.renderer.baseMarker.getWorldPosition(app.client.manipulation.renderer.baseMarker.position.clone());
+      inputs.right.position.set(away ? -4 : p.x, away ? 2 : p.y, away ? 0 : p.z + 0.5);
+      inputs.right.quaternion.set(0, 0, 0, 1); inputs.left.position.set(-5, 2, 0);
+    }, away);
+    const read = () => page.evaluate(() => {
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const r = app.client.manipulation.renderer;
+      const meshes = Array.from(r.modelRenderer.previewMeshes.values()) as any[];
+      return { selected: app.client.isRobotSelected(), visible: meshes.map(m => m.visible),
+        alpha: meshes.map(m => { let value = 0; m.traverse((part: any) => { if (part.isMesh && !part.userData.armOutline) value = part.material.uniforms.uOpacity.value; }); return value; }),
+        measured: r.measuredHandle.object.visible, offset: app.client.manipulation.interaction.snapshot().targetOffset,
+        hit: app.interaction.hit(w.xb.core.input.rightController)?.object.userData.manipulationLink };
+    });
+    try {
+      await fixture.localized(); await point(true);
+      await page.evaluate(() => {
+        const app = (window as any).xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+        app.client.setRobotSelected(true);
+      });
+      await expect.poll(async () => (await read()).visible.length).toBeGreaterThan(0);
+      await expect.poll(async () => (await read()).visible.every(Boolean)).toBe(true);
+      expect(await read()).toMatchObject({ selected: true, measured: true, offset: false });
+      await expect.poll(async () => (await read()).alpha.every(a => a > 0.99)).toBe(true);
+      // A held press begun in empty space must not activate a selection target on entry.
+      await setSelection(page, 1); await point(false);
+      await expect.poll(async () => (await read()).hit).toBe("base-marker");
+      expect((await read()).selected).toBe(true);
+      expect((await read()).alpha.every(a => a > 0.99)).toBe(true);
+      await setSelection(page, 0);
+      expect((await read()).selected).toBe(true);
+      await point(true);
+      await expect.poll(async () => (await read()).hit).toBeUndefined();
+      expect((await read()).visible.every(Boolean)).toBe(true);
+      expect((await read()).alpha.every(a => a > 0.99)).toBe(true);
+      await point(false);
+      await expect.poll(async () => (await read()).hit).toBe("base-marker");
+      // A fresh press on the root sphere is an explicit toggle.
+      await setSelection(page, 1); await setSelection(page, 0);
+      await expect.poll(async () => (await read()).selected).toBe(false);
+      await expect.poll(async () => (await read()).alpha.every(a => a > 0.95)).toBe(true);
+      const before = (await read()).alpha[0];
+      await point(true);
+      const fadeFrames = await page.evaluate(async () => {
+        const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+        const session = w.xb.core.renderer.xr.getSession(), values: number[] = [];
+        for (let frame = 0; frame < 20; frame++) {
+          await new Promise<void>(resolve => session.requestAnimationFrame(() => resolve()));
+          const mesh = app.client.manipulation.renderer.modelRenderer.previewMeshes.values().next().value;
+          mesh.traverse((part: any) => { if (part.isMesh && !part.userData.armOutline) values.push(part.material.uniforms.uOpacity.value); });
+        }
+        return values;
+      });
+      expect(fadeFrames.some(alpha => alpha > 0 && alpha < before - 0.001)).toBe(true);
+      await expect.poll(async () => (await read()).visible.every(v => !v)).toBe(true);
+      expect((await read()).measured).toBe(true);
+      await page.screenshot({ path: info.outputPath(`arm-hover-${mode}.png`) });
+    } finally { fixture.close(); }
+  });
+}
+
+test("the selected near-EE action executes a checked draft and stays available under hover", async ({ page }, info) => {
+  const fixture = await bootstrap(page, "controller", { manipulation: true });
+  try {
+    await fixture.localized();
+    await page.evaluate(() => {
+      const app = (window as any).xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      app.client.setRobotSelected(true);
+    });
+    await aimHandle(page); await setSelection(page, 1);
+    await page.evaluate(() => { (window as any).questDevice.controllers.right.position.y += 0.08; });
+    await expect.poll(() => fixture.commands.some(c => c.action === "plan")).toBe(true);
+    await setSelection(page, 0);
+    await aimHandle(page);
+    await expect.poll(() => page.evaluate(() => {
+      const app = (window as any).xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const r = app.client.manipulation.renderer, button = r.controlsView.buttons.get("gripper");
+      return r.gripperMenu.visible && button.text === "Execute" && button.enabled;
+    })).toBe(true);
+    await page.evaluate(() => {
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      const button = app.client.manipulation.renderer.controlsView.buttons.get("gripper");
+      const p = button.getWorldPosition(button.position.clone()), q = button.getWorldQuaternion(button.quaternion.clone());
+      p.add(p.clone().set(0, 0, 0.5).applyQuaternion(q));
+      w.questDevice.controllers.right.position.copy(p); w.questDevice.controllers.right.quaternion.copy(q);
+    });
+    await expect.poll(() => page.evaluate(() => {
+      const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+      return app.interaction.hit(w.xb.core.input.rightController)?.object.userData.manipulationAction;
+    })).toBe("execute");
+    expect(fixture.commands.some(c => c.action === "execute")).toBe(false);
+    await page.screenshot({ path: info.outputPath("near-ee-execute.png") });
+    await setSelection(page, 1); await setSelection(page, 0);
+    await expect.poll(() => fixture.commands.filter(c => c.action === "execute").length).toBe(1);
+    expect(fixture.commands.some(c => c.action === "gripper")).toBe(false);
+  } finally { fixture.close(); }
 });

@@ -83,6 +83,7 @@ export interface ManipulationResult {
   quiescent?: boolean;
   sequence?: number;
   code?: string;
+  failed_joints?: string[];
   message?: string;
   token?: string;
   joints?: Record<string, number> | null;

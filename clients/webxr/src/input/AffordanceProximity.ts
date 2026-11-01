@@ -4,6 +4,19 @@ export type NearbyAffordance = { object: THREE.Mesh; point: THREE.Vector3; dista
 
 /** Closest point on the actual local control shape; world-space distance handles scaled panels. */
 export function closestPoint(mesh: THREE.Mesh, point: THREE.Vector3): THREE.Vector3 {
+  if (mesh.userData.meshSelection) {
+    const positions = mesh.geometry.getAttribute("position"), indices = mesh.geometry.index;
+    const triangle = new THREE.Triangle(), candidate = new THREE.Vector3(), best = new THREE.Vector3();
+    let distance = Infinity;
+    for (let i = 0; i < (indices?.count ?? positions.count); i += 3) {
+      for (const [j, vertex] of [triangle.a, triangle.b, triangle.c].entries())
+        vertex.fromBufferAttribute(positions, indices ? indices.getX(i + j) : i + j).applyMatrix4(mesh.matrixWorld);
+      triangle.closestPointToPoint(point, candidate);
+      const next = candidate.distanceToSquared(point);
+      if (next < distance) { distance = next; best.copy(candidate); }
+    }
+    return best;
+  }
   const local = mesh.worldToLocal(point.clone());
   if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
   const box = mesh.geometry.boundingBox!;
@@ -16,6 +29,8 @@ export function closestPoint(mesh: THREE.Mesh, point: THREE.Vector3): THREE.Vect
     const offset = new THREE.Vector2(local.x, local.y).sub(center);
     if (offset.length() > r) offset.setLength(r);
     local.set(center.x + offset.x, center.y + offset.y, 0);
+  } else if (mesh.geometry.type === "SphereGeometry") {
+    local.clampLength(0, (mesh.geometry as THREE.SphereGeometry).parameters.radius);
   } else if (mesh.geometry.type === "CylinderGeometry") {
     const radius = (mesh.geometry as THREE.CylinderGeometry).parameters.radiusTop;
     const length = Math.hypot(local.x, local.z);
@@ -26,6 +41,7 @@ export function closestPoint(mesh: THREE.Mesh, point: THREE.Vector3): THREE.Vect
 }
 
 export function proximityToAffordance(ray: THREE.Ray, mesh: THREE.Mesh, retained: boolean, range: number): NearbyAffordance | null {
+  if (mesh.userData.meshSelection) return null;
   if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
   const sphere = mesh.geometry.boundingSphere!.clone().applyMatrix4(mesh.matrixWorld);
   const maxMiss = retained ? 0.08 : 0.05;

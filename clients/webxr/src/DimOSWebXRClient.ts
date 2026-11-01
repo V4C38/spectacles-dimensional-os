@@ -293,7 +293,8 @@ export class DimOSWebXRClient {
   }
 
   loseInput(completeDictation = false): void {
-    this.manipulation.end();
+    if (completeDictation) this.manipulation.end();
+    else this.manipulation.interrupt();
     this.speech.endRecording(!completeDictation);
     if (!completeDictation) this.navigation.cancelDrag();
     this.joystick.loseInput();

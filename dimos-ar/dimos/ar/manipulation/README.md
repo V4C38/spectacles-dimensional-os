@@ -82,12 +82,10 @@ OpenYAM composition uses coincident world/base/odom frames. If those transforms 
 changed, configure their composition consistently with the actual model base.
 Tag mounts are relative to that base. Host basis conversion happens once.
 
-The measured arm uses oriented per-link bounds in the shared world-line style.
+The arm preview uses articulated mesh geometry in the shared world-line style.
 The planning ghost is a bundled 251 KB simplified model; see the WebXR model
 NOTICE for source and license. Geometry preparation happens once outside this repo.
-WebXR applies the existing OpenYAM base visual quarter-turn to only the root
-bounding box for the explicit `openyam` visual profile; mesh geometry and all other boxes retain
-their established orientation. Joint topology and bounds come from the configured official model, and a
+The explicit `openyam` visual profile retains its existing root-mesh orientation correction. Joint topology and bounds come from the configured official model, and a
 numerically normalized visual signature prevents using the bundled ghost with a
 mismatched model. ClientCore FK is visual only and supports revolute, continuous,
 prismatic, fixed, and mimic joints. It is never used to authorize motion.
@@ -134,15 +132,15 @@ plan. **Preview** computes and animates the trajectory without moving hardware.
 Changing the target or speed invalidates the previous preview. Deselecting drops
 the target and returns the handle to the measured tool pose.
 
-With the robot unselected, hold and drag the tool sphere to follow live; release
-to stop following. Grab capture persists outside the robot bounds. The controller's
+With the robot unselected, hold and drag the tool sphere to follow live; normal release
+lets the arm finish reaching the final valid target. Grab capture persists outside the robot bounds. The controller's
 secondary face button toggles the gripper during a drag. The tool's floating
 Open/Close button appears below the marker while hovering either the sphere or the
 button, with a short grace period for moving between them. It hides immediately
 during an end-effector grab. Preview appears above a selected displaced marker and
 also hides during the grab.
 
-Robot settings and the arm base panel share a 5–100% manipulation speed slider, default 20%. It scales
+Robot settings and the arm base panel share a 5–100% manipulation speed slider, default 50%. It scales
 planned motion and the live IK joint velocity envelope. Reset plans a checked
 joint-zero arm move and leaves the gripper unchanged. The base panel stacks Execute (selected mode), Reset, speed, Stop, and the wider
 E-stop control. Once stopped, the bottom control becomes the white Resume operation
@@ -205,10 +203,11 @@ establish that measurement.
 ### Specs and shared client behavior
 
 Specs uses the existing PIN/IP setup and measured robot-profile calibration.
-Select the arm through its bounds or menu. Selected dragging edits a full-pose
+Select the arm through its mesh, root sphere, or menu. Selected dragging edits a full-pose
 target; release requests a checked plan. Preview plays the articulated trajectory
 once and retains its endpoint. Execute binds to that plan. Unselected dragging
-follows until release, input loss, or tracking/session invalidation. Both hosts
+follows while held and finishes toward its retained target after normal release;
+input loss or tracking/session invalidation interrupts it. Both hosts
 use ClientCore for grab offsets, pose smoothing, action dispatch, preview timing,
 visual kinematics, trajectory sampling, and control-state derivation.
 
@@ -279,16 +278,13 @@ Only the exact current intent can execute. Activity labels are compact and deriv
 from shared interaction state; an offset selected target remains Planning between
 requests. Execution remains latched until authoritative terminal feedback arrives.
 
-Unselected dragging renders a movement-weighted dashed IK skeleton, while the tool
-retains its 3D model. Unreachable input preserves capture and the following lease,
-holds motion, and can recover within the same gesture. Release returns the marker
-to measured pose. Joint-limit warnings use the last 5% of bounded joint ranges.
+Unselected dragging renders a movement-weighted articulated 3D mesh. Unreachable input preserves capture and the following lease,
+holds motion, and can recover within the same gesture. Normal release retains the valid final target and completes motion toward it; an
+invalid target returns to the last validated pose, and motion completes there. Joint-limit warnings use the last 5% of bounded joint ranges.
 
 OpenYAM finger pads open as the independent prismatic joints move toward their
-lower URDF limits (the meshes cross their joint origins). The visual-only forearm
-profile uses two boxes; planner collision geometry and GLB signatures are unchanged.
-Gripper bounds update their picking mesh independently from their instanced outline.
-Stationary bounds reveal along their full longest axis, then expand crosswise.
+lower URDF limits (the meshes cross their joint origins). Selection uses mesh triangles, including the gripper; planner collision geometry
+and GLB signatures are unchanged. No arm selection boxes are drawn.
 
 The mini-menu uses the shared labeled speed slider. Ray capture follows its thumb
 in either menu, independently of the ray-plane calculation that changes its value.
@@ -338,3 +334,17 @@ Full repository CI includes browser integration and production build checks.
 Physical registration, stopping latency, CAN hardware, headset input and depth
 quality remain attended hardware checks; fixture and mock passes do not establish
 their physical performance.
+
+
+### Arm presentation and selection feedback
+
+The complete selected outlined mesh stays at normal strength independently of hover,
+even at the measured pose. Displacement weighting controls only the unselected mesh. Hover and
+selection visibility transitions fade smoothly using the shared presentation owner;
+mesh picking remains enabled independently of opacity. Shape edges use 6 mm dashes
+and 9 mm gaps. The small translucent sphere always marks the measured EE pose.
+Following and execution paths use full opacity, while planning paths remain faint.
+Below the hovered EE marker, selected mode offers Execute after release; unselected
+mode offers Open/Close, including the independent second-hand action. Hover never
+toggles selection: selecting a mesh/root sphere or pressing the near-EE action
+requires a new pinch/press after release.

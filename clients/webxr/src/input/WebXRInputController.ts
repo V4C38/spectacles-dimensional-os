@@ -1,4 +1,4 @@
-import { ManipulationInputCapture } from "@dimos-ar-client/manipulation/ManipulationInputCapture";
+import { ManipulationInputCapture, ManipulationPressEdges } from "@dimos-ar-client/manipulation/ManipulationInputCapture";
 import { FingertipButtons } from "./FingertipButtons";
 import { ViewerPanelPlacement } from "../presentation/ViewerPanelPlacement";
 import * as THREE from "three";
@@ -31,6 +31,7 @@ export class WebXRInputController {
   private worldHold: xb.SelectEvent["target"] | null = null;
   private holdFromMarker = false;
   private secondaryPressed = false;
+  private readonly pressEdges = new ManipulationPressEdges();
   private readonly manipulationCapture = new ManipulationInputCapture();
   private readonly gripperPresses = new Set<xb.SelectEvent["target"]>();
   private speedHold: THREE.Object3D | null = null;
@@ -149,7 +150,7 @@ export class WebXRInputController {
     this.scene.add(this.mainMenu.panel);
     this.interaction.setPolicy({
       eligible: (controller, object, point) => this.canInteract(controller, object, point),
-      ignored: (controller, object) => object === this.client.robot.collider && this.client.navigation.interaction.ownsDraft(this.navigationSourceId(controller)),
+      ignored: (controller, object) => this.client.robot.ownsTarget(object) && this.client.navigation.interaction.ownsDraft(this.navigationSourceId(controller)),
       captured: controller => this.capture.owner === controller && (this.uiGrab || this.worldHold === controller || this.manipulationHold === controller || this.panelHold === controller),
       unobstructed: (object, origin, point) => {
         if (this.mainMenu?.ownsTarget(object)) return true;
@@ -211,6 +212,7 @@ export class WebXRInputController {
     }
     this.detectedSurfaces = this.readDetectedSurfaces(frame, reference);
     this.client.ui.surfaceCount = this.detectedSurfaces.length;
+    if (this.manipulationHold && !this.client.manipulation.interaction.dragging && !this.client.manipulation.renderer.pinned) this.clearInput();
     if (this.capture.owner && (!this.capture.owner.visible || this.capture.owner.userData.connected !== true)) this.clearInput();
     this.handStyle.apply(this.input.hands);
     this.interaction.direct.sample(frame, reference, this.input.controllers);
@@ -232,8 +234,9 @@ export class WebXRInputController {
     this.client.manipulation.renderer.hoveredLink = manipulationHovered?.userData.manipulationLink ?? null;
     this.client.manipulation.renderer.hoveredAction = manipulationHovered?.userData.manipulationAction ?? null;
     this.client.manipulation.renderer.handDragging = !!this.manipulationHold?.inputSource?.hand;
-    this.client.manipulation.renderer.eeHovered = actionableHits.some(hit => !!hit && (hit === this.client.manipulation.renderer.handle.collider || hit.userData.manipulationAction === "gripper"));
-    const robotHovered = hoverTargets.includes(this.client.robot.collider);
+    this.client.manipulation.renderer.eeHovered = actionableHits.some(hit => !!hit && (hit === this.client.manipulation.renderer.handle.collider || hit.userData.endEffectorAction === true));
+    const robotHovered = hoverTargets.some(hit => this.client.robot.ownsTarget(hit)) ||
+      this.interaction.hoverTargets(this.client.robot.markerCollider).includes(this.client.robot.markerCollider);
     const markerHovered = hoverTargets.some(hit => hit !== this.client.navigation.marker.cancelObject && isDescendant(hit, this.client.navigation.marker.object));
     const worldHover = worldMarkerHover(this.client.navigation.interaction.snapshot().attachedToRobot, robotHovered, markerHovered);
     this.client.robot.setHovered(worldHover.robot);
@@ -328,8 +331,8 @@ export class WebXRInputController {
       const surface = navigationSurfaceHits(origin.toArray() as [number, number, number], direction.toArray() as [number, number, number], this.detectedSurfaces, this.client.robot.floorWorldY() ?? 0)[0];
       if (surface && new THREE.Vector3(...surface.position).distanceTo(origin) + 0.02 < point.distanceTo(origin)) return false;
     }
-    if (object === this.client.robot.collider && this.client.navigation.interaction.ownsDraft(this.navigationSourceId(controller))) return false;
-    if (object === this.client.robot.collider) return this.client.ui.snapshot().robotSelectable;
+    if (this.client.robot.ownsTarget(object) && this.client.navigation.interaction.ownsDraft(this.navigationSourceId(controller))) return false;
+    if (this.client.robot.ownsTarget(object)) return this.client.ui.snapshot().robotSelectable;
     if (!this.client.controlsEnabled() || !this.client.originStore.hasTrackingOrigin) return false;
     if (object === this.navigationFloor) return this.client.isRobotSelected() && point.distanceTo(controller.getWorldPosition(new THREE.Vector3())) <= FLOOR_AIM_RANGE_M;
     if (this.client.manipulation.owns(object)) return object.userData.interactionEnabled !== false;
@@ -339,6 +342,7 @@ export class WebXRInputController {
   onSelectStart(event: xb.SelectEvent): void {
     if (!this.touchDispatch && this.touches.owns(event.target)) return;
     if (!this.tracking || this.session?.visibilityState !== "visible") return;
+    if (!this.pressEdges.observe(this.navigationSourceId(event.target), true)) return;
     const hit = this.interaction.hit(event.target);
     if (this.mainMenu?.isEmergencyTarget(hit?.object) || hit?.object.userData.manipulationAction === "estop") {
       this.clearInput();
@@ -411,7 +415,7 @@ export class WebXRInputController {
       this.uiGrab = true;
       return;
     }
-    if (hit?.object === this.client.robot.collider && this.client.ui.setupCompleted) {
+    if (hit && this.client.robot.ownsTarget(hit.object) && this.client.ui.setupCompleted) {
       this.client.toggleRobotSelection();
       this.uiGrab = true;
       return;
@@ -448,6 +452,7 @@ export class WebXRInputController {
   }
 
   onSelectEnd(event: xb.SelectEvent): void {
+    this.pressEdges.observe(this.navigationSourceId(event.target), false);
     if (this.gripperPresses.delete(event.target)) {
       this.manipulationCapture.release(this.navigationSourceId(event.target));
       return;

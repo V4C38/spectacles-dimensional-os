@@ -551,7 +551,7 @@ def test_follow_ik_failure_keeps_lease_and_recovers(monkeypatch):
     module.adapter.ready = True
     module.adapter.evaluation_code = lambda evaluation: "joint_limit"
     token = command(module, "acquire")["token"]
-    outcome = SimpleNamespace(success=False, message="joint limits", target_joints=None)
+    outcome = SimpleNamespace(success=False, message="joint limits", target_joints=None, group_poses={})
     module.adapter.evaluate = lambda *args: outcome
     body = {
         "token": token,
@@ -585,7 +585,7 @@ def test_follow_solver_does_not_hold_ownership_lock_against_stop(monkeypatch):
     def evaluate(request):
         entered.set()
         assert release.wait(3)
-        return SimpleNamespace(success=True, target_joints=None)
+        return SimpleNamespace(success=True, group_poses={}, target_joints=None)
 
     module.adapter.evaluate = lambda group, pose: evaluate(pose)
     replies = []
@@ -669,7 +669,7 @@ def test_failed_streaming_solver_holds_target_until_it_changes(monkeypatch):
     clear.assert_called_once()
     task.on_cartesian_command(point)
     assert submit.call_count == 1
-    assert task.get_failure() == "QP failed"
+    assert task.get_failure() == {"code": "ik_failed", "message": "QP failed", "failed_joints": []}
     point.position.z = 0.2
     task.on_cartesian_command(point)
     assert submit.call_count == 2
@@ -794,3 +794,30 @@ def test_snapshot_does_not_actuate_a_completed_deferred_gripper():
     module.adapter.set_gripper_position.assert_not_called()
     module.advance()
     module.adapter.set_gripper_position.assert_called_once_with(1.0, planning_group="arm")
+
+
+def test_recoverable_ik_exception_retains_lease_and_clears_only_motion_target(monkeypatch):
+    from dimos.ar.manipulation.errors import ManipulationError
+
+    module = runtime()
+    module.adapter.ready = True
+    token = command(module, "acquire")["token"]
+
+    def fail(*args):
+        raise ManipulationError("ik_failed", "IK did not converge")
+
+    module.adapter.evaluate = fail
+    failed = module.dispatch("a", {"action": "update", "group_id": "arm", "token": token,
+                                   "sequence": 1, "ts": time.time(), "position": [0, 0, 0.3],
+                                   "orientation": [0, 0, 0, 1]})
+    assert failed["status"] == "infeasible"
+    assert module.session.token == token
+    assert module.session.owner == "a"
+
+
+@pytest.mark.parametrize("message", ["IK failed", "unreachable target", "no solution", "infeasible target"])
+def test_backend_spatial_failure_messages_have_recoverable_codes(message):
+    from dimos.ar.manipulation.adapter import DimOSManipulationAdapter
+
+    assert DimOSManipulationAdapter.error_code(message) == "ik_failed"
+    assert DimOSManipulationAdapter.error_code("connection retired") == "rejected"

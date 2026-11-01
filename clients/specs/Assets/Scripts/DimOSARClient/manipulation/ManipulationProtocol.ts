@@ -39,12 +39,14 @@ function vector(value: unknown, count: number): number[] {
     throw new Error("Invalid manipulation vector");
   return value.map(finite);
 }
-function pose(value: unknown): void {
+function pose(value: unknown, path = "pose"): void {
+  try {
   const p = object(value);
   vector(p.position, 3);
   const q = vector(p.orientation, 4);
   if (Math.abs(q.reduce((s, v) => s + v * v, 0) - 1) > 1e-4)
     throw new Error("Expected unit quaternion");
+  } catch (error) { throw new Error(`${path}: ${error instanceof Error ? error.message : String(error)}`); }
 }
 function joints(value: unknown): void {
   for (const v of Object.values(object(value))) finite(v);
@@ -86,6 +88,11 @@ export function decodeManipulation(
     if (data.quiescent !== undefined && typeof data.quiescent !== "boolean")
       throw new Error("Invalid shutdown acknowledgment");
     if (data.code !== undefined) text(data.code);
+    if (data.failed_joints !== undefined) {
+      if (!Array.isArray(data.failed_joints) || data.failed_joints.length > 256)
+        throw new Error("Invalid failed joints");
+      data.failed_joints.forEach(text);
+    }
     if (
       data.sequence !== undefined &&
       (!Number.isSafeInteger(data.sequence) || Number(data.sequence) < 0)
@@ -206,11 +213,11 @@ export function decodeManipulation(
         )
           throw new Error("Invalid group capabilities");
       }
-      for (const raw of Object.values(object(data.observations))) {
+      for (const [name, raw] of Object.entries(object(data.observations))) {
         const observation = object(raw);
         if (observation.joints != null) joints(observation.joints);
         if (observation.measured_at != null) finite(observation.measured_at);
-        if (observation.pose != null) pose(observation.pose);
+        if (observation.pose != null) pose(observation.pose, `observations.${name}.pose`);
         if (observation.gripper != null) finite(observation.gripper);
       }
       if (data.plan != null) plan(object(data.plan));

@@ -11,7 +11,7 @@ export class SpeedSlider extends THREE.Group {
   readonly thumb: THREE.Mesh;
   constructor(readonly width: number) {
     super();
-    const height = width * 0.035;
+    const height = width * 0.0525;
     const track = new THREE.Mesh(
       new THREE.PlaneGeometry(width, height),
       glassMaterial({
@@ -48,9 +48,10 @@ export class SpeedSlider extends THREE.Group {
       }),
     );
     this.thumb = new THREE.Mesh(
-      new THREE.CircleGeometry(width * 0.055, 40),
+      new THREE.CircleGeometry(width * 0.063, 40),
       new THREE.MeshBasicMaterial({
         color: 0xffffff,
+        transparent: true,
         depthTest: false,
         depthWrite: false,
       }),
@@ -70,13 +71,13 @@ export class SpeedSlider extends THREE.Group {
     registerRayTarget(this.hit);
     this.add(track, this.fill, this.thumb, this.hit);
     this.traverse((n) => {
-      n.renderOrder = n === this.thumb ? 66 : 65;
+      n.renderOrder = n === this.thumb ? 68 : n === shadow ? 67 : n === this.fill ? 66 : 65;
       if (n !== this.hit) n.raycast = () => {};
       if (n instanceof THREE.Mesh)
         for (const m of Array.isArray(n.material) ? n.material : [n.material])
           m.depthTest = m.depthWrite = false;
     });
-    this.setValue(0.2);
+    this.setValue(0.5);
   }
   setValue(value: number) {
     const t = THREE.MathUtils.clamp((value - 0.05) / 0.95, 0, 1);

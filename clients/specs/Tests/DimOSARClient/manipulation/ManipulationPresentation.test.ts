@@ -11,3 +11,15 @@ it("plays once from zero and retains the final configuration", () => {
   p.togglePreview(); expect(p.sample(plan, 110).time).toBe(0);
   p.reset(); expect(p.previewRequested).toBe(false);
 });
+
+
+import { endEffectorAction, manipulationPathOpacity } from "../../../Assets/Scripts/DimOSARClient/manipulation/ManipulationPresentation";
+it("shares near-EE Execute and motion path opacity across both clients", () => {
+  const intent = { canExecute: true, canManipulate: true, stopped: false, executing: false, finishing: false } as any;
+  expect(endEffectorAction(true, intent, 0, true)).toMatchObject({ action: "execute", label: "Execute", enabled: true, allowDuringGrab: false });
+  expect(endEffectorAction(false, intent, 0, true)).toMatchObject({ action: "gripper", label: "Open" });
+  expect(manipulationPathOpacity(intent, false, false)).toBe(0.5);
+  expect(manipulationPathOpacity(intent, true, false)).toBe(1);
+  expect(manipulationPathOpacity({ ...intent, executing: true }, false, true)).toBe(1);
+  expect(manipulationPathOpacity({ ...intent, finishing: true }, false, false)).toBe(1);
+});

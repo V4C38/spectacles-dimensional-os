@@ -134,8 +134,20 @@ class ClientPose:
     ts: float
 
 
+@dataclass(frozen=True)
+class ClientError:
+    message_type: str
+    detail: str
+    excerpt: str
+    ts: float | None = None
+    message_ts: float | None = None
+    request_id: str | None = None
+    suppressed_count: int = 0
+
+
 Inbound = (
-    ManipulationRequest
+    ClientError
+    | ManipulationRequest
     | NavGoalRequest
     | NavJoystickRequest
     | EstopRequest
@@ -164,6 +176,29 @@ def decode_inbound(text: str) -> Inbound:
     if not isinstance(data, dict):
         raise TypeError("Frame must be a JSON object")
     msg_type = _require_type(data, "type", str)
+
+    if msg_type == "client_error":
+        values = {}
+        for key, limit in (("message_type", 128), ("detail", 1024), ("excerpt", 512)):
+            value = _require_type(data, key, str)
+            if len(value) > limit:
+                raise ValueError(f"{key} exceeds {limit} characters")
+            values[key] = value
+        ts = _finite_float(data, "ts") if "ts" in data else None
+        message_ts = _finite_float(data, "message_ts") if "message_ts" in data else None
+        request_id = data.get("request_id")
+        if request_id is not None and (
+            not isinstance(request_id, str) or not 1 <= len(request_id) <= 128
+        ):
+            raise ValueError("request_id must contain 1 to 128 characters")
+        suppressed = data.get("suppressed_count", 0)
+        if isinstance(suppressed, bool) or not isinstance(suppressed, int) or suppressed < 0:
+            raise ValueError("suppressed_count must be a nonnegative integer")
+        return ClientError(
+            message_type=values["message_type"], detail=values["detail"],
+            excerpt=values["excerpt"], ts=ts, message_ts=message_ts,
+            request_id=request_id, suppressed_count=suppressed,
+        )
 
     if msg_type == "hello_request":
         raise ValueError("hello_request is handled during handshake, not in the message loop")
@@ -641,3 +676,5 @@ def encode_lidar_binary(
 
 # Manipulation commands use the shared codec. Shutdown quiescence receipts and
 # explicit model visual metadata are encoded by the service; see PROTOCOL.md.
+
+# Manipulation results may carry optional failed_joints identifiers for segment feedback.

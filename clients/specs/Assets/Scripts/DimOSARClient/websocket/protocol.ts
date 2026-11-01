@@ -189,6 +189,14 @@ export function encodeLocalizationObservations(
   return out;
 }
 
+export interface DecodeContext { message_type: string; message_ts?: number; request_id?: string }
+export class ProtocolDecodeError extends Error {
+  constructor(readonly context: DecodeContext, detail: string, readonly excerpt?: string) { super(detail); this.name = "ProtocolDecodeError"; }
+}
+export function encodeClientError(report: import("./protocolTypes").ClientError): string {
+  return encodeText(report);
+}
+
 export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
   let parsed: unknown;
   try {
@@ -199,6 +207,7 @@ export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
   const data = asObject(parsed, "Frame");
   const msgType = requireString(data, "type");
 
+  try {
   switch (msgType) {
     case "manipulation_state":
     case "manipulation_result":
@@ -221,6 +230,20 @@ export function decodeOutbound(text: string): Exclude<Outbound, Lidar> {
       return decodeAgentSkill(data);
     default:
       throw new Error(`Unknown outbound frame type: '${msgType}'`);
+  }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const field = detail.split(":")[0];
+    let section: string | undefined;
+    if (/^[a-zA-Z_][\w]*(?:\.[\w]+)+$/.test(field)) {
+      let value: unknown = data;
+      for (const part of field.split(".")) value = value && typeof value === "object" ? (value as Record<string, unknown>)[part] : undefined;
+      if (value !== undefined) section = JSON.stringify({ field, value });
+    }
+    throw new ProtocolDecodeError({ message_type: msgType,
+      ...(typeof data.ts === "number" && Number.isFinite(data.ts) ? { message_ts: data.ts } : {}),
+      ...(typeof data.request_id === "string" ? { request_id: data.request_id.slice(0, 128) } : {}) },
+      detail, section);
   }
 }
 
@@ -859,3 +882,5 @@ function asciiBytes(text: string): Uint8Array {
 
 // ManipulationProtocol validates shutdown quiescence receipts and explicit model
 // visual metadata at this shared boundary; see dimos-ar/PROTOCOL.md.
+
+// Manipulation results may carry optional failed_joints identifiers for segment feedback.

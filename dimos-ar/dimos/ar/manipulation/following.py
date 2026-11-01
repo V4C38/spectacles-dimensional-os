@@ -24,8 +24,9 @@ logger = setup_logger()
 
 
 class SpeedScaledPoseTargetSolver(PinkPoseTargetSolver):  # type: ignore[misc]
-    speed_scale = 0.2
+    speed_scale = 0.5
     failure: str | None = None
+    failed_joints: tuple[str, ...] = ()
 
     def step(self, *args: Any, **kwargs: Any) -> Any:
         try:
@@ -34,6 +35,8 @@ class SpeedScaledPoseTargetSolver(PinkPoseTargetSolver):  # type: ignore[misc]
             if self.failure is None:
                 logger.warning("Following IK target failed", error=str(exc))
             self.failure = str(exc)
+            joint = getattr(exc, "joint_name", None)
+            self.failed_joints = (joint,) if isinstance(joint, str) else ()
             return None
 
     def _step_frame_targets(self, *args: Any, **kwargs: Any) -> Any:
@@ -69,9 +72,14 @@ class SpeedScaledCartesianIKTask(CartesianIKTask):  # type: ignore[misc]
         self._solver.failure = None
         return super().on_cartesian_command(pose, t_now=t_now)
 
-    def get_failure(self) -> str | None:
+    def get_failure(self) -> dict[str, Any] | None:
         failure = self._solver.failure
-        return str(failure) if failure is not None else None
+        if failure is None:
+            return None
+        from dimos.ar.manipulation.errors import spatial_error_code
+
+        return {"message": str(failure), "code": spatial_error_code(str(failure), "ik_failed"),
+                "failed_joints": list(getattr(self._solver, "failed_joints", ()))}
 
     def set_speed_scale(self, value: float) -> None:
         if not math.isfinite(value) or not 0 < value <= 1:

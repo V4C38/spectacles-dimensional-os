@@ -7,7 +7,7 @@ import { DIMOS_AR_DESIGN } from "./DimOSARDesign";
 import { registerRayTarget, UI_CONTROL_RAY_PRIORITY } from "../input/XRBlocksRayInteraction";
 const C = DIMOS_AR_DESIGN.colors;
 const HEIGHT = DIMOS_AR_DESIGN.panel.height;
-export type ButtonVariant = "default" | "primary" | "danger" | "field" | "tab";
+export type ButtonVariant = "default" | "primary" | "danger" | "resume" | "field" | "tab";
 
 export class SurfaceButton extends xb.TextButton {
   private disposed = false;
@@ -153,8 +153,8 @@ export class SurfaceButton extends xb.TextButton {
 
   private restyle(): void {
     const uniforms = (this.mesh?.material as THREE.ShaderMaterial | undefined)?.uniforms;
-    const primary = this.variant === "primary" || this.active && this.variant !== "field";
-    const surface = !this.enabled ? C.fill : this.variant === "danger" ? C.danger :
+    const primary = this.variant === "primary" || this.variant === "resume" || this.active && this.variant !== "field";
+    const surface = !this.enabled ? C.fill : this.variant === "danger" ? C.danger : this.variant === "resume" ? "#ffcc00" :
       this.variant === "field" ? C.field : primary ? C.primary : C.secondary;
     if (uniforms?.uTint) {
       this.targetTint.set(surface);

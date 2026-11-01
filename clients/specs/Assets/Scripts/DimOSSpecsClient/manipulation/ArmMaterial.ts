@@ -1,12 +1,10 @@
-import { ARM_FRESNEL_STYLE as STYLE, WORLD_DASH_STYLE } from "../../DimOSARClient/presentation/WorldVisualStyle";
+import { ARM_VISUAL_STYLE } from "../../DimOSARClient/manipulation/ManipulationVisuals";
 export const ARM_MATERIAL = requireAsset("../../../Materials/ArmFresnel.mat") as Material;
 
-export function configureArmMaterial(material: Material, thin = false): void {
-  const pass = material.mainPass as Pass & { fill: number; edgeOpacity: number; power: number; dashM: number; gapM: number; twoSided: boolean };
-  pass.fill = thin ? STYLE.toolFill : STYLE.fill;
-  pass.edgeOpacity = thin ? STYLE.toolEdgeOpacity : STYLE.edgeOpacity;
-  pass.power = STYLE.power;
-  pass.dashM = WORLD_DASH_STYLE.dashM;
-  pass.gapM = WORLD_DASH_STYLE.gapM;
+export function configureArmMaterial(material: Material, opacity = 1): void {
+  const pass = material.mainPass as Pass & { fill: number; edgeOpacity: number; power: number; twoSided: boolean };
+  pass.fill = pass.edgeOpacity = ARM_VISUAL_STYLE.fill * opacity;
+  // Negative power selects the flat surface branch; the measured sphere retains Fresnel.
+  pass.power = -1;
   pass.twoSided = false;
 }

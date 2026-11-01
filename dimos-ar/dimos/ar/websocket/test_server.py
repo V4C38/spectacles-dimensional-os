@@ -495,3 +495,26 @@ async def test_hello_timeout_retires_silent_or_blocked_handshake_without_registr
     assert h._server._outbound == {}
     assert h._server._time_sync == {}
     assert h.disconnected_client_ids == []
+
+
+@pytest.mark.asyncio
+async def test_client_decode_report_does_not_disconnect_or_generate_a_reply(harness, monkeypatch):
+    from dimos.ar.websocket import server
+
+    reports = []
+    monkeypatch.setattr(server.logger, "error", lambda event, **fields: reports.append((event, fields)))
+    async with websockets.connect(f"ws://127.0.0.1:{harness.port}") as ws:
+        hello = await _send_hello_request(ws)
+        await ws.send(json.dumps({"type": "client_error", "message_type": "manipulation_state",
+                                  "detail": "invalid pose", "excerpt": "orientation", "ts": 1001}))
+        await ws.send(json.dumps({"type": "localization_start_request"}))
+        for _ in range(50):
+            if reports and harness.localization_start_requests:
+                break
+            await asyncio.sleep(0.01)
+        assert reports[0][1]["client_id"] == hello["client_id"]
+        assert reports[0][1]["detail"] == "invalid pose"
+        assert harness.localization_start_requests == [hello["client_id"]]
+        assert harness.disconnected_client_ids == []
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(ws.recv(), 0.05)

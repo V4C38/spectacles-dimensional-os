@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { ManipulationInputCapture } from "../../../Assets/Scripts/DimOSARClient/manipulation/ManipulationInputCapture";
+import { ManipulationInputCapture, ManipulationPressEdges } from "../../../Assets/Scripts/DimOSARClient/manipulation/ManipulationInputCapture";
 
 it("keeps drag ownership through another hand's gripper press and release", () => {
   const capture = new ManipulationInputCapture();
@@ -15,4 +15,13 @@ it("keeps drag ownership through another hand's gripper press and release", () =
   capture.reset();
   expect(capture.owner).toBeNull();
   expect(capture.pressGripper("left")).toBe(true);
+});
+
+it("requires release before another selection press from the same source", () => {
+  const edges = new ManipulationPressEdges();
+  expect(edges.observe("right", false)).toBe(false);
+  expect(edges.observe("right", true)).toBe(true);
+  expect(edges.observe("right", true)).toBe(false);
+  expect(edges.observe("left", true)).toBe(true);
+  edges.observe("right", false); expect(edges.observe("right", true)).toBe(true);
 });

@@ -3,6 +3,8 @@ import type { ClientTrackingOrigin, ClientTrackingOriginStore } from "../localiz
 import { LocalizationSubmission } from "../localization/localizationSubmission";
 import {
   TextFramer,
+  ProtocolDecodeError,
+  encodeClientError,
   decodeLidar,
   decodeOutbound,
   encodeEstopRequest,
@@ -50,6 +52,7 @@ export interface ARModuleSessionState {
   nav_goal: NavGoal | null;
   nav_preview?: NavGoal | null;
   manipulation?: ManipulationState | null;
+  manipulationError?: string | null;
   lidar: Lidar | null;
   capabilities: Capabilities | null;
   nav: NavState | null;
@@ -92,6 +95,8 @@ export class ARModuleSession {
   private agentMessage: string | null = null;
   private agentMessageRevision = 0;
   private lastError: string | null = null;
+  private readonly decodeReports = new Map<string, { at: number; suppressed: number }>();
+  private manipulationError: string | null = null;
   private helloDeadline: number | null = null;
   private reconnectAt: number | null = null;
   private pendingHelloTs: number | null = null;
@@ -207,7 +212,7 @@ export class ARModuleSession {
     try {
       this.lidar = decodeLidar(data);
     } catch (error) {
-      this.fail(errorMessage(error));
+      this.reportDecodeError(error, Array.from(data.slice(0, 64)).map(v => v.toString(16).padStart(2, "0")).join(""), "lidar");
       return;
     }
     this.emitOutbound(this.lidar);
@@ -272,6 +277,7 @@ export class ARModuleSession {
       nav_goal: this.nav_goal,
       nav_preview: this.nav_preview,
       manipulation: this.manipulation,
+      manipulationError: this.manipulationError,
       lidar: this.lidar,
       capabilities: this.hello?.capabilities ?? null,
       nav: this.state?.nav ?? null,
@@ -298,7 +304,11 @@ export class ARModuleSession {
     try {
       message = decodeOutbound(line);
     } catch (error) {
-      this.fail(errorMessage(error));
+      if (this.phase !== "ready") {
+        this.fail(errorMessage(error));
+        return;
+      }
+      this.reportDecodeError(error, line);
       return;
     }
 
@@ -335,7 +345,13 @@ export class ARModuleSession {
   private applyReadyMessage(message: Exclude<Outbound, Lidar | Hello>): void {
     switch (message.type) {
       case "manipulation_state":
-        this.manipulation = message;
+        this.manipulationError = null;
+        // An unavailable poll contains no replacement topology or measurements.
+        // Keep their original timestamps so brief gaps pause commands rather than
+        // reset capture; genuinely stale source feedback still expires normally.
+        this.manipulation = !message.available && this.manipulation
+          ? { ...this.manipulation, available: false, message: message.message }
+          : message;
         break;
       case "manipulation_result":
         this.emitOutbound(message);
@@ -384,6 +400,28 @@ export class ARModuleSession {
     this.emitView();
   }
 
+  private reportDecodeError(error: unknown, excerpt: string, type = "unknown"): void {
+    const context = error instanceof ProtocolDecodeError ? error.context : { message_type: type };
+    const detail = errorMessage(error).slice(0, 1024);
+    if (context.message_type === "unknown" || context.message_type.startsWith("manipulation_")) {
+      this.manipulationError = detail;
+      this.emitView();
+    }
+    const now = this.clock.now(), key = `${context.message_type}:${detail}`;
+    const prior = this.decodeReports.get(key);
+    if (prior && now - prior.at < 5) { prior.suppressed++; return; }
+    this.decodeReports.delete(key);
+    if (this.decodeReports.size >= 32) this.decodeReports.delete(this.decodeReports.keys().next().value!);
+    this.decodeReports.set(key, { at: now, suppressed: 0 });
+    const sync = this.hello?.time_sync;
+    try {
+      this.transport.sendText(encodeClientError({ type: "client_error", ...context,
+        message_type: context.message_type.slice(0, 128), detail, excerpt: (error instanceof ProtocolDecodeError ? error.excerpt ?? excerpt : excerpt).slice(0, 512),
+        ts: now + (sync ? sync.ts_server - sync.ts_client : 0),
+        ...(prior?.suppressed ? { suppressed_count: prior.suppressed } : {}) }));
+    } catch { /* Transport notifications own actual connection failures. */ }
+  }
+
   private enterConnecting(): void {
     this.clearConnectionFacts();
     this.phase = "connecting";
@@ -419,9 +457,11 @@ export class ARModuleSession {
     this.nav_preview = null;
     this.lidar = null;
     this.manipulation = null;
+    this.manipulationError = null;
     this.agentMessage = null;
     this.clientTrackingOriginStore.clear();
     this.framer = new TextFramer();
+    this.decodeReports.clear();
   }
 
   private closeTransport(): void {

@@ -24,6 +24,7 @@ export async function bootstrap(
   const armNow = () => armClockBase + (performance.now() - armClockStarted) / 1000;
   let following = false, plan: any = null, owner: string | null = null;
   let armStopped = false;
+  let ikFailure: { code: string; failed_joints?: string[] } | null = null;
   let planSequence = 0;
   const delayedReplies: ReturnType<typeof setTimeout>[] = [];
   const armState = () => {
@@ -171,7 +172,14 @@ export async function bootstrap(
         if (command.action === "resume") { armStopped = false; result = {status: "resumed"}; }
         if (command.action === "acquire") { following = true; owner = "integration"; result = {status: "acquired", token: "fixture-follow"}; }
         if (command.action === "release" || command.action === "cancel") { following = false; owner = null; plan = null; }
-        if (command.action === "update") result = {status:"feasible", sequence:command.sequence, joints:{...arm.joints,yam_joint6:arm.joints.yam_joint6+0.8}};
+        if (command.action === "update") {
+          result = {status:"feasible", sequence:command.sequence, joints:{...arm.joints,yam_joint6:arm.joints.yam_joint6+0.8}};
+          if (!ikFailure) arm.pose = { position: command.position, orientation: command.orientation };
+        }
+        if (ikFailure && ["update", "evaluate", "plan"].includes(command.action)) {
+          result = { status: "infeasible", message: "Pink IK did not converge within the iteration budget", ...ikFailure,
+            ...(command.action === "update" ? { sequence: command.sequence } : {}) };
+        }
         const reply = {type: "manipulation_result", request_id: command.request_id, action: command.action, group_id: command.group_id, ...result};
         if (command.action === "plan" && options.planDelayMs) delayedReplies.push(setTimeout(()=>send(reply),options.planDelayMs));
         else send(reply);
@@ -308,6 +316,7 @@ export async function bootstrap(
   };
   return {
     send,
+    setIKFailure: (failure: typeof ikFailure) => { ikFailure = failure; },
     state,
     commands,
     localized,

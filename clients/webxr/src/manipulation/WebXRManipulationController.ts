@@ -36,7 +36,7 @@ export class WebXRManipulationController {
     this.object = this.renderer.object;
   }
   setSelected(selected: boolean): void {
-    if (this.selected !== selected) this.end();
+    if (this.selected !== selected) this.interrupt();
     this.selected = selected;
     this.core.setSelected(selected);
   }
@@ -79,7 +79,7 @@ export class WebXRManipulationController {
     this.interaction.end();
   }
   suspend(): void { this.end(); this.core.suspend(); }
-  interrupt(): void { this.end(); this.core.suspend(); }
+  interrupt(): void { this.panelOffset = null; this.gesture.end(); this.interaction.interrupt(); this.core.suspend(); }
   action(action: ManipulationControlAction): void {
     this.core.action(action);
     this.renderer.previewRequested = this.core.presentation.previewRequested;
@@ -95,7 +95,7 @@ export class WebXRManipulationController {
       groupId: this.interaction.groupId,
       selected: this.selected,
       target: this.interaction.target,
-      solution: this.interaction.solution,
+      solution: this.interaction.previewJoints,
       plan: this.interaction.plan ?? this.interaction.previewPlan,
       now: this.now(),
       robotTitle: this.session.view().hello?.robot.display_name ?? "Arm",

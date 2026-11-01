@@ -725,3 +725,19 @@ def test_binary_localization_rejects_invalid_calibration(changes):
                   "distortion_model": "none", "distortion": [], **changes}
     with pytest.raises((TypeError, ValueError)):
         decode_localization_observations(_encode_localization_observations_frame(b"jpeg", json.dumps(intrinsics).encode()))
+
+
+def test_client_decode_error_is_a_bounded_diagnostic():
+    from dimos.ar.websocket.protocol import ClientError
+
+    body = {"type": "client_error", "message_type": "manipulation_state", "detail": "bad pose",
+            "excerpt": '{"orientation":[0,0,0,0]}', "ts": 10.0, "message_ts": 9.9,
+            "request_id": "plan-1", "suppressed_count": 2}
+    report = decode_inbound(json.dumps(body))
+    assert isinstance(report, ClientError)
+    assert report.message_ts == 9.9
+    assert report.suppressed_count == 2
+    for key, value in (("excerpt", "x" * 513), ("detail", "x" * 1025), ("ts", True),
+                       ("suppressed_count", -1), ("request_id", "")):
+        with pytest.raises((ValueError, TypeError)):
+            decode_inbound(json.dumps({**body, key: value}))

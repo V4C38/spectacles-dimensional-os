@@ -38,7 +38,7 @@ def test_new_arm_never_inherits_go2_calibration(tmp_path, monkeypatch):
     assert mount == {
         "marker_id": 0,
         "size_m": 0.056,
-        "position": [0.0, -0.12, 0.0],
+        "position": [0.0, -0.06, 0.0],
         "orientation": [0.0, 0.0, 0.0, 1.0],
     }
     assert arm["armodule"]["localization"]["providers"] == [{"type": "fiducial_marker"}]

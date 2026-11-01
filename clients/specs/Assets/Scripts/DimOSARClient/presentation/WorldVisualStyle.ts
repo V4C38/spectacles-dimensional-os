@@ -97,10 +97,3 @@ export function navigationCancelReveal(progress: number, circleHeightM: number) 
 }
 
 export const NAVIGATION_PREVIEW_ARROW_STYLE = { widthScale: 0.8, opacityScale: 0.8 } as const;
-
-/** Shared high-contrast arm surface with a narrow, soft edge. */
-export const ARM_FRESNEL_STYLE = {
-  fill: 0.015, edgeOpacity: 0.92, power: 5.0,
-  toolFill: 0.008, toolEdgeOpacity: 0.82,
-  color: 0xcbd9df, rimColor: 0xd9f0ff,
-} as const;

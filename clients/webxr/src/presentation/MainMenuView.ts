@@ -254,7 +254,7 @@ export class MainMenuView {
     this.settingsPage.add(this.speedGroup);
     this.speedSlider.position.set(0.10 / HEIGHT, 0, 0.006);
     this.speedGroup.add(this.speedSlider);
-    const speedText = label(this.speedGroup, "Speed · 20%", -0.27, 0, 0.22, 0.04, 22, C.muted);
+    const speedText = label(this.speedGroup, "Speed · 50%", -0.27, 0, 0.22, 0.04, 22, C.muted);
     this.speedLabel = speedText;
     label(this.settingsPage, COPY.headset, 0, -0.014, CONTENT, 0.03, 19, C.muted);
     this.debugToggle = button(this.settingsPage, "Debug · Off", 0, -0.084, CONTENT, ACTION_HEIGHT, handlers.onDebug);

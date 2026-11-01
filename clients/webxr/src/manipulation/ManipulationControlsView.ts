@@ -1,3 +1,4 @@
+import { manipulationMenuRows, manipulationButtonEnabled, endEffectorAction } from "@dimos-ar-client/manipulation/ManipulationPresentation";
 import type { ManipulationSnapshot } from "@dimos-ar-client/manipulation/ManipulationInteraction";
 import type {
   ManipulationGroup,
@@ -117,7 +118,8 @@ export class ManipulationControlsView {
     this.speedLabel.raycast = () => {};
     this.speedSlider.add(this.speedLabel);
     this.speedLabel.position.y = 0.012;
-    addButton("gripper", this.gripperMenu, "Open", "gripper", 0, 0, 0.095);
+    const eeAction = addButton("gripper", this.gripperMenu, "Open", "gripper", 0, 0, 0.095);
+    eeAction.traverse(node => { node.userData.endEffectorAction = true; });
     this.status.font = UI_FONT_REGULAR;
     this.status.fontSize = 0.014;
     this.status.maxWidth = 0.34;
@@ -172,13 +174,7 @@ export class ManipulationControlsView {
       syncText(this.speedLabel);
     }
     this.speedSlider.hit.userData.interactionEnabled = intent.canManipulate;
-    const rows = [
-      ...(selected && !state.stopped ? ["execute"] : []),
-      "reset",
-      "speed",
-      "stop",
-      "estop",
-    ];
+    const rows = manipulationMenuRows(selected, stopped);
     this.menuHeight.request(rows.length * 0.04 + 0.028);
     this.menuHeight.tick(dtOutline);
     this.menuPlate.resize(0.224, this.menuHeight.height, 0.016);
@@ -201,30 +197,28 @@ export class ManipulationControlsView {
     if (emergency.userData.mode !== emergencyAction) {
       emergency.userData.mode = emergencyAction;
       emergency.setText(state.stopped ? "Resume operation" : "E-stop");
-      emergency.setVariant(state.stopped ? "primary" : "danger");
+      emergency.setVariant(state.stopped ? "resume" : "danger");
       emergency.traverse((node) => {
         node.userData.manipulationAction = emergencyAction;
       });
     }
+    const opening = selected ? input.desiredGripper ?? observed?.gripper : observed?.gripper;
+    const markerAction = endEffectorAction(selected, intent, opening, group?.has_gripper === true);
     for (const [key, button] of this.buttons) {
-      button.setEnabled(intent.canManipulate);
-      if (key === "estop")
-        button.setEnabled(intent.canStop || intent.canResume);
-      if (key === "stop") button.setEnabled(intent.canStop);
-      if (key === "reset") button.setEnabled(intent.canReset);
-      if (key === "execute") button.setEnabled(intent.canExecute);
+      button.setEnabled(manipulationButtonEnabled(key, intent));
       if (key === "plan") {
         button.setActive(input.previewRequested);
         button.setEnabled(intent.canPreview);
       }
       if (key === "gripper") {
-        button.visible = group?.has_gripper === true;
-        const value = selected
-          ? (input.desiredGripper ?? observed?.gripper)
-          : observed?.gripper;
-        button.setText(
-          value == null ? "Gripper —" : value < 0.5 ? "Open" : "Close",
-        );
+        button.visible = markerAction.available;
+        button.setText(markerAction.label);
+        button.setEnabled(markerAction.enabled);
+        if (button.userData.mode !== markerAction.action) {
+          button.userData.mode = markerAction.action;
+          button.setVariant(selected ? "primary" : "default");
+          button.traverse(node => { node.userData.manipulationAction = markerAction.action; });
+        }
       }
       button.feedbackPressed =
         input.hoveredAction === button.userData.manipulationAction;
@@ -240,9 +234,9 @@ export class ManipulationControlsView {
         (1 - Math.exp(-14 * dtOutline));
     }
     this.gripperMenu.visible =
-      (!dragging || input.handDragging === true) &&
+      (!dragging || (input.handDragging === true && markerAction.allowDuringGrab)) &&
       !state.stopped &&
-      group?.has_gripper === true &&
+      markerAction.available &&
       this.hoverProgress > 0.01;
     this.gripperMenu.scale.setScalar(Math.max(0.01, this.hoverProgress));
     this.gripperMenu.position

@@ -46,6 +46,10 @@ export class ReviewScenario extends BaseScriptComponent {
           joint_names: Object.keys(ARM_FIXTURE.joints), duration: 2,
           trajectory: [{ time: 0, positions: Object.values(ARM_FIXTURE.joints) },
             { time: 2, positions: Object.values(ARM_FIXTURE.joints).map((v, i) => i === 0 ? v + 0.3 : v) }] });
+        if (command.action === "update") {
+          reply.status = "feasible"; reply.sequence = command.sequence; reply.joints = ARM_FIXTURE.joints;
+          this.state.observations.arm.pose = { position: command.position, orientation: command.orientation };
+        }
         if (command.action === "gripper") this.state.observations.arm.gripper = command.value;
         if (command.action === "execute") this.state.execution = "executing";
         this.wire(reply);
@@ -90,19 +94,25 @@ export class ReviewScenario extends BaseScriptComponent {
       this.emit({ type: "diagnostic", setup: root.uiPresenter.isSetupCompleted(), mode: root.uiPresenter.getOperatingMode(), connection: root.session.view().connection, error: root.session.view().lastError, origin: root.clientTrackingOriginStore.T_odom_client !== null, meshes: arm.renderer.meshes.size });
       this.check("manipulation_model", arm.renderer.meshes.size > 0 && arm.renderer.object.enabled);
       const mesh = arm.renderer.meshes.values().next().value;
-      this.check("manipulation_material", !!mesh && Math.abs(mesh.material.mainPass.fill - 0.015) < 0.0001 && Math.abs(mesh.material.mainPass.edgeOpacity - 0.92) < 0.0001 && mesh.material.mainPass.power === 5 && Math.abs(mesh.material.mainPass.dashM - 0.012) < 0.00001 && Math.abs(mesh.material.mainPass.gapM - 0.01) < 0.00001);
+      this.check("manipulation_material", !!mesh && Math.abs(mesh.material.mainPass.fill - mesh.material.mainPass.edgeOpacity) < 0.0001 && mesh.material.mainPass.power < 0 && arm.renderer.edges.size > 0);
       this.check("manipulation_stroke_width", Math.abs(arm.renderer.path.material.mainPass.nearWidthScale - 0.75) < 0.0001);
       this.check("manipulation_pose", handle.getTransform().getWorldPosition().distance(new vec3(...clientTrackingToSpecsPose(odomToClientTrackingPose(ARM_FIXTURE.pose as any, root.clientTrackingOriginStore.T_odom_client)).position)) < 0.01);
+      this.check("manipulation_gripper_meshes", ["gripper", "tip_left", "tip_right"].every(link => arm.renderer.picks.get(link)?.enabled === true));
       root.selection.setSelected(true); this.scene("manipulation_target");
     } else if (this.phase === 1) {
+      this.check("selected_idle_mesh_visible", [...arm.renderer.meshes.values()].every((mesh: any) => mesh.object.enabled));
+      this.check("measured_ee_sphere_present", arm.renderer.measured.object.enabled);
       const interactable = handle.getComponent("ScriptComponent") as any;
       this.drag!.ray(handle.getTransform().getWorldPosition().add(new vec3(0, 0, 30)), handle.getTransform().getWorldPosition(), interactable);
       this.dragFrom = this.drag!.from;
       this.drag!.start(interactable);
     } else if (this.phase === 2) {
       this.drag!.end(); this.check("manipulation_evaluate", this.sent.some(c => c.action === "evaluate"));
+      arm.core.action("gripper");
+      this.check("manipulation_gripper_draft_only", !this.sent.some(c => c.action === "execute" || c.action === "gripper"));
       arm.core.action("plan"); this.scene("manipulation_preview");
     } else if (this.phase === 3) {
+      this.check("selected_ee_execute", arm.renderer.gripper.labelText.text === "Execute");
       this.check("manipulation_plan", !!arm.core.interaction.plan);
       arm.core.action("execute"); this.check("manipulation_execute", this.sent.some(c => c.action === "execute" && c.plan_id === "native-plan"));
       this.state.execution = "idle"; root.selection.setSelected(false); this.scene("manipulation_follow");
@@ -112,15 +122,22 @@ export class ReviewScenario extends BaseScriptComponent {
       this.dragFrom = this.drag!.from;
       this.drag!.start(interactable);
     } else if (this.phase === 5) {
+      const update = [...this.sent].reverse().find(c => c.action === "update");
+      if (update) this.wire({ type: "manipulation_result", request_id: update.request_id, action: "update", group_id: update.group_id, sequence: update.sequence, status: "infeasible", code: "ik_failed", message: "IK failed" });
+      this.check("manipulation_ik_retains_capture", arm.core.interaction.dragging && arm.input.capture.owner !== null);
       const button = arm.renderer.gripper.button;
-      const actor = this.other!.actor, interactable = button.interactable;
-      const args: any = { interactor: actor, target: interactable, propagationPhase: "Target", connectionId: null, endedInsideInteractable: true, stopPropagation: () => {} };
+      const interactable = button.interactable;
       const owner = arm.input.capture.owner;
-      interactable.triggerStart(args); interactable.triggerEnd(args);
+      this.other!.start(interactable); arm.input.tick(true); this.other!.end(); arm.input.tick(true);
       this.check("manipulation_two_hands", owner !== null && owner === arm.input.capture.owner && this.sent.some(c => c.action === "gripper"));
       this.check("manipulation_following", this.sent.some(c => c.action === "update")); this.scene("manipulation_gripper");
       this.drag!.end();
     } else if (this.phase === 6) {
+      this.check("manipulation_mesh_picking", arm.renderer.picks.size > 0 &&
+        [...arm.renderer.picks.values()].every((pick: any) => {
+          const shape = pick.getComponent("Physics.ColliderComponent").shape;
+          return !!shape.mesh && shape.convex === false;
+        }));
       this.check("manipulation_release", this.sent.some(c => c.action === "release"));
       root.emergencyStop(); this.check("manipulation_estop", this.sent.some(c => c.type === "estop_request"));
       this.drag!.restore(); this.other!.restore();

@@ -5,7 +5,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from dimos.ar.manipulation.errors import ManipulationError
+from dimos.ar.manipulation.errors import ManipulationError, spatial_error_code
 from dimos.ar.manipulation.model import describe_model
 from dimos.ar.manipulation.operation import ManipulationOperation
 from dimos.ar.manipulation.ports import ManipulationBackend
@@ -69,8 +69,20 @@ class ManipulationRuntime:
             return self.command(client_id, request)
         except ValueError as exc:
             message = str(exc)
-            code = exc.code if isinstance(exc, ManipulationError) else "rejected"
-            result: dict[str, Any] = {"status": "rejected", "code": code, "message": message}
+            code = exc.code if isinstance(exc, ManipulationError) else spatial_error_code(message)
+            recoverable = request.get("action") in {"update", "evaluate", "plan"} and code in {
+                "ik_failed", "joint_limit", "collision"
+            }
+            result: dict[str, Any] = {
+                "status": "infeasible" if recoverable else "rejected",
+                "code": code, "message": message,
+            }
+            if isinstance(exc, ManipulationError) and exc.failed_joints:
+                result["failed_joints"] = exc.failed_joints
+            if recoverable and request.get("action") == "update":
+                with self.lock:
+                    if self.session.owner == client_id:
+                        self.clear_following()
             if request.get("action") == "prepare_shutdown":
                 result["quiescent"] = self.session.quiesced
             return result
@@ -213,6 +225,7 @@ class ManipulationRuntime:
                 evaluation = self.adapter.evaluate(group, self.pose(body))
                 result_body = {
                     "status": "feasible" if evaluation.success else "infeasible",
+                    **({"code": self.adapter.evaluation_code(evaluation)} if not evaluation.success else {}),
                     "message": evaluation.message,
                     "joints": self.joints(evaluation.target_joints),
                     "pose": self.pose_wire(evaluation.group_poses.get(group)),
@@ -293,6 +306,8 @@ class ManipulationRuntime:
                 task, "on_cartesian_command", {"pose": self.pose(body), "t_now": None}
             )
             failure = self.adapter.task_invoke(task, "get_failure", {})
+            if isinstance(failure, dict) and failure.get("message"):
+                return {"status": "infeasible", "sequence": body["sequence"], **failure}
             if isinstance(failure, str) and failure:
                 return {
                     "status": "infeasible",
@@ -304,6 +319,7 @@ class ManipulationRuntime:
                 "status": "feasible",
                 "sequence": body["sequence"],
                 "joints": self.joints(evaluation.target_joints) if evaluation else None,
+                "pose": self.pose_wire(evaluation.group_poses.get(group)) if evaluation else None,
             }
 
     def pose(self, body: dict[str, Any]) -> PoseStamped:

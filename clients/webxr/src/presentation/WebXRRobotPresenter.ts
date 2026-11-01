@@ -40,6 +40,7 @@ export class WebXRRobotPresenter {
     THREE.ShaderMaterial
   >;
   private readonly labelGroup: THREE.Group;
+  readonly markerCollider: THREE.Mesh;
   readonly collider: THREE.Mesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>;
   private readonly outline: THREE.LineSegments<
     THREE.EdgesGeometry,
@@ -111,6 +112,11 @@ export class WebXRRobotPresenter {
       indicatorMaterial(),
     );
     this.indicator.name = "RobotIndicator";
+    this.markerCollider = new THREE.Mesh(new THREE.SphereGeometry(0.03, 24, 16), new THREE.MeshBasicMaterial({ visible: false }));
+    this.markerCollider.name = "Robot marker selection collider";
+    this.markerCollider.userData.rayPriority = 20;
+    registerRayTarget(this.markerCollider);
+    this.object.add(this.markerCollider);
     this.indicator.raycast = () => {};
     this.collider = new THREE.Mesh(
       new THREE.BoxGeometry(1, 1, 1),
@@ -185,10 +191,10 @@ export class WebXRRobotPresenter {
       return;
     }
     if (input.mode === "localizedPending") {
-      this.collider.userData.interactionEnabled = false;
+      this.collider.userData.interactionEnabled = this.markerCollider.userData.interactionEnabled = false;
       return;
     }
-    this.collider.userData.interactionEnabled = true;
+    this.collider.userData.interactionEnabled = this.markerCollider.userData.interactionEnabled = true;
     if (input.mode === "unlocalizedFallbackPosition") {
       this.applyUnlocalized(input, fallbackPosition);
       return;
@@ -208,6 +214,8 @@ export class WebXRRobotPresenter {
   setFloorVisible(visible: boolean): void {
     this.floorVisible = visible;
   }
+
+  ownsTarget(object: THREE.Object3D): boolean { return object === this.collider || object === this.markerCollider; }
 
   setHovered(hovered: boolean): void {
     this.hovered = hovered;

@@ -7,6 +7,7 @@ from collections.abc import Callable
 import logging
 from typing import Any
 
+from dimos.ar.manipulation.errors import spatial_error_code
 from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.manipulation.rpc import ManipulationRPC
 from dimos.ar.manipulation.spec import ARManipulationSpec
@@ -116,7 +117,9 @@ class ManipulationService:
             if request.action == "prepare_shutdown":
                 self._quiescent = result.get("quiescent") is True
         except ValueError as exc:
-            result = {"status": "rejected", "code": "rejected", "message": str(exc)}
+            code = spatial_error_code(str(exc))
+            recoverable = request.action in {"update", "evaluate", "plan"} and code in {"ik_failed", "joint_limit", "collision"}
+            result = {"status": "infeasible" if recoverable else "rejected", "code": code, "message": str(exc)}
             logger.info("Manipulation request rejected: %s: %s", request.action, str(exc))
         except Exception as exc:
             logger.exception("Manipulation command failed")
