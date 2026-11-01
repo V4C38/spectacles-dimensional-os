@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 import time
 from typing import Protocol
 
@@ -32,12 +33,16 @@ class NavigationPreviewService:
         factor: float,
         odometry: Callable[[], AcceptedOdometry | None],
         send: Callable[[str, str], None],
+        on_preview: Callable[[str, NavGoalRequest, NavGoalFrame], None] | None = None,
     ) -> None:
         self._closed = False
         self._planner = planner
         self._factor = factor
         self._odometry = odometry
         self._send = send
+        self._on_preview = on_preview
+        self._executor: ThreadPoolExecutor | None = None
+        self._permit = asyncio.Semaphore(1)
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self.costmap_ts: float | None = None
 
@@ -71,13 +76,28 @@ class NavigationPreviewService:
         tasks = tuple(self._tasks.values())
         self.cancel_all()
         await asyncio.gather(*tasks, return_exceptions=True)
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
 
     async def _run(
         self, request: NavGoalRequest, client_id: str, pose: AcceptedOdometry | None
     ) -> None:
         try:
-            frame = await asyncio.to_thread(self.compute, request, pose)
-            self._send(client_id, encode_nav_goal(frame))
+            await self._permit.acquire()
+            if self._closed:
+                self._permit.release()
+                return
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ar-preview")
+            loop = asyncio.get_running_loop()
+            future = loop.run_in_executor(self._executor, self.compute, request, pose)
+            future.add_done_callback(lambda _future: self._permit.release())
+            future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+            frame = await asyncio.shield(future)
+            if self._on_preview is not None:
+                self._on_preview(client_id, request, frame)
+            else:
+                self._send(client_id, encode_nav_goal(frame))
         finally:
             if self._tasks.get(client_id) is asyncio.current_task():
                 self._tasks.pop(client_id, None)

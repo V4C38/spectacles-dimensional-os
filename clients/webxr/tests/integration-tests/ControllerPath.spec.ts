@@ -78,11 +78,11 @@ test("controller-only walkthrough", async ({ page }, info) => {
         );
       },
       async () =>
-        runtime.commands.some(
-          (c) =>
-            c.type === "nav_joystick_request" &&
-            c.linear.every((v: number) => v === 0),
-        ),
+        runtime.joystickStops > 0 && (await page.evaluate(() => {
+          const w = window as any;
+          return w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp")
+            .client.session.collaboration.raw().authority === null;
+        })),
       { durationS: 12 },
     );
   } finally {

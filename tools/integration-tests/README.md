@@ -42,6 +42,16 @@ state owners. WebXR drives emulated XR joints/controllers; Specs uses native SIK
 events with a test interactor. Actual hardware hand tracking, ASR quality, robot
 motion and device performance still need on-device verification.
 
+`MultiClient.spec.ts` additionally starts one production Python ARModule and
+connects two independent browser contexts to its real WebSocket server. It checks
+selected-mode planning exclusivity across the first release, shared preview and
+target state, the observer's grey cross, confirmation, handover, and disconnect
+cleanup. Only native robot ports/planning and headset origins are simulated.
+The fixture uses `$CI_VENV/bin/python`, `$DIMOS_PYTHON`, or the default local CI
+environment, in that order. Run it alone with
+`npx playwright test tests/integration-tests/MultiClient.spec.ts` from WebXR.
+Physical cross-headset alignment and native Lens interaction remain device checks.
+
 Validate the contract and encoder without a headset:
 
 ```sh

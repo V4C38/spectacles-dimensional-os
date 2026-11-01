@@ -174,3 +174,30 @@ def test_late_path_after_estop_is_ignored() -> None:
     coordinator.on_estop()
     assert coordinator.on_path(path) == (None, False)
     assert coordinator.nav_state().state == "idle"
+
+
+@pytest.mark.parametrize("success", [True, False])
+def test_old_goal_terminal_cannot_retire_new_ar_goal(success):
+    coordinator = NavGoalCoordinator(odom_scale_correction_factor=1)
+    old = coordinator.submit_goal(_nav_goal_request(x=1))
+    coordinator.on_native_status(old.ts, "accepted")
+    current = coordinator.submit_goal(_nav_goal_request(x=2))
+    assert not coordinator.on_native_status(old.ts, "succeeded" if success else "failed")
+    assert not coordinator.on_goal_reached(Bool(success))
+    coordinator.on_native_status(current.ts, "accepted")
+    coordinator.on_path(_path(((2, 0, 0), (0, 0, 0, 1))))
+    assert not coordinator.on_native_status(old.ts, "accepted")
+    assert coordinator.nav_state().state == "following_path"
+    assert coordinator.on_native_status(current.ts, "succeeded" if success else "failed")
+    assert coordinator.nav_state().outcome == ("succeeded" if success else "failed")
+    assert not coordinator.on_native_status(current.ts, "succeeded")
+
+
+def test_correlated_native_status_after_stop_cannot_resurrect_goal():
+    coordinator = NavGoalCoordinator(odom_scale_correction_factor=1)
+    goal = coordinator.submit_goal(_nav_goal_request())
+    coordinator.on_native_status(goal.ts, "accepted")
+    coordinator.on_estop()
+    assert not coordinator.on_native_status(goal.ts, "accepted")
+    assert not coordinator.on_native_status(goal.ts, "succeeded")
+    assert coordinator.nav_state().state == "idle"

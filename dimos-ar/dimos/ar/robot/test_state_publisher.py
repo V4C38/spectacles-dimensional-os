@@ -262,3 +262,28 @@ def test_native_navigation_and_lidar_share_one_corrected_wire_frame() -> None:
     assert cloud_xy == pytest.approx(route.pose[:2])
     assert route.pose[:2] == pytest.approx(wire_goal.position[:2])
     assert json.loads(sink.text_payloads[0])["position"] == [5, -2.5, 0.33]
+
+
+def test_lidar_subscriptions_are_isolated_and_downsample_once(monkeypatch):
+    sink = _RecordingBroadcast()
+    targeted = []
+    sink.schedule_send_binary_to_client = lambda client, data: targeted.append((client, data))
+    preferences = {
+        "near": LidarSettings(True, 0.1, 1.5, 1.0),
+        "far": LidarSettings(True, 0.1, 1.5, 5.0),
+        "off": LidarSettings(False, 0.1, 1.5, 5.0),
+    }
+    publisher = _publisher(sink, lidar_max_hz=0, subscriptions=lambda: preferences)
+    cloud = _FakePointCloud2(np.array([[4.5, 8.0, 0.5], [7.0, 8.0, 0.5]], dtype=np.float32))
+    downsample = Mock(wraps=cloud.voxel_downsample)
+    monkeypatch.setattr(cloud, "voxel_downsample", downsample)
+    publisher.publish_lidar(cloud, lidar=LidarSettings(True, 0.1, 1.5, 5.0))
+    downsample.assert_called_once()
+    assert not sink.binary_payloads
+    assert {client for client, _ in targeted} == {"near", "far"}
+    counts = {client: struct.unpack_from("<I", data, 12)[0] for client, data in targeted}
+    assert counts == {"near": 1, "far": 2}
+    preferences["near"] = LidarSettings(False, 0.1, 1.5, 1.0)
+    targeted.clear()
+    publisher.publish_lidar(cloud, lidar=LidarSettings(True, 0.1, 1.5, 5.0))
+    assert [client for client, _ in targeted] == ["far"]

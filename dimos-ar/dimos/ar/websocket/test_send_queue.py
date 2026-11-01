@@ -30,7 +30,7 @@ class _FakeWebSocket:
 
 
 @pytest.mark.asyncio
-async def test_send_timing_reports_backpressure_and_window_drops(
+async def test_send_timing_reports_backpressure_without_silent_drops(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = [100.0]
@@ -44,14 +44,14 @@ async def test_send_timing_reports_backpressure_and_window_drops(
             await super().send(payload)
 
     outbound = ClientSendQueue(SlowWebSocket())
-    for _ in range(OUTBOUND_FIFO_MAXSIZE + 5):
+    for _ in range(OUTBOUND_FIFO_MAXSIZE):
         outbound.enqueue('{"type":"hello"}\n')
     now[0] += 30
     await outbound._send_text("test")
     fields = logger.info.call_args.kwargs
     assert fields["send_max_ms"] == 250
     assert fields["slow_sends"] == 1
-    assert fields["dropped_fifo"] == 5
+    assert fields["dropped_fifo"] == 0
     now[0] += 30
     await outbound._send_binary(b"test")
     assert logger.info.call_args.kwargs["dropped_fifo"] == 0
@@ -137,20 +137,74 @@ async def test_outbound_coalesces_binary_lidar() -> None:
 
 
 @pytest.mark.asyncio
-async def test_outbound_drops_oldest_fifo_when_full() -> None:
+async def test_outbound_overflow_retires_connection_without_dropping_an_old_reply() -> None:
     ws = _FakeWebSocket()
-    outbound = ClientSendQueue(ws)  # type: ignore[arg-type]
-    outbound.start()
+    failures: list[str] = []
+    outbound = ClientSendQueue(ws, on_failure=failures.append)  # type: ignore[arg-type]
 
     for index in range(OUTBOUND_FIFO_MAXSIZE + 5):
         outbound.enqueue(f'{{"type":"hello","seq":{index}}}\n')
 
-    await asyncio.sleep(0.1)
-    await outbound.stop()
+    assert failures == ["outbound control queue overflow"]
+    assert outbound.failure_reason == failures[0]
+    assert outbound._queue.qsize() == OUTBOUND_FIFO_MAXSIZE
+    assert json.loads(outbound._queue.get_nowait()[1])["seq"] == 0
+    outbound.enqueue_binary(b"ignored")
+    assert outbound._coalesce_latest_binary is None
+    assert ws.sent_text == []
 
-    assert outbound._dropped_fifo_count >= 5
-    first_seq = json.loads(ws.sent_text[0])["seq"]
-    assert first_seq >= 5
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("binary", [False, True])
+async def test_blocked_send_is_bounded_and_retires_authority_once(binary: bool) -> None:
+    class BlockedWebSocket(_FakeWebSocket):
+        async def send(self, payload: str | bytes) -> None:
+            await asyncio.Event().wait()
+
+    failures: list[str] = []
+    outbound = ClientSendQueue(
+        BlockedWebSocket(), on_failure=failures.append, send_timeout_s=0.01
+    )
+    if binary:
+        outbound.enqueue_binary(b"lidar")
+    else:
+        outbound.enqueue('{"type":"interaction_result"}\n')
+    outbound.start()
+    assert outbound._task is not None
+    await asyncio.wait_for(outbound._task, 1)
+    assert failures == ["outbound send timeout"]
+    await outbound._send_text("later")
+    await outbound.stop()
+    assert failures == ["outbound send timeout"]
+
+
+@pytest.mark.asyncio
+async def test_failed_sender_does_not_leave_a_live_silent_connection() -> None:
+    ws = _FakeWebSocket()
+    ws.closed = True
+    failures: list[str] = []
+    outbound = ClientSendQueue(ws, on_failure=failures.append)
+    outbound.enqueue('{"type":"interaction_result"}\n')
+    outbound.start()
+    assert outbound._task is not None
+    await asyncio.wait_for(outbound._task, 1)
+    assert failures == ["outbound send failed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("domain", ["interaction", "manipulation"])
+async def test_interaction_snapshots_coalesce_but_decisions_remain_fifo(domain: str) -> None:
+    ws = _FakeWebSocket()
+    outbound = ClientSendQueue(ws)
+    for revision in [1, 2, 3]:
+        outbound.enqueue(json.dumps({"type": f"{domain}_state", "revision": revision}) + "\n")
+        outbound.enqueue(json.dumps({"type": f"{domain}_result", "request_id": str(revision)}) + "\n")
+    outbound.start()
+    await asyncio.sleep(0.01)
+    await outbound.stop()
+    frames = _messages_from_sent(ws.sent_text)
+    assert [f["request_id"] for f in frames if f["type"] == f"{domain}_result"] == ["1", "2", "3"]
+    assert [f["revision"] for f in frames if f["type"] == f"{domain}_state"] == [3]
 
 
 @pytest.mark.asyncio

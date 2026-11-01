@@ -5,6 +5,7 @@ export async function saveCaseProof(
   info: TestInfo,
   ids: string[],
   images: string[] = [],
+  assertions: Record<string, string[]> = {},
 ) {
   await mkdir(info.outputDir, { recursive: true });
   if (!images.length)
@@ -15,11 +16,11 @@ export async function saveCaseProof(
     info.outputPath("case-results.json"),
     JSON.stringify(
       {
-        checks: ids.map((id) => ({
+        checks: ids.flatMap((id) => (assertions[id] ?? [id]).map(name => ({
           caseId: id,
-          name: id,
+          name,
           passed: info.status === "passed",
-        })),
+        }))),
         images: [
           ...ids.flatMap((id) =>
             images.length

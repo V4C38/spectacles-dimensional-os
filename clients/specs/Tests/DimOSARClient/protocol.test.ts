@@ -21,7 +21,7 @@ import {
 import type { LocalizationObservation } from "../../Assets/Scripts/DimOSARClient/websocket/protocolTypes";
 
 const HELLO_FIXTURE = {
-  type: "hello",
+  type: "hello", protocol_version: 2,
   client_id: "c3f1a9",
   time_sync: { ts_client: 1234.567, ts_server: 5678.901 },
   robot: {

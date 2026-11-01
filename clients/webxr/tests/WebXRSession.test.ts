@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+import "./fixtures/browserAudio";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RecognitionPort, SynthesisPort } from "@dimos-ar-client/agent/AgentDraftSession";
 import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
@@ -5,6 +7,7 @@ import { BrowserWebSocketTransport } from "../src/websocket/BrowserWebSocketTran
 import { cameraFixture } from "./fixtures/camera";
 import { LIDAR_FOURCC, decodeLocalizationObservations } from "@dimos-ar-client/websocket/protocol";
 import type { Hello, State } from "@dimos-ar-client/websocket/protocolTypes";
+import type { InteractionState } from "@dimos-ar-client/replication/CollaborationTypes";
 
 class Socket {
   binaryType = "";
@@ -14,7 +17,46 @@ class Socket {
   onerror: ((event: Event) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   sent: (string | Uint8Array)[] = [];
-  send(value: string | Uint8Array) { this.sent.push(value); }
+  nativeJoystick: { linear: number[]; angular: number[] }[] = [];
+  private interaction: InteractionState = { type: "interaction_state", epoch: "fixture-robot", revision: 0,
+    mode: "manual", authority: null, target: null, preview: null, active_goal: null };
+  send(value: string | Uint8Array) {
+    this.sent.push(value);
+    if (typeof value !== "string") return;
+    const command = JSON.parse(value);
+    if (command.type === "nav_joystick_request") this.nativeJoystick.push(command);
+    if (command.type !== "interaction_request") return;
+    const shared = this.interaction;
+    let status = "accepted", code = command.action;
+    if (command.action === "acquire") {
+      if (shared.authority || shared.mode !== "manual") { status = "busy"; code = "robot_busy"; }
+      else shared.authority = { client_id: "webxr", source_id: command.source_id, acquisition_id: command.acquisition_id,
+        lease_id: command.acquisition_id, kind: command.kind, held: true, sequence: -1, expires_at: 1000 };
+    } else if (command.action === "mode") {
+      if (shared.authority) { status = "busy"; code = "robot_busy"; }
+      else shared.mode = command.mode;
+    } else if (command.action !== "snapshot" && command.action !== "cancel_acquire" && shared.authority?.lease_id !== command.lease_id) {
+      status = "stale"; code = "lease_retired";
+    }
+    if (status === "accepted") {
+      if (command.position && command.orientation) shared.target = { position: command.position, orientation: command.orientation,
+        revision: (shared.target?.revision ?? 0) + 1, phase: command.kind === "live" || shared.authority?.kind === "live" ? "live" : "draft",
+        sequence: command.sequence ?? -1, sample_ts: 10 };
+      if (shared.authority && command.sequence !== undefined) shared.authority.sequence = command.sequence;
+      if (["cancel", "cancel_acquire", "confirm", "release"].includes(command.action)) {
+        if (command.action === "release" && shared.authority?.kind === "navigation_planning") shared.authority.held = false;
+        else {
+          if (shared.authority?.kind === "joystick") this.nativeJoystick.push({ linear: [0,0,0], angular: [0,0,0] });
+          shared.authority = null;
+          if (shared.target && ["confirm", "release"].includes(command.action)) shared.target.phase = "committed";
+        }
+      }
+      shared.revision++;
+    }
+    this.receive({ type: "interaction_result", request_id: command.request_id, epoch: shared.epoch,
+      revision: shared.revision, status, code, ...(shared.authority ? { lease_id: shared.authority.lease_id } : {}) });
+    this.receive(shared);
+  }
   result(position = [0, 0, 0]) {
     const packet = this.sent.filter((value): value is Uint8Array => value instanceof Uint8Array).at(-1)!;
     const ts = Math.max(...decodeLocalizationObservations(packet).observations.map(observation => observation.ts_capture));
@@ -22,7 +64,10 @@ class Socket {
   }
   close() { this.readyState = 3; }
   open() { this.readyState = 1; this.onopen?.(new Event("open")); }
-  receive(message: object) { this.onmessage?.({ data: JSON.stringify(message) + "\n" } as MessageEvent); }
+  receive(message: object) {
+    this.onmessage?.({ data: JSON.stringify(message) + "\n" } as MessageEvent);
+    if ((message as { type?: string }).type === "hello") this.receive(this.interaction);
+  }
   acknowledgeLidar() {
     const { type: _type, ...lidar } = this.commands("lidar_settings_request").at(-1);
     this.receive({ ...state, lidar });
@@ -30,7 +75,7 @@ class Socket {
   commands(type: string) { return this.sent.filter((value): value is string => typeof value === "string").map(value => JSON.parse(value)).filter(value => value.type === type); }
 }
 const hello: Hello = {
-  type: "hello", client_id: "webxr", time_sync: { ts_client: 10, ts_server: 10 },
+  type: "hello", protocol_version: 2, client_id: "webxr", time_sync: { ts_client: 10, ts_server: 10 },
   robot: { display_name: "Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.3], base_height_m: 0.33 },
   capabilities: {
     lidar: { available: true, reason: null }, localization: { available: true, reason: null },
@@ -49,6 +94,7 @@ const request = { type: "localization_observations_request", capture_policy: "an
 const cleanup: (() => void)[] = [];
 afterEach(() => { cleanup.splice(0).forEach(dispose => dispose()); });
 function fixture(recognition: RecognitionPort | null = null, odomScale = 1, synthesis: SynthesisPort | null = null) {
+  localStorage.clear();
   let now = 10;
   const sockets: Socket[] = [];
   const camera = cameraFixture(undefined, { now: () => now });
@@ -223,7 +269,7 @@ describe("WebXR complete ARModule session", () => {
     f.tick({ x: 0, y: -1 });
     expect(socket.commands("nav_joystick_request").at(-1)?.linear[0]).toBeGreaterThan(0);
     f.client.ui.setOperatingMode("agent"); f.tick({ x: 0, y: -1 });
-    expect(socket.commands("nav_joystick_request").at(-1)?.linear).toEqual([0, 0, 0]);
+    expect(socket.nativeJoystick.at(-1)?.linear).toEqual([0, 0, 0]);
     const count = socket.commands("nav_joystick_request").length;
     f.client.holdNavigation([0, 1, 0], [0, -1, -1], []);
     expect(socket.commands("nav_goal_request")).toHaveLength(0);
@@ -231,7 +277,7 @@ describe("WebXR complete ARModule session", () => {
     f.client.ui.menuOpen = true; f.tick({ x: 0, y: -1 });
     expect(socket.commands("nav_joystick_request")).toHaveLength(count + 1);
     f.client.ui.menuOpen = false; f.advance(1); f.tick({ x: 0, y: -1 }); f.client.loseInput();
-    expect(socket.commands("nav_joystick_request").at(-1)?.linear).toEqual([0, 0, 0]);
+    expect(socket.nativeJoystick.at(-1)?.linear).toEqual([0, 0, 0]);
     f.client.invalidateTracking();
     expect(f.client.originStore.hasTrackingOrigin).toBe(false);
     expect(f.client.ui.setupCompleted).toBe(false);

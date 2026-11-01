@@ -293,7 +293,7 @@ class FakeCapture implements CameraCaptureSource {
 
 function helloAt(tsClient: number): Hello {
   return {
-    type: "hello",
+    type: "hello", protocol_version: 2,
     client_id: "c3f1a9",
     time_sync: { ts_client: tsClient, ts_server: 100 },
     robot: {
@@ -961,6 +961,42 @@ it("measures a three-frame batch separately from server wait and applies the fir
   f.clock.nowS = 30; expect(controller.timing().resultWaitS).toBeCloseTo(0.2);
   expect(traces.filter(stage => stage === "frame-captured")).toHaveLength(3);
   expect(traces).toContain("batch-sent"); expect(traces).toContain("result-received"); controller.dispose();
+});
+
+it("lets one deliberate realign batch recover from a wrong retained origin", async () => {
+  const f = makeController();
+  setOriginLookingAtRobot(f.session);
+  deliverPose(f.session, [0, 0, -1]); // Incorrect retained alignment puts the robot behind the camera.
+  const previousBatches = f.transport.binaries.length;
+  f.controller.requestCorrection();
+  deliverRequest(f.session, { type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 3 });
+  expect(f.controller.view().phase).toBe("capturing");
+  for (let i = 0; i < 3; i++) {
+    f.clock.nowS = i * GEOMETRY.frameSpacingS;
+    f.controller.tick(); await settleCapture();
+  }
+  expect(f.transport.binaries).toHaveLength(previousBatches + 1);
+  expect(f.controller.view().phase).toBe("awaiting_result");
+  // The next server episode resumes normal geometric gating, even after a miss.
+  deliverRequest(f.session, { type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 3 });
+  expect(f.controller.view().phase).toBe("waiting_for_geometric_gate");
+  f.controller.dispose();
+});
+
+it("bounds deliberate realign capture when camera startup or frame delivery stalls", async () => {
+  const f = makeController();
+  setOriginLookingAtRobot(f.session); deliverPose(f.session, [0, 0, -1]);
+  const previousBatches = f.transport.binaries.length;
+  f.controller.requestCorrection();
+  deliverRequest(f.session, { type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 3 });
+  const frame = f.capture.defer(); f.controller.tick();
+  f.clock.nowS = 10;
+  f.controller.tick();
+  expect(f.controller.view().phase).toBe("waiting_for_geometric_gate");
+  frame.resolve(f.capture.observation()); await settleCapture();
+  expect(f.transport.binaries).toHaveLength(previousBatches);
+  expect(f.controller.view().capturedCount).toBe(0);
+  f.controller.dispose();
 });
 
 it("uses the optional server result timeout and retains the legacy default when absent", async () => {

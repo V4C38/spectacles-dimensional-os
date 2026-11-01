@@ -13,6 +13,10 @@ class NavGoalRequest:
     orientation: tuple[float, float, float, float]
     preview: bool = False
     preview_id: str | None = None
+    epoch: str | None = None
+    lease_id: str | None = None
+    sequence: int | None = None
+    target_revision: int | None = None
 
 
 @dataclass(frozen=True)
@@ -20,6 +24,9 @@ class NavJoystickRequest:
     linear: tuple[float, float, float]
     angular: tuple[float, float, float]
     duration: float | None = None
+    epoch: str | None = None
+    lease_id: str | None = None
+    sequence: int | None = None
 
 
 @dataclass(frozen=True)

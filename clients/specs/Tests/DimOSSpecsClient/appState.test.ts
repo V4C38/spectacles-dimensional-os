@@ -48,7 +48,7 @@ function baseView(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessio
 
 function helloView(): Hello {
   return {
-    type: "hello",
+    type: "hello", protocol_version: 2,
     client_id: "test-client",
     time_sync: { ts_client: 0, ts_server: 0 },
     robot: GO2,

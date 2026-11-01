@@ -171,7 +171,7 @@ async def test_connect_receives_hello_after_hello_request(harness: ServerHarness
         assert "client_id" in msg
         assert msg["time_sync"]["ts_client"] == 42.0
         assert isinstance(msg["time_sync"]["ts_server"], float)
-        assert "protocol_version" not in msg
+        assert msg["protocol_version"] == 2
 
 
 @pytest.mark.asyncio

@@ -25,7 +25,7 @@ function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionSta
     connection: "ready",
     hasTrackingOrigin: false,
     hello: {
-      type: "hello",
+      type: "hello", protocol_version: 2,
       client_id: "c",
       time_sync: { ts_client: 0, ts_server: 0 },
       robot: {

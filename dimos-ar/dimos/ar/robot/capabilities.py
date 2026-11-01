@@ -5,6 +5,7 @@ from enum import StrEnum
 
 
 class CapabilityName(StrEnum):
+    MANIPULATION = "manipulation"
     LIDAR = "lidar"
     NAVIGATION = "navigation"
     LOCALIZATION = "localization"
@@ -65,6 +66,7 @@ class CapabilitySet:
         *,
         localization_available: bool,
         agent_available: bool,
+        manipulation_available: bool = False,
         supported_navigation_inputs: frozenset[str] = frozenset(),
     ) -> CapabilitySet:
         unknown = supported_navigation_inputs - NAVIGATION_INPUT_NAME_SET
@@ -89,10 +91,13 @@ class CapabilitySet:
             name: _capability(name in supported_navigation_inputs, _NAVIGATION_INPUT_REASONS[name])
             for name in NAVIGATION_INPUT_NAMES
         }
+        if manipulation_available:
+            items[CapabilityName.MANIPULATION] = Capability(True, None)
         return cls(_items=items, _navigation=navigation)
 
     def supports(self, name: CapabilityName) -> bool:
-        return self._items[name].available
+        capability = self._items.get(name)
+        return capability.available if capability is not None else False
 
     def supports_navigation(self, name: str) -> bool:
         if name not in NAVIGATION_INPUT_NAME_SET:

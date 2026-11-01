@@ -35,7 +35,7 @@ class FakeTransport implements WebSocketTransport {
 
 function helloAt(tsClient: number, capabilities?: Partial<Capabilities>): Hello {
   return {
-    type: "hello",
+    type: "hello", protocol_version: 2,
     client_id: "c3f1a9",
     time_sync: { ts_client: tsClient, ts_server: 100 },
     robot: {

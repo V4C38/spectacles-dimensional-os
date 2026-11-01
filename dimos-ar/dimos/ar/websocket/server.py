@@ -13,7 +13,9 @@ import time
 import websockets
 import websockets.asyncio.server as ws_server
 
+from dimos.ar.manipulation.protocol import ManipulationRequest
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest
+from dimos.ar.replication.interaction import InteractionRequest
 from dimos.ar.websocket.ip_relay import IpRelayPublisher, lan_ip
 from dimos.ar.websocket.protocol import (
     LOCALIZATION_OBSERVATIONS_FOURCC,
@@ -46,7 +48,9 @@ ConnectHandler = Callable[[ws_server.ServerConnection, str], None]
 NavGoalRequestHandler = Callable[[NavGoalRequest, ws_server.ServerConnection, str], None]
 NavJoystickRequestHandler = Callable[[NavJoystickRequest, ws_server.ServerConnection, str], None]
 EstopRequestHandler = Callable[[EstopRequest, ws_server.ServerConnection], None]
-LidarSettingsRequestHandler = Callable[[LidarSettingsRequest, ws_server.ServerConnection], None]
+LidarSettingsRequestHandler = Callable[
+    [LidarSettingsRequest, ws_server.ServerConnection, str], None
+]
 StateRequestHandler = Callable[[StateRequest, ws_server.ServerConnection], None]
 LocalizationStartRequestHandler = Callable[[LocalizationStartRequest, str], None]
 LocalizationObservationsHandler = Callable[
@@ -73,7 +77,7 @@ def split_inbound_text_lines(message: str) -> list[str]:
 
 
 def _new_client_id() -> str:
-    return secrets.token_hex(3)
+    return secrets.token_hex(16)
 
 
 class WebSocketServer:
@@ -98,6 +102,8 @@ class WebSocketServer:
         on_client_pose: ClientPoseHandler | None = None,
         on_nav_joystick_request: NavJoystickRequestHandler | None = None,
         on_disconnect: DisconnectHandler | None = None,
+        on_interaction_request: Callable[[InteractionRequest, str], None] | None = None,
+        on_manipulation_request: Callable[[ManipulationRequest, str, float], None] | None = None,
         on_localization_progress: Callable[
             [LocalizationTracking | LocalizationCaptureProgress, str, TimeSync], None
         ]
@@ -120,6 +126,10 @@ class WebSocketServer:
         self._on_nav_joystick_request = on_nav_joystick_request
         self._on_localization_progress = on_localization_progress
         self._on_disconnect = on_disconnect
+        self._on_interaction_request = on_interaction_request
+        self._on_manipulation_request = on_manipulation_request
+        self._retired_connections: set[ws_server.ServerConnection] = set()
+        self._closing_tasks: set[asyncio.Task[None]] = set()
 
         self._stop_event: asyncio.Event | None = None
         self._connections: dict[str, ws_server.ServerConnection] = {}
@@ -220,7 +230,10 @@ class WebSocketServer:
                 await self._complete_handshake(websocket, client_id)
             self._connections[client_id] = websocket
             self._client_ids[websocket] = client_id
-            outbound = ClientSendQueue(websocket)
+            outbound = ClientSendQueue(
+                websocket,
+                on_failure=lambda reason: self._retire_connection(websocket, client_id, reason),
+            )
             self._outbound[websocket] = outbound
             outbound.start()
             registered = True
@@ -228,6 +241,8 @@ class WebSocketServer:
             if self._on_connect is not None:
                 self._on_connect(websocket, client_id)
             async for message in websocket:
+                if websocket in self._retired_connections:
+                    break
                 try:
                     if isinstance(message, bytes):
                         await self._handle_binary(message, websocket, client_id)
@@ -265,8 +280,38 @@ class WebSocketServer:
                 pass
             else:
                 await queued.stop()
-            if registered and self._on_disconnect is not None:
+            if (
+                registered
+                and websocket not in self._retired_connections
+                and self._on_disconnect is not None
+            ):
                 self._on_disconnect(websocket, client_id)
+            self._retired_connections.discard(websocket)
+
+    def _retire_connection(
+        self,
+        websocket: ws_server.ServerConnection,
+        client_id: str,
+        reason: str,
+    ) -> None:
+        if websocket in self._retired_connections:
+            return
+        self._retired_connections.add(websocket)
+        if self._connections.get(client_id) is websocket:
+            self._connections.pop(client_id, None)
+        if self._on_disconnect is not None:
+            self._on_disconnect(websocket, client_id)
+
+        async def close() -> None:
+            try:
+                async with asyncio.timeout(2.0):
+                    await websocket.close(1011, reason[:120])
+            except Exception:
+                logger.exception("Failed to close retired client", client_id=client_id)
+
+        task = asyncio.create_task(close())
+        self._closing_tasks.add(task)
+        task.add_done_callback(self._closing_tasks.discard)
 
     async def _complete_handshake(
         self,
@@ -324,6 +369,15 @@ class WebSocketServer:
         websocket: ws_server.ServerConnection,
         client_id: str,
     ) -> None:
+        if isinstance(inbound, ManipulationRequest):
+            if self._on_manipulation_request is not None:
+                sync = self._time_sync[websocket]
+                self._on_manipulation_request(inbound, client_id, sync.ts_server - sync.ts_client)
+            return
+        if isinstance(inbound, InteractionRequest):
+            if self._on_interaction_request is not None:
+                self._on_interaction_request(inbound, client_id)
+            return
         if isinstance(inbound, NavGoalRequest):
             if self._on_nav_goal_request is not None:
                 self._on_nav_goal_request(inbound, websocket, client_id)
@@ -334,7 +388,7 @@ class WebSocketServer:
             return
         if isinstance(inbound, LidarSettingsRequest):
             if self._on_lidar_settings_request is not None:
-                self._on_lidar_settings_request(inbound, websocket)
+                self._on_lidar_settings_request(inbound, websocket, client_id)
             return
         if isinstance(inbound, StateRequest):
             if self._on_state_request is not None:
@@ -378,6 +432,16 @@ class WebSocketServer:
 
     def schedule_broadcast_binary(self, data: bytes) -> None:
         asyncio.run_coroutine_threadsafe(self._enqueue_all_binary(data), self._loop)
+
+    def schedule_send_binary_to_client(self, client_id: str, data: bytes) -> None:
+        websocket = self._connections.get(client_id)
+        if websocket is not None:
+            asyncio.run_coroutine_threadsafe(self._enqueue_one_binary(websocket, data), self._loop)
+
+    async def _enqueue_one_binary(self, websocket: ws_server.ServerConnection, data: bytes) -> None:
+        outbound = self._outbound.get(websocket)
+        if outbound is not None:
+            outbound.enqueue_binary(data)
 
     def schedule_send_to(self, websocket: ws_server.ServerConnection, text: str) -> None:
         asyncio.run_coroutine_threadsafe(self._enqueue_one_text(websocket, text), self._loop)

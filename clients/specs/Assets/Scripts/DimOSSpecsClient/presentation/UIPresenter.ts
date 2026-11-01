@@ -367,7 +367,8 @@ export class UIPresenter extends BaseScriptComponent {
           this.appState.debugModeEnabled,
         );
         const next = mode === "agent" && !accessible ? "manual" : mode;
-        this.appState.setOperatingMode(next);
+        if (deps.session.view().interaction) deps.session.collaboration.setMode(next);
+        else this.appState.setOperatingMode(next);
         this.deps?.speechController?.syncEnabled();
         this.deps?.onModeChanged();
       },
@@ -455,6 +456,7 @@ export class UIPresenter extends BaseScriptComponent {
   private refreshHud(): void {
     const deps = this.requireDeps();
     const view = deps.session.view();
+    if (view.interaction) this.appState.setOperatingMode(view.interaction.mode);
     const agentAvailable = view.capabilities?.agent.available === true;
     if (
       !agentModeAccessible(agentAvailable, this.appState.debugModeEnabled) &&

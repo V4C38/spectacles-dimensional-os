@@ -29,7 +29,8 @@ def test_unitree_go2_ar_agentic_wires_agent_ports() -> None:
     ports = {stream.name for stream in atoms[0].streams}
     assert {"human_input", "agent", "agent_idle"} <= ports
     names = {atom.module.__name__ for atom in unitree_go2_ar_agentic.active_blueprints}
-    assert "McpClient" in names
+    assert {"ARGuardedMcpClient", "ARPersonFollowSkillContainer", "ARReplanningAStarPlanner"} <= names
+    assert "McpClient" not in names
     assert "McpServer" in names
 
 
@@ -48,3 +49,18 @@ def test_go2_blueprints_connect_preview_costmap(blueprint) -> None:
     ]
     assert outputs, "autoconnect requires a global_costmap producer in both Go2 blueprints"
     assert outputs[0].type == inputs[0].type
+
+
+@pytest.mark.parametrize("blueprint", [unitree_go2_ar, unitree_go2_ar_agentic])
+def test_go2_blueprints_connect_correlated_navigation_status(blueprint) -> None:
+    if blueprint is None:
+        pytest.skip("Go2 blueprint is not installed")
+    ar = next(atom for atom in blueprint.active_blueprints if atom.module is ARModule)
+    incoming = next(stream for stream in ar.streams if stream.name == "ar_navigation_status")
+    planner = next(
+        atom for atom in blueprint.active_blueprints
+        if atom.module.__name__ == "ARReplanningAStarPlanner"
+    )
+    outgoing = next(stream for stream in planner.streams if stream.name == incoming.name)
+    assert incoming.direction == "in" and outgoing.direction == "out"
+    assert incoming.type == outgoing.type

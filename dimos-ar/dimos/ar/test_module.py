@@ -29,6 +29,7 @@ from dimos.ar.module import (
 from dimos.ar.navigation.preview_service import NavigationPreviewService
 from dimos.ar.navigation.tele_cmd_vel import TeleCmdVelPublisher
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest, NavState
+from dimos.ar.replication.interaction import InteractionCoordinator, InteractionRequest
 from dimos.ar.robot.agent_service import ARAgentService, _textual_ai_message
 from dimos.ar.robot.capabilities import NAV_GOAL, NAV_JOYSTICK, CapabilityName, CapabilitySet
 from dimos.ar.robot.odometry import RobotOdometry
@@ -51,12 +52,23 @@ class _FakeWs:
         self.connection_count = 1
         self.sent: list[tuple[str, str]] = []
         self.broadcasts: list[str] = []
+        self.interaction_sent: list[tuple[str, str]] = []
+        self.state_sent: list[tuple[str, str]] = []
+        self.interaction_broadcasts: list[str] = []
 
     def schedule_send_to_client(self, client_id: str, text: str) -> None:
-        self.sent.append((client_id, text))
+        if json.loads(text).get("type", "").startswith("interaction_"):
+            self.interaction_sent.append((client_id, text))
+        elif json.loads(text).get("type") == "state":
+            self.state_sent.append((client_id, text))
+        else:
+            self.sent.append((client_id, text))
 
     def schedule_broadcast_text(self, text: str) -> None:
-        self.broadcasts.append(text)
+        if json.loads(text).get("type", "").startswith("interaction_"):
+            self.interaction_broadcasts.append(text)
+        else:
+            self.broadcasts.append(text)
 
 
 def _anvil_openyam_profile() -> RobotProfile:
@@ -80,6 +92,14 @@ def _module_with_policy(
     agent_available: bool = False,
 ) -> ARModule:
     module = object.__new__(ARModule)
+    module._interaction = InteractionCoordinator()
+    module._lidar_subscriptions = {}
+    module._native_sequences = {}
+    module._pending_arm_motion = set()
+    module._arm_native_busy = False
+    module._arm_uncertain = False
+    module._arm_stop_pending = False
+    module._interaction_sent_revision = -1
     module._map_localization = None
     module._pairing_log_at = 0.0
     module._pairing_rejected = 0
@@ -121,6 +141,35 @@ def _module_with_policy(
         send=module._ws_server.schedule_send_to_client,
     )
     return module
+
+
+def _authorized_request(module, message, client_id):
+    """Explicitly model a granted lease in legacy handler-focused unit cases."""
+    kind = (
+        "joystick"
+        if isinstance(message, NavJoystickRequest)
+        else "navigation_planning"
+        if message.preview
+        else "live"
+    )
+    owner = module._interaction
+    owner.connect(client_id)
+    if owner.authority is None:
+        fields = (
+            {}
+            if isinstance(message, NavJoystickRequest)
+            else {"position": message.position, "orientation": message.orientation}
+        )
+        owner.handle(
+            client_id, InteractionRequest("unit-grab", "acquire", owner.epoch, kind=kind, **fields)
+        )
+    assert owner.authority is not None
+    return replace(
+        message,
+        epoch=owner.epoch,
+        lease_id=owner.authority.lease_id,
+        sequence=module._native_sequences.get(owner.authority.lease_id, -1) + 1,
+    )
 
 
 def test_ar_module_declares_stable_port_superset() -> None:
@@ -409,7 +458,9 @@ def test_nav_goal_request_noops_without_navigation() -> None:
         submit_goal=lambda msg: published.append(msg),
     )
     module._on_nav_goal_request(
-        NavGoalRequest(position=(1.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+        _authorized_request(
+            module, NavGoalRequest(position=(1.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)), "c1"
+        ),
         None,  # type: ignore[arg-type]
         "c1",
     )
@@ -461,6 +512,18 @@ def test_estop_request_clears_navigation_and_publishes_stop() -> None:
     assert called is True
     assert [msg.data for msg in published] == [True]
     assert module._ws_server.broadcasts  # type: ignore[union-attr]
+
+
+def test_estop_publishes_idle_state_before_native_path_has_started() -> None:
+    module = _module_with_policy([])
+    module._interaction.set_active_goal(
+        {"type": "nav_goal", "pose": [2, 0, 0, 0], "path_poses": [], "ts": 1}
+    )
+    assert module._nav_goal_coordinator.nav_state().state == "idle"
+    module._on_estop_request(SimpleNamespace(), None)  # type: ignore[arg-type]
+    assert module._interaction.active_goal is None
+    frames = [json.loads(frame) for frame in module._ws_server.broadcasts]
+    assert any(frame["type"] == "state" and frame["nav"]["state"] == "idle" for frame in frames)
 
 
 def test_last_disconnect_runs_safety() -> None:
@@ -682,6 +745,10 @@ def test_user_message_request_requires_capability_and_transport() -> None:
     assert published == []
 
     module.human_input = SimpleNamespace(transport=object(), publish=published.append)
+    module._interaction.connect("c1")
+    module._interaction.handle(
+        "c1", InteractionRequest("agent-mode", "mode", module._interaction.epoch, mode="agent")
+    )
     module._on_user_message_request(UserMessageRequest(text="go"), None, "c1")  # type: ignore[arg-type]
     assert published == ["go"]
 
@@ -753,9 +820,10 @@ def test_ar_get_client_pose_empty_stale_fresh() -> None:
     assert "look_dir" in text
     assert "[0.8, 1.6, 3.0]" in text
     assert "[0.0, 0.0, 1.0]" in text
-    module._agent_service._received_at = time.time() - 1.1
+    pose, _ = module._agent_service._poses["c1"]
+    module._agent_service._poses["c1"] = (pose, time.time() - 1.1)
     assert "position" in module.ar_get_client_pose()
-    module._agent_service._received_at = time.time() - 2.1
+    module._agent_service._poses["c1"] = (pose, time.time() - 2.1)
     assert module.ar_get_client_pose() == "No client pose"
 
 
@@ -774,7 +842,9 @@ def test_nav_joystick_request_noops_without_nav_joystick() -> None:
     published: list[object] = []
     module.tele_cmd_vel = SimpleNamespace(transport=object(), publish=published.append)
     module._on_nav_joystick_request(
-        NavJoystickRequest(linear=(0.4, 0.0, 0.0), angular=(0.0, 0.0, 0.0)),
+        _authorized_request(
+            module, NavJoystickRequest(linear=(0.4, 0.0, 0.0), angular=(0.0, 0.0, 0.0)), "c1"
+        ),
         None,  # type: ignore[arg-type]
         "c1",
     )
@@ -792,7 +862,9 @@ def test_nav_joystick_request_publishes_tele_cmd_vel() -> None:
         loop=asyncio.new_event_loop(),
     )
     module._on_nav_joystick_request(
-        NavJoystickRequest(linear=(0.4, 0.0, 0.0), angular=(0.0, 0.0, 0.3)),
+        _authorized_request(
+            module, NavJoystickRequest(linear=(0.4, 0.0, 0.0), angular=(0.0, 0.0, 0.3)), "c1"
+        ),
         None,  # type: ignore[arg-type]
         "c1",
     )
@@ -856,9 +928,13 @@ async def test_preview_is_requester_only_off_loop_and_does_not_submit_motion() -
     module._previews._planner = SimpleNamespace(plan=plan)
     before = module._state_snapshot()
     request = NavGoalRequest((4, 6, 0.5), (0, 0, 0, 1), preview=True, preview_id="aim")
-    module._on_nav_goal_request(request, None, "requester")
+    module._on_nav_goal_request(
+        _authorized_request(module, request, "requester"), None, "requester"
+    )
     task = module._previews._tasks["requester"]
-    module._on_nav_goal_request(request, None, "requester")
+    module._on_nav_goal_request(
+        _authorized_request(module, request, "requester"), None, "requester"
+    )
     assert module._previews._tasks["requester"] is task
     await task
     assert worker_threads and worker_threads[0] != loop_thread
@@ -898,7 +974,9 @@ async def test_disconnect_cancels_preview_delivery_while_worker_finishes() -> No
 
     module._previews._planner = SimpleNamespace(plan=plan)
     request = NavGoalRequest((1, 1, 0), (0, 0, 0, 1), preview=True, preview_id="retired")
-    module._on_nav_goal_request(request, None, "retired-client")
+    module._on_nav_goal_request(
+        _authorized_request(module, request, "retired-client"), None, "retired-client"
+    )
     task = module._previews._tasks["retired-client"]
     try:
         assert await asyncio.to_thread(started.wait, 5)
@@ -923,7 +1001,9 @@ def test_new_goal_broadcasts_cleared_state_before_planner_can_complete() -> None
         transport=object(), publish=lambda _goal: order.append("planner")
     )
     module._on_nav_goal_request(
-        NavGoalRequest(position=(1.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)),
+        _authorized_request(
+            module, NavGoalRequest(position=(1.0, 0.0, 0.0), orientation=(0.0, 0.0, 0.0, 1.0)), "c1"
+        ),
         None,  # type: ignore[arg-type]
         "c1",
     )
@@ -957,7 +1037,11 @@ async def test_changed_robot_frame_retires_origins_and_requires_mapping_restart(
     assert not hello.capabilities[CapabilityName.NAVIGATION].available
     assert not hello.navigation_inputs[NAV_GOAL].available
     module.goal_request = SimpleNamespace(transport=object(), publish=Mock())
-    module._on_nav_goal_request(NavGoalRequest((1, 0, 0), (0, 0, 0, 1)), None, "client")
+    module._on_nav_goal_request(
+        _authorized_request(module, NavGoalRequest((1, 0, 0), (0, 0, 0, 1)), "client"),
+        None,
+        "client",
+    )
     module.goal_request.publish.assert_not_called()
 
 
@@ -1045,6 +1129,10 @@ def test_unwired_goal_does_not_mutate_navigation() -> None:
     module = _module_with_policy([])
     module.goal_request = SimpleNamespace(transport=None, publish=Mock())
     module._nav_goal_coordinator.submit_goal = Mock()
-    module._on_nav_goal_request(NavGoalRequest((1, 0, 0), (0, 0, 0, 1)), None, "client")
+    module._on_nav_goal_request(
+        _authorized_request(module, NavGoalRequest((1, 0, 0), (0, 0, 0, 1)), "client"),
+        None,
+        "client",
+    )
     module._nav_goal_coordinator.submit_goal.assert_not_called()
     assert module._ws_server.broadcasts == []

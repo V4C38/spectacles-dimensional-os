@@ -1,3 +1,5 @@
+import type { ManipulationOutbound } from "../manipulation/ManipulationTypes";
+import type { InteractionState, InteractionResult } from "../replication/CollaborationTypes";
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
 export type YawPose = [number, number, number, number];
@@ -15,6 +17,7 @@ export const CAPABILITY_NAMES = [
   "localization",
   "estop",
   "agent",
+  "manipulation",
 ] as const;
 export type CapabilityName = (typeof CAPABILITY_NAMES)[number];
 
@@ -34,8 +37,8 @@ export type NavigationCapability = Capability & {
 };
 
 export type Capabilities = {
-  [K in Exclude<CapabilityName, "navigation">]: Capability;
-} & { navigation: NavigationCapability };
+  [K in Exclude<CapabilityName, "navigation" | "manipulation">]: Capability;
+} & { navigation: NavigationCapability; manipulation?: Capability };
 
 export interface TimeSync {
   ts_client: number;
@@ -58,6 +61,7 @@ export interface ServerInfo {
 }
 
 export interface Hello {
+  protocol_version: 2;
   /** Stable for the server odometry reference, including across socket reconnects. */
   odom_reference_id?: string;
   server_info?: ServerInfo;
@@ -189,6 +193,9 @@ export interface Lidar {
 }
 
 export type Outbound =
+  | ManipulationOutbound
+  | InteractionState
+  | InteractionResult
   | Hello
   | State
   | LocalizationObservationsRequest
@@ -231,6 +238,7 @@ export interface LocalizationStartRequest {
 }
 
 export interface NavGoalRequest {
+  epoch?: string; lease_id?: string; sequence?: number;
   preview?: boolean;
   preview_id?: string;
   type: "nav_goal_request";
@@ -259,6 +267,7 @@ export interface ClientPose {
 }
 
 export interface NavJoystickRequest {
+  epoch?: string; lease_id?: string; sequence?: number;
   type: "nav_joystick_request";
   linear: Vec3;
   angular: Vec3;

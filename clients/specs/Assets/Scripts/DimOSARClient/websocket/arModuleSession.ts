@@ -1,3 +1,6 @@
+import type { ManipulationState } from "../manipulation/ManipulationTypes";
+import { CollaborationController } from "../replication/CollaborationController";
+import type { InteractionState } from "../replication/CollaborationTypes";
 import type { ClientTrackingOrigin, ClientTrackingOriginStore } from "../localization/clientTrackingOrigin";
 import { LocalizationSubmission } from "../localization/localizationSubmission";
 import {
@@ -39,6 +42,8 @@ export interface ARModuleSessionConfig {
 }
 
 export interface ARModuleSessionState {
+  manipulation?: ManipulationState | null;
+  interaction?: InteractionState | null;
   connection: ConnectionPhase;
   hasTrackingOrigin: boolean;
   hasRetainedTrackingOrigin?: boolean;
@@ -68,6 +73,7 @@ type OutboundListener = (message: Outbound) => void;
 type CaptureRequestListener = (request: LocalizationObservationsRequest) => void;
 
 export class ARModuleSession {
+  readonly collaboration: CollaborationController;
   private readonly transport: WebSocketTransport;
   private readonly clock: ClientClock;
   private readonly clientTrackingOriginStore: ClientTrackingOriginStore;
@@ -85,6 +91,7 @@ export class ARModuleSession {
   private pose: Pose | null = null;
   private nav_goal: NavGoal | null = null;
   private nav_preview: NavGoal | null = null;
+  private manipulation: ManipulationState | null = null;
   private lidar: Lidar | null = null;
   private agentMessage: string | null = null;
   private agentMessageRevision = 0;
@@ -99,6 +106,8 @@ export class ARModuleSession {
   private captureEpisodeId: string | null = null;
 
   constructor(deps: ARModuleSessionDependencies) {
+    this.collaboration = new CollaborationController({ ready: () => this.phase === "ready",
+      clientId: () => this.hello?.client_id ?? null, now: () => deps.clock.now(), send: text => this.sendText(text) });
     this.transport = deps.transport;
     this.clock = deps.clock;
     this.clientTrackingOriginStore = deps.clientTrackingOriginStore;
@@ -138,6 +147,7 @@ export class ARModuleSession {
   }
 
   tick(): void {
+    this.collaboration.tick();
     const now = this.clock.now();
     if (this.phase === "awaiting_hello" && this.helloDeadline !== null && now >= this.helloDeadline) {
       this.fail("hello timeout");
@@ -251,6 +261,7 @@ export class ARModuleSession {
 
   requestEstop(): void {
     requireCapability(this, "estop");
+    this.collaboration.cancel();
     this.sendText(encodeEstopRequest());
   }
 
@@ -260,6 +271,8 @@ export class ARModuleSession {
 
   view(): ARModuleSessionState {
     return {
+      manipulation: this.manipulation,
+      interaction: this.collaboration.raw(),
       connection: this.phase,
       hasTrackingOrigin: this.clientTrackingOriginStore.hasTrackingOrigin,
       ...(this.retainedOrigin ? { hasRetainedTrackingOrigin: true } : {}),
@@ -331,6 +344,16 @@ export class ARModuleSession {
 
   private applyReadyMessage(message: Exclude<Outbound, Lidar | Hello>): void {
     switch (message.type) {
+      case "manipulation_state": this.manipulation = message; break;
+      case "manipulation_result": this.emitOutbound(message); return;
+      case "interaction_state":
+        if (!this.collaboration.apply(message)) return;
+        this.nav_goal = message.active_goal;
+        this.nav_preview = message.preview;
+        break;
+      case "interaction_result":
+        this.collaboration.accept(message);
+        break;
       case "state":
         this.state = message;
         break;
@@ -421,6 +444,8 @@ export class ARModuleSession {
   }
 
   private clearConnectionFacts(): void {
+    this.collaboration.reset();
+    this.manipulation = null;
     this.captureEpisodeId = null;
     this.localizationSubmission.reset();
     this.hello = null;

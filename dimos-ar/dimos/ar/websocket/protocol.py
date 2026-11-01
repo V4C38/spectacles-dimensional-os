@@ -9,7 +9,10 @@ import struct
 from typing import Any
 
 from dimos.ar.localization.types import CapturePolicy, Intrinsics, LocalizationResult, Observation
+from dimos.ar.manipulation.protocol import ManipulationRequest, decode_request
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
+from dimos.ar.replication.interaction import InteractionRequest
+from dimos.ar.replication.protocol import decode_interaction_request, identifier, sequence
 from dimos.ar.robot.capabilities import (
     NAVIGATION_INPUT_NAMES,
     Capability,
@@ -150,7 +153,9 @@ class ClientPose:
 
 
 Inbound = (
-    NavGoalRequest
+    InteractionRequest
+    | ManipulationRequest
+    | NavGoalRequest
     | NavJoystickRequest
     | EstopRequest
     | LidarSettingsRequest
@@ -184,6 +189,12 @@ def decode_inbound(text: str) -> Inbound:
     if msg_type == "hello_request":
         raise ValueError("hello_request is handled during handshake, not in the message loop")
 
+    if msg_type == "manipulation_request":
+        return decode_request(data)
+
+    if msg_type == "interaction_request":
+        return decode_interaction_request(data)
+
     if msg_type == "nav_goal_request":
         preview_id = _require_type(data, "preview_id", str) if "preview_id" in data else None
         if preview_id is not None and not (1 <= len(preview_id) <= 128):
@@ -195,6 +206,10 @@ def decode_inbound(text: str) -> Inbound:
             orientation=_finite_quat(data, "orientation"),
             preview=_require_type(data, "preview", bool) if "preview" in data else False,
             preview_id=preview_id,
+            epoch=identifier(data, "epoch"),
+            lease_id=identifier(data, "lease_id"),
+            sequence=sequence(data),
+            target_revision=sequence(data, "target_revision"),
         )
 
     if msg_type == "estop_request":
@@ -294,7 +309,14 @@ def _decode_nav_joystick_request(data: dict[str, Any]) -> NavJoystickRequest:
             )
         if duration == 0.0:
             duration = None
-    return NavJoystickRequest(linear=linear, angular=angular, duration=duration)
+    return NavJoystickRequest(
+        linear=linear,
+        angular=angular,
+        duration=duration,
+        epoch=identifier(data, "epoch"),
+        lease_id=identifier(data, "lease_id"),
+        sequence=sequence(data),
+    )
 
 
 @dataclass(frozen=True)
@@ -483,6 +505,7 @@ def encode_hello(hello: Hello) -> str:
     return encode_text(
         {
             "type": "hello",
+            "protocol_version": 2,
             "client_id": hello.client_id,
             **({"odom_reference_id": hello.odom_reference_id} if hello.odom_reference_id else {}),
             "time_sync": {

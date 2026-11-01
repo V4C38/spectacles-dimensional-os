@@ -1,0 +1,25 @@
+input_float Fill;
+input_float EdgeOpacity;
+input_float Power;
+input_float DashM;
+input_float GapM;
+output_vec4 Result;
+void main() {
+    vec3 normal = normalize(system.getSurfaceNormalCameraSpace());
+    vec3 position = system.getSurfacePositionCameraSpace() * 0.01;
+    vec3 view = normalize(-position);
+    vec3 tangent = cross(normal, view);
+    float along = abs(tangent.x) > abs(tangent.y) ? position.x : position.y;
+    float period = DashM + GapM;
+    float pixel = max(length(dFdx(position)), length(dFdy(position)));
+    float aa = max(fwidth(along), 0.00001);
+    float phase = mod(along, period);
+    float distance = min(phase, period - phase);
+    float dash = 1.0 - smoothstep(DashM * 0.5 - aa, DashM * 0.5 + aa, distance);
+    float solid = 1.0 - smoothstep(6.0, 10.0, period / max(pixel, 0.00001));
+    float coverage = mix(dash, 1.0, solid);
+    float rim = pow(1.0 - abs(dot(normal, view)), Power);
+    vec4 tint = system.getSurfaceColor();
+    vec3 color = mix(tint.rgb, vec3(0.85098039, 0.94117647, 1.0), rim);
+    Result = vec4(color, tint.a * (Fill + (EdgeOpacity - Fill) * rim * coverage));
+}

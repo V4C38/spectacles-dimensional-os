@@ -59,7 +59,7 @@ export class WebXRApp extends xb.Script {
   override init({ input }: { input: xb.Input }): void {
     const client = this.client;
     this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2));
-    this.add(client.robot.object, client.lidar.object, client.route.object,
+    this.add(client.manipulation.object, client.robot.object, client.lidar.object, client.route.object,
       client.markers.object, client.navigation.marker.object, client.navigation.probeRoot,
       client.navigation.draftMarker.object, client.previewRoute.object, client.notifications.object);
     this.inputController.init({ input });
@@ -77,6 +77,7 @@ export class WebXRApp extends xb.Script {
     const { position: p, orientation: q } = viewer.transform;
     this.client.tick({ position: [p.x, p.y, p.z], orientation: [q.x, q.y, q.z, q.w] }, this.inputController.readJoystick());
     this.client.robot.orientFeedback(new THREE.Vector3(p.x, p.y, p.z));
+    this.client.manipulation.renderer.faceViewer(new THREE.Vector3(p.x, p.y, p.z));
     this.client.notifications.tick([p.x, p.y, p.z], [q.x, q.y, q.z, q.w], viewer.views?.[0]?.projectionMatrix[5] ?? 1, deltaS);
     this.client.ui.trackingStatus = "Tracking";
     this.inputController.update(time, frame, viewer, reference, deltaS);

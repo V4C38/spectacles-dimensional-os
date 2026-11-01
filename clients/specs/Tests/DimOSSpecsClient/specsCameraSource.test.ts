@@ -45,10 +45,17 @@ function sample(t: number, x: number, y: number, z: number): PoseSample {
 
 describe("lookupPoseSample", () => {
   it("interpolates position between samples", () => {
-    const pose = lookupPoseSample([sample(0, 0, 0, 0), sample(2, 10, 0, 0)], 1);
+    const pose = lookupPoseSample([sample(0.95, 0, 0, 0), sample(1.05, 10, 0, 0)], 1);
     expect(pose).not.toBeNull();
     expect(pose!.t).toBe(1);
     expect(pose!.position.x).toBeCloseTo(5, 6);
+  });
+
+  it("rejects a capture bracket spanning a tracking gap even near an endpoint", () => {
+    const history = [sample(0, 0, 0, 0), sample(2, 10, 0, 0)];
+    expect(lookupPoseSample(history, 1)).toBeNull();
+    expect(lookupPoseSample(history, 0.01)).toBeNull();
+    expect(lookupPoseSample(history, 1.99)).toBeNull();
   });
 
   it("returns null when the nearest sample is stale", () => {

@@ -7,7 +7,7 @@ clients update their protocol module in the same change.
 
 ## Conventions
 
-- **24 message types** — 12 outbound, 12 inbound. Inventory is below.
+- **Version 2 interaction messages** supplement the robot telemetry and localization inventory below.
 - **Wire frame is `odom`** — the robot's drifting leg-odometry frame, in
   DimOS's right-handed Z-up axes. ARModule performs **no axis conversion**. Each
   client converts on receipt; clients do not share one scene convention.
@@ -26,7 +26,7 @@ clients update their protocol module in the same change.
   the client to act: `localization_observations_request` is that exception.
   Binary payloads use a bare noun (`localization_observations`, `lidar`).
 - **`hello.capabilities`** — keys `lidar`, `navigation`, `localization`,
-  `estop`, `agent`. Any key may be `available=false` with `reason`. Nested
+  `estop`, `agent`, plus optional `manipulation`. Any key may be `available=false` with `reason`. Nested
   `navigation.nav_goal` and `navigation.nav_joystick` are always present.
 
 ## Transport
@@ -161,25 +161,80 @@ repeated marker/VPS localization handles alignment drift that one constant canno
 Changing the factor requires restarting ARModule and reconnecting clients so
 origins, paths, previews and points cannot mix old/new coordinate models.
 
-## Multiple clients
+## Multiple clients and replication
 
-Any number of clients may connect at once.
+The collaboration protocol is version **2**, advertised as `hello.protocol_version`.
+ARModule owns the robot's shared targets, authority, manual/agent mode, accepted
+preview and active goal. Headset tracking origins, input capture and interpolation
+remain local. The supported validation target is two to five simultaneous clients.
 
-- **Telemetry is broadcast.** Every client receives identical `pose`, active `nav_goal`,
-  `lidar` and `state`. Payloads are byte-identical, so there is no per-client
-  view to reconcile.
-- **Localization is per connection.** `localization_observations_request` and
-  `localization_result` are addressed to one connection, since each client has
-  its own tracking origin.
-- **Control is last-command-wins.** ARModule does not arbitrate. The most
-  recent `nav_goal_request`, `nav_joystick_request`, or `estop_request` takes
-  effect regardless of which client sent it. ARModule publishes joystick
-  commands on DimOS `tele_cmd_vel`; `MovementManager` muxes that stream against
-  planner `nav_cmd_vel`.
+`interaction_state` is a complete revisioned snapshot. It contains `epoch` (robot
+interaction reference), `revision`, `mode`, `motion_busy`, `authority`, `target` (last edited
+canonical target), `targets` (retained navigation and per-group manipulation targets),
+`preview`, and `active_goal`. Poses use odometry metres and XYZW quaternions.
+Targets contain `domain`, optional `group_id`, `position`, `orientation`, `revision`,
+`phase` (`draft`, `live`, `committed`), `sample_ts`, `sequence`, `speed_scale` and
+optional `gripper`. `sample_ts` is a server monotonic interpolation sample time,
+not a headset clock or exposure timestamp. Apply each headset's current origin
+when rendering canonical odometry poses.
 
-`hello` assigns each connection a `client_id` for logging and future features.
-Navigation overlay uses `nav_goal` and `pose`. `state.nav` tracks planner
-navigation regardless of who issued the goal.
+Authority is robot-wide: `client_id`, `source_id`, `acquisition_id`, `lease_id`,
+`kind`, `held`, `expires_at`, `sequence`, and optional `group_id`. Kinds are `live`,
+`navigation_planning`, `joystick`, `manipulation_planning`, and
+`manipulation_following`. A lease lasts 500 ms; its client renews at 100 ms.
+Only the owning connection can edit or command while a lease is present.
+Other clients display grey targets with a cross and retain Emergency Stop.
+
+### Interaction commands
+
+`interaction_request` contains a nonempty `request_id` and `action`:
+
+| Action | Additional fields | Effect |
+|---|---|---|
+| `snapshot` | None | Return current state. |
+| `acquire` | `epoch`, `kind`, `source_id`, `acquisition_id`; optional pose and `group_id` | First accepted acquisition owns the robot. |
+| `renew` | `epoch`, `lease_id` | Extend the current lease. |
+| `update` | `epoch`, `lease_id`, increasing `sequence`, pose; optional speed/gripper | Accept an exact intended target. |
+| `release` | Same credentials, increasing sequence and final pose | Atomically retain final pose and release live authority; live navigation submits its final goal. |
+| `confirm` | Same credentials, increasing sequence and frozen final pose | Commit selected navigation and release planning authority. |
+| `cancel` | `epoch`, `lease_id` | Retire this interaction without confirming its draft. |
+| `cancel_acquire` | `epoch`, `acquisition_id` | Cancel pending acquisition; a late grant cannot restore it. |
+| `mode` | `epoch`, `mode` (`manual` or `agent`) | Change shared robot mode only while no interaction/agent turn owns it. |
+
+Selected navigation is a two-gesture planning session. **Its first release keeps
+the planning lease** (with `held: false`) until confirmation, cancellation,
+deselection, tracking loss, disconnect or expiry. Only that client requests an
+advisory path; every client sees the accepted shared draft and preview. An
+advisory navigation preview survives target jitter below 0.2 m and 15 degrees of
+yaw relative to the canonical aim captured for that preview (the native safe-goal
+endpoint can be offset from that aim). A worker result from an earlier target
+revision may be accepted only within those bounds and the same live epoch and
+planning lease. Larger changes invalidate the route; handover or reference reset
+always rejects the old result. Arm checked plans retain exact revision matching.
+Planning
+does not overwrite a previously executing goal/route. Selected arm planning
+releases editing authority when the hand opens; checked plans bind to the shared
+target revision rather than remaining owned by their creating client.
+
+Every command receives `interaction_result` with `request_id`, `epoch`, `revision`,
+`status` (`accepted`, `busy`, `stale`, `rejected`), `code`, and optional `lease_id`.
+Request deduplication is bounded per connection. Ordinary target snapshots may
+coalesce; critical command results cannot be silently dropped on queue overflow.
+
+Navigation and joystick requests carry `epoch`, `lease_id`, and `sequence`.
+Preview work requires the selected planning owner. Bare legacy motion packets
+never reach native ports. The server validates authority separately from clients'
+optimistic prediction. Owner input renders immediately; accepted target updates
+replicate at up to 20 Hz independently from robot command throttling. Remote
+interpolation never changes authoritative target poses or native commands.
+
+Localization requests/results remain per connection. Shared robot telemetry and
+accepted targets are broadcast. Reconnection creates a fresh connection identity
+and receives current shared state; old leases cannot resume. A live owner loss
+stops that control even if observers remain, while observer loss does not stop
+another owner's interaction. Last-client disconnect retains stop handling.
+Agent context uses the sender of the active robot turn, not the most recent
+headset pose. Shared AR marker poses are replayed to late joiners.
 
 ## Handshake
 
@@ -213,6 +268,7 @@ connection, and replies with `hello`.
 ```json
 {
   "type": "hello",
+  "protocol_version": 2,
   "client_id": "c3f1a9",
   "time_sync": {
     "ts_client": 1234.567,
@@ -241,6 +297,7 @@ connection, and replies with `hello`.
 
 | Field | Type | Notes |
 |-------|------|-------|
+| `protocol_version` | integer | Required collaboration protocol version; current value is `2`. |
 | `client_id` | string | Server-assigned, unique per connection. |
 | `time_sync.ts_client` | float | Echo of `hello_request.ts_client`. |
 | `time_sync.ts_server` | float | Server time when `hello_request` arrived. |
@@ -249,14 +306,16 @@ connection, and replies with `hello`.
 | `robot.footprint_m` | `[L, W]` | Ground footprint for nav UI. |
 | `robot.base_height_m` | float | Height of the odometry pose origin above the ground, so a client can place a ground marker under a `pose`. |
 | `robot.odom_scale_correction_factor` | float | Optional finite positive native-to-AR XY heuristic, default 1 when absent. Points/poses are already corrected; use it only to recover native distances. |
-| `capabilities.*.available` | bool | Feature gate for client UI. Keys are `lidar`, `navigation`, `localization`, `estop`, and `agent`. |
+| `capabilities.*.available` | bool | Feature gate for client UI. Keys are `lidar`, `navigation`, `localization`, `estop`, `agent`, and optional `manipulation`. |
 | `capabilities.*.reason` | string \| null | Human-readable, non-null exactly when `available` is `false`. |
 | `capabilities.navigation.nav_goal` | `{ available, reason, preview? }` | Can send `nav_goal_request`. Always present. Optional boolean `preview` defaults to false. |
 | `capabilities.navigation.nav_joystick` | `{ available, reason }` | Can send `nav_joystick_request`. Always present. |
 
 `navigation.available` is true when any nested input is available. Clients that
 need a specific input check that nested key; Specs point-and-click checks
-`nav_goal`.
+`nav_goal`. `capabilities.manipulation` is present and available only when the
+optional native manipulation Spec is connected; an absent key means unavailable.
+Go2 deployments do not load arm runtime dependencies.
 
 ARModule keeps `ts_server - ts_client` as the per-connection offset. The client
 may use the same pair for its own UI timing; localization does not require the
@@ -783,7 +842,7 @@ DimOS `tele_cmd_vel: Out[Twist]`; `MovementManager` muxes with planner
 | `duration` | float | Optional. Seconds to republish this twist. Omit or `0` publishes once. `0 < duration <= 2.0` holds at 10 Hz on ARModule, then a release-edge zero. Negative, boolean, non-finite, or above `2.0` is rejected, not clamped. |
 
 A new `nav_joystick_request` replaces any in-flight duration. Zero twist is the
-release edge. `estop_request` and last-client disconnect cancel a hold. Callers
+release edge. `estop_request`, owner disconnect, interaction release, and lease expiry cancel a hold. Callers
 that omit `duration` must keep sending if drive should continue
 (`cmd_vel_timeout` is 0.2 s). Gated on `hello.capabilities.navigation.nav_joystick`.
 
@@ -816,6 +875,19 @@ issuing a new `nav_goal_request`.
 ARModule also stops the robot on its own when the last client disconnects, so
 losing the headset cannot leave the robot walking.
 
+The repository's Go2 blueprints use `ARReplanningAStarPlanner`, a subclass of
+the installed native planner. Its private DimOS `ar_navigation_status` topic
+captures the immutable submitted goal timestamp and accepted/succeeded/failed
+phase under the native planner lock. ARModule ignores uncorrelated native Bool
+terminal messages after an AR goal has been issued. A delayed old-goal terminal
+therefore cannot clear a newer shared goal. Native stop also installs a timestamp
+tombstone under that lock: a queued goal created before the stop cannot restart
+motion, and a later explicit goal can resume it. This changes no WebSocket message.
+The native planning algorithm still owns obstacle avoidance, arrival detection,
+and cancellation: the adapter cannot guarantee that an upstream monitoring
+thread never makes an incorrect decision from its own stale internal samples.
+Hardware validation remains necessary for that backend behavior.
+
 ### `lidar_settings_request`
 
 ```json
@@ -842,8 +914,76 @@ All four fields are required on every `lidar_settings_request`. A non-finite or 
 (`min_height_m` above `max_height_m`) is an error and is rejected, not silently
 clamped.
 
-`state.lidar` reflects the result, and because telemetry is broadcast, one client
-changing the filter changes it for everyone.
+LiDAR settings belong to the requesting connection. `state.lidar` reflects that
+connection's settings; changing presets or disabling LiDAR does not affect other
+clients. ARModule downsamples a cloud once, groups identical subscriptions, and
+sends each filtered binary payload only to its subscribing connections. A new
+connection starts with LiDAR disabled.
+
+### `manipulation_request` (optional)
+
+Arm deployments expose `hello.capabilities.manipulation.available=true`.
+Every request contains `request_id`, `action`, `group_id`, and the current
+interaction `epoch`. Planning, execution, and gripper commands also contain the
+canonical `target_revision`. Following commands carry the owning `lease_id`.
+
+```json
+{
+  "type": "manipulation_request",
+  "request_id": "plan-42",
+  "action": "plan",
+  "group_id": "arm",
+  "epoch": "robot-interaction-reference",
+  "target_revision": 12,
+  "position": [0.4, 0.0, 0.3],
+  "orientation": [0.0, 0.0, 0.0, 1.0],
+  "speed_scale": 0.2,
+  "final_gripper": 0.5
+}
+```
+
+| Action | Additional fields | Behavior |
+|---|---|---|
+| `evaluate` | `position`, `orientation` | Advisory feasibility for the current target. |
+| `plan` | Pose, optional `speed_scale` and `final_gripper` | Return a checked plan bound to the canonical target revision. |
+| `execute` | `plan_id` | Execute the still-current checked plan. |
+| `acquire` | Owning following lease | Request the native following `token`. |
+| `update` | `token`, increasing `sequence`, `ts`, pose, optional `speed_scale` | Refresh native following while the robot-wide lease remains valid. |
+| `release` | `token` | Retire native following. Release the interaction lease separately. |
+| `gripper` | `value` | Apply the replicated target's gripper setting. |
+| `cancel` | None | Cancel the current arm operation. |
+| `resume` | None | Resume only after native stop confirmation and valid authority. |
+| `reset_joints`, `prepare_shutdown` | Optional `speed_scale` | Native reset or parking; shutdown reports explicit `quiescent`. |
+
+Poses are odometry metres and unit XYZW quaternions. Speed is in `(0,1]`;
+gripper values are in `[0,1]`. Plan/evaluate/following poses and speed, plan final
+gripper, and discrete gripper values are taken from the matching server target;
+client echoes cannot change the geometry labeled with that revision. A gripper
+setting must first be accepted into the replicated target.
+
+`manipulation_result` includes `request_id`, `action`, `group_id`, `status`, and
+optional `code`/`message` plus action-specific fields. A `planned` result includes
+`plan_id`, `target_revision`, `joint_names`, `trajectory` (time/positions), and
+`duration`. The checked plan is robot-owned and replayed to late joiners. Editing
+release preserves a plan for an unchanged target; changing target settings
+retires it. Native execution remains robot-owned after editing release or client
+disconnect.
+
+`manipulation_state` is a complete native snapshot, normally sent at 10 Hz and
+replayed on connection. Available snapshots include the model descriptor,
+`root_pose`, planning `groups`, measured group `observations`, `execution`,
+`operation_id`, `plan`, `following`, `owner`, `stopped`, and `stop_confirmed`.
+An unavailable snapshot contains `available=false` and a message. Accepted,
+executing, uncertain, or faulted native motion blocks new robot interaction and
+mode changes through `interaction_state.motion_busy`. A transport failure after
+a motion command is uncertain; only positive native stop confirmation clears
+that uncertainty. Emergency Stop remains available to every client.
+
+ARModule injects a private native RPC envelope with epoch, monotonic deadline,
+authority revision, lease, and target revision. The native process rejects retired
+or expired envelopes. Emergency Stop installs its revision tombstone atomically
+with the native stop latch, preventing delayed old resume commands from undoing
+it. These private fields are not client-controlled WebSocket authority.
 
 ### `state_request`
 
@@ -903,6 +1043,8 @@ stale returns `No client pose`.
 |-----------------|-----------------|
 | `hello_request` | `hello` |
 | `state_request` | `state` |
+| `interaction_request` | `interaction_state`, `interaction_result` |
+| `manipulation_request` (optional) | `manipulation_state`, `manipulation_result` |
 | `localization_start_request` | `localization_observations_request` |
 | `localization_observations` (binary) | `localization_result` |
 | `nav_goal_request` | `nav_goal` |

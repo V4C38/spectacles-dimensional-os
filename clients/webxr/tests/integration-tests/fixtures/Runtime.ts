@@ -2,6 +2,12 @@ import { expect, type Page, type WebSocketRoute } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { activateButton } from "./Input";
+import { previewAimChanged } from "./AdvisoryPreview";
+
+export function isNavigationCommit(command: { type: string; preview?: boolean; action?: string }): boolean {
+  return command.type === "nav_goal_request" && !command.preview
+    || command.type === "interaction_request" && command.action === "confirm";
+}
 
 export const shared = JSON.parse(
   readFileSync(
@@ -19,6 +25,12 @@ export async function bootstrap(
 ) {
   const commands: any[] = [];
   let socket: WebSocketRoute | undefined;
+  let revision = 0, interactionMode = "manual";
+  let authority: any = null, target: any = null, preview: any = null, activeGoal: any = null;
+  let previewAim: { position: number[]; orientation: number[] } | null = null;
+  let joystickStops = 0;
+  const interactionState = () => send({ type: "interaction_state", epoch: "fixture-epoch", revision: ++revision,
+    mode: interactionMode, authority, target, targets: target ? [target] : [], preview, active_goal: activeGoal });
   let captureTs = 0;
   let acceptedCaptureTs = 0;
   let lidarSettings = {
@@ -72,7 +84,7 @@ export async function bootstrap(
       };
       if (command.type === "hello_request") {
         send({
-          type: "hello",
+          type: "hello", protocol_version: 2,
           client_id: "integration",
           time_sync: {
             ts_client: command.ts_client,
@@ -97,12 +109,56 @@ export async function bootstrap(
           },
         });
         state();
+        interactionState();
         send({
           type: "pose",
           position: shared.fixtures.pose,
           orientation: [0, 0, 0, 1],
           ts: command.ts_client,
         });
+      }
+      if (command.type === "interaction_request") {
+        let status = "accepted", code = command.action;
+        if (command.action === "acquire") {
+          if (authority || interactionMode !== "manual") { status = "busy"; code = "robot_busy"; }
+          else {
+            authority = { client_id: "integration", source_id: command.source_id, acquisition_id: command.acquisition_id,
+              lease_id: `fixture-lease-${revision}`, kind: command.kind, held: true, expires_at: 1e9, sequence: -1 };
+            preview = previewAim = null;
+          }
+        } else if (command.action === "mode") {
+          if (authority) { status = "busy"; code = "robot_busy"; } else interactionMode = command.mode;
+        } else if (command.action === "cancel" || command.action === "cancel_acquire") {
+          if (authority?.kind === "joystick") joystickStops++;
+          authority = null; preview = previewAim = null;
+        } else if (command.action !== "snapshot" && (!authority || command.lease_id !== authority.lease_id)) {
+          status = "stale"; code = "not_owner";
+        }
+        if (status === "accepted" && command.position) {
+          const changed = !target || JSON.stringify([target.position, target.orientation])
+            !== JSON.stringify([command.position, command.orientation]);
+          target = { position: command.position, orientation: command.orientation, domain: "navigation", revision: changed ? revision + 1 : target.revision,
+            phase: authority?.kind === "navigation_planning" ? "draft" : "live", sample_ts: performance.now() / 1000,
+            sequence: command.sequence ?? -1 };
+          if (authority) authority.sequence = command.sequence ?? -1;
+          if (previewAimChanged(previewAim, target)) preview = previewAim = null;
+        }
+        if (status === "accepted" && (command.action === "release" || command.action === "confirm")) {
+          if (command.action === "release" && authority?.kind === "navigation_planning") authority.held = false;
+          else {
+            if (authority?.kind === "joystick") joystickStops++;
+            if (target && authority?.kind !== "joystick") {
+              target.phase = "committed";
+              const [x, y, z] = target.position;
+              activeGoal = { type: "nav_goal", pose: [x, y, z, 0], path_poses: [[2,0,0,0],[2.5,y/2,0,0],[x,y,z,0]], ts: performance.now() };
+              send(activeGoal); state("following_path");
+            }
+            authority = null; preview = previewAim = null;
+          }
+        }
+        interactionState();
+        send({ type: "interaction_result", request_id: command.request_id, epoch: "fixture-epoch", revision,
+          status, code, ...(authority ? { lease_id: authority.lease_id } : {}) });
       }
       if (command.type === "state_request") state();
       if (command.type === "lidar_settings_request" && !options.unavailable) {
@@ -124,7 +180,7 @@ export async function bootstrap(
         send({ type: "agent_message", text: shared.fixtures.response });
       if (command.type === "nav_goal_request") {
         const [x, y, z] = command.position;
-        send({
+        const frame = {
           type: "nav_goal",
           preview: !!command.preview,
           ...(command.preview ? { preview_id: command.preview_id } : {}),
@@ -135,10 +191,13 @@ export async function bootstrap(
             [x, y, z, 0],
           ],
           ts: performance.now(),
-        });
+        };
+        send(frame);
+        if (command.preview) { preview = frame; previewAim = { position: [...command.position], orientation: [...command.orientation] }; interactionState(); }
+        else { activeGoal = frame; interactionState(); }
         if (!command.preview) state("following_path");
       }
-      if (command.type === "estop_request") state("idle");
+      if (command.type === "estop_request") { authority = null; preview = previewAim = null; activeGoal = null; state("idle"); interactionState(); }
     });
   });
   await page.goto("/?debug=1");
@@ -272,6 +331,7 @@ export async function bootstrap(
     send,
     state,
     commands,
+    get joystickStops() { return joystickStops; },
     localized,
     completeLocalization,
     lidar,

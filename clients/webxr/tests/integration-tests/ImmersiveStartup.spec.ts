@@ -4,6 +4,7 @@ import { startVisualReview, markVisualReview, saveVisualReview } from "./fixture
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { State } from "../../../specs/Assets/Scripts/DimOSARClient/websocket/protocolTypes";
+import { previewAimChanged } from "./fixtures/AdvisoryPreview";
 
 // ClientCore lives outside WebXR's ESM package. Load it through Playwright's
 // CommonJS transform so test discovery also works on CI's Node 20 runtime.
@@ -62,6 +63,17 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
       w.questDevice.installRuntime({ forceInstall: true });
     }, mode);
     let socket: WebSocketRoute | undefined;
+    let interactionRevision = 0, interactionMode = "manual";
+    let authority: any = null, target: any = null, preview: any = null, activeGoal: any = null;
+    let previewAim: { position: number[]; orientation: number[] } | null = null;
+    const sendInteraction = (peer = socket) => peer!.send(JSON.stringify({ type: "interaction_state",
+      epoch: "startup-fixture", revision: ++interactionRevision, mode: interactionMode,
+      authority, target, targets: target ? [target] : [], preview, active_goal: activeGoal }) + "\n");
+    const sendNavigation = (frame: object, peer = socket) => {
+      activeGoal = frame;
+      peer!.send(JSON.stringify(frame) + "\n");
+      sendInteraction(peer);
+    };
     let serverState: State = { type: "state", server: { connected_clients: 1 },
       lidar: { enabled: false, min_height_m: 0, max_height_m: 2, max_range_m: 5 },
       nav: { state: "idle", outcome: null }, agent: { idle: true } };
@@ -98,26 +110,74 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
           sendState({ lidar: { enabled: command.enabled, min_height_m: command.min_height_m,
             max_height_m: command.max_height_m, max_range_m: command.max_range_m } }, ws);
         }
-        if (command.type === "estop_request") estops++;
+        if (command.type === "estop_request") {
+          estops++; authority = null; preview = previewAim = null; activeGoal = null;
+          sendInteraction(ws);
+        }
+        if (command.type === "interaction_request") {
+          let status = "accepted", code = command.action;
+          if (command.action === "acquire") {
+            if (authority || interactionMode !== "manual") { status = "busy"; code = "robot_busy"; }
+            else {
+              authority = { client_id: "browser-test", source_id: command.source_id, acquisition_id: command.acquisition_id,
+                lease_id: `startup-lease-${interactionRevision}`, kind: command.kind, held: true, expires_at: 1e9, sequence: -1 };
+              preview = previewAim = null;
+            }
+          } else if (command.action === "mode") {
+            if (authority) { status = "busy"; code = "robot_busy"; }
+            else interactionMode = command.mode;
+          } else if (command.action === "cancel" || command.action === "cancel_acquire") {
+            if (authority?.kind === "navigation_planning") target = null;
+            authority = null; preview = previewAim = null;
+          } else if (command.action !== "snapshot" && (!authority || command.lease_id !== authority.lease_id)) {
+            status = "stale"; code = "not_owner";
+          }
+          if (status === "accepted" && command.position) {
+            const changed = !target || JSON.stringify([target.position, target.orientation]) !== JSON.stringify([command.position, command.orientation]);
+            target = { position: command.position, orientation: command.orientation, domain: "navigation",
+              revision: changed ? interactionRevision + 1 : target.revision,
+              phase: authority?.kind === "navigation_planning" ? "draft" : "live", sample_ts: performance.now() / 1000,
+              sequence: command.sequence ?? -1 };
+            if (authority) authority.sequence = command.sequence ?? -1;
+            if (previewAimChanged(previewAim, target)) preview = previewAim = null;
+          }
+          if (status === "accepted" && (command.action === "release" || command.action === "confirm")) {
+            if (command.action === "release" && authority?.kind === "navigation_planning") authority.held = false;
+            else {
+              if (target && authority?.kind !== "joystick") {
+                goals++;
+                target.phase = "committed";
+                activeGoal = { type: "nav_goal", pose: [...target.position, 0], path_poses: [], ts: 10 };
+              }
+              authority = null; preview = previewAim = null;
+            }
+          }
+          sendInteraction(ws);
+          send({ type: "interaction_result", request_id: command.request_id, epoch: "startup-fixture",
+            revision: interactionRevision, status, code, ...(authority ? { lease_id: authority.lease_id } : {}) });
+        }
         if (command.type === "user_message_request") {
           agentMessages.push(command.text);
           send({ type: "agent_message", text: "I will go forward to the requested location." });
         }
         if (command.type === "nav_goal_request") {
           if (command.preview) {
-            const [x, y, z] = command.position;
-            send({ type: "nav_goal", preview: true, preview_id: command.preview_id, pose: [x, y, z, 0], path_poses: [[2, 0, 0, 0], [x, y, z, 0]], ts: performance.now() });
+            const [x, y, z] = target.position;
+            preview = { type: "nav_goal", preview: true, preview_id: command.preview_id, pose: [x, y, z, 0], path_poses: [[2, 0, 0, 0], [x, y, z, 0]], ts: performance.now() };
+            previewAim = { position: [...target.position], orientation: [...target.orientation] };
+            send(preview); sendInteraction(ws);
           } else goals++;
         }
         if (command.type === "hello_request") {
           handshakes++;
           const available = { available: true, reason: null };
-          send({ type: "hello", client_id: "browser-test", time_sync: { ts_client: command.ts_client, ts_server: command.ts_client },
+          send({ type: "hello", protocol_version: 2, client_id: "browser-test", time_sync: { ts_client: command.ts_client, ts_server: command.ts_client },
             server_info: { robot_ip: "192.168.1.42", dimos_version: "0.4.0", armodule_version: "0.2.0" },
             robot: { display_name: "Unitree Go2", body_bounds_m: [0.7, 0.5, 0.55], footprint_m: [0.7, 0.3], base_height_m: 0.33 },
             capabilities: { lidar: available, localization: available, estop: available, agent: available,
               navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: available } } });
           sendState({}, ws);
+          authority = null; sendInteraction(ws);
           send({ type: "pose", position: [2, 0, 0.33], orientation: [0, 0, 0, 1], ts: command.ts_client });
         }
         if (command.type === "localization_start_request") send({ type: "localization_observations_request", capture_policy: "robot_los_required", observation_count: 3 });
@@ -486,7 +546,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
         document.querySelector("canvas")!.style.background = "#182028";
         return saved;
       }, aiming);
-      await expect.poll(() => page.evaluate(({ aiming, dashStyle }) => {
+      try { await expect.poll(() => page.evaluate(({ aiming, dashStyle }) => {
         const w = window as any;
         const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
         if (!aiming) return app.client.robot.object.getObjectByName("Robot selection outline").material.opacity >= 0.79;
@@ -494,14 +554,26 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
         const draft = navigation.draftMarker;
         const dashed = draft.object.getObjectByName("Navigation draft circle");
         return draft.object.visible &&
-          Math.abs(draft.circleBounds().radius - navigation.marker.circleBounds().radius) < 0.0001 &&
+          // The active target pulses by up to 4% while the planning target stays still.
+          Math.abs(draft.circleBounds().radius - navigation.marker.circleBounds().radius) <= draft.circleBounds().radius * 0.041 &&
           draft.circleBounds().radius > 0.24 && dashed.visible &&
           !draft.object.getObjectByName("NavigationCircle").visible &&
           draft.object.getObjectByName("NavigationHeading").visible &&
           Math.abs(dashed.material.uniforms.uDash.value - dashStyle.dashM) < 0.00001 &&
           Math.abs(dashed.material.uniforms.uGap.value - dashStyle.gapM) < 0.00001 &&
           Math.abs(dashed.material.uniforms.uWidth.value - dashStyle.selectedWidthM) < 0.00001;
-      }, { aiming, dashStyle: ROBOT_LINE_STYLE })).toBe(true);
+      }, { aiming, dashStyle: ROBOT_LINE_STYLE })).toBe(true); }
+      catch (error) {
+        console.error("World capture:", name, await page.evaluate(() => {
+          const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.constructor.name === "WebXRApp");
+          const nav = app.client.navigation, draft = nav.draftMarker, dashed = draft.object.getObjectByName("Navigation draft circle");
+          return { snapshot: nav.interaction.snapshot(), interaction: app.client.session.collaboration.raw(), draftVisible: draft.object.visible,
+            draftRadius: draft.circleBounds().radius, markerRadius: nav.marker.circleBounds().radius, dashedVisible: dashed.visible,
+            ringVisible: draft.object.getObjectByName("NavigationCircle").visible, headingVisible: draft.object.getObjectByName("NavigationHeading").visible,
+            dash: dashed.material.uniforms.uDash.value, gap: dashed.material.uniforms.uGap.value, width: dashed.material.uniforms.uWidth.value };
+        }));
+        throw error;
+      }
       markVisualReview(page, name);
       await page.screenshot({ path: testInfo.outputPath(name) });
       await page.evaluate(saved => {
@@ -684,8 +756,8 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     await page.screenshot({ path: testInfo.outputPath("laser-navigation.png") });
     await setSelection(page, 0);
 
-    socket!.send(JSON.stringify({ type: "nav_goal", ts: 10, pose: [1.1, 0.45, 0, 0],
-      path_poses: [[2, 0, 0, 0], [1.5, 0, 0, 0], [1.1, 0.45, 0, 0]] }) + "\n");
+    sendNavigation({ type: "nav_goal", ts: 10, pose: [1.1, 0.45, 0, 0],
+      path_poses: [[2, 0, 0, 0], [1.5, 0, 0, 0], [1.1, 0.45, 0, 0]] });
     await expect.poll(() => page.evaluate(dashStyle => {
       const w = window as any;
       const app = w.xb.core.scene.children.find((object: any) => object.constructor.name === "WebXRApp");
@@ -771,7 +843,7 @@ for (const [mode, hmd, denyCamera] of [["controller", "quest3", false], ["hand",
     for (const outcome of ["succeeded", "cancelled"] as const) {
       if (outcome === "cancelled") {
         sendState({ nav: { state: "idle", outcome: null } });
-        socket!.send(JSON.stringify({ type: "nav_goal", ts: 20, pose: [1.1, 0.45, 0, 0], path_poses: [[2, 0, 0, 0], [1.1, 0.45, 0, 0]] }) + "\n");
+        sendNavigation({ type: "nav_goal", ts: 20, pose: [1.1, 0.45, 0, 0], path_poses: [[2, 0, 0, 0], [1.1, 0.45, 0, 0]] });
         sendState({ nav: { state: "following_path", outcome: null } });
         await expect.poll(async () => (await feedback()).attached).toBe(false);
       }

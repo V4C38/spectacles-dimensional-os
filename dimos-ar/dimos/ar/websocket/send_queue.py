@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import json
+import math
 import re
 import time
 
@@ -16,7 +18,10 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger()
 
 OUTBOUND_FIFO_MAXSIZE = 64
-COALESCE_FRAME_TYPES = frozenset({"pose", "nav_goal", "state", "localization_result"})
+OUTBOUND_SEND_TIMEOUT_S = 2.0
+COALESCE_FRAME_TYPES = frozenset(
+    {"pose", "nav_goal", "state", "localization_result", "interaction_state", "manipulation_state"}
+)
 _FRAME_TYPE_RE = re.compile(r'"type"\s*:\s*"([^"]+)"')
 
 
@@ -28,16 +33,25 @@ def peek_frame_type(text: str) -> str | None:
 class ClientSendQueue:
     """Per-connection sender with latest-wins coalescing and bounded FIFO."""
 
-    def __init__(self, websocket: ws_server.ServerConnection) -> None:
+    def __init__(
+        self,
+        websocket: ws_server.ServerConnection,
+        *,
+        on_failure: Callable[[str], None] | None = None,
+        send_timeout_s: float = OUTBOUND_SEND_TIMEOUT_S,
+    ) -> None:
+        if not math.isfinite(send_timeout_s) or send_timeout_s <= 0:
+            raise ValueError("send_timeout_s must be finite and positive")
         self._websocket = websocket
+        self._on_failure = on_failure
+        self._send_timeout_s = send_timeout_s
+        self.failure_reason: str | None = None
         self._queue: asyncio.Queue[tuple[int, str]] = asyncio.Queue(
             maxsize=OUTBOUND_FIFO_MAXSIZE,
         )
         self._coalesce_latest: dict[str, str] = {}
         self._coalesce_latest_binary: bytes | None = None
         self._sequence = 0
-        self._dropped_fifo_count = 0
-        self._reported_drops = 0
         self._timing = TimingSummary(
             "WebSocket outbound timing", connection_id=f"{id(websocket):x}"
         )
@@ -75,16 +89,24 @@ class ClientSendQueue:
             try:
                 self._queue.put_nowait(item)
             except asyncio.QueueFull:
-                try:
-                    self._queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                self._dropped_fifo_count += 1
-                try:
-                    self._queue.put_nowait(item)
-                except asyncio.QueueFull:
-                    pass
+                # Authority decisions and request replies cannot be dropped.
+                # Retire the connection so a reconnect obtains a full snapshot.
+                self._fail("outbound control queue overflow")
+                return
         self._work_available.set()
+
+    def _fail(self, reason: str) -> None:
+        if self.failure_reason is not None or self._closed:
+            return
+        self.failure_reason = reason
+        self._closed = True
+        self._work_available.set()
+        logger.warning("WebSocket outbound connection failed", reason=reason)
+        if self._on_failure is not None:
+            try:
+                self._on_failure(reason)
+            except Exception:
+                logger.exception("WebSocket outbound failure handler failed")
 
     def enqueue_binary(self, data: bytes) -> None:
         if self._closed:
@@ -115,6 +137,7 @@ class ClientSendQueue:
             raise
         except Exception:
             logger.exception("WebSocket outbound sender crashed")
+            self._fail("outbound sender crashed")
 
     async def _flush_coalesced(self) -> None:
         if self._closed:
@@ -123,47 +146,49 @@ class ClientSendQueue:
             batch = "".join(self._coalesce_latest.values())
             self._coalesce_latest.clear()
             await self._send_text(batch)
-        if self._coalesce_latest_binary is not None:
+        if not self._closed and self._coalesce_latest_binary is not None:
             data = self._coalesce_latest_binary
             self._coalesce_latest_binary = None
             await self._send_binary(data)
 
     async def _send_text(self, text: str) -> None:
+        if self._closed:
+            return
         started = time.monotonic()
         try:
-            await self._websocket.send(text)
+            async with asyncio.timeout(self._send_timeout_s):
+                await self._websocket.send(text)
             self._record_send(started, binary=False)
-        except websockets.ConnectionClosed:
-            self._closed = True
-        except (OSError, websockets.WebSocketException) as exc:
+        except (TimeoutError, OSError, websockets.WebSocketException) as exc:
             logger.warning(
                 "WebSocket outbound text send failed",
                 error=str(exc),
                 frame_type=peek_frame_type(text),
             )
+            self._fail("outbound send timeout" if isinstance(exc, TimeoutError) else "outbound send failed")
 
     async def _send_binary(self, data: bytes) -> None:
+        if self._closed:
+            return
         started = time.monotonic()
         try:
-            await self._websocket.send(data)
+            async with asyncio.timeout(self._send_timeout_s):
+                await self._websocket.send(data)
             self._record_send(started, binary=True)
-        except websockets.ConnectionClosed:
-            self._closed = True
-        except (OSError, websockets.WebSocketException) as exc:
+        except (TimeoutError, OSError, websockets.WebSocketException) as exc:
             logger.warning("WebSocket outbound binary send failed", error=str(exc))
+            self._fail("outbound send timeout" if isinstance(exc, TimeoutError) else "outbound send failed")
 
     def _record_send(self, started: float, *, binary: bool) -> None:
         # send() duration includes transport backpressure and event-loop stalls;
         # it does not measure delivery to, or consumption by, the headset.
         duration_ms = (time.monotonic() - started) * 1000
-        dropped = self._dropped_fifo_count - self._reported_drops
-        self._reported_drops = self._dropped_fifo_count
         self._timing.record(
             counts={
                 "text_sends": int(not binary),
                 "binary_sends": int(binary),
                 "slow_sends": int(duration_ms >= 100),
-                "dropped_fifo": dropped,
+                "dropped_fifo": 0,
             },
             maxima={
                 "send_max_ms": duration_ms,

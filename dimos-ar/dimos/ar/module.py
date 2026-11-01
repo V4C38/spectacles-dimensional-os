@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import copy
 from dataclasses import replace
+import json
 import math
 import time
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
-from dimos_lcm.std_msgs import Bool
+from dimos_lcm.std_msgs import Bool, String
 from langchain_core.messages.base import BaseMessage
 from pydantic import BaseModel, Field, field_validator
 import websockets.asyncio.server as ws_server
@@ -29,11 +30,22 @@ from dimos.ar.localization.vps.localizer import VpsLocalizer
 from dimos.ar.localization.vps.multiset_client import MultisetVpsClient, MultisetVpsClientConfig
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
 from dimos.ar.localization.worker import LocalizationWorker
+from dimos.ar.manipulation.frames import ReferencePose
+from dimos.ar.manipulation.protocol import ManipulationRequest
+from dimos.ar.manipulation.service import ManipulationService
+from dimos.ar.manipulation.spec import ARManipulationSpec
 from dimos.ar.navigation.coordinator import NavGoalCoordinator
 from dimos.ar.navigation.preview_planner import PreviewPlanner
 from dimos.ar.navigation.preview_service import NavigationPreviewService
 from dimos.ar.navigation.tele_cmd_vel import TeleCmdVelPublisher
-from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest
+from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest
+from dimos.ar.replication.interaction import (
+    InteractionCoordinator,
+    InteractionKind,
+    InteractionRequest,
+    SharedTarget,
+)
+from dimos.ar.robot.agent_control import ARAgentControlSpec
 from dimos.ar.robot.agent_service import ARAgentService
 from dimos.ar.robot.capabilities import (
     NAV_GOAL,
@@ -73,6 +85,7 @@ from dimos.ar.websocket.protocol import (
     encode_nav_goal,
     encode_pose,
     encode_state,
+    encode_text,
     observation_from_localization,
 )
 from dimos.ar.websocket.server import WebSocketServer
@@ -111,6 +124,7 @@ class LocalizationConfig(BaseModel):
 
 
 class ARModuleConfig(ModuleConfig):  # type: ignore[misc]
+    stationary_base: ReferencePose | None = None
     robot: RobotName = RobotName.UNITREE_GO2
     port: int = 8787
     ip_relay_url: str | None = Field(default=DEFAULT_IP_RELAY_URL, pattern=r"^https?://[^/]+")
@@ -165,7 +179,11 @@ def profile_for_config(config: ARModuleConfig) -> RobotProfile:
         return profile
     if not mounts:
         raise ValueError("fiducial_marker_mounts must not be empty")
-    return replace(profile, fiducial_marker_mounts=tuple(mounts))
+    return replace(
+        profile,
+        fiducial_marker_mounts=tuple(mounts),
+        fiducial_dictionary=profile.fiducial_dictionary or "DICT_APRILTAG_36h11",
+    )
 
 
 class ARModule(Module):  # type: ignore[misc]
@@ -177,6 +195,7 @@ class ARModule(Module):  # type: ignore[misc]
     tf: In[TFMessage]
     path: In[Path]
     goal_reached: In[Bool]
+    ar_navigation_status: In[String]
     color_image: In[Image]
     camera_info: In[CameraInfo]
     agent: In[BaseMessage]
@@ -203,23 +222,41 @@ class ARModule(Module):  # type: ignore[misc]
     _odometry: RobotOdometry
     _previews: NavigationPreviewService
     _agent_service: ARAgentService
+    _agent_control: ARAgentControlSpec | None = None
+    _mode_task: asyncio.Task[None] | None = None
+    _manipulation: ARManipulationSpec | None = None
+    _manipulation_service: ManipulationService | None = None
+    _stationary_task: asyncio.Task[None] | None = None
+    _interaction: InteractionCoordinator
+    _interaction_task: asyncio.Task[None] | None = None
+    _native_mode_uncertain: bool = False
+    _interaction_sent_revision: int = -1
+    _native_sequences: dict[str, int]
 
     @rpc
     def build(self) -> None:
         super().build()
         assert self._loop is not None
         self._profile = profile_for_config(self.config)
+        self._interaction = InteractionCoordinator()
+        self._interaction_task = None
+        self._interaction_sent_revision = -1
+        self._native_sequences = {}
+        self._pending_arm_motion: set[str] = set()
+        self._arm_uncertain = False
+        self._arm_stop_pending = False
+        self._arm_native_busy = False
         self._lidar_settings = DEFAULT_LIDAR_SETTINGS
+        self._lidar_subscriptions: dict[str, LidarSettings] = {}
         self._localization_worker = LocalizationWorker()
         self._vps_admission = VpsAdmission()
         self._pairing_log_at = 0.0
         self._pairing_rejected = 0
         self._pairing_accepted = 0
         self._map_localization: MapLocalization | None = None
-        self._replay_mode = (
-            global_config.unitree_connection_type == "replay"
-            or global_config.robot_ip in ("fake", "mock", "replay")
-        )
+        self._replay_mode = getattr(
+            global_config, "unitree_connection_type", None
+        ) == "replay" or global_config.robot_ip in ("fake", "mock", "replay")
         self._odometry = RobotOdometry(
             factor=self._profile.odom_scale_correction_factor, recording=self._replay_mode
         )
@@ -241,7 +278,17 @@ class ARModule(Module):  # type: ignore[misc]
             on_localization_progress=self._on_localization_progress,
             on_nav_joystick_request=self._on_nav_joystick_request,
             on_disconnect=self._on_client_disconnect,
+            on_interaction_request=self._on_interaction_request,
+            on_manipulation_request=self._on_manipulation_request,
         )
+        if self._manipulation is not None:
+            self._manipulation_service = ManipulationService(
+                self._manipulation,
+                self._ws_server.schedule_send_to_client,
+                self._ws_server.schedule_broadcast_text,
+                on_snapshot=self._on_manipulation_snapshot,
+                on_result=self._on_manipulation_result,
+            )
         self._nav_goal_coordinator = NavGoalCoordinator(
             odom_scale_correction_factor=self._profile.odom_scale_correction_factor,
         )
@@ -250,6 +297,7 @@ class ARModule(Module):  # type: ignore[misc]
             factor=self._profile.odom_scale_correction_factor,
             odometry=self._odometry.latest,
             send=self._ws_server.schedule_send_to_client,
+            on_preview=self._on_navigation_preview,
         )
         self._agent_service = ARAgentService(
             factor=self._profile.odom_scale_correction_factor,
@@ -260,6 +308,7 @@ class ARModule(Module):  # type: ignore[misc]
             self._ws_server,
             odom_scale_correction_factor=self._profile.odom_scale_correction_factor,
             robot_position=self._odometry.native_position,
+            subscriptions=lambda: dict(self._lidar_subscriptions),
         )
         self._policy = LocalizationPolicy(
             [provider.type for provider in self.config.localization.providers],
@@ -278,6 +327,7 @@ class ARModule(Module):  # type: ignore[misc]
             self._profile.supported_capabilities,
             localization_available=bool(self._policy.providers),
             agent_available=self.config.agent,
+            manipulation_available=self._manipulation is not None,
             supported_navigation_inputs=self._profile.supported_navigation_inputs,
         )
         self._tele_cmd_vel_publisher = None
@@ -353,7 +403,8 @@ class ARModule(Module):  # type: ignore[misc]
                     pose_buffer=self._odometry.history,
                     marker_mounts=self._profile.fiducial_marker_mounts,
                     dictionary_name=self._profile.fiducial_dictionary,
-                    allow_latest_robot_pose=self._replay_mode,
+                    allow_latest_robot_pose=self._replay_mode
+                    or self.config.stationary_base is not None,
                 )
             elif provider.type == "vps" and vps is None:
                 if not provider.map_code:
@@ -377,6 +428,11 @@ class ARModule(Module):  # type: ignore[misc]
     def start(self) -> None:
         super().start()
         self._loop.call_soon_threadsafe(self._localization_runner.start)
+        self._loop.call_soon_threadsafe(self._start_interaction_poll)
+        if self._manipulation_service is not None:
+            self._loop.call_soon_threadsafe(self._manipulation_service.start)
+        if self.config.stationary_base is not None:
+            self._loop.call_soon_threadsafe(self._start_stationary_base)
         try:
             self._ws_server.start()
         except Exception:
@@ -392,7 +448,14 @@ class ARModule(Module):  # type: ignore[misc]
     def stop(self) -> None:
         logger.info("ARModule stopping")
         self._cancel_tele_cmd_vel()
+        if self._mode_task is not None:
+            self._loop.call_soon_threadsafe(self._mode_task.cancel)
+        if self._interaction_task is not None:
+            self._loop.call_soon_threadsafe(self._interaction_task.cancel)
+        if self._stationary_task is not None:
+            self._loop.call_soon_threadsafe(self._stationary_task.cancel)
         for name, service in (
+            ("manipulation", getattr(self, "_manipulation_service", None)),
             ("preview", getattr(self, "_previews", None)),
             ("localization", getattr(self, "_localization_runner", None)),
         ):
@@ -444,7 +507,15 @@ class ARModule(Module):  # type: ignore[misc]
         )
 
     def _broadcast_state(self) -> None:
-        self._ws_server.schedule_broadcast_text(encode_state(self._state_snapshot()))
+        snapshot = self._state_snapshot()
+        subscriptions = getattr(self, "_lidar_subscriptions", {})
+        if subscriptions:
+            for client_id, settings in subscriptions.items():
+                self._ws_server.schedule_send_to_client(
+                    client_id, encode_state(replace(snapshot, lidar=settings))
+                )
+        else:
+            self._ws_server.schedule_broadcast_text(encode_state(snapshot))
 
     def _send_observations_request(self, client_id: str) -> None:
         spec = self._policy.capture_spec
@@ -488,6 +559,15 @@ class ARModule(Module):  # type: ignore[misc]
         client_id: str,
     ) -> None:
         logger.info("AR client session ready", client_id=client_id)
+        self._interaction.connect(client_id)
+        self._lidar_subscriptions[client_id] = DEFAULT_LIDAR_SETTINGS
+        if self._manipulation_service is not None:
+            self._manipulation_service.connect(client_id)
+        self._ws_server.schedule_send_to_client(
+            client_id, encode_text(self._interaction.snapshot())
+        )
+        for marker in self._agent_service.marker_snapshot():
+            self._ws_server.schedule_send_to_client(client_id, marker)
         self._broadcast_state()
         if self._replay_mode:
             pose = self._odometry.history.latest()
@@ -511,6 +591,14 @@ class ARModule(Module):  # type: ignore[misc]
 
     def _on_client_disconnect(self, _websocket: ws_server.ServerConnection, client_id: str) -> None:
         self._previews.cancel(client_id)
+        self._interaction.disconnect(client_id)
+        self._lidar_subscriptions.pop(client_id, None)
+        self._update_lidar_aggregate()
+        if self._manipulation_service is not None:
+            self._manipulation_service.disconnect(client_id)
+        self._drain_interaction_retirements()
+        self._agent_service.disconnect(client_id)
+        self._broadcast_interaction()
         runner = getattr(self, "_localization_runner", None)
         if runner is not None:
             runner.cancel(client_id)
@@ -523,51 +611,491 @@ class ARModule(Module):  # type: ignore[misc]
             self._agent_service.reset()
         self._broadcast_state()
 
+    def _start_stationary_base(self) -> None:
+        self._stationary_task = asyncio.create_task(self._publish_stationary_base())
+
+    async def _publish_stationary_base(self) -> None:
+        mount = self.config.stationary_base
+        if mount is None:
+            return
+        while True:
+            await self.handle_odom(
+                PoseStamped(
+                    ts=time.time(),
+                    frame_id="odom",
+                    position=list(mount.position),
+                    orientation=list(mount.orientation),
+                )
+            )
+            await asyncio.sleep(0.1)
+
+    def _start_interaction_poll(self) -> None:
+        self._interaction_task = asyncio.create_task(self._poll_interaction())
+
+    async def _poll_interaction(self) -> None:
+        while True:
+            self._interaction.poll()
+            self._drain_interaction_retirements()
+            self._broadcast_interaction()
+            await asyncio.sleep(0.05)
+
+    def _broadcast_interaction(self, *, force: bool = False) -> None:
+        if force or self._interaction_sent_revision != self._interaction.revision:
+            self._interaction_sent_revision = self._interaction.revision
+            self._ws_server.schedule_broadcast_text(encode_text(self._interaction.snapshot()))
+
+    def _drain_interaction_retirements(self) -> None:
+        for authority, reason in self._interaction.drain_retirements():
+            self._previews.cancel(authority.client_id)
+            self._native_sequences.pop(authority.lease_id, None)
+            if (
+                authority.kind.startswith("manipulation_")
+                and self._manipulation_service is not None
+            ):
+                self._manipulation_service.revoke(
+                    self._interaction.epoch, authority.lease_id, self._interaction.revision, reason
+                )
+            if authority.kind == "joystick":
+                self._cancel_tele_cmd_vel()
+            elif authority.kind == "live" and reason not in {"released", "confirmed"}:
+                self._cancel_tele_cmd_vel()
+                self._safety.on_estop_request()
+                self._interaction.set_active_goal(None)
+                self._broadcast_interaction(force=True)
+                self._broadcast_state()
+
+    def _on_interaction_request(self, request: InteractionRequest, client_id: str) -> None:
+        self._interaction.poll()
+        self._drain_interaction_retirements()
+        if (
+            request.action == "mode"
+            and (request.mode != self._interaction.mode or self._native_mode_uncertain)
+            and self._capabilities.supports(CapabilityName.AGENT)
+        ):
+            if (
+                self._mode_task is not None
+                or self._interaction.authority is not None
+                or self._interaction.agent_busy
+                or self._interaction.motion_busy
+            ):
+                self._interaction_reply(request, client_id, "busy", "robot_busy")
+                return
+            if self._agent_control is None:
+                self._interaction_reply(
+                    request, client_id, "rejected", "native_quiescence_unavailable"
+                )
+                return
+            if request.mode == "agent":
+                result = self._interaction.handle(client_id, request)
+                if result.status != "accepted":
+                    self._ws_server.schedule_send_to_client(client_id, encode_text(result.wire()))
+                    return
+                self._broadcast_interaction(force=True)
+            self._interaction.agent_busy = True
+            self._mode_task = asyncio.create_task(self._change_native_mode(request, client_id))
+            return
+        if (
+            request.action == "mode"
+            and request.mode == "agent"
+            and not self._capabilities.supports(CapabilityName.AGENT)
+        ):
+            reply = {
+                "type": "interaction_result",
+                "request_id": request.request_id,
+                "status": "rejected",
+                "code": "agent_unavailable",
+                "epoch": self._interaction.epoch,
+                "revision": self._interaction.revision,
+            }
+        elif request.action == "acquire" and (
+            not self._capabilities.supports(
+                CapabilityName.MANIPULATION
+                if request.kind is not None and request.kind.startswith("manipulation_")
+                else CapabilityName.NAVIGATION
+            )
+            or getattr(self, "_requires_mapping_restart", False)
+        ):
+            reply = {
+                "type": "interaction_result",
+                "request_id": request.request_id,
+                "status": "rejected",
+                "code": "navigation_unavailable",
+                "epoch": self._interaction.epoch,
+                "revision": self._interaction.revision,
+            }
+        else:
+            previous_target = self._interaction.target
+            result = self._interaction.handle(client_id, request, commit=self._commit_shared_target)
+            authority = self._interaction.authority
+            if (
+                self._manipulation_service is not None
+                and authority is not None
+                and authority.kind == "manipulation_planning"
+                and self._interaction.target is not None
+                and (
+                    previous_target is None
+                    or self._interaction.target.domain != previous_target.domain
+                    or self._interaction.target.group_id != previous_target.group_id
+                    or self._interaction.target.revision != previous_target.revision
+                )
+            ):
+                self._manipulation_service.revoke(
+                    self._interaction.epoch,
+                    authority.lease_id,
+                    self._interaction.revision,
+                    "target_changed",
+                )
+            reply = result.wire()
+        self._drain_interaction_retirements()
+        self._ws_server.schedule_send_to_client(client_id, encode_text(reply))
+        # High-rate target samples are coalesced by the 20Hz loop. Authority
+        # transitions and their exact final poses are delivered immediately.
+        if request.action != "update":
+            self._broadcast_interaction(force=True)
+
+    def _interaction_reply(
+        self, request: InteractionRequest, client_id: str, status: str, code: str
+    ) -> None:
+        self._ws_server.schedule_send_to_client(
+            client_id,
+            encode_text(
+                {
+                    "type": "interaction_result",
+                    "request_id": request.request_id,
+                    "status": status,
+                    "code": code,
+                    "epoch": self._interaction.epoch,
+                    "revision": self._interaction.revision,
+                }
+            ),
+        )
+
+    async def _change_native_mode(self, request: InteractionRequest, client_id: str) -> None:
+        try:
+            assert self._agent_control is not None
+            accepted = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._agent_control.ar_agent_set_manual, request.mode == "manual"
+                ),
+                2.0,
+            )
+            self._interaction.agent_busy = not self._agent_service.idle
+            if request.epoch != self._interaction.epoch:
+                self._interaction_reply(request, client_id, "stale", "epoch_changed")
+            elif not accepted:
+                self._native_mode_uncertain = False
+                if request.mode == "agent":
+                    # Native refused to resume, so manual is still its positive state.
+                    self._interaction.mode = "manual"
+                    self._interaction.revision += 1
+                self._interaction_reply(request, client_id, "busy", "native_motion_active")
+            elif request.mode == "manual":
+                self._native_mode_uncertain = False
+                result = self._interaction.handle(client_id, request)
+                self._ws_server.schedule_send_to_client(client_id, encode_text(result.wire()))
+            else:
+                self._native_mode_uncertain = False
+                self._interaction_reply(request, client_id, "accepted", "mode_changed")
+            self._broadcast_interaction(force=True)
+        except TimeoutError:
+            self._native_mode_uncertain = True
+            self._interaction_reply(request, client_id, "rejected", "native_mode_timeout")
+        except Exception:
+            self._native_mode_uncertain = True
+            logger.exception("Native robot mode transition failed")
+            self._interaction_reply(request, client_id, "rejected", "native_mode_failed")
+        finally:
+            self._interaction.agent_busy = not self._agent_service.idle
+            self._mode_task = None
+
+    def _commit_shared_target(self, target: SharedTarget, kind: InteractionKind) -> bool:
+        if kind == "joystick":
+            self._cancel_tele_cmd_vel()
+            return True
+        return self._submit_navigation_goal(NavGoalRequest(target.position, target.orientation))
+
+    def _submit_navigation_goal(self, msg: NavGoalRequest) -> bool:
+        if self.goal_request.transport is None or getattr(self, "_requires_mapping_restart", False):
+            return False
+        goal = self._nav_goal_coordinator.submit_goal(msg)
+        self._broadcast_state()
+        self.goal_request.publish(goal)
+        yaw = PoseStamped(position=list(msg.position), orientation=list(msg.orientation)).yaw
+        self._interaction.set_active_goal(
+            {"type": "nav_goal", "pose": [*msg.position, yaw], "path_poses": [], "ts": time.time()}
+        )
+        return True
+
+    def _native_authorized(
+        self, client_id: str, msg: NavGoalRequest | NavJoystickRequest, kind: InteractionKind
+    ) -> bool:
+        allowed = self._interaction.authorized(client_id, msg.epoch, msg.lease_id, kind=kind)
+        self._drain_interaction_retirements()
+        authority = self._interaction.authority
+        if not allowed or authority is None or msg.sequence is None:
+            return False
+        if msg.sequence < authority.sequence or msg.sequence <= self._native_sequences.get(
+            authority.lease_id, -1
+        ):
+            return False
+        self._native_sequences[authority.lease_id] = msg.sequence
+        return True
+
     def _on_nav_goal_request(
-        self,
-        msg: NavGoalRequest,
-        _websocket: ws_server.ServerConnection,
-        client_id: str,
+        self, msg: NavGoalRequest, _websocket: ws_server.ServerConnection, client_id: str
     ) -> None:
         if not self._capabilities.supports_navigation(NAV_GOAL) or getattr(
             self, "_requires_mapping_restart", False
         ):
             return
         if msg.preview:
-            self._previews.request(msg, client_id)
+            if not self._interaction.authorized(
+                client_id, msg.epoch, msg.lease_id, kind="navigation_planning"
+            ):
+                self._drain_interaction_retirements()
+                return
+            target = self._interaction.target
+            if target is None:
+                return
+            self._previews.request(
+                replace(
+                    msg,
+                    position=target.position,
+                    orientation=target.orientation,
+                    target_revision=target.revision,
+                ),
+                client_id,
+            )
             return
-        if self.goal_request.transport is None:
-            logger.warning("nav_goal_request ignored — goal_request transport is not wired")
+        if not self._native_authorized(client_id, msg, "live"):
             return
-        goal = self._nav_goal_coordinator.submit_goal(msg)
-        # Publish the new execution's cleared state before planner callbacks can
-        # produce a terminal result (including an immediately reached goal).
-        self._broadcast_state()
-        self.goal_request.publish(goal)
-        logger.info("nav_goal_request published", client_id=client_id, position=msg.position)
+        target = self._interaction.target
+        if target is not None and target.domain == "navigation":
+            self._submit_navigation_goal(
+                replace(msg, position=target.position, orientation=target.orientation)
+            )
+
+    def _on_navigation_preview(
+        self, client_id: str, request: NavGoalRequest, frame: object
+    ) -> None:
+        # The worker may complete after release, expiry, handover or aim changes.
+        if not isinstance(frame, NavGoalFrame):
+            return
+        if request.epoch is None or request.lease_id is None or request.target_revision is None:
+            return
+        body = json.loads(encode_nav_goal(frame))
+        if self._interaction.set_preview(
+            body,
+            epoch=request.epoch,
+            lease_id=request.lease_id,
+            target_revision=request.target_revision,
+            source_position=request.position,
+            source_orientation=request.orientation,
+        ):
+            self._ws_server.schedule_send_to_client(client_id, encode_nav_goal(frame))
+            self._broadcast_interaction()
+
+    def _on_manipulation_snapshot(self, snapshot: dict[str, Any]) -> None:
+        if snapshot.get("available") is not True:
+            return
+        execution = snapshot.get("execution")
+        self._arm_native_busy = (
+            snapshot.get("operation_id") is not None
+            or snapshot.get("following") is True
+            or execution in {"accepted", "executing", "uncertain", "fault"}
+        )
+        # A transport timeout can leave native work running. Only an explicit,
+        # confirmed stop resolves that uncertainty; missing observations cannot.
+        stopped = (
+            snapshot.get("stopped") is True
+            and snapshot.get("stop_confirmed") is True
+            and not self._arm_native_busy
+            and execution in {"idle", "completed", "aborted", "rejected"}
+        )
+        if stopped:
+            self._arm_uncertain = self._arm_stop_pending = False
+        self._interaction.set_motion_busy(
+            bool(self._pending_arm_motion)
+            or self._arm_native_busy
+            or self._arm_uncertain
+            or self._arm_stop_pending
+        )
+
+    def _on_manipulation_result(self, request: ManipulationRequest, result: dict[str, Any]) -> None:
+        if request.action in {"execute", "reset_joints", "prepare_shutdown"}:
+            self._pending_arm_motion.discard(request.request_id)
+            if result.get("status") in {"uncertain", "fault"}:
+                self._arm_uncertain = True
+            self._interaction.set_motion_busy(
+                bool(self._pending_arm_motion)
+                or self._arm_native_busy
+                or self._arm_uncertain
+                or self._arm_stop_pending
+                or result.get("status") == "accepted"
+            )
+
+    def _on_manipulation_request(
+        self, request: ManipulationRequest, client_id: str, clock_offset: float
+    ) -> None:
+        service = self._manipulation_service
+        if service is None:
+            return
+        self._interaction.poll()
+        self._drain_interaction_retirements()
+        payload = request.payload
+        authority = self._interaction.authority
+        epoch = payload.get("epoch")
+        lease_id = payload.get("lease_id")
+        owns = (
+            authority is not None
+            and authority.client_id == client_id
+            and authority.lease_id == lease_id
+            and authority.kind.startswith("manipulation_")
+            and authority.group_id == request.group_id
+        )
+        # Discrete commands can use a released shared target; they do not acquire
+        # a persistent creator-client lock. Native operation admission stays atomic.
+        target = next(
+            (
+                t
+                for t in self._interaction.snapshot()["targets"]
+                if t["domain"] == "manipulation" and t["group_id"] == request.group_id
+            ),
+            None,
+        )
+        valid_target = target is not None and payload.get("target_revision") == target["revision"]
+        allowed = (
+            epoch == self._interaction.epoch
+            and self._interaction.mode == "manual"
+            and (owns or authority is None)
+        )
+        if request.action in {"acquire", "update"}:
+            allowed = (
+                allowed
+                and owns
+                and authority is not None
+                and authority.kind == "manipulation_following"
+            )
+        elif request.action in {"plan", "evaluate", "execute", "gripper"}:
+            allowed = allowed and valid_target
+        if not allowed:
+            self._ws_server.schedule_send_to_client(
+                client_id,
+                encode_text(
+                    {
+                        "type": "manipulation_result",
+                        "request_id": request.request_id,
+                        "action": request.action,
+                        "group_id": request.group_id,
+                        "status": "rejected",
+                        "code": "ownership",
+                        "message": "Robot interaction is owned or target changed",
+                    }
+                ),
+            )
+            return
+        if request.action in {"update", "plan", "evaluate"} and target is not None:
+            payload = {
+                **payload,
+                "position": target["position"],
+                "orientation": target["orientation"],
+                "speed_scale": target["speed_scale"],
+            }
+            payload.pop("final_gripper", None)
+            if request.action == "plan" and "gripper" in target:
+                payload["final_gripper"] = target["gripper"]
+        if request.action == "gripper" and target is not None:
+            if "gripper" not in target:
+                self._ws_server.schedule_send_to_client(
+                    client_id,
+                    encode_text(
+                        {
+                            "type": "manipulation_result",
+                            "request_id": request.request_id,
+                            "action": request.action,
+                            "group_id": request.group_id,
+                            "status": "rejected",
+                            "code": "target_changed",
+                        }
+                    ),
+                )
+                return
+            payload = {**payload, "value": target["gripper"]}
+        trusted = {
+            **payload,
+            "authority_epoch": self._interaction.epoch,
+            "authority_lease": authority.lease_id if owns and authority is not None else None,
+            "authority_revision": self._interaction.revision,
+            "authority_deadline": authority.expires_at
+            if owns and authority is not None
+            else time.monotonic() + 0.5,
+            "target_revision": target["revision"] if target is not None else 0,
+        }
+        if request.action in {"execute", "reset_joints", "prepare_shutdown"}:
+            if self._interaction.motion_busy:
+                self._ws_server.schedule_send_to_client(
+                    client_id,
+                    encode_text(
+                        {
+                            "type": "manipulation_result",
+                            "request_id": request.request_id,
+                            "action": request.action,
+                            "group_id": request.group_id,
+                            "status": "rejected",
+                            "code": "busy",
+                        }
+                    ),
+                )
+                return
+            self._pending_arm_motion.add(request.request_id)
+            self._interaction.set_motion_busy(True)
+        service.submit(replace(request, payload=trusted), client_id, clock_offset)
 
     async def handle_global_costmap(self, msg: OccupancyGrid) -> None:
         await self._previews.update_costmap(msg)
         self._broadcast_state()
 
     def _on_estop_request(self, _msg: EstopRequest, _websocket: ws_server.ServerConnection) -> None:
+        if not self._capabilities.supports(CapabilityName.ESTOP):
+            return
+        self._interaction.stop()
+        if self._manipulation_service is not None:
+            self._arm_stop_pending = True
+            self._interaction.set_motion_busy(True)
+            self._manipulation_service.emergency_stop(
+                self._interaction.epoch, self._interaction.revision
+            )
+        self._drain_interaction_retirements()
         self._cancel_tele_cmd_vel()
-        if self._safety.on_estop_request():
-            self._broadcast_state()
+        self._broadcast_interaction()
+        self._safety.on_estop_request()
+        # A goal can be accepted before native path following starts. Publish
+        # the stop fact even when the legacy navigation phase was already idle.
+        self._broadcast_state()
+
+    def _update_lidar_aggregate(self) -> None:
+        active = [settings for settings in self._lidar_subscriptions.values() if settings.enabled]
+        self._lidar_settings = LidarSettings(
+            enabled=bool(active),
+            min_height_m=min((s.min_height_m for s in active), default=0.1),
+            max_height_m=max((s.max_height_m for s in active), default=1.5),
+            max_range_m=max((s.max_range_m for s in active), default=5.0),
+        )
 
     def _on_lidar_settings_request(
         self,
         msg: LidarSettingsRequest,
         _websocket: ws_server.ServerConnection,
+        client_id: str | None = None,
     ) -> None:
         if not self._capabilities.supports(CapabilityName.LIDAR):
             return
-        self._lidar_settings = LidarSettings(
-            enabled=msg.enabled,
-            min_height_m=msg.min_height_m,
-            max_height_m=msg.max_height_m,
-            max_range_m=msg.max_range_m,
-        )
+        settings = LidarSettings(msg.enabled, msg.min_height_m, msg.max_height_m, msg.max_range_m)
+        if client_id is None:
+            self._lidar_settings = settings
+        elif client_id in self._lidar_subscriptions:
+            self._lidar_subscriptions[client_id] = settings
+            self._update_lidar_aggregate()
         self._broadcast_state()
 
     def _on_state_request(
@@ -576,6 +1104,7 @@ class ARModule(Module):  # type: ignore[misc]
         _websocket: ws_server.ServerConnection,
     ) -> None:
         self._broadcast_state()
+        self._broadcast_interaction(force=True)
 
     def _on_user_message_request(
         self,
@@ -588,7 +1117,22 @@ class ARModule(Module):  # type: ignore[misc]
         if self.human_input.transport is None:
             logger.warning("user_message_request ignored — human_input transport is not wired")
             return
-        self.human_input.publish(msg.text)
+        if (
+            self._mode_task is not None
+            or self._native_mode_uncertain
+            or self._interaction.mode != "agent"
+            or self._interaction.authority is not None
+        ):
+            return
+        if not self._agent_service.begin_turn(client_id):
+            return
+        self._interaction.agent_busy = True
+        try:
+            self.human_input.publish(msg.text)
+        except Exception:
+            self._agent_service.cancel_turn(client_id)
+            self._interaction.agent_busy = False
+            raise
         logger.info("human_input published", client_id=client_id, chars=len(msg.text))
 
     def _on_client_pose(
@@ -597,7 +1141,7 @@ class ARModule(Module):  # type: ignore[misc]
         _websocket: ws_server.ServerConnection,
         _client_id: str,
     ) -> None:
-        self._agent_service.set_pose(msg)
+        self._agent_service.set_pose(msg, client_id=_client_id)
 
     def _on_nav_joystick_request(
         self,
@@ -608,6 +1152,8 @@ class ARModule(Module):  # type: ignore[misc]
         if not self._capabilities.supports_navigation(NAV_JOYSTICK) or getattr(
             self, "_requires_mapping_restart", False
         ):
+            return
+        if not self._native_authorized(_client_id, msg, "joystick"):
             return
         if self.tele_cmd_vel.transport is None:
             logger.warning("nav_joystick_request ignored — tele_cmd_vel transport is not wired")
@@ -768,6 +1314,17 @@ class ARModule(Module):  # type: ignore[misc]
         self._flush_localization(prompts, episodes)
 
     def _retire_robot_source(self) -> None:
+        # Retire native work against the old reference before replacing its epoch.
+        self._interaction.stop("reference_reset")
+        self._drain_interaction_retirements()
+        if self._manipulation_service is not None:
+            self._arm_stop_pending = True
+            self._interaction.set_motion_busy(True)
+            self._manipulation_service.emergency_stop(
+                self._interaction.epoch, self._interaction.revision
+            )
+        self._interaction.reset()
+        self._broadcast_interaction()
         self._odometry.retire()
         self._previews.cancel_all()
         self._requires_mapping_restart = True
@@ -848,16 +1405,45 @@ class ARModule(Module):  # type: ignore[misc]
             return
         nav_goal_frame, state_changed = self._nav_goal_coordinator.on_path(msg)
         if nav_goal_frame is not None:
+            self._interaction.set_active_goal(json.loads(encode_nav_goal(nav_goal_frame)))
             self._ws_server.schedule_broadcast_text(encode_nav_goal(nav_goal_frame))
+            self._broadcast_interaction()
         if state_changed:
             self._broadcast_state()
 
     async def handle_goal_reached(self, msg: Bool) -> None:
         if not self._capabilities.supports(CapabilityName.NAVIGATION):
             return
-        self._nav_goal_coordinator.on_goal_reached(msg)
+        if not self._nav_goal_coordinator.on_goal_reached(msg):
+            return
+        self._finish_navigation(msg.data)
+
+    async def handle_ar_navigation_status(self, msg: String) -> None:
+        if not self._capabilities.supports(CapabilityName.NAVIGATION):
+            return
+        try:
+            body = json.loads(msg.data)
+        except (ValueError, TypeError):
+            return
+        if not isinstance(body, dict):
+            return
+        stamp, phase = body.get("goal_ts"), body.get("phase")
+        if (
+            isinstance(stamp, bool)
+            or not isinstance(stamp, (int, float))
+            or not math.isfinite(stamp)
+            or not isinstance(phase, str)
+            or phase not in {"accepted", "succeeded", "failed"}
+        ):
+            return
+        if self._nav_goal_coordinator.on_native_status(float(stamp), phase):
+            self._finish_navigation(phase == "succeeded")
+
+    def _finish_navigation(self, succeeded: bool) -> None:
+        self._interaction.set_active_goal(None)
+        self._broadcast_interaction()
         self._broadcast_state()
-        if msg.data:
+        if succeeded:
             client_ids = self._policy.on_goal_reached(succeeded=True)
             for client_id in client_ids:
                 self._send_observations_request(client_id)
@@ -870,7 +1456,9 @@ class ARModule(Module):  # type: ignore[misc]
     async def handle_agent_idle(self, msg: bool) -> None:
         if not self._capabilities.supports(CapabilityName.AGENT):
             return
-        if self._agent_service.update_idle(bool(msg)):
+        changed = self._agent_service.update_idle(bool(msg))
+        self._interaction.agent_busy = not self._agent_service.idle
+        if changed:
             self._broadcast_state()
 
     @skill

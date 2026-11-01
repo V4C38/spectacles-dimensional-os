@@ -195,7 +195,7 @@ export class ReviewScenario extends BaseScriptComponent {
     if (!session.wantConnected) session.start();
     session.onTransportOpen();
     const request = [...this.sent].reverse().find(row => row.type === "hello_request");
-    this.wire({ type: "hello", client_id: "native-integration", odom_reference_id: "native-fixture-odom", time_sync: { ts_client: request.ts_client, ts_server: getTime() },
+    this.wire({ type: "hello", protocol_version: 2, client_id: "native-integration", odom_reference_id: "native-fixture-odom", time_sync: { ts_client: request.ts_client, ts_server: getTime() },
       robot: CATALOG.fixtures.robot, capabilities });
     this.state("idle", null);
     this.pose(CATALOG.fixtures.pose);

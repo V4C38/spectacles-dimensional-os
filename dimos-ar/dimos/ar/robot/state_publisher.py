@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import math
 import time
 from typing import TYPE_CHECKING, Protocol
@@ -29,6 +29,8 @@ class _BroadcastSink(Protocol):
 
     def schedule_broadcast_binary(self, data: bytes) -> None: ...
 
+    def schedule_send_binary_to_client(self, client_id: str, data: bytes) -> None: ...
+
 
 class RobotStatePublisher:
     """DimOS stream handlers → client-ready pose and LiDAR for all clients."""
@@ -43,8 +45,10 @@ class RobotStatePublisher:
         lidar_max_hz: float = DEFAULT_LIDAR_MAX_HZ,
         lidar_voxel_size_m: float = 0.05,
         lidar_target_points: int = DEFAULT_TARGET_POINTS,
+        subscriptions: Callable[[], Mapping[str, LidarSettings]] | None = None,
     ) -> None:
         self._ws = ws_server
+        self._subscriptions = subscriptions
         self._odom_scale_correction_factor = odom_scale_correction_factor
         self._pose_max_hz = pose_max_hz
         self._lidar_max_hz = lidar_max_hz
@@ -91,23 +95,32 @@ class RobotStatePublisher:
         points = downsampled.points_f32()
         downsampled_count = len(points)
         downsampled_at = time.monotonic()
-        settings = LidarFilterSettings.from_lidar_settings(
-            lidar,
-            target_points=self._lidar_target_points,
-        )
-        prepared = prepare_lidar_points(
-            points,
-            settings=settings,
-            robot_position=robot_position,
-        )
-        # Filter/downsample using native sensor metres, then use the exact same
-        # constant XY mapping as pose/path. Accumulated voxels stay stationary.
-        corrected = correct_odom_points(prepared, factor=self._odom_scale_correction_factor)
-        points = [tuple(point) for point in corrected]
+        groups: dict[LidarSettings, list[str]] = {}
+        if self._subscriptions is not None:
+            for client_id, settings in self._subscriptions().items():
+                if settings.enabled:
+                    groups.setdefault(settings, []).append(client_id)
+        else:
+            groups[lidar] = []
+        output_count = 0
+        for preference, clients in groups.items():
+            prepared = prepare_lidar_points(
+                points,
+                settings=LidarFilterSettings.from_lidar_settings(
+                    preference, target_points=self._lidar_target_points
+                ),
+                robot_position=robot_position,
+            )
+            corrected = correct_odom_points(prepared, factor=self._odom_scale_correction_factor)
+            output = [tuple(point) for point in corrected]
+            output_count = max(output_count, len(output))
+            payload = encode_lidar_binary(ts=msg.ts, points=output)
+            if self._subscriptions is None:
+                self._ws.schedule_broadcast_binary(payload)
+            else:
+                for client_id in clients:
+                    self._ws.schedule_send_binary_to_client(client_id, payload)
         self._lidar_last_emit_mono = time.monotonic()
-        self._ws.schedule_broadcast_binary(
-            encode_lidar_binary(ts=msg.ts, points=points),
-        )
         processing_ms = (time.monotonic() - started) * 1000
         self._lidar_timing.record(
             counts={"processed": 1, "slow_processing": int(processing_ms >= 100)},
@@ -117,7 +130,7 @@ class RobotStatePublisher:
                 "source_age_max_ms": source_age_ms,
                 "input_points_max": float(getattr(msg, "width", 0) * getattr(msg, "height", 0)),
                 "downsampled_points_max": float(downsampled_count),
-                "output_points_max": float(len(points)),
+                "output_points_max": float(output_count),
             },
         )
 

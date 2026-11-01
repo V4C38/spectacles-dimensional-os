@@ -154,6 +154,7 @@ export function lookupPoseSample(buffer: readonly PoseSample[], ts: number): Pos
     }
   }
   if (before && after && after.t > before.t) {
+    if (ts - before.t > STALE_POSE_S || after.t - ts > STALE_POSE_S) return null;
     const alpha = (ts - before.t) / (after.t - before.t);
     return {
       t: ts,

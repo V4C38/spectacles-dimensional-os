@@ -63,6 +63,17 @@ Do **not** edit `.scene` files by hand. Use the Lens Studio MCP tools for scene-
 | `AgentDraftSession` | Draft and dictation lifecycle |
 | `NavigationInteraction` | Navigation interaction intent |
 | `NavigationPreviewCoordinator` | Advisory request lifecycle and current preview |
+| `replication/CollaborationController` | Server authority, local target prediction and buffered observer interpolation |
+
+The `replication/` folders in ARModule, ClientCore and both hosts separate shared
+robot authority from navigation/manipulation behavior and platform presentation.
+ARModule grants one robot-wide lease and publishes canonical odometry-space
+targets. ClientCore predicts the active gesture immediately, sends fenced requests,
+and interpolates remote samples before each host applies its own tracking origin.
+Hosts render unavailable targets with a grey cross and exclude them from grabs.
+Selected navigation planning retains its reservation between placement gestures;
+ordinary release preserves the shared target and makes authority available again.
+Native arm execution remains robot-owned after the editing lease ends.
 
 **Specs logic** (tracked room)
 

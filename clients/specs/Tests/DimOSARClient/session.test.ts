@@ -46,7 +46,7 @@ class FakeTransport implements WebSocketTransport {
 
 function helloAt(tsClient: number, capabilities?: Partial<Capabilities>): Hello {
   return {
-    type: "hello",
+    type: "hello", protocol_version: 2,
     client_id: "c3f1a9",
     time_sync: { ts_client: tsClient, ts_server: 100 },
     robot: {
@@ -132,6 +132,14 @@ function pythonLidar(ts: number, points: [number, number, number][]): Uint8Array
 }
 
 describe("session handshake", () => {
+  it.each([undefined, 1, 3])("rejects incompatible hello version %s with an actionable error", version => {
+    const { session } = makeSession();
+    session.start(); session.onTransportOpen();
+    session.onTransportText(JSON.stringify({ ...helloAt(0), protocol_version: version }) + "\n");
+    expect(session.view().connection).toBe("failed");
+    expect(session.view().lastError).toContain("Incompatible ARModule protocol: expected version 2");
+    expect(session.view().hello).toBeNull();
+  });
   it("sends hello_request as the first text frame and becomes ready on hello", () => {
     const { session, transport, clock } = makeSession();
     const hello = handshake(session, transport, clock);
@@ -194,6 +202,17 @@ describe("session handshake", () => {
 });
 
 describe("session facts and tracking origin", () => {
+  it("clears an accepted goal and preview when their authoritative snapshot clears them", () => {
+    const { session, transport, clock } = makeSession(); handshake(session, transport, clock);
+    const interaction = { type: "interaction_state", epoch: "robot", revision: 1, mode: "manual", authority: null, target: null,
+      active_goal: { type: "nav_goal", pose: [2,0,0,0], path_poses: [], ts: 1 },
+      preview: { type: "nav_goal", preview: true, pose: [2,0,0,0], path_poses: [[0,0,0,0],[2,0,0,0]], ts: 1 } };
+    session.onTransportText(JSON.stringify(interaction) + "\n");
+    expect(session.view().nav_goal?.pose).toEqual([2,0,0,0]);
+    expect(session.view().nav_preview).not.toBeNull();
+    session.onTransportText(JSON.stringify({ ...interaction, revision: 2, active_goal: null, preview: null }) + "\n");
+    expect(session.view().nav_goal).toBeNull(); expect(session.view().nav_preview).toBeNull();
+  });
   it("stores telemetry and routes localization_result to the origin store", () => {
     const { session, transport, clock, originStore } = makeSession();
     handshake(session, transport, clock);

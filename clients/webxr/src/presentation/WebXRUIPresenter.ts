@@ -146,6 +146,7 @@ export class WebXRUIPresenter {
   }
 
   tick(now: number): void {
+    if (this.session.view().interaction) this.operatingMode = this.session.view().interaction!.mode;
     const visibleDeltaS = this.lastVisibleTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastVisibleTickAt));
     this.lastVisibleTickAt = now;
     if (this.successElapsedS !== null) this.successElapsedS += visibleDeltaS;
@@ -293,7 +294,8 @@ export class WebXRUIPresenter {
     if (mode === "agent" && this.session.view().capabilities?.agent.available !== true) {
       throw new Error("hello.capabilities.agent is not available");
     }
-    this.operatingMode = mode;
+    if (this.session.view().interaction) this.session.collaboration.setMode(mode);
+    else this.operatingMode = mode;
   }
 
   cycleLidar(): LidarDisplayMode { return this.sensors.cycle(); }

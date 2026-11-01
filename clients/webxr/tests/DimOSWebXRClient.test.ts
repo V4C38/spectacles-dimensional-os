@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+import "./fixtures/browserAudio";
 import { describe, expect, it } from "vitest";
 import { DimOSWebXRClient } from "../src/DimOSWebXRClient";
 import { BrowserWebSocketTransport } from "../src/websocket/BrowserWebSocketTransport";

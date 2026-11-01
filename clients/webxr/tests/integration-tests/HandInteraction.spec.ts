@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { bootstrap, snapshot } from "./fixtures/Runtime";
+import { bootstrap, snapshot, isNavigationCommit } from "./fixtures/Runtime";
 import { frameMenu, summonMenu, pointIndexAtButton } from "./fixtures/Input";
 
 
@@ -25,7 +25,7 @@ for (const pinch of [false, true]) test(`index fingertip activates a real menu b
   await pointIndexAtButton(page, "Agent", 0.04);
   await expect.poll(() => snapshot(page).then(s => s.operatingMode)).toBe("agent");
   expect(await page.evaluate(() => (window as any).modeChanges)).toBe(1);
-  expect(runtime.commands.filter(c => c.type === "nav_goal_request" && !c.preview)).toHaveLength(0);
+  expect(runtime.commands.filter(isNavigationCommit)).toHaveLength(0);
 });
 
 test("detached unselected marker hovers and drags independently of the robot box", async ({ page }) => {
